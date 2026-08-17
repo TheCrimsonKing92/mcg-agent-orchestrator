@@ -16,37 +16,27 @@ public sealed class AcceptanceGateEngineSettingsTests
         Xunit.Assert.Equal(AcceptanceGateEngineSettings.DefaultOutputCaptureLimitBytes, settings.OutputCaptureLimitBytes);
         Xunit.Assert.Equal(17, settings.InfrastructureTestLanes.Count);
         Xunit.Assert.Equal(6, startupContract.ManifestCheckCount);
-        var expectedEstimates = new Dictionary<string, double>(StringComparer.Ordinal)
-        {
-            ["Cli"] = 65.2,
-            ["Worker shell"] = 9.1,
-            ["Worker sandbox planner"] = 9.3,
-            ["Conduct watch sweep scoping"] = 10.0,
-            ["Goal lifecycle commands"] = 194.6,
-            ["Goal worktree cleanup"] = 274.6,
-            ["Goal worktree parallel"] = 52.7,
-            ["Worker profiles"] = 45.8,
-            ["Worker dispatch fixtures"] = 354.0,
-            ["Process spawning"] = 230.2,
-            ["Chaos gate"] = 75.1,
-            ["Dotnet build slots"] = 201.2,
-            ["Goal acceptance verifier"] = 30.5,
-            ["Goal acceptance build slots"] = 326.0,
-            ["Remainder balance A"] = 136.6,
-            ["Remainder balance B"] = 33.1,
-            ["Remainder"] = 176.6
-        };
+        using var manifestDocument = System.Text.Json.JsonDocument.Parse(
+            File.ReadAllText(Path.Combine(repositoryRoot, "config", "acceptance-manifest.json")));
+        var manifestLanes = manifestDocument.RootElement
+            .GetProperty("engine")
+            .GetProperty("infrastructureTestLanes")
+            .EnumerateArray()
+            .ToArray();
+        Xunit.Assert.Equal(manifestLanes.Length, settings.InfrastructureTestLanes.Count);
         Xunit.Assert.Equal(
-            expectedEstimates,
-            settings.InfrastructureTestLanes.ToDictionary(
-                lane => lane.Name,
-                lane => lane.EstimatedSerialSeconds,
-                StringComparer.Ordinal));
+            manifestLanes.Select(lane => lane.GetProperty("name").GetString()),
+            settings.InfrastructureTestLanes.Select(lane => lane.Name));
+        Xunit.Assert.All(
+            manifestLanes,
+            lane => Xunit.Assert.True(
+                lane.TryGetProperty("estimatedSerialSeconds", out _),
+                $"Checked-in lane '{lane.GetProperty("name").GetString()}' must explicitly declare a serial-duration estimate."));
         Xunit.Assert.All(
             settings.InfrastructureTestLanes,
             lane => Xunit.Assert.True(
-                lane.EstimatedSerialSeconds > 0,
-                $"Checked-in lane '{lane.Name}' must carry a positive serial-duration estimate."));
+                lane.EstimatedSerialSeconds > 0 && double.IsFinite(lane.EstimatedSerialSeconds),
+                $"Checked-in lane '{lane.Name}' must carry a positive finite serial-duration estimate."));
         AssertLaneSetPreservesCoverage(
             settings,
             ["Goal lifecycle commands", "Goal worktree cleanup", "Goal worktree parallel"],

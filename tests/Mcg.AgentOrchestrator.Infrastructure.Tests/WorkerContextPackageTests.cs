@@ -50,7 +50,7 @@ public sealed class WorkerContextPackageTests
 
     [Xunit.Theory]
     [Xunit.InlineData("final newline\n")]
-    [Xunit.InlineData("non-ASCII café 漢字 e\u0301\r\n")]
+    [Xunit.InlineData("non-ASCII café 漢字 e\u0301\0delimiter\r\n")]
     [Xunit.InlineData("embedded\0delimiter\n")]
     public void InlineFullRecoversExactUtf8Bytes(string content)
     {
@@ -66,6 +66,168 @@ public sealed class WorkerContextPackageTests
         Assert.Equal(artifact.ContentHash, WorkerContextArtifact.Hash(recovered));
         Assert.Equal(1, Count(rendered, "identity=instructions/task.md"));
         Assert.DoesNotContain("MANDATORY READ: identity=instructions/task.md", rendered, StringComparison.Ordinal);
+    }
+
+    [Xunit.Fact]
+    public void StructuralCoverageUnicodeIdentityReconcilesAndMissingControlStaysRed()
+    {
+        const string unicodeIdentity =
+            "WorkerContextPackageTests.InlineFullRecoversExactUtf8Bytes(content: \"non-ASCII café 漢字 e\u0301\\0delimiter\\r\\n\")";
+        const string genuinelyUnexecuted =
+            "WorkerContextPackageTests.InlineFullUsesBase64ForInvalidUtf8WithoutChangingBytes";
+        var trx = WriteCoverageTrx(unicodeIdentity);
+        try
+        {
+            var covered = TestCoverageInvariant.Evaluate(
+                new HashSet<string>([unicodeIdentity], StringComparer.OrdinalIgnoreCase),
+                [new TestPartitionCoverage("focused", true, [trx])]);
+
+            Assert.True(covered.Passed, covered.Summary);
+            Assert.Empty(covered.MissingTests);
+
+            var filteredOut = TestCoverageInvariant.Evaluate(
+                new HashSet<string>([unicodeIdentity, genuinelyUnexecuted], StringComparer.OrdinalIgnoreCase),
+                [new TestPartitionCoverage("focused", true, [trx])]);
+
+            Assert.False(filteredOut.Passed);
+            Assert.Equal([genuinelyUnexecuted], filteredOut.MissingTests);
+            Assert.Contains("executed=1, recorded=1, missing=1", filteredOut.Summary, StringComparison.Ordinal);
+        }
+        finally
+        {
+            File.Delete(trx);
+        }
+    }
+
+    [Xunit.Fact]
+    public void StructuralCoverageMismatchKeepsBothIdentityForms()
+    {
+        const string discovered =
+            "WorkerContextPackageTests.InlineFullRecoversExactUtf8Bytes(content: \"non-ASCII café ?? e'\\0delimiter\\r\\n\")";
+        const string executed =
+            "WorkerContextPackageTests.InlineFullRecoversExactUtf8Bytes(content: \"non-ASCII café 漢字 e\u0301\\0delimiter\\r\\n\")";
+        const string closerButUnrelatedClass =
+            "W0rkerContextPackageTests.InlineFullRecoversExactUtf8Bytes(content: \"non-ASCII café ?? e'\\0delimiter\\r\\n\")";
+        var trx = WriteCoverageTrx(executed);
+        var unrelatedTrx = WriteCoverageTrx(closerButUnrelatedClass);
+        try
+        {
+            var result = TestCoverageInvariant.Evaluate(
+                new HashSet<string>([discovered], StringComparer.OrdinalIgnoreCase),
+                [new TestPartitionCoverage("focused", true, [trx, unrelatedTrx])]);
+
+            Assert.False(result.Passed);
+            var mismatch = Assert.Single(result.IdentityMismatches!);
+            Assert.Equal(discovered, mismatch.Discovered);
+            Assert.Equal(executed, mismatch.Executed);
+        }
+        finally
+        {
+            File.Delete(trx);
+            File.Delete(unrelatedTrx);
+        }
+    }
+
+    [Xunit.Fact]
+    public void DiscoveryCaptureForcesUtf8BeforeMtpStarts()
+    {
+        var startInfo = GoalAcceptanceVerifier.BuildAcceptanceProcessStartInfo(
+            ["dotnet", "tests.dll", "--list-tests", "json"],
+            Path.GetTempPath(),
+            @"\\.\pipe\utf8-discovery-out",
+            @"\\.\pipe\utf8-discovery-err",
+            forceUtf8ConsoleOutput: true);
+
+        if (OperatingSystem.IsWindows())
+        {
+            Assert.Contains("(chcp 65001 > nul &&", startInfo.Arguments, StringComparison.Ordinal);
+            Assert.Contains(") > ", startInfo.Arguments, StringComparison.Ordinal);
+            Assert.Contains("2> ", startInfo.Arguments, StringComparison.Ordinal);
+        }
+        else
+        {
+            Assert.DoesNotContain("chcp", startInfo.ArgumentList.Last(), StringComparison.Ordinal);
+        }
+    }
+
+    [Xunit.Fact]
+    public async Task Utf8DiscoveryCapturePreservesUnicodeBytesThroughOwnedNamedPipes()
+    {
+        if (!OperatingSystem.IsWindows())
+        {
+            return;
+        }
+
+        const string expectedIdentity =
+            "WorkerContextPackageTests.InlineFullRecoversExactUtf8Bytes(content: \"non-ASCII café 漢字 e\u0301\\0delimiter\\r\\n\")";
+        var stdoutPipeName = $"mcg-utf8-discovery-{Guid.NewGuid():N}-out";
+        var stderrPipeName = $"mcg-utf8-discovery-{Guid.NewGuid():N}-err";
+        await using var stdoutPipe = new System.IO.Pipes.NamedPipeServerStream(
+            stdoutPipeName,
+            System.IO.Pipes.PipeDirection.In,
+            1,
+            System.IO.Pipes.PipeTransmissionMode.Byte,
+            System.IO.Pipes.PipeOptions.Asynchronous);
+        await using var stderrPipe = new System.IO.Pipes.NamedPipeServerStream(
+            stderrPipeName,
+            System.IO.Pipes.PipeDirection.In,
+            1,
+            System.IO.Pipes.PipeTransmissionMode.Byte,
+            System.IO.Pipes.PipeOptions.Asynchronous);
+        var stdoutConnection = stdoutPipe.WaitForConnectionAsync();
+        var stderrConnection = stderrPipe.WaitForConnectionAsync();
+        var stdoutDrain = ConnectAndReadAsync(stdoutPipe, stdoutConnection);
+        var stderrDrain = ConnectAndReadAsync(stderrPipe, stderrConnection);
+        var startInfo = GoalAcceptanceVerifier.BuildAcceptanceProcessStartInfo(
+            [
+                "dotnet",
+                typeof(WorkerContextPackageTests).Assembly.Location,
+                "--no-ansi",
+                "--progress",
+                "off",
+                "--list-tests",
+                "json",
+                "--filter-class",
+                "*WorkerContextPackageTests*"
+            ],
+            Path.GetDirectoryName(typeof(WorkerContextPackageTests).Assembly.Location)!,
+            $@"\\.\pipe\{stdoutPipeName}",
+            $@"\\.\pipe\{stderrPipeName}",
+            forceUtf8ConsoleOutput: true);
+        using var process = Process.Start(startInfo)
+            ?? throw new InvalidOperationException("Failed to start UTF-8 discovery capture process.");
+        try
+        {
+            await Task.WhenAll(stdoutConnection, stderrConnection)
+                .WaitAsync(TimeSpan.FromSeconds(30));
+            await process.WaitForExitAsync().WaitAsync(TimeSpan.FromMinutes(10));
+            var captures = await Task.WhenAll(stdoutDrain, stderrDrain)
+                .WaitAsync(TimeSpan.FromSeconds(30));
+
+            Xunit.Assert.True(
+                process.ExitCode == 0,
+                $"Discovery exited {process.ExitCode}: {Encoding.UTF8.GetString(captures[1])}");
+            var output = new UTF8Encoding(encoderShouldEmitUTF8Identifier: false, throwOnInvalidBytes: true)
+                .GetString(captures[0]);
+            var discovery = TestCoverageInvariant.ParseDiscovery(output, bareTestList: true);
+            Xunit.Assert.Contains(expectedIdentity, discovery.Tests);
+        }
+        finally
+        {
+            if (!process.HasExited)
+            {
+                process.Kill(entireProcessTree: true);
+                await process.WaitForExitAsync();
+            }
+        }
+
+        static async Task<byte[]> ConnectAndReadAsync(Stream pipe, Task connection)
+        {
+            await connection;
+            using var capture = new MemoryStream();
+            await pipe.CopyToAsync(capture);
+            return capture.ToArray();
+        }
     }
 
     [Xunit.Fact]
@@ -1465,6 +1627,16 @@ public sealed class WorkerContextPackageTests
 
     private static int Count(string value, string needle) =>
         (value.Length - value.Replace(needle, string.Empty, StringComparison.Ordinal).Length) / needle.Length;
+
+    private static string WriteCoverageTrx(string identity)
+    {
+        var path = Path.Combine(Path.GetTempPath(), $"coverage-{Guid.NewGuid():N}.trx");
+        var escaped = System.Security.SecurityElement.Escape(identity);
+        File.WriteAllText(
+            path,
+            $"<TestRun><TestDefinitions><UnitTest id=\"1\" name=\"{escaped}\"><TestMethod className=\"WorkerContextPackageTests\" name=\"InlineFullRecoversExactUtf8Bytes\" /></UnitTest></TestDefinitions><Results><UnitTestResult testId=\"1\" testName=\"{escaped}\" outcome=\"Passed\" /></Results></TestRun>");
+        return path;
+    }
 
     private static void AssertRecoveredContainsSemanticValue(byte[] recovered, string expected)
     {

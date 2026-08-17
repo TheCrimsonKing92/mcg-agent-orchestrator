@@ -94,40 +94,6 @@ public sealed class ConductorBatchLoopTestsLoopSchedulingPolicy : ConductorBatch
             var (loopKernel, loopGoal) = SimpleGoal("Keep ticking during concurrent goal intake");
             await repository.SaveAsync(loopKernel);
 
-            var firstPersistEntered = new ManualResetEventSlim(initialState: false);
-            var allowFirstPersist = new ManualResetEventSlim(initialState: false);
-            var tickCount = 0;
-            var persistCount = 0;
-            string loopOutput = string.Empty;
-            var loopTask = Task.Run(() =>
-                loopOutput = AsyncLocalConsoleRouter.Capture(() =>
-                    new ConductorBatchLoop().Run(
-                        loopKernel,
-                        MakeDriver(),
-                        ConductorAutonomyPolicy.Conservative,
-                        stopPath,
-                        maxIterations: 2,
-                        onTick: _ => Interlocked.Increment(ref tickCount),
-                        onlyGoalId: loopGoal.Id.Value,
-                        persistTick: currentKernel =>
-                        {
-                            if (Interlocked.Increment(ref persistCount) == 1)
-                            {
-                                firstPersistEntered.Set();
-                                allowFirstPersist.Wait(TimeSpan.FromSeconds(15));
-                            }
-
-                            repository.TransactAsync(
-                                    (stored, _) =>
-                                    {
-                                        stored.ReplaceGoalWithSnapshot(currentKernel.ExportGoalSnapshot(loopGoal.Id));
-                                        return Task.FromResult((true, true));
-                                    })
-                                .GetAwaiter()
-                                .GetResult();
-                        })));
-
-            Xunit.Assert.True(firstPersistEntered.Wait(TimeSpan.FromSeconds(15)), "Conductor did not reach its first tick write.");
             var refiner = new LoopBlockingGoalRefinerProvider();
             IReadOnlyList<AgentDefinition> agents = DefaultAgents();
             var profiles = WorkerProfileCatalog.Default();
@@ -141,19 +107,63 @@ public sealed class ConductorBatchLoopTestsLoopSchedulingPolicy : ConductorBatch
                 ref profiles,
                 ref currentGoal));
 
+            await intakeTask.WaitAsync(TimeSpan.FromSeconds(2));
+            Xunit.Assert.NotNull(currentGoal);
+            Xunit.Assert.False(refiner.Entered.IsSet);
+            var refinementMessage = Xunit.Assert.Single(
+                await repository.ListOutboxMessagesAsync(GoalRefinementWorkCoordinator.OutboxKind));
+            Xunit.Assert.Equal(GoalRefinementWorkCoordinator.MessageId(currentGoal!.Id), refinementMessage.Id);
+
+            using var refinementDeadline = new CancellationTokenSource(TimeSpan.FromSeconds(30));
+            var refinementTask = Task.Run(() => GoalRefinementWorkCoordinator.ProcessAsync(
+                repository,
+                workspace,
+                new InMemoryModelProviderRegistry([refiner]),
+                profiles,
+                currentGoal.Id,
+                refinementDeadline.Token));
+
+            var tickCount = 0;
+            string loopOutput = string.Empty;
+            var loopTask = Task.Run(() =>
+                loopOutput = AsyncLocalConsoleRouter.Capture(() =>
+                    new ConductorBatchLoop().Run(
+                        loopKernel,
+                        MakeDriver(),
+                        ConductorAutonomyPolicy.Conservative,
+                        stopPath,
+                        maxIterations: 2,
+                        onTick: _ => Interlocked.Increment(ref tickCount),
+                        onlyGoalId: loopGoal.Id.Value,
+                        persistTick: currentKernel =>
+                            repository.TransactAsync(
+                                    (stored, _) =>
+                                    {
+                                        stored.ReplaceGoalWithSnapshot(currentKernel.ExportGoalSnapshot(loopGoal.Id));
+                                        return Task.FromResult((true, true));
+                                    })
+                                .GetAwaiter()
+                                .GetResult())));
+
             try
             {
-                Xunit.Assert.True(refiner.Entered.Wait(TimeSpan.FromSeconds(15)), "Goal intake did not reach refinement.");
-                allowFirstPersist.Set();
+                Xunit.Assert.True(
+                    refiner.Entered.Wait(TimeSpan.FromSeconds(15)),
+                    "Durable refinement work did not start.");
                 await loopTask.WaitAsync(TimeSpan.FromSeconds(15));
+            }
+            catch
+            {
+                refinementDeadline.Cancel();
+                throw;
             }
             finally
             {
-                allowFirstPersist.Set();
                 refiner.Release.Set();
             }
 
-            await intakeTask.WaitAsync(TimeSpan.FromSeconds(15));
+            var refinementResult = await refinementTask.WaitAsync(TimeSpan.FromSeconds(15));
+            Xunit.Assert.True(refinementResult.Attached);
             Assert.True(tickCount >= 2, $"Expected at least two completed ticks, observed {tickCount}.");
             Assert.DoesNotContain("TICK_WRITE_BUSY", loopOutput, StringComparison.Ordinal);
             Assert.DoesNotContain("sqlite-busy-retry-exhausted", loopOutput, StringComparison.Ordinal);

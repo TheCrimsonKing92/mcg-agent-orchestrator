@@ -2509,8 +2509,12 @@ public static class WorkerProfileDispatcher
                         return Encoding.UTF8.GetBytes(output.Content);
                     },
                     StringComparer.Ordinal);
-            var resolver = new LegacyHandoffCompatibilityResolver(identity =>
-                authoritativeByIdentity.TryGetValue(identity, out var bytes) ? bytes : null);
+            var selfVerificationIdentity = $"prior/{task.Id.Value}/verification-output";
+            var resolver = new LegacyHandoffCompatibilityResolver(
+                identity => authoritativeByIdentity.TryGetValue(identity, out var bytes) ? bytes : null,
+                workingDirectory,
+                selfVerificationIdentity,
+                File.ReadAllBytes);
             foreach (var recovered in resolver.ResolveArtifactsFromMarkdown(File.ReadAllText(handoffPath)))
             {
                 var existing = artifacts.FirstOrDefault(artifact =>

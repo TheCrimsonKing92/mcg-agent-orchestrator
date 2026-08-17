@@ -63,7 +63,8 @@ public static class RepositoryOwnershipMap
         }
 
         if (path.StartsWith("src/Mcg.AgentOrchestrator.Core/", StringComparison.OrdinalIgnoreCase) ||
-            path.StartsWith("src/Mcg.AgentOrchestrator.Infrastructure/", StringComparison.OrdinalIgnoreCase))
+            path.StartsWith("src/Mcg.AgentOrchestrator.Infrastructure/", StringComparison.OrdinalIgnoreCase) ||
+            path.StartsWith("src/Mcg.AgentOrchestrator.Infrastructure.Providers/", StringComparison.OrdinalIgnoreCase))
         {
             return Build(path, RepositoryOwnershipArea.SharedInfrastructure, "shared-infrastructure", highRisk: true);
         }

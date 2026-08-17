@@ -211,6 +211,7 @@ public sealed class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
 
     private static readonly string[] DiffBaseArgs = ["git", "diff", "--unified=0", "main...HEAD", "--"];
     private const string CoreProject = "src/Mcg.AgentOrchestrator.Core/Mcg.AgentOrchestrator.Core.csproj";
+    private const string ProvidersProject = "src/Mcg.AgentOrchestrator.Infrastructure.Providers/Mcg.AgentOrchestrator.Infrastructure.Providers.csproj";
     private const string InfrastructureProject = "src/Mcg.AgentOrchestrator.Infrastructure/Mcg.AgentOrchestrator.Infrastructure.csproj";
     private const string AppProject = "src/Mcg.AgentOrchestrator.App/Mcg.AgentOrchestrator.App.csproj";
     private const string CoreTestsProject = "tests/Mcg.AgentOrchestrator.Core.Tests/Mcg.AgentOrchestrator.Core.Tests.csproj";
@@ -236,7 +237,8 @@ public sealed class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
 
     private static readonly Dictionary<string, string[]> ReferencingProjectsByProject = new(StringComparer.OrdinalIgnoreCase)
     {
-        [CoreProject] = [InfrastructureProject, AppProject, CoreTestsProject, InfrastructureTestsProject, DashboardTestsProject, TestSupportProject, ProviderEnvironmentTestsProject, CliTestsProject],
+        [CoreProject] = [ProvidersProject, InfrastructureProject, AppProject, CoreTestsProject, InfrastructureTestsProject, DashboardTestsProject, TestSupportProject, ProviderEnvironmentTestsProject, CliTestsProject],
+        [ProvidersProject] = [InfrastructureProject, AppProject, InfrastructureTestsProject, ProviderEnvironmentTestsProject],
         [InfrastructureProject] = [AppProject, InfrastructureTestsProject, DashboardTestsProject, TestSupportProject, ProviderEnvironmentTestsProject, CliTestsProject],
         [AppProject] = [InfrastructureTestsProject, DashboardTestsProject, TestSupportProject, ProviderEnvironmentTestsProject, CliTestsProject],
         [CoreTestsProject] = [],
@@ -284,6 +286,7 @@ public sealed class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
         return new StartupContract(manifest.Checks.Count, laneNames);
     }
     private readonly Func<string[], string, TimeSpan, CancellationToken, Task<CommandResult>> _runner;
+    private readonly Func<string[], string, TimeSpan, CancellationToken, Task<CommandResult>> _discoveryRunner;
     private readonly TimeProvider _timeProvider;
     private readonly Action<TimeSpan> _leaseSleep;
     private static readonly AsyncLocal<GateHeartbeatContext?> CurrentGateHeartbeatContext = new();
@@ -322,6 +325,7 @@ public sealed class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
     private static readonly string[] CacheableProjects =
     [
         CoreProject,
+        ProvidersProject,
         InfrastructureProject,
         AppProject,
         CoreTestsProject,
@@ -332,7 +336,7 @@ public sealed class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
         CliTestsProject
     ];
 
-    public GoalAcceptanceVerifier() : this(RunProcessAsync, TimeProvider.System) { }
+    public GoalAcceptanceVerifier() : this(RunProcessAsync, RunUtf8DiscoveryProcessAsync, TimeProvider.System) { }
 
     internal GoalAcceptanceVerifier(Func<string[], string, CancellationToken, Task<CommandResult>> runner)
         : this(runner, TimeProvider.System)
@@ -357,8 +361,18 @@ public sealed class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
         Func<string[], string, TimeSpan, CancellationToken, Task<CommandResult>> runner,
         TimeProvider timeProvider,
         Action<TimeSpan>? leaseSleep = null)
+        : this(runner, runner, timeProvider, leaseSleep)
+    {
+    }
+
+    private GoalAcceptanceVerifier(
+        Func<string[], string, TimeSpan, CancellationToken, Task<CommandResult>> runner,
+        Func<string[], string, TimeSpan, CancellationToken, Task<CommandResult>> discoveryRunner,
+        TimeProvider timeProvider,
+        Action<TimeSpan>? leaseSleep = null)
     {
         _runner = runner;
+        _discoveryRunner = discoveryRunner;
         _timeProvider = timeProvider;
         _leaseSleep = leaseSleep ?? Thread.Sleep;
     }
@@ -2603,6 +2617,8 @@ public sealed class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
         var normalized = NormalizePath(path)!;
         if (normalized.StartsWith("src/Mcg.AgentOrchestrator.Core/", StringComparison.OrdinalIgnoreCase))
             return CoreProject;
+        if (normalized.StartsWith("src/Mcg.AgentOrchestrator.Infrastructure.Providers/", StringComparison.OrdinalIgnoreCase))
+            return ProvidersProject;
         if (normalized.StartsWith("src/Mcg.AgentOrchestrator.Infrastructure/", StringComparison.OrdinalIgnoreCase))
             return InfrastructureProject;
         if (normalized.StartsWith("src/Mcg.AgentOrchestrator.App/", StringComparison.OrdinalIgnoreCase))
@@ -2624,6 +2640,7 @@ public sealed class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
 
     internal static string ProjectLabel(string project) =>
         project.Equals(CoreProject, StringComparison.OrdinalIgnoreCase) ? "Core" :
+        project.Equals(ProvidersProject, StringComparison.OrdinalIgnoreCase) ? "Infrastructure.Providers" :
         project.Equals(InfrastructureProject, StringComparison.OrdinalIgnoreCase) ? "Infrastructure" :
         project.Equals(AppProject, StringComparison.OrdinalIgnoreCase) ? "App" :
         project.Equals(CoreTestsProject, StringComparison.OrdinalIgnoreCase) ? "Core.Tests" :
@@ -3014,8 +3031,20 @@ public sealed class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
 
         foreach (var shard in manifestChecks.Where(IsFullPolicyShardCheck))
         {
-            if (checks.Any(result => result.Name.Equals(shard.Name, StringComparison.OrdinalIgnoreCase)))
+            var existingIndex = checks.FindIndex(result =>
+                result.Name.Equals(shard.Name, StringComparison.OrdinalIgnoreCase));
+            if (existingIndex >= 0)
+            {
+                var existing = checks[existingIndex];
+                var executionEvidence = $"changed file in dependency closure; {policyShardPlan.Evidence}";
+                checks[existingIndex] = existing with
+                {
+                    ResultSummary = string.IsNullOrWhiteSpace(existing.ResultSummary)
+                        ? executionEvidence
+                        : $"{existing.ResultSummary}; {executionEvidence}"
+                };
                 continue;
+            }
 
             if (!policyShardPlan.IncludesProject(shard.Project))
             {
@@ -5401,7 +5430,7 @@ public sealed class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
                 broadCheck,
                 EngineSettings,
                 environment);
-            var candidateDiscovery = await _runner(
+            var candidateDiscovery = await _discoveryRunner(
                 candidateDiscoveryArguments,
                 worktreePath,
                 EngineSettings.ResolveDiscoveryTimeout(),
@@ -5416,7 +5445,6 @@ public sealed class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
                     ResultSummary: "candidate trusted discovery failed");
             }
 
-            var discoveryDecodeFault = candidateDiscovery.Output.Contains('\uFFFD', StringComparison.Ordinal);
             TestDiscoverySnapshot? mainDiscoverySnapshot = null;
             var mainProjectPath = Path.Combine(
                 mainWorktreePath,
@@ -5485,7 +5513,7 @@ public sealed class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
                 CommandResult mainDiscovery;
                 try
                 {
-                    mainDiscovery = await _runner(
+                    mainDiscovery = await _discoveryRunner(
                         mainDiscoveryArguments,
                         mainWorktreePath,
                         EngineSettings.ResolveDiscoveryTimeout(),
@@ -5509,7 +5537,6 @@ public sealed class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
                         TailOutput(mainDiscovery.Output));
                 }
 
-                discoveryDecodeFault |= mainDiscovery.Output.Contains('\uFFFD', StringComparison.Ordinal);
                 mainDiscoverySnapshot = TestCoverageInvariant.ParseDiscovery(
                     mainDiscovery.Output,
                     bareTestList: UsesMicrosoftTestingPlatform(broadCheck),
@@ -5552,13 +5579,14 @@ public sealed class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
                     $"classification: {coverage.FailureClassification}",
                     coverage.Summary
                 };
-                if (discoveryDecodeFault)
-                {
-                    details.Add(
-                        "discovery output contains Unicode replacement characters; captured process output decoding is corrupt");
-                }
                 details.AddRange(coverage.EmptyPartitions.Take(10).Select(name => $"empty partition: {name}"));
-                details.AddRange(coverage.MissingTests.Take(10).Select(name => $"missing test: {name}"));
+                var identityMismatches = coverage.IdentityMismatches ?? [];
+                details.AddRange(identityMismatches.Take(10).Select(mismatch =>
+                    $"missing test: discovered={JsonSerializer.Serialize(mismatch.Discovered)}; executed={JsonSerializer.Serialize(mismatch.Executed)}"));
+                details.AddRange(coverage.MissingTests
+                    .Except(identityMismatches.Select(mismatch => mismatch.Discovered), StringComparer.OrdinalIgnoreCase)
+                    .Take(10)
+                    .Select(name => $"missing test: {name}"));
                 return new AcceptanceCheckResult(
                     $"structural test coverage: {broadCheck.Name}",
                     false,
@@ -7749,6 +7777,31 @@ public sealed class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
         string[] arguments,
         string workingDirectory,
         TimeSpan commandTimeout,
+        CancellationToken cancellationToken) =>
+        await RunProcessAsync(
+            arguments,
+            workingDirectory,
+            commandTimeout,
+            forceUtf8ConsoleOutput: false,
+            cancellationToken).ConfigureAwait(false);
+
+    private static async Task<CommandResult> RunUtf8DiscoveryProcessAsync(
+        string[] arguments,
+        string workingDirectory,
+        TimeSpan commandTimeout,
+        CancellationToken cancellationToken) =>
+        await RunProcessAsync(
+            arguments,
+            workingDirectory,
+            commandTimeout,
+            forceUtf8ConsoleOutput: true,
+            cancellationToken).ConfigureAwait(false);
+
+    private static async Task<CommandResult> RunProcessAsync(
+        string[] arguments,
+        string workingDirectory,
+        TimeSpan commandTimeout,
+        bool forceUtf8ConsoleOutput,
         CancellationToken cancellationToken)
     {
         // Keep the shell command semantics, but own the capture file offsets in this process. The
@@ -7771,7 +7824,8 @@ public sealed class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
             arguments,
             workingDirectory,
             stdoutPipeName is null ? null : $@"\\.\pipe\{stdoutPipeName}",
-            stderrPipeName is null ? null : $@"\\.\pipe\{stderrPipeName}");
+            stderrPipeName is null ? null : $@"\\.\pipe\{stderrPipeName}",
+            forceUtf8ConsoleOutput);
         CancellationTokenSource? captureDrainCts = null;
         Task<CaptureLimitResult>[]? captureDrains = null;
         Stream[]? captureSources = null;
@@ -8135,7 +8189,8 @@ public sealed class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
         string[] arguments,
         string workingDirectory,
         string? stdoutRedirectTarget = null,
-        string? stderrRedirectTarget = null)
+        string? stderrRedirectTarget = null,
+        bool forceUtf8ConsoleOutput = false)
     {
         var startInfo = new ProcessStartInfo
         {
@@ -8153,6 +8208,16 @@ public sealed class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
 
             startInfo.FileName = "cmd.exe";
             var command = BuildShellCommand(arguments, QuoteForCmd);
+            if (forceUtf8ConsoleOutput)
+            {
+                // MTP formats theory arguments before writing them. Under an OEM console code page,
+                // Windows best-fit conversion irreversibly changes CJK and combining characters before
+                // capture, so decoding the resulting bytes cannot repair the discovery identity.
+                // Group the preflight with the child command so owned stdout/stderr redirections
+                // are opened before chcp runs. A failed preflight then returns its non-zero exit
+                // code and captured stderr instead of leaving the named-pipe readers unconnected.
+                command = $"(chcp 65001 > nul && {command})";
+            }
             if (!string.IsNullOrWhiteSpace(stdoutRedirectTarget))
             {
                 command = $"{command} > {QuoteForCmd(stdoutRedirectTarget)} 2> {QuoteForCmd(stderrRedirectTarget!)}";

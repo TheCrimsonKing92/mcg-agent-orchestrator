@@ -63,13 +63,20 @@ public sealed class WorkerDispatchTestsDispatchPreparation : WorkerDispatchTestS
 
         var restored = await repository.LoadAsync();
         var successor = Xunit.Assert.Single(restored.Goals, goal => goal.Id != predecessor.Id);
-        Xunit.Assert.Equal(1, refiner.InvocationCount);
+        Xunit.Assert.Equal(0, refiner.InvocationCount);
         Xunit.Assert.Contains("GOAL_REPLACE_SUCCEEDED", output, StringComparison.Ordinal);
         var claim = new SourceBacklogClaimStore(workspace.SqliteStatePath).ResolveClaim(restored, item.Id);
         Xunit.Assert.Equal(successor.Id.Value, claim!.OwnerGoalId);
         Xunit.Assert.Equal(
             [AgentRole.Researcher, AgentRole.Planner, AgentRole.Developer, AgentRole.Tester, AgentRole.Reviewer],
             successor.Tasks.Select(task => task.RequiredRole));
+        Xunit.Assert.Null(successor.RefinedSpec);
+        Xunit.Assert.Contains(successor.Timeline, evt =>
+            evt.Kind == ProgressKind.GoalPolicyDecision &&
+            evt.Message.StartsWith("spec_refinement outcome=pending", StringComparison.Ordinal));
+        var refinementMessage = Xunit.Assert.Single(
+            await repository.ListOutboxMessagesAsync(GoalRefinementWorkCoordinator.OutboxKind));
+        Xunit.Assert.Equal(GoalRefinementWorkCoordinator.MessageId(successor.Id), refinementMessage.Id);
         Xunit.Assert.All(successor.Tasks, task =>
         {
             Xunit.Assert.Null(task.LastDispatch);
@@ -128,7 +135,7 @@ public sealed class WorkerDispatchTestsDispatchPreparation : WorkerDispatchTestS
 
         var restored = await repository.LoadAsync();
         Xunit.Assert.Contains("GOAL_REPLACE_PROTECTED_OWNER", exception.Message, StringComparison.Ordinal);
-        Xunit.Assert.Equal(1, refiner.InvocationCount);
+        Xunit.Assert.Equal(0, refiner.InvocationCount);
         var restoredPredecessor = Xunit.Assert.Single(restored.Goals);
         Xunit.Assert.Equal(predecessor.Id, restoredPredecessor.Id);
         var restoredTask = Xunit.Assert.Single(restoredPredecessor.Tasks);
@@ -1536,6 +1543,51 @@ public sealed class WorkerDispatchTestsDispatchPreparation : WorkerDispatchTestS
         Assert.Equal(
             Encoding.UTF8.GetBytes("legacy complete payload"),
             File.ReadAllBytes(Path.Combine(workingDirectory, section.MandatoryRelativePath!.Replace('/', Path.DirectorySeparatorChar))));
+    }
+
+    [Xunit.Fact]
+    public void PrepareTask_SelfPointerWithMatchingFile_UsesMaterialization()
+    {
+        var root = CreateTempDirectory();
+        var workingDirectory = Path.Combine(root, "repo");
+        Directory.CreateDirectory(workingDirectory);
+        var kernel = new AgentOrchestratorKernel();
+        var task = new TaskSpec(TaskId.New(), "Resume the current task.", AgentRole.Developer);
+        var goal = kernel.CreateGoal("Recover self-referential handoff evidence", [task]);
+        kernel.ActivateGoal(goal.Id, AgentCatalog.Default().Agents);
+        var bytes = Encoding.UTF8.GetBytes("current task verification evidence");
+        var identity = new LogicalArtifactIdentity($"prior/{task.Id.Value}/verification-output");
+        var relativePath = $".orchestrator-context/legacy-handoff/{task.Id.Value}/verification-output.bin";
+        var materializationPath = Path.Combine(
+            workingDirectory,
+            relativePath.Replace('/', Path.DirectorySeparatorChar));
+        Directory.CreateDirectory(Path.GetDirectoryName(materializationPath)!);
+        File.WriteAllBytes(materializationPath, bytes);
+        var pointer = LegacyHandoffCompatibilityResolver.CreateV1Pointer(identity, bytes, relativePath);
+        File.WriteAllText(
+            Path.Combine(workingDirectory, ".orchestrator-handoff.md"),
+            "Compatibility pointer (v1, hash-bound; resolve from authoritative task evidence): " + pointer);
+
+        var result = WorkerProfileDispatcher.PrepareTask(
+            kernel,
+            goal,
+            task,
+            new WorkerProfile("codex-cli", "codex exec --sandbox {sandboxMode} --cd {workingDirectory}"),
+            Path.Combine(root, "prompts"),
+            workingDirectory,
+            DateTimeOffset.UtcNow,
+            providerName: "OpenAI",
+            modelName: AgentCatalog.OpenAiSolSubscriptionModelAlias);
+
+        var section = Assert.Single(
+            result.Task.LastDispatch!.ContextPackageReceipt!.Sections,
+            item => item.LogicalIdentity == identity.Value);
+        Assert.Equal(WorkerContextArtifact.Hash(bytes), section.ContentHash);
+        Assert.Equal(
+            bytes,
+            File.ReadAllBytes(Path.Combine(
+                workingDirectory,
+                section.MandatoryRelativePath!.Replace('/', Path.DirectorySeparatorChar))));
     }
 
     [Xunit.Fact]

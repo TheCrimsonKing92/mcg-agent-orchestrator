@@ -23,8 +23,8 @@ public sealed class GoalRefinementTests
         Xunit.Assert.Contains("<none>", ex.Message);
     }
 
-    [Xunit.Fact(DisplayName = "GoalLifecycleCommands_refines_with_fallback_before_activation_and_planner_brief")]
-    public void GoalLifecycleCommandsRefinesWithFallbackBeforeActivationAndPlannerBrief()
+    [Xunit.Fact(DisplayName = "GoalLifecycleCommands_defers_fallback_refinement_until_a_spec_consumer")]
+    public void GoalLifecycleCommandsDefersFallbackRefinementUntilSpecConsumer()
     {
         var root = CreateTempDirectory();
         var workspace = OrchestratorWorkspace.ForDirectory(root);
@@ -64,7 +64,13 @@ public sealed class GoalRefinementTests
             workspace,
             providers);
 
-        Xunit.Assert.NotNull(goal.RefinedSpec);
+        Xunit.Assert.Null(goal.RefinedSpec);
+        Xunit.Assert.DoesNotContain(goal.Timeline, evt =>
+            evt.Kind == ProgressKind.GoalPolicyDecision &&
+            evt.Message.StartsWith("spec_refinement outcome=pending", StringComparison.Ordinal));
+
+        _ = GoalRefinementGate.EnsureRefined(kernel, workspace, providers, goal);
+
         Xunit.Assert.Contains("Implement:", goal.RefinedSpec!.BehavioralContract);
         Xunit.Assert.Equal(
             [
@@ -81,6 +87,120 @@ public sealed class GoalRefinementTests
         Xunit.Assert.Equal(
             goal.RefinedSpec.AcceptanceCriteria.Select(criterion => $"- {criterion}"),
             ExtractRenderedAcceptanceCriteria(brief));
+    }
+
+    [Xunit.Fact(DisplayName = "GoalLifecycleCommands_returns_before_slow_refinement_and_durable_owner_holds_planner")]
+    public async Task GoalLifecycleCommandsReturnsBeforeSlowRefinementAndDurableOwnerHoldsPlanner()
+    {
+        var root = CreateTempDirectory();
+        var workspace = OrchestratorWorkspace.ForDirectory(root);
+        var provider = new BlockingModelProvider("slow-refiner");
+        var providers = new InMemoryModelProviderRegistry([provider]);
+        ModelFunctionCatalogStore.Save(workspace.ModelFunctionCatalogPath, new ModelFunctionCatalog([
+            new ModelFunctionBinding(
+                ModelFunctionPurposes.SpecRefiner,
+                ModelLane.CheapApi,
+                new ModelProfile("slow-refiner", "slow-model", ModelCapability.Text, SubscriptionMode.ApiKey))
+        ]));
+        var kernel = new AgentOrchestratorKernel();
+
+        var goal = GoalLifecycleCommands.CreateAndActivateGoal(
+            kernel,
+            AgentCatalog.Default().Agents,
+            "Research and plan a focused implementation with tests.",
+            workspace,
+            providers);
+
+        Xunit.Assert.Null(goal.RefinedSpec);
+        Xunit.Assert.False(provider.Started.Task.IsCompleted);
+
+        var repository = CreateMigratedStateRepository(workspace.SqliteStatePath);
+        GoalRefinementWorkCoordinator.RecordPending(kernel, goal.Id);
+        await repository.TransactWithOutboxAsync(
+            (persistedKernel, _) =>
+            {
+                persistedKernel.ReplaceGoalWithSnapshot(kernel.ExportGoalSnapshot(goal.Id));
+                return Task.FromResult((
+                    ShouldSave: true,
+                    Result: true,
+                    OutboxMessages: (IReadOnlyList<OrchestratorStateOutboxMessage>)[
+                        GoalRefinementWorkCoordinator.CreateMessage(goal.Id)
+                    ]));
+            });
+
+        var profile = new WorkerProfile("test-profile", "Write-Output {promptPath}");
+        var researcher = goal.Tasks.First(task => task.RequiredRole == AgentRole.Researcher);
+        _ = GoalManagementCommandService.ProfileDispatchTask(
+            kernel,
+            workspace,
+            goal,
+            researcher,
+            profile,
+            AgentCatalog.Default().Agents,
+            providers);
+        Xunit.Assert.False(provider.Started.Task.IsCompleted);
+        await repository.SaveAsync(kernel);
+
+        var planner = goal.Tasks.First(task => task.RequiredRole == AgentRole.Planner);
+        var pending = Xunit.Assert.Throws<InvalidOperationException>(() =>
+            GoalManagementCommandService.ProfileDispatchTask(
+                kernel,
+                workspace,
+                goal,
+                planner,
+                profile,
+                AgentCatalog.Default().Agents,
+                providers));
+        Xunit.Assert.StartsWith("SPEC_REFINEMENT_PENDING", pending.Message, StringComparison.Ordinal);
+        Xunit.Assert.False(provider.Started.Task.IsCompleted);
+
+        // The production coordinator runs in its own process. Keep this invocation off xUnit's
+        // synchronization context because EnsureRefined is intentionally a synchronous gate over
+        // the asynchronous provider call; running it on that context would block this test from
+        // delivering the provider response below.
+        var refinement = Task.Run(() => GoalRefinementWorkCoordinator.ProcessAsync(
+            repository,
+            workspace,
+            providers,
+            WorkerProfileCatalog.Default(),
+            goal.Id));
+        await provider.Started.Task.WaitAsync(TimeSpan.FromSeconds(1));
+        Xunit.Assert.False(refinement.IsCompleted);
+
+        provider.CompleteWith("""
+            ```json
+            {"behavioralContract":"Use the completed refined spec.","acceptanceCriteria":["Planner sees the spec"],"verificationClass":"TestVerifiable","decisions":[],"forks":[]}
+            ```
+            """);
+        var refinementResult = await refinement.WaitAsync(TimeSpan.FromSeconds(2));
+        Xunit.Assert.True(refinementResult.Claimed);
+        Xunit.Assert.True(refinementResult.Attached);
+        Xunit.Assert.Empty(await repository.ListOutboxMessagesAsync(GoalRefinementWorkCoordinator.OutboxKind));
+        var replay = await GoalRefinementWorkCoordinator.ProcessAsync(
+            repository,
+            workspace,
+            providers,
+            WorkerProfileCatalog.Default(),
+            goal.Id);
+        Xunit.Assert.False(replay.Claimed);
+        Xunit.Assert.False(replay.Attached);
+
+        var reloadedKernel = await repository.LoadAsync();
+        var reloadedGoal = reloadedKernel.GetGoal(goal.Id);
+        var reloadedResearcher = reloadedGoal.Tasks.First(task => task.RequiredRole == AgentRole.Researcher);
+        Xunit.Assert.NotNull(reloadedResearcher.LastDispatch);
+        var reloadedPlanner = reloadedGoal.Tasks.First(task => task.RequiredRole == AgentRole.Planner);
+        var preflight = await Xunit.Assert.ThrowsAsync<WorkerSubscriptionPreflightException>(
+            () => Task.Run(() => GoalManagementCommandService.ProfileDispatchTask(
+                reloadedKernel,
+                workspace,
+                reloadedGoal,
+                reloadedPlanner,
+                profile,
+                AgentCatalog.Default().Agents,
+                providers)));
+        Xunit.Assert.Contains("missing-research-artifact", preflight.Message, StringComparison.Ordinal);
+        Xunit.Assert.Equal("Use the completed refined spec.", reloadedGoal.RefinedSpec!.BehavioralContract);
     }
 
     [Xunit.Fact(DisplayName = "GoalLifecycleCommands_records_auto_pipeline_decision_and_creates_reviewer_lane")]
@@ -1020,7 +1140,54 @@ public sealed class GoalRefinementTests
         var result = await service.RefineAsync(kernel, goalId);
 
         Xunit.Assert.Equal(RefinementOutcome.AutoRefined, result.Outcome);
+        Xunit.Assert.Equal(RefinementDisposition.Completed, result.Disposition);
+        var receipt = GoalRefinementGate.BuildPolicyReceipt(result);
+        Xunit.Assert.Contains("outcome=completed", receipt, StringComparison.Ordinal);
+        Xunit.Assert.DoesNotContain("reason_code=", receipt, StringComparison.Ordinal);
         Xunit.Assert.Equal("Subscription CLI refined the goal.", kernel.GetGoal(goalId).RefinedSpec!.BehavioralContract);
+    }
+
+    [Xunit.Fact(DisplayName = "GoalRefinementService_subscription_timeout_records_fallback_reason_and_invocation")]
+    public async Task GoalRefinementServiceSubscriptionTimeoutRecordsFallbackReasonAndInvocation()
+    {
+        var catalog = new ModelFunctionCatalog([
+            new ModelFunctionBinding(
+                ModelFunctionPurposes.SpecRefiner,
+                ModelLane.Capable,
+                new ModelProfile("unused-api", "unused-model", ModelCapability.Text, SubscriptionMode.ApiKey),
+                Subscription: new SubscriptionLaunchProfile("codex-cli", "gpt-test", "medium"))
+        ]);
+        var profiles = new WorkerProfileCatalog([
+            new WorkerProfile("codex-cli", "codex exec --model {subscriptionModelName} {promptPath}")
+        ]);
+        var (service, kernel, goalId, _) = BuildScenario(
+            catalog,
+            workerProfiles: profiles,
+            subscriptionCompleterFactory: sub => new SubscriptionCliCompleter(
+                profiles.GetRequired(sub.WorkerProfileName).CommandTemplate,
+                sub.WorkerProfileName,
+                sub.ModelAlias ?? string.Empty,
+                sub.ReasoningEffort,
+                async (_, _, cancellationToken) =>
+                {
+                    await Task.Delay(Timeout.InfiniteTimeSpan, cancellationToken);
+                    return string.Empty;
+                }),
+            subscriptionTimeout: TimeSpan.FromMilliseconds(25));
+
+        var result = await service.RefineAsync(kernel, goalId);
+        var receipt = GoalRefinementGate.BuildPolicyReceipt(result);
+
+        Xunit.Assert.Equal(RefinementDisposition.Fallback, result.Disposition);
+        Xunit.Assert.Equal("subscription-timeout", result.Failure!.ReasonCode);
+        Xunit.Assert.True(result.Invocation.PromptCharacterCount > 0);
+        Xunit.Assert.True(result.Invocation.PromptUtf8ByteCount >= result.Invocation.PromptCharacterCount);
+        Xunit.Assert.Equal("OpenAICodexCli", result.Invocation.ProviderKind);
+        Xunit.Assert.Equal("codex-cli", result.Invocation.WorkerProfile);
+        Xunit.Assert.Equal("gpt-test", result.Invocation.Model);
+        Xunit.Assert.Equal("medium", result.Invocation.ReasoningEffort);
+        Xunit.Assert.Contains("outcome=fallback", receipt, StringComparison.Ordinal);
+        Xunit.Assert.Contains("reason_code=subscription-timeout", receipt, StringComparison.Ordinal);
     }
 
     [Xunit.Fact(DisplayName = "GoalRefinementService_selects_subscription_refiner_binding_by_identity_when_not_first")]
@@ -1185,6 +1352,7 @@ public sealed class GoalRefinementTests
             "Integrate API with unspecified version",
             workspace,
             providers);
+        _ = GoalRefinementGate.EnsureRefined(kernel, workspace, providers, goal);
 
         Xunit.Assert.True(GoalRefinementGate.HasOpenClarification(workspace, goal));
         var blocked = Xunit.Assert.ThrowsAny<InvalidOperationException>(
@@ -1272,13 +1440,37 @@ public sealed class GoalRefinementTests
         Xunit.Assert.False(second.RanRefinement);
         Xunit.Assert.Equal(1, kernel.GetTimeline(goal.Id).Count(evt =>
             evt.Kind == ProgressKind.GoalPolicyDecision &&
-            evt.Message.Contains("Goal refinement attached", StringComparison.Ordinal)));
+            evt.Message.StartsWith("spec_refinement outcome=", StringComparison.Ordinal)));
+    }
+
+    [Xunit.Fact(DisplayName = "GoalRefinementGate_records_distinct_countable_fallback_receipt")]
+    public void GoalRefinementGateRecordsDistinctCountableFallbackReceipt()
+    {
+        var root = CreateTempDirectory();
+        var workspace = OrchestratorWorkspace.ForDirectory(root);
+        var providers = new InMemoryModelProviderRegistry([]);
+        ModelFunctionCatalogStore.Save(workspace.ModelFunctionCatalogPath, new ModelFunctionCatalog([
+            new ModelFunctionBinding(
+                ModelFunctionPurposes.SpecRefiner,
+                ModelLane.CheapApi,
+                new ModelProfile("missing-provider", "fake-model", ModelCapability.Text, SubscriptionMode.ApiKey))
+        ]));
+        var kernel = new AgentOrchestratorKernel();
+        var goal = kernel.CreateGoal("Refine one objective");
+
+        _ = GoalRefinementGate.EnsureRefined(kernel, workspace, providers, goal);
+
+        var receipt = Xunit.Assert.Single(kernel.GetTimeline(goal.Id).Where(evt =>
+            evt.Kind == ProgressKind.GoalPolicyDecision &&
+            evt.Message.StartsWith("spec_refinement outcome=", StringComparison.Ordinal)));
+        Xunit.Assert.Contains("outcome=fallback", receipt.Message, StringComparison.Ordinal);
+        Xunit.Assert.Contains("reason_code=provider-unavailable", receipt.Message, StringComparison.Ordinal);
     }
 
     // --- Answer-back: a store-only resolution (the listener path) is synced into the spec by the gate ---
 
-    [Xunit.Fact(DisplayName = "GoalRefinementGate_EnsureRefined_syncs_store_resolved_answer_into_spec_and_resumes")]
-    public async Task EnsureRefinedSyncsStoreResolvedAnswerIntoSpecAndResumes()
+    [Xunit.Fact(DisplayName = "Spec_consumer_guard_syncs_store_resolved_answer_into_spec_and_resumes")]
+    public async Task SpecConsumerGuardSyncsStoreResolvedAnswerIntoSpecAndResumes()
     {
         var root = CreateTempDirectory();
         var workspace = OrchestratorWorkspace.ForDirectory(root);
@@ -1299,6 +1491,7 @@ public sealed class GoalRefinementTests
         var kernel = new AgentOrchestratorKernel();
         var goal = GoalLifecycleCommands.CreateAndActivateGoal(
             kernel, AgentCatalog.Default().Agents, "Integrate API with unspecified version", workspace, providers);
+        _ = GoalRefinementGate.EnsureRefined(kernel, workspace, providers, goal);
 
         // Refinement raised a clarification: goal is awaiting and the spec has an open question.
         Xunit.Assert.True(GoalRefinementGate.HasOpenClarification(workspace, goal));
@@ -1309,13 +1502,18 @@ public sealed class GoalRefinementTests
         await CollaborationItemStore.ForDirectory(workspace.OrchestratorDirectory).TryResolveAsync(item.CorrelationKey!, "v2");
         Xunit.Assert.False(GoalRefinementGate.HasOpenClarification(workspace, goal));
 
-        // Conductor/gate path: EnsureRefined syncs the stored answer into the spec and clears AwaitingClarification.
-        var result = GoalRefinementGate.EnsureRefined(kernel, workspace, providers, kernel.GetGoal(goal.Id));
+        // Production dispatch path: the consumer guard syncs the stored answer into the spec before
+        // checking whether clarification still blocks the task.
+        GoalManagementCommandService.EnsureRefinedForSpecConsumer(
+            kernel,
+            workspace,
+            providers,
+            kernel.GetGoal(goal.Id));
 
-        Xunit.Assert.Equal(RefinementOutcome.AutoRefined, result.Outcome);
-        Xunit.Assert.False(result.Spec.HasOpenQuestions);
-        Xunit.Assert.Contains(result.Spec.Decisions, decision => decision.Choice == "v2");
-        Xunit.Assert.False(kernel.GetGoal(goal.Id).RefinedSpec!.HasOpenQuestions);
+        var synced = kernel.GetGoal(goal.Id).RefinedSpec!;
+        Xunit.Assert.False(synced.HasOpenQuestions);
+        Xunit.Assert.Contains(synced.Decisions, decision => decision.Choice == "v2");
+        Xunit.Assert.Contains(synced.ClarificationAnswerHistory, answer => answer.Text == "v2");
     }
 
     [Xunit.Fact(DisplayName = "SubscriptionCliCompleter_BuildStartInfo_uses_utf8_stdio_encoding")]
@@ -1586,6 +1784,7 @@ public sealed class GoalRefinementTests
             "Add deterministic benchmark support",
             workspace,
             providers);
+        _ = GoalRefinementGate.EnsureRefined(kernel, workspace, providers, goal);
 
         var blocked = Xunit.Assert.ThrowsAny<InvalidOperationException>(() =>
             GoalManagementCommandService.SubscriptionDispatchReadyTasks(
@@ -1625,6 +1824,7 @@ public sealed class GoalRefinementTests
             "Add deterministic benchmark support",
             workspace,
             providers);
+        _ = GoalRefinementGate.EnsureRefined(kernel, workspace, providers, goal);
         var store = CollaborationItemStore.ForDirectory(workspace.OrchestratorDirectory);
         var item = (await store.ListAsync(goal.Id.Value)).Single();
         await store.TryResolveAsync(item.CorrelationKey!, $"re-scope: {replacement}");
@@ -1773,7 +1973,8 @@ public sealed class GoalRefinementTests
         SpecRefinerPrecedentStore? precedentStore = null,
         WorkerProfileCatalog? workerProfiles = null,
         Func<SubscriptionLaunchProfile, SubscriptionCliCompleter>? subscriptionCompleterFactory = null,
-        string objective = "Integrate the billing system")
+        string objective = "Integrate the billing system",
+        TimeSpan? subscriptionTimeout = null)
     {
         var provider = new FakeSmokeProvider(text: responseJson, providerName: "fake-refiner");
         var registry = new InMemoryModelProviderRegistry([provider]);
@@ -1796,11 +1997,29 @@ public sealed class GoalRefinementTests
             collab,
             prec,
             workerProfiles,
-            subscriptionCompleterFactory);
+            subscriptionCompleterFactory,
+            subscriptionTimeout: subscriptionTimeout);
         var kernel = new AgentOrchestratorKernel();
         var goal = kernel.CreateGoal(objective);
 
         return (service, kernel, goal.Id, collab);
+    }
+
+    private sealed class BlockingModelProvider(string providerName) : IModelProvider
+    {
+        private readonly TaskCompletionSource<string> _response = new(TaskCreationOptions.RunContinuationsAsynchronously);
+
+        public string ProviderName { get; } = providerName;
+        public TaskCompletionSource<bool> Started { get; } = new(TaskCreationOptions.RunContinuationsAsynchronously);
+
+        public void CompleteWith(string response) => _response.TrySetResult(response);
+
+        public async Task<ModelResponse> CompleteAsync(ModelRequest request, CancellationToken cancellationToken)
+        {
+            Started.TrySetResult(true);
+            var text = await _response.Task.WaitAsync(cancellationToken);
+            return new ModelResponse(text, new ModelUsage(1, 1), "stop");
+        }
     }
 }
 

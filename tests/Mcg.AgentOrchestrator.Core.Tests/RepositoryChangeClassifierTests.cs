@@ -403,7 +403,6 @@ public sealed class RepositoryChangeClassifierTests
     [Xunit.InlineData("src/Mcg.AgentOrchestrator.Infrastructure/Workspaces/GoalAcceptanceVerifier.cs")]
     [Xunit.InlineData("src/Mcg.AgentOrchestrator.Infrastructure/Workers/WorkerProfileDispatcher.cs")]
     [Xunit.InlineData("src/Mcg.AgentOrchestrator.Infrastructure/Persistence/ModelFunctionCatalogStore.cs")]
-    [Xunit.InlineData("src/Mcg.AgentOrchestrator.Infrastructure/Persistence/AgentCatalogStore.cs")]
     [Xunit.InlineData("src/Mcg.AgentOrchestrator.Core/Application/TaskComplexityEstimator.cs")]
     [Xunit.InlineData("src/Mcg.AgentOrchestrator.App/Orchestration/LandingExecutor.cs")]
     [Xunit.InlineData("src/Mcg.AgentOrchestrator.App/Orchestration/GoalRefinementGate.cs")]
@@ -496,6 +495,53 @@ public sealed class RepositoryChangeClassifierTests
         Assert.Equal("infrastructure tests", check.Name);
         Assert.True(check.Command.Any(argument => argument.Equals("tests/Mcg.AgentOrchestrator.Infrastructure.Tests/Mcg.AgentOrchestrator.Infrastructure.Tests.csproj", StringComparison.Ordinal)));
         Assert.False(check.Command.Any(argument => argument.Equals("tests/Mcg.AgentOrchestrator.Core.Tests/Mcg.AgentOrchestrator.Core.Tests.csproj", StringComparison.Ordinal)));
+    }
+
+    [Xunit.Fact(DisplayName = "RepositoryTestImpactPlanner_selects_infrastructure_tests_for_extracted_provider_changes")]
+    public void RepositoryTestImpactPlannerSelectsInfrastructureTestsForExtractedProviderChanges()
+    {
+        var path = "src/Mcg.AgentOrchestrator.Infrastructure.Providers/ModelProviders.cs";
+
+        var summary = RepositoryChangeClassifier.Classify([path]);
+        var plan = RepositoryTestImpactPlanner.Plan(summary);
+
+        Assert.True(summary.RequiresConductorRelaunch);
+        Assert.True(summary.RequiresBroadVerification);
+        Assert.True(plan.RequiresBuild);
+        var check = Assert.Single(plan.Checks);
+        Assert.Equal("infrastructure tests", check.Name);
+        Assert.Contains(
+            "tests/Mcg.AgentOrchestrator.Infrastructure.Tests/Mcg.AgentOrchestrator.Infrastructure.Tests.csproj",
+            check.Command);
+    }
+
+    [Xunit.Fact(DisplayName = "RepositoryOwnershipMap_classifies_extracted_provider_as_shared_infrastructure")]
+    public void RepositoryOwnershipMapClassifiesExtractedProviderAsSharedInfrastructure()
+    {
+        var guard = RepositoryOwnershipMap.GuardWriteSet([
+            "src/Mcg.AgentOrchestrator.Infrastructure.Providers/ModelProviders.cs"
+        ]);
+
+        var path = Assert.Single(guard.Paths);
+        Assert.Equal(RepositoryOwnershipArea.SharedInfrastructure, path.Area);
+        Assert.True(path.IsHighRisk);
+        Assert.True(path.RequiresSerialization);
+        Assert.True(guard.RequiresOperatorApproval);
+        Assert.Contains("ownership:shared-infrastructure", guard.RequiredResources);
+    }
+
+    [Xunit.Fact(DisplayName = "RepositoryTestImpactPlanner_runs_full_infrastructure_tests_for_provider_and_test_changes")]
+    public void RepositoryTestImpactPlannerRunsFullInfrastructureTestsForProviderAndTestChanges()
+    {
+        var plan = RepositoryTestImpactPlanner.Plan([
+            "src/Mcg.AgentOrchestrator.Infrastructure.Providers/ModelProviders.cs",
+            "tests/Mcg.AgentOrchestrator.Infrastructure.Tests/TestHarness/InfrastructureProductionProjectGraphTests.cs"
+        ]);
+
+        var check = Assert.Single(plan.Checks);
+        Assert.Equal("infrastructure tests", check.Name);
+        Assert.Contains("tests/Mcg.AgentOrchestrator.Infrastructure.Tests/Mcg.AgentOrchestrator.Infrastructure.Tests.csproj", check.Command);
+        Assert.DoesNotContain("--filter", check.Command);
     }
 
     [Xunit.Fact(DisplayName = "RepositoryTestImpactPlanner_selects_focused_cli_filter_for_cli_only_changes")]

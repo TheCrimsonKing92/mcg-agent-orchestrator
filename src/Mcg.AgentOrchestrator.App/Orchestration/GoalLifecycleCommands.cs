@@ -56,13 +56,6 @@ internal static class GoalLifecycleCommands
         GoalObjectivePlanner.ThrowIfBlocked(plan);
         EnsureRequestedPipelineCanBeSatisfied(plan, agents);
         var goal = CreateGoalFromPlan(kernel, plan);
-        GoalRefinementGate.EnsureRefined(
-            kernel,
-            workspace,
-            providers,
-            goal,
-            eventWriter: eventWriter,
-            collaborationItemRaise: collaborationItemRaise);
         kernel.ActivateGoal(goal.Id, agents);
         return goal;
     }
@@ -146,13 +139,6 @@ internal static class GoalLifecycleCommands
         var plan = GoalObjectivePlanner.Build(objective, GoalIntakePipeline.DeveloperOnly, kernel.BuildTaskDurationStats());
         GoalObjectivePlanner.ThrowIfBlocked(plan);
         var goal = CreateGoalFromPlan(kernel, plan);
-        GoalRefinementGate.EnsureRefined(
-            kernel,
-            workspace,
-            providers,
-            goal,
-            eventWriter: eventWriter,
-            collaborationItemRaise: collaborationItemRaise);
         kernel.ActivateGoal(goal.Id, agents);
         return goal;
     }
@@ -169,7 +155,7 @@ internal static class GoalLifecycleCommands
         var plan = GoalObjectivePlanner.Build(objective, pipeline, kernel.BuildTaskDurationStats());
         GoalObjectivePlanner.ThrowIfBlocked(plan);
         var goal = CreateGoalFromPlan(kernel, plan, sliceBatchParentId);
-        GoalRefinementGate.EnsureRefined(kernel, workspace, providers, goal, eventWriter: eventWriter);
+        GoalRefinementWorkCoordinator.RecordPending(kernel, goal.Id);
         return goal;
     }
 

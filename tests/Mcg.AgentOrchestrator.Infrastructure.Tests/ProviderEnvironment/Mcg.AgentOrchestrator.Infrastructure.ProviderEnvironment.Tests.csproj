@@ -11,7 +11,7 @@
   <ItemGroup>
     <ProjectReference Include="..\..\..\src\Mcg.AgentOrchestrator.Core\Mcg.AgentOrchestrator.Core.csproj" />
     <ProjectReference Include="..\..\..\src\Mcg.AgentOrchestrator.App\Mcg.AgentOrchestrator.App.csproj" />
-    <ProjectReference Include="..\..\..\src\Mcg.AgentOrchestrator.Infrastructure\Mcg.AgentOrchestrator.Infrastructure.csproj" />
+    <ProjectReference Include="..\..\..\src\Mcg.AgentOrchestrator.Infrastructure.Providers\Mcg.AgentOrchestrator.Infrastructure.Providers.csproj" />
     <PackageReference Include="Microsoft.Testing.Extensions.TrxReport" Version="2.3.2" />
     <PackageReference Include="xunit.v3.mtp-v2" Version="3.2.2" />
   </ItemGroup>

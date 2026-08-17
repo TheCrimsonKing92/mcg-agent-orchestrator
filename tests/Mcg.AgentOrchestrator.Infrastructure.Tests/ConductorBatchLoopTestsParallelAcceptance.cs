@@ -3356,6 +3356,572 @@ public sealed class ConductorBatchLoopTestsParallelAcceptance : ConductorBatchLo
         }
     }
 
+    [Xunit.Fact]
+    public void BatchLoopAmbiguousTerminalClaimsReconcileBeforeLiveClaimDeferral()
+    {
+        var kernel = new AgentOrchestratorKernel();
+        var liveGoal = CreateVerifiedSimpleGoal(kernel, "Update src/Mcg.AgentOrchestrator.App/Orchestration/SharedTerminal.cs");
+        var terminalGoal = CreateVerifiedSimpleGoal(kernel, "Also update src/Mcg.AgentOrchestrator.App/Orchestration/SharedTerminal.cs");
+        var attemptRoot = CreateTempDirectory("mcg-conductor-ambiguous-terminal-attempts");
+        try
+        {
+            var seedCoordinator = new ConductorParallelAcceptanceAttemptCoordinator(attemptRoot, runInline: true);
+            var liveCandidate = ConductorParallelAcceptanceCandidate.Create(
+                liveGoal,
+                0,
+                ["src/Mcg.AgentOrchestrator.App/Orchestration/SharedTerminal.cs"]);
+            var terminalCandidate = ConductorParallelAcceptanceCandidate.Create(
+                terminalGoal,
+                1,
+                ["src/Mcg.AgentOrchestrator.App/Orchestration/SharedTerminal.cs"]);
+            var live = seedCoordinator.Evaluate(
+                liveCandidate,
+                ConductorAutonomyPolicy.Conservative,
+                PassingRun).Attempt;
+            var terminal = seedCoordinator.Evaluate(
+                terminalCandidate,
+                ConductorAutonomyPolicy.Conservative,
+                PassingRun).Attempt;
+            File.Delete(live.ResultPath);
+            File.Delete(live.ExitCodePath);
+            File.WriteAllText(
+                live.MetadataPath,
+                JsonSerializer.Serialize(
+                    live with
+                    {
+                        Outcome = ConductorParallelAcceptanceAttemptOutcome.Running,
+                        OwnerProcessId = Environment.ProcessId,
+                        CompletedAt = null,
+                        ReconciledAt = null,
+                        Detail = null
+                    },
+                    new JsonSerializerOptions(JsonSerializerDefaults.Web) { WriteIndented = true }));
+
+            var reconcileCoordinator = new ConductorParallelAcceptanceAttemptCoordinator(
+                attemptRoot,
+                isProcessAlive: _ => true,
+                launchOwnedProcess: _ => throw new InvalidOperationException("existing attempts must be observed, not relaunched"));
+            var driver = MakeDriver(
+                getFacts: _ => new GoalLifecycleFacts(WorkspaceExists: true),
+                getLandingFileScopes: _ => liveCandidate.ScopePaths,
+                runAcceptanceWithSlot: (_, _) => AcceptanceVerificationSummary.PassedWithNoUnmetCriteria,
+                parallelAcceptanceAttemptCoordinator: reconcileCoordinator);
+
+            _ = new ConductorBatchLoop().Run(
+                kernel,
+                driver,
+                ConductorAutonomyPolicy.Conservative,
+                NoStopPath(),
+                maxIterations: 1);
+
+            Assert.Equal(GoalStatus.Verifying, liveGoal.Status);
+            Assert.NotNull(ReadAttempt(terminal.MetadataPath).ReconciledAt);
+            Assert.Equal(GoalStatus.Verified, terminalGoal.Status);
+        }
+        finally
+        {
+            TryDeleteDirectory(attemptRoot);
+        }
+    }
+
+    [Xunit.Fact]
+    public void BatchLoopSameGoalTerminalAttemptsAllReconcile()
+    {
+        var kernel = new AgentOrchestratorKernel();
+        var goal = CreateVerifiedSimpleGoal(kernel, "Update src/Mcg.AgentOrchestrator.App/Orchestration/SameGoal.cs");
+        var attemptRoot = CreateTempDirectory("mcg-conductor-same-goal-terminal-attempts");
+        try
+        {
+            var seedCoordinator = new ConductorParallelAcceptanceAttemptCoordinator(attemptRoot, runInline: true);
+            var candidate = ConductorParallelAcceptanceCandidate.Create(
+                goal,
+                0,
+                ["src/Mcg.AgentOrchestrator.App/Orchestration/SameGoal.cs"],
+                "branch",
+                "main");
+            var first = seedCoordinator.Evaluate(
+                candidate,
+                ConductorAutonomyPolicy.Conservative,
+                PassingRun).Attempt;
+            var secondId = first.AttemptId + "-duplicate";
+            string DuplicatePath(string path) => path.Replace(first.AttemptId, secondId, StringComparison.Ordinal);
+            var second = first with
+            {
+                AttemptId = secondId,
+                StartedAt = first.StartedAt.AddSeconds(1),
+                LastHeartbeatAt = first.LastHeartbeatAt.AddSeconds(1),
+                StdoutPath = DuplicatePath(first.StdoutPath),
+                StderrPath = DuplicatePath(first.StderrPath),
+                ExitCodePath = DuplicatePath(first.ExitCodePath),
+                HeartbeatPath = DuplicatePath(first.HeartbeatPath),
+                ResultPath = DuplicatePath(first.ResultPath),
+                MetadataPath = DuplicatePath(first.MetadataPath)
+            };
+            File.Copy(first.ResultPath, second.ResultPath);
+            File.Copy(first.ExitCodePath, second.ExitCodePath);
+            File.WriteAllText(
+                second.MetadataPath,
+                JsonSerializer.Serialize(
+                    second,
+                    new JsonSerializerOptions(JsonSerializerDefaults.Web) { WriteIndented = true }));
+
+            var landed = false;
+            var reconcileCoordinator = new ConductorParallelAcceptanceAttemptCoordinator(
+                attemptRoot,
+                launchOwnedProcess: _ => throw new InvalidOperationException("terminal receipt reconciliation must not launch"));
+            var driver = MakeDriver(
+                getFacts: _ => landed
+                    ? new GoalLifecycleFacts(WorkspaceExists: true, IsMerged: true, IsRecorded: true, IsCleanedUp: true)
+                    : new GoalLifecycleFacts(WorkspaceExists: true),
+                land: landedGoal =>
+                {
+                    landed = true;
+                    return new LandingResult(
+                        landedGoal.Id.Value,
+                        landedGoal.Id.Value[..8],
+                        new LandingDecision.Promote(),
+                        "integration",
+                        true,
+                        "ok");
+                },
+                getLandingFileScopes: _ => candidate.ScopePaths,
+                runAcceptanceWithSlot: (_, _) => AcceptanceVerificationSummary.PassedWithNoUnmetCriteria,
+                parallelAcceptanceAttemptCoordinator: reconcileCoordinator);
+
+            var summary = new ConductorBatchLoop().Run(
+                kernel,
+                driver,
+                ConductorAutonomyPolicy.Conservative,
+                NoStopPath(),
+                maxIterations: 1);
+
+            Assert.Equal(1, summary.Advanced);
+            Assert.True(landed);
+            Assert.NotNull(ReadAttempt(first.MetadataPath).ReconciledAt);
+            Assert.NotNull(ReadAttempt(second.MetadataPath).ReconciledAt);
+        }
+        finally
+        {
+            TryDeleteDirectory(attemptRoot);
+        }
+    }
+
+    [Xunit.Fact]
+    public void BatchLoopSameGoalLiveAttemptIsObservedAfterNewerTerminalSiblingReconciles()
+    {
+        var kernel = new AgentOrchestratorKernel();
+        var goal = CreateVerifiedSimpleGoal(kernel, "Update src/Mcg.AgentOrchestrator.App/Orchestration/SameGoalLive.cs");
+        var attemptRoot = CreateTempDirectory("mcg-conductor-same-goal-live-attempts");
+        try
+        {
+            var seedCoordinator = new ConductorParallelAcceptanceAttemptCoordinator(attemptRoot, runInline: true);
+            var candidate = ConductorParallelAcceptanceCandidate.Create(
+                goal,
+                0,
+                ["src/Mcg.AgentOrchestrator.App/Orchestration/SameGoalLive.cs"],
+                "branch",
+                "main");
+            var terminal = seedCoordinator.Evaluate(
+                candidate,
+                ConductorAutonomyPolicy.Conservative,
+                PassingRun).Attempt;
+            var liveId = terminal.AttemptId + "-live-predecessor";
+            string LivePath(string path) => path.Replace(terminal.AttemptId, liveId, StringComparison.Ordinal);
+            var live = terminal with
+            {
+                AttemptId = liveId,
+                StartedAt = terminal.StartedAt.AddSeconds(-1),
+                LastHeartbeatAt = DateTimeOffset.UtcNow,
+                OwnerProcessId = Environment.ProcessId,
+                Outcome = ConductorParallelAcceptanceAttemptOutcome.Running,
+                StdoutPath = LivePath(terminal.StdoutPath),
+                StderrPath = LivePath(terminal.StderrPath),
+                ExitCodePath = LivePath(terminal.ExitCodePath),
+                HeartbeatPath = LivePath(terminal.HeartbeatPath),
+                ResultPath = LivePath(terminal.ResultPath),
+                MetadataPath = LivePath(terminal.MetadataPath),
+                CompletedAt = null,
+                ReconciledAt = null,
+                Detail = null
+            };
+            File.WriteAllText(
+                live.MetadataPath,
+                JsonSerializer.Serialize(
+                    live,
+                    new JsonSerializerOptions(JsonSerializerDefaults.Web) { WriteIndented = true }));
+
+            var launches = 0;
+            var landed = false;
+            var reconcileCoordinator = new ConductorParallelAcceptanceAttemptCoordinator(
+                attemptRoot,
+                isProcessAlive: _ => true,
+                launchOwnedProcess: _ =>
+                {
+                    launches++;
+                    return new ConductorParallelAcceptanceOwnedProcessLaunchResult(Environment.ProcessId);
+                });
+            var driver = MakeDriver(
+                getFacts: _ => new GoalLifecycleFacts(WorkspaceExists: true),
+                land: landedGoal =>
+                {
+                    landed = true;
+                    return new LandingResult(
+                        landedGoal.Id.Value,
+                        landedGoal.Id.Value[..8],
+                        new LandingDecision.Promote(),
+                        "integration",
+                        true,
+                        "ok");
+                },
+                getLandingFileScopes: _ => candidate.ScopePaths,
+                runAcceptanceWithSlot: (_, _) => AcceptanceVerificationSummary.PassedWithNoUnmetCriteria,
+                parallelAcceptanceAttemptCoordinator: reconcileCoordinator);
+
+            var summary = new ConductorBatchLoop().Run(
+                kernel,
+                driver,
+                ConductorAutonomyPolicy.Conservative,
+                NoStopPath(),
+                maxIterations: 1);
+
+            Assert.Equal(0, summary.Advanced);
+            Assert.Equal(1, summary.Held);
+            Assert.False(landed);
+            Assert.Equal(0, launches);
+            Assert.Equal(GoalStatus.Verifying, goal.Status);
+            Assert.NotNull(ReadAttempt(terminal.MetadataPath).ReconciledAt);
+            Assert.Null(ReadAttempt(live.MetadataPath).ReconciledAt);
+        }
+        finally
+        {
+            TryDeleteDirectory(attemptRoot);
+        }
+    }
+
+    [Xunit.Fact]
+    public void HandoffCanonicalRegistrationBindsDiscoveredMetadataPath()
+    {
+        var (_, goal) = SimpleGoal("Update src/Mcg.AgentOrchestrator.App/Orchestration/CanonicalClaim.cs");
+        var attemptRoot = CreateTempDirectory("mcg-conductor-canonical-claim");
+        try
+        {
+            var coordinator = new ConductorParallelAcceptanceAttemptCoordinator(attemptRoot, runInline: true);
+            var candidate = ConductorParallelAcceptanceCandidate.Create(
+                goal,
+                0,
+                ["src/Mcg.AgentOrchestrator.App/Orchestration/CanonicalClaim.cs"],
+                "branch",
+                "main");
+            var seeded = coordinator.Evaluate(
+                candidate,
+                ConductorAutonomyPolicy.Conservative,
+                PassingRun).Attempt;
+            var decoyPath = Path.Combine(attemptRoot, "decoy", "claim.attempt.json");
+            File.WriteAllText(
+                seeded.MetadataPath,
+                JsonSerializer.Serialize(
+                    seeded with { MetadataPath = decoyPath },
+                    new JsonSerializerOptions(JsonSerializerDefaults.Web) { WriteIndented = true }));
+
+            var discovered = Assert.Single(coordinator.GetUnreconciledAttempts([goal.Id.Value]));
+            Assert.Equal(Path.GetFullPath(seeded.MetadataPath), discovered.MetadataPath);
+            var decision = coordinator.ObserveExistingAttempt(discovered, candidate);
+            Assert.Equal(ConductorParallelAcceptanceAttemptDecisionKind.Completed, decision.Kind);
+            coordinator.MarkReconciled(decision.Attempt);
+
+            Assert.NotNull(ReadAttempt(seeded.MetadataPath).ReconciledAt);
+            Assert.False(File.Exists(decoyPath));
+        }
+        finally
+        {
+            TryDeleteDirectory(attemptRoot);
+        }
+    }
+
+    [Xunit.Fact]
+    public void HandoffCanonicalRegistrationBindsLatestMetadataPathBeforeInvalidation()
+    {
+        var (_, goal) = SimpleGoal("Update src/Mcg.AgentOrchestrator.App/Orchestration/CanonicalLatestClaim.cs");
+        var attemptRoot = CreateTempDirectory("mcg-conductor-canonical-latest-claim");
+        try
+        {
+            var coordinator = new ConductorParallelAcceptanceAttemptCoordinator(
+                attemptRoot,
+                isProcessAlive: _ => true,
+                launchOwnedProcess: _ => new ConductorParallelAcceptanceOwnedProcessLaunchResult(Environment.ProcessId));
+            var candidate = ConductorParallelAcceptanceCandidate.Create(
+                goal,
+                0,
+                ["src/Mcg.AgentOrchestrator.App/Orchestration/CanonicalLatestClaim.cs"],
+                "branch",
+                "main");
+            var seeded = coordinator.Evaluate(
+                candidate,
+                ConductorAutonomyPolicy.Conservative,
+                PassingRun).Attempt;
+            var decoyDirectory = Path.Combine(attemptRoot, "decoy");
+            Directory.CreateDirectory(decoyDirectory);
+            var decoyPath = Path.Combine(decoyDirectory, "claim.attempt.json");
+            File.Copy(seeded.MetadataPath, decoyPath);
+            File.WriteAllText(
+                seeded.MetadataPath,
+                JsonSerializer.Serialize(
+                    seeded with { MetadataPath = decoyPath },
+                    new JsonSerializerOptions(JsonSerializerDefaults.Web) { WriteIndented = true }));
+
+            Assert.True(coordinator.InvalidateCurrent(goal.Id.Value, "retry invalidated candidate"));
+
+            var canonical = ReadAttempt(seeded.MetadataPath);
+            Assert.Equal(ConductorParallelAcceptanceAttemptOutcome.StaleCandidate, canonical.Outcome);
+            Assert.Equal(Path.GetFullPath(seeded.MetadataPath), canonical.MetadataPath);
+            Assert.Equal(ConductorParallelAcceptanceAttemptOutcome.Running, ReadAttempt(decoyPath).Outcome);
+        }
+        finally
+        {
+            TryDeleteDirectory(attemptRoot);
+        }
+    }
+
+    [Xunit.Fact]
+    public void BatchLoopPersistedCompletionHonorsAuthoritativeVerificationGate()
+    {
+        var seedKernel = new AgentOrchestratorKernel();
+        var seededGoal = CreateVerifiedSimpleGoal(
+            seedKernel,
+            "Update src/Mcg.AgentOrchestrator.App/Orchestration/PersistedGate.cs");
+        var snapshot = seedKernel.ExportSnapshot();
+        var goalSnapshot = Assert.Single(snapshot.Goals);
+        var taskSnapshot = Assert.Single(goalSnapshot.Tasks);
+        var kernel = AgentOrchestratorKernel.FromSnapshot(snapshot with
+        {
+            Goals =
+            [
+                goalSnapshot with
+                {
+                    Status = GoalStatus.Verified,
+                    Tasks =
+                    [
+                        taskSnapshot with
+                        {
+                            LastExecution = new TaskExecutionSnapshot(
+                                "test-agent",
+                                "Test Agent",
+                                "test",
+                                "test",
+                                "truncated",
+                                "max_output_tokens",
+                                10,
+                                10,
+                                DateTimeOffset.UtcNow,
+                                MaxOutputTokens: 10)
+                        }
+                    ]
+                }
+            ]
+        });
+        var goal = kernel.GetGoal(seededGoal.Id);
+        var attemptRoot = CreateTempDirectory("mcg-conductor-persisted-gate");
+        try
+        {
+            var coordinator = new ConductorParallelAcceptanceAttemptCoordinator(attemptRoot, runInline: true);
+            var candidate = ConductorParallelAcceptanceCandidate.Create(
+                goal,
+                0,
+                ["src/Mcg.AgentOrchestrator.App/Orchestration/PersistedGate.cs"],
+                "branch",
+                "main");
+            var terminal = coordinator.Evaluate(
+                candidate,
+                ConductorAutonomyPolicy.Conservative,
+                PassingRun).Attempt;
+            Assert.False(kernel.BuildVerificationGate(goal.Id).IsSatisfied);
+            var landed = false;
+            var escalations = new List<string>();
+            var driver = MakeDriver(
+                getFacts: _ => new GoalLifecycleFacts(WorkspaceExists: true),
+                land: landedGoal =>
+                {
+                    landed = true;
+                    return new LandingResult(
+                        landedGoal.Id.Value,
+                        landedGoal.Id.Value[..8],
+                        new LandingDecision.Promote(),
+                        "integration",
+                        true,
+                        "ok");
+                },
+                writeEscalation: (_, _, reason) => escalations.Add(reason),
+                getLandingFileScopes: _ => candidate.ScopePaths,
+                runAcceptanceWithSlot: (_, _) => AcceptanceVerificationSummary.PassedWithNoUnmetCriteria,
+                parallelAcceptanceAttemptCoordinator: coordinator);
+
+            var summary = new ConductorBatchLoop().Run(
+                kernel,
+                driver,
+                ConductorAutonomyPolicy.Conservative,
+                NoStopPath(),
+                maxIterations: 1);
+
+            Assert.False(landed);
+            Assert.Equal(1, summary.Escalated);
+            Assert.Null(ReadAttempt(terminal.MetadataPath).ReconciledAt);
+            Assert.Contains(escalations, reason =>
+                reason.Contains("authoritative task verification gate unsatisfied", StringComparison.Ordinal));
+        }
+        finally
+        {
+            TryDeleteDirectory(attemptRoot);
+        }
+    }
+
+    [Xunit.Fact]
+    public void BatchLoopPersistedCompletionHonorsAcceptanceEngineCircuit()
+    {
+        var kernel = new AgentOrchestratorKernel();
+        var goal = CreateVerifiedSimpleGoal(kernel, "Update acceptance engine persisted circuit claim");
+        var attemptRoot = CreateTempDirectory("mcg-conductor-persisted-circuit");
+        var circuitRoot = CreateTempDirectory("mcg-conductor-persisted-circuit-state");
+        var dbPath = Path.Combine(circuitRoot, "run-events.db");
+        var events = new PostLandingCanaryEventStore(new SqliteRunEventStore(dbPath), dbPath);
+        try
+        {
+            var coordinator = new ConductorParallelAcceptanceAttemptCoordinator(attemptRoot, runInline: true);
+            var candidate = ConductorParallelAcceptanceCandidate.Create(
+                goal,
+                0,
+                ["src/Mcg.AgentOrchestrator.Infrastructure/Workspaces/TestCoverageInvariant.cs"],
+                "branch",
+                "main");
+            var terminal = coordinator.Evaluate(
+                candidate,
+                ConductorAutonomyPolicy.Conservative,
+                PassingRun).Attempt;
+            PostLandingCanaryEmergencyCircuit.Signal(
+                events.Identity,
+                "sha-red",
+                "fixture circuit open",
+                DateTimeOffset.UtcNow);
+            var circuit = new AcceptanceEngineCircuitBreaker(events);
+            var landed = false;
+            var driver = MakeDriver(
+                getFacts: _ => new GoalLifecycleFacts(WorkspaceExists: true),
+                land: landedGoal =>
+                {
+                    landed = true;
+                    return new LandingResult(
+                        landedGoal.Id.Value,
+                        landedGoal.Id.Value[..8],
+                        new LandingDecision.Promote(),
+                        "integration",
+                        true,
+                        "ok");
+                },
+                getLandingFileScopes: _ => candidate.ScopePaths,
+                runAcceptanceWithSlot: (_, _) => AcceptanceVerificationSummary.PassedWithNoUnmetCriteria,
+                parallelAcceptanceAttemptCoordinator: coordinator);
+
+            var summary = new ConductorBatchLoop(acceptanceEngineCircuit: circuit).Run(
+                kernel,
+                driver,
+                ConductorAutonomyPolicy.Conservative,
+                NoStopPath(),
+                maxIterations: 1);
+
+            Assert.False(landed);
+            Assert.Equal(1, summary.Held);
+            Assert.Null(ReadAttempt(terminal.MetadataPath).ReconciledAt);
+        }
+        finally
+        {
+            PostLandingCanaryEmergencyCircuit.Clear(events.Identity);
+            TryDeleteDirectory(attemptRoot);
+            TryDeleteDirectory(circuitRoot);
+        }
+    }
+
+    [Xunit.Fact]
+    public void BatchLoopPersistedReconciliationFaultIsolatedWhileHealthySiblingReconciles()
+    {
+        var kernel = new AgentOrchestratorKernel();
+        var faultyGoal = GoalLifecycleCommands.CreateAndActivateSimpleGoal(
+            kernel,
+            DefaultAgents(),
+            "Update src/Mcg.AgentOrchestrator.App/Orchestration/FaultyPersistedAttempt.cs");
+        var healthyGoal = GoalLifecycleCommands.CreateAndActivateSimpleGoal(
+            kernel,
+            DefaultAgents(),
+            "Update src/Mcg.AgentOrchestrator.App/Orchestration/HealthyPersistedAttempt.cs");
+        PassVerificationAt(kernel, faultyGoal, faultyGoal.Tasks.Single(), DateTimeOffset.Parse("2026-08-17T10:00:00Z"));
+        PassVerificationAt(kernel, healthyGoal, healthyGoal.Tasks.Single(), DateTimeOffset.Parse("2026-08-17T10:01:00Z"));
+        var attemptRoot = CreateTempDirectory("mcg-conductor-persisted-fault-isolation");
+        try
+        {
+            var coordinator = new ConductorParallelAcceptanceAttemptCoordinator(attemptRoot, runInline: true);
+            var faultyCandidate = ConductorParallelAcceptanceCandidate.Create(
+                faultyGoal,
+                0,
+                ["src/Mcg.AgentOrchestrator.App/Orchestration/FaultyPersistedAttempt.cs"],
+                "branch",
+                "main");
+            var faultyAttempt = coordinator.Evaluate(
+                faultyCandidate,
+                ConductorAutonomyPolicy.Conservative,
+                PassingRun).Attempt;
+            var healthyCandidate = ConductorParallelAcceptanceCandidate.Create(
+                healthyGoal,
+                0,
+                ["src/Mcg.AgentOrchestrator.App/Orchestration/HealthyPersistedAttempt.cs"],
+                "branch",
+                "main");
+            var healthyAttempt = coordinator.Evaluate(
+                healthyCandidate,
+                ConductorAutonomyPolicy.Conservative,
+                PassingRun).Attempt;
+            var landedGoalIds = new List<GoalId>();
+            var escalatedGoalIds = new List<GoalId>();
+            var driver = MakeDriver(
+                getFacts: _ => new GoalLifecycleFacts(WorkspaceExists: true),
+                land: landedGoal =>
+                {
+                    landedGoalIds.Add(landedGoal.Id);
+                    if (landedGoal.Id == faultyGoal.Id)
+                    {
+                        File.Delete(faultyAttempt.MetadataPath);
+                    }
+                    return new LandingResult(
+                        landedGoal.Id.Value,
+                        landedGoal.Id.Value[..8],
+                        new LandingDecision.Promote(),
+                        "integration",
+                        true,
+                        "ok");
+                },
+                writeEscalation: (goal, _, _) => escalatedGoalIds.Add(goal.Id),
+                getLandingFileScopes: goal => goal.Id == healthyGoal.Id
+                    ? healthyCandidate.ScopePaths
+                    : faultyCandidate.ScopePaths,
+                runAcceptanceWithSlot: (_, _) => AcceptanceVerificationSummary.PassedWithNoUnmetCriteria,
+                parallelAcceptanceAttemptCoordinator: coordinator);
+
+            var summary = new ConductorBatchLoop().Run(
+                kernel,
+                driver,
+                ConductorAutonomyPolicy.Conservative,
+                NoStopPath(),
+                maxIterations: 1);
+
+            Assert.Contains(healthyGoal.Id, landedGoalIds);
+            Assert.Contains(faultyGoal.Id, escalatedGoalIds);
+            Assert.Equal(1, summary.Advanced);
+            Assert.Equal(1, summary.Escalated);
+            Assert.NotNull(ReadAttempt(healthyAttempt.MetadataPath).ReconciledAt);
+        }
+        finally
+        {
+            TryDeleteDirectory(attemptRoot);
+        }
+    }
+
     private static double Median(IReadOnlyList<AcceptanceMakespanSample> samples) =>
         samples.Count % 2 == 0
             ? (samples[(samples.Count / 2) - 1].MakespanMs + samples[samples.Count / 2].MakespanMs) / 2
