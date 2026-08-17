@@ -1499,13 +1499,12 @@ public sealed class BackgroundDispatchRunner
                     hasCompletedVerification);
                 var verificationRecognized =
                     hasCompletedVerification || hasVerificationOnlyTesterCompletion;
-                var successfulChildStillRequiresChangeEvidence =
-                    successfulChildResultAvailable &&
+                var roleStillRequiresChangeEvidence =
                     dispatchRoleCapability == DispatchRoleOutputCapability.RequiresChangeEvidence;
                 var requiresCommitEvidence =
                     !successfulChildWithoutUsableWorkerResult &&
                     RequiresPostDispatchCommitEvidence(task, hasVerificationOnlyTesterCompletion) &&
-                    (successfulChildStillRequiresChangeEvidence ||
+                    (roleStillRequiresChangeEvidence ||
                      (!verificationRecognized &&
                        !AllowsNoChangeCompletion(task, decisionStandardOutput, decisionStandardError))) &&
                     !worktreeEvidence.HasRelevantCommitAfterDispatch;
