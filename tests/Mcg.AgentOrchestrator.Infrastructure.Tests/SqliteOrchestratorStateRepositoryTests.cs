@@ -2494,35 +2494,31 @@ public sealed class SqliteOrchestratorStateRepositoryTests
         var goalB = kernel.CreateGoal("Concurrent goal B");
         await repo.SaveAsync(kernel);
 
-        var snapA = await repo.LoadGoalAsync(goalA.Id);
-        var snapB = await repo.LoadGoalAsync(goalB.Id);
+        var mutateAStarted = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var releaseMutateA = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var taskA = repo.TransactGoalAsync<bool>(
+            goalA.Id,
+            async (snap, ct) =>
+            {
+                mutateAStarted.TrySetResult();
+                await releaseMutateA.Task.WaitAsync(ct);
+                return (true, snap, true);
+            });
+        await mutateAStarted.Task.WaitAsync(TimeSpan.FromSeconds(5));
 
-        // Simulate goal A holding a long mutate outside the write tx, while goal B does a short CAS.
-        // Both use TransactGoalAsync which only holds BEGIN IMMEDIATE for the brief CAS write.
-        var taskA = Task.Run(async () =>
-        {
-            await repo.TransactGoalAsync<bool>(
-                goalA.Id,
-                async (snap, ct) =>
-                {
-                    await Task.Delay(500, ct); // long work outside write tx
-                    return (true, snap, true);
-                });
-        });
-
-        // Goal B should complete its short CAS write DURING goal A's long mutate delay.
-        var sw = System.Diagnostics.Stopwatch.StartNew();
-        await repo.TransactGoalAsync<bool>(
+        var taskB = repo.TransactGoalAsync<bool>(
             goalB.Id,
-            (snap, ct) => Task.FromResult((true, snap, true)));
-        sw.Stop();
-
-        // Goal B's write should complete well before goal A's 500 ms delay ends.
-        // Allow generous margin (250 ms) for test environment variance.
-        Assert.True(sw.ElapsedMilliseconds < 250,
-            $"Goal B's TransactGoalAsync took {sw.ElapsedMilliseconds}ms — should complete independently of goal A's long mutate");
-
-        await taskA; // ensure A also completes
+            (snap, _) => Task.FromResult((true, snap, true)));
+        try
+        {
+            await taskB.WaitAsync(TimeSpan.FromSeconds(5));
+            Assert.False(taskA.IsCompleted, "Goal A must remain held while goal B completes independently.");
+        }
+        finally
+        {
+            releaseMutateA.TrySetResult();
+            await Task.WhenAll(taskA, taskB).WaitAsync(TimeSpan.FromSeconds(5));
+        }
     }
 
     [Xunit.Fact(DisplayName = "SqliteOrchestratorStateRepository_lists_goal_metadata")]
