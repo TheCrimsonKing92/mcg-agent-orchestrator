@@ -83,6 +83,77 @@ public static class DispatchFailureDiagnosticMarker
     public static string Format(string code) => $"{Prefix} {code}";
 }
 
+public static class DispatchRejectionDiagnosticMarker
+{
+    public const string Prefix = "@@MCG_DISPATCH_REJECTION@@";
+    public const string VerificationPatternUnmatched = "verification-pattern-unmatched";
+    public const string NoChangeEvidence = "no-change-evidence";
+
+    public static string Format(
+        bool verificationRecognized,
+        int postDispatchCommits,
+        string changedPaths) =>
+        $"{Prefix} verification_recognized={verificationRecognized.ToString().ToLowerInvariant()} " +
+        $"reason={(verificationRecognized ? NoChangeEvidence : VerificationPatternUnmatched)} " +
+        $"post_dispatch_commits={postDispatchCommits} " +
+        $"changed_paths_base64={Convert.ToBase64String(Encoding.UTF8.GetBytes(changedPaths))}";
+
+    public static bool TryParse(
+        string standardError,
+        out bool verificationRecognized,
+        out string reason,
+        out int postDispatchCommits,
+        out string changedPaths)
+    {
+        foreach (var line in standardError.Split(
+                     ['\r', '\n'],
+                     StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries).Reverse())
+        {
+            if (!line.StartsWith(Prefix + " ", StringComparison.Ordinal))
+            {
+                continue;
+            }
+
+            var fields = new Dictionary<string, string>(StringComparer.Ordinal);
+            foreach (var field in line[(Prefix.Length + 1)..]
+                         .Split(' ', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries))
+            {
+                var separator = field.IndexOf('=');
+                if (separator > 0)
+                {
+                    fields[field[..separator]] = field[(separator + 1)..];
+                }
+            }
+            if (!fields.TryGetValue("verification_recognized", out var recognizedText) ||
+                !bool.TryParse(recognizedText, out verificationRecognized) ||
+                !fields.TryGetValue("reason", out reason) ||
+                reason != (verificationRecognized ? NoChangeEvidence : VerificationPatternUnmatched) ||
+                !fields.TryGetValue("post_dispatch_commits", out var commitsText) ||
+                !int.TryParse(commitsText, out postDispatchCommits) ||
+                !fields.TryGetValue("changed_paths_base64", out var changedPathsBase64))
+            {
+                continue;
+            }
+
+            try
+            {
+                changedPaths = Encoding.UTF8.GetString(Convert.FromBase64String(changedPathsBase64));
+                return true;
+            }
+            catch (FormatException)
+            {
+                // A malformed marker is not positive evidence. Continue in case an earlier valid marker exists.
+            }
+        }
+
+        verificationRecognized = false;
+        reason = string.Empty;
+        postDispatchCommits = 0;
+        changedPaths = string.Empty;
+        return false;
+    }
+}
+
 public static class DispatchFailureClassifier
 {
     private static readonly TimeSpan BareClockRetryStalenessTolerance = TimeSpan.FromHours(1);
@@ -244,6 +315,9 @@ public static class DispatchFailureClassifier
     public static bool HasVerificationEvidenceInOutput(string standardOutput, string standardError) =>
         HasVerificationEvidence(standardOutput, standardError);
 
+    public static bool HasWorkerResultDeferralInOutput(string standardOutput) =>
+        HasWorkerResultDeferral(SplitEvidenceLines(standardOutput));
+
     public static bool IsTransientEmptyOutputDispatchFlake(TaskVerificationRecord verification)
     {
         if (IsPreflightFailure(verification))
@@ -380,6 +454,7 @@ public static class DispatchFailureClassifier
         line.StartsWith("RESOURCE ", StringComparison.Ordinal) ||
         line.StartsWith("CLASSIFIER ", StringComparison.Ordinal) ||
         line.StartsWith(DispatchFailureDiagnosticMarker.Prefix, StringComparison.Ordinal) ||
+        line.StartsWith(DispatchRejectionDiagnosticMarker.Prefix, StringComparison.Ordinal) ||
         line.StartsWith("Dispatch recovery policy action=", StringComparison.Ordinal) ||
         line.StartsWith("Developer/Tester dispatch did not produce required relevant file-change evidence.", StringComparison.Ordinal);
 
@@ -994,13 +1069,17 @@ public static class DispatchFailureClassifier
         return TryGetWorkerResultFieldValue(verification, "blockers", out blockers);
     }
 
-    private static bool TryGetWorkerResultDeferralsValue(TaskVerificationRecord verification, out string deferrals)
-    {
-        return TryGetWorkerResultFieldValue(verification, "deferrals", out deferrals);
-    }
-
     private static bool TryGetWorkerResultFieldValue(
         TaskVerificationRecord verification,
+        string fieldName,
+        out string value) =>
+        TryGetWorkerResultFieldValue(
+            EnumerateEvidenceLines(verification, includeStandardOutput: true, includeStandardError: true),
+            fieldName,
+            out value);
+
+    private static bool TryGetWorkerResultFieldValue(
+        IEnumerable<string> evidenceLines,
         string fieldName,
         out string value)
     {
@@ -1008,7 +1087,7 @@ public static class DispatchFailureClassifier
         var inBlock = false;
         string? latestValue = null;
 
-        foreach (var rawLine in EnumerateEvidenceLines(verification, includeStandardOutput: true, includeStandardError: true))
+        foreach (var rawLine in evidenceLines)
         {
             var line = rawLine.Trim();
             if (IsWorkerResultOpener(line))
@@ -1566,10 +1645,17 @@ public static class DispatchFailureClassifier
     }
 
     private static bool HasWorkerResultDeferral(TaskVerificationRecord verification) =>
-        (WorkerResultBlockers.TryGetTestsStatus(verification, out var testsStatus) &&
-         testsStatus == WorkerResultBlockers.TestsStatus.Deferred) ||
-        (TryGetWorkerResultDeferralsValue(verification, out var deferrals) &&
-         !IsNoWorkerResultBlockersValue(deferrals));
+        HasWorkerResultDeferral(
+            EnumerateEvidenceLines(verification, includeStandardOutput: true, includeStandardError: false));
+
+    private static bool HasWorkerResultDeferral(IEnumerable<string> evidenceLines)
+    {
+        var retainedLines = evidenceLines.ToArray();
+        return (WorkerResultBlockers.TryGetTestsStatus(string.Join('\n', retainedLines), out var testsStatus) &&
+                testsStatus == WorkerResultBlockers.TestsStatus.Deferred) ||
+            (TryGetWorkerResultFieldValue(retainedLines, "deferrals", out var deferrals) &&
+             !IsNoWorkerResultBlockersValue(deferrals));
+    }
 
     private static bool HasGreenCommittedWorkerResultEvidence(
         TaskVerificationRecord verification,

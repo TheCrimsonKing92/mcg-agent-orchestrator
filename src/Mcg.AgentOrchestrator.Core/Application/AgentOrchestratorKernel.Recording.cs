@@ -303,23 +303,94 @@ public sealed partial class AgentOrchestratorKernel
             outcome.Kind == DispatchOutcomeKind.VerifiedSuccess ? WorkTaskStatus.Completed : WorkTaskStatus.Failed,
             outcome.Kind == DispatchOutcomeKind.VerifiedSuccess
                  ? BuildCompletionMessageWithAdvisoryBlocker(
-                     $"Dispatch completed successfully: {task.LastDispatch.Command}",
-                     task,
-                     verification)
-                : BuildDispatchFailureMessage(outcome, task.LastDispatch.Command));
+                      $"Dispatch completed successfully: {task.LastDispatch.Command}",
+                      task,
+                      verification)
+                : BuildDispatchFailureMessage(outcome, task, verification));
     }
 
-    private static string BuildDispatchFailureMessage(DispatchOutcome outcome, string command)
+    private static string BuildDispatchFailureMessage(
+        DispatchOutcome outcome,
+        TaskSpec task,
+        TaskVerificationRecord verification)
     {
         var rule = TaskOutcomeClassifier.TryExtractRule(outcome.ClassifierReceipt) ??
             TaskOutcomeRules.UnknownFailure.Token;
-        var exitCode = outcome.ExitCode != 0 &&
-            (string.Equals(rule, TaskOutcomeRules.SilentLaunchFailure.Token, StringComparison.Ordinal) ||
-             string.Equals(rule, TaskOutcomeRules.UnknownFailure.Token, StringComparison.Ordinal))
-                ? $"; exit code {outcome.ExitCode}"
-                : string.Empty;
-        return $"Dispatch failed: rule={rule}{exitCode}: {command}";
+        if (!string.Equals(
+                rule,
+                TaskOutcomeRules.RequiredFileChangeEvidenceMissing.Token,
+                StringComparison.Ordinal))
+        {
+            var exitCode = outcome.ExitCode != 0 &&
+                (string.Equals(rule, TaskOutcomeRules.SilentLaunchFailure.Token, StringComparison.Ordinal) ||
+                 string.Equals(rule, TaskOutcomeRules.UnknownFailure.Token, StringComparison.Ordinal))
+                    ? $"; exit code {outcome.ExitCode}"
+                    : string.Empty;
+            return $"Dispatch failed: rule={rule}{exitCode}: {task.LastDispatch!.Command}";
+        }
+
+        var dispatch = task.LastDispatch;
+        var testsStatus = WorkerResultBlockers.TryGetTestsStatus(verification, out var parsedTestsStatus)
+            ? parsedTestsStatus.ToString()
+            : WorkerResultBlockers.TestsStatus.Unknown.ToString();
+        var blockersStatus = WorkerResultBlockers.TryGetBlockersStatus(verification, out var parsedBlockersStatus)
+            ? parsedBlockersStatus.ToString()
+            : WorkerResultBlockers.BlockersStatus.Unknown.ToString();
+        var missingChangeEvidence = string.Equals(
+            rule,
+            TaskOutcomeRules.RequiredFileChangeEvidenceMissing.Token,
+            StringComparison.Ordinal);
+        var hasRejectionDiagnostic = DispatchRejectionDiagnosticMarker.TryParse(
+            verification.StandardError,
+            out var verificationRecognized,
+            out var rejectionReason,
+            out var postDispatchCommits,
+            out var changedPaths);
+        var reason = hasRejectionDiagnostic ? rejectionReason : rule;
+        var detail = BuildDispatchRejectionDetail(outcome, verification, missingChangeEvidence, verificationRecognized);
+        var baselineHead = string.IsNullOrWhiteSpace(dispatch?.BaseCommit) ? "unknown" : dispatch.BaseCommit;
+
+        return $"DISPATCH_REJECTED role={task.RequiredRole} task={task.Id.Value} " +
+            $"worktree={QuoteDispatchDiagnosticValue(verification.WorkingDirectory)} " +
+            $"dispatched_at={(dispatch?.DispatchedAt ?? verification.DispatchStartedAt ?? verification.CompletedAt):O} " +
+            $"baseline_head={FormatDispatchDiagnosticAtom(baselineHead)} " +
+            $"post_dispatch_commits={(hasRejectionDiagnostic ? postDispatchCommits.ToString() : "unknown")} " +
+            $"changed_paths={FormatDispatchDiagnosticAtom(hasRejectionDiagnostic ? changedPaths : "unknown")} " +
+            $"tests_status={testsStatus} blockers={blockersStatus} " +
+            $"verification_recognized={(hasRejectionDiagnostic ? verificationRecognized.ToString().ToLowerInvariant() : "unknown")} " +
+            $"reason={reason} detail={QuoteDispatchDiagnosticValue(detail)}";
     }
+
+    private static string BuildDispatchRejectionDetail(
+        DispatchOutcome outcome,
+        TaskVerificationRecord verification,
+        bool missingChangeEvidence,
+        bool verificationRecognized)
+    {
+        if (!missingChangeEvidence)
+        {
+            return string.IsNullOrWhiteSpace(outcome.EvidenceSummary)
+                ? "dispatch outcome was rejected"
+                : outcome.EvidenceSummary;
+        }
+
+        if (verificationRecognized)
+        {
+            return "recognized verification evidence but no relevant post-dispatch file change was recorded";
+        }
+
+        return WorkerResultBlockers.TryFindTests(verification, out var tests)
+            ? $"{tests} matched no accepted verification pattern"
+            : "no structured tests value or accepted verification pattern was present";
+    }
+
+    private static string FormatDispatchDiagnosticAtom(string value) =>
+        value.All(character => char.IsLetterOrDigit(character) || character is '-' or '_' or '.' or '/' or ',')
+            ? value
+            : QuoteDispatchDiagnosticValue(value);
+
+    private static string QuoteDispatchDiagnosticValue(string value) =>
+        $"\"{value.Replace("\\", "\\\\", StringComparison.Ordinal).Replace("\"", "\\\"", StringComparison.Ordinal).Replace("\r", " ", StringComparison.Ordinal).Replace("\n", " ", StringComparison.Ordinal)}\"";
 
     private static TimeSpan BuildProviderConnectivityBackoff(int attempt)
     {
