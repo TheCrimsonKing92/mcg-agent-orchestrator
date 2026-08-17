@@ -53,7 +53,8 @@ public sealed record RunEventMaintenanceOptions(
     DateTimeOffset? UtcNow = null,
     int MaxConductorTickPayloadBytes = 50000,
     int DeleteBatchSize = 1000,
-    bool LegacyOversizedConductorTickPurge = false)
+    bool LegacyOversizedConductorTickPurge = false,
+    int MaintenanceLockCommandTimeoutSeconds = 30)
 {
     public static RunEventMaintenanceOptions Default { get; } = new(TimeSpan.FromDays(7));
 }
@@ -308,6 +309,14 @@ public sealed class SqliteRunEventStore : IRunEventStore
         CancellationToken cancellationToken = default)
     {
         options ??= RunEventMaintenanceOptions.Default;
+        if (options.MaintenanceLockCommandTimeoutSeconds <= 0)
+        {
+            throw new ArgumentOutOfRangeException(
+                nameof(options.MaintenanceLockCommandTimeoutSeconds),
+                options.MaintenanceLockCommandTimeoutSeconds,
+                "The maintenance lock command timeout must be positive.");
+        }
+
         var clock = Stopwatch.StartNew();
         var bytesBefore = GetDatabaseBytes();
         await using var conn = OpenConnection(busyTimeoutMilliseconds: 0);
@@ -483,6 +492,7 @@ public sealed class SqliteRunEventStore : IRunEventStore
                 deleteCommand.Parameters.AddWithValue("$max_payload_bytes", maxPayloadBytes);
                 deleteCommand.Parameters.AddWithValue("$batch_size", batchSize);
             },
+            options.MaintenanceLockCommandTimeoutSeconds,
             cancellationToken).ConfigureAwait(false);
     }
 
@@ -549,6 +559,7 @@ public sealed class SqliteRunEventStore : IRunEventStore
                 deleteCommand.Parameters.AddWithValue("$keep_rows", keepRows);
                 deleteCommand.Parameters.AddWithValue("$batch_size", batchSize);
             },
+            options.MaintenanceLockCommandTimeoutSeconds,
             cancellationToken).ConfigureAwait(false);
     }
 
@@ -557,6 +568,7 @@ public sealed class SqliteRunEventStore : IRunEventStore
         int batchSize,
         Action<SqliteCommand> configureStatsCommand,
         Action<SqliteCommand> configureDeleteCommand,
+        int lockCommandTimeoutSeconds,
         CancellationToken cancellationToken)
     {
         var rowsDeleted = 0;
@@ -566,7 +578,11 @@ public sealed class SqliteRunEventStore : IRunEventStore
         {
             try
             {
-                await RunNonQueryAsync(conn, "BEGIN IMMEDIATE", cancellationToken).ConfigureAwait(false);
+                await RunNonQueryAsync(
+                    conn,
+                    "BEGIN IMMEDIATE",
+                    cancellationToken,
+                    lockCommandTimeoutSeconds).ConfigureAwait(false);
             }
             catch (SqliteException ex) when (IsTransientLock(ex))
             {
@@ -650,10 +666,19 @@ public sealed class SqliteRunEventStore : IRunEventStore
         cmd.ExecuteNonQuery();
     }
 
-    private static async Task RunNonQueryAsync(SqliteConnection conn, string sql, CancellationToken cancellationToken)
+    private static async Task RunNonQueryAsync(
+        SqliteConnection conn,
+        string sql,
+        CancellationToken cancellationToken,
+        int? commandTimeoutSeconds = null)
     {
         await using var cmd = conn.CreateCommand();
         cmd.CommandText = sql;
+        if (commandTimeoutSeconds is { } timeout)
+        {
+            cmd.CommandTimeout = timeout;
+        }
+
         await cmd.ExecuteNonQueryAsync(cancellationToken).ConfigureAwait(false);
     }
 

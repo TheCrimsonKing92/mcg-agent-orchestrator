@@ -379,6 +379,27 @@ public sealed class RunEventStoreTests
         Assert.Equal("sentinel".Length, exclusive.Length);
     }
 
+    [Xunit.Fact(DisplayName = "RunEventMaintenanceCadence_production_default_runs_store_maintenance")]
+    public async Task RunEventMaintenanceCadenceProductionDefaultRunsStoreMaintenance()
+    {
+        var root = CreateTempDirectory();
+        var db = Path.Combine(root, "run-events.db");
+        var logPath = Path.Combine(root, "logs", ConductEventLogWriter.CurrentFileName);
+        var now = DateTimeOffset.Parse("2026-07-16T12:00:00Z");
+        var store = new SqliteRunEventStore(db);
+        var oversized = await AppendTickAsync(store, now.AddMinutes(-10), new string('x', 60_000));
+
+        var result = RunEventMaintenanceCadence.TryRunIfDue(db, logPath, () => now);
+
+        Assert.True(result.Attempted);
+        Assert.False(result.Deferred);
+        Assert.False(result.Failed);
+        var maintenance = Assert.IsType<RunEventMaintenanceResult>(result.Maintenance);
+        Assert.Equal(1, maintenance.OversizedConductorTickRowsDeleted);
+        var remaining = await store.ReadSinceAsync(maxCount: 10);
+        Assert.DoesNotContain(remaining, evt => evt.Sequence == oversized.Sequence);
+    }
+
     [Xunit.Fact(DisplayName = "RunEventMaintenanceCadence_self_defers_when_database_writer_is_busy")]
     public async Task RunEventMaintenanceCadenceSelfDefersWhenDatabaseWriterIsBusy()
     {
@@ -388,23 +409,44 @@ public sealed class RunEventStoreTests
         var now = DateTimeOffset.Parse("2026-07-16T12:00:00Z");
         var store = new SqliteRunEventStore(db);
         await AppendTickAsync(store, now.AddDays(-20), "{}");
-        await using var blocker = new SqliteConnection($"Data Source={db};Mode=ReadWriteCreate;Pooling=False;");
-        await blocker.OpenAsync();
-        await using var begin = blocker.CreateCommand();
-        begin.CommandText = "BEGIN IMMEDIATE";
-        await begin.ExecuteNonQueryAsync();
+        var maintenanceCalls = 0;
+        RunEventMaintenanceOptions? observedOptions = null;
+        var deferredMaintenance = new RunEventMaintenanceResult(
+            Deferred: true,
+            DeferredReason: "database-busy",
+            ConductorTickRowsDeleted: 0,
+            AgedConductorTickRowsDeleted: 0,
+            OversizedConductorTickRowsDeleted: 0,
+            DeletedPayloadBytesEstimate: 0,
+            MaxRowsDeletedInTransaction: 0,
+            Duration: TimeSpan.Zero,
+            BytesBefore: 0,
+            BytesAfter: 0,
+            VacuumRequested: false,
+            VacuumCompleted: false,
+            VacuumDeferred: false);
 
-        var result = RunEventMaintenanceCadence.TryRunIfDue(db, logPath, () => now);
+        var result = RunEventMaintenanceCadence.TryRunIfDue(
+            db,
+            logPath,
+            () => now,
+            (_, options) =>
+            {
+                maintenanceCalls++;
+                observedOptions = options;
+                return deferredMaintenance;
+            });
 
+        Assert.Equal(1, maintenanceCalls);
+        Assert.NotNull(observedOptions);
+        Assert.Equal(now, observedOptions.UtcNow);
+        Assert.False(observedOptions.Vacuum);
         Assert.True(result.Attempted);
         Assert.True(result.Deferred);
         Assert.False(result.Failed);
         Assert.Equal("database-busy", result.Reason);
+        Assert.Same(deferredMaintenance, result.Maintenance);
         Assert.Contains("run-events-maintenance", File.ReadAllText(logPath), StringComparison.Ordinal);
-
-        await using var rollback = blocker.CreateCommand();
-        rollback.CommandText = "ROLLBACK";
-        await rollback.ExecuteNonQueryAsync();
     }
 
     [Xunit.Fact(DisplayName = "SqliteRunEventStore_maintenance_defers_when_database_write_lock_is_active")]
@@ -426,19 +468,25 @@ public sealed class RunEventStoreTests
         begin.CommandText = "BEGIN IMMEDIATE";
         await begin.ExecuteNonQueryAsync();
 
-        var result = await store.MaintainAsync(new RunEventMaintenanceOptions(
-            TimeSpan.FromDays(1),
-            MinConductorTickRowsToKeep: 0,
-            Vacuum: true,
-            UtcNow: DateTimeOffset.Parse("2026-07-16T12:00:00Z")));
+        try
+        {
+            var result = await store.MaintainAsync(new RunEventMaintenanceOptions(
+                TimeSpan.FromDays(1),
+                MinConductorTickRowsToKeep: 0,
+                Vacuum: true,
+                UtcNow: DateTimeOffset.Parse("2026-07-16T12:00:00Z"),
+                MaintenanceLockCommandTimeoutSeconds: 1));
 
-        Assert.True(result.Deferred);
-        Assert.Equal("database-busy", result.DeferredReason);
-        Assert.Equal(0, result.ConductorTickRowsDeleted);
-
-        await using var rollback = blocker.CreateCommand();
-        rollback.CommandText = "ROLLBACK";
-        await rollback.ExecuteNonQueryAsync();
+            Assert.True(result.Deferred);
+            Assert.Equal("database-busy", result.DeferredReason);
+            Assert.Equal(0, result.ConductorTickRowsDeleted);
+        }
+        finally
+        {
+            await using var rollback = blocker.CreateCommand();
+            rollback.CommandText = "ROLLBACK";
+            await rollback.ExecuteNonQueryAsync();
+        }
     }
 
     private static Task<RunEventRecord> AppendTickAsync(
