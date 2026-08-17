@@ -2332,7 +2332,7 @@ public sealed class WorkerDispatchTestsWorkerResultClassification : WorkerDispat
             WorkerResultBlock("none", "dotnet test --logger trx", "TRX 5/5 passed", "none"),
         string.Empty,
         clock,
-        taskDescription: "Verify behavior with automated and manual checks",
+        taskDescription: "Verify behavior and modify the tests",
         verificationPlan: "Run or attempt exact automated tests or manual smoke checks and record pass/fail evidence.");
     WriteHeartbeat(process, clock.UtcNow, clock.UtcNow, "completed", 256, 0, childPid: null, exitFileExists: true);
 
@@ -2362,7 +2362,7 @@ public sealed class WorkerDispatchTestsWorkerResultClassification : WorkerDispat
             standardOutput,
             string.Empty,
             clock,
-            taskDescription: "Verify behavior with automated and manual checks",
+            taskDescription: "Verify behavior and modify the tests",
             verificationPlan: "Run or attempt exact automated tests or manual smoke checks and record pass/fail evidence.");
         kernel.RecordDispatchBaseCommit(
             goal.Id,
