@@ -505,17 +505,40 @@ internal sealed class IcaclsIntegrityLabeler : IWorkerIntegrityLabeler
                 return new IntegrityLabelState(Exists: true, Low: false, Inheritable: false);
             }
 
-            var low = output.Contains("Low Mandatory Level", StringComparison.OrdinalIgnoreCase) ||
-                output.Contains(":(OI)(CI)(NW)", StringComparison.OrdinalIgnoreCase);
-            var medium = output.Contains("Medium Mandatory Level", StringComparison.OrdinalIgnoreCase);
-            var inheritable = output.Contains("(OI)", StringComparison.OrdinalIgnoreCase) &&
-                output.Contains("(CI)", StringComparison.OrdinalIgnoreCase);
-            return new IntegrityLabelState(Exists: true, low, inheritable, medium);
+            return ParseQueryOutput(output);
         }
         catch
         {
             return new IntegrityLabelState(Exists: true, Low: false, Inheritable: false);
         }
+    }
+
+    internal static IntegrityLabelState ParseQueryOutput(string output)
+    {
+        var mandatoryLabelRows = output
+            .Split(['\r', '\n'], StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries)
+            .Where(row => row.Contains("Mandatory Label\\", StringComparison.OrdinalIgnoreCase))
+            .ToArray();
+        if (mandatoryLabelRows.Length != 1)
+        {
+            return new IntegrityLabelState(Exists: true, Low: false, Inheritable: false);
+        }
+
+        var mandatoryLabelRow = mandatoryLabelRows[0];
+        var low = mandatoryLabelRow.Contains(
+            "Mandatory Label\\Low Mandatory Level:",
+            StringComparison.OrdinalIgnoreCase);
+        var medium = mandatoryLabelRow.Contains(
+            "Mandatory Label\\Medium Mandatory Level:",
+            StringComparison.OrdinalIgnoreCase);
+        if (low && medium)
+        {
+            return new IntegrityLabelState(Exists: true, Low: false, Inheritable: false);
+        }
+
+        var inheritable = mandatoryLabelRow.Contains("(OI)", StringComparison.OrdinalIgnoreCase) &&
+            mandatoryLabelRow.Contains("(CI)", StringComparison.OrdinalIgnoreCase);
+        return new IntegrityLabelState(Exists: true, low, inheritable, medium);
     }
 
     public bool SetIntegrity(string path, string level, bool recursive)
