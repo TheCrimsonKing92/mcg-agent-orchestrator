@@ -2646,14 +2646,52 @@ internal sealed class ConductorBatchLoop
                 GetDependencyHoldReason(goal, completedGoals, escalatedGoals, kernel) is null &&
                 TryHasUnresolvedPersistedVerifiedAcceptanceEscalation(goal, driver) == false)
             .ToArray());
-        var eligibleGoalsById = orderedEligible.ToDictionary(goal => goal.Id.Value, StringComparer.Ordinal);
-        var persistedAttempts = driver.ParallelAcceptanceAttemptCoordinator.GetUnreconciledAttempts(
-            eligibleGoalsById.Keys);
-        foreach (var sameGoalAttempts in persistedAttempts.GroupBy(
-                     attempt => attempt.GoalId,
-                     StringComparer.Ordinal))
+        foreach (var goal in orderedEligible)
         {
-            var goal = eligibleGoalsById[sameGoalAttempts.Key];
+            try
+            {
+            var sameGoalAttempts = driver.ParallelAcceptanceAttemptCoordinator.GetUnreconciledAttempts(
+                [goal.Id.Value]);
+            if (sameGoalAttempts.Count == 0)
+            {
+                continue;
+            }
+
+            var verificationGate = kernel.BuildVerificationGate(goal.Id);
+            if (!verificationGate.IsSatisfied)
+            {
+                var blockingReasons = string.Join(
+                    ',',
+                    verificationGate.Tasks
+                        .Where(task => task.GateStatus != VerificationGateStatus.Passed)
+                        .Select(task => $"{task.Role}:{task.Reason}"));
+                var reason = BoundSingleLine(
+                    $"inconsistent {goal.Status} state: authoritative task verification gate unsatisfied ({blockingReasons}); " +
+                    "apply verify-manual or retry before acceptance");
+                results[goal.Id.Value] = new ParallelLandingOutcome(
+                    EscalateParallelAcceptanceSafely(driver, goal, policy, reason),
+                    null);
+                RecordParallelAcceptanceProgress(
+                    $"ADMISSION tick={tick} result=escalated reason=authoritative-verification-gate-unsatisfied goal={goal.Id.Value[..8]} detail={SanitizeReason(reason)}",
+                    changedGoalLines);
+                continue;
+            }
+
+            var engineHealth = _acceptanceEngineCircuit?.Read();
+            if (IsAcceptanceEngineCircuitHoldRequired(goal.Status, engineHealth))
+            {
+                results[goal.Id.Value] = new ParallelLandingOutcome(
+                    ParallelAcceptanceHeld(
+                        goal,
+                        policy,
+                        BuildAcceptanceEngineHoldReason(engineHealth!)),
+                    null);
+                RecordParallelAcceptanceProgress(
+                    $"ADMISSION tick={tick} result=held reason=acceptance-engine-circuit goal={goal.Id.Value[..8]} health={engineHealth.Health}",
+                    changedGoalLines);
+                continue;
+            }
+
             var observed = sameGoalAttempts
                 .Select(attempt =>
                 {
@@ -2737,6 +2775,18 @@ internal sealed class ConductorBatchLoop
             RecordParallelAcceptanceProgress(
                 $"ACCEPTANCE goal={goal.Id.Value[..8]} slot=slot-{retainedTerminal.Attempt.SlotIndex} result={AcceptanceAttemptOutcomeToken(retainedTerminal.Attempt.Outcome)} attempt={retainedTerminal.Attempt.AttemptId} tick={tick}",
                 changedGoalLines);
+            }
+            catch (Exception ex)
+            {
+                var reason = BoundSingleLine(
+                    $"persisted parallel acceptance reconciliation fault isolated: {ex.GetType().Name}: {ex.Message}");
+                results[goal.Id.Value] = new ParallelLandingOutcome(
+                    EscalateParallelAcceptanceSafely(driver, goal, policy, reason),
+                    null);
+                RecordParallelAcceptanceProgress(
+                    $"ADMISSION tick={tick} result=escalated reason=persisted-acceptance-reconciliation-fault goal={goal.Id.Value[..8]} detail={SanitizeReason(reason)}",
+                    changedGoalLines);
+            }
         }
         var speculativeCandidates = orderedEligible
             .Select(goal => new ConductorSpeculativeAcceptanceCandidate(

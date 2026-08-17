@@ -1790,6 +1790,10 @@ internal sealed class ConductorParallelAcceptanceAttemptCoordinator
                 continue;
             }
 
+            // The directory enumeration is the registration authority. Metadata may be stale,
+            // corrupt, or attacker-controlled; never let its serialized path redirect later writes.
+            attempt = attempt with { MetadataPath = Path.GetFullPath(path) };
+
             latest = latest is null || attempt.StartedAt > latest.StartedAt ? attempt : latest;
             if (!IsReconciled(attempt) &&
                 (latestUnreconciled is null || attempt.StartedAt > latestUnreconciled.StartedAt))
@@ -2497,11 +2501,17 @@ internal sealed class ConductorParallelAcceptanceAttemptCoordinator
     {
         try
         {
-            return File.Exists(path)
-                ? JsonSerializer.Deserialize<ConductorParallelAcceptanceAttempt>(
-                    ReadAllTextSharedWithRetry(path),
-                    JsonOptions)
-                : null;
+            if (!File.Exists(path))
+            {
+                return null;
+            }
+
+            var attempt = JsonSerializer.Deserialize<ConductorParallelAcceptanceAttempt>(
+                ReadAllTextSharedWithRetry(path),
+                JsonOptions);
+            return attempt is null
+                ? null
+                : attempt with { MetadataPath = Path.GetFullPath(path) };
         }
         catch
         {
