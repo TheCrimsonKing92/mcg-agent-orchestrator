@@ -5,7 +5,7 @@
     "maxConcurrentShards": 4,
     "enforceStructuralCoverage": true,
     "partitionVerdictFullRerunEveryN": 5,
-    "laneEstimateComment": "Unchanged estimatedSerialSeconds values record rounded lane timings from the clean 2026-08-09 a9920536 acceptance receipt. Goal 6bb531ff provisionally apportions the affected measured values by source-declared test attributes (84/388 moved from Goal lifecycle commands; 24/149 moved from Goal worktree cleanup) until the operator-owned post-change receipt replaces them; live overlap and contention remain receipt-level acceptance checks.",
+    "laneEstimateComment": "estimatedSerialSeconds values are one-decimal process-span means from qualified acceptance receipts dated 2026-08-16 at or after 1f669450 (sample joined attempt 695e3554-0-20260816193157705-fcf6d38ae8bd4ef7b2e70518b04d80df). Included receipts have a completed, exit-code-zero heartbeat joined to a completed TRX whose result counters fully account for the discovered tests.",
     "timeouts": {
       "defaultMinutes": 40,
       "buildServerShutdownMinutes": 5,
@@ -15,73 +15,73 @@
       {
         "name": "Cli",
         "filter": "FullyQualifiedName~CliCommandTests&FullyQualifiedName!~CliCommandTestsGoalLifecycleCleanupHooks&FullyQualifiedName!~CliCommandTestsPersistentRunnerCommands&FullyQualifiedName!~CliCommandTestsSubscriptionDispatchCommands",
-        "estimatedSerialSeconds": 65.2
+        "estimatedSerialSeconds": 112.6
       },
       {
         "name": "Worker shell",
         "filter": "FullyQualifiedName~WorkerShellTests",
-        "estimatedSerialSeconds": 9.1
+        "estimatedSerialSeconds": 8.6
       },
       {
         "name": "Worker sandbox planner",
         "filter": "FullyQualifiedName~WorkerSandboxCapabilityPlannerTests",
-        "estimatedSerialSeconds": 9.3
+        "estimatedSerialSeconds": 8.7
       },
       {
         "name": "Conduct watch sweep scoping",
         "filter": "FullyQualifiedName~ConductWatchSweepScopingTests",
-        "estimatedSerialSeconds": 10.0
+        "estimatedSerialSeconds": 10.2
       },
       {
         "name": "Goal lifecycle commands",
         "filter": "FullyQualifiedName~CliCommandTestsGoalLifecycleCleanupHooks|FullyQualifiedName~CliCommandTestsPersistentRunnerCommands|FullyQualifiedName~CliCommandTestsSubscriptionDispatchCommands|FullyQualifiedName~GoalsPruneTests|FullyQualifiedName~LandingExecutorTests",
-        "estimatedSerialSeconds": 194.6,
+        "estimatedSerialSeconds": 267.1,
         "exclusiveResourceKeys": [ "xunit:GoalWorktreeCleanupHooks" ]
       },
       {
         "name": "Goal worktree cleanup",
         "filter": "FullyQualifiedName~AcceptanceCohortWorkflowTests|FullyQualifiedName~GoalWorktreeTestsAcceptanceLanding|FullyQualifiedName~GoalWorktreeTestsCleanupHookDelegates|FullyQualifiedName~GoalWorktreeTestsOrphanEphemeralSweep|FullyQualifiedName~GoalWorktreeTestsRebaseMerge|FullyQualifiedName~GoalWorktreeTestsRemoveCleanup",
-        "estimatedSerialSeconds": 274.6,
+        "estimatedSerialSeconds": 330.9,
         "exclusiveResourceKeys": [ "xunit:GoalWorktreeCleanupHooks" ]
       },
       {
         "name": "Goal worktree parallel",
         "filter": "FullyQualifiedName~GoalGitFactIndexTests|FullyQualifiedName~GoalWorktreeTestsCreationResolution|FullyQualifiedName~GoalWorktreeTestsSqliteTooling",
-        "estimatedSerialSeconds": 52.7
+        "estimatedSerialSeconds": 63.7
       },
       {
         "name": "Worker profiles",
         "filter": "FullyQualifiedName~AdvanceLoopTests|FullyQualifiedName~ConductLoopLockTests|FullyQualifiedName~ConductorLoopHandoffTests|FullyQualifiedName~GoalBacklogLinkTests|FullyQualifiedName~GoalLifecycleEventWriterTests|FullyQualifiedName~SqliteOrchestratorStateRepositoryTests|FullyQualifiedName~WorkerProfileTests|FullyQualifiedName~WorkspaceConsolidatorTests",
-        "estimatedSerialSeconds": 45.8,
+        "estimatedSerialSeconds": 57.4,
         "exclusiveResourceKeys": [ "xunit:EnvMutation" ]
       },
       {
         "name": "Worker dispatch fixtures",
         "filter": "FullyQualifiedName~RealWorkerProcessGuardTests|FullyQualifiedName~WorkerDispatchTestsDispatchPreparation|FullyQualifiedName~WorkerDispatchTestsModelSelectionEnvMutation|FullyQualifiedName~WorkerDispatchTestsSandboxLowIntegrity|FullyQualifiedName~WorkerDispatchTestsSubscriptionPreflight|FullyQualifiedName~WorkerDispatchTestsWorkerResultClassification|FullyQualifiedName~WorkerProcessJobsTests",
-        "estimatedSerialSeconds": 354.0,
+        "estimatedSerialSeconds": 392.8,
         "exclusiveResourceKeys": [ "xunit:EnvMutation" ]
       },
       {
         "name": "Process spawning",
         "filter": "FullyQualifiedName~CitedPriorEvidenceResolverTests|FullyQualifiedName~CliHelpTests|FullyQualifiedName~ConductorDriverTests|FullyQualifiedName~ConductorSelfRelaunchTests|FullyQualifiedName~ConductorSuccessorSelfCheckTests|FullyQualifiedName~DispatchProcessHostTests|FullyQualifiedName~ExcessWorkerRoundAnalysisScriptTests|FullyQualifiedName~GitCliTests|FullyQualifiedName~LauncherScriptTests|FullyQualifiedName~MtpTestRunnerScriptTests|FullyQualifiedName~ProcessTreeGuiSuppressionTests|FullyQualifiedName~SemanticAcceptanceTests|FullyQualifiedName~WorkerContextArtifactsCharacterizationTests|(FullyQualifiedName~WorkerDispatchTestsModelSelection&FullyQualifiedName!~WorkerDispatchTestsModelSelectionEnvMutation)",
-        "estimatedSerialSeconds": 230.2,
+        "estimatedSerialSeconds": 327.7,
         "exclusiveResourceKeys": [ "xunit:ProcessSpawning" ]
       },
       {
         "name": "Chaos gate",
         "filter": "(FullyQualifiedName~ChaosGate|FullyQualifiedName~AutoReviewRetryConvergenceBriefBuilderTests|FullyQualifiedName~InquiryDispatcherTests|FullyQualifiedName~ProgressiveReviewSteeringTests)&Category!=HostIntegration",
-        "estimatedSerialSeconds": 75.1
+        "estimatedSerialSeconds": 77.9
       },
       {
         "name": "Dotnet build slots",
         "filter": "FullyQualifiedName~ConductorBatchLoopTests|FullyQualifiedName~DotnetBuildEnvironmentManagerTests|FullyQualifiedName~LocalProcessVerifierDotnetBuildSlotTests",
-        "estimatedSerialSeconds": 201.2,
+        "estimatedSerialSeconds": 225.1,
         "exclusiveResourceKeys": [ "xunit:DotnetBuildSlots" ]
       },
       {
         "name": "Goal acceptance verifier",
         "filter": "FullyQualifiedName~AcceptanceGateEngineSettingsTests|FullyQualifiedName~GoalAcceptanceVerifierTests|FullyQualifiedName~RealProcessShardAlphaSmokeTests|FullyQualifiedName~RealProcessShardBetaSmokeTests|FullyQualifiedName~WorkerDispatchJobAccountingTests",
-        "estimatedSerialSeconds": 30.5,
+        "estimatedSerialSeconds": 41.0,
         "exclusiveResourceKeys": [
           "xunit:GoalAcceptanceVerifier",
           "xunit:JobAccounting"
@@ -90,24 +90,24 @@
       {
         "name": "Goal acceptance build slots",
         "filter": "FullyQualifiedName~GoalAcceptanceVerifierDotnetBuildSlotTests",
-        "estimatedSerialSeconds": 326.0,
+        "estimatedSerialSeconds": 335.4,
         "exclusiveResourceKeys": [ "xunit:JobAccounting" ]
       },
       {
         "name": "Remainder balance A",
         "filter": "FullyQualifiedName~RunEventStoreTests",
-        "estimatedSerialSeconds": 136.6
+        "estimatedSerialSeconds": 134.0
       },
       {
         "name": "Remainder balance B",
         "filter": "FullyQualifiedName~RunGoalServiceTests|FullyQualifiedName~GoalMonitoringSubscriptionCommandTests|FullyQualifiedName~VerificationAndProcessLogTests|FullyQualifiedName~ToolchainDetectionTests|FullyQualifiedName~FundamentalAliasTests|FullyQualifiedName~GoalWorktreeIsolatedDotnetTests|FullyQualifiedName~WorkerDispatchSpecClarificationTests|FullyQualifiedName~ProgressiveReviewGlanceTests|FullyQualifiedName~DispatchRecoveryPolicyTests|FullyQualifiedName~OperatorChannelTests|FullyQualifiedName~StatePersistenceAndPerformanceTests|FullyQualifiedName~DiscordGatewayTests",
-        "estimatedSerialSeconds": 33.1,
+        "estimatedSerialSeconds": 30.1,
         "exclusiveResourceKeys": [ "xunit:ProcessSpawning" ]
       },
       {
         "name": "Remainder",
         "filter": "FullyQualifiedName!~CliCommandTests&FullyQualifiedName!~WorkerShellTests&FullyQualifiedName!~WorkerSandboxCapabilityPlannerTests&FullyQualifiedName!~ConductWatchSweepScopingTests&FullyQualifiedName!~AcceptanceCohortWorkflowTests&FullyQualifiedName!~GoalGitFactIndexTests&FullyQualifiedName!~GoalsPruneTests&FullyQualifiedName!~GoalWorktreeTestsAcceptanceLanding&FullyQualifiedName!~GoalWorktreeTestsCleanupHookDelegates&FullyQualifiedName!~GoalWorktreeTestsCreationResolution&FullyQualifiedName!~GoalWorktreeTestsOrphanEphemeralSweep&FullyQualifiedName!~GoalWorktreeTestsRebaseMerge&FullyQualifiedName!~GoalWorktreeTestsRemoveCleanup&FullyQualifiedName!~GoalWorktreeTestsSqliteTooling&FullyQualifiedName!~LandingExecutorTests&FullyQualifiedName!~AdvanceLoopTests&FullyQualifiedName!~ConductLoopLockTests&FullyQualifiedName!~ConductorLoopHandoffTests&FullyQualifiedName!~GoalBacklogLinkTests&FullyQualifiedName!~GoalLifecycleEventWriterTests&FullyQualifiedName!~RealWorkerProcessGuardTests&FullyQualifiedName!~SqliteOrchestratorStateRepositoryTests&FullyQualifiedName!~WorkerDispatchTestsDispatchPreparation&FullyQualifiedName!~WorkerDispatchTestsModelSelection&FullyQualifiedName!~WorkerDispatchTestsSandboxLowIntegrity&FullyQualifiedName!~WorkerDispatchTestsSubscriptionPreflight&FullyQualifiedName!~WorkerDispatchTestsWorkerResultClassification&FullyQualifiedName!~WorkerProcessJobsTests&FullyQualifiedName!~WorkerProfileTests&FullyQualifiedName!~WorkspaceConsolidatorTests&FullyQualifiedName!~CitedPriorEvidenceResolverTests&FullyQualifiedName!~CliHelpTests&FullyQualifiedName!~ConductorDriverTests&FullyQualifiedName!~ConductorSelfRelaunchTests&FullyQualifiedName!~ConductorSuccessorSelfCheckTests&FullyQualifiedName!~DispatchProcessHostTests&FullyQualifiedName!~ExcessWorkerRoundAnalysisScriptTests&FullyQualifiedName!~GitCliTests&FullyQualifiedName!~LauncherScriptTests&FullyQualifiedName!~MtpTestRunnerScriptTests&FullyQualifiedName!~ProcessTreeGuiSuppressionTests&FullyQualifiedName!~SemanticAcceptanceTests&FullyQualifiedName!~WorkerContextArtifactsCharacterizationTests&FullyQualifiedName!~ChaosGate&FullyQualifiedName!~AutoReviewRetryConvergenceBriefBuilderTests&FullyQualifiedName!~InquiryDispatcherTests&FullyQualifiedName!~ProgressiveReviewSteeringTests&FullyQualifiedName!~ConductorBatchLoopTests&FullyQualifiedName!~DotnetBuildEnvironmentManagerTests&FullyQualifiedName!~LocalProcessVerifierDotnetBuildSlotTests&FullyQualifiedName!~AcceptanceGateEngineSettingsTests&FullyQualifiedName!~GoalAcceptanceVerifierTests&FullyQualifiedName!~GoalAcceptanceVerifierDotnetBuildSlotTests&FullyQualifiedName!~RealProcessShardAlphaSmokeTests&FullyQualifiedName!~RealProcessShardBetaSmokeTests&FullyQualifiedName!~WorkerDispatchJobAccountingTests&FullyQualifiedName!~RunEventStoreTests&FullyQualifiedName!~RunGoalServiceTests&FullyQualifiedName!~GoalMonitoringSubscriptionCommandTests&FullyQualifiedName!~VerificationAndProcessLogTests&FullyQualifiedName!~ToolchainDetectionTests&FullyQualifiedName!~FundamentalAliasTests&FullyQualifiedName!~GoalWorktreeIsolatedDotnetTests&FullyQualifiedName!~WorkerDispatchSpecClarificationTests&FullyQualifiedName!~ProgressiveReviewGlanceTests&FullyQualifiedName!~DispatchRecoveryPolicyTests&FullyQualifiedName!~OperatorChannelTests&FullyQualifiedName!~StatePersistenceAndPerformanceTests&FullyQualifiedName!~DiscordGatewayTests&Category!=HostIntegration",
-        "estimatedSerialSeconds": 176.6,
+        "estimatedSerialSeconds": 62.3,
         "exclusiveResourceKeys": [
           "xunit:DotnetBuildSlots",
           "xunit:GoalAcceptanceVerifier",
