@@ -1490,15 +1490,24 @@ public sealed class BackgroundDispatchRunner
             }
             else if (!orchestratorCommitted && worktreeEvidence.IsClean)
             {
+                var hasCompletedVerification = HasCompletedVerification(
+                    decisionStandardOutput,
+                    decisionStandardError);
+                var hasVerificationOnlyTesterCompletion = IsVerificationOnlyTesterCompletion(
+                    task,
+                    decisionStandardOutput,
+                    hasCompletedVerification);
+                var verificationRecognized =
+                    hasCompletedVerification || hasVerificationOnlyTesterCompletion;
                 var successfulChildStillRequiresChangeEvidence =
                     successfulChildResultAvailable &&
                     dispatchRoleCapability == DispatchRoleOutputCapability.RequiresChangeEvidence;
                 var requiresCommitEvidence =
                     !successfulChildWithoutUsableWorkerResult &&
-                    RequiresPostDispatchCommitEvidence(task, decisionStandardOutput, decisionStandardError, workerResultPresent) &&
+                    RequiresPostDispatchCommitEvidence(task, hasVerificationOnlyTesterCompletion) &&
                     (successfulChildStillRequiresChangeEvidence ||
-                     (!HasCompletedVerification(decisionStandardOutput, decisionStandardError) &&
-                      !AllowsNoChangeCompletion(task, decisionStandardOutput, decisionStandardError))) &&
+                     (!verificationRecognized &&
+                       !AllowsNoChangeCompletion(task, decisionStandardOutput, decisionStandardError))) &&
                     !worktreeEvidence.HasRelevantCommitAfterDispatch;
 
                 if (requiresCommitEvidence)
@@ -1508,7 +1517,9 @@ public sealed class BackgroundDispatchRunner
                     exitCode = 1;
                     standardErrorDiagnostic = AppendDiagnostic(
                         AppendDiagnostic(
-                            standardErrorDiagnostic ?? string.Empty,
+                            AppendDiagnostic(
+                                standardErrorDiagnostic ?? string.Empty,
+                                DispatchRejectionDiagnosticMarker.Format(verificationRecognized)),
                             "Developer/Tester dispatch did not produce required relevant file-change evidence. " +
                             $"branch={worktreeEvidence.Branch}; head={worktreeEvidence.Head}; worktree={worktreeEvidence.WorktreeStatus}; " +
                             $"commits_after_dispatch={worktreeEvidence.CommitsAfterDispatch}; changed_paths={worktreeEvidence.ChangedPathsSummary}."),
@@ -2019,14 +2030,12 @@ public sealed class BackgroundDispatchRunner
 
     private static bool RequiresPostDispatchCommitEvidence(
         TaskSpec task,
-        string standardOutput,
-        string standardError,
-        bool workerResultPresent)
+        bool hasVerificationOnlyTesterCompletion)
     {
         return task.RequiredRole switch
         {
             AgentRole.Developer => true,
-            AgentRole.Tester => !IsVerificationOnlyTesterCompletion(task, standardOutput, standardError, workerResultPresent),
+            AgentRole.Tester => !hasVerificationOnlyTesterCompletion,
             _ => false
         };
     }
@@ -2034,13 +2043,12 @@ public sealed class BackgroundDispatchRunner
     private static bool IsVerificationOnlyTesterCompletion(
         TaskSpec task,
         string standardOutput,
-        string standardError,
-        bool workerResultPresent)
+        bool hasCompletedVerification)
     {
         return task.RequiredRole == AgentRole.Tester &&
             !TesterTaskRequestsFileChanges(task) &&
-            (HasCompletedVerification(standardOutput, standardError) ||
-             DispatchFailureClassifier.HasWorkerResultDeferralInOutput(standardOutput, standardError));
+            (hasCompletedVerification ||
+             DispatchFailureClassifier.HasWorkerResultDeferralInOutput(standardOutput));
     }
 
     // A verification-role worker proves it did its job with recognised verification evidence.

@@ -126,13 +126,14 @@ public sealed class DispatchOutcomeClassifyTests
     private static TaskVerificationRecord WorkerResultVerification(
         int exitCode,
         string stdout,
-        bool hasCommittedChanges = false) =>
+        bool hasCommittedChanges = false,
+        string standardError = "") =>
         new(
             "cmd",
             "C:\\repo",
             exitCode,
             stdout,
-            string.Empty,
+            standardError,
             DateTimeOffset.UtcNow,
             WorkerResultPresent: true,
             HasCommittedChanges: hasCommittedChanges,
@@ -187,6 +188,20 @@ public sealed class DispatchOutcomeClassifyTests
             WorkerResultVerification(WorkerResultStdout("pass - verification completed")));
 
         Xunit.Assert.Equal(DispatchOutcomeKind.VerifiedSuccess, outcome.Kind);
+    }
+
+    [Xunit.Fact]
+    public void ClassifyIgnoresStderrDeferralWhenStdoutIsInconclusive()
+    {
+        var outcome = DispatchFailureClassifier.Classify(
+            SimpleTask(AgentRole.Tester),
+            WorkerResultVerification(
+                0,
+                WorkerResultStdout("inconclusive - no test host was available"),
+                standardError: WorkerResultStdout("deferred - stale launcher prompt")));
+
+        Xunit.Assert.Equal(DispatchOutcomeKind.UnknownFailure, outcome.Kind);
+        Xunit.Assert.Contains("rule=unknown-failure", outcome.ClassifierReceipt, StringComparison.Ordinal);
     }
 
     [Xunit.Theory(DisplayName = "Classify Tester WORKER_RESULT blocker as real failure regardless of process exit")]

@@ -323,19 +323,18 @@ public sealed partial class AgentOrchestratorKernel
         var blockersStatus = WorkerResultBlockers.TryGetBlockersStatus(verification, out var parsedBlockersStatus)
             ? parsedBlockersStatus.ToString()
             : WorkerResultBlockers.BlockersStatus.Unknown.ToString();
-        var verificationRecognized =
-            DispatchFailureClassifier.HasVerificationEvidenceInOutput(
-                verification.StandardOutput,
-                verification.StandardError) ||
-            DispatchFailureClassifier.HasWorkerResultDeferralInOutput(
-                verification.StandardOutput,
-                verification.StandardError);
         var missingChangeEvidence = string.Equals(
             rule,
             TaskOutcomeRules.RequiredFileChangeEvidenceMissing.Token,
             StringComparison.Ordinal);
+        var hasRejectionDiagnostic = DispatchRejectionDiagnosticMarker.TryParse(
+            verification.StandardError,
+            out var verificationRecognized,
+            out var rejectionReason);
         var reason = missingChangeEvidence
-            ? verificationRecognized ? "no-change-evidence" : "verification-pattern-unmatched"
+            ? hasRejectionDiagnostic
+                ? rejectionReason
+                : DispatchRejectionDiagnosticMarker.VerificationPatternUnmatched
             : rule;
         var detail = BuildDispatchRejectionDetail(outcome, verification, missingChangeEvidence, verificationRecognized);
         var postDispatchCommits = TryGetDispatchDiagnosticValue(

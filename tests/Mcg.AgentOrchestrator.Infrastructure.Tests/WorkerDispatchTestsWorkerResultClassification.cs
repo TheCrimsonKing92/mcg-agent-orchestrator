@@ -2383,6 +2383,81 @@ public sealed class WorkerDispatchTestsWorkerResultClassification : WorkerDispat
         AssertExitCode(process.ExitCodePath, 0);
     }
 
+    [Xunit.Fact]
+    public void TesterStderrDeferralDoesNotOverrideStdout()
+    {
+        var root = CreateSeededDispatchRepository();
+        var clock = new TestClock(DateTimeOffset.Parse("2026-08-17T02:54:12Z"));
+        var standardOutput = WorkerResultBlock(
+            "none",
+            "none",
+            "inconclusive - no test host was available",
+            commit: "none",
+            blockers: "none");
+        var staleStandardError = WorkerResultBlock(
+            "<comma-separated changed files or none>",
+            "<commands run or none>",
+            "deferred - stale launcher prompt",
+            commit: "<commit sha or none>",
+            blockers: "<none|exact-blocker - token first>");
+        var (kernel, goal, task, process) = CreateCompletedGoalWorktreeDispatch(
+            root,
+            AgentRole.Tester,
+            standardOutput,
+            staleStandardError,
+            clock,
+            taskDescription: "Verify behavior with available checks",
+            verificationPlan: "Report the verification result or an explicit structured deferral.");
+        kernel.RecordDispatchBaseCommit(
+            goal.Id,
+            task.Id,
+            ReadGit(process.WorkingDirectory, ["rev-parse", "--short", "HEAD"]));
+
+        new BackgroundDispatchRunner(clock).RefreshLatestProcess(kernel, goal.Id, task.Id);
+
+        Assert.Equal(WorkTaskStatus.Failed, task.Status);
+        var failure = Assert.Single(goal.Timeline.Where(evt =>
+            evt.TaskId == task.Id && evt.Kind == ProgressKind.TaskFailed));
+        Assert.Contains("tests_status=Inconclusive", failure.Message, StringComparison.Ordinal);
+        Assert.Contains("verification_recognized=false", failure.Message, StringComparison.Ordinal);
+        Assert.Contains("reason=verification-pattern-unmatched", failure.Message, StringComparison.Ordinal);
+    }
+
+    [Xunit.Fact]
+    public void TesterFailingFractionReportsUnrecognizedVerification()
+    {
+        var root = CreateSeededDispatchRepository();
+        var clock = new TestClock(DateTimeOffset.Parse("2026-08-17T02:54:12Z"));
+        var standardOutput = WorkerResultBlock(
+            "none",
+            "none",
+            "fail - 3/4 passed",
+            commit: "none",
+            blockers: "none");
+        var (kernel, goal, task, process) = CreateCompletedGoalWorktreeDispatch(
+            root,
+            AgentRole.Tester,
+            standardOutput,
+            string.Empty,
+            clock,
+            taskDescription: "Verify behavior with available checks",
+            verificationPlan: "Report the verification result or an explicit structured deferral.");
+        kernel.RecordDispatchBaseCommit(
+            goal.Id,
+            task.Id,
+            ReadGit(process.WorkingDirectory, ["rev-parse", "--short", "HEAD"]));
+
+        new BackgroundDispatchRunner(clock).RefreshLatestProcess(kernel, goal.Id, task.Id);
+
+        Assert.Equal(WorkTaskStatus.Failed, task.Status);
+        var failure = Assert.Single(goal.Timeline.Where(evt =>
+            evt.TaskId == task.Id && evt.Kind == ProgressKind.TaskFailed));
+        Assert.Contains("tests_status=Fail", failure.Message, StringComparison.Ordinal);
+        Assert.Contains("verification_recognized=false", failure.Message, StringComparison.Ordinal);
+        Assert.Contains("reason=verification-pattern-unmatched", failure.Message, StringComparison.Ordinal);
+        Assert.Contains("detail=\"fail - 3/4 passed matched no accepted verification pattern\"", failure.Message, StringComparison.Ordinal);
+    }
+
     [Xunit.Fact(DisplayName = "BackgroundDispatchRunner_tester_native_exit_zero_noisy_stderr_passing_result_completes")]
     public void BackgroundDispatchRunnerTesterNativeExitZero_NoisyStderr_PassingResultCompletes()
     {
@@ -2622,8 +2697,8 @@ public sealed class WorkerDispatchTestsWorkerResultClassification : WorkerDispat
             evt.TaskId == task.Id && evt.Kind == ProgressKind.TaskFailed));
         Assert.Contains("DISPATCH_REJECTED role=Developer", failure.Message, StringComparison.Ordinal);
         Assert.Contains("tests_status=Deferred blockers=None", failure.Message, StringComparison.Ordinal);
-        Assert.Contains("verification_recognized=true", failure.Message, StringComparison.Ordinal);
-        Assert.Contains("reason=no-change-evidence", failure.Message, StringComparison.Ordinal);
+        Assert.Contains("verification_recognized=false", failure.Message, StringComparison.Ordinal);
+        Assert.Contains("reason=verification-pattern-unmatched", failure.Message, StringComparison.Ordinal);
         AssertExitCode(process.ExitCodePath, 0);
     }
 

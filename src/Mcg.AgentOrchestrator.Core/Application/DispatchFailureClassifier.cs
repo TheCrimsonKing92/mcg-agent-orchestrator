@@ -83,6 +83,49 @@ public static class DispatchFailureDiagnosticMarker
     public static string Format(string code) => $"{Prefix} {code}";
 }
 
+public static class DispatchRejectionDiagnosticMarker
+{
+    public const string Prefix = "@@MCG_DISPATCH_REJECTION@@";
+    public const string VerificationPatternUnmatched = "verification-pattern-unmatched";
+    public const string NoChangeEvidence = "no-change-evidence";
+
+    public static string Format(bool verificationRecognized) =>
+        $"{Prefix} verification_recognized={verificationRecognized.ToString().ToLowerInvariant()} " +
+        $"reason={(verificationRecognized ? NoChangeEvidence : VerificationPatternUnmatched)}";
+
+    public static bool TryParse(string standardError, out bool verificationRecognized, out string reason)
+    {
+        foreach (var line in standardError.Split(
+                     ['\r', '\n'],
+                     StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries).Reverse())
+        {
+            if (string.Equals(
+                    line,
+                    $"{Prefix} verification_recognized=true reason={NoChangeEvidence}",
+                    StringComparison.Ordinal))
+            {
+                verificationRecognized = true;
+                reason = NoChangeEvidence;
+                return true;
+            }
+
+            if (string.Equals(
+                    line,
+                    $"{Prefix} verification_recognized=false reason={VerificationPatternUnmatched}",
+                    StringComparison.Ordinal))
+            {
+                verificationRecognized = false;
+                reason = VerificationPatternUnmatched;
+                return true;
+            }
+        }
+
+        verificationRecognized = false;
+        reason = string.Empty;
+        return false;
+    }
+}
+
 public static class DispatchFailureClassifier
 {
     private static readonly TimeSpan BareClockRetryStalenessTolerance = TimeSpan.FromHours(1);
@@ -244,8 +287,8 @@ public static class DispatchFailureClassifier
     public static bool HasVerificationEvidenceInOutput(string standardOutput, string standardError) =>
         HasVerificationEvidence(standardOutput, standardError);
 
-    public static bool HasWorkerResultDeferralInOutput(string standardOutput, string standardError) =>
-        HasWorkerResultDeferral(SplitEvidenceLines($"{standardOutput}\n{standardError}"));
+    public static bool HasWorkerResultDeferralInOutput(string standardOutput) =>
+        HasWorkerResultDeferral(SplitEvidenceLines(standardOutput));
 
     public static bool IsTransientEmptyOutputDispatchFlake(TaskVerificationRecord verification)
     {
@@ -383,6 +426,7 @@ public static class DispatchFailureClassifier
         line.StartsWith("RESOURCE ", StringComparison.Ordinal) ||
         line.StartsWith("CLASSIFIER ", StringComparison.Ordinal) ||
         line.StartsWith(DispatchFailureDiagnosticMarker.Prefix, StringComparison.Ordinal) ||
+        line.StartsWith(DispatchRejectionDiagnosticMarker.Prefix, StringComparison.Ordinal) ||
         line.StartsWith("Dispatch recovery policy action=", StringComparison.Ordinal) ||
         line.StartsWith("Developer/Tester dispatch did not produce required relevant file-change evidence.", StringComparison.Ordinal);
 
@@ -1574,7 +1618,7 @@ public static class DispatchFailureClassifier
 
     private static bool HasWorkerResultDeferral(TaskVerificationRecord verification) =>
         HasWorkerResultDeferral(
-            EnumerateEvidenceLines(verification, includeStandardOutput: true, includeStandardError: true));
+            EnumerateEvidenceLines(verification, includeStandardOutput: true, includeStandardError: false));
 
     private static bool HasWorkerResultDeferral(IEnumerable<string> evidenceLines)
     {
