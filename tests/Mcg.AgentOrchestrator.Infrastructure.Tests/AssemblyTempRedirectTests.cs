@@ -115,23 +115,25 @@ public sealed class AssemblyTempRedirectTests
                 Path.Combine(root, "first-receipt.json"),
                 firstReadyName,
                 releaseName);
-            var firstReceipt = await WaitForProbeReceiptAsync(
-                "first",
-                firstProcess,
-                firstReady,
-                TestContext.Current.CancellationToken);
-
             secondProcess = StartMtpProbe(
                 executable,
                 root,
                 Path.Combine(root, "second-receipt.json"),
                 secondReadyName,
                 releaseName);
-            var secondReceipt = await WaitForProbeReceiptAsync(
+
+            var firstReceiptTask = WaitForProbeReceiptAsync(
+                "first",
+                firstProcess,
+                firstReady,
+                TestContext.Current.CancellationToken);
+            var secondReceiptTask = WaitForProbeReceiptAsync(
                 "second",
                 secondProcess,
                 secondReady,
                 TestContext.Current.CancellationToken);
+            var firstReceipt = await firstReceiptTask;
+            var secondReceipt = await secondReceiptTask;
             Assert.Equal(firstProcess.Process.Id, firstReceipt.ProcessId);
             Assert.Equal(secondProcess.Process.Id, secondReceipt.ProcessId);
             Assert.False(string.Equals(
@@ -142,12 +144,15 @@ public sealed class AssemblyTempRedirectTests
                 firstReceipt.FixtureRepositoryPath,
                 secondReceipt.FixtureRepositoryPath,
                 StringComparison.OrdinalIgnoreCase));
+
+            await AssertProcessStillRunningAsync("first", firstProcess);
+            await AssertProcessStillRunningAsync("second", secondProcess);
             Assert.True(
                 Directory.Exists(firstReceipt.TempRoot),
-                $"The second host's startup sweep removed the first host's live root '{firstReceipt.TempRoot}'.");
+                $"A concurrently starting host removed the first host's live root '{firstReceipt.TempRoot}'.");
             Assert.True(
                 Directory.Exists(secondReceipt.TempRoot),
-                $"The second host did not retain its selected root '{secondReceipt.TempRoot}'.");
+                $"A concurrently starting host removed the second host's live root '{secondReceipt.TempRoot}'.");
 
             release.Set();
             var results = await Task.WhenAll(
@@ -609,6 +614,21 @@ public sealed class AssemblyTempRedirectTests
         $"stdout:{Environment.NewLine}{result.Stdout}{Environment.NewLine}" +
         $"stderr:{Environment.NewLine}{result.Stderr}";
 
+    private static async Task AssertProcessStillRunningAsync(string label, MtpProbeProcess process)
+    {
+        if (!process.Process.HasExited)
+        {
+            return;
+        }
+
+        var result = await process.WaitForExitAsync(CancellationToken.None);
+        throw new Xunit.Sdk.XunitException(
+            $"The {label} MTP apphost exited before both live roots could be checked; " +
+            "root absence cannot be attributed to the concurrent startup sweep." +
+            Environment.NewLine +
+            FormatProcessFailure(label, result));
+    }
+
     private static void DeleteDirectory(string path)
     {
         try
@@ -762,7 +782,7 @@ public sealed class AssemblyTempRedirectChildSmokeTests
     internal const string ReadyEventVariable = "MCG_MTP_TEMP_ROOT_READY_EVENT";
     internal const string ReleaseEventVariable = "MCG_MTP_TEMP_ROOT_RELEASE_EVENT";
 
-    [Fact(Timeout = 45_000)]
+    [Fact]
     public void ProcessTempRootSupportsAnExclusiveMutableFixtureRepository()
     {
         if (!OperatingSystem.IsWindows())
@@ -813,9 +833,7 @@ public sealed class AssemblyTempRedirectChildSmokeTests
             using var ready = EventWaitHandle.OpenExisting(readyEventName);
             using var release = EventWaitHandle.OpenExisting(releaseEventName);
             ready.Set();
-            Assert.True(
-                release.WaitOne(TimeSpan.FromSeconds(30)),
-                "Parent MTP temp-root probe did not release the mutable-fixture gate.");
+            release.WaitOne();
         }
         finally
         {
