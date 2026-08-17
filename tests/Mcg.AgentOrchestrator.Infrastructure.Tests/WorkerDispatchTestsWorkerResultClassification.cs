@@ -2367,7 +2367,7 @@ public sealed class WorkerDispatchTestsWorkerResultClassification : WorkerDispat
         kernel.RecordDispatchBaseCommit(
             goal.Id,
             task.Id,
-            ReadGit(process.WorkingDirectory, ["rev-parse", "--short", "HEAD"]));
+            ReadGit(process.WorkingDirectory, ["rev-parse", "HEAD"]));
 
         new BackgroundDispatchRunner(clock).RefreshLatestProcess(kernel, goal.Id, task.Id);
 
@@ -2411,7 +2411,7 @@ public sealed class WorkerDispatchTestsWorkerResultClassification : WorkerDispat
         kernel.RecordDispatchBaseCommit(
             goal.Id,
             task.Id,
-            ReadGit(process.WorkingDirectory, ["rev-parse", "--short", "HEAD"]));
+            ReadGit(process.WorkingDirectory, ["rev-parse", "HEAD"]));
 
         new BackgroundDispatchRunner(clock).RefreshLatestProcess(kernel, goal.Id, task.Id);
 
@@ -2445,7 +2445,7 @@ public sealed class WorkerDispatchTestsWorkerResultClassification : WorkerDispat
         kernel.RecordDispatchBaseCommit(
             goal.Id,
             task.Id,
-            ReadGit(process.WorkingDirectory, ["rev-parse", "--short", "HEAD"]));
+            ReadGit(process.WorkingDirectory, ["rev-parse", "HEAD"]));
 
         new BackgroundDispatchRunner(clock).RefreshLatestProcess(kernel, goal.Id, task.Id);
 
@@ -2634,7 +2634,7 @@ public sealed class WorkerDispatchTestsWorkerResultClassification : WorkerDispat
     kernel.RecordDispatchBaseCommit(
         goal.Id,
         task.Id,
-        ReadGit(process.WorkingDirectory, ["rev-parse", "--short", "HEAD"]));
+        ReadGit(process.WorkingDirectory, ["rev-parse", "HEAD"]));
 
     new BackgroundDispatchRunner(clock).RefreshLatestProcess(kernel, goal.Id, task.Id);
 
@@ -2683,7 +2683,7 @@ public sealed class WorkerDispatchTestsWorkerResultClassification : WorkerDispat
         kernel.RecordDispatchBaseCommit(
             goal.Id,
             task.Id,
-            ReadGit(process.WorkingDirectory, ["rev-parse", "--short", "HEAD"]));
+            ReadGit(process.WorkingDirectory, ["rev-parse", "HEAD"]));
 
         new BackgroundDispatchRunner(clock).RefreshLatestProcess(kernel, goal.Id, task.Id);
 
@@ -2724,7 +2724,7 @@ public sealed class WorkerDispatchTestsWorkerResultClassification : WorkerDispat
         kernel.RecordDispatchBaseCommit(
             goal.Id,
             task.Id,
-            ReadGit(process.WorkingDirectory, ["rev-parse", "--short", "HEAD"]));
+            ReadGit(process.WorkingDirectory, ["rev-parse", "HEAD"]));
 
         new BackgroundDispatchRunner(clock).RefreshLatestProcess(kernel, goal.Id, task.Id);
 
