@@ -1,4 +1,5 @@
 using System.Diagnostics;
+using System.Globalization;
 using System.Text;
 using System.Text.Json;
 using Mcg.AgentOrchestrator.Infrastructure;
@@ -494,6 +495,8 @@ public sealed class AssemblyTempRedirectTests
         startInfo.Environment[AssemblyTempRedirectChildSmokeTests.ReceiptPathVariable] = receiptPath;
         startInfo.Environment[AssemblyTempRedirectChildSmokeTests.ReadyEventVariable] = readyEventName;
         startInfo.Environment[AssemblyTempRedirectChildSmokeTests.ReleaseEventVariable] = releaseEventName;
+        startInfo.Environment[AssemblyTempRedirectChildSmokeTests.ParentProcessIdVariable] =
+            Environment.ProcessId.ToString(CultureInfo.InvariantCulture);
         startInfo.ArgumentList.Add("--filter-class");
         startInfo.ArgumentList.Add("*AssemblyTempRedirectChildSmokeTests*");
 
@@ -578,7 +581,7 @@ public sealed class AssemblyTempRedirectTests
         return ReadProbeReceipt(process.ReceiptPath);
     }
 
-    private static async Task WaitForSignalAsync(
+    internal static async Task WaitForSignalAsync(
         WaitHandle waitHandle,
         CancellationToken cancellationToken)
     {
@@ -781,9 +784,10 @@ public sealed class AssemblyTempRedirectChildSmokeTests
     internal const string ReceiptPathVariable = "MCG_MTP_TEMP_ROOT_RECEIPT";
     internal const string ReadyEventVariable = "MCG_MTP_TEMP_ROOT_READY_EVENT";
     internal const string ReleaseEventVariable = "MCG_MTP_TEMP_ROOT_RELEASE_EVENT";
+    internal const string ParentProcessIdVariable = "MCG_MTP_TEMP_ROOT_PARENT_PROCESS_ID";
 
     [Fact]
-    public void ProcessTempRootSupportsAnExclusiveMutableFixtureRepository()
+    public async Task ProcessTempRootSupportsAnExclusiveMutableFixtureRepository()
     {
         if (!OperatingSystem.IsWindows())
         {
@@ -818,8 +822,16 @@ public sealed class AssemblyTempRedirectChildSmokeTests
 
             var readyEventName = Environment.GetEnvironmentVariable(ReadyEventVariable);
             var releaseEventName = Environment.GetEnvironmentVariable(ReleaseEventVariable);
+            var parentProcessIdText = Environment.GetEnvironmentVariable(ParentProcessIdVariable);
             Assert.False(string.IsNullOrWhiteSpace(readyEventName));
             Assert.False(string.IsNullOrWhiteSpace(releaseEventName));
+            Assert.True(
+                int.TryParse(
+                    parentProcessIdText,
+                    NumberStyles.None,
+                    CultureInfo.InvariantCulture,
+                    out var parentProcessId),
+                $"Missing or invalid parent process id '{parentProcessIdText}'.");
             Directory.CreateDirectory(Path.GetDirectoryName(receiptPath)!);
             File.WriteAllText(
                 receiptPath,
@@ -833,7 +845,21 @@ public sealed class AssemblyTempRedirectChildSmokeTests
             using var ready = EventWaitHandle.OpenExisting(readyEventName);
             using var release = EventWaitHandle.OpenExisting(releaseEventName);
             ready.Set();
-            release.WaitOne();
+            Process? parentProcess = null;
+            try
+            {
+                parentProcess = Process.GetProcessById(parentProcessId);
+                await WaitForReleaseOrParentExitAsync(release, parentProcess);
+            }
+            catch (ArgumentException)
+            {
+                // The parent exited before its process handle could be opened; returning lets
+                // this apphost run fixture and temp-root cleanup instead of becoming orphaned.
+            }
+            finally
+            {
+                parentProcess?.Dispose();
+            }
         }
         finally
         {
@@ -847,6 +873,25 @@ public sealed class AssemblyTempRedirectChildSmokeTests
             }
         }
     }
+
+    private static async Task WaitForReleaseOrParentExitAsync(WaitHandle release, Process parentProcess)
+    {
+        using var cancellation = new CancellationTokenSource();
+        var releaseTask = AssemblyTempRedirectTests.WaitForSignalAsync(release, cancellation.Token);
+        var parentExitTask = parentProcess.WaitForExitAsync(cancellation.Token);
+        await Task.WhenAny(releaseTask, parentExitTask);
+        cancellation.Cancel();
+
+        try
+        {
+            await Task.WhenAll(releaseTask, parentExitTask);
+        }
+        catch (OperationCanceledException)
+        {
+            // Exactly one signal wins; cancellation releases the losing registered wait.
+        }
+    }
+
 }
 
 internal sealed record TempRootProbeReceipt(
