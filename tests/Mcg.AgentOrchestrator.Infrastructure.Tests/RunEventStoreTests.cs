@@ -379,6 +379,27 @@ public sealed class RunEventStoreTests
         Assert.Equal("sentinel".Length, exclusive.Length);
     }
 
+    [Xunit.Fact(DisplayName = "RunEventMaintenanceCadence_production_default_runs_store_maintenance")]
+    public async Task RunEventMaintenanceCadenceProductionDefaultRunsStoreMaintenance()
+    {
+        var root = CreateTempDirectory();
+        var db = Path.Combine(root, "run-events.db");
+        var logPath = Path.Combine(root, "logs", ConductEventLogWriter.CurrentFileName);
+        var now = DateTimeOffset.Parse("2026-07-16T12:00:00Z");
+        var store = new SqliteRunEventStore(db);
+        var oversized = await AppendTickAsync(store, now.AddMinutes(-10), new string('x', 60_000));
+
+        var result = RunEventMaintenanceCadence.TryRunIfDue(db, logPath, () => now);
+
+        Assert.True(result.Attempted);
+        Assert.False(result.Deferred);
+        Assert.False(result.Failed);
+        var maintenance = Assert.IsType<RunEventMaintenanceResult>(result.Maintenance);
+        Assert.Equal(1, maintenance.OversizedConductorTickRowsDeleted);
+        var remaining = await store.ReadSinceAsync(maxCount: 10);
+        Assert.DoesNotContain(remaining, evt => evt.Sequence == oversized.Sequence);
+    }
+
     [Xunit.Fact(DisplayName = "RunEventMaintenanceCadence_self_defers_when_database_writer_is_busy")]
     public async Task RunEventMaintenanceCadenceSelfDefersWhenDatabaseWriterIsBusy()
     {
