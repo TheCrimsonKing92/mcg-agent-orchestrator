@@ -15,7 +15,8 @@ internal static class RunEventMaintenanceCadence
     public static RunEventMaintenanceCadenceResult TryRunIfDue(
         string runEventStorePath,
         string conductEventsLogPath,
-        Func<DateTimeOffset>? utcNow = null)
+        Func<DateTimeOffset>? utcNow = null,
+        Func<SqliteRunEventStore, RunEventMaintenanceOptions, RunEventMaintenanceResult>? maintenanceOperation = null)
     {
         var now = (utcNow ?? (() => DateTimeOffset.UtcNow))();
         var cadenceKey = Path.GetFullPath(runEventStorePath);
@@ -38,7 +39,9 @@ internal static class RunEventMaintenanceCadence
             }
 
             var options = RunEventMaintenanceOptions.Default with { UtcNow = now, Vacuum = false };
-            var result = store.MaintainAsync(options).GetAwaiter().GetResult();
+            var result = maintenanceOperation is null
+                ? store.MaintainAsync(options).GetAwaiter().GetResult()
+                : maintenanceOperation(store, options);
             var receipt = FormatReceipt("cadence", options, result);
             Console.WriteLine(receipt);
             TryAppendJournal(journal, "run-events-maintenance", receipt, now);
