@@ -87,7 +87,9 @@ public abstract class ConductorBatchLoopTests
             ConductorAcceptanceCohortSelection,
             IReadOnlyList<Goal>,
             ConductorAutonomyPolicy,
-            ConductorAcceptanceCohortRunResult>? runAcceptanceCohort = null) =>
+            ConductorAcceptanceCohortRunResult>? runAcceptanceCohort = null,
+        Func<Goal, ReconcileAcceptanceLeaseState?>? getEvidenceMutationLease = null,
+        Func<DateTimeOffset>? utcNow = null) =>
         new ConductorDriver(
             getFacts ?? (_ => GoalLifecycleFacts.None),
             getRunningCount ?? (() => 0),
@@ -122,7 +124,9 @@ public abstract class ConductorBatchLoopTests
             recheckPreLandingRebaseConflict: recheckPreLandingRebaseConflict,
             isVerificationGateSatisfied: isVerificationGateSatisfied,
             gateReadyCandidateProjector: gateReadyCandidateProjector,
-            runAcceptanceCohort: runAcceptanceCohort);
+            runAcceptanceCohort: runAcceptanceCohort,
+            getEvidenceMutationLease: getEvidenceMutationLease,
+            utcNow: utcNow);
 
     // Returns a path to a stop file that does NOT exist yet.
     private protected static string NoStopPath() =>

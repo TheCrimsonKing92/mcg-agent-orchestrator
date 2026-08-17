@@ -250,9 +250,13 @@ public sealed class ReconcileSweepRemediationTests
         var store = new ReconcileSweepRemediationStore(NewDatabasePath());
         using var first = store.TryAcquireAcceptanceLease("goal-1", "owner-1", TimeSpan.FromMinutes(30));
         var overlapping = store.TryAcquireAcceptanceLease("goal-1", "owner-2", TimeSpan.FromMinutes(30));
+        var observed = store.TryGetAcceptanceLease("goal-1", TimeSpan.FromMinutes(30));
 
         Xunit.Assert.NotNull(first);
         Xunit.Assert.Null(overlapping);
+        Xunit.Assert.NotNull(observed);
+        Xunit.Assert.Equal("owner-1", observed.Owner);
+        Xunit.Assert.Equal(observed.AcquiredAtUtc.AddMinutes(30), observed.ExpiresAtUtc);
         first.Dispose();
         using var afterRelease = store.TryAcquireAcceptanceLease("goal-1", "owner-2", TimeSpan.FromMinutes(30));
         Xunit.Assert.NotNull(afterRelease);

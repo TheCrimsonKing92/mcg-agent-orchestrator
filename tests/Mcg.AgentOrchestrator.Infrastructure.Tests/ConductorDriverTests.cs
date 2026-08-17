@@ -955,10 +955,11 @@ public sealed class ConductorDriverTests
         File.WriteAllText(Path.Combine(worktree, "feature.txt"), "goal work");
         RunGit(worktree, "add", "feature.txt");
         RunGit(worktree, "commit", "-m", "goal work");
+        var leaseOwner = $"goal-replace:test:{Guid.NewGuid():N}";
         using var replacementLease = new ReconcileSweepRemediationStore(workspace.SqliteStatePath)
             .TryAcquireAcceptanceLease(
                 goal.Id.Value,
-                $"goal-replace:test:{Guid.NewGuid():N}",
+                leaseOwner,
                 TimeSpan.FromMinutes(30));
         Assert.NotNull(replacementLease);
         var driver = new ConductorDriver(
@@ -971,7 +972,9 @@ public sealed class ConductorDriverTests
         var result = driver.AdvanceOnce(goal, ConductorAutonomyPolicy.Conservative);
 
         var held = Assert.IsType<ConductorAdvanceOutcome.Held>(result.Outcome);
-        Assert.Contains("concurrent source-backlog replacement", held.Reason, StringComparison.Ordinal);
+        Assert.Contains("acceptance lease", held.Reason, StringComparison.Ordinal);
+        Assert.Contains($"owner={leaseOwner}", held.Reason, StringComparison.Ordinal);
+        Assert.Contains("expiresAtUtc=", held.Reason, StringComparison.Ordinal);
         Assert.DoesNotContain(
             GoalOperationJournal.Read(root, goal.Id).Entries,
             entry => entry.Operation.StartsWith("conductor:acceptance", StringComparison.Ordinal) ||

@@ -43,11 +43,12 @@ internal sealed record DeveloperBranchIntegrationResult(
 
 internal sealed class ConductorDriver
 {
-    private sealed class EvidenceMutationLeaseUnavailableException(string message)
+    internal sealed class EvidenceMutationLeaseUnavailableException(string message)
         : InvalidOperationException(message);
 
     private const int MaxCriterionRetryEvidenceLines = 30;
     private static readonly TimeSpan DefaultBuildServerShutdownTimeout = TimeSpan.FromSeconds(5);
+    private static readonly TimeSpan EvidenceMutationLeaseDuration = TimeSpan.FromMinutes(30);
     private const string CleanBaselineRedCorrelationKeyPrefix = "clean-baseline-red:";
 
     // Finding evidence retries deliver a Conductor-owned receipt or typed refusal to the role that
@@ -132,6 +133,8 @@ internal sealed class ConductorDriver
     private readonly Func<bool> _hasGateReadyGoal;
     private readonly Func<Goal, string?> _tryBuildAwaitingClarificationEscalationReason;
     private readonly Func<Goal, string, IDisposable?> _tryAcquireEvidenceMutationLease;
+    private readonly Func<Goal, ReconcileAcceptanceLeaseState?> _getEvidenceMutationLease;
+    private readonly Func<DateTimeOffset> _utcNow;
     private readonly string? _executionDirectory;
     private readonly ConductorParallelAcceptanceAttemptCoordinator _parallelAcceptanceAttemptCoordinator;
     private readonly ConductorParallelAcceptanceAttemptCoordinator _focusedEvidenceAttemptCoordinator;
@@ -223,11 +226,18 @@ internal sealed class ConductorDriver
         var worktreeSnapshot = GoalWorktrees.ResolveAll(dir, factGoalIds)
             .ToDictionary(pair => pair.Key, pair => pair.Value);
         void RefreshJournal(GoalId goalId) => journalSnapshot[goalId] = GoalOperationJournal.Read(dir, goalId);
+        var evidenceMutationLeaseStore = new ReconcileSweepRemediationStore(workspace.SqliteStatePath);
+        _getEvidenceMutationLease = goal => evidenceMutationLeaseStore.TryGetAcceptanceLease(
+            goal.Id.Value,
+            EvidenceMutationLeaseDuration);
+        _utcNow = () => DateTimeOffset.UtcNow;
         IDisposable? AcquireEvidenceMutationLease(Goal goal, string operation)
         {
             var owner = $"goal-evidence:{operation}:{Environment.ProcessId}:{Guid.NewGuid():N}";
-            return new ReconcileSweepRemediationStore(workspace.SqliteStatePath)
-                .TryAcquireAcceptanceLease(goal.Id.Value, owner, TimeSpan.FromMinutes(30));
+            return evidenceMutationLeaseStore.TryAcquireAcceptanceLease(
+                goal.Id.Value,
+                owner,
+                EvidenceMutationLeaseDuration);
         }
         _tryAcquireEvidenceMutationLease = AcquireEvidenceMutationLease;
         void RecordMissingBranchRetirement(Goal goal, string detail)
@@ -1111,7 +1121,9 @@ internal sealed class ConductorDriver
             ConductorAutonomyPolicy,
             ConductorAcceptanceCohortRunResult>? runAcceptanceCohort = null,
         Func<Goal, string, IDisposable?>? tryAcquireEvidenceMutationLease = null,
-        Func<Goal, DeveloperBranchIntegrationResult>? integrateMainBeforeDeveloperDispatch = null)
+        Func<Goal, DeveloperBranchIntegrationResult>? integrateMainBeforeDeveloperDispatch = null,
+        Func<Goal, ReconcileAcceptanceLeaseState?>? getEvidenceMutationLease = null,
+        Func<DateTimeOffset>? utcNow = null)
     {
         _getFacts = getFacts;
         _getRunningPaidWorkerCount = getRunningPaidWorkerCount;
@@ -1209,6 +1221,8 @@ internal sealed class ConductorDriver
             tryBuildAwaitingClarificationEscalationReason ?? (_ => null);
         _tryAcquireEvidenceMutationLease =
             tryAcquireEvidenceMutationLease ?? ((_, _) => NoopEvidenceMutationLease.Instance);
+        _getEvidenceMutationLease = getEvidenceMutationLease ?? (_ => null);
+        _utcNow = utcNow ?? (() => DateTimeOffset.UtcNow);
         _executionDirectory = null;
         _parallelAcceptanceEnabled =
             runAcceptanceVerificationWithSlot is not null ||
@@ -2938,6 +2952,12 @@ internal sealed class ConductorDriver
         if (!HasCompletedPassedVerificationForAllTasks(goal))
         {
             return null;
+        }
+
+        if (!_parallelAcceptanceAttemptCoordinator.HasLiveAttempt(goal.Id.Value) &&
+            TryGetActiveEvidenceMutationLease(goal) is { } lease)
+        {
+            throw new EvidenceMutationLeaseUnavailableException(FormatEvidenceMutationLeaseHeld(lease));
         }
 
         var slotCount = GetAcceptanceSlotCount(goal);
@@ -5126,17 +5146,34 @@ internal sealed class ConductorDriver
         return $"path={attribution.Path}; holders: {holders}";
     }
 
+    private ReconcileAcceptanceLeaseState? TryGetActiveEvidenceMutationLease(Goal goal)
+    {
+        var lease = _getEvidenceMutationLease(goal);
+        return lease is not null && lease.ExpiresAtUtc > _utcNow()
+            ? lease
+            : null;
+    }
+
+    private static string FormatEvidenceMutationLeaseHeld(ReconcileAcceptanceLeaseState lease) =>
+        $"acceptance lease held; owner={lease.Owner}; expiresAtUtc={lease.ExpiresAtUtc:O}";
+
     private ConductorAdvanceResult ReplacementEvidenceMutationHeld(
         Goal goal,
         string goalPrefix,
-        ConductorAutonomyPolicy policy) =>
-        MakeResult(
+        ConductorAutonomyPolicy policy)
+    {
+        var lease = TryGetActiveEvidenceMutationLease(goal);
+        var reason = lease is null
+            ? "acceptance lease acquisition blocked; owner=unknown; expiresAtUtc=unknown"
+            : FormatEvidenceMutationLeaseHeld(lease);
+        return MakeResult(
             goal.Id.Value,
             goalPrefix,
             policy,
             new ConductorAdvanceOutcome.Held(
                 GoalLifecycleState.Verified,
-                "Acceptance or landing is blocked by concurrent source-backlog replacement."));
+                reason));
+    }
 
     private sealed class NoopEvidenceMutationLease : IDisposable
     {
