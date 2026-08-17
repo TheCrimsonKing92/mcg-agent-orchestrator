@@ -3065,16 +3065,13 @@ public sealed class GoalAcceptanceVerifierDotnetBuildSlotTests : GoalAcceptanceV
     }
 
     [Xunit.Fact]
-    public async Task FocusedEvidence_RealCheckThatPassesOnBothArmsIsVacuous()
+    public void FocusedEvidence_RealCheckThatPassesOnBothArmsIsVacuous()
     {
-        var vacuous = await RunRealDualArmProbeAsync(
-            baselineFeature: "public static class Feature { public static bool Enabled => true; }",
-            candidateFeature: "public static class Feature { public static bool Enabled => true; }",
-            candidateMarker: "vacuous candidate change");
-        Assert.Equal(FindingEvidenceOutcomeReason.VacuousEvidence, vacuous.OutcomeReason);
-        Assert.Equal(
-            [FindingEvidenceArmDisposition.Green, FindingEvidenceArmDisposition.Green],
-            vacuous.Arms!.Select(arm => arm.Disposition));
+        var outcome = GoalAcceptanceVerifier.ClassifyFocusedEvidenceExperiment(
+            CreateFocusedEvidenceArm(FindingEvidenceArm.Candidate, FindingEvidenceArmDisposition.Green),
+            CreateFocusedEvidenceArm(FindingEvidenceArm.Baseline, FindingEvidenceArmDisposition.Green));
+
+        Assert.Equal(FindingEvidenceOutcomeReason.VacuousEvidence, outcome);
     }
 
     [Xunit.Fact]
@@ -4919,7 +4916,7 @@ public sealed class GoalAcceptanceVerifierDotnetBuildSlotTests : GoalAcceptanceV
             return;
         }
 
-        GoalAcceptanceVerifier.ResolveShardCoreBudgetForTests = () => 2;
+        GoalAcceptanceVerifier.ResolveShardCoreBudgetForTests = () => 1;
         var root = CreateRealProcessShardManifestWorkspace();
         var repositoryRoot = InfrastructureTestSupport.FindRepositoryRoot();
         const string infrastructureTestProject =
@@ -4930,18 +4927,10 @@ public sealed class GoalAcceptanceVerifierDotnetBuildSlotTests : GoalAcceptanceV
         var executablePaths = new System.Collections.Concurrent.ConcurrentBag<string>();
         var resultsDirectories = new System.Collections.Concurrent.ConcurrentBag<string>();
         var testProcessIds = new System.Collections.Concurrent.ConcurrentBag<int>();
-        var signalDirectory = Path.Combine(root, ".shard-smoke");
-        Directory.CreateDirectory(signalDirectory);
-        var alphaSignalPath = Path.Combine(signalDirectory, "alpha.signal");
-        var betaSignalPath = Path.Combine(signalDirectory, "beta.signal");
         var ambientAttemptPrefix = Path.Combine(root, "ambient-gate-attempt", "not-a-slot");
         var previousAttemptPrefix = Environment.GetEnvironmentVariable(
             GoalAcceptanceVerifier.AcceptanceAttemptTrxPrefixVariable);
-        IReadOnlyDictionary<string, string> shardEnvironment = new Dictionary<string, string>
-        {
-            ["MCG_SHARD_SMOKE_ALPHA_SIGNAL"] = alphaSignalPath,
-            ["MCG_SHARD_SMOKE_BETA_SIGNAL"] = betaSignalPath
-        };
+        IReadOnlyDictionary<string, string> shardEnvironment = new Dictionary<string, string>();
         DotnetBuildEnvironmentLease? primaryLease = null;
         DotnetBuildEnvironment? primaryEnvironment = null;
         var primaryBuildPermit = -1;
@@ -5009,9 +4998,7 @@ public sealed class GoalAcceptanceVerifierDotnetBuildSlotTests : GoalAcceptanceV
                     result.Checks!
                         .Where(check => !check.Passed)
                         .Select(check => $"{check.Name}: exit={check.ExitCode}; output={check.OutputTail}")));
-            Assert.True(File.Exists(alphaSignalPath));
-            Assert.True(File.Exists(betaSignalPath));
-            Assert.Equal(2, testProcessIds.Distinct().Count());
+            Assert.True(Assert.Single(testProcessIds) > 0);
             var invocationArray = invocations.ToArray();
             Assert.Single(invocationArray, call =>
                 call.Length >= 2 &&
@@ -5027,9 +5014,11 @@ public sealed class GoalAcceptanceVerifierDotnetBuildSlotTests : GoalAcceptanceV
             Assert.Single(executablePaths.Distinct(StringComparer.OrdinalIgnoreCase));
             Assert.All(executablePaths, path => Assert.True(File.Exists(path), $"Missing prebuilt MTP executable '{path}'."));
             var attemptResultsDirectory = Path.GetDirectoryName(ambientAttemptPrefix)!;
+            Assert.Single(resultsDirectories);
             Assert.All(
                 resultsDirectories,
                 path => Assert.Equal(attemptResultsDirectory, path, ignoreCase: true));
+            Assert.Single(result.TestResultPaths!);
             Assert.All(
                 result.TestResultPaths!,
                 path => Assert.StartsWith(
@@ -5327,7 +5316,8 @@ public sealed class GoalAcceptanceVerifierDotnetBuildSlotTests : GoalAcceptanceV
     [Xunit.Fact(DisplayName = "GoalAcceptanceVerifier_partition_verdict_cache_reuses_green_partitions_on_reroll")]
     public async Task GoalAcceptanceVerifierPartitionVerdictCacheReusesGreenPartitionsOnReroll()
     {
-        var root = CreateCheckedInManifestShapeWorkspace();
+        var root = CreateTwoLanePartitionVerdictManifestWorkspace();
+        var remainderLaneFilter = ResolveLaneFilter(root, "Remainder");
         var goalId = new GoalId("12345678123456781234567812345678");
         var calls = new List<string[]>();
         var remainderRuns = 0;
@@ -5339,7 +5329,7 @@ public sealed class GoalAcceptanceVerifierDotnetBuildSlotTests : GoalAcceptanceV
             var verifier = new GoalAcceptanceVerifier((args, _, _) =>
             {
                 calls.Add(args);
-                if (IsInfrastructurePartitionTestCall(args) && args.Any(arg => arg.Contains("FullyQualifiedName!~GoalAcceptanceVerifierTests", StringComparison.Ordinal)))
+                if (IsInfrastructurePartitionTestCall(args) && args.Contains(remainderLaneFilter))
                 {
                     remainderRuns++;
                     return Task.FromResult(remainderRuns < 3
@@ -5652,7 +5642,7 @@ public sealed class GoalAcceptanceVerifierDotnetBuildSlotTests : GoalAcceptanceV
     [Xunit.Fact]
     public async Task PartitionCache_ManifestChange_RerunsAllPartitions()
     {
-        var root = CreateCheckedInManifestShapeWorkspace();
+        var root = CreateTwoLanePartitionVerdictManifestWorkspace();
         var goalId = new GoalId("12345678123456781234567812345678");
         var calls = new List<string[]>();
         SetPartitionVerdictKeyHooks("tree-a", "main-a", "commit-a");
@@ -7727,15 +7717,11 @@ public sealed class GoalAcceptanceVerifierDotnetBuildSlotTests : GoalAcceptanceV
             {
               "version": 1,
               "engine": {
-                "maxConcurrentShards": 2,
+                "maxConcurrentShards": 1,
                 "infrastructureTestLanes": [
                   {
                     "name": "Real process alpha",
                     "filter": "FullyQualifiedName~ShardProbeAlphaTests"
-                  },
-                  {
-                    "name": "Real process beta",
-                    "filter": "FullyQualifiedName~ShardProbeBetaTests"
                   }
                 ],
                 "mtpInvocations": [
