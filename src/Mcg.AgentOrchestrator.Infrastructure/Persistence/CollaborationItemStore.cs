@@ -5,6 +5,7 @@ namespace Mcg.AgentOrchestrator.Infrastructure;
 public sealed partial class CollaborationItemStore : ICollaborationItemStore
 {
     private readonly string _dbPath;
+    private readonly bool _readOnly;
     private static readonly TimeSpan DefaultActionTtl = TimeSpan.FromHours(12);
     private static readonly JsonSerializerOptions JsonOptions = new(JsonSerializerDefaults.Web);
     private static readonly HashSet<string> AllowedActionVerbs = new(StringComparer.OrdinalIgnoreCase)
@@ -30,9 +31,18 @@ public sealed partial class CollaborationItemStore : ICollaborationItemStore
     };
 
     public CollaborationItemStore(string dbPath)
+        : this(dbPath, readOnly: false)
+    {
+    }
+
+    private CollaborationItemStore(string dbPath, bool readOnly)
     {
         _dbPath = dbPath;
-        EnsureSchema();
+        _readOnly = readOnly;
+        if (!readOnly)
+        {
+            EnsureSchema();
+        }
     }
 
 }

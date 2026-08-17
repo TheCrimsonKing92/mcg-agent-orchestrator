@@ -327,6 +327,40 @@ public sealed class OperatorIntentStoreTests
         }
     }
 
+    [Xunit.Fact]
+    public async Task ActionableSummariesBatchCountsAndLatestTypedTimestamp()
+    {
+        var root = CreateTempDirectory();
+        try
+        {
+            var dbPath = Path.Combine(root, SqliteOperatorIntentStore.DatabaseFileName);
+            var logPath = Path.Combine(root, "logs");
+            var store = new SqliteOperatorIntentStore(dbPath, logPath);
+            var first = CreateRetryIntent("goal-one", "task-one", "intent-one", "key-one") with
+            {
+                CreatedAt = DateTimeOffset.Parse("2026-08-17T10:00:00Z")
+            };
+            var second = CreateRetryIntent("goal-one", "task-two", "intent-two", "key-two") with
+            {
+                CreatedAt = DateTimeOffset.Parse("2026-08-17T11:00:00Z")
+            };
+            await store.EnqueueAsync(first);
+            await store.EnqueueAsync(second);
+            await store.EnqueueAsync(CreateRetryIntent("goal-other", "task-three", "intent-three", "key-three"));
+
+            var summaries = await new SqliteOperatorIntentStore(dbPath, logPath, readOnly: true)
+                .ListActionableSummariesAsync(["goal-one"]);
+
+            var summary = Xunit.Assert.Single(summaries).Value;
+            Xunit.Assert.Equal(2, summary.Count);
+            Xunit.Assert.Equal(second.CreatedAt, summary.LatestAt);
+        }
+        finally
+        {
+            TryDeleteDirectory(root);
+        }
+    }
+
     private static OperatorIntentRecord CreateRetryIntent(
         string goalId,
         string taskId,

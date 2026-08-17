@@ -6,6 +6,38 @@ using Microsoft.Data.Sqlite;
 public sealed class CollaborationItemStoreTests
 {
     [Xunit.Fact]
+    public async Task OpenExistingReadsWithoutCreatingOrMigratingStorage()
+    {
+        var root = CreateTempDirectory();
+        var missingRoot = CreateTempDirectory();
+        try
+        {
+            _ = CollaborationItemStore.OpenExisting(missingRoot);
+            Xunit.Assert.False(File.Exists(Path.Combine(missingRoot, "collaboration-items.db")));
+
+            var writer = CollaborationItemStore.ForDirectory(root);
+            var raised = await writer.RaiseAsync(
+                CollaborationItemType.Clarification,
+                "goal-one",
+                "Need input",
+                "Question");
+            var beforeColumns = ReadColumnNames(Path.Combine(root, "collaboration-items.db"));
+
+            var items = await CollaborationItemStore.OpenExisting(root).ListForGoalIdsAsync(["goal-one"]);
+
+            Xunit.Assert.Equal(raised.Id, Xunit.Assert.Single(items).Id);
+            Xunit.Assert.Equal(beforeColumns, ReadColumnNames(Path.Combine(root, "collaboration-items.db")));
+        }
+        finally
+        {
+            if (Directory.Exists(root))
+                Directory.Delete(root, recursive: true);
+            if (Directory.Exists(missingRoot))
+                Directory.Delete(missingRoot, recursive: true);
+        }
+    }
+
+    [Xunit.Fact]
     public async Task ConcurrentLegacySchemaInitializationAddsAnswerHistoryOnce()
     {
         // The unique database path keeps this real-SQLite test parallel-safe.

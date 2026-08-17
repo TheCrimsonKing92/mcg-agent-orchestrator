@@ -207,6 +207,26 @@ if (startupArgs.Count > 0 && startupArgs[0].Equals("prototype", StringComparison
     return 0;
 }
 
+if (GoalBoardCommand.IsBoardCommand(startupArgs))
+{
+    try
+    {
+        var boardRepository = SqliteOrchestratorStateRepository.OpenReadOnly(workspace.SqliteStatePath);
+        GoalBoardCommand.Run(startupArgs, boardRepository, workspace);
+        return ExitCompletedStartupCommand(0);
+    }
+    catch (ArgumentException ex)
+    {
+        Console.Error.WriteLine($"Error: {ex.Message}");
+        return ExitCompletedStartupCommand(1);
+    }
+    catch (Exception ex)
+    {
+        Console.Error.WriteLine(ProgramStartupErrorFormatter.Format(ex));
+        return ExitCompletedStartupCommand(1);
+    }
+}
+
 if (CliPersistentStateRunner.IsGoalIntakeStatusCommand(startupArgs))
 {
     try

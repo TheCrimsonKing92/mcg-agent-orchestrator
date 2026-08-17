@@ -49,6 +49,11 @@ public sealed record OperatorIntentRecord(
     DateTimeOffset? CompletedAt = null,
     string? Outcome = null);
 
+public sealed record ActionableOperatorIntentSummary(
+    string GoalId,
+    int Count,
+    DateTimeOffset? LatestAt);
+
 public interface IOperatorIntentStore
 {
     Task<OperatorIntentRecord> EnqueueAsync(
@@ -78,6 +83,10 @@ public interface IOperatorIntentStore
         CancellationToken cancellationToken = default);
 
     Task<IReadOnlyList<string>> ListActionableGoalIdsAsync(
+        CancellationToken cancellationToken = default);
+
+    Task<IReadOnlyDictionary<string, ActionableOperatorIntentSummary>> ListActionableSummariesAsync(
+        IReadOnlyCollection<string> goalIds,
         CancellationToken cancellationToken = default);
 
     void AcknowledgeWake(string intentId);
@@ -288,6 +297,52 @@ public sealed class SqliteOperatorIntentStore : IOperatorIntentStore
         }
 
         return goalIds;
+    }
+
+    public async Task<IReadOnlyDictionary<string, ActionableOperatorIntentSummary>> ListActionableSummariesAsync(
+        IReadOnlyCollection<string> goalIds,
+        CancellationToken cancellationToken = default)
+    {
+        ArgumentNullException.ThrowIfNull(goalIds);
+        var requested = goalIds
+            .Where(goalId => !string.IsNullOrWhiteSpace(goalId))
+            .ToHashSet(StringComparer.Ordinal);
+        if (requested.Count == 0)
+        {
+            return new Dictionary<string, ActionableOperatorIntentSummary>(StringComparer.Ordinal);
+        }
+
+        await using var conn = OpenConnection();
+        await using var cmd = conn.CreateCommand();
+        cmd.CommandText = """
+            SELECT goal_id, COUNT(*), MAX(COALESCE(claimed_at, created_at))
+            FROM operator_intents
+            WHERE status IN ($pending, $claimed)
+            GROUP BY goal_id
+            ORDER BY goal_id
+            """;
+        cmd.Parameters.AddWithValue("$pending", OperatorIntentStatus.Pending.ToString());
+        cmd.Parameters.AddWithValue("$claimed", OperatorIntentStatus.Claimed.ToString());
+        await using var reader = await cmd.ExecuteReaderAsync(cancellationToken);
+        var summaries = new Dictionary<string, ActionableOperatorIntentSummary>(StringComparer.Ordinal);
+        while (await reader.ReadAsync(cancellationToken))
+        {
+            var goalId = reader.GetString(0);
+            if (!requested.Contains(goalId))
+            {
+                continue;
+            }
+
+            DateTimeOffset? latestAt = null;
+            if (!reader.IsDBNull(2) && DateTimeOffset.TryParse(reader.GetString(2), out var parsed))
+            {
+                latestAt = parsed;
+            }
+
+            summaries[goalId] = new ActionableOperatorIntentSummary(goalId, reader.GetInt32(1), latestAt);
+        }
+
+        return summaries;
     }
 
     public void AcknowledgeWake(string intentId)

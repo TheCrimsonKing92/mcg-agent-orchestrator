@@ -7,7 +7,11 @@ public sealed partial class CollaborationItemStore
     public static CollaborationItemStore ForDirectory(string directory) =>
         new(Path.Combine(directory, "collaboration-items.db"));
 
-    private string ConnectionString => $"Data Source={_dbPath};Mode=ReadWriteCreate;Pooling=False;";
+    public static CollaborationItemStore OpenExisting(string directory) =>
+        new(Path.Combine(directory, "collaboration-items.db"), readOnly: true);
+
+    private string ConnectionString =>
+        $"Data Source={_dbPath};Mode={(_readOnly ? "ReadOnly" : "ReadWriteCreate")};Pooling=False;";
 
     private SqliteConnection OpenConnection()
     {

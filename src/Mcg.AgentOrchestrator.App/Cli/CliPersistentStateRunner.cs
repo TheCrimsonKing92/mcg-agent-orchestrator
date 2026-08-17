@@ -80,6 +80,12 @@ internal static class CliPersistentStateRunner
         IGoalAcceptanceVerifier? acceptanceVerifier = null,
         OperatorIntentSubmissionSource operatorIntentSubmissionSource = OperatorIntentSubmissionSource.Cli)
     {
+        if (GoalBoardCommand.IsBoardCommand(args))
+        {
+            GoalBoardCommand.Run(args, stateRepository, workspace);
+            return false;
+        }
+
         using var writeOperationTag = SqliteOrchestratorStateRepository.UseWriteOperationTag(
             $"cli:{(args.Count == 0 ? "repl" : args[0].Trim().ToLowerInvariant())}");
         DrainAcceptanceRetryAuditOutbox(stateRepository, workspace);
@@ -526,6 +532,13 @@ internal static class CliPersistentStateRunner
     {
         if (args.Count == 0)
             return false;
+
+        if (args.Count >= 2 &&
+            args[0].Equals("goals", StringComparison.OrdinalIgnoreCase) &&
+            args[1].Equals("--board", StringComparison.OrdinalIgnoreCase))
+        {
+            return true;
+        }
 
         return args[0].ToLowerInvariant() switch
         {

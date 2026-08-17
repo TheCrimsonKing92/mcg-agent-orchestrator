@@ -41,6 +41,35 @@ public sealed class GitCliTests
         }
     }
 
+    [Xunit.Fact(DisplayName = "GitCli_InspectAheadBehind_returns_typed_divergence_counts")]
+    public void GitCliInspectAheadBehindReturnsTypedDivergenceCounts()
+    {
+        var repo = CreateSeededRepository();
+        try
+        {
+            RunGit(repo, "branch", "-M", "main");
+            RunGit(repo, "checkout", "-b", "feature");
+            File.WriteAllText(Path.Combine(repo, "feature.txt"), "feature");
+            RunGit(repo, "add", "-A");
+            RunGit(repo, "commit", "-m", "Feature");
+            RunGit(repo, "checkout", "main");
+            File.WriteAllText(Path.Combine(repo, "main.txt"), "main");
+            RunGit(repo, "add", "-A");
+            RunGit(repo, "commit", "-m", "Main");
+            RunGit(repo, "checkout", "feature");
+
+            var result = GitCli.InspectAheadBehind(repo);
+
+            Assert.True(result.Succeeded, result.Error);
+            Assert.Equal(1, result.Ahead);
+            Assert.Equal(1, result.Behind);
+        }
+        finally
+        {
+            DeleteDirectory(repo);
+        }
+    }
+
     [Xunit.Fact(DisplayName = "GitCli_Run_captures_stdout_output")]
     public void GitCliRunCapturesStdoutOutput()
     {
