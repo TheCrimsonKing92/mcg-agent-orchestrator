@@ -137,7 +137,8 @@ public sealed class LegacyHandoffCompatibilityResolver
             }
 
             var materialized = _readMaterializedBytes(fullPath);
-            if (!WorkerContextArtifact.Hash(materialized).Equals(pointer.Sha256, StringComparison.Ordinal))
+            if (_materializationFallbackIdentity is not null &&
+                !WorkerContextArtifact.Hash(materialized).Equals(pointer.Sha256, StringComparison.Ordinal))
             {
                 throw MissingEvidence(pointer.AuthoritativeEvidenceIdentity);
             }

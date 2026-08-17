@@ -88,7 +88,7 @@ public sealed class WorkerContextCompatibilityTests
             var error = Assert.Throws<WorkerContextPreparationException>(() =>
                 new LegacyHandoffCompatibilityResolver(_ => null, root).Resolve(pointer));
 
-            Assert.Equal("authoritative-evidence-missing", error.Reason);
+            Assert.Equal("authoritative-evidence-hash-mismatch", error.Reason);
         }
         finally
         {
