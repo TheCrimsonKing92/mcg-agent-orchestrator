@@ -375,6 +375,71 @@ internal sealed class ConductorParallelAcceptanceAttemptCoordinator
         ConductorParallelAcceptanceRunAcceptance runAcceptance)
         => EvaluateCore(candidate, policy, runAcceptance, GateDispatchKind, focusedEvidenceRequest: null, requestContext: null);
 
+    internal IReadOnlyList<ConductorParallelAcceptanceAttempt> GetUnreconciledAttempts(
+        IEnumerable<string> goalIds)
+    {
+        ArgumentNullException.ThrowIfNull(goalIds);
+
+        var attempts = new List<ConductorParallelAcceptanceAttempt>();
+        foreach (var goalId in goalIds.Distinct(StringComparer.Ordinal))
+        {
+            ArgumentException.ThrowIfNullOrWhiteSpace(goalId);
+            var directory = Path.Combine(_rootDirectory, goalId);
+            if (!Directory.Exists(directory))
+            {
+                continue;
+            }
+
+            foreach (var path in Directory.EnumerateFiles(directory, "*.attempt.json"))
+            {
+                var attempt = ReadCanonicalAttempt(path, goalId);
+                if (!IsReconciled(attempt))
+                {
+                    attempts.Add(attempt);
+                }
+            }
+        }
+
+        return attempts
+            .OrderBy(attempt => attempt.GoalId, StringComparer.Ordinal)
+            .ThenBy(attempt => attempt.StartedAt)
+            .ThenBy(attempt => attempt.AttemptId, StringComparer.Ordinal)
+            .ToArray();
+    }
+
+    internal ConductorParallelAcceptanceAttemptDecision ObserveExistingAttempt(
+        ConductorParallelAcceptanceAttempt attempt,
+        ConductorParallelAcceptanceCandidate candidate)
+    {
+        ArgumentNullException.ThrowIfNull(attempt);
+        ArgumentNullException.ThrowIfNull(candidate);
+
+        var current = ReadCanonicalAttempt(attempt.MetadataPath, attempt.GoalId);
+        if (!string.Equals(current.AttemptId, attempt.AttemptId, StringComparison.Ordinal))
+        {
+            throw new InvalidDataException(
+                $"Acceptance attempt identity changed at canonical metadata path '{attempt.MetadataPath}'.");
+        }
+
+        if (IsReconciled(current))
+        {
+            throw new InvalidDataException(
+                $"Acceptance attempt '{current.AttemptId}' was selected for observation after reconciliation.");
+        }
+
+        if (IsTerminalWithoutRunOutcome(current.Outcome))
+        {
+            return ConductorParallelAcceptanceAttemptDecision.TerminalWithoutRun(current);
+        }
+
+        var decision = TryCompleteRunningAttempt(current, candidate) ??
+            ConductorParallelAcceptanceAttemptDecision.Running(current);
+        return decision with
+        {
+            Attempt = decision.Attempt with { MetadataPath = current.MetadataPath }
+        };
+    }
+
     internal DotnetBuildEnvironmentLease AcquireCohortStableSlotLease(
         string cohortId,
         CancellationToken cancellationToken = default,
@@ -570,7 +635,12 @@ internal sealed class ConductorParallelAcceptanceAttemptCoordinator
     {
         lock (MetadataWriteGate)
         {
-            var current = TryReadAttemptFile(attempt.MetadataPath) ?? attempt;
+            var current = ReadCanonicalAttempt(attempt.MetadataPath, attempt.GoalId);
+            if (!string.Equals(current.AttemptId, attempt.AttemptId, StringComparison.Ordinal))
+            {
+                throw new InvalidDataException(
+                    $"Acceptance attempt identity changed at canonical metadata path '{attempt.MetadataPath}'.");
+            }
             if (current.ReconciledAt.HasValue)
             {
                 return;
@@ -1499,7 +1569,10 @@ internal sealed class ConductorParallelAcceptanceAttemptCoordinator
         out ConductorParallelAcceptanceAttemptDecision decision)
     {
         decision = null!;
-        var latest = TryReadAttemptFile(attempt.MetadataPath) ?? attempt;
+        var latest = (TryReadAttemptFile(attempt.MetadataPath) ?? attempt) with
+        {
+            MetadataPath = attempt.MetadataPath
+        };
         if (latest.Outcome != ConductorParallelAcceptanceAttemptOutcome.Passed ||
             string.Equals(latest.Kind, PreReviewEvidenceDispatchKind, StringComparison.Ordinal))
         {
@@ -1531,7 +1604,10 @@ internal sealed class ConductorParallelAcceptanceAttemptCoordinator
     {
         lock (MetadataWriteGate)
         {
-            var current = TryReadAttemptFile(attempt.MetadataPath) ?? attempt;
+            var current = (TryReadAttemptFile(attempt.MetadataPath) ?? attempt) with
+            {
+                MetadataPath = attempt.MetadataPath
+            };
             if (!string.Equals(current.AttemptId, attempt.AttemptId, StringComparison.Ordinal))
             {
                 return current;
@@ -1676,6 +1752,7 @@ internal sealed class ConductorParallelAcceptanceAttemptCoordinator
         }
 
         ConductorParallelAcceptanceAttempt? latest = null;
+        ConductorParallelAcceptanceAttempt? latestUnreconciled = null;
         foreach (var path in Directory.EnumerateFiles(directory, "*.attempt.json"))
         {
             ConductorParallelAcceptanceAttempt? attempt;
@@ -1714,9 +1791,42 @@ internal sealed class ConductorParallelAcceptanceAttemptCoordinator
             }
 
             latest = latest is null || attempt.StartedAt > latest.StartedAt ? attempt : latest;
+            if (!IsReconciled(attempt) &&
+                (latestUnreconciled is null || attempt.StartedAt > latestUnreconciled.StartedAt))
+            {
+                latestUnreconciled = attempt;
+            }
         }
 
-        return latest;
+        return latestUnreconciled ?? latest;
+    }
+
+    private ConductorParallelAcceptanceAttempt ReadCanonicalAttempt(string path, string expectedGoalId)
+    {
+        var canonicalPath = Path.GetFullPath(path);
+        var expectedDirectory = Path.GetFullPath(Path.Combine(_rootDirectory, expectedGoalId));
+        if (!string.Equals(Path.GetDirectoryName(canonicalPath), expectedDirectory, StringComparison.OrdinalIgnoreCase))
+        {
+            throw new InvalidDataException(
+                $"Acceptance attempt metadata path '{canonicalPath}' is outside canonical goal directory '{expectedDirectory}'.");
+        }
+
+        var attempt = TryReadAttemptFile(canonicalPath) ??
+            throw new InvalidDataException($"Acceptance attempt metadata '{canonicalPath}' is unreadable.");
+        var expectedFileName = $"{attempt.AttemptId}.attempt.json";
+        if (!string.Equals(Path.GetFileName(canonicalPath), expectedFileName, StringComparison.Ordinal))
+        {
+            throw new InvalidDataException(
+                $"Acceptance attempt metadata path '{canonicalPath}' is not canonical for attempt '{attempt.AttemptId}'.");
+        }
+
+        if (!string.Equals(attempt.GoalId, expectedGoalId, StringComparison.Ordinal))
+        {
+            throw new InvalidDataException(
+                $"Acceptance attempt '{attempt.AttemptId}' belongs to goal '{attempt.GoalId}', not canonical directory goal '{expectedGoalId}'.");
+        }
+
+        return attempt with { MetadataPath = canonicalPath };
     }
 
     private void Persist(ConductorParallelAcceptanceAttempt attempt)
