@@ -22,6 +22,7 @@ $exclusionOrder = @(
     'nonZeroExitCode',
     'unparseableTimestamps',
     'incompleteResultCount',
+    'nonTimingCheck',
     'notInManifest'
 )
 
@@ -308,6 +309,8 @@ try {
 
     $manifest = Read-JsonFile $ManifestPath
     $manifestLanes = [Collections.Generic.Dictionary[string, object]]::new([StringComparer]::Ordinal)
+    $expandedChecks = [Collections.Generic.List[string]]::new()
+    $nonTimingChecks = [Collections.Generic.List[object]]::new()
     foreach ($entry in @($manifest.engine.infrastructureTestLanes)) {
         $name = ConvertTo-LaneName ([string]$entry.name)
         if ([string]::IsNullOrWhiteSpace($name)) { throw 'Acceptance manifest contains a blank infrastructure lane name.' }
@@ -315,7 +318,28 @@ try {
             throw "Acceptance manifest contains duplicate normalized lane '$name'."
         }
     }
-    if ($manifestLanes.Count -eq 0) { throw 'Acceptance manifest contains no infrastructure test lanes.' }
+    foreach ($check in @($manifest.checks)) {
+        $name = ConvertTo-LaneName ([string]$check.name)
+        $type = [string]$check.type
+        if ([string]::IsNullOrWhiteSpace($name)) { throw 'Acceptance manifest contains a blank check name.' }
+        if ($name.Equals('infrastructure tests', [StringComparison]::Ordinal) -and
+            $type.Equals('dotnet-test', [StringComparison]::Ordinal)) {
+            $expandedChecks.Add($name)
+            continue
+        }
+        if (-not $type.Equals('dotnet-test', [StringComparison]::Ordinal)) {
+            $nonTimingChecks.Add([ordered]@{
+                name = $name
+                type = $type
+                reason = 'check type has no TRX result contract'
+            })
+            continue
+        }
+        if (-not $manifestLanes.TryAdd($name, $check)) {
+            throw "Acceptance manifest contains duplicate normalized lane '$name'."
+        }
+    }
+    if ($manifestLanes.Count -eq 0) { throw 'Acceptance manifest contains no timing lanes.' }
 
     $exclusions = [ordered]@{}
     foreach ($reason in $exclusionOrder) { $exclusions[$reason] = 0 }
@@ -328,10 +352,7 @@ try {
     foreach ($heartbeatFile in $heartbeats) {
         try { $heartbeat = Read-JsonFile $heartbeatFile.FullName } catch { continue }
         $target = [string]$heartbeat.currentTarget
-        if ([string]::IsNullOrWhiteSpace($target) -or
-            -not $target.StartsWith('infrastructure tests: ', [StringComparison]::Ordinal)) {
-            continue
-        }
+        if ([string]::IsNullOrWhiteSpace($target)) { continue }
 
         $laneName = ConvertTo-LaneName $target
         $dotIndex = $heartbeatFile.Name.IndexOf('.')
@@ -368,13 +389,25 @@ try {
             $reason = 'unparseableTimestamps'
         }
 
-        $slug = ConvertTo-LaneSlug $laneName
-        $trxPath = Join-Path $heartbeatFile.DirectoryName "$attemptId.infrastructure-tests-$slug.trx"
+        $isInfrastructureLane = $target.StartsWith('infrastructure tests: ', [StringComparison]::Ordinal)
+        $nonTimingCheck = @($nonTimingChecks | Where-Object {
+            ([string]$_.name).Equals($target, [StringComparison]::Ordinal)
+        }).Count -gt 0 -or @($expandedChecks | Where-Object {
+            ([string]$_).Equals($target, [StringComparison]::Ordinal)
+        }).Count -gt 0
+        $artifactStem = if ($isInfrastructureLane) {
+            "infrastructure-tests-$(ConvertTo-LaneSlug $laneName)"
+        } else {
+            ConvertTo-LaneSlug $target
+        }
+        $trxPath = Join-Path $heartbeatFile.DirectoryName "$attemptId.$artifactStem.trx"
         $trx = Get-TrxMeasurement $trxPath
-        if ($null -eq $reason -and $null -eq $trx) {
-            $reason = 'incompleteResultCount'
+        if ($null -eq $reason -and $nonTimingCheck) {
+            $reason = 'nonTimingCheck'
         } elseif ($null -eq $reason -and -not $manifestLanes.ContainsKey($laneName)) {
             $reason = 'notInManifest'
+        } elseif ($null -eq $reason -and $null -eq $trx) {
+            $reason = 'incompleteResultCount'
         }
 
         if ($null -ne $reason) { Add-Exclusion $exclusions $reason }
@@ -424,6 +457,11 @@ try {
             includedReceipts = $includedReceipts
             excludedReceipts = $excludedReceipts
             exclusionReasons = $exclusions
+        }
+        manifest = [ordered]@{
+            timingLanes = @($manifestLanes.Keys | Sort-Object)
+            expandedChecks = @($expandedChecks | Sort-Object)
+            nonTimingChecks = @($nonTimingChecks | Sort-Object { $_.name })
         }
         lanes = $laneDocument
     }

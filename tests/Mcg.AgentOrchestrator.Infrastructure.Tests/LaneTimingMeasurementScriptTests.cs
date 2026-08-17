@@ -29,13 +29,69 @@ public sealed class LaneTimingMeasurementScriptTests
     public void MissingManifestLane_FailsAndNamesLane()
     {
         using var fixture = LaneTimingFixture.Create();
-        fixture.WriteManifest("Alpha", "Beta", "Gamma");
+        fixture.WriteManifestWithChecks(
+            ["Alpha", "Beta", "Gamma"],
+            ("git diff whitespace", "command"),
+            ("core tests", "dotnet-test"),
+            ("infrastructure tests", "dotnet-test"));
 
         var result = fixture.Run();
 
         Xunit.Assert.NotEqual(0, result.ExitCode);
-        Xunit.Assert.Contains("Manifest lane(s) with no qualified receipts: Gamma", result.Stderr, StringComparison.Ordinal);
+        Xunit.Assert.Contains("Manifest lane(s) with no qualified receipts:", result.Stderr, StringComparison.Ordinal);
+        Xunit.Assert.Contains("Gamma", result.Stderr, StringComparison.Ordinal);
+        Xunit.Assert.Contains("core tests", result.Stderr, StringComparison.Ordinal);
         Xunit.Assert.True(string.IsNullOrWhiteSpace(result.Stdout), result.Stdout);
+    }
+
+    [Xunit.Fact]
+    public void ManifestChecks_AreReconciledAndNonTestChecksAreExplicit()
+    {
+        using var fixture = LaneTimingFixture.Create();
+        fixture.WriteManifestWithChecks(
+            ["Alpha", "Beta"],
+            ("git diff whitespace", "command"),
+            ("core tests", "dotnet-test"),
+            ("infrastructure tests", "dotnet-test"));
+        fixture.AddCheckReceipt("core-a", "core tests", 50, 10, startOffsetMinutes: 4);
+        fixture.AddCheckReceipt("diff-a", "git diff whitespace", 2, 0, startOffsetMinutes: 5, writeTrx: false);
+        var jsonPath = Path.Combine(fixture.Root, "manifest-checks.json");
+
+        var result = fixture.Run("-Json", jsonPath);
+
+        Xunit.Assert.True(result.ExitCode == 0, result.Stdout + result.Stderr);
+        Xunit.Assert.Contains("core tests", result.Stdout, StringComparison.Ordinal);
+        Xunit.Assert.Contains("nonTimingCheck=1", result.Stdout, StringComparison.Ordinal);
+        using var document = JsonDocument.Parse(File.ReadAllText(jsonPath));
+        Xunit.Assert.True(document.RootElement.GetProperty("lanes").TryGetProperty("core tests", out _));
+        var manifest = document.RootElement.GetProperty("manifest");
+        Xunit.Assert.Contains(
+            manifest.GetProperty("nonTimingChecks").EnumerateArray(),
+            item => item.GetProperty("name").GetString() == "git diff whitespace");
+        Xunit.Assert.Contains(
+            manifest.GetProperty("expandedChecks").EnumerateArray(),
+            item => item.GetString() == "infrastructure tests");
+    }
+
+    [Xunit.Fact]
+    public void ProcessAndTestStatistics_AreDistinctAndRanged()
+    {
+        using var fixture = LaneTimingFixture.Create();
+        var jsonPath = Path.Combine(fixture.Root, "statistics.json");
+
+        var result = fixture.Run("-Json", jsonPath);
+
+        Xunit.Assert.True(result.ExitCode == 0, result.Stdout + result.Stderr);
+        using var document = JsonDocument.Parse(File.ReadAllText(jsonPath));
+        var alpha = document.RootElement.GetProperty("lanes").GetProperty("Alpha");
+        var process = alpha.GetProperty("processSeconds");
+        var test = alpha.GetProperty("testSeconds");
+        Xunit.Assert.Equal(15, process.GetProperty("mean").GetDouble());
+        Xunit.Assert.Equal(10, process.GetProperty("min").GetDouble());
+        Xunit.Assert.Equal(20, process.GetProperty("max").GetDouble());
+        Xunit.Assert.Equal(3, test.GetProperty("mean").GetDouble());
+        Xunit.Assert.Equal(2, test.GetProperty("min").GetDouble());
+        Xunit.Assert.Equal(4, test.GetProperty("max").GetDouble());
     }
 
     [Xunit.Fact]
@@ -144,6 +200,11 @@ public sealed class LaneTimingMeasurementScriptTests
         }
 
         public void WriteManifest(params string[] laneNames)
+            => WriteManifestWithChecks(laneNames);
+
+        public void WriteManifestWithChecks(
+            string[] laneNames,
+            params (string Name, string Type)[] checks)
         {
             var manifest = new
             {
@@ -151,10 +212,28 @@ public sealed class LaneTimingMeasurementScriptTests
                 engine = new
                 {
                     infrastructureTestLanes = laneNames.Select(name => new { name, filter = "fixture" }).ToArray()
-                }
+                },
+                checks = checks.Select(check => new { name = check.Name, type = check.Type }).ToArray()
             };
             File.WriteAllText(ManifestPath, JsonSerializer.Serialize(manifest));
         }
+
+        public void AddCheckReceipt(
+            string attemptId,
+            string checkName,
+            double processSeconds,
+            double testSeconds,
+            int startOffsetMinutes = 0,
+            bool writeTrx = true)
+            => AddReceipt(
+                attemptId,
+                checkName,
+                processSeconds,
+                testSeconds,
+                startOffsetMinutes: startOffsetMinutes,
+                currentTarget: checkName,
+                artifactStem: Slug(checkName),
+                writeTrx: writeTrx);
 
         public void AddExclusionReceipts()
         {
@@ -256,7 +335,10 @@ public sealed class LaneTimingMeasurementScriptTests
             bool writeAttempt = true,
             bool invalidHeartbeatTime = false,
             bool emptyTrx = false,
-            int startOffsetMinutes = 0)
+            int startOffsetMinutes = 0,
+            string? currentTarget = null,
+            string? artifactStem = null,
+            bool writeTrx = true)
         {
             var startedAt = BaseTime.AddMinutes(startOffsetMinutes);
             var prefix = Path.Combine(_goalDirectory, attemptId);
@@ -269,17 +351,18 @@ public sealed class LaneTimingMeasurementScriptTests
 
             var heartbeat = new
             {
-                currentTarget = $"infrastructure tests: {lane}",
+                currentTarget = currentTarget ?? $"infrastructure tests: {lane}",
                 state,
                 exitCode,
                 startedAt = invalidHeartbeatTime ? "not-a-time" : startedAt.ToString("O"),
                 lastObservedAt = invalidHeartbeatTime ? "not-a-time" : startedAt.AddSeconds(processSeconds).ToString("O")
             };
             var slug = Slug(lane);
+            artifactStem ??= $"infrastructure-tests-{slug}";
             File.WriteAllText(
-                $"{prefix}.infrastructure-tests-{slug}-fixture.gate-heartbeat.json",
+                $"{prefix}.{artifactStem}-fixture.gate-heartbeat.json",
                 JsonSerializer.Serialize(heartbeat));
-            WriteTrx($"{prefix}.infrastructure-tests-{slug}.trx", testSeconds, emptyTrx);
+            if (writeTrx) WriteTrx($"{prefix}.{artifactStem}.trx", testSeconds, emptyTrx);
         }
 
         private static void WriteTrx(string path, double testSeconds, bool empty)
