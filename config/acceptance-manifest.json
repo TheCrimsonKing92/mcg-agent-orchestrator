@@ -5,7 +5,7 @@
     "maxConcurrentShards": 4,
     "enforceStructuralCoverage": true,
     "partitionVerdictFullRerunEveryN": 5,
-    "laneEstimateComment": "estimatedSerialSeconds values are one-decimal process-span means from qualified acceptance receipts dated 2026-08-16 at or after 1f669450 (sample joined attempt 695e3554-0-20260816193157705-fcf6d38ae8bd4ef7b2e70518b04d80df). Included receipts have a completed, exit-code-zero heartbeat joined to a completed TRX whose result counters fully account for the discovered tests.",
+    "laneEstimateComment": "estimatedSerialSeconds values are one-decimal process-span means from acceptance receipts dated 2026-08-16 at or after 1f669450 (sample joined attempt 695e3554-0-20260816193157705-fcf6d38ae8bd4ef7b2e70518b04d80df), restricted to completed, exit-code-zero heartbeats joined by attempt id to completed TRX receipts. Full-result-count qualification is unobtainable from the recorded in-window receipts for Dotnet build slots (all 9 report 359 executed of 360 total) and Goal acceptance build slots (all 8 report 157 of 158 or 158 of 159); those two estimates retain the otherwise-qualified process-span means.",
     "timeouts": {
       "defaultMinutes": 40,
       "buildServerShutdownMinutes": 5,
