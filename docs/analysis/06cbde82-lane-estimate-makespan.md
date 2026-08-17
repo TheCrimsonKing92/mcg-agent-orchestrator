@@ -76,19 +76,24 @@ resource-pressure mechanism is inferred from these observations.
 uses manifest order as the tie-breaker. It starts the first runnable lane while fewer
 than four lanes are active and honors each lane's exclusive resource keys.
 
-The old and refreshed estimates produce the same rank at all 17 positions. Therefore
-a replay preserving each attempt's observed lane durations, four-lane concurrency,
-manifest order, and resource keys produces identical old-order and new-order
-makespans. The result was 0.0 seconds for every attempt in both cohorts: before mean
-delta 0.0, range 0.0-0.0; after mean delta 0.0, range 0.0-0.0.
+The old estimates come from the refresh merge's first parent, `c17f5c15`; the
+refreshed estimates come from landed merge `952f3a47`. Their rank orders differ. A
+replay preserving each attempt's observed lane durations, four-lane concurrency,
+manifest order, and resource keys gives the following refreshed-order minus old-order
+deltas: before mean +3.2 seconds, range 0.0 to +10.6; after mean -12.0 seconds, range
+-14.7 to -10.3. Negative values favor the refreshed order.
 
-The scheduling contribution of this refresh is therefore exactly zero under the
-implemented scheduler. The observed +268.0-second lane-phase delta and +398.5-second
-whole-gate delta arise outside the estimate-order change; the receipts do not identify
-their physical cause.
+The scheduling contribution is therefore small and cost-vector-sensitive within the
+observed cohorts: the refreshed order is up to 10.6 seconds slower on the before
+vectors and 10.3-14.7 seconds faster on the after vectors. Those effects are much
+smaller than the observed lane-phase spread, and the sign changes between cohorts, so
+they do not prove an observed scheduling win. The raw +268.0-second lane-phase delta
+and +398.5-second whole-gate delta remain dominated by lane-cost movement; the
+receipts do not identify its physical cause.
 
 ## Disposition
 
-Negative control: **no improvement**. The refreshed values changed calibration but
-not ordering, and the measured after makespan is slower. A scheduling win must not be
-claimed from this refresh.
+Negative control: **no improvement**. The refreshed values changed calibration and
+ordering, but the measured after makespan is slower. The replay's small counterfactual
+benefit on the after vectors does not establish a scheduling win in observed wall-clock
+time, so one must not be claimed from this refresh.
