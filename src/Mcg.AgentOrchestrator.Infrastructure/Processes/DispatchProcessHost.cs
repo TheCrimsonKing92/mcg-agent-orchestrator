@@ -918,7 +918,10 @@ public static class DispatchProcessHost
         // which blew the two-minute icacls cap on large worktree groves and silently left the
         // boundary UNLABELED. Create/delete under the parent is governed by the parent's own label,
         // so one node suffices; sibling worktree interiors are covered by their own labels.
-        if (!ResolveIntegrityLabeler().SetIntegrity(parent.FullName, "M", recursive: false))
+        var integrityLabeler = ResolveIntegrityLabeler();
+        var state = integrityLabeler.Query(parent.FullName);
+        var confirmedMedium = state.Exists && state.Medium && !state.Low;
+        if (!confirmedMedium && !integrityLabeler.SetIntegrity(parent.FullName, "M", recursive: false))
         {
             throw new InvalidOperationException($"Failed to protect workspace boundary '{parent.FullName}'.");
         }
