@@ -91,7 +91,10 @@ public static class RepositoryOwnershipMap
 
         if (IsTest(path, fileName))
         {
-            return Build(path, RepositoryOwnershipArea.Test, "tests", highRisk: false);
+            var reservationKey = TestProjectReservationKey(path);
+            return reservationKey is null
+                ? Build(path, RepositoryOwnershipArea.Unknown, "unknown-acceptance-scope", highRisk: false)
+                : Build(path, RepositoryOwnershipArea.Test, reservationKey, highRisk: false);
         }
 
         if (IsDocumentation(path, extension))
@@ -185,6 +188,20 @@ public static class RepositoryOwnershipMap
         path.StartsWith("tests/", StringComparison.OrdinalIgnoreCase) ||
         path.Contains("/tests/", StringComparison.OrdinalIgnoreCase) ||
         fileName.EndsWith("Tests.cs", StringComparison.OrdinalIgnoreCase);
+
+    private static string? TestProjectReservationKey(string path)
+    {
+        var parts = path.Split('/', StringSplitOptions.RemoveEmptyEntries);
+        if (parts.Length < 3 || !parts[0].Equals("tests", StringComparison.OrdinalIgnoreCase))
+        {
+            return null;
+        }
+
+        var project = parts[1];
+        return string.IsNullOrWhiteSpace(project) || project is "." or ".."
+            ? null
+            : $"test-project:tests/{project.ToLowerInvariant()}";
+    }
 
     private static bool IsConfiguration(string path, string extension) =>
         path.StartsWith("config/", StringComparison.OrdinalIgnoreCase) ||
