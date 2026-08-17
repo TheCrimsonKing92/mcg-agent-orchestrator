@@ -1,4 +1,5 @@
 using Microsoft.Data.Sqlite;
+using System.Globalization;
 
 namespace Mcg.AgentOrchestrator.Infrastructure;
 
@@ -12,6 +13,11 @@ public sealed record ReconcileSweepRemediationState(
 
 public sealed record ReconcileSweepAttemptClaim(bool Claimed, int AttemptNumber, string? Owner);
 
+public sealed record ReconcileAcceptanceLeaseState(
+    string Owner,
+    DateTimeOffset AcquiredAtUtc,
+    DateTimeOffset ExpiresAtUtc);
+
 public interface IReconcileSweepRemediationStore
 {
     ReconcileSweepRemediationState Observe(string stateKey, string goalId, string blockerKind, string evidence, string remedy);
@@ -21,6 +27,7 @@ public interface IReconcileSweepRemediationStore
     bool TryMarkEscalationEmitted(string stateKey);
     bool TryClaimAcceptanceLease(string goalId, string owner, TimeSpan staleAfter);
     IDisposable? TryAcquireAcceptanceLease(string goalId, string owner, TimeSpan staleAfter);
+    ReconcileAcceptanceLeaseState? TryGetAcceptanceLease(string goalId, TimeSpan staleAfter);
     string? TryGetAcceptanceLeaseOwner(string goalId);
     void ReleaseAcceptanceLease(string goalId, string owner);
 }
@@ -221,6 +228,44 @@ public sealed class ReconcileSweepRemediationStore : IReconcileSweepRemediationS
 
         using var connection = Open();
         return GetAcceptanceLeaseOwner(connection, goalId);
+    }
+
+    public ReconcileAcceptanceLeaseState? TryGetAcceptanceLease(string goalId, TimeSpan staleAfter)
+    {
+        ReconcileAcceptanceLeaseState? activeTransactionLease = null;
+        if (StateDbWriteSession.TryExecute(
+                _dbPath,
+                connection => activeTransactionLease = GetAcceptanceLease(connection, goalId, staleAfter)))
+        {
+            return activeTransactionLease;
+        }
+
+        using var connection = Open();
+        return GetAcceptanceLease(connection, goalId, staleAfter);
+    }
+
+    private static ReconcileAcceptanceLeaseState? GetAcceptanceLease(
+        SqliteConnection connection,
+        string goalId,
+        TimeSpan staleAfter)
+    {
+        using var command = connection.CreateCommand();
+        command.CommandText = "SELECT owner, acquired_at FROM reconcile_acceptance_leases WHERE goal_id = $goal";
+        command.Parameters.AddWithValue("$goal", goalId);
+        using var reader = command.ExecuteReader();
+        if (!reader.Read())
+        {
+            return null;
+        }
+
+        var acquiredAtUtc = DateTimeOffset.Parse(
+            reader.GetString(1),
+            CultureInfo.InvariantCulture,
+            DateTimeStyles.RoundtripKind);
+        return new ReconcileAcceptanceLeaseState(
+            reader.GetString(0),
+            acquiredAtUtc,
+            acquiredAtUtc.Add(staleAfter));
     }
 
     private static string? GetAcceptanceLeaseOwner(SqliteConnection connection, string goalId)

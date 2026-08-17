@@ -966,6 +966,79 @@ public sealed class ConductorBatchLoopTestsParallelAcceptance : ConductorBatchLo
         Assert.DoesNotContain(escalationReasons, reason => reason.Contains("retry", StringComparison.OrdinalIgnoreCase));
     }
 
+    [Xunit.Fact(DisplayName = "BatchLoop_acceptance_lease_defers_attempts_until_known_expiry")]
+    public void BatchLoopAcceptanceLeaseDefersAttemptsUntilKnownExpiry()
+    {
+        var time = new ManualConductorTimeProviderForTests(
+            new DateTimeOffset(2026, 8, 17, 18, 12, 47, TimeSpan.Zero));
+        var kernel = new AgentOrchestratorKernel();
+        var goal = CreateVerifiedSimpleGoal(
+            kernel,
+            "Update src/Mcg.AgentOrchestrator.App/Orchestration/AcceptanceLeaseBackoff.cs");
+        var lease = new ReconcileAcceptanceLeaseState(
+            "goal-evidence:conductor:parallel-acceptance:55916:dead",
+            time.GetUtcNow(),
+            time.GetUtcNow().AddMinutes(30));
+        var attempts = 0;
+        var attemptRoot = CreateTempDirectory("mcg-conductor-acceptance-lease-backoff");
+
+        try
+        {
+            var coordinator = new ConductorParallelAcceptanceAttemptCoordinator(
+                attemptRoot,
+                runInline: true,
+                acquireStableSlotLease: (_, _) => null,
+                timeProvider: time);
+            var driver = MakeDriver(
+                getFacts: _ => new GoalLifecycleFacts(WorkspaceExists: true),
+                runAcceptanceWithSlot: (_, _) =>
+                {
+                    attempts++;
+                    return AcceptanceVerificationSummary.PassedWithNoUnmetCriteria;
+                },
+                parallelAcceptanceAttemptCoordinator: coordinator,
+                getEvidenceMutationLease: _ => lease,
+                utcNow: time.GetUtcNow);
+
+            var firstTick = new List<BatchTickSummary>();
+            new ConductorBatchLoop(utcNow: time.GetUtcNow).Run(
+                kernel,
+                driver,
+                ConductorAutonomyPolicy.Conservative,
+                NoStopPath(),
+                maxIterations: 1,
+                onTick: firstTick.Add);
+            time.AdvanceForTests(TimeSpan.FromMinutes(29));
+            new ConductorBatchLoop(utcNow: time.GetUtcNow).Run(
+                kernel,
+                driver,
+                ConductorAutonomyPolicy.Conservative,
+                NoStopPath(),
+                maxIterations: 1);
+
+            Assert.Equal(0, attempts);
+            Assert.Empty(Directory.EnumerateFiles(attemptRoot, "*.attempt.json", SearchOption.AllDirectories));
+            Assert.Contains(firstTick.Single().ProgressLines!, line =>
+                line.Contains($"owner={lease.Owner}", StringComparison.Ordinal) &&
+                line.Contains($"expiresAtUtc={lease.ExpiresAtUtc:O}", StringComparison.Ordinal));
+
+            time.AdvanceForTests(TimeSpan.FromMinutes(1));
+            new ConductorBatchLoop(utcNow: time.GetUtcNow).Run(
+                kernel,
+                driver,
+                ConductorAutonomyPolicy.Conservative,
+                NoStopPath(),
+                maxIterations: 1);
+
+            Assert.Equal(1, attempts);
+            Assert.Single(Directory.EnumerateFiles(attemptRoot, "*.attempt.json", SearchOption.AllDirectories));
+        }
+        finally
+        {
+            TryDeleteDirectory(attemptRoot);
+        }
+    }
+
     [Xunit.Fact(DisplayName = "BatchLoop_slots_busy_gate_retries_and_lands_on_later_tick")]
     public void BatchLoopSlotsBusyGateRetriesAndLandsOnLaterTick()
     {

@@ -2932,14 +2932,15 @@ internal sealed class ConductorBatchLoop
                 }
                 else if (deferredBuildException is not null)
                 {
+                    var unavailableReason = FormatParallelAcceptanceCandidateUnavailable(deferredBuildException);
                     results[goal.Id.Value] = new ParallelLandingOutcome(
                         ParallelAcceptanceHeld(
                             goal,
                             policy,
-                            $"parallel acceptance candidate unavailable; retry on next conduct tick: {Sanitize(deferredBuildException.Message)}"),
+                            unavailableReason),
                         null);
                     RecordParallelAcceptanceProgress(
-                        $"ADMISSION tick={tick} result=held reason=parallel-acceptance-candidate goal={goal.Id.Value[..8]} detail={Sanitize(deferredBuildException.Message)}",
+                        $"ADMISSION tick={tick} result=held reason=parallel-acceptance-candidate goal={goal.Id.Value[..8]} detail={FormatParallelAcceptanceCandidateUnavailableDetail(deferredBuildException)}",
                         changedGoalLines);
                 }
 
@@ -2968,14 +2969,15 @@ internal sealed class ConductorBatchLoop
             {
                 if (buildException is not null)
                 {
+                    var unavailableReason = FormatParallelAcceptanceCandidateUnavailable(buildException);
                     results[goal.Id.Value] = new ParallelLandingOutcome(
                         ParallelAcceptanceHeld(
                             goal,
                             policy,
-                            $"parallel acceptance candidate unavailable; retry on next conduct tick: {Sanitize(buildException.Message)}"),
+                            unavailableReason),
                         null);
                     RecordParallelAcceptanceProgress(
-                        $"ADMISSION tick={tick} result=held reason=parallel-acceptance-candidate goal={goal.Id.Value[..8]} detail={Sanitize(buildException.Message)}",
+                        $"ADMISSION tick={tick} result=held reason=parallel-acceptance-candidate goal={goal.Id.Value[..8]} detail={FormatParallelAcceptanceCandidateUnavailableDetail(buildException)}",
                         changedGoalLines);
                 }
 
@@ -3548,6 +3550,16 @@ internal sealed class ConductorBatchLoop
             return null;
         }
     }
+
+    private static string FormatParallelAcceptanceCandidateUnavailable(Exception exception) =>
+        exception is ConductorDriver.EvidenceMutationLeaseUnavailableException
+            ? exception.Message
+            : $"parallel acceptance candidate unavailable; retry on next conduct tick: {Sanitize(exception.Message)}";
+
+    private static string FormatParallelAcceptanceCandidateUnavailableDetail(Exception exception) =>
+        exception is ConductorDriver.EvidenceMutationLeaseUnavailableException
+            ? SanitizeReason(exception.Message)
+            : Sanitize(exception.Message);
 
     internal static TerminalGoalRemedyExecutionResult ExecuteReconcileSweepAcceptanceRemedy(
         AgentOrchestratorKernel kernel,
