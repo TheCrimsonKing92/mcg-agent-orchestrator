@@ -481,6 +481,22 @@ public sealed class RepositoryChangeClassifierTests
         Assert.NotEqual(core.ReservationKey, infrastructure.ReservationKey);
     }
 
+    [Xunit.Fact(DisplayName = "RepositoryOwnershipMap_treats_project_directory_as_conventional_test_scope")]
+    public void RepositoryOwnershipMapTreatsProjectDirectoryAsConventionalTestScope()
+    {
+        const string projectDirectory = "tests/Mcg.AgentOrchestrator.Core.Tests";
+        const string expectedReservation = "test-project:tests/mcg.agentorchestrator.core.tests";
+        var ownedPath = RepositoryOwnershipMap.Classify(projectDirectory);
+        var guard = RepositoryOwnershipMap.GuardWriteSet([
+            projectDirectory,
+            $"{projectDirectory}/RepositoryChangeClassifierTests.cs"
+        ]);
+
+        Assert.Equal(RepositoryOwnershipArea.Test, ownedPath.Area);
+        Assert.Equal(expectedReservation, ownedPath.ReservationKey);
+        Assert.Equal($"ownership:{expectedReservation}", Assert.Single(guard.RequiredResources));
+    }
+
     [Xunit.Fact(DisplayName = "RepositoryOwnershipMap_normalizes_and_serializes_one_test_project")]
     public void RepositoryOwnershipMapNormalizesAndSerializesOneTestProject()
     {

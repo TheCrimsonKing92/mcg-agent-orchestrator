@@ -7,8 +7,9 @@ public sealed class AcceptanceCohortReceiptTests
     [Xunit.Fact(DisplayName = "AcceptanceCohortReceipt_exposes_test_project_keys")]
     public void AcceptanceCohortReceiptExposesTestProjectKeys()
     {
-        const string coreKey = "ownership:test-project:tests/mcg.agentorchestrator.core.tests";
-        const string infrastructureKey = "ownership:test-project:tests/mcg.agentorchestrator.infrastructure.tests";
+        var coreKey = ProjectResourceKey("tests/Mcg.AgentOrchestrator.Core.Tests/SecondTests.cs");
+        var infrastructureKey = ProjectResourceKey(
+            "tests/Mcg.AgentOrchestrator.Infrastructure.Tests/FirstTests.cs");
         var identity = AcceptanceCohortIdentity.Create(
             [
                 Binding(
@@ -64,6 +65,9 @@ public sealed class AcceptanceCohortReceiptTests
 
         Assert.Empty(receipt.TestProjectKeys);
     }
+
+    private static string ProjectResourceKey(string path) =>
+        Assert.Single(RepositoryLandingScopeNormalization.Normalize([path]).ResourceKeys);
 
     private static AcceptanceCohortMemberBinding Binding(
         string goalValue,

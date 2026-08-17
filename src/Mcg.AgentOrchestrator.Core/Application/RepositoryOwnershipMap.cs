@@ -32,6 +32,8 @@ public sealed record RepositoryWriteSetGuardReport(
 
 public static class RepositoryOwnershipMap
 {
+    internal const string TestProjectReservationKeyPrefix = "test-project:tests/";
+
     private static readonly string[] GeneratedSegments =
     [
         "bin",
@@ -192,15 +194,17 @@ public static class RepositoryOwnershipMap
     private static string? TestProjectReservationKey(string path)
     {
         var parts = path.Split('/', StringSplitOptions.RemoveEmptyEntries);
-        if (parts.Length < 3 || !parts[0].Equals("tests", StringComparison.OrdinalIgnoreCase))
+        if (parts.Length < 2 || !parts[0].Equals("tests", StringComparison.OrdinalIgnoreCase))
         {
             return null;
         }
 
         var project = parts[1];
-        return string.IsNullOrWhiteSpace(project) || project is "." or ".."
+        return string.IsNullOrWhiteSpace(project) ||
+               project is "." or ".." ||
+               (parts.Length == 2 && project.EndsWith(".cs", StringComparison.OrdinalIgnoreCase))
             ? null
-            : $"test-project:tests/{project.ToLowerInvariant()}";
+            : $"{TestProjectReservationKeyPrefix}{project.ToLowerInvariant()}";
     }
 
     private static bool IsConfiguration(string path, string extension) =>
