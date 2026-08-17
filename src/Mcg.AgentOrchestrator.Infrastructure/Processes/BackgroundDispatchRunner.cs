@@ -1519,7 +1519,10 @@ public sealed class BackgroundDispatchRunner
                         AppendDiagnostic(
                             AppendDiagnostic(
                                 standardErrorDiagnostic ?? string.Empty,
-                                DispatchRejectionDiagnosticMarker.Format(verificationRecognized)),
+                                DispatchRejectionDiagnosticMarker.Format(
+                                    verificationRecognized,
+                                    worktreeEvidence.CommitsAfterDispatch,
+                                    worktreeEvidence.ChangedPathsSummary)),
                             "Developer/Tester dispatch did not produce required relevant file-change evidence. " +
                             $"branch={worktreeEvidence.Branch}; head={worktreeEvidence.Head}; worktree={worktreeEvidence.WorktreeStatus}; " +
                             $"commits_after_dispatch={worktreeEvidence.CommitsAfterDispatch}; changed_paths={worktreeEvidence.ChangedPathsSummary}."),

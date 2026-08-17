@@ -316,6 +316,19 @@ public sealed partial class AgentOrchestratorKernel
     {
         var rule = TaskOutcomeClassifier.TryExtractRule(outcome.ClassifierReceipt) ??
             TaskOutcomeRules.UnknownFailure.Token;
+        if (!string.Equals(
+                rule,
+                TaskOutcomeRules.RequiredFileChangeEvidenceMissing.Token,
+                StringComparison.Ordinal))
+        {
+            var exitCode = outcome.ExitCode != 0 &&
+                (string.Equals(rule, TaskOutcomeRules.SilentLaunchFailure.Token, StringComparison.Ordinal) ||
+                 string.Equals(rule, TaskOutcomeRules.UnknownFailure.Token, StringComparison.Ordinal))
+                    ? $"; exit code {outcome.ExitCode}"
+                    : string.Empty;
+            return $"Dispatch failed: rule={rule}{exitCode}: {task.LastDispatch!.Command}";
+        }
+
         var dispatch = task.LastDispatch;
         var testsStatus = WorkerResultBlockers.TryGetTestsStatus(verification, out var parsedTestsStatus)
             ? parsedTestsStatus.ToString()
@@ -330,34 +343,21 @@ public sealed partial class AgentOrchestratorKernel
         var hasRejectionDiagnostic = DispatchRejectionDiagnosticMarker.TryParse(
             verification.StandardError,
             out var verificationRecognized,
-            out var rejectionReason);
-        var reason = missingChangeEvidence
-            ? hasRejectionDiagnostic
-                ? rejectionReason
-                : DispatchRejectionDiagnosticMarker.VerificationPatternUnmatched
-            : rule;
+            out var rejectionReason,
+            out var postDispatchCommits,
+            out var changedPaths);
+        var reason = hasRejectionDiagnostic ? rejectionReason : rule;
         var detail = BuildDispatchRejectionDetail(outcome, verification, missingChangeEvidence, verificationRecognized);
-        var postDispatchCommits = TryGetDispatchDiagnosticValue(
-            verification.StandardError,
-            "commits_after_dispatch",
-            out var commits)
-                ? commits
-                : "unknown";
-        var changedPaths = TryGetDispatchDiagnosticValue(
-            verification.StandardError,
-            "changed_paths",
-            out var paths)
-                ? paths
-                : "unknown";
+        var baselineHead = string.IsNullOrWhiteSpace(dispatch?.BaseCommit) ? "unknown" : dispatch.BaseCommit;
 
         return $"DISPATCH_REJECTED role={task.RequiredRole} task={task.Id.Value} " +
             $"worktree={QuoteDispatchDiagnosticValue(verification.WorkingDirectory)} " +
             $"dispatched_at={(dispatch?.DispatchedAt ?? verification.DispatchStartedAt ?? verification.CompletedAt):O} " +
-            $"baseline_head={FormatDispatchDiagnosticAtom(dispatch?.BaseCommit ?? "unknown")} " +
-            $"post_dispatch_commits={FormatDispatchDiagnosticAtom(postDispatchCommits)} " +
-            $"changed_paths={FormatDispatchDiagnosticAtom(changedPaths)} " +
+            $"baseline_head={FormatDispatchDiagnosticAtom(baselineHead)} " +
+            $"post_dispatch_commits={(hasRejectionDiagnostic ? postDispatchCommits.ToString() : "unknown")} " +
+            $"changed_paths={FormatDispatchDiagnosticAtom(hasRejectionDiagnostic ? changedPaths : "unknown")} " +
             $"tests_status={testsStatus} blockers={blockersStatus} " +
-            $"verification_recognized={verificationRecognized.ToString().ToLowerInvariant()} " +
+            $"verification_recognized={(hasRejectionDiagnostic ? verificationRecognized.ToString().ToLowerInvariant() : "unknown")} " +
             $"reason={reason} detail={QuoteDispatchDiagnosticValue(detail)}";
     }
 
@@ -382,22 +382,6 @@ public sealed partial class AgentOrchestratorKernel
         return WorkerResultBlockers.TryFindTests(verification, out var tests)
             ? $"{tests} matched no accepted verification pattern"
             : "no structured tests value or accepted verification pattern was present";
-    }
-
-    private static bool TryGetDispatchDiagnosticValue(string text, string key, out string value)
-    {
-        value = string.Empty;
-        var marker = key + "=";
-        var start = text.LastIndexOf(marker, StringComparison.OrdinalIgnoreCase);
-        if (start < 0)
-        {
-            return false;
-        }
-
-        start += marker.Length;
-        var end = text.IndexOfAny([';', '\r', '\n'], start);
-        value = (end < 0 ? text[start..] : text[start..end]).Trim().TrimEnd('.');
-        return value.Length > 0;
     }
 
     private static string FormatDispatchDiagnosticAtom(string value) =>

@@ -2362,8 +2362,8 @@ public sealed class WorkerDispatchTestsWorkerResultClassification : WorkerDispat
             standardOutput,
             string.Empty,
             clock,
-            taskDescription: "Verify behavior with available checks",
-            verificationPlan: "Report the verification result or an explicit structured deferral.");
+            taskDescription: "Verify behavior with automated and manual checks",
+            verificationPlan: "Run or attempt exact automated tests or manual smoke checks and record pass/fail evidence.");
         kernel.RecordDispatchBaseCommit(
             goal.Id,
             task.Id,
@@ -2700,6 +2700,44 @@ public sealed class WorkerDispatchTestsWorkerResultClassification : WorkerDispat
         Assert.Contains("verification_recognized=false", failure.Message, StringComparison.Ordinal);
         Assert.Contains("reason=verification-pattern-unmatched", failure.Message, StringComparison.Ordinal);
         AssertExitCode(process.ExitCodePath, 0);
+    }
+
+    [Xunit.Fact]
+    public void BackgroundDispatchRunnerDeveloperPassingVerificationNoChangeReportsNoChangeEvidence()
+    {
+        var root = CreateSeededDispatchRepository();
+        var clock = new TestClock(DateTimeOffset.Parse("2026-08-17T02:54:12Z"));
+        var standardOutput = WorkerResultBlock(
+            "none",
+            "dotnet test",
+            "pass - total=1 passed=1 failed=0 skipped=0",
+            commit: "none",
+            blockers: "none");
+        var (kernel, goal, task, process) = CreateCompletedGoalWorktreeDispatch(
+            root,
+            AgentRole.Developer,
+            standardOutput,
+            string.Empty,
+            clock,
+            taskDescription: "Implement the required source change",
+            verificationPlan: "Report focused verification evidence.");
+        kernel.RecordDispatchBaseCommit(
+            goal.Id,
+            task.Id,
+            ReadGit(process.WorkingDirectory, ["rev-parse", "--short", "HEAD"]));
+
+        new BackgroundDispatchRunner(clock).RefreshLatestProcess(kernel, goal.Id, task.Id);
+
+        Assert.Equal(WorkTaskStatus.Failed, task.Status);
+        var failure = Assert.Single(goal.Timeline.Where(evt =>
+            evt.TaskId == task.Id && evt.Kind == ProgressKind.TaskFailed));
+        Assert.Contains("DISPATCH_REJECTED role=Developer", failure.Message, StringComparison.Ordinal);
+        Assert.Contains("verification_recognized=true", failure.Message, StringComparison.Ordinal);
+        Assert.Contains("reason=no-change-evidence", failure.Message, StringComparison.Ordinal);
+        Assert.Contains(
+            "detail=\"recognized verification evidence but no relevant post-dispatch file change was recorded\"",
+            failure.Message,
+            StringComparison.Ordinal);
     }
 
     [Xunit.Fact(DisplayName = "BackgroundDispatchRunner_tester_expected_file_change_with_green_tests_completes")]

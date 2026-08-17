@@ -89,39 +89,67 @@ public static class DispatchRejectionDiagnosticMarker
     public const string VerificationPatternUnmatched = "verification-pattern-unmatched";
     public const string NoChangeEvidence = "no-change-evidence";
 
-    public static string Format(bool verificationRecognized) =>
+    public static string Format(
+        bool verificationRecognized,
+        int postDispatchCommits,
+        string changedPaths) =>
         $"{Prefix} verification_recognized={verificationRecognized.ToString().ToLowerInvariant()} " +
-        $"reason={(verificationRecognized ? NoChangeEvidence : VerificationPatternUnmatched)}";
+        $"reason={(verificationRecognized ? NoChangeEvidence : VerificationPatternUnmatched)} " +
+        $"post_dispatch_commits={postDispatchCommits} " +
+        $"changed_paths_base64={Convert.ToBase64String(Encoding.UTF8.GetBytes(changedPaths))}";
 
-    public static bool TryParse(string standardError, out bool verificationRecognized, out string reason)
+    public static bool TryParse(
+        string standardError,
+        out bool verificationRecognized,
+        out string reason,
+        out int postDispatchCommits,
+        out string changedPaths)
     {
         foreach (var line in standardError.Split(
                      ['\r', '\n'],
                      StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries).Reverse())
         {
-            if (string.Equals(
-                    line,
-                    $"{Prefix} verification_recognized=true reason={NoChangeEvidence}",
-                    StringComparison.Ordinal))
+            if (!line.StartsWith(Prefix + " ", StringComparison.Ordinal))
             {
-                verificationRecognized = true;
-                reason = NoChangeEvidence;
-                return true;
+                continue;
             }
 
-            if (string.Equals(
-                    line,
-                    $"{Prefix} verification_recognized=false reason={VerificationPatternUnmatched}",
-                    StringComparison.Ordinal))
+            var fields = new Dictionary<string, string>(StringComparer.Ordinal);
+            foreach (var field in line[(Prefix.Length + 1)..]
+                         .Split(' ', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries))
             {
-                verificationRecognized = false;
-                reason = VerificationPatternUnmatched;
+                var separator = field.IndexOf('=');
+                if (separator > 0)
+                {
+                    fields[field[..separator]] = field[(separator + 1)..];
+                }
+            }
+            if (!fields.TryGetValue("verification_recognized", out var recognizedText) ||
+                !bool.TryParse(recognizedText, out verificationRecognized) ||
+                !fields.TryGetValue("reason", out reason) ||
+                reason != (verificationRecognized ? NoChangeEvidence : VerificationPatternUnmatched) ||
+                !fields.TryGetValue("post_dispatch_commits", out var commitsText) ||
+                !int.TryParse(commitsText, out postDispatchCommits) ||
+                !fields.TryGetValue("changed_paths_base64", out var changedPathsBase64))
+            {
+                continue;
+            }
+
+            try
+            {
+                changedPaths = Encoding.UTF8.GetString(Convert.FromBase64String(changedPathsBase64));
                 return true;
+            }
+            catch (FormatException)
+            {
+                // A malformed marker is not positive evidence. Continue in case an earlier valid marker exists.
             }
         }
 
         verificationRecognized = false;
         reason = string.Empty;
+        postDispatchCommits = 0;
+        changedPaths = string.Empty;
         return false;
     }
 }
