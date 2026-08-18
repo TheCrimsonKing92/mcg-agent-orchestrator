@@ -2048,7 +2048,6 @@ public sealed class BackgroundDispatchRunner
         bool hasCompletedVerification)
     {
         return task.RequiredRole == AgentRole.Tester &&
-            !TesterTaskRequestsFileChanges(task) &&
             (hasCompletedVerification ||
              DispatchFailureClassifier.HasWorkerResultDeferralInOutput(standardOutput));
     }
@@ -2316,16 +2315,6 @@ public sealed class BackgroundDispatchRunner
 
         tests = string.Empty;
         return false;
-    }
-
-    private static bool TesterTaskRequestsFileChanges(TaskSpec task)
-    {
-        var text = $"{task.Description}\n{task.VerificationPlan}".ToLowerInvariant();
-        return Regex.IsMatch(
-            text,
-            @"\b(add|create|write|implement|update|modify|edit|fix)\b.{0,80}\b(test|tests|coverage|fixture|fixtures|source|file|files)\b|" +
-            @"\b(test|tests|coverage|fixture|fixtures|source|file|files)\b.{0,80}\b(add|create|write|implement|update|modify|edit|fix)\b",
-            RegexOptions.CultureInvariant);
     }
 
     private static bool HasExplicitNoChangeRationale(string standardOutput, string standardError)
