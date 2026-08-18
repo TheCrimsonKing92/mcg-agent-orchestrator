@@ -2,10 +2,127 @@ using System.Diagnostics;
 using System.Runtime.CompilerServices;
 using System.Text;
 using System.Text.Json;
+using System.Xml.Linq;
+using Mcg.AgentOrchestrator.Core;
+using Mcg.AgentOrchestrator.Infrastructure;
 
 [Xunit.Collection(TestCollections.ProcessSpawning)]
 public sealed class MtpTestRunnerScriptTests
 {
+    [Xunit.Fact(DisplayName = "Repository_test_projects_opt_into_native_MTP_dotnet_test")]
+    public void RepositoryTestProjectsOptIntoNativeMtpDotnetTest()
+    {
+        var root = RepositoryRoot();
+        using var globalJson = JsonDocument.Parse(File.ReadAllText(Path.Combine(root, "global.json")));
+        Xunit.Assert.Equal(
+            "Microsoft.Testing.Platform",
+            globalJson.RootElement.GetProperty("test").GetProperty("runner").GetString());
+
+        var properties = XDocument.Load(Path.Combine(root, "Directory.Build.props"));
+        Xunit.Assert.Empty(properties.Descendants("TestingPlatformDotnetTestSupport"));
+        Xunit.Assert.Equal(
+            "$(McgIsolatedArtifactsPath)\\bin\\$(MSBuildProjectName)\\",
+            properties.Descendants("BaseOutputPath").Single().Value);
+        Xunit.Assert.Equal(
+            "$(McgIsolatedArtifactsPath)\\obj\\$(MSBuildProjectName)\\",
+            properties.Descendants("BaseIntermediateOutputPath").Single().Value);
+        Xunit.Assert.Equal("false", properties.Descendants("AppendTargetFrameworkToOutputPath").Single().Value);
+        Xunit.Assert.Contains(
+            "$(MSBuildProjectDirectory)\\obj\\**",
+            properties.Descendants("DefaultItemExcludes").Last().Value,
+            StringComparison.Ordinal);
+        Xunit.Assert.Contains(
+            "$(MSBuildProjectDirectory)\\bin\\**",
+            properties.Descendants("DefaultItemExcludes").Last().Value,
+            StringComparison.Ordinal);
+
+        string[] testProjects =
+        [
+            "tests/Mcg.AgentOrchestrator.Core.Tests/Mcg.AgentOrchestrator.Core.Tests.csproj",
+            "tests/Mcg.AgentOrchestrator.Infrastructure.Tests/Mcg.AgentOrchestrator.Infrastructure.Tests.csproj",
+            "tests/Mcg.AgentOrchestrator.Infrastructure.Tests/ProviderEnvironment/Mcg.AgentOrchestrator.Infrastructure.ProviderEnvironment.Tests.csproj",
+            "tests/Mcg.AgentOrchestrator.Infrastructure.Tests/Cli/Mcg.AgentOrchestrator.Infrastructure.Cli.Tests.csproj",
+            "tests/Mcg.AgentOrchestrator.Dashboard.Tests/Mcg.AgentOrchestrator.Dashboard.Tests.csproj"
+        ];
+        foreach (var project in testProjects)
+        {
+            var document = XDocument.Load(Path.Combine(root, project));
+            Xunit.Assert.Equal("true", document.Descendants("IsTestProject").Single().Value, ignoreCase: true);
+            Xunit.Assert.Equal("Exe", document.Descendants("OutputType").Single().Value, ignoreCase: true);
+            Xunit.Assert.Equal(
+                "true",
+                document.Descendants("UseMicrosoftTestingPlatformRunner").Single().Value,
+                ignoreCase: true);
+        }
+    }
+
+    [Xunit.Theory(DisplayName = "Native_MTP_dotnet_test_runs_every_repository_test_project_in_one_step")]
+    [Xunit.InlineData("tests/Mcg.AgentOrchestrator.Core.Tests/Mcg.AgentOrchestrator.Core.Tests.csproj", "RepositoryChangeClassifierTests")]
+    [Xunit.InlineData("tests/Mcg.AgentOrchestrator.Infrastructure.Tests/Mcg.AgentOrchestrator.Infrastructure.Tests.csproj", "ProcessStartInfoSourceGuardTests")]
+    [Xunit.InlineData("tests/Mcg.AgentOrchestrator.Infrastructure.Tests/ProviderEnvironment/Mcg.AgentOrchestrator.Infrastructure.ProviderEnvironment.Tests.csproj", "ProviderDefaultTests")]
+    [Xunit.InlineData("tests/Mcg.AgentOrchestrator.Infrastructure.Tests/Cli/Mcg.AgentOrchestrator.Infrastructure.Cli.Tests.csproj", "CliArgumentNormalizationTests")]
+    [Xunit.InlineData("tests/Mcg.AgentOrchestrator.Dashboard.Tests/Mcg.AgentOrchestrator.Dashboard.Tests.csproj", "DashboardValidationHarnessTests")]
+    public void NativeMtpDotnetTestRunsEveryRepositoryTestProjectInOneStep(string project, string testClass)
+    {
+        var root = RepositoryRoot();
+        var goalId = new GoalId(Guid.NewGuid().ToString("N"));
+        var environment = DotnetBuildEnvironmentManager.CreateAttempt(goalId, "mtp-one-step-contract");
+        var acquisition = DotnetBuildEnvironmentManager.TryAcquireFirstAvailableBuildPermit(
+            environment,
+            timeout: TimeSpan.FromMinutes(5));
+        var acquired = Xunit.Assert.IsType<DotnetBuildLeaseAcquisition.Acquired>(acquisition);
+        var lease = acquired.Lease;
+        var artifactsPath = lease.Environment.ArtifactsPath;
+        try
+        {
+            var startInfo = new ProcessStartInfo
+            {
+                FileName = "dotnet",
+                WorkingDirectory = root,
+                UseShellExecute = false,
+                RedirectStandardOutput = true,
+                RedirectStandardError = true,
+                CreateNoWindow = true
+            };
+            var nugetHttpCache = Path.Combine(lease.Environment.RootPath, "nuget-http-cache");
+            Directory.CreateDirectory(nugetHttpCache);
+            startInfo.Environment["NUGET_HTTP_CACHE_PATH"] = nugetHttpCache;
+            startInfo.Environment["MCG_ORCHESTRATOR_REPOSITORY_ROOT"] = root;
+            foreach (var argument in new[]
+            {
+                "test",
+                "--project",
+                project,
+                $"--property:McgIsolatedArtifactsPath={artifactsPath}",
+                "--property:BuildInParallel=false",
+                "--",
+                "--filter-class",
+                $"*{testClass}*",
+                "--minimum-expected-tests",
+                "1",
+                "--no-ansi",
+                "--progress",
+                "off"
+            })
+            {
+                startInfo.ArgumentList.Add(argument);
+            }
+
+            var result = Run(startInfo, timeout: TimeSpan.FromMinutes(5));
+
+            Xunit.Assert.True(
+                result.ExitCode == 0,
+                $"dotnet test --project {project} exited {result.ExitCode}.{Environment.NewLine}" +
+                $"stdout:{Environment.NewLine}{result.Stdout}{Environment.NewLine}" +
+                $"stderr:{Environment.NewLine}{result.Stderr}");
+        }
+        finally
+        {
+            lease.Dispose();
+            DotnetBuildEnvironmentManager.TryDeleteGoalArtifacts(goalId);
+        }
+    }
+
     [Xunit.Fact(DisplayName = "MTP_script_filter_translation_and_filename_bounding_match_gate_conventions")]
     public void MtpScriptFilterTranslationAndFilenameBoundingMatchGateConventions()
     {
@@ -416,17 +533,18 @@ public sealed class MtpTestRunnerScriptTests
         ArgumentList = { "-NoProfile", "-ExecutionPolicy", "Bypass" }
     };
 
-    private static ProcessResult Run(ProcessStartInfo startInfo)
+    private static ProcessResult Run(ProcessStartInfo startInfo, TimeSpan? timeout = null)
     {
         using var process = Process.Start(startInfo)
             ?? throw new InvalidOperationException($"Failed to start {startInfo.FileName}.");
         var stdout = process.StandardOutput.ReadToEndAsync();
         var stderr = process.StandardError.ReadToEndAsync();
-        if (!process.WaitForExit(30_000))
+        var timeoutMilliseconds = checked((int)(timeout ?? TimeSpan.FromSeconds(30)).TotalMilliseconds);
+        if (!process.WaitForExit(timeoutMilliseconds))
         {
             process.Kill(entireProcessTree: true);
             process.WaitForExit(10_000);
-            throw new TimeoutException($"{startInfo.FileName} did not exit within 30 seconds.");
+            throw new TimeoutException($"{startInfo.FileName} did not exit within {timeoutMilliseconds / 1000} seconds.");
         }
         return new ProcessResult(process.ExitCode, stdout.GetAwaiter().GetResult(), stderr.GetAwaiter().GetResult());
     }

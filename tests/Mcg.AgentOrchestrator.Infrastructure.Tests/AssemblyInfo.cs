@@ -29,7 +29,8 @@ public sealed class IsolatedDotnetRootCollection : Xunit.ICollectionFixture<Isol
 [Xunit.CollectionDefinition(TestCollections.JobAccounting, DisableParallelization = true)]
 public sealed class JobAccountingCollection : Xunit.ICollectionFixture<IsolatedDotnetRootFixture>;
 
-// Process-spawning/worker-dispatch tests mutate process-wide env vars and shared config stores.
+// Process-spawning/worker-dispatch tests mutate process-wide env vars and shared config stores;
+// keep nested build activity off the host gate slots as well.
 [Xunit.CollectionDefinition(TestCollections.ProcessSpawning, DisableParallelization = true)]
-public sealed class ProcessSpawningCollection;
+public sealed class ProcessSpawningCollection : Xunit.ICollectionFixture<IsolatedDotnetRootFixture>;
 // Extracted modules own their remaining collection definitions.

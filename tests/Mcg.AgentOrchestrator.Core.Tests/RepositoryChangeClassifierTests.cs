@@ -757,8 +757,8 @@ public sealed class RepositoryChangeClassifierTests
         Assert.True(plan.Checks.Any(check => check.Name == "infrastructure tests"));
     }
 
-    [Xunit.Fact(DisplayName = "RepositoryTestImpactPlanner_full_suite_is_per_project_checks_never_a_solution_run")]
-    public void RepositoryTestImpactPlannerFullSuiteIsPerProjectChecksNeverASolutionRun()
+    [Xunit.Fact(DisplayName = "RepositoryTestImpactPlanner_full_suite_uses_MTP_routable_project_commands")]
+    public void RepositoryTestImpactPlannerFullSuiteUsesMtpRoutableProjectCommands()
     {
         // Security-sensitive paths force the full suite. The test projects are MTP, so a
         // project-less "dotnet test" always fails on .NET 10 with the VSTest-target error —
@@ -769,15 +769,33 @@ public sealed class RepositoryChangeClassifierTests
 
         Assert.True(plan.RequiresBuild);
         Assert.True(plan.RequiresBroadVerification);
-        Assert.Equal(3, plan.Checks.Count);
+        Assert.Equal(5, plan.Checks.Count);
         Assert.All(plan.Checks, check =>
-            Assert.True(check.Command.Any(argument => argument.EndsWith(".csproj", StringComparison.Ordinal))));
-        Assert.True(plan.Checks.Any(check =>
-            check.Command.Contains("tests/Mcg.AgentOrchestrator.Core.Tests/Mcg.AgentOrchestrator.Core.Tests.csproj")));
-        Assert.True(plan.Checks.Any(check =>
-            check.Command.Contains("tests/Mcg.AgentOrchestrator.Infrastructure.Tests/Mcg.AgentOrchestrator.Infrastructure.Tests.csproj")));
-        Assert.True(plan.Checks.Any(check =>
-            check.Command.Contains("tests/Mcg.AgentOrchestrator.Dashboard.Tests/Mcg.AgentOrchestrator.Dashboard.Tests.csproj")));
+        {
+            Assert.Equal("dotnet", check.Command[0]);
+            Assert.Equal("test", check.Command[1]);
+            Assert.Equal("--project", check.Command[2]);
+            Assert.EndsWith(".csproj", check.Command[3], StringComparison.Ordinal);
+            Assert.DoesNotContain("Mcg.AgentOrchestrator.sln", check.Command);
+        });
+        Assert.Equal(
+            [
+                "core tests",
+                "infrastructure tests",
+                "provider environment tests",
+                "cli tests",
+                "full dotnet tests: dashboard"
+            ],
+            plan.Checks.Select(check => check.Name));
+        Assert.Equal(
+            [
+                "tests/Mcg.AgentOrchestrator.Core.Tests/Mcg.AgentOrchestrator.Core.Tests.csproj",
+                "tests/Mcg.AgentOrchestrator.Infrastructure.Tests/Mcg.AgentOrchestrator.Infrastructure.Tests.csproj",
+                "tests/Mcg.AgentOrchestrator.Infrastructure.Tests/ProviderEnvironment/Mcg.AgentOrchestrator.Infrastructure.ProviderEnvironment.Tests.csproj",
+                "tests/Mcg.AgentOrchestrator.Infrastructure.Tests/Cli/Mcg.AgentOrchestrator.Infrastructure.Cli.Tests.csproj",
+                "tests/Mcg.AgentOrchestrator.Dashboard.Tests/Mcg.AgentOrchestrator.Dashboard.Tests.csproj"
+            ],
+            plan.Checks.Select(check => check.Command[3]));
     }
 
     [Xunit.Fact(DisplayName = "VerificationPolicyCompiler_compiles_different_policies_from_task_risk_and_scope")]

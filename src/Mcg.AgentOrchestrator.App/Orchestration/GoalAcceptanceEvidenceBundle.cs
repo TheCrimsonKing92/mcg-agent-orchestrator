@@ -277,6 +277,34 @@ internal static class GoalAcceptanceEvidenceBundleBuilder
             return null;
         }
 
+        if (check.CommandLine.Contains("Mcg.AgentOrchestrator.sln", StringComparison.OrdinalIgnoreCase))
+        {
+            string[] aggregateNames =
+            [
+                "core tests",
+                "infrastructure tests",
+                "provider environment tests",
+                "cli tests"
+            ];
+            var aggregateChecks = aggregateNames
+                .Select(name => acceptanceChecks.FirstOrDefault(result =>
+                    !result.Advisory &&
+                    result.Name.Equals(name, StringComparison.OrdinalIgnoreCase)))
+                .ToArray();
+            if (aggregateChecks.Any(result => result is null))
+            {
+                return null;
+            }
+
+            var failed = aggregateChecks.FirstOrDefault(result => !result!.Passed);
+            return failed ?? new AcceptanceCheckResult(
+                check.Name,
+                Passed: true,
+                ExitCode: 0,
+                OutputTail: null,
+                ResultSummary: "covered by all project test checks");
+        }
+
         var aggregateName = check.CommandLine.Contains(
             "Mcg.AgentOrchestrator.Infrastructure.Tests.csproj",
             StringComparison.OrdinalIgnoreCase)
@@ -289,7 +317,15 @@ internal static class GoalAcceptanceEvidenceBundleBuilder
                 "Mcg.AgentOrchestrator.Core.Tests.csproj",
                 StringComparison.OrdinalIgnoreCase)
                 ? "core tests"
-                : null;
+                : check.CommandLine.Contains(
+                    "Mcg.AgentOrchestrator.Infrastructure.ProviderEnvironment.Tests.csproj",
+                    StringComparison.OrdinalIgnoreCase)
+                    ? "provider environment tests"
+                    : check.CommandLine.Contains(
+                        "Mcg.AgentOrchestrator.Infrastructure.Cli.Tests.csproj",
+                        StringComparison.OrdinalIgnoreCase)
+                        ? "cli tests"
+                        : null;
         return aggregateName is null
             ? null
             : acceptanceChecks.FirstOrDefault(result =>

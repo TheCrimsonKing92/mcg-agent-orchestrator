@@ -98,6 +98,10 @@ public sealed class AssemblyTempRedirectTests
             AppContext.BaseDirectory,
             "Mcg.AgentOrchestrator.Infrastructure.Tests.exe");
         Directory.CreateDirectory(root);
+        var syntheticLocalLow = Path.Combine(root, "LocalLow");
+        Assert.False(
+            Directory.Exists(syntheticLocalLow),
+            $"The synthetic LocalLow precondition was not clean: '{syntheticLocalLow}'.");
         Assert.True(File.Exists(executable), $"Missing independently launchable MTP apphost '{executable}'.");
 
         var releaseName = $"Local\\mcg-mtp-temp-release-{Guid.NewGuid():N}";
@@ -135,6 +139,9 @@ public sealed class AssemblyTempRedirectTests
                 TestContext.Current.CancellationToken);
             var firstReceipt = await firstReceiptTask;
             var secondReceipt = await secondReceiptTask;
+            Assert.True(
+                Directory.Exists(syntheticLocalLow),
+                $"The MTP apphosts did not establish the missing synthetic LocalLow base '{syntheticLocalLow}'.");
             Assert.Equal(firstProcess.Process.Id, firstReceipt.ProcessId);
             Assert.Equal(secondProcess.Process.Id, secondReceipt.ProcessId);
             Assert.False(string.Equals(

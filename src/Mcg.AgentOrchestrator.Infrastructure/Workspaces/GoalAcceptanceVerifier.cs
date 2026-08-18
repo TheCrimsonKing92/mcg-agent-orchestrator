@@ -2831,7 +2831,8 @@ public sealed class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
         string worktreePath,
         RepositoryTestImpactCheck check)
     {
-        // Command format: ["dotnet", "test", <optional project>, ...args]
+        // Command format: ["dotnet", "test", "--project", <project>, ...args]
+        // or the legacy positional form: ["dotnet", "test", <optional project>, ...args]
         return DotnetCommandToManifestCheck(worktreePath, check.Name, [.. check.Command]);
     }
 
@@ -2841,10 +2842,18 @@ public sealed class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
         string[] command)
     {
         var remaining = command.Skip(2).ToArray();
-        var project = remaining.Length > 0 && !remaining[0].StartsWith("-", StringComparison.Ordinal)
-            ? remaining[0]
-            : null;
-        var arguments = project is null ? remaining : remaining.Skip(1).ToArray();
+        var usesNativeProjectOption = remaining.Length > 1 &&
+            remaining[0].Equals("--project", StringComparison.OrdinalIgnoreCase);
+        var project = usesNativeProjectOption
+            ? remaining[1]
+            : remaining.Length > 0 && !remaining[0].StartsWith("-", StringComparison.Ordinal)
+                ? remaining[0]
+                : null;
+        var arguments = usesNativeProjectOption
+            ? remaining.Skip(2).ToArray()
+            : project is null
+                ? remaining
+                : remaining.Skip(1).ToArray();
         return new AcceptanceManifestCheck
         {
             Name = name,
@@ -8681,22 +8690,7 @@ public sealed class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
                 check.Command[0].Equals("dotnet", StringComparison.OrdinalIgnoreCase) &&
                 check.Command[1].Equals("test", StringComparison.OrdinalIgnoreCase))
             {
-                var remaining = check.Command.Skip(2).ToArray();
-                var project = remaining.Length > 0 && !remaining[0].StartsWith("-", StringComparison.Ordinal)
-                    ? remaining[0]
-                    : null;
-                var arguments = project is null
-                    ? remaining
-                    : remaining.Skip(1).ToArray();
-
-                return new AcceptanceManifestCheck
-                {
-                    Name = check.Name,
-                    Type = "dotnet-test",
-                    Project = project,
-                    Arguments = arguments,
-                    Runner = ResolveDotnetTestRunner(worktreePath, project)
-                };
+                return DotnetCommandToManifestCheck(worktreePath, check.Name, [.. check.Command]);
             }
 
             return new AcceptanceManifestCheck

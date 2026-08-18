@@ -7,4 +7,16 @@
     <DefaultItemExcludes>$(DefaultItemExcludes);**\artifacts\**;**/artifacts/**;**\.scratch\**;**/.scratch/**</DefaultItemExcludes>
     <DefaultItemExcludesInProjectFolder>$(DefaultItemExcludesInProjectFolder);**\artifacts\**;**/artifacts/**;**\.scratch\**;**/.scratch/**</DefaultItemExcludesInProjectFolder>
   </PropertyGroup>
+  <PropertyGroup Condition="'$(McgIsolatedArtifactsPath)' != ''">
+    <!-- Keep native MTP build outputs isolated without setting the SDK-reserved ArtifactsPath.
+         .NET 10 forwards ArtifactsPath to the test app as an artifacts-path option, which xUnit MTP v2
+         3.2.2 does not accept. Project-scoped base paths preserve isolation without changing the
+         test application's argument vector. The project-name segment is also the manifest and
+         reusable-artifact lookup contract. -->
+    <BaseOutputPath>$(McgIsolatedArtifactsPath)\bin\$(MSBuildProjectName)\</BaseOutputPath>
+    <BaseIntermediateOutputPath>$(McgIsolatedArtifactsPath)\obj\$(MSBuildProjectName)\</BaseIntermediateOutputPath>
+    <MSBuildProjectExtensionsPath>$(BaseIntermediateOutputPath)</MSBuildProjectExtensionsPath>
+    <AppendTargetFrameworkToOutputPath>false</AppendTargetFrameworkToOutputPath>
+    <DefaultItemExcludes>$(DefaultItemExcludes);$(MSBuildProjectDirectory)\obj\**;$(MSBuildProjectDirectory)\bin\**</DefaultItemExcludes>
+  </PropertyGroup>
 </Project>

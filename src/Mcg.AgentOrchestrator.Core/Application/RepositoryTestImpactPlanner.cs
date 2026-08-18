@@ -22,6 +22,7 @@ public static class RepositoryTestImpactPlanner
     [
         "dotnet",
         "test",
+        "--project",
         "tests/Mcg.AgentOrchestrator.Core.Tests/Mcg.AgentOrchestrator.Core.Tests.csproj",
         "--verbosity",
         "minimal"
@@ -31,7 +32,28 @@ public static class RepositoryTestImpactPlanner
     [
         "dotnet",
         "test",
+        "--project",
         "tests/Mcg.AgentOrchestrator.Infrastructure.Tests/Mcg.AgentOrchestrator.Infrastructure.Tests.csproj",
+        "--verbosity",
+        "minimal"
+    ];
+
+    private static readonly string[] ProviderEnvironmentTests =
+    [
+        "dotnet",
+        "test",
+        "--project",
+        "tests/Mcg.AgentOrchestrator.Infrastructure.Tests/ProviderEnvironment/Mcg.AgentOrchestrator.Infrastructure.ProviderEnvironment.Tests.csproj",
+        "--verbosity",
+        "minimal"
+    ];
+
+    private static readonly string[] CliTests =
+    [
+        "dotnet",
+        "test",
+        "--project",
+        "tests/Mcg.AgentOrchestrator.Infrastructure.Tests/Cli/Mcg.AgentOrchestrator.Infrastructure.Cli.Tests.csproj",
         "--verbosity",
         "minimal"
     ];
@@ -40,6 +62,7 @@ public static class RepositoryTestImpactPlanner
     [
         "dotnet",
         "test",
+        "--project",
         "tests/Mcg.AgentOrchestrator.Dashboard.Tests/Mcg.AgentOrchestrator.Dashboard.Tests.csproj",
         "--verbosity",
         "minimal"
@@ -55,6 +78,7 @@ public static class RepositoryTestImpactPlanner
     // "dotnet test": the test projects are Microsoft.Testing.Platform, and a project-less
     // dotnet-test check cannot be routed to the MTP runner, so it always dies on .NET 10 with
     // "Testing with VSTest target is no longer supported".
+
 
     public static RepositoryTestImpactPlan Plan(IEnumerable<string> paths) =>
         Plan(RepositoryChangeClassifier.Classify(paths));
@@ -222,12 +246,20 @@ public static class RepositoryTestImpactPlanner
             Checks:
             [
                 new RepositoryTestImpactCheck(
-                    "full dotnet tests: core",
+                    "core tests",
                     CoreTests,
                     summary),
                 new RepositoryTestImpactCheck(
-                    "full dotnet tests: infrastructure",
+                    "infrastructure tests",
                     InfrastructureTests,
+                    summary),
+                new RepositoryTestImpactCheck(
+                    "provider environment tests",
+                    ProviderEnvironmentTests,
+                    summary),
+                new RepositoryTestImpactCheck(
+                    "cli tests",
+                    CliTests,
                     summary),
                 new RepositoryTestImpactCheck(
                     "full dotnet tests: dashboard",
