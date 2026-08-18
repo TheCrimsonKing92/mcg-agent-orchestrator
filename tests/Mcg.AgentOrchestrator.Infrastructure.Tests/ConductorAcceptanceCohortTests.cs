@@ -87,6 +87,46 @@ public sealed class ConductorAcceptanceCohortTests
     }
 
     [Fact]
+    public void Selector_DocsTreeCandidate_IsTypedExclusion()
+    {
+        var docs = Ready(
+            "11111111111111111111111111111111",
+            "docs/operator.md",
+            "resource:docs");
+        var code = Ready(
+            "22222222222222222222222222222222",
+            "src/Feature.cs",
+            "resource:code");
+
+        var decision = ConductorAcceptanceCohortSelector.Select([docs, code]);
+
+        Assert.Null(decision.Selection);
+        var exclusion = Assert.Single(decision.Exclusions);
+        Assert.Equal(
+            ConductorAcceptanceCohortPairExclusionReason.DocsTreeOnlyCandidate,
+            exclusion.Reason);
+        Assert.Contains("disposition=docs-tree-only-candidate", exclusion.Evidence, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void Selector_OrdinaryCodeCandidates_RemainEligible()
+    {
+        var first = Ready(
+            "11111111111111111111111111111111",
+            "src/First.cs",
+            "resource:first");
+        var second = Ready(
+            "22222222222222222222222222222222",
+            "tests/SecondTests.cs",
+            "resource:second");
+
+        var selection = Assert.IsType<ConductorAcceptanceCohortSelection>(
+            ConductorAcceptanceCohortSelector.Select([first, second]).Selection);
+
+        Assert.Equal([first.GoalId, second.GoalId], selection.Members.Select(member => member.GoalId));
+    }
+
+    [Fact]
     public void Identity_IsStableLengthPrefixedAndMemberOrderSensitive()
     {
         var first = Binding("11111111111111111111111111111111", 'b', "a:b", "resource:a");

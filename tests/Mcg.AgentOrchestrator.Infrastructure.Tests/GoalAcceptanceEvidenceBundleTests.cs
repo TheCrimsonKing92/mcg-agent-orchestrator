@@ -6,6 +6,91 @@ namespace Mcg.AgentOrchestrator.Infrastructure.Tests;
 
 public sealed class GoalAcceptanceEvidenceBundleTests
 {
+    [Xunit.Fact]
+    public void ChangedFiles_FailedDiff_ThrowsInsteadOfReturningKnownEmpty()
+    {
+        var root = Path.Combine(Path.GetTempPath(), "mcg-changed-files-tests", Guid.NewGuid().ToString("N"));
+        Directory.CreateDirectory(root);
+        try
+        {
+            Xunit.Assert.Throws<InvalidOperationException>(() =>
+                GoalAcceptanceEvidenceBundleBuilder.GetChangedFiles(root));
+        }
+        finally
+        {
+            Directory.Delete(root, recursive: true);
+        }
+    }
+
+    [Xunit.Fact]
+    public void ChangedFiles_FailedBaseRefProbe_ThrowsInsteadOfReturningKnownEmpty()
+    {
+        var root = Path.Combine(Path.GetTempPath(), "mcg-changed-files-tests", Guid.NewGuid().ToString("N"));
+        Directory.CreateDirectory(root);
+        try
+        {
+            RunGit(root, "init", "-b", "topic");
+            RunGit(root, "config", "user.email", "tests@example.invalid");
+            RunGit(root, "config", "user.name", "Tests");
+            File.WriteAllText(Path.Combine(root, "seed.txt"), "seed");
+            RunGit(root, "add", "seed.txt");
+            RunGit(root, "commit", "-m", "Seed");
+
+            var corruptMainRef = Path.Combine(root, ".git", "refs", "heads", "main");
+            Directory.CreateDirectory(Path.GetDirectoryName(corruptMainRef)!);
+            File.WriteAllText(corruptMainRef, "not-an-object-id");
+
+            var exception = Xunit.Assert.Throws<InvalidOperationException>(() =>
+                GoalAcceptanceEvidenceBundleBuilder.GetChangedFiles(root));
+
+            Xunit.Assert.Contains("git base-ref discovery failed", exception.Message, StringComparison.Ordinal);
+            Xunit.Assert.Contains("ref=main", exception.Message, StringComparison.Ordinal);
+        }
+        finally
+        {
+            foreach (var path in Directory.EnumerateFiles(root, "*", SearchOption.AllDirectories))
+            {
+                File.SetAttributes(path, FileAttributes.Normal);
+            }
+
+            Directory.Delete(root, recursive: true);
+        }
+    }
+
+    [Xunit.Theory]
+    [Xunit.InlineData(false, 0, false, "process-started=false")]
+    [Xunit.InlineData(true, 7, false, "exit-code=7")]
+    [Xunit.InlineData(true, 0, true, "drain-timed-out=true")]
+    public void ChangedFiles_UnsuccessfulDiffState_ThrowsBoundedDiagnostic(
+        bool processStarted,
+        int exitCode,
+        bool drainTimedOut,
+        string expectedDiagnostic)
+    {
+        var result = new GitCli.GitResult(
+            exitCode,
+            string.Empty,
+            new string('x', 2_000),
+            drainTimedOut,
+            processStarted);
+
+        var exception = Xunit.Assert.Throws<InvalidOperationException>(() =>
+            GoalAcceptanceEvidenceBundleBuilder.ParseChangedFilesResult(result));
+
+        Xunit.Assert.Contains(expectedDiagnostic, exception.Message, StringComparison.Ordinal);
+        Xunit.Assert.Contains("...(truncated)", exception.Message, StringComparison.Ordinal);
+        Xunit.Assert.True(exception.Message.Length < 1_000, exception.Message);
+    }
+
+    [Xunit.Fact]
+    public void ChangedFiles_SuccessfulEmptyDiff_ReturnsKnownEmpty()
+    {
+        var files = GoalAcceptanceEvidenceBundleBuilder.ParseChangedFilesResult(
+            new GitCli.GitResult(0, string.Empty, string.Empty));
+
+        Xunit.Assert.Empty(files);
+    }
+
     [Xunit.Theory(DisplayName = "Acceptance_policy_recognizes_equivalent_aggregate_project_test_evidence")]
     [Xunit.InlineData(
         "full dotnet tests: infrastructure",
@@ -115,4 +200,12 @@ public sealed class GoalAcceptanceEvidenceBundleTests
         Required: true,
         "dotnet test Mcg.AgentOrchestrator.sln --verbosity minimal",
         "Broad verification required.");
+
+    private static void RunGit(string workingDirectory, params string[] args)
+    {
+        var result = GitCli.Run(workingDirectory, args);
+        Xunit.Assert.True(
+            result.ProcessStarted && result.ExitCode == 0 && !result.DrainTimedOut,
+            $"git {string.Join(' ', args)} failed ({result.ExitCode}): {result.Error}");
+    }
 }

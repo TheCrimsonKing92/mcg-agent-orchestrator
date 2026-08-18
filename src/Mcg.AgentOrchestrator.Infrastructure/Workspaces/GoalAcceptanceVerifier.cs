@@ -107,6 +107,13 @@ public sealed record AcceptanceVerificationResult(
     IReadOnlyList<AcceptanceCheckResult>? Checks = null,
     IReadOnlyList<string>? TestResultPaths = null);
 
+public enum DotnetShardDisposition
+{
+    RunDotnetShards,
+    KnownEmptyCandidate,
+    DocsTreeOnlyCandidate
+}
+
 public sealed record FocusedEvidenceRunResult(
     string Request,
     bool Accepted,
@@ -621,10 +628,13 @@ public sealed class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
             checks.Add(partitionCacheReceipt);
         }
 
-        AddCoveredBroadInfrastructureResults(checks, policyRequiredChecks, changedFiles, infrastructureTestLanes);
-        AddCoveredBroadInfrastructureResults(checks, manifest.Checks, changedFiles, infrastructureTestLanes);
-        AddCoveredPolicyAliasResults(checks, policyRequiredChecks, effectiveChecks);
-        AddPolicyShardReceiptResults(checks, manifest.Checks, effectiveChecks, policyShardPlan);
+        if (effectivePlan.DotnetShardDisposition == DotnetShardDisposition.RunDotnetShards)
+        {
+            AddCoveredBroadInfrastructureResults(checks, policyRequiredChecks, changedFiles, infrastructureTestLanes);
+            AddCoveredBroadInfrastructureResults(checks, manifest.Checks, changedFiles, infrastructureTestLanes);
+            AddCoveredPolicyAliasResults(checks, policyRequiredChecks, effectiveChecks);
+            AddPolicyShardReceiptResults(checks, manifest.Checks, effectiveChecks, policyShardPlan);
+        }
 
         if (checks.All(check => check.Passed) && manifest.ForbiddenChangedPathGlobs.Count > 0)
         {
@@ -656,6 +666,20 @@ public sealed class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
         // Advisory checks: always run, failures are recorded but do not affect overall Passed.
         foreach (var advisoryCheck in advisoryChecks)
         {
+            if (effectivePlan.DotnetShardDisposition != DotnetShardDisposition.RunDotnetShards &&
+                advisoryCheck.Type.Equals("dotnet-test", StringComparison.OrdinalIgnoreCase))
+            {
+                checks.Add(new AcceptanceCheckResult(
+                    advisoryCheck.Name,
+                    true,
+                    null,
+                    null,
+                    ResultSummary:
+                    $"advisory-skip=true; dotnet-shard-disposition={DotnetShardDispositionReason(effectivePlan.DotnetShardDisposition)}",
+                    Advisory: true));
+                continue;
+            }
+
             var checkResult = await RunCheckWithCancellationProbeAsync(advisoryCheck, worktreePath, goalId, stableSlotIndex, stableSlotLease, dotnetTestBuildPhase, cancellationToken).ConfigureAwait(false);
             checks.Add(checkResult.Result with { Advisory = true });
         }
@@ -2436,9 +2460,74 @@ public sealed class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
         AcceptanceGateEngineSettings engineSettings,
         IReadOnlyList<string>? changedFiles) =>
         engineSettings.EnforceStructuralCoverage &&
+        ClassifyDotnetShardDisposition(changedFiles) == DotnetShardDisposition.RunDotnetShards &&
         (changedFiles is null ||
             changedFiles.Count == 0 ||
             !RepositoryChangeClassifier.Classify(changedFiles).IsDocsOnly);
+
+    internal static DotnetShardDisposition ClassifyDotnetShardDisposition(
+        IReadOnlyList<string>? changedFiles)
+    {
+        if (changedFiles is null)
+            return DotnetShardDisposition.RunDotnetShards;
+
+        if (changedFiles.Count == 0)
+            return DotnetShardDisposition.KnownEmptyCandidate;
+
+        return changedFiles.All(IsStrictDocsTreePath)
+            ? DotnetShardDisposition.DocsTreeOnlyCandidate
+            : DotnetShardDisposition.RunDotnetShards;
+    }
+
+    private static bool IsStrictDocsTreePath(string path)
+    {
+        if (string.IsNullOrWhiteSpace(path) ||
+            !path.Equals(path.Trim(), StringComparison.Ordinal) ||
+            Path.IsPathRooted(path) ||
+            path.Contains(':', StringComparison.Ordinal))
+        {
+            return false;
+        }
+
+        var normalized = path.Replace('\\', '/');
+        var segments = normalized.Split('/');
+        return segments.Length > 1 &&
+            segments[0].Equals("docs", StringComparison.OrdinalIgnoreCase) &&
+            segments.All(segment =>
+                !string.IsNullOrWhiteSpace(segment) &&
+                !segment.Equals(".", StringComparison.Ordinal) &&
+                !segment.Equals("..", StringComparison.Ordinal));
+    }
+
+    private static string DotnetShardDispositionReason(DotnetShardDisposition disposition) =>
+        disposition switch
+        {
+            DotnetShardDisposition.KnownEmptyCandidate => "known-empty-candidate",
+            DotnetShardDisposition.DocsTreeOnlyCandidate => "docs-tree-only-candidate",
+            _ => "run-dotnet-shards"
+        };
+
+    private static IReadOnlyList<AcceptanceManifestCheck> ApplyDotnetShardDisposition(
+        IReadOnlyList<AcceptanceManifestCheck> checks,
+        DotnetShardDisposition disposition)
+    {
+        if (disposition == DotnetShardDisposition.RunDotnetShards)
+            return checks;
+
+        var reason = DotnetShardDispositionReason(disposition);
+        return
+        [
+            .. checks.Where(check =>
+                !check.Type.Equals("dotnet-test", StringComparison.OrdinalIgnoreCase) &&
+                !check.Name.Equals(reason, StringComparison.Ordinal)),
+            new AcceptanceManifestCheck
+            {
+                Name = reason,
+                Type = "no-op",
+                Arguments = ["dotnet-shards=omitted"]
+            }
+        ];
+    }
 
     private static EffectiveGatePlan CreateEffectiveGatePlan(
         string worktreePath,
@@ -2447,7 +2536,20 @@ public sealed class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
     {
         var manifest = AcceptanceManifest.Load(worktreePath, changedFiles);
         var infrastructureTestLanes = engineSettings.InfrastructureTestLanes;
+        var dotnetShardDisposition = ClassifyDotnetShardDisposition(changedFiles);
         var policyShardPlan = BuildPolicyShardPlan(changedFiles);
+        if (dotnetShardDisposition == DotnetShardDisposition.RunDotnetShards &&
+            !policyShardPlan.ForceFull &&
+            manifest.Checks.Any(check =>
+                check.Type.Equals("dotnet-test", StringComparison.OrdinalIgnoreCase)) &&
+            !manifest.Checks.Any(check =>
+                check.Type.Equals("dotnet-test", StringComparison.OrdinalIgnoreCase) &&
+                policyShardPlan.IncludesProject(check.Project)))
+        {
+            policyShardPlan = PolicyShardPlan.Full(
+                $"strict candidate path disposition requires dotnet shards; {policyShardPlan.Evidence}",
+                policyShardPlan.DependencyClosure);
+        }
 
         // This is the single owner of the environment- and scope-expanded gate plan. Cohort
         // identity, partition-cache identity, and execution all hash or consume this exact plan.
@@ -2466,16 +2568,19 @@ public sealed class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
                 manifest.Checks,
                 worktreePath)
             : policyEffectiveChecks;
-        var effectiveChecks = ExpandBroadInfrastructureChecks(
-            structurallyCompleteChecks,
-            infrastructureTestLanes);
+        var effectiveChecks = ApplyDotnetShardDisposition(
+            ExpandBroadInfrastructureChecks(
+                structurallyCompleteChecks,
+                infrastructureTestLanes),
+            dotnetShardDisposition);
         return new EffectiveGatePlan(
             manifest,
             effectiveChecks,
             infrastructureTestLanes,
             policyShardPlan,
             policyRequiredChecks,
-            structuralCoverageApplies);
+            structuralCoverageApplies,
+            dotnetShardDisposition);
     }
 
     private static IReadOnlyList<AcceptanceManifestCheck> BuildRequiredPolicyChecks(
@@ -3681,7 +3786,13 @@ public sealed class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
     {
         if (check.Type.Equals("no-op", StringComparison.OrdinalIgnoreCase))
         {
-            return (new AcceptanceCheckResult(check.Name, true, null, null, Advisory: check.Advisory), false);
+            return (new AcceptanceCheckResult(
+                check.Name,
+                true,
+                null,
+                null,
+                ResultSummary: check.Arguments.Count == 0 ? null : string.Join("; ", check.Arguments),
+                Advisory: check.Advisory), false);
         }
 
         if (check.Type.Equals("grep-absent", StringComparison.OrdinalIgnoreCase))
@@ -8615,7 +8726,8 @@ public sealed class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
         IReadOnlyList<AcceptanceTestLane> InfrastructureTestLanes,
         PolicyShardPlan PolicyShardPlan,
         IReadOnlyList<AcceptanceManifestCheck> PolicyRequiredChecks,
-        bool StructuralCoverageApplies);
+        bool StructuralCoverageApplies,
+        DotnetShardDisposition DotnetShardDisposition);
 
     private sealed record PolicyShardPlan(
         bool Applies,
