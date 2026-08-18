@@ -11,6 +11,33 @@ using Mcg.AgentOrchestrator.Infrastructure;
 [Xunit.Collection("ProcessSpawning")]
 public sealed class DispatchProcessHostTests
 {
+    [Xunit.Fact]
+    public void RoutineCompletionContract_ExistingHostSource_ExcludesGlobalShutdown()
+    {
+        var parameterNames = typeof(DispatchProcessHost.DispatchRunParameters)
+            .GetProperties()
+            .Select(property => property.Name)
+            .ToArray();
+        var sourcePath = Path.Combine(
+            InfrastructureTestSupport.FindRepositoryRoot(),
+            "src",
+            "Mcg.AgentOrchestrator.Infrastructure",
+            "Processes",
+            "DispatchProcessHost.cs");
+        var source = File.ReadAllText(sourcePath);
+        var remediationSource = File.ReadAllText(Path.Combine(
+            InfrastructureTestSupport.FindRepositoryRoot(),
+            "src",
+            "Mcg.AgentOrchestrator.Infrastructure",
+            "Workspaces",
+            "DotnetBuildEnvironmentManager.cs"));
+
+        Assert.DoesNotContain("ShutdownBuildServerOnExit", parameterNames);
+        Assert.DoesNotContain("build-server", source, StringComparison.OrdinalIgnoreCase);
+        Assert.Contains("ShutdownBuildServersBestEffort", remediationSource, StringComparison.Ordinal);
+        Assert.Contains("ArgumentList = { \"build-server\", \"shutdown\" }", remediationSource, StringComparison.Ordinal);
+    }
+
     [Xunit.Fact(DisplayName = "DispatchProcessHost_parameters_round_trip_via_camelCase_json")]
     public void DispatchProcessHostParametersRoundTrip()
     {
@@ -26,7 +53,6 @@ public sealed class DispatchProcessHostTests
                 Path.Combine(dir, "err.log"),
                 Path.Combine(dir, "exit.txt"),
                 Path.Combine(dir, "heartbeat.json"),
-                ShutdownBuildServerOnExit: true,
                 DisableSharedCompilation: true,
                 Provider: WorkerSandboxProvider.Codex,
                 PromptPath: Path.Combine(dir, "prompt.md"));
@@ -38,11 +64,17 @@ public sealed class DispatchProcessHostTests
             Assert.True(json.Contains("\"command\"", StringComparison.Ordinal));
             Assert.True(json.Contains("\"disableSharedCompilation\"", StringComparison.Ordinal));
             Assert.True(json.Contains("\"promptPath\"", StringComparison.Ordinal));
+            Assert.DoesNotContain("shutdownBuildServerOnExit", json, StringComparison.Ordinal);
 
             var roundTripped = JsonSerializer.Deserialize<DispatchProcessHost.DispatchRunParameters>(
                 json,
                 new JsonSerializerOptions { PropertyNamingPolicy = JsonNamingPolicy.CamelCase });
             Assert.Equal(parameters, roundTripped);
+
+            var legacyJson = json.TrimEnd('}') + ",\"shutdownBuildServerOnExit\":true}";
+            File.WriteAllText(path, legacyJson);
+            var legacyRoundTripped = DispatchProcessHost.ReadParameters(path);
+            Assert.Equal(parameters, legacyRoundTripped);
         }
         finally
         {
@@ -130,7 +162,6 @@ public sealed class DispatchProcessHostTests
                 Path.Combine(dir, "err.log"),
                 Path.Combine(dir, "exit.txt"),
                 null,
-                ShutdownBuildServerOnExit: false,
                 DisableSharedCompilation: false,
                 Provider: WorkerSandboxProvider.Codex,
                 PromptPath: promptPath);
@@ -168,7 +199,6 @@ public sealed class DispatchProcessHostTests
                 stderrPath,
                 exitPath,
                 null,
-                ShutdownBuildServerOnExit: false,
                 DisableSharedCompilation: false,
                 Provider: WorkerSandboxProvider.Codex);
             var parametersPath = Path.Combine(dir, "dispatch.json");
@@ -237,7 +267,6 @@ public sealed class DispatchProcessHostTests
                 stderrPath,
                 exitPath,
                 null,
-                ShutdownBuildServerOnExit: false,
                 DisableSharedCompilation: false,
                 Provider: WorkerSandboxProvider.Codex,
                 PromptPath: promptPath);
@@ -297,7 +326,6 @@ public sealed class DispatchProcessHostTests
                 stderrPath,
                 exitPath,
                 heartbeatPath,
-                ShutdownBuildServerOnExit: false,
                 DisableSharedCompilation: false,
                 Provider: WorkerSandboxProvider.Claude,
                 ChildExitRecordPath: childExitPath,
@@ -374,7 +402,6 @@ public sealed class DispatchProcessHostTests
                 stderrDirectory,
                 Path.Combine(dir, "exit.txt"),
                 heartbeatPath,
-                ShutdownBuildServerOnExit: false,
                 DisableSharedCompilation: false,
                 HostDiagnosticPath: hostDiagnosticPath);
             var parametersPath = Path.Combine(dir, "dispatch.json");
@@ -502,7 +529,6 @@ public sealed class DispatchProcessHostTests
                 Path.Combine(root, "err.log"),
                 Path.Combine(root, "exit.txt"),
                 null,
-                ShutdownBuildServerOnExit: false,
                 DisableSharedCompilation: false,
                 SandboxLowIntegrity: true,
                 WorkerSandboxProvider.Codex);
@@ -550,7 +576,6 @@ public sealed class DispatchProcessHostTests
                 Path.Combine(root, "err.log"),
                 Path.Combine(root, "exit.txt"),
                 null,
-                ShutdownBuildServerOnExit: false,
                 DisableSharedCompilation: false,
                 SandboxLowIntegrity: true,
                 Provider: WorkerSandboxProvider.Codex,
@@ -616,7 +641,6 @@ public sealed class DispatchProcessHostTests
                 Path.Combine(root, "err.log"),
                 Path.Combine(root, "exit.txt"),
                 null,
-                ShutdownBuildServerOnExit: false,
                 DisableSharedCompilation: false,
                 MandatoryContextFiles:
                 [
@@ -667,7 +691,6 @@ public sealed class DispatchProcessHostTests
                 Path.Combine(root, "err.log"),
                 Path.Combine(root, "exit.txt"),
                 null,
-                ShutdownBuildServerOnExit: false,
                 DisableSharedCompilation: false,
                 SandboxLowIntegrity: false);
 
@@ -1295,7 +1318,6 @@ public sealed class DispatchProcessHostTests
                 Path.Combine(dir, "err.log"),
                 Path.Combine(dir, "exit.txt"),
                 null,
-                ShutdownBuildServerOnExit: false,
                 DisableSharedCompilation: false,
                 SandboxLowIntegrity: true);
 
@@ -1337,7 +1359,6 @@ public sealed class DispatchProcessHostTests
                 Path.Combine(dir, "err.log"),
                 Path.Combine(dir, "exit.txt"),
                 null,
-                ShutdownBuildServerOnExit: false,
                 DisableSharedCompilation: false,
                 SandboxLowIntegrity: true);
 
@@ -1377,7 +1398,6 @@ public sealed class DispatchProcessHostTests
                 Path.Combine(dir, "err.log"),
                 Path.Combine(dir, "exit.txt"),
                 null,
-                ShutdownBuildServerOnExit: false,
                 DisableSharedCompilation: false,
                 SandboxLowIntegrity: true);
 
@@ -1418,7 +1438,6 @@ public sealed class DispatchProcessHostTests
                 stderrPath,
                 exitCodePath,
                 null,
-                ShutdownBuildServerOnExit: false,
                 DisableSharedCompilation: false));
 
             var startInfo = new ProcessStartInfo
@@ -1792,7 +1811,6 @@ public sealed class DispatchProcessHostTests
                 stderrPath,
                 Path.Combine(logs, "exit.txt"),
                 Path.Combine(logs, "heartbeat.json"),
-                ShutdownBuildServerOnExit: false,
                 DisableSharedCompilation: false,
                 SandboxLowIntegrity: true,
                 WorkerSandboxProvider.Codex));
@@ -1993,7 +2011,6 @@ public sealed class DispatchProcessHostTests
             Path.Combine(root, "err.log"),
             Path.Combine(root, "exit.txt"),
             null,
-            ShutdownBuildServerOnExit: false,
             DisableSharedCompilation: false,
             SandboxLowIntegrity: true,
             provider);
@@ -2104,7 +2121,6 @@ public sealed class DispatchProcessHostTests
             stderrPath,
             exitPath,
             heartbeatPath,
-            ShutdownBuildServerOnExit: false,
             DisableSharedCompilation: false,
             SandboxLowIntegrity: true,
             WorkerSandboxProvider.Codex,

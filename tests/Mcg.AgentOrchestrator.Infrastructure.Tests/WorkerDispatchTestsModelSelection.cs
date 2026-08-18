@@ -2240,7 +2240,6 @@ public void WorkerProfileDispatcherRejectsVerifiedSubscriptionDispatch()
         Path.Combine(root, "stderr.log"),
         Path.Combine(root, "exit.txt"),
         null,
-        ShutdownBuildServerOnExit: false,
         DisableSharedCompilation: false,
         Provider: sandboxProvider,
         PromptPath: task.LastDispatch.PromptPath)));
