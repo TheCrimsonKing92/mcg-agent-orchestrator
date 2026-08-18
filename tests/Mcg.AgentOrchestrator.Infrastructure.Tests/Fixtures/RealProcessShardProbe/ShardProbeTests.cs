@@ -16,6 +16,14 @@ public sealed class ShardProbeBetaTests
             "MCG_SHARD_SMOKE_ALPHA_SIGNAL");
 }
 
+public sealed class Utf8DiscoveryProbeTests
+{
+    [Xunit.Theory]
+    [Xunit.InlineData("non-ASCII café 漢字 e\u0301\0delimiter\r\n")]
+    public void PreservesParameterizedUnicodeIdentity(string content) =>
+        Xunit.Assert.NotEmpty(content);
+}
+
 internal static class ShardProbeSynchronization
 {
     internal static async Task SynchronizeAsync(string ownSignalVariable, string peerSignalVariable)
