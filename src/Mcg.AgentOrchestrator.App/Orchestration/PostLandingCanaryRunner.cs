@@ -13,6 +13,14 @@ internal interface IPostLandingCanaryRunner
         CancellationToken cancellationToken);
 }
 
+internal interface IPostLandingCanaryApplicationBinaryResolver
+{
+    Task<string> ResolveAsync(
+        string sourceRoot,
+        string sourceSha,
+        CancellationToken cancellationToken);
+}
+
 internal sealed record PostLandingCanaryRepositoryVerdict(
     bool Green,
     bool PreconditionFailure,
@@ -73,13 +81,15 @@ internal sealed class PostLandingCanaryRunner : IPostLandingCanaryRunner
     private readonly string _buildCacheRoot;
     private readonly string _logDirectory;
     private readonly Func<PostLandingCanaryRequest, CancellationToken, Task<PostLandingCanaryOutcome>>? _override;
+    private readonly IPostLandingCanaryApplicationBinaryResolver? _applicationBinaryResolver;
 
     internal PostLandingCanaryRunner(
         string repositoryRoot,
         string? dotnetPath = null,
         Func<PostLandingCanaryRequest, CancellationToken, Task<PostLandingCanaryOutcome>>? runOverride = null,
         string? buildCacheRoot = null,
-        string? logDirectory = null)
+        string? logDirectory = null,
+        IPostLandingCanaryApplicationBinaryResolver? applicationBinaryResolver = null)
     {
         _repositoryRoot = Path.GetFullPath(repositoryRoot);
         _dotnetPath = string.IsNullOrWhiteSpace(dotnetPath) ? "dotnet" : dotnetPath;
@@ -90,6 +100,7 @@ internal sealed class PostLandingCanaryRunner : IPostLandingCanaryRunner
             ? Path.Combine(_repositoryRoot, ".orchestrator", "logs")
             : Path.GetFullPath(logDirectory);
         _override = runOverride;
+        _applicationBinaryResolver = applicationBinaryResolver;
     }
 
     public Task<PostLandingCanaryOutcome> RunAsync(
@@ -131,12 +142,18 @@ internal sealed class PostLandingCanaryRunner : IPostLandingCanaryRunner
 
             using var fixture = PostLandingCanaryFixture.Materialize(canaryRepositoryRoot, request.LandingSha);
             await InitializeFixtureRepositoryAsync(fixture.RootPath, logs, cancellationToken).ConfigureAwait(false);
-            var appDllPath = await ResolveOrBuildMainBinaryAsync(
-                    canaryRepositoryRoot,
-                    baseline.HeadSha,
-                    logs,
-                    cancellationToken)
-                .ConfigureAwait(false);
+            var appDllPath = _applicationBinaryResolver is null
+                ? await ResolveOrBuildMainBinaryAsync(
+                        canaryRepositoryRoot,
+                        baseline.HeadSha,
+                        logs,
+                        cancellationToken)
+                    .ConfigureAwait(false)
+                : await _applicationBinaryResolver.ResolveAsync(
+                        canaryRepositoryRoot,
+                        baseline.HeadSha,
+                        cancellationToken)
+                    .ConfigureAwait(false);
             var process = await RunProcessAsync(
                 _dotnetPath,
                 [
