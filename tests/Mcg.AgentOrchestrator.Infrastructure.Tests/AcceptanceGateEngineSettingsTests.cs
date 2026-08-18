@@ -104,8 +104,11 @@ public sealed class AcceptanceGateEngineSettingsTests
             "Goal acceptance build slots",
             [
                 "AcceptanceGateEngineSettingsTests",
+                "AcceptanceOutputCaptureTests",
                 "GoalAcceptanceVerifierTests",
                 "GoalAcceptanceVerifierDotnetBuildSlotTests",
+                "HermeticVerificationEnvironmentTests",
+                "PreReviewFocusedEvidenceVerifierTests",
                 "RealProcessShardAlphaSmokeTests",
                 "RealProcessShardBetaSmokeTests",
                 "WorkerDispatchJobAccountingTests"
