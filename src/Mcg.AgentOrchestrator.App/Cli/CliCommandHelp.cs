@@ -7,6 +7,7 @@ internal static class CliCommandHelp
     public const string ConductUsage = "Usage: conduct <goal-id-prefix> [--policy <Conservative|Permissive|Manual>] [--watch [--poll-seconds <n>]], or conduct --loop [--max-iterations <n>] [--max-duration <seconds>] [--watch|--daemon] [--poll-seconds <n>] [--unscoped-stall-ticks <n>]";
     public const string GoalUsage = "Usage: goal <objective> [--pipeline <auto|five-role>] [--simple] [--from-backlog] [--run --confirm-batch-start] [--backlog-item <id-prefix> --backlog-coverage <full|slice>] [--request-key <key>] | goal --text-file <path> [--pipeline <auto|five-role>] [--request-key <key>] | goal --brief-file <path> [--pipeline <auto|five-role>] [--request-key <key>]";
     public const string GoalIntakeStatusUsage = "Usage: goal-intake-status <request-key>";
+    public const string GoalBoardUsage = GoalBoardOptions.Usage;
     public const string GoalReplaceUsage = "Usage: goal-replace <predecessor-goal-id> --brief-file <path> --reason-file <path> --request-id <guid> --disposition <zero-work-correction|abandon-failed-attempt|supersede-unlanded-attempt> --confirm-goal-replace [--pipeline <auto|five-role>] [--ideation <agent>|--researcher <agent>|--planner <agent>|--developer <agent>|--tester <agent>|--reviewer <agent>]";
     public const string AddTaskUsage = "Usage: add-task [--goal <goal-prefix>] <role> <description> [--before-role <role>] | add-task [--goal <goal-prefix>] <role> --text-file <path> [--before-role <role>]";
     public const string RetryUsage = "Usage: retry [--goal <goal-prefix>] <task-number> <message> [--goal <goal-prefix>] [--mechanical] | retry [--goal <goal-prefix>] <task-number> --text-file <path> [--goal <goal-prefix>] [--mechanical]";
@@ -109,6 +110,11 @@ internal static class CliCommandHelp
         GoalMonitoringSubscriptionCommand.GoalsSubscribeUsage,
         "Monitor goal lifecycle events. Example: goals subscribe --goal-prefix abc123 --event-kind conductor:dispatch --wait-terminal --once --timeout 5m",
         ["--goal-prefix", "--from-cursor", "--since", "--task", "--event-kind", "--once", "--wait-terminal", "--format", "--timeout", "--help", "-h"]);
+
+    private static readonly CommandHelpEntry GoalsBoard = new(
+        GoalBoardUsage,
+        "Show the read-only operational goal board for takeover and loop supervision.",
+        ["--board", "--limit", "--all", "--help", "-h"]);
 
     private static readonly CommandHelpEntry AddTask = new(
         AddTaskUsage,
@@ -511,6 +517,12 @@ internal static class CliCommandHelp
         if (args[0].Equals("goal-intake-status", StringComparison.OrdinalIgnoreCase))
         {
             entry = GoalIntakeStatus;
+            return true;
+        }
+
+        if (IsGoalsBoardHelpTarget(args))
+        {
+            entry = GoalsBoard;
             return true;
         }
 
@@ -962,7 +974,7 @@ internal static class CliCommandHelp
     private static bool HasHelpFlag(IReadOnlyList<string> args)
     {
         return args.Any(IsHelpFlag) ||
-            (IsGoalsSubscribeHelpTarget(args) && SplitCompositeToken(args[1]).Any(IsHelpFlag));
+            ((IsGoalsSubscribeHelpTarget(args) || IsGoalsBoardHelpTarget(args)) && SplitCompositeToken(args[1]).Any(IsHelpFlag));
     }
 
     private static bool IsGoalsSubscribeHelpTarget(IReadOnlyList<string> args)
@@ -973,6 +985,13 @@ internal static class CliCommandHelp
         }
 
         return SplitCompositeToken(args[1]).FirstOrDefault()?.Equals("subscribe", StringComparison.OrdinalIgnoreCase) == true;
+    }
+
+    private static bool IsGoalsBoardHelpTarget(IReadOnlyList<string> args)
+    {
+        if (args.Count < 2 || !args[0].Equals("goals", StringComparison.OrdinalIgnoreCase))
+            return false;
+        return SplitCompositeToken(args[1]).FirstOrDefault()?.Equals("--board", StringComparison.OrdinalIgnoreCase) == true;
     }
 
     private static IEnumerable<string> ExpandHelpTarget(IEnumerable<string> targetParts)

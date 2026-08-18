@@ -41,6 +41,12 @@ internal static class GitCli
         public bool IsDirty => CommitWorthyPaths.Count > 0;
     }
 
+    internal readonly record struct AheadBehindInspection(
+        bool Succeeded,
+        int? Ahead,
+        int? Behind,
+        string? Error);
+
     public static GitResult Run(string workingDirectory, params string[] args) =>
         Run(workingDirectory, DefaultTimeoutMilliseconds, args);
 
@@ -131,6 +137,34 @@ internal static class GitCli
         return result.ExitCode == 0
             ? new WorktreeStatusInspection(true, ParseCommitWorthyStatusPaths(result.Output), null)
             : new WorktreeStatusInspection(false, [], string.IsNullOrWhiteSpace(result.Error) ? "git status failed" : result.Error.Trim());
+    }
+
+    internal static AheadBehindInspection InspectAheadBehind(string workingDirectory)
+    {
+        var result = Run(workingDirectory, "rev-list", "--left-right", "--count", "main...HEAD");
+        return InspectAheadBehind(result);
+    }
+
+    internal static AheadBehindInspection InspectAheadBehind(GitResult result)
+    {
+        if (!result.Succeeded || result.DrainTimedOut)
+        {
+            return new AheadBehindInspection(
+                false,
+                null,
+                null,
+                string.IsNullOrWhiteSpace(result.Error) ? "git rev-list failed" : result.Error.Trim());
+        }
+
+        var parts = result.Output.Split((char[]?)null, StringSplitOptions.RemoveEmptyEntries);
+        if (parts.Length != 2 ||
+            !int.TryParse(parts[0], System.Globalization.NumberStyles.None, System.Globalization.CultureInfo.InvariantCulture, out var behind) ||
+            !int.TryParse(parts[1], System.Globalization.NumberStyles.None, System.Globalization.CultureInfo.InvariantCulture, out var ahead))
+        {
+            return new AheadBehindInspection(false, null, null, "git rev-list returned malformed counts");
+        }
+
+        return new AheadBehindInspection(true, ahead, behind, null);
     }
 
     internal static string FilterCommitWorthyStatus(string statusOutput)

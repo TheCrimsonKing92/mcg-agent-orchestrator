@@ -115,6 +115,11 @@ catch (ArgumentException ex)
     return 1;
 }
 
+if (GoalBoardCommand.IsBoardCommand(startupArgs))
+{
+    return ExitCompletedStartupCommand(ProgramStartupLifecycle.RunGoalBoard(startupArgs, workspace));
+}
+
 if (ConductorContinuitySupervisor.ShouldSupervise(
         startupArgs,
         ProgramStartupLifecycle.IsAuthorityTransferRequested(startupArgs)))
@@ -454,6 +459,34 @@ static bool IsGoalEventsFollowCommand(IReadOnlyList<string> startupArgs)
 
 internal static class ProgramStartupLifecycle
 {
+    internal static int RunGoalBoard(
+        IReadOnlyList<string> startupArgs,
+        OrchestratorWorkspace workspace,
+        Func<string, IOrchestratorStateRepository>? repositoryFactory = null,
+        Func<ProcessCommandLineSnapshot>? processSnapshotFactory = null)
+    {
+        try
+        {
+            var repository = (repositoryFactory ?? SqliteOrchestratorStateRepository.OpenReadOnly)(workspace.SqliteStatePath);
+            GoalBoardCommand.Run(
+                startupArgs,
+                repository,
+                workspace,
+                processSnapshotFactory: processSnapshotFactory);
+            return 0;
+        }
+        catch (ArgumentException ex)
+        {
+            Console.Error.WriteLine($"Error: {ex.Message}");
+            return 1;
+        }
+        catch (Exception ex)
+        {
+            Console.Error.WriteLine(ProgramStartupErrorFormatter.Format(ex));
+            return 1;
+        }
+    }
+
     internal static bool IsAuthorityTransferRequested(IReadOnlyList<string> _) =>
         ConductorLoopHandoff.IsAuthorityTransferRequested;
 

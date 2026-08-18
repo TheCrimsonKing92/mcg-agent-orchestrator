@@ -563,6 +563,10 @@ public abstract class CliCommandTestBase
 
         public int SaveGoalSnapshotsCount { get; private set; }
 
+        public int SaveAsyncCount { get; private set; }
+
+        public int ListOutboxMessagesCount { get; private set; }
+
         public int CompletedHumanInputQueryCount { get; private set; }
 
         public long LoadedGoalSnapshotJsonBytes { get; private set; }
@@ -644,6 +648,7 @@ public abstract class CliCommandTestBase
 
         public Task SaveAsync(AgentOrchestratorKernel kernel, CancellationToken cancellationToken = default)
         {
+            SaveAsyncCount++;
             _kernel = Clone(kernel);
             return Task.CompletedTask;
         }
@@ -807,12 +812,15 @@ public abstract class CliCommandTestBase
 
         public Task<IReadOnlyList<OrchestratorStateOutboxMessage>> ListOutboxMessagesAsync(
             string kind,
-            CancellationToken cancellationToken = default) =>
-            Task.FromResult<IReadOnlyList<OrchestratorStateOutboxMessage>>(_outbox.Values
+            CancellationToken cancellationToken = default)
+        {
+            ListOutboxMessagesCount++;
+            return Task.FromResult<IReadOnlyList<OrchestratorStateOutboxMessage>>(_outbox.Values
                 .Where(message => message.Kind.Equals(kind, StringComparison.Ordinal))
                 .OrderBy(message => message.CreatedAt)
                 .ThenBy(message => message.Id, StringComparer.Ordinal)
                 .ToArray());
+        }
 
         public async Task<bool> TryProcessOutboxMessageAsync(
             string id,

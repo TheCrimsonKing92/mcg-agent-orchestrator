@@ -125,7 +125,7 @@ public static class StatusProjector
             DetermineHealth(goal));
     }
 
-    private static string DetermineStage(StatusProjectionGoal goal)
+    public static string DetermineStage(StatusProjectionGoal goal)
     {
         if (goal.LifecycleState is GoalLifecycleState.Merged or GoalLifecycleState.Recorded)
             return "cleanup";

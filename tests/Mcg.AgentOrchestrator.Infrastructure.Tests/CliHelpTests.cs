@@ -33,6 +33,7 @@ public sealed class CliHelpTests
     [Xunit.InlineData(new[] { "agent", "--help" }, "agent <role>", "--subscription-reasoning")]
     [Xunit.InlineData(new[] { "agent-add", "--help" }, "agent-add <role>", "--subscription-reasoning")]
     [Xunit.InlineData(new[] { "goals", "subscribe", "--help" }, "goals subscribe", "--from-cursor")]
+    [Xunit.InlineData(new[] { "goals", "--board", "--help" }, "goals --board", "--limit <n>")]
     [Xunit.InlineData(new[] { "conduct", "--help" }, "conduct", "--loop")]
     [Xunit.InlineData(new[] { "refresh-dispatch", "--help" }, "refresh-dispatch <task-number>", "--history-limit <n>")]
     [Xunit.InlineData(new[] { "workspace", "create", "-h" }, "workspace create", "--help")]
@@ -67,6 +68,15 @@ public sealed class CliHelpTests
         Xunit.Assert.Contains(optionToken, output);
         Xunit.Assert.False(File.Exists(workspace.BacklogStorePath));
         Xunit.Assert.Empty(kernel.Goals);
+    }
+
+    [Xunit.Fact(DisplayName = "CliCommandHelp_GoalsBoard_accepts_board_selector")]
+    public void CliCommandHelpGoalsBoardAcceptsBoardSelector()
+    {
+        var exception = Xunit.Record.Exception(() =>
+            CliCommandHelp.ThrowIfInvalidFlags(["goals", "--board", "--all"]));
+
+        Xunit.Assert.Null(exception);
     }
 
     [Xunit.Fact]

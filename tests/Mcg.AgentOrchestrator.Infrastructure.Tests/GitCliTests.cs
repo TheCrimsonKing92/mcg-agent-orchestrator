@@ -41,6 +41,57 @@ public sealed class GitCliTests
         }
     }
 
+    [Xunit.Fact(DisplayName = "GitCli_InspectAheadBehind_returns_typed_divergence_counts")]
+    public void GitCliInspectAheadBehindReturnsTypedDivergenceCounts()
+    {
+        var repo = CreateSeededRepository();
+        try
+        {
+            RunGit(repo, "branch", "-M", "main");
+            RunGit(repo, "checkout", "-b", "feature");
+            File.WriteAllText(Path.Combine(repo, "feature.txt"), "feature");
+            RunGit(repo, "add", "-A");
+            RunGit(repo, "commit", "-m", "Feature");
+            RunGit(repo, "checkout", "main");
+            File.WriteAllText(Path.Combine(repo, "main.txt"), "main");
+            RunGit(repo, "add", "-A");
+            RunGit(repo, "commit", "-m", "Main");
+            RunGit(repo, "checkout", "feature");
+
+            var result = GitCli.InspectAheadBehind(repo);
+
+            Assert.True(result.Succeeded, result.Error);
+            Assert.Equal(1, result.Ahead);
+            Assert.Equal(1, result.Behind);
+        }
+        finally
+        {
+            DeleteDirectory(repo);
+        }
+    }
+
+    [Xunit.Fact(DisplayName = "GitCli_InspectAheadBehind_rejects_malformed_output")]
+    public void GitCliInspectAheadBehindRejectsMalformedOutput()
+    {
+        var result = GitCli.InspectAheadBehind(new GitCli.GitResult(0, "not-counts", string.Empty));
+
+        Assert.False(result.Succeeded);
+        Assert.Null(result.Ahead);
+        Assert.Null(result.Behind);
+        Assert.Contains("malformed", result.Error, StringComparison.OrdinalIgnoreCase);
+    }
+
+    [Xunit.Fact(DisplayName = "GitCli_InspectAheadBehind_preserves_command_failure")]
+    public void GitCliInspectAheadBehindPreservesCommandFailure()
+    {
+        var result = GitCli.InspectAheadBehind(new GitCli.GitResult(128, string.Empty, "repository unreadable"));
+
+        Assert.False(result.Succeeded);
+        Assert.Null(result.Ahead);
+        Assert.Null(result.Behind);
+        Assert.Contains("repository unreadable", result.Error, StringComparison.Ordinal);
+    }
+
     [Xunit.Fact(DisplayName = "GitCli_Run_captures_stdout_output")]
     public void GitCliRunCapturesStdoutOutput()
     {
