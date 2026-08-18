@@ -265,9 +265,20 @@ public sealed record AcceptanceCohortReceipt(
     AcceptanceCohortAttributionOutcome Attribution = AcceptanceCohortAttributionOutcome.NotApplicable,
     bool ValidForLanding = false)
 {
+    private const string TestProjectResourceKeyPrefix =
+        "ownership:" + RepositoryOwnershipMap.TestProjectReservationKeyPrefix;
+
     public IReadOnlyList<AcceptanceCohortEvidenceArtifact> GateEvidenceArtifacts { get; init; } = [];
 
     public AcceptanceCohortInvalidation? Invalidation { get; init; }
+
+    public IReadOnlyList<string> TestProjectKeys => Identity.Members
+        .SelectMany(member => member.ResourceKeys)
+        .Where(key => key.StartsWith(TestProjectResourceKeyPrefix, StringComparison.OrdinalIgnoreCase))
+        .Select(key => key.ToLowerInvariant())
+        .Distinct(StringComparer.OrdinalIgnoreCase)
+        .Order(StringComparer.OrdinalIgnoreCase)
+        .ToArray();
 
     public bool HasAuthoritativeLandingEvidence =>
         Outcome == AcceptanceCohortGateOutcome.Passed &&

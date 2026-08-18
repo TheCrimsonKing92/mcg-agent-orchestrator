@@ -32,6 +32,8 @@ public sealed record RepositoryWriteSetGuardReport(
 
 public static class RepositoryOwnershipMap
 {
+    internal const string TestProjectReservationKeyPrefix = "test-project:tests/";
+
     private static readonly string[] GeneratedSegments =
     [
         "bin",
@@ -91,7 +93,10 @@ public static class RepositoryOwnershipMap
 
         if (IsTest(path, fileName))
         {
-            return Build(path, RepositoryOwnershipArea.Test, "tests", highRisk: false);
+            var reservationKey = TestProjectReservationKey(path);
+            return reservationKey is null
+                ? Build(path, RepositoryOwnershipArea.Unknown, "unknown-acceptance-scope", highRisk: false)
+                : Build(path, RepositoryOwnershipArea.Test, reservationKey, highRisk: false);
         }
 
         if (IsDocumentation(path, extension))
@@ -185,6 +190,22 @@ public static class RepositoryOwnershipMap
         path.StartsWith("tests/", StringComparison.OrdinalIgnoreCase) ||
         path.Contains("/tests/", StringComparison.OrdinalIgnoreCase) ||
         fileName.EndsWith("Tests.cs", StringComparison.OrdinalIgnoreCase);
+
+    private static string? TestProjectReservationKey(string path)
+    {
+        var parts = path.Split('/', StringSplitOptions.RemoveEmptyEntries);
+        if (parts.Length < 2 || !parts[0].Equals("tests", StringComparison.OrdinalIgnoreCase))
+        {
+            return null;
+        }
+
+        var project = parts[1];
+        return string.IsNullOrWhiteSpace(project) ||
+               project is "." or ".." ||
+               (parts.Length == 2 && project.EndsWith(".cs", StringComparison.OrdinalIgnoreCase))
+            ? null
+            : $"{TestProjectReservationKeyPrefix}{project.ToLowerInvariant()}";
+    }
 
     private static bool IsConfiguration(string path, string extension) =>
         path.StartsWith("config/", StringComparison.OrdinalIgnoreCase) ||

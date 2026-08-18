@@ -468,6 +468,76 @@ public sealed class RepositoryChangeClassifierTests
         Assert.Contains(guard.Reasons, reason => reason.Contains("generated/noisy path", StringComparison.Ordinal));
     }
 
+    [Xunit.Fact(DisplayName = "RepositoryOwnershipMap_uses_distinct_conventional_test_project_reservations")]
+    public void RepositoryOwnershipMapUsesDistinctConventionalTestProjectReservations()
+    {
+        var core = RepositoryOwnershipMap.Classify(
+            "tests/Mcg.AgentOrchestrator.Core.Tests/RepositoryChangeClassifierTests.cs");
+        var infrastructure = RepositoryOwnershipMap.Classify(
+            "tests/Mcg.AgentOrchestrator.Infrastructure.Tests/WorkerDispatchTests.cs");
+
+        Assert.Equal("test-project:tests/mcg.agentorchestrator.core.tests", core.ReservationKey);
+        Assert.Equal("test-project:tests/mcg.agentorchestrator.infrastructure.tests", infrastructure.ReservationKey);
+        Assert.NotEqual(core.ReservationKey, infrastructure.ReservationKey);
+    }
+
+    [Xunit.Fact(DisplayName = "RepositoryOwnershipMap_treats_project_directory_as_conventional_test_scope")]
+    public void RepositoryOwnershipMapTreatsProjectDirectoryAsConventionalTestScope()
+    {
+        const string projectDirectory = "tests/Mcg.AgentOrchestrator.Core.Tests";
+        const string expectedReservation = "test-project:tests/mcg.agentorchestrator.core.tests";
+        var ownedPath = RepositoryOwnershipMap.Classify(projectDirectory);
+        var guard = RepositoryOwnershipMap.GuardWriteSet([
+            projectDirectory,
+            $"{projectDirectory}/RepositoryChangeClassifierTests.cs"
+        ]);
+
+        Assert.Equal(RepositoryOwnershipArea.Test, ownedPath.Area);
+        Assert.Equal(expectedReservation, ownedPath.ReservationKey);
+        Assert.Equal($"ownership:{expectedReservation}", Assert.Single(guard.RequiredResources));
+    }
+
+    [Xunit.Fact(DisplayName = "RepositoryOwnershipMap_normalizes_and_serializes_one_test_project")]
+    public void RepositoryOwnershipMapNormalizesAndSerializesOneTestProject()
+    {
+        const string expectedResource = "ownership:test-project:tests/mcg.agentorchestrator.core.tests";
+        var first = RepositoryOwnershipMap.Classify(
+            @"TESTS\Mcg.AgentOrchestrator.Core.Tests\FirstTests.cs");
+        var repeated = RepositoryOwnershipMap.Classify(
+            "tests/mcg.agentorchestrator.core.tests/FirstTests.cs");
+        var guard = RepositoryOwnershipMap.GuardWriteSet([
+            "tests/Mcg.AgentOrchestrator.Core.Tests/FirstTests.cs",
+            "tests/Mcg.AgentOrchestrator.Core.Tests/SecondTests.cs"
+        ]);
+        var scope = RepositoryLandingScopeNormalization.Normalize([
+            "tests/Mcg.AgentOrchestrator.Core.Tests/FirstTests.cs"
+        ]);
+
+        Assert.Equal(first.ReservationKey, repeated.ReservationKey);
+        Assert.Equal(expectedResource, Assert.Single(guard.RequiredResources));
+        Assert.Equal(expectedResource, Assert.Single(scope.ResourceKeys));
+        Assert.DoesNotContain("ownership:tests", scope.ResourceKeys);
+    }
+
+    [Xunit.Theory(DisplayName = "RepositoryOwnershipMap_fails_closed_for_malformed_test_paths")]
+    [Xunit.InlineData("tests/LooseTests.cs")]
+    [Xunit.InlineData("tests/ /LooseTests.cs")]
+    [Xunit.InlineData("tests/../LooseTests.cs")]
+    [Xunit.InlineData("misc/LooseTests.cs")]
+    [Xunit.InlineData("nested/tests/Project/LooseTests.cs")]
+    public void RepositoryOwnershipMapFailsClosedForMalformedTestPaths(string path)
+    {
+        var ownedPath = RepositoryOwnershipMap.Classify(path);
+        var guard = RepositoryOwnershipMap.GuardWriteSet([path]);
+
+        Assert.Equal(RepositoryOwnershipArea.Unknown, ownedPath.Area);
+        Assert.Equal("unknown-acceptance-scope", ownedPath.ReservationKey);
+        Assert.Equal(
+            RepositoryLandingScopeNormalization.UnknownAcceptanceScopeResourceKey,
+            Assert.Single(guard.RequiredResources));
+        Assert.DoesNotContain("ownership:tests", guard.RequiredResources);
+    }
+
     [Xunit.Fact(DisplayName = "RepositoryTestImpactPlanner_skips_build_for_docs_only_changes")]
     public void RepositoryTestImpactPlannerSkipsBuildForDocsOnlyChanges()
     {
