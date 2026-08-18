@@ -1,5 +1,6 @@
 using Mcg.AgentOrchestrator.Core;
 using Mcg.AgentOrchestrator.Core.Conductor;
+using Mcg.AgentOrchestrator.Infrastructure;
 
 namespace Mcg.AgentOrchestrator.App.Orchestration;
 
@@ -8,6 +9,7 @@ internal enum ConductorAcceptanceCohortPairExclusionReason
     UpstreamExcluded,
     DuplicateGoal,
     IncompleteLandingScope,
+    DocsTreeOnlyCandidate,
     IncompleteResourceKeys,
     MainRevisionMismatch,
     LandingPathOverlap,
@@ -148,6 +150,20 @@ internal static class ConductorAcceptanceCohortSelector
         if (first.LandingPaths.Count == 0 || second.LandingPaths.Count == 0)
         {
             return Excluded(first, second, ConductorAcceptanceCohortPairExclusionReason.IncompleteLandingScope);
+        }
+        var firstDisposition = GoalAcceptanceVerifier.ClassifyDotnetShardDisposition(first.LandingPaths);
+        var secondDisposition = GoalAcceptanceVerifier.ClassifyDotnetShardDisposition(second.LandingPaths);
+        if (firstDisposition == DotnetShardDisposition.DocsTreeOnlyCandidate ||
+            secondDisposition == DotnetShardDisposition.DocsTreeOnlyCandidate)
+        {
+            var docsGoalId = firstDisposition == DotnetShardDisposition.DocsTreeOnlyCandidate
+                ? first.GoalId
+                : second.GoalId;
+            return Excluded(
+                first,
+                second,
+                ConductorAcceptanceCohortPairExclusionReason.DocsTreeOnlyCandidate,
+                $"goal={docsGoalId.Value}; disposition=docs-tree-only-candidate");
         }
         if (first.ResourceKeys.Count == 0 || second.ResourceKeys.Count == 0)
         {

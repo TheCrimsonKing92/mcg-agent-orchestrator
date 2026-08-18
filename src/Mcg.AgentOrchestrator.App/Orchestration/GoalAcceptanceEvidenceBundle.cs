@@ -386,7 +386,36 @@ internal static class GoalAcceptanceEvidenceBundleBuilder
         value.Split(['\r', '\n'], StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries);
 
     public static string[] GetChangedFiles(string workingDirectory) =>
-        SplitLines(GitCli.Run(workingDirectory, "diff", "--name-only", BuildDiffSpec(workingDirectory)).Output.Trim());
+        ParseChangedFilesResult(
+            GitCli.Run(workingDirectory, "diff", "--name-only", BuildDiffSpec(workingDirectory)));
+
+    internal static string[] ParseChangedFilesResult(GitCli.GitResult result)
+    {
+        if (!result.ProcessStarted || result.ExitCode != 0 || result.DrainTimedOut)
+        {
+            var detail = BoundGitDiagnostic(
+                string.IsNullOrWhiteSpace(result.Error) ? result.Output : result.Error);
+            throw new InvalidOperationException(
+                "git changed-file discovery failed: " +
+                $"process-started={result.ProcessStarted.ToString().ToLowerInvariant()}; " +
+                $"exit-code={result.ExitCode}; " +
+                $"drain-timed-out={result.DrainTimedOut.ToString().ToLowerInvariant()}; " +
+                $"detail={detail}");
+        }
+
+        return SplitLines(result.Output.Trim());
+    }
+
+    private static string BoundGitDiagnostic(string value)
+    {
+        const int maxChars = 800;
+        var normalized = string.IsNullOrWhiteSpace(value)
+            ? "none"
+            : string.Join(' ', SplitLines(value));
+        return normalized.Length <= maxChars
+            ? normalized
+            : normalized[..maxChars] + "...(truncated)";
+    }
 
     // Bounded unified diff of the goal branch against its base, for feeding an advisory semantic
     // judge. Truncated so a large change cannot blow the judge's context/cost budget.

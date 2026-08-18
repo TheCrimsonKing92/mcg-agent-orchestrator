@@ -963,48 +963,241 @@ public sealed class GoalAcceptanceVerifierTests : GoalAcceptanceVerifierTestBase
         Assert.Equal(expected, GoalAcceptanceVerifier.IsTransientTesthostAbort(output));
     }
 
-    [Xunit.Fact(DisplayName = "GoalAcceptanceVerifier_skips_dotnet_tests_for_docs_only_default_plan")]
-    public async Task GoalAcceptanceVerifierSkipsDotnetTestsForDocsOnlyDefaultPlan()
+    [Xunit.Theory]
+    [Xunit.InlineData(false, "known-empty-candidate")]
+    [Xunit.InlineData(true, "docs-tree-only-candidate")]
+    public async Task ProvenNoTestCandidate_RunsNonDotnetChecks_AndRecordsReceipt(
+        bool docsTreeOnly,
+        string receiptName)
     {
-        var root = CreateManifestWorkspace("""
-            {
-              "engine": {
-                "maxConcurrentShards": 1,
-                "enforceStructuralCoverage": true
-              },
-              "checks": [
-                { "name": "test impact: no build required", "type": "no-op" }
-              ],
-              "forbiddenChangedPathGlobs": []
-            }
-            """);
+        var root = CreateTrackedManifestShapeWorkspace();
         var calls = new List<string[]>();
-        var responses = new Queue<GoalAcceptanceVerifier.CommandResult>([
-            new(0, "")
-        ]);
         var verifier = new GoalAcceptanceVerifier((args, _, _) =>
         {
             calls.Add(args);
-            return Task.FromResult(responses.Dequeue());
+            return Task.FromResult(new GoalAcceptanceVerifier.CommandResult(0, "non-dotnet check passed"));
         });
 
         try
         {
-            var result = await verifier.RunAsync(root, changedFiles: ["README.md"]);
+            IReadOnlyList<string> changedFiles = docsTreeOnly ? ["docs/operator.md"] : [];
+            var result = await verifier.RunAsync(root, changedFiles: changedFiles);
 
             Assert.True(result.Passed);
-            Assert.Equal(1, calls.Count);
-            Assert.True(calls[0].SequenceEqual(["dotnet", "build-server", "shutdown"]));
-            var check = Xunit.Assert.Single(result.Checks!);
-            Assert.Equal("test impact: no build required", check.Name);
-            Xunit.Assert.Null(check.ExitCode);
-            Xunit.Assert.Null(result.ArtifactsPath);
+            Assert.False(result.Skipped);
+            Assert.Equal(0, result.ExitCode);
+            Assert.Empty(result.TestResultPaths ?? []);
+            Assert.Contains(calls, call => call.SequenceEqual(["git", "diff", "--check"]));
+            Assert.DoesNotContain(calls, IsDotnetShardInvocation);
+            var receipt = Assert.Single(result.Checks!, check => check.Name == receiptName);
+            Assert.True(receipt.Passed);
+            Assert.Equal("dotnet-shards=omitted", receipt.ResultSummary);
         }
         finally
         {
             DeleteDirectoryWithRetry(root);
         }
     }
+
+    [Xunit.Fact]
+    public async Task ProvenNoTestCandidate_FailingNonDotnetCheck_FailsGate()
+    {
+        var root = CreateTrackedManifestShapeWorkspace();
+        var calls = new List<string[]>();
+        var verifier = new GoalAcceptanceVerifier((args, _, _) =>
+        {
+            calls.Add(args);
+            var failed = args.SequenceEqual(["git", "diff", "--check"]);
+            return Task.FromResult(new GoalAcceptanceVerifier.CommandResult(
+                failed ? 1 : 0,
+                failed ? "whitespace error" : string.Empty));
+        });
+
+        try
+        {
+            var result = await verifier.RunAsync(root, changedFiles: ["docs/operator.md"]);
+
+            Assert.False(result.Passed);
+            Assert.False(result.Skipped);
+            Assert.Equal(1, result.ExitCode);
+            Assert.DoesNotContain(calls, IsDotnetShardInvocation);
+            Assert.Contains(result.Checks!, check =>
+                check.Name == "git diff whitespace" && !check.Passed);
+        }
+        finally
+        {
+            DeleteDirectoryWithRetry(root);
+        }
+    }
+
+    [Xunit.Theory]
+    [Xunit.InlineData("README.md", null)]
+    [Xunit.InlineData("notes/example.md", null)]
+    [Xunit.InlineData("src/Feature.cs", null)]
+    [Xunit.InlineData("tests/FeatureTests.cs", null)]
+    [Xunit.InlineData("docs/operator.md", "src/Feature.cs")]
+    public async Task NonDocsTreeCandidate_ExecutesDotnetShard(string firstPath, string? secondPath)
+    {
+        var root = CreateTrackedManifestShapeWorkspace();
+        SetManifestStructuralCoverage(root, enabled: false);
+        var calls = new List<string[]>();
+        var verifier = new GoalAcceptanceVerifier((args, _, _) =>
+        {
+            calls.Add(args);
+            return Task.FromResult(new GoalAcceptanceVerifier.CommandResult(
+                0,
+                IsDotnetShardInvocation(args)
+                    ? "Passed! - Failed: 0, Passed: 1, Skipped: 0, Total: 1."
+                    : string.Empty));
+        });
+
+        try
+        {
+            IReadOnlyList<string> changedFiles = secondPath is null
+                ? [firstPath]
+                : [firstPath, secondPath];
+            await verifier.RunAsync(root, changedFiles: changedFiles);
+
+            Assert.Contains(calls, IsDotnetShardInvocation);
+        }
+        finally
+        {
+            DeleteDirectoryWithRetry(root);
+        }
+    }
+
+    [Xunit.Fact]
+    public async Task UnknownCandidate_ExecutesDotnetShard()
+    {
+        var root = CreateTrackedManifestShapeWorkspace();
+        SetManifestStructuralCoverage(root, enabled: false);
+        var calls = new List<string[]>();
+        var verifier = new GoalAcceptanceVerifier((args, _, _) =>
+        {
+            calls.Add(args);
+            return Task.FromResult(new GoalAcceptanceVerifier.CommandResult(
+                0,
+                IsDotnetShardInvocation(args)
+                    ? "Passed! - Failed: 0, Passed: 1, Skipped: 0, Total: 1."
+                    : string.Empty));
+        });
+
+        try
+        {
+            await verifier.RunAsync(root, changedFiles: null);
+
+            Assert.Contains(calls, IsDotnetShardInvocation);
+        }
+        finally
+        {
+            DeleteDirectoryWithRetry(root);
+        }
+    }
+
+    [Xunit.Theory]
+    [Xunit.InlineData("")]
+    [Xunit.InlineData(" ")]
+    [Xunit.InlineData("docs")]
+    [Xunit.InlineData("/docs/operator.md")]
+    [Xunit.InlineData("C:/repo/docs/operator.md")]
+    [Xunit.InlineData("docs/../src/Feature.cs")]
+    [Xunit.InlineData("docs//operator.md")]
+    public void InvalidDocsPath_RunsDotnetShards(string path)
+    {
+        Assert.Equal(
+            DotnetShardDisposition.RunDotnetShards,
+            GoalAcceptanceVerifier.ClassifyDotnetShardDisposition([path]));
+    }
+
+    [Xunit.Fact]
+    public void NoTestDispositions_TransformEffectivePlanIdentity()
+    {
+        var root = CreateTrackedManifestShapeWorkspace();
+        try
+        {
+            var emptyIdentity = GoalAcceptanceVerifier.ComputeEffectiveAcceptancePlanIdentity(root, []);
+            var docsIdentity = GoalAcceptanceVerifier.ComputeEffectiveAcceptancePlanIdentity(
+                root,
+                ["docs/operator.md"]);
+            var codeIdentity = GoalAcceptanceVerifier.ComputeEffectiveAcceptancePlanIdentity(
+                root,
+                ["src/Feature.cs"]);
+
+            Assert.Equal(
+                DotnetShardDisposition.KnownEmptyCandidate,
+                GoalAcceptanceVerifier.ClassifyDotnetShardDisposition([]));
+            Assert.Equal(
+                DotnetShardDisposition.DocsTreeOnlyCandidate,
+                GoalAcceptanceVerifier.ClassifyDotnetShardDisposition(["docs/operator.md"]));
+            Assert.Equal(
+                DotnetShardDisposition.RunDotnetShards,
+                GoalAcceptanceVerifier.ClassifyDotnetShardDisposition(null));
+            var settings = AcceptanceGateEngineSettings.Load(root);
+            Assert.False(GoalAcceptanceVerifier.StructuralCoverageApplies(settings, []));
+            Assert.False(GoalAcceptanceVerifier.StructuralCoverageApplies(
+                settings,
+                ["docs/operator.md"]));
+            Assert.NotEqual(emptyIdentity, docsIdentity);
+            Assert.NotEqual(emptyIdentity, codeIdentity);
+            Assert.NotEqual(docsIdentity, codeIdentity);
+        }
+        finally
+        {
+            DeleteDirectoryWithRetry(root);
+        }
+    }
+
+    [Xunit.Fact]
+    public async Task DocsTreeCandidate_SkipsAdvisoryDotnet_ButRunsOtherAdvisories()
+    {
+        var root = CreateTrackedManifestShapeWorkspace();
+        var orchestratorDirectory = Path.Combine(root, ".orchestrator");
+        Directory.CreateDirectory(orchestratorDirectory);
+        File.WriteAllText(Path.Combine(orchestratorDirectory, "marker.txt"), "present");
+        File.WriteAllText(
+            Path.Combine(orchestratorDirectory, "goal-acceptance-criteria.json"),
+            """
+            [
+              { "name": "marker exists", "type": "file-exists", "path": ".orchestrator/marker.txt" },
+              { "name": "advisory dotnet tests", "type": "dotnet-test" }
+            ]
+            """);
+        var calls = new List<string[]>();
+        var verifier = new GoalAcceptanceVerifier((args, _, _) =>
+        {
+            calls.Add(args);
+            return Task.FromResult(new GoalAcceptanceVerifier.CommandResult(0, string.Empty));
+        });
+
+        try
+        {
+            var result = await verifier.RunAsync(root, changedFiles: ["docs/operator.md"]);
+
+            Assert.True(result.Passed);
+            Assert.DoesNotContain(calls, IsDotnetShardInvocation);
+            Assert.Contains(result.Checks!, check =>
+                check.Name == "marker exists" && check.Advisory && check.Passed);
+            var advisorySkip = Assert.Single(result.Checks!, check =>
+                check.Name == "advisory dotnet tests");
+            Assert.True(advisorySkip.Advisory);
+            Assert.Contains("advisory-skip=true", advisorySkip.ResultSummary, StringComparison.Ordinal);
+            Assert.Contains("docs-tree-only-candidate", advisorySkip.ResultSummary, StringComparison.Ordinal);
+        }
+        finally
+        {
+            DeleteDirectoryWithRetry(root);
+        }
+    }
+
+    private static bool IsDotnetShardInvocation(string[] args) =>
+        (args.Length >= 2 &&
+            args[0].Equals("dotnet", StringComparison.OrdinalIgnoreCase) &&
+            (args[1].Equals("build", StringComparison.OrdinalIgnoreCase) ||
+                args[1].Equals("test", StringComparison.OrdinalIgnoreCase))) ||
+        (args.Length > 0 &&
+            args[0].Contains("Tests", StringComparison.OrdinalIgnoreCase) &&
+            (args[0].EndsWith(".exe", StringComparison.OrdinalIgnoreCase) ||
+                args[0].EndsWith(".dll", StringComparison.OrdinalIgnoreCase)));
 
     [Xunit.Fact(DisplayName = "GoalAcceptanceVerifier_uses_25_minute_default_timeout_when_unconfigured")]
     public async Task GoalAcceptanceVerifierUses25MinuteDefaultTimeoutWhenUnconfigured()
@@ -1290,6 +1483,44 @@ public abstract class GoalAcceptanceVerifierTestBase
             Path.Combine(manifestDirectory, "acceptance-manifest.json"),
             AcceptanceManifestTestDefaults.WithEngine(manifest));
         return root;
+    }
+
+    protected static string CreateTrackedManifestShapeWorkspace()
+    {
+        var root = CreateManifestWorkspace("""
+            {
+              "version": 1,
+              "checks": [
+                { "name": "git diff whitespace", "type": "command", "command": "git", "arguments": ["diff", "--check"] },
+                { "name": "core tests", "type": "dotnet-test", "runner": "mtp", "project": "tests/Mcg.AgentOrchestrator.Core.Tests/Mcg.AgentOrchestrator.Core.Tests.csproj", "arguments": ["--verbosity", "minimal"] },
+                { "name": "infrastructure tests", "type": "dotnet-test", "runner": "mtp", "project": "tests/Mcg.AgentOrchestrator.Infrastructure.Tests/Mcg.AgentOrchestrator.Infrastructure.Tests.csproj", "arguments": ["--verbosity", "minimal"] },
+                { "name": "dashboard tests", "type": "dotnet-test", "runner": "mtp", "project": "tests/Mcg.AgentOrchestrator.Dashboard.Tests/Mcg.AgentOrchestrator.Dashboard.Tests.csproj", "arguments": ["--verbosity", "minimal", "--filter-not-trait", "Category=HostIntegration"] }
+              ],
+              "forbiddenChangedPathGlobs": [
+                "bin/**",
+                "obj/**",
+                ".scratch/**",
+                ".orchestrator-prototype/**",
+                "TestResults/**",
+                "playwright-report/**"
+              ]
+            }
+            """);
+        var manifestPath = Path.Combine(root, "config", "acceptance-manifest.json");
+        var manifest = JsonNode.Parse(File.ReadAllText(manifestPath))?.AsObject()
+            ?? throw new InvalidOperationException("Expected tracked-shape manifest JSON.");
+        manifest["engine"]!["enforceStructuralCoverage"] = true;
+        File.WriteAllText(manifestPath, manifest.ToJsonString());
+        return root;
+    }
+
+    protected static void SetManifestStructuralCoverage(string root, bool enabled)
+    {
+        var manifestPath = Path.Combine(root, "config", "acceptance-manifest.json");
+        var manifest = JsonNode.Parse(File.ReadAllText(manifestPath))?.AsObject()
+            ?? throw new InvalidOperationException("Expected acceptance manifest JSON.");
+        manifest["engine"]!["enforceStructuralCoverage"] = enabled;
+        File.WriteAllText(manifestPath, manifest.ToJsonString());
     }
 
     protected static string? SetAcceptanceTimeoutEnvironment(string? value)
