@@ -125,6 +125,8 @@ internal static class GoalBoardProjector
             omitted > 0 ? $"rerun goals --board --all or --limit {rerunLimit}" : null);
     }
 
+    internal static bool IsIncluded(GoalStatus status) => IncludedStatuses.Contains(status);
+
     private static ProjectedRow ProjectRow(GoalBoardGoalFact fact, DateTimeOffset now)
     {
         var latestSignal = fact.Signals

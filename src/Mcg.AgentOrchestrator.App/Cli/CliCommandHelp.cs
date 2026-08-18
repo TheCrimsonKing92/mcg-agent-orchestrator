@@ -114,7 +114,7 @@ internal static class CliCommandHelp
     private static readonly CommandHelpEntry GoalsBoard = new(
         GoalBoardUsage,
         "Show the read-only operational goal board for takeover and loop supervision.",
-        ["--limit", "--all", "--help", "-h"]);
+        ["--board", "--limit", "--all", "--help", "-h"]);
 
     private static readonly CommandHelpEntry AddTask = new(
         AddTaskUsage,

@@ -5,6 +5,7 @@ internal static partial class CliArgumentParser
 internal static IReadOnlyList<string> RecognizedCommands { get; } =
 [
     "attention",
+    "goals",
     "status",
     "doctor",
     "project",

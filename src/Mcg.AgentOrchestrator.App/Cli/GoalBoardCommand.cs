@@ -17,17 +17,20 @@ internal static class GoalBoardCommand
         IOrchestratorStateRepository stateRepository,
         OrchestratorWorkspace workspace,
         Func<DateTimeOffset>? utcNow = null,
-        Func<ProcessCommandLineSnapshot>? processSnapshotFactory = null)
+        Func<ProcessCommandLineSnapshot>? processSnapshotFactory = null,
+        Func<string, IEnumerable<GoalId>, IReadOnlyDictionary<GoalId, string>>? worktreeResolver = null,
+        Func<string, GitCli.WorktreeStatusInspection>? worktreeStatusInspector = null,
+        Func<string, GitCli.AheadBehindInspection>? aheadBehindInspector = null)
     {
         var options = GoalBoardOptions.Parse(args);
         var now = (utcNow ?? (() => DateTimeOffset.UtcNow))();
         var metadata = stateRepository.ListGoalMetadataAsync().GetAwaiter().GetResult();
         var includedIds = metadata
-            .Where(summary => Enum.TryParse<GoalStatus>(summary.Status, ignoreCase: true, out var status) && IsIncluded(status))
+            .Where(summary => Enum.TryParse<GoalStatus>(summary.Status, ignoreCase: true, out var status) && GoalBoardProjector.IsIncluded(status))
             .Select(summary => new GoalId(summary.Id))
             .ToArray();
         var kernel = stateRepository.LoadGoalsAsync(includedIds).GetAwaiter().GetResult();
-        var goals = kernel.Goals.Where(goal => IsIncluded(goal.Status)).ToArray();
+        var goals = kernel.Goals.Where(goal => GoalBoardProjector.IsIncluded(goal.Status)).ToArray();
         var goalIds = goals.Select(goal => goal.Id.Value).ToArray();
 
         var attention = ReadAttention(workspace, goalIds);
@@ -35,7 +38,12 @@ internal static class GoalBoardCommand
         var acceptance = GoalBoardAcceptanceAttemptReader.Read(
             Path.Combine(workspace.OrchestratorDirectory, "acceptance-gate-attempts"),
             goalIds);
-        var worktrees = InspectWorktrees(workspace.ExecutionDirectory, goals.Select(goal => goal.Id));
+        var worktrees = InspectWorktrees(
+            workspace.ExecutionDirectory,
+            goals.Select(goal => goal.Id),
+            worktreeResolver,
+            worktreeStatusInspector,
+            aheadBehindInspector);
 
         // Machine process discovery is deliberately captured once for the entire board. Every goal
         // disposition evaluates against this immutable snapshot.
@@ -199,13 +207,16 @@ internal static class GoalBoardCommand
 
     private static IReadOnlyDictionary<GoalId, GoalBoardWorktreeFact> InspectWorktrees(
         string executionDirectory,
-        IEnumerable<GoalId> goalIds)
+        IEnumerable<GoalId> goalIds,
+        Func<string, IEnumerable<GoalId>, IReadOnlyDictionary<GoalId, string>>? worktreeResolver,
+        Func<string, GitCli.WorktreeStatusInspection>? worktreeStatusInspector,
+        Func<string, GitCli.AheadBehindInspection>? aheadBehindInspector)
     {
         var ids = goalIds.ToArray();
         IReadOnlyDictionary<GoalId, string> resolved;
         try
         {
-            resolved = GoalWorktrees.ResolveAll(executionDirectory, ids);
+            resolved = (worktreeResolver ?? GoalWorktrees.ResolveAll)(executionDirectory, ids);
         }
         catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
         {
@@ -221,8 +232,8 @@ internal static class GoalBoardCommand
                 continue;
             }
 
-            var status = GitCli.InspectWorktreeStatus(path);
-            var divergence = GitCli.InspectAheadBehind(path);
+            var status = (worktreeStatusInspector ?? GitCli.InspectWorktreeStatus)(path);
+            var divergence = (aheadBehindInspector ?? GitCli.InspectAheadBehind)(path);
             facts[id] = status.Succeeded && divergence.Succeeded
                 ? new GoalBoardWorktreeFact(status.IsDirty ? "dirty" : "clean", divergence.Ahead, divergence.Behind)
                 : GoalBoardWorktreeFact.Unknown;
@@ -270,16 +281,6 @@ internal static class GoalBoardCommand
             index > 0 && char.IsUpper(character) ? $"-{char.ToLowerInvariant(character)}" : char.ToLowerInvariant(character).ToString()));
 
     private static string Prefix(string value) => value[..Math.Min(8, value.Length)].ToLowerInvariant();
-
-    private static bool IsIncluded(GoalStatus status) => status is
-        GoalStatus.Draft or
-        GoalStatus.Active or
-        GoalStatus.WaitingForHuman or
-        GoalStatus.Parked or
-        GoalStatus.Verifying or
-        GoalStatus.Verified or
-        GoalStatus.AcceptanceFailed or
-        GoalStatus.Failed;
 
     private sealed class BoardClock(DateTimeOffset now) : IClock
     {

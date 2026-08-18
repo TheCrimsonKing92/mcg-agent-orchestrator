@@ -70,6 +70,28 @@ public sealed class GitCliTests
         }
     }
 
+    [Xunit.Fact(DisplayName = "GitCli_InspectAheadBehind_rejects_malformed_output")]
+    public void GitCliInspectAheadBehindRejectsMalformedOutput()
+    {
+        var result = GitCli.InspectAheadBehind(new GitCli.GitResult(0, "not-counts", string.Empty));
+
+        Assert.False(result.Succeeded);
+        Assert.Null(result.Ahead);
+        Assert.Null(result.Behind);
+        Assert.Contains("malformed", result.Error, StringComparison.OrdinalIgnoreCase);
+    }
+
+    [Xunit.Fact(DisplayName = "GitCli_InspectAheadBehind_preserves_command_failure")]
+    public void GitCliInspectAheadBehindPreservesCommandFailure()
+    {
+        var result = GitCli.InspectAheadBehind(new GitCli.GitResult(128, string.Empty, "repository unreadable"));
+
+        Assert.False(result.Succeeded);
+        Assert.Null(result.Ahead);
+        Assert.Null(result.Behind);
+        Assert.Contains("repository unreadable", result.Error, StringComparison.Ordinal);
+    }
+
     [Xunit.Fact(DisplayName = "GitCli_Run_captures_stdout_output")]
     public void GitCliRunCapturesStdoutOutput()
     {

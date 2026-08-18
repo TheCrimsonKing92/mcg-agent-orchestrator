@@ -142,6 +142,11 @@ internal static class GitCli
     internal static AheadBehindInspection InspectAheadBehind(string workingDirectory)
     {
         var result = Run(workingDirectory, "rev-list", "--left-right", "--count", "main...HEAD");
+        return InspectAheadBehind(result);
+    }
+
+    internal static AheadBehindInspection InspectAheadBehind(GitResult result)
+    {
         if (!result.Succeeded || result.DrainTimedOut)
         {
             return new AheadBehindInspection(

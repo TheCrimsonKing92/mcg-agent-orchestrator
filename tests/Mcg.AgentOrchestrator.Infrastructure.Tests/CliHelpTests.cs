@@ -70,6 +70,15 @@ public sealed class CliHelpTests
         Xunit.Assert.Empty(kernel.Goals);
     }
 
+    [Xunit.Fact(DisplayName = "CliCommandHelp_GoalsBoard_accepts_board_selector")]
+    public void CliCommandHelpGoalsBoardAcceptsBoardSelector()
+    {
+        var exception = Xunit.Record.Exception(() =>
+            CliCommandHelp.ThrowIfInvalidFlags(["goals", "--board", "--all"]));
+
+        Xunit.Assert.Null(exception);
+    }
+
     [Xunit.Fact]
     public void RefreshDispatchHelpDescribesCompactDefaultAndBothHistoryModes()
     {
