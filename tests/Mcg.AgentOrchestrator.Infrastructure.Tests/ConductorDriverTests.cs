@@ -434,7 +434,8 @@ public sealed class ConductorDriverTests
         Action<GoalId, TaskId, string>? recordFindingEvidenceRun = null,
         Func<Goal, AcceptanceGateEngineSettings>? getFindingEvidenceEngineSettings = null,
         Func<Goal, bool>? isVerificationGateSatisfied = null,
-        GateReadyCandidateProjector? gateReadyCandidateProjector = null)
+        GateReadyCandidateProjector? gateReadyCandidateProjector = null,
+        Func<Goal, string, IDisposable?>? tryAcquireEvidenceMutationLease = null)
     {
         return new ConductorDriver(
             getFacts ?? (_ => GoalLifecycleFacts.None),
@@ -483,7 +484,13 @@ public sealed class ConductorDriverTests
             recordFindingEvidenceRun: recordFindingEvidenceRun,
             getFindingEvidenceEngineSettings: getFindingEvidenceEngineSettings,
             isVerificationGateSatisfied: isVerificationGateSatisfied,
-            gateReadyCandidateProjector: gateReadyCandidateProjector);
+            gateReadyCandidateProjector: gateReadyCandidateProjector,
+            tryAcquireEvidenceMutationLease: tryAcquireEvidenceMutationLease);
+    }
+
+    private sealed class ThrowingDisposable : IDisposable
+    {
+        public void Dispose() => throw new InvalidOperationException("injected cleanup failure");
     }
 
     private static PreReviewEvidenceContext FocusedPreReviewContext(string sha) =>
@@ -1331,6 +1338,36 @@ public sealed class ConductorDriverTests
         var secondSkip = driver.RunParallelLandingAcceptancePreSlot(candidate!, ConductorAutonomyPolicy.Conservative);
         Assert.NotNull(secondSkip);
         Assert.Equal("skip-already-merged", secondSkip!.EarlyOutcome?.Kind);
+    }
+
+    [Xunit.Fact]
+    public void ParallelAcceptanceCleanupFailureCannotReplaceAcceptedResult()
+    {
+        var (_, goal) = SimpleGoal("Acceptance cleanup is non-dispositive");
+        var candidate = ConductorParallelAcceptanceCandidate.Create(
+            goal,
+            0,
+            ["src/Mcg.AgentOrchestrator.App/Orchestration/ConductorDriver.cs"],
+            "branch-sha",
+            "main-sha");
+        var accepted = new AcceptanceVerificationSummary(
+            true,
+            [],
+            BranchHeadSha: "branch-sha",
+            MainHeadSha: "main-sha");
+        var driver = MakeDriver(
+            runAcceptanceSummary: _ => accepted,
+            tryAcquireEvidenceMutationLease: (_, _) => new ThrowingDisposable());
+
+        var result = driver.RunParallelLandingAcceptance(
+            candidate,
+            ConductorAutonomyPolicy.Conservative,
+            stableSlotLease: null,
+            CancellationToken.None);
+
+        Assert.Null(result.Exception);
+        Assert.Same(accepted, result.Acceptance);
+        Assert.True(result.Acceptance!.Passed);
     }
 
     [Xunit.Fact]

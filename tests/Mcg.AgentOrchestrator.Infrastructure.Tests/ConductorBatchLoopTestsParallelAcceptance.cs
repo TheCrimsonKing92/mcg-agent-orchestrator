@@ -3912,6 +3912,105 @@ public sealed class ConductorBatchLoopTestsParallelAcceptance : ConductorBatchLo
         }
     }
 
+    [Xunit.Fact(Timeout = 30_000)]
+    [Xunit.Trait("Category", "CrossTick")]
+    public void PersistedAcceptedAdvisory_LeaseClears_ResumesWithoutVerifierRerun()
+    {
+        var kernel = new AgentOrchestratorKernel();
+        var goal = CreateVerifiedSimpleGoal(kernel, "Resume landing from persisted accepted attempt");
+        var attemptRoot = CreateTempDirectory("mcg-conductor-persisted-accepted-lease");
+        var now = new DateTimeOffset(2026, 8, 18, 4, 0, 0, TimeSpan.Zero);
+        var leaseAvailable = false;
+        var verifierRuns = 0;
+        var landingRuns = 0;
+        var advisory = new AcceptanceCheckResult(
+            "post-landing operator observation",
+            false,
+            0,
+            "operator observation remains nonblocking",
+            ResultSummary: "operator observation remains nonblocking",
+            Advisory: true);
+        var accepted = new AcceptanceVerificationSummary(true, [advisory]);
+        try
+        {
+            Assert.True(accepted.Passed);
+            Assert.Single(accepted.AdvisoryUnmetCriteria);
+            var coordinator = new ConductorParallelAcceptanceAttemptCoordinator(attemptRoot, runInline: true);
+            var candidate = ConductorParallelAcceptanceCandidate.Create(
+                goal,
+                0,
+                ["src/Mcg.AgentOrchestrator.App/Orchestration/ConductorBatchLoop.cs"],
+                "branch",
+                "main");
+            var terminal = coordinator.Evaluate(
+                candidate,
+                ConductorAutonomyPolicy.Conservative,
+                (acceptedCandidate, _) =>
+                {
+                    verifierRuns++;
+                    return ConductorParallelAcceptanceRunResult.Accepted(
+                        acceptedCandidate,
+                        accepted);
+                }).Attempt;
+            var heldLease = new ReconcileAcceptanceLeaseState(
+                "stale-owner",
+                now.Subtract(TimeSpan.FromMinutes(1)),
+                now.AddMinutes(29));
+            var driver = MakeDriver(
+                getFacts: _ => new GoalLifecycleFacts(WorkspaceExists: true),
+                runAcceptanceWithSlot: (_, _) =>
+                {
+                    verifierRuns++;
+                    return accepted;
+                },
+                land: landedGoal =>
+                {
+                    landingRuns++;
+                    return new LandingResult(
+                        landedGoal.Id.Value,
+                        landedGoal.Id.Value[..8],
+                        new LandingDecision.Promote(),
+                        "integration",
+                        true,
+                        "ok");
+                },
+                getLandingFileScopes: _ => candidate.ScopePaths,
+                parallelAcceptanceAttemptCoordinator: coordinator,
+                tryAcquireEvidenceMutationLease: (_, _) => leaseAvailable ? new ActionDisposable(() => { }) : null,
+                getEvidenceMutationLease: _ => leaseAvailable ? null : heldLease,
+                utcNow: () => now);
+
+            var held = new ConductorBatchLoop(utcNow: () => now).Run(
+                kernel,
+                driver,
+                ConductorAutonomyPolicy.Conservative,
+                NoStopPath(),
+                maxIterations: 1);
+
+            Assert.Equal(1, held.Held);
+            Assert.Equal(0, landingRuns);
+            Assert.Equal(1, verifierRuns);
+            Assert.Null(ReadAttempt(terminal.MetadataPath).ReconciledAt);
+
+            leaseAvailable = true;
+            var resumed = new ConductorBatchLoop(utcNow: () => now).Run(
+                kernel,
+                driver,
+                ConductorAutonomyPolicy.Conservative,
+                NoStopPath(),
+                maxIterations: 1);
+
+            Assert.Equal(1, resumed.Advanced);
+            Assert.Equal(1, landingRuns);
+            Assert.Equal(1, verifierRuns);
+            Assert.NotNull(ReadAttempt(terminal.MetadataPath).ReconciledAt);
+        }
+        finally
+        {
+            TryDeleteDirectory(attemptRoot);
+        }
+    }
+
     [Xunit.Fact]
     public void BatchLoopPersistedReconciliationFaultIsolatedWhileHealthySiblingReconciles()
     {
@@ -4013,6 +4112,11 @@ public sealed class ConductorBatchLoopTestsParallelAcceptance : ConductorBatchLo
         double MakespanMs,
         IReadOnlyList<double> GateDurationsMs,
         IReadOnlyList<string> Permits);
+
+    private sealed class ActionDisposable(Action dispose) : IDisposable
+    {
+        public void Dispose() => dispose();
+    }
 
     private sealed class AcceptanceMeasurementGate(int startedAtMs, int? permitIndex) : IDisposable
     {
