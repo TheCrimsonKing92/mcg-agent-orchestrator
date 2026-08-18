@@ -15,8 +15,7 @@
       {
         "name": "Cli",
         "filter": "FullyQualifiedName~CliCommandTests&FullyQualifiedName!~CliCommandTestsGoalLifecycleCleanupHooks&FullyQualifiedName!~CliCommandTestsPersistentRunnerCommands&FullyQualifiedName!~CliCommandTestsSubscriptionDispatchCommands",
-        "estimatedSerialSeconds": 112.6,
-        "exclusiveResourceKeys": [ "xunit:GoalWorktreeCleanupHooks" ]
+        "estimatedSerialSeconds": 112.6
       },
       {
         "name": "Worker shell",

@@ -5,7 +5,6 @@ using Mcg.AgentOrchestrator.App.Orchestration;
 using Mcg.AgentOrchestrator.Core;
 using Mcg.AgentOrchestrator.Infrastructure;
 
-[Xunit.Collection("GoalWorktreeCleanupHooks")]
 public sealed class CliCommandTestsGoalBoard : CliCommandTestBase
 {
     private readonly ITestOutputHelper _output;
