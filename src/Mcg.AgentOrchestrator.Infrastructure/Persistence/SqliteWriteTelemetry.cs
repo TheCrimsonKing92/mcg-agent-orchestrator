@@ -132,6 +132,32 @@ internal sealed class SqliteWriteTelemetry
             maxAttempts: _options.MaxBusyRetries));
     }
 
+    public void EmitFailure(
+        string operation,
+        Exception exception,
+        int attemptCount,
+        string disposition,
+        string? goalId = null,
+        string? owner = null)
+    {
+        AppendReceipt(BuildReceipt(
+            eventType: "sqlite-state-write-failure",
+            severity: "critical",
+            operation,
+            disposition,
+            acquisitionWait: TimeSpan.Zero,
+            holdDuration: null,
+            rowsWritten: 0,
+            serializedBytes: 0,
+            exception,
+            includeStack: true,
+            sqliteException: exception as Microsoft.Data.Sqlite.SqliteException,
+            attemptCount,
+            maxAttempts: _options.MaxBusyRetries,
+            goalId,
+            owner));
+    }
+
     private void EmitCompletedScope(
         string operation,
         string disposition,
@@ -184,7 +210,9 @@ internal sealed class SqliteWriteTelemetry
         bool includeStack,
         Microsoft.Data.Sqlite.SqliteException? sqliteException,
         int attemptCount,
-        int maxAttempts)
+        int maxAttempts,
+        string? goalId = null,
+        string? owner = null)
     {
         return new SqliteWriteTelemetryReceipt(
             Timestamp: _options.UtcNow(),
@@ -206,7 +234,9 @@ internal sealed class SqliteWriteTelemetry
             SerializedBytes: serializedBytes,
             ExceptionType: exception?.GetType().FullName,
             Error: exception?.Message,
-            StackSummary: includeStack ? BuildStackSummary() : null);
+            StackSummary: includeStack ? BuildStackSummary() : null,
+            GoalId: goalId,
+            Owner: owner);
     }
 
     private void AppendReceipt(SqliteWriteTelemetryReceipt receipt)
@@ -366,7 +396,9 @@ internal sealed record SqliteWriteTelemetryReceipt(
     long SerializedBytes,
     string? ExceptionType,
     string? Error,
-    string[]? StackSummary);
+    string[]? StackSummary,
+    string? GoalId = null,
+    string? Owner = null);
 
 internal sealed record ConductEventMirrorRecord(
     DateTimeOffset Timestamp,

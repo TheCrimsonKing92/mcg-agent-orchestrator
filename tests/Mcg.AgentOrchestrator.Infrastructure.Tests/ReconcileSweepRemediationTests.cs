@@ -1,7 +1,9 @@
 using Mcg.AgentOrchestrator.App.Orchestration;
 using Mcg.AgentOrchestrator.Core;
 using Mcg.AgentOrchestrator.Infrastructure;
+using Microsoft.Data.Sqlite;
 using Microsoft.Extensions.Configuration;
+using System.Text.Json.Nodes;
 
 public sealed class ReconcileSweepRemediationTests
 {
@@ -281,6 +283,148 @@ public sealed class ReconcileSweepRemediationTests
     }
 
     [Xunit.Fact]
+    public void AcceptanceLeaseReleaseFailureIsNonDispositiveAndPreservesLease()
+    {
+        var dbPath = NewDatabasePath();
+        var diagnosticsPath = Path.Combine(Path.GetDirectoryName(dbPath)!, "release-failures.jsonl");
+        var store = new ReconcileSweepRemediationStore(
+            dbPath,
+            busyTimeoutSeconds: 0,
+            busyRetryDelay: null,
+            writeTelemetryOptions: new SqliteWriteTelemetryOptions
+            {
+                DiagnosticsPath = diagnosticsPath,
+                MirrorToConductEventStream = false,
+                MaxBusyRetries = 2
+            });
+        var lease = store.TryAcquireAcceptanceLease("goal-1", "owner-1", TimeSpan.FromMinutes(30));
+        Xunit.Assert.NotNull(lease);
+        using (var connection = new SqliteConnection($"Data Source={dbPath};Pooling=False"))
+        {
+            connection.Open();
+            using var trigger = connection.CreateCommand();
+            trigger.CommandText = """
+                CREATE TRIGGER reject_acceptance_lease_release
+                BEFORE DELETE ON reconcile_acceptance_leases
+                BEGIN
+                    SELECT RAISE(ABORT, 'injected non-transient release failure');
+                END;
+                """;
+            trigger.ExecuteNonQuery();
+        }
+
+        var exception = Xunit.Record.Exception(lease!.Dispose);
+
+        Xunit.Assert.Null(exception);
+        Xunit.Assert.Equal("owner-1", store.TryGetAcceptanceLeaseOwner("goal-1"));
+        var receipt = ReadLastReceipt(diagnosticsPath);
+        Xunit.Assert.Equal("sqlite-state-write-failure", receipt["eventType"]?.GetValue<string>());
+        Xunit.Assert.Equal(Path.GetFullPath(dbPath), receipt["stateDbPath"]?.GetValue<string>());
+        Xunit.Assert.Equal("reconcile-acceptance-lease-release", receipt["operation"]?.GetValue<string>());
+        Xunit.Assert.Equal("goal-1", receipt["goalId"]?.GetValue<string>());
+        Xunit.Assert.Equal("owner-1", receipt["owner"]?.GetValue<string>());
+        Xunit.Assert.Equal(19, receipt["sqliteErrorCode"]?.GetValue<int>());
+        Xunit.Assert.Equal(1811, receipt["sqliteExtendedErrorCode"]?.GetValue<int>());
+        Xunit.Assert.Equal(1, receipt["attemptCount"]?.GetValue<int>());
+        Xunit.Assert.Equal("lease-preserved-non-transient", receipt["disposition"]?.GetValue<string>());
+    }
+
+    [Xunit.Fact]
+    public async Task AcceptanceLeaseBusyReleaseRetriesLockAcquisitionThenDeletesOnlyItsOwner()
+    {
+        var dbPath = NewDatabasePath();
+        using var retryObserved = new ManualResetEventSlim(false);
+        var permitRetry = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var retryCount = 0;
+        var store = new ReconcileSweepRemediationStore(
+            dbPath,
+            busyTimeoutSeconds: 1,
+            busyRetryDelay: (_, _, cancellationToken) =>
+            {
+                Interlocked.Increment(ref retryCount);
+                retryObserved.Set();
+                return permitRetry.Task.WaitAsync(cancellationToken);
+            },
+            writeTelemetryOptions: new SqliteWriteTelemetryOptions
+            {
+                MirrorToConductEventStream = false,
+                MaxBusyRetries = 3,
+                BusyRetryBudget = TimeSpan.FromSeconds(5)
+            });
+        var lease = store.TryAcquireAcceptanceLease("goal-1", "owner-1", TimeSpan.FromMinutes(30));
+        Xunit.Assert.NotNull(lease);
+        using var otherGoal = store.TryAcquireAcceptanceLease("goal-2", "owner-2", TimeSpan.FromMinutes(30));
+        Xunit.Assert.NotNull(otherGoal);
+        using var lockHeld = new ManualResetEventSlim(false);
+        using var releaseLock = new ManualResetEventSlim(false);
+        var lockTask = HoldWriteLock(dbPath, lockHeld, releaseLock);
+        Xunit.Assert.True(lockHeld.Wait(TimeSpan.FromSeconds(5)));
+
+        var disposal = Task.Factory.StartNew(
+            lease!.Dispose,
+            CancellationToken.None,
+            TaskCreationOptions.LongRunning,
+            TaskScheduler.Default);
+        Xunit.Assert.True(retryObserved.Wait(TimeSpan.FromSeconds(5)));
+        releaseLock.Set();
+        await lockTask;
+        permitRetry.SetResult();
+        await disposal;
+
+        Xunit.Assert.Equal(1, retryCount);
+        Xunit.Assert.Null(store.TryGetAcceptanceLeaseOwner("goal-1"));
+        Xunit.Assert.Equal("owner-2", store.TryGetAcceptanceLeaseOwner("goal-2"));
+        lease.Dispose();
+        Xunit.Assert.Equal(1, retryCount);
+
+        using var current = store.TryAcquireAcceptanceLease("goal-1", "owner-2", TimeSpan.FromMinutes(30));
+        Xunit.Assert.NotNull(current);
+        store.ReleaseAcceptanceLease("goal-1", "foreign-owner");
+        Xunit.Assert.Equal("owner-2", store.TryGetAcceptanceLeaseOwner("goal-1"));
+    }
+
+    [Xunit.Fact]
+    public async Task AcceptanceLeaseBusyReleaseExhaustionIsTypedAndPreservesLease()
+    {
+        var dbPath = NewDatabasePath();
+        var diagnosticsPath = Path.Combine(Path.GetDirectoryName(dbPath)!, "release-failures.jsonl");
+        var store = new ReconcileSweepRemediationStore(
+            dbPath,
+            busyTimeoutSeconds: 1,
+            busyRetryDelay: (_, _, _) => Task.CompletedTask,
+            writeTelemetryOptions: new SqliteWriteTelemetryOptions
+            {
+                DiagnosticsPath = diagnosticsPath,
+                MirrorToConductEventStream = false,
+                MaxBusyRetries = 2,
+                BusyRetryBudget = TimeSpan.FromSeconds(5)
+            });
+        var lease = store.TryAcquireAcceptanceLease("goal-busy", "owner-busy", TimeSpan.FromMinutes(30));
+        Xunit.Assert.NotNull(lease);
+        using var lockHeld = new ManualResetEventSlim(false);
+        using var releaseLock = new ManualResetEventSlim(false);
+        var lockTask = HoldWriteLock(dbPath, lockHeld, releaseLock);
+        Xunit.Assert.True(lockHeld.Wait(TimeSpan.FromSeconds(5)));
+
+        var exception = Xunit.Record.Exception(lease!.Dispose);
+        releaseLock.Set();
+        await lockTask;
+
+        Xunit.Assert.Null(exception);
+        Xunit.Assert.Equal("owner-busy", store.TryGetAcceptanceLeaseOwner("goal-busy"));
+        var receipt = ReadLastReceipt(diagnosticsPath);
+        Xunit.Assert.Equal("sqlite-state-write-failure", receipt["eventType"]?.GetValue<string>());
+        Xunit.Assert.Equal(Path.GetFullPath(dbPath), receipt["stateDbPath"]?.GetValue<string>());
+        Xunit.Assert.Equal("reconcile-acceptance-lease-release", receipt["operation"]?.GetValue<string>());
+        Xunit.Assert.Equal("goal-busy", receipt["goalId"]?.GetValue<string>());
+        Xunit.Assert.Equal("owner-busy", receipt["owner"]?.GetValue<string>());
+        Xunit.Assert.Contains(receipt["sqliteErrorCode"]!.GetValue<int>(), new[] { 5, 6 });
+        Xunit.Assert.Contains(receipt["sqliteExtendedErrorCode"]!.GetValue<int>(), new[] { 5, 6 });
+        Xunit.Assert.Equal(2, receipt["attemptCount"]?.GetValue<int>());
+        Xunit.Assert.Equal("lease-preserved-busy-exhausted", receipt["disposition"]?.GetValue<string>());
+    }
+
+    [Xunit.Fact]
     public void ConfigurationAllowsExplicitEmptyAllowlist()
     {
         var values = new Dictionary<string, string?>
@@ -340,4 +484,31 @@ public sealed class ReconcileSweepRemediationTests
         Directory.CreateDirectory(root);
         return Path.Combine(root, "state.db");
     }
+
+    private static Task HoldWriteLock(
+        string dbPath,
+        ManualResetEventSlim lockHeld,
+        ManualResetEventSlim releaseLock) =>
+        Task.Factory.StartNew(() =>
+        {
+            using var connection = new SqliteConnection(new SqliteConnectionStringBuilder
+            {
+                DataSource = dbPath,
+                Mode = SqliteOpenMode.ReadWrite,
+                Pooling = false,
+                DefaultTimeout = 0
+            }.ToString());
+            connection.Open();
+            using var begin = connection.CreateCommand();
+            begin.CommandText = "BEGIN IMMEDIATE";
+            begin.ExecuteNonQuery();
+            lockHeld.Set();
+            Xunit.Assert.True(releaseLock.Wait(TimeSpan.FromSeconds(30)));
+            using var rollback = connection.CreateCommand();
+            rollback.CommandText = "ROLLBACK";
+            rollback.ExecuteNonQuery();
+        }, CancellationToken.None, TaskCreationOptions.LongRunning, TaskScheduler.Default);
+
+    private static JsonObject ReadLastReceipt(string path) =>
+        JsonNode.Parse(File.ReadLines(path).Last())!.AsObject();
 }

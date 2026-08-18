@@ -2748,7 +2748,7 @@ internal sealed class ConductorBatchLoop
                     new InvalidOperationException("Completed acceptance attempt had no run result."));
                 ReconcileParallelAcceptanceTerminalState(kernel, goal, run, retainedTerminal.Attempt);
                 var result = CompleteParallelAcceptanceRun(driver, policy, run, retainedTerminal.Attempt);
-                driver.ParallelAcceptanceAttemptCoordinator.MarkReconciled(retainedTerminal.Attempt);
+                MarkParallelAcceptanceReconciledUnlessLeaseHeld(driver, run, result, retainedTerminal.Attempt);
                 changedGoalIds.Add(goal.Id);
                 results[goal.Id.Value] = new ParallelLandingOutcome(result, retainedTerminal.Attempt.SlotIndex);
                 RecordParallelAcceptanceProgress(
@@ -3050,7 +3050,11 @@ internal sealed class ConductorBatchLoop
                                 policy,
                                 terminalRun,
                                 terminalDecision.Attempt);
-                            driver.ParallelAcceptanceAttemptCoordinator.MarkReconciled(terminalDecision.Attempt);
+                            MarkParallelAcceptanceReconciledUnlessLeaseHeld(
+                                driver,
+                                terminalRun,
+                                terminalResult,
+                                terminalDecision.Attempt);
                             oldestServedThisTick |= goal.Id == oldestWaiter?.Id;
                             RecordParallelAcceptanceFairnessGrant(goal.Id.Value, oldestWaiter?.Id.Value);
                             RecordParallelAcceptanceFairnessCapIfReached(goal, oldestWaiter, tick, changedGoalLines);
@@ -3115,7 +3119,7 @@ internal sealed class ConductorBatchLoop
                         new InvalidOperationException("Completed acceptance attempt had no run result."));
                     ReconcileParallelAcceptanceTerminalState(kernel, goal, run, decision.Attempt);
                     var result = CompleteParallelAcceptanceRun(driver, policy, run, decision.Attempt);
-                    driver.ParallelAcceptanceAttemptCoordinator.MarkReconciled(decision.Attempt);
+                    MarkParallelAcceptanceReconciledUnlessLeaseHeld(driver, run, result, decision.Attempt);
                     oldestServedThisTick |= goal.Id == oldestWaiter?.Id;
                     RecordParallelAcceptanceFairnessGrant(goal.Id.Value, oldestWaiter?.Id.Value);
                     RecordParallelAcceptanceFairnessCapIfReached(goal, oldestWaiter, tick, changedGoalLines);
@@ -3623,7 +3627,7 @@ internal sealed class ConductorBatchLoop
             new InvalidOperationException("Completed acceptance attempt had no run result."));
         ReconcileParallelAcceptanceTerminalState(kernel, goal, run, decision.Attempt);
         var completion = CompleteParallelAcceptanceRun(driver, policy, run, decision.Attempt);
-        driver.ParallelAcceptanceAttemptCoordinator.MarkReconciled(decision.Attempt);
+        MarkParallelAcceptanceReconciledUnlessLeaseHeld(driver, run, completion, decision.Attempt);
         var capturedOutput =
             $"attempt={decision.Attempt.AttemptId} outcome={AcceptanceRunDisposition(run)} " +
             $"detail={decision.Attempt.Detail ?? "no attempt detail was recorded"} completion={completion.Outcome}";
@@ -3731,6 +3735,23 @@ internal sealed class ConductorBatchLoop
         {
             return ParallelAcceptanceFault(driver, run.Candidate, policy, ex);
         }
+    }
+
+    private static void MarkParallelAcceptanceReconciledUnlessLeaseHeld(
+        ConductorDriver driver,
+        ConductorParallelAcceptanceRunResult run,
+        ConductorAdvanceResult completion,
+        ConductorParallelAcceptanceAttempt attempt)
+    {
+        if (run.Acceptance is { Passed: true, UnmetCriteria.Count: 0 } &&
+            completion.Outcome is ConductorAdvanceOutcome.Held held &&
+            held.State == GoalLifecycleState.Verified &&
+            held.Reason.StartsWith("acceptance lease", StringComparison.Ordinal))
+        {
+            return;
+        }
+
+        driver.ParallelAcceptanceAttemptCoordinator.MarkReconciled(attempt);
     }
 
     private static ConductorAdvanceResult ParallelAcceptanceHeld(

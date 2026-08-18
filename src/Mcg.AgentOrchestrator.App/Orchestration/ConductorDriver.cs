@@ -3631,7 +3631,7 @@ internal sealed class ConductorDriver
         CancellationToken cancellationToken)
     {
         var effectiveCandidate = candidate;
-        using var evidenceMutationLease = _tryAcquireEvidenceMutationLease(
+        var evidenceMutationLease = _tryAcquireEvidenceMutationLease(
             candidate.Goal,
             "conductor:parallel-acceptance");
         if (evidenceMutationLease is null)
@@ -3641,6 +3641,7 @@ internal sealed class ConductorDriver
                 ReplacementEvidenceMutationHeld(candidate.Goal, candidate.GoalPrefix, policy),
                 null);
         }
+        ConductorParallelAcceptanceRunResult result;
         try
         {
             var early = RebaseBeforeAcceptance(
@@ -3651,11 +3652,12 @@ internal sealed class ConductorDriver
                 out var earlyOutcome);
             if (early is not null)
             {
-                return ConductorParallelAcceptanceRunResult.Early(candidate, early, earlyOutcome);
+                result = ConductorParallelAcceptanceRunResult.Early(candidate, early, earlyOutcome);
+                return result;
             }
 
             effectiveCandidate = RefreshParallelAcceptanceCandidate(candidate);
-            return ConductorParallelAcceptanceRunResult.Accepted(
+            result = ConductorParallelAcceptanceRunResult.Accepted(
                 effectiveCandidate,
                 _runAcceptanceVerification(
                     effectiveCandidate.Goal,
@@ -3665,8 +3667,22 @@ internal sealed class ConductorDriver
         }
         catch (Exception ex)
         {
-            return ConductorParallelAcceptanceRunResult.Fault(effectiveCandidate, ex);
+            result = ConductorParallelAcceptanceRunResult.Fault(effectiveCandidate, ex);
         }
+        finally
+        {
+            try
+            {
+                evidenceMutationLease.Dispose();
+            }
+            catch
+            {
+                // Cleanup cannot replace a computed acceptance result. Store-backed leases emit
+                // typed failure evidence and retain their owner-qualified row for expiry recovery.
+            }
+        }
+
+        return result;
     }
 
     internal ConductorParallelAcceptanceRunResult RunPreReviewFocusedEvidence(

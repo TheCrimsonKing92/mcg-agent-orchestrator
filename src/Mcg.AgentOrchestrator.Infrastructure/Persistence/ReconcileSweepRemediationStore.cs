@@ -37,6 +37,7 @@ public sealed class ReconcileSweepRemediationStore : IReconcileSweepRemediationS
     private readonly string _dbPath;
     private readonly int _busyTimeoutSeconds;
     private readonly Func<int, TimeSpan, CancellationToken, Task>? _busyRetryDelay;
+    private readonly SqliteWriteTelemetry _writeTelemetry;
 
     public ReconcileSweepRemediationStore(string dbPath)
         : this(dbPath, busyTimeoutSeconds: 5, busyRetryDelay: null)
@@ -46,13 +47,15 @@ public sealed class ReconcileSweepRemediationStore : IReconcileSweepRemediationS
     internal ReconcileSweepRemediationStore(
         string dbPath,
         int busyTimeoutSeconds,
-        Func<int, TimeSpan, CancellationToken, Task>? busyRetryDelay)
+        Func<int, TimeSpan, CancellationToken, Task>? busyRetryDelay,
+        SqliteWriteTelemetryOptions? writeTelemetryOptions = null)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(dbPath);
         ArgumentOutOfRangeException.ThrowIfNegative(busyTimeoutSeconds);
         _dbPath = Path.GetFullPath(dbPath);
         _busyTimeoutSeconds = busyTimeoutSeconds;
         _busyRetryDelay = busyRetryDelay;
+        _writeTelemetry = new SqliteWriteTelemetry(_dbPath, writeTelemetryOptions);
         Directory.CreateDirectory(Path.GetDirectoryName(_dbPath)!);
         if (StateDbWriteSession.TryExecute(_dbPath, EnsureSchema))
         {
@@ -212,7 +215,7 @@ public sealed class ReconcileSweepRemediationStore : IReconcileSweepRemediationS
     public IDisposable? TryAcquireAcceptanceLease(string goalId, string owner, TimeSpan staleAfter)
     {
         return TryClaimAcceptanceLease(goalId, owner, staleAfter)
-            ? new AcceptanceLease(_dbPath, goalId, owner)
+            ? new AcceptanceLease(this, goalId, owner)
             : null;
     }
 
@@ -325,26 +328,84 @@ public sealed class ReconcileSweepRemediationStore : IReconcileSweepRemediationS
     }
 
     public void ReleaseAcceptanceLease(string goalId, string owner)
-        => ReleaseAcceptanceLease(_dbPath, goalId, owner);
-
-    private static void ReleaseAcceptanceLease(string dbPath, string goalId, string owner)
     {
-        if (StateDbWriteSession.TryExecute(
-                dbPath,
-                connection => ReleaseAcceptanceLease(connection, goalId, owner)))
+        var attemptCount = 1;
+        try
         {
-            return;
+            if (StateDbWriteSession.TryExecute(
+                    _dbPath,
+                    connection => ReleaseAcceptanceLease(connection, goalId, owner)))
+            {
+                return;
+            }
+
+            using var connection = Open();
+            attemptCount = BeginAcceptanceLeaseRelease(connection);
+            try
+            {
+                ReleaseAcceptanceLease(connection, goalId, owner);
+                Commit(connection);
+            }
+            catch
+            {
+                Rollback(connection);
+                throw;
+            }
+        }
+        catch (Exception ex)
+        {
+            attemptCount = ex.Data["Mcg.AttemptCount"] is int recordedAttempts
+                ? recordedAttempts
+                : attemptCount;
+            var disposition = ex is SqliteException sqlite &&
+                              SqliteOrchestratorStateRepository.IsTransientLock(sqlite)
+                ? "lease-preserved-busy-exhausted"
+                : "lease-preserved-non-transient";
+            _writeTelemetry.EmitFailure(
+                "reconcile-acceptance-lease-release",
+                ex,
+                attemptCount,
+                disposition,
+                goalId,
+                owner);
+            throw;
+        }
+    }
+
+    private int BeginAcceptanceLeaseRelease(SqliteConnection connection)
+    {
+        var attemptCount = 0;
+        SqliteException? lastTransient = null;
+        SqliteOrchestratorStateRepository.WithBusyRetryAsync(
+            () =>
+            {
+                attemptCount++;
+                Execute(connection, "BEGIN IMMEDIATE");
+                return Task.FromResult(true);
+            },
+            CancellationToken.None,
+            retryBudget: _writeTelemetry.Options.BusyRetryBudget,
+            maxBusyRetries: _writeTelemetry.Options.MaxBusyRetries,
+            retryDelay: _busyRetryDelay ?? _writeTelemetry.Options.RetryDelay,
+            retryObserver: (attempt, elapsed, exception) =>
+            {
+                lastTransient = exception;
+                _writeTelemetry.EmitBusyRetry(
+                    "reconcile-acceptance-lease-release",
+                    elapsed,
+                    exception,
+                    attempt);
+            }).GetAwaiter().GetResult();
+        if (lastTransient is not null)
+        {
+            _writeTelemetry.EmitBusyRecovered(
+                "reconcile-acceptance-lease-release",
+                TimeSpan.Zero,
+                lastTransient,
+                attemptCount);
         }
 
-        using var connection = new SqliteConnection(new SqliteConnectionStringBuilder
-        {
-            DataSource = dbPath,
-            Mode = SqliteOpenMode.ReadWrite,
-            Pooling = false,
-            DefaultTimeout = 5
-        }.ToString());
-        connection.Open();
-        ReleaseAcceptanceLease(connection, goalId, owner);
+        return Math.Max(1, attemptCount);
     }
 
     private static void ReleaseAcceptanceLease(SqliteConnection connection, string goalId, string owner)
@@ -463,7 +524,10 @@ public sealed class ReconcileSweepRemediationStore : IReconcileSweepRemediationS
         command.ExecuteNonQuery();
     }
 
-    private sealed class AcceptanceLease(string dbPath, string goalId, string owner) : IDisposable
+    private sealed class AcceptanceLease(
+        ReconcileSweepRemediationStore store,
+        string goalId,
+        string owner) : IDisposable
     {
         private int _disposed;
 
@@ -473,7 +537,16 @@ public sealed class ReconcileSweepRemediationStore : IReconcileSweepRemediationS
             {
                 return;
             }
-            ReleaseAcceptanceLease(dbPath, goalId, owner);
+            try
+            {
+                store.ReleaseAcceptanceLease(goalId, owner);
+            }
+            catch
+            {
+                // Lease cleanup is best-effort after the protected operation has reached a verdict.
+                // The owner-qualified row remains available for stale-expiry recovery, and the store
+                // has already emitted typed failure evidence.
+            }
         }
     }
 }
