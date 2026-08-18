@@ -1606,18 +1606,8 @@ public sealed class PostLandingCanaryTests : CliCommandTestBase
 
     private static string CreateExternalTestRoot(string sourceRoot)
     {
-        var baseRoot = Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData);
-        if (string.IsNullOrWhiteSpace(baseRoot))
-        {
-            baseRoot = Path.GetTempPath();
-        }
-        else if (OperatingSystem.IsWindows())
-        {
-            baseRoot = Path.GetFullPath(Path.Combine(baseRoot, "..", "LocalLow"));
-        }
-
         var root = Path.GetFullPath(Path.Combine(
-            baseRoot,
+            Path.GetTempPath(),
             "mcg-post-landing-canary-tests",
             Guid.NewGuid().ToString("N")));
         var normalizedSourceRoot = Path.GetFullPath(sourceRoot)
