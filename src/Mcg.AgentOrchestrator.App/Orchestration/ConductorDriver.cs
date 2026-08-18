@@ -3764,13 +3764,19 @@ internal sealed class ConductorDriver
     internal ConductorAdvanceResult CompleteParallelLandingAcceptance(
         ConductorParallelAcceptanceCandidate candidate,
         ConductorAutonomyPolicy policy,
-        AcceptanceVerificationSummary acceptance)
+        AcceptanceVerificationSummary acceptance,
+        out bool evidenceMutationLeaseHeld)
     {
+        evidenceMutationLeaseHeld = false;
         using var evidenceMutationLease = _tryAcquireEvidenceMutationLease(
             candidate.Goal,
             "conductor:parallel-land");
         if (evidenceMutationLease is null)
-            return ReplacementEvidenceMutationHeld(candidate.Goal, candidate.GoalPrefix, policy);
+        {
+            var held = ReplacementEvidenceMutationHeld(candidate.Goal, candidate.GoalPrefix, policy);
+            evidenceMutationLeaseHeld = true;
+            return held;
+        }
 
         acceptance = NormalizeNamedFailedChecksForRetry(acceptance);
         if (!acceptance.Passed || acceptance.UnmetCriteria.Count > 0)

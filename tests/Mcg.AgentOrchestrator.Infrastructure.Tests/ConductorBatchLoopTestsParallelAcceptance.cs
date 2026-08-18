@@ -3912,8 +3912,9 @@ public sealed class ConductorBatchLoopTestsParallelAcceptance : ConductorBatchLo
         }
     }
 
-    [Xunit.Fact]
-    public void BatchLoopPersistedAcceptedAttemptResumesLandingAfterLeaseClearsWithoutVerifierRerun()
+    [Xunit.Fact(Timeout = 30_000)]
+    [Xunit.Trait("Category", "CrossTick")]
+    public void PersistedAcceptedAdvisory_LeaseClears_ResumesWithoutVerifierRerun()
     {
         var kernel = new AgentOrchestratorKernel();
         var goal = CreateVerifiedSimpleGoal(kernel, "Resume landing from persisted accepted attempt");
@@ -3922,8 +3923,18 @@ public sealed class ConductorBatchLoopTestsParallelAcceptance : ConductorBatchLo
         var leaseAvailable = false;
         var verifierRuns = 0;
         var landingRuns = 0;
+        var advisory = new AcceptanceCheckResult(
+            "post-landing operator observation",
+            false,
+            0,
+            "operator observation remains nonblocking",
+            ResultSummary: "operator observation remains nonblocking",
+            Advisory: true);
+        var accepted = new AcceptanceVerificationSummary(true, [advisory]);
         try
         {
+            Assert.True(accepted.Passed);
+            Assert.Single(accepted.AdvisoryUnmetCriteria);
             var coordinator = new ConductorParallelAcceptanceAttemptCoordinator(attemptRoot, runInline: true);
             var candidate = ConductorParallelAcceptanceCandidate.Create(
                 goal,
@@ -3939,7 +3950,7 @@ public sealed class ConductorBatchLoopTestsParallelAcceptance : ConductorBatchLo
                     verifierRuns++;
                     return ConductorParallelAcceptanceRunResult.Accepted(
                         acceptedCandidate,
-                        AcceptanceVerificationSummary.PassedWithNoUnmetCriteria);
+                        accepted);
                 }).Attempt;
             var heldLease = new ReconcileAcceptanceLeaseState(
                 "stale-owner",
@@ -3950,7 +3961,7 @@ public sealed class ConductorBatchLoopTestsParallelAcceptance : ConductorBatchLo
                 runAcceptanceWithSlot: (_, _) =>
                 {
                     verifierRuns++;
-                    return AcceptanceVerificationSummary.PassedWithNoUnmetCriteria;
+                    return accepted;
                 },
                 land: landedGoal =>
                 {

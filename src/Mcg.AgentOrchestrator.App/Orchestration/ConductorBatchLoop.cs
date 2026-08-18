@@ -2747,8 +2747,17 @@ internal sealed class ConductorBatchLoop
                         retainedTerminal.Attempt.MainHeadSha),
                     new InvalidOperationException("Completed acceptance attempt had no run result."));
                 ReconcileParallelAcceptanceTerminalState(kernel, goal, run, retainedTerminal.Attempt);
-                var result = CompleteParallelAcceptanceRun(driver, policy, run, retainedTerminal.Attempt);
-                MarkParallelAcceptanceReconciledUnlessLeaseHeld(driver, run, result, retainedTerminal.Attempt);
+                var result = CompleteParallelAcceptanceRun(
+                    driver,
+                    policy,
+                    run,
+                    retainedTerminal.Attempt,
+                    out var evidenceMutationLeaseHeld);
+                MarkParallelAcceptanceReconciledUnlessLeaseHeld(
+                    driver,
+                    run,
+                    evidenceMutationLeaseHeld,
+                    retainedTerminal.Attempt);
                 changedGoalIds.Add(goal.Id);
                 results[goal.Id.Value] = new ParallelLandingOutcome(result, retainedTerminal.Attempt.SlotIndex);
                 RecordParallelAcceptanceProgress(
@@ -3049,11 +3058,12 @@ internal sealed class ConductorBatchLoop
                                 driver,
                                 policy,
                                 terminalRun,
-                                terminalDecision.Attempt);
+                                terminalDecision.Attempt,
+                                out var terminalEvidenceMutationLeaseHeld);
                             MarkParallelAcceptanceReconciledUnlessLeaseHeld(
                                 driver,
                                 terminalRun,
-                                terminalResult,
+                                terminalEvidenceMutationLeaseHeld,
                                 terminalDecision.Attempt);
                             oldestServedThisTick |= goal.Id == oldestWaiter?.Id;
                             RecordParallelAcceptanceFairnessGrant(goal.Id.Value, oldestWaiter?.Id.Value);
@@ -3118,8 +3128,17 @@ internal sealed class ConductorBatchLoop
                         candidate,
                         new InvalidOperationException("Completed acceptance attempt had no run result."));
                     ReconcileParallelAcceptanceTerminalState(kernel, goal, run, decision.Attempt);
-                    var result = CompleteParallelAcceptanceRun(driver, policy, run, decision.Attempt);
-                    MarkParallelAcceptanceReconciledUnlessLeaseHeld(driver, run, result, decision.Attempt);
+                    var result = CompleteParallelAcceptanceRun(
+                        driver,
+                        policy,
+                        run,
+                        decision.Attempt,
+                        out var evidenceMutationLeaseHeld);
+                    MarkParallelAcceptanceReconciledUnlessLeaseHeld(
+                        driver,
+                        run,
+                        evidenceMutationLeaseHeld,
+                        decision.Attempt);
                     oldestServedThisTick |= goal.Id == oldestWaiter?.Id;
                     RecordParallelAcceptanceFairnessGrant(goal.Id.Value, oldestWaiter?.Id.Value);
                     RecordParallelAcceptanceFairnessCapIfReached(goal, oldestWaiter, tick, changedGoalLines);
@@ -3626,8 +3645,17 @@ internal sealed class ConductorBatchLoop
             candidate,
             new InvalidOperationException("Completed acceptance attempt had no run result."));
         ReconcileParallelAcceptanceTerminalState(kernel, goal, run, decision.Attempt);
-        var completion = CompleteParallelAcceptanceRun(driver, policy, run, decision.Attempt);
-        MarkParallelAcceptanceReconciledUnlessLeaseHeld(driver, run, completion, decision.Attempt);
+        var completion = CompleteParallelAcceptanceRun(
+            driver,
+            policy,
+            run,
+            decision.Attempt,
+            out var evidenceMutationLeaseHeld);
+        MarkParallelAcceptanceReconciledUnlessLeaseHeld(
+            driver,
+            run,
+            evidenceMutationLeaseHeld,
+            decision.Attempt);
         var capturedOutput =
             $"attempt={decision.Attempt.AttemptId} outcome={AcceptanceRunDisposition(run)} " +
             $"detail={decision.Attempt.Detail ?? "no attempt detail was recorded"} completion={completion.Outcome}";
@@ -3650,8 +3678,10 @@ internal sealed class ConductorBatchLoop
         ConductorDriver driver,
         ConductorAutonomyPolicy policy,
         ConductorParallelAcceptanceRunResult run,
-        ConductorParallelAcceptanceAttempt attempt)
+        ConductorParallelAcceptanceAttempt attempt,
+        out bool evidenceMutationLeaseHeld)
     {
+        evidenceMutationLeaseHeld = false;
         if (run.Exception is not null)
         {
             if (run.Exception is AcceptanceInfrastructureDeferredException infrastructureDeferred)
@@ -3729,7 +3759,11 @@ internal sealed class ConductorBatchLoop
 
         try
         {
-            return driver.CompleteParallelLandingAcceptance(run.Candidate, policy, run.Acceptance);
+            return driver.CompleteParallelLandingAcceptance(
+                run.Candidate,
+                policy,
+                run.Acceptance,
+                out evidenceMutationLeaseHeld);
         }
         catch (Exception ex)
         {
@@ -3740,13 +3774,10 @@ internal sealed class ConductorBatchLoop
     private static void MarkParallelAcceptanceReconciledUnlessLeaseHeld(
         ConductorDriver driver,
         ConductorParallelAcceptanceRunResult run,
-        ConductorAdvanceResult completion,
+        bool evidenceMutationLeaseHeld,
         ConductorParallelAcceptanceAttempt attempt)
     {
-        if (run.Acceptance is { Passed: true, UnmetCriteria.Count: 0 } &&
-            completion.Outcome is ConductorAdvanceOutcome.Held held &&
-            held.State == GoalLifecycleState.Verified &&
-            held.Reason.StartsWith("acceptance lease", StringComparison.Ordinal))
+        if (run.Acceptance is { Passed: true } && evidenceMutationLeaseHeld)
         {
             return;
         }
