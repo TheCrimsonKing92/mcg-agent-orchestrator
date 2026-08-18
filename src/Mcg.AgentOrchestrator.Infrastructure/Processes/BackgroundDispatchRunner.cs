@@ -327,7 +327,6 @@ public sealed class BackgroundDispatchRunner
             stderrPath,
             exitCodePath,
             heartbeatPath,
-            ShutdownBuildServerOnExit: !isLocalDispatch,
             DisableSharedCompilation: !isLocalDispatch,
             SandboxLowIntegrity: useSandbox,
             Provider: sandboxProvider,

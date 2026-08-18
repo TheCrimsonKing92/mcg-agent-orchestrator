@@ -567,12 +567,14 @@ public sealed class VerificationAndProcessLogTests
     Assert.Equal(shortText, preview.Text);
 }
 
-    [Xunit.Fact(DisplayName = "RecordCompletedProcess_reaps_build_daemons_referencing_working_directory")]
-    public void RecordCompletedProcessReapsBuildDaemonsReferencingWorkingDirectory()
+    [Xunit.Fact]
+    public void CompletedNonLocalDispatch_ExitArtifactPrecedesScopedCleanup()
 {
     var root = CreateTempDirectory();
     var workingDirectory = Path.Combine(root, "worktree");
+    var siblingDirectory = Path.Combine(root, "sibling-worktree");
     Directory.CreateDirectory(workingDirectory);
+    Directory.CreateDirectory(siblingDirectory);
     var kernel = new AgentOrchestratorKernel();
     var goal = kernel.CreateGoal("Reap build daemons on completion");
     kernel.ActivateGoal(goal.Id, AgentCatalog.Default().Agents);
@@ -584,16 +586,39 @@ public sealed class VerificationAndProcessLogTests
     kernel.RecordTaskDispatch(goal.Id, task.Id, new TaskDispatchRecord("codex-cli", "codex exec", workingDirectory, DateTimeOffset.UtcNow));
     var processRecord = new TaskProcessRecord(999999, "codex exec", workingDirectory, stdoutPath, stderrPath, exitPath, DateTimeOffset.UtcNow, null, null);
     kernel.RecordTaskProcessStarted(goal.Id, task.Id, processRecord);
-    var killedPids = new List<int>();
+    using var ownedKilled = new ManualResetEventSlim();
+    using var siblingKilled = new ManualResetEventSlim();
+    string? cleanupScope = null;
+    var fixtures = new[]
+    {
+        (ProcessId: 42716, Name: "VBCSCompiler", CommandLine: Path.Combine(workingDirectory, "obj", "debug", "Assembly.dll")),
+        (ProcessId: 42717, Name: "VBCSCompiler", CommandLine: Path.Combine(siblingDirectory, "obj", "debug", "Sibling.dll"))
+    };
     var runner = new BackgroundDispatchRunner(
         isStillRunning: _ => false,
-        findBuildDaemons: _ => [(42716, "VBCSCompiler", Path.Combine(workingDirectory, "obj", "debug", "Assembly.dll"))],
-        tryKillBuildDaemon: pid => { killedPids.Add(pid); return true; });
+        findBuildDaemons: directory =>
+        {
+            cleanupScope = directory;
+            Assert.True(File.Exists(exitPath), "The native exit artifact must exist before scoped cleanup starts.");
+            return fixtures
+                .Where(fixture => BackgroundDispatchRunner.ShouldReapBuildDaemon(directory, fixture.CommandLine))
+                .Select(fixture => (fixture.ProcessId, fixture.Name, (string?)fixture.CommandLine))
+                .ToArray();
+        },
+        tryKillBuildDaemon: pid =>
+        {
+            if (pid == 42716) ownedKilled.Set();
+            if (pid == 42717) siblingKilled.Set();
+            return true;
+        });
 
     runner.RefreshLatestProcess(kernel, goal.Id, task.Id);
 
-    Assert.True(killedPids.Count == 1 && killedPids[0] == 42716);
+    Assert.Equal(Path.GetFullPath(workingDirectory), Path.GetFullPath(cleanupScope!));
+    Assert.True(ownedKilled.IsSet);
+    Assert.False(siblingKilled.IsSet);
     Assert.True(task.LastVerification!.StandardError.Contains("42716", StringComparison.Ordinal));
+    Assert.DoesNotContain("42717", task.LastVerification.StandardError, StringComparison.Ordinal);
     Assert.True(task.LastVerification.StandardError.Contains("VBCSCompiler", StringComparison.Ordinal));
     Assert.True(task.LastVerification.StandardError.Contains("Reaped", StringComparison.Ordinal));
 }

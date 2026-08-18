@@ -47,7 +47,8 @@ public static class DispatchProcessHost
 
     private static readonly JsonSerializerOptions JsonOptions = new()
     {
-        PropertyNamingPolicy = JsonNamingPolicy.CamelCase
+        PropertyNamingPolicy = JsonNamingPolicy.CamelCase,
+        UnmappedMemberHandling = System.Text.Json.Serialization.JsonUnmappedMemberHandling.Skip
     };
 
     public sealed record DispatchRunParameters(
@@ -57,7 +58,6 @@ public static class DispatchProcessHost
         string StderrPath,
         string ExitCodePath,
         string? HeartbeatPath,
-        bool ShutdownBuildServerOnExit,
         bool DisableSharedCompilation,
         // OS worker sandbox: when SandboxLowIntegrity is set, the worker runs at LOW integrity (same
         // operator user) with a Low CODEX_HOME/TEMP. SandboxWorktreeWritable controls whether the
@@ -104,6 +104,10 @@ public static class DispatchProcessHost
         WriteAllTextDurable(path, JsonSerializer.Serialize(parameters, JsonOptions));
         return path;
     }
+
+    internal static DispatchRunParameters ReadParameters(string path) =>
+        JsonSerializer.Deserialize<DispatchRunParameters>(File.ReadAllText(path), JsonOptions)
+        ?? throw new InvalidOperationException("Dispatch parameters were empty.");
 
     public static string WritePrepRecord(string path, DispatchPrepRecord record)
     {
@@ -1049,8 +1053,7 @@ public static void DropToLow() {
         DispatchRunParameters parameters;
         try
         {
-            parameters = JsonSerializer.Deserialize<DispatchRunParameters>(File.ReadAllText(parametersPath), JsonOptions)
-                ?? throw new InvalidOperationException("Dispatch parameters were empty.");
+            parameters = ReadParameters(parametersPath);
         }
         catch
         {
@@ -1460,11 +1463,6 @@ public static void DropToLow() {
             heartbeatTimer.Change(Timeout.Infinite, Timeout.Infinite);
             prepHeartbeatTimer.Change(Timeout.Infinite, Timeout.Infinite);
             CompletePrep(exitCode == 0 ? 0 : 1);
-            if (parameters.ShutdownBuildServerOnExit)
-            {
-                TryShutdownBuildServer(parameters.WorkingDirectory);
-            }
-
             // One final heartbeat synchronizes the selected-child handle with the childPid receipt.
             // Freeze that selection into the child record before publishing the completion signal.
             WriteHeartbeat("exited");
@@ -1955,27 +1953,4 @@ public static void DropToLow() {
         }
     }
 
-    private static void TryShutdownBuildServer(string workingDirectory)
-    {
-        try
-        {
-            var psi = new ProcessStartInfo
-            {
-                FileName = "dotnet",
-                WorkingDirectory = workingDirectory,
-                UseShellExecute = false,
-                CreateNoWindow = true,
-                RedirectStandardOutput = true,
-                RedirectStandardError = true
-            };
-            psi.ArgumentList.Add("build-server");
-            psi.ArgumentList.Add("shutdown");
-            using var process = Process.Start(psi);
-            process?.WaitForExit(10000);
-        }
-        catch
-        {
-            // Best-effort build-server cleanup.
-        }
-    }
 }
