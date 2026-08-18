@@ -1255,59 +1255,91 @@ public sealed class PostLandingCanaryTests : CliCommandTestBase
     [Xunit.Fact(DisplayName = "Known-green fixture runs from an isolated landed worktree despite a dirty operator checkout")]
     public async Task KnownGreenFixtureRunsThroughFreshBinaryWithoutDirtyingRepository()
     {
-        var root = FindRepoRoot();
-        var landingSha = GoalAcceptanceVerifier.ResolveGitText(root, "rev-parse", "HEAD")?.Trim();
+        var sourceRoot = FindRepoRoot();
+        var sourceStatusBefore = ReadGitStatus(sourceRoot);
+        var testRoot = CreateExternalTestRoot(sourceRoot);
+        var repositoryRoot = Path.Combine(testRoot, "repository");
+        var logDirectory = Path.Combine(testRoot, "logs");
+        var appDllPath = typeof(PostLandingCanaryRunner).Assembly.Location;
+        var runtimeConfigPath = Path.ChangeExtension(appDllPath, ".runtimeconfig.json");
+        Assert.True(File.Exists(appDllPath), $"Current App assembly was not built: {appDllPath}");
+        Assert.True(File.Exists(runtimeConfigPath), $"Current App runtime config was not built: {runtimeConfigPath}");
+        CopyDirectory(
+            Path.Combine(sourceRoot, "tests", "canary-fixture"),
+            Path.Combine(repositoryRoot, "tests", "canary-fixture"));
+        RunGit(repositoryRoot, "init", "--quiet");
+        RunGit(repositoryRoot, "add", "--all");
+        RunGit(
+            repositoryRoot,
+            "-c", "user.name=MCG Canary Test",
+            "-c", "user.email=canary-test@localhost",
+            "commit", "--quiet", "-m", "minimal canary repository");
+        var landingSha = RunGit(repositoryRoot, "rev-parse", "HEAD").Output.Trim();
         Assert.False(string.IsNullOrWhiteSpace(landingSha));
         using var timeout = new CancellationTokenSource(TimeSpan.FromSeconds(120));
-        var buildCacheRoot = Path.Combine(
-            Path.GetTempPath(),
-            "mcg-canary-binary-tests",
-            Guid.NewGuid().ToString("N"));
-        var logDirectory = Path.Combine(buildCacheRoot, "logs");
-        var dirtySentinel = Path.Combine(root, $"post-landing-canary-dirty-{Guid.NewGuid():N}.sentinel");
+        var dirtySentinel = Path.Combine(repositoryRoot, "operator-owned-uncommitted.sentinel");
+        var resolver = new FixedAppBinaryResolver(appDllPath);
+        var clock = Stopwatch.StartNew();
         try
         {
             File.WriteAllText(dirtySentinel, "operator-owned uncommitted content");
-            var statusBefore = GoalAcceptanceVerifier.ResolveGitText(
-                root,
-                "status",
-                "--porcelain",
-                "--untracked-files=all");
+            var statusBefore = ReadGitStatus(repositoryRoot);
             Assert.Contains(
                 Path.GetFileName(dirtySentinel),
                 statusBefore,
                 StringComparison.Ordinal);
             var outcome = await new PostLandingCanaryRunner(
-                    root,
-                    buildCacheRoot: buildCacheRoot,
-                    logDirectory: logDirectory)
+                    repositoryRoot,
+                    logDirectory: logDirectory,
+                    applicationBinaryResolver: resolver)
                 .RunAsync(
                     new PostLandingCanaryRequest(landingSha!, ["integration-test"]),
                     timeout.Token);
+            clock.Stop();
+            Console.WriteLine(
+                $"PostLandingCanary known-green elapsed={clock.Elapsed.TotalSeconds:F2}s baseline=38.02s");
 
             Assert.True(outcome.Green, outcome.Detail);
             Assert.True(outcome.ExecutedTestCount > 0);
-            Assert.NotEmpty(Directory.GetFiles(
+            Assert.Equal(1, resolver.CallCount);
+            Assert.Equal(landingSha, resolver.SourceSha);
+            Assert.NotNull(resolver.SourceRoot);
+            Assert.False(
+                Directory.Exists(resolver.SourceRoot),
+                $"Detached canary worktree was not removed: {resolver.SourceRoot}");
+            var stdoutLogs = Directory.GetFiles(
                 logDirectory,
-                $"post-landing-canary-{landingSha}-*.out.log"));
-            Assert.NotEmpty(Directory.GetFiles(
+                $"post-landing-canary-{landingSha}-*.out.log");
+            var stderrLogs = Directory.GetFiles(
                 logDirectory,
-                $"post-landing-canary-{landingSha}-*.err.log"));
+                $"post-landing-canary-{landingSha}-*.err.log");
+            Assert.NotEmpty(stdoutLogs);
+            Assert.NotEmpty(stderrLogs);
+            Assert.Contains(stdoutLogs, path =>
+                Path.GetFileName(path).Contains("create-isolated-landing-worktree", StringComparison.Ordinal));
+            Assert.Contains(stdoutLogs, path =>
+                Path.GetFileName(path).Contains("remove-isolated-landing-worktree", StringComparison.Ordinal));
+            var probeStdout = Assert.Single(stdoutLogs.Where(path =>
+                Path.GetFileName(path).Contains("run-canary-probe", StringComparison.Ordinal)));
+            var resultLine = File.ReadLines(probeStdout).Single(line =>
+                line.StartsWith(PostLandingCanaryCommand.ResultPrefix, StringComparison.Ordinal));
+            var probe = JsonSerializer.Deserialize<PostLandingCanaryProbeResult>(
+                resultLine[PostLandingCanaryCommand.ResultPrefix.Length..],
+                new JsonSerializerOptions { PropertyNameCaseInsensitive = true });
+            Assert.True(Assert.IsType<PostLandingCanaryProbeResult>(probe).Green);
             Assert.NotEmpty(Directory.GetFiles(
                 logDirectory,
                 $"post-landing-canary-{landingSha}-*.trx"));
             Assert.Equal(
                 statusBefore,
-                GoalAcceptanceVerifier.ResolveGitText(
-                    root,
-                    "status",
-                    "--porcelain",
-                    "--untracked-files=all"));
+                ReadGitStatus(repositoryRoot));
+            Assert.Equal(sourceStatusBefore, ReadGitStatus(sourceRoot));
         }
         finally
         {
-            try { File.Delete(dirtySentinel); } catch { }
-            try { Directory.Delete(buildCacheRoot, recursive: true); } catch { }
+            DeleteDirectoryLoudly(testRoot);
+            Assert.False(Directory.Exists(testRoot), $"Disposable canary repository cleanup failed: {testRoot}");
+            Assert.Equal(sourceStatusBefore, ReadGitStatus(sourceRoot));
         }
     }
 
@@ -1572,6 +1604,63 @@ public sealed class PostLandingCanaryTests : CliCommandTestBase
         throw new DirectoryNotFoundException("Could not locate repository root.");
     }
 
+    private static string CreateExternalTestRoot(string sourceRoot)
+    {
+        var root = Path.GetFullPath(Path.Combine(
+            Path.GetTempPath(),
+            "mcg-post-landing-canary-tests",
+            Guid.NewGuid().ToString("N")));
+        var normalizedSourceRoot = Path.GetFullPath(sourceRoot)
+            .TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar) + Path.DirectorySeparatorChar;
+        Assert.False(
+            root.StartsWith(normalizedSourceRoot, StringComparison.OrdinalIgnoreCase),
+            $"Disposable canary repository must be outside the source repository: {root}");
+        Directory.CreateDirectory(root);
+        return root;
+    }
+
+    private static void CopyDirectory(string source, string destination)
+    {
+        Assert.True(Directory.Exists(source), $"Canary fixture source was not found: {source}");
+        foreach (var sourcePath in Directory.EnumerateFiles(source, "*", SearchOption.AllDirectories))
+        {
+            var destinationPath = Path.Combine(destination, Path.GetRelativePath(source, sourcePath));
+            Directory.CreateDirectory(Path.GetDirectoryName(destinationPath)!);
+            File.Copy(sourcePath, destinationPath);
+        }
+    }
+
+    private static void DeleteDirectoryLoudly(string root)
+    {
+        foreach (var path in Directory.EnumerateFiles(root, "*", SearchOption.AllDirectories))
+        {
+            File.SetAttributes(path, FileAttributes.Normal);
+        }
+
+        foreach (var path in Directory.EnumerateDirectories(root, "*", SearchOption.AllDirectories))
+        {
+            var directory = new DirectoryInfo(path);
+            directory.Attributes &= ~FileAttributes.ReadOnly;
+        }
+
+        var rootDirectory = new DirectoryInfo(root);
+        rootDirectory.Attributes &= ~FileAttributes.ReadOnly;
+        Directory.Delete(root, recursive: true);
+    }
+
+    private static GitCli.GitResult RunGit(string workingDirectory, params string[] arguments)
+    {
+        var result = GitCli.Run(workingDirectory, arguments);
+        Assert.True(
+            result.Succeeded,
+            $"git {string.Join(' ', arguments)} failed ({result.ExitCode}): " +
+            $"{result.Output}{Environment.NewLine}{result.Error}");
+        return result;
+    }
+
+    private static string ReadGitStatus(string repositoryRoot) =>
+        RunGit(repositoryRoot, "status", "--porcelain", "--untracked-files=all").Output;
+
     private static string CreateFailingCanaryTool(string root)
     {
         if (OperatingSystem.IsWindows())
@@ -1643,6 +1732,26 @@ public sealed class PostLandingCanaryTests : CliCommandTestBase
             PostLandingCanaryRequest request,
             CancellationToken cancellationToken) =>
             run(request, cancellationToken);
+    }
+
+    private sealed class FixedAppBinaryResolver(string appDllPath)
+        : IPostLandingCanaryApplicationBinaryResolver
+    {
+        internal int CallCount { get; private set; }
+        internal string? SourceRoot { get; private set; }
+        internal string? SourceSha { get; private set; }
+
+        public Task<string> ResolveAsync(
+            string sourceRoot,
+            string sourceSha,
+            CancellationToken cancellationToken)
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            CallCount++;
+            SourceRoot = sourceRoot;
+            SourceSha = sourceSha;
+            return Task.FromResult(appDllPath);
+        }
     }
 
     private sealed class FakeAcceptanceVerifier(AcceptanceVerificationResult result)
