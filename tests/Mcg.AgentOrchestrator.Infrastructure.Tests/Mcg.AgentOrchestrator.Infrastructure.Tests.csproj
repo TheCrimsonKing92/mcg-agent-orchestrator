@@ -16,6 +16,7 @@
     <ProjectReference Include="..\..\scripts\OrchestratorSqliteTools\OrchestratorSqliteTools.csproj" />
     <ProjectReference Include="..\Mcg.AgentOrchestrator.TestSupport\Mcg.AgentOrchestrator.TestSupport.csproj" />
     <ProjectReference Include="Fixtures\IsolatedDotnetProbe\Mcg.AgentOrchestrator.IsolatedDotnetProbe.csproj" ReferenceOutputAssembly="false" />
+    <ProjectReference Include="Fixtures\RealProcessShardProbe\Mcg.AgentOrchestrator.RealProcessShardProbe.csproj" ReferenceOutputAssembly="false" />
     <PackageReference Include="BouncyCastle.Cryptography" Version="2.4.0" />
     <PackageReference Include="Microsoft.Testing.Extensions.TrxReport" Version="2.3.2" />
     <PackageReference Include="xunit.v3.mtp-v2" Version="3.2.2" />

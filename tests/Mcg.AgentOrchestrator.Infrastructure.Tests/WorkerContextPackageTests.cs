@@ -5,6 +5,9 @@ using Mcg.AgentOrchestrator.Infrastructure;
 
 public sealed class WorkerContextPackageTests
 {
+    private const string InfrastructureTestProjectName = "Mcg.AgentOrchestrator.Infrastructure.Tests";
+    private const string RealProcessShardProbeProjectName = "Mcg.AgentOrchestrator.RealProcessShardProbe";
+
     private static readonly AgentRole[] AllRoles =
     [
         AgentRole.Researcher,
@@ -131,12 +134,11 @@ public sealed class WorkerContextPackageTests
     [Xunit.Fact]
     public void DiscoveryCaptureForcesUtf8BeforeMtpStarts()
     {
-        var startInfo = GoalAcceptanceVerifier.BuildAcceptanceProcessStartInfo(
+        var startInfo = BuildUtf8DiscoveryProcessStartInfo(
             ["dotnet", "tests.dll", "--list-tests", "json"],
             Path.GetTempPath(),
             @"\\.\pipe\utf8-discovery-out",
-            @"\\.\pipe\utf8-discovery-err",
-            forceUtf8ConsoleOutput: true);
+            @"\\.\pipe\utf8-discovery-err");
 
         if (OperatingSystem.IsWindows())
         {
@@ -150,16 +152,20 @@ public sealed class WorkerContextPackageTests
         }
     }
 
-    [Xunit.Fact]
+    [Xunit.Fact(Skip = "Requires Windows.", SkipUnless = nameof(IsWindows))]
     public async Task Utf8DiscoveryCapturePreservesUnicodeBytesThroughOwnedNamedPipes()
     {
-        if (!OperatingSystem.IsWindows())
-        {
-            return;
-        }
-
         const string expectedIdentity =
-            "WorkerContextPackageTests.InlineFullRecoversExactUtf8Bytes(content: \"non-ASCII café 漢字 e\u0301\\0delimiter\\r\\n\")";
+            "Utf8DiscoveryProbeTests.PreservesParameterizedUnicodeIdentity(content: \"non-ASCII café 漢字 e\u0301\\0delimiter\\r\\n\")";
+        var probeAppHost = ResolveRealProcessShardProbeAppHost();
+        Xunit.Assert.Equal(
+            $"{RealProcessShardProbeProjectName}.exe",
+            Path.GetFileName(probeAppHost),
+            ignoreCase: true);
+        Xunit.Assert.DoesNotContain(
+            InfrastructureTestProjectName,
+            Path.GetFileName(probeAppHost),
+            StringComparison.OrdinalIgnoreCase);
         var stdoutPipeName = $"mcg-utf8-discovery-{Guid.NewGuid():N}-out";
         var stderrPipeName = $"mcg-utf8-discovery-{Guid.NewGuid():N}-err";
         await using var stdoutPipe = new System.IO.Pipes.NamedPipeServerStream(
@@ -178,22 +184,20 @@ public sealed class WorkerContextPackageTests
         var stderrConnection = stderrPipe.WaitForConnectionAsync();
         var stdoutDrain = ConnectAndReadAsync(stdoutPipe, stdoutConnection);
         var stderrDrain = ConnectAndReadAsync(stderrPipe, stderrConnection);
-        var startInfo = GoalAcceptanceVerifier.BuildAcceptanceProcessStartInfo(
+        var startInfo = BuildUtf8DiscoveryProcessStartInfo(
             [
-                "dotnet",
-                typeof(WorkerContextPackageTests).Assembly.Location,
+                probeAppHost,
                 "--no-ansi",
                 "--progress",
                 "off",
                 "--list-tests",
                 "json",
                 "--filter-class",
-                "*WorkerContextPackageTests*"
+                "*Utf8DiscoveryProbeTests*"
             ],
-            Path.GetDirectoryName(typeof(WorkerContextPackageTests).Assembly.Location)!,
+            Path.GetDirectoryName(probeAppHost)!,
             $@"\\.\pipe\{stdoutPipeName}",
-            $@"\\.\pipe\{stderrPipeName}",
-            forceUtf8ConsoleOutput: true);
+            $@"\\.\pipe\{stderrPipeName}");
         using var process = Process.Start(startInfo)
             ?? throw new InvalidOperationException("Failed to start UTF-8 discovery capture process.");
         try
@@ -204,11 +208,10 @@ public sealed class WorkerContextPackageTests
             var captures = await Task.WhenAll(stdoutDrain, stderrDrain)
                 .WaitAsync(TimeSpan.FromSeconds(30));
 
-            Xunit.Assert.True(
-                process.ExitCode == 0,
-                $"Discovery exited {process.ExitCode}: {Encoding.UTF8.GetString(captures[1])}");
-            var output = new UTF8Encoding(encoderShouldEmitUTF8Identifier: false, throwOnInvalidBytes: true)
-                .GetString(captures[0]);
+            var strictUtf8 = new UTF8Encoding(encoderShouldEmitUTF8Identifier: false, throwOnInvalidBytes: true);
+            var output = strictUtf8.GetString(captures[0]);
+            var error = strictUtf8.GetString(captures[1]);
+            Xunit.Assert.True(process.ExitCode == 0, $"Discovery exited {process.ExitCode}: {error}");
             var discovery = TestCoverageInvariant.ParseDiscovery(output, bareTestList: true);
             Xunit.Assert.Contains(expectedIdentity, discovery.Tests);
         }
@@ -228,6 +231,113 @@ public sealed class WorkerContextPackageTests
             await pipe.CopyToAsync(capture);
             return capture.ToArray();
         }
+    }
+
+    [Xunit.Fact]
+    public void RealProcessShardProbeAppHostResolutionRejectsMissingArtifact()
+    {
+        var missingPath = Path.Combine(
+            Path.GetTempPath(),
+            $"mcg-missing-probe-{Guid.NewGuid():N}",
+            $"{RealProcessShardProbeProjectName}.exe");
+
+        var error = Xunit.Assert.Throws<FileNotFoundException>(
+            () => ResolveRealProcessShardProbeAppHost([missingPath]));
+
+        Xunit.Assert.Contains("Missing prebuilt MTP probe apphost", error.Message, StringComparison.Ordinal);
+        Xunit.Assert.Contains(missingPath, error.Message, StringComparison.OrdinalIgnoreCase);
+    }
+
+    [Xunit.Fact]
+    public void RealProcessShardProbeAppHostResolutionRejectsAmbiguousArtifacts()
+    {
+        var root = CreateTempDirectory();
+        var first = Path.Combine(root, "first", $"{RealProcessShardProbeProjectName}.exe");
+        var second = Path.Combine(root, "second", $"{RealProcessShardProbeProjectName}.exe");
+        try
+        {
+            Directory.CreateDirectory(Path.GetDirectoryName(first)!);
+            Directory.CreateDirectory(Path.GetDirectoryName(second)!);
+            File.WriteAllText(first, string.Empty);
+            File.WriteAllText(second, string.Empty);
+
+            var error = Xunit.Assert.Throws<InvalidOperationException>(
+                () => ResolveRealProcessShardProbeAppHost([first, second]));
+
+            Xunit.Assert.Contains("Ambiguous prebuilt MTP probe apphosts", error.Message, StringComparison.Ordinal);
+            Xunit.Assert.Contains(first, error.Message, StringComparison.OrdinalIgnoreCase);
+            Xunit.Assert.Contains(second, error.Message, StringComparison.OrdinalIgnoreCase);
+        }
+        finally
+        {
+            Directory.Delete(root, recursive: true);
+        }
+    }
+
+    public static bool IsWindows => OperatingSystem.IsWindows();
+
+    private static ProcessStartInfo BuildUtf8DiscoveryProcessStartInfo(
+        string[] command,
+        string workingDirectory,
+        string stdoutPipePath,
+        string stderrPipePath) =>
+        GoalAcceptanceVerifier.BuildAcceptanceProcessStartInfo(
+            command,
+            workingDirectory,
+            stdoutPipePath,
+            stderrPipePath,
+            forceUtf8ConsoleOutput: true);
+
+    private static string ResolveRealProcessShardProbeAppHost(IReadOnlyList<string>? candidates = null)
+    {
+        var candidatePaths = (candidates ?? BuildRealProcessShardProbeAppHostCandidates())
+            .Select(Path.GetFullPath)
+            .Distinct(StringComparer.OrdinalIgnoreCase)
+            .ToArray();
+        var existingPaths = candidatePaths.Where(File.Exists).ToArray();
+        return existingPaths.Length switch
+        {
+            1 => existingPaths[0],
+            0 => throw new FileNotFoundException(
+                $"Missing prebuilt MTP probe apphost. Checked: {string.Join(", ", candidatePaths)}"),
+            _ => throw new InvalidOperationException(
+                $"Ambiguous prebuilt MTP probe apphosts: {string.Join(", ", existingPaths)}")
+        };
+    }
+
+    private static IReadOnlyList<string> BuildRealProcessShardProbeAppHostCandidates()
+    {
+        var infrastructureOutput = new DirectoryInfo(AppContext.BaseDirectory);
+        var configurationDirectory = infrastructureOutput.Name.Equals("net10.0", StringComparison.OrdinalIgnoreCase)
+            ? infrastructureOutput.Parent
+                ?? throw new InvalidOperationException("Infrastructure test output has no configuration directory.")
+            : infrastructureOutput;
+        var configuration = configurationDirectory.Name;
+        var executableName = $"{RealProcessShardProbeProjectName}.exe";
+        var candidates = new List<string>();
+
+        var isolatedProjectDirectory = configurationDirectory.Parent;
+        if (isolatedProjectDirectory?.Name.Equals(InfrastructureTestProjectName, StringComparison.OrdinalIgnoreCase) == true &&
+            isolatedProjectDirectory.Parent?.Name.Equals("bin", StringComparison.OrdinalIgnoreCase) == true)
+        {
+            candidates.Add(Path.Combine(
+                isolatedProjectDirectory.Parent.FullName,
+                RealProcessShardProbeProjectName,
+                configuration,
+                executableName));
+        }
+
+        candidates.Add(Path.Combine(
+            InfrastructureTestSupport.FindRepositoryRoot(),
+            "tests",
+            InfrastructureTestProjectName,
+            "Fixtures",
+            "RealProcessShardProbe",
+            "bin",
+            configuration,
+            "net10.0",
+            executableName));
+        return candidates;
     }
 
     [Xunit.Fact]
