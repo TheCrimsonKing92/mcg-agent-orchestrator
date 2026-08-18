@@ -454,18 +454,46 @@ internal static class GoalAcceptanceEvidenceBundleBuilder
 
     private static string BuildDiffSpec(string workingDirectory)
     {
-        if (GitCli.Run(workingDirectory, "rev-parse", "--verify", "main").Succeeded)
+        if (RevisionExists(workingDirectory, "main"))
         {
             return "main...HEAD";
         }
 
-        if (GitCli.Run(workingDirectory, "rev-parse", "--verify", "master").Succeeded)
+        if (RevisionExists(workingDirectory, "master"))
         {
             return "master...HEAD";
         }
 
-        return GitCli.Run(workingDirectory, "rev-parse", "--verify", "HEAD~1").Succeeded
+        return RevisionExists(workingDirectory, "HEAD~1")
             ? "HEAD~1...HEAD"
             : "HEAD";
+    }
+
+    private static bool RevisionExists(string workingDirectory, string revision)
+    {
+        var result = GitCli.Run(workingDirectory, "rev-parse", "--verify", "--quiet", revision);
+        if (result.ProcessStarted && result.ExitCode == 0 && !result.DrainTimedOut)
+        {
+            return true;
+        }
+
+        if (result.ProcessStarted &&
+            result.ExitCode == 1 &&
+            !result.DrainTimedOut &&
+            string.IsNullOrWhiteSpace(result.Output) &&
+            string.IsNullOrWhiteSpace(result.Error))
+        {
+            return false;
+        }
+
+        var detail = BoundGitDiagnostic(
+            string.IsNullOrWhiteSpace(result.Error) ? result.Output : result.Error);
+        throw new InvalidOperationException(
+            "git base-ref discovery failed: " +
+            $"ref={revision}; " +
+            $"process-started={result.ProcessStarted.ToString().ToLowerInvariant()}; " +
+            $"exit-code={result.ExitCode}; " +
+            $"drain-timed-out={result.DrainTimedOut.ToString().ToLowerInvariant()}; " +
+            $"detail={detail}");
     }
 }
