@@ -152,7 +152,7 @@ public sealed class WorkerContextPackageTests
         }
     }
 
-    [Xunit.Fact(SkipUnless = nameof(IsWindows))]
+    [Xunit.Fact(Skip = "Requires Windows.", SkipUnless = nameof(IsWindows))]
     public async Task Utf8DiscoveryCapturePreservesUnicodeBytesThroughOwnedNamedPipes()
     {
         const string expectedIdentity =
