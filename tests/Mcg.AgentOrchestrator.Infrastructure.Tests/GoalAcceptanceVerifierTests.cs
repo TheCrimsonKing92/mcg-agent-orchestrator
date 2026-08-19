@@ -2029,6 +2029,51 @@ public sealed class GoalAcceptanceVerifierDotnetBuildSlotTests : GoalAcceptanceV
         }
     }
 
+    [Xunit.Fact(DisplayName = "GoalAcceptanceVerifier_unfiltered_mtp_dashboard_run_excludes_host_integration")]
+    public async Task GoalAcceptanceVerifierUnfilteredMtpDashboardRunExcludesHostIntegration()
+    {
+        var calls = new List<string[]>();
+        var root = CreateManifestWorkspace("""
+            {
+              "version": 1,
+              "checks": [
+                { "name": "full dotnet tests: dashboard", "type": "dotnet-test", "runner": "mtp", "project": "tests/Mcg.AgentOrchestrator.Dashboard.Tests/Mcg.AgentOrchestrator.Dashboard.Tests.csproj", "arguments": ["--verbosity", "minimal"] }
+              ],
+              "forbiddenChangedPathGlobs": []
+            }
+            """);
+        try
+        {
+            var verifier = new GoalAcceptanceVerifier((args, _, _) =>
+            {
+                calls.Add(args);
+                if (IsMtpExecutableCall(args, "Mcg.AgentOrchestrator.Dashboard.Tests"))
+                {
+                    WriteMtpTrx(args);
+                    return Task.FromResult(new GoalAcceptanceVerifier.CommandResult(0, "Passed! - Failed: 0, Passed: 2, Skipped: 0, Total: 2."));
+                }
+
+                return Task.FromResult(args.Length >= 2 && args[0] == "dotnet" && args[1] == "test"
+                    ? new GoalAcceptanceVerifier.CommandResult(0, "Passed! - Failed: 0, Passed: 2, Skipped: 0, Total: 2.")
+                    : new GoalAcceptanceVerifier.CommandResult(0, "Build succeeded."));
+            });
+
+            var result = await verifier.RunAsync(
+                root,
+                new GoalId("abcdef12abcdef12abcdef12abcdef12"),
+                stableSlotIndex: 0);
+
+            Assert.True(result.Passed);
+            var mtpCall = calls.Single(call => IsMtpExecutableCall(call, "Mcg.AgentOrchestrator.Dashboard.Tests"));
+            AssertArgumentPair(mtpCall, "--filter-not-trait", "Category=HostIntegration");
+        }
+        finally
+        {
+            TryDeleteStableSlotHeartbeat(0);
+            DeleteDirectoryWithRetry(root);
+        }
+    }
+
     [Xunit.Fact(DisplayName = "GoalAcceptanceVerifier_extracts_all_failed_tests_from_real_mtp_trx_fixture")]
     public void GoalAcceptanceVerifierExtractsAllFailedTestsFromRealMtpTrxFixture()
     {
