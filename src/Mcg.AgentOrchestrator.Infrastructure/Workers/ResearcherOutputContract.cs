@@ -50,7 +50,7 @@ internal static partial class ResearcherOutputContract
     {
         research = string.Empty;
         diagnostic = string.Empty;
-        var normalized = text.ReplaceLineEndings("\n");
+        var normalized = MarkdownHeadingNormalizer.SeparateInlineAtxHeadings(text);
         var sections = new List<(string Label, int Start, int BodyStart)>();
         foreach (var (label, heading) in RequiredSections)
         {

@@ -605,6 +605,25 @@ public sealed class WorkerDispatchPlannerHandoffTests : WorkerDispatchTestSuppor
         Assert.Contains("Retry Planner for contract repair", result.Diagnostic, StringComparison.Ordinal);
     }
 
+    [Xunit.Fact(DisplayName = "Planner_output_contract_accepts_grok_cli_glued_first_heading")]
+    public void PlannerOutputContractAcceptsGrokCliGluedFirstHeading()
+    {
+        var glued = PlannerContractPlanFixture().Replace(
+            "## Premise validity",
+            "I'll pin exact symbols in the cited files so the plan's path citations match the worktree.## Premise validity",
+            StringComparison.Ordinal);
+
+        Assert.True(
+            PlannerOutputContract.TryValidate(glued, out var plan, out var diagnostic),
+            diagnostic);
+        Assert.StartsWith("## Premise validity", plan, StringComparison.Ordinal);
+        Assert.DoesNotContain("worktree.## Premise validity", plan, StringComparison.Ordinal);
+        Assert.Contains(
+            "worktree.\n## Premise validity",
+            MarkdownHeadingNormalizer.SeparateInlineAtxHeadings(glued),
+            StringComparison.Ordinal);
+    }
+
     [Xunit.Fact]
     public void PlannerContract_AcceptanceMappingWithoutKeyword_Passes()
     {
