@@ -47,10 +47,30 @@ public sealed class AgentCatalogTests
     Assert.Equal(OutputTokenPolicy.RoutinePaidMaxOutputTokens, AgentCatalog.RoutineApiMaxOutputTokens);
     Assert.Equal(OutputTokenPolicy.ComplexPaidMaxOutputTokens, AgentCatalog.ComplexApiMaxOutputTokens);
 
-    foreach (var agent in AgentCatalog.OllamaDefault().Agents)
+    foreach (var agent in AgentCatalog.OllamaDefault().Agents.Concat(AgentCatalog.LlamaCppDefault().Agents))
     {
         Assert.Equal(OutputTokenPolicy.RoutineLocalMaxOutputTokens, agent.Model.MaxOutputTokens);
         Assert.Equal(OutputTokenPolicy.ComplexLocalMaxOutputTokens, agent.ComplexModel!.MaxOutputTokens);
+    }
+}
+
+    [Xunit.Fact(DisplayName = "AgentCatalog_LlamaCppDefault_uses_qwen_code_subscription_for_every_role")]
+    public void AgentCatalogLlamaCppDefaultUsesQwenCodeSubscriptionForEveryRole()
+{
+    var catalog = AgentCatalog.LlamaCppDefault();
+
+    Assert.Equal(6, catalog.Agents.Count);
+
+    foreach (var role in Enum.GetValues<AgentRole>())
+    {
+        var agent = catalog.GetRequired(role);
+        Assert.Equal("LlamaCpp", agent.Model.ProviderName);
+        Assert.Equal(LlamaCppDefaults.DefaultModelAlias, agent.Model.ModelName);
+        Assert.Equal(AgentExecutionPolicy.PreferSubscription, agent.ExecutionPolicy);
+        Assert.Equal("qwen-code-cli", agent.Subscription!.WorkerProfileName);
+        Assert.Equal(LlamaCppDefaults.DefaultModelAlias, agent.Subscription.ModelAlias);
+        Assert.Equal("LlamaCpp", agent.ComplexModel!.ProviderName);
+        Assert.Equal(LlamaCppDefaults.DefaultModelAlias, agent.ComplexModel.ModelName);
     }
 }
     [Xunit.Fact(DisplayName = "AgentCatalog_AnthropicDefault_pairs_haiku_base_with_sonnet_complex")]
@@ -98,7 +118,7 @@ public sealed class AgentCatalogTests
     (string Id, string Name, AgentRole Role, string Provider, string? ModelAlias)[] fixture =
     [
         ("openai-planner", "OpenAI planner", AgentRole.Planner, "OpenAI", AgentCatalog.OpenAiLunaSubscriptionModelAlias),
-        ("ollama-ideation", "Ollama ideation", AgentRole.Ideation, "Ollama", null),
+        ("llamacpp-ideation", "LlamaCpp ideation", AgentRole.Ideation, "LlamaCpp", LlamaCppDefaults.DefaultModelAlias),
         ("openai-researcher", "OpenAI researcher", AgentRole.Researcher, "OpenAI", AgentCatalog.OpenAiSolSubscriptionModelAlias),
         ("openai-developer", "OpenAI developer", AgentRole.Developer, "OpenAI", AgentCatalog.OpenAiSolSubscriptionModelAlias),
         ("openai-tester", "OpenAI tester", AgentRole.Tester, "OpenAI", AgentCatalog.OpenAiLunaSubscriptionModelAlias),

@@ -21,8 +21,8 @@ public sealed class HealthInspectorTests
     Assert.Equal("ApiKey", report.Providers.Single(provider => provider.ProviderName == "OpenAI").Mode);
     Assert.Equal("Offline", report.Providers.Single(provider => provider.ProviderName == "Anthropic").Mode);
 }
-    [Xunit.Fact(DisplayName = "OrchestratorHealthInspector_recommends_ollama_for_paid_agents_when_available")]
-public async Task OrchestratorHealthInspectorRecommendsOllamaForPaidAgentsWhenAvailable()
+    [Xunit.Fact(DisplayName = "OrchestratorHealthInspector_recommends_llamacpp_for_paid_agents_when_available")]
+public async Task OrchestratorHealthInspectorRecommendsLlamaCppForPaidAgentsWhenAvailable()
 {
     using var listener = new TcpListener(IPAddress.Loopback, 0);
     listener.Start();
@@ -42,14 +42,14 @@ public async Task OrchestratorHealthInspectorRecommendsOllamaForPaidAgentsWhenAv
     var environment = new Dictionary<string, string?>(StringComparer.OrdinalIgnoreCase)
     {
         ["OPENAI_API_KEY"] = "set",
-        ["OLLAMA_BASE_URL"] = $"http://127.0.0.1:{port}"
+        ["LLAMA_CPP_BASE_URL"] = $"http://127.0.0.1:{port}"
     };
 
     var report = OrchestratorHealthInspector.Inspect(environment, AgentCatalog.Default(), WorkerProfileCatalog.Default(), _ => false);
 
     var developer = report.Agents.Single(agent => agent.Role == AgentRole.Developer);
-    Assert.Contains("local Ollama is available", developer.Detail, StringComparison.Ordinal);
-    Assert.Contains("switching this role to Ollama before paid work", developer.Detail, StringComparison.Ordinal);
+    Assert.Contains("local LlamaCpp is available", developer.Detail, StringComparison.Ordinal);
+    Assert.Contains("switching this role to LlamaCpp before paid work", developer.Detail, StringComparison.Ordinal);
     await server.WaitAsync(TimeSpan.FromSeconds(5));
 }
     [Xunit.Fact(DisplayName = "OrchestratorHealthInspector_validates_subscription_only_agents_by_worker_profile")]

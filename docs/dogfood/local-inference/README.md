@@ -2,19 +2,18 @@
 
 Pipeline composition while OpenAI/Anthropic are dark:
 
-| Role | Provider | Profile |
+| Role | What (backend) | How (harness) |
 |---|---|---|
 | Planner / Researcher / Developer | xAI `grok-4.6` | `grok-cli` (`--permission-mode plan` or `bypassPermissions`) |
-| Tester / Reviewer | LlamaCpp `qwen3.6-35b-a3b` | `llama-server-cli` |
-| Ideation | Ollama | ApiOnly |
+| Tester / Reviewer / Ideation | LlamaCpp `qwen3.6-35b-a3b` at `http://127.0.0.1:8080/v1` | `qwen-code-cli` (`--approval-mode yolo` for Tester, `plan` for Reviewer/Ideation) |
 
-Start the local server before Tester/Reviewer dispatch:
+Start the local server before LlamaCpp dispatch:
 
 ```powershell
 .\scripts\Invoke-RepoScript.ps1 scripts\Start-LlamaServer.ps1
 ```
 
-Default listen: `http://127.0.0.1:8080/v1`. Completions go through `scripts/Invoke-LlamaCompletion.ps1`.
+Default listen: `http://127.0.0.1:8080/v1` with `-c 16384`. `qwen-code-cli` must pass `--bare`: a default qwen-code startup at repo root is ~25728 tokens and 400s against 8k/16k; `--bare` drops that to ~8671, which fits 16k. `llama-server-cli` remains an optional HTTP-only smoke profile.
 
 # Local LLM bench receipts
 

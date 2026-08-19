@@ -1723,6 +1723,30 @@ public sealed class ConductorDriverTests
         Assert.Equal(GoalLifecycleState.Dispatched, ((ConductorAdvanceOutcome.Executed)result.Outcome).FromState);
     }
 
+    [Xunit.Fact(DisplayName = "ConductorDriver_WorkspaceReady_refinement_pending_holds_instead_of_escalating")]
+    public void ConductorDriverWorkspaceReadyRefinementPendingHoldsInsteadOfEscalating()
+    {
+        var (_, goal) = SimpleGoal();
+        var escalated = false;
+        var pending =
+            "SPEC_REFINEMENT_PENDING goal=deadbeef owner=durable-outbox executor_started=true detail=running";
+        var driver = MakeDriver(
+            getFacts: _ => new GoalLifecycleFacts(WorkspaceExists: true),
+            dispatchAndStart: _ => DispatchStartOutcome.Deferred(pending),
+            writeEscalationWithResult: (_, _, _) =>
+            {
+                escalated = true;
+                return new LandingEscalationWriteResult(0, "ok", 0, "ok", 0, "ok");
+            });
+
+        var result = driver.AdvanceOnce(goal, ConductorAutonomyPolicy.Permissive);
+
+        Assert.False(escalated);
+        var held = Assert.IsType<ConductorAdvanceOutcome.Held>(result.Outcome);
+        Assert.Equal(GoalLifecycleState.WorkspaceReady, held.State);
+        Assert.Equal(pending, held.Reason);
+    }
+
     [Xunit.Fact(DisplayName = "ConductorDriver_Dispatched_start_failure_escalates_with_reason")]
     public void ConductorDriverDispatchedStartFailureEscalatesWithReason()
     {

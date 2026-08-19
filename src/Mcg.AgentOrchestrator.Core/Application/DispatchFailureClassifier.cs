@@ -58,9 +58,9 @@ public static class DispatchRoleOutputCapabilities
     {
         capability = role switch
         {
-            AgentRole.Planner or AgentRole.Researcher or AgentRole.Reviewer => DispatchRoleOutputCapability.ReadOnly,
+            AgentRole.Planner or AgentRole.Researcher or AgentRole.Reviewer or AgentRole.Ideation => DispatchRoleOutputCapability.ReadOnly,
             AgentRole.Tester => DispatchRoleOutputCapability.VerificationOnly,
-            AgentRole.Developer or AgentRole.Ideation => DispatchRoleOutputCapability.RequiresChangeEvidence,
+            AgentRole.Developer => DispatchRoleOutputCapability.RequiresChangeEvidence,
             _ => DispatchRoleOutputCapability.RequiresChangeEvidence
         };
 

@@ -7,6 +7,7 @@ public enum ProviderKind
     AnthropicClaudeCli,
     OpenAICodexSpark,
     OpenAICodexOssCli,
+    // Qwen-code harness (how). Backend URL (what) is injected as {openaiBaseUrl}.
     OllamaQwenCodeCli
 }
 

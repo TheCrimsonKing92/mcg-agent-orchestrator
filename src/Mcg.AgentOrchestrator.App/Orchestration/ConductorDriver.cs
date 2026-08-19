@@ -336,9 +336,14 @@ internal sealed class ConductorDriver
             }
             catch (Exception ex)
             {
-                var exceptionReason = $"Subscription dispatch start failed: {ex.Message}";
-                GoalOperationJournal.Failed(dir, goal, "conductor:dispatch", exceptionReason);
-                return DispatchStartOutcome.SpawnFailed(exceptionReason);
+                var mapped = DispatchStartOutcome.FromDispatchException(
+                    ex,
+                    "Subscription dispatch start failed");
+                if (mapped.Category == DispatchStartOutcomeCategory.Deferred)
+                    return mapped;
+
+                GoalOperationJournal.Failed(dir, goal, "conductor:dispatch", mapped.Reason!);
+                return mapped;
             }
             var outcome = ClassifySubscriptionStartForConductor(result);
             if (outcome.Category == DispatchStartOutcomeCategory.RecoverableSandboxPrep)
@@ -390,9 +395,14 @@ internal sealed class ConductorDriver
             }
             catch (Exception ex) when (ex is not DispatchRecordWriteException)
             {
-                var exceptionReason = $"Recorded dispatch start failed: {ex.Message}";
-                GoalOperationJournal.Failed(dir, goal, "conductor:dispatch-start", exceptionReason);
-                return DispatchStartOutcome.SpawnFailed(exceptionReason);
+                var mapped = DispatchStartOutcome.FromDispatchException(
+                    ex,
+                    "Recorded dispatch start failed");
+                if (mapped.Category == DispatchStartOutcomeCategory.Deferred)
+                    return mapped;
+
+                GoalOperationJournal.Failed(dir, goal, "conductor:dispatch-start", mapped.Reason!);
+                return mapped;
             }
 
             var outcome = ClassifyRecordedDispatchStartForConductor(result);

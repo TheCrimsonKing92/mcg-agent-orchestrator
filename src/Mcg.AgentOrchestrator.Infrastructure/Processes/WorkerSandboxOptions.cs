@@ -7,7 +7,8 @@ public enum WorkerSandboxProvider
     Unknown,
     Codex,
     Claude,
-    Ollama
+    Ollama,
+    Grok
 }
 
 public interface IWorkerSandbox

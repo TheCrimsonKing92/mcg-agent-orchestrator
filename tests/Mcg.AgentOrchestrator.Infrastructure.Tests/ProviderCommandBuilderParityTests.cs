@@ -77,13 +77,32 @@ public sealed class ProviderCommandBuilderParityTests
         var promptRoot = Path.Combine(
             Path.GetTempPath(),
             $"provider-command-builder-{Guid.NewGuid():N}");
+        string? openaiBaseUrl = LlamaCppDefaults.BuildOpenAiCompatibleBaseUrl(LlamaCppDefaults.BaseUrl);
+        string? openaiApiKey = LlamaCppDefaults.OpenAiApiKey;
+        string? approvalMode = isWriteCapable ? "yolo" : "plan";
+        if (valueState == "blank")
+        {
+            openaiBaseUrl = string.Empty;
+            openaiApiKey = string.Empty;
+            approvalMode = string.Empty;
+        }
+        else if (valueState == "null")
+        {
+            openaiBaseUrl = null;
+            openaiApiKey = null;
+            approvalMode = null;
+        }
+
         var variables = new Dictionary<string, string?>
         {
             ["subscriptionModelName"] = modelAlias,
             ["subscriptionReasoningEffort"] = reasoningEffort,
             ["permissionMode"] = permissionMode,
             ["sandboxMode"] = sandboxMode,
-            ["workingDirectory"] = workingDirectory
+            ["workingDirectory"] = workingDirectory,
+            ["openaiBaseUrl"] = openaiBaseUrl,
+            ["openaiApiKey"] = openaiApiKey,
+            ["approvalMode"] = approvalMode
         };
 
         try

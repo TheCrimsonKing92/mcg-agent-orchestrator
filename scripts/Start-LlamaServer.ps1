@@ -7,7 +7,7 @@ param(
     [int] $GpuLayers = 41,
     [int] $CpuMoe = 30,
     [int] $Threads = 20,
-    [int] $Context = 8192,
+    [int] $Context = 16384,
     [string] $Alias = 'qwen3.6-35b-a3b',
     # Confirmed IQ4 fit-params: ngl 41, blk.14 ffn_down + blk.15-40 expert FFN on CPU.
     # Empty string restores the older -ngl 99 -ncmoe <CpuMoe> profile.

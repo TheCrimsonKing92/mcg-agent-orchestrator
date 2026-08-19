@@ -11,7 +11,10 @@ public static class ProviderCommandBuilder
         string resolvedPermissionMode,
         string resolvedSandboxMode,
         string? workingDirectory,
-        string? sessionId = null)
+        string? sessionId = null,
+        string? openaiBaseUrl = null,
+        string? openaiApiKey = null,
+        string? approvalMode = null)
     {
         return providerKind switch
         {
@@ -33,7 +36,7 @@ public static class ProviderCommandBuilder
                 modelAlias,
                 resolvedPermissionMode,
                 sessionId),
-            ProviderKind.OllamaQwenCodeCli => BuildQwen(modelAlias, workingDirectory),
+            ProviderKind.OllamaQwenCodeCli => BuildQwen(modelAlias, workingDirectory, openaiBaseUrl, openaiApiKey, approvalMode),
             _ => throw new ArgumentOutOfRangeException(
                 nameof(providerKind),
                 providerKind,
@@ -118,18 +121,23 @@ public static class ProviderCommandBuilder
 
     private static IReadOnlyList<string> BuildQwen(
         string modelAlias,
-        string? workingDirectory)
+        string? workingDirectory,
+        string? openaiBaseUrl,
+        string? openaiApiKey,
+        string? approvalMode)
     {
         var command = new List<string>
         {
-            "$env:OPENAI_BASE_URL='http://127.0.0.1:11434/v1';",
-            "$env:OPENAI_API_KEY='ollama';",
+            $"$env:OPENAI_BASE_URL={Expand(openaiBaseUrl)};",
+            $"$env:OPENAI_API_KEY={Expand(openaiApiKey)};",
             $"$env:OPENAI_MODEL={Expand(modelAlias)};"
         };
         command.Add("Set-Location");
         command.Add($"{Expand(workingDirectory)};");
         command.Add("qwen");
-        command.Add("--yolo");
+        command.Add("--bare");
+        command.Add("--approval-mode");
+        command.Add(Expand(approvalMode));
         command.Add("-p");
         // Slice 1 still passes the typed command through WorkerCommandTemplate.Prepare,
         // which owns prompt-path creation and expands this legacy delivery token.

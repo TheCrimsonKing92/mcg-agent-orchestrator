@@ -140,8 +140,11 @@ public static class WorkerProfileDispatcher
     public const string OpenAiSparkSubscriptionProfileName = "codex-spark";
     public const string OpenAiSparkSubscriptionModelName = "gpt-5.3-codex-spark";
     public const string AnthropicSubscriptionProfileName = "claude-cli";
+    public const string XaiSubscriptionProfileName = "grok-cli";
+    public const string QwenCodeCliProfileName = "qwen-code-cli";
+    public const string LlamaCppSubscriptionProfileName = QwenCodeCliProfileName;
     public const string LightRoleAnthropicModelName = "claude-haiku-4-5";
-    public const string OllamaSubscriptionProfileName = "qwen-code-cli";
+    public const string OllamaSubscriptionProfileName = QwenCodeCliProfileName;
     public const string ReviewerScopeUnavailableErrorCode = WorkerGitContext.ReviewerScopeUnavailableErrorCode;
     public const string ReviewerMergeBaseUnavailableErrorCode = WorkerGitContext.ReviewerMergeBaseUnavailableErrorCode;
     public const string ReviewerMergeTreeUnavailableErrorCode = WorkerGitContext.ReviewerMergeTreeUnavailableErrorCode;
@@ -316,7 +319,7 @@ public static class WorkerProfileDispatcher
                 ArtifactTooLargeErrorCode,
                 findings);
         }
-        var dispatchVariables = BuildDispatchVariables(task.RequiredRole, workingDirectory, variables, sandboxOptions);
+        var dispatchVariables = BuildDispatchVariables(task.RequiredRole, workingDirectory, variables, sandboxOptions, providerName);
         var workerProviderKind = DefaultProviders.ResolveProfile(profile.Name).Identity.Kind;
         var commandTemplate = BuildDispatchCommandTemplate(profile, workerProviderKind, dispatchVariables);
         var preparation = WorkerCommandTemplate.Prepare(
@@ -1560,7 +1563,9 @@ public static class WorkerProfileDispatcher
             ["taskComplexity"] = selection.Complexity.ToString(),
             ["modelSelectionReason"] = selection.Reason,
             ["dispatchLane"] = selection.DispatchLane,
-            ["executionPolicy"] = agent.ExecutionPolicy.ToString()
+            ["executionPolicy"] = agent.ExecutionPolicy.ToString(),
+            ["openaiBaseUrl"] = OpenAiCompatibleCliBackend.ResolveBaseUrl(selection.Model.ProviderName),
+            ["openaiApiKey"] = OpenAiCompatibleCliBackend.ResolveApiKey(selection.Model.ProviderName)
         };
     }
 
@@ -3087,7 +3092,8 @@ public static class WorkerProfileDispatcher
         AgentRole role,
         string workingDirectory,
         IReadOnlyDictionary<string, string?>? variables,
-        WorkerSandboxOptions? sandboxOptions = null)
+        WorkerSandboxOptions? sandboxOptions = null,
+        string? providerName = null)
     {
         var isWriteCapable = role == AgentRole.Developer || role == AgentRole.Tester;
         // When the OS worker sandbox is active, Codex's nested sandbox is disabled so it does not run
@@ -3100,7 +3106,10 @@ public static class WorkerProfileDispatcher
             ["sandboxMode"] = osSandbox
                 ? "danger-full-access"
                 : (isWriteCapable ? "workspace-write" : "read-only"),
-            ["permissionMode"] = isWriteCapable ? "bypassPermissions" : "plan"
+            ["permissionMode"] = isWriteCapable ? "bypassPermissions" : "plan",
+            ["approvalMode"] = isWriteCapable ? "yolo" : "plan",
+            ["openaiBaseUrl"] = OpenAiCompatibleCliBackend.ResolveBaseUrl(providerName),
+            ["openaiApiKey"] = OpenAiCompatibleCliBackend.ResolveApiKey(providerName)
         };
 
         if (variables is not null)
@@ -3135,7 +3144,10 @@ public static class WorkerProfileDispatcher
                 GetDispatchVariable(dispatchVariables, "subscriptionReasoningEffort"),
                 GetDispatchVariable(dispatchVariables, "permissionMode"),
                 GetDispatchVariable(dispatchVariables, "sandboxMode"),
-                GetDispatchVariable(dispatchVariables, "workingDirectory")));
+                GetDispatchVariable(dispatchVariables, "workingDirectory"),
+                openaiBaseUrl: GetDispatchVariable(dispatchVariables, "openaiBaseUrl"),
+                openaiApiKey: GetDispatchVariable(dispatchVariables, "openaiApiKey"),
+                approvalMode: GetDispatchVariable(dispatchVariables, "approvalMode")));
     }
 
     private static bool HasRequiredBuiltInVariables(
@@ -3156,7 +3168,7 @@ public static class WorkerProfileDispatcher
             ProviderKind.AnthropicClaudeCli =>
                 HasKeys(variables, "subscriptionModelName", "permissionMode"),
             ProviderKind.OllamaQwenCodeCli =>
-                HasKeys(variables, "subscriptionModelName", "workingDirectory"),
+                HasKeys(variables, "subscriptionModelName", "workingDirectory", "openaiBaseUrl", "openaiApiKey", "approvalMode"),
             _ => false
         };
     }

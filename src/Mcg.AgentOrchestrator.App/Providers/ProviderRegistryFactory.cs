@@ -26,6 +26,12 @@ internal static class ProviderRegistryFactory
             ? new ChatCompletionsModelProvider(ProviderHttpClientFactory.CreateOllamaClient(ollamaBaseUrl), ollamaModel, "Ollama")
             : new ScriptedModelProvider("Ollama"));
 
+        var llamaBaseUrl = LlamaCppDefaults.ResolveBaseUrl();
+        var llamaModel = Environment.GetEnvironmentVariable("LLAMA_CPP_MODEL") ?? LlamaCppDefaults.DefaultModelAlias;
+        providers.Add(IsLlamaCppReachable(llamaBaseUrl)
+            ? new ChatCompletionsModelProvider(ProviderHttpClientFactory.CreateLlamaCppClient(llamaBaseUrl), llamaModel, "LlamaCpp")
+            : new ScriptedModelProvider("LlamaCpp"));
+
         return new InMemoryModelProviderRegistry(providers);
     }
 
@@ -34,10 +40,23 @@ internal static class ProviderRegistryFactory
 
     public static bool IsOllamaReachable(string baseUrl)
     {
+        return IsOpenAiCompatibleReachable(OllamaDefaults.BuildOpenAiModelsUrl(baseUrl));
+    }
+
+    public static bool IsLlamaCppReachable() =>
+        IsLlamaCppReachable(LlamaCppDefaults.ResolveBaseUrl());
+
+    public static bool IsLlamaCppReachable(string baseUrl)
+    {
+        return IsOpenAiCompatibleReachable(LlamaCppDefaults.BuildOpenAiModelsUrl(baseUrl));
+    }
+
+    private static bool IsOpenAiCompatibleReachable(string modelsUrl)
+    {
         try
         {
             using var probe = new HttpClient { Timeout = TimeSpan.FromSeconds(5) };
-            var response = probe.GetAsync(OllamaDefaults.BuildOpenAiModelsUrl(baseUrl)).GetAwaiter().GetResult();
+            var response = probe.GetAsync(modelsUrl).GetAwaiter().GetResult();
             return response.IsSuccessStatusCode;
         }
         catch

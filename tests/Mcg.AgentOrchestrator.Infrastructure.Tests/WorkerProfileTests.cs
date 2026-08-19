@@ -98,6 +98,20 @@ public sealed class WorkerProfileTests
     Assert.Equal("qwen-code-cli", WorkerProfileDispatcher.ResolveSubscriptionProfileName(agent));
 }
 
+    [Xunit.Fact(DisplayName = "LlamaCpp_agents_default_to_qwen_code_subscription_profile")]
+    public void LlamaCppAgentsDefaultToQwenCodeSubscriptionProfile()
+{
+    var agent = new AgentDefinition(
+        AgentId.New(),
+        "Local reviewer",
+        AgentRole.Reviewer,
+        new ModelProfile("LlamaCpp", LlamaCppDefaults.DefaultModelAlias, ModelCapability.Text | ModelCapability.Code, SubscriptionMode.LocalBridge),
+        ExecutionPolicy: AgentExecutionPolicy.PreferSubscription);
+
+    Assert.Equal(WorkerProfileDispatcher.QwenCodeCliProfileName, WorkerProfileDispatcher.ResolveSubscriptionProfileName(agent));
+    Assert.Equal(WorkerProfileDispatcher.QwenCodeCliProfileName, WorkerProfileDispatcher.LlamaCppSubscriptionProfileName);
+}
+
     [Xunit.Fact(DisplayName = "WorkerProfileCatalog_default_qwen_code_profile_pins_model_and_prompt")]
     public void WorkerProfileCatalogDefaultQwenCodeProfilePinsModelAndPrompt()
 {
@@ -106,7 +120,11 @@ public sealed class WorkerProfileTests
     Assert.Contains("OPENAI_MODEL={subscriptionModelName}", qwenCode.CommandTemplate, StringComparison.Ordinal);
     Assert.Contains("Set-Location {workingDirectory}", qwenCode.CommandTemplate, StringComparison.Ordinal);
     Assert.Contains("Get-Content -Raw {promptPath}", qwenCode.CommandTemplate, StringComparison.Ordinal);
-    Assert.Contains("127.0.0.1:11434", qwenCode.CommandTemplate, StringComparison.Ordinal);
+    Assert.Contains("{openaiBaseUrl}", qwenCode.CommandTemplate, StringComparison.Ordinal);
+    Assert.Contains("{openaiApiKey}", qwenCode.CommandTemplate, StringComparison.Ordinal);
+    Assert.Contains("--bare --approval-mode {approvalMode}", qwenCode.CommandTemplate, StringComparison.Ordinal);
+    Assert.DoesNotContain("11434", qwenCode.CommandTemplate, StringComparison.Ordinal);
+    Assert.DoesNotContain("--yolo", qwenCode.CommandTemplate, StringComparison.Ordinal);
     Assert.False(WorkerProfileDiagnostics.IsEchoOnlyCommand(qwenCode.CommandTemplate));
 }
     [Xunit.Fact(DisplayName = "WorkerProfileCatalog_upsert_replaces_existing_profile")]
@@ -196,6 +214,26 @@ public sealed class WorkerProfileTests
 
     Assert.Contains("--model {subscriptionModelName}", restored.GetRequired("claude-cli").CommandTemplate, StringComparison.Ordinal);
     Assert.DoesNotContain("{promptPath}", restored.GetRequired("claude-cli").CommandTemplate, StringComparison.Ordinal);
+}
+
+    [Xunit.Fact(DisplayName = "WorkerProfileStore_load_repairs_qwen_code_profile_baked_backend_url")]
+    public void WorkerProfileStoreLoadRepairsQwenCodeProfileBakedBackendUrl()
+{
+    var root = CreateTempDirectory();
+    var path = Path.Combine(root, "workers.json");
+    var saved = WorkerProfileCatalog.Default()
+        .Upsert(new WorkerProfile(
+            "qwen-code-cli",
+            "$env:OPENAI_BASE_URL='http://127.0.0.1:11434/v1'; $env:OPENAI_API_KEY='ollama'; $env:OPENAI_MODEL={subscriptionModelName}; Set-Location {workingDirectory}; qwen --yolo -p (Get-Content -Raw {promptPath})"));
+
+    WorkerProfileStore.Save(path, saved);
+    var restored = WorkerProfileStore.Load(path);
+    var template = restored.GetRequired("qwen-code-cli").CommandTemplate;
+
+    Assert.Contains("{openaiBaseUrl}", template, StringComparison.Ordinal);
+    Assert.Contains("{approvalMode}", template, StringComparison.Ordinal);
+    Assert.DoesNotContain("11434", template, StringComparison.Ordinal);
+    Assert.DoesNotContain("--yolo", template, StringComparison.Ordinal);
 }
     [Xunit.Fact(DisplayName = "WorkerProfileStore_load_repairs_claude_profile_missing_permission_mode")]
     public void WorkerProfileStoreLoadRepairsClaudeProfileMissingPermissionMode()

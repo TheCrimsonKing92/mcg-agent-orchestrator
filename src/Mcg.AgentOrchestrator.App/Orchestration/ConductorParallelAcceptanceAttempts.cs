@@ -971,7 +971,7 @@ internal sealed class ConductorParallelAcceptanceAttemptCoordinator
             var goal = kernel.Goals.FirstOrDefault(g => g.Id.Value == attempt.GoalId)
                 ?? throw new InvalidOperationException($"goal {attempt.GoalPrefix} was not found for acceptance attempt");
             var providers = ProviderRegistryFactory.CreateDefaultProviders();
-            var agentFallback = ProviderRegistryFactory.IsOllamaReachable() ? AgentCatalog.OllamaDefault() : null;
+            var agentFallback = ProviderRegistryFactory.IsLlamaCppReachable() ? AgentCatalog.LlamaCppDefault() : null;
             var agents = AgentCatalogStore.Load(workspace.AgentCatalogPath, agentFallback).Agents;
             var profiles = WorkerProfileStore.Load(workspace.WorkerProfilePath);
             var driver = new ConductorDriver(

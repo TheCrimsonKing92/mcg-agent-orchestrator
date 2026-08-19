@@ -744,6 +744,80 @@ public sealed class DispatchProcessHostTests
         }
     }
 
+    [Xunit.Fact(DisplayName = "DispatchProcessHost_ApplyWorkerSandbox_scopes_grok_home_to_grok_provider")]
+    public void ApplyWorkerSandboxScopesGrokHomeToGrokProvider()
+    {
+        if (!OperatingSystem.IsWindows())
+        {
+            return;
+        }
+
+        var root = Path.Combine(Path.GetTempPath(), "mcg-grok-provider-sandbox-test", Guid.NewGuid().ToString("n"));
+        var worktree = Path.Combine(root, "worktree");
+        var userGrok = Path.Combine(root, "user-grok");
+        Directory.CreateDirectory(root);
+        try
+        {
+            Directory.CreateDirectory(worktree);
+            Directory.CreateDirectory(userGrok);
+            File.WriteAllText(Path.Combine(userGrok, "auth.json"), "{\"token\":\"test\"}\n");
+            File.WriteAllText(Path.Combine(userGrok, "config.toml"), "[cli]\nauto_update = false\n");
+
+            var startInfo = CreateSandboxStartInfo(worktree);
+            DispatchProcessHost.SeedGrokEnvironment(
+                startInfo,
+                Path.Combine(worktree, ".mcg-sandbox"),
+                grokHomeDirectoryAccessor: () => userGrok);
+
+            var grokHome = Path.Combine(worktree, ".mcg-sandbox", "grok-home");
+            Assert.Equal(grokHome, startInfo.Environment["GROK_HOME"]);
+            Assert.Equal("1", startInfo.Environment["GROK_DISABLE_AUTOUPDATER"]);
+            Assert.True(File.Exists(Path.Combine(grokHome, "auth.json")));
+            Assert.True(File.Exists(Path.Combine(grokHome, "config.toml")));
+            Assert.Contains("token", File.ReadAllText(Path.Combine(grokHome, "auth.json")), StringComparison.Ordinal);
+        }
+        finally
+        {
+            try { Directory.Delete(root, recursive: true); } catch { }
+        }
+    }
+
+    [Xunit.Fact(DisplayName = "DispatchProcessHost_ApplyWorkerSandbox_sets_grok_home_for_grok_provider")]
+    public void ApplyWorkerSandboxSetsGrokHomeForGrokProvider()
+    {
+        if (!OperatingSystem.IsWindows())
+        {
+            return;
+        }
+
+        var root = Path.Combine(Path.GetTempPath(), "mcg-grok-apply-sandbox-test", Guid.NewGuid().ToString("n"));
+        var worktree = Path.Combine(root, "worktree");
+        Directory.CreateDirectory(root);
+        try
+        {
+            Directory.CreateDirectory(worktree);
+            var startInfo = CreateSandboxStartInfo(worktree);
+            var parameters = CreateSandboxParameters(root, worktree, WorkerSandboxProvider.Grok);
+
+            DispatchProcessHost.ApplyWorkerSandbox(
+                startInfo,
+                parameters,
+                new WorkerSandboxPreparer(new RecordingIntegrityLabeler(new IntegrityLabelState(Exists: true, Low: true, Inheritable: true))),
+                protectWorkspaceBoundary: _ => { });
+
+            var sandboxRoot = Path.Combine(worktree, ".mcg-sandbox");
+            var grokHome = Path.Combine(sandboxRoot, "grok-home");
+            Assert.Equal(grokHome, startInfo.Environment["GROK_HOME"]);
+            Assert.True(Directory.Exists(grokHome));
+            Assert.False(startInfo.Environment.ContainsKey("CODEX_HOME"));
+            Assert.False(startInfo.Environment.ContainsKey("CLAUDE_CONFIG_DIR"));
+        }
+        finally
+        {
+            try { Directory.Delete(root, recursive: true); } catch { }
+        }
+    }
+
     [Xunit.Fact(DisplayName = "DispatchProcessHost_ApplyWorkerSandbox_leaves_unknown_provider_without_provider_home")]
     public void ApplyWorkerSandboxLeavesUnknownProviderWithoutProviderHome()
     {
@@ -770,8 +844,10 @@ public sealed class DispatchProcessHostTests
             var sandboxRoot = Path.Combine(worktree, ".mcg-sandbox");
             Assert.False(startInfo.Environment.ContainsKey("CODEX_HOME"));
             Assert.False(startInfo.Environment.ContainsKey("CLAUDE_CONFIG_DIR"));
+            Assert.False(startInfo.Environment.ContainsKey("GROK_HOME"));
             Assert.False(Directory.Exists(Path.Combine(sandboxRoot, "codex-home")));
             Assert.False(Directory.Exists(Path.Combine(sandboxRoot, "claude-config")));
+            Assert.False(Directory.Exists(Path.Combine(sandboxRoot, "grok-home")));
             Assert.True(Directory.Exists(Path.Combine(sandboxRoot, "temp")));
             Assert.True(Directory.Exists(Path.Combine(sandboxRoot, "bin")));
         }
