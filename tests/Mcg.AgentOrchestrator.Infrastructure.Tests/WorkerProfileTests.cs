@@ -112,19 +112,22 @@ public sealed class WorkerProfileTests
     Assert.Equal(WorkerProfileDispatcher.QwenCodeCliProfileName, WorkerProfileDispatcher.LlamaCppSubscriptionProfileName);
 }
 
-    [Xunit.Fact(DisplayName = "WorkerProfileCatalog_default_qwen_code_profile_pins_model_and_prompt")]
-    public void WorkerProfileCatalogDefaultQwenCodeProfilePinsModelAndPrompt()
+    [Xunit.Fact(DisplayName = "WorkerProfileCatalog_default_qwen_code_profile_pins_model_and_reads_prompt_from_stdin")]
+    public void WorkerProfileCatalogDefaultQwenCodeProfilePinsModelAndReadsPromptFromStdin()
 {
     var qwenCode = WorkerProfileCatalog.Default().GetRequired("qwen-code-cli");
 
     Assert.Contains("OPENAI_MODEL={subscriptionModelName}", qwenCode.CommandTemplate, StringComparison.Ordinal);
     Assert.Contains("Set-Location {workingDirectory}", qwenCode.CommandTemplate, StringComparison.Ordinal);
-    Assert.Contains("Get-Content -Raw {promptPath}", qwenCode.CommandTemplate, StringComparison.Ordinal);
     Assert.Contains("{openaiBaseUrl}", qwenCode.CommandTemplate, StringComparison.Ordinal);
     Assert.Contains("{openaiApiKey}", qwenCode.CommandTemplate, StringComparison.Ordinal);
     Assert.Contains("--bare --approval-mode {approvalMode}", qwenCode.CommandTemplate, StringComparison.Ordinal);
+    Assert.Contains("--input-format text", qwenCode.CommandTemplate, StringComparison.Ordinal);
+    Assert.DoesNotContain("{promptPath}", qwenCode.CommandTemplate, StringComparison.Ordinal);
+    Assert.DoesNotContain("-p (Get-Content", qwenCode.CommandTemplate, StringComparison.Ordinal);
     Assert.DoesNotContain("11434", qwenCode.CommandTemplate, StringComparison.Ordinal);
     Assert.DoesNotContain("--yolo", qwenCode.CommandTemplate, StringComparison.Ordinal);
+    Assert.Equal("qwen", WorkerProfileDiagnostics.ExtractExecutable(qwenCode.CommandTemplate), StringComparer.OrdinalIgnoreCase);
     Assert.False(WorkerProfileDiagnostics.IsEchoOnlyCommand(qwenCode.CommandTemplate));
 }
     [Xunit.Fact(DisplayName = "WorkerProfileCatalog_upsert_replaces_existing_profile")]
@@ -234,6 +237,28 @@ public sealed class WorkerProfileTests
     Assert.Contains("{approvalMode}", template, StringComparison.Ordinal);
     Assert.DoesNotContain("11434", template, StringComparison.Ordinal);
     Assert.DoesNotContain("--yolo", template, StringComparison.Ordinal);
+    Assert.DoesNotContain("{promptPath}", template, StringComparison.Ordinal);
+    Assert.DoesNotContain("-p (Get-Content", template, StringComparison.Ordinal);
+    Assert.Contains("--input-format text", template, StringComparison.Ordinal);
+}
+
+    [Xunit.Fact(DisplayName = "WorkerProfileStore_load_repairs_qwen_code_profile_argv_prompt")]
+    public void WorkerProfileStoreLoadRepairsQwenCodeProfileArgvPrompt()
+{
+    var root = CreateTempDirectory();
+    var path = Path.Combine(root, "workers.json");
+    var saved = WorkerProfileCatalog.Default()
+        .Upsert(new WorkerProfile(
+            "qwen-code-cli",
+            "$env:OPENAI_BASE_URL={openaiBaseUrl}; $env:OPENAI_API_KEY={openaiApiKey}; $env:OPENAI_MODEL={subscriptionModelName}; Set-Location {workingDirectory}; qwen --bare --approval-mode {approvalMode} -p (Get-Content -Raw {promptPath})"));
+
+    WorkerProfileStore.Save(path, saved);
+    var restored = WorkerProfileStore.Load(path);
+    var template = restored.GetRequired("qwen-code-cli").CommandTemplate;
+
+    Assert.DoesNotContain("{promptPath}", template, StringComparison.Ordinal);
+    Assert.DoesNotContain("-p (Get-Content", template, StringComparison.Ordinal);
+    Assert.Contains("--input-format text", template, StringComparison.Ordinal);
 }
     [Xunit.Fact(DisplayName = "WorkerProfileStore_load_repairs_claude_profile_missing_permission_mode")]
     public void WorkerProfileStoreLoadRepairsClaudeProfileMissingPermissionMode()

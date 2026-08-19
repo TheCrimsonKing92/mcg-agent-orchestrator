@@ -167,6 +167,14 @@ public sealed class DispatchProcessHostTests
                 PromptPath: promptPath);
 
             Assert.True(DispatchProcessHost.ShouldWritePromptToStdin(parameters));
+            Assert.True(DispatchProcessHost.ShouldWritePromptToStdin(parameters with
+            {
+                Provider = WorkerSandboxProvider.Ollama
+            }));
+            Assert.False(DispatchProcessHost.ShouldWritePromptToStdin(parameters with
+            {
+                Provider = WorkerSandboxProvider.Grok
+            }));
             DispatchProcessHost.WriteUtf8PromptToStream(promptPath, stdin);
 
             var actual = stdin.ToArray();

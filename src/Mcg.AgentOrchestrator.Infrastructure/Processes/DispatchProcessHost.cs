@@ -1914,7 +1914,7 @@ public static void DropToLow() {
     }
 
     internal static bool ShouldWritePromptToStdin(DispatchRunParameters parameters) =>
-        parameters.Provider is WorkerSandboxProvider.Claude or WorkerSandboxProvider.Codex &&
+        parameters.Provider is WorkerSandboxProvider.Claude or WorkerSandboxProvider.Codex or WorkerSandboxProvider.Ollama &&
         !string.IsNullOrWhiteSpace(parameters.PromptPath);
 
     internal static void WritePromptToWorkerStdin(Process worker, DispatchRunParameters parameters)

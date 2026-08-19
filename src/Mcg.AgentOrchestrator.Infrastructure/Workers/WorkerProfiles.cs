@@ -394,7 +394,7 @@ public sealed record WorkerProfileCatalog(IReadOnlyList<WorkerProfile> Profiles)
             new WorkerProfile("codex-cli", "codex exec --json --skip-git-repo-check --model {subscriptionModelName} -c model_reasoning_effort={subscriptionReasoningEffort} --sandbox {sandboxMode} --cd {workingDirectory}"),
             new WorkerProfile("codex-spark", "codex exec --json --skip-git-repo-check --model {subscriptionModelName} -c model_reasoning_effort={subscriptionReasoningEffort} --sandbox {sandboxMode} --cd {workingDirectory}"),
             new WorkerProfile("codex-oss-cli", "codex exec --skip-git-repo-check --oss --local-provider ollama --model {subscriptionModelName} --sandbox {sandboxMode} --cd {workingDirectory}"),
-            new WorkerProfile("qwen-code-cli", "$env:OPENAI_BASE_URL={openaiBaseUrl}; $env:OPENAI_API_KEY={openaiApiKey}; $env:OPENAI_MODEL={subscriptionModelName}; Set-Location {workingDirectory}; qwen --bare --approval-mode {approvalMode} -p (Get-Content -Raw {promptPath})"),
+            new WorkerProfile("qwen-code-cli", "$env:OPENAI_BASE_URL={openaiBaseUrl}; $env:OPENAI_API_KEY={openaiApiKey}; $env:OPENAI_MODEL={subscriptionModelName}; Set-Location {workingDirectory}; qwen --bare --approval-mode {approvalMode} --input-format text"),
             // -p = headless print mode; without it Claude opens the interactive REPL and emits nothing (exits 0 empty, so the task is wrongly classified Failed). The prompt is piped via stdin and --session-id is appended by the spawn layer.
             new WorkerProfile("claude-cli", "claude -p --model {subscriptionModelName} --permission-mode {permissionMode}"),
             new WorkerProfile("grok-cli", "grok --prompt-file {promptPath} --model {subscriptionModelName} --permission-mode {permissionMode} --cwd {workingDirectory} --output-format plain --no-subagents --verbatim --max-turns 32")
@@ -551,7 +551,9 @@ public static class WorkerProfileStore
                 !profile.CommandTemplate.Contains("{approvalMode}", StringComparison.OrdinalIgnoreCase) ||
                 !profile.CommandTemplate.Contains("--bare", StringComparison.OrdinalIgnoreCase) ||
                 profile.CommandTemplate.Contains("11434", StringComparison.Ordinal) ||
-                profile.CommandTemplate.Contains("--yolo", StringComparison.OrdinalIgnoreCase);
+                profile.CommandTemplate.Contains("--yolo", StringComparison.OrdinalIgnoreCase) ||
+                profile.CommandTemplate.Contains("{promptPath}", StringComparison.OrdinalIgnoreCase) ||
+                profile.CommandTemplate.Contains("-p (Get-Content", StringComparison.OrdinalIgnoreCase);
         }
 
         return provider.Identity.Kind is ProviderKind.AnthropicClaudeCli &&
