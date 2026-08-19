@@ -1927,6 +1927,10 @@ public static void DropToLow() {
                 worker.StandardInput.Flush();
             }
         }
+        catch (IOException)
+        {
+            // The worker can exit before the prompt copy finishes. Drain/exit handling records that.
+        }
         finally
         {
             // EOF is the end-of-prompt signal for stdin-driven workers. Close before draining output so

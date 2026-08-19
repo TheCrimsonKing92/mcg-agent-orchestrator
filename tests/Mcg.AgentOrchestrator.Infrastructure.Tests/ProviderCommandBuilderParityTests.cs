@@ -139,6 +139,28 @@ public sealed class ProviderCommandBuilderParityTests
         }
     }
 
+    [Xunit.Fact(DisplayName = "ProviderCommandBuilder_qwen_reads_prompt_from_stdin")]
+    public void ProviderCommandBuilderQwenReadsPromptFromStdin()
+    {
+        var command = string.Join(
+            ' ',
+            ProviderCommandBuilder.Build(
+                ProviderKind.OllamaQwenCodeCli,
+                "qwen3.6-35b-a3b",
+                reasoningEffort: null,
+                resolvedPermissionMode: "bypassPermissions",
+                resolvedSandboxMode: "workspace-write",
+                workingDirectory: @"C:\worker repo",
+                openaiBaseUrl: "http://127.0.0.1:8080/v1",
+                openaiApiKey: "llamacpp",
+                approvalMode: "yolo"));
+
+        Assert.Contains("--input-format text", command, StringComparison.Ordinal);
+        Assert.DoesNotContain("-p", command, StringComparison.Ordinal);
+        Assert.DoesNotContain("Get-Content", command, StringComparison.Ordinal);
+        Assert.DoesNotContain("{promptPath}", command, StringComparison.Ordinal);
+    }
+
     [Xunit.Fact(DisplayName = "ProviderCommandBuilder_appends_optional_claude_session_id")]
     public void ProviderCommandBuilderAppendsOptionalClaudeSessionId()
     {
