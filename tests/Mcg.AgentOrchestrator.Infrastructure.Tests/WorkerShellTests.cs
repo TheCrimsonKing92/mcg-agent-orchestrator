@@ -97,4 +97,32 @@ public sealed class WorkerShellTests
         Assert.False(startInfo.RedirectStandardInput);
         Assert.Null(startInfo.StandardInputEncoding);
     }
+
+    [Xunit.Fact(DisplayName = "ProcessOutputDrainPolicy_default_is_twelve_second_completion_and_two_second_grace")]
+    public void ProcessOutputDrainPolicyDefaultIsTwelveSecondCompletionAndTwoSecondGrace()
+    {
+        var policy = ProcessOutputDrainPolicy.Default.Validate();
+
+        Assert.Equal(TimeSpan.FromSeconds(12), policy.Completion);
+        Assert.Equal(TimeSpan.FromSeconds(2), policy.CancellationGrace);
+    }
+
+    [Xunit.Theory(DisplayName = "ProcessOutputDrainPolicy_rejects_nonpositive_spans")]
+    [Xunit.InlineData(0, 2000, "Completion")]
+    [Xunit.InlineData(-1, 2000, "Completion")]
+    [Xunit.InlineData(12_000, 0, "CancellationGrace")]
+    [Xunit.InlineData(12_000, -1, "CancellationGrace")]
+    public void ProcessOutputDrainPolicyRejectsNonpositiveSpans(
+        int completionMs,
+        int graceMs,
+        string parameterName)
+    {
+        var policy = new ProcessOutputDrainPolicy(
+            TimeSpan.FromMilliseconds(completionMs),
+            TimeSpan.FromMilliseconds(graceMs));
+
+        var exception = Assert.Throws<ArgumentOutOfRangeException>(() => policy.Validate());
+
+        Assert.Equal(parameterName, exception.ParamName);
+    }
 }
