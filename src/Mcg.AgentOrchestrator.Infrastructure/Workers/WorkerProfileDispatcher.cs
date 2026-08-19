@@ -221,7 +221,8 @@ public static class WorkerProfileDispatcher
             goal,
             task,
             providerName ?? "unknown",
-            modelName ?? "unknown");
+            modelName ?? "unknown",
+            profile.Name);
         if (durableArtifactFindings.Any(finding => finding.StartsWith("blocked:", StringComparison.OrdinalIgnoreCase)))
         {
             var errorCode = ResolvePreflightErrorCode(durableArtifactFindings);
@@ -305,7 +306,11 @@ public static class WorkerProfileDispatcher
         TaskBrief budgetedBrief;
         try
         {
-            budgetedBrief = WorkerPromptInputBudget.Apply(packagedBrief, providerName, modelName).Brief;
+            budgetedBrief = WorkerPromptInputBudget.Apply(
+                packagedBrief,
+                providerName,
+                modelName,
+                workerProfileName: profile.Name).Brief;
         }
         catch (WorkerPromptInputBudgetExceededException error)
             when (UsesResearchFirstArtifactHandoff(goal, task))
@@ -614,7 +619,8 @@ public static class WorkerProfileDispatcher
                 goal,
                 task,
                 dispatchProviderName,
-                effectiveModelName);
+                effectiveModelName,
+                profile.Name);
 
             AddProfileFinding(
                 findings,
@@ -794,7 +800,8 @@ public static class WorkerProfileDispatcher
         Goal goal,
         TaskSpec task,
         string providerName,
-        string modelName)
+        string modelName,
+        string? workerProfileName = null)
     {
         var plannerIndex = goal.Tasks.ToList().FindIndex(candidate => candidate.RequiredRole == AgentRole.Planner);
         var researcherIndex = goal.Tasks.ToList().FindIndex(candidate => candidate.RequiredRole == AgentRole.Researcher);
@@ -836,7 +843,7 @@ public static class WorkerProfileDispatcher
         var artifactCharacters = artifacts.Sum(artifact => artifact.Text.Length);
         var artifactTokens = WorkerPromptInputBudget.CountTokens(
             string.Join(Environment.NewLine, artifacts.Select(artifact => artifact.Text)));
-        var tokenBudget = WorkerPromptInputBudget.InputTokenBudget(providerName, modelName);
+        var tokenBudget = WorkerPromptInputBudget.InputTokenBudget(providerName, modelName, workerProfileName);
         if (artifactTokens > tokenBudget)
         {
             findings.Add(
@@ -1098,7 +1105,11 @@ public static class WorkerProfileDispatcher
             goal.Id,
             task.Id,
             BuildModelFitTarget(selection.Model.ProviderName, modelName));
-        return WorkerPromptInputBudget.Apply(brief, selection.Model.ProviderName, modelName).Brief.Content.Length;
+        return WorkerPromptInputBudget.Apply(
+            brief,
+            selection.Model.ProviderName,
+            modelName,
+            workerProfileName: agent.Subscription?.WorkerProfileName).Brief.Content.Length;
     }
 
     public static IReadOnlyList<WorkerProfileDispatchResult> PrepareSubscriptionReadyTasks(

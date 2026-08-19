@@ -69,11 +69,12 @@ public static class WorkerPromptInputBudget
         TaskBrief brief,
         string? providerName,
         string? modelName,
-        int? inputTokenBudgetOverride = null)
+        int? inputTokenBudgetOverride = null,
+        string? workerProfileName = null)
     {
         var provider = string.IsNullOrWhiteSpace(providerName) ? "unknown" : providerName.Trim();
         var model = string.IsNullOrWhiteSpace(modelName) ? "unknown" : modelName.Trim();
-        var tokenBudget = inputTokenBudgetOverride ?? InputTokenBudget(provider, model);
+        var tokenBudget = inputTokenBudgetOverride ?? InputTokenBudget(provider, model, workerProfileName);
         var originalTokenCount = CountTokens(brief.Content);
         if (originalTokenCount <= tokenBudget)
         {
@@ -133,16 +134,27 @@ public static class WorkerPromptInputBudget
         return (content.Length + ApproximateCharactersPerToken - 1) / ApproximateCharactersPerToken;
     }
 
-    public static int InputTokenBudget(string? providerName, string? modelName)
+    public static int InputTokenBudget(
+        string? providerName,
+        string? modelName,
+        string? workerProfileName = null)
     {
         var contextWindow = ContextWindowTokens(providerName, modelName);
-        var reserved = ReservedOutputTokens;
-        if (IsLlamaCpp(providerName))
+        return Math.Max(
+            1,
+            contextWindow - ReservedOutputTokens - HarnessReservedTokens(workerProfileName));
+    }
+
+    public static int HarnessReservedTokens(string? workerProfileName)
+    {
+        if (string.IsNullOrWhiteSpace(workerProfileName))
         {
-            reserved += LlamaCppDefaults.QwenCodeBareStartupTokens;
+            return 0;
         }
 
-        return Math.Max(1, contextWindow - reserved);
+        return workerProfileName.Trim().Equals(WorkerProfile.QwenCodeCliName, StringComparison.OrdinalIgnoreCase)
+            ? WorkerProfile.QwenCodeBareStartupTokens
+            : 0;
     }
 
     public static int ContextWindowTokens(string? providerName, string? modelName)
@@ -161,10 +173,6 @@ public static class WorkerPromptInputBudget
             _ => DefaultContextWindowTokens
         };
     }
-
-    private static bool IsLlamaCpp(string? providerName) =>
-        !string.IsNullOrWhiteSpace(providerName) &&
-        providerName.Trim().Equals("LlamaCpp", StringComparison.OrdinalIgnoreCase);
 
     private static string DropSections(string content, IReadOnlySet<string> headings, out int droppedCount)
     {

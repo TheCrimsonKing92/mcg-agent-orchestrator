@@ -11,10 +11,6 @@ public static class LlamaCppDefaults
     // Live llama-server on this box is started with `-c 32768`.
     public const int ContextWindowTokens = 32768;
 
-    // Measured qwen-code `--bare` startup at this repo: system prompt plus tool schemas,
-    // without the workspace-init dump. Default (non-bare) startup is ~25728 tokens.
-    public const int QwenCodeBareStartupTokens = 8700;
-
     public static string ResolveBaseUrl()
     {
         return ResolveBaseUrl(Environment.GetEnvironmentVariable("LLAMA_CPP_BASE_URL"));

@@ -540,38 +540,54 @@ public sealed class WorkerDispatchTestsDispatchPreparation : WorkerDispatchTestS
                 DispatchRecordCheckpointPhase.BeforeProcessStart));
     }
 
-    [Xunit.Fact(DisplayName = "LlamaCpp_input_budget_subtracts_output_reserve_and_qwen_code_bare_startup")]
-    public void WorkerPromptInputBudgetLlamaCppSubtractsHarnessAndOutputReserve()
+    [Xunit.Fact(DisplayName = "Context_window_is_provider_responsive_and_qwen_code_tax_is_a_profile_reserve")]
+    public void WorkerPromptInputBudgetSeparatesProviderWindowFromQwenCodeHarnessReserve()
     {
-        var expected = LlamaCppDefaults.ContextWindowTokens
-            - WorkerPromptInputBudget.ReservedOutputTokens
-            - LlamaCppDefaults.QwenCodeBareStartupTokens;
-
         Assert.Equal(32768, WorkerPromptInputBudget.ContextWindowTokens("LlamaCpp", LlamaCppDefaults.DefaultModelAlias));
-        Assert.Equal(expected, WorkerPromptInputBudget.InputTokenBudget("LlamaCpp", LlamaCppDefaults.DefaultModelAlias));
         Assert.Equal(8192, WorkerPromptInputBudget.ContextWindowTokens("Ollama", "qwen3:8b"));
         Assert.Equal(100_000, WorkerPromptInputBudget.ContextWindowTokens("xAI", "grok-4.6"));
+
+        Assert.Equal(0, WorkerPromptInputBudget.HarnessReservedTokens(null));
+        Assert.Equal(0, WorkerPromptInputBudget.HarnessReservedTokens("grok-cli"));
+        Assert.Equal(WorkerProfile.QwenCodeBareStartupTokens, WorkerPromptInputBudget.HarnessReservedTokens(WorkerProfile.QwenCodeCliName));
+
+        Assert.Equal(
+            32768 - WorkerPromptInputBudget.ReservedOutputTokens,
+            WorkerPromptInputBudget.InputTokenBudget("LlamaCpp", LlamaCppDefaults.DefaultModelAlias));
+        Assert.Equal(
+            32768 - WorkerPromptInputBudget.ReservedOutputTokens - WorkerProfile.QwenCodeBareStartupTokens,
+            WorkerPromptInputBudget.InputTokenBudget(
+                "LlamaCpp",
+                LlamaCppDefaults.DefaultModelAlias,
+                WorkerProfile.QwenCodeCliName));
     }
 
-    [Xunit.Fact(DisplayName = "LlamaCpp_over_budget_prompt_is_rejected_instead_of_using_the_100k_default")]
-    public void WorkerPromptInputBudgetLlamaCppRejectsPromptThatFitsOnlyTheDefaultWindow()
+    [Xunit.Fact(DisplayName = "Qwen_code_profile_rejects_a_prompt_that_fits_the_LlamaCpp_window_alone")]
+    public void WorkerPromptInputBudgetQwenCodeProfileRejectsPromptThatFitsLlamaCppWindowOnly()
     {
-        var llamaBudget = WorkerPromptInputBudget.InputTokenBudget("LlamaCpp", LlamaCppDefaults.DefaultModelAlias);
-        var defaultBudget = WorkerPromptInputBudget.InputTokenBudget("xAI", "grok-4.6");
-        Assert.True(llamaBudget < defaultBudget);
+        var windowOnlyBudget = WorkerPromptInputBudget.InputTokenBudget("LlamaCpp", LlamaCppDefaults.DefaultModelAlias);
+        var qwenBudget = WorkerPromptInputBudget.InputTokenBudget(
+            "LlamaCpp",
+            LlamaCppDefaults.DefaultModelAlias,
+            WorkerProfile.QwenCodeCliName);
+        Assert.True(qwenBudget < windowOnlyBudget);
 
-        var paddingTokens = llamaBudget + 8;
+        var paddingTokens = qwenBudget + 8;
         var padding = new string('x', paddingTokens * 4);
         var brief = CreateBudgetBrief("## Instructions", padding);
 
-        Assert.True(WorkerPromptInputBudget.CountTokens(brief.Content) > llamaBudget);
-        Assert.True(WorkerPromptInputBudget.CountTokens(brief.Content) < defaultBudget);
+        Assert.True(WorkerPromptInputBudget.CountTokens(brief.Content) > qwenBudget);
+        Assert.True(WorkerPromptInputBudget.CountTokens(brief.Content) < windowOnlyBudget);
 
         var error = Assert.Throws<WorkerPromptInputBudgetExceededException>(() =>
-            WorkerPromptInputBudget.Apply(brief, "LlamaCpp", LlamaCppDefaults.DefaultModelAlias));
+            WorkerPromptInputBudget.Apply(
+                brief,
+                "LlamaCpp",
+                LlamaCppDefaults.DefaultModelAlias,
+                workerProfileName: WorkerProfile.QwenCodeCliName));
 
-        Assert.Equal(llamaBudget, error.TokenBudget);
-        var kept = WorkerPromptInputBudget.Apply(brief, "xAI", "grok-4.6");
+        Assert.Equal(qwenBudget, error.TokenBudget);
+        var kept = WorkerPromptInputBudget.Apply(brief, "LlamaCpp", LlamaCppDefaults.DefaultModelAlias);
         Assert.False(kept.Trimmed);
     }
 
