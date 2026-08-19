@@ -8,6 +8,13 @@ public static class LlamaCppDefaults
     public const string OpenAiApiKey = "llamacpp";
     public const string DefaultModelAlias = "qwen3.6-35b-a3b";
 
+    // Live llama-server on this box is started with `-c 32768`.
+    public const int ContextWindowTokens = 32768;
+
+    // Measured qwen-code `--bare` startup at this repo: system prompt plus tool schemas,
+    // without the workspace-init dump. Default (non-bare) startup is ~25728 tokens.
+    public const int QwenCodeBareStartupTokens = 8700;
+
     public static string ResolveBaseUrl()
     {
         return ResolveBaseUrl(Environment.GetEnvironmentVariable("LLAMA_CPP_BASE_URL"));

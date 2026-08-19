@@ -136,7 +136,13 @@ public static class WorkerPromptInputBudget
     public static int InputTokenBudget(string? providerName, string? modelName)
     {
         var contextWindow = ContextWindowTokens(providerName, modelName);
-        return Math.Max(1, contextWindow - ReservedOutputTokens);
+        var reserved = ReservedOutputTokens;
+        if (IsLlamaCpp(providerName))
+        {
+            reserved += LlamaCppDefaults.QwenCodeBareStartupTokens;
+        }
+
+        return Math.Max(1, contextWindow - reserved);
     }
 
     public static int ContextWindowTokens(string? providerName, string? modelName)
@@ -151,9 +157,14 @@ public static class WorkerPromptInputBudget
             var provider when provider.Equals("Anthropic", StringComparison.OrdinalIgnoreCase) => AnthropicContextWindowTokens,
             var provider when provider.Equals("OpenAI", StringComparison.OrdinalIgnoreCase) => OpenAiContextWindowTokens,
             var provider when provider.Equals("Ollama", StringComparison.OrdinalIgnoreCase) => OllamaContextWindowTokens,
+            var provider when provider.Equals("LlamaCpp", StringComparison.OrdinalIgnoreCase) => LlamaCppDefaults.ContextWindowTokens,
             _ => DefaultContextWindowTokens
         };
     }
+
+    private static bool IsLlamaCpp(string? providerName) =>
+        !string.IsNullOrWhiteSpace(providerName) &&
+        providerName.Trim().Equals("LlamaCpp", StringComparison.OrdinalIgnoreCase);
 
     private static string DropSections(string content, IReadOnlySet<string> headings, out int droppedCount)
     {

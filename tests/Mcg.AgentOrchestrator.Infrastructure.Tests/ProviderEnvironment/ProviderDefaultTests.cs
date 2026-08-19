@@ -22,6 +22,8 @@ public sealed class ProviderDefaultTests
         Assert.Equal(LlamaCppDefaults.BaseUrl, LlamaCppDefaults.ResolveBaseUrl("  "));
         Assert.Equal("http://llama-host:8080", LlamaCppDefaults.ResolveBaseUrl(" http://llama-host:8080 "));
         Assert.Equal("http://127.0.0.1:8080/v1", LlamaCppDefaults.BuildOpenAiCompatibleBaseUrl(LlamaCppDefaults.BaseUrl));
+        Assert.Equal(32768, LlamaCppDefaults.ContextWindowTokens);
+        Assert.Equal(8700, LlamaCppDefaults.QwenCodeBareStartupTokens);
     }
 
     [Xunit.Fact(DisplayName = "Provider_defaults_keep_openai_fallback_aligned_with_base_agent_model")]
