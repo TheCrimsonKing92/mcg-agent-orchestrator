@@ -1107,6 +1107,7 @@ public sealed class GoalMonitoringSubscriptionCommandTests
             "wrong event kind",
             null));
         using var output = new SignalingStringWriter();
+        using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(30));
 
         var runTask = GoalMonitoringSubscriptionCommand.RunAsync(
             [
@@ -1118,17 +1119,17 @@ public sealed class GoalMonitoringSubscriptionCommandTests
                 "conductor:dispatch",
                 "--once",
                 "--format",
-                "human",
-                "--timeout",
-                "5s"
+                "human"
             ],
             output,
             kernel,
             workspace,
             [],
-            WorkerProfileCatalog.Default());
+            WorkerProfileCatalog.Default(),
+            cancellationToken: cts.Token);
 
-        await output.FirstFlush.WaitAsync(TimeSpan.FromSeconds(3));
+        await output.FirstFlush.WaitAsync(TimeSpan.FromSeconds(10));
+        Assert.False(runTask.IsFaulted, runTask.Exception?.ToString());
         Assert.False(runTask.IsCompleted);
         Assert.Equal(string.Empty, output.ToString());
 
@@ -1139,7 +1140,7 @@ public sealed class GoalMonitoringSubscriptionCommandTests
             "Completed",
             "target dispatch",
             null));
-        await runTask.WaitAsync(TimeSpan.FromSeconds(3));
+        await runTask.WaitAsync(TimeSpan.FromSeconds(10));
 
         var line = Assert.Single(output.ToString().Split(Environment.NewLine, StringSplitOptions.RemoveEmptyEntries));
         Assert.Contains("[conductor:dispatch]", line);

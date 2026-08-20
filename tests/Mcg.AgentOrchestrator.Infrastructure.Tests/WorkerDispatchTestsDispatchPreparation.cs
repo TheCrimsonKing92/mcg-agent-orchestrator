@@ -560,6 +560,11 @@ public sealed class WorkerDispatchTestsDispatchPreparation : WorkerDispatchTestS
                 "LlamaCpp",
                 LlamaCppDefaults.DefaultModelAlias,
                 WorkerProfile.QwenCodeCliName));
+
+        var invalid = Assert.Throws<InvalidOperationException>(() =>
+            WorkerPromptInputBudget.InputTokenBudget("Ollama", "qwen3:8b", WorkerProfile.QwenCodeCliName));
+        Assert.Contains("context window 8192", invalid.Message, StringComparison.Ordinal);
+        Assert.Contains("harness reserve 8700", invalid.Message, StringComparison.Ordinal);
     }
 
     [Xunit.Fact(DisplayName = "Qwen_code_profile_rejects_a_prompt_that_fits_the_LlamaCpp_window_alone")]

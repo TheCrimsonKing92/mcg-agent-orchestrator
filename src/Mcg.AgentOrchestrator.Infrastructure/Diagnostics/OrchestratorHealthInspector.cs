@@ -248,7 +248,8 @@ public static class OrchestratorHealthInspector
             return true;
         }
 
-        return false;
+        return provider.ProviderName.Equals("Ollama", StringComparison.OrdinalIgnoreCase) &&
+            provider.Mode.Equals("LocalBridge", StringComparison.OrdinalIgnoreCase);
     }
 
     private static bool IsSubscriptionRouteUsable(AgentDefinition agent, WorkerProfileValidation? profile)
