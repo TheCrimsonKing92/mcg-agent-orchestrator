@@ -76,7 +76,8 @@ internal sealed record GoalBoardGoalFact(
     string? DispatchRecoveryCommand,
     bool LiveAcceptance,
     bool LiveWorker,
-    string FallbackCommand);
+    string FallbackCommand,
+    GoalLifecycleState? LifecycleState = null);
 
 internal sealed record GoalBoardProjection(
     IReadOnlyList<string> Rows,
@@ -108,7 +109,7 @@ internal static class GoalBoardProjector
         ArgumentNullException.ThrowIfNull(options);
 
         var projected = facts
-            .Where(fact => IncludedStatuses.Contains(fact.Status))
+            .Where(IsIncluded)
             .Select(fact => ProjectRow(fact, now))
             .OrderBy(row => row.Bucket)
             .ThenBy(row => row.SignalAt is null ? 1 : 0)
@@ -126,6 +127,14 @@ internal static class GoalBoardProjector
     }
 
     internal static bool IsIncluded(GoalStatus status) => IncludedStatuses.Contains(status);
+
+    internal static bool IsIncluded(GoalBoardGoalFact fact) =>
+        IsIncluded(fact.Status) && fact.LifecycleState is not GoalLifecycleState.CleanedUp;
+
+    internal static string FormatStatus(GoalBoardGoalFact fact) =>
+        fact.LifecycleState is GoalLifecycleState.Merged or GoalLifecycleState.Recorded
+            ? "Landed"
+            : fact.Status.ToString();
 
     private static ProjectedRow ProjectRow(GoalBoardGoalFact fact, DateTimeOffset now)
     {
@@ -146,7 +155,7 @@ internal static class GoalBoardProjector
         var ahead = fact.Worktree.Ahead?.ToString(CultureInfo.InvariantCulture) ?? "?";
         var behind = fact.Worktree.Behind?.ToString(CultureInfo.InvariantCulture) ?? "?";
         var tail =
-            $" [{prefix}] status={fact.Status} stage={Sanitize(fact.Stage, 28)} " +
+            $" [{prefix}] status={FormatStatus(fact)} stage={Sanitize(fact.Stage, 28)} " +
             $"work={Sanitize(fact.Work, 48)} signal={signal} attention={attention} intents={intents} " +
             $"backlog={Sanitize(fact.Backlog, 28)} worktree={Sanitize(fact.Worktree.State, 8)} ahead={ahead} behind={behind} {control}";
         var titleBudget = Math.Max(1, Math.Min(80, MaximumRowLength - tail.Length));

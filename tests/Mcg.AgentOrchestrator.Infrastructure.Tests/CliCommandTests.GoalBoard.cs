@@ -369,7 +369,7 @@ public sealed class CliCommandTestsGoalBoard : CliCommandTestBase
                 processSnapshotFactory: () => ProcessCommandLineSnapshot.Empty,
                 worktreeResolver: (_, ids) => ids.ToDictionary(id => id, _ => root),
                 worktreeStatusInspector: _ => new GitCli.WorktreeStatusInspection(false, [], "status denied"),
-                aheadBehindInspector: _ => new GitCli.AheadBehindInspection(false, null, null, "rev-list denied")));
+                gitRunner: (_, _) => new GitCli.GitResult(1, string.Empty, "for-each-ref denied")));
 
             var row = SingleLineContaining(output, $"[{goal.Id.Value[..8]}]");
             Xunit.Assert.Contains("worktree=unknown ahead=? behind=?", row, StringComparison.Ordinal);
@@ -422,6 +422,220 @@ public sealed class CliCommandTestsGoalBoard : CliCommandTestBase
         }
     }
 
+    [Xunit.Fact]
+    public void InspectWorktreesInvokesForEachRefOnceForMultipleGoals()
+    {
+        var root = CreateTempDirectory();
+        try
+        {
+            var workspace = OrchestratorWorkspace.ForDirectory(root);
+            var kernel = new AgentOrchestratorKernel();
+            var first = GoalLifecycleCommands.CreateAndActivateSimpleGoal(kernel, AgentCatalog.Default().Agents, "First git goal");
+            var second = GoalLifecycleCommands.CreateAndActivateSimpleGoal(kernel, AgentCatalog.Default().Agents, "Second git goal");
+            var gitCalls = 0;
+            var output = CaptureConsole(() => GoalBoardCommand.Run(
+                ["goals", "--board", "--all"],
+                new InMemoryTransactionalStateRepository(kernel),
+                workspace,
+                processSnapshotFactory: () => ProcessCommandLineSnapshot.Empty,
+                worktreeResolver: (_, ids) => ids.ToDictionary(id => id, _ => root),
+                worktreeStatusInspector: _ => new GitCli.WorktreeStatusInspection(true, [], null),
+                gitRunner: (_, args) =>
+                {
+                    gitCalls++;
+                    Xunit.Assert.Equal("for-each-ref", args[0]);
+                    return new GitCli.GitResult(
+                        0,
+                        $"{GoalWorktrees.BranchName(first.Id)} 3 7\n{GoalWorktrees.BranchName(second.Id)} 3 7\n",
+                        string.Empty);
+                }));
+
+            Xunit.Assert.Equal(1, gitCalls);
+            Xunit.Assert.Contains("ahead=3 behind=7", SingleLineContaining(output, "First git goal"), StringComparison.Ordinal);
+            Xunit.Assert.Contains("ahead=3 behind=7", SingleLineContaining(output, "Second git goal"), StringComparison.Ordinal);
+        }
+        finally
+        {
+            if (Directory.Exists(root))
+                Directory.Delete(root, recursive: true);
+        }
+    }
+
+    [Xunit.Fact]
+    public void InspectWorktreesProbesDirtyStatusOncePerResolvedWorktree()
+    {
+        var root = CreateTempDirectory();
+        try
+        {
+            var workspace = OrchestratorWorkspace.ForDirectory(root);
+            var kernel = new AgentOrchestratorKernel();
+            var resolved = GoalLifecycleCommands.CreateAndActivateSimpleGoal(kernel, AgentCatalog.Default().Agents, "Resolved worktree");
+            _ = GoalLifecycleCommands.CreateAndActivateSimpleGoal(kernel, AgentCatalog.Default().Agents, "Unresolved worktree");
+            var probes = 0;
+            var output = CaptureConsole(() => GoalBoardCommand.Run(
+                ["goals", "--board", "--all"],
+                new InMemoryTransactionalStateRepository(kernel),
+                workspace,
+                processSnapshotFactory: () => ProcessCommandLineSnapshot.Empty,
+                worktreeResolver: (_, _) => new Dictionary<GoalId, string> { [resolved.Id] = root },
+                worktreeStatusInspector: _ =>
+                {
+                    probes++;
+                    return new GitCli.WorktreeStatusInspection(true, [], null);
+                },
+                gitRunner: (_, _) => new GitCli.GitResult(
+                    0,
+                    $"{GoalWorktrees.BranchName(resolved.Id)} 1 0\n",
+                    string.Empty)));
+
+            Xunit.Assert.Equal(1, probes);
+            Xunit.Assert.Contains("worktree=clean ahead=1 behind=0", SingleLineContaining(output, "Resolved worktree"), StringComparison.Ordinal);
+            Xunit.Assert.Contains("worktree=- ahead=? behind=?", SingleLineContaining(output, "Unresolved worktree"), StringComparison.Ordinal);
+        }
+        finally
+        {
+            if (Directory.Exists(root))
+                Directory.Delete(root, recursive: true);
+        }
+    }
+
+    [Xunit.Fact]
+    public void InspectWorktreesFailedForEachRefLeavesUnknownDivergence()
+    {
+        var root = CreateTempDirectory();
+        try
+        {
+            var workspace = OrchestratorWorkspace.ForDirectory(root);
+            var kernel = new AgentOrchestratorKernel();
+            _ = GoalLifecycleCommands.CreateAndActivateSimpleGoal(kernel, AgentCatalog.Default().Agents, "Unknown divergence");
+            var gitCalls = 0;
+            var output = CaptureConsole(() => GoalBoardCommand.Run(
+                ["goals", "--board", "--all"],
+                new InMemoryTransactionalStateRepository(kernel),
+                workspace,
+                processSnapshotFactory: () => ProcessCommandLineSnapshot.Empty,
+                worktreeResolver: (_, ids) => ids.ToDictionary(id => id, _ => root),
+                worktreeStatusInspector: _ => new GitCli.WorktreeStatusInspection(true, [], null),
+                gitRunner: (_, _) =>
+                {
+                    gitCalls++;
+                    return new GitCli.GitResult(128, string.Empty, "unknown field ahead-behind");
+                }));
+
+            Xunit.Assert.Equal(1, gitCalls);
+            Xunit.Assert.Contains("worktree=clean ahead=? behind=?", SingleLineContaining(output, "Unknown divergence"), StringComparison.Ordinal);
+        }
+        finally
+        {
+            if (Directory.Exists(root))
+                Directory.Delete(root, recursive: true);
+        }
+    }
+
+    [Xunit.Fact]
+    public void VerifiedGoalWithCleanupJournalIsOmittedFromBoard()
+    {
+        var root = CreateTempDirectory();
+        try
+        {
+            var workspace = OrchestratorWorkspace.ForDirectory(root);
+            var kernel = new AgentOrchestratorKernel();
+            var cleaned = GoalLifecycleCommands.CreateAndActivateSimpleGoal(kernel, AgentCatalog.Default().Agents, "Cleaned verified goal");
+            var live = GoalLifecycleCommands.CreateAndActivateSimpleGoal(kernel, AgentCatalog.Default().Agents, "Live verified goal");
+            GoalOperationJournal.Completed(root, cleaned, "conductor:land");
+            GoalOperationJournal.Completed(root, cleaned, "conductor:record");
+            GoalOperationJournal.Completed(root, cleaned, "conductor:cleanup");
+            kernel = WithGoalStatus(kernel, GoalStatus.Verified);
+
+            var output = CaptureConsole(() => GoalBoardCommand.Run(
+                ["goals", "--board", "--all"],
+                new InMemoryTransactionalStateRepository(kernel),
+                workspace,
+                processSnapshotFactory: () => ProcessCommandLineSnapshot.Empty));
+
+            Xunit.Assert.DoesNotContain("Cleaned verified goal", output, StringComparison.Ordinal);
+            Xunit.Assert.Contains("status=Verified", SingleLineContaining(output, "Live verified goal"), StringComparison.Ordinal);
+            Xunit.Assert.Contains("shown=1 omitted=0", output, StringComparison.Ordinal);
+        }
+        finally
+        {
+            if (Directory.Exists(root))
+                Directory.Delete(root, recursive: true);
+        }
+    }
+
+    [Xunit.Fact]
+    public void MergedJournalRendersLandedCleanupStage()
+    {
+        var root = CreateTempDirectory();
+        try
+        {
+            var workspace = OrchestratorWorkspace.ForDirectory(root);
+            var kernel = new AgentOrchestratorKernel();
+            var goal = GoalLifecycleCommands.CreateAndActivateSimpleGoal(kernel, AgentCatalog.Default().Agents, "Landed verified goal");
+            GoalOperationJournal.Completed(root, goal, "conductor:land");
+            GoalOperationJournal.Completed(root, goal, "conductor:record");
+            kernel = WithGoalStatus(kernel, GoalStatus.Verified);
+
+            var output = CaptureConsole(() => GoalBoardCommand.Run(
+                ["goals", "--board", "--all"],
+                new InMemoryTransactionalStateRepository(kernel),
+                workspace,
+                processSnapshotFactory: () => ProcessCommandLineSnapshot.Empty));
+
+            var row = SingleLineContaining(output, "Landed verified goal");
+            Xunit.Assert.Contains("status=Landed", row, StringComparison.Ordinal);
+            Xunit.Assert.Contains("stage=cleanup", row, StringComparison.Ordinal);
+        }
+        finally
+        {
+            if (Directory.Exists(root))
+                Directory.Delete(root, recursive: true);
+        }
+    }
+
+    [Xunit.Fact]
+    public async Task OpenDecisionIsCountedAndAdvertisedOnBoard()
+    {
+        var root = CreateTempDirectory();
+        try
+        {
+            var workspace = OrchestratorWorkspace.ForDirectory(root);
+            var kernel = new AgentOrchestratorKernel();
+            var goal = GoalLifecycleCommands.CreateAndActivateSimpleGoal(kernel, AgentCatalog.Default().Agents, "Decision attention goal");
+            var store = CollaborationItemStore.ForDirectory(workspace.OrchestratorDirectory);
+            _ = await store.RaiseAsync(
+                CollaborationItemType.Decision,
+                goal.Id.Value,
+                "Need a call",
+                "Decide whether to keep the current slice.");
+
+            var output = CaptureConsole(() => GoalBoardCommand.Run(
+                ["goals", "--board", "--all"],
+                new InMemoryTransactionalStateRepository(kernel),
+                workspace,
+                processSnapshotFactory: () => ProcessCommandLineSnapshot.Empty));
+
+            var row = SingleLineContaining(output, "Decision attention goal");
+            Xunit.Assert.Contains("attention=1", row, StringComparison.Ordinal);
+            Xunit.Assert.Contains($"next=attention show {goal.Id.Value[..8]}", row, StringComparison.Ordinal);
+        }
+        finally
+        {
+            if (Directory.Exists(root))
+                Directory.Delete(root, recursive: true);
+        }
+    }
+
+    private static AgentOrchestratorKernel WithGoalStatus(AgentOrchestratorKernel kernel, GoalStatus status)
+    {
+        var snapshot = kernel.ExportSnapshot();
+        return AgentOrchestratorKernel.FromSnapshot(snapshot with
+        {
+            Goals = snapshot.Goals.Select(goal => goal with { Status = status }).ToList()
+        });
+    }
+
     private static void WriteAcceptanceAttempt(OrchestratorWorkspace workspace, string goalId, bool live)
     {
         var root = Path.Combine(workspace.OrchestratorDirectory, "acceptance-gate-attempts", goalId);
@@ -469,6 +683,47 @@ public sealed class GoalBoardProjectorTests
         Xunit.Assert.DoesNotContain(projection.Rows, row => row.StartsWith("Cancelled title", StringComparison.Ordinal));
         Xunit.Assert.DoesNotContain(projection.Rows, row => row.StartsWith("Superseded title", StringComparison.Ordinal));
         Xunit.Assert.Equal(8, projection.Shown);
+    }
+
+    [Xunit.Fact]
+    public void CleanedUpLifecycleIsOmittedFromProjection()
+    {
+        var now = DateTimeOffset.Parse("2026-08-17T12:00:00Z");
+        var facts = new[]
+        {
+            Fact("10000000000000000000000000000000", status: GoalStatus.Verified, title: "Still verified"),
+            Fact(
+                "20000000000000000000000000000000",
+                status: GoalStatus.Verified,
+                title: "Already cleaned",
+                lifecycleState: GoalLifecycleState.CleanedUp)
+        };
+
+        var projection = GoalBoardProjector.Project(facts, new GoalBoardOptions(null), now);
+
+        Xunit.Assert.Equal(1, projection.Shown);
+        Xunit.Assert.Contains("status=Verified", Xunit.Assert.Single(projection.Rows), StringComparison.Ordinal);
+        Xunit.Assert.DoesNotContain(projection.Rows, row => row.Contains("Already cleaned", StringComparison.Ordinal));
+    }
+
+    [Xunit.Fact]
+    public void MergedLifecycleRendersLandedStatus()
+    {
+        var now = DateTimeOffset.Parse("2026-08-17T12:00:00Z");
+        var facts = new[]
+        {
+            Fact(
+                "10000000000000000000000000000000",
+                status: GoalStatus.Verified,
+                title: "Landed goal",
+                stage: "cleanup",
+                lifecycleState: GoalLifecycleState.Recorded)
+        };
+
+        var row = Xunit.Assert.Single(GoalBoardProjector.Project(facts, new GoalBoardOptions(null), now).Rows);
+
+        Xunit.Assert.Contains("status=Landed", row, StringComparison.Ordinal);
+        Xunit.Assert.Contains("stage=cleanup", row, StringComparison.Ordinal);
     }
 
     [Xunit.Fact]
@@ -559,7 +814,8 @@ public sealed class GoalBoardProjectorTests
         bool dead = false,
         string? recovery = null,
         bool liveAcceptance = false,
-        bool liveWorker = false) =>
+        bool liveWorker = false,
+        GoalLifecycleState? lifecycleState = null) =>
         new(
             id,
             title,
@@ -575,7 +831,8 @@ public sealed class GoalBoardProjectorTests
             recovery,
             liveAcceptance,
             liveWorker,
-            $"next {id[..8]} --full");
+            $"next {id[..8]} --full",
+            lifecycleState);
 
     private static void AssertRow(IReadOnlyList<string> rows, string id, params string[] expected)
     {

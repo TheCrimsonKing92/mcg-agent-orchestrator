@@ -10,16 +10,6 @@ namespace Mcg.AgentOrchestrator.App.Cli;
 
 internal static partial class CliCommandHandlers
 {
-    private static List<CollaborationItem> OpenClarificationsForGoal(CollaborationItemStore store, Goal goal)
-    {
-        return store.GetAttentionQueueAsync().GetAwaiter().GetResult()
-            .Where(item =>
-                !string.IsNullOrWhiteSpace(item.CorrelationKey) &&
-                item.CorrelationKey!.StartsWith("spec-clarification:", StringComparison.Ordinal) &&
-                string.Equals(item.GoalId, goal.Id.Value, StringComparison.OrdinalIgnoreCase))
-            .ToList();
-    }
-
     private static List<CollaborationItem> OpenClarifications(CollaborationItemStore store)
     {
         return store.GetAttentionQueueAsync().GetAwaiter().GetResult()
@@ -380,9 +370,9 @@ internal static partial class CliCommandHandlers
                     return false;
                 }
 
-                // `attention show [--goal] <goal-id-prefix>`: list open typed human waits, falling back to
-                // collaboration clarifications for compatibility with existing spec-refinement reach-ups.
-                // and the question, so the operator can read them before deciding to answer or dismiss.
+                // `attention show [--goal] <goal-id-prefix>`: list open typed human waits plus the same
+                // nonterminal Decision/Clarification/Verify queue the board counts. Spec-clarification
+                // rows keep short ids so `attention answer` still works. `--all` remains history.
                 if (parts.Count > 1 && parts[1].Equals("show", StringComparison.OrdinalIgnoreCase))
                 {
                     var showMigratedHumanWaits = context.Kernel.SweepParkedGoalHumanWaits();
@@ -425,57 +415,64 @@ internal static partial class CliCommandHandlers
                         .ToList();
                     var waitsForGoal = HumanWaitsForAttention(context.Kernel, goal.Id, includeHistory);
                     if (waitsForGoal.Count > 0)
-                    {
                         ConsoleViews.PrintHumanWaits(waitsForGoal, DateTimeOffset.UtcNow, includeHistory);
-                        if (includeHistory)
-                        {
-                            var allItems = store.ListAsync().GetAwaiter().GetResult();
-                            ConsoleViews.PrintCollaborationItems(
-                                CollaborationItemsForAttention(allItems, context.Kernel, goal.Id, includeHistory),
-                                includeHistory,
-                                item => IsSpecClarification(item) ? ClarificationId(item, clarificationIdentityUniverse) : null);
-                        }
 
-                        return changed;
-                    }
-
-                    var scopedItems = includeHistory
-                        ? CollaborationItemsForAttention(store.ListAsync().GetAwaiter().GetResult(), context.Kernel, goal.Id, includeHistory)
-                        : OpenClarificationsForGoal(store, goal).Cast<CollaborationItem>().ToList();
                     if (includeHistory)
                     {
-                        if (scopedItems.Count == 0)
+                        var allItems = store.ListAsync().GetAwaiter().GetResult();
+                        var historyItems = CollaborationItemsForAttention(allItems, context.Kernel, goal.Id, includeHistory);
+                        if (waitsForGoal.Count > 0)
+                        {
+                            ConsoleViews.PrintCollaborationItems(
+                                historyItems,
+                                includeHistory,
+                                item => IsSpecClarification(item) ? ClarificationId(item, clarificationIdentityUniverse) : null);
+                            return changed;
+                        }
+
+                        if (historyItems.Count == 0)
                         {
                             Console.WriteLine($"No open attention items for goal {goal.Id.Value}.");
                             return changed;
                         }
 
                         ConsoleViews.PrintCollaborationItems(
-                            scopedItems,
+                            historyItems,
                             includeHistory,
                             item => IsSpecClarification(item) ? ClarificationId(item, clarificationIdentityUniverse) : null);
                         return changed;
                     }
 
-                    var clarifications = scopedItems
-                        .Where(item =>
-                            !string.IsNullOrWhiteSpace(item.CorrelationKey) &&
-                            item.CorrelationKey!.StartsWith("spec-clarification:", StringComparison.Ordinal))
+                    var scopedItems = store.GetAttentionQueueAsync().GetAwaiter().GetResult()
+                        .Where(item => string.Equals(item.GoalId, goal.Id.Value, StringComparison.OrdinalIgnoreCase))
                         .ToList();
-                    if (clarifications.Count == 0)
+                    if (scopedItems.Count == 0)
                     {
-                        Console.WriteLine($"No open attention items for goal {goal.Id.Value}.");
+                        if (waitsForGoal.Count == 0)
+                            Console.WriteLine($"No open attention items for goal {goal.Id.Value}.");
                         return changed;
                     }
 
-                    foreach (var clarification in clarifications)
+                    var printedClarification = false;
+                    foreach (var item in scopedItems)
                     {
-                        Console.WriteLine($"[{ClarificationId(clarification, clarificationIdentityUniverse)}] {clarification.Subject}");
-                        if (!string.IsNullOrWhiteSpace(clarification.Body))
-                            Console.WriteLine($"    {clarification.Body}");
+                        if (IsSpecClarification(item))
+                        {
+                            Console.WriteLine($"[{ClarificationId(item, clarificationIdentityUniverse)}] {item.Subject}");
+                            if (!string.IsNullOrWhiteSpace(item.Body))
+                                Console.WriteLine($"    {item.Body}");
+                            printedClarification = true;
+                            continue;
+                        }
+
+                        Console.WriteLine($"[{item.Id[..8]}] ({item.Type}) {item.Subject}");
                     }
 
-                    Console.WriteLine($"Answer with: attention answer {goal.Id.Value[..8]} <id> <answer> or --text-file <path> (ids are stable; answering one does not renumber the rest)");
+                    if (printedClarification)
+                    {
+                        Console.WriteLine($"Answer with: attention answer {goal.Id.Value[..8]} <id> <answer> or --text-file <path> (ids are stable; answering one does not renumber the rest)");
+                    }
+
                     return changed;
                 }
 
