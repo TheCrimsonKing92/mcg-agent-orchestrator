@@ -642,7 +642,8 @@ public sealed partial class AgentOrchestratorKernel
             {
                 "Complete this SDLC task. Report only changed files, verification evidence, blockers, or HUMAN_INPUT: <question>.",
                 "Use repository-local verification when practical; do not claim completion without evidence.",
-                "Do not stage or commit changes; the orchestrator commits verified Developer/Tester diffs."
+                "Do not stage or commit changes; the orchestrator commits verified Developer/Tester diffs.",
+                "Host platform is Windows. Prefer PowerShell or cmd syntax for shell commands. POSIX-only utilities such as printf may be unavailable."
             };
             simpleLines.Insert(
                 2,
@@ -660,7 +661,8 @@ public sealed partial class AgentOrchestratorKernel
             "If you cannot proceed without operator input, write a line that starts with HUMAN_INPUT: followed by the exact question.",
             "Use repository-local commands for evidence when possible. Do not mark work complete without verification.",
             "Avoid generic status summaries. Tie conclusions to repository files, command output, or cited source material.",
-            "Do not stage or commit changes; the orchestrator commits verified Developer/Tester diffs."
+            "Do not stage or commit changes; the orchestrator commits verified Developer/Tester diffs.",
+            "Host platform is Windows. Prefer PowerShell or cmd syntax for shell commands. POSIX-only utilities such as printf may be unavailable."
         };
         complexLines.InsertRange(
             4,
