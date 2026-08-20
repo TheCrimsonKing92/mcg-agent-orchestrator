@@ -8,7 +8,8 @@ public sealed record WorkerProcessRunRequest(
     string Command,
     string WorkingDirectory,
     TimeSpan? Timeout = null,
-    string? StandardInput = null);
+    string? StandardInput = null,
+    ProcessOutputDrainPolicy? OutputDrainPolicy = null);
 
 public sealed record WorkerProcessRunResult(
     int ExitCode,
@@ -101,7 +102,8 @@ public static class WorkerProcessRunner
 
             await process.WaitForExitAsync(linkedCts.Token).ConfigureAwait(false);
 
-            await DrainOutputAsync(process, processGroup, drainCts, stdoutTask, stderrTask).ConfigureAwait(false);
+            var drainPolicy = (request.OutputDrainPolicy ?? ProcessOutputDrainPolicy.Default).Validate();
+            await DrainOutputAsync(process, processGroup, drainCts, stdoutTask, stderrTask, drainPolicy).ConfigureAwait(false);
 
             return new WorkerProcessRunResult(
                 process.ExitCode,
@@ -157,11 +159,11 @@ public static class WorkerProcessRunner
         OwnedProcessGroup? processGroup,
         CancellationTokenSource drainCts,
         Task stdoutTask,
-        Task stderrTask)
+        Task stderrTask,
+        ProcessOutputDrainPolicy drainPolicy)
     {
-        const int DrainTimeoutMs = 12_000;
         var drainTask = Task.WhenAll(stdoutTask, stderrTask);
-        if (await Task.WhenAny(drainTask, Task.Delay(DrainTimeoutMs)).ConfigureAwait(false) == drainTask)
+        if (await Task.WhenAny(drainTask, Task.Delay(drainPolicy.Completion)).ConfigureAwait(false) == drainTask)
         {
             await drainTask.ConfigureAwait(false);
             return;
@@ -169,7 +171,7 @@ public static class WorkerProcessRunner
 
         drainCts.Cancel();
         TryKillProcessTree(process, processGroup);
-        try { await Task.WhenAny(drainTask, Task.Delay(2000)).ConfigureAwait(false); } catch { }
+        try { await Task.WhenAny(drainTask, Task.Delay(drainPolicy.CancellationGrace)).ConfigureAwait(false); } catch { }
     }
 
     private static void TryKillProcessTree(Process process, OwnedProcessGroup? processGroup)

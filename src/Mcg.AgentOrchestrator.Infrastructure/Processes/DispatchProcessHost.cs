@@ -79,7 +79,8 @@ public static class DispatchProcessHost
         string? ChildExitRecordPath = null,
         string? HostDiagnosticPath = null,
         int HeartbeatIntervalMilliseconds = 15_000,
-        IReadOnlyList<MandatoryContextFileDescriptor>? MandatoryContextFiles = null);
+        IReadOnlyList<MandatoryContextFileDescriptor>? MandatoryContextFiles = null,
+        ProcessOutputDrainPolicy? OutputDrainPolicy = null);
 
     public sealed record DispatchChildExitRecord(
         int ProcessId,
@@ -1485,13 +1486,13 @@ public static void DropToLow() {
             // (e.g. claude-cli's node child) keeps CopyToAsync alive indefinitely after
             // the worker exits. Cap the wait and cancel so the finally block always
             // writes the exit-code file.
-            const int DrainTimeoutMs = 12_000;
+            var drainPolicy = (parameters.OutputDrainPolicy ?? ProcessOutputDrainPolicy.Default).Validate();
             var drainTasks = new Task[] { copyOut, copyErr };
-            if (!Task.WaitAll(drainTasks, DrainTimeoutMs))
+            if (!Task.WaitAll(drainTasks, drainPolicy.Completion))
             {
                 drainCts.Cancel();
                 TryKillWorkerTree(worker, workerGroup);
-                try { Task.WaitAll(drainTasks, 2000); } catch { }
+                try { Task.WaitAll(drainTasks, drainPolicy.CancellationGrace); } catch { }
             }
 
             try { stdout.Flush(); } catch { }

@@ -140,9 +140,17 @@ public static class WorkerPromptInputBudget
         string? workerProfileName = null)
     {
         var contextWindow = ContextWindowTokens(providerName, modelName);
-        return Math.Max(
-            1,
-            contextWindow - ReservedOutputTokens - HarnessReservedTokens(workerProfileName));
+        var harnessReservedTokens = HarnessReservedTokens(workerProfileName);
+        var inputTokenBudget = contextWindow - ReservedOutputTokens - harnessReservedTokens;
+        if (inputTokenBudget <= 0)
+        {
+            throw new InvalidOperationException(
+                $"Worker prompt budget configuration is invalid for {providerName ?? "unknown"}/{modelName ?? "unknown"}: " +
+                $"context window {contextWindow} must exceed output reserve {ReservedOutputTokens} " +
+                $"plus harness reserve {harnessReservedTokens}.");
+        }
+
+        return inputTokenBudget;
     }
 
     public static int HarnessReservedTokens(string? workerProfileName)

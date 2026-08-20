@@ -1054,17 +1054,22 @@ public sealed class GoalMonitoringSubscriptionCommandTests
         var goal = kernel.CreateGoal("Monitor continuous", [task]);
         kernel.ActivateGoal(goal.Id, []);
         kernel.ReportTaskProgress(goal.Id, task.Id, WorkTaskStatus.Running, "Started local work.");
-        using var output = new StringWriter();
-        using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(2));
+        using var output = new SignalingStringWriter();
+        using var cts = new CancellationTokenSource();
+        cts.CancelAfter(TimeSpan.FromSeconds(10));
 
-        await Xunit.Assert.ThrowsAnyAsync<OperationCanceledException>(() => GoalMonitoringSubscriptionCommand.RunAsync(
+        var runTask = GoalMonitoringSubscriptionCommand.RunAsync(
             ["monitor-goal", goal.Id.Value[..8], "--format", "ndjson"],
             output,
             kernel,
             workspace,
             [],
             WorkerProfileCatalog.Default(),
-            cancellationToken: cts.Token));
+            cancellationToken: cts.Token);
+
+        await output.FirstWrite.WaitAsync(TimeSpan.FromSeconds(10));
+        cts.Cancel();
+        await Xunit.Assert.ThrowsAnyAsync<OperationCanceledException>(() => runTask);
 
         Assert.Contains("\"eventKind\":\"goal.snapshot\"", output.ToString());
     }
@@ -1101,7 +1106,8 @@ public sealed class GoalMonitoringSubscriptionCommandTests
             "Completed",
             "wrong event kind",
             null));
-        using var output = new StringWriter();
+        using var output = new SignalingStringWriter();
+        using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(30));
 
         var runTask = GoalMonitoringSubscriptionCommand.RunAsync(
             [
@@ -1113,17 +1119,17 @@ public sealed class GoalMonitoringSubscriptionCommandTests
                 "conductor:dispatch",
                 "--once",
                 "--format",
-                "human",
-                "--timeout",
-                "5s"
+                "human"
             ],
             output,
             kernel,
             workspace,
             [],
-            WorkerProfileCatalog.Default());
+            WorkerProfileCatalog.Default(),
+            cancellationToken: cts.Token);
 
-        await Task.Delay(TimeSpan.FromMilliseconds(150));
+        await output.FirstFlush.WaitAsync(TimeSpan.FromSeconds(10));
+        Assert.False(runTask.IsFaulted, runTask.Exception?.ToString());
         Assert.False(runTask.IsCompleted);
         Assert.Equal(string.Empty, output.ToString());
 
@@ -1134,7 +1140,7 @@ public sealed class GoalMonitoringSubscriptionCommandTests
             "Completed",
             "target dispatch",
             null));
-        await runTask.WaitAsync(TimeSpan.FromSeconds(3));
+        await runTask.WaitAsync(TimeSpan.FromSeconds(10));
 
         var line = Assert.Single(output.ToString().Split(Environment.NewLine, StringSplitOptions.RemoveEmptyEntries));
         Assert.Contains("[conductor:dispatch]", line);
@@ -1587,6 +1593,27 @@ public sealed class GoalMonitoringSubscriptionCommandTests
         {
             await base.WriteAsync(buffer, cancellationToken);
             _firstWrite.TrySetResult();
+        }
+    }
+
+    private sealed class SignalingStringWriter : StringWriter
+    {
+        private readonly TaskCompletionSource _firstWrite = new(TaskCreationOptions.RunContinuationsAsynchronously);
+        private readonly TaskCompletionSource _firstFlush = new(TaskCreationOptions.RunContinuationsAsynchronously);
+
+        public Task FirstWrite => _firstWrite.Task;
+        public Task FirstFlush => _firstFlush.Task;
+
+        public override void WriteLine(string? value)
+        {
+            base.WriteLine(value);
+            _firstWrite.TrySetResult();
+        }
+
+        public override async Task FlushAsync(CancellationToken cancellationToken)
+        {
+            await base.FlushAsync(cancellationToken);
+            _firstFlush.TrySetResult();
         }
     }
 

@@ -82,6 +82,43 @@ public sealed class DispatchProcessHostTests
         }
     }
 
+    [Xunit.Fact(DisplayName = "DispatchProcessHost_omitted_output_drain_policy_json_uses_production_default")]
+    public void DispatchProcessHostOmittedOutputDrainPolicyJsonUsesProductionDefault()
+    {
+        var dir = Path.Combine(Path.GetTempPath(), "mcg-dispatch-host-tests", Guid.NewGuid().ToString("n"));
+        Directory.CreateDirectory(dir);
+        try
+        {
+            var path = Path.Combine(dir, "dispatch.json");
+            var json = """
+                {
+                  "command": "Write-Output ok",
+                  "workingDirectory": "C:\\tmp",
+                  "stdoutPath": "C:\\tmp\\out.log",
+                  "stderrPath": "C:\\tmp\\err.log",
+                  "exitCodePath": "C:\\tmp\\exit.txt",
+                  "heartbeatPath": null,
+                  "disableSharedCompilation": false
+                }
+                """;
+            File.WriteAllText(path, json);
+
+            using var document = JsonDocument.Parse(json);
+            Assert.False(document.RootElement.TryGetProperty("outputDrainPolicy", out _));
+
+            var omitted = DispatchProcessHost.ReadParameters(path);
+            Assert.Null(omitted.OutputDrainPolicy);
+            var resolved = (omitted.OutputDrainPolicy ?? ProcessOutputDrainPolicy.Default).Validate();
+            Assert.Equal(ProcessOutputDrainPolicy.Default, resolved);
+            Assert.Equal(TimeSpan.FromSeconds(12), resolved.Completion);
+            Assert.Equal(TimeSpan.FromSeconds(2), resolved.CancellationGrace);
+        }
+        finally
+        {
+            try { Directory.Delete(dir, recursive: true); } catch { }
+        }
+    }
+
     [Xunit.Fact(DisplayName = "DispatchProcessHost_captures_provider_session_id_from_codex_output_lines")]
     public void DispatchProcessHostCapturesProviderSessionIdFromCodexOutputLines()
     {
@@ -1522,7 +1559,10 @@ public sealed class DispatchProcessHostTests
                 stderrPath,
                 exitCodePath,
                 null,
-                DisableSharedCompilation: false));
+                DisableSharedCompilation: false,
+                OutputDrainPolicy: new ProcessOutputDrainPolicy(
+                    TimeSpan.FromMilliseconds(250),
+                    TimeSpan.FromMilliseconds(200))));
 
             var startInfo = new ProcessStartInfo
             {
@@ -1539,7 +1579,8 @@ public sealed class DispatchProcessHostTests
             hostProcess = Process.Start(startInfo)
                 ?? throw new InvalidOperationException("Failed to start dispatch host.");
 
-            // The exit file must appear within the drain timeout (~12 s) plus buffer.
+            // The exit file must appear within the injected drain policy plus host startup.
+            // The 30s poll is a hang failsafe only; do not assert wall-clock.
             var deadline = DateTimeOffset.UtcNow.AddSeconds(30);
             while (!File.Exists(exitCodePath) && DateTimeOffset.UtcNow < deadline)
                 Thread.Sleep(200);
