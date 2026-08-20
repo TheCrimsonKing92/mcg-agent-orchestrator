@@ -265,6 +265,9 @@ Additional recovery notes:
 
 - If a retry is swallowed because the same completed dispatch exit artifact keeps being reconciled, stop the loop, identify the exact stale `.exit.txt` from `task <goal> <n>` or `Get-GoalDispatchInventory.ps1`, move that single exit artifact aside with a `.retired` suffix, then run `recover <goal> --text-file <path>` and `retry <goal> <task-number> --text-file <path>`. Do not delete broad log sets; preserve stdout/stderr for evidence.
 - `recover` can over-reset tasks that had already passed. Bridge those back with explicit receipts: `progress <goal> <task-number> completed --text-file <path>` followed by `verify-manual <goal> <task-number> passed --text-file <path>`.
+- **`Applied` is not `delivered`. A `recover --text-file` note can be recorded and still never reach the worker.** The flag parses and the text is persisted to both `.orchestrator/goal-events/<goal>.jsonl` and `state.db`, so every journal says the guidance exists — and the next dispatch prompt can contain none of it. Operator text renders in the retry-history block (`- [still-open] Retry N of M; ...; TaskRetried: <text>`), which only appears once the retry counter is engaged; a plain `recover` of a `Failed` task can produce a prompt with no such block at all. Before concluding that guidance "did not help", grep the emitted prompt under `.orchestrator/prompts/` for a distinctive phrase from your note. On 2026-08-20 goal `ab933e32` burned a third identical worker round on unchanged instructions, and the repeat failure was initially misread as the advice being wrong rather than absent. Tracked as backlog `2861b909`.
+- **Operator note text is truncated in the middle, not at the end.** Long notes render as `...[truncated N chars for prompt budget]...` with the head and tail preserved, so framing sentences survive and the decisive content in the middle is what disappears. On goal `21b284a0` this removed exactly the executed/passed/failed counts and the failing test names from an operator retry. Front-load numbers, test ids, and file paths into the first few lines; never bury them mid-note.
+- **Re-apply `reassign-agent` after any `recover` or task-failure reset.** A per-task agent assignment made with `reassign-agent <goal> <task-number> <agent-id>` can revert to the role default across a reset, and the revert is silent — the next `reassign-agent` reports `from agent '<original>'`, which is the only visible sign it was undone. Confirm the intended agent in `status <goal>` after every recovery step. Tracked with the note above under backlog `2861b909`.
 - `retry`, `progress`, and `verify-manual` always append typed requests to `.orchestrator/operator-intents.db`. The tick applies each request as the sole `state.db` writer; when no conductor is running, requests remain pending until one starts. `operator-intent-status <intent-id>` and the dashboard operator-intent panel expose the terminal outcome and audit fields. Wake files are one-shot notifications; SQLite remains the durable queue.
 - **`Pending` is not `Applied`. Poll `operator-intent-status <intent-id>` before treating a submitted intent as delivered, and before reporting it as such.** Submission returns an id, not an outcome; the tick may apply the intent, or reject it. Rejection is normal and expected — the retry guard refuses an upstream retry while a downstream task holds a running process (`Cannot retry Developer task ... while downstream Reviewer task ... has a running process`), and a rejected intent is silently dropped, not queued for later. On 2026-08-14 a diagnosis was queued, rejected by that guard, and reported as routed; the Reviewer spent forty minutes re-deriving evidence for failures whose cause was already known but never delivered. Resubmit once the blocking lane clears, and confirm `status=Applied` rather than inferring it from the absence of an error. The same applies to a *sequence* of intents: a mechanical reopen is not complete until every verb in it has applied, and a `progress` without its `verify-manual` leaves the goal held at `AwaitingVerification` indefinitely — the task list will show the task `Completed` while the goal never advances, because task state and the verification gate are different facts.
 - A lingering goal-level `Failed` display while retryable tasks are already in flight is expected noise during recovery. Judge the live state by the task process, dispatch inventory, and event stream before applying another repair.
@@ -436,13 +439,28 @@ Durable state lives in stores, never in `.scratch`.
 | `.orchestrator/backlog.db` | the backlog (use `backlog-list`/`backlog-add`/`backlog-show`/`backlog-close`; this is the source of truth, not `BACKLOG.md`) |
 | `.orchestrator/dogfood-log.db` | dogfood goal-boundary evidence (use `dogfood-log list`/`dogfood-log add`; this is the source of truth, not `DOGFOOD_LOG.md`) |
 | `.orchestrator/collaboration-items.db` | clarifications / operator-input items |
-| `.orchestrator/agents.json` | the agent catalog (which model each role uses) |
+| `.orchestrator/agents.json` | the agent catalog (which model each role uses) — see the roster-change caveat below |
 | `.orchestrator/logs/conduct-events.log` | canonical structured conduct event stream (JSON lines with `eventKind`; stable path, rotated by size; listen from the current end) |
 | `.orchestrator/logs/`, `.orchestrator/prompts/` | per-dispatch worker logs (`*.out.log`/`*.err.log`/`*.exit.txt`) and the rendered worker prompts |
 | `.orchestrator-worktrees/<goal-prefix>` | the goal's isolated git worktree on branch `goal/<prefix>` |
 | `.orchestrator-context/<goal-id>` | worker context artifacts for a goal |
 
 `--text-file` is the uniform throwaway vehicle to pass long text past the command-length cap for `retry`, `note`, `progress`, `verify-manual`, `recover`, `answer`, and `add-task`. `goal --brief-file <path>` and `backlog-add --body-file <path>` are the preferred command-specific forms, with `--text-file` aliases still accepted by current CLI help. The durable copy becomes the goal objective, task note, verification receipt, answer, or backlog item, so **delete the scratch input** afterward.
+
+### Changing which model a role uses
+
+`agent <role> <provider> <model> [name]` replaces the role's primary agent. `agent-add <role> <provider> <model> [name]` adds a second entry at `route=alternate` with a derived id, leaving the primary in place — that is the right verb when you want one goal's task moved to a different model via `reassign-agent` without switching the whole role.
+
+**Both verbs set the API model and leave the subscription half stale, and the subscription half is the one that dispatches.** They write `Model.ModelName` but not `Subscription.ModelAlias`, `Subscription.ReasoningEffort`, or `ComplexModel.ModelName`, which retain values from whatever previously occupied that id or role. Under the default `ExecutionPolicy=PreferSubscription`, the worker CLI is invoked with `{subscriptionModelName}` and `{subscriptionReasoningEffort}` from `workers.json` templates — so the model you just configured is the half that is *not* used.
+
+The `agents` listing prints both halves on one line without marking the conflict:
+
+```
+Developer: Codex developer id=openai-developer ... api=OpenAI/gpt-5.6-sol reasoning=medium subscription=codex-cli model=gpt-5.5 reasoning=low
+                                                    ^^^ what the command set                ^^^ what actually dispatches
+```
+
+There is no CLI flag for the subscription alias. After any roster change, edit the entry in `.orchestrator/agents.json` — `Subscription.ModelAlias`, `Subscription.ReasoningEffort`, and `ComplexModel.ModelName` — then re-run `agents` and confirm the two halves agree before letting a dispatch form. Tracked as backlog `fd4a5ed5`.
 
 Dogfood goal-boundary evidence is durable SQLite state, not a tracked markdown append log.
 
