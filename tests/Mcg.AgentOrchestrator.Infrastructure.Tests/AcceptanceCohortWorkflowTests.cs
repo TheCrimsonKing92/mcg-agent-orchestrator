@@ -1536,6 +1536,57 @@ public sealed class AcceptanceCohortWorkflowTests : GoalWorktreeTestBase
     }
 
     [Fact]
+    public void ProductionMergeTrain_ManifestFailureReturnsTypedFallback()
+    {
+        var repo = CreateReducedAcceptanceCohortRepository();
+        try
+        {
+            AddAcceptanceManifest(repo);
+            var kernel = new AgentOrchestratorKernel();
+            var firstGoal = CreateCompletedGoal(kernel, "First manifest-failure train member", repo);
+            var secondGoal = CreateCompletedGoal(kernel, "Second manifest-failure train member", repo);
+            var thirdGoal = CreateCompletedGoal(kernel, "Third manifest-failure train member", repo);
+            _ = CreateWorktreeCandidate(
+                repo,
+                firstGoal.Id,
+                "tests/Mcg.AgentOrchestrator.Core.Tests/ManifestTrainFirst.cs",
+                "first");
+            _ = CreateWorktreeCandidate(
+                repo,
+                secondGoal.Id,
+                "tests/Mcg.AgentOrchestrator.Infrastructure.Tests/ManifestTrainSecond.cs",
+                "second");
+            _ = CreateWorktreeCandidate(
+                repo,
+                thirdGoal.Id,
+                "tests/Mcg.AgentOrchestrator.Dashboard.Tests/ManifestTrainThird.cs",
+                "third");
+            var verifier = new ManifestThrowingAcceptanceVerifier(
+                new InvalidOperationException("acceptance manifest changed during train materialization"));
+            var workspace = OrchestratorWorkspace.ForDirectory(repo);
+            var driver = new ConductorDriver(
+                kernel, workspace, verifier, AgentCatalog.Default().Agents, WorkerProfileCatalog.Default());
+            var selection = ProjectTrainSelection(driver, firstGoal, secondGoal, thirdGoal);
+
+            var result = driver.RunMergeTrain(
+                selection,
+                [firstGoal, secondGoal, thirdGoal],
+                ConductorAutonomyPolicy.Permissive);
+
+            Assert.Null(result.Receipt);
+            Assert.Empty(result.MemberResults);
+            Assert.Empty(result.Ejections);
+            Assert.Contains("manifest fallback", result.Detail, StringComparison.Ordinal);
+            Assert.Equal(0, verifier.RunCount);
+            AssertNoMergeTrainWorkspaces(repo);
+        }
+        finally
+        {
+            DeleteDirectory(repo);
+        }
+    }
+
+    [Fact]
     public void ProductionBatch_SelectsRunsPersistsLandsAndCleansOneSharedCohort()
     {
         var repo = CreateReducedAcceptanceCohortRepository();
@@ -2211,5 +2262,36 @@ public sealed class AcceptanceCohortWorkflowTests : GoalWorktreeTestBase
             bool runBaselineArm = false,
             CancellationToken cancellationToken = default) =>
             throw new NotSupportedException("Focused evidence is not used by the cohort sequence fixture.");
+    }
+
+    private sealed class ManifestThrowingAcceptanceVerifier(Exception exception) : IGoalAcceptanceVerifier
+    {
+        internal int RunCount { get; private set; }
+
+        public string ComputeEffectivePlanIdentity(
+            string worktreePath,
+            IReadOnlyList<string>? changedFiles = null) => throw exception;
+
+        public Task<AcceptanceVerificationResult> RunAsync(
+            string worktreePath,
+            GoalId? goalId = null,
+            IReadOnlyList<string>? changedFiles = null,
+            int? stableSlotIndex = null,
+            DotnetBuildEnvironmentLease? stableSlotLease = null,
+            CancellationToken cancellationToken = default)
+        {
+            RunCount++;
+            throw new InvalidOperationException("The gate must not run when manifest identity cannot be computed.");
+        }
+
+        public Task<FocusedEvidenceRunResult> RunFocusedEvidenceAsync(
+            string worktreePath,
+            GoalId? goalId,
+            string request,
+            int? stableSlotIndex = null,
+            DotnetBuildEnvironmentLease? stableSlotLease = null,
+            bool runBaselineArm = false,
+            CancellationToken cancellationToken = default) =>
+            throw new NotSupportedException("Focused evidence is not used by the manifest-failure fixture.");
     }
 }

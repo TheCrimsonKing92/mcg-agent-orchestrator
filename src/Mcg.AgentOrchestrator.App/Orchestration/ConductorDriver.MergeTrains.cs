@@ -35,6 +35,14 @@ internal sealed partial class ConductorDriver
         }
 
         var goalsById = orderedGoals.ToDictionary(goal => goal.Id);
+        foreach (var member in selection.Members)
+        {
+            if (!goalsById.ContainsKey(member.GoalId))
+            {
+                throw new InvalidOperationException(
+                    $"Selected merge train goal {member.GoalId.Value} is not in the current Ready batch.");
+            }
+        }
         var originalBindings = selection.BindMembers();
         var attemptId = $"merge-train-attempt-{Guid.NewGuid():N}";
         var allEjections = new List<MergeTrainEjection>();
@@ -78,7 +86,15 @@ internal sealed partial class ConductorDriver
             var changedFiles = members.SelectMany(member => member.LandingPaths)
                 .Distinct(StringComparer.OrdinalIgnoreCase)
                 .ToArray();
-            var manifest = _cohortAcceptanceVerifier.ComputeEffectivePlanIdentity(workspace.Path, changedFiles);
+            string manifest;
+            try
+            {
+                manifest = _cohortAcceptanceVerifier.ComputeEffectivePlanIdentity(workspace.Path, changedFiles);
+            }
+            catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or InvalidOperationException)
+            {
+                return Fallback($"manifest fallback: {ex.GetType().Name}: {BoundCohortDetail(ex.Message)}");
+            }
             var identity = MergeTrainIdentity.Create(
                 members,
                 selection.Members[0].MainRevision,
@@ -128,7 +144,8 @@ internal sealed partial class ConductorDriver
                 }
                 catch (Exception ex) when (ex is AcceptanceInfrastructureDeferredException or
                     DotnetBuildSlotsBusyException or BuildLockBlockedException or OperationCanceledException or
-                    IOException or InvalidDataException)
+                    IOException or InvalidDataException or UnauthorizedAccessException or ArgumentException or
+                    NotSupportedException)
                 {
                     return Fallback($"gate infrastructure failure: {ex.GetType().Name}: {BoundCohortDetail(ex.Message)}");
                 }
@@ -154,7 +171,15 @@ internal sealed partial class ConductorDriver
                             "post-gate binding changed; train held for fresh Ready projection");
                     }
                 }
-                workspace.AssertGoalBranchesUnchanged();
+                try
+                {
+                    workspace.AssertGoalBranchesUnchanged();
+                }
+                catch (InvalidOperationException ex)
+                {
+                    var detail = $"post-gate goal branch changed; fresh Ready projection required; detail={BoundCohortDetail(ex.Message)}";
+                    return new ConductorMergeTrainRunResult(receipt, Hold(goals, detail), allEjections, detail);
+                }
                 var landing = LandingExecutor.ExecuteMergeTrain(
                     _cohortKernel,
                     goals,
