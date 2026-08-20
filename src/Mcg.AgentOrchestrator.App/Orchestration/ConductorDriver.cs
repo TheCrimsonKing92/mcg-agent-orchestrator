@@ -41,7 +41,7 @@ internal sealed record DeveloperBranchIntegrationResult(
         Status is DeveloperBranchIntegrationStatus.Current or DeveloperBranchIntegrationStatus.Integrated;
 }
 
-internal sealed class ConductorDriver
+internal sealed partial class ConductorDriver
 {
     internal sealed class EvidenceMutationLeaseUnavailableException(string message)
         : InvalidOperationException(message);
@@ -123,11 +123,17 @@ internal sealed class ConductorDriver
     private readonly IGoalAcceptanceVerifier? _cohortAcceptanceVerifier;
     private readonly IGoalLifecycleEventWriter? _cohortEventWriter;
     private readonly CohortAcceptanceStore? _cohortAcceptanceStore;
+    private readonly MergeTrainAcceptanceStore? _mergeTrainAcceptanceStore;
     private readonly Func<
         ConductorAcceptanceCohortSelection,
         IReadOnlyList<Goal>,
         ConductorAutonomyPolicy,
         ConductorAcceptanceCohortRunResult>? _runAcceptanceCohortOverride;
+    private readonly Func<
+        ConductorMergeTrainSelection,
+        IReadOnlyList<Goal>,
+        ConductorAutonomyPolicy,
+        ConductorMergeTrainRunResult>? _runMergeTrainOverride;
     private readonly Func<Goal, int> _getAcceptanceSlotCount;
     private readonly Func<int> _getWorkerAdmissionCapacity;
     private readonly Func<bool> _hasGateReadyGoal;
@@ -141,6 +147,8 @@ internal sealed class ConductorDriver
     private readonly bool _parallelAcceptanceEnabled;
     private readonly List<(ConductorLandingReceipt Receipt, string CohortId, string ReceiptId)>
         _pendingRecoveredLandingReceipts = [];
+    private readonly List<(ConductorLandingReceipt Receipt, string TrainId, string ReceiptId)>
+        _pendingRecoveredMergeTrainLandingReceipts = [];
     private Action<ConductorLandingReceipt>? _successfulLandingSink;
     private bool _buildServerShutdownRanThisTick;
 
@@ -151,11 +159,17 @@ internal sealed class ConductorDriver
         set
         {
             _successfulLandingSink = value;
-            if (value is null || _pendingRecoveredLandingReceipts.Count == 0)
+            if (value is null ||
+                (_pendingRecoveredLandingReceipts.Count == 0 &&
+                 _pendingRecoveredMergeTrainLandingReceipts.Count == 0))
             {
                 return;
             }
             foreach (var pending in _pendingRecoveredLandingReceipts)
+            {
+                value(pending.Receipt);
+            }
+            foreach (var pending in _pendingRecoveredMergeTrainLandingReceipts)
             {
                 value(pending.Receipt);
             }
@@ -164,7 +178,13 @@ internal sealed class ConductorDriver
             {
                 _cohortAcceptanceStore?.CompleteLandingEffects(pending.CohortId, pending.ReceiptId);
             }
+            foreach (var pending in _pendingRecoveredMergeTrainLandingReceipts
+                         .DistinctBy(item => item.TrainId))
+            {
+                _mergeTrainAcceptanceStore?.CompleteLandingEffects(pending.TrainId, pending.ReceiptId);
+            }
             _pendingRecoveredLandingReceipts.Clear();
+            _pendingRecoveredMergeTrainLandingReceipts.Clear();
         }
     }
     internal Action<GoalId>? DispatchRecordWriteSucceededSink { get; set; }
@@ -215,6 +235,8 @@ internal sealed class ConductorDriver
         _cohortEventWriter = eventWriter;
         _cohortAcceptanceStore = new CohortAcceptanceStore(
             Path.Combine(workspace.OrchestratorDirectory, "cohort-acceptance.db"));
+        _mergeTrainAcceptanceStore = new MergeTrainAcceptanceStore(
+            Path.Combine(workspace.OrchestratorDirectory, "merge-train-acceptance.db"));
         kernel.SetEventWriter(eventWriter);
         _tryBuildAwaitingClarificationEscalationReason = goal =>
             GoalRefinementGate.TryBuildAwaitingClarificationEscalationReason(workspace, goal, eventWriter, out var reason)
@@ -893,6 +915,7 @@ internal sealed class ConductorDriver
         _getFindingEvidenceEngineSettings = goal => AcceptanceGateEngineSettings.Load(
             GoalWorktrees.TryResolve(dir, goal.Id) ?? dir);
         RecoverCohortLandingEffects(kernel, workspace, eventWriter, _cohortAcceptanceStore);
+        RecoverMergeTrainLandingEffects(kernel, workspace, eventWriter, _mergeTrainAcceptanceStore);
     }
 
     internal static LandingEscalationRecheckResult ClassifyPreLandingRebaseConflict(
@@ -1130,6 +1153,11 @@ internal sealed class ConductorDriver
             IReadOnlyList<Goal>,
             ConductorAutonomyPolicy,
             ConductorAcceptanceCohortRunResult>? runAcceptanceCohort = null,
+        Func<
+            ConductorMergeTrainSelection,
+            IReadOnlyList<Goal>,
+            ConductorAutonomyPolicy,
+            ConductorMergeTrainRunResult>? runMergeTrain = null,
         Func<Goal, string, IDisposable?>? tryAcquireEvidenceMutationLease = null,
         Func<Goal, DeveloperBranchIntegrationResult>? integrateMainBeforeDeveloperDispatch = null,
         Func<Goal, ReconcileAcceptanceLeaseState?>? getEvidenceMutationLease = null,
@@ -1224,6 +1252,7 @@ internal sealed class ConductorDriver
         _isVerificationGateSatisfied = isVerificationGateSatisfied ?? (_ => false);
         _gateReadyCandidateProjector = gateReadyCandidateProjector;
         _runAcceptanceCohortOverride = runAcceptanceCohort;
+        _runMergeTrainOverride = runMergeTrain;
         _getAcceptanceSlotCount = getAcceptanceSlotCount ?? (_ => ConductorBatchLoop.DefaultParallelAcceptanceCapacity);
         _getWorkerAdmissionCapacity = getWorkerAdmissionCapacity ?? (() => ConductorBatchLoop.WorkerAdmissionCapacity);
         _hasGateReadyGoal = hasGateReadyGoal ?? (() => false);
@@ -3158,6 +3187,15 @@ internal sealed class ConductorDriver
 
     internal void ResetCohortFairness(GoalId goalId) =>
         _cohortAcceptanceStore?.ResetOvertake(goalId);
+
+    internal void RecordMergeTrainAdmissionFairness(ConductorMergeTrainSelection selection)
+    {
+        if (_cohortAcceptanceStore is null) return;
+        foreach (var member in selection.Members)
+        {
+            _cohortAcceptanceStore.ResetOvertake(member.GoalId);
+        }
+    }
 
     internal ConductorAcceptanceCohortRunResult RunAcceptanceCohort(
         ConductorAcceptanceCohortSelection selection,

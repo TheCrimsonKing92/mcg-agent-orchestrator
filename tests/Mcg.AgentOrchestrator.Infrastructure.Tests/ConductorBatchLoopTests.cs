@@ -88,6 +88,11 @@ public abstract class ConductorBatchLoopTests
             IReadOnlyList<Goal>,
             ConductorAutonomyPolicy,
             ConductorAcceptanceCohortRunResult>? runAcceptanceCohort = null,
+        Func<
+            ConductorMergeTrainSelection,
+            IReadOnlyList<Goal>,
+            ConductorAutonomyPolicy,
+            ConductorMergeTrainRunResult>? runMergeTrain = null,
         Func<Goal, string, IDisposable?>? tryAcquireEvidenceMutationLease = null,
         Func<Goal, ReconcileAcceptanceLeaseState?>? getEvidenceMutationLease = null,
         Func<DateTimeOffset>? utcNow = null) =>
@@ -126,6 +131,7 @@ public abstract class ConductorBatchLoopTests
             isVerificationGateSatisfied: isVerificationGateSatisfied,
             gateReadyCandidateProjector: gateReadyCandidateProjector,
             runAcceptanceCohort: runAcceptanceCohort,
+            runMergeTrain: runMergeTrain,
             tryAcquireEvidenceMutationLease: tryAcquireEvidenceMutationLease,
             getEvidenceMutationLease: getEvidenceMutationLease,
             utcNow: utcNow);

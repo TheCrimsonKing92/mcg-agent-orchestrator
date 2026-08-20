@@ -2812,6 +2812,35 @@ internal sealed class ConductorBatchLoop
         var productionCandidates = speculativeCandidates
             .Where(candidate => !liveAttemptGoalIds.Contains(candidate.GoalId.Value))
             .ToArray();
+        if (driver.MergeTrainsEnabled &&
+            cohortEligible.Length >= ConductorMergeTrainSelector.MinimumMembers &&
+            !cohortEligible.Any(goal => IsAcceptanceEngineCircuitHoldRequired(
+                goal.Status,
+                _acceptanceEngineCircuit?.Read())) &&
+            ConductorMergeTrainSelector.Select(
+                productionCandidates,
+                driver.ReadSuppressedCohortPairs()) is { } trainSelection)
+        {
+            var trainRun = driver.RunMergeTrain(
+                trainSelection,
+                cohortEligible,
+                policy,
+                onGateAdmitted: () => driver.RecordMergeTrainAdmissionFairness(trainSelection));
+            foreach (var member in trainRun.MemberResults)
+            {
+                results[member.Key] = new ParallelLandingOutcome(member.Value, SlotIndex: 0);
+            }
+            RecordParallelAcceptanceProgress(
+                $"ACCEPTANCE_TRAIN tick={tick} members={string.Join(',', trainSelection.Members.Select(member => member.GoalId.Value[..8]))} " +
+                $"ejected={string.Join(',', trainRun.Ejections.Select(ejection => ejection.GoalId.Value[..8]))} {trainRun.Detail}",
+                changedGoalLines);
+            cohortEligible = cohortEligible
+                .Where(goal => !results.ContainsKey(goal.Id.Value))
+                .ToArray();
+            productionCandidates = productionCandidates
+                .Where(candidate => !results.ContainsKey(candidate.GoalId.Value))
+                .ToArray();
+        }
         GoalId? forcedCohortCandidate = null;
         if (driver.AcceptanceCohortsEnabled &&
             cohortEligible.Length >= ConductorAcceptanceCohortSelector.CohortSize &&
