@@ -227,7 +227,13 @@ public sealed class MergeTrainAcceptanceStore
 
     private SqliteConnection Open()
     {
-        var connection = new SqliteConnection($"Data Source={_databasePath};Mode=ReadWriteCreate;Cache=Shared");
+        var connection = new SqliteConnection(new SqliteConnectionStringBuilder
+        {
+            DataSource = _databasePath,
+            Mode = SqliteOpenMode.ReadWriteCreate,
+            Cache = SqliteCacheMode.Shared,
+            Pooling = false
+        }.ConnectionString);
         connection.Open();
         using var pragma = connection.CreateCommand();
         pragma.CommandText = "PRAGMA foreign_keys=ON; PRAGMA busy_timeout=5000;";
