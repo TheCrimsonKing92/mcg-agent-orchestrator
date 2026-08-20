@@ -2423,8 +2423,10 @@ public sealed class WorkerDispatchTestsWorkerResultClassification : WorkerDispat
         Assert.Contains("reason=verification-pattern-unmatched", failure.Message, StringComparison.Ordinal);
     }
 
-    [Xunit.Fact]
-    public void TesterFailingVerificationIsRecordedWithoutUnmatchedRejection()
+    [Xunit.Theory]
+    [Xunit.InlineData("fail - 3/4 passed; NamedTestA, NamedTestB")]
+    [Xunit.InlineData("fail - NamedTestA, NamedTestB")]
+    public void TesterFailingVerificationIsRecordedWithoutUnmatchedRejection(string reportedTests)
     {
         var root = CreateSeededDispatchRepository();
         var clock = new TestClock(DateTimeOffset.Parse("2026-08-17T02:54:12Z"));
@@ -2434,7 +2436,7 @@ public sealed class WorkerDispatchTestsWorkerResultClassification : WorkerDispat
             WorkerResultBlock(
                 "none",
                 "dotnet test --filter NamedTestA|NamedTestB",
-                "fail - 3/4 passed; NamedTestA, NamedTestB",
+                reportedTests,
                 commit: "none",
                 blockers: "none");
         var (kernel, goal, task, process) = CreateCompletedGoalWorktreeDispatch(
@@ -2459,7 +2461,7 @@ public sealed class WorkerDispatchTestsWorkerResultClassification : WorkerDispat
         Assert.True(WorkerResultBlockers.TryGetTestsStatus(task.LastVerification, out var testsStatus));
         Assert.Equal(WorkerResultBlockers.TestsStatus.Fail, testsStatus);
         Assert.True(WorkerResultBlockers.TryFindTests(task.LastVerification, out var tests));
-        Assert.Equal("fail - 3/4 passed; NamedTestA, NamedTestB", tests);
+        Assert.Equal(reportedTests, tests);
         Assert.DoesNotContain("verification-pattern-unmatched", task.LastVerification.StandardError, StringComparison.Ordinal);
         Assert.DoesNotContain(
             DispatchFailureDiagnosticMarker.Format(DispatchFailureDiagnosticMarker.RequiredFileChangeEvidenceMissing),
