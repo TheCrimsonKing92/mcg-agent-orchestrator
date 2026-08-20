@@ -145,6 +145,16 @@ internal static class GoalOperationJournal
             "goal-operations",
             $"{goalId.Value}.jsonl");
 
+    public static string ArchiveDirectoryFor(string executionDirectory) =>
+        System.IO.Path.Combine(
+            System.IO.Path.GetFullPath(executionDirectory),
+            ".orchestrator",
+            "goal-operations",
+            "archive");
+
+    public static string ArchivePathFor(string executionDirectory, GoalId goalId) =>
+        System.IO.Path.Combine(ArchiveDirectoryFor(executionDirectory), $"{goalId.Value}.jsonl");
+
     public static string LifecycleIndexPath(string executionDirectory) =>
         System.IO.Path.Combine(
             System.IO.Path.GetFullPath(executionDirectory),
@@ -673,8 +683,13 @@ internal static class GoalOperationJournal
         var summaries = new Dictionary<GoalId, GoalOperationJournalSummary>();
         if (Directory.Exists(root))
         {
-            foreach (var path in Directory.EnumerateFiles(root, "*.jsonl", SearchOption.TopDirectoryOnly))
+            foreach (var path in Directory.EnumerateFiles(root, "*.jsonl", SearchOption.AllDirectories))
             {
+                if (IsArchivedPath(root, path))
+                {
+                    continue;
+                }
+
                 var fileName = System.IO.Path.GetFileNameWithoutExtension(path);
                 if (fileName.Equals("lifecycle-index", StringComparison.OrdinalIgnoreCase))
                 {
@@ -692,6 +707,13 @@ internal static class GoalOperationJournal
         }
 
         return summaries;
+    }
+
+    private static bool IsArchivedPath(string journalRoot, string path)
+    {
+        var archiveRoot = System.IO.Path.GetFullPath(System.IO.Path.Combine(journalRoot, "archive")) +
+            System.IO.Path.DirectorySeparatorChar;
+        return System.IO.Path.GetFullPath(path).StartsWith(archiveRoot, StringComparison.OrdinalIgnoreCase);
     }
 
     private static GoalOperationJournalEntry[] ReadEntries(string path) =>

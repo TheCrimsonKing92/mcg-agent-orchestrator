@@ -1,6 +1,7 @@
 using System.Globalization;
 using System.Collections.Concurrent;
 using System.Text.Json;
+using Mcg.AgentOrchestrator.Core;
 using Mcg.AgentOrchestrator.Infrastructure;
 
 namespace Mcg.AgentOrchestrator.App.Orchestration;
@@ -16,7 +17,9 @@ internal static class RunEventMaintenanceCadence
         string runEventStorePath,
         string conductEventsLogPath,
         Func<DateTimeOffset>? utcNow = null,
-        Func<SqliteRunEventStore, RunEventMaintenanceOptions, RunEventMaintenanceResult>? maintenanceOperation = null)
+        Func<SqliteRunEventStore, RunEventMaintenanceOptions, RunEventMaintenanceResult>? maintenanceOperation = null,
+        OrchestratorWorkspace? workspace = null,
+        IReadOnlyCollection<Goal>? goals = null)
     {
         var now = (utcNow ?? (() => DateTimeOffset.UtcNow))();
         var cadenceKey = Path.GetFullPath(runEventStorePath);
@@ -38,10 +41,22 @@ internal static class RunEventMaintenanceCadence
                 return SkippedResult();
             }
 
-            var options = RunEventMaintenanceOptions.Default with { UtcNow = now, Vacuum = false };
+            var terminalGoalIds = goals?
+                .Where(goal => goal.IsTerminal)
+                .Select(goal => goal.Id.Value)
+                .ToArray();
+            var options = RunEventMaintenanceOptions.Default with
+            {
+                UtcNow = now,
+                Vacuum = IsOffPeakVacuumWindow(now),
+                TerminalGoalIds = terminalGoalIds
+            };
             var result = maintenanceOperation is null
                 ? store.MaintainAsync(options).GetAwaiter().GetResult()
                 : maintenanceOperation(store, options);
+            var artifactRetention = workspace is null || goals is null
+                ? null
+                : StorageRetentionMaintenance.Run(workspace, goals, now);
             var receipt = FormatReceipt("cadence", options, result);
             Console.WriteLine(receipt);
             TryAppendJournal(journal, "run-events-maintenance", receipt, now);
@@ -57,7 +72,8 @@ internal static class RunEventMaintenanceCadence
                 Deferred: result.Deferred,
                 Failed: false,
                 Reason: result.DeferredReason,
-                Maintenance: result);
+                Maintenance: result,
+                ArtifactRetention: artifactRetention);
         }
         catch (Exception ex)
         {
@@ -70,7 +86,8 @@ internal static class RunEventMaintenanceCadence
                 Deferred: false,
                 Failed: true,
                 Reason: ex.GetType().Name,
-                Maintenance: null);
+                Maintenance: null,
+                ArtifactRetention: null);
         }
     }
 
@@ -81,7 +98,11 @@ internal static class RunEventMaintenanceCadence
             Deferred: false,
             Failed: false,
             Reason: "fresh",
-            Maintenance: null);
+            Maintenance: null,
+            ArtifactRetention: null);
+
+    internal static bool IsOffPeakVacuumWindow(DateTimeOffset now) =>
+        now.DayOfWeek == DayOfWeek.Sunday && now.Hour >= 2 && now.Hour < 5;
 
     public static string FormatReceipt(
         string mode,
@@ -90,7 +111,7 @@ internal static class RunEventMaintenanceCadence
     {
         var status = result.Deferred ? "deferred" : "completed";
         return string.Create(CultureInfo.InvariantCulture,
-            $"RUN_EVENTS_MAINTENANCE mode={mode} status={status} agedDeleted={result.AgedConductorTickRowsDeleted} oversizedDeleted={result.OversizedConductorTickRowsDeleted} totalDeleted={result.ConductorTickRowsDeleted} payloadBytesEstimate={result.DeletedPayloadBytesEstimate} maxRowsPerTransaction={result.MaxRowsDeletedInTransaction} durationMs={(long)result.Duration.TotalMilliseconds} tickMaxAgeDays={options.ConductorTickMaxAge.TotalDays:0.###} keepTickRows={options.MinConductorTickRowsToKeep} payloadMaxBytes={options.MaxConductorTickPayloadBytes} batchSize={Math.Clamp(options.DeleteBatchSize, 1, 1000)} bytesBefore={result.BytesBefore} bytesAfter={result.BytesAfter} vacuumRequested={result.VacuumRequested} vacuumCompleted={result.VacuumCompleted} vacuumDeferred={result.VacuumDeferred}{(string.IsNullOrWhiteSpace(result.DeferredReason) ? "" : $" deferredReason={Sanitize(result.DeferredReason)}")}");
+            $"RUN_EVENTS_MAINTENANCE mode={mode} status={status} agedDeleted={result.AgedConductorTickRowsDeleted} oversizedDeleted={result.OversizedConductorTickRowsDeleted} totalDeleted={result.ConductorTickRowsDeleted} terminalGoalOperationsDeleted={result.TerminalGoalOperationRowsDeleted} payloadBytesEstimate={result.DeletedPayloadBytesEstimate} maxRowsPerTransaction={result.MaxRowsDeletedInTransaction} durationMs={(long)result.Duration.TotalMilliseconds} tickMaxAgeDays={options.ConductorTickMaxAge.TotalDays:0.###} terminalGoalOperationMaxAgeDays={options.EffectiveTerminalGoalOperationMaxAge.TotalDays:0.###} keepTickRows={options.MinConductorTickRowsToKeep} payloadMaxBytes={options.MaxConductorTickPayloadBytes} batchSize={Math.Clamp(options.DeleteBatchSize, 1, 1000)} bytesBefore={result.BytesBefore} bytesAfter={result.BytesAfter} vacuumRequested={result.VacuumRequested} vacuumCompleted={result.VacuumCompleted} vacuumDeferred={result.VacuumDeferred}{(string.IsNullOrWhiteSpace(result.DeferredReason) ? "" : $" deferredReason={Sanitize(result.DeferredReason)}")}");
     }
 
     public static void TryAppendRunEventReceipt(
@@ -124,6 +145,7 @@ internal static class RunEventMaintenanceCadence
                     result.VacuumRequested,
                     result.VacuumCompleted,
                     result.VacuumDeferred,
+                    result.TerminalGoalOperationRowsDeleted,
                     options.MinConductorTickRowsToKeep,
                     options.MaxConductorTickPayloadBytes,
                     deleteBatchSize = Math.Clamp(options.DeleteBatchSize, 1, 1000),
@@ -231,4 +253,5 @@ internal sealed record RunEventMaintenanceCadenceResult(
     bool Deferred,
     bool Failed,
     string? Reason,
-    RunEventMaintenanceResult? Maintenance);
+    RunEventMaintenanceResult? Maintenance,
+    StorageRetentionResult? ArtifactRetention = null);

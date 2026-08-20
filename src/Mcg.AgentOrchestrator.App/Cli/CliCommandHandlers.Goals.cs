@@ -1632,7 +1632,9 @@ private static bool? TryExecuteGoalCommand(string command, IReadOnlyList<string>
                         context.Workspace);
                     RunEventMaintenanceCadence.TryRunIfDue(
                         context.Workspace.RunEventStorePath,
-                        context.Workspace.ConductEventsLogPath);
+                        context.Workspace.ConductEventsLogPath,
+                        workspace: context.Workspace,
+                        goals: loopKernel.Goals.ToArray());
                     RemoteGitMirror.TryStartBackgroundProcessing(loopKernel, context.Workspace.ExecutionDirectory);
                     return terminalSweep;
                 }

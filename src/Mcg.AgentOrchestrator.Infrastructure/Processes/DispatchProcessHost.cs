@@ -635,9 +635,9 @@ public static class DispatchProcessHost
         File.AppendAllText(stderrPath, message + Environment.NewLine);
     }
 
-    internal static FileStream OpenWorkerStderrStream(string stderrPath)
+    internal static Stream OpenWorkerStderrStream(string stderrPath)
     {
-        return new FileStream(stderrPath, FileMode.Append, FileAccess.Write, FileShare.Read);
+        return new RollingLogWriteStream(stderrPath, FileMode.Append);
     }
 
     internal static string BuildLowIntegrityPath(string? currentPath, string shellExecutable, string? sandboxBin = null)
@@ -1447,7 +1447,7 @@ public static void DropToLow() {
             WritePromptToWorkerStdin(worker, parameters);
 
             // Stream raw bytes to the log files so the heartbeat's byte-growth progress detection works.
-            using var stdout = new FileStream(parameters.StdoutPath, FileMode.Create, FileAccess.Write, FileShare.Read);
+            using var stdout = new RollingLogWriteStream(parameters.StdoutPath, FileMode.Create);
             using var stderr = OpenWorkerStderrStream(parameters.StderrPath);
             using var drainCts = new CancellationTokenSource();
             var copyOut = worker.StandardOutput.BaseStream.CopyToAsync(stdout, drainCts.Token);

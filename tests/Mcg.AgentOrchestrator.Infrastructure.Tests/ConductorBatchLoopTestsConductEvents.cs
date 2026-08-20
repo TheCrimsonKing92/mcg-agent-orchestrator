@@ -472,4 +472,25 @@ public sealed class ConductorBatchLoopTestsConductEvents : ConductorBatchLoopTes
             new JsonSerializerOptions(JsonSerializerDefaults.Web))!;
         Assert.Equal("loop-stop", current.EventKind);
     }
+
+    [Xunit.Fact(DisplayName = "ConductEvents_rotation_keeps_bounded_generation_count")]
+    public void ConductEventsRotationKeepsBoundedGenerationCount()
+    {
+        var root = CreateTempDirectory("mcg-conduct-events-bounded-rollover");
+        var logPath = Path.Combine(root, ".orchestrator", "logs", ConductEventLogWriter.CurrentFileName);
+        var tick = 0;
+        var writer = new ConductEventLogWriter(
+            logPath,
+            maxBytes: 1,
+            utcNow: () => DateTimeOffset.Parse("2026-07-13T02:30:00Z").AddSeconds(tick++),
+            rotatedGenerationCount: 3);
+
+        for (var index = 0; index < 7; index++)
+        {
+            writer.Append("bounded-rollover", null, $"event={index}");
+        }
+
+        Assert.Equal(3, Directory.GetFiles(Path.GetDirectoryName(logPath)!, "conduct-events-*.log").Length);
+        Assert.True(File.Exists(logPath));
+    }
 }

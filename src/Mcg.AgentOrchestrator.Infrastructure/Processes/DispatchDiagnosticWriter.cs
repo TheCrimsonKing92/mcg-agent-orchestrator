@@ -1,6 +1,3 @@
-using System.Text.Json;
-using System.Text.Json.Serialization;
-
 namespace Mcg.AgentOrchestrator.Infrastructure;
 
 public sealed record DispatchDiagnosticRecord(
@@ -25,38 +22,13 @@ public interface IDispatchDiagnosticWriter
 
 public sealed class FileDiagnosticWriter : IDispatchDiagnosticWriter
 {
-    private static readonly JsonSerializerOptions JsonOptions = new()
-    {
-        PropertyNamingPolicy = JsonNamingPolicy.CamelCase
-    };
-
-    static FileDiagnosticWriter()
-    {
-        JsonOptions.Converters.Add(new JsonStringEnumConverter());
-    }
-
-    private static readonly object WriteLock = new();
+    public const string RetentionDecision =
+        "Disabled: dispatch-diagnostics.jsonl has no production reader; structured task/process records remain authoritative.";
 
     public void WriteRecord(DispatchDiagnosticRecord record)
     {
-        try
-        {
-            var logDir = Path.GetDirectoryName(record.OutputPath);
-            if (string.IsNullOrEmpty(logDir))
-                logDir = ".";
-
-            Directory.CreateDirectory(logDir);
-            var logPath = Path.Combine(logDir, "dispatch-diagnostics.jsonl");
-            var line = JsonSerializer.Serialize(record, JsonOptions) + "\n";
-
-            lock (WriteLock)
-            {
-                File.AppendAllText(logPath, line);
-            }
-        }
-        catch (Exception ex)
-        {
-            System.Diagnostics.Debug.WriteLine($"[DispatchDiagnostic] Write failed: {ex.Message}");
-        }
+        ArgumentNullException.ThrowIfNull(record);
+        // Intentionally no-op until a production consumer exists. The previous append-only file grew
+        // without bound while duplicating authoritative dispatch state and had no production reader.
     }
 }

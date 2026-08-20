@@ -54,9 +54,14 @@ public sealed record RunEventMaintenanceOptions(
     int MaxConductorTickPayloadBytes = 50000,
     int DeleteBatchSize = 1000,
     bool LegacyOversizedConductorTickPurge = false,
-    int MaintenanceLockCommandTimeoutSeconds = 30)
+    int MaintenanceLockCommandTimeoutSeconds = 30,
+    TimeSpan? TerminalGoalOperationMaxAge = null,
+    IReadOnlyCollection<string>? TerminalGoalIds = null)
 {
     public static RunEventMaintenanceOptions Default { get; } = new(TimeSpan.FromDays(7));
+
+    public TimeSpan EffectiveTerminalGoalOperationMaxAge =>
+        TerminalGoalOperationMaxAge ?? TimeSpan.FromDays(30);
 }
 
 public sealed record RunEventMaintenanceResult(
@@ -72,7 +77,8 @@ public sealed record RunEventMaintenanceResult(
     long BytesAfter,
     bool VacuumRequested,
     bool VacuumCompleted,
-    bool VacuumDeferred);
+    bool VacuumDeferred,
+    int TerminalGoalOperationRowsDeleted = 0);
 
 public sealed class SqliteRunEventStore : IRunEventStore
 {
@@ -320,11 +326,13 @@ public sealed class SqliteRunEventStore : IRunEventStore
         var clock = Stopwatch.StartNew();
         var bytesBefore = GetDatabaseBytes();
         await using var conn = OpenConnection(busyTimeoutMilliseconds: 0);
+        await PopulateTerminalGoalsAsync(conn, options.TerminalGoalIds, cancellationToken).ConfigureAwait(false);
         var oversized = await PruneOversizedConductorTicksAsync(conn, options, cancellationToken).ConfigureAwait(false);
         var aged = options.LegacyOversizedConductorTickPurge
             ? ConductorTickPruneResult.Empty
             : await PruneAgedConductorTicksAsync(conn, options, cancellationToken).ConfigureAwait(false);
-        var deferred = oversized.Deferred || aged.Deferred;
+        var goalOperations = await PruneAgedTerminalGoalOperationsAsync(conn, options, cancellationToken).ConfigureAwait(false);
+        var deferred = oversized.Deferred || aged.Deferred || goalOperations.Deferred;
         if (deferred)
         {
             clock.Stop();
@@ -341,7 +349,8 @@ public sealed class SqliteRunEventStore : IRunEventStore
                 BytesAfter: GetDatabaseBytes(),
                 VacuumRequested: options.Vacuum,
                 VacuumCompleted: false,
-                VacuumDeferred: false);
+                VacuumDeferred: false,
+                TerminalGoalOperationRowsDeleted: goalOperations.RowsDeleted);
         }
 
         var vacuumCompleted = false;
@@ -374,7 +383,33 @@ public sealed class SqliteRunEventStore : IRunEventStore
             BytesAfter: GetDatabaseBytes(),
             VacuumRequested: options.Vacuum,
             VacuumCompleted: vacuumCompleted,
-            VacuumDeferred: vacuumDeferred);
+            VacuumDeferred: vacuumDeferred,
+            TerminalGoalOperationRowsDeleted: goalOperations.RowsDeleted);
+    }
+
+    private static async Task PopulateTerminalGoalsAsync(
+        SqliteConnection conn,
+        IReadOnlyCollection<string>? terminalGoalIds,
+        CancellationToken cancellationToken)
+    {
+        await RunNonQueryAsync(
+            conn,
+            "CREATE TEMP TABLE IF NOT EXISTS maintenance_terminal_goals (goal_id TEXT PRIMARY KEY)",
+            cancellationToken).ConfigureAwait(false);
+        await RunNonQueryAsync(conn, "DELETE FROM maintenance_terminal_goals", cancellationToken).ConfigureAwait(false);
+        if (terminalGoalIds is null || terminalGoalIds.Count == 0)
+        {
+            return;
+        }
+
+        await using var command = conn.CreateCommand();
+        command.CommandText = "INSERT OR IGNORE INTO maintenance_terminal_goals (goal_id) VALUES ($goal_id)";
+        var parameter = command.Parameters.Add("$goal_id", SqliteType.Text);
+        foreach (var goalId in terminalGoalIds.Where(value => !string.IsNullOrWhiteSpace(value)).Distinct(StringComparer.Ordinal))
+        {
+            parameter.Value = goalId;
+            await command.ExecuteNonQueryAsync(cancellationToken).ConfigureAwait(false);
+        }
     }
 
     private SqliteConnection OpenConnection()
@@ -557,6 +592,71 @@ public sealed class SqliteRunEventStore : IRunEventStore
                 deleteCommand.Parameters.AddWithValue("$event_type", RunEventTypes.ConductorTick);
                 deleteCommand.Parameters.AddWithValue("$cutoff", cutoff);
                 deleteCommand.Parameters.AddWithValue("$keep_rows", keepRows);
+                deleteCommand.Parameters.AddWithValue("$batch_size", batchSize);
+            },
+            options.MaintenanceLockCommandTimeoutSeconds,
+            cancellationToken).ConfigureAwait(false);
+    }
+
+    private async Task<ConductorTickPruneResult> PruneAgedTerminalGoalOperationsAsync(
+        SqliteConnection conn,
+        RunEventMaintenanceOptions options,
+        CancellationToken cancellationToken)
+    {
+        if (options.TerminalGoalIds is null || options.TerminalGoalIds.Count == 0)
+        {
+            return ConductorTickPruneResult.Empty;
+        }
+
+        var cutoff = (options.UtcNow ?? DateTimeOffset.UtcNow)
+            .Subtract(options.EffectiveTerminalGoalOperationMaxAge)
+            .ToString("O", CultureInfo.InvariantCulture);
+        var batchSize = NormalizeDeleteBatchSize(options.DeleteBatchSize);
+        return await PruneConductorTickBatchesAsync(
+            conn,
+            batchSize,
+            statsCommand =>
+            {
+                statsCommand.CommandText = """
+                    SELECT COUNT(1), COALESCE(SUM(payload_bytes), 0)
+                    FROM (
+                        SELECT seq, COALESCE(LENGTH(payload_json), 0) AS payload_bytes
+                        FROM run_events
+                        WHERE event_type = $event_type
+                          AND occurred_at < $cutoff
+                          AND EXISTS (
+                              SELECT 1
+                              FROM maintenance_terminal_goals terminal
+                              WHERE terminal.goal_id = run_events.goal_id
+                          )
+                        ORDER BY seq ASC
+                        LIMIT $batch_size
+                    )
+                    """;
+                statsCommand.Parameters.AddWithValue("$event_type", RunEventTypes.GoalOperation);
+                statsCommand.Parameters.AddWithValue("$cutoff", cutoff);
+                statsCommand.Parameters.AddWithValue("$batch_size", batchSize);
+            },
+            deleteCommand =>
+            {
+                deleteCommand.CommandText = """
+                    DELETE FROM run_events
+                    WHERE seq IN (
+                        SELECT seq
+                        FROM run_events
+                        WHERE event_type = $event_type
+                          AND occurred_at < $cutoff
+                          AND EXISTS (
+                              SELECT 1
+                              FROM maintenance_terminal_goals terminal
+                              WHERE terminal.goal_id = run_events.goal_id
+                          )
+                        ORDER BY seq ASC
+                        LIMIT $batch_size
+                    )
+                    """;
+                deleteCommand.Parameters.AddWithValue("$event_type", RunEventTypes.GoalOperation);
+                deleteCommand.Parameters.AddWithValue("$cutoff", cutoff);
                 deleteCommand.Parameters.AddWithValue("$batch_size", batchSize);
             },
             options.MaintenanceLockCommandTimeoutSeconds,
