@@ -21,6 +21,58 @@ Rules for using and maintaining this file:
 - **Durable lessons belong in `### Operating lessons worth keeping`; live state belongs in the top
   section.** Everything else is history.
 
+## RESUME HERE — 2026-08-20 05:00 UTC, board running, gate blocked by ~14 red tests on main
+
+**THE ONE THING TO KNOW: the acceptance gate is unpassable for every goal**, because main carries
+roughly fourteen failing tests. This is not a per-goal quality problem — three unrelated candidates
+failed their gates on the same set tonight, including one whose diff is **docs and tests only, zero
+source**, which proves the reds are on main. Two goals now cover them and **both must land** before
+anything else can:
+
+| Goal | Covers | State at handoff |
+|---|---|---|
+| `4fa6af44` | the six Planner-contract reds | Reviewer, final step; root cause fixed and verified green |
+| `c30eb2fe` | the eight local-provider reds (backlog `7009ffbd`) | Developer, just intaken |
+
+`4fa6af44`'s root cause is worth keeping: `MarkdownHeadingNormalizer`'s `(?m)(?<=\S)(#{1,6}[ \t]+\S)`
+demoted a start-of-line `## Heading` to `# Heading`, because the first `#` satisfied the lookbehind.
+One product bug behind all five reds. Fixed in `c85b9bdc`, confirmed by a focused receipt: 26 tests
+executed, passed.
+
+`c30eb2fe`'s eight cluster around local provider routing and are **hypothesised** (not diagnosed) to be
+stale Ollama expectations after the LlamaCpp switch. Verify before fixing.
+
+**How that was nearly missed, and the lesson.** The first read of a failing gate said "worker profiles:
+failed: 1". That came from grepping two of roughly twenty lane receipts. Always sweep every lane:
+
+```
+grep -oh 'testName="[^"]*"[^>]*outcome="Failed"' <attempt-dir>/<attempt-id>.*.trx | grep -o 'testName="[^"]*"' | sort -u
+```
+
+**Roster: codex is back on Developer** (`openai-developer`, `gpt-5.6-sol`, `codex-cli`, medium). Verify
+which harness actually ran by the prompt filename suffix (`-codex-cli.md` / `-grok-cli.md`) or the
+`Dispatched to ...` reason — **not** by `agents` output or `status`, both of which lied all evening. See
+backlog `fd4a5ed5`: a roster change and a `reassign-agent` can both report success and never reach
+dispatch.
+
+**Five defects filed tonight, all orchestrator-side, all cost real rounds:**
+
+| Id | Defect |
+|---|---|
+| `9a9c7e8e` | a rejected focused-evidence request is replayed verbatim forever; burned 16 retries on `21b284a0`. Trigger is **multi-selection** requests only — a single selection works |
+| `2861b909` | operator text in `recover`/`retry --text-file` is recorded, reports `Applied`, and never reaches the prompt when the retry counter is not yet engaged |
+| `fd4a5ed5` | `agent`/`agent-add` leave the subscription alias stale, and task agent assignments revert silently |
+| `9fbce159` | the Planner contract rejects `File.cs:442-479`; a line range discards the whole plan. Mitigated for future Planners by `045930f8` |
+| `7009ffbd` | the eight local-provider reds above |
+
+**Operating notes that saved or cost time tonight** — all now in `docs/operator-runbook.md`:
+verify a conductor rebuild with `App.dll.git-head` vs `git rev-parse HEAD` (run-dir hash proves nothing;
+handoff rebuilds are intermittent); never grep a .NET assembly for a string you added (UTF-16, gives
+false negatives on strings that are demonstrably present); put worker guidance in the **brief**, not a
+recover note; and front-load numbers in operator notes because truncation eats the middle.
+
+Prior section follows.
+
 ## RESUME HERE — 2026-08-20 00:38 UTC, loop RELAUNCHED (was wound down after a LlamaCpp Tester 400)
 
 **UPDATE 2026-08-19/20 — board ran unattended, roster changed, loop relaunched.** While Claude and
