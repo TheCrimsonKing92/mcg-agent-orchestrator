@@ -20,7 +20,7 @@ internal static class GoalBoardCommand
         Func<ProcessCommandLineSnapshot>? processSnapshotFactory = null,
         Func<string, IEnumerable<GoalId>, IReadOnlyDictionary<GoalId, string>>? worktreeResolver = null,
         Func<string, GitCli.WorktreeStatusInspection>? worktreeStatusInspector = null,
-        Func<string, GitCli.AheadBehindInspection>? aheadBehindInspector = null)
+        Func<string, IReadOnlyList<string>, GitCli.GitResult>? gitRunner = null)
     {
         var options = GoalBoardOptions.Parse(args);
         var now = (utcNow ?? (() => DateTimeOffset.UtcNow))();
@@ -38,12 +38,21 @@ internal static class GoalBoardCommand
         var acceptance = GoalBoardAcceptanceAttemptReader.Read(
             Path.Combine(workspace.OrchestratorDirectory, "acceptance-gate-attempts"),
             goalIds);
-        var worktrees = InspectWorktrees(
-            workspace.ExecutionDirectory,
-            goals.Select(goal => goal.Id),
-            worktreeResolver,
-            worktreeStatusInspector,
-            aheadBehindInspector);
+        var ids = goals.Select(goal => goal.Id).ToArray();
+        var worktreePaths = ResolveWorktreePaths(workspace.ExecutionDirectory, ids, worktreeResolver);
+        var worktrees = worktreePaths is null
+            ? ids.ToDictionary(id => id, _ => GoalBoardWorktreeFact.Unknown)
+            : InspectWorktrees(
+                workspace.ExecutionDirectory,
+                ids,
+                worktreePaths,
+                worktreeStatusInspector,
+                gitRunner);
+        var lifecycleFacts = ReadLifecycleFacts(
+            workspace,
+            ids,
+            worktreePaths ?? new Dictionary<GoalId, string>(),
+            attention.OpenClarificationGoalIds);
 
         // Machine process discovery is deliberately captured once for the entire board. Every goal
         // disposition evaluates against this immutable snapshot.
@@ -60,6 +69,7 @@ internal static class GoalBoardCommand
             intents,
             acceptance,
             worktrees,
+            lifecycleFacts,
             dispositionSurface,
             processSnapshot)).ToArray();
         var projection = GoalBoardProjector.Project(facts, options, now);
@@ -77,6 +87,7 @@ internal static class GoalBoardCommand
         IntentRead intentRead,
         IReadOnlyDictionary<string, GoalBoardAcceptanceFact> acceptance,
         IReadOnlyDictionary<GoalId, GoalBoardWorktreeFact> worktrees,
+        IReadOnlyDictionary<GoalId, GoalLifecycleFacts>? lifecycleFacts,
         GoalOperatorDispositionSurface dispositionSurface,
         ProcessCommandLineSnapshot processSnapshot)
     {
@@ -140,12 +151,20 @@ internal static class GoalBoardCommand
             }
         }
 
+        GoalLifecycleState? lifecycleState = null;
+        if (lifecycleFacts is not null)
+        {
+            lifecycleFacts.TryGetValue(goal.Id, out var facts);
+            lifecycleState = GoalLifecycle.ResolveState(goal, facts ?? GoalLifecycleFacts.None);
+        }
+
         var stageInput = new StatusProjectionGoal(
             goal.Id.Value,
             goal.Objective,
             goal.Status,
             goal.Tasks.Select(task => new StatusProjectionTask(task.RequiredRole, task.Status)).ToArray(),
-            goal.Timeline.OrderByDescending(evt => evt.OccurredAt).FirstOrDefault()?.OccurredAt);
+            goal.Timeline.OrderByDescending(evt => evt.OccurredAt).FirstOrDefault()?.OccurredAt,
+            lifecycleState);
         return new GoalBoardGoalFact(
             goal.Id.Value,
             goal.Objective,
@@ -161,7 +180,8 @@ internal static class GoalBoardCommand
             deadDispatch ? dispatch?.NextSafeCommand : null,
             acceptanceFact.IsLive,
             liveWorker,
-            Fallback(kernel, goal));
+            Fallback(kernel, goal),
+            lifecycleState);
     }
 
     private static AttentionRead ReadAttention(OrchestratorWorkspace workspace, IReadOnlyCollection<string> goalIds)
@@ -180,7 +200,16 @@ internal static class GoalBoardCommand
                     group => group.Key,
                     group => new AttentionSummary(group.Count(), group.Max(item => item.RaisedAt)),
                     StringComparer.Ordinal);
-            return new AttentionRead(true, summaries);
+            var openClarifications = new HashSet<GoalId>();
+            foreach (var group in items
+                .Where(item => !string.IsNullOrWhiteSpace(item.GoalId))
+                .GroupBy(item => item.GoalId!, StringComparer.Ordinal))
+            {
+                if (GoalRefinementService.HasOpenClarification(group.ToArray()))
+                    openClarifications.Add(new GoalId(group.Key));
+            }
+
+            return new AttentionRead(true, summaries, openClarifications);
         }
         catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or Microsoft.Data.Sqlite.SqliteException)
         {
@@ -205,24 +234,36 @@ internal static class GoalBoardCommand
         }
     }
 
-    private static IReadOnlyDictionary<GoalId, GoalBoardWorktreeFact> InspectWorktrees(
+    private static IReadOnlyDictionary<GoalId, string>? ResolveWorktreePaths(
         string executionDirectory,
-        IEnumerable<GoalId> goalIds,
-        Func<string, IEnumerable<GoalId>, IReadOnlyDictionary<GoalId, string>>? worktreeResolver,
-        Func<string, GitCli.WorktreeStatusInspection>? worktreeStatusInspector,
-        Func<string, GitCli.AheadBehindInspection>? aheadBehindInspector)
+        IReadOnlyList<GoalId> ids,
+        Func<string, IEnumerable<GoalId>, IReadOnlyDictionary<GoalId, string>>? worktreeResolver)
     {
-        var ids = goalIds.ToArray();
-        IReadOnlyDictionary<GoalId, string> resolved;
         try
         {
-            resolved = (worktreeResolver ?? GoalWorktrees.ResolveAll)(executionDirectory, ids);
+            return (worktreeResolver ?? GoalWorktrees.ResolveAll)(executionDirectory, ids);
         }
         catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
         {
-            return ids.ToDictionary(id => id, _ => GoalBoardWorktreeFact.Unknown);
+            return null;
+        }
+    }
+
+    private static IReadOnlyDictionary<GoalId, GoalBoardWorktreeFact> InspectWorktrees(
+        string executionDirectory,
+        IReadOnlyList<GoalId> ids,
+        IReadOnlyDictionary<GoalId, string> resolved,
+        Func<string, GitCli.WorktreeStatusInspection>? worktreeStatusInspector,
+        Func<string, IReadOnlyList<string>, GitCli.GitResult>? gitRunner)
+    {
+        if (resolved.Count == 0)
+        {
+            return ids.ToDictionary(id => id, _ => GoalBoardWorktreeFact.Absent);
         }
 
+        var divergence = GoalBoardGitDivergence.Capture(executionDirectory, gitRunner);
+        var inspectStatus = worktreeStatusInspector
+            ?? (path => GitCli.InspectWorktreeStatus(path, GoalBoardGitDivergence.DirtyProbeTimeoutMilliseconds));
         var facts = new Dictionary<GoalId, GoalBoardWorktreeFact>();
         foreach (var id in ids)
         {
@@ -232,11 +273,62 @@ internal static class GoalBoardCommand
                 continue;
             }
 
-            var status = (worktreeStatusInspector ?? GitCli.InspectWorktreeStatus)(path);
-            var divergence = (aheadBehindInspector ?? GitCli.InspectAheadBehind)(path);
-            facts[id] = status.Succeeded && divergence.Succeeded
-                ? new GoalBoardWorktreeFact(status.IsDirty ? "dirty" : "clean", divergence.Ahead, divergence.Behind)
-                : GoalBoardWorktreeFact.Unknown;
+            var status = inspectStatus(path);
+            if (!status.Succeeded)
+            {
+                facts[id] = GoalBoardWorktreeFact.Unknown;
+                continue;
+            }
+
+            int? ahead = null;
+            int? behind = null;
+            if (divergence.TryGetValue(GoalWorktrees.BranchName(id), out var counts) && counts.Succeeded)
+            {
+                ahead = counts.Ahead;
+                behind = counts.Behind;
+            }
+
+            facts[id] = new GoalBoardWorktreeFact(status.IsDirty ? "dirty" : "clean", ahead, behind);
+        }
+
+        return facts;
+    }
+
+    private static IReadOnlyDictionary<GoalId, GoalLifecycleFacts>? ReadLifecycleFacts(
+        OrchestratorWorkspace workspace,
+        IReadOnlyList<GoalId> ids,
+        IReadOnlyDictionary<GoalId, string> resolvedWorktrees,
+        IReadOnlySet<GoalId> openClarificationGoalIds)
+    {
+        IReadOnlyDictionary<GoalId, GoalOperationJournalSummary> journals;
+        try
+        {
+            journals = GoalOperationJournal.ReadAll(workspace.ExecutionDirectory, ids);
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+        {
+            return null;
+        }
+
+        var facts = new Dictionary<GoalId, GoalLifecycleFacts>();
+        foreach (var id in ids)
+        {
+            var journal = journals.TryGetValue(id, out var summary)
+                ? summary
+                : new GoalOperationJournalSummary(
+                    GoalOperationJournal.PathFor(workspace.ExecutionDirectory, id),
+                    [],
+                    [],
+                    []);
+            facts[id] = new GoalLifecycleFacts(
+                WorkspaceExists: resolvedWorktrees.ContainsKey(id),
+                // Board renders no Blocked state. Computing it would pull
+                // HasCurrentBlockingAcceptanceState onto a per-goal path.
+                IsBlocked: false,
+                IsMerged: GoalOperationJournal.HasCompletedLandingEvidence(journal),
+                IsRecorded: GoalOperationJournal.HasCompletedRecordEvidence(journal),
+                IsCleanedUp: GoalOperationJournal.HasCompletedCleanupEvidence(journal),
+                HasOpenClarification: openClarificationGoalIds.Contains(id));
         }
 
         return facts;
@@ -288,11 +380,15 @@ internal static class GoalBoardCommand
     }
 
     private sealed record AttentionSummary(int Count, DateTimeOffset LatestAt);
-    private sealed record AttentionRead(bool Available, IReadOnlyDictionary<string, AttentionSummary> Summaries)
+    private sealed record AttentionRead(
+        bool Available,
+        IReadOnlyDictionary<string, AttentionSummary> Summaries,
+        IReadOnlySet<GoalId> OpenClarificationGoalIds)
     {
         public static AttentionRead Unavailable { get; } = new(
             false,
-            new Dictionary<string, AttentionSummary>(StringComparer.Ordinal));
+            new Dictionary<string, AttentionSummary>(StringComparer.Ordinal),
+            new HashSet<GoalId>());
     }
 
     private sealed record IntentRead(

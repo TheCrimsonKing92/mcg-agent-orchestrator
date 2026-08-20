@@ -663,7 +663,7 @@ public sealed class GoalWorktreeTestsAcceptanceLanding : GoalWorktreeTestBase
     [Xunit.Fact(DisplayName = "Cli_acceptance_queue_applies_ready_goals_sequentially")]
     public void CliAcceptanceQueueAppliesReadyGoalsSequentially()
     {
-        var repo = CreateSeededRepository();
+        var repo = CreateReducedAcceptanceCohortRepository(renameInitialBranchToMain: false);
         try
         {
             var kernel = new AgentOrchestratorKernel();

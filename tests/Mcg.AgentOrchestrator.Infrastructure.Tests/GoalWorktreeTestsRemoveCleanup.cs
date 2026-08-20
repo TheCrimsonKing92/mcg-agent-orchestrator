@@ -1243,7 +1243,7 @@ public sealed class GoalWorktreeTestsRemoveCleanup : GoalWorktreeTestBase
     [Xunit.Fact(DisplayName = "Cli_acceptance_queue_apply_persists_cleanup_after_outside_transaction_routing")]
     public async Task CliAcceptanceQueueApplyPersistsCleanupAfterOutsideTransactionRouting()
     {
-        var repo = CreateSeededRepository();
+        var repo = CreateReducedAcceptanceCohortRepository(renameInitialBranchToMain: false);
         try
         {
             var workspace = OrchestratorWorkspace.ForDirectory(repo);

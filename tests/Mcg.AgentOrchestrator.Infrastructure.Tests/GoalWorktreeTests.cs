@@ -1,4 +1,5 @@
 using System.Collections.Concurrent;
+using System.Collections.Immutable;
 using System.Diagnostics;
 using System.Globalization;
 using System.Runtime.CompilerServices;
@@ -14,6 +15,8 @@ using Microsoft.Data.Sqlite;
 
 public abstract class GoalWorktreeTestBase
 {
+    private static readonly Lazy<ImmutableArray<byte>> MigratedStateTemplate = new(CreateMigratedStateTemplate);
+
     private protected static AgentDefinition EchoDeveloper() => new(
         new AgentId("echo-developer"),
         "Echo Developer",
@@ -101,25 +104,66 @@ public abstract class GoalWorktreeTestBase
         ]);
     }
 
-    private protected static string CreateSeededRepository()
+    private static string CreateSeededGitRepository(bool renameInitialBranchToMain = false)
     {
         var tempRoot = OperatingSystem.IsWindows()
             ? Path.Combine(FindCurrentSourceRoot(), ".scratch", "mcg-wt")
             : Path.Combine(Path.GetTempPath(), "mcg-worktree-tests");
-        var root = Path.Combine(tempRoot, Guid.NewGuid().ToString("n"));
-        Directory.CreateDirectory(root);
-        RunGit(root, "init");
-        RunGit(root, "config", "user.email", "tests@example.com");
-        RunGit(root, "config", "user.name", "Worktree Tests");
+        var repo = Path.Combine(tempRoot, Guid.NewGuid().ToString("n"));
+        Directory.CreateDirectory(repo);
+        RunGit(repo, "init");
+        RunGit(repo, "config", "user.email", "tests@example.com");
+        RunGit(repo, "config", "user.name", "Worktree Tests");
         File.AppendAllText(
-            Path.Combine(root, ".git", "info", "exclude"),
+            Path.Combine(repo, ".git", "info", "exclude"),
             ".orchestrator/" + Environment.NewLine);
-        File.WriteAllText(Path.Combine(root, "seed.txt"), "seed");
-        RunGit(root, "add", "-A");
-        RunGit(root, "commit", "-m", "Seed");
+        File.WriteAllText(Path.Combine(repo, "seed.txt"), "seed");
+        RunGit(repo, "add", "-A");
+        RunGit(repo, "commit", "-m", "Seed");
+        if (renameInitialBranchToMain)
+        {
+            RunGit(repo, "branch", "-M", "main");
+        }
+
+        return repo;
+    }
+
+    private protected static string CreateSeededRepository()
+    {
+        var root = CreateSeededGitRepository();
         _ = CreateMigratedStateRepository(
             OrchestratorWorkspace.ForDirectory(root).SqliteStatePath);
         return root;
+    }
+
+    private protected static string CreateReducedAcceptanceCohortRepository(
+        bool renameInitialBranchToMain = true)
+    {
+        var repo = CreateSeededGitRepository(renameInitialBranchToMain);
+        var statePath = OrchestratorWorkspace.ForDirectory(repo).SqliteStatePath;
+        Directory.CreateDirectory(Path.GetDirectoryName(statePath)!);
+        File.WriteAllBytes(statePath, MigratedStateTemplate.Value.ToArray());
+        return repo;
+    }
+
+    private static ImmutableArray<byte> CreateMigratedStateTemplate()
+    {
+        var root = Path.Combine(Path.GetTempPath(), $"mcg-state-template-{Guid.NewGuid():N}");
+        var statePath = Path.Combine(root, "state.db");
+        try
+        {
+            _ = CreateMigratedStateRepository(statePath);
+            if (!StateDbMigrations.IsUpToDate(statePath))
+            {
+                throw new InvalidOperationException("The reduced goal-worktree fixture state template is not fully migrated.");
+            }
+
+            return [.. File.ReadAllBytes(statePath)];
+        }
+        finally
+        {
+            DeleteDirectory(root);
+        }
     }
 
     private protected static bool HasCleanupNeededRecord(string repo, string cleanupPath, string reason)
@@ -821,6 +865,42 @@ public abstract class GoalWorktreeTestBase
     private protected sealed class TestClock(DateTimeOffset utcNow) : IClock
     {
         public DateTimeOffset UtcNow { get; } = utcNow;
+    }
+}
+
+public sealed class GoalWorktreeReducedFixtureTests : GoalWorktreeTestBase
+{
+    [Xunit.Fact(DisplayName = "Reduced_seeded_repository_factory_creates_independent_current_state_stores")]
+    public async Task ReducedSeededRepositoryFactoryCreatesIndependentCurrentStateStores()
+    {
+        var firstRepo = CreateReducedAcceptanceCohortRepository(renameInitialBranchToMain: false);
+        var secondRepo = CreateReducedAcceptanceCohortRepository(renameInitialBranchToMain: false);
+        try
+        {
+            var firstStatePath = OrchestratorWorkspace.ForDirectory(firstRepo).SqliteStatePath;
+            var secondStatePath = OrchestratorWorkspace.ForDirectory(secondRepo).SqliteStatePath;
+            Assert.NotEqual(firstRepo, secondRepo);
+            Assert.NotEqual(firstStatePath, secondStatePath);
+            Assert.True(StateDbMigrations.IsUpToDate(firstStatePath));
+            Assert.True(StateDbMigrations.IsUpToDate(secondStatePath));
+
+            var firstRepository = CreateMigratedStateRepository(firstStatePath);
+            var firstKernel = await firstRepository.LoadAsync();
+            var isolatedGoal = firstKernel.CreateGoal(
+                "Persist only in the first reduced fixture",
+                [new TaskSpec(TaskId.New(), "Implement", AgentRole.Developer)]);
+            await firstRepository.SaveAsync(firstKernel);
+
+            var reloadedFirst = await CreateMigratedStateRepository(firstStatePath).LoadAsync();
+            var reloadedSecond = await CreateMigratedStateRepository(secondStatePath).LoadAsync();
+            Assert.Equal(isolatedGoal.Id, Assert.Single(reloadedFirst.Goals).Id);
+            Assert.Empty(reloadedSecond.Goals);
+        }
+        finally
+        {
+            DeleteDirectory(firstRepo);
+            DeleteDirectory(secondRepo);
+        }
     }
 }
 

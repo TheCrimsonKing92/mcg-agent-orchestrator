@@ -131,9 +131,12 @@ internal static class GitCli
         return !inspection.Succeeded || inspection.IsDirty;
     }
 
-    internal static WorktreeStatusInspection InspectWorktreeStatus(string workingDirectory)
+    internal static WorktreeStatusInspection InspectWorktreeStatus(string workingDirectory) =>
+        InspectWorktreeStatus(workingDirectory, DefaultTimeoutMilliseconds);
+
+    internal static WorktreeStatusInspection InspectWorktreeStatus(string workingDirectory, int timeoutMilliseconds)
     {
-        var result = Run(workingDirectory, "status", "--porcelain=v1", "--untracked-files=all");
+        var result = Run(workingDirectory, timeoutMilliseconds, "status", "--porcelain=v1", "--untracked-files=all");
         return result.ExitCode == 0
             ? new WorktreeStatusInspection(true, ParseCommitWorthyStatusPaths(result.Output), null)
             : new WorktreeStatusInspection(false, [], string.IsNullOrWhiteSpace(result.Error) ? "git status failed" : result.Error.Trim());

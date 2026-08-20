@@ -565,7 +565,7 @@ public sealed class GoalWorktreeTestsRebaseMerge : GoalWorktreeTestBase
     [Xunit.Fact(DisplayName = "Reconcile_sweep_retries_acceptance_after_untracked_rebase_blocker_is_removed")]
     public void ReconcileSweepRetriesAcceptanceAfterUntrackedRebaseBlockerIsRemoved()
     {
-        var repo = CreateSeededRepository();
+        var repo = CreateReducedAcceptanceCohortRepository(renameInitialBranchToMain: false);
         try
         {
             var kernel = new AgentOrchestratorKernel();
