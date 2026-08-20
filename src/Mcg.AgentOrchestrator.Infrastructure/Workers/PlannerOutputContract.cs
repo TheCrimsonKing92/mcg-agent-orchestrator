@@ -462,7 +462,10 @@ internal static partial class PlannerOutputContract
         return fields;
     }
 
-    [GeneratedRegex(@"^[ \t]*(?:[-*][ \t]+)?(?:criterion[ \t]+)?(?<criterion>\d+)\b(?:[ \t]*[.)\]:-][ \t]*(?:(?:maps?(?:[ \t]+to)?|covers)[ \t]+)?|[ \t]+(?:maps?(?:[ \t]+to)?|covers|→|=>)[ \t]*)(?<mapping>.*)$", RegexOptions.IgnoreCase)]
+    // Accepts idiomatic markdown as well as plain lines: a bold marker before the criterion
+    // (**Criterion 1 — ...**) and en/em dashes as the separator. A correct plan was rejected on
+    // 2026-08-20 solely because it used "**Criterion 1 — ..." instead of "1. ...".
+    [GeneratedRegex(@"^[ \t]*(?:[-*][ \t]+)?(?:\*\*|__)?(?:criterion[ \t]+)?(?<criterion>\d+)\b(?:[ \t]*[.)\]:\-–—][ \t]*(?:(?:maps?(?:[ \t]+to)?|covers)[ \t]+)?|[ \t]+(?:maps?(?:[ \t]+to)?|covers|→|=>|[–—])[ \t]*)(?<mapping>.*)$", RegexOptions.IgnoreCase)]
     private static partial Regex CriterionMappingLine();
 
     [GeneratedRegex(@"(?i)(?<name>disposition|plan|would-settle|required-source|unavailable-because)\s*=\s*(?<value>[^;]+)")]
