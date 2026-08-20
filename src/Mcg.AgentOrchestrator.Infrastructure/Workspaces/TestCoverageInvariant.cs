@@ -27,8 +27,14 @@ internal sealed record TestCoverageIdentityMismatch(
     string? Executed);
 
 internal sealed record TestDiscoverySnapshot(
-    IReadOnlySet<string> Tests,
+    IReadOnlyList<string> Tests,
     IReadOnlyDictionary<string, string>? SourceFilesByTest);
+
+internal sealed record TestExecutionRecord(IReadOnlySet<string> Identities);
+
+internal sealed record TestIdentityMatchResult(
+    IReadOnlyList<string> Matched,
+    IReadOnlyList<string> Unmatched);
 
 internal static class TestCoverageInvariant
 {
@@ -62,7 +68,7 @@ internal static class TestCoverageInvariant
         "Error"
     ];
 
-    public static IReadOnlySet<string> ParseDiscoveredTests(string output, bool bareTestList = false) =>
+    public static IReadOnlyList<string> ParseDiscoveredTests(string output, bool bareTestList = false) =>
         ParseDiscovery(output, bareTestList).Tests;
 
     public static TestDiscoverySnapshot ParseDiscovery(
@@ -79,9 +85,9 @@ internal static class TestCoverageInvariant
         return new TestDiscoverySnapshot(ParseTextDiscovery(output, bareTestList), null);
     }
 
-    private static IReadOnlySet<string> ParseTextDiscovery(string output, bool bareTestList)
+    private static IReadOnlyList<string> ParseTextDiscovery(string output, bool bareTestList)
     {
-        var tests = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        var tests = new List<string>();
         var inTestList = false;
         foreach (var rawLine in output.Split(['\r', '\n'], StringSplitOptions.RemoveEmptyEntries))
         {
@@ -150,7 +156,7 @@ internal static class TestCoverageInvariant
                 throw new InvalidDataException("Structured test discovery did not contain a tests array.");
             }
 
-            var tests = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+            var tests = new List<string>();
             var sourceFiles = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
             var ambiguousSourceFiles = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
             foreach (var discoveredTest in discoveredTests.EnumerateArray())
@@ -200,17 +206,23 @@ internal static class TestCoverageInvariant
     }
 
     public static IReadOnlySet<string> ReadCompletedTests(IEnumerable<string> trxPaths) =>
-        ReadTests(trxPaths, passedOnly: true);
+        ReadTestRecords(trxPaths, passedOnly: true)
+            .SelectMany(record => record.Identities)
+            .ToHashSet(StringComparer.OrdinalIgnoreCase);
 
     // Any-outcome variant: a test recorded in a TRX with outcome NotExecuted was selected by the
     // run and deliberately skipped (static Skip, opt-in fact). It is ACCOUNTED FOR in coverage -
     // present in the run's report - without counting as executed evidence.
     public static IReadOnlySet<string> ReadRecordedTests(IEnumerable<string> trxPaths) =>
-        ReadTests(trxPaths, passedOnly: false);
+        ReadTestRecords(trxPaths, passedOnly: false)
+            .SelectMany(record => record.Identities)
+            .ToHashSet(StringComparer.OrdinalIgnoreCase);
 
-    private static IReadOnlySet<string> ReadTests(IEnumerable<string> trxPaths, bool passedOnly)
+    private static IReadOnlyList<TestExecutionRecord> ReadTestRecords(
+        IEnumerable<string> trxPaths,
+        bool passedOnly)
     {
-        var tests = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        var records = new List<TestExecutionRecord>();
         foreach (var path in trxPaths.Distinct(StringComparer.OrdinalIgnoreCase))
         {
             if (!File.Exists(path) || new FileInfo(path).Length == 0)
@@ -246,21 +258,27 @@ internal static class TestCoverageInvariant
 
                 var id = (string?)result.Attribute("testId");
                 var displayName = (string?)result.Attribute("testName");
-                AddNormalized(tests, displayName);
+                var identities = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+                AddNormalized(identities, displayName);
                 if (id is not null && definitions.TryGetValue(id, out var definition))
                 {
-                    AddNormalized(tests, definition);
+                    AddNormalized(identities, definition);
+                }
+
+                if (identities.Count > 0)
+                {
+                    records.Add(new TestExecutionRecord(identities));
                 }
             }
         }
 
-        return tests;
+        return records;
     }
 
     public static TestCoverageInvariantResult Evaluate(
-        IReadOnlySet<string> candidateDiscoveredTests,
+        IReadOnlyCollection<string> candidateDiscoveredTests,
         IReadOnlyList<TestPartitionCoverage> partitions,
-        IReadOnlySet<string>? mainDiscoveredTests = null,
+        IReadOnlyCollection<string>? mainDiscoveredTests = null,
         IReadOnlyList<string>? deletedTestFiles = null,
         string? currentAttemptId = null,
         IReadOnlyDictionary<string, string>? mainDiscoveredTestSourceFiles = null,
@@ -292,33 +310,29 @@ internal static class TestCoverageInvariant
                 .Partition)
             .ToArray();
         var emptyPartitions = new List<string>();
-        var completedTests = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
-        var accountedTests = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        var completedRecords = new List<TestExecutionRecord>();
+        var accountedRecords = new List<TestExecutionRecord>();
         foreach (var partition in partitions)
         {
-            var executed = ReadCompletedTests(partition.TestResultPaths);
+            var executed = ReadTestRecords(partition.TestResultPaths, passedOnly: true);
             if (!partition.Completed || executed.Count == 0)
             {
                 emptyPartitions.Add(partition.Name);
                 continue;
             }
 
-            completedTests.UnionWith(executed);
-            accountedTests.UnionWith(ReadRecordedTests(partition.TestResultPaths));
+            completedRecords.AddRange(executed);
+            accountedRecords.AddRange(ReadTestRecords(partition.TestResultPaths, passedOnly: false));
         }
 
-        var executedTests = candidateDiscoveredTests
-            .Where(discovered => completedTests.Any(completed => IdentitiesMatch(discovered, completed)))
-            .OrderBy(identity => identity, StringComparer.OrdinalIgnoreCase)
-            .ToArray();
-        var recordedTests = candidateDiscoveredTests
-            .Where(discovered => accountedTests.Any(accounted => IdentitiesMatch(discovered, accounted)))
-            .OrderBy(identity => identity, StringComparer.OrdinalIgnoreCase)
-            .ToArray();
-        var missing = candidateDiscoveredTests
-            .Where(discovered => !accountedTests.Any(accounted => IdentitiesMatch(discovered, accounted)))
-            .OrderBy(identity => identity, StringComparer.OrdinalIgnoreCase)
-            .ToList();
+        var executedMatch = MatchDiscoveredTests(candidateDiscoveredTests, completedRecords);
+        var recordedMatch = MatchDiscoveredTests(candidateDiscoveredTests, accountedRecords);
+        var executedTests = executedMatch.Matched;
+        var recordedTests = recordedMatch.Matched;
+        var missing = recordedMatch.Unmatched.ToList();
+        var completedTests = completedRecords
+            .SelectMany(record => record.Identities)
+            .ToHashSet(StringComparer.OrdinalIgnoreCase);
         var identityMismatches = missing
             .Select(discovered => new TestCoverageIdentityMismatch(
                 discovered,
@@ -334,18 +348,14 @@ internal static class TestCoverageInvariant
                 .Where(path => !string.IsNullOrWhiteSpace(path))
                 .Distinct(StringComparer.OrdinalIgnoreCase)
                 .ToArray();
-            var deletedClassNames = normalizedDeletedTestFiles
-                .Select(Path.GetFileNameWithoutExtension)
-                .Where(name => !string.IsNullOrWhiteSpace(name))
+            var deletedTestFilesByClass = normalizedDeletedTestFiles
+                .Select(file => (File: file, ClassName: Path.GetFileNameWithoutExtension(file)))
+                .Where(item => !string.IsNullOrWhiteSpace(item.ClassName))
                 .ToArray();
-            // Structured MTP discovery identifies the source file directly. Prefer that exact
-            // attribution over the legacy filename/class-name heuristic. Location metadata is
-            // optional, however, so an unattributed deleted file retains at most the legacy
-            // one-test credit and emits a named receipt instead of silently tightening the gate.
+            // A deleted file reduces the floor only when a qualified discovered identity or
+            // structured source location attributes the test to that exact file.
             var creditedMainTests = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
-            var anonymousAttributionCandidates = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
-            var unattributedDeletedFiles = new List<string>();
-            var unmatchedDeletedFileCount = 0;
+            var unattributedDeletedFiles = new List<(string Source, string File)>();
             if (mainDiscoveredTestSourceFiles is not null)
             {
                 foreach (var deletedTestFile in normalizedDeletedTestFiles)
@@ -362,37 +372,20 @@ internal static class TestCoverageInvariant
                     }
                     else
                     {
-                        unattributedDeletedFiles.Add(deletedTestFile);
+                        unattributedDeletedFiles.Add(("mtp-json-location", deletedTestFile));
                     }
                 }
-
-                var testsWithoutUsableAttribution = mainDiscoveredTests.Count(mainTest =>
-                    !mainDiscoveredTestSourceFiles.TryGetValue(mainTest, out var sourceFile) ||
-                    !IsUsableRepositoryRelativeSourcePath(sourceFile));
-                anonymousAttributionCandidates.UnionWith(mainDiscoveredTests.Where(mainTest =>
-                    !mainDiscoveredTestSourceFiles.TryGetValue(mainTest, out var sourceFile) ||
-                    !IsUsableRepositoryRelativeSourcePath(sourceFile)));
-                unmatchedDeletedFileCount = Math.Min(
-                    unattributedDeletedFiles.Count,
-                    testsWithoutUsableAttribution);
             }
             else
             {
                 creditedMainTests.UnionWith(mainDiscoveredTests.Where(mainTest =>
-                    deletedClassNames.Any(className =>
-                        IdentityBelongsToDeletedTestFile(mainTest, className!))));
-                anonymousAttributionCandidates.UnionWith(mainDiscoveredTests.Where(mainTest =>
-                    !HasClassQualifiedIdentity(mainTest) &&
-                    !deletedClassNames.Any(className =>
-                        IdentityBelongsToDeletedTestFile(mainTest, className!))));
-                unmatchedDeletedFileCount = Math.Min(
-                    deletedClassNames.Count(className =>
-                        !mainDiscoveredTests.Any(mainTest =>
-                            IdentityBelongsToDeletedTestFile(mainTest, className!))),
-                    mainDiscoveredTests.Count(mainTest =>
-                        !HasClassQualifiedIdentity(mainTest) &&
-                        !deletedClassNames.Any(className =>
-                            IdentityBelongsToDeletedTestFile(mainTest, className!))));
+                    deletedTestFilesByClass.Any(deletedTestFile =>
+                        IdentityBelongsToDeletedTestFile(mainTest, deletedTestFile.ClassName!))));
+                unattributedDeletedFiles.AddRange(deletedTestFilesByClass
+                    .Where(deletedTestFile => !mainDiscoveredTests.Any(mainTest =>
+                        IdentityBelongsToDeletedTestFile(mainTest, deletedTestFile.ClassName!)))
+                    .Select(deletedTestFile =>
+                        ("qualified-filename-identity", deletedTestFile.File)));
             }
 
             foreach (var declaredIdentity in (sanctionedRemovedTests ?? [])
@@ -409,20 +402,17 @@ internal static class TestCoverageInvariant
                     $"cross-generation-attribution:source=declared-test-removal,identity={declaredIdentity},status={(corroboratedTests.Length > 0 ? "corroborated" : "unmatched")},credit={corroboratedTests.Length}");
             }
 
-            unmatchedDeletedFileCount = Math.Max(
-                0,
-                unmatchedDeletedFileCount - creditedMainTests.Count(anonymousAttributionCandidates.Contains));
-            for (var index = 0; index < unattributedDeletedFiles.Count; index++)
+            foreach (var unattributedDeletedFile in unattributedDeletedFiles)
             {
                 attributionReceipts.Add(
-                    $"cross-generation-attribution:source=mtp-json-location,file={unattributedDeletedFiles[index]},status=unattributed,fallback=legacy-one-per-file,credit={(index < unmatchedDeletedFileCount ? 1 : 0)}");
+                    $"cross-generation-attribution:source={unattributedDeletedFile.Source},file={unattributedDeletedFile.File},status=unattributed,fallback=none,credit=0");
             }
-            var deletedMainTestCount = creditedMainTests.Count;
+            var deletedMainTestCount = mainDiscoveredTests.Count(creditedMainTests.Contains);
             var minimumCandidateCount = Math.Max(
                 0,
-                mainDiscoveredTests.Count - deletedMainTestCount - unmatchedDeletedFileCount);
+                mainDiscoveredTests.Count - deletedMainTestCount);
             crossGenerationCountReceipt =
-                $"cross-generation-count:candidate={candidateDiscoveredTests.Count},minimum={minimumCandidateCount},main={mainDiscoveredTests.Count},deleted={deletedMainTestCount + unmatchedDeletedFileCount}";
+                $"cross-generation-count:candidate={candidateDiscoveredTests.Count},minimum={minimumCandidateCount},main={mainDiscoveredTests.Count},deleted={deletedMainTestCount}";
             if (candidateDiscoveredTests.Count < minimumCandidateCount)
             {
                 missing.Add(crossGenerationCountReceipt);
@@ -431,8 +421,8 @@ internal static class TestCoverageInvariant
 
         var passed = emptyPartitions.Count == 0 && missing.Count == 0;
         var summary = passed
-            ? $"structural coverage complete: discovered={candidateDiscoveredTests.Count}, executed={executedTests.Length}, recorded={recordedTests.Length}, partitions={partitions.Count}"
-            : $"structural coverage failed: discovered={candidateDiscoveredTests.Count}, executed={executedTests.Length}, recorded={recordedTests.Length}, missing={missing.Count}, emptyPartitions={emptyPartitions.Count}";
+            ? $"structural coverage complete: discovered={candidateDiscoveredTests.Count}, executed={executedTests.Count}, recorded={recordedTests.Count}, partitions={partitions.Count}"
+            : $"structural coverage failed: discovered={candidateDiscoveredTests.Count}, executed={executedTests.Count}, recorded={recordedTests.Count}, missing={missing.Count}, emptyPartitions={emptyPartitions.Count}";
         if (crossGenerationCountReceipt is not null)
         {
             summary += $"; {crossGenerationCountReceipt}";
@@ -456,6 +446,83 @@ internal static class TestCoverageInvariant
             failureClassification,
             executedTests,
             identityMismatches);
+    }
+
+    private static TestIdentityMatchResult MatchDiscoveredTests(
+        IReadOnlyCollection<string> discoveredTests,
+        IReadOnlyList<TestExecutionRecord> executionRecords)
+    {
+        var discovered = discoveredTests.ToArray();
+        var matched = new bool[discovered.Length];
+        var consumedRecords = new bool[executionRecords.Count];
+        var exactRecordsByIdentity = new Dictionary<string, Queue<int>>(StringComparer.OrdinalIgnoreCase);
+        for (var recordIndex = 0; recordIndex < executionRecords.Count; recordIndex++)
+        {
+            foreach (var identity in executionRecords[recordIndex].Identities)
+            {
+                var normalized = NormalizeIdentity(identity);
+                if (!exactRecordsByIdentity.TryGetValue(normalized, out var recordIndexes))
+                {
+                    recordIndexes = new Queue<int>();
+                    exactRecordsByIdentity[normalized] = recordIndexes;
+                }
+
+                recordIndexes.Enqueue(recordIndex);
+            }
+        }
+
+        for (var discoveredIndex = 0; discoveredIndex < discovered.Length; discoveredIndex++)
+        {
+            var normalized = NormalizeIdentity(discovered[discoveredIndex]);
+            if (!exactRecordsByIdentity.TryGetValue(normalized, out var recordIndexes))
+            {
+                continue;
+            }
+
+            while (recordIndexes.Count > 0 && consumedRecords[recordIndexes.Peek()])
+            {
+                recordIndexes.Dequeue();
+            }
+
+            if (recordIndexes.Count > 0)
+            {
+                var recordIndex = recordIndexes.Dequeue();
+                consumedRecords[recordIndex] = true;
+                matched[discoveredIndex] = true;
+            }
+        }
+
+        for (var discoveredIndex = 0; discoveredIndex < discovered.Length; discoveredIndex++)
+        {
+            if (matched[discoveredIndex])
+            {
+                continue;
+            }
+
+            for (var recordIndex = 0; recordIndex < executionRecords.Count; recordIndex++)
+            {
+                if (consumedRecords[recordIndex] ||
+                    !executionRecords[recordIndex].Identities.Any(identity =>
+                        IdentitiesMatch(discovered[discoveredIndex], identity)))
+                {
+                    continue;
+                }
+
+                consumedRecords[recordIndex] = true;
+                matched[discoveredIndex] = true;
+                break;
+            }
+        }
+
+        return new TestIdentityMatchResult(
+            discovered
+                .Where((_, index) => matched[index])
+                .OrderBy(identity => identity, StringComparer.OrdinalIgnoreCase)
+                .ToArray(),
+            discovered
+                .Where((_, index) => !matched[index])
+                .OrderBy(identity => identity, StringComparer.OrdinalIgnoreCase)
+                .ToArray());
     }
 
     private static string? FindClosestExecutedForm(string discovered, IReadOnlySet<string> completedTests)
@@ -618,12 +685,26 @@ internal static class TestCoverageInvariant
     }
 
     private static bool IsBareTestListDiagnostic(string line) =>
-        BareTestListDiagnosticPrefixes.Any(prefix =>
-            line.StartsWith(prefix, StringComparison.OrdinalIgnoreCase)) ||
+        BareTestListDiagnosticPrefixes.Any(prefix => IsDiagnosticPrefixMatch(line, prefix)) ||
         line.StartsWith("[xUnit.net", StringComparison.OrdinalIgnoreCase) ||
         line.All(character => character is '-' or '=' or '_');
 
-    private static void AddNormalized(ISet<string> tests, string? value)
+    private static bool IsDiagnosticPrefixMatch(string line, string prefix)
+    {
+        if (!line.StartsWith(prefix, StringComparison.OrdinalIgnoreCase))
+        {
+            return false;
+        }
+
+        return line.Length == prefix.Length ||
+            !IsIdentifierCharacter(prefix[^1]) ||
+            !IsIdentifierCharacter(line[prefix.Length]);
+    }
+
+    private static bool IsIdentifierCharacter(char character) =>
+        char.IsLetterOrDigit(character) || character == '_';
+
+    private static void AddNormalized(ICollection<string> tests, string? value)
     {
         var normalized = NormalizeIdentity(value);
         if (!string.IsNullOrWhiteSpace(normalized))
