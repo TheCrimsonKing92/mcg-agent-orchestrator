@@ -13,6 +13,7 @@ public sealed class StorageRetentionMaintenanceTests
     {
         using var fixture = new RetentionFixture();
         var path = fixture.WriteWorkerArtifact("out.log", Now.AddDays(-13));
+        fixture.WriteSuccessfulExit(Now.AddDays(-13));
 
         fixture.Run(TerminalGoal(WorkTaskStatus.Completed));
 
@@ -24,7 +25,7 @@ public sealed class StorageRetentionMaintenanceTests
     public void ArtifactOneDayOutsideThresholdIsRemoved()
     {
         using var fixture = new RetentionFixture();
-        var path = fixture.WriteWorkerArtifact("exit.txt", Now.AddDays(-15));
+        var path = fixture.WriteSuccessfulExit(Now.AddDays(-15));
 
         fixture.Run(TerminalGoal(WorkTaskStatus.Completed));
 
@@ -122,6 +123,7 @@ public sealed class StorageRetentionMaintenanceTests
         var path = fixture.WorkerArtifactPath("out.log");
         File.WriteAllText(path, "before");
         File.SetLastWriteTimeUtc(path, Now.AddDays(-15).UtcDateTime);
+        fixture.WriteSuccessfulExit(Now.AddDays(-15));
         var writerReady = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
         var releaseWriter = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
         var writer = Task.Run(async () =>
@@ -289,6 +291,14 @@ public sealed class StorageRetentionMaintenanceTests
         {
             var path = WorkerArtifactPath(suffix);
             File.WriteAllText(path, "artifact");
+            File.SetLastWriteTimeUtc(path, lastWrite.UtcDateTime);
+            return path;
+        }
+
+        public string WriteSuccessfulExit(DateTimeOffset lastWrite)
+        {
+            var path = WorkerArtifactPath("exit.txt");
+            DispatchExitArtifacts.Write(path, DispatchExitArtifacts.Native(0, "completed", lastWrite));
             File.SetLastWriteTimeUtc(path, lastWrite.UtcDateTime);
             return path;
         }
