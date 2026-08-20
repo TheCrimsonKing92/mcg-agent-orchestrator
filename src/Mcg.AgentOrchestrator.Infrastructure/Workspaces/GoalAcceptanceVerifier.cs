@@ -5587,7 +5587,19 @@ public sealed class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
             return ResolveMainWorktreePathForTests(worktreePath);
         }
 
-        var output = ResolveGitText(worktreePath, "worktree", "list", "--porcelain");
+        return ResolveMainWorktreePathCore(worktreePath, AcceptanceGitTextResolver.Resolve);
+    }
+
+    internal static string? ResolveMainWorktreePathWithGitForTests(
+        string worktreePath,
+        Func<string, string[], string?> resolveGitText) =>
+        ResolveMainWorktreePathCore(worktreePath, resolveGitText);
+
+    private static string? ResolveMainWorktreePathCore(
+        string worktreePath,
+        Func<string, string[], string?> resolveGitText)
+    {
+        var output = resolveGitText(worktreePath, ["worktree", "list", "--porcelain"]);
         if (string.IsNullOrWhiteSpace(output))
         {
             return null;
@@ -5617,7 +5629,21 @@ public sealed class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
             return ResolveDeletedTestFilesForTests(worktreePath);
         }
 
-        var output = ResolveGitText(worktreePath, "diff", "--name-status", "main...HEAD", "--");
+        return ResolveDeletedTestFilesCore(worktreePath, project, AcceptanceGitTextResolver.Resolve);
+    }
+
+    internal static string[] ResolveDeletedTestFilesWithGitForTests(
+        string worktreePath,
+        string project,
+        Func<string, string[], string?> resolveGitText) =>
+        ResolveDeletedTestFilesCore(worktreePath, project, resolveGitText);
+
+    private static string[] ResolveDeletedTestFilesCore(
+        string worktreePath,
+        string project,
+        Func<string, string[], string?> resolveGitText)
+    {
+        var output = resolveGitText(worktreePath, ["diff", "--name-status", "main...HEAD", "--"]);
         if (string.IsNullOrWhiteSpace(output))
         {
             return [];
@@ -6084,7 +6110,19 @@ public sealed class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
 
     private static AcceptanceCheckResult? TryClassifyManifestTrust(
         string worktreePath,
-        IReadOnlyList<string>? changedFiles)
+        IReadOnlyList<string>? changedFiles) =>
+        TryClassifyManifestTrustCore(worktreePath, changedFiles, AcceptanceGitTextResolver.Resolve);
+
+    internal static AcceptanceCheckResult? TryClassifyManifestTrustWithGitForTests(
+        string worktreePath,
+        IReadOnlyList<string>? changedFiles,
+        Func<string, string[], string?> resolveGitText) =>
+        TryClassifyManifestTrustCore(worktreePath, changedFiles, resolveGitText);
+
+    private static AcceptanceCheckResult? TryClassifyManifestTrustCore(
+        string worktreePath,
+        IReadOnlyList<string>? changedFiles,
+        Func<string, string[], string?> resolveGitText)
     {
         if (changedFiles is null ||
             !changedFiles.Any(path =>
@@ -6094,7 +6132,7 @@ public sealed class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
         }
 
         var candidatePath = Path.Combine(worktreePath, "config", "acceptance-manifest.json");
-        var trustedJson = ResolveGitText(worktreePath, "show", "main:config/acceptance-manifest.json");
+        var trustedJson = resolveGitText(worktreePath, ["show", "main:config/acceptance-manifest.json"]);
         if (!File.Exists(candidatePath) || string.IsNullOrWhiteSpace(trustedJson))
         {
             return new AcceptanceCheckResult(
@@ -6471,52 +6509,8 @@ public sealed class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
     private static string[] UseDotnetHostForManagedExecutable(IReadOnlyList<string> arguments) =>
         AcceptanceCheckCommandBuilder.UseDotnetHostForManagedExecutable(arguments);
 
-    internal static string? ResolveGitText(string worktreePath, params string[] arguments)
-    {
-        try
-        {
-            using var process = new Process();
-            process.StartInfo = new ProcessStartInfo
-            {
-                FileName = "git",
-                WorkingDirectory = worktreePath,
-                RedirectStandardOutput = true,
-                RedirectStandardError = true,
-                UseShellExecute = false,
-                CreateNoWindow = true
-            };
-            foreach (var argument in arguments)
-            {
-                process.StartInfo.ArgumentList.Add(argument);
-            }
-
-            if (!process.Start())
-            {
-                return null;
-            }
-
-            // Drain both pipes concurrently BEFORE waiting for exit. Waiting first deadlocks as soon
-            // as the child's output exceeds the pipe buffer (~4KB): the child blocks writing, the
-            // 5s wait expires, and the caller sees null. The acceptance manifest crossed that size
-            // when the engine section landed, which turned every trusted-manifest read into a refusal.
-            var standardOutputTask = process.StandardOutput.ReadToEndAsync();
-            var standardErrorTask = process.StandardError.ReadToEndAsync();
-            if (!process.WaitForExit(5000))
-            {
-                try { process.Kill(entireProcessTree: true); } catch { /* best effort */ }
-                try { process.WaitForExit(1000); } catch { /* best effort */ }
-                try { Task.WhenAll(standardOutputTask, standardErrorTask).Wait(1000); } catch { /* best effort */ }
-                return null;
-            }
-
-            Task.WhenAll(standardOutputTask, standardErrorTask).GetAwaiter().GetResult();
-            return process.ExitCode == 0 ? standardOutputTask.Result : null;
-        }
-        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or InvalidOperationException)
-        {
-            return null;
-        }
-    }
+    internal static string? ResolveGitText(string worktreePath, params string[] arguments) =>
+        AcceptanceGitTextResolver.Resolve(worktreePath, arguments);
 
     private static string? ExtractMtpCompatibleArguments(IReadOnlyList<string> sourceArguments, List<string> destinationArguments)
     {

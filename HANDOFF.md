@@ -21,7 +21,95 @@ Rules for using and maintaining this file:
 - **Durable lessons belong in `### Operating lessons worth keeping`; live state belongs in the top
   section.** Everything else is history.
 
-## RESUME HERE — 2026-08-20 09:35 UTC, the fourteen reds are FIXED and landed; board draining
+## RESUME HERE — 2026-08-20 20:05 UTC, eleven landings; gate throughput is now the binding constraint
+
+Board recovered fully from the deadlock: **11 landings on 08-20** against 2 on 08-18 and 1 on 08-19. Most
+recent `bc01a13c` (`9bf2b63a`, base build cache). Six goals ran concurrently after the paid-worker cap was
+corrected from 5 to 6 (see below).
+
+**The constraint moved from workers to gates.** Four goals finished their pipelines within forty minutes and
+then queued behind one gate each, because acceptance serialises them. Raising worker concurrency did not
+raise throughput, it just moved the queue downstream.
+
+### The isolation finding, which is the most important thing on this page
+
+Operator direction (Miles, 08-20): decompose not only to kill god classes but to get **finer-grained test
+isolation so the grouping features can engage**. Measured evidence says the seams as previously scoped
+deliver none of that.
+
+Goals serialise on TWO reservation keys, both from `RepositoryOwnershipMap.Classify`:
+
+    ownership:shared-infrastructure                                        (Core + Infrastructure + Providers, ONE key)
+    ownership:test-project:tests/mcg.agentorchestrator.infrastructure.tests
+
+A pair needs BOTH distinct to gate concurrently, cohort, or join a merge train. At 19:53 four queued goals
+had all six pairs excluded. `3d016860` is the clean proof: it touches only a docs file and one test file,
+has NO production key at all, and is still excluded from pairing with everything.
+
+Consequences, each verified:
+- Class-level extraction inside `src/Mcg.AgentOrchestrator.Infrastructure/` does not change either key. Seams
+  4, 3, and 2 all landed and moved neither.
+- Seam 6 (`08537608`) created a genuinely separate collaborator and then put its tests back in the monolith
+  test project. Real extraction, **zero** isolation gain.
+- This is why acceptance cohorts have never executed across hundreds of planning ticks, and why the merge
+  train would not have formed on this queue either — `ConductorMergeTrains.Overlaps` excludes on shared
+  `ResourceKeys`, which is a parallelism rule misapplied to a mechanism that gates members as ONE attempt.
+
+Work filed: goal `f43caad4` (production key split, in flight), backlog `caef9efe` (test-project split, **the
+binding half**), backlog `3e1a0ad7` annotated with the merge-train overlap fix, backlog `8aae1018` now
+requires each seam to land its tests in its own test project.
+
+### Defect species found 08-20: correct work blocked by an undisclosed protocol
+
+Five instances, all found by watching goals fail rather than by reading code. Four cost paid rounds.
+
+| Backlog | Defect | Documented remedy | What actually happened |
+|---|---|---|---|
+| `0699a50d` | Tester reporting failing tests has its dispatch DISCARDED (`HasCompletedVerification` requires no failing tests) | report failures | discarded; four rounds lost, and a Tester reported `blockers=none` on a candidate that did not compile |
+| `6c1f59ee` | `AdvanceFault` set-aside makes a Verified goal invisible to the loop | `recover` | accepted, mutated nothing, no effect |
+| `b204ee6e` | Build break cannot be routed upstream; `retry` refused while any downstream task runs, and Tester↔Reviewer never idles | `retry` | refused twice, no alternative named |
+| `9fbce159` | One unresolvable backticked span discards an entire Planner plan | — | 7 plans discarded in one day |
+| (Reviewer) | `blockers: none` does NOT close findings; a prior finding not resubmitted stays Open (`ReviewFindings.cs:566`) | — | `ae9dccd4` burned three full cycles |
+
+### Corrections issued against earlier claims on this page and in reports
+
+- **"Retention made gates 40% faster" is RETRACTED.** Five timed gates split 47.7 min mean (busy board) vs
+  28.4 min (quiet board), and retention landed between them. The discriminating test — one gate under full
+  contention — came back at **46m39s** (`9bf2b63a`, 19:12:21→19:59:00). Gate wall-clock tracks contention,
+  not retention. Target concurrency and lane duration, not serial I/O plumbing.
+- **Base build cache was never a gate-latency lever.** Measured on real cache data: hash+copy total ~320 ms
+  per attempt against gates of tens of minutes. `docs/measurements/basebuildcache-io.md` has the numbers.
+  Requiring a committed measurement artifact is what caught this.
+- **"The ownership key is the cheaper half worth landing alone" is wrong.** It unblocks nothing for a queue
+  whose goals all add tests to one test project. `caef9efe` is the binding half.
+- **Decomposition line-count target is unreachable as written.** `GoalAcceptanceVerifier.cs` went 6,342
+  (07-27) → 8,713 (08-20) while ~761 lines were extracted. Judge seams on isolation, not size.
+
+### Operating notes worth keeping from this session
+
+- **The conductor ran 48 commits stale for ~19.5 hours.** The max-duration handoff spawns a
+  `--continuity-child` that reuses the parent's pinned `%TEMP%\mcg-run\<hash>` directory. **Check the marker
+  in the run-dir the PROCESS NAMES, not `src/.../bin/Debug`** — those diverge exactly when it matters. See
+  the new runbook section "Which binary is the running conductor actually executing?" (`fde5f80f`).
+- **`--policy Permissive` silently overrode `conductor-policy.json`.** The flag selects a built-in preset
+  (cap 5) and the file is loaded only to validate it before being discarded, so `PermissiveCap6Trial`'s cap
+  of 6 had been inert. Relaunch WITHOUT `--policy` to honour the file.
+- **`--help` is curated.** The full verb list is `CliArgumentParser.CommandCatalog.cs`. Verbs absent from
+  help but present and useful: `cancel-dispatch`, `backlog-depends`, `backlog-update`, `backlog-supersede`,
+  `loop-health`, `durations`, `provenance`.
+- **`cancel-dispatch <goal> <task#>` is the escape hatch** when `retry` on an upstream task is refused.
+  Cancel the downstream worker, then retry upstream immediately — the cycle re-dispatches within ~60s.
+- **The AdvanceFault remedy** is `retry <goal> <last-task#> --mechanical`, then `progress ... completed`,
+  then `verify-manual ... passed`. It costs one real dispatch on the tick between reopen and close. Hit four
+  times today.
+- **The grok Researcher death is fixed operationally.** `--permission-mode plan` headless has no approver, so
+  a tool outside the allow set is cancelled in ~1 ms and grok exits 0 — 2 of 4 Researchers died before the
+  fix. `grok-researcher` is now `Status: Offline` in `agents.json` (an agents.json edit specifically so
+  `recover` cannot revert it) and the codex researcher is primary. Root cause is
+  `WorkerProfileDispatcher.cs:3118`; the misclassification as `researcher-output-contract-rejected` is the
+  worse half and is unfixed (backlog `d8ff610b`).
+
+## SUPERSEDED 2026-08-20 20:05 — kept for its receipts. RESUME HERE — 2026-08-20 09:35 UTC, the fourteen reds are FIXED and landed; board draining
 
 **RESOLVED at `c0ad1c47`.** Main no longer carries the fourteen red tests that made the acceptance gate
 unpassable for every goal. A combined candidate carrying all fourteen fixes gated with **zero failures
