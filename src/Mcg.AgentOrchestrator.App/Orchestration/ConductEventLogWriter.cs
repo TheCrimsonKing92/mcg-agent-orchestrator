@@ -44,11 +44,6 @@ internal sealed class ConductEventLogWriter
         _rotatedGenerationCount = Math.Max(0, rotatedGenerationCount);
         _requiredEventMutexName = RequiredEventMutexName(path);
         MigrateLegacyPendingEvents();
-        var directory = Path.GetDirectoryName(_path) ?? ".";
-        if (Directory.Exists(directory))
-        {
-            PruneRotatedGenerations(directory, Path.GetFileName(_path));
-        }
     }
 
     public string CurrentPath => _path;

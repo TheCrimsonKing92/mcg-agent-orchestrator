@@ -537,6 +537,57 @@ public sealed class RunEventStoreTests
             DateTimeOffset.Parse("2026-08-23T12:00:00Z")));
         Assert.False(RunEventMaintenanceCadence.IsOffPeakVacuumWindow(
             DateTimeOffset.Parse("2026-08-24T03:00:00Z")));
+        Assert.Equal(
+            DateTimeOffset.Parse("2026-08-23T02:00:00Z"),
+            RunEventMaintenanceCadence.NextDue(DateTimeOffset.Parse("2026-08-22T12:00:00Z")));
+    }
+
+    [Xunit.Fact(DisplayName = "RunEventMaintenanceCadence_fresh_daily_marker_does_not_suppress_due_off_peak_vacuum")]
+    public async Task FreshDailyMarkerDoesNotSuppressDueOffPeakVacuum()
+    {
+        var root = CreateTempDirectory();
+        var db = Path.Combine(root, "run-events.db");
+        var logPath = Path.Combine(root, "logs", ConductEventLogWriter.CurrentFileName);
+        var now = DateTimeOffset.Parse("2026-08-23T03:00:00Z");
+        var store = new SqliteRunEventStore(db);
+        await store.AppendAsync(new RunEventAppend(
+            RunEventTypes.RunEventMaintenance,
+            null,
+            RunEventMaintenanceCadence.Operation,
+            "Completed",
+            "fresh daily marker",
+            "{}",
+            OccurredAt: now.AddHours(-1)));
+        RunEventMaintenanceOptions? observedOptions = null;
+
+        var result = RunEventMaintenanceCadence.TryRunIfDue(
+            db,
+            logPath,
+            () => now,
+            (_, options) =>
+            {
+                observedOptions = options;
+                return new RunEventMaintenanceResult(
+                    Deferred: false,
+                    DeferredReason: null,
+                    ConductorTickRowsDeleted: 0,
+                    AgedConductorTickRowsDeleted: 0,
+                    OversizedConductorTickRowsDeleted: 0,
+                    DeletedPayloadBytesEstimate: 0,
+                    MaxRowsDeletedInTransaction: 0,
+                    Duration: TimeSpan.Zero,
+                    BytesBefore: 1024,
+                    BytesAfter: 512,
+                    VacuumRequested: true,
+                    VacuumCompleted: true,
+                    VacuumDeferred: false);
+            });
+
+        Assert.True(result.Attempted);
+        Assert.True(observedOptions?.Vacuum);
+        Assert.NotNull(await store.ReadLatestAsync(
+            RunEventTypes.RunEventMaintenance,
+            RunEventMaintenanceCadence.VacuumOperation));
     }
 
     private static Task<RunEventRecord> AppendGoalOperationAsync(

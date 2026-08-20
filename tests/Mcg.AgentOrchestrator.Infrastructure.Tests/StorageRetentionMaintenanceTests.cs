@@ -58,6 +58,18 @@ public sealed class StorageRetentionMaintenanceTests
         Assert.True(File.Exists(exitPath));
     }
 
+    [Xunit.Fact(DisplayName = "WorkerRetention_dispatch_without_exit_artifact_is_kept_past_threshold")]
+    public void DispatchWithoutExitArtifactIsKeptPastThreshold()
+    {
+        using var fixture = new RetentionFixture();
+        var path = fixture.WriteWorkerArtifact("err.log", Now.AddDays(-45));
+
+        fixture.Run(TerminalGoal(WorkTaskStatus.Completed));
+
+        Assert.True(File.Exists(path));
+        Assert.False(File.Exists(path + ".gz"));
+    }
+
     [Xunit.Fact(DisplayName = "WorkerRetention_goal_with_no_terminal_state_is_untouched")]
     public void GoalWithNoTerminalStateIsUntouched()
     {
@@ -71,6 +83,24 @@ public sealed class StorageRetentionMaintenanceTests
 
         Assert.True(File.Exists(path));
         Assert.False(File.Exists(path + ".gz"));
+    }
+
+    [Xunit.Fact(DisplayName = "StorageRetention_persisted_terminal_goals_are_loaded_outside_conductor_working_set")]
+    public async Task PersistedTerminalGoalsAreLoadedOutsideConductorWorkingSet()
+    {
+        using var fixture = new RetentionFixture();
+        var repository = new SqliteOrchestratorStateRepository(
+            Path.Combine(fixture.OrchestratorDirectory, "state.db"));
+        await repository.SaveGoalSnapshotsAsync([
+            GoalSnapshotFor(GoalId, GoalStatus.Completed, WorkTaskStatus.Completed),
+            GoalSnapshotFor("33333333333333333333333333333333", GoalStatus.Active, WorkTaskStatus.Running)
+        ]);
+
+        var goals = StorageRetentionMaintenance.LoadPersistedTerminalGoals(repository);
+
+        var terminal = Assert.Single(goals);
+        Assert.Equal(GoalId, terminal.GoalId);
+        Assert.Equal(WorkTaskStatus.Completed, terminal.TaskStatuses[TaskId]);
     }
 
     [Xunit.Fact(DisplayName = "DispatchDiagnostics_unread_file_is_not_retained")]
@@ -149,15 +179,48 @@ public sealed class StorageRetentionMaintenanceTests
     public void ArchiveIsSkippedByReadAll()
     {
         using var fixture = new RetentionFixture();
-        var source = GoalOperationJournal.PathFor(fixture.ExecutionDirectory, new GoalId(GoalId));
-        Directory.CreateDirectory(Path.GetDirectoryName(source)!);
-        File.WriteAllText(source, "{\"at\":\"2026-08-01T00:00:00Z\"}\n");
+        var kernel = new AgentOrchestratorKernel();
+        var goal = kernel.CreateGoal("retired retention fixture", [
+            new TaskSpec(new TaskId(TaskId), "fixture task", AgentRole.Developer)
+        ]);
+        var source = GoalOperationJournal.PathFor(fixture.ExecutionDirectory, goal.Id);
+        GoalOperationJournal.RecordTerminalDisposition(
+            fixture.ExecutionDirectory,
+            goal,
+            new GoalTerminalDisposition(GoalTerminalDispositionKind.Retired, "retired retention fixture"));
 
-        fixture.Run(TerminalGoal(WorkTaskStatus.Completed));
+        fixture.Run(new StorageRetentionGoal(
+            goal.Id.Value,
+            GoalStatus.Completed,
+            new Dictionary<string, WorkTaskStatus> { [TaskId] = WorkTaskStatus.Completed }));
 
         Assert.False(File.Exists(source));
-        Assert.True(File.Exists(GoalOperationJournal.ArchivePathFor(fixture.ExecutionDirectory, new GoalId(GoalId))));
-        Assert.DoesNotContain(new GoalId(GoalId), GoalOperationJournal.ReadAll(fixture.ExecutionDirectory).Keys);
+        Assert.True(File.Exists(GoalOperationJournal.ArchivePathFor(fixture.ExecutionDirectory, goal.Id)));
+        Assert.DoesNotContain(goal.Id, GoalOperationJournal.ReadAll(fixture.ExecutionDirectory).Keys);
+        Assert.True(GoalOperationJournal.HasRetiredTerminalDisposition(
+            GoalOperationJournal.Read(fixture.ExecutionDirectory, goal.Id)));
+    }
+
+    [Xunit.Fact(DisplayName = "GoalOperationJournal_terminal_goal_without_retired_disposition_is_not_archived")]
+    public void TerminalGoalWithoutRetiredDispositionIsNotArchived()
+    {
+        using var fixture = new RetentionFixture();
+        var kernel = new AgentOrchestratorKernel();
+        var goal = kernel.CreateGoal("landed retention fixture", [
+            new TaskSpec(new TaskId(TaskId), "fixture task", AgentRole.Developer)
+        ]);
+        GoalOperationJournal.RecordTerminalDisposition(
+            fixture.ExecutionDirectory,
+            goal,
+            new GoalTerminalDisposition(GoalTerminalDispositionKind.Landed, "landed retention fixture"));
+
+        fixture.Run(new StorageRetentionGoal(
+            goal.Id.Value,
+            GoalStatus.Completed,
+            new Dictionary<string, WorkTaskStatus> { [TaskId] = WorkTaskStatus.Completed }));
+
+        Assert.True(File.Exists(GoalOperationJournal.PathFor(fixture.ExecutionDirectory, goal.Id)));
+        Assert.False(File.Exists(GoalOperationJournal.ArchivePathFor(fixture.ExecutionDirectory, goal.Id)));
     }
 
     [Xunit.Fact(DisplayName = "RollingLogWriteStream_crossing_byte_threshold_rolls_without_truncating")]
@@ -177,6 +240,27 @@ public sealed class StorageRetentionMaintenanceTests
 
     private static StorageRetentionGoal TerminalGoal(WorkTaskStatus taskStatus) =>
         new(GoalId, GoalStatus.Completed, new Dictionary<string, WorkTaskStatus> { [TaskId] = taskStatus });
+
+    private static GoalSnapshot GoalSnapshotFor(
+        string goalId,
+        GoalStatus goalStatus,
+        WorkTaskStatus taskStatus) =>
+        new(
+            goalId,
+            "retention fixture",
+            goalStatus,
+            [new TaskSnapshot(
+                TaskId,
+                "retention task",
+                AgentRole.Developer,
+                taskStatus,
+                AssignedAgentId: null,
+                LastExecution: null,
+                LastVerification: null,
+                VerificationHistory: null,
+                LastDispatch: null,
+                LastProcess: null)],
+            []);
 
     private static string SuccessfulTrx(string testName) =>
         $"<TestRun><Results><UnitTestResult testName=\"{testName}\" outcome=\"Passed\" /></Results>" +

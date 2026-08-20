@@ -588,7 +588,13 @@ internal static class GoalOperationJournal
         var path = PathFor(executionDirectory, goalId);
         if (!File.Exists(path))
         {
-            return new GoalOperationJournalSummary(path, [], [], []);
+            var archivePath = ArchivePathFor(executionDirectory, goalId);
+            if (!File.Exists(archivePath))
+            {
+                return new GoalOperationJournalSummary(path, [], [], []);
+            }
+
+            path = archivePath;
         }
 
         var entries = ReadEntries(path);

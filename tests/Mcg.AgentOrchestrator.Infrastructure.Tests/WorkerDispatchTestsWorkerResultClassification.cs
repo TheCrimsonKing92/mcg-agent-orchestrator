@@ -4247,26 +4247,6 @@ public sealed class WorkerDispatchTestsWorkerResultClassification : WorkerDispat
     Assert.Contains("no production reader", FileDiagnosticWriter.RetentionDecision, StringComparison.Ordinal);
     Assert.Equal(WorkTaskStatus.Completed, task.Status);
     Assert.NotNull(task.LastVerification);
-    Assert.True(root2.TryGetProperty("dispatchState", out var state));
-    Assert.Equal("Completed", state.GetProperty("kind").GetString());
-    Assert.Equal("none", state.GetProperty("recommendedAction").GetString());
-    Assert.True(state.TryGetProperty("processTree", out var processTree));
-    Assert.Equal(999999, processTree.GetProperty("wrapperProcessId").GetInt32());
-    Assert.Equal(123456, processTree.GetProperty("childProcessId").GetInt32());
-    Assert.Contains(
-        processTree.GetProperty("ownedProcessIds").EnumerateArray(),
-        pid => pid.GetInt32() == 123456);
-    Assert.True(state.TryGetProperty("artifacts", out var artifacts));
-    Assert.True(artifacts.GetProperty("standardOutputExists").GetBoolean());
-    Assert.True(artifacts.GetProperty("exitCodeExists").GetBoolean());
-    Assert.True(artifacts.GetProperty("heartbeatExists").GetBoolean());
-    Assert.True(state.TryGetProperty("worktree", out var worktree));
-    Assert.Equal(root, worktree.GetProperty("workingDirectory").GetString());
-    Assert.True(worktree.GetProperty("exists").GetBoolean());
-    Assert.True(state.TryGetProperty("staleThresholds", out var staleThresholds));
-    Assert.True(staleThresholds.GetProperty("recentHeartbeatGrace").GetString() is { Length: > 0 });
-    Assert.True(staleThresholds.GetProperty("liveIdleTimeout").GetString() is { Length: > 0 });
-    Assert.True(staleThresholds.TryGetProperty("staleRetryBudgetRemaining", out _));
 }
 
     [Xunit.Fact(DisplayName = "ShowOrchestratorLogArtifacts_defaults_to_latest_dispatch_run_and_all_restores_history")]

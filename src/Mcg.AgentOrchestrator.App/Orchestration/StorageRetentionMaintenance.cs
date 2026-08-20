@@ -13,6 +13,12 @@ internal sealed record StorageRetentionGoal(
     IReadOnlyDictionary<string, WorkTaskStatus> TaskStatuses)
 {
     public bool IsTerminal => Status is GoalStatus.Completed or GoalStatus.Failed or GoalStatus.Cancelled or GoalStatus.Superseded;
+
+    public static StorageRetentionGoal FromSnapshot(GoalSnapshot snapshot) =>
+        new(
+            snapshot.Id,
+            snapshot.Status,
+            snapshot.Tasks.ToDictionary(task => task.Id, task => task.Status, StringComparer.OrdinalIgnoreCase));
 }
 
 internal sealed record StorageRetentionResult(
@@ -43,6 +49,28 @@ internal static partial class StorageRetentionMaintenance
             goal.Tasks.ToDictionary(task => task.Id.Value, task => task.Status, StringComparer.OrdinalIgnoreCase)))
             .ToArray();
         return Run(workspace.LogDirectory, workspace.OrchestratorDirectory, workspace.ExecutionDirectory, retentionGoals, now);
+    }
+
+    internal static IReadOnlyCollection<StorageRetentionGoal> LoadPersistedTerminalGoals(
+        ITransactionalOrchestratorStateRepository stateRepository)
+    {
+        var terminalGoalIds = stateRepository.ListConductLoopGoalMetadataAsync().GetAwaiter().GetResult()
+            .Where(summary =>
+                Enum.TryParse<GoalStatus>(summary.Status, ignoreCase: true, out var status) &&
+                status is GoalStatus.Completed or GoalStatus.Failed or GoalStatus.Cancelled or GoalStatus.Superseded)
+            .Select(summary => new GoalId(summary.Id))
+            .ToArray();
+        var goals = new List<StorageRetentionGoal>(terminalGoalIds.Length);
+        foreach (var goalId in terminalGoalIds)
+        {
+            var snapshot = stateRepository.LoadGoalAsync(goalId).GetAwaiter().GetResult();
+            if (snapshot is not null)
+            {
+                goals.Add(StorageRetentionGoal.FromSnapshot(snapshot));
+            }
+        }
+
+        return goals;
     }
 
     internal static StorageRetentionResult Run(
@@ -132,7 +160,9 @@ internal static partial class StorageRetentionMaintenance
         {
             if (!File.Exists(childExitPath))
             {
-                return false;
+                // A terminal task without any durable exit artifact is the killed/hung/reaped case.
+                // Preserve its raw logs because successful completion has not been positively established.
+                return true;
             }
 
             using var document = JsonDocument.Parse(File.ReadAllText(childExitPath));
@@ -374,6 +404,12 @@ internal static partial class StorageRetentionMaintenance
         {
             var source = GoalOperationJournal.PathFor(executionDirectory, new GoalId(goal.GoalId));
             if (!File.Exists(source))
+            {
+                continue;
+            }
+
+            var journal = GoalOperationJournal.Read(executionDirectory, new GoalId(goal.GoalId));
+            if (!GoalOperationJournal.HasRetiredTerminalDisposition(journal))
             {
                 continue;
             }
