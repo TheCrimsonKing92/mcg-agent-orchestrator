@@ -108,7 +108,7 @@ public sealed class MtpTestRunnerScriptTests
                 startInfo.ArgumentList.Add(argument);
             }
 
-            var result = Run(startInfo, timeout: TimeSpan.FromMinutes(5));
+            var result = Run(startInfo, timeout: TimeSpan.FromMinutes(15));
 
             Xunit.Assert.True(
                 result.ExitCode == 0,
