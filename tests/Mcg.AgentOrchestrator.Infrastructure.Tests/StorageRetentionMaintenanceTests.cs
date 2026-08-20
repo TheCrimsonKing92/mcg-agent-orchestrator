@@ -110,7 +110,7 @@ public sealed class StorageRetentionMaintenanceTests
     public async Task PersistedTerminalGoalsAreLoadedOutsideConductorWorkingSet()
     {
         using var fixture = new RetentionFixture();
-        var repository = new SqliteOrchestratorStateRepository(
+        var repository = InfrastructureTestSupport.CreateMigratedStateRepository(
             Path.Combine(fixture.OrchestratorDirectory, "state.db"));
         await repository.SaveGoalSnapshotsAsync([
             GoalSnapshotFor(GoalId, GoalStatus.Completed, WorkTaskStatus.Completed),
