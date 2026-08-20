@@ -545,7 +545,9 @@ internal static partial class PlannerOutputContract
 
             if (hasExplicitDirectory)
             {
-                var citesDirectory = citedPath.EndsWith('/') || citedPath.EndsWith('\\');
+                var citesDirectory = Directory.Exists(candidate) ||
+                    citedPath.EndsWith('/') ||
+                    citedPath.EndsWith('\\');
                 var candidateDirectory = citesDirectory ? candidate : Path.GetDirectoryName(candidate);
                 contextualDirectory = candidateDirectory is not null && Directory.Exists(candidateDirectory)
                     ? candidateDirectory
@@ -611,12 +613,12 @@ internal static partial class PlannerOutputContract
 
                     if (repositoryMatches.Length > 1)
                     {
-                        var citationStart = targetHeading.Index + match.Groups["citation"].Index;
+                        var ambiguousCitationStart = targetHeading.Index + match.Groups["citation"].Index;
                         var candidates = string.Join(
                             ", ",
                             repositoryMatches.Select(path => $"'{Path.GetRelativePath(workingDirectory, path).Replace(Path.DirectorySeparatorChar, '/')}'"));
                         diagnostic =
-                            $"target citation '{citation}' is ambiguous; matching repository files: {candidates}; source span [{citationStart}..{citationStart + citation.Length})." +
+                            $"target citation '{citation}' is ambiguous; at least these repository files match: {candidates}; source span [{ambiguousCitationStart}..{ambiguousCitationStart + citation.Length})." +
                             $"{Environment.NewLine}Offending citation: '{citation}'";
                         return false;
                     }

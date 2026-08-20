@@ -396,10 +396,11 @@ public sealed class PlannerOutputContractTests : WorkerDispatchTestSupport
     public void PlannerContract_UnresolvableProseSpansPassThroughUntouched()
     {
         var workingDirectory = CreateTempDirectory();
+        File.WriteAllText(Path.Combine(workingDirectory, "seed.txt"), "seed");
         var plan = ReplaceSectionBody(
             PlannerContractPlanFixture(),
             "## Target seams and symbols",
-            "- Keep `try/finally` behavior explicit and retain the `archive/` directory reference in the implementation notes.");
+            "- Keep `seed.txt` as the concrete seam, preserve `try/finally` behavior, and retain the `archive/` directory reference.");
 
         var result = PlannerOutputContract.Resolve(plan, string.Empty, workingDirectory);
 
@@ -414,9 +415,10 @@ public sealed class PlannerOutputContractTests : WorkerDispatchTestSupport
     {
         var repositoryRoot = InfrastructureTestSupport.FindRepositoryRoot();
         const string filename = "GoalOperationJournal.cs";
+        var fixtureMatches = FindNonExcludedRepositoryFixtureFiles(repositoryRoot, filename);
         Xunit.Assert.True(
-            File.Exists(Path.Combine(repositoryRoot, "src", "Mcg.AgentOrchestrator.App", "Orchestration", filename)),
-            "The unique repository fixture moved; re-pin this test to a real unique source filename.");
+            fixtureMatches.Length == 1,
+            $"Expected exactly one non-excluded '{filename}' fixture, found {fixtureMatches.Length}; re-pin this test to a real unique source filename.");
         var plan = ReplaceSectionBody(
             PlannerContractPlanFixture(),
             "## Target seams and symbols",
@@ -440,6 +442,23 @@ public sealed class PlannerOutputContractTests : WorkerDispatchTestSupport
             PlannerContractPlanFixture(),
             "## Target seams and symbols",
             "- Extend `UniqueTarget.cs` with focused citation-resolution coverage.");
+
+        var result = PlannerOutputContract.Resolve(plan, string.Empty, workingDirectory);
+
+        Xunit.Assert.True(result.Succeeded, result.Diagnostic);
+    }
+
+    [Xunit.Fact]
+    public void PlannerContract_ExistingDirectoryProvidesSameLineContextForBareFilename()
+    {
+        var workingDirectory = CreateTempDirectory();
+        var contextualDirectory = Path.Combine(workingDirectory, "src", "feature");
+        Directory.CreateDirectory(contextualDirectory);
+        File.WriteAllText(Path.Combine(contextualDirectory, "Sibling.cs"), "// fixture");
+        var plan = ReplaceSectionBody(
+            PlannerContractPlanFixture(),
+            "## Target seams and symbols",
+            "- Inspect `src/feature` and extend same-line `Sibling.cs` with contextual resolution coverage.");
 
         var result = PlannerOutputContract.Resolve(plan, string.Empty, workingDirectory);
 
@@ -749,6 +768,37 @@ public sealed class PlannerOutputContractTests : WorkerDispatchTestSupport
             "Fixtures",
             "PlannerOutputContract",
             fileName);
+
+    private static bool IsExcludedRepositoryFixtureDirectory(string name) =>
+        name.StartsWith(".", StringComparison.Ordinal) ||
+        name.Equals("bin", StringComparison.OrdinalIgnoreCase) ||
+        name.Equals("obj", StringComparison.OrdinalIgnoreCase) ||
+        name.Equals("node_modules", StringComparison.OrdinalIgnoreCase) ||
+        name.Equals("TestResults", StringComparison.OrdinalIgnoreCase) ||
+        name.Equals("playwright-report", StringComparison.OrdinalIgnoreCase);
+
+    private static string[] FindNonExcludedRepositoryFixtureFiles(string repositoryRoot, string filename)
+    {
+        var matches = new List<string>();
+        var pendingDirectories = new Stack<string>();
+        pendingDirectories.Push(repositoryRoot);
+        while (pendingDirectories.TryPop(out var directory))
+        {
+            matches.AddRange(Directory.EnumerateFiles(directory, filename));
+            foreach (var childDirectory in Directory.EnumerateDirectories(directory))
+            {
+                if (IsExcludedRepositoryFixtureDirectory(Path.GetFileName(childDirectory)) ||
+                    (File.GetAttributes(childDirectory) & FileAttributes.ReparsePoint) != 0)
+                {
+                    continue;
+                }
+
+                pendingDirectories.Push(childDirectory);
+            }
+        }
+
+        return matches.ToArray();
+    }
 
     private static string ReadCanonicalArchivedFixture(string fileName, string expectedSha256)
     {
