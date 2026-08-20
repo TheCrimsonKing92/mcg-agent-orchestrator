@@ -30,7 +30,7 @@ internal sealed record AcceptanceCohortLandingResult(
     public bool MainAdvanced => Outcome == AcceptanceCohortLandingOutcome.Advanced;
 }
 
-internal static class LandingExecutor
+internal static partial class LandingExecutor
 {
     public const string IntegrationBranchName = "integration";
     private const string TempWorktreeDirName = ".orchestrator-integration-tmp";

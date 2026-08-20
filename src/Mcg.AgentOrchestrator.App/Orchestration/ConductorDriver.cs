@@ -41,7 +41,7 @@ internal sealed record DeveloperBranchIntegrationResult(
         Status is DeveloperBranchIntegrationStatus.Current or DeveloperBranchIntegrationStatus.Integrated;
 }
 
-internal sealed class ConductorDriver
+internal sealed partial class ConductorDriver
 {
     internal sealed class EvidenceMutationLeaseUnavailableException(string message)
         : InvalidOperationException(message);
@@ -123,11 +123,17 @@ internal sealed class ConductorDriver
     private readonly IGoalAcceptanceVerifier? _cohortAcceptanceVerifier;
     private readonly IGoalLifecycleEventWriter? _cohortEventWriter;
     private readonly CohortAcceptanceStore? _cohortAcceptanceStore;
+    private readonly MergeTrainAcceptanceStore? _mergeTrainAcceptanceStore;
     private readonly Func<
         ConductorAcceptanceCohortSelection,
         IReadOnlyList<Goal>,
         ConductorAutonomyPolicy,
         ConductorAcceptanceCohortRunResult>? _runAcceptanceCohortOverride;
+    private readonly Func<
+        ConductorMergeTrainSelection,
+        IReadOnlyList<Goal>,
+        ConductorAutonomyPolicy,
+        ConductorMergeTrainRunResult>? _runMergeTrainOverride;
     private readonly Func<Goal, int> _getAcceptanceSlotCount;
     private readonly Func<int> _getWorkerAdmissionCapacity;
     private readonly Func<bool> _hasGateReadyGoal;
@@ -215,6 +221,8 @@ internal sealed class ConductorDriver
         _cohortEventWriter = eventWriter;
         _cohortAcceptanceStore = new CohortAcceptanceStore(
             Path.Combine(workspace.OrchestratorDirectory, "cohort-acceptance.db"));
+        _mergeTrainAcceptanceStore = new MergeTrainAcceptanceStore(
+            Path.Combine(workspace.OrchestratorDirectory, "merge-train-acceptance.db"));
         kernel.SetEventWriter(eventWriter);
         _tryBuildAwaitingClarificationEscalationReason = goal =>
             GoalRefinementGate.TryBuildAwaitingClarificationEscalationReason(workspace, goal, eventWriter, out var reason)
@@ -1130,6 +1138,11 @@ internal sealed class ConductorDriver
             IReadOnlyList<Goal>,
             ConductorAutonomyPolicy,
             ConductorAcceptanceCohortRunResult>? runAcceptanceCohort = null,
+        Func<
+            ConductorMergeTrainSelection,
+            IReadOnlyList<Goal>,
+            ConductorAutonomyPolicy,
+            ConductorMergeTrainRunResult>? runMergeTrain = null,
         Func<Goal, string, IDisposable?>? tryAcquireEvidenceMutationLease = null,
         Func<Goal, DeveloperBranchIntegrationResult>? integrateMainBeforeDeveloperDispatch = null,
         Func<Goal, ReconcileAcceptanceLeaseState?>? getEvidenceMutationLease = null,
@@ -1224,6 +1237,7 @@ internal sealed class ConductorDriver
         _isVerificationGateSatisfied = isVerificationGateSatisfied ?? (_ => false);
         _gateReadyCandidateProjector = gateReadyCandidateProjector;
         _runAcceptanceCohortOverride = runAcceptanceCohort;
+        _runMergeTrainOverride = runMergeTrain;
         _getAcceptanceSlotCount = getAcceptanceSlotCount ?? (_ => ConductorBatchLoop.DefaultParallelAcceptanceCapacity);
         _getWorkerAdmissionCapacity = getWorkerAdmissionCapacity ?? (() => ConductorBatchLoop.WorkerAdmissionCapacity);
         _hasGateReadyGoal = hasGateReadyGoal ?? (() => false);
