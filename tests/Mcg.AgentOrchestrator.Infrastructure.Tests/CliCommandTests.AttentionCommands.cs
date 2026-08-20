@@ -222,6 +222,54 @@ public sealed class CliCommandTestsAttentionCommands : CliCommandTestBase
     }
 
     [Xunit.Fact]
+    public async Task CliAttentionShowGoalPrefixPrintsOpenDecision()
+    {
+        var root = CreateTempDirectory();
+        var workspace = CreateRefinedWorkspace(root);
+        var kernel = new AgentOrchestratorKernel();
+        var goal = kernel.CreateGoal(new GoalId("cccccccc111111111111111111111111"), "Decision goal");
+        kernel.ActivateGoal(goal.Id, AgentCatalog.Default().Agents);
+        var store = CollaborationItemStore.ForDirectory(workspace.OrchestratorDirectory);
+        var decision = await store.RaiseAsync(
+            CollaborationItemType.Decision,
+            goal.Id.Value,
+            "Need a call",
+            "Decide the remaining slice.");
+
+        var output = ExecuteCliAndCapture(["attention", "show", "cccccccc"], kernel, workspace);
+
+        Xunit.Assert.Contains($"[{decision.Id[..8]}] (Decision) Need a call", output, StringComparison.Ordinal);
+        Xunit.Assert.DoesNotContain("No open attention items", output, StringComparison.Ordinal);
+        Xunit.Assert.DoesNotContain("Answer with:", output, StringComparison.Ordinal);
+    }
+
+    [Xunit.Fact]
+    public async Task CliAttentionShowGoalPrefixPrintsWaitAndDecision()
+    {
+        var root = CreateTempDirectory();
+        var workspace = CreateRefinedWorkspace(root);
+        var kernel = new AgentOrchestratorKernel();
+        var goal = GoalLifecycleCommands.CreateAndActivateSimpleGoal(
+            kernel,
+            AgentCatalog.Default().Agents,
+            "Wait and decision");
+        var task = goal.Tasks.Single();
+        kernel.RequestHumanInput(goal.Id, task.Id, "Which branch?");
+        var store = CollaborationItemStore.ForDirectory(workspace.OrchestratorDirectory);
+        var decision = await store.RaiseAsync(
+            CollaborationItemType.Decision,
+            goal.Id.Value,
+            "Need a call",
+            "Decide after the wait.");
+
+        var output = ExecuteCliAndCapture(["attention", "show", goal.Id.Value[..8]], kernel, workspace);
+
+        Xunit.Assert.Contains("Human waits:", output, StringComparison.Ordinal);
+        Xunit.Assert.Contains("Which branch?", output, StringComparison.Ordinal);
+        Xunit.Assert.Contains($"[{decision.Id[..8]}] (Decision) Need a call", output, StringComparison.Ordinal);
+    }
+
+    [Xunit.Fact]
     public async Task CliAttentionListingItemIdRoundTripsThroughScopedAnswer()
     {
         var root = CreateTempDirectory();
