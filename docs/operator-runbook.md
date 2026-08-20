@@ -87,6 +87,38 @@ Remove-Item -LiteralPath .conduct-stop
 .\scripts\Invoke-RepoScript.ps1 scripts\Start-OrchestratorCommand.ps1 -Name <batch-name> conduct --loop --watch --policy Permissive --poll-seconds 15 --max-duration 5400
 ```
 
+#### Which binary is the running conductor actually executing?
+
+The conductor does not execute the in-tree build. It runs from a pinned copy under `%TEMP%\mcg-run\<hash>\`,
+so `src\Mcg.AgentOrchestrator.App\bin\Debug\net10.0\...dll.git-head` tells you only what the last build
+produced. Those two diverge exactly when it matters: after a landing rebuilds the tree while a stale loop
+keeps running. Read the marker from the run directory named on the process command line:
+
+```powershell
+Get-CimInstance Win32_Process -Filter "Name='dotnet.exe'" | Where-Object { $_.CommandLine -like '*conduct*' } | Format-List ProcessId, ParentProcessId, CreationDate, CommandLine
+Get-Content -LiteralPath "$env:TEMP\mcg-run\<hash-from-that-command-line>\Mcg.AgentOrchestrator.App.dll.git-head"
+git rev-parse HEAD
+```
+
+Equal means the running conductor is current. If they differ, quantify the gap and check whether the missing
+commits touch the behaviour you are reasoning about, because that is what separates "staleness explains this
+symptom" from "staleness is real but irrelevant here":
+
+```powershell
+git log --oneline <marker-sha>..HEAD
+git log --oneline <marker-sha>..HEAD -- <paths-you-care-about>
+```
+
+Note that the conductor runs as `dotnet.exe`, not as `Mcg.AgentOrchestrator.App`, so filtering the process
+list by the product name finds nothing and reads as "the loop is dead".
+
+#### The max-duration handoff does not re-stage the binary
+
+At `--max-duration` the loop exits and spawns a successor with `--continuity-child`. That successor normally
+reuses the predecessor's run directory, so landed code stays inert across the rollover and the run-directory
+hash is unchanged on both sides. A rollover is therefore not a substitute for the manual bounce above. Some
+handoffs have been observed to rebuild, so neither outcome is safe to assume: check the marker every time.
+
 ### Auto-resume after reboot or loop crash
 
 Long-running unattended drives can opt into a reboot/crash watchdog. Launch the drive through `scripts\Start-OrchestratorCommand.ps1`; when the command is `conduct --loop`, the script overwrites `.orchestrator\last-drive.json` with the batch name, `AppDll` if any, original conduct arguments, policy, poll interval, and duration cap. This is a dumb last-drive journal: it is replaced on every new loop launch and is not a queue.

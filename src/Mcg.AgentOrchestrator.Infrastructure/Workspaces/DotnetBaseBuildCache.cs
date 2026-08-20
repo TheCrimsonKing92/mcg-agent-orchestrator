@@ -33,12 +33,18 @@ internal sealed class DotnetBaseBuildCache
     private readonly string _rootPath;
     private readonly int _maxEntries;
     private readonly TimeSpan _maxAge;
+    private readonly Func<string, byte[]> _contentReader;
 
-    public DotnetBaseBuildCache(string rootPath, int? maxEntries = null, TimeSpan? maxAge = null)
+    public DotnetBaseBuildCache(
+        string rootPath,
+        int? maxEntries = null,
+        TimeSpan? maxAge = null,
+        Func<string, byte[]>? contentReader = null)
     {
         _rootPath = rootPath;
         _maxEntries = Math.Max(1, maxEntries ?? DefaultMaxEntries);
         _maxAge = maxAge ?? DefaultMaxAge;
+        _contentReader = contentReader ?? File.ReadAllBytes;
     }
 
     public static DotnetBaseBuildCache Default() =>
@@ -91,7 +97,7 @@ internal sealed class DotnetBaseBuildCache
                 continue;
             }
 
-            var currentHash = HashDirectory(entryPath, excludeRootManifest: true);
+            var currentHash = ResolveEntryHash(entryPath, manifest);
             if (!string.Equals(currentHash, manifest.ContentHash, StringComparison.Ordinal))
             {
                 receipts.Add(new DotnetBaseBuildCacheProjectReceipt(project, projectKey, "miss", "invalid", currentHash));
@@ -140,11 +146,14 @@ internal sealed class DotnetBaseBuildCache
                     CopyDirectory(sourceRoot, Path.Combine(stagingPath, relativeRoot));
                 }
 
-                var hash = HashDirectory(stagingPath, excludeRootManifest: false);
+                var (hash, files) = HashDirectoryWithStats(
+                    stagingPath,
+                    excludeRootManifest: false,
+                    _contentReader);
                 File.WriteAllText(
                     Path.Combine(stagingPath, ManifestFileName),
                     JsonSerializer.Serialize(
-                        new CacheEntryManifest(mainSha, project, projectKey, hash, DateTimeOffset.UtcNow),
+                        new CacheEntryManifest(mainSha, project, projectKey, hash, DateTimeOffset.UtcNow, files),
                         new JsonSerializerOptions { WriteIndented = true }));
 
                 var finalPath = EntryPath(mainSha, projectKey);
@@ -180,7 +189,7 @@ internal sealed class DotnetBaseBuildCache
                 CopyDirectory(sourceRoot, Path.Combine(stagingPath, relativeRoot));
             }
 
-            return HashDirectory(stagingPath, excludeRootManifest: false);
+            return HashDirectory(stagingPath, excludeRootManifest: false, File.ReadAllBytes);
         }
         finally
         {
@@ -318,30 +327,101 @@ internal sealed class DotnetBaseBuildCache
         }
     }
 
-    private static string HashDirectory(string path, bool excludeRootManifest)
+    private string ResolveEntryHash(string entryPath, CacheEntryManifest manifest)
+    {
+        if (manifest.Files is not null)
+        {
+            var currentFiles = TryStatDirectory(entryPath, excludeRootManifest: true);
+            if (currentFiles is not null && FileStatsMatch(manifest.Files, currentFiles))
+            {
+                return manifest.ContentHash;
+            }
+        }
+
+        return HashDirectory(entryPath, excludeRootManifest: true, _contentReader);
+    }
+
+    private static IReadOnlyList<CachedFileStat>? TryStatDirectory(string path, bool excludeRootManifest)
+    {
+        try
+        {
+            return EnumerateFiles(path, excludeRootManifest)
+                .Select(file => new CachedFileStat(
+                    RelativePath(path, file.FullName),
+                    file.Length,
+                    file.LastWriteTimeUtc.Ticks))
+                .ToArray();
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+        {
+            return null;
+        }
+    }
+
+    private static bool FileStatsMatch(
+        IReadOnlyList<CachedFileStat> expected,
+        IReadOnlyList<CachedFileStat> actual)
+    {
+        if (expected.Count != actual.Count)
+        {
+            return false;
+        }
+
+        for (var index = 0; index < expected.Count; index++)
+        {
+            if (!string.Equals(expected[index].Path, actual[index].Path, StringComparison.Ordinal)
+                || expected[index].Length != actual[index].Length
+                || expected[index].LastWriteUtcTicks != actual[index].LastWriteUtcTicks)
+            {
+                return false;
+            }
+        }
+
+        return true;
+    }
+
+    private static string HashDirectory(
+        string path,
+        bool excludeRootManifest,
+        Func<string, byte[]> contentReader) =>
+        HashDirectoryWithStats(path, excludeRootManifest, contentReader).Hash;
+
+    private static (string Hash, IReadOnlyList<CachedFileStat> Files) HashDirectoryWithStats(
+        string path,
+        bool excludeRootManifest,
+        Func<string, byte[]> contentReader)
     {
         using var sha = SHA256.Create();
         if (!Directory.Exists(path))
         {
-            return Convert.ToHexString(sha.ComputeHash([])).ToLowerInvariant();
+            return (Convert.ToHexString(sha.ComputeHash([])).ToLowerInvariant(), []);
         }
 
-        foreach (var file in Directory.EnumerateFiles(path, "*", SearchOption.AllDirectories)
-            .Where(file => !excludeRootManifest || !IsRootManifest(path, file))
-            .OrderBy(file => Path.GetRelativePath(path, file), StringComparer.OrdinalIgnoreCase))
+        var files = new List<CachedFileStat>();
+        foreach (var file in EnumerateFiles(path, excludeRootManifest))
         {
-            var relative = Path.GetRelativePath(path, file).Replace('\\', '/');
+            var relative = RelativePath(path, file.FullName);
+            files.Add(new CachedFileStat(relative, file.Length, file.LastWriteTimeUtc.Ticks));
             var nameBytes = System.Text.Encoding.UTF8.GetBytes(relative);
             sha.TransformBlock(nameBytes, 0, nameBytes.Length, null, 0);
             sha.TransformBlock([0], 0, 1, null, 0);
-            var content = File.ReadAllBytes(file);
+            var content = contentReader(file.FullName);
             sha.TransformBlock(content, 0, content.Length, null, 0);
             sha.TransformBlock([0], 0, 1, null, 0);
         }
 
         sha.TransformFinalBlock([], 0, 0);
-        return Convert.ToHexString(sha.Hash!).ToLowerInvariant();
+        return (Convert.ToHexString(sha.Hash!).ToLowerInvariant(), files);
     }
+
+    private static IEnumerable<FileInfo> EnumerateFiles(string path, bool excludeRootManifest) =>
+        new DirectoryInfo(path)
+            .EnumerateFiles("*", SearchOption.AllDirectories)
+            .Where(file => !excludeRootManifest || !IsRootManifest(path, file.FullName))
+            .OrderBy(file => Path.GetRelativePath(path, file.FullName), StringComparer.OrdinalIgnoreCase);
+
+    private static string RelativePath(string rootPath, string filePath) =>
+        Path.GetRelativePath(rootPath, filePath).Replace('\\', '/');
 
     private static bool IsRootManifest(string rootPath, string filePath) =>
         Path.GetRelativePath(rootPath, filePath).Equals(ManifestFileName, StringComparison.OrdinalIgnoreCase);
@@ -375,5 +455,8 @@ internal sealed class DotnetBaseBuildCache
         string Project,
         string ProjectKey,
         string ContentHash,
-        DateTimeOffset CreatedAt);
+        DateTimeOffset CreatedAt,
+        IReadOnlyList<CachedFileStat>? Files = null);
+
+    private sealed record CachedFileStat(string Path, long Length, long LastWriteUtcTicks);
 }
