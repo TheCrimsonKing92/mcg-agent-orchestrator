@@ -1106,7 +1106,7 @@ public sealed class GoalMonitoringSubscriptionCommandTests
             "Completed",
             "wrong event kind",
             null));
-        using var output = new StringWriter();
+        using var output = new SignalingStringWriter();
 
         var runTask = GoalMonitoringSubscriptionCommand.RunAsync(
             [
@@ -1127,6 +1127,10 @@ public sealed class GoalMonitoringSubscriptionCommandTests
             workspace,
             [],
             WorkerProfileCatalog.Default());
+
+        await output.FirstFlush.WaitAsync(TimeSpan.FromSeconds(3));
+        Assert.False(runTask.IsCompleted);
+        Assert.Equal(string.Empty, output.ToString());
 
         await store.AppendAsync(new RunEventAppend(
             RunEventTypes.GoalOperation,
@@ -1594,13 +1598,21 @@ public sealed class GoalMonitoringSubscriptionCommandTests
     private sealed class SignalingStringWriter : StringWriter
     {
         private readonly TaskCompletionSource _firstWrite = new(TaskCreationOptions.RunContinuationsAsynchronously);
+        private readonly TaskCompletionSource _firstFlush = new(TaskCreationOptions.RunContinuationsAsynchronously);
 
         public Task FirstWrite => _firstWrite.Task;
+        public Task FirstFlush => _firstFlush.Task;
 
         public override void WriteLine(string? value)
         {
             base.WriteLine(value);
             _firstWrite.TrySetResult();
+        }
+
+        public override async Task FlushAsync(CancellationToken cancellationToken)
+        {
+            await base.FlushAsync(cancellationToken);
+            _firstFlush.TrySetResult();
         }
     }
 

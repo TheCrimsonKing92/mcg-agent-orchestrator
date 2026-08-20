@@ -412,7 +412,7 @@ public sealed class RunGoalServiceTests
             new AgentId("ollama-planner-qwen-fallback"),
             "Qwen fallback",
             AgentRole.Planner,
-            new ModelProfile("LlamaCpp", LlamaCppDefaults.DefaultModelAlias, ModelCapability.Text | ModelCapability.Code | ModelCapability.ToolUse, SubscriptionMode.LocalBridge),
+            new ModelProfile("LlamaCpp", LlamaCppDefaults.DefaultModelAlias, ModelCapability.Text | ModelCapability.Code | ModelCapability.ToolUse, SubscriptionMode.ApiKey),
             ExecutionPolicy: AgentExecutionPolicy.PreferSubscription,
             Subscription: new SubscriptionLaunchProfile("qwen-code-cli"));
         var agents = AgentCatalog.Default().AddOrReplaceById(alternate).Agents;
