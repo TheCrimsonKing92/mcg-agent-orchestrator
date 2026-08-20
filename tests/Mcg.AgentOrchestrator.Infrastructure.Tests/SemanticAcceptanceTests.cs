@@ -991,20 +991,25 @@ public sealed class SemanticAcceptanceTests : IDisposable
     {
         // Simulate the grandchild-holds-the-pipe bug: the parent PowerShell writes output
         // and exits, but a grandchild (started via Process.Start with UseShellExecute=false
-        // so it inherits the stdout pipe handle) keeps the pipe open for 60s. Without the
-        // fix, ReadToEndAsync hangs until the outer 20s CancellationToken fires. With the
-        // fix, the 12s drain timeout kills the tree and returns well before 20s.
+        // so it inherits the stdout pipe handle) keeps the pipe open for 60s. Without a
+        // drain timeout, CopyToAsync hangs until the outer 20s CancellationToken fires.
+        // A short injected policy expires the drain, kills the tree, and returns before
+        // that hang failsafe. Do not assert wall-clock; the 20s token is failsafe only.
         var exe = WorkerShell.Executable;
         var command = $"Write-Output 'verdict'; $psi = [System.Diagnostics.ProcessStartInfo]::new('{exe}', '-NonInteractive -Command Start-Sleep 60'); $psi.UseShellExecute = $false; $psi.CreateNoWindow = $true; [System.Diagnostics.Process]::Start($psi) | Out-Null; exit 0";
 
         using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(20));
-        var sw = System.Diagnostics.Stopwatch.StartNew();
+        var drainPolicy = new ProcessOutputDrainPolicy(
+            TimeSpan.FromMilliseconds(250),
+            TimeSpan.FromMilliseconds(200)).Validate();
 
-        await SubscriptionCliSemanticJudge.RunCommandAsync(command, Path.GetTempPath(), cts.Token);
+        await WorkerProcessRunner.RunBufferedAsync(
+            new WorkerProcessRunRequest(
+                command,
+                Path.GetTempPath(),
+                OutputDrainPolicy: drainPolicy),
+            cts.Token);
 
-        sw.Stop();
-
-        // Drain timeout (12s) must fire before the outer 20s cancellation token.
         Assert.False(cts.IsCancellationRequested);
     }
 
