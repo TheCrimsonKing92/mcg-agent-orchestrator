@@ -292,7 +292,7 @@ public sealed class BackgroundDispatchRunner
         // Codex roles also run Low so Codex can skip its expensive nested Windows sandbox setup, but
         // their worktree stays Medium and MIC therefore denies writes.
         var sandbox = sandboxOptions ?? WorkerSandboxOptions.FromEnvironment();
-        var sandboxProvider = ResolveSandboxProvider(workerProvider);
+        var sandboxProvider = ResolveSandboxProvider(dispatch);
         var sandboxWorktreeWritable = IsSandboxWorktreeWritable(task.RequiredRole);
         var useSandbox = ShouldUseOsSandbox(
             sandbox.Enabled,
@@ -479,6 +479,11 @@ public sealed class BackgroundDispatchRunner
 
     private WorkerSandboxProvider ResolveSandboxProvider(TaskDispatchRecord dispatch)
     {
+        if (IsGrokCliProfile(dispatch.WorkerName))
+        {
+            return WorkerSandboxProvider.Grok;
+        }
+
         return ResolveSandboxProvider(ResolveWorkerProvider(dispatch));
     }
 
@@ -501,6 +506,9 @@ public sealed class BackgroundDispatchRunner
 
         return WorkerSandboxProvider.Unknown;
     }
+
+    internal static bool IsGrokCliProfile(string? workerName) =>
+        string.Equals(workerName, WorkerProfileDispatcher.XaiSubscriptionProfileName, StringComparison.OrdinalIgnoreCase);
 
     internal static bool IsSandboxWorktreeWritable(AgentRole role) =>
         role is AgentRole.Developer or AgentRole.Tester;

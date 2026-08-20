@@ -35,11 +35,13 @@ internal static class SdlcRolePromptRequirements
                 "- Define falsifiable proof Developer, Tester, and Reviewer must provide before acceptance.",
                 "- If repository evidence disproves the goal premise, report `blockers: premise-invalid - <fact and evidence>` and stop before proposing implementation.",
                 "- Do not return a generic SDLC checklist or restate the user's goal as a plan.",
+                "- Cite files without a line RANGE. `File.cs`, `File.cs:442`, `File.cs#L442`, and `File.cs::Symbol` are accepted; `File.cs:442-479` is REJECTED and discards your entire plan, because the validator treats the whole string including the range as the path and finds no such file. Before emitting, scan your output for `.cs:<digits>-<digits>` and replace each with its single start line.",
                 "- Do not modify repository files; implementation belongs to the Developer task."
             ],
             AgentRole.Researcher =>
             [
                 "## Researcher Requirements",
+                "- Do NOT build the solution or run tests. A live conductor holds the built assemblies, so your build will fail on a file lock and consume your whole session on lock recovery. Inspect source, git history, and committed receipts instead. If a question can only be settled by executing tests, say so and name the exact test classes so the Tester or a Conductor-side evidence request can settle it.",
                 "- Produce the durable research artifact under the required Current source findings, Prior goal evidence, Upstream capabilities, and Likely seams and risks headings.",
                 "- Lead with concrete findings tied to repository-local files, APIs, tests, or primary external sources; include file paths, commands, URLs, or symbol names for each material claim.",
                 "- Prefer /api/source-survey?max=8 when available, or source reads that exclude generated artifacts such as **/bin/** and **/obj/**; inspect generated output only when it is the subject of the task.",
@@ -63,6 +65,7 @@ internal static class SdlcRolePromptRequirements
             AgentRole.Tester =>
             [
                 "## Tester Requirements",
+                "- PRIMARY PATH: prefer a Conductor-side run over executing tests yourself. Emit evidence_request with selections of test_project and test_class inside your findings JSON, and report tests: deferred naming what you requested. The Conductor runs that selection and returns receipts. This is faster, avoids composing runner commands for this platform and runner, and keeps large test output out of your context. Execute directly only when a test-class selection cannot settle the question.",
                 "- Derive a focused verification matrix from the requested behavior, changed files, and known risks.",
                 "- Run or attempt the exact verification commands relevant to this task.",
                 "- Keep test discovery focused on source and intentional test assets; avoid treating bin/obj output as changed source.",
@@ -75,7 +78,8 @@ internal static class SdlcRolePromptRequirements
                 "- A verification command that is killed, times out, or produces no results file is an environment/plumbing outcome, NOT a test failure: report `tests: inconclusive - <current-round evidence>` with `blockers: none`, and never restate a prior round's conclusion as this round's evidence.",
                 "- Keep each verification command bounded in wall time: build once as its own step, then run tests with a narrow filter and no rebuild; do not bundle a build and a broad or full-suite test run into a single command.",
                 "- Do not ask for shell restoration unless an attempted command actually failed because of execution access.",
-                "- You may build and run tests but must not modify source files."
+                "- You may build and run tests but must not modify source files.",
+                "- Prefer scripts/Invoke-TestSummary.ps1 with -Target <csproj>, -Filter FullyQualifiedName~<Class>, and -NoBuild over hand-composed runner commands. It emits one compact MTP_TERMINAL_SUMMARY line instead of full runner output. MTP filters require FullyQualifiedName~Class or DisplayName~Method syntax and reject a bare class name."
             ],
             AgentRole.Reviewer =>
             [
@@ -175,11 +179,13 @@ internal static class SdlcRolePromptRequirements
                 "- Map every acceptance criterion by number and include ownership/lifecycle, edge contracts, risks, seams, and focused verification.",
                 "- Define falsifiable proof for downstream roles; do not return a generic checklist.",
                 "- If repository evidence disproves the goal premise, report `blockers: premise-invalid - <fact and evidence>` and stop before proposing implementation.",
+                "- Cite files without a line RANGE. `File.cs`, `File.cs:442`, `File.cs#L442`, and `File.cs::Symbol` are accepted; `File.cs:442-479` is REJECTED and discards your entire plan, because the validator treats the whole string including the range as the path and finds no such file. Before emitting, scan your output for `.cs:<digits>-<digits>` and replace each with its single start line.",
                 "- Do not modify repository files; implementation belongs to the Developer task."
             ],
             AgentRole.Researcher =>
             [
                 "## Researcher Requirements",
+                "- Do NOT build the solution or run tests. A live conductor holds the built assemblies, so your build will fail on a file lock and consume your whole session on lock recovery. Inspect source, git history, and committed receipts instead. If a question can only be settled by executing tests, say so and name the exact test classes so the Tester or a Conductor-side evidence request can settle it.",
                 "- Produce the durable research artifact under the required Current source findings, Prior goal evidence, Upstream capabilities, and Likely seams and risks headings.",
                 "- Lead with repository evidence: file paths, symbols, APIs, tests, primary sources, and commands or file inspections.",
                 "- Prefer /api/source-survey?max=8 when available; otherwise exclude generated output such as **/bin/** and **/obj/** unless the task targets it.",
@@ -198,6 +204,7 @@ internal static class SdlcRolePromptRequirements
             AgentRole.Tester =>
             [
                 "## Tester Requirements",
+                "- PRIMARY PATH: prefer a Conductor-side run over executing tests yourself. Emit evidence_request with selections of test_project and test_class inside your findings JSON, and report tests: deferred naming what you requested. The Conductor runs that selection and returns receipts. This is faster, avoids composing runner commands for this platform and runner, and keeps large test output out of your context. Execute directly only when a test-class selection cannot settle the question.",
                 "- Derive focused checks from the requested behavior and report concrete evidence.",
                 "- Run or attempt exact commands; include exit code and concise output summary.",
                 "- Cover edge/negative cases when practical and avoid treating bin/obj output as changed source.",
@@ -205,7 +212,8 @@ internal static class SdlcRolePromptRequirements
                 "- Reuse a carried finding's stable_id. Keep its original location unless the code moved: when the system-derived round diff touched the prior anchor, keep the stable_id and report the defect's current location. Otherwise a different location is rejected. If a new stable_id describes the same open anchor, reuse the canonical stable_id instead.",
                 "- A killed/timed-out/no-results verification is an environment outcome, not a failure: report `tests: inconclusive - <current-round evidence>` with `blockers: none`, and do not reuse a prior round's conclusion as evidence.",
                 "- Keep each command bounded: build once, then run narrow no-rebuild test filters; never bundle a build and a broad test run in one command.",
-                "- You may build and run tests but must not modify source files."
+                "- You may build and run tests but must not modify source files.",
+                "- Prefer scripts/Invoke-TestSummary.ps1 with -Target <csproj>, -Filter FullyQualifiedName~<Class>, and -NoBuild over hand-composed runner commands. It emits one compact MTP_TERMINAL_SUMMARY line instead of full runner output. MTP filters require FullyQualifiedName~Class or DisplayName~Method syntax and reject a bare class name."
             ],
             AgentRole.Reviewer =>
             [

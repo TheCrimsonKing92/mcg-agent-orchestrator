@@ -1224,6 +1224,23 @@ public sealed class SqliteOrchestratorStateRepository : IOrchestratorStateOutbox
         await cmd.ExecuteNonQueryAsync(cancellationToken);
     }
 
+    internal static bool TryInsertOutboxMessageIfMissing(
+        SqliteConnection conn,
+        OrchestratorStateOutboxMessage message)
+    {
+        using var cmd = conn.CreateCommand();
+        cmd.CommandText = """
+            INSERT INTO state_outbox (id, kind, payload_json, created_at)
+            VALUES ($id, $kind, $payload_json, $created_at)
+            ON CONFLICT(id) DO NOTHING
+            """;
+        cmd.Parameters.AddWithValue("$id", message.Id);
+        cmd.Parameters.AddWithValue("$kind", message.Kind);
+        cmd.Parameters.AddWithValue("$payload_json", message.PayloadJson);
+        cmd.Parameters.AddWithValue("$created_at", message.CreatedAt.ToString("O", CultureInfo.InvariantCulture));
+        return cmd.ExecuteNonQuery() == 1;
+    }
+
     public async Task<IReadOnlyList<GoalSummary>> ListGoalMetadataAsync(CancellationToken cancellationToken = default)
     {
         await using var conn = OpenConnection();

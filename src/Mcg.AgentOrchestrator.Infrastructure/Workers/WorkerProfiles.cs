@@ -3,7 +3,14 @@ using Mcg.AgentOrchestrator.Core;
 
 namespace Mcg.AgentOrchestrator.Infrastructure;
 
-public sealed record WorkerProfile(string Name, string CommandTemplate);
+public sealed record WorkerProfile(string Name, string CommandTemplate)
+{
+    public const string QwenCodeCliName = "qwen-code-cli";
+
+    // Measured `--bare` startup at this repo: system prompt plus tool schemas,
+    // without the workspace-init dump. Default (non-bare) startup is ~25728 tokens.
+    public const int QwenCodeBareStartupTokens = 8700;
+}
 
 public static class WorkerProfileDiagnostics
 {
@@ -394,9 +401,10 @@ public sealed record WorkerProfileCatalog(IReadOnlyList<WorkerProfile> Profiles)
             new WorkerProfile("codex-cli", "codex exec --json --skip-git-repo-check --model {subscriptionModelName} -c model_reasoning_effort={subscriptionReasoningEffort} --sandbox {sandboxMode} --cd {workingDirectory}"),
             new WorkerProfile("codex-spark", "codex exec --json --skip-git-repo-check --model {subscriptionModelName} -c model_reasoning_effort={subscriptionReasoningEffort} --sandbox {sandboxMode} --cd {workingDirectory}"),
             new WorkerProfile("codex-oss-cli", "codex exec --skip-git-repo-check --oss --local-provider ollama --model {subscriptionModelName} --sandbox {sandboxMode} --cd {workingDirectory}"),
-            new WorkerProfile("qwen-code-cli", "$env:OPENAI_BASE_URL='http://127.0.0.1:11434/v1'; $env:OPENAI_API_KEY='ollama'; $env:OPENAI_MODEL={subscriptionModelName}; Set-Location {workingDirectory}; qwen --yolo -p (Get-Content -Raw {promptPath})"),
+            new WorkerProfile(WorkerProfile.QwenCodeCliName, "$env:OPENAI_BASE_URL={openaiBaseUrl}; $env:OPENAI_API_KEY={openaiApiKey}; $env:OPENAI_MODEL={subscriptionModelName}; Set-Location {workingDirectory}; qwen --bare --approval-mode {approvalMode} --input-format text"),
             // -p = headless print mode; without it Claude opens the interactive REPL and emits nothing (exits 0 empty, so the task is wrongly classified Failed). The prompt is piped via stdin and --session-id is appended by the spawn layer.
-            new WorkerProfile("claude-cli", "claude -p --model {subscriptionModelName} --permission-mode {permissionMode}")
+            new WorkerProfile("claude-cli", "claude -p --model {subscriptionModelName} --permission-mode {permissionMode}"),
+            new WorkerProfile("grok-cli", "grok --prompt-file {promptPath} --model {subscriptionModelName} --permission-mode {permissionMode} --cwd {workingDirectory} --output-format plain --no-subagents --verbatim --max-turns 32")
         ]);
     }
 }
@@ -497,7 +505,8 @@ public static class WorkerProfileStore
                       WorkerProfileDispatcher.OpenAiSubscriptionProfileName,
                       providers.Resolve(ProviderKind.OpenAICodexSpark).ProfileName,
                       providers.Resolve(ProviderKind.OpenAICodexOssCli).ProfileName,
-                      WorkerProfileDispatcher.AnthropicSubscriptionProfileName
+                      WorkerProfileDispatcher.AnthropicSubscriptionProfileName,
+                      WorkerProfileDispatcher.QwenCodeCliProfileName
                   })
         {
             var current = repaired.GetRequired(profileName);
@@ -540,6 +549,18 @@ public static class WorkerProfileStore
                 !profile.CommandTemplate.Contains("--cd", StringComparison.OrdinalIgnoreCase) ||
                 !profile.CommandTemplate.Contains("--model {subscriptionModelName}", StringComparison.OrdinalIgnoreCase) ||
                 profile.CommandTemplate.Contains("{promptPath}", StringComparison.OrdinalIgnoreCase);
+        }
+
+        if (provider.Identity.Kind is ProviderKind.OllamaQwenCodeCli)
+        {
+            return !profile.CommandTemplate.Contains("{openaiBaseUrl}", StringComparison.OrdinalIgnoreCase) ||
+                !profile.CommandTemplate.Contains("{openaiApiKey}", StringComparison.OrdinalIgnoreCase) ||
+                !profile.CommandTemplate.Contains("{approvalMode}", StringComparison.OrdinalIgnoreCase) ||
+                !profile.CommandTemplate.Contains("--bare", StringComparison.OrdinalIgnoreCase) ||
+                profile.CommandTemplate.Contains("11434", StringComparison.Ordinal) ||
+                profile.CommandTemplate.Contains("--yolo", StringComparison.OrdinalIgnoreCase) ||
+                profile.CommandTemplate.Contains("{promptPath}", StringComparison.OrdinalIgnoreCase) ||
+                profile.CommandTemplate.Contains("-p (Get-Content", StringComparison.OrdinalIgnoreCase);
         }
 
         return provider.Identity.Kind is ProviderKind.AnthropicClaudeCli &&

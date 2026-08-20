@@ -14,6 +14,17 @@ public sealed class ProviderDefaultTests
         Assert.Equal("http://ollama-host:11434", OllamaDefaults.ResolveBaseUrl(" http://ollama-host:11434 "));
     }
 
+    [Xunit.Fact(DisplayName = "LlamaCpp_default_base_url_avoids_localhost_ipv6_fallback")]
+    public void LlamaCppDefaultBaseUrlAvoidsLocalhostIpv6Fallback()
+    {
+        Assert.Equal("http://127.0.0.1:8080", LlamaCppDefaults.BaseUrl);
+        Assert.Equal(LlamaCppDefaults.BaseUrl, LlamaCppDefaults.ResolveBaseUrl(null));
+        Assert.Equal(LlamaCppDefaults.BaseUrl, LlamaCppDefaults.ResolveBaseUrl("  "));
+        Assert.Equal("http://llama-host:8080", LlamaCppDefaults.ResolveBaseUrl(" http://llama-host:8080 "));
+        Assert.Equal("http://127.0.0.1:8080/v1", LlamaCppDefaults.BuildOpenAiCompatibleBaseUrl(LlamaCppDefaults.BaseUrl));
+        Assert.Equal(32768, LlamaCppDefaults.ContextWindowTokens);
+    }
+
     [Xunit.Fact(DisplayName = "Provider_defaults_keep_openai_fallback_aligned_with_base_agent_model")]
     public void ProviderDefaultsKeepOpenAiFallbackAlignedWithBaseAgentModel()
     {
@@ -52,13 +63,14 @@ public sealed class ProviderDefaultTests
         var defaultTargets = ProviderSmokeRunner.ResolveProviderSmokeTargets(ProviderSmokeRunner.DefaultTarget);
 
         Assert.Equal("default", ProviderSmokeRunner.DefaultTarget);
-        Assert.Equal("Ollama", defaultTargets.Single());
+        Assert.Equal("LlamaCpp", defaultTargets.Single());
     }
 
     [Xunit.Fact(DisplayName = "Provider_smoke_identifies_paid_targets_that_need_confirmation")]
     public void ProviderSmokeIdentifiesPaidTargetsThatNeedConfirmation()
     {
         Assert.False(ProviderSmokeRunner.RequiresPaidConfirmation("ollama"));
+        Assert.False(ProviderSmokeRunner.RequiresPaidConfirmation("llamacpp"));
         Assert.False(ProviderSmokeRunner.RequiresPaidConfirmation(ProviderSmokeRunner.DefaultTarget));
         Assert.True(ProviderSmokeRunner.RequiresPaidConfirmation("openai"));
         Assert.True(ProviderSmokeRunner.RequiresPaidConfirmation("anthropic"));

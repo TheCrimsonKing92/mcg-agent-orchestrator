@@ -58,6 +58,7 @@ public static class OrchestratorHealthInspector
         {
             InspectProvider("OpenAI", "OPENAI_API_KEY", "codex", environment, commandExists),
             InspectProvider("Anthropic", "ANTHROPIC_API_KEY", "claude", environment, commandExists),
+            InspectLlamaCppProvider(environment),
             InspectOllamaProvider(environment)
         };
 
@@ -108,6 +109,31 @@ public static class OrchestratorHealthInspector
         return new ProviderConfigurationStatus(providerName, false, "Offline", $"{apiKeyName} is not set and '{localBridgeExecutable}' was not found; offline scripted provider will be used.");
     }
 
+    private static ProviderConfigurationStatus InspectLlamaCppProvider(IReadOnlyDictionary<string, string?> environment)
+    {
+        var baseUrl = LlamaCppDefaults.ResolveBaseUrl(
+            environment.TryGetValue("LLAMA_CPP_BASE_URL", out var url) ? url : null);
+
+        try
+        {
+            using var probe = new HttpClient { Timeout = TimeSpan.FromSeconds(5) };
+            var response = probe.GetAsync(LlamaCppDefaults.BuildOpenAiModelsUrl(baseUrl)).GetAwaiter().GetResult();
+            if (response.IsSuccessStatusCode)
+            {
+                var model = environment.TryGetValue("LLAMA_CPP_MODEL", out var m) && !string.IsNullOrWhiteSpace(m)
+                    ? m
+                    : LlamaCppDefaults.DefaultModelAlias;
+                return new ProviderConfigurationStatus("LlamaCpp", true, "LocalBridge", $"OpenAI-compatible local inference server is running at {baseUrl}; default model is '{model}'.");
+            }
+        }
+        catch
+        {
+            // Local inference server is not reachable.
+        }
+
+        return new ProviderConfigurationStatus("LlamaCpp", false, "Offline", $"OpenAI-compatible local inference server is not reachable at {baseUrl}.");
+    }
+
     private static ProviderConfigurationStatus InspectOllamaProvider(IReadOnlyDictionary<string, string?> environment)
     {
         var baseUrl = OllamaDefaults.ResolveBaseUrl(
@@ -138,8 +164,8 @@ public static class OrchestratorHealthInspector
     {
         var providersByName = providers.ToDictionary(provider => provider.ProviderName, StringComparer.OrdinalIgnoreCase);
         var profilesByName = workerProfiles.ToDictionary(profile => profile.Name, StringComparer.OrdinalIgnoreCase);
-        var localOllamaAvailable = providers.Any(provider =>
-            provider.ProviderName.Equals("Ollama", StringComparison.OrdinalIgnoreCase) &&
+        var localLlamaAvailable = providers.Any(provider =>
+            provider.ProviderName.Equals("LlamaCpp", StringComparison.OrdinalIgnoreCase) &&
             provider.IsConfigured &&
             provider.Mode.Equals("LocalBridge", StringComparison.OrdinalIgnoreCase));
         var roles = Enum.GetValues<AgentRole>();
@@ -202,7 +228,7 @@ public static class OrchestratorHealthInspector
                 subscriptionCapableAlternates.Count > 0,
                 BuildSubscriptionCapableAlternatesDetail(subscriptionCapableAlternates),
                 isValid,
-                BuildAgentValidationDetail(agent, provider, profileKnown ? profile : null, apiAllowed, subscriptionAllowed, profileName, localOllamaAvailable),
+                BuildAgentValidationDetail(agent, provider, profileKnown ? profile : null, apiAllowed, subscriptionAllowed, profileName, localLlamaAvailable),
                 agent.ComplexModel?.ProviderName,
                 agent.ComplexModel?.ModelName,
                 agent.ComplexModel?.MaxOutputTokens,
@@ -279,7 +305,7 @@ public static class OrchestratorHealthInspector
         bool apiAllowed,
         bool subscriptionAllowed,
         string? profileName,
-        bool localOllamaAvailable)
+        bool localLlamaAvailable)
     {
         var api = apiAllowed
             ? BuildApiValidationDetail(agent, provider)
@@ -287,13 +313,13 @@ public static class OrchestratorHealthInspector
         var subscription = subscriptionAllowed
             ? BuildSubscriptionValidationDetail(agent, profile, profileName)
             : "subscription execution disabled";
-        return $"{api}; {subscription}{BuildLocalModelRecommendation(agent, localOllamaAvailable)}.";
+        return $"{api}; {subscription}{BuildLocalModelRecommendation(agent, localLlamaAvailable)}.";
     }
 
-    private static string BuildLocalModelRecommendation(AgentDefinition agent, bool localOllamaAvailable)
+    private static string BuildLocalModelRecommendation(AgentDefinition agent, bool localLlamaAvailable)
     {
-        return localOllamaAvailable && IsPotentiallyPaidProvider(agent.Model.ProviderName)
-            ? "; local Ollama is available, consider switching this role to Ollama before paid work"
+        return localLlamaAvailable && IsPotentiallyPaidProvider(agent.Model.ProviderName)
+            ? "; local LlamaCpp is available, consider switching this role to LlamaCpp before paid work"
             : string.Empty;
     }
 
@@ -420,7 +446,9 @@ public static class OrchestratorHealthInspector
             name.Equals("codex-spark", StringComparison.OrdinalIgnoreCase) ||
             name.Equals("codex-oss-cli", StringComparison.OrdinalIgnoreCase) ||
             name.Equals("qwen-code-cli", StringComparison.OrdinalIgnoreCase) ||
-            name.Equals("claude-cli", StringComparison.OrdinalIgnoreCase);
+            name.Equals("claude-cli", StringComparison.OrdinalIgnoreCase) ||
+            name.Equals("grok-cli", StringComparison.OrdinalIgnoreCase) ||
+            name.Equals("llama-server-cli", StringComparison.OrdinalIgnoreCase);
     }
 
     private static bool IsDiagnosticEchoProfile(string name)

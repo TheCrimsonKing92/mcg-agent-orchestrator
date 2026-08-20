@@ -6822,7 +6822,31 @@ public sealed class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
                 : TranslateMtpFilter(filter));
         }
 
+        // MTP execution does not go through BuildDotnetTestArguments. Unattended dashboard /
+        // full-suite checks often have no --filter in Arguments, so HostIntegration must be
+        // excluded here to match discovery.
+        if (NeedsUnattendedHostIntegrationExclusion(check) &&
+            !HasMtpTraitExclusion(args, "Category=HostIntegration"))
+        {
+            args.Add("--filter-not-trait");
+            args.Add("Category=HostIntegration");
+        }
+
         return UseDotnetHostForManagedExecutable(args);
+    }
+
+    private static bool HasMtpTraitExclusion(IReadOnlyList<string> arguments, string trait)
+    {
+        for (var index = 0; index < arguments.Count - 1; index++)
+        {
+            if (arguments[index].Equals("--filter-not-trait", StringComparison.OrdinalIgnoreCase) &&
+                arguments[index + 1].Equals(trait, StringComparison.OrdinalIgnoreCase))
+            {
+                return true;
+            }
+        }
+
+        return false;
     }
 
     private static string[] UseDotnetHostForManagedExecutable(IReadOnlyList<string> arguments) =>

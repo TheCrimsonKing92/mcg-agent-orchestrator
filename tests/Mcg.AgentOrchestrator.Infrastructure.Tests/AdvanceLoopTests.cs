@@ -1205,7 +1205,7 @@ private static AgentDefinition CreateSubscriptionAgent(AgentRole role)
         goal);
 
     Assert.True(promptCharacters > 6000);
-    Assert.True(promptCharacters <= PaidPromptThresholds.ComplexPaidPrompt);
+    Assert.True(promptCharacters <= PaidPromptThresholds.AnomalyPromptThreshold(TaskComplexity.Complex, usesComplexModel: true));
     Assert.True(blocked.Executed);
     Assert.True(blocked.StepCount > 0);
     Assert.False(blocked.StopReason.Contains("--confirm-large-paid-subscription-start", StringComparison.Ordinal));

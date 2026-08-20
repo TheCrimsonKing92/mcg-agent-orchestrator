@@ -111,7 +111,8 @@ public static AgentDefinition CreateAgentDefinition(AgentSubmissionDto submissio
 
 private static SubscriptionMode DefaultSubscriptionMode(string providerName)
 {
-    return providerName.Equals("Ollama", StringComparison.OrdinalIgnoreCase)
+    return providerName.Equals("Ollama", StringComparison.OrdinalIgnoreCase) ||
+        providerName.Equals("LlamaCpp", StringComparison.OrdinalIgnoreCase)
         ? SubscriptionMode.LocalBridge
         : SubscriptionMode.ApiKey;
 }
@@ -153,6 +154,16 @@ private static string? DefaultSubscriptionProfileName(string providerName, Agent
         return WorkerProfileDispatcher.OllamaSubscriptionProfileName;
     }
 
+    if (providerName.Equals("xAI", StringComparison.OrdinalIgnoreCase))
+    {
+        return WorkerProfileDispatcher.XaiSubscriptionProfileName;
+    }
+
+    if (providerName.Equals("LlamaCpp", StringComparison.OrdinalIgnoreCase))
+    {
+        return WorkerProfileDispatcher.LlamaCppSubscriptionProfileName;
+    }
+
     return null;
 }
 
@@ -166,6 +177,16 @@ private static string? DefaultSubscriptionModelAlias(string providerName, AgentE
     if (providerName.Equals("OpenAI", StringComparison.OrdinalIgnoreCase))
     {
         return AgentCatalog.OpenAiSubscriptionModelAlias;
+    }
+
+    if (providerName.Equals("xAI", StringComparison.OrdinalIgnoreCase))
+    {
+        return "grok-4.6";
+    }
+
+    if (providerName.Equals("LlamaCpp", StringComparison.OrdinalIgnoreCase))
+    {
+        return LlamaCppDefaults.DefaultModelAlias;
     }
 
     // Anthropic API model ids are valid claude CLI model names, so the CLI uses the
@@ -227,7 +248,8 @@ private static ModelProfile? DefaultComplexModel(string providerName)
 private static bool IsPaidProvider(string providerName)
 {
     return providerName.Equals("OpenAI", StringComparison.OrdinalIgnoreCase) ||
-        providerName.Equals("Anthropic", StringComparison.OrdinalIgnoreCase);
+        providerName.Equals("Anthropic", StringComparison.OrdinalIgnoreCase) ||
+        providerName.Equals("xAI", StringComparison.OrdinalIgnoreCase);
 }
 
 public static WorkerProfileSubmissionDto ParseWorkerProfileSubmission(string body)

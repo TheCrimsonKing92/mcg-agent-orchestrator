@@ -77,13 +77,32 @@ public sealed class ProviderCommandBuilderParityTests
         var promptRoot = Path.Combine(
             Path.GetTempPath(),
             $"provider-command-builder-{Guid.NewGuid():N}");
+        string? openaiBaseUrl = LlamaCppDefaults.BuildOpenAiCompatibleBaseUrl(LlamaCppDefaults.BaseUrl);
+        string? openaiApiKey = LlamaCppDefaults.OpenAiApiKey;
+        string? approvalMode = isWriteCapable ? "yolo" : "plan";
+        if (valueState == "blank")
+        {
+            openaiBaseUrl = string.Empty;
+            openaiApiKey = string.Empty;
+            approvalMode = string.Empty;
+        }
+        else if (valueState == "null")
+        {
+            openaiBaseUrl = null;
+            openaiApiKey = null;
+            approvalMode = null;
+        }
+
         var variables = new Dictionary<string, string?>
         {
             ["subscriptionModelName"] = modelAlias,
             ["subscriptionReasoningEffort"] = reasoningEffort,
             ["permissionMode"] = permissionMode,
             ["sandboxMode"] = sandboxMode,
-            ["workingDirectory"] = workingDirectory
+            ["workingDirectory"] = workingDirectory,
+            ["openaiBaseUrl"] = openaiBaseUrl,
+            ["openaiApiKey"] = openaiApiKey,
+            ["approvalMode"] = approvalMode
         };
 
         try
@@ -118,6 +137,28 @@ public sealed class ProviderCommandBuilderParityTests
                 Directory.Delete(promptRoot, recursive: true);
             }
         }
+    }
+
+    [Xunit.Fact(DisplayName = "ProviderCommandBuilder_qwen_reads_prompt_from_stdin")]
+    public void ProviderCommandBuilderQwenReadsPromptFromStdin()
+    {
+        var command = string.Join(
+            ' ',
+            ProviderCommandBuilder.Build(
+                ProviderKind.OllamaQwenCodeCli,
+                "qwen3.6-35b-a3b",
+                reasoningEffort: null,
+                resolvedPermissionMode: "bypassPermissions",
+                resolvedSandboxMode: "workspace-write",
+                workingDirectory: @"C:\worker repo",
+                openaiBaseUrl: "http://127.0.0.1:8080/v1",
+                openaiApiKey: "llamacpp",
+                approvalMode: "yolo"));
+
+        Assert.Contains("--input-format text", command, StringComparison.Ordinal);
+        Assert.DoesNotContain("-p", command, StringComparison.Ordinal);
+        Assert.DoesNotContain("Get-Content", command, StringComparison.Ordinal);
+        Assert.DoesNotContain("{promptPath}", command, StringComparison.Ordinal);
     }
 
     [Xunit.Fact(DisplayName = "ProviderCommandBuilder_appends_optional_claude_session_id")]

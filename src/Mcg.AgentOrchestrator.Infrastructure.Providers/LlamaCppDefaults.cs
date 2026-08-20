@@ -1,18 +1,19 @@
 namespace Mcg.AgentOrchestrator.Infrastructure;
 
-public static class OllamaDefaults
+public static class LlamaCppDefaults
 {
-    // 127.0.0.1 rather than localhost: Windows resolves localhost through an
-    // IPv6 attempt first, and the fallback to IPv4 can exceed reachability
-    // probe timeouts while Ollama listens on IPv4 only.
-    public const string BaseUrl = "http://127.0.0.1:11434";
+    public const string BaseUrl = "http://127.0.0.1:8080";
     public const string OpenAiCompatiblePath = "/v1";
     public const string OpenAiModelsPath = "/v1/models";
-    public const string OpenAiApiKey = "ollama";
+    public const string OpenAiApiKey = "llamacpp";
+    public const string DefaultModelAlias = "qwen3.6-35b-a3b";
+
+    // Live llama-server on this box is started with `-c 32768`.
+    public const int ContextWindowTokens = 32768;
 
     public static string ResolveBaseUrl()
     {
-        return ResolveBaseUrl(Environment.GetEnvironmentVariable("OLLAMA_BASE_URL"));
+        return ResolveBaseUrl(Environment.GetEnvironmentVariable("LLAMA_CPP_BASE_URL"));
     }
 
     public static string ResolveBaseUrl(string? configured)

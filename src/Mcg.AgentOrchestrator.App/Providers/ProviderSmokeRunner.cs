@@ -98,11 +98,12 @@ public static IReadOnlyList<string> ResolveProviderSmokeTargets(string target)
     return target.ToLowerInvariant() switch
     {
         "default" => ResolveDefaultProviderSmokeTargets(),
-        "all" => ["OpenAI", "Anthropic", "Ollama"],
+        "all" => ["OpenAI", "Anthropic", "LlamaCpp"],
         "openai" => ["OpenAI"],
         "anthropic" => ["Anthropic"],
+        "llamacpp" => ["LlamaCpp"],
         "ollama" => ["Ollama"],
-        _ => throw new ArgumentException("Usage: provider-smoke [openai|anthropic|ollama] [--confirm-paid-smoke] [task-number]; omit the target for local Ollama only; use provider-smoke all --confirm-all only for deliberate broad checks.")
+        _ => throw new ArgumentException("Usage: provider-smoke [openai|anthropic|llamacpp] [--confirm-paid-smoke] [task-number]; omit the target for local LlamaCpp only; use provider-smoke all --confirm-all only for deliberate broad checks.")
     };
 }
 
@@ -115,28 +116,29 @@ public static bool RequiresPaidConfirmation(string target)
 public static bool IsPaidProviderName(string providerName)
 {
     return providerName.Equals("OpenAI", StringComparison.OrdinalIgnoreCase) ||
-        providerName.Equals("Anthropic", StringComparison.OrdinalIgnoreCase);
+        providerName.Equals("Anthropic", StringComparison.OrdinalIgnoreCase) ||
+        providerName.Equals("xAI", StringComparison.OrdinalIgnoreCase);
 }
 
 public static string BuildPaidSmokeConfirmationMessage(string confirmFlag)
 {
-    return $"Paid provider smoke requires {confirmFlag} because it can make a live billable request. Use the default local Ollama smoke first; add {confirmFlag} only after deciding a paid smoke request is necessary.";
+    return $"Paid provider smoke requires {confirmFlag} because it can make a live billable request. Use the default local LlamaCpp smoke first; add {confirmFlag} only after deciding a paid smoke request is necessary.";
 }
 
 public static string BuildBroadSmokeConfirmationMessage(string confirmFlag)
 {
-    return $"Smoking all providers requires {confirmFlag} because broad paid smoke tests are deliberate. Use the default local Ollama smoke first, or target one paid provider with explicit paid-smoke confirmation.";
+    return $"Smoking all providers requires {confirmFlag} because broad paid smoke tests are deliberate. Use the default local LlamaCpp smoke first, or target one paid provider with explicit paid-smoke confirmation.";
 }
 
 private static IReadOnlyList<string> ResolveDefaultProviderSmokeTargets()
 {
-    return ["Ollama"];
+    return ["LlamaCpp"];
 }
 
 private static string NoProviderSmokeRanMessage(string target)
 {
     return target.Equals(DefaultTarget, StringComparison.OrdinalIgnoreCase)
-        ? "Provider smoke did not run. Local Ollama was not reachable; use provider-smoke openai --confirm-paid-smoke or provider-smoke anthropic --confirm-paid-smoke for an explicit paid smoke."
+        ? "Provider smoke did not run. Local LlamaCpp was not reachable; use provider-smoke openai --confirm-paid-smoke or provider-smoke anthropic --confirm-paid-smoke for an explicit paid smoke."
         : "Provider smoke did not run. Configure the selected provider, then retry.";
 }
 
@@ -171,6 +173,34 @@ public static bool TryCreateLiveProvider(string providerName, out IModelProvider
 
         modelName = Environment.GetEnvironmentVariable("ANTHROPIC_MODEL") ?? ProviderModelDefaults.Anthropic;
         provider = new AnthropicMessagesModelProvider(ProviderHttpClientFactory.CreateAnthropicClient(), key, modelName);
+        return true;
+    }
+
+    if (providerName.Equals("LlamaCpp", StringComparison.OrdinalIgnoreCase))
+    {
+        var baseUrl = LlamaCppDefaults.ResolveBaseUrl();
+        modelName = Environment.GetEnvironmentVariable("LLAMA_CPP_MODEL") ?? LlamaCppDefaults.DefaultModelAlias;
+
+        try
+        {
+            using var probe = new HttpClient { Timeout = TimeSpan.FromSeconds(3) };
+            var check = probe.GetAsync(LlamaCppDefaults.BuildOpenAiModelsUrl(baseUrl)).GetAwaiter().GetResult();
+            if (!check.IsSuccessStatusCode)
+            {
+                detail = $"OpenAI-compatible local inference server not reachable at {baseUrl}";
+                return false;
+            }
+        }
+        catch
+        {
+            detail = $"OpenAI-compatible local inference server not reachable at {baseUrl}";
+            return false;
+        }
+
+        provider = new ChatCompletionsModelProvider(
+            ProviderHttpClientFactory.CreateLlamaCppClient(baseUrl),
+            modelName,
+            "LlamaCpp");
         return true;
     }
 

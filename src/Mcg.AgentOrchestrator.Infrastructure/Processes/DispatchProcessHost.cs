@@ -440,6 +440,7 @@ public static class DispatchProcessHost
     {
         startInfo.Environment.Remove("CODEX_HOME");
         startInfo.Environment.Remove("CLAUDE_CONFIG_DIR");
+        startInfo.Environment.Remove("GROK_HOME");
 
         if (provider == WorkerSandboxProvider.Codex)
         {
@@ -458,6 +459,12 @@ public static class DispatchProcessHost
                 stderrPath,
                 anthropicApiKeyAccessor,
                 claudeCredentialDirectoryAccessor);
+            return;
+        }
+
+        if (provider == WorkerSandboxProvider.Grok)
+        {
+            SeedGrokEnvironment(startInfo, sandboxRoot, stderrPath);
         }
     }
 
@@ -1046,6 +1053,48 @@ public static void DropToLow() {
         }
         catch { /* best-effort */ }
     }
+
+    internal static void SeedGrokEnvironment(
+        ProcessStartInfo startInfo,
+        string sandboxRoot,
+        string? stderrPath = null,
+        Func<string>? grokHomeDirectoryAccessor = null)
+    {
+        var grokHome = Path.Combine(sandboxRoot, "grok-home");
+        Directory.CreateDirectory(grokHome);
+
+        var userGrokDir = (grokHomeDirectoryAccessor ?? ResolveGrokHomeDirectory)();
+        var seededAuth = false;
+        foreach (var fileName in new[] { "auth.json", "config.toml", "trusted_folders.toml" })
+        {
+            try
+            {
+                var source = Path.Combine(userGrokDir, fileName);
+                if (File.Exists(source))
+                {
+                    File.Copy(source, Path.Combine(grokHome, fileName), overwrite: true);
+                    seededAuth = seededAuth || fileName == "auth.json";
+                }
+            }
+            catch
+            {
+                // Best-effort seed; a missing auth file is reported below.
+            }
+        }
+
+        if (!seededAuth && !string.IsNullOrWhiteSpace(stderrPath))
+        {
+            AppendDispatchStderrDiagnostic(
+                stderrPath,
+                "Grok worker sandbox diagnostic: no auth.json was found to seed into GROK_HOME; Grok may fail to authenticate.");
+        }
+
+        startInfo.Environment["GROK_HOME"] = grokHome;
+        startInfo.Environment["GROK_DISABLE_AUTOUPDATER"] = "1";
+    }
+
+    private static string ResolveGrokHomeDirectory() =>
+        Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.UserProfile), ".grok");
 
     /// <summary>Entry point for the detached <c>__dispatch-run &lt;paramsPath&gt;</c> subcommand.</summary>
     public static int Run(string parametersPath)
@@ -1865,7 +1914,7 @@ public static void DropToLow() {
     }
 
     internal static bool ShouldWritePromptToStdin(DispatchRunParameters parameters) =>
-        parameters.Provider is WorkerSandboxProvider.Claude or WorkerSandboxProvider.Codex &&
+        parameters.Provider is WorkerSandboxProvider.Claude or WorkerSandboxProvider.Codex or WorkerSandboxProvider.Ollama &&
         !string.IsNullOrWhiteSpace(parameters.PromptPath);
 
     internal static void WritePromptToWorkerStdin(Process worker, DispatchRunParameters parameters)
@@ -1877,6 +1926,10 @@ public static void DropToLow() {
                 WriteUtf8PromptToStream(parameters.PromptPath!, worker.StandardInput.BaseStream);
                 worker.StandardInput.Flush();
             }
+        }
+        catch (IOException)
+        {
+            // The worker can exit before the prompt copy finishes. Drain/exit handling records that.
         }
         finally
         {

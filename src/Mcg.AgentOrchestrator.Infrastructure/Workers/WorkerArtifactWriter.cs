@@ -1204,6 +1204,7 @@ internal sealed class WorkerArtifactWriter
     {
         return role switch
         {
+            AgentRole.Ideation => "Rank evidence-backed proposals; do not modify repository files.",
             AgentRole.Planner => "Clarify approach, sequencing, risks, and handoff decisions; do not modify repository files.",
             AgentRole.Researcher => "Inspect source and report evidence-backed findings; do not modify repository files.",
             AgentRole.Developer => "Implement scoped source changes and verify them with repository-local commands.",

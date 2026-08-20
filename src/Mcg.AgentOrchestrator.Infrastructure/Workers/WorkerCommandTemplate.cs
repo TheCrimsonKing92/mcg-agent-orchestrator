@@ -130,7 +130,7 @@ public static partial class WorkerCommandTemplate
 
         throw new InvalidOperationException(
             $"Worker command template for '{workerName}' left unresolved template variable(s): {string.Join(", ", variables)}. " +
-            "Supported generic variables are {promptPath}, {goalId}, {taskId}, {role}, {title}, {workingDirectory}, {sandboxMode}, and {permissionMode}; " +
+            "Supported generic variables are {promptPath}, {goalId}, {taskId}, {role}, {title}, {workingDirectory}, {sandboxMode}, {permissionMode}, {approvalMode}, {openaiBaseUrl}, and {openaiApiKey}; " +
             "subscription variables such as {subscriptionModelName} and {subscriptionReasoningEffort} are supplied only by subscription-dispatch or by profile-dispatch when the selected profile matches the assigned subscription agent.");
     }
 

@@ -31,9 +31,15 @@ internal static class GoalRefinementWorkCoordinator
     private const int ReceiptVersion = 1;
     private static readonly JsonSerializerOptions JsonOptions = new(JsonSerializerDefaults.Web);
     private static readonly ConcurrentDictionary<string, DateTimeOffset> RecoveryLaunches = new(StringComparer.Ordinal);
-    private static readonly TimeSpan RecoveryLaunchCadence = TimeSpan.FromMinutes(15);
+    internal static readonly TimeSpan RecoveryLaunchCadence = TimeSpan.FromMinutes(15);
+    internal const string CadenceDeferredDetail = "executor-launch-deferred-cadence";
 
     internal static Func<OrchestratorWorkspace, GoalId, GoalRefinementWorkLaunchResult>? LaunchOverride { get; set; }
+    internal static Func<DateTimeOffset>? UtcNowOverride { get; set; }
+
+    internal static void ResetRecoveryLaunchesForTests() => RecoveryLaunches.Clear();
+
+    private static DateTimeOffset UtcNow() => UtcNowOverride?.Invoke() ?? DateTimeOffset.UtcNow;
 
     public static OrchestratorStateOutboxMessage CreateMessage(GoalId goalId) =>
         new(
@@ -156,6 +162,39 @@ internal static class GoalRefinementWorkCoordinator
         return new GoalRefinementWorkProcessResult(goalId.Value, claimed, attached);
     }
 
+    public static bool TryEnsurePendingOutbox(OrchestratorWorkspace workspace, GoalId goalId)
+    {
+        var message = CreateMessage(goalId);
+        var inserted = false;
+        if (StateDbWriteSession.TryExecute(
+                workspace.SqliteStatePath,
+                connection => inserted = SqliteOrchestratorStateRepository.TryInsertOutboxMessageIfMissing(
+                    connection,
+                    message)))
+        {
+            return inserted;
+        }
+
+        return EnsurePendingOutboxOn(
+            new SqliteOrchestratorStateRepository(workspace.SqliteStatePath),
+            goalId);
+    }
+
+    public static GoalRefinementWorkLaunchResult TryLaunchIfDue(OrchestratorWorkspace workspace, GoalId goalId)
+    {
+        var now = UtcNow();
+        if (RecoveryLaunches.TryGetValue(goalId.Value, out var lastLaunch) &&
+            now - lastLaunch < RecoveryLaunchCadence)
+        {
+            return new GoalRefinementWorkLaunchResult(false, null, CadenceDeferredDetail);
+        }
+
+        var launch = TryLaunch(workspace, goalId);
+        if (launch.Started)
+            RecoveryLaunches[goalId.Value] = now;
+        return launch;
+    }
+
     public static GoalRefinementWorkLaunchResult TryLaunch(OrchestratorWorkspace workspace, GoalId goalId)
     {
         if (LaunchOverride is { } launchOverride)
@@ -207,26 +246,44 @@ internal static class GoalRefinementWorkCoordinator
     {
         var pending = repository.ListOutboxMessagesAsync(OutboxKind).GetAwaiter().GetResult().FirstOrDefault();
         if (pending is null)
-            return;
+        {
+            var kernel = repository.LoadAsync().GetAwaiter().GetResult();
+            foreach (var goal in kernel.Goals.Where(HasPendingWork))
+                EnsurePendingOutboxOn(repository, goal.Id);
+
+            pending = repository.ListOutboxMessagesAsync(OutboxKind).GetAwaiter().GetResult().FirstOrDefault();
+            if (pending is null)
+                return;
+        }
 
         try
         {
             var receipt = Deserialize(pending);
-            var now = DateTimeOffset.UtcNow;
-            if (RecoveryLaunches.TryGetValue(receipt.GoalId, out var lastLaunch) &&
-                now - lastLaunch < RecoveryLaunchCadence)
-            {
-                return;
-            }
-
-            var launch = TryLaunch(workspace, new GoalId(receipt.GoalId));
-            if (launch.Started)
-                RecoveryLaunches[receipt.GoalId] = now;
+            _ = TryLaunchIfDue(workspace, new GoalId(receipt.GoalId));
         }
         catch (JsonException)
         {
             // The processing path quarantines poison receipts. Recovery launch must stay non-blocking.
         }
+    }
+
+    private static bool EnsurePendingOutboxOn(
+        IOrchestratorStateOutboxRepository repository,
+        GoalId goalId)
+    {
+        var messageId = MessageId(goalId);
+        var existing = repository.ListOutboxMessagesAsync(OutboxKind).GetAwaiter().GetResult();
+        if (existing.Any(message => message.Id.Equals(messageId, StringComparison.Ordinal)))
+            return false;
+
+        repository.TransactWithOutboxAsync(
+                (_, _) => Task.FromResult((
+                    ShouldSave: false,
+                    Result: true,
+                    OutboxMessages: (IReadOnlyList<OrchestratorStateOutboxMessage>)[CreateMessage(goalId)])))
+            .GetAwaiter()
+            .GetResult();
+        return true;
     }
 
     private static string SingleLine(string value) =>

@@ -1,6 +1,6 @@
 # Orchestrator Handoff
 
-**Updated:** 2026-08-07 by Claude. Live status, not durable policy — verify before mutating.
+**Updated:** 2026-08-19 by Grok. Live status, not durable policy — verify before mutating.
 
 ## HOW TO READ THIS FILE — folklore warning
 
@@ -21,7 +21,602 @@ Rules for using and maintaining this file:
 - **Durable lessons belong in `### Operating lessons worth keeping`; live state belongs in the top
   section.** Everything else is history.
 
-## RESUME HERE — orchestrator deliberately wound down 2026-08-07 01:13 UTC
+## RESUME HERE — 2026-08-20 05:00 UTC, board running, gate blocked by ~14 red tests on main
+
+**THE ONE THING TO KNOW: the acceptance gate is unpassable for every goal**, because main carries
+roughly fourteen failing tests. This is not a per-goal quality problem — three unrelated candidates
+failed their gates on the same set tonight, including one whose diff is **docs and tests only, zero
+source**, which proves the reds are on main. Two goals now cover them and **both must land** before
+anything else can:
+
+| Goal | Covers | State at handoff |
+|---|---|---|
+| `4fa6af44` | the six Planner-contract reds | Reviewer, final step; root cause fixed and verified green |
+| `c30eb2fe` | the eight local-provider reds (backlog `7009ffbd`) | Developer, just intaken |
+
+`4fa6af44`'s root cause is worth keeping: `MarkdownHeadingNormalizer`'s `(?m)(?<=\S)(#{1,6}[ \t]+\S)`
+demoted a start-of-line `## Heading` to `# Heading`, because the first `#` satisfied the lookbehind.
+One product bug behind all five reds. Fixed in `c85b9bdc`, confirmed by a focused receipt: 26 tests
+executed, passed.
+
+`c30eb2fe`'s eight cluster around local provider routing and are **hypothesised** (not diagnosed) to be
+stale Ollama expectations after the LlamaCpp switch. Verify before fixing.
+
+**How that was nearly missed, and the lesson.** The first read of a failing gate said "worker profiles:
+failed: 1". That came from grepping two of roughly twenty lane receipts. Always sweep every lane:
+
+```
+grep -oh 'testName="[^"]*"[^>]*outcome="Failed"' <attempt-dir>/<attempt-id>.*.trx | grep -o 'testName="[^"]*"' | sort -u
+```
+
+**Roster: codex is back on Developer** (`openai-developer`, `gpt-5.6-sol`, `codex-cli`, medium). Verify
+which harness actually ran by the prompt filename suffix (`-codex-cli.md` / `-grok-cli.md`) or the
+`Dispatched to ...` reason — **not** by `agents` output or `status`, both of which lied all evening. See
+backlog `fd4a5ed5`: a roster change and a `reassign-agent` can both report success and never reach
+dispatch.
+
+**Five defects filed tonight, all orchestrator-side, all cost real rounds:**
+
+| Id | Defect |
+|---|---|
+| `9a9c7e8e` | a rejected focused-evidence request is replayed verbatim forever; burned 16 retries on `21b284a0`. Trigger is **multi-selection** requests only — a single selection works |
+| `2861b909` | operator text in `recover`/`retry --text-file` is recorded, reports `Applied`, and never reaches the prompt when the retry counter is not yet engaged |
+| `fd4a5ed5` | `agent`/`agent-add` leave the subscription alias stale, and task agent assignments revert silently |
+| `9fbce159` | the Planner contract rejects `File.cs:442-479`; a line range discards the whole plan. Mitigated for future Planners by `045930f8` |
+| `7009ffbd` | the eight local-provider reds above |
+
+**Operating notes that saved or cost time tonight** — all now in `docs/operator-runbook.md`:
+verify a conductor rebuild with `App.dll.git-head` vs `git rev-parse HEAD` (run-dir hash proves nothing;
+handoff rebuilds are intermittent); never grep a .NET assembly for a string you added (UTF-16, gives
+false negatives on strings that are demonstrably present); put worker guidance in the **brief**, not a
+recover note; and front-load numbers in operator notes because truncation eats the middle.
+
+Prior section follows.
+
+## RESUME HERE — 2026-08-20 00:38 UTC, loop RELAUNCHED (was wound down after a LlamaCpp Tester 400)
+
+**UPDATE 2026-08-19/20 — board ran unattended, roster changed, loop relaunched.** While Claude and
+Codex were rate-limited the board kept working: **58 commits landed, 14 of them goal integrations**.
+Main is now `093a389b`. The loop was deliberately stopped and has been relaunched (conductor pid
+1096804, lock claimed 00:37:58Z).
+
+**Worker roster now:**
+
+| Role | Model | Harness |
+|---|---|---|
+| Planner | Anthropic `claude-opus-5` | `claude-cli` |
+| Researcher | xAI `grok-4.6` | `grok-cli` |
+| Developer | xAI `grok-4.6` | `grok-cli` |
+| Tester | xAI `grok-4.6` (id `xai-tester`) | `grok-cli` |
+| Reviewer | Anthropic `claude-opus-5` | `claude-cli` |
+| Ideation | LlamaCpp `qwen3.6-35b-a3b` | `qwen-code-cli` |
+
+Planner was deliberately moved to Anthropic because its output feeds Developer, Tester **and**
+Reviewer — a weak plan is the one defect that compounds through every downstream role. Changes were
+made with the `agent <role> <provider> <model>` verb, not by hand-editing `agents.json`.
+
+**CODEX QUOTA RESETS 22:29 CDT 2026-08-19 (03:29 UTC 2026-08-20) — reintegrate codex for Developer
+then.**
+
+**Local inference (qwen-code + llama-server): works for Planner-class roles, Tester failed 6 of 6 and
+has never once succeeded.** Root cause measured rather than guessed:
+
+- A Tester dispatch baseline is **~10,906 tokens**, of which **~8,671 is qwen-code's own startup**
+  even with `--bare` (confirmed by api_response telemetry and independently by the README).
+- Tool-result accumulation pushed real requests to **33,060** and **40,603** against a **32,768**
+  context. One missed by only 292 tokens.
+- The orchestrator owns only ~2,400 of those tokens, so **shrinking prompts cannot fix this** — the
+  bloat is qwen-code's own conversation growth, which the orchestrator does not manage.
+- All 6 dispatches were the same worst-case task (build a csproj and run MTP tests). **The normal
+  deferring Tester has never been tried**, and would have ~21k headroom.
+
+**Recommended path: `evidence_request`.** The Tester emits
+`evidence_request:{selections:[{test_project,test_class}]}` and the conductor runs the tests
+instead. Already implemented and proven on the Reviewer path (`mode=focused
+reason=explicit-focused-mapping`). It removes both failure classes at once — no shell composition, so
+no POSIX-on-Windows or MTP-filter errors, and zero test output in the model's context.
+
+Fixed this session in commit `74857b14`: worker prompts now state the host is Windows (the prompt had
+**zero** platform mentions, and the model reached for POSIX `printf` three times), and the Tester
+requirements now name `Invoke-TestSummary.ps1` plus the required `FullyQualifiedName~Class` filter
+syntax. Verified 66/66 on `TaskBrief` tests.
+
+Open: `scripts/Start-LlamaServer.ps1` still defaults to `-c 16384`, which cannot fit a Tester after an
+8,671-token startup — under review. Prompt reprocessing also dominates latency: a real dispatch took
+`duration_ms 142923` for 10,906 input tokens, so the constant startup prefix is a KV-cache-reuse
+candidate.
+
+
+The orchestrator is deliberately stopped at a clean quiet boundary. Repo-root `.conduct-stop` is
+present; `LOOP_STOP tick=29 rechecks=144 reason=stop-while-idle` was recorded at 23:49:36Z; former
+conductor PID `834896` (host `857764`, cmd `767572`) is gone; lock file gone; inventory found no
+orchestrator lock-holders and the build lock FREE. **Do not remove the marker or relaunch until the
+operator resumes.** No goal-intake command was run after this stop.
+
+Main is `093a389b` — charge qwen-code startup tokens to the worker profile, not LlamaCpp. Live llama-server
+was last observed at `127.0.0.1:8080` with `-c 32768 -ngl 99 -ncmoe 26` on `qwen3.6-35b-a3b`; verify
+before a LlamaCpp dispatch. Anthropic Reviewer is `claude-opus-5`. Usage was reset this session.
+
+Landed this session (already on the incumbent that just stopped): `d3240da1` grok heading normalizer;
+`ca5014f1` / `28982f8d` qwen-code prompt on stdin (not argv / not `Get-Content`); `5ca93490` always
+`--filter-not-trait Category=HostIntegration` on unattended MTP; `3e572472` then `093a389b` LlamaCpp
+window 32768 minus qwen-code `--bare` tax 8700 on the **profile**, not the provider.
+
+### Parked goals — do not unpark as a set
+
+| goal | state | do |
+|---|---|---|
+| `e8351d7c` | Parked. Developer completed (`dfd73332`, one comment). Tester Failed. | Unpark only after the 32k brief/system-prompt change below. Retry Tester **once**. |
+| `6241ed3f` | Parked. Product `8d09516d` (typed drain policy) independently looks good. Last FullSuite failed the same 11 tests twice. | Do not land. Diagnose the 11 (lifecycle ×2, process-spawning budget test, Remainder 8) separately. Do not re-dispatch its Tester or Developer. |
+| `ab933e32` | Parked. Researcher Failed heading contract twice (`…111635…`, `…211122…`). | Do **not** cancel. Do **not** third-retry the heading axis via feedback. |
+| `b54b2d92` | Parked. Duplicate of the drain-policy work. | Do **not** recover. |
+| `9f64cd98` | still AcceptanceFailed from the 08-18 handoff | Do **not** create a second retry. |
+| `d6569ca1` | Cancelled/abandoned smoke | Leave it. |
+
+### LlamaCpp Tester — launch is validated; completion is not
+
+`e8351d7c` was the true file-touching Tester run (not `verify-manual`). Dispatch was
+`qwen --bare --approval-mode yolo --input-format text` against the live 32768 server. Brief was 9644
+bytes. Receipts:
+
+| probe | prompt tokens | result |
+|---|---|---|
+| empty dir, `--bare`, “say ok” | **8017** | works |
+| worktree + real Tester brief, `--bare --max-tool-calls 0` | **10906** | first request fits |
+| live Tester, tools allowed | **40603** | `400 request exceeds 32768` |
+
+Hook-up that is done: Windows argv, stdin, `--bare`, LlamaCpp 32768, profile tax 8700. The 400 is
+**later-request tool growth**. The shared brief still says “read digest.md first” and to use
+source-survey; those files plus `AGENTS.md` (~30k bytes) are what blew the session. **Do not “fix”
+this with `--exclude-tools read_file`** — filesystem access is the intended model. Next change:
+stop instructing a 32k Tester to ingest digest / source-survey / AGENTS; keep `read_file` and
+`run_shell_command`. Then unpark `e8351d7c` and retry Tester once. Pass only on: process exit, MTP
+counts ≠ 0, no 400, no `verify-manual`.
+
+`--pipeline five-role` through `Invoke-OrchestratorCommand.ps1` never reaches the CLI:
+`CmdletBinding` binds `--pipeline` to `-PipelineVariable`. Three intakes (`44a6563a`, `8d88ade3`,
+`e8351d7c`) created automatic Developer+Reviewer (`isOverride:false`). The Tester task was added
+with `add-task --goal e8351d7c Tester --text-file … --before-role Reviewer`. Until that wrapper is
+fixed, force five-role via `mcg-orchestrator.cmd` directly, or `add-task`.
+
+### At resume
+
+1. Do the Tester brief/system-prompt change (or an equivalent that keeps FS tools) **before**
+   unparking `e8351d7c`.
+2. Leave `6241ed3f` / `ab933e32` / `b54b2d92` parked unless the operator names one.
+3. Delete `.conduct-stop`, then
+   `.\scripts\Invoke-RepoScript.ps1 scripts\Start-OrchestratorCommand.ps1 -Name <batch> conduct --loop --watch --policy Permissive --poll-seconds 15 --max-duration 3600`
+   with no `-AppDll`.
+
+## ~~RESUME HERE — 2026-08-18 05:50 UTC, deliberately wound down after usage exhaustion~~ — **SUPERSEDED by the 2026-08-19 23:49 UTC wind-down above** (re-checked 2026-08-19: conductor was relaunched and stopped again; several of the “no implementation goals” children below were later created — `ab933e32` from `76cd5e80`, `6241ed3f`/`b54b2d92` from `5c4c854d`. Treat the parked-goal table in the 23:49 section as live, not this intake list.)
+
+The orchestrator is deliberately stopped at a clean quiet boundary. Repo-root `.conduct-stop` is
+present; `LOOP_STOP tick=102 reason=stop-while-idle` was recorded at 05:49:29Z; former conductor PID
+`26564` is gone; the final supported inventory found no orchestrator lock holders and the build lock
+FREE. **Do not remove the marker or relaunch until the operator resumes usage.** No goal-intake command
+was run after this stop.
+
+Main is `9b0ab00d` after `d244f1b8` — make evidence-mutation lease release retryable and
+non-dispositive — passed all 17 partitions and landed. Its full gate ran 23m51.175s. The now-landed
+fix preserves every accepted result, including Passed-with-advisory, through lease cleanup. A supported
+`acceptance-retry` has already moved `13b3be0d` — finish the cleanup-lane fixture reduction — from
+AcceptanceFailed to Verified; the next current-HEAD conductor should run one fresh integrated gate
+(the old main-keyed partition cache is invalid).
+
+`9f64cd98` — give durable refinement one execution owner and keep readiness pure — failed its second
+full gate in 21m19.335s on exactly three candidate regressions after all 17 shards ran. A precise
+Developer task-1 retry is durably Pending as operator intent `8a78d17fa83b491781aa48d616a555d9`:
+fresh-load intake state after a concurrent reservation winner commits, migrate the bare AdvanceLoop
+fixture before reading `state_outbox`, and assert the kernel-owned goal after intentional refinement
+pending. It will apply when a conductor resumes; do not create a second retry.
+
+Four detailed dedicated backlog children were filed and related, but **no implementation goals were
+created**:
+
+- `76cd5e80` — fix `goals --board` lifecycle/attention disagreement and its serial per-worktree Git
+  N+1. Fresh live dogfood was 34.3s for 62 rows; source launches status + ahead/behind serially per
+  registered worktree. Reuse the landed `GoalGitFactIndex` capture-once pattern.
+- `5c4c854d` — inject a typed inherited-output drain policy while retaining the 12s/2s production
+  defaults; two accepted tests consume about 25s combined.
+- `03d8c426` — direct-launch a fingerprint-validated current SQLite helper artifact instead of
+  compiling it on every supported read; this is a dedicated child because umbrella `48bc3608` has a
+  bad legacy Full owner.
+- `80ca5e16` — build one immutable fingerprinted real self-relaunch successor while keeping fresh
+  state/lease/log roots for all three scenarios; accepted tests total 85.36s.
+
+At resume, while the marker still owns the quiet window, intake the highest-payoff disjoint set:
+FULL `b51bc690` — replace five native-MTP real project builds (325.36s in the latest accepted receipt)
+with one Core production-path run plus structural/contract coverage; Slice `74802406` — one trusted
+main prebuild plus generation-keyed structural-discovery snapshots and bounded discovery fan-out
+(250.781s measured serial tail); then the four children above as capacity permits. Slice `345175c8`
+— replace two redundant terminal-sweep full-repository early-exit cases — is also ready and disjoint
+from those production seams. Use `--pipeline auto`, explicit Full/Slice coverage, and keyed requests;
+do not add brittle elapsed-time pass thresholds. Then remove `.conduct-stop` and relaunch Permissive
+from current HEAD with `Start-OrchestratorCommand.ps1` and no `-AppDll`, so the landed ae72/1856/48/d244
+fixes are finally armed. All transient `.scratch` inputs from this wind-down were deleted.
+
+The targeted repeated-cold-work audit confirmed this is a useful exemplar: prepare immutable inputs
+once, bounded-fan-out independent reads, aggregate deterministically. It also found a lower-priority
+21.19s double `GoalAcceptanceVerifier.RunAsync` safety-valve test and confirmed persistence/SSE/external
+delivery loops generally carry real transaction, ordering, or stream dependencies; do not blanket
+parallelize every `foreach await`.
+
+The architectural reframe is already durable as backlog `95d6bd6d` — make the driving agent
+replaceable and non-authoritative while preserving disposable portfolio intelligence. Prefer that
+framing over “work the operator out of the loop.”
+
+## ~~RESUME HERE — 2026-08-18 04:13 UTC, Codex takeover, max concurrency under Permissive~~ — **SUPERSEDED by the 05:50 UTC wind-down section above**
+
+Main is at `22aaca10` after `48bbd193` — replace the 54.69-second UTF-8 full-suite discovery with a
+minimal MTP probe — passed and landed. Its accepted target duration is **0.5331634 s**, **99.03%
+lower / ~102.6x faster** than baseline; the full gate was green across 22 TRXs / 17 shards in
+21m03.695s, with Process spawning still longest at 685.617s. The preceding `1856ee3e` — compact
+read-only `goals --board` — also passed and landed. Its
+full gate was green across 22 TRXs / 17 infrastructure shards in 21m35.138s. Post-landing live-store
+dogfood `goals --board --all` exited 0 in 9.1s with `shown=64 omitted=0` and rendered Active,
+Verifying, Verified, AcceptanceFailed, and Parked rows. It also exposed a likely projection defect:
+the board still rendered cleaned-up `1856ee3e` and `ae72beac` as Verified/accepting; triage is active.
+The preceding `ae72beac` landing's full gate was green across 22 TRXs / 17 infrastructure shards in
+26m06.761s; Process spawning remained the floor at 740.274s, so do not claim an overall wall-time win
+from this high-variance sample. The running **Permissive** conductor renewed to continuity child pid
+`26564` at 05:00 UTC but deliberately reused the incumbent executable, so it still predates both
+landings; relaunch current HEAD at the next all-quiet boundary to arm the fixes. PowerShell
+7 resolution remains fixed and no `.conduct-stop` is present. Other recent landed velocity changes
+include `089ad32e` (skip .NET shards for proven empty/strict-docs candidates), `e64cc9f9`
+(PostLandingCanary fixture build removal), and `a23b0945` (Remainder resource-key correction).
+
+`48bbd193` — replace a 54.69-second UTF-8 full-suite discovery with the minimal MTP probe — is
+CleanedUp on main and measured **0.5332 s** in its accepted full gate: **99.03% removed**. Its first
+gate's sole failure was an
+unrelated Remainder apparatus precondition: a Git `rev-parse HEAD` helper returned null in 78 ms and
+discarded the causal stderr/exception; the same test passed in five recent gates and the automatic
+recovery worker reproduced it green 1/1 in 2.221 s. Candidate `eddfe28d` remained clean and unchanged;
+both tasks were manually reverified without a candidate change. Do not invent a candidate fix for
+the opaque Git failure; a dedicated diagnostic-hardening brief is prepared for the next boundary.
+
+`9f64cd98` — make durable refinement the sole execution owner and keep readiness pure — failed its
+first full gate after 27m29.997s with 55 candidate-path failures across seven shards: repair state was
+acquired but executor launch was deferred outside the app host, plus missing `state_outbox` setup.
+Corrected candidate `de280649` now proves pending -> one outbox row -> coordinator ProcessAsync ->
+reload -> dispatch (clarification slice 8/8 plus both prior regressions); independent review passed
+and a fresh full gate is live concurrently with `d244f1b8`. `d244f1b8` — make evidence-lease
+release retryable and unable to overwrite a green result — is in a live full gate at corrected candidate
+`e775a415`: typed lease-acquisition evidence replaces Reason prose, every Passed result including
+advisory-unmet is retained, build is green, and the exact focused slice passed 6/6. `13b3be0d`
+remains AcceptanceFailed pending that fix landing; its old green partition cache is diagnostic only
+because main has advanced and cache identity includes main SHA.
+
+`1856ee3e` — compact read-only `goals --board` — is CleanedUp on main. Its
+first gate found a disabled-collection invariant; the first fix would have serialized Cli + lifecycle
++ cleanup into a measured **~879.7-second** exclusive chain. The corrected candidate `9e144070`
+instead removes the board fixture's unjustified cleanup collection and reverts only the new Cli key;
+fresh focused suites passed 20/20, 17/17, 107/107, and 3/3. After landing, run live
+`goals --board --all` and retain its post-landing operator evidence.
+
+Anthropic now reports the explicit monthly spend limit on every Reviewer dispatch. Reviewer bindings
+and roles remain unchanged; substantive independent operator review bridges only the affected current
+candidates until Wednesday. Backlog `9d4cc989` records that the explicit budget message is currently
+misclassified as `unknown-failure` and immediately retried. Intake backlogs `ad054da3`, `ec4faf81`,
+and `aa06b228` retain the typed-inbox, slice-consumption, and ignored-pipeline defects. The next test
+intake at the next all-quiet boundary is: (1) FULL `b51bc690`, collapse five serial native-MTP
+project executions while retaining one real Core production-entry run (**338.66 s** observed); (2)
+the structural-discovery-cache slice of `74802406`: accepted gate decomposition found a **5m03.986s**
+post-shard serial tail, with **250.781s** in six serial trusted-project builds/discoveries; use one
+generation prebuild, typed immutable snapshots, bounded fan-out, and fail-closed invalidation; (3) a
+dedicated FULL child implementing the SQLite-tool current-artifact slice of umbrella `48bc3608`
+(**15.61 s** test plus operator-read tax; legacy cancelled predecessor incorrectly owns Full
+coverage, so do not `goal-replace` it); and (4) a dedicated child for the two inherited-output
+12-second drain waits (**25.73 s**). `345175c8` remains the subsequent slice for the **42.56 s**
+terminal-sweep fixture; its `CliPersistentStateRunner` collision cleared when the board goal landed.
+
+Crash conclusion and dump configuration are in `### Crash analysis — final bounded conclusion`
+below. The partial screen supports `CLOCK_WATCHDOG_TIMEOUT (0x101)`; the CPER proves a prior-session
+Intel product-`0x037` PMC-family crash log surfaced at boot, but public Intel/OEM collateral does not
+map its opaque reason fields, so component-level attribution remains unknown.
+
+## ~~RESUME HERE — 2026-08-18 00:55 UTC, Codex takeover, max concurrency under Permissive~~ — **SUPERSEDED by the 04:05 UTC section above**
+
+Main is at `bccb6254` after `8ab0a29d` landed. The conductor is running
+**Permissive** under continuity-child pid `32184` (supervised by pid `22236`) with
+`--poll-seconds 15 --max-duration 5400`; no `.conduct-stop` is present. It was launched before the
+latest lease-backoff and MTP landings, so bounce it through the runbook at the next quiet gate
+boundary to arm current HEAD; do not repair SQLite. At the latest status read, `4b9d69fb` was
+Verifying; `1856ee3e`, `f9e4f0f0`, `9f64cd98`, `a23b0945`, `13b3be0d`, `e64cc9f9`, and new
+velocity goal `089ad32e` were Active. Observe through `conduct-events.log` first. Do not replace
+this with a Conservative/manual workflow.
+
+### Live velocity work
+
+- **`b985206d`** is Completed and landed at main commit `e9f1895e`; it removes the two deterministic
+  ~60-second RunEventStore test waits. Candidate `bb7ce759` cleared the normal Anthropic Reviewer and
+  passed full acceptance at 21:35:26 UTC. The retry added a real
+  production-default cadence/store integration test, closing the first review's coverage blocker;
+  the Tester independently passed the three-project isolated build. The full-gate TRX measured the
+  targets at **0.021 s and 2.189 s**, down from about **60.1 s each** (~118 s of test work removed),
+  and the production-default coverage test passed in 0.023 s.
+- **`3b21ed78`** — stop retrying a held acceptance/evidence lease every tick and report its
+  owner/expiry — is Completed and landed at `ea601c71`. Its normal Anthropic Reviewer completed;
+  no discretionary extra cross-family review was added.
+- **`1856ee3e`** — add a compact, read-only `goals --board` takeover/supervision command — is Active,
+  full coverage of backlog `c9c1e8eb`. Fresh built-app execution proved the current candidate rejects
+  `goals --board --all` before routing because the validated flag set omits `--board`; five blocking
+  evidence/coverage gaps also remain. The conductor incorrectly launched a third Tester on unchanged
+  SHA `79ef600d`; the operator cancelled it and an exact six-finding Developer retry intent was Applied.
+  Backlog `b1c83566` records that same-SHA Tester/upstream-owner routing defect.
+- **`4b9d69fb`** — replace coarse `ownership:tests` reservations with deterministic per-test-project
+  keys — is Verifying in a live acceptance attempt, a slice of backlog `c49290c3`; Developer, Tester,
+  and Reviewer completed. Its first Planner output was substantively complete but falsely rejected because an expected resource-key literal was parsed as a nonexistent target
+  citation. It preserves shared-infrastructure and unknown-layout
+  fail-closed behavior.
+- **`f9e4f0f0`** — stop Tester prose from falsely requiring file changes when structured verification
+  evidence is complete — is Active with Developer reopened after an environmental acceptance failure,
+  a slice of backlog `c279e0b7`. Its 560-test Process-spawning shard ran 7m54.865s and failed only
+  because low-integrity testhost could not launch `pwsh`; backlog `1a7c7ac7` now has this second
+  independent receipt. The Reviewer correctly found that
+  only the deferred fixture is a discriminating RED arm and that the per-goal negative-control receipt
+  was missing; the Developer added the receipt and corrected that claim. A second review then hit the
+  documented hard cycle of requiring Acceptance-owned execution before review can finish, so criterion
+  10 alone was waived with that exact reason; the narrow Reviewer retry completed. No-change
+  Developers remain blocked.
+- **`8bc81cae`** — avoid redundant workspace-boundary integrity relabeling and parse the mandatory-
+  label entry precisely — passed acceptance and landed at `45a755d9`, a slice of backlog `eaf7f191`.
+  Unknown/non-Medium state still sets the label and fails closed.
+- **`8ab0a29d`** — enable one-step MTP `dotnet test` — passed operator re-gate 1/3 and landed at
+  main commit `bccb6254` after the prior full gate ran 1,000 infrastructure tests and failed only when
+  `LaneTimingMeasurementScriptTests.MissingManifestLane_FailsAndNamesLane` could not launch `pwsh`
+  from the low-integrity temp directory (`Win32Exception: Access is denied`). The candidate's
+  Developer and normal Reviewer are complete; this was recorded as environmental, not a worker retry.
+  Its persisted lifecycle still reads Verified immediately after landing, matching the known
+  terminalization/sweep defect rather than an unmerged branch.
+  Rebase proved the acceptance failure was branch-owned: its own commit reintroduced
+  `CreateShortWindowsRoot`, whose synthetic `LOCALAPPDATA` parent was never created before atomic
+  claim attempts. The retry fixes that exact defect and keeps the concurrent distinct-root control.
+- **`1ef781e5`** — the standalone early-apphost/temp-root repair — is Cancelled because a fresh
+  current-main control passed and the failing helper was owned by `8ab0a29d` itself. Backlog
+  `da19b0b4` was superseded to `1afa6964`; do not revive this duplicate lane.
+- **`9f64cd98`** — give the durable refinement coordinator sole execution ownership and make readiness
+  a pure query — is Active with Developer complete at `28fd9a3a` and normal Reviewer live, full coverage of backlog
+  `c87ed4d1`. Its exact scopes were rechecked against the live board diff before intake. It immediately
+  reproduced its target: ticks 160 and 163 treated `SPEC_REFINEMENT_PENDING` with
+  `executor_started=true` as a subscription spawn failure, escalated, and launched no-op executor
+  rechecks while the original durable refinement remained in progress; no attention item is open.
+- **`a23b0945`** — release `Remainder` and `Remainder balance B` from borrowed exclusive-resource
+  keys — is Active with Developer complete and Reviewer Failed pending exact triage, a slice of backlog `13b65761`. The passed `8bc81cae` receipt
+  shows roughly 149 seconds of unrelated tests held behind those keys. This is the obvious manifest
+  correction; no new pre-change timing exercise is required. Its refiner correctly found two omitted
+  `GoalAcceptanceVerifier` classes (`AcceptanceOutputCaptureTests` and
+  `HermeticVerificationEnvironmentTests`); the operator answered yes to route/exclude them under the
+  same exhaustive rule, and the goal returned to Active.
+- **`13b3be0d`** — salvage the unlanded cleanup-lane reduced-repository fixture — is Active with a
+  clean candidate at `9de855f0`; focused evidence passed 199/199 and Reviewer verdict was pass, but
+  automatic attestation rejected two explicitly operator-owned criteria. Four reversible RED controls
+  are prepared in detached worktree `.scratch/13b3be0d-negative-controls` and must run after live gates
+  release the relevant resources, then be documented before `verify-manual` closes Reviewer task 2.
+  Full coverage of new backlog `9b82af60`. It reapplies detached commits
+  `a035f923`/`3e72bb0d`/`37306ce1` on current main with corrected evidence ownership and one shared
+  immutable template helper. Expected source-level reduction is 6–18 seconds; post-landing timing is
+  nonblocking.
+- **`e64cc9f9`** — remove the full-repository build and live-checkout write from the measured
+  38.02-second PostLandingCanary test — is Active with Developer responding to a failed focused-evidence
+  round, full coverage of backlog `2918058d`.
+  Production binary resolution remains unchanged; the test gets a scoped prebuilt-binary seam and a
+  disposable minimal repository while retaining the real worktree/process/JSON/TRX path.
+- **`089ad32e`** — skip dotnet shards for successfully known-empty or strict `docs/**` candidates while
+  retaining non-dotnet checks and ordinary landing semantics — is Active with Developer live, full
+  coverage of backlog `c6750b35`. Unknown/code/mixed paths remain fail-closed/full-gate; cohort TRX
+  evidence is not weakened. Scope extraction again falsely claimed forbidden/example paths, already
+  covered by backlog `e9c98cc5`.
+- **`26e9d1ef`** is Cancelled/retired after testing the apparently obvious first slice of backlog `f1b5e4aa`: remove only
+  `GoalWorktreeTestsRebaseMerge` from the process-wide cleanup collection. Pre-review evidence passed
+  **31/31 tests in 165.908 s**, but the normal Reviewer correctly rejected it: the deleted attribute
+  also supplies `IsolatedDotnetRootFixture`, and 19 tests reach the acceptance CLI's real build-slot
+  grid. The isolated filter cannot prove concurrent safety. Its retry instead expanded into fake slot
+  injection across 17 contexts; the operator cancelled it, discarded only that uncommitted divergence,
+  and ran `abandon-goal`. This rejection is annotated on `f1b5e4aa`.
+  `GoalWorktreeTestsOrphanEphemeralSweep` remains excluded because it mutates the static
+  `GoalWorktrees.SandboxAclHelper` seam.
+The runnable board is at worker capacity. `b15cb04c` (stop-while-idle) remains parked because its
+frozen criterion requires the wrong behavior; recut it from backlog `2f13d826`. `e5c18520`
+(background acceptance ownership across handoff) remains parked pending semantic integration against
+the now-landed `3b21ed78` conductor/lease changes. `a893a9e6` and empty duplicate `275c97fd`
+retain durable `Retired` dispositions; `a893a9e6` work remains at tag
+  `salvage/a893a9e6-cleanup-lane-tests`; its useful work is now recut as `13b3be0d`.
+Backlog `c87ed4d1` (make the durable refinement coordinator the sole refinement owner) was intaken as
+goal `9f64cd98` when `8bc81cae` freed a lane; its corrected brief remains in the latest backlog annotation.
+
+### Takeover dogfood findings
+
+- Architecture backlog **`95d6bd6d`** replaces the crude “work the operator/driving agent out of the
+  loop” framing with the stronger target: retain disposable portfolio-level intelligence, but make
+  every driver replaceable and non-authoritative. A fresh driver reconstructs decision facts from
+  typed durable state; typed idempotent proposals cross into a deterministic kernel that alone owns
+  mutation, authorization, lifecycle, acceptance, and landing; driver failure loses time, not truth
+  or control; humans receive compressed decision-complete escalations. `HANDOFF.md`, chat history, and
+  agent personality are convenience context, never required authority or state.
+- New backlog **`e9c98cc5`** records that scope extraction treated the explicit prohibition “do not
+  edit `config/acceptance-manifest.json`” as a positive claimed file and reported a false exact-file
+  collision between `13b3be0d` and `a23b0945`. New backlog **`dd9bb673`** records that invalid goal
+  option validation persisted a failed intake before rejecting `--backlog-coverage partial`, burning
+  the idempotency key and forcing a v2 request. The same scope defect then claimed the whole
+  `docs/negative-controls/` directory for goal-specific evidence and falsely serialized `e64cc9f9`
+  against `13b3be0d`.
+- New backlog **`1a7c7ac7`** records the low-integrity `pwsh` launch failure that blocked
+  `8ab0a29d` after 1,000 tests. New backlog **`bfa98686`** records the associated status-surface defect:
+  `next --full` projected that `AcceptanceFailed` goal as Accept/high-confidence/no-blockers with no
+  immediate action while the conductor called the same state unhandled.
+- New backlog **`4731eac5`** records a regression of closed CLI-ergonomics backlog `61fd36c7`:
+  `attention show` printed clarification id `2b55912c`, but both documented `attention answer` forms
+  rejected it; only the separate top-level `answer 2b55912c ...` command succeeded.
+- Backlog **`fe7e4012`** records the proven green-gate loss mechanism, now reproduced by
+  `13b3be0d`: `RunParallelLandingAcceptance` computes GREEN while holding an evidence-mutation lease,
+  then the lease-disposal SQLite `DELETE` can throw `database is locked` and replace that green return
+  with a fault while leaving the lease stale. Later one-second attempts are merely early-held, not
+  fresh green gates. Make release lock-safe and preserve the completed result; do not blame source-
+  backlog replacement or rerun an uncached full gate.
+
+- Goal-board usability is active goal **`1856ee3e`** (full coverage of backlog `c9c1e8eb`).
+  `Get-OrchestratorSnapshot.ps1` again timed out without output during this intake, reinforcing the
+  need for the compact read-only board command.
+- New backlog **`50bb6fb8`** records that standalone `goal-recovery` is advertised as inspection
+  but runs `TerminalGoalSweep` and terminalized `3b21ed78` without a repair confirmation. It now also
+  carries the receipt that the live sweep re-terminalized already-landed `8bc81cae` with identical
+  evidence on at least nine ticks, contributing repeated 6–14-second sweeps. Existing
+  backlogs `c87ed4d1` and `3eb43a8a` now carry the tick-20 receipt where a pending-refinement
+  readiness check held the serial per-goal walk for 176.374 s; `ec331244` carries both the 11-second
+  per-command control-plane receipt and three filtered backlog reads that each took 19–20 seconds
+  regardless of whether they returned 1, 25, or 41 rows.
+- Existing backlog **`464b4b27`** now records the live contradiction where clarification-blocked
+  goals remained Active, `readiness` said start allowed, and `next` advertised runnable tasks while
+  only `attention show` exposed the real gate. Four clarifications were answered and both affected
+  Researchers resumed through typed retry intents.
+- New backlog **`ee2fd57f`** records the false Planner-contract rejection of an expected resource-key
+  literal as a nonexistent source target. The exact plan was reissued through a typed Planner retry.
+- New backlog **`75073507`** records that sanctioned isolated build/test helpers emitted roughly
+  1,869–2,117 lines even at quiet verbosity (and about 358 lines on the focused summary path), hiding
+  the useful verdict and adding avoidable operator latency. The fix must bound default output while
+  retaining full diagnostics in a raw artifact.
+- Existing backlog **`8674be25`** now has the `b985206d` receipt: a stale 30-minute evidence lease
+  repeatedly blocked forward progress while reporting a generic concurrent-acceptance message; the
+  first targeted Permissive tick after exact expiry advanced immediately.
+- Existing backlog **`2f13d826`** now has a second `stop-while-idle` receipt. After `b985206d`
+  became Verified, pid `21132` emitted no ticks for more than 10 minutes despite `next --full`
+  reporting Accept/high-confidence/no-blockers and no child workers. The canonical stop file produced
+  `LOOP_STOP tick=100 reason=stop-while-idle`; a clean Permissive relaunch then landed the goal.
+- Operator priority is implementation velocity: use measurement to choose the obvious serial
+  fraction, then change it. Do not create another audit when the measured target and mechanism are
+  already known.
+- Anthropic budget is constrained until Wednesday, so skip additional discretionary cross-family
+  review until rollover. This does **not** change the Reviewer role or catalog. The exact original
+  Anthropic Opus Reviewer and `b985206d` Reviewer binding were restored after a mistaken temporary
+  reassignment.
+
+### Crash analysis — final bounded conclusion
+
+System WHEA EventRecordID `28747` is a valid 3,552-byte CPER (`BOOT`, `PreviousError`, Fatal), supplied
+through ACPI BERT from the prior session. Its three firmware-record-reference sections decode as Intel
+Crash Log `PMC`, `PMC_TRACE`, and `PMC_RST`; collection completed before reset. There are no standard
+processor/MCA, memory, or PCIe sections in this CPER, but absence does not rule those causes out. The
+operator's partial-screen photograph appears to show **`CLOCK_WATCHDOG_TIMEOUT (0x101)`**, which means
+Windows detected a secondary processor that stopped processing clock interrupts. `Kernel-Power 41`
+recorded bugcheck zero and Windows produced no bugcheck `MEMORY.DMP`, but WER did preserve a separate
+`LiveKernelEvent 124/7` WHEA dump. Here `124/7` means a WHEA **BOOT error source** and corroborates the
+next-boot CPER; it does not prove that the photographed stop was `0x124` or recover the lost `0x101`
+state. Its queued copy is under
+`C:\ProgramData\Microsoft\Windows\WER\ReportQueue\Kernel_124_6ae9f61acf7cd854dee99924782464fe55cf456c_00000000_1883ed1d-ef6e-48c4-ad49-860d2a1e5553`;
+the original was `C:\Windows\LiveKernelReports\WHEA\WHEA-20260817-1502.dmp`. This session cannot read
+the ACL-protected queued copy without another elevation prompt, which the operator explicitly declined.
+
+Intel's complete reachable public crashlog history (all tags and pull refs), all six official release
+ZIPs, and the relevant Intel PMT/Linux, EDK2, coreboot, and MSI public material contain no product
+`0x037` definition or semantic mapping for reason `0x00020010`/PMC_RST `0x1802`. Official `iclg`
+therefore decodes only the common headers; a full decode requires matching Intel/OEM collateral via
+`iclg -c`. The extracted raw record is preserved in the ignored artifact store at
+`artifacts\crash-forensics\2026-08-17\SeventhSon-evt-2026-08-17-20-02.crashlog`
+(SHA-256 `EF11DCA3F172D40FDEE59C09BB12B2AC40A27CA7A1DE241B18ECCA80ED142909`), with an MSI/Intel-ready
+support note beside it in `README.md`. The bounded conclusion is
+**processor/platform forward progress was lost**; CPU silicon, BIOS/microcode, CPU voltage/clock
+behavior, motherboard delivery, and firmware/software deadlock remain possible. Primary PSU loss is
+less supported after the 0x101 photo. The strongest reversible trigger is the mixed four-DIMM 3200
+configuration: 2x16 GB Corsair plus 2x8 GB Team Group. It is not proven, and prior APIC-0 internal-
+parity WHEA reports predate the RAM upgrade. Run an XMP-only A/B first (all four DIMMs unchanged), then
+one matched kit at JEDEC if both arms fail. Preserve the crash photo and restart once before testing so
+the configured Automatic dump can capture the hung processor index and stack on a recurrence. Configuration is now
+`CrashDumpEnabled=7` plus `AlwaysKeepMemoryDump=1`, with the system-managed pagefile on C:; a restart is
+still required before those settings take effect. Board/firmware: MSI PRO Z690-A WIFI DDR4 (`MS-7D25`),
+AMI BIOS `1.C0` dated 2023-05-16. Do not flash from this note; verify the exact current MSI release first.
+
+## ~~RESUME HERE — 2026-08-17 20:10 UTC, recovered from a host crash, loop running~~ — **SUPERSEDED, see the 21:19 UTC section above**
+
+**Host crashed mid-session and was recovered.** Main is at `36dfd0fb` (Integrate goal/27b2d4d3).
+Conductor relaunched as **pid 24508**, holds `conduct-loop.lock`, ticking normally — `b76879ab`
+restarted acceptance at 20:08:17.
+
+Crash assessment, all verified rather than assumed: main working tree clean, no `.conduct-stop`, goal
+branches intact, queued operator intents survived (the tick is the only applier). The old lock still
+named dead pid `73244`; stale-lock takeover worked once `tasklist` confirmed **no `dotnet.exe`
+processes at all** — that phrasing is the unambiguous form, unlike `Get-Process` exit codes.
+
+Relaunch that worked:
+
+    pwsh -NoProfile -File scripts/Start-OrchestratorCommand.ps1 -Name conduct-loop conduct --loop --max-duration 5400 --watch
+
+The launcher's `$Arguments` is `ValueFromRemainingArguments`, so trailing positional args bind fine —
+the older `-Arguments` note below still works but is not required. The launcher rebuilds and takes
+**over two minutes**; do not treat a slow return as a hang.
+
+### Landed 2026-08-17 — eleven goals
+
+`b1656a93` worker-context artifact prep (the day's biggest unblocker, freed four goals) · `38a4449e`
+lane variance ~2× · `951b4cb7` pass 1e fixed-waiting · `c3b6852a` lane-estimate refresh · `65a89883`
+same-goal reconciliation · `323a40a8` temp-root flake (**did not actually fix it — see `da19b0b4`**) ·
+`e7a49b08` qualified lane-timing tooling · `c23ca078` pass 1d · `06cbde82` gate-makespan measurement ·
+`27b2d4d3` dispatch evidence disagreement (**incomplete — see `c279e0b7`**) · plus hand-landed
+`c365fd32` artifact-preparation fallback.
+
+### In flight
+
+- **`b76879ab`** pass 1f — in acceptance, re-running after the crash. Measured **218.2 s serial vs a
+  335.4 s control**, under its 380 s ceiling. Two criteria were waived by exact text (circular
+  post-landing window, and an operator-owned RED arm); criteria 1 and 3 still stand as the anti-vacuity
+  guards.
+- **`b985206d`** cut top-cost tests — at Reviewer. Re-scoped by remeasurement to the only two targets
+  still expensive: `RunEventMaintenanceCadence_self_defers_when_database_writer_is_busy` and
+  `SqliteRunEventStore_maintenance_defers_when_database_write_lock_is_active`, both pinned at
+  **60.07–60.24 s with a 0.15 s spread** — a hardcoded timeout, not work.
+
+### Deliberately held — do NOT revive without reading why
+
+- **`b15cb04c`** — premise refuted. Its frozen criterion 1 *mandates implementing a bug*. Needs a
+  re-cut; corrected premise is on backlog `2f13d826`. The `27b2d4d3` landing does **not** unblock it.
+- **`8ab0a29d`** — AcceptanceFailed. Do not reopen until `da19b0b4` closes with a repeat-run control. I
+  reopened it once on an unvalidated landing and burned a full acceptance cycle.
+- **`e5c18520`** — Developer dispatch blocked by a 3-file merge conflict with main. Only one conflict
+  hunk in `ConductorBatchLoop.cs`, but resolution is *semantic*: main's side came from its own split-out
+  child `65a89883`, which landed. Needs a guarded window — validating a conductor-loop merge requires a
+  build.
+- **`a893a9e6`** — salvaged and abandoned. Work preserved at tag `salvage/a893a9e6-cleanup-lane-tests`
+  (6 files, 156 insertions; verify with `git diff --stat main...<tag>`, **not** `git show`).
+- **`275c97fd`** — duplicate of `b985206d`, empty branch, refinement-deadlocked.
+
+### Operator-owned work outstanding, all needing a quiet gate window
+
+RED-arm execution for the declared negative controls (tracked `143cbe9f`); the five-run load validation
+for `323a40a8` (now a prerequisite for `da19b0b4`); and the `e5c18520` merge. Receipt *scanning* needs
+no window — that misclassification is why `06cbde82` sat blocked for hours.
+
+### Defects filed 2026-08-17
+
+`845349a5` 20 000-char decision cap silently makes a complete worker result "unparseable" · `e8729993`
+eight more caps that feed decisions, incl. a scope guard that **strips its own omission marker** and a
+16-PID cap that mislabels lock holders as foreign · `c279e0b7` `27b2d4d3` incomplete: a prose regex
+still blocks verification-only Testers and matches test-audit goals by construction · `e2c366ba`
+unresolvable base commit lets a no-change Developer reach Completed · `4dc7d959` CLI silently ignores
+unknown flags · `3fe73923` `Get-TestCostRanking.ps1` aborts on the first malformed TRX · `da19b0b4`
+temp-root flake survived its fix · `ab281eb9` reviewer misroute (**premise wrong — read its
+annotation**) · `cab46813` 529s escalate instead of retrying · `c090ae39` / `9510f2a9` inline gates and
+unbounded canary wait · `eee0d174` one-shot `goal-salvage` command · `27239f10` evidence reuse
+(scope-corrected).
+
+### Goal disposal is a minefield — three traps hit today
+
+1. `cancel-goal` with open tasks reports `Cancelled` then **silently reverts to Active**.
+2. Cancelling those tasks to make it stick instead makes the task set terminal and **promotes the goal
+   toward landing**. Both `275c97fd` and `a893a9e6` advanced to Verified/Verifying this way.
+3. `goal-replace` refuses a `Cancelled` predecessor, and cancelling strands the source-backlog claim —
+   so `Failed` is usually the right terminal state.
+
+`eee0d174` proposes collapsing this into one command. Until then, check `Source backlog:` before
+cancelling: no claim means cancelling is safe.
+
+### Cohorts: answered definitively, do not re-investigate
+
+Across **all 70** `conduct-events*.log` files (2026-07-13 → 2026-08-17): **20 006 speculative plans, 0
+with members; 1 974 production `ACCEPTANCE_COHORT`, all `outcome=unpaired`.** No coverage gap — the
+machinery landed 2026-08-13 and logs precede it by a month. `LifecycleNotReady` is the largest
+exclusion **every single day**, not `SerializedResourceOverlap`, so removing the resource veto attacks
+the *second* constraint. Full design analysis and the narrowest traced pilot are on `c771916148`.
+
+## ~~RESUME HERE — orchestrator deliberately wound down 2026-08-07 01:13 UTC~~ — **SUPERSEDED, see the 2026-08-17 section above** (re-checked 2026-08-17: the RAM upgrade completed, the host has since crashed and been recovered, and `71d5ab45` is 43 commits behind)
 
 The loop was stopped gracefully at operator request (`LOOP_STOP tick=2 reason=stop-while-idle`), with
 **zero workers and zero gates in flight**. No stale `conduct-loop.lock` was left behind; `.conduct-stop`
@@ -139,6 +734,17 @@ The diagnostic was never surfaced anywhere an operator could read it.
 
 ### Operating lessons worth keeping
 
+- **`Invoke-OrchestratorCommand.ps1` eats `--pipeline`.** It is `CmdletBinding`; `--pipeline` binds to
+  `-PipelineVariable` and never reaches the app. `goal --pipeline five-role` through that wrapper
+  creates automatic Developer+Reviewer. Use `.\mcg-orchestrator.cmd` or `add-task`. Receipt 2026-08-19:
+  three intakes, all `isOverride:false`.
+- **LlamaCpp / qwen-code 400 at 32k is usually the second request.** `--bare` first request is ~8–11k
+  (8700 harness + brief). The 40k 400 is tool results after “read digest.md first” / source-survey /
+  `AGENTS.md`. Do not disable `read_file` to paper over it. Receipt: `e8351d7c` Tester 2026-08-19.
+- **qwen-code rewrites `.qwen/settings.json` (+ `.orig`) in the worktree.** Discard, never commit;
+  dirty worktree blocks dispatch/rebase. Do not discard while a qwen process is still live.
+- **`park-goal` is the isolation tool** (2026-08-19). The older “Failed is a zero-cost pause; no park
+  verb needed” note below is stale for Active goals you must keep off the next Permissive tick.
 - **`?? Microsoft/` first.** On `Assigned_tasks_exist_but_no_ready_batch`, run
   `git -C .orchestrator-worktrees/<goal> status --short` **before** `readiness`, which reports
   `RequireOperatorConfirmation` as a standing red herring. That cost two hours on 2026-08-06.
@@ -147,6 +753,8 @@ The diagnostic was never surfaced anywhere an operator could read it.
   Developer. That misattribution drove most of a day's wrong diagnosis.
 - **A `Failed` goal is a zero-cost pause.** It never dispatches. To stop a non-converging goal, simply
   do not `recover` it — no park verb needed. Tag the branch head first.
+  *(2026-08-19: `park-goal` now exists; use it to keep an **Active** goal off the next tick. Failed
+  still will not dispatch if you leave it Failed.)*
 - **`recover` races dispatch (~25s).** A follow-up `retry` is rejected "already running". Put worker
   guidance **inside the recover note** — it becomes the delivered `TaskRetried` note.
 - **Event silence is not a hang.** `BLOCKED_RECHECK_SLEEP` writes nothing to `conduct-events.log` and

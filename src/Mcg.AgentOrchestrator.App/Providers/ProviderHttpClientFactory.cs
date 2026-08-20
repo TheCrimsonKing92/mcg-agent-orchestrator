@@ -25,6 +25,11 @@ internal static class ProviderHttpClientFactory
         return CreateClient(new Uri(OllamaDefaults.ResolveBaseUrl(baseUrl)));
     }
 
+    public static HttpClient CreateLlamaCppClient(string? baseUrl = null)
+    {
+        return CreateClient(new Uri(LlamaCppDefaults.ResolveBaseUrl(baseUrl)));
+    }
+
     private static HttpClient CreateClient(Uri baseAddress)
     {
         return new HttpClient(SharedHandler, disposeHandler: false)

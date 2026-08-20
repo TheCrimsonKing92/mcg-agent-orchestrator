@@ -274,6 +274,39 @@ public sealed class WorkerContextPackageTests
         }
     }
 
+    [Xunit.Fact]
+    public void RealProcessShardProbeCandidatesPreferIsolatedSiblingOverRepositoryFallback()
+    {
+        var root = CreateTempDirectory();
+        try
+        {
+            var infrastructureOutput = Path.Combine(
+                root,
+                "artifacts",
+                "bin",
+                InfrastructureTestProjectName,
+                "debug");
+
+            var candidate = Xunit.Assert.Single(
+                BuildRealProcessShardProbeAppHostCandidates(infrastructureOutput, root));
+
+            Xunit.Assert.Equal(
+                Path.Combine(
+                    root,
+                    "artifacts",
+                    "bin",
+                    RealProcessShardProbeProjectName,
+                    "debug",
+                    $"{RealProcessShardProbeProjectName}.exe"),
+                candidate,
+                ignoreCase: true);
+        }
+        finally
+        {
+            Directory.Delete(root, recursive: true);
+        }
+    }
+
     public static bool IsWindows => OperatingSystem.IsWindows();
 
     private static ProcessStartInfo BuildUtf8DiscoveryProcessStartInfo(
@@ -305,39 +338,45 @@ public sealed class WorkerContextPackageTests
         };
     }
 
-    private static IReadOnlyList<string> BuildRealProcessShardProbeAppHostCandidates()
+    private static IReadOnlyList<string> BuildRealProcessShardProbeAppHostCandidates(
+        string? baseDirectory = null,
+        string? repositoryRoot = null)
     {
-        var infrastructureOutput = new DirectoryInfo(AppContext.BaseDirectory);
+        var infrastructureOutput = new DirectoryInfo(baseDirectory ?? AppContext.BaseDirectory);
         var configurationDirectory = infrastructureOutput.Name.Equals("net10.0", StringComparison.OrdinalIgnoreCase)
             ? infrastructureOutput.Parent
                 ?? throw new InvalidOperationException("Infrastructure test output has no configuration directory.")
             : infrastructureOutput;
         var configuration = configurationDirectory.Name;
         var executableName = $"{RealProcessShardProbeProjectName}.exe";
-        var candidates = new List<string>();
-
         var isolatedProjectDirectory = configurationDirectory.Parent;
         if (isolatedProjectDirectory?.Name.Equals(InfrastructureTestProjectName, StringComparison.OrdinalIgnoreCase) == true &&
             isolatedProjectDirectory.Parent?.Name.Equals("bin", StringComparison.OrdinalIgnoreCase) == true)
         {
-            candidates.Add(Path.Combine(
-                isolatedProjectDirectory.Parent.FullName,
-                RealProcessShardProbeProjectName,
-                configuration,
-                executableName));
+            // The sibling probe belongs to this isolated test build; a repository output may be stale.
+            return
+            [
+                Path.Combine(
+                    isolatedProjectDirectory.Parent.FullName,
+                    RealProcessShardProbeProjectName,
+                    configuration,
+                    executableName)
+            ];
         }
 
-        candidates.Add(Path.Combine(
-            InfrastructureTestSupport.FindRepositoryRoot(),
-            "tests",
-            InfrastructureTestProjectName,
-            "Fixtures",
-            "RealProcessShardProbe",
-            "bin",
-            configuration,
-            "net10.0",
-            executableName));
-        return candidates;
+        return
+        [
+            Path.Combine(
+                repositoryRoot ?? InfrastructureTestSupport.FindRepositoryRoot(),
+                "tests",
+                InfrastructureTestProjectName,
+                "Fixtures",
+                "RealProcessShardProbe",
+                "bin",
+                configuration,
+                "net10.0",
+                executableName)
+        ];
     }
 
     [Xunit.Fact]

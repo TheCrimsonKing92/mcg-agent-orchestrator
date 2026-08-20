@@ -69,11 +69,12 @@ public static class WorkerPromptInputBudget
         TaskBrief brief,
         string? providerName,
         string? modelName,
-        int? inputTokenBudgetOverride = null)
+        int? inputTokenBudgetOverride = null,
+        string? workerProfileName = null)
     {
         var provider = string.IsNullOrWhiteSpace(providerName) ? "unknown" : providerName.Trim();
         var model = string.IsNullOrWhiteSpace(modelName) ? "unknown" : modelName.Trim();
-        var tokenBudget = inputTokenBudgetOverride ?? InputTokenBudget(provider, model);
+        var tokenBudget = inputTokenBudgetOverride ?? InputTokenBudget(provider, model, workerProfileName);
         var originalTokenCount = CountTokens(brief.Content);
         if (originalTokenCount <= tokenBudget)
         {
@@ -133,10 +134,35 @@ public static class WorkerPromptInputBudget
         return (content.Length + ApproximateCharactersPerToken - 1) / ApproximateCharactersPerToken;
     }
 
-    public static int InputTokenBudget(string? providerName, string? modelName)
+    public static int InputTokenBudget(
+        string? providerName,
+        string? modelName,
+        string? workerProfileName = null)
     {
         var contextWindow = ContextWindowTokens(providerName, modelName);
-        return Math.Max(1, contextWindow - ReservedOutputTokens);
+        var harnessReservedTokens = HarnessReservedTokens(workerProfileName);
+        var inputTokenBudget = contextWindow - ReservedOutputTokens - harnessReservedTokens;
+        if (inputTokenBudget <= 0)
+        {
+            throw new InvalidOperationException(
+                $"Worker prompt budget configuration is invalid for {providerName ?? "unknown"}/{modelName ?? "unknown"}: " +
+                $"context window {contextWindow} must exceed output reserve {ReservedOutputTokens} " +
+                $"plus harness reserve {harnessReservedTokens}.");
+        }
+
+        return inputTokenBudget;
+    }
+
+    public static int HarnessReservedTokens(string? workerProfileName)
+    {
+        if (string.IsNullOrWhiteSpace(workerProfileName))
+        {
+            return 0;
+        }
+
+        return workerProfileName.Trim().Equals(WorkerProfile.QwenCodeCliName, StringComparison.OrdinalIgnoreCase)
+            ? WorkerProfile.QwenCodeBareStartupTokens
+            : 0;
     }
 
     public static int ContextWindowTokens(string? providerName, string? modelName)
@@ -151,6 +177,7 @@ public static class WorkerPromptInputBudget
             var provider when provider.Equals("Anthropic", StringComparison.OrdinalIgnoreCase) => AnthropicContextWindowTokens,
             var provider when provider.Equals("OpenAI", StringComparison.OrdinalIgnoreCase) => OpenAiContextWindowTokens,
             var provider when provider.Equals("Ollama", StringComparison.OrdinalIgnoreCase) => OllamaContextWindowTokens,
+            var provider when provider.Equals("LlamaCpp", StringComparison.OrdinalIgnoreCase) => LlamaCppDefaults.ContextWindowTokens,
             _ => DefaultContextWindowTokens
         };
     }

@@ -178,9 +178,15 @@ public sealed class WorkerProviderCatalog
 
     public bool TryResolveModelProvider(string providerName, out IWorkerProvider provider)
     {
+        if (OpenAiCompatibleCliBackend.UsesQwenCodeHarness(providerName) &&
+            TryResolve(ProviderKind.OllamaQwenCodeCli, out provider))
+        {
+            return true;
+        }
+
         provider = _providers.FirstOrDefault(candidate =>
             candidate.ProviderName.Equals(providerName, StringComparison.OrdinalIgnoreCase) &&
-            candidate.Identity.Kind is ProviderKind.OpenAICodexCli or ProviderKind.AnthropicClaudeCli or ProviderKind.OllamaQwenCodeCli)
+            candidate.Identity.Kind is ProviderKind.OpenAICodexCli or ProviderKind.AnthropicClaudeCli)
             ?? DefaultUnknownProvider.Instance;
         return provider.Identity.Kind != ProviderKind.Unknown;
     }
@@ -225,13 +231,13 @@ public sealed class WorkerProviderCatalog
                 SupportsPlanMode: true)),
         new StaticWorkerProvider(
             new WorkerProviderIdentity(ProviderKind.OllamaQwenCodeCli, UsesCodexExitFileBehavior: false),
-            WorkerProfileDispatcher.OllamaSubscriptionProfileName,
-            "Ollama",
+            WorkerProfileDispatcher.QwenCodeCliProfileName,
+            "LlamaCpp",
             new WorkerCapabilities(
                 CanSelfCommit: true,
                 CanSelfVerify: false,
                 SupportsInteractiveSession: false,
-                SupportsPlanMode: false))
+                SupportsPlanMode: true))
     ]);
 
     private sealed class DefaultUnknownProvider : IWorkerProvider

@@ -302,12 +302,20 @@ public sealed class WorkerDispatchTestsModelSelection : WorkerDispatchTestSuppor
     var workingDirectory = Path.Combine(root, "repo");
     Directory.CreateDirectory(workingDirectory);
     var dispatchedAt = DateTimeOffset.Parse("2026-06-02T12:00:00Z");
+    var profileName = WorkerProfile.QwenCodeCliName;
+    var modelName = "qwen3:8b";
+    var providerName = WorkerProviderCatalog.Default().ResolveProfile(profileName).ProviderName;
+    var tokenBudget = WorkerPromptInputBudget.InputTokenBudget(providerName, modelName, profileName);
+    // Size from the live qwen-code-cli input budget. A 20_000-char literal stopped exceeding
+    // after 91044f53 remapped the profile off Ollama. Refined-spec filler is not a droppable
+    // budget section, so this remains over after trim.
+    var overBudgetChars = (tokenBudget + 8) * 4;
     var kernel = new AgentOrchestratorKernel();
     var goal = kernel.CreateGoal(
         "Reject irreducible over-budget subscription prompt",
         [new TaskSpec(TaskId.New(), "Research prompt budget behavior", AgentRole.Researcher)]);
     kernel.SetGoalRefinedSpec(goal.Id, new RefinedSpec(
-        "Fixed refined spec content " + new string('x', 20000),
+        "Fixed refined spec content " + new string('x', overBudgetChars),
         ["Prompt budget failure is reported before dispatch."],
         VerificationClass.TestVerifiable,
         [],
@@ -330,7 +338,7 @@ public sealed class WorkerDispatchTestsModelSelection : WorkerDispatchTestSuppor
         promptRoot,
         workingDirectory,
         dispatchedAt,
-        new DispatchModelOverride("qwen-code-cli", "qwen3:8b", null)));
+        new DispatchModelOverride(profileName, modelName, null)));
 
     Assert.Equal(task.Id, ex.TaskId);
     Assert.False(Directory.Exists(promptRoot));

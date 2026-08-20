@@ -131,6 +131,25 @@ public sealed record AgentCatalog(IReadOnlyList<AgentDefinition> Agents)
             new(new AgentId("ollama-reviewer"), "Ollama reviewer", AgentRole.Reviewer, Coder(OutputTokenPolicy.RoutineLocalMaxOutputTokens), ComplexModel: Qwen3(OutputTokenPolicy.ComplexLocalMaxOutputTokens), IsProviderRoutingConstrained: false)
         ]);
     }
+
+    public static AgentCatalog LlamaCppDefault()
+    {
+        static ModelProfile Llama(int maxOutputTokens) =>
+            new("LlamaCpp", LlamaCppDefaults.DefaultModelAlias, ModelCapability.Text | ModelCapability.Code | ModelCapability.ToolUse, SubscriptionMode.LocalBridge, MaxOutputTokens: maxOutputTokens);
+
+        static SubscriptionLaunchProfile QwenCode() =>
+            new("qwen-code-cli", LlamaCppDefaults.DefaultModelAlias);
+
+        return new AgentCatalog(
+        [
+            new(new AgentId("llamacpp-planner"), "LlamaCpp planner", AgentRole.Planner, Llama(OutputTokenPolicy.RoutineLocalMaxOutputTokens), ExecutionPolicy: AgentExecutionPolicy.PreferSubscription, Subscription: QwenCode(), ComplexModel: Llama(OutputTokenPolicy.ComplexLocalMaxOutputTokens), IsProviderRoutingConstrained: false),
+            new(new AgentId("llamacpp-ideation"), "LlamaCpp ideation", AgentRole.Ideation, Llama(OutputTokenPolicy.RoutineLocalMaxOutputTokens), ExecutionPolicy: AgentExecutionPolicy.PreferSubscription, Subscription: QwenCode(), ComplexModel: Llama(OutputTokenPolicy.ComplexLocalMaxOutputTokens), IsProviderRoutingConstrained: false),
+            new(new AgentId("llamacpp-researcher"), "LlamaCpp researcher", AgentRole.Researcher, Llama(OutputTokenPolicy.RoutineLocalMaxOutputTokens), ExecutionPolicy: AgentExecutionPolicy.PreferSubscription, Subscription: QwenCode(), ComplexModel: Llama(OutputTokenPolicy.ComplexLocalMaxOutputTokens), IsProviderRoutingConstrained: false),
+            new(new AgentId("llamacpp-developer"), "LlamaCpp developer", AgentRole.Developer, Llama(OutputTokenPolicy.RoutineLocalMaxOutputTokens), ExecutionPolicy: AgentExecutionPolicy.PreferSubscription, Subscription: QwenCode(), ComplexModel: Llama(OutputTokenPolicy.ComplexLocalMaxOutputTokens), IsProviderRoutingConstrained: false),
+            new(new AgentId("llamacpp-tester"), "LlamaCpp tester", AgentRole.Tester, Llama(OutputTokenPolicy.RoutineLocalMaxOutputTokens), ExecutionPolicy: AgentExecutionPolicy.PreferSubscription, Subscription: QwenCode(), ComplexModel: Llama(OutputTokenPolicy.ComplexLocalMaxOutputTokens), IsProviderRoutingConstrained: false),
+            new(new AgentId("llamacpp-reviewer"), "LlamaCpp reviewer", AgentRole.Reviewer, Llama(OutputTokenPolicy.RoutineLocalMaxOutputTokens), ExecutionPolicy: AgentExecutionPolicy.PreferSubscription, Subscription: QwenCode(), ComplexModel: Llama(OutputTokenPolicy.ComplexLocalMaxOutputTokens), IsProviderRoutingConstrained: false)
+        ]);
+    }
 }
 
 public static class AgentCatalogStore
@@ -194,6 +213,7 @@ public static class AgentCatalogStore
         var builtInRoutingCandidates = AgentCatalog.Default().Agents
             .Concat(AgentCatalog.AnthropicDefault().Agents)
             .Concat(AgentCatalog.OllamaDefault().Agents)
+            .Concat(AgentCatalog.LlamaCppDefault().Agents)
             .Concat(defaultCatalog.Agents)
             .ToList();
         var normalizedAgents = new List<AgentDefinition>(catalog.Agents.Count);
@@ -316,6 +336,7 @@ public static class AgentCatalogStore
     private static bool IsPaidProvider(string providerName)
     {
         return providerName.Equals("OpenAI", StringComparison.OrdinalIgnoreCase) ||
-            providerName.Equals("Anthropic", StringComparison.OrdinalIgnoreCase);
+            providerName.Equals("Anthropic", StringComparison.OrdinalIgnoreCase) ||
+            providerName.Equals("xAI", StringComparison.OrdinalIgnoreCase);
     }
 }

@@ -15,4 +15,15 @@ internal sealed record DispatchStartOutcome(
     internal static DispatchStartOutcome SpawnFailed(string reason) => new(DispatchStartOutcomeCategory.SpawnFailed, reason);
     internal static DispatchStartOutcome RecoverableSandboxPrep(WorkerSandboxPrepRecoverableAction action) =>
         new(DispatchStartOutcomeCategory.RecoverableSandboxPrep, action.Reason, action);
+
+    internal const string SpecRefinementPendingPrefix = "SPEC_REFINEMENT_PENDING";
+
+    internal static bool IsSpecRefinementPending(Exception ex) =>
+        ex is InvalidOperationException &&
+        ex.Message.StartsWith(SpecRefinementPendingPrefix, StringComparison.Ordinal);
+
+    internal static DispatchStartOutcome FromDispatchException(Exception ex, string failurePrefix) =>
+        IsSpecRefinementPending(ex)
+            ? Deferred(ex.Message)
+            : SpawnFailed($"{failurePrefix}: {ex.Message}");
 }

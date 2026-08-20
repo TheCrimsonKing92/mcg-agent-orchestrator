@@ -409,12 +409,20 @@ internal static void EnsureRefinedForSpecConsumer(
     Goal goal)
 {
     var current = kernel.GetGoal(goal.Id);
+    if (GoalRefinementWorkCoordinator.HasPendingWork(current) &&
+        TryHydrateStoreRefinedSpec(kernel, workspace, goal.Id))
+    {
+        current = kernel.GetGoal(goal.Id);
+    }
+
     if (GoalRefinementWorkCoordinator.HasPendingWork(current))
     {
-        var launch = GoalRefinementWorkCoordinator.TryLaunch(workspace, goal.Id);
+        var repaired = GoalRefinementWorkCoordinator.TryEnsurePendingOutbox(workspace, goal.Id);
+        var launch = GoalRefinementWorkCoordinator.TryLaunchIfDue(workspace, goal.Id);
         throw new InvalidOperationException(
             $"SPEC_REFINEMENT_PENDING goal={goal.Id.Value} owner=durable-outbox " +
-            $"executor_started={launch.Started.ToString().ToLowerInvariant()} detail={launch.Detail}");
+            $"executor_started={launch.Started.ToString().ToLowerInvariant()} " +
+            $"repaired={repaired.ToString().ToLowerInvariant()} detail={launch.Detail}");
     }
 
     _ = GoalRefinementGate.EnsureRefined(
@@ -477,6 +485,25 @@ public static ParallelExecutionPlan BuildReadyTaskParallelPlan(
         .Select(provider => new ParallelExecutionProviderQuota(provider, 1))
         .ToList();
     return ParallelExecutionPlanner.Build(intents, providerQuotas, approveHighRiskOwnership);
+}
+
+private static bool TryHydrateStoreRefinedSpec(
+    AgentOrchestratorKernel kernel,
+    OrchestratorWorkspace workspace,
+    GoalId goalId)
+{
+    var stored = new SqliteOrchestratorStateRepository(workspace.SqliteStatePath)
+        .LoadGoalAsync(goalId)
+        .GetAwaiter()
+        .GetResult();
+    if (stored is null)
+        return false;
+    if (stored.RefinedSpec is null &&
+        (stored.RefinedSpecVersions is null || stored.RefinedSpecVersions.Count == 0))
+        return false;
+
+    kernel.ReplaceGoalWithSnapshot(stored);
+    return true;
 }
 
 private static bool IsRefinementEligible(Goal goal, TaskSpec task) =>

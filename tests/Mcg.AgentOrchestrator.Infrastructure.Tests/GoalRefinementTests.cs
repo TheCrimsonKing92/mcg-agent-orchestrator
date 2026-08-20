@@ -203,6 +203,212 @@ public sealed class GoalRefinementTests
         Xunit.Assert.Equal("Use the completed refined spec.", reloadedGoal.RefinedSpec!.BehavioralContract);
     }
 
+    [Xunit.Fact]
+    public async Task SpecConsumer_missing_outbox_repairs_then_holds()
+    {
+        var root = CreateTempDirectory();
+        var workspace = OrchestratorWorkspace.ForDirectory(root);
+        var providers = new InMemoryModelProviderRegistry([]);
+        ModelFunctionCatalogStore.Save(workspace.ModelFunctionCatalogPath, new ModelFunctionCatalog([
+            new ModelFunctionBinding(
+                ModelFunctionPurposes.SpecRefiner,
+                ModelLane.CheapApi,
+                new ModelProfile("missing-provider", "fake-model", ModelCapability.Text, SubscriptionMode.ApiKey))
+        ]));
+        var kernel = new AgentOrchestratorKernel();
+        var goal = GoalLifecycleCommands.CreateAndActivateGoal(
+            kernel,
+            AgentCatalog.Default().Agents,
+            "Research and plan a focused implementation with tests.",
+            workspace,
+            providers);
+        GoalRefinementWorkCoordinator.RecordPending(kernel, goal.Id);
+        var repository = CreateMigratedStateRepository(workspace.SqliteStatePath);
+        await repository.SaveAsync(kernel);
+        Xunit.Assert.Empty(await repository.ListOutboxMessagesAsync(GoalRefinementWorkCoordinator.OutboxKind));
+
+        var launches = 0;
+        GoalRefinementWorkCoordinator.ResetRecoveryLaunchesForTests();
+        GoalRefinementWorkCoordinator.LaunchOverride = (_, _) =>
+        {
+            launches++;
+            return new GoalRefinementWorkLaunchResult(true, 1, "test-launch");
+        };
+        try
+        {
+            var pending = Xunit.Assert.Throws<InvalidOperationException>(() =>
+                GoalManagementCommandService.EnsureRefinedForSpecConsumer(
+                    kernel,
+                    workspace,
+                    providers,
+                    kernel.GetGoal(goal.Id)));
+            Xunit.Assert.StartsWith("SPEC_REFINEMENT_PENDING", pending.Message, StringComparison.Ordinal);
+            Xunit.Assert.Contains("repaired=true", pending.Message, StringComparison.Ordinal);
+            Xunit.Assert.Equal(1, launches);
+            Xunit.Assert.Equal(
+                GoalRefinementWorkCoordinator.MessageId(goal.Id),
+                Xunit.Assert.Single(await repository.ListOutboxMessagesAsync(GoalRefinementWorkCoordinator.OutboxKind)).Id);
+
+            var again = Xunit.Assert.Throws<InvalidOperationException>(() =>
+                GoalManagementCommandService.EnsureRefinedForSpecConsumer(
+                    kernel,
+                    workspace,
+                    providers,
+                    kernel.GetGoal(goal.Id)));
+            Xunit.Assert.Contains("repaired=false", again.Message, StringComparison.Ordinal);
+            Xunit.Assert.Contains(GoalRefinementWorkCoordinator.CadenceDeferredDetail, again.Message, StringComparison.Ordinal);
+            Xunit.Assert.Equal(1, launches);
+            Xunit.Assert.Single(await repository.ListOutboxMessagesAsync(GoalRefinementWorkCoordinator.OutboxKind));
+        }
+        finally
+        {
+            GoalRefinementWorkCoordinator.LaunchOverride = null;
+            GoalRefinementWorkCoordinator.UtcNowOverride = null;
+            GoalRefinementWorkCoordinator.ResetRecoveryLaunchesForTests();
+        }
+    }
+
+    [Xunit.Fact]
+    public async Task SpecConsumer_hydrates_store_spec_instead_of_reliving_pending()
+    {
+        var root = CreateTempDirectory();
+        var workspace = OrchestratorWorkspace.ForDirectory(root);
+        var provider = new FakeSmokeProvider(
+            text: """
+                ```json
+                {"behavioralContract":"Hydrated spec from store.","acceptanceCriteria":["store wins"],"verificationClass":"TestVerifiable","decisions":[],"forks":[]}
+                ```
+                """,
+            providerName: "hydrate-refiner");
+        var providers = new InMemoryModelProviderRegistry([provider]);
+        ModelFunctionCatalogStore.Save(workspace.ModelFunctionCatalogPath, new ModelFunctionCatalog([
+            new ModelFunctionBinding(
+                ModelFunctionPurposes.SpecRefiner,
+                ModelLane.CheapApi,
+                new ModelProfile("hydrate-refiner", "fake-model", ModelCapability.Text, SubscriptionMode.ApiKey))
+        ]));
+        var kernel = new AgentOrchestratorKernel();
+        var goal = GoalLifecycleCommands.CreateAndActivateGoal(
+            kernel,
+            AgentCatalog.Default().Agents,
+            "Research and plan a focused implementation with tests.",
+            workspace,
+            providers);
+        GoalRefinementWorkCoordinator.RecordPending(kernel, goal.Id);
+        var repository = CreateMigratedStateRepository(workspace.SqliteStatePath);
+        await repository.TransactWithOutboxAsync(
+            (persistedKernel, _) =>
+            {
+                persistedKernel.ReplaceGoalWithSnapshot(kernel.ExportGoalSnapshot(goal.Id));
+                return Task.FromResult((
+                    ShouldSave: true,
+                    Result: true,
+                    OutboxMessages: (IReadOnlyList<OrchestratorStateOutboxMessage>)[
+                        GoalRefinementWorkCoordinator.CreateMessage(goal.Id)
+                    ]));
+            });
+
+        var processed = await GoalRefinementWorkCoordinator.ProcessAsync(
+            repository,
+            workspace,
+            providers,
+            WorkerProfileCatalog.Default(),
+            goal.Id);
+        Xunit.Assert.True(processed.Claimed);
+        Xunit.Assert.True(processed.Attached);
+        Xunit.Assert.True(GoalRefinementWorkCoordinator.HasPendingWork(kernel.GetGoal(goal.Id)));
+
+        GoalManagementCommandService.EnsureRefinedForSpecConsumer(
+            kernel,
+            workspace,
+            providers,
+            kernel.GetGoal(goal.Id));
+
+        var hydrated = kernel.GetGoal(goal.Id);
+        Xunit.Assert.False(GoalRefinementWorkCoordinator.HasPendingWork(hydrated));
+        Xunit.Assert.Equal("Hydrated spec from store.", hydrated.RefinedSpec!.BehavioralContract);
+    }
+
+    [Xunit.Fact]
+    public async Task TryLaunchFirstPending_repairs_missing_outbox_then_launches()
+    {
+        var root = CreateTempDirectory();
+        var workspace = OrchestratorWorkspace.ForDirectory(root);
+        var providers = new InMemoryModelProviderRegistry([]);
+        var kernel = new AgentOrchestratorKernel();
+        var goal = GoalLifecycleCommands.CreateAndActivateGoal(
+            kernel,
+            AgentCatalog.Default().Agents,
+            "Research and plan a focused implementation with tests.",
+            workspace,
+            providers);
+        GoalRefinementWorkCoordinator.RecordPending(kernel, goal.Id);
+        var repository = CreateMigratedStateRepository(workspace.SqliteStatePath);
+        await repository.SaveAsync(kernel);
+        Xunit.Assert.Empty(await repository.ListOutboxMessagesAsync(GoalRefinementWorkCoordinator.OutboxKind));
+
+        var launches = 0;
+        GoalRefinementWorkCoordinator.ResetRecoveryLaunchesForTests();
+        GoalRefinementWorkCoordinator.LaunchOverride = (_, launchedId) =>
+        {
+            launches++;
+            Xunit.Assert.Equal(goal.Id, launchedId);
+            return new GoalRefinementWorkLaunchResult(true, 7, "test-launch");
+        };
+        try
+        {
+            GoalRefinementWorkCoordinator.TryLaunchFirstPending(repository, workspace);
+            Xunit.Assert.Equal(1, launches);
+            Xunit.Assert.Equal(
+                GoalRefinementWorkCoordinator.MessageId(goal.Id),
+                Xunit.Assert.Single(await repository.ListOutboxMessagesAsync(GoalRefinementWorkCoordinator.OutboxKind)).Id);
+        }
+        finally
+        {
+            GoalRefinementWorkCoordinator.LaunchOverride = null;
+            GoalRefinementWorkCoordinator.ResetRecoveryLaunchesForTests();
+        }
+    }
+
+    [Xunit.Fact]
+    public void TryLaunchIfDue_defers_within_cadence_then_relaunches()
+    {
+        var workspace = OrchestratorWorkspace.ForDirectory(CreateTempDirectory());
+        var goalId = GoalId.New();
+        var launches = 0;
+        var now = new DateTimeOffset(2026, 8, 19, 12, 0, 0, TimeSpan.Zero);
+        GoalRefinementWorkCoordinator.ResetRecoveryLaunchesForTests();
+        GoalRefinementWorkCoordinator.UtcNowOverride = () => now;
+        GoalRefinementWorkCoordinator.LaunchOverride = (_, _) =>
+        {
+            launches++;
+            return new GoalRefinementWorkLaunchResult(true, launches, "test-launch");
+        };
+        try
+        {
+            var first = GoalRefinementWorkCoordinator.TryLaunchIfDue(workspace, goalId);
+            Xunit.Assert.True(first.Started);
+            Xunit.Assert.Equal(1, launches);
+
+            now = now.AddMinutes(1);
+            var deferred = GoalRefinementWorkCoordinator.TryLaunchIfDue(workspace, goalId);
+            Xunit.Assert.False(deferred.Started);
+            Xunit.Assert.Equal(GoalRefinementWorkCoordinator.CadenceDeferredDetail, deferred.Detail);
+            Xunit.Assert.Equal(1, launches);
+
+            now += GoalRefinementWorkCoordinator.RecoveryLaunchCadence;
+            var second = GoalRefinementWorkCoordinator.TryLaunchIfDue(workspace, goalId);
+            Xunit.Assert.True(second.Started);
+            Xunit.Assert.Equal(2, launches);
+        }
+        finally
+        {
+            GoalRefinementWorkCoordinator.LaunchOverride = null;
+            GoalRefinementWorkCoordinator.UtcNowOverride = null;
+            GoalRefinementWorkCoordinator.ResetRecoveryLaunchesForTests();
+        }
+    }
+
     [Xunit.Fact(DisplayName = "GoalLifecycleCommands_records_auto_pipeline_decision_and_creates_reviewer_lane")]
     public void GoalLifecycleCommandsRecordsAutoPipelineDecisionAndCreatesReviewerLane()
     {

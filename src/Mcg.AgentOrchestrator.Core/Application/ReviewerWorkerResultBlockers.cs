@@ -805,21 +805,14 @@ public static class WorkerResultBlockers
         return task.RequiredRole switch
         {
             AgentRole.Researcher => true,
-            AgentRole.Tester => !TaskRequestsFileChanges(task),
+            // A Tester never owes file changes: execution defers to the Conductor and tests: deferred
+            // is the correct output. Inferring otherwise from task prose rejected correct work whenever
+            // a plan happened to mention modifying tests. Mirrors the fix already applied to
+            // BackgroundDispatchRunner.IsVerificationOnlyTesterCompletion.
+            AgentRole.Tester => true,
             _ => false
         };
     }
-
-    private static bool TaskRequestsFileChanges(TaskSpec task)
-    {
-        var text = $"{task.Description}\n{task.VerificationPlan}".ToLowerInvariant();
-        return Regex.IsMatch(
-            text,
-            @"\b(add|create|write|implement|update|modify|edit|fix)\b.{0,80}\b(test|tests|coverage|fixture|fixtures|source|file|files)\b|" +
-            @"\b(test|tests|coverage|fixture|fixtures|source|file|files)\b.{0,80}\b(add|create|write|implement|update|modify|edit|fix)\b",
-            RegexOptions.CultureInvariant);
-    }
-
     private static bool ContainsBlockerClassification(string line)
     {
         var normalized = line

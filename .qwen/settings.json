@@ -2,23 +2,15 @@
   "modelProviders": {
     "openai": [
       {
-        "id": "qwen3:8b",
-        "name": "Ollama qwen3:8b (no thinking)",
+        "id": "qwen3.6-35b-a3b",
+        "name": "llama-server qwen3.6-35b-a3b (no thinking)",
         "envKey": "OPENAI_API_KEY",
-        "baseUrl": "http://127.0.0.1:11434/v1",
-        "generationConfig": {
-          "reasoning": false
-        }
-      },
-      {
-        "id": "qwen3:14b",
-        "name": "Ollama qwen3:14b (no thinking)",
-        "envKey": "OPENAI_API_KEY",
-        "baseUrl": "http://127.0.0.1:11434/v1",
+        "baseUrl": "http://127.0.0.1:8080/v1",
         "generationConfig": {
           "reasoning": false
         }
       }
     ]
-  }
+  },
+  "$version": 4
 }

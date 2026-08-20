@@ -540,6 +540,62 @@ public sealed class WorkerDispatchTestsDispatchPreparation : WorkerDispatchTestS
                 DispatchRecordCheckpointPhase.BeforeProcessStart));
     }
 
+    [Xunit.Fact(DisplayName = "Context_window_is_provider_responsive_and_qwen_code_tax_is_a_profile_reserve")]
+    public void WorkerPromptInputBudgetSeparatesProviderWindowFromQwenCodeHarnessReserve()
+    {
+        Assert.Equal(32768, WorkerPromptInputBudget.ContextWindowTokens("LlamaCpp", LlamaCppDefaults.DefaultModelAlias));
+        Assert.Equal(8192, WorkerPromptInputBudget.ContextWindowTokens("Ollama", "qwen3:8b"));
+        Assert.Equal(100_000, WorkerPromptInputBudget.ContextWindowTokens("xAI", "grok-4.6"));
+
+        Assert.Equal(0, WorkerPromptInputBudget.HarnessReservedTokens(null));
+        Assert.Equal(0, WorkerPromptInputBudget.HarnessReservedTokens("grok-cli"));
+        Assert.Equal(WorkerProfile.QwenCodeBareStartupTokens, WorkerPromptInputBudget.HarnessReservedTokens(WorkerProfile.QwenCodeCliName));
+
+        Assert.Equal(
+            32768 - WorkerPromptInputBudget.ReservedOutputTokens,
+            WorkerPromptInputBudget.InputTokenBudget("LlamaCpp", LlamaCppDefaults.DefaultModelAlias));
+        Assert.Equal(
+            32768 - WorkerPromptInputBudget.ReservedOutputTokens - WorkerProfile.QwenCodeBareStartupTokens,
+            WorkerPromptInputBudget.InputTokenBudget(
+                "LlamaCpp",
+                LlamaCppDefaults.DefaultModelAlias,
+                WorkerProfile.QwenCodeCliName));
+
+        var invalid = Assert.Throws<InvalidOperationException>(() =>
+            WorkerPromptInputBudget.InputTokenBudget("Ollama", "qwen3:8b", WorkerProfile.QwenCodeCliName));
+        Assert.Contains("context window 8192", invalid.Message, StringComparison.Ordinal);
+        Assert.Contains("harness reserve 8700", invalid.Message, StringComparison.Ordinal);
+    }
+
+    [Xunit.Fact(DisplayName = "Qwen_code_profile_rejects_a_prompt_that_fits_the_LlamaCpp_window_alone")]
+    public void WorkerPromptInputBudgetQwenCodeProfileRejectsPromptThatFitsLlamaCppWindowOnly()
+    {
+        var windowOnlyBudget = WorkerPromptInputBudget.InputTokenBudget("LlamaCpp", LlamaCppDefaults.DefaultModelAlias);
+        var qwenBudget = WorkerPromptInputBudget.InputTokenBudget(
+            "LlamaCpp",
+            LlamaCppDefaults.DefaultModelAlias,
+            WorkerProfile.QwenCodeCliName);
+        Assert.True(qwenBudget < windowOnlyBudget);
+
+        var paddingTokens = qwenBudget + 8;
+        var padding = new string('x', paddingTokens * 4);
+        var brief = CreateBudgetBrief("## Instructions", padding);
+
+        Assert.True(WorkerPromptInputBudget.CountTokens(brief.Content) > qwenBudget);
+        Assert.True(WorkerPromptInputBudget.CountTokens(brief.Content) < windowOnlyBudget);
+
+        var error = Assert.Throws<WorkerPromptInputBudgetExceededException>(() =>
+            WorkerPromptInputBudget.Apply(
+                brief,
+                "LlamaCpp",
+                LlamaCppDefaults.DefaultModelAlias,
+                workerProfileName: WorkerProfile.QwenCodeCliName));
+
+        Assert.Equal(qwenBudget, error.TokenBudget);
+        var kept = WorkerPromptInputBudget.Apply(brief, "LlamaCpp", LlamaCppDefaults.DefaultModelAlias);
+        Assert.False(kept.Trimmed);
+    }
+
     [Xunit.Fact(DisplayName = "Within-budget worker context remains byte-identical with no dropped sections")]
     public void WorkerPromptInputBudgetKeepsWithinBudgetPromptUnchanged()
 {

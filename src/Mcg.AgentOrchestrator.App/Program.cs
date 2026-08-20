@@ -175,7 +175,7 @@ if (IsGoalEventsFollowCommand(startupArgs))
 }
 
 var providers = ProviderRegistryFactory.CreateDefaultProviders();
-var agentFallback = ProviderRegistryFactory.IsOllamaReachable() ? AgentCatalog.OllamaDefault() : null;
+var agentFallback = ProviderRegistryFactory.IsLlamaCppReachable() ? AgentCatalog.LlamaCppDefault() : null;
 var agents = AgentCatalogStore.Load(workspace.AgentCatalogPath, agentFallback).Agents;
 var workerProfiles = WorkerProfileStore.Load(workspace.WorkerProfilePath);
 var operatorCatalog = OperatorChannelStore.Load(workspace.OperatorChannelPath);

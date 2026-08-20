@@ -2031,7 +2031,7 @@ public sealed class CliCommandTestsSubscriptionDispatchCommands : CliCommandTest
 
         Xunit.Assert.NotNull(ex);
         Xunit.Assert.Contains("--confirm-all", ex!.Message);
-        Xunit.Assert.Contains("default local Ollama smoke first", ex.Message);
+        Xunit.Assert.Contains("default local LlamaCpp smoke first", ex.Message);
     }
 
 
@@ -2065,7 +2065,7 @@ public sealed class CliCommandTestsSubscriptionDispatchCommands : CliCommandTest
 
         Xunit.Assert.NotNull(ex);
         Xunit.Assert.Contains("--confirm-paid-smoke", ex!.Message);
-        Xunit.Assert.Contains("default local Ollama smoke first", ex.Message);
+        Xunit.Assert.Contains("default local LlamaCpp smoke first", ex.Message);
     }
 
 
