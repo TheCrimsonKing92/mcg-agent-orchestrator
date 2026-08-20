@@ -59,6 +59,26 @@ public sealed class StorageRetentionMaintenanceTests
         Assert.True(File.Exists(exitPath));
     }
 
+    [Xunit.Fact]
+    public void WorkerArtifacts_SuccessfulDispatchPastThreshold_RemovesWholeGroup()
+    {
+        using var fixture = new RetentionFixture();
+        var paths = new[]
+        {
+            fixture.WriteSuccessfulChildExit(Now.AddDays(-15)),
+            fixture.WriteWorkerArtifact("err.log", Now.AddDays(-15)),
+            fixture.WriteSuccessfulExit(Now.AddDays(-15)),
+            fixture.WriteWorkerArtifact("out.log", Now.AddDays(-15))
+        };
+        Assert.All(paths, path => Assert.True(File.Exists(path)));
+        Assert.True(DispatchExitArtifacts.TryRead(paths[2], out var exitArtifact));
+        Assert.Equal(0, exitArtifact.ExitCode);
+
+        fixture.Run(TerminalGoal(WorkTaskStatus.Completed));
+
+        Assert.All(paths, path => Assert.False(File.Exists(path)));
+    }
+
     [Xunit.Fact(DisplayName = "WorkerRetention_dispatch_without_exit_artifact_is_kept_past_threshold")]
     public void DispatchWithoutExitArtifactIsKeptPastThreshold()
     {
@@ -299,6 +319,14 @@ public sealed class StorageRetentionMaintenanceTests
         {
             var path = WorkerArtifactPath("exit.txt");
             DispatchExitArtifacts.Write(path, DispatchExitArtifacts.Native(0, "completed", lastWrite));
+            File.SetLastWriteTimeUtc(path, lastWrite.UtcDateTime);
+            return path;
+        }
+
+        public string WriteSuccessfulChildExit(DateTimeOffset lastWrite)
+        {
+            var path = WorkerArtifactPath("child-exit.json");
+            File.WriteAllText(path, "{\"exitCode\":0}");
             File.SetLastWriteTimeUtc(path, lastWrite.UtcDateTime);
             return path;
         }

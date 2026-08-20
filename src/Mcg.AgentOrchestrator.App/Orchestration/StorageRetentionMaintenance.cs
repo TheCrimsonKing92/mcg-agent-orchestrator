@@ -105,11 +105,25 @@ internal static partial class StorageRetentionMaintenance
             .GroupBy(goal => goal.GoalId[..Math.Min(8, goal.GoalId.Length)], StringComparer.OrdinalIgnoreCase)
             .Where(group => group.Count() == 1)
             .ToDictionary(group => group.Key, group => group.Single(), StringComparer.OrdinalIgnoreCase);
+        var artifacts = Directory.EnumerateFiles(logDirectory, "*", SearchOption.TopDirectoryOnly)
+            .Select(path => (Path: path, Match: DispatchArtifactNameRegex().Match(Path.GetFileName(path))))
+            .ToArray();
+        var dispatchFailures = artifacts
+            .Where(artifact =>
+                artifact.Match.Success &&
+                byPrefix.TryGetValue(artifact.Match.Groups["goal"].Value, out var goal) &&
+                goal.IsTerminal)
+            .Select(artifact => artifact.Match.Groups["dispatch"].Value)
+            .Distinct(StringComparer.OrdinalIgnoreCase)
+            .ToDictionary(
+                dispatchPrefix => dispatchPrefix,
+                dispatchPrefix => DispatchFailed(logDirectory, dispatchPrefix),
+                StringComparer.OrdinalIgnoreCase);
         var deleted = TryDeleteExclusive(Path.Combine(logDirectory, "dispatch-diagnostics.jsonl")) ? 1 : 0;
         var compressed = 0;
-        foreach (var path in Directory.EnumerateFiles(logDirectory, "*", SearchOption.TopDirectoryOnly))
+        foreach (var artifact in artifacts)
         {
-            var match = DispatchArtifactNameRegex().Match(Path.GetFileName(path));
+            var (path, match) = artifact;
             if (!match.Success || !byPrefix.TryGetValue(match.Groups["goal"].Value, out var goal) || !goal.IsTerminal)
             {
                 continue;
@@ -122,7 +136,7 @@ internal static partial class StorageRetentionMaintenance
                 .ToArray();
             var preserveRaw = goal.Status == GoalStatus.Failed && matchingTasks.Length == 0 ||
                 matchingTasks.Any(status => status is WorkTaskStatus.Failed or WorkTaskStatus.WaitingForHuman) ||
-                DispatchFailed(logDirectory, match.Groups["dispatch"].Value);
+                dispatchFailures[match.Groups["dispatch"].Value];
             if (preserveRaw)
             {
                 continue;
