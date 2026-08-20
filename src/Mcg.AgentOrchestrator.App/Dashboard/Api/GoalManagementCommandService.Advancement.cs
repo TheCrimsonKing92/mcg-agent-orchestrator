@@ -93,10 +93,8 @@ private static async Task<object?> AdvanceRunAssignedTaskAsync(
     bool allowApiFallback = false)
 {
     var task = goal.Tasks.Single(task => task.Id == taskId);
-    if (goal.RefinedSpec is null && task.RequiredRole != AgentRole.Researcher)
+    if (goal.RefinedSpec is not null || task.RequiredRole != AgentRole.Researcher)
         EnsureRefinedForSpecConsumer(kernel, workspace, providers, goal);
-    else if (goal.RefinedSpec is not null)
-        GoalRefinementGate.ThrowIfAwaitingClarification(workspace, goal);
     var agent = ResolveAssignedAgent(task, agents);
     if (agent.ExecutionPolicy is AgentExecutionPolicy.SubscriptionOnly or AgentExecutionPolicy.PreferSubscription)
     {
@@ -157,10 +155,8 @@ private static async Task<object?> AdvanceApiRunAssignedTaskAsync(
     TaskId taskId)
 {
     var task = goal.Tasks.Single(task => task.Id == taskId);
-    if (goal.RefinedSpec is null && task.RequiredRole != AgentRole.Researcher)
+    if (goal.RefinedSpec is not null || task.RequiredRole != AgentRole.Researcher)
         EnsureRefinedForSpecConsumer(kernel, workspace, providers, goal);
-    else if (goal.RefinedSpec is not null)
-        GoalRefinementGate.ThrowIfAwaitingClarification(workspace, goal);
     var agent = ResolveAssignedAgent(task, agents);
     if (!AgentExecutionPolicies.AllowsApi(agent.ExecutionPolicy))
     {

@@ -415,22 +415,102 @@ internal static void EnsureRefinedForSpecConsumer(
         current = kernel.GetGoal(goal.Id);
     }
 
-    if (GoalRefinementWorkCoordinator.HasPendingWork(current))
+    var repository = new SqliteOrchestratorStateRepository(workspace.SqliteStatePath);
+    var outboxState = repository
+        .GetOutboxStateAsync(GoalRefinementWorkCoordinator.MessageId(goal.Id))
+        .GetAwaiter()
+        .GetResult();
+    var clarificationFacts = new GoalRefinementClarificationFacts(
+        CollaborationItemStore.ForDirectory(workspace.OrchestratorDirectory)
+            .ListAsync(goal.Id.Value)
+            .GetAwaiter()
+            .GetResult());
+    var readiness = GoalRefinementGate.Evaluate(current, outboxState, clarificationFacts);
+
+    switch (readiness.Readiness)
     {
-        var repaired = GoalRefinementWorkCoordinator.TryEnsurePendingOutbox(workspace, goal.Id);
-        var launch = GoalRefinementWorkCoordinator.TryLaunchIfDue(workspace, goal.Id);
-        throw new InvalidOperationException(
-            $"SPEC_REFINEMENT_PENDING goal={goal.Id.Value} owner=durable-outbox " +
-            $"executor_started={launch.Started.ToString().ToLowerInvariant()} " +
-            $"repaired={repaired.ToString().ToLowerInvariant()} detail={launch.Detail}");
+        case GoalRefinementReadiness.Ready:
+            return;
+
+        case GoalRefinementReadiness.AwaitingClarification:
+            throw new InvalidOperationException(readiness.Detail);
+
+        case GoalRefinementReadiness.Pending:
+            ThrowPending(workspace, goal.Id, readiness.Detail, repaired: false);
+            return;
+
+        case GoalRefinementReadiness.RepairRequired:
+            var ensured = repository
+                .EnsureOutboxMessageAsync(GoalRefinementWorkCoordinator.CreateMessage(goal.Id))
+                .GetAwaiter()
+                .GetResult();
+            if (ensured.Disposition == OrchestratorStateOutboxEnsureDisposition.Failed)
+                ThrowFailed(goal.Id, ensured.State.Detail);
+            if (ensured.Disposition == OrchestratorStateOutboxEnsureDisposition.Quarantined)
+                ThrowQuarantined(goal.Id, ensured.State.Detail);
+            GoalRefinementWorkCoordinator.RecordPending(kernel, goal.Id);
+            ThrowPending(
+                workspace,
+                goal.Id,
+                $"repair={ensured.Disposition.ToString().ToLowerInvariant()}",
+                repaired: true);
+            return;
+
+        case GoalRefinementReadiness.Failed:
+            ThrowFailed(goal.Id, readiness.Detail);
+            return;
+
+        case GoalRefinementReadiness.Quarantined:
+            ThrowQuarantined(goal.Id, readiness.Detail);
+            return;
+
+        default:
+            throw new InvalidOperationException(
+                $"Unknown goal-refinement readiness '{readiness.Readiness}'.");
     }
 
-    _ = GoalRefinementGate.EnsureRefined(
-        kernel,
-        workspace,
-        providers ?? new InMemoryModelProviderRegistry([]),
-        current);
-    GoalRefinementGate.ThrowIfAwaitingClarification(workspace, kernel.GetGoal(goal.Id));
+    static void ThrowPending(
+        OrchestratorWorkspace workspace,
+        GoalId goalId,
+        string stateDetail,
+        bool repaired)
+    {
+        if (StateDbWriteSession.IsActiveFor(workspace.SqliteStatePath))
+        {
+            throw new StateDbCommitBeforeRethrowException(
+                () => BuildPendingException(workspace, goalId, stateDetail, repaired));
+        }
+
+        throw BuildPendingException(workspace, goalId, stateDetail, repaired);
+    }
+
+    static InvalidOperationException BuildPendingException(
+        OrchestratorWorkspace workspace,
+        GoalId goalId,
+        string stateDetail,
+        bool repaired)
+    {
+        var launch = GoalRefinementWorkCoordinator.TryLaunchIfDue(workspace, goalId);
+        return new InvalidOperationException(
+            $"SPEC_REFINEMENT_PENDING goal={goalId.Value} owner=durable-outbox " +
+            $"executor_started={launch.Started.ToString().ToLowerInvariant()} " +
+            $"state={stateDetail} repaired={repaired.ToString().ToLowerInvariant()} " +
+            $"detail={launch.Detail}");
+    }
+
+    static void ThrowFailed(GoalId goalId, string? detail)
+    {
+        var failure = string.IsNullOrWhiteSpace(detail) ? "last-executor-failed" : detail;
+        throw new InvalidOperationException(
+            failure.StartsWith("SPEC_REFINEMENT_FAILED", StringComparison.Ordinal)
+                ? $"SPEC_REFINEMENT_FAILED goal={goalId.Value} {failure["SPEC_REFINEMENT_FAILED".Length..].TrimStart()}"
+                : $"SPEC_REFINEMENT_FAILED goal={goalId.Value} owner=durable-outbox phase=executor detail={failure}");
+    }
+
+    static void ThrowQuarantined(GoalId goalId, string? detail) =>
+        throw new InvalidOperationException(
+            $"SPEC_REFINEMENT_OPERATOR_RECOVERY goal={goalId.Value} owner=durable-outbox " +
+            $"state=quarantined detail={detail ?? "operator-recovery-required"}");
 }
 
 private static ParallelSafeBatchSelection SelectFirstParallelSafeAssignedBatch(

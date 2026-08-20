@@ -4,65 +4,100 @@ using Mcg.AgentOrchestrator.Infrastructure;
 
 namespace Mcg.AgentOrchestrator.App.Orchestration;
 
-internal sealed record GoalRefinementGateResult(
-    RefinementOutcome Outcome,
-    bool RanRefinement,
-    RefinedSpec Spec)
+internal enum GoalRefinementReadiness
 {
-    public bool AwaitingClarification => Outcome == RefinementOutcome.AwaitingClarification;
+    Ready,
+    Pending,
+    AwaitingClarification,
+    RepairRequired,
+    Failed,
+    Quarantined
 }
+
+internal sealed record GoalRefinementClarificationFacts(
+    IReadOnlyList<CollaborationItem> Items);
+
+internal sealed record GoalRefinementReadinessResult(
+    GoalRefinementReadiness Readiness,
+    string Detail);
 
 internal static class GoalRefinementGate
 {
-    public static GoalRefinementGateResult EnsureRefined(
-        AgentOrchestratorKernel kernel,
-        OrchestratorWorkspace workspace,
-        IModelProviderRegistry providers,
+    public static GoalRefinementReadinessResult Evaluate(
         Goal goal,
-        ConductorAutonomyPolicy? policy = null,
-        WorkerProfileCatalog? workerProfiles = null,
-        IGoalLifecycleEventWriter? eventWriter = null,
-        CollaborationItemRaise? collaborationItemRaise = null,
-        Func<SubscriptionLaunchProfile, SubscriptionCliCompleter>? subscriptionCompleterFactory = null,
-        TimeSpan? subscriptionTimeout = null)
+        OrchestratorStateOutboxState? outboxState,
+        GoalRefinementClarificationFacts clarificationFacts)
     {
-        if (goal.RefinedSpec is { } existing)
+        if (outboxState is { } typedState &&
+            (!typedState.Message.Id.Equals(GoalRefinementWorkCoordinator.MessageId(goal.Id), StringComparison.Ordinal) ||
+             !typedState.Message.Kind.Equals(GoalRefinementWorkCoordinator.OutboxKind, StringComparison.Ordinal)))
         {
-            var existingService = CreateService(
-                workspace,
-                providers,
-                workerProfiles,
-                collaborationItemRaise,
-                subscriptionCompleterFactory,
-                subscriptionTimeout);
-            // Pick up any operator answers submitted since refinement: resolved clarification items in
-            // the store are written into the spec's open questions here (the listener only resolves the
-            // store item), so an answered goal clears AwaitingClarification and planning resumes with the
-            // operator's decisions recorded in the spec.
-            if (existing.HasOpenQuestions)
-            {
-                existing = existingService.SyncAnsweredFeasibilityClarifications(kernel, goal.Id) ?? existing;
-                existing = existingService.SyncAnsweredClarifications(kernel, goal.Id) ?? existing;
-            }
-
-            var outcome = existing.HasOpenQuestions ? RefinementOutcome.AwaitingClarification : RefinementOutcome.AutoRefined;
-            if (outcome == RefinementOutcome.AwaitingClarification)
-                eventWriter?.AppendClarificationNeeded(goal.Id, "spec");
-            return new GoalRefinementGateResult(outcome, RanRefinement: false, existing);
+            return new GoalRefinementReadinessResult(
+                GoalRefinementReadiness.Quarantined,
+                "outbox-identity-mismatch");
         }
 
-        var service = CreateService(
-            workspace,
-            providers,
-            workerProfiles,
-            collaborationItemRaise,
-            subscriptionCompleterFactory,
-            subscriptionTimeout);
-        var result = service.RefineAsync(kernel, goal.Id, policy ?? ConductorAutonomyPolicy.Conservative).GetAwaiter().GetResult();
-        kernel.RecordGoalPolicyDecision(goal.Id, BuildPolicyReceipt(result));
-        if (result.Outcome == RefinementOutcome.AwaitingClarification)
-            eventWriter?.AppendClarificationNeeded(goal.Id, "spec");
-        return new GoalRefinementGateResult(result.Outcome, RanRefinement: true, result.Spec);
+        if (outboxState?.Status == OrchestratorStateOutboxStatus.Quarantined)
+            return new GoalRefinementReadinessResult(GoalRefinementReadiness.Quarantined, outboxState.Detail ?? "quarantined");
+        if (outboxState?.Status == OrchestratorStateOutboxStatus.Failed)
+            return new GoalRefinementReadinessResult(GoalRefinementReadiness.Failed, outboxState.Detail ?? "last-executor-failed");
+
+        if (goal.RefinedSpec is null &&
+            (!GoalRefinementWorkCoordinator.HasPendingWork(goal) || outboxState is null))
+        {
+            return new GoalRefinementReadinessResult(
+                GoalRefinementReadiness.RepairRequired,
+                outboxState is null ? "missing-durable-work" : "missing-pending-marker");
+        }
+
+        if (outboxState?.Status is OrchestratorStateOutboxStatus.Pending or OrchestratorStateOutboxStatus.Processing)
+            return new GoalRefinementReadinessResult(GoalRefinementReadiness.Pending, outboxState.Status.ToString().ToLowerInvariant());
+
+        if (goal.RefinedSpec is null)
+            return new GoalRefinementReadinessResult(GoalRefinementReadiness.RepairRequired, "missing-durable-work");
+
+        var resolvedItems = clarificationFacts.Items
+            .Where(item =>
+                item.Type == CollaborationItemType.Clarification &&
+                CollaborationItemLifecycle.IsTerminal(item.Status) &&
+                !string.IsNullOrWhiteSpace(item.CorrelationKey))
+            .ToArray();
+        if (goal.RefinedSpec.OpenQuestions.Any(question =>
+                HasResolvedAnswerPendingSync(question, resolvedItems)))
+        {
+            return new GoalRefinementReadinessResult(
+                GoalRefinementReadiness.RepairRequired,
+                "resolved-answers-pending-sync");
+        }
+
+        if (goal.RefinedSpec.HasOpenQuestions)
+        {
+            return new GoalRefinementReadinessResult(
+                GoalRefinementReadiness.AwaitingClarification,
+                BuildAwaitingClarificationReason(goal, clarificationFacts.Items));
+        }
+
+        return new GoalRefinementReadinessResult(GoalRefinementReadiness.Ready, "ready");
+    }
+
+    private static bool HasResolvedAnswerPendingSync(
+        RefinedSpecOpenQuestion question,
+        IReadOnlyList<CollaborationItem> resolvedItems)
+    {
+        var exactMatches = resolvedItems
+            .Where(item => string.Equals(item.CorrelationKey, question.Id, StringComparison.Ordinal))
+            .ToArray();
+        if (exactMatches.Length == 0)
+            return false;
+
+        var selected = string.Equals(
+            question.ForkKind,
+            AcceptanceCriterionFeasibility.ForkKind,
+            StringComparison.OrdinalIgnoreCase)
+            ? exactMatches[^1]
+            : exactMatches[0];
+        var resolved = ToResolvedClarification(selected);
+        return !string.Equals(question.Answer, resolved.Resolution, StringComparison.Ordinal);
     }
 
     internal static string BuildPolicyReceipt(RefinementResult result)
@@ -170,23 +205,6 @@ internal static class GoalRefinementGate
         return results;
     }
 
-    private static GoalRefinementService CreateService(
-        OrchestratorWorkspace workspace,
-        IModelProviderRegistry providers,
-        WorkerProfileCatalog? workerProfiles,
-        CollaborationItemRaise? collaborationItemRaise = null,
-        Func<SubscriptionLaunchProfile, SubscriptionCliCompleter>? subscriptionCompleterFactory = null,
-        TimeSpan? subscriptionTimeout = null) =>
-        new(
-            providers,
-            ModelFunctionCatalogStore.Load(workspace.ModelFunctionCatalogPath),
-            CollaborationItemStore.ForDirectory(workspace.OrchestratorDirectory),
-            new SpecRefinerPrecedentStore(workspace.SpecRefinerPrecedentsPath),
-            workerProfiles ?? WorkerProfileStore.Load(workspace.WorkerProfilePath),
-            subscriptionCompleterFactory,
-            raiseCollaborationItem: collaborationItemRaise,
-            subscriptionTimeout: subscriptionTimeout);
-
     private static IReadOnlyList<CollaborationItem> ListGoalCollaborationItems(
         OrchestratorWorkspace workspace,
         Goal goal) =>
@@ -215,6 +233,31 @@ internal static class GoalRefinementGate
             .Select(GoalRefinementService.ResolveQuestionTopicKey)
             .Distinct(StringComparer.OrdinalIgnoreCase)
             .ToArray();
+    }
+
+    private static string BuildAwaitingClarificationReason(
+        Goal goal,
+        IReadOnlyList<CollaborationItem> items)
+    {
+        var openClarifications = items
+            .Where(item =>
+                item.Type == CollaborationItemType.Clarification &&
+                !CollaborationItemLifecycle.IsTerminal(item.Status) &&
+                item.CorrelationKey?.StartsWith(GoalRefinementService.CorrelationKeyPrefix, StringComparison.Ordinal) == true)
+            .ToArray();
+        var staleTopicKeys = FindStaleClarificationTopicKeys(openClarifications, items);
+        if (staleTopicKeys.Count > 0)
+        {
+            var recoveryCommand = $"attention dismiss {goal.Id.Value[..8]}";
+            return
+                $"Stale spec clarification detected for goal {goal.Id.Value[..8]}: {string.Join(", ", staleTopicKeys)}. " +
+                $"Recovery: run `{recoveryCommand}` to clear stale clarification attention, then retry dispatch.";
+        }
+
+        return openClarifications.Length == 0
+            ? "Resolve the spec clarification item before dispatching planner work."
+            : $"Resolve spec clarification before dispatching planner work: {openClarifications.Length} pending for goal {goal.Id.Value[..8]}. " +
+              $"Run `attention show {goal.Id.Value[..8]}` to read and answer them.";
     }
 
     private static ResolvedSpecClarification ToResolvedClarification(CollaborationItem item)

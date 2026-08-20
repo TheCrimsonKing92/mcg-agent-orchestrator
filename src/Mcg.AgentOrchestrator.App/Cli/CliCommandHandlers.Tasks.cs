@@ -598,12 +598,6 @@ private static bool? TryExecuteTaskCommand(string command, IReadOnlyList<string>
                     supersedeText,
                     HumanInputAnswerOrigin.Operator,
                     supersedeGoal.AuthoritativeBrief.Version).GetAwaiter().GetResult();
-                var refinementService = new GoalRefinementService(
-                    context.Providers,
-                    ModelFunctionCatalog.Empty,
-                    store,
-                    new SpecRefinerPrecedentStore(context.Workspace.SpecRefinerPrecedentsPath));
-                refinementService.SyncAnsweredClarifications(context.Kernel, supersedeGoal.Id);
                 authoritativeText = updated.AuthoritativeAnswer?.Text ?? updated.Resolution!;
                 supersededId = ClarificationId(updated, identityUniverse);
             }

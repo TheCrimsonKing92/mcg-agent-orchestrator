@@ -2105,8 +2105,11 @@ public sealed class WorkerDispatchSpecClarificationTests : WorkerDispatchTestSup
     {
         var root = CreateTempDirectory();
         var workspace = OrchestratorWorkspace.ForDirectory(root);
+        var repository = InfrastructureTestSupport.CreateMigratedStateRepository(workspace.SqliteStatePath);
         ModelFunctionCatalogStore.Save(workspace.ModelFunctionCatalogPath, RefinerCatalog());
         var store = CollaborationItemStore.ForDirectory(workspace.OrchestratorDirectory);
+        var provider = new QueueRefinerProvider();
+        var providers = new InMemoryModelProviderRegistry([provider]);
         var kernel = new AgentOrchestratorKernel();
         var taskSpec = new TaskSpec(TaskId.New(), "Implement after clarified spec.", AgentRole.Developer);
         var goal = kernel.CreateGoal("Dispatch after clarification.", [taskSpec]);
@@ -2133,19 +2136,56 @@ public sealed class WorkerDispatchSpecClarificationTests : WorkerDispatchTestSup
             "Question: Which API version should dispatch use?\nFork kind: external-contract",
             questionId);
         Assert.True(await store.TryResolveAsync(questionId, "REST v2"));
+        await repository.SaveAsync(kernel);
 
-        var result = GoalManagementCommandService.ProfileDispatchTask(
-            kernel,
-            workspace,
-            kernel.GetGoal(goal.Id),
-            task,
-            new WorkerProfile("test-profile", "echo {promptPath}"),
-            [agent],
-            new InMemoryModelProviderRegistry([]));
+        var previousLaunchOverride = GoalRefinementWorkCoordinator.LaunchOverride;
+        GoalRefinementWorkCoordinator.LaunchOverride = (_, _) =>
+            new GoalRefinementWorkLaunchResult(false, null, "test-launch-suppressed");
+        try
+        {
+            var pending = Assert.Throws<InvalidOperationException>(() =>
+                GoalManagementCommandService.ProfileDispatchTask(
+                    kernel,
+                    workspace,
+                    kernel.GetGoal(goal.Id),
+                    task,
+                    new WorkerProfile("test-profile", "echo {promptPath}"),
+                    [agent],
+                    providers));
+            Assert.StartsWith("SPEC_REFINEMENT_PENDING", pending.Message, StringComparison.Ordinal);
+            Assert.Empty(provider.Requests);
+            Assert.Single(await repository.ListOutboxMessagesAsync(GoalRefinementWorkCoordinator.OutboxKind));
 
-        Assert.NotNull(result.PromptPath);
-        Assert.Null(task.LastProcess);
-        Assert.NotNull(task.LastDispatch);
+            var synchronized = await GoalRefinementWorkCoordinator.ProcessAsync(
+                repository,
+                workspace,
+                providers,
+                WorkerProfileCatalog.Default(),
+                goal.Id);
+            Assert.True(synchronized.Attached);
+            Assert.Empty(provider.Requests);
+            Assert.Empty(await repository.ListOutboxMessagesAsync(GoalRefinementWorkCoordinator.OutboxKind));
+
+            kernel = await repository.LoadAsync();
+            goal = kernel.GetGoal(goal.Id);
+            task = goal.Tasks.Single();
+            var result = GoalManagementCommandService.ProfileDispatchTask(
+                kernel,
+                workspace,
+                goal,
+                task,
+                new WorkerProfile("test-profile", "echo {promptPath}"),
+                [agent],
+                providers);
+
+            Assert.NotNull(result.PromptPath);
+            Assert.Null(task.LastProcess);
+            Assert.NotNull(task.LastDispatch);
+        }
+        finally
+        {
+            GoalRefinementWorkCoordinator.LaunchOverride = previousLaunchOverride;
+        }
     }
 
     [Xunit.Fact(DisplayName = "Dispatch_gate_surfaces_stale_clarification_recovery_action")]

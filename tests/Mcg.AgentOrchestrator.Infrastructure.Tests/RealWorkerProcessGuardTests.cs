@@ -44,7 +44,7 @@ public sealed class RealWorkerProcessGuardTests
     {
         var baseline = RealWorkerProcessGuard.CaptureSnapshot();
         var root = CreateTempDirectory();
-        var workspace = OrchestratorWorkspace.ForDirectory(root);
+        var workspace = CreateRefinedWorkspace(root);
         var kernel = new AgentOrchestratorKernel();
         var objective = "Design and implement a production multi-tenant distributed architecture " + new string('o', 5000);
         var task = new TaskSpec(
@@ -91,7 +91,7 @@ public sealed class RealWorkerProcessGuardTests
     {
         var baseline = RealWorkerProcessGuard.CaptureSnapshot();
         var root = CreateTempDirectory();
-        var workspace = OrchestratorWorkspace.ForDirectory(root);
+        var workspace = CreateRefinedWorkspace(root);
         var kernel = new AgentOrchestratorKernel();
         var objective = "Implement a focused source change through the default conductor dispatch path.";
         var task = new TaskSpec(

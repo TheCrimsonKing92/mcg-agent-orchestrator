@@ -731,6 +731,7 @@ public sealed class CliCommandTestsGoalLifecycleCommands : CliCommandTestBase
             ref currentGoal));
         var goal = Xunit.Assert.Single(kernel.Goals);
         var task = Xunit.Assert.Single(goal.Tasks);
+        MarkGoalRefined(kernel, goal);
 
         var worktreePath = GoalWorktrees.WorktreePath(projectRootA, goal.Id);
         Directory.CreateDirectory(worktreePath);

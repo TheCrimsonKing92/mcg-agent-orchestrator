@@ -624,6 +624,8 @@ public sealed class CliCommandTestsSubscriptionDispatchCommands : CliCommandTest
         var latestGoal = kernel.CreateGoal(
             "Do newer work",
             [new TaskSpec(TaskId.New(), "Do newer work", AgentRole.Developer)]);
+        MarkGoalRefined(kernel, olderGoal);
+        MarkGoalRefined(kernel, latestGoal);
         var agent = new AgentDefinition(
             new AgentId("developer"),
             "Developer",
@@ -671,6 +673,8 @@ public sealed class CliCommandTestsSubscriptionDispatchCommands : CliCommandTest
         var latestGoal = kernel.CreateGoal(
             "Do newer work",
             [new TaskSpec(TaskId.New(), "Do newer work", AgentRole.Developer)]);
+        MarkGoalRefined(kernel, olderGoal);
+        MarkGoalRefined(kernel, latestGoal);
         var agent = new AgentDefinition(
             new AgentId("developer"),
             "Developer",
@@ -715,6 +719,7 @@ public sealed class CliCommandTestsSubscriptionDispatchCommands : CliCommandTest
         var goal = kernel.CreateGoal(
             "Target goal",
             [new TaskSpec(TaskId.New(), "Do work", AgentRole.Developer)]);
+        MarkGoalRefined(kernel, goal);
         var agent = new AgentDefinition(
             new AgentId("developer"),
             "Developer",
@@ -1360,6 +1365,7 @@ public sealed class CliCommandTestsSubscriptionDispatchCommands : CliCommandTest
         var kernel = new AgentOrchestratorKernel();
         var task = new TaskSpec(TaskId.New(), "Update src/one.txt", AgentRole.Developer);
         var goal = kernel.CreateGoal("Report blocked start tasks", [task]);
+        MarkGoalRefined(kernel, goal);
         IReadOnlyList<AgentDefinition> agents = [SubscriptionDeveloper()];
         var providers = new InMemoryModelProviderRegistry([]);
         var profiles = WorkerProfileCatalog.Default();
@@ -1401,6 +1407,7 @@ public sealed class CliCommandTestsSubscriptionDispatchCommands : CliCommandTest
         var kernel = new AgentOrchestratorKernel();
         var task = new TaskSpec(TaskId.New(), "Update src/one.txt", AgentRole.Developer);
         var goal = kernel.CreateGoal("Expose blocked ready tasks", [task]);
+        MarkGoalRefined(kernel, goal);
         IReadOnlyList<AgentDefinition> agents = [SubscriptionDeveloper()];
         kernel.ActivateGoal(goal.Id, agents);
         WorkerProfileStore.Save(workspace.WorkerProfilePath, WorkerProfileCatalog.Default());
@@ -1565,6 +1572,7 @@ public sealed class CliCommandTestsSubscriptionDispatchCommands : CliCommandTest
         var goal = kernel.CreateGoal(
             "Plan architecture work",
             [new TaskSpec(TaskId.New(), "Design and implement a production multi-tenant architecture.", AgentRole.Developer)]);
+        MarkGoalRefined(kernel, goal);
         var agent = new AgentDefinition(
             new AgentId("developer"),
             "Developer",
@@ -2303,6 +2311,7 @@ public sealed class CliCommandTestsSubscriptionDispatchCommands : CliCommandTest
         var workspace = CreateRefinedWorkspace(root);
         var kernel = new AgentOrchestratorKernel();
         var goal = kernel.CreateGoal("Keep guidance status-neutral", [new TaskSpec(TaskId.New(), "Do work", AgentRole.Developer)]);
+        MarkGoalRefined(kernel, goal);
         IReadOnlyList<AgentDefinition> agents =
         [
             new AgentDefinition(
@@ -2566,6 +2575,7 @@ public sealed class CliCommandTestsSubscriptionDispatchCommands : CliCommandTest
         var workspace = CreateRefinedWorkspace(root);
         var kernel = new AgentOrchestratorKernel();
         var goal = kernel.CreateGoal("Recover orphaned assignment", [new TaskSpec(TaskId.New(), "Do work", AgentRole.Developer)]);
+        MarkGoalRefined(kernel, goal);
         var oldAgent = new AgentDefinition(
             new AgentId("anthropic-developer"),
             "Anthropic developer",
@@ -2667,6 +2677,7 @@ public sealed class CliCommandTestsSubscriptionDispatchCommands : CliCommandTest
         var workspace = CreateRefinedWorkspace(root);
         var kernel = new AgentOrchestratorKernel();
         var goal = kernel.CreateGoal("Review subscription limits", [new TaskSpec(TaskId.New(), "Do work", AgentRole.Developer)]);
+        MarkGoalRefined(kernel, goal);
         IReadOnlyList<AgentDefinition> agents =
         [
             new AgentDefinition(
@@ -2762,6 +2773,7 @@ public sealed class CliCommandTestsSubscriptionDispatchCommands : CliCommandTest
         var workspace = CreateRefinedWorkspace(root);
         var kernel = new AgentOrchestratorKernel();
         var goal = kernel.CreateGoal("Review subscription limit from file", [new TaskSpec(TaskId.New(), "Do work", AgentRole.Developer)]);
+        MarkGoalRefined(kernel, goal);
         IReadOnlyList<AgentDefinition> agents =
         [
             new AgentDefinition(
@@ -3215,6 +3227,7 @@ public sealed class CliCommandTestsSubscriptionDispatchCommands : CliCommandTest
         var workspace = CreateRefinedWorkspace(root);
         var kernel = new AgentOrchestratorKernel();
         var goal = kernel.CreateGoal("One-step subscription dispatch", [new TaskSpec(TaskId.New(), "Do work", AgentRole.Developer)]);
+        MarkGoalRefined(kernel, goal);
         var agent = new AgentDefinition(
             new AgentId("developer"),
             "Developer",
@@ -3262,6 +3275,7 @@ public sealed class CliCommandTestsSubscriptionDispatchCommands : CliCommandTest
         var workspace = CreateRefinedWorkspace(root);
         var kernel = new AgentOrchestratorKernel();
         var goal = kernel.CreateGoal("Prepare-only subscription dispatch", [new TaskSpec(TaskId.New(), "Do work", AgentRole.Developer)]);
+        MarkGoalRefined(kernel, goal);
         var agent = new AgentDefinition(
             new AgentId("developer"),
             "Developer",
@@ -3294,8 +3308,8 @@ public sealed class CliCommandTestsSubscriptionDispatchCommands : CliCommandTest
     }
 
 
-    [Xunit.Fact(DisplayName = "Cli_simple_goal_with_dispatch_creates_goal_and_launches_worker")]
-    public void CliSimpleGoalWithDispatchCreatesGoalAndLaunchesWorker()
+    [Xunit.Fact(DisplayName = "Cli_simple_goal_with_dispatch_creates_goal_and_defers_worker_until_refined")]
+    public void CliSimpleGoalWithDispatchCreatesGoalAndDefersWorkerUntilRefined()
     {
         using var _sandboxEnv = ClearWorkerSandboxEnv();
         var root = CreateTempDirectory();
@@ -3317,8 +3331,7 @@ public sealed class CliCommandTestsSubscriptionDispatchCommands : CliCommandTest
         var profiles = WorkerProfileCatalog.Default();
         Goal? currentGoal = null;
 
-        try
-        {
+        var exception = Xunit.Assert.Throws<InvalidOperationException>(() =>
             CaptureConsole(() => CliCommandDispatcher.ExecuteCommand(
                 ["simple-goal", "Implement src/Test.cs with tests coverage", "--dispatch", "--confirm-dispatch-start"],
                 kernel,
@@ -3326,24 +3339,14 @@ public sealed class CliCommandTestsSubscriptionDispatchCommands : CliCommandTest
                 ref agents,
                 providers,
                 ref profiles,
-                ref currentGoal));
+                ref currentGoal)));
 
-            Xunit.Assert.Single(kernel.Goals);
-            Xunit.Assert.NotNull(currentGoal);
-            var task = currentGoal!.Tasks.Single();
-            Xunit.Assert.NotNull(task.LastDispatch);
-            Xunit.Assert.NotNull(task.LastProcess);
-        }
-        finally
-        {
-            var goal = kernel.Goals.FirstOrDefault();
-            if (goal is not null)
-            {
-                var task = goal.Tasks.SingleOrDefault();
-                if (task?.LastProcess is { IsRunning: true })
-                    new BackgroundDispatchRunner().CancelLatestProcess(kernel, goal.Id, task.Id);
-            }
-        }
+        Xunit.Assert.Contains("SPEC_REFINEMENT_PENDING", exception.Message, StringComparison.Ordinal);
+        Xunit.Assert.Single(kernel.Goals);
+        Xunit.Assert.NotNull(currentGoal);
+        var task = currentGoal!.Tasks.Single();
+        Xunit.Assert.Null(task.LastDispatch);
+        Xunit.Assert.Null(task.LastProcess);
     }
 
 
@@ -3384,6 +3387,7 @@ public sealed class CliCommandTestsSubscriptionDispatchCommands : CliCommandTest
         var workspace = CreateRefinedWorkspace(root);
         var kernel = new AgentOrchestratorKernel();
         var goal = kernel.CreateGoal("One-step profile dispatch", [new TaskSpec(TaskId.New(), "Do work", AgentRole.Developer)]);
+        MarkGoalRefined(kernel, goal);
         var agent = new AgentDefinition(
             new AgentId("developer"),
             "Developer",
@@ -3431,6 +3435,7 @@ public sealed class CliCommandTestsSubscriptionDispatchCommands : CliCommandTest
         var workspace = CreateRefinedWorkspace(root);
         var kernel = new AgentOrchestratorKernel();
         var goal = kernel.CreateGoal("Prepare-only profile dispatch", [new TaskSpec(TaskId.New(), "Do work", AgentRole.Developer)]);
+        MarkGoalRefined(kernel, goal);
         var agent = new AgentDefinition(
             new AgentId("developer"),
             "Developer",

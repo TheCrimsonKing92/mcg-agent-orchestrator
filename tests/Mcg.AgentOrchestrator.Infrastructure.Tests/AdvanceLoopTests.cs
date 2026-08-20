@@ -12,6 +12,7 @@ public sealed class AdvanceLoopTests
     {
         var path = InfrastructureTestSupport.CreateTempDirectory();
         SeedLocalSkillCatalog(path);
+        _ = StateDbMigrations.EnsureUpToDate(OrchestratorWorkspace.ForDirectory(path).SqliteStatePath);
         return path;
     }
 

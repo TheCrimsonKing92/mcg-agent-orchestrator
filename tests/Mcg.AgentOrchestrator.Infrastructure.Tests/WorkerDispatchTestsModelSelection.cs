@@ -457,6 +457,7 @@ public sealed class WorkerDispatchTestsModelSelection : WorkerDispatchTestSuppor
 {
     var root = CreateTempDirectory();
     var workspace = OrchestratorWorkspace.ForDirectory(root);
+    _ = StateDbMigrations.EnsureUpToDate(workspace.SqliteStatePath);
     var kernel = new AgentOrchestratorKernel();
     var goal = kernel.CreateGoal(
         "Plan architecture work",
