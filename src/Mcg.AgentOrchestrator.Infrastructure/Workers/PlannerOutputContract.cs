@@ -480,6 +480,7 @@ internal static partial class PlannerOutputContract
         resolvedPlan = plan;
         diagnostic = string.Empty;
         var substitutions = new List<CitationSubstitution>();
+        var repositoryFilenameMatches = new Dictionary<string, string[]>(StringComparer.Ordinal);
         string? contextualDirectory = null;
         var contextualLineStart = -2;
         var targetHeading = TargetSeamsHeading().Match(plan);
@@ -544,11 +545,11 @@ internal static partial class PlannerOutputContract
 
             if (hasExplicitDirectory)
             {
-                contextualDirectory = Directory.Exists(candidate) ||
-                    citedPath.EndsWith('/') ||
-                    citedPath.EndsWith('\\')
-                        ? candidate
-                        : Path.GetDirectoryName(candidate);
+                var citesDirectory = citedPath.EndsWith('/') || citedPath.EndsWith('\\');
+                var candidateDirectory = citesDirectory ? candidate : Path.GetDirectoryName(candidate);
+                contextualDirectory = candidateDirectory is not null && Directory.Exists(candidateDirectory)
+                    ? candidateDirectory
+                    : null;
             }
 
             inheritedNewFileMarker = inheritedNewFileMarker ||
@@ -592,12 +593,47 @@ internal static partial class PlannerOutputContract
                 continue;
             }
 
+            if (!hasExplicitDirectory && contextualDirectory is null)
+            {
+                var filename = Path.GetFileName(citedPath);
+                if (!string.IsNullOrWhiteSpace(filename) && CitedFilePath().IsMatch(citation))
+                {
+                    if (!repositoryFilenameMatches.TryGetValue(filename, out var repositoryMatches))
+                    {
+                        repositoryMatches = ResolveRepositoryFilesByName(workingDirectory, filename);
+                        repositoryFilenameMatches[filename] = repositoryMatches;
+                    }
+
+                    if (repositoryMatches.Length == 1)
+                    {
+                        continue;
+                    }
+
+                    if (repositoryMatches.Length > 1)
+                    {
+                        var citationStart = targetHeading.Index + match.Groups["citation"].Index;
+                        var candidates = string.Join(
+                            ", ",
+                            repositoryMatches.Select(path => $"'{Path.GetRelativePath(workingDirectory, path).Replace(Path.DirectorySeparatorChar, '/')}'"));
+                        diagnostic =
+                            $"target citation '{citation}' is ambiguous; matching repository files: {candidates}; source span [{citationStart}..{citationStart + citation.Length})." +
+                            $"{Environment.NewLine}Offending citation: '{citation}'";
+                        return false;
+                    }
+                }
+            }
+
             var citationStart = targetHeading.Index + match.Groups["citation"].Index;
             var suggestion = FindSingleCaseInsensitiveSuggestion(
                 candidate,
                 citation,
                 hasExplicitDirectory,
                 workingDirectory);
+            if (!CitedFilePath().IsMatch(citation) && suggestion is null)
+            {
+                continue;
+            }
+
             var suggestionText = suggestion is null
                 ? string.Empty
                 : $" Did you mean `{suggestion}`?";
@@ -629,6 +665,64 @@ internal static partial class PlannerOutputContract
 
         return true;
     }
+
+    private static string[] ResolveRepositoryFilesByName(string workingDirectory, string filename)
+    {
+        var matches = new List<string>(capacity: 2);
+        var pendingDirectories = new Stack<string>();
+        pendingDirectories.Push(workingDirectory);
+
+        while (pendingDirectories.Count > 0 && matches.Count < 2)
+        {
+            var directory = pendingDirectories.Pop();
+            try
+            {
+                foreach (var file in Directory.EnumerateFiles(directory))
+                {
+                    if (string.Equals(Path.GetFileName(file), filename, StringComparison.Ordinal))
+                    {
+                        matches.Add(file);
+                        if (matches.Count == 2)
+                        {
+                            break;
+                        }
+                    }
+                }
+
+                if (matches.Count == 2)
+                {
+                    break;
+                }
+
+                foreach (var childDirectory in Directory.EnumerateDirectories(directory).OrderByDescending(path => path, StringComparer.Ordinal))
+                {
+                    var name = Path.GetFileName(childDirectory);
+                    if (IsExcludedRepositorySearchDirectory(name) ||
+                        (File.GetAttributes(childDirectory) & FileAttributes.ReparsePoint) != 0)
+                    {
+                        continue;
+                    }
+
+                    pendingDirectories.Push(childDirectory);
+                }
+            }
+            catch (Exception error) when (
+                error is IOException or UnauthorizedAccessException or ArgumentException or NotSupportedException or PathTooLongException)
+            {
+                // An unreadable subtree cannot contribute a safe unique match.
+            }
+        }
+
+        return matches.ToArray();
+    }
+
+    private static bool IsExcludedRepositorySearchDirectory(string name) =>
+        name.StartsWith(".", StringComparison.Ordinal) ||
+        name.Equals("bin", StringComparison.OrdinalIgnoreCase) ||
+        name.Equals("obj", StringComparison.OrdinalIgnoreCase) ||
+        name.Equals("node_modules", StringComparison.OrdinalIgnoreCase) ||
+        name.Equals("TestResults", StringComparison.OrdinalIgnoreCase) ||
+        name.Equals("playwright-report", StringComparison.OrdinalIgnoreCase);
 
     private static bool PathExistsWithExactCasing(string path, string? citationCasingRoot)
     {
@@ -718,7 +812,7 @@ internal static partial class PlannerOutputContract
             catch (Exception error) when (
                 error is IOException or UnauthorizedAccessException or ArgumentException or NotSupportedException)
             {
-                // Suggestions are advisory and must never change the validation verdict.
+                // An unreadable directory cannot provide a reliable casing classification.
             }
         }
 
@@ -1134,7 +1228,7 @@ internal static partial class PlannerOutputContract
     [GeneratedRegex(@"`(?<citation>[^`\r\n]+)`")]
     private static partial Regex BacktickedCitation();
 
-    [GeneratedRegex(@"(?i)^(?<path>.+?\.(?:cs|csproj|ps1|md|json|yml|yaml|props|targets|txt))(?:(?::\d+)|(?:#L\d+)|(?:::.+))?$")]
+    [GeneratedRegex(@"(?i)^(?<path>.+?\.(?:cs|csproj|ps1|md|json|yml|yaml|props|targets|txt))(?:(?::\d+(?:-\d+)?)|(?:#L\d+(?:-L?\d+)?)|(?:::.+))?$")]
     private static partial Regex CitedFilePath();
 
     [GeneratedRegex(@"(?m)^[ \t]{0,3}#{1,6}[ \t]+")]
