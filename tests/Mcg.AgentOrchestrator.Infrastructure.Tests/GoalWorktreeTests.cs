@@ -104,29 +104,7 @@ public abstract class GoalWorktreeTestBase
         ]);
     }
 
-    private protected static string CreateSeededRepository()
-    {
-        var tempRoot = OperatingSystem.IsWindows()
-            ? Path.Combine(FindCurrentSourceRoot(), ".scratch", "mcg-wt")
-            : Path.Combine(Path.GetTempPath(), "mcg-worktree-tests");
-        var root = Path.Combine(tempRoot, Guid.NewGuid().ToString("n"));
-        Directory.CreateDirectory(root);
-        RunGit(root, "init");
-        RunGit(root, "config", "user.email", "tests@example.com");
-        RunGit(root, "config", "user.name", "Worktree Tests");
-        File.AppendAllText(
-            Path.Combine(root, ".git", "info", "exclude"),
-            ".orchestrator/" + Environment.NewLine);
-        File.WriteAllText(Path.Combine(root, "seed.txt"), "seed");
-        RunGit(root, "add", "-A");
-        RunGit(root, "commit", "-m", "Seed");
-        _ = CreateMigratedStateRepository(
-            OrchestratorWorkspace.ForDirectory(root).SqliteStatePath);
-        return root;
-    }
-
-    private protected static string CreateReducedAcceptanceCohortRepository(
-        bool renameInitialBranchToMain = true)
+    private static string CreateSeededGitRepository(bool renameInitialBranchToMain = false)
     {
         var tempRoot = OperatingSystem.IsWindows()
             ? Path.Combine(FindCurrentSourceRoot(), ".scratch", "mcg-wt")
@@ -147,10 +125,24 @@ public abstract class GoalWorktreeTestBase
             RunGit(repo, "branch", "-M", "main");
         }
 
+        return repo;
+    }
+
+    private protected static string CreateSeededRepository()
+    {
+        var root = CreateSeededGitRepository();
+        _ = CreateMigratedStateRepository(
+            OrchestratorWorkspace.ForDirectory(root).SqliteStatePath);
+        return root;
+    }
+
+    private protected static string CreateReducedAcceptanceCohortRepository(
+        bool renameInitialBranchToMain = true)
+    {
+        var repo = CreateSeededGitRepository(renameInitialBranchToMain);
         var statePath = OrchestratorWorkspace.ForDirectory(repo).SqliteStatePath;
         Directory.CreateDirectory(Path.GetDirectoryName(statePath)!);
-        var stateBytes = MigratedStateTemplate.Value.ToArray();
-        File.WriteAllBytes(statePath, stateBytes);
+        File.WriteAllBytes(statePath, MigratedStateTemplate.Value.ToArray());
         return repo;
     }
 
@@ -876,7 +868,7 @@ public abstract class GoalWorktreeTestBase
     }
 }
 
-public sealed class GoalWorktreeTestsAcceptanceRetry : GoalWorktreeTestBase
+public sealed class GoalWorktreeReducedFixtureTests : GoalWorktreeTestBase
 {
     [Xunit.Fact(DisplayName = "Reduced_seeded_repository_factory_creates_independent_current_state_stores")]
     public async Task ReducedSeededRepositoryFactoryCreatesIndependentCurrentStateStores()
@@ -910,7 +902,10 @@ public sealed class GoalWorktreeTestsAcceptanceRetry : GoalWorktreeTestBase
             DeleteDirectory(secondRepo);
         }
     }
+}
 
+public sealed class GoalWorktreeTestsAcceptanceRetry : GoalWorktreeTestBase
+{
     [Xunit.Fact(DisplayName = "acceptance-retry_returns_failed_goal_to_verified_without_mutating_tasks")]
     public void AcceptanceRetryReturnsFailedGoalToVerifiedWithoutMutatingTasks()
     {
