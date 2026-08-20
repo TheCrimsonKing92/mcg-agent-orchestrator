@@ -608,7 +608,12 @@ public sealed class WorkerDispatchPlannerHandoffTests : WorkerDispatchTestSuppor
     [Xunit.Fact(DisplayName = "Planner_output_contract_accepts_grok_cli_glued_first_heading")]
     public void PlannerOutputContractAcceptsGrokCliGluedFirstHeading()
     {
-        var glued = PlannerContractPlanFixture().Replace(
+        var fixture = PlannerContractPlanFixture();
+        Assert.Equal(
+            fixture.ReplaceLineEndings("\n"),
+            MarkdownHeadingNormalizer.SeparateInlineAtxHeadings(fixture));
+
+        var glued = fixture.Replace(
             "## Premise validity",
             "I'll pin exact symbols in the cited files so the plan's path citations match the worktree.## Premise validity",
             StringComparison.Ordinal);
