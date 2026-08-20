@@ -248,7 +248,7 @@ public static class OrchestratorHealthInspector
             return true;
         }
 
-        return provider.Mode.Equals("LocalBridge", StringComparison.OrdinalIgnoreCase);
+        return false;
     }
 
     private static bool IsSubscriptionRouteUsable(AgentDefinition agent, WorkerProfileValidation? profile)

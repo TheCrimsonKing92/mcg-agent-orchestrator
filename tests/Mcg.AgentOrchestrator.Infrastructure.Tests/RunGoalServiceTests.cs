@@ -65,12 +65,12 @@ public sealed class RunGoalServiceTests
         var providerName = profileName.Contains("claude", StringComparison.OrdinalIgnoreCase)
             ? "Anthropic"
             : profileName.Contains("qwen", StringComparison.OrdinalIgnoreCase)
-                ? "Ollama"
+                ? "LlamaCpp"
                 : "OpenAI";
         var modelName = providerName switch
         {
             "Anthropic" => "claude-haiku-4-5",
-            "Ollama" => "qwen3:8b",
+            "LlamaCpp" => LlamaCppDefaults.DefaultModelAlias,
             _ => AgentCatalog.OpenAiSubscriptionModelAlias
         };
 
@@ -412,7 +412,7 @@ public sealed class RunGoalServiceTests
             new AgentId("ollama-planner-qwen-fallback"),
             "Qwen fallback",
             AgentRole.Planner,
-            new ModelProfile("Ollama", "qwen3:8b", ModelCapability.Text | ModelCapability.Code | ModelCapability.ToolUse, SubscriptionMode.ApiKey),
+            new ModelProfile("LlamaCpp", LlamaCppDefaults.DefaultModelAlias, ModelCapability.Text | ModelCapability.Code | ModelCapability.ToolUse, SubscriptionMode.LocalBridge),
             ExecutionPolicy: AgentExecutionPolicy.PreferSubscription,
             Subscription: new SubscriptionLaunchProfile("qwen-code-cli"));
         var agents = AgentCatalog.Default().AddOrReplaceById(alternate).Agents;

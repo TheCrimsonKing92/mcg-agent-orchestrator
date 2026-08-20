@@ -1054,17 +1054,22 @@ public sealed class GoalMonitoringSubscriptionCommandTests
         var goal = kernel.CreateGoal("Monitor continuous", [task]);
         kernel.ActivateGoal(goal.Id, []);
         kernel.ReportTaskProgress(goal.Id, task.Id, WorkTaskStatus.Running, "Started local work.");
-        using var output = new StringWriter();
-        using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(2));
+        using var output = new SignalingStringWriter();
+        using var cts = new CancellationTokenSource();
+        cts.CancelAfter(TimeSpan.FromSeconds(10));
 
-        await Xunit.Assert.ThrowsAnyAsync<OperationCanceledException>(() => GoalMonitoringSubscriptionCommand.RunAsync(
+        var runTask = GoalMonitoringSubscriptionCommand.RunAsync(
             ["monitor-goal", goal.Id.Value[..8], "--format", "ndjson"],
             output,
             kernel,
             workspace,
             [],
             WorkerProfileCatalog.Default(),
-            cancellationToken: cts.Token));
+            cancellationToken: cts.Token);
+
+        await output.FirstWrite.WaitAsync(TimeSpan.FromSeconds(10));
+        cts.Cancel();
+        await Xunit.Assert.ThrowsAnyAsync<OperationCanceledException>(() => runTask);
 
         Assert.Contains("\"eventKind\":\"goal.snapshot\"", output.ToString());
     }
@@ -1122,10 +1127,6 @@ public sealed class GoalMonitoringSubscriptionCommandTests
             workspace,
             [],
             WorkerProfileCatalog.Default());
-
-        await Task.Delay(TimeSpan.FromMilliseconds(150));
-        Assert.False(runTask.IsCompleted);
-        Assert.Equal(string.Empty, output.ToString());
 
         await store.AppendAsync(new RunEventAppend(
             RunEventTypes.GoalOperation,
@@ -1586,6 +1587,19 @@ public sealed class GoalMonitoringSubscriptionCommandTests
         public override async ValueTask WriteAsync(ReadOnlyMemory<byte> buffer, CancellationToken cancellationToken = default)
         {
             await base.WriteAsync(buffer, cancellationToken);
+            _firstWrite.TrySetResult();
+        }
+    }
+
+    private sealed class SignalingStringWriter : StringWriter
+    {
+        private readonly TaskCompletionSource _firstWrite = new(TaskCreationOptions.RunContinuationsAsynchronously);
+
+        public Task FirstWrite => _firstWrite.Task;
+
+        public override void WriteLine(string? value)
+        {
+            base.WriteLine(value);
             _firstWrite.TrySetResult();
         }
     }

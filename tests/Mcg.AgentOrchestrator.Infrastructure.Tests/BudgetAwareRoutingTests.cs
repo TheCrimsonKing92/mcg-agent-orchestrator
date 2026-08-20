@@ -54,9 +54,9 @@ public sealed class BudgetAwareRoutingTests
         var plan = SubscriptionPlanBuilder.Build(updatedGoal, allAgents, DefaultProfiles);
         var item = plan.Items.Single(i => i.Role == AgentRole.Developer);
 
-        // Local (Ollama) agent should be selected for the Simple task, not the paid OpenAI lane
+        // The qwen-code harness resolves to its LlamaCpp backend; the Simple task must stay off the paid OpenAI lane.
         Assert.Equal(WorkerRouteDisposition.Selected, item.Route!.Disposition);
-        Assert.True(string.Equals("Ollama", item.ProviderName, StringComparison.OrdinalIgnoreCase));
+        Assert.True(string.Equals("LlamaCpp", item.ProviderName, StringComparison.OrdinalIgnoreCase));
         Assert.True(
             item.Route.Reasons.Any(r =>
                 r.Contains("simple", StringComparison.OrdinalIgnoreCase) &&
