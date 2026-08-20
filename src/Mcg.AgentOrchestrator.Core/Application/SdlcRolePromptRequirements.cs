@@ -35,6 +35,7 @@ internal static class SdlcRolePromptRequirements
                 "- Define falsifiable proof Developer, Tester, and Reviewer must provide before acceptance.",
                 "- If repository evidence disproves the goal premise, report `blockers: premise-invalid - <fact and evidence>` and stop before proposing implementation.",
                 "- Do not return a generic SDLC checklist or restate the user's goal as a plan.",
+                "- Cite files without a line RANGE. `File.cs`, `File.cs:442`, `File.cs#L442`, and `File.cs::Symbol` are accepted; `File.cs:442-479` is REJECTED and discards your entire plan, because the validator treats the whole string including the range as the path and finds no such file. Before emitting, scan your output for `.cs:<digits>-<digits>` and replace each with its single start line.",
                 "- Do not modify repository files; implementation belongs to the Developer task."
             ],
             AgentRole.Researcher =>
@@ -178,6 +179,7 @@ internal static class SdlcRolePromptRequirements
                 "- Map every acceptance criterion by number and include ownership/lifecycle, edge contracts, risks, seams, and focused verification.",
                 "- Define falsifiable proof for downstream roles; do not return a generic checklist.",
                 "- If repository evidence disproves the goal premise, report `blockers: premise-invalid - <fact and evidence>` and stop before proposing implementation.",
+                "- Cite files without a line RANGE. `File.cs`, `File.cs:442`, `File.cs#L442`, and `File.cs::Symbol` are accepted; `File.cs:442-479` is REJECTED and discards your entire plan, because the validator treats the whole string including the range as the path and finds no such file. Before emitting, scan your output for `.cs:<digits>-<digits>` and replace each with its single start line.",
                 "- Do not modify repository files; implementation belongs to the Developer task."
             ],
             AgentRole.Researcher =>
