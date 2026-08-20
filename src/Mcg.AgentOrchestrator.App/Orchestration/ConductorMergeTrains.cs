@@ -1,5 +1,6 @@
 using Mcg.AgentOrchestrator.Core;
 using Mcg.AgentOrchestrator.Core.Conductor;
+using Mcg.AgentOrchestrator.Infrastructure;
 
 namespace Mcg.AgentOrchestrator.App.Orchestration;
 
@@ -26,11 +27,15 @@ internal sealed record ConductorMergeTrainRunResult(
 
 internal static class ConductorMergeTrainSelector
 {
-    internal const int MinimumMembers = 2;
+    // Two compatible goals remain the existing production cohort's domain. A train starts at three,
+    // then may shrink to two only after conflict ejection or bounded RED bisection.
+    internal const int MinimumCompositionMembers = 2;
+    internal const int MinimumMembers = 3;
     internal const int MaximumMembers = 3;
 
     internal static ConductorMergeTrainSelection? Select(
-        IReadOnlyList<ConductorSpeculativeAcceptanceCandidate> orderedCandidates)
+        IReadOnlyList<ConductorSpeculativeAcceptanceCandidate> orderedCandidates,
+        IReadOnlySet<string>? suppressedPairFingerprints = null)
     {
         ArgumentNullException.ThrowIfNull(orderedCandidates);
         var selected = new List<GateReadyCandidateProjection>(MaximumMembers);
@@ -42,7 +47,14 @@ internal static class ConductorMergeTrainSelector
             }
             var projection = ready.Projection;
             if (projection.GoalId != candidate.GoalId ||
-                selected.Any(existing => Overlaps(existing, projection)))
+                projection.LandingPaths.Count == 0 ||
+                projection.ResourceKeys.Count == 0 ||
+                GoalAcceptanceVerifier.ClassifyDotnetShardDisposition(projection.LandingPaths) ==
+                    DotnetShardDisposition.DocsTreeOnlyCandidate ||
+                (selected.Count > 0 && !projection.MainRevision.Equals(selected[0].MainRevision, StringComparison.Ordinal)) ||
+                selected.Any(existing => Overlaps(existing, projection) ||
+                    suppressedPairFingerprints?.Contains(
+                        ConductorAcceptanceCohortSelector.PairFingerprint(existing, projection)) == true))
             {
                 continue;
             }

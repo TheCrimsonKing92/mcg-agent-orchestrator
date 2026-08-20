@@ -147,6 +147,8 @@ internal sealed partial class ConductorDriver
     private readonly bool _parallelAcceptanceEnabled;
     private readonly List<(ConductorLandingReceipt Receipt, string CohortId, string ReceiptId)>
         _pendingRecoveredLandingReceipts = [];
+    private readonly List<(ConductorLandingReceipt Receipt, string TrainId, string ReceiptId)>
+        _pendingRecoveredMergeTrainLandingReceipts = [];
     private Action<ConductorLandingReceipt>? _successfulLandingSink;
     private bool _buildServerShutdownRanThisTick;
 
@@ -157,11 +159,17 @@ internal sealed partial class ConductorDriver
         set
         {
             _successfulLandingSink = value;
-            if (value is null || _pendingRecoveredLandingReceipts.Count == 0)
+            if (value is null ||
+                (_pendingRecoveredLandingReceipts.Count == 0 &&
+                 _pendingRecoveredMergeTrainLandingReceipts.Count == 0))
             {
                 return;
             }
             foreach (var pending in _pendingRecoveredLandingReceipts)
+            {
+                value(pending.Receipt);
+            }
+            foreach (var pending in _pendingRecoveredMergeTrainLandingReceipts)
             {
                 value(pending.Receipt);
             }
@@ -170,7 +178,13 @@ internal sealed partial class ConductorDriver
             {
                 _cohortAcceptanceStore?.CompleteLandingEffects(pending.CohortId, pending.ReceiptId);
             }
+            foreach (var pending in _pendingRecoveredMergeTrainLandingReceipts
+                         .DistinctBy(item => item.TrainId))
+            {
+                _mergeTrainAcceptanceStore?.CompleteLandingEffects(pending.TrainId, pending.ReceiptId);
+            }
             _pendingRecoveredLandingReceipts.Clear();
+            _pendingRecoveredMergeTrainLandingReceipts.Clear();
         }
     }
     internal Action<GoalId>? DispatchRecordWriteSucceededSink { get; set; }
@@ -901,6 +915,7 @@ internal sealed partial class ConductorDriver
         _getFindingEvidenceEngineSettings = goal => AcceptanceGateEngineSettings.Load(
             GoalWorktrees.TryResolve(dir, goal.Id) ?? dir);
         RecoverCohortLandingEffects(kernel, workspace, eventWriter, _cohortAcceptanceStore);
+        RecoverMergeTrainLandingEffects(kernel, workspace, eventWriter, _mergeTrainAcceptanceStore);
     }
 
     internal static LandingEscalationRecheckResult ClassifyPreLandingRebaseConflict(
@@ -3172,6 +3187,15 @@ internal sealed partial class ConductorDriver
 
     internal void ResetCohortFairness(GoalId goalId) =>
         _cohortAcceptanceStore?.ResetOvertake(goalId);
+
+    internal void RecordMergeTrainAdmissionFairness(ConductorMergeTrainSelection selection)
+    {
+        if (_cohortAcceptanceStore is null) return;
+        foreach (var member in selection.Members)
+        {
+            _cohortAcceptanceStore.ResetOvertake(member.GoalId);
+        }
+    }
 
     internal ConductorAcceptanceCohortRunResult RunAcceptanceCohort(
         ConductorAcceptanceCohortSelection selection,

@@ -5,6 +5,10 @@ using Microsoft.Data.Sqlite;
 namespace Mcg.AgentOrchestrator.Infrastructure;
 
 public sealed record MergeTrainCoverage(GoalId GoalId, string TrainId, string ReceiptId, bool Landed);
+public sealed record MergeTrainLandingRecovery(
+    MergeTrainReceipt Receipt,
+    string CommitRevision,
+    IReadOnlyList<MergeTrainCoverage> Coverage);
 
 public sealed class MergeTrainAcceptanceStore
 {
@@ -150,6 +154,65 @@ public sealed class MergeTrainAcceptanceStore
         using var connection = Open();
         using var command = connection.CreateCommand();
         command.CommandText = """
+            SELECT COUNT(*) FROM merge_train_landings
+            WHERE train_id=$train AND receipt_id=$receipt AND state='prepared';
+            """;
+        command.Parameters.AddWithValue("$train", trainId);
+        command.Parameters.AddWithValue("$receipt", receiptId);
+        if (Convert.ToInt32(command.ExecuteScalar()) != 1)
+        {
+            throw new InvalidOperationException("Merge train prepared landing was not present exactly once.");
+        }
+        return receipt.Identity.Members
+            .Select(member => new MergeTrainCoverage(member.GoalId, trainId, receiptId, Landed: true))
+            .ToArray();
+    }
+
+    public IReadOnlyList<MergeTrainLandingRecovery> RecoverPreparedLandings(string executionDirectory)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(executionDirectory);
+        var prepared = new List<(string TrainId, string ReceiptId, string Commit)>();
+        using (var connection = Open())
+        using (var command = connection.CreateCommand())
+        {
+            command.CommandText = """
+                SELECT train_id, receipt_id, commit_revision
+                FROM merge_train_landings WHERE state='prepared' ORDER BY train_id;
+                """;
+            using var reader = command.ExecuteReader();
+            while (reader.Read())
+            {
+                prepared.Add((reader.GetString(0), reader.GetString(1), reader.GetString(2)));
+            }
+        }
+
+        var recovered = new List<MergeTrainLandingRecovery>();
+        foreach (var intent in prepared)
+        {
+            var receipt = TryReadReceipt(intent.TrainId);
+            if (receipt is null ||
+                !receipt.ReceiptId.Equals(intent.ReceiptId, StringComparison.Ordinal) ||
+                !receipt.HasAuthoritativeLandingEvidence ||
+                GitCli.Run(
+                    executionDirectory,
+                    "merge-base", "--is-ancestor", intent.Commit, "refs/heads/main").ExitCode != 0)
+            {
+                continue;
+            }
+
+            recovered.Add(new MergeTrainLandingRecovery(
+                receipt,
+                intent.Commit,
+                FinalizeLanding(intent.TrainId, intent.ReceiptId)));
+        }
+        return recovered;
+    }
+
+    public void CompleteLandingEffects(string trainId, string receiptId)
+    {
+        using var connection = Open();
+        using var command = connection.CreateCommand();
+        command.CommandText = """
             UPDATE merge_train_landings SET state='finalized', updated_at=$updated
             WHERE train_id=$train AND receipt_id=$receipt AND state='prepared';
             """;
@@ -158,11 +221,8 @@ public sealed class MergeTrainAcceptanceStore
         command.Parameters.AddWithValue("$updated", DateTimeOffset.UtcNow.ToString("O"));
         if (command.ExecuteNonQuery() != 1)
         {
-            throw new InvalidOperationException("Merge train prepared landing was not finalized exactly once.");
+            throw new InvalidOperationException("Merge train landing effects were not finalized exactly once.");
         }
-        return receipt.Identity.Members
-            .Select(member => new MergeTrainCoverage(member.GoalId, trainId, receiptId, Landed: true))
-            .ToArray();
     }
 
     private SqliteConnection Open()

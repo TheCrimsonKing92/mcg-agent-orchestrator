@@ -50,8 +50,16 @@ public sealed class MergeTrainWorkspace : IDisposable
     public void Dispose()
     {
         if (_disposed) return;
-        GoalWorktrees.RemoveMergeTrainWorkspace(_executionDirectory, Path);
-        _disposed = true;
+        try
+        {
+            GoalWorktrees.RemoveMergeTrainWorkspace(_executionDirectory, Path);
+            _disposed = true;
+        }
+        catch
+        {
+            GoalWorktrees.RecordAcceptanceCohortCleanupNeeded(Path);
+            throw;
+        }
     }
 }
 

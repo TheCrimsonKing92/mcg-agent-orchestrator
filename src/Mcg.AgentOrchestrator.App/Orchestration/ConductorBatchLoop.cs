@@ -2818,13 +2818,16 @@ internal sealed class ConductorBatchLoop
             !cohortEligible.Any(goal => IsAcceptanceEngineCircuitHoldRequired(
                 goal.Status,
                 _acceptanceEngineCircuit?.Read())) &&
-            ConductorMergeTrainSelector.Select(productionCandidates) is { } trainSelection)
+            ConductorMergeTrainSelector.Select(
+                productionCandidates,
+                driver.ReadSuppressedCohortPairs()) is { } trainSelection)
         {
             trainAttempted = true;
             var trainRun = driver.RunMergeTrain(
                 trainSelection,
                 cohortEligible,
-                policy);
+                policy,
+                onGateAdmitted: () => driver.RecordMergeTrainAdmissionFairness(trainSelection));
             foreach (var member in trainRun.MemberResults)
             {
                 results[member.Key] = new ParallelLandingOutcome(member.Value, SlotIndex: 0);

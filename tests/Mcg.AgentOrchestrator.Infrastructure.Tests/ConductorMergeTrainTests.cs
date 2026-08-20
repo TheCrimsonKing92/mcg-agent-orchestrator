@@ -23,11 +23,12 @@ public sealed class ConductorMergeTrainTests
         var first = Ready("11111111111111111111111111111111", "src/Shared", "resource:first");
         var overlapping = Ready("22222222222222222222222222222222", "src/Shared/File.cs", "resource:second");
         var third = Ready("33333333333333333333333333333333", "tests/Third.cs", "resource:third");
+        var fourth = Ready("44444444444444444444444444444444", "src/Fourth.cs", "resource:fourth");
 
         var selection = Assert.IsType<ConductorMergeTrainSelection>(
-            ConductorMergeTrainSelector.Select([first, overlapping, third]));
+            ConductorMergeTrainSelector.Select([first, overlapping, third, fourth]));
 
-        Assert.Equal([first.GoalId, third.GoalId], selection.Members.Select(member => member.GoalId));
+        Assert.Equal([first.GoalId, third.GoalId, fourth.GoalId], selection.Members.Select(member => member.GoalId));
     }
 
     [Fact]
@@ -36,6 +37,15 @@ public sealed class ConductorMergeTrainTests
         var only = Ready("11111111111111111111111111111111", "src/Only.cs", "resource:only");
 
         Assert.Null(ConductorMergeTrainSelector.Select([only]));
+    }
+
+    [Fact]
+    public void Selector_leaves_two_ready_goals_to_the_existing_pair_cohort()
+    {
+        var first = Ready("11111111111111111111111111111111", "src/First.cs", "resource:first");
+        var second = Ready("22222222222222222222222222222222", "src/Second.cs", "resource:second");
+
+        Assert.Null(ConductorMergeTrainSelector.Select([first, second]));
     }
 
     private static ConductorSpeculativeAcceptanceCandidate Ready(string id, string path, string resource)

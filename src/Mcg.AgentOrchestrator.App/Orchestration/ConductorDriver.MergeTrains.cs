@@ -43,13 +43,33 @@ internal sealed partial class ConductorDriver
 
         for (var attempt = 0; attempt <= 1; attempt++)
         {
-            using var workspace = GoalWorktrees.CreateMergeTrainWorkspace(
-                _cohortWorkspace.ExecutionDirectory,
-                selection.Members[0].MainRevision,
-                composition);
+            MergeTrainWorkspace workspace;
+            try
+            {
+                workspace = GoalWorktrees.CreateMergeTrainWorkspace(
+                    _cohortWorkspace.ExecutionDirectory,
+                    selection.Members[0].MainRevision,
+                    composition);
+            }
+            catch (InvalidOperationException ex)
+            {
+                var reason = ex.Message.Contains("stale", StringComparison.OrdinalIgnoreCase)
+                    ? MergeTrainEjectionReason.StaleBinding
+                    : MergeTrainEjectionReason.MaterializationFailure;
+                var ejections = composition.Select(member => new MergeTrainEjection(
+                    member.GoalId,
+                    reason,
+                    [],
+                    BoundCohortDetail(ex.Message))).ToArray();
+                allEjections.AddRange(ejections);
+                _mergeTrainAcceptanceStore.RecordEjections(attemptId, ejections);
+                return Fallback($"materialization fallback: {reason}: {BoundCohortDetail(ex.Message)}");
+            }
+
+            using var workspaceScope = workspace;
             allEjections.AddRange(workspace.Ejections);
             _mergeTrainAcceptanceStore.RecordEjections(attemptId, workspace.Ejections);
-            if (workspace.Members.Count < ConductorMergeTrainSelector.MinimumMembers)
+            if (workspace.Members.Count < ConductorMergeTrainSelector.MinimumCompositionMembers)
             {
                 return Fallback("materialization left fewer than two compatible members");
             }
@@ -120,8 +140,21 @@ internal sealed partial class ConductorDriver
 
             if (receipt.Outcome == MergeTrainGateOutcome.Passed)
             {
-                workspace.AssertGoalBranchesUnchanged();
                 var goals = members.Select(member => goalsById[member.GoalId]).ToArray();
+                var originalSelection = selection.Members.ToDictionary(member => member.GoalId);
+                for (var index = 0; index < goals.Length; index++)
+                {
+                    if (ProjectGateReadyCandidate(goals[index], policy) is not GateReadyCandidateProjectionResult.Ready live ||
+                        !live.Projection.Equals(originalSelection[members[index].GoalId]))
+                    {
+                        return new ConductorMergeTrainRunResult(
+                            receipt,
+                            Hold(goals, "post-gate binding changed; train held for fresh Ready projection"),
+                            allEjections,
+                            "post-gate binding changed; train held for fresh Ready projection");
+                    }
+                }
+                workspace.AssertGoalBranchesUnchanged();
                 var landing = LandingExecutor.ExecuteMergeTrain(
                     _cohortKernel,
                     goals,
@@ -150,6 +183,7 @@ internal sealed partial class ConductorDriver
                     SuccessfulLandingSink?.Invoke(new ConductorLandingReceipt(goal.Id.Value, changedFiles, landing.CommitRevision));
                     _afterSuccessfulLanding(goal, result);
                 }
+                _mergeTrainAcceptanceStore.CompleteLandingEffects(identity.Value, receipt.ReceiptId);
                 return new ConductorMergeTrainRunResult(
                     receipt,
                     goals.ToDictionary(
@@ -202,5 +236,88 @@ internal sealed partial class ConductorDriver
                     policy,
                     new ConductorAdvanceOutcome.Held(GoalLifecycleState.Verified, detail)),
                 StringComparer.Ordinal);
+    }
+
+    private void RecoverMergeTrainLandingEffects(
+        AgentOrchestratorKernel kernel,
+        OrchestratorWorkspace workspace,
+        IGoalLifecycleEventWriter eventWriter,
+        MergeTrainAcceptanceStore store)
+    {
+        var goalsById = kernel.Goals.ToDictionary(goal => goal.Id);
+        foreach (var recovery in store.RecoverPreparedLandings(workspace.ExecutionDirectory))
+        {
+            var goals = recovery.Receipt.Identity.Members
+                .Select(member => goalsById.TryGetValue(member.GoalId, out var goal) ? goal : null)
+                .ToArray();
+            if (goals.Any(goal => goal is null))
+            {
+                continue;
+            }
+
+            var resolvedGoals = goals.Cast<Goal>().ToArray();
+            var evidenceMutationLeases = new Stack<IDisposable>();
+            try
+            {
+                foreach (var goal in resolvedGoals.OrderBy(goal => goal.Id.Value, StringComparer.Ordinal))
+                {
+                    var lease = _tryAcquireEvidenceMutationLease(goal, "conductor:merge-train-recovery");
+                    if (lease is null)
+                    {
+                        break;
+                    }
+                    evidenceMutationLeases.Push(lease);
+                }
+                if (evidenceMutationLeases.Count != resolvedGoals.Length)
+                {
+                    continue;
+                }
+
+                var changedFiles = recovery.Receipt.Identity.Members
+                    .SelectMany(member => member.LandingPaths)
+                    .Distinct(StringComparer.OrdinalIgnoreCase)
+                    .Order(StringComparer.OrdinalIgnoreCase)
+                    .ToArray();
+                foreach (var goal in resolvedGoals)
+                {
+                    GoalOperationJournal.Completed(
+                        workspace.ExecutionDirectory,
+                        goal,
+                        "conductor:land",
+                        $"Recovered merge train receipt {recovery.Receipt.ReceiptId} after main advanced.");
+                    eventWriter.AppendGoalLanded(
+                        goal.Id,
+                        $"train/{recovery.Receipt.Identity.Value}",
+                        GoalWorktrees.BranchName(goal.Id));
+                    StateEffectProposalApplier.ApplyLandedProposals(
+                        kernel,
+                        goal,
+                        workspace,
+                        changedFiles,
+                        Console.WriteLine);
+                    var landingResult = new LandingResult(
+                        goal.Id.Value,
+                        goal.Id.Value[..8],
+                        new LandingDecision.Promote(),
+                        $"train/{recovery.Receipt.Identity.Value}",
+                        MainAdvanced: true,
+                        "Recovered exact tested merge train landing after main advanced.",
+                        recovery.CommitRevision,
+                        changedFiles);
+                    _pendingRecoveredMergeTrainLandingReceipts.Add((
+                        new ConductorLandingReceipt(goal.Id.Value, changedFiles, recovery.CommitRevision),
+                        recovery.Receipt.Identity.Value,
+                        recovery.Receipt.ReceiptId));
+                    _afterSuccessfulLanding(goal, landingResult);
+                }
+            }
+            finally
+            {
+                while (evidenceMutationLeases.TryPop(out var lease))
+                {
+                    lease.Dispose();
+                }
+            }
+        }
     }
 }
