@@ -293,7 +293,7 @@ public sealed class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
         return new StartupContract(manifest.Checks.Count, laneNames);
     }
     private readonly Func<string[], string, TimeSpan, CancellationToken, Task<CommandResult>> _runner;
-    private readonly Func<string[], string, TimeSpan, CancellationToken, Task<CommandResult>> _discoveryRunner;
+    private readonly AcceptanceStructuralCoverageEvaluator _structuralCoverageEvaluator;
     private readonly TimeProvider _timeProvider;
     private readonly Action<TimeSpan> _leaseSleep;
     private static readonly AsyncLocal<GateHeartbeatContext?> CurrentGateHeartbeatContext = new();
@@ -379,7 +379,9 @@ public sealed class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
         Action<TimeSpan>? leaseSleep = null)
     {
         _runner = runner;
-        _discoveryRunner = discoveryRunner;
+        _structuralCoverageEvaluator = new AcceptanceStructuralCoverageEvaluator(
+            discoveryRunner,
+            IsBuildArtifactIoException);
         _timeProvider = timeProvider;
         _leaseSleep = leaseSleep ?? Thread.Sleep;
     }
@@ -5550,27 +5552,39 @@ public sealed class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
                 broadCheck,
                 EngineSettings,
                 environment);
-            var candidateDiscovery = await _discoveryRunner(
-                candidateDiscoveryArguments,
-                worktreePath,
-                EngineSettings.ResolveDiscoveryTimeout(),
-                cancellationToken).ConfigureAwait(false);
-            if (candidateDiscovery.ExitCode != 0)
+            IReadOnlyList<TestPartitionCoverage> ResolvePartitions()
             {
-                return new AcceptanceCheckResult(
-                    $"structural test coverage: {broadCheck.Name}",
-                    false,
-                    candidateDiscovery.ExitCode,
-                    TailOutput(candidateDiscovery.Output),
-                    ResultSummary: "candidate trusted discovery failed");
+                IEnumerable<AcceptanceManifestCheck> partitionChecks = IsBroadInfrastructureTestCheck(broadCheck)
+                    ? ExpandBroadInfrastructureCheck(broadCheck)
+                    : [broadCheck];
+                return partitionChecks
+                    .Select(shard =>
+                    {
+                        var result = completedChecks.LastOrDefault(candidate =>
+                            candidate.Name.Equals(shard.Name, StringComparison.OrdinalIgnoreCase));
+                        return new TestPartitionCoverage(
+                            shard.Name,
+                            result?.Passed == true,
+                            result?.TestResultPaths ?? [],
+                            result?.LockRemediationApplied == true,
+                            result?.TestResultAttemptId,
+                            result?.TestResultRunOrdinal ?? 0,
+                            result?.TestResultIsExplicitCrossAttemptReuse == true);
+                    })
+                    .ToArray();
             }
 
-            TestDiscoverySnapshot? mainDiscoverySnapshot = null;
-            var mainProjectPath = Path.Combine(
-                mainWorktreePath,
-                broadCheck.Project!.Replace('/', Path.DirectorySeparatorChar));
-            if (File.Exists(mainProjectPath))
+            async Task<AcceptanceStructuralCoverageBaseline?> PrepareBaselineAsync(
+                CancellationToken baselineCancellationToken)
             {
+                var mainProjectPath = Path.Combine(
+                    mainWorktreePath,
+                    broadCheck.Project!.Replace('/', Path.DirectorySeparatorChar));
+                if (!File.Exists(mainProjectPath))
+                {
+                    return null;
+                }
+
                 var mainArtifactsPath = Path.Combine(environment.ArtifactsPath, "main-coverage-baseline");
                 var mainEnvironment = environment.DeriveArtifactsPath(mainArtifactsPath);
                 var mainBuildArguments = new[]
@@ -5582,6 +5596,7 @@ public sealed class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
                     "minimal"
                 };
                 AcceptanceCheckResult mainBuild;
+                var lockRemediationApplied = false;
                 try
                 {
                     var managedBuild = await RunManagedDotnetCheckAsync(
@@ -5592,11 +5607,11 @@ public sealed class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
                         stableSlotIndex,
                         stableSlotLease,
                         "acceptance-main-coverage-baseline",
-                        cancellationToken,
+                        baselineCancellationToken,
                         executionEnvironment: mainEnvironment)
                         .ConfigureAwait(false);
                     mainBuild = managedBuild.Result;
-                    baselineLockRemediationApplied |= managedBuild.Retried;
+                    lockRemediationApplied = managedBuild.Retried;
                 }
                 catch (BuildLockBlockedException ex)
                 {
@@ -5630,68 +5645,60 @@ public sealed class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
                     broadCheck,
                     EngineSettings,
                     mainEnvironment);
-                CommandResult mainDiscovery;
-                try
-                {
-                    mainDiscovery = await _discoveryRunner(
-                        mainDiscoveryArguments,
-                        mainWorktreePath,
-                        EngineSettings.ResolveDiscoveryTimeout(),
-                        cancellationToken).ConfigureAwait(false);
-                }
-                catch (Exception ex) when (IsBuildArtifactIoException(ex))
-                {
-                    throw new AcceptanceInfrastructureDeferredException(
-                        "trusted-main-discovery-io",
-                        exitCode: null,
-                        outputTail: ex.Message);
-                }
-
-                if (mainDiscovery.TimedOut || mainDiscovery.ExitCode != 0)
-                {
-                    throw new AcceptanceInfrastructureDeferredException(
-                        mainDiscovery.TimedOut
-                            ? "trusted-main-discovery-timeout"
-                            : "trusted-main-discovery-failed",
-                        mainDiscovery.ExitCode,
-                        TailOutput(mainDiscovery.Output));
-                }
-
-                mainDiscoverySnapshot = TestCoverageInvariant.ParseDiscovery(
-                    mainDiscovery.Output,
-                    bareTestList: UsesMicrosoftTestingPlatform(broadCheck),
-                    repositoryRoot: mainWorktreePath);
+                return new AcceptanceStructuralCoverageBaseline(
+                    mainDiscoveryArguments,
+                    mainWorktreePath,
+                    mainWorktreePath,
+                    UsesMicrosoftTestingPlatform(broadCheck),
+                    lockRemediationApplied);
             }
 
-            IEnumerable<AcceptanceManifestCheck> partitionChecks = IsBroadInfrastructureTestCheck(broadCheck)
-                ? ExpandBroadInfrastructureCheck(broadCheck)
-                : [broadCheck];
-            var partitions = partitionChecks
-                .Select(shard =>
-                {
-                    var result = completedChecks.LastOrDefault(candidate =>
-                        candidate.Name.Equals(shard.Name, StringComparison.OrdinalIgnoreCase));
-                    return new TestPartitionCoverage(
-                        shard.Name,
-                        result?.Passed == true,
-                        result?.TestResultPaths ?? [],
-                        result?.LockRemediationApplied == true,
-                        result?.TestResultAttemptId,
-                        result?.TestResultRunOrdinal ?? 0,
-                        result?.TestResultIsExplicitCrossAttemptReuse == true);
-                })
-                .ToArray();
-            var candidateDiscoverySnapshot = TestCoverageInvariant.ParseDiscovery(
-                candidateDiscovery.Output,
-                bareTestList: UsesMicrosoftTestingPlatform(broadCheck));
-            var coverage = TestCoverageInvariant.Evaluate(
-                candidateDiscoverySnapshot.Tests,
-                partitions,
-                mainDiscoverySnapshot?.Tests,
-                DeletedTestFilesForProject(deletedTestFiles, broadCheck.Project!),
-                currentAttemptId,
-                mainDiscoverySnapshot?.SourceFilesByTest,
-                sanctionedRemovedTests);
+            var evaluation = await _structuralCoverageEvaluator.EvaluateAsync(
+                new AcceptanceStructuralCoverageRequest(
+                    candidateDiscoveryArguments,
+                    worktreePath,
+                    EngineSettings.ResolveDiscoveryTimeout(),
+                    UsesMicrosoftTestingPlatform(broadCheck),
+                    ResolvePartitions,
+                    () => DeletedTestFilesForProject(deletedTestFiles, broadCheck.Project!),
+                    currentAttemptId,
+                    sanctionedRemovedTests,
+                    PrepareBaselineAsync),
+                cancellationToken).ConfigureAwait(false);
+
+            var candidateDiscovery = evaluation.CandidateDiscovery;
+            if (candidateDiscovery.ExitCode != 0)
+            {
+                return new AcceptanceCheckResult(
+                    $"structural test coverage: {broadCheck.Name}",
+                    false,
+                    candidateDiscovery.ExitCode,
+                    TailOutput(candidateDiscovery.Output),
+                    ResultSummary: "candidate trusted discovery failed");
+            }
+
+            if (evaluation.BaselineDiscoveryIoException is { } baselineDiscoveryException)
+            {
+                throw new AcceptanceInfrastructureDeferredException(
+                    "trusted-main-discovery-io",
+                    exitCode: null,
+                    outputTail: baselineDiscoveryException.Message);
+            }
+
+            if (evaluation.BaselineDiscovery is { } mainDiscovery &&
+                (mainDiscovery.TimedOut || mainDiscovery.ExitCode != 0))
+            {
+                throw new AcceptanceInfrastructureDeferredException(
+                    mainDiscovery.TimedOut
+                        ? "trusted-main-discovery-timeout"
+                        : "trusted-main-discovery-failed",
+                    mainDiscovery.ExitCode,
+                    TailOutput(mainDiscovery.Output));
+            }
+
+            baselineLockRemediationApplied |= evaluation.BaselineLockRemediationApplied;
+            var coverage = evaluation.Coverage
+                ?? throw new InvalidOperationException("Structural coverage evaluation produced no verdict.");
             if (!coverage.Passed)
             {
                 var details = new List<string>
