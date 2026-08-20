@@ -2812,7 +2812,6 @@ internal sealed class ConductorBatchLoop
         var productionCandidates = speculativeCandidates
             .Where(candidate => !liveAttemptGoalIds.Contains(candidate.GoalId.Value))
             .ToArray();
-        var trainAttempted = false;
         if (driver.MergeTrainsEnabled &&
             cohortEligible.Length >= ConductorMergeTrainSelector.MinimumMembers &&
             !cohortEligible.Any(goal => IsAcceptanceEngineCircuitHoldRequired(
@@ -2822,7 +2821,6 @@ internal sealed class ConductorBatchLoop
                 productionCandidates,
                 driver.ReadSuppressedCohortPairs()) is { } trainSelection)
         {
-            trainAttempted = true;
             var trainRun = driver.RunMergeTrain(
                 trainSelection,
                 cohortEligible,
@@ -2844,8 +2842,7 @@ internal sealed class ConductorBatchLoop
                 .ToArray();
         }
         GoalId? forcedCohortCandidate = null;
-        if (!trainAttempted &&
-            driver.AcceptanceCohortsEnabled &&
+        if (driver.AcceptanceCohortsEnabled &&
             cohortEligible.Length >= ConductorAcceptanceCohortSelector.CohortSize &&
             !cohortEligible.Any(goal => IsAcceptanceEngineCircuitHoldRequired(
                 goal.Status,

@@ -1295,9 +1295,21 @@ public sealed class AcceptanceCohortWorkflowTests : GoalWorktreeTestBase
             var firstGoal = CreateCompletedGoal(kernel, "First production train member", repo);
             var secondGoal = CreateCompletedGoal(kernel, "Second production train member", repo);
             var thirdGoal = CreateCompletedGoal(kernel, "Third production train member", repo);
-            _ = CreateWorktreeCandidate(repo, firstGoal.Id, "src/TrainFirst.cs", "first");
-            _ = CreateWorktreeCandidate(repo, secondGoal.Id, "tests/TrainSecond.cs", "second");
-            _ = CreateWorktreeCandidate(repo, thirdGoal.Id, "src/TrainThird.cs", "third");
+            _ = CreateWorktreeCandidate(
+                repo,
+                firstGoal.Id,
+                "tests/Mcg.AgentOrchestrator.Core.Tests/TrainFirst.cs",
+                "first");
+            _ = CreateWorktreeCandidate(
+                repo,
+                secondGoal.Id,
+                "tests/Mcg.AgentOrchestrator.Infrastructure.Tests/TrainSecond.cs",
+                "second");
+            _ = CreateWorktreeCandidate(
+                repo,
+                thirdGoal.Id,
+                "tests/Mcg.AgentOrchestrator.Dashboard.Tests/TrainThird.cs",
+                "third");
             var verifier = new SequenceAcceptanceVerifier(
             [
                 new AcceptanceVerificationResult(
@@ -1325,9 +1337,21 @@ public sealed class AcceptanceCohortWorkflowTests : GoalWorktreeTestBase
             Assert.Equal(3, landings.Count);
             Assert.Equal(MergeTrainGateOutcome.Passed, result.Receipt?.Outcome);
             Assert.Contains("attempts=1 landings=3", result.Detail, StringComparison.Ordinal);
-            Assert.True(File.Exists(Path.Combine(repo, "src", "TrainFirst.cs")));
-            Assert.True(File.Exists(Path.Combine(repo, "tests", "TrainSecond.cs")));
-            Assert.True(File.Exists(Path.Combine(repo, "src", "TrainThird.cs")));
+            Assert.True(File.Exists(Path.Combine(
+                repo,
+                "tests",
+                "Mcg.AgentOrchestrator.Core.Tests",
+                "TrainFirst.cs")));
+            Assert.True(File.Exists(Path.Combine(
+                repo,
+                "tests",
+                "Mcg.AgentOrchestrator.Infrastructure.Tests",
+                "TrainSecond.cs")));
+            Assert.True(File.Exists(Path.Combine(
+                repo,
+                "tests",
+                "Mcg.AgentOrchestrator.Dashboard.Tests",
+                "TrainThird.cs")));
             AssertNoMergeTrainWorkspaces(repo);
         }
         finally
@@ -1355,9 +1379,21 @@ public sealed class AcceptanceCohortWorkflowTests : GoalWorktreeTestBase
             var firstGoal = CreateCompletedGoal(kernel, "First RED train member", repo);
             var secondGoal = CreateCompletedGoal(kernel, "Second RED train member", repo);
             var thirdGoal = CreateCompletedGoal(kernel, "Newest RED train member", repo);
-            _ = CreateWorktreeCandidate(repo, firstGoal.Id, "src/RedTrainFirst.cs", "first");
-            _ = CreateWorktreeCandidate(repo, secondGoal.Id, "tests/RedTrainSecond.cs", "second");
-            _ = CreateWorktreeCandidate(repo, thirdGoal.Id, "src/RedTrainNewest.cs", "newest");
+            _ = CreateWorktreeCandidate(
+                repo,
+                firstGoal.Id,
+                "tests/Mcg.AgentOrchestrator.Core.Tests/RedTrainFirst.cs",
+                "first");
+            _ = CreateWorktreeCandidate(
+                repo,
+                secondGoal.Id,
+                "tests/Mcg.AgentOrchestrator.Infrastructure.Tests/RedTrainSecond.cs",
+                "second");
+            _ = CreateWorktreeCandidate(
+                repo,
+                thirdGoal.Id,
+                "tests/Mcg.AgentOrchestrator.Dashboard.Tests/RedTrainNewest.cs",
+                "newest");
             var verifier = new SequenceAcceptanceVerifier(
             [
                 FailedVerification(repo, "train-three-red.trx", "three-member train"),
@@ -1384,12 +1420,26 @@ public sealed class AcceptanceCohortWorkflowTests : GoalWorktreeTestBase
             Assert.DoesNotContain(thirdGoal.Id.Value, result.MemberResults.Keys);
             var dropped = Assert.Single(result.Ejections, item => item.Reason == MergeTrainEjectionReason.RedNewestMember);
             Assert.Equal(thirdGoal.Id, dropped.GoalId);
-            Assert.True(File.Exists(Path.Combine(repo, "src", "RedTrainFirst.cs")));
-            Assert.True(File.Exists(Path.Combine(repo, "tests", "RedTrainSecond.cs")));
-            Assert.False(File.Exists(Path.Combine(repo, "src", "RedTrainNewest.cs")));
+            Assert.True(File.Exists(Path.Combine(
+                repo,
+                "tests",
+                "Mcg.AgentOrchestrator.Core.Tests",
+                "RedTrainFirst.cs")));
+            Assert.True(File.Exists(Path.Combine(
+                repo,
+                "tests",
+                "Mcg.AgentOrchestrator.Infrastructure.Tests",
+                "RedTrainSecond.cs")));
+            Assert.False(File.Exists(Path.Combine(
+                repo,
+                "tests",
+                "Mcg.AgentOrchestrator.Dashboard.Tests",
+                "RedTrainNewest.cs")));
             var soloProjection = Assert.IsType<GateReadyCandidateProjectionResult.Ready>(
                 driver.ProjectGateReadyCandidate(thirdGoal, ConductorAutonomyPolicy.Permissive));
-            Assert.Equal(["src/RedTrainNewest.cs"], soloProjection.Projection.LandingPaths);
+            Assert.Equal(
+                ["tests/Mcg.AgentOrchestrator.Dashboard.Tests/RedTrainNewest.cs"],
+                soloProjection.Projection.LandingPaths);
             var soloResult = driver.RunParallelLandingAcceptance(
                 ConductorParallelAcceptanceCandidate.Create(
                     thirdGoal,
@@ -1404,8 +1454,14 @@ public sealed class AcceptanceCohortWorkflowTests : GoalWorktreeTestBase
             Assert.Equal<GoalId?>([firstGoal.Id, firstGoal.Id, thirdGoal.Id], verifier.GoalIds);
             Assert.Equal(3, verifier.ChangedFiles[0].Count);
             Assert.Equal(2, verifier.ChangedFiles[1].Count);
-            Assert.Equal(["src/RedTrainNewest.cs"], verifier.ChangedFiles[2]);
-            Assert.False(File.Exists(Path.Combine(repo, "src", "RedTrainNewest.cs")));
+            Assert.Equal(
+                ["tests/Mcg.AgentOrchestrator.Dashboard.Tests/RedTrainNewest.cs"],
+                verifier.ChangedFiles[2]);
+            Assert.False(File.Exists(Path.Combine(
+                repo,
+                "tests",
+                "Mcg.AgentOrchestrator.Dashboard.Tests",
+                "RedTrainNewest.cs")));
             using var connection = new SqliteConnection(
                 $"Data Source={Path.Combine(workspace.OrchestratorDirectory, "merge-train-acceptance.db")}");
             connection.Open();
@@ -1434,9 +1490,21 @@ public sealed class AcceptanceCohortWorkflowTests : GoalWorktreeTestBase
             var firstGoal = CreateCompletedGoal(kernel, "First stale train member", repo);
             var secondGoal = CreateCompletedGoal(kernel, "Second stale train member", repo);
             var thirdGoal = CreateCompletedGoal(kernel, "Third stale train member", repo);
-            _ = CreateWorktreeCandidate(repo, firstGoal.Id, "src/StaleTrainFirst.cs", "first");
-            _ = CreateWorktreeCandidate(repo, secondGoal.Id, "tests/StaleTrainSecond.cs", "second");
-            _ = CreateWorktreeCandidate(repo, thirdGoal.Id, "src/StaleTrainThird.cs", "third");
+            _ = CreateWorktreeCandidate(
+                repo,
+                firstGoal.Id,
+                "tests/Mcg.AgentOrchestrator.Core.Tests/StaleTrainFirst.cs",
+                "first");
+            _ = CreateWorktreeCandidate(
+                repo,
+                secondGoal.Id,
+                "tests/Mcg.AgentOrchestrator.Infrastructure.Tests/StaleTrainSecond.cs",
+                "second");
+            _ = CreateWorktreeCandidate(
+                repo,
+                thirdGoal.Id,
+                "tests/Mcg.AgentOrchestrator.Dashboard.Tests/StaleTrainThird.cs",
+                "third");
             var verifier = new FakeAcceptanceVerifier(
                 result: null,
                 exception: new InvalidOperationException("A stale train must not invoke the gate."));

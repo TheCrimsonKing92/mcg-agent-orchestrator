@@ -627,6 +627,90 @@ public sealed class ConductorBatchLoopTestsParallelAcceptance : ConductorBatchLo
     }
 
     [Xunit.Fact]
+    public void ProductionTrainLeavesCompatiblePairForCohortInSameTick()
+    {
+        var kernel = new AgentOrchestratorKernel();
+        var goals = Enumerable.Range(1, 5)
+            .Select(index => CreateVerifiedSimpleGoal(kernel, $"Train and cohort member {index}"))
+            .ToArray();
+        var mainRevision = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
+        var paths = new Dictionary<GoalId, IReadOnlyList<string>>
+        {
+            [goals[0].Id] = ["tests/Mcg.AgentOrchestrator.Core.Tests/TrainFirst.cs"],
+            [goals[1].Id] = ["tests/Mcg.AgentOrchestrator.Infrastructure.Tests/TrainSecond.cs"],
+            [goals[2].Id] = ["tests/Mcg.AgentOrchestrator.Dashboard.Tests/TrainThird.cs"],
+            [goals[3].Id] = ["src/Mcg.AgentOrchestrator.App/Dashboard/Components/CohortFourth.razor"],
+            [goals[4].Id] = ["src/Mcg.AgentOrchestrator.App/Dashboard/Api/CohortFifth.cs"]
+        };
+        var projector = new GateReadyCandidateProjector(
+            goalId => new GateReadyCandidateRevisionPair(
+                goalId.Value.PadRight(40, 'b')[..40],
+                mainRevision),
+            goalId => new GateReadyLandingScopeObservation(true, paths[goalId]),
+            (_, _, _) => new GateReadyMergeTreeObservation(true));
+        var trainCalls = 0;
+        var cohortCalls = 0;
+        var ordinaryCalls = 0;
+        var driver = MakeDriver(
+            getFacts: _ => new GoalLifecycleFacts(WorkspaceExists: true),
+            runAcceptanceWithSlot: (_, _) =>
+            {
+                ordinaryCalls++;
+                return AcceptanceVerificationSummary.PassedWithNoUnmetCriteria;
+            },
+            classifyRisk: _ => ChangeRiskTier.DocsOnly,
+            getLandingFileScopes: goal => paths[goal.Id],
+            isVerificationGateSatisfied: _ => true,
+            gateReadyCandidateProjector: projector,
+            runMergeTrain: (selection, orderedGoals, policy) =>
+            {
+                trainCalls++;
+                var admitted = orderedGoals
+                    .Where(goal => selection.Members.Any(member => member.GoalId == goal.Id))
+                    .ToDictionary(
+                        goal => goal.Id.Value,
+                        goal => new ConductorAdvanceResult(
+                            goal.Id.Value,
+                            goal.Id.Value[..8],
+                            policy.Name,
+                            new ConductorAdvanceOutcome.Executed(
+                                GoalLifecycleState.Verified,
+                                "admitted by train")),
+                        StringComparer.Ordinal);
+                return new ConductorMergeTrainRunResult(null, admitted, [], "outcome=passed");
+            },
+            runAcceptanceCohort: (selection, orderedGoals, policy) =>
+            {
+                cohortCalls++;
+                var admitted = orderedGoals
+                    .Where(goal => selection.Members.Any(member => member.GoalId == goal.Id))
+                    .ToDictionary(
+                        goal => goal.Id.Value,
+                        goal => new ConductorAdvanceResult(
+                            goal.Id.Value,
+                            goal.Id.Value[..8],
+                            policy.Name,
+                            new ConductorAdvanceOutcome.Executed(
+                                GoalLifecycleState.Verified,
+                                "admitted by cohort")),
+                        StringComparer.Ordinal);
+                return new ConductorAcceptanceCohortRunResult(null, admitted, "outcome=passed");
+            });
+
+        var summary = new ConductorBatchLoop().Run(
+            kernel,
+            driver,
+            ConductorAutonomyPolicy.Permissive,
+            NoStopPath(),
+            maxIterations: 1);
+
+        Assert.Equal(5, summary.Advanced);
+        Assert.Equal(1, trainCalls);
+        Assert.Equal(1, cohortCalls);
+        Assert.Equal(0, ordinaryCalls);
+    }
+
+    [Xunit.Fact]
     public void IncompatibleCohortCandidates_UseOrdinaryAcceptance()
     {
         var kernel = new AgentOrchestratorKernel();
