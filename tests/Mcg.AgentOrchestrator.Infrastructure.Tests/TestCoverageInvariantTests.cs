@@ -388,8 +388,8 @@ public sealed class TestCoverageInvariantTests
         }
     }
 
-    [Xunit.Fact(DisplayName = "TestCoverageInvariant_uses_loud_legacy_credit_when_MTP_location_is_missing")]
-    public void TestCoverageInvariantUsesLoudLegacyCreditWhenMtpLocationIsMissing()
+    [Xunit.Fact(DisplayName = "TestCoverageInvariant_refuses_unmatched_MTP_location_credit")]
+    public void TestCoverageInvariantRefusesUnmatchedMtpLocationCredit()
     {
         var trx = WriteTrxWithMethodIdentity(("1", "current test", "Passed", "CurrentTests.Runs"));
         try
@@ -402,9 +402,12 @@ public sealed class TestCoverageInvariantTests
                 ["tests/Example.Tests/RemovedTests.cs"],
                 mainDiscoveredTestSourceFiles: mainDiscovery.SourceFilesByTest);
 
-            Xunit.Assert.True(result.Passed);
+            Xunit.Assert.False(result.Passed);
             Xunit.Assert.Contains(
-                "cross-generation-attribution:source=mtp-json-location,file=tests/Example.Tests/RemovedTests.cs,status=unattributed,fallback=legacy-one-per-file,credit=1",
+                "cross-generation-count:candidate=1,minimum=2,main=2,deleted=0",
+                result.MissingTests);
+            Xunit.Assert.Contains(
+                "cross-generation-attribution:source=mtp-json-location,file=tests/Example.Tests/RemovedTests.cs,status=unattributed,fallback=none,credit=0",
                 result.Summary);
         }
         finally
@@ -842,6 +845,30 @@ public sealed class TestCoverageInvariantTests
         Xunit.Assert.Equal(["structural coverage uses the MTP display name"], discovered);
     }
 
+    [Xunit.Fact(DisplayName = "TestCoverageInvariant_counts_display_name_with_diagnostic_prefix")]
+    public void TestCoverageInvariantCountsDisplayNameWithDiagnosticPrefix()
+    {
+        const string testName = "ErrorHandlingWhenDispatchExits";
+        var discovered = TestCoverageInvariant.ParseDiscoveredTests(
+            $"Microsoft.Testing.Platform v1.8.0{Environment.NewLine}{testName}",
+            bareTestList: true);
+        var trx = WriteTrx(("1", "UnrelatedTests.Runs", "Passed"));
+        try
+        {
+            var result = TestCoverageInvariant.Evaluate(
+                discovered,
+                [new TestPartitionCoverage("lane", true, [trx])]);
+
+            Xunit.Assert.Equal([testName], discovered);
+            Xunit.Assert.False(result.Passed);
+            Xunit.Assert.Contains(testName, result.MissingTests);
+        }
+        finally
+        {
+            File.Delete(trx);
+        }
+    }
+
     [Xunit.Fact(DisplayName = "TestCoverageInvariant_preserves_distinct_parameterized_cases")]
     public void TestCoverageInvariantPreservesDistinctParameterizedCases()
     {
@@ -860,6 +887,44 @@ public sealed class TestCoverageInvariantTests
         finally
         {
             File.Delete(trx);
+        }
+    }
+
+    [Xunit.Fact(DisplayName = "TestCoverageInvariant_counts_truncated_parameterized_cases_exactly")]
+    public void TestCoverageInvariantCountsTruncatedParameterizedCasesExactly()
+    {
+        var uniqueNames = Enumerable.Range(0, 42)
+            .Select(index => $"TheoryTests.Runs(value: {index:D2}···)")
+            .ToArray();
+        var discoveredNames = uniqueNames
+            .Concat([uniqueNames[0], uniqueNames[1]])
+            .ToArray();
+        var discovery = ParseMtpDiscoveryWithoutLocations(discoveredNames);
+        var trxRows = discoveredNames
+            .Select((name, index) => ($"test-{index:D2}", name, "Passed"))
+            .ToArray();
+        var completeTrx = WriteTrx(trxRows);
+        var oneShortTrx = WriteTrx(trxRows[..^1]);
+        try
+        {
+            var complete = TestCoverageInvariant.Evaluate(
+                discovery.Tests,
+                [new TestPartitionCoverage("theories", true, [completeTrx])]);
+            var oneShort = TestCoverageInvariant.Evaluate(
+                discovery.Tests,
+                [new TestPartitionCoverage("theories", true, [oneShortTrx])]);
+
+            Xunit.Assert.Equal(44, discovery.Tests.Count);
+            Xunit.Assert.True(complete.Passed);
+            Xunit.Assert.Contains("discovered=44, executed=44", complete.Summary);
+            Xunit.Assert.False(oneShort.Passed);
+            Xunit.Assert.Single(oneShort.MissingTests);
+            Xunit.Assert.Equal(uniqueNames[1], oneShort.MissingTests[0]);
+        }
+        finally
+        {
+            File.Delete(completeTrx);
+            File.Delete(oneShortTrx);
         }
     }
 
@@ -883,8 +948,8 @@ public sealed class TestCoverageInvariantTests
         }
     }
 
-    [Xunit.Fact(DisplayName = "TestCoverageInvariant_allows_custom_display_name_for_deleted_test_file")]
-    public void TestCoverageInvariantAllowsCustomDisplayNameForDeletedTestFile()
+    [Xunit.Fact(DisplayName = "TestCoverageInvariant_refuses_deletion_credit_for_unmatched_filename")]
+    public void TestCoverageInvariantRefusesDeletionCreditForUnmatchedFilename()
     {
         var trx = WriteTrx(("1", "CurrentTests.Runs", "Passed"));
         try
@@ -897,7 +962,10 @@ public sealed class TestCoverageInvariantTests
                     StringComparer.OrdinalIgnoreCase),
                 ["tests/Example.Tests/RemovedTests.cs"]);
 
-            Xunit.Assert.True(result.Passed);
+            Xunit.Assert.False(result.Passed);
+            Xunit.Assert.Contains(
+                "cross-generation-count:candidate=1,minimum=2,main=2,deleted=0",
+                result.MissingTests);
         }
         finally
         {
