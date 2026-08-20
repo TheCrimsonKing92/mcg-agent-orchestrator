@@ -21,18 +21,37 @@ Rules for using and maintaining this file:
 - **Durable lessons belong in `### Operating lessons worth keeping`; live state belongs in the top
   section.** Everything else is history.
 
-## RESUME HERE — 2026-08-20 05:00 UTC, board running, gate blocked by ~14 red tests on main
+## RESUME HERE — 2026-08-20 09:35 UTC, the fourteen reds are FIXED and landed; board draining
 
-**THE ONE THING TO KNOW: the acceptance gate is unpassable for every goal**, because main carries
-roughly fourteen failing tests. This is not a per-goal quality problem — three unrelated candidates
-failed their gates on the same set tonight, including one whose diff is **docs and tests only, zero
-source**, which proves the reds are on main. Two goals now cover them and **both must land** before
-anything else can:
+**RESOLVED at `c0ad1c47`.** Main no longer carries the fourteen red tests that made the acceptance gate
+unpassable for every goal. A combined candidate carrying all fourteen fixes gated with **zero failures
+across every lane** and landed. `af19fd2a` (`6241ed3f`, gate-latency velocity) landed behind it.
 
-| Goal | Covers | State at handoff |
-|---|---|---|
-| `4fa6af44` | the six Planner-contract reds | Reviewer, final step; root cause fixed and verified green |
-| `c30eb2fe` | the eight local-provider reds (backlog `7009ffbd`) | Developer, just intaken |
+**How it was resolved, because the mechanism matters.** The two fix goals DEADLOCKED each other:
+`4fa6af44` fixed six Planner-contract reds, `c30eb2fe` fixed eight local-provider reds, and any candidate
+touching `src/Mcg.AgentOrchestrator.Infrastructure/` runs the whole Infrastructure suite
+(`RepositoryTestImpactPlanner.cs:194`), so each one's gate met the other's reds and failed. Proven, not
+inferred: `4fa6af44`'s gate showed all six of its own fixed, zero introduced, and still failed on exactly
+`c30eb2fe`'s eight. The exit was to merge `goal/4fa6af44` into `goal/c30eb2fe` so ONE gate run could see
+all fourteen fixes at once. **That merge was manual and only necessary because the gate cannot distinguish
+"you broke this" from "this was already broken" — backlog `92f531b4`, which carries the full proof.**
+
+Root causes worth keeping:
+- Six Planner reds: `MarkdownHeadingNormalizer`'s `(?m)(?<=\S)(#{1,6}[ \t]+\S)` — the first `#` of a
+  start-of-line `## Heading` satisfied the lookbehind, so the replace demoted it to `# Heading`. Fixed to
+  `(?<=[^\s#])`. One product bug behind all five failures, found by a grok Tester whose dispatch was then
+  rejected on output shape.
+- Eight local-provider reds: stale Ollama expectations after the LlamaCpp switch, plus one real bug —
+  `OrchestratorHealthInspector.IsApiRouteUsable` treated `Mode == "LocalBridge"` as an API route.
+
+**Still open and worth knowing before you drive:**
+
+| Goal | State |
+|---|---|
+| `21b284a0` | **held deliberately.** Its criterion demands the focused-evidence path that `9a9c7e8e` breaks; it burned 32 attempts. The Developer fix is done. Read the note on task 4 before removing the hold. |
+| `fe37d616` | `GoalAcceptanceVerifier` seam-4 extraction, recovered and current. **This is the only genuine test of whether the post-landing canary fires** — it is the sole engine-touching candidate. |
+| `9f64cd98` | squashed from 12 commits (with merges) to **1 linear commit** to stop a rebase treadmill that recurred every time main moved. |
+| `13b3be0d`, `ab933e32` | draining normally against a green base. |
 
 `4fa6af44`'s root cause is worth keeping: `MarkdownHeadingNormalizer`'s `(?m)(?<=\S)(#{1,6}[ \t]+\S)`
 demoted a start-of-line `## Heading` to `# Heading`, because the first `#` satisfied the lookbehind.
