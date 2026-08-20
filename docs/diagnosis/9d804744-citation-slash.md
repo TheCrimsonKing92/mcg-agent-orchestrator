@@ -1,41 +1,44 @@
-# Planner: a backticked span containing a slash is read as a file path and discards the plan
+# Planner: NEVER put a slash inside backticks unless it is a complete path to an existing file
 
-Your previous plan was rejected for citation FORMAT only. The analysis was accepted on every other axis.
+Three plans have now been discarded on this rule. The analysis was accepted every time; only the prose was
+rejected.
 
-## What was rejected
+## The rule, stated as a mechanical check
 
-    target citation 'try/finally' does not exist and is not marked as a new file
+Before emitting, find every backticked span in your output. For each one containing `/`, ask: **is this the
+complete relative path of a file that exists in this repository right now?**
 
-from your sentence:
+- YES -> keep it. `src/Mcg.AgentOrchestrator.App/Orchestration/GoalOperationJournal.cs` is fine.
+- NO -> remove the backticks and rewrite in plain words.
 
-    ...tests must save and restore it in `try/finally` exactly as `tests/Mcg.AgentOrchestrator...`
+There is no third option. A backticked span with a slash that is not an existing file path DISCARDS YOUR
+ENTIRE PLAN.
 
-You wrote that correctly. Backticks around `try/finally` mark it as code, which is right. The validator
-scans backticked spans, sees the `/`, treats it as a path, finds no such file, and discards the whole plan.
+## What has been rejected so far, all correct English
 
-## What to do
+    `try/finally`   ->  write: a try-finally block
+    `archive/`      ->  write: the archive subdirectory, or the full path if you mean a specific one
 
-Do NOT put a slash inside backticks unless it is a real repository path. Rewrite as plain words:
+Also rejected: any line RANGE. `File.cs:127` is accepted, `File.cs:127-140` is not.
 
-    "in a try/finally block"        ->  in a try-finally block
-    "`read/write`"                  ->  read and write
-    "`and/or`"                      ->  and, or both
+Directories are the trap. A trailing slash makes something look like a path but a bare directory name is
+not an existing file, so it fails. Say "the archive subdirectory under goal-operations" in plain text.
 
-Real paths in backticks are fine and expected: `src/Mcg.AgentOrchestrator.App/Orchestration/GoalOperationJournal.cs`.
+## Your previous finding is worth keeping — restate it
 
-Also still applies: cite a single line, never a range. `File.cs:127` is accepted; `File.cs:127-140` is
-rejected for the same reason.
+Your last plan contained this, and it is a genuine and important observation:
 
-Before emitting, scan your output for backticked spans containing `/` and confirm each one is a real path.
+    ArchiveGoalJournals renames the live journal into archive/, and today an open handle blocks it
 
-## Keep everything else
+That is a real interaction between the journal archiving that landed recently and the share-violation this
+goal fixes: the archive rename is another operation that contends for the same handle, so the audit and the
+fix must cover it. Keep this in the re-emitted plan, written without backticks around `archive/`.
 
-This is an orchestrator defect, filed as backlog `9fbce159`; you are not expected to have known it. Your
-plan's substance was not questioned. Re-emit it with the prose adjusted - do not re-derive the research and
-do not change scope.
+## Everything else stands
 
-Prior work you should build on, already committed on this branch at
-`docs/diagnosis/9d804744-journal-openers.md`: the four openers in `GoalOperationJournal.cs` are
-`File.ReadLines` at :180 and :698 and `File.AppendAllText` at :202 and :876, none with an explicit
-`FileShare`. Criterion 1 still requires a repository-wide audit rather than accepting those four as the
-complete set.
+This is an orchestrator defect, backlog `9fbce159`; you are not expected to have known it. Do not re-derive
+the research and do not change scope. Also on this branch:
+`docs/diagnosis/9d804744-journal-openers.md` records the four verified openers in
+`GoalOperationJournal.cs` — `File.ReadLines` at :180 and :698, `File.AppendAllText` at :202 and :876, none
+with an explicit `FileShare` — and notes that criterion 1 still requires a repository-wide audit rather than
+treating those four as the complete set.
