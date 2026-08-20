@@ -489,6 +489,120 @@ public sealed class RunEventStoreTests
         }
     }
 
+    [Xunit.Fact(DisplayName = "RunEventMaintenance_terminal_goal_operation_outside_threshold_is_removed")]
+    public async Task TerminalGoalOperationOutsideThresholdIsRemoved()
+    {
+        var db = TempDb();
+        var store = new SqliteRunEventStore(db);
+        var now = DateTimeOffset.Parse("2026-08-20T12:00:00Z");
+        await AppendGoalOperationAsync(store, "terminal-goal", now.AddDays(-31));
+        await AppendGoalOperationAsync(store, "terminal-goal", now.AddDays(-29));
+
+        var result = await store.MaintainAsync(RunEventMaintenanceOptions.Default with
+        {
+            UtcNow = now,
+            TerminalGoalIds = ["terminal-goal"]
+        });
+
+        Assert.Equal(1, result.TerminalGoalOperationRowsDeleted);
+        var remaining = await store.ReadSinceAsync(goalId: "terminal-goal");
+        Assert.Single(remaining);
+        Assert.Equal(now.AddDays(-29), remaining[0].OccurredAt);
+    }
+
+    [Xunit.Fact(DisplayName = "RunEventMaintenance_goal_with_no_terminal_state_is_untouched")]
+    public async Task GoalWithNoTerminalStateIsUntouched()
+    {
+        var db = TempDb();
+        var store = new SqliteRunEventStore(db);
+        var now = DateTimeOffset.Parse("2026-08-20T12:00:00Z");
+        await AppendGoalOperationAsync(store, "active-goal", now.AddDays(-90));
+
+        var result = await store.MaintainAsync(RunEventMaintenanceOptions.Default with
+        {
+            UtcNow = now,
+            TerminalGoalIds = ["different-terminal-goal"]
+        });
+
+        Assert.Equal(0, result.TerminalGoalOperationRowsDeleted);
+        Assert.Single(await store.ReadSinceAsync(goalId: "active-goal"));
+    }
+
+    [Xunit.Fact(DisplayName = "RunEventMaintenanceCadence_requests_vacuum_only_in_weekly_off_peak_window")]
+    public void RunEventMaintenanceCadenceRequestsVacuumOnlyInWeeklyOffPeakWindow()
+    {
+        Assert.True(RunEventMaintenanceCadence.IsOffPeakVacuumWindow(
+            DateTimeOffset.Parse("2026-08-23T03:00:00Z")));
+        Assert.False(RunEventMaintenanceCadence.IsOffPeakVacuumWindow(
+            DateTimeOffset.Parse("2026-08-23T12:00:00Z")));
+        Assert.False(RunEventMaintenanceCadence.IsOffPeakVacuumWindow(
+            DateTimeOffset.Parse("2026-08-24T03:00:00Z")));
+        Assert.Equal(
+            DateTimeOffset.Parse("2026-08-23T02:00:00Z"),
+            RunEventMaintenanceCadence.NextDue(DateTimeOffset.Parse("2026-08-22T12:00:00Z")));
+    }
+
+    [Xunit.Fact(DisplayName = "RunEventMaintenanceCadence_fresh_daily_marker_does_not_suppress_due_off_peak_vacuum")]
+    public async Task FreshDailyMarkerDoesNotSuppressDueOffPeakVacuum()
+    {
+        var root = CreateTempDirectory();
+        var db = Path.Combine(root, "run-events.db");
+        var logPath = Path.Combine(root, "logs", ConductEventLogWriter.CurrentFileName);
+        var now = DateTimeOffset.Parse("2026-08-23T03:00:00Z");
+        var store = new SqliteRunEventStore(db);
+        await store.AppendAsync(new RunEventAppend(
+            RunEventTypes.RunEventMaintenance,
+            null,
+            RunEventMaintenanceCadence.Operation,
+            "Completed",
+            "fresh daily marker",
+            "{}",
+            OccurredAt: now.AddHours(-1)));
+        RunEventMaintenanceOptions? observedOptions = null;
+
+        var result = RunEventMaintenanceCadence.TryRunIfDue(
+            db,
+            logPath,
+            () => now,
+            (_, options) =>
+            {
+                observedOptions = options;
+                return new RunEventMaintenanceResult(
+                    Deferred: false,
+                    DeferredReason: null,
+                    ConductorTickRowsDeleted: 0,
+                    AgedConductorTickRowsDeleted: 0,
+                    OversizedConductorTickRowsDeleted: 0,
+                    DeletedPayloadBytesEstimate: 0,
+                    MaxRowsDeletedInTransaction: 0,
+                    Duration: TimeSpan.Zero,
+                    BytesBefore: 1024,
+                    BytesAfter: 512,
+                    VacuumRequested: true,
+                    VacuumCompleted: true,
+                    VacuumDeferred: false);
+            });
+
+        Assert.True(result.Attempted);
+        Assert.True(observedOptions?.Vacuum);
+        Assert.NotNull(await store.ReadLatestAsync(
+            RunEventTypes.RunEventMaintenance,
+            RunEventMaintenanceCadence.VacuumOperation));
+    }
+
+    private static Task<RunEventRecord> AppendGoalOperationAsync(
+        SqliteRunEventStore store,
+        string goalId,
+        DateTimeOffset occurredAt) =>
+        store.AppendAsync(new RunEventAppend(
+            RunEventTypes.GoalOperation,
+            goalId,
+            "conductor:test",
+            "Completed",
+            "test",
+            "{}",
+            OccurredAt: occurredAt));
+
     private static Task<RunEventRecord> AppendTickAsync(
         SqliteRunEventStore store,
         DateTimeOffset occurredAt,

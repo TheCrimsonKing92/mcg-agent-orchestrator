@@ -4205,8 +4205,8 @@ public sealed class WorkerDispatchTestsWorkerResultClassification : WorkerDispat
     Assert.Equal(WorkTaskStatus.Completed, task.Status);
 }
 
-    [Xunit.Fact(DisplayName = "DispatchDiagnostic_FileDiagnosticWriter_produces_parseable_jsonl_with_all_required_fields")]
-    public void DispatchDiagnosticFileDiagnosticWriterProducesParseableJsonlWithAllRequiredFields()
+    [Xunit.Fact(DisplayName = "DispatchDiagnostic_FileDiagnosticWriter_does_not_retain_unread_jsonl")]
+    public void DispatchDiagnosticFileDiagnosticWriterDoesNotRetainUnreadJsonl()
 {
     var root = CreateTempDirectory();
     var logDir = Path.Combine(root, "logs");
@@ -4243,47 +4243,10 @@ public sealed class WorkerDispatchTestsWorkerResultClassification : WorkerDispat
     new BackgroundDispatchRunner(clock, isStillRunning: _ => false, diagnosticWriter: new FileDiagnosticWriter())
         .RefreshLatestProcess(kernel, goal.Id, task.Id);
 
-    var logPath = Path.Combine(logDir, "dispatch-diagnostics.jsonl");
-    Assert.True(File.Exists(logPath));
-    var line = File.ReadAllLines(logPath).FirstOrDefault(l => !string.IsNullOrWhiteSpace(l));
-    Assert.NotNull(line);
-    var doc = JsonDocument.Parse(line!);
-    var root2 = doc.RootElement;
-    Assert.True(root2.TryGetProperty("goalId", out _));
-    Assert.True(root2.TryGetProperty("taskId", out _));
-    Assert.True(root2.TryGetProperty("prefix", out _));
-    Assert.True(root2.TryGetProperty("exitCode", out _));
-    Assert.True(root2.TryGetProperty("outputPath", out _));
-    Assert.True(root2.TryGetProperty("fileExists", out _));
-    Assert.True(root2.TryGetProperty("fileLen", out _));
-    Assert.True(root2.TryGetProperty("readLen", out _));
-    Assert.True(root2.TryGetProperty("stderrLen", out _));
-    Assert.True(root2.TryGetProperty("classification", out var cls));
-    Assert.Equal("success", cls.GetString());
-    Assert.True(root2.TryGetProperty("reason", out _));
-    Assert.True(root2.TryGetProperty("timestamp", out _));
+    Assert.False(File.Exists(Path.Combine(logDir, "dispatch-diagnostics.jsonl")));
+    Assert.Contains("no production reader", FileDiagnosticWriter.RetentionDecision, StringComparison.Ordinal);
     Assert.Equal(WorkTaskStatus.Completed, task.Status);
     Assert.NotNull(task.LastVerification);
-    Assert.True(root2.TryGetProperty("dispatchState", out var state));
-    Assert.Equal("Completed", state.GetProperty("kind").GetString());
-    Assert.Equal("none", state.GetProperty("recommendedAction").GetString());
-    Assert.True(state.TryGetProperty("processTree", out var processTree));
-    Assert.Equal(999999, processTree.GetProperty("wrapperProcessId").GetInt32());
-    Assert.Equal(123456, processTree.GetProperty("childProcessId").GetInt32());
-    Assert.Contains(
-        processTree.GetProperty("ownedProcessIds").EnumerateArray(),
-        pid => pid.GetInt32() == 123456);
-    Assert.True(state.TryGetProperty("artifacts", out var artifacts));
-    Assert.True(artifacts.GetProperty("standardOutputExists").GetBoolean());
-    Assert.True(artifacts.GetProperty("exitCodeExists").GetBoolean());
-    Assert.True(artifacts.GetProperty("heartbeatExists").GetBoolean());
-    Assert.True(state.TryGetProperty("worktree", out var worktree));
-    Assert.Equal(root, worktree.GetProperty("workingDirectory").GetString());
-    Assert.True(worktree.GetProperty("exists").GetBoolean());
-    Assert.True(state.TryGetProperty("staleThresholds", out var staleThresholds));
-    Assert.True(staleThresholds.GetProperty("recentHeartbeatGrace").GetString() is { Length: > 0 });
-    Assert.True(staleThresholds.GetProperty("liveIdleTimeout").GetString() is { Length: > 0 });
-    Assert.True(staleThresholds.TryGetProperty("staleRetryBudgetRemaining", out _));
 }
 
     [Xunit.Fact(DisplayName = "ShowOrchestratorLogArtifacts_defaults_to_latest_dispatch_run_and_all_restores_history")]

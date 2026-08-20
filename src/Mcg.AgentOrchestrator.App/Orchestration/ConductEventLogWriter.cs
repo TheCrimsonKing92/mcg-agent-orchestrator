@@ -13,6 +13,7 @@ internal sealed class ConductEventLogWriter
     public const string CurrentFileName = "conduct-events.log";
     internal const string PendingEventsDirectoryName = "pending-events";
     internal const long DefaultMaxBytes = 1_048_576;
+    internal const int DefaultRotatedGenerationCount = 8;
 
     private static readonly JsonSerializerOptions JsonOptions = new(JsonSerializerDefaults.Web);
     private static readonly object RequiredEventDrainGate = new();
@@ -23,6 +24,7 @@ internal sealed class ConductEventLogWriter
     private readonly Func<DateTimeOffset> _utcNow;
     private readonly Action? _beforeRequiredEventDrain;
     private readonly Action? _beforeAppendCommit;
+    private readonly int _rotatedGenerationCount;
     private readonly string _requiredEventMutexName;
     private readonly object _lock = new();
 
@@ -31,13 +33,15 @@ internal sealed class ConductEventLogWriter
         long maxBytes = DefaultMaxBytes,
         Func<DateTimeOffset>? utcNow = null,
         Action? beforeRequiredEventDrain = null,
-        Action? beforeAppendCommit = null)
+        Action? beforeAppendCommit = null,
+        int rotatedGenerationCount = DefaultRotatedGenerationCount)
     {
         _path = path;
         _maxBytes = maxBytes;
         _utcNow = utcNow ?? (() => DateTimeOffset.UtcNow);
         _beforeRequiredEventDrain = beforeRequiredEventDrain;
         _beforeAppendCommit = beforeAppendCommit;
+        _rotatedGenerationCount = Math.Max(0, rotatedGenerationCount);
         _requiredEventMutexName = RequiredEventMutexName(path);
         MigrateLegacyPendingEvents();
     }
@@ -319,6 +323,30 @@ internal sealed class ConductEventLogWriter
         }
 
         File.Move(_path, candidate);
+        PruneRotatedGenerations(info.DirectoryName ?? ".", info.Name);
+    }
+
+    private void PruneRotatedGenerations(string directory, string currentFileName)
+    {
+        var stem = Path.GetFileNameWithoutExtension(currentFileName);
+        var extension = Path.GetExtension(currentFileName);
+        var rotated = Directory.EnumerateFiles(directory, $"{stem}-*{extension}", SearchOption.TopDirectoryOnly)
+            .Select(path => new FileInfo(path))
+            .OrderByDescending(file => file.LastWriteTimeUtc)
+            .ThenByDescending(file => file.Name, StringComparer.Ordinal)
+            .Skip(_rotatedGenerationCount)
+            .ToArray();
+        foreach (var file in rotated)
+        {
+            try
+            {
+                file.Delete();
+            }
+            catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+            {
+                // A reader may still hold a rotated generation. Keep it for the next rotation.
+            }
+        }
     }
 }
 
