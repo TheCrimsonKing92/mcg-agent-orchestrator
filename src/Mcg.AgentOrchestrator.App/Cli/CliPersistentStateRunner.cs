@@ -3447,6 +3447,20 @@ internal static class CliPersistentStateRunner
         {
             return false;
         }
+        catch (Exception ex)
+            when (committedSnapshot is null && GetGoalCreationPreconditionReason(ex) is not null)
+        {
+            currentGoal = null;
+            if (request is not null)
+            {
+                _ = requestStore!.MarkFailed(
+                    request.RequestKey,
+                    request.Fingerprint,
+                    ResolveGoalIntakeFailureCode(ex),
+                    ex.Message);
+            }
+            throw;
+        }
         catch (Exception ex) when (request is not null && committedSnapshot is null)
         {
             _ = requestStore!.MarkFailed(
