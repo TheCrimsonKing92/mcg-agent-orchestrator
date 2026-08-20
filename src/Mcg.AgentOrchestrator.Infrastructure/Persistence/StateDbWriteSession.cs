@@ -75,6 +75,24 @@ internal static class StateDbWriteSession
         return false;
     }
 
+    public static bool IsActiveFor(string databasePath)
+    {
+        var normalized = Normalize(databasePath);
+        for (var session = Current.Value; session is not null; session = session.Previous)
+        {
+            lock (session.SyncRoot)
+            {
+                if (session.IsActive &&
+                    string.Equals(session.DatabasePath, normalized, PathComparison))
+                {
+                    return true;
+                }
+            }
+        }
+
+        return false;
+    }
+
     private static string Normalize(string databasePath) =>
         Path.GetFullPath(databasePath);
 }

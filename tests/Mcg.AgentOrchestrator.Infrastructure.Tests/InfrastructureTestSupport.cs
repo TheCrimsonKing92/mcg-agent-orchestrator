@@ -45,6 +45,20 @@ public static IDisposable ClearProtectedPidEnvironment()
 public static OrchestratorWorkspace CreateRefinedWorkspace(string root)
     => (OrchestratorWorkspace)SharedTestSupport.CreateRefinedWorkspaceOpaque(root);
 
+public static Goal MarkGoalRefined(
+    AgentOrchestratorKernel kernel,
+    Goal goal,
+    string? decision = null)
+{
+    kernel.SetGoalRefinedSpec(goal.Id, new RefinedSpec(
+        goal.Objective,
+        [decision ?? "Test fixture goal is already refined."],
+        VerificationClass.TestVerifiable,
+        [],
+        []));
+    return goal;
+}
+
 public static void SeedLocalSkillCatalog(string workingDirectory)
     => SharedTestSupport.SeedLocalSkillCatalog(workingDirectory);
 

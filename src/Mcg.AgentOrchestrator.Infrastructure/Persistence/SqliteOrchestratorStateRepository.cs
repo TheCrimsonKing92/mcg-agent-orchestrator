@@ -214,6 +214,10 @@ public sealed class SqliteOrchestratorStateRepository : IOrchestratorStateOutbox
     internal static bool IsTransientLock(SqliteException ex) =>
         ex.SqliteErrorCode == 5 /* SQLITE_BUSY */ || ex.SqliteErrorCode == 6 /* SQLITE_LOCKED */;
 
+    internal static bool IsMissingStateOutboxTable(SqliteException ex) =>
+        ex.SqliteErrorCode == 1 &&
+        ex.Message.Contains("no such table: state_outbox", StringComparison.OrdinalIgnoreCase);
+
     internal static async Task<T> WithBusyRetryAsync<T>(
         Func<Task<T>> operation,
         CancellationToken ct,
@@ -902,6 +906,8 @@ public sealed class SqliteOrchestratorStateRepository : IOrchestratorStateOutbox
         var write = await BeginWriteAsync(ResolveOperationTag(nameof(TransactAsync), operationName), cancellationToken);
         await using var conn = write.Connection;
         var telemetry = write.Telemetry;
+        T result = default!;
+        StateDbCommitBeforeRethrowException? commitBeforeRethrow = null;
         try
         {
             var kernel = await LoadFromConnectionAsync(conn, goalIds: null, cancellationToken);
@@ -912,10 +918,17 @@ public sealed class SqliteOrchestratorStateRepository : IOrchestratorStateOutbox
             }
 
             bool shouldSave;
-            T result;
-            using (StateDbWriteSession.Enter(_dbPath, conn))
+            try
             {
-                (shouldSave, result) = await transaction(kernel, CheckpointAsync, cancellationToken);
+                using (StateDbWriteSession.Enter(_dbPath, conn))
+                {
+                    (shouldSave, result) = await transaction(kernel, CheckpointAsync, cancellationToken);
+                }
+            }
+            catch (StateDbCommitBeforeRethrowException ex)
+            {
+                shouldSave = true;
+                commitBeforeRethrow = ex;
             }
 
             if (shouldSave)
@@ -923,7 +936,6 @@ public sealed class SqliteOrchestratorStateRepository : IOrchestratorStateOutbox
 
             await RunNonQueryAsync(conn, "COMMIT", cancellationToken);
             telemetry.Emit("commit");
-            return result;
         }
         catch (Exception ex)
         {
@@ -931,6 +943,11 @@ public sealed class SqliteOrchestratorStateRepository : IOrchestratorStateOutbox
             telemetry.Emit("rollback", ex);
             throw;
         }
+
+        if (commitBeforeRethrow is not null)
+            throw commitBeforeRethrow.CreatePostCommitException();
+
+        return result;
     }
 
     public async Task<T> TransactWithOutboxAsync<T>(
@@ -945,15 +962,24 @@ public sealed class SqliteOrchestratorStateRepository : IOrchestratorStateOutbox
             cancellationToken);
         await using var conn = write.Connection;
         var telemetry = write.Telemetry;
+        T result = default!;
+        StateDbCommitBeforeRethrowException? commitBeforeRethrow = null;
         try
         {
             var kernel = await LoadFromConnectionAsync(conn, goalIds: null, cancellationToken);
-            bool shouldSave;
-            T result;
-            IReadOnlyList<OrchestratorStateOutboxMessage> outboxMessages;
-            using (StateDbWriteSession.Enter(_dbPath, conn))
+            var shouldSave = false;
+            IReadOnlyList<OrchestratorStateOutboxMessage> outboxMessages = [];
+            try
             {
-                (shouldSave, result, outboxMessages) = await transaction(kernel, cancellationToken);
+                using (StateDbWriteSession.Enter(_dbPath, conn))
+                {
+                    (shouldSave, result, outboxMessages) = await transaction(kernel, cancellationToken);
+                }
+            }
+            catch (StateDbCommitBeforeRethrowException ex)
+            {
+                shouldSave = true;
+                commitBeforeRethrow = ex;
             }
 
             if (shouldSave)
@@ -967,7 +993,6 @@ public sealed class SqliteOrchestratorStateRepository : IOrchestratorStateOutbox
             _beforeOutboxCommit?.Invoke();
             await RunNonQueryAsync(conn, "COMMIT", cancellationToken);
             telemetry.Emit("commit");
-            return result;
         }
         catch (Exception ex)
         {
@@ -975,6 +1000,11 @@ public sealed class SqliteOrchestratorStateRepository : IOrchestratorStateOutbox
             telemetry.Emit("rollback", ex);
             throw;
         }
+
+        if (commitBeforeRethrow is not null)
+            throw commitBeforeRethrow.CreatePostCommitException();
+
+        return result;
     }
 
     public async Task<IReadOnlyList<OrchestratorStateOutboxMessage>> ListOutboxMessagesAsync(
@@ -1004,6 +1034,43 @@ public sealed class SqliteOrchestratorStateRepository : IOrchestratorStateOutbox
         return messages;
     }
 
+    public Task<OrchestratorStateOutboxState?> GetOutboxStateAsync(
+        string id,
+        CancellationToken cancellationToken = default)
+    {
+        OrchestratorStateOutboxState? ambientState = null;
+        try
+        {
+            if (StateDbWriteSession.TryExecute(
+                    _dbPath,
+                    connection => ambientState = ReadOutboxState(connection, id)))
+            {
+                return Task.FromResult(ambientState);
+            }
+        }
+        catch (SqliteException ex) when (IsMissingStateOutboxTable(ex))
+        {
+            return Task.FromResult<OrchestratorStateOutboxState?>(null);
+        }
+
+        return GetOutboxStateCoreAsync(id, cancellationToken);
+    }
+
+    public Task<OrchestratorStateOutboxEnsureResult> EnsureOutboxMessageAsync(
+        OrchestratorStateOutboxMessage message,
+        CancellationToken cancellationToken = default)
+    {
+        OrchestratorStateOutboxEnsureResult? ambientResult = null;
+        if (StateDbWriteSession.TryExecute(
+                _dbPath,
+                connection => ambientResult = EnsureOutboxMessage(connection, message)))
+        {
+            return Task.FromResult(ambientResult!);
+        }
+
+        return EnsureOutboxMessageCoreAsync(message, cancellationToken);
+    }
+
     public async Task<bool> TryProcessOutboxMessageAsync(
         string id,
         Func<OrchestratorStateOutboxMessage, CancellationToken, Task<OrchestratorStateOutboxProcessingResult>> processor,
@@ -1021,11 +1088,15 @@ public sealed class SqliteOrchestratorStateRepository : IOrchestratorStateOutbox
             await FinalizeOutboxMessageAsync(id, processingToken, result, cancellationToken);
             return true;
         }
-        catch
+        catch (Exception ex)
         {
             try
             {
-                await ReleaseOutboxMessageClaimAsync(id, processingToken, CancellationToken.None);
+                await ReleaseOutboxMessageClaimAsync(
+                    id,
+                    processingToken,
+                    SingleLine(ex.Message),
+                    CancellationToken.None);
             }
             catch
             {
@@ -1173,6 +1244,7 @@ public sealed class SqliteOrchestratorStateRepository : IOrchestratorStateOutbox
     private async Task ReleaseOutboxMessageClaimAsync(
         string id,
         string processingToken,
+        string failureDetail,
         CancellationToken cancellationToken)
     {
         var write = await BeginWriteAsync(
@@ -1186,11 +1258,12 @@ public sealed class SqliteOrchestratorStateRepository : IOrchestratorStateOutbox
             cmd.CommandText = """
                 UPDATE state_outbox
                 SET processing_token = NULL,
-                    processing_started_at = NULL
+                    quarantine_reason = $failure_detail
                 WHERE id = $id AND processing_token = $processing_token
                 """;
             cmd.Parameters.AddWithValue("$id", id);
             cmd.Parameters.AddWithValue("$processing_token", processingToken);
+            cmd.Parameters.AddWithValue("$failure_detail", failureDetail);
             _ = await cmd.ExecuteNonQueryAsync(cancellationToken);
             await RunNonQueryAsync(conn, "COMMIT", cancellationToken);
             telemetry.Emit("commit");
@@ -1212,10 +1285,7 @@ public sealed class SqliteOrchestratorStateRepository : IOrchestratorStateOutbox
         cmd.CommandText = """
             INSERT INTO state_outbox (id, kind, payload_json, created_at)
             VALUES ($id, $kind, $payload_json, $created_at)
-            ON CONFLICT(id) DO UPDATE SET
-                kind = excluded.kind,
-                payload_json = excluded.payload_json,
-                created_at = excluded.created_at
+            ON CONFLICT(id) DO NOTHING
             """;
         cmd.Parameters.AddWithValue("$id", message.Id);
         cmd.Parameters.AddWithValue("$kind", message.Kind);
@@ -1223,6 +1293,164 @@ public sealed class SqliteOrchestratorStateRepository : IOrchestratorStateOutbox
         cmd.Parameters.AddWithValue("$created_at", message.CreatedAt.ToString("O", CultureInfo.InvariantCulture));
         await cmd.ExecuteNonQueryAsync(cancellationToken);
     }
+
+    private async Task<OrchestratorStateOutboxState?> GetOutboxStateCoreAsync(
+        string id,
+        CancellationToken cancellationToken)
+    {
+        await using var conn = OpenConnection();
+        try
+        {
+            await using var cmd = BuildOutboxStateCommand(conn, id);
+            await using var reader = await cmd.ExecuteReaderAsync(cancellationToken);
+            return await reader.ReadAsync(cancellationToken) ? ReadOutboxState(reader) : null;
+        }
+        catch (SqliteException ex) when (IsMissingStateOutboxTable(ex))
+        {
+            return null;
+        }
+    }
+
+    private async Task<OrchestratorStateOutboxEnsureResult> EnsureOutboxMessageCoreAsync(
+        OrchestratorStateOutboxMessage message,
+        CancellationToken cancellationToken)
+    {
+        var write = await BeginWriteAsync(
+            ResolveOperationTag(nameof(EnsureOutboxMessageAsync)),
+            cancellationToken);
+        await using var conn = write.Connection;
+        var telemetry = write.Telemetry;
+        try
+        {
+            var inserted = await InsertOutboxMessageIfMissingAsync(conn, message, cancellationToken);
+            var state = await ReadOutboxStateAsync(conn, message.Id, cancellationToken)
+                ?? throw new InvalidOperationException($"Outbox message '{message.Id}' disappeared after ensure.");
+            await RunNonQueryAsync(conn, "COMMIT", cancellationToken);
+            telemetry.Emit("commit");
+            return new OrchestratorStateOutboxEnsureResult(
+                inserted
+                    ? OrchestratorStateOutboxEnsureDisposition.Acquired
+                    : ToEnsureDisposition(state.Status),
+                state);
+        }
+        catch (Exception ex)
+        {
+            try { await RunNonQueryAsync(conn, "ROLLBACK", cancellationToken); } catch { }
+            telemetry.Emit("rollback", ex);
+            throw;
+        }
+    }
+
+    private static OrchestratorStateOutboxEnsureResult EnsureOutboxMessage(
+        SqliteConnection connection,
+        OrchestratorStateOutboxMessage message)
+    {
+        using var insert = connection.CreateCommand();
+        insert.CommandText = """
+            INSERT INTO state_outbox (id, kind, payload_json, created_at)
+            VALUES ($id, $kind, $payload_json, $created_at)
+            ON CONFLICT(id) DO NOTHING
+            """;
+        BindOutboxMessage(insert, message);
+        var inserted = insert.ExecuteNonQuery() == 1;
+        var state = ReadOutboxState(connection, message.Id)
+            ?? throw new InvalidOperationException($"Outbox message '{message.Id}' disappeared after ensure.");
+        return new OrchestratorStateOutboxEnsureResult(
+            inserted
+                ? OrchestratorStateOutboxEnsureDisposition.Acquired
+                : ToEnsureDisposition(state.Status),
+            state);
+    }
+
+    private static async Task<bool> InsertOutboxMessageIfMissingAsync(
+        SqliteConnection connection,
+        OrchestratorStateOutboxMessage message,
+        CancellationToken cancellationToken)
+    {
+        await using var cmd = connection.CreateCommand();
+        cmd.CommandText = """
+            INSERT INTO state_outbox (id, kind, payload_json, created_at)
+            VALUES ($id, $kind, $payload_json, $created_at)
+            ON CONFLICT(id) DO NOTHING
+            """;
+        BindOutboxMessage(cmd, message);
+        return await cmd.ExecuteNonQueryAsync(cancellationToken) == 1;
+    }
+
+    private static void BindOutboxMessage(SqliteCommand command, OrchestratorStateOutboxMessage message)
+    {
+        command.Parameters.AddWithValue("$id", message.Id);
+        command.Parameters.AddWithValue("$kind", message.Kind);
+        command.Parameters.AddWithValue("$payload_json", message.PayloadJson);
+        command.Parameters.AddWithValue("$created_at", message.CreatedAt.ToString("O", CultureInfo.InvariantCulture));
+    }
+
+    private static OrchestratorStateOutboxState? ReadOutboxState(SqliteConnection connection, string id)
+    {
+        using var cmd = BuildOutboxStateCommand(connection, id);
+        using var reader = cmd.ExecuteReader();
+        return reader.Read() ? ReadOutboxState(reader) : null;
+    }
+
+    private static async Task<OrchestratorStateOutboxState?> ReadOutboxStateAsync(
+        SqliteConnection connection,
+        string id,
+        CancellationToken cancellationToken)
+    {
+        await using var cmd = BuildOutboxStateCommand(connection, id);
+        await using var reader = await cmd.ExecuteReaderAsync(cancellationToken);
+        return await reader.ReadAsync(cancellationToken) ? ReadOutboxState(reader) : null;
+    }
+
+    private static SqliteCommand BuildOutboxStateCommand(SqliteConnection connection, string id)
+    {
+        var cmd = connection.CreateCommand();
+        cmd.CommandText = """
+            SELECT id, kind, payload_json, created_at,
+                   quarantined_at, quarantine_reason, processing_token, processing_started_at
+            FROM state_outbox
+            WHERE id = $id
+            """;
+        cmd.Parameters.AddWithValue("$id", id);
+        return cmd;
+    }
+
+    private static OrchestratorStateOutboxState ReadOutboxState(SqliteDataReader reader)
+    {
+        var message = new OrchestratorStateOutboxMessage(
+            reader.GetString(0),
+            reader.GetString(1),
+            reader.GetString(2),
+            DateTimeOffset.Parse(reader.GetString(3), CultureInfo.InvariantCulture, DateTimeStyles.RoundtripKind));
+        var quarantinedAt = reader.IsDBNull(4) ? null : reader.GetString(4);
+        var detail = reader.IsDBNull(5) ? null : reader.GetString(5);
+        var processingToken = reader.IsDBNull(6) ? null : reader.GetString(6);
+        var processingStartedAt = reader.IsDBNull(7)
+            ? (DateTimeOffset?)null
+            : DateTimeOffset.Parse(reader.GetString(7), CultureInfo.InvariantCulture, DateTimeStyles.RoundtripKind);
+        var status = quarantinedAt is not null
+            ? OrchestratorStateOutboxStatus.Quarantined
+            : processingToken is not null
+                ? OrchestratorStateOutboxStatus.Processing
+                : detail is not null
+                    ? OrchestratorStateOutboxStatus.Failed
+                    : OrchestratorStateOutboxStatus.Pending;
+        return new OrchestratorStateOutboxState(message, status, detail, processingStartedAt);
+    }
+
+    private static OrchestratorStateOutboxEnsureDisposition ToEnsureDisposition(
+        OrchestratorStateOutboxStatus status) =>
+        status switch
+        {
+            OrchestratorStateOutboxStatus.Pending => OrchestratorStateOutboxEnsureDisposition.Existing,
+            OrchestratorStateOutboxStatus.Processing => OrchestratorStateOutboxEnsureDisposition.Processing,
+            OrchestratorStateOutboxStatus.Failed => OrchestratorStateOutboxEnsureDisposition.Failed,
+            OrchestratorStateOutboxStatus.Quarantined => OrchestratorStateOutboxEnsureDisposition.Quarantined,
+            _ => throw new ArgumentOutOfRangeException(nameof(status), status, null)
+        };
+
+    private static string SingleLine(string value) =>
+        string.Concat(value.Select(character => char.IsWhiteSpace(character) ? ' ' : character)).Trim();
 
     internal static bool TryInsertOutboxMessageIfMissing(
         SqliteConnection conn,
@@ -1234,10 +1462,7 @@ public sealed class SqliteOrchestratorStateRepository : IOrchestratorStateOutbox
             VALUES ($id, $kind, $payload_json, $created_at)
             ON CONFLICT(id) DO NOTHING
             """;
-        cmd.Parameters.AddWithValue("$id", message.Id);
-        cmd.Parameters.AddWithValue("$kind", message.Kind);
-        cmd.Parameters.AddWithValue("$payload_json", message.PayloadJson);
-        cmd.Parameters.AddWithValue("$created_at", message.CreatedAt.ToString("O", CultureInfo.InvariantCulture));
+        BindOutboxMessage(cmd, message);
         return cmd.ExecuteNonQuery() == 1;
     }
 

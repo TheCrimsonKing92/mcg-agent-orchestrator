@@ -361,6 +361,7 @@ public sealed class CliCommandTestsPersistentRunnerCommands : CliCommandTestBase
             var goal = kernel.CreateGoal(
                 "Commit registration failure before CLI exit",
                 [new TaskSpec(TaskId.New(), "Inspect harmless fixture", AgentRole.Planner)]);
+            MarkGoalRefined(kernel, goal);
             kernel.ActivateGoal(goal.Id, AgentCatalog.Default().Agents);
             var task = goal.Tasks.Single();
             kernel.RecordTaskDispatch(

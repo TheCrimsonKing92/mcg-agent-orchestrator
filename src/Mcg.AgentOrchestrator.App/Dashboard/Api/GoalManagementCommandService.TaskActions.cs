@@ -30,10 +30,8 @@ public static async Task<object?> ApplyTaskActionAsync(
             return await AdvanceApiRunAssignedTaskAsync(kernel, agents, providers, workspace, goal, task.Id);
 
         case "dispatch":
-            if (goal.RefinedSpec is null && task.RequiredRole != AgentRole.Researcher)
+            if (task.RequiredRole != AgentRole.Researcher || goal.RefinedSpec is not null)
                 EnsureRefinedForSpecConsumer(kernel, workspace, providers, goal);
-            else if (goal.RefinedSpec is not null)
-                GoalRefinementGate.ThrowIfAwaitingClarification(workspace, goal);
             var dispatch = DashboardRequestParser.ParseDispatchSubmission(body);
             kernel.RecordTaskDispatch(
                 goal.Id,

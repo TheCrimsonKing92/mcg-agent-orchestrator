@@ -34,7 +34,12 @@ internal static class GoalRefinementWorkCoordinator
     internal static readonly TimeSpan RecoveryLaunchCadence = TimeSpan.FromMinutes(15);
     internal const string CadenceDeferredDetail = "executor-launch-deferred-cadence";
 
-    internal static Func<OrchestratorWorkspace, GoalId, GoalRefinementWorkLaunchResult>? LaunchOverride { get; set; }
+    private static readonly AsyncLocal<Func<OrchestratorWorkspace, GoalId, GoalRefinementWorkLaunchResult>?> LaunchOverrideLocal = new();
+    internal static Func<OrchestratorWorkspace, GoalId, GoalRefinementWorkLaunchResult>? LaunchOverride
+    {
+        get => LaunchOverrideLocal.Value;
+        set => LaunchOverrideLocal.Value = value;
+    }
     internal static Func<DateTimeOffset>? UtcNowOverride { get; set; }
 
     internal static void ResetRecoveryLaunchesForTests() => RecoveryLaunches.Clear();
@@ -89,6 +94,7 @@ internal static class GoalRefinementWorkCoordinator
             MessageId(goalId),
             async (message, claimCancellationToken) =>
             {
+                var phase = "deserialize-receipt";
                 GoalRefinementWorkReceipt receipt;
                 try
                 {
@@ -105,57 +111,108 @@ internal static class GoalRefinementWorkCoordinator
                         $"Goal-refinement work receipt targets '{receipt.GoalId}', not '{goalId.Value}'.");
                 }
 
-                var refinementKernel = await repository.LoadAsync(claimCancellationToken).ConfigureAwait(false);
-                var goal = refinementKernel.Goals.FirstOrDefault(candidate => candidate.Id == goalId);
-                if (goal is null)
+                try
                 {
-                    return OrchestratorStateOutboxProcessingResult.Quarantined(
-                        $"Goal-refinement work targets missing goal '{goalId.Value}'.");
-                }
-
-                if (goal.RefinedSpec is not null)
-                    return OrchestratorStateOutboxProcessingResult.Completed;
-
-                var baselineSnapshot = refinementKernel.ExportGoalSnapshot(goalId);
-                _ = GoalRefinementGate.EnsureRefined(
-                    refinementKernel,
-                    workspace,
-                    providers,
-                    goal,
-                    workerProfiles: workerProfiles,
-                    eventWriter: new GoalLifecycleEventWriter(workspace.GoalLifecycleEventsDirectory, kernel: refinementKernel));
-                var refinedSnapshot = refinementKernel.ExportGoalSnapshot(goalId);
-
-                attached = await repository.TransactGoalAsync(
-                    goalId,
-                    (current, _) =>
+                    phase = "load-goal";
+                    var refinementKernel = await repository.LoadAsync(claimCancellationToken).ConfigureAwait(false);
+                    var goal = refinementKernel.Goals.FirstOrDefault(candidate => candidate.Id == goalId);
+                    if (goal is null)
                     {
-                        if (current is null)
+                        return OrchestratorStateOutboxProcessingResult.Quarantined(
+                            $"Goal-refinement work targets missing goal '{goalId.Value}'.");
+                    }
+
+                    phase = "create-service";
+                    var service = CreateService(workspace, providers, workerProfiles);
+                    var eventWriter = new GoalLifecycleEventWriter(
+                        workspace.GoalLifecycleEventsDirectory,
+                        kernel: refinementKernel);
+                    var baselineSnapshot = refinementKernel.ExportGoalSnapshot(goalId);
+                    var synchronizingAnswers = goal.RefinedSpec is not null;
+
+                    if (!synchronizingAnswers)
+                    {
+                        phase = "provider-refinement";
+                        var refinement = await service.RefineAsync(
+                                refinementKernel,
+                                goalId,
+                                cancellationToken: claimCancellationToken)
+                            .ConfigureAwait(false);
+                        phase = "record-policy-receipt";
+                        refinementKernel.RecordGoalPolicyDecision(
+                            goalId,
+                            GoalRefinementGate.BuildPolicyReceipt(refinement));
+                    }
+                    else
+                    {
+                        phase = "sync-feasibility-answers";
+                        _ = await service.SyncAnsweredFeasibilityClarificationsAsync(
+                                refinementKernel,
+                                goalId,
+                                claimCancellationToken)
+                            .ConfigureAwait(false);
+                        phase = "sync-ordinary-answers";
+                        _ = await service.SyncAnsweredClarificationsAsync(
+                                refinementKernel,
+                                goalId,
+                                claimCancellationToken)
+                            .ConfigureAwait(false);
+                    }
+
+                    var refinedSnapshot = refinementKernel.ExportGoalSnapshot(goalId);
+                    if (refinedSnapshot.RefinedSpec?.OpenQuestions.Any(question =>
+                            string.Equals(question.Status, "Open", StringComparison.OrdinalIgnoreCase)) == true)
+                    {
+                        phase = "emit-clarification-event";
+                        eventWriter.AppendClarificationNeeded(goalId, "spec");
+                        refinedSnapshot = refinementKernel.ExportGoalSnapshot(goalId);
+                    }
+
+                    var changed = !Equals(baselineSnapshot.RefinedSpec, refinedSnapshot.RefinedSpec) ||
+                        baselineSnapshot.RefinedSpecVersions.Count != refinedSnapshot.RefinedSpecVersions.Count ||
+                        baselineSnapshot.Timeline.Count != refinedSnapshot.Timeline.Count;
+                    if (!changed)
+                        return OrchestratorStateOutboxProcessingResult.Completed;
+
+                    phase = "attach-snapshot";
+                    attached = await repository.TransactGoalAsync(
+                        goalId,
+                        (current, _) =>
                         {
-                            throw new InvalidOperationException(
-                                $"Goal '{goalId.Value}' disappeared before refined-spec attachment.");
-                        }
+                            if (current is null)
+                            {
+                                throw new InvalidOperationException(
+                                    $"Goal '{goalId.Value}' disappeared before refined-spec attachment.");
+                            }
 
-                        if (current.RefinedSpec is not null)
-                            return Task.FromResult((false, current, false));
+                            if (!synchronizingAnswers && current.RefinedSpec is not null)
+                                return Task.FromResult((false, current, false));
 
-                        var refinementEvents = refinedSnapshot.Timeline
-                            .Skip(baselineSnapshot.Timeline.Count)
-                            .ToArray();
-                        var merged = current with
-                        {
-                            RefinedSpec = refinedSnapshot.RefinedSpec,
-                            RefinedSpecVersions = refinedSnapshot.RefinedSpecVersions,
-                            ClarificationRoundCount = Math.Max(
-                                current.ClarificationRoundCount,
-                                refinedSnapshot.ClarificationRoundCount),
-                            Timeline = current.Timeline.Concat(refinementEvents).ToArray()
-                        };
-                        return Task.FromResult((true, merged, true));
-                    },
-                    claimCancellationToken).ConfigureAwait(false);
+                            var refinementEvents = refinedSnapshot.Timeline
+                                .Skip(baselineSnapshot.Timeline.Count)
+                                .ToArray();
+                            var merged = current with
+                            {
+                                RefinedSpec = refinedSnapshot.RefinedSpec,
+                                RefinedSpecVersions = refinedSnapshot.RefinedSpecVersions,
+                                ClarificationRoundCount = Math.Max(
+                                    current.ClarificationRoundCount,
+                                    refinedSnapshot.ClarificationRoundCount),
+                                Timeline = current.Timeline.Concat(refinementEvents).ToArray()
+                            };
+                            return Task.FromResult((true, merged, true));
+                        },
+                        claimCancellationToken).ConfigureAwait(false);
 
-                return OrchestratorStateOutboxProcessingResult.Completed;
+                    return OrchestratorStateOutboxProcessingResult.Completed;
+                }
+                catch (Exception ex) when (ex is not OperationCanceledException)
+                {
+                    throw new InvalidOperationException(
+                        $"SPEC_REFINEMENT_FAILED owner=durable-outbox phase={phase} " +
+                        $"detail={SingleLine(ex.Message)}",
+                        ex);
+                }
             },
             cancellationToken).ConfigureAwait(false);
 
@@ -288,4 +345,15 @@ internal static class GoalRefinementWorkCoordinator
 
     private static string SingleLine(string value) =>
         string.Concat(value.Select(character => char.IsWhiteSpace(character) ? ' ' : character)).Trim();
+
+    private static GoalRefinementService CreateService(
+        OrchestratorWorkspace workspace,
+        IModelProviderRegistry providers,
+        WorkerProfileCatalog workerProfiles) =>
+        new(
+            providers,
+            ModelFunctionCatalogStore.Load(workspace.ModelFunctionCatalogPath),
+            CollaborationItemStore.ForDirectory(workspace.OrchestratorDirectory),
+            new SpecRefinerPrecedentStore(workspace.SpecRefinerPrecedentsPath),
+            workerProfiles);
 }

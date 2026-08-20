@@ -141,6 +141,39 @@ public sealed record OrchestratorStateOutboxMessage(
     string PayloadJson,
     DateTimeOffset CreatedAt);
 
+public enum OrchestratorStateOutboxStatus
+{
+    Pending,
+    Processing,
+    Failed,
+    Quarantined
+}
+
+public sealed record OrchestratorStateOutboxState(
+    OrchestratorStateOutboxMessage Message,
+    OrchestratorStateOutboxStatus Status,
+    string? Detail,
+    DateTimeOffset? ProcessingStartedAt);
+
+public enum OrchestratorStateOutboxEnsureDisposition
+{
+    Acquired,
+    Existing,
+    Processing,
+    Failed,
+    Quarantined
+}
+
+public sealed record OrchestratorStateOutboxEnsureResult(
+    OrchestratorStateOutboxEnsureDisposition Disposition,
+    OrchestratorStateOutboxState State);
+
+internal sealed class StateDbCommitBeforeRethrowException(
+    Func<Exception> postCommitExceptionFactory) : Exception
+{
+    public Exception CreatePostCommitException() => postCommitExceptionFactory();
+}
+
 public enum OrchestratorStateOutboxDisposition
 {
     Complete,
@@ -170,6 +203,16 @@ public interface IOrchestratorStateOutboxRepository : ITransactionalOrchestrator
     Task<IReadOnlyList<OrchestratorStateOutboxMessage>> ListOutboxMessagesAsync(
         string kind,
         CancellationToken cancellationToken = default);
+
+    Task<OrchestratorStateOutboxState?> GetOutboxStateAsync(
+        string id,
+        CancellationToken cancellationToken = default) =>
+        throw new NotSupportedException("This repository does not support exact outbox-state reads.");
+
+    Task<OrchestratorStateOutboxEnsureResult> EnsureOutboxMessageAsync(
+        OrchestratorStateOutboxMessage message,
+        CancellationToken cancellationToken = default) =>
+        throw new NotSupportedException("This repository does not support atomic outbox ensure.");
 
     Task<bool> TryProcessOutboxMessageAsync(
         string id,

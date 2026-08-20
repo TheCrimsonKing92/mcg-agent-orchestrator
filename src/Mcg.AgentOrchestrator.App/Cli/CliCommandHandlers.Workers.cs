@@ -51,17 +51,13 @@ private static bool? TryExecuteWorkerCommand(string command, IReadOnlyList<strin
             context.CurrentGoal = OrchestratorEntityResolver.RequireGoal(context.CurrentGoal);
             var workerTask = OrchestratorEntityResolver.GetTaskByDisplayNumber(context.CurrentGoal, parts[1]);
             var workerExecutionDirectory = context.Workspace.ResolveExecutionDirectory(context.CurrentGoal.Id);
-            if (context.CurrentGoal.RefinedSpec is null && workerTask.RequiredRole != AgentRole.Researcher)
+            if (workerTask.RequiredRole != AgentRole.Researcher || context.CurrentGoal.RefinedSpec is not null)
             {
                 GoalManagementCommandService.EnsureRefinedForSpecConsumer(
                     context.Kernel,
                     context.Workspace,
                     context.Providers,
                     context.CurrentGoal);
-            }
-            else if (context.CurrentGoal.RefinedSpec is not null)
-            {
-                GoalRefinementGate.ThrowIfAwaitingClarification(context.Workspace, context.CurrentGoal, context.EventWriter);
             }
             var brief = context.Kernel.BuildTaskBrief(context.CurrentGoal.Id, workerTask.Id, workingDirectory: workerExecutionDirectory);
             var preparation = WorkerCommandTemplate.Prepare(

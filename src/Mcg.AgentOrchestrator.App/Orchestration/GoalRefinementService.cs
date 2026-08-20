@@ -495,17 +495,20 @@ internal sealed class GoalRefinementService
     }
 
     // Applies operator answers recorded in the collaboration store (resolved clarification items) into
-    // the goal's RefinedSpec open questions. Run by the goal-owning process (the conductor, via the
-    // refinement gate): an answer submitted through the listener only resolves the store item, so this
-    // is where that answer takes effect on the spec and the goal resumes with the operator's decision.
+    // the goal's RefinedSpec open questions. The durable refinement coordinator is the sole caller: an
+    // answer submitted through the listener only resolves the store item, so this is where that answer
+    // takes effect on the spec and the goal resumes with the operator's decision.
     // Returns the current (possibly updated) RefinedSpec for the goal.
-    public RefinedSpec? SyncAnsweredClarifications(AgentOrchestratorKernel kernel, GoalId goalId)
+    public async Task<RefinedSpec?> SyncAnsweredClarificationsAsync(
+        AgentOrchestratorKernel kernel,
+        GoalId goalId,
+        CancellationToken cancellationToken = default)
     {
         var goal = kernel.Goals.FirstOrDefault(candidate => candidate.Id == goalId);
         if (goal?.RefinedSpec is not { } spec)
             return goal?.RefinedSpec;
 
-        var resolvedItems = _collaboration.ListAsync(goalId.Value).GetAwaiter().GetResult()
+        var resolvedItems = (await _collaboration.ListAsync(goalId.Value, cancellationToken).ConfigureAwait(false))
             .Where(item =>
                 item.Type == CollaborationItemType.Clarification &&
                 CollaborationItemLifecycle.IsTerminal(item.Status) &&
@@ -577,15 +580,16 @@ internal sealed class GoalRefinementService
         return updated;
     }
 
-    public RefinedSpec? SyncAnsweredFeasibilityClarifications(
+    public async Task<RefinedSpec?> SyncAnsweredFeasibilityClarificationsAsync(
         AgentOrchestratorKernel kernel,
-        GoalId goalId)
+        GoalId goalId,
+        CancellationToken cancellationToken = default)
     {
         var goal = kernel.Goals.FirstOrDefault(candidate => candidate.Id == goalId);
         if (goal?.RefinedSpec is not { } spec || !spec.HasOpenQuestions)
             return goal?.RefinedSpec;
 
-        var answers = _collaboration.ListAsync(goalId.Value).GetAwaiter().GetResult()
+        var answers = (await _collaboration.ListAsync(goalId.Value, cancellationToken).ConfigureAwait(false))
             .Where(item =>
                 item.Type == CollaborationItemType.Clarification &&
                 CollaborationItemLifecycle.IsTerminal(item.Status) &&
@@ -602,8 +606,14 @@ internal sealed class GoalRefinementService
             if (string.Equals(question.Answer, answer, StringComparison.Ordinal))
                 continue;
 
-            spec = ApplyFeasibilityResolutionAsync(kernel, goalId, spec, question, answer)
-                .GetAwaiter().GetResult();
+            spec = await ApplyFeasibilityResolutionAsync(
+                    kernel,
+                    goalId,
+                    spec,
+                    question,
+                    answer,
+                    cancellationToken)
+                .ConfigureAwait(false);
         }
 
         return spec;

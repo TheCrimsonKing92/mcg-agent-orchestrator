@@ -832,6 +832,7 @@ public sealed class ConductorDriverTests
         RunGit(root, "commit", "-m", "initial");
 
         var workspace = OrchestratorWorkspace.ForDirectory(root);
+        _ = StateDbMigrations.EnsureUpToDate(workspace.SqliteStatePath);
         var (kernel, goal) = SimpleGoal("Real dispatch checkpoint rollback");
         kernel.SetGoalRefinedSpec(goal.Id, new RefinedSpec(
             "Dispatch checkpoint rollback fixture is already refined.",
@@ -7600,6 +7601,7 @@ public sealed class ConductorDriverTests
         RunGit(root, "add", ".");
         RunGit(root, "commit", "-m", "initial");
         var workspace = OrchestratorWorkspace.ForDirectory(root);
+        _ = StateDbMigrations.EnsureUpToDate(workspace.SqliteStatePath);
         Directory.CreateDirectory(workspace.OrchestratorDirectory);
         var configuredPolicy = ConductorAutonomyPolicy.Permissive with
         {

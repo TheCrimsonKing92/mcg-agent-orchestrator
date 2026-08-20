@@ -8,6 +8,13 @@ public sealed class RunGoalServiceTests
 {
     private static readonly RunGoalService.SleepFunc NoSleep = async (_, _) => await Task.Yield();
 
+    private static string CreateTempDirectory()
+    {
+        var root = InfrastructureTestSupport.CreateTempDirectory();
+        _ = StateDbMigrations.EnsureUpToDate(OrchestratorWorkspace.ForDirectory(root).SqliteStatePath);
+        return root;
+    }
+
     private static RunGoalService.SleepFunc WaitForNextExitFile(string logDirectory)
     {
         var seen = 0;

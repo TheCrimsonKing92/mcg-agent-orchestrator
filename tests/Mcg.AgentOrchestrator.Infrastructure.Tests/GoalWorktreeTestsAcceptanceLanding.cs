@@ -246,6 +246,7 @@ public sealed class GoalWorktreeTestsAcceptanceLanding : GoalWorktreeTestBase
         {
             var kernel = new AgentOrchestratorKernel();
             var goal = kernel.CreateGoal("Dispatch auto-create test", [new TaskSpec(TaskId.New(), "Implement", AgentRole.Developer)]);
+            MarkGoalRefined(kernel, goal);
             kernel.ActivateGoal(goal.Id, [EchoDeveloper()]);
 
             var workspace = OrchestratorWorkspace.ForDirectory(repo);

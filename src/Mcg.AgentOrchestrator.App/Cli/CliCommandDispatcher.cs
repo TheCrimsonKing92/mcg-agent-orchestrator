@@ -82,10 +82,19 @@ public static bool ExecuteCommand(
         StableSlotAcquisitionTimeout = stableSlotAcquisitionTimeout,
         StableSlotSelector = stableSlotSelector
     };
-    var changed = CliCommandHandlers.Execute(parts, context);
-    agents = context.Agents;
-    workerProfiles = context.WorkerProfiles;
-    currentGoal = context.CurrentGoal;
+    bool changed;
+    try
+    {
+        changed = CliCommandHandlers.Execute(parts, context);
+    }
+    finally
+    {
+        // Assign even when Execute throws: goal-create can hold later on SPEC_REFINEMENT_PENDING.
+        agents = context.Agents;
+        workerProfiles = context.WorkerProfiles;
+        currentGoal = context.CurrentGoal;
+    }
+
     return changed;
 }
 }

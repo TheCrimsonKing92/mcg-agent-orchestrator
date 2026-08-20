@@ -57,7 +57,8 @@ public sealed class CliCommandTestsHumanInputSupersede : CliCommandTestBase
     public async Task SupersedeCommand_CorrectsClosedSpecClarification_AndPreservesAuditHistory()
     {
         var root = CreateTempDirectory();
-        var workspace = OrchestratorWorkspace.ForDirectory(root);
+        var workspace = CreateRefinedWorkspace(root);
+        var repository = CreateMigratedStateRepository(workspace.SqliteStatePath);
         var kernel = new AgentOrchestratorKernel();
         var task = new TaskSpec(TaskId.New(), "Implement Use 5 seconds without changing Notice text.", AgentRole.Developer);
         var goal = kernel.CreateGoal("Prior artifact says Use 5 seconds. Notice text remains.", [task]);
@@ -93,6 +94,22 @@ public sealed class CliCommandTestsHumanInputSupersede : CliCommandTestBase
             ["supersede", goal.Id.Value[..8], "minimum-backoff-values", "5 seconds"],
             kernel,
             workspace);
+        await repository.SaveAsync(kernel);
+        var providers = new InMemoryModelProviderRegistry([]);
+        var pending = Xunit.Assert.Throws<InvalidOperationException>(() =>
+            GoalManagementCommandService.EnsureRefinedForSpecConsumer(
+                kernel,
+                workspace,
+                providers,
+                goal));
+        Xunit.Assert.StartsWith("SPEC_REFINEMENT_PENDING", pending.Message, StringComparison.Ordinal);
+        _ = await GoalRefinementWorkCoordinator.ProcessAsync(
+            repository,
+            workspace,
+            providers,
+            WorkerProfileCatalog.Default(),
+            goal.Id);
+        kernel = await repository.LoadAsync();
         var updated = Assert.Single((await store.ListAsync(goal.Id.Value)).Where(candidate => candidate.Id == item.Id));
         var historyOutput = ExecuteCliAndCapture(
             ["attention", "show", "--all", goal.Id.Value[..8]],

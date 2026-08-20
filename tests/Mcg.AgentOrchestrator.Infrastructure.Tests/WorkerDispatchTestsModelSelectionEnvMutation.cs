@@ -23,6 +23,7 @@ public sealed class WorkerDispatchTestsModelSelectionEnvMutation : WorkerDispatc
 {
     var root = CreateTempDirectory();
     var workspace = OrchestratorWorkspace.ForDirectory(root);
+    _ = StateDbMigrations.EnsureUpToDate(workspace.SqliteStatePath);
     var workingDirectory = Path.Combine(root, "repo");
     Directory.CreateDirectory(workingDirectory);
     var kernel = new AgentOrchestratorKernel(new TestClock(DateTimeOffset.Parse("2026-06-28T14:10:00Z")));
@@ -151,6 +152,7 @@ public sealed class WorkerDispatchTestsModelSelectionEnvMutation : WorkerDispatc
     File.WriteAllText(Path.Combine(root, ".git"), "gitdir: ..");
     var kernel = new AgentOrchestratorKernel();
     var goal = kernel.CreateGoal("Dispatch Tester after Developer completion");
+    MarkGoalRefined(kernel, goal);
     var agents = new[]
     {
         TestSubscriptionAgent("planner", "Planner", AgentRole.Planner),

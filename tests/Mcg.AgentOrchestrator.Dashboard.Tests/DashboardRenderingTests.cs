@@ -1537,6 +1537,12 @@ public sealed class DashboardRenderingTests
             Subscription: new SubscriptionLaunchProfile("codex-cli"))
     ];
     var providers = new InMemoryModelProviderRegistry([new FakeSmokeProvider(providerName: "OpenAI")]);
+    kernel.SetGoalRefinedSpec(goal.Id, new RefinedSpec(
+        "Dashboard subscription limit review fixture is already refined.",
+        ["Limit review acknowledgement permits subscription dispatch preparation."],
+        VerificationClass.TestVerifiable,
+        [],
+        []));
     kernel.ActivateGoal(goal.Id, agents);
     var worktreePath = GoalWorktrees.WorktreePath(root, goal.Id);
     Directory.CreateDirectory(worktreePath);

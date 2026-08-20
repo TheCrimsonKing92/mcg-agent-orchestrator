@@ -418,6 +418,7 @@ public sealed class WorkerDispatchTestsDispatchPreparation : WorkerDispatchTestS
 {
     var root = CreateTempDirectory();
     var workspace = OrchestratorWorkspace.ForDirectory(root);
+    _ = StateDbMigrations.EnsureUpToDate(workspace.SqliteStatePath);
     var workingDirectory = Path.Combine(root, "repo");
     Directory.CreateDirectory(workingDirectory);
     var kernel = new AgentOrchestratorKernel(new TestClock(DateTimeOffset.Parse("2026-06-28T14:00:00Z")));
@@ -477,6 +478,7 @@ public sealed class WorkerDispatchTestsDispatchPreparation : WorkerDispatchTestS
     var workingDirectory = Path.Combine(root, "repo");
     Directory.CreateDirectory(workingDirectory);
     var workspace = OrchestratorWorkspace.ForDirectory(root, workingDirectory);
+    _ = StateDbMigrations.EnsureUpToDate(workspace.SqliteStatePath);
     WriteSkill(workingDirectory, "orchestrator-dogfood");
     var kernel = new AgentOrchestratorKernel(new TestClock(DateTimeOffset.Parse("2026-07-07T12:00:00Z")));
     var planner = new TaskSpec(TaskId.New(), "Plan the dispatch checkpoint.", AgentRole.Planner);
@@ -2210,6 +2212,7 @@ public sealed class WorkerDispatchTestsDispatchPreparation : WorkerDispatchTestS
 {
     var root = CreateSeededDispatchRepository();
     var workspace = OrchestratorWorkspace.ForDirectory(root);
+    _ = StateDbMigrations.EnsureUpToDate(workspace.SqliteStatePath);
     var kernel = new AgentOrchestratorKernel();
     var reviewer = new TaskSpec(TaskId.New(), "Review implementation output and risks.", AgentRole.Reviewer);
     var goal = kernel.CreateGoal("Review profile dispatch changed-file scope", [reviewer]);
