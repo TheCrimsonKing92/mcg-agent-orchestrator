@@ -9,6 +9,7 @@ internal static class AssemblyTempRedirect
 {
     internal const string LowInheritableLevel = "(OI)(CI)L";
     internal const int MaxRootsReapedPerProcess = 32;
+    internal static string? StartupTimingDiagnostic { get; private set; }
 
     // Deliberately far longer than any run: the acceptance gate's own per-lane budget is 40
     // minutes, so a root untouched for half a day cannot belong to a live host. Generous enough
@@ -509,7 +510,8 @@ internal static class AssemblyTempRedirect
     {
         try
         {
-            Console.Error.WriteLine(FormatTimingDiagnostic(timings));
+            StartupTimingDiagnostic = FormatTimingDiagnostic(timings);
+            Console.Error.WriteLine(StartupTimingDiagnostic);
         }
         catch
         {
@@ -592,6 +594,19 @@ internal sealed record TempRootRejection(
 internal sealed record TempRootSelectionResult(
     string? SelectedRoot,
     IReadOnlyList<TempRootRejection> Rejections);
+
+internal interface IWorkerIntegrityLabelerDiagnostics
+{
+    IntegrityLabelSetOutcome? LastSetOutcome { get; }
+}
+
+internal sealed record IntegrityLabelSetOutcome(
+    bool Completed,
+    bool TimedOut,
+    int? ExitCode,
+    bool Succeeded,
+    string FailureKind,
+    long ElapsedMilliseconds);
 
 internal sealed class TempRootStartupTimings
 {

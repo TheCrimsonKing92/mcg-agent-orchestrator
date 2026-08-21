@@ -1,9 +1,26 @@
-using System.Diagnostics;
 using Mcg.AgentOrchestrator.Infrastructure;
 
 [Xunit.Collection("IsolatedProcessSpawning")]
-public sealed class AssemblyTempRedirectStartupCostTests
+public sealed class AssemblyTempRedirectStartupCostTests(ITestOutputHelper output)
 {
+    [Fact]
+    public void CurrentHostPublishesInitializerTimingReceipt()
+    {
+        if (!OperatingSystem.IsWindows())
+        {
+            return;
+        }
+
+        var receipt = AssemblyTempRedirect.StartupTimingDiagnostic;
+
+        Assert.False(string.IsNullOrWhiteSpace(receipt));
+        Assert.StartsWith("assembly-temp-redirect-timing ", receipt, StringComparison.Ordinal);
+        Assert.Contains("totalMs=", receipt, StringComparison.Ordinal);
+        Assert.Contains("reapSiblingCount=", receipt, StringComparison.Ordinal);
+        Assert.Contains("deleteMs=", receipt, StringComparison.Ordinal);
+        output.WriteLine(receipt);
+    }
+
     [Fact]
     public void TimingDiagnosticDistinguishesSkippedLabelAndReapPhases()
     {
@@ -80,33 +97,36 @@ public sealed class AssemblyTempRedirectStartupCostTests
     }
 
     [Fact]
-    public void NonzeroLabelHelperReportsCompletedExitOutcomeWithoutChangingBooleanContract()
+    public void ReturnedFalseLabelSetterFallsBackAndReportsCompletedOutcome()
     {
-        if (!OperatingSystem.IsWindows())
+        var timings = new TempRootStartupTimings();
+        var fileSystem = new SuccessfulTempRootFileSystem();
+        var candidates = new[]
         {
-            return;
-        }
+            new TempRootCandidate("preferred", RequiresLowLabel: true),
+            new TempRootCandidate("fallback", RequiresLowLabel: false)
+        };
 
-        var labeler = new IcaclsIntegrityLabeler(_ => Process.Start(new ProcessStartInfo
-        {
-            FileName = "cmd.exe",
-            Arguments = "/d /c exit 7",
-            UseShellExecute = false,
-            CreateNoWindow = true,
-            RedirectStandardOutput = true,
-            RedirectStandardError = true
-        }));
+        var selection = AssemblyTempRedirect.SelectWritableRoot(
+            candidates,
+            candidate => AssemblyTempRedirect.TryPrepareRoot(
+                candidate,
+                isWindows: true,
+                fileSystem,
+                new ReturnedFalseIntegrityLabeler(),
+                probeDirectoryName: "probe",
+                timings));
 
-        var succeeded = labeler.SetIntegrity("ignored-by-helper", "(OI)(CI)L", recursive: false);
-
-        Assert.False(succeeded);
-        var outcome = Assert.IsType<IntegrityLabelSetOutcome>(labeler.LastSetOutcome);
+        Assert.Equal("fallback", selection.SelectedRoot);
+        Assert.Equal(TempRootRejectionReason.Label, Assert.Single(Assert.Single(selection.Rejections).Reasons));
+        Assert.True(timings.LabelSetElapsedMilliseconds.HasValue);
+        Assert.True(timings.LabelSetElapsedMilliseconds.GetValueOrDefault() >= 0);
+        var outcome = Assert.IsType<IntegrityLabelSetOutcome>(timings.LabelSetOutcome);
         Assert.True(outcome.Completed);
         Assert.False(outcome.TimedOut);
-        Assert.True(outcome.ExitCode.HasValue);
-        Assert.Equal(7, outcome.ExitCode.GetValueOrDefault());
+        Assert.Null(outcome.ExitCode);
         Assert.False(outcome.Succeeded);
-        Assert.Equal("exit", outcome.FailureKind);
+        Assert.Equal("returned-false", outcome.FailureKind);
         Assert.True(outcome.ElapsedMilliseconds >= 0);
     }
 
@@ -211,5 +231,13 @@ public sealed class AssemblyTempRedirectStartupCostTests
                 ElapsedMilliseconds: 120_000);
             return false;
         }
+    }
+
+    private sealed class ReturnedFalseIntegrityLabeler : IWorkerIntegrityLabeler
+    {
+        public IntegrityLabelState Query(string path) =>
+            new(Exists: true, Low: false, Inheritable: false);
+
+        public bool SetIntegrity(string path, string level, bool recursive) => false;
     }
 }
