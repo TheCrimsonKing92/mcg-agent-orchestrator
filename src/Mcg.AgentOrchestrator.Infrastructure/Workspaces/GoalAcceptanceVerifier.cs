@@ -1244,10 +1244,12 @@ public sealed class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
         var pendingShards = orderedShards.ToList();
         var activeResourceKeys = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
         var activeShards = new List<(Task Task, IReadOnlyList<string> ResourceKeys)>();
+        var shardConcurrency = new GateShardConcurrencyCounter();
         var failures = new List<Exception>();
 
         async Task RunShardAsync(IndexedShard shard)
         {
+            using var shardExecution = shardConcurrency.Enter();
             OnInfrastructureShardResourcesAcquiredForTests?.Invoke(shard.Check.Name);
             var shardClock = Stopwatch.StartNew();
             var worker = new ShardWorkerLease(
@@ -1273,7 +1275,8 @@ public sealed class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
                 "shard-complete",
                 shard.Check.Name,
                 worker.SlotIndex,
-                shardClock.Elapsed);
+                shardClock.Elapsed,
+                shardConcurrency.Count);
         }
 
         while (pendingShards.Count > 0 || activeShards.Count > 0)
@@ -1357,7 +1360,8 @@ public sealed class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
             "shards-complete",
             $"{shardChecks.Count}-infrastructure-shards",
             primarySlotIndex,
-            wallClock.Elapsed);
+            wallClock.Elapsed,
+            shardConcurrency.Count);
         var completed = outcomes.Select(outcome => outcome!).ToArray();
         return new CheckBatchResult(
             completed.Select(outcome => outcome.Result).ToArray(),
@@ -1403,12 +1407,13 @@ public sealed class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
         }
     }
 
-    private static void EmitShardTimingProgress(
+    internal static void EmitShardTimingProgress(
         GoalId? goalId,
         string phase,
         string target,
         int slotIndex,
-        TimeSpan elapsed)
+        TimeSpan elapsed,
+        int concurrentShardCount)
     {
         var now = DateTimeOffset.UtcNow;
         EmitGateProgress(new AcceptanceGateProgress(
@@ -1423,7 +1428,8 @@ public sealed class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
             now,
             elapsed,
             0,
-            GateHeartbeatArtifacts.GetStableSlotPath(slotIndex)));
+            GateHeartbeatArtifacts.GetStableSlotPath(slotIndex),
+            GateLoadContextProbe.Capture(concurrentShardCount)));
     }
 
     private async Task<(AcceptanceCheckResult Result, bool Retried)> RunCheckWithPartitionVerdictCacheAsync(
@@ -7804,7 +7810,7 @@ public sealed class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
         var line =
             $"PHASE_PROGRESS goal={FormatNullableToken(progress.GoalId, 8)} phase={progress.Phase} elapsed_ms={(long)progress.Elapsed.TotalMilliseconds} " +
             $"target={QuoteProgressToken(progress.CurrentTarget)} child_pid={progress.ChildProcessId?.ToString(System.Globalization.CultureInfo.InvariantCulture) ?? "unknown"} " +
-            $"output_bytes={progress.OutputBytes} heartbeat={QuoteProgressToken(progress.HeartbeatPath)}";
+            $"output_bytes={progress.OutputBytes} heartbeat={QuoteProgressToken(progress.HeartbeatPath)} {GateLoadContextProbe.FormatProgressTokens(progress.LoadContext)}";
         Console.WriteLine($"{line} ts={progress.LastObservedAt:O}");
         Console.Out.Flush();
         CurrentGateProgressSink.Value?.Invoke(progress);

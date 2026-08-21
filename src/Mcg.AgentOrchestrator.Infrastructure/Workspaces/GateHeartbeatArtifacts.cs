@@ -19,7 +19,8 @@ public sealed record AcceptanceGateProgress(
     DateTimeOffset LastProgressAt,
     TimeSpan Elapsed,
     long OutputBytes,
-    string HeartbeatPath);
+    string HeartbeatPath,
+    GateLoadContext? LoadContext = null);
 
 public sealed record GateHeartbeatSnapshot(
     string? GoalId,
