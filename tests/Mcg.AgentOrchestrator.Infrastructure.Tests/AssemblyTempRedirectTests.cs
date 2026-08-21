@@ -4,7 +4,7 @@ using System.Text;
 using System.Text.Json;
 using Mcg.AgentOrchestrator.Infrastructure;
 
-[Xunit.Collection(TestCollections.ProcessSpawning)]
+[Xunit.Collection("IsolatedProcessSpawning")]
 public sealed class AssemblyTempRedirectTests
 {
     [Fact]
@@ -785,7 +785,7 @@ public sealed class AssemblyTempRedirectTests
     }
 }
 
-[Xunit.Collection(TestCollections.ProcessSpawning)]
+[Xunit.Collection("IsolatedProcessSpawning")]
 public sealed class AssemblyTempRedirectChildSmokeTests
 {
     internal const string ReceiptPathVariable = "MCG_MTP_TEMP_ROOT_RECEIPT";

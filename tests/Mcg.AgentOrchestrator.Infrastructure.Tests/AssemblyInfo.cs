@@ -33,4 +33,8 @@ public sealed class JobAccountingCollection : Xunit.ICollectionFixture<IsolatedD
 // keep nested build activity off the host gate slots as well.
 [Xunit.CollectionDefinition(TestCollections.ProcessSpawning, DisableParallelization = true)]
 public sealed class ProcessSpawningCollection : Xunit.ICollectionFixture<IsolatedDotnetRootFixture>;
+
+// Process-spawning tests that only need the isolated dotnet root may overlap other collections.
+[Xunit.CollectionDefinition("IsolatedProcessSpawning")]
+public sealed class IsolatedProcessSpawningCollection : Xunit.ICollectionFixture<IsolatedDotnetRootFixture>;
 // Extracted modules own their remaining collection definitions.
