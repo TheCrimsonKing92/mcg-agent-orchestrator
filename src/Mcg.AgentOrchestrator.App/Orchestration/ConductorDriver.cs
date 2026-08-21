@@ -2083,7 +2083,7 @@ internal sealed partial class ConductorDriver
             var mergedFinding = ReviewFindingConvergence.ResolveMergedFinding(
                 mergedFindings, round, finding.StableId);
             if (mergedFinding?.EvidenceOutcome is { } priorOutcome &&
-                (string.IsNullOrWhiteSpace(priorOutcome.ReceiptId) ||
+                (IsPermanentFindingEvidenceRefusal(priorOutcome) ||
                     HasCurrentFindingEvidenceReceipt(
                         requestingTask,
                         mergedFinding,
@@ -2662,6 +2662,11 @@ internal sealed partial class ConductorDriver
                 ? null
                 : "incompatible-filter-semantics";
     }
+
+    private static bool IsPermanentFindingEvidenceRefusal(FindingEvidenceOutcome outcome) =>
+        string.IsNullOrWhiteSpace(outcome.ReceiptId) &&
+        outcome.Reason is FindingEvidenceNotHonouredReason.UnsupportedProject or
+            FindingEvidenceNotHonouredReason.UnparseableSelection;
 
     private static bool HasCurrentFindingEvidenceReceipt(
         TaskSpec requestingTask,

@@ -4297,6 +4297,127 @@ public sealed class ConductorDriverTests
     }
 
     [Xunit.Fact]
+    public void UnresolvableSelectionDoesNotRerunOnNextRound()
+    {
+        const string originalToken = "FullyQualifiedName~CliCommandTests.PersistentRunnerCommands";
+        const string stableId = "unresolvable-selection";
+        var (kernel, goal) = SoftwareGoal();
+        var developer = goal.Tasks.Single(task => task.RequiredRole == AgentRole.Developer);
+        var reviewer = goal.Tasks.Single(task => task.RequiredRole == AgentRole.Reviewer);
+        foreach (var task in goal.Tasks.Where(task => task.RequiredRole != AgentRole.Reviewer))
+        {
+            PassVerification(kernel, goal, task);
+        }
+
+        var finding = EvidenceFindingWithRequest(
+            "An unresolvable selection must be replaced before it runs again.",
+            id: stableId,
+            classes: [originalToken]);
+        FailReviewerNeedsWork(kernel, goal, reviewer, "focused evidence required", findings: [finding]);
+        var observedRequests = new List<string>();
+        string? developerRetryMessage = null;
+        var driver = MakeDriver(
+            getPreReviewEvidenceContext: _ => NoPreReviewContext("abc1234"),
+            runFocusedEvidence: (_, request) =>
+            {
+                observedRequests.Add(request);
+                return new FocusedEvidenceRunResult(
+                    request,
+                    Accepted: false,
+                    Passed: false,
+                    Summary: "selection rejected",
+                    Checks: [],
+                    Rejection: new FocusedEvidenceRejection(
+                        FocusedEvidenceRejectionCode.UnresolvableSelection,
+                        originalToken,
+                        "selection does not resolve"));
+            },
+            retryTask: (goalId, taskId, message) =>
+            {
+                if (taskId == developer.Id)
+                {
+                    developerRetryMessage = message;
+                }
+
+                return kernel.RetryTask(goalId, taskId, message);
+            },
+            retryTaskWithRoundKind: (goalId, taskId, message, roundKind) =>
+            {
+                if (taskId == developer.Id)
+                {
+                    developerRetryMessage = message;
+                }
+
+                return kernel.RetryTask(goalId, taskId, message, retryRoundKind: roundKind);
+            },
+            recordFindingEvidenceOutcome: (goalId, taskId, findingId, outcome, receipt) =>
+                kernel.RecordFindingEvidenceOutcome(goalId, taskId, findingId, outcome, receipt));
+
+        driver.AdvanceOnce(goal, ConductorAutonomyPolicy.Permissive);
+        FailReviewerNeedsWork(kernel, goal, reviewer, "focused evidence required", findings: [finding]);
+
+        driver.AdvanceOnce(goal, ConductorAutonomyPolicy.Permissive);
+
+        Assert.Equal(["Infrastructure.Tests:" + originalToken], observedRequests);
+        var mergedFinding = reviewer.VerificationHistory.Last().MergedReviewFindings!
+            .Single(item => item.StableId == stableId);
+        Assert.Equal(ReviewFindingState.Open, mergedFinding.State);
+        Assert.Equal(FindingEvidenceNotHonouredReason.UnparseableSelection, mergedFinding.EvidenceOutcome?.Reason);
+        Assert.Equal(WorkTaskStatus.Assigned, developer.Status);
+        Assert.Contains("- stable_id: " + stableId, developerRetryMessage, StringComparison.Ordinal);
+        var retryBrief = kernel.BuildTaskBrief(goal.Id, reviewer.Id).Content;
+        Assert.Contains("verdict=not-honoured", retryBrief, StringComparison.Ordinal);
+        Assert.Contains("reason=unparseable-selection", retryBrief, StringComparison.Ordinal);
+        Assert.Contains(originalToken, retryBrief, StringComparison.Ordinal);
+    }
+
+    [Xunit.Fact]
+    public void TransientEvidenceFailureRerunsOnNextRound()
+    {
+        const string originalToken = "FullyQualifiedName~ConductorDriverTests.MissingMethod";
+        var (kernel, goal) = SoftwareGoal();
+        var reviewer = goal.Tasks.Single(task => task.RequiredRole == AgentRole.Reviewer);
+        foreach (var task in goal.Tasks.Where(task => task.RequiredRole != AgentRole.Reviewer))
+        {
+            PassVerification(kernel, goal, task);
+        }
+
+        var finding = EvidenceFindingWithRequest(
+            "A source-discovery failure must remain retryable.",
+            id: "transient-source-discovery",
+            classes: [originalToken]);
+        FailReviewerNeedsWork(kernel, goal, reviewer, "focused evidence required", findings: [finding]);
+        var focusedRuns = 0;
+        var driver = MakeDriver(
+            getPreReviewEvidenceContext: _ => NoPreReviewContext("abc1234"),
+            runFocusedEvidence: (_, request) =>
+            {
+                focusedRuns++;
+                return new FocusedEvidenceRunResult(
+                    request,
+                    Accepted: false,
+                    Passed: false,
+                    Summary: "source discovery failed",
+                    Checks: [],
+                    Rejection: new FocusedEvidenceRejection(
+                        FocusedEvidenceRejectionCode.SourceDiscoveryFailure,
+                        originalToken,
+                        "source discovery failed"));
+            },
+            retryTaskWithRoundKind: (goalId, taskId, message, roundKind) =>
+                kernel.RetryTask(goalId, taskId, message, retryRoundKind: roundKind),
+            recordFindingEvidenceOutcome: (goalId, taskId, findingId, outcome, receipt) =>
+                kernel.RecordFindingEvidenceOutcome(goalId, taskId, findingId, outcome, receipt));
+
+        driver.AdvanceOnce(goal, ConductorAutonomyPolicy.Permissive);
+        FailReviewerNeedsWork(kernel, goal, reviewer, "focused evidence required", findings: [finding]);
+
+        driver.AdvanceOnce(goal, ConductorAutonomyPolicy.Permissive);
+
+        Assert.Equal(2, focusedRuns);
+    }
+
+    [Xunit.Fact]
     public void FindingEvidenceRawLengthCannotBeTrimmedBelowBound()
     {
         var (kernel, goal) = SoftwareGoal();
