@@ -1505,7 +1505,9 @@ public sealed class BackgroundDispatchRunner
                     decisionStandardOutput,
                     hasCompletedVerification);
                 var verificationRecognized =
-                    hasCompletedVerification || hasVerificationOnlyTesterCompletion;
+                    hasCompletedVerification ||
+                    hasVerificationOnlyTesterCompletion ||
+                    HasReportedFailingVerification(decisionStandardOutput, decisionStandardError);
                 var roleStillRequiresChangeEvidence =
                     dispatchRoleCapability == DispatchRoleOutputCapability.RequiresChangeEvidence;
                 var requiresCommitEvidence =
@@ -2071,6 +2073,11 @@ public sealed class BackgroundDispatchRunner
     {
         return HasClassifiedVerificationEvidence(standardOutput, standardError) &&
             !TryFindFailingTestsInWorkerResult(standardOutput, standardError, out _);
+    }
+
+    private static bool HasReportedFailingVerification(string standardOutput, string standardError)
+    {
+        return TryFindFailingTestsInWorkerResult(standardOutput, standardError, out _);
     }
 
     private static bool HasSandboxCommitBlockedEvidence(
