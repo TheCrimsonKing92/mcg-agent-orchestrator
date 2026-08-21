@@ -15,6 +15,107 @@ public sealed class ConductorCrossTickTests
         await RunFairnessScenario(1);
     }
 
+    [Xunit.Fact(Timeout = 30_000)]
+    [Xunit.Trait("Category", "CrossTick")]
+    public async Task ParallelAcceptanceFairness_StalledOldest_BypassesAtThreshold()
+    {
+        var scenario = await RunStalledOldestScenario();
+
+        Assert.Contains(scenario.Tick3.ProgressLines!, line =>
+            line.Contains($"ACCEPTANCE goal={scenario.BypassedGoalId[..8]}", StringComparison.Ordinal) &&
+            line.Contains("result=started", StringComparison.Ordinal));
+        Assert.Equal(2, scenario.HeldAttemptCount);
+        Assert.Equal(0, scenario.ProcessSpawnCount);
+    }
+
+    [Xunit.Fact(Timeout = 30_000)]
+    [Xunit.Trait("Category", "CrossTick")]
+    public async Task ParallelAcceptanceFairness_BelowStallThreshold_ExplicitlyDefers()
+    {
+        var scenario = await RunStalledOldestScenario();
+
+        Assert.Contains(scenario.Tick2.ProgressLines!, line =>
+            line.Contains($"goal={scenario.BypassedGoalId[..8]}", StringComparison.Ordinal) &&
+            line.Contains("result=deferred", StringComparison.Ordinal) &&
+            line.Contains("reason=parallel-acceptance-fairness", StringComparison.Ordinal) &&
+            line.Contains($"oldest={scenario.StalledGoalId[..8]}", StringComparison.Ordinal));
+        Assert.DoesNotContain(scenario.Tick2.ProgressLines!, line =>
+            line.Contains("reason=parallel-acceptance-stalled-oldest-bypass", StringComparison.Ordinal));
+        Assert.DoesNotContain(scenario.Tick2.ProgressLines!, line =>
+            line.Contains($"ACCEPTANCE goal={scenario.BypassedGoalId[..8]}", StringComparison.Ordinal) &&
+            line.Contains("result=started", StringComparison.Ordinal));
+        Assert.Equal(0, scenario.ProcessSpawnCount);
+    }
+
+    [Xunit.Fact(Timeout = 30_000)]
+    [Xunit.Trait("Category", "CrossTick")]
+    public async Task ParallelAcceptanceFairness_StalledOldestBypass_EmitsDistinctAdmissionRecord()
+    {
+        var scenario = await RunStalledOldestScenario();
+
+        var capReached = Assert.Single(scenario.Tick1.ProgressLines!, line =>
+            line.Contains("result=cap-reached", StringComparison.Ordinal) &&
+            line.Contains("reason=parallel-acceptance-fairness", StringComparison.Ordinal) &&
+            line.Contains($"goal={scenario.OvertakingGoalId[..8]}", StringComparison.Ordinal));
+        var bypass = Assert.Single(scenario.Tick3.ProgressLines!, line =>
+            line.Contains("result=admitted", StringComparison.Ordinal) &&
+            line.Contains("reason=parallel-acceptance-stalled-oldest-bypass", StringComparison.Ordinal) &&
+            line.Contains($"goal={scenario.BypassedGoalId[..8]}", StringComparison.Ordinal));
+
+        Assert.Contains($"bypassedOldest={scenario.StalledGoalId[..8]}", bypass, StringComparison.Ordinal);
+        Assert.Contains("stalledTicks=3", bypass, StringComparison.Ordinal);
+        Assert.Contains("threshold=3", bypass, StringComparison.Ordinal);
+        Assert.DoesNotContain("bypassedOldest=", capReached, StringComparison.Ordinal);
+        Assert.NotEqual(capReached, bypass);
+        Assert.Equal(0, scenario.ProcessSpawnCount);
+    }
+
+    private static async Task<StalledOldestScenarioResult> RunStalledOldestScenario()
+    {
+        var time = new ManualConductorTimeProviderForTests(
+            new DateTimeOffset(2026, 8, 21, 12, 0, 0, TimeSpan.Zero));
+        await using var fixture = new HoldingAcceptanceAttemptsAcrossTicksFixture(time);
+        var kernel = new AgentOrchestratorKernel();
+        var stalled = CreateGoal(kernel, "Update src/StalledOldestAcrossTicks.cs");
+        var overtaking = CreateGoal(kernel, "Update src/OvertakingAcrossTicks.cs");
+        var paidWorkerStartCount = 0;
+        var driver = CreateDriver(
+            fixture.AttemptCoordinator,
+            goal => goal.Id == stalled.Id
+                ? throw new IOException("oldest scope temporarily unavailable")
+                : [$"src/{goal.Id.Value}.cs"],
+            () => paidWorkerStartCount++);
+
+        PassVerification(kernel, stalled, time.GetUtcNow());
+        PassVerification(kernel, overtaking, time.GetUtcNow().AddMinutes(1));
+        BatchTickSummary? tick1 = null;
+        fixture.RunTickForTests(kernel, driver, tick => tick1 = tick);
+        Assert.Equal(
+            ConductorParallelAcceptanceAttemptOutcome.Running,
+            fixture.RequiredHandleForTests(overtaking).Attempt.Outcome);
+
+        fixture.AdvanceTimeForTests(TimeSpan.FromSeconds(1));
+        var bypassed = CreateGoal(kernel, "Update src/BypassedAcrossTicks.cs");
+        PassVerification(kernel, bypassed, time.GetUtcNow().AddMinutes(2));
+        BatchTickSummary? tick2 = null;
+        fixture.RunTickForTests(kernel, driver, tick => tick2 = tick);
+
+        fixture.AdvanceTimeForTests(TimeSpan.FromSeconds(1));
+        BatchTickSummary? tick3 = null;
+        fixture.RunTickForTests(kernel, driver, tick => tick3 = tick);
+
+        Assert.Equal(0, paidWorkerStartCount);
+        return new StalledOldestScenarioResult(
+            stalled.Id.Value,
+            overtaking.Id.Value,
+            bypassed.Id.Value,
+            tick1!,
+            tick2!,
+            tick3!,
+            fixture.HeldAttemptCount,
+            fixture.ProcessSpawnCount);
+    }
+
     private static async Task RunFairnessScenario(int iteration)
     {
         var time = new ManualConductorTimeProviderForTests(
@@ -179,4 +280,14 @@ public sealed class ConductorCrossTickTests
                 AcceptanceVerificationSummary.PassedWithNoUnmetCriteria,
             parallelAcceptanceAttemptCoordinator: coordinator);
     }
+
+    private sealed record StalledOldestScenarioResult(
+        string StalledGoalId,
+        string OvertakingGoalId,
+        string BypassedGoalId,
+        BatchTickSummary Tick1,
+        BatchTickSummary Tick2,
+        BatchTickSummary Tick3,
+        int HeldAttemptCount,
+        int ProcessSpawnCount);
 }

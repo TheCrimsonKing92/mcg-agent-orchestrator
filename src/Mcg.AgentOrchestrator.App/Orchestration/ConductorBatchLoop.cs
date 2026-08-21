@@ -12,6 +12,15 @@ internal sealed record ConductorPolicyResolution(
     string Source,
     IReadOnlyList<string> Warnings);
 
+internal readonly record struct ParallelAcceptanceOldestWaiterObservation(
+    Goal? Waiter,
+    int ConsecutiveTicks)
+{
+    internal bool IsStalled =>
+        Waiter is not null &&
+        ConsecutiveTicks >= ConductorBatchLoop.ParallelAcceptanceOldestWaiterStallTickThreshold;
+}
+
 internal sealed class ConductorBatchLoop
 {
     internal const string StopFileName = ".conduct-stop";
@@ -27,6 +36,10 @@ internal sealed class ConductorBatchLoop
     internal const int JanitorialFailureEscalationThreshold = 3;
     internal const int ParallelAcceptanceTransientFailureCap = 3;
     internal const int ParallelAcceptanceBoundedOvertakeLimit = 1;
+    // Tick 1 permits the single bounded overtake, tick 2 preserves the oldest waiter's
+    // guaranteed turn, and tick 3 is the first bypass. A waiter with a live attempt is
+    // excluded by the selector; admission on the threshold tick sets the served guard.
+    internal const int ParallelAcceptanceOldestWaiterStallTickThreshold = 3;
     // Parallel-acceptance WIDTH: how many landing-acceptance gates may run concurrently.
     // Bounded by build concurrency because every running gate holds a build slot; the
     // slot-exhaustion / second-attempt-yields tests encode this capacity-2 semantics.
@@ -73,6 +86,8 @@ internal sealed class ConductorBatchLoop
     private static readonly object ParallelAcceptanceFairnessGate = new();
     private static string? s_parallelAcceptanceOldestWaiter;
     private static int s_parallelAcceptanceConsecutiveOvertakes;
+    private static string? s_parallelAcceptanceObservedOldestWaiter;
+    private static int s_parallelAcceptanceObservedOldestWaiterConsecutiveTicks;
 
     public ConductorBatchLoop(
         Action<AgentOrchestratorKernel>? sweep = null,
@@ -2920,7 +2935,8 @@ internal sealed class ConductorBatchLoop
                 $"ACCEPTANCE_COHORT tick={tick} goal={goal.Id.Value[..8]} result=held {cohortHoldDetail}",
                 changedGoalLines);
         }
-        var oldestWaiter = SelectOldestParallelAcceptanceWaiter(orderedEligible, liveAttemptGoalIds);
+        var oldestWaiterObservation = ObserveOldestParallelAcceptanceWaiter(orderedEligible, liveAttemptGoalIds);
+        var oldestWaiter = oldestWaiterObservation.Waiter;
         var oldestServedThisTick = false;
         foreach (var goal in orderedEligible)
         {
@@ -2989,45 +3005,53 @@ internal sealed class ConductorBatchLoop
                 continue;
             }
 
+            ParallelAcceptanceOldestWaiterObservation? stalledOldestBypass = null;
             if (!liveAttemptGoalIds.Contains(goal.Id.Value) &&
                 oldestWaiter is not null &&
                 goal.Id != oldestWaiter.Id &&
                 !oldestServedThisTick &&
                 ShouldDeferForParallelAcceptanceFairness(oldestWaiter.Id.Value))
             {
-                var deferredCandidate = TryBuildParallelAcceptanceCandidate(
-                    driver,
-                    goal,
-                    policy,
-                    Math.Min(activeCandidates.Count, acceptanceSlotCount - 1),
-                    out var deferredBuildException);
-                if (deferredCandidate is not null)
+                if (oldestWaiterObservation.IsStalled)
                 {
-                    results[goal.Id.Value] = new ParallelLandingOutcome(
-                        ParallelAcceptanceHeld(
-                            deferredCandidate,
-                            policy,
-                            $"parallel acceptance fairness waiting for oldest verified goal {oldestWaiter.Id.Value[..8]}; retry on next conduct tick"),
-                        null);
-                    RecordParallelAcceptanceProgress(
-                        $"ADMISSION tick={tick} result=deferred reason=parallel-acceptance-fairness goal={goal.Id.Value[..8]} oldest={oldestWaiter.Id.Value[..8]}",
-                        changedGoalLines);
+                    stalledOldestBypass = oldestWaiterObservation;
                 }
-                else if (deferredBuildException is not null)
+                else
                 {
-                    var unavailableReason = FormatParallelAcceptanceCandidateUnavailable(deferredBuildException);
-                    results[goal.Id.Value] = new ParallelLandingOutcome(
-                        ParallelAcceptanceHeld(
-                            goal,
-                            policy,
-                            unavailableReason),
-                        null);
-                    RecordParallelAcceptanceProgress(
-                        $"ADMISSION tick={tick} result=held reason=parallel-acceptance-candidate goal={goal.Id.Value[..8]} detail={FormatParallelAcceptanceCandidateUnavailableDetail(deferredBuildException)}",
-                        changedGoalLines);
-                }
+                    var deferredCandidate = TryBuildParallelAcceptanceCandidate(
+                        driver,
+                        goal,
+                        policy,
+                        Math.Min(activeCandidates.Count, acceptanceSlotCount - 1),
+                        out var deferredBuildException);
+                    if (deferredCandidate is not null)
+                    {
+                        results[goal.Id.Value] = new ParallelLandingOutcome(
+                            ParallelAcceptanceHeld(
+                                deferredCandidate,
+                                policy,
+                                $"parallel acceptance fairness waiting for oldest verified goal {oldestWaiter.Id.Value[..8]}; retry on next conduct tick"),
+                            null);
+                        RecordParallelAcceptanceProgress(
+                            $"ADMISSION tick={tick} result=deferred reason=parallel-acceptance-fairness goal={goal.Id.Value[..8]} oldest={oldestWaiter.Id.Value[..8]}",
+                            changedGoalLines);
+                    }
+                    else if (deferredBuildException is not null)
+                    {
+                        var unavailableReason = FormatParallelAcceptanceCandidateUnavailable(deferredBuildException);
+                        results[goal.Id.Value] = new ParallelLandingOutcome(
+                            ParallelAcceptanceHeld(
+                                goal,
+                                policy,
+                                unavailableReason),
+                            null);
+                        RecordParallelAcceptanceProgress(
+                            $"ADMISSION tick={tick} result=held reason=parallel-acceptance-candidate goal={goal.Id.Value[..8]} detail={FormatParallelAcceptanceCandidateUnavailableDetail(deferredBuildException)}",
+                            changedGoalLines);
+                    }
 
-                continue;
+                    continue;
+                }
             }
 
             if (activeCandidates.Count >= acceptanceSlotCount)
@@ -3141,7 +3165,12 @@ internal sealed class ConductorBatchLoop
                                 terminalDecision.Attempt);
                             oldestServedThisTick |= goal.Id == oldestWaiter?.Id;
                             RecordParallelAcceptanceFairnessGrant(goal.Id.Value, oldestWaiter?.Id.Value);
-                            RecordParallelAcceptanceFairnessCapIfReached(goal, oldestWaiter, tick, changedGoalLines);
+                            RecordParallelAcceptanceFairnessAdmission(
+                                goal,
+                                oldestWaiter,
+                                stalledOldestBypass,
+                                tick,
+                                changedGoalLines);
                             results[candidate.Goal.Id.Value] = new ParallelLandingOutcome(terminalResult, candidate.SlotIndex);
                             RecordParallelAcceptanceProgress(
                                 $"ACCEPTANCE goal={candidate.GoalPrefix} slot=slot-{candidate.SlotIndex} result={AcceptanceRunDisposition(terminalRun)} attempt={terminalDecision.Attempt.AttemptId} tick={tick}",
@@ -3167,7 +3196,12 @@ internal sealed class ConductorBatchLoop
                     activeCandidates.Add(candidate);
                     oldestServedThisTick |= goal.Id == oldestWaiter?.Id;
                     RecordParallelAcceptanceFairnessGrant(goal.Id.Value, oldestWaiter?.Id.Value);
-                    RecordParallelAcceptanceFairnessCapIfReached(goal, oldestWaiter, tick, changedGoalLines);
+                    RecordParallelAcceptanceFairnessAdmission(
+                        goal,
+                        oldestWaiter,
+                        stalledOldestBypass,
+                        tick,
+                        changedGoalLines);
                     results[candidate.Goal.Id.Value] = new ParallelLandingOutcome(
                         ParallelAcceptanceHeld(
                             candidate,
@@ -3186,7 +3220,12 @@ internal sealed class ConductorBatchLoop
                     activeCandidates.Add(candidate);
                     oldestServedThisTick |= goal.Id == oldestWaiter?.Id;
                     RecordParallelAcceptanceFairnessGrant(goal.Id.Value, oldestWaiter?.Id.Value);
-                    RecordParallelAcceptanceFairnessCapIfReached(goal, oldestWaiter, tick, changedGoalLines);
+                    RecordParallelAcceptanceFairnessAdmission(
+                        goal,
+                        oldestWaiter,
+                        stalledOldestBypass,
+                        tick,
+                        changedGoalLines);
                     results[candidate.Goal.Id.Value] = new ParallelLandingOutcome(
                         ParallelAcceptanceHeld(
                             candidate,
@@ -3215,7 +3254,12 @@ internal sealed class ConductorBatchLoop
                         decision.Attempt);
                     oldestServedThisTick |= goal.Id == oldestWaiter?.Id;
                     RecordParallelAcceptanceFairnessGrant(goal.Id.Value, oldestWaiter?.Id.Value);
-                    RecordParallelAcceptanceFairnessCapIfReached(goal, oldestWaiter, tick, changedGoalLines);
+                    RecordParallelAcceptanceFairnessAdmission(
+                        goal,
+                        oldestWaiter,
+                        stalledOldestBypass,
+                        tick,
+                        changedGoalLines);
                     results[candidate.Goal.Id.Value] = new ParallelLandingOutcome(result, candidate.SlotIndex);
                     RecordParallelAcceptanceProgress(
                         $"ACCEPTANCE goal={candidate.GoalPrefix} slot=slot-{candidate.SlotIndex} result={AcceptanceRunDisposition(run)} attempt={decision.Attempt.AttemptId} tick={tick}",
@@ -3425,6 +3469,39 @@ internal sealed class ConductorBatchLoop
         IReadOnlySet<string> liveAttemptGoalIds) =>
         orderedEligible.FirstOrDefault(goal => !liveAttemptGoalIds.Contains(goal.Id.Value));
 
+    internal static ParallelAcceptanceOldestWaiterObservation ObserveOldestParallelAcceptanceWaiter(
+        IReadOnlyList<Goal> orderedEligible,
+        IReadOnlySet<string> liveAttemptGoalIds)
+    {
+        var waiter = SelectOldestParallelAcceptanceWaiter(orderedEligible, liveAttemptGoalIds);
+        lock (ParallelAcceptanceFairnessGate)
+        {
+            if (waiter is null)
+            {
+                s_parallelAcceptanceObservedOldestWaiter = null;
+                s_parallelAcceptanceObservedOldestWaiterConsecutiveTicks = 0;
+                return new ParallelAcceptanceOldestWaiterObservation(null, 0);
+            }
+
+            if (!string.Equals(
+                    s_parallelAcceptanceObservedOldestWaiter,
+                    waiter.Id.Value,
+                    StringComparison.Ordinal))
+            {
+                s_parallelAcceptanceObservedOldestWaiter = waiter.Id.Value;
+                s_parallelAcceptanceObservedOldestWaiterConsecutiveTicks = 1;
+            }
+            else if (s_parallelAcceptanceObservedOldestWaiterConsecutiveTicks < int.MaxValue)
+            {
+                s_parallelAcceptanceObservedOldestWaiterConsecutiveTicks++;
+            }
+
+            return new ParallelAcceptanceOldestWaiterObservation(
+                waiter,
+                s_parallelAcceptanceObservedOldestWaiterConsecutiveTicks);
+        }
+    }
+
     private static bool IsParallelAcceptanceLifecycleEligible(
         Goal goal,
         ConductorDriver driver)
@@ -3525,6 +3602,8 @@ internal sealed class ConductorBatchLoop
         {
             s_parallelAcceptanceOldestWaiter = null;
             s_parallelAcceptanceConsecutiveOvertakes = 0;
+            s_parallelAcceptanceObservedOldestWaiter = null;
+            s_parallelAcceptanceObservedOldestWaiterConsecutiveTicks = 0;
         }
     }
 
@@ -3570,6 +3649,24 @@ internal sealed class ConductorBatchLoop
         RecordParallelAcceptanceProgress(
             $"ADMISSION tick={tick} result=cap-reached reason=parallel-acceptance-fairness goal={goal.Id.Value[..8]} oldest={oldestWaiter.Id.Value[..8]} limit={ParallelAcceptanceBoundedOvertakeLimit}",
             changedGoalLines);
+    }
+
+    private static void RecordParallelAcceptanceFairnessAdmission(
+        Goal goal,
+        Goal? oldestWaiter,
+        ParallelAcceptanceOldestWaiterObservation? stalledOldestBypass,
+        int tick,
+        List<string> changedGoalLines)
+    {
+        if (stalledOldestBypass is { } bypass && bypass.Waiter is not null)
+        {
+            RecordParallelAcceptanceProgress(
+                $"ADMISSION tick={tick} result=admitted reason=parallel-acceptance-stalled-oldest-bypass goal={goal.Id.Value[..8]} bypassedOldest={bypass.Waiter.Id.Value[..8]} stalledTicks={bypass.ConsecutiveTicks} threshold={ParallelAcceptanceOldestWaiterStallTickThreshold}",
+                changedGoalLines);
+            return;
+        }
+
+        RecordParallelAcceptanceFairnessCapIfReached(goal, oldestWaiter, tick, changedGoalLines);
     }
 
     private static bool IsParallelAcceptanceFairnessAtLimit(string oldestGoalId)

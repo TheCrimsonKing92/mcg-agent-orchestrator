@@ -2253,6 +2253,63 @@ public sealed class ConductorBatchLoopTestsParallelAcceptance : ConductorBatchLo
         }
     }
 
+    [Xunit.Fact]
+    public void ParallelAcceptance_stall_observation_never_counts_persisted_running_attempt()
+    {
+        using var _ = IsolatedDotnetRootScope();
+        ConductorBatchLoop.ResetParallelAcceptanceFairnessForTests();
+        var kernel = new AgentOrchestratorKernel();
+        var running = GoalLifecycleCommands.CreateAndActivateSimpleGoal(
+            kernel,
+            DefaultAgents(),
+            "Update src/Mcg.AgentOrchestrator.App/Orchestration/RunningStallObservation.cs");
+        var now = DateTimeOffset.UtcNow;
+        PassVerificationAt(kernel, running, running.Tasks.Single(), now);
+        var attemptRoot = CreateTempDirectory("mcg-conductor-acceptance-attempts");
+
+        try
+        {
+            var coordinator = new ConductorParallelAcceptanceAttemptCoordinator(
+                attemptRoot,
+                utcNow: () => now,
+                isProcessAlive: _ => true,
+                launchOwnedProcess: _ => new ConductorParallelAcceptanceOwnedProcessLaunchResult(8702),
+                recentHeartbeatGrace: TimeSpan.FromMinutes(1));
+            var candidate = ConductorParallelAcceptanceCandidate.Create(
+                running,
+                0,
+                ["src/Mcg.AgentOrchestrator.App/Orchestration/RunningStallObservation.cs"],
+                "branch",
+                "main");
+
+            var decision = coordinator.Evaluate(
+                candidate,
+                ConductorAutonomyPolicy.Conservative,
+                PassingRun);
+            Assert.Equal(ConductorParallelAcceptanceAttemptDecisionKind.Started, decision.Kind);
+
+            for (var tick = 0;
+                 tick < ConductorBatchLoop.ParallelAcceptanceOldestWaiterStallTickThreshold + 2;
+                 tick++)
+            {
+                var liveGoalIds = coordinator.GetLiveAttemptGoalIds([running.Id.Value]);
+                var observation = ConductorBatchLoop.ObserveOldestParallelAcceptanceWaiter(
+                    [running],
+                    liveGoalIds);
+
+                Assert.Contains(running.Id.Value, liveGoalIds);
+                Assert.Null(observation.Waiter);
+                Assert.Equal(0, observation.ConsecutiveTicks);
+                Assert.False(observation.IsStalled);
+            }
+        }
+        finally
+        {
+            ConductorBatchLoop.ResetParallelAcceptanceFairnessForTests();
+            TryDeleteDirectory(attemptRoot);
+        }
+    }
+
     [Xunit.Fact(DisplayName = "BatchLoop_parallel_acceptance_bounded_overtake_defers_newer_after_cap")]
     public void BatchLoopParallelAcceptanceBoundedOvertakeDefersNewerAfterCap()
     {
