@@ -78,6 +78,7 @@ public sealed class ConductorCrossTickTests
         var kernel = new AgentOrchestratorKernel();
         var stalled = CreateGoal(kernel, "Update src/StalledOldestAcrossTicks.cs");
         var overtaking = CreateGoal(kernel, "Update src/OvertakingAcrossTicks.cs");
+        var bypassed = CreateGoal(kernel, "Update src/BypassedAcrossTicks.cs");
         var paidWorkerStartCount = 0;
         var driver = CreateDriver(
             fixture.AttemptCoordinator,
@@ -88,6 +89,7 @@ public sealed class ConductorCrossTickTests
 
         PassVerification(kernel, stalled, time.GetUtcNow());
         PassVerification(kernel, overtaking, time.GetUtcNow().AddMinutes(1));
+        PassVerification(kernel, bypassed, time.GetUtcNow().AddMinutes(2));
         BatchTickSummary? tick1 = null;
         fixture.RunTickForTests(kernel, driver, tick => tick1 = tick);
         Assert.Equal(
@@ -95,8 +97,6 @@ public sealed class ConductorCrossTickTests
             fixture.RequiredHandleForTests(overtaking).Attempt.Outcome);
 
         fixture.AdvanceTimeForTests(TimeSpan.FromSeconds(1));
-        var bypassed = CreateGoal(kernel, "Update src/BypassedAcrossTicks.cs");
-        PassVerification(kernel, bypassed, time.GetUtcNow().AddMinutes(2));
         BatchTickSummary? tick2 = null;
         fixture.RunTickForTests(kernel, driver, tick => tick2 = tick);
 
