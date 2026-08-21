@@ -12,6 +12,8 @@ public sealed class MtpTestRunnerScriptTests
     // The same unchanged case passed in 00:06:02.49 on 2026-08-21; this budget is a hang guard, not a performance assertion.
     private static readonly TimeSpan NativeMtpRealProcessHangGuard = TimeSpan.FromMinutes(15);
     private static readonly TimeSpan ProcessControlReadinessHangGuard = TimeSpan.FromSeconds(30);
+    private static readonly TimeSpan RealProcessControlShortHangGuard = TimeSpan.FromSeconds(1);
+    private static readonly TimeSpan RealProcessControlCompletionDelay = TimeSpan.FromSeconds(3);
 
     [Xunit.Fact(DisplayName = "Repository_test_projects_opt_into_native_MTP_dotnet_test")]
     public void RepositoryTestProjectsOptIntoNativeMtpDotnetTest()
@@ -127,27 +129,41 @@ public sealed class MtpTestRunnerScriptTests
         }
     }
 
-    [Xunit.Fact(DisplayName = "Real_process_guard_value_decides_short_and_generous_arms")]
-    public void RealProcessGuardValueDecidesShortAndGenerousArms()
+    [Xunit.Fact(DisplayName = "Real_process_guard_fires_when_child_outlives_injected_budget_and_passes_with_production_guard")]
+    public void RealProcessGuardFiresWhenChildOutlivesInjectedBudgetAndPassesWithProductionGuard()
     {
         var root = Path.Combine(Path.GetTempPath(), "mcg-mtp-real-process-guard", Guid.NewGuid().ToString("N"));
         Directory.CreateDirectory(root);
         try
         {
             var shortReady = Path.Combine(root, "short.ready");
-            var shortStartInfo = RealProcessControlStartInfo(root, shortReady, neverExits: false);
-            var shortGuard = TimeSpan.FromSeconds(1);
+            var shortStartInfo = RealProcessControlStartInfo(
+                root,
+                shortReady,
+                neverExits: false,
+                completionDelay: RealProcessControlCompletionDelay);
+
+            Xunit.Assert.True(
+                RealProcessControlCompletionDelay > RealProcessControlShortHangGuard,
+                "The real child delay must exceed the injected guard by construction.");
 
             var timeout = Xunit.Assert.Throws<RealProcessHangGuardException>(
-                () => Run(shortStartInfo, shortGuard, readinessPath: shortReady));
+                () => Run(shortStartInfo, RealProcessControlShortHangGuard, readinessPath: shortReady));
 
-            Xunit.Assert.Contains($"{shortGuard.TotalSeconds:0} seconds", timeout.Message, StringComparison.Ordinal);
+            Xunit.Assert.Contains(
+                $"{RealProcessControlShortHangGuard.TotalSeconds:0} seconds",
+                timeout.Message,
+                StringComparison.Ordinal);
             Xunit.Assert.Contains("elapsed=", timeout.Message, StringComparison.Ordinal);
             Xunit.Assert.True(timeout.RootExited, "The short-guard process must be reaped.");
 
             var generousReady = Path.Combine(root, "generous.ready");
             var generousResult = Run(
-                RealProcessControlStartInfo(root, generousReady, neverExits: false),
+                RealProcessControlStartInfo(
+                    root,
+                    generousReady,
+                    neverExits: false,
+                    completionDelay: RealProcessControlCompletionDelay),
                 NativeMtpRealProcessHangGuard,
                 readinessPath: generousReady);
 
@@ -604,6 +620,7 @@ public sealed class MtpTestRunnerScriptTests
         string workingDirectory,
         string readyPath,
         bool neverExits,
+        TimeSpan? completionDelay = null,
         string? descendantPidPath = null)
     {
         static string Quote(string path) => path.Replace("'", "''", StringComparison.Ordinal);
@@ -620,7 +637,11 @@ public sealed class MtpTestRunnerScriptTests
         }
         else
         {
-            startInfo.ArgumentList.Add($"Set-Content -LiteralPath '{Quote(readyPath)}' -Value ready; Start-Sleep -Seconds 3");
+            var delay = completionDelay
+                ?? throw new ArgumentNullException(nameof(completionDelay), "A completing control must declare its real delay.");
+            var delayMilliseconds = checked((int)delay.TotalMilliseconds);
+            startInfo.ArgumentList.Add(
+                $"Set-Content -LiteralPath '{Quote(readyPath)}' -Value ready; Start-Sleep -Milliseconds {delayMilliseconds}");
         }
         return startInfo;
     }
