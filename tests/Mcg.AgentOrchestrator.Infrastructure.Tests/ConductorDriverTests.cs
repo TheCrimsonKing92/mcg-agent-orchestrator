@@ -433,6 +433,7 @@ public sealed class ConductorDriverTests
         Action<GoalId, TaskId, string>? recordFindingEvidenceRequest = null,
         Action<GoalId, TaskId, string>? recordFindingEvidenceRun = null,
         Func<Goal, AcceptanceGateEngineSettings>? getFindingEvidenceEngineSettings = null,
+        Func<Goal, string, string, IReadOnlyList<string>>? resolveFindingEvidenceSiblingClasses = null,
         Func<Goal, bool>? isVerificationGateSatisfied = null,
         GateReadyCandidateProjector? gateReadyCandidateProjector = null,
         Func<Goal, string, IDisposable?>? tryAcquireEvidenceMutationLease = null)
@@ -483,6 +484,7 @@ public sealed class ConductorDriverTests
             recordFindingEvidenceRequest: recordFindingEvidenceRequest,
             recordFindingEvidenceRun: recordFindingEvidenceRun,
             getFindingEvidenceEngineSettings: getFindingEvidenceEngineSettings,
+            resolveFindingEvidenceSiblingClasses: resolveFindingEvidenceSiblingClasses,
             isVerificationGateSatisfied: isVerificationGateSatisfied,
             gateReadyCandidateProjector: gateReadyCandidateProjector,
             tryAcquireEvidenceMutationLease: tryAcquireEvidenceMutationLease);
@@ -4164,6 +4166,120 @@ public sealed class ConductorDriverTests
             "Infrastructure.Tests:FullyQualifiedName~ConductorDriverTests; " +
             "Infrastructure.Tests:FullyQualifiedName~GoalAcceptanceVerifierTests",
             observedRequest);
+    }
+
+    [Xunit.Fact]
+    public void ReviewerRequestSharedFileAddsSiblingTestClasses()
+    {
+        var request = CaptureNormalizedFindingEvidenceRequest(
+            ["GoalAcceptanceVerifierTests"],
+            (_, project, requestedClass) =>
+                FocusedEvidenceSiblingClassResolver.ResolveSiblingTestClassNames(
+                    InfrastructureTestSupport.FindRepositoryRoot(),
+                    project,
+                    requestedClass));
+
+        Assert.Contains("Infrastructure.Tests:GoalAcceptanceVerifierTests", request, StringComparison.Ordinal);
+        Assert.Contains(
+            "Infrastructure.Tests:GoalAcceptanceVerifierDotnetBuildSlotTests",
+            request,
+            StringComparison.Ordinal);
+        Assert.Contains("Infrastructure.Tests:AcceptanceOutputCaptureTests", request, StringComparison.Ordinal);
+        Assert.Contains("Infrastructure.Tests:HermeticVerificationEnvironmentTests", request, StringComparison.Ordinal);
+        Assert.Contains("Infrastructure.Tests:RealProcessShardAlphaSmokeTests", request, StringComparison.Ordinal);
+        Assert.Contains("Infrastructure.Tests:RealProcessShardBetaSmokeTests", request, StringComparison.Ordinal);
+    }
+
+    [Xunit.Fact]
+    public void ReviewerRequestSingleClassFileKeepsOriginalSelection()
+    {
+        var request = CaptureNormalizedFindingEvidenceRequest(
+            ["ConductorDriverTests"],
+            (_, project, requestedClass) =>
+                FocusedEvidenceSiblingClassResolver.ResolveSiblingTestClassNames(
+                    InfrastructureTestSupport.FindRepositoryRoot(),
+                    project,
+                    requestedClass));
+
+        Assert.Equal("Infrastructure.Tests:ConductorDriverTests", request);
+    }
+
+    [Xunit.Fact]
+    public void ReviewerRequestSiblingExpansionContainsEveryOriginalSelection()
+    {
+        string[] filters =
+        [
+            "GoalAcceptanceVerifierTests",
+            "FullyQualifiedName~GoalAcceptanceVerifierTests",
+            "FullyQualifiedName~GoalAcceptanceVerifierTests|FullyQualifiedName~ConductorDriverTests",
+            "GoalAcceptanceVerifierTests.MissingMethod",
+            "ThisClassIsNotDeclaredAnywhereTests"
+        ];
+
+        foreach (var filter in filters)
+        {
+            var before = CaptureNormalizedFindingEvidenceRequest([filter]);
+            var after = CaptureNormalizedFindingEvidenceRequest(
+                [filter],
+                (_, project, requestedClass) =>
+                    FocusedEvidenceSiblingClassResolver.ResolveSiblingTestClassNames(
+                        InfrastructureTestSupport.FindRepositoryRoot(),
+                        project,
+                        requestedClass));
+
+            var beforeSelections = before.Split("; ", StringSplitOptions.RemoveEmptyEntries);
+            var afterSelections = after.Split("; ", StringSplitOptions.RemoveEmptyEntries);
+            Assert.All(beforeSelections, selection => Assert.Contains(selection, afterSelections));
+        }
+    }
+
+    [Xunit.Fact]
+    public void ReviewerRequestUnresolvedClassKeepsOriginalSelection()
+    {
+        var request = CaptureNormalizedFindingEvidenceRequest(
+            ["ThisClassIsNotDeclaredAnywhereTests"],
+            (_, project, requestedClass) =>
+                FocusedEvidenceSiblingClassResolver.ResolveSiblingTestClassNames(
+                    InfrastructureTestSupport.FindRepositoryRoot(),
+                    project,
+                    requestedClass));
+
+        Assert.Equal("Infrastructure.Tests:ThisClassIsNotDeclaredAnywhereTests", request);
+    }
+
+    private static string CaptureNormalizedFindingEvidenceRequest(
+        IReadOnlyList<string> classes,
+        Func<Goal, string, string, IReadOnlyList<string>>? resolveSiblingClasses = null)
+    {
+        var (kernel, goal) = SoftwareGoal();
+        var reviewer = goal.Tasks.Single(task => task.RequiredRole == AgentRole.Reviewer);
+        foreach (var task in goal.Tasks.Where(task => task.RequiredRole != AgentRole.Reviewer))
+        {
+            PassVerification(kernel, goal, task);
+        }
+
+        var finding = EvidenceFindingWithRequest(
+            "Normalize the focused evidence selections.",
+            id: "normalize-focused-evidence",
+            classes: classes.ToArray());
+        FailReviewerNeedsWork(kernel, goal, reviewer, "focused evidence required", findings: [finding]);
+        string? observedRequest = null;
+        var driver = MakeDriver(
+            getPreReviewEvidenceContext: _ => NoPreReviewContext("abc1234"),
+            runFocusedEvidence: (_, request) =>
+            {
+                observedRequest = request;
+                return new FocusedEvidenceRunResult(request, true, true, "selection normalized", []);
+            },
+            retryTaskWithRoundKind: (goalId, taskId, message, roundKind) =>
+                kernel.RetryTask(goalId, taskId, message, retryRoundKind: roundKind),
+            recordFindingEvidenceOutcome: (goalId, taskId, stableId, outcome, receipt) =>
+                kernel.RecordFindingEvidenceOutcome(goalId, taskId, stableId, outcome, receipt),
+            resolveFindingEvidenceSiblingClasses: resolveSiblingClasses);
+
+        driver.AdvanceOnce(goal, ConductorAutonomyPolicy.Permissive);
+
+        return Assert.IsType<string>(observedRequest);
     }
 
     [Xunit.Fact]
