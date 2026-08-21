@@ -845,6 +845,44 @@ public sealed class GoalLifecycleTests
     }
 
     [Xunit.Fact]
+    public void RecordTaskVerification_completes_retried_task_without_result_commit_invalidates_retained_downstream()
+    {
+        var kernel = new AgentOrchestratorKernel();
+        var goal = kernel.CreateGoal("Complete a retried task through direct verification",
+            [
+                new TaskSpec(TaskId.New(), "Implement fix", AgentRole.Developer),
+                new TaskSpec(TaskId.New(), "Test fix", AgentRole.Tester)
+            ]);
+        kernel.ActivateGoal(goal.Id, DefaultAgents());
+        var developer = goal.Tasks.Single(task => task.RequiredRole == AgentRole.Developer);
+        var tester = goal.Tasks.Single(task => task.RequiredRole == AgentRole.Tester);
+        CompleteCandidateDispatch(kernel, goal, developer, "aaa111", "aaa111");
+        CompleteCandidateDispatch(kernel, goal, tester, "aaa111", "aaa111");
+
+        kernel.RetryTask(goal.Id, developer.Id, "Attach verification without a dispatch result.");
+        Assert.Equal(WorkTaskStatus.Completed, tester.Status);
+        kernel.RecordTaskVerification(
+            goal.Id,
+            developer.Id,
+            new TaskVerificationRecord(
+                "manual",
+                "C:\\repo",
+                0,
+                "passed",
+                "",
+                DateTimeOffset.UtcNow));
+
+        Assert.Equal(WorkTaskStatus.Completed, developer.Status);
+        Assert.Equal(WorkTaskStatus.Assigned, tester.Status);
+        Assert.Null(tester.LastVerification);
+        Assert.Single(tester.VerificationHistory);
+        Assert.Contains(goal.Timeline, evt =>
+            evt.TaskId == tester.Id &&
+            evt.Kind == ProgressKind.TaskRetried &&
+            evt.Message.Contains("result unknown", StringComparison.Ordinal));
+    }
+
+    [Xunit.Fact]
     public void RetryTask_preserves_the_never_run_downstream_exemption()
     {
         var kernel = new AgentOrchestratorKernel();
