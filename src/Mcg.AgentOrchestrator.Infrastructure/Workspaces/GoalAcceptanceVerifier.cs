@@ -460,6 +460,7 @@ public sealed class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
         using var engineScope = PushEngineSettings(engineSettings);
         using var resultsScope = PushOwnerResultsScope(worktreePath, goalId, "gate");
         using var runEnvironmentScope = PushManagedRunEnvironmentScope();
+        using var laneDurationScope = AcceptanceLaneDurationStore.PushRecordingScope(worktreePath);
         if (TryClassifyManifestTrust(worktreePath, changedFiles) is { } manifestTrustFailure)
         {
             return new AcceptanceVerificationResult(
@@ -727,6 +728,7 @@ public sealed class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
             TestResultPaths: testResultPaths);
         if (verification.Passed)
         {
+            AcceptanceLaneDurationStore.Flush();
             runEnvironmentScope.MarkSuccessful();
         }
 
@@ -1246,7 +1248,7 @@ public sealed class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
         var wallClock = Stopwatch.StartNew();
         var orderedShards = shardChecks
             .Select((check, index) => new IndexedShard(index, check))
-            .OrderByDescending(shard => shard.Check.EstimatedSerialSeconds)
+            .OrderByDescending(shard => AcceptanceLaneDurationStore.ResolveSortSeconds(shard.Check))
             .ThenBy(shard => shard.Index)
             .ToArray();
         var outcomes = new ShardRunOutcome?[shardChecks.Count];
@@ -1282,6 +1284,7 @@ public sealed class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
                 shardResultsDirectory).ConfigureAwait(false);
             shardClock.Stop();
             outcomes[shard.Index] = new ShardRunOutcome(run.Result, run.Retried);
+            AcceptanceLaneDurationStore.Record(shard.Check, run.Result, shardClock.Elapsed);
             EmitShardTimingProgress(
                 goalId,
                 "shard-complete",

@@ -370,12 +370,12 @@ internal sealed class AcceptancePartitionVerdictCache
 
     private static string PartitionVerdictJournalPath(string worktreePath, string goalId) =>
         Path.Combine(
-            ResolvePartitionVerdictJournalRoot(worktreePath),
+            ResolveHostStateRoot(worktreePath),
             ".orchestrator",
             "goal-operations",
             $"{goalId}.jsonl");
 
-    private static string ResolvePartitionVerdictJournalRoot(string worktreePath)
+    internal static string ResolveHostStateRoot(string worktreePath)
     {
         var fullPath = Path.GetFullPath(worktreePath)
             .TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar);

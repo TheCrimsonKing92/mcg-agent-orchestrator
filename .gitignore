@@ -29,6 +29,7 @@ publish/
 *.snupkg
 
 # Local orchestrator/prototype state
+.orchestrator/acceptance-lane-durations.jsonl
 .orchestrator/
 **/.orchestrator/
 **/.orchestrator-context/
