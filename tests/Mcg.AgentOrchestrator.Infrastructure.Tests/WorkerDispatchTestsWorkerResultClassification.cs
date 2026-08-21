@@ -2423,17 +2423,22 @@ public sealed class WorkerDispatchTestsWorkerResultClassification : WorkerDispat
         Assert.Contains("reason=verification-pattern-unmatched", failure.Message, StringComparison.Ordinal);
     }
 
-    [Xunit.Fact]
-    public void TesterFailingFractionReportsUnrecognizedVerification()
+    [Xunit.Theory]
+    [Xunit.InlineData("fail - 3/4 passed; NamedTestA, NamedTestB")]
+    [Xunit.InlineData("fail - NamedTestA, NamedTestB")]
+    public void TesterFailingVerificationIsRecordedWithoutUnmatchedRejection(string reportedTests)
     {
         var root = CreateSeededDispatchRepository();
         var clock = new TestClock(DateTimeOffset.Parse("2026-08-17T02:54:12Z"));
-        var standardOutput = WorkerResultBlock(
-            "none",
-            "none",
-            "fail - 3/4 passed",
-            commit: "none",
-            blockers: "none");
+        const string proseFindings = "Focused verification found two failures that require implementation changes.";
+        var standardOutput =
+            proseFindings + "\r\n" +
+            WorkerResultBlock(
+                "none",
+                "dotnet test --filter NamedTestA|NamedTestB",
+                reportedTests,
+                commit: "none",
+                blockers: "none");
         var (kernel, goal, task, process) = CreateCompletedGoalWorktreeDispatch(
             root,
             AgentRole.Tester,
@@ -2450,12 +2455,150 @@ public sealed class WorkerDispatchTestsWorkerResultClassification : WorkerDispat
         new BackgroundDispatchRunner(clock).RefreshLatestProcess(kernel, goal.Id, task.Id);
 
         Assert.Equal(WorkTaskStatus.Failed, task.Status);
+        Assert.NotEqual(GoalStatus.Verified, goal.Status);
+        Assert.Equal(0, task.LastVerification!.ExitCode);
+        Assert.Contains(proseFindings, task.LastVerification.StandardOutput, StringComparison.Ordinal);
+        Assert.True(WorkerResultBlockers.TryGetTestsStatus(task.LastVerification, out var testsStatus));
+        Assert.Equal(WorkerResultBlockers.TestsStatus.Fail, testsStatus);
+        Assert.True(WorkerResultBlockers.TryFindTests(task.LastVerification, out var tests));
+        Assert.Equal(reportedTests, tests);
+        Assert.DoesNotContain("verification-pattern-unmatched", task.LastVerification.StandardError, StringComparison.Ordinal);
+        Assert.DoesNotContain(
+            DispatchFailureDiagnosticMarker.Format(DispatchFailureDiagnosticMarker.RequiredFileChangeEvidenceMissing),
+            task.LastVerification.StandardError,
+            StringComparison.Ordinal);
+        Assert.Contains(goal.Timeline, evt =>
+            evt.TaskId == task.Id &&
+            evt.Kind == ProgressKind.TaskNote &&
+            evt.Message.Contains("rule=succeeded-worker-result-failing-tests", StringComparison.Ordinal));
+        Assert.DoesNotContain(goal.Timeline, evt =>
+            evt.TaskId == task.Id && evt.Kind == ProgressKind.TaskCompleted);
+        Assert.DoesNotContain(goal.Timeline, evt =>
+            evt.TaskId == task.Id &&
+            evt.Message.Contains("verification-pattern-unmatched", StringComparison.Ordinal));
+        AssertExitCode(process.ExitCodePath, 0);
+    }
+
+    [Xunit.Fact]
+    public void TesterFailingVerificationRetainsDeveloperHandoffPreconditions()
+    {
+        var root = CreateSeededDispatchRepository();
+        var clock = new TestClock(DateTimeOffset.Parse("2026-08-17T02:54:12Z"));
+        const string blocker = "NamedTestA and NamedTestB fail until the Developer fixes the implementation.";
+        var standardOutput =
+            "The focused assertions reproduce the implementation defect.\r\n" +
+            WorkerResultBlock(
+                "none",
+                "dotnet test --filter NamedTestA|NamedTestB",
+                "fail - 3/4 passed; NamedTestA, NamedTestB",
+                commit: "none",
+                blockers: blocker);
+        var (kernel, goal, task, process) = CreateCompletedGoalWorktreeDispatch(
+            root,
+            AgentRole.Tester,
+            standardOutput,
+            string.Empty,
+            clock,
+            taskDescription: "Verify behavior with available checks",
+            verificationPlan: "Report the verification result or an explicit structured deferral.");
+        kernel.RecordDispatchBaseCommit(
+            goal.Id,
+            task.Id,
+            ReadGit(process.WorkingDirectory, ["rev-parse", "HEAD"]));
+
+        new BackgroundDispatchRunner(clock).RefreshLatestProcess(kernel, goal.Id, task.Id);
+
+        Assert.Equal(WorkTaskStatus.Failed, task.Status);
+        Assert.Equal(AgentRole.Tester, task.RequiredRole);
+        Assert.Equal(0, task.LastVerification!.ExitCode);
+        Assert.True(WorkerResultBlockers.TryGetTestsStatus(task.LastVerification, out var testsStatus));
+        Assert.Equal(WorkerResultBlockers.TestsStatus.Fail, testsStatus);
+        Assert.True(WorkerResultBlockers.TryFindTests(task.LastVerification, out var tests));
+        Assert.Contains("3/4 passed", tests, StringComparison.Ordinal);
+        Assert.Contains("NamedTestA, NamedTestB", tests, StringComparison.Ordinal);
+        Assert.True(WorkerResultBlockers.TryFindHardFailureBlocker(task.LastVerification, out var recordedBlocker));
+        Assert.Equal(blocker, recordedBlocker);
+        Assert.DoesNotContain("verification-pattern-unmatched", task.LastVerification.StandardError, StringComparison.Ordinal);
+        Assert.DoesNotContain(goal.Timeline, evt =>
+            evt.TaskId == task.Id && evt.Kind == ProgressKind.TaskCompleted);
+        AssertExitCode(process.ExitCodePath, 0);
+    }
+
+    [Xunit.Fact]
+    public void DeveloperFailingVerificationWithoutChangeStillReportsNoChangeEvidence()
+    {
+        var root = CreateSeededDispatchRepository();
+        var clock = new TestClock(DateTimeOffset.Parse("2026-08-17T02:54:12Z"));
+        var standardOutput = WorkerResultBlock(
+            "none",
+            "dotnet test --filter NamedTestA|NamedTestB",
+            "fail - 3/4 passed; NamedTestA, NamedTestB",
+            commit: "none",
+            blockers: "none");
+        var (kernel, goal, task, process) = CreateCompletedGoalWorktreeDispatch(
+            root,
+            AgentRole.Developer,
+            standardOutput,
+            string.Empty,
+            clock,
+            taskDescription: "Implement the required source change",
+            verificationPlan: "Report focused verification evidence.");
+        kernel.RecordDispatchBaseCommit(
+            goal.Id,
+            task.Id,
+            ReadGit(process.WorkingDirectory, ["rev-parse", "HEAD"]));
+
+        new BackgroundDispatchRunner(clock).RefreshLatestProcess(kernel, goal.Id, task.Id);
+
+        Assert.Equal(WorkTaskStatus.Failed, task.Status);
+        Assert.Equal(1, task.LastVerification!.ExitCode);
+        Assert.Contains(
+            DispatchFailureDiagnosticMarker.Format(DispatchFailureDiagnosticMarker.RequiredFileChangeEvidenceMissing),
+            task.LastVerification.StandardError,
+            StringComparison.Ordinal);
         var failure = Assert.Single(goal.Timeline.Where(evt =>
             evt.TaskId == task.Id && evt.Kind == ProgressKind.TaskFailed));
-        Assert.Contains("tests_status=Fail", failure.Message, StringComparison.Ordinal);
-        Assert.Contains("verification_recognized=false", failure.Message, StringComparison.Ordinal);
-        Assert.Contains("reason=verification-pattern-unmatched", failure.Message, StringComparison.Ordinal);
-        Assert.Contains("detail=\"fail - 3/4 passed matched no accepted verification pattern\"", failure.Message, StringComparison.Ordinal);
+        Assert.Contains("verification_recognized=true", failure.Message, StringComparison.Ordinal);
+        Assert.Contains("reason=no-change-evidence", failure.Message, StringComparison.Ordinal);
+        Assert.DoesNotContain("verification-pattern-unmatched", failure.Message, StringComparison.Ordinal);
+        AssertExitCode(process.ExitCodePath, 0);
+    }
+
+    [Xunit.Fact]
+    public void TesterFocusedSelectionDeferralWithCountsAndNamesCompletes()
+    {
+        var root = CreateSeededDispatchRepository();
+        var clock = new TestClock(DateTimeOffset.Parse("2026-08-17T02:54:12Z"));
+        var standardOutput = WorkerResultBlock(
+            "none",
+            "none",
+            "deferred - 0/2 executed; acceptance gate selected NamedTestA, NamedTestB",
+            commit: "none",
+            blockers: "none");
+        var (kernel, goal, task, process) = CreateCompletedGoalWorktreeDispatch(
+            root,
+            AgentRole.Tester,
+            standardOutput,
+            string.Empty,
+            clock,
+            taskDescription: "Verify behavior with available checks",
+            verificationPlan: "Acceptance gate runs NamedTestA and NamedTestB.");
+        kernel.RecordDispatchBaseCommit(
+            goal.Id,
+            task.Id,
+            ReadGit(process.WorkingDirectory, ["rev-parse", "HEAD"]));
+
+        new BackgroundDispatchRunner(clock).RefreshLatestProcess(kernel, goal.Id, task.Id);
+
+        Assert.Equal(WorkTaskStatus.Completed, task.Status);
+        Assert.Equal(0, task.LastVerification!.ExitCode);
+        Assert.DoesNotContain(
+            DispatchFailureDiagnosticMarker.Format(DispatchFailureDiagnosticMarker.RequiredFileChangeEvidenceMissing),
+            task.LastVerification.StandardError,
+            StringComparison.Ordinal);
+        Assert.DoesNotContain(goal.Timeline, evt =>
+            evt.TaskId == task.Id && evt.Kind == ProgressKind.TaskFailed);
+        AssertExitCode(process.ExitCodePath, 0);
     }
 
     [Xunit.Fact(DisplayName = "BackgroundDispatchRunner_tester_native_exit_zero_noisy_stderr_passing_result_completes")]
