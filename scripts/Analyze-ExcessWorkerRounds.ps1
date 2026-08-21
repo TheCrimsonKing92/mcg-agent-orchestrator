@@ -113,6 +113,35 @@ function Get-JournalManifestDigest($Rows) {
     return [Convert]::ToHexString([Security.Cryptography.SHA256]::HashData($bytes)).ToLowerInvariant()
 }
 
+function Open-SharedReadStream([string]$Path) {
+    $share = [IO.FileShare]::ReadWrite -bor [IO.FileShare]::Delete
+    return [IO.File]::Open($Path, [IO.FileMode]::Open, [IO.FileAccess]::Read, $share)
+}
+
+function Get-SharedFileHash([string]$Path) {
+    $stream = Open-SharedReadStream $Path
+    try {
+        return [Convert]::ToHexString([Security.Cryptography.SHA256]::HashData($stream)).ToLowerInvariant()
+    }
+    finally {
+        $stream.Dispose()
+    }
+}
+
+function Read-SharedLines([string]$Path) {
+    $stream = Open-SharedReadStream $Path
+    $reader = [IO.StreamReader]::new($stream)
+    try {
+        while ($null -ne ($line = $reader.ReadLine())) {
+            Write-Output $line
+        }
+    }
+    finally {
+        $reader.Dispose()
+        $stream.Dispose()
+    }
+}
+
 function Assert-ExpectedFileHash([string]$Path, [string]$Expected, [string]$Name) {
     $actual = (Get-FileHash -Algorithm SHA256 -LiteralPath $Path).Hash.ToLowerInvariant()
     if ($actual -ne $Expected.ToLowerInvariant()) {
@@ -148,7 +177,7 @@ function Get-JournalFacts([string]$Path, [datetimeoffset]$Cutoff) {
     $gates = 0
     $categories = [Collections.Generic.HashSet[string]]::new([StringComparer]::Ordinal)
     $lineCount = 0
-    foreach ($line in [IO.File]::ReadLines($Path)) {
+    foreach ($line in (Read-SharedLines $Path)) {
         $lineCount++
         try { $entry = $line | ConvertFrom-Json -ErrorAction Stop }
         catch { throw "Journal contains malformed JSON at ${Path}:$lineCount" }
@@ -260,7 +289,7 @@ foreach ($entry in $journalManifestRows) {
         throw "Journal manifest entry is outside JournalRoot: $resolved"
     }
     if (-not $seenJournals.Add($resolved)) { throw "Journal manifest contains duplicate path: $resolved" }
-    $actual = (Get-FileHash -Algorithm SHA256 -LiteralPath $resolved).Hash.ToLowerInvariant()
+    $actual = Get-SharedFileHash $resolved
     if ($actual -ne $entry.sha256.ToLowerInvariant()) { throw "Journal manifest hash mismatch: $resolved" }
     $validatedJournals.Add($resolved)
 }
@@ -404,7 +433,7 @@ foreach ($item in $validated) {
 foreach ($entry in $journalManifestRows) {
     $candidate = if ([IO.Path]::IsPathRooted($entry.path)) { $entry.path } else { Join-Path $journalPath $entry.path }
     $resolved = Resolve-RequiredPath $candidate 'Journal manifest entry'
-    $actual = (Get-FileHash -Algorithm SHA256 -LiteralPath $resolved).Hash.ToLowerInvariant()
+    $actual = Get-SharedFileHash $resolved
     if ($actual -ne $entry.sha256.ToLowerInvariant()) { throw "Journal manifest hash changed while reading: $resolved" }
 }
 [void](Assert-ExpectedFileHash $dogfoodPath $DogfoodDbSha256 'Dogfood database after read')

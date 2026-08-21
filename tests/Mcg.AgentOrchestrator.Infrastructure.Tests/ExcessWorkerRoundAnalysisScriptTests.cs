@@ -70,6 +70,22 @@ public sealed class ExcessWorkerRoundAnalysisScriptTests
         Xunit.Assert.Equal(2, summary.RootElement.GetProperty("weekly").GetArrayLength());
     }
 
+    [Xunit.Fact(DisplayName = "Excess_round_analyzer_reads_a_journal_while_an_appender_handle_is_open")]
+    public async Task ExcessRoundAnalyzerReadsAJournalWhileAnAppenderHandleIsOpen()
+    {
+        using var fixture = await AnalysisFixture.CreateAsync();
+        using var appender = new FileStream(
+            fixture.FirstJournalPath,
+            FileMode.Append,
+            FileAccess.Write,
+            FileShare.Read | FileShare.Delete);
+
+        var result = fixture.Run("shared-journal");
+
+        Xunit.Assert.True(result.ExitCode == 0, result.Stdout + result.Stderr);
+        Xunit.Assert.True(File.Exists(Path.Combine(fixture.Root, "shared-journal", "excess-worker-rounds.csv")));
+    }
+
     [Xunit.Fact(DisplayName = "Excess_round_analyzer_fails_closed_when_a_manifest_hash_changes")]
     public async Task ExcessRoundAnalyzerFailsClosedWhenAManifestHashChanges()
     {

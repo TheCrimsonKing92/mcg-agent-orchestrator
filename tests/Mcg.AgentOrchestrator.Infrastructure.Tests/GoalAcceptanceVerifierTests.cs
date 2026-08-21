@@ -8578,7 +8578,7 @@ public sealed class GoalAcceptanceVerifierDotnetBuildSlotTests : GoalAcceptanceV
             ".orchestrator",
             "goal-operations",
             "12345678123456781234567812345678.jsonl");
-        var lines = File.ReadAllLines(path);
+        var lines = SharedJsonlFile.ReadAllLines(path);
         var updated = false;
         for (var index = 0; index < lines.Length; index++)
         {
@@ -8601,7 +8601,14 @@ public sealed class GoalAcceptanceVerifierDotnetBuildSlotTests : GoalAcceptanceV
             throw new InvalidOperationException("Expected partition verdict journal record.");
         }
 
-        File.WriteAllLines(path, lines);
+        var payload = Encoding.UTF8.GetBytes(string.Join(Environment.NewLine, lines) + Environment.NewLine);
+        using var stream = new FileStream(
+            path,
+            FileMode.Create,
+            FileAccess.Write,
+            FileShare.ReadWrite | FileShare.Delete,
+            bufferSize: 1);
+        stream.Write(payload);
     }
 
     private static void AssertIsolatedTestCommand(string[] args)

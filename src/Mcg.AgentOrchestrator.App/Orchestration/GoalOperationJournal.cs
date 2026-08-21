@@ -187,7 +187,7 @@ internal static class GoalOperationJournal
         }
 
         var key = LifecycleKey(commandName, objective);
-        return File.ReadLines(path)
+        return SharedJsonlFile.ReadAllLines(path)
             .Select(TryDeserializeLifecycle)
             .Where(entry => entry is not null && entry.IdempotencyKey.Equals(key, StringComparison.OrdinalIgnoreCase))
             .Select(entry => entry!.GoalId)
@@ -209,7 +209,7 @@ internal static class GoalOperationJournal
             commandName,
             objective,
             DateTimeOffset.UtcNow);
-        File.AppendAllText(path, JsonSerializer.Serialize(entry, JsonOptions) + Environment.NewLine);
+        SharedJsonlFile.AppendLine(path, JsonSerializer.Serialize(entry, JsonOptions));
     }
 
     public static void Begin(
@@ -723,7 +723,7 @@ internal static class GoalOperationJournal
     }
 
     private static GoalOperationJournalEntry[] ReadEntries(string path) =>
-        File.ReadLines(path)
+        SharedJsonlFile.ReadAllLines(path)
             .Select(TryDeserialize)
             .Where(entry => entry is not null)
             .Select(entry => entry!)
@@ -901,7 +901,7 @@ internal static class GoalOperationJournal
             CurrentHeadMainSha: currentHeadMainSha,
             OperatorRegateCount: operatorRegateCount,
             FailedCheckNames: failedCheckNames);
-        File.AppendAllText(path, JsonSerializer.Serialize(entry, JsonOptions) + Environment.NewLine);
+        SharedJsonlFile.AppendLine(path, JsonSerializer.Serialize(entry, JsonOptions));
         TryAppendRunEvent(executionDirectory, entry);
     }
 
