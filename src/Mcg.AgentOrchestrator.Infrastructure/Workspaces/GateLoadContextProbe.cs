@@ -5,9 +5,30 @@ using System.Runtime.InteropServices;
 
 namespace Mcg.AgentOrchestrator.Infrastructure;
 
-public sealed record GateLoadSample(bool IsAvailable, double? Value, string? UnavailableReason)
+public sealed record GateLoadSample
 {
-    public static GateLoadSample Available(double value) => new(true, value, null);
+    private GateLoadSample(bool isAvailable, double? value, string? unavailableReason)
+    {
+        IsAvailable = isAvailable;
+        Value = value;
+        UnavailableReason = unavailableReason;
+    }
+
+    public bool IsAvailable { get; }
+
+    public double? Value { get; }
+
+    public string? UnavailableReason { get; }
+
+    public static GateLoadSample Available(double value)
+    {
+        if (!double.IsFinite(value))
+        {
+            throw new ArgumentOutOfRangeException(nameof(value), value, "Available load samples must be finite.");
+        }
+
+        return new(true, value, null);
+    }
 
     public static GateLoadSample Unavailable(string reason)
     {
@@ -17,9 +38,9 @@ public sealed record GateLoadSample(bool IsAvailable, double? Value, string? Una
 }
 
 /// <summary>
-/// Load observed when a lane receipt is emitted. ConcurrentGateCount and
-/// InFlightPaidWorkerDispatchCount are cross-process values; they remain explicitly unavailable until a
-/// conductor-owned bridge is added. ConcurrentShardCount is local to this gate and includes the completing shard.
+/// Load observed when a lane receipt is emitted. ConcurrentGateCount counts distinct live gate heartbeats and
+/// includes the calling gate. InFlightPaidWorkerDispatchCount remains explicitly unavailable until the
+/// conductor supplies its authoritative cross-process value. ConcurrentShardCount is local to this gate.
 /// </summary>
 public sealed record GateLoadContext(
     GateLoadSample ConcurrentGateCount,
@@ -59,7 +80,11 @@ internal sealed class GateShardConcurrencyCounter
 internal static class GateLoadContextProbe
 {
     private const string CrossProcessCounterUnavailable = "cross-process-counter-unavailable";
+    private const double MinimumCpuSampleWindowMilliseconds = 200;
+    private static readonly TimeSpan LiveGateHeartbeatFreshness = TimeSpan.FromMinutes(2);
     private static readonly object CpuSync = new();
+    private static readonly AsyncLocal<Func<int?>?> ConcurrentGateCountProbeOverride = new();
+    private static readonly AsyncLocal<Func<int?>?> InFlightWorkerDispatchProbeOverride = new();
     private static readonly AsyncLocal<Func<HostCpuSample>?> HostCpuProbeOverride = new();
     private static CpuTimes? _previousCpuTimes;
 
@@ -80,17 +105,29 @@ internal static class GateLoadContextProbe
         var concurrentShards = concurrentShardCount >= 0
             ? GateLoadSample.Available(concurrentShardCount)
             : GateLoadSample.Unavailable("invalid-concurrent-shard-count");
+        var concurrentGates = CaptureCount(
+            ConcurrentGateCountProbeOverride.Value ?? CaptureConcurrentGateCount,
+            minimumValue: 1,
+            "gate-count-unavailable");
+        var inFlightWorkers = CaptureCount(
+            InFlightWorkerDispatchProbeOverride.Value ?? CaptureUnavailableWorkerDispatchCount,
+            minimumValue: 0,
+            CrossProcessCounterUnavailable);
         try
         {
             var cpu = (HostCpuProbeOverride.Value ?? CaptureHostCpu)();
-            if (cpu.UtilizationPercent is < 0 or > 100 || cpu.ProcessorCount <= 0 || cpu.WindowMilliseconds <= 0)
+            if (!double.IsFinite(cpu.UtilizationPercent) ||
+                cpu.UtilizationPercent is < 0 or > 100 ||
+                cpu.ProcessorCount <= 0 ||
+                !double.IsFinite(cpu.WindowMilliseconds) ||
+                cpu.WindowMilliseconds < MinimumCpuSampleWindowMilliseconds)
             {
                 throw new LoadProbeUnavailableException("cpu-sample-invalid");
             }
 
             return new GateLoadContext(
-                GateLoadSample.Unavailable(CrossProcessCounterUnavailable),
-                GateLoadSample.Unavailable(CrossProcessCounterUnavailable),
+                concurrentGates,
+                inFlightWorkers,
                 concurrentShards,
                 GateLoadSample.Available(cpu.UtilizationPercent),
                 GateLoadSample.Available(cpu.ProcessorCount),
@@ -98,11 +135,15 @@ internal static class GateLoadContextProbe
         }
         catch (LoadProbeUnavailableException exception)
         {
-            return WithUnavailableCpu(concurrentShards, exception.Reason);
+            return WithUnavailableCpu(concurrentGates, inFlightWorkers, concurrentShards, exception.Reason);
         }
         catch (Exception exception)
         {
-            return WithUnavailableCpu(concurrentShards, $"probe-error:{exception.GetType().Name}");
+            return WithUnavailableCpu(
+                concurrentGates,
+                inFlightWorkers,
+                concurrentShards,
+                $"probe-error:{exception.GetType().Name}");
         }
     }
 
@@ -122,17 +163,92 @@ internal static class GateLoadContextProbe
         return new RestoreAction(() => HostCpuProbeOverride.Value = previous);
     }
 
-    private static GateLoadContext WithUnavailableCpu(GateLoadSample concurrentShards, string reason)
+    internal static IDisposable PushConcurrentGateCountProbe(Func<int?> probe) =>
+        PushCountProbe(ConcurrentGateCountProbeOverride, probe);
+
+    internal static IDisposable PushInFlightWorkerDispatchProbe(Func<int?> probe) =>
+        PushCountProbe(InFlightWorkerDispatchProbeOverride, probe);
+
+    private static IDisposable PushCountProbe(AsyncLocal<Func<int?>?> target, Func<int?> probe)
+    {
+        ArgumentNullException.ThrowIfNull(probe);
+        var previous = target.Value;
+        target.Value = probe;
+        return new RestoreAction(() => target.Value = previous);
+    }
+
+    private static GateLoadContext WithUnavailableCpu(
+        GateLoadSample concurrentGates,
+        GateLoadSample inFlightWorkers,
+        GateLoadSample concurrentShards,
+        string reason)
     {
         var unavailable = GateLoadSample.Unavailable(
             string.IsNullOrWhiteSpace(reason) ? "probe-unavailable" : reason);
         return new GateLoadContext(
-            GateLoadSample.Unavailable(CrossProcessCounterUnavailable),
-            GateLoadSample.Unavailable(CrossProcessCounterUnavailable),
+            concurrentGates,
+            inFlightWorkers,
             concurrentShards,
             unavailable,
             unavailable,
             unavailable);
+    }
+
+    private static GateLoadSample CaptureCount(Func<int?> probe, int minimumValue, string unavailableReason)
+    {
+        try
+        {
+            var value = probe();
+            return value is null
+                ? GateLoadSample.Unavailable(unavailableReason)
+                : value >= minimumValue
+                    ? GateLoadSample.Available(value.Value)
+                    : GateLoadSample.Unavailable("count-out-of-range");
+        }
+        catch (LoadProbeUnavailableException exception)
+        {
+            return GateLoadSample.Unavailable(exception.Reason);
+        }
+        catch (Exception exception)
+        {
+            return GateLoadSample.Unavailable($"probe-error:{exception.GetType().Name}");
+        }
+    }
+
+    private static int? CaptureUnavailableWorkerDispatchCount() => null;
+
+    private static int? CaptureConcurrentGateCount()
+    {
+        var heartbeatDirectory = Path.GetDirectoryName(GateHeartbeatArtifacts.GetStableSlotPath(0));
+        if (string.IsNullOrWhiteSpace(heartbeatDirectory) || !Directory.Exists(heartbeatDirectory))
+        {
+            throw new LoadProbeUnavailableException("gate-heartbeat-directory-unavailable");
+        }
+
+        var identities = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        foreach (var status in GateHeartbeatArtifacts.ReadStableSlots())
+        {
+            var snapshot = status.Snapshot;
+            if (!status.IsAvailable ||
+                snapshot is null ||
+                !string.Equals(snapshot.State, "running", StringComparison.OrdinalIgnoreCase) ||
+                status.HeartbeatAge is not { } heartbeatAge ||
+                heartbeatAge > LiveGateHeartbeatFreshness)
+            {
+                continue;
+            }
+
+            if (snapshot.ProcessId == Environment.ProcessId)
+            {
+                continue;
+            }
+
+            identities.Add(snapshot.ProcessId is > 0
+                ? $"pid:{snapshot.ProcessId.Value}"
+                : $"goal:{snapshot.GoalId ?? status.Path}");
+        }
+
+        return identities.Count + 1;
     }
 
     private static string Format(GateLoadSample? sample) =>

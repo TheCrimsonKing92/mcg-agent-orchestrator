@@ -367,6 +367,8 @@ public sealed class GoalAcceptanceVerifierTests : GoalAcceptanceVerifierTestBase
     public void EmitShardTimingProgressRecordsTypedLoadContextAndPreservesExistingFields()
     {
         var progress = new List<AcceptanceGateProgress>();
+        using var gateProbe = GateLoadContextProbe.PushConcurrentGateCountProbe(() => 3);
+        using var workerProbe = GateLoadContextProbe.PushInFlightWorkerDispatchProbe(() => 5);
         using var cpuProbe = GateLoadContextProbe.PushHostCpuProbe(
             () => new GateLoadContextProbe.HostCpuSample(37.5, 16, 425));
         using var sink = GoalAcceptanceVerifier.PushGateProgressSink(progress.Add);
@@ -392,14 +394,16 @@ public sealed class GoalAcceptanceVerifierTests : GoalAcceptanceVerifierTestBase
         AssertAvailable(load.HostCpuUtilizationPercent, 37.5);
         AssertAvailable(load.ProcessorCount, 16);
         AssertAvailable(load.CpuSampleWindowMilliseconds, 425);
-        AssertUnavailable(load.ConcurrentGateCount, "cross-process-counter-unavailable");
-        AssertUnavailable(load.InFlightPaidWorkerDispatchCount, "cross-process-counter-unavailable");
+        AssertAvailable(load.ConcurrentGateCount, 3);
+        AssertAvailable(load.InFlightPaidWorkerDispatchCount, 5);
     }
 
     [Xunit.Fact]
     public void EmitShardTimingProgressDistinguishesAvailableZeroFromUnavailableCounts()
     {
         var progress = new List<AcceptanceGateProgress>();
+        using var gateProbe = GateLoadContextProbe.PushConcurrentGateCountProbe(() => null);
+        using var workerProbe = GateLoadContextProbe.PushInFlightWorkerDispatchProbe(() => 0);
         using var cpuProbe = GateLoadContextProbe.PushHostCpuProbe(
             () => new GateLoadContextProbe.HostCpuSample(0, 8, 250));
         using var sink = GoalAcceptanceVerifier.PushGateProgressSink(progress.Add);
@@ -414,17 +418,21 @@ public sealed class GoalAcceptanceVerifierTests : GoalAcceptanceVerifierTestBase
 
         var load = Assert.IsType<GateLoadContext>(Assert.Single(progress).LoadContext);
         AssertAvailable(load.ConcurrentShardCount, 0);
-        AssertUnavailable(load.ConcurrentGateCount, "cross-process-counter-unavailable");
-        Assert.NotEqual(load.ConcurrentShardCount.IsAvailable, load.ConcurrentGateCount.IsAvailable);
-        Assert.NotEqual(load.ConcurrentShardCount.Value, load.ConcurrentGateCount.Value);
+        AssertAvailable(load.InFlightPaidWorkerDispatchCount, 0);
+        AssertUnavailable(load.ConcurrentGateCount, "gate-count-unavailable");
+        Assert.NotEqual(load.InFlightPaidWorkerDispatchCount.IsAvailable, load.ConcurrentGateCount.IsAvailable);
+        Assert.NotEqual(load.InFlightPaidWorkerDispatchCount.Value, load.ConcurrentGateCount.Value);
     }
 
     [Xunit.Fact]
     public void ThrowingLoadProbeDoesNotEscapeOrPreventTimingRecord()
     {
         var progress = new List<AcceptanceGateProgress>();
+        using var gateProbe = GateLoadContextProbe.PushConcurrentGateCountProbe(
+            () => throw new InvalidOperationException("deterministic gate probe failure"));
+        using var workerProbe = GateLoadContextProbe.PushInFlightWorkerDispatchProbe(() => 4);
         using var cpuProbe = GateLoadContextProbe.PushHostCpuProbe(
-            () => throw new InvalidOperationException("deterministic probe failure"));
+            () => new GateLoadContextProbe.HostCpuSample(25, 8, 500));
         using var sink = GoalAcceptanceVerifier.PushGateProgressSink(progress.Add);
 
         var exception = Record.Exception(() => GoalAcceptanceVerifier.EmitShardTimingProgress(
@@ -441,24 +449,101 @@ public sealed class GoalAcceptanceVerifierTests : GoalAcceptanceVerifierTestBase
         Assert.Equal(TimeSpan.FromSeconds(4), emitted.Elapsed);
         var load = Assert.IsType<GateLoadContext>(emitted.LoadContext);
         AssertAvailable(load.ConcurrentShardCount, 2);
-        AssertUnavailable(load.HostCpuUtilizationPercent, "probe-error:InvalidOperationException");
-        AssertUnavailable(load.ProcessorCount, "probe-error:InvalidOperationException");
+        AssertUnavailable(load.ConcurrentGateCount, "probe-error:InvalidOperationException");
+        AssertAvailable(load.InFlightPaidWorkerDispatchCount, 4);
+        AssertAvailable(load.HostCpuUtilizationPercent, 25);
     }
 
     [Xunit.Fact]
-    public void LoadCaptureInvokesHostProbeOncePerLaneCompletion()
+    public void LoadCaptureInvokesEachProbeOncePerLaneCompletion()
     {
-        var calls = 0;
+        var gateCalls = 0;
+        var workerCalls = 0;
+        var cpuCalls = 0;
+        using var gateProbe = GateLoadContextProbe.PushConcurrentGateCountProbe(() =>
+        {
+            gateCalls++;
+            return 1;
+        });
+        using var workerProbe = GateLoadContextProbe.PushInFlightWorkerDispatchProbe(() =>
+        {
+            workerCalls++;
+            return 0;
+        });
         using var cpuProbe = GateLoadContextProbe.PushHostCpuProbe(() =>
         {
-            calls++;
+            cpuCalls++;
             return new GateLoadContextProbe.HostCpuSample(25, 4, 500);
         });
 
         var load = GateLoadContextProbe.Capture(1);
 
-        Assert.Equal(1, calls);
+        Assert.Equal(1, gateCalls);
+        Assert.Equal(1, workerCalls);
+        Assert.Equal(1, cpuCalls);
         AssertAvailable(load.ConcurrentShardCount, 1);
+    }
+
+    [Xunit.Fact]
+    public void CpuSamplesBelowMinimumWindowOrWithNonFiniteUtilizationAreUnavailable()
+    {
+        using var gateProbe = GateLoadContextProbe.PushConcurrentGateCountProbe(() => 1);
+        using var workerProbe = GateLoadContextProbe.PushInFlightWorkerDispatchProbe(() => 0);
+        using (GateLoadContextProbe.PushHostCpuProbe(
+            () => new GateLoadContextProbe.HostCpuSample(25, 4, 199)))
+        {
+            AssertUnavailable(
+                GateLoadContextProbe.Capture(1).HostCpuUtilizationPercent,
+                "cpu-sample-invalid");
+        }
+
+        using (GateLoadContextProbe.PushHostCpuProbe(
+            () => new GateLoadContextProbe.HostCpuSample(double.NaN, 4, 500)))
+        {
+            AssertUnavailable(
+                GateLoadContextProbe.Capture(1).HostCpuUtilizationPercent,
+                "cpu-sample-invalid");
+        }
+    }
+
+    [Xunit.Fact]
+    public void RealHostCpuProbeReturnsFiniteSampleOrExplicitUnavailableState()
+    {
+        using var gateProbe = GateLoadContextProbe.PushConcurrentGateCountProbe(() => 1);
+        using var workerProbe = GateLoadContextProbe.PushInFlightWorkerDispatchProbe(() => 0);
+
+        var load = GateLoadContextProbe.Capture(1);
+
+        Assert.Equal(load.HostCpuUtilizationPercent.IsAvailable, load.ProcessorCount.IsAvailable);
+        Assert.Equal(load.HostCpuUtilizationPercent.IsAvailable, load.CpuSampleWindowMilliseconds.IsAvailable);
+        if (load.HostCpuUtilizationPercent.IsAvailable)
+        {
+            Assert.True(double.IsFinite(load.HostCpuUtilizationPercent.Value!.Value));
+            Assert.InRange(load.HostCpuUtilizationPercent.Value.Value, 0, 100);
+            Assert.True(load.CpuSampleWindowMilliseconds.Value >= 200);
+        }
+        else
+        {
+            Assert.False(string.IsNullOrWhiteSpace(load.HostCpuUtilizationPercent.UnavailableReason));
+        }
+    }
+
+    [Xunit.Fact]
+    public void ProductionGateProbeIncludesCallingGateWhenHeartbeatDirectoryIsReachable()
+    {
+        var heartbeatDirectory = Path.GetDirectoryName(GateHeartbeatArtifacts.GetStableSlotPath(0));
+        Assert.False(string.IsNullOrWhiteSpace(heartbeatDirectory));
+        Directory.CreateDirectory(heartbeatDirectory!);
+        using var workerProbe = GateLoadContextProbe.PushInFlightWorkerDispatchProbe(() => 0);
+        using var cpuProbe = GateLoadContextProbe.PushHostCpuProbe(
+            () => new GateLoadContextProbe.HostCpuSample(25, 4, 500));
+
+        var sample = GateLoadContextProbe.Capture(1).ConcurrentGateCount;
+
+        Assert.True(sample.IsAvailable);
+        Assert.NotNull(sample.Value);
+        Assert.True(sample.Value >= 1);
+        Assert.Null(sample.UnavailableReason);
     }
 
     [Xunit.Fact]
@@ -1608,6 +1693,20 @@ public sealed class GoalAcceptanceVerifierTests : GoalAcceptanceVerifierTestBase
 
 public abstract class GoalAcceptanceVerifierTestBase
 {
+    protected static void AssertAvailable(GateLoadSample sample, double expected)
+    {
+        Assert.True(sample.IsAvailable);
+        Assert.Equal(expected, sample.Value!.Value);
+        Assert.Null(sample.UnavailableReason);
+    }
+
+    protected static void AssertUnavailable(GateLoadSample sample, string expectedReason)
+    {
+        Assert.False(sample.IsAvailable);
+        Assert.Null(sample.Value);
+        Assert.Equal(expectedReason, sample.UnavailableReason);
+    }
+
     protected static string CreateManifestWorkspace(string manifest)
     {
         var root = Path.Combine(Path.GetTempPath(), "mcg-acceptance-tests", Guid.NewGuid().ToString("N"));
@@ -4203,24 +4302,24 @@ public sealed class GoalAcceptanceVerifierDotnetBuildSlotTests : GoalAcceptanceV
     [Xunit.Fact(DisplayName = "GoalAcceptanceVerifier_partitions_checked_in_infrastructure_manifest_check")]
     public async Task GoalAcceptanceVerifierPartitionsCheckedInInfrastructureManifestCheck()
     {
-        var calls = new List<string[]>();
-        var progress = new List<AcceptanceGateProgress>();
+        var calls = new System.Collections.Concurrent.ConcurrentQueue<string[]>();
+        var progress = new System.Collections.Concurrent.ConcurrentQueue<AcceptanceGateProgress>();
         var root = CreateCheckedInManifestShapeWorkspace();
         try
         {
             var lanes = AcceptanceGateEngineSettings.Load(root).InfrastructureTestLanes;
             var verifier = new GoalAcceptanceVerifier((args, _, _) =>
             {
-                calls.Add(args);
+                calls.Enqueue(args);
                 return Task.FromResult(new GoalAcceptanceVerifier.CommandResult(
                     0,
                     args.Length > 1 && args[0] == "dotnet" && args[1] == "test"
                         ? "Passed! - Failed: 0, Passed: 1, Skipped: 0, Total: 1."
-                    : ""));
+                        : ""));
             });
             using var cpuProbe = GateLoadContextProbe.PushHostCpuProbe(
                 () => throw new InvalidOperationException("deterministic probe failure"));
-            using var sink = GoalAcceptanceVerifier.PushGateProgressSink(progress.Add);
+            using var sink = GoalAcceptanceVerifier.PushGateProgressSink(progress.Enqueue);
 
             var result = await verifier.RunAsync(root);
 
@@ -4551,20 +4650,6 @@ public sealed class GoalAcceptanceVerifierDotnetBuildSlotTests : GoalAcceptanceV
             GoalAcceptanceVerifier.PartitionVerdictWithinAttemptRerunEnabled = true;
             ResetPartitionVerdictKeyHooks();
         }
-    }
-
-    private static void AssertAvailable(GateLoadSample sample, double expected)
-    {
-        Assert.True(sample.IsAvailable);
-        Assert.Equal(expected, sample.Value!.Value);
-        Assert.Null(sample.UnavailableReason);
-    }
-
-    private static void AssertUnavailable(GateLoadSample sample, string expectedReason)
-    {
-        Assert.False(sample.IsAvailable);
-        Assert.Null(sample.Value);
-        Assert.Equal(expectedReason, sample.UnavailableReason);
     }
 
     [Xunit.Fact(DisplayName = "GoalAcceptanceVerifier_exclusive_resource_key_order_is_exact_and_declaration_independent")]
