@@ -4,7 +4,7 @@ using System.Text;
 using System.Text.Json;
 using System.Xml.Linq;
 
-[Xunit.Collection(TestCollections.ProcessSpawning)]
+[Xunit.Collection("IsolatedProcessSpawning")]
 public sealed class LaneTimingMeasurementScriptTests
 {
     [Xunit.Fact]

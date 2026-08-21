@@ -63,9 +63,14 @@
       },
       {
         "name": "Process spawning",
-        "filter": "FullyQualifiedName~AssemblyTempRedirectTests|FullyQualifiedName~AssemblyTempRedirectChildSmokeTests|FullyQualifiedName~LaneTimingMeasurementScriptTests|FullyQualifiedName~GoalWorktreeIsolatedDotnetTests|FullyQualifiedName~CitedPriorEvidenceResolverTests|FullyQualifiedName~CliHelpTests|FullyQualifiedName~ConductorDriverTests|FullyQualifiedName~ConductorSelfRelaunchTests|FullyQualifiedName~ConductorSuccessorSelfCheckTests|FullyQualifiedName~DispatchProcessHostTests|FullyQualifiedName~ExcessWorkerRoundAnalysisScriptTests|FullyQualifiedName~GitCliTests|FullyQualifiedName~LauncherScriptTests|FullyQualifiedName~MtpTestRunnerScriptTests|FullyQualifiedName~ProcessTreeGuiSuppressionTests|FullyQualifiedName~SemanticAcceptanceTests|FullyQualifiedName~WorkerContextArtifactsCharacterizationTests|(FullyQualifiedName~WorkerDispatchTestsModelSelection&FullyQualifiedName!~WorkerDispatchTestsModelSelectionEnvMutation)",
+        "filter": "FullyQualifiedName~GoalWorktreeIsolatedDotnetTests|FullyQualifiedName~ConductorSelfRelaunchTests|FullyQualifiedName~ConductorSuccessorSelfCheckTests|FullyQualifiedName~DispatchProcessHostTests|FullyQualifiedName~LauncherScriptTests|FullyQualifiedName~MtpTestRunnerScriptTests|FullyQualifiedName~ProcessTreeGuiSuppressionTests",
         "estimatedSerialSeconds": 327.7,
         "exclusiveResourceKeys": [ "xunit:ProcessSpawning" ]
+      },
+      {
+        "name": "Process spawning parallel",
+        "filter": "FullyQualifiedName~AssemblyTempRedirectTests|FullyQualifiedName~AssemblyTempRedirectChildSmokeTests|FullyQualifiedName~CitedPriorEvidenceResolverTests|FullyQualifiedName~CliHelpTests|FullyQualifiedName~ConductorDriverTests|FullyQualifiedName~ExcessWorkerRoundAnalysisScriptTests|FullyQualifiedName~GitCliTests|FullyQualifiedName~LaneTimingMeasurementScriptTests|FullyQualifiedName~SemanticAcceptanceTests|FullyQualifiedName~WorkerContextArtifactsCharacterizationTests|(FullyQualifiedName~WorkerDispatchTestsModelSelection&FullyQualifiedName!~WorkerDispatchTestsModelSelectionEnvMutation)",
+        "estimatedSerialSeconds": 200.3
       },
       {
         "name": "Chaos gate",
@@ -129,7 +134,7 @@
       {
         "name": "Conductor",
         "description": "Conductor watch, build-slot, and process-spawning coverage.",
-        "laneNames": [ "Conduct watch sweep scoping", "Dotnet build slots", "Process spawning" ]
+        "laneNames": [ "Conduct watch sweep scoping", "Dotnet build slots", "Process spawning", "Process spawning parallel" ]
       },
       {
         "name": "ChaosGate",

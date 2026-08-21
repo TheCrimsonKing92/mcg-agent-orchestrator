@@ -8,7 +8,7 @@ using Microsoft.Data.Sqlite;
 using System.Text.Json;
 using System.Xml.Linq;
 
-[Xunit.Collection(TestCollections.ProcessSpawning)]
+[Xunit.Collection("IsolatedProcessSpawning")]
 public sealed class ConductorDriverTests
 {
     // ── Helpers ──────────────────────────────────────────────────────────────

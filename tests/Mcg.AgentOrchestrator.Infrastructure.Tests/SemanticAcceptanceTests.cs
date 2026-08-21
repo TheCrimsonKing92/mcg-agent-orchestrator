@@ -3,7 +3,7 @@ using Mcg.AgentOrchestrator.App.Orchestration;
 using Mcg.AgentOrchestrator.Core;
 using Mcg.AgentOrchestrator.Infrastructure;
 
-[Xunit.Collection(TestCollections.ProcessSpawning)]
+[Xunit.Collection("IsolatedProcessSpawning")]
 public sealed class SemanticAcceptanceTests : IDisposable
 {
     private readonly List<string> _tempDirectories = [];

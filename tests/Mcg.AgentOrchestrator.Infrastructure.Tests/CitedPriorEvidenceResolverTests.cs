@@ -5,7 +5,7 @@ using Mcg.AgentOrchestrator.App.Orchestration;
 using Mcg.AgentOrchestrator.Core;
 using Mcg.AgentOrchestrator.Infrastructure;
 
-[Xunit.Collection("ProcessSpawning")]
+[Xunit.Collection("IsolatedProcessSpawning")]
 public sealed class CitedPriorEvidenceResolverTests : WorkerDispatchTestSupport
 {
     private const string PriorGoalId = "cbf7b22e46664d2b899ff5ead8469b5b";
