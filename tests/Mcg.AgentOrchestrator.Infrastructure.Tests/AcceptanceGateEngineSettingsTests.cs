@@ -11,7 +11,7 @@ public sealed class AcceptanceGateEngineSettingsTests
         var settings = AcceptanceGateEngineSettings.Load(repositoryRoot);
         var startupContract = GoalAcceptanceVerifier.ValidateStartupContract(repositoryRoot);
 
-        Xunit.Assert.Equal(4, settings.MaxConcurrentShards);
+        Xunit.Assert.Equal(6, settings.MaxConcurrentShards);
         Xunit.Assert.Equal(5, settings.PartitionVerdictFullRerunEveryN);
         Xunit.Assert.Equal(AcceptanceGateEngineSettings.DefaultOutputCaptureLimitBytes, settings.OutputCaptureLimitBytes);
         Xunit.Assert.Equal(19, settings.InfrastructureTestLanes.Count);
@@ -208,6 +208,30 @@ public sealed class AcceptanceGateEngineSettingsTests
                 () => AcceptanceGateEngineSettings.Load(root));
 
             Xunit.Assert.Contains("partitionVerdictFullRerunEveryN must be at least 1", error.Message);
+        }
+        finally
+        {
+            Directory.Delete(root, recursive: true);
+        }
+    }
+
+    [Xunit.Theory(DisplayName = "AcceptanceGateEngine_rejects_invalid_max_concurrent_shards")]
+    [Xunit.InlineData(0)]
+    [Xunit.InlineData(-1)]
+    public void AcceptanceGateEngineRejectsInvalidMaxConcurrentShards(int maxConcurrentShards)
+    {
+        var root = CreateWorkspace($$"""
+            {
+              "version": 1,
+              "engine": { "maxConcurrentShards": {{maxConcurrentShards}} }
+            }
+            """);
+        try
+        {
+            var error = Xunit.Assert.Throws<InvalidDataException>(
+                () => AcceptanceGateEngineSettings.Load(root));
+
+            Xunit.Assert.Contains("maxConcurrentShards must be at least 1", error.Message);
         }
         finally
         {
@@ -468,6 +492,137 @@ public sealed class AcceptanceGateEngineSettingsTests
         }
         finally
         {
+            Directory.Delete(root, recursive: true);
+        }
+    }
+
+    [Xunit.Fact(DisplayName = "GoalAcceptanceVerifier_raised_cap_preserves_exclusive_resource_isolation")]
+    public async Task GoalAcceptanceVerifierRaisedCapPreservesExclusiveResourceIsolation()
+    {
+        var root = CreateWorkspace("""
+            {
+              "version": 1,
+              "engine": {
+                "maxConcurrentShards": 6,
+                "partitionVerdictFullRerunEveryN": 5,
+                "mtpInvocations": [{
+                  "project": "tests/Mcg.AgentOrchestrator.Infrastructure.Tests/Mcg.AgentOrchestrator.Infrastructure.Tests.csproj",
+                  "executablePathTemplate": "candidate/{projectName}{executableExtension}",
+                  "firewallExecutablePathTemplate": "candidate/{projectName}.exe",
+                  "arguments": [
+                    "{executable}",
+                    "--results-directory",
+                    "{resultsDirectory}",
+                    "--report-trx-filename",
+                    "{trxFileName}"
+                  ]
+                }],
+                "infrastructureTestLanes": [
+                  { "name": "shared alpha", "filter": "FullyQualifiedName~SharedAlphaTests", "exclusiveResourceKeys": ["candidate:shared"] },
+                  { "name": "shared beta", "filter": "FullyQualifiedName~SharedBetaTests", "exclusiveResourceKeys": ["CANDIDATE:SHARED"] },
+                  { "name": "disjoint gamma", "filter": "FullyQualifiedName~DisjointGammaTests" },
+                  { "name": "disjoint delta", "filter": "FullyQualifiedName~DisjointDeltaTests" },
+                  { "name": "disjoint epsilon", "filter": "FullyQualifiedName~DisjointEpsilonTests" },
+                  { "name": "disjoint zeta", "filter": "FullyQualifiedName~DisjointZetaTests" },
+                  { "name": "disjoint eta", "filter": "FullyQualifiedName~DisjointEtaTests" }
+                ]
+              },
+              "checks": [{
+                "name": "infrastructure tests",
+                "type": "dotnet-test",
+                "runner": "mtp",
+                "project": "tests/Mcg.AgentOrchestrator.Infrastructure.Tests/Mcg.AgentOrchestrator.Infrastructure.Tests.csproj"
+              }]
+            }
+            """);
+        var goalId = new Mcg.AgentOrchestrator.Core.GoalId("12345678123456781234567812345678");
+        var previousPrefix = Environment.GetEnvironmentVariable(
+            GoalAcceptanceVerifier.AcceptanceAttemptTrxPrefixVariable);
+        var releaseInitialWave = new TaskCompletionSource<bool>(
+            TaskCreationOptions.RunContinuationsAsynchronously);
+        var activeShards = 0;
+        var peakShards = 0;
+        var activeSharedShards = 0;
+        var peakSharedShards = 0;
+        GoalAcceptanceVerifier.ResolveShardCoreBudgetForTests = () => 6;
+        GoalAcceptanceVerifier.ResolveMainWorktreePathForTests = _ => root;
+        GoalAcceptanceVerifier.ResolveDeletedTestFilesForTests = _ => [];
+        GoalAcceptanceVerifier.ResolvePartitionVerdictCandidateTreeShaForTests = _ => "tree-raised-cap";
+        GoalAcceptanceVerifier.ResolvePartitionVerdictMainShaForTests = _ => "main-raised-cap";
+        GoalAcceptanceVerifier.ResolvePartitionVerdictVerifyingCommitShaForTests = _ => "commit-raised-cap";
+        GoalAcceptanceVerifier.PartitionVerdictWithinAttemptRerunEnabled = false;
+        try
+        {
+            var verifier = new GoalAcceptanceVerifier(async (arguments, _, _) =>
+            {
+                if (!arguments.Contains("--report-trx-filename"))
+                {
+                    return new GoalAcceptanceVerifier.CommandResult(0, "Build succeeded.");
+                }
+
+                var laneName = new[]
+                    {
+                        "SharedAlphaTests",
+                        "SharedBetaTests",
+                        "DisjointGammaTests",
+                        "DisjointDeltaTests",
+                        "DisjointEpsilonTests",
+                        "DisjointZetaTests",
+                        "DisjointEtaTests"
+                    }
+                    .Single(name => arguments.Any(argument => argument.Contains(name, StringComparison.Ordinal)));
+                var isShared = laneName.StartsWith("Shared", StringComparison.Ordinal);
+                var currentShards = Interlocked.Increment(ref activeShards);
+                ObservePeak(ref peakShards, currentShards);
+                if (isShared)
+                {
+                    var currentSharedShards = Interlocked.Increment(ref activeSharedShards);
+                    ObservePeak(ref peakSharedShards, currentSharedShards);
+                }
+
+                if (currentShards == 6)
+                {
+                    releaseInitialWave.TrySetResult(true);
+                }
+
+                try
+                {
+                    await releaseInitialWave.Task.WaitAsync(TimeSpan.FromSeconds(10));
+                    WriteMtpTrx(arguments, $"{laneName} passes", $"{laneName}.Runs");
+                    return new GoalAcceptanceVerifier.CommandResult(0, "Passed: 1");
+                }
+                finally
+                {
+                    if (isShared)
+                    {
+                        Interlocked.Decrement(ref activeSharedShards);
+                    }
+
+                    Interlocked.Decrement(ref activeShards);
+                }
+            });
+
+            Environment.SetEnvironmentVariable(
+                GoalAcceptanceVerifier.AcceptanceAttemptTrxPrefixVariable,
+                Path.Combine(root, ".orchestrator", "raised-cap-attempt"));
+            var result = await verifier.RunAsync(root, goalId);
+
+            Xunit.Assert.True(result.Passed);
+            Xunit.Assert.Equal(6, peakShards);
+            Xunit.Assert.Equal(1, peakSharedShards);
+        }
+        finally
+        {
+            Environment.SetEnvironmentVariable(
+                GoalAcceptanceVerifier.AcceptanceAttemptTrxPrefixVariable,
+                previousPrefix);
+            GoalAcceptanceVerifier.ResolveShardCoreBudgetForTests = null;
+            GoalAcceptanceVerifier.ResolveMainWorktreePathForTests = null;
+            GoalAcceptanceVerifier.ResolveDeletedTestFilesForTests = null;
+            GoalAcceptanceVerifier.ResolvePartitionVerdictCandidateTreeShaForTests = null;
+            GoalAcceptanceVerifier.ResolvePartitionVerdictMainShaForTests = null;
+            GoalAcceptanceVerifier.ResolvePartitionVerdictVerifyingCommitShaForTests = null;
+            GoalAcceptanceVerifier.PartitionVerdictWithinAttemptRerunEnabled = true;
             Directory.Delete(root, recursive: true);
         }
     }
@@ -1102,6 +1257,21 @@ public sealed class AcceptanceGateEngineSettingsTests
         }
 
         return root;
+    }
+
+    private static void ObservePeak(ref int peak, int candidate)
+    {
+        var observed = Volatile.Read(ref peak);
+        while (candidate > observed)
+        {
+            var previous = Interlocked.CompareExchange(ref peak, candidate, observed);
+            if (previous == observed)
+            {
+                return;
+            }
+
+            observed = previous;
+        }
     }
 
     private static void WriteVstestTrx(string[] arguments, string testName)
