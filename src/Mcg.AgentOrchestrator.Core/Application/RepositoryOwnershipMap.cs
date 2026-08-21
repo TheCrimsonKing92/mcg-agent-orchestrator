@@ -33,6 +33,19 @@ public sealed record RepositoryWriteSetGuardReport(
 public static class RepositoryOwnershipMap
 {
     internal const string TestProjectReservationKeyPrefix = "test-project:tests/";
+    internal const string SharedInfrastructureReservationKey = "shared-infrastructure";
+
+    private static readonly Dictionary<string, (string Token, string[] Subsystems)> SharedInfrastructureProjects =
+        new(StringComparer.OrdinalIgnoreCase)
+        {
+            ["Mcg.AgentOrchestrator.Core"] = (
+                "core",
+                ["Application", "Collaboration", "Conductor", "Domain", "Models", "Persistence", "Reports"]),
+            ["Mcg.AgentOrchestrator.Infrastructure"] = (
+                "infrastructure",
+                ["Diagnostics", "OperatorComms", "Persistence", "Processes", "Verification", "Workers", "Workspaces"]),
+            ["Mcg.AgentOrchestrator.Infrastructure.Providers"] = ("infrastructure.providers", [])
+        };
 
     private static readonly string[] GeneratedSegments =
     [
@@ -68,7 +81,11 @@ public static class RepositoryOwnershipMap
             path.StartsWith("src/Mcg.AgentOrchestrator.Infrastructure/", StringComparison.OrdinalIgnoreCase) ||
             path.StartsWith("src/Mcg.AgentOrchestrator.Infrastructure.Providers/", StringComparison.OrdinalIgnoreCase))
         {
-            return Build(path, RepositoryOwnershipArea.SharedInfrastructure, "shared-infrastructure", highRisk: true);
+            return Build(
+                path,
+                RepositoryOwnershipArea.SharedInfrastructure,
+                SharedInfrastructureReservationKeyFor(path),
+                highRisk: true);
         }
 
         if (path.StartsWith("src/Mcg.AgentOrchestrator.App/Dashboard/Api/", StringComparison.OrdinalIgnoreCase))
@@ -205,6 +222,27 @@ public static class RepositoryOwnershipMap
                (parts.Length == 2 && project.EndsWith(".cs", StringComparison.OrdinalIgnoreCase))
             ? null
             : $"{TestProjectReservationKeyPrefix}{project.ToLowerInvariant()}";
+    }
+
+    private static string SharedInfrastructureReservationKeyFor(string path)
+    {
+        var parts = path.Split('/', StringSplitOptions.RemoveEmptyEntries);
+        if (parts.Length < 3 ||
+            !parts[0].Equals("src", StringComparison.OrdinalIgnoreCase) ||
+            !SharedInfrastructureProjects.TryGetValue(parts[1], out var project))
+        {
+            return SharedInfrastructureReservationKey;
+        }
+
+        var subsystem = parts[2];
+        if (string.IsNullOrWhiteSpace(subsystem) ||
+            subsystem is "." or ".." ||
+            !project.Subsystems.Contains(subsystem, StringComparer.OrdinalIgnoreCase))
+        {
+            return SharedInfrastructureReservationKey;
+        }
+
+        return $"{SharedInfrastructureReservationKey}:{project.Token}/{subsystem.ToLowerInvariant()}";
     }
 
     private static bool IsConfiguration(string path, string extension) =>
