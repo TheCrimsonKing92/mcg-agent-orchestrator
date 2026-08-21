@@ -1127,6 +1127,7 @@ public sealed class MtpTestRunnerScriptTests
 }
 
 [Xunit.Collection(TestCollections.ProcessSpawning)]
+[Xunit.Trait("Category", "AcceptanceOptIn")]
 public sealed class MtpTestRunnerScriptTestsOneStepProjectRebuild
 {
     [Xunit.Theory(DisplayName = "Native_MTP_dotnet_test_runs_large_repository_test_projects_in_one_step")]
