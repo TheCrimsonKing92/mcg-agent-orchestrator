@@ -46,7 +46,20 @@ internal interface IWorkerIntegrityLabeler
     bool SetIntegrity(string path, string level, bool recursive);
 }
 
+internal interface IWorkerIntegrityLabelerDiagnostics
+{
+    IntegrityLabelSetOutcome? LastSetOutcome { get; }
+}
+
 internal sealed record IntegrityLabelState(bool Exists, bool Low, bool Inheritable, bool Medium = false);
+
+internal sealed record IntegrityLabelSetOutcome(
+    bool Completed,
+    bool TimedOut,
+    int? ExitCode,
+    bool Succeeded,
+    string FailureKind,
+    long ElapsedMilliseconds);
 
 internal sealed class WorkerSandboxPreparer(IWorkerIntegrityLabeler labeler)
 {
@@ -459,7 +472,7 @@ internal sealed class WorkerSandboxPreparer(IWorkerIntegrityLabeler labeler)
             .TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar);
 }
 
-internal sealed class IcaclsIntegrityLabeler : IWorkerIntegrityLabeler
+internal sealed class IcaclsIntegrityLabeler : IWorkerIntegrityLabeler, IWorkerIntegrityLabelerDiagnostics
 {
     private readonly Func<ProcessStartInfo, Process?> startProcess;
 
@@ -472,6 +485,8 @@ internal sealed class IcaclsIntegrityLabeler : IWorkerIntegrityLabeler
     {
         this.startProcess = startProcess;
     }
+
+    public IntegrityLabelSetOutcome? LastSetOutcome { get; private set; }
 
     public IntegrityLabelState Query(string path)
     {
@@ -543,6 +558,8 @@ internal sealed class IcaclsIntegrityLabeler : IWorkerIntegrityLabeler
 
     public bool SetIntegrity(string path, string level, bool recursive)
     {
+        LastSetOutcome = null;
+        var setClock = Stopwatch.StartNew();
         try
         {
             var psi = new ProcessStartInfo
@@ -564,6 +581,14 @@ internal sealed class IcaclsIntegrityLabeler : IWorkerIntegrityLabeler
             using var process = startProcess(psi);
             if (process is null)
             {
+                setClock.Stop();
+                LastSetOutcome = new IntegrityLabelSetOutcome(
+                    Completed: false,
+                    TimedOut: false,
+                    ExitCode: null,
+                    Succeeded: false,
+                    FailureKind: "launch",
+                    setClock.ElapsedMilliseconds);
                 return false;
             }
 
@@ -571,10 +596,28 @@ internal sealed class IcaclsIntegrityLabeler : IWorkerIntegrityLabeler
             var copyErr = process.StandardError.BaseStream.CopyToAsync(Stream.Null);
             var completed = DispatchProcessHost.WaitForIntegrityLabeler(process, TimeSpan.FromMinutes(2));
             try { Task.WaitAll([copyOut, copyErr], 2000); } catch { }
-            return completed && process.ExitCode == 0;
+            setClock.Stop();
+            int? exitCode = completed ? process.ExitCode : null;
+            var succeeded = completed && exitCode == 0;
+            LastSetOutcome = new IntegrityLabelSetOutcome(
+                Completed: completed,
+                TimedOut: !completed,
+                ExitCode: exitCode,
+                Succeeded: succeeded,
+                FailureKind: succeeded ? "none" : completed ? "exit" : "timeout",
+                ElapsedMilliseconds: setClock.ElapsedMilliseconds);
+            return succeeded;
         }
         catch
         {
+            setClock.Stop();
+            LastSetOutcome = new IntegrityLabelSetOutcome(
+                Completed: false,
+                TimedOut: false,
+                ExitCode: null,
+                Succeeded: false,
+                FailureKind: "exception",
+                setClock.ElapsedMilliseconds);
             return false;
         }
     }

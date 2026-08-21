@@ -1,4 +1,5 @@
 using System.Runtime.CompilerServices;
+using System.Diagnostics;
 using Mcg.AgentOrchestrator.Infrastructure;
 
 // Infrastructure.Tests builds a self-contained Microsoft.Testing.Platform executable.
@@ -7,6 +8,7 @@ using Mcg.AgentOrchestrator.Infrastructure;
 internal static class AssemblyTempRedirect
 {
     internal const string LowInheritableLevel = "(OI)(CI)L";
+    internal const int MaxRootsReapedPerProcess = 32;
 
     // Deliberately far longer than any run: the acceptance gate's own per-lane budget is 40
     // minutes, so a root untouched for half a day cannot belong to a live host. Generous enough
@@ -23,6 +25,8 @@ internal static class AssemblyTempRedirect
 
         var fileSystem = new PhysicalTempRootFileSystem();
         var labeler = new IcaclsIntegrityLabeler();
+        var timings = new TempRootStartupTimings();
+        var totalClock = Stopwatch.StartNew();
         var selection = SelectWritableRoot(
             EnumerateCandidateRoots(),
             candidate => TryPrepareRoot(
@@ -30,11 +34,15 @@ internal static class AssemblyTempRedirect
                 isWindows: true,
                 fileSystem,
                 labeler,
-                $".write-probe-{Guid.NewGuid():N}"));
+                $".write-probe-{Guid.NewGuid():N}",
+                timings));
 
         Console.Error.WriteLine(FormatDiagnostic(selection));
         if (selection.SelectedRoot is null)
         {
+            totalClock.Stop();
+            timings.TotalElapsedMilliseconds = totalClock.ElapsedMilliseconds;
+            TryWriteTimingDiagnostic(timings);
             return;
         }
 
@@ -44,8 +52,11 @@ internal static class AssemblyTempRedirect
         // The root is owned by this process: delete it on exit, and reap roots whose owning
         // process is gone. Both are required — exit handlers do not run for killed processes,
         // and this repository cancels dispatches and times out gates routinely.
-        ReapOrphanedRoots(selection.SelectedRoot);
+        ReapOrphanedRoots(selection.SelectedRoot, timings);
         AppDomain.CurrentDomain.ProcessExit += (_, _) => TryDeleteTree(selection.SelectedRoot);
+        totalClock.Stop();
+        timings.TotalElapsedMilliseconds = totalClock.ElapsedMilliseconds;
+        TryWriteTimingDiagnostic(timings);
     }
 
     internal static IReadOnlyList<string> SelectReapableRoots(
@@ -133,8 +144,31 @@ internal static class AssemblyTempRedirect
             && processId > 0;
     }
 
-    private static void ReapOrphanedRoots(string selectedRoot)
+    internal static IReadOnlyList<string> SelectBoundedReapRoots(
+        IEnumerable<string> reapableByProcess,
+        IEnumerable<string> abandonedByAge,
+        Func<string, DateTime> lastWriteUtc,
+        int limit)
     {
+        ArgumentNullException.ThrowIfNull(reapableByProcess);
+        ArgumentNullException.ThrowIfNull(abandonedByAge);
+        ArgumentNullException.ThrowIfNull(lastWriteUtc);
+        ArgumentOutOfRangeException.ThrowIfNegativeOrZero(limit);
+
+        return reapableByProcess
+            .Concat(abandonedByAge)
+            .Distinct(StringComparer.OrdinalIgnoreCase)
+            .Select(name => (Name: name, LastWriteUtc: TryGetLastWriteUtc(name, lastWriteUtc)))
+            .OrderBy(candidate => candidate.LastWriteUtc)
+            .ThenBy(candidate => candidate.Name, StringComparer.OrdinalIgnoreCase)
+            .Take(limit)
+            .Select(candidate => candidate.Name)
+            .ToArray();
+    }
+
+    private static void ReapOrphanedRoots(string selectedRoot, TempRootStartupTimings timings)
+    {
+        timings.ReapRan = true;
         try
         {
             var sharedRoot = Path.GetDirectoryName(selectedRoot);
@@ -143,24 +177,57 @@ internal static class AssemblyTempRedirect
                 return;
             }
 
+            var phaseClock = Stopwatch.StartNew();
             var siblings = Directory.EnumerateDirectories(sharedRoot)
                 .Select(Path.GetFileName)
                 .OfType<string>()
                 .ToArray();
-            var livePids = SnapshotLiveProcessIds();
-            foreach (var orphan in SelectReapableRoots(siblings, Environment.ProcessId, livePids.Contains))
-            {
-                TryDeleteTree(Path.Combine(sharedRoot, orphan));
-            }
+            phaseClock.Stop();
+            timings.ReapEnumerateElapsedMilliseconds = phaseClock.ElapsedMilliseconds;
+            timings.ReapSiblingCount = siblings.Length;
 
-            foreach (var abandoned in SelectRootsAbandonedByAge(
-                         siblings,
-                         Environment.ProcessId,
-                         name => Directory.GetLastWriteTimeUtc(Path.Combine(sharedRoot, name)),
-                         DateTime.UtcNow - AbandonedRootAge))
+            phaseClock.Restart();
+            var livePids = SnapshotLiveProcessIds();
+            phaseClock.Stop();
+            timings.ReapProcessSnapshotElapsedMilliseconds = phaseClock.ElapsedMilliseconds;
+
+            phaseClock.Restart();
+            var reapableByProcess = SelectReapableRoots(siblings, Environment.ProcessId, livePids.Contains);
+            phaseClock.Stop();
+            timings.ReapProcessSelectionElapsedMilliseconds = phaseClock.ElapsedMilliseconds;
+
+            phaseClock.Restart();
+            var abandonedByAge = SelectRootsAbandonedByAge(
+                siblings,
+                Environment.ProcessId,
+                name => Directory.GetLastWriteTimeUtc(Path.Combine(sharedRoot, name)),
+                DateTime.UtcNow - AbandonedRootAge);
+            phaseClock.Stop();
+            timings.ReapAgeSelectionElapsedMilliseconds = phaseClock.ElapsedMilliseconds;
+            timings.ReapOverlapCount = reapableByProcess.Intersect(
+                abandonedByAge,
+                StringComparer.OrdinalIgnoreCase).Count();
+
+            phaseClock.Restart();
+            var bounded = SelectBoundedReapRoots(
+                reapableByProcess,
+                abandonedByAge,
+                name => Directory.GetLastWriteTimeUtc(Path.Combine(sharedRoot, name)),
+                MaxRootsReapedPerProcess);
+            phaseClock.Stop();
+            timings.ReapBoundSelectionElapsedMilliseconds = phaseClock.ElapsedMilliseconds;
+
+            phaseClock.Restart();
+            foreach (var candidate in bounded)
             {
-                TryDeleteTree(Path.Combine(sharedRoot, abandoned));
+                timings.ReapDeleteAttempted++;
+                if (TryDeleteTree(Path.Combine(sharedRoot, candidate)))
+                {
+                    timings.ReapDeleteSucceeded++;
+                }
             }
+            phaseClock.Stop();
+            timings.ReapDeleteElapsedMilliseconds = phaseClock.ElapsedMilliseconds;
         }
         catch (Exception)
         {
@@ -189,18 +256,22 @@ internal static class AssemblyTempRedirect
         return live;
     }
 
-    private static void TryDeleteTree(string path)
+    private static bool TryDeleteTree(string path)
     {
         try
         {
-            if (Directory.Exists(path))
+            if (!Directory.Exists(path))
             {
-                Directory.Delete(path, recursive: true);
+                return false;
             }
+
+            Directory.Delete(path, recursive: true);
+            return true;
         }
         catch (Exception ex) when (IsFileSystemFailure(ex))
         {
             // A live sibling may hold a handle; the next run reaps it.
+            return false;
         }
     }
 
@@ -228,8 +299,10 @@ internal static class AssemblyTempRedirect
         bool isWindows,
         ITempRootFileSystem fileSystem,
         IWorkerIntegrityLabeler labeler,
-        string probeDirectoryName)
+        string probeDirectoryName,
+        TempRootStartupTimings? timings = null)
     {
+        var phaseClock = Stopwatch.StartNew();
         try
         {
             fileSystem.CreateDirectory(candidate.Path);
@@ -238,8 +311,13 @@ internal static class AssemblyTempRedirect
         {
             return TempRootPreparationResult.Rejected(TempRootRejectionReason.Create);
         }
+        finally
+        {
+            phaseClock.Stop();
+            timings?.AddCreateElapsed(phaseClock.ElapsedMilliseconds);
+        }
 
-        if (isWindows && candidate.RequiresLowLabel && !EnsureLowLabel(candidate.Path, labeler))
+        if (isWindows && candidate.RequiresLowLabel && !EnsureLowLabel(candidate.Path, labeler, timings))
         {
             return TempRootPreparationResult.Rejected(TempRootRejectionReason.Label);
         }
@@ -247,6 +325,7 @@ internal static class AssemblyTempRedirect
         var reasons = new List<TempRootRejectionReason>();
         var probeDirectory = Path.Combine(candidate.Path, probeDirectoryName);
         var probeFile = Path.Combine(probeDirectory, "probe.tmp");
+        phaseClock.Restart();
         try
         {
             fileSystem.CreateDirectory(probeDirectory);
@@ -258,6 +337,10 @@ internal static class AssemblyTempRedirect
         }
         finally
         {
+            phaseClock.Stop();
+            timings?.AddProbeWriteElapsed(phaseClock.ElapsedMilliseconds);
+
+            phaseClock.Restart();
             var cleanupFailed = false;
             try
             {
@@ -285,6 +368,9 @@ internal static class AssemblyTempRedirect
             {
                 reasons.Add(TempRootRejectionReason.Cleanup);
             }
+
+            phaseClock.Stop();
+            timings?.AddProbeCleanupElapsed(phaseClock.ElapsedMilliseconds);
         }
 
         return reasons.Count == 0
@@ -304,6 +390,36 @@ internal static class AssemblyTempRedirect
         return $"assembly-temp-redirect selected={selected} rejected={rejected}";
     }
 
+    internal static string FormatTimingDiagnostic(TempRootStartupTimings timings)
+    {
+        ArgumentNullException.ThrowIfNull(timings);
+        var labelSet = timings.LabelSetOutcome;
+        return "assembly-temp-redirect-timing " +
+            $"totalMs={timings.TotalElapsedMilliseconds} " +
+            $"createMs={timings.CreateElapsedMilliseconds} " +
+            $"labelQueryMs={timings.LabelQueryElapsedMilliseconds} " +
+            $"labelQueryCount={timings.LabelQueryCount} " +
+            $"labelSetMs={FormatOptional(timings.LabelSetElapsedMilliseconds)} " +
+            $"labelSetCompleted={FormatOptional(labelSet?.Completed)} " +
+            $"labelSetTimedOut={FormatOptional(labelSet?.TimedOut)} " +
+            $"labelSetExitCode={FormatOptional(labelSet?.ExitCode)} " +
+            $"labelSetSucceeded={FormatOptional(labelSet?.Succeeded)} " +
+            $"labelSetFailure={labelSet?.FailureKind ?? "not-run"} " +
+            $"probeWriteMs={timings.ProbeWriteElapsedMilliseconds} " +
+            $"probeCleanupMs={timings.ProbeCleanupElapsedMilliseconds} " +
+            $"reap={(timings.ReapRan ? "run" : "not-run")} " +
+            $"reapEnumerateMs={FormatReap(timings, timings.ReapEnumerateElapsedMilliseconds)} " +
+            $"reapSiblingCount={FormatReap(timings, timings.ReapSiblingCount)} " +
+            $"reapPidSnapshotMs={FormatReap(timings, timings.ReapProcessSnapshotElapsedMilliseconds)} " +
+            $"reapOrphanSelectMs={FormatReap(timings, timings.ReapProcessSelectionElapsedMilliseconds)} " +
+            $"reapAgeSelectMs={FormatReap(timings, timings.ReapAgeSelectionElapsedMilliseconds)} " +
+            $"reapBoundSelectMs={FormatReap(timings, timings.ReapBoundSelectionElapsedMilliseconds)} " +
+            $"reapOverlap={FormatReap(timings, timings.ReapOverlapCount)} " +
+            $"deleteAttempted={FormatReap(timings, timings.ReapDeleteAttempted)} " +
+            $"deleteSucceeded={FormatReap(timings, timings.ReapDeleteSucceeded)} " +
+            $"deleteMs={FormatReap(timings, timings.ReapDeleteElapsedMilliseconds)}";
+    }
+
     internal static string BuildProcessTempRoot(string sharedRoot, int processId)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(sharedRoot);
@@ -311,22 +427,47 @@ internal static class AssemblyTempRedirect
         return Path.Combine(sharedRoot, $"p{processId:x}");
     }
 
-    private static bool EnsureLowLabel(string path, IWorkerIntegrityLabeler labeler)
+    private static bool EnsureLowLabel(
+        string path,
+        IWorkerIntegrityLabeler labeler,
+        TempRootStartupTimings? timings)
     {
         try
         {
-            var state = labeler.Query(path);
+            var state = QueryLabel(path, labeler, timings);
             if (state.Exists && state.Low && state.Inheritable)
             {
                 return true;
             }
 
-            if (!labeler.SetIntegrity(path, LowInheritableLevel, recursive: false))
+            var setClock = Stopwatch.StartNew();
+            var completed = false;
+            var succeeded = false;
+            try
+            {
+                succeeded = labeler.SetIntegrity(path, LowInheritableLevel, recursive: false);
+                completed = true;
+            }
+            finally
+            {
+                setClock.Stop();
+                var outcome = (labeler as IWorkerIntegrityLabelerDiagnostics)?.LastSetOutcome ??
+                    new IntegrityLabelSetOutcome(
+                        Completed: completed,
+                        TimedOut: false,
+                        ExitCode: null,
+                        Succeeded: succeeded,
+                        FailureKind: completed ? succeeded ? "none" : "returned-false" : "exception",
+                        ElapsedMilliseconds: setClock.ElapsedMilliseconds);
+                timings?.RecordLabelSet(outcome.ElapsedMilliseconds, outcome);
+            }
+
+            if (!succeeded)
             {
                 return false;
             }
 
-            state = labeler.Query(path);
+            state = QueryLabel(path, labeler, timings);
             return state.Exists && state.Low && state.Inheritable;
         }
         catch
@@ -334,6 +475,59 @@ internal static class AssemblyTempRedirect
             return false;
         }
     }
+
+    private static IntegrityLabelState QueryLabel(
+        string path,
+        IWorkerIntegrityLabeler labeler,
+        TempRootStartupTimings? timings)
+    {
+        var queryClock = Stopwatch.StartNew();
+        try
+        {
+            return labeler.Query(path);
+        }
+        finally
+        {
+            queryClock.Stop();
+            timings?.AddLabelQueryElapsed(queryClock.ElapsedMilliseconds);
+        }
+    }
+
+    private static DateTime TryGetLastWriteUtc(string name, Func<string, DateTime> lastWriteUtc)
+    {
+        try
+        {
+            return lastWriteUtc(name);
+        }
+        catch (Exception ex) when (IsFileSystemFailure(ex))
+        {
+            return DateTime.MaxValue;
+        }
+    }
+
+    private static void TryWriteTimingDiagnostic(TempRootStartupTimings timings)
+    {
+        try
+        {
+            Console.Error.WriteLine(FormatTimingDiagnostic(timings));
+        }
+        catch
+        {
+            // Timing must never make module initialization fail.
+        }
+    }
+
+    private static string FormatOptional(long? value) => value?.ToString() ?? "not-run";
+
+    private static string FormatOptional(int? value) => value?.ToString() ?? "not-run";
+
+    private static string FormatOptional(bool? value) => value?.ToString().ToLowerInvariant() ?? "not-run";
+
+    private static string FormatReap(TempRootStartupTimings timings, long value) =>
+        timings.ReapRan ? value.ToString() : "not-run";
+
+    private static string FormatReap(TempRootStartupTimings timings, int value) =>
+        timings.ReapRan ? value.ToString() : "not-run";
 
     private static bool IsFileSystemFailure(Exception exception) =>
         exception is UnauthorizedAccessException or IOException;
@@ -398,6 +592,50 @@ internal sealed record TempRootRejection(
 internal sealed record TempRootSelectionResult(
     string? SelectedRoot,
     IReadOnlyList<TempRootRejection> Rejections);
+
+internal sealed class TempRootStartupTimings
+{
+    internal long TotalElapsedMilliseconds { get; set; }
+    internal long CreateElapsedMilliseconds { get; private set; }
+    internal long LabelQueryElapsedMilliseconds { get; private set; }
+    internal int LabelQueryCount { get; private set; }
+    internal long? LabelSetElapsedMilliseconds { get; private set; }
+    internal IntegrityLabelSetOutcome? LabelSetOutcome { get; private set; }
+    internal long ProbeWriteElapsedMilliseconds { get; private set; }
+    internal long ProbeCleanupElapsedMilliseconds { get; private set; }
+    internal bool ReapRan { get; set; }
+    internal long ReapEnumerateElapsedMilliseconds { get; set; }
+    internal int ReapSiblingCount { get; set; }
+    internal long ReapProcessSnapshotElapsedMilliseconds { get; set; }
+    internal long ReapProcessSelectionElapsedMilliseconds { get; set; }
+    internal long ReapAgeSelectionElapsedMilliseconds { get; set; }
+    internal long ReapBoundSelectionElapsedMilliseconds { get; set; }
+    internal int ReapOverlapCount { get; set; }
+    internal int ReapDeleteAttempted { get; set; }
+    internal int ReapDeleteSucceeded { get; set; }
+    internal long ReapDeleteElapsedMilliseconds { get; set; }
+
+    internal void AddCreateElapsed(long elapsedMilliseconds) =>
+        CreateElapsedMilliseconds += elapsedMilliseconds;
+
+    internal void AddLabelQueryElapsed(long elapsedMilliseconds)
+    {
+        LabelQueryElapsedMilliseconds += elapsedMilliseconds;
+        LabelQueryCount++;
+    }
+
+    internal void RecordLabelSet(long elapsedMilliseconds, IntegrityLabelSetOutcome outcome)
+    {
+        LabelSetElapsedMilliseconds = (LabelSetElapsedMilliseconds ?? 0) + elapsedMilliseconds;
+        LabelSetOutcome = outcome;
+    }
+
+    internal void AddProbeWriteElapsed(long elapsedMilliseconds) =>
+        ProbeWriteElapsedMilliseconds += elapsedMilliseconds;
+
+    internal void AddProbeCleanupElapsed(long elapsedMilliseconds) =>
+        ProbeCleanupElapsedMilliseconds += elapsedMilliseconds;
+}
 
 internal interface ITempRootFileSystem
 {
