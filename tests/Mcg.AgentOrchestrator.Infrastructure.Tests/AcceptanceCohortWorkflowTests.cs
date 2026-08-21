@@ -1755,7 +1755,10 @@ public sealed class AcceptanceCohortWorkflowTests : GoalWorktreeTestBase
                     line,
                     new JsonSerializerOptions(JsonSerializerDefaults.Web))!)
                 .ToArray();
-            var gateProgressEvents = conductEvents
+            var gateProgressEvents = File.ReadAllLines(workspace.ConductEventsLogPath)
+                .Select(line => JsonSerializer.Deserialize<ConductEventRecord>(
+                    line,
+                    new JsonSerializerOptions(JsonSerializerDefaults.Web))!)
                 .Where(record => record.EventKind == "gate-progress")
                 .ToArray();
             Assert.Equal(2, gateProgressEvents.Length);
@@ -1835,16 +1838,17 @@ public sealed class AcceptanceCohortWorkflowTests : GoalWorktreeTestBase
     }
 
     [Fact]
-    public void OrdinaryParallelAcceptance_StillStartsPromptlyAndReconcilesLater()
+    public void ProductionBatch_OrdinaryParallelAcceptanceStillStartsPromptlyAndReconcilesLater()
     {
         var repo = CreateReducedAcceptanceCohortRepository();
+        var attemptRoot = Path.Combine(repo, ".orchestrator", "ordinary-negative-control");
         try
         {
             var kernel = new AgentOrchestratorKernel();
             var goal = CreateCompletedGoal(kernel, "Ordinary acceptance negative control", repo);
-            var attemptRoot = Path.Combine(repo, ".orchestrator", "ordinary-negative-control");
             ConductorParallelAcceptanceOwnedProcessLaunch? launch = null;
             const int ownerProcessId = 8123;
+            var landed = false;
             var coordinator = new ConductorParallelAcceptanceAttemptCoordinator(
                 attemptRoot,
                 isProcessAlive: _ => true,
@@ -1852,34 +1856,88 @@ public sealed class AcceptanceCohortWorkflowTests : GoalWorktreeTestBase
                 {
                     launch = pending;
                     return new ConductorParallelAcceptanceOwnedProcessLaunchResult(ownerProcessId);
-                });
-            var candidate = ConductorParallelAcceptanceCandidate.Create(
-                goal,
-                0,
-                ["src/Ordinary.cs"],
-                "ordinary-branch",
-                "ordinary-main");
+                },
+                acquireStableSlotLease: (_, _) => null);
+            var driver = new ConductorDriver(
+                getFacts: _ => landed
+                    ? new GoalLifecycleFacts(
+                        WorkspaceExists: true,
+                        IsMerged: true,
+                        IsRecorded: true,
+                        IsCleanedUp: true)
+                    : new GoalLifecycleFacts(WorkspaceExists: true),
+                getRunningPaidWorkerCount: () => 0,
+                createWorkspace: _ => repo,
+                dispatchAndStart: _ => DispatchStartOutcome.Started(),
+                startRecordedDispatches: null,
+                buildServerShutdown: null,
+                runAcceptanceVerification: _ => AcceptanceVerificationSummary.PassedWithNoUnmetCriteria,
+                runAdvisorySemanticAcceptance: null,
+                retryTask: null,
+                recordTaskNote: null,
+                recordCriterionRetryFeedback: null,
+                clearCriterionRetryFeedback: null,
+                rebaseOntoMain: _ => new GoalWorktreeRebaseResult(
+                    GoalWorktreeRebaseStatus.AlreadyFastForwardable,
+                    GoalWorktrees.BranchName(goal.Id),
+                    "current",
+                    [],
+                    null),
+                land: (candidate, _) =>
+                {
+                    landed = true;
+                    return new LandingResult(
+                        candidate.Id.Value,
+                        candidate.Id.Value[..8],
+                        new LandingDecision.Promote(),
+                        LandingExecutor.IntegrationBranchName,
+                        MainAdvanced: true,
+                        "landed");
+                },
+                afterSuccessfulLanding: null,
+                record: _ => { },
+                cleanup: _ => new GoalWorktreeRemoveResult("clean", null, [], null),
+                writeEscalation: (_, _, _) => { },
+                classifyChangeRisk: _ => ChangeRiskTier.Behavior,
+                getLandingFileScopes: _ => ["src/Ordinary.cs"],
+                runAcceptanceVerificationWithSlot: (_, _) =>
+                    AcceptanceVerificationSummary.PassedWithNoUnmetCriteria,
+                parallelAcceptanceAttemptCoordinator: coordinator);
+            var stopPath = Path.Combine(repo, "stop-does-not-exist");
+            BatchTickSummary? startTick = null;
 
-            var started = coordinator.Evaluate(
-                candidate,
+            var started = new ConductorBatchLoop().Run(
+                kernel,
+                driver,
                 ConductorAutonomyPolicy.Permissive,
-                (runCandidate, _) => ConductorParallelAcceptanceRunResult.Accepted(
-                    runCandidate,
-                    AcceptanceVerificationSummary.PassedWithNoUnmetCriteria));
+                stopPath,
+                maxIterations: 1,
+                onTick: tick => startTick = tick);
 
-            Assert.Equal(ConductorParallelAcceptanceAttemptDecisionKind.Started, started.Kind);
+            Assert.Equal(0, started.Advanced);
+            Assert.Equal(1, started.Held);
+            Assert.Equal(GoalStatus.Verifying, goal.Status);
             Assert.NotNull(launch);
+            Assert.False(driver.TryGetCohortGateHold(goal.Id, out _));
+            Assert.Contains(startTick!.ProgressLines!, line =>
+                line.Contains("ACCEPTANCE", StringComparison.Ordinal) &&
+                line.Contains("result=started", StringComparison.Ordinal));
             launch.ExecuteInCurrentProcess(ownerProcessId);
 
-            var completed = coordinator.Evaluate(
-                candidate,
+            BatchTickSummary? reconcileTick = null;
+            var completed = new ConductorBatchLoop().Run(
+                kernel,
+                driver,
                 ConductorAutonomyPolicy.Permissive,
-                (runCandidate, _) => ConductorParallelAcceptanceRunResult.Accepted(
-                    runCandidate,
-                    AcceptanceVerificationSummary.PassedWithNoUnmetCriteria));
-            Assert.Equal(ConductorParallelAcceptanceAttemptDecisionKind.Completed, completed.Kind);
+                stopPath,
+                maxIterations: 1,
+                onTick: tick => reconcileTick = tick);
 
-            coordinator.MarkReconciled(completed.Attempt);
+            Assert.Equal(1, completed.Advanced);
+            Assert.True(landed);
+            Assert.Contains(reconcileTick!.ProgressLines!, line =>
+                line.Contains("ACCEPTANCE", StringComparison.Ordinal) &&
+                line.Contains("result=passed", StringComparison.Ordinal));
             Assert.Empty(coordinator.GetUnreconciledAttempts([goal.Id.Value]));
         }
         finally
