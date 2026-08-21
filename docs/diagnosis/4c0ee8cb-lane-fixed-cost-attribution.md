@@ -28,6 +28,14 @@ and one file per root. Deleting all of it took 714 ms; deleting 32 took 59 ms. R
 therefore does not explain the floor. The expensive input is the accumulated content of the real
 shared population, traversed synchronously and, for 1,211 roots, eligible through both rules.
 
+The closing controlled observation removed only orphan roots older than twelve hours from the real
+Low test-temp population, reducing it from 1,680 roots to 82 (95 percent). Four same-named lanes on
+uncontended gates then lost 124.8 to 129.2 seconds each despite having very different test workloads.
+`Remainder balance A` fell from 138.5 seconds to 13.7 seconds, breaking the 119.1-second historical
+floor. The nearly constant absolute reduction, coupled with the synthetic same-count control above,
+attributes the fixed cost to synchronous traversal/reaping of the accumulated real orphan content,
+not to lane work, root count alone, or the `icacls` setter.
+
 ## Timing breakdown
 
 | Phase or control | Elapsed | Outcome |
@@ -44,29 +52,36 @@ shared population, traversed synchronously and, for 1,211 roots, eligible throug
 | Recursive walk plus per-file metadata | >120,000 ms | Command deadline fired before completion |
 | Delete representative synthetic 1,284-root population | 714 ms | Completed |
 | Delete representative synthetic bounded set | 59 ms | 32 completed |
+| Real Low-root population before operator control | 1,680 roots | Before uncontended gate |
+| Real Low-root population after operator control | 82 roots | Only roots older than twelve hours removed |
+| `Remainder balance A` before / after | 138,500 / 13,700 ms | 124,800 ms removed |
+| `Dotnet build slots` before / after | 335,400 / 208,300 ms | 127,100 ms removed |
+| `Worker dispatch fixtures` before / after | 354,800 / 225,600 ms | 129,200 ms removed |
+| `Goal worktree cleanup` before / after | 425,500 / 299,500 ms | 126,000 ms removed |
+| Independent focused evidence before / after | 214,400 / 91,500 ms | 122,900 ms removed; 206 / 207 tests |
 
-The supplied fastest-lane receipt and the initializer measurements were not captured from the same
-process, so subtracting them would falsely imply a matched phase breakdown. What is known is:
+The matched gate comparison closes the previously unattributed fixed-floor budget. The before gate
+ran from 2026-08-21T04:04:53Z to 2026-08-21T04:26:34Z. The after gate started at
+2026-08-21T16:28:36Z as attempt
+`19d16954-0-20260821162836436-b849b932ae65404b8fda688149252d83`; it was verified to be the only gate
+publishing progress events at the time. For the smallest matched lane:
 
-`fixed_floor_budget = total_lane - declared_work = 119.1s - 8.6s = 110.5s`.
+`removed_fixed_cost = 138.5s before - 13.7s after = 124.8s`.
 
-The historical paired startup measurement assigns 50.4 seconds to the reap at a smaller 1,106-root
-population. The current real-population metadata traversal exceeds 120 seconds, showing that the
-same seam has enough work to account for the entire 110.5-second fixed budget; it is not a matched
-initializer receipt and is not represented as one.
+The other three same-named lanes lost 127.1, 129.2, and 126.0 seconds. Their mean removed cost is
+126.8 seconds. Because the removed amount is approximately constant rather than proportional to
+lane duration, it is a per-process cost. Because reducing only the orphan population made that
+constant disappear and produced a 13.7-second lane where none of 71 prior receipts was below 119.1
+seconds, the historical fixed floor has no remaining unattributed portion. The earlier
+`fixed_floor_budget = 119.1s - 8.6s = 110.5s` was an estimate assembled from unmatched observations;
+the controlled same-lane delta supersedes it.
 
-The exact remaining observation is one uncontended Low-host lane where the following are captured
-from the same process: its `shard-complete` duration, declared test-work estimate, shared-root count,
-and the new `assembly-temp-redirect-timing` stderr line. The focused
-`CurrentHostPublishesInitializerTimingReceipt` test copies the current host's already-produced line
-into test output, so the acceptance artifact retains the numbers without launching or reaping a
-second real host. The line records total initialization,
-create, label query, elapsed label-set result, probe write/cleanup, sibling enumeration, process
-snapshot, both selections, overlap, bounded selection, deletion attempts/successes, and deletion
-elapsed time. Acceptance/the operator owns this receipt because a real initializer run can delete
-live shared roots; this Developer did not run it during a concurrent gate. The closing calculation
-is `shard-complete - initializer_total - declared_work`; if it is not near zero, the residual is
-outside this initializer and the reap remedy must not be credited for that portion.
+The gates had different overall topology: the before run had 16 lanes and the after run had 18 after
+goal `ea1a518e` split one collection. The four comparisons remain valid because they use the same
+named lanes, but a whole-gate wall-clock delta is not computed. Roughly 126.8 seconds multiplied by
+the lane count is an inference, not an observed gate-level saving. The independent focused-evidence
+control corroborates the result: goal `58ae2e59` fell from 214.4 seconds for 206 tests before cleanup
+to 91.5 seconds for 207 tests afterward, a 122.9-second absolute reduction.
 
 ## Why the setter hypothesis is excluded
 
@@ -85,16 +100,19 @@ timeout outcome used by the fallback negative control.
 
 ## Remedy and criterion 2 handoff
 
-The reap now unions the dead-PID and age-expired sets case-insensitively, sorts them oldest first,
-and attempts at most 32 roots per process. Both abandonment rules remain active, process-exit
-cleanup remains active, and failed deletes remain best effort. This bounds the synchronous critical
-path without weakening Low-integrity confinement or adding a shared lock.
+The candidate mitigation unions the dead-PID and age-expired sets case-insensitively, sorts them
+oldest first, and attempts at most 32 roots per process. Both abandonment rules remain active,
+process-exit cleanup remains active, and failed deletes remain best effort. This bounds deletion
+attempts without weakening Low-integrity confinement or adding a shared lock.
 
 The synthetic control predicts a bounded-set reduction from 714 ms to 59 ms for a shallow
-1,284-root population. Criterion 2 remains operator-owned and pending: compare the same named lane
-on uncontended before/after gates, record the shared-root population at both points, and recover
-`assembly-temp-redirect-timing` from lane stderr. Do not clear the shared root between runs. Two
-concurrent gates are not comparable.
+1,284-root population. Criterion 2 is satisfied by the operator-owned matched receipts above: the
+same named small lane measurably completed below 119 seconds after the removable population cost was
+cleared. This is not proof of a durable fix. The population grew from 1,293 to 1,680 in roughly three
+hours of normal board activity, and the matched after run followed an operator cleanup rather than a
+regrown-population trial of the bounded reap. A future uncontended gate with a regrown population is
+required before crediting the candidate mitigation with preventing recurrence; until then, manual
+cleanup is a recurring operational workaround, not the solution.
 
 ## Measurement commands
 
