@@ -975,10 +975,10 @@ public sealed class TaskBriefTests
     kernel.ActivateGoal(goal.Id, DefaultAgents());
     var acceptanceFailedAt = clock.UtcNow;
     var journalPath = Path.Combine(workingDirectory, ".orchestrator", "goal-operations", $"{goal.Id.Value}.jsonl");
-    File.WriteAllText(journalPath,
+    SharedJsonlFile.AppendLine(journalPath,
         $$"""
         {"idempotencyKey":"{{goal.Id.Value}}:conductor:acceptance","goalId":{"value":"{{goal.Id.Value}}"},"operation":"conductor:acceptance","status":"Failed","at":"{{acceptanceFailedAt:O}}","detail":"Acceptance failed (exit 1). Acceptance output tail: Failed Tests:\n  ReceiptTests.AcceptanceTailPinsNames\ncompiler error CS1002: ; expected\nstdout: C:\\repo\\.orchestrator\\logs\\acceptance.out.log\nstderr: C:\\repo\\.orchestrator\\logs\\acceptance.err.log"}
-        """ + Environment.NewLine);
+        """);
     clock.Advance();
     kernel.RecordAcceptanceFailure(goal.Id, ["test tamper guard: 1 test degradation signal(s)"]);
     clock.Advance();

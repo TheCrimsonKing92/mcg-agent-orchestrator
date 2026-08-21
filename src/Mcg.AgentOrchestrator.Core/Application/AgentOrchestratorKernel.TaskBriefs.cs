@@ -1588,7 +1588,7 @@ public sealed partial class AgentOrchestratorKernel
             return null;
         }
 
-        return File.ReadLines(journalPath)
+        return SharedJsonlFile.ReadAllLines(journalPath)
             .Select(TryReadGoalOperationReceiptEntry)
             .Where(entry =>
                 entry is not null &&

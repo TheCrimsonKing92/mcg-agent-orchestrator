@@ -39,7 +39,8 @@ foreach ($file in Get-ChildItem -Path $JournalDir -Filter *.jsonl) {
     $regate = 0
     $failedChecks = New-Object System.Collections.Generic.HashSet[string]
 
-    $stream = [System.IO.File]::Open($file.FullName, [System.IO.FileMode]::Open, [System.IO.FileAccess]::Read, [System.IO.FileShare]::ReadWrite)
+    $share = [System.IO.FileShare]::ReadWrite -bor [System.IO.FileShare]::Delete
+    $stream = [System.IO.File]::Open($file.FullName, [System.IO.FileMode]::Open, [System.IO.FileAccess]::Read, $share)
     $reader = New-Object System.IO.StreamReader($stream)
     try {
         while ($null -ne ($line = $reader.ReadLine())) {

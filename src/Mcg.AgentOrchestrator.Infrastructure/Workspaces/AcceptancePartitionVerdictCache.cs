@@ -398,7 +398,7 @@ internal sealed class AcceptancePartitionVerdictCache
 
             var records = new List<PartitionVerdictRecord>();
             var summaries = new List<PartitionVerdictJournalSummary>();
-            foreach (var line in File.ReadLines(path))
+            foreach (var line in SharedJsonlFile.ReadAllLines(path))
             {
                 if (TryDeserializePartitionVerdictJournalEntry(line) is not { } entry)
                     continue;
@@ -468,7 +468,7 @@ internal sealed class AcceptancePartitionVerdictCache
                 Directory.CreateDirectory(directory);
             }
 
-            File.AppendAllLines(
+            SharedJsonlFile.AppendLines(
                 path,
                 entries.Select(entry => JsonSerializer.Serialize(entry, PartitionVerdictJournalJsonOptions)));
         }

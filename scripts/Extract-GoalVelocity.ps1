@@ -8,6 +8,21 @@ param(
 Set-StrictMode -Version Latest
 $ErrorActionPreference = "Stop"
 
+function Read-SharedJournalLines([string]$Path) {
+    $share = [System.IO.FileShare]::ReadWrite -bor [System.IO.FileShare]::Delete
+    $stream = [System.IO.File]::Open($Path, [System.IO.FileMode]::Open, [System.IO.FileAccess]::Read, $share)
+    $reader = New-Object System.IO.StreamReader($stream)
+    try {
+        while ($null -ne ($line = $reader.ReadLine())) {
+            Write-Output $line
+        }
+    }
+    finally {
+        $reader.Dispose()
+        $stream.Dispose()
+    }
+}
+
 # goalPrefix -> landing time (UTC)
 $landings = @{}
 $log = & git -C $RepoRoot log --grep="Integrate goal/" --format="%aI|%s" main
@@ -37,7 +52,7 @@ foreach ($file in Get-ChildItem -Path $JournalDir -Filter *.jsonl) {
     $escalations = 0
     $buildMs = 0
 
-    foreach ($line in [System.IO.File]::ReadLines($file.FullName)) {
+    foreach ($line in (Read-SharedJournalLines $file.FullName)) {
         $t = $null
         if ($line -match '"at":"([^"]+)"') {
             $t = ([datetimeoffset]$matches[1]).ToUniversalTime()
@@ -79,7 +94,7 @@ foreach ($file in Get-ChildItem -Path $JournalDir -Filter *.jsonl) {
         acceptanceOps = $acceptRun
         escalationOps = $escalations
         buildPhaseMin = [Math]::Round($buildMs / 60000.0, 1)
-        journalLines  = (Get-Content $file.FullName | Measure-Object -Line).Lines
+        journalLines  = (Read-SharedJournalLines $file.FullName | Measure-Object -Line).Lines
     })
 }
 

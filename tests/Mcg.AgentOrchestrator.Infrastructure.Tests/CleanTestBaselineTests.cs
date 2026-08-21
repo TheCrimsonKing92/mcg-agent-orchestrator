@@ -109,7 +109,7 @@ public sealed class CleanTestBaselineTests
                 "attestation=unattested",
                 "main-a");
             var path = Path.Combine(root, ".orchestrator", "goal-operations", $"{goal.Id.Value}.jsonl");
-            File.AppendAllText(path, "{malformed" + Environment.NewLine);
+            SharedJsonlFile.AppendLine(path, "{malformed");
 
             var journal = GoalOperationJournal.ReadAll(root)[goal.Id];
 
