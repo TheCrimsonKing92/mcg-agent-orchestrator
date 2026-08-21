@@ -9,6 +9,10 @@ using Mcg.AgentOrchestrator.Infrastructure;
 [Xunit.Collection(TestCollections.ProcessSpawning)]
 public sealed class MtpTestRunnerScriptTests
 {
+    // The same unchanged case passed in 00:06:02.49 on 2026-08-21; this budget is a hang guard, not a performance assertion.
+    private static readonly TimeSpan NativeMtpRealProcessHangGuard = TimeSpan.FromMinutes(15);
+    private static readonly TimeSpan ProcessControlReadinessHangGuard = TimeSpan.FromSeconds(30);
+
     [Xunit.Fact(DisplayName = "Repository_test_projects_opt_into_native_MTP_dotnet_test")]
     public void RepositoryTestProjectsOptIntoNativeMtpDotnetTest()
     {
@@ -108,7 +112,7 @@ public sealed class MtpTestRunnerScriptTests
                 startInfo.ArgumentList.Add(argument);
             }
 
-            var result = Run(startInfo, timeout: TimeSpan.FromMinutes(15));
+            var result = Run(startInfo, timeout: NativeMtpRealProcessHangGuard);
 
             Xunit.Assert.True(
                 result.ExitCode == 0,
@@ -120,6 +124,69 @@ public sealed class MtpTestRunnerScriptTests
         {
             lease.Dispose();
             DotnetBuildEnvironmentManager.TryDeleteGoalArtifacts(goalId);
+        }
+    }
+
+    [Xunit.Fact(DisplayName = "Real_process_guard_value_decides_short_and_generous_arms")]
+    public void RealProcessGuardValueDecidesShortAndGenerousArms()
+    {
+        var root = Path.Combine(Path.GetTempPath(), "mcg-mtp-real-process-guard", Guid.NewGuid().ToString("N"));
+        Directory.CreateDirectory(root);
+        try
+        {
+            var shortReady = Path.Combine(root, "short.ready");
+            var shortStartInfo = RealProcessControlStartInfo(root, shortReady, neverExits: false);
+            var shortGuard = TimeSpan.FromSeconds(1);
+
+            var timeout = Xunit.Assert.Throws<RealProcessHangGuardException>(
+                () => Run(shortStartInfo, shortGuard, readinessPath: shortReady));
+
+            Xunit.Assert.Contains($"{shortGuard.TotalSeconds:0} seconds", timeout.Message, StringComparison.Ordinal);
+            Xunit.Assert.Contains("elapsed=", timeout.Message, StringComparison.Ordinal);
+            Xunit.Assert.True(timeout.RootExited, "The short-guard process must be reaped.");
+
+            var generousReady = Path.Combine(root, "generous.ready");
+            var generousResult = Run(
+                RealProcessControlStartInfo(root, generousReady, neverExits: false),
+                NativeMtpRealProcessHangGuard,
+                readinessPath: generousReady);
+
+            Xunit.Assert.Equal(0, generousResult.ExitCode);
+            Xunit.Assert.True(File.Exists(generousReady), "The generous arm must execute the real child command.");
+        }
+        finally
+        {
+            Directory.Delete(root, recursive: true);
+        }
+    }
+
+    [Xunit.Fact(DisplayName = "Real_process_guard_fails_and_reaps_when_dependency_never_exits")]
+    public void RealProcessGuardFailsAndReapsWhenDependencyNeverExits()
+    {
+        var root = Path.Combine(Path.GetTempPath(), "mcg-mtp-real-process-never-exits", Guid.NewGuid().ToString("N"));
+        Directory.CreateDirectory(root);
+        try
+        {
+            var readyPath = Path.Combine(root, "never.ready");
+            var descendantPidPath = Path.Combine(root, "descendant.pid");
+            var guard = TimeSpan.FromSeconds(2);
+            var startInfo = RealProcessControlStartInfo(
+                root,
+                readyPath,
+                neverExits: true,
+                descendantPidPath: descendantPidPath);
+
+            var timeout = Xunit.Assert.Throws<RealProcessHangGuardException>(
+                () => Run(startInfo, guard, readinessPath: readyPath, descendantPidPath: descendantPidPath));
+
+            Xunit.Assert.Contains($"{guard.TotalSeconds:0} seconds", timeout.Message, StringComparison.Ordinal);
+            Xunit.Assert.Contains("elapsed=", timeout.Message, StringComparison.Ordinal);
+            Xunit.Assert.True(timeout.RootExited, "The guarded PowerShell root must be reaped.");
+            Xunit.Assert.True(timeout.DescendantExited, "The never-exiting descendant must be reaped.");
+        }
+        finally
+        {
+            Directory.Delete(root, recursive: true);
         }
     }
 
@@ -533,20 +600,119 @@ public sealed class MtpTestRunnerScriptTests
         ArgumentList = { "-NoProfile", "-ExecutionPolicy", "Bypass" }
     };
 
-    private static ProcessResult Run(ProcessStartInfo startInfo, TimeSpan? timeout = null)
+    private static ProcessStartInfo RealProcessControlStartInfo(
+        string workingDirectory,
+        string readyPath,
+        bool neverExits,
+        string? descendantPidPath = null)
+    {
+        static string Quote(string path) => path.Replace("'", "''", StringComparison.Ordinal);
+
+        var startInfo = PowerShellStartInfo(workingDirectory);
+        startInfo.ArgumentList.Add("-Command");
+        if (neverExits)
+        {
+            startInfo.ArgumentList.Add(
+                "$child = Start-Process powershell.exe -ArgumentList '-NoProfile','-NonInteractive','-Command','while ($true) { Start-Sleep -Seconds 60 }' -WindowStyle Hidden -PassThru; " +
+                $"Set-Content -LiteralPath '{Quote(descendantPidPath!)}' -Value $child.Id; " +
+                $"Set-Content -LiteralPath '{Quote(readyPath)}' -Value ready; " +
+                "while ($true) { Start-Sleep -Seconds 60 }");
+        }
+        else
+        {
+            startInfo.ArgumentList.Add($"Set-Content -LiteralPath '{Quote(readyPath)}' -Value ready; Start-Sleep -Seconds 3");
+        }
+        return startInfo;
+    }
+
+    private static ProcessResult Run(
+        ProcessStartInfo startInfo,
+        TimeSpan? timeout = null,
+        string? readinessPath = null,
+        string? descendantPidPath = null)
     {
         using var process = Process.Start(startInfo)
             ?? throw new InvalidOperationException($"Failed to start {startInfo.FileName}.");
         var stdout = process.StandardOutput.ReadToEndAsync();
         var stderr = process.StandardError.ReadToEndAsync();
+        Process? descendant = null;
+        if (readinessPath is not null)
+        {
+            string[] readinessPaths = descendantPidPath is null ? [readinessPath] : [readinessPath, descendantPidPath];
+            try
+            {
+                WaitForFilesAsync(startInfo.WorkingDirectory, readinessPaths, ProcessControlReadinessHangGuard).GetAwaiter().GetResult();
+            }
+            catch
+            {
+                if (!process.HasExited)
+                {
+                    process.Kill(entireProcessTree: true);
+                }
+                process.WaitForExit(10_000);
+                stdout.GetAwaiter().GetResult();
+                stderr.GetAwaiter().GetResult();
+                throw;
+            }
+            if (descendantPidPath is not null)
+            {
+                descendant = Process.GetProcessById(int.Parse(File.ReadAllText(descendantPidPath).Trim(), System.Globalization.CultureInfo.InvariantCulture));
+            }
+        }
+
         var timeoutMilliseconds = checked((int)(timeout ?? TimeSpan.FromSeconds(30)).TotalMilliseconds);
+        var stopwatch = Stopwatch.StartNew();
         if (!process.WaitForExit(timeoutMilliseconds))
         {
             process.Kill(entireProcessTree: true);
-            process.WaitForExit(10_000);
-            throw new TimeoutException($"{startInfo.FileName} did not exit within {timeoutMilliseconds / 1000} seconds.");
+            var rootExited = process.WaitForExit(10_000);
+            var descendantExited = descendant is null || descendant.WaitForExit(10_000);
+            var timedOutStdout = stdout.GetAwaiter().GetResult();
+            var timedOutStderr = stderr.GetAwaiter().GetResult();
+            descendant?.Dispose();
+            throw new RealProcessHangGuardException(
+                $"{startInfo.FileName} did not exit within {timeoutMilliseconds / 1000} seconds; elapsed={stopwatch.Elapsed}." +
+                $"{Environment.NewLine}stdout:{Environment.NewLine}{timedOutStdout}" +
+                $"{Environment.NewLine}stderr:{Environment.NewLine}{timedOutStderr}",
+                rootExited,
+                descendantExited);
         }
+        descendant?.Dispose();
         return new ProcessResult(process.ExitCode, stdout.GetAwaiter().GetResult(), stderr.GetAwaiter().GetResult());
+    }
+
+    private static async Task WaitForFilesAsync(string directory, string[] paths, TimeSpan hangGuard)
+    {
+        if (paths.All(File.Exists))
+        {
+            return;
+        }
+
+        var ready = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        using var watcher = new FileSystemWatcher(directory)
+        {
+            EnableRaisingEvents = true,
+            IncludeSubdirectories = false
+        };
+        FileSystemEventHandler checkReady = (_, _) =>
+        {
+            if (paths.All(File.Exists))
+            {
+                ready.TrySetResult();
+            }
+        };
+        watcher.Created += checkReady;
+        watcher.Changed += checkReady;
+        if (paths.All(File.Exists))
+        {
+            return;
+        }
+
+        using var timeout = new CancellationTokenSource(hangGuard);
+        using var registration = timeout.Token.Register(
+            () => ready.TrySetException(new Xunit.Sdk.XunitException(
+                $"Real-process readiness files did not arrive within {hangGuard.TotalSeconds:0} seconds: {string.Join(", ", paths)}")));
+        await ready.Task;
     }
 
     private static ProcessResult RunAfterStdoutGate(
@@ -616,6 +782,15 @@ public sealed class MtpTestRunnerScriptTests
         Path.GetFullPath(Path.Combine(Path.GetDirectoryName(sourceFile)!, "..", ".."));
 
     private sealed record ProcessResult(int ExitCode, string Stdout, string Stderr);
+
+    private sealed class RealProcessHangGuardException(
+        string message,
+        bool rootExited,
+        bool descendantExited) : TimeoutException(message)
+    {
+        public bool RootExited { get; } = rootExited;
+        public bool DescendantExited { get; } = descendantExited;
+    }
 
     private sealed class ScriptSandbox : IDisposable
     {
