@@ -13,7 +13,7 @@ public sealed class MtpTestRunnerScriptTests
     private static readonly TimeSpan NativeMtpRealProcessHangGuard = TimeSpan.FromMinutes(15);
     private static readonly TimeSpan ProcessControlReadinessHangGuard = TimeSpan.FromSeconds(30);
     private static readonly TimeSpan RealProcessControlShortHangGuard = TimeSpan.FromSeconds(1);
-    private static readonly TimeSpan RealProcessControlCompletionDelay = TimeSpan.FromSeconds(3);
+    private static readonly TimeSpan RealProcessControlCompletionDelay = TimeSpan.FromSeconds(5);
 
     [Xunit.Fact(DisplayName = "Repository_test_projects_opt_into_native_MTP_dotnet_test")]
     public void RepositoryTestProjectsOptIntoNativeMtpDotnetTest()

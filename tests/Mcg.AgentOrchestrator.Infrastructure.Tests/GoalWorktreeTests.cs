@@ -1710,7 +1710,8 @@ public sealed class GoalWorktreeIsolatedDotnetTests : GoalWorktreeTestBase
     // Goal receipts after the minimal-probe conversion complete in 0.66-0.91s; this is a hang guard, not a performance bound.
     private static readonly TimeSpan RealProcessExitHangGuard = TimeSpan.FromSeconds(90);
     private static readonly TimeSpan ProcessReadinessHangGuard = TimeSpan.FromSeconds(30);
-    private static readonly TimeSpan OldProcessExitBudget = TimeSpan.FromSeconds(30);
+    private static readonly TimeSpan RealProcessControlShortHangGuard = TimeSpan.FromSeconds(2);
+    private static readonly TimeSpan RealProcessControlCompletionDelay = TimeSpan.FromSeconds(5);
     private const string ProbeProjectName = "Mcg.AgentOrchestrator.IsolatedDotnetProbe";
     private const string ProbeProject = "tests/Mcg.AgentOrchestrator.Infrastructure.Tests/Fixtures/IsolatedDotnetProbe/Mcg.AgentOrchestrator.IsolatedDotnetProbe.csproj";
 
@@ -1796,23 +1797,40 @@ public sealed class GoalWorktreeIsolatedDotnetTests : GoalWorktreeTestBase
         }
     }
 
-    [Xunit.Fact(DisplayName = "Reuse_hang_guard_allows_real_dependency_past_old_budget")]
-    public async Task ReuseHangGuardAllowsRealDependencyPastOldBudget()
+    [Xunit.Fact(DisplayName = "Reuse_hang_guard_fires_when_real_dependency_outlives_injected_budget")]
+    public async Task ReuseHangGuardFiresWhenRealDependencyOutlivesInjectedBudget()
     {
         if (!OperatingSystem.IsWindows())
         {
             return;
         }
 
-        var deliberateDelay = OldProcessExitBudget + TimeSpan.FromSeconds(3);
-        var fixture = CreateReuseFixture(includeAssembly: true, shimDelay: deliberateDelay);
+        var fixture = CreateReuseFixture(includeAssembly: true, shimDelay: RealProcessControlCompletionDelay);
         try
         {
+            Assert.True(
+                RealProcessControlCompletionDelay > RealProcessControlShortHangGuard,
+                "The real shim delay must exceed the injected guard by construction.");
+
+            var exception = await Assert.ThrowsAsync<RealProcessHangGuardException>(
+                () => RunReusePassAsync(
+                    fixture,
+                    RealProcessControlShortHangGuard,
+                    waitForShimReadiness: true));
+
+            Assert.Contains(
+                $"{RealProcessControlShortHangGuard.TotalSeconds:0} seconds",
+                exception.Message,
+                StringComparison.Ordinal);
+            Assert.Contains("elapsed=", exception.Message, StringComparison.Ordinal);
+            Assert.True(exception.RootExited, "The short-guard PowerShell root must be reaped.");
+            Assert.True(exception.DescendantExited, "The delayed shim descendant must be reaped.");
+
             var result = await RunReusePassAsync(fixture);
 
             Assert.True(result.ExitCode == 0, result.Stdout + result.Stderr);
             Assert.Contains(
-                $"delaySeconds={deliberateDelay.TotalSeconds:0}",
+                $"delaySeconds={RealProcessControlCompletionDelay.TotalSeconds:0}",
                 File.ReadAllText(fixture.DotnetLogPath),
                 StringComparison.Ordinal);
         }
@@ -1896,7 +1914,9 @@ public sealed class GoalWorktreeIsolatedDotnetTests : GoalWorktreeTestBase
         if (shimDelay.HasValue)
         {
             shimLines.Add($">> \"%DOTNET_SHIM_LOG%\" echo delaySeconds={shimDelay.Value.TotalSeconds:0}");
-            shimLines.Add($"powershell.exe -NoProfile -NonInteractive -Command \"Start-Sleep -Seconds {shimDelay.Value.TotalSeconds:0}\"");
+            shimLines.Add(
+                $"powershell.exe -NoProfile -NonInteractive -Command \"Set-Content -LiteralPath $env:DOTNET_SHIM_CHILD_PID -Value $PID; " +
+                $"Set-Content -LiteralPath $env:DOTNET_SHIM_READY_PATH -Value ready; Start-Sleep -Seconds {shimDelay.Value.TotalSeconds:0}\"");
         }
         else if (shimNeverExits)
         {
