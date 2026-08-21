@@ -376,7 +376,7 @@ public sealed class PlannerOutputContractTests : WorkerDispatchTestSupport
     }
 
     [Xunit.Fact]
-    public void PlannerContract_ExtensionlessMissingCitationStillFails()
+    public void PlannerContract_ExtensionlessMissingCitationPassesThroughAsProse()
     {
         var workingDirectory = CreateTempDirectory();
         var citation = "src/GenuinelyMissingTarget";
@@ -387,9 +387,144 @@ public sealed class PlannerOutputContractTests : WorkerDispatchTestSupport
 
         var result = PlannerOutputContract.Resolve(plan, string.Empty, workingDirectory);
 
+        Xunit.Assert.True(result.Succeeded, result.Diagnostic);
+        Xunit.Assert.Contains($"`{citation}`", result.Plan, StringComparison.Ordinal);
+        Xunit.Assert.DoesNotContain("Planner contract note", result.Plan, StringComparison.Ordinal);
+    }
+
+    [Xunit.Fact]
+    public void PlannerContract_UnresolvableProseSpansPassThroughUntouched()
+    {
+        var workingDirectory = CreateTempDirectory();
+        File.WriteAllText(Path.Combine(workingDirectory, "seed.txt"), "seed");
+        var plan = ReplaceSectionBody(
+            PlannerContractPlanFixture(),
+            "## Target seams and symbols",
+            "- Keep `seed.txt` as the concrete seam, preserve `try/finally` behavior, and retain the `archive/` directory reference.");
+
+        var result = PlannerOutputContract.Resolve(plan, string.Empty, workingDirectory);
+
+        Xunit.Assert.True(result.Succeeded, result.Diagnostic);
+        Xunit.Assert.Contains("`try/finally`", result.Plan, StringComparison.Ordinal);
+        Xunit.Assert.Contains("`archive/`", result.Plan, StringComparison.Ordinal);
+        Xunit.Assert.DoesNotContain("Planner contract note", result.Plan, StringComparison.Ordinal);
+    }
+
+    [Xunit.Fact]
+    public void PlannerContract_BareUniqueRepositoryFilenameResolvesWithoutPrecedingFullPath()
+    {
+        var repositoryRoot = InfrastructureTestSupport.FindRepositoryRoot();
+        const string filename = "GoalOperationJournal.cs";
+        var fixtureMatches = FindNonExcludedRepositoryFixtureFiles(repositoryRoot, filename);
+        Xunit.Assert.True(
+            fixtureMatches.Length == 1,
+            $"Expected exactly one non-excluded '{filename}' fixture, found {fixtureMatches.Length}; re-pin this test to a real unique source filename.");
+        var plan = ReplaceSectionBody(
+            PlannerContractPlanFixture(),
+            "## Target seams and symbols",
+            $"- Extend `{filename}` with focused citation-resolution coverage.");
+
+        var result = PlannerOutputContract.Resolve(plan, string.Empty, repositoryRoot);
+
+        Xunit.Assert.True(result.Succeeded, result.Diagnostic);
+        Xunit.Assert.Contains($"`{filename}`", result.Plan, StringComparison.Ordinal);
+        Xunit.Assert.DoesNotContain("Planner contract note", result.Plan, StringComparison.Ordinal);
+    }
+
+    [Xunit.Fact]
+    public void PlannerContract_BareUniqueFilenameResolvesInIsolatedRepository()
+    {
+        var workingDirectory = CreateTempDirectory();
+        var nestedDirectory = Path.Combine(workingDirectory, "nested");
+        Directory.CreateDirectory(nestedDirectory);
+        File.WriteAllText(Path.Combine(nestedDirectory, "UniqueTarget.cs"), "// fixture");
+        var plan = ReplaceSectionBody(
+            PlannerContractPlanFixture(),
+            "## Target seams and symbols",
+            "- Extend `UniqueTarget.cs` with focused citation-resolution coverage.");
+
+        var result = PlannerOutputContract.Resolve(plan, string.Empty, workingDirectory);
+
+        Xunit.Assert.True(result.Succeeded, result.Diagnostic);
+    }
+
+    [Xunit.Fact]
+    public void PlannerContract_ExistingDirectoryProvidesSameLineContextForBareFilename()
+    {
+        var workingDirectory = CreateTempDirectory();
+        var contextualDirectory = Path.Combine(workingDirectory, "src", "feature");
+        Directory.CreateDirectory(contextualDirectory);
+        File.WriteAllText(Path.Combine(contextualDirectory, "Sibling.cs"), "// fixture");
+        var plan = ReplaceSectionBody(
+            PlannerContractPlanFixture(),
+            "## Target seams and symbols",
+            "- Inspect `src/feature` and extend same-line `Sibling.cs` with contextual resolution coverage.");
+
+        var result = PlannerOutputContract.Resolve(plan, string.Empty, workingDirectory);
+
+        Xunit.Assert.True(result.Succeeded, result.Diagnostic);
+    }
+
+    [Xunit.Fact]
+    public void PlannerContract_AmbiguousBareFilenameFailsWithCandidateDiagnostic()
+    {
+        var workingDirectory = CreateTempDirectory();
+        Directory.CreateDirectory(Path.Combine(workingDirectory, "first"));
+        Directory.CreateDirectory(Path.Combine(workingDirectory, "second"));
+        File.WriteAllText(Path.Combine(workingDirectory, "first", "Duplicate.cs"), "// first");
+        File.WriteAllText(Path.Combine(workingDirectory, "second", "Duplicate.cs"), "// second");
+        var plan = ReplaceSectionBody(
+            PlannerContractPlanFixture(),
+            "## Target seams and symbols",
+            "- Extend `Duplicate.cs` with focused ambiguity coverage.");
+
+        var result = PlannerOutputContract.Resolve(plan, string.Empty, workingDirectory);
+
         Xunit.Assert.False(result.Succeeded);
-        Xunit.Assert.Contains($"target citation '{citation}' does not exist", result.Diagnostic, StringComparison.Ordinal);
-        Xunit.Assert.Contains($"Offending citation: '{citation}'", result.Diagnostic, StringComparison.Ordinal);
+        Xunit.Assert.Contains("target citation 'Duplicate.cs' is ambiguous", result.Diagnostic, StringComparison.Ordinal);
+        Xunit.Assert.Contains("'first/Duplicate.cs'", result.Diagnostic, StringComparison.Ordinal);
+        Xunit.Assert.Contains("'second/Duplicate.cs'", result.Diagnostic, StringComparison.Ordinal);
+        Xunit.Assert.Contains("Offending citation: 'Duplicate.cs'", result.Diagnostic, StringComparison.Ordinal);
+    }
+
+    [Xunit.Fact]
+    public void PlannerContract_LineRangeSuffixResolvesAgainstExistingFile()
+    {
+        var workingDirectory = CreateTempDirectory();
+        var sourceDirectory = Path.Combine(workingDirectory, "src");
+        Directory.CreateDirectory(sourceDirectory);
+        File.WriteAllText(Path.Combine(sourceDirectory, "RangeTarget.cs"), "// fixture");
+        const string citation = "src/RangeTarget.cs:10-20";
+        var plan = ReplaceSectionBody(
+            PlannerContractPlanFixture(),
+            "## Target seams and symbols",
+            $"- Extend `{citation}` with focused line-range coverage.");
+
+        var result = PlannerOutputContract.Resolve(plan, string.Empty, workingDirectory);
+
+        Xunit.Assert.True(result.Succeeded, result.Diagnostic);
+        Xunit.Assert.Contains($"`{citation}`", result.Plan, StringComparison.Ordinal);
+        Xunit.Assert.DoesNotContain("Planner contract note", result.Plan, StringComparison.Ordinal);
+    }
+
+    [Xunit.Fact]
+    public void PlannerContract_ExcludedTreeDoesNotCreateFalseAmbiguity()
+    {
+        var workingDirectory = CreateTempDirectory();
+        foreach (var directory in new[] { "source", "bin", ".state" })
+        {
+            Directory.CreateDirectory(Path.Combine(workingDirectory, directory));
+            File.WriteAllText(Path.Combine(workingDirectory, directory, "VisibleTarget.cs"), "// fixture");
+        }
+
+        var plan = ReplaceSectionBody(
+            PlannerContractPlanFixture(),
+            "## Target seams and symbols",
+            "- Extend `VisibleTarget.cs` with focused exclusion coverage.");
+
+        var result = PlannerOutputContract.Resolve(plan, string.Empty, workingDirectory);
+
+        Xunit.Assert.True(result.Succeeded, result.Diagnostic);
     }
 
     [Xunit.Fact]
@@ -438,7 +573,7 @@ public sealed class PlannerOutputContractTests : WorkerDispatchTestSupport
     {
         var root = CreateSeededDispatchRepository();
         var clock = new TestClock(DateTimeOffset.Parse("2026-08-09T03:07:55Z"));
-        var citation = "tests/Mcg.AgentOrchestrator.Core.Tests/" + new string('Q', 600);
+        var citation = "tests/Mcg.AgentOrchestrator.Core.Tests/" + new string('Q', 600) + ".cs";
         var plan = ReplaceSectionBody(
             PlannerContractPlanFixture(),
             "## Target seams and symbols",
@@ -633,6 +768,37 @@ public sealed class PlannerOutputContractTests : WorkerDispatchTestSupport
             "Fixtures",
             "PlannerOutputContract",
             fileName);
+
+    private static bool IsExcludedRepositoryFixtureDirectory(string name) =>
+        name.StartsWith(".", StringComparison.Ordinal) ||
+        name.Equals("bin", StringComparison.OrdinalIgnoreCase) ||
+        name.Equals("obj", StringComparison.OrdinalIgnoreCase) ||
+        name.Equals("node_modules", StringComparison.OrdinalIgnoreCase) ||
+        name.Equals("TestResults", StringComparison.OrdinalIgnoreCase) ||
+        name.Equals("playwright-report", StringComparison.OrdinalIgnoreCase);
+
+    private static string[] FindNonExcludedRepositoryFixtureFiles(string repositoryRoot, string filename)
+    {
+        var matches = new List<string>();
+        var pendingDirectories = new Stack<string>();
+        pendingDirectories.Push(repositoryRoot);
+        while (pendingDirectories.TryPop(out var directory))
+        {
+            matches.AddRange(Directory.EnumerateFiles(directory, filename));
+            foreach (var childDirectory in Directory.EnumerateDirectories(directory))
+            {
+                if (IsExcludedRepositoryFixtureDirectory(Path.GetFileName(childDirectory)) ||
+                    (File.GetAttributes(childDirectory) & FileAttributes.ReparsePoint) != 0)
+                {
+                    continue;
+                }
+
+                pendingDirectories.Push(childDirectory);
+            }
+        }
+
+        return matches.ToArray();
+    }
 
     private static string ReadCanonicalArchivedFixture(string fileName, string expectedSha256)
     {
