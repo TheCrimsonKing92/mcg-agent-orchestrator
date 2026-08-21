@@ -71,7 +71,7 @@ public static class SharedJsonlFile
                     path,
                     FileMode.Append,
                     FileAccess.Write,
-                    FileShare.ReadWrite | FileShare.Delete,
+                    FileShare.Read | FileShare.Delete,
                     bufferSize: 1);
             }
             catch (IOException ex) when (IsShareViolation(ex) && retry < MaximumShareViolationRetries)

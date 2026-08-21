@@ -10,7 +10,11 @@ public sealed class SharedJsonlFileTests
         FileStream? heldWriter = null;
         try
         {
-            heldWriter = new FileStream(path, FileMode.Create, FileAccess.Write, FileShare.Read);
+            heldWriter = new FileStream(
+                path,
+                FileMode.Append,
+                FileAccess.Write,
+                FileShare.Read | FileShare.Delete);
             WriteRecord(heldWriter, "first");
 
             SharedJsonlFile.AppendLine(path, "second", retryNumber =>
@@ -36,7 +40,11 @@ public sealed class SharedJsonlFileTests
         var path = CreateJournalPath(root);
         try
         {
-            using var heldWriter = new FileStream(path, FileMode.Create, FileAccess.Write, FileShare.Read);
+            using var heldWriter = new FileStream(
+                path,
+                FileMode.Append,
+                FileAccess.Write,
+                FileShare.Read | FileShare.Delete);
             var retries = 0;
 
             Assert.Throws<IOException>(() =>
