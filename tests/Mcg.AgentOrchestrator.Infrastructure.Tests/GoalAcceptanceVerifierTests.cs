@@ -5345,6 +5345,8 @@ public sealed class GoalAcceptanceVerifierDotnetBuildSlotTests : GoalAcceptanceV
         var startOrder = new System.Collections.Concurrent.ConcurrentQueue<string>();
         try
         {
+            Assert.False(File.Exists(AcceptanceLaneDurationStore.ResolveStorePath(root)));
+
             async Task<GoalAcceptanceVerifier.CommandResult> RunEstimatedShardAsync(
                 string[] args,
                 string _,
@@ -5416,6 +5418,328 @@ public sealed class GoalAcceptanceVerifierDotnetBuildSlotTests : GoalAcceptanceV
             GoalAcceptanceVerifier.ResolveShardCoreBudgetForTests = null;
             ResetPartitionVerdictKeyHooks();
             DeleteDirectoryWithRetry(root);
+        }
+    }
+
+    [Xunit.Fact]
+    public async Task ConcurrentShards_ObservedHistory_UsesObservedOrder()
+    {
+        var root = CreateLaneOrderingWorkspace();
+        try
+        {
+            SeedLaneDurations(root, sampleCount: 3,
+                ("Light first", "FullyQualifiedName~LightFirstTests", 500),
+                ("Heavy alpha", "FullyQualifiedName~HeavyAlphaTests", 1),
+                ("Light second", "FullyQualifiedName~LightSecondTests", 500),
+                ("Heavy beta", "FullyQualifiedName~HeavyBetaTests", 1));
+
+            var (result, firstWave) = await RunLaneOrderingAsync(
+                root,
+                "observed",
+                "LightFirstTests",
+                "LightSecondTests");
+
+            Assert.True(result.Passed);
+            Assert.Contains(firstWave, filter => filter.Contains("LightFirstTests", StringComparison.Ordinal));
+            Assert.Contains(firstWave, filter => filter.Contains("LightSecondTests", StringComparison.Ordinal));
+        }
+        finally
+        {
+            DeleteDirectoryWithRetry(root);
+        }
+    }
+
+    [Xunit.Theory]
+    [Xunit.InlineData("empty")]
+    [Xunit.InlineData("below-threshold")]
+    public async Task ConcurrentShards_InsufficientHistory_UsesSeedOrder(string history)
+    {
+        var root = CreateLaneOrderingWorkspace();
+        try
+        {
+            if (history == "empty")
+            {
+                var path = AcceptanceLaneDurationStore.ResolveStorePath(root);
+                Directory.CreateDirectory(Path.GetDirectoryName(path)!);
+                File.WriteAllText(path, string.Empty);
+            }
+            else
+            {
+                SeedLaneDurations(root, sampleCount: 2,
+                    ("Light first", "FullyQualifiedName~LightFirstTests", 500),
+                    ("Heavy alpha", "FullyQualifiedName~HeavyAlphaTests", 1),
+                    ("Light second", "FullyQualifiedName~LightSecondTests", 500),
+                    ("Heavy beta", "FullyQualifiedName~HeavyBetaTests", 1));
+            }
+
+            var (result, firstWave) = await RunLaneOrderingAsync(
+                root,
+                history,
+                "HeavyAlphaTests",
+                "HeavyBetaTests");
+
+            Assert.True(result.Passed);
+            Assert.Contains(firstWave, filter => filter.Contains("HeavyAlphaTests", StringComparison.Ordinal));
+            Assert.Contains(firstWave, filter => filter.Contains("HeavyBetaTests", StringComparison.Ordinal));
+        }
+        finally
+        {
+            DeleteDirectoryWithRetry(root);
+        }
+    }
+
+    [Xunit.Fact]
+    public async Task ConcurrentShards_ChangedFilter_DiscardsHistory()
+    {
+        var root = CreateLaneOrderingWorkspace("FullyQualifiedName~LightFirstRenamedTests");
+        try
+        {
+            SeedLaneDurations(root, sampleCount: 3,
+                ("Light first", "FullyQualifiedName~LightFirstTests", 500));
+            var changed = LaneCheck(
+                "Light first",
+                "FullyQualifiedName~LightFirstRenamedTests",
+                seed: 1);
+            using (AcceptanceLaneDurationStore.PushRecordingScope(root))
+            {
+                Assert.Equal(1d, AcceptanceLaneDurationStore.ResolveSortSeconds(changed));
+            }
+
+            var (result, firstWave) = await RunLaneOrderingAsync(
+                root,
+                "changed-filter",
+                "HeavyAlphaTests",
+                "HeavyBetaTests");
+
+            Assert.True(result.Passed);
+            Assert.Contains(firstWave, filter => filter.Contains("HeavyAlphaTests", StringComparison.Ordinal));
+            Assert.Contains(firstWave, filter => filter.Contains("HeavyBetaTests", StringComparison.Ordinal));
+        }
+        finally
+        {
+            DeleteDirectoryWithRetry(root);
+        }
+    }
+
+    [Xunit.Fact]
+    public void EffectivePlanIdentity_ObservedHistory_IsByteIdentical()
+    {
+        var root = CreateLaneOrderingWorkspace();
+        try
+        {
+            var withoutHistory = GoalAcceptanceVerifier.ComputeEffectiveAcceptancePlanIdentity(root);
+            var lightFirst = LaneCheck("Light first", "FullyQualifiedName~LightFirstTests", seed: 1);
+            SeedLaneDurations(root, sampleCount: 3,
+                ("Light first", "FullyQualifiedName~LightFirstTests", 500));
+            using (AcceptanceLaneDurationStore.PushRecordingScope(root))
+            {
+                Assert.Equal(500d, AcceptanceLaneDurationStore.ResolveSortSeconds(lightFirst));
+            }
+
+            var withHistory = GoalAcceptanceVerifier.ComputeEffectiveAcceptancePlanIdentity(root);
+
+            Assert.Equal(withoutHistory, withHistory);
+        }
+        finally
+        {
+            DeleteDirectoryWithRetry(root);
+        }
+    }
+
+    [Xunit.Fact]
+    public async Task FailedGate_DoesNotPersistShardDurations()
+    {
+        var root = CreateLaneOrderingWorkspace(failForbiddenPathCheck: true);
+        try
+        {
+            var (result, _) = await RunLaneOrderingAsync(
+                root,
+                "failed-gate",
+                "HeavyAlphaTests",
+                "HeavyBetaTests",
+                forbiddenChangedPath: "bin/generated.dll");
+
+            Assert.False(result.Passed);
+            Assert.Contains(result.Checks!, check =>
+                check.Name == "forbidden changed paths" && !check.Passed);
+            Assert.False(File.Exists(AcceptanceLaneDurationStore.ResolveStorePath(root)));
+        }
+        finally
+        {
+            DeleteDirectoryWithRetry(root);
+        }
+    }
+
+    private static string CreateLaneOrderingWorkspace(
+        string lightFirstFilter = "FullyQualifiedName~LightFirstTests",
+        bool failForbiddenPathCheck = false)
+    {
+        var forbiddenChangedPathGlobs = failForbiddenPathCheck ? "[ \"bin/**\" ]" : "[]";
+        return CreateManifestWorkspace($$"""
+            {
+              "version": 1,
+              "engine": {
+                "maxConcurrentShards": 2,
+                "infrastructureTestLanes": [
+                  {
+                    "name": "Light first",
+                    "filter": "{{lightFirstFilter}}",
+                    "estimatedSerialSeconds": 1
+                  },
+                  {
+                    "name": "Heavy alpha",
+                    "filter": "FullyQualifiedName~HeavyAlphaTests",
+                    "estimatedSerialSeconds": 100
+                  },
+                  {
+                    "name": "Light second",
+                    "filter": "FullyQualifiedName~LightSecondTests",
+                    "estimatedSerialSeconds": 2
+                  },
+                  {
+                    "name": "Heavy beta",
+                    "filter": "FullyQualifiedName~HeavyBetaTests",
+                    "estimatedSerialSeconds": 99
+                  }
+                ],
+                "mtpInvocations": [
+                  {
+                    "project": "tests/Mcg.AgentOrchestrator.Infrastructure.Tests/Mcg.AgentOrchestrator.Infrastructure.Tests.csproj",
+                    "executablePathTemplate": "bin/{projectName}/{configuration}/{projectName}{executableExtension}",
+                    "firewallExecutablePathTemplate": "bin/{projectName}/{configuration}/{projectName}.exe",
+                    "arguments": [
+                      "{executable}",
+                      "--results-directory",
+                      "{resultsDirectory}",
+                      "--report-trx-filename",
+                      "{trxFileName}"
+                    ]
+                  }
+                ]
+              },
+              "checks": [
+                {
+                  "name": "infrastructure tests",
+                  "type": "dotnet-test",
+                  "runner": "mtp",
+                  "project": "tests/Mcg.AgentOrchestrator.Infrastructure.Tests/Mcg.AgentOrchestrator.Infrastructure.Tests.csproj"
+                }
+              ],
+              "forbiddenChangedPathGlobs": {{forbiddenChangedPathGlobs}}
+            }
+            """);
+    }
+
+    private static void SeedLaneDurations(
+        string root,
+        int sampleCount,
+        params (string Name, string Filter, double Seconds)[] lanes)
+    {
+        for (var sample = 0; sample < sampleCount; sample++)
+        {
+            using var scope = AcceptanceLaneDurationStore.PushRecordingScope(root);
+            foreach (var lane in lanes)
+            {
+                var check = LaneCheck(lane.Name, lane.Filter, seed: 1);
+                AcceptanceLaneDurationStore.Record(
+                    check,
+                    new AcceptanceCheckResult(check.Name, true, 0, null),
+                    TimeSpan.FromSeconds(lane.Seconds));
+            }
+
+            AcceptanceLaneDurationStore.Flush();
+        }
+    }
+
+    private static GoalAcceptanceVerifier.AcceptanceManifestCheck LaneCheck(
+        string laneName,
+        string filter,
+        double seed) =>
+        new()
+        {
+            Name = $"infrastructure tests: {laneName}",
+            Type = "dotnet-test",
+            Project = "tests/Mcg.AgentOrchestrator.Infrastructure.Tests/Mcg.AgentOrchestrator.Infrastructure.Tests.csproj",
+            Arguments = ["--filter", filter],
+            EstimatedSerialSeconds = seed
+        };
+
+    private async Task<(AcceptanceVerificationResult Result, string[] FirstWave)> RunLaneOrderingAsync(
+        string root,
+        string hookSuffix,
+        string firstExpectedFilter,
+        string secondExpectedFilter,
+        string? forbiddenChangedPath = null)
+    {
+        GoalAcceptanceVerifier.ResolveShardCoreBudgetForTests = () => 2;
+        SetPartitionVerdictKeyHooks($"tree-{hookSuffix}", $"main-{hookSuffix}", $"commit-{hookSuffix}");
+        var firstStarted = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var secondStarted = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var startOrder = new System.Collections.Concurrent.ConcurrentQueue<string>();
+        try
+        {
+            async Task<GoalAcceptanceVerifier.CommandResult> RunShardAsync(
+                string[] args,
+                string _,
+                CancellationToken _cancellationToken)
+            {
+                if (args.Length > 0 && args[0] == "dotnet")
+                {
+                    if (args.Length >= 2 && args[1] == "build")
+                    {
+                        var executable = Path.Combine(
+                            GetArtifactsPath(args),
+                            "bin",
+                            "Mcg.AgentOrchestrator.Infrastructure.Tests",
+                            "debug",
+                            "Mcg.AgentOrchestrator.Infrastructure.Tests.exe");
+                        Directory.CreateDirectory(Path.GetDirectoryName(executable)!);
+                        File.WriteAllText(executable, "deterministic shard fixture");
+                    }
+
+                    return new GoalAcceptanceVerifier.CommandResult(0, "Build succeeded.");
+                }
+
+                if (args.SequenceEqual(["git", "diff", "--name-only", "main...HEAD"]))
+                {
+                    return new GoalAcceptanceVerifier.CommandResult(0, forbiddenChangedPath ?? string.Empty);
+                }
+
+                WriteMtpTrx(args);
+                var filterIndex = Array.IndexOf(args, "--filter-class");
+                Assert.True(filterIndex >= 0 && filterIndex + 1 < args.Length);
+                var filter = args[filterIndex + 1];
+                startOrder.Enqueue(filter);
+                if (filter.Contains(firstExpectedFilter, StringComparison.Ordinal))
+                {
+                    firstStarted.TrySetResult();
+                    await secondStarted.Task.WaitAsync(TimeSpan.FromSeconds(5));
+                }
+                else if (filter.Contains(secondExpectedFilter, StringComparison.Ordinal))
+                {
+                    secondStarted.TrySetResult();
+                    await firstStarted.Task.WaitAsync(TimeSpan.FromSeconds(5));
+                }
+
+                return new GoalAcceptanceVerifier.CommandResult(0, "Passed: 1");
+            }
+
+            var verifier = new GoalAcceptanceVerifier(RunShardAsync);
+            using var lease = DotnetBuildEnvironmentManager.AcquireFirstAvailableStableSlotExecutionLock(
+                TimeSpan.FromSeconds(2));
+            var result = await verifier.RunAsync(
+                root,
+                new GoalId("44444444444444444444444444444444"),
+                stableSlotIndex: StableSlotIndex(lease.Environment.ArtifactsPath),
+                stableSlotLease: lease);
+            var firstWave = startOrder.Take(2).ToArray();
+            Assert.Equal(2, firstWave.Length);
+            return (result, firstWave);
+        }
+        finally
+        {
+            GoalAcceptanceVerifier.ResolveShardCoreBudgetForTests = null;
+            ResetPartitionVerdictKeyHooks();
         }
     }
 
