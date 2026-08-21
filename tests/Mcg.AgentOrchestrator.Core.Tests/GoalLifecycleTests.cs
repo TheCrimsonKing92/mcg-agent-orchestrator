@@ -801,6 +801,39 @@ public sealed class GoalLifecycleTests
     }
 
     [Xunit.Fact]
+    public void RetryTask_invalidates_retained_downstream_when_requeued_attempt_matches_current_but_not_reviewed_candidate()
+    {
+        var kernel = new AgentOrchestratorKernel();
+        var goal = kernel.CreateGoal("Retry through an interrupted changed attempt",
+            [
+                new TaskSpec(TaskId.New(), "Implement fix", AgentRole.Developer),
+                new TaskSpec(TaskId.New(), "Test fix", AgentRole.Tester)
+            ]);
+        kernel.ActivateGoal(goal.Id, DefaultAgents());
+        var developer = goal.Tasks.Single(task => task.RequiredRole == AgentRole.Developer);
+        var tester = goal.Tasks.Single(task => task.RequiredRole == AgentRole.Tester);
+        CompleteCandidateDispatch(kernel, goal, developer, "aaa111", "aaa111");
+        CompleteCandidateDispatch(kernel, goal, tester, "aaa111", "aaa111");
+
+        kernel.RetryTask(goal.Id, developer.Id, "Revise the candidate.");
+        kernel.RecordTaskDispatch(
+            goal.Id,
+            developer.Id,
+            new TaskDispatchRecord("Developer", "worker", "C:\\repo", DateTimeOffset.UtcNow));
+        kernel.RecordDispatchResultCommit(goal.Id, developer.Id, "bbb222");
+        kernel.RequeueInterruptedDispatch(goal.Id, developer.Id, "Retry the interrupted changed attempt.");
+        CompleteCandidateDispatch(kernel, goal, developer, "bbb222", "bbb222");
+
+        Assert.Equal(WorkTaskStatus.Assigned, tester.Status);
+        Assert.Null(tester.LastVerification);
+        Assert.Single(tester.VerificationHistory);
+        Assert.Contains(goal.Timeline, evt =>
+            evt.TaskId == tester.Id &&
+            evt.Kind == ProgressKind.TaskRetried &&
+            evt.Message.Contains("changed candidate from aaa111 to bbb222", StringComparison.Ordinal));
+    }
+
+    [Xunit.Fact]
     public void RetryTask_invalidates_downstream_when_candidate_identity_is_indeterminate()
     {
         var missingPriorKernel = new AgentOrchestratorKernel();
@@ -880,6 +913,54 @@ public sealed class GoalLifecycleTests
             evt.TaskId == tester.Id &&
             evt.Kind == ProgressKind.TaskRetried &&
             evt.Message.Contains("result unknown", StringComparison.Ordinal));
+    }
+
+    [Xunit.Fact]
+    public void RecordTaskProcessCancelled_invalidates_retained_downstream_when_current_candidate_is_indeterminate()
+    {
+        var clock = new FakeClock();
+        var kernel = new AgentOrchestratorKernel(clock);
+        var goal = kernel.CreateGoal("Cancel a retried task with retained downstream evidence",
+            [
+                new TaskSpec(TaskId.New(), "Implement fix", AgentRole.Developer),
+                new TaskSpec(TaskId.New(), "Test fix", AgentRole.Tester)
+            ]);
+        kernel.ActivateGoal(goal.Id, DefaultAgents());
+        var developer = goal.Tasks.Single(task => task.RequiredRole == AgentRole.Developer);
+        var tester = goal.Tasks.Single(task => task.RequiredRole == AgentRole.Tester);
+        CompleteCandidateDispatch(kernel, goal, developer, "aaa111", "aaa111");
+        CompleteCandidateDispatch(kernel, goal, tester, "aaa111", "aaa111");
+
+        kernel.RetryTask(goal.Id, developer.Id, "Retry before cancellation.");
+        kernel.RecordTaskDispatch(
+            goal.Id,
+            developer.Id,
+            new TaskDispatchRecord("Developer", "worker", "C:\\repo", clock.UtcNow));
+        var started = new TaskProcessRecord(
+            1234,
+            "worker",
+            "C:\\repo",
+            "out.log",
+            "err.log",
+            "exit.txt",
+            clock.UtcNow,
+            null,
+            null);
+        kernel.RecordTaskProcessStarted(goal.Id, developer.Id, started);
+        kernel.RecordTaskProcessCancelled(
+            goal.Id,
+            developer.Id,
+            started with { CompletedAt = clock.UtcNow, WasCancelled = true });
+
+        Assert.Equal(WorkTaskStatus.Cancelled, developer.Status);
+        Assert.Equal(WorkTaskStatus.Assigned, tester.Status);
+        Assert.Null(tester.LastVerification);
+        Assert.Single(tester.VerificationHistory);
+        Assert.False(kernel.BuildVerificationGate(goal.Id).IsSatisfied);
+        Assert.Contains(goal.Timeline, evt =>
+            evt.TaskId == tester.Id &&
+            evt.Kind == ProgressKind.TaskRetried &&
+            evt.Message.Contains("result unknown; status Cancelled", StringComparison.Ordinal));
     }
 
     [Xunit.Fact]

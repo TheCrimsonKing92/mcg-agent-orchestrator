@@ -1203,36 +1203,30 @@ public sealed partial class AgentOrchestratorKernel
 
     private void ReconcileRetainedDownstreamTasks(Goal goal, TaskSpec retriedTask, DateTimeOffset reconciledAt)
     {
-        var dispatchHistory = retriedTask.DispatchHistory;
-        var priorDispatchCount = retriedTask.LastDispatch is null
-            ? dispatchHistory.Count
-            : Math.Max(0, dispatchHistory.Count - 1);
-        var priorCandidate = dispatchHistory
-            .Take(priorDispatchCount)
-            .Reverse()
-            .Select(dispatch => dispatch.ResultCommit)
-            .FirstOrDefault(candidate => !string.IsNullOrWhiteSpace(candidate));
-        var currentCandidateSha = retriedTask.LastDispatch?.ResultCommit;
-        if (priorCandidate is null ||
-            retriedTask.Status == WorkTaskStatus.Completed &&
-            SameNonEmptyReviewedCommit(priorCandidate, currentCandidateSha))
+        if (retriedTask.LatestRetryAt is null)
         {
             return;
         }
 
+        var currentCandidateSha = retriedTask.Status == WorkTaskStatus.Completed
+            ? retriedTask.LastDispatch?.ResultCommit
+            : null;
         var currentCandidateKnown = !string.IsNullOrWhiteSpace(currentCandidateSha);
         var currentCandidate = !currentCandidateKnown
             ? "unknown"
             : currentCandidateSha!.Trim();
-        var invalidationReason = retriedTask.Status == WorkTaskStatus.Completed && currentCandidateKnown
-            ? $"changed candidate from {priorCandidate.Trim()} to {currentCandidate}"
-            : $"did not prove candidate {priorCandidate.Trim()} unchanged (result {currentCandidate}; status {retriedTask.Status})";
         foreach (var downstream in goal.Tasks.Where(task =>
                      IsDownstreamRole(retriedTask.RequiredRole, task.RequiredRole) &&
                      task.Status == WorkTaskStatus.Completed &&
                      task.LastVerification is not null &&
-                     SameNonEmptyReviewedCommit(task.LastVerification.ReviewedCommit, priorCandidate)))
+                     !SameNonEmptyReviewedCommit(task.LastVerification.ReviewedCommit, currentCandidateSha)))
         {
+            var reviewedCandidate = string.IsNullOrWhiteSpace(downstream.LastVerification!.ReviewedCommit)
+                ? "unknown"
+                : downstream.LastVerification.ReviewedCommit.Trim();
+            var invalidationReason = retriedTask.Status == WorkTaskStatus.Completed && currentCandidateKnown
+                ? $"changed candidate from {reviewedCandidate} to {currentCandidate}"
+                : $"did not prove candidate {reviewedCandidate} unchanged (result {currentCandidate}; status {retriedTask.Status})";
             ResetTaskForRetry(downstream, reconciledAt);
             Append(
                 goal,
@@ -1508,6 +1502,7 @@ public sealed partial class AgentOrchestratorKernel
                             $"worker_result_log={FormatWorkerResultLogReference(workerResultLogReference)}; suppression threshold " +
                             $"{DuplicateHumanInputSuppressionThreshold} reached. Automatic redispatch stopped.");
                     }
+
                 }
             }
             else if (task.Status != WorkTaskStatus.Completed)
