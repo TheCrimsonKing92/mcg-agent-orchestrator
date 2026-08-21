@@ -4420,6 +4420,58 @@ public sealed class ConductorDriverTests
     }
 
     [Xunit.Fact]
+    public void ReceiptlessUnclassifiedEvidenceOutcomesDoNotRerun()
+    {
+        FindingEvidenceNotHonouredReason?[] unclassifiedReasons =
+        [
+            FindingEvidenceNotHonouredReason.Unknown,
+            FindingEvidenceNotHonouredReason.PerRoundCap,
+            null,
+            (FindingEvidenceNotHonouredReason)int.MaxValue
+        ];
+
+        foreach (var reason in unclassifiedReasons)
+        {
+            var (kernel, goal) = SoftwareGoal();
+            var tester = goal.Tasks.Single(task => task.RequiredRole == AgentRole.Tester);
+            var reviewer = goal.Tasks.Single(task => task.RequiredRole == AgentRole.Reviewer);
+            foreach (var task in goal.Tasks.Where(task => task.RequiredRole != AgentRole.Reviewer))
+            {
+                PassVerification(kernel, goal, task);
+            }
+
+            var finding = EvidenceFindingWithRequest(
+                "An unclassified receiptless outcome must not replay unchanged.",
+                id: "unclassified-receiptless-outcome");
+            FailReviewerNeedsWork(kernel, goal, reviewer, "focused evidence required", findings: [finding]);
+            kernel.RecordFindingEvidenceOutcome(
+                goal.Id,
+                reviewer.Id,
+                finding.StableId,
+                new FindingEvidenceOutcome(Honoured: false, Reason: reason));
+            var focusedRuns = 0;
+            TaskId? retriedTaskId = null;
+            var driver = MakeDriver(
+                getPreReviewEvidenceContext: _ => NoPreReviewContext("abc1234"),
+                runFocusedEvidence: (_, request) =>
+                {
+                    focusedRuns++;
+                    return new FocusedEvidenceRunResult(request, true, true, "must not run", []);
+                },
+                retryTask: (goalId, taskId, message) =>
+                {
+                    retriedTaskId = taskId;
+                    return kernel.RetryTask(goalId, taskId, message);
+                });
+
+            driver.AdvanceOnce(goal, ConductorAutonomyPolicy.Permissive);
+
+            Assert.Equal(0, focusedRuns);
+            Assert.Equal(tester.Id, retriedTaskId);
+        }
+    }
+
+    [Xunit.Fact]
     public void FindingEvidenceRawLengthCannotBeTrimmedBelowBound()
     {
         var (kernel, goal) = SoftwareGoal();
