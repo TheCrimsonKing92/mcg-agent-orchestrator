@@ -7131,7 +7131,7 @@ public sealed class GoalAcceptanceVerifierDotnetBuildSlotTests : GoalAcceptanceV
         var infrastructureCalls = calls
             .Where(IsInfrastructurePartitionTestCall)
             .ToArray();
-        var laneCount = AcceptanceGateEngineSettings.Load(root).InfrastructureTestLanes.Count;
+        var laneCount = CountChangeScopedInfrastructureTestLanes(root);
         Assert.Equal(laneCount, infrastructureCalls.Length);
         Assert.DoesNotContain(calls, call => call.Contains("tests/Mcg.AgentOrchestrator.Core.Tests/Mcg.AgentOrchestrator.Core.Tests.csproj", StringComparer.Ordinal));
         foreach (var call in infrastructureCalls)
@@ -7821,7 +7821,7 @@ public sealed class GoalAcceptanceVerifierDotnetBuildSlotTests : GoalAcceptanceV
 
         Assert.True(result.Passed);
         Assert.Equal(
-            AcceptanceGateEngineSettings.Load(root).InfrastructureTestLanes.Count + 5,
+            CountChangeScopedInfrastructureTestLanes(root) + 5,
             calls.Count);
         Assert.Equal("tests/Mcg.AgentOrchestrator.Core.Tests/Mcg.AgentOrchestrator.Core.Tests.csproj", calls[2][2]);
         var infrastructureCalls = calls
@@ -7830,7 +7830,7 @@ public sealed class GoalAcceptanceVerifierDotnetBuildSlotTests : GoalAcceptanceV
                 call[1] == "test" &&
                 call[2] == "tests/Mcg.AgentOrchestrator.Infrastructure.Tests/Mcg.AgentOrchestrator.Infrastructure.Tests.csproj")
             .ToArray();
-        var laneCount = AcceptanceGateEngineSettings.Load(root).InfrastructureTestLanes.Count;
+        var laneCount = CountChangeScopedInfrastructureTestLanes(root);
         Assert.Equal(laneCount, infrastructureCalls.Length);
         foreach (var call in infrastructureCalls)
             Assert.Contains("--filter", call);
@@ -7874,7 +7874,7 @@ public sealed class GoalAcceptanceVerifierDotnetBuildSlotTests : GoalAcceptanceV
         var infrastructureCalls = calls
             .Where(IsInfrastructurePartitionTestCall)
             .ToArray();
-        var laneCount = AcceptanceGateEngineSettings.Load(root).InfrastructureTestLanes.Count;
+        var laneCount = CountChangeScopedInfrastructureTestLanes(root);
         Assert.Equal(laneCount, infrastructureCalls.Length);
         Assert.DoesNotContain(calls, call => call.Contains("Mcg.AgentOrchestrator.sln", StringComparer.OrdinalIgnoreCase));
         foreach (var call in infrastructureCalls)
@@ -7937,7 +7937,7 @@ public sealed class GoalAcceptanceVerifierDotnetBuildSlotTests : GoalAcceptanceV
         var infrastructureCalls = calls
             .Where(IsInfrastructurePartitionTestCall)
             .ToArray();
-        var laneCount = AcceptanceGateEngineSettings.Load(root).InfrastructureTestLanes.Count;
+        var laneCount = CountChangeScopedInfrastructureTestLanes(root);
         Assert.Equal(laneCount, infrastructureCalls.Length);
         // The substituted infrastructure shards are MTP, so every shard carries a translated class filter.
         foreach (var call in infrastructureCalls)
@@ -8444,6 +8444,10 @@ public sealed class GoalAcceptanceVerifierDotnetBuildSlotTests : GoalAcceptanceV
 
     private static int CountInfrastructurePartitionTestCalls(IEnumerable<string[]> calls) =>
         calls.Count(IsInfrastructurePartitionTestCall);
+
+    private static int CountChangeScopedInfrastructureTestLanes(string root) =>
+        AcceptanceGateEngineSettings.Load(root).InfrastructureTestLanes.Count(
+            lane => !lane.RequiresBuildSystemChange);
 
     // A partition shard for Infrastructure.Tests appears as exactly one command per shard, in one of
     // two runner shapes depending on how the check was synthesized:
@@ -9547,7 +9551,7 @@ public sealed class GoalAcceptanceVerifierDotnetBuildSlotTests : GoalAcceptanceV
         var infrastructureCalls = calls
             .Where(IsInfrastructurePartitionTestCall)
             .ToArray();
-        var laneCount = AcceptanceGateEngineSettings.Load(root).InfrastructureTestLanes.Count;
+        var laneCount = CountChangeScopedInfrastructureTestLanes(root);
         Assert.Equal(laneCount, infrastructureCalls.Length);
         foreach (var call in infrastructureCalls)
             Assert.True(
