@@ -47,6 +47,7 @@ internal sealed partial class ConductorDriver
     private sealed record CohortGateRun(
         DateTimeOffset StartedAt,
         IReadOnlySet<string> MemberGoalIds,
+        string PairFingerprint,
         TaskCompletionSource Completion);
 
     private sealed class TransferableCohortWorkspace(AcceptanceCohortWorkspace workspace) : IDisposable
@@ -3227,7 +3228,7 @@ internal sealed partial class ConductorDriver
 
             var elapsed = _utcNow() - pair.Value.StartedAt;
             detail =
-                $"outcome=inflight fingerprint={pair.Key} elapsed_ms={Math.Max(0L, (long)elapsed.TotalMilliseconds)}";
+                $"outcome=inflight fingerprint={pair.Value.PairFingerprint} elapsed_ms={Math.Max(0L, (long)elapsed.TotalMilliseconds)}";
             return true;
         }
 
@@ -3269,7 +3270,8 @@ internal sealed partial class ConductorDriver
         var pairFingerprint = ConductorAcceptanceCohortSelector.PairFingerprint(
             selection.Members[0],
             selection.Members[1]);
-        if (_cohortGateRuns.TryGetValue(pairFingerprint, out var currentRun))
+        var memberPairKey = CohortGateMemberPairKey(selection);
+        if (_cohortGateRuns.TryGetValue(memberPairKey, out var currentRun))
         {
             if (!currentRun.Completion.Task.IsCompleted)
             {
@@ -3277,11 +3279,11 @@ internal sealed partial class ConductorDriver
                     selection,
                     orderedGoals,
                     policy,
-                    pairFingerprint,
+                    currentRun.PairFingerprint,
                     currentRun.StartedAt);
             }
 
-            _cohortGateRuns.TryRemove(pairFingerprint, out _);
+            _cohortGateRuns.TryRemove(memberPairKey, out _);
             currentRun.Completion.Task.GetAwaiter().GetResult();
         }
         SweepCompletedCohortGateRuns();
@@ -3377,15 +3379,17 @@ internal sealed partial class ConductorDriver
                     selection.Members
                         .Select(member => member.GoalId.Value)
                         .ToHashSet(StringComparer.Ordinal),
+                    pairFingerprint,
                     new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously));
-                if (!_cohortGateRuns.TryAdd(pairFingerprint, run))
+                if (!_cohortGateRuns.TryAdd(memberPairKey, run))
                 {
+                    var competingRun = _cohortGateRuns[memberPairKey];
                     return CohortInFlight(
                         selection,
                         orderedGoals,
                         policy,
-                        pairFingerprint,
-                        _cohortGateRuns[pairFingerprint].StartedAt);
+                        competingRun.PairFingerprint,
+                        competingRun.StartedAt);
                 }
 
                 var ownedIntegration = integrationScope.Transfer();
@@ -3765,6 +3769,13 @@ internal sealed partial class ConductorDriver
             completed.Completion.Task.GetAwaiter().GetResult();
         }
     }
+
+    private static string CohortGateMemberPairKey(ConductorAcceptanceCohortSelection selection) =>
+        string.Join(
+            ":",
+            selection.Members
+                .Select(member => member.GoalId.Value)
+                .OrderBy(goalId => goalId, StringComparer.Ordinal));
 
     private ConductorAcceptanceCohortRunResult CohortInFlight(
         ConductorAcceptanceCohortSelection selection,

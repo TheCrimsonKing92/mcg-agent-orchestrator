@@ -1651,6 +1651,106 @@ public sealed class AcceptanceCohortWorkflowTests : GoalWorktreeTestBase
     }
 
     [Fact]
+    public void BackgroundCohortGate_MainAdvanceDoesNotLaunchDuplicateForSameMembers()
+    {
+        var repo = CreateReducedAcceptanceCohortRepository();
+        var trx = Path.Combine(Path.GetTempPath(), $"cohort-member-pair-{Guid.NewGuid():N}.trx");
+        using var gateStarted = new ManualResetEventSlim();
+        using var gateRelease = new ManualResetEventSlim();
+        var previousIsolatedRoot = Environment.GetEnvironmentVariable(
+            DotnetBuildEnvironmentManager.IsolatedRootOverrideVariable);
+        try
+        {
+            Environment.SetEnvironmentVariable(
+                DotnetBuildEnvironmentManager.IsolatedRootOverrideVariable,
+                Path.Combine(repo, ".dotnet-test-root"));
+            AddAcceptanceManifest(repo);
+            File.WriteAllText(trx, ValidPassingTrx());
+            var kernel = new AgentOrchestratorKernel();
+            var firstGoal = CreateCompletedGoal(kernel, "First stable member-pair member", repo);
+            var secondGoal = CreateCompletedGoal(kernel, "Second stable member-pair member", repo);
+            _ = CreateWorktreeCandidate(
+                repo,
+                firstGoal.Id,
+                "src/Mcg.AgentOrchestrator.Infrastructure/First.cs",
+                "first");
+            _ = CreateWorktreeCandidate(repo, secondGoal.Id, "tests/Second.cs", "second");
+            var verifier = new BlockingAcceptanceVerifier(
+                gateStarted,
+                gateRelease,
+                new AcceptanceVerificationResult(
+                    Passed: true,
+                    Skipped: false,
+                    ExitCode: 0,
+                    OutputTail: null,
+                    Checks: [new AcceptanceCheckResult("shared-member-pair-gate", true, 0, null)],
+                    TestResultPaths: [trx]));
+            var driver = new ConductorDriver(
+                kernel,
+                OrchestratorWorkspace.ForDirectory(repo),
+                verifier,
+                AgentCatalog.Default().Agents,
+                WorkerProfileCatalog.Default());
+            var selection = ProjectSelection(driver, firstGoal, secondGoal);
+            var originalPairFingerprint = ConductorAcceptanceCohortSelector.PairFingerprint(
+                selection.Members[0],
+                selection.Members[1]);
+
+            var first = driver.RunAcceptanceCohort(
+                selection,
+                [firstGoal, secondGoal],
+                ConductorAutonomyPolicy.Permissive,
+                runGateInBackground: true);
+
+            Assert.Contains("outcome=inflight", first.Detail, StringComparison.Ordinal);
+            Assert.True(gateStarted.Wait(TimeSpan.FromSeconds(10)), "The controlled cohort verifier did not start.");
+            Assert.Equal(1, verifier.RunCount);
+            Assert.Single(Directory.EnumerateDirectories(
+                Path.Combine(repo, GoalWorktrees.DirectoryName),
+                "c-*"));
+
+            File.WriteAllText(Path.Combine(repo, "main-advanced.txt"), "main advanced while cohort gate remained held");
+            RunGit(repo, "add", "main-advanced.txt");
+            RunGit(repo, "commit", "-m", "Advance main during cohort gate");
+            var revisedSelection = ProjectSelection(driver, firstGoal, secondGoal);
+            Assert.NotEqual(selection.Members[0].MainRevision, revisedSelection.Members[0].MainRevision);
+            Assert.NotEqual(
+                originalPairFingerprint,
+                ConductorAcceptanceCohortSelector.PairFingerprint(
+                    revisedSelection.Members[0],
+                    revisedSelection.Members[1]));
+
+            var held = driver.RunAcceptanceCohort(
+                revisedSelection,
+                [firstGoal, secondGoal],
+                ConductorAutonomyPolicy.Permissive,
+                runGateInBackground: true);
+
+            Assert.Contains("outcome=inflight", held.Detail, StringComparison.Ordinal);
+            Assert.Contains($"fingerprint={originalPairFingerprint}", held.Detail, StringComparison.Ordinal);
+            Assert.Equal(1, verifier.RunCount);
+            Assert.Single(Directory.EnumerateDirectories(
+                Path.Combine(repo, GoalWorktrees.DirectoryName),
+                "c-*"));
+        }
+        finally
+        {
+            gateRelease.Set();
+            _ = SpinWait.SpinUntil(
+                () => !Directory.Exists(repo) ||
+                      !Directory.EnumerateDirectories(
+                          Path.Combine(repo, GoalWorktrees.DirectoryName),
+                          "c-*").Any(),
+                TimeSpan.FromSeconds(10));
+            Environment.SetEnvironmentVariable(
+                DotnetBuildEnvironmentManager.IsolatedRootOverrideVariable,
+                previousIsolatedRoot);
+            if (File.Exists(trx)) File.Delete(trx);
+            DeleteDirectory(repo);
+        }
+    }
+
+    [Fact]
     public void ProductionBatch_LongCohortGateDoesNotBlockTicksOrOperatorIntents_AndReconcilesLater()
     {
         var repo = CreateReducedAcceptanceCohortRepository();
