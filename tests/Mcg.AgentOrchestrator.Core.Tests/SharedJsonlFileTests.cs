@@ -3,6 +3,28 @@ using Mcg.AgentOrchestrator.Core;
 public sealed class SharedJsonlFileTests
 {
     [Xunit.Fact]
+    public void ReadAllLines_AppenderIsOpen_ReturnsCompleteLines()
+    {
+        var root = CreateTempDirectory();
+        var path = CreateJournalPath(root);
+        try
+        {
+            using var heldWriter = new FileStream(
+                path,
+                FileMode.Append,
+                FileAccess.Write,
+                FileShare.Read);
+            WriteRecord(heldWriter, "first");
+
+            Assert.Equal(new[] { "first" }, SharedJsonlFile.ReadAllLines(path));
+        }
+        finally
+        {
+            Directory.Delete(root, recursive: true);
+        }
+    }
+
+    [Xunit.Fact]
     public void SharedJsonlFile_AppendUnderShareViolation_PreservesBothRecordsInOrder()
     {
         var root = CreateTempDirectory();
@@ -25,6 +47,37 @@ public sealed class SharedJsonlFileTests
             });
 
             Assert.Equal(new[] { "first", "second" }, File.ReadAllLines(path));
+        }
+        finally
+        {
+            heldWriter?.Dispose();
+            Directory.Delete(root, recursive: true);
+        }
+    }
+
+    [Xunit.Fact]
+    public void AppendLines_ShareViolation_PreservesAllRecords()
+    {
+        var root = CreateTempDirectory();
+        var path = CreateJournalPath(root);
+        FileStream? heldWriter = null;
+        try
+        {
+            heldWriter = new FileStream(
+                path,
+                FileMode.Append,
+                FileAccess.Write,
+                FileShare.Read | FileShare.Delete);
+            WriteRecord(heldWriter, "first");
+
+            SharedJsonlFile.AppendLines(path, ["second", "third"], retryNumber =>
+            {
+                Assert.Equal(1, retryNumber);
+                heldWriter!.Dispose();
+                heldWriter = null;
+            });
+
+            Assert.Equal(new[] { "first", "second", "third" }, File.ReadAllLines(path));
         }
         finally
         {
