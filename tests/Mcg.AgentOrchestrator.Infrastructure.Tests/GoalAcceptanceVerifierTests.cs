@@ -4303,7 +4303,6 @@ public sealed class GoalAcceptanceVerifierDotnetBuildSlotTests : GoalAcceptanceV
     public async Task GoalAcceptanceVerifierPartitionsCheckedInInfrastructureManifestCheck()
     {
         var calls = new System.Collections.Concurrent.ConcurrentQueue<string[]>();
-        var progress = new System.Collections.Concurrent.ConcurrentQueue<AcceptanceGateProgress>();
         var root = CreateCheckedInManifestShapeWorkspace();
         try
         {
@@ -4317,22 +4316,9 @@ public sealed class GoalAcceptanceVerifierDotnetBuildSlotTests : GoalAcceptanceV
                         ? "Passed! - Failed: 0, Passed: 1, Skipped: 0, Total: 1."
                         : ""));
             });
-            using var cpuProbe = GateLoadContextProbe.PushHostCpuProbe(
-                () => throw new InvalidOperationException("deterministic probe failure"));
-            using var sink = GoalAcceptanceVerifier.PushGateProgressSink(progress.Enqueue);
-
             var result = await verifier.RunAsync(root);
 
             Assert.True(result.Passed);
-            Assert.Contains(
-                progress,
-                item => item.Phase == "shard-complete" &&
-                    item.LoadContext?.HostCpuUtilizationPercent is
-                    {
-                        IsAvailable: false,
-                        Value: null,
-                        UnavailableReason: "probe-error:InvalidOperationException"
-                    });
             var checks = result.Checks ?? throw new InvalidOperationException("Expected acceptance checks.");
             var expectedInfrastructureChecks = lanes.Select(lane => $"infrastructure tests: {lane.Name}");
             Assert.Equal(
@@ -4587,6 +4573,8 @@ public sealed class GoalAcceptanceVerifierDotnetBuildSlotTests : GoalAcceptanceV
                 }
             }
 
+            using var cpuProbe = GateLoadContextProbe.PushHostCpuProbe(
+                () => throw new InvalidOperationException("deterministic probe failure"));
             using var progressSink = GoalAcceptanceVerifier.PushGateProgressSink(timingProgress.Enqueue);
             var sequential = await RunScenarioAsync(
                 1,
@@ -4616,7 +4604,13 @@ public sealed class GoalAcceptanceVerifierDotnetBuildSlotTests : GoalAcceptanceV
                 timingProgress,
                 item => item.GoalId == "22222222222222222222222222222222" &&
                     item.Phase == "shard-complete" &&
-                    item.LoadContext?.ConcurrentShardCount is { IsAvailable: true, Value: 2 });
+                    item.LoadContext?.ConcurrentShardCount is { IsAvailable: true, Value: 2 } &&
+                    item.LoadContext.HostCpuUtilizationPercent is
+                    {
+                        IsAvailable: false,
+                        Value: null,
+                        UnavailableReason: "probe-error:InvalidOperationException"
+                    });
             Assert.Contains(
                 timingProgress,
                 item => item.GoalId == "22222222222222222222222222222222" &&
