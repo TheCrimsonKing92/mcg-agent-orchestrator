@@ -155,6 +155,7 @@ internal sealed record AcceptanceTestLane(
     double EstimatedSerialSeconds = 0)
 {
     public IReadOnlyList<string> ExclusiveResourceKeys { get; init; } = [];
+    public bool RequiresBuildSystemChange { get; init; }
 }
 
 internal sealed class AcceptanceMtpInvocation
