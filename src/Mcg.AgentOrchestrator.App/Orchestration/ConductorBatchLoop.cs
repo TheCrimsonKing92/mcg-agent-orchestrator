@@ -1867,6 +1867,9 @@ internal sealed class ConductorBatchLoop
             "POLICY_WARNING" => "policy-warning",
             "SPECULATIVE_COHORT_PLAN" => "speculative-cohort-plan",
             "ACCEPTANCE_COHORT" => "acceptance-cohort",
+            "ACCEPTANCE_COHORT_ENTRY" => "acceptance-cohort",
+            "ACCEPTANCE_COHORT_EXIT" => "acceptance-cohort",
+            "ACCEPTANCE_COHORT_INFLIGHT" => "acceptance-cohort",
             "SWEEP_BLOCKER" => "sweep-blocker",
             "SWEEP_ESCALATION" => "sweep-escalation",
             "SWEEP_REMEDY_ATTEMPT" => "sweep-remedy-attempt",
@@ -2855,14 +2858,38 @@ internal sealed class ConductorBatchLoop
                 driver.ReadSuppressedCohortPairs());
             if (cohortDecision.Selection is { } cohortSelection)
             {
-                var cohortRun = driver.RunAcceptanceCohort(
-                    cohortSelection,
-                    cohortEligible,
-                    policy,
-                    onGateAdmitted: () => driver.RecordCohortAdmissionFairness(cohortEligible, cohortSelection));
+                var memberIds = string.Join(',', cohortSelection.Members.Select(member => member.GoalId.Value[..8]));
+                var markerGoal = cohortSelection.Members[0].GoalId.Value[..8];
+                EmitProgress(
+                    $"ACCEPTANCE_COHORT_ENTRY tick={tick} goal={markerGoal} members={memberIds}");
+                ConductorAcceptanceCohortRunResult cohortRun;
+                var exitOutcome = "exception";
+                try
+                {
+                    cohortRun = driver.RunAcceptanceCohort(
+                        cohortSelection,
+                        cohortEligible,
+                        policy,
+                        onGateAdmitted: () => driver.RecordCohortAdmissionFairness(cohortEligible, cohortSelection),
+                        runGateInBackground: true);
+                    exitOutcome = cohortRun.Receipt?.Outcome.ToString() ??
+                        (cohortRun.Detail.Contains("outcome=inflight", StringComparison.Ordinal)
+                            ? "inflight"
+                            : "no-receipt");
+                }
+                finally
+                {
+                    EmitProgress(
+                        $"ACCEPTANCE_COHORT_EXIT tick={tick} goal={markerGoal} members={memberIds} outcome={exitOutcome}");
+                }
                 foreach (var pair in cohortRun.MemberResults)
                 {
                     results[pair.Key] = new ParallelLandingOutcome(pair.Value, SlotIndex: 0);
+                }
+                if (cohortRun.Detail.Contains("outcome=inflight", StringComparison.Ordinal))
+                {
+                    EmitProgress(
+                        $"ACCEPTANCE_COHORT_INFLIGHT tick={tick} goal={markerGoal} members={memberIds} {cohortRun.Detail}");
                 }
                 RecordParallelAcceptanceProgress(
                     $"ACCEPTANCE_COHORT tick={tick} members={string.Join(',', cohortSelection.Members.Select(member => member.GoalId.Value[..8]))} {cohortRun.Detail}",
@@ -2874,6 +2901,24 @@ internal sealed class ConductorBatchLoop
                     $"ACCEPTANCE_COHORT tick={tick} outcome=unpaired exclusions={FormatCohortPairExclusions(cohortDecision.Exclusions)} fallback=ordinary",
                     changedGoalLines);
             }
+        }
+        foreach (var goal in orderedEligible)
+        {
+            if (results.ContainsKey(goal.Id.Value) ||
+                !driver.TryGetCohortGateHold(goal.Id, out var cohortHoldDetail))
+            {
+                continue;
+            }
+
+            results[goal.Id.Value] = new ParallelLandingOutcome(
+                ParallelAcceptanceHeld(
+                    goal,
+                    policy,
+                    $"Acceptance cohort gate owns this member: {cohortHoldDetail}"),
+                SlotIndex: null);
+            RecordParallelAcceptanceProgress(
+                $"ACCEPTANCE_COHORT tick={tick} goal={goal.Id.Value[..8]} result=held {cohortHoldDetail}",
+                changedGoalLines);
         }
         var oldestWaiter = SelectOldestParallelAcceptanceWaiter(orderedEligible, liveAttemptGoalIds);
         var oldestServedThisTick = false;
