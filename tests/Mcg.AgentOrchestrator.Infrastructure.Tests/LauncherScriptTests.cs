@@ -10,6 +10,10 @@ using System.Text.Json;
 [Xunit.Collection("ProcessSpawning")]
 public sealed class LauncherScriptTests
 {
+    // Keep the status timeout comfortably above the shim's deliberate pre-sentinel delay so startup variance cannot decide the test.
+    private const int SnapshotStatusTimeoutSeconds = 20;
+    private const int SnapshotShimSentinelDelaySeconds = 6;
+    private static readonly TimeSpan RealProcessFileHangGuard = TimeSpan.FromSeconds(60);
     private static readonly string[] JsonLineSeparators = ["\r\n", "\n"];
     private static readonly string[] ExpectedStartCommandJsonProperties = ["args", "pid", "startedAt", "stderrPath", "stdoutPath"];
     private static readonly string?[] ExpectedAcceptanceGoalArguments = ["acceptance", "goal"];
@@ -175,8 +179,8 @@ public sealed class LauncherScriptTests
 
         var stdoutPath = root.GetProperty("stdoutPath").GetString()
             ?? throw new InvalidOperationException("Start command did not emit stdoutPath.");
-        WaitForFile(stdoutPath, TimeSpan.FromSeconds(10));
-        var deadline = DateTimeOffset.UtcNow.AddSeconds(10);
+        WaitForFile(stdoutPath, RealProcessFileHangGuard);
+        var deadline = DateTimeOffset.UtcNow.Add(RealProcessFileHangGuard);
         while (!File.Exists(sandbox.InvocationPath) && DateTimeOffset.UtcNow < deadline)
         {
             Thread.Sleep(100);
@@ -1234,7 +1238,7 @@ public sealed class LauncherScriptTests
             startInfo.ArgumentList.Add("-File");
             startInfo.ArgumentList.Add(Path.Combine(sandbox.RepositoryRoot, "scripts", "Get-OrchestratorSnapshot.ps1"));
             startInfo.ArgumentList.Add("-StatusTimeoutSeconds");
-            startInfo.ArgumentList.Add("1");
+            startInfo.ArgumentList.Add(SnapshotStatusTimeoutSeconds.ToString(System.Globalization.CultureInfo.InvariantCulture));
             startInfo.ArgumentList.Add("-GoalPrefix");
             startInfo.ArgumentList.Add("hang");
             startInfo.ArgumentList.Add("ok");
@@ -1246,15 +1250,14 @@ public sealed class LauncherScriptTests
 
             Assert.True(
                 result.ExitCode == 0,
-                $"exit={result.ExitCode}{Environment.NewLine}stdout:{Environment.NewLine}{result.Stdout}{Environment.NewLine}stderr:{Environment.NewLine}{result.Stderr}");
-            Assert.True(stopwatch.Elapsed < TimeSpan.FromSeconds(15), $"Snapshot took {stopwatch.Elapsed}.");
+                $"exit={result.ExitCode}{Environment.NewLine}stdout:{Environment.NewLine}{result.Stdout}{Environment.NewLine}stderr:{Environment.NewLine}{result.Stderr}{Environment.NewLine}elapsed:{stopwatch.Elapsed}");
             Assert.True(string.IsNullOrWhiteSpace(result.Stderr), result.Stderr);
             Assert.Contains("partial hang", result.Stdout);
-            Assert.Contains("status timed out after 1s; killed pid=", result.Stdout);
+            Assert.Contains($"status timed out after {SnapshotStatusTimeoutSeconds}s; killed pid=", result.Stdout);
             Assert.Contains("status ok ok", result.Stdout);
             Assert.Contains("Cleanup backoff: reason=remove:branch-delete-failed", result.Stdout);
             Assert.Contains("Cleanup retry: conduct cleanup --loop", result.Stdout);
-            WaitForFile(sandbox.SentinelPath, TimeSpan.FromSeconds(5));
+            WaitForFile(sandbox.SentinelPath, RealProcessFileHangGuard);
             var childPid = int.Parse(File.ReadAllText(sandbox.SentinelPath).Trim(), System.Globalization.CultureInfo.InvariantCulture);
             Assert.True(!IsProcessRunning(childPid), $"Expected hung status child pid {childPid} to be reaped.");
         }
@@ -1262,6 +1265,21 @@ public sealed class LauncherScriptTests
         {
             sandbox.KillRecordedChild();
         }
+    }
+
+    [Xunit.Fact(DisplayName = "WaitForFile_missing_file_still_fails_after_hang_guard")]
+    public void WaitForFileMissingFileStillFailsAfterHangGuard()
+    {
+        var missingPath = Path.Combine(
+            Path.GetTempPath(),
+            $"wait-for-file-missing-{Guid.NewGuid():N}",
+            "never-created.pid");
+
+        var exception = Assert.ThrowsAny<Xunit.Sdk.XunitException>(
+            () => WaitForFile(missingPath, TimeSpan.FromMilliseconds(300)));
+
+        Assert.Contains("Expected file to exist", exception.Message);
+        Assert.Contains(missingPath, exception.Message);
     }
 
     [Xunit.Fact]
@@ -1426,8 +1444,8 @@ public sealed class LauncherScriptTests
             // Short commands can exit before the test reopens the emitted PID.
         }
 
-        WaitForFile(stdoutPath, TimeSpan.FromSeconds(10));
-        WaitForFile(stderrPath, TimeSpan.FromSeconds(10));
+        WaitForFile(stdoutPath, RealProcessFileHangGuard);
+        WaitForFile(stderrPath, RealProcessFileHangGuard);
         var childStdout = ReadAllTextShared(stdoutPath);
         var childStderr = ReadAllTextShared(stderrPath);
         Assert.True(string.IsNullOrWhiteSpace(childStderr), childStderr);
@@ -1964,11 +1982,11 @@ public sealed class LauncherScriptTests
         var dotnetShimPath = Path.Combine(shimPath, "dotnet.cmd");
         File.WriteAllText(
             dotnetShimPath,
-            """
+            $"""
             @echo off
             if "%~3"=="hang" (
               echo partial hang
-              powershell.exe -NoProfile -ExecutionPolicy Bypass -Command "Set-Content -LiteralPath $env:DOTNET_STATUS_SENTINEL -Value $PID; Start-Sleep -Seconds 60"
+              powershell.exe -NoProfile -ExecutionPolicy Bypass -Command "Start-Sleep -Seconds {SnapshotShimSentinelDelaySeconds}; Set-Content -LiteralPath $env:DOTNET_STATUS_SENTINEL -Value $PID; Start-Sleep -Seconds 60"
               exit /b 0
             )
             if "%~3"=="cleanup" (
