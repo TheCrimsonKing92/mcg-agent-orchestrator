@@ -4303,6 +4303,7 @@ public sealed class ConductorDriverTests
         const string stableId = "unresolvable-selection";
         var (kernel, goal) = SoftwareGoal();
         var developer = goal.Tasks.Single(task => task.RequiredRole == AgentRole.Developer);
+        var tester = goal.Tasks.Single(task => task.RequiredRole == AgentRole.Tester);
         var reviewer = goal.Tasks.Single(task => task.RequiredRole == AgentRole.Reviewer);
         foreach (var task in goal.Tasks.Where(task => task.RequiredRole != AgentRole.Reviewer))
         {
@@ -4315,7 +4316,7 @@ public sealed class ConductorDriverTests
             classes: [originalToken]);
         FailReviewerNeedsWork(kernel, goal, reviewer, "focused evidence required", findings: [finding]);
         var observedRequests = new List<string>();
-        string? developerRetryMessage = null;
+        string? blockingRetryMessage = null;
         var driver = MakeDriver(
             getPreReviewEvidenceContext: _ => NoPreReviewContext("abc1234"),
             runFocusedEvidence: (_, request) =>
@@ -4334,18 +4335,18 @@ public sealed class ConductorDriverTests
             },
             retryTask: (goalId, taskId, message) =>
             {
-                if (taskId == developer.Id)
+                if (taskId == tester.Id)
                 {
-                    developerRetryMessage = message;
+                    blockingRetryMessage = message;
                 }
 
                 return kernel.RetryTask(goalId, taskId, message);
             },
             retryTaskWithRoundKind: (goalId, taskId, message, roundKind) =>
             {
-                if (taskId == developer.Id)
+                if (taskId == tester.Id)
                 {
-                    developerRetryMessage = message;
+                    blockingRetryMessage = message;
                 }
 
                 return kernel.RetryTask(goalId, taskId, message, retryRoundKind: roundKind);
@@ -4363,8 +4364,9 @@ public sealed class ConductorDriverTests
             .Single(item => item.StableId == stableId);
         Assert.Equal(ReviewFindingState.Open, mergedFinding.State);
         Assert.Equal(FindingEvidenceNotHonouredReason.UnparseableSelection, mergedFinding.EvidenceOutcome?.Reason);
-        Assert.Equal(WorkTaskStatus.Assigned, developer.Status);
-        Assert.Contains("- stable_id: " + stableId, developerRetryMessage, StringComparison.Ordinal);
+        Assert.Equal(WorkTaskStatus.Completed, developer.Status);
+        Assert.Equal(WorkTaskStatus.Assigned, tester.Status);
+        Assert.Contains("- stable_id: " + stableId, blockingRetryMessage, StringComparison.Ordinal);
         var retryBrief = kernel.BuildTaskBrief(goal.Id, reviewer.Id).Content;
         Assert.Contains("verdict=not-honoured", retryBrief, StringComparison.Ordinal);
         Assert.Contains("reason=unparseable-selection", retryBrief, StringComparison.Ordinal);
@@ -5296,7 +5298,7 @@ public sealed class ConductorDriverTests
             driver.AdvanceOnce(goal, ConductorAutonomyPolicy.Permissive);
         }
 
-        Assert.Equal([AgentRole.Tester, AgentRole.Tester], retriedRoles);
+        Assert.Equal([AgentRole.Reviewer, AgentRole.Reviewer], retriedRoles);
     }
 
     [Xunit.Fact]
