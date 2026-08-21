@@ -433,7 +433,7 @@ foreach ($item in $validated) {
 foreach ($entry in $journalManifestRows) {
     $candidate = if ([IO.Path]::IsPathRooted($entry.path)) { $entry.path } else { Join-Path $journalPath $entry.path }
     $resolved = Resolve-RequiredPath $candidate 'Journal manifest entry'
-    $actual = (Get-FileHash -Algorithm SHA256 -LiteralPath $resolved).Hash.ToLowerInvariant()
+    $actual = Get-SharedFileHash $resolved
     if ($actual -ne $entry.sha256.ToLowerInvariant()) { throw "Journal manifest hash changed while reading: $resolved" }
 }
 [void](Assert-ExpectedFileHash $dogfoodPath $DogfoodDbSha256 'Dogfood database after read')
