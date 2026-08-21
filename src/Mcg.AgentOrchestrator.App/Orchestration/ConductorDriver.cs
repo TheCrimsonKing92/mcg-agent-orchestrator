@@ -2083,7 +2083,7 @@ internal sealed partial class ConductorDriver
             var mergedFinding = ReviewFindingConvergence.ResolveMergedFinding(
                 mergedFindings, round, finding.StableId);
             if (mergedFinding?.EvidenceOutcome is { } priorOutcome &&
-                (string.IsNullOrWhiteSpace(priorOutcome.ReceiptId) ||
+                (IsPermanentFindingEvidenceRefusal(priorOutcome) ||
                     HasCurrentFindingEvidenceReceipt(
                         requestingTask,
                         mergedFinding,
@@ -2661,6 +2661,29 @@ internal sealed partial class ConductorDriver
             EvidenceBareClassNamePattern.IsMatch(selection.TestClass.Trim()))
                 ? null
                 : "incompatible-filter-semantics";
+    }
+
+    private static bool IsPermanentFindingEvidenceRefusal(FindingEvidenceOutcome outcome)
+    {
+        if (!string.IsNullOrWhiteSpace(outcome.ReceiptId))
+        {
+            return false;
+        }
+
+        return outcome.Reason switch
+        {
+            FindingEvidenceNotHonouredReason.Unknown => true, // Permanent default: no typed retry signal exists.
+            FindingEvidenceNotHonouredReason.UnsupportedProject => true, // Permanent until the request changes.
+            FindingEvidenceNotHonouredReason.UnparseableSelection => true, // Permanent until the selection changes.
+            FindingEvidenceNotHonouredReason.CandidateShaMissing => false, // Transient: a later candidate may have a sha.
+            FindingEvidenceNotHonouredReason.ExecutorUnavailable => false, // Transient: the executor may recover.
+            FindingEvidenceNotHonouredReason.SelectionApparatusFailure => false, // Transient: source discovery may recover.
+            FindingEvidenceNotHonouredReason.RunFailed => false, // Transient: the focused run may succeed later.
+            FindingEvidenceNotHonouredReason.SupersededByActionableRed => true, // Permanent for this unchanged request.
+            FindingEvidenceNotHonouredReason.PerRoundCap => true, // Retired persisted disposition; preserve suppression.
+            null => true, // Persisted outcomes without a reason are unclassified and fail safe.
+            _ => true // Future or unrecognized reasons fail safe against verbatim replay.
+        };
     }
 
     private static bool HasCurrentFindingEvidenceReceipt(

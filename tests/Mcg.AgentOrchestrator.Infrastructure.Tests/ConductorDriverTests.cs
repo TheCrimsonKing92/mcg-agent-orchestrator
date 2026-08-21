@@ -4297,6 +4297,181 @@ public sealed class ConductorDriverTests
     }
 
     [Xunit.Fact]
+    public void UnresolvableSelectionDoesNotRerunOnNextRound()
+    {
+        const string originalToken = "FullyQualifiedName~CliCommandTests.PersistentRunnerCommands";
+        const string stableId = "unresolvable-selection";
+        var (kernel, goal) = SoftwareGoal();
+        var developer = goal.Tasks.Single(task => task.RequiredRole == AgentRole.Developer);
+        var tester = goal.Tasks.Single(task => task.RequiredRole == AgentRole.Tester);
+        var reviewer = goal.Tasks.Single(task => task.RequiredRole == AgentRole.Reviewer);
+        foreach (var task in goal.Tasks.Where(task => task.RequiredRole != AgentRole.Reviewer))
+        {
+            PassVerification(kernel, goal, task);
+        }
+
+        var finding = EvidenceFindingWithRequest(
+            "An unresolvable selection must be replaced before it runs again.",
+            id: stableId,
+            classes: [originalToken]);
+        FailReviewerNeedsWork(kernel, goal, reviewer, "focused evidence required", findings: [finding]);
+        var observedRequests = new List<string>();
+        string? blockingRetryMessage = null;
+        var driver = MakeDriver(
+            getPreReviewEvidenceContext: _ => NoPreReviewContext("abc1234"),
+            runFocusedEvidence: (_, request) =>
+            {
+                observedRequests.Add(request);
+                return new FocusedEvidenceRunResult(
+                    request,
+                    Accepted: false,
+                    Passed: false,
+                    Summary: "selection rejected",
+                    Checks: [],
+                    Rejection: new FocusedEvidenceRejection(
+                        FocusedEvidenceRejectionCode.UnresolvableSelection,
+                        originalToken,
+                        "selection does not resolve"));
+            },
+            retryTask: (goalId, taskId, message) =>
+            {
+                if (taskId == tester.Id)
+                {
+                    blockingRetryMessage = message;
+                }
+
+                return kernel.RetryTask(goalId, taskId, message);
+            },
+            retryTaskWithRoundKind: (goalId, taskId, message, roundKind) =>
+            {
+                if (taskId == tester.Id)
+                {
+                    blockingRetryMessage = message;
+                }
+
+                return kernel.RetryTask(goalId, taskId, message, retryRoundKind: roundKind);
+            },
+            recordFindingEvidenceOutcome: (goalId, taskId, findingId, outcome, receipt) =>
+                kernel.RecordFindingEvidenceOutcome(goalId, taskId, findingId, outcome, receipt));
+
+        driver.AdvanceOnce(goal, ConductorAutonomyPolicy.Permissive);
+        FailReviewerNeedsWork(kernel, goal, reviewer, "focused evidence required", findings: [finding]);
+
+        driver.AdvanceOnce(goal, ConductorAutonomyPolicy.Permissive);
+
+        Assert.Equal(["Infrastructure.Tests:" + originalToken], observedRequests);
+        var mergedFinding = reviewer.VerificationHistory.Last().MergedReviewFindings!
+            .Single(item => item.StableId == stableId);
+        Assert.Equal(ReviewFindingState.Open, mergedFinding.State);
+        Assert.Equal(FindingEvidenceNotHonouredReason.UnparseableSelection, mergedFinding.EvidenceOutcome?.Reason);
+        Assert.Equal(WorkTaskStatus.Completed, developer.Status);
+        Assert.Equal(WorkTaskStatus.Assigned, tester.Status);
+        Assert.Contains("- stable_id: " + stableId, blockingRetryMessage, StringComparison.Ordinal);
+        var retryBrief = kernel.BuildTaskBrief(goal.Id, reviewer.Id).Content;
+        Assert.Contains("verdict=not-honoured", retryBrief, StringComparison.Ordinal);
+        Assert.Contains("reason=unparseable-selection", retryBrief, StringComparison.Ordinal);
+        Assert.Contains(originalToken, retryBrief, StringComparison.Ordinal);
+    }
+
+    [Xunit.Fact]
+    public void TransientEvidenceFailureRerunsOnNextRound()
+    {
+        const string originalToken = "FullyQualifiedName~ConductorDriverTests.MissingMethod";
+        var (kernel, goal) = SoftwareGoal();
+        var reviewer = goal.Tasks.Single(task => task.RequiredRole == AgentRole.Reviewer);
+        foreach (var task in goal.Tasks.Where(task => task.RequiredRole != AgentRole.Reviewer))
+        {
+            PassVerification(kernel, goal, task);
+        }
+
+        var finding = EvidenceFindingWithRequest(
+            "A source-discovery failure must remain retryable.",
+            id: "transient-source-discovery",
+            classes: [originalToken]);
+        FailReviewerNeedsWork(kernel, goal, reviewer, "focused evidence required", findings: [finding]);
+        var focusedRuns = 0;
+        var driver = MakeDriver(
+            getPreReviewEvidenceContext: _ => NoPreReviewContext("abc1234"),
+            runFocusedEvidence: (_, request) =>
+            {
+                focusedRuns++;
+                return new FocusedEvidenceRunResult(
+                    request,
+                    Accepted: false,
+                    Passed: false,
+                    Summary: "source discovery failed",
+                    Checks: [],
+                    Rejection: new FocusedEvidenceRejection(
+                        FocusedEvidenceRejectionCode.SourceDiscoveryFailure,
+                        originalToken,
+                        "source discovery failed"));
+            },
+            retryTaskWithRoundKind: (goalId, taskId, message, roundKind) =>
+                kernel.RetryTask(goalId, taskId, message, retryRoundKind: roundKind),
+            recordFindingEvidenceOutcome: (goalId, taskId, findingId, outcome, receipt) =>
+                kernel.RecordFindingEvidenceOutcome(goalId, taskId, findingId, outcome, receipt));
+
+        driver.AdvanceOnce(goal, ConductorAutonomyPolicy.Permissive);
+        FailReviewerNeedsWork(kernel, goal, reviewer, "focused evidence required", findings: [finding]);
+
+        driver.AdvanceOnce(goal, ConductorAutonomyPolicy.Permissive);
+
+        Assert.Equal(2, focusedRuns);
+    }
+
+    [Xunit.Fact]
+    public void ReceiptlessUnclassifiedEvidenceOutcomesDoNotRerun()
+    {
+        FindingEvidenceNotHonouredReason?[] unclassifiedReasons =
+        [
+            FindingEvidenceNotHonouredReason.Unknown,
+            FindingEvidenceNotHonouredReason.PerRoundCap,
+            null,
+            (FindingEvidenceNotHonouredReason)int.MaxValue
+        ];
+
+        foreach (var reason in unclassifiedReasons)
+        {
+            var (kernel, goal) = SoftwareGoal();
+            var tester = goal.Tasks.Single(task => task.RequiredRole == AgentRole.Tester);
+            var reviewer = goal.Tasks.Single(task => task.RequiredRole == AgentRole.Reviewer);
+            foreach (var task in goal.Tasks.Where(task => task.RequiredRole != AgentRole.Reviewer))
+            {
+                PassVerification(kernel, goal, task);
+            }
+
+            var finding = EvidenceFindingWithRequest(
+                "An unclassified receiptless outcome must not replay unchanged.",
+                id: "unclassified-receiptless-outcome");
+            FailReviewerNeedsWork(kernel, goal, reviewer, "focused evidence required", findings: [finding]);
+            kernel.RecordFindingEvidenceOutcome(
+                goal.Id,
+                reviewer.Id,
+                finding.StableId,
+                new FindingEvidenceOutcome(Honoured: false, Reason: reason));
+            var focusedRuns = 0;
+            TaskId? retriedTaskId = null;
+            var driver = MakeDriver(
+                getPreReviewEvidenceContext: _ => NoPreReviewContext("abc1234"),
+                runFocusedEvidence: (_, request) =>
+                {
+                    focusedRuns++;
+                    return new FocusedEvidenceRunResult(request, true, true, "must not run", []);
+                },
+                retryTask: (goalId, taskId, message) =>
+                {
+                    retriedTaskId = taskId;
+                    return kernel.RetryTask(goalId, taskId, message);
+                });
+
+            driver.AdvanceOnce(goal, ConductorAutonomyPolicy.Permissive);
+
+            Assert.Equal(0, focusedRuns);
+            Assert.Equal(tester.Id, retriedTaskId);
+        }
+    }
+
+    [Xunit.Fact]
     public void FindingEvidenceRawLengthCannotBeTrimmedBelowBound()
     {
         var (kernel, goal) = SoftwareGoal();
@@ -5175,7 +5350,7 @@ public sealed class ConductorDriverTests
             driver.AdvanceOnce(goal, ConductorAutonomyPolicy.Permissive);
         }
 
-        Assert.Equal([AgentRole.Tester, AgentRole.Tester], retriedRoles);
+        Assert.Equal([AgentRole.Reviewer, AgentRole.Reviewer], retriedRoles);
     }
 
     [Xunit.Fact]
