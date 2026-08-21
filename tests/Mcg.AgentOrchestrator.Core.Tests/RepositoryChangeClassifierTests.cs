@@ -463,7 +463,9 @@ public sealed class RepositoryChangeClassifierTests
         Assert.Contains(guard.Paths, path => path.Area == RepositoryOwnershipArea.Documentation);
         Assert.Contains(guard.Paths, path => path.Area == RepositoryOwnershipArea.GeneratedOrNoisy && path.IsGeneratedOrNoisy);
         Assert.True(guard.RequiresOperatorApproval);
-        Assert.Contains(guard.RequiredResources, resource => resource == "ownership:shared-infrastructure");
+        Assert.Contains(
+            guard.RequiredResources,
+            resource => resource == "ownership:shared-infrastructure:core/application");
         Assert.Contains(guard.RequiredResources, resource => resource == "ownership:dashboard-ui");
         Assert.Contains(guard.Reasons, reason => reason.Contains("generated/noisy path", StringComparison.Ordinal));
     }
@@ -536,6 +538,96 @@ public sealed class RepositoryChangeClassifierTests
             RepositoryLandingScopeNormalization.UnknownAcceptanceScopeResourceKey,
             Assert.Single(guard.RequiredResources));
         Assert.DoesNotContain("ownership:tests", guard.RequiredResources);
+    }
+
+    [Xunit.Fact(DisplayName = "RepositoryOwnershipMap_uses_subsystem_reservations_within_shared_projects")]
+    public void RepositoryOwnershipMapUsesSubsystemReservationsWithinSharedProjects()
+    {
+        var firstWorkspace = RepositoryOwnershipMap.Classify(
+            "src/Mcg.AgentOrchestrator.Infrastructure/Workspaces/DotnetBaseBuildCache.cs");
+        var secondWorkspace = RepositoryOwnershipMap.Classify(
+            "src/Mcg.AgentOrchestrator.Infrastructure/Workspaces/GoalAcceptanceVerifier.cs");
+        var worker = RepositoryOwnershipMap.Classify(
+            "src/Mcg.AgentOrchestrator.Infrastructure/Workers/WorkerProfileDispatcher.cs");
+
+        Assert.Equal("shared-infrastructure:infrastructure/workspaces", firstWorkspace.ReservationKey);
+        Assert.Equal(firstWorkspace.ReservationKey, secondWorkspace.ReservationKey);
+        Assert.Equal("shared-infrastructure:infrastructure/workers", worker.ReservationKey);
+        Assert.NotEqual(firstWorkspace.ReservationKey, worker.ReservationKey);
+    }
+
+    [Xunit.Fact(DisplayName = "RepositoryOwnershipMap_includes_project_in_shared_subsystem_reservation")]
+    public void RepositoryOwnershipMapIncludesProjectInSharedSubsystemReservation()
+    {
+        var core = RepositoryOwnershipMap.Classify(
+            "src/Mcg.AgentOrchestrator.Core/Persistence/OrchestratorSnapshots.cs");
+        var infrastructure = RepositoryOwnershipMap.Classify(
+            "src/Mcg.AgentOrchestrator.Infrastructure/Persistence/BacklogStore.cs");
+
+        Assert.Equal("shared-infrastructure:core/persistence", core.ReservationKey);
+        Assert.Equal("shared-infrastructure:infrastructure/persistence", infrastructure.ReservationKey);
+        Assert.NotEqual(core.ReservationKey, infrastructure.ReservationKey);
+    }
+
+    [Xunit.Theory(DisplayName = "RepositoryOwnershipMap_preserves_shared_infrastructure_risk_and_serialization")]
+    [Xunit.InlineData("src/Mcg.AgentOrchestrator.Core/Application/RepositoryOwnershipMap.cs")]
+    [Xunit.InlineData("src/Mcg.AgentOrchestrator.Infrastructure/Workspaces/GoalAcceptanceVerifier.cs")]
+    [Xunit.InlineData("src/Mcg.AgentOrchestrator.Infrastructure.Providers/ModelProviders.cs")]
+    [Xunit.InlineData("src/Mcg.AgentOrchestrator.Core/AgentOutputDirectives.cs")]
+    [Xunit.InlineData("src/Mcg.AgentOrchestrator.Infrastructure/NotASubsystem/Unknown.cs")]
+    public void RepositoryOwnershipMapPreservesSharedInfrastructureRiskAndSerialization(string path)
+    {
+        var ownedPath = RepositoryOwnershipMap.Classify(path);
+
+        Assert.Equal(RepositoryOwnershipArea.SharedInfrastructure, ownedPath.Area);
+        Assert.True(ownedPath.IsHighRisk);
+        Assert.True(ownedPath.RequiresSerialization);
+    }
+
+    [Xunit.Theory(DisplayName = "RepositoryOwnershipMap_fails_closed_for_unrecognized_shared_infrastructure_layouts")]
+    [Xunit.InlineData("src/Mcg.AgentOrchestrator.Core/AgentOutputDirectives.cs")]
+    [Xunit.InlineData("src/Mcg.AgentOrchestrator.Infrastructure.Providers/ModelProviders.cs")]
+    [Xunit.InlineData("src/Mcg.AgentOrchestrator.Core/../Boom.cs")]
+    [Xunit.InlineData("src/Mcg.AgentOrchestrator.Core/./Application/X.cs")]
+    [Xunit.InlineData("src/Mcg.AgentOrchestrator.Infrastructure/ /X.cs")]
+    [Xunit.InlineData("src/Mcg.AgentOrchestrator.Infrastructure/NotASubsystem/X.cs")]
+    [Xunit.InlineData("src/Mcg.AgentOrchestrator.Core/Properties/AssemblyInfo.cs")]
+    public void RepositoryOwnershipMapFailsClosedForUnrecognizedSharedInfrastructureLayouts(string path)
+    {
+        var ownedPath = RepositoryOwnershipMap.Classify(path);
+
+        Assert.Equal(RepositoryOwnershipArea.SharedInfrastructure, ownedPath.Area);
+        Assert.Equal("shared-infrastructure", ownedPath.ReservationKey);
+    }
+
+    [Xunit.Theory(DisplayName = "RepositoryOwnershipMap_keeps_generated_shared_infrastructure_paths_generated")]
+    [Xunit.InlineData("src/Mcg.AgentOrchestrator.Infrastructure/bin/Debug/generated.dll")]
+    [Xunit.InlineData("src/Mcg.AgentOrchestrator.Core/obj/Debug/x.cs")]
+    [Xunit.InlineData("src/Mcg.AgentOrchestrator.Infrastructure/Workspaces/obj/Debug/x.cs")]
+    public void RepositoryOwnershipMapKeepsGeneratedSharedInfrastructurePathsGenerated(string path)
+    {
+        var ownedPath = RepositoryOwnershipMap.Classify(path);
+
+        Assert.Equal(RepositoryOwnershipArea.GeneratedOrNoisy, ownedPath.Area);
+        Assert.True(ownedPath.IsGeneratedOrNoisy);
+        Assert.Equal("generated-or-noisy", ownedPath.ReservationKey);
+    }
+
+    [Xunit.Fact(DisplayName = "RepositoryOwnershipMap_emits_distinct_resources_for_shared_subsystems")]
+    public void RepositoryOwnershipMapEmitsDistinctResourcesForSharedSubsystems()
+    {
+        var guard = RepositoryOwnershipMap.GuardWriteSet([
+            "src/Mcg.AgentOrchestrator.Infrastructure/Workspaces/DotnetBaseBuildCache.cs",
+            "src/Mcg.AgentOrchestrator.Infrastructure/Processes/BackgroundDispatchRunner.cs"
+        ]);
+
+        Assert.Equal(
+            [
+                "ownership:shared-infrastructure:infrastructure/processes",
+                "ownership:shared-infrastructure:infrastructure/workspaces"
+            ],
+            guard.RequiredResources);
+        Assert.DoesNotContain("ownership:shared-infrastructure", guard.RequiredResources);
     }
 
     [Xunit.Fact(DisplayName = "RepositoryTestImpactPlanner_skips_build_for_docs_only_changes")]
