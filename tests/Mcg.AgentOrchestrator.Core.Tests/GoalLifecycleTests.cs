@@ -735,6 +735,264 @@ public sealed class GoalLifecycleTests
     Assert.True(gate.Tasks.Any(task => task.TaskId == reviewer.Id && task.GateStatus == VerificationGateStatus.NotReady));
 }
 
+    [Xunit.Fact]
+    public void RetryTask_preserves_downstream_completed_work_when_the_candidate_is_unchanged()
+    {
+        var kernel = new AgentOrchestratorKernel();
+        var goal = kernel.CreateGoal("Retry without changing the candidate",
+            [
+                new TaskSpec(TaskId.New(), "Implement fix", AgentRole.Developer),
+                new TaskSpec(TaskId.New(), "Test fix", AgentRole.Tester),
+                new TaskSpec(TaskId.New(), "Review fix", AgentRole.Reviewer)
+            ]);
+        kernel.ActivateGoal(goal.Id, DefaultAgents());
+        var developer = goal.Tasks.Single(task => task.RequiredRole == AgentRole.Developer);
+        var tester = goal.Tasks.Single(task => task.RequiredRole == AgentRole.Tester);
+        var reviewer = goal.Tasks.Single(task => task.RequiredRole == AgentRole.Reviewer);
+        CompleteCandidateDispatch(kernel, goal, developer, "aaa111", "aaa111");
+        CompleteCandidateDispatch(kernel, goal, tester, "aaa111", "aaa111");
+        CompleteCandidateDispatch(kernel, goal, reviewer, "aaa111", "aaa111");
+        var testerVerification = tester.LastVerification;
+        var reviewerVerification = reviewer.LastVerification;
+
+        kernel.RetryTask(goal.Id, developer.Id, "Attach focused evidence without changing code.");
+        CompleteCandidateDispatch(kernel, goal, developer, "aaa111", "aaa111");
+
+        Assert.Equal(WorkTaskStatus.Completed, tester.Status);
+        Assert.Equal(WorkTaskStatus.Completed, reviewer.Status);
+        Assert.Same(testerVerification, tester.LastVerification);
+        Assert.Same(reviewerVerification, reviewer.LastVerification);
+        Assert.DoesNotContain(goal.Timeline, evt =>
+            evt.TaskId is { } taskId &&
+            (taskId == tester.Id || taskId == reviewer.Id) &&
+            evt.Kind == ProgressKind.TaskRetried);
+        Assert.Contains(goal.Timeline, evt =>
+            evt.TaskId == tester.Id &&
+            evt.Kind == ProgressKind.TaskUpdated &&
+            evt.Message.Contains("verification covers candidate aaa111", StringComparison.Ordinal));
+    }
+
+    [Xunit.Fact]
+    public void RetryTask_invalidates_downstream_when_the_retry_changed_the_candidate()
+    {
+        var kernel = new AgentOrchestratorKernel();
+        var goal = kernel.CreateGoal("Retry and change the candidate",
+            [
+                new TaskSpec(TaskId.New(), "Implement fix", AgentRole.Developer),
+                new TaskSpec(TaskId.New(), "Test fix", AgentRole.Tester)
+            ]);
+        kernel.ActivateGoal(goal.Id, DefaultAgents());
+        var developer = goal.Tasks.Single(task => task.RequiredRole == AgentRole.Developer);
+        var tester = goal.Tasks.Single(task => task.RequiredRole == AgentRole.Tester);
+        CompleteCandidateDispatch(kernel, goal, developer, "aaa111", "aaa111");
+        CompleteCandidateDispatch(kernel, goal, tester, "aaa111", "aaa111");
+
+        kernel.RetryTask(goal.Id, developer.Id, "Revise the candidate.");
+        Assert.Equal(WorkTaskStatus.Completed, tester.Status);
+        CompleteCandidateDispatch(kernel, goal, developer, "bbb222", "bbb222");
+
+        Assert.Equal(WorkTaskStatus.Assigned, tester.Status);
+        Assert.Null(tester.LastVerification);
+        Assert.Single(tester.VerificationHistory);
+        Assert.Contains(goal.Timeline, evt =>
+            evt.TaskId == tester.Id &&
+            evt.Kind == ProgressKind.TaskRetried &&
+            evt.Message.Contains("changed candidate from aaa111 to bbb222", StringComparison.Ordinal));
+    }
+
+    [Xunit.Fact]
+    public void RetryTask_invalidates_retained_downstream_when_requeued_attempt_matches_current_but_not_reviewed_candidate()
+    {
+        var kernel = new AgentOrchestratorKernel();
+        var goal = kernel.CreateGoal("Retry through an interrupted changed attempt",
+            [
+                new TaskSpec(TaskId.New(), "Implement fix", AgentRole.Developer),
+                new TaskSpec(TaskId.New(), "Test fix", AgentRole.Tester)
+            ]);
+        kernel.ActivateGoal(goal.Id, DefaultAgents());
+        var developer = goal.Tasks.Single(task => task.RequiredRole == AgentRole.Developer);
+        var tester = goal.Tasks.Single(task => task.RequiredRole == AgentRole.Tester);
+        CompleteCandidateDispatch(kernel, goal, developer, "aaa111", "aaa111");
+        CompleteCandidateDispatch(kernel, goal, tester, "aaa111", "aaa111");
+
+        kernel.RetryTask(goal.Id, developer.Id, "Revise the candidate.");
+        kernel.RecordTaskDispatch(
+            goal.Id,
+            developer.Id,
+            new TaskDispatchRecord("Developer", "worker", "C:\\repo", DateTimeOffset.UtcNow));
+        kernel.RecordDispatchResultCommit(goal.Id, developer.Id, "bbb222");
+        kernel.RequeueInterruptedDispatch(goal.Id, developer.Id, "Retry the interrupted changed attempt.");
+        CompleteCandidateDispatch(kernel, goal, developer, "bbb222", "bbb222");
+
+        Assert.Equal(WorkTaskStatus.Assigned, tester.Status);
+        Assert.Null(tester.LastVerification);
+        Assert.Single(tester.VerificationHistory);
+        Assert.Contains(goal.Timeline, evt =>
+            evt.TaskId == tester.Id &&
+            evt.Kind == ProgressKind.TaskRetried &&
+            evt.Message.Contains("changed candidate from aaa111 to bbb222", StringComparison.Ordinal));
+    }
+
+    [Xunit.Fact]
+    public void RetryTask_invalidates_downstream_when_candidate_identity_is_indeterminate()
+    {
+        var missingPriorKernel = new AgentOrchestratorKernel();
+        var missingPriorGoal = missingPriorKernel.CreateGoal("Retry without a prior candidate",
+            [
+                new TaskSpec(TaskId.New(), "Implement fix", AgentRole.Developer),
+                new TaskSpec(TaskId.New(), "Test fix", AgentRole.Tester)
+            ]);
+        missingPriorKernel.ActivateGoal(missingPriorGoal.Id, DefaultAgents());
+        var missingPriorDeveloper = missingPriorGoal.Tasks.Single(task => task.RequiredRole == AgentRole.Developer);
+        var missingPriorTester = missingPriorGoal.Tasks.Single(task => task.RequiredRole == AgentRole.Tester);
+        CompleteCandidateDispatch(missingPriorKernel, missingPriorGoal, missingPriorDeveloper, null, null);
+        CompleteCandidateDispatch(missingPriorKernel, missingPriorGoal, missingPriorTester, "aaa111", "aaa111");
+
+        missingPriorKernel.RetryTask(missingPriorGoal.Id, missingPriorDeveloper.Id, "Retry with unknown prior candidate.");
+
+        Assert.Equal(WorkTaskStatus.Assigned, missingPriorTester.Status);
+        Assert.Null(missingPriorTester.LastVerification);
+
+        var missingCurrentKernel = new AgentOrchestratorKernel();
+        var missingCurrentGoal = missingCurrentKernel.CreateGoal("Retry without a current candidate",
+            [
+                new TaskSpec(TaskId.New(), "Implement fix", AgentRole.Developer),
+                new TaskSpec(TaskId.New(), "Test fix", AgentRole.Tester)
+            ]);
+        missingCurrentKernel.ActivateGoal(missingCurrentGoal.Id, DefaultAgents());
+        var missingCurrentDeveloper = missingCurrentGoal.Tasks.Single(task => task.RequiredRole == AgentRole.Developer);
+        var missingCurrentTester = missingCurrentGoal.Tasks.Single(task => task.RequiredRole == AgentRole.Tester);
+        CompleteCandidateDispatch(missingCurrentKernel, missingCurrentGoal, missingCurrentDeveloper, "aaa111", "aaa111");
+        CompleteCandidateDispatch(missingCurrentKernel, missingCurrentGoal, missingCurrentTester, "aaa111", "aaa111");
+
+        missingCurrentKernel.RetryTask(missingCurrentGoal.Id, missingCurrentDeveloper.Id, "Retry with unknown result candidate.");
+        Assert.Equal(WorkTaskStatus.Completed, missingCurrentTester.Status);
+        CompleteCandidateDispatch(missingCurrentKernel, missingCurrentGoal, missingCurrentDeveloper, null, null);
+
+        Assert.Equal(WorkTaskStatus.Assigned, missingCurrentTester.Status);
+        Assert.Null(missingCurrentTester.LastVerification);
+        Assert.Contains(missingCurrentGoal.Timeline, evt =>
+            evt.TaskId == missingCurrentTester.Id &&
+            evt.Kind == ProgressKind.TaskRetried &&
+            evt.Message.Contains("result unknown", StringComparison.Ordinal));
+    }
+
+    [Xunit.Fact]
+    public void RecordTaskVerification_completes_retried_task_without_result_commit_invalidates_retained_downstream()
+    {
+        var kernel = new AgentOrchestratorKernel();
+        var goal = kernel.CreateGoal("Complete a retried task through direct verification",
+            [
+                new TaskSpec(TaskId.New(), "Implement fix", AgentRole.Developer),
+                new TaskSpec(TaskId.New(), "Test fix", AgentRole.Tester)
+            ]);
+        kernel.ActivateGoal(goal.Id, DefaultAgents());
+        var developer = goal.Tasks.Single(task => task.RequiredRole == AgentRole.Developer);
+        var tester = goal.Tasks.Single(task => task.RequiredRole == AgentRole.Tester);
+        CompleteCandidateDispatch(kernel, goal, developer, "aaa111", "aaa111");
+        CompleteCandidateDispatch(kernel, goal, tester, "aaa111", "aaa111");
+
+        kernel.RetryTask(goal.Id, developer.Id, "Attach verification without a dispatch result.");
+        Assert.Equal(WorkTaskStatus.Completed, tester.Status);
+        kernel.RecordTaskVerification(
+            goal.Id,
+            developer.Id,
+            new TaskVerificationRecord(
+                "manual",
+                "C:\\repo",
+                0,
+                "passed",
+                "",
+                DateTimeOffset.UtcNow));
+
+        Assert.Equal(WorkTaskStatus.Completed, developer.Status);
+        Assert.Equal(WorkTaskStatus.Assigned, tester.Status);
+        Assert.Null(tester.LastVerification);
+        Assert.Single(tester.VerificationHistory);
+        Assert.Contains(goal.Timeline, evt =>
+            evt.TaskId == tester.Id &&
+            evt.Kind == ProgressKind.TaskRetried &&
+            evt.Message.Contains("result unknown", StringComparison.Ordinal));
+    }
+
+    [Xunit.Fact]
+    public void RecordTaskProcessCancelled_invalidates_retained_downstream_when_current_candidate_is_indeterminate()
+    {
+        var clock = new FakeClock();
+        var kernel = new AgentOrchestratorKernel(clock);
+        var goal = kernel.CreateGoal("Cancel a retried task with retained downstream evidence",
+            [
+                new TaskSpec(TaskId.New(), "Implement fix", AgentRole.Developer),
+                new TaskSpec(TaskId.New(), "Test fix", AgentRole.Tester)
+            ]);
+        kernel.ActivateGoal(goal.Id, DefaultAgents());
+        var developer = goal.Tasks.Single(task => task.RequiredRole == AgentRole.Developer);
+        var tester = goal.Tasks.Single(task => task.RequiredRole == AgentRole.Tester);
+        CompleteCandidateDispatch(kernel, goal, developer, "aaa111", "aaa111");
+        CompleteCandidateDispatch(kernel, goal, tester, "aaa111", "aaa111");
+
+        kernel.RetryTask(goal.Id, developer.Id, "Retry before cancellation.");
+        kernel.RecordTaskDispatch(
+            goal.Id,
+            developer.Id,
+            new TaskDispatchRecord("Developer", "worker", "C:\\repo", clock.UtcNow));
+        var started = new TaskProcessRecord(
+            1234,
+            "worker",
+            "C:\\repo",
+            "out.log",
+            "err.log",
+            "exit.txt",
+            clock.UtcNow,
+            null,
+            null);
+        kernel.RecordTaskProcessStarted(goal.Id, developer.Id, started);
+        kernel.RecordTaskProcessCancelled(
+            goal.Id,
+            developer.Id,
+            started with { CompletedAt = clock.UtcNow, WasCancelled = true });
+
+        Assert.Equal(WorkTaskStatus.Cancelled, developer.Status);
+        Assert.Equal(WorkTaskStatus.Assigned, tester.Status);
+        Assert.Null(tester.LastVerification);
+        Assert.Single(tester.VerificationHistory);
+        Assert.False(kernel.BuildVerificationGate(goal.Id).IsSatisfied);
+        Assert.Contains(goal.Timeline, evt =>
+            evt.TaskId == tester.Id &&
+            evt.Kind == ProgressKind.TaskRetried &&
+            evt.Message.Contains("result unknown; status Cancelled", StringComparison.Ordinal));
+    }
+
+    [Xunit.Fact]
+    public void RetryTask_preserves_the_never_run_downstream_exemption()
+    {
+        var kernel = new AgentOrchestratorKernel();
+        var goal = kernel.CreateGoal("Retry while preserving never-run downstream work",
+            [
+                new TaskSpec(TaskId.New(), "Implement fix", AgentRole.Developer),
+                new TaskSpec(TaskId.New(), "Test fix", AgentRole.Tester),
+                new TaskSpec(TaskId.New(), "Review fix", AgentRole.Reviewer)
+            ]);
+        kernel.ActivateGoal(goal.Id, DefaultAgents().Where(agent => agent.Role != AgentRole.Reviewer).ToArray());
+        var developer = goal.Tasks.Single(task => task.RequiredRole == AgentRole.Developer);
+        var tester = goal.Tasks.Single(task => task.RequiredRole == AgentRole.Tester);
+        var reviewer = goal.Tasks.Single(task => task.RequiredRole == AgentRole.Reviewer);
+        CompleteCandidateDispatch(kernel, goal, developer, "aaa111", "aaa111");
+        CompleteCandidateDispatch(kernel, goal, tester, "bbb222", "bbb222");
+
+        kernel.RetryTask(goal.Id, developer.Id, "Retry with stale Tester evidence.");
+
+        Assert.Equal(WorkTaskStatus.Assigned, tester.Status);
+        Assert.Equal(WorkTaskStatus.Pending, reviewer.Status);
+        Assert.Null(reviewer.LastVerification);
+        Assert.Null(reviewer.LastExecution);
+        Assert.Null(reviewer.LastDispatch);
+        Assert.Null(reviewer.LastProcess);
+        Assert.Null(reviewer.SubscriptionRetryAfter);
+        Assert.DoesNotContain(goal.Timeline, evt =>
+            evt.TaskId == reviewer.Id && evt.Kind == ProgressKind.TaskRetried);
+    }
+
     [Xunit.Fact(DisplayName = "RetryTask_refuses_running_downstream_before_mutating_upstream_task")]
     public void RetryTaskRefusesRunningDownstreamBeforeMutatingUpstreamTask()
 {
@@ -909,6 +1167,40 @@ static void CompleteWithVerification(AgentOrchestratorKernel kernel, Goal goal, 
 {
     kernel.ReportTaskProgress(goal.Id, task.Id, WorkTaskStatus.Completed, $"{task.RequiredRole} done.");
     kernel.RecordTaskVerification(goal.Id, task.Id, new TaskVerificationRecord("dotnet test", "C:\\repo", 0, standardOutput, "", DateTimeOffset.UtcNow));
+}
+
+static void CompleteCandidateDispatch(
+    AgentOrchestratorKernel kernel,
+    Goal goal,
+    TaskSpec task,
+    string? resultCommit,
+    string? reviewedCommit)
+{
+    kernel.RecordTaskDispatch(
+        goal.Id,
+        task.Id,
+        new TaskDispatchRecord(task.RequiredRole.ToString(), "worker", "C:\\repo", DateTimeOffset.UtcNow));
+    if (!string.IsNullOrWhiteSpace(reviewedCommit))
+    {
+        kernel.RecordDispatchBaseCommit(goal.Id, task.Id, reviewedCommit);
+    }
+    if (!string.IsNullOrWhiteSpace(resultCommit))
+    {
+        kernel.RecordDispatchResultCommit(goal.Id, task.Id, resultCommit);
+    }
+
+    kernel.ReportTaskProgress(goal.Id, task.Id, WorkTaskStatus.Completed, $"{task.RequiredRole} done.");
+    kernel.RecordTaskVerification(
+        goal.Id,
+        task.Id,
+        new TaskVerificationRecord(
+            "dotnet test",
+            "C:\\repo",
+            0,
+            "passed",
+            "",
+            DateTimeOffset.UtcNow,
+            ReviewedCommit: reviewedCommit));
 }
 
 static AgentDefinition TestAgent(string id, string name, AgentRole role) =>

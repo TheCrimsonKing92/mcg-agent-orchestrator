@@ -1280,6 +1280,7 @@ public sealed partial class AgentOrchestratorKernel
             task.SetStatus(WorkTaskStatus.Cancelled);
         }
         Append(goal, taskId, ProgressKind.TaskCancelled, $"Cancelled process {process.ProcessId}: {process.Command}");
+        ReconcileRetainedDownstreamTasks(goal, task, _clock.UtcNow);
     }
 
     private bool TryCompleteTaskWithPassingVerification(Goal goal, TaskSpec task, string message)
@@ -1296,6 +1297,7 @@ public sealed partial class AgentOrchestratorKernel
 
         task.SetStatus(WorkTaskStatus.Completed);
         Append(goal, task.Id, ProgressKind.TaskCompleted, message);
+        ReconcileRetainedDownstreamTasks(goal, task, _clock.UtcNow);
         return true;
     }
 }
