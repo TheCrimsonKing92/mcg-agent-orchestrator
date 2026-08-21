@@ -1747,11 +1747,26 @@ public sealed class AcceptanceCohortWorkflowTests : GoalWorktreeTestBase
             Assert.Equal(OperatorIntentStatus.Applied, intentStore.GetAsync(intentId).GetAwaiter().GetResult()!.Status);
             Assert.Equal(GoalStatus.Verified, firstGoal.Status);
             Assert.Equal(GoalStatus.Verified, secondGoal.Status);
+            Assert.Empty(driver.ParallelAcceptanceAttemptCoordinator.GetUnreconciledAttempts(
+                [firstGoal.Id.Value, secondGoal.Id.Value]));
             Assert.Equal(0, heldSummary.Advanced);
-            var cohortEvents = File.ReadAllLines(conductLogPath)
+            var conductEvents = File.ReadAllLines(conductLogPath)
                 .Select(line => JsonSerializer.Deserialize<ConductEventRecord>(
                     line,
                     new JsonSerializerOptions(JsonSerializerDefaults.Web))!)
+                .ToArray();
+            var gateProgressEvents = conductEvents
+                .Where(record => record.EventKind == "gate-progress")
+                .ToArray();
+            Assert.Equal(2, gateProgressEvents.Length);
+            Assert.Contains(gateProgressEvents, record => record.GoalId == firstGoal.Id.Value[..8]);
+            Assert.Contains(gateProgressEvents, record => record.GoalId == secondGoal.Id.Value[..8]);
+            Assert.All(gateProgressEvents, record =>
+            {
+                Assert.Contains($"members={firstGoal.Id.Value[..8]},{secondGoal.Id.Value[..8]}", record.Detail, StringComparison.Ordinal);
+                Assert.DoesNotContain("goal=unknown", record.Detail, StringComparison.Ordinal);
+            });
+            var cohortEvents = conductEvents
                 .Where(record => record.EventKind == "acceptance-cohort")
                 .ToArray();
             Assert.StartsWith("ACCEPTANCE_COHORT_ENTRY", cohortEvents[0].Detail, StringComparison.Ordinal);
@@ -1815,6 +1830,60 @@ public sealed class AcceptanceCohortWorkflowTests : GoalWorktreeTestBase
                 DotnetBuildEnvironmentManager.IsolatedRootOverrideVariable,
                 previousIsolatedRoot);
             if (File.Exists(trx)) File.Delete(trx);
+            DeleteDirectory(repo);
+        }
+    }
+
+    [Fact]
+    public void OrdinaryParallelAcceptance_StillStartsPromptlyAndReconcilesLater()
+    {
+        var repo = CreateReducedAcceptanceCohortRepository();
+        try
+        {
+            var kernel = new AgentOrchestratorKernel();
+            var goal = CreateCompletedGoal(kernel, "Ordinary acceptance negative control", repo);
+            var attemptRoot = Path.Combine(repo, ".orchestrator", "ordinary-negative-control");
+            ConductorParallelAcceptanceOwnedProcessLaunch? launch = null;
+            const int ownerProcessId = 8123;
+            var coordinator = new ConductorParallelAcceptanceAttemptCoordinator(
+                attemptRoot,
+                isProcessAlive: _ => true,
+                launchOwnedProcess: pending =>
+                {
+                    launch = pending;
+                    return new ConductorParallelAcceptanceOwnedProcessLaunchResult(ownerProcessId);
+                });
+            var candidate = ConductorParallelAcceptanceCandidate.Create(
+                goal,
+                0,
+                ["src/Ordinary.cs"],
+                "ordinary-branch",
+                "ordinary-main");
+
+            var started = coordinator.Evaluate(
+                candidate,
+                ConductorAutonomyPolicy.Permissive,
+                (runCandidate, _) => ConductorParallelAcceptanceRunResult.Accepted(
+                    runCandidate,
+                    AcceptanceVerificationSummary.PassedWithNoUnmetCriteria));
+
+            Assert.Equal(ConductorParallelAcceptanceAttemptDecisionKind.Started, started.Kind);
+            Assert.NotNull(launch);
+            launch.ExecuteInCurrentProcess(ownerProcessId);
+
+            var completed = coordinator.Evaluate(
+                candidate,
+                ConductorAutonomyPolicy.Permissive,
+                (runCandidate, _) => ConductorParallelAcceptanceRunResult.Accepted(
+                    runCandidate,
+                    AcceptanceVerificationSummary.PassedWithNoUnmetCriteria));
+            Assert.Equal(ConductorParallelAcceptanceAttemptDecisionKind.Completed, completed.Kind);
+
+            coordinator.MarkReconciled(completed.Attempt);
+            Assert.Empty(coordinator.GetUnreconciledAttempts([goal.Id.Value]));
+        }
+        finally
+        {
             DeleteDirectory(repo);
         }
     }
@@ -2399,6 +2468,25 @@ public sealed class AcceptanceCohortWorkflowTests : GoalWorktreeTestBase
             Interlocked.Increment(ref _runCount);
             WorktreePath = worktreePath;
             StableSlotLeaseObserved = stableSlotLease is not null && stableSlotIndex is not null;
+            var now = DateTimeOffset.UtcNow;
+            typeof(GoalAcceptanceVerifier)
+                .GetMethod("EmitGateProgress", System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Static)!
+                .Invoke(null,
+                [
+                    new AcceptanceGateProgress(
+                        GoalId: goalId?.Value,
+                        Phase: "controlled-cohort",
+                        CurrentTarget: "blocking-verifier",
+                        SlotIndex: stableSlotIndex,
+                        ProcessId: Environment.ProcessId,
+                        ChildProcessId: null,
+                        StartedAt: now,
+                        LastObservedAt: now,
+                        LastProgressAt: now,
+                        Elapsed: TimeSpan.Zero,
+                        OutputBytes: 0,
+                        HeartbeatPath: Path.Combine(worktreePath, "controlled-heartbeat.json"))
+                ]);
             started.Set();
             if (!release.Wait(TimeSpan.FromSeconds(10), cancellationToken))
             {

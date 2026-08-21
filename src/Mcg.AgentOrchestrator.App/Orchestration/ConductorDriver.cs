@@ -46,6 +46,7 @@ internal sealed partial class ConductorDriver
 {
     private sealed record CohortGateRun(
         DateTimeOffset StartedAt,
+        IReadOnlySet<string> MemberGoalIds,
         TaskCompletionSource Completion);
 
     private sealed class TransferableCohortWorkspace(AcceptanceCohortWorkspace workspace) : IDisposable
@@ -3214,6 +3215,26 @@ internal sealed partial class ConductorDriver
     internal void ResetCohortFairness(GoalId goalId) =>
         _cohortAcceptanceStore?.ResetOvertake(goalId);
 
+    internal bool TryGetCohortGateHold(GoalId goalId, out string detail)
+    {
+        SweepCompletedCohortGateRuns();
+        foreach (var pair in _cohortGateRuns)
+        {
+            if (!pair.Value.MemberGoalIds.Contains(goalId.Value))
+            {
+                continue;
+            }
+
+            var elapsed = _utcNow() - pair.Value.StartedAt;
+            detail =
+                $"outcome=inflight fingerprint={pair.Key} elapsed_ms={Math.Max(0L, (long)elapsed.TotalMilliseconds)}";
+            return true;
+        }
+
+        detail = string.Empty;
+        return false;
+    }
+
     internal void RecordMergeTrainAdmissionFairness(ConductorMergeTrainSelection selection)
     {
         if (_cohortAcceptanceStore is null) return;
@@ -3353,6 +3374,9 @@ internal sealed partial class ConductorDriver
             {
                 var run = new CohortGateRun(
                     _utcNow(),
+                    selection.Members
+                        .Select(member => member.GoalId.Value)
+                        .ToHashSet(StringComparer.Ordinal),
                     new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously));
                 if (!_cohortGateRuns.TryAdd(pairFingerprint, run))
                 {

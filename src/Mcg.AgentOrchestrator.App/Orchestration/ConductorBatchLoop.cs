@@ -2902,6 +2902,24 @@ internal sealed class ConductorBatchLoop
                     changedGoalLines);
             }
         }
+        foreach (var goal in orderedEligible)
+        {
+            if (results.ContainsKey(goal.Id.Value) ||
+                !driver.TryGetCohortGateHold(goal.Id, out var cohortHoldDetail))
+            {
+                continue;
+            }
+
+            results[goal.Id.Value] = new ParallelLandingOutcome(
+                ParallelAcceptanceHeld(
+                    goal,
+                    policy,
+                    $"Acceptance cohort gate owns this member: {cohortHoldDetail}"),
+                SlotIndex: null);
+            RecordParallelAcceptanceProgress(
+                $"ACCEPTANCE_COHORT tick={tick} goal={goal.Id.Value[..8]} result=held {cohortHoldDetail}",
+                changedGoalLines);
+        }
         var oldestWaiter = SelectOldestParallelAcceptanceWaiter(orderedEligible, liveAttemptGoalIds);
         var oldestServedThisTick = false;
         foreach (var goal in orderedEligible)
