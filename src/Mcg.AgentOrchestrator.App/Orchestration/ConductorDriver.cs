@@ -1,3 +1,4 @@
+using System.Collections.Concurrent;
 using System.Diagnostics;
 using System.Security.Cryptography;
 using System.Text;
@@ -43,6 +44,21 @@ internal sealed record DeveloperBranchIntegrationResult(
 
 internal sealed partial class ConductorDriver
 {
+    private sealed record CohortGateRun(
+        DateTimeOffset StartedAt,
+        TaskCompletionSource Completion);
+
+    private sealed class TransferableCohortWorkspace(AcceptanceCohortWorkspace workspace) : IDisposable
+    {
+        private AcceptanceCohortWorkspace? _workspace = workspace;
+
+        internal AcceptanceCohortWorkspace Transfer() =>
+            Interlocked.Exchange(ref _workspace, null)
+            ?? throw new InvalidOperationException("Acceptance cohort workspace ownership was already transferred.");
+
+        public void Dispose() => Interlocked.Exchange(ref _workspace, null)?.Dispose();
+    }
+
     internal sealed class EvidenceMutationLeaseUnavailableException(string message)
         : InvalidOperationException(message);
 
@@ -129,6 +145,8 @@ internal sealed partial class ConductorDriver
         IReadOnlyList<Goal>,
         ConductorAutonomyPolicy,
         ConductorAcceptanceCohortRunResult>? _runAcceptanceCohortOverride;
+    private readonly ConcurrentDictionary<string, CohortGateRun> _cohortGateRuns = new(StringComparer.Ordinal);
+    private readonly Action<Action> _startCohortGateBackground;
     private readonly Func<
         ConductorMergeTrainSelection,
         IReadOnlyList<Goal>,
@@ -235,6 +253,10 @@ internal sealed partial class ConductorDriver
         _cohortEventWriter = eventWriter;
         _cohortAcceptanceStore = new CohortAcceptanceStore(
             Path.Combine(workspace.OrchestratorDirectory, "cohort-acceptance.db"));
+        _startCohortGateBackground = action =>
+        {
+            _ = Task.Run(action);
+        };
         _mergeTrainAcceptanceStore = new MergeTrainAcceptanceStore(
             Path.Combine(workspace.OrchestratorDirectory, "merge-train-acceptance.db"));
         kernel.SetEventWriter(eventWriter);
@@ -1252,6 +1274,10 @@ internal sealed partial class ConductorDriver
         _isVerificationGateSatisfied = isVerificationGateSatisfied ?? (_ => false);
         _gateReadyCandidateProjector = gateReadyCandidateProjector;
         _runAcceptanceCohortOverride = runAcceptanceCohort;
+        _startCohortGateBackground = action =>
+        {
+            _ = Task.Run(action);
+        };
         _runMergeTrainOverride = runMergeTrain;
         _getAcceptanceSlotCount = getAcceptanceSlotCount ?? (_ => ConductorBatchLoop.DefaultParallelAcceptanceCapacity);
         _getWorkerAdmissionCapacity = getWorkerAdmissionCapacity ?? (() => ConductorBatchLoop.WorkerAdmissionCapacity);
@@ -3202,7 +3228,8 @@ internal sealed partial class ConductorDriver
         IReadOnlyList<Goal> orderedGoals,
         ConductorAutonomyPolicy policy,
         CancellationToken cancellationToken = default,
-        Action? onGateAdmitted = null)
+        Action? onGateAdmitted = null,
+        bool runGateInBackground = false)
     {
         ArgumentNullException.ThrowIfNull(selection);
         ArgumentNullException.ThrowIfNull(orderedGoals);
@@ -3217,6 +3244,26 @@ internal sealed partial class ConductorDriver
         {
             throw new InvalidOperationException("Production acceptance cohort dependencies are unavailable.");
         }
+
+        var pairFingerprint = ConductorAcceptanceCohortSelector.PairFingerprint(
+            selection.Members[0],
+            selection.Members[1]);
+        if (_cohortGateRuns.TryGetValue(pairFingerprint, out var currentRun))
+        {
+            if (!currentRun.Completion.Task.IsCompleted)
+            {
+                return CohortInFlight(
+                    selection,
+                    orderedGoals,
+                    policy,
+                    pairFingerprint,
+                    currentRun.StartedAt);
+            }
+
+            _cohortGateRuns.TryRemove(pairFingerprint, out _);
+            currentRun.Completion.Task.GetAwaiter().GetResult();
+        }
+        SweepCompletedCohortGateRuns();
 
         var goalsById = orderedGoals.ToDictionary(goal => goal.Id);
         var goals = selection.Members.Select(member =>
@@ -3243,7 +3290,7 @@ internal sealed partial class ConductorDriver
                 ex.Message);
         }
 
-        using var integrationScope = integration;
+        using var integrationScope = new TransferableCohortWorkspace(integration);
         string manifestIdentity;
         try
         {
@@ -3263,8 +3310,6 @@ internal sealed partial class ConductorDriver
             integration.TreeRevision,
             manifestIdentity);
         var receipt = _cohortAcceptanceStore.TryReadReceipt(identity.Value);
-        AcceptanceVerificationResult? verification = null;
-
         if (receipt?.Invalidation is not null ||
             receipt?.Outcome == AcceptanceCohortGateOutcome.Invalidated)
         {
@@ -3304,72 +3349,58 @@ internal sealed partial class ConductorDriver
 
         if (receipt is null)
         {
-            var gateClock = Stopwatch.StartNew();
-            var outcome = AcceptanceCohortGateOutcome.InfrastructureFailure;
-            IReadOnlyList<string> failedChecks = [];
-            int? gateExitCode = null;
-            IReadOnlyList<string> gateTestResultPaths = [];
-            DotnetBuildEnvironmentLease? stableSlotLease = null;
-            var gateExecutionComplete = false;
-            try
+            if (runGateInBackground)
             {
-                stableSlotLease = _parallelAcceptanceAttemptCoordinator.AcquireCohortStableSlotLease(
-                    identity.Value,
-                    cancellationToken);
-                onGateAdmitted?.Invoke();
-                verification = _cohortAcceptanceVerifier.RunAsync(
-                    integration.Path,
-                    goalId: null,
-                    changedFiles: bindings.SelectMany(member => member.LandingPaths).Distinct(StringComparer.OrdinalIgnoreCase).ToArray(),
-                    stableSlotIndex: stableSlotLease.Environment.BuildPermitIndex,
-                    stableSlotLease: stableSlotLease,
-                    cancellationToken: cancellationToken).GetAwaiter().GetResult();
-                gateExitCode = verification.ExitCode;
-                gateTestResultPaths = NormalizeCohortTestResultPaths(verification.TestResultPaths);
-                outcome = ClassifyCohortVerification(verification);
-                failedChecks = verification.Checks?
-                    .Where(check => !check.Passed && !check.Advisory)
-                    .Select(check => check.Name)
-                    .ToArray() ?? [];
-                gateExecutionComplete = true;
-                gateClock.Stop();
-                receipt = _cohortAcceptanceStore.SaveGateReceipt(new AcceptanceCohortReceipt(
-                    $"cohort-receipt-v2-{identity.Value[(AcceptanceCohortIdentity.Version.Length + 1)..]}",
-                    identity,
-                    outcome,
-                    DateTimeOffset.UtcNow,
-                    checked((long)gateClock.Elapsed.TotalMilliseconds),
-                    failedChecks,
-                    GateExitCode: gateExitCode,
-                    GateTestResultPaths: gateTestResultPaths,
-                    ValidForLanding: outcome == AcceptanceCohortGateOutcome.Passed));
+                var run = new CohortGateRun(
+                    _utcNow(),
+                    new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously));
+                if (!_cohortGateRuns.TryAdd(pairFingerprint, run))
+                {
+                    return CohortInFlight(
+                        selection,
+                        orderedGoals,
+                        policy,
+                        pairFingerprint,
+                        _cohortGateRuns[pairFingerprint].StartedAt);
+                }
+
+                var ownedIntegration = integrationScope.Transfer();
+                _startCohortGateBackground(() =>
+                {
+                    try
+                    {
+                        using (ownedIntegration)
+                        {
+                            _ = ExecuteAcceptanceCohortGate(
+                                ownedIntegration,
+                                identity,
+                                bindings,
+                                pairFingerprint,
+                                cancellationToken,
+                                onGateAdmitted);
+                        }
+                        run.Completion.SetResult();
+                    }
+                    catch (Exception ex)
+                    {
+                        run.Completion.SetException(ex);
+                    }
+                });
+                return CohortInFlight(
+                    selection,
+                    orderedGoals,
+                    policy,
+                    pairFingerprint,
+                    run.StartedAt);
             }
-            catch (Exception ex) when (!gateExecutionComplete && ex is (
-                AcceptanceInfrastructureDeferredException or DotnetBuildSlotsBusyException or
-                BuildLockBlockedException or OperationCanceledException or IOException or
-                InvalidDataException))
-            {
-                outcome = AcceptanceCohortGateOutcome.InfrastructureFailure;
-                failedChecks = [$"infrastructure:{ex.GetType().Name}:{BoundCohortDetail(ex.Message)}"];
-            }
-            finally
-            {
-                stableSlotLease?.Dispose();
-            }
-            if (receipt is null)
-            {
-                gateClock.Stop();
-                receipt = _cohortAcceptanceStore.SaveGateReceipt(new AcceptanceCohortReceipt(
-                    $"cohort-receipt-v2-{identity.Value[(AcceptanceCohortIdentity.Version.Length + 1)..]}",
-                    identity,
-                    outcome,
-                    DateTimeOffset.UtcNow,
-                    checked((long)gateClock.Elapsed.TotalMilliseconds),
-                    failedChecks,
-                    GateExitCode: gateExitCode,
-                    GateTestResultPaths: gateTestResultPaths,
-                    ValidForLanding: false));
-            }
+
+            receipt = ExecuteAcceptanceCohortGate(
+                integration,
+                identity,
+                bindings,
+                pairFingerprint,
+                cancellationToken,
+                onGateAdmitted);
         }
 
         try
@@ -3389,25 +3420,6 @@ internal sealed partial class ConductorDriver
             return CohortReprojection(
                 receipt,
                 $"indeterminate cohort outcome={receipt.Outcome}; attribution=none; fresh Ready projection required");
-        }
-        if (receipt.Outcome == AcceptanceCohortGateOutcome.Failed &&
-            receipt.Attribution == AcceptanceCohortAttributionOutcome.NotApplicable)
-        {
-            var first = RunCohortPartition(bindings[0], 0);
-            var second = RunCohortPartition(bindings[1], 1);
-            var attribution = ConductorAcceptanceCohortAttribution.Classify(first.Outcome, second.Outcome);
-            var innocentGoalId = attribution switch
-            {
-                AcceptanceCohortAttributionOutcome.FirstMemberFailed => bindings[1].GoalId,
-                AcceptanceCohortAttributionOutcome.SecondMemberFailed => bindings[0].GoalId,
-                _ => (GoalId?)null
-            };
-            receipt = _cohortAcceptanceStore.SaveAttribution(
-                identity.Value,
-                attribution,
-                [first, second],
-                ConductorAcceptanceCohortSelector.PairFingerprint(selection.Members[0], selection.Members[1]),
-                innocentGoalId);
         }
         if (receipt.Outcome == AcceptanceCohortGateOutcome.Failed &&
             receipt.Attribution != AcceptanceCohortAttributionOutcome.NotApplicable)
@@ -3532,59 +3544,6 @@ internal sealed partial class ConductorDriver
                 $"outcome=materialization-failure kind={failure.Outcome} attempt={failure.AttemptId} fallback=ordinary detail={BoundCohortDetail(failure.Detail)}");
         }
 
-        AcceptanceCohortPartitionReceipt RunCohortPartition(
-            AcceptanceCohortMemberBinding member,
-            int memberOrdinal)
-        {
-            var clock = Stopwatch.StartNew();
-            string? treeRevision = null;
-            string partitionManifest = identity.ManifestIdentity;
-            IReadOnlyList<string> testResultPaths = [];
-            AcceptanceCohortGateOutcome outcome;
-            try
-            {
-                using var partition = GoalWorktrees.CreateAcceptancePartitionWorkspace(
-                    _cohortWorkspace.ExecutionDirectory,
-                    identity.ObservedMainRevision,
-                    member);
-                treeRevision = partition.TreeRevision;
-                partitionManifest = _cohortAcceptanceVerifier.ComputeEffectivePlanIdentity(
-                    partition.Path,
-                    member.LandingPaths);
-                var result = _cohortAcceptanceVerifier.RunAsync(
-                    partition.Path,
-                    member.GoalId,
-                    member.LandingPaths,
-                    cancellationToken: cancellationToken).GetAwaiter().GetResult();
-                testResultPaths = NormalizeCohortTestResultPaths(result.TestResultPaths);
-                partition.AssertGoalBranchesUnchanged();
-                outcome = ClassifyCohortVerification(result);
-            }
-            catch (Exception ex) when (ex is AcceptanceInfrastructureDeferredException or
-                DotnetBuildSlotsBusyException or BuildLockBlockedException or
-                OperationCanceledException or IOException or InvalidDataException or InvalidOperationException)
-            {
-                outcome = AcceptanceCohortGateOutcome.InfrastructureFailure;
-            }
-            clock.Stop();
-            var receiptId = CreateCohortPartitionReceiptId(
-                member,
-                identity.ObservedMainRevision,
-                treeRevision,
-                partitionManifest);
-            return new AcceptanceCohortPartitionReceipt(
-                receiptId,
-                member.GoalId,
-                memberOrdinal,
-                member.CandidateRevision,
-                identity.ObservedMainRevision,
-                treeRevision,
-                partitionManifest,
-                outcome,
-                checked((long)clock.Elapsed.TotalMilliseconds),
-                testResultPaths);
-        }
-
         ConductorAcceptanceCohortRunResult CohortReprojection(
             AcceptanceCohortReceipt diagnosticReceipt,
             string detail) => CohortHeld(goals, policy, diagnosticReceipt, detail);
@@ -3597,6 +3556,217 @@ internal sealed partial class ConductorDriver
                 $"outcome={diagnosticReceipt.Outcome} receipt={diagnosticReceipt.ReceiptId} " +
                 $"invalidation={diagnosticReceipt.Invalidation?.Reason.ToString() ?? "legacy"} fallback=ordinary " +
                 $"detail={BoundCohortDetail(detail)}");
+    }
+
+    private AcceptanceCohortReceipt ExecuteAcceptanceCohortGate(
+        AcceptanceCohortWorkspace integration,
+        AcceptanceCohortIdentity identity,
+        IReadOnlyList<AcceptanceCohortMemberBinding> bindings,
+        string pairFingerprint,
+        CancellationToken cancellationToken,
+        Action? onGateAdmitted)
+    {
+        var verifier = _cohortAcceptanceVerifier
+            ?? throw new InvalidOperationException("Production acceptance cohort verifier is unavailable.");
+        var store = _cohortAcceptanceStore
+            ?? throw new InvalidOperationException("Production acceptance cohort store is unavailable.");
+        var workspace = _cohortWorkspace
+            ?? throw new InvalidOperationException("Production acceptance cohort workspace is unavailable.");
+        var gateProgressEventWriter = new ConductEventLogWriter(
+            Path.Combine(workspace.ExecutionDirectory, ".orchestrator", "logs", ConductEventLogWriter.CurrentFileName));
+        using var progressSink = GoalAcceptanceVerifier.PushGateProgressSink(progress =>
+            AppendCohortGateProgressEvents(gateProgressEventWriter, identity, bindings, progress));
+
+        var gateClock = Stopwatch.StartNew();
+        var outcome = AcceptanceCohortGateOutcome.InfrastructureFailure;
+        IReadOnlyList<string> failedChecks = [];
+        int? gateExitCode = null;
+        IReadOnlyList<string> gateTestResultPaths = [];
+        DotnetBuildEnvironmentLease? stableSlotLease = null;
+        AcceptanceCohortReceipt? receipt = null;
+        var gateExecutionComplete = false;
+        try
+        {
+            stableSlotLease = _parallelAcceptanceAttemptCoordinator.AcquireCohortStableSlotLease(
+                identity.Value,
+                cancellationToken);
+            onGateAdmitted?.Invoke();
+            var verification = verifier.RunAsync(
+                integration.Path,
+                goalId: null,
+                changedFiles: bindings.SelectMany(member => member.LandingPaths).Distinct(StringComparer.OrdinalIgnoreCase).ToArray(),
+                stableSlotIndex: stableSlotLease.Environment.BuildPermitIndex,
+                stableSlotLease: stableSlotLease,
+                cancellationToken: cancellationToken).GetAwaiter().GetResult();
+            gateExitCode = verification.ExitCode;
+            gateTestResultPaths = NormalizeCohortTestResultPaths(verification.TestResultPaths);
+            outcome = ClassifyCohortVerification(verification);
+            failedChecks = verification.Checks?
+                .Where(check => !check.Passed && !check.Advisory)
+                .Select(check => check.Name)
+                .ToArray() ?? [];
+            gateExecutionComplete = true;
+            gateClock.Stop();
+            receipt = store.SaveGateReceipt(new AcceptanceCohortReceipt(
+                $"cohort-receipt-v2-{identity.Value[(AcceptanceCohortIdentity.Version.Length + 1)..]}",
+                identity,
+                outcome,
+                _utcNow(),
+                checked((long)gateClock.Elapsed.TotalMilliseconds),
+                failedChecks,
+                GateExitCode: gateExitCode,
+                GateTestResultPaths: gateTestResultPaths,
+                ValidForLanding: outcome == AcceptanceCohortGateOutcome.Passed));
+        }
+        catch (Exception ex) when (!gateExecutionComplete && ex is (
+            AcceptanceInfrastructureDeferredException or DotnetBuildSlotsBusyException or
+            BuildLockBlockedException or OperationCanceledException or IOException or
+            InvalidDataException))
+        {
+            outcome = AcceptanceCohortGateOutcome.InfrastructureFailure;
+            failedChecks = [$"infrastructure:{ex.GetType().Name}:{BoundCohortDetail(ex.Message)}"];
+        }
+        finally
+        {
+            stableSlotLease?.Dispose();
+        }
+
+        if (receipt is null)
+        {
+            gateClock.Stop();
+            receipt = store.SaveGateReceipt(new AcceptanceCohortReceipt(
+                $"cohort-receipt-v2-{identity.Value[(AcceptanceCohortIdentity.Version.Length + 1)..]}",
+                identity,
+                outcome,
+                _utcNow(),
+                checked((long)gateClock.Elapsed.TotalMilliseconds),
+                failedChecks,
+                GateExitCode: gateExitCode,
+                GateTestResultPaths: gateTestResultPaths,
+                ValidForLanding: false));
+        }
+
+        if (receipt.Outcome == AcceptanceCohortGateOutcome.Failed &&
+            receipt.Attribution == AcceptanceCohortAttributionOutcome.NotApplicable)
+        {
+            var first = RunCohortPartition(bindings[0], 0, identity, cancellationToken);
+            var second = RunCohortPartition(bindings[1], 1, identity, cancellationToken);
+            var attribution = ConductorAcceptanceCohortAttribution.Classify(first.Outcome, second.Outcome);
+            var innocentGoalId = attribution switch
+            {
+                AcceptanceCohortAttributionOutcome.FirstMemberFailed => bindings[1].GoalId,
+                AcceptanceCohortAttributionOutcome.SecondMemberFailed => bindings[0].GoalId,
+                _ => (GoalId?)null
+            };
+            receipt = store.SaveAttribution(
+                identity.Value,
+                attribution,
+                [first, second],
+                pairFingerprint,
+                innocentGoalId);
+        }
+
+        return receipt;
+    }
+
+    private AcceptanceCohortPartitionReceipt RunCohortPartition(
+        AcceptanceCohortMemberBinding member,
+        int memberOrdinal,
+        AcceptanceCohortIdentity identity,
+        CancellationToken cancellationToken)
+    {
+        var workspace = _cohortWorkspace
+            ?? throw new InvalidOperationException("Production acceptance cohort workspace is unavailable.");
+        var verifier = _cohortAcceptanceVerifier
+            ?? throw new InvalidOperationException("Production acceptance cohort verifier is unavailable.");
+        var clock = Stopwatch.StartNew();
+        string? treeRevision = null;
+        var partitionManifest = identity.ManifestIdentity;
+        IReadOnlyList<string> testResultPaths = [];
+        AcceptanceCohortGateOutcome outcome;
+        try
+        {
+            using var partition = GoalWorktrees.CreateAcceptancePartitionWorkspace(
+                workspace.ExecutionDirectory,
+                identity.ObservedMainRevision,
+                member);
+            treeRevision = partition.TreeRevision;
+            partitionManifest = verifier.ComputeEffectivePlanIdentity(
+                partition.Path,
+                member.LandingPaths);
+            var result = verifier.RunAsync(
+                partition.Path,
+                member.GoalId,
+                member.LandingPaths,
+                cancellationToken: cancellationToken).GetAwaiter().GetResult();
+            testResultPaths = NormalizeCohortTestResultPaths(result.TestResultPaths);
+            partition.AssertGoalBranchesUnchanged();
+            outcome = ClassifyCohortVerification(result);
+        }
+        catch (Exception ex) when (ex is AcceptanceInfrastructureDeferredException or
+            DotnetBuildSlotsBusyException or BuildLockBlockedException or
+            OperationCanceledException or IOException or InvalidDataException or InvalidOperationException)
+        {
+            outcome = AcceptanceCohortGateOutcome.InfrastructureFailure;
+        }
+        clock.Stop();
+        var receiptId = CreateCohortPartitionReceiptId(
+            member,
+            identity.ObservedMainRevision,
+            treeRevision,
+            partitionManifest);
+        return new AcceptanceCohortPartitionReceipt(
+            receiptId,
+            member.GoalId,
+            memberOrdinal,
+            member.CandidateRevision,
+            identity.ObservedMainRevision,
+            treeRevision,
+            partitionManifest,
+            outcome,
+            checked((long)clock.Elapsed.TotalMilliseconds),
+            testResultPaths);
+    }
+
+    private void SweepCompletedCohortGateRuns()
+    {
+        foreach (var pair in _cohortGateRuns)
+        {
+            if (!pair.Value.Completion.Task.IsCompleted ||
+                !_cohortGateRuns.TryRemove(pair.Key, out var completed))
+            {
+                continue;
+            }
+
+            completed.Completion.Task.GetAwaiter().GetResult();
+        }
+    }
+
+    private ConductorAcceptanceCohortRunResult CohortInFlight(
+        ConductorAcceptanceCohortSelection selection,
+        IReadOnlyList<Goal> orderedGoals,
+        ConductorAutonomyPolicy policy,
+        string pairFingerprint,
+        DateTimeOffset startedAt)
+    {
+        var selectedIds = selection.Members.Select(member => member.GoalId).ToHashSet();
+        var goals = orderedGoals.Where(goal => selectedIds.Contains(goal.Id)).ToArray();
+        var elapsed = _utcNow() - startedAt;
+        var detail =
+            $"outcome=inflight fingerprint={pairFingerprint} elapsed_ms={Math.Max(0L, (long)elapsed.TotalMilliseconds)}";
+        return new ConductorAcceptanceCohortRunResult(
+            Receipt: null,
+            goals.ToDictionary(
+                goal => goal.Id.Value,
+                goal => MakeResult(
+                    goal.Id.Value,
+                    goal.Id.Value[..8],
+                    policy,
+                    new ConductorAdvanceOutcome.Held(
+                        GoalLifecycleState.Verified,
+                        $"Acceptance cohort gate is running in the background: {detail}")),
+                StringComparer.Ordinal),
+            detail);
     }
 
     private static string CreateCohortPartitionReceiptId(
@@ -4856,6 +5026,30 @@ internal sealed partial class ConductorDriver
         {
             throw new IOException(
                 $"Required gate progress event could not be appended for goal {goalId.Value[..8]}.");
+        }
+    }
+
+    internal static void AppendCohortGateProgressEvents(
+        ConductEventLogWriter writer,
+        AcceptanceCohortIdentity identity,
+        IReadOnlyList<AcceptanceCohortMemberBinding> bindings,
+        AcceptanceGateProgress progress)
+    {
+        var members = string.Join(',', bindings.Select(member => member.GoalId.Value[..8]));
+        foreach (var member in bindings)
+        {
+            var goalId = member.GoalId.Value[..8];
+            var detail =
+                $"PHASE_PROGRESS goal={goalId} cohort={identity.Value[..Math.Min(18, identity.Value.Length)]} " +
+                $"member={goalId} members={members} phase={progress.Phase} " +
+                $"elapsed_ms={(long)progress.Elapsed.TotalMilliseconds} target={FormatConductToken(progress.CurrentTarget)} " +
+                $"child_pid={progress.ChildProcessId?.ToString(System.Globalization.CultureInfo.InvariantCulture) ?? "unknown"} " +
+                $"output_bytes={progress.OutputBytes} heartbeat={FormatConductToken(progress.HeartbeatPath)}";
+            if (!writer.AppendRequired("gate-progress", goalId, detail))
+            {
+                throw new IOException(
+                    $"Required cohort gate progress event could not be appended for goal {goalId}.");
+            }
         }
     }
 

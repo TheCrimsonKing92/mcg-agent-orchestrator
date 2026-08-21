@@ -1,3 +1,4 @@
+using System.Text.Json;
 using Mcg.AgentOrchestrator.App.Cli;
 using Mcg.AgentOrchestrator.App.Orchestration;
 using Mcg.AgentOrchestrator.Core;
@@ -1587,10 +1588,75 @@ public sealed class AcceptanceCohortWorkflowTests : GoalWorktreeTestBase
     }
 
     [Fact]
-    public void ProductionBatch_SelectsRunsPersistsLandsAndCleansOneSharedCohort()
+    public void CohortProgressEvents_AreStructuredForBothMembersWithoutUnknownGoal()
+    {
+        var root = Path.Combine(Path.GetTempPath(), $"cohort-progress-{Guid.NewGuid():N}");
+        Directory.CreateDirectory(root);
+        try
+        {
+            var first = new GoalId("11111111111111111111111111111111");
+            var second = new GoalId("22222222222222222222222222222222");
+            var bindings = new[]
+            {
+                Bind(first, new string('a', 40), "src/First.cs", "production:first"),
+                Bind(second, new string('b', 40), "src/Second.cs", "production:second")
+            };
+            var identity = AcceptanceCohortIdentity.Create(
+                bindings,
+                new string('c', 40),
+                new string('d', 40),
+                "manifest-v1");
+            var logPath = Path.Combine(root, "conduct-events.jsonl");
+            var writer = new ConductEventLogWriter(logPath);
+            var now = DateTimeOffset.UtcNow;
+
+            ConductorDriver.AppendCohortGateProgressEvents(
+                writer,
+                identity,
+                bindings,
+                new AcceptanceGateProgress(
+                    GoalId: null,
+                    Phase: "lane",
+                    CurrentTarget: "focused-cohort",
+                    SlotIndex: 0,
+                    ProcessId: Environment.ProcessId,
+                    ChildProcessId: 1234,
+                    StartedAt: now.AddSeconds(-1),
+                    LastObservedAt: now,
+                    LastProgressAt: now,
+                    Elapsed: TimeSpan.FromSeconds(1),
+                    OutputBytes: 42,
+                    HeartbeatPath: Path.Combine(root, "heartbeat.json")));
+
+            var records = File.ReadAllLines(logPath)
+                .Select(line => JsonSerializer.Deserialize<ConductEventRecord>(
+                    line,
+                    new JsonSerializerOptions(JsonSerializerDefaults.Web))!)
+                .ToArray();
+            Assert.Equal(2, records.Length);
+            Assert.Contains(records, record => record.GoalId == first.Value[..8]);
+            Assert.Contains(records, record => record.GoalId == second.Value[..8]);
+            Assert.All(records, record =>
+            {
+                Assert.Equal("gate-progress", record.EventKind);
+                Assert.Contains($"cohort={identity.Value[..18]}", record.Detail, StringComparison.Ordinal);
+                Assert.Contains($"members={first.Value[..8]},{second.Value[..8]}", record.Detail, StringComparison.Ordinal);
+                Assert.DoesNotContain("goal=unknown", record.Detail, StringComparison.Ordinal);
+            });
+        }
+        finally
+        {
+            DeleteDirectory(root);
+        }
+    }
+
+    [Fact]
+    public void ProductionBatch_LongCohortGateDoesNotBlockTicksOrOperatorIntents_AndReconcilesLater()
     {
         var repo = CreateReducedAcceptanceCohortRepository();
         var trx = Path.Combine(Path.GetTempPath(), $"cohort-production-{Guid.NewGuid():N}.trx");
+        using var gateStarted = new ManualResetEventSlim();
+        using var gateRelease = new ManualResetEventSlim();
         var previousIsolatedRoot = Environment.GetEnvironmentVariable(
             DotnetBuildEnvironmentManager.IsolatedRootOverrideVariable);
         try
@@ -1609,13 +1675,16 @@ public sealed class AcceptanceCohortWorkflowTests : GoalWorktreeTestBase
                 "src/Mcg.AgentOrchestrator.Infrastructure/First.cs",
                 "first");
             _ = CreateWorktreeCandidate(repo, secondGoal.Id, "tests/Second.cs", "second");
-            var verifier = new FakeAcceptanceVerifier(new AcceptanceVerificationResult(
-                Passed: true,
-                Skipped: false,
-                ExitCode: 0,
-                OutputTail: null,
-                Checks: [new AcceptanceCheckResult("shared-production-gate", true, 0, null)],
-                TestResultPaths: [trx]));
+            var verifier = new BlockingAcceptanceVerifier(
+                gateStarted,
+                gateRelease,
+                new AcceptanceVerificationResult(
+                    Passed: true,
+                    Skipped: false,
+                    ExitCode: 0,
+                    OutputTail: null,
+                    Checks: [new AcceptanceCheckResult("shared-production-gate", true, 0, null)],
+                    TestResultPaths: [trx]));
             var workspace = OrchestratorWorkspace.ForDirectory(repo);
             var driver = new ConductorDriver(
                 kernel,
@@ -1628,19 +1697,86 @@ public sealed class AcceptanceCohortWorkflowTests : GoalWorktreeTestBase
             fairnessStore.RecordOvertake(firstGoal.Id);
             fairnessStore.RecordOvertake(secondGoal.Id);
             var stopPath = Path.Combine(repo, "stop-does-not-exist");
+            var conductLogPath = Path.Combine(workspace.OrchestratorDirectory, "logs", "cohort-nonblocking.jsonl");
+            var intentStore = new SqliteOperatorIntentStore(
+                Path.Combine(workspace.OrchestratorDirectory, "operator-intents.db"),
+                Path.Combine(workspace.OrchestratorDirectory, "logs"));
+            const string intentId = "cohort-running-progress";
+            var ticks = new List<BatchTickSummary>();
 
-            var summary = new ConductorBatchLoop().Run(
+            var heldSummary = new ConductorBatchLoop(
+                operatorIntents: new OperatorIntentCoordinator(intentStore),
+                conductEventLogWriter: new ConductEventLogWriter(conductLogPath)).Run(
+                kernel,
+                driver,
+                ConductorAutonomyPolicy.Permissive,
+                stopPath,
+                maxIterations: 3,
+                watchInterval: TimeSpan.FromMilliseconds(1),
+                sleepFunc: _ => false,
+                onTick: tick =>
+                {
+                    ticks.Add(tick);
+                    if (ticks.Count != 1)
+                    {
+                        return;
+                    }
+
+                    Assert.True(gateStarted.Wait(TimeSpan.FromSeconds(10)), "The controlled cohort verifier did not start.");
+                    intentStore.EnqueueAsync(new OperatorIntentRecord(
+                        intentId,
+                        "cohort-running-progress-key",
+                        OperatorIntentVerbs.Progress,
+                        firstGoal.Id.Value,
+                        firstGoal.Tasks.Single().Id.Value,
+                        JsonSerializer.Serialize(
+                            new ProgressOperatorIntentPayload(WorkTaskStatus.Completed, "operator intent applied while cohort gate remained held"),
+                            new JsonSerializerOptions(JsonSerializerDefaults.Web)),
+                        [],
+                        "operator",
+                        "test",
+                        "local-process",
+                        DateTimeOffset.UtcNow)).GetAwaiter().GetResult();
+                },
+                persistGoalTick: (_, _) => { });
+
+            Assert.Equal(3, ticks.Count);
+            Assert.Equal(1, verifier.RunCount);
+            Assert.True(verifier.StableSlotLeaseObserved);
+            Assert.True(Directory.Exists(verifier.WorktreePath));
+            Assert.Equal(OperatorIntentStatus.Applied, intentStore.GetAsync(intentId).GetAwaiter().GetResult()!.Status);
+            Assert.Equal(GoalStatus.Verified, firstGoal.Status);
+            Assert.Equal(GoalStatus.Verified, secondGoal.Status);
+            Assert.Equal(0, heldSummary.Advanced);
+            var cohortEvents = File.ReadAllLines(conductLogPath)
+                .Select(line => JsonSerializer.Deserialize<ConductEventRecord>(
+                    line,
+                    new JsonSerializerOptions(JsonSerializerDefaults.Web))!)
+                .Where(record => record.EventKind == "acceptance-cohort")
+                .ToArray();
+            Assert.StartsWith("ACCEPTANCE_COHORT_ENTRY", cohortEvents[0].Detail, StringComparison.Ordinal);
+            Assert.Contains(cohortEvents, record => record.Detail.StartsWith("ACCEPTANCE_COHORT_ENTRY", StringComparison.Ordinal));
+            Assert.Contains(cohortEvents, record => record.Detail.StartsWith("ACCEPTANCE_COHORT_EXIT", StringComparison.Ordinal));
+            var inFlightTicks = cohortEvents
+                .Where(record => record.Detail.StartsWith("ACCEPTANCE_COHORT_INFLIGHT", StringComparison.Ordinal))
+                .Select(record => record.Detail.Split(' ', StringSplitOptions.RemoveEmptyEntries)
+                    .Single(token => token.StartsWith("tick=", StringComparison.Ordinal)))
+                .Distinct(StringComparer.Ordinal)
+                .ToArray();
+            Assert.True(inFlightTicks.Length >= 2, "Expected in-flight cohort records from at least two completed ticks.");
+
+            gateRelease.Set();
+            Assert.True(SpinWait.SpinUntil(ReceiptPersisted, TimeSpan.FromSeconds(10)), "The background cohort receipt was not persisted.");
+            var landedSummary = new ConductorBatchLoop().Run(
                 kernel,
                 driver,
                 ConductorAutonomyPolicy.Permissive,
                 stopPath,
                 maxIterations: 1);
 
-            Assert.Equal(1, verifier.RunCount);
-            Assert.True(verifier.StableSlotLeaseObserved);
             Assert.Equal(0, fairnessStore.ReadOvertakeCount(firstGoal.Id));
             Assert.Equal(0, fairnessStore.ReadOvertakeCount(secondGoal.Id));
-            Assert.Equal(2, summary.Advanced);
+            Assert.Equal(2, landedSummary.Advanced);
             Assert.True(File.Exists(Path.Combine(
                 repo,
                 "src",
@@ -1661,9 +1797,20 @@ public sealed class AcceptanceCohortWorkflowTests : GoalWorktreeTestBase
             Assert.Equal(1, reader.GetInt32(0));
             Assert.Equal(0, reader.GetInt32(1));
             Assert.Equal(1, reader.GetInt32(2));
+
+            bool ReceiptPersisted()
+            {
+                using var receiptConnection = new SqliteConnection(
+                    $"Data Source={Path.Combine(workspace.OrchestratorDirectory, "cohort-acceptance.db")}");
+                receiptConnection.Open();
+                using var receiptCommand = receiptConnection.CreateCommand();
+                receiptCommand.CommandText = "SELECT COUNT(*) FROM cohort_receipts;";
+                return Convert.ToInt32(receiptCommand.ExecuteScalar()) == 1;
+            }
         }
         finally
         {
+            gateRelease.Set();
             Environment.SetEnvironmentVariable(
                 DotnetBuildEnvironmentManager.IsolatedRootOverrideVariable,
                 previousIsolatedRoot);
@@ -2228,7 +2375,48 @@ public sealed class AcceptanceCohortWorkflowTests : GoalWorktreeTestBase
             ChangeRiskTier.Behavior,
             ConductorTransitionDecision.Auto,
             GateReadyMergeStatus.Clean.ToString(),
-            GateReadyMergeReason.NoConflictsDetected.ToString());
+             GateReadyMergeReason.NoConflictsDetected.ToString());
+
+    private sealed class BlockingAcceptanceVerifier(
+        ManualResetEventSlim started,
+        ManualResetEventSlim release,
+        AcceptanceVerificationResult result) : IGoalAcceptanceVerifier
+    {
+        private int _runCount;
+
+        internal int RunCount => Volatile.Read(ref _runCount);
+        internal bool StableSlotLeaseObserved { get; private set; }
+        internal string WorktreePath { get; private set; } = string.Empty;
+
+        public Task<AcceptanceVerificationResult> RunAsync(
+            string worktreePath,
+            GoalId? goalId = null,
+            IReadOnlyList<string>? changedFiles = null,
+            int? stableSlotIndex = null,
+            DotnetBuildEnvironmentLease? stableSlotLease = null,
+            CancellationToken cancellationToken = default)
+        {
+            Interlocked.Increment(ref _runCount);
+            WorktreePath = worktreePath;
+            StableSlotLeaseObserved = stableSlotLease is not null && stableSlotIndex is not null;
+            started.Set();
+            if (!release.Wait(TimeSpan.FromSeconds(10), cancellationToken))
+            {
+                throw new TimeoutException("Controlled cohort verifier was not released.");
+            }
+            return Task.FromResult(result);
+        }
+
+        public Task<FocusedEvidenceRunResult> RunFocusedEvidenceAsync(
+            string worktreePath,
+            GoalId? goalId,
+            string request,
+            int? stableSlotIndex = null,
+            DotnetBuildEnvironmentLease? stableSlotLease = null,
+            bool runBaselineArm = false,
+            CancellationToken cancellationToken = default) =>
+            throw new NotSupportedException("Focused evidence is not used by the blocking cohort fixture.");
+    }
 
     private sealed class SequenceAcceptanceVerifier(
         IReadOnlyList<AcceptanceVerificationResult> results) : IGoalAcceptanceVerifier
