@@ -544,6 +544,7 @@ public sealed class AcceptanceGateEngineSettingsTests
         var peakShards = 0;
         var activeSharedShards = 0;
         var peakSharedShards = 0;
+        DotnetBuildEnvironmentLease? buildLease = null;
         GoalAcceptanceVerifier.ResolveShardCoreBudgetForTests = () => 6;
         GoalAcceptanceVerifier.ResolveMainWorktreePathForTests = _ => root;
         GoalAcceptanceVerifier.ResolveDeletedTestFilesForTests = _ => [];
@@ -553,10 +554,30 @@ public sealed class AcceptanceGateEngineSettingsTests
         GoalAcceptanceVerifier.PartitionVerdictWithinAttemptRerunEnabled = false;
         try
         {
+            buildLease = DotnetBuildEnvironmentManager.AcquireFirstAvailableStableSlotExecutionLock(
+                TimeSpan.FromSeconds(2));
+            var stableSlotIndex = buildLease.Environment.BuildPermitIndex
+                ?? throw new InvalidOperationException("Expected a scheduler-managed build permit.");
             var verifier = new GoalAcceptanceVerifier(async (arguments, _, _) =>
             {
                 if (!arguments.Contains("--report-trx-filename"))
                 {
+                    if (arguments.Length >= 2 &&
+                        arguments[0].Equals("dotnet", StringComparison.OrdinalIgnoreCase) &&
+                        arguments[1].Equals("build", StringComparison.OrdinalIgnoreCase))
+                    {
+                        var artifactsPathIndex = Array.IndexOf(arguments, "--artifacts-path");
+                        Xunit.Assert.True(
+                            artifactsPathIndex >= 0 && artifactsPathIndex + 1 < arguments.Length,
+                            "The MTP prebuild must specify its stable-slot artifacts path.");
+                        var executable = Path.Combine(
+                            arguments[artifactsPathIndex + 1],
+                            "candidate",
+                            "Mcg.AgentOrchestrator.Infrastructure.Tests.exe");
+                        Directory.CreateDirectory(Path.GetDirectoryName(executable)!);
+                        File.WriteAllText(executable, "deterministic raised-cap fixture");
+                    }
+
                     return new GoalAcceptanceVerifier.CommandResult(0, "Build succeeded.");
                 }
 
@@ -605,7 +626,11 @@ public sealed class AcceptanceGateEngineSettingsTests
             Environment.SetEnvironmentVariable(
                 GoalAcceptanceVerifier.AcceptanceAttemptTrxPrefixVariable,
                 Path.Combine(root, ".orchestrator", "raised-cap-attempt"));
-            var result = await verifier.RunAsync(root, goalId);
+            var result = await verifier.RunAsync(
+                root,
+                goalId,
+                stableSlotIndex: stableSlotIndex,
+                stableSlotLease: buildLease);
 
             Xunit.Assert.True(result.Passed);
             Xunit.Assert.Equal(6, peakShards);
@@ -613,6 +638,7 @@ public sealed class AcceptanceGateEngineSettingsTests
         }
         finally
         {
+            buildLease?.Dispose();
             Environment.SetEnvironmentVariable(
                 GoalAcceptanceVerifier.AcceptanceAttemptTrxPrefixVariable,
                 previousPrefix);
