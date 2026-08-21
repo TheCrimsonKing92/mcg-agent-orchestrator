@@ -213,3 +213,7 @@ Recommended backlog order:
 8. Core classifier extraction: provider rule sets.
 
 Each item should enter the backlog as a behavior-preserving goal with explicit characterization tests first, a narrow changed-file set, and a disjointness note copied from the matrix above.
+
+## GoalAcceptanceVerifier size ratchet
+
+`GoalAcceptanceVerifierSizeRatchetTests` prevents `GoalAcceptanceVerifier.cs` from growing past the recorded `MaximumLineCount`, seeded at 8713 from `File.ReadLines(path).Count()` at commit `fde5f80f62ae388f98eb13c712cfe3abb4782b44`. When an extraction shrinks the file, lower the constant in the same change. If growth is unavoidable, raise the constant deliberately with justification in the same change; never derive it automatically from the current file or delete the guard.
