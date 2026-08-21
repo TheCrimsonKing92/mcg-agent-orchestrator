@@ -14,7 +14,7 @@ public sealed class AcceptanceGateEngineSettingsTests
         Xunit.Assert.Equal(4, settings.MaxConcurrentShards);
         Xunit.Assert.Equal(5, settings.PartitionVerdictFullRerunEveryN);
         Xunit.Assert.Equal(AcceptanceGateEngineSettings.DefaultOutputCaptureLimitBytes, settings.OutputCaptureLimitBytes);
-        Xunit.Assert.Equal(18, settings.InfrastructureTestLanes.Count);
+        Xunit.Assert.Equal(19, settings.InfrastructureTestLanes.Count);
         Xunit.Assert.Equal(6, startupContract.ManifestCheckCount);
         using var manifestDocument = System.Text.Json.JsonDocument.Parse(
             File.ReadAllText(Path.Combine(repositoryRoot, "config", "acceptance-manifest.json")));
@@ -738,6 +738,46 @@ public sealed class AcceptanceGateEngineSettingsTests
             GoalAcceptanceVerifier.ResolveMainWorktreePathForTests = null;
             GoalAcceptanceVerifier.ResolveDeletedTestFilesForTests = null;
             Directory.Delete(root, recursive: true);
+        }
+    }
+
+    [Xunit.Fact]
+    public void ChangeScopedSelectionDropsExpensiveMtpLaneExceptForBuildSystemChanges()
+    {
+        var root = InfrastructureTestSupport.FindRepositoryRoot();
+        var previousChangeScoped = Environment.GetEnvironmentVariable("MCG_ACCEPTANCE_CHANGE_SCOPED");
+        var previousFullShards = Environment.GetEnvironmentVariable("MCG_ACCEPTANCE_FULL_SHARDS");
+        try
+        {
+            Environment.SetEnvironmentVariable("MCG_ACCEPTANCE_CHANGE_SCOPED", "1");
+            Environment.SetEnvironmentVariable("MCG_ACCEPTANCE_FULL_SHARDS", null);
+            var ordinaryChange = GoalAcceptanceVerifier.BuildEffectiveAcceptanceChecksForTests(
+                root,
+                ["src/Mcg.AgentOrchestrator.Infrastructure/Workspaces/WorkspaceConsolidator.cs"]);
+            var buildSystemChange = GoalAcceptanceVerifier.BuildEffectiveAcceptanceChecksForTests(
+                root,
+                [
+                    "Directory.Build.props",
+                    "src/Mcg.AgentOrchestrator.Infrastructure/Workspaces/WorkspaceConsolidator.cs"
+                ]);
+
+            Xunit.Assert.DoesNotContain(
+                ordinaryChange,
+                check => check.Name.EndsWith(": Mtp one-step project rebuild", StringComparison.Ordinal));
+            Xunit.Assert.Contains(
+                buildSystemChange,
+                check => check.Name.EndsWith(": Mtp one-step project rebuild", StringComparison.Ordinal));
+            Xunit.Assert.Contains(
+                ordinaryChange,
+                check => check.Name.EndsWith(": Process spawning", StringComparison.Ordinal));
+            Xunit.Assert.Contains(
+                buildSystemChange,
+                check => check.Name.EndsWith(": Process spawning", StringComparison.Ordinal));
+        }
+        finally
+        {
+            Environment.SetEnvironmentVariable("MCG_ACCEPTANCE_CHANGE_SCOPED", previousChangeScoped);
+            Environment.SetEnvironmentVariable("MCG_ACCEPTANCE_FULL_SHARDS", previousFullShards);
         }
     }
 

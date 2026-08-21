@@ -63,9 +63,16 @@
       },
       {
         "name": "Process spawning",
-        "filter": "FullyQualifiedName~GoalWorktreeIsolatedDotnetTests|FullyQualifiedName~ConductorSelfRelaunchTests|FullyQualifiedName~ConductorSuccessorSelfCheckTests|FullyQualifiedName~DispatchProcessHostTests|FullyQualifiedName~LauncherScriptTests|FullyQualifiedName~MtpTestRunnerScriptTests|FullyQualifiedName~ProcessTreeGuiSuppressionTests",
+        "filter": "FullyQualifiedName~GoalWorktreeIsolatedDotnetTests|FullyQualifiedName~ConductorSelfRelaunchTests|FullyQualifiedName~ConductorSuccessorSelfCheckTests|FullyQualifiedName~DispatchProcessHostTests|FullyQualifiedName~LauncherScriptTests|(FullyQualifiedName~MtpTestRunnerScriptTests&FullyQualifiedName!~MtpTestRunnerScriptTestsOneStepProjectRebuild)|FullyQualifiedName~ProcessTreeGuiSuppressionTests",
         "estimatedSerialSeconds": 327.7,
         "exclusiveResourceKeys": [ "xunit:ProcessSpawning" ]
+      },
+      {
+        "name": "Mtp one-step project rebuild",
+        "filter": "FullyQualifiedName~MtpTestRunnerScriptTestsOneStepProjectRebuild",
+        "estimatedSerialSeconds": 1065.0,
+        "exclusiveResourceKeys": [ "xunit:ProcessSpawning" ],
+        "requiresBuildSystemChange": true
       },
       {
         "name": "Process spawning parallel",
@@ -134,7 +141,7 @@
       {
         "name": "Conductor",
         "description": "Conductor watch, build-slot, and process-spawning coverage.",
-        "laneNames": [ "Conduct watch sweep scoping", "Dotnet build slots", "Process spawning", "Process spawning parallel" ]
+        "laneNames": [ "Conduct watch sweep scoping", "Dotnet build slots", "Process spawning", "Mtp one-step project rebuild", "Process spawning parallel" ]
       },
       {
         "name": "ChaosGate",

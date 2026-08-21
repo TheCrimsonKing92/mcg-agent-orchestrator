@@ -437,6 +437,17 @@ public sealed class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
         return ComputeEffectiveAcceptanceManifestIdentity(plan.Checks);
     }
 
+    internal static IReadOnlyList<AcceptanceManifestCheck> BuildEffectiveAcceptanceChecksForTests(
+        string worktreePath,
+        IReadOnlyList<string>? changedFiles = null)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(worktreePath);
+        var engineSettings = AcceptanceGateEngineSettings.Load(worktreePath);
+        using var engineScope = PushEngineSettings(engineSettings);
+        using var runEnvironmentScope = PushManagedRunEnvironmentScope();
+        return CreateEffectiveGatePlan(worktreePath, changedFiles, engineSettings).Checks;
+    }
+
     public async Task<AcceptanceVerificationResult> RunAsync(
         string worktreePath,
         GoalId? goalId = null,
@@ -651,6 +662,7 @@ public sealed class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
         {
             var structuralCoverage = await RunStructuralCoverageCheckAsync(
                 effectiveChecks,
+                infrastructureTestLanes,
                 checks,
                 worktreePath,
                 changedFiles,
@@ -2510,7 +2522,6 @@ public sealed class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
         AcceptanceGateEngineSettings engineSettings)
     {
         var manifest = AcceptanceManifest.Load(worktreePath, changedFiles);
-        var infrastructureTestLanes = engineSettings.InfrastructureTestLanes;
         var dotnetShardDisposition = ClassifyDotnetShardDisposition(changedFiles);
         var policyShardPlan = BuildPolicyShardPlan(changedFiles);
         if (dotnetShardDisposition == DotnetShardDisposition.RunDotnetShards &&
@@ -2525,6 +2536,11 @@ public sealed class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
                 $"strict candidate path disposition requires dotnet shards; {policyShardPlan.Evidence}",
                 policyShardPlan.DependencyClosure);
         }
+
+        var infrastructureTestLanes = SelectInfrastructureTestLanes(
+            engineSettings.InfrastructureTestLanes,
+            changedFiles,
+            policyShardPlan);
 
         // This is the single owner of the environment- and scope-expanded gate plan. Cohort
         // identity, partition-cache identity, and execution all hash or consume this exact plan.
@@ -2556,6 +2572,36 @@ public sealed class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
             policyRequiredChecks,
             structuralCoverageApplies,
             dotnetShardDisposition);
+    }
+
+    private static IReadOnlyList<AcceptanceTestLane> SelectInfrastructureTestLanes(
+        IReadOnlyList<AcceptanceTestLane> lanes,
+        IReadOnlyList<string>? changedFiles,
+        PolicyShardPlan policyShardPlan)
+    {
+        if (!policyShardPlan.Applies || policyShardPlan.ForceFull || changedFiles is null)
+        {
+            return lanes;
+        }
+
+        var normalizedFiles = changedFiles
+            .Where(path => !string.IsNullOrWhiteSpace(path))
+            .Select(NormalizePath)
+            .OfType<string>()
+            .Distinct(StringComparer.OrdinalIgnoreCase)
+            .ToArray();
+        if (normalizedFiles.Length == 0)
+        {
+            return lanes;
+        }
+
+        var summary = RepositoryChangeClassifier.Classify(normalizedFiles);
+        if (summary.HasBuildSystemChanges || summary.HasSecuritySensitiveChanges)
+        {
+            return lanes;
+        }
+
+        return lanes.Where(lane => !lane.RequiresBuildSystemChange).ToArray();
     }
 
     private static IReadOnlyList<AcceptanceManifestCheck> BuildRequiredPolicyChecks(
@@ -5126,6 +5172,7 @@ public sealed class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
 
     private async Task<AcceptanceCheckResult> RunStructuralCoverageCheckAsync(
         IReadOnlyList<AcceptanceManifestCheck> effectiveChecks,
+        IReadOnlyList<AcceptanceTestLane> infrastructureTestLanes,
         IReadOnlyList<AcceptanceCheckResult> completedChecks,
         string worktreePath,
         IReadOnlyList<string>? changedFiles,
@@ -5175,7 +5222,7 @@ public sealed class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
             IReadOnlyList<TestPartitionCoverage> ResolvePartitions()
             {
                 IEnumerable<AcceptanceManifestCheck> partitionChecks = IsBroadInfrastructureTestCheck(broadCheck)
-                    ? ExpandBroadInfrastructureCheck(broadCheck)
+                    ? ExpandBroadInfrastructureCheck(broadCheck, infrastructureTestLanes)
                     : [broadCheck];
                 return partitionChecks
                     .Select(shard =>
