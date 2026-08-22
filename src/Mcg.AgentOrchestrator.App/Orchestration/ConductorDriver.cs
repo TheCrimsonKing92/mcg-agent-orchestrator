@@ -373,7 +373,8 @@ internal sealed partial class ConductorDriver
                             DispatchRecordWriteSucceededSink?.Invoke(goalId);
                         },
                     readCurrentInterruptedDispatchState: readCurrentInterruptedDispatchState,
-                    reviewAutoRetryStopRound: policy.ReviewAutoRetryStopRound);
+                    reviewAutoRetryStopRound: policy.ReviewAutoRetryStopRound,
+                    plannerSampleCount: policy.PlannerSampleCount);
             }
             catch (DispatchRecordWriteException ex)
             {

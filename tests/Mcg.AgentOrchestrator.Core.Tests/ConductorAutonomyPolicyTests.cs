@@ -40,6 +40,32 @@ public sealed class ConductorAutonomyPolicyTests
         }
     }
 
+    [Xunit.Fact]
+    public void ConductorAutonomyPolicyPlannerSamplingDefaultsAreOptInAndSerializable()
+    {
+        Assert.Equal(1, ConductorAutonomyPolicy.Conservative.PlannerSampleCount);
+        Assert.Equal(1, ConductorAutonomyPolicy.Permissive.PlannerSampleCount);
+        Assert.Equal(1, ConductorAutonomyPolicy.Manual.PlannerSampleCount);
+
+        var explicitSampling = ConductorAutonomyPolicy.Conservative with { PlannerSampleCount = 3 };
+        var restored = ConductorAutonomyPolicy.ParseJson(explicitSampling.ToJson());
+        Assert.Equal(3, restored.PlannerSampleCount);
+    }
+
+    [Xunit.Fact]
+    public void ConductorAutonomyPolicyLegacyJsonDefaultsPlannerSamplingOff()
+    {
+        var json = string.Join(
+            Environment.NewLine,
+            ConductorAutonomyPolicy.Manual.ToJson()
+                .Split(["\r\n", "\n"], StringSplitOptions.None)
+                .Where(line => !line.Contains("\"plannerSampleCount\"", StringComparison.Ordinal)));
+
+        var restored = ConductorAutonomyPolicy.ParseJson(json);
+
+        Assert.Equal(1, restored.PlannerSampleCount);
+    }
+
     [Xunit.Fact(DisplayName = "ConductorAutonomyPolicy_presets_contain_all_lifecycle_states")]
     public void ConductorAutonomyPolicyPresetsContainAllLifecycleStates()
     {

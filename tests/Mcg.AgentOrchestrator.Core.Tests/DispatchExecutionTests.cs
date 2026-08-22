@@ -424,6 +424,29 @@ public sealed class DispatchExecutionTests
     Assert.Equal(ProviderKind.OpenAICodexCli, restoredTask.LastDispatch.WorkerProviderKind);
     Assert.Equal(WorkTaskStatus.Running, restoredTask.Status);
 }
+    [Xunit.Fact(DisplayName = "Snapshot_roundtrip_preserves_non_blocking_process_ownership")]
+    public void SnapshotRoundtripPreservesNonBlockingProcessOwnership()
+{
+    var task = new TaskSpec(TaskId.New(), "Produce a sampled plan.", AgentRole.Planner);
+    task.RecordProcess(new TaskProcessRecord(
+        101,
+        "planner",
+        "C:\\repo",
+        "planner.out.log",
+        "planner.err.log",
+        "planner.exit.txt",
+        DateTimeOffset.Parse("2026-08-22T18:00:00Z"),
+        null,
+        null,
+        OwnedProcessIds: [101, 202],
+        NonBlockingProcessIds: [202]));
+
+    var restored = TaskSpec.FromSnapshot(task.ToSnapshot());
+
+    Assert.Equal([101, 202], restored.LastProcess!.TrackedProcessIds);
+    Assert.Equal([202], restored.LastProcess.NonBlockingProcessIds);
+    Assert.Equal([101], restored.LastProcess.CompletionTrackedProcessIds);
+}
     [Xunit.Fact(DisplayName = "RecordDispatchExecutionResult_completes_task_on_success")]
     public void RecordDispatchExecutionResultCompletesTaskOnSuccess()
 {

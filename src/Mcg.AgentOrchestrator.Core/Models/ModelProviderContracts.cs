@@ -81,7 +81,8 @@ public sealed record TaskVerificationRecord(
     string? FullStandardOutputUnavailableReason = null,
     string? FullStandardErrorUnavailableReason = null,
     bool StandardOutputIsAuthoritative = true,
-    bool StandardErrorIsAuthoritative = true)
+    bool StandardErrorIsAuthoritative = true,
+    PlannerCandidateDivergenceReceipt? PlannerCandidateDivergence = null)
 {
     public string? AuthoritativeStandardOutput { get; init; } = FullStandardOutput ??
         (StandardOutputIsAuthoritative && FullStandardOutputUnavailableReason is null ? StandardOutput : null);
@@ -128,7 +129,8 @@ public sealed record TaskDispatchRecord(
     string? BriefSnapshot = null,
     string? ReviewFindingTouchProofDiagnostic = null,
     ReviewRetryCapReceipt? ReviewRetryCap = null,
-    WorkerContextPackageReceipt? ContextPackageReceipt = null)
+    WorkerContextPackageReceipt? ContextPackageReceipt = null,
+    int PlannerSampleCount = 1)
 {
     public int BriefVersion { get; internal set; } = BriefVersion;
 
@@ -231,7 +233,8 @@ public sealed record TaskProcessRecord(
     int? ChildExitCode = null,
     DispatchExitArtifactOrigin ExitArtifactOrigin = DispatchExitArtifactOrigin.None,
     string? ExitArtifactReason = null,
-    bool WasGracefullyDetachedByConductor = false)
+    bool WasGracefullyDetachedByConductor = false,
+    IReadOnlyList<int>? NonBlockingProcessIds = null)
 {
     public bool IsRunning => CompletedAt is null && ExitCode is null;
 
@@ -239,6 +242,11 @@ public sealed record TaskProcessRecord(
         OwnedProcessIds is { Count: > 0 }
             ? OwnedProcessIds
             : [ProcessId];
+
+    public IReadOnlyList<int> CompletionTrackedProcessIds =>
+        NonBlockingProcessIds is { Count: > 0 }
+            ? TrackedProcessIds.Where(pid => pid == ProcessId || !NonBlockingProcessIds.Contains(pid)).ToArray()
+            : TrackedProcessIds;
 }
 
 public enum DispatchExitArtifactOrigin

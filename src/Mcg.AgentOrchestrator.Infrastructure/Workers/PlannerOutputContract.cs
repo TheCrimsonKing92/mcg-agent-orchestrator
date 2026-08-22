@@ -94,6 +94,24 @@ internal static partial class PlannerOutputContract
             $"Planner output contract failed.{pathDetail} Stdout plan reason: {diagnostic}. Retry Planner for contract repair.");
     }
 
+    internal static IReadOnlyDictionary<string, string> SplitRequiredSections(string plan)
+    {
+        var matches = RequiredSections
+            .Select(section => (section.Label, Match: section.Heading.Match(plan)))
+            .Where(section => section.Match.Success)
+            .OrderBy(section => section.Match.Index)
+            .ToArray();
+        var sections = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
+        for (var index = 0; index < matches.Length; index++)
+        {
+            var bodyStart = matches[index].Match.Index + matches[index].Match.Length;
+            var bodyEnd = index + 1 < matches.Length ? matches[index + 1].Match.Index : plan.Length;
+            sections[matches[index].Label] = plan[bodyStart..bodyEnd].Trim();
+        }
+
+        return sections;
+    }
+
     internal static string ReadCapturedOutputTail(string path)
     {
         try

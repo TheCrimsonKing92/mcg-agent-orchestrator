@@ -80,7 +80,8 @@ public static class DispatchProcessHost
         string? HostDiagnosticPath = null,
         int HeartbeatIntervalMilliseconds = 15_000,
         IReadOnlyList<MandatoryContextFileDescriptor>? MandatoryContextFiles = null,
-        ProcessOutputDrainPolicy? OutputDrainPolicy = null);
+        ProcessOutputDrainPolicy? OutputDrainPolicy = null,
+        string? SandboxInstanceName = null);
 
     public sealed record DispatchChildExitRecord(
         int ProcessId,
@@ -225,8 +226,7 @@ public static class DispatchProcessHost
             JsonOptions);
         var manifestHash = Convert.ToHexString(SHA256.HashData(manifestBytes)).ToLowerInvariant();
         var manifestPath = Path.Combine(
-            root,
-            ".mcg-sandbox",
+            ResolveSandboxRoot(parameters),
             $"mandatory-context-authority-{manifestHash}.json");
         // The authority manifest exists on every platform, including those where the Windows
         // integrity sandbox is not applied. Keep that host-owned scratch out of worktree status
@@ -299,7 +299,7 @@ public static class DispatchProcessHost
             return new WorkerSandboxPreparationResult(false, false);
         }
 
-        var sandboxRoot = Path.Combine(parameters.WorkingDirectory, ".mcg-sandbox");
+        var sandboxRoot = ResolveSandboxRoot(parameters);
         if (!parameters.SandboxLowIntegrity)
         {
             ConfigurePowerShellModuleAnalysisCache(startInfo.Environment, sandboxRoot);
@@ -421,6 +421,28 @@ public static class DispatchProcessHost
 
         return effectivePreparation;
     }
+
+    internal static string ResolveSandboxRoot(DispatchRunParameters parameters)
+    {
+        var sharedRoot = Path.GetFullPath(Path.Combine(parameters.WorkingDirectory, ".mcg-sandbox"));
+        if (string.IsNullOrWhiteSpace(parameters.SandboxInstanceName))
+        {
+            return sharedRoot;
+        }
+
+        var instanceRoot = Path.GetFullPath(Path.Combine(sharedRoot, parameters.SandboxInstanceName));
+        var requiredPrefix = sharedRoot.TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar)
+            + Path.DirectorySeparatorChar;
+        if (!instanceRoot.StartsWith(requiredPrefix, StringComparison.OrdinalIgnoreCase))
+        {
+            throw new InvalidOperationException("Sandbox instance must resolve below the dispatch sandbox root.");
+        }
+
+        return instanceRoot;
+    }
+
+    internal static void PrepareSharedSandboxState(DispatchRunParameters parameters) =>
+        ExcludeSandboxFromGit(parameters.WorkingDirectory);
 
     private static void ConfigurePowerShellModuleAnalysisCache(
         IDictionary<string, string?> environment,

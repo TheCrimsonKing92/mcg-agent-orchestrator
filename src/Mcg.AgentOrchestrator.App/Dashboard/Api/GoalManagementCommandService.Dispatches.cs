@@ -44,7 +44,8 @@ public static WorkerProfileDispatchResult ProfileDispatchTask(
     IModelProviderRegistry? providers = null,
     bool allowPendingRecordedDispatchRefresh = false,
     int? reviewAutoRetryStopRound = null,
-    WorkerSandboxOptions? sandboxOptions = null)
+    WorkerSandboxOptions? sandboxOptions = null,
+    int? plannerSampleCount = null)
 {
     EnsureRefinedForTask(kernel, workspace, providers, goal, task);
     var subscriptionMetadata = TryBuildProfileSubscriptionMetadata(goal, task, profile, agents);
@@ -71,7 +72,8 @@ public static WorkerProfileDispatchResult ProfileDispatchTask(
                 ResolveReviewAutoRetryStopRound(workspace, reviewAutoRetryStopRound))
             : null,
         citedPriorEvidenceResolver: CreateCitedPriorEvidenceResolver(workspace),
-        sandboxOptions: sandboxOptions);
+        sandboxOptions: sandboxOptions,
+        plannerSampleCount: ResolvePlannerSampleCount(workspace, plannerSampleCount));
 }
 
 public static WorkerProfileDispatchResult RefreshPreparedDispatchBeforeStart(
@@ -83,7 +85,8 @@ public static WorkerProfileDispatchResult RefreshPreparedDispatchBeforeStart(
     WorkerProfileCatalog? profiles = null,
     IModelProviderRegistry? providers = null,
     int? reviewAutoRetryStopRound = null,
-    WorkerSandboxOptions? sandboxOptions = null)
+    WorkerSandboxOptions? sandboxOptions = null,
+    int? plannerSampleCount = null)
 {
     var lastDispatch = task.LastDispatch
         ?? throw new InvalidOperationException($"Task '{task.Id}' has no dispatch to refresh before start.");
@@ -112,7 +115,8 @@ public static WorkerProfileDispatchResult RefreshPreparedDispatchBeforeStart(
         providers,
         allowPendingRecordedDispatchRefresh: true,
         reviewAutoRetryStopRound: reviewAutoRetryStopRound,
-        sandboxOptions: sandboxOptions);
+        sandboxOptions: sandboxOptions,
+        plannerSampleCount: plannerSampleCount);
 }
 
 public static IReadOnlyList<WorkerProfileDispatchResult> RefreshPreparedDispatchesBeforeStart(
@@ -123,7 +127,8 @@ public static IReadOnlyList<WorkerProfileDispatchResult> RefreshPreparedDispatch
     WorkerProfileCatalog? profiles = null,
     IModelProviderRegistry? providers = null,
     int? reviewAutoRetryStopRound = null,
-    WorkerSandboxOptions? sandboxOptions = null)
+    WorkerSandboxOptions? sandboxOptions = null,
+    int? plannerSampleCount = null)
 {
     var plan = kernel.BuildProcessBatchPlan(goal.Id, ProcessBatchActionKind.StartDispatches);
     var resolvedAgents = agents ?? AgentCatalogStore.Load(workspace.AgentCatalogPath).Agents;
@@ -142,7 +147,8 @@ public static IReadOnlyList<WorkerProfileDispatchResult> RefreshPreparedDispatch
             resolvedProfiles,
             providers,
             reviewAutoRetryStopRound,
-            sandboxOptions);
+            sandboxOptions,
+            plannerSampleCount);
         refreshed.Add(dispatch);
     }
 
@@ -218,7 +224,8 @@ public static IReadOnlyList<WorkerProfileDispatchResult> SubscriptionDispatchRea
     WorkerProfileCatalog profiles,
     IModelProviderRegistry? providers = null,
     int? reviewAutoRetryStopRound = null,
-    WorkerSandboxOptions? sandboxOptions = null)
+    WorkerSandboxOptions? sandboxOptions = null,
+    int? plannerSampleCount = null)
 {
     return SubscriptionDispatchReadyBatch(
         kernel,
@@ -228,7 +235,8 @@ public static IReadOnlyList<WorkerProfileDispatchResult> SubscriptionDispatchRea
         profiles,
         providers,
         reviewAutoRetryStopRound,
-        sandboxOptions).Dispatches;
+        sandboxOptions,
+        plannerSampleCount).Dispatches;
 }
 
 public static WorkerProfileReadyBatchResult SubscriptionDispatchReadyBatch(
@@ -239,7 +247,8 @@ public static WorkerProfileReadyBatchResult SubscriptionDispatchReadyBatch(
     WorkerProfileCatalog profiles,
     IModelProviderRegistry? providers = null,
     int? reviewAutoRetryStopRound = null,
-    WorkerSandboxOptions? sandboxOptions = null)
+    WorkerSandboxOptions? sandboxOptions = null,
+    int? plannerSampleCount = null)
 {
     ReconcileExitedAssignedProcessRecords(kernel, goal);
     goal = kernel.GetGoal(goal.Id);
@@ -257,7 +266,8 @@ public static WorkerProfileReadyBatchResult SubscriptionDispatchReadyBatch(
         safeBatch.TaskIds,
         reviewAutoRetryStopRound: ResolveReviewAutoRetryStopRound(workspace, reviewAutoRetryStopRound),
         citedPriorEvidenceResolver: CreateCitedPriorEvidenceResolver(workspace),
-        sandboxOptions: sandboxOptions);
+        sandboxOptions: sandboxOptions,
+        plannerSampleCount: ResolvePlannerSampleCount(workspace, plannerSampleCount));
 }
 
 public static WorkerProfileDispatchResult SubscriptionDispatchTask(
@@ -270,7 +280,8 @@ public static WorkerProfileDispatchResult SubscriptionDispatchTask(
     DispatchModelOverride? modelOverride = null,
     bool allowGitReference = false,
     IModelProviderRegistry? providers = null,
-    int? reviewAutoRetryStopRound = null)
+    int? reviewAutoRetryStopRound = null,
+    int? plannerSampleCount = null)
 {
     EnsureRefinedForTask(kernel, workspace, providers, goal, task);
     return WorkerProfileDispatcher.PrepareSubscriptionTask(
@@ -285,7 +296,8 @@ public static WorkerProfileDispatchResult SubscriptionDispatchTask(
         modelOverride,
         allowGitReference,
         reviewAutoRetryStopRound: ResolveReviewAutoRetryStopRound(workspace, reviewAutoRetryStopRound),
-        citedPriorEvidenceResolver: CreateCitedPriorEvidenceResolver(workspace));
+        citedPriorEvidenceResolver: CreateCitedPriorEvidenceResolver(workspace),
+        plannerSampleCount: ResolvePlannerSampleCount(workspace, plannerSampleCount));
 }
 
 public static SubscriptionStartResult StartSubscriptionReadyTasks(
@@ -300,7 +312,8 @@ public static SubscriptionStartResult StartSubscriptionReadyTasks(
     Func<GoalId, TaskId, InterruptedDispatchStateRead>? readCurrentInterruptedDispatchState = null,
     int? reviewAutoRetryStopRound = null,
     BackgroundDispatchRunner? runner = null,
-    WorkerSandboxOptions? sandboxOptions = null)
+    WorkerSandboxOptions? sandboxOptions = null,
+    int? plannerSampleCount = null)
 {
     ReconcileExitedAssignedProcessRecords(kernel, goal);
     goal = kernel.GetGoal(goal.Id);
@@ -318,7 +331,8 @@ public static SubscriptionStartResult StartSubscriptionReadyTasks(
         safeBatch.TaskIds,
         reviewAutoRetryStopRound: ResolveReviewAutoRetryStopRound(workspace, reviewAutoRetryStopRound),
         citedPriorEvidenceResolver: CreateCitedPriorEvidenceResolver(workspace),
-        sandboxOptions: sandboxOptions);
+        sandboxOptions: sandboxOptions,
+        plannerSampleCount: ResolvePlannerSampleCount(workspace, plannerSampleCount));
     var containsInterruptedDispatchRecovery = batch.Dispatches.Any(dispatch =>
         dispatch.Task.InterruptedDispatchRecoveryId is not null);
     if (!containsInterruptedDispatchRecovery &&
@@ -361,6 +375,13 @@ private static int ResolveReviewAutoRetryStopRound(
     reviewAutoRetryStopRound ??
     ConductorAutonomyPolicy.LoadFromOrchestratorDirectory(
         new DirectoryInfo(workspace.OrchestratorDirectory)).ReviewAutoRetryStopRound;
+
+private static int ResolvePlannerSampleCount(
+    OrchestratorWorkspace workspace,
+    int? plannerSampleCount) =>
+    plannerSampleCount ??
+    ConductorAutonomyPolicy.LoadFromOrchestratorDirectory(
+        new DirectoryInfo(workspace.OrchestratorDirectory)).PlannerSampleCount;
 
 private static void EnsureRefinedForSelectedTasks(
     AgentOrchestratorKernel kernel,

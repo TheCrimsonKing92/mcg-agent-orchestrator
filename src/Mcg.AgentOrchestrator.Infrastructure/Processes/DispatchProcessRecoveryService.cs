@@ -545,7 +545,7 @@ internal sealed class DispatchProcessRecoveryService
         _writeExitArtifact(path, exitCode, reason);
 
     internal bool AnyTrackedProcessStillRunning(TaskProcessRecord processRecord) =>
-        processRecord.TrackedProcessIds.Any(_isStillRunning);
+        processRecord.CompletionTrackedProcessIds.Any(_isStillRunning);
 
     private bool AnyObservedProcessStillRunning(TaskProcessRecord processRecord, DispatchHeartbeat? heartbeat) =>
         GetObservedProcessIds(processRecord, heartbeat).Any(_isStillRunning);
@@ -555,7 +555,7 @@ internal sealed class DispatchProcessRecoveryService
 
     private static IReadOnlyList<int> GetObservedProcessIds(TaskProcessRecord processRecord, DispatchHeartbeat? heartbeat)
     {
-        var processIds = new HashSet<int>(processRecord.TrackedProcessIds.Where(pid => pid > 0));
+        var processIds = new HashSet<int>(processRecord.CompletionTrackedProcessIds.Where(pid => pid > 0));
         if (heartbeat is not null)
         {
             if (heartbeat.ChildProcessId is > 0)
@@ -580,7 +580,10 @@ internal sealed class DispatchProcessRecoveryService
         var processIds = new HashSet<int>();
         if (processRecord.OwnedProcessIds is { Count: > 0 })
         {
-            foreach (var processId in processRecord.OwnedProcessIds.Where(pid => pid > 0))
+            foreach (var processId in processRecord.OwnedProcessIds.Where(pid =>
+                         pid > 0 &&
+                         (processRecord.NonBlockingProcessIds is not { Count: > 0 } ||
+                          !processRecord.NonBlockingProcessIds.Contains(pid))))
             {
                 processIds.Add(processId);
             }

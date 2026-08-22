@@ -334,7 +334,7 @@ public sealed class BackgroundDispatchRunner
                 null));
         }
 
-        DispatchProcessHost.WriteParameters(parametersPath, new DispatchProcessHost.DispatchRunParameters(
+        var runParameters = new DispatchProcessHost.DispatchRunParameters(
             dispatchHostCommand,
             dispatch.WorkingDirectory,
             stdoutPath,
@@ -366,7 +366,8 @@ public sealed class BackgroundDispatchRunner
                     section.ContractVersion,
                     task.RequiredRole,
                     section.RoleVisibility))
-                .ToArray()));
+                .ToArray());
+        DispatchProcessHost.WriteParameters(parametersPath, runParameters);
 
         // Launch the native dispatch host detached: it outlives this CLI process, runs the worker
         // command through the resolved PowerShell host, performs sandbox prep off the conductor tick,
@@ -423,6 +424,7 @@ public sealed class BackgroundDispatchRunner
         // cancellation and make the subsequent read falsely appear non-terminal.
         checkpointBeforeWorkerStart?.Invoke(kernel, goalId, taskId, DispatchRecordCheckpointPhase.BeforeProcessStart);
 
+        DispatchProcessHost.PrepareSharedSandboxState(runParameters);
         ProcessSpawnGuard.ClearInheritableStateDatabaseHandles();
         var process = _startProcess(startInfo)
             ?? throw new InvalidOperationException("Failed to start background dispatch process.");
@@ -434,6 +436,16 @@ public sealed class BackgroundDispatchRunner
             return DispatchProcessStartResult.Failed(registrationFailure);
         }
 
+        var sampleArtifacts = task.RequiredRole == AgentRole.Planner
+            ? PlannerSampleDispatcher.CreateArtifacts(stdoutPath, dispatch.PlannerSampleCount)
+            : [];
+        var sampleLaunches = PlannerSampleDispatcher.StartSamples(
+            sampleArtifacts,
+            runParameters,
+            ResolveDispatchHostAssembly(),
+            $"{goalId.Value}:{taskId.Value}",
+            _startProcess);
+
         var record = new TaskProcessRecord(
             process.Id,
             dispatch.Command,
@@ -444,8 +456,9 @@ public sealed class BackgroundDispatchRunner
             _clock.UtcNow,
             null,
             null,
-            OwnedProcessIds: [process.Id],
-            ChildExitRecordPath: childExitRecordPath);
+            OwnedProcessIds: sampleLaunches.Select(launch => launch.Process.Id).Prepend(process.Id).ToArray(),
+            ChildExitRecordPath: childExitRecordPath,
+            NonBlockingProcessIds: sampleLaunches.Select(launch => launch.Process.Id).ToArray());
 
         kernel.RecordTaskProcessStarted(goalId, taskId, record);
         try
@@ -455,9 +468,11 @@ public sealed class BackgroundDispatchRunner
         catch
         {
             TerminateUnreleasedDispatchHost(process);
+            PlannerSampleDispatcher.TerminateUnreleased(sampleLaunches);
             throw;
         }
 
+        PlannerSampleDispatcher.ReleaseStartGates(sampleLaunches);
         ReleaseDispatchHostStartGate(startGatePath);
         return DispatchProcessStartResult.Started(record);
     }
@@ -1211,6 +1226,7 @@ public sealed class BackgroundDispatchRunner
             }
         }
 
+        PlannerCandidateDivergenceReceipt? plannerCandidateDivergence = null;
         if (task.RequiredRole == AgentRole.Planner && (exitCode == 0 || successfulChildResultAvailable))
         {
             var acceptanceCriteria = RequiresDurablePlanArtifact(goal, task)
@@ -1218,13 +1234,30 @@ public sealed class BackgroundDispatchRunner
                 : null;
             var capturedPlannerOutput = PlannerOutputContract.ReadCapturedOutputTail(processRecord.StandardOutputPath);
             var evidenceRequest = AgentOutputDirectives.ParseHumanInputRequest(decisionStandardOutput, AgentRole.Planner);
-            var plannerContract = evidenceRequest.IsMalformed
-                ? new PlannerOutputContractResult(false, null, null, evidenceRequest.Diagnostic!)
-                : PlannerOutputContract.Resolve(
+            PlannerOutputContractResult plannerContract;
+            if (evidenceRequest.IsMalformed)
+            {
+                plannerContract = new PlannerOutputContractResult(false, null, null, evidenceRequest.Diagnostic!);
+            }
+            else if (task.LastDispatch?.PlannerSampleCount > 1)
+            {
+                var selection = PlannerCandidateSelector.Select(
+                    PlannerSampleDispatcher.CollectCandidates(
+                        processRecord.StandardOutputPath,
+                        task.LastDispatch.PlannerSampleCount),
+                    processRecord.WorkingDirectory,
+                    acceptanceCriteria);
+                plannerContract = selection.SelectedContract;
+                plannerCandidateDivergence = selection.Receipt;
+            }
+            else
+            {
+                plannerContract = PlannerOutputContract.Resolve(
                     capturedPlannerOutput,
                     decisionStandardError,
                     processRecord.WorkingDirectory,
                     acceptanceCriteria: acceptanceCriteria);
+            }
             if (!plannerContract.Succeeded || plannerContract.Plan is null)
             {
                 exitCode = 1;
@@ -1643,7 +1676,8 @@ public sealed class BackgroundDispatchRunner
             FullStandardOutput: fullStandardOutput.Content,
             FullStandardError: fullStandardError.Content,
             FullStandardOutputUnavailableReason: fullStandardOutput.UnavailableReason,
-            FullStandardErrorUnavailableReason: fullStandardError.UnavailableReason);
+            FullStandardErrorUnavailableReason: fullStandardError.UnavailableReason,
+            PlannerCandidateDivergence: plannerCandidateDivergence);
 
         var outcome = new DispatchRefreshOutcome(
             completed,

@@ -1,4 +1,5 @@
 using Mcg.AgentOrchestrator.Core;
+using Mcg.AgentOrchestrator.Core.Conductor;
 using Mcg.AgentOrchestrator.Infrastructure;
 
 namespace Mcg.AgentOrchestrator.App.CostControl;
@@ -93,7 +94,8 @@ internal static class SubscriptionPromptCostGuard
                 task.LastDispatch.TaskComplexity,
                 task.LastDispatch.PromptCharacterCount!.Value,
                 EffectivePreparedPromptCharacterCount(goal, task),
-                task.LastDispatch.UsesComplexModel || task.LastDispatch.TaskComplexity == TaskComplexity.Complex))
+                task.LastDispatch.UsesComplexModel || task.LastDispatch.TaskComplexity == TaskComplexity.Complex,
+                PreparedPerCallPromptCharacterCount(goal, task)))
             .ToList();
 
         return BuildRisk(candidates, BuildReadyModelFitSummaries(goal));
@@ -118,20 +120,24 @@ internal static class SubscriptionPromptCostGuard
                     task.LastDispatch.TaskComplexity,
                     task.LastDispatch.PromptCharacterCount.Value,
                     EffectivePreparedPromptCharacterCount(goal, task),
-                    task.LastDispatch.UsesComplexModel || task.LastDispatch.TaskComplexity == TaskComplexity.Complex)
+                    task.LastDispatch.UsesComplexModel || task.LastDispatch.TaskComplexity == TaskComplexity.Complex,
+                    PreparedPerCallPromptCharacterCount(goal, task))
             ],
             BuildReadyModelFitSummaries(goal));
     }
 
-    private static int EffectivePreparedPromptCharacterCount(Goal goal, TaskSpec task)
+    private static int PreparedPerCallPromptCharacterCount(Goal goal, TaskSpec task)
     {
         var dispatch = task.LastDispatch
             ?? throw new InvalidOperationException("Prepared prompt accounting requires a dispatch record.");
-        var effective = PaidPromptThresholds.EffectivePromptCharacterCount(
+        return PaidPromptThresholds.EffectivePromptCharacterCount(
             dispatch.PromptCharacterCount ?? 0,
             AgentOrchestratorKernel.EstimatePriorTaskEvidenceCharacterCount(goal, task.Id));
-        return effective;
     }
+
+    private static int EffectivePreparedPromptCharacterCount(Goal goal, TaskSpec task) => checked(
+        PreparedPerCallPromptCharacterCount(goal, task) *
+        PlannerSamplingPolicy.EffectiveSampleCount(task.RequiredRole, task.LastDispatch?.PlannerSampleCount ?? 1));
 
     // Only a genuinely ANOMALOUS prompt (disproportionate to its task complexity, or an extreme
     // batch fan-in) requires explicit acknowledgement. A routine large paid start that the operator
@@ -260,7 +266,8 @@ internal static class SubscriptionPromptCostGuard
         var tooManyPaidTasks = candidates.Count > PaidPromptThresholds.BatchPaidTasks;
         // Anomaly = a prompt disproportionate to its complexity, or an extreme batch fan-in. Only
         // these block; routine-large/fanout/prior-fit are advisory and proceed.
-        var anomalousCount = candidates.Count(candidate => candidate.CostGuardPromptCharacterCount >= AnomalyThreshold(candidate));
+        var anomalousCount = candidates.Count(candidate =>
+            (candidate.AnomalyPromptCharacterCount ?? candidate.CostGuardPromptCharacterCount) >= AnomalyThreshold(candidate));
         var isAnomalous = anomalousCount > 0 || total >= PaidPromptThresholds.AnomalyBatchThreshold;
 
         if (total <= PaidPromptThresholds.BatchPaidPrompt &&
@@ -377,5 +384,6 @@ internal static class SubscriptionPromptCostGuard
         TaskComplexity? TaskComplexity,
         int PromptCharacterCount,
         int CostGuardPromptCharacterCount,
-        bool UsesComplexModel = false);
+        bool UsesComplexModel = false,
+        int? AnomalyPromptCharacterCount = null);
 }

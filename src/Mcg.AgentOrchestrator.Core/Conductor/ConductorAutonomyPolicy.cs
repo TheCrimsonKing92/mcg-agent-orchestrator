@@ -38,7 +38,8 @@ public sealed record ConductorAutonomyPolicy(
     double EmptyOutputRetryBackoffMultiplier = 2,
     double EmptyOutputRetryMaxDelaySeconds = 30,
     int ReviewAutoRetryWarningRound = 4,
-    int ReviewAutoRetryStopRound = 7)
+    int ReviewAutoRetryStopRound = 7,
+    int PlannerSampleCount = 1)
 {
     private static readonly GoalLifecycleState[] AllStates =
         Enum.GetValues<GoalLifecycleState>();
@@ -71,7 +72,8 @@ public sealed record ConductorAutonomyPolicy(
             [GoalLifecycleState.Failed] = ConductorTransitionDecision.Escalate,
             [GoalLifecycleState.Blocked] = ConductorTransitionDecision.Escalate,
             [GoalLifecycleState.AwaitingHumanInput] = ConductorTransitionDecision.Escalate,
-        });
+        },
+        PlannerSampleCount: 1);
 
     // Auto everything within caps. AutoPromoteRiskThreshold = Broad so all change types
     // get auto-promoted at Merged when risk is known.
@@ -80,7 +82,8 @@ public sealed record ConductorAutonomyPolicy(
         MaxConcurrentPaidWorkers: 5,
         MaxCriterionRetries: 2,
         AutoPromoteRiskThreshold: ChangeRiskTier.Broad,
-        TransitionMap: BuildUniformMap(ConductorTransitionDecision.Auto));
+        TransitionMap: BuildUniformMap(ConductorTransitionDecision.Auto),
+        PlannerSampleCount: 1);
 
     // Escalate everything; no autonomous transitions regardless of risk.
     public static ConductorAutonomyPolicy Manual { get; } = new(
@@ -157,6 +160,9 @@ public sealed record ConductorAutonomyPolicy(
         if (ReviewAutoRetryStopRound <= ReviewAutoRetryWarningRound)
             errors.Add($"reviewAutoRetryStopRound ({ReviewAutoRetryStopRound}) must be greater than reviewAutoRetryWarningRound ({ReviewAutoRetryWarningRound}).");
 
+        if (PlannerSampleCount is < PlannerSamplingPolicy.MinimumSampleCount or > PlannerSamplingPolicy.MaximumSampleCount)
+            errors.Add($"plannerSampleCount must be between {PlannerSamplingPolicy.MinimumSampleCount} and {PlannerSamplingPolicy.MaximumSampleCount} (got {PlannerSampleCount}).");
+
         foreach (var state in AllStates)
         {
             if (!TransitionMap.ContainsKey(state))
@@ -181,6 +187,7 @@ public sealed record ConductorAutonomyPolicy(
         sb.AppendLine($"  \"emptyOutputRetryMaxDelaySeconds\": {EmptyOutputRetryMaxDelaySeconds},");
         sb.AppendLine($"  \"reviewAutoRetryWarningRound\": {ReviewAutoRetryWarningRound},");
         sb.AppendLine($"  \"reviewAutoRetryStopRound\": {ReviewAutoRetryStopRound},");
+        sb.AppendLine($"  \"plannerSampleCount\": {PlannerSampleCount},");
 
         sb.AppendLine(AutoPromoteRiskThreshold.HasValue
             ? $"  \"autoPromoteRiskThreshold\": {JsonStr(AutoPromoteRiskThreshold.Value.ToString())},"
@@ -248,6 +255,9 @@ public sealed record ConductorAutonomyPolicy(
             var reviewAutoRetryStopRound = root.TryGetProperty("reviewAutoRetryStopRound", out _)
                 ? RequireInt(root, "reviewAutoRetryStopRound", src)
                 : 7;
+            var plannerSampleCount = root.TryGetProperty("plannerSampleCount", out _)
+                ? RequireInt(root, "plannerSampleCount", src)
+                : 1;
             ChangeRiskTier? riskThreshold = null;
             if (root.TryGetProperty("autoPromoteRiskThreshold", out var thresholdEl)
                 && thresholdEl.ValueKind != JsonValueKind.Null)
@@ -294,7 +304,8 @@ public sealed record ConductorAutonomyPolicy(
                 emptyOutputRetryBackoffMultiplier,
                 emptyOutputRetryMaxDelaySeconds,
                 reviewAutoRetryWarningRound,
-                reviewAutoRetryStopRound);
+                reviewAutoRetryStopRound,
+                plannerSampleCount);
 
             var errors = policy.Validate();
             if (errors.Count > 0)
