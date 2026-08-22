@@ -230,13 +230,15 @@ Each item should enter the backlog as a behavior-preserving goal with explicit c
 | `tests/Mcg.AgentOrchestrator.Infrastructure.Tests/ConductorDriverTests.cs` | 9282 |
 | `tests/Mcg.AgentOrchestrator.Infrastructure.Tests/CliCommandTests.PersistentRunnerCommands.cs` | 7038 |
 | `tests/Mcg.AgentOrchestrator.Infrastructure.Tests/WorkerDispatchTestsWorkerResultClassification.cs` | 4834 |
-| `tests/Mcg.AgentOrchestrator.Infrastructure.Tests/ConductorBatchLoopTestsParallelAcceptance.cs` | 4355 |
+| `tests/Mcg.AgentOrchestrator.Infrastructure.Tests/ConductorBatchLoopTestsParallelAcceptance.cs` | 4473 |
 
 The production rows are the six ranked god classes whose growth the inventory tracks. Two test rows, `GoalAcceptanceVerifierTests.cs` and `ConductorDriverTests.cs`, are unsplit test god classes guarded as the test-side counterparts to their already-guarded production files. The other three test rows are products of earlier splits that have regrown past roughly 4,300 lines; a one-time split without a bound only resets the clock. This is intentionally not a repository-wide size rule. For example, `DotnetBuildEnvironmentManagerTests.cs` (5199 lines) is large but is neither a ranked god class nor a split product; `CliCommandTests.GoalLifecycleCommands.cs` (4211) and `CliCommandTests.SubscriptionDispatchCommands.cs` (3471) remain within their intended post-split size; `DashboardRenderingTests.cs` (3795) has already moved to the Dashboard test project; and `DispatchFailureClassifier.cs` (2393) remains below the seeded production band.
 
 When extraction shrinks a guarded file, lower that row in the same change. If growth is unavoidable, raise only that row deliberately with an inline justification naming the goal. A rename or deletion must update its row in the same change. Never derive a ceiling automatically from the current file, make a row advisory, add an opt-out, or delete the guard.
 
 ### Recorded row raises
+
+Goal `46ff9f83` raised the `ConductorBatchLoopTestsParallelAcceptance.cs` row from 4355 to 4473 for the unequal logical-width/build-permit control and the typed maximum diagnostic. The existing parallel-acceptance test class owns both conductor admission and physical permit characterization, so extracting these controls would split the contract they compare.
 
 Goal `b4b80aca` raised the `GoalAcceptanceVerifier.cs` row from 8763 to 8779 for the phase-transition calls that connect gate accounting to verifier-owned control-flow and resource-custody boundaries. The accountant, records, formatting, and lifecycle behavior remain extracted in `AcceptanceGatePhaseAccounting.cs`; moving the remaining transitions out would split the orchestration invariant they measure.
 
