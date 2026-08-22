@@ -256,7 +256,7 @@ Wave 2 item 3 places the commit-on-behalf boundary at `DispatchWorktreeCommitter
 | Guarded file | Seeded ceiling |
 | --- | ---: |
 | `src/Mcg.AgentOrchestrator.Infrastructure/Workspaces/GoalAcceptanceVerifier.cs` | 8779 |
-| `src/Mcg.AgentOrchestrator.App/Orchestration/ConductorDriver.cs` | 6156 |
+| `src/Mcg.AgentOrchestrator.App/Orchestration/ConductorDriver.cs` | 6178 |
 | `src/Mcg.AgentOrchestrator.App/Orchestration/ConductorBatchLoop.cs` | 4974 |
 | `src/Mcg.AgentOrchestrator.Infrastructure/Processes/BackgroundDispatchRunner.cs` | 3222 |
 | `src/Mcg.AgentOrchestrator.Infrastructure/Workers/WorkerProfileDispatcher.cs` | 3220 |
