@@ -462,6 +462,34 @@ internal static class WorkerResultParser
         return false;
     }
 
+    internal static bool WorkerBuildCheckTestsReportSuccess(ParsedWorkerResult result)
+    {
+        var tests = result.Fields.TryGetValue("tests", out var value) ? value : string.Empty;
+        if (string.IsNullOrWhiteSpace(tests) ||
+            result.TestsStatus is TestsStatus.Fail or TestsStatus.NotRun or TestsStatus.Inconclusive ||
+            WorkerBuildCheckTestsReportFailure(result, out _) ||
+            Regex.IsMatch(tests, @"\b[1-9]\d*\s+errors?\b", RegexOptions.IgnoreCase | RegexOptions.CultureInvariant) ||
+            Regex.IsMatch(tests, @"\b[1-9]\d*\s+error\(s\)", RegexOptions.IgnoreCase | RegexOptions.CultureInvariant))
+        {
+            return false;
+        }
+
+        var normalized = Regex.Replace(tests, @"\s+", " ").Trim();
+        var zeroErrors = Regex.IsMatch(
+            normalized,
+            @"\b0\s+errors?\b|\b0\s+error\(s\)",
+            RegexOptions.IgnoreCase | RegexOptions.CultureInvariant);
+        if (zeroErrors && normalized.Contains("Invoke-WorkerBuildCheck", StringComparison.OrdinalIgnoreCase))
+        {
+            return true;
+        }
+
+        const string build = @"\bbuilds?\b";
+        const string success = @"\b(?:pass(?:ed|es)?|succeed(?:ed|s)?|success(?:ful)?|ok|clean|green)\b";
+        return (zeroErrors && Regex.IsMatch(normalized, build, RegexOptions.IgnoreCase | RegexOptions.CultureInvariant)) ||
+            Regex.IsMatch(normalized, $@"{build}.{{0,40}}{success}|{success}.{{0,40}}{build}", RegexOptions.IgnoreCase | RegexOptions.CultureInvariant);
+    }
+
     private static bool HasSubstantiveValue(IReadOnlyDictionary<string, string> fields, string key)
     {
         return fields.TryGetValue(key, out var value) &&

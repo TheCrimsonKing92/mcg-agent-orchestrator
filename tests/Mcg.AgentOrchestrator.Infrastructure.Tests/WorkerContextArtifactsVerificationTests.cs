@@ -23,7 +23,9 @@ public sealed class WorkerContextArtifactsVerificationTests
         Xunit.Assert.Contains("tests: pass - build: 0 errors (Invoke-WorkerBuildCheck)", currentTask);
         Xunit.Assert.DoesNotContain("tests: build: 0 errors (Invoke-WorkerBuildCheck)", currentTask);
         Xunit.Assert.Contains("Do not run raw `dotnet test`", currentTask);
-        Xunit.Assert.Contains("raw test execution can create per-worktree testhost firewall prompts", currentTask);
+        Xunit.Assert.Contains("Compiling every changed project is required", currentTask);
+        Xunit.Assert.Contains("tests belong to the acceptance gate", currentTask);
+        Xunit.Assert.DoesNotContain("testhost firewall prompts", currentTask);
     }
 
     [Xunit.Theory(DisplayName = "WorkerContextArtifacts_role_worker_result_contract_contains_guardrail_fields")]
