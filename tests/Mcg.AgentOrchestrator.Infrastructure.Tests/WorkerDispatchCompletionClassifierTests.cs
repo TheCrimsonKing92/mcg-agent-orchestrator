@@ -101,7 +101,10 @@ public sealed class WorkerDispatchCompletionClassifierTests
         var process = ProcessRecord("worktree");
         var sandboxPrep = "{\"event\":\"sandbox-prep\",\"phase\":\"complete\"}";
 
-        Xunit.Assert.True(classifier.HasSandboxCommitBlockedEvidence(AgentRole.Developer, string.Empty, sandboxFailure));
+        Xunit.Assert.True(classifier.HasSandboxCommitBlockedEvidence(
+            AgentRole.Developer,
+            WorkerResultBlock("src/Feature.cs", "git commit", "not-run - commit blocked by sandbox"),
+            sandboxFailure));
         Xunit.Assert.True(classifier.HasLowIntegrityConfinementEvidence(dispatch, process, sandboxPrep, false));
         Xunit.Assert.False(classifier.HasLowIntegrityConfinementEvidence(null, process, sandboxPrep, true));
     }
@@ -230,7 +233,7 @@ public sealed class WorkerDispatchCompletionClassifierTests
         tests: {tests}
         commit: none
         blockers: none
-        model_fit: OpenAI/gpt-5.6-sol - adequate - test fixture
+        model_fit: OpenAI/{AgentCatalog.OpenAiSolSubscriptionModelAlias} - adequate - test fixture
         skills: none
         confidence: high
         END_WORKER_RESULT
