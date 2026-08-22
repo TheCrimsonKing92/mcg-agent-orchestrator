@@ -597,6 +597,143 @@ public sealed class CliHelpTests
         Xunit.Assert.Contains("--text=--goal", exception.Message, StringComparison.Ordinal);
     }
 
+    [Xunit.Fact(DisplayName = "Cli_unknown_flag_on_validating_verb_suggests_near_match")]
+    public void CliUnknownFlagOnValidatingVerbSuggestsNearMatch()
+    {
+        var exception = Xunit.Assert.Throws<ArgumentException>(() =>
+            CliCommandHelp.ThrowIfInvalidFlags(["backlog-list", "--limt"]));
+
+        Xunit.Assert.Contains("Unknown option '--limt'", exception.Message, StringComparison.Ordinal);
+        Xunit.Assert.Contains("Did you mean: --limit", exception.Message, StringComparison.Ordinal);
+    }
+
+    [Xunit.Fact(DisplayName = "Cli_goal_near_typo_flag_suggests_brief_file")]
+    public void CliGoalNearTypoFlagSuggestsBriefFile()
+    {
+        var exception = Xunit.Assert.Throws<ArgumentException>(() =>
+            CliCommandHelp.ThrowIfInvalidFlags(["goal", "Ship the parser", "--brief-fil", "brief.md"]));
+
+        Xunit.Assert.Contains("Unknown option '--brief-fil'", exception.Message, StringComparison.Ordinal);
+        Xunit.Assert.Contains("Did you mean: --brief-file", exception.Message, StringComparison.Ordinal);
+    }
+
+    [Xunit.Fact(DisplayName = "Cli_goal_source_backlog_unknown_flag_fails_without_creating_goal")]
+    public void CliGoalSourceBacklogUnknownFlagFailsWithoutCreatingGoal()
+    {
+        var root = CreateTempDirectory();
+        var briefPath = Path.Combine(root, "brief.md");
+        File.WriteAllText(briefPath, "Link this goal to a backlog item.");
+        var workspace = OrchestratorWorkspace.ForDirectory(root);
+        var kernel = new AgentOrchestratorKernel();
+        IReadOnlyList<AgentDefinition> agents = AgentCatalog.Default().Agents;
+        var providers = new InMemoryModelProviderRegistry([]);
+        var profiles = WorkerProfileCatalog.Default();
+        Goal? currentGoal = null;
+
+        var exception = Xunit.Assert.ThrowsAny<ArgumentException>(() =>
+            CliCommandDispatcher.ExecuteCommand(
+                ["goal", "--brief-file", briefPath, "--source-backlog", "759af574"],
+                kernel,
+                workspace,
+                ref agents,
+                providers,
+                ref profiles,
+                ref currentGoal));
+
+        Xunit.Assert.Contains("Unknown option '--source-backlog'", exception.Message, StringComparison.Ordinal);
+        Xunit.Assert.Empty(kernel.Goals);
+        Xunit.Assert.Null(currentGoal);
+    }
+
+    [Xunit.Theory(DisplayName = "Cli_shared_flag_seam_rejects_unknown_flags_on_goal_lifecycle_verbs")]
+    [Xunit.InlineData("goal")]
+    [Xunit.InlineData("simple-goal")]
+    [Xunit.InlineData("backlog-intake")]
+    [Xunit.InlineData("acceptance")]
+    [Xunit.InlineData("run-goal")]
+    public void CliSharedFlagSeamRejectsUnknownFlagsOnGoalLifecycleVerbs(string command)
+    {
+        var exception = Xunit.Assert.Throws<ArgumentException>(() =>
+            CliCommandHelp.ThrowIfInvalidFlags([command, "--zz-not-a-real-flag"]));
+
+        Xunit.Assert.Contains("Unknown option '--zz-not-a-real-flag'", exception.Message, StringComparison.Ordinal);
+        Xunit.Assert.Contains("Usage:", exception.Message, StringComparison.Ordinal);
+        Xunit.Assert.Contains(command, exception.Message, StringComparison.Ordinal);
+    }
+
+    [Xunit.Fact(DisplayName = "Cli_all_recognized_commands_reject_unknown_flags")]
+    public void CliAllRecognizedCommandsRejectUnknownFlags()
+    {
+        foreach (var command in CliArgumentParser.RecognizedCommands)
+        {
+            var exception = Xunit.Assert.Throws<ArgumentException>(() =>
+                CliCommandHelp.ThrowIfInvalidFlags([command, "--zz-not-a-real-flag"]));
+            Xunit.Assert.Contains("Unknown option '--zz-not-a-real-flag'", exception.Message, StringComparison.Ordinal);
+        }
+    }
+
+    [Xunit.Fact(DisplayName = "Cli_newly_validated_goal_verbs_accept_existing_flags")]
+    public void CliNewlyValidatedGoalVerbsAcceptExistingFlags()
+    {
+        var commandFlags = new Dictionary<string, string[]>(StringComparer.OrdinalIgnoreCase)
+        {
+            ["goal"] =
+            [
+                "--pipeline", "--simple", "--from-backlog", "--run", "--confirm-batch-start",
+                "--backlog-item", "--backlog-coverage", "--request-key", "--text-file", "--brief-file",
+                "--ideation", "--researcher", "--planner", "--developer", "--tester", "--reviewer",
+                "--dispatch", "--confirm-dispatch-start", "--create-goal", "--create-simple-goal",
+                "--force-reclaim", "--autonomy", "--autonomy-policy",
+                "--confirm-large-paid-subscription-start", "--confirm-readiness-risk", "--help", "-h"
+            ],
+            ["simple-goal"] =
+            [
+                "--pipeline", "--brief-file", "--text-file", "--backlog-item", "--backlog-coverage",
+                "--request-key", "--dispatch", "--confirm-dispatch-start",
+                "--ideation", "--researcher", "--planner", "--developer", "--tester", "--reviewer", "--help", "-h"
+            ],
+            ["backlog-intake"] =
+            [
+                "--create-goal", "--create-simple-goal", "--force-reclaim", "--pipeline",
+                "--backlog-item", "--backlog-coverage", "--request-key", "--help", "-h"
+            ],
+            ["acceptance"] = ["--skip-verify", "--keep-workspace", "--no-record", "--autonomy", "--autonomy-policy", "--help", "-h"],
+            ["run-goal"] =
+            [
+                "--confirm-batch-start", "--confirm-large-paid-subscription-start", "--confirm-readiness-risk",
+                "--autonomy", "--autonomy-policy", "--help", "-h"
+            ]
+        };
+
+        foreach (var (command, flags) in commandFlags)
+        {
+            foreach (var flag in flags)
+            {
+                var exception = Xunit.Record.Exception(() =>
+                    CliCommandHelp.ThrowIfInvalidFlags([command, flag, "value"]));
+                Xunit.Assert.True(exception is null, $"{command} {flag} was rejected: {exception?.Message}");
+            }
+        }
+    }
+
+    [Xunit.Fact(DisplayName = "Cli_inline_goal_values_and_leading_dash_filter_are_accepted")]
+    public void CliInlineGoalValuesAndLeadingDashFilterAreAccepted()
+    {
+        Xunit.Assert.Null(Xunit.Record.Exception(() => CliCommandHelp.ThrowIfInvalidFlags(
+            ["goal", "--backlog-item=759af574", "--backlog-coverage=slice"])));
+        Xunit.Assert.Null(Xunit.Record.Exception(() => CliCommandHelp.ThrowIfInvalidFlags(
+            ["backlog-list", "--text=-filter"])));
+    }
+
+    [Xunit.Fact(DisplayName = "Cli_equals_form_remains_rejected_for_non_inline_flags")]
+    public void CliEqualsFormRemainsRejectedForNonInlineFlags()
+    {
+        var exception = Xunit.Assert.Throws<ArgumentException>(() =>
+            CliCommandHelp.ThrowIfInvalidFlags(["conduct", "--poll-seconds=5"]));
+
+        Xunit.Assert.Contains("Unknown option '--poll-seconds=5'", exception.Message, StringComparison.Ordinal);
+    }
+
     private static string CreateTempDirectory()
     {
         var path = Path.Combine(Path.GetTempPath(), "mcg-cli-help-tests", Guid.NewGuid().ToString("N"));
