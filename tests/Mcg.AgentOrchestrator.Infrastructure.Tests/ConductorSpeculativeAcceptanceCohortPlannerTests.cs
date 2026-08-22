@@ -113,6 +113,49 @@ public sealed class ConductorSpeculativeAcceptanceCohortPlannerTests
     }
 
     [Fact]
+    public void Receipt_NamesRealResourceAndPathConflicts_AndAdmitsDisjointTestFiles()
+    {
+        var resourcePlan = ConductorSpeculativeAcceptanceCohortPlanner.Plan(
+        [
+            Ready(
+                "11111111111111111111111111111111",
+                "src/Mcg.AgentOrchestrator.Infrastructure/Workspaces/First.cs"),
+            Ready(
+                "22222222222222222222222222222222",
+                "src/Mcg.AgentOrchestrator.Infrastructure/Workspaces/Second.cs")
+        ]);
+        var pathPlan = ConductorSpeculativeAcceptanceCohortPlanner.Plan(
+        [
+            Ready(
+                "33333333333333333333333333333333",
+                "tests/Mcg.AgentOrchestrator.Infrastructure.Tests/WorkerDispatchTests.cs"),
+            Ready(
+                "44444444444444444444444444444444",
+                "tests/Mcg.AgentOrchestrator.Infrastructure.Tests/WorkerDispatchTests.cs")
+        ]);
+        var disjointTestPlan = ConductorSpeculativeAcceptanceCohortPlanner.Plan(
+        [
+            Ready(
+                "55555555555555555555555555555555",
+                "tests/Mcg.AgentOrchestrator.Infrastructure.Tests/WorkerDispatchTests.cs"),
+            Ready(
+                "66666666666666666666666666666666",
+                "tests/Mcg.AgentOrchestrator.Infrastructure.Tests/ConductorParallelAcceptanceCandidateTests.cs")
+        ]);
+
+        Assert.Contains(
+            "22222222:SerializedResourceOverlap(conflict=11111111,resource=ownership:shared-infrastructure:infrastructure/workspaces)",
+            resourcePlan.FormatReceipt(1),
+            StringComparison.Ordinal);
+        Assert.Contains(
+            "44444444:LandingPathOverlap(conflict=33333333,path=tests/Mcg.AgentOrchestrator.Infrastructure.Tests/WorkerDispatchTests.cs",
+            pathPlan.FormatReceipt(2),
+            StringComparison.Ordinal);
+        Assert.Equal(["55555555", "66666666"], Prefixes(Assert.Single(disjointTestPlan.Cohorts)));
+        Assert.Contains("exclusions=none", disjointTestPlan.FormatReceipt(3), StringComparison.Ordinal);
+    }
+
+    [Fact]
     public void CohortIsBoundedAtFour_AndFifthCandidateRemainsVisibleAsDeferred()
     {
         var candidates = Enumerable.Range(1, 5)

@@ -77,6 +77,68 @@ public sealed class ConductorParallelAcceptanceCandidateTests
     }
 
     [Fact]
+    public void DisjointTestFilesInSameProject_DoNotOverlap()
+    {
+        var goal = CreateGoal();
+        var first = ConductorParallelAcceptanceCandidate.Create(
+            goal,
+            0,
+            ["tests/Mcg.AgentOrchestrator.Infrastructure.Tests/WorkerDispatchTests.cs"]);
+        var second = ConductorParallelAcceptanceCandidate.Create(
+            goal,
+            1,
+            ["tests/Mcg.AgentOrchestrator.Infrastructure.Tests/ConductorParallelAcceptanceCandidateTests.cs"]);
+
+        Assert.NotEmpty(first.ResourceKeys);
+        Assert.NotEmpty(second.ResourceKeys);
+        Assert.Empty(first.ResourceKeys.Intersect(second.ResourceKeys, StringComparer.OrdinalIgnoreCase));
+        Assert.False(first.Overlaps(second));
+        Assert.False(second.Overlaps(first));
+    }
+
+    [Fact]
+    public void SameTestFile_OverlapsThroughExactPathReservation()
+    {
+        const string path = "tests/Mcg.AgentOrchestrator.Infrastructure.Tests/WorkerDispatchTests.cs";
+        const string expectedResource =
+            "ownership:test-project:tests/mcg.agentorchestrator.infrastructure.tests/workerdispatchtests.cs";
+        var goal = CreateGoal();
+        var first = ConductorParallelAcceptanceCandidate.Create(goal, 0, [path]);
+        var second = ConductorParallelAcceptanceCandidate.Create(goal, 1, [path]);
+
+        Assert.Contains(first.ResourceKeys, key => key.Equals(expectedResource, StringComparison.OrdinalIgnoreCase));
+        Assert.Contains(second.ResourceKeys, key => key.Equals(expectedResource, StringComparison.OrdinalIgnoreCase));
+        Assert.True(first.Overlaps(second));
+        Assert.True(second.Overlaps(first));
+    }
+
+    [Fact]
+    public void UnknownScopes_ReserveConservativelyAndOverlap()
+    {
+        var goal = CreateGoal();
+        var first = ConductorParallelAcceptanceCandidate.Create(goal, 0, []);
+        var second = ConductorParallelAcceptanceCandidate.Create(goal, 1, []);
+
+        Assert.Equal(["ownership:unknown-acceptance-scope"], first.ResourceKeys);
+        Assert.Equal(["ownership:unknown-acceptance-scope"], second.ResourceKeys);
+        Assert.True(first.Overlaps(second));
+        Assert.True(second.Overlaps(first));
+    }
+
+    [Fact]
+    public void DistinctMalformedTestPaths_ReserveConservativelyAndOverlap()
+    {
+        var goal = CreateGoal();
+        var first = ConductorParallelAcceptanceCandidate.Create(goal, 0, ["tests/LooseTests.cs"]);
+        var second = ConductorParallelAcceptanceCandidate.Create(goal, 1, ["tests/OtherLoose.cs"]);
+
+        Assert.Equal(["ownership:unknown-acceptance-scope"], first.ResourceKeys);
+        Assert.Equal(["ownership:unknown-acceptance-scope"], second.ResourceKeys);
+        Assert.True(first.Overlaps(second));
+        Assert.True(second.Overlaps(first));
+    }
+
+    [Fact]
     public void DocumentationOnlyScope_ReservesNothingAndNeverOverlaps()
     {
         var goal = CreateGoal();
