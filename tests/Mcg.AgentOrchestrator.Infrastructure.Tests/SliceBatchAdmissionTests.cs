@@ -84,10 +84,18 @@ public sealed class SliceBatchAdmissionTests
         evaluator.BeginTick();
         var held = evaluator.Evaluate(ordered[1]);
         var winner = evaluator.Evaluate(ordered[0]);
+        var winnerAgain = evaluator.Evaluate(ordered[0]);
 
         Xunit.Assert.False(held.IsAllowed);
         Xunit.Assert.Contains(ordered[0].Id.Value[..8], held.Reason, StringComparison.Ordinal);
         Xunit.Assert.True(winner.IsAllowed);
+        Xunit.Assert.True(winnerAgain.IsAllowed);
+
+        kernel.CancelGoal(ordered[0].Id, "Synthetic terminal winner for stable-order coverage.");
+
+        var released = evaluator.Evaluate(ordered[1]);
+
+        Xunit.Assert.True(released.IsAllowed);
     }
 
     [Xunit.Fact]
