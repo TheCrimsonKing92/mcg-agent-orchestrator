@@ -9,12 +9,8 @@ internal static class AssemblyTempRedirect
 {
     internal const string LowInheritableLevel = "(OI)(CI)L";
     internal const int MaxRootsReapedPerProcess = 32;
+    internal static int RetainedOrphanRoots => Math.Clamp(Environment.ProcessorCount * 4, 32, 128);
     internal static string? StartupTimingDiagnostic { get; private set; }
-
-    // Deliberately far longer than any run: the acceptance gate's own per-lane budget is 40
-    // minutes, so a root untouched for half a day cannot belong to a live host. Generous enough
-    // that age never races a running test, short enough to bound the directory.
-    internal static readonly TimeSpan AbandonedRootAge = TimeSpan.FromHours(12);
 
     [ModuleInitializer]
     internal static void Install()
@@ -90,24 +86,28 @@ internal static class AssemblyTempRedirect
         return reapable;
     }
 
-    // PID identity cannot bound growth. A PID recycled onto a live process makes a long-dead run's
-    // root look alive forever, so it is never reaped and the shared directory only grows. Age has
-    // no such failure mode: nothing here runs for hours, so a root older than the cutoff is
-    // abandoned whatever its PID now refers to. This is deliberately not a liveness cache — a
-    // cache would keep PID identity as the signal and add invalidation on top of it.
-    internal static IReadOnlyList<string> SelectRootsAbandonedByAge(
+    // Retain enough recent roots for four hosts per logical processor, with fixed lower and upper
+    // safety rails. Unlike an age window, the population bound is unchanged when throughput rises.
+    // Ordering also prevents PID reuse from retaining an old root forever.
+    internal static IReadOnlyList<string> SelectRootsBeyondRetention(
         IEnumerable<string> siblingDirectoryNames,
         int currentProcessId,
+        Func<int, bool> isProcessAlive,
+        Func<int, DateTime?> processStartTimeUtc,
         Func<string, DateTime> lastWriteUtc,
-        DateTime cutoffUtc)
+        int retainedRoots)
     {
         ArgumentNullException.ThrowIfNull(siblingDirectoryNames);
+        ArgumentNullException.ThrowIfNull(isProcessAlive);
+        ArgumentNullException.ThrowIfNull(processStartTimeUtc);
         ArgumentNullException.ThrowIfNull(lastWriteUtc);
+        ArgumentOutOfRangeException.ThrowIfNegative(retainedRoots);
 
-        var abandoned = new List<string>();
+        var owned = new List<(string Name, DateTime LastWriteUtc)>();
         foreach (var name in siblingDirectoryNames)
         {
-            if (!TryParseProcessTempRootName(name, out var processId) || processId == currentProcessId)
+            if (!TryParseProcessTempRootName(name, out var processId) ||
+                processId == currentProcessId)
             {
                 continue;
             }
@@ -122,13 +122,26 @@ internal static class AssemblyTempRedirect
                 continue;
             }
 
-            if (written < cutoffUtc)
+            if (isProcessAlive(processId))
             {
-                abandoned.Add(name);
+                var processStarted = processStartTimeUtc(processId);
+                if (processStarted is null || processStarted <= written)
+                {
+                    continue;
+                }
             }
+
+            owned.Add((name, written));
         }
 
-        return abandoned;
+        return owned
+            .OrderByDescending(candidate => candidate.LastWriteUtc)
+            .ThenBy(candidate => candidate.Name, StringComparer.OrdinalIgnoreCase)
+            .Skip(retainedRoots)
+            .OrderBy(candidate => candidate.LastWriteUtc)
+            .ThenBy(candidate => candidate.Name, StringComparer.OrdinalIgnoreCase)
+            .Select(candidate => candidate.Name)
+            .ToArray();
     }
 
     internal static bool TryParseProcessTempRootName(string? directoryName, out int processId)
@@ -196,31 +209,38 @@ internal static class AssemblyTempRedirect
             timings.ReapSiblingCount = siblings.Length;
 
             phaseClock.Restart();
-            var livePids = SnapshotLiveProcessIds();
+            var liveProcesses = SnapshotLiveProcesses(siblings, Environment.ProcessId);
             phaseClock.Stop();
             timings.ReapProcessSnapshotElapsedMilliseconds = phaseClock.ElapsedMilliseconds;
 
             phaseClock.Restart();
-            var reapableByProcess = SelectReapableRoots(siblings, Environment.ProcessId, livePids.Contains);
+            var reapableByProcess = SelectReapableRoots(
+                siblings,
+                Environment.ProcessId,
+                liveProcesses.ContainsKey);
             phaseClock.Stop();
             timings.ReapProcessSelectionElapsedMilliseconds = phaseClock.ElapsedMilliseconds;
 
             phaseClock.Restart();
-            var abandonedByAge = SelectRootsAbandonedByAge(
+            var beyondRetention = SelectRootsBeyondRetention(
                 siblings,
                 Environment.ProcessId,
+                liveProcesses.ContainsKey,
+                processId => liveProcesses.GetValueOrDefault(processId),
                 name => Directory.GetLastWriteTimeUtc(Path.Combine(sharedRoot, name)),
-                DateTime.UtcNow - AbandonedRootAge);
+                RetainedOrphanRoots);
             phaseClock.Stop();
-            timings.ReapAgeSelectionElapsedMilliseconds = phaseClock.ElapsedMilliseconds;
+            timings.ReapRetentionSelectionElapsedMilliseconds = phaseClock.ElapsedMilliseconds;
+            timings.ReapRetentionReserve = RetainedOrphanRoots;
+            timings.ReapOverflowCount = beyondRetention.Count;
             timings.ReapOverlapCount = reapableByProcess.Intersect(
-                abandonedByAge,
+                beyondRetention,
                 StringComparer.OrdinalIgnoreCase).Count();
 
             phaseClock.Restart();
             var bounded = SelectBoundedReapRoots(
                 reapableByProcess,
-                abandonedByAge,
+                beyondRetention,
                 name => Directory.GetLastWriteTimeUtc(Path.Combine(sharedRoot, name)),
                 MaxRootsReapedPerProcess);
             phaseClock.Stop();
@@ -280,33 +300,70 @@ internal static class AssemblyTempRedirect
     // were cleared. Membership in the snapshot also preserves the previous semantics for a PID
     // that cannot be opened — it still enumerates, so it still counts as alive and its root is
     // left alone.
-    private static HashSet<int> SnapshotLiveProcessIds()
+    private static Dictionary<int, DateTime?> SnapshotLiveProcesses(
+        IEnumerable<string> siblingDirectoryNames,
+        int currentProcessId)
     {
-        var live = new HashSet<int>();
+        var relevantProcessIds = new HashSet<int>();
+        foreach (var name in siblingDirectoryNames)
+        {
+            if (TryParseProcessTempRootName(name, out var processId) && processId != currentProcessId)
+            {
+                relevantProcessIds.Add(processId);
+            }
+        }
+
+        var live = new Dictionary<int, DateTime?>();
         foreach (var process in System.Diagnostics.Process.GetProcesses())
         {
-            live.Add(process.Id);
-            process.Dispose();
+            try
+            {
+                if (!relevantProcessIds.Contains(process.Id))
+                {
+                    continue;
+                }
+
+                DateTime? startedUtc = null;
+                try
+                {
+                    startedUtc = process.StartTime.ToUniversalTime();
+                }
+                catch (Exception ex) when (IsProcessSnapshotFailure(ex))
+                {
+                    // An inaccessible start time still proves the PID is live. Preserve the root.
+                }
+
+                live[process.Id] = startedUtc;
+            }
+            finally
+            {
+                process.Dispose();
+            }
         }
 
         return live;
     }
 
+    private static bool IsProcessSnapshotFailure(Exception ex) =>
+        ex is InvalidOperationException or System.ComponentModel.Win32Exception or NotSupportedException;
+
     internal static TempRootDeleteOutcome DeleteTree(string path)
     {
-        try
+        var result = TempRootJanitor.DeleteTree(path);
+        return result.Status switch
         {
-            Directory.Delete(path, recursive: true);
-            return TempRootDeleteOutcome.Deleted(path);
-        }
-        catch (DirectoryNotFoundException)
-        {
-            return TempRootDeleteOutcome.AlreadyAbsent(path);
-        }
-        catch (Exception ex) when (IsFileSystemFailure(ex))
-        {
-            return TempRootDeleteOutcome.Failure(path, ex);
-        }
+            TempRootJanitorDeleteStatus.Deleted => TempRootDeleteOutcome.Deleted(
+                path,
+                result.ReadOnlyAttributesCleared),
+            TempRootJanitorDeleteStatus.AlreadyAbsent => TempRootDeleteOutcome.AlreadyAbsent(
+                path,
+                result.ReadOnlyAttributesCleared),
+            _ => TempRootDeleteOutcome.Failure(
+                path,
+                result.ExceptionType ?? "unknown",
+                result.FailurePath,
+                result.ReadOnlyAttributesCleared)
+        };
     }
 
     internal static string? RunStartupHousekeeping(
@@ -467,7 +524,8 @@ internal static class AssemblyTempRedirect
             $"reapSiblingCount={FormatReap(timings, timings.ReapSiblingCount)} " +
             $"reapPidSnapshotMs={FormatReap(timings, timings.ReapProcessSnapshotElapsedMilliseconds)} " +
             $"reapOrphanSelectMs={FormatReap(timings, timings.ReapProcessSelectionElapsedMilliseconds)} " +
-            $"reapAgeSelectMs={FormatReap(timings, timings.ReapAgeSelectionElapsedMilliseconds)} " +
+            // Preserve the original field as a compatibility alias for existing receipt readers.
+            $"reapAgeSelectMs={FormatReap(timings, timings.ReapRetentionSelectionElapsedMilliseconds)} " +
             $"reapBoundSelectMs={FormatReap(timings, timings.ReapBoundSelectionElapsedMilliseconds)} " +
             $"reapOverlap={FormatReap(timings, timings.ReapOverlapCount)} " +
             $"deleteAttempted={FormatReap(timings, timings.ReapDeleteAttempted)} " +
@@ -477,14 +535,18 @@ internal static class AssemblyTempRedirect
             $"deleteAlreadyAbsent={FormatReap(timings, timings.ReapDeleteAlreadyAbsent)} " +
             $"deleteFailed={FormatReap(timings, timings.ReapDeleteFailed)} " +
             $"deleteFailureKinds={FormatReap(timings, timings.DeleteFailureKinds)} " +
-            $"deleteFirstFailure={FormatReap(timings, timings.FirstDeleteFailure)}";
+            $"deleteFirstFailure={FormatReap(timings, timings.FirstDeleteFailure)} " +
+            $"reapRetentionSelectMs={FormatReap(timings, timings.ReapRetentionSelectionElapsedMilliseconds)} " +
+            $"reapRetentionReserve={FormatReap(timings, timings.ReapRetentionReserve)} " +
+            $"reapOverflowCount={FormatReap(timings, timings.ReapOverflowCount)} " +
+            $"deleteReadOnlyCleared={FormatReap(timings, timings.DeleteReadOnlyAttributesCleared)}";
     }
 
     internal static string BuildProcessTempRoot(string sharedRoot, int processId)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(sharedRoot);
         ArgumentOutOfRangeException.ThrowIfNegativeOrZero(processId);
-        return Path.Combine(sharedRoot, $"p{processId:x}");
+        return TempRootJanitor.BuildOwnedRootPath(sharedRoot, processId);
     }
 
     private static bool EnsureLowLabel(
@@ -685,16 +747,35 @@ internal enum TempRootDeleteStatus
 internal sealed record TempRootDeleteOutcome(
     string Path,
     TempRootDeleteStatus Status,
-    string? ExceptionType)
+    string? ExceptionType,
+    string? FailurePath = null,
+    int ReadOnlyAttributesCleared = 0)
 {
-    internal static TempRootDeleteOutcome Deleted(string path) =>
-        new(path, TempRootDeleteStatus.Deleted, ExceptionType: null);
+    internal static TempRootDeleteOutcome Deleted(string path, int readOnlyAttributesCleared = 0) =>
+        new(
+            path,
+            TempRootDeleteStatus.Deleted,
+            ExceptionType: null,
+            FailurePath: null,
+            ReadOnlyAttributesCleared: readOnlyAttributesCleared);
 
-    internal static TempRootDeleteOutcome AlreadyAbsent(string path) =>
-        new(path, TempRootDeleteStatus.AlreadyAbsent, ExceptionType: null);
+    internal static TempRootDeleteOutcome AlreadyAbsent(string path, int readOnlyAttributesCleared = 0) =>
+        new(
+            path,
+            TempRootDeleteStatus.AlreadyAbsent,
+            ExceptionType: null,
+            FailurePath: null,
+            ReadOnlyAttributesCleared: readOnlyAttributesCleared);
 
     internal static TempRootDeleteOutcome Failure(string path, Exception exception) =>
-        new(path, TempRootDeleteStatus.Failed, exception.GetType().Name);
+        Failure(path, exception.GetType().Name, failurePath: null, readOnlyAttributesCleared: 0);
+
+    internal static TempRootDeleteOutcome Failure(
+        string path,
+        string exceptionType,
+        string? failurePath,
+        int readOnlyAttributesCleared) =>
+        new(path, TempRootDeleteStatus.Failed, exceptionType, failurePath, readOnlyAttributesCleared);
 }
 
 internal interface IWorkerIntegrityLabelerDiagnostics
@@ -727,14 +808,17 @@ internal sealed class TempRootStartupTimings
     internal int ReapSiblingCount { get; set; }
     internal long ReapProcessSnapshotElapsedMilliseconds { get; set; }
     internal long ReapProcessSelectionElapsedMilliseconds { get; set; }
-    internal long ReapAgeSelectionElapsedMilliseconds { get; set; }
+    internal long ReapRetentionSelectionElapsedMilliseconds { get; set; }
     internal long ReapBoundSelectionElapsedMilliseconds { get; set; }
+    internal int ReapRetentionReserve { get; set; }
+    internal int ReapOverflowCount { get; set; }
     internal int ReapOverlapCount { get; set; }
     internal int ReapDeleteAttempted { get; private set; }
     internal int ReapDeleteSucceeded { get; private set; }
     internal int ReapDeleteDeleted { get; private set; }
     internal int ReapDeleteAlreadyAbsent { get; private set; }
     internal int ReapDeleteFailed { get; private set; }
+    internal int DeleteReadOnlyAttributesCleared { get; private set; }
     internal long ReapDeleteElapsedMilliseconds { get; set; }
     internal string DeleteFailureKinds => deleteFailureKindCounts.Count == 0
         ? "none"
@@ -771,6 +855,7 @@ internal sealed class TempRootStartupTimings
         ArgumentNullException.ThrowIfNull(outcome);
 
         ReapDeleteAttempted++;
+        DeleteReadOnlyAttributesCleared += outcome.ReadOnlyAttributesCleared;
         switch (outcome.Status)
         {
             case TempRootDeleteStatus.Deleted:
@@ -787,7 +872,7 @@ internal sealed class TempRootStartupTimings
                     deleteFailureKindCounts.GetValueOrDefault(exceptionType) + 1;
                 if (FirstDeleteFailure == "none")
                 {
-                    var leaf = SanitizeDiagnosticValue(Path.GetFileName(outcome.Path));
+                    var leaf = SanitizeDiagnosticValue(Path.GetFileName(outcome.FailurePath ?? outcome.Path));
                     FirstDeleteFailure = $"{leaf}:{exceptionType}";
                 }
 
