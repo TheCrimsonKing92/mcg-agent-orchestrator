@@ -74,7 +74,11 @@ public sealed class AcceptanceContainedGenerationBaselineTests
             (_, _) => ++resolveCall == 1 ? "aaaaaaaa\r\n" : "bbbbbbbb\r\n",
             (_, arguments) =>
             {
-                addedRevision = arguments[4];
+                if (arguments.Count == 5 && arguments[0] == "worktree" && arguments[1] == "add")
+                {
+                    addedRevision = arguments[4];
+                }
+
                 return new GitCli.GitResult(0, string.Empty, string.Empty);
             });
 
