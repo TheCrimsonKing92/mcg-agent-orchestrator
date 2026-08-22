@@ -256,7 +256,7 @@ Wave 2 item 2 places the process-recovery boundary at `DispatchProcessRefreshVer
 | `src/Mcg.AgentOrchestrator.Infrastructure/Workspaces/GoalAcceptanceVerifier.cs` | 8779 |
 | `src/Mcg.AgentOrchestrator.App/Orchestration/ConductorDriver.cs` | 6156 |
 | `src/Mcg.AgentOrchestrator.App/Orchestration/ConductorBatchLoop.cs` | 4974 |
-| `src/Mcg.AgentOrchestrator.Infrastructure/Processes/BackgroundDispatchRunner.cs` | 3533 |
+| `src/Mcg.AgentOrchestrator.Infrastructure/Processes/BackgroundDispatchRunner.cs` | 3559 |
 | `src/Mcg.AgentOrchestrator.Infrastructure/Workers/WorkerProfileDispatcher.cs` | 3220 |
 | `src/Mcg.AgentOrchestrator.App/Cli/CliPersistentStateRunner.cs` | 4821 |
 | `tests/Mcg.AgentOrchestrator.Infrastructure.Tests/GoalAcceptanceVerifierTests.cs` | 1566 |
@@ -270,6 +270,8 @@ The production rows are the six ranked god classes whose growth the inventory tr
 When extraction shrinks a guarded file, lower that row in the same change. If growth is unavoidable, raise only that row deliberately with an inline justification naming the goal. A rename or deletion must update its row in the same change. Never derive a ceiling automatically from the current file, make a row advisory, add an opt-out, or delete the guard.
 
 ### Recorded row raises
+
+Goal `18afe5f2` raised the `BackgroundDispatchRunner.cs` row from 3499 to 3525 because missing-build-evidence rejection and commit suppression must run where parsed worker results and authoritative changed paths meet.
 
 Goal `46ff9f83` raised the `ConductorBatchLoopTestsParallelAcceptance.cs` row from 4355 to 4473 for the unequal logical-width/build-permit control and the typed maximum diagnostic. The existing parallel-acceptance test class owns both conductor admission and physical permit characterization, so extracting these controls would split the contract they compare.
 

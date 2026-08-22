@@ -1406,6 +1406,7 @@ public sealed class DispatchOutcomeClassifyTests
         ("1217", AgentRole.Planner, "planner-output-contract-rejected", "Planner output contract rejected the captured plan."),
         ("1231", AgentRole.Planner, "planner-plan-persistence-failed", "Planner output contract could not persist the accepted plan."),
         ("1280", AgentRole.Developer, "worker-build-check-failed", "Deterministic worker build check failed."),
+        ("missing-build-evidence", AgentRole.Developer, "worker-build-evidence-missing", "Required worker build evidence was not reported."),
         ("wrapper-exit", AgentRole.Tester, "wrapper-process-exit-failure", "Wrapper process exited nonzero after the selected child succeeded, without usable completion evidence."),
         ("1376", AgentRole.Developer, "required-file-change-evidence-missing", "Developer/Tester dispatch did not produce required relevant file-change evidence."),
         ("1402", AgentRole.Developer, "worktree-inspection-failed", "Completed dispatch worktree inspection failed.")
@@ -1474,7 +1475,7 @@ public sealed class DispatchOutcomeClassifyTests
     [Xunit.Fact(DisplayName = "Orchestrator-authored markers do not displace an already-named outcome")]
     public void OrchestratorAuthoredMarkersDoNotDisplaceAlreadyNamedOutcome()
     {
-        Xunit.Assert.Equal(8, OrchestratorAuthoredFailures.Length);
+        Xunit.Assert.Equal(9, OrchestratorAuthoredFailures.Length);
         Xunit.Assert.Equal(
             OrchestratorAuthoredFailures.Length,
             OrchestratorAuthoredFailures.Select(failure => failure.Rule).Distinct(StringComparer.Ordinal).Count());

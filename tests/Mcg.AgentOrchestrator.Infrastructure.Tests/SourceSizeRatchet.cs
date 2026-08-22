@@ -20,9 +20,13 @@ internal static class SourceSizeRatchet
             // cancellation seam had already added 74 net lines before the multi-file ratchet landed.
             new SourceSizeCeiling("src/Mcg.AgentOrchestrator.App/Orchestration/ConductorDriver.cs", 6156),
             new SourceSizeCeiling("src/Mcg.AgentOrchestrator.App/Orchestration/ConductorBatchLoop.cs", 4974),
-            // Goal 0d39b5a3 adds the narrow Planner sample launch and completion-selection call sites;
-            // the fan-out and selection behavior remain extracted into dedicated components.
-            new SourceSizeCeiling("src/Mcg.AgentOrchestrator.Infrastructure/Processes/BackgroundDispatchRunner.cs", 3533),
+            // Raised for goal 18afe5f2: missing-build-evidence rejection and commit suppression
+            // must run where parsed worker results and authoritative changed paths meet. Raised again
+            // for goal 0d39b5a3, which adds the narrow Planner sample launch and completion-selection
+            // call sites; the fan-out and selection behavior remain extracted into dedicated components.
+            // Both goals grew this file, so this row is the measured size of the merged result, not
+            // either goal's individual ceiling.
+            new SourceSizeCeiling("src/Mcg.AgentOrchestrator.Infrastructure/Processes/BackgroundDispatchRunner.cs", 3559),
             new SourceSizeCeiling("src/Mcg.AgentOrchestrator.Infrastructure/Workers/WorkerProfileDispatcher.cs", 3220),
             new SourceSizeCeiling("src/Mcg.AgentOrchestrator.App/Cli/CliPersistentStateRunner.cs", 4821),
             new SourceSizeCeiling("tests/Mcg.AgentOrchestrator.Infrastructure.Tests/GoalAcceptanceVerifierTests.cs", 1566),
