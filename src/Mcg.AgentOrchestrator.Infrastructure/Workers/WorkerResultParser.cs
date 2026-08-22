@@ -480,11 +480,12 @@ internal static class WorkerResultParser
             @"\b0\s+errors?\b|\b0\s+error\(s\)",
             RegexOptions.IgnoreCase | RegexOptions.CultureInvariant);
         const string build = @"\bbuilds?\b";
+        const string buildSubject = @"(?:\bbuilds?\b|Invoke-WorkerBuildCheck)";
         const string success = @"\b(?:pass(?:ed|es)?|succeed(?:ed|s)?|success(?:ful)?|ok|clean|green)\b";
         const string negation = @"\b(?:not|never|did\s+not|does\s+not|do\s+not|isn['’]?t|wasn['’]?t|weren['’]?t)\b";
         if (Regex.IsMatch(
                 normalized,
-                $@"{build}.{{0,40}}{negation}.{{0,20}}{success}|{negation}.{{0,20}}{success}.{{0,40}}{build}",
+                $@"{buildSubject}.{{0,40}}{negation}.{{0,20}}{success}|{negation}.{{0,20}}{success}.{{0,40}}{buildSubject}",
                 RegexOptions.IgnoreCase | RegexOptions.CultureInvariant))
         {
             return false;
