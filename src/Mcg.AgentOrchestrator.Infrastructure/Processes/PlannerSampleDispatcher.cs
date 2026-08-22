@@ -64,7 +64,8 @@ internal static class PlannerSampleDispatcher
                     PrepHeartbeatPath = primaryParameters.PrepHeartbeatPath is null ? null : sample.PrepHeartbeatPath,
                     PrepExitCodePath = primaryParameters.PrepExitCodePath is null ? null : sample.PrepExitCodePath,
                     ChildExitRecordPath = sample.ChildExitRecordPath,
-                    HostDiagnosticPath = sample.HostDiagnosticPath
+                    HostDiagnosticPath = sample.HostDiagnosticPath,
+                    SandboxInstanceName = $"planner-sample-{sample.Index}"
                 };
                 DispatchProcessHost.WriteParameters(sample.ParametersPath, parameters);
                 var startInfo = CreateStartInfo(parameters.WorkingDirectory, dispatchHostAssembly, sample.ParametersPath, sample.StartGatePath);
@@ -149,8 +150,6 @@ internal static class PlannerSampleDispatcher
                 continue;
             }
 
-            if (!WorkerProcessJobs.TryDetachForGracefulStop(launch.Process.Id, out var failure))
-                WriteLaunchDiagnostic(launch.Artifacts, failure);
             launch.Process.Dispose();
         }
     }

@@ -217,7 +217,8 @@ public sealed record TaskProcessSnapshot(
     int? ChildExitCode = null,
     DispatchExitArtifactOrigin ExitArtifactOrigin = DispatchExitArtifactOrigin.None,
     string? ExitArtifactReason = null,
-    bool WasGracefullyDetachedByConductor = false);
+    bool WasGracefullyDetachedByConductor = false,
+    IReadOnlyList<int>? NonBlockingProcessIds = null);
 
 public sealed record TaskProcessResourceAccountingSnapshot(
     long CpuMilliseconds,

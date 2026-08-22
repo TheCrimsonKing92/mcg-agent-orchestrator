@@ -233,7 +233,8 @@ public sealed record TaskProcessRecord(
     int? ChildExitCode = null,
     DispatchExitArtifactOrigin ExitArtifactOrigin = DispatchExitArtifactOrigin.None,
     string? ExitArtifactReason = null,
-    bool WasGracefullyDetachedByConductor = false)
+    bool WasGracefullyDetachedByConductor = false,
+    IReadOnlyList<int>? NonBlockingProcessIds = null)
 {
     public bool IsRunning => CompletedAt is null && ExitCode is null;
 
@@ -241,6 +242,11 @@ public sealed record TaskProcessRecord(
         OwnedProcessIds is { Count: > 0 }
             ? OwnedProcessIds
             : [ProcessId];
+
+    public IReadOnlyList<int> CompletionTrackedProcessIds =>
+        NonBlockingProcessIds is { Count: > 0 }
+            ? TrackedProcessIds.Where(pid => pid == ProcessId || !NonBlockingProcessIds.Contains(pid)).ToArray()
+            : TrackedProcessIds;
 }
 
 public enum DispatchExitArtifactOrigin

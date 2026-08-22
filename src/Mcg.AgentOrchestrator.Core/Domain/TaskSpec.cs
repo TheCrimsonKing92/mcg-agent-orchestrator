@@ -223,7 +223,8 @@ public sealed class TaskSpec
                     LastProcess.ChildExitCode,
                     LastProcess.ExitArtifactOrigin,
                     LastProcess.ExitArtifactReason,
-                    LastProcess.WasGracefullyDetachedByConductor),
+                    LastProcess.WasGracefullyDetachedByConductor,
+                    LastProcess.NonBlockingProcessIds),
             VerificationPlan,
             SubscriptionRetryAfter,
             SubscriptionLimitReviewNote,
@@ -403,7 +404,8 @@ public sealed class TaskSpec
                 snapshot.LastProcess.ChildExitCode,
                 snapshot.LastProcess.ExitArtifactOrigin,
                 snapshot.LastProcess.ExitArtifactReason,
-                snapshot.LastProcess.WasGracefullyDetachedByConductor));
+                snapshot.LastProcess.WasGracefullyDetachedByConductor,
+                snapshot.LastProcess.NonBlockingProcessIds));
         }
 
         task.SetSubscriptionRetryAfter(snapshot.SubscriptionRetryAfter);

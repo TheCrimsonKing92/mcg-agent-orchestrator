@@ -18,6 +18,7 @@ public sealed class PlannerSamplingDispatchTests : WorkerDispatchTestSupport
         var artifacts = PlannerSampleDispatcher.CreateArtifacts(primaryPath, sampleCount);
         var primaryParameters = CreateRunParameters(root, primaryPath);
         var launchedProcessIds = new List<int>();
+        var sampleSandboxRoots = new List<string>();
         var launchCount = 0;
         var launches = PlannerSampleDispatcher.StartSamples(
             artifacts,
@@ -28,6 +29,7 @@ public sealed class PlannerSamplingDispatchTests : WorkerDispatchTestSupport
             {
                 launchCount++;
                 var sampleParameters = DispatchProcessHost.ReadParameters(startInfo.ArgumentList.Last());
+                sampleSandboxRoots.Add(DispatchProcessHost.ResolveSandboxRoot(sampleParameters));
                 File.WriteAllText(
                     sampleParameters.StdoutPath,
                     plan + Environment.NewLine + $"<!-- launched sample {launchCount} -->");
@@ -43,10 +45,15 @@ public sealed class PlannerSamplingDispatchTests : WorkerDispatchTestSupport
         {
             Xunit.Assert.Equal(configuredSampleCount - 1, launchCount);
             Xunit.Assert.All(launches, launch => Xunit.Assert.True(WorkerProcessJobs.HasRegisteredJob(launch.Process.Id)));
+            Xunit.Assert.Equal(configuredSampleCount - 1, sampleSandboxRoots.Distinct(StringComparer.OrdinalIgnoreCase).Count());
+            Xunit.Assert.All(sampleSandboxRoots, sandboxRoot => Xunit.Assert.StartsWith(
+                Path.Combine(root, ".mcg-sandbox", "planner-sample-"),
+                sandboxRoot,
+                StringComparison.OrdinalIgnoreCase));
 
             var registeredProcessIds = launches.Select(launch => launch.Process.Id).ToArray();
             PlannerSampleDispatcher.ReleaseStartGates(launches);
-            Xunit.Assert.All(registeredProcessIds, processId => Xunit.Assert.False(WorkerProcessJobs.HasRegisteredJob(processId)));
+            Xunit.Assert.All(registeredProcessIds, processId => Xunit.Assert.True(WorkerProcessJobs.HasRegisteredJob(processId)));
 
             var candidates = PlannerSampleDispatcher.CollectCandidates(primaryPath, sampleCount);
 
@@ -148,9 +155,10 @@ public sealed class PlannerSamplingDispatchTests : WorkerDispatchTestSupport
 
         var processes = new List<Process>();
         var startedProcessIds = new List<int>();
+        var simulatedLiveProcessIds = new HashSet<int>();
         var invocation = 0;
         var runner = new BackgroundDispatchRunner(
-            isStillRunning: _ => false,
+            isStillRunning: simulatedLiveProcessIds.Contains,
             disableProcessStart: false,
             startProcess: startInfo =>
             {
@@ -176,7 +184,10 @@ public sealed class PlannerSamplingDispatchTests : WorkerDispatchTestSupport
             Xunit.Assert.NotNull(start.ProcessRecord);
             Xunit.Assert.Equal(3, invocation);
             Xunit.Assert.True(WorkerProcessJobs.HasRegisteredJob(start.ProcessRecord.ProcessId));
-            Xunit.Assert.False(WorkerProcessJobs.HasRegisteredJob(startedProcessIds[1]));
+            Xunit.Assert.True(WorkerProcessJobs.HasRegisteredJob(startedProcessIds[1]));
+            Xunit.Assert.Equal(startedProcessIds, start.ProcessRecord.TrackedProcessIds);
+            Xunit.Assert.Equal(new[] { startedProcessIds[1] }, start.ProcessRecord.NonBlockingProcessIds);
+            simulatedLiveProcessIds.Add(startedProcessIds[1]);
             var failedSample = PlannerSampleDispatcher.CreateArtifacts(
                 start.ProcessRecord.StandardOutputPath,
                 3)[1];
@@ -188,6 +199,7 @@ public sealed class PlannerSamplingDispatchTests : WorkerDispatchTestSupport
             runner.RefreshLatestProcess(kernel, goal.Id, task.Id);
 
             Xunit.Assert.True(task.LastVerification!.Succeeded, task.LastVerification.StandardError);
+            Xunit.Assert.All(startedProcessIds, processId => Xunit.Assert.False(WorkerProcessJobs.HasRegisteredJob(processId)));
         }
         finally
         {

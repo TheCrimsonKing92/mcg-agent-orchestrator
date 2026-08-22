@@ -424,6 +424,7 @@ public sealed class BackgroundDispatchRunner
         // cancellation and make the subsequent read falsely appear non-terminal.
         checkpointBeforeWorkerStart?.Invoke(kernel, goalId, taskId, DispatchRecordCheckpointPhase.BeforeProcessStart);
 
+        DispatchProcessHost.PrepareSharedSandboxState(runParameters);
         ProcessSpawnGuard.ClearInheritableStateDatabaseHandles();
         var process = _startProcess(startInfo)
             ?? throw new InvalidOperationException("Failed to start background dispatch process.");
@@ -455,10 +456,9 @@ public sealed class BackgroundDispatchRunner
             _clock.UtcNow,
             null,
             null,
-            // Sample hosts have independent exit/heartbeat artifacts and watchdogs. Keeping the primary
-            // as the sole tracked process preserves non-blocking completion when a sample is still running.
-            OwnedProcessIds: [process.Id],
-            ChildExitRecordPath: childExitRecordPath);
+            OwnedProcessIds: sampleLaunches.Select(launch => launch.Process.Id).Prepend(process.Id).ToArray(),
+            ChildExitRecordPath: childExitRecordPath,
+            NonBlockingProcessIds: sampleLaunches.Select(launch => launch.Process.Id).ToArray());
 
         kernel.RecordTaskProcessStarted(goalId, taskId, record);
         try
