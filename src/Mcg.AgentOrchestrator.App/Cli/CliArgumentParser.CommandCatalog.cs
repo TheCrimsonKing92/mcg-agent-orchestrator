@@ -171,6 +171,39 @@ internal static string FormatUnknownCommandMessage(IReadOnlyList<string> parts)
     return message + $"{Environment.NewLine}Run with --help to list commands and usage.";
 }
 
+internal static IReadOnlyList<string> FindNearestFlags(string token, IEnumerable<string> candidates)
+{
+    var flags = candidates
+        .Distinct(StringComparer.OrdinalIgnoreCase)
+        .ToArray();
+    var prefixMatches = flags
+        .Where(flag => flag.StartsWith(token, StringComparison.OrdinalIgnoreCase))
+        .OrderBy(flag => flag, StringComparer.OrdinalIgnoreCase)
+        .Take(3)
+        .ToArray();
+    if (prefixMatches.Length > 0)
+    {
+        return prefixMatches;
+    }
+
+    return flags
+        .Select(flag => new
+        {
+            Flag = flag,
+            Distance = EditDistance(token, flag),
+            Overlap = CommonSubsequenceLength(token, flag),
+            LengthDelta = Math.Abs(token.Length - flag.Length)
+        })
+        .Where(candidate => candidate.Distance <= 2)
+        .OrderBy(candidate => candidate.Distance)
+        .ThenBy(candidate => candidate.LengthDelta)
+        .ThenByDescending(candidate => candidate.Overlap)
+        .ThenBy(candidate => candidate.Flag, StringComparer.OrdinalIgnoreCase)
+        .Take(3)
+        .Select(candidate => candidate.Flag)
+        .ToArray();
+}
+
 private static bool IsSimpleCommand(string command)
 {
     return IsRecognizedCommand(command);

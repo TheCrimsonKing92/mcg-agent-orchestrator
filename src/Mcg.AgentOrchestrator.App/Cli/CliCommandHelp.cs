@@ -6,6 +6,10 @@ internal static class CliCommandHelp
 {
     public const string ConductUsage = "Usage: conduct <goal-id-prefix> [--policy <Conservative|Permissive|Manual>] [--watch [--poll-seconds <n>]], or conduct --loop [--max-iterations <n>] [--max-duration <seconds>] [--watch|--daemon] [--poll-seconds <n>] [--unscoped-stall-ticks <n>]";
     public const string GoalUsage = "Usage: goal <objective> [--pipeline <auto|five-role>] [--simple] [--from-backlog] [--run --confirm-batch-start] [--backlog-item <id-prefix> --backlog-coverage <full|slice>] [--request-key <key>] | goal --text-file <path> [--pipeline <auto|five-role>] [--request-key <key>] | goal --brief-file <path> [--pipeline <auto|five-role>] [--request-key <key>]";
+    public const string SimpleGoalUsage = "Usage: simple-goal <objective> [--dispatch --confirm-dispatch-start] [--backlog-item <id-prefix> --backlog-coverage <full|slice>] [--request-key <key>] | simple-goal --text-file <path> | simple-goal --brief-file <path>";
+    public const string BacklogIntakeUsage = "Usage: backlog-intake [filter...] [--create-goal|--create-simple-goal] [--force-reclaim] [--pipeline <auto|five-role>] [--backlog-item <id-prefix> --backlog-coverage <full|slice>] [--request-key <key>]";
+    public const string AcceptanceUsage = "Usage: acceptance [goal-id-prefix] [--skip-verify] [--keep-workspace] [--no-record] [--autonomy <policy>]";
+    public const string RunGoalUsage = "Usage: run-goal [goal-id-prefix] --confirm-batch-start [--confirm-large-paid-subscription-start] [--confirm-readiness-risk] [--autonomy <policy>]";
     public const string GoalIntakeStatusUsage = "Usage: goal-intake-status <request-key>";
     public const string GoalBoardUsage = GoalBoardOptions.Usage;
     public const string GoalReplaceUsage = "Usage: goal-replace <predecessor-goal-id> --brief-file <path> --reason-file <path> --request-id <guid> --disposition <zero-work-correction|abandon-failed-attempt|supersede-unlanded-attempt> --confirm-goal-replace [--pipeline <auto|five-role>] [--ideation <agent>|--researcher <agent>|--planner <agent>|--developer <agent>|--tester <agent>|--reviewer <agent>]";
@@ -86,12 +90,71 @@ internal static class CliCommandHelp
             "-h"
         ]);
 
+    private static readonly string[] HelpFlags = ["--help", "-h"];
+
+    private static readonly string[] GoalRoleOverrideFlags =
+        ["--ideation", "--researcher", "--planner", "--developer", "--tester", "--reviewer"];
+
+    private static readonly string[] GoalOwnFlags =
+    [
+        "--pipeline", "--simple", "--from-backlog", "--run", "--confirm-batch-start",
+        "--backlog-item", "--backlog-coverage", "--request-key", "--text-file", "--brief-file",
+        ..GoalRoleOverrideFlags,
+        ..HelpFlags
+    ];
+
+    private static readonly string[] SimpleGoalOwnFlags =
+    [
+        "--pipeline", "--brief-file", "--text-file", "--backlog-item", "--backlog-coverage",
+        "--request-key", "--dispatch", "--confirm-dispatch-start",
+        ..GoalRoleOverrideFlags,
+        ..HelpFlags
+    ];
+
+    private static readonly string[] BacklogIntakeOwnFlags =
+    [
+        "--create-goal", "--create-simple-goal", "--force-reclaim", "--pipeline",
+        "--backlog-item", "--backlog-coverage", "--request-key",
+        ..HelpFlags
+    ];
+
+    private static readonly string[] AcceptanceOwnFlags =
+    [
+        "--skip-verify", "--keep-workspace", "--no-record", "--autonomy", "--autonomy-policy",
+        ..HelpFlags
+    ];
+
+    private static readonly string[] RunGoalOwnFlags =
+    [
+        "--confirm-batch-start", "--confirm-large-paid-subscription-start", "--confirm-readiness-risk",
+        "--autonomy", "--autonomy-policy",
+        ..HelpFlags
+    ];
+
+    private static readonly CommandHelpEntry SimpleGoal = new(
+        SimpleGoalUsage,
+        "Create a developer-only goal.",
+        SimpleGoalOwnFlags);
+
+    private static readonly CommandHelpEntry BacklogIntake = new(
+        BacklogIntakeUsage,
+        "Plan or create goals from matching backlog items.",
+        BacklogIntakeOwnFlags);
+
+    private static readonly CommandHelpEntry Acceptance = new(
+        AcceptanceUsage,
+        "Run acceptance evidence and merge for a verified goal.",
+        AcceptanceOwnFlags);
+
+    private static readonly CommandHelpEntry RunGoal = new(
+        RunGoalUsage,
+        "Drive an existing goal through subscription dispatch until it is verified or blocked.",
+        RunGoalOwnFlags);
+
     private static readonly CommandHelpEntry Goal = new(
         GoalUsage,
         "Create a goal. Before authoring criteria, assign evidence owners using docs/role-capability-matrix.md.",
-        new[] { "--pipeline", "--simple", "--from-backlog", "--run", "--confirm-batch-start", "--backlog-item", "--backlog-coverage", "--request-key", "--text-file", "--brief-file", "--help", "-h" }
-            .ToHashSet(StringComparer.OrdinalIgnoreCase),
-        ValidateFlags: false);
+        UnionFlags(GoalOwnFlags, SimpleGoal.Flags, BacklogIntake.Flags, RunGoal.Flags));
 
     private static readonly CommandHelpEntry GoalIntakeStatus = new(
         GoalIntakeStatusUsage,
@@ -393,8 +456,125 @@ internal static class CliCommandHelp
         "Show one stored run event by sequence, including goal-less event receipt text.",
         ["--format", "--help", "-h"]);
 
-    private static readonly IReadOnlySet<string> GenericHelpFlags =
-        new[] { "--help", "-h" }.ToHashSet(StringComparer.OrdinalIgnoreCase);
+    private static readonly IReadOnlyDictionary<string, IReadOnlySet<string>> GenericCommandFlags =
+        new Dictionary<string, IReadOnlySet<string>>(StringComparer.OrdinalIgnoreCase)
+        {
+            ["project"] = Flags("--root"),
+            ["provider-smoke"] = Flags("--confirm-all", "--confirm-paid-smoke"),
+            ["prototype-ui"] = DashboardFlags(),
+            ["serve-dashboard"] = DashboardFlags(),
+            ["hosted-dashboard"] = DashboardFlags(),
+            ["simple-hosted-dashboard"] = DashboardFlags(),
+            ["open-dashboard"] = DashboardFlags(),
+            ["monitor-goal"] = Flags(
+                "--event-kind", "--format", "--from-cursor", "--goal-prefix", "--once", "--since",
+                "--task", "--timeout", "--wait-terminal"),
+            ["goal-events"] = Flags("--follow"),
+            ["goal-timing"] = Flags("--all"),
+            ["dispatch-value"] = Flags("--since"),
+            ["durations"] = Flags("--by-model", "--since"),
+            ["loop-health"] = Flags("--last"),
+            ["repo-process-info"] = Flags(
+                "--command-contains", "--conduct-loop", "--dispatch-host", "--id", "--include-children",
+                "--locks", "--name", "--newest", "--parent-id"),
+            ["repo-process-stop"] = Flags("--command-contains", "--force", "--id"),
+            ["failure-triage"] = Flags("--autonomy", "--autonomy-policy", "--policy"),
+            ["build-lease-cleanup"] = Flags("--confirm-build-lease-cleanup"),
+            ["acceptance-queue"] = Flags(
+                "--apply", "--autonomy", "--autonomy-policy", "--confirm-acceptance-queue"),
+            ["drain-goals"] = Flags(
+                "--apply", "--autonomy", "--autonomy-policy", "--confirm-batch-start", "--confirm-goal-drain",
+                "--confirm-large-paid-subscription-start", "--confirm-readiness-risk"),
+            ["operator-inbox"] = Flags("--show-acknowledged"),
+            ["operator-inbox-ack"] = Flags("--goal"),
+            ["operator-channel"] = Flags(
+                "--dashboard-url", "--forum-channel-id", "--operator-user-id", "--operator-user-ids", "--spine"),
+            ["operator-control-plane"] = Flags("--hours"),
+            ["next"] = Flags("--autonomy", "--autonomy-policy", "--full"),
+            ["advance-subscription"] = Flags(
+                "--autonomy", "--autonomy-policy", "--confirm-large-paid-subscription-start",
+                "--confirm-subscription-advance"),
+            ["lifecycle-simple-goal"] = LifecycleGoalFlags(),
+            ["lifecycle-goal"] = LifecycleGoalFlags(),
+            ["goal-depends"] = Flags("--clear", "--on", "--remove"),
+            ["goal-plan"] = Flags("--backlog-coverage", "--create-goals", "--create-simple-goals"),
+            ["plan"] = Flags("--confirm-plan", "--slice-batch"),
+            ["ideate"] = Flags("--append-backlog"),
+            ["intent-template"] = Flags("--create-goal", "--create-simple-goal"),
+            ["goal-mark-landed"] = Flags("--confirm-goal-mark-landed", "--force"),
+            ["acceptance-repair"] = Flags("--confirm-acceptance-repair"),
+            ["rollback-goal"] = Flags("--confirm-goal-rollback", "--text-file"),
+            ["goal-changes"] = Flags("--all", "--committed", "--flat", "--json", "--role", "--task", "--working"),
+            ["goals-prune"] = Flags("--confirm-prune"),
+            ["model-function-add"] = Flags("--subscription", "--subscription-model", "--subscription-reasoning"),
+            ["task"] = GoalScopedTaskFlags(),
+            ["verification-plan"] = GoalScopedTaskFlags(),
+            ["brief"] = GoalScopedTaskFlags(),
+            ["task-timeline"] = GoalScopedTaskFlags(),
+            ["verifications"] = GoalScopedTaskFlags(),
+            ["run"] = ApiRunFlags(),
+            ["api-run"] = ApiRunFlags(),
+            ["re-delegate"] = Flags("--autonomy", "--autonomy-policy", "--goal"),
+            ["redelegate"] = Flags("--autonomy", "--autonomy-policy", "--goal"),
+            ["profile-dispatch"] = DispatchStartFlags("--confirm-dispatch-start"),
+            ["profile-dispatch-ready"] = Flags("--goal"),
+            ["subscription-dispatch-ready"] = Flags("--goal"),
+            ["cross-goal-start-plan"] = Flags("--confirm-large-paid-subscription-start"),
+            ["start-subscription-ready-goals"] = BatchStartFlags(includeGoal: false),
+            ["start-subscription-ready"] = BatchStartFlags(includeGoal: true),
+            ["execute-dispatch"] = DispatchStartFlags("--confirm-dispatch-start"),
+            ["start-dispatch"] = DispatchStartFlags("--confirm-dispatch-start"),
+            ["start-dispatches"] = BatchStartFlags(includeGoal: true),
+            ["refresh-dispatches"] = Flags("--autonomy", "--autonomy-policy", "--goal"),
+            ["logs"] = GoalScopedTaskFlags(),
+            ["cancel-dispatch"] = GoalScopedTaskFlags(),
+            ["accept"] = Flags(
+                "--autonomy", "--autonomy-policy", "--keep-workspace", "--no-record", "--skip-verify")
+        };
+
+    private static IReadOnlySet<string> Flags(params string[] flags) =>
+        flags.Concat(["--help", "-h"]).ToHashSet(StringComparer.OrdinalIgnoreCase);
+
+    private static IReadOnlySet<string> DashboardFlags() =>
+        Flags("--lan", "--no-open", "--open", "--refresh");
+
+    private static IReadOnlySet<string> LifecycleGoalFlags() =>
+        Flags(
+            "--autonomy", "--autonomy-policy", "--backlog-coverage", "--backlog-item", "--confirm-batch-start",
+            "--confirm-large-paid-subscription-start", "--confirm-readiness-risk");
+
+    private static IReadOnlySet<string> GoalScopedTaskFlags() => Flags("--goal");
+
+    private static IReadOnlySet<string> ApiRunFlags() =>
+        Flags(
+            "--autonomy", "--autonomy-policy", "--confirm-large-paid-api-prompt", "--confirm-paid-api-run", "--goal");
+
+    private static IReadOnlySet<string> DispatchStartFlags(string confirmationFlag) =>
+        Flags(
+            "--autonomy", "--autonomy-policy", "--confirm-large-paid-subscription-start", confirmationFlag, "--goal");
+
+    private static IReadOnlySet<string> BatchStartFlags(bool includeGoal)
+    {
+        var flags = new List<string>
+        {
+            "--autonomy", "--autonomy-policy", "--confirm-batch-start",
+            "--confirm-large-paid-subscription-start", "--confirm-readiness-risk"
+        };
+        if (includeGoal)
+        {
+            flags.Add("--goal");
+        }
+
+        return Flags([.. flags]);
+    }
+
+    private static readonly IReadOnlySet<string> InlineValueFlags =
+        new HashSet<string>(StringComparer.OrdinalIgnoreCase)
+        {
+            "--text", "--request-key", "--brief-file", "--text-file", "--pipeline",
+            "--backlog-item", "--backlog-coverage", "--ideation", "--researcher", "--planner",
+            "--developer", "--tester", "--reviewer"
+        };
 
     public static bool TryPrintStartupHelp(IReadOnlyList<string> args)
     {
@@ -465,27 +645,36 @@ internal static class CliCommandHelp
             var option = GetOptionName(arg);
             if (!entry.Flags.Contains(option))
             {
-                var escapeHint = index > 1 &&
-                    args[index - 1].Equals("--text", StringComparison.OrdinalIgnoreCase)
-                    ? $" To pass a leading-dash text value, use --text={arg}."
+                var previousOption = index > 1 ? GetOptionName(args[index - 1]) : null;
+                var escapeHint = previousOption is not null &&
+                    InlineValueFlags.Contains(previousOption) &&
+                    entry.Flags.Contains(previousOption)
+                    ? $" To pass a leading-dash value, use {previousOption}={arg}."
                     : string.Empty;
-                throw new ArgumentException($"Unknown option '{arg}'.{escapeHint}{Environment.NewLine}{entry.Usage}");
+                var suggestions = CliArgumentParser.FindNearestFlags(option, entry.Flags);
+                var suggestionText = suggestions.Count > 0
+                    ? $"{Environment.NewLine}Did you mean: {string.Join(", ", suggestions)}?"
+                    : string.Empty;
+                throw new ArgumentException($"Unknown option '{arg}'.{escapeHint}{suggestionText}{Environment.NewLine}{entry.Usage}");
             }
         }
     }
 
     private static string GetOptionName(string arg)
     {
-        var separatorIndex = arg.StartsWith("--", StringComparison.Ordinal)
-            ? arg.IndexOf('=')
-            : -1;
+        if (!arg.StartsWith("--", StringComparison.Ordinal))
+        {
+            return arg;
+        }
+
+        var separatorIndex = arg.IndexOf('=');
         if (separatorIndex <= 2)
         {
             return arg;
         }
 
         var option = arg[..separatorIndex];
-        return option.Equals("--text", StringComparison.OrdinalIgnoreCase) ? option : arg;
+        return InlineValueFlags.Contains(option) ? option : arg;
     }
 
     private static bool TryResolveEntry(IReadOnlyList<string> args, out CommandHelpEntry entry)
@@ -505,6 +694,30 @@ internal static class CliCommandHelp
         if (args[0].Equals("goal", StringComparison.OrdinalIgnoreCase))
         {
             entry = Goal;
+            return true;
+        }
+
+        if (args[0].Equals("simple-goal", StringComparison.OrdinalIgnoreCase))
+        {
+            entry = SimpleGoal;
+            return true;
+        }
+
+        if (args[0].Equals("backlog-intake", StringComparison.OrdinalIgnoreCase))
+        {
+            entry = BacklogIntake;
+            return true;
+        }
+
+        if (args[0].Equals("acceptance", StringComparison.OrdinalIgnoreCase))
+        {
+            entry = Acceptance;
+            return true;
+        }
+
+        if (args[0].Equals("run-goal", StringComparison.OrdinalIgnoreCase))
+        {
+            entry = RunGoal;
             return true;
         }
 
@@ -1036,11 +1249,28 @@ internal static class CliCommandHelp
         {
         }
 
-        public static CommandHelpEntry Generic(string command) => new(
-            $"Usage: {command} [options]",
-            "Run this operator command.",
-            GenericHelpFlags,
-            [],
-            ValidateFlags: false);
+        public static CommandHelpEntry Generic(string command)
+        {
+            // stable-slot-dotnet forwards every argument after the command to dotnet, whose option domain
+            // is intentionally open. Those tokens are not orchestrator flags and cannot be enumerated here.
+            var forwardsArbitraryDotnetOptions = command.Equals("stable-slot-dotnet", StringComparison.OrdinalIgnoreCase);
+            return new CommandHelpEntry(
+                $"Usage: {command} [options]",
+                "Run this operator command.",
+                GenericCommandFlags.TryGetValue(command, out var flags) ? flags : CliCommandHelp.Flags(),
+                [],
+                ValidateFlags: !forwardsArbitraryDotnetOptions);
+        }
+    }
+
+    private static HashSet<string> UnionFlags(params IEnumerable<string>[] parts)
+    {
+        var flags = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        foreach (var part in parts)
+        {
+            flags.UnionWith(part);
+        }
+
+        return flags;
     }
 }
