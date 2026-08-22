@@ -34,6 +34,13 @@ Ambient discovery breaks isolated gate execution and can make acceptance inspect
 process instead of the goal worktree being verified.
 
 Thread the repository or worktree root as an explicit argument. A repository-layout test may derive its root
-hermetically from `[CallerFilePath]` when its source location is the authority. This convention is documented
-but is not mechanically token-banned here: those ambient APIs have unrelated legitimate uses, and removing
-existing ambient repository resolution belongs to its owning goal.
+hermetically from `[CallerFilePath]` when its source location is the authority. The compiler supplies the
+source path even when the test binary runs under an isolated `mcg-dotnet-isolated` artifacts root with no
+repository above it. Walk upward from that source path and recognize `.git` as either a directory or a file,
+as shown in `tests/Mcg.AgentOrchestrator.Core.Tests/AgentHarnessDocsDriftTests.cs`.
+
+The repository layout convention guard mechanically rejects test-source patterns that combine
+`Environment.CurrentDirectory` or `AppContext.BaseDirectory` with repository-root discovery. It deliberately
+does not reject ambient paths used for copied fixtures, build outputs, or other non-repository filesystem
+access. Existing repository-root violators are grandfathered in the same shrink-only inventory as the other
+test-source conventions and should be removed by their owning goals.
