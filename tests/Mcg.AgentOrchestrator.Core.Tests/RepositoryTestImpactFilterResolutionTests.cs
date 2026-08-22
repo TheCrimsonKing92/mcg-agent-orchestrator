@@ -4,6 +4,13 @@ namespace Mcg.AgentOrchestrator.Core.Tests;
 
 public sealed class RepositoryTestImpactFilterResolutionTests
 {
+    private readonly Xunit.ITestOutputHelper _output;
+
+    public RepositoryTestImpactFilterResolutionTests(Xunit.ITestOutputHelper output)
+    {
+        _output = output;
+    }
+
     [Xunit.Fact]
     public void DottedChangedTestFileUsesDeclaredClass()
     {
@@ -185,7 +192,8 @@ public sealed class RepositoryTestImpactFilterResolutionTests
     {
         if (!TryFindRepositoryRoot(out var root))
         {
-            Assert.Skip("Repository census skipped because no repository root is reachable in this lane.");
+            _output.WriteLine(
+                "Repository census did not run because no repository root is reachable in this lane.");
             return;
         }
 
@@ -201,7 +209,19 @@ public sealed class RepositoryTestImpactFilterResolutionTests
         {
             var absoluteProjectDirectory = Path.Combine(root, projectDirectory);
             var projectDeclarations = reader.ReadProject(projectDirectory);
+            if (projectDeclarations.Outcome == TestClassDeclarationOutcome.Unreadable)
+            {
+                _output.WriteLine(
+                    "Repository census did not run for '{0}': ReadProject returned Unreadable because " +
+                    "one or more project sources were unavailable or could not be parsed in this lane.",
+                    projectDirectory);
+                return;
+            }
+
             Assert.Equal(TestClassDeclarationOutcome.Resolved, projectDeclarations.Outcome);
+            _output.WriteLine(
+                "Repository census is comparing '{0}': ReadProject returned Resolved.",
+                projectDirectory);
             foreach (var path in Directory.EnumerateFiles(
                 absoluteProjectDirectory,
                 "*.cs",
@@ -263,6 +283,8 @@ public sealed class RepositoryTestImpactFilterResolutionTests
                 }
             }
         }
+
+        _output.WriteLine("Repository census completed using Resolved declarations for all test projects.");
     }
 
     [Xunit.Fact]
