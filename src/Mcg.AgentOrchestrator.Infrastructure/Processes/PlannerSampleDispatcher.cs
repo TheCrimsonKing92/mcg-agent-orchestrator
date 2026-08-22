@@ -112,7 +112,7 @@ internal static class PlannerSampleDispatcher
     {
         var candidates = new List<PlannerCandidateInput>(sampleCount)
         {
-            new(0, PlannerOutputContract.ReadCapturedOutputTail(primaryStandardOutputPath))
+            new(0, PlannerOutputContract.ReadCapturedOutputTail(primaryStandardOutputPath), SourcePath: primaryStandardOutputPath)
         };
         foreach (var sample in CreateArtifacts(primaryStandardOutputPath, sampleCount))
         {
@@ -121,14 +121,16 @@ internal static class PlannerSampleDispatcher
                 candidates.Add(new PlannerCandidateInput(
                     sample.Index,
                     string.Empty,
-                    ReadLaunchDiagnostic(sample) ?? "Planner sample did not produce a successful exit artifact."));
+                    ReadLaunchDiagnostic(sample) ?? "Planner sample did not produce a successful exit artifact.",
+                    sample.StandardOutputPath));
                 continue;
             }
 
             candidates.Add(new PlannerCandidateInput(
                 sample.Index,
                 PlannerOutputContract.ReadCapturedOutputTail(sample.StandardOutputPath),
-                ReadBounded(sample.StandardErrorPath)));
+                ReadBounded(sample.StandardErrorPath),
+                sample.StandardOutputPath));
         }
 
         return candidates;

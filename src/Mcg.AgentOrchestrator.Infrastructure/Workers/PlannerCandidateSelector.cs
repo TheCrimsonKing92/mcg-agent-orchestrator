@@ -5,7 +5,11 @@ using Mcg.AgentOrchestrator.Core;
 
 namespace Mcg.AgentOrchestrator.Infrastructure;
 
-internal sealed record PlannerCandidateInput(int Index, string StandardOutput, string StandardError = "");
+internal sealed record PlannerCandidateInput(
+    int Index,
+    string StandardOutput,
+    string StandardError = "",
+    string? SourcePath = null);
 
 internal sealed record PlannerCandidateSelectionResult(
     PlannerOutputContractResult SelectedContract,
@@ -25,10 +29,13 @@ internal static partial class PlannerCandidateSelector
         ArgumentNullException.ThrowIfNull(candidates);
         if (candidates.Count == 0)
             throw new ArgumentException("At least one Planner candidate is required.", nameof(candidates));
+        if (!candidates.Select(candidate => candidate.Index).Order().SequenceEqual(Enumerable.Range(0, candidates.Count)))
+            throw new ArgumentException("Planner candidate indexes must be unique, contiguous, and zero-based.", nameof(candidates));
 
         var resolved = candidates
             .Select(candidate => new ResolvedCandidate(
                 candidate.Index,
+                candidate.SourcePath,
                 PlannerOutputContract.Resolve(
                     candidate.StandardOutput,
                     candidate.StandardError,
@@ -62,8 +69,11 @@ internal static partial class PlannerCandidateSelector
             .OrderByDescending(candidate => scores[candidate.Index])
             .ThenBy(candidate => candidate.Index)
             .First();
+        var selectedContract = selected.Contract.IngestedPath is null && selected.SourcePath is not null
+            ? selected.Contract with { IngestedPath = selected.SourcePath }
+            : selected.Contract;
         return new PlannerCandidateSelectionResult(
-            selected.Contract,
+            selectedContract,
             BuildReceipt(resolved, valid, selected.Index, scores, candidateFeatures));
     }
 
@@ -162,7 +172,7 @@ internal static partial class PlannerCandidateSelector
     private static string Hash(string value) =>
         Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(value.ReplaceLineEndings("\n")))).ToLowerInvariant();
 
-    private sealed record ResolvedCandidate(int Index, PlannerOutputContractResult Contract);
+    private sealed record ResolvedCandidate(int Index, string? SourcePath, PlannerOutputContractResult Contract);
 
     private sealed record CandidateFeatures(
         IReadOnlyDictionary<string, string> Bodies,

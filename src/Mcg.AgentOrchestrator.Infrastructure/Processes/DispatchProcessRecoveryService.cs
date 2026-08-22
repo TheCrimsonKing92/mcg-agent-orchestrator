@@ -578,9 +578,12 @@ internal sealed class DispatchProcessRecoveryService
     private static IReadOnlyList<int> GetOwnedWorkerProcessIds(TaskProcessRecord processRecord, DispatchHeartbeat? heartbeat)
     {
         var processIds = new HashSet<int>();
-        if (processRecord.CompletionTrackedProcessIds is { Count: > 0 })
+        if (processRecord.OwnedProcessIds is { Count: > 0 })
         {
-            foreach (var processId in processRecord.CompletionTrackedProcessIds.Where(pid => pid > 0))
+            foreach (var processId in processRecord.OwnedProcessIds.Where(pid =>
+                         pid > 0 &&
+                         (processRecord.NonBlockingProcessIds is not { Count: > 0 } ||
+                          !processRecord.NonBlockingProcessIds.Contains(pid))))
             {
                 processIds.Add(processId);
             }

@@ -260,7 +260,12 @@ public sealed class PlannerSamplingDispatchTests : WorkerDispatchTestSupport
             "src/Mcg.AgentOrchestrator.Core/Application/ReviewerWorkerResultBlockers.cs",
             "src/Mcg.AgentOrchestrator.Core/Reports/TaskOutcomeClassification.cs",
             "src/Mcg.AgentOrchestrator.Core/Reports/VerificationReports.cs",
-            "src/Mcg.AgentOrchestrator.Infrastructure/Processes/BackgroundDispatchRunner.cs"
+            "src/Mcg.AgentOrchestrator.Infrastructure/Processes/BackgroundDispatchRunner.cs",
+            "tests/Mcg.AgentOrchestrator.Core.Tests/DispatchOutcomeClassifyTests.cs",
+            "tests/Mcg.AgentOrchestrator.Core.Tests/DispatchExecutionTests.cs",
+            "tests/Mcg.AgentOrchestrator.Core.Tests/VerificationAndInputWorklistTests.cs",
+            "tests/Mcg.AgentOrchestrator.Infrastructure.Tests/WorkerDispatchTestsWorkerResultClassification.cs",
+            "tests/Mcg.AgentOrchestrator.Core.Tests/ModelOutcomeScorecardTests.cs"
         ];
         foreach (var relativePath in paths)
         {
