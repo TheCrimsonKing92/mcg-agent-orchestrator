@@ -603,10 +603,12 @@ internal static class GoalOperationJournal
 
     public static bool HasCompletedLandingEvidence(GoalOperationJournalSummary journal) =>
         HasRetiredTerminalDisposition(journal) ||
+        journal.Entries.Any(entry =>
+            entry.Status == GoalOperationStatus.Completed &&
+            entry.Operation.Equals("conductor:land", StringComparison.OrdinalIgnoreCase)) ||
         journal.LatestByOperation.Any(entry =>
             entry.Status == GoalOperationStatus.Completed &&
-            (entry.Operation.Equals("acceptance", StringComparison.OrdinalIgnoreCase) ||
-             entry.Operation.Equals("conductor:land", StringComparison.OrdinalIgnoreCase)));
+            entry.Operation.Equals("acceptance", StringComparison.OrdinalIgnoreCase));
 
     public static bool HasCompletedRecordEvidence(GoalOperationJournalSummary journal) =>
         HasRetiredTerminalDisposition(journal) ||
