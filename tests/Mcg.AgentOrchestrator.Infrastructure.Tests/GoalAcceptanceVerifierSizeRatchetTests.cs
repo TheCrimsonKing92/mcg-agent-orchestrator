@@ -1,59 +1,159 @@
-using System.Globalization;
-
 public sealed class GoalAcceptanceVerifierSizeRatchetTests
 {
-    // Seeded at fde5f80f62ae388f98eb13c712cfe3abb4782b44 using File.ReadLines(path).Count().
-    // Raised from 8713 for goal 75b85ca1: effective lane selection and structural-coverage
-    // threading belong to the gate-plan owner, so extracting them would split that invariant.
-    // Raised again for goal 85f0b81d: 227 new behavior lines were extracted to
-    // AcceptanceLaneDurationStore, so only call-site lines remained here.
-    // Raised from 8763 for goal b4b80aca: phase accounting lives in its own owner;
-    // these call-site transitions are the irreducible verifier orchestration seam.
-    private const int MaximumLineCount = 8779;
-    private const string SourceRelativePath =
-        "src/Mcg.AgentOrchestrator.Infrastructure/Workspaces/GoalAcceptanceVerifier.cs";
-    private const string DocumentationPath = "docs/god-class-decomposition-plan.md";
-
     [Fact]
-    public void RealFile_CurrentLineCount_StaysWithinRecordedCeiling()
+    public void RealTable_EveryEntryWithinCeiling()
     {
         var repositoryRoot = FindRepositoryRoot();
-        var sourcePath = Path.Combine(
+        var paths = SourceSizeRatchet.SeededCeilings.Select(entry => entry.RelativePath).ToArray();
+        var documentationPath = Path.Combine(
             repositoryRoot,
-            SourceRelativePath.Replace('/', Path.DirectorySeparatorChar));
-        Assert.True(File.Exists(sourcePath), $"Expected ratcheted source file at '{sourcePath}'.");
+            SourceSizeRatchet.DocumentationPath.Replace('/', Path.DirectorySeparatorChar));
 
-        AssertWithinCeiling(CountLines(sourcePath));
+        Assert.Equal(11, SourceSizeRatchet.SeededCeilings.Count);
+        Assert.Equal(paths.Length, paths.Distinct(StringComparer.Ordinal).Count());
+        Assert.True(
+            File.Exists(documentationPath),
+            $"Size-ratchet guidance document '{SourceSizeRatchet.DocumentationPath}' does not exist.");
+        Assert.Equal(
+            SourceSizeRatchet.SeededCeilings.ToArray(),
+            ReadDocumentedCeilings(documentationPath));
+        AssertNoViolations(SourceSizeRatchet.Evaluate(repositoryRoot, SourceSizeRatchet.SeededCeilings));
     }
 
     [Fact]
-    public void SyntheticCountAboveCeiling_FailsAndNamesBothRemedies()
+    public void SyntheticTable_OneCompliantAndOneExceeding_FailsOnlyExceeding()
     {
-        var actualLineCount = MaximumLineCount + 1;
+        var root = CreateTempDirectory();
+        try
+        {
+            WriteLines(root, "compliant.txt", 5, "line");
+            WriteLines(root, "exceeding.txt", 12, "line");
+            var table = new[]
+            {
+                new SourceSizeCeiling("compliant.txt", 8),
+                new SourceSizeCeiling("exceeding.txt", 4),
+            };
 
-        var exception = Record.Exception(() => AssertWithinCeiling(actualLineCount));
+            var violations = SourceSizeRatchet.Evaluate(root, table);
+            var violation = Assert.Single(violations);
+            var exception = Record.Exception(() => AssertNoViolations(violations));
 
-        Assert.NotNull(exception);
-        Assert.Contains(
-            MaximumLineCount.ToString(CultureInfo.InvariantCulture),
-            exception.Message,
-            StringComparison.Ordinal);
-        Assert.Contains(
-            actualLineCount.ToString(CultureInfo.InvariantCulture),
-            exception.Message,
-            StringComparison.Ordinal);
-        Assert.Contains("Extract behavior to a collaborator", exception.Message, StringComparison.Ordinal);
-        Assert.Contains("raise MaximumLineCount deliberately", exception.Message, StringComparison.Ordinal);
-        Assert.Contains("justification", exception.Message, StringComparison.Ordinal);
-        Assert.Contains(DocumentationPath, exception.Message, StringComparison.Ordinal);
+            Assert.Equal("exceeding.txt", violation.RelativePath);
+            Assert.Equal(12, violation.ActualLineCount);
+            Assert.Equal(4, violation.MaximumLineCount);
+            Assert.NotNull(exception);
+            Assert.Contains("exceeding.txt", exception.Message, StringComparison.Ordinal);
+            Assert.DoesNotContain("compliant.txt", exception.Message, StringComparison.Ordinal);
+        }
+        finally
+        {
+            Directory.Delete(root, recursive: true);
+        }
     }
 
     [Fact]
-    public void SyntheticCountAtOrBelowCeiling_Passes()
+    public void SyntheticTable_AtBelowAndZero_ProducesNoViolations()
     {
-        Assert.Null(Record.Exception(() => AssertWithinCeiling(MaximumLineCount)));
-        Assert.Null(Record.Exception(() => AssertWithinCeiling(MaximumLineCount - 1)));
-        Assert.Null(Record.Exception(() => AssertWithinCeiling(0)));
+        var root = CreateTempDirectory();
+        try
+        {
+            WriteLines(root, "at-ceiling.txt", 4, "line");
+            WriteLines(root, "below-ceiling.txt", 3, "line");
+            WriteLines(root, "empty.txt", 0, "line");
+            var table = new[]
+            {
+                new SourceSizeCeiling("at-ceiling.txt", 4),
+                new SourceSizeCeiling("below-ceiling.txt", 4),
+                new SourceSizeCeiling("empty.txt", 4),
+            };
+
+            Assert.Empty(SourceSizeRatchet.Evaluate(root, table));
+        }
+        finally
+        {
+            Directory.Delete(root, recursive: true);
+        }
+    }
+
+    [Fact]
+    public void OverCeilingMessage_NamesFileActualCeilingAndBothRemedies()
+    {
+        var root = CreateTempDirectory();
+        try
+        {
+            WriteLines(root, "exceeding.txt", 12, "line");
+
+            var violation = Assert.Single(SourceSizeRatchet.Evaluate(
+                root,
+                new[] { new SourceSizeCeiling("exceeding.txt", 4) }));
+
+            Assert.Contains("exceeding.txt", violation.Message, StringComparison.Ordinal);
+            Assert.Contains("12", violation.Message, StringComparison.Ordinal);
+            Assert.Contains("recorded ceiling of 4", violation.Message, StringComparison.Ordinal);
+            Assert.Contains(
+                "Extract behavior to a collaborator and lower the ceiling",
+                violation.Message,
+                StringComparison.Ordinal);
+            Assert.Contains(
+                "raise the recorded ceiling for this entry deliberately",
+                violation.Message,
+                StringComparison.Ordinal);
+            Assert.Contains("justification in the same change", violation.Message, StringComparison.Ordinal);
+            Assert.Contains("SourceSizeRatchet.SeededCeilings", violation.Message, StringComparison.Ordinal);
+            Assert.Contains(SourceSizeRatchet.DocumentationPath, violation.Message, StringComparison.Ordinal);
+        }
+        finally
+        {
+            Directory.Delete(root, recursive: true);
+        }
+    }
+
+    [Fact]
+    public void SyntheticTable_MissingFile_ProducesLoudViolation()
+    {
+        var root = CreateTempDirectory();
+        try
+        {
+            var violation = Assert.Single(SourceSizeRatchet.Evaluate(
+                root,
+                new[] { new SourceSizeCeiling("renamed-or-deleted.cs", 10) }));
+
+            Assert.Equal("renamed-or-deleted.cs", violation.RelativePath);
+            Assert.Null(violation.ActualLineCount);
+            Assert.Contains("does not exist", violation.Message, StringComparison.Ordinal);
+            Assert.Contains("rename or delete", violation.Message, StringComparison.Ordinal);
+            Assert.Contains("update SourceSizeRatchet.SeededCeilings", violation.Message, StringComparison.Ordinal);
+            Assert.Contains("in the same change", violation.Message, StringComparison.Ordinal);
+        }
+        finally
+        {
+            Directory.Delete(root, recursive: true);
+        }
+    }
+
+    [Fact]
+    public void SyntheticTable_UnreadableFile_ProducesLoudViolation()
+    {
+        var root = CreateTempDirectory();
+        try
+        {
+            WriteLines(root, "unreadable.cs", 1, "line");
+
+            var violation = Assert.Single(SourceSizeRatchet.Evaluate(
+                root,
+                new[] { new SourceSizeCeiling("unreadable.cs", 10) },
+                _ => throw new IOException("simulated read failure")));
+
+            Assert.Equal("unreadable.cs", violation.RelativePath);
+            Assert.Null(violation.ActualLineCount);
+            Assert.Contains("could not be read", violation.Message, StringComparison.Ordinal);
+            Assert.Contains("IOException: simulated read failure", violation.Message, StringComparison.Ordinal);
+            Assert.Contains(SourceSizeRatchet.DocumentationPath, violation.Message, StringComparison.Ordinal);
+        }
+        finally
+        {
+            Directory.Delete(root, recursive: true);
+        }
     }
 
     [Fact]
@@ -62,37 +162,32 @@ public sealed class GoalAcceptanceVerifierSizeRatchetTests
         var root = CreateTempDirectory();
         try
         {
-            var atCeilingA = WriteLines(root, "at-ceiling-a.txt", MaximumLineCount, "alpha");
-            var atCeilingB = WriteLines(root, "at-ceiling-b.txt", MaximumLineCount, "unrelated edit");
-            var overCeilingA = WriteLines(root, "over-ceiling-a.txt", MaximumLineCount + 1, "alpha");
-            var overCeilingB = WriteLines(root, "over-ceiling-b.txt", MaximumLineCount + 1, "unrelated edit");
+            var atCeilingA = WriteLines(root, "at-ceiling-a.txt", 4, "alpha");
+            var atCeilingB = WriteLines(root, "at-ceiling-b.txt", 4, "unrelated edit");
+            var overCeilingA = WriteLines(root, "over-ceiling-a.txt", 5, "alpha");
+            var overCeilingB = WriteLines(root, "over-ceiling-b.txt", 5, "unrelated edit");
 
             Assert.NotEqual(File.ReadAllText(atCeilingA), File.ReadAllText(atCeilingB));
-            var firstAtCeilingCount = CountLines(atCeilingA);
-            var secondAtCeilingCount = CountLines(atCeilingB);
-            var firstOverCeilingCount = CountLines(overCeilingA);
-            var secondOverCeilingCount = CountLines(overCeilingB);
-            Assert.Equal(MaximumLineCount, firstAtCeilingCount);
-            Assert.Equal(firstAtCeilingCount, secondAtCeilingCount);
-            Assert.Equal(MaximumLineCount + 1, firstOverCeilingCount);
-            Assert.Equal(firstOverCeilingCount, secondOverCeilingCount);
-            Assert.Null(Record.Exception(() => AssertWithinCeiling(firstAtCeilingCount)));
-            Assert.Null(Record.Exception(() => AssertWithinCeiling(secondAtCeilingCount)));
+            var table = new[]
+            {
+                new SourceSizeCeiling(Path.GetFileName(atCeilingA), 4),
+                new SourceSizeCeiling(Path.GetFileName(atCeilingB), 4),
+                new SourceSizeCeiling(Path.GetFileName(overCeilingA), 4),
+                new SourceSizeCeiling(Path.GetFileName(overCeilingB), 4),
+            };
 
-            var firstFailure = Record.Exception(() => AssertWithinCeiling(firstOverCeilingCount));
-            var secondFailure = Record.Exception(() => AssertWithinCeiling(secondOverCeilingCount));
-            Assert.NotNull(firstFailure);
-            Assert.NotNull(secondFailure);
-            Assert.Equal(firstFailure.Message, secondFailure.Message);
+            var violations = SourceSizeRatchet.Evaluate(root, table);
+
+            Assert.Equal(
+                new[] { "over-ceiling-a.txt", "over-ceiling-b.txt" },
+                violations.Select(violation => violation.RelativePath));
+            Assert.All(violations, violation => Assert.Equal(5, violation.ActualLineCount));
         }
         finally
         {
             Directory.Delete(root, recursive: true);
         }
     }
-
-    private static int CountLines(string path)
-        => File.ReadLines(path).Count();
 
     private static string WriteLines(string root, string fileName, int lineCount, string content)
     {
@@ -101,16 +196,36 @@ public sealed class GoalAcceptanceVerifierSizeRatchetTests
         return path;
     }
 
-    private static void AssertWithinCeiling(int actualLineCount)
+    private static SourceSizeCeiling[] ReadDocumentedCeilings(string documentationPath)
     {
-        Assert.True(actualLineCount <= MaximumLineCount, BuildFailureMessage(actualLineCount));
+        const string tableHeader = "| Guarded file | Seeded ceiling |";
+        var lines = File.ReadLines(documentationPath).ToArray();
+        var headerIndex = Array.FindIndex(lines, line => string.Equals(line, tableHeader, StringComparison.Ordinal));
+        Assert.True(headerIndex >= 0, $"{SourceSizeRatchet.DocumentationPath} does not contain the ratchet table.");
+
+        return lines
+            .Skip(headerIndex + 2)
+            .TakeWhile(line => line.StartsWith("| `", StringComparison.Ordinal))
+            .Select(ParseDocumentedCeiling)
+            .ToArray();
     }
 
-    private static string BuildFailureMessage(int actualLineCount)
+    private static SourceSizeCeiling ParseDocumentedCeiling(string row)
     {
-        return $"GoalAcceptanceVerifier.cs has {actualLineCount.ToString(CultureInfo.InvariantCulture)} lines, " +
-            $"exceeding the recorded ceiling of {MaximumLineCount.ToString(CultureInfo.InvariantCulture)}. " +
-            "Extract behavior to a collaborator and lower the ceiling, or raise MaximumLineCount deliberately " +
-            $"with justification in the same change. See {DocumentationPath}.";
+        var cells = row.Split('|', StringSplitOptions.TrimEntries | StringSplitOptions.RemoveEmptyEntries);
+        Assert.Equal(2, cells.Length);
+        Assert.StartsWith("`", cells[0], StringComparison.Ordinal);
+        Assert.EndsWith("`", cells[0], StringComparison.Ordinal);
+        Assert.True(
+            int.TryParse(cells[1], out var maximumLineCount),
+            $"Ratchet table ceiling '{cells[1]}' is not an integer.");
+        return new SourceSizeCeiling(cells[0][1..^1], maximumLineCount);
+    }
+
+    private static void AssertNoViolations(IReadOnlyList<SourceSizeViolation> violations)
+    {
+        Assert.True(
+            violations.Count == 0,
+            string.Join(Environment.NewLine, violations.Select(violation => violation.Message)));
     }
 }
