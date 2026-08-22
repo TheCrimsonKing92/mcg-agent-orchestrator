@@ -214,6 +214,8 @@ Recommended backlog order:
 
 Each item should enter the backlog as a behavior-preserving goal with explicit characterization tests first, a narrow changed-file set, and a disjointness note copied from the matrix above.
 
+Wave 2 item 2 places the process-recovery boundary at `DispatchProcessRefreshVerdict`: `DispatchProcessRecoveryService` answers what happened to the worker by reading heartbeat and exit artifacts, observing or reaping owned processes, evaluating recovery policy, and producing refresh diagnostics. The boundary is derived from the call graph: helpers that consume only process records, artifact data, the clock, and process/file seams moved; `BackgroundDispatchRunner` still decides what the verdict does to the task and kernel. Worker-result interpretation, `BuildCompletedProcessOutcome`, worktree/Git evidence, verification construction, and commit-on-behalf deliberately remain in the runner for Wave 2 item 3.
+
 ## Guarded source size ratchet
 
 `GoalAcceptanceVerifierSizeRatchetTests` runs as an ordinary acceptance-gate test and applies the literal ceilings in `SourceSizeRatchet.SeededCeilings`. The table was seeded at commit `6e7a90d7b3fe192ae4f1e430cb7452710f88b73c` on 2026-08-22; every value below is that file's complete line count from `File.ReadLines(path).Count()` at that commit, except where a later row-raise is recorded below the table.
@@ -223,7 +225,7 @@ Each item should enter the backlog as a behavior-preserving goal with explicit c
 | `src/Mcg.AgentOrchestrator.Infrastructure/Workspaces/GoalAcceptanceVerifier.cs` | 8779 |
 | `src/Mcg.AgentOrchestrator.App/Orchestration/ConductorDriver.cs` | 6156 |
 | `src/Mcg.AgentOrchestrator.App/Orchestration/ConductorBatchLoop.cs` | 4974 |
-| `src/Mcg.AgentOrchestrator.Infrastructure/Processes/BackgroundDispatchRunner.cs` | 4640 |
+| `src/Mcg.AgentOrchestrator.Infrastructure/Processes/BackgroundDispatchRunner.cs` | 3499 |
 | `src/Mcg.AgentOrchestrator.Infrastructure/Workers/WorkerProfileDispatcher.cs` | 3212 |
 | `src/Mcg.AgentOrchestrator.App/Cli/CliPersistentStateRunner.cs` | 4821 |
 | `tests/Mcg.AgentOrchestrator.Infrastructure.Tests/GoalAcceptanceVerifierTests.cs` | 10451 |
