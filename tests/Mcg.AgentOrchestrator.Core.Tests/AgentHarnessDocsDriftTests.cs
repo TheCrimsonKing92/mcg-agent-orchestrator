@@ -4,6 +4,7 @@ public sealed class AgentHarnessDocsDriftTests
 {
     private const string AgentsPath = "AGENTS.md";
     private const string ClaudePath = "CLAUDE.md";
+    private const string RepositoryConventionsPath = "docs/repository-conventions.md";
     private const string TestDesignDisciplinePath = "docs/test-design-discipline.md";
 
     private static readonly SharedSection[] SharedSections =
@@ -26,6 +27,11 @@ public sealed class AgentHarnessDocsDriftTests
         new(
             TestDesignDisciplinePath,
             "<!-- shared-discipline:test-design-discipline -->",
+            "another shared home",
+            [AgentsPath, ClaudePath]),
+        new(
+            RepositoryConventionsPath,
+            "<!-- shared-discipline:repository-conventions -->",
             "another shared home",
             [AgentsPath, ClaudePath])
     ];
