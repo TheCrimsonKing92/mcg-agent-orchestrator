@@ -54,9 +54,7 @@ internal sealed class FileSystemTestClassDeclarationReader : ITestClassDeclarati
             while (directory is not null)
             {
                 if (Directory.Exists(Path.Combine(directory.FullName, ".git")) ||
-                    File.Exists(Path.Combine(directory.FullName, ".git")) ||
-                    File.Exists(Path.Combine(directory.FullName, "AGENTS.md")) &&
-                    File.Exists(Path.Combine(directory.FullName, "CLAUDE.md")))
+                    File.Exists(Path.Combine(directory.FullName, ".git")))
                 {
                     return new FileSystemTestClassDeclarationReader(directory.FullName);
                 }
