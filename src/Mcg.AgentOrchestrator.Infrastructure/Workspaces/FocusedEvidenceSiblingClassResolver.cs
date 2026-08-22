@@ -110,9 +110,10 @@ internal static class FocusedEvidenceSiblingClassResolver
     private static bool IsQualifyingTestClass(TypeDeclarationSyntax declaration)
     {
         if (!IsTopLevel(declaration) ||
-            declaration.Modifiers.All(modifier => !modifier.IsKind(SyntaxKind.PublicKeyword)) ||
+            declaration.Modifiers.All(modifier => modifier.RawKind != (int)SyntaxKind.PublicKeyword) ||
             declaration.Modifiers.Any(modifier =>
-                modifier.IsKind(SyntaxKind.AbstractKeyword) || modifier.IsKind(SyntaxKind.StaticKeyword)) ||
+                modifier.RawKind == (int)SyntaxKind.AbstractKeyword ||
+                modifier.RawKind == (int)SyntaxKind.StaticKeyword) ||
             declaration is not ClassDeclarationSyntax &&
             declaration is not RecordDeclarationSyntax)
         {
@@ -120,7 +121,7 @@ internal static class FocusedEvidenceSiblingClassResolver
         }
 
         if (declaration is RecordDeclarationSyntax record &&
-            record.ClassOrStructKeyword.IsKind(SyntaxKind.StructKeyword))
+            record.ClassOrStructKeyword.RawKind == (int)SyntaxKind.StructKeyword)
         {
             return false;
         }
