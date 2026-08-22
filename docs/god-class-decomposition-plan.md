@@ -247,6 +247,8 @@ Each item should enter the backlog as a behavior-preserving goal with explicit c
 
 Wave 2 item 2 places the process-recovery boundary at `DispatchProcessRefreshVerdict`: `DispatchProcessRecoveryService` answers what happened to the worker by reading heartbeat and exit artifacts, observing or reaping owned processes, evaluating recovery policy, and producing refresh diagnostics. The boundary is derived from the call graph: helpers that consume only process records, artifact data, the clock, and process/file seams moved; `BackgroundDispatchRunner` still decides what the verdict does to the task and kernel. Worker-result interpretation, `BuildCompletedProcessOutcome`, worktree/Git evidence, verification construction, and commit-on-behalf deliberately remain in the runner for Wave 2 item 3.
 
+Wave 2 item 3 places the commit-on-behalf boundary at `DispatchWorktreeCommitter`: the component inspects and caches worktree Git evidence, derives byte-stable commit subjects, stages commit-worthy dirty paths, creates the recovery commit, and formats Git failure diagnostics. The boundary is derived by a call-graph test: operations whose inputs are only the working directory, goal identity, dispatch time, subject, and dirty paths, and whose outputs are worktree evidence or a commit result, move together so the inspection/commit protocol and its cache have one owner. `BackgroundDispatchRunner` deliberately retains commit eligibility, sandbox and low-integrity classification, recovery and completion decisions, task-state transitions, verification construction, and result-commit provenance for later Wave 2 items.
+
 ## Guarded source size ratchet
 
 `GoalAcceptanceVerifierSizeRatchetTests` runs as an ordinary acceptance-gate test and applies the literal ceilings in `SourceSizeRatchet.SeededCeilings`. The table was seeded at commit `6e7a90d7b3fe192ae4f1e430cb7452710f88b73c` on 2026-08-22; every value below is that file's complete line count from `File.ReadLines(path).Count()` at that commit, except where a later row-raise is recorded below the table.
@@ -256,7 +258,7 @@ Wave 2 item 2 places the process-recovery boundary at `DispatchProcessRefreshVer
 | `src/Mcg.AgentOrchestrator.Infrastructure/Workspaces/GoalAcceptanceVerifier.cs` | 8779 |
 | `src/Mcg.AgentOrchestrator.App/Orchestration/ConductorDriver.cs` | 6156 |
 | `src/Mcg.AgentOrchestrator.App/Orchestration/ConductorBatchLoop.cs` | 4974 |
-| `src/Mcg.AgentOrchestrator.Infrastructure/Processes/BackgroundDispatchRunner.cs` | 3559 |
+| `src/Mcg.AgentOrchestrator.Infrastructure/Processes/BackgroundDispatchRunner.cs` | 3222 |
 | `src/Mcg.AgentOrchestrator.Infrastructure/Workers/WorkerProfileDispatcher.cs` | 3220 |
 | `src/Mcg.AgentOrchestrator.App/Cli/CliPersistentStateRunner.cs` | 4821 |
 | `tests/Mcg.AgentOrchestrator.Infrastructure.Tests/GoalAcceptanceVerifierTests.cs` | 1566 |
