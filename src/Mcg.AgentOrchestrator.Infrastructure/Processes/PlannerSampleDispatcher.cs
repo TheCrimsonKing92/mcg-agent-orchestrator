@@ -1,3 +1,4 @@
+using System.ComponentModel;
 using System.Diagnostics;
 using System.Text.RegularExpressions;
 
@@ -84,7 +85,7 @@ internal static class PlannerSampleDispatcher
 
                 launches.Add(new PlannerSampleLaunch(process, sample));
             }
-            catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or InvalidOperationException)
+            catch (Exception ex) when (IsSampleLaunchFailure(ex))
             {
                 WriteLaunchDiagnostic(sample, ex.Message);
             }
@@ -92,6 +93,17 @@ internal static class PlannerSampleDispatcher
 
         return launches;
     }
+
+    // Every documented Process.Start(ProcessStartInfo) failure degrades optional sampling. The
+    // inherited cases are deliberate: IOException includes FileNotFoundException, while
+    // InvalidOperationException includes ObjectDisposedException. ArgumentNullException cannot
+    // occur because CreateStartInfo supplies the instance; any other exception is a code defect.
+    private static bool IsSampleLaunchFailure(Exception exception) => exception is
+        Win32Exception or
+        IOException or
+        UnauthorizedAccessException or
+        InvalidOperationException or
+        PlatformNotSupportedException;
 
     internal static IReadOnlyList<PlannerCandidateInput> CollectCandidates(
         string primaryStandardOutputPath,

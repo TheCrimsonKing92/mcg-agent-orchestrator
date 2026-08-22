@@ -1,3 +1,4 @@
+using System.ComponentModel;
 using System.Diagnostics;
 using Mcg.AgentOrchestrator.Core;
 using Mcg.AgentOrchestrator.Core.Conductor;
@@ -115,6 +116,86 @@ public sealed class PlannerSamplingDispatchTests : WorkerDispatchTestSupport
         }
 
         Xunit.Assert.False(WorkerProcessJobs.HasRegisteredJob(processId));
+    }
+
+    [Xunit.Fact]
+    public void LaunchFailureDegradesAndPrimaryCompletes()
+    {
+        var root = CreateSeededDispatchRepository();
+        var logRoot = Path.Combine(root, "logs");
+        SeedFixtureCitationTargets(root);
+        var kernel = new AgentOrchestratorKernel();
+        var goal = kernel.CreateGoal("Planner sample launch failure", [
+            new TaskSpec(TaskId.New(), "Produce a sampled plan.", AgentRole.Planner)
+        ]);
+        var planner = new AgentDefinition(
+            new AgentId("planner"),
+            "Planner",
+            AgentRole.Planner,
+            new ModelProfile(
+                "OpenAI",
+                AgentCatalog.OpenAiSubscriptionModelAlias,
+                ModelCapability.Text,
+                SubscriptionMode.ApiKey));
+        kernel.ActivateGoal(goal.Id, [planner]);
+        var task = goal.Tasks.Single();
+        kernel.RecordTaskDispatch(goal.Id, task.Id, new TaskDispatchRecord(
+            "local",
+            "Write-Output planner",
+            root,
+            DateTimeOffset.Parse("2026-08-22T18:00:00Z"),
+            PlannerSampleCount: 3));
+
+        var processes = new List<Process>();
+        var startedProcessIds = new List<int>();
+        var invocation = 0;
+        var runner = new BackgroundDispatchRunner(
+            isStillRunning: _ => false,
+            disableProcessStart: false,
+            startProcess: startInfo =>
+            {
+                invocation++;
+                if (invocation == 3)
+                    throw new Win32Exception("fixture sample launch failure");
+
+                var parameters = DispatchProcessHost.ReadParameters(startInfo.ArgumentList.Last());
+                File.WriteAllText(parameters.StdoutPath, ReadPlannerFixture());
+                DispatchExitArtifacts.Write(
+                    parameters.ExitCodePath,
+                    DispatchExitArtifacts.Native(0, "fixture completed", DateTimeOffset.UtcNow));
+                var process = StartSleeper();
+                processes.Add(process);
+                startedProcessIds.Add(process.Id);
+                return process;
+            });
+
+        try
+        {
+            var start = runner.TryStartLatestDispatch(kernel, goal.Id, task.Id, logRoot);
+
+            Xunit.Assert.NotNull(start.ProcessRecord);
+            Xunit.Assert.Equal(3, invocation);
+            Xunit.Assert.True(WorkerProcessJobs.HasRegisteredJob(start.ProcessRecord.ProcessId));
+            Xunit.Assert.False(WorkerProcessJobs.HasRegisteredJob(startedProcessIds[1]));
+            var failedSample = PlannerSampleDispatcher.CreateArtifacts(
+                start.ProcessRecord.StandardOutputPath,
+                3)[1];
+            Xunit.Assert.Contains(
+                "fixture sample launch failure",
+                File.ReadAllText(failedSample.LaunchDiagnosticPath),
+                StringComparison.Ordinal);
+
+            runner.RefreshLatestProcess(kernel, goal.Id, task.Id);
+
+            Xunit.Assert.True(task.LastVerification!.Succeeded, task.LastVerification.StandardError);
+        }
+        finally
+        {
+            foreach (var processId in startedProcessIds)
+                try { WorkerProcessJobs.TryKillOrFallback(processId); } catch { }
+            foreach (var process in processes)
+                try { process.Dispose(); } catch { }
+        }
     }
 
     [Xunit.Fact]
