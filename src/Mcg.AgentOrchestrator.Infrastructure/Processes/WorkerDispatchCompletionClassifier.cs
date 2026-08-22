@@ -284,6 +284,47 @@ internal sealed class WorkerDispatchCompletionClassifier
         return true;
     }
 
+    internal bool HasWorkerBuildEvidence(
+        string workingDirectory,
+        string standardOutput,
+        string standardError)
+    {
+        if (WorkerResultParser.TryParseResult(standardOutput, out var result, out _) ||
+            WorkerResultParser.TryParseResult(standardError, out result, out _))
+        {
+            return WorkerResultParser.WorkerBuildCheckTestsReportSuccess(result);
+        }
+
+        foreach (var fileName in new[] { "WORKER_RESULT.md", "WORKER_RESULT.txt" })
+        {
+            var path = Path.Combine(workingDirectory, fileName);
+            if (!_fileExists(path))
+            {
+                continue;
+            }
+
+            try
+            {
+                if (HasWorkerBuildEvidenceInText(_readArtifactText(path)))
+                {
+                    return true;
+                }
+            }
+            catch (IOException)
+            {
+            }
+            catch (UnauthorizedAccessException)
+            {
+            }
+        }
+
+        return false;
+    }
+
+    internal static bool HasWorkerBuildEvidenceInText(string text) =>
+        WorkerResultParser.TryParseResult(text, out var result, out _) &&
+        WorkerResultParser.WorkerBuildCheckTestsReportSuccess(result);
+
     internal bool TryFindFailingTestsInWorkerResult(
         string standardOutput,
         string standardError,

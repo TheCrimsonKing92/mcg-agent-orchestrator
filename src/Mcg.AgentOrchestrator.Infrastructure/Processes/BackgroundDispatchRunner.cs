@@ -1338,11 +1338,12 @@ public sealed class BackgroundDispatchRunner
                 processRecord.WorkingDirectory,
                 decisionStandardOutput,
                 decisionStandardError);
-            if (_completionClassifier.TryFindFailedWorkerBuildCheck(
+            var failedWorkerBuildCheck = _completionClassifier.TryFindFailedWorkerBuildCheck(
                     processRecord.WorkingDirectory,
                     decisionStandardOutput,
                     decisionStandardError,
-                    out var failedBuildCheckDiagnostic))
+                    out var failedBuildCheckDiagnostic);
+            if (failedWorkerBuildCheck)
             {
                 exitCode = 1;
                 standardErrorDiagnostic = AppendDiagnostic(
@@ -1352,11 +1353,36 @@ public sealed class BackgroundDispatchRunner
                     DispatchFailureDiagnosticMarker.Format(DispatchFailureDiagnosticMarker.WorkerBuildCheckFailed));
             }
 
+            var requiredBuildProjects = WorkerBuildEvidenceRequirement.FindRequiredProjects(
+                processRecord.WorkingDirectory,
+                task.RequiredRole,
+                worktreeEvidence.ChangedPaths,
+                worktreeEvidence.DirtyPaths);
+            var missingWorkerBuildEvidence =
+                !failedWorkerBuildCheck &&
+                requiredBuildProjects.Count > 0 &&
+                !_completionClassifier.HasWorkerBuildEvidence(
+                    processRecord.WorkingDirectory,
+                    decisionStandardOutput,
+                    decisionStandardError);
+            if (missingWorkerBuildEvidence)
+            {
+                exitCode = 1;
+                standardErrorDiagnostic = AppendDiagnostic(
+                    AppendDiagnostic(
+                        standardErrorDiagnostic ?? string.Empty,
+                        "WORKER_RESULT omitted required build evidence for project(s): " +
+                        string.Join(", ", requiredBuildProjects) +
+                        ". Run .\\scripts\\Invoke-WorkerBuildCheck.ps1 for each named project and report the result in tests."),
+                    DispatchFailureDiagnosticMarker.Format(DispatchFailureDiagnosticMarker.WorkerBuildEvidenceMissing));
+            }
+
             var provider = ResolveWorkerProvider(task.LastDispatch);
             var normalIntegrityCommitEvidence =
                 task.LastDispatch.SandboxLowIntegrity != true &&
                 (successfulWorkerResult || worktreeEvidence.HasRelevantCommitAfterDispatch);
             var shouldCommitDirtyWorktree =
+                !missingWorkerBuildEvidence &&
                 (recoveryDecision?.Action != DispatchRecoveryAction.PreserveInterruptedWork || reconcileWrapperExit) &&
                 ((exitCode == 0 && (normalIntegrityCommitEvidence || lowIntegrityConfinementEvidence)) ||
                  reconcileWrapperExit ||
@@ -1382,7 +1408,7 @@ public sealed class BackgroundDispatchRunner
                 {
                     orchestratorCommitted = true;
                     hasCommittedChanges = true;
-                    if (!reconcileWrapperExit)
+                    if (!reconcileWrapperExit && !missingWorkerBuildEvidence)
                     {
                         exitCode = 0;
                     }

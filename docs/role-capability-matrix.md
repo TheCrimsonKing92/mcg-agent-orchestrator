@@ -7,9 +7,9 @@ repository today; it does not grant new capabilities.
 
 The boundaries below come from these live controls:
 
-- A generated `.orchestrator-context/<goal-id>/current-task.md:8-12` gives Developer and Tester workers the
-  only sanctioned worker-side .NET check, `Invoke-WorkerBuildCheck.ps1`, forbids raw `dotnet test`, raw
-  `dotnet build`, and `Invoke-IsolatedDotnet.ps1`, and routes test execution to the acceptance gate
+- A generated `.orchestrator-context/<goal-id>/current-task.md:8-12` requires Developer and Tester workers to
+  compile every changed .NET project through `Invoke-WorkerBuildCheck.ps1`, forbids raw `dotnet test`,
+  `Invoke-IsolatedDotnet.ps1`, and other worker-side test execution, and routes tests to the acceptance gate
   (`src/Mcg.AgentOrchestrator.Infrastructure/Workers/WorkerArtifactWriter.cs:251-260` and
   `src/Mcg.AgentOrchestrator.Infrastructure/Workers/WorkerArtifactWriter.cs:346-356`).
 - Dispatch variables give Developer and Tester a writable sandbox and give Planner, Researcher, and

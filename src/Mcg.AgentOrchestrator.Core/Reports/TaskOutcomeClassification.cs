@@ -51,6 +51,7 @@ internal static class TaskOutcomeRules
     public static readonly TaskOutcomeRule PlannerOutputContractRejected = new("planner-output-contract-rejected", TaskOutcomeClass.UnknownEra);
     public static readonly TaskOutcomeRule PlannerPlanPersistenceFailed = new("planner-plan-persistence-failed", TaskOutcomeClass.UnknownEra);
     public static readonly TaskOutcomeRule WorkerBuildCheckFailed = new("worker-build-check-failed", TaskOutcomeClass.UnknownEra);
+    public static readonly TaskOutcomeRule WorkerBuildEvidenceMissing = new("worker-build-evidence-missing", TaskOutcomeClass.UnknownEra);
     public static readonly TaskOutcomeRule WrapperProcessExitFailure = new("wrapper-process-exit-failure", TaskOutcomeClass.UnknownEra);
     public static readonly TaskOutcomeRule RequiredFileChangeEvidenceMissing = new("required-file-change-evidence-missing", TaskOutcomeClass.UnknownEra);
     public static readonly TaskOutcomeRule WorktreeInspectionFailed = new("worktree-inspection-failed", TaskOutcomeClass.UnknownEra);
@@ -87,6 +88,7 @@ internal static class TaskOutcomeRules
         PlannerOutputContractRejected,
         PlannerPlanPersistenceFailed,
         WorkerBuildCheckFailed,
+        WorkerBuildEvidenceMissing,
         WrapperProcessExitFailure,
         RequiredFileChangeEvidenceMissing,
         WorktreeInspectionFailed,
