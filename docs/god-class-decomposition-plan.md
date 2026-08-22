@@ -18,7 +18,7 @@ Acceptance lane model used here:
 - App/Dashboard or App/Dashboard/Api changes select focused dashboard infrastructure tests when the changed App scope stays under one dashboard/API subsystem.
 - Shared Infrastructure changes map to broad Infrastructure test coverage; treat these as touching all five infrastructure partitions unless a characterization goal proves a narrower filter.
 - Core source changes map to Core tests plus downstream Infrastructure tests through the `GoalAcceptanceVerifier` project dependency closure.
-- `GoalAcceptanceVerifier.cs` and `GoalAcceptanceVerifierTests.cs` are explicit full-shard triggers in `GoalAcceptanceVerifier.FullShardReason`.
+- `GoalAcceptanceVerifier.cs` and `GoalAcceptanceVerifierTests.cs` are not explicit full-shard triggers. Commit `88e4dc59` removed those special cases on 2026-07-19; current selection uses changed-project mapping and filename-derived focused test filters.
 
 Prior art already exists: `AgentOrchestratorKernel.*.cs` is a successful Core partial-class split, with the largest fragment now `AgentOrchestratorKernel.GoalLifecycle.cs` at 706 lines and 33 commits in the last 60 days. `CliCommandHandlers.*.cs` is also partially split, but `CliCommandHandlers.Goals.cs` remains a 3,054-line hotspot while siblings such as `CliCommandHandlers.Workers.cs` at 509 lines and `CliCommandHandlers.Backlog.cs` at 305 lines show the intended direction.
 
@@ -74,6 +74,35 @@ growth. `ConductorBatchLoopTests.cs` is now the largest file in the repository.
    `DashboardDispatchStartFailureEndpointTests.cs` (358) and `DashboardValidationHarnessTests.cs` (74) total
    4,783 lines of a human-interface concern sitting on the orchestrator's acceptance critical path. The
    dashboard is not on the conductor's critical path and the orchestrator runs without it.
+
+### 2026-08-22 GoalAcceptanceVerifier test split
+
+Wave 1 item 6 now uses one class per file because changed-test selection derives a class filter from each
+changed filename and focused-evidence sibling resolution expects one declaring file per class. The four
+existing secondary classes moved unchanged to `AcceptanceOutputCaptureTests.cs`,
+`HermeticVerificationEnvironmentTests.cs`, `RealProcessShardAlphaSmokeTests.cs`, and
+`RealProcessShardBetaSmokeTests.cs`. The dominant build-slot class became an abstract shared-helper base with
+eleven concrete `GoalAcceptanceVerifierDotnetBuildSlotTests<Topic>` siblings:
+
+1. `GateHeartbeat` owns run-scoped heartbeat and hung-child coverage.
+2. `RunnerInvocationAndTrx` owns runner selection, invocation arguments, and TRX diagnostics.
+3. `FocusedEvidence` owns focused-selection parsing, routing, and dual-arm evidence.
+4. `SlotGateJobResources` owns build-slot gating, job receipts, lock self-heal, and timeout diagnostics because those paths share owned-process and heartbeat helpers.
+5. `ConcurrentShardScheduling` owns resource-key scheduling and observed lane ordering.
+6. `ShardReceipts` owns attempt artifacts, heartbeat files, and owner-result isolation.
+7. `VerdictAndBuildCache` owns partition verdict reuse and base-build caching because both share partition-key hooks.
+8. `PolicyShardScope` owns change-scope routing, policy injection, and solution-check substitution.
+9. `AdvisoryChecks` owns advisory grep, file, command, and missing-criteria behavior.
+10. `TestTamperGuard` owns declared-removal and assertion-tamper controls.
+11. `TrustedBaselineDiscovery` owns trusted-baseline retry, project discovery, and deleted-file scope.
+
+This differs from the original six-topic starting list because criterion parsing/check conversion and
+forbidden-generated-path coverage already belong to the retained `GoalAcceptanceVerifierTests` class, while
+focused evidence, concurrent scheduling, and verdict caching grew into independent concerns after that list
+was written. Every build-slot-derived fragment and both real-process smoke classes retain the serial
+`JobAccounting` collection; the non-process classes retain `GoalAcceptanceVerifier`. The manifest's literal
+`GoalAcceptanceVerifierDotnetBuildSlotTests` lane token still matches every prefixed fragment, and the
+full-shard behavior is unchanged: no hard-coded trigger exists to narrow.
 
 ### Cross-reference
 
@@ -228,13 +257,13 @@ Wave 2 item 2 places the process-recovery boundary at `DispatchProcessRefreshVer
 | `src/Mcg.AgentOrchestrator.Infrastructure/Processes/BackgroundDispatchRunner.cs` | 3499 |
 | `src/Mcg.AgentOrchestrator.Infrastructure/Workers/WorkerProfileDispatcher.cs` | 3212 |
 | `src/Mcg.AgentOrchestrator.App/Cli/CliPersistentStateRunner.cs` | 4821 |
-| `tests/Mcg.AgentOrchestrator.Infrastructure.Tests/GoalAcceptanceVerifierTests.cs` | 10451 |
+| `tests/Mcg.AgentOrchestrator.Infrastructure.Tests/GoalAcceptanceVerifierTests.cs` | 1566 |
 | `tests/Mcg.AgentOrchestrator.Infrastructure.Tests/ConductorDriverTests.cs` | 9282 |
 | `tests/Mcg.AgentOrchestrator.Infrastructure.Tests/CliCommandTests.PersistentRunnerCommands.cs` | 7038 |
 | `tests/Mcg.AgentOrchestrator.Infrastructure.Tests/WorkerDispatchTestsWorkerResultClassification.cs` | 4834 |
 | `tests/Mcg.AgentOrchestrator.Infrastructure.Tests/ConductorBatchLoopTestsParallelAcceptance.cs` | 4473 |
 
-The production rows are the six ranked god classes whose growth the inventory tracks. Two test rows, `GoalAcceptanceVerifierTests.cs` and `ConductorDriverTests.cs`, are unsplit test god classes guarded as the test-side counterparts to their already-guarded production files. The other three test rows are products of earlier splits that have regrown past roughly 4,300 lines; a one-time split without a bound only resets the clock. This is intentionally not a repository-wide size rule. For example, `DotnetBuildEnvironmentManagerTests.cs` (5199 lines) is large but is neither a ranked god class nor a split product; `CliCommandTests.GoalLifecycleCommands.cs` (4211) and `CliCommandTests.SubscriptionDispatchCommands.cs` (3471) remain within their intended post-split size; `DashboardRenderingTests.cs` (3795) has already moved to the Dashboard test project; and `DispatchFailureClassifier.cs` (2393) remains below the seeded production band.
+The production rows are the six ranked god classes whose growth the inventory tracks. `ConductorDriverTests.cs` remains an unsplit test god class guarded as the test-side counterpart to its already-guarded production file. The `GoalAcceptanceVerifierTests.cs` row remains at its measured post-split size so regrowth is visible; none of its new fragments approaches the roughly 4,300-line threshold for adding a split-product row. The other three test rows are products of earlier splits that have regrown past that threshold; a one-time split without a bound only resets the clock. This is intentionally not a repository-wide size rule. For example, `DotnetBuildEnvironmentManagerTests.cs` (5199 lines) is large but is neither a ranked god class nor a split product; `CliCommandTests.GoalLifecycleCommands.cs` (4211) and `CliCommandTests.SubscriptionDispatchCommands.cs` (3471) remain within their intended post-split size; `DashboardRenderingTests.cs` (3795) has already moved to the Dashboard test project; and `DispatchFailureClassifier.cs` (2393) remains below the seeded production band.
 
 When extraction shrinks a guarded file, lower that row in the same change. If growth is unavoidable, raise only that row deliberately with an inline justification naming the goal. A rename or deletion must update its row in the same change. Never derive a ceiling automatically from the current file, make a row advisory, add an opt-out, or delete the guard.
 
