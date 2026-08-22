@@ -4769,48 +4769,27 @@ internal sealed partial class ConductorDriver
         }
 
         var failingTests = ExtractFailingTestIdentities(evidence.Checks);
-        if (failingTests.Count == 0)
+        RecordPreReviewReceipt(
+            goal, reviewerTask, context, round, PreReviewEvidenceDisposition.Red,
+            evidence.Checks, failingTests, evidencePointer);
+        var buildDiagnostic = failingTests.Count == 0
+            ? FormatPreReviewBuildDiagnostic(evidence.Checks)
+            : null;
+        if (buildDiagnostic is not null &&
+            currentReceipt is { Disposition: PreReviewEvidenceDisposition.Red } previousRed &&
+            previousRed.FailingTestIdentities.Count == 0 &&
+            previousRed.MatchesCurrentCandidate(goal.Id.Value, context.CandidateSha, context.SelectedFocusedTests))
         {
-            RecordPreReviewReceipt(
-                goal,
-                reviewerTask,
-                context,
-                round,
-                PreReviewEvidenceDisposition.MappingNeedsInput,
-                evidence.Checks,
-                [],
-                evidencePointer);
-            if (TryRoutePreReviewEvidenceToTester(
-                    goal,
-                    reviewerTask,
-                    goalPrefix,
-                    policy,
-                    $"pre-review checks were red but yielded no typed TRX failure identities for candidate {context.CandidateSha}; " +
-                    $"pointer={evidencePointer ?? "none"}",
-                    out result))
-            {
-                return true;
-            }
-
             result = Escalate(
                 goal,
                 goalPrefix,
                 policy,
                 fromState,
-                "PRE_REVIEW_MAPPING_NEEDS_INPUT: focused checks were red but produced no exact failing test identities; " +
-                $"Reviewer and Developer dispatch are blocked pending typed evidence. Pointer={evidencePointer ?? "none"}.");
+                $"PRE_REVIEW_RED_UNCHANGED_CANDIDATE: candidate {context.CandidateSha} failed again without typed test identities; " +
+                $"diagnostic: {buildDiagnostic}.");
             return true;
         }
 
-        RecordPreReviewReceipt(
-            goal,
-            reviewerTask,
-            context,
-            round,
-            PreReviewEvidenceDisposition.Red,
-            evidence.Checks,
-            failingTests,
-            evidencePointer);
         var developerTask = TasksBefore(goal, reviewerTask)
             .LastOrDefault(task => task.RequiredRole == AgentRole.Developer);
         if (developerTask is null)
@@ -4820,17 +4799,18 @@ internal sealed partial class ConductorDriver
                 goalPrefix,
                 policy,
                 fromState,
-                $"PRE_REVIEW_RED: no responsible Developer task exists. Failing tests: {string.Join(", ", failingTests)}. " +
+                $"PRE_REVIEW_RED: no responsible Developer task exists. " +
+                (buildDiagnostic is null ? $"Failing tests: {string.Join(", ", failingTests)}. " : $"Diagnostic: {buildDiagnostic}. ") +
                 $"Pointer={evidencePointer ?? "none"}.");
             return true;
         }
 
-        _retryTask(
-            goal.Id,
-            developerTask.Id,
-            $"pre-review focused-test repair: candidate {context.CandidateSha}; exact failing tests: " +
-            $"{string.Join(", ", failingTests)}; evidence pointer: {evidencePointer ?? "none"}",
-            RetryRoundKind.Mechanical);
+        var retryMessage = buildDiagnostic is null
+            ? $"pre-review focused-test repair: candidate {context.CandidateSha}; exact failing tests: " +
+                $"{string.Join(", ", failingTests)}; evidence pointer: {evidencePointer ?? "none"}"
+            : $"pre-review build repair: candidate {context.CandidateSha}; diagnostic: {buildDiagnostic}; " +
+                $"evidence pointer: {evidencePointer ?? "none"}";
+        _retryTask(goal.Id, developerTask.Id, retryMessage, RetryRoundKind.Mechanical);
         var retryState = GoalLifecycle.ResolveState(goal, GetFacts(goal));
         result = ExecuteDispatchAndStart(goal, goalPrefix, policy, retryState);
         return true;
@@ -6124,6 +6104,25 @@ internal sealed partial class ConductorDriver
                 yield return line;
             }
         }
+    }
+
+    private static string FormatPreReviewBuildDiagnostic(IReadOnlyList<AcceptanceCheckResult> checks)
+    {
+        var failedChecks = checks.Where(check => !check.Passed).ToArray();
+        var lines = failedChecks
+            .Where(check => !string.IsNullOrWhiteSpace(check.OutputTail))
+            .SelectMany(ExtractConcreteOutputEvidence)
+            .Take(5)
+            .ToArray();
+        lines = lines.Length > 0 ? lines : failedChecks
+            .Select(check => check.ResultSummary)
+            .Concat(failedChecks.Select(check => check.OutputTail))
+            .Where(text => !string.IsNullOrWhiteSpace(text))
+            .SelectMany(text => SplitEvidenceLines(text!))
+            .Take(5)
+            .ToArray();
+        var diagnostic = lines.Length == 0 ? "no diagnostic output was captured" : string.Join(" | ", lines);
+        return diagnostic.Length <= 1000 ? diagnostic : $"{diagnostic[..997]}...";
     }
 
     private static IEnumerable<string> SplitEvidenceLines(string text) =>

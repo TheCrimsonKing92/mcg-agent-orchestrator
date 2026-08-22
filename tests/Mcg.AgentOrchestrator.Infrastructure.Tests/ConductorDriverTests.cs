@@ -46,7 +46,7 @@ public sealed class ConductorDriverTests
         return (kernel, goal);
     }
 
-    private static (AgentOrchestratorKernel Kernel, Goal Goal) SoftwareGoal(string objective = "Review retry goal")
+    internal static (AgentOrchestratorKernel Kernel, Goal Goal) SoftwareGoal(string objective = "Review retry goal")
     {
         var kernel = new AgentOrchestratorKernel();
         var goal = GoalLifecycleCommands.CreateAndActivateGoal(kernel, DefaultAgents(), objective);
@@ -85,7 +85,7 @@ public sealed class ConductorDriverTests
         kernel.RecordTaskDispatch(goal.Id, task.Id, dispatch);
     }
 
-    private static void PassVerification(
+    internal static void PassVerification(
         AgentOrchestratorKernel kernel,
         Goal goal,
         TaskSpec task,
@@ -414,7 +414,7 @@ public sealed class ConductorDriverTests
         return new GoalLifecycleFacts(workspaceExists, IsBlocked: false, isMerged, isRecorded, isCleanedUp, hasOpenClarification);
     }
 
-    private static ConductorDriver MakeDriver(
+    internal static ConductorDriver MakeDriver(
         Func<Goal, GoalLifecycleFacts>? getFacts = null,
         Func<int>? getRunningCount = null,
         Func<Goal, string>? createWorkspace = null,
@@ -519,7 +519,7 @@ public sealed class ConductorDriverTests
         public void Dispose() => throw new InvalidOperationException("injected cleanup failure");
     }
 
-    private static PreReviewEvidenceContext FocusedPreReviewContext(string sha) =>
+    internal static PreReviewEvidenceContext FocusedPreReviewContext(string sha) =>
         new(
             sha,
             [
@@ -6452,10 +6452,11 @@ public sealed class ConductorDriverTests
             reviewer.PreReviewEvidenceReceipt?.FailingTestIdentities);
     }
 
-    [Xunit.Fact(DisplayName = "ConductorDriver_pre_review_red_without_trx_does_not_invent_a_failing_test")]
-    public void ConductorDriverPreReviewRedWithoutTrxDoesNotInventFailingTest()
+    [Xunit.Fact]
+    public void PreReview_RedWithoutTrx_RoutesDeveloperWithDiagnostic()
     {
         var (kernel, goal) = SoftwareGoal();
+        var developer = goal.Tasks.Single(task => task.RequiredRole == AgentRole.Developer);
         var tester = goal.Tasks.Single(task => task.RequiredRole == AgentRole.Tester);
         var reviewer = goal.Tasks.Single(task => task.RequiredRole == AgentRole.Reviewer);
         foreach (var task in goal.Tasks.TakeWhile(task => task.Id != reviewer.Id))
@@ -6463,37 +6464,25 @@ public sealed class ConductorDriverTests
             PassVerification(kernel, goal, task);
         }
 
-        TaskId? retriedTaskId = null;
+        var retriedTaskIds = new List<TaskId>();
+        string? retryMessage = null;
         string? escalation = null;
-        var evidenceRuns = 0;
-        const string checkName = "reviewer mapped project evidence: Core.Tests";
+        const string diagnostic = "error CS0019: Operator '??=' cannot be applied to operands of type 'Func<GoalId, Goal?>' and 'lambda expression'";
         var driver = MakeDriver(
             getFacts: _ => new GoalLifecycleFacts(WorkspaceExists: true),
             getPreReviewEvidenceContext: _ => FocusedPreReviewContext("plumbing-red-sha"),
-            runFocusedEvidence: (_, request) =>
-            {
-                evidenceRuns++;
-                return evidenceRuns == 1
-                    ? new FocusedEvidenceRunResult(
-                        request,
-                        Accepted: true,
-                        Passed: false,
-                        Summary: "test process produced no TRX",
-                        Checks:
-                        [
-                            new AcceptanceCheckResult(
-                                checkName,
-                                false,
-                                1,
-                                $"[FAIL] {checkName}: failed — no TRX produced")
-                        ])
-                    : PassingPreReviewEvidence(request);
-            },
+            runFocusedEvidence: (_, request) => new FocusedEvidenceRunResult(
+                request,
+                Accepted: true,
+                Passed: false,
+                Summary: "build failed before tests executed",
+                Checks: [new AcceptanceCheckResult("focused build", false, 1, diagnostic)]),
             recordPreReviewEvidence: (goalId, taskId, receipt) =>
                 kernel.RecordPreReviewEvidence(goalId, taskId, receipt),
             retryTaskWithRoundKind: (goalId, taskId, message, roundKind) =>
             {
-                retriedTaskId = taskId;
+                retriedTaskIds.Add(taskId);
+                retryMessage = message;
                 return kernel.RetryTask(goalId, taskId, message, retryRoundKind: roundKind);
             },
             dispatchAndStart: _ => DispatchStartOutcome.Started(),
@@ -6501,15 +6490,13 @@ public sealed class ConductorDriverTests
 
         driver.AdvanceOnce(goal, ConductorAutonomyPolicy.Permissive);
 
-        Assert.Equal(tester.Id, retriedTaskId);
+        Assert.Equal([developer.Id], retriedTaskIds);
+        Assert.DoesNotContain(tester.Id, retriedTaskIds);
+        Assert.Contains(diagnostic, retryMessage, StringComparison.Ordinal);
+        Assert.Contains("plumbing-red-sha", retryMessage, StringComparison.Ordinal);
         Assert.Null(escalation);
-
-        PassVerification(kernel, goal, tester);
-        driver.AdvanceOnce(goal, ConductorAutonomyPolicy.Permissive);
-
-        Assert.Equal(2, evidenceRuns);
-        Assert.Null(escalation);
-        Assert.Equal(PreReviewEvidenceDisposition.Green, reviewer.PreReviewEvidenceReceipt?.Disposition);
+        Assert.Equal(PreReviewEvidenceDisposition.Red, reviewer.PreReviewEvidenceReceipt?.Disposition);
+        Assert.Empty(reviewer.PreReviewEvidenceReceipt?.FailingTestIdentities ?? []);
     }
 
     [Xunit.Fact(DisplayName = "ConductorDriver_pre_review_no_applicable_tests_is_explicit_green_path")]
