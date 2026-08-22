@@ -3,13 +3,43 @@ namespace Mcg.AgentOrchestrator.Core.Tests;
 public sealed class RepositoryTestImpactFilterResolutionTests
 {
     [Xunit.Fact]
-    public void DottedChangedTestFileUsesEveryDeclaredClass()
+    public void DottedChangedTestFileUsesDeclaredClass()
     {
-        var reader = new FileSystemTestClassDeclarationReader(FindRepositoryRoot());
+        // Mirrors CliCommandTests.PersistentRunnerCommands.cs, whose declared class removes the dot.
+        const string path =
+            "tests/Mcg.AgentOrchestrator.Infrastructure.Tests/CliCommandTests.PersistentRunnerCommands.cs";
+        var reader = SourceDeclarationReader.ForFiles(
+            (path, TestSource("CliCommandTestsPersistentRunnerCommands")));
+
         var plan = RepositoryTestImpactPlanner.Plan(
-            RepositoryChangeClassifier.Classify([
-                "tests/Mcg.AgentOrchestrator.Infrastructure.Tests/CliCommandTests.GoalLifecycleCommands.cs"
-            ]),
+            RepositoryChangeClassifier.Classify([path]),
+            reader);
+
+        var check = Assert.Single(plan.Checks);
+        Assert.Equal("focused changed infrastructure tests", check.Name);
+        Assert.Equal(
+            "FullyQualifiedName~CliCommandTestsPersistentRunnerCommands",
+            check.Command[^1]);
+        Assert.DoesNotContain('.', check.Command[^1]["FullyQualifiedName~".Length..]);
+    }
+
+    [Xunit.Fact]
+    public void DottedMultiClassFileUsesEveryDeclaredClass()
+    {
+        // Mirrors CliCommandTests.GoalLifecycleCommands.cs, including its non-derivable classes.
+        const string path =
+            "tests/Mcg.AgentOrchestrator.Infrastructure.Tests/CliCommandTests.GoalLifecycleCommands.cs";
+        var reader = SourceDeclarationReader.ForFiles(
+            (path, TestSource(
+                "CliCommandTestsGoalLifecycleCommands",
+                "CliCommandTestsIsolatedBuildLeaseCommands",
+                "CliCommandTestsGoalLifecycleCleanupHooksAbandon",
+                "CliCommandTestsGoalLifecycleCommandsCreation",
+                "CliCommandTestsGoalLifecycleCleanupHooksAcceptance",
+                "CliCommandTestsGoalLifecycleCleanupHooks")));
+
+        var plan = RepositoryTestImpactPlanner.Plan(
+            RepositoryChangeClassifier.Classify([path]),
             reader);
 
         var check = Assert.Single(plan.Checks);
@@ -30,11 +60,12 @@ public sealed class RepositoryTestImpactFilterResolutionTests
     [Xunit.Fact]
     public void ChangedFileWithNoQualifyingClassAbandonsFocusedFilter()
     {
-        var reader = new FileSystemTestClassDeclarationReader(FindRepositoryRoot());
+        const string path = "tests/Mcg.AgentOrchestrator.Core.Tests/CoreTestSupport.cs";
+        var reader = SourceDeclarationReader.ForFiles(
+            (path, "internal static class CoreTestSupport { }"));
+
         var plan = RepositoryTestImpactPlanner.Plan(
-            RepositoryChangeClassifier.Classify([
-                "tests/Mcg.AgentOrchestrator.Core.Tests/CoreTestSupport.cs"
-            ]),
+            RepositoryChangeClassifier.Classify([path]),
             reader);
 
         var check = Assert.Single(plan.Checks);
@@ -47,13 +78,18 @@ public sealed class RepositoryTestImpactFilterResolutionTests
     [Xunit.Fact]
     public void OrdinarySingleClassFiltersRemainByteIdentical()
     {
-        var reader = new FileSystemTestClassDeclarationReader(FindRepositoryRoot());
+        const string taskBriefPath = "tests/Mcg.AgentOrchestrator.Core.Tests/TaskBriefTests.cs";
+        const string classifierPath =
+            "tests/Mcg.AgentOrchestrator.Core.Tests/RepositoryChangeClassifierTests.cs";
+        const string docsPath =
+            "tests/Mcg.AgentOrchestrator.Core.Tests/AgentHarnessDocsDriftTests.cs";
+        var reader = SourceDeclarationReader.ForFiles(
+            (taskBriefPath, TestSource("TaskBriefTests")),
+            (classifierPath, TestSource("RepositoryChangeClassifierTests")),
+            (docsPath, TestSource("AgentHarnessDocsDriftTests")));
+
         var plan = RepositoryTestImpactPlanner.Plan(
-            RepositoryChangeClassifier.Classify([
-                "tests/Mcg.AgentOrchestrator.Core.Tests/TaskBriefTests.cs",
-                "tests/Mcg.AgentOrchestrator.Core.Tests/RepositoryChangeClassifierTests.cs",
-                "tests/Mcg.AgentOrchestrator.Core.Tests/AgentHarnessDocsDriftTests.cs"
-            ]),
+            RepositoryChangeClassifier.Classify([taskBriefPath, classifierPath, docsPath]),
             reader);
 
         var check = Assert.Single(plan.Checks);
@@ -68,11 +104,19 @@ public sealed class RepositoryTestImpactFilterResolutionTests
     [Xunit.Fact]
     public void DotFreeMultiClassFileWidensToEveryDeclaredTestClass()
     {
-        var reader = new FileSystemTestClassDeclarationReader(FindRepositoryRoot());
+        const string path =
+            "tests/Mcg.AgentOrchestrator.Infrastructure.Tests/GoalAcceptanceVerifierTests.cs";
+        var reader = SourceDeclarationReader.ForFiles(
+            (path, TestSource(
+                "AcceptanceOutputCaptureTests",
+                "HermeticVerificationEnvironmentTests",
+                "GoalAcceptanceVerifierTests",
+                "GoalAcceptanceVerifierDotnetBuildSlotTests",
+                "RealProcessShardAlphaSmokeTests",
+                "RealProcessShardBetaSmokeTests")));
+
         var plan = RepositoryTestImpactPlanner.Plan(
-            RepositoryChangeClassifier.Classify([
-                "tests/Mcg.AgentOrchestrator.Infrastructure.Tests/GoalAcceptanceVerifierTests.cs"
-            ]),
+            RepositoryChangeClassifier.Classify([path]),
             reader);
 
         var check = Assert.Single(plan.Checks);
@@ -89,7 +133,12 @@ public sealed class RepositoryTestImpactFilterResolutionTests
     [Xunit.Fact]
     public void EveryRepositoryTestFileIsNeverNarrowerThanLegacySelection()
     {
-        var root = FindRepositoryRoot();
+        if (!TryFindRepositoryRoot(out var root))
+        {
+            Assert.Skip("Repository census skipped because no repository root is reachable in this lane.");
+            return;
+        }
+
         var reader = new FileSystemTestClassDeclarationReader(root);
         var projectDirectories = new[]
         {
@@ -175,7 +224,7 @@ public sealed class RepositoryTestImpactFilterResolutionTests
     [Xunit.Fact]
     public void DottedOrchestrationSourceAbandonsFocusedFilter()
     {
-        var reader = new FileSystemTestClassDeclarationReader(FindRepositoryRoot());
+        var reader = new StubDeclarationReader(TestClassDeclarations.Unreadable);
         var plan = RepositoryTestImpactPlanner.Plan(
             RepositoryChangeClassifier.Classify([
                 "src/Mcg.AgentOrchestrator.App/Orchestration/ConductorDriver.MergeTrains.cs"
@@ -186,6 +235,20 @@ public sealed class RepositoryTestImpactFilterResolutionTests
         Assert.Equal("infrastructure tests", check.Name);
         Assert.DoesNotContain("--filter", check.Command);
         Assert.DoesNotContain("ConductorDriver.MergeTrainsTests", check.Command);
+    }
+
+    [Xunit.Fact]
+    public void ExplicitRepositoryRootRejectsAmbientRelativePath()
+    {
+        var summary = RepositoryChangeClassifier.Classify([
+            "tests/Mcg.AgentOrchestrator.Core.Tests/TaskBriefTests.cs"
+        ]);
+
+        var exception = Assert.Throws<ArgumentException>(() =>
+            RepositoryTestImpactPlanner.Plan(summary, "."));
+
+        Assert.Equal("repositoryRoot", exception.ParamName);
+        Assert.Contains("absolute path", exception.Message, StringComparison.Ordinal);
     }
 
     [Xunit.Fact]
@@ -237,15 +300,22 @@ public sealed class RepositoryTestImpactFilterResolutionTests
     [Xunit.Fact]
     public void MissingFileIsUnreadable()
     {
-        var reader = new FileSystemTestClassDeclarationReader(FindRepositoryRoot());
+        var reader = SourceDeclarationReader.ForFiles();
 
-        var declarations = reader.ReadFile("tests/Mcg.AgentOrchestrator.Core.Tests/DoesNotExist.cs");
+        var declarations = reader.ReadFile(
+            "tests/Mcg.AgentOrchestrator.Core.Tests/DoesNotExist.cs");
 
         Assert.Equal(TestClassDeclarationOutcome.Unreadable, declarations.Outcome);
         Assert.Empty(declarations.ClassNames);
     }
 
-    private static string FindRepositoryRoot()
+    private static string TestSource(params string[] classNames) =>
+        string.Join(
+            Environment.NewLine,
+            classNames.Select(name =>
+                $"public sealed class {name} {{ [Xunit.Fact] public void Runs() {{ }} }}"));
+
+    private static bool TryFindRepositoryRoot(out string root)
     {
         foreach (var candidate in new[] { Environment.CurrentDirectory, AppContext.BaseDirectory })
         {
@@ -255,14 +325,49 @@ public sealed class RepositoryTestImpactFilterResolutionTests
                 if (Directory.Exists(Path.Combine(directory.FullName, ".git")) ||
                     File.Exists(Path.Combine(directory.FullName, ".git")))
                 {
-                    return directory.FullName;
+                    root = directory.FullName;
+                    return true;
                 }
 
                 directory = directory.Parent;
             }
         }
 
-        throw new InvalidOperationException("Repository root was not found.");
+        root = string.Empty;
+        return false;
+    }
+
+    private sealed class SourceDeclarationReader : ITestClassDeclarationReader
+    {
+        private readonly IReadOnlyDictionary<string, string> _sources;
+
+        private SourceDeclarationReader(IReadOnlyDictionary<string, string> sources)
+        {
+            _sources = sources;
+        }
+
+        internal static SourceDeclarationReader ForFiles(
+            params (string Path, string Source)[] files) =>
+            new(files.ToDictionary(
+                file => file.Path,
+                file => file.Source,
+                StringComparer.OrdinalIgnoreCase));
+
+        public TestClassDeclarations ReadFile(string repositoryRelativePath)
+        {
+            if (!_sources.TryGetValue(repositoryRelativePath, out var source) ||
+                !CSharpTestClassScanner.TryReadClassNames(source, out var classNames))
+            {
+                return TestClassDeclarations.Unreadable;
+            }
+
+            return classNames.Count == 0
+                ? TestClassDeclarations.NoQualifyingClass
+                : TestClassDeclarations.Resolved(classNames);
+        }
+
+        public TestClassDeclarations ReadProject(string repositoryRelativeDirectory) =>
+            TestClassDeclarations.Unreadable;
     }
 
     private sealed class StubDeclarationReader(TestClassDeclarations projectDeclarations)

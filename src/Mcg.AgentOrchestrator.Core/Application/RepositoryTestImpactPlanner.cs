@@ -85,8 +85,26 @@ public static class RepositoryTestImpactPlanner
     public static RepositoryTestImpactPlan Plan(IEnumerable<string> paths) =>
         Plan(RepositoryChangeClassifier.Classify(paths));
 
+    public static RepositoryTestImpactPlan Plan(IEnumerable<string> paths, string repositoryRoot) =>
+        Plan(RepositoryChangeClassifier.Classify(paths), repositoryRoot);
+
     public static RepositoryTestImpactPlan Plan(RepositoryChangeSummary summary) =>
         Plan(summary, FileSystemTestClassDeclarationReader.CreateForCurrentRepository());
+
+    public static RepositoryTestImpactPlan Plan(
+        RepositoryChangeSummary summary,
+        string repositoryRoot)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(repositoryRoot);
+        if (!Path.IsPathFullyQualified(repositoryRoot))
+        {
+            throw new ArgumentException(
+                "The repository root must be an absolute path.",
+                nameof(repositoryRoot));
+        }
+
+        return Plan(summary, new FileSystemTestClassDeclarationReader(repositoryRoot));
+    }
 
     internal static RepositoryTestImpactPlan Plan(
         RepositoryChangeSummary summary,

@@ -2369,7 +2369,7 @@ public sealed class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
             return null;
         }
 
-        var plan = RepositoryTestImpactPlanner.Plan(summary);
+        var plan = RepositoryTestImpactPlanner.Plan(summary, worktreePath);
         if (!plan.RequiresBuild ||
             plan.RequiresBroadVerification ||
             plan.Checks.Any(check => check.Command.Count == 0))
@@ -8415,7 +8415,9 @@ public sealed class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
             {
                 return changedFiles is null
                     ? new AcceptanceManifest()
-                    : FromTestImpactPlan(worktreePath, RepositoryTestImpactPlanner.Plan(changedFiles));
+                    : FromTestImpactPlan(
+                        worktreePath,
+                        RepositoryTestImpactPlanner.Plan(changedFiles, worktreePath));
             }
 
             return JsonSerializer.Deserialize<AcceptanceManifest>(
