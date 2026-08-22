@@ -1,0 +1,1066 @@
+using Mcg.AgentOrchestrator.Core;
+using Mcg.AgentOrchestrator.App.Orchestration;
+using Mcg.AgentOrchestrator.Infrastructure;
+using System.Diagnostics;
+using System.Text;
+using System.Text.Json;
+using System.Text.Json.Nodes;
+using System.Xml.Linq;
+
+[Xunit.Collection(TestCollections.JobAccounting)]
+public sealed class GoalAcceptanceVerifierDotnetBuildSlotTestsFocusedEvidence : GoalAcceptanceVerifierDotnetBuildSlotTests
+{
+    [Xunit.Fact]
+    public async Task FocusedEvidence_SixTargetsOneProject_PreservesOneFilteredCheckAndEveryTarget()
+    {
+        string[] targets =
+        [
+            "CliCommandTests",
+            "WorkerShellTests",
+            "WorkerSandboxCapabilityPlannerTests",
+            "DashboardValidationHarnessTests",
+            "ConductorDriverTests",
+            "GoalWorktreeTests"
+        ];
+        var (result, calls) = await RunMappedEvidenceAsync(
+            $"Infrastructure.Tests: {string.Join(',', targets)}");
+
+        Assert.True(result.Accepted);
+        Assert.True(result.Passed);
+        var check = Assert.Single(result.Checks);
+        Assert.StartsWith("reviewer focused evidence: Infrastructure.Tests ", check.Name, StringComparison.Ordinal);
+        Assert.Contains("mode=focused reason=explicit-focused-mapping", result.Summary);
+        Assert.NotNull(result.Coverage);
+        Assert.Equal("focused", result.Coverage.ExecutionMode);
+        Assert.Equal("explicit-focused-mapping", result.Coverage.ExecutionReason);
+        var targetCoverage = Assert.Single(result.Coverage.TargetToChecks);
+        Assert.Equal(
+            $"Infrastructure.Tests: {string.Join(',', targets)}",
+            targetCoverage.Target);
+        Assert.Equal(check.Name, Assert.Single(targetCoverage.CheckNames));
+        var testCall = Assert.Single(calls.Where(call =>
+            IsMtpExecutableCall(call, "Mcg.AgentOrchestrator.Infrastructure.Tests")));
+        Assert.Contains("--filter-class", testCall);
+        Assert.All(targets, target =>
+            Assert.Contains(testCall, argument => argument.Contains(target, StringComparison.Ordinal)));
+    }
+
+    [Xunit.Theory]
+    [Xunit.InlineData("GoalAcceptanceVerifierTests")]
+    [Xunit.InlineData("Infrastructure.Tests: GoalAcceptanceVerifierTests")]
+    [Xunit.InlineData("FullyQualifiedName~GoalAcceptanceVerifierTests")]
+    [Xunit.InlineData("Infrastructure.Tests: FullyQualifiedName~GoalAcceptanceVerifierTests")]
+    public async Task FocusedEvidenceAcceptsBareAndFullyQualifiedClassSpellings(string request)
+    {
+        var (result, calls) = await RunMappedEvidenceAsync(request);
+
+        Assert.True(result.Accepted);
+        Assert.True(result.Passed);
+        var testCall = Assert.Single(calls.Where(call =>
+            IsMtpExecutableCall(call, "Mcg.AgentOrchestrator.Infrastructure.Tests")));
+        AssertArgumentPair(testCall, "--filter-class", "*GoalAcceptanceVerifierTests*");
+        Assert.DoesNotContain("Infrastructure.Tests:", testCall);
+    }
+
+    [Xunit.Fact]
+    public async Task MethodQualifiedFocusedEvidenceUsesExactMethodSelector()
+    {
+        var (result, calls) = await RunMappedEvidenceAsync(
+            "Infrastructure.Tests: FullyQualifiedName~SelectionProbeTests.SelectsOneMethod",
+            configureWorkspace: root =>
+            {
+                var directory = Path.Combine(root, "tests", "Mcg.AgentOrchestrator.Infrastructure.Tests");
+                Directory.CreateDirectory(directory);
+                File.WriteAllText(
+                    Path.Combine(directory, "SelectionProbeTests.cs"),
+                    """
+                    sealed class SelectionProbeTests
+                    {
+                        [Xunit.Fact]
+                        public void SelectsOneMethod() { }
+                    }
+                    """);
+            });
+
+        Assert.True(result.Accepted);
+        Assert.True(result.Passed);
+        var testCall = Assert.Single(calls.Where(call =>
+            IsMtpExecutableCall(call, "Mcg.AgentOrchestrator.Infrastructure.Tests")));
+        AssertArgumentPair(
+            testCall,
+            "--filter-method",
+            "*SelectionProbeTests.SelectsOneMethod*");
+        Assert.DoesNotContain("--filter-class", testCall);
+    }
+
+    [Xunit.Fact]
+    public async Task MethodQualifiedFocusedEvidencePreservesContainsSemantics()
+    {
+        var (result, calls) = await RunMappedEvidenceAsync(
+            "Infrastructure.Tests: FullyQualifiedName~SelectionProbeTests.SelectsOne",
+            configureWorkspace: root =>
+            {
+                var directory = Path.Combine(root, "tests", "Mcg.AgentOrchestrator.Infrastructure.Tests");
+                Directory.CreateDirectory(directory);
+                File.WriteAllText(
+                    Path.Combine(directory, "SelectionProbeTests.cs"),
+                    """
+                    sealed class SelectionProbeTests
+                    {
+                        [Xunit.Fact]
+                        public void SelectsOneMethod() { }
+                    }
+                    """);
+            });
+
+        Assert.True(result.Accepted);
+        var testCall = Assert.Single(calls.Where(call =>
+            IsMtpExecutableCall(call, "Mcg.AgentOrchestrator.Infrastructure.Tests")));
+        AssertArgumentPair(testCall, "--filter-method", "*SelectionProbeTests.SelectsOne*");
+        Assert.DoesNotContain("--filter-class", testCall);
+    }
+
+    [Xunit.Fact]
+    public async Task DeclarationLookingTextInsideRawStringIsNotResolvedAsTestMethod()
+    {
+        const string offendingToken = "FullyQualifiedName~SelectionProbeTests.SelectsOneMethod";
+        var (result, calls) = await RunMappedEvidenceAsync(
+            $"Infrastructure.Tests: {offendingToken}",
+            configureWorkspace: root =>
+            {
+                var directory = Path.Combine(root, "tests", "Mcg.AgentOrchestrator.Infrastructure.Tests");
+                Directory.CreateDirectory(directory);
+                File.WriteAllText(
+                    Path.Combine(directory, "SelectionProbeTests.cs"),
+                    """"
+                    sealed class SelectionProbeTests
+                    {
+                        private const string Fixture = """
+                            [Xunit.Fact]
+                            public void SelectsOneMethod() { }
+                            """;
+                    }
+                    """");
+            });
+
+        Assert.False(result.Accepted);
+        Assert.Equal(FocusedEvidenceRejectionCode.UnresolvableSelection, result.Rejection?.Code);
+        Assert.Equal(" " + offendingToken, result.Rejection?.OffendingToken);
+        Assert.Empty(calls);
+    }
+
+    [Xunit.Fact]
+    public async Task UnreadableFocusedEvidenceSourceIsTypedAsApparatusFailure()
+    {
+        if (!OperatingSystem.IsWindows())
+        {
+            return;
+        }
+
+        const string offendingToken = "FullyQualifiedName~LockedSelectionProbeTests.SelectsOneMethod";
+        var (result, calls) = await RunMappedEvidenceAsync(
+            $"Infrastructure.Tests: {offendingToken}",
+            configureWorkspace: root =>
+            {
+                var directory = Path.Combine(root, "tests", "Mcg.AgentOrchestrator.Infrastructure.Tests");
+                Directory.CreateDirectory(directory);
+                File.WriteAllText(
+                    Path.Combine(directory, "LockedSelectionProbeTests.cs"),
+                    """
+                    sealed class LockedSelectionProbeTests
+                    {
+                        [Xunit.Fact]
+                        public void SelectsOneMethod() { }
+                    }
+                    """);
+            },
+            holdWorkspaceResource: root => File.Open(
+                Path.Combine(
+                    root,
+                    "tests",
+                    "Mcg.AgentOrchestrator.Infrastructure.Tests",
+                    "LockedSelectionProbeTests.cs"),
+                FileMode.Open,
+                FileAccess.ReadWrite,
+                FileShare.None));
+
+        Assert.False(result.Accepted);
+        Assert.Equal(FocusedEvidenceRejectionCode.SourceDiscoveryFailure, result.Rejection?.Code);
+        Assert.Equal(" " + offendingToken, result.Rejection?.OffendingToken);
+        Assert.Empty(calls);
+    }
+
+    [Xunit.Fact]
+    public async Task InvocationNameIsNotResolvedAsTestMethod()
+    {
+        const string offendingToken = "FullyQualifiedName~GoalAcceptanceVerifierTests.WriteAllText";
+        var (result, calls) = await RunMappedEvidenceAsync($"Infrastructure.Tests: {offendingToken}");
+
+        Assert.False(result.Accepted);
+        Assert.Equal(FocusedEvidenceRejectionCode.UnresolvableSelection, result.Rejection?.Code);
+        Assert.Equal(" " + offendingToken, result.Rejection?.OffendingToken);
+        Assert.Empty(calls);
+    }
+
+    [Xunit.Fact]
+    public async Task SiblingTestMethodIsNotResolvedForSelectedClass()
+    {
+        const string offendingToken = "FullyQualifiedName~SelectionProbeTests.SiblingMethod";
+        var (result, calls) = await RunMappedEvidenceAsync(
+            $"Infrastructure.Tests: {offendingToken}",
+            configureWorkspace: root =>
+            {
+                var directory = Path.Combine(root, "tests", "Mcg.AgentOrchestrator.Infrastructure.Tests");
+                Directory.CreateDirectory(directory);
+                File.WriteAllText(
+                    Path.Combine(directory, "SelectionProbeTests.cs"),
+                    """
+                    sealed class SelectionProbeTests { }
+
+                    sealed class SiblingTests
+                    {
+                        [Xunit.Fact]
+                        public void SiblingMethod() { }
+                    }
+                    """);
+            });
+
+        Assert.False(result.Accepted);
+        Assert.Equal(FocusedEvidenceRejectionCode.UnresolvableSelection, result.Rejection?.Code);
+        Assert.Equal(" " + offendingToken, result.Rejection?.OffendingToken);
+        Assert.Empty(calls);
+    }
+
+    [Xunit.Fact]
+    public async Task UnsupportedFocusedEvidenceTokenIsTypedAndExactBeforeLaunch()
+    {
+        const string offendingToken = "Bogus == token";
+        var (result, calls) = await RunMappedEvidenceAsync(
+            $"Infrastructure.Tests: FullyQualifiedName~GoalAcceptanceVerifierTests|{offendingToken}");
+
+        Assert.False(result.Accepted);
+        Assert.False(result.Passed);
+        Assert.NotNull(result.Rejection);
+        Assert.Equal(FocusedEvidenceRejectionCode.UnsupportedToken, result.Rejection.Code);
+        Assert.Equal(offendingToken, result.Rejection.OffendingToken);
+        Assert.Contains(offendingToken, result.Rejection.Detail, StringComparison.Ordinal);
+        Assert.Empty(calls);
+    }
+
+    [Xunit.Fact]
+    public async Task BareInvalidTokenPreservesOriginalWhitespace()
+    {
+        const string offendingToken = " Bogus == token ";
+        var (result, calls) = await RunMappedEvidenceAsync(
+            $"Infrastructure.Tests: GoalAcceptanceVerifierTests,{offendingToken}");
+
+        Assert.False(result.Accepted);
+        Assert.Equal(FocusedEvidenceRejectionCode.UnsupportedToken, result.Rejection?.Code);
+        Assert.Equal(offendingToken, result.Rejection?.OffendingToken);
+        Assert.Empty(calls);
+    }
+
+    [Xunit.Fact]
+    public async Task UnresolvableMethodSelectionIsRejectedWithoutClassFallback()
+    {
+        const string offendingToken = "FullyQualifiedName~MissingTests.MissingMethod";
+        var (result, calls) = await RunMappedEvidenceAsync(
+            $"Infrastructure.Tests: {offendingToken}");
+
+        Assert.False(result.Accepted);
+        Assert.Equal(FocusedEvidenceRejectionCode.UnresolvableSelection, result.Rejection?.Code);
+        Assert.Equal(" " + offendingToken, result.Rejection?.OffendingToken);
+        Assert.Empty(calls);
+    }
+
+    [Xunit.Fact]
+    public async Task OversizedFocusedEvidenceTokenIsRejectedBeforeLaunch()
+    {
+        var offendingToken = "FullyQualifiedName~" + new string('A', 1025);
+        var (result, calls) = await RunMappedEvidenceAsync($"Infrastructure.Tests: {offendingToken}");
+
+        Assert.False(result.Accepted);
+        Assert.Equal(FocusedEvidenceRejectionCode.OversizedFilter, result.Rejection?.Code);
+        Assert.Equal(" " + offendingToken, result.Rejection?.OffendingToken);
+        Assert.Empty(calls);
+    }
+
+    [Xunit.Fact]
+    public async Task WhitespacePaddedTokenCannotBypassLengthLimit()
+    {
+        var offendingToken = "GoalAcceptanceVerifierTests" + new string(' ', 1024);
+        var (result, calls) = await RunMappedEvidenceAsync($"Infrastructure.Tests: {offendingToken}");
+
+        Assert.False(result.Accepted);
+        Assert.Equal(FocusedEvidenceRejectionCode.OversizedFilter, result.Rejection?.Code);
+        Assert.Equal(" " + offendingToken, result.Rejection?.OffendingToken);
+        Assert.Empty(calls);
+    }
+
+    [Xunit.Theory]
+    [Xunit.InlineData(0)]
+    [Xunit.InlineData(8)]
+    public async Task FocusedEvidenceZeroExecutedTestsIsApparatusFailure(int exitCode)
+    {
+        var (result, _) = await RunMappedEvidenceAsync(
+            "Infrastructure.Tests: GoalAcceptanceVerifierTests",
+            executedTestCount: 0,
+            testExitCode: exitCode);
+
+        Assert.True(result.Accepted);
+        Assert.False(result.Passed);
+        Assert.Equal(FindingEvidenceOutcomeReason.ApparatusFailure, result.OutcomeReason);
+        var arm = Assert.Single(result.Arms!);
+        Assert.Equal(FindingEvidenceArmDisposition.ApparatusFailure, arm.Disposition);
+        var check = Assert.Single(result.Checks);
+        Assert.Equal(0, check.ExecutedTestCount);
+        Assert.Equal(
+            AcceptanceFailureClassifications.FocusedSelectionApparatusFailure,
+            check.FailureClassification);
+        Assert.Empty(check.FailingTestIdentities!);
+        Assert.Contains("executed 0 tests", check.OutputTail, StringComparison.Ordinal);
+    }
+
+    [Xunit.Fact]
+    public void FocusedEvidence_BaselineApparatusFailureOverridesCandidateRed()
+    {
+        var outcome = GoalAcceptanceVerifier.ClassifyFocusedEvidenceExperiment(
+            CreateFocusedEvidenceArm(FindingEvidenceArm.Candidate, FindingEvidenceArmDisposition.Red),
+            CreateFocusedEvidenceArm(FindingEvidenceArm.Baseline, FindingEvidenceArmDisposition.ApparatusFailure));
+
+        Assert.Equal(FindingEvidenceOutcomeReason.ApparatusFailure, outcome);
+    }
+
+    [Xunit.Fact]
+    public void FocusedEvidence_BaselineApparatusFailureOverridesCandidateInconclusive()
+    {
+        var outcome = GoalAcceptanceVerifier.ClassifyFocusedEvidenceExperiment(
+            CreateFocusedEvidenceArm(FindingEvidenceArm.Candidate, FindingEvidenceArmDisposition.Inconclusive),
+            CreateFocusedEvidenceArm(FindingEvidenceArm.Baseline, FindingEvidenceArmDisposition.ApparatusFailure));
+
+        Assert.Equal(FindingEvidenceOutcomeReason.ApparatusFailure, outcome);
+    }
+
+    [Xunit.Fact]
+    public async Task FocusedEvidence_TwoReceiptTargetsAcrossProjects_PreserveFocusedChecks()
+    {
+        var (result, calls) = await RunMappedEvidenceAsync(
+            "Core.Tests: DispatchOutcomeClassifyTests; " +
+            "Infrastructure.Tests: WorkerDispatchTestsWorkerResultClassification");
+
+        Assert.True(result.Accepted);
+        Assert.True(result.Passed);
+        Assert.Equal(
+            [
+                "reviewer focused evidence: Core.Tests FullyQualifiedName~DispatchOutcomeClassifyTests",
+                "reviewer focused evidence: Infrastructure.Tests FullyQualifiedName~WorkerDispatchTestsWorkerResultClassification"
+            ],
+            result.Checks.Select(check => check.Name));
+        Assert.Contains("mode=focused reason=explicit-focused-mapping", result.Summary);
+        var testCalls = calls
+            .Where(call =>
+                IsMtpExecutableCall(call, "Mcg.AgentOrchestrator.Core.Tests") ||
+                IsMtpExecutableCall(call, "Mcg.AgentOrchestrator.Infrastructure.Tests"))
+            .ToArray();
+        Assert.Equal(2, testCalls.Length);
+        Assert.True(IsMtpExecutableCall(testCalls[0], "Mcg.AgentOrchestrator.Core.Tests"));
+        Assert.True(IsMtpExecutableCall(testCalls[1], "Mcg.AgentOrchestrator.Infrastructure.Tests"));
+        Assert.All(testCalls, call => Assert.Contains("--filter-class", call));
+    }
+
+    [Xunit.Fact]
+    public async Task FocusedEvidence_MultipleMappedItems_PreservesFocusedChecks()
+    {
+        // Unchanged-behaviour guard: this passes before and after the overflow fix.
+        var (result, _) = await RunMappedEvidenceAsync(
+            "Infrastructure.Tests: AlphaTests,BetaTests; Core.Tests: GammaTests,DeltaTests");
+
+        Assert.True(result.Accepted);
+        Assert.True(result.Passed);
+        Assert.Equal(
+            [
+                "reviewer focused evidence: Infrastructure.Tests FullyQualifiedName~AlphaTests|FullyQualifiedName~BetaTests",
+                "reviewer focused evidence: Core.Tests FullyQualifiedName~GammaTests|FullyQualifiedName~DeltaTests"
+            ],
+            result.Checks.Select(check => check.Name));
+        Assert.Contains("mode=focused reason=explicit-focused-mapping", result.Summary);
+    }
+
+    [Xunit.Fact]
+    public async Task FocusedEvidence_CompatibleSameProjectItemsUseOneDeterministicInvocation()
+    {
+        var (result, calls) = await RunMappedEvidenceAsync(
+            "Infrastructure.Tests: GateReadyCandidateProjectorTests; " +
+            "Infrastructure.Tests: ConductorDriverTests; " +
+            "Infrastructure.Tests: GateReadyCandidateProjectorTests",
+            executedTestCount: 2,
+            executedTestIdentities:
+            [
+                "Mcg.AgentOrchestrator.Infrastructure.Tests.ConductorDriverTests.ExecutedMember",
+                "Mcg.AgentOrchestrator.Infrastructure.Tests.GateReadyCandidateProjectorTests.ExecutedMember"
+            ]);
+
+        Assert.True(result.Accepted);
+        Assert.True(result.Passed);
+        var check = Assert.Single(result.Checks);
+        Assert.Equal(
+            "reviewer focused evidence: Infrastructure.Tests " +
+            "FullyQualifiedName~ConductorDriverTests|FullyQualifiedName~GateReadyCandidateProjectorTests",
+            check.Name);
+        Assert.Contains("compatible-same-project-batch", result.Summary, StringComparison.Ordinal);
+        var testCall = Assert.Single(calls.Where(call =>
+            IsMtpExecutableCall(call, "Mcg.AgentOrchestrator.Infrastructure.Tests")));
+        Assert.Contains("--filter-class", testCall);
+        Assert.Contains("*ConductorDriverTests*", testCall);
+        Assert.Contains("*GateReadyCandidateProjectorTests*", testCall);
+    }
+
+    [Xunit.Fact]
+    public async Task FocusedEvidence_CompatibleBatchReportsUncoveredSelectionAsApparatusFailure()
+    {
+        var (result, calls) = await RunMappedEvidenceAsync(
+            "Infrastructure.Tests: ConductorDriverTests; " +
+            "Infrastructure.Tests: GateReadyCandidateProjectorTests",
+            executedTestCount: 1,
+            executedTestIdentities:
+            [
+                "Mcg.AgentOrchestrator.Infrastructure.Tests.ConductorDriverTests.ExecutedMember"
+            ]);
+
+        Assert.True(result.Accepted);
+        Assert.False(result.Passed);
+        Assert.Equal(FindingEvidenceOutcomeReason.ApparatusFailure, result.OutcomeReason);
+        var check = Assert.Single(result.Checks);
+        Assert.Equal(1, check.ExecutedTestCount);
+        Assert.Equal(
+            AcceptanceFailureClassifications.FocusedSelectionApparatusFailure,
+            check.FailureClassification);
+        Assert.Contains("GateReadyCandidateProjectorTests", check.OutputTail, StringComparison.Ordinal);
+        Assert.Contains("matching 0 tests", check.OutputTail, StringComparison.Ordinal);
+        Assert.Single(calls.Where(call =>
+            IsMtpExecutableCall(call, "Mcg.AgentOrchestrator.Infrastructure.Tests")));
+    }
+
+    [Xunit.Fact]
+    public async Task FocusedEvidence_MethodPrefixCoverageUsesRunnerSubstringSemantics()
+    {
+        var (result, _) = await RunMappedEvidenceAsync(
+            "Infrastructure.Tests: GoalAcceptanceVerifierTests.FocusedEvidence_CompatibleBatchReports; " +
+            "Infrastructure.Tests: ConductorDriverTests",
+            executedTestCount: 2,
+            executedTestIdentities:
+            [
+                "Mcg.AgentOrchestrator.Infrastructure.Tests.GoalAcceptanceVerifierTests." +
+                "FocusedEvidence_CompatibleBatchReportsUncoveredSelectionAsApparatusFailure",
+                "Mcg.AgentOrchestrator.Infrastructure.Tests.ConductorDriverTests.ExecutedMember"
+            ]);
+
+        Assert.True(result.Accepted);
+        Assert.True(result.Passed);
+        Assert.DoesNotContain(result.Checks, check =>
+            check.FailureClassification == AcceptanceFailureClassifications.FocusedSelectionApparatusFailure);
+    }
+
+    [Xunit.Fact]
+    public async Task FocusedEvidence_UnreadableSelectionReceiptReportsDistinctApparatusCause()
+    {
+        var (result, _) = await RunMappedEvidenceAsync(
+            "Infrastructure.Tests: ConductorDriverTests; " +
+            "Infrastructure.Tests: GateReadyCandidateProjectorTests",
+            executedTestCount: 2,
+            corruptTrx: true);
+
+        Assert.True(result.Accepted);
+        Assert.False(result.Passed);
+        Assert.Equal(FindingEvidenceOutcomeReason.ApparatusFailure, result.OutcomeReason);
+        var check = Assert.Single(result.Checks);
+        Assert.Equal(AcceptanceFailureClassifications.FocusedSelectionReceiptUnreadable, check.FailureClassification);
+        Assert.Contains("could not read test receipt", check.OutputTail, StringComparison.Ordinal);
+        Assert.DoesNotContain("matching 0 tests", check.OutputTail, StringComparison.Ordinal);
+    }
+
+    [Xunit.Fact]
+    public async Task FocusedEvidence_NativeProjectRequest_ReportsProjectMode()
+    {
+        var (nativeProjectResult, _) = await RunMappedEvidenceAsync("Infrastructure.Tests: mapped-project");
+        Assert.True(nativeProjectResult.Accepted);
+        Assert.True(nativeProjectResult.Passed);
+        Assert.Equal(
+            "reviewer mapped project evidence: Infrastructure.Tests",
+            nativeProjectResult.Checks.Single().Name);
+        Assert.Contains("mode=project reason=explicit-mapped-project-request", nativeProjectResult.Summary);
+    }
+
+    [Xunit.Fact]
+    public void FocusedEvidence_ExtractedInfrastructureAliasesResolveFromRegisteredMtpProjects()
+    {
+        const string providerProject =
+            "tests/Mcg.AgentOrchestrator.Infrastructure.Tests/ProviderEnvironment/" +
+            "Mcg.AgentOrchestrator.Infrastructure.ProviderEnvironment.Tests.csproj";
+        const string secondProject =
+            "tests/Mcg.AgentOrchestrator.Infrastructure.Tests/SecondModule/" +
+            "Mcg.AgentOrchestrator.Infrastructure.SecondModule.Tests.csproj";
+        var settings = new AcceptanceGateEngineSettings
+        {
+            MtpInvocations =
+            [
+                new AcceptanceMtpInvocation { Project = providerProject },
+                new AcceptanceMtpInvocation { Project = secondProject }
+            ]
+        };
+
+        Assert.True(GoalAcceptanceVerifier.TryResolveFocusedEvidenceProject(
+            "Infrastructure.ProviderEnvironment.Tests",
+            settings,
+            out var resolved));
+        Assert.Equal(providerProject, resolved);
+        Assert.Equal("Infrastructure.ProviderEnvironment.Tests", GoalAcceptanceVerifier.ProjectLabel(resolved));
+        Assert.True(GoalAcceptanceVerifier.TryResolveFocusedEvidenceProject(
+            "Infrastructure.SecondModule.Tests",
+            settings,
+            out resolved));
+        Assert.Equal(secondProject, resolved);
+    }
+
+    [Xunit.Fact]
+    public async Task FocusedEvidence_UmbrellaAliasRoutesMovedClassOnlyToOwningExtractedProject()
+    {
+        var calls = new List<string[]>();
+        var root = CreateManifestWorkspace("""
+            {
+              "version": 1,
+              "engine": {
+                "mtpInvocations": [
+                  {
+                    "project": "tests/Mcg.AgentOrchestrator.Infrastructure.Tests/Mcg.AgentOrchestrator.Infrastructure.Tests.csproj",
+                    "executablePathTemplate": "bin/{projectName}/{configuration}/{projectName}{executableExtension}",
+                    "firewallExecutablePathTemplate": "bin/{projectName}/{configuration}/{projectName}.exe",
+                    "arguments": [ "{executable}", "--results-directory", "{resultsDirectory}", "--report-trx-filename", "{trxFileName}", "--minimum-expected-tests", "1" ]
+                  },
+                  {
+                    "project": "tests/Mcg.AgentOrchestrator.Infrastructure.Tests/ProviderEnvironment/Mcg.AgentOrchestrator.Infrastructure.ProviderEnvironment.Tests.csproj",
+                    "executablePathTemplate": "bin/{projectName}/{configuration}/{projectName}{executableExtension}",
+                    "firewallExecutablePathTemplate": "bin/{projectName}/{configuration}/{projectName}.exe",
+                    "arguments": [ "{executable}", "--results-directory", "{resultsDirectory}", "--report-trx-filename", "{trxFileName}", "--minimum-expected-tests", "1" ]
+                  }
+                ]
+              },
+              "checks": [],
+              "forbiddenChangedPathGlobs": []
+            }
+            """);
+        var providerDirectory = Path.Combine(
+            root,
+            "tests",
+            "Mcg.AgentOrchestrator.Infrastructure.Tests",
+            "ProviderEnvironment");
+        Directory.CreateDirectory(providerDirectory);
+        File.WriteAllText(
+            Path.Combine(providerDirectory, "ProviderDefaultTests.cs"),
+            "sealed class ProviderDefaultTests { }");
+        var goalId = new GoalId(Guid.NewGuid().ToString("N"));
+        try
+        {
+            var verifier = new GoalAcceptanceVerifier((args, _, _) =>
+            {
+                calls.Add(args);
+                if (IsMtpExecutableCall(args, "Mcg.AgentOrchestrator.Infrastructure.Tests"))
+                {
+                    return Task.FromResult(new GoalAcceptanceVerifier.CommandResult(
+                        8,
+                        "Minimum expected tests was set to 1, but 0 tests were selected."));
+                }
+
+                if (IsMtpExecutableCall(args, "Mcg.AgentOrchestrator.Infrastructure.ProviderEnvironment.Tests"))
+                {
+                    WriteMtpTrx(args);
+                    return Task.FromResult(new GoalAcceptanceVerifier.CommandResult(0, "Passed: 1"));
+                }
+
+                return Task.FromResult(new GoalAcceptanceVerifier.CommandResult(0, "Build succeeded."));
+            });
+
+            var result = await verifier.RunFocusedEvidenceAsync(
+                root,
+                goalId,
+                "Infrastructure.Tests: FullyQualifiedName~ProviderDefaultTests");
+
+            Assert.True(result.Accepted);
+            Assert.True(result.Passed);
+            var check = Assert.Single(result.Checks);
+            Assert.Contains("Infrastructure.ProviderEnvironment.Tests", check.Name, StringComparison.Ordinal);
+            Assert.DoesNotContain(calls, call => IsMtpExecutableCall(
+                call,
+                "Mcg.AgentOrchestrator.Infrastructure.Tests"));
+            Assert.Single(calls, call => IsMtpExecutableCall(
+                call,
+                "Mcg.AgentOrchestrator.Infrastructure.ProviderEnvironment.Tests"));
+        }
+        finally
+        {
+            DotnetBuildEnvironmentManager.TryDeleteGoalArtifacts(goalId);
+            DeleteDirectoryWithRetry(root);
+        }
+    }
+
+    [Xunit.Fact]
+    public async Task FocusedEvidence_UmbrellaAliasSplitsParentAndMovedClassesByOwningProject()
+    {
+        var calls = new List<string[]>();
+        var root = CreateManifestWorkspace("""
+            {
+              "version": 1,
+              "engine": {
+                "mtpInvocations": [
+                  {
+                    "project": "tests/Mcg.AgentOrchestrator.Infrastructure.Tests/Mcg.AgentOrchestrator.Infrastructure.Tests.csproj",
+                    "executablePathTemplate": "bin/{projectName}/{configuration}/{projectName}{executableExtension}",
+                    "firewallExecutablePathTemplate": "bin/{projectName}/{configuration}/{projectName}.exe",
+                    "arguments": [ "{executable}", "--results-directory", "{resultsDirectory}", "--report-trx-filename", "{trxFileName}", "--minimum-expected-tests", "1" ]
+                  },
+                  {
+                    "project": "tests/Mcg.AgentOrchestrator.Infrastructure.Tests/ProviderEnvironment/Mcg.AgentOrchestrator.Infrastructure.ProviderEnvironment.Tests.csproj",
+                    "executablePathTemplate": "bin/{projectName}/{configuration}/{projectName}{executableExtension}",
+                    "firewallExecutablePathTemplate": "bin/{projectName}/{configuration}/{projectName}.exe",
+                    "arguments": [ "{executable}", "--results-directory", "{resultsDirectory}", "--report-trx-filename", "{trxFileName}", "--minimum-expected-tests", "1" ]
+                  }
+                ]
+              },
+              "checks": [],
+              "forbiddenChangedPathGlobs": []
+            }
+            """);
+        var providerDirectory = Path.Combine(
+            root,
+            "tests",
+            "Mcg.AgentOrchestrator.Infrastructure.Tests",
+            "ProviderEnvironment");
+        Directory.CreateDirectory(providerDirectory);
+        File.WriteAllText(
+            Path.Combine(providerDirectory, "ProviderDefaultTests.cs"),
+            "sealed class ProviderDefaultTests { }");
+        var goalId = new GoalId(Guid.NewGuid().ToString("N"));
+        try
+        {
+            var verifier = new GoalAcceptanceVerifier((args, _, _) =>
+            {
+                calls.Add(args);
+                if (IsMtpExecutableCall(args, "Mcg.AgentOrchestrator.Infrastructure.Tests") ||
+                    IsMtpExecutableCall(args, "Mcg.AgentOrchestrator.Infrastructure.ProviderEnvironment.Tests"))
+                {
+                    WriteMtpTrx(args);
+                    return Task.FromResult(new GoalAcceptanceVerifier.CommandResult(0, "Passed: 1"));
+                }
+
+                return Task.FromResult(new GoalAcceptanceVerifier.CommandResult(0, "Build succeeded."));
+            });
+
+            var result = await verifier.RunFocusedEvidenceAsync(
+                root,
+                goalId,
+                "Infrastructure.Tests: GoalAcceptanceVerifierTests,ProviderDefaultTests");
+
+            Assert.True(result.Accepted);
+            Assert.True(result.Passed);
+            Assert.Equal(2, result.Checks.Count);
+            var target = Assert.Single(result.Coverage?.TargetToChecks ?? []);
+            Assert.Equal(2, target.CheckNames.Count);
+            Assert.Single(calls, call => IsMtpExecutableCall(
+                call,
+                "Mcg.AgentOrchestrator.Infrastructure.Tests"));
+            Assert.Single(calls, call => IsMtpExecutableCall(
+                call,
+                "Mcg.AgentOrchestrator.Infrastructure.ProviderEnvironment.Tests"));
+        }
+        finally
+        {
+            DotnetBuildEnvironmentManager.TryDeleteGoalArtifacts(goalId);
+            DeleteDirectoryWithRetry(root);
+        }
+    }
+
+    [Xunit.Fact]
+    public async Task FocusedEvidence_MixedRequest_ReportsFocusedAndMappedProjectReason()
+    {
+        var (result, calls) = await RunMappedEvidenceAsync(
+            "Infrastructure.Tests: AlphaTests; Core.Tests: mapped-project");
+
+        Assert.True(result.Accepted);
+        Assert.True(result.Passed);
+        Assert.Equal(
+            [
+                "reviewer focused evidence: Infrastructure.Tests FullyQualifiedName~AlphaTests",
+                "reviewer mapped project evidence: Core.Tests"
+            ],
+            result.Checks.Select(check => check.Name));
+        Assert.Contains(
+            "mode=mixed reason=explicit-focused-and-mapped-project-request",
+            result.Summary);
+        Assert.Equal("mixed", result.Coverage?.ExecutionMode);
+        Assert.Equal("explicit-focused-and-mapped-project-request", result.Coverage?.ExecutionReason);
+        var testCalls = calls
+            .Where(call =>
+                IsMtpExecutableCall(call, "Mcg.AgentOrchestrator.Core.Tests") ||
+                IsMtpExecutableCall(call, "Mcg.AgentOrchestrator.Infrastructure.Tests"))
+            .ToArray();
+        Assert.Equal(2, testCalls.Length);
+        Assert.Contains("--filter-class", testCalls[0]);
+        Assert.DoesNotContain("--filter-class", testCalls[1]);
+    }
+
+    [Xunit.Fact]
+    public async Task FocusedEvidence_EmptyRequest_IsRejectedWithoutRunnerCall()
+    {
+        var (emptyResult, calls) = await RunMappedEvidenceAsync(" ; ");
+        Assert.False(emptyResult.Accepted);
+        Assert.False(emptyResult.Passed);
+        Assert.Equal("empty evidence request", emptyResult.Summary);
+        Assert.Empty(emptyResult.Checks);
+        Assert.Empty(calls);
+    }
+
+    [Xunit.Fact]
+    public async Task FocusedEvidence_OverCapWithBadAlias_RejectsAlias()
+    {
+        var (result, calls) = await RunMappedEvidenceAsync(
+            "Infrastructure.Tests: AlphaTests,BetaTests,GammaTests,DeltaTests,EpsilonTests; Unknown.Tests: ZetaTests");
+
+        Assert.False(result.Accepted);
+        Assert.False(result.Passed);
+        Assert.Equal("unsupported evidence request project alias 'Unknown.Tests'", result.Summary);
+        Assert.Empty(result.Checks);
+        Assert.Empty(calls);
+    }
+
+    [Xunit.Fact]
+    public async Task FocusedEvidence_OverCapWithBadFilter_RejectsFilter()
+    {
+        var (result, calls) = await RunMappedEvidenceAsync(
+            "Infrastructure.Tests: AlphaTests,BetaTests,GammaTests,DeltaTests,EpsilonTests; Core.Tests: all");
+
+        Assert.False(result.Accepted);
+        Assert.False(result.Passed);
+        Assert.Contains("unbounded evidence request rejected", result.Summary);
+        Assert.Empty(result.Checks);
+        Assert.Empty(calls);
+    }
+
+    [Xunit.Fact]
+    public async Task FocusedEvidence_DuplicateProjectAliases_BatchCompatibleSelectionsInOneCheck()
+    {
+        var (result, calls) = await RunMappedEvidenceAsync(
+            "Infrastructure.Tests: AlphaTests,BetaTests,GammaTests; Mcg.AgentOrchestrator.Infrastructure.Tests: DeltaTests,EpsilonTests",
+            executedTestCount: 5,
+            executedTestIdentities:
+            [
+                "Mcg.AgentOrchestrator.Infrastructure.Tests.AlphaTests.ExecutedMember",
+                "Mcg.AgentOrchestrator.Infrastructure.Tests.BetaTests.ExecutedMember",
+                "Mcg.AgentOrchestrator.Infrastructure.Tests.GammaTests.ExecutedMember",
+                "Mcg.AgentOrchestrator.Infrastructure.Tests.DeltaTests.ExecutedMember",
+                "Mcg.AgentOrchestrator.Infrastructure.Tests.EpsilonTests.ExecutedMember"
+            ]);
+
+        Assert.True(result.Accepted);
+        Assert.True(result.Passed);
+        var check = Assert.Single(result.Checks);
+        Assert.Single(calls, call =>
+            IsMtpExecutableCall(call, "Mcg.AgentOrchestrator.Infrastructure.Tests"));
+        Assert.StartsWith(
+            "reviewer focused evidence: Infrastructure.Tests ",
+            check.Name,
+            StringComparison.Ordinal);
+        Assert.Contains("AlphaTests", check.Name, StringComparison.Ordinal);
+        Assert.Contains("EpsilonTests", check.Name, StringComparison.Ordinal);
+        Assert.Contains("compatible-same-project-batch", result.Summary, StringComparison.Ordinal);
+    }
+
+    [Xunit.Fact]
+    public async Task FocusedEvidence_WideFilteredCheckTimesOut_UsesManifestBudgetAndReportsMode()
+    {
+        var observedTimeouts = new List<TimeSpan>();
+        var (result, _) = await RunMappedEvidenceAsync(
+            "Infrastructure.Tests: AlphaTests,BetaTests,GammaTests,DeltaTests,EpsilonTests",
+            timeOutTests: true,
+            observedTimeouts: observedTimeouts);
+
+        Assert.True(result.Accepted);
+        Assert.False(result.Passed);
+        Assert.Contains(TimeSpan.FromMinutes(40), observedTimeouts);
+        var check = Assert.Single(result.Checks);
+        Assert.False(check.Passed);
+        Assert.Contains("reviewer-focused-evidence", check.Name);
+        Assert.Contains("mode=focused reason=explicit-focused-mapping", result.Summary);
+    }
+
+    [Xunit.Fact]
+    public void FocusedEvidence_RealCheckThatPassesOnBothArmsIsVacuous()
+    {
+        var outcome = GoalAcceptanceVerifier.ClassifyFocusedEvidenceExperiment(
+            CreateFocusedEvidenceArm(FindingEvidenceArm.Candidate, FindingEvidenceArmDisposition.Green),
+            CreateFocusedEvidenceArm(FindingEvidenceArm.Baseline, FindingEvidenceArmDisposition.Green));
+
+        Assert.Equal(FindingEvidenceOutcomeReason.VacuousEvidence, outcome);
+    }
+
+    [Xunit.Fact]
+    public async Task FocusedEvidence_RealCheckThatFailsOnBaselineIsValid()
+    {
+        var valid = await RunRealDualArmProbeAsync(
+            baselineFeature: "public static class Feature { public static bool Enabled => false; }",
+            candidateFeature: "public static class Feature { public static bool Enabled => true; }");
+        Assert.Equal(FindingEvidenceOutcomeReason.ValidEvidence, valid.OutcomeReason);
+        Assert.Equal(FindingEvidenceArmDisposition.Green, valid.Arms![0].Disposition);
+        Assert.Equal(FindingEvidenceArmDisposition.Red, valid.Arms[1].Disposition);
+        Assert.NotEmpty(valid.Arms[1].Checks.SelectMany(check => check.FailingTestIdentities ?? []));
+    }
+
+    [Xunit.Fact]
+    public async Task FocusedEvidence_RealBaselineBuildFailureIsInconclusive()
+    {
+        var inconclusive = await RunRealDualArmProbeAsync(
+            baselineFeature: "public static class Feature { public static bool Enabled => ; }",
+            candidateFeature: "public static class Feature { public static bool Enabled => true; }");
+        Assert.Equal(FindingEvidenceOutcomeReason.BaselineInconclusive, inconclusive.OutcomeReason);
+        Assert.Equal(FindingEvidenceArmDisposition.Green, inconclusive.Arms![0].Disposition);
+        Assert.Equal(FindingEvidenceArmDisposition.Inconclusive, inconclusive.Arms[1].Disposition);
+        Assert.Empty(inconclusive.Arms[1].Checks.SelectMany(check => check.FailingTestIdentities ?? []));
+    }
+
+    private static async Task<FocusedEvidenceRunResult> RunRealDualArmProbeAsync(
+        string baselineFeature,
+        string candidateFeature,
+        string? candidateMarker = null)
+    {
+        var root = CreateManifestWorkspace("""
+            {
+              "version": 1,
+              "engine": {
+                "slotCount": 1,
+                "maxConcurrentShards": 1,
+                "enforceStructuralCoverage": false,
+                "mtpInvocations": [
+                  {
+                    "project": "tests/Mcg.AgentOrchestrator.Core.Tests/Mcg.AgentOrchestrator.Core.Tests.csproj",
+                    "executablePathTemplate": "bin/{projectName}/{configuration}/{projectName}.dll",
+                    "arguments": [
+                      "{executable}",
+                      "--results-directory",
+                      "{resultsDirectory}",
+                      "--report-trx",
+                      "--report-trx-filename",
+                      "{trxFileName}"
+                    ]
+                  }
+                ]
+              },
+              "checks": [],
+              "forbiddenChangedPathGlobs": []
+            }
+            """);
+        File.WriteAllText(
+            Path.Combine(root, "Directory.Build.props"),
+            """
+            <Project>
+              <PropertyGroup>
+                <UseSharedCompilation>false</UseSharedCompilation>
+                <RestoreIgnoreFailedSources>true</RestoreIgnoreFailedSources>
+                <NuGetAudit>false</NuGetAudit>
+              </PropertyGroup>
+            </Project>
+            """);
+        File.WriteAllText(
+            Path.Combine(root, "NuGet.Config"),
+            """
+            <?xml version="1.0" encoding="utf-8"?>
+            <configuration>
+              <packageSources>
+                <clear />
+              </packageSources>
+            </configuration>
+            """);
+        var projectDirectory = Path.Combine(root, "tests", "Mcg.AgentOrchestrator.Core.Tests");
+        Directory.CreateDirectory(projectDirectory);
+        File.WriteAllText(
+            Path.Combine(projectDirectory, "Mcg.AgentOrchestrator.Core.Tests.csproj"),
+            """
+            <Project Sdk="Microsoft.NET.Sdk">
+              <PropertyGroup>
+                <TargetFramework>net10.0</TargetFramework>
+                <ImplicitUsings>enable</ImplicitUsings>
+                <Nullable>enable</Nullable>
+                <IsPackable>false</IsPackable>
+                <IsTestProject>true</IsTestProject>
+                <OutputType>Exe</OutputType>
+                <UseMicrosoftTestingPlatformRunner>true</UseMicrosoftTestingPlatformRunner>
+              </PropertyGroup>
+              <ItemGroup>
+                <PackageReference Include="Microsoft.Testing.Extensions.TrxReport" Version="2.3.2" />
+                <PackageReference Include="xunit.v3.mtp-v2" Version="3.2.2" />
+              </ItemGroup>
+            </Project>
+            """);
+        File.WriteAllText(
+            Path.Combine(projectDirectory, "DualArmProbeTests.cs"),
+            """
+            public sealed class DualArmProbeTests
+            {
+                [Xunit.Fact]
+                public void CandidateBehaviorIsPresent() => Xunit.Assert.True(Feature.Enabled);
+            }
+            """);
+        var featurePath = Path.Combine(projectDirectory, "Feature.cs");
+        File.WriteAllText(featurePath, baselineFeature);
+        AssertGitSucceeded(root, "init", "-b", "main");
+        AssertGitSucceeded(root, "config", "user.email", "dual-arm@example.invalid");
+        AssertGitSucceeded(root, "config", "user.name", "Dual Arm Fixture");
+        AssertGitSucceeded(root, "add", ".");
+        AssertGitSucceeded(root, "commit", "-m", "baseline");
+        AssertGitSucceeded(root, "checkout", "-b", "goal/dual-arm");
+        File.WriteAllText(featurePath, candidateFeature);
+        if (candidateMarker is not null)
+        {
+            File.WriteAllText(Path.Combine(root, "candidate-marker.txt"), candidateMarker);
+        }
+        AssertGitSucceeded(root, "add", ".");
+        AssertGitSucceeded(root, "commit", "-m", "candidate");
+
+        var goalId = GoalId.New();
+        FocusedEvidenceRunResult? result = null;
+        try
+        {
+            result = await new GoalAcceptanceVerifier().RunFocusedEvidenceAsync(
+                root,
+                goalId,
+                "Core.Tests: DualArmProbeTests",
+                runBaselineArm: true);
+            var baseline = Assert.Single(result.Arms!, arm => arm.Arm == FindingEvidenceArm.Baseline);
+            Assert.All(
+                baseline.Checks.Where(check => !string.IsNullOrWhiteSpace(check.ArtifactsPath)),
+                check => Assert.False(
+                    Directory.Exists(check.ArtifactsPath!),
+                    $"Baseline artifacts were retained at {check.ArtifactsPath}."));
+            return result;
+        }
+        finally
+        {
+            DotnetBuildEnvironmentManager.TryDeleteGoalArtifacts(goalId);
+            foreach (var artifactPath in result?.Arms?
+                         .SelectMany(arm => arm.Checks)
+                         .Select(check => check.ArtifactsPath)
+                         .Where(path => !string.IsNullOrWhiteSpace(path))
+                         .Distinct(StringComparer.OrdinalIgnoreCase) ?? [])
+            {
+                if (Directory.Exists(artifactPath))
+                {
+                    TryDeleteDirectoryWithRetry(artifactPath!);
+                }
+            }
+            TryDeleteDirectoryWithRetry(root);
+        }
+    }
+
+    private static void TryDeleteDirectoryWithRetry(string path)
+    {
+        try
+        {
+            DeleteDirectoryWithRetry(path);
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+        {
+            // Probe teardown must never replace the assertion or execution failure being diagnosed.
+        }
+    }
+
+    private static void AssertGitSucceeded(string workingDirectory, params string[] arguments)
+    {
+        var result = GitCli.Run(workingDirectory, arguments);
+        Assert.True(result.Succeeded, $"git {string.Join(' ', arguments)} failed: {result.Error}");
+    }
+
+    private static async Task<(FocusedEvidenceRunResult Result, List<string[]> Calls)> RunMappedEvidenceAsync(
+        string request,
+        bool timeOutTests = false,
+        List<TimeSpan>? observedTimeouts = null,
+        Action<string>? configureWorkspace = null,
+        int? executedTestCount = null,
+        int testExitCode = 0,
+        Func<string, IDisposable?>? holdWorkspaceResource = null,
+        IReadOnlyList<string>? executedTestIdentities = null,
+        bool corruptTrx = false)
+    {
+        var calls = new List<string[]>();
+        var root = CreateManifestWorkspace("""
+            {
+              "version": 1,
+              "checks": [],
+              "forbiddenChangedPathGlobs": []
+            }
+            """);
+        var manifestPath = Path.Combine(root, "config", "acceptance-manifest.json");
+        var configuredManifest = JsonNode.Parse(File.ReadAllText(manifestPath))!.AsObject();
+        configuredManifest["engine"]!["timeouts"]!["defaultMinutes"] = 40;
+        File.WriteAllText(manifestPath, configuredManifest.ToJsonString());
+        configureWorkspace?.Invoke(root);
+        var goalId = new GoalId(Guid.NewGuid().ToString("N"));
+        try
+        {
+            using var workspaceResource = holdWorkspaceResource?.Invoke(root);
+            var verifier = new GoalAcceptanceVerifier((args, _, timeout, _) =>
+            {
+                calls.Add(args);
+                observedTimeouts?.Add(timeout);
+                if (IsMtpExecutableCall(args, "Mcg.AgentOrchestrator.Core.Tests") ||
+                    IsMtpExecutableCall(args, "Mcg.AgentOrchestrator.Infrastructure.Tests"))
+                {
+                    if (timeOutTests)
+                    {
+                        return Task.FromResult(new GoalAcceptanceVerifier.CommandResult(
+                            124,
+                            "timed out",
+                            TimedOut: true,
+                            Timeout: TimeSpan.FromMinutes(40),
+                            Elapsed: TimeSpan.FromMinutes(40)));
+                    }
+
+                    WriteMtpTrx(args, executedTestCount, executedTestIdentities);
+                    if (corruptTrx)
+                    {
+                        var resultsDirectoryIndex = Array.IndexOf(args, "--results-directory");
+                        var trxFileIndex = Array.IndexOf(args, "--report-trx-filename");
+                        File.WriteAllText(
+                            Path.Combine(args[resultsDirectoryIndex + 1], args[trxFileIndex + 1]),
+                            "<not-valid-trx");
+                    }
+                    return Task.FromResult(new GoalAcceptanceVerifier.CommandResult(
+                        testExitCode,
+                        executedTestCount == 0
+                            ? "Minimum expected tests was set to 1, but 0 tests were selected."
+                            : "Passed! - Failed: 0, Passed: 1, Skipped: 0, Total: 1."));
+                }
+
+                return Task.FromResult(new GoalAcceptanceVerifier.CommandResult(0, "Build succeeded."));
+            });
+
+            var result = await verifier.RunFocusedEvidenceAsync(root, goalId, request);
+            return (result, calls);
+        }
+        finally
+        {
+            DotnetBuildEnvironmentManager.TryDeleteGoalArtifacts(goalId);
+            DeleteDirectoryWithRetry(root);
+        }
+    }
+
+    private static FocusedEvidenceArmRunResult CreateFocusedEvidenceArm(
+        FindingEvidenceArm arm,
+        FindingEvidenceArmDisposition disposition) =>
+        new(
+            arm,
+            $"{arm.ToString().ToLowerInvariant()}-sha",
+            disposition,
+            Accepted: true,
+            Passed: disposition == FindingEvidenceArmDisposition.Green,
+            Summary: disposition.ToString(),
+            Checks: []);
+
+}
