@@ -214,8 +214,32 @@ Recommended backlog order:
 
 Each item should enter the backlog as a behavior-preserving goal with explicit characterization tests first, a narrow changed-file set, and a disjointness note copied from the matrix above.
 
-## GoalAcceptanceVerifier size ratchet
+## Guarded source size ratchet
 
-`GoalAcceptanceVerifierSizeRatchetTests` prevents `GoalAcceptanceVerifier.cs` from growing past the recorded `MaximumLineCount`, seeded at 8713 from `File.ReadLines(path).Count()` at commit `fde5f80f62ae388f98eb13c712cfe3abb4782b44`. When an extraction shrinks the file, lower the constant in the same change. If growth is unavoidable, raise the constant deliberately with justification in the same change; never derive it automatically from the current file or delete the guard.
+`GoalAcceptanceVerifierSizeRatchetTests` runs as an ordinary acceptance-gate test and applies the literal ceilings in `SourceSizeRatchet.SeededCeilings`. The table was seeded at commit `6e7a90d7b3fe192ae4f1e430cb7452710f88b73c` on 2026-08-22; every value below is that file's complete line count from `File.ReadLines(path).Count()` at that commit, except where a later row-raise is recorded below the table.
 
-Goal `b4b80aca` raised the ceiling from 8763 to 8779 for the phase-transition calls that connect gate accounting to verifier-owned control-flow and resource-custody boundaries. The accountant, records, formatting, and lifecycle behavior remain extracted in `AcceptanceGatePhaseAccounting.cs`; moving the remaining transitions out would split the orchestration invariant they measure.
+| Guarded file | Seeded ceiling |
+| --- | ---: |
+| `src/Mcg.AgentOrchestrator.Infrastructure/Workspaces/GoalAcceptanceVerifier.cs` | 8779 |
+| `src/Mcg.AgentOrchestrator.App/Orchestration/ConductorDriver.cs` | 6156 |
+| `src/Mcg.AgentOrchestrator.App/Orchestration/ConductorBatchLoop.cs` | 4974 |
+| `src/Mcg.AgentOrchestrator.Infrastructure/Processes/BackgroundDispatchRunner.cs` | 4640 |
+| `src/Mcg.AgentOrchestrator.Infrastructure/Workers/WorkerProfileDispatcher.cs` | 3212 |
+| `src/Mcg.AgentOrchestrator.App/Cli/CliPersistentStateRunner.cs` | 4821 |
+| `tests/Mcg.AgentOrchestrator.Infrastructure.Tests/GoalAcceptanceVerifierTests.cs` | 10451 |
+| `tests/Mcg.AgentOrchestrator.Infrastructure.Tests/ConductorDriverTests.cs` | 9282 |
+| `tests/Mcg.AgentOrchestrator.Infrastructure.Tests/CliCommandTests.PersistentRunnerCommands.cs` | 7038 |
+| `tests/Mcg.AgentOrchestrator.Infrastructure.Tests/WorkerDispatchTestsWorkerResultClassification.cs` | 4834 |
+| `tests/Mcg.AgentOrchestrator.Infrastructure.Tests/ConductorBatchLoopTestsParallelAcceptance.cs` | 4355 |
+
+The production rows are the six ranked god classes whose growth the inventory tracks. Two test rows, `GoalAcceptanceVerifierTests.cs` and `ConductorDriverTests.cs`, are unsplit test god classes guarded as the test-side counterparts to their already-guarded production files. The other three test rows are products of earlier splits that have regrown past roughly 4,300 lines; a one-time split without a bound only resets the clock. This is intentionally not a repository-wide size rule. For example, `DotnetBuildEnvironmentManagerTests.cs` (5199 lines) is large but is neither a ranked god class nor a split product; `CliCommandTests.GoalLifecycleCommands.cs` (4211) and `CliCommandTests.SubscriptionDispatchCommands.cs` (3471) remain within their intended post-split size; `DashboardRenderingTests.cs` (3795) has already moved to the Dashboard test project; and `DispatchFailureClassifier.cs` (2393) remains below the seeded production band.
+
+When extraction shrinks a guarded file, lower that row in the same change. If growth is unavoidable, raise only that row deliberately with an inline justification naming the goal. A rename or deletion must update its row in the same change. Never derive a ceiling automatically from the current file, make a row advisory, add an opt-out, or delete the guard.
+
+### Recorded row raises
+
+Goal `b4b80aca` raised the `GoalAcceptanceVerifier.cs` row from 8763 to 8779 for the phase-transition calls that connect gate accounting to verifier-owned control-flow and resource-custody boundaries. The accountant, records, formatting, and lifecycle behavior remain extracted in `AcceptanceGatePhaseAccounting.cs`; moving the remaining transitions out would split the orchestration invariant they measure.
+
+Goal `682f25a1` re-derived the `GoalAcceptanceVerifierTests.cs` row from 10426 to 10451 after integrating goal `b4b80aca`, whose gate-phase accounting coverage had already added 25 net lines before the multi-file ratchet landed. This is a catch-up raise for pre-existing growth, not growth introduced by the ratchet change.
+
+Earlier raises of that same file, recorded before the table existed: goal `75b85ca1` from 8713 to 8760 for lane selection and structural-coverage threading owned by the gate plan, and goal `85f0b81d` to 8763 after extracting 227 behaviour lines to `AcceptanceLaneDurationStore.cs`, leaving only call sites.
