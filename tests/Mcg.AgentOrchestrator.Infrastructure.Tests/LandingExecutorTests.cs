@@ -55,6 +55,146 @@ public sealed class LandingExecutorTests
         Assert.True(escalation.Reason.Contains("repeated failures", StringComparison.OrdinalIgnoreCase));
     }
 
+    [Xunit.Fact]
+    public void SecondEvaluationAfterLanding_SkipsAcceptanceAndEscalation()
+    {
+        var repo = CreateGitRepository();
+        try
+        {
+            var (workspace, kernel, goal) = CreateAcceptedCandidate(
+                repo,
+                "src/already-landed.txt");
+            var first = LandingExecutor.Execute(kernel, goal, workspace);
+            Assert.True(first.MainAdvanced, first.Message);
+            GoalOperationJournal.Completed(repo, goal, "conductor:land", first.Message);
+
+            GoalOperationJournal.Begin(repo, goal, "conductor:land", "redundant post-landing evaluation");
+            var second = LandingExecutor.Execute(kernel, goal, workspace);
+
+            Assert.False(second.MainAdvanced);
+            Assert.IsType<LandingDecision.Promote>(second.Decision);
+            Assert.Contains("already landed", second.Message, StringComparison.OrdinalIgnoreCase);
+            var inbox = OperatorInbox.Build(
+                kernel,
+                [],
+                WorkerProfileCatalog.Default(),
+                workspace,
+                goal.Id.Value[..8]);
+            Assert.DoesNotContain(inbox.Items, item => item.Kind == OperatorInboxKind.LandingEscalation);
+            Assert.Contains(
+                GoalOperationJournal.Read(repo, goal.Id).Entries,
+                entry => entry.Operation.Equals("conductor:post-landing-skip", StringComparison.OrdinalIgnoreCase));
+        }
+        finally
+        {
+            TryDeleteDirectory(repo);
+        }
+    }
+
+    [Xunit.Fact]
+    public void SecondEvaluationAfterLanding_DoesNotMutateRefsOrLoseEvidence()
+    {
+        var repo = CreateGitRepository();
+        try
+        {
+            var (workspace, kernel, goal) = CreateAcceptedCandidate(
+                repo,
+                "src/no-duplicate-merge.txt");
+            var first = LandingExecutor.Execute(kernel, goal, workspace);
+            Assert.True(first.MainAdvanced, first.Message);
+            GoalOperationJournal.Completed(repo, goal, "conductor:land", first.Message);
+            var mainBefore = ReadGit(repo, "rev-parse", "main");
+            var integrationBefore = ReadGit(repo, "rev-parse", LandingExecutor.IntegrationBranchName);
+            var commitCountBefore = ReadGit(repo, "rev-list", "--count", "main");
+
+            GoalOperationJournal.Begin(repo, goal, "conductor:land", "redundant post-landing evaluation");
+            var second = LandingExecutor.Execute(kernel, goal, workspace);
+
+            Assert.IsType<LandingDecision.Promote>(second.Decision);
+            Assert.False(second.MainAdvanced);
+            Assert.Equal(mainBefore, ReadGit(repo, "rev-parse", "main"));
+            Assert.Equal(integrationBefore, ReadGit(repo, "rev-parse", LandingExecutor.IntegrationBranchName));
+            Assert.Equal(commitCountBefore, ReadGit(repo, "rev-list", "--count", "main"));
+
+            GoalOperationJournal.Failed(repo, goal, "conductor:land", second.Message);
+            Assert.True(GoalOperationJournal.HasCompletedLandingEvidence(
+                GoalOperationJournal.Read(repo, goal.Id)));
+        }
+        finally
+        {
+            TryDeleteDirectory(repo);
+        }
+    }
+
+    [Xunit.Fact]
+    public void PostLandingReachabilityFailure_UsesDistinctEscalation()
+    {
+        var repo = CreateGitRepository();
+        var oldGitRunner = LandingExecutor.GitRunner;
+        try
+        {
+            var (workspace, kernel, goal) = CreateAcceptedCandidate(
+                repo,
+                "src/post-landing-check.txt");
+            var first = LandingExecutor.Execute(kernel, goal, workspace);
+            Assert.True(first.MainAdvanced, first.Message);
+            Assert.NotNull(first.MergeCommitSha);
+            GoalOperationJournal.Completed(repo, goal, "conductor:land", first.Message);
+            LandingExecutor.GitRunner = (workingDirectory, args) =>
+                args is ["merge-base", "--is-ancestor", var revision, "main"] &&
+                revision.Equals(first.MergeCommitSha, StringComparison.OrdinalIgnoreCase)
+                    ? new GitCli.GitResult(1, string.Empty, string.Empty)
+                    : oldGitRunner(workingDirectory, args);
+
+            var result = LandingExecutor.Execute(kernel, goal, workspace);
+
+            Assert.False(result.MainAdvanced);
+            var escalation = Assert.IsType<LandingDecision.Escalate>(result.Decision);
+            Assert.True(LandingExecutor.IsPostLandingConfirmationEscalation(escalation.Reason));
+            Assert.Contains("landed previously", escalation.Reason, StringComparison.OrdinalIgnoreCase);
+            Assert.DoesNotContain("not passed", escalation.Reason, StringComparison.OrdinalIgnoreCase);
+        }
+        finally
+        {
+            LandingExecutor.GitRunner = oldGitRunner;
+            TryDeleteDirectory(repo);
+        }
+    }
+
+    [Xunit.Fact]
+    public void UnacceptedGoal_EscalatesWithoutLanding()
+    {
+        var repo = CreateGitRepository();
+        try
+        {
+            var workspace = OrchestratorWorkspace.ForDirectory(repo);
+            var (kernel, goal) = CreateVerifiedGoal(repo);
+            var goalBranch = GoalWorktrees.BranchName(goal.Id);
+            AddGoalBranchCommit(repo, goalBranch, "src/not-accepted.txt", "goal work");
+            _ = GoalWorktrees.Ensure(repo, goal.Id);
+            var mainBefore = ReadGit(repo, "rev-parse", "main");
+
+            var result = LandingExecutor.Execute(kernel, goal, workspace);
+
+            Assert.False(result.MainAdvanced);
+            var escalation = Assert.IsType<LandingDecision.Escalate>(result.Decision);
+            Assert.Equal("acceptance verification not passed", escalation.Reason);
+            Assert.Equal(mainBefore, ReadGit(repo, "rev-parse", "main"));
+            Assert.False(IsBranchReachableFromMain(repo, goalBranch));
+            var inbox = OperatorInbox.Build(
+                kernel,
+                [],
+                WorkerProfileCatalog.Default(),
+                workspace,
+                goal.Id.Value[..8]);
+            Assert.Contains(inbox.Items, item => item.Kind == OperatorInboxKind.LandingEscalation);
+        }
+        finally
+        {
+            TryDeleteDirectory(repo);
+        }
+    }
+
     [Xunit.Fact(DisplayName = "LandingExecutor_applies_landed_backlog_add_proposal_once")]
     public void LandingExecutorAppliesLandedBacklogAddProposalOnce()
     {
@@ -999,6 +1139,27 @@ public sealed class LandingExecutorTests
             ManualVerificationRecorder.Create(true, "Passed.", repo, DateTimeOffset.UtcNow));
         Assert.Equal(GoalStatus.Verified, goal.Status);
         return (kernel, goal);
+    }
+
+    private static (OrchestratorWorkspace Workspace, AgentOrchestratorKernel Kernel, Goal Goal)
+        CreateAcceptedCandidate(string repo, string fileName)
+    {
+        var workspace = OrchestratorWorkspace.ForDirectory(repo);
+        var (kernel, goal) = CreateVerifiedGoal(repo);
+        var goalBranch = GoalWorktrees.BranchName(goal.Id);
+        AddGoalBranchCommit(repo, goalBranch, fileName, "goal work");
+        var worktree = GoalWorktrees.Ensure(repo, goal.Id);
+        var branchHead = ReadGit(worktree, "rev-parse", "HEAD");
+        var mainHead = ReadGit(repo, "rev-parse", "main");
+        GoalOperationJournal.AcceptancePassed(
+            repo,
+            goal,
+            "conductor:acceptance",
+            branchHead,
+            mainHead,
+            "passing acceptance for the candidate",
+            DateTimeOffset.UtcNow.AddMinutes(-1));
+        return (workspace, kernel, goal);
     }
 
     private static (AgentOrchestratorKernel Kernel, Goal Goal) CreateCompletedGoalWithLeftoverWorkspace(string repo)

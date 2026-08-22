@@ -36,6 +36,8 @@ internal static partial class LandingExecutor
     private const string TempWorktreeDirName = ".orchestrator-integration-tmp";
     private const string OwnershipHoldReasonPrefix = "ownership-denylist hold";
     private const string MutationHoldReasonPrefix = "landing mutation blocked:";
+    private const string PostLandingConfirmationReasonPrefix =
+        "goal landed previously, then post-landing confirmation failed:";
     internal static Func<string, string[], GitCli.GitResult> GitRunner { get; set; } =
         (workingDirectory, args) => GitCli.Run(workingDirectory, args);
 
@@ -56,6 +58,17 @@ internal static partial class LandingExecutor
         {
             throw new InvalidOperationException(
                 $"Goal branch '{goalBranch}' does not exist. Create the workspace first with: workspace create {goalPrefix}");
+        }
+
+        if (TryResolveCompletedLanding(
+                goal,
+                workspace,
+                goalPrefix,
+                goalBranch,
+                channel,
+                eventWriter) is { } completedLanding)
+        {
+            return completedLanding;
         }
 
         var changedFilesResult = GoalWorktrees.ResolveChangedFilesAgainstHead(
@@ -139,6 +152,20 @@ internal static partial class LandingExecutor
         var acceptancePassed = GoalAcceptanceStatusProjector.Build(kernel, goal, workspace.ExecutionDirectory).IsAccepted;
         if (!acceptancePassed)
         {
+            // A sibling landing path can complete after this attempt's initial journal read.
+            // Re-read at the decision point so an irreversible landing is not reported as
+            // a failed acceptance check.
+            if (TryResolveCompletedLanding(
+                    goal,
+                    workspace,
+                    goalPrefix,
+                    goalBranch,
+                    channel,
+                    eventWriter) is { } concurrentlyCompletedLanding)
+            {
+                return concurrentlyCompletedLanding;
+            }
+
             var acceptanceDecision = new LandingDecision.Escalate("acceptance verification not passed");
             OperatorInbox.RecordLandingEscalation(workspace, goal, acceptanceDecision.Reason, IntegrationBranchName, channel);
             eventWriter?.AppendGoalEscalated(goal.Id, GoalLifecycleState.Verified, goal.Status, acceptanceDecision.Reason, IntegrationBranchName);
@@ -224,6 +251,111 @@ internal static partial class LandingExecutor
         return new LandingResult(goal.Id.Value, goalPrefix, decision, IntegrationBranchName,
             false, $"Parked on {IntegrationBranchName}: {escalate.Reason}");
     }
+
+    private static LandingResult? TryResolveCompletedLanding(
+        Goal goal,
+        OrchestratorWorkspace workspace,
+        string goalPrefix,
+        string goalBranch,
+        IOperatorChannel? channel,
+        IGoalLifecycleEventWriter? eventWriter)
+    {
+        var journal = GoalOperationJournal.Read(workspace.ExecutionDirectory, goal.Id);
+        if (!GoalOperationJournal.HasCompletedLandingEvidence(journal))
+        {
+            return null;
+        }
+
+        var landingIntent = GoalOperationJournal.TryGetLatestLandingIntent(journal);
+        var landingRevision = landingIntent?.MergeCommitSha ?? goalBranch;
+        GitCli.GitResult reachability;
+        try
+        {
+            reachability = RunGit(
+                workspace.ExecutionDirectory,
+                "merge-base",
+                "--is-ancestor",
+                landingRevision,
+                "main");
+        }
+        catch (Exception exception)
+        {
+            return BuildPostLandingConfirmationFailure(
+                goal,
+                workspace,
+                goalPrefix,
+                channel,
+                eventWriter,
+                $"could not check whether revision {landingRevision} is reachable from main: {exception.Message}");
+        }
+
+        if (!reachability.Succeeded)
+        {
+            var detail = reachability.DrainTimedOut
+                ? $"reachability check for revision {landingRevision} against main timed out while draining git output"
+                : reachability.ExitCode == 1
+                    ? $"revision {landingRevision} is not reachable from main"
+                    : $"git merge-base --is-ancestor {landingRevision} main failed: {FormatGitFailure(reachability)}";
+            return BuildPostLandingConfirmationFailure(
+                goal,
+                workspace,
+                goalPrefix,
+                channel,
+                eventWriter,
+                detail);
+        }
+
+        GoalOperationJournal.Completed(
+            workspace.ExecutionDirectory,
+            goal,
+            "conductor:post-landing-skip",
+            $"Completed landing evidence for {landingRevision} was confirmed reachable from main; " +
+            "skipped redundant acceptance evaluation and merge.");
+        return new LandingResult(
+            goal.Id.Value,
+            goalPrefix,
+            new LandingDecision.Promote(),
+            landingIntent?.IntegrationBranch ?? IntegrationBranchName,
+            MainAdvanced: false,
+            Message: $"Goal {goalPrefix} already landed; skipped redundant acceptance evaluation and merge.",
+            MergeCommitSha: landingIntent?.MergeCommitSha,
+            ChangedFiles: []);
+    }
+
+    private static LandingResult BuildPostLandingConfirmationFailure(
+        Goal goal,
+        OrchestratorWorkspace workspace,
+        string goalPrefix,
+        IOperatorChannel? channel,
+        IGoalLifecycleEventWriter? eventWriter,
+        string detail)
+    {
+        var reason = $"{PostLandingConfirmationReasonPrefix} {detail}";
+        OperatorInbox.RecordLandingEscalation(
+            workspace,
+            goal,
+            reason,
+            IntegrationBranchName,
+            channel);
+        eventWriter?.AppendGoalEscalated(
+            goal.Id,
+            GoalLifecycleState.Merged,
+            goal.Status,
+            reason,
+            IntegrationBranchName);
+        return new LandingResult(
+            goal.Id.Value,
+            goalPrefix,
+            new LandingDecision.Escalate(reason),
+            IntegrationBranchName,
+            MainAdvanced: false,
+            Message: reason);
+    }
+
+    private static string FormatGitFailure(GitCli.GitResult result) =>
+        string.IsNullOrWhiteSpace(result.Error)
+            ? $"git exited {result.ExitCode}"
+            : result.Error.Trim();
 
     internal static AcceptanceCohortLandingResult ExecuteCohort(
         AgentOrchestratorKernel kernel,
@@ -542,6 +674,9 @@ internal static partial class LandingExecutor
 
     internal static bool IsMutationHoldEscalation(string reason) =>
         reason.StartsWith(MutationHoldReasonPrefix, StringComparison.OrdinalIgnoreCase);
+
+    internal static bool IsPostLandingConfirmationEscalation(string reason) =>
+        reason.StartsWith(PostLandingConfirmationReasonPrefix, StringComparison.OrdinalIgnoreCase);
 
     private static IReadOnlyList<OwnershipHoldRequest> BuildOwnershipHoldRequests(
         Goal goal,
