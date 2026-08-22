@@ -43,7 +43,7 @@ internal static class AssemblyTempRedirect
         {
             totalClock.Stop();
             timings.TotalElapsedMilliseconds = totalClock.ElapsedMilliseconds;
-            TryWriteTimingDiagnostic(timings);
+            TryPublishTimingDiagnostic(TryFormatTimingDiagnostic(timings));
             return;
         }
 
@@ -53,11 +53,13 @@ internal static class AssemblyTempRedirect
         // The root is owned by this process: delete it on exit, and reap roots whose owning
         // process is gone. Both are required — exit handlers do not run for killed processes,
         // and this repository cancels dispatches and times out gates routinely.
-        ReapOrphanedRoots(selection.SelectedRoot, timings);
-        AppDomain.CurrentDomain.ProcessExit += (_, _) => TryDeleteTree(selection.SelectedRoot);
-        totalClock.Stop();
-        timings.TotalElapsedMilliseconds = totalClock.ElapsedMilliseconds;
-        TryWriteTimingDiagnostic(timings);
+        var timingDiagnostic = RunStartupHousekeeping(
+            selection.SelectedRoot,
+            timings,
+            totalClock,
+            DeleteTree);
+        AppDomain.CurrentDomain.ProcessExit += (_, _) => DeleteTree(selection.SelectedRoot);
+        TryPublishTimingDiagnostic(timingDiagnostic);
     }
 
     internal static IReadOnlyList<string> SelectReapableRoots(
@@ -167,7 +169,13 @@ internal static class AssemblyTempRedirect
             .ToArray();
     }
 
-    private static void ReapOrphanedRoots(string selectedRoot, TempRootStartupTimings timings)
+    private static void ReapOrphanedRoots(string selectedRoot, TempRootStartupTimings timings) =>
+        ReapOrphanedRoots(selectedRoot, timings, DeleteTree);
+
+    private static void ReapOrphanedRoots(
+        string selectedRoot,
+        TempRootStartupTimings timings,
+        Func<string, TempRootDeleteOutcome> deleteTree)
     {
         timings.ReapRan = true;
         try
@@ -219,14 +227,7 @@ internal static class AssemblyTempRedirect
             timings.ReapBoundSelectionElapsedMilliseconds = phaseClock.ElapsedMilliseconds;
 
             phaseClock.Restart();
-            foreach (var candidate in bounded)
-            {
-                timings.ReapDeleteAttempted++;
-                if (TryDeleteTree(Path.Combine(sharedRoot, candidate)))
-                {
-                    timings.ReapDeleteSucceeded++;
-                }
-            }
+            ReapBoundedRoots(sharedRoot, bounded, deleteTree, timings);
             phaseClock.Stop();
             timings.ReapDeleteElapsedMilliseconds = phaseClock.ElapsedMilliseconds;
         }
@@ -236,6 +237,40 @@ internal static class AssemblyTempRedirect
             // a ModuleInitializer, so anything escaping here kills the apphost before discovery and
             // the lane reports zero tests with no failing test to point at.
         }
+    }
+
+    internal static IReadOnlyList<TempRootDeleteOutcome> ReapBoundedRoots(
+        string sharedRoot,
+        IEnumerable<string> boundedCandidates,
+        Func<string, TempRootDeleteOutcome> deleteTree,
+        TempRootStartupTimings timings)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(sharedRoot);
+        ArgumentNullException.ThrowIfNull(boundedCandidates);
+        ArgumentNullException.ThrowIfNull(deleteTree);
+        ArgumentNullException.ThrowIfNull(timings);
+
+        var outcomes = new List<TempRootDeleteOutcome>();
+        foreach (var candidate in boundedCandidates)
+        {
+            var path = Path.Combine(sharedRoot, candidate);
+            TempRootDeleteOutcome outcome;
+            try
+            {
+                outcome = deleteTree(path) ?? TempRootDeleteOutcome.Failure(
+                    path,
+                    new InvalidOperationException("The delete seam returned no outcome."));
+            }
+            catch (Exception ex)
+            {
+                outcome = TempRootDeleteOutcome.Failure(path, ex);
+            }
+
+            timings.RecordDelete(outcome);
+            outcomes.Add(outcome);
+        }
+
+        return outcomes;
     }
 
     // One process-table snapshot for the whole sweep. Probing each root with
@@ -257,22 +292,41 @@ internal static class AssemblyTempRedirect
         return live;
     }
 
-    private static bool TryDeleteTree(string path)
+    internal static TempRootDeleteOutcome DeleteTree(string path)
     {
         try
         {
-            if (!Directory.Exists(path))
-            {
-                return false;
-            }
-
             Directory.Delete(path, recursive: true);
-            return true;
+            return TempRootDeleteOutcome.Deleted(path);
+        }
+        catch (DirectoryNotFoundException)
+        {
+            return TempRootDeleteOutcome.AlreadyAbsent(path);
         }
         catch (Exception ex) when (IsFileSystemFailure(ex))
         {
-            // A live sibling may hold a handle; the next run reaps it.
-            return false;
+            return TempRootDeleteOutcome.Failure(path, ex);
+        }
+    }
+
+    internal static string? RunStartupHousekeeping(
+        string selectedRoot,
+        TempRootStartupTimings timings,
+        Stopwatch totalClock,
+        Func<string, TempRootDeleteOutcome> deleteTree)
+    {
+        try
+        {
+            ReapOrphanedRoots(selectedRoot, timings, deleteTree);
+            totalClock.Stop();
+            timings.TotalElapsedMilliseconds = totalClock.ElapsedMilliseconds;
+            return TryFormatTimingDiagnostic(timings);
+        }
+        catch
+        {
+            // This path runs from a ModuleInitializer. Housekeeping and its diagnostics must not
+            // prevent test discovery even when an injected or physical delete fails unexpectedly.
+            return null;
         }
     }
 
@@ -418,7 +472,12 @@ internal static class AssemblyTempRedirect
             $"reapOverlap={FormatReap(timings, timings.ReapOverlapCount)} " +
             $"deleteAttempted={FormatReap(timings, timings.ReapDeleteAttempted)} " +
             $"deleteSucceeded={FormatReap(timings, timings.ReapDeleteSucceeded)} " +
-            $"deleteMs={FormatReap(timings, timings.ReapDeleteElapsedMilliseconds)}";
+            $"deleteMs={FormatReap(timings, timings.ReapDeleteElapsedMilliseconds)} " +
+            $"deleteDeleted={FormatReap(timings, timings.ReapDeleteDeleted)} " +
+            $"deleteAlreadyAbsent={FormatReap(timings, timings.ReapDeleteAlreadyAbsent)} " +
+            $"deleteFailed={FormatReap(timings, timings.ReapDeleteFailed)} " +
+            $"deleteFailureKinds={FormatReap(timings, timings.DeleteFailureKinds)} " +
+            $"deleteFirstFailure={FormatReap(timings, timings.FirstDeleteFailure)}";
     }
 
     internal static string BuildProcessTempRoot(string sharedRoot, int processId)
@@ -506,16 +565,34 @@ internal static class AssemblyTempRedirect
         }
     }
 
-    private static void TryWriteTimingDiagnostic(TempRootStartupTimings timings)
+    private static string? TryFormatTimingDiagnostic(TempRootStartupTimings timings)
     {
         try
         {
-            StartupTimingDiagnostic = FormatTimingDiagnostic(timings);
-            Console.Error.WriteLine(StartupTimingDiagnostic);
+            return FormatTimingDiagnostic(timings);
         }
         catch
         {
             // Timing must never make module initialization fail.
+            return null;
+        }
+    }
+
+    private static void TryPublishTimingDiagnostic(string? diagnostic)
+    {
+        try
+        {
+            if (diagnostic is null)
+            {
+                return;
+            }
+
+            StartupTimingDiagnostic = diagnostic;
+            Console.Error.WriteLine(diagnostic);
+        }
+        catch
+        {
+            // Publishing timing must never make module initialization fail.
         }
     }
 
@@ -530,6 +607,9 @@ internal static class AssemblyTempRedirect
 
     private static string FormatReap(TempRootStartupTimings timings, int value) =>
         timings.ReapRan ? value.ToString() : "not-run";
+
+    private static string FormatReap(TempRootStartupTimings timings, string value) =>
+        timings.ReapRan ? value : "not-run";
 
     private static bool IsFileSystemFailure(Exception exception) =>
         exception is UnauthorizedAccessException or IOException;
@@ -595,6 +675,28 @@ internal sealed record TempRootSelectionResult(
     string? SelectedRoot,
     IReadOnlyList<TempRootRejection> Rejections);
 
+internal enum TempRootDeleteStatus
+{
+    Deleted,
+    AlreadyAbsent,
+    Failed
+}
+
+internal sealed record TempRootDeleteOutcome(
+    string Path,
+    TempRootDeleteStatus Status,
+    string? ExceptionType)
+{
+    internal static TempRootDeleteOutcome Deleted(string path) =>
+        new(path, TempRootDeleteStatus.Deleted, ExceptionType: null);
+
+    internal static TempRootDeleteOutcome AlreadyAbsent(string path) =>
+        new(path, TempRootDeleteStatus.AlreadyAbsent, ExceptionType: null);
+
+    internal static TempRootDeleteOutcome Failure(string path, Exception exception) =>
+        new(path, TempRootDeleteStatus.Failed, exception.GetType().Name);
+}
+
 internal interface IWorkerIntegrityLabelerDiagnostics
 {
     IntegrityLabelSetOutcome? LastSetOutcome { get; }
@@ -610,6 +712,8 @@ internal sealed record IntegrityLabelSetOutcome(
 
 internal sealed class TempRootStartupTimings
 {
+    private readonly Dictionary<string, int> deleteFailureKindCounts = new(StringComparer.Ordinal);
+
     internal long TotalElapsedMilliseconds { get; set; }
     internal long CreateElapsedMilliseconds { get; private set; }
     internal long LabelQueryElapsedMilliseconds { get; private set; }
@@ -626,9 +730,20 @@ internal sealed class TempRootStartupTimings
     internal long ReapAgeSelectionElapsedMilliseconds { get; set; }
     internal long ReapBoundSelectionElapsedMilliseconds { get; set; }
     internal int ReapOverlapCount { get; set; }
-    internal int ReapDeleteAttempted { get; set; }
-    internal int ReapDeleteSucceeded { get; set; }
+    internal int ReapDeleteAttempted { get; private set; }
+    internal int ReapDeleteSucceeded { get; private set; }
+    internal int ReapDeleteDeleted { get; private set; }
+    internal int ReapDeleteAlreadyAbsent { get; private set; }
+    internal int ReapDeleteFailed { get; private set; }
     internal long ReapDeleteElapsedMilliseconds { get; set; }
+    internal string DeleteFailureKinds => deleteFailureKindCounts.Count == 0
+        ? "none"
+        : string.Join(
+            "|",
+            deleteFailureKindCounts
+                .OrderBy(pair => pair.Key, StringComparer.Ordinal)
+                .Select(pair => $"{pair.Key}:{pair.Value}"));
+    internal string FirstDeleteFailure { get; private set; } = "none";
 
     internal void AddCreateElapsed(long elapsedMilliseconds) =>
         CreateElapsedMilliseconds += elapsedMilliseconds;
@@ -650,6 +765,47 @@ internal sealed class TempRootStartupTimings
 
     internal void AddProbeCleanupElapsed(long elapsedMilliseconds) =>
         ProbeCleanupElapsedMilliseconds += elapsedMilliseconds;
+
+    internal void RecordDelete(TempRootDeleteOutcome outcome)
+    {
+        ArgumentNullException.ThrowIfNull(outcome);
+
+        ReapDeleteAttempted++;
+        switch (outcome.Status)
+        {
+            case TempRootDeleteStatus.Deleted:
+                ReapDeleteSucceeded++;
+                ReapDeleteDeleted++;
+                break;
+            case TempRootDeleteStatus.AlreadyAbsent:
+                ReapDeleteAlreadyAbsent++;
+                break;
+            case TempRootDeleteStatus.Failed:
+                ReapDeleteFailed++;
+                var exceptionType = SanitizeDiagnosticValue(outcome.ExceptionType ?? "unknown");
+                deleteFailureKindCounts[exceptionType] =
+                    deleteFailureKindCounts.GetValueOrDefault(exceptionType) + 1;
+                if (FirstDeleteFailure == "none")
+                {
+                    var leaf = SanitizeDiagnosticValue(Path.GetFileName(outcome.Path));
+                    FirstDeleteFailure = $"{leaf}:{exceptionType}";
+                }
+
+                break;
+            default:
+                throw new ArgumentOutOfRangeException(nameof(outcome), outcome.Status, null);
+        }
+    }
+
+    private static string SanitizeDiagnosticValue(string? value)
+    {
+        if (string.IsNullOrWhiteSpace(value))
+        {
+            return "unknown";
+        }
+
+        return new string(value.Select(character => char.IsWhiteSpace(character) ? '_' : character).ToArray());
+    }
 }
 
 internal interface ITempRootFileSystem
