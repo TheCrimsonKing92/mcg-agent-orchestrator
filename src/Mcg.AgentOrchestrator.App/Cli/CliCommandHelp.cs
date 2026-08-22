@@ -478,7 +478,6 @@ internal static class CliCommandHelp
                 "--command-contains", "--conduct-loop", "--dispatch-host", "--id", "--include-children",
                 "--locks", "--name", "--newest", "--parent-id"),
             ["repo-process-stop"] = Flags("--command-contains", "--force", "--id"),
-            ["stable-slot-dotnet"] = StableSlotDotnetFlags(),
             ["failure-triage"] = Flags("--autonomy", "--autonomy-policy", "--policy"),
             ["build-lease-cleanup"] = Flags("--confirm-build-lease-cleanup"),
             ["acceptance-queue"] = Flags(
@@ -507,6 +506,7 @@ internal static class CliCommandHelp
             ["rollback-goal"] = Flags("--confirm-goal-rollback", "--text-file"),
             ["goal-changes"] = Flags("--all", "--committed", "--flat", "--json", "--role", "--task", "--working"),
             ["goals-prune"] = Flags("--confirm-prune"),
+            ["model-function-add"] = Flags("--subscription", "--subscription-model", "--subscription-reasoning"),
             ["task"] = GoalScopedTaskFlags(),
             ["verification-plan"] = GoalScopedTaskFlags(),
             ["brief"] = GoalScopedTaskFlags(),
@@ -567,14 +567,6 @@ internal static class CliCommandHelp
 
         return Flags([.. flags]);
     }
-
-    private static IReadOnlySet<string> StableSlotDotnetFlags() =>
-        Flags(
-            "--blame", "--collect", "--configuration", "--filter", "--filter-class", "--filter-not-class",
-            "--framework", "--interactive", "--list-tests", "--logger", "--no-ansi", "--no-build",
-            "--no-dependencies", "--no-restore", "--nologo", "--output", "--progress", "--property", "--report-trx",
-            "--report-trx-filename", "--results-directory", "--runtime", "--settings", "--verbosity",
-            "-c", "-f", "-o", "-r", "-v");
 
     private static readonly IReadOnlySet<string> InlineValueFlags =
         new HashSet<string>(StringComparer.OrdinalIgnoreCase)
@@ -1257,12 +1249,18 @@ internal static class CliCommandHelp
         {
         }
 
-        public static CommandHelpEntry Generic(string command) => new(
-            $"Usage: {command} [options]",
-            "Run this operator command.",
-            GenericCommandFlags.TryGetValue(command, out var flags) ? flags : CliCommandHelp.Flags(),
-            [],
-            ValidateFlags: true);
+        public static CommandHelpEntry Generic(string command)
+        {
+            // stable-slot-dotnet forwards every argument after the command to dotnet, whose option domain
+            // is intentionally open. Those tokens are not orchestrator flags and cannot be enumerated here.
+            var forwardsArbitraryDotnetOptions = command.Equals("stable-slot-dotnet", StringComparison.OrdinalIgnoreCase);
+            return new CommandHelpEntry(
+                $"Usage: {command} [options]",
+                "Run this operator command.",
+                GenericCommandFlags.TryGetValue(command, out var flags) ? flags : CliCommandHelp.Flags(),
+                [],
+                ValidateFlags: !forwardsArbitraryDotnetOptions);
+        }
     }
 
     private static HashSet<string> UnionFlags(params IEnumerable<string>[] parts)

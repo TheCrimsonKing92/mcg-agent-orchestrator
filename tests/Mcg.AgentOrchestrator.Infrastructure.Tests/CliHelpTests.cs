@@ -661,11 +661,16 @@ public sealed class CliHelpTests
         Xunit.Assert.Contains(command, exception.Message, StringComparison.Ordinal);
     }
 
-    [Xunit.Fact(DisplayName = "Cli_all_recognized_commands_reject_unknown_flags")]
-    public void CliAllRecognizedCommandsRejectUnknownFlags()
+    [Xunit.Fact(DisplayName = "Cli_all_recognized_commands_reject_unknown_flags_except_documented_passthrough")]
+    public void CliAllRecognizedCommandsRejectUnknownFlagsExceptDocumentedPassthrough()
     {
         foreach (var command in CliArgumentParser.RecognizedCommands)
         {
+            if (command.Equals("stable-slot-dotnet", StringComparison.OrdinalIgnoreCase))
+            {
+                continue;
+            }
+
             var exception = Xunit.Assert.Throws<ArgumentException>(() =>
                 CliCommandHelp.ThrowIfInvalidFlags([command, "--zz-not-a-real-flag"]));
             Xunit.Assert.Contains("Unknown option '--zz-not-a-real-flag'", exception.Message, StringComparison.Ordinal);
@@ -747,7 +752,24 @@ public sealed class CliHelpTests
         Xunit.Assert.Null(Xunit.Record.Exception(() =>
             CliCommandHelp.ThrowIfInvalidFlags(["failure-triage", "--policy", "Conservative"])));
         Xunit.Assert.Null(Xunit.Record.Exception(() =>
-            CliCommandHelp.ThrowIfInvalidFlags(["stable-slot-dotnet", "--nologo"])));
+            CliCommandHelp.ThrowIfInvalidFlags(
+                ["model-function-add", "--subscription", "--subscription-model", "--subscription-reasoning"])));
+    }
+
+    [Xunit.Fact(DisplayName = "Cli_stable_slot_dotnet_preserves_unbounded_dotnet_option_passthrough")]
+    public void CliStableSlotDotnetPreservesUnboundedDotnetOptionPassthrough()
+    {
+        var dotnetOptions = new[]
+        {
+            "-p:Name=Value", "-clp:ErrorsOnly", "--artifacts-path", "--arch", "--os",
+            "--filter-method", "--filter-not-trait"
+        };
+
+        foreach (var option in dotnetOptions)
+        {
+            Xunit.Assert.Null(Xunit.Record.Exception(() =>
+                CliCommandHelp.ThrowIfInvalidFlags(["stable-slot-dotnet", option, "value"])));
+        }
     }
 
     [Xunit.Theory(DisplayName = "Cli_generic_commands_reject_flags_owned_by_other_commands")]
