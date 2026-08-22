@@ -456,6 +456,9 @@ public sealed class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
         DotnetBuildEnvironmentLease? stableSlotLease = null,
         CancellationToken cancellationToken = default)
     {
+        using var phaseAccountant = AcceptanceGatePhaseAccountant.Start(
+            _timeProvider, goalId?.Value, EmitGateProgress, cancellationToken);
+        phaseAccountant.TransitionTo(AcceptanceGatePhaseNames.GatePlan);
         var engineSettings = AcceptanceGateEngineSettings.Load(worktreePath);
         using var engineScope = PushEngineSettings(engineSettings);
         using var resultsScope = PushOwnerResultsScope(worktreePath, goalId, "gate");
@@ -463,6 +466,7 @@ public sealed class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
         using var laneDurationScope = AcceptanceLaneDurationStore.PushRecordingScope(worktreePath);
         if (TryClassifyManifestTrust(worktreePath, changedFiles) is { } manifestTrustFailure)
         {
+            phaseAccountant.MarkCompleted(passed: false);
             return new AcceptanceVerificationResult(
                 Passed: false,
                 Skipped: false,
@@ -472,12 +476,14 @@ public sealed class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
         }
 
         // Shut down build servers to release file locks before running tests.
+        phaseAccountant.TransitionTo(AcceptanceGatePhaseNames.BuildServerShutdown);
         await _runner(
             ["dotnet", "build-server", "shutdown"],
             worktreePath,
             engineSettings.ResolveBuildServerShutdownTimeout(),
             cancellationToken).ConfigureAwait(false);
 
+        phaseAccountant.TransitionTo(AcceptanceGatePhaseNames.PlanConstruction);
         var shardCoreBudget =
             ResolveShardCoreBudgetForTests?.Invoke() ?? Math.Max(1, Environment.ProcessorCount / 2);
         var shardConcurrencyBudget = Math.Min(
@@ -515,6 +521,7 @@ public sealed class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
 
         var checks = new List<AcceptanceCheckResult>();
         var retried = false;
+        phaseAccountant.TransitionTo(AcceptanceGatePhaseNames.CheckExecution);
 
         // When the manifest has both a solution-wide dotnet-test check and granular
         // per-project .csproj checks covered by it, run the solution once and synthesize
@@ -641,6 +648,7 @@ public sealed class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
             retried |= batch.Retried;
         }
 
+        phaseAccountant.TransitionTo(AcceptanceGatePhaseNames.PolicySynthesis);
         if (partitionVerdictCache?.CompleteAttempt() is { } partitionCacheReceipt)
         {
             checks.Add(partitionCacheReceipt);
@@ -659,6 +667,7 @@ public sealed class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
             checks.Add(await RunForbiddenChangedPathsCheckAsync(manifest.ForbiddenChangedPathGlobs, worktreePath, cancellationToken).ConfigureAwait(false));
         }
 
+        phaseAccountant.TransitionTo(AcceptanceGatePhaseNames.StructuralCoverage);
         if (checks.All(check => check.Passed) && structuralCoverageApplies)
         {
             var structuralCoverage = await RunStructuralCoverageCheckAsync(
@@ -677,6 +686,7 @@ public sealed class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
             retried |= structuralCoverage.LockRemediationApplied;
         }
 
+        phaseAccountant.TransitionTo(AcceptanceGatePhaseNames.AdvisoryAndTamper);
         if (checks.All(check => check.Passed) && ProposalValidationApplies(worktreePath, changedFiles))
         {
             checks.Add(RunStateEffectProposalSchemaCheck(worktreePath, changedFiles));
@@ -713,6 +723,7 @@ public sealed class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
                 cancellationToken).ConfigureAwait(false));
         }
 
+        phaseAccountant.TransitionTo(AcceptanceGatePhaseNames.Finalize);
         var failedCheck = checks.FirstOrDefault(check => !check.Advisory && !check.Passed);
         var artifactsPath = checks.LastOrDefault(check => !string.IsNullOrWhiteSpace(check.ArtifactsPath))?.ArtifactsPath;
         var testResultPaths = CollectTestResultPaths(checks);
@@ -732,6 +743,7 @@ public sealed class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
             runEnvironmentScope.MarkSuccessful();
         }
 
+        phaseAccountant.MarkCompleted(verification.Passed);
         return verification;
     }
 
@@ -1226,6 +1238,7 @@ public sealed class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
         int maxConcurrentShards,
         CancellationToken cancellationToken)
     {
+        AcceptanceGatePhaseAccountant.TransitionCurrent(AcceptanceGatePhaseNames.SharedPrebuild);
         var allShardsUseMtp = shardChecks.All(UsesMicrosoftTestingPlatform);
         if (allShardsUseMtp && primaryBuildPhase is not null)
         {
@@ -1245,7 +1258,8 @@ public sealed class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
             }
         }
 
-        var wallClock = Stopwatch.StartNew();
+        AcceptanceGatePhaseAccountant.TransitionCurrent(AcceptanceGatePhaseNames.LaneExecution);
+        var wallClock = _timeProvider.GetTimestamp();
         var orderedShards = shardChecks
             .Select((check, index) => new IndexedShard(index, check))
             .OrderByDescending(shard => AcceptanceLaneDurationStore.ResolveSortSeconds(shard.Check))
@@ -1363,7 +1377,9 @@ public sealed class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
         }
 
         cancellationToken.ThrowIfCancellationRequested();
-        wallClock.Stop();
+        var wallElapsed = _timeProvider.GetElapsedTime(wallClock);
+        AcceptanceGatePhaseAccountant.RecordCurrentLaneExecution(wallElapsed);
+        AcceptanceGatePhaseAccountant.TransitionCurrent(AcceptanceGatePhaseNames.CheckExecution);
         if (outcomes.Any(outcome => outcome is null))
         {
             throw new InvalidOperationException(
@@ -1375,7 +1391,7 @@ public sealed class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
             "shards-complete",
             $"{shardChecks.Count}-infrastructure-shards",
             primarySlotIndex,
-            wallClock.Elapsed,
+            wallElapsed,
             shardConcurrency.Count);
         var completed = outcomes.Select(outcome => outcome!).ToArray();
         return new CheckBatchResult(
