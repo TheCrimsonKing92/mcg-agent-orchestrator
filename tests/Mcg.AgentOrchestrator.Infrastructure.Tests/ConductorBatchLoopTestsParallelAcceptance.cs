@@ -1160,8 +1160,8 @@ public sealed class ConductorBatchLoopTestsParallelAcceptance : ConductorBatchLo
         Assert.Equal(0, summary.Held);
         Assert.Equal(1, summary.Escalated);
         var reason = Assert.Single(escalationReasons);
-        Assert.Contains($"Acceptance slot count {requestedWidth}", reason, StringComparison.Ordinal);
-        Assert.Contains($"maximum {ConductorBatchLoop.MaxParallelAcceptanceCapacity}", reason, StringComparison.Ordinal);
+        Assert.Contains($"Acceptance_slot_count_{requestedWidth}", reason, StringComparison.Ordinal);
+        Assert.Contains($"maximum_{ConductorBatchLoop.MaxParallelAcceptanceCapacity}", reason, StringComparison.Ordinal);
     }
 
     [Xunit.Fact(DisplayName = "BatchLoop_acceptance_lease_defers_attempts_until_known_expiry")]

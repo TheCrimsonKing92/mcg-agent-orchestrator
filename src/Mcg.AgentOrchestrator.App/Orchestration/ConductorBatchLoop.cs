@@ -3000,7 +3000,7 @@ internal sealed class ConductorBatchLoop
                     driver.EscalateParallelLandingAcceptance(
                         goal,
                         policy,
-                        $"invalid parallel acceptance slot settings: {Sanitize(ex.Message)}"),
+                        $"invalid parallel acceptance slot settings: {SanitizeReason(ex.Message)}"),
                     null);
                 RecordParallelAcceptanceProgress(
                     $"ADMISSION tick={tick} result=escalated reason=parallel-acceptance-slot-settings goal={goal.Id.Value[..8]} detail={Sanitize(ex.Message)}",
