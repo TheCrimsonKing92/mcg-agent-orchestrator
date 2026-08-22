@@ -16,7 +16,8 @@ internal sealed record AcceptanceStructuralCoverageRequest(
     Func<IReadOnlyList<string>> ResolveDeletedTestFiles,
     string? CurrentAttemptId,
     IReadOnlyList<string> SanctionedRemovedTests,
-    Func<CancellationToken, Task<AcceptanceStructuralCoverageBaseline?>> PrepareBaseline);
+    Func<CancellationToken, Task<AcceptanceStructuralCoverageBaseline?>> PrepareBaseline,
+    Func<CancellationToken, Task<AcceptanceContainedGenerationBaseline>>? PrepareContainedBaseline = null);
 
 internal sealed record AcceptanceStructuralCoverageEvaluation(
     GoalAcceptanceVerifier.CommandResult CandidateDiscovery,
@@ -130,6 +131,51 @@ internal sealed class AcceptanceStructuralCoverageEvaluator
             request.CurrentAttemptId,
             baselineSnapshot?.SourceFilesByTest,
             request.SanctionedRemovedTests);
+        if (coverage.CountComparison?.IsShortfall == true &&
+            coverage.EmptyPartitions.Count == 0 &&
+            coverage.MissingTests.Count == 1 &&
+            baselineSnapshot is not null &&
+            request.PrepareContainedBaseline is not null)
+        {
+            var observedMainCount = baselineSnapshot.Tests.Count;
+            using var contained = await request.PrepareContainedBaseline(
+                cancellationToken).ConfigureAwait(false);
+            if (!contained.IsResolved)
+            {
+                coverage = AppendGenerationReceipt(
+                    coverage,
+                    $"cross-generation-staleness:contained=unresolved,reason={contained.UnresolvedReason ?? "unknown"},disposition=unresolved-generation",
+                    addToMissing: true);
+            }
+            else
+            {
+                var containedSnapshot = contained.UseObservedBaseline
+                    ? baselineSnapshot
+                    : await DiscoverContainedBaselineAsync(contained, request, cancellationToken).ConfigureAwait(false);
+                if (containedSnapshot is null || containedSnapshot.Tests.Count == 0)
+                {
+                    coverage = AppendGenerationReceipt(
+                        coverage,
+                        $"cross-generation-staleness:contained=unresolved,reason={contained.UnresolvedReason ?? "discovery-unresolved"},disposition=unresolved-generation",
+                        addToMissing: true);
+                }
+                else
+                {
+                    coverage = TestCoverageInvariant.Evaluate(
+                        candidateSnapshot.Tests,
+                        partitions,
+                        containedSnapshot.Tests,
+                        deletedTestFiles,
+                        request.CurrentAttemptId,
+                        containedSnapshot.SourceFilesByTest,
+                        request.SanctionedRemovedTests);
+                    var disposition = coverage.Passed ? "integration-stale" : "coverage-shortfall";
+                    var receipt =
+                        $"cross-generation-staleness:contained={ShortSha(contained.ContainedMainSha)},observed-main={ShortSha(contained.ObservedMainSha)},candidate={candidateSnapshot.Tests.Count},contained-minimum={coverage.CountComparison?.MinimumCandidateCount ?? containedSnapshot.Tests.Count},observed-main-count={observedMainCount},disposition={disposition}";
+                    coverage = AppendGenerationReceipt(coverage, receipt, addToMissing: !coverage.Passed);
+                }
+            }
+        }
         return new AcceptanceStructuralCoverageEvaluation(
             candidateDiscovery,
             baselineDiscovery,
@@ -137,4 +183,53 @@ internal sealed class AcceptanceStructuralCoverageEvaluator
             coverage,
             baseline?.LockRemediationApplied == true);
     }
+
+    private async Task<TestDiscoverySnapshot?> DiscoverContainedBaselineAsync(
+        AcceptanceContainedGenerationBaseline contained,
+        AcceptanceStructuralCoverageRequest request,
+        CancellationToken cancellationToken)
+    {
+        if (contained.Baseline is null)
+        {
+            contained.MarkUnresolved("baseline-unavailable");
+            return null;
+        }
+
+        try
+        {
+            var discovery = await _discoveryRunner(
+                contained.Baseline.DiscoveryArguments,
+                contained.Baseline.WorktreePath,
+                request.DiscoveryTimeout,
+                cancellationToken).ConfigureAwait(false);
+            if (discovery.TimedOut || discovery.ExitCode != 0)
+            {
+                contained.MarkUnresolved(discovery.TimedOut ? "discovery-timeout" : "discovery-failed");
+                return null;
+            }
+
+            return TestCoverageInvariant.ParseDiscovery(
+                discovery.Output,
+                contained.Baseline.BareTestList,
+                contained.Baseline.RepositoryRoot);
+        }
+        catch (Exception ex) when (_isBaselineDiscoveryIoException(ex))
+        {
+            contained.MarkUnresolved("discovery-io");
+            return null;
+        }
+    }
+
+    private static TestCoverageInvariantResult AppendGenerationReceipt(
+        TestCoverageInvariantResult coverage,
+        string receipt,
+        bool addToMissing) =>
+        coverage with
+        {
+            Summary = $"{coverage.Summary}; {receipt}",
+            MissingTests = addToMissing ? [.. coverage.MissingTests, receipt] : coverage.MissingTests
+        };
+
+    private static string ShortSha(string? sha) =>
+        string.IsNullOrWhiteSpace(sha) ? "unavailable" : sha[..Math.Min(8, sha.Length)];
 }

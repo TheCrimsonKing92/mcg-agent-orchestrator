@@ -3,6 +3,7 @@ using Mcg.AgentOrchestrator.Infrastructure;
 public sealed class AcceptanceStructuralCoverageEvaluatorTests : IDisposable
 {
     private const string PassedTest = "Namespace.SampleTests.Passes";
+    private const string SecondTest = "Namespace.SampleTests.Second";
     private const string MissingTest = "Namespace.SampleTests.Missing";
     private readonly string _root = CreateTempDirectory();
     private int _discoveryInvocations;
@@ -73,6 +74,80 @@ public sealed class AcceptanceStructuralCoverageEvaluatorTests : IDisposable
         Assert.Equal(1, _discoveryInvocations);
     }
 
+    [Fact]
+    public async Task Evaluate_CandidateBelowNewerMainButMatchesContainedGeneration_Passes()
+    {
+        var trxPath = WriteTrx(
+            "stale-main.trx",
+            [
+                TestResult("passed", PassedTest, "Passed"),
+                TestResult("second", SecondTest, "Passed")
+            ],
+            executed: 2);
+
+        var evaluation = await EvaluateWithBaselinesAsync(
+            [PassedTest, SecondTest],
+            [PassedTest, SecondTest, MissingTest],
+            [PassedTest, SecondTest],
+            trxPath);
+
+        var coverage = Assert.IsType<TestCoverageInvariantResult>(evaluation.Coverage);
+        Assert.True(coverage.Passed, coverage.Summary);
+        Assert.Null(coverage.FailureClassification);
+        Assert.Contains("disposition=integration-stale", coverage.Summary, StringComparison.Ordinal);
+        Assert.DoesNotContain("disposition=coverage-shortfall", coverage.Summary, StringComparison.Ordinal);
+        Assert.Equal(3, _discoveryInvocations);
+    }
+
+    [Fact]
+    public async Task Evaluate_CandidateBelowContainedGeneration_FailsExplicitly()
+    {
+        var trxPath = WriteTrx(
+            "contained-shortfall.trx",
+            [TestResult("passed", PassedTest, "Passed")],
+            executed: 1);
+
+        var evaluation = await EvaluateWithBaselinesAsync(
+            [PassedTest],
+            [PassedTest, SecondTest, MissingTest],
+            [PassedTest, SecondTest],
+            trxPath);
+
+        var coverage = Assert.IsType<TestCoverageInvariantResult>(evaluation.Coverage);
+        Assert.False(coverage.Passed);
+        Assert.Equal(AcceptanceFailureClassifications.StructuralCoverageFailed, coverage.FailureClassification);
+        Assert.Contains(
+            "cross-generation-count:candidate=1,minimum=2,main=2,deleted=0",
+            coverage.MissingTests);
+        Assert.Contains("disposition=coverage-shortfall", coverage.Summary, StringComparison.Ordinal);
+        Assert.DoesNotContain("disposition=integration-stale", coverage.Summary, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public async Task Evaluate_ContainedGenerationUnresolved_FailsConservatively()
+    {
+        var trxPath = WriteTrx(
+            "unresolved.trx",
+            [
+                TestResult("passed", PassedTest, "Passed"),
+                TestResult("second", SecondTest, "Passed")
+            ],
+            executed: 2);
+
+        var evaluation = await EvaluateWithBaselinesAsync(
+            [PassedTest, SecondTest],
+            [PassedTest, SecondTest, MissingTest],
+            containedTests: null,
+            trxPath: trxPath,
+            unresolvedReason: "merge-base-unresolved");
+
+        var coverage = Assert.IsType<TestCoverageInvariantResult>(evaluation.Coverage);
+        Assert.False(coverage.Passed);
+        Assert.Equal(AcceptanceFailureClassifications.StructuralCoverageFailed, coverage.FailureClassification);
+        Assert.Contains("contained=unresolved", coverage.Summary, StringComparison.Ordinal);
+        Assert.Contains("disposition=unresolved-generation", coverage.Summary, StringComparison.Ordinal);
+    }
+
     public void Dispose()
     {
         if (Directory.Exists(_root))
@@ -111,6 +186,76 @@ public sealed class AcceptanceStructuralCoverageEvaluatorTests : IDisposable
             CurrentAttemptId: null,
             SanctionedRemovedTests: [],
             PrepareBaseline: _ => Task.FromResult<AcceptanceStructuralCoverageBaseline?>(null));
+
+        return await evaluator.EvaluateAsync(request, CancellationToken.None);
+    }
+
+    private async Task<AcceptanceStructuralCoverageEvaluation> EvaluateWithBaselinesAsync(
+        IReadOnlyList<string> candidateTests,
+        IReadOnlyList<string> observedMainTests,
+        IReadOnlyList<string>? containedTests,
+        string trxPath,
+        string? unresolvedReason = null)
+    {
+        const string observedPath = "observed-main";
+        const string containedPath = "contained-main";
+        var evaluator = new AcceptanceStructuralCoverageEvaluator(
+            (arguments, workingDirectory, timeout, cancellationToken) =>
+            {
+                _discoveryInvocations++;
+                var discovered = workingDirectory switch
+                {
+                    observedPath => observedMainTests,
+                    containedPath => containedTests ?? [],
+                    _ => candidateTests
+                };
+                return Task.FromResult(new GoalAcceptanceVerifier.CommandResult(
+                    0,
+                    string.Join(
+                        Environment.NewLine,
+                        discovered.Select(test => $"DISCOVERED_TEST: {test}"))));
+            });
+        var request = new AcceptanceStructuralCoverageRequest(
+            CandidateDiscoveryArguments: ["discover"],
+            CandidateWorktreePath: _root,
+            DiscoveryTimeout: TimeSpan.FromMinutes(1),
+            BareTestList: false,
+            ResolvePartitions: () =>
+            [
+                new TestPartitionCoverage(
+                    "partition",
+                    Completed: true,
+                    TestResultPaths: [trxPath])
+            ],
+            ResolveDeletedTestFiles: () => [],
+            CurrentAttemptId: null,
+            SanctionedRemovedTests: [],
+            PrepareBaseline: _ => Task.FromResult<AcceptanceStructuralCoverageBaseline?>(new(
+                ["discover-observed"],
+                observedPath,
+                _root,
+                BareTestList: false,
+                LockRemediationApplied: false)),
+            PrepareContainedBaseline: _ =>
+            {
+                var contained = new AcceptanceContainedGenerationBaseline(
+                    containedMainSha: unresolvedReason is null ? "aaaaaaaa" : null,
+                    observedMainSha: "bbbbbbbb",
+                    worktreePath: containedTests is null ? null : containedPath,
+                    useObservedBaseline: false,
+                    unresolvedReason);
+                if (containedTests is not null)
+                {
+                    contained.SetBaseline(new AcceptanceStructuralCoverageBaseline(
+                        ["discover-contained"],
+                        containedPath,
+                        _root,
+                        BareTestList: false,
+                        LockRemediationApplied: false));
+                }
+
+                return Task.FromResult(contained);
+            });
 
         return await evaluator.EvaluateAsync(request, CancellationToken.None);
     }

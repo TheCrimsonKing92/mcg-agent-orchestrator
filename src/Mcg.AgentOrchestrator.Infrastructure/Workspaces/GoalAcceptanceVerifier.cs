@@ -5261,17 +5261,20 @@ public sealed class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
             }
 
             async Task<AcceptanceStructuralCoverageBaseline?> PrepareBaselineAsync(
+                string baselineWorktreePath,
+                string artifactsDirectoryName,
+                string operationName,
                 CancellationToken baselineCancellationToken)
             {
-                var mainProjectPath = Path.Combine(
-                    mainWorktreePath,
+                var baselineProjectPath = Path.Combine(
+                    baselineWorktreePath,
                     broadCheck.Project!.Replace('/', Path.DirectorySeparatorChar));
-                if (!File.Exists(mainProjectPath))
+                if (!File.Exists(baselineProjectPath))
                 {
                     return null;
                 }
 
-                var mainArtifactsPath = Path.Combine(environment.ArtifactsPath, "main-coverage-baseline");
+                var mainArtifactsPath = Path.Combine(environment.ArtifactsPath, artifactsDirectoryName);
                 var mainEnvironment = environment.DeriveArtifactsPath(mainArtifactsPath);
                 var mainBuildArguments = new[]
                 {
@@ -5288,11 +5291,11 @@ public sealed class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
                     var managedBuild = await RunManagedDotnetCheckAsync(
                         broadCheck,
                         mainBuildArguments,
-                        mainWorktreePath,
+                        baselineWorktreePath,
                         goalId,
                         stableSlotIndex,
                         stableSlotLease,
-                        "acceptance-main-coverage-baseline",
+                        operationName,
                         baselineCancellationToken,
                         executionEnvironment: mainEnvironment)
                         .ConfigureAwait(false);
@@ -5333,11 +5336,25 @@ public sealed class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
                     mainEnvironment);
                 return new AcceptanceStructuralCoverageBaseline(
                     mainDiscoveryArguments,
-                    mainWorktreePath,
-                    mainWorktreePath,
+                    baselineWorktreePath,
+                    baselineWorktreePath,
                     UsesMicrosoftTestingPlatform(broadCheck),
                     lockRemediationApplied);
             }
+
+            Task<AcceptanceContainedGenerationBaseline> PrepareContainedBaselineAsync(
+                CancellationToken baselineCancellationToken) =>
+                AcceptanceContainedGenerationBaseline.PrepareAsync(
+                    worktreePath,
+                    goalId?.Value ?? "operator",
+                    (path, sha, token) => PrepareBaselineAsync(
+                        path,
+                        $"contained-coverage-baseline-{sha[..Math.Min(8, sha.Length)]}",
+                        "acceptance-contained-coverage-baseline",
+                        token),
+                    AcceptanceGitTextResolver.Resolve,
+                    static (directory, arguments) => GitCli.Run(directory, arguments),
+                    baselineCancellationToken);
 
             var evaluation = await _structuralCoverageEvaluator.EvaluateAsync(
                 new AcceptanceStructuralCoverageRequest(
@@ -5349,7 +5366,12 @@ public sealed class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
                     () => DeletedTestFilesForProject(deletedTestFiles, broadCheck.Project!),
                     currentAttemptId,
                     sanctionedRemovedTests,
-                    PrepareBaselineAsync),
+                    cancellationToken => PrepareBaselineAsync(
+                        mainWorktreePath,
+                        "main-coverage-baseline",
+                        "acceptance-main-coverage-baseline",
+                        cancellationToken),
+                    PrepareContainedBaselineAsync),
                 cancellationToken).ConfigureAwait(false);
 
             var candidateDiscovery = evaluation.CandidateDiscovery;
@@ -5659,40 +5681,15 @@ public sealed class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
             return ResolveMainWorktreePathForTests(worktreePath);
         }
 
-        return ResolveMainWorktreePathCore(worktreePath, AcceptanceGitTextResolver.Resolve);
+        return AcceptanceContainedGenerationBaseline.ResolveMainWorktreePath(
+            worktreePath,
+            AcceptanceGitTextResolver.Resolve);
     }
 
     internal static string? ResolveMainWorktreePathWithGitForTests(
         string worktreePath,
         Func<string, string[], string?> resolveGitText) =>
-        ResolveMainWorktreePathCore(worktreePath, resolveGitText);
-
-    private static string? ResolveMainWorktreePathCore(
-        string worktreePath,
-        Func<string, string[], string?> resolveGitText)
-    {
-        var output = resolveGitText(worktreePath, ["worktree", "list", "--porcelain"]);
-        if (string.IsNullOrWhiteSpace(output))
-        {
-            return null;
-        }
-
-        string? currentPath = null;
-        foreach (var line in output.Split(['\r', '\n'], StringSplitOptions.RemoveEmptyEntries))
-        {
-            if (line.StartsWith("worktree ", StringComparison.Ordinal))
-            {
-                currentPath = line["worktree ".Length..].Trim();
-            }
-            else if (line.Equals("branch refs/heads/main", StringComparison.Ordinal) &&
-                !string.IsNullOrWhiteSpace(currentPath))
-            {
-                return currentPath;
-            }
-        }
-
-        return null;
-    }
+        AcceptanceContainedGenerationBaseline.ResolveMainWorktreePath(worktreePath, resolveGitText);
 
     private static string[] ResolveDeletedTestFiles(string worktreePath, string project)
     {
