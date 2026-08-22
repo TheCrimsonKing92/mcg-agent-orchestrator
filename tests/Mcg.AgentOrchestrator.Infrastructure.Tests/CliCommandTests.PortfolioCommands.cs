@@ -72,8 +72,34 @@ public sealed class CliCommandTestsPortfolioCommands : CliCommandTestBase
 
         var output = ExecuteCliAndCapture(["status", goal.Id.Value[..8]], kernel, workspace);
 
+        Xunit.Assert.Contains($"Goal {goal.Id.Value}", output);
+        Xunit.Assert.Contains("Objective: Status membership goal", output);
+        Xunit.Assert.Contains("Status: Active", output);
         Xunit.Assert.Contains("Portfolio: epic=Portfolio Board", output);
         Xunit.Assert.Contains("project=Control Plane", output);
+    }
+
+    [Xunit.Fact(DisplayName = "Cli_epic_members_lists_terminal_goal_and_backlog_members")]
+    public void EpicMembersListsTerminalGoalAndBacklogMembers()
+    {
+        var root = CreateTempDirectory();
+        var workspace = CreateRefinedWorkspace(root);
+        var kernel = new AgentOrchestratorKernel();
+        var goal = kernel.CreateGoal(new GoalId("eeeeeeee555555555555555555555555"), "Cancelled member");
+        kernel.ActivateGoal(goal.Id, AgentCatalog.Default().Agents);
+        kernel = WithGoalStatus(kernel, goal.Id, GoalStatus.Cancelled);
+        var backlogStore = new BacklogStore(workspace.BacklogStorePath);
+        var backlog = backlogStore.AddAsync("Done backlog member").GetAwaiter().GetResult();
+        backlogStore.TryCloseByIdAsync(backlog.Id).GetAwaiter().GetResult();
+        var store = new PortfolioStore(workspace.PortfolioStorePath);
+        var epic = store.AddEpicAsync("Terminal members").GetAwaiter().GetResult();
+        store.AssignGoalToEpicAsync(goal.Id.Value, epic.Id).GetAwaiter().GetResult();
+        store.AssignBacklogItemToEpicAsync(backlog.Id, epic.Id).GetAwaiter().GetResult();
+
+        var output = ExecuteCliAndCapture(["epic-members", epic.Id[..8]], kernel, workspace);
+
+        Xunit.Assert.Contains($"Goal: {goal.Id.Value}", output);
+        Xunit.Assert.Contains($"BacklogItem: {backlog.Id}", output);
     }
 
     [Xunit.Fact(DisplayName = "Cli_epic_suggest_records_all_signals_without_assigning_members")]

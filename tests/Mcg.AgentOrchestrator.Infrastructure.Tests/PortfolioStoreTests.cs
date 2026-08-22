@@ -3,6 +3,109 @@ using Mcg.AgentOrchestrator.Infrastructure;
 
 public sealed class PortfolioStoreTests
 {
+    [Xunit.Fact(DisplayName = "PortfolioStore_entities_round_trip_with_optional_parent")]
+    public async Task EntitiesRoundTripWithOptionalParent()
+    {
+        var store = new PortfolioStore(TempDb());
+        var root = await store.AddProjectAsync("Control plane");
+        var child = await store.AddProjectAsync("Orchestration", root.Id);
+        var parentedEpic = await store.AddEpicAsync("Wave 2", child.Id);
+        var unparentedEpic = await store.AddEpicAsync("Independent work");
+
+        var projects = await store.ListProjectsAsync();
+        var epics = await store.ListEpicsAsync();
+
+        var roundTrippedRoot = Assert.Single(projects, project => project.Id == root.Id);
+        Assert.Equal("Control plane", roundTrippedRoot.Title);
+        Assert.Null(roundTrippedRoot.ParentProjectId);
+        var roundTrippedChild = Assert.Single(projects, project => project.Id == child.Id);
+        Assert.Equal("Orchestration", roundTrippedChild.Title);
+        Assert.Equal(root.Id, roundTrippedChild.ParentProjectId);
+        var roundTrippedParentedEpic = Assert.Single(epics, epic => epic.Id == parentedEpic.Id);
+        Assert.Equal("Wave 2", roundTrippedParentedEpic.Title);
+        Assert.Equal(child.Id, roundTrippedParentedEpic.ProjectId);
+        var roundTrippedUnparentedEpic = Assert.Single(epics, epic => epic.Id == unparentedEpic.Id);
+        Assert.Equal("Independent work", roundTrippedUnparentedEpic.Title);
+        Assert.Null(roundTrippedUnparentedEpic.ProjectId);
+    }
+
+    [Xunit.Fact(DisplayName = "PortfolioStore_membership_round_trips_for_goal_and_backlog_members")]
+    public async Task MembershipRoundTripsForGoalAndBacklogMembers()
+    {
+        var store = new PortfolioStore(TempDb());
+        var project = await store.AddProjectAsync("Control plane");
+        var epic = await store.AddEpicAsync("Wave 2", project.Id);
+        const string goalId = "aaaaaaaa111111111111111111111111";
+        const string backlogItemId = "backlog11111111111111111111111111";
+
+        await store.AssignGoalToEpicAsync(goalId, epic.Id);
+        await store.AssignBacklogItemToEpicAsync(backlogItemId, epic.Id);
+
+        var goalMembership = await store.GetGoalMembershipAsync(goalId);
+        var backlogMembership = await store.GetBacklogMembershipAsync(backlogItemId);
+
+        Assert.Equal(epic.Id, goalMembership!.EpicId);
+        Assert.Equal("Wave 2", goalMembership.EpicTitle);
+        Assert.Equal("Control plane", goalMembership.ProjectTitle);
+        Assert.Equal(epic.Id, backlogMembership!.EpicId);
+        Assert.Equal("Wave 2", backlogMembership.EpicTitle);
+        Assert.Equal("Control plane", backlogMembership.ProjectTitle);
+    }
+
+    [Xunit.Fact(DisplayName = "PortfolioStore_membership_survives_terminal_member_states")]
+    public async Task MembershipSurvivesTerminalMemberStates()
+    {
+        var store = new PortfolioStore(TempDb());
+        var epic = await store.AddEpicAsync("Terminal members");
+        var kernel = new AgentOrchestratorKernel();
+        var terminalStatuses = new[] { GoalStatus.Completed, GoalStatus.Failed, GoalStatus.Cancelled, GoalStatus.Superseded };
+        var goals = terminalStatuses
+            .Select((status, index) => (Goal: kernel.CreateGoal(new GoalId($"{index + 1:D8}aaaaaaaaaaaaaaaaaaaaaaaa"), $"{status} goal"), Status: status))
+            .ToArray();
+        foreach (var (goal, _) in goals)
+            kernel.ActivateGoal(goal.Id, AgentCatalog.Default().Agents);
+        foreach (var (goal, status) in goals)
+            kernel = WithStatus(kernel, goal.Id, status);
+        foreach (var (goal, status) in goals)
+            Assert.Contains(kernel.Goals, current => current.Id == goal.Id && current.Status == status);
+
+        var backlogStore = new BacklogStore(TempDb());
+        var done = await backlogStore.AddAsync("Done backlog member");
+        var superseded = await backlogStore.AddAsync("Superseded backlog member");
+        var replacement = await backlogStore.AddAsync("Replacement backlog member");
+        Assert.True(await backlogStore.TryCloseByIdAsync(done.Id));
+        var supersededResult = await backlogStore.SupersedeAsync(superseded.Id, replacement.Id);
+        Assert.Equal(BacklogItemStatus.Done, (await backlogStore.ListAsync(includeAll: true)).Single(item => item.Id == done.Id).Status);
+        Assert.Equal(BacklogItemStatus.Superseded, supersededResult.Status);
+
+        foreach (var (goal, _) in goals)
+            await store.AssignGoalToEpicAsync(goal.Id.Value, epic.Id);
+        await store.AssignBacklogItemToEpicAsync(done.Id, epic.Id);
+        await store.AssignBacklogItemToEpicAsync(superseded.Id, epic.Id);
+
+        var members = await store.ListEpicMembersAsync(epic.Id);
+        var rollup = Assert.Single(await store.BuildEpicRollupsAsync(Array.Empty<Goal>()));
+
+        Assert.Equal(4, members.Count(member => member.Kind == PortfolioMemberKind.Goal));
+        Assert.Equal(2, members.Count(member => member.Kind == PortfolioMemberKind.BacklogItem));
+        foreach (var (goal, _) in goals)
+            Assert.Equal(epic.Id, (await store.GetGoalMembershipAsync(goal.Id.Value))!.EpicId);
+        Assert.Equal(epic.Id, (await store.GetBacklogMembershipAsync(done.Id))!.EpicId);
+        Assert.Equal(epic.Id, (await store.GetBacklogMembershipAsync(superseded.Id))!.EpicId);
+        Assert.Equal(4, rollup.GoalCount);
+        Assert.Equal(2, rollup.BacklogItemCount);
+    }
+
+    [Xunit.Fact(DisplayName = "PortfolioStore_list_epic_members_rejects_unknown_epic")]
+    public async Task ListEpicMembersRejectsUnknownEpic()
+    {
+        var store = new PortfolioStore(TempDb());
+
+        var error = await Assert.ThrowsAsync<InvalidOperationException>(() => store.ListEpicMembersAsync("missing-epic"));
+
+        Assert.Equal("Epic 'missing-epic' was not found.", error.Message);
+    }
+
     [Xunit.Fact(DisplayName = "PortfolioStore_crud_membership_and_rollups")]
     public async Task CrudMembershipAndRollups()
     {

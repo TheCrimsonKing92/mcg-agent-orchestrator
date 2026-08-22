@@ -72,6 +72,17 @@ private static bool? TryExecutePortfolioCommand(string command, IReadOnlyList<st
             return false;
         }
 
+        case "epic-members":
+        {
+            CliArgumentParser.RequirePartCount(parts, 2, "epic-members <epic>");
+            var store = new PortfolioStore(context.Workspace.PortfolioStorePath);
+            var epic = store.ResolveEpicAsync(parts[1]).GetAwaiter().GetResult()
+                ?? throw new InvalidOperationException($"Epic '{parts[1]}' was not found.");
+            var members = store.ListEpicMembersAsync(epic.Id).GetAwaiter().GetResult();
+            ConsoleViews.PrintEpicMembers(epic, members);
+            return false;
+        }
+
         case "portfolio":
         case "portfolio-view":
         {

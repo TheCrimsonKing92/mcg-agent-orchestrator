@@ -28,6 +28,15 @@ public sealed record PortfolioMembership(
     string? ProjectId,
     string? ProjectTitle);
 
+public enum PortfolioMemberKind { Goal, BacklogItem }
+
+public sealed record PortfolioEpicMember(
+    string EpicId,
+    PortfolioMemberKind Kind,
+    string MemberId,
+    DateTimeOffset CreatedAt,
+    string CreatedBy);
+
 public sealed record PortfolioClusterSuggestion(
     string Id,
     string Signal,
@@ -214,6 +223,19 @@ public sealed class PortfolioStore
         return await GetMembershipAsync(conn, "backlog_epic_memberships", "backlog_item_id", backlogItemId, cancellationToken);
     }
 
+    public async Task<IReadOnlyList<PortfolioEpicMember>> ListEpicMembersAsync(
+        string epicId,
+        CancellationToken cancellationToken = default)
+    {
+        await using var conn = OpenConnection();
+        await RequireEpicAsync(conn, epicId, cancellationToken);
+
+        var members = new List<PortfolioEpicMember>();
+        await LoadEpicMembersAsync(conn, members, epicId, PortfolioMemberKind.Goal, "goal_epic_memberships", "goal_id", cancellationToken);
+        await LoadEpicMembersAsync(conn, members, epicId, PortfolioMemberKind.BacklogItem, "backlog_epic_memberships", "backlog_item_id", cancellationToken);
+        return members;
+    }
+
     public async Task<PortfolioEpic?> ResolveEpicAsync(string idOrTitle, CancellationToken cancellationToken = default)
     {
         await using var conn = OpenConnection();
@@ -255,7 +277,7 @@ public sealed class PortfolioStore
                 return new PortfolioEpicRollup(
                     epic,
                     epic.ProjectId is not null && projects.TryGetValue(epic.ProjectId, out var project) ? project : null,
-                    epicGoals.Length,
+                    goalMemberships.Count(pair => pair.Value.Equals(epic.Id, StringComparison.Ordinal)),
                     backlogMemberships.Count(pair => pair.Value.Equals(epic.Id, StringComparison.Ordinal)),
                     epicGoals.Count(goal => goal.Status is GoalStatus.Active or GoalStatus.WaitingForHuman or GoalStatus.Draft),
                     epicGoals.Count(goal => goal.Status == GoalStatus.Verified),
@@ -504,6 +526,30 @@ public sealed class PortfolioStore
         while (await reader.ReadAsync(cancellationToken))
             results[reader.GetString(0)] = reader.GetString(1);
         return results;
+    }
+
+    private static async Task LoadEpicMembersAsync(
+        SqliteConnection conn,
+        ICollection<PortfolioEpicMember> members,
+        string epicId,
+        PortfolioMemberKind kind,
+        string table,
+        string idColumn,
+        CancellationToken cancellationToken)
+    {
+        await using var cmd = conn.CreateCommand();
+        cmd.CommandText = $"SELECT {idColumn}, created_at, created_by FROM {table} WHERE epic_id = $epic_id ORDER BY {idColumn}";
+        cmd.Parameters.AddWithValue("$epic_id", epicId);
+        await using var reader = await cmd.ExecuteReaderAsync(cancellationToken);
+        while (await reader.ReadAsync(cancellationToken))
+        {
+            members.Add(new PortfolioEpicMember(
+                epicId,
+                kind,
+                reader.GetString(0),
+                DateTimeOffset.Parse(reader.GetString(1)),
+                reader.GetString(2)));
+        }
     }
 
     private static async Task<IReadOnlyList<PortfolioProject>> LoadProjectsAsync(SqliteConnection conn, CancellationToken cancellationToken)
