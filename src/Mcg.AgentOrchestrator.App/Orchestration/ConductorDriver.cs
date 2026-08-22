@@ -210,6 +210,7 @@ internal sealed partial class ConductorDriver
     }
     internal Action<GoalId>? DispatchRecordWriteSucceededSink { get; set; }
     internal Func<string?>? LandingMutationBlocker { get; set; }
+    internal SliceBatchAdmissionEvaluator? SliceBatchAdmissionEvaluator { get; set; }
 
     internal WorkerAdmissionSnapshot GetWorkerAdmissionSnapshot(ConductorAutonomyPolicy policy)
     {
@@ -956,6 +957,16 @@ internal sealed partial class ConductorDriver
                 ? InferRecordedFileScopes(goal)
                 : changedFiles;
         };
+        SliceBatchAdmissionEvaluator = new SliceBatchAdmissionEvaluator(
+            () => kernel.Goals,
+            goal =>
+            {
+                var worktreePath = GoalWorktrees.TryResolve(dir, goal.Id);
+                return worktreePath is null
+                    ? null
+                    : GoalAcceptanceEvidenceBundleBuilder.GetChangedFiles(worktreePath);
+            },
+            kernel.RecordGoalPolicyDecision);
         _isVerificationGateSatisfied = goal => kernel.BuildVerificationGate(goal.Id).IsSatisfied;
         _gateReadyCandidateProjector = GateReadyCandidateProjector.CreateForRepository(dir);
         _getPreReviewEvidenceContext = goal =>
@@ -1348,7 +1359,11 @@ internal sealed partial class ConductorDriver
 
     internal int GetAcceptanceSlotCount(Goal goal) => _getAcceptanceSlotCount(goal);
 
-    internal void BeginTick() => _buildServerShutdownRanThisTick = false;
+    internal void BeginTick()
+    {
+        _buildServerShutdownRanThisTick = false;
+        SliceBatchAdmissionEvaluator?.BeginTick();
+    }
 
     internal static DispatchStartOutcome ClassifySubscriptionStartForConductor(SubscriptionStartResult result)
     {
@@ -4355,6 +4370,12 @@ internal sealed partial class ConductorDriver
                             : $"At worker cap ({running}/{workerCap}); will advance when a slot opens"));
         }
 
+        if (SliceBatchAdmissionEvaluator?.Evaluate(goal) is { IsAllowed: false } sliceDecision)
+        {
+            return MakeResult(goal.Id.Value, goalPrefix, policy,
+                new ConductorAdvanceOutcome.Held(fromState, sliceDecision.Reason!));
+        }
+
         if (fromState == GoalLifecycleState.WorkspaceReady &&
             HasAssignedDeveloperReadyForDispatch(goal))
         {
@@ -4437,6 +4458,7 @@ internal sealed partial class ConductorDriver
 
         if (outcome.Category == DispatchStartOutcomeCategory.Started)
         {
+            SliceBatchAdmissionEvaluator?.RecordAdmitted(goal);
             return MakeResult(goal.Id.Value, goalPrefix, policy,
                 new ConductorAdvanceOutcome.Executed(fromState, "Subscription dispatch started"));
         }
