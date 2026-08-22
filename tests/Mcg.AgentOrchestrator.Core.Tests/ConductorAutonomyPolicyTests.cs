@@ -41,14 +41,15 @@ public sealed class ConductorAutonomyPolicyTests
     }
 
     [Xunit.Fact]
-    public void ConductorAutonomyPolicyPlannerSamplingDefaultsAreConservativeAndSerializable()
+    public void ConductorAutonomyPolicyPlannerSamplingDefaultsAreOptInAndSerializable()
     {
-        Assert.Equal(2, ConductorAutonomyPolicy.Conservative.PlannerSampleCount);
-        Assert.Equal(3, ConductorAutonomyPolicy.Permissive.PlannerSampleCount);
+        Assert.Equal(1, ConductorAutonomyPolicy.Conservative.PlannerSampleCount);
+        Assert.Equal(1, ConductorAutonomyPolicy.Permissive.PlannerSampleCount);
         Assert.Equal(1, ConductorAutonomyPolicy.Manual.PlannerSampleCount);
 
-        var restored = ConductorAutonomyPolicy.ParseJson(ConductorAutonomyPolicy.Conservative.ToJson());
-        Assert.Equal(2, restored.PlannerSampleCount);
+        var explicitSampling = ConductorAutonomyPolicy.Conservative with { PlannerSampleCount = 3 };
+        var restored = ConductorAutonomyPolicy.ParseJson(explicitSampling.ToJson());
+        Assert.Equal(3, restored.PlannerSampleCount);
     }
 
     [Xunit.Fact]

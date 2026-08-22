@@ -73,7 +73,7 @@ public sealed record ConductorAutonomyPolicy(
             [GoalLifecycleState.Blocked] = ConductorTransitionDecision.Escalate,
             [GoalLifecycleState.AwaitingHumanInput] = ConductorTransitionDecision.Escalate,
         },
-        PlannerSampleCount: 2);
+        PlannerSampleCount: 1);
 
     // Auto everything within caps. AutoPromoteRiskThreshold = Broad so all change types
     // get auto-promoted at Merged when risk is known.
@@ -83,7 +83,7 @@ public sealed record ConductorAutonomyPolicy(
         MaxCriterionRetries: 2,
         AutoPromoteRiskThreshold: ChangeRiskTier.Broad,
         TransitionMap: BuildUniformMap(ConductorTransitionDecision.Auto),
-        PlannerSampleCount: 3);
+        PlannerSampleCount: 1);
 
     // Escalate everything; no autonomous transitions regardless of risk.
     public static ConductorAutonomyPolicy Manual { get; } = new(
