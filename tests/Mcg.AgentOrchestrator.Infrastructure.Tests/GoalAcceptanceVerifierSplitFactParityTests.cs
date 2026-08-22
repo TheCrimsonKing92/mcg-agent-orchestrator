@@ -1,4 +1,5 @@
 using System.Reflection;
+using System.Text.RegularExpressions;
 
 [Xunit.Collection(TestCollections.GoalAcceptanceVerifier)]
 public sealed class GoalAcceptanceVerifierSplitFactParityTests
@@ -12,14 +13,19 @@ public sealed class GoalAcceptanceVerifierSplitFactParityTests
         var expectedOwners = expected
             .Select(identity => identity[..identity.IndexOf('.', StringComparison.Ordinal)])
             .ToHashSet(StringComparer.Ordinal);
-
-        var actual = Assembly.GetExecutingAssembly()
+        var affectedTypes = Assembly.GetExecutingAssembly()
             .GetTypes()
             .Where(type => IsAffectedConcreteTestClass(type, expectedOwners))
+            .ToArray();
+        var sourceByType = LoadSourceByType(
+            SourceDirectory(),
+            affectedTypes.Select(type => type.Name).ToHashSet(StringComparer.Ordinal));
+
+        var actual = affectedTypes
             .SelectMany(type => type
                 .GetMethods(BindingFlags.Instance | BindingFlags.Public | BindingFlags.DeclaredOnly)
                 .Where(IsFactOrTheory)
-                .Select(method => $"{NormalizeOwner(type)}.{method.Name}"))
+                .SelectMany(method => TestCaseIdentities(type, method, sourceByType)))
             .OrderBy(identity => identity, StringComparer.Ordinal)
             .ToArray();
 
@@ -66,6 +72,64 @@ public sealed class GoalAcceptanceVerifierSplitFactParityTests
     private static bool IsFactOrTheory(MethodInfo method) =>
         method.GetCustomAttributes(inherit: false).Any(attribute => attribute is Xunit.FactAttribute);
 
+    private static IEnumerable<string> TestCaseIdentities(
+        Type type,
+        MethodInfo method,
+        IReadOnlyDictionary<string, string> sourceByType)
+    {
+        if (!sourceByType.TryGetValue(type.Name, out var source))
+        {
+            throw new InvalidOperationException(
+                $"Could not find one source file declaring {type.Name}.");
+        }
+
+        var methodMatch = Regex.Match(
+            source,
+            $@"(?m)(?<attributes>(?:^[ \t]*\[[^\r\n]+\]\r?\n)+)[ \t]*public[ \t]+(?:async[ \t]+)?[^\r\n(]+[ \t]+{Regex.Escape(method.Name)}[ \t]*\((?<parameters>[^)]*)\)[ \t]*(?:\r?\n[ \t]*)?(?:\{{|=>)");
+        if (!methodMatch.Success)
+        {
+            throw new InvalidOperationException(
+                $"Could not find the source declaration for {type.Name}.{method.Name}.");
+        }
+
+        var identity = $"{NormalizeOwner(type)}.{method.Name}";
+        var parameters = Regex.Replace(
+            methodMatch.Groups["parameters"].Value,
+            @"\s+",
+            " ").Trim();
+        var dataAttributes = Regex.Matches(
+            methodMatch.Groups["attributes"].Value,
+            @"(?m)^[ \t]*\[(?:Xunit\.)?(?<kind>InlineData|MemberData|ClassData)\((?<args>[^\r\n]*)\)\][ \t]*\r?$");
+
+        if (dataAttributes.Count == 0)
+        {
+            yield return parameters.Length == 0 ? identity : $"{identity}({parameters})";
+            yield break;
+        }
+
+        foreach (Match dataAttribute in dataAttributes)
+        {
+            yield return $"{identity}({parameters})|" +
+                $"{dataAttribute.Groups["kind"].Value}({dataAttribute.Groups["args"].Value.Trim()})";
+        }
+    }
+
+    private static IReadOnlyDictionary<string, string> LoadSourceByType(
+        string sourceDirectory,
+        IReadOnlySet<string> affectedTypeNames) =>
+        Directory
+            .EnumerateFiles(sourceDirectory, "*.cs", SearchOption.TopDirectoryOnly)
+            .Select(path => File.ReadAllText(path))
+            .SelectMany(source => Regex
+                .Matches(source, @"\bpublic\s+sealed\s+class\s+(?<name>[A-Za-z_][A-Za-z0-9_]*)\b")
+                .Select(match => new
+                {
+                    Name = match.Groups["name"].Value,
+                    Source = source,
+                }))
+            .Where(item => affectedTypeNames.Contains(item.Name))
+            .ToDictionary(item => item.Name, item => item.Source, StringComparer.Ordinal);
+
     private static string NormalizeOwner(Type type) =>
         type.Name.StartsWith(OriginalBuildSlotClass, StringComparison.Ordinal)
             ? OriginalBuildSlotClass
@@ -77,6 +141,11 @@ public sealed class GoalAcceptanceVerifierSplitFactParityTests
             .ConstructorArguments
             .Single()
             .Value as string;
+
+    private static string SourceDirectory(
+        [System.Runtime.CompilerServices.CallerFilePath] string sourceFilePath = "") =>
+        Path.GetDirectoryName(sourceFilePath)
+            ?? throw new InvalidOperationException("Parity test source path has no directory.");
 
     private static string[] LoadBaseline(
         [System.Runtime.CompilerServices.CallerFilePath] string sourceFilePath = "") =>
