@@ -478,8 +478,12 @@ public sealed class RepositoryChangeClassifierTests
         var infrastructure = RepositoryOwnershipMap.Classify(
             "tests/Mcg.AgentOrchestrator.Infrastructure.Tests/WorkerDispatchTests.cs");
 
-        Assert.Equal("test-project:tests/mcg.agentorchestrator.core.tests", core.ReservationKey);
-        Assert.Equal("test-project:tests/mcg.agentorchestrator.infrastructure.tests", infrastructure.ReservationKey);
+        Assert.Equal(
+            "test-project:tests/mcg.agentorchestrator.core.tests/repositorychangeclassifiertests.cs",
+            core.ReservationKey);
+        Assert.Equal(
+            "test-project:tests/mcg.agentorchestrator.infrastructure.tests/workerdispatchtests.cs",
+            infrastructure.ReservationKey);
         Assert.NotEqual(core.ReservationKey, infrastructure.ReservationKey);
     }
 
@@ -496,13 +500,21 @@ public sealed class RepositoryChangeClassifierTests
 
         Assert.Equal(RepositoryOwnershipArea.Test, ownedPath.Area);
         Assert.Equal(expectedReservation, ownedPath.ReservationKey);
-        Assert.Equal($"ownership:{expectedReservation}", Assert.Single(guard.RequiredResources));
+        Assert.Equal(
+        [
+            $"ownership:{expectedReservation}",
+            $"ownership:{expectedReservation}/repositorychangeclassifiertests.cs"
+        ],
+            guard.RequiredResources);
     }
 
     [Xunit.Fact(DisplayName = "RepositoryOwnershipMap_normalizes_and_serializes_one_test_project")]
     public void RepositoryOwnershipMapNormalizesAndSerializesOneTestProject()
     {
-        const string expectedResource = "ownership:test-project:tests/mcg.agentorchestrator.core.tests";
+        const string expectedFirstResource =
+            "ownership:test-project:tests/mcg.agentorchestrator.core.tests/firsttests.cs";
+        const string expectedSecondResource =
+            "ownership:test-project:tests/mcg.agentorchestrator.core.tests/secondtests.cs";
         var first = RepositoryOwnershipMap.Classify(
             @"TESTS\Mcg.AgentOrchestrator.Core.Tests\FirstTests.cs");
         var repeated = RepositoryOwnershipMap.Classify(
@@ -516,8 +528,8 @@ public sealed class RepositoryChangeClassifierTests
         ]);
 
         Assert.Equal(first.ReservationKey, repeated.ReservationKey);
-        Assert.Equal(expectedResource, Assert.Single(guard.RequiredResources));
-        Assert.Equal(expectedResource, Assert.Single(scope.ResourceKeys));
+        Assert.Equal([expectedFirstResource, expectedSecondResource], guard.RequiredResources);
+        Assert.Equal(expectedFirstResource, Assert.Single(scope.ResourceKeys));
         Assert.DoesNotContain("ownership:tests", scope.ResourceKeys);
     }
 
@@ -525,6 +537,9 @@ public sealed class RepositoryChangeClassifierTests
     [Xunit.InlineData("tests/LooseTests.cs")]
     [Xunit.InlineData("tests/ /LooseTests.cs")]
     [Xunit.InlineData("tests/../LooseTests.cs")]
+    [Xunit.InlineData("tests/Proj/Sub//X.cs")]
+    [Xunit.InlineData("tests/Proj/Sub/./X.cs")]
+    [Xunit.InlineData("tests/Proj/Sub/../X.cs")]
     [Xunit.InlineData("misc/LooseTests.cs")]
     [Xunit.InlineData("nested/tests/Project/LooseTests.cs")]
     public void RepositoryOwnershipMapFailsClosedForMalformedTestPaths(string path)
