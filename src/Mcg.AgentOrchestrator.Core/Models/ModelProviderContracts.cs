@@ -81,7 +81,8 @@ public sealed record TaskVerificationRecord(
     string? FullStandardOutputUnavailableReason = null,
     string? FullStandardErrorUnavailableReason = null,
     bool StandardOutputIsAuthoritative = true,
-    bool StandardErrorIsAuthoritative = true)
+    bool StandardErrorIsAuthoritative = true,
+    PlannerCandidateDivergenceReceipt? PlannerCandidateDivergence = null)
 {
     public string? AuthoritativeStandardOutput { get; init; } = FullStandardOutput ??
         (StandardOutputIsAuthoritative && FullStandardOutputUnavailableReason is null ? StandardOutput : null);
@@ -128,7 +129,8 @@ public sealed record TaskDispatchRecord(
     string? BriefSnapshot = null,
     string? ReviewFindingTouchProofDiagnostic = null,
     ReviewRetryCapReceipt? ReviewRetryCap = null,
-    WorkerContextPackageReceipt? ContextPackageReceipt = null)
+    WorkerContextPackageReceipt? ContextPackageReceipt = null,
+    int PlannerSampleCount = 1)
 {
     public int BriefVersion { get; internal set; } = BriefVersion;
 

@@ -159,7 +159,8 @@ public sealed record TaskVerificationSnapshot(
     string? AuthoritativeStandardOutput = null,
     string? AuthoritativeStandardError = null,
     string? AuthoritativeStandardOutputUnavailableReason = null,
-    string? AuthoritativeStandardErrorUnavailableReason = null)
+    string? AuthoritativeStandardErrorUnavailableReason = null,
+    PlannerCandidateDivergenceReceipt? PlannerCandidateDivergence = null)
 {
     public string StandardOutput { get; init; } = VerificationTextBounds.BoundText(StandardOutput, StandardOutputPath);
 
@@ -194,7 +195,8 @@ public sealed record TaskDispatchSnapshot(
     string? BriefSnapshot = null,
     string? ReviewFindingTouchProofDiagnostic = null,
     ReviewRetryCapReceipt? ReviewRetryCap = null,
-    WorkerContextPackageReceipt? ContextPackageReceipt = null);
+    WorkerContextPackageReceipt? ContextPackageReceipt = null,
+    int PlannerSampleCount = 1);
 
 public sealed record TaskProcessSnapshot(
     int ProcessId,

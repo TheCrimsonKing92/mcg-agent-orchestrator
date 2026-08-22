@@ -1,4 +1,5 @@
 using Mcg.AgentOrchestrator.Core;
+using Mcg.AgentOrchestrator.Core.Conductor;
 using Mcg.AgentOrchestrator.Infrastructure;
 
 namespace Mcg.AgentOrchestrator.App.CostControl;
@@ -130,7 +131,7 @@ internal static class SubscriptionPromptCostGuard
         var effective = PaidPromptThresholds.EffectivePromptCharacterCount(
             dispatch.PromptCharacterCount ?? 0,
             AgentOrchestratorKernel.EstimatePriorTaskEvidenceCharacterCount(goal, task.Id));
-        return effective;
+        return checked(effective * PlannerSamplingPolicy.EffectiveSampleCount(task.RequiredRole, dispatch.PlannerSampleCount));
     }
 
     // Only a genuinely ANOMALOUS prompt (disproportionate to its task complexity, or an extreme

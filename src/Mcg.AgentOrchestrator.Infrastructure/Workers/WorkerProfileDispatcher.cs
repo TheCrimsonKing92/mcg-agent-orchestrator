@@ -211,7 +211,8 @@ public static class WorkerProfileDispatcher
         string? modelSelectionReason = null,
         ReviewRetryCapReceipt? reviewRetryCap = null,
         CitedPriorEvidenceResolver? citedPriorEvidenceResolver = null,
-        WorkerSandboxOptions? sandboxOptions = null)
+        WorkerSandboxOptions? sandboxOptions = null,
+        int plannerSampleCount = 1)
     {
         EnsureTaskNeedsExecution(task, allowPendingRecordedDispatchRefresh);
         EnsureSubscriptionRetryWindowHasPassed(task, dispatchedAt);
@@ -353,7 +354,8 @@ public static class WorkerProfileDispatcher
             ReviewFindingTouchedAnchors: reviewerRoundTouchScope.TouchedAnchors,
             ReviewFindingTouchProofDiagnostic: reviewerRoundTouchScope.Diagnostic,
             ReviewRetryCap: effectiveReviewRetryCap,
-            ContextPackageReceipt: contextPackageReceipt),
+            ContextPackageReceipt: contextPackageReceipt,
+            PlannerSampleCount: PlannerSamplingPolicy.EffectiveSampleCount(task.RequiredRole, plannerSampleCount)),
             allowPendingRecordedDispatchRefresh);
         return new WorkerProfileDispatchResult(task, preparation.PromptPath);
     }
@@ -504,7 +506,8 @@ public static class WorkerProfileDispatcher
         WorkerSandboxOptions? sandboxOptions = null,
         Func<string, bool>? commandExists = null,
         int? reviewAutoRetryStopRound = null,
-        CitedPriorEvidenceResolver? citedPriorEvidenceResolver = null)
+        CitedPriorEvidenceResolver? citedPriorEvidenceResolver = null,
+        int plannerSampleCount = 1)
     {
         EnsureTaskNeedsExecution(task);
         var sandbox = sandboxOptions ?? WorkerSandboxOptions.FromEnvironment();
@@ -573,7 +576,8 @@ public static class WorkerProfileDispatcher
                     reviewAutoRetryStopRound ?? ConductorAutonomyPolicy.Default.ReviewAutoRetryStopRound)
                 : null,
             citedPriorEvidenceResolver: citedPriorEvidenceResolver,
-            sandboxOptions: sandbox);
+            sandboxOptions: sandbox,
+            plannerSampleCount: plannerSampleCount);
     }
 
     public static WorkerSubscriptionPreflightResult PreflightSubscriptionTask(
@@ -1124,7 +1128,8 @@ public static class WorkerProfileDispatcher
         Func<string, bool>? commandExists = null,
         int? reviewAutoRetryStopRound = null,
         CitedPriorEvidenceResolver? citedPriorEvidenceResolver = null,
-        WorkerSandboxOptions? sandboxOptions = null)
+        WorkerSandboxOptions? sandboxOptions = null,
+        int plannerSampleCount = 1)
     {
         return PrepareSubscriptionReadyBatch(
             kernel,
@@ -1138,7 +1143,8 @@ public static class WorkerProfileDispatcher
             commandExists,
             reviewAutoRetryStopRound,
             citedPriorEvidenceResolver,
-            sandboxOptions).Dispatches;
+            sandboxOptions,
+            plannerSampleCount).Dispatches;
     }
 
     public static WorkerProfileReadyBatchResult PrepareSubscriptionReadyBatch(
@@ -1153,7 +1159,8 @@ public static class WorkerProfileDispatcher
         Func<string, bool>? commandExists = null,
         int? reviewAutoRetryStopRound = null,
         CitedPriorEvidenceResolver? citedPriorEvidenceResolver = null,
-        WorkerSandboxOptions? sandboxOptions = null)
+        WorkerSandboxOptions? sandboxOptions = null,
+        int plannerSampleCount = 1)
     {
         var selections = goal.Tasks
             .Where(task => task.Status == WorkTaskStatus.Assigned)
@@ -1239,7 +1246,8 @@ public static class WorkerProfileDispatcher
                         reviewAutoRetryStopRound ?? ConductorAutonomyPolicy.Default.ReviewAutoRetryStopRound)
                     : null,
                 citedPriorEvidenceResolver: citedPriorEvidenceResolver,
-                sandboxOptions: sandbox));
+                sandboxOptions: sandbox,
+                plannerSampleCount: plannerSampleCount));
         }
 
         return new WorkerProfileReadyBatchResult(results, blocked);

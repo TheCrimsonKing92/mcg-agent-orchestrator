@@ -133,7 +133,8 @@ public sealed class TaskSpec
                     LastVerification.AuthoritativeStandardOutput,
                     LastVerification.AuthoritativeStandardError,
                     LastVerification.FullStandardOutputUnavailableReason,
-                    LastVerification.FullStandardErrorUnavailableReason),
+                    LastVerification.FullStandardErrorUnavailableReason,
+                    LastVerification.PlannerCandidateDivergence),
             _verificationHistory
                 .Select(verification => new TaskVerificationSnapshot(
                     verification.Command,
@@ -159,7 +160,8 @@ public sealed class TaskSpec
                     verification.AuthoritativeStandardOutput,
                     verification.AuthoritativeStandardError,
                     verification.FullStandardOutputUnavailableReason,
-                    verification.FullStandardErrorUnavailableReason))
+                    verification.FullStandardErrorUnavailableReason,
+                    verification.PlannerCandidateDivergence))
                 .ToList(),
             LastDispatch is null
                 ? null
@@ -191,7 +193,8 @@ public sealed class TaskSpec
                     LastDispatch.BriefSnapshot,
                     LastDispatch.ReviewFindingTouchProofDiagnostic,
                     LastDispatch.ReviewRetryCap,
-                    LastDispatch.ContextPackageReceipt),
+                    LastDispatch.ContextPackageReceipt,
+                    LastDispatch.PlannerSampleCount),
             LastProcess is null
                 ? null
                 : new TaskProcessSnapshot(
@@ -300,7 +303,8 @@ public sealed class TaskSpec
                         verification.AuthoritativeStandardError,
                         verification.AuthoritativeStandardErrorUnavailableReason),
                     StandardOutputIsAuthoritative: verification.AuthoritativeStandardOutput is not null,
-                    StandardErrorIsAuthoritative: verification.AuthoritativeStandardError is not null));
+                    StandardErrorIsAuthoritative: verification.AuthoritativeStandardError is not null,
+                    PlannerCandidateDivergence: verification.PlannerCandidateDivergence));
             }
         }
 
@@ -336,7 +340,8 @@ public sealed class TaskSpec
                     snapshot.LastVerification.AuthoritativeStandardError,
                     snapshot.LastVerification.AuthoritativeStandardErrorUnavailableReason),
                 StandardOutputIsAuthoritative: snapshot.LastVerification.AuthoritativeStandardOutput is not null,
-                StandardErrorIsAuthoritative: snapshot.LastVerification.AuthoritativeStandardError is not null);
+                StandardErrorIsAuthoritative: snapshot.LastVerification.AuthoritativeStandardError is not null,
+                PlannerCandidateDivergence: snapshot.LastVerification.PlannerCandidateDivergence);
             if (!task._verificationHistory.Contains(latestVerification))
             {
                 task.RestoreVerificationHistory(latestVerification);
@@ -741,7 +746,8 @@ public sealed class TaskSpec
         dispatch.BriefSnapshot,
         dispatch.ReviewFindingTouchProofDiagnostic,
         dispatch.ReviewRetryCap,
-        dispatch.ContextPackageReceipt);
+        dispatch.ContextPackageReceipt,
+        dispatch.PlannerSampleCount);
 
     private static TaskDispatchRecord FromDispatchSnapshot(TaskDispatchSnapshot dispatch) => new(
         dispatch.WorkerName,
@@ -771,7 +777,8 @@ public sealed class TaskSpec
         dispatch.BriefSnapshot,
         dispatch.ReviewFindingTouchProofDiagnostic,
         dispatch.ReviewRetryCap,
-        dispatch.ContextPackageReceipt);
+        dispatch.ContextPackageReceipt,
+        dispatch.PlannerSampleCount);
 
     private static string? NormalizeOptional(string? value) =>
         string.IsNullOrWhiteSpace(value) ? null : value.Trim();
