@@ -7,6 +7,7 @@ Rule: Agents editing shared-discipline content must update BOTH AGENTS.md and CL
 Operator procedure home: docs/operator-runbook.md owns harness-neutral operate/observe/recover procedures, including conductor stop and relaunch semantics; counterpart files point there instead of duplicating them.
 Role capability home: docs/role-capability-matrix.md owns the enforcement-sourced worker capability and acceptance-criterion routing matrix; counterpart files point there instead of duplicating it.
 Worker guidance home: docs/worker-guidance-discipline.md owns how to phrase briefs, retry feedback, and clarification answers so a worker can check its own output; counterpart files point there instead of duplicating it.
+Repository conventions home: docs/repository-conventions.md owns test-source layout and repository-root conventions that protect test selection and isolated verification; counterpart files point there instead of duplicating them.
 Shared anchors:
 - output-discipline
 - retry-and-loop-control
@@ -28,6 +29,7 @@ Codex auto-reads this file. Claude Code auto-reads [`CLAUDE.md`](CLAUDE.md); kee
 
 > **Operating the orchestrator — driving, observing, or recovering goals? Start with [`docs/operator-runbook.md`](docs/operator-runbook.md).** It is the canonical conductor-first guide, including the stuck-goal playbook (symptom → command) and the state/store map. This file covers output/diagnosis/spec discipline and architecture invariants — read it alongside the runbook, not instead of it.
 > **Test-design discipline?** Use the shared [`test-design-discipline`](docs/test-design-discipline.md) guidance and Reviewer checklist requirement.
+> **Adding or splitting test source?** Follow the shared [`repository conventions`](docs/repository-conventions.md) that protect changed-test selection and isolated verification.
 > **Assigning a verdict, terminal state, circuit trip, escalation, or retry-vs-fail choice?** Use [`dispositive-decision-discipline`](docs/dispositive-decision-discipline.md). One check: *could I write the justification for this outcome from what is in scope right here?* If not, the discriminating evidence was discarded upstream and the decision is a guess. Five instances of this shipped in a single day.
 
 <!-- shared-discipline:output-discipline -->

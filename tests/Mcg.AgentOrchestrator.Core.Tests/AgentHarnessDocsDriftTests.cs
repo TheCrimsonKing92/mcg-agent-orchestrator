@@ -1,9 +1,11 @@
+using System.Runtime.CompilerServices;
 using System.Text.RegularExpressions;
 
 public sealed class AgentHarnessDocsDriftTests
 {
     private const string AgentsPath = "AGENTS.md";
     private const string ClaudePath = "CLAUDE.md";
+    private const string RepositoryConventionsPath = "docs/repository-conventions.md";
     private const string TestDesignDisciplinePath = "docs/test-design-discipline.md";
 
     private static readonly SharedSection[] SharedSections =
@@ -26,6 +28,11 @@ public sealed class AgentHarnessDocsDriftTests
         new(
             TestDesignDisciplinePath,
             "<!-- shared-discipline:test-design-discipline -->",
+            "another shared home",
+            [AgentsPath, ClaudePath]),
+        new(
+            RepositoryConventionsPath,
+            "<!-- shared-discipline:repository-conventions -->",
             "another shared home",
             [AgentsPath, ClaudePath])
     ];
@@ -287,31 +294,28 @@ public sealed class AgentHarnessDocsDriftTests
         return line[field.Length..].Trim();
     }
 
-    private static string FindRepositoryRoot()
+    private static string FindRepositoryRoot([CallerFilePath] string sourceFilePath = "")
     {
-        var candidates = new[] { Environment.CurrentDirectory, AppContext.BaseDirectory };
-        foreach (var candidate in candidates)
+        var directory = new DirectoryInfo(Path.GetDirectoryName(sourceFilePath)!);
+        while (directory is not null)
         {
-            var directory = new DirectoryInfo(Path.GetFullPath(candidate));
-            while (directory is not null)
+            if (Directory.Exists(Path.Combine(directory.FullName, ".git")) ||
+                File.Exists(Path.Combine(directory.FullName, ".git")))
             {
-                if (Directory.Exists(Path.Combine(directory.FullName, ".git")) ||
-                    File.Exists(Path.Combine(directory.FullName, ".git")))
-                {
-                    return directory.FullName;
-                }
-
-                if (File.Exists(Path.Combine(directory.FullName, "AGENTS.md")) &&
-                    File.Exists(Path.Combine(directory.FullName, "CLAUDE.md")))
-                {
-                    return directory.FullName;
-                }
-
-                directory = directory.Parent;
+                return directory.FullName;
             }
+
+            if (File.Exists(Path.Combine(directory.FullName, "AGENTS.md")) &&
+                File.Exists(Path.Combine(directory.FullName, "CLAUDE.md")))
+            {
+                return directory.FullName;
+            }
+
+            directory = directory.Parent;
         }
 
-        throw new DirectoryNotFoundException("Could not locate repository root.");
+        throw new DirectoryNotFoundException(
+            $"Could not locate repository root from source file path '{sourceFilePath}'.");
     }
 
     private static void RequireContains(string value, string expected, string message)
