@@ -74,7 +74,7 @@ public sealed class AcceptanceContainedGenerationBaselineTests
             (_, _) => ++resolveCall == 1 ? "aaaaaaaa\r\n" : "bbbbbbbb\r\n",
             (_, arguments) =>
             {
-                if (arguments.Count == 5 && arguments[0] == "worktree" && arguments[1] == "add")
+                if (arguments.Length == 5 && arguments[0] == "worktree" && arguments[1] == "add")
                 {
                     addedRevision = arguments[4];
                 }
