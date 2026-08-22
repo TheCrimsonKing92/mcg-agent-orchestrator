@@ -41,8 +41,10 @@ internal sealed class AcceptanceContainedGenerationBaseline : IDisposable
         Func<string, string[], string?> resolveGitText,
         Func<string, string[], GitCli.GitResult> runGit)
     {
-        var containedMainSha = resolveGitText(candidateWorktreePath, ["merge-base", "HEAD", "main"]);
-        var observedMainSha = resolveGitText(candidateWorktreePath, ["rev-parse", "main"]);
+        var containedMainSha = NormalizeGitSha(
+            resolveGitText(candidateWorktreePath, ["merge-base", "HEAD", "main"]));
+        var observedMainSha = NormalizeGitSha(
+            resolveGitText(candidateWorktreePath, ["rev-parse", "main"]));
         if (string.IsNullOrWhiteSpace(containedMainSha))
         {
             return Unresolved(observedMainSha, "merge-base-unresolved");
@@ -204,6 +206,12 @@ internal sealed class AcceptanceContainedGenerationBaseline : IDisposable
             worktreePath: null,
             useObservedBaseline: false,
             unresolvedReason: reason);
+
+    private static string? NormalizeGitSha(string? output)
+    {
+        var sha = output?.Trim();
+        return sha is { Length: >= 7 } && sha.All(Uri.IsHexDigit) ? sha : null;
+    }
 
     private static void TryDeleteDirectory(string baselineRoot, string baselinePath)
     {

@@ -64,6 +64,27 @@ public sealed class AcceptanceContainedGenerationBaselineTests
     }
 
     [Fact]
+    public void Resolve_StaleCandidate_TrimsRealGitShaOutput()
+    {
+        string? addedRevision = null;
+        var resolveCall = 0;
+        using var baseline = AcceptanceContainedGenerationBaseline.Resolve(
+            "candidate",
+            "goal",
+            (_, _) => ++resolveCall == 1 ? "aaaaaaaa\r\n" : "bbbbbbbb\r\n",
+            (_, arguments) =>
+            {
+                addedRevision = arguments[4];
+                return new GitCli.GitResult(0, string.Empty, string.Empty);
+            });
+
+        Assert.True(baseline.IsResolved);
+        Assert.Equal("aaaaaaaa", baseline.ContainedMainSha);
+        Assert.Equal("bbbbbbbb", baseline.ObservedMainSha);
+        Assert.Equal("aaaaaaaa", addedRevision);
+    }
+
+    [Fact]
     public void Resolve_WorktreeCreationFails_IsConservativelyUnresolved()
     {
         var resolveCall = 0;
