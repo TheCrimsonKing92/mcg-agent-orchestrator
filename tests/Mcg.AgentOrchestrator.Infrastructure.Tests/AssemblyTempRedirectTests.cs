@@ -86,6 +86,63 @@ public sealed class AssemblyTempRedirectTests
     }
 
     [Fact(Timeout = 60_000)]
+    public async Task KilledHostRootIsRemovedThroughSupervisorCleanupSeam()
+    {
+        if (!OperatingSystem.IsWindows())
+        {
+            return;
+        }
+
+        var root = Path.Combine(Path.GetTempPath(), $"mtp-temp-kill-{Guid.NewGuid():N}");
+        var executable = Path.Combine(
+            AppContext.BaseDirectory,
+            "Mcg.AgentOrchestrator.Infrastructure.Tests.exe");
+        Directory.CreateDirectory(root);
+        var releaseName = $"Local\\mcg-mtp-temp-release-{Guid.NewGuid():N}";
+        var readyName = $"Local\\mcg-mtp-temp-ready-{Guid.NewGuid():N}";
+        using var release = new EventWaitHandle(false, EventResetMode.ManualReset, releaseName);
+        using var ready = new EventWaitHandle(false, EventResetMode.ManualReset, readyName);
+        MtpProbeProcess? process = null;
+        try
+        {
+            process = StartMtpProbe(
+                executable,
+                root,
+                Path.Combine(root, "receipt.json"),
+                readyName,
+                releaseName);
+            var receipt = await WaitForProbeReceiptAsync(
+                "killed",
+                process,
+                ready,
+                TestContext.Current.CancellationToken);
+            Assert.True(Directory.Exists(receipt.TempRoot));
+
+            process.Process.Kill(entireProcessTree: true);
+            _ = await process.WaitForExitAsync(TestContext.Current.CancellationToken);
+            Assert.True(
+                Directory.Exists(receipt.TempRoot),
+                "The kill unexpectedly ran ProcessExit, so the supervisor-cleanup seam was not exercised.");
+
+            var outcome = Assert.Single(WorkerProcessJobs.ReapOwnedTempRoots(
+                [receipt.ProcessId],
+                [Path.GetDirectoryName(receipt.TempRoot)!]));
+
+            Assert.Equal(TempRootJanitorDeleteStatus.Deleted, outcome.Status);
+            Assert.False(Directory.Exists(receipt.TempRoot));
+        }
+        finally
+        {
+            release.Set();
+            if (process is not null)
+            {
+                await process.DisposeAsync();
+            }
+            _ = TempRootJanitor.DeleteTree(root);
+        }
+    }
+
+    [Fact(Timeout = 60_000)]
     public async Task ConcurrentTestHostsReceiveDistinctTempRoots()
     {
         if (!OperatingSystem.IsWindows())
@@ -197,53 +254,37 @@ public sealed class AssemblyTempRedirectTests
         Assert.Equal(["pdead1", "pbeef", "p7fffffff"], reapable);
     }
 
-    [Fact(DisplayName = "Age sweep removes a root whose PID is still live, since PID reuse cannot bound growth")]
-    public void AgeSweepRemovesStaleRootEvenWhenPidLooksAlive()
+    [Fact(DisplayName = "Retention sweep bounds a doubled recent-root population")]
+    public void RetentionSweepBoundsRecentHighThroughputPopulation()
     {
-        var cutoff = new DateTime(2026, 8, 16, 12, 0, 0, DateTimeKind.Utc);
-        var ages = new Dictionary<string, DateTime>(StringComparer.Ordinal)
-        {
-            ["pbeef"] = cutoff.AddHours(-1),
-            ["pdead1"] = cutoff.AddMinutes(1),
-        };
+        const int reserve = 4;
+        var now = new DateTime(2026, 8, 22, 12, 0, 0, DateTimeKind.Utc);
+        var names = Enumerable.Range(1, reserve * 2).Select(index => $"p{index:x}").ToArray();
+        var writes = names
+            .Select((name, index) => (name, written: now.AddSeconds(index)))
+            .ToDictionary(item => item.name, item => item.written, StringComparer.Ordinal);
 
-        var abandoned = AssemblyTempRedirect.SelectRootsAbandonedByAge(
-            ["pbeef", "pdead1"],
+        var overflow = AssemblyTempRedirect.SelectRootsBeyondRetention(
+            names,
             currentProcessId: 0x30,
-            lastWriteUtc: name => ages[name],
-            cutoffUtc: cutoff);
+            lastWriteUtc: name => writes[name],
+            retainedRoots: reserve);
 
-        // pbeef predates the cutoff and goes, whatever its PID now refers to. pdead1 is newer than
-        // the cutoff and stays. Liveness is deliberately not consulted here.
-        Assert.Equal(["pbeef"], abandoned);
+        Assert.Equal(reserve, overflow.Count);
+        Assert.Equal(["p1", "p2", "p3", "p4"], overflow);
+        Assert.Equal(reserve, names.Except(overflow, StringComparer.OrdinalIgnoreCase).Count());
     }
 
-    [Fact(DisplayName = "Age sweep keeps every root when none predates the cutoff")]
-    public void AgeSweepKeepsRootsNewerThanCutoff()
+    [Fact(DisplayName = "Retention sweep never removes the current process root")]
+    public void RetentionSweepNeverRemovesCurrentProcessRoot()
     {
-        var cutoff = new DateTime(2026, 8, 16, 12, 0, 0, DateTimeKind.Utc);
-
-        var abandoned = AssemblyTempRedirect.SelectRootsAbandonedByAge(
-            ["pbeef", "pdead1"],
+        var overflow = AssemblyTempRedirect.SelectRootsBeyondRetention(
+            ["p30", "p31"],
             currentProcessId: 0x30,
-            lastWriteUtc: _ => cutoff.AddMinutes(1),
-            cutoffUtc: cutoff);
+            lastWriteUtc: _ => DateTime.UnixEpoch,
+            retainedRoots: 0);
 
-        Assert.Empty(abandoned);
-    }
-
-    [Fact(DisplayName = "Age sweep never removes the current process root however old it looks")]
-    public void AgeSweepNeverRemovesCurrentProcessRoot()
-    {
-        var cutoff = new DateTime(2026, 8, 16, 12, 0, 0, DateTimeKind.Utc);
-
-        var abandoned = AssemblyTempRedirect.SelectRootsAbandonedByAge(
-            ["p30"],
-            currentProcessId: 0x30,
-            lastWriteUtc: _ => cutoff.AddYears(-1),
-            cutoffUtc: cutoff);
-
-        Assert.Empty(abandoned);
+        Assert.Equal(["p31"], overflow);
     }
 
     [Fact(DisplayName = "Reaper never removes the current process root even if reported dead")]

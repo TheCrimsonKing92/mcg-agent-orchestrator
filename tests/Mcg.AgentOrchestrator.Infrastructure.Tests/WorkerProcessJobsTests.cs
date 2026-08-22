@@ -28,6 +28,33 @@ public sealed class WorkerProcessJobsTests : IDisposable
         Environment.SetEnvironmentVariable("MCG_ORCHESTRATOR_PROTECTED_PID", _originalProtectedPid);
     }
 
+    [Xunit.Fact(DisplayName = "WorkerProcessJobs_supervisor_cleanup_reaps_named_owned_root")]
+    public void WorkerProcessJobsSupervisorCleanupReapsNamedOwnedRoot()
+    {
+        if (!OperatingSystem.IsWindows())
+        {
+            return;
+        }
+
+        var sharedRoot = Path.Combine(Path.GetTempPath(), $"worker-temp-reap-{Guid.NewGuid():N}");
+        var processId = int.MaxValue;
+        var ownedRoot = TempRootJanitor.BuildOwnedRootPath(sharedRoot, processId);
+        Directory.CreateDirectory(ownedRoot);
+        try
+        {
+            var result = Assert.Single(WorkerProcessJobs.ReapOwnedTempRoots(
+                [processId],
+                [sharedRoot]));
+
+            Assert.Equal(TempRootJanitorDeleteStatus.Deleted, result.Status);
+            Assert.False(Directory.Exists(ownedRoot));
+        }
+        finally
+        {
+            _ = TempRootJanitor.DeleteTree(sharedRoot);
+        }
+    }
+
     [Xunit.Fact(DisplayName = "WorkerProcessJobs_startup_sweep_retains_worker_owned_by_live_process")]
     public void WorkerProcessJobsStartupSweepRetainsWorkerOwnedByLiveProcess()
     {

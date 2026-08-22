@@ -41,7 +41,9 @@ public sealed class AssemblyTempRedirectStartupCostTests(ITestOutputHelper outpu
             "reapAgeSelectMs=not-run reapBoundSelectMs=not-run reapOverlap=not-run " +
             "deleteAttempted=not-run deleteSucceeded=not-run deleteMs=not-run " +
             "deleteDeleted=not-run deleteAlreadyAbsent=not-run deleteFailed=not-run " +
-            "deleteFailureKinds=not-run deleteFirstFailure=not-run",
+            "deleteFailureKinds=not-run deleteFirstFailure=not-run " +
+            "reapRetentionSelectMs=not-run reapRetentionReserve=not-run " +
+            "reapOverflowCount=not-run deleteReadOnlyCleared=not-run",
             diagnostic);
     }
 
@@ -101,6 +103,44 @@ public sealed class AssemblyTempRedirectStartupCostTests(ITestOutputHelper outpu
     }
 
     [Fact]
+    public void PhysicalBackstopDeletesReadOnlyRootAndRecordsSuccess()
+    {
+        if (!OperatingSystem.IsWindows())
+        {
+            return;
+        }
+
+        var sharedRoot = Path.Combine(Path.GetTempPath(), $"mcg-reap-readonly-{Guid.NewGuid():N}");
+        var root = AssemblyTempRedirect.BuildProcessTempRoot(sharedRoot, int.MaxValue);
+        var nested = Directory.CreateDirectory(Path.Combine(root, "repository", ".git", "objects")).FullName;
+        var readOnlyFile = Path.Combine(nested, "object");
+        File.WriteAllText(readOnlyFile, "fixture");
+        File.SetAttributes(readOnlyFile, File.GetAttributes(readOnlyFile) | FileAttributes.ReadOnly);
+        var timings = new TempRootStartupTimings { ReapRan = true };
+
+        try
+        {
+            Assert.Throws<UnauthorizedAccessException>(() => Directory.Delete(root, recursive: true));
+
+            var outcome = Assert.Single(AssemblyTempRedirect.ReapBoundedRoots(
+                sharedRoot,
+                [Path.GetFileName(root)],
+                AssemblyTempRedirect.DeleteTree,
+                timings));
+
+            Assert.Equal(TempRootDeleteStatus.Deleted, outcome.Status);
+            Assert.False(Directory.Exists(root));
+            Assert.Equal(1, timings.ReapDeleteDeleted);
+            Assert.Equal(0, timings.ReapDeleteFailed);
+            Assert.True(timings.DeleteReadOnlyAttributesCleared > 0);
+        }
+        finally
+        {
+            _ = TempRootJanitor.DeleteTree(sharedRoot);
+        }
+    }
+
+    [Fact]
     public void ThrowingDeleteSeamSurfacesExceptionTypeAndFailingLeaf()
     {
         var timings = new TempRootStartupTimings { ReapRan = true };
@@ -131,9 +171,6 @@ public sealed class AssemblyTempRedirectStartupCostTests(ITestOutputHelper outpu
         var selectedRoot = AssemblyTempRedirect.BuildProcessTempRoot(sharedRoot, Environment.ProcessId);
         var abandonedRoot = AssemblyTempRedirect.BuildProcessTempRoot(sharedRoot, int.MaxValue);
         Directory.CreateDirectory(abandonedRoot);
-        Directory.SetLastWriteTimeUtc(
-            abandonedRoot,
-            DateTime.UtcNow - AssemblyTempRedirect.AbandonedRootAge - TimeSpan.FromMinutes(1));
         var timings = new TempRootStartupTimings();
         var completed = false;
         string? receipt = null;
@@ -149,7 +186,7 @@ public sealed class AssemblyTempRedirectStartupCostTests(ITestOutputHelper outpu
         }
         finally
         {
-            Directory.Delete(sharedRoot, recursive: true);
+            _ = TempRootJanitor.DeleteTree(sharedRoot);
         }
 
         Assert.True(completed, "Startup housekeeping did not return after the delete seam threw.");

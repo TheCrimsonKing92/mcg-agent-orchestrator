@@ -7,11 +7,8 @@ using Mcg.AgentOrchestrator.Infrastructure;
 internal static class AssemblyTempRedirect
 {
     internal const string LowInheritableLevel = "(OI)(CI)L";
-
-    // Deliberately far longer than any run: the acceptance gate's own per-lane budget is 40
-    // minutes, so a root untouched for half a day cannot belong to a live host. Generous enough
-    // that age never races a running test, short enough to bound the directory.
-    internal static readonly TimeSpan AbandonedRootAge = TimeSpan.FromHours(12);
+    internal const int MaxRootsReapedPerProcess = 32;
+    internal static int RetainedOrphanRoots => Math.Clamp(Environment.ProcessorCount * 4, 32, 128);
 
     [ModuleInitializer]
     internal static void Install()
@@ -76,21 +73,17 @@ internal static class AssemblyTempRedirect
         return reapable;
     }
 
-    // PID identity cannot bound growth. A PID recycled onto a live process makes a long-dead run's
-    // root look alive forever, so it is never reaped and the shared directory only grows. Age has
-    // no such failure mode: nothing here runs for hours, so a root older than the cutoff is
-    // abandoned whatever its PID now refers to. This is deliberately not a liveness cache — a
-    // cache would keep PID identity as the signal and add invalidation on top of it.
-    internal static IReadOnlyList<string> SelectRootsAbandonedByAge(
+    internal static IReadOnlyList<string> SelectRootsBeyondRetention(
         IEnumerable<string> siblingDirectoryNames,
         int currentProcessId,
         Func<string, DateTime> lastWriteUtc,
-        DateTime cutoffUtc)
+        int retainedRoots)
     {
         ArgumentNullException.ThrowIfNull(siblingDirectoryNames);
         ArgumentNullException.ThrowIfNull(lastWriteUtc);
+        ArgumentOutOfRangeException.ThrowIfNegative(retainedRoots);
 
-        var abandoned = new List<string>();
+        var owned = new List<(string Name, DateTime LastWriteUtc)>();
         foreach (var name in siblingDirectoryNames)
         {
             if (!TryParseProcessTempRootName(name, out var processId) || processId == currentProcessId)
@@ -108,13 +101,17 @@ internal static class AssemblyTempRedirect
                 continue;
             }
 
-            if (written < cutoffUtc)
-            {
-                abandoned.Add(name);
-            }
+            owned.Add((name, written));
         }
 
-        return abandoned;
+        return owned
+            .OrderByDescending(candidate => candidate.LastWriteUtc)
+            .ThenBy(candidate => candidate.Name, StringComparer.OrdinalIgnoreCase)
+            .Skip(retainedRoots)
+            .OrderBy(candidate => candidate.LastWriteUtc)
+            .ThenBy(candidate => candidate.Name, StringComparer.OrdinalIgnoreCase)
+            .Select(candidate => candidate.Name)
+            .ToArray();
     }
 
     internal static bool TryParseProcessTempRootName(string? directoryName, out int processId)
@@ -148,18 +145,21 @@ internal static class AssemblyTempRedirect
                 .OfType<string>()
                 .ToArray();
             var livePids = SnapshotLiveProcessIds();
-            foreach (var orphan in SelectReapableRoots(siblings, Environment.ProcessId, livePids.Contains))
+            var reapableByProcess = SelectReapableRoots(siblings, Environment.ProcessId, livePids.Contains);
+            var beyondRetention = SelectRootsBeyondRetention(
+                siblings,
+                Environment.ProcessId,
+                name => Directory.GetLastWriteTimeUtc(Path.Combine(sharedRoot, name)),
+                RetainedOrphanRoots);
+            foreach (var candidate in reapableByProcess
+                         .Concat(beyondRetention)
+                         .Distinct(StringComparer.OrdinalIgnoreCase)
+                         .OrderBy(name => TryGetLastWriteUtc(
+                             name,
+                             candidate => Directory.GetLastWriteTimeUtc(Path.Combine(sharedRoot, candidate))))
+                         .Take(MaxRootsReapedPerProcess))
             {
-                TryDeleteTree(Path.Combine(sharedRoot, orphan));
-            }
-
-            foreach (var abandoned in SelectRootsAbandonedByAge(
-                         siblings,
-                         Environment.ProcessId,
-                         name => Directory.GetLastWriteTimeUtc(Path.Combine(sharedRoot, name)),
-                         DateTime.UtcNow - AbandonedRootAge))
-            {
-                TryDeleteTree(Path.Combine(sharedRoot, abandoned));
+                TryDeleteTree(Path.Combine(sharedRoot, candidate));
             }
         }
         catch (Exception)
@@ -193,14 +193,11 @@ internal static class AssemblyTempRedirect
     {
         try
         {
-            if (Directory.Exists(path))
-            {
-                Directory.Delete(path, recursive: true);
-            }
+            _ = TempRootJanitor.DeleteTree(path);
         }
-        catch (Exception ex) when (IsFileSystemFailure(ex))
+        catch
         {
-            // A live sibling may hold a handle; the next run reaps it.
+            // This path is called by the module initializer and process-exit handler.
         }
     }
 
@@ -306,9 +303,19 @@ internal static class AssemblyTempRedirect
 
     internal static string BuildProcessTempRoot(string sharedRoot, int processId)
     {
-        ArgumentException.ThrowIfNullOrWhiteSpace(sharedRoot);
-        ArgumentOutOfRangeException.ThrowIfNegativeOrZero(processId);
-        return Path.Combine(sharedRoot, $"p{processId:x}");
+        return TempRootJanitor.BuildOwnedRootPath(sharedRoot, processId);
+    }
+
+    private static DateTime TryGetLastWriteUtc(string name, Func<string, DateTime> lastWriteUtc)
+    {
+        try
+        {
+            return lastWriteUtc(name);
+        }
+        catch (Exception ex) when (IsFileSystemFailure(ex))
+        {
+            return DateTime.MaxValue;
+        }
     }
 
     private static bool EnsureLowLabel(string path, IWorkerIntegrityLabeler labeler)
