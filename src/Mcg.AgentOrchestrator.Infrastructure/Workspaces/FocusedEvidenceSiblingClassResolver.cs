@@ -103,7 +103,8 @@ internal static class FocusedEvidenceSiblingClassResolver
                 .Any(declaration =>
                     IsTopLevel(declaration) &&
                     declaration.Identifier.ValueText.Equals(baseName, StringComparison.Ordinal) &&
-                    declaration.Modifiers.Any(modifier => modifier.IsKind(SyntaxKind.AbstractKeyword))))
+                    declaration.Modifiers.Any(modifier =>
+                        modifier.RawKind == (int)SyntaxKind.AbstractKeyword)))
             .ToHashSet(StringComparer.Ordinal) ?? [];
         var sourceRoots = new List<CompilationUnitSyntax> { declaringRoot };
         if (familyBaseNames.Count > 0)
