@@ -4095,18 +4095,18 @@ internal sealed partial class ConductorDriver
     internal static bool IsAcceptanceAttemptCancelled(
         OrchestratorWorkspace workspace,
         GoalId goalId,
-        Func<GoalId, Goal?>? loadGoal = null,
+        Func<GoalId, GoalStatus?>? loadGoalStatus = null,
         Func<bool>? attemptInvalidationRecorded = null) =>
         GetAcceptanceAttemptCancellationDecision(
             workspace,
             goalId,
-            loadGoal,
+            loadGoalStatus,
             attemptInvalidationRecorded).ShouldCancel;
 
     internal static AcceptanceAttemptCancellationDecision GetAcceptanceAttemptCancellationDecision(
         OrchestratorWorkspace workspace,
         GoalId goalId,
-        Func<GoalId, Goal?>? loadGoal = null,
+        Func<GoalId, GoalStatus?>? loadGoalStatus = null,
         Func<bool>? attemptInvalidationRecorded = null)
     {
         var invalidated = false;
@@ -4123,18 +4123,20 @@ internal sealed partial class ConductorDriver
             }
         }
 
-        loadGoal ??= id => SqliteOrchestratorStateRepository.OpenReadOnly(workspace.SqliteStatePath)
-            .LoadGoalAsync(id)
-            .GetAwaiter()
-            .GetResult();
+        var loadGoalStatusRecord = loadGoalStatus ?? new Func<GoalId, GoalStatus?>(id =>
+            SqliteOrchestratorStateRepository.OpenReadOnly(workspace.SqliteStatePath)
+                .LoadGoalAsync(id)
+                .GetAwaiter()
+                .GetResult()
+                ?.Status);
 
         for (var attempt = 0; attempt < 3; attempt++)
         {
             try
             {
-                var latest = loadGoal(goalId);
+                var observedStatus = loadGoalStatusRecord(goalId);
                 return AcceptanceAttemptCancellation.Decide(
-                    latest?.Status,
+                    observedStatus,
                     goalRecordReadable: true,
                     attemptInvalidationRecorded: invalidated);
             }

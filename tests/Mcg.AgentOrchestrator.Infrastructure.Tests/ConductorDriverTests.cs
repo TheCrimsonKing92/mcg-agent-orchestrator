@@ -1283,11 +1283,11 @@ public sealed class ConductorDriverTests
             var missing = ConductorDriver.GetAcceptanceAttemptCancellationDecision(
                 workspace,
                 goalId,
-                loadGoal: _ => null);
+                loadGoalStatus: _ => null);
             var unreadable = ConductorDriver.GetAcceptanceAttemptCancellationDecision(
                 workspace,
                 goalId,
-                loadGoal: _ =>
+                loadGoalStatus: _ =>
                 {
                     loadAttempts++;
                     throw new InvalidOperationException("state unavailable");
@@ -1300,7 +1300,7 @@ public sealed class ConductorDriverTests
             var metadataUnreadable = ConductorDriver.GetAcceptanceAttemptCancellationDecision(
                 workspace,
                 current.Id,
-                loadGoal: _ => current,
+                loadGoalStatus: _ => current.Status,
                 attemptInvalidationRecorded: () => throw new IOException("attempt metadata unavailable"));
 
             Assert.True(missing.ShouldCancel);
