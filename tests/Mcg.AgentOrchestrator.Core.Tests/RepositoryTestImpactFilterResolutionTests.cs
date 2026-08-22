@@ -58,6 +58,30 @@ public sealed class RepositoryTestImpactFilterResolutionTests
     }
 
     [Xunit.Fact]
+    public void RealDottedRepositoryFileUsesEveryDeclaredClass()
+    {
+        Assert.True(TryFindRepositoryRoot(out var root), "Repository root was not found.");
+        const string path =
+            "tests/Mcg.AgentOrchestrator.Infrastructure.Tests/CliCommandTests.GoalLifecycleCommands.cs";
+        Assert.True(File.Exists(Path.Combine(root, path)), $"Real dotted fixture was not found: {path}");
+
+        var plan = RepositoryTestImpactPlanner.Plan(
+            RepositoryChangeClassifier.Classify([path]),
+            root);
+
+        var check = Assert.Single(plan.Checks);
+        Assert.Equal("focused changed infrastructure tests", check.Name);
+        Assert.Equal(
+            "FullyQualifiedName~CliCommandTestsGoalLifecycleCleanupHooks|" +
+            "FullyQualifiedName~CliCommandTestsGoalLifecycleCleanupHooksAbandon|" +
+            "FullyQualifiedName~CliCommandTestsGoalLifecycleCleanupHooksAcceptance|" +
+            "FullyQualifiedName~CliCommandTestsGoalLifecycleCommands|" +
+            "FullyQualifiedName~CliCommandTestsGoalLifecycleCommandsCreation|" +
+            "FullyQualifiedName~CliCommandTestsIsolatedBuildLeaseCommands",
+            check.Command[^1]);
+    }
+
+    [Xunit.Fact]
     public void ChangedFileWithNoQualifyingClassAbandonsFocusedFilter()
     {
         const string path = "tests/Mcg.AgentOrchestrator.Core.Tests/CoreTestSupport.cs";
@@ -238,6 +262,52 @@ public sealed class RepositoryTestImpactFilterResolutionTests
     }
 
     [Xunit.Fact]
+    public void UnreadableOrchestrationIndexAbandonsFocusedFilter()
+    {
+        var reader = new StubDeclarationReader(TestClassDeclarations.Unreadable);
+        var plan = RepositoryTestImpactPlanner.Plan(
+            RepositoryChangeClassifier.Classify([
+                "src/Mcg.AgentOrchestrator.App/Orchestration/ConductorDriver.cs"
+            ]),
+            reader);
+
+        var check = Assert.Single(plan.Checks);
+        Assert.Equal("infrastructure tests", check.Name);
+        Assert.DoesNotContain("--filter", check.Command);
+        Assert.DoesNotContain("ConductorDriverTests", check.Command);
+    }
+
+    [Xunit.Fact]
+    public void MissingDotFreeTestFileAbandonsFocusedFilter()
+    {
+        const string path = "tests/Mcg.AgentOrchestrator.Core.Tests/DoesNotExist.cs";
+        var plan = RepositoryTestImpactPlanner.Plan(
+            RepositoryChangeClassifier.Classify([path]),
+            SourceDeclarationReader.ForFiles());
+
+        var check = Assert.Single(plan.Checks);
+        Assert.Equal("core tests", check.Name);
+        Assert.DoesNotContain("--filter", check.Command);
+        Assert.DoesNotContain("DoesNotExist", check.Command);
+        Assert.Contains("could not be read", check.Reason, StringComparison.Ordinal);
+    }
+
+    [Xunit.Fact]
+    public void UnavailableReaderPreservesLegacyDotFreeFilter()
+    {
+        const string path = "tests/Mcg.AgentOrchestrator.Core.Tests/TaskBriefTests.cs";
+        var plan = RepositoryTestImpactPlanner.Plan(
+            RepositoryChangeClassifier.Classify([path]),
+            new StubDeclarationReader(
+                TestClassDeclarations.Unavailable,
+                TestClassDeclarations.Unavailable));
+
+        var check = Assert.Single(plan.Checks);
+        Assert.Equal("focused changed core tests", check.Name);
+        Assert.Equal("FullyQualifiedName~TaskBriefTests", check.Command[^1]);
+    }
+
+    [Xunit.Fact]
     public void ExplicitRepositoryRootRejectsAmbientRelativePath()
     {
         var summary = RepositoryChangeClassifier.Classify([
@@ -323,7 +393,9 @@ public sealed class RepositoryTestImpactFilterResolutionTests
             while (directory is not null)
             {
                 if (Directory.Exists(Path.Combine(directory.FullName, ".git")) ||
-                    File.Exists(Path.Combine(directory.FullName, ".git")))
+                    File.Exists(Path.Combine(directory.FullName, ".git")) ||
+                    File.Exists(Path.Combine(directory.FullName, "AGENTS.md")) &&
+                    File.Exists(Path.Combine(directory.FullName, "CLAUDE.md")))
                 {
                     root = directory.FullName;
                     return true;
@@ -370,11 +442,13 @@ public sealed class RepositoryTestImpactFilterResolutionTests
             TestClassDeclarations.Unreadable;
     }
 
-    private sealed class StubDeclarationReader(TestClassDeclarations projectDeclarations)
+    private sealed class StubDeclarationReader(
+        TestClassDeclarations projectDeclarations,
+        TestClassDeclarations? fileDeclarations = null)
         : ITestClassDeclarationReader
     {
         public TestClassDeclarations ReadFile(string repositoryRelativePath) =>
-            TestClassDeclarations.Unreadable;
+            fileDeclarations ?? TestClassDeclarations.Unreadable;
 
         public TestClassDeclarations ReadProject(string repositoryRelativeDirectory) =>
             projectDeclarations;

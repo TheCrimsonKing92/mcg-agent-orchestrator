@@ -345,6 +345,13 @@ public static class RepositoryTestImpactPlanner
                     $"Focused test selection was abandoned because {fileName} declares no qualifying test class; run the project unfiltered.");
             }
 
+            if (declarations.Outcome == TestClassDeclarationOutcome.Unreadable)
+            {
+                return new TestClassFilterBuildResult(
+                    null,
+                    $"Focused test selection was abandoned because declarations could not be read from {fileName}; run the project unfiltered.");
+            }
+
             if (baseName.Contains('.', StringComparison.Ordinal))
             {
                 return new TestClassFilterBuildResult(
@@ -432,10 +439,9 @@ public static class RepositoryTestImpactPlanner
                     .ToArray();
                 var projectDeclarations = declarationReader.ReadProject(
                     "tests/Mcg.AgentOrchestrator.Infrastructure.Tests/");
-                if (projectDeclarations.Outcome != TestClassDeclarationOutcome.Unreadable &&
-                    (projectDeclarations.Outcome != TestClassDeclarationOutcome.Resolved ||
-                        derivedClassNames.Any(name =>
-                            !projectDeclarations.ClassNames.Contains(name, StringComparer.Ordinal))))
+                if (projectDeclarations.Outcome != TestClassDeclarationOutcome.Resolved ||
+                    derivedClassNames.Any(name =>
+                        !projectDeclarations.ClassNames.Contains(name, StringComparer.Ordinal)))
                 {
                     return null;
                 }

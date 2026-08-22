@@ -6,7 +6,8 @@ internal enum TestClassDeclarationOutcome
 {
     Resolved,
     NoQualifyingClass,
-    Unreadable
+    Unreadable,
+    Unavailable
 }
 
 internal sealed record TestClassDeclarations(
@@ -23,6 +24,9 @@ internal sealed record TestClassDeclarations(
 
     internal static TestClassDeclarations Unreadable { get; } =
         new(TestClassDeclarationOutcome.Unreadable, []);
+
+    internal static TestClassDeclarations Unavailable { get; } =
+        new(TestClassDeclarationOutcome.Unavailable, []);
 }
 
 internal interface ITestClassDeclarationReader
@@ -184,9 +188,9 @@ internal sealed class UnavailableTestClassDeclarationReader : ITestClassDeclarat
     {
     }
 
-    public TestClassDeclarations ReadFile(string repositoryRelativePath) => TestClassDeclarations.Unreadable;
+    public TestClassDeclarations ReadFile(string repositoryRelativePath) => TestClassDeclarations.Unavailable;
 
-    public TestClassDeclarations ReadProject(string repositoryRelativeDirectory) => TestClassDeclarations.Unreadable;
+    public TestClassDeclarations ReadProject(string repositoryRelativeDirectory) => TestClassDeclarations.Unavailable;
 }
 
 internal static class CSharpTestClassScanner
