@@ -389,6 +389,7 @@ public sealed class GoalAcceptanceVerifierTests : GoalAcceptanceVerifierTestBase
         Assert.Equal("Process spawning", emitted.CurrentTarget);
         Assert.Equal(1, emitted.SlotIndex);
         Assert.Equal(elapsed, emitted.Elapsed);
+        Assert.Null(emitted.PhaseBreakdown);
         var load = Assert.IsType<GateLoadContext>(emitted.LoadContext);
         AssertAvailable(load.ConcurrentShardCount, 3);
         AssertAvailable(load.HostCpuUtilizationPercent, 37.5);
@@ -416,7 +417,13 @@ public sealed class GoalAcceptanceVerifierTests : GoalAcceptanceVerifierTestBase
             TimeSpan.Zero,
             0);
 
-        var load = Assert.IsType<GateLoadContext>(Assert.Single(progress).LoadContext);
+        var emitted = Assert.Single(progress);
+        Assert.Equal("shards-complete", emitted.Phase);
+        Assert.Equal("0-infrastructure-shards", emitted.CurrentTarget);
+        Assert.Equal(0, emitted.SlotIndex);
+        Assert.Equal(TimeSpan.Zero, emitted.Elapsed);
+        Assert.Null(emitted.PhaseBreakdown);
+        var load = Assert.IsType<GateLoadContext>(emitted.LoadContext);
         AssertAvailable(load.ConcurrentShardCount, 0);
         AssertAvailable(load.InFlightPaidWorkerDispatchCount, 0);
         AssertUnavailable(load.ConcurrentGateCount, "gate-count-unavailable");
@@ -580,6 +587,7 @@ public sealed class GoalAcceptanceVerifierTests : GoalAcceptanceVerifierTestBase
         Assert.Equal(4, progress.OutputBytes);
         Assert.Equal("heartbeat", progress.HeartbeatPath);
         Assert.Null(progress.LoadContext);
+        Assert.Null(progress.PhaseBreakdown);
     }
 
     [Xunit.Fact]
@@ -4616,6 +4624,23 @@ public sealed class GoalAcceptanceVerifierDotnetBuildSlotTests : GoalAcceptanceV
                 item => item.GoalId == "22222222222222222222222222222222" &&
                     item.Phase == "shards-complete" &&
                     item.LoadContext?.ConcurrentShardCount is { IsAvailable: true, Value: 0 });
+            var batchTiming = Assert.Single(
+                timingProgress,
+                item => item.GoalId == "22222222222222222222222222222222" &&
+                    item.Phase == "shards-complete");
+            Assert.Equal("2-infrastructure-shards", batchTiming.CurrentTarget);
+            Assert.NotNull(batchTiming.SlotIndex);
+            Assert.True(batchTiming.Elapsed >= TimeSpan.Zero);
+            Assert.Null(batchTiming.PhaseBreakdown);
+            var gateTiming = Assert.IsType<AcceptanceGatePhaseBreakdown>(Assert.Single(
+                timingProgress,
+                item => item.GoalId == "22222222222222222222222222222222" &&
+                    item.Phase == "gate-phase-breakdown").PhaseBreakdown);
+            Assert.Equal(batchTiming.Elapsed, gateTiming.LaneExecutionDuration);
+            Assert.Contains(gateTiming.Phases, phase => phase.Name == AcceptanceGatePhaseNames.SharedPrebuild);
+            Assert.Contains(gateTiming.Phases, phase =>
+                phase.Name == AcceptanceGatePhaseNames.LaneExecution &&
+                phase.Duration == batchTiming.Elapsed);
             Assert.Collection(
                 concurrentShards,
                 alpha =>

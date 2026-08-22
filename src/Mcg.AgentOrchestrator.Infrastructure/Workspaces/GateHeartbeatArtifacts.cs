@@ -20,7 +20,8 @@ public sealed record AcceptanceGateProgress(
     TimeSpan Elapsed,
     long OutputBytes,
     string HeartbeatPath,
-    GateLoadContext? LoadContext = null);
+    GateLoadContext? LoadContext = null,
+    AcceptanceGatePhaseBreakdown? PhaseBreakdown = null);
 
 public sealed record GateHeartbeatSnapshot(
     string? GoalId,
