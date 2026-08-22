@@ -1,5 +1,4 @@
 using System.Diagnostics;
-using System.Collections.Concurrent;
 using System.Security.Cryptography;
 using System.Text;
 using System.Text.Json;
@@ -117,12 +116,11 @@ public sealed class BackgroundDispatchRunner
     private readonly WorkerProviderCatalog _workerProviders;
     private readonly WorkerDispatchCompletionClassifier _completionClassifier;
     private readonly DispatchProcessRecoveryService _recoveryService;
+    private readonly DispatchWorktreeCommitter _worktreeCommitter;
     private readonly Func<string, Stream> _openLogReadStream;
-    private readonly Action? _beforeGoalWorktreeInspection;
     private readonly Func<ProcessStartInfo, Process?> _startProcess;
     private readonly Dictionary<ProcessLogCacheKey, ProcessLogSnapshot> _processLogCache = [];
     private readonly object _processLogCacheGate = new();
-    private readonly ConcurrentDictionary<WorktreeInspectionCacheKey, GoalWorktreeInspectionResult> _worktreeInspectionCache = [];
 
     public BackgroundDispatchRunner(
         IClock? clock = null,
@@ -170,7 +168,7 @@ public sealed class BackgroundDispatchRunner
             evaluateRecovery: (process, hasLiveProcess, staleRetryBudgetRemaining, worktreeInspection) =>
                 _recoveryPolicy.Evaluate(process, hasLiveProcess, staleRetryBudgetRemaining, worktreeInspection),
             diagnosticWriter: _diagnosticWriter);
-        _beforeGoalWorktreeInspection = beforeGoalWorktreeInspection;
+        _worktreeCommitter = new DispatchWorktreeCommitter(beforeWorktreeInspection: beforeGoalWorktreeInspection);
         _startProcess = startProcess ?? Process.Start;
     }
 
@@ -186,7 +184,7 @@ public sealed class BackgroundDispatchRunner
         return value is "1" || string.Equals(value, "true", StringComparison.OrdinalIgnoreCase);
     }
 
-    public void BeginRefreshCycle() => _worktreeInspectionCache.Clear();
+    public void BeginRefreshCycle() => _worktreeCommitter.BeginRefreshCycle();
 
     internal static string RewriteRealWorkerCommandForTests(string command, bool rewriteEnabled)
     {
@@ -793,7 +791,7 @@ public sealed class BackgroundDispatchRunner
     {
         var lastDispatch = task.LastDispatch
             ?? throw new InvalidOperationException("Recovery worktree inspection requires a dispatch record.");
-        var inspection = InspectGoalWorktree(
+        var inspection = _worktreeCommitter.InspectGoalWorktree(
             processRecord.WorkingDirectory,
             goalId,
             lastDispatch.DispatchedAt);
@@ -815,7 +813,7 @@ public sealed class BackgroundDispatchRunner
     private bool HasRecoveryWorktreeProgress(TaskSpec task, TaskProcessRecord processRecord, GoalId goalId)
     {
         return task.LastDispatch is { } dispatch &&
-            TryInspectGoalWorktree(processRecord.WorkingDirectory, goalId, dispatch.DispatchedAt, out var worktree) &&
+            _worktreeCommitter.TryInspectGoalWorktree(processRecord.WorkingDirectory, goalId, dispatch.DispatchedAt, out var worktree) &&
             (worktree.HasCommitAfterDispatch || !worktree.IsClean);
     }
 
@@ -1073,7 +1071,7 @@ public sealed class BackgroundDispatchRunner
         GoalWorktreeDispatchEvidence? worktreeEvidence = null;
         var worktreeEvidenceAvailable = false;
         if (task.LastDispatch is { } dispatch &&
-            TryInspectGoalWorktree(processRecord.WorkingDirectory, goalId, dispatch.DispatchedAt, out var inspectedWorktree))
+            _worktreeCommitter.TryInspectGoalWorktree(processRecord.WorkingDirectory, goalId, dispatch.DispatchedAt, out var inspectedWorktree))
         {
             worktreeEvidenceAvailable = true;
             worktreeEvidence = inspectedWorktree;
@@ -1305,7 +1303,7 @@ public sealed class BackgroundDispatchRunner
         var hasCommittedChanges = false;
         var orchestratorCommitted = false;
         var completedWorktreeInspection = RequiresFileChangeEvidence(task)
-            ? InspectGoalWorktree(
+            ? _worktreeCommitter.InspectGoalWorktree(
                 processRecord.WorkingDirectory,
                 goalId,
                 task.LastDispatch!.DispatchedAt,
@@ -1425,13 +1423,13 @@ public sealed class BackgroundDispatchRunner
             if (!worktreeEvidence.IsClean &&
                 shouldCommitDirtyWorktree)
             {
-                commitAttempt = TryCommitWorktreeEdits(
+                commitAttempt = _worktreeCommitter.TryCommitWorktreeEdits(
                     processRecord.WorkingDirectory,
-                    BuildOrchestratorCommitSubject(task, decisionStandardOutput, decisionStandardError),
+                    DispatchWorktreeCommitter.BuildOrchestratorCommitSubject(task, decisionStandardOutput, decisionStandardError),
                     worktreeEvidence.DirtyPaths);
                 commitAttempted = true;
                 if (commitAttempt.Succeeded &&
-                    TryInspectGoalWorktree(
+                    _worktreeCommitter.TryInspectGoalWorktree(
                         processRecord.WorkingDirectory,
                         goalId,
                         task.LastDispatch!.DispatchedAt,
@@ -1482,7 +1480,7 @@ public sealed class BackgroundDispatchRunner
                 {
                     standardErrorDiagnostic = AppendDiagnostic(
                         standardErrorDiagnostic ?? string.Empty,
-                        BuildCommitOnBehalfFailureDiagnostic(commitAttempt.Diagnostic, worktreeEvidence));
+                        DispatchWorktreeCommitter.BuildCommitOnBehalfFailureDiagnostic(commitAttempt.Diagnostic, worktreeEvidence));
                 }
                 else
                 {
@@ -1928,7 +1926,7 @@ public sealed class BackgroundDispatchRunner
 
         if (RequiresFileChangeEvidence(task) &&
             task.LastDispatch is { } dispatch &&
-            InspectGoalWorktree(processRecord.WorkingDirectory, goalId, dispatch.DispatchedAt) is
+            _worktreeCommitter.InspectGoalWorktree(processRecord.WorkingDirectory, goalId, dispatch.DispatchedAt) is
                 { IsAvailable: true, Evidence: var worktreeEvidence } &&
             worktreeEvidence.IsClean && worktreeEvidence.HasRelevantCommitAfterDispatch)
         {
@@ -1986,272 +1984,6 @@ public sealed class BackgroundDispatchRunner
         {
             return Path.Combine(workingDirectory, ".git", "index.lock");
         }
-    }
-
-    // Commits the worker's uncommitted worktree edits from the orchestrator after verification guards
-    // pass. The dirty path list is filtered from git status so generated/noise paths are not absorbed
-    // into the recovery commit.
-    private static CommitWorktreeEditsResult TryCommitWorktreeEdits(string workingDirectory, string subject, IReadOnlyList<string> dirtyPaths)
-    {
-        try
-        {
-            if (dirtyPaths.Count == 0)
-            {
-                return CommitWorktreeEditsResult.Failed("Orchestrator commit-on-behalf skipped: no commit-worthy dirty paths.");
-            }
-
-            var addArgs = new List<string>(dirtyPaths.Count + 3) { "add", "-A", "--" };
-            addArgs.AddRange(dirtyPaths);
-            var add = GitCli.Run(workingDirectory, addArgs.ToArray());
-            if (!add.Succeeded)
-            {
-                return CommitWorktreeEditsResult.FromGitFailure("add", addArgs, add);
-            }
-
-            var staged = GitCli.Run(workingDirectory, "diff", "--cached", "--name-only");
-            if (staged.ExitCode != 0 || string.IsNullOrWhiteSpace(staged.Output))
-            {
-                // Nothing to commit (e.g. only the excluded sandbox scratch was dirty) — leave the
-                // dispatch to fail/report rather than create an empty commit.
-                return staged.ExitCode == 0
-                    ? CommitWorktreeEditsResult.Failed("Orchestrator commit-on-behalf found no staged changes after git add.")
-                    : CommitWorktreeEditsResult.FromGitFailure("diff", ["diff", "--cached", "--name-only"], staged);
-            }
-
-            var substantive = GitCli.Run(
-                workingDirectory,
-                "diff",
-                "--cached",
-                "--ignore-all-space",
-                "--quiet",
-                "--exit-code",
-                "--");
-            if (substantive.ExitCode == 0)
-            {
-                return CommitWorktreeEditsResult.Failed("Orchestrator commit-on-behalf found no substantive staged changes after ignoring whitespace.");
-            }
-
-            if (substantive.ExitCode != 1)
-            {
-                return CommitWorktreeEditsResult.FromGitFailure(
-                    "diff",
-                    ["diff", "--cached", "--ignore-all-space", "--quiet", "--exit-code", "--"],
-                    substantive);
-            }
-
-            var commitArgs = new[] { "commit", "-m", subject };
-            var commit = GitCli.Run(workingDirectory, commitArgs);
-            return commit.Succeeded
-                ? CommitWorktreeEditsResult.Success
-                : CommitWorktreeEditsResult.FromGitFailure("commit", commitArgs, commit);
-        }
-        catch (Exception ex) when (ex is InvalidOperationException or IOException or UnauthorizedAccessException)
-        {
-            return CommitWorktreeEditsResult.Failed(
-                $"Orchestrator commit-on-behalf failed with {ex.GetType().Name}: {NormalizeDiagnosticText(ex.Message)}");
-        }
-    }
-
-    private static string BuildOrchestratorCommitSubject(TaskSpec task, string standardOutput, string standardError)
-    {
-        var title = NormalizeCommitSubjectPart(task.Description);
-        var summary = ExtractWorkerSummary(standardOutput, standardError);
-        var subject = string.IsNullOrWhiteSpace(summary)
-            ? title
-            : $"{title}: {summary}";
-        return TruncateCommitSubject(subject);
-    }
-
-    private static string ExtractWorkerSummary(string standardOutput, string standardError)
-    {
-        if (WorkerResultParser.TryParseFields($"{standardOutput}\n{standardError}", out var fields, out _) &&
-            fields.TryGetValue("summary", out var summary))
-        {
-            return NormalizeCommitSubjectPart(summary);
-        }
-
-        foreach (var line in $"{standardOutput}\n{standardError}".Split(['\r', '\n'], StringSplitOptions.RemoveEmptyEntries))
-        {
-            var trimmed = line.Trim();
-            if (trimmed.Length == 0 ||
-                WorkerResultParser.IsOpener(trimmed) ||
-                WorkerResultParser.IsEndMarker(trimmed) ||
-                trimmed.Contains(':', StringComparison.Ordinal))
-            {
-                continue;
-            }
-
-            return NormalizeCommitSubjectPart(trimmed);
-        }
-
-        return string.Empty;
-    }
-
-    private static string NormalizeCommitSubjectPart(string value)
-    {
-        return Regex.Replace(value.Trim(), @"\s+", " ");
-    }
-
-    private static string TruncateCommitSubject(string subject)
-    {
-        const int MaxSubjectLength = 72;
-        subject = NormalizeCommitSubjectPart(subject);
-        return subject.Length <= MaxSubjectLength
-            ? subject
-            : subject[..MaxSubjectLength].TrimEnd();
-    }
-
-    private static string BuildCommitOnBehalfFailureDiagnostic(
-        string gitFailureDiagnostic,
-        GoalWorktreeDispatchEvidence worktreeEvidence)
-    {
-        return gitFailureDiagnostic + " " +
-            "Developer/Tester dispatch exited 0 but left the worktree dirty. " +
-            "Commit-on-behalf failure is retryable; worktree preserved. " +
-            "operator_action=inspect the preserved worktree, resolve the named git failure, then rerun refresh-dispatch for this task; " +
-            $"branch={worktreeEvidence.Branch}; head={worktreeEvidence.Head}; worktree={worktreeEvidence.WorktreeStatus}; " +
-            $"commits_after_dispatch={worktreeEvidence.CommitsAfterDispatch}; status_short={worktreeEvidence.StatusShort}.";
-    }
-
-    private GoalWorktreeInspectionResult InspectGoalWorktree(
-        string workingDirectory,
-        GoalId goalId,
-        DateTimeOffset dispatchedAt,
-        bool forceRefresh = false)
-    {
-        var key = new WorktreeInspectionCacheKey(workingDirectory, goalId, dispatchedAt);
-        if (!forceRefresh && _worktreeInspectionCache.TryGetValue(key, out var cached))
-        {
-            return cached;
-        }
-
-        _beforeGoalWorktreeInspection?.Invoke();
-        var result = InspectGoalWorktreeCore(workingDirectory, goalId, dispatchedAt);
-        _worktreeInspectionCache[key] = result;
-        return result;
-    }
-
-    private bool TryInspectGoalWorktree(
-        string workingDirectory,
-        GoalId goalId,
-        DateTimeOffset dispatchedAt,
-        out GoalWorktreeDispatchEvidence evidence,
-        bool forceRefresh = false)
-    {
-        var inspection = InspectGoalWorktree(workingDirectory, goalId, dispatchedAt, forceRefresh);
-        evidence = inspection.Evidence;
-        return inspection.IsAvailable;
-    }
-
-    private static GoalWorktreeInspectionResult InspectGoalWorktreeCore(
-        string workingDirectory,
-        GoalId goalId,
-        DateTimeOffset dispatchedAt)
-    {
-        if (!Directory.Exists(workingDirectory))
-        {
-            return GoalWorktreeInspectionResult.Unavailable("directory-missing", "git-not-run");
-        }
-
-        if (!File.Exists(Path.Combine(workingDirectory, ".git")))
-        {
-            return GoalWorktreeInspectionResult.Unavailable("git-metadata-missing", "git-not-run");
-        }
-
-        var branch = GitCli.Run(workingDirectory, "branch", "--show-current");
-        var expectedBranch = GoalWorktrees.BranchName(goalId);
-        if (branch.ExitCode != 0)
-        {
-            return GoalWorktreeInspectionResult.Unavailable(
-                "branch-inspection-failed",
-                BuildGitInspectionReceipt("branch", branch));
-        }
-
-        if (!string.Equals(branch.Output.Trim(), expectedBranch, StringComparison.Ordinal))
-        {
-            return GoalWorktreeInspectionResult.Unsafe(
-                "branch-mismatch",
-                $"expected={expectedBranch}; actual={NormalizeDiagnosticText(branch.Output)}");
-        }
-
-        var head = GitCli.Run(workingDirectory, "rev-parse", "--short", "HEAD");
-        var status = GitCli.Run(workingDirectory, "status", "--short", "--untracked-files=all");
-        var dispatch = GitCli.Run(workingDirectory, "log", "--format=%H", $"--since={dispatchedAt:O}");
-        var changedPaths = GitCli.Run(workingDirectory, "log", "--name-only", "--format=", $"--since={dispatchedAt:O}");
-        var failedGitOperation = new[]
-        {
-            (Name: "head", Result: head),
-            (Name: "status", Result: status),
-            (Name: "dispatch-log", Result: dispatch),
-            (Name: "changed-paths", Result: changedPaths)
-        }.FirstOrDefault(item => !item.Result.Succeeded || item.Result.DrainTimedOut);
-        if (failedGitOperation.Name is not null)
-        {
-            return GoalWorktreeInspectionResult.Unavailable(
-                "git-inspection-failed",
-                BuildGitInspectionReceipt(failedGitOperation.Name, failedGitOperation.Result));
-        }
-
-        var commitsAfterDispatch = dispatch.Output
-            .Split(['\r', '\n'], StringSplitOptions.RemoveEmptyEntries)
-            .Length;
-        var pathsChangedAfterDispatch = changedPaths.Output
-            .Split(['\r', '\n'], StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries)
-            .Distinct(StringComparer.OrdinalIgnoreCase)
-            .Order(StringComparer.OrdinalIgnoreCase)
-            .ToArray();
-
-        var filteredStatusOutput = GitCli.FilterCommitWorthyStatus(status.Output);
-        var evidence = new GoalWorktreeDispatchEvidence(
-            branch.Output.Trim(),
-            head.Output.Trim(),
-            string.IsNullOrWhiteSpace(filteredStatusOutput),
-            string.IsNullOrWhiteSpace(filteredStatusOutput) ? "clean" : "dirty",
-            FormatStatusShort(new GitCli.GitResult(status.ExitCode, filteredStatusOutput, string.Empty)),
-            commitsAfterDispatch,
-            pathsChangedAfterDispatch,
-            GitCli.ParseCommitWorthyStatusPaths(filteredStatusOutput));
-        return GoalWorktreeInspectionResult.Available(evidence);
-    }
-
-    private static string BuildGitInspectionReceipt(string operation, GitCli.GitResult result)
-    {
-        var detail = string.IsNullOrWhiteSpace(result.Error) ? result.Output : result.Error;
-        var normalizedDetail = NormalizeDiagnosticText(detail);
-        return $"operation={operation}; exit_code={result.ExitCode}; drain_timed_out={result.DrainTimedOut.ToString().ToLowerInvariant()}; " +
-            $"detail={normalizedDetail[..Math.Min(normalizedDetail.Length, 256)]}";
-    }
-
-    private sealed record WorktreeInspectionCacheKey(
-        string WorkingDirectory,
-        GoalId GoalId,
-        DateTimeOffset DispatchedAt);
-
-    private static string FormatChangedPaths(IReadOnlyList<string> changedPaths)
-    {
-        if (changedPaths.Count == 0)
-        {
-            return "none";
-        }
-
-        var entries = changedPaths.Take(8).ToArray();
-        return string.Join(" | ", entries);
-    }
-
-    private static string FormatStatusShort(GitCli.GitResult status)
-    {
-        if (status.ExitCode != 0)
-        {
-            return "unavailable";
-        }
-
-        var entries = status.Output
-            .Split(['\r', '\n'], StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries)
-            .Take(8)
-            .ToArray();
-        return entries.Length == 0
-            ? "clean"
-            : string.Join(" | ", entries);
     }
 
     public TaskProcessRecord CancelLatestProcess(
@@ -3452,14 +3184,6 @@ public sealed class BackgroundDispatchRunner
             : standardError.TrimEnd() + Environment.NewLine + diagnostic;
     }
 
-    private static string NormalizeDiagnosticText(string value)
-    {
-        var normalized = string.Join(
-            " ",
-            value.Split(['\r', '\n'], StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries));
-        return string.IsNullOrWhiteSpace(normalized) ? "none" : normalized;
-    }
-
     private static bool TryKillProcess(int processId)
     {
         return WorkerProcessJobs.TryKillOrFallback(processId);
@@ -3484,40 +3208,6 @@ public sealed class BackgroundDispatchRunner
         return dispatch.WorkerName.Equals("local", StringComparison.OrdinalIgnoreCase);
     }
 
-    private sealed record GoalWorktreeInspectionResult(
-        bool IsAvailable,
-        bool IsUnsafe,
-        GoalWorktreeDispatchEvidence Evidence,
-        string? UnavailableReason,
-        string GitReceipt)
-    {
-        public static GoalWorktreeInspectionResult Available(GoalWorktreeDispatchEvidence evidence) =>
-            new(true, false, evidence, null, "git-inspection-succeeded");
-
-        public static GoalWorktreeInspectionResult Unsafe(string reason, string gitReceipt) =>
-            new(false, true, GoalWorktreeDispatchEvidence.Unknown, reason, gitReceipt);
-
-        public static GoalWorktreeInspectionResult Unavailable(string reason, string gitReceipt) =>
-            new(false, false, GoalWorktreeDispatchEvidence.Unknown, reason, gitReceipt);
-    }
-
-    private sealed record GoalWorktreeDispatchEvidence(
-        string Branch,
-        string Head,
-        bool IsClean,
-        string WorktreeStatus,
-        string StatusShort,
-        int CommitsAfterDispatch,
-        IReadOnlyList<string> ChangedPaths,
-        IReadOnlyList<string> DirtyPaths)
-    {
-        public bool HasCommitAfterDispatch => CommitsAfterDispatch > 0;
-        public bool HasRelevantCommitAfterDispatch => ChangedPaths.Any(path => !GitCli.IsOrchestratorInternalArtifactPath(path));
-        public string ChangedPathsSummary => FormatChangedPaths(ChangedPaths);
-
-        public static GoalWorktreeDispatchEvidence Unknown { get; } = new("unknown", "unknown", false, "unknown", "unavailable", 0, [], []);
-    }
-
     internal readonly record struct WrapperExitReconciliationEvidence(
         int ObservedRootExitCode,
         int? ChildExitCode,
@@ -3529,31 +3219,4 @@ public sealed class BackgroundDispatchRunner
         bool HasTerminalHumanInputDirective,
         bool HasFatalOrchestratorFailure);
 
-    private readonly record struct CommitWorktreeEditsResult(bool Succeeded, string Diagnostic)
-    {
-        public static CommitWorktreeEditsResult Success { get; } = new(true, string.Empty);
-
-        public static CommitWorktreeEditsResult Failed(string diagnostic) => new(false, diagnostic);
-
-        public static CommitWorktreeEditsResult FromGitFailure(
-            string operation,
-            IReadOnlyList<string> arguments,
-            GitCli.GitResult result)
-        {
-            var detail = string.IsNullOrWhiteSpace(result.Error)
-                ? result.Output
-                : result.Error;
-            return Failed(
-                "Orchestrator commit-on-behalf git command failed. " +
-                $"operation={operation}; command=git {FormatGitArguments(arguments)}; exit_code={result.ExitCode}; " +
-                $"error={NormalizeDiagnosticText(detail)}.");
-        }
-
-        private static string FormatGitArguments(IReadOnlyList<string> arguments)
-        {
-            return string.Join(
-                ' ',
-                arguments.Select(argument => argument.Contains(' ', StringComparison.Ordinal) ? $"\"{argument}\"" : argument));
-        }
-    }
 }
