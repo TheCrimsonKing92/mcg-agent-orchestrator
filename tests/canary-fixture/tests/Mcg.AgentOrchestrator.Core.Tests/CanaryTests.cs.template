@@ -1,21 +1,21 @@
 using System.Security;
 
-if (args.Length != 7 ||
-    !args[0].Equals("--results-directory", StringComparison.Ordinal) ||
-    !args[2].Equals("--report-trx", StringComparison.Ordinal) ||
-    !args[3].Equals("--report-trx-filename", StringComparison.Ordinal) ||
-    !args[5].Equals("--filter-class", StringComparison.Ordinal) ||
-    !args[6].Contains("CanaryTests", StringComparison.Ordinal))
+if (!TryReadRequiredValue(args, "--results-directory", out var resultsDirectory, out var resultsDirectoryFailure))
 {
     Console.Error.WriteLine(
-        "Known-green canary received arguments outside the strict MTP contract: " +
-        string.Join(' ', args));
+        $"Known-green canary is missing a required argument value: --results-directory {resultsDirectoryFailure}. " +
+        $"Received: {FormatArguments(args)}");
     return 2;
 }
 
-var resultsDirectory = ReadValue(args, "--results-directory")
-    ?? Path.Combine(Environment.CurrentDirectory, "TestResults");
-var trxFileName = ReadValue(args, "--report-trx-filename") ?? "core-tests.trx";
+if (!TryReadRequiredValue(args, "--report-trx-filename", out var trxFileName, out var trxFileNameFailure))
+{
+    Console.Error.WriteLine(
+        $"Known-green canary is missing a required argument value: --report-trx-filename {trxFileNameFailure}. " +
+        $"Received: {FormatArguments(args)}");
+    return 2;
+}
+
 Directory.CreateDirectory(resultsDirectory);
 var trxPath = Path.Combine(resultsDirectory, trxFileName);
 const string testId = "a82a00e4-0e82-4c59-843b-a70bd036fbf1";
@@ -43,17 +43,37 @@ File.WriteAllText(trxPath, trx);
 Console.WriteLine("Passed! Failed: 0, Passed: 1, Skipped: 0, Total: 1");
 return 0;
 
-static string? ReadValue(string[] arguments, string name)
+static bool TryReadRequiredValue(
+    string[] arguments,
+    string name,
+    out string value,
+    out string failure)
 {
-    for (var index = 0; index < arguments.Length - 1; index++)
+    for (var index = 0; index < arguments.Length; index++)
     {
         if (arguments[index].Equals(name, StringComparison.OrdinalIgnoreCase))
         {
-            return SecurityElement.Escape(arguments[index + 1]) is { } escaped
+            if (index == arguments.Length - 1 ||
+                string.IsNullOrWhiteSpace(arguments[index + 1]) ||
+                arguments[index + 1].StartsWith("--", StringComparison.Ordinal))
+            {
+                value = string.Empty;
+                failure = "had no value";
+                return false;
+            }
+
+            value = SecurityElement.Escape(arguments[index + 1]) is { } escaped
                 ? System.Net.WebUtility.HtmlDecode(escaped)
                 : arguments[index + 1];
+            failure = string.Empty;
+            return true;
         }
     }
 
-    return null;
+    value = string.Empty;
+    failure = "was not supplied";
+    return false;
 }
+
+static string FormatArguments(string[] arguments)
+    => arguments.Length == 0 ? "<none>" : string.Join(' ', arguments);
