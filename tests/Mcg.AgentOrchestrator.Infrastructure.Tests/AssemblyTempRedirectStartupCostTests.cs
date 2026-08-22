@@ -18,6 +18,7 @@ public sealed class AssemblyTempRedirectStartupCostTests(ITestOutputHelper outpu
         Assert.Contains("totalMs=", receipt, StringComparison.Ordinal);
         Assert.Contains("reapSiblingCount=", receipt, StringComparison.Ordinal);
         Assert.Contains("deleteMs=", receipt, StringComparison.Ordinal);
+        Assert.Contains("deleteFailed=", receipt, StringComparison.Ordinal);
         output.WriteLine(receipt);
     }
 
@@ -38,8 +39,123 @@ public sealed class AssemblyTempRedirectStartupCostTests(ITestOutputHelper outpu
             "probeWriteMs=0 probeCleanupMs=0 reap=not-run reapEnumerateMs=not-run " +
             "reapSiblingCount=not-run reapPidSnapshotMs=not-run reapOrphanSelectMs=not-run " +
             "reapAgeSelectMs=not-run reapBoundSelectMs=not-run reapOverlap=not-run " +
-            "deleteAttempted=not-run deleteSucceeded=not-run deleteMs=not-run",
+            "deleteAttempted=not-run deleteSucceeded=not-run deleteMs=not-run " +
+            "deleteDeleted=not-run deleteAlreadyAbsent=not-run deleteFailed=not-run " +
+            "deleteFailureKinds=not-run deleteFirstFailure=not-run",
             diagnostic);
+    }
+
+    [Fact]
+    public void BoundedReapRecordsEachDeleteOutcomeClassification()
+    {
+        var statuses = new[]
+        {
+            TempRootDeleteStatus.Deleted,
+            TempRootDeleteStatus.AlreadyAbsent,
+            TempRootDeleteStatus.Failed
+        };
+        var nextStatus = 0;
+        var timings = new TempRootStartupTimings { ReapRan = true };
+
+        var outcomes = AssemblyTempRedirect.ReapBoundedRoots(
+            "shared",
+            ["p1", "p2", "p3"],
+            path =>
+            {
+                var status = statuses[nextStatus++];
+                return new TempRootDeleteOutcome(
+                    path,
+                    status,
+                    status == TempRootDeleteStatus.Failed ? "InjectedFailure" : null);
+            },
+            timings);
+
+        Assert.Equal(statuses, outcomes.Select(outcome => outcome.Status));
+        Assert.Equal(3, timings.ReapDeleteAttempted);
+        Assert.Equal(1, timings.ReapDeleteDeleted);
+        Assert.Equal(1, timings.ReapDeleteAlreadyAbsent);
+        Assert.Equal(1, timings.ReapDeleteFailed);
+        Assert.Equal(
+            timings.ReapDeleteAttempted,
+            timings.ReapDeleteDeleted + timings.ReapDeleteAlreadyAbsent + timings.ReapDeleteFailed);
+    }
+
+    [Fact]
+    public void MissingRootIsAlreadyAbsentAndDoesNotIncrementFailureCount()
+    {
+        var sharedRoot = Path.Combine(Path.GetTempPath(), $"mcg-reap-absent-{Guid.NewGuid():N}");
+        var timings = new TempRootStartupTimings { ReapRan = true };
+
+        var outcome = Assert.Single(AssemblyTempRedirect.ReapBoundedRoots(
+            sharedRoot,
+            ["p1"],
+            AssemblyTempRedirect.DeleteTree,
+            timings));
+        var diagnostic = AssemblyTempRedirect.FormatTimingDiagnostic(timings);
+
+        Assert.Equal(TempRootDeleteStatus.AlreadyAbsent, outcome.Status);
+        Assert.Equal(1, timings.ReapDeleteAlreadyAbsent);
+        Assert.Equal(0, timings.ReapDeleteFailed);
+        Assert.Contains("deleteAlreadyAbsent=1", diagnostic, StringComparison.Ordinal);
+        Assert.Contains("deleteFailed=0", diagnostic, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void ThrowingDeleteSeamSurfacesExceptionTypeAndFailingLeaf()
+    {
+        var timings = new TempRootStartupTimings { ReapRan = true };
+
+        var outcome = Assert.Single(AssemblyTempRedirect.ReapBoundedRoots(
+            "shared",
+            ["p2"],
+            _ => throw new UnauthorizedAccessException("denied"),
+            timings));
+        var diagnostic = AssemblyTempRedirect.FormatTimingDiagnostic(timings);
+
+        Assert.Equal(TempRootDeleteStatus.Failed, outcome.Status);
+        Assert.Equal(nameof(UnauthorizedAccessException), outcome.ExceptionType);
+        Assert.Contains(
+            "deleteFailureKinds=UnauthorizedAccessException:1",
+            diagnostic,
+            StringComparison.Ordinal);
+        Assert.Contains(
+            "deleteFirstFailure=p2:UnauthorizedAccessException",
+            diagnostic,
+            StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void StartupHousekeepingCompletesWhenDeleteSeamThrows()
+    {
+        var sharedRoot = Path.Combine(Path.GetTempPath(), $"mcg-reap-safety-{Guid.NewGuid():N}");
+        var selectedRoot = AssemblyTempRedirect.BuildProcessTempRoot(sharedRoot, Environment.ProcessId);
+        var abandonedRoot = AssemblyTempRedirect.BuildProcessTempRoot(sharedRoot, int.MaxValue);
+        Directory.CreateDirectory(abandonedRoot);
+        Directory.SetLastWriteTimeUtc(
+            abandonedRoot,
+            DateTime.UtcNow - AssemblyTempRedirect.AbandonedRootAge - TimeSpan.FromMinutes(1));
+        var timings = new TempRootStartupTimings();
+        var completed = false;
+        string? receipt = null;
+
+        try
+        {
+            receipt = AssemblyTempRedirect.RunStartupHousekeeping(
+                selectedRoot,
+                timings,
+                System.Diagnostics.Stopwatch.StartNew(),
+                _ => throw new UnauthorizedAccessException("denied"));
+            completed = true;
+        }
+        finally
+        {
+            Directory.Delete(sharedRoot, recursive: true);
+        }
+
+        Assert.True(completed, "Startup housekeeping did not return after the delete seam threw.");
+        Assert.NotNull(receipt);
+        Assert.StartsWith("assembly-temp-redirect-timing ", receipt, StringComparison.Ordinal);
+        Assert.Contains("deleteFailed=1", receipt, StringComparison.Ordinal);
     }
 
     [Fact]
