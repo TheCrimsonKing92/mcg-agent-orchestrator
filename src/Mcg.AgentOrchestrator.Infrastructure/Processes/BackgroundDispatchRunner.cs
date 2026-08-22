@@ -118,6 +118,7 @@ public sealed class BackgroundDispatchRunner
     private readonly IDispatchDiagnosticWriter _diagnosticWriter;
     private readonly DispatchRecoveryPolicy _recoveryPolicy;
     private readonly WorkerProviderCatalog _workerProviders;
+    private readonly WorkerDispatchCompletionClassifier _completionClassifier;
     private readonly Func<string, Stream> _openLogReadStream;
     private readonly Action? _beforeGoalWorktreeInspection;
     private readonly Func<ProcessStartInfo, Process?> _startProcess;
@@ -154,6 +155,11 @@ public sealed class BackgroundDispatchRunner
         _diagnosticWriter = diagnosticWriter ?? new FileDiagnosticWriter();
         _recoveryPolicy = recoveryPolicy ?? new DispatchRecoveryPolicy(_clock);
         _workerProviders = workerProviders ?? WorkerProviderCatalog.Default();
+        _completionClassifier = new WorkerDispatchCompletionClassifier(
+            ResolveWorkerProvider,
+            _clock,
+            File.Exists,
+            ReadDecisionBestEffort);
         _openLogReadStream = openLogReadStream ??
             (path => new FileStream(path, FileMode.Open, FileAccess.Read, FileShare.ReadWrite | FileShare.Delete));
         _beforeGoalWorktreeInspection = beforeGoalWorktreeInspection;
@@ -1114,7 +1120,7 @@ public sealed class BackgroundDispatchRunner
         var stderrFileBytes = SafeFileLength(processRecord.StandardErrorPath);
         var stdout = ReadProcessLogBestEffort(processRecord, processRecord.StandardOutputPath).DecisionText;
         var stderr = ReadProcessLogBestEffort(processRecord, processRecord.StandardErrorPath).DecisionText;
-        var workerResultPresent = HasWorkerResultArtifact(processRecord.WorkingDirectory, stdout);
+        var workerResultPresent = _completionClassifier.HasWorkerResultArtifact(processRecord.WorkingDirectory, stdout);
         var taskOutputCommitted = HasTaskOutputCommittedForDispatch(kernel.GetGoal(goalId), taskId, task.LastDispatch);
         GoalWorktreeDispatchEvidence? worktreeEvidence = null;
         var worktreeEvidenceAvailable = false;
@@ -1222,7 +1228,7 @@ public sealed class BackgroundDispatchRunner
         var goal = kernel.GetGoal(goalId);
         var humanInputDirective = AgentOutputDirectives.ParseHumanInputRequest(decisionStandardOutput, task.RequiredRole);
         var hasRoleCapability = DispatchRoleOutputCapabilities.TryGet(task.RequiredRole, out var dispatchRoleCapability);
-        var completeNonBlockedWorkerResult = hasRoleCapability && HasSuccessfulWorkerResult(
+        var completeNonBlockedWorkerResult = hasRoleCapability && _completionClassifier.HasSuccessfulWorkerResult(
             processRecord.WorkingDirectory,
             decisionStandardOutput,
             decisionStandardError,
@@ -1326,8 +1332,8 @@ public sealed class BackgroundDispatchRunner
             }
         }
 
-        var providerFailureKind = ParseProviderFailureKind(task.LastDispatch, observedExitCode, decisionStandardOutput, decisionStandardError);
-        var workerResultPresent = HasWorkerResultArtifact(
+        var providerFailureKind = _completionClassifier.ParseProviderFailureKind(task.LastDispatch, observedExitCode, decisionStandardOutput, decisionStandardError);
+        var workerResultPresent = _completionClassifier.HasWorkerResultArtifact(
             processRecord.WorkingDirectory,
             decisionStandardOutput);
         var hasCommittedChanges = false;
@@ -1351,7 +1357,7 @@ public sealed class BackgroundDispatchRunner
         var relevantChangeEvidenceAvailable =
             worktreeEvidenceAvailable && (hasCommittedChanges || hasQualifyingDirtyChanges);
         var reconciliationOriginRule = successfulChildResultAvailable
-            ? ClassifyReconciliationOriginRule(
+            ? _completionClassifier.ClassifyReconciliationOriginRule(
                 task,
                 processRecord,
                 observedExitCode,
@@ -1382,24 +1388,24 @@ public sealed class BackgroundDispatchRunner
             var originalExitCode = exitCode;
             var commitAttempted = false;
             var commitAttempt = default(CommitWorktreeEditsResult);
-            var sandboxCommitBlocked = HasSandboxCommitBlockedEvidence(
+            var sandboxCommitBlocked = _completionClassifier.HasSandboxCommitBlockedEvidence(
                 task.RequiredRole,
                 decisionStandardOutput,
                 decisionStandardError);
             var sandboxCommitOnBehalfEvidence =
                 sandboxCommitBlocked || providerFailureKind == ProviderFailureKind.Sandbox1312;
-            var lowIntegrityConfinementEvidence = HasLowIntegrityConfinementEvidence(
+            var lowIntegrityConfinementEvidence = _completionClassifier.HasLowIntegrityConfinementEvidence(
                 task.LastDispatch,
                 processRecord,
                 decisionStandardError,
                 sandboxCommitOnBehalfEvidence);
             // Blockers remain advisory on the ordinary exit-0 commit path. The stricter
             // completeNonBlockedWorkerResult is reserved for overriding a failed wrapper exit.
-            var successfulWorkerResult = HasSuccessfulWorkerResult(
+            var successfulWorkerResult = _completionClassifier.HasSuccessfulWorkerResult(
                 processRecord.WorkingDirectory,
                 decisionStandardOutput,
                 decisionStandardError);
-            if (TryFindFailedWorkerBuildCheck(
+            if (_completionClassifier.TryFindFailedWorkerBuildCheck(
                     processRecord.WorkingDirectory,
                     decisionStandardOutput,
                     decisionStandardError,
@@ -1497,25 +1503,25 @@ public sealed class BackgroundDispatchRunner
             }
             else if (!orchestratorCommitted && worktreeEvidence.IsClean)
             {
-                var hasCompletedVerification = HasCompletedVerification(
+                var hasCompletedVerification = _completionClassifier.HasCompletedVerification(
                     decisionStandardOutput,
                     decisionStandardError);
-                var hasVerificationOnlyTesterCompletion = IsVerificationOnlyTesterCompletion(
+                var hasVerificationOnlyTesterCompletion = _completionClassifier.IsVerificationOnlyTesterCompletion(
                     task,
                     decisionStandardOutput,
                     hasCompletedVerification);
                 var verificationRecognized =
                     hasCompletedVerification ||
                     hasVerificationOnlyTesterCompletion ||
-                    HasReportedFailingVerification(decisionStandardOutput, decisionStandardError);
+                    _completionClassifier.HasReportedFailingVerification(decisionStandardOutput, decisionStandardError);
                 var roleStillRequiresChangeEvidence =
                     dispatchRoleCapability == DispatchRoleOutputCapability.RequiresChangeEvidence;
                 var requiresCommitEvidence =
                     !successfulChildWithoutUsableWorkerResult &&
-                    RequiresPostDispatchCommitEvidence(task, hasVerificationOnlyTesterCompletion) &&
+                    _completionClassifier.RequiresPostDispatchCommitEvidence(task, hasVerificationOnlyTesterCompletion) &&
                     (roleStillRequiresChangeEvidence ||
                      (!verificationRecognized &&
-                       !AllowsNoChangeCompletion(task, decisionStandardOutput, decisionStandardError))) &&
+                       !_completionClassifier.AllowsNoChangeCompletion(task, decisionStandardOutput, decisionStandardError))) &&
                     !worktreeEvidence.HasRelevantCommitAfterDispatch;
 
                 if (requiresCommitEvidence)
@@ -1702,72 +1708,7 @@ public sealed class BackgroundDispatchRunner
             .FirstOrDefault();
 
     internal static bool ShouldReconcileWrapperExit(WrapperExitReconciliationEvidence evidence) =>
-        evidence.ObservedRootExitCode != 0 &&
-        evidence.ChildExitCode == 0 &&
-        evidence.HasCompleteNonBlockedWorkerResult &&
-        evidence.CompletionContractSucceeded &&
-        evidence.HasKnownRoleCapability &&
-        (evidence.RoleCapability != DispatchRoleOutputCapability.RequiresChangeEvidence ||
-         evidence.HasRelevantChangeEvidence) &&
-        !evidence.HasTerminalHumanInputDirective &&
-        !evidence.HasFatalOrchestratorFailure;
-
-    private string? ClassifyReconciliationOriginRule(
-        TaskSpec task,
-        TaskProcessRecord processRecord,
-        int observedRootExitCode,
-        string standardOutput,
-        string standardError,
-        string? standardErrorDiagnostic,
-        bool workerResultPresent,
-        bool hasCommittedChanges,
-        ProviderFailureKind providerFailureKind,
-        DispatchProcessHost.DispatchChildExitRecord childExitRecord,
-        DispatchRecoveryDecision? recoveryDecision)
-    {
-        var diagnosticStandardError = AppendDiagnostic(standardError, standardErrorDiagnostic ?? string.Empty);
-        var recordedOriginRule = TaskOutcomeClassifier.TryExtractRule(standardOutput) ??
-            TaskOutcomeClassifier.TryExtractRule(diagnosticStandardError);
-        if (!string.IsNullOrWhiteSpace(recordedOriginRule))
-        {
-            return recordedOriginRule;
-        }
-
-        // PreserveInterruptedWork is the typed dirty-dispatch boundary that the failure classifier
-        // reports as dirty-dispatch-recovery after a failed verification is recorded. Capture that
-        // diagnostic origin before successful reconciliation changes the logical task disposition.
-        // This metadata never participates in ShouldReconcileWrapperExit.
-        if (recoveryDecision?.Action == DispatchRecoveryAction.PreserveInterruptedWork)
-        {
-            return "dirty-dispatch-recovery";
-        }
-
-        var verification = new TaskVerificationRecord(
-            processRecord.Command,
-            processRecord.WorkingDirectory,
-            observedRootExitCode,
-            standardOutput,
-            diagnosticStandardError,
-            _clock.UtcNow,
-            StandardOutputPath: processRecord.StandardOutputPath,
-            StandardErrorPath: processRecord.StandardErrorPath,
-            WorkerResultPresent: workerResultPresent,
-            HasCommittedChanges: hasCommittedChanges,
-            ProviderFailureKind: providerFailureKind,
-            DispatchStartedAt: processRecord.StartedAt,
-            ChildProcessId: childExitRecord.ProcessId,
-            ChildExitCode: childExitRecord.ExitCode,
-            ObservedRootExitCode: observedRootExitCode,
-            FullStandardOutput: standardOutput,
-            FullStandardError: diagnosticStandardError);
-        var origin = DispatchFailureClassifier.Classify(
-            task,
-            verification,
-            providerFailureKind,
-            workerResultPresent,
-            hasCommittedChanges);
-        return TaskOutcomeClassifier.TryExtractRule(origin.ClassifierReceipt);
-    }
+        WorkerDispatchCompletionClassifier.ShouldReconcileWrapperExit(evidence);
 
     private static bool RequiresDurableResearchArtifact(Goal goal, TaskSpec researcher)
     {
@@ -1953,7 +1894,7 @@ public sealed class BackgroundDispatchRunner
             SafeFileLength(processRecord.StandardOutputPath) > 0L ||
             (TryReadHeartbeat(GetHeartbeatPath(processRecord), out var heartbeat) &&
              heartbeat.StandardOutputBytes > 0L);
-        var hasSuccessfulWorkerResult = HasSuccessfulWorkerResult(
+        var hasSuccessfulWorkerResult = _completionClassifier.HasSuccessfulWorkerResult(
             processRecord.WorkingDirectory,
             standardOutput,
             standardError,
@@ -2039,133 +1980,6 @@ public sealed class BackgroundDispatchRunner
         kernel.RecordDispatchProviderSessionId(goalId, taskId, heartbeat.ProviderSessionId);
     }
 
-    private static bool RequiresPostDispatchCommitEvidence(
-        TaskSpec task,
-        bool hasVerificationOnlyTesterCompletion)
-    {
-        return task.RequiredRole switch
-        {
-            AgentRole.Developer => true,
-            AgentRole.Tester => !hasVerificationOnlyTesterCompletion,
-            _ => false
-        };
-    }
-
-    private static bool IsVerificationOnlyTesterCompletion(
-        TaskSpec task,
-        string standardOutput,
-        bool hasCompletedVerification)
-    {
-        return task.RequiredRole == AgentRole.Tester &&
-            (hasCompletedVerification ||
-             DispatchFailureClassifier.HasWorkerResultDeferralInOutput(standardOutput));
-    }
-
-    // A verification-role worker proves it did its job with recognised verification evidence.
-    // WORKER_RESULT shape alone is not enough: evidence-less clean dispatches must fail so the
-    // orchestrator does not convert a well-formed self-report into proof that checks actually passed.
-    private static bool HasClassifiedVerificationEvidence(string standardOutput, string standardError)
-    {
-        return DispatchFailureClassifier.HasVerificationEvidenceInOutput(standardOutput, standardError);
-    }
-
-    private static bool HasCompletedVerification(string standardOutput, string standardError)
-    {
-        return HasClassifiedVerificationEvidence(standardOutput, standardError) &&
-            !TryFindFailingTestsInWorkerResult(standardOutput, standardError, out _);
-    }
-
-    private static bool HasReportedFailingVerification(string standardOutput, string standardError)
-    {
-        return TryFindFailingTestsInWorkerResult(standardOutput, standardError, out _);
-    }
-
-    private static bool HasSandboxCommitBlockedEvidence(
-        AgentRole role,
-        string standardOutput,
-        string standardError)
-    {
-        return DispatchFailureClassifier.IsSandboxCommitBlockedFailure(
-            role,
-            1,
-            standardOutput,
-            standardError);
-    }
-
-    private static bool HasLowIntegrityConfinementEvidence(
-        TaskDispatchRecord? dispatch,
-        TaskProcessRecord processRecord,
-        string standardError,
-        bool sandboxCommitOnBehalfEvidence)
-    {
-        if (dispatch?.SandboxLowIntegrity != true)
-        {
-            return false;
-        }
-
-        return sandboxCommitOnBehalfEvidence ||
-            HasCompletedSandboxPreparationEvent(standardError) ||
-            HasLowIntegritySetupArtifact(processRecord.WorkingDirectory);
-    }
-
-    private static bool HasCompletedSandboxPreparationEvent(string standardError)
-    {
-        foreach (var line in standardError.Split(['\r', '\n'], StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries))
-        {
-            if (!line.Contains("sandbox-prep", StringComparison.OrdinalIgnoreCase))
-            {
-                continue;
-            }
-
-            try
-            {
-                using var document = JsonDocument.Parse(line);
-                var root = document.RootElement;
-                if (root.TryGetProperty("event", out var evt) &&
-                    root.TryGetProperty("phase", out var phase) &&
-                    string.Equals(evt.GetString(), "sandbox-prep", StringComparison.OrdinalIgnoreCase) &&
-                    string.Equals(phase.GetString(), "complete", StringComparison.OrdinalIgnoreCase))
-                {
-                    return true;
-                }
-            }
-            catch (JsonException)
-            {
-            }
-        }
-
-        return false;
-    }
-
-    private static bool HasLowIntegritySetupArtifact(string workingDirectory)
-    {
-        try
-        {
-            return File.Exists(Path.Combine(workingDirectory, ".mcg-sandbox", DispatchProcessHost.LowIntegritySetupArtifactName));
-        }
-        catch
-        {
-            return false;
-        }
-    }
-
-    private ProviderFailureKind ParseProviderFailureKind(
-        TaskDispatchRecord? dispatch,
-        int exitCode,
-        string standardOutput,
-        string standardError)
-    {
-        if (dispatch is null)
-        {
-            return ProviderFailureKind.Unknown;
-        }
-
-        return ResolveWorkerProvider(dispatch).ParseOutcome(new WorkerProviderOutcome(
-            exitCode,
-            standardOutput,
-            standardError));
-    }
-
     private static string TryResolveIndexLockPath(string workingDirectory)
     {
         try
@@ -2176,173 +1990,6 @@ public sealed class BackgroundDispatchRunner
         {
             return Path.Combine(workingDirectory, ".git", "index.lock");
         }
-    }
-
-    private static bool HasWorkerResultArtifact(string workingDirectory, string standardOutput)
-    {
-        if (WorkerResultParser.TryParseFields(standardOutput, out _, out _))
-        {
-            return true;
-        }
-
-        foreach (var fileName in new[] { "WORKER_RESULT.md", "WORKER_RESULT.txt" })
-        {
-            var path = Path.Combine(workingDirectory, fileName);
-            if (!File.Exists(path))
-            {
-                continue;
-            }
-
-            try
-            {
-                if (WorkerResultParser.TryParseFields(ReadDecisionBestEffort(path), out _, out _))
-                {
-                    return true;
-                }
-            }
-            catch (IOException)
-            {
-            }
-            catch (UnauthorizedAccessException)
-            {
-            }
-        }
-
-        return false;
-    }
-
-    private static bool HasSuccessfulWorkerResult(
-        string workingDirectory,
-        string standardOutput,
-        string standardError,
-        bool allowNoChangedFiles = false,
-        bool requireNoBlockers = false,
-        DispatchRoleOutputCapability? roleCapability = null)
-    {
-        if (WorkerResultParser.TryParseSuccessfulResult(
-                $"{standardOutput}\n{standardError}",
-                out _,
-                out _,
-                allowNoChangedFiles,
-                requireNoBlockers,
-                allowReadOnlyTestStatuses: roleCapability == DispatchRoleOutputCapability.ReadOnly))
-        {
-            return true;
-        }
-
-        foreach (var fileName in new[] { "WORKER_RESULT.md", "WORKER_RESULT.txt" })
-        {
-            var path = Path.Combine(workingDirectory, fileName);
-            if (!File.Exists(path))
-            {
-                continue;
-            }
-
-            try
-            {
-                if (WorkerResultParser.TryParseSuccessfulResult(
-                        ReadDecisionBestEffort(path),
-                        out _,
-                        out _,
-                        allowNoChangedFiles,
-                        requireNoBlockers,
-                        allowReadOnlyTestStatuses: roleCapability == DispatchRoleOutputCapability.ReadOnly))
-                {
-                    return true;
-                }
-            }
-            catch (IOException)
-            {
-            }
-            catch (UnauthorizedAccessException)
-            {
-            }
-        }
-
-        return false;
-    }
-
-    private static bool TryFindFailedWorkerBuildCheck(
-        string workingDirectory,
-        string standardOutput,
-        string standardError,
-        out string diagnostic)
-    {
-        if (TryFindFailedWorkerBuildCheckInText($"{standardOutput}\n{standardError}", out diagnostic))
-        {
-            return true;
-        }
-
-        foreach (var fileName in new[] { "WORKER_RESULT.md", "WORKER_RESULT.txt" })
-        {
-            var path = Path.Combine(workingDirectory, fileName);
-            if (!File.Exists(path))
-            {
-                continue;
-            }
-
-            try
-            {
-                if (TryFindFailedWorkerBuildCheckInText(ReadDecisionBestEffort(path), out diagnostic))
-                {
-                    return true;
-                }
-            }
-            catch (IOException)
-            {
-            }
-            catch (UnauthorizedAccessException)
-            {
-            }
-        }
-
-        diagnostic = string.Empty;
-        return false;
-    }
-
-    private static bool TryFindFailedWorkerBuildCheckInText(string text, out string diagnostic)
-    {
-        if (!WorkerResultParser.TryParseResult(text, out var result, out _) ||
-            !WorkerResultParser.WorkerBuildCheckTestsReportFailure(result, out var tests))
-        {
-            diagnostic = string.Empty;
-            return false;
-        }
-
-        diagnostic = $"WORKER_RESULT reported failed worker build check: {tests}";
-        return true;
-    }
-
-    private static bool TryFindFailingTestsInWorkerResult(
-        string standardOutput,
-        string standardError,
-        out string tests)
-    {
-        // stdout and stderr are independently ordered streams. Concatenating them lets a retained
-        // prompt/schema block in noisy stderr supersede the worker's real final stdout result.
-        // Prefer a complete stdout result and consult stderr only when stdout has none.
-        if (WorkerResultParser.TryParseResult(standardOutput, out var result, out _) ||
-            WorkerResultParser.TryParseResult(standardError, out result, out _))
-        {
-            return WorkerResultParser.TestsReportFailure(result, out tests);
-        }
-
-        tests = string.Empty;
-        return false;
-    }
-
-    private static bool HasExplicitNoChangeRationale(string standardOutput, string standardError)
-    {
-        var output = $"{standardOutput}\n{standardError}";
-        return output.Contains("NO_CHANGE:", StringComparison.OrdinalIgnoreCase) ||
-            output.Contains("No-change rationale:", StringComparison.OrdinalIgnoreCase) ||
-            output.Contains("No changes needed:", StringComparison.OrdinalIgnoreCase);
-    }
-
-    private static bool AllowsNoChangeCompletion(TaskSpec task, string standardOutput, string standardError)
-    {
-        return task.RequiredRole != AgentRole.Developer &&
-            HasExplicitNoChangeRationale(standardOutput, standardError);
     }
 
     // Commits the worker's uncommitted worktree edits from the orchestrator after verification guards
