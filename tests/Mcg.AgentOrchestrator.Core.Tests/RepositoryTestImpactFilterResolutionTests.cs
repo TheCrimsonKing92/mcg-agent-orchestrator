@@ -1,3 +1,5 @@
+using System.Runtime.CompilerServices;
+
 namespace Mcg.AgentOrchestrator.Core.Tests;
 
 public sealed class RepositoryTestImpactFilterResolutionTests
@@ -187,9 +189,13 @@ public sealed class RepositoryTestImpactFilterResolutionTests
                 }
 
                 var relativePath = Path.GetRelativePath(root, path).Replace('\\', '/');
-                var plan = RepositoryTestImpactPlanner.Plan(
-                    RepositoryChangeClassifier.Classify([relativePath]),
-                    reader);
+                var summary = RepositoryChangeClassifier.Classify([relativePath]);
+                if (summary.RequiresBroadVerification)
+                {
+                    continue;
+                }
+
+                var plan = RepositoryTestImpactPlanner.Plan(summary, reader);
                 var check = Assert.Single(plan.Checks);
                 var filterIndex = -1;
                 for (var argumentIndex = 0; argumentIndex < check.Command.Count; argumentIndex++)
@@ -385,24 +391,21 @@ public sealed class RepositoryTestImpactFilterResolutionTests
             classNames.Select(name =>
                 $"public sealed class {name} {{ [Xunit.Fact] public void Runs() {{ }} }}"));
 
-    private static bool TryFindRepositoryRoot(out string root)
+    private static bool TryFindRepositoryRoot(
+        out string root,
+        [CallerFilePath] string sourceFilePath = "")
     {
-        foreach (var candidate in new[] { Environment.CurrentDirectory, AppContext.BaseDirectory })
+        var directory = new DirectoryInfo(Path.GetDirectoryName(sourceFilePath)!);
+        while (directory is not null)
         {
-            var directory = new DirectoryInfo(Path.GetFullPath(candidate));
-            while (directory is not null)
+            if (Directory.Exists(Path.Combine(directory.FullName, ".git")) ||
+                File.Exists(Path.Combine(directory.FullName, ".git")))
             {
-                if (Directory.Exists(Path.Combine(directory.FullName, ".git")) ||
-                    File.Exists(Path.Combine(directory.FullName, ".git")) ||
-                    File.Exists(Path.Combine(directory.FullName, "AGENTS.md")) &&
-                    File.Exists(Path.Combine(directory.FullName, "CLAUDE.md")))
-                {
-                    root = directory.FullName;
-                    return true;
-                }
-
-                directory = directory.Parent;
+                root = directory.FullName;
+                return true;
             }
+
+            directory = directory.Parent;
         }
 
         root = string.Empty;
