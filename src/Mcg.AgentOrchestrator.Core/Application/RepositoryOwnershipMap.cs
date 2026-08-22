@@ -210,18 +210,17 @@ public static class RepositoryOwnershipMap
 
     private static string? TestProjectReservationKey(string path)
     {
-        var parts = path.Split('/', StringSplitOptions.RemoveEmptyEntries);
+        var parts = path.Split('/');
         if (parts.Length < 2 || !parts[0].Equals("tests", StringComparison.OrdinalIgnoreCase))
         {
             return null;
         }
 
         var project = parts[1];
-        return string.IsNullOrWhiteSpace(project) ||
-               project is "." or ".." ||
+        return parts.Skip(1).Any(part => string.IsNullOrWhiteSpace(part) || part is "." or "..") ||
                (parts.Length == 2 && project.EndsWith(".cs", StringComparison.OrdinalIgnoreCase))
             ? null
-            : $"{TestProjectReservationKeyPrefix}{project.ToLowerInvariant()}";
+            : $"{TestProjectReservationKeyPrefix}{string.Join('/', parts.Skip(1)).ToLowerInvariant()}";
     }
 
     private static string SharedInfrastructureReservationKeyFor(string path)
