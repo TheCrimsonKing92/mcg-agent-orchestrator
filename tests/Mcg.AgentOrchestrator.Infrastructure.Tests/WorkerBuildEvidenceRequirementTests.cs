@@ -53,6 +53,9 @@ public sealed class WorkerBuildEvidenceRequirementTests : WorkerDispatchTestSupp
         { "pass - build completed with 0 errors", true },
         { "deferred - Invoke-WorkerBuildCheck", false },
         { "deferred - acceptance gate owns execution", false },
+        { "deferred - build did not pass", false },
+        { "deferred - build not clean", false },
+        { "deferred - Invoke-WorkerBuildCheck did not pass with 0 errors", false },
         { "fail - build: 1 error (Invoke-WorkerBuildCheck)", false },
         { "fail - build passed despite the reported failure", false },
         { "not-run - build passed", false }

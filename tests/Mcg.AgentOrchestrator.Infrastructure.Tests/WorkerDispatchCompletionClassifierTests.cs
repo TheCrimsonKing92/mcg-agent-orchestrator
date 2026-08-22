@@ -88,6 +88,23 @@ public sealed class WorkerDispatchCompletionClassifierTests
     }
 
     [Xunit.Fact]
+    public void BuildEvidencePrefersCompleteStdoutResultOverRetainedStderrResult()
+    {
+        var classifier = CreateClassifier();
+        var stdout = WorkerResultBlock(
+            "src/Feature.cs",
+            ".\\scripts\\Invoke-WorkerBuildCheck.ps1 src\\Feature.csproj",
+            "deferred - acceptance gate owns execution");
+        var retainedStderr = WorkerResultBlock(
+            "src/OldFeature.cs",
+            ".\\scripts\\Invoke-WorkerBuildCheck.ps1 src\\OldFeature.csproj",
+            "pass - build: 0 errors (Invoke-WorkerBuildCheck)");
+
+        Xunit.Assert.False(classifier.HasWorkerBuildEvidence("unused", stdout, retainedStderr));
+        Xunit.Assert.True(classifier.HasWorkerBuildEvidence("unused", string.Empty, retainedStderr));
+    }
+
+    [Xunit.Fact]
     public void SandboxCommitBlockedAndLowIntegrityConfinementAreClassifiedIndependently()
     {
         var classifier = CreateClassifier();

@@ -479,13 +479,22 @@ internal static class WorkerResultParser
             normalized,
             @"\b0\s+errors?\b|\b0\s+error\(s\)",
             RegexOptions.IgnoreCase | RegexOptions.CultureInvariant);
+        const string build = @"\bbuilds?\b";
+        const string success = @"\b(?:pass(?:ed|es)?|succeed(?:ed|s)?|success(?:ful)?|ok|clean|green)\b";
+        const string negation = @"\b(?:not|never|did\s+not|does\s+not|do\s+not|isn['’]?t|wasn['’]?t|weren['’]?t)\b";
+        if (Regex.IsMatch(
+                normalized,
+                $@"{build}.{{0,40}}{negation}.{{0,20}}{success}|{negation}.{{0,20}}{success}.{{0,40}}{build}",
+                RegexOptions.IgnoreCase | RegexOptions.CultureInvariant))
+        {
+            return false;
+        }
+
         if (zeroErrors && normalized.Contains("Invoke-WorkerBuildCheck", StringComparison.OrdinalIgnoreCase))
         {
             return true;
         }
 
-        const string build = @"\bbuilds?\b";
-        const string success = @"\b(?:pass(?:ed|es)?|succeed(?:ed|s)?|success(?:ful)?|ok|clean|green)\b";
         return (zeroErrors && Regex.IsMatch(normalized, build, RegexOptions.IgnoreCase | RegexOptions.CultureInvariant)) ||
             Regex.IsMatch(normalized, $@"{build}.{{0,40}}{success}|{success}.{{0,40}}{build}", RegexOptions.IgnoreCase | RegexOptions.CultureInvariant);
     }

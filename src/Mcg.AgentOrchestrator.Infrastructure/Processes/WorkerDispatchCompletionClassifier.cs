@@ -289,9 +289,10 @@ internal sealed class WorkerDispatchCompletionClassifier
         string standardOutput,
         string standardError)
     {
-        if (HasWorkerBuildEvidenceInText($"{standardOutput}\n{standardError}"))
+        if (WorkerResultParser.TryParseResult(standardOutput, out var result, out _) ||
+            WorkerResultParser.TryParseResult(standardError, out result, out _))
         {
-            return true;
+            return WorkerResultParser.WorkerBuildCheckTestsReportSuccess(result);
         }
 
         foreach (var fileName in new[] { "WORKER_RESULT.md", "WORKER_RESULT.txt" })
