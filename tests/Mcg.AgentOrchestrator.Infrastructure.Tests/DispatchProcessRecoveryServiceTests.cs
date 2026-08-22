@@ -1,0 +1,205 @@
+using System.Text;
+using Mcg.AgentOrchestrator.Core;
+using Mcg.AgentOrchestrator.Infrastructure;
+
+public sealed class DispatchProcessRecoveryServiceTests
+{
+    private static readonly DateTimeOffset Now = DateTimeOffset.Parse("2026-08-22T12:00:00Z");
+
+    [Xunit.Fact]
+    public void ValidExitArtifactReturnsCompletedVerdictWithoutRealFilesOrProcesses()
+    {
+        var process = ProcessRecord(41, Now.AddMinutes(-5));
+        var artifacts = new Dictionary<string, string>(StringComparer.Ordinal)
+        {
+            [process.ExitCodePath] = "in-memory exit artifact"
+        };
+        var service = CreateService(
+            artifacts,
+            readExitArtifact: _ => new ExitCodeReadResult(
+                ExitCodeReadKind.Valid,
+                0,
+                "origin=Native exit_code=0 reason=completed",
+                DispatchExitArtifactOrigin.Native,
+                "completed"));
+
+        var verdict = Classify(service, process);
+
+        Xunit.Assert.Equal(DispatchProcessVerdictKind.CompletedFromExitFile, verdict.Kind);
+        Xunit.Assert.Equal(0, verdict.ExitCode);
+        Xunit.Assert.Equal(
+            "Dispatch recovery policy action='mark-stale' evidence='memory/job.exit.txt' reason='test recovery decision'.",
+            verdict.Diagnostic);
+    }
+
+    [Xunit.Fact]
+    public void StalledHeartbeatWithExitedChildReturnsHungWrapperVerdict()
+    {
+        var process = ProcessRecord(42, Now.AddMinutes(-10));
+        var heartbeatPath = DispatchProcessRecoveryService.GetHeartbeatPath(process);
+        var artifacts = new Dictionary<string, string>(StringComparer.Ordinal)
+        {
+            [heartbeatPath] = HeartbeatJson(
+                process.ProcessId,
+                childProcessId: null,
+                lastObservedAt: Now.AddMinutes(-3),
+                lastProgressAt: Now.AddMinutes(-3),
+                ownedCpuMs: 2000,
+                stdoutBytes: 12,
+                stderrBytes: 0)
+        };
+        var service = CreateService(
+            artifacts,
+            liveProcessIds: new HashSet<int> { process.ProcessId });
+
+        var verdict = Classify(service, process);
+
+        Xunit.Assert.Equal(DispatchProcessVerdictKind.HungWrapper, verdict.Kind);
+        Xunit.Assert.Equal(
+            "Background dispatch wrapper appears hung with stalled heartbeat for 00:03:00; no exit file was written. " +
+            "Marking dispatch based on role completion evidence.",
+            verdict.Diagnostic);
+    }
+
+    [Xunit.Fact]
+    public void NoToolLaunchSignalsPastTimeoutReturnsSuspectedHangVerdict()
+    {
+        var process = ProcessRecord(43, Now.AddMinutes(-5));
+        var heartbeatPath = DispatchProcessRecoveryService.GetHeartbeatPath(process);
+        var artifacts = new Dictionary<string, string>(StringComparer.Ordinal)
+        {
+            [heartbeatPath] = HeartbeatJson(
+                process.ProcessId,
+                childProcessId: null,
+                lastObservedAt: Now,
+                lastProgressAt: Now,
+                ownedCpuMs: 0,
+                stdoutBytes: 0,
+                stderrBytes: 0)
+        };
+        var service = CreateService(
+            artifacts,
+            liveProcessIds: new HashSet<int> { process.ProcessId });
+
+        var verdict = Classify(service, process);
+
+        Xunit.Assert.Equal(DispatchProcessVerdictKind.SuspectedHang, verdict.Kind);
+        Xunit.Assert.Equal(DispatchRecoveryAction.Reap, verdict.HangRecoveryAction);
+        Xunit.Assert.Equal(
+            "Background dispatch never launched its tool process: childPid=null, ownedCpuMs=0, " +
+            "stdout_bytes=0, stderr_bytes=0, alive_for=00:05:00, startup_hang_timeout=00:02:00. " +
+            "No child process, startup CPU burst, or output since start; process tree killed and dispatch marked failed.",
+            verdict.Diagnostic);
+    }
+
+    [Xunit.Fact]
+    public void DeadProcessWithoutExitArtifactReturnsStaleVerdictAndUsesInjectedKillSeam()
+    {
+        var process = ProcessRecord(44, Now.AddMinutes(-20));
+        var killedProcessIds = new List<int>();
+        var service = CreateService(
+            new Dictionary<string, string>(StringComparer.Ordinal),
+            killedProcessIds: killedProcessIds);
+
+        var verdict = Classify(service, process);
+
+        Xunit.Assert.Equal(DispatchProcessVerdictKind.ProcessGone, verdict.Kind);
+        Xunit.Assert.Equal(DispatchRecoveryAction.MarkStale, verdict.RecoveryDecision.Action);
+        Xunit.Assert.Equal(new[] { process.ProcessId }, killedProcessIds);
+    }
+
+    private static DispatchProcessRefreshVerdict Classify(
+        DispatchProcessRecoveryService service,
+        TaskProcessRecord process)
+    {
+        var task = new TaskSpec(TaskId.New(), "Inspect recovery.", AgentRole.Researcher);
+        return service.ClassifyRefresh(
+            task,
+            GoalId.New(),
+            process,
+            staleRetryBudgetRemaining: 0,
+            usesCodexExitFileBehavior: false,
+            requiresFileChangeEvidence: false,
+            inspectWorktree: () => throw new InvalidOperationException("read-only recovery must not inspect a worktree"),
+            hasCodexFinalOutput: () => throw new InvalidOperationException("non-codex recovery must not read worker output"),
+            hasWorktreeProgress: () => throw new InvalidOperationException("read-only recovery must not inspect worktree progress"),
+            heartbeatObserved: _ => { });
+    }
+
+    private static DispatchProcessRecoveryService CreateService(
+        IReadOnlyDictionary<string, string> artifacts,
+        IReadOnlySet<int>? liveProcessIds = null,
+        List<int>? killedProcessIds = null,
+        Func<string, ExitCodeReadResult>? readExitArtifact = null)
+    {
+        liveProcessIds ??= new HashSet<int>();
+        killedProcessIds ??= [];
+        return new DispatchProcessRecoveryService(
+            clock: new TestClock(Now),
+            postOutputIdleTimeout: TimeSpan.FromMinutes(2),
+            progressStallTimeout: TimeSpan.FromMinutes(15),
+            startupHangTimeout: TimeSpan.FromMinutes(2),
+            isStillRunning: liveProcessIds.Contains,
+            tryKillOwnedProcess: processId =>
+            {
+                killedProcessIds.Add(processId);
+                return true;
+            },
+            fileExists: artifacts.ContainsKey,
+            openArtifactReadStream: path => new MemoryStream(Encoding.UTF8.GetBytes(artifacts[path])),
+            getLastWriteTimeUtc: _ => Now.AddMinutes(-10),
+            getFileLength: path => Encoding.UTF8.GetByteCount(artifacts[path]),
+            getPeakMemoryBytes: _ => null,
+            readExitArtifact: readExitArtifact ?? (_ =>
+                new ExitCodeReadResult(ExitCodeReadKind.Missing, null, "file-missing")),
+            writeExitArtifact: (_, _, _) => throw new InvalidOperationException("classification must not write an exit artifact"),
+            evaluateRecovery: (_, _, _, _) => RecoveryDecision(),
+            diagnosticWriter: new FileDiagnosticWriter());
+    }
+
+    private static DispatchRecoveryDecision RecoveryDecision() =>
+        new(
+            DispatchRecoveryAction.MarkStale,
+            DispatchRecoveryPolicy.ToActionName(DispatchRecoveryAction.MarkStale),
+            "memory/job.exit.txt",
+            "test recovery decision");
+
+    private static TaskProcessRecord ProcessRecord(int processId, DateTimeOffset startedAt) =>
+        new(
+            processId,
+            "worker command",
+            "memory",
+            "memory/job.stdout.log",
+            "memory/job.stderr.log",
+            "memory/job.exit.txt",
+            startedAt,
+            null,
+            null);
+
+    private static string HeartbeatJson(
+        int processId,
+        int? childProcessId,
+        DateTimeOffset lastObservedAt,
+        DateTimeOffset lastProgressAt,
+        long ownedCpuMs,
+        long stdoutBytes,
+        long stderrBytes) =>
+        $$"""
+        {
+          "pid": {{processId}},
+          "childPid": {{(childProcessId is null ? "null" : childProcessId.Value.ToString())}},
+          "state": "running",
+          "lastObservedAt": "{{lastObservedAt:O}}",
+          "lastProgressAt": "{{lastProgressAt:O}}",
+          "stdoutBytes": {{stdoutBytes}},
+          "stderrBytes": {{stderrBytes}},
+          "ownedCpuMs": {{ownedCpuMs}},
+          "ownedPids": [{{processId}}]
+        }
+        """;
+
+    private sealed class TestClock(DateTimeOffset utcNow) : IClock
+    {
+        public DateTimeOffset UtcNow { get; } = utcNow;
+    }
+}
