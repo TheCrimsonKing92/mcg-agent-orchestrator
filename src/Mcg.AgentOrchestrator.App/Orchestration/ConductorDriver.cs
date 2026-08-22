@@ -102,6 +102,7 @@ internal sealed partial class ConductorDriver
     private readonly bool _focusedEvidenceRunnerConfigured;
     private readonly Func<Goal, PreReviewEvidenceContext> _getPreReviewEvidenceContext;
     private readonly Func<Goal, AcceptanceGateEngineSettings> _getFindingEvidenceEngineSettings;
+    private readonly Func<Goal, string, string, IReadOnlyList<string>> _resolveFindingEvidenceSiblingClasses;
     private readonly Action<GoalId, TaskId, PreReviewEvidenceReceipt> _recordPreReviewEvidence;
     private readonly Action<GoalId, TaskId, string, int> _recordPreReviewMappingEscalationSuppressed;
     private readonly Func<GoalId, TaskId, string, RetryRoundKind?, TaskSpec> _retryTask;
@@ -938,6 +939,11 @@ internal sealed partial class ConductorDriver
                 _getLandingFileScopes(goal));
         _getFindingEvidenceEngineSettings = goal => AcceptanceGateEngineSettings.Load(
             GoalWorktrees.TryResolve(dir, goal.Id) ?? dir);
+        _resolveFindingEvidenceSiblingClasses = (goal, project, requestedClass) =>
+            FocusedEvidenceSiblingClassResolver.ResolveSiblingTestClassNames(
+                GoalWorktrees.TryResolve(dir, goal.Id) ?? dir,
+                project,
+                requestedClass);
         RecoverCohortLandingEffects(kernel, workspace, eventWriter, _cohortAcceptanceStore);
         RecoverMergeTrainLandingEffects(kernel, workspace, eventWriter, _mergeTrainAcceptanceStore);
     }
@@ -1170,6 +1176,7 @@ internal sealed partial class ConductorDriver
         Action<GoalId, TaskId, string>? recordFindingEvidenceRequest = null,
         Action<GoalId, TaskId, string>? recordFindingEvidenceRun = null,
         Func<Goal, AcceptanceGateEngineSettings>? getFindingEvidenceEngineSettings = null,
+        Func<Goal, string, string, IReadOnlyList<string>>? resolveFindingEvidenceSiblingClasses = null,
         Func<Goal, bool>? isVerificationGateSatisfied = null,
         GateReadyCandidateProjector? gateReadyCandidateProjector = null,
         Func<
@@ -1228,6 +1235,8 @@ internal sealed partial class ConductorDriver
                 MappingNeedsInput: false));
         _getFindingEvidenceEngineSettings = getFindingEvidenceEngineSettings ??
             (_ => new AcceptanceGateEngineSettings());
+        _resolveFindingEvidenceSiblingClasses = resolveFindingEvidenceSiblingClasses ??
+            ((_, _, _) => []);
         _recordPreReviewEvidence = recordPreReviewEvidence ?? ((_, _, _) => { });
         _recordPreReviewMappingEscalationSuppressed = recordPreReviewMappingEscalationSuppressed ?? ((_, _, _, _) => { });
         _retryTask = retryTaskWithRoundKind
@@ -2070,6 +2079,8 @@ internal sealed partial class ConductorDriver
         {
             if (!TryNormalizeFindingEvidenceRequest(
                     finding.EvidenceRequest!, _getFindingEvidenceEngineSettings(goal),
+                    (project, requestedClass) =>
+                        _resolveFindingEvidenceSiblingClasses(goal, project, requestedClass),
                     out var typedRequest, out var request,
                     out var refusalReason, out var refusalDetail))
             {
@@ -2413,6 +2424,7 @@ internal sealed partial class ConductorDriver
     private static bool TryNormalizeFindingEvidenceRequest(
         FindingEvidenceRequest request,
         AcceptanceGateEngineSettings engineSettings,
+        Func<string, string, IReadOnlyList<string>> resolveSiblingClasses,
         out FindingEvidenceRequest normalized,
         out string executorRequest,
         out FindingEvidenceNotHonouredReason refusalReason,
@@ -2463,6 +2475,23 @@ internal sealed partial class ConductorDriver
 
             var canonicalProject = GoalAcceptanceVerifier.ProjectLabel(resolvedProject);
             selections.Add(new FindingEvidenceSelection(canonicalProject, originalTestClass));
+            if (TryGetExpandableFindingEvidenceClass(testClass, out var requestedClass, out var filterPrefix))
+            {
+                foreach (var siblingClass in resolveSiblingClasses(resolvedProject, requestedClass))
+                {
+                    if (string.IsNullOrWhiteSpace(siblingClass) ||
+                        !EvidenceBareClassNamePattern.IsMatch(siblingClass) ||
+                        siblingClass.Contains('+') ||
+                        siblingClass.Contains('`'))
+                    {
+                        continue;
+                    }
+
+                    selections.Add(new FindingEvidenceSelection(
+                        canonicalProject,
+                        filterPrefix + siblingClass));
+                }
+            }
         }
 
         var distinct = selections
@@ -2475,6 +2504,25 @@ internal sealed partial class ConductorDriver
             "; ",
             distinct.Select(FormatFindingEvidenceSelection));
         return true;
+    }
+
+    private static bool TryGetExpandableFindingEvidenceClass(
+        string filter,
+        out string requestedClass,
+        out string filterPrefix)
+    {
+        const string fullyQualifiedNamePrefix = "FullyQualifiedName~";
+        filterPrefix = string.Empty;
+        requestedClass = filter;
+        if (filter.StartsWith(fullyQualifiedNamePrefix, StringComparison.Ordinal))
+        {
+            filterPrefix = fullyQualifiedNamePrefix;
+            requestedClass = filter[fullyQualifiedNamePrefix.Length..];
+        }
+
+        return EvidenceBareClassNamePattern.IsMatch(requestedClass) &&
+            !requestedClass.Contains('+') &&
+            !requestedClass.Contains('`');
     }
 
     private static bool IsSupportedFindingEvidenceFilter(string filter)
