@@ -15,6 +15,30 @@ public sealed class ConductorDriverTests
 
     private static IReadOnlyList<AgentDefinition> DefaultAgents() => AgentCatalog.Default().Agents;
 
+    private static ConductorParallelAcceptanceAttemptCoordinator SeedLiveAcceptanceAttempt(
+        string root,
+        Goal goal)
+    {
+        var coordinator = new ConductorParallelAcceptanceAttemptCoordinator(
+            Path.Combine(root, "acceptance-attempts"),
+            isProcessAlive: _ => true,
+            launchOwnedProcess: _ => new ConductorParallelAcceptanceOwnedProcessLaunchResult(4242));
+        var candidate = ConductorParallelAcceptanceCandidate.Create(
+            goal,
+            0,
+            ["src/CurrentAttempt.cs"],
+            "branch-current",
+            "main-current");
+        var decision = coordinator.Evaluate(
+            candidate,
+            ConductorAutonomyPolicy.Conservative,
+            (_, _) => throw new InvalidOperationException("Owned acceptance callback should not run inline."));
+
+        Assert.Equal(ConductorParallelAcceptanceAttemptDecisionKind.Started, decision.Kind);
+        Assert.True(coordinator.HasLiveAttempt(goal.Id.Value));
+        return coordinator;
+    }
+
     private static (AgentOrchestratorKernel Kernel, Goal Goal) SimpleGoal(string objective = "Test goal")
     {
         var kernel = new AgentOrchestratorKernel();
@@ -1111,8 +1135,8 @@ public sealed class ConductorDriverTests
         Assert.False(string.IsNullOrWhiteSpace(blockedOutcome.MainHeadSha));
     }
 
-    [Xunit.Fact(DisplayName = "ConductorDriver_acceptance_cancellation_probe_stops_reopened_Active_goal")]
-    public async Task ConductorDriverAcceptanceCancellationProbeStopsReopenedActiveGoal()
+    [Xunit.Fact(DisplayName = "ConductorDriver_acceptance_cancellation_probe_allows_current_attempt_over_lagging_Active_row")]
+    public async Task ConductorDriverAcceptanceCancellationProbeAllowsCurrentAttemptOverLaggingActiveRow()
     {
         var root = CreateTempDirectory();
         try
@@ -1123,19 +1147,168 @@ public sealed class ConductorDriverTests
             var goal = GoalLifecycleCommands.CreateAndActivateSimpleGoal(
                 kernel,
                 DefaultAgents(),
-                "Cancel stale acceptance before retry dispatch");
+                "Allow current acceptance while persistence catches up");
             var task = goal.Tasks.Single();
 
             await repository.SaveAsync(kernel);
-            Assert.True(ConductorDriver.IsAcceptanceAttemptCancelled(workspace, goal.Id));
-
             PassVerification(kernel, goal, task);
-            await repository.SaveAsync(kernel);
-            Assert.False(ConductorDriver.IsAcceptanceAttemptCancelled(workspace, goal.Id));
+            var coordinator = SeedLiveAcceptanceAttempt(root, goal);
 
-            kernel.BeginGoalAcceptanceVerification(goal.Id, "Acceptance attempt launched.");
+            Assert.Equal(GoalStatus.Verified, kernel.GetGoal(goal.Id).Status);
+            Assert.Equal(GoalStatus.Active, (await repository.LoadGoalAsync(goal.Id))?.Status);
+            Assert.False(ConductorDriver.IsAcceptanceAttemptCancelled(
+                workspace,
+                goal.Id,
+                attemptInvalidationRecorded: () =>
+                    coordinator.TryGetLiveInvalidatedAttempt(goal.Id.Value, out _)));
+
             await repository.SaveAsync(kernel);
             Assert.False(ConductorDriver.IsAcceptanceAttemptCancelled(workspace, goal.Id));
+        }
+        finally
+        {
+            if (Directory.Exists(root))
+            {
+                Directory.Delete(root, recursive: true);
+            }
+        }
+    }
+
+    [Xunit.Theory(DisplayName = "ConductorDriver_acceptance_cancellation_decision_stops_every_stopped_disposition")]
+    [Xunit.InlineData(GoalStatus.Parked)]
+    [Xunit.InlineData(GoalStatus.Cancelled)]
+    [Xunit.InlineData(GoalStatus.Superseded)]
+    [Xunit.InlineData(GoalStatus.Failed)]
+    public void ConductorDriverAcceptanceCancellationDecisionStopsEveryStoppedDisposition(GoalStatus status)
+    {
+        var decision = AcceptanceAttemptCancellation.Decide(
+            status,
+            goalRecordReadable: true,
+            attemptInvalidationRecorded: false);
+
+        Assert.True(decision.ShouldCancel);
+        Assert.Equal(AcceptanceAttemptCancellationCause.StoppedDisposition, decision.Cause);
+        Assert.Equal(status, decision.ObservedStatus);
+    }
+
+    [Xunit.Theory(DisplayName = "ConductorDriver_acceptance_cancellation_decision_allows_transitional_dispositions")]
+    [Xunit.InlineData(GoalStatus.Active)]
+    [Xunit.InlineData(GoalStatus.AcceptanceFailed)]
+    public void ConductorDriverAcceptanceCancellationDecisionAllowsTransitionalDispositions(GoalStatus status)
+    {
+        var decision = AcceptanceAttemptCancellation.Decide(
+            status,
+            goalRecordReadable: true,
+            attemptInvalidationRecorded: false);
+
+        Assert.False(decision.ShouldCancel);
+        Assert.Equal(AcceptanceAttemptCancellationCause.None, decision.Cause);
+    }
+
+    [Xunit.Fact(DisplayName = "ConductorDriver_acceptance_cancellation_decision_census_has_only_stopped_dispositions")]
+    public void ConductorDriverAcceptanceCancellationDecisionCensusHasOnlyStoppedDispositions()
+    {
+        var stopped = new HashSet<GoalStatus>
+        {
+            GoalStatus.Parked,
+            GoalStatus.Cancelled,
+            GoalStatus.Superseded,
+            GoalStatus.Failed
+        };
+
+        foreach (var status in Enum.GetValues<GoalStatus>())
+        {
+            var decision = AcceptanceAttemptCancellation.Decide(
+                status,
+                goalRecordReadable: true,
+                attemptInvalidationRecorded: false);
+
+            Assert.Equal(stopped.Contains(status), decision.ShouldCancel);
+        }
+    }
+
+    [Xunit.Fact(DisplayName = "ConductorDriver_acceptance_cancellation_probe_stops_recorded_invalidation_and_Parked_row")]
+    public async Task ConductorDriverAcceptanceCancellationProbeStopsRecordedInvalidationAndParkedRow()
+    {
+        var root = CreateTempDirectory();
+        try
+        {
+            var workspace = OrchestratorWorkspace.ForDirectory(root);
+            var repository = CreateMigratedStateRepository(workspace.SqliteStatePath);
+            var kernel = new AgentOrchestratorKernel();
+            var goal = GoalLifecycleCommands.CreateAndActivateSimpleGoal(
+                kernel,
+                DefaultAgents(),
+                "Stop invalidated acceptance before retry dispatch");
+            await repository.SaveAsync(kernel);
+            var coordinator = SeedLiveAcceptanceAttempt(root, goal);
+            Assert.True(coordinator.InvalidateCurrent(
+                goal.Id.Value,
+                "Retry invalidated the running acceptance attempt."));
+
+            var cancelled = ConductorDriver.IsAcceptanceAttemptCancelled(
+                workspace,
+                goal.Id,
+                attemptInvalidationRecorded: () =>
+                    coordinator.TryGetLiveInvalidatedAttempt(goal.Id.Value, out _));
+
+            Assert.True(cancelled);
+
+            kernel.ParkGoal(goal.Id, "Operator deliberately stopped this goal.");
+            await repository.SaveAsync(kernel);
+            Assert.True(ConductorDriver.IsAcceptanceAttemptCancelled(
+                workspace,
+                goal.Id,
+                attemptInvalidationRecorded: () => false));
+        }
+        finally
+        {
+            if (Directory.Exists(root))
+            {
+                Directory.Delete(root, recursive: true);
+            }
+        }
+    }
+
+    [Xunit.Fact(DisplayName = "ConductorDriver_acceptance_cancellation_probe_fails_closed_for_missing_or_unreadable_goal")]
+    public void ConductorDriverAcceptanceCancellationProbeFailsClosedForMissingOrUnreadableGoal()
+    {
+        var root = CreateTempDirectory();
+        try
+        {
+            var workspace = OrchestratorWorkspace.ForDirectory(root);
+            var goalId = GoalId.New();
+            var loadAttempts = 0;
+
+            var missing = ConductorDriver.GetAcceptanceAttemptCancellationDecision(
+                workspace,
+                goalId,
+                loadGoal: _ => null);
+            var unreadable = ConductorDriver.GetAcceptanceAttemptCancellationDecision(
+                workspace,
+                goalId,
+                loadGoal: _ =>
+                {
+                    loadAttempts++;
+                    throw new InvalidOperationException("state unavailable");
+                });
+            var activeGoal = new AgentOrchestratorKernel();
+            var current = GoalLifecycleCommands.CreateAndActivateSimpleGoal(
+                activeGoal,
+                DefaultAgents(),
+                "Ignore supplementary attempt metadata read failure");
+            var metadataUnreadable = ConductorDriver.GetAcceptanceAttemptCancellationDecision(
+                workspace,
+                current.Id,
+                loadGoal: _ => current,
+                attemptInvalidationRecorded: () => throw new IOException("attempt metadata unavailable"));
+
+            Assert.True(missing.ShouldCancel);
+            Assert.Equal(AcceptanceAttemptCancellationCause.GoalRecordMissing, missing.Cause);
+            Assert.True(unreadable.ShouldCancel);
+            Assert.Equal(AcceptanceAttemptCancellationCause.GoalRecordUnreadable, unreadable.Cause);
+            Assert.Equal(3, loadAttempts);
+            Assert.False(metadataUnreadable.ShouldCancel);
         }
         finally
         {

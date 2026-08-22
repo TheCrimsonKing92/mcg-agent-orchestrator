@@ -92,6 +92,64 @@ public sealed class ConductorBatchLoopTestsFaultIsolationEligibility : Conductor
         Assert.Equal(1, summary.Ticks);
     }
 
+    [Xunit.Fact(DisplayName = "BatchLoop_ExpectedAcceptanceCancellation_HeldWithoutFaultIsolation")]
+    public void BatchLoopExpectedAcceptanceCancellationHeldWithoutFaultIsolation()
+    {
+        var (kernel, goal) = SimpleGoal("expected acceptance cancellation");
+        PassVerification(kernel, goal, goal.Tasks.Single());
+        var escalations = new List<string>();
+        var reapedGoalIds = new List<GoalId>();
+        var decision = AcceptanceAttemptCancellation.Decide(
+            GoalStatus.Parked,
+            goalRecordReadable: true,
+            attemptInvalidationRecorded: false);
+        var driver = MakeDriver(
+            runAcceptance: _ => throw new AcceptanceAttemptCancelledException(decision),
+            writeEscalation: (_, _, reason) => escalations.Add(reason),
+            isVerificationGateSatisfied: _ => true);
+
+        var summary = new ConductorBatchLoop(
+            reapGoalRunningDispatches: (_, reaped) => reapedGoalIds.Add(reaped.Id)).Run(
+                kernel,
+                driver,
+                ConductorAutonomyPolicy.Conservative,
+                NoStopPath(),
+                maxIterations: 1);
+
+        Assert.Equal(0, summary.Escalated);
+        Assert.Empty(escalations);
+        Assert.Empty(reapedGoalIds);
+        Assert.Equal(GoalStatus.Verified, kernel.GetGoal(goal.Id).Status);
+        Assert.DoesNotContain(kernel.GetGoal(goal.Id).Timeline, item =>
+            item.Kind == ProgressKind.GoalPolicyDecision &&
+            item.Message.Contains("fault isolating goal", StringComparison.Ordinal));
+    }
+
+    [Xunit.Fact(DisplayName = "BatchLoop_GenuineAcceptanceFault_IsStillFaultIsolated")]
+    public void BatchLoopGenuineAcceptanceFaultIsStillFaultIsolated()
+    {
+        var (kernel, goal) = SimpleGoal("genuine acceptance fault");
+        PassVerification(kernel, goal, goal.Tasks.Single());
+        var reapedGoalIds = new List<GoalId>();
+        var driver = MakeDriver(
+            runAcceptance: _ => throw new InvalidOperationException("genuine acceptance fault"),
+            isVerificationGateSatisfied: _ => true);
+
+        var summary = new ConductorBatchLoop(
+            reapGoalRunningDispatches: (_, reaped) => reapedGoalIds.Add(reaped.Id)).Run(
+                kernel,
+                driver,
+                ConductorAutonomyPolicy.Conservative,
+                NoStopPath(),
+                maxIterations: 1);
+
+        Assert.Equal(1, summary.Escalated);
+        Assert.Equal([goal.Id], reapedGoalIds);
+        Assert.Contains(kernel.GetGoal(goal.Id).Timeline, item =>
+            item.Kind == ProgressKind.GoalPolicyDecision &&
+            item.Message.Contains("fault isolating goal", StringComparison.Ordinal));
+    }
+
     [Xunit.Fact(DisplayName = "BatchLoop_FaultIsolation_RetryAdvanceThrowEscalatesOneGoalAndContinuesBatch")]
     public void BatchLoop_FaultIsolation_RetryAdvanceThrowEscalatesOneGoalAndContinuesBatch()
     {
