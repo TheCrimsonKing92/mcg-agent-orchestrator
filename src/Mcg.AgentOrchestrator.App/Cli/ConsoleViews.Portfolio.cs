@@ -20,6 +20,19 @@ internal static partial class ConsoleViews
         }
     }
 
+    public static void PrintEpicMembers(PortfolioEpic epic, IReadOnlyList<PortfolioEpicMember> members)
+    {
+        if (members.Count == 0)
+        {
+            Console.WriteLine($"Epic {epic.Title} ({ShortId(epic.Id)}) has no members.");
+            return;
+        }
+
+        Console.WriteLine($"Epic {epic.Title} ({ShortId(epic.Id)}) members:");
+        foreach (var member in members)
+            Console.WriteLine($"  {member.Kind}: {member.MemberId}");
+    }
+
     public static void PrintPortfolio(IReadOnlyList<PortfolioEpicRollup> rollups, IReadOnlyList<PortfolioGoalRow> rows)
     {
         if (rollups.Count == 0)

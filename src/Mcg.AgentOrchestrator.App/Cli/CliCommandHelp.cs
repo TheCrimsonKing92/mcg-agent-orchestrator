@@ -57,6 +57,7 @@ internal static class CliCommandHelp
     public const string EpicAddUsage = "Usage: epic-add <title> | epic-add --text-file <path>";
     public const string EpicAssignUsage = "Usage: epic-assign <goal-or-backlog-id> <epic>";
     public const string EpicListUsage = "Usage: epic-list";
+    public const string EpicMembersUsage = "Usage: epic-members <epic>";
     public const string EpicSuggestUsage = "Usage: epic-suggest | epic-suggestions";
     public const string ProjectAddUsage = "Usage: project-add <title> | project-add --text-file <path>";
     public const string ProjectAssignUsage = "Usage: project-assign <epic> <project>";
@@ -392,6 +393,11 @@ internal static class CliCommandHelp
     private static readonly CommandHelpEntry EpicList = new(
         EpicListUsage,
         "List epics with membership and state rollups.",
+        ["--help", "-h"]);
+
+    private static readonly CommandHelpEntry EpicMembers = new(
+        EpicMembersUsage,
+        "List an epic's goal and backlog item members.",
         ["--help", "-h"]);
 
     private static readonly CommandHelpEntry EpicSuggest = new(
@@ -1000,6 +1006,12 @@ internal static class CliCommandHelp
         if (args[0].Equals("epic-list", StringComparison.OrdinalIgnoreCase))
         {
             entry = EpicList;
+            return true;
+        }
+
+        if (args[0].Equals("epic-members", StringComparison.OrdinalIgnoreCase))
+        {
+            entry = EpicMembers;
             return true;
         }
 
