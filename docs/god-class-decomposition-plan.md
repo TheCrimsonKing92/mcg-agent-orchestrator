@@ -18,7 +18,7 @@ Acceptance lane model used here:
 - App/Dashboard or App/Dashboard/Api changes select focused dashboard infrastructure tests when the changed App scope stays under one dashboard/API subsystem.
 - Shared Infrastructure changes map to broad Infrastructure test coverage; treat these as touching all five infrastructure partitions unless a characterization goal proves a narrower filter.
 - Core source changes map to Core tests plus downstream Infrastructure tests through the `GoalAcceptanceVerifier` project dependency closure.
-- `GoalAcceptanceVerifier.cs` and `GoalAcceptanceVerifierTests.cs` are explicit full-shard triggers in `GoalAcceptanceVerifier.FullShardReason`.
+- `GoalAcceptanceVerifier.cs` and `GoalAcceptanceVerifierTests.cs` are not explicit full-shard triggers. Commit `88e4dc59` removed those special cases on 2026-07-19; current selection uses changed-project mapping and filename-derived focused test filters.
 
 Prior art already exists: `AgentOrchestratorKernel.*.cs` is a successful Core partial-class split, with the largest fragment now `AgentOrchestratorKernel.GoalLifecycle.cs` at 706 lines and 33 commits in the last 60 days. `CliCommandHandlers.*.cs` is also partially split, but `CliCommandHandlers.Goals.cs` remains a 3,054-line hotspot while siblings such as `CliCommandHandlers.Workers.cs` at 509 lines and `CliCommandHandlers.Backlog.cs` at 305 lines show the intended direction.
 
@@ -75,6 +75,37 @@ growth. `ConductorBatchLoopTests.cs` is now the largest file in the repository.
    4,783 lines of a human-interface concern sitting on the orchestrator's acceptance critical path. The
    dashboard is not on the conductor's critical path and the orchestrator runs without it.
 
+### 2026-08-22 GoalAcceptanceVerifier test split
+
+Wave 1 item 6 now uses one class per file because changed-test selection derives a class filter from each
+changed filename and focused-evidence sibling resolution expects one declaring file per class. The four
+existing secondary classes moved unchanged to `AcceptanceOutputCaptureTests.cs`,
+`HermeticVerificationEnvironmentTests.cs`, `RealProcessShardAlphaSmokeTests.cs`, and
+`RealProcessShardBetaSmokeTests.cs`. The dominant build-slot class became an abstract shared-helper base with
+eleven concrete `GoalAcceptanceVerifierDotnetBuildSlotTests<Topic>` siblings:
+
+1. `GateHeartbeat` owns run-scoped heartbeat and hung-child coverage.
+2. `RunnerInvocationAndTrx` owns runner selection, invocation arguments, and TRX diagnostics.
+3. `FocusedEvidence` owns focused-selection parsing, routing, and dual-arm evidence.
+4. `SlotGateJobResources` owns build-slot gating, job receipts, lock self-heal, and timeout diagnostics because those paths share owned-process and heartbeat helpers.
+5. `ConcurrentShardScheduling` owns resource-key scheduling and observed lane ordering.
+6. `ShardReceipts` owns attempt artifacts, heartbeat files, and owner-result isolation.
+7. `VerdictAndBuildCache` owns partition verdict reuse and base-build caching because both share partition-key hooks.
+8. `PolicyShardScope` owns change-scope routing, policy injection, and solution-check substitution.
+9. `AdvisoryChecks` owns advisory grep, file, command, and missing-criteria behavior.
+10. `TestTamperGuard` owns declared-removal and assertion-tamper controls.
+11. `TrustedBaselineDiscovery` owns trusted-baseline retry, project discovery, and deleted-file scope.
+
+This differs from the original six-topic starting list because criterion parsing/check conversion and
+forbidden-generated-path coverage already belong to the retained `GoalAcceptanceVerifierTests` class, while
+focused evidence, concurrent scheduling, and verdict caching grew into independent concerns after that list
+was written. Every build-slot-derived fragment and both real-process smoke classes retain the serial
+`JobAccounting` collection; the non-process classes retain `GoalAcceptanceVerifier`. The manifest's literal
+`GoalAcceptanceVerifierDotnetBuildSlotTests` lane token still matches every prefixed fragment, and the
+full-shard behavior is unchanged: no hard-coded trigger exists to narrow. Extracted classes share the local
+abstract verifier test base so focused-evidence sibling expansion can follow that family across files; the
+source/reflection-only parity guard is collection-free because it mutates no shared state.
+
 ### Cross-reference
 
 `docs/compensation-stack-audit-2026-08-13.md` reaches the same targets from the runtime side and supplies the
@@ -98,7 +129,7 @@ Score is `lines x churn x lane breadth`. Lane breadth is intentionally coarse: i
 | 5 | `src/Mcg.AgentOrchestrator.App/Cli/CliCommandHandlers.Goals.cs` | 3,054 | 154 | Focused CLI infrastructure tests / `Cli` partition | 1 | 470,316 | Existing partial class still owns goal lifecycle, backlog intake, conduct, workspace, acceptance, recovery, and landing commands. |
 | 6 | `tests/Mcg.AgentOrchestrator.Infrastructure.Tests/DashboardRenderingTests.cs` | 3,068 | 150 | `Dashboard` | 1 | 460,200 | Dashboard/API rendering and report-preview behavior; no collection attribute found. |
 | 7 | `src/Mcg.AgentOrchestrator.Infrastructure/Workspaces/GoalAcceptanceVerifier.cs` | 1,698 | 44 | Full shard trigger: all Infrastructure partitions plus Core tests when relevant | 5 | 373,560 | Acceptance policy, manifest loading, shard receipts, grep/file checks, process runner, tamper checks. |
-| 8 | `tests/Mcg.AgentOrchestrator.Infrastructure.Tests/GoalAcceptanceVerifierTests.cs` | 1,731 | 39 | Full shard trigger / `GoalWorktree` partition | 5 | 337,545 | Special-cased by `GoalAcceptanceVerifier.FullShardReason`; extraction must avoid weakening acceptance receipts. |
+| 8 | `tests/Mcg.AgentOrchestrator.Infrastructure.Tests/GoalAcceptanceVerifierTests.cs` | 1,731 | 39 | Changed-project Infrastructure mapping with filename-derived focused filters | 5 | 337,545 | Not special-cased by `GoalAcceptanceVerifier.FullShardReason`; extraction must preserve filename/class filter alignment and acceptance receipts. |
 | 9 | `src/Mcg.AgentOrchestrator.Infrastructure/Workspaces/GoalWorktrees.cs` | 1,567 | 43 | Broad Infrastructure: chiefly `GoalWorktree`, with process/build cleanup spillover | 5 | 336,905 | Worktree create/remove/rebase/sweep, cleanup backoff, lock holders, sandbox ACL reset. |
 | 10 | `src/Mcg.AgentOrchestrator.Infrastructure/Workers/WorkerProfileDispatcher.cs` | 1,090 | 61 | Broad Infrastructure, dominated by `WorkerDispatch` | 5 | 332,450 | Subscription preflight, profile resolution, model selection, guardrails, template variables. |
 | 11 | `src/Mcg.AgentOrchestrator.App/Orchestration/ConductorDriver.cs` | 1,201 | 54 | Broad Infrastructure, dominated by `Conductor` | 5 | 324,270 | Advance state machine, dispatch/start, landing, recording, cleanup, evidence extraction. |
@@ -131,7 +162,7 @@ These should land first because they reduce future verification cost without cha
 
 5. Split `ConductorBatchLoopTests.cs` into loop scheduling, parallel acceptance, dependency completion, set-aside/readmit, persistence failure, and reaping/detach classes. Preserve any local fake repositories or clocks with the fragment that owns them; no collection attribute is present today. Expected shard-time effect: conductor follow-ups can run class-specific filters within the `Conductor` partition instead of the 2,996-line batch-loop file. Disjointness: can run concurrently with Dashboard and WorkerDispatch splits; serialize with `ConductorBatchLoop.cs` and `ConductorDriver.cs` extractions. Acceptance shape: no product changes, tests remain in the Infrastructure test project, and existing partition helper still lists the conductor lane.
 
-6. Split `GoalAcceptanceVerifierTests.cs` only after the three larger test splits. Suggested fragments: manifest/scoped-check planning, policy shard receipts, criterion parsing/check conversion, test-tamper detection, forbidden generated paths, and process runner timeout/diagnostics. Keep `[Xunit.Collection(TestCollections.JobAccounting)]` only on process/accounting fragments. Expected shard-time effect: this file is currently a full-shard trigger when touched; splitting it does not remove that hard-coded trigger by itself, but it creates the prerequisite for a later safe narrowing of the special case from file-level to behavior-level. Disjointness: serialize with any `GoalAcceptanceVerifier.cs` extraction; can run after other test splits. Acceptance shape: class split plus explicit note that the full-shard trigger remains unchanged.
+6. Split `GoalAcceptanceVerifierTests.cs` only after the three larger test splits. Suggested fragments: manifest/scoped-check planning, policy shard receipts, criterion parsing/check conversion, test-tamper detection, forbidden generated paths, and process runner timeout/diagnostics. Keep `[Xunit.Collection(TestCollections.JobAccounting)]` only on process/accounting fragments. Expected selection effect: test-only changes use filename-derived focused class filters, so split filenames and class names must stay aligned while the existing changed-project mapping remains intact. Disjointness: serialize with any `GoalAcceptanceVerifier.cs` extraction; can run after other test splits. Acceptance shape: class split plus explicit evidence that every fragment remains selected by its filename-derived filter and existing manifest lane token.
 
 ## Wave 2: Product Extractions
 
@@ -143,7 +174,7 @@ Every product extraction below is behavior-preserving and characterization-tests
 
 3. Extract `BackgroundDispatchRunner` commit-on-behalf behavior into `DispatchWorktreeCommitter`. Responsibility: inspect dirty paths, build orchestrator commit subjects, commit worker edits, and report commit diagnostics. Dependencies crossing the seam: `GitCli`, `GoalId`, `TaskSpec`, worktree head/status, and worker summary extraction. Characterization prerequisite: a WorkerDispatch test fragment covering result-commit, dirty worktree, subject truncation, and git failure diagnostics. Disjointness: serialize with `CliCommandHandlers.Goals` sandbox-blocked commit handling and other `BackgroundDispatchRunner` slices; disjoint from Conductor and Dashboard slices. Backlog-ready acceptance: `BackgroundDispatchRunner` delegates commit creation; commit subjects and failure messages stay byte-for-byte stable in tests.
 
-4. Extract `GoalAcceptanceVerifier` policy shard planning into `AcceptancePolicyShardPlanner`. Responsibility: map changed files to projects, dependency closure, full-shard reasons, shard evidence, and runnable/skipped policy checks. Dependencies crossing the seam: `RepositoryChangeClassifier`, manifest check records, project constants, environment flags. Characterization prerequisite: `GoalAcceptanceVerifierTests` policy-shard fragment must cover docs-only/no-changed-files, App/Cli focused checks, broad Infrastructure expansion, full-shard override, build-system changes, and the explicit acceptance-verifier file trigger. Disjointness: serialize with any `RepositoryTestImpactPlanner` or acceptance manifest changes; disjoint from WorkerDispatch completion extraction. Backlog-ready acceptance: new planner type, unchanged shard receipt text, unchanged full-shard special cases.
+4. Extract `GoalAcceptanceVerifier` policy shard planning into `AcceptancePolicyShardPlanner`. Responsibility: map changed files to projects, dependency closure, full-shard reasons, shard evidence, and runnable/skipped policy checks. Dependencies crossing the seam: `RepositoryChangeClassifier`, manifest check records, project constants, environment flags. Characterization prerequisite: `GoalAcceptanceVerifierTests` policy-shard fragment must cover docs-only/no-changed-files, App/Cli focused checks, broad Infrastructure expansion, full-shard override, build-system changes, and filename-derived focused selection for acceptance-verifier tests. Disjointness: serialize with any `RepositoryTestImpactPlanner` or acceptance manifest changes; disjoint from WorkerDispatch completion extraction. Backlog-ready acceptance: new planner type, unchanged shard receipt text, unchanged current full-shard reasons and focused-selection behavior.
 
 5. Extract `GoalAcceptanceVerifier` deterministic check execution into `AcceptanceCheckRunner`. Responsibility: run grep/file-exists/command/dotnet checks, timeouts, retry reads, stdout/stderr capture, and result formatting. Dependencies crossing the seam: runner delegate, `AcceptanceManifestCheck`, `AcceptanceCheckResult`, timeout constants, stable slot lease. Characterization prerequisite: `GoalAcceptanceVerifierTests` check-runner fragment covering command timeout, stdout/stderr paths, grep present/absent, file exists, and retry read behavior. Disjointness: serialize with policy shard extraction because both edit `GoalAcceptanceVerifier.cs`; disjoint from GoalWorktrees cleanup extraction. Backlog-ready acceptance: `RunAsync` becomes orchestration, check result summaries remain stable.
 
@@ -214,6 +245,8 @@ Recommended backlog order:
 
 Each item should enter the backlog as a behavior-preserving goal with explicit characterization tests first, a narrow changed-file set, and a disjointness note copied from the matrix above.
 
+Wave 2 item 2 places the process-recovery boundary at `DispatchProcessRefreshVerdict`: `DispatchProcessRecoveryService` answers what happened to the worker by reading heartbeat and exit artifacts, observing or reaping owned processes, evaluating recovery policy, and producing refresh diagnostics. The boundary is derived from the call graph: helpers that consume only process records, artifact data, the clock, and process/file seams moved; `BackgroundDispatchRunner` still decides what the verdict does to the task and kernel. Worker-result interpretation, `BuildCompletedProcessOutcome`, worktree/Git evidence, verification construction, and commit-on-behalf deliberately remain in the runner for Wave 2 item 3.
+
 ## Guarded source size ratchet
 
 `GoalAcceptanceVerifierSizeRatchetTests` runs as an ordinary acceptance-gate test and applies the literal ceilings in `SourceSizeRatchet.SeededCeilings`. The table was seeded at commit `6e7a90d7b3fe192ae4f1e430cb7452710f88b73c` on 2026-08-22; every value below is that file's complete line count from `File.ReadLines(path).Count()` at that commit, except where a later row-raise is recorded below the table.
@@ -223,20 +256,22 @@ Each item should enter the backlog as a behavior-preserving goal with explicit c
 | `src/Mcg.AgentOrchestrator.Infrastructure/Workspaces/GoalAcceptanceVerifier.cs` | 8779 |
 | `src/Mcg.AgentOrchestrator.App/Orchestration/ConductorDriver.cs` | 6156 |
 | `src/Mcg.AgentOrchestrator.App/Orchestration/ConductorBatchLoop.cs` | 4974 |
-| `src/Mcg.AgentOrchestrator.Infrastructure/Processes/BackgroundDispatchRunner.cs` | 4640 |
+| `src/Mcg.AgentOrchestrator.Infrastructure/Processes/BackgroundDispatchRunner.cs` | 3499 |
 | `src/Mcg.AgentOrchestrator.Infrastructure/Workers/WorkerProfileDispatcher.cs` | 3212 |
 | `src/Mcg.AgentOrchestrator.App/Cli/CliPersistentStateRunner.cs` | 4821 |
-| `tests/Mcg.AgentOrchestrator.Infrastructure.Tests/GoalAcceptanceVerifierTests.cs` | 10451 |
+| `tests/Mcg.AgentOrchestrator.Infrastructure.Tests/GoalAcceptanceVerifierTests.cs` | 1566 |
 | `tests/Mcg.AgentOrchestrator.Infrastructure.Tests/ConductorDriverTests.cs` | 9282 |
 | `tests/Mcg.AgentOrchestrator.Infrastructure.Tests/CliCommandTests.PersistentRunnerCommands.cs` | 7038 |
 | `tests/Mcg.AgentOrchestrator.Infrastructure.Tests/WorkerDispatchTestsWorkerResultClassification.cs` | 4834 |
-| `tests/Mcg.AgentOrchestrator.Infrastructure.Tests/ConductorBatchLoopTestsParallelAcceptance.cs` | 4355 |
+| `tests/Mcg.AgentOrchestrator.Infrastructure.Tests/ConductorBatchLoopTestsParallelAcceptance.cs` | 4473 |
 
-The production rows are the six ranked god classes whose growth the inventory tracks. Two test rows, `GoalAcceptanceVerifierTests.cs` and `ConductorDriverTests.cs`, are unsplit test god classes guarded as the test-side counterparts to their already-guarded production files. The other three test rows are products of earlier splits that have regrown past roughly 4,300 lines; a one-time split without a bound only resets the clock. This is intentionally not a repository-wide size rule. For example, `DotnetBuildEnvironmentManagerTests.cs` (5199 lines) is large but is neither a ranked god class nor a split product; `CliCommandTests.GoalLifecycleCommands.cs` (4211) and `CliCommandTests.SubscriptionDispatchCommands.cs` (3471) remain within their intended post-split size; `DashboardRenderingTests.cs` (3795) has already moved to the Dashboard test project; and `DispatchFailureClassifier.cs` (2393) remains below the seeded production band.
+The production rows are the six ranked god classes whose growth the inventory tracks. `ConductorDriverTests.cs` remains an unsplit test god class guarded as the test-side counterpart to its already-guarded production file. The `GoalAcceptanceVerifierTests.cs` row remains at its measured post-split size so regrowth is visible; none of its new fragments approaches the roughly 4,300-line threshold for adding a split-product row. The other three test rows are products of earlier splits that have regrown past that threshold; a one-time split without a bound only resets the clock. This is intentionally not a repository-wide size rule. For example, `DotnetBuildEnvironmentManagerTests.cs` (5199 lines) is large but is neither a ranked god class nor a split product; `CliCommandTests.GoalLifecycleCommands.cs` (4211) and `CliCommandTests.SubscriptionDispatchCommands.cs` (3471) remain within their intended post-split size; `DashboardRenderingTests.cs` (3795) has already moved to the Dashboard test project; and `DispatchFailureClassifier.cs` (2393) remains below the seeded production band.
 
 When extraction shrinks a guarded file, lower that row in the same change. If growth is unavoidable, raise only that row deliberately with an inline justification naming the goal. A rename or deletion must update its row in the same change. Never derive a ceiling automatically from the current file, make a row advisory, add an opt-out, or delete the guard.
 
 ### Recorded row raises
+
+Goal `46ff9f83` raised the `ConductorBatchLoopTestsParallelAcceptance.cs` row from 4355 to 4473 for the unequal logical-width/build-permit control and the typed maximum diagnostic. The existing parallel-acceptance test class owns both conductor admission and physical permit characterization, so extracting these controls would split the contract they compare.
 
 Goal `b4b80aca` raised the `GoalAcceptanceVerifier.cs` row from 8763 to 8779 for the phase-transition calls that connect gate accounting to verifier-owned control-flow and resource-custody boundaries. The accountant, records, formatting, and lifecycle behavior remain extracted in `AcceptanceGatePhaseAccounting.cs`; moving the remaining transitions out would split the orchestration invariant they measure.
 

@@ -85,9 +85,6 @@ public sealed class BackgroundDispatchRunner
     // only bounds how long a genuinely never-started tool may sit before it is reaped.
     private static readonly TimeSpan DefaultStartupHangTimeout = TimeSpan.FromSeconds(120);
 
-    // ownedCpuMs above this means the tool consumed real CPU since start (it launched and ran), beyond
-    // the bare pwsh wrapper baseline - one of the signals that the tool was invoked.
-    private const long CpuStartupBurstMs = 1000L;
     private const string TestSafeWorkerEchoCommand =
         "Write-Output 'WORKER_RESULT:'; " +
         "Write-Output 'files: none'; " +
@@ -119,6 +116,7 @@ public sealed class BackgroundDispatchRunner
     private readonly DispatchRecoveryPolicy _recoveryPolicy;
     private readonly WorkerProviderCatalog _workerProviders;
     private readonly WorkerDispatchCompletionClassifier _completionClassifier;
+    private readonly DispatchProcessRecoveryService _recoveryService;
     private readonly Func<string, Stream> _openLogReadStream;
     private readonly Action? _beforeGoalWorktreeInspection;
     private readonly Func<ProcessStartInfo, Process?> _startProcess;
@@ -162,6 +160,16 @@ public sealed class BackgroundDispatchRunner
             ReadDecisionBestEffort);
         _openLogReadStream = openLogReadStream ??
             (path => new FileStream(path, FileMode.Open, FileAccess.Read, FileShare.ReadWrite | FileShare.Delete));
+        _recoveryService = new DispatchProcessRecoveryService(
+            _clock,
+            _postOutputIdleTimeout,
+            _progressStallTimeout,
+            _startupHangTimeout,
+            _isStillRunning,
+            _tryKillOwnedProcess,
+            evaluateRecovery: (process, hasLiveProcess, staleRetryBudgetRemaining, worktreeInspection) =>
+                _recoveryPolicy.Evaluate(process, hasLiveProcess, staleRetryBudgetRemaining, worktreeInspection),
+            diagnosticWriter: _diagnosticWriter);
         _beforeGoalWorktreeInspection = beforeGoalWorktreeInspection;
         _startProcess = startProcess ?? Process.Start;
     }
@@ -554,9 +562,31 @@ public sealed class BackgroundDispatchRunner
                     continue;
                 }
 
-                var recoveryDecision = _recoveryPolicy.Evaluate(process, AnyTrackedProcessStillRunning(process));
-                if (!TryCompleteFromExitFile(kernel, goal.Id, task.Id, process, recoveryDecision, out var outcome))
+                var recoveryDecision = _recoveryPolicy.Evaluate(process, _recoveryService.AnyTrackedProcessStillRunning(process));
+                if (!_recoveryService.TryCompleteFromExitFile(
+                        process,
+                        recoveryDecision,
+                        heartbeat => RecordProviderSessionFromHeartbeat(
+                            kernel,
+                            goal.Id,
+                            task.Id,
+                            kernel.GetTask(goal.Id, task.Id),
+                            heartbeat),
+                        out var verdict))
+                {
                     continue;
+                }
+
+                var outcome = verdict.Kind == DispatchProcessVerdictKind.CompletedFromExitFile
+                    ? BuildCompletedProcessOutcome(
+                        kernel,
+                        goal.Id,
+                        task.Id,
+                        process,
+                        verdict.ExitCode!.Value,
+                        verdict.Diagnostic,
+                        verdict.RecoveryDecision)
+                    : new DispatchRefreshOutcome(process, null, RecoveryDecision: verdict.RecoveryDecision);
 
                 ApplyRefreshOutcomeAndWriteDiagnostics(kernel, goal.Id, task.Id, outcome);
                 if (outcome.RecoveryDecision?.Action != DispatchRecoveryAction.Hold)
@@ -607,7 +637,7 @@ public sealed class BackgroundDispatchRunner
             return;
 
         var task = kernel.GetTask(goalId, taskId);
-        TryWriteDiagnosticRecord(
+        _recoveryService.TryWriteDiagnosticRecord(
             goalId,
             taskId,
             task,
@@ -622,117 +652,68 @@ public sealed class BackgroundDispatchRunner
         var task = kernel.GetTask(goalId, taskId);
         var processRecord = task.LastProcess
             ?? throw new InvalidOperationException($"Task '{taskId}' has no background process to refresh.");
-
-        var hasLiveTrackedProcess = AnyTrackedProcessStillRunning(processRecord);
-        var observedHeartbeat = TryReadHeartbeat(GetHeartbeatPath(processRecord), out var refreshHeartbeat)
-            ? refreshHeartbeat
-            : null;
-        RecordProviderSessionFromHeartbeat(kernel, goalId, taskId, task, observedHeartbeat);
-        var hasLiveProcess = AnyObservedProcessStillRunning(processRecord, observedHeartbeat);
-        var worktreeInspectionStatus = DispatchWorktreeInspectionStatus.NotRequired;
-        if (!hasLiveProcess &&
-            !File.Exists(processRecord.ExitCodePath) &&
-            task.LastDispatch is { } lastDispatch &&
-            RequiresFileChangeEvidence(task))
-        {
-            var inspection = InspectGoalWorktree(
-                processRecord.WorkingDirectory,
-                goalId,
-                lastDispatch.DispatchedAt);
-            worktreeInspectionStatus = inspection.IsAvailable
-                ? DispatchWorktreeInspectionStatus.Available(
-                    !inspection.Evidence.IsClean,
-                    processRecord.WorkingDirectory)
-                : inspection.IsUnsafe
-                    ? DispatchWorktreeInspectionStatus.Unsafe(
-                        processRecord.WorkingDirectory,
-                        inspection.UnavailableReason ?? "unknown",
-                        inspection.GitReceipt)
-                : DispatchWorktreeInspectionStatus.Unavailable(
-                    processRecord.WorkingDirectory,
-                    inspection.UnavailableReason ?? "unknown",
-                    inspection.GitReceipt);
-        }
-        var recoveryDecision = _recoveryPolicy.Evaluate(
+        var verdict = _recoveryService.ClassifyRefresh(
+            task,
+            goalId,
             processRecord,
-            hasLiveProcess,
             DispatchRecoveryPolicy.GetStaleRetryBudgetRemaining(task),
-            worktreeInspectionStatus);
-        var exitFileExists = File.Exists(processRecord.ExitCodePath);
-        if (TryCompleteFromExitFile(kernel, goalId, taskId, processRecord, recoveryDecision, out var completion))
-            return completion;
+            UsesCodexExitFileBehavior(task.LastDispatch),
+            RequiresFileChangeEvidence(task),
+            inspectWorktree: () => BuildRecoveryWorktreeInspectionStatus(task, processRecord, goalId),
+            hasCodexFinalOutput: () =>
+            {
+                var standardOutput = ReadProcessLogBestEffort(processRecord, processRecord.StandardOutputPath);
+                var standardError = ReadProcessLogBestEffort(processRecord, processRecord.StandardErrorPath);
+                return standardOutput.FinalOutputSeen || standardError.FinalOutputSeen;
+            },
+            hasWorktreeProgress: () => HasRecoveryWorktreeProgress(task, processRecord, goalId),
+            heartbeatObserved: heartbeat =>
+                RecordProviderSessionFromHeartbeat(kernel, goalId, taskId, task, heartbeat));
 
-        if (hasLiveProcess)
+        if (verdict.Kind == DispatchProcessVerdictKind.CompletedFromExitFile)
         {
-            if (!hasLiveTrackedProcess && !exitFileExists)
-            {
-                return new DispatchRefreshOutcome(processRecord, null, RecoveryDecision: recoveryDecision);
-            }
-
-            if (IsAuthoritativeHold(recoveryDecision))
-            {
-                return new DispatchRefreshOutcome(processRecord, null, RecoveryDecision: recoveryDecision);
-            }
-
-            if (TryDetectHungCodexWrapper(task, processRecord, out var diagnostic))
-            {
-                return CompleteHungWrapperDispatch(
-                    kernel,
-                    goalId,
-                    taskId,
-                    task,
-                    processRecord,
-                    diagnostic,
-                    recoveryDecision);
-            }
-
-            if (TryDetectHungSubscriptionWrapper(task, processRecord, out var wrapperDiagnostic))
-            {
-                return CompleteHungWrapperDispatch(
-                    kernel,
-                    goalId,
-                    taskId,
-                    task,
-                    processRecord,
-                    wrapperDiagnostic,
-                    recoveryDecision);
-            }
-
-            if (TryDetectStartupHang(processRecord, out var startupHangDiagnostic))
-            {
-                return CompleteSuspectedHangDispatch(
-                    kernel,
-                    goalId,
-                    taskId,
-                    task,
-                    processRecord,
-                    startupHangDiagnostic,
-                    DispatchRecoveryAction.Reap,
-                    recoveryDecision);
-            }
-
-            if (TryDetectProbableProgressStall(task, goalId, processRecord, out var stallDiagnostic))
-            {
-                return CompleteSuspectedHangDispatch(
-                    kernel,
-                    goalId,
-                    taskId,
-                    task,
-                    processRecord,
-                    stallDiagnostic,
-                    DispatchRecoveryAction.ClassifyBlocker,
-                    recoveryDecision);
-            }
-
-            return new DispatchRefreshOutcome(processRecord, null, RecoveryDecision: recoveryDecision);
+            return BuildCompletedProcessOutcome(
+                kernel,
+                goalId,
+                taskId,
+                processRecord,
+                verdict.ExitCode!.Value,
+                verdict.Diagnostic,
+                verdict.RecoveryDecision);
         }
 
-        if (exitFileExists)
+        if (verdict.Kind == DispatchProcessVerdictKind.HungWrapper)
         {
-            return new DispatchRefreshOutcome(processRecord, null, RecoveryDecision: recoveryDecision);
+            return CompleteHungWrapperDispatch(
+                kernel,
+                goalId,
+                taskId,
+                task,
+                processRecord,
+                verdict.Diagnostic,
+                verdict.RecoveryDecision);
         }
 
-        var staleResourceAccounting = ReapTrackedProcessJobs(processRecord, waitForExit: false);
+        if (verdict.Kind == DispatchProcessVerdictKind.SuspectedHang)
+        {
+            return CompleteSuspectedHangDispatch(
+                kernel,
+                goalId,
+                taskId,
+                task,
+                processRecord,
+                verdict.Diagnostic,
+                verdict.HangRecoveryAction,
+                verdict.RecoveryDecision);
+        }
+
+        if (verdict.Kind is DispatchProcessVerdictKind.Live or DispatchProcessVerdictKind.Hold)
+        {
+            return new DispatchRefreshOutcome(processRecord, null, RecoveryDecision: verdict.RecoveryDecision);
+        }
+
+        var recoveryDecision = verdict.RecoveryDecision;
+        var staleResourceAccounting = verdict.ResourceAccounting;
         if (TryBuildStaleDispatchAutoRequeueOutcome(
                 kernel,
                 goalId,
@@ -751,7 +732,7 @@ public sealed class BackgroundDispatchRunner
             return new DispatchRefreshOutcome(processRecord, null, RecoveryDecision: recoveryDecision);
         }
 
-        if (worktreeInspectionStatus.HasDirtyEvidence)
+        if (verdict.WorktreeInspectionStatus.HasDirtyEvidence)
         {
             var interruptedDecision = new DispatchRecoveryDecision(
                 DispatchRecoveryAction.PreserveInterruptedWork,
@@ -760,25 +741,25 @@ public sealed class BackgroundDispatchRunner
                 "process disappeared with dirty worktree evidence",
                 "interrupted worker evidence requires operator verification");
             const string interruptedReason = "process missing with dirty worktree evidence";
-            TryWriteExitCode(processRecord.ExitCodePath, 1, interruptedReason);
+            _recoveryService.TryWriteExitCode(processRecord.ExitCodePath, 1, interruptedReason);
             return BuildCompletedProcessOutcome(
                 kernel,
                 goalId,
                 taskId,
                 processRecord,
                 1,
-                BuildRecoveryDiagnostic(interruptedDecision),
+                DispatchProcessRecoveryService.BuildRecoveryDiagnostic(interruptedDecision),
                 interruptedDecision,
                 staleResourceAccounting) with
                 {
                     AutoRequeueDisposition = new DispatchAutoRequeueDisposition(
                     "InterruptedDispatchWorkPreserved",
-                    BuildRecoveryDiagnostic(interruptedDecision),
+                    DispatchProcessRecoveryService.BuildRecoveryDiagnostic(interruptedDecision),
                     ShouldRequeue: false)
                 };
         }
 
-        var staleDiagnostic = BuildRecoveryDiagnostic(recoveryDecision);
+        var staleDiagnostic = DispatchProcessRecoveryService.BuildRecoveryDiagnostic(recoveryDecision);
         return BuildCompletedProcessOutcome(
             kernel,
             goalId,
@@ -790,90 +771,37 @@ public sealed class BackgroundDispatchRunner
             staleResourceAccounting);
     }
 
-    private bool TryCompleteFromExitFile(
-        AgentOrchestratorKernel kernel,
-        GoalId goalId,
-        TaskId taskId,
+    private DispatchWorktreeInspectionStatus BuildRecoveryWorktreeInspectionStatus(
+        TaskSpec task,
         TaskProcessRecord processRecord,
-        DispatchRecoveryDecision recoveryDecision,
-        out DispatchRefreshOutcome outcome)
+        GoalId goalId)
     {
-        var hasHeartbeat = TryReadHeartbeat(GetHeartbeatPath(processRecord), out var heartbeat);
-        var observedHeartbeat = hasHeartbeat ? heartbeat : null;
-        RecordProviderSessionFromHeartbeat(kernel, goalId, taskId, kernel.GetTask(goalId, taskId), observedHeartbeat);
-        var exitRead = ReadExitCode(processRecord.ExitCodePath);
-        if (exitRead.Kind == ExitCodeReadKind.Valid)
-        {
-            if (AnyOwnedWorkerProcessStillRunning(processRecord, observedHeartbeat))
-            {
-                outcome = new DispatchRefreshOutcome(processRecord, null, RecoveryDecision: recoveryDecision);
-                return false;
-            }
-        }
-        else
-        {
-            if (exitRead.Kind == ExitCodeReadKind.Missing ||
-                AnyObservedProcessStillRunning(processRecord, observedHeartbeat))
-            {
-                outcome = new DispatchRefreshOutcome(processRecord, null, RecoveryDecision: recoveryDecision);
-                return false;
-            }
-
-            exitRead = ReadExitCodeWithRetry(processRecord.ExitCodePath);
-            if (exitRead.Kind != ExitCodeReadKind.Valid)
-            {
-                var apparatusDecision = new DispatchRecoveryDecision(
-                    DispatchRecoveryAction.Hold,
-                    DispatchRecoveryPolicy.ToActionName(DispatchRecoveryAction.Hold),
-                    processRecord.ExitCodePath,
-                    $"exit artifact unavailable; state={exitRead.Kind}; evidence={exitRead.Evidence}",
-                    $"exit-artifact-{exitRead.Kind.ToString().ToLowerInvariant()}");
-                outcome = new DispatchRefreshOutcome(
-                    processRecord,
-                    null,
-                    RecoveryDecision: apparatusDecision);
-                return true;
-            }
-        }
-
-        var exitCode = exitRead.ExitCode!.Value;
-
-        if (AnyOwnedWorkerProcessStillRunning(processRecord, observedHeartbeat))
-        {
-            outcome = new DispatchRefreshOutcome(processRecord, null, RecoveryDecision: recoveryDecision);
-            return false;
-        }
-
-        outcome = BuildCompletedProcessOutcome(
-            kernel,
+        var lastDispatch = task.LastDispatch
+            ?? throw new InvalidOperationException("Recovery worktree inspection requires a dispatch record.");
+        var inspection = InspectGoalWorktree(
+            processRecord.WorkingDirectory,
             goalId,
-            taskId,
-            processRecord,
-            exitCode,
-            BuildRecoveryDiagnostic(recoveryDecision),
-            recoveryDecision);
-        return true;
+            lastDispatch.DispatchedAt);
+        return inspection.IsAvailable
+            ? DispatchWorktreeInspectionStatus.Available(
+                !inspection.Evidence.IsClean,
+                processRecord.WorkingDirectory)
+            : inspection.IsUnsafe
+                ? DispatchWorktreeInspectionStatus.Unsafe(
+                    processRecord.WorkingDirectory,
+                    inspection.UnavailableReason ?? "unknown",
+                    inspection.GitReceipt)
+                : DispatchWorktreeInspectionStatus.Unavailable(
+                    processRecord.WorkingDirectory,
+                    inspection.UnavailableReason ?? "unknown",
+                    inspection.GitReceipt);
     }
 
-    private static ExitCodeReadResult ReadExitCodeWithRetry(string path)
+    private bool HasRecoveryWorktreeProgress(TaskSpec task, TaskProcessRecord processRecord, GoalId goalId)
     {
-        const int attempts = 3;
-        var result = ReadExitCode(path);
-        for (var attempt = 0; attempt < attempts; attempt++)
-        {
-            if (result.Kind == ExitCodeReadKind.Valid)
-            {
-                return result;
-            }
-
-            if (attempt < attempts - 1)
-            {
-                Thread.Sleep(TimeSpan.FromMilliseconds(50));
-                result = ReadExitCode(path);
-            }
-        }
-
-        return result;
+        return task.LastDispatch is { } dispatch &&
+            TryInspectGoalWorktree(processRecord.WorkingDirectory, goalId, dispatch.DispatchedAt, out var worktree) &&
+            (worktree.HasCommitAfterDispatch || !worktree.IsClean);
     }
 
     public static void ApplyRefreshOutcome(
@@ -965,7 +893,7 @@ public sealed class BackgroundDispatchRunner
             evt.Message.StartsWith(ApparatusHoldReceiptPrefix, StringComparison.Ordinal) &&
             evt.Message.Contains($"blocker='{blocker}'", StringComparison.Ordinal));
         var observation = priorObservations + 1;
-        var diagnostic = BuildRecoveryDiagnostic(decision);
+        var diagnostic = DispatchProcessRecoveryService.BuildRecoveryDiagnostic(decision);
         kernel.RecordTaskNote(
             goalId,
             taskId,
@@ -1055,7 +983,7 @@ public sealed class BackgroundDispatchRunner
                 recoveryDecision.EvidencePath,
                 capBlocker,
                 capBlocker);
-            var capDiagnostic = AppendDiagnostic(BuildRecoveryDiagnostic(capDecision), capEvidenceDiagnostic);
+            var capDiagnostic = AppendDiagnostic(DispatchProcessRecoveryService.BuildRecoveryDiagnostic(capDecision), capEvidenceDiagnostic);
             outcome = BuildCompletedProcessOutcome(
                 kernel,
                 goalId,
@@ -1076,8 +1004,13 @@ public sealed class BackgroundDispatchRunner
             return true;
         }
 
-        var retryDecision = WithAction(DispatchRecoveryAction.RetryStale, recoveryDecision, recoveryDecision.Reason);
-        var diagnostic = AppendDiagnostic(BuildRecoveryDiagnostic(retryDecision), evidenceDiagnostic);
+        var retryDecision = DispatchProcessRecoveryService.WithAction(
+            DispatchRecoveryAction.RetryStale,
+            recoveryDecision,
+            recoveryDecision.Reason);
+        var diagnostic = AppendDiagnostic(
+            DispatchProcessRecoveryService.BuildRecoveryDiagnostic(retryDecision),
+            evidenceDiagnostic);
         outcome = BuildCompletedProcessOutcome(
             kernel,
             goalId,
@@ -1218,10 +1151,10 @@ public sealed class BackgroundDispatchRunner
         string? finalPlannerRejectionDiagnostic = null;
         var hasChildExitRecord = TryReadChildExitRecord(processRecord.ChildExitRecordPath, out var childExitRecord);
         var wrapperExitReconciled = false;
-        var resourceAccounting = capturedResourceAccounting ?? ReleaseTrackedProcessJobs(processRecord);
+        var resourceAccounting = capturedResourceAccounting ?? _recoveryService.ReleaseTrackedProcessJobs(processRecord);
         if (resourceAccounting is not null &&
             !resourceAccounting.Reaped &&
-            IsDispatchHostReapCompletion(decisionStandardError))
+            DispatchProcessRecoveryService.IsDispatchHostReapCompletion(decisionStandardError))
         {
             resourceAccounting = resourceAccounting with { Reaped = true };
         }
@@ -1628,7 +1561,7 @@ public sealed class BackgroundDispatchRunner
             finalPlannerRejectionDiagnostic);
         if (!exitArtifactAlreadyExisted)
         {
-            TryWriteExitCode(
+            _recoveryService.TryWriteExitCode(
                 processRecord.ExitCodePath,
                 exitCode,
                 recoveryDecision is null
@@ -1654,7 +1587,7 @@ public sealed class BackgroundDispatchRunner
             : null;
 
         // Worker-self-reported stdout bytes from the heartbeat — a flush-race-proof signal of real output.
-        var heartbeatStdoutBytes = TryReadHeartbeat(GetHeartbeatPath(processRecord), out var completionHeartbeat)
+        var heartbeatStdoutBytes = _recoveryService.TryReadHeartbeat(GetHeartbeatPath(processRecord), out var completionHeartbeat)
             ? completionHeartbeat.StandardOutputBytes
             : (long?)null;
 
@@ -1810,7 +1743,7 @@ public sealed class BackgroundDispatchRunner
         string hungDiagnostic,
         DispatchRecoveryDecision recoveryDecision)
     {
-        var resourceAccounting = ReapTrackedProcessJobs(processRecord, waitForExit: true);
+        var resourceAccounting = _recoveryService.ReapTrackedProcessJobs(processRecord, waitForExit: true);
         var exitCode = 1;
         var completionDiagnostic = hungDiagnostic;
 
@@ -1831,7 +1764,10 @@ public sealed class BackgroundDispatchRunner
             processRecord,
             exitCode,
             completionDiagnostic,
-            WithAction(DispatchRecoveryAction.Reap, recoveryDecision, completionDiagnostic),
+            DispatchProcessRecoveryService.WithAction(
+                DispatchRecoveryAction.Reap,
+                recoveryDecision,
+                completionDiagnostic),
             resourceAccounting);
     }
 
@@ -1845,8 +1781,8 @@ public sealed class BackgroundDispatchRunner
         DispatchRecoveryAction recoveryAction,
         DispatchRecoveryDecision recoveryDecision)
     {
-        var resourceAccounting = ReapTrackedProcessJobs(processRecord, waitForExit: true);
-        var exitRead = ReadExitCodeWithRetry(processRecord.ExitCodePath);
+        var resourceAccounting = _recoveryService.ReapTrackedProcessJobs(processRecord, waitForExit: true);
+        var exitRead = _recoveryService.ReadExitCodeWithRetry(processRecord.ExitCodePath);
         var exitCode = exitRead.Kind == ExitCodeReadKind.Valid
             ? exitRead.ExitCode!.Value
             : 1;
@@ -1873,7 +1809,7 @@ public sealed class BackgroundDispatchRunner
             processRecord,
             exitCode,
             completionDiagnostic,
-            WithAction(recoveryAction, recoveryDecision, completionDiagnostic),
+            DispatchProcessRecoveryService.WithAction(recoveryAction, recoveryDecision, completionDiagnostic),
             resourceAccounting,
             orchestratorFailureReason);
     }
@@ -1892,7 +1828,7 @@ public sealed class BackgroundDispatchRunner
         var standardError = ReadProcessLogBestEffort(processRecord, processRecord.StandardErrorPath).DecisionText;
         var hasPopulatedStandardOutput =
             SafeFileLength(processRecord.StandardOutputPath) > 0L ||
-            (TryReadHeartbeat(GetHeartbeatPath(processRecord), out var heartbeat) &&
+            (_recoveryService.TryReadHeartbeat(GetHeartbeatPath(processRecord), out var heartbeat) &&
              heartbeat.StandardOutputBytes > 0L);
         var hasSuccessfulWorkerResult = _completionClassifier.HasSuccessfulWorkerResult(
             processRecord.WorkingDirectory,
@@ -2280,8 +2216,8 @@ public sealed class BackgroundDispatchRunner
         {
             if (bypassTrackedJobRegistry)
             {
-                resourceAccounting = SnapshotTrackedProcessAccounting(processRecord);
-                TryKillTrackedProcesses(processRecord, waitForExit: true, bypassTrackedJobRegistry: true);
+                resourceAccounting = _recoveryService.SnapshotTrackedProcessAccounting(processRecord);
+                _recoveryService.TryKillTrackedProcesses(processRecord, waitForExit: true, bypassTrackedJobRegistry: true);
                 if (resourceAccounting is not null)
                 {
                     resourceAccounting = resourceAccounting with { Reaped = true };
@@ -2291,7 +2227,7 @@ public sealed class BackgroundDispatchRunner
             {
                 try
                 {
-                    resourceAccounting = ReapTrackedProcessJobs(processRecord, waitForExit: true);
+                    resourceAccounting = _recoveryService.ReapTrackedProcessJobs(processRecord, waitForExit: true);
                 }
                 catch (ArgumentException)
                 {
@@ -2302,7 +2238,7 @@ public sealed class BackgroundDispatchRunner
 
         if (!bypassTrackedJobRegistry)
         {
-            resourceAccounting ??= ReleaseTrackedProcessJobs(processRecord);
+            resourceAccounting ??= _recoveryService.ReleaseTrackedProcessJobs(processRecord);
         }
         var cancelled = processRecord with
         {
@@ -2421,7 +2357,7 @@ public sealed class BackgroundDispatchRunner
                          detachedFailure.ProcessId,
                          detachedFailure.StartedAt)) &&
                     task.LastVerification?.WorkerResultPresent != true &&
-                    !AnyTrackedProcessStillRunning(detachedFailure))
+                    !_recoveryService.AnyTrackedProcessStillRunning(detachedFailure))
                 {
                     EvictProcessLogCache(detachedFailure);
                     recovered += TryAutoRequeue(
@@ -2439,7 +2375,7 @@ public sealed class BackgroundDispatchRunner
                 if (task.Status != WorkTaskStatus.Running ||
                     task.LastProcess is not { IsRunning: true } process ||
                     ReadExitCode(process.ExitCodePath).Kind != ExitCodeReadKind.Missing ||
-                    AnyTrackedProcessStillRunning(process))
+                    _recoveryService.AnyTrackedProcessStillRunning(process))
                 {
                     continue;
                 }
@@ -3412,277 +3348,8 @@ public sealed class BackgroundDispatchRunner
             evt.Message.Contains("TaskOutputCommitted", StringComparison.Ordinal));
     }
 
-    private bool TryDetectHungCodexWrapper(TaskSpec task, TaskProcessRecord processRecord, out string diagnostic)
-    {
-        diagnostic = string.Empty;
-        if (!UsesCodexExitFileBehavior(task.LastDispatch) || File.Exists(processRecord.ExitCodePath))
-        {
-            return false;
-        }
-
-        var lastOutputAt = GetLastOutputWriteTime(processRecord);
-        var idleFor = _clock.UtcNow - lastOutputAt;
-        if (idleFor < _postOutputIdleTimeout)
-        {
-            return false;
-        }
-
-        var standardOutput = ReadProcessLogBestEffort(processRecord, processRecord.StandardOutputPath);
-        var standardError = ReadProcessLogBestEffort(processRecord, processRecord.StandardErrorPath);
-        if (!standardOutput.FinalOutputSeen && !standardError.FinalOutputSeen)
-        {
-            return false;
-        }
-        diagnostic = $"Background dispatch wrapper appears hung after codex final output; no exit file was written after {FormatDuration(idleFor)} of idle logs. Marking dispatch failed with captured stdout/stderr evidence.";
-        return true;
-    }
-
-    private bool TryDetectHungSubscriptionWrapper(TaskSpec task, TaskProcessRecord processRecord, out string diagnostic)
-    {
-        diagnostic = string.Empty;
-        // Codex dispatches have their own output-content detector; skip them here.
-        if (UsesCodexExitFileBehavior(task.LastDispatch) || File.Exists(processRecord.ExitCodePath))
-        {
-            return false;
-        }
-
-        if (!TryReadHeartbeat(GetHeartbeatPath(processRecord), out var heartbeat))
-        {
-            return false;
-        }
-
-        // A null childPid means the worker process has exited. Combined with a stalled
-        // progress heartbeat and no exit file, this is the hung-wrapper signature:
-        // the worker finished but a grandchild inherited the pipe and blocked the drain.
-        if (heartbeat.ChildProcessId is not null)
-        {
-            return false;
-        }
-
-        var idleFor = _clock.UtcNow - heartbeat.LastProgressAt;
-        if (idleFor < _postOutputIdleTimeout)
-        {
-            return false;
-        }
-
-        diagnostic =
-            $"Background dispatch wrapper appears hung with stalled heartbeat for {FormatDuration(idleFor)}; no exit file was written. " +
-            "Marking dispatch based on role completion evidence.";
-        return true;
-    }
-
-    private bool TryDetectStartupHang(
-        TaskProcessRecord processRecord,
-        out string diagnostic)
-    {
-        diagnostic = string.Empty;
-        if (File.Exists(processRecord.ExitCodePath) ||
-            !TryReadHeartbeat(GetHeartbeatPath(processRecord), out var heartbeat))
-        {
-            return false;
-        }
-
-        // Treat as a startup-hang ONLY if the tool process was never invoked. Any positive sign the
-        // tool launched and ran rules it out, however long it then idles: API-bound CLI workers
-        // (claude/codex in -p/exec mode) burn a brief startup CPU burst then wait at near-zero local
-        // CPU on the provider with output buffered, so a healthy worker's cumulative CPU stays low.
-        // The "tool was invoked" signals are a live child process, a startup CPU burst above the
-        // bare-wrapper baseline, or any produced output.
-        var hasLiveChild = heartbeat.ChildProcessId is not null;
-        var consumedStartupBurst = (heartbeat.OwnedCpuMs ?? 0L) > CpuStartupBurstMs;
-        var producedOutput = heartbeat.StandardOutputBytes + heartbeat.StandardErrorBytes > 0L;
-        if (hasLiveChild || consumedStartupBurst || producedOutput)
-        {
-            return false;
-        }
-
-        var aliveFor = _clock.UtcNow - processRecord.StartedAt;
-        if (aliveFor < _startupHangTimeout)
-        {
-            return false;
-        }
-
-        diagnostic =
-            $"Background dispatch never launched its tool process: childPid=null, " +
-            $"ownedCpuMs={heartbeat.OwnedCpuMs}, stdout_bytes={heartbeat.StandardOutputBytes}, " +
-            $"stderr_bytes={heartbeat.StandardErrorBytes}, alive_for={FormatDuration(aliveFor)}, " +
-            $"startup_hang_timeout={FormatDuration(_startupHangTimeout)}. " +
-            "No child process, startup CPU burst, or output since start; process tree killed and dispatch marked failed.";
-        return true;
-    }
-
-    private bool TryDetectProbableProgressStall(
-        TaskSpec task,
-        GoalId goalId,
-        TaskProcessRecord processRecord,
-        out string diagnostic)
-    {
-        diagnostic = string.Empty;
-        if (File.Exists(processRecord.ExitCodePath) ||
-            !TryReadHeartbeat(GetHeartbeatPath(processRecord), out var heartbeat))
-        {
-            return false;
-        }
-
-        var idleFor = _clock.UtcNow - heartbeat.LastProgressAt;
-        if (idleFor < _progressStallTimeout)
-        {
-            return false;
-        }
-
-        if (RequiresFileChangeEvidence(task) &&
-            task.LastDispatch is { } dispatch &&
-            TryInspectGoalWorktree(processRecord.WorkingDirectory, goalId, dispatch.DispatchedAt, out var wt) &&
-            (wt.HasCommitAfterDispatch || !wt.IsClean))
-        {
-            return false;
-        }
-
-        var observedFor = _clock.UtcNow - heartbeat.LastObservedAt;
-        diagnostic =
-            "Background dispatch made no observable progress before the stall timeout; " +
-            $"wrapper heartbeat state={heartbeat.State}, pid={heartbeat.ProcessId}, child_pid={heartbeat.ChildProcessId?.ToString() ?? "unknown"}, " +
-            $"stdout_bytes={heartbeat.StandardOutputBytes}, stderr_bytes={heartbeat.StandardErrorBytes}, " +
-            $"last_progress={heartbeat.LastProgressAt:u}, last_observed={heartbeat.LastObservedAt:u}, " +
-            $"idle_for={FormatDuration(idleFor)}, heartbeat_age={FormatDuration(observedFor)}. " +
-            "Wrapper process reaped and dispatch marked failed with captured stdout/stderr evidence.";
-        return true;
-    }
-
-    internal static string GetHeartbeatPath(TaskProcessRecord processRecord)
-    {
-        const string exitSuffix = ".exit.txt";
-        var directory = Path.GetDirectoryName(processRecord.ExitCodePath) ?? string.Empty;
-        var fileName = Path.GetFileName(processRecord.ExitCodePath);
-        return fileName.EndsWith(exitSuffix, StringComparison.OrdinalIgnoreCase)
-            ? Path.Combine(directory, fileName[..^exitSuffix.Length] + ".heartbeat.json")
-            : processRecord.ExitCodePath + ".heartbeat.json";
-    }
-
-    private static bool TryReadHeartbeat(string path, out DispatchHeartbeat heartbeat)
-    {
-        heartbeat = DispatchHeartbeat.Empty;
-        if (!File.Exists(path))
-        {
-            return false;
-        }
-
-        try
-        {
-            using var stream = new FileStream(path, FileMode.Open, FileAccess.Read, FileShare.ReadWrite | FileShare.Delete);
-            using var document = JsonDocument.Parse(stream);
-            var root = document.RootElement;
-            if (!TryGetDateTimeOffset(root, "lastObservedAt", out var lastObservedAt) ||
-                !TryGetDateTimeOffset(root, "lastProgressAt", out var lastProgressAt))
-            {
-                return false;
-            }
-
-            heartbeat = new DispatchHeartbeat(
-                GetInt32(root, "pid"),
-                GetNullableInt32(root, "childPid"),
-                GetString(root, "state"),
-                lastObservedAt,
-                lastProgressAt,
-                GetInt64(root, "stdoutBytes"),
-                GetInt64(root, "stderrBytes"),
-                GetNullableInt64(root, "ownedCpuMs"),
-                GetInt32Array(root, "ownedPids"),
-                GetNullableString(root, "providerSessionId"),
-                GetNullableString(root, "worktreeHeadSha"),
-                GetNullableString(root, "dirtyStateHash"));
-            return true;
-        }
-        catch (IOException)
-        {
-            return false;
-        }
-        catch (UnauthorizedAccessException)
-        {
-            return false;
-        }
-        catch (JsonException)
-        {
-            return false;
-        }
-    }
-
-    private static bool TryGetDateTimeOffset(JsonElement root, string propertyName, out DateTimeOffset value)
-    {
-        value = default;
-        return root.TryGetProperty(propertyName, out var property) &&
-            property.ValueKind == JsonValueKind.String &&
-            DateTimeOffset.TryParse(property.GetString(), out value);
-    }
-
-    private static string GetString(JsonElement root, string propertyName)
-    {
-        return root.TryGetProperty(propertyName, out var property) && property.ValueKind == JsonValueKind.String
-            ? property.GetString() ?? "unknown"
-            : "unknown";
-    }
-
-    private static string? GetNullableString(JsonElement root, string propertyName)
-    {
-        return root.TryGetProperty(propertyName, out var property) &&
-            property.ValueKind == JsonValueKind.String &&
-            !string.IsNullOrWhiteSpace(property.GetString())
-            ? property.GetString()
-            : null;
-    }
-
-    private static int GetInt32(JsonElement root, string propertyName)
-    {
-        return root.TryGetProperty(propertyName, out var property) && property.TryGetInt32(out var value)
-            ? value
-            : 0;
-    }
-
-    private static int? GetNullableInt32(JsonElement root, string propertyName)
-    {
-        if (!root.TryGetProperty(propertyName, out var property) || property.ValueKind == JsonValueKind.Null)
-        {
-            return null;
-        }
-
-        return property.TryGetInt32(out var value) ? value : null;
-    }
-
-    private static long GetInt64(JsonElement root, string propertyName)
-    {
-        return root.TryGetProperty(propertyName, out var property) && property.TryGetInt64(out var value)
-            ? value
-            : 0;
-    }
-
-    private static long? GetNullableInt64(JsonElement root, string propertyName)
-    {
-        if (!root.TryGetProperty(propertyName, out var property) || property.ValueKind == JsonValueKind.Null)
-        {
-            return null;
-        }
-
-        return property.TryGetInt64(out var value) ? value : null;
-    }
-
-    private static List<int> GetInt32Array(JsonElement root, string propertyName)
-    {
-        if (!root.TryGetProperty(propertyName, out var property) || property.ValueKind != JsonValueKind.Array)
-        {
-            return [];
-        }
-
-        var values = new List<int>();
-        foreach (var item in property.EnumerateArray())
-        {
-            if (item.ValueKind == JsonValueKind.Number && item.TryGetInt32(out var value))
-            {
-                values.Add(value);
-            }
-        }
-
-        return values;
-    }
+    internal static string GetHeartbeatPath(TaskProcessRecord processRecord) =>
+        DispatchProcessRecoveryService.GetHeartbeatPath(processRecord);
 
     private bool UsesCodexExitFileBehavior(TaskDispatchRecord? dispatch) =>
         dispatch is not null && ResolveWorkerProvider(dispatch).Identity.UsesCodexExitFileBehavior;
@@ -3733,314 +3400,6 @@ public sealed class BackgroundDispatchRunner
         return string.IsNullOrWhiteSpace(normalized) ? "none" : normalized;
     }
 
-    private static string BuildRecoveryDiagnostic(DispatchRecoveryDecision? decision)
-    {
-        if (decision is null)
-        {
-            return string.Empty;
-        }
-
-        var blocker = string.IsNullOrWhiteSpace(decision.Blocker)
-            ? string.Empty
-            : $" blocker='{decision.Blocker}'";
-        return $"Dispatch recovery policy action='{decision.ActionName}' evidence='{decision.EvidencePath}' reason='{decision.Reason}'{blocker}.";
-    }
-
-    private static DispatchRecoveryDecision WithAction(
-        DispatchRecoveryAction action,
-        DispatchRecoveryDecision basis,
-        string reason) =>
-        new(
-            action,
-            DispatchRecoveryPolicy.ToActionName(action),
-            basis.EvidencePath,
-            string.IsNullOrWhiteSpace(reason) ? basis.Reason : reason,
-            basis.Blocker);
-
-    private static bool IsAuthoritativeHold(DispatchRecoveryDecision decision) =>
-        decision.Action == DispatchRecoveryAction.Hold &&
-        (decision.Reason.Contains("recent heartbeat", StringComparison.OrdinalIgnoreCase) ||
-         decision.Reason.Contains("CPU activity", StringComparison.OrdinalIgnoreCase) ||
-         decision.Reason.Contains("output progress", StringComparison.OrdinalIgnoreCase));
-
-    private DateTimeOffset GetLastOutputWriteTime(TaskProcessRecord processRecord)
-    {
-        var newest = processRecord.StartedAt;
-        foreach (var path in new[] { processRecord.StandardOutputPath, processRecord.StandardErrorPath })
-        {
-            if (!File.Exists(path))
-            {
-                continue;
-            }
-
-            var lastWrite = new DateTimeOffset(File.GetLastWriteTimeUtc(path), TimeSpan.Zero);
-            if (lastWrite > newest)
-            {
-                newest = lastWrite;
-            }
-        }
-
-        return newest;
-    }
-
-    private static string FormatDuration(TimeSpan duration)
-    {
-        return duration < TimeSpan.Zero
-            ? TimeSpan.Zero.ToString("c")
-            : duration.ToString("c");
-    }
-
-    private static void TryWriteExitCode(
-        string path,
-        int exitCode,
-        string reason = "orchestrator synthesized dispatch outcome")
-    {
-        try
-        {
-            DispatchExitArtifacts.Write(
-                path,
-                DispatchExitArtifacts.Synthetic(exitCode, reason, DateTimeOffset.UtcNow));
-        }
-        catch (IOException)
-        {
-        }
-        catch (UnauthorizedAccessException)
-        {
-        }
-    }
-
-    private bool AnyTrackedProcessStillRunning(TaskProcessRecord processRecord)
-    {
-        return processRecord.TrackedProcessIds.Any(_isStillRunning);
-    }
-
-    private bool AnyObservedProcessStillRunning(TaskProcessRecord processRecord, DispatchHeartbeat? heartbeat)
-    {
-        return GetObservedProcessIds(processRecord, heartbeat).Any(_isStillRunning);
-    }
-
-    private bool AnyOwnedWorkerProcessStillRunning(TaskProcessRecord processRecord, DispatchHeartbeat? heartbeat)
-    {
-        return GetOwnedWorkerProcessIds(processRecord, heartbeat).Any(_isStillRunning);
-    }
-
-    private static IReadOnlyList<int> GetObservedProcessIds(TaskProcessRecord processRecord, DispatchHeartbeat? heartbeat)
-    {
-        var processIds = new HashSet<int>(processRecord.TrackedProcessIds.Where(pid => pid > 0));
-        if (heartbeat is not null)
-        {
-            if (heartbeat.ChildProcessId is > 0)
-            {
-                processIds.Add(heartbeat.ChildProcessId.Value);
-            }
-
-            if (heartbeat.OwnedProcessIds is { Count: > 0 })
-            {
-                foreach (var processId in heartbeat.OwnedProcessIds)
-                {
-                    if (processId > 0)
-                    {
-                        processIds.Add(processId);
-                    }
-                }
-            }
-        }
-
-        return processIds.ToArray();
-    }
-
-    private static IReadOnlyList<int> GetOwnedWorkerProcessIds(TaskProcessRecord processRecord, DispatchHeartbeat? heartbeat)
-    {
-        var processIds = new HashSet<int>();
-        if (processRecord.OwnedProcessIds is { Count: > 0 })
-        {
-            foreach (var processId in processRecord.OwnedProcessIds)
-            {
-                if (processId > 0)
-                {
-                    processIds.Add(processId);
-                }
-            }
-        }
-
-        if (heartbeat is not null)
-        {
-            if (heartbeat.ProcessId > 0)
-            {
-                processIds.Add(heartbeat.ProcessId);
-            }
-
-            if (heartbeat.ChildProcessId is > 0)
-            {
-                processIds.Add(heartbeat.ChildProcessId.Value);
-            }
-
-            if (heartbeat.OwnedProcessIds is { Count: > 0 })
-            {
-                foreach (var processId in heartbeat.OwnedProcessIds)
-                {
-                    if (processId > 0)
-                    {
-                        processIds.Add(processId);
-                    }
-                }
-            }
-        }
-
-        return processIds.ToArray();
-    }
-
-    private void TryKillTrackedProcesses(
-        TaskProcessRecord processRecord,
-        bool waitForExit,
-        bool bypassTrackedJobRegistry = false)
-    {
-        foreach (var processId in processRecord.TrackedProcessIds.Distinct())
-        {
-            if (bypassTrackedJobRegistry)
-            {
-                WorkerProcessJobs.TryKillOrFallbackWithoutRegistry(processId);
-            }
-            else
-            {
-                _tryKillOwnedProcess(processId);
-            }
-            if (!waitForExit)
-            {
-                continue;
-            }
-
-            var deadline = DateTimeOffset.UtcNow.AddSeconds(5);
-            while (_isStillRunning(processId) && DateTimeOffset.UtcNow < deadline)
-            {
-                Thread.Sleep(100);
-            }
-        }
-    }
-
-    private static TaskProcessResourceAccounting? ReleaseTrackedProcessJobs(TaskProcessRecord processRecord)
-    {
-        var preReleaseSnapshot = SnapshotTrackedProcessAccounting(processRecord);
-        long cpuMilliseconds = 0;
-        long peakMemoryBytes = 0;
-        long ioBytes = 0;
-        var capturedAny = false;
-        var accountingSource = "live";
-
-        foreach (var processId in processRecord.TrackedProcessIds.Distinct())
-        {
-            WorkerProcessJobs.Release(processId, out var accounting);
-            if (accounting is null)
-            {
-                continue;
-            }
-
-            cpuMilliseconds = SaturatingAdd(cpuMilliseconds, accounting.CpuMilliseconds);
-            peakMemoryBytes = Math.Max(peakMemoryBytes, accounting.PeakMemoryBytes);
-            ioBytes = SaturatingAdd(ioBytes, accounting.IoBytes);
-            accountingSource = capturedAny
-                ? MergeAccountingSource(accountingSource, accounting.AccountingSource)
-                : accounting.AccountingSource;
-            capturedAny = true;
-        }
-
-        return capturedAny
-            ? new TaskProcessResourceAccounting(cpuMilliseconds, peakMemoryBytes, ioBytes, AccountingSource: accountingSource)
-            : preReleaseSnapshot;
-    }
-
-    private TaskProcessResourceAccounting? ReapTrackedProcessJobs(TaskProcessRecord processRecord, bool waitForExit)
-    {
-        var preReapSnapshot = SnapshotTrackedProcessAccounting(processRecord);
-        TaskProcessResourceAccounting? jobAccounting = null;
-        foreach (var processId in processRecord.TrackedProcessIds.Distinct())
-        {
-            WorkerProcessJobs.Reap(processId, waitForExit ? WaitForTrackedProcessExit : null, out var accounting);
-            if (accounting is not null)
-            {
-                jobAccounting = MergeResourceAccounting(
-                    jobAccounting,
-                    new TaskProcessResourceAccounting(
-                        accounting.CpuMilliseconds,
-                        accounting.PeakMemoryBytes,
-                        accounting.IoBytes,
-                        Reaped: true,
-                        AccountingSource: accounting.AccountingSource));
-                continue;
-            }
-
-            _tryKillOwnedProcess(processId);
-            if (waitForExit)
-            {
-                WaitForTrackedProcessExit(processId);
-            }
-        }
-
-        return jobAccounting ?? (preReapSnapshot is null ? null : preReapSnapshot with { Reaped = true });
-    }
-
-    private static TaskProcessResourceAccounting? SnapshotTrackedProcessAccounting(TaskProcessRecord processRecord)
-    {
-        if (!TryReadHeartbeat(GetHeartbeatPath(processRecord), out var heartbeat))
-        {
-            return null;
-        }
-
-        var peakMemoryBytes = 0L;
-        foreach (var processId in processRecord.TrackedProcessIds.Distinct())
-        {
-            try
-            {
-                using var process = Process.GetProcessById(processId);
-                if (process.HasExited)
-                {
-                    continue;
-                }
-
-                peakMemoryBytes = Math.Max(peakMemoryBytes, Math.Max(process.WorkingSet64, process.PeakWorkingSet64));
-            }
-            catch (ArgumentException)
-            {
-            }
-            catch (InvalidOperationException)
-            {
-            }
-        }
-
-        if (heartbeat.OwnedCpuMs is null && peakMemoryBytes <= 0)
-        {
-            return null;
-        }
-
-        return new TaskProcessResourceAccounting(
-            Math.Max(0L, heartbeat.OwnedCpuMs ?? 0L),
-            peakMemoryBytes,
-            0L,
-            AccountingSource: "snapshot");
-    }
-
-    private static TaskProcessResourceAccounting? MergeResourceAccounting(
-        TaskProcessResourceAccounting? left,
-        TaskProcessResourceAccounting? right)
-    {
-        if (left is null)
-        {
-            return right;
-        }
-
-        if (right is null)
-        {
-            return left;
-        }
-
-        return new TaskProcessResourceAccounting(
-            Math.Max(left.CpuMilliseconds, right.CpuMilliseconds),
-            Math.Max(left.PeakMemoryBytes, right.PeakMemoryBytes),
-            Math.Max(left.IoBytes, right.IoBytes),
-            left.Reaped || right.Reaped,
-            MergeAccountingSource(left.AccountingSource, right.AccountingSource));
-    }
-
     private static bool TryKillProcess(int processId)
     {
         return WorkerProcessJobs.TryKillOrFallback(processId);
@@ -4051,48 +3410,6 @@ public sealed class BackgroundDispatchRunner
         TaskId taskId,
         TaskProcessResourceAccounting accounting) =>
         $"RESOURCE goal={goalId.Value[..8]} task={taskId.Value[..8]} cpu_ms={accounting.CpuMilliseconds} peak_mem_bytes={accounting.PeakMemoryBytes} io_bytes={accounting.IoBytes} accounting_source={accounting.AccountingSource}{(accounting.Reaped ? " reaped=true" : string.Empty)}";
-
-    private void WaitForTrackedProcessExit(int processId)
-    {
-        var deadline = DateTimeOffset.UtcNow.AddSeconds(5);
-        while (_isStillRunning(processId) && DateTimeOffset.UtcNow < deadline)
-        {
-            Thread.Sleep(100);
-        }
-    }
-
-    private static string MergeAccountingSource(string left, string right)
-    {
-        if (string.Equals(left, right, StringComparison.Ordinal))
-        {
-            return left;
-        }
-
-        if (string.Equals(left, "snapshot", StringComparison.Ordinal))
-        {
-            return right;
-        }
-
-        if (string.Equals(right, "snapshot", StringComparison.Ordinal))
-        {
-            return left;
-        }
-
-        return "mixed";
-    }
-
-    private static bool IsDispatchHostReapCompletion(string standardError) =>
-        standardError.Contains("[dispatch-host] terminating worker tree:", StringComparison.Ordinal);
-
-    private static long SaturatingAdd(long left, long right)
-    {
-        if (left < 0 || right < 0)
-        {
-            return Math.Max(left, right);
-        }
-
-        return long.MaxValue - left < right ? long.MaxValue : left + right;
-    }
 
     // The detached dispatch host is the App's __dispatch-run subcommand. The App assembly sits next
     // to this Infrastructure assembly in every run context (the App output dir in production; the
@@ -4105,111 +3422,6 @@ public sealed class BackgroundDispatchRunner
     private static bool IsLocalDispatch(TaskDispatchRecord dispatch)
     {
         return dispatch.WorkerName.Equals("local", StringComparison.OrdinalIgnoreCase);
-    }
-
-    private void TryWriteDiagnosticRecord(
-        GoalId goalId,
-        TaskId taskId,
-        TaskSpec task,
-        TaskProcessRecord processRecord,
-        int exitCode,
-        string standardOutput,
-        string standardError)
-    {
-        try
-        {
-            const string exitSuffix = ".exit.txt";
-            var fn = Path.GetFileName(processRecord.ExitCodePath);
-            var prefix = fn.EndsWith(exitSuffix, StringComparison.OrdinalIgnoreCase)
-                ? fn[..^exitSuffix.Length]
-                : fn;
-
-            var outputPath = processRecord.StandardOutputPath;
-            var fileExists = File.Exists(outputPath);
-            var fileLen = fileExists ? new FileInfo(outputPath).Length : 0L;
-            var readLen = (long)standardOutput.Length;
-            var stderrPath = processRecord.StandardErrorPath;
-            var stderrLen = File.Exists(stderrPath) ? new FileInfo(stderrPath).Length : 0L;
-
-            var classification = ClassifyDispatch(
-                exitCode, fileLen, readLen, stderrLen, standardOutput, standardError, out var reason);
-
-            var dispatchState = new DispatchStateSurface(_clock, _isStillRunning).Evaluate(goalId, task);
-
-            var record = new DispatchDiagnosticRecord(
-                goalId.Value,
-                taskId.Value,
-                prefix,
-                exitCode,
-                outputPath,
-                fileExists,
-                fileLen,
-                readLen,
-                stderrLen,
-                classification,
-                reason,
-                _clock.UtcNow.ToString("O"),
-                dispatchState);
-
-            _diagnosticWriter.WriteRecord(record);
-        }
-        catch (Exception ex)
-        {
-            System.Diagnostics.Debug.WriteLine($"[DispatchDiagnostic] Failed to record dispatch diagnostic: {ex.Message}");
-        }
-    }
-
-    private static string ClassifyDispatch(
-        int exitCode,
-        long fileLen,
-        long readLen,
-        long stderrLen,
-        string standardOutput,
-        string standardError,
-        out string reason)
-    {
-        if (exitCode == 0 && fileLen > 0)
-        {
-            reason = $"exit 0 with {fileLen} bytes in output file";
-            return "success";
-        }
-
-        if (exitCode != 0 && ProviderLimitEvidenceParser.TryGetEvidenceLine(
-                standardOutput,
-                standardError,
-                out var providerLimitEvidence))
-        {
-            reason = $"provider limit evidence: {providerLimitEvidence}";
-            return "rate-limited";
-        }
-
-        if (exitCode != 0 && fileLen == 0 && readLen == 0 && stderrLen == 0)
-        {
-            reason = "root exited non-zero with zero bytes on both redirected streams";
-            return "launch-failure";
-        }
-
-        reason = exitCode == 0
-            ? $"exit 0; fileLen={fileLen}; readLen={readLen}"
-            : $"exit {exitCode}; fileLen={fileLen}; readLen={readLen}; stderrLen={stderrLen}";
-        return exitCode == 0 ? "success" : "failed";
-    }
-
-    private sealed record DispatchHeartbeat(
-        int ProcessId,
-        int? ChildProcessId,
-        string State,
-        DateTimeOffset LastObservedAt,
-        DateTimeOffset LastProgressAt,
-        long StandardOutputBytes,
-        long StandardErrorBytes,
-        long? OwnedCpuMs = null,
-        IReadOnlyList<int>? OwnedProcessIds = null,
-        string? ProviderSessionId = null,
-        string? WorktreeHeadSha = null,
-        string? DirtyStateHash = null)
-    {
-        public static DispatchHeartbeat Empty { get; } = new(0, null, "unknown", DateTimeOffset.MinValue, DateTimeOffset.MinValue, 0, 0);
     }
 
     private sealed record GoalWorktreeInspectionResult(

@@ -40,11 +40,14 @@ internal sealed class ConductorBatchLoop
     // guaranteed turn, and tick 3 is the first bypass. A waiter with a live attempt is
     // excluded by the selector; admission on the threshold tick sets the served guard.
     internal const int ParallelAcceptanceOldestWaiterStallTickThreshold = 3;
-    // Parallel-acceptance WIDTH: how many landing-acceptance gates may run concurrently.
-    // Bounded by build concurrency because every running gate holds a build slot; the
-    // slot-exhaustion / second-attempt-yields tests encode this capacity-2 semantics.
-    internal const int DefaultParallelAcceptanceCapacity =
-        DotnetBuildEnvironmentManager.BuildConcurrencySlotCount;
+    // Parallel-acceptance WIDTH governs logical, per-tick landing-gate admission. BuildConcurrencySlotCount
+    // separately governs isolated build environments and their OS file-lock permits, which a gate holds only
+    // for its shared prebuild. Both defaults remain 2 by current tuning, not by derivation. Before raising width,
+    // measure intermittent acceptance-gate failures per attempt stratified by peak concurrent gate count, plus
+    // p95 Verified-to-gate-start time and peak CPU, working set, and disk-queue depth; widen the slot-heartbeat
+    // enumeration first if width will exceed build slots. The maximum rejects corrupt overrides, not endorses 4.
+    internal const int DefaultParallelAcceptanceCapacity = 2;
+    internal const int MaxParallelAcceptanceCapacity = 4;
     // Paid-worker ADMISSION pool that the gate-slot reservation (ConductorDriver worker-cap)
     // draws from. Deliberately INDEPENDENT of build concurrency / acceptance width: coding
     // workers do not hold build slots. On the 47.9-GiB operator host, a reviewed paid-worker
@@ -2647,8 +2650,8 @@ internal sealed class ConductorBatchLoop
         List<string> changedGoalLines,
         HashSet<GoalId> changedGoalIds)
     {
-        var trustedHostSlotCount = DefaultParallelAcceptanceCapacity;
-        if (trustedHostSlotCount < 2)
+        var configuredAcceptanceWidth = DefaultParallelAcceptanceCapacity;
+        if (configuredAcceptanceWidth < 2)
         {
             return new Dictionary<string, ParallelLandingOutcome>(StringComparer.Ordinal);
         }
@@ -2985,10 +2988,10 @@ internal sealed class ConductorBatchLoop
             try
             {
                 acceptanceSlotCount = driver.GetAcceptanceSlotCount(goal);
-                if (acceptanceSlotCount is < 1 || acceptanceSlotCount > trustedHostSlotCount)
+                if (acceptanceSlotCount is < 1 || acceptanceSlotCount > MaxParallelAcceptanceCapacity)
                 {
                     throw new InvalidDataException(
-                        $"Acceptance slot count must be between 1 and the trusted host maximum {trustedHostSlotCount}.");
+                        $"Acceptance slot count {acceptanceSlotCount} must be between 1 and maximum {MaxParallelAcceptanceCapacity}.");
                 }
             }
             catch (Exception ex)
@@ -2997,7 +3000,7 @@ internal sealed class ConductorBatchLoop
                     driver.EscalateParallelLandingAcceptance(
                         goal,
                         policy,
-                        $"invalid parallel acceptance slot settings: {Sanitize(ex.Message)}"),
+                        $"invalid parallel acceptance slot settings: {SanitizeReason(ex.Message)}"),
                     null);
                 RecordParallelAcceptanceProgress(
                     $"ADMISSION tick={tick} result=escalated reason=parallel-acceptance-slot-settings goal={goal.Id.Value[..8]} detail={Sanitize(ex.Message)}",
@@ -3088,18 +3091,6 @@ internal sealed class ConductorBatchLoop
                         changedGoalLines);
                 }
 
-                continue;
-            }
-
-            if (activeCandidates.Count >= trustedHostSlotCount)
-            {
-                deferredByAdmission++;
-                results[goal.Id.Value] = new ParallelLandingOutcome(
-                    ParallelAcceptanceHeld(
-                        candidate,
-                        policy,
-                        "parallel acceptance slot cap reached; retry on next conduct tick"),
-                    null);
                 continue;
             }
 
@@ -3293,7 +3284,7 @@ internal sealed class ConductorBatchLoop
         if (deferredByAdmission > 0)
         {
             RecordParallelAcceptanceProgress(
-                $"ADMISSION tick={tick} result=deferred reason=parallel-acceptance-slot-cap cap={trustedHostSlotCount} deferred={deferredByAdmission}",
+                $"ADMISSION tick={tick} result=deferred reason=parallel-acceptance-slot-cap cap={configuredAcceptanceWidth} deferred={deferredByAdmission}",
                 changedGoalLines);
         }
 

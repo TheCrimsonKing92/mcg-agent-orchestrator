@@ -57,18 +57,19 @@ internal static class FocusedEvidenceSiblingClassResolver
             .Distinct(StringComparer.OrdinalIgnoreCase)
             .ToArray();
         var requestedSimpleName = normalizedRequestedClass.Split('.').Last();
-        var declaringFiles = new List<CompilationUnitSyntax>();
+        var sourcePaths = Directory
+            .EnumerateFiles(projectDirectory, "*.cs", SearchOption.AllDirectories)
+            .Where(path =>
+                !HasGeneratedPathSegment(path) &&
+                !nestedProjectDirectories.Any(directory => IsWithinDirectory(path, directory)))
+            .ToArray();
+        var requestedDeclarations = new List<TypeDeclarationSyntax>();
 
         // Deliberately mirrors GoalAcceptanceVerifier's source-discovery mechanism without
-        // changing that verifier: resolve one declaring file, then inspect only that file.
-        foreach (var path in Directory.EnumerateFiles(projectDirectory, "*.cs", SearchOption.AllDirectories))
+        // changing that verifier: resolve one declaration, then inspect its file and any
+        // concrete test descendants of an abstract base declared beside it.
+        foreach (var path in sourcePaths)
         {
-            if (HasGeneratedPathSegment(path) ||
-                nestedProjectDirectories.Any(directory => IsWithinDirectory(path, directory)))
-            {
-                continue;
-            }
-
             var source = File.ReadAllText(path);
             if (!source.Contains(requestedSimpleName, StringComparison.Ordinal))
             {
@@ -83,28 +84,102 @@ internal static class FocusedEvidenceSiblingClassResolver
             }
 
             var root = syntaxTree.GetCompilationUnitRoot();
-            if (root.DescendantNodes()
+            requestedDeclarations.AddRange(root.DescendantNodes()
                 .OfType<TypeDeclarationSyntax>()
-                .Any(declaration => IsTopLevel(declaration) && TypeMatches(declaration, normalizedRequestedClass)))
-            {
-                declaringFiles.Add(root);
-            }
+                .Where(declaration => IsTopLevel(declaration) && TypeMatches(declaration, normalizedRequestedClass)));
         }
 
-        if (declaringFiles.Count != 1)
+        if (requestedDeclarations.Count != 1)
         {
             return [];
         }
 
-        return declaringFiles[0]
-            .DescendantNodes()
+        var requestedDeclaration = requestedDeclarations[0];
+        var declaringRoot = requestedDeclaration.SyntaxTree.GetCompilationUnitRoot();
+        var familyBaseNames = requestedDeclaration.BaseList?.Types
+            .Select(SimpleTypeName)
+            .Where(baseName => declaringRoot.DescendantNodes()
+                .OfType<ClassDeclarationSyntax>()
+                .Any(declaration =>
+                    IsTopLevel(declaration) &&
+                    declaration.Identifier.ValueText.Equals(baseName, StringComparison.Ordinal) &&
+                    declaration.Modifiers.Any(modifier =>
+                        modifier.RawKind == (int)SyntaxKind.AbstractKeyword)))
+            .ToHashSet(StringComparer.Ordinal) ?? [];
+        var sourceRoots = new List<CompilationUnitSyntax> { declaringRoot };
+        if (familyBaseNames.Count > 0)
+        {
+            foreach (var path in sourcePaths.Where(path =>
+                         !path.Equals(declaringRoot.SyntaxTree.FilePath, StringComparison.OrdinalIgnoreCase)))
+            {
+                var syntaxTree = CSharpSyntaxTree.ParseText(File.ReadAllText(path), path: path);
+                if (!syntaxTree.GetDiagnostics().Any(diagnostic =>
+                        diagnostic.Severity == Microsoft.CodeAnalysis.DiagnosticSeverity.Error))
+                {
+                    sourceRoots.Add(syntaxTree.GetCompilationUnitRoot());
+                }
+            }
+        }
+
+        var classDeclarationsByName = sourceRoots
+            .SelectMany(root => root.DescendantNodes().OfType<ClassDeclarationSyntax>())
+            .Where(IsTopLevel)
+            .GroupBy(declaration => declaration.Identifier.ValueText, StringComparer.Ordinal)
+            .ToDictionary(group => group.Key, group => group.ToArray(), StringComparer.Ordinal);
+
+        return sourceRoots
+            .SelectMany(root => root.DescendantNodes())
             .OfType<TypeDeclarationSyntax>()
             .Where(IsQualifyingTestClass)
             .Where(declaration => !TypeMatches(declaration, normalizedRequestedClass))
+            .Where(declaration =>
+                declaration.SyntaxTree == declaringRoot.SyntaxTree ||
+                DerivesFromFamily(declaration, familyBaseNames, classDeclarationsByName, []))
             .Select(declaration => declaration.Identifier.ValueText)
             .Distinct(StringComparer.Ordinal)
             .Order(StringComparer.Ordinal)
             .ToArray();
+    }
+
+    private static bool DerivesFromFamily(
+        TypeDeclarationSyntax declaration,
+        IReadOnlySet<string> familyBaseNames,
+        IReadOnlyDictionary<string, ClassDeclarationSyntax[]> classDeclarationsByName,
+        HashSet<string> visited)
+    {
+        foreach (var baseName in declaration.BaseList?.Types.Select(SimpleTypeName) ?? [])
+        {
+            if (familyBaseNames.Contains(baseName))
+            {
+                return true;
+            }
+
+            if (!visited.Add(baseName) ||
+                !classDeclarationsByName.TryGetValue(baseName, out var baseDeclarations) ||
+                baseDeclarations.Length != 1)
+            {
+                continue;
+            }
+
+            if (DerivesFromFamily(baseDeclarations[0], familyBaseNames, classDeclarationsByName, visited))
+            {
+                return true;
+            }
+        }
+
+        return false;
+    }
+
+    private static string SimpleTypeName(BaseTypeSyntax baseType)
+    {
+        var name = baseType.Type.ToString();
+        var genericStart = name.IndexOf('<');
+        if (genericStart >= 0)
+        {
+            name = name[..genericStart];
+        }
+
+        return name.Split('.').Last().Split("::").Last();
     }
 
     private static bool IsQualifyingTestClass(TypeDeclarationSyntax declaration)

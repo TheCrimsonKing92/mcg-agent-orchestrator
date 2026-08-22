@@ -78,7 +78,7 @@ public sealed class FocusedEvidenceSiblingClassResolverTests
             "tests/Mcg.AgentOrchestrator.Infrastructure.Tests/Mcg.AgentOrchestrator.Infrastructure.Tests.csproj",
             "GoalAcceptanceVerifierTests");
 
-        Assert.Contains("GoalAcceptanceVerifierDotnetBuildSlotTests", siblings);
+        Assert.Contains("GoalAcceptanceVerifierDotnetBuildSlotTestsGateHeartbeat", siblings);
         Assert.Contains("RealProcessShardAlphaSmokeTests", siblings);
         Assert.DoesNotContain("GoalAcceptanceVerifierTestBase", siblings);
         Assert.DoesNotContain("RecordingTimeProvider", siblings);
