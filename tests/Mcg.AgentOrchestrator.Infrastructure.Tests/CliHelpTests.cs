@@ -716,6 +716,35 @@ public sealed class CliHelpTests
         }
     }
 
+    [Xunit.Fact(DisplayName = "Cli_generic_vocabulary_accepts_flags_declared_outside_cli_source_tree")]
+    public void CliGenericVocabularyAcceptsFlagsDeclaredOutsideCliSourceTree()
+    {
+        var dashboardCommands = new[]
+        {
+            "prototype-ui", "serve-dashboard", "hosted-dashboard", "simple-hosted-dashboard", "open-dashboard"
+        };
+        var dashboardFlags = new[] { "--refresh", "--lan", "--open", "--no-open" };
+
+        foreach (var command in dashboardCommands)
+        {
+            foreach (var flag in dashboardFlags)
+            {
+                var exception = Xunit.Record.Exception(() =>
+                    CliCommandHelp.ThrowIfInvalidFlags([command, flag, "value"]));
+                Xunit.Assert.True(exception is null, $"{command} {flag} was rejected: {exception?.Message}");
+            }
+        }
+
+        foreach (var command in new[] { "run", "api-run" })
+        {
+            var exception = Xunit.Record.Exception(() => CliCommandHelp.ThrowIfInvalidFlags(
+                [command, "--confirm-paid-api-run", "--confirm-large-paid-api-prompt"]));
+            Xunit.Assert.True(
+                exception is null,
+                $"{command} paid API confirmation flags were rejected: {exception?.Message}");
+        }
+    }
+
     [Xunit.Fact(DisplayName = "Cli_inline_goal_values_and_leading_dash_filter_are_accepted")]
     public void CliInlineGoalValuesAndLeadingDashFilterAreAccepted()
     {
