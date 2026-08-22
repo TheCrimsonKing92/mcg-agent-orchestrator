@@ -889,10 +889,11 @@ public static class WorkerProcessJobs
             }
         }
 
+        var fallbackOwnedTempRoots = TempRootJanitor.SnapshotOwnedRoots([processId]);
         var fallbackKilled = TryKillPidTree(processId);
         if (fallbackKilled)
         {
-            _ = ReapOwnedTempRoots([processId]);
+            _ = ReapOwnedTempRoots(fallbackOwnedTempRoots);
         }
         if (fallbackKilled && markRegistryReleased)
         {
@@ -1071,7 +1072,7 @@ public static class WorkerProcessJobs
 
         try
         {
-            var ownedProcessIds = SnapshotOwnedProcessIds(job.Group);
+            var ownedTempRoots = SnapshotOwnedTempRoots(job.Group);
             try
             {
                 job.Group.Kill();
@@ -1086,7 +1087,7 @@ public static class WorkerProcessJobs
             {
                 OwnedProcessGroup.WaitForJobExit(job.DuplicateAccountingHandle, TimeSpan.FromSeconds(5));
             }
-            _ = ReapOwnedTempRoots(ownedProcessIds);
+            _ = ReapOwnedTempRoots(ownedTempRoots);
 
             if (job.DuplicateAccountingHandle is not null &&
                 OwnedProcessGroup.TryReadAccounting(job.DuplicateAccountingHandle, out var duplicateAccounting))
@@ -1119,7 +1120,7 @@ public static class WorkerProcessJobs
             return !kill;
         }
 
-        var ownedProcessIds = kill ? SnapshotOwnedProcessIds(job.Group) : [];
+        var ownedTempRoots = kill ? SnapshotOwnedTempRoots(job.Group) : [];
 
         try
         {
@@ -1164,7 +1165,7 @@ public static class WorkerProcessJobs
                     OwnedProcessGroup.WaitForJobExit(job.DuplicateAccountingHandle, TimeSpan.FromSeconds(5));
                 }
 
-                _ = ReapOwnedTempRoots(ownedProcessIds);
+                _ = ReapOwnedTempRoots(ownedTempRoots);
             }
 
             killed = true;
@@ -1197,12 +1198,20 @@ public static class WorkerProcessJobs
         }
     }
 
+    private static IReadOnlyList<TempRootJanitorOwnedRoot> SnapshotOwnedTempRoots(
+        OwnedProcessGroup group) =>
+        TempRootJanitor.SnapshotOwnedRoots(SnapshotOwnedProcessIds(group));
+
     internal static IReadOnlyList<TempRootJanitorDeleteResult> ReapOwnedTempRoots(
         IEnumerable<int> processIds,
         IEnumerable<string>? sharedRoots = null) =>
         sharedRoots is null
             ? TempRootJanitor.ReapOwnedRoots(processIds)
             : TempRootJanitor.ReapOwnedRoots(processIds, sharedRoots);
+
+    internal static IReadOnlyList<TempRootJanitorDeleteResult> ReapOwnedTempRoots(
+        IEnumerable<TempRootJanitorOwnedRoot> ownedRoots) =>
+        TempRootJanitor.ReapOwnedRoots(ownedRoots);
 
     private static bool TryDetachAndDispose(RegisteredJob job)
     {

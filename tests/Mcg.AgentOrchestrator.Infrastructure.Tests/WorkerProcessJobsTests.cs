@@ -55,6 +55,41 @@ public sealed class WorkerProcessJobsTests : IDisposable
         }
     }
 
+    [Xunit.Fact(DisplayName = "WorkerProcessJobs_supervisor_cleanup_captures_and_reaps_test_tmp_fallback_root")]
+    public void WorkerProcessJobsSupervisorCleanupCapturesAndReapsTestTmpFallbackRoot()
+    {
+        if (!OperatingSystem.IsWindows())
+        {
+            return;
+        }
+
+        var appBase = Path.Combine(Path.GetTempPath(), $"worker-fallback-reap-{Guid.NewGuid():N}");
+        var processId = int.MaxValue;
+        var sharedRoot = Path.Combine(appBase, ".test-tmp");
+        var ownedRoot = TempRootJanitor.BuildOwnedRootPath(sharedRoot, processId);
+        Directory.CreateDirectory(ownedRoot);
+        try
+        {
+            var captured = Assert.Single(
+                TempRootJanitor.SnapshotOwnedRoots(
+                    [processId],
+                    _ => Path.Combine(appBase, "testhost.exe")),
+                root => string.Equals(
+                    root.SharedRoot,
+                    sharedRoot,
+                    StringComparison.OrdinalIgnoreCase));
+
+            var result = Assert.Single(WorkerProcessJobs.ReapOwnedTempRoots([captured]));
+
+            Assert.Equal(TempRootJanitorDeleteStatus.Deleted, result.Status);
+            Assert.False(Directory.Exists(ownedRoot));
+        }
+        finally
+        {
+            _ = TempRootJanitor.DeleteTree(appBase);
+        }
+    }
+
     [Xunit.Fact(DisplayName = "WorkerProcessJobs_startup_sweep_retains_worker_owned_by_live_process")]
     public void WorkerProcessJobsStartupSweepRetainsWorkerOwnedByLiveProcess()
     {

@@ -14,6 +14,8 @@ internal sealed record TempRootJanitorDeleteResult(
     string? FailurePath,
     int ReadOnlyAttributesCleared);
 
+internal sealed record TempRootJanitorOwnedRoot(int ProcessId, string SharedRoot);
+
 /// <summary>
 /// Removes the process-owned test roots whose names encode the owning process id.
 /// </summary>
@@ -32,7 +34,7 @@ internal static class TempRootJanitor
         DeleteTree(BuildOwnedRootPath(sharedRoot, processId));
 
     internal static IReadOnlyList<TempRootJanitorDeleteResult> ReapOwnedRoots(IEnumerable<int> processIds) =>
-        ReapOwnedRoots(processIds, EnumerateSharedRoots());
+        ReapOwnedRoots(SnapshotOwnedRoots(processIds));
 
     internal static IReadOnlyList<TempRootJanitorDeleteResult> ReapOwnedRoots(
         IEnumerable<int> processIds,
@@ -40,6 +42,64 @@ internal static class TempRootJanitor
     {
         ArgumentNullException.ThrowIfNull(processIds);
         ArgumentNullException.ThrowIfNull(sharedRoots);
+
+        var roots = sharedRoots.ToArray();
+        return ReapOwnedRoots(
+            processIds.SelectMany(processId =>
+                roots.Select(sharedRoot => new TempRootJanitorOwnedRoot(processId, sharedRoot))));
+    }
+
+    internal static IReadOnlyList<TempRootJanitorOwnedRoot> SnapshotOwnedRoots(
+        IEnumerable<int> processIds) =>
+        SnapshotOwnedRoots(processIds, TryGetProcessImagePath);
+
+    internal static IReadOnlyList<TempRootJanitorOwnedRoot> SnapshotOwnedRoots(
+        IEnumerable<int> processIds,
+        Func<int, string?> processImagePath)
+    {
+        ArgumentNullException.ThrowIfNull(processIds);
+        ArgumentNullException.ThrowIfNull(processImagePath);
+
+        var ownedRoots = new List<TempRootJanitorOwnedRoot>();
+        var standardRoots = EnumerateStandardSharedRoots()
+            .Distinct(StringComparer.OrdinalIgnoreCase)
+            .ToArray();
+        foreach (var processId in processIds.Where(processId => processId > 0).Distinct())
+        {
+            ownedRoots.AddRange(standardRoots.Select(sharedRoot =>
+                new TempRootJanitorOwnedRoot(processId, sharedRoot)));
+
+            try
+            {
+                var imagePath = processImagePath(processId);
+                var baseDirectory = string.IsNullOrWhiteSpace(imagePath)
+                    ? null
+                    : Path.GetDirectoryName(imagePath);
+                if (!string.IsNullOrWhiteSpace(baseDirectory))
+                {
+                    ownedRoots.Add(new TempRootJanitorOwnedRoot(
+                        processId,
+                        Path.Combine(baseDirectory, ".test-tmp")));
+                }
+            }
+            catch
+            {
+                // A process can exit while its image path is being captured. The standard shared root
+                // remains available, and a later test-host startup remains the fallback-root backstop.
+            }
+        }
+
+        return ownedRoots
+            .DistinctBy(
+                ownedRoot => $"{ownedRoot.ProcessId}:{ownedRoot.SharedRoot}",
+                StringComparer.OrdinalIgnoreCase)
+            .ToArray();
+    }
+
+    internal static IReadOnlyList<TempRootJanitorDeleteResult> ReapOwnedRoots(
+        IEnumerable<TempRootJanitorOwnedRoot> ownedRoots)
+    {
+        ArgumentNullException.ThrowIfNull(ownedRoots);
 
         var results = new List<TempRootJanitorDeleteResult>();
         try
@@ -49,23 +109,14 @@ internal static class TempRootJanitor
                 return results;
             }
 
-            var ids = processIds.Where(processId => processId > 0).Distinct().ToArray();
-            if (ids.Length == 0)
+            foreach (var ownedRoot in ownedRoots)
             {
-                return results;
-            }
-
-            foreach (var sharedRoot in sharedRoots.Distinct(StringComparer.OrdinalIgnoreCase))
-            {
-                if (!Directory.Exists(sharedRoot))
+                if (ownedRoot.ProcessId <= 0 || !Directory.Exists(ownedRoot.SharedRoot))
                 {
                     continue;
                 }
 
-                foreach (var processId in ids)
-                {
-                    results.Add(ReapOwnedRoot(sharedRoot, processId));
-                }
+                results.Add(ReapOwnedRoot(ownedRoot.SharedRoot, ownedRoot.ProcessId));
             }
         }
         catch
@@ -178,7 +229,7 @@ internal static class TempRootJanitor
         return root;
     }
 
-    private static IEnumerable<string> EnumerateSharedRoots()
+    private static IEnumerable<string> EnumerateStandardSharedRoots()
     {
         foreach (var localAppData in new[]
                  {
@@ -190,6 +241,19 @@ internal static class TempRootJanitor
             {
                 yield return Path.Combine(localAppData, "Temp", "Low", OwnedRootParentName);
             }
+        }
+    }
+
+    private static string? TryGetProcessImagePath(int processId)
+    {
+        try
+        {
+            using var process = System.Diagnostics.Process.GetProcessById(processId);
+            return process.MainModule?.FileName;
+        }
+        catch
+        {
+            return null;
         }
     }
 

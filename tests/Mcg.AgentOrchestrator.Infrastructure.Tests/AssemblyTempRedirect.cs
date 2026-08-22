@@ -92,17 +92,21 @@ internal static class AssemblyTempRedirect
     internal static IReadOnlyList<string> SelectRootsBeyondRetention(
         IEnumerable<string> siblingDirectoryNames,
         int currentProcessId,
+        Func<int, bool> isProcessAlive,
         Func<string, DateTime> lastWriteUtc,
         int retainedRoots)
     {
         ArgumentNullException.ThrowIfNull(siblingDirectoryNames);
+        ArgumentNullException.ThrowIfNull(isProcessAlive);
         ArgumentNullException.ThrowIfNull(lastWriteUtc);
         ArgumentOutOfRangeException.ThrowIfNegative(retainedRoots);
 
         var owned = new List<(string Name, DateTime LastWriteUtc)>();
         foreach (var name in siblingDirectoryNames)
         {
-            if (!TryParseProcessTempRootName(name, out var processId) || processId == currentProcessId)
+            if (!TryParseProcessTempRootName(name, out var processId) ||
+                processId == currentProcessId ||
+                isProcessAlive(processId))
             {
                 continue;
             }
@@ -208,6 +212,7 @@ internal static class AssemblyTempRedirect
             var beyondRetention = SelectRootsBeyondRetention(
                 siblings,
                 Environment.ProcessId,
+                livePids.Contains,
                 name => Directory.GetLastWriteTimeUtc(Path.Combine(sharedRoot, name)),
                 RetainedOrphanRoots);
             phaseClock.Stop();

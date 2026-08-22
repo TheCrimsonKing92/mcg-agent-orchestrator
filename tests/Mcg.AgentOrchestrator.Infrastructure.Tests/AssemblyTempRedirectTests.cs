@@ -267,6 +267,7 @@ public sealed class AssemblyTempRedirectTests
         var overflow = AssemblyTempRedirect.SelectRootsBeyondRetention(
             names,
             currentProcessId: 0x30,
+            isProcessAlive: _ => false,
             lastWriteUtc: name => writes[name],
             retainedRoots: reserve);
 
@@ -281,10 +282,24 @@ public sealed class AssemblyTempRedirectTests
         var overflow = AssemblyTempRedirect.SelectRootsBeyondRetention(
             ["p30", "p31"],
             currentProcessId: 0x30,
+            isProcessAlive: _ => false,
             lastWriteUtc: _ => DateTime.UnixEpoch,
             retainedRoots: 0);
 
         Assert.Equal(["p31"], overflow);
+    }
+
+    [Fact(DisplayName = "Retention sweep never removes roots owned by other live processes")]
+    public void RetentionSweepNeverRemovesOtherLiveProcessRoots()
+    {
+        var overflow = AssemblyTempRedirect.SelectRootsBeyondRetention(
+            ["p30", "p31", "p32"],
+            currentProcessId: 0x30,
+            isProcessAlive: processId => processId == 0x31,
+            lastWriteUtc: name => name == "p31" ? DateTime.UnixEpoch : DateTime.UnixEpoch.AddSeconds(1),
+            retainedRoots: 0);
+
+        Assert.Equal(["p32"], overflow);
     }
 
     [Fact(DisplayName = "Reaper never removes the current process root even if reported dead")]
