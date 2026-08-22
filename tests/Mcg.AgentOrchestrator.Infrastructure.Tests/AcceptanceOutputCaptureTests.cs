@@ -8,7 +8,7 @@ using System.Text.Json.Nodes;
 using System.Xml.Linq;
 
 [Xunit.Collection(TestCollections.GoalAcceptanceVerifier)]
-public sealed class AcceptanceOutputCaptureTests
+public sealed class AcceptanceOutputCaptureTests : GoalAcceptanceVerifierTestBase
 {
     [Xunit.Fact]
     public void AcceptanceProcessUsesOwnedStartCompatibleCaptureTransport()

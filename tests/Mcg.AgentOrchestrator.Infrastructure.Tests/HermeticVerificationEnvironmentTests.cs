@@ -8,7 +8,7 @@ using System.Text.Json.Nodes;
 using System.Xml.Linq;
 
 [Xunit.Collection(TestCollections.GoalAcceptanceVerifier)]
-public sealed class HermeticVerificationEnvironmentTests
+public sealed class HermeticVerificationEnvironmentTests : GoalAcceptanceVerifierTestBase
 {
     [Xunit.Fact(DisplayName = "GoalAcceptanceVerifier_constructs_allow_list_env_so_the_gate_verdict_is_hermetic")]
     public void GoalAcceptanceVerifierConstructsAllowListEnvSoTheGateVerdictIsHermetic()

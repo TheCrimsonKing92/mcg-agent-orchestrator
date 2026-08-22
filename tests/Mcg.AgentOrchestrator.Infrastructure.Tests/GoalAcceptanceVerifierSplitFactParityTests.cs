@@ -1,7 +1,6 @@
 using System.Reflection;
 using System.Text.RegularExpressions;
 
-[Xunit.Collection(TestCollections.GoalAcceptanceVerifier)]
 public sealed class GoalAcceptanceVerifierSplitFactParityTests
 {
     private const string OriginalBuildSlotClass = nameof(GoalAcceptanceVerifierDotnetBuildSlotTests);

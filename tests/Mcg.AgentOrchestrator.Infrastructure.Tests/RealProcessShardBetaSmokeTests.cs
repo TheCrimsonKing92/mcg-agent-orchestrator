@@ -8,7 +8,7 @@ using System.Text.Json.Nodes;
 using System.Xml.Linq;
 
 [Xunit.Collection(TestCollections.JobAccounting)]
-public sealed class RealProcessShardBetaSmokeTests
+public sealed class RealProcessShardBetaSmokeTests : GoalAcceptanceVerifierTestBase
 {
     [Xunit.Fact]
     public Task SynchronizesWithAlphaShard() =>

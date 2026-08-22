@@ -102,7 +102,9 @@ focused evidence, concurrent scheduling, and verdict caching grew into independe
 was written. Every build-slot-derived fragment and both real-process smoke classes retain the serial
 `JobAccounting` collection; the non-process classes retain `GoalAcceptanceVerifier`. The manifest's literal
 `GoalAcceptanceVerifierDotnetBuildSlotTests` lane token still matches every prefixed fragment, and the
-full-shard behavior is unchanged: no hard-coded trigger exists to narrow.
+full-shard behavior is unchanged: no hard-coded trigger exists to narrow. Extracted classes share the local
+abstract verifier test base so focused-evidence sibling expansion can follow that family across files; the
+source/reflection-only parity guard is collection-free because it mutates no shared state.
 
 ### Cross-reference
 
