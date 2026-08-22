@@ -109,7 +109,8 @@ public sealed class ConductorBatchLoopTestsFaultIsolationEligibility : Conductor
             isVerificationGateSatisfied: _ => true);
 
         var summary = new ConductorBatchLoop(
-            reapGoalRunningDispatches: (_, reaped) => reapedGoalIds.Add(reaped.Id)).Run(
+            reapGoalRunningDispatches: (_, reaped) => reapedGoalIds.Add(reaped.Id),
+            detachGoalRunningDispatches: (_, _) => { }).Run(
                 kernel,
                 driver,
                 ConductorAutonomyPolicy.Conservative,
