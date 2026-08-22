@@ -84,10 +84,22 @@ public sealed class WorkerDispatchBuildEvidenceClassificationTests : WorkerDispa
     {
         var root = CreateSeededDispatchRepository();
         var clock = new TestClock(DateTimeOffset.Parse("2026-08-22T12:00:00Z"));
+        var reviewerResult = WorkerResultBlock(
+            "none",
+            "reviewed candidate",
+            "deferred - acceptance gate owns tests")
+            .Replace(
+                "END_WORKER_RESULT",
+                "findings: []\n" +
+                "touched_anchors: []\n" +
+                "criteria_verdicts: []\n" +
+                "verdict: pass\n" +
+                "END_WORKER_RESULT",
+                StringComparison.Ordinal);
         var (kernel, goal, task, _) = CreateCompletedGoalWorktreeDispatch(
             root,
             AgentRole.Reviewer,
-            WorkerResultBlock("none", "reviewed candidate", "deferred - acceptance gate owns tests"),
+            reviewerResult,
             string.Empty,
             clock);
 
