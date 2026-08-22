@@ -69,6 +69,28 @@ public sealed class SliceBatchAdmissionTests
     }
 
     [Xunit.Fact]
+    public void PreviouslyDispatchedCollidingSiblings_UseStableTieBreakWithoutMutualHold()
+    {
+        var (kernel, first, second) = CreateBatch(
+            "Change src/Mcg.AgentOrchestrator.Core/Application/AlphaService.cs.",
+            "Change src/Mcg.AgentOrchestrator.Core/Application/BetaService.cs.");
+        RecordPreviousProcess(kernel, first, 101);
+        RecordPreviousProcess(kernel, second, 102);
+        var ordered = new[] { first, second }
+            .OrderBy(goal => goal.Id.Value, StringComparer.Ordinal)
+            .ToArray();
+        var evaluator = CreateEvaluator(kernel);
+
+        evaluator.BeginTick();
+        var held = evaluator.Evaluate(ordered[1]);
+        var winner = evaluator.Evaluate(ordered[0]);
+
+        Xunit.Assert.False(held.IsAllowed);
+        Xunit.Assert.Contains(ordered[0].Id.Value[..8], held.Reason, StringComparison.Ordinal);
+        Xunit.Assert.True(winner.IsAllowed);
+    }
+
+    [Xunit.Fact]
     public void OrdinaryGoal_EvaluatorConfigured_SkipsSliceWork()
     {
         var kernel = new AgentOrchestratorKernel();
@@ -130,8 +152,48 @@ public sealed class SliceBatchAdmissionTests
             item.Message.Contains("UndeclaredService.cs", StringComparison.Ordinal));
     }
 
+    [Xunit.Fact]
+    public void ObservedPathReadFailure_RecordsUnavailablePolicyDecision()
+    {
+        var (kernel, first, _) = CreateBatch(
+            "Change src/Mcg.AgentOrchestrator.App/Orchestration/AlphaSlice.cs.",
+            "Change src/Mcg.AgentOrchestrator.App/Orchestration/BetaSlice.cs.");
+        var evaluator = new SliceBatchAdmissionEvaluator(
+            () => kernel.Goals,
+            _ => throw new InvalidOperationException("Synthetic changed-path read failure."),
+            kernel.RecordGoalPolicyDecision);
+
+        evaluator.BeginTick();
+        var decision = evaluator.Evaluate(first);
+
+        Xunit.Assert.True(decision.IsAllowed);
+        Xunit.Assert.Contains(first.Timeline, item =>
+            item.Kind == ProgressKind.GoalPolicyDecision &&
+            item.Message.Contains("slice-scope-observation-unavailable", StringComparison.Ordinal) &&
+            item.Message.Contains("InvalidOperationException", StringComparison.Ordinal));
+    }
+
     private static SliceBatchAdmissionEvaluator CreateEvaluator(AgentOrchestratorKernel kernel) =>
         new(() => kernel.Goals, _ => [], kernel.RecordGoalPolicyDecision);
+
+    private static void RecordPreviousProcess(AgentOrchestratorKernel kernel, Goal goal, int processId)
+    {
+        var task = goal.Tasks.Single();
+        kernel.RecordTaskDispatch(
+            goal.Id,
+            task.Id,
+            new TaskDispatchRecord("test-worker", "test.exe", "C:\\tmp", DateTimeOffset.UnixEpoch));
+        kernel.RecordTaskProcessStarted(goal.Id, task.Id, new TaskProcessRecord(
+            processId,
+            "test.exe",
+            "C:\\tmp",
+            "C:\\tmp\\stdout",
+            "C:\\tmp\\stderr",
+            "C:\\tmp\\exit",
+            DateTimeOffset.UnixEpoch,
+            DateTimeOffset.UnixEpoch.AddSeconds(1),
+            0));
+    }
 
     private static (AgentOrchestratorKernel Kernel, Goal First, Goal Second) CreateBatch(
         string firstObjective,

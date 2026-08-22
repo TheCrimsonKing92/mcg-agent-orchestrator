@@ -35,7 +35,9 @@ internal sealed class SliceBatchAdmissionEvaluator(
             .Where(goal =>
                 goal.Id != candidate.Id &&
                 goal.SliceBatchParentId == candidate.SliceBatchParentId &&
-                (_admittedThisTick.Contains(goal.Id) || goal.Tasks.Any(task => task.LastProcess is not null)));
+                (_admittedThisTick.Contains(goal.Id) ||
+                 (goal.Tasks.Any(task => task.LastProcess is not null) &&
+                  StringComparer.Ordinal.Compare(goal.Id.Value, candidate.Id.Value) < 0)));
 
         foreach (var sibling in occupyingSiblings)
         {
@@ -95,8 +97,11 @@ internal sealed class SliceBatchAdmissionEvaluator(
         {
             observed = observedChangedPathsReader(goal);
         }
-        catch
+        catch (Exception exception)
         {
+            RecordOnce(
+                goal.Id,
+                $"slice-scope-observation-unavailable goal={GoalPrefix(goal)} reason={exception.GetType().Name}");
             observed = null;
         }
 
