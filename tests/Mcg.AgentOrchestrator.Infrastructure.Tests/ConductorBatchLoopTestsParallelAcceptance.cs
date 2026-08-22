@@ -1155,7 +1155,7 @@ public sealed class ConductorBatchLoopTestsParallelAcceptance : ConductorBatchLo
             driver,
             ConductorAutonomyPolicy.Conservative,
             NoStopPath(),
-            maxIterations: 1);
+            maxIterations: 2, watchInterval: TimeSpan.FromMilliseconds(1), sleepFunc: _ => false);
 
         Assert.Equal(0, summary.Held);
         Assert.Equal(1, summary.Escalated);
