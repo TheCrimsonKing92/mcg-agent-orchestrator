@@ -743,6 +743,24 @@ public sealed class CliHelpTests
                 exception is null,
                 $"{command} paid API confirmation flags were rejected: {exception?.Message}");
         }
+
+        Xunit.Assert.Null(Xunit.Record.Exception(() =>
+            CliCommandHelp.ThrowIfInvalidFlags(["failure-triage", "--policy", "Conservative"])));
+        Xunit.Assert.Null(Xunit.Record.Exception(() =>
+            CliCommandHelp.ThrowIfInvalidFlags(["stable-slot-dotnet", "--nologo"])));
+    }
+
+    [Xunit.Theory(DisplayName = "Cli_generic_commands_reject_flags_owned_by_other_commands")]
+    [Xunit.InlineData("doctor", "--backlog-item")]
+    [Xunit.InlineData("run", "--refresh")]
+    [Xunit.InlineData("prototype-ui", "--confirm-paid-api-run")]
+    [Xunit.InlineData("durations", "--backlog-coverage")]
+    public void CliGenericCommandsRejectFlagsOwnedByOtherCommands(string command, string flag)
+    {
+        var exception = Xunit.Assert.Throws<ArgumentException>(() =>
+            CliCommandHelp.ThrowIfInvalidFlags([command, flag, "value"]));
+
+        Xunit.Assert.Contains($"Unknown option '{flag}'", exception.Message, StringComparison.Ordinal);
     }
 
     [Xunit.Fact(DisplayName = "Cli_inline_goal_values_and_leading_dash_filter_are_accepted")]

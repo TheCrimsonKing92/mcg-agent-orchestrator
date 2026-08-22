@@ -456,46 +456,125 @@ internal static class CliCommandHelp
         "Show one stored run event by sequence, including goal-less event receipt text.",
         ["--format", "--help", "-h"]);
 
-    private static readonly IReadOnlySet<string> SharedFlagVocabulary =
-        new[]
+    private static readonly IReadOnlyDictionary<string, IReadOnlySet<string>> GenericCommandFlags =
+        new Dictionary<string, IReadOnlySet<string>>(StringComparer.OrdinalIgnoreCase)
         {
-            "--actor", "--all", "--allow-git-reference", "--append-backlog", "--apply", "--apply-safe",
-            "--as", "--autonomy", "--autonomy-policy", "--backlog-coverage", "--backlog-item", "--batch-size",
-            "--before-role", "--board", "--body-file", "--brief-file", "--by-model", "--clear",
-            "--command-contains", "--committed", "--complex-model", "--conduct-loop", "--confirm-acceptance-queue",
-            "--confirm-acceptance-repair", "--confirm-acceptance-retry", "--confirm-all", "--confirm-batch-start",
-            "--confirm-build-lease-cleanup", "--confirm-dispatch-start", "--confirm-goal-abandon",
-            "--confirm-goal-drain", "--confirm-goal-mark-landed", "--confirm-goal-park", "--confirm-goal-replace",
-            "--confirm-goal-rollback", "--confirm-goal-stop", "--confirm-goal-unpark",
-            "--confirm-large-paid-api-prompt", "--confirm-large-paid-subscription-start", "--confirm-limit-review", "--confirm-paid-api-run",
-            "--confirm-paid-smoke", "--confirm-plan", "--confirm-prune", "--confirm-readiness-risk",
-            "--confirm-subscription-advance", "--create-goal", "--create-goals", "--create-simple-goal",
-            "--create-simple-goals", "--daemon", "--dashboard-url", "--depends-on", "--description", "--developer",
-            "--dispatch", "--dispatch-host", "--disposition", "--event-kind", "--filter", "--filter-class",
-            "--filter-not-class", "--first-parent", "--flat", "--follow", "--force", "--force-reclaim",
-            "--force-terminal-cleanup", "--format", "--forum-channel-id", "--from-backlog", "--from-cursor",
-            "--full", "--gate-deliverable", "--goal", "--goal-prefix", "--help", "--history", "--history-limit",
-            "--hours", "--id", "--ideation", "--idempotency-key", "--include-children", "--include-parked",
-            "--is-ancestor", "--item", "--json", "--keep-tick-rows", "--keep-workspace", "--lan", "--last",
-            "--legacy-purge-oversized-ticks", "--limit", "--locks", "--loop", "--max-duration",
-            "--max-iterations", "--mechanical", "--mode", "--name", "--newest", "--no-ansi", "--no-build",
-            "--no-open", "--no-record", "--nologo", "--on", "--once", "--open", "--operator-actor", "--operator-user-id",
-            "--operator-user-ids", "--parent-id", "--payload-max-bytes", "--pipeline", "--planner", "--policy",
-            "--poll-seconds", "--priority", "--progress", "--quiet", "--reason", "--reason-file",
-            "--refresh", "--regexp-ignore-case", "--related", "--remove", "--report-trx", "--report-trx-filename",
-            "--request-id", "--request-key", "--researcher", "--results-directory", "--reviewer", "--role",
-            "--root", "--run", "--show-acknowledged", "--simple", "--since", "--skip-verify", "--slice-batch",
-            "--spine", "--stale-days", "--stall-warning-minutes", "--stall-warning-seconds", "--status",
-            "--subscription", "--subscription-model", "--subscription-reasoning", "--supersede-answer", "--tags",
-            "--task", "--tester", "--text", "--text-file", "--tick-max-age-days", "--timeout", "--title",
-            "--unscoped-stall-ticks", "--vacuum", "--verify", "--wait-terminal", "--waive", "--watch",
-            "--watch-interval", "--working",
+            ["project"] = Flags("--root"),
+            ["provider-smoke"] = Flags("--confirm-all", "--confirm-paid-smoke"),
+            ["prototype-ui"] = DashboardFlags(),
+            ["serve-dashboard"] = DashboardFlags(),
+            ["hosted-dashboard"] = DashboardFlags(),
+            ["simple-hosted-dashboard"] = DashboardFlags(),
+            ["open-dashboard"] = DashboardFlags(),
+            ["monitor-goal"] = Flags(
+                "--event-kind", "--format", "--from-cursor", "--goal-prefix", "--once", "--since",
+                "--task", "--timeout", "--wait-terminal"),
+            ["goal-events"] = Flags("--follow"),
+            ["goal-timing"] = Flags("--all"),
+            ["dispatch-value"] = Flags("--since"),
+            ["durations"] = Flags("--by-model", "--since"),
+            ["loop-health"] = Flags("--last"),
+            ["repo-process-info"] = Flags(
+                "--command-contains", "--conduct-loop", "--dispatch-host", "--id", "--include-children",
+                "--locks", "--name", "--newest", "--parent-id"),
+            ["repo-process-stop"] = Flags("--command-contains", "--force", "--id"),
+            ["stable-slot-dotnet"] = StableSlotDotnetFlags(),
+            ["failure-triage"] = Flags("--autonomy", "--autonomy-policy", "--policy"),
+            ["build-lease-cleanup"] = Flags("--confirm-build-lease-cleanup"),
+            ["acceptance-queue"] = Flags(
+                "--apply", "--autonomy", "--autonomy-policy", "--confirm-acceptance-queue"),
+            ["drain-goals"] = Flags(
+                "--apply", "--autonomy", "--autonomy-policy", "--confirm-batch-start", "--confirm-goal-drain",
+                "--confirm-large-paid-subscription-start", "--confirm-readiness-risk"),
+            ["operator-inbox"] = Flags("--show-acknowledged"),
+            ["operator-inbox-ack"] = Flags("--goal"),
+            ["operator-channel"] = Flags(
+                "--dashboard-url", "--forum-channel-id", "--operator-user-id", "--operator-user-ids", "--spine"),
+            ["operator-control-plane"] = Flags("--hours"),
+            ["next"] = Flags("--autonomy", "--autonomy-policy", "--full"),
+            ["advance-subscription"] = Flags(
+                "--autonomy", "--autonomy-policy", "--confirm-large-paid-subscription-start",
+                "--confirm-subscription-advance"),
+            ["lifecycle-simple-goal"] = LifecycleGoalFlags(),
+            ["lifecycle-goal"] = LifecycleGoalFlags(),
+            ["goal-depends"] = Flags("--clear", "--on", "--remove"),
+            ["goal-plan"] = Flags("--backlog-coverage", "--create-goals", "--create-simple-goals"),
+            ["plan"] = Flags("--confirm-plan", "--slice-batch"),
+            ["ideate"] = Flags("--append-backlog"),
+            ["intent-template"] = Flags("--create-goal", "--create-simple-goal"),
+            ["goal-mark-landed"] = Flags("--confirm-goal-mark-landed", "--force"),
+            ["acceptance-repair"] = Flags("--confirm-acceptance-repair"),
+            ["rollback-goal"] = Flags("--confirm-goal-rollback", "--text-file"),
+            ["goal-changes"] = Flags("--all", "--committed", "--flat", "--json", "--role", "--task", "--working"),
+            ["goals-prune"] = Flags("--confirm-prune"),
+            ["task"] = GoalScopedTaskFlags(),
+            ["verification-plan"] = GoalScopedTaskFlags(),
+            ["brief"] = GoalScopedTaskFlags(),
+            ["task-timeline"] = GoalScopedTaskFlags(),
+            ["verifications"] = GoalScopedTaskFlags(),
+            ["run"] = ApiRunFlags(),
+            ["api-run"] = ApiRunFlags(),
+            ["re-delegate"] = Flags("--autonomy", "--autonomy-policy", "--goal"),
+            ["redelegate"] = Flags("--autonomy", "--autonomy-policy", "--goal"),
+            ["profile-dispatch"] = DispatchStartFlags("--confirm-dispatch-start"),
+            ["profile-dispatch-ready"] = Flags("--goal"),
+            ["subscription-dispatch-ready"] = Flags("--goal"),
+            ["cross-goal-start-plan"] = Flags("--confirm-large-paid-subscription-start"),
+            ["start-subscription-ready-goals"] = BatchStartFlags(includeGoal: false),
+            ["start-subscription-ready"] = BatchStartFlags(includeGoal: true),
+            ["execute-dispatch"] = DispatchStartFlags("--confirm-dispatch-start"),
+            ["start-dispatch"] = DispatchStartFlags("--confirm-dispatch-start"),
+            ["start-dispatches"] = BatchStartFlags(includeGoal: true),
+            ["refresh-dispatches"] = Flags("--autonomy", "--autonomy-policy", "--goal"),
+            ["logs"] = GoalScopedTaskFlags(),
+            ["cancel-dispatch"] = GoalScopedTaskFlags(),
+            ["accept"] = Flags(
+                "--autonomy", "--autonomy-policy", "--keep-workspace", "--no-record", "--skip-verify")
+        };
 
-            // stable-slot-dotnet forwards established dotnet CLI options rather than interpreting them itself.
-            "--blame", "--collect", "--configuration", "--framework", "--interactive", "--list-tests", "--logger",
-            "--no-dependencies", "--no-restore", "--output", "--property", "--runtime", "--settings", "--verbosity",
-            "-c", "-f", "-h", "-o", "-r", "-v"
-        }.ToHashSet(StringComparer.OrdinalIgnoreCase);
+    private static IReadOnlySet<string> Flags(params string[] flags) =>
+        flags.Concat(["--help", "-h"]).ToHashSet(StringComparer.OrdinalIgnoreCase);
+
+    private static IReadOnlySet<string> DashboardFlags() =>
+        Flags("--lan", "--no-open", "--open", "--refresh");
+
+    private static IReadOnlySet<string> LifecycleGoalFlags() =>
+        Flags(
+            "--autonomy", "--autonomy-policy", "--backlog-coverage", "--backlog-item", "--confirm-batch-start",
+            "--confirm-large-paid-subscription-start", "--confirm-readiness-risk");
+
+    private static IReadOnlySet<string> GoalScopedTaskFlags() => Flags("--goal");
+
+    private static IReadOnlySet<string> ApiRunFlags() =>
+        Flags(
+            "--autonomy", "--autonomy-policy", "--confirm-large-paid-api-prompt", "--confirm-paid-api-run", "--goal");
+
+    private static IReadOnlySet<string> DispatchStartFlags(string confirmationFlag) =>
+        Flags(
+            "--autonomy", "--autonomy-policy", "--confirm-large-paid-subscription-start", confirmationFlag, "--goal");
+
+    private static IReadOnlySet<string> BatchStartFlags(bool includeGoal)
+    {
+        var flags = new List<string>
+        {
+            "--autonomy", "--autonomy-policy", "--confirm-batch-start",
+            "--confirm-large-paid-subscription-start", "--confirm-readiness-risk"
+        };
+        if (includeGoal)
+        {
+            flags.Add("--goal");
+        }
+
+        return Flags([.. flags]);
+    }
+
+    private static IReadOnlySet<string> StableSlotDotnetFlags() =>
+        Flags(
+            "--blame", "--collect", "--configuration", "--filter", "--filter-class", "--filter-not-class",
+            "--framework", "--interactive", "--list-tests", "--logger", "--no-ansi", "--no-build",
+            "--no-dependencies", "--no-restore", "--nologo", "--output", "--progress", "--property", "--report-trx",
+            "--report-trx-filename", "--results-directory", "--runtime", "--settings", "--verbosity",
+            "-c", "-f", "-o", "-r", "-v");
 
     private static readonly IReadOnlySet<string> InlineValueFlags =
         new HashSet<string>(StringComparer.OrdinalIgnoreCase)
@@ -1181,7 +1260,7 @@ internal static class CliCommandHelp
         public static CommandHelpEntry Generic(string command) => new(
             $"Usage: {command} [options]",
             "Run this operator command.",
-            SharedFlagVocabulary,
+            GenericCommandFlags.TryGetValue(command, out var flags) ? flags : CliCommandHelp.Flags(),
             [],
             ValidateFlags: true);
     }
