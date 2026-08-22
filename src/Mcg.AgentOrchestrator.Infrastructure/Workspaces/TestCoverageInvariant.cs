@@ -20,7 +20,15 @@ internal sealed record TestCoverageInvariantResult(
     IReadOnlyList<string> EmptyPartitions,
     string? FailureClassification,
     IReadOnlyList<string> ExecutedTests,
-    IReadOnlyList<TestCoverageIdentityMismatch>? IdentityMismatches = null);
+    IReadOnlyList<TestCoverageIdentityMismatch>? IdentityMismatches = null,
+    TestCoverageCountComparison? CountComparison = null);
+
+internal sealed record TestCoverageCountComparison(
+    int CandidateCount,
+    int MinimumCandidateCount,
+    int MainCount,
+    int DeletedCount,
+    bool IsShortfall);
 
 internal sealed record TestCoverageIdentityMismatch(
     string Discovered,
@@ -340,6 +348,7 @@ internal static class TestCoverageInvariant
             .ToArray();
         var attributionReceipts = new List<string>();
         string? crossGenerationCountReceipt = null;
+        TestCoverageCountComparison? countComparison = null;
 
         if (mainDiscoveredTests is not null)
         {
@@ -413,7 +422,14 @@ internal static class TestCoverageInvariant
                 mainDiscoveredTests.Count - deletedMainTestCount);
             crossGenerationCountReceipt =
                 $"cross-generation-count:candidate={candidateDiscoveredTests.Count},minimum={minimumCandidateCount},main={mainDiscoveredTests.Count},deleted={deletedMainTestCount}";
-            if (candidateDiscoveredTests.Count < minimumCandidateCount)
+            var isCountShortfall = candidateDiscoveredTests.Count < minimumCandidateCount;
+            countComparison = new TestCoverageCountComparison(
+                candidateDiscoveredTests.Count,
+                minimumCandidateCount,
+                mainDiscoveredTests.Count,
+                deletedMainTestCount,
+                isCountShortfall);
+            if (isCountShortfall)
             {
                 missing.Add(crossGenerationCountReceipt);
             }
@@ -445,7 +461,8 @@ internal static class TestCoverageInvariant
             emptyPartitions,
             failureClassification,
             executedTests,
-            identityMismatches);
+            identityMismatches,
+            countComparison);
     }
 
     private static TestIdentityMatchResult MatchDiscoveredTests(
