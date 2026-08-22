@@ -96,7 +96,7 @@ public sealed class PlannerSamplingDispatchTests : WorkerDispatchTestSupport
 
         Xunit.Assert.True(task.LastVerification!.Succeeded, task.LastVerification.StandardError);
         Xunit.Assert.Null(task.LastVerification.PlannerCandidateDivergence);
-        Xunit.Assert.Equal(capturedBeforeCompletion, task.LastVerification.AuthoritativeStandardOutput);
+        Xunit.Assert.Equal(expectedPersistedOutput, task.LastVerification.AuthoritativeStandardOutput);
         Xunit.Assert.Equal(expectedPersistedOutput, File.ReadAllText(process.StandardOutputPath));
     }
 
