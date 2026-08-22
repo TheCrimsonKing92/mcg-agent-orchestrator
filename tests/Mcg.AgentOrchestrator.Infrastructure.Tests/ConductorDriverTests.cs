@@ -1793,13 +1793,10 @@ public sealed class ConductorDriverTests
     [Xunit.Fact(DisplayName = "ConductorDriver_gate_reservation_draws_from_worker_admission_not_acceptance_width")]
     public void ConductorDriverGateReservationDrawsFromWorkerAdmissionNotAcceptanceWidth()
     {
-        // Decoupling guard: parallel-acceptance WIDTH stays aligned with build concurrency (2)
-        // while the paid-worker ADMISSION pool the gate reservation draws from is independent (9).
-        // These are two distinct concepts and must not share one constant.
-        Assert.Equal(
-            DotnetBuildEnvironmentManager.BuildConcurrencySlotCount,
-            ConductorBatchLoop.DefaultParallelAcceptanceCapacity);
+        // Parallel-acceptance width, build concurrency, and paid-worker admission are independently tuned.
+        // The first two both default to 2 today, but neither derives from the other.
         Assert.Equal(2, ConductorBatchLoop.DefaultParallelAcceptanceCapacity);
+        Assert.Equal(2, DotnetBuildEnvironmentManager.BuildConcurrencySlotCount);
         Assert.Equal(9, ConductorBatchLoop.WorkerAdmissionCapacity);
         Assert.NotEqual(
             ConductorBatchLoop.DefaultParallelAcceptanceCapacity,
