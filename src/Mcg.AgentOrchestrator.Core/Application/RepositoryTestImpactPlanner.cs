@@ -327,17 +327,40 @@ public static class RepositoryTestImpactPlanner
         }
 
         var classFilters = new List<string>();
+        TestClassDeclarations? projectDeclarations = null;
         foreach (var file in changedTestSources)
         {
+            var fileName = Path.GetFileName(file.Path);
+            var baseName = Path.GetFileNameWithoutExtension(file.Path);
             var declarations = declarationReader.ReadFile(file.Path);
             if (declarations.Outcome == TestClassDeclarationOutcome.Resolved)
             {
                 classFilters.AddRange(declarations.ClassNames.Select(name => $"FullyQualifiedName~{name}"));
+
+                if (!baseName.Contains('.', StringComparison.Ordinal) &&
+                    !declarations.ClassNames.Contains(baseName, StringComparer.OrdinalIgnoreCase))
+                {
+                    projectDeclarations ??= declarationReader.ReadProject(testProjectPrefix);
+                    var stemResolves = projectDeclarations.Outcome == TestClassDeclarationOutcome.Resolved
+                        ? projectDeclarations.ClassNames.Any(name =>
+                            name.StartsWith(baseName, StringComparison.OrdinalIgnoreCase))
+                        : declarations.ClassNames.Any(name =>
+                            name.StartsWith(baseName, StringComparison.OrdinalIgnoreCase));
+                    if (stemResolves)
+                    {
+                        classFilters.Add($"FullyQualifiedName~{baseName}");
+                    }
+                    else if (projectDeclarations.Outcome != TestClassDeclarationOutcome.Resolved)
+                    {
+                        return new TestClassFilterBuildResult(
+                            null,
+                            $"Focused test selection was abandoned because the legacy selector for {fileName} could not be resolved against project declarations; run the project unfiltered.");
+                    }
+                }
+
                 continue;
             }
 
-            var fileName = Path.GetFileName(file.Path);
-            var baseName = Path.GetFileNameWithoutExtension(file.Path);
             if (declarations.Outcome == TestClassDeclarationOutcome.NoQualifyingClass)
             {
                 return new TestClassFilterBuildResult(
@@ -451,7 +474,7 @@ public static class RepositoryTestImpactPlanner
                     : derivedClassNames
                         .Where(name => projectDeclarations.ClassNames.Contains(name, StringComparer.Ordinal))
                         .ToArray();
-                if (resolvedClassNames.Length == 0)
+                if (resolvedClassNames.Length != derivedClassNames.Length)
                     return null;
 
                 var orchestrationFilters = resolvedClassNames

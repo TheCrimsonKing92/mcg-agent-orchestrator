@@ -128,6 +128,30 @@ public sealed class RepositoryTestImpactFilterResolutionTests
     }
 
     [Xunit.Fact]
+    public void DotFreeStemPreservesProjectWideLegacySelection()
+    {
+        const string path =
+            "tests/Mcg.AgentOrchestrator.Infrastructure.Tests/GoalWorktreeTests.cs";
+        var reader = new StubDeclarationReader(
+            TestClassDeclarations.Resolved([
+                "GoalWorktreeTestsAcceptanceLanding",
+                "GoalWorktreeTestsAcceptanceRetry"
+            ]),
+            TestClassDeclarations.Resolved(["GoalWorktreeTestsAcceptanceRetry"]));
+
+        var plan = RepositoryTestImpactPlanner.Plan(
+            RepositoryChangeClassifier.Classify([path]),
+            reader);
+
+        var check = Assert.Single(plan.Checks);
+        Assert.Equal("focused changed infrastructure tests", check.Name);
+        Assert.Equal(
+            "FullyQualifiedName~GoalWorktreeTestsAcceptanceRetry|" +
+            "FullyQualifiedName~GoalWorktreeTests",
+            check.Command[^1]);
+    }
+
+    [Xunit.Fact]
     public void DotFreeMultiClassFileWidensToEveryDeclaredTestClass()
     {
         const string path =
@@ -176,6 +200,8 @@ public sealed class RepositoryTestImpactFilterResolutionTests
         foreach (var projectDirectory in projectDirectories)
         {
             var absoluteProjectDirectory = Path.Combine(root, projectDirectory);
+            var projectDeclarations = reader.ReadProject(projectDirectory);
+            Assert.Equal(TestClassDeclarationOutcome.Resolved, projectDeclarations.Outcome);
             foreach (var path in Directory.EnumerateFiles(
                 absoluteProjectDirectory,
                 "*.cs",
@@ -192,6 +218,9 @@ public sealed class RepositoryTestImpactFilterResolutionTests
                 var summary = RepositoryChangeClassifier.Classify([relativePath]);
                 if (summary.RequiresBroadVerification)
                 {
+                    Assert.All(
+                        RepositoryTestImpactPlanner.Plan(summary, reader).Checks,
+                        check => Assert.DoesNotContain("--filter", check.Command));
                     continue;
                 }
 
@@ -219,12 +248,14 @@ public sealed class RepositoryTestImpactFilterResolutionTests
                     var selectedClassNames = filterTokens
                         .Select(token => token["FullyQualifiedName~".Length..])
                         .ToArray();
-                    var legacySelectedClassNames = declarations.ClassNames
+                    var legacySelectedClassNames = projectDeclarations.ClassNames
                         .Where(name => name.Contains(baseName, StringComparison.OrdinalIgnoreCase))
                         .ToArray();
                     Assert.All(
                         legacySelectedClassNames,
-                        name => Assert.Contains(name, selectedClassNames));
+                        name => Assert.Contains(
+                            selectedClassNames,
+                            selector => name.Contains(selector, StringComparison.OrdinalIgnoreCase)));
                 }
                 else
                 {
@@ -249,6 +280,24 @@ public sealed class RepositoryTestImpactFilterResolutionTests
         Assert.Equal("infrastructure tests", check.Name);
         Assert.DoesNotContain("--filter", check.Command);
         Assert.DoesNotContain("NoMatchingClassTests", check.Command);
+    }
+
+    [Xunit.Fact]
+    public void PartiallyResolvedOrchestrationConventionAbandonsFocusedFilter()
+    {
+        var reader = new StubDeclarationReader(
+            TestClassDeclarations.Resolved(["ConductorDriverTests"]));
+        var plan = RepositoryTestImpactPlanner.Plan(
+            RepositoryChangeClassifier.Classify([
+                "src/Mcg.AgentOrchestrator.App/Orchestration/ConductorDriver.cs",
+                "src/Mcg.AgentOrchestrator.App/Orchestration/LandingExecutor.cs"
+            ]),
+            reader);
+
+        var check = Assert.Single(plan.Checks);
+        Assert.Equal("infrastructure tests", check.Name);
+        Assert.DoesNotContain("--filter", check.Command);
+        Assert.DoesNotContain("ConductorDriverTests", check.Command);
     }
 
     [Xunit.Fact]
