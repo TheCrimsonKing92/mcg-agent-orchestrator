@@ -1,6 +1,9 @@
+using System.Diagnostics;
+using Mcg.AgentOrchestrator.Core;
+using Mcg.AgentOrchestrator.Core.Conductor;
 using Mcg.AgentOrchestrator.Infrastructure;
 
-public sealed class PlannerSamplingDispatchTests
+public sealed class PlannerSamplingDispatchTests : WorkerDispatchTestSupport
 {
     [Xunit.Fact]
     public void ConfiguredPlannerSampleCountProducesNCandidates()
@@ -9,35 +12,109 @@ public sealed class PlannerSamplingDispatchTests
         var primaryPath = Path.Combine(root, "planner.out.log");
         var plan = ReadPlannerFixture();
         File.WriteAllText(primaryPath, plan);
-        var artifacts = PlannerSampleDispatcher.CreateArtifacts(primaryPath, 3);
-        foreach (var sample in artifacts)
+        const int configuredSampleCount = 3;
+        var sampleCount = PlannerSamplingPolicy.EffectiveSampleCount(AgentRole.Planner, configuredSampleCount);
+        var artifacts = PlannerSampleDispatcher.CreateArtifacts(primaryPath, sampleCount);
+        var primaryParameters = CreateRunParameters(root, primaryPath);
+        var launchedProcessIds = new List<int>();
+        var launchCount = 0;
+        var launches = PlannerSampleDispatcher.StartSamples(
+            artifacts,
+            primaryParameters,
+            "dispatch-host.dll",
+            "planner-sampling-test",
+            startInfo =>
+            {
+                launchCount++;
+                var sampleParameters = DispatchProcessHost.ReadParameters(startInfo.ArgumentList.Last());
+                File.WriteAllText(
+                    sampleParameters.StdoutPath,
+                    plan + Environment.NewLine + $"<!-- launched sample {launchCount} -->");
+                DispatchExitArtifacts.Write(
+                    sampleParameters.ExitCodePath,
+                    DispatchExitArtifacts.Native(0, "test sample completed", DateTimeOffset.UtcNow));
+                var process = StartSleeper();
+                launchedProcessIds.Add(process.Id);
+                return process;
+            });
+
+        try
         {
-            File.WriteAllText(sample.StandardOutputPath, plan + Environment.NewLine + $"<!-- sample {sample.Index} -->");
-            DispatchExitArtifacts.Write(
-                sample.ExitCodePath,
-                DispatchExitArtifacts.Native(0, "test sample completed", DateTimeOffset.UtcNow));
+            Xunit.Assert.Equal(configuredSampleCount - 1, launchCount);
+            Xunit.Assert.All(launches, launch => Xunit.Assert.True(WorkerProcessJobs.HasRegisteredJob(launch.Process.Id)));
+
+            var registeredProcessIds = launches.Select(launch => launch.Process.Id).ToArray();
+            PlannerSampleDispatcher.ReleaseStartGates(launches);
+            Xunit.Assert.All(registeredProcessIds, processId => Xunit.Assert.False(WorkerProcessJobs.HasRegisteredJob(processId)));
+
+            var candidates = PlannerSampleDispatcher.CollectCandidates(primaryPath, sampleCount);
+
+            Xunit.Assert.Equal(configuredSampleCount, candidates.Count);
+            Xunit.Assert.Equal([0, 1, 2], candidates.Select(candidate => candidate.Index));
+            Xunit.Assert.All(candidates.Skip(1), candidate => Xunit.Assert.Contains("launched sample", candidate.StandardOutput));
         }
-
-        var candidates = PlannerSampleDispatcher.CollectCandidates(primaryPath, 3);
-
-        Xunit.Assert.Equal(3, candidates.Count);
-        Xunit.Assert.Equal([0, 1, 2], candidates.Select(candidate => candidate.Index));
+        finally
+        {
+            foreach (var processId in launchedProcessIds)
+                try { WorkerProcessJobs.TryKillOrFallback(processId); } catch { }
+        }
     }
 
     [Xunit.Fact]
-    public void SingleSampleBypassesSiblingArtifactsAndPreservesCapturedBytes()
+    public void SingleSampleProductionCompletionPreservesLegacyContractBytes()
+    {
+        var root = CreateSeededDispatchRepository();
+        var plan = ReadPlannerFixture();
+        var clock = new TestClock(DateTimeOffset.Parse("2026-08-22T18:00:00Z"));
+        var (kernel, goal, task, process) = CreateCompletedGoalWorktreeDispatch(
+            root,
+            AgentRole.Planner,
+            plan,
+            string.Empty,
+            clock,
+            mutateWorktree: SeedFixtureCitationTargets);
+        var capturedBeforeCompletion = File.ReadAllText(process.StandardOutputPath);
+        var legacyContract = PlannerOutputContract.Resolve(
+            capturedBeforeCompletion,
+            string.Empty,
+            process.WorkingDirectory);
+        Xunit.Assert.True(legacyContract.Succeeded, legacyContract.Diagnostic);
+        var expectedPersistedOutput = capturedBeforeCompletion + PlannerOutputContract.BuildIngestedReceipt(
+            process.StandardOutputPath,
+            legacyContract.Plan!);
+
+        new BackgroundDispatchRunner(clock, isStillRunning: _ => false)
+            .RefreshLatestProcess(kernel, goal.Id, task.Id);
+
+        Xunit.Assert.True(task.LastVerification!.Succeeded, task.LastVerification.StandardError);
+        Xunit.Assert.Null(task.LastVerification.PlannerCandidateDivergence);
+        Xunit.Assert.Equal(capturedBeforeCompletion, task.LastVerification.AuthoritativeStandardOutput);
+        Xunit.Assert.Equal(expectedPersistedOutput, File.ReadAllText(process.StandardOutputPath));
+    }
+
+    [Xunit.Fact]
+    public void UnreleasedSampleCleanupRemovesJobOwnership()
     {
         var root = CreateTempDirectory();
         var primaryPath = Path.Combine(root, "planner.out.log");
-        var plan = ReadPlannerFixture();
-        File.WriteAllText(primaryPath, plan);
+        var artifacts = PlannerSampleDispatcher.CreateArtifacts(primaryPath, 2);
+        var launches = PlannerSampleDispatcher.StartSamples(
+            artifacts,
+            CreateRunParameters(root, primaryPath),
+            "dispatch-host.dll",
+            "planner-sampling-cleanup-test",
+            _ => StartSleeper());
+        var processId = Xunit.Assert.Single(launches).Process.Id;
+        try
+        {
+            Xunit.Assert.True(WorkerProcessJobs.HasRegisteredJob(processId));
+        }
+        finally
+        {
+            PlannerSampleDispatcher.TerminateUnreleased(launches);
+        }
 
-        var artifacts = PlannerSampleDispatcher.CreateArtifacts(primaryPath, 1);
-        var candidates = PlannerSampleDispatcher.CollectCandidates(primaryPath, 1);
-
-        Xunit.Assert.Empty(artifacts);
-        Xunit.Assert.Single(candidates);
-        Xunit.Assert.Equal(PlannerOutputContract.ReadCapturedOutputTail(primaryPath), candidates[0].StandardOutput);
+        Xunit.Assert.False(WorkerProcessJobs.HasRegisteredJob(processId));
     }
 
     [Xunit.Fact]
@@ -58,10 +135,45 @@ public sealed class PlannerSamplingDispatchTests
         "tests", "Mcg.AgentOrchestrator.Infrastructure.Tests", "Fixtures", "PlannerOutputContract",
         "658501ce-f6708f44-20260805012800.out.txt"));
 
-    private static string CreateTempDirectory()
+    private static DispatchProcessHost.DispatchRunParameters CreateRunParameters(string root, string primaryPath) =>
+        new(
+            "planner-command",
+            root,
+            primaryPath,
+            Path.Combine(root, "planner.err.log"),
+            Path.Combine(root, "planner.exit.txt"),
+            Path.Combine(root, "planner.heartbeat.json"),
+            DisableSharedCompilation: true,
+            Provider: WorkerSandboxProvider.Codex);
+
+    private static Process StartSleeper()
     {
-        var path = Path.Combine(Path.GetTempPath(), "planner-sampling-" + Guid.NewGuid().ToString("N"));
-        Directory.CreateDirectory(path);
-        return path;
+        var startInfo = new ProcessStartInfo
+        {
+            FileName = WorkerShell.Executable,
+            UseShellExecute = false,
+            CreateNoWindow = true
+        }.WithArguments(WorkerShell.BaseArguments().Concat(["Start-Sleep -Seconds 30"]));
+        return Process.Start(startInfo) ?? throw new InvalidOperationException("Failed to start Planner sample test host.");
+    }
+
+    private static void SeedFixtureCitationTargets(string worktree)
+    {
+        string[] paths =
+        [
+            "src/Mcg.AgentOrchestrator.Core/Application/AgentOrchestratorKernel.InternalState.cs",
+            "src/Mcg.AgentOrchestrator.Core/Application/AgentOrchestratorKernel.Recording.cs",
+            "src/Mcg.AgentOrchestrator.Core/Application/DispatchFailureClassifier.cs",
+            "src/Mcg.AgentOrchestrator.Core/Application/ReviewerWorkerResultBlockers.cs",
+            "src/Mcg.AgentOrchestrator.Core/Reports/TaskOutcomeClassification.cs",
+            "src/Mcg.AgentOrchestrator.Core/Reports/VerificationReports.cs",
+            "src/Mcg.AgentOrchestrator.Infrastructure/Processes/BackgroundDispatchRunner.cs"
+        ];
+        foreach (var relativePath in paths)
+        {
+            var path = Path.Combine(worktree, relativePath.Replace('/', Path.DirectorySeparatorChar));
+            Directory.CreateDirectory(Path.GetDirectoryName(path)!);
+            File.WriteAllText(path, "fixture citation target");
+        }
     }
 }

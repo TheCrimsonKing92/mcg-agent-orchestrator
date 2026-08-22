@@ -160,7 +160,7 @@ internal static partial class PlannerCandidateSelector
         Whitespace().Replace(value.Trim().ToLowerInvariant(), " ");
 
     private static string Hash(string value) =>
-        Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(value))).ToLowerInvariant();
+        Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(value.ReplaceLineEndings("\n")))).ToLowerInvariant();
 
     private sealed record ResolvedCandidate(int Index, PlannerOutputContractResult Contract);
 

@@ -130,17 +130,23 @@ internal static class PlannerSampleDispatcher
                 Directory.CreateDirectory(Path.GetDirectoryName(launch.Artifacts.StartGatePath)!);
                 File.WriteAllText(launch.Artifacts.StartGatePath, "go");
             }
-            catch
+            catch (Exception ex)
             {
-                // The host fails closed if its gate cannot be released.
+                WriteLaunchDiagnostic(launch.Artifacts, $"Planner sample start gate could not be released: {ex.Message}");
+                TerminateOwned(launch.Process);
+                continue;
             }
+
+            if (!WorkerProcessJobs.TryDetachForGracefulStop(launch.Process.Id, out var failure))
+                WriteLaunchDiagnostic(launch.Artifacts, failure);
+            launch.Process.Dispose();
         }
     }
 
     internal static void TerminateUnreleased(IEnumerable<PlannerSampleLaunch> launches)
     {
         foreach (var launch in launches)
-            TryTerminate(launch.Process);
+            TerminateOwned(launch.Process);
     }
 
     private static PlannerSampleArtifacts CreateArtifactSet(string prefix, int index)
@@ -209,6 +215,13 @@ internal static class PlannerSampleDispatcher
         {
             // Launch failure remains the actionable diagnostic.
         }
+    }
+
+    private static void TerminateOwned(Process process)
+    {
+        try { WorkerProcessJobs.TryKillOrFallback(process.Id); }
+        catch { /* Cleanup is best-effort after the actionable launch/checkpoint failure. */ }
+        finally { process.Dispose(); }
     }
 
     private static void WriteLaunchDiagnostic(PlannerSampleArtifacts sample, string diagnostic)
