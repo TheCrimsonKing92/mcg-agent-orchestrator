@@ -539,14 +539,24 @@ internal sealed partial class ConductorDriver
             }
 
             AcceptanceVerificationResult verification;
+            AcceptanceAttemptCancellationDecision? cancellationDecision = null;
             try
             {
                 var gateProgressEventWriter = new ConductEventLogWriter(
                     Path.Combine(dir, ".orchestrator", "logs", ConductEventLogWriter.CurrentFileName));
                 using var progressSink = GoalAcceptanceVerifier.PushGateProgressSink(progress =>
                     AppendGateProgressEvent(gateProgressEventWriter, goal.Id, progress));
-                using var cancellationProbe = GoalAcceptanceVerifier.PushGateCancellationProbe(
-                    () => IsAcceptanceAttemptCancelled(workspace, goal.Id));
+                using var cancellationProbe = GoalAcceptanceVerifier.PushGateCancellationProbe(() =>
+                {
+                    cancellationDecision = GetAcceptanceAttemptCancellationDecision(
+                        workspace,
+                        goal.Id,
+                        attemptInvalidationRecorded: () =>
+                            _parallelAcceptanceAttemptCoordinator.TryGetLiveInvalidatedAttempt(
+                                goal.Id.Value,
+                                out _));
+                    return cancellationDecision.ShouldCancel;
+                });
                 verification = acceptanceVerifier.RunAsync(
                     worktreePath,
                     goal.Id,
@@ -593,6 +603,20 @@ internal sealed partial class ConductorDriver
                     $"Acceptance blocked:BUILD_LOCK_BLOCKED for candidate {FormatAcceptanceCandidate(branchHeadSha, mainHeadSha)}: {FormatBuildLockBlocked(ex.Attribution)}",
                     acceptanceAttemptStartedAt);
                 throw;
+            }
+            catch (OperationCanceledException ex) when (cancellationDecision?.ShouldCancel == true)
+            {
+                var decision = cancellationDecision!;
+                GoalOperationJournal.AcceptanceBlocked(
+                    dir,
+                    goal,
+                    "conductor:acceptance",
+                    "disposition-cancelled",
+                    branchHeadSha,
+                    mainHeadSha,
+                    $"Acceptance blocked:disposition-cancelled for candidate {FormatAcceptanceCandidate(branchHeadSha, mainHeadSha)}: {decision.Cause}",
+                    acceptanceAttemptStartedAt);
+                throw new AcceptanceAttemptCancelledException(decision, ex);
             }
             var unmetCriteria = verification.Checks?
                 .Where(check => !check.Passed)
@@ -4068,21 +4092,64 @@ internal sealed partial class ConductorDriver
             TryResolveAcceptanceBranchHead(candidate.Goal),
             _executionDirectory is null ? null : TryResolveGitHead(_executionDirectory));
 
-    internal static bool IsAcceptanceAttemptCancelled(OrchestratorWorkspace workspace, GoalId goalId)
+    internal static bool IsAcceptanceAttemptCancelled(
+        OrchestratorWorkspace workspace,
+        GoalId goalId,
+        Func<GoalId, GoalStatus?>? loadGoalStatus = null,
+        Func<bool>? attemptInvalidationRecorded = null) =>
+        GetAcceptanceAttemptCancellationDecision(
+            workspace,
+            goalId,
+            loadGoalStatus,
+            attemptInvalidationRecorded).ShouldCancel;
+
+    internal static AcceptanceAttemptCancellationDecision GetAcceptanceAttemptCancellationDecision(
+        OrchestratorWorkspace workspace,
+        GoalId goalId,
+        Func<GoalId, GoalStatus?>? loadGoalStatus = null,
+        Func<bool>? attemptInvalidationRecorded = null)
     {
-        try
+        var invalidated = false;
+        if (attemptInvalidationRecorded is not null)
         {
-            var latest = SqliteOrchestratorStateRepository.OpenReadOnly(workspace.SqliteStatePath)
-                .LoadGoalAsync(goalId)
+            try
+            {
+                invalidated = attemptInvalidationRecorded();
+            }
+            catch
+            {
+                // Attempt metadata is supplementary stop evidence. Every operator stop also updates the
+                // fail-closed goal record, so transient metadata I/O must not recreate spurious cancellation.
+            }
+        }
+
+        var loadGoalStatusRecord = loadGoalStatus ?? new Func<GoalId, GoalStatus?>(id =>
+            SqliteOrchestratorStateRepository.OpenReadOnly(workspace.SqliteStatePath)
+                .LoadGoalAsync(id)
                 .GetAwaiter()
-                .GetResult();
-            return latest is null ||
-                latest.Status is GoalStatus.Active or GoalStatus.Parked or GoalStatus.AcceptanceFailed or GoalStatus.Cancelled or GoalStatus.Superseded or GoalStatus.Failed;
-        }
-        catch
+                .GetResult()
+                ?.Status);
+
+        for (var attempt = 0; attempt < 3; attempt++)
         {
-            return false;
+            try
+            {
+                var observedStatus = loadGoalStatusRecord(goalId);
+                return AcceptanceAttemptCancellation.Decide(
+                    observedStatus,
+                    goalRecordReadable: true,
+                    attemptInvalidationRecorded: invalidated);
+            }
+            catch
+            {
+                // Retry immediately: this callback runs at every gate-check boundary and must stay cheap.
+            }
         }
+
+        return AcceptanceAttemptCancellation.Decide(
+            observedStatus: null,
+            goalRecordReadable: false,
+            attemptInvalidationRecorded: invalidated);
     }
 
     internal ConductorAdvanceResult CompleteParallelLandingAcceptance(
@@ -5502,6 +5569,13 @@ internal sealed partial class ConductorDriver
                 new ConductorAdvanceOutcome.Held(
                     GoalLifecycleState.Verified,
                     $"Build artifact lock blocked acceptance; retry on next conduct tick. {FormatBuildLockBlocked(ex.Attribution)}"));
+        }
+        catch (AcceptanceAttemptCancelledException ex)
+        {
+            return MakeResult(goal.Id.Value, goalPrefix, policy,
+                new ConductorAdvanceOutcome.Held(
+                    GoalLifecycleState.Verified,
+                    $"Acceptance attempt stopped by cancellation probe ({ex.Decision.Cause}); retry when the goal is eligible."));
         }
 
         return CompleteLandingAfterAcceptance(goal, goalPrefix, policy, acceptance);
