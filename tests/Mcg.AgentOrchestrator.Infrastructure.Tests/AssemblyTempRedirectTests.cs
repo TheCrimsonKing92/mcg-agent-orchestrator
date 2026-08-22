@@ -267,13 +267,25 @@ public sealed class AssemblyTempRedirectTests
         var overflow = AssemblyTempRedirect.SelectRootsBeyondRetention(
             names,
             currentProcessId: 0x30,
-            isProcessAlive: _ => false,
+            isProcessAlive: _ => true,
+            processStartTimeUtc: _ => now.AddMinutes(1),
             lastWriteUtc: name => writes[name],
             retainedRoots: reserve);
+        var reapable = AssemblyTempRedirect.SelectReapableRoots(
+            names,
+            currentProcessId: 0x30,
+            isProcessAlive: _ => true);
+        var selected = AssemblyTempRedirect.SelectBoundedReapRoots(
+            reapable,
+            overflow,
+            name => writes[name],
+            limit: names.Length);
 
         Assert.Equal(reserve, overflow.Count);
         Assert.Equal(["p1", "p2", "p3", "p4"], overflow);
-        Assert.Equal(reserve, names.Except(overflow, StringComparer.OrdinalIgnoreCase).Count());
+        Assert.Empty(reapable);
+        Assert.Equal(overflow, selected);
+        Assert.Equal(reserve, names.Except(selected, StringComparer.OrdinalIgnoreCase).Count());
     }
 
     [Fact(DisplayName = "Retention sweep never removes the current process root")]
@@ -283,6 +295,7 @@ public sealed class AssemblyTempRedirectTests
             ["p30", "p31"],
             currentProcessId: 0x30,
             isProcessAlive: _ => false,
+            processStartTimeUtc: _ => null,
             lastWriteUtc: _ => DateTime.UnixEpoch,
             retainedRoots: 0);
 
@@ -296,6 +309,9 @@ public sealed class AssemblyTempRedirectTests
             ["p30", "p31", "p32"],
             currentProcessId: 0x30,
             isProcessAlive: processId => processId == 0x31,
+            processStartTimeUtc: processId => processId == 0x31
+                ? DateTime.UnixEpoch.AddSeconds(-1)
+                : null,
             lastWriteUtc: name => name == "p31" ? DateTime.UnixEpoch : DateTime.UnixEpoch.AddSeconds(1),
             retainedRoots: 0);
 

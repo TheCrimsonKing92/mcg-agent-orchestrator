@@ -77,11 +77,13 @@ internal static class AssemblyTempRedirect
         IEnumerable<string> siblingDirectoryNames,
         int currentProcessId,
         Func<int, bool> isProcessAlive,
+        Func<int, DateTime?> processStartTimeUtc,
         Func<string, DateTime> lastWriteUtc,
         int retainedRoots)
     {
         ArgumentNullException.ThrowIfNull(siblingDirectoryNames);
         ArgumentNullException.ThrowIfNull(isProcessAlive);
+        ArgumentNullException.ThrowIfNull(processStartTimeUtc);
         ArgumentNullException.ThrowIfNull(lastWriteUtc);
         ArgumentOutOfRangeException.ThrowIfNegative(retainedRoots);
 
@@ -89,8 +91,7 @@ internal static class AssemblyTempRedirect
         foreach (var name in siblingDirectoryNames)
         {
             if (!TryParseProcessTempRootName(name, out var processId) ||
-                processId == currentProcessId ||
-                isProcessAlive(processId))
+                processId == currentProcessId)
             {
                 continue;
             }
@@ -103,6 +104,15 @@ internal static class AssemblyTempRedirect
             catch (Exception ex) when (IsFileSystemFailure(ex))
             {
                 continue;
+            }
+
+            if (isProcessAlive(processId))
+            {
+                var processStarted = processStartTimeUtc(processId);
+                if (processStarted is null || processStarted <= written)
+                {
+                    continue;
+                }
             }
 
             owned.Add((name, written));
@@ -148,12 +158,16 @@ internal static class AssemblyTempRedirect
                 .Select(Path.GetFileName)
                 .OfType<string>()
                 .ToArray();
-            var livePids = SnapshotLiveProcessIds();
-            var reapableByProcess = SelectReapableRoots(siblings, Environment.ProcessId, livePids.Contains);
+            var liveProcesses = SnapshotLiveProcesses(siblings, Environment.ProcessId);
+            var reapableByProcess = SelectReapableRoots(
+                siblings,
+                Environment.ProcessId,
+                liveProcesses.ContainsKey);
             var beyondRetention = SelectRootsBeyondRetention(
                 siblings,
                 Environment.ProcessId,
-                livePids.Contains,
+                liveProcesses.ContainsKey,
+                processId => liveProcesses.GetValueOrDefault(processId),
                 name => Directory.GetLastWriteTimeUtc(Path.Combine(sharedRoot, name)),
                 RetainedOrphanRoots);
             foreach (var candidate in reapableByProcess
@@ -182,17 +196,52 @@ internal static class AssemblyTempRedirect
     // were cleared. Membership in the snapshot also preserves the previous semantics for a PID
     // that cannot be opened — it still enumerates, so it still counts as alive and its root is
     // left alone.
-    private static HashSet<int> SnapshotLiveProcessIds()
+    private static Dictionary<int, DateTime?> SnapshotLiveProcesses(
+        IEnumerable<string> siblingDirectoryNames,
+        int currentProcessId)
     {
-        var live = new HashSet<int>();
+        var relevantProcessIds = new HashSet<int>();
+        foreach (var name in siblingDirectoryNames)
+        {
+            if (TryParseProcessTempRootName(name, out var processId) && processId != currentProcessId)
+            {
+                relevantProcessIds.Add(processId);
+            }
+        }
+
+        var live = new Dictionary<int, DateTime?>();
         foreach (var process in System.Diagnostics.Process.GetProcesses())
         {
-            live.Add(process.Id);
-            process.Dispose();
+            try
+            {
+                if (!relevantProcessIds.Contains(process.Id))
+                {
+                    continue;
+                }
+
+                DateTime? startedUtc = null;
+                try
+                {
+                    startedUtc = process.StartTime.ToUniversalTime();
+                }
+                catch (Exception ex) when (IsProcessSnapshotFailure(ex))
+                {
+                    // An inaccessible start time still proves the PID is live. Preserve the root.
+                }
+
+                live[process.Id] = startedUtc;
+            }
+            finally
+            {
+                process.Dispose();
+            }
         }
 
         return live;
     }
+
+    private static bool IsProcessSnapshotFailure(Exception ex) =>
+        ex is InvalidOperationException or System.ComponentModel.Win32Exception or NotSupportedException;
 
     private static void TryDeleteTree(string path)
     {
