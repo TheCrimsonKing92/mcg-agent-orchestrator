@@ -439,14 +439,22 @@ public static class RepositoryTestImpactPlanner
                     .ToArray();
                 var projectDeclarations = declarationReader.ReadProject(
                     "tests/Mcg.AgentOrchestrator.Infrastructure.Tests/");
-                if (projectDeclarations.Outcome != TestClassDeclarationOutcome.Resolved ||
-                    derivedClassNames.Any(name =>
-                        !projectDeclarations.ClassNames.Contains(name, StringComparer.Ordinal)))
+                if (projectDeclarations.Outcome is not (
+                    TestClassDeclarationOutcome.Resolved or
+                    TestClassDeclarationOutcome.Unavailable))
                 {
                     return null;
                 }
 
-                var orchestrationFilters = derivedClassNames
+                var resolvedClassNames = projectDeclarations.Outcome == TestClassDeclarationOutcome.Unavailable
+                    ? derivedClassNames
+                    : derivedClassNames
+                        .Where(name => projectDeclarations.ClassNames.Contains(name, StringComparer.Ordinal))
+                        .ToArray();
+                if (resolvedClassNames.Length == 0)
+                    return null;
+
+                var orchestrationFilters = resolvedClassNames
                     .Select(name => $"FullyQualifiedName~{name}")
                     .ToArray();
 
