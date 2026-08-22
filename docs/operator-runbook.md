@@ -87,6 +87,33 @@ Remove-Item -LiteralPath .conduct-stop
 .\scripts\Invoke-RepoScript.ps1 scripts\Start-OrchestratorCommand.ps1 -Name <batch-name> conduct --loop --watch --policy Permissive --poll-seconds 15 --max-duration 5400
 ```
 
+#### Is the loop alive? Read the lock, then verify that PID
+
+Do not answer this from the process list. Every direct way of asking "is the conductor running" returns a
+false negative, and all of them look identical to death:
+
+- The conductor runs as **`dotnet`**, never as `Mcg.AgentOrchestrator.App`. Filtering by the product name
+  finds nothing.
+- `tasklist` truncates image names at 25 characters, so even the right name may not match a longer pattern.
+- `tasklist /FI "..."` is mangled by Git Bash path conversion (`/FI` becomes a path). Filter in PowerShell,
+  or pipe `tasklist` to `grep` with no `/`-flags.
+- `Get-Process` exits non-zero when the process is absent, which is indistinguishable from a lookup error.
+
+The authoritative answer is the lock file, which names the current owner:
+
+```powershell
+Get-Content -LiteralPath .orchestrator\conduct-loop.lock   # line 1 = PID, then heartbeat timestamps
+Get-Process -Id <pid> | Select-Object Id, ProcessName, StartTime
+```
+
+**A `LOOP_STOP` event does not mean the loop is gone.** At `--max-duration` the incumbent exits and a
+successor takes the lock within seconds. Compare the lock's timestamp to the `LOOP_STOP` timestamp: a lock
+written *after* the stop is a successful handoff, and the new PID's `StartTime` will match the stop moment.
+Treating that as a dead loop and relaunching starts a second conductor against a lock another process owns.
+
+Liveness is the **tick counter advancing**, not gate progress and not worker activity. An idle loop with an
+empty `blocked=` list is healthy, not wedged. See the stuck-goal playbook before concluding otherwise.
+
 #### Which binary is the running conductor actually executing?
 
 The conductor does not execute the in-tree build. It runs from a pinned copy under `%TEMP%\mcg-run\<hash>\`,
