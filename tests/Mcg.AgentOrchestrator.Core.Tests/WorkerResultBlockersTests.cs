@@ -321,6 +321,44 @@ public sealed class WorkerResultBlockersTests
         Assert.Equal(ReviewFindingState.Open, state.Single(finding => finding.StableId == "F-NEW").State);
     }
 
+    [Xunit.Fact]
+    public void ApplyRound_ResolvedPriorAndNewSameAnchor_AcceptsBothStates()
+    {
+        var anchor = new ReviewFindingLocation("src/A.cs", "A.Run", "guard");
+        var previous = new[]
+        {
+            new ReviewFinding(
+                "F-A",
+                ReviewFindingState.Open,
+                anchor,
+                "Original issue.",
+                FindingSeverity.Blocking)
+        };
+        var next = new ReviewFindingRound(
+            [
+                new ReviewFinding(
+                    "F-A",
+                    ReviewFindingState.Resolved,
+                    anchor,
+                    "Original issue resolved.",
+                    FindingSeverity.Blocking),
+                new ReviewFinding(
+                    "F-B",
+                    ReviewFindingState.Open,
+                    anchor,
+                    "Different issue at the same anchor.",
+                    FindingSeverity.Blocking)
+            ],
+            [anchor]);
+
+        var state = ReviewFindingConvergence.ApplyRound(previous, next);
+
+        Assert.Equal(2, state.Count);
+        Assert.Equal(1, ReviewFindingConvergence.CountOpen(state));
+        Assert.Equal(ReviewFindingState.Resolved, state.Single(finding => finding.StableId == "F-A").State);
+        Assert.Equal(ReviewFindingState.Open, state.Single(finding => finding.StableId == "F-B").State);
+    }
+
     [Xunit.Fact(DisplayName = "ReviewFindingConvergence_rejects_recycled_stable_id_at_open_anchor")]
     public void ReviewFindingConvergenceRejectsRecycledStableIdAtOpenAnchor()
     {
@@ -468,6 +506,81 @@ public sealed class WorkerResultBlockersTests
             () => ReviewFindingConvergence.ApplyRound(previous, next, out _));
 
         Assert.Equal(ReviewFindingConvergence.RecycledAnchorIdentityViolationCode, error.Code);
+    }
+
+    [Xunit.Fact]
+    public void ApplyRound_OmittedOpenPriorWithTwoNewFindings_RejectsAnchorReuse()
+    {
+        var anchor = new ReviewFindingLocation("src/A.cs", "A.Run", "guard");
+        var previous = new[]
+        {
+            new ReviewFinding("F-A", ReviewFindingState.Open, anchor, "Original issue.")
+        };
+        var next = new ReviewFindingRound(
+            [
+                new ReviewFinding("F-B", ReviewFindingState.Open, anchor, "Replacement identity."),
+                new ReviewFinding(
+                    "F-C",
+                    ReviewFindingState.Open,
+                    new ReviewFindingLocation("src/C.cs", "C.Run", "guard"),
+                    "Independent issue.")
+            ],
+            []);
+
+        var error = Assert.Throws<ReviewFindingConvergenceException>(
+            () => ReviewFindingConvergence.ApplyRound(previous, next));
+
+        Assert.Equal(ReviewFindingConvergence.RecycledAnchorIdentityViolationCode, error.Code);
+        Assert.Equal("F-A", error.Violation.PriorStableId);
+        Assert.Equal("F-B", error.Violation.SubmittedStableId);
+        Assert.Contains("cannot be recycled", error.Message, StringComparison.Ordinal);
+        Assert.Contains("Report the same defect under 'F-A'", error.Message, StringComparison.Ordinal);
+        Assert.Contains("submit 'F-A' as resolved in this same round", error.Message, StringComparison.Ordinal);
+    }
+
+    [Xunit.Fact]
+    public void RejectedCapResolution_NewSameAnchor_RetainsReportablePrior()
+    {
+        var anchor = new ReviewFindingLocation("src/A.cs", "A.Run", "guard");
+        var previous = new[]
+        {
+            new ReviewFinding(
+                "F-A",
+                ReviewFindingState.Open,
+                anchor,
+                "Original issue.",
+                FindingSeverity.Blocking)
+        };
+        var next = new ReviewFindingRound(
+            [
+                new ReviewFinding(
+                    "F-A",
+                    ReviewFindingState.Resolved,
+                    anchor,
+                    "Original issue resolved.",
+                    FindingSeverity.Blocking),
+                new ReviewFinding(
+                    "F-B",
+                    ReviewFindingState.Open,
+                    anchor,
+                    "Different issue at the same anchor.",
+                    FindingSeverity.Blocking)
+            ],
+            []);
+
+        var error = Assert.Throws<ReviewFindingConvergenceException>(() =>
+            ReviewFindingConvergence.ValidateResolutionAtCap(previous, next, [], "candidate", []));
+        var state = ReviewFindingConvergence.ApplyRejectedCapResolutionRound(
+            previous,
+            next,
+            error.Violation);
+
+        Assert.Equal(ReviewFindingConvergence.UnprovenResolutionAtCapViolationCode, error.Code);
+        var retained = Assert.Single(state);
+        Assert.Equal("F-A", retained.StableId);
+        Assert.Equal(ReviewFindingState.Open, retained.State);
+        Assert.Equal("Different issue at the same anchor.", retained.Description);
+        Assert.Equal(1, ReviewFindingConvergence.CountOpen(state));
     }
 
     [Xunit.Fact(DisplayName = "ReviewFindingConvergence_allows_new_stable_id_at_resolved_anchor")]

@@ -986,13 +986,17 @@ public static class ReviewFindingConvergence
         {
             var priorAtAnchor = previous.FirstOrDefault(prior =>
                 prior.State == ReviewFindingState.Open &&
+                RemainsOpenAfterRound(prior, submittedById) &&
                 ExactAnchor(prior.Location, newFinding.Location));
             if (priorAtAnchor is null)
             {
                 continue;
             }
 
-            var message = $"Structural anchor '{newFinding.Location}' already belongs to open stable_id '{priorAtAnchor.StableId}'; it cannot be recycled as '{newFinding.StableId}'.";
+            var message = BuildRecycledAnchorMessage(
+                priorAtAnchor.StableId,
+                newFinding.StableId,
+                newFinding.Location);
             mismatches.Add(new ReviewFindingIdentityMismatch(
                 RecycledAnchorIdentityViolationCode,
                 message,
@@ -1184,6 +1188,15 @@ public static class ReviewFindingConvergence
             $"normalized_submitted_region='{NormalizeRegion(submitted.Region)}'.";
     }
 
+    private static string BuildRecycledAnchorMessage(
+        string priorStableId,
+        string submittedStableId,
+        ReviewFindingLocation location) =>
+        $"Structural anchor '{location}' already belongs to open stable_id '{priorStableId}'; " +
+        $"it cannot be recycled as '{submittedStableId}'. Report the same defect under '{priorStableId}', " +
+        $"or, if '{submittedStableId}' is a genuinely different defect at that anchor, submit " +
+        $"'{priorStableId}' as resolved in this same round and keep '{submittedStableId}' open.";
+
     private static string BuildUntouchedReopenMessage(string stableId, string? touchProofDiagnostic) =>
         $"Resolved finding '{stableId}' was re-opened without system-derived proof that its structural anchor was touched." +
         FormatTouchProofDiagnostic(touchProofDiagnostic);
@@ -1199,6 +1212,13 @@ public static class ReviewFindingConvergence
         string.Equals(left.File, right.File, StringComparison.OrdinalIgnoreCase) &&
         string.Equals(left.Region, right.Region, StringComparison.Ordinal) &&
         string.Equals(left.Hunk, right.Hunk, StringComparison.Ordinal);
+
+    // Omission is continuity, not resolution: only an explicitly resolved prior relinquishes its anchor.
+    private static bool RemainsOpenAfterRound(
+        ReviewFinding prior,
+        Dictionary<string, ReviewFinding> submittedById) =>
+        !submittedById.TryGetValue(prior.StableId, out var submitted) ||
+        submitted.State != ReviewFindingState.Resolved;
 
     private static void ValidateFindings(IEnumerable<ReviewFinding> findings)
     {
