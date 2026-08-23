@@ -179,6 +179,9 @@ public abstract class GoalWorktreeTestBase
         return root;
     }
 
+    private protected static string CreateSeededGitRepositoryForIsolation() =>
+        CreateSeededGitRepository();
+
     private protected static string CreateReducedAcceptanceCohortRepository(
         bool renameInitialBranchToMain = true)
     {
@@ -766,6 +769,132 @@ public abstract class GoalWorktreeTestBase
         error = process.StandardError.ReadToEnd();
         process.WaitForExit(60000);
         return process.ExitCode;
+    }
+
+    private protected static (int ExitCode, string Stdout, string Stderr) ReadSeedHeadCommitId(
+        string repo)
+    {
+        var arguments = new[] { "rev-parse", "--verify", "HEAD^{commit}" };
+        var exitCode = RunGitExitCode(repo, arguments, out var output, out var error);
+        return (exitCode, output, error);
+    }
+
+    private protected static string DescribeSeedHeadState(
+        string repo,
+        (int ExitCode, string Stdout, string Stderr) failingHead)
+    {
+        var receipt = new List<string>
+        {
+            $"failing rev-parse --verify HEAD^{{commit}} exit={failingHead.ExitCode}",
+            $"failing rev-parse stdoutLength={failingHead.Stdout.Length} stdout={FormatReceiptValue(failingHead.Stdout)}",
+            $"failing rev-parse stderr={FormatReceiptValue(failingHead.Stderr)}",
+        };
+
+        try
+        {
+            var head = ReadSeedHeadCommitId(repo);
+            receipt.Add($"subsequent rev-parse --verify HEAD^{{commit}} exit={head.ExitCode}");
+            receipt.Add($"subsequent rev-parse stdoutLength={head.Stdout.Length} stdout={FormatReceiptValue(head.Stdout)}");
+            receipt.Add($"subsequent rev-parse stderr={FormatReceiptValue(head.Stderr)}");
+        }
+        catch (Exception ex)
+        {
+            receipt.Add($"subsequent rev-parse exception={FormatReceiptException(ex)}");
+        }
+
+        try
+        {
+            var exitCode = RunGitExitCode(repo, "cat-file", "-e", "HEAD^{commit}");
+            receipt.Add($"cat-file -e HEAD^{{commit}} exit={exitCode}");
+        }
+        catch (Exception ex)
+        {
+            receipt.Add($"cat-file exception={FormatReceiptException(ex)}");
+        }
+
+        try
+        {
+            var arguments = new[] { "status", "--porcelain=v2", "--branch" };
+            var exitCode = RunGitExitCode(repo, arguments, out var output, out var error);
+            receipt.Add($"status --porcelain=v2 --branch exit={exitCode}");
+            receipt.Add($"status stdout={FormatReceiptValue(output)}");
+            receipt.Add($"status stderr={FormatReceiptValue(error)}");
+        }
+        catch (Exception ex)
+        {
+            receipt.Add($"status exception={FormatReceiptException(ex)}");
+        }
+
+        try
+        {
+            var gitPath = Path.Combine(repo, ".git");
+            var gitKind = Directory.Exists(gitPath)
+                ? "directory"
+                : File.Exists(gitPath)
+                    ? "file"
+                    : "missing";
+            receipt.Add($".git kind={gitKind}");
+
+            if (File.Exists(gitPath))
+            {
+                receipt.Add($".git contents={FormatReceiptValue(File.ReadAllText(gitPath))}");
+            }
+
+            var headPath = Path.Combine(gitPath, "HEAD");
+            var headText = File.Exists(headPath) ? File.ReadAllText(headPath) : string.Empty;
+            receipt.Add($".git/HEAD exists={File.Exists(headPath)} contents={FormatReceiptValue(headText)}");
+
+            const string SymrefPrefix = "ref: ";
+            if (headText.StartsWith(SymrefPrefix, StringComparison.Ordinal))
+            {
+                var refName = headText[SymrefPrefix.Length..].Trim();
+                var refPath = Path.Combine(
+                    gitPath,
+                    refName.Replace('/', Path.DirectorySeparatorChar));
+                receipt.Add(
+                    $"HEAD symref={FormatReceiptValue(refName)} looseRefExists={File.Exists(refPath)} " +
+                    $"looseRefContents={FormatReceiptValue(File.Exists(refPath) ? File.ReadAllText(refPath) : string.Empty)}");
+            }
+
+            receipt.Add($"packed-refs exists={File.Exists(Path.Combine(gitPath, "packed-refs"))}");
+        }
+        catch (Exception ex)
+        {
+            receipt.Add($"git metadata exception={FormatReceiptException(ex)}");
+        }
+
+        receipt.Add(DescribeDirectoryEntries("repo entries", repo));
+        receipt.Add(DescribeDirectoryEntries(
+            "refs/heads entries",
+            Path.Combine(repo, ".git", "refs", "heads")));
+        return string.Join(Environment.NewLine, receipt);
+
+        static string DescribeDirectoryEntries(string label, string path)
+        {
+            try
+            {
+                if (!Directory.Exists(path))
+                {
+                    return $"{label}=<missing>";
+                }
+
+                var entries = Directory.EnumerateFileSystemEntries(path)
+                    .Select(Path.GetFileName)
+                    .OrderBy(name => name, StringComparer.Ordinal)
+                    .ToArray();
+                return $"{label}={FormatReceiptValue(string.Join(", ", entries))}";
+            }
+            catch (Exception ex)
+            {
+                return $"{label} exception={FormatReceiptException(ex)}";
+            }
+        }
+
+        static string FormatReceiptValue(string value) =>
+            $"'{value.Replace("\r", "\\r", StringComparison.Ordinal).Replace("\n", "\\n", StringComparison.Ordinal)}'";
+
+        static string FormatReceiptException(Exception ex) =>
+            $"{ex.GetType().Name}: {FormatReceiptValue(ex.Message)}";
     }
 
     private protected static string NormalizePath(string path) =>
