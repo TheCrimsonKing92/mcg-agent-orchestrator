@@ -1129,7 +1129,7 @@ internal sealed class ConductorBatchLoop
 
                             if (_progressiveReviewSteering is not null && watchInterval is not null)
                             {
-                                var steerResult = _progressiveReviewSteering.ExecutePending(kernel, goal);
+                                var steerResult = _progressiveReviewSteering.ExecutePending(kernel, goal, policy);
                                 foreach (var line in steerResult.ProgressLines)
                                 {
                                     EmitProgress(line, tickLines);

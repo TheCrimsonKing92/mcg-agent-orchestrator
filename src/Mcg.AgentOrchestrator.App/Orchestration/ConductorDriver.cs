@@ -375,8 +375,7 @@ internal sealed partial class ConductorDriver
                             DispatchRecordWriteSucceededSink?.Invoke(goalId);
                         },
                     readCurrentInterruptedDispatchState: readCurrentInterruptedDispatchState,
-                    reviewAutoRetryStopRound: policy.ReviewAutoRetryStopRound,
-                    plannerSampleCount: policy.PlannerSampleCount);
+                    conductorPolicy: policy);
             }
             catch (DispatchRecordWriteException ex)
             {
@@ -441,7 +440,7 @@ internal sealed partial class ConductorDriver
                             DispatchRecordWriteSucceededSink?.Invoke(goalId);
                         },
                     readCurrentInterruptedDispatchState: readCurrentInterruptedDispatchState,
-                    reviewAutoRetryStopRound: policy.ReviewAutoRetryStopRound);
+                    conductorPolicy: policy);
             }
             catch (Exception ex) when (ex is not DispatchRecordWriteException)
             {

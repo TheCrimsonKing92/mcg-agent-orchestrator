@@ -1,5 +1,6 @@
 using Mcg.AgentOrchestrator.App.Orchestration;
 using Mcg.AgentOrchestrator.Core;
+using Mcg.AgentOrchestrator.Core.Conductor;
 using Mcg.AgentOrchestrator.Infrastructure;
 using System.Text;
 using System.Text.RegularExpressions;
@@ -692,6 +693,7 @@ public sealed class ProgressiveReviewSteeringTests
         var root = CreateGitRepository("mcg-steer-fresh");
         var head = GitCli.Run(root, "rev-parse", "HEAD").Output.Trim();
         var (kernel, goal, task) = RunningDeveloper(root, now, "not-an-ancestor", sessionId: "session-12345678");
+        var runPolicy = ConductorAutonomyPolicy.Permissive with { ReviewAutoRetryStopRound = 7 };
         var store = new InMemoryProgressiveReviewSteeringStore();
         store.EnqueueIntentAsync(Intent(goal, task, now, "fresh fallback guidance")).GetAwaiter().GetResult();
         var preparedFresh = false;
@@ -718,9 +720,10 @@ public sealed class ProgressiveReviewSteeringTests
                 k.RecordTaskProcessStarted(goalId, taskId, started);
                 return started;
             },
-            prepareFreshDispatch: (k, g, t, guidance) =>
+            prepareFreshDispatchWithPolicy: (k, g, t, guidance, policy) =>
             {
                 preparedFresh = true;
+                Assert.Same(runPolicy, policy);
                 Assert.Contains("fresh fallback guidance", guidance, StringComparison.Ordinal);
                 var builder = new WorkerContextPackageBuilder();
                 var package = WorkerProfileDispatcher.FinalizeContextPackageWithManifest(
@@ -751,7 +754,7 @@ public sealed class ProgressiveReviewSteeringTests
             },
             currentHead: head);
 
-        var result = coordinator.ExecutePending(kernel, goal);
+        var result = coordinator.ExecutePending(kernel, goal, runPolicy);
 
         Assert.True(result.MutatedTaskState);
         Assert.True(preparedFresh);
@@ -1279,6 +1282,7 @@ public sealed class ProgressiveReviewSteeringTests
         Func<AgentOrchestratorKernel, GoalId, TaskId, TaskProcessRecord>? cancelProcess = null,
         Func<AgentOrchestratorKernel, GoalId, TaskId, TaskProcessRecord>? startProcess = null,
         Action<AgentOrchestratorKernel, Goal, TaskSpec, string>? prepareFreshDispatch = null,
+        Action<AgentOrchestratorKernel, Goal, TaskSpec, string, ConductorAutonomyPolicy?>? prepareFreshDispatchWithPolicy = null,
         IReadOnlyList<AgentDefinition>? agents = null,
         ProgressiveReviewSteeringOptions? options = null,
         string? currentHead = null,
@@ -1300,7 +1304,8 @@ public sealed class ProgressiveReviewSteeringTests
             startProcess: startProcess,
             prepareFreshDispatch: prepareFreshDispatch,
             headResolver: currentHead is null ? null : _ => currentHead,
-            capturedHeadIsAncestor: currentHead is null ? null : SameHead);
+            capturedHeadIsAncestor: currentHead is null ? null : SameHead,
+            prepareFreshDispatchWithPolicy: prepareFreshDispatchWithPolicy);
     }
 
     private static bool SameHead(string _, string? capturedHead, string? currentHead) =>

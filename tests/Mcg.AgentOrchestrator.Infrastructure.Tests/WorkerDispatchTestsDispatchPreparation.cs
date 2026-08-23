@@ -1,4 +1,5 @@
 using Mcg.AgentOrchestrator.Core;
+using Mcg.AgentOrchestrator.Core.Conductor;
 using Mcg.AgentOrchestrator.App.Cli;
 using Mcg.AgentOrchestrator.App.CostControl;
 using Mcg.AgentOrchestrator.App.Dashboard.Api;
@@ -470,6 +471,70 @@ public sealed class WorkerDispatchTestsDispatchPreparation : WorkerDispatchTestS
     Assert.DoesNotContain("Get-Content -Raw", developer.LastDispatch.Command, StringComparison.Ordinal);
     Xunit.Assert.Null(developer.LastProcess);
 }
+
+    [Xunit.Fact]
+    public void StartDispatches_ConductPolicy_DoesNotReloadPolicyFile()
+    {
+        var root = CreateTempDirectory();
+        var workspace = OrchestratorWorkspace.ForDirectory(root);
+        _ = StateDbMigrations.EnsureUpToDate(workspace.SqliteStatePath);
+        Directory.CreateDirectory(workspace.OrchestratorDirectory);
+        Directory.CreateDirectory(Path.Combine(root, "repo"));
+        var filePolicy = ConductorAutonomyPolicy.Conservative with
+        {
+            Name = "FilePolicy",
+            PlannerSampleCount = 1
+        };
+        File.WriteAllText(
+            Path.Combine(workspace.OrchestratorDirectory, "conductor-policy.json"),
+            filePolicy.ToJson());
+        var runPolicy = ConductorAutonomyPolicy.Permissive with { PlannerSampleCount = 2 };
+        var kernel = new AgentOrchestratorKernel(new TestClock(DateTimeOffset.Parse("2026-08-23T08:00:00Z")));
+        var planner = new TaskSpec(TaskId.New(), "Plan without reloading conductor policy.", AgentRole.Planner);
+        var goal = kernel.CreateGoal("Keep one conductor policy per run", [planner]);
+        kernel.SetGoalRefinedSpec(goal.Id, new RefinedSpec(
+            "Keep one conductor policy per run",
+            ["Recorded dispatch refresh uses the run's resolved policy."],
+            VerificationClass.TestVerifiable,
+            [],
+            []));
+        var agent = new AgentDefinition(
+            new AgentId("planner"),
+            "Planner",
+            AgentRole.Planner,
+            new ModelProfile("OpenAI", AgentCatalog.OpenAiSubscriptionModelAlias, ModelCapability.Text, SubscriptionMode.ApiKey),
+            ExecutionPolicy: AgentExecutionPolicy.SubscriptionOnly,
+            Subscription: new SubscriptionLaunchProfile("codex-cli", AgentCatalog.OpenAiSubscriptionModelAlias, "low"));
+        kernel.ActivateGoal(goal.Id, [agent]);
+        var profiles = new WorkerProfileCatalog(
+        [
+            new WorkerProfile("codex-cli", "codex exec --model {subscriptionModelName} -c model_reasoning_effort={subscriptionReasoningEffort} --sandbox {sandboxMode} --cd {workingDirectory}")
+        ]);
+        _ = GoalManagementCommandService.ProfileDispatchTask(
+            kernel,
+            workspace,
+            goal,
+            planner,
+            profiles.GetRequired("codex-cli"),
+            [agent],
+            sandboxOptions: DisabledSandbox,
+            plannerSampleCount: runPolicy.PlannerSampleCount);
+
+        Assert.ThrowsAny<InvalidOperationException>(() =>
+        {
+            _ = GoalManagementCommandService.StartDispatches(
+                kernel,
+                workspace,
+                goal,
+                [agent],
+                profiles,
+                runner: new BackgroundDispatchRunner(disableProcessStart: true),
+                sandboxOptions: DisabledSandbox,
+                conductorPolicy: runPolicy);
+        });
+
+        Assert.Equal(runPolicy.PlannerSampleCount, planner.LastDispatch!.PlannerSampleCount);
+    }
 
     [Xunit.Fact(DisplayName = "StartSubscriptionReadyTasks_checkpoints_dispatch_record_before_process_start")]
     public void StartSubscriptionReadyTasksCheckpointsDispatchRecordBeforeProcessStart()

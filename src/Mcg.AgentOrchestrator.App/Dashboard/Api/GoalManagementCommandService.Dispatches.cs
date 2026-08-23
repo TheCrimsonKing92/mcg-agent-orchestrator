@@ -86,7 +86,8 @@ public static WorkerProfileDispatchResult RefreshPreparedDispatchBeforeStart(
     IModelProviderRegistry? providers = null,
     int? reviewAutoRetryStopRound = null,
     WorkerSandboxOptions? sandboxOptions = null,
-    int? plannerSampleCount = null)
+    int? plannerSampleCount = null,
+    ConductorAutonomyPolicy? conductorPolicy = null)
 {
     var lastDispatch = task.LastDispatch
         ?? throw new InvalidOperationException($"Task '{task.Id}' has no dispatch to refresh before start.");
@@ -114,9 +115,9 @@ public static WorkerProfileDispatchResult RefreshPreparedDispatchBeforeStart(
         resolvedAgents,
         providers,
         allowPendingRecordedDispatchRefresh: true,
-        reviewAutoRetryStopRound: reviewAutoRetryStopRound,
+        reviewAutoRetryStopRound: ResolveReviewAutoRetryStopRound(workspace, reviewAutoRetryStopRound, conductorPolicy),
         sandboxOptions: sandboxOptions,
-        plannerSampleCount: plannerSampleCount);
+        plannerSampleCount: ResolvePlannerSampleCount(workspace, plannerSampleCount, conductorPolicy));
 }
 
 public static IReadOnlyList<WorkerProfileDispatchResult> RefreshPreparedDispatchesBeforeStart(
@@ -281,7 +282,8 @@ public static WorkerProfileDispatchResult SubscriptionDispatchTask(
     bool allowGitReference = false,
     IModelProviderRegistry? providers = null,
     int? reviewAutoRetryStopRound = null,
-    int? plannerSampleCount = null)
+    int? plannerSampleCount = null,
+    ConductorAutonomyPolicy? conductorPolicy = null)
 {
     EnsureRefinedForTask(kernel, workspace, providers, goal, task);
     return WorkerProfileDispatcher.PrepareSubscriptionTask(
@@ -295,9 +297,9 @@ public static WorkerProfileDispatchResult SubscriptionDispatchTask(
         DateTimeOffset.UtcNow,
         modelOverride,
         allowGitReference,
-        reviewAutoRetryStopRound: ResolveReviewAutoRetryStopRound(workspace, reviewAutoRetryStopRound),
+        reviewAutoRetryStopRound: ResolveReviewAutoRetryStopRound(workspace, reviewAutoRetryStopRound, conductorPolicy),
         citedPriorEvidenceResolver: CreateCitedPriorEvidenceResolver(workspace),
-        plannerSampleCount: ResolvePlannerSampleCount(workspace, plannerSampleCount));
+        plannerSampleCount: ResolvePlannerSampleCount(workspace, plannerSampleCount, conductorPolicy));
 }
 
 public static SubscriptionStartResult StartSubscriptionReadyTasks(
@@ -313,7 +315,8 @@ public static SubscriptionStartResult StartSubscriptionReadyTasks(
     int? reviewAutoRetryStopRound = null,
     BackgroundDispatchRunner? runner = null,
     WorkerSandboxOptions? sandboxOptions = null,
-    int? plannerSampleCount = null)
+    int? plannerSampleCount = null,
+    ConductorAutonomyPolicy? conductorPolicy = null)
 {
     ReconcileExitedAssignedProcessRecords(kernel, goal);
     goal = kernel.GetGoal(goal.Id);
@@ -329,10 +332,10 @@ public static SubscriptionStartResult StartSubscriptionReadyTasks(
         workspace.ResolveExecutionDirectory(goal.Id),
         DateTimeOffset.UtcNow,
         safeBatch.TaskIds,
-        reviewAutoRetryStopRound: ResolveReviewAutoRetryStopRound(workspace, reviewAutoRetryStopRound),
+        reviewAutoRetryStopRound: ResolveReviewAutoRetryStopRound(workspace, reviewAutoRetryStopRound, conductorPolicy),
         citedPriorEvidenceResolver: CreateCitedPriorEvidenceResolver(workspace),
         sandboxOptions: sandboxOptions,
-        plannerSampleCount: ResolvePlannerSampleCount(workspace, plannerSampleCount));
+        plannerSampleCount: ResolvePlannerSampleCount(workspace, plannerSampleCount, conductorPolicy));
     var containsInterruptedDispatchRecovery = batch.Dispatches.Any(dispatch =>
         dispatch.Task.InterruptedDispatchRecoveryId is not null);
     if (!containsInterruptedDispatchRecovery &&
@@ -371,15 +374,19 @@ private static CitedPriorEvidenceResolver CreateCitedPriorEvidenceResolver(Orche
 
 private static int ResolveReviewAutoRetryStopRound(
     OrchestratorWorkspace workspace,
-    int? reviewAutoRetryStopRound) =>
+    int? reviewAutoRetryStopRound,
+    ConductorAutonomyPolicy? conductorPolicy = null) =>
     reviewAutoRetryStopRound ??
+    conductorPolicy?.ReviewAutoRetryStopRound ??
     ConductorAutonomyPolicy.LoadFromOrchestratorDirectory(
         new DirectoryInfo(workspace.OrchestratorDirectory)).ReviewAutoRetryStopRound;
 
 private static int ResolvePlannerSampleCount(
     OrchestratorWorkspace workspace,
-    int? plannerSampleCount) =>
+    int? plannerSampleCount,
+    ConductorAutonomyPolicy? conductorPolicy = null) =>
     plannerSampleCount ??
+    conductorPolicy?.PlannerSampleCount ??
     ConductorAutonomyPolicy.LoadFromOrchestratorDirectory(
         new DirectoryInfo(workspace.OrchestratorDirectory)).PlannerSampleCount;
 
@@ -846,7 +853,8 @@ public static ProcessBatchExecutionResult StartDispatches(
     Func<GoalId, TaskId, InterruptedDispatchStateRead>? readCurrentInterruptedDispatchState = null,
     int? reviewAutoRetryStopRound = null,
     BackgroundDispatchRunner? runner = null,
-    WorkerSandboxOptions? sandboxOptions = null)
+    WorkerSandboxOptions? sandboxOptions = null,
+    ConductorAutonomyPolicy? conductorPolicy = null)
 {
     return StartDispatches(
         kernel,
@@ -861,7 +869,8 @@ public static ProcessBatchExecutionResult StartDispatches(
         readCurrentInterruptedDispatchState,
         reviewAutoRetryStopRound,
         runner,
-        sandboxOptions);
+        sandboxOptions,
+        conductorPolicy);
 }
 
 private static ProcessBatchExecutionResult StartDispatches(
@@ -877,7 +886,8 @@ private static ProcessBatchExecutionResult StartDispatches(
     Func<GoalId, TaskId, InterruptedDispatchStateRead>? readCurrentInterruptedDispatchState = null,
     int? reviewAutoRetryStopRound = null,
     BackgroundDispatchRunner? runner = null,
-    WorkerSandboxOptions? sandboxOptions = null)
+    WorkerSandboxOptions? sandboxOptions = null,
+    ConductorAutonomyPolicy? conductorPolicy = null)
 {
     runner ??= new BackgroundDispatchRunner();
     var logRoot = workspace.LogDirectory;
@@ -910,7 +920,8 @@ private static ProcessBatchExecutionResult StartDispatches(
                 resolvedProfiles,
                 providers,
                 reviewAutoRetryStopRound,
-                sandboxOptions);
+                sandboxOptions,
+                conductorPolicy: conductorPolicy);
         }
 
         Action<AgentOrchestratorKernel, GoalId, TaskId, DispatchRecordCheckpointPhase>? batchCheckpoint =
