@@ -6,35 +6,98 @@ public sealed class WorkerDispatchBuildEvidenceClassificationTests : WorkerDispa
     [Xunit.Theory]
     [Xunit.InlineData(AgentRole.Developer)]
     [Xunit.InlineData(AgentRole.Tester)]
-    public void CompiledChangeWithoutBuildEvidenceIsRejectedAndNamesProject(AgentRole role)
+    public void MissingEvidencePassingCheckCompletesAndCommits(AgentRole role)
     {
         var root = CreateSeededDispatchRepository();
         var clock = new TestClock(DateTimeOffset.Parse("2026-08-22T12:00:00Z"));
-        var (kernel, goal, task, _) = CreateCompletedGoalWorktreeDispatch(
+        var (kernel, goal, task, process) = CreateCompletedGoalWorktreeDispatch(
             root,
             role,
             WorkerResultBlock("src/Feature/Feature.cs", "implemented feature", "deferred - acceptance gate owns tests"),
             string.Empty,
             clock,
             AddCompiledFeature);
-        var acceptanceRetriesBefore = goal.AutomaticAcceptanceRetryCount;
-        var reviewRoundBefore = ReviewRetryCapReceipt.Create(goal, 2).Round;
+        OrchestratorBuildCheckRequest? request = null;
 
-        new BackgroundDispatchRunner(clock).RefreshLatestProcess(kernel, goal.Id, task.Id);
+        new BackgroundDispatchRunner(
+            clock,
+            runOrchestratorBuildCheck: candidate =>
+            {
+                request = candidate;
+                return new(true, 0, "PASS build: 0 errors (Invoke-WorkerBuildCheck) projects=1");
+            }).RefreshLatestProcess(kernel, goal.Id, task.Id);
+
+        Xunit.Assert.Equal(WorkTaskStatus.Completed, task.Status);
+        Xunit.Assert.Equal(0, task.LastVerification!.ExitCode);
+        Xunit.Assert.NotNull(request);
+        Xunit.Assert.Equal(["src/Feature/Feature.csproj"], request.Projects);
+        Xunit.Assert.Contains("build_evidence_producer=orchestrator", task.LastVerification.StandardError, StringComparison.Ordinal);
+        Xunit.Assert.DoesNotContain(
+            DispatchFailureDiagnosticMarker.WorkerBuildEvidenceMissing,
+            task.LastVerification.StandardError,
+            StringComparison.Ordinal);
+        Xunit.Assert.Equal(string.Empty, ReadGit(process.WorkingDirectory, ["status", "--short"]));
+    }
+
+    [Xunit.Fact]
+    public void MissingEvidenceCompilerFailurePreservesError()
+    {
+        var (task, worktree) = RefreshDeveloper(
+            "deferred - acceptance gate owns tests",
+            AddCompiledFeature,
+            _ => new(
+                true,
+                1,
+                "project: src/Feature/Feature.csproj\n" +
+                "Feature.cs(1,1): error CS0103: The name 'Missing' does not exist in the current context"));
 
         Xunit.Assert.Equal(WorkTaskStatus.Failed, task.Status);
         Xunit.Assert.Equal(1, task.LastVerification!.ExitCode);
-        Xunit.Assert.Contains("src/Feature/Feature.csproj", task.LastVerification.StandardError, StringComparison.Ordinal);
+        Xunit.Assert.Contains("error CS0103", task.LastVerification.StandardError, StringComparison.Ordinal);
         Xunit.Assert.Contains(
-            DispatchFailureDiagnosticMarker.Format(DispatchFailureDiagnosticMarker.WorkerBuildEvidenceMissing),
+            DispatchFailureDiagnosticMarker.Format(DispatchFailureDiagnosticMarker.WorkerBuildCheckFailed),
             task.LastVerification.StandardError,
             StringComparison.Ordinal);
-        var outcome = DispatchFailureClassifier.Classify(task, task.LastVerification);
-        Xunit.Assert.Equal(TaskOutcomeClass.UnknownEra, outcome.OutcomeClass);
-        Xunit.Assert.Equal(RecoveryRecommendation.OperatorNeeded, outcome.RecoveryRecommendation);
-        Xunit.Assert.Contains("rule=worker-build-evidence-missing", outcome.ClassifierReceipt, StringComparison.Ordinal);
-        Xunit.Assert.Equal(acceptanceRetriesBefore, goal.AutomaticAcceptanceRetryCount);
-        Xunit.Assert.Equal(reviewRoundBefore, ReviewRetryCapReceipt.Create(goal, 2).Round);
+        Xunit.Assert.DoesNotContain(
+            DispatchFailureDiagnosticMarker.WorkerBuildEvidenceMissing,
+            task.LastVerification.StandardError,
+            StringComparison.Ordinal);
+        Xunit.Assert.NotEqual(string.Empty, ReadGit(worktree, ["status", "--short"]));
+    }
+
+    [Xunit.Fact]
+    public void MissingEvidenceApparatusFailureKeepsRule()
+    {
+        var (task, _) = RefreshDeveloper(
+            "deferred - acceptance gate owns tests",
+            AddCompiledFeature,
+            _ => new(false, -1, "Build evidence check timed out."));
+
+        Xunit.Assert.Equal(WorkTaskStatus.Failed, task.Status);
+        Xunit.Assert.Contains(
+            DispatchFailureDiagnosticMarker.Format(DispatchFailureDiagnosticMarker.WorkerBuildEvidenceMissing),
+            task.LastVerification!.StandardError,
+            StringComparison.Ordinal);
+        Xunit.Assert.DoesNotContain(
+            DispatchFailureDiagnosticMarker.WorkerBuildCheckFailed,
+            task.LastVerification.StandardError,
+            StringComparison.Ordinal);
+    }
+
+    [Xunit.Fact]
+    public void BuildCommandUsesSanctionedScriptAndProjects()
+    {
+        var repositoryRoot = InfrastructureTestSupport.FindRepositoryRoot();
+        var projects = new[] { "src/Feature/Feature.csproj", "tests/Feature.Tests/Feature.Tests.csproj" };
+
+        var command = OrchestratorBuildEvidenceCheck.BuildCommand(projects);
+
+        Xunit.Assert.True(File.Exists(Path.Combine(repositoryRoot, OrchestratorBuildEvidenceCheck.ScriptRelativePath)));
+        Xunit.Assert.Contains("./scripts/Invoke-WorkerBuildCheck.ps1", command, StringComparison.Ordinal);
+        foreach (var project in projects)
+        {
+            Xunit.Assert.Contains($"'{project}'", command, StringComparison.Ordinal);
+        }
     }
 
     [Xunit.Fact]
@@ -111,7 +174,8 @@ public sealed class WorkerDispatchBuildEvidenceClassificationTests : WorkerDispa
 
     private static (TaskSpec Task, string Worktree) RefreshDeveloper(
         string tests,
-        Action<string> mutateWorktree)
+        Action<string> mutateWorktree,
+        Func<OrchestratorBuildCheckRequest, OrchestratorBuildCheckResult>? runOrchestratorBuildCheck = null)
     {
         var root = CreateSeededDispatchRepository();
         var clock = new TestClock(DateTimeOffset.Parse("2026-08-22T12:00:00Z"));
@@ -123,7 +187,9 @@ public sealed class WorkerDispatchBuildEvidenceClassificationTests : WorkerDispa
             clock,
             mutateWorktree);
 
-        new BackgroundDispatchRunner(clock).RefreshLatestProcess(kernel, goal.Id, task.Id);
+        new BackgroundDispatchRunner(
+            clock,
+            runOrchestratorBuildCheck: runOrchestratorBuildCheck).RefreshLatestProcess(kernel, goal.Id, task.Id);
         return (task, process.WorkingDirectory);
     }
 
