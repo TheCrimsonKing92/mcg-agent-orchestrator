@@ -243,6 +243,8 @@ public sealed record TaskProcessRecord(
             ? OwnedProcessIds
             : [ProcessId];
 
+    // Planner samples stay non-blocking for generic hang classification; BackgroundDispatchRunner
+    // applies their separate artifact-based bounded completion gate before candidate collection.
     public IReadOnlyList<int> CompletionTrackedProcessIds =>
         NonBlockingProcessIds is { Count: > 0 }
             ? TrackedProcessIds.Where(pid => pid == ProcessId || !NonBlockingProcessIds.Contains(pid)).ToArray()

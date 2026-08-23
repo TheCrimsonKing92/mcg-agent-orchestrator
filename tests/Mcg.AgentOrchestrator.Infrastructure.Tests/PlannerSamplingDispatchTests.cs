@@ -211,6 +211,199 @@ public sealed class PlannerSamplingDispatchTests : WorkerDispatchTestSupport
     }
 
     [Xunit.Fact]
+    public void LateFinishingSampleStillReachesSelector()
+    {
+        var root = CreateSeededDispatchRepository();
+        var logRoot = Path.Combine(root, "logs");
+        SeedFixtureCitationTargets(root);
+        var kernel = new AgentOrchestratorKernel();
+        var goal = kernel.CreateGoal("Planner late sample", [
+            new TaskSpec(TaskId.New(), "Produce a sampled plan.", AgentRole.Planner)
+        ]);
+        var planner = new AgentDefinition(
+            new AgentId("planner"),
+            "Planner",
+            AgentRole.Planner,
+            new ModelProfile(
+                "OpenAI",
+                AgentCatalog.OpenAiSubscriptionModelAlias,
+                ModelCapability.Text,
+                SubscriptionMode.ApiKey));
+        kernel.ActivateGoal(goal.Id, [planner]);
+        var task = goal.Tasks.Single();
+        kernel.RecordTaskDispatch(goal.Id, task.Id, new TaskDispatchRecord(
+            "local",
+            "Write-Output planner",
+            root,
+            DateTimeOffset.Parse("2026-08-22T18:00:00Z"),
+            PlannerSampleCount: 2));
+
+        var processes = new List<Process>();
+        var startedProcessIds = new List<int>();
+        DispatchProcessHost.DispatchRunParameters? sampleParameters = null;
+        var invocation = 0;
+        var runner = new BackgroundDispatchRunner(
+            isStillRunning: processId => startedProcessIds.Skip(1).Contains(processId),
+            disableProcessStart: false,
+            startProcess: startInfo =>
+            {
+                invocation++;
+                var parameters = DispatchProcessHost.ReadParameters(startInfo.ArgumentList.Last());
+                if (invocation == 1)
+                {
+                    File.WriteAllText(parameters.StdoutPath, ReadPlannerFixture());
+                    DispatchExitArtifacts.Write(
+                        parameters.ExitCodePath,
+                        DispatchExitArtifacts.Native(0, "fixture primary completed", DateTimeOffset.UtcNow));
+                }
+                else
+                {
+                    sampleParameters = parameters;
+                }
+
+                var process = StartSleeper();
+                processes.Add(process);
+                startedProcessIds.Add(process.Id);
+                return process;
+            });
+
+        try
+        {
+            var start = runner.TryStartLatestDispatch(kernel, goal.Id, task.Id, logRoot);
+            var primaryOutputBeforeRefresh = File.ReadAllText(start.ProcessRecord!.StandardOutputPath);
+
+            runner.RefreshLatestProcess(kernel, goal.Id, task.Id);
+
+            Xunit.Assert.Null(task.LastVerification);
+            Xunit.Assert.Equal(primaryOutputBeforeRefresh, File.ReadAllText(start.ProcessRecord.StandardOutputPath));
+
+            Xunit.Assert.NotNull(sampleParameters);
+            File.WriteAllText(
+                sampleParameters.StdoutPath,
+                ReadPlannerFixture() + Environment.NewLine + "<!-- late sample output -->");
+            DispatchExitArtifacts.Write(
+                sampleParameters.ExitCodePath,
+                DispatchExitArtifacts.Native(0, "fixture sample completed", DateTimeOffset.UtcNow));
+
+            runner.RefreshLatestProcess(kernel, goal.Id, task.Id);
+
+            var divergence = Xunit.Assert.IsType<PlannerCandidateDivergenceReceipt>(
+                task.LastVerification!.PlannerCandidateDivergence);
+            Xunit.Assert.True(divergence.CandidateScores[1] > 0);
+            var lateCandidate = PlannerSampleDispatcher.CollectCandidates(
+                start.ProcessRecord.StandardOutputPath,
+                2)[1];
+            Xunit.Assert.NotEmpty(lateCandidate.StandardOutput);
+            Xunit.Assert.Contains("late sample output", lateCandidate.StandardOutput, StringComparison.Ordinal);
+        }
+        finally
+        {
+            foreach (var processId in startedProcessIds)
+                try { WorkerProcessJobs.TryKillOrFallback(processId); } catch { }
+            foreach (var process in processes)
+                try { process.Dispose(); } catch { }
+        }
+    }
+
+    [Xunit.Fact]
+    public void UnresolvedSampleTimesOutAndPrimarySucceeds()
+    {
+        var root = CreateSeededDispatchRepository();
+        var logRoot = Path.Combine(root, "logs");
+        SeedFixtureCitationTargets(root);
+        var startedAt = DateTimeOffset.Parse("2026-08-22T18:00:00Z");
+        var clock = new MutableClock(startedAt);
+        var kernel = new AgentOrchestratorKernel();
+        var goal = kernel.CreateGoal("Planner sample timeout", [
+            new TaskSpec(TaskId.New(), "Produce a sampled plan.", AgentRole.Planner)
+        ]);
+        var planner = new AgentDefinition(
+            new AgentId("planner"),
+            "Planner",
+            AgentRole.Planner,
+            new ModelProfile(
+                "OpenAI",
+                AgentCatalog.OpenAiSubscriptionModelAlias,
+                ModelCapability.Text,
+                SubscriptionMode.ApiKey));
+        kernel.ActivateGoal(goal.Id, [planner]);
+        var task = goal.Tasks.Single();
+        kernel.RecordTaskDispatch(goal.Id, task.Id, new TaskDispatchRecord(
+            "local",
+            "Write-Output planner",
+            root,
+            startedAt,
+            PlannerSampleCount: 2));
+
+        var processes = new List<Process>();
+        var startedProcessIds = new List<int>();
+        var killedProcessIds = new List<int>();
+        DispatchProcessHost.DispatchRunParameters? sampleParameters = null;
+        var invocation = 0;
+        var runner = new BackgroundDispatchRunner(
+            clock,
+            isStillRunning: processId => startedProcessIds.Skip(1).Contains(processId),
+            tryKillOwnedProcess: processId =>
+            {
+                killedProcessIds.Add(processId);
+                return true;
+            },
+            disableProcessStart: false,
+            startProcess: startInfo =>
+            {
+                invocation++;
+                var parameters = DispatchProcessHost.ReadParameters(startInfo.ArgumentList.Last());
+                if (invocation == 1)
+                {
+                    File.WriteAllText(parameters.StdoutPath, ReadPlannerFixture());
+                    DispatchExitArtifacts.Write(
+                        parameters.ExitCodePath,
+                        DispatchExitArtifacts.Native(
+                            0,
+                            "fixture primary completed",
+                            startedAt.AddMinutes(10)));
+                }
+                else
+                {
+                    sampleParameters = parameters;
+                }
+
+                var process = StartSleeper();
+                processes.Add(process);
+                startedProcessIds.Add(process.Id);
+                return process;
+            });
+
+        try
+        {
+            var start = runner.TryStartLatestDispatch(kernel, goal.Id, task.Id, logRoot);
+            clock.Advance(TimeSpan.FromMinutes(21));
+
+            runner.RefreshLatestProcess(kernel, goal.Id, task.Id);
+
+            Xunit.Assert.True(task.LastVerification!.Succeeded, task.LastVerification.StandardError);
+            Xunit.Assert.Contains(startedProcessIds[1], killedProcessIds);
+            Xunit.Assert.NotNull(sampleParameters);
+            var timeoutDiagnostic = File.ReadAllText(
+                PlannerSampleDispatcher.CreateArtifacts(start.ProcessRecord!.StandardOutputPath, 2)[0]
+                    .LaunchDiagnosticPath);
+            Xunit.Assert.Contains("timed out", timeoutDiagnostic, StringComparison.OrdinalIgnoreCase);
+            var sampleCandidate = PlannerSampleDispatcher.CollectCandidates(
+                start.ProcessRecord.StandardOutputPath,
+                2)[1];
+            Xunit.Assert.Empty(sampleCandidate.StandardOutput);
+            Xunit.Assert.Contains("timed out", sampleCandidate.StandardError, StringComparison.OrdinalIgnoreCase);
+        }
+        finally
+        {
+            foreach (var processId in startedProcessIds)
+                try { WorkerProcessJobs.TryKillOrFallback(processId); } catch { }
+            foreach (var process in processes)
+                try { process.Dispose(); } catch { }
+        }
+    }
+
+    [Xunit.Fact]
     public void ClaudeSamplesUseIndependentProviderSessions()
     {
         const string primaryCommand = "claude -p --session-id primary-session";
