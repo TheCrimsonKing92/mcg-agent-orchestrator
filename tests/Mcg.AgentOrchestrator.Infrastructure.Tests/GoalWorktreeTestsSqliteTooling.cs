@@ -43,7 +43,32 @@ public sealed class GoalWorktreeTestsSqliteTooling : GoalWorktreeTestBase
             process.ExitCode is 0 or 2,
             $"Expected Find-OrchestratorLocks.ps1 to exit 0 or 2, got {process.ExitCode}. stderr: {stderr}");
         Assert.DoesNotContain("A positional parameter cannot be found that accepts argument", stderr, StringComparison.Ordinal);
-        Assert.DoesNotContain("repo-process-info --locks", stdout, StringComparison.OrdinalIgnoreCase);
+        Assert.False(
+            ContainsUnexpectedLockQueryEcho(stdout),
+            $"Find-OrchestratorLocks.ps1 stdout echoed the lock query outside a report row.{Environment.NewLine}{stdout}");
+    }
+
+    [Xunit.Fact(DisplayName = "LockReportCheck_accepts_sibling_report_rows_containing_the_lock_query")]
+    public void LockReportCheckAcceptsSiblingReportRowsContainingTheLockQuery()
+    {
+        const string stdout =
+            "LOCK id=17 kind=conduct-loop parent=9 name=dotnet created=2026-08-23T12:00:00.0000000Z path=C:\\Program Files\\dotnet\\dotnet.exe command=\"dotnet\" C:\\repo\\Mcg.AgentOrchestrator.App.dll repo-process-info --locks\r\n" +
+            "PROCESS id=23 parent=9 name=dotnet created=2026-08-23T12:00:01.0000000Z path=C:\\Program Files\\dotnet\\dotnet.exe command=\"dotnet\" C:\\repo\\Mcg.AgentOrchestrator.App.dll repo-process-info --locks\n" +
+            "2 lock-holder(s) running; in-tree build lock is HELD.";
+
+        Assert.False(ContainsUnexpectedLockQueryEcho(stdout));
+    }
+
+    [Xunit.Fact(DisplayName = "LockReportCheck_rejects_self_echo_and_mangled_argument_output")]
+    public void LockReportCheckRejectsSelfEchoAndMangledArgumentOutput()
+    {
+        const string selfEchoOutput =
+            "\"dotnet\" \"C:\\Temp\\Mcg.AgentOrchestrator.App.dll\" repo-process-info --locks\r\n" +
+            "No orchestrator lock-holders running; in-tree build lock is FREE.";
+
+        Assert.True(ContainsUnexpectedLockQueryEcho(selfEchoOutput));
+        Assert.True(ContainsUnexpectedLockQueryEcho("Unknown command 'repo-process-info --locks'"));
+        Assert.True(ContainsUnexpectedLockQueryEcho("LOCK id=7 kind=conduct-loop repo-process-info --locks"));
     }
 
     [Xunit.Fact(DisplayName = "InvokeGit_through_repo_script_preserves_hyphenated_git_arguments")]
@@ -734,6 +759,37 @@ public sealed class GoalWorktreeTestsSqliteTooling : GoalWorktreeTestBase
             DeleteDirectory(repo);
             DeleteDirectory(linkedWorktree);
         }
+    }
+
+    private const string LockQueryCommandText = "repo-process-info --locks";
+
+    // A correct --locks report prints other processes' command lines, so the query text legitimately
+    // appears inside command=. Only text outside a report row indicates a self-echo or mangled arguments.
+    private static bool ContainsUnexpectedLockQueryEcho(string stdout)
+    {
+        foreach (var rawLine in stdout.Split(['\r', '\n'], StringSplitOptions.RemoveEmptyEntries))
+        {
+            var line = rawLine.Trim();
+            if (line.IndexOf(LockQueryCommandText, StringComparison.OrdinalIgnoreCase) < 0)
+            {
+                continue;
+            }
+
+            if (!line.StartsWith("LOCK id=", StringComparison.Ordinal) &&
+                !line.StartsWith("PROCESS id=", StringComparison.Ordinal))
+            {
+                return true;
+            }
+
+            var commandFieldIndex = line.IndexOf(" command=", StringComparison.Ordinal);
+            if (commandFieldIndex < 0 ||
+                line.IndexOf(LockQueryCommandText, 0, commandFieldIndex, StringComparison.OrdinalIgnoreCase) >= 0)
+            {
+                return true;
+            }
+        }
+
+        return false;
     }
 
 }
