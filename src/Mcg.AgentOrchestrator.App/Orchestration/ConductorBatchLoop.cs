@@ -4119,7 +4119,7 @@ internal sealed class ConductorBatchLoop
             return ParallelAcceptanceHeld(
                 candidate,
                 policy,
-                $"Transient worker-process registration fault ({attempt.TransientFailureCount}/{ParallelAcceptanceTransientFailureCap}); retry on next conduct tick. attempt={attempt.AttemptId}: {SanitizeReason(registrationFault!)}");
+                $"Transient worker-process registration fault ({attempt.TransientFailureCount}/{ParallelAcceptanceTransientFailureCap}); retry on next conduct tick. attempt={attempt.AttemptId}: {registrationFault}");
         }
 
         if (disposition is WorkerRegistrationFaultDisposition.BoundedRetry or WorkerRegistrationFaultDisposition.Terminal)
@@ -4127,7 +4127,7 @@ internal sealed class ConductorBatchLoop
             return driver.EscalateParallelLandingAcceptance(
                 candidate,
                 policy,
-                $"background acceptance worker-process registration fault: {SanitizeReason(registrationFault!)}");
+                $"background acceptance worker-process registration fault: {registrationFault}");
         }
 
         return ParallelAcceptanceUnclassifiedFault(driver, candidate, policy, exception);
