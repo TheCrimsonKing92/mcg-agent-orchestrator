@@ -46,7 +46,17 @@ internal static ConductorPolicyResolution ResolveConductorPolicy(string? presetN
         var warnings = new List<string>();
         try
         {
-            _ = ConductorAutonomyPolicy.LoadFromOrchestratorDirectory(new DirectoryInfo(orchestratorDirectory));
+            var filePolicy = ConductorAutonomyPolicy.LoadFromOrchestratorDirectory(new DirectoryInfo(orchestratorDirectory));
+            if (!ReferenceEquals(filePolicy, ConductorAutonomyPolicy.Default))
+            {
+                var differences = DescribeConductorPolicyDifferences(preset, filePolicy);
+                if (differences.Count > 0)
+                {
+                    warnings.Add(
+                        $"Policy file '{policyPath}' (policy '{filePolicy.Name}') disagrees with explicit --policy {preset.Name}; " +
+                        $"--policy {preset.Name} wins and will be applied to the whole run. Differences: {string.Join("; ", differences)}.");
+                }
+            }
         }
         catch (Exception ex) when (ex is FormatException or IOException or UnauthorizedAccessException)
         {
@@ -81,6 +91,42 @@ internal static ConductorPolicyResolution ResolveConductorPolicy(string? presetN
     }
 
     return new ConductorPolicyResolution(loaded, $"file:{policyPath}", fileWarnings);
+}
+
+private static IReadOnlyList<string> DescribeConductorPolicyDifferences(
+    ConductorAutonomyPolicy preset,
+    ConductorAutonomyPolicy file)
+{
+    var differences = new List<string>();
+
+    void Add<T>(string field, T presetValue, T fileValue)
+    {
+        if (!EqualityComparer<T>.Default.Equals(presetValue, fileValue))
+        {
+            differences.Add($"{field}: preset={Format(presetValue)} file={Format(fileValue)}");
+        }
+    }
+
+    static string Format<T>(T value) => value is null ? "<null>" : value.ToString() ?? "<null>";
+
+    Add(nameof(ConductorAutonomyPolicy.Name), preset.Name, file.Name);
+    Add(nameof(ConductorAutonomyPolicy.MaxConcurrentPaidWorkers), preset.MaxConcurrentPaidWorkers, file.MaxConcurrentPaidWorkers);
+    Add(nameof(ConductorAutonomyPolicy.MaxCriterionRetries), preset.MaxCriterionRetries, file.MaxCriterionRetries);
+    Add(nameof(ConductorAutonomyPolicy.AutoPromoteRiskThreshold), preset.AutoPromoteRiskThreshold, file.AutoPromoteRiskThreshold);
+    Add(nameof(ConductorAutonomyPolicy.MaxEmptyOutputDispatchRetries), preset.MaxEmptyOutputDispatchRetries, file.MaxEmptyOutputDispatchRetries);
+    Add(nameof(ConductorAutonomyPolicy.MaxEmptyOutputAutoRecoverCycles), preset.MaxEmptyOutputAutoRecoverCycles, file.MaxEmptyOutputAutoRecoverCycles);
+    Add(nameof(ConductorAutonomyPolicy.EmptyOutputRetryInitialDelaySeconds), preset.EmptyOutputRetryInitialDelaySeconds, file.EmptyOutputRetryInitialDelaySeconds);
+    Add(nameof(ConductorAutonomyPolicy.EmptyOutputRetryBackoffMultiplier), preset.EmptyOutputRetryBackoffMultiplier, file.EmptyOutputRetryBackoffMultiplier);
+    Add(nameof(ConductorAutonomyPolicy.EmptyOutputRetryMaxDelaySeconds), preset.EmptyOutputRetryMaxDelaySeconds, file.EmptyOutputRetryMaxDelaySeconds);
+    Add(nameof(ConductorAutonomyPolicy.ReviewAutoRetryWarningRound), preset.ReviewAutoRetryWarningRound, file.ReviewAutoRetryWarningRound);
+    Add(nameof(ConductorAutonomyPolicy.ReviewAutoRetryStopRound), preset.ReviewAutoRetryStopRound, file.ReviewAutoRetryStopRound);
+    Add(nameof(ConductorAutonomyPolicy.PlannerSampleCount), preset.PlannerSampleCount, file.PlannerSampleCount);
+    foreach (var state in Enum.GetValues<GoalLifecycleState>())
+    {
+        Add($"{nameof(ConductorAutonomyPolicy.TransitionMap)}[{state}]", preset.TransitionMap[state], file.TransitionMap[state]);
+    }
+
+    return differences;
 }
 
 internal static void PrintConductorPolicyWarnings(ConductorPolicyResolution resolution)

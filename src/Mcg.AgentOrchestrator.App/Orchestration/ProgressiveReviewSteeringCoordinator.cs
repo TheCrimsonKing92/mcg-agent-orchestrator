@@ -3,6 +3,7 @@ using System.Security.Cryptography;
 using System.Text;
 using System.Text.Json;
 using Mcg.AgentOrchestrator.Core;
+using Mcg.AgentOrchestrator.Core.Conductor;
 using Mcg.AgentOrchestrator.Infrastructure;
 
 namespace Mcg.AgentOrchestrator.App.Orchestration;
@@ -37,7 +38,8 @@ internal sealed class ProgressiveReviewSteeringCoordinator
     private readonly Func<TaskProcessRecord, IReadOnlyList<int>> _getLineageDescendants;
     private readonly Func<AgentOrchestratorKernel, GoalId, TaskId, TaskProcessRecord> _cancelProcess;
     private readonly Func<AgentOrchestratorKernel, GoalId, TaskId, TaskProcessRecord> _startProcess;
-    private readonly Action<AgentOrchestratorKernel, Goal, TaskSpec, string> _prepareFreshDispatch;
+    private readonly Action<AgentOrchestratorKernel, Goal, TaskSpec, string>? _prepareFreshDispatch;
+    private readonly Action<AgentOrchestratorKernel, Goal, TaskSpec, string, ConductorAutonomyPolicy?>? _prepareFreshDispatchWithPolicy;
     private readonly Func<string, string?> _headResolver;
     private readonly Func<string, string?, string?, bool> _capturedHeadIsAncestor;
 
@@ -56,7 +58,8 @@ internal sealed class ProgressiveReviewSteeringCoordinator
         Func<AgentOrchestratorKernel, GoalId, TaskId, TaskProcessRecord>? startProcess = null,
         Action<AgentOrchestratorKernel, Goal, TaskSpec, string>? prepareFreshDispatch = null,
         Func<string, string?>? headResolver = null,
-        Func<string, string?, string?, bool>? capturedHeadIsAncestor = null)
+        Func<string, string?, string?, bool>? capturedHeadIsAncestor = null,
+        Action<AgentOrchestratorKernel, Goal, TaskSpec, string, ConductorAutonomyPolicy?>? prepareFreshDispatchWithPolicy = null)
     {
         _workspace = workspace;
         _agents = agents;
@@ -70,7 +73,8 @@ internal sealed class ProgressiveReviewSteeringCoordinator
         _getLineageDescendants = getLineageDescendants ?? GetLiveLineageDescendants;
         _cancelProcess = cancelProcess ?? ((kernel, goalId, taskId) => new BackgroundDispatchRunner().CancelLatestProcess(kernel, goalId, taskId));
         _startProcess = startProcess ?? ((kernel, goalId, taskId) => new BackgroundDispatchRunner().StartLatestDispatch(kernel, goalId, taskId, workspace.LogDirectory));
-        _prepareFreshDispatch = prepareFreshDispatch ?? PrepareRawFreshSubscriptionDispatch;
+        _prepareFreshDispatch = prepareFreshDispatch;
+        _prepareFreshDispatchWithPolicy = prepareFreshDispatchWithPolicy;
         _headResolver = headResolver ?? TryResolveHead;
         _capturedHeadIsAncestor = capturedHeadIsAncestor ?? CapturedHeadIsAncestor;
     }
@@ -84,12 +88,15 @@ internal sealed class ProgressiveReviewSteeringCoordinator
         return new ProgressiveReviewSteeringCoordinator(workspace, agents, profiles, providers);
     }
 
-    public ProgressiveReviewSteeringResult ExecutePending(AgentOrchestratorKernel kernel, Goal goal)
+    public ProgressiveReviewSteeringResult ExecutePending(
+        AgentOrchestratorKernel kernel,
+        Goal goal,
+        ConductorAutonomyPolicy? conductorPolicy = null)
     {
         var lines = new List<string>();
         try
         {
-            return ExecutePendingCore(kernel, goal, lines);
+            return ExecutePendingCore(kernel, goal, lines, conductorPolicy);
         }
         catch (Exception ex)
         {
@@ -98,7 +105,11 @@ internal sealed class ProgressiveReviewSteeringCoordinator
         }
     }
 
-    private ProgressiveReviewSteeringResult ExecutePendingCore(AgentOrchestratorKernel kernel, Goal goal, List<string> lines)
+    private ProgressiveReviewSteeringResult ExecutePendingCore(
+        AgentOrchestratorKernel kernel,
+        Goal goal,
+        List<string> lines,
+        ConductorAutonomyPolicy? conductorPolicy)
     {
         var intent = _store.ReserveNextPendingAsync(goal.Id.Value).GetAwaiter().GetResult();
         if (intent is null)
@@ -106,7 +117,7 @@ internal sealed class ProgressiveReviewSteeringCoordinator
 
         try
         {
-            return ExecuteReservedIntent(kernel, goal, lines, intent);
+            return ExecuteReservedIntent(kernel, goal, lines, intent, conductorPolicy);
         }
         catch (Exception ex)
         {
@@ -125,7 +136,8 @@ internal sealed class ProgressiveReviewSteeringCoordinator
         AgentOrchestratorKernel kernel,
         Goal goal,
         List<string> lines,
-        ProgressiveReviewSteerIntent intent)
+        ProgressiveReviewSteerIntent intent,
+        ConductorAutonomyPolicy? conductorPolicy)
     {
         var taskId = new TaskId(intent.TaskId);
         var now = _utcNow();
@@ -212,7 +224,12 @@ internal sealed class ProgressiveReviewSteeringCoordinator
                     originalRenderedContextPackage,
                     effectiveGuidanceText);
             else
-                PrepareFreshDispatchWithGuidance(kernel, refreshedGoal, refreshedTask, effectiveGuidanceText);
+                PrepareFreshDispatchWithGuidance(
+                    kernel,
+                    refreshedGoal,
+                    refreshedTask,
+                    effectiveGuidanceText,
+                    conductorPolicy);
 
             startedDispatch = kernel.GetTask(goal.Id, taskId).LastDispatch;
             started = _startProcess(kernel, goal.Id, taskId);
@@ -499,7 +516,12 @@ internal sealed class ProgressiveReviewSteeringCoordinator
             : null;
     }
 
-    private void PrepareRawFreshSubscriptionDispatch(AgentOrchestratorKernel kernel, Goal goal, TaskSpec task, string guidanceText)
+    private void PrepareRawFreshSubscriptionDispatch(
+        AgentOrchestratorKernel kernel,
+        Goal goal,
+        TaskSpec task,
+        string guidanceText,
+        ConductorAutonomyPolicy? conductorPolicy)
     {
         _ = guidanceText;
         GoalManagementCommandService.SubscriptionDispatchTask(
@@ -509,12 +531,23 @@ internal sealed class ProgressiveReviewSteeringCoordinator
             task,
             _agents,
             _profiles,
-            providers: _providers);
+            providers: _providers,
+            conductorPolicy: conductorPolicy);
     }
 
-    private void PrepareFreshDispatchWithGuidance(AgentOrchestratorKernel kernel, Goal goal, TaskSpec task, string guidanceText)
+    private void PrepareFreshDispatchWithGuidance(
+        AgentOrchestratorKernel kernel,
+        Goal goal,
+        TaskSpec task,
+        string guidanceText,
+        ConductorAutonomyPolicy? conductorPolicy)
     {
-        _prepareFreshDispatch(kernel, goal, task, guidanceText);
+        if (_prepareFreshDispatchWithPolicy is not null)
+            _prepareFreshDispatchWithPolicy(kernel, goal, task, guidanceText, conductorPolicy);
+        else if (_prepareFreshDispatch is null)
+            PrepareRawFreshSubscriptionDispatch(kernel, goal, task, guidanceText, conductorPolicy);
+        else
+            _prepareFreshDispatch(kernel, goal, task, guidanceText);
         var prepared = kernel.GetTask(goal.Id, task.Id).LastDispatch
             ?? throw new InvalidOperationException("Fresh steering fallback did not produce a dispatch record.");
         var freshPrompt = TryReadText(prepared.PromptPath, out var preparedPrompt)

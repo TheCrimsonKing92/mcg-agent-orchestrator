@@ -219,8 +219,8 @@ public sealed class ConductorBatchLoopTestsLoopSchedulingPolicy : ConductorBatch
         }
     }
 
-    [Xunit.Fact(DisplayName = "Conductor_policy_resolution_uses_file_default_and_explicit_preset_precedence")]
-    public void ConductorPolicyResolutionUsesFileDefaultAndExplicitPresetPrecedence()
+    [Xunit.Fact(DisplayName = "Conductor_policy_resolution_preserves_file_values_and_reports_explicit_preset_divergence")]
+    public void ConductorPolicyResolutionPreservesFileValuesAndReportsExplicitPresetDivergence()
     {
         var root = CreateTempDirectory("mcg-conductor-policy-resolution");
         try
@@ -235,12 +235,35 @@ public sealed class ConductorBatchLoopTestsLoopSchedulingPolicy : ConductorBatch
             var configured = ConductorAutonomyPolicy.Conservative with
             {
                 Name = "OperatorTuned",
-                MaxConcurrentPaidWorkers = 8
+                MaxConcurrentPaidWorkers = 8,
+                MaxCriterionRetries = 3,
+                AutoPromoteRiskThreshold = ChangeRiskTier.Security,
+                MaxEmptyOutputDispatchRetries = 9,
+                MaxEmptyOutputAutoRecoverCycles = 4,
+                EmptyOutputRetryInitialDelaySeconds = 1,
+                EmptyOutputRetryBackoffMultiplier = 3,
+                EmptyOutputRetryMaxDelaySeconds = 40,
+                ReviewAutoRetryWarningRound = 5,
+                ReviewAutoRetryStopRound = 8,
+                PlannerSampleCount = 2,
+                TransitionMap = ConductorAutonomyPolicy.Conservative.TransitionMap
             };
             File.WriteAllText(policyPath, configured.ToJson());
 
             var fromFile = CliCommandHandlers.ResolveConductorPolicy(null, orchestratorDirectory);
-            Assert.Equal(8, fromFile.Policy.MaxConcurrentPaidWorkers);
+            Assert.Equal(configured.Name, fromFile.Policy.Name);
+            Assert.Equal(configured.MaxConcurrentPaidWorkers, fromFile.Policy.MaxConcurrentPaidWorkers);
+            Assert.Equal(configured.MaxCriterionRetries, fromFile.Policy.MaxCriterionRetries);
+            Assert.Equal(configured.AutoPromoteRiskThreshold, fromFile.Policy.AutoPromoteRiskThreshold);
+            Assert.Equal(configured.MaxEmptyOutputDispatchRetries, fromFile.Policy.MaxEmptyOutputDispatchRetries);
+            Assert.Equal(configured.MaxEmptyOutputAutoRecoverCycles, fromFile.Policy.MaxEmptyOutputAutoRecoverCycles);
+            Assert.Equal(configured.EmptyOutputRetryInitialDelaySeconds, fromFile.Policy.EmptyOutputRetryInitialDelaySeconds);
+            Assert.Equal(configured.EmptyOutputRetryBackoffMultiplier, fromFile.Policy.EmptyOutputRetryBackoffMultiplier);
+            Assert.Equal(configured.EmptyOutputRetryMaxDelaySeconds, fromFile.Policy.EmptyOutputRetryMaxDelaySeconds);
+            Assert.Equal(configured.ReviewAutoRetryWarningRound, fromFile.Policy.ReviewAutoRetryWarningRound);
+            Assert.Equal(configured.ReviewAutoRetryStopRound, fromFile.Policy.ReviewAutoRetryStopRound);
+            Assert.Equal(configured.PlannerSampleCount, fromFile.Policy.PlannerSampleCount);
+            Assert.Equal(configured.TransitionMap, fromFile.Policy.TransitionMap);
             Assert.Equal($"file:{Path.GetFullPath(policyPath)}", fromFile.Source);
             Assert.Contains(fromFile.Warnings, warning =>
                 warning.Contains("above the highest preset value 5", StringComparison.Ordinal));
@@ -248,6 +271,36 @@ public sealed class ConductorBatchLoopTestsLoopSchedulingPolicy : ConductorBatch
             var explicitPreset = CliCommandHandlers.ResolveConductorPolicy("Permissive", orchestratorDirectory);
             Assert.Same(ConductorAutonomyPolicy.Permissive, explicitPreset.Policy);
             Assert.Equal("preset", explicitPreset.Source);
+            var divergenceWarning = Assert.Single(explicitPreset.Warnings);
+            Assert.Contains(Path.GetFullPath(policyPath), divergenceWarning, StringComparison.Ordinal);
+            Assert.Contains("--policy Permissive", divergenceWarning, StringComparison.Ordinal);
+            Assert.Contains("OperatorTuned", divergenceWarning, StringComparison.Ordinal);
+            Assert.Contains("MaxConcurrentPaidWorkers: preset=5 file=8", divergenceWarning, StringComparison.Ordinal);
+            Assert.Contains("MaxCriterionRetries: preset=2 file=3", divergenceWarning, StringComparison.Ordinal);
+            Assert.Contains("TransitionMap[AwaitingClarification]: preset=Auto file=Escalate", divergenceWarning, StringComparison.Ordinal);
+
+            var (_, goal) = SimpleGoal();
+            var candidate = ConductorParallelAcceptanceCandidate.Create(
+                goal,
+                0,
+                ["src/PresetPolicyTransport.cs"],
+                "branch-preset-policy",
+                "main-preset-policy");
+            var coordinator = new ConductorParallelAcceptanceAttemptCoordinator(
+                Path.Combine(root, "attempts"),
+                isProcessAlive: _ => true,
+                launchOwnedProcess: _ => new ConductorParallelAcceptanceOwnedProcessLaunchResult(7000));
+            var started = coordinator.Evaluate(
+                candidate,
+                explicitPreset.Policy,
+                (_, _) => throw new InvalidOperationException("The owned-process stub must not run acceptance inline."));
+            var roundTripped = JsonSerializer.Deserialize<ConductorParallelAcceptanceAttempt>(
+                File.ReadAllText(started.Attempt.MetadataPath),
+                new JsonSerializerOptions(JsonSerializerDefaults.Web));
+            Assert.NotNull(roundTripped);
+            Assert.Equal(
+                explicitPreset.Policy.ToJson(),
+                ConductorParallelAcceptanceAttemptCoordinator.ResolveAttemptPolicy(roundTripped).ToJson());
 
             var unknown = Assert.Throws<InvalidOperationException>(() =>
                 CliCommandHandlers.ResolveConductorPolicy("UnknownName", orchestratorDirectory));
@@ -258,6 +311,76 @@ public sealed class ConductorBatchLoopTestsLoopSchedulingPolicy : ConductorBatch
         finally
         {
             TryDeleteDirectory(root);
+        }
+    }
+
+    [Xunit.Fact(DisplayName = "Acceptance_owned_process_resolves_the_transported_conductor_policy_snapshot")]
+    public void AcceptanceOwnedProcessResolvesTheTransportedConductorPolicySnapshot()
+    {
+        var attemptRoot = CreateTempDirectory("mcg-acceptance-policy-transport");
+        try
+        {
+            var (_, goal) = SimpleGoal();
+            var configured = ConductorAutonomyPolicy.Conservative with
+            {
+                Name = "OperatorTuned",
+                MaxConcurrentPaidWorkers = 6,
+                MaxCriterionRetries = 3,
+                AutoPromoteRiskThreshold = ChangeRiskTier.Broad,
+                MaxEmptyOutputDispatchRetries = 9,
+                MaxEmptyOutputAutoRecoverCycles = 4,
+                EmptyOutputRetryInitialDelaySeconds = 1,
+                EmptyOutputRetryBackoffMultiplier = 3,
+                EmptyOutputRetryMaxDelaySeconds = 40,
+                ReviewAutoRetryWarningRound = 5,
+                ReviewAutoRetryStopRound = 8,
+                PlannerSampleCount = 2,
+                TransitionMap = ConductorAutonomyPolicy.Permissive.TransitionMap
+            };
+            var candidate = ConductorParallelAcceptanceCandidate.Create(
+                goal,
+                0,
+                ["src/PolicyTransport.cs"],
+                "branch-policy",
+                "main-policy");
+            var coordinator = new ConductorParallelAcceptanceAttemptCoordinator(
+                attemptRoot,
+                isProcessAlive: _ => true,
+                launchOwnedProcess: _ => new ConductorParallelAcceptanceOwnedProcessLaunchResult(7001));
+
+            var started = coordinator.Evaluate(
+                candidate,
+                configured,
+                (_, _) => throw new InvalidOperationException("The owned-process stub must not run acceptance inline."));
+            var roundTripped = JsonSerializer.Deserialize<ConductorParallelAcceptanceAttempt>(
+                File.ReadAllText(started.Attempt.MetadataPath),
+                new JsonSerializerOptions(JsonSerializerDefaults.Web));
+
+            Assert.NotNull(roundTripped);
+            Assert.Equal(configured.ToJson(), roundTripped.PolicyJson);
+            var resolved = ConductorParallelAcceptanceAttemptCoordinator.ResolveAttemptPolicy(roundTripped);
+            Assert.Equal(configured.Name, resolved.Name);
+            Assert.Equal(configured.MaxConcurrentPaidWorkers, resolved.MaxConcurrentPaidWorkers);
+            Assert.Equal(configured.MaxCriterionRetries, resolved.MaxCriterionRetries);
+            Assert.Equal(configured.AutoPromoteRiskThreshold, resolved.AutoPromoteRiskThreshold);
+            Assert.Equal(configured.MaxEmptyOutputDispatchRetries, resolved.MaxEmptyOutputDispatchRetries);
+            Assert.Equal(configured.MaxEmptyOutputAutoRecoverCycles, resolved.MaxEmptyOutputAutoRecoverCycles);
+            Assert.Equal(configured.EmptyOutputRetryInitialDelaySeconds, resolved.EmptyOutputRetryInitialDelaySeconds);
+            Assert.Equal(configured.EmptyOutputRetryBackoffMultiplier, resolved.EmptyOutputRetryBackoffMultiplier);
+            Assert.Equal(configured.EmptyOutputRetryMaxDelaySeconds, resolved.EmptyOutputRetryMaxDelaySeconds);
+            Assert.Equal(configured.ReviewAutoRetryWarningRound, resolved.ReviewAutoRetryWarningRound);
+            Assert.Equal(configured.ReviewAutoRetryStopRound, resolved.ReviewAutoRetryStopRound);
+            Assert.Equal(configured.PlannerSampleCount, resolved.PlannerSampleCount);
+            Assert.Equal(configured.TransitionMap, resolved.TransitionMap);
+
+            Assert.Same(
+                ConductorAutonomyPolicy.Permissive,
+                ConductorParallelAcceptanceAttemptCoordinator.ResolveAttemptPolicy(
+                    roundTripped with { PolicyName = "Permissive", PolicyJson = "{ damaged" }));
+        }
+        finally
+        {
+            TryDeleteDirectory(attemptRoot);
         }
     }
 
@@ -312,9 +435,10 @@ public sealed class ConductorBatchLoopTestsLoopSchedulingPolicy : ConductorBatch
 
             var explicitPreset = CliCommandHandlers.ResolveConductorPolicy("Permissive", orchestratorDirectory);
             Assert.Same(ConductorAutonomyPolicy.Permissive, explicitPreset.Policy);
-            Assert.Contains(explicitPreset.Warnings, warning =>
-                warning.Contains(policyPath, StringComparison.Ordinal) &&
-                warning.Contains("not valid JSON", StringComparison.Ordinal));
+            var warning = Assert.Single(explicitPreset.Warnings);
+            Assert.Contains(policyPath, warning, StringComparison.Ordinal);
+            Assert.Contains("not valid JSON", warning, StringComparison.Ordinal);
+            Assert.DoesNotContain("disagrees", warning, StringComparison.Ordinal);
         }
         finally
         {
