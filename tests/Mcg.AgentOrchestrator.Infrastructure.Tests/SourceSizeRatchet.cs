@@ -24,7 +24,9 @@ internal static class SourceSizeRatchet
             // Raised for goal 8b6de491: the slice-batch parent execution guard must be consulted where the
             // driver decides a goal's advance, which is the only point holding both the goal and the guard.
             // Goal 0e0aa816 extracted acceptance landing to its own partial-class source file.
-            new SourceSizeCeiling("src/Mcg.AgentOrchestrator.App/Orchestration/ConductorDriver.cs", 6139),
+            // Goal ce3c3917 adds only the injectable inline-landing lease seam here; lease behavior remains
+            // extracted in ConductorDriver.AcceptanceLanding.cs.
+            new SourceSizeCeiling("src/Mcg.AgentOrchestrator.App/Orchestration/ConductorDriver.cs", 6143),
             // Raised for goal dadadfac: set-aside re-admission must be decided where the loop already holds
             // the goal, its recorded set-aside entry, and the current sweep blockers together.
             // Raised for goal 289b469d: registration-fault hold/escalation must be decided at the existing
@@ -45,8 +47,12 @@ internal static class SourceSizeRatchet
             new SourceSizeCeiling("tests/Mcg.AgentOrchestrator.Infrastructure.Tests/GoalAcceptanceVerifierTests.cs", 1566),
             // Goal 682f25a1 re-derived this row after integrating goal c2eae988, whose fault-isolation
             // eligibility coverage had already added 173 net lines before the multi-file ratchet landed.
-            new SourceSizeCeiling("tests/Mcg.AgentOrchestrator.Infrastructure.Tests/ConductorDriverTests.cs", 1396),
-            new SourceSizeCeiling("tests/Mcg.AgentOrchestrator.Infrastructure.Tests/ConductorDriverTestsAcceptanceCoordination.cs", 900),
+            // Goal ce3c3917 adds the two MakeDriver forwarding seams required to inject and capture the
+            // inline-landing lease lifecycle without changing unrelated driver tests.
+            new SourceSizeCeiling("tests/Mcg.AgentOrchestrator.Infrastructure.Tests/ConductorDriverTests.cs", 1400),
+            // Goal ce3c3917 keeps acquired, unavailable, and exceptional lease-lifecycle coverage together
+            // in the acceptance-coordination owner rather than splitting one behavioral contract.
+            new SourceSizeCeiling("tests/Mcg.AgentOrchestrator.Infrastructure.Tests/ConductorDriverTestsAcceptanceCoordination.cs", 984),
             new SourceSizeCeiling("tests/Mcg.AgentOrchestrator.Infrastructure.Tests/ConductorDriverTestsLifecycleStates.cs", 1543),
             new SourceSizeCeiling("tests/Mcg.AgentOrchestrator.Infrastructure.Tests/ConductorDriverTestsReviewRetryConvergence.cs", 778),
             // Raised for goal 4e3cdbb8: behavioral coverage now pins every permanent and transient

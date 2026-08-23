@@ -96,6 +96,7 @@ internal sealed partial class ConductorDriver
     private readonly Func<TimeSpan, string> _buildServerShutdown;
     private readonly TimeSpan _buildServerShutdownTimeout;
     private readonly Func<Goal, int?, DotnetBuildEnvironmentLease?, CancellationToken, AcceptanceVerificationSummary> _runAcceptanceVerification;
+    private readonly Func<Goal, DotnetBuildEnvironmentLease?> _tryAcquireLandingStableSlotLease;
     private readonly Action<Goal, AcceptanceVerificationSummary> _runAdvisorySemanticAcceptance;
     private readonly Func<Goal, string, DotnetBuildEnvironmentLease?, CancellationToken, FocusedEvidenceRunResult> _runFocusedEvidence;
     private readonly Func<Goal, string, DotnetBuildEnvironmentLease?, CancellationToken, FocusedEvidenceRunResult> _runDualArmFocusedEvidence;
@@ -250,6 +251,7 @@ internal sealed partial class ConductorDriver
             Path.Combine(workspace.OrchestratorDirectory, "acceptance-gate-attempts"),
             dir,
             tryRunPreSlot: RunParallelLandingAcceptancePreSlot);
+        _tryAcquireLandingStableSlotLease = _ => TryAcquireInlineLandingStableSlotLease();
         _focusedEvidenceAttemptCoordinator = new ConductorParallelAcceptanceAttemptCoordinator(
             Path.Combine(workspace.OrchestratorDirectory, "pre-review-evidence-attempts"),
             dir,
@@ -1196,6 +1198,7 @@ internal sealed partial class ConductorDriver
         Func<Goal, IReadOnlyList<string>>? getLandingFileScopes = null,
         Func<Goal, int?, AcceptanceVerificationSummary>? runAcceptanceVerificationWithSlot = null,
         Func<Goal, int?, DotnetBuildEnvironmentLease?, CancellationToken, AcceptanceVerificationSummary>? runAcceptanceVerificationWithLease = null,
+        Func<Goal, DotnetBuildEnvironmentLease?>? tryAcquireLandingStableSlotLease = null,
         Func<bool>? hasGateReadyGoal = null,
         ConductorParallelAcceptanceAttemptCoordinator? parallelAcceptanceAttemptCoordinator = null,
         Func<Goal, string, FocusedEvidenceRunResult>? runFocusedEvidence = null,
@@ -1254,6 +1257,7 @@ internal sealed partial class ConductorDriver
             ?? (runAcceptanceVerificationWithSlot is not null
                 ? ((goal, slot, _, _) => runAcceptanceVerificationWithSlot(goal, slot))
                 : ((goal, _, _, _) => runAcceptanceVerification(goal)));
+        _tryAcquireLandingStableSlotLease = tryAcquireLandingStableSlotLease ?? (_ => null);
         _runAdvisorySemanticAcceptance = runAdvisorySemanticAcceptance ?? ((_, _) => { });
         _runFocusedEvidence = runFocusedEvidence is null
             ? ((_, request, _, _) => new FocusedEvidenceRunResult(
