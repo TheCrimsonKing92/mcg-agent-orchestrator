@@ -16,12 +16,17 @@ using Microsoft.Data.Sqlite;
 public abstract class GoalWorktreeTestBase
 {
     private static readonly Lazy<ImmutableArray<byte>> MigratedStateTemplate = new(CreateMigratedStateTemplate);
-    private static readonly Lazy<string> SeedRepositoryProcessRoot = new(
-        InitializeSeedRepositoryProcessRoot,
-        LazyThreadSafetyMode.ExecutionAndPublication);
+    private static readonly SeedRepositoryRootInitializer SeedRepositoryProcessRoot = new(
+        InitializeSeedRepositoryProcessRoot);
     private static readonly long SeedRepositoryProcessStartTimeUtcTicks = GetCurrentProcessStartTimeUtcTicks();
     private static int seedRepositoryCounter;
 
+    // Repository evidence does not make the Windows source-root placement load-bearing:
+    // non-Windows uses Temp, and the Windows move from Temp recorded no rationale.
+    // Keeping it here preserves current cleanup ownership while long-path behavior is unmeasured.
+    // Cohort, terminal, and orphan worktree removal can delete this subtree with the worktree.
+    // The sandbox ACL reset targets only .mcg-sandbox, not this .scratch subtree.
+    // Moving to Temp would leave crash leftovers to OS policy unless cleanup ownership also moved.
     private static string SeedRepositoryBaseRootPath => OperatingSystem.IsWindows()
         ? Path.Combine(FindCurrentSourceRoot(), ".scratch", "mcg-wt")
         : Path.Combine(Path.GetTempPath(), "mcg-worktree-tests");
@@ -150,7 +155,7 @@ public abstract class GoalWorktreeTestBase
         }
     }
 
-    private static string EnsureSeedRepositoryProcessRoot() => SeedRepositoryProcessRoot.Value;
+    private static string EnsureSeedRepositoryProcessRoot() => SeedRepositoryProcessRoot.EnsureInitialized();
 
     private protected static string BuildSeedRepositoryContainerName(
         long processStartTimeUtcTicks,
@@ -163,13 +168,11 @@ public abstract class GoalWorktreeTestBase
         return process.StartTime.ToUniversalTime().Ticks;
     }
 
-    private static string InitializeSeedRepositoryProcessRoot()
-    {
-        var processRoot = SeedRepositoryProcessRootPath;
-        _ = TempRootJanitor.DeleteTree(processRoot);
-        Directory.CreateDirectory(processRoot);
-        return processRoot;
-    }
+    private static string InitializeSeedRepositoryProcessRoot() =>
+        SeedRepositoryRootInitializer.CreateProcessRoot(
+            SeedRepositoryProcessRootPath,
+            TempRootJanitor.DeleteTree,
+            path => Directory.CreateDirectory(path));
 
     private protected static string CreateSeededRepository()
     {
