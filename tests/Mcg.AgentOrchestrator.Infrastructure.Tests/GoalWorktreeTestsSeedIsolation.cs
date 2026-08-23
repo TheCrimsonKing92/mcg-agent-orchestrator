@@ -101,7 +101,7 @@ public sealed class GoalWorktreeTestsSeedIsolation : GoalWorktreeTestBase
             foreach (var repo in createdRepos)
             {
                 Assert.True(File.Exists(Path.Combine(repo, "seed.txt")));
-                Assert.NotEmpty(RunGitOutput(repo, "rev-parse", "HEAD").Trim());
+                AssertSeedHeadResolves(repo);
             }
 
             foreach (var repo in createdRepos[..2])
@@ -112,7 +112,7 @@ public sealed class GoalWorktreeTestsSeedIsolation : GoalWorktreeTestBase
             foreach (var repo in createdRepos[2..])
             {
                 Assert.True(File.Exists(Path.Combine(repo, "seed.txt")));
-                Assert.NotEmpty(RunGitOutput(repo, "rev-parse", "HEAD").Trim());
+                AssertSeedHeadResolves(repo);
             }
         }
         finally
@@ -125,5 +125,61 @@ public sealed class GoalWorktreeTestsSeedIsolation : GoalWorktreeTestBase
                 }
             }
         }
+    }
+
+    [Xunit.Fact]
+    public async Task ConcurrentSeedCreationRepeatedlyProducesResolvableHeads()
+    {
+        const int roundCount = 6;
+        const int creatorCount = 6;
+
+        for (var round = 0; round < roundCount; round++)
+        {
+            var repos = new string?[creatorCount];
+            using var startGate = new Barrier(creatorCount);
+            try
+            {
+                var creators = Enumerable.Range(0, creatorCount)
+                    .Select(index => Task.Run(() =>
+                    {
+                        if (!startGate.SignalAndWait(TimeSpan.FromSeconds(30)))
+                        {
+                            throw new TimeoutException("Concurrent seed creators did not reach the start gate.");
+                        }
+
+                        repos[index] = CreateSeededGitRepositoryForIsolation();
+                    }))
+                    .ToArray();
+                await Task.WhenAll(creators);
+
+                foreach (var repo in repos.Select(repo => repo!))
+                {
+                    AssertSeedHeadResolves(repo);
+                }
+            }
+            finally
+            {
+                foreach (var repo in repos)
+                {
+                    if (repo is not null)
+                    {
+                        DeleteDirectory(repo);
+                    }
+                }
+            }
+        }
+    }
+
+    private static void AssertSeedHeadResolves(string repo)
+    {
+        var head = ReadSeedHeadCommitId(repo);
+        if (head.ExitCode == 0 && head.Stdout.Trim().Length > 0)
+        {
+            return;
+        }
+
+        Assert.Fail(
+            $"Seed repository '{repo}' reported no HEAD commit (exit={head.ExitCode}, stdoutLength={head.Stdout.Length}). " +
+            DescribeSeedHeadState(repo));
     }
 }
