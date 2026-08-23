@@ -99,6 +99,25 @@ public sealed class SliceBatchAdmissionTests
     }
 
     [Xunit.Fact]
+    public void PreviouslyDispatchedHigherIdSibling_HoldsNeverDispatchedLowerIdSibling()
+    {
+        var (kernel, first, second) = CreateBatch(
+            "Change src/Mcg.AgentOrchestrator.Core/Application/AlphaService.cs.",
+            "Change src/Mcg.AgentOrchestrator.Core/Application/BetaService.cs.");
+        var ordered = new[] { first, second }
+            .OrderBy(goal => goal.Id.Value, StringComparer.Ordinal)
+            .ToArray();
+        RecordPreviousProcess(kernel, ordered[1], 101);
+        var evaluator = CreateEvaluator(kernel);
+
+        evaluator.BeginTick();
+        var held = evaluator.Evaluate(ordered[0]);
+
+        Xunit.Assert.False(held.IsAllowed);
+        Xunit.Assert.Contains(ordered[1].Id.Value[..8], held.Reason, StringComparison.Ordinal);
+    }
+
+    [Xunit.Fact]
     public void OrdinaryGoal_EvaluatorConfigured_SkipsSliceWork()
     {
         var kernel = new AgentOrchestratorKernel();

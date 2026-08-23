@@ -31,13 +31,15 @@ internal sealed class SliceBatchAdmissionEvaluator(
         }
 
         var candidateScope = GetEffectiveScope(candidate);
+        var candidateDispatched = candidate.Tasks.Any(task => task.LastProcess is not null);
         var occupyingSiblings = GoalScopeCollisionAdvisor.SelectComparisonCandidates(siblingSource())
             .Where(goal =>
                 goal.Id != candidate.Id &&
                 goal.SliceBatchParentId == candidate.SliceBatchParentId &&
                 (_admittedThisTick.Contains(goal.Id) ||
-                 (goal.Tasks.Any(task => task.LastProcess is not null) &&
-                  StringComparer.Ordinal.Compare(goal.Id.Value, candidate.Id.Value) < 0)));
+                  (goal.Tasks.Any(task => task.LastProcess is not null) &&
+                   (!candidateDispatched ||
+                    StringComparer.Ordinal.Compare(goal.Id.Value, candidate.Id.Value) < 0))));
 
         foreach (var sibling in occupyingSiblings)
         {
