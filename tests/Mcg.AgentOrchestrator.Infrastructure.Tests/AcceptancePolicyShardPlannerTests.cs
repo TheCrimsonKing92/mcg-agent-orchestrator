@@ -40,7 +40,8 @@ public sealed class AcceptancePolicyShardPlannerTests
                     ["scripts/Invoke-IsolatedDotnet.ps1"]).Evidence);
             Assert.Equal(
                 "changed files did not map to a known project; changed projects: (none); dependency closure: (none)",
-                AcceptancePolicyShardPlanner.BuildPolicyShardPlan(["tools/AcceptancePolicy.cs"]).Evidence);
+                AcceptancePolicyShardPlanner.BuildPolicyShardPlan(
+                    ["src/Mcg.AgentOrchestrator.Dashboard/Foo.cs"]).Evidence);
         }
         finally
         {
