@@ -380,7 +380,8 @@ internal static class GoalFileScopeInference
                 {
                     resolved.Add(path);
                 }
-                else if (warnOnUnresolvedTarget && !string.IsNullOrWhiteSpace(target))
+                else if ((warning is not null || warnOnUnresolvedTarget) &&
+                    !string.IsNullOrWhiteSpace(target))
                 {
                     warnings.Add(warning ?? $"scope target could not be resolved: {target.Trim()}");
                 }

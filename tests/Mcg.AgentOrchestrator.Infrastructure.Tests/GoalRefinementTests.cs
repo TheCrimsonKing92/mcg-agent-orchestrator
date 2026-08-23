@@ -826,6 +826,20 @@ public sealed class GoalRefinementTests
     }
 
     [Xunit.Fact]
+    public void GoalObjectivePlanner_WrappedRiskPhrase_PreservesComplexClassification()
+    {
+        const string objective =
+            "Implement the retry ledger in src/Mcg.AgentOrchestrator.App/Orchestration/ConductorDriver.cs and fix the race\n" +
+            "condition in the worker dispatch queue.";
+
+        var plan = GoalObjectivePlanner.Build(objective);
+
+        Xunit.Assert.Equal(TaskComplexity.Complex, plan.EstimatedComplexity);
+        Xunit.Assert.Contains("complex", plan.RiskLabels);
+        Xunit.Assert.Equal(GoalIntakePipeline.DeveloperReviewer, plan.PipelineDecision.Pipeline);
+    }
+
+    [Xunit.Fact]
     public void GoalObjectivePlanner_FileScopes_AgreeWithSharedInference()
     {
         const string objective = """

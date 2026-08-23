@@ -180,8 +180,9 @@ internal static class GoalObjectivePlanner
     {
         var normalized = objective.Trim();
         var classificationText = BuildActionableClassificationText(normalized);
+        var fileScopeText = BuildActionableFileScopeText(normalized);
         var tokens = BuildTokenSet(classificationText);
-        var fileScopes = InferFileScopes(classificationText);
+        var fileScopes = InferFileScopes(fileScopeText);
         var estimated = TaskComplexityEstimator.Estimate(classificationText, classificationText, AgentRole.Developer);
         var historicalRecord = FindHistoricalEstimate(durationStats, AgentRole.Developer, estimated);
         var historicalEstimate = BuildHistoricalEstimate(historicalRecord);
@@ -246,7 +247,13 @@ internal static class GoalObjectivePlanner
             .ToArray();
     }
 
-    private static string BuildActionableClassificationText(string objective)
+    private static string BuildActionableClassificationText(string objective) =>
+        BuildActionableText(objective, " ");
+
+    private static string BuildActionableFileScopeText(string objective) =>
+        BuildActionableText(objective, "\n");
+
+    private static string BuildActionableText(string objective, string separator)
     {
         var withoutParentheticalMeta = Regex.Replace(
             objective,
@@ -258,7 +265,7 @@ internal static class GoalObjectivePlanner
             .Where(part => !string.IsNullOrWhiteSpace(part) && !IsMetaCommentary(part))
             .ToArray();
 
-        return parts.Length == 0 ? objective : string.Join("\n", parts);
+        return parts.Length == 0 ? objective : string.Join(separator, parts);
     }
 
     private static bool IsMetaCommentary(string text)

@@ -149,6 +149,32 @@ public sealed class GoalFileScopeInferenceTests
         }
     }
 
+    [Xunit.Fact]
+    public void DeriveForIntake_AmbiguousExclusion_PreservesUnknownConfidence()
+    {
+        var root = CreateRepository();
+        try
+        {
+            Directory.CreateDirectory(Path.Combine(root, "src", "FeatureA", "Rendering"));
+            Directory.CreateDirectory(Path.Combine(root, "tests", "FeatureB", "Rendering"));
+
+            var result = GoalFileScopeInference.DeriveForIntake(
+                "Update scripts/Invoke-IsolatedDotnet.ps1. Do not touch Rendering.",
+                root);
+
+            Xunit.Assert.Equal(RepositoryScopeConfidence.Unknown, result.Confidence);
+            Xunit.Assert.Equal(["scripts/Invoke-IsolatedDotnet.ps1"], result.Includes);
+            Xunit.Assert.Empty(result.Exclusions);
+            Xunit.Assert.Contains(
+                result.Warnings,
+                warning => warning.Contains("ambiguous", StringComparison.OrdinalIgnoreCase));
+        }
+        finally
+        {
+            Directory.Delete(root, recursive: true);
+        }
+    }
+
     [Xunit.Fact(DisplayName = "GoalFileScopeInference_explicit_only_and_exclusions_are_authoritative")]
     public void ExplicitOnlyAndExclusionsAreAuthoritative()
     {
