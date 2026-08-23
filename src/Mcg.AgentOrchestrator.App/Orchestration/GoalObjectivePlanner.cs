@@ -258,7 +258,7 @@ internal static class GoalObjectivePlanner
             .Where(part => !string.IsNullOrWhiteSpace(part) && !IsMetaCommentary(part))
             .ToArray();
 
-        return parts.Length == 0 ? objective : string.Join(" ", parts);
+        return parts.Length == 0 ? objective : string.Join("\n", parts);
     }
 
     private static bool IsMetaCommentary(string text)

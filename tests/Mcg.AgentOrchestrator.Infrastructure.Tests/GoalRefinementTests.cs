@@ -842,6 +842,45 @@ public sealed class GoalRefinementTests
         Xunit.Assert.Equal(inferred, plan.FileScopes);
     }
 
+    public static IEnumerable<object[]> LineOrientedFileScopeObjectives()
+    {
+        yield return
+        [
+            """
+            Do not change config/acceptance-manifest.json
+            Expected to change:
+            - src/Mcg.AgentOrchestrator.App/Orchestration/ConductorDriver.cs
+            """,
+            new[] { "src/Mcg.AgentOrchestrator.App/Orchestration/ConductorDriver.cs" }
+        ];
+        yield return
+        [
+            string.Join(
+                "\n",
+                BacklogIntakePlanner.TargetScopeHeadingLine,
+                BacklogIntakePlanner.PreciseScopeMarkerLine,
+                BacklogIntakePlanner.ScopeIncludesHeadingLine,
+                "- src/Mcg.AgentOrchestrator.App/Orchestration/ConductorDriver.cs",
+                BacklogIntakePlanner.ScopeExclusionsHeadingLine,
+                "- config/acceptance-manifest.json"),
+            new[] { "src/Mcg.AgentOrchestrator.App/Orchestration/ConductorDriver.cs" }
+        ];
+    }
+
+    [Xunit.Theory]
+    [Xunit.MemberData(nameof(LineOrientedFileScopeObjectives))]
+    public void GoalObjectivePlanner_FileScopes_PreserveLineOrientedInference(
+        string objective,
+        string[] expectedScopes)
+    {
+        var plan = GoalObjectivePlanner.Build(objective, simple: false);
+
+        Xunit.Assert.Equal(expectedScopes, plan.FileScopes);
+        Xunit.Assert.Equal(
+            GoalFileScopeInference.FromText(objective).Select(scope => scope.Path),
+            plan.FileScopes);
+    }
+
     [Xunit.Fact]
     public void GoalObjectivePlanner_ProhibitionOnly_UsesImplicitScopeRouting()
     {

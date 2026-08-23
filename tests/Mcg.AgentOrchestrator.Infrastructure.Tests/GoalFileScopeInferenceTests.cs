@@ -127,6 +127,28 @@ public sealed class GoalFileScopeInferenceTests
         }
     }
 
+    [Xunit.Fact]
+    public void DeriveForIntake_UnresolvableProhibitionTarget_DoesNotEraseValidIncludes()
+    {
+        var root = CreateRepository();
+        try
+        {
+            var result = GoalFileScopeInference.DeriveForIntake(
+                "Update scripts/Invoke-IsolatedDotnet.ps1. " +
+                "Do not change WorkerProcessJobs.cs. Its diagnostics are already correct.",
+                root);
+
+            Xunit.Assert.Equal(RepositoryScopeConfidence.Precise, result.Confidence);
+            Xunit.Assert.Equal(["scripts/Invoke-IsolatedDotnet.ps1"], result.Includes);
+            Xunit.Assert.Empty(result.Exclusions);
+            Xunit.Assert.Empty(result.Warnings);
+        }
+        finally
+        {
+            Directory.Delete(root, recursive: true);
+        }
+    }
+
     [Xunit.Fact(DisplayName = "GoalFileScopeInference_explicit_only_and_exclusions_are_authoritative")]
     public void ExplicitOnlyAndExclusionsAreAuthoritative()
     {

@@ -122,7 +122,12 @@ internal static class GoalFileScopeInference
                 ["scope text contains traversal or an out-of-repository path"]);
         }
 
-        var exclusions = ResolveConstraints(ExclusionConstraintRegex, text, context, warnings);
+        var exclusions = ResolveConstraints(
+            ExclusionConstraintRegex,
+            text,
+            context,
+            warnings,
+            warnOnUnresolvedTarget: false);
         var inclusionMatches = InclusionConstraintRegex.Matches(text);
         var includes = inclusionMatches.Count > 0
             ? ResolveConstraints(InclusionConstraintRegex, text, context, warnings)
@@ -363,7 +368,8 @@ internal static class GoalFileScopeInference
         Regex regex,
         string text,
         GoalFileScopeDerivationContext context,
-        ICollection<string> warnings)
+        ICollection<string> warnings,
+        bool warnOnUnresolvedTarget = true)
     {
         var resolved = new List<string>();
         foreach (Match match in regex.Matches(text))
@@ -374,7 +380,7 @@ internal static class GoalFileScopeInference
                 {
                     resolved.Add(path);
                 }
-                else if (!string.IsNullOrWhiteSpace(target))
+                else if (warnOnUnresolvedTarget && !string.IsNullOrWhiteSpace(target))
                 {
                     warnings.Add(warning ?? $"scope target could not be resolved: {target.Trim()}");
                 }
