@@ -18,13 +18,16 @@ internal sealed record ConductorSupervisorProcessRequest(
     string WorkingDirectory,
     string ExitArtifactPath,
     string StdoutPath,
-    string StderrPath);
+    string StderrPath,
+    IReadOnlyList<string>? CommandPrefix = null,
+    Action<string>? OnStandardOutputLine = null);
 
 internal sealed record ConductorSupervisorProcessResult(
     int ExitCode,
     int ProcessId,
     string StdoutPath = "",
-    string StderrPath = "");
+    string StderrPath = "",
+    bool TerminationConfirmed = true);
 
 internal sealed record ConductorContinuityExitArtifact(
     string StopReason,
@@ -70,7 +73,12 @@ internal sealed class ConductorContinuitySupervisor(
     Func<TimeSpan, CancellationToken, Task>? delay = null,
     int maxUnexpectedRestarts = 3,
     TimeSpan? restartWindow = null,
-    int maxRenewalsWithoutProgress = ConductorLoopHandoff.DefaultMaxRenewalsWithoutLanding)
+    int maxRenewalsWithoutProgress = ConductorLoopHandoff.DefaultMaxRenewalsWithoutLanding,
+    Func<CancellationToken, ConductorPreparedSuccessor>? stageSuccessor = null,
+    Action<string, string?, string>? appendConductEvent = null,
+    TimeSpan? readinessTimeout = null,
+    int maxConsecutiveStagingFailures = 2,
+    string? dotnetPath = null)
 {
     public const string ChildFlag = "--continuity-child";
     public const string ExitArtifactFlag = "--continuity-exit-artifact";
@@ -79,6 +87,10 @@ internal sealed class ConductorContinuitySupervisor(
     private readonly TimeProvider _timeProvider = timeProvider ?? TimeProvider.System;
     private readonly Func<TimeSpan, CancellationToken, Task> _delay = delay ?? Task.Delay;
     private readonly TimeSpan _restartWindow = restartWindow ?? TimeSpan.FromMinutes(10);
+    private readonly TimeSpan _readinessTimeout = readinessTimeout ?? TimeSpan.FromMinutes(2);
+    private readonly string _dotnetPath = dotnetPath ??
+        Environment.GetEnvironmentVariable("MCG_ORCHESTRATOR_DOTNET_PATH") ??
+        "dotnet";
 
     public static bool ShouldSupervise(
         IReadOnlyList<string> args,
@@ -99,6 +111,9 @@ internal sealed class ConductorContinuitySupervisor(
     {
         var unexpectedStarts = new Queue<DateTimeOffset>();
         var renewalsWithoutProgress = 0;
+        var consecutiveStagingFailures = 0;
+        var stagingDisabled = false;
+        ConductorPreparedSuccessor? pendingSuccessor = null;
         var attempt = 0;
 
         while (true)
@@ -125,16 +140,125 @@ internal sealed class ConductorContinuitySupervisor(
                 .ToArray();
             ConductorSupervisorProcessResult result;
             string? launchFailure = null;
+            var successor = pendingSuccessor;
+            var readiness = successor is null
+                ? null
+                : new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+            var commandPrefix = successor is null
+                ? null
+                : new[]
+                {
+                    _dotnetPath,
+                    successor.AppDllPath
+                };
+            var request = new ConductorSupervisorProcessRequest(
+                childArgs,
+                workingDirectory,
+                artifactPath,
+                stdoutPath,
+                stderrPath,
+                commandPrefix,
+                line =>
+                {
+                    if (line.StartsWith("LOOP_START ", StringComparison.Ordinal))
+                    {
+                        readiness?.TrySetResult();
+                    }
+                });
             try
             {
-                result = await processHost.RunAsync(
-                    new ConductorSupervisorProcessRequest(
-                        childArgs,
-                        workingDirectory,
-                        artifactPath,
-                        stdoutPath,
-                        stderrPath),
-                    cancellationToken).ConfigureAwait(false);
+                if (successor is null)
+                {
+                    result = await processHost.RunAsync(request, cancellationToken).ConfigureAwait(false);
+                }
+                else
+                {
+                    using var processCts = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
+                    using var timeoutCts = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
+                    Task<ConductorSupervisorProcessResult> runTask;
+                    try
+                    {
+                        runTask = processHost.RunAsync(request, processCts.Token);
+                    }
+                    catch (Exception ex)
+                    {
+                        cancellationToken.ThrowIfCancellationRequested();
+                        pendingSuccessor = null;
+                        consecutiveStagingFailures++;
+                        stagingDisabled = consecutiveStagingFailures >= Math.Max(1, maxConsecutiveStagingFailures);
+                        EmitHandoff(
+                            "failed",
+                            attempt,
+                            $"LOOP_HANDOFF_FAILED attempt={attempt} phase=readiness " +
+                            $"reason={Sanitize($"successor-launch-failed {ex.GetType().Name}:{ex.Message}")}" +
+                            (stagingDisabled ? " stagingDisabled=true" : string.Empty),
+                            0,
+                            stdoutPath,
+                            stderrPath);
+                        TryDeleteArtifact(artifactPath);
+                        continue;
+                    }
+
+                    var timeoutTask = _delay(_readinessTimeout, timeoutCts.Token);
+                    var completed = await Task.WhenAny(runTask, readiness!.Task, timeoutTask)
+                        .ConfigureAwait(false);
+                    if (readiness.Task.IsCompletedSuccessfully)
+                    {
+                        timeoutCts.Cancel();
+                        consecutiveStagingFailures = 0;
+                        pendingSuccessor = null;
+                        EmitHandoff(
+                            "completed",
+                            attempt,
+                            $"LOOP_HANDOFF attempt={attempt} stagedSourceCommit={successor.StagedSourceCommit} " +
+                            $"repositoryHead={successor.RepositoryHead} runDir={successor.RunDirectory}",
+                            0,
+                            stdoutPath,
+                            stderrPath);
+                        result = await runTask.ConfigureAwait(false);
+                    }
+                    else
+                    {
+                        processCts.Cancel();
+                        timeoutCts.Cancel();
+                        var failureReason = completed == runTask
+                            ? await DescribeReadinessExit(runTask).ConfigureAwait(false)
+                            : $"timeoutSeconds={(int)_readinessTimeout.TotalSeconds}";
+                        ConductorSupervisorProcessResult? stoppedResult = null;
+                        if (completed != runTask)
+                        {
+                            stoppedResult = await ObserveStoppedSuccessor(runTask).ConfigureAwait(false);
+                        }
+
+                        cancellationToken.ThrowIfCancellationRequested();
+                        if (completed != runTask && stoppedResult?.TerminationConfirmed != true)
+                        {
+                            EmitHandoff(
+                                "failed",
+                                attempt,
+                                $"LOOP_HANDOFF_FAILED attempt={attempt} phase=readiness " +
+                                $"reason={Sanitize(failureReason)} terminationConfirmed=false fallbackSuppressed=true",
+                                stoppedResult?.ProcessId ?? 0,
+                                stdoutPath,
+                                stderrPath);
+                            return 1;
+                        }
+
+                        pendingSuccessor = null;
+                        consecutiveStagingFailures++;
+                        stagingDisabled = consecutiveStagingFailures >= Math.Max(1, maxConsecutiveStagingFailures);
+                        EmitHandoff(
+                            "failed",
+                            attempt,
+                            $"LOOP_HANDOFF_FAILED attempt={attempt} phase=readiness reason={Sanitize(failureReason)}" +
+                            (stagingDisabled ? " stagingDisabled=true" : string.Empty),
+                            0,
+                            stdoutPath,
+                            stderrPath);
+                        TryDeleteArtifact(artifactPath);
+                        continue;
+                    }
+                }
             }
             catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
             {
@@ -145,6 +269,7 @@ internal sealed class ConductorContinuitySupervisor(
                 launchFailure = $"launch={ex.GetType().Name}:{ex.Message}";
                 result = new ConductorSupervisorProcessResult(-1, 0, stdoutPath, stderrPath);
             }
+            cancellationToken.ThrowIfCancellationRequested();
             var artifact = ConductorContinuityExitArtifact.TryRead(artifactPath);
             TryDeleteArtifact(artifactPath);
 
@@ -166,6 +291,49 @@ internal sealed class ConductorContinuitySupervisor(
                 }
 
                 Record("restart", "planned", attempt, artifact.StopReason, result.ProcessId, stdoutPath, stderrPath);
+                if (stageSuccessor is not null && !stagingDisabled)
+                {
+                    TryAppendConductEvent(
+                        $"LOOP_HANDOFF_STAGING attempt={attempt} repositoryHead=resolve-pending");
+                    try
+                    {
+                        cancellationToken.ThrowIfCancellationRequested();
+                        pendingSuccessor = stageSuccessor(cancellationToken);
+                        cancellationToken.ThrowIfCancellationRequested();
+                    }
+                    catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+                    {
+                        throw;
+                    }
+                    catch (Exception ex)
+                    {
+                        consecutiveStagingFailures++;
+                        stagingDisabled = consecutiveStagingFailures >= Math.Max(1, maxConsecutiveStagingFailures);
+                        var phase = ex is ConductorSelfRelaunchPreparationException preparation
+                            ? preparation.Phase
+                            : "stage";
+                        EmitHandoff(
+                            "failed",
+                            attempt,
+                            $"LOOP_HANDOFF_FAILED attempt={attempt} phase={phase} " +
+                            $"reason={Sanitize($"{ex.GetType().Name}:{ex.Message}")}" +
+                            (stagingDisabled ? " stagingDisabled=true" : string.Empty),
+                            result.ProcessId,
+                            stdoutPath,
+                            stderrPath);
+                    }
+                }
+                else if (stageSuccessor is not null)
+                {
+                    EmitHandoff(
+                        "failed",
+                        attempt,
+                        $"LOOP_HANDOFF_FAILED attempt={attempt} phase=stage " +
+                        $"reason=staging-disabled consecutiveFailures={consecutiveStagingFailures}",
+                        result.ProcessId,
+                        stdoutPath,
+                        stderrPath);
+                }
                 continue;
             }
 
@@ -198,6 +366,73 @@ internal sealed class ConductorContinuitySupervisor(
             await _delay(backoff, cancellationToken).ConfigureAwait(false);
         }
     }
+
+    private static async Task<string> DescribeReadinessExit(
+        Task<ConductorSupervisorProcessResult> runTask)
+    {
+        try
+        {
+            var result = await runTask.ConfigureAwait(false);
+            return $"successor-exited-before-readiness exit={result.ExitCode}";
+        }
+        catch (Exception ex)
+        {
+            return $"successor-launch-failed {ex.GetType().Name}:{ex.Message}";
+        }
+    }
+
+    private static async Task<ConductorSupervisorProcessResult?> ObserveStoppedSuccessor(
+        Task<ConductorSupervisorProcessResult> runTask)
+    {
+        try
+        {
+            return await runTask.ConfigureAwait(false);
+        }
+        catch (OperationCanceledException)
+        {
+            return null;
+        }
+        catch (Exception)
+        {
+            return null;
+        }
+    }
+
+    private void EmitHandoff(
+        string status,
+        int attempt,
+        string detail,
+        int processId,
+        string stdoutPath,
+        string stderrPath)
+    {
+        TryAppendConductEvent(detail);
+        try
+        {
+            Record("handoff", status, attempt, detail, processId, stdoutPath, stderrPath);
+        }
+        catch (Exception ex)
+        {
+            Console.Error.WriteLine(
+                $"[conduct supervisor] Could not record handoff run event: {ex.GetType().Name}: {ex.Message}");
+        }
+    }
+
+    private void TryAppendConductEvent(string detail)
+    {
+        try
+        {
+            appendConductEvent?.Invoke("loop-handoff", null, detail);
+        }
+        catch (Exception ex)
+        {
+            Console.Error.WriteLine(
+                $"[conduct supervisor] Could not append conduct event: {ex.GetType().Name}: {ex.Message}");
+        }
+    }
+
+    private static string Sanitize(string value) =>
+        value.Replace('\r', ' ').Replace('\n', ' ').Trim();
 
     private void Record(
         string operation,
@@ -275,6 +510,15 @@ internal sealed class SystemConductorSupervisorProcessHost(
                 {
                     stdoutWriter.WriteLine(eventArgs.Data);
                 }
+                try
+                {
+                    request.OnStandardOutputLine?.Invoke(eventArgs.Data);
+                }
+                catch (Exception ex)
+                {
+                    Console.Error.WriteLine(
+                        $"[conduct supervisor] Standard-output observer failed: {ex.GetType().Name}: {ex.Message}");
+                }
             }
         };
         process.ErrorDataReceived += (_, eventArgs) =>
@@ -295,7 +539,33 @@ internal sealed class SystemConductorSupervisorProcessHost(
         process.StandardInput.Close();
         process.BeginOutputReadLine();
         process.BeginErrorReadLine();
-        await process.WaitForExitAsync(cancellationToken).ConfigureAwait(false);
+        try
+        {
+            await process.WaitForExitAsync(cancellationToken).ConfigureAwait(false);
+        }
+        catch (OperationCanceledException)
+        {
+            var terminationConfirmed = process.HasExited;
+            try
+            {
+                if (!terminationConfirmed)
+                {
+                    process.Kill(entireProcessTree: true);
+                    terminationConfirmed = process.WaitForExit(5000);
+                }
+            }
+            catch (Exception ex) when (ex is InvalidOperationException or System.ComponentModel.Win32Exception)
+            {
+                terminationConfirmed = process.HasExited;
+            }
+
+            return new ConductorSupervisorProcessResult(
+                -1,
+                process.Id,
+                request.StdoutPath,
+                request.StderrPath,
+                terminationConfirmed);
+        }
         process.WaitForExit();
         return new ConductorSupervisorProcessResult(
             process.ExitCode,
@@ -307,9 +577,19 @@ internal sealed class SystemConductorSupervisorProcessHost(
     private static ProcessStartInfo BuildDefaultStartInfo(ConductorSupervisorProcessRequest request)
     {
         var commandLineArgs = Environment.GetCommandLineArgs();
-        var executable = Environment.ProcessPath ?? "dotnet";
+        var hasCommandPrefix = request.CommandPrefix is { Count: > 0 };
+        var executable = hasCommandPrefix
+            ? request.CommandPrefix![0]
+            : Environment.ProcessPath ?? "dotnet";
         var startInfo = new ProcessStartInfo(executable);
-        if (Path.GetFileNameWithoutExtension(executable).Equals("dotnet", StringComparison.OrdinalIgnoreCase) &&
+        if (hasCommandPrefix)
+        {
+            foreach (var argument in request.CommandPrefix!.Skip(1))
+            {
+                startInfo.ArgumentList.Add(argument);
+            }
+        }
+        else if (Path.GetFileNameWithoutExtension(executable).Equals("dotnet", StringComparison.OrdinalIgnoreCase) &&
             commandLineArgs.Length > 0)
         {
             startInfo.ArgumentList.Add(commandLineArgs[0]);

@@ -126,9 +126,45 @@ if (ConductorContinuitySupervisor.ShouldSupervise(
 {
     try
     {
+        var maxDurationRestage = Environment.GetEnvironmentVariable(
+            "MCG_ORCHESTRATOR_MAX_DURATION_RESTAGE");
+        var restageEnabled =
+            !string.Equals(maxDurationRestage, "0", StringComparison.OrdinalIgnoreCase) &&
+            !string.Equals(maxDurationRestage, "false", StringComparison.OrdinalIgnoreCase);
+        Func<CancellationToken, ConductorPreparedSuccessor>? stageSuccessor = null;
+        if (restageEnabled)
+        {
+            var repositoryRoot = workspace.ExecutionDirectory;
+            var repositoryBuildKey = Convert.ToHexString(
+                System.Security.Cryptography.SHA256.HashData(
+                    System.Text.Encoding.UTF8.GetBytes(Path.GetFullPath(repositoryRoot))))[..16];
+            var appOutputDirectory = Path.Combine(
+                Path.GetTempPath(),
+                "mcg-self-relaunch-build",
+                repositoryBuildKey);
+            var stagingOptions = new ConductorSuccessorStagingOptions(
+                RepositoryRoot: repositoryRoot,
+                AppProjectPath: Path.Combine(repositoryRoot, "src", "Mcg.AgentOrchestrator.App", "Mcg.AgentOrchestrator.App.csproj"),
+                AppDllPath: Path.Combine(appOutputDirectory, "Mcg.AgentOrchestrator.App.dll"),
+                UpdateHeadMarkerScriptPath: Path.Combine(repositoryRoot, "scripts", "Update-AppDllGitHeadMarker.ps1"),
+                ResolveRunDirectoryScriptPath: Path.Combine(repositoryRoot, "scripts", "resolve-run-dir.ps1"),
+                StateStorePath: workspace.SqliteStatePath,
+                AgentCatalogPath: workspace.AgentCatalogPath,
+                WorkerProfilePath: workspace.WorkerProfilePath,
+                ModelFunctionCatalogPath: workspace.ModelFunctionCatalogPath,
+                DotnetPath: Environment.GetEnvironmentVariable("MCG_ORCHESTRATOR_DOTNET_PATH") ?? "dotnet",
+                PowerShellPath: "powershell");
+            stageSuccessor = cancellationToken =>
+                ConductorSelfRelaunch.PrepareSuccessor(stagingOptions, cancellationToken);
+        }
+
+        var conductEventLogWriter = new ConductEventLogWriter(workspace.ConductEventsLogPath);
         var supervisor = new ConductorContinuitySupervisor(
             new SystemConductorSupervisorProcessHost(),
-            new SqliteRunEventStore(workspace.RunEventStorePath));
+            new SqliteRunEventStore(workspace.RunEventStorePath),
+            stageSuccessor: stageSuccessor,
+            appendConductEvent: (eventKind, goalId, detail) =>
+                conductEventLogWriter.Append(eventKind, goalId, detail));
         return await supervisor.RunAsync(
             startupArgs,
             workspace.ExecutionDirectory,

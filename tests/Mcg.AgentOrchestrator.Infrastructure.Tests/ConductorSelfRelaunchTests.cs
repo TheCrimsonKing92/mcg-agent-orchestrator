@@ -82,6 +82,7 @@ public sealed class ConductorSelfRelaunchTests
                 Path.Combine(root, "mcg-run", "abc123"),
                 Path.Combine(root, "mcg-run", "abc123", "Mcg.AgentOrchestrator.App.dll"),
                 "deadbeef",
+                "deadbeef",
                 "LOOP_START selfCheck=true");
             var result = ConductorSelfRelaunch.TryRelaunch(
                 Options(root),
@@ -102,6 +103,85 @@ public sealed class ConductorSelfRelaunchTests
             Assert.Equal(
                 ["dotnet", prepared.AppDllPath],
                 observedOptions!.SuccessorCommandPrefix);
+        }
+        finally
+        {
+            TryDeleteDirectory(root);
+        }
+    }
+
+    [Xunit.Fact]
+    public void StagedSourceCommit_MatchingMarker_IsReturned()
+    {
+        var root = CreateTempDirectory();
+        try
+        {
+            File.WriteAllText(Path.Combine(root, "App.dll.git-head"), "deadbeef\r\n");
+
+            var actual = ConductorSelfRelaunch.ReadStagedSourceCommit(
+                root,
+                "App.dll",
+                "deadbeef");
+
+            Assert.Equal("deadbeef", actual);
+        }
+        finally
+        {
+            TryDeleteDirectory(root);
+        }
+    }
+
+    [Xunit.Fact]
+    public void StagedSourceCommit_DivergentMarker_FailsStage()
+    {
+        var root = CreateTempDirectory();
+        try
+        {
+            File.WriteAllText(Path.Combine(root, "App.dll.git-head"), "old-head");
+
+            var error = Assert.Throws<ConductorSelfRelaunchPreparationException>(() =>
+                ConductorSelfRelaunch.ReadStagedSourceCommit(root, "App.dll", "new-head"));
+
+            Assert.Equal("stage", error.Phase);
+            Assert.Contains("did not match repository HEAD", error.Message, StringComparison.Ordinal);
+        }
+        finally
+        {
+            TryDeleteDirectory(root);
+        }
+    }
+
+    [Xunit.Fact]
+    public void StagedSourceCommit_MissingMarker_FailsStage()
+    {
+        var root = CreateTempDirectory();
+        try
+        {
+            var error = Assert.Throws<ConductorSelfRelaunchPreparationException>(() =>
+                ConductorSelfRelaunch.ReadStagedSourceCommit(root, "App.dll", "new-head"));
+
+            Assert.Equal("stage", error.Phase);
+            Assert.Contains("could not be read", error.Message, StringComparison.Ordinal);
+        }
+        finally
+        {
+            TryDeleteDirectory(root);
+        }
+    }
+
+    [Xunit.Fact]
+    public void StagedSourceCommit_EmptyMarker_FailsStage()
+    {
+        var root = CreateTempDirectory();
+        try
+        {
+            File.WriteAllText(Path.Combine(root, "App.dll.git-head"), "  \r\n");
+
+            var error = Assert.Throws<ConductorSelfRelaunchPreparationException>(() =>
+                ConductorSelfRelaunch.ReadStagedSourceCommit(root, "App.dll", "new-head"));
+
+            Assert.Equal("stage", error.Phase);
+            Assert.Contains("was empty", error.Message, StringComparison.Ordinal);
         }
         finally
         {
