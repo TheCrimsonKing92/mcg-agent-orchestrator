@@ -87,9 +87,15 @@ internal sealed class SystemTrialProcessInventory : ITrialProcessInventory
     }
 }
 
-internal sealed class TrialProcessHandle(Process process, int processId, string stdoutPath, string stderrPath) : IDisposable
+internal sealed class TrialProcessHandle(
+    Process process,
+    int processId,
+    string stdoutPath,
+    string stderrPath,
+    string exitCodePath) : IDisposable
 {
-    public Process Process { get; } = process;
+    private readonly Process _process = process;
+    private int? _exitCode;
 
     public int ProcessId { get; } = processId;
 
@@ -97,7 +103,37 @@ internal sealed class TrialProcessHandle(Process process, int processId, string 
 
     public string StderrPath { get; } = stderrPath;
 
-    public void Dispose() => Process.Dispose();
+    public bool WaitForExit(int milliseconds)
+    {
+        if (!_process.WaitForExit(milliseconds))
+        {
+            return false;
+        }
+
+        _exitCode ??= ReadExitCode(exitCodePath);
+        return true;
+    }
+
+    public int ExitCode => _exitCode ?? throw new InvalidOperationException(
+        "The trial exit code is unavailable until WaitForExit confirms the PowerShell-owned child completed.");
+
+    public void Dispose() => _process.Dispose();
+
+    private static int ReadExitCode(string path)
+    {
+        if (!File.Exists(path))
+        {
+            throw new InvalidOperationException($"Trial process exited without writing its exit-code receipt '{path}'.");
+        }
+
+        var value = File.ReadAllText(path).Trim();
+        if (!int.TryParse(value, System.Globalization.NumberStyles.Integer, System.Globalization.CultureInfo.InvariantCulture, out var exitCode))
+        {
+            throw new InvalidOperationException($"Trial exit-code receipt '{path}' was invalid: '{value}'.");
+        }
+
+        return exitCode;
+    }
 }
 
 internal sealed record TrialOwnedProcess(OwnedProcessGroup Group, Process Process, int ProcessId);

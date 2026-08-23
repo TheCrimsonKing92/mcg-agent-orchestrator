@@ -407,7 +407,8 @@ internal sealed partial class TrialRootLease
             var launchId = Guid.NewGuid().ToString("N");
             var stdoutPath = Path.Combine(HarnessStatePath, $"launch-{launchId}.stdout.log");
             var stderrPath = Path.Combine(HarnessStatePath, $"launch-{launchId}.stderr.log");
-            var script = BuildLaunchScript(command, _useLowIntegrityProcess);
+            var exitCodePath = Path.Combine(HarnessStatePath, $"launch-{launchId}.exitcode");
+            var script = BuildLaunchScript(command, exitCodePath, _useLowIntegrityProcess);
             var encodedScript = Convert.ToBase64String(Encoding.Unicode.GetBytes(script));
 
             var startInfo = new ProcessStartInfo
@@ -435,21 +436,39 @@ internal sealed partial class TrialRootLease
             var process = suspended.TransferOwnership();
             var processId = process.Id;
             _processes.Add(new TrialOwnedProcess(suspended.Group, process, processId));
-            return new TrialProcessHandle(process, processId, stdoutPath, stderrPath);
+            return new TrialProcessHandle(process, processId, stdoutPath, stderrPath, exitCodePath);
         }
     }
 
-    private static string BuildLaunchScript(ProcessStartInfo command, bool useLowIntegrityProcess)
+    private static string BuildLaunchScript(
+        ProcessStartInfo command,
+        string exitCodePath,
+        bool useLowIntegrityProcess)
     {
         static string Quote(string value) => "'" + value.Replace("'", "''") + "'";
 
-        var arguments = string.Join(",", command.ArgumentList.Select(Quote));
+        var arguments = string.Join(" ", command.ArgumentList.Select(OwnedProcessGroup.QuoteCommandArgument));
         var integrityPrefix = useLowIntegrityProcess
             ? DispatchProcessHost.DropToLowScript + Environment.NewLine
             : string.Empty;
         return integrityPrefix +
-            "$mcgTrialArgs=@(" + arguments + ")" + Environment.NewLine +
-            "& " + Quote(command.FileName) + " @mcgTrialArgs" + Environment.NewLine +
-            "exit $LASTEXITCODE" + Environment.NewLine;
+            "$mcgTrialStartInfo=New-Object System.Diagnostics.ProcessStartInfo" + Environment.NewLine +
+            "$mcgTrialStartInfo.FileName=" + Quote(command.FileName) + Environment.NewLine +
+            "$mcgTrialStartInfo.Arguments=" + Quote(arguments) + Environment.NewLine +
+            "$mcgTrialStartInfo.UseShellExecute=$false" + Environment.NewLine +
+            "$mcgTrialStartInfo.CreateNoWindow=$true" + Environment.NewLine +
+            "$mcgTrialStartInfo.RedirectStandardOutput=$true" + Environment.NewLine +
+            "$mcgTrialStartInfo.RedirectStandardError=$true" + Environment.NewLine +
+            "$mcgTrialProcess=New-Object System.Diagnostics.Process" + Environment.NewLine +
+            "$mcgTrialProcess.StartInfo=$mcgTrialStartInfo" + Environment.NewLine +
+            "if (-not $mcgTrialProcess.Start()) { throw 'Trial process did not start.' }" + Environment.NewLine +
+            "$mcgTrialStdout=$mcgTrialProcess.StandardOutput.ReadToEndAsync()" + Environment.NewLine +
+            "$mcgTrialStderr=$mcgTrialProcess.StandardError.ReadToEndAsync()" + Environment.NewLine +
+            "$mcgTrialProcess.WaitForExit()" + Environment.NewLine +
+            "$mcgTrialExitCode=$mcgTrialProcess.ExitCode" + Environment.NewLine +
+            "[Console]::Out.Write($mcgTrialStdout.GetAwaiter().GetResult())" + Environment.NewLine +
+            "[Console]::Error.Write($mcgTrialStderr.GetAwaiter().GetResult())" + Environment.NewLine +
+            "Set-Content -LiteralPath " + Quote(exitCodePath) + " -Value $mcgTrialExitCode -Encoding Ascii" + Environment.NewLine +
+            "exit $mcgTrialExitCode" + Environment.NewLine;
     }
 }

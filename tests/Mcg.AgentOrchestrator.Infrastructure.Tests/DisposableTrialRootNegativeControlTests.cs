@@ -39,8 +39,8 @@ public sealed class DisposableTrialRootNegativeControlTests
                 "Write-Output 'outside-write-unexpected'; exit 7 } " +
                 "catch { Write-Output 'outside-write-denied'; exit 0 }");
             var process = lease.Start(command);
-            Xunit.Assert.True(process.Process.WaitForExit(15_000), "Trial process did not exit.");
-            Xunit.Assert.Equal(0, process.Process.ExitCode);
+            Xunit.Assert.True(process.WaitForExit(15_000), "Trial process did not exit.");
+            Xunit.Assert.Equal(0, process.ExitCode);
             Xunit.Assert.Contains("outside-write-denied", File.ReadAllText(process.StdoutPath));
             Xunit.Assert.Equal("unchanged", File.ReadAllText(outsideFile));
 
@@ -81,9 +81,9 @@ public sealed class DisposableTrialRootNegativeControlTests
                 $"try {{ Add-Content -LiteralPath '{Ps(gitConfig)}' -Value changed -ErrorAction Stop }} catch {{ $denied++; Write-Output 'git-write-denied' }}; " +
                 "if ($denied -ne 2) { exit 7 }; exit 0");
             var process = lease.Start(command);
-            Xunit.Assert.True(process.Process.WaitForExit(15_000), "Trial process did not exit.");
+            Xunit.Assert.True(process.WaitForExit(15_000), "Trial process did not exit.");
             var stdout = File.ReadAllText(process.StdoutPath);
-            Xunit.Assert.Equal(0, process.Process.ExitCode);
+            Xunit.Assert.Equal(0, process.ExitCode);
             Xunit.Assert.Contains("tracked-write-denied", stdout);
             Xunit.Assert.Contains("git-write-denied", stdout);
             Xunit.Assert.Equal(trackedBefore, File.ReadAllBytes(tracked));

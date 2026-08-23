@@ -84,8 +84,8 @@ public sealed class DisposableTrialRootTests(Xunit.ITestOutputHelper output)
                 "Set-Content -LiteralPath $marker -Value $name -ErrorAction Stop }; exit 0";
             using var process = lease.Start(PowerShellCommand(script));
 
-            Xunit.Assert.True(process.Process.WaitForExit(15_000), "Trial environment writer did not exit.");
-            Xunit.Assert.Equal(0, process.Process.ExitCode);
+            Xunit.Assert.True(process.WaitForExit(15_000), "Trial environment writer did not exit.");
+            Xunit.Assert.Equal(0, process.ExitCode);
             foreach (var variable in TrialRootEnvironment.RootLocalVariables)
             {
                 var directory = Xunit.Assert.IsType<string>(lease.ChildEnvironment[variable]);

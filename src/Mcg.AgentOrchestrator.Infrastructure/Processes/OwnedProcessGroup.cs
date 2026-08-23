@@ -233,6 +233,45 @@ internal sealed class OwnedProcessGroup : IDisposable
         return WindowsJob.TryDuplicateCurrentProcessHandle(_jobHandle, out duplicate);
     }
 
+    internal static string QuoteCommandArgument(string value)
+    {
+        var quoted = new StringBuilder();
+        quoted.Append('"');
+        var backslashes = 0;
+        foreach (var character in value)
+        {
+            if (character == '\\')
+            {
+                backslashes++;
+                continue;
+            }
+
+            if (character == '"')
+            {
+                quoted.Append('\\', (backslashes * 2) + 1);
+                quoted.Append('"');
+                backslashes = 0;
+                continue;
+            }
+
+            if (backslashes > 0)
+            {
+                quoted.Append('\\', backslashes);
+                backslashes = 0;
+            }
+
+            quoted.Append(character);
+        }
+
+        if (backslashes > 0)
+        {
+            quoted.Append('\\', backslashes * 2);
+        }
+
+        quoted.Append('"');
+        return quoted.ToString();
+    }
+
     /// <summary>
     /// Releases this process group without terminating its members. On Windows the kill-on-close
     /// limit must be cleared before the final job handle is closed; otherwise a logical detach
@@ -681,45 +720,6 @@ internal sealed class OwnedProcessGroup : IDisposable
             }
 
             return commandLine.ToString();
-        }
-
-        private static string QuoteCommandArgument(string value)
-        {
-            var quoted = new StringBuilder();
-            quoted.Append('"');
-            var backslashes = 0;
-            foreach (var character in value)
-            {
-                if (character == '\\')
-                {
-                    backslashes++;
-                    continue;
-                }
-
-                if (character == '"')
-                {
-                    quoted.Append('\\', (backslashes * 2) + 1);
-                    quoted.Append('"');
-                    backslashes = 0;
-                    continue;
-                }
-
-                if (backslashes > 0)
-                {
-                    quoted.Append('\\', backslashes);
-                    backslashes = 0;
-                }
-
-                quoted.Append(character);
-            }
-
-            if (backslashes > 0)
-            {
-                quoted.Append('\\', backslashes * 2);
-            }
-
-            quoted.Append('"');
-            return quoted.ToString();
         }
 
         private static string BuildEnvironmentBlock(IDictionary<string, string?> environment)
