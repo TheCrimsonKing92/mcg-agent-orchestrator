@@ -625,10 +625,13 @@ public abstract class GoalWorktreeTestBase
 
     private protected static void RunGit(string workingDirectory, params string[] arguments)
     {
-        var exitCode = RunGitExitCode(workingDirectory, arguments, out var error);
+        var exitCode = RunGitExitCode(workingDirectory, arguments, out var output, out var error);
         if (exitCode != 0)
         {
-            throw new InvalidOperationException($"git {string.Join(' ', arguments)} failed: {error}");
+            throw new InvalidOperationException(
+                $"git {string.Join(' ', arguments)} failed: exit={exitCode}{Environment.NewLine}" +
+                $"stdout: {output.Trim()}{Environment.NewLine}" +
+                $"stderr: {error.Trim()}");
         }
     }
 
@@ -691,10 +694,14 @@ public abstract class GoalWorktreeTestBase
 
     private protected static int RunGitExitCode(string workingDirectory, params string[] arguments)
     {
-        return RunGitExitCode(workingDirectory, arguments, out _);
+        return RunGitExitCode(workingDirectory, arguments, out _, out _);
     }
 
-    private protected static int RunGitExitCode(string workingDirectory, string[] arguments, out string error)
+    private protected static int RunGitExitCode(
+        string workingDirectory,
+        string[] arguments,
+        out string output,
+        out string error)
     {
         var startInfo = new ProcessStartInfo
         {
@@ -712,7 +719,7 @@ public abstract class GoalWorktreeTestBase
         }
 
         using var process = Process.Start(startInfo)!;
-        process.StandardOutput.ReadToEnd();
+        output = process.StandardOutput.ReadToEnd();
         error = process.StandardError.ReadToEnd();
         process.WaitForExit(60000);
         return process.ExitCode;
