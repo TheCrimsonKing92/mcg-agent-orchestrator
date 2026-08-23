@@ -1,9 +1,108 @@
 using Mcg.AgentOrchestrator.Core;
 using Mcg.AgentOrchestrator.Infrastructure;
+using Mcg.AgentOrchestrator.App.Cli;
 using Mcg.AgentOrchestrator.App.Orchestration;
 
 public sealed class SourceBacklogClaimTests
 {
+    [Xunit.Theory]
+    [Xunit.InlineData("failed", GoalStatus.Failed, GoalLifecycleState.Failed)]
+    [Xunit.InlineData("cancelled", GoalStatus.Cancelled, GoalLifecycleState.Failed)]
+    [Xunit.InlineData("superseded", GoalStatus.Superseded, GoalLifecycleState.Failed)]
+    [Xunit.InlineData("merged", GoalStatus.Completed, GoalLifecycleState.Merged)]
+    [Xunit.InlineData("recorded", GoalStatus.Completed, GoalLifecycleState.Recorded)]
+    [Xunit.InlineData("cleaned-up", GoalStatus.Completed, GoalLifecycleState.CleanedUp)]
+    public void SiblingAdmissionAllowsEachTerminalOwnerShape(
+        string terminalShape,
+        GoalStatus expectedStatus,
+        GoalLifecycleState expectedLifecycleState)
+    {
+        var root = CreateTempDirectory();
+        var kernel = new AgentOrchestratorKernel();
+        var task = new TaskSpec(TaskId.New(), "Establish terminal owner state", AgentRole.Developer);
+        var owner = kernel.CreateGoal($"Terminal {terminalShape} source owner", [task]);
+
+        switch (terminalShape)
+        {
+            case "failed":
+                kernel.EscalateTaskFailure(owner.Id, task.Id, "Terminal failure fixture.");
+                break;
+            case "cancelled":
+                kernel.CancelGoal(owner.Id, "Terminal cancellation fixture.");
+                break;
+            case "superseded":
+                kernel.SupersedeGoal(owner.Id, "Terminal supersession fixture.");
+                break;
+            case "merged":
+            case "recorded":
+            case "cleaned-up":
+                kernel.ActivateGoal(owner.Id, AgentCatalog.Default().Agents);
+                kernel.RecordTaskDispatch(
+                    owner.Id,
+                    task.Id,
+                    new TaskDispatchRecord("worker", "codex exec", root, DateTimeOffset.UtcNow));
+                kernel.RecordDispatchExecutionResult(
+                    owner.Id,
+                    task.Id,
+                    new TaskVerificationRecord(
+                        "codex exec",
+                        root,
+                        0,
+                        "WORKER_RESULT: files: none commands: none tests: pass commit: none blockers: none model_fit: test skills: none confidence: high END_WORKER_RESULT",
+                        "",
+                        DateTimeOffset.UtcNow,
+                        WorkerResultPresent: true));
+                kernel.CompleteGoal(owner.Id, "Completed source owner fixture.");
+                GoalOperationJournal.Completed(root, owner, "conductor:land", "Landed fixture.");
+                if (terminalShape is "recorded" or "cleaned-up")
+                    GoalOperationJournal.Completed(root, owner, "conductor:record", "Recorded fixture.");
+                if (terminalShape == "cleaned-up")
+                    GoalOperationJournal.Completed(root, owner, "workspace:remove", "Cleaned fixture.");
+                break;
+        }
+
+        var facts = CliCommandHandlers.BuildSourceBacklogSiblingFacts(
+            root,
+            owner,
+            SourceBacklogCoverage.Full,
+            workspaceExists: false);
+
+        Xunit.Assert.Equal(expectedStatus, facts.OwnerStatus);
+        Xunit.Assert.Equal(expectedLifecycleState, facts.OwnerLifecycleState);
+        Xunit.Assert.Equal(SourceBacklogSiblingAdmission.Admit, SourceBacklogSiblingAdmissionPolicy.Evaluate(facts));
+    }
+
+    [Xunit.Fact]
+    public void SiblingAdmissionAllowsActiveSliceOwner()
+    {
+        var facts = new SourceBacklogSiblingFacts(
+            SourceBacklogCoverage.Slice,
+            GoalStatus.Active,
+            GoalLifecycleState.Created);
+
+        Xunit.Assert.Equal(SourceBacklogSiblingAdmission.Admit, SourceBacklogSiblingAdmissionPolicy.Evaluate(facts));
+    }
+
+    [Xunit.Theory]
+    [Xunit.InlineData(GoalStatus.Active, GoalLifecycleState.Created)]
+    [Xunit.InlineData(GoalStatus.Completed, GoalLifecycleState.Verified)]
+    public void SiblingAdmissionRefusesNonTerminalFullOwner(
+        GoalStatus ownerStatus,
+        GoalLifecycleState ownerLifecycleState)
+    {
+        var facts = new SourceBacklogSiblingFacts(
+            SourceBacklogCoverage.Full,
+            ownerStatus,
+            ownerLifecycleState);
+
+        Xunit.Assert.Equal(
+            SourceBacklogSiblingAdmission.RefuseActiveOwnerFullCoverage,
+            SourceBacklogSiblingAdmissionPolicy.Evaluate(facts));
+        Xunit.Assert.Equal(
+            "source-backlog-active-owner-full-coverage",
+            SourceBacklogSiblingAdmissionPolicy.ActiveOwnerFullCoverageReason);
+    }
+
     [Xunit.Theory]
     [Xunit.InlineData(GoalStatus.Cancelled, false, GoalReplacementDisposition.ZeroWorkCorrection, GoalReplacementOutcome.Succeeded)]
     [Xunit.InlineData(GoalStatus.Cancelled, true, GoalReplacementDisposition.ZeroWorkCorrection, GoalReplacementOutcome.IneligibleDisposition)]

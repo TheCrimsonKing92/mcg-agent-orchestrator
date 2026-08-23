@@ -3679,6 +3679,7 @@ internal static class CliPersistentStateRunner
         }
 
         if (!string.Equals(claim.OwnerGoalId, preparedSnapshot.Id, StringComparison.Ordinal) &&
+            replacementPredecessorGoalId is not null &&
             !string.Equals(claim.OwnerGoalId, replacementPredecessorGoalId, StringComparison.Ordinal))
         {
             throw GoalCreatePreconditionChanged(
@@ -3687,6 +3688,37 @@ internal static class CliPersistentStateRunner
                 ("competingGoal", claim.OwnerGoalId),
                 ("claimVersion", claim.Version.ToString(System.Globalization.CultureInfo.InvariantCulture)),
                 ("replacement", "goal-replace"));
+        }
+
+        if (!string.Equals(claim.OwnerGoalId, preparedSnapshot.Id, StringComparison.Ordinal) &&
+            replacementPredecessorGoalId is null)
+        {
+            var owner = currentKernel.Goals.FirstOrDefault(goal => goal.Id.Value == claim.OwnerGoalId);
+            if (owner is null)
+            {
+                throw GoalCreatePreconditionChanged(
+                    "source-backlog-owner-unresolved",
+                    ("backlogItem", backlogItemId),
+                    ("competingGoal", claim.OwnerGoalId),
+                    ("claimVersion", claim.Version.ToString(System.Globalization.CultureInfo.InvariantCulture)));
+            }
+
+            var facts = CliCommandHandlers.BuildSourceBacklogSiblingFacts(
+                workspace.ExecutionDirectory,
+                owner,
+                claim.Coverage,
+                workspaceExists: false);
+            if (SourceBacklogSiblingAdmissionPolicy.Evaluate(facts) == SourceBacklogSiblingAdmission.RefuseActiveOwnerFullCoverage)
+            {
+                throw GoalCreatePreconditionChanged(
+                    SourceBacklogSiblingAdmissionPolicy.ActiveOwnerFullCoverageReason,
+                    ("backlogItem", backlogItemId),
+                    ("competingGoal", claim.OwnerGoalId),
+                    ("claimVersion", claim.Version.ToString(System.Globalization.CultureInfo.InvariantCulture)),
+                    ("ownerStatus", facts.OwnerStatus.ToString()),
+                    ("ownerState", facts.OwnerLifecycleState.ToString()),
+                    ("coverage", facts.Coverage.ToString().ToLowerInvariant()));
+            }
         }
 
         var currentDependencies = new HashSet<string>(StringComparer.Ordinal);

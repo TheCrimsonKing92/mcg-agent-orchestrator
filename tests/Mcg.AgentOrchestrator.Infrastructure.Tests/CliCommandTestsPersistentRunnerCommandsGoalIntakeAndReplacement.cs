@@ -558,6 +558,53 @@ public sealed class CliCommandTestsPersistentRunnerCommandsGoalIntakeAndReplacem
         Xunit.Assert.Equal(GoalStatus.Active, created.Status);
     }
 
+    [Xunit.Fact(DisplayName = "CliPersistentStateRunner_active_slice_owner_allows_sibling_goal")]
+    public async Task PersistentRunnerActiveSliceOwnerAllowsSiblingGoal()
+    {
+        var root = CreateTempDirectory();
+        var workspace = CreateRefinedWorkspace(root);
+        ModelFunctionCatalogStore.Save(workspace.ModelFunctionCatalogPath, new ModelFunctionCatalog([
+            new ModelFunctionBinding(
+                ModelFunctionPurposes.SpecRefiner,
+                ModelLane.CheapApi,
+                new ModelProfile("clarifying-refiner", "fake-model", ModelCapability.Text, SubscriptionMode.ApiKey),
+                Name: ModelFunctionPurposes.SpecRefiner)
+        ]));
+        var item = await new BacklogStore(workspace.BacklogStorePath).AddAsync("Multi-slice backlog source");
+        var repository = CreateMigratedStateRepository(workspace.SqliteStatePath);
+        var providers = new InMemoryModelProviderRegistry([new ClarifyingGoalRefinerProvider()]);
+        IReadOnlyList<AgentDefinition> agents = AgentCatalog.Default().Agents;
+        var profiles = WorkerProfileCatalog.Default();
+        Goal? currentGoal = null;
+
+        _ = CaptureConsole(() => CliPersistentStateRunner.ExecuteCommand(
+            ["goal", "Implement first active slice", "--backlog-item", item.Id, "--backlog-coverage", "slice"],
+            repository,
+            workspace,
+            ref agents,
+            providers,
+            ref profiles,
+            ref currentGoal));
+        var firstGoalId = currentGoal!.Id;
+
+        _ = CaptureConsole(() => CliPersistentStateRunner.ExecuteCommand(
+            ["goal", "Implement second active slice", "--backlog-item", item.Id, "--backlog-coverage", "slice"],
+            repository,
+            workspace,
+            ref agents,
+            providers,
+            ref profiles,
+            ref currentGoal));
+
+        var restored = await repository.LoadAsync();
+        Xunit.Assert.Equal(2, restored.Goals.Count);
+        Xunit.Assert.All(restored.Goals, goal => Xunit.Assert.Equal(item.Id, goal.SourceBacklogItemId));
+        var claim = new SourceBacklogClaimStore(workspace.SqliteStatePath).ResolveClaim(restored, item.Id);
+        Xunit.Assert.NotNull(claim);
+        Xunit.Assert.Equal(firstGoalId.Value, claim.OwnerGoalId);
+        Xunit.Assert.Equal(1, claim.Version);
+    }
+
     [Xunit.Fact(DisplayName = "CliPersistentStateRunner_concurrent_goal_creates_have_exactly_one_backlog_winner")]
     public async Task PersistentRunnerConcurrentGoalCreatesHaveExactlyOneBacklogWinner()
     {
@@ -583,7 +630,7 @@ public sealed class CliCommandTestsPersistentRunnerCommandsGoalIntakeAndReplacem
             try
             {
                 _ = CliPersistentStateRunner.ExecuteCommand(
-                    ["goal", objective, "--backlog-item", item.Id, "--backlog-coverage", "slice"],
+                    ["goal", objective, "--backlog-item", item.Id, "--backlog-coverage", "full"],
                     repository,
                     workspace,
                     ref localAgents,
@@ -601,16 +648,24 @@ public sealed class CliCommandTestsPersistentRunnerCommandsGoalIntakeAndReplacem
         var firstCreate = Task.Run(() => RunCreate(firstRepository, "Concurrent intake candidate one"));
         var secondCreate = Task.Run(() => RunCreate(secondRepository, "Concurrent intake candidate two"));
         var outcomes = await Task.WhenAll(firstCreate, secondCreate).WaitAsync(TimeSpan.FromSeconds(15));
-        Xunit.Assert.Single(outcomes, outcome => outcome is null);
-        var rejected = Xunit.Assert.Single(outcomes, outcome => outcome is not null)!;
-        Xunit.Assert.Contains("GOAL_CREATE_PRECONDITION_CHANGED reason=source-backlog-consumed", rejected.Message);
+        Xunit.Assert.All(
+            outcomes.Where(outcome => outcome is not null),
+            rejected => Xunit.Assert.Contains(
+                "GOAL_CREATE_PRECONDITION_CHANGED reason=source-backlog-active-owner-full-coverage",
+                rejected!.Message));
 
         var restored = await firstRepository.LoadAsync();
-        var winner = Xunit.Assert.Single(restored.Goals);
-        Xunit.Assert.Equal(item.Id, winner.SourceBacklogItemId);
-        Xunit.Assert.Null(winner.RefinedSpec);
-        Xunit.Assert.Equal(GoalStatus.Active, winner.Status);
-        Xunit.Assert.Single(Directory.GetFiles(workspace.GoalLifecycleEventsDirectory, "*.jsonl"));
+        Xunit.Assert.InRange(restored.Goals.Count, 1, 2);
+        Xunit.Assert.All(restored.Goals, goal => Xunit.Assert.Equal(item.Id, goal.SourceBacklogItemId));
+        var claim = new SourceBacklogClaimStore(workspace.SqliteStatePath).ResolveClaim(restored, item.Id);
+        Xunit.Assert.NotNull(claim);
+        var owner = Xunit.Assert.Single(restored.Goals, goal => goal.Id.Value == claim.OwnerGoalId);
+        Xunit.Assert.Null(owner.RefinedSpec);
+        Xunit.Assert.Equal(GoalStatus.Active, owner.Status);
+        Xunit.Assert.Equal(1, claim.Version);
+        Xunit.Assert.Equal(
+            restored.Goals.Count,
+            Directory.GetFiles(workspace.GoalLifecycleEventsDirectory, "*.jsonl").Length);
     }
 
     [Xunit.Fact(DisplayName = "CliPersistentStateRunner_goal_create_rejects_competing_backlog_link_atomically")]
@@ -636,7 +691,7 @@ public sealed class CliCommandTestsPersistentRunnerCommandsGoalIntakeAndReplacem
         {
             var competingKernel = repository.LoadAsync().GetAwaiter().GetResult();
             var competing = competingKernel.CreateGoal("Competing intake winner");
-            competingKernel.SetGoalSourceBacklogItemLink(competing.Id, item.Id, SourceBacklogCoverage.Slice);
+            competingKernel.SetGoalSourceBacklogItemLink(competing.Id, item.Id, SourceBacklogCoverage.Full);
             repository.SaveAsync(competingKernel).GetAwaiter().GetResult();
         };
         InvalidOperationException error;
@@ -644,7 +699,7 @@ public sealed class CliCommandTestsPersistentRunnerCommandsGoalIntakeAndReplacem
         {
             error = Xunit.Assert.Throws<InvalidOperationException>(() => CaptureConsole(() =>
                 CliPersistentStateRunner.ExecuteCommand(
-                    ["goal", "Create one linked goal", "--backlog-item", item.Id, "--backlog-coverage", "slice"],
+                    ["goal", "Create one linked goal", "--backlog-item", item.Id, "--backlog-coverage", "full"],
                     repository,
                     workspace,
                     ref agents,
@@ -657,7 +712,10 @@ public sealed class CliCommandTestsPersistentRunnerCommandsGoalIntakeAndReplacem
             GoalCreationSideEffectDelivery.BeforeStateCommit = null;
         }
 
-        Xunit.Assert.Contains("GOAL_CREATE_PRECONDITION_CHANGED reason=source-backlog-consumed", error.Message);
+        Xunit.Assert.Contains(
+            "GOAL_CREATE_PRECONDITION_CHANGED reason=source-backlog-active-owner-full-coverage",
+            error.Message);
+        Xunit.Assert.Contains("coverage=full", error.Message);
         Xunit.Assert.Null(currentGoal);
         var restored = await repository.LoadAsync();
         var winner = Xunit.Assert.Single(restored.Goals);
