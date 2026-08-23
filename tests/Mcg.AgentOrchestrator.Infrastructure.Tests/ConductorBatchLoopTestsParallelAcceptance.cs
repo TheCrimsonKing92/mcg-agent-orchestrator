@@ -2017,6 +2017,201 @@ public sealed class ConductorBatchLoopTestsParallelAcceptance : ConductorBatchLo
         }
     }
 
+    [Xunit.Theory]
+    [Xunit.InlineData("duplicate-or-recycled-pid")]
+    [Xunit.InlineData("owned-process-group-attachment")]
+    [Xunit.InlineData("victim-identity-read")]
+    [Xunit.InlineData("owner-identity-read")]
+    [Xunit.InlineData("job-publication")]
+    [Xunit.InlineData("process-resume")]
+    [Xunit.InlineData("durable-registry-write")]
+    public void RegistrationFaultBoundedStageHoldsForRetry(string stage)
+    {
+        var kernel = new AgentOrchestratorKernel();
+        var goal = CreateVerifiedSimpleGoal(kernel, "Update src/Mcg.AgentOrchestrator.App/Orchestration/RegistrationFault.cs");
+        var task = goal.Tasks.Single();
+        var attemptRoot = CreateTempDirectory("mcg-conductor-registration-fault");
+        var acceptanceAttempts = 0;
+        var registrationFailure =
+            $"worker-process-registration-failed: pid=36824; stage={stage}; cleanup=process-tree-termination-requested";
+        var driver = MakeDriver(
+            getFacts: _ => new GoalLifecycleFacts(WorkspaceExists: true),
+            runAcceptanceWithSlot: (_, _) =>
+            {
+                acceptanceAttempts++;
+                throw new InvalidOperationException(registrationFailure);
+            },
+            getLandingFileScopes: _ => ["src/Mcg.AgentOrchestrator.App/Orchestration/RegistrationFault.cs"],
+            parallelAcceptanceAttemptCoordinator: new ConductorParallelAcceptanceAttemptCoordinator(
+                attemptRoot,
+                runInline: true));
+
+        try
+        {
+            var summary = new ConductorBatchLoop().Run(
+                kernel,
+                driver,
+                ConductorAutonomyPolicy.Conservative,
+                NoStopPath(),
+                maxIterations: 1);
+            var latest = ReadLatestAttempt(attemptRoot, goal);
+
+            Assert.Equal(1, summary.Held);
+            Assert.Equal(0, summary.Escalated);
+            Assert.Equal(1, acceptanceAttempts);
+            Assert.Equal(1, latest.TransientFailureCount);
+            Assert.Equal(ConductorParallelAcceptanceAttemptOutcome.Failed, latest.Outcome);
+            Assert.Equal(GoalStatus.Verifying, goal.Status);
+            Assert.Null(goal.LatestAcceptanceFailure);
+            Assert.Equal(WorkTaskStatus.Completed, task.Status);
+            Assert.Equal(0, task.CriterionRetryCount);
+            Assert.Equal(0, goal.AutomaticAcceptanceRetryCount);
+        }
+        finally
+        {
+            TryDeleteDirectory(attemptRoot);
+        }
+    }
+
+    [Xunit.Theory]
+    [Xunit.InlineData("worker-process-registration-failed: pid=1; stage=protected-process-boundary; cleanup=refused-protected-process", true)]
+    [Xunit.InlineData("worker-process-registration-failed: pid=1; stage=unknown-stage; cleanup=process-tree-termination-requested", true)]
+    [Xunit.InlineData("worker-process-registration-failed: pid=1; cleanup=process-tree-termination-requested", true)]
+    [Xunit.InlineData("worker-process-registration-failed: pid=1; stage=; cleanup=process-tree-termination-requested", true)]
+    [Xunit.InlineData("worker-process-registration-degraded: pid=1; stage=victim-identity-read; outcome=durable-registration-skipped-process-preserved", false)]
+    [Xunit.InlineData("worker-process-registration-degraded: pid=1; stage=owner-identity-read; outcome=durable-registration-skipped-process-preserved", false)]
+    [Xunit.InlineData("worker-process-start-failed: pid=1; stage=owned-process-group-launch", false)]
+    [Xunit.InlineData("wrapped worker-process-registration-failed: pid=1; stage=duplicate-or-recycled-pid", false)]
+    public void RegistrationFaultTerminalOrNonFaultEscalates(string faultMessage, bool isRegistrationFault)
+    {
+        var kernel = new AgentOrchestratorKernel();
+        var goal = CreateVerifiedSimpleGoal(kernel, "Update src/Mcg.AgentOrchestrator.App/Orchestration/RegistrationFault.cs");
+        var attemptRoot = CreateTempDirectory("mcg-conductor-registration-fault");
+        var escalations = new List<string>();
+        var acceptanceAttempts = 0;
+        var driver = MakeDriver(
+            getFacts: _ => new GoalLifecycleFacts(WorkspaceExists: true),
+            runAcceptanceWithSlot: (_, _) =>
+            {
+                acceptanceAttempts++;
+                throw new InvalidOperationException(faultMessage);
+            },
+            writeEscalation: (_, _, reason) => escalations.Add(reason),
+            getLandingFileScopes: _ => ["src/Mcg.AgentOrchestrator.App/Orchestration/RegistrationFault.cs"],
+            parallelAcceptanceAttemptCoordinator: new ConductorParallelAcceptanceAttemptCoordinator(
+                attemptRoot,
+                runInline: true));
+
+        try
+        {
+            var summary = new ConductorBatchLoop().Run(
+                kernel,
+                driver,
+                ConductorAutonomyPolicy.Conservative,
+                NoStopPath(),
+                maxIterations: 1);
+            var latest = ReadLatestAttempt(attemptRoot, goal);
+
+            Assert.Equal(0, summary.Held);
+            Assert.Equal(1, summary.Escalated);
+            Assert.Single(escalations);
+            Assert.Equal(0, latest.TransientFailureCount);
+            Assert.Equal(isRegistrationFault ? GoalStatus.Verifying : GoalStatus.AcceptanceFailed, goal.Status);
+            Assert.Equal(isRegistrationFault, goal.LatestAcceptanceFailure is null);
+
+            new ConductorBatchLoop().Run(
+                kernel,
+                driver,
+                ConductorAutonomyPolicy.Conservative,
+                NoStopPath(),
+                maxIterations: 1);
+            Assert.Equal(1, acceptanceAttempts);
+        }
+        finally
+        {
+            TryDeleteDirectory(attemptRoot);
+        }
+    }
+
+    [Xunit.Fact]
+    public void RegistrationFaultRetriesToCapWithoutWorkerRound()
+    {
+        var kernel = new AgentOrchestratorKernel();
+        var goal = CreateVerifiedSimpleGoal(kernel, "Update src/Mcg.AgentOrchestrator.App/Orchestration/RegistrationFault.cs");
+        var task = goal.Tasks.Single();
+        var attemptRoot = CreateTempDirectory("mcg-conductor-registration-fault");
+        var escalations = new List<string>();
+        var acceptanceAttempts = 0;
+        var workerRetries = 0;
+        const string RegistrationFailure =
+            "worker-process-registration-failed: pid=36824; stage=owned-process-group-attachment; " +
+            "cleanup=process-tree-termination-requested; native_error_code=5";
+        const string OuterFailure = "acceptance attempt wrapper";
+        var driver = MakeDriver(
+            getFacts: _ => new GoalLifecycleFacts(WorkspaceExists: true),
+            runAcceptanceWithSlot: (_, _) =>
+            {
+                acceptanceAttempts++;
+                throw new InvalidOperationException(
+                    OuterFailure,
+                    new InvalidOperationException(RegistrationFailure));
+            },
+            retryTask: (goalId, taskId, message) =>
+            {
+                workerRetries++;
+                return kernel.RetryTask(goalId, taskId, message);
+            },
+            recordCriterionRetryFeedback: kernel.RecordCriterionRetryFeedback,
+            writeEscalation: (_, _, reason) => escalations.Add(reason),
+            getLandingFileScopes: _ => ["src/Mcg.AgentOrchestrator.App/Orchestration/RegistrationFault.cs"],
+            parallelAcceptanceAttemptCoordinator: new ConductorParallelAcceptanceAttemptCoordinator(
+                attemptRoot,
+                runInline: true));
+
+        try
+        {
+            var summary = new ConductorBatchLoop().Run(
+                kernel,
+                driver,
+                ConductorAutonomyPolicy.Conservative,
+                NoStopPath(),
+                maxIterations: ConductorBatchLoop.ParallelAcceptanceTransientFailureCap,
+                watchInterval: TimeSpan.FromMilliseconds(1),
+                sleepFunc: _ => false);
+            var latest = ReadLatestAttempt(attemptRoot, goal);
+
+            Assert.Equal(ConductorBatchLoop.ParallelAcceptanceTransientFailureCap - 1, summary.Held);
+            Assert.Equal(1, summary.Escalated);
+            Assert.Equal(ConductorBatchLoop.ParallelAcceptanceTransientFailureCap, acceptanceAttempts);
+            Assert.Equal(ConductorBatchLoop.ParallelAcceptanceTransientFailureCap, latest.TransientFailureCount);
+            Assert.Equal(RegistrationFailure, latest.Detail);
+            Assert.Single(escalations);
+            Assert.Contains(RegistrationFailure, escalations.Single(), StringComparison.Ordinal);
+            Assert.DoesNotContain(OuterFailure, escalations.Single(), StringComparison.Ordinal);
+            Assert.Equal(GoalStatus.Verifying, goal.Status);
+            Assert.Null(goal.LatestAcceptanceFailure);
+            Assert.Equal(WorkTaskStatus.Completed, task.Status);
+            Assert.Equal(0, task.CriterionRetryCount);
+            Assert.Equal(0, goal.AutomaticAcceptanceRetryCount);
+            Assert.Equal(0, workerRetries);
+
+            var restartSummary = new ConductorBatchLoop().Run(
+                kernel,
+                driver,
+                ConductorAutonomyPolicy.Conservative,
+                NoStopPath(),
+                maxIterations: 1);
+
+            Assert.Equal(1, restartSummary.Escalated);
+            Assert.Equal(ConductorBatchLoop.ParallelAcceptanceTransientFailureCap, acceptanceAttempts);
+            Assert.Equal(0, workerRetries);
+        }
+        finally
+        {
+            TryDeleteDirectory(attemptRoot);
+        }
+    }
+
     [Xunit.Fact(DisplayName = "BatchLoop_verified_goal_with_running_task_does_not_start_acceptance_attempt")]
     public void BatchLoopVerifiedGoalWithRunningTaskDoesNotStartAcceptanceAttempt()
     {
@@ -2105,26 +2300,45 @@ public sealed class ConductorBatchLoopTestsParallelAcceptance : ConductorBatchLo
         Assert.Equal(1, summary.Advanced);
         Assert.Equal(GoalStatus.Active, goal.Status);
         Assert.Equal(WorkTaskStatus.Assigned, task.Status);
+        Assert.Equal(1, task.CriterionRetryCount);
+        Assert.Equal(1, goal.AutomaticAcceptanceRetryCount);
+        Assert.Equal(0, summary.Held);
+        Assert.Equal(0, summary.Escalated);
         Assert.Null(goal.LatestAcceptanceFailure);
         Assert.Equal(GoalLifecycleState.WorkspaceReady, GoalLifecycle.ResolveState(goal, new GoalLifecycleFacts(WorkspaceExists: true)));
         Assert.Contains("WorkerSandboxPreparer_second_round_reuses_prep_receipt", retryMessage!, StringComparison.Ordinal);
         Assert.Contains("acceptance failed checks", retryMessage!, StringComparison.Ordinal);
     }
 
-    [Xunit.Fact(DisplayName = "BatchLoop_failed_parallel_acceptance_artifact_reconciles_goal_to_AcceptanceFailed")]
-    public void BatchLoopFailedParallelAcceptanceArtifactReconcilesGoalToAcceptanceFailed()
+    [Xunit.Theory]
+    [Xunit.InlineData(0, GoalStatus.AcceptanceFailed, WorkTaskStatus.Completed, 0, 1)]
+    [Xunit.InlineData(1, GoalStatus.Active, WorkTaskStatus.Assigned, 1, 0)]
+    public void BatchLoopFailedParallelAcceptanceArtifactPreservesVerdictRetryPolicy(
+        int maxCriterionRetries,
+        GoalStatus expectedGoalStatus,
+        WorkTaskStatus expectedTaskStatus,
+        int expectedRetryCount,
+        int expectedEscalated)
     {
         var kernel = new AgentOrchestratorKernel();
         var goal = CreateVerifiedSimpleGoal(kernel, "Update src/Mcg.AgentOrchestrator.App/Orchestration/FailedGate.cs");
+        var task = goal.Tasks.Single();
         var attemptRoot = CreateTempDirectory("mcg-conductor-acceptance-attempts");
-        var policy = ConductorAutonomyPolicy.Conservative with { MaxCriterionRetries = 0 };
+        var acceptanceAttempts = 0;
+        var policy = ConductorAutonomyPolicy.Conservative with { MaxCriterionRetries = maxCriterionRetries };
         var driver = MakeDriver(
             getFacts: _ => new GoalLifecycleFacts(WorkspaceExists: true),
-            runAcceptanceWithSlot: (_, _) => new AcceptanceVerificationSummary(
-                false,
-                [],
-                "Acceptance failed.",
-                ["FailedGateTests.Fails"]),
+            runAcceptanceWithSlot: (_, _) =>
+            {
+                acceptanceAttempts++;
+                return new AcceptanceVerificationSummary(
+                    false,
+                    [],
+                    "Acceptance failed.",
+                    ["FailedGateTests.Fails"]);
+            },
+            retryTask: (goalId, taskId, message) => kernel.RetryTask(goalId, taskId, message),
+            recordCriterionRetryFeedback: kernel.RecordCriterionRetryFeedback,
             getLandingFileScopes: _ => ["src/Mcg.AgentOrchestrator.App/Orchestration/FailedGate.cs"],
             parallelAcceptanceAttemptCoordinator: new ConductorParallelAcceptanceAttemptCoordinator(
                 attemptRoot,
@@ -2139,10 +2353,21 @@ public sealed class ConductorBatchLoopTestsParallelAcceptance : ConductorBatchLo
                 NoStopPath(),
                 maxIterations: 1);
 
-            Assert.Equal(1, summary.Escalated);
-            Assert.Equal(GoalStatus.AcceptanceFailed, goal.Status);
-            Assert.NotNull(goal.LatestAcceptanceFailure);
-            Assert.Contains("FailedGateTests.Fails", goal.LatestAcceptanceFailure!.FailedChecks);
+            Assert.Equal(1, acceptanceAttempts);
+            Assert.Equal(expectedEscalated, summary.Escalated);
+            Assert.Equal(expectedGoalStatus, goal.Status);
+            Assert.Equal(expectedTaskStatus, task.Status);
+            Assert.Equal(expectedRetryCount, task.CriterionRetryCount);
+            Assert.Equal(expectedRetryCount, goal.AutomaticAcceptanceRetryCount);
+            if (expectedGoalStatus == GoalStatus.AcceptanceFailed)
+            {
+                Assert.NotNull(goal.LatestAcceptanceFailure);
+                Assert.Contains("FailedGateTests.Fails", goal.LatestAcceptanceFailure!.FailedChecks);
+            }
+            else
+            {
+                Assert.Null(goal.LatestAcceptanceFailure);
+            }
         }
         finally
         {
