@@ -5,6 +5,36 @@ using Mcg.AgentOrchestrator.Infrastructure;
 
 public sealed class GoalScopeCollisionAdvisorTests
 {
+    [Xunit.Theory]
+    [Xunit.InlineData(
+        "src/Mcg.AgentOrchestrator.Core/Application/AlphaService.cs",
+        "src/Mcg.AgentOrchestrator.Core/Application/BetaService.cs",
+        true)]
+    [Xunit.InlineData(
+        "src/Mcg.AgentOrchestrator.App/Orchestration/AlphaSlice.cs",
+        "src/Mcg.AgentOrchestrator.App/Orchestration/BetaSlice.cs",
+        false)]
+    public void SiblingCollision_SamePaths_AgreesWithOwnershipAndAcceptance(
+        string leftPath,
+        string rightPath,
+        bool expectedCollision)
+    {
+        var scheduler = GoalScopeCollisionAdvisor.ClassifySiblingScopeCollision([leftPath], [rightPath]);
+        var leftScope = RepositoryLandingScopeNormalization.Normalize([leftPath], reserveUnknownScope: true);
+        var rightScope = RepositoryLandingScopeNormalization.Normalize([rightPath], reserveUnknownScope: true);
+        var leftOwned = RepositoryOwnershipMap.Classify(leftPath);
+        var rightOwned = RepositoryOwnershipMap.Classify(rightPath);
+        string[] leftExpectedResources = leftOwned.RequiresSerialization ? [$"ownership:{leftOwned.ReservationKey}"] : [];
+        string[] rightExpectedResources = rightOwned.RequiresSerialization ? [$"ownership:{rightOwned.ReservationKey}"] : [];
+        var acceptanceLeft = ConductorParallelAcceptanceCandidate.Create(CreateGoal(leftPath), 0, [leftPath]);
+        var acceptanceRight = ConductorParallelAcceptanceCandidate.Create(CreateGoal(rightPath), 1, [rightPath]);
+
+        Xunit.Assert.Equal(leftExpectedResources, leftScope.ResourceKeys);
+        Xunit.Assert.Equal(rightExpectedResources, rightScope.ResourceKeys);
+        Xunit.Assert.Equal(expectedCollision, acceptanceLeft.Overlaps(acceptanceRight));
+        Xunit.Assert.Equal(acceptanceLeft.Overlaps(acceptanceRight), scheduler.HasCollision);
+    }
+
     [Xunit.Fact(DisplayName = "GoalScopeCollisionAdvisor_reports_no_overlap_only_with_explicit_evidence")]
     public void ReportsNoOverlapOnlyWithExplicitEvidence()
     {

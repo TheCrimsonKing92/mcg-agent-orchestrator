@@ -55,6 +55,8 @@ internal sealed record SliceBatchScopeCollision(
     string RightPath,
     ScopeCollisionKind Kind);
 
+internal sealed record SiblingScopeCollisionDecision(bool HasCollision, string? Evidence);
+
 internal sealed record GoalScopeCollisionReport(
     IReadOnlyList<DeclaredFileScope> ProposedScopes,
     int InputGoalCount,
@@ -271,6 +273,35 @@ internal static class GoalScopeCollisionAdvisor
         }
 
         return collisions;
+    }
+
+    internal static SiblingScopeCollisionDecision ClassifySiblingScopeCollision(
+        IReadOnlyList<string> leftPaths,
+        IReadOnlyList<string> rightPaths)
+    {
+        var left = RepositoryLandingScopeNormalization.Normalize(leftPaths, reserveUnknownScope: true);
+        var right = RepositoryLandingScopeNormalization.Normalize(rightPaths, reserveUnknownScope: true);
+        var sharedResource = left.ResourceKeys
+            .Intersect(right.ResourceKeys, StringComparer.OrdinalIgnoreCase)
+            .Order(StringComparer.OrdinalIgnoreCase)
+            .FirstOrDefault();
+        if (sharedResource is not null)
+        {
+            return new SiblingScopeCollisionDecision(true, sharedResource);
+        }
+
+        foreach (var leftPath in left.ConflictPaths)
+        {
+            foreach (var rightPath in right.ConflictPaths)
+            {
+                if (RepositoryPathOverlap.Overlaps(leftPath, rightPath))
+                {
+                    return new SiblingScopeCollisionDecision(true, $"path:{leftPath}<->{rightPath}");
+                }
+            }
+        }
+
+        return new SiblingScopeCollisionDecision(false, null);
     }
 
     private static void AddProposedEvidenceGap(
