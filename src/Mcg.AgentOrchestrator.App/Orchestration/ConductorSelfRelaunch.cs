@@ -17,6 +17,37 @@ internal sealed record ConductorSelfRelaunchOptions(
     string PowerShellPath,
     ConductLoopHandoffOptions HandoffOptions,
     TimeSpan BuildTimeout = default,
+    TimeSpan SelfCheckTimeout = default)
+{
+    internal ConductorSuccessorStagingOptions Staging => new(
+        RepositoryRoot,
+        AppProjectPath,
+        AppDllPath,
+        UpdateHeadMarkerScriptPath,
+        ResolveRunDirectoryScriptPath,
+        StateStorePath,
+        AgentCatalogPath,
+        WorkerProfilePath,
+        ModelFunctionCatalogPath,
+        DotnetPath,
+        PowerShellPath,
+        BuildTimeout,
+        SelfCheckTimeout);
+}
+
+internal sealed record ConductorSuccessorStagingOptions(
+    string RepositoryRoot,
+    string AppProjectPath,
+    string AppDllPath,
+    string UpdateHeadMarkerScriptPath,
+    string ResolveRunDirectoryScriptPath,
+    string StateStorePath,
+    string AgentCatalogPath,
+    string WorkerProfilePath,
+    string ModelFunctionCatalogPath,
+    string DotnetPath,
+    string PowerShellPath,
+    TimeSpan BuildTimeout = default,
     TimeSpan SelfCheckTimeout = default);
 
 internal sealed record ConductorSelfRelaunchRequest(
@@ -26,7 +57,8 @@ internal sealed record ConductorSelfRelaunchRequest(
 internal sealed record ConductorPreparedSuccessor(
     string RunDirectory,
     string AppDllPath,
-    string GitHead,
+    string RepositoryHead,
+    string StagedSourceCommit,
     string SelfCheckDetail);
 
 internal sealed record ConductorSelfRelaunchResult(
@@ -48,25 +80,25 @@ internal static class ConductorSelfRelaunch
 
     internal static Func<ConductorSelfRelaunchRequest, ConductorSelfRelaunchResult> Create(
         ConductorSelfRelaunchOptions options,
-        Func<ConductorSelfRelaunchOptions, ConductorPreparedSuccessor>? prepare = null,
+        Func<ConductorSuccessorStagingOptions, ConductorPreparedSuccessor>? prepare = null,
         Func<ConductLoopHandoffOptions, ConductorLoopHandoffRequest, ConductorLoopHandoffResult>? handoff = null) =>
         request => TryRelaunch(
             options,
             request,
-            prepare ?? PrepareSuccessor,
+            prepare ?? (stagingOptions => PrepareSuccessor(stagingOptions)),
             handoff ?? ((handoffOptions, handoffRequest) =>
                 ConductorLoopHandoff.Create(handoffOptions)(handoffRequest)));
 
     internal static ConductorSelfRelaunchResult TryRelaunch(
         ConductorSelfRelaunchOptions options,
         ConductorSelfRelaunchRequest request,
-        Func<ConductorSelfRelaunchOptions, ConductorPreparedSuccessor> prepare,
+        Func<ConductorSuccessorStagingOptions, ConductorPreparedSuccessor> prepare,
         Func<ConductLoopHandoffOptions, ConductorLoopHandoffRequest, ConductorLoopHandoffResult> handoff)
     {
         ConductorPreparedSuccessor successor;
         try
         {
-            successor = prepare(options);
+            successor = prepare(options.Staging);
         }
         catch (ConductorSelfRelaunchPreparationException ex)
         {
@@ -122,8 +154,11 @@ internal static class ConductorSelfRelaunch
                 handoffResult.RollbackSucceeded);
     }
 
-    internal static ConductorPreparedSuccessor PrepareSuccessor(ConductorSelfRelaunchOptions options)
+    internal static ConductorPreparedSuccessor PrepareSuccessor(
+        ConductorSuccessorStagingOptions options,
+        CancellationToken cancellationToken = default)
     {
+        cancellationToken.ThrowIfCancellationRequested();
         var buildTimeout = options.BuildTimeout <= TimeSpan.Zero
             ? DefaultBuildTimeout
             : options.BuildTimeout;
@@ -135,7 +170,8 @@ internal static class ConductorSelfRelaunch
             "git",
             ["-C", options.RepositoryRoot, "rev-parse", "HEAD"],
             options.RepositoryRoot,
-            TimeSpan.FromSeconds(30));
+            TimeSpan.FromSeconds(30),
+            cancellationToken);
         EnsureSucceeded("build", "resolve merged git HEAD", gitHeadResult);
         var gitHead = gitHeadResult.Stdout.Trim();
         if (string.IsNullOrWhiteSpace(gitHead))
@@ -164,33 +200,40 @@ internal static class ConductorSelfRelaunch
                 "-clp:ErrorsOnly"
             ],
             options.RepositoryRoot,
-            buildTimeout);
+            buildTimeout,
+            cancellationToken);
         EnsureSucceeded("build", "build merged conductor", build);
 
         var marker = RunPowerShell(
             options,
             options.UpdateHeadMarkerScriptPath,
             [options.RepositoryRoot, appHeadMarkerPath],
-            TimeSpan.FromMinutes(1));
-        EnsureSucceeded("build", "record conductor git HEAD", marker);
+            TimeSpan.FromMinutes(1),
+            cancellationToken);
+        EnsureSucceeded("stage", "record conductor git HEAD", marker);
 
         var resolve = RunPowerShell(
             options,
             options.ResolveRunDirectoryScriptPath,
             [appDllPath],
-            TimeSpan.FromMinutes(2));
-        EnsureSucceeded("build", "publish content-addressed run directory", resolve);
+            TimeSpan.FromMinutes(2),
+            cancellationToken);
+        EnsureSucceeded("stage", "publish content-addressed run directory", resolve);
         var runDirectory = resolve.Stdout
             .Split(['\r', '\n'], StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries)
             .LastOrDefault();
         if (string.IsNullOrWhiteSpace(runDirectory))
         {
             throw new ConductorSelfRelaunchPreparationException(
-                "build",
+                "stage",
                 "Run-directory resolver returned no content-addressed directory.");
         }
 
         var successorDll = Path.Combine(runDirectory, Path.GetFileName(appDllPath));
+        var stagedSourceCommit = ReadStagedSourceCommit(
+            runDirectory,
+            Path.GetFileName(appDllPath),
+            gitHead);
         var selfCheck = RunProcess(
             options.DotnetPath,
             [
@@ -204,7 +247,8 @@ internal static class ConductorSelfRelaunch
                 options.ModelFunctionCatalogPath
             ],
             options.RepositoryRoot,
-            selfCheckTimeout);
+            selfCheckTimeout,
+            cancellationToken);
         EnsureSucceeded("self-check", "probe successor startup contract", selfCheck);
         var readiness = selfCheck.Stdout
             .Split(['\r', '\n'], StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries)
@@ -218,14 +262,55 @@ internal static class ConductorSelfRelaunch
                 "Successor did not return the compatible LOOP_START readiness contract.");
         }
 
-        return new ConductorPreparedSuccessor(runDirectory, successorDll, gitHead, readiness);
+        return new ConductorPreparedSuccessor(
+            runDirectory,
+            successorDll,
+            gitHead,
+            stagedSourceCommit,
+            readiness);
+    }
+
+    internal static string ReadStagedSourceCommit(
+        string runDirectory,
+        string dllFileName,
+        string expectedRepositoryHead)
+    {
+        var markerPath = Path.Combine(runDirectory, dllFileName + ".git-head");
+        string stagedSourceCommit;
+        try
+        {
+            stagedSourceCommit = File.ReadAllText(markerPath).Trim();
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+        {
+            throw new ConductorSelfRelaunchPreparationException(
+                "stage",
+                $"Staged source marker could not be read at {markerPath}: {ex.Message}");
+        }
+
+        if (string.IsNullOrWhiteSpace(stagedSourceCommit))
+        {
+            throw new ConductorSelfRelaunchPreparationException(
+                "stage",
+                $"Staged source marker was empty at {markerPath}.");
+        }
+
+        if (!stagedSourceCommit.Equals(expectedRepositoryHead, StringComparison.OrdinalIgnoreCase))
+        {
+            throw new ConductorSelfRelaunchPreparationException(
+                "stage",
+                $"Staged source commit {stagedSourceCommit} did not match repository HEAD {expectedRepositoryHead}.");
+        }
+
+        return stagedSourceCommit;
     }
 
     private static CapturedProcessResult RunPowerShell(
-        ConductorSelfRelaunchOptions options,
+        ConductorSuccessorStagingOptions options,
         string scriptPath,
         IReadOnlyList<string> scriptArguments,
-        TimeSpan timeout)
+        TimeSpan timeout,
+        CancellationToken cancellationToken)
     {
         var arguments = new List<string>
         {
@@ -236,14 +321,20 @@ internal static class ConductorSelfRelaunch
             scriptPath
         };
         arguments.AddRange(scriptArguments);
-        return RunProcess(options.PowerShellPath, arguments, options.RepositoryRoot, timeout);
+        return RunProcess(
+            options.PowerShellPath,
+            arguments,
+            options.RepositoryRoot,
+            timeout,
+            cancellationToken);
     }
 
     private static CapturedProcessResult RunProcess(
         string fileName,
         IReadOnlyList<string> arguments,
         string workingDirectory,
-        TimeSpan timeout)
+        TimeSpan timeout,
+        CancellationToken cancellationToken = default)
     {
         var startInfo = new ProcessStartInfo(fileName)
         {
@@ -265,9 +356,12 @@ internal static class ConductorSelfRelaunch
         var stdoutTask = process.StandardOutput.ReadToEndAsync();
         var stderrTask = process.StandardError.ReadToEndAsync();
         using var timeoutCts = new CancellationTokenSource(timeout);
+        using var linkedCts = CancellationTokenSource.CreateLinkedTokenSource(
+            timeoutCts.Token,
+            cancellationToken);
         try
         {
-            process.WaitForExitAsync(timeoutCts.Token).GetAwaiter().GetResult();
+            process.WaitForExitAsync(linkedCts.Token).GetAwaiter().GetResult();
         }
         catch (OperationCanceledException)
         {
@@ -278,6 +372,11 @@ internal static class ConductorSelfRelaunch
             }
             catch
             {
+            }
+
+            if (cancellationToken.IsCancellationRequested)
+            {
+                cancellationToken.ThrowIfCancellationRequested();
             }
 
             return new CapturedProcessResult(
