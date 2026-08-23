@@ -2,6 +2,7 @@ using System.Diagnostics;
 using System.Runtime.ExceptionServices;
 using System.Runtime.InteropServices;
 using System.Security.Cryptography;
+using System.Text;
 using Microsoft.Win32.SafeHandles;
 
 namespace Mcg.AgentOrchestrator.Infrastructure;
@@ -10,6 +11,7 @@ internal sealed class DisposableTrialRoot
 {
     private readonly IWorkerIntegrityLabeler _integrityLabeler;
     private readonly ITrialProcessInventory _processInventory;
+    private readonly ITrialJobExitWaiter _jobExitWaiter;
     private readonly bool _useContainedJob;
     private readonly bool _useLowIntegrityProcess;
 
@@ -18,7 +20,8 @@ internal sealed class DisposableTrialRoot
             new IcaclsIntegrityLabeler(),
             new SystemTrialProcessInventory(),
             useContainedJob: true,
-            useLowIntegrityProcess: true)
+            useLowIntegrityProcess: true,
+            jobExitWaiter: new SystemTrialJobExitWaiter())
     {
     }
 
@@ -26,10 +29,12 @@ internal sealed class DisposableTrialRoot
         IWorkerIntegrityLabeler integrityLabeler,
         ITrialProcessInventory processInventory,
         bool useContainedJob = true,
-        bool useLowIntegrityProcess = true)
+        bool useLowIntegrityProcess = true,
+        ITrialJobExitWaiter? jobExitWaiter = null)
     {
         _integrityLabeler = integrityLabeler;
         _processInventory = processInventory;
+        _jobExitWaiter = jobExitWaiter ?? new SystemTrialJobExitWaiter();
         _useContainedJob = useContainedJob;
         _useLowIntegrityProcess = useLowIntegrityProcess;
     }
@@ -88,6 +93,7 @@ internal sealed class DisposableTrialRoot
                 childEnvironment,
                 protectedPaths,
                 _processInventory,
+                _jobExitWaiter,
                 _useContainedJob,
                 _useLowIntegrityProcess,
                 EnsurePositive(started.Elapsed),
@@ -399,11 +405,10 @@ internal sealed partial class TrialRootLease
             }
 
             var launchId = Guid.NewGuid().ToString("N");
-            var scriptPath = Path.Combine(HarnessStatePath, $"launch-{launchId}.ps1");
             var stdoutPath = Path.Combine(HarnessStatePath, $"launch-{launchId}.stdout.log");
             var stderrPath = Path.Combine(HarnessStatePath, $"launch-{launchId}.stderr.log");
             var script = BuildLaunchScript(command, _useLowIntegrityProcess);
-            File.WriteAllText(scriptPath, script);
+            var encodedScript = Convert.ToBase64String(Encoding.Unicode.GetBytes(script));
 
             var startInfo = new ProcessStartInfo
             {
@@ -415,10 +420,8 @@ internal sealed partial class TrialRootLease
             startInfo.ArgumentList.Add("-NoLogo");
             startInfo.ArgumentList.Add("-NoProfile");
             startInfo.ArgumentList.Add("-NonInteractive");
-            startInfo.ArgumentList.Add("-ExecutionPolicy");
-            startInfo.ArgumentList.Add("Bypass");
-            startInfo.ArgumentList.Add("-File");
-            startInfo.ArgumentList.Add(scriptPath);
+            startInfo.ArgumentList.Add("-EncodedCommand");
+            startInfo.ArgumentList.Add(encodedScript);
             startInfo.Environment.Clear();
             foreach (var pair in ChildEnvironment)
             {

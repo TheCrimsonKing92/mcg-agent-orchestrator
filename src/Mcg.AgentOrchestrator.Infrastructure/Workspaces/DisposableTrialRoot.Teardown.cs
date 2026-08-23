@@ -17,6 +17,7 @@ internal sealed partial class TrialRootLease
             var started = Stopwatch.StartNew();
             var diagnostics = new List<string>();
             var observedProcessIds = new HashSet<int>();
+            var jobExitConfirmed = true;
             foreach (var owned in _processes)
             {
                 observedProcessIds.Add(owned.Process.Id);
@@ -33,8 +34,9 @@ internal sealed partial class TrialRootLease
                     using (waitHandle)
                     {
                         owned.Group.Kill();
-                        if (!OwnedProcessGroup.WaitForJobExit(waitHandle, TimeSpan.FromSeconds(5)))
+                        if (!_jobExitWaiter.WaitForExit(waitHandle, TimeSpan.FromSeconds(5)))
                         {
+                            jobExitConfirmed = false;
                             diagnostics.Add($"Owned job for root process {owned.Process.Id} did not report an empty process set.");
                         }
                     }
@@ -42,6 +44,7 @@ internal sealed partial class TrialRootLease
                 else
                 {
                     owned.Group.Kill();
+                    jobExitConfirmed = false;
                     diagnostics.Add($"Could not duplicate the owned job handle for root process {owned.Process.Id}.");
                 }
 
@@ -63,6 +66,7 @@ internal sealed partial class TrialRootLease
                 rootRemoved,
                 observedProcessIds.Order().ToArray(),
                 survivors,
+                jobExitConfirmed,
                 outsideWrites,
                 CreateDuration,
                 started.Elapsed > TimeSpan.Zero ? started.Elapsed : TimeSpan.FromTicks(1),

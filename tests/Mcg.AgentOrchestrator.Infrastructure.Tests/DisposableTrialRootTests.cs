@@ -5,8 +5,7 @@ namespace Mcg.AgentOrchestrator.Infrastructure.Tests;
 [Xunit.Collection(TestCollections.ProcessSpawning)]
 public sealed class DisposableTrialRootTests(Xunit.ITestOutputHelper output)
 {
-    public static bool IsWindowsAtMediumOrHigher =>
-        DisposableTrialRootNegativeControlTests.IsWindowsAtMediumOrHigher;
+    public static bool IsWindows => OperatingSystem.IsWindows();
 
     [Xunit.Fact]
     public void CreateProducesStandaloneCloneAndRootLocalStateThenDestroyReportsClean()
@@ -43,6 +42,7 @@ public sealed class DisposableTrialRootTests(Xunit.ITestOutputHelper output)
 
             var report = lease.Destroy();
             Xunit.Assert.True(report.RootRemoved);
+            Xunit.Assert.True(report.JobExitConfirmed);
             Xunit.Assert.Empty(report.SurvivingProcessIds);
             Xunit.Assert.Empty(report.OutsideWrites);
             Xunit.Assert.True(report.Clean);
@@ -60,8 +60,8 @@ public sealed class DisposableTrialRootTests(Xunit.ITestOutputHelper output)
     }
 
     [Xunit.Fact(
-        Skip = "Requires Windows at Medium integrity or above.",
-        SkipUnless = nameof(IsWindowsAtMediumOrHigher))]
+        Skip = "Requires Windows process containment.",
+        SkipUnless = nameof(IsWindows))]
     public void ChildWritesThroughEveryRootLocalEnvironmentVariable()
     {
         var fixture = CreateFixtureRepository();
@@ -183,7 +183,12 @@ public sealed class DisposableTrialRootTests(Xunit.ITestOutputHelper output)
 
     private static ProcessStartInfo PowerShellCommand(string script)
     {
-        var command = new ProcessStartInfo { FileName = "powershell.exe" };
+        var command = new ProcessStartInfo
+        {
+            FileName = "powershell.exe",
+            UseShellExecute = false,
+            CreateNoWindow = true
+        };
         command.ArgumentList.Add("-NoLogo");
         command.ArgumentList.Add("-NoProfile");
         command.ArgumentList.Add("-NonInteractive");

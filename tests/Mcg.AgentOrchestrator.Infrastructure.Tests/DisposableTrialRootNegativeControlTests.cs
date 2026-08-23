@@ -2,6 +2,7 @@ using System.Diagnostics;
 using System.ComponentModel;
 using System.Runtime.InteropServices;
 using System.Text;
+using Microsoft.Win32.SafeHandles;
 
 namespace Mcg.AgentOrchestrator.Infrastructure.Tests;
 
@@ -24,6 +25,7 @@ public sealed class DisposableTrialRootNegativeControlTests
         var fixture = CreateFixtureRepository();
         var outsideFile = Path.Combine(fixture.Root, "outside.txt");
         File.WriteAllText(outsideFile, "unchanged");
+        AssertMediumIntegrity(outsideFile, recursive: false);
         try
         {
             using var lease = CreateNegativeControlFactory().Create(new TrialRootRequest(
@@ -63,6 +65,9 @@ public sealed class DisposableTrialRootNegativeControlTests
         var gitConfig = Path.Combine(fixture.Source, ".git", "config");
         var trackedBefore = File.ReadAllBytes(tracked);
         var gitConfigBefore = File.ReadAllBytes(gitConfig);
+        AssertMediumIntegrity(fixture.Source, recursive: true);
+        AssertMediumIntegrity(tracked, recursive: false);
+        AssertMediumIntegrity(gitConfig, recursive: false);
         try
         {
             using var lease = new DisposableTrialRoot().Create(new TrialRootRequest(
@@ -122,8 +127,8 @@ public sealed class DisposableTrialRootNegativeControlTests
     }
 
     [Xunit.Fact(
-        Skip = "Requires Windows at Medium integrity or above.",
-        SkipUnless = nameof(IsWindowsAtMediumOrHigher))]
+        Skip = "Requires Windows process containment.",
+        SkipUnless = nameof(IsWindows))]
     public void CancellationKillsChildAndGrandchildWhenContainedJobIsEnabled()
     {
         var fixture = CreateFixtureRepository();
@@ -145,7 +150,7 @@ public sealed class DisposableTrialRootNegativeControlTests
             var encodedChild = Convert.ToBase64String(Encoding.Unicode.GetBytes(childScript));
             var breakawayProbe = BuildBreakawayProbeScript(breakawayDenied);
             var parentScript =
-                $"$child=Start-Process powershell.exe -ArgumentList @('-NoProfile','-EncodedCommand','{encodedChild}') -PassThru; " +
+                $"$child=Start-Process powershell.exe -ArgumentList @('-NoProfile','-EncodedCommand','{encodedChild}') -WindowStyle Hidden -PassThru; " +
                 $"while (-not (Test-Path -LiteralPath '{Ps(childReady)}')) {{ Start-Sleep -Milliseconds 25 }}; " +
                 breakawayProbe + "; " +
                 $"'ready' | Set-Content -LiteralPath '{Ps(parentReady)}'; " +
@@ -161,10 +166,44 @@ public sealed class DisposableTrialRootNegativeControlTests
             var report = lease.Destroy();
 
             Xunit.Assert.Empty(report.SurvivingProcessIds);
+            Xunit.Assert.True(report.JobExitConfirmed);
             Xunit.Assert.Contains(parent.ProcessId, report.PreTeardownProcessIds);
             Xunit.Assert.Contains(grandchildProcessId, report.PreTeardownProcessIds);
             Xunit.Assert.True(report.Clean);
             parent.Dispose();
+        }
+        finally
+        {
+            DeleteFixture(fixture.Root);
+        }
+    }
+
+    [Xunit.Fact(
+        Skip = "Requires Windows process containment.",
+        SkipUnless = nameof(IsWindows))]
+    public void UnconfirmedJobExitIsReportedAndMakesTeardownUnclean()
+    {
+        var fixture = CreateFixtureRepository();
+        try
+        {
+            var factory = new DisposableTrialRoot(
+                new IcaclsIntegrityLabeler(),
+                new SystemTrialProcessInventory(),
+                jobExitWaiter: new UnconfirmedJobExitWaiter());
+            using var lease = factory.Create(new TrialRootRequest(
+                fixture.Source,
+                fixture.Commit,
+                fixture.Trials,
+                "unconfirmed-job-exit"));
+            using var process = lease.Start(PowerShellCommand("Start-Sleep -Seconds 30"));
+
+            var report = lease.Destroy();
+
+            Xunit.Assert.False(report.JobExitConfirmed);
+            Xunit.Assert.False(report.Clean);
+            Xunit.Assert.Contains(
+                report.Diagnostics,
+                item => item.Contains("did not report an empty process set", StringComparison.Ordinal));
         }
         finally
         {
@@ -200,8 +239,8 @@ public sealed class DisposableTrialRootNegativeControlTests
     }
 
     [Xunit.Fact(
-        Skip = "Requires Windows at Medium integrity or above.",
-        SkipUnless = nameof(IsWindowsAtMediumOrHigher))]
+        Skip = "Requires Windows integrity labelling.",
+        SkipUnless = nameof(IsWindows))]
     public void CreationFailsClosedWhenIntegrityLabellingIsDisabled()
     {
         var fixture = CreateFixtureRepository();
@@ -219,8 +258,8 @@ public sealed class DisposableTrialRootNegativeControlTests
     }
 
     [Xunit.Fact(
-        Skip = "Requires Windows at Medium integrity or above.",
-        SkipUnless = nameof(IsWindowsAtMediumOrHigher))]
+        Skip = "Requires Windows integrity labelling.",
+        SkipUnless = nameof(IsWindows))]
     public void PartialRootCleanupFailureReportsTheSurvivingPathAndBothFailures()
     {
         var fixture = CreateFixtureRepository();
@@ -253,7 +292,12 @@ public sealed class DisposableTrialRootNegativeControlTests
 
     private static ProcessStartInfo PowerShellCommand(string script)
     {
-        var command = new ProcessStartInfo { FileName = "powershell.exe" };
+        var command = new ProcessStartInfo
+        {
+            FileName = "powershell.exe",
+            UseShellExecute = false,
+            CreateNoWindow = true
+        };
         command.ArgumentList.Add("-NoLogo");
         command.ArgumentList.Add("-NoProfile");
         command.ArgumentList.Add("-NonInteractive");
@@ -384,6 +428,19 @@ public static class McgBreakawayProbe {
 
     private static string Ps(string value) => value.Replace("'", "''");
 
+    private static void AssertMediumIntegrity(string path, bool recursive)
+    {
+        var labeler = new IcaclsIntegrityLabeler();
+        var level = Directory.Exists(path) ? "(OI)(CI)M" : "M";
+        Xunit.Assert.True(
+            labeler.SetIntegrity(path, level, recursive),
+            $"Could not establish the Medium-integrity negative-control precondition for '{path}'.");
+        var state = labeler.Query(path);
+        Xunit.Assert.True(
+            state.Exists && state.Medium && !state.Low,
+            $"Negative-control target was not confirmed Medium integrity: '{path}'.");
+    }
+
     private static (string Root, string Source, string Trials, string Commit) CreateFixtureRepository()
     {
         var root = Path.Combine(Path.GetTempPath(), "mcg-trial-negative-tests", Guid.NewGuid().ToString("N"));
@@ -424,6 +481,11 @@ public static class McgBreakawayProbe {
     private sealed class SyntheticInventory(params int[] survivors) : ITrialProcessInventory
     {
         public IReadOnlyList<int> FindSurvivors(IReadOnlyCollection<int> observedProcessIds) => survivors;
+    }
+
+    private sealed class UnconfirmedJobExitWaiter : ITrialJobExitWaiter
+    {
+        public bool WaitForExit(SafeFileHandle jobHandle, TimeSpan timeout) => false;
     }
 
     private sealed class DisabledIntegrityLabeler : IWorkerIntegrityLabeler

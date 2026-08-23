@@ -1,4 +1,5 @@
 using System.Diagnostics;
+using Microsoft.Win32.SafeHandles;
 
 namespace Mcg.AgentOrchestrator.Infrastructure;
 
@@ -27,6 +28,7 @@ internal sealed record TrialTeardownReport(
     bool RootRemoved,
     IReadOnlyList<int> PreTeardownProcessIds,
     IReadOnlyList<int> SurvivingProcessIds,
+    bool JobExitConfirmed,
     IReadOnlyList<string> OutsideWrites,
     TimeSpan CreateDuration,
     TimeSpan DestroyDuration,
@@ -35,8 +37,20 @@ internal sealed record TrialTeardownReport(
 {
     public bool Clean =>
         RootRemoved &&
+        JobExitConfirmed &&
         SurvivingProcessIds.Count == 0 &&
         OutsideWrites.Count == 0;
+}
+
+internal interface ITrialJobExitWaiter
+{
+    bool WaitForExit(SafeFileHandle jobHandle, TimeSpan timeout);
+}
+
+internal sealed class SystemTrialJobExitWaiter : ITrialJobExitWaiter
+{
+    public bool WaitForExit(SafeFileHandle jobHandle, TimeSpan timeout) =>
+        OwnedProcessGroup.WaitForJobExit(jobHandle, timeout);
 }
 
 internal interface ITrialProcessInventory
@@ -97,6 +111,7 @@ internal sealed partial class TrialRootLease : IDisposable
     private readonly List<TrialOwnedProcess> _processes = [];
     private readonly IReadOnlyList<ProtectedPathSnapshot> _protectedSnapshots;
     private readonly ITrialProcessInventory _processInventory;
+    private readonly ITrialJobExitWaiter _jobExitWaiter;
     private readonly bool _useContainedJob;
     private readonly bool _useLowIntegrityProcess;
     private TrialTeardownReport? _teardownReport;
@@ -108,6 +123,7 @@ internal sealed partial class TrialRootLease : IDisposable
         IReadOnlyDictionary<string, string?> childEnvironment,
         IReadOnlyList<ProtectedPathSnapshot> protectedSnapshots,
         ITrialProcessInventory processInventory,
+        ITrialJobExitWaiter jobExitWaiter,
         bool useContainedJob,
         bool useLowIntegrityProcess,
         TimeSpan createDuration,
@@ -125,6 +141,7 @@ internal sealed partial class TrialRootLease : IDisposable
         ChildEnvironment = childEnvironment;
         _protectedSnapshots = protectedSnapshots;
         _processInventory = processInventory;
+        _jobExitWaiter = jobExitWaiter;
         _useContainedJob = useContainedJob;
         _useLowIntegrityProcess = useLowIntegrityProcess;
         CreateDuration = createDuration;
