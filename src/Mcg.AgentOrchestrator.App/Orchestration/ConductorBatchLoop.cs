@@ -21,7 +21,7 @@ internal readonly record struct ParallelAcceptanceOldestWaiterObservation(
         ConsecutiveTicks >= ConductorBatchLoop.ParallelAcceptanceOldestWaiterStallTickThreshold;
 }
 
-internal sealed class ConductorBatchLoop
+internal sealed partial class ConductorBatchLoop
 {
     internal const string StopFileName = ".conduct-stop";
     internal const int DefaultMaxVerifyRetries = 2;
@@ -981,7 +981,7 @@ internal sealed class ConductorBatchLoop
             var perGoalPhaseTimingLines = new List<string>();
             driver.PhaseTimingSink = line => perGoalPhaseTimingLines.Add($"PHASE_TIMING tick={totalTicks} {line}");
             var goalWalkTimings = new List<GoalWalkTiming>();
-            driver.BeginTick();
+            driver.BeginTick(kernel, totalTicks);
             var goalWalkClock = Stopwatch.StartNew();
             var glanceDurationStats = _progressiveReviewGlances is null
                 ? Array.Empty<TaskDurationStatsRecord>()
@@ -3362,23 +3362,7 @@ internal sealed class ConductorBatchLoop
         string.Join(',', exclusions.Select(exclusion =>
             $"{exclusion.FirstGoalId.Value[..8]}:{exclusion.SecondGoalId.Value[..8]}:{exclusion.Reason}"));
 
-    private static bool MarkParallelAcceptanceStarted(
-        AgentOrchestratorKernel kernel,
-        Goal goal,
-        ConductorParallelAcceptanceAttempt attempt,
-        int tick)
-    {
-        if (goal.Status != GoalStatus.Verified)
-        {
-            return false;
-        }
-
-        return kernel.BeginGoalAcceptanceVerification(
-            goal.Id,
-            $"Batch loop tick {tick}: acceptance gate record {attempt.AttemptId} is running in background; goal entered Verifying.");
-    }
-
-    private static void ReconcileParallelAcceptanceTerminalState(
+    internal static void ReconcileParallelAcceptanceTerminalState(
         AgentOrchestratorKernel kernel,
         Goal goal,
         ConductorParallelAcceptanceRunResult run,
@@ -3429,7 +3413,7 @@ internal sealed class ConductorBatchLoop
             run.Acceptance?.BaselineAttestation);
     }
 
-    private static void ReconcileParallelAcceptanceTerminalState(
+    internal static void ReconcileParallelAcceptanceTerminalState(
         AgentOrchestratorKernel kernel,
         Goal goal,
         ConductorParallelAcceptanceAttempt attempt)
@@ -3909,7 +3893,7 @@ internal sealed class ConductorBatchLoop
             capturedOutput);
     }
 
-    private static ConductorAdvanceResult CompleteParallelAcceptanceRun(
+    internal static ConductorAdvanceResult CompleteParallelAcceptanceRun(
         ConductorDriver driver,
         ConductorAutonomyPolicy policy,
         ConductorParallelAcceptanceRunResult run,
@@ -4006,7 +3990,7 @@ internal sealed class ConductorBatchLoop
         }
     }
 
-    private static void MarkParallelAcceptanceReconciledUnlessLeaseHeld(
+    internal static void MarkParallelAcceptanceReconciledUnlessLeaseHeld(
         ConductorDriver driver,
         ConductorParallelAcceptanceRunResult run,
         bool evidenceMutationLeaseHeld,
@@ -4056,7 +4040,7 @@ internal sealed class ConductorBatchLoop
             snapshot.Health,
             AcceptanceEngineAcceptanceGate.DefaultUnavailablePolicy).Allowed;
 
-    private static ConductorAdvanceResult ParallelAcceptanceTerminal(
+    internal static ConductorAdvanceResult ParallelAcceptanceTerminal(
         ConductorDriver driver,
         ConductorParallelAcceptanceCandidate candidate,
         ConductorAutonomyPolicy policy,
