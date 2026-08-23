@@ -18,6 +18,7 @@ internal static partial class PlannerOutputContract
     private const int CapturedOutputTailBytes = (MaxPlanChars * 4) + 32_000;
     private const int AppendAttempts = 4;
     private const int MinimumDistinctSectionWords = 8;
+    private const int MaxOffendingLineChars = 200;
     private static readonly string[] CandidatePathSuffixes = [".cs"];
 
     private static readonly (string Label, Regex Heading)[] RequiredSections =
@@ -403,12 +404,19 @@ internal static partial class PlannerOutputContract
             : FindPlanEnd(normalized, mapping.BodyStart);
         var body = normalized[mapping.BodyStart..end];
         var mappingLines = new Dictionary<int, string>();
+        var unparsedLines = new Dictionary<int, string>();
         foreach (var line in body.Split('\n'))
         {
-            var match = CriterionMappingLine().Match(line);
-            if (match.Success && int.TryParse(match.Groups["criterion"].Value, out var criterion))
+            if (TryParseCriterionMappingLine(line, out var criterion, out var parsedMapping))
             {
-                mappingLines.TryAdd(criterion, match.Groups["mapping"].Value.Trim());
+                mappingLines.TryAdd(criterion, parsedMapping);
+                continue;
+            }
+
+            var prefix = CriterionMappingPrefix().Match(line);
+            if (prefix.Success && int.TryParse(prefix.Groups["criterion"].Value, out criterion))
+            {
+                unparsedLines.TryAdd(criterion, line.Trim());
             }
         }
 
@@ -416,7 +424,9 @@ internal static partial class PlannerOutputContract
         {
             if (!mappingLines.ContainsKey(criterion))
             {
-                diagnostic = $"acceptance criterion mapping is incomplete: criterion {criterion} is unmapped";
+                diagnostic = unparsedLines.TryGetValue(criterion, out var offendingLine)
+                    ? $"acceptance criterion mapping is incomplete: criterion {criterion} is unmapped; a line for criterion {criterion} was found but was not parsed as a mapping: '{BoundOffendingLine(offendingLine)}'"
+                    : $"acceptance criterion mapping is incomplete: criterion {criterion} is unmapped; no line was found for criterion {criterion}";
                 return false;
             }
         }
@@ -469,6 +479,37 @@ internal static partial class PlannerOutputContract
         return true;
     }
 
+    internal static bool TryParseCriterionMappingLine(
+        string line,
+        out int criterion,
+        out string mapping)
+    {
+        criterion = 0;
+        mapping = string.Empty;
+        var match = CriterionMappingLine().Match(line);
+        if (!match.Success || !int.TryParse(match.Groups["criterion"].Value, out criterion))
+        {
+            return false;
+        }
+
+        mapping = match.Groups["mapping"].Value.Trim();
+        var openingMarker = match.Groups["open"].Value;
+        var skipped = match.Groups["skip"].Value;
+        if (openingMarker.Length > 0 &&
+            !skipped.Contains(openingMarker, StringComparison.Ordinal) &&
+            mapping.EndsWith(openingMarker, StringComparison.Ordinal))
+        {
+            mapping = mapping[..^openingMarker.Length].TrimEnd();
+        }
+
+        return true;
+    }
+
+    private static string BoundOffendingLine(string line) =>
+        line.Length <= MaxOffendingLineChars
+            ? line
+            : line[..(MaxOffendingLineChars - 1)] + "…";
+
     private static Dictionary<string, string> ParseCriterionMappingFields(string mapping)
     {
         var fields = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
@@ -480,11 +521,13 @@ internal static partial class PlannerOutputContract
         return fields;
     }
 
-    // Accepts idiomatic markdown as well as plain lines: a bold marker before the criterion
-    // (**Criterion 1 — ...**) and en/em dashes as the separator. A correct plan was rejected on
-    // 2026-08-20 solely because it used "**Criterion 1 — ..." instead of "1. ...".
-    [GeneratedRegex(@"^[ \t]*(?:[-*][ \t]+)?(?:\*\*|__)?(?:criterion[ \t]+)?(?<criterion>\d+)\b(?:[ \t]*[.)\]:\-–—][ \t]*(?:(?:maps?(?:[ \t]+to)?|covers)[ \t]+)?|[ \t]+(?:maps?(?:[ \t]+to)?|covers|→|=>|[–—])[ \t]*)(?<mapping>.*)$", RegexOptions.IgnoreCase)]
+    // Locate the criterion number first, then scan only over complete emphasis runs or one-level
+    // parenthesized/bracketed asides before requiring the existing mapping separator grammar.
+    [GeneratedRegex(@"^[ \t]*(?:[-*][ \t]+)?(?<open>\*{1,2}|_{1,2})?(?:criterion[ \t]+)?(?<criterion>\d+)\b(?<skip>(?:[ \t]*(?:\*{1,2}|_{1,2}|\([^()\n]*\)|\[[^\[\]\n]*\]))*)(?:[ \t]*[.)\]:\-–—][ \t]*(?:(?:maps?(?:[ \t]+to)?|covers)[ \t]+)?|[ \t]+(?:maps?(?:[ \t]+to)?|covers|→|=>|[–—])[ \t]*)(?<mapping>.*)$", RegexOptions.IgnoreCase)]
     private static partial Regex CriterionMappingLine();
+
+    [GeneratedRegex(@"^[ \t]*(?:[-*][ \t]+)?(?:\*{1,2}|_{1,2})?(?:criterion[ \t]+)?(?<criterion>\d+)\b", RegexOptions.IgnoreCase)]
+    private static partial Regex CriterionMappingPrefix();
 
     [GeneratedRegex(@"(?i)(?<name>disposition|plan|would-settle|required-source|unavailable-because)\s*=\s*(?<value>[^;]+)")]
     private static partial Regex CriterionMappingField();
