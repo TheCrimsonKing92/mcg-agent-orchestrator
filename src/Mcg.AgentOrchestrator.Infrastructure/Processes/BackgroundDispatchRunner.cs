@@ -119,6 +119,7 @@ public sealed class BackgroundDispatchRunner
     private readonly DispatchWorktreeCommitter _worktreeCommitter;
     private readonly Func<string, Stream> _openLogReadStream;
     private readonly Func<ProcessStartInfo, Process?> _startProcess;
+    private readonly Func<OrchestratorBuildCheckRequest, OrchestratorBuildCheckResult> _runOrchestratorBuildCheck;
     private readonly Dictionary<ProcessLogCacheKey, ProcessLogSnapshot> _processLogCache = [];
     private readonly object _processLogCacheGate = new();
 
@@ -137,7 +138,8 @@ public sealed class BackgroundDispatchRunner
         WorkerProviderCatalog? workerProviders = null,
         Func<string, Stream>? openLogReadStream = null,
         Action? beforeGoalWorktreeInspection = null,
-        Func<ProcessStartInfo, Process?>? startProcess = null)
+        Func<ProcessStartInfo, Process?>? startProcess = null,
+        Func<OrchestratorBuildCheckRequest, OrchestratorBuildCheckResult>? runOrchestratorBuildCheck = null)
     {
         _clock = clock ?? new SystemClock();
         _postOutputIdleTimeout = postOutputIdleTimeout ?? DefaultPostOutputIdleTimeout;
@@ -170,6 +172,7 @@ public sealed class BackgroundDispatchRunner
             diagnosticWriter: _diagnosticWriter);
         _worktreeCommitter = new DispatchWorktreeCommitter(beforeWorktreeInspection: beforeGoalWorktreeInspection);
         _startProcess = startProcess ?? Process.Start;
+        _runOrchestratorBuildCheck = runOrchestratorBuildCheck ?? OrchestratorBuildEvidenceCheck.RunDefault;
     }
 
     private static bool IsDispatchStartDisabledByEnvironment()
@@ -705,6 +708,10 @@ public sealed class BackgroundDispatchRunner
         var task = kernel.GetTask(goalId, taskId);
         var processRecord = task.LastProcess
             ?? throw new InvalidOperationException($"Task '{taskId}' has no background process to refresh.");
+        if (HasProcessOnlyCompletionAlreadyApplied(task, processRecord) || HasRecordedCompletionForProcess(task, processRecord))
+        {
+            return new DispatchRefreshOutcome(processRecord, null);
+        }
         var verdict = _recoveryService.ClassifyRefresh(
             task,
             goalId,
@@ -1424,30 +1431,23 @@ public sealed class BackgroundDispatchRunner
                     DispatchFailureDiagnosticMarker.Format(DispatchFailureDiagnosticMarker.WorkerBuildCheckFailed));
             }
 
-            var requiredBuildProjects = WorkerBuildEvidenceRequirement.FindRequiredProjects(
+            var buildEvidence = OrchestratorBuildEvidenceCheck.Resolve(
                 processRecord.WorkingDirectory,
                 task.RequiredRole,
                 worktreeEvidence.ChangedPaths,
-                worktreeEvidence.DirtyPaths);
-            var missingWorkerBuildEvidence =
-                !failedWorkerBuildCheck &&
-                requiredBuildProjects.Count > 0 &&
-                !_completionClassifier.HasWorkerBuildEvidence(
+                worktreeEvidence.DirtyPaths,
+                failedWorkerBuildCheck,
+                () => _completionClassifier.HasWorkerBuildEvidence(
                     processRecord.WorkingDirectory,
                     decisionStandardOutput,
-                    decisionStandardError);
-            if (missingWorkerBuildEvidence)
+                    decisionStandardError),
+                _runOrchestratorBuildCheck);
+            var missingWorkerBuildEvidence = buildEvidence.MissingEvidence;
+            standardErrorDiagnostic = buildEvidence.AppendDiagnostic(standardErrorDiagnostic);
+            if (buildEvidence.FailsRound)
             {
                 exitCode = 1;
-                standardErrorDiagnostic = AppendDiagnostic(
-                    AppendDiagnostic(
-                        standardErrorDiagnostic ?? string.Empty,
-                        "WORKER_RESULT omitted required build evidence for project(s): " +
-                        string.Join(", ", requiredBuildProjects) +
-                        ". Run .\\scripts\\Invoke-WorkerBuildCheck.ps1 for each named project and report the result in tests."),
-                    DispatchFailureDiagnosticMarker.Format(DispatchFailureDiagnosticMarker.WorkerBuildEvidenceMissing));
             }
-
             var provider = ResolveWorkerProvider(task.LastDispatch);
             var normalIntegrityCommitEvidence =
                 task.LastDispatch.SandboxLowIntegrity != true &&
