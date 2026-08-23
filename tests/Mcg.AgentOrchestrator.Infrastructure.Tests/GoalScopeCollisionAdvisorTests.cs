@@ -66,6 +66,36 @@ public sealed class GoalScopeCollisionAdvisorTests
         Xunit.Assert.Equal("src/Feature/File.cs", collision.ConflictingPath);
     }
 
+    [Xunit.Fact]
+    public void ExpectedChangeLists_SameFile_StillCollide()
+    {
+        const string sharedPath =
+            "src/Mcg.AgentOrchestrator.App/Orchestration/ConductorParallelAcceptanceAttempts.cs";
+        var activeGoal = CreateGoal(
+            $"Expected to change:\n- {sharedPath}\nDo not change src/Active/Forbidden.cs.");
+
+        var report = GoalScopeCollisionAdvisor.Build(
+            [$"Expected to change:\n- {sharedPath}\nDo not change src/Proposed/Forbidden.cs."],
+            [activeGoal]);
+
+        var collision = Xunit.Assert.Single(report.Collisions);
+        Xunit.Assert.Equal(ScopeCollisionVerdict.OverlapDetected, report.Verdict);
+        Xunit.Assert.Equal(ScopeCollisionKind.ExactFile, collision.Kind);
+        Xunit.Assert.Equal(sharedPath, collision.ProposedPath);
+        Xunit.Assert.Equal(sharedPath, collision.ConflictingPath);
+    }
+
+    [Xunit.Fact]
+    public void ProhibitionOnly_ProposedScope_IsInsufficientEvidence()
+    {
+        var report = GoalScopeCollisionAdvisor.Build(
+            ["Do not change src/Feature/File.cs."],
+            [CreateGoal("Change src/Other/File.cs.")]);
+
+        Xunit.Assert.Equal(ScopeCollisionVerdict.InsufficientEvidence, report.Verdict);
+        Xunit.Assert.Contains(report.EvidenceGaps, gap => gap.Gap == ScopeEvidenceGap.ProposedScopesMissing);
+    }
+
     [Xunit.Fact(DisplayName = "GoalScopeCollisionAdvisor_reports_directory_prefix_paths")]
     public void ReportsDirectoryPrefixPaths()
     {

@@ -82,8 +82,9 @@ internal static class GoalFileScopeInference
         @"(?:touch\s+only|changes?\s+must\s+be\s+confined\s+to)\s+(?<targets>.*?)(?=;|\.(?:\s|$)|\r?$|\n)",
         RegexOptions.Compiled | RegexOptions.CultureInvariant | RegexOptions.IgnoreCase);
 
+    // Brief-author recognition contract: docs/worker-guidance-discipline.md#declaring-and-forbidding-file-scopes
     private static readonly Regex ExclusionConstraintRegex = new(
-        @"(?:do\s+not\s+touch|don't\s+touch|must\s+not\s+touch)\s+(?<targets>.*?)(?=;|\.(?:\s|$)|\r?$|\n)",
+        @"(?:(?:do\s+not|don't|must\s+not|never)\s+(?:touch|change|modify|edit|alter|rename|delete))\s+(?<targets>.*?)(?=;|\.(?:\s|$)|\r?$|\n)",
         RegexOptions.Compiled | RegexOptions.CultureInvariant | RegexOptions.IgnoreCase);
 
     private static readonly Regex TargetSeparatorRegex = new(
@@ -121,7 +122,12 @@ internal static class GoalFileScopeInference
                 ["scope text contains traversal or an out-of-repository path"]);
         }
 
-        var exclusions = ResolveConstraints(ExclusionConstraintRegex, text, context, warnings);
+        var exclusions = ResolveConstraints(
+            ExclusionConstraintRegex,
+            text,
+            context,
+            warnings,
+            warnOnUnresolvedTarget: false);
         var inclusionMatches = InclusionConstraintRegex.Matches(text);
         var includes = inclusionMatches.Count > 0
             ? ResolveConstraints(InclusionConstraintRegex, text, context, warnings)
@@ -236,10 +242,8 @@ internal static class GoalFileScopeInference
             }
         }
 
-        return scopes
-            .Select(pair => new DeclaredFileScope(pair.Key, pair.Value))
-            .OrderBy(scope => scope.Path, StringComparer.OrdinalIgnoreCase)
-            .ToArray();
+        return PruneRedundantAncestors(
+            scopes.Select(pair => new DeclaredFileScope(pair.Key, pair.Value)));
     }
 
     public static IReadOnlyList<DeclaredFileScope> FromGoal(
@@ -364,7 +368,8 @@ internal static class GoalFileScopeInference
         Regex regex,
         string text,
         GoalFileScopeDerivationContext context,
-        ICollection<string> warnings)
+        ICollection<string> warnings,
+        bool warnOnUnresolvedTarget = true)
     {
         var resolved = new List<string>();
         foreach (Match match in regex.Matches(text))
@@ -375,7 +380,8 @@ internal static class GoalFileScopeInference
                 {
                     resolved.Add(path);
                 }
-                else if (!string.IsNullOrWhiteSpace(target))
+                else if ((warning is not null || warnOnUnresolvedTarget) &&
+                    !string.IsNullOrWhiteSpace(target))
                 {
                     warnings.Add(warning ?? $"scope target could not be resolved: {target.Trim()}");
                 }
@@ -568,9 +574,21 @@ internal static class GoalFileScopeInference
             }
         }
 
-        return scopes
-            .Select(pair => new DeclaredFileScope(pair.Key, pair.Value))
+        return PruneRedundantAncestors(
+            scopes.Select(pair => new DeclaredFileScope(pair.Key, pair.Value)));
+    }
+
+    private static IReadOnlyList<DeclaredFileScope> PruneRedundantAncestors(
+        IEnumerable<DeclaredFileScope> scopes)
+    {
+        var ordered = scopes
             .OrderBy(scope => scope.Path, StringComparer.OrdinalIgnoreCase)
+            .ToArray();
+        return ordered
+            .Where(candidate => !ordered.Any(other =>
+                other.Path.Length > candidate.Path.Length &&
+                TrustRank(other.Provenance) >= TrustRank(candidate.Provenance) &&
+                RepositoryPathOverlap.Classify(candidate.Path, other.Path) == PathOverlapKind.DirectoryPrefix))
             .ToArray();
     }
 

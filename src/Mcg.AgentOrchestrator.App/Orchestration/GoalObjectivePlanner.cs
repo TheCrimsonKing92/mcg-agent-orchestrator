@@ -98,10 +98,6 @@ internal sealed record GoalObjectivePlan(
 
 internal static class GoalObjectivePlanner
 {
-    private static readonly Regex FileScopeRegex = new(
-        @"(?<![\w.-])(?:src|tests|scripts|docs|config|\.agents)[\\/][A-Za-z0-9_.\\/\-]+",
-        RegexOptions.Compiled | RegexOptions.CultureInvariant | RegexOptions.IgnoreCase);
-
     private static readonly string[] HighRiskSignals =
     [
         "auth",
@@ -184,8 +180,9 @@ internal static class GoalObjectivePlanner
     {
         var normalized = objective.Trim();
         var classificationText = BuildActionableClassificationText(normalized);
+        var fileScopeText = BuildActionableFileScopeText(normalized);
         var tokens = BuildTokenSet(classificationText);
-        var fileScopes = InferFileScopes(classificationText);
+        var fileScopes = InferFileScopes(fileScopeText);
         var estimated = TaskComplexityEstimator.Estimate(classificationText, classificationText, AgentRole.Developer);
         var historicalRecord = FindHistoricalEstimate(durationStats, AgentRole.Developer, estimated);
         var historicalEstimate = BuildHistoricalEstimate(historicalRecord);
@@ -250,7 +247,13 @@ internal static class GoalObjectivePlanner
             .ToArray();
     }
 
-    private static string BuildActionableClassificationText(string objective)
+    private static string BuildActionableClassificationText(string objective) =>
+        BuildActionableText(objective, " ");
+
+    private static string BuildActionableFileScopeText(string objective) =>
+        BuildActionableText(objective, "\n");
+
+    private static string BuildActionableText(string objective, string separator)
     {
         var withoutParentheticalMeta = Regex.Replace(
             objective,
@@ -262,7 +265,7 @@ internal static class GoalObjectivePlanner
             .Where(part => !string.IsNullOrWhiteSpace(part) && !IsMetaCommentary(part))
             .ToArray();
 
-        return parts.Length == 0 ? objective : string.Join(" ", parts);
+        return parts.Length == 0 ? objective : string.Join(separator, parts);
     }
 
     private static bool IsMetaCommentary(string text)
@@ -297,15 +300,10 @@ internal static class GoalObjectivePlanner
         return meaningful.Length == 0 || (tokens.Count <= 3 && meaningful.Length <= 1);
     }
 
-    private static string[] InferFileScopes(string text)
-    {
-        return FileScopeRegex.Matches(text)
-            .Select(match => match.Value.Replace('\\', '/').TrimEnd('.', ',', ';', ':', ')', ']'))
-            .Where(value => !string.IsNullOrWhiteSpace(value))
-            .Distinct(StringComparer.OrdinalIgnoreCase)
-            .Order(StringComparer.OrdinalIgnoreCase)
+    private static string[] InferFileScopes(string text) =>
+        GoalFileScopeInference.FromText(text)
+            .Select(scope => scope.Path)
             .ToArray();
-    }
 
     private static string[] BuildRiskLabels(
         HashSet<string> tokens,

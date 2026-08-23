@@ -80,6 +80,18 @@ Cost of learning this the slow way: four contract rejections, three operator rou
 irreversible mis-waive on a safety constraint while trying to bypass the problem, and a cancelled
 goal.
 
+## Declaring and forbidding file scopes
+
+To forbid a repository path, keep it inside a clause that starts with `do not`, `don't`,
+`must not`, or `never`, followed by `touch`, `change`, `modify`, `edit`, `alter`, `rename`, or
+`delete`. The clause ends at a semicolon, at a period followed by whitespace or the end of the
+line, or at the end of the line. For example: `Do not change config/acceptance-manifest.json.`
+
+Suppression applies to that path occurrence, not to the path globally. Name a path elsewhere,
+such as under `Expected to change:`, to declare it even when another clause prohibits it. When
+an objective declares both a directory and an equally or more trusted specific path beneath it,
+only the specific path is declared; name the directory alone when the exact file is not known.
+
 ## Corollaries
 
 **State the mechanism, not the property.** "Durable" is an adjective; "persisted to the outbox,

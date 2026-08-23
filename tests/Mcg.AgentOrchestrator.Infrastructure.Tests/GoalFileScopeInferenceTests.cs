@@ -4,6 +4,177 @@ using Mcg.AgentOrchestrator.Infrastructure;
 
 public sealed class GoalFileScopeInferenceTests
 {
+    [Xunit.Theory]
+    [Xunit.InlineData(
+        "Do not change WorkerProcessJobs.cs. Its diagnostics are already correct.",
+        "src/Mcg.AgentOrchestrator.Infrastructure/Processes/WorkerProcessJobs.cs")]
+    [Xunit.InlineData(
+        "Do not change config/acceptance-manifest.json. A manifest edit forces a full gate and a cache wipe.",
+        "config/acceptance-manifest.json")]
+    [Xunit.InlineData(
+        "This is test-only work. Do not change ConductorDriver.cs.",
+        "src/Mcg.AgentOrchestrator.App/Orchestration/ConductorDriver.cs")]
+    public void ProhibitionClause_PathOnlyOccurrence_IsNotDeclared(
+        string receiptSentence,
+        string repositoryPath)
+    {
+        var objective = $"{receiptSentence}\nDo not change {repositoryPath}.";
+        var positiveControl = objective.Replace("Do not change", "Change", StringComparison.Ordinal);
+
+        var scopes = GoalFileScopeInference.FromText(objective);
+        var positiveScopes = GoalFileScopeInference.FromText(positiveControl);
+
+        Xunit.Assert.DoesNotContain(scopes, scope => scope.Path.Equals(repositoryPath, StringComparison.OrdinalIgnoreCase));
+        Xunit.Assert.Contains(positiveScopes, scope => scope.Path.Equals(repositoryPath, StringComparison.OrdinalIgnoreCase));
+    }
+
+    public static IEnumerable<object[]> ProhibitionVocabulary()
+    {
+        foreach (var opener in new[] { "do not", "don't", "must not", "never" })
+        {
+            foreach (var verb in new[] { "touch", "change", "modify", "edit", "alter", "rename", "delete" })
+            {
+                yield return [opener, verb];
+            }
+        }
+    }
+
+    [Xunit.Theory]
+    [Xunit.MemberData(nameof(ProhibitionVocabulary))]
+    public void ProhibitionClause_RecognizedVocabulary_SuppressesOccurrence(
+        string opener,
+        string verb)
+    {
+        var scopes = GoalFileScopeInference.FromText($"{opener} {verb} src/Feature/File.cs.");
+
+        Xunit.Assert.Empty(scopes);
+    }
+
+    [Xunit.Theory]
+    [Xunit.InlineData(false)]
+    [Xunit.InlineData(true)]
+    public void PositiveOccurrence_AlsoProhibited_RemainsDeclared(bool prohibitionFirst)
+    {
+        const string path = "src/Mcg.AgentOrchestrator.App/Orchestration/ConductorDriver.cs";
+        var positive = $"Expected to change:\n- {path}";
+        var prohibition = $"Do not change {path}.";
+        var objective = prohibitionFirst
+            ? $"{prohibition}\n{positive}"
+            : $"{positive}\n{prohibition}";
+
+        var scope = Xunit.Assert.Single(GoalFileScopeInference.FromText(objective));
+
+        Xunit.Assert.Equal(path, scope.Path);
+        Xunit.Assert.Equal(FileScopeProvenance.Explicit, scope.Provenance);
+    }
+
+    public static IEnumerable<object[]> DeclarationShapes()
+    {
+        yield return
+        [
+            "Expected to change:\n- tests/Mcg.AgentOrchestrator.Infrastructure.Tests\n- tests/Mcg.AgentOrchestrator.Infrastructure.Tests/GoalRefinementTests.cs",
+            new[] { "tests/Mcg.AgentOrchestrator.Infrastructure.Tests/GoalRefinementTests.cs" }
+        ];
+        yield return
+        [
+            "Expected to change:\n- tests/Mcg.AgentOrchestrator.Infrastructure.Tests",
+            new[] { "tests/Mcg.AgentOrchestrator.Infrastructure.Tests" }
+        ];
+        yield return
+        [
+            string.Join(
+                "\n",
+                "Inspect tests/Mcg.AgentOrchestrator.Infrastructure.Tests.",
+                BacklogIntakePlanner.TargetScopeHeadingLine,
+                BacklogIntakePlanner.UnknownScopeMarkerLine,
+                BacklogIntakePlanner.ScopeIncludesHeadingLine,
+                "- tests/Mcg.AgentOrchestrator.Infrastructure.Tests/GoalRefinementTests.cs"),
+            new[]
+            {
+                "tests/Mcg.AgentOrchestrator.Infrastructure.Tests",
+                "tests/Mcg.AgentOrchestrator.Infrastructure.Tests/GoalRefinementTests.cs"
+            }
+        ];
+    }
+
+    [Xunit.Theory]
+    [Xunit.MemberData(nameof(DeclarationShapes))]
+    public void DeclarationShape_RedundantAncestor_IsPruned(
+        string objective,
+        string[] expectedPaths)
+    {
+        var scopes = GoalFileScopeInference.FromText(objective);
+
+        Xunit.Assert.Equal(expectedPaths, scopes.Select(scope => scope.Path));
+    }
+
+    [Xunit.Fact]
+    public void DeriveForIntake_DoNotChange_ProducesExclusion()
+    {
+        var root = CreateRepository();
+        try
+        {
+            var result = GoalFileScopeInference.DeriveForIntake(
+                "Touch only src/Feature/File.cs; do not change src/Feature/Generated.cs.",
+                root);
+
+            Xunit.Assert.Equal(["src/Feature/File.cs"], result.Includes);
+            Xunit.Assert.Equal(["src/Feature/Generated.cs"], result.Exclusions);
+        }
+        finally
+        {
+            Directory.Delete(root, recursive: true);
+        }
+    }
+
+    [Xunit.Fact]
+    public void DeriveForIntake_UnresolvableProhibitionTarget_DoesNotEraseValidIncludes()
+    {
+        var root = CreateRepository();
+        try
+        {
+            var result = GoalFileScopeInference.DeriveForIntake(
+                "Update scripts/Invoke-IsolatedDotnet.ps1. " +
+                "Do not change WorkerProcessJobs.cs. Its diagnostics are already correct.",
+                root);
+
+            Xunit.Assert.Equal(RepositoryScopeConfidence.Precise, result.Confidence);
+            Xunit.Assert.Equal(["scripts/Invoke-IsolatedDotnet.ps1"], result.Includes);
+            Xunit.Assert.Empty(result.Exclusions);
+            Xunit.Assert.Empty(result.Warnings);
+        }
+        finally
+        {
+            Directory.Delete(root, recursive: true);
+        }
+    }
+
+    [Xunit.Fact]
+    public void DeriveForIntake_AmbiguousExclusion_PreservesUnknownConfidence()
+    {
+        var root = CreateRepository();
+        try
+        {
+            Directory.CreateDirectory(Path.Combine(root, "src", "FeatureA", "Rendering"));
+            Directory.CreateDirectory(Path.Combine(root, "tests", "FeatureB", "Rendering"));
+
+            var result = GoalFileScopeInference.DeriveForIntake(
+                "Update scripts/Invoke-IsolatedDotnet.ps1. Do not touch Rendering.",
+                root);
+
+            Xunit.Assert.Equal(RepositoryScopeConfidence.Unknown, result.Confidence);
+            Xunit.Assert.Equal(["scripts/Invoke-IsolatedDotnet.ps1"], result.Includes);
+            Xunit.Assert.Empty(result.Exclusions);
+            Xunit.Assert.Contains(
+                result.Warnings,
+                warning => warning.Contains("ambiguous", StringComparison.OrdinalIgnoreCase));
+        }
+        finally
+        {
+            Directory.Delete(root, recursive: true);
+        }
+    }
+
     [Xunit.Fact(DisplayName = "GoalFileScopeInference_explicit_only_and_exclusions_are_authoritative")]
     public void ExplicitOnlyAndExclusionsAreAuthoritative()
     {

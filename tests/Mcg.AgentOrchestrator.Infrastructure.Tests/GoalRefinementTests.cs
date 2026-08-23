@@ -825,6 +825,88 @@ public sealed class GoalRefinementTests
         Xunit.Assert.Equal(GoalIntakePipeline.DeveloperOnly, plan.PipelineDecision.Pipeline);
     }
 
+    [Xunit.Fact]
+    public void GoalObjectivePlanner_WrappedRiskPhrase_PreservesComplexClassification()
+    {
+        const string objective =
+            "Implement the retry ledger in src/Mcg.AgentOrchestrator.App/Orchestration/ConductorDriver.cs and fix the race\n" +
+            "condition in the worker dispatch queue.";
+
+        var plan = GoalObjectivePlanner.Build(objective);
+
+        Xunit.Assert.Equal(TaskComplexity.Complex, plan.EstimatedComplexity);
+        Xunit.Assert.Contains("complex", plan.RiskLabels);
+        Xunit.Assert.Equal(GoalIntakePipeline.DeveloperReviewer, plan.PipelineDecision.Pipeline);
+    }
+
+    [Xunit.Fact]
+    public void GoalObjectivePlanner_FileScopes_AgreeWithSharedInference()
+    {
+        const string objective = """
+            Expected to change:
+            - src/Mcg.AgentOrchestrator.App/Orchestration/ConductorDriver.cs
+            Do not change config/acceptance-manifest.json.
+            """;
+
+        var plan = GoalObjectivePlanner.Build(objective, simple: false);
+        var inferred = GoalFileScopeInference.FromText(objective)
+            .Select(scope => scope.Path)
+            .ToArray();
+
+        Xunit.Assert.Equal(inferred, plan.FileScopes);
+    }
+
+    public static IEnumerable<object[]> LineOrientedFileScopeObjectives()
+    {
+        yield return
+        [
+            """
+            Do not change config/acceptance-manifest.json
+            Expected to change:
+            - src/Mcg.AgentOrchestrator.App/Orchestration/ConductorDriver.cs
+            """,
+            new[] { "src/Mcg.AgentOrchestrator.App/Orchestration/ConductorDriver.cs" }
+        ];
+        yield return
+        [
+            string.Join(
+                "\n",
+                BacklogIntakePlanner.TargetScopeHeadingLine,
+                BacklogIntakePlanner.PreciseScopeMarkerLine,
+                BacklogIntakePlanner.ScopeIncludesHeadingLine,
+                "- src/Mcg.AgentOrchestrator.App/Orchestration/ConductorDriver.cs",
+                BacklogIntakePlanner.ScopeExclusionsHeadingLine,
+                "- config/acceptance-manifest.json"),
+            new[] { "src/Mcg.AgentOrchestrator.App/Orchestration/ConductorDriver.cs" }
+        ];
+    }
+
+    [Xunit.Theory]
+    [Xunit.MemberData(nameof(LineOrientedFileScopeObjectives))]
+    public void GoalObjectivePlanner_FileScopes_PreserveLineOrientedInference(
+        string objective,
+        string[] expectedScopes)
+    {
+        var plan = GoalObjectivePlanner.Build(objective, simple: false);
+
+        Xunit.Assert.Equal(expectedScopes, plan.FileScopes);
+        Xunit.Assert.Equal(
+            GoalFileScopeInference.FromText(objective).Select(scope => scope.Path),
+            plan.FileScopes);
+    }
+
+    [Xunit.Fact]
+    public void GoalObjectivePlanner_ProhibitionOnly_UsesImplicitScopeRouting()
+    {
+        var plan = GoalObjectivePlanner.Build(
+            "Do not change config/acceptance-manifest.json.",
+            simple: false);
+
+        Xunit.Assert.Empty(plan.FileScopes);
+        Xunit.Assert.Contains("scope-implicit", plan.RiskLabels);
+        Xunit.Assert.Equal(GoalIntakePipeline.FiveRole, plan.PipelineDecision.Pipeline);
+    }
+
     [Xunit.Fact(DisplayName = "GoalLifecycleCommands_records_capability_warning_for_remote_git_instructions")]
     public void GoalLifecycleCommandsRecordsCapabilityWarningForRemoteGitInstructions()
     {
