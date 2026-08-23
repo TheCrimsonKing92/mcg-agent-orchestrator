@@ -28,6 +28,13 @@ internal enum ConductorParallelAcceptanceAttemptOutcome
     Reconciled
 }
 
+internal enum WorkerRegistrationFaultDisposition
+{
+    None,
+    BoundedRetry,
+    Terminal
+}
+
 internal enum ConductorEvidenceAttemptOutcome
 {
     Passed,
@@ -1192,7 +1199,7 @@ internal sealed class ConductorParallelAcceptanceAttemptCoordinator
                 LastHeartbeatAt = _utcNow(),
                 Detail = AcceptanceRunDetail(run),
                 TestResultPaths = ResultTestPaths(run),
-                TransientFailureCount = IsBoundedInfrastructureOutcome(outcome)
+                TransientFailureCount = IsBoundedTransientFailure(outcome, AcceptanceRunDetail(run))
                     ? CountConsecutiveTransientFailures(current) + 1
                     : current.TransientFailureCount
             });
@@ -1643,7 +1650,7 @@ internal sealed class ConductorParallelAcceptanceAttemptCoordinator
                 LastHeartbeatAt = _utcNow(),
                 Detail = current.Detail ?? AcceptanceRunDetail(run),
                 TestResultPaths = ResultTestPaths(run) ?? current.TestResultPaths,
-                TransientFailureCount = IsBoundedInfrastructureOutcome(outcome)
+                TransientFailureCount = IsBoundedTransientFailure(outcome, current.Detail ?? AcceptanceRunDetail(run))
                     ? current.TransientFailureCount > 0
                         ? current.TransientFailureCount
                         : CountConsecutiveTransientFailures(current) + 1
@@ -2212,7 +2219,7 @@ internal sealed class ConductorParallelAcceptanceAttemptCoordinator
                     OperationCanceledException => "cancelled",
                     _ => "exception"
                 },
-                run.Exception.Message,
+                WorkerRegistrationFaultMessage(run.Exception) ?? run.Exception.Message,
                 null,
                 null,
                 null,
@@ -2437,7 +2444,7 @@ internal sealed class ConductorParallelAcceptanceAttemptCoordinator
     {
         if (run.Exception is not null)
         {
-            return run.Exception.Message;
+            return WorkerRegistrationFaultMessage(run.Exception) ?? run.Exception.Message;
         }
 
         if (run.EarlyResult is not null)
@@ -2635,11 +2642,75 @@ internal sealed class ConductorParallelAcceptanceAttemptCoordinator
         (attempt.Outcome == ConductorParallelAcceptanceAttemptOutcome.LaunchFailed ||
             attempt.Outcome == ConductorParallelAcceptanceAttemptOutcome.CorruptArtifacts ||
             attempt.Outcome == ConductorParallelAcceptanceAttemptOutcome.ProcessDied ||
-            IsBoundedInfrastructureOutcome(attempt.Outcome));
+            IsBoundedTransientFailure(attempt.Outcome, attempt.Detail));
 
     internal static bool IsBoundedInfrastructureOutcome(ConductorParallelAcceptanceAttemptOutcome outcome) =>
         outcome is ConductorParallelAcceptanceAttemptOutcome.BlockedBuildLock or
             ConductorParallelAcceptanceAttemptOutcome.InfrastructureDeferred;
+
+    internal static WorkerRegistrationFaultDisposition ClassifyWorkerRegistrationFault(Exception? exception)
+    {
+        var message = WorkerRegistrationFaultMessage(exception);
+        return message is null
+            ? WorkerRegistrationFaultDisposition.None
+            : ClassifyWorkerRegistrationFault(message);
+    }
+
+    private static string? WorkerRegistrationFaultMessage(Exception? exception)
+    {
+        const int MaxInnerExceptionDepth = 8;
+        for (var depth = 0; exception is not null && depth < MaxInnerExceptionDepth; depth++, exception = exception.InnerException)
+        {
+            var disposition = ClassifyWorkerRegistrationFault(exception.Message);
+            if (disposition != WorkerRegistrationFaultDisposition.None)
+            {
+                return exception.Message.Trim();
+            }
+        }
+
+        return null;
+    }
+
+    internal static WorkerRegistrationFaultDisposition ClassifyWorkerRegistrationFault(string? message)
+    {
+        const string Prefix = "worker-process-registration-failed";
+        var trimmed = message?.Trim();
+        if (string.IsNullOrEmpty(trimmed) ||
+            !trimmed.StartsWith(Prefix, StringComparison.Ordinal) ||
+            trimmed.Length <= Prefix.Length ||
+            trimmed[Prefix.Length] is not (':' or ';'))
+        {
+            return WorkerRegistrationFaultDisposition.None;
+        }
+
+        var stage = trimmed[(Prefix.Length + 1)..]
+            .Split(';', StringSplitOptions.TrimEntries)
+            .FirstOrDefault(segment => segment.StartsWith("stage=", StringComparison.Ordinal));
+        if (stage is null)
+        {
+            return WorkerRegistrationFaultDisposition.Terminal;
+        }
+
+        return stage["stage=".Length..].Trim() switch
+        {
+            "duplicate-or-recycled-pid" or
+            "owned-process-group-attachment" or
+            "victim-identity-read" or
+            "owner-identity-read" or
+            "job-publication" or
+            "process-resume" or
+            "durable-registry-write" => WorkerRegistrationFaultDisposition.BoundedRetry,
+            "protected-process-boundary" => WorkerRegistrationFaultDisposition.Terminal,
+            _ => WorkerRegistrationFaultDisposition.Terminal
+        };
+    }
+
+    private static bool IsBoundedTransientFailure(
+        ConductorParallelAcceptanceAttemptOutcome outcome,
+        string? detail) =>
+        IsBoundedInfrastructureOutcome(outcome) ||
+        outcome == ConductorParallelAcceptanceAttemptOutcome.Failed &&
+            ClassifyWorkerRegistrationFault(detail) == WorkerRegistrationFaultDisposition.BoundedRetry;
 
     private bool IsHeartbeatStale(ConductorParallelAcceptanceAttempt attempt)
     {
