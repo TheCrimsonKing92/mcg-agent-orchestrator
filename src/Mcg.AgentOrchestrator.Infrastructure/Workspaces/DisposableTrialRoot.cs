@@ -50,10 +50,11 @@ internal sealed class DisposableTrialRoot
 
         var name = SanitizeName(request.Name);
         var root = Path.Combine(baseDirectory, $"{name}-{Guid.NewGuid():N}");
+        var bundlePath = Path.Combine(baseDirectory, $".{name}-{Guid.NewGuid():N}.bundle");
         try
         {
             Directory.CreateDirectory(baseDirectory);
-            RunGitRequired(source, "clone", "--no-local", "--no-hardlinks", source, root);
+            CreateStandaloneClone(source, root, bundlePath);
             RunGitRequired(root, "checkout", "--detach", revision);
             RunGitRequired(root, "remote", "remove", "origin");
             AssertStandalone(root, revision);
@@ -160,11 +161,64 @@ internal sealed class DisposableTrialRoot
         var result = GitCli.Run(workingDirectory, arguments);
         if (!result.Succeeded || result.DrainTimedOut)
         {
-            var detail = string.IsNullOrWhiteSpace(result.Error) ? result.Output : result.Error;
-            throw new InvalidOperationException(detail.Trim());
+            throw new InvalidOperationException(
+                $"git {string.Join(' ', arguments)} failed with exit code {result.ExitCode}" +
+                (result.DrainTimedOut ? " after its output drain timed out" : string.Empty) +
+                $".{Environment.NewLine}stdout:{Environment.NewLine}{result.Output.Trim()}" +
+                $"{Environment.NewLine}stderr:{Environment.NewLine}{result.Error.Trim()}");
         }
 
         return result;
+    }
+
+    private static void CreateStandaloneClone(string source, string root, string bundlePath)
+    {
+        Exception? operationError = null;
+        try
+        {
+            // Git for Windows' local upload-pack transport starts MSYS sh.exe, which cannot create
+            // its BaseNamedObjects namespace from a Low-integrity acceptance host. A bundle carries
+            // the same committed object graph without starting that transport or linking object files.
+            RunGitRequired(source, "bundle", "create", bundlePath, "--all");
+            RunGitRequired(source, "clone", "--quiet", "--no-hardlinks", bundlePath, root);
+        }
+        catch (Exception ex)
+        {
+            operationError = ex;
+        }
+
+        Exception? cleanupError = null;
+        try
+        {
+            if (File.Exists(bundlePath))
+            {
+                File.Delete(bundlePath);
+            }
+        }
+        catch (Exception ex)
+        {
+            cleanupError = ex;
+        }
+
+        if (operationError is not null && cleanupError is not null)
+        {
+            throw new AggregateException(
+                $"Standalone clone creation failed and its temporary bundle may survive at '{bundlePath}'.",
+                operationError,
+                cleanupError);
+        }
+
+        if (cleanupError is not null)
+        {
+            throw new IOException(
+                $"Standalone clone succeeded but its temporary bundle may survive at '{bundlePath}'.",
+                cleanupError);
+        }
+
+        if (operationError is not null)
+        {
+            ExceptionDispatchInfo.Capture(operationError).Throw();
+        }
     }
 
     private static void AssertStandalone(string root, string revision)
