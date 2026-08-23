@@ -608,7 +608,7 @@ internal sealed class ConductorBatchLoop
                 catch (Exception ex)
                 {
                     EmitProgress(
-                        $"OPERATOR_INTENT result=store-unavailable phase=list reason={Sanitize(ex.Message)}");
+                        $"OPERATOR_INTENT result=store-unavailable phase=list reason={SanitizeReason(ex.Message)}");
                 }
             }
 
@@ -652,7 +652,7 @@ internal sealed class ConductorBatchLoop
                         catch (Exception ex)
                         {
                             EmitProgress(
-                                $"OPERATOR_INTENT goal={ShortGoalId(actionableGoalId)} result=store-unavailable phase=reject reason={Sanitize(ex.Message)}");
+                                $"OPERATOR_INTENT goal={ShortGoalId(actionableGoalId)} result=store-unavailable phase=reject reason={SanitizeReason(ex.Message)}");
                         }
 
                         continue;
@@ -679,7 +679,7 @@ internal sealed class ConductorBatchLoop
                     catch (Exception ex)
                     {
                         EmitProgress(
-                            $"OPERATOR_INTENT goal={ShortGoalId(scopedGoal.Id.Value)} result=store-unavailable phase=execute reason={Sanitize(ex.Message)}");
+                            $"OPERATOR_INTENT goal={ShortGoalId(scopedGoal.Id.Value)} result=store-unavailable phase=execute reason={SanitizeReason(ex.Message)}");
                         continue;
                     }
 
@@ -1648,7 +1648,7 @@ internal sealed class ConductorBatchLoop
                 ? ("DISPATCH_RECORD_WRITE_CONTENTION", "contention")
                 : ("DISPATCH_RECORD_WRITE_UNCLASSIFIED", "unclassified");
             var diagnostic = ex.Cause is null
-                ? $" exception={ex.InnerException?.GetType().FullName ?? "unavailable"} error={Sanitize(ex.InnerException?.Message ?? ex.Message)}"
+                ? $" exception={ex.InnerException?.GetType().FullName ?? "unavailable"} error={SanitizeReason(ex.InnerException?.Message ?? ex.Message)}"
                 : string.Empty;
             EmitProgress(
                 $"{token} tick={totalTicks} kind={ex.Kind} goal={label} task={ShortGoalId(ex.TaskId.Value)} sqliteCode={code} skip={skips}/{DispatchRecordContentionSkipLimit}{diagnostic}",
@@ -1680,8 +1680,8 @@ internal sealed class ConductorBatchLoop
         }
         catch (Exception ex)
         {
-            var msg = $"Batch loop tick {totalTicks}: fault isolating goal — advance threw: {Sanitize(ex.Message)}";
-            changedGoalLines.Add($"GOAL goal={label} result=escalated reason={Sanitize(ex.Message)}");
+            var msg = $"Batch loop tick {totalTicks}: fault isolating goal — advance threw: {SanitizeReason(ex.Message)}";
+            changedGoalLines.Add($"GOAL goal={label} result=escalated reason={SanitizeReason(ex.Message)}");
             lastGoalDisposition[goal.Id.Value] = changedGoalLines[^1];
             changedGoalIds.Add(goal.Id);
             kernel.ClearGoalHold(goal.Id);
@@ -1748,7 +1748,7 @@ internal sealed class ConductorBatchLoop
             return;
         }
 
-        EmitProgress($"LOOP_HANDOFF_SKIPPED tick={tick} reason={Sanitize(handoff.Reason ?? "not-started")}");
+        EmitProgress($"LOOP_HANDOFF_SKIPPED tick={tick} reason={SanitizeReason(handoff.Reason ?? "not-started")}");
         Console.WriteLine($"[conduct --loop] Handoff skipped: {handoff.Reason ?? "not-started"}");
     }
 
@@ -2057,7 +2057,7 @@ internal sealed class ConductorBatchLoop
         catch (Exception ex)
         {
             var line =
-                $"OPERATOR_INTENT goals={ResolveGoalContext(persistedGoalIds, onlyGoalId: null)} result=completion-deferred reason={Sanitize(ex.Message)}";
+                $"OPERATOR_INTENT goals={ResolveGoalContext(persistedGoalIds, onlyGoalId: null)} result=completion-deferred reason={SanitizeReason(ex.Message)}";
             EmitProgress(line, tickLines);
         }
     }
@@ -2381,7 +2381,7 @@ internal sealed class ConductorBatchLoop
                         "TICK_WRITE_DEGRADED",
                         goals,
                         kind,
-                        $"TICK_WRITE_DEGRADED tick={tick} kind={kind} goal={goals} attempt={reportedAttempt} disposition=exhausted holder=unknown error={Sanitize(ex.Message)}",
+                        $"TICK_WRITE_DEGRADED tick={tick} kind={kind} goal={goals} attempt={reportedAttempt} disposition=exhausted holder=unknown error={SanitizeReason(ex.Message)}",
                         tickLines);
                     return new PersistWriteAttemptResult(false, ex);
                 }
@@ -3003,7 +3003,7 @@ internal sealed class ConductorBatchLoop
                         $"invalid parallel acceptance slot settings: {SanitizeReason(ex.Message)}"),
                     null);
                 RecordParallelAcceptanceProgress(
-                    $"ADMISSION tick={tick} result=escalated reason=parallel-acceptance-slot-settings goal={goal.Id.Value[..8]} detail={Sanitize(ex.Message)}",
+                    $"ADMISSION tick={tick} result=escalated reason=parallel-acceptance-slot-settings goal={goal.Id.Value[..8]} detail={SanitizeReason(ex.Message)}",
                     changedGoalLines);
                 continue;
             }
@@ -3421,19 +3421,19 @@ internal sealed class ConductorBatchLoop
 
         if (run.Exception is not null)
         {
-            return [$"background-acceptance-fault: {Sanitize(run.Exception.Message)}"];
+            return [$"background-acceptance-fault: {SanitizeReason(run.Exception.Message)}"];
         }
 
         if (run.EarlyOutcome is not null)
         {
-            return [$"{run.EarlyOutcome.Kind}: {Sanitize(run.EarlyOutcome.Detail)}"];
+            return [$"{run.EarlyOutcome.Kind}: {SanitizeReason(run.EarlyOutcome.Detail)}"];
         }
 
         return [AcceptanceAttemptFailureCheck(attempt)];
     }
 
     private static string AcceptanceAttemptFailureCheck(ConductorParallelAcceptanceAttempt attempt) =>
-        $"background-acceptance-{AcceptanceAttemptOutcomeToken(attempt.Outcome)}: {Sanitize(attempt.Detail ?? attempt.AttemptId)}";
+        $"background-acceptance-{AcceptanceAttemptOutcomeToken(attempt.Outcome)}: {SanitizeReason(attempt.Detail ?? attempt.AttemptId)}";
 
     private static void EnsureParallelAcceptanceTerminalIsVerifying(
         AgentOrchestratorKernel kernel,
@@ -3739,12 +3739,12 @@ internal sealed class ConductorBatchLoop
     private static string FormatParallelAcceptanceCandidateUnavailable(Exception exception) =>
         exception is ConductorDriver.EvidenceMutationLeaseUnavailableException
             ? exception.Message
-            : $"parallel acceptance candidate unavailable; retry on next conduct tick: {Sanitize(exception.Message)}";
+            : $"parallel acceptance candidate unavailable; retry on next conduct tick: {SanitizeReason(exception.Message)}";
 
     private static string FormatParallelAcceptanceCandidateUnavailableDetail(Exception exception) =>
         exception is ConductorDriver.EvidenceMutationLeaseUnavailableException
             ? SanitizeReason(exception.Message)
-            : Sanitize(exception.Message);
+            : SanitizeReason(exception.Message);
 
     internal static TerminalGoalRemedyExecutionResult ExecuteReconcileSweepAcceptanceRemedy(
         AgentOrchestratorKernel kernel,
@@ -3853,7 +3853,7 @@ internal sealed class ConductorBatchLoop
                     return driver.EscalateParallelLandingAcceptance(
                         run.Candidate,
                         policy,
-                        $"background acceptance infrastructure-deferred: {Sanitize(infrastructureDeferred.Message)}");
+                        $"background acceptance infrastructure-deferred: {SanitizeReason(infrastructureDeferred.Message)}");
                 }
 
                 return ParallelAcceptanceHeld(
@@ -3880,7 +3880,7 @@ internal sealed class ConductorBatchLoop
                 return ParallelAcceptanceHeld(
                     run.Candidate,
                     policy,
-                    $"Background acceptance attempt cancelled; retry on next conduct tick: {Sanitize(cancelled.Message)}");
+                    $"Background acceptance attempt cancelled; retry on next conduct tick: {SanitizeReason(cancelled.Message)}");
             }
 
             if (run.Exception is BuildLockBlockedException buildLock)
@@ -4011,7 +4011,7 @@ internal sealed class ConductorBatchLoop
             return ParallelAcceptanceHeld(
                 candidate,
                 policy,
-                $"Background acceptance attempt cancelled; retry on next conduct tick. attempt={attempt.AttemptId}: {Sanitize(attempt.Detail ?? "cancelled")}");
+                $"Background acceptance attempt cancelled; retry on next conduct tick. attempt={attempt.AttemptId}: {SanitizeReason(attempt.Detail ?? "cancelled")}");
         }
 
         if (ConductorParallelAcceptanceAttemptCoordinator.IsTransientTerminalFailure(attempt) &&
@@ -4020,13 +4020,13 @@ internal sealed class ConductorBatchLoop
             return ParallelAcceptanceHeld(
                 candidate,
                 policy,
-                $"Transient background acceptance {AcceptanceAttemptOutcomeToken(attempt.Outcome)} ({attempt.TransientFailureCount}/{ParallelAcceptanceTransientFailureCap}); retry on next conduct tick. attempt={attempt.AttemptId}: {Sanitize(attempt.Detail ?? "transient artifact fault")}");
+                $"Transient background acceptance {AcceptanceAttemptOutcomeToken(attempt.Outcome)} ({attempt.TransientFailureCount}/{ParallelAcceptanceTransientFailureCap}); retry on next conduct tick. attempt={attempt.AttemptId}: {SanitizeReason(attempt.Detail ?? "transient artifact fault")}");
         }
 
         return driver.EscalateParallelLandingAcceptance(
             candidate,
             policy,
-            $"background acceptance {AcceptanceAttemptOutcomeToken(attempt.Outcome)}: {Sanitize(attempt.Detail ?? attempt.AttemptId)}");
+            $"background acceptance {AcceptanceAttemptOutcomeToken(attempt.Outcome)}: {SanitizeReason(attempt.Detail ?? attempt.AttemptId)}");
     }
 
     private static ConductorAdvanceResult ParallelAcceptanceFault(
@@ -4037,7 +4037,7 @@ internal sealed class ConductorBatchLoop
         driver.EscalateParallelLandingAcceptance(
             candidate,
             policy,
-            $"parallel acceptance fault: {Sanitize(exception.Message)}");
+            $"parallel acceptance fault: {SanitizeReason(exception.Message)}");
 
     private static string AcceptanceRunDisposition(ConductorParallelAcceptanceRunResult run)
     {
@@ -4241,7 +4241,7 @@ internal sealed class ConductorBatchLoop
                 }
                 catch (Exception ex)
                 {
-                    var failureObservation = Sanitize(ex.Message);
+                    var failureObservation = SanitizeReason(ex.Message);
                     kernel.RecordGoalPolicyDecision(
                         goal.Id,
                         $"Landing escalation recheck failed; goal remains set aside: {failureObservation}");
@@ -4260,7 +4260,7 @@ internal sealed class ConductorBatchLoop
 
                 if (recheck.TerminalUnsatisfiable)
                 {
-                    var terminalObservation = Sanitize(recheck.Observation);
+                    var terminalObservation = SanitizeReason(recheck.Observation);
                     kernel.RecordGoalPolicyDecision(
                         goal.Id,
                         $"Landing escalation recheck is terminal-unsatisfiable for this invocation: {terminalObservation}");
@@ -4293,12 +4293,12 @@ internal sealed class ConductorBatchLoop
                 escalatedGoals.Remove(entry.GoalId);
                 reapedGoals.Remove(entry.GoalId);
                 var observation =
-                    $"status={recheck.Status}; message={Sanitize(recheck.Observation)}";
+                    $"status={recheck.Status}; message={SanitizeReason(recheck.Observation)}";
                 kernel.RecordGoalPolicyDecision(
                     goal.Id,
                     $"Landing escalation self-cleared: condition=pre-landing_rebase_conflict; observation={observation}; evidence={recheck.EvidenceFingerprint}.");
                 EmitProgress(
-                    $"ESCALATION_SELF_CLEARED goal={entry.GoalId[..8]} condition=pre-landing_rebase_conflict observation={Sanitize(observation)}");
+                    $"ESCALATION_SELF_CLEARED goal={entry.GoalId[..8]} condition=pre-landing_rebase_conflict observation={SanitizeReason(observation)}");
                 continue;
             }
 

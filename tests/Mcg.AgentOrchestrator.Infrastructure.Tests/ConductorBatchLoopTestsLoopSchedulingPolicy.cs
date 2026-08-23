@@ -74,6 +74,24 @@ public sealed class ConductorBatchLoopTestsLoopSchedulingPolicy : ConductorBatch
         Assert.Contains("journalMode=wal", output, StringComparison.Ordinal);
     }
 
+    [Xunit.Fact(DisplayName = "BatchLoop_loop_start_truncates_compact_journal_mode_token")]
+    public void BatchLoopLoopStartTruncatesCompactJournalModeToken()
+    {
+        const string journalMode = "0123456789012345678901234567890123456789DISTINCTIVE_TAIL";
+        var (kernel, _) = SimpleGoal();
+        var output = CaptureConsole(() =>
+            new ConductorBatchLoop().Run(
+                kernel,
+                MakeDriver(hasGateReadyGoal: () => true),
+                ConductorAutonomyPolicy.Conservative,
+                NoStopPath(),
+                maxIterations: 0,
+                journalMode: journalMode));
+
+        Assert.Contains($"journalMode={journalMode[..40]}", output, StringComparison.Ordinal);
+        Assert.DoesNotContain("DISTINCTIVE_TAIL", output, StringComparison.Ordinal);
+    }
+
     [Xunit.Fact(DisplayName = "ConductorBatchLoop_continues_ticking_while_goal_refinement_is_in_flight")]
     public async Task ConductorBatchLoopContinuesTickingWhileGoalRefinementIsInFlight()
     {
