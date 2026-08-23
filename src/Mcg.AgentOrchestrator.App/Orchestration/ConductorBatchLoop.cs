@@ -3368,6 +3368,14 @@ internal sealed class ConductorBatchLoop
         ConductorParallelAcceptanceAttempt attempt,
         int tick)
     {
+        if (goal.Status == GoalStatus.Completed &&
+            !kernel.NormalizePrematureCompletedGoalToVerified(
+                goal.Id,
+                $"Batch loop tick {tick}: background acceptance gate {attempt.AttemptId} repaired premature Completed state before verification."))
+        {
+            return false;
+        }
+
         if (goal.Status != GoalStatus.Verified)
         {
             return false;

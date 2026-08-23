@@ -115,11 +115,14 @@ public sealed class ConductorBatchLoopTestsParallelAcceptance : ConductorBatchLo
         var goal = kernel.GetGoal(seededGoal.Id);
         var attemptRoot = CreateTempDirectory("mcg-conductor-fallback-reap");
         var dispatchRoot = CreateTempDirectory("mcg-conductor-dead-worker");
-        var workerGoal = GoalLifecycleCommands.CreateAndActivateSimpleGoal(
-            kernel,
-            DefaultAgents(),
-            "Worker dies while acceptance remains in flight");
-        var workerTask = workerGoal.Tasks.Single();
+        var workerTask = new TaskSpec(
+            TaskId.New(),
+            "Review while acceptance remains in flight",
+            AgentRole.Reviewer);
+        var workerGoal = kernel.CreateGoal(
+            "Worker dies while acceptance remains in flight",
+            [workerTask]);
+        kernel.ActivateGoal(workerGoal.Id, DefaultAgents());
         var startedAt = DateTimeOffset.Parse("2026-08-23T12:00:00Z");
         var stdoutPath = Path.Combine(dispatchRoot, "worker.out.log");
         var stderrPath = Path.Combine(dispatchRoot, "worker.err.log");
@@ -160,28 +163,45 @@ public sealed class ConductorBatchLoopTestsParallelAcceptance : ConductorBatchLo
             runAcceptanceWithSlot: (_, _) => AcceptanceVerificationSummary.PassedWithNoUnmetCriteria,
             getLandingFileScopes: _ => ["src/Mcg.AgentOrchestrator.App/Orchestration/ReapGate.cs"],
             parallelAcceptanceAttemptCoordinator: coordinator);
-        var loop = new ConductorBatchLoop(loopKernel => runner.SweepExitedProcesses(loopKernel));
+        var sweeps = 0;
+        var loop = new ConductorBatchLoop(
+            sweep: loopKernel =>
+            {
+                sweeps++;
+                if (workerAlive)
+                {
+                    return;
+                }
+
+                runner.RefreshLatestProcess(loopKernel, workerGoal.Id, workerTask.Id);
+            });
 
         try
         {
-            var first = loop.Run(
+            var tickBoundaries = 0;
+            var summary = loop.Run(
                 kernel,
                 driver,
                 ConductorAutonomyPolicy.Conservative,
                 NoStopPath(),
-                maxIterations: 1);
-            Assert.True(kernel.GetTask(workerGoal.Id, workerTask.Id).LastProcess!.IsRunning);
+                maxIterations: 2,
+                watchInterval: TimeSpan.FromMilliseconds(1),
+                sleepFunc: _ =>
+                {
+                    tickBoundaries++;
+                    if (workerAlive)
+                    {
+                        Assert.True(kernel.GetTask(workerGoal.Id, workerTask.Id).LastProcess!.IsRunning);
+                        Assert.Equal(GoalStatus.Verifying, goal.Status);
+                        workerAlive = false;
+                    }
 
-            workerAlive = false;
-            var second = loop.Run(
-                kernel,
-                driver,
-                ConductorAutonomyPolicy.Conservative,
-                NoStopPath(),
-                maxIterations: 1);
+                    return false;
+                });
 
-            Assert.True(first.Held >= 2);
-            Assert.True(second.Held >= 1);
+            Assert.Equal(2, sweeps);
+            Assert.True(tickBoundaries >= 1);
+            Assert.True(summary.Held >= 2);
             Assert.False(kernel.GetTask(workerGoal.Id, workerTask.Id).LastProcess!.IsRunning);
             Assert.Equal(1, launches);
             var attempt = Assert.Single(coordinator.GetUnreconciledAttempts([goal.Id.Value]));
@@ -264,16 +284,20 @@ public sealed class ConductorBatchLoopTestsParallelAcceptance : ConductorBatchLo
     [Xunit.Fact]
     public void FallbackGate_FailedAttempt_EscalatesWithoutLanding()
     {
-        var (kernel, goal) = SimpleGoal("Update src/Mcg.AgentOrchestrator.App/Orchestration/FailedFallback.cs");
-        PassVerification(kernel, goal, goal.Tasks.Single());
+        var (kernel, seededGoal) = SimpleGoal("Update src/Mcg.AgentOrchestrator.App/Orchestration/FailedFallback.cs");
+        PassVerification(kernel, seededGoal, seededGoal.Tasks.Single());
+        kernel = WithGoalStatus(kernel, seededGoal.Id, GoalStatus.Completed);
+        var goal = kernel.GetGoal(seededGoal.Id);
         var attemptRoot = CreateTempDirectory("mcg-conductor-fallback-failed");
         ConductorParallelAcceptanceOwnedProcessLaunch? ownedLaunch = null;
+        var launches = 0;
         var landingRuns = 0;
         var coordinator = new ConductorParallelAcceptanceAttemptCoordinator(
             attemptRoot,
             isProcessAlive: _ => true,
             launchOwnedProcess: launch =>
             {
+                launches++;
                 ownedLaunch = launch;
                 return new ConductorParallelAcceptanceOwnedProcessLaunchResult(9401);
             });
@@ -302,11 +326,15 @@ public sealed class ConductorBatchLoopTestsParallelAcceptance : ConductorBatchLo
         {
             driver.BeginTick(kernel, 1);
             Assert.True(driver.AdvanceOnce(goal, ConductorAutonomyPolicy.Conservative).IsHeld);
+            Assert.Equal(GoalStatus.Verifying, goal.Status);
             ownedLaunch!.ExecuteInCurrentProcess(9401);
             var completed = driver.AdvanceOnce(goal, ConductorAutonomyPolicy.Conservative);
+            var later = driver.AdvanceOnce(goal, ConductorAutonomyPolicy.Conservative);
 
             Assert.True(completed.WasEscalated);
+            Assert.True(later.WasEscalated);
             Assert.Equal(GoalStatus.AcceptanceFailed, goal.Status);
+            Assert.Equal(1, launches);
             Assert.Equal(0, landingRuns);
             var attempt = ReadAttempt(ownedLaunch.Attempt.MetadataPath);
             Assert.Equal(ConductorParallelAcceptanceAttemptOutcome.Failed, attempt.Outcome);
