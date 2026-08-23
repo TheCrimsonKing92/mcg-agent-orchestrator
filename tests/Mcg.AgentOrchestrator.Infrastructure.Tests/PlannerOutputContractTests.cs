@@ -225,7 +225,7 @@ public sealed class PlannerOutputContractTests : WorkerDispatchTestSupport
     public void PlannerContract_ContextualSameLineExistingSibling_Passes()
     {
         var targetBody =
-            "- Extend `tests\\Mcg.AgentOrchestrator.Infrastructure.Tests\\CliCommandTests.PersistentRunnerCommands.cs` and `CliHelpTests.cs` with focused contract coverage.";
+            "- Extend `tests\\Mcg.AgentOrchestrator.Infrastructure.Tests\\CliCommandTestsPersistentRunnerCommands.cs` and `CliHelpTests.cs` with focused contract coverage.";
         var plan = ReplaceSectionBody(PlannerContractPlanFixture(), "## Target seams and symbols", targetBody);
 
         var result = PlannerOutputContract.Resolve(
@@ -241,7 +241,7 @@ public sealed class PlannerOutputContractTests : WorkerDispatchTestSupport
     {
         var targetBody =
             """
-            - Extend `tests\Mcg.AgentOrchestrator.Infrastructure.Tests\CliCommandTests.PersistentRunnerCommands.cs` with focused contract coverage.
+            - Extend `tests\Mcg.AgentOrchestrator.Infrastructure.Tests\CliCommandTestsPersistentRunnerCommands.cs` with focused contract coverage.
             - Extend `HallucinatedSibling.cs` with a later-bullet negative control.
             """;
         var plan = ReplaceSectionBody(PlannerContractPlanFixture(), "## Target seams and symbols", targetBody);

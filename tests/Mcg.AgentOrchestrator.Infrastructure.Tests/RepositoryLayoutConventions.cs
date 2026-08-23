@@ -39,7 +39,6 @@ internal static class RepositoryLayoutConventions
             "tests/Mcg.AgentOrchestrator.Infrastructure.Tests/CliCommandTests.GoalLifecycleCommands.cs",
             "tests/Mcg.AgentOrchestrator.Infrastructure.Tests/CliCommandTests.GoalRevision.cs",
             "tests/Mcg.AgentOrchestrator.Infrastructure.Tests/CliCommandTests.HumanInputSupersede.cs",
-            "tests/Mcg.AgentOrchestrator.Infrastructure.Tests/CliCommandTests.PersistentRunnerCommands.cs",
             "tests/Mcg.AgentOrchestrator.Infrastructure.Tests/CliCommandTests.PortfolioCommands.cs",
             "tests/Mcg.AgentOrchestrator.Infrastructure.Tests/CliCommandTests.RefreshDispatchOutput.cs",
             "tests/Mcg.AgentOrchestrator.Infrastructure.Tests/CliCommandTests.SubscriptionDispatchCommands.cs",

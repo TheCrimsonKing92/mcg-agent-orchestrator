@@ -9,7 +9,7 @@ public sealed class GoalAcceptanceVerifierSizeRatchetTests
             repositoryRoot,
             SourceSizeRatchet.DocumentationPath.Replace('/', Path.DirectorySeparatorChar));
 
-        Assert.Equal(18, SourceSizeRatchet.SeededCeilings.Count);
+        Assert.Equal(24, SourceSizeRatchet.SeededCeilings.Count);
         Assert.Equal(paths.Length, paths.Distinct(StringComparer.Ordinal).Count());
         Assert.True(
             File.Exists(documentationPath),
