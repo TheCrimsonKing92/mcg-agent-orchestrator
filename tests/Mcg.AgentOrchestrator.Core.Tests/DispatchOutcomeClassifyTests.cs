@@ -266,6 +266,99 @@ public sealed class DispatchOutcomeClassifyTests
         Xunit.Assert.DoesNotContain("rule=retry-round-produced-no-commit-and-no-deferral", outcome.ClassifierReceipt, StringComparison.Ordinal);
     }
 
+    [Xunit.Theory]
+    [Xunit.InlineData("pass - focused verification completed")]
+    [Xunit.InlineData("deferred - acceptance gate owns the out-of-scope check")]
+    public void Classify_RetryDeveloperVerifiedNoChange_Completes(string tests)
+    {
+        const string baseCommit = "48422231916172e8d172a0cc0428d13d222c071c";
+        var verification = WorkerResultVerification(
+            1,
+            WorkerResultStdout(tests),
+            standardError: VerifiedNoChangeDiagnostics(verificationRecognized: true));
+
+        var outcome = DispatchFailureClassifier.Classify(
+            RetryTaskWithBaseCommit(baseCommit),
+            verification);
+
+        Xunit.Assert.Equal(DispatchOutcomeKind.VerifiedSuccess, outcome.Kind);
+        Xunit.Assert.Equal(RecoveryRecommendation.None, outcome.RecoveryRecommendation);
+        Xunit.Assert.Contains("rule=verified-no-change-round", outcome.ClassifierReceipt, StringComparison.Ordinal);
+        Xunit.Assert.Contains("verdict=VerifiedSuccess", outcome.ClassifierReceipt, StringComparison.Ordinal);
+    }
+
+    [Xunit.Fact]
+    public void Classify_NoChangeWithoutRecognizedVerification_Fails()
+    {
+        var verification = WorkerResultVerification(
+            1,
+            WorkerResultStdout("pass - focused verification completed"),
+            standardError: VerifiedNoChangeDiagnostics(verificationRecognized: false));
+
+        var outcome = DispatchFailureClassifier.Classify(
+            RetryTaskWithBaseCommit("48422231916172e8d172a0cc0428d13d222c071c"),
+            verification);
+
+        Xunit.Assert.Equal(DispatchOutcomeKind.UnknownFailure, outcome.Kind);
+        Xunit.Assert.Contains("rule=required-file-change-evidence-missing", outcome.ClassifierReceipt, StringComparison.Ordinal);
+        Xunit.Assert.DoesNotContain("rule=verified-no-change-round", outcome.ClassifierReceipt, StringComparison.Ordinal);
+    }
+
+    [Xunit.Fact]
+    public void Classify_NoChangeWithoutAuthoredMarker_Fails()
+    {
+        var verification = WorkerResultVerification(
+            1,
+            WorkerResultStdout("pass - focused verification completed"),
+            standardError: DispatchRejectionDiagnosticMarker.Format(true, 0, "none"));
+
+        var outcome = DispatchFailureClassifier.Classify(
+            RetryTaskWithBaseCommit("48422231916172e8d172a0cc0428d13d222c071c"),
+            verification);
+
+        Xunit.Assert.Equal(DispatchOutcomeKind.UnknownFailure, outcome.Kind);
+        Xunit.Assert.Contains("rule=unknown-failure", outcome.ClassifierReceipt, StringComparison.Ordinal);
+        Xunit.Assert.DoesNotContain("rule=verified-no-change-round", outcome.ClassifierReceipt, StringComparison.Ordinal);
+    }
+
+    [Xunit.Fact]
+    public void Classify_VerifiedNoChangeWithBlocker_Fails()
+    {
+        var verification = WorkerResultVerification(
+            1,
+            WorkerResultStdout("pass - focused verification completed", "exact-blocker - dependency unavailable"),
+            standardError: VerifiedNoChangeDiagnostics(verificationRecognized: true));
+
+        var outcome = DispatchFailureClassifier.Classify(
+            RetryTaskWithBaseCommit("48422231916172e8d172a0cc0428d13d222c071c"),
+            verification);
+
+        Xunit.Assert.Equal(DispatchOutcomeKind.UnknownFailure, outcome.Kind);
+        Xunit.Assert.Contains("rule=required-file-change-evidence-missing", outcome.ClassifierReceipt, StringComparison.Ordinal);
+        Xunit.Assert.DoesNotContain("rule=verified-no-change-round", outcome.ClassifierReceipt, StringComparison.Ordinal);
+    }
+
+    [Xunit.Fact]
+    public void Classify_VerifiedNoChangeWithFailingTests_Fails()
+    {
+        var verification = WorkerResultVerification(
+            1,
+            WorkerResultStdout("fail - focused verification failed"),
+            standardError: VerifiedNoChangeDiagnostics(verificationRecognized: true));
+
+        var outcome = DispatchFailureClassifier.Classify(
+            RetryTaskWithBaseCommit("48422231916172e8d172a0cc0428d13d222c071c"),
+            verification);
+
+        Xunit.Assert.Equal(DispatchOutcomeKind.UnknownFailure, outcome.Kind);
+        Xunit.Assert.Contains("rule=required-file-change-evidence-missing", outcome.ClassifierReceipt, StringComparison.Ordinal);
+        Xunit.Assert.DoesNotContain("rule=verified-no-change-round", outcome.ClassifierReceipt, StringComparison.Ordinal);
+    }
+
+    private static string VerifiedNoChangeDiagnostics(bool verificationRecognized) =>
+        DispatchRejectionDiagnosticMarker.Format(verificationRecognized, 0, "none") + Environment.NewLine +
+        DispatchFailureDiagnosticMarker.Format(DispatchFailureDiagnosticMarker.RequiredFileChangeEvidenceMissing);
+
     [Xunit.Fact(DisplayName = "Classify completes retry developer round with explicit deferral and no commit")]
     public void ClassifyCompletesRetryDeveloperRoundWithExplicitDeferralAndNoCommit()
     {

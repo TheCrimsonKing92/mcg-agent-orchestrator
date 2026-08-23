@@ -297,13 +297,33 @@ public sealed partial class AgentOrchestratorKernel
                 "Reconciled failed dispatch verification to Completed from structured WORKER_RESULT evidence and commit provenance.");
         }
 
+        var outcomeRule = TaskOutcomeClassifier.TryExtractRule(outcome.ClassifierReceipt);
+        var isVerifiedNoChangeRound = string.Equals(
+            outcomeRule,
+            TaskOutcomeRules.VerifiedNoChangeRound.Token,
+            StringComparison.Ordinal);
+        if (isVerifiedNoChangeRound &&
+            task.LastDispatch is { } dispatch &&
+            !string.IsNullOrWhiteSpace(dispatch.BaseCommit) &&
+            string.IsNullOrWhiteSpace(dispatch.ResultCommit))
+        {
+            task.SetDispatchResultCommit(dispatch.BaseCommit);
+            Append(
+                goal,
+                null,
+                ProgressKind.TaskNote,
+                $"NO_CHANGE_DISPOSITION task={task.Id.Value} rule={TaskOutcomeRules.VerifiedNoChangeRound.Token} candidate={dispatch.BaseCommit}");
+        }
+
         ReportTaskProgress(
             goalId,
             taskId,
             outcome.Kind == DispatchOutcomeKind.VerifiedSuccess ? WorkTaskStatus.Completed : WorkTaskStatus.Failed,
             outcome.Kind == DispatchOutcomeKind.VerifiedSuccess
                  ? BuildCompletionMessageWithAdvisoryBlocker(
-                      $"Dispatch completed successfully: {task.LastDispatch.Command}",
+                      isVerifiedNoChangeRound
+                          ? $"Dispatch completed with verified no change: {task.LastDispatch.Command}"
+                          : $"Dispatch completed successfully: {task.LastDispatch.Command}",
                       task,
                       verification)
                 : BuildDispatchFailureMessage(outcome, task, verification));

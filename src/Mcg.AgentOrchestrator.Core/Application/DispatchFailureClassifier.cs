@@ -612,6 +612,24 @@ public static class DispatchFailureClassifier
                 BuildVerifiedNoNewCommitEvidenceSummary(task, verification)));
         }
 
+        if (IsDeveloperVerifiedNoChangeRound(task, verification, workerResultPresent, hasCommittedChanges))
+        {
+            return BuildOutcome(
+                TaskOutcomeRules.VerifiedNoChangeRound,
+                task,
+                verification,
+                workerResultPresent,
+                hasCommittedChanges,
+                new DispatchOutcome(
+                DispatchOutcomeKind.VerifiedSuccess,
+                exitCode,
+                hasZeroByteOutput,
+                null,
+                null,
+                RecoveryRecommendation.None,
+                BuildVerifiedNoChangeRoundEvidenceSummary(task, verification)));
+        }
+
         if (IsRetryRoundWithoutCommitOrDeferral(task, verification, workerResultPresent, hasCommittedChanges))
         {
             return BuildOutcome(
@@ -1397,6 +1415,15 @@ public static class DispatchFailureClassifier
         return $"verified-no-new-commit: {commitEvidence}{testsEvidence}";
     }
 
+    private static string BuildVerifiedNoChangeRoundEvidenceSummary(TaskSpec task, TaskVerificationRecord verification)
+    {
+        var testsEvidence = WorkerResultBlockers.TryFindTests(verification, out var tests)
+            ? $"; tests: {TruncateEvidence(tests)}"
+            : string.Empty;
+
+        return $"verified-no-change-round: candidate {task.LastDispatch!.BaseCommit}{testsEvidence}";
+    }
+
     private static string BuildProviderAuthenticationEvidenceSummary(TaskVerificationRecord verification) =>
         TryGetProviderAuthenticationLine(verification, out var line)
             ? $"provider-authentication: {TruncateEvidence(line)}; remediation=codex login / provider re-auth"
@@ -1596,6 +1623,47 @@ public static class DispatchFailureClassifier
         task.RequiredRole == AgentRole.Developer &&
         (task.CriterionRetryCount > 0 || task.CriterionRetryFeedback.Count > 0) &&
         HasVerifiedNoNewCommitWorkerResult(task, verification);
+
+    private static bool IsDeveloperVerifiedNoChangeRound(
+        TaskSpec task,
+        TaskVerificationRecord verification,
+        bool workerResultPresent,
+        bool hasCommittedChanges)
+    {
+        if (task.RequiredRole != AgentRole.Developer ||
+            hasCommittedChanges ||
+            !workerResultPresent ||
+            (task.CriterionRetryCount == 0 && task.CriterionRetryFeedback.Count == 0) ||
+            string.IsNullOrWhiteSpace(task.LastDispatch?.BaseCommit) ||
+            !HasPopulatedStandardOutput(verification) ||
+            !DispatchRejectionDiagnosticMarker.TryParse(
+                verification.StandardError,
+                out var verificationRecognized,
+                out var reason,
+                out var postDispatchCommits,
+                out var changedPaths) ||
+            !verificationRecognized ||
+            !string.Equals(reason, DispatchRejectionDiagnosticMarker.NoChangeEvidence, StringComparison.Ordinal) ||
+            postDispatchCommits != 0 ||
+            !(string.IsNullOrWhiteSpace(changedPaths) ||
+              string.Equals(changedPaths, "none", StringComparison.OrdinalIgnoreCase)) ||
+            !TryGetOrchestratorAuthoredFailure(verification, out var authoredFailure) ||
+            !string.Equals(
+                authoredFailure.Rule.Token,
+                TaskOutcomeRules.RequiredFileChangeEvidenceMissing.Token,
+                StringComparison.Ordinal) ||
+            !WorkerResultBlockers.TryGetBlockersStatus(verification, out var blockersStatus) ||
+            blockersStatus != WorkerResultBlockers.BlockersStatus.None ||
+            WorkerResultBlockers.TryFindBlocker(verification, out _) ||
+            !WorkerResultBlockers.TryGetTestsStatus(verification, out var testsStatus) ||
+            testsStatus is not (WorkerResultBlockers.TestsStatus.Pass or WorkerResultBlockers.TestsStatus.Deferred) ||
+            HasStructuredFailingTests(verification))
+        {
+            return false;
+        }
+
+        return true;
+    }
 
     private static bool HasVerifiedNoNewCommitWorkerResult(TaskSpec task, TaskVerificationRecord verification) =>
         HasPopulatedStandardOutput(verification) &&

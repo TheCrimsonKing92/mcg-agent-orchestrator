@@ -21,6 +21,7 @@ internal sealed record TaskOutcomeRule(string Token, TaskOutcomeClass Class);
 internal static class TaskOutcomeRules
 {
     public static readonly TaskOutcomeRule CommittedWorkerResultEvidence = new("committed-worker-result-evidence", TaskOutcomeClass.Success);
+    public static readonly TaskOutcomeRule VerifiedNoChangeRound = new("verified-no-change-round", TaskOutcomeClass.Success);
     public static readonly TaskOutcomeRule VerifiedNoNewCommit = new("verified-no-new-commit", TaskOutcomeClass.Success);
     public static readonly TaskOutcomeRule SucceededDispatchCompletionEvidence = new("succeeded-dispatch-completion-evidence", TaskOutcomeClass.Success);
 
@@ -63,6 +64,7 @@ internal static class TaskOutcomeRules
     public static IReadOnlyList<TaskOutcomeRule> Produced { get; } =
     [
         CommittedWorkerResultEvidence,
+        VerifiedNoChangeRound,
         VerifiedNoNewCommit,
         SucceededDispatchCompletionEvidence,
         DirtyDispatchRecovery,
