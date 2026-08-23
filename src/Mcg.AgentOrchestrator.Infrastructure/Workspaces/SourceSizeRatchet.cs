@@ -1,10 +1,12 @@
 using System.Globalization;
 
+namespace Mcg.AgentOrchestrator.Infrastructure;
+
 internal static class SourceSizeRatchet
 {
     internal const string DocumentationPath = "docs/god-class-decomposition-plan.md";
     internal const string DocumentationSectionHeading = "## Guarded source size ratchet";
-    internal const string SourcePath = "tests/Mcg.AgentOrchestrator.Infrastructure.Tests/SourceSizeRatchet.cs";
+    internal const string SourcePath = "src/Mcg.AgentOrchestrator.Infrastructure/Workspaces/SourceSizeRatchet.cs";
 
     // Seeded at 6e7a90d7b3fe192ae4f1e430cb7452710f88b73c using File.ReadLines(path).Count().
     // Each row is the only place its guarded path and ceiling value live. When extraction shrinks a guarded
@@ -17,7 +19,9 @@ internal static class SourceSizeRatchet
             // threading belong to the gate-plan owner, so extracting them would split that invariant.
             // Raised again for goal 85f0b81d: 227 new behavior lines were extracted to
             // AcceptanceLaneDurationStore, so only call-site lines remained here.
-            new SourceSizeCeiling("src/Mcg.AgentOrchestrator.Infrastructure/Workspaces/GoalAcceptanceVerifier.cs", 8334),
+            // Raised for goal 4c366f95: the preflight must run at the gate's single entry point before
+            // any process-launching phase; parsing and evaluation remain in dedicated collaborators.
+            new SourceSizeCeiling("src/Mcg.AgentOrchestrator.Infrastructure/Workspaces/GoalAcceptanceVerifier.cs", 8348),
             // Goal 682f25a1 re-derived this row after integrating goal c2eae988, whose acceptance
             // cancellation seam had already added 74 net lines before the multi-file ratchet landed.
             // Raised for goal a22c7293: slice admission must run where all dispatch paths converge.

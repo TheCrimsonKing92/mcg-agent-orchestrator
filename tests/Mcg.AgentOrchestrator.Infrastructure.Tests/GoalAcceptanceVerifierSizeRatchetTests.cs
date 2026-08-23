@@ -1,3 +1,5 @@
+using Mcg.AgentOrchestrator.Infrastructure;
+
 public sealed class GoalAcceptanceVerifierSizeRatchetTests
 {
     [Fact]
@@ -9,6 +11,38 @@ public sealed class GoalAcceptanceVerifierSizeRatchetTests
         Assert.NotEmpty(SourceSizeRatchet.SeededCeilings);
         Assert.Equal(paths.Length, paths.Distinct(StringComparer.Ordinal).Count());
         AssertNoViolations(SourceSizeRatchet.Evaluate(repositoryRoot, SourceSizeRatchet.SeededCeilings));
+    }
+
+    [Fact]
+    public void ParsedAuthority_MatchesCompiledSeededCeilings()
+    {
+        var parsed = SourceSizeRatchetPreflight.TryReadAuthority(FindRepositoryRoot());
+
+        Assert.NotNull(parsed);
+        Assert.Equal(SourceSizeRatchet.SeededCeilings, parsed);
+    }
+
+    [Fact]
+    public void BackstopAssertion_ViolatingTable_GoesRed()
+    {
+        var root = CreateTempDirectory();
+        try
+        {
+            WriteLines(root, "backstop.cs", 3, "line");
+            var violations = SourceSizeRatchet.Evaluate(
+                root,
+                [new SourceSizeCeiling("backstop.cs", 2)]);
+
+            var exception = Assert.Throws<Xunit.Sdk.TrueException>(() => AssertNoViolations(violations));
+            Assert.Contains("backstop.cs has 3 lines", exception.Message, StringComparison.Ordinal);
+            Assert.Contains("recorded ceiling of 2", exception.Message, StringComparison.Ordinal);
+            Assert.Contains("Extract behavior to a collaborator", exception.Message, StringComparison.Ordinal);
+            Assert.Contains("raise the recorded ceiling", exception.Message, StringComparison.Ordinal);
+        }
+        finally
+        {
+            Directory.Delete(root, recursive: true);
+        }
     }
 
     [Fact]

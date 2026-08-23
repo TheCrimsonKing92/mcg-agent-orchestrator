@@ -436,6 +436,20 @@ public sealed class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
         using var phaseAccountant = AcceptanceGatePhaseAccountant.Start(
             _timeProvider, goalId?.Value, EmitGateProgress, cancellationToken);
         phaseAccountant.TransitionTo(AcceptanceGatePhaseNames.GatePlan);
+        var sourceSizePreflight = SourceSizeRatchetPreflight.Evaluate(worktreePath);
+        if (sourceSizePreflight.HasBlockingViolation)
+        {
+            phaseAccountant.MarkCompleted(passed: false);
+            var check = new AcceptanceCheckResult(
+                "source size ratchet preflight", false, 1, sourceSizePreflight.Message);
+            return new AcceptanceVerificationResult(
+                Passed: false,
+                Skipped: false,
+                ExitCode: 1,
+                OutputTail: sourceSizePreflight.Message,
+                Checks: [check]);
+        }
+
         var engineSettings = AcceptanceGateEngineSettings.Load(worktreePath);
         using var engineScope = PushEngineSettings(engineSettings);
         using var resultsScope = PushOwnerResultsScope(worktreePath, goalId, "gate");
