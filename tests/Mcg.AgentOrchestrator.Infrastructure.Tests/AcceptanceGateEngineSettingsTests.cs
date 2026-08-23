@@ -42,6 +42,7 @@ public sealed class AcceptanceGateEngineSettingsTests
             ["Goal lifecycle commands", "Goal worktree cleanup", "Goal worktree parallel"],
             [
                 "AcceptanceCohortWorkflowTests",
+                "AcceptanceVerdictCarryForwardTests",
                 "CliCommandTestsGoalLifecycleCleanupHooks",
                 "CliCommandTestsPersistentRunnerCommands",
                 "CliCommandTestsSubscriptionDispatchCommands",

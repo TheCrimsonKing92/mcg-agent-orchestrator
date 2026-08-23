@@ -4204,7 +4204,7 @@ internal sealed partial class ConductorDriver
         }
 
         var rebase = RebaseBeforeMerge(candidate.Goal, candidate.GoalPrefix, policy);
-        return rebase ?? CompleteLandingAfterAcceptance(candidate.Goal, candidate.GoalPrefix, policy, acceptance);
+        return rebase ?? CompleteLandingAfterRacingLandingCarryForward(candidate, policy, acceptance);
     }
 
     internal ConductorAdvanceResult EscalateParallelLandingAcceptance(

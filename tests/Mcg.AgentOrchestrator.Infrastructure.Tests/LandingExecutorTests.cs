@@ -1129,7 +1129,7 @@ public sealed class LandingExecutorTests
             DateTimeOffset.UtcNow));
     }
 
-    private static (AgentOrchestratorKernel Kernel, Goal Goal) CreateVerifiedGoal(string repo)
+    internal static (AgentOrchestratorKernel Kernel, Goal Goal) CreateVerifiedGoal(string repo)
     {
         var (kernel, goal) = CreateGoal(AgentRole.Developer);
         var task = goal.Tasks.Single();
@@ -1209,14 +1209,14 @@ public sealed class LandingExecutorTests
     private static string CreateRemotePath(string repo, string name) =>
         Path.Combine(repo, ".orchestrator-test-remotes", name);
 
-    private static void AddGoalBranchCommit(string repo, string goalBranch, string fileName, string content)
+    internal static void AddGoalBranchCommit(string repo, string goalBranch, string fileName, string content)
     {
         RunGit(repo, "checkout", "-b", goalBranch);
         AppendCommit(repo, fileName, content);
         RunGit(repo, "checkout", "main");
     }
 
-    private static void AppendCommit(string repo, string fileName, string content)
+    internal static void AppendCommit(string repo, string fileName, string content)
     {
         var path = Path.Combine(repo, fileName);
         Directory.CreateDirectory(Path.GetDirectoryName(path)!);
@@ -1225,7 +1225,7 @@ public sealed class LandingExecutorTests
         RunGit(repo, "commit", "-m", $"Add {fileName}");
     }
 
-    private static string ReadGit(string workingDirectory, params string[] arguments)
+    internal static string ReadGit(string workingDirectory, params string[] arguments)
     {
         var result = GitCli.Run(workingDirectory, arguments);
         if (result.ExitCode != 0)
@@ -1291,7 +1291,7 @@ public sealed class LandingExecutorTests
         }
     }
 
-    private static void TryDeleteDirectory(string path)
+    internal static void TryDeleteDirectory(string path)
     {
         try
         {
