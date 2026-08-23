@@ -36,7 +36,7 @@ internal sealed partial class ConductorDriver
         AcceptanceVerificationSummary acceptance;
         try
         {
-            acceptance = _runAcceptanceVerification(goal, null, null, CancellationToken.None);
+            acceptance = RunInlineLandingAcceptance(goal);
         }
         catch (AcceptanceInfrastructureDeferredException ex)
         {
@@ -68,6 +68,48 @@ internal sealed partial class ConductorDriver
         }
 
         return CompleteLandingAfterAcceptance(goal, goalPrefix, policy, acceptance);
+    }
+
+    private AcceptanceVerificationSummary RunInlineLandingAcceptance(Goal goal)
+    {
+        var stableSlotLease = _tryAcquireLandingStableSlotLease(goal);
+        var stableSlotIndex = stableSlotLease?.Environment.BuildPermitIndex;
+        if (!stableSlotIndex.HasValue)
+        {
+            TryDisposeInlineLandingStableSlotLease(stableSlotLease);
+            return _runAcceptanceVerification(goal, null, null, CancellationToken.None);
+        }
+
+        try
+        {
+            return _runAcceptanceVerification(
+                goal,
+                stableSlotIndex,
+                stableSlotLease,
+                CancellationToken.None);
+        }
+        finally
+        {
+            TryDisposeInlineLandingStableSlotLease(stableSlotLease);
+        }
+    }
+
+    private static DotnetBuildEnvironmentLease? TryAcquireInlineLandingStableSlotLease() =>
+        DotnetBuildEnvironmentManager.TryAcquireFirstAvailableStableSlotExecutionLock(TimeSpan.Zero) is
+            DotnetBuildLeaseAcquisition.Acquired acquired
+                ? acquired.Lease
+                : null;
+
+    private static void TryDisposeInlineLandingStableSlotLease(DotnetBuildEnvironmentLease? stableSlotLease)
+    {
+        try
+        {
+            stableSlotLease?.Dispose();
+        }
+        catch
+        {
+            // Acceptance outcome is dispositive; best-effort lease cleanup must not replace it.
+        }
     }
 
     private ConductorAdvanceResult ExecuteVerifying(

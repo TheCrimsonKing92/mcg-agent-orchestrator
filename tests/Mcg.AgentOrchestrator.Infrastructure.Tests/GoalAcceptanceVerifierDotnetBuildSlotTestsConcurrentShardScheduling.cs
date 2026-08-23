@@ -127,11 +127,13 @@ public sealed class GoalAcceptanceVerifierDotnetBuildSlotTestsConcurrentShardSch
         var alphaStarted = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
         var remainderFinished = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
         var completionOrder = new System.Collections.Concurrent.ConcurrentQueue<string>();
+        var parallelBatchChecks = new System.Collections.Concurrent.ConcurrentQueue<string>();
         var timingProgress = new System.Collections.Concurrent.ConcurrentQueue<AcceptanceGateProgress>();
         var activeShardWorkers = 0;
         var peakShardWorkers = 0;
         try
         {
+            GoalAcceptanceVerifier.OnInfrastructureShardResourcesAcquiredForTests = parallelBatchChecks.Enqueue;
             static Task<GoalAcceptanceVerifier.CommandResult> RunSequentialFixedVerdict(
                 string[] args,
                 string _,
@@ -311,6 +313,9 @@ public sealed class GoalAcceptanceVerifierDotnetBuildSlotTestsConcurrentShardSch
             Assert.Equal(sequentialShards, concurrentShards);
             Assert.Equal(2, peakShardWorkers);
             Assert.Equal(new[] { "Remainder", "Alpha" }, completionOrder);
+            Assert.Equal(
+                new[] { "infrastructure tests: Alpha", "infrastructure tests: Remainder" },
+                parallelBatchChecks.Order(StringComparer.Ordinal));
             Assert.Contains(
                 timingProgress,
                 item => item.GoalId == "22222222222222222222222222222222" &&
@@ -368,6 +373,7 @@ public sealed class GoalAcceptanceVerifierDotnetBuildSlotTestsConcurrentShardSch
         }
         finally
         {
+            GoalAcceptanceVerifier.OnInfrastructureShardResourcesAcquiredForTests = null;
             GoalAcceptanceVerifier.ResolveShardCoreBudgetForTests = null;
             GoalAcceptanceVerifier.PartitionVerdictWithinAttemptRerunEnabled = true;
             ResetPartitionVerdictKeyHooks();
