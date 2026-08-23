@@ -16,6 +16,17 @@ using Microsoft.Data.Sqlite;
 public abstract class GoalWorktreeTestBase
 {
     private static readonly Lazy<ImmutableArray<byte>> MigratedStateTemplate = new(CreateMigratedStateTemplate);
+    private static readonly Lazy<string> SeedRepositoryProcessRoot = new(
+        InitializeSeedRepositoryProcessRoot,
+        LazyThreadSafetyMode.ExecutionAndPublication);
+    private static int seedRepositoryCounter;
+
+    private static string SeedRepositoryBaseRootPath => OperatingSystem.IsWindows()
+        ? Path.Combine(FindCurrentSourceRoot(), ".scratch", "mcg-wt")
+        : Path.Combine(Path.GetTempPath(), "mcg-worktree-tests");
+
+    private protected static string SeedRepositoryProcessRootPath =>
+        TempRootJanitor.BuildOwnedRootPath(SeedRepositoryBaseRootPath, Environment.ProcessId);
 
     private protected static AgentDefinition EchoDeveloper() => new(
         new AgentId("echo-developer"),
@@ -106,26 +117,49 @@ public abstract class GoalWorktreeTestBase
 
     private static string CreateSeededGitRepository(bool renameInitialBranchToMain = false)
     {
-        var tempRoot = OperatingSystem.IsWindows()
-            ? Path.Combine(FindCurrentSourceRoot(), ".scratch", "mcg-wt")
-            : Path.Combine(Path.GetTempPath(), "mcg-worktree-tests");
-        var repo = Path.Combine(tempRoot, Guid.NewGuid().ToString("n"));
-        Directory.CreateDirectory(repo);
-        RunGit(repo, "init");
-        RunGit(repo, "config", "user.email", "tests@example.com");
-        RunGit(repo, "config", "user.name", "Worktree Tests");
-        File.AppendAllText(
-            Path.Combine(repo, ".git", "info", "exclude"),
-            ".orchestrator/" + Environment.NewLine);
-        File.WriteAllText(Path.Combine(repo, "seed.txt"), "seed");
-        RunGit(repo, "add", "-A");
-        RunGit(repo, "commit", "-m", "Seed");
-        if (renameInitialBranchToMain)
+        var container = Path.Combine(
+            EnsureSeedRepositoryProcessRoot(),
+            Interlocked.Increment(ref seedRepositoryCounter).ToString("x", CultureInfo.InvariantCulture));
+        var repo = Path.Combine(container, "repo");
+        try
         {
-            RunGit(repo, "branch", "-M", "main");
+            Directory.CreateDirectory(repo);
+            RunGit(repo, "init");
+            RunGit(repo, "config", "user.email", "tests@example.com");
+            RunGit(repo, "config", "user.name", "Worktree Tests");
+            File.AppendAllText(
+                Path.Combine(repo, ".git", "info", "exclude"),
+                ".orchestrator/" + Environment.NewLine);
+            File.WriteAllText(Path.Combine(repo, "seed.txt"), "seed");
+            RunGit(repo, "add", "-A");
+            RunGit(repo, "commit", "-m", "Seed");
+            if (renameInitialBranchToMain)
+            {
+                RunGit(repo, "branch", "-M", "main");
+            }
+
+            return repo;
+        }
+        catch
+        {
+            DeleteDirectory(repo);
+            throw;
+        }
+    }
+
+    private static string EnsureSeedRepositoryProcessRoot() => SeedRepositoryProcessRoot.Value;
+
+    private static string InitializeSeedRepositoryProcessRoot()
+    {
+        var processRoot = SeedRepositoryProcessRootPath;
+        _ = TempRootJanitor.DeleteTree(processRoot);
+        if (Directory.Exists(processRoot))
+        {
+            throw new IOException($"Could not clean stale seed repository process root '{processRoot}'.");
         }
 
-        return repo;
+        Directory.CreateDirectory(processRoot);
+        return processRoot;
     }
 
     private protected static string CreateSeededRepository()
@@ -734,6 +768,12 @@ public abstract class GoalWorktreeTestBase
 
     private protected static void DeleteDirectory(string path)
     {
+        if (TryResolveOwnedSeedContainer(SeedRepositoryProcessRootPath, path, out var container))
+        {
+            _ = TempRootJanitor.DeleteTree(container);
+            return;
+        }
+
         try
         {
             Directory.Delete(path, recursive: true);
@@ -745,6 +785,33 @@ public abstract class GoalWorktreeTestBase
         catch (UnauthorizedAccessException)
         {
         }
+    }
+
+    private protected static bool TryResolveOwnedSeedContainer(
+        string processRoot,
+        string path,
+        out string container)
+    {
+        container = string.Empty;
+        var normalizedPath = NormalizePath(path);
+        if (!string.Equals(Path.GetFileName(normalizedPath), "repo", StringComparison.OrdinalIgnoreCase))
+        {
+            return false;
+        }
+
+        var candidate = Path.GetDirectoryName(normalizedPath);
+        var candidateParent = candidate is null ? null : Path.GetDirectoryName(candidate);
+        if (candidateParent is null ||
+            !string.Equals(
+                NormalizePath(candidateParent),
+                NormalizePath(processRoot),
+                StringComparison.OrdinalIgnoreCase))
+        {
+            return false;
+        }
+
+        container = candidate!;
+        return true;
     }
 
     private protected static string FindCurrentSourceRoot([CallerFilePath] string sourceFilePath = "")
