@@ -3412,6 +3412,13 @@ internal sealed class ConductorBatchLoop
             return;
         }
 
+        if (run.Acceptance is null && ConductorParallelAcceptanceAttemptCoordinator
+                .ClassifyWorkerRegistrationFault(run.Exception) != WorkerRegistrationFaultDisposition.None)
+        {
+            // Keep classified registration faults distinct; unclassified faults retain AcceptanceFailed.
+            return;
+        }
+
         kernel.ReconcileGoalAcceptanceFailed(
             goal.Id,
             BuildFailedAcceptanceChecks(run, attempt),
@@ -3968,7 +3975,7 @@ internal sealed class ConductorBatchLoop
                         $"Build artifact lock blocked acceptance; retry on next conduct tick. {FormatBuildLockBlocked(buildLock.Attribution)}"));
             }
 
-            return ParallelAcceptanceFault(driver, run.Candidate, policy, run.Exception);
+            return ParallelAcceptanceFault(driver, run.Candidate, policy, attempt, run.Exception);
         }
 
         if (run.EarlyResult is not null)
@@ -3978,7 +3985,7 @@ internal sealed class ConductorBatchLoop
 
         if (run.Acceptance is null)
         {
-            return ParallelAcceptanceFault(
+            return ParallelAcceptanceUnclassifiedFault(
                 driver,
                 run.Candidate,
                 policy,
@@ -3995,7 +4002,7 @@ internal sealed class ConductorBatchLoop
         }
         catch (Exception ex)
         {
-            return ParallelAcceptanceFault(driver, run.Candidate, policy, ex);
+            return ParallelAcceptanceUnclassifiedFault(driver, run.Candidate, policy, ex);
         }
     }
 
@@ -4096,6 +4103,37 @@ internal sealed class ConductorBatchLoop
     }
 
     private static ConductorAdvanceResult ParallelAcceptanceFault(
+        ConductorDriver driver,
+        ConductorParallelAcceptanceCandidate candidate,
+        ConductorAutonomyPolicy policy,
+        ConductorParallelAcceptanceAttempt attempt,
+        Exception exception)
+    {
+        var registrationFault =
+            ConductorParallelAcceptanceAttemptCoordinator.WorkerRegistrationFaultMessage(exception);
+        var disposition =
+            ConductorParallelAcceptanceAttemptCoordinator.ClassifyWorkerRegistrationFault(registrationFault);
+        if (disposition == WorkerRegistrationFaultDisposition.BoundedRetry &&
+            attempt.TransientFailureCount < ParallelAcceptanceTransientFailureCap)
+        {
+            return ParallelAcceptanceHeld(
+                candidate,
+                policy,
+                $"Transient worker-process registration fault ({attempt.TransientFailureCount}/{ParallelAcceptanceTransientFailureCap}); retry on next conduct tick. attempt={attempt.AttemptId}: {registrationFault}");
+        }
+
+        if (disposition is WorkerRegistrationFaultDisposition.BoundedRetry or WorkerRegistrationFaultDisposition.Terminal)
+        {
+            return driver.EscalateParallelLandingAcceptance(
+                candidate,
+                policy,
+                $"background acceptance worker-process registration fault: {registrationFault}");
+        }
+
+        return ParallelAcceptanceUnclassifiedFault(driver, candidate, policy, exception);
+    }
+
+    private static ConductorAdvanceResult ParallelAcceptanceUnclassifiedFault(
         ConductorDriver driver,
         ConductorParallelAcceptanceCandidate candidate,
         ConductorAutonomyPolicy policy,
