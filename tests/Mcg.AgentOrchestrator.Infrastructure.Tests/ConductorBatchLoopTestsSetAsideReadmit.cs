@@ -184,9 +184,9 @@ public sealed class ConductorBatchLoopTestsSetAsideReadmit : ConductorBatchLoopT
         var goal = CreateVerifiedSimpleGoal(kernel, "Readmit cleared sweep blocker");
         kernel.RecordGoalPolicyDecision(goal.Id, "Batch loop tick 1: escalated at Verified — Acceptance verification failed");
         var blocker = new TerminalGoalSweepBlocker(
-            "completed-branch-unmerged",
-            "verified branch remains unmerged",
-            $"acceptance {goal.Id.Value[..8]}");
+            "terminal-dirty-worktree",
+            "untracked acceptance debris remains",
+            $"remove debris for {goal.Id.Value[..8]}");
         var sweepCalls = 0;
         var landAttempts = 0;
         var driver = MakeDriver(
@@ -233,9 +233,13 @@ public sealed class ConductorBatchLoopTestsSetAsideReadmit : ConductorBatchLoopT
         var goal = CreateVerifiedSimpleGoal(kernel, "Keep persistent sweep blocker");
         kernel.RecordGoalPolicyDecision(goal.Id, "Batch loop tick 1: escalated at Verified — Acceptance verification failed");
         var blocker = new TerminalGoalSweepBlocker(
+            "terminal-dirty-worktree",
+            "untracked acceptance debris remains",
+            $"remove debris for {goal.Id.Value[..8]}");
+        var actionableBlocker = new TerminalGoalSweepBlocker(
             "completed-branch-unmerged",
             "verified branch remains unmerged",
-            $"acceptance {goal.Id.Value[..8]}");
+            TerminalGoalRemedy.Acceptance(goal.Id, goal.Id.Value[..8], gateArtifact: null));
         var sweepCalls = 0;
         var landAttempts = 0;
         var driver = MakeDriver(
@@ -244,6 +248,62 @@ public sealed class ConductorBatchLoopTestsSetAsideReadmit : ConductorBatchLoopT
             {
                 landAttempts++;
                 throw new InvalidOperationException("A persistently blocked goal must not reach landing.");
+            });
+
+        var summary = new ConductorBatchLoop(
+            measuredSweep: _ =>
+            {
+                sweepCalls++;
+                return new TerminalGoalSweepResult(
+                    [new TerminalGoalSweepGoalResult(goal.Id, goal.Id.Value[..8], [], [actionableBlocker, blocker])],
+                    SweptGoalIds: [goal.Id]);
+            }).Run(
+            kernel,
+            driver,
+            ConductorAutonomyPolicy.Conservative,
+            NoStopPath(),
+            maxIterations: 2,
+            watchInterval: TimeSpan.FromMilliseconds(1),
+            sleepFunc: _ => false);
+
+        Assert.Equal(2, sweepCalls);
+        Assert.Equal(1, summary.Escalated);
+        Assert.Equal(0, landAttempts);
+        Assert.DoesNotContain(goal.Timeline, evt =>
+            evt.Kind == ProgressKind.GoalPolicyDecision &&
+            evt.Message.StartsWith("Set-aside self-cleared:", StringComparison.Ordinal));
+    }
+
+    [Xunit.Fact]
+    public void BatchLoopReadmitsLifecycleEscalationWhenSweepBlockerHasSafeProgressRemedy()
+    {
+        var kernel = new AgentOrchestratorKernel();
+        var goal = CreateVerifiedSimpleGoal(kernel, "Readmit actionable sweep blocker");
+        kernel.RecordGoalPolicyDecision(goal.Id, "Batch loop tick 1: escalated at Verified — Acceptance verification failed");
+        var blocker = new TerminalGoalSweepBlocker(
+            "completed-branch-unmerged",
+            "verified branch remains unmerged",
+            TerminalGoalRemedy.Acceptance(goal.Id, goal.Id.Value[..8], gateArtifact: null));
+        var sweepCalls = 0;
+        var acceptanceAttempts = 0;
+        var landAttempts = 0;
+        var driver = MakeDriver(
+            getFacts: _ => new GoalLifecycleFacts(WorkspaceExists: true),
+            runAcceptance: _ =>
+            {
+                acceptanceAttempts++;
+                return true;
+            },
+            land: g =>
+            {
+                landAttempts++;
+                return new LandingResult(
+                    g.Id.Value,
+                    g.Id.Value[..8],
+                    new LandingDecision.Promote(),
+                    "integration",
+                    true,
+                    "Landed");
             });
 
         var summary = new ConductorBatchLoop(
@@ -264,8 +324,9 @@ public sealed class ConductorBatchLoopTestsSetAsideReadmit : ConductorBatchLoopT
 
         Assert.Equal(2, sweepCalls);
         Assert.Equal(1, summary.Escalated);
-        Assert.Equal(0, landAttempts);
-        Assert.DoesNotContain(goal.Timeline, evt =>
+        Assert.Equal(1, acceptanceAttempts);
+        Assert.Equal(1, landAttempts);
+        Assert.Contains(goal.Timeline, evt =>
             evt.Kind == ProgressKind.GoalPolicyDecision &&
             evt.Message.StartsWith("Set-aside self-cleared:", StringComparison.Ordinal));
     }
@@ -324,7 +385,7 @@ public sealed class ConductorBatchLoopTestsSetAsideReadmit : ConductorBatchLoopT
         Assert.Contains(records, record =>
             record.EventKind == "blocked-recheck-heartbeat" &&
             record.Detail.Contains("rechecks=2", StringComparison.Ordinal) &&
-            record.Detail.Contains("completed-branch-unmerged(recurrences=2)", StringComparison.Ordinal) &&
+            record.Detail.Contains("completed-branch-unmerged(recurrences=1)", StringComparison.Ordinal) &&
             record.Detail.Contains("evidence=verified_branch_remains_unmerged", StringComparison.Ordinal) &&
             record.Detail.Contains($"clears=acceptance_{goal.Id.Value[..8]}", StringComparison.Ordinal));
     }
@@ -338,7 +399,7 @@ public sealed class ConductorBatchLoopTestsSetAsideReadmit : ConductorBatchLoopT
         var blocker = new TerminalGoalSweepBlocker(
             "completed-branch-unmerged",
             "verified branch remains unmerged",
-            $"acceptance {goal.Id.Value[..8]}");
+            TerminalGoalRemedy.Acceptance(goal.Id, goal.Id.Value[..8], gateArtifact: null));
         var sweepCalls = 0;
         var acceptanceAttempts = 0;
         var driver = MakeDriver(
@@ -353,11 +414,9 @@ public sealed class ConductorBatchLoopTestsSetAsideReadmit : ConductorBatchLoopT
             measuredSweep: _ =>
             {
                 sweepCalls++;
-                return sweepCalls is 1 or 3
-                    ? new TerminalGoalSweepResult(
-                        [new TerminalGoalSweepGoalResult(goal.Id, goal.Id.Value[..8], [], [blocker])],
-                        SweptGoalIds: [goal.Id])
-                    : new TerminalGoalSweepResult([], SweptGoalIds: [goal.Id]);
+                return new TerminalGoalSweepResult(
+                    [new TerminalGoalSweepGoalResult(goal.Id, goal.Id.Value[..8], [], [blocker])],
+                    SweptGoalIds: [goal.Id]);
             }).Run(
             kernel,
             driver,

@@ -1953,10 +1953,8 @@ internal sealed class ConductorBatchLoop
             {
                 recurrences.Remove(staleKey);
             }
-            else
-            {
-                recurrences[staleKey] = previous with { Count = previous.Count + 1 };
-            }
+            // Otherwise the goal was not observed by this sweep. Keep the last known condition
+            // visible, but do not claim another recurrence without a fresh observation.
         }
 
         foreach (var (key, observation) in current)
@@ -4375,41 +4373,49 @@ internal sealed class ConductorBatchLoop
                 entry.SweepBlockerKind is not null &&
                 entry.SweepBlockerFingerprint is not null)
             {
-                if (sweepResult is null ||
-                    !sweepResult.ExplicitlySweptGoalIds.Contains(goal.Id) ||
-                    sweepResult.Goals.Any(result =>
-                        result.GoalId == goal.Id &&
-                        result.Blockers.Any(blocker => string.Equals(
-                            blocker.Kind,
-                            entry.SweepBlockerKind,
-                            StringComparison.Ordinal))))
+                var explicitlySwept = sweepResult?.ExplicitlySweptGoalIds.Contains(goal.Id) == true;
+                if (explicitlySwept)
                 {
-                    continue;
+                    var currentBlockers = sweepResult!.Goals
+                        .Where(result => result.GoalId == goal.Id)
+                        .SelectMany(result => result.Blockers)
+                        .ToArray();
+                    var hasOperatorOnlyBlocker = currentBlockers.Any(blocker =>
+                        blocker.Remedy.SafetyClass == TerminalGoalRemedySafetyClass.OperatorOnly);
+                    var progressBlocker = SelectControllingSweepBlocker(currentBlockers.Where(blocker =>
+                        blocker.Remedy.SafetyClass == TerminalGoalRemedySafetyClass.KnownSafeIdempotent));
+                    var canMakeProgress = !hasOperatorOnlyBlocker &&
+                        (currentBlockers.Length == 0 || progressBlocker is not null);
+                    var selfClearFingerprint = progressBlocker is null
+                        ? entry.SweepBlockerFingerprint
+                        : BuildSweepBlockerFingerprint(progressBlocker);
+
+                    if (canMakeProgress && !string.Equals(
+                        entry.LastSelfClearEvidenceFingerprint,
+                        selfClearFingerprint,
+                        StringComparison.Ordinal))
+                    {
+                        var blockerKind = progressBlocker?.Kind ?? entry.SweepBlockerKind;
+                        goalProjectionCache.Invalidate(goal.Id);
+                        selfClearedSetAsideEntries[entry.GoalId] = entry with
+                        {
+                            LastSelfClearEvidenceFingerprint = selfClearFingerprint
+                        };
+                        setAsideGoals.Remove(entry.GoalId);
+                        escalatedGoals.Remove(entry.GoalId);
+                        reapedGoals.Remove(entry.GoalId);
+                        kernel.RecordGoalPolicyDecision(
+                            goal.Id,
+                            $"{SetAsideSelfClearDecisionPrefix} condition=lifecycle_escalation; blocker={blockerKind}; " +
+                            $"evidence={SanitizeReason(selfClearFingerprint)}.");
+                        EmitProgress(
+                            $"SET_ASIDE_SELF_CLEARED goal={entry.GoalId[..8]} condition=lifecycle_escalation blocker={Sanitize(blockerKind)}");
+                        continue;
+                    }
                 }
 
-                if (string.Equals(
-                    entry.LastSelfClearEvidenceFingerprint,
-                    entry.SweepBlockerFingerprint,
-                    StringComparison.Ordinal))
-                {
-                    continue;
-                }
-
-                goalProjectionCache.Invalidate(goal.Id);
-                selfClearedSetAsideEntries[entry.GoalId] = entry with
-                {
-                    LastSelfClearEvidenceFingerprint = entry.SweepBlockerFingerprint
-                };
-                setAsideGoals.Remove(entry.GoalId);
-                escalatedGoals.Remove(entry.GoalId);
-                reapedGoals.Remove(entry.GoalId);
-                kernel.RecordGoalPolicyDecision(
-                    goal.Id,
-                    $"{SetAsideSelfClearDecisionPrefix} condition=lifecycle_escalation; blocker={entry.SweepBlockerKind}; " +
-                    $"evidence={SanitizeReason(entry.SweepBlockerFingerprint)}.");
-                EmitProgress(
-                    $"SET_ASIDE_SELF_CLEARED goal={entry.GoalId[..8]} condition=lifecycle_escalation blocker={Sanitize(entry.SweepBlockerKind)}");
-                continue;
+                // A missing/partial sweep and a repeat-bounded or operator-only blocker fail closed,
+                // while still preserving the pre-existing state-change readmission path below.
             }
 
             var currentFingerprint = BuildEscalatedGoalStateFingerprint(kernel, driver, goal);
@@ -4592,13 +4598,9 @@ internal sealed class ConductorBatchLoop
                 ? selfClearedEntry?.LastSelfClearEvidenceFingerprint
                 : null;
         var sweepBlocker = condition == BatchSetAsideCondition.LifecycleEscalation
-            ? sweepResult?.Goals
+            ? SelectControllingSweepBlocker(sweepResult?.Goals
                 .Where(result => result.GoalId == goal.Id)
-                .SelectMany(result => result.Blockers)
-                .OrderBy(blocker => blocker.Kind, StringComparer.Ordinal)
-                .ThenBy(blocker => blocker.Evidence, StringComparer.Ordinal)
-                .ThenBy(blocker => blocker.Command, StringComparer.Ordinal)
-                .FirstOrDefault()
+                .SelectMany(result => result.Blockers) ?? [])
             : null;
         selfClearedSetAsideEntries?.Remove(goal.Id.Value);
         setAsideGoals[goal.Id.Value] = new BatchSetAsideEntry(
@@ -4609,8 +4611,20 @@ internal sealed class ConductorBatchLoop
             sweepBlocker?.Kind,
             sweepBlocker is null
                 ? null
-                : $"{sweepBlocker.Kind}\n{sweepBlocker.Evidence}\n{sweepBlocker.Command}");
+                : BuildSweepBlockerFingerprint(sweepBlocker));
     }
+
+    private static TerminalGoalSweepBlocker? SelectControllingSweepBlocker(
+        IEnumerable<TerminalGoalSweepBlocker> blockers) =>
+        blockers
+            .OrderBy(blocker => blocker.Remedy.SafetyClass == TerminalGoalRemedySafetyClass.OperatorOnly ? 0 : 1)
+            .ThenBy(blocker => blocker.Kind, StringComparer.Ordinal)
+            .ThenBy(blocker => blocker.Evidence, StringComparer.Ordinal)
+            .ThenBy(blocker => blocker.Command, StringComparer.Ordinal)
+            .FirstOrDefault();
+
+    private static string BuildSweepBlockerFingerprint(TerminalGoalSweepBlocker blocker) =>
+        $"{blocker.Kind}\n{blocker.Evidence}\n{blocker.Command}";
 
     private static string BuildEscalatedGoalStateFingerprint(
         AgentOrchestratorKernel kernel,
