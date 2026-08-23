@@ -251,41 +251,17 @@ Wave 2 item 3 places the commit-on-behalf boundary at `DispatchWorktreeCommitter
 
 ## Guarded source size ratchet
 
-`GoalAcceptanceVerifierSizeRatchetTests` runs as an ordinary acceptance-gate test and applies the literal ceilings in `SourceSizeRatchet.SeededCeilings`. The table was seeded at commit `6e7a90d7b3fe192ae4f1e430cb7452710f88b73c` on 2026-08-22; every value below is that file's complete line count from `File.ReadLines(path).Count()` at that commit, except where a later row-raise is recorded below the table.
+`GoalAcceptanceVerifierSizeRatchetTests` runs as an ordinary acceptance-gate test and applies the literal ceilings in [`SourceSizeRatchet.SeededCeilings`](../tests/Mcg.AgentOrchestrator.Infrastructure.Tests/SourceSizeRatchet.cs). That symbol is the only authority for both the guarded set and its current ceilings; read it to inspect or change either. The authority was seeded at commit `6e7a90d7b3fe192ae4f1e430cb7452710f88b73c` on 2026-08-22 from each file's complete `File.ReadLines(path).Count()` result.
 
-| Guarded file | Seeded ceiling |
-| --- | ---: |
-| `src/Mcg.AgentOrchestrator.Infrastructure/Workspaces/GoalAcceptanceVerifier.cs` | 8779 |
-| `src/Mcg.AgentOrchestrator.App/Orchestration/ConductorDriver.cs` | 6191 |
-| `src/Mcg.AgentOrchestrator.App/Orchestration/ConductorBatchLoop.cs` | 5110 |
-| `src/Mcg.AgentOrchestrator.Infrastructure/Processes/BackgroundDispatchRunner.cs` | 3262 |
-| `src/Mcg.AgentOrchestrator.Infrastructure/Workers/WorkerProfileDispatcher.cs` | 3220 |
-| `src/Mcg.AgentOrchestrator.App/Cli/CliPersistentStateRunner.cs` | 4821 |
-| `tests/Mcg.AgentOrchestrator.Infrastructure.Tests/GoalAcceptanceVerifierTests.cs` | 1566 |
-| `tests/Mcg.AgentOrchestrator.Infrastructure.Tests/ConductorDriverTests.cs` | 1396 |
-| `tests/Mcg.AgentOrchestrator.Infrastructure.Tests/ConductorDriverTestsAcceptanceCoordination.cs` | 900 |
-| `tests/Mcg.AgentOrchestrator.Infrastructure.Tests/ConductorDriverTestsLifecycleStates.cs` | 1543 |
-| `tests/Mcg.AgentOrchestrator.Infrastructure.Tests/ConductorDriverTestsReviewRetryConvergence.cs` | 778 |
-| `tests/Mcg.AgentOrchestrator.Infrastructure.Tests/ConductorDriverTestsFindingEvidence.cs` | 1948 |
-| `tests/Mcg.AgentOrchestrator.Infrastructure.Tests/ConductorDriverTestsPreReviewEvidence.cs` | 1187 |
-| `tests/Mcg.AgentOrchestrator.Infrastructure.Tests/ConductorDriverTestsContractRepairBounds.cs` | 1097 |
-| `tests/Mcg.AgentOrchestrator.Infrastructure.Tests/ConductorDriverTestsDispatchRecovery.cs` | 537 |
-| `tests/Mcg.AgentOrchestrator.Infrastructure.Tests/CliCommandTestsPersistentRunnerCommands.cs` | 1489 |
-| `tests/Mcg.AgentOrchestrator.Infrastructure.Tests/CliCommandTestsPersistentRunnerCommandsAcceptance.cs` | 697 |
-| `tests/Mcg.AgentOrchestrator.Infrastructure.Tests/CliCommandTestsPersistentRunnerCommandsConductLoopHydration.cs` | 817 |
-| `tests/Mcg.AgentOrchestrator.Infrastructure.Tests/CliCommandTestsPersistentRunnerCommandsDispatchRecovery.cs` | 455 |
-| `tests/Mcg.AgentOrchestrator.Infrastructure.Tests/CliCommandTestsPersistentRunnerCommandsGoalIntakeAndReplacement.cs` | 2832 |
-| `tests/Mcg.AgentOrchestrator.Infrastructure.Tests/CliCommandTestsPersistentRunnerCommandsGoalQueriesAndLanding.cs` | 575 |
-| `tests/Mcg.AgentOrchestrator.Infrastructure.Tests/CliCommandTestsPersistentRunnerCommandsStartupAndMetadata.cs` | 275 |
-| `tests/Mcg.AgentOrchestrator.Infrastructure.Tests/WorkerDispatchTestsWorkerResultClassification.cs` | 4834 |
-| `tests/Mcg.AgentOrchestrator.Infrastructure.Tests/ConductorBatchLoopTestsParallelAcceptance.cs` | 4473 |
-| `tests/Mcg.AgentOrchestrator.Infrastructure.Tests/DotnetBuildEnvironmentManagerTests.cs` | 1480 |
+This section deliberately contains no current ceiling value or guarded relative path, so a ceiling-only change cannot make the documentation stale. The acceptance-gate documentation contract requires the authority pointer above and rejects a guarded relative path reintroduced anywhere in this section, including subsections.
 
-The production rows are the six ranked god classes whose growth the inventory tracks. The `ConductorDriverTests.cs` row and its split-product rows remain at their measured post-split sizes so regrowth is visible. The `CliCommandTestsPersistentRunnerCommands.cs` row and its split-product rows remain at their measured post-split sizes for the same reason. The `DotnetBuildEnvironmentManagerTests.cs` and `GoalAcceptanceVerifierTests.cs` rows remain at their measured post-split sizes for the same reason; none of their new fragments approaches the roughly 4,300-line threshold for adding a split-product row. The other two test rows are products of earlier splits that have regrown past that threshold; a one-time split without a bound only resets the clock. This is intentionally not a repository-wide size rule. For example, `CliCommandTests.GoalLifecycleCommands.cs` (4211) and `CliCommandTests.SubscriptionDispatchCommands.cs` (3471) remain within their intended post-split size; `DashboardRenderingTests.cs` (3795) has already moved to the Dashboard test project; and `DispatchFailureClassifier.cs` (2393) remains below the seeded production band.
+The guarded production entries are the ranked god classes whose growth the inventory tracks. Selected split products remain guarded at their measured post-split sizes so regrowth is visible; a one-time split without a bound only resets the clock. This is intentionally not a repository-wide size rule: files that remain within their intended post-split size, files moved to a more appropriate test project, and production files below the seeded band do not become guarded merely because they are large.
 
-When extraction shrinks a guarded file, lower that row in the same change. If growth is unavoidable, raise only that row deliberately with an inline justification naming the goal. A rename or deletion must update its row in the same change. Never derive a ceiling automatically from the current file, make a row advisory, add an opt-out, or delete the guard.
+When extraction shrinks a guarded file, lower its row in the authority in the same change. If growth is unavoidable, add an inline comment immediately above that row naming the goal and justification, then raise only that value. A rename or deletion must update the authority in the same change. Never derive a ceiling automatically from the current file, make a row advisory, add an opt-out, or delete the guard.
 
 ### Recorded row raises
+
+This is a closed historical record; new justifications belong in the inline comment immediately above the authoritative row.
 
 Goal `18afe5f2` raised the `BackgroundDispatchRunner.cs` row from 3499 to 3525 because missing-build-evidence rejection and commit suppression must run where parsed worker results and authoritative changed paths meet.
 

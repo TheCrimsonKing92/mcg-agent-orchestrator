@@ -3,11 +3,13 @@ using System.Globalization;
 internal static class SourceSizeRatchet
 {
     internal const string DocumentationPath = "docs/god-class-decomposition-plan.md";
+    internal const string DocumentationSectionHeading = "## Guarded source size ratchet";
+    internal const string SourcePath = "tests/Mcg.AgentOrchestrator.Infrastructure.Tests/SourceSizeRatchet.cs";
 
     // Seeded at 6e7a90d7b3fe192ae4f1e430cb7452710f88b73c using File.ReadLines(path).Count().
-    // When extraction shrinks a guarded file, lower its ceiling in the same change. When growth is
-    // unavoidable, raise only that row with an inline justification naming the goal. Never derive these
-    // ceilings from the current files or add an opt-out.
+    // Each row is the only place its guarded path and ceiling value live. When extraction shrinks a guarded
+    // file, lower its ceiling here. When growth is unavoidable, put the goal-specific justification directly
+    // above that row and raise only that value. Never derive these ceilings from current files or add an opt-out.
     internal static IReadOnlyList<SourceSizeCeiling> SeededCeilings { get; } = Array.AsReadOnly(
         new[]
         {
@@ -109,6 +111,83 @@ internal static class SourceSizeRatchet
         return violations;
     }
 
+    internal static IReadOnlyList<SourceSizeDocumentationViolation> EvaluateDocumentation(
+        IEnumerable<string> documentationLines,
+        IEnumerable<SourceSizeCeiling> ceilings)
+    {
+        var lines = documentationLines.ToArray();
+        var sectionStart = Array.FindIndex(
+            lines,
+            line => string.Equals(line.Trim(), DocumentationSectionHeading, StringComparison.Ordinal));
+        if (sectionStart < 0)
+        {
+            return new[]
+            {
+                new SourceSizeDocumentationViolation(
+                    "missing-ratchet-section",
+                    null,
+                    $"{DocumentationPath} must contain the '{DocumentationSectionHeading}' section."),
+            };
+        }
+
+        var sectionEnd = lines.Length;
+        for (var lineIndex = sectionStart + 1; lineIndex < lines.Length; lineIndex++)
+        {
+            if (!lines[lineIndex].StartsWith("## ", StringComparison.Ordinal))
+            {
+                continue;
+            }
+
+            sectionEnd = lineIndex;
+            break;
+        }
+
+        var section = lines[sectionStart..sectionEnd];
+        var violations = new List<SourceSizeDocumentationViolation>();
+        AddMissingAuthorityPointerViolation(section, SeededCeilingsSymbol, violations);
+        AddMissingAuthorityPointerViolation(section, SourcePath, violations);
+
+        foreach (var ceiling in ceilings)
+        {
+            var windowsPath = ceiling.RelativePath.Replace('/', '\\');
+            for (var sectionLineIndex = 0; sectionLineIndex < section.Length; sectionLineIndex++)
+            {
+                var line = section[sectionLineIndex];
+                if (!line.Contains(ceiling.RelativePath, StringComparison.Ordinal) &&
+                    !line.Contains(windowsPath, StringComparison.Ordinal))
+                {
+                    continue;
+                }
+
+                var lineNumber = sectionStart + sectionLineIndex + 1;
+                violations.Add(new SourceSizeDocumentationViolation(
+                    "duplicated-ceiling-record",
+                    lineNumber,
+                    $"{DocumentationPath} line {lineNumber} duplicates guarded path '{ceiling.RelativePath}'. " +
+                    $"Keep guarded paths and ceiling values only in {SeededCeilingsSymbol} at {SourcePath}."));
+            }
+        }
+
+        return violations;
+    }
+
+    private static void AddMissingAuthorityPointerViolation(
+        IReadOnlyList<string> section,
+        string requiredText,
+        ICollection<SourceSizeDocumentationViolation> violations)
+    {
+        if (section.Any(line => line.Contains(requiredText, StringComparison.Ordinal)))
+        {
+            return;
+        }
+
+        violations.Add(new SourceSizeDocumentationViolation(
+            "missing-authority-pointer",
+            null,
+            $"The '{DocumentationSectionHeading}' section in {DocumentationPath} must point to " +
+            $"{SeededCeilingsSymbol} at {SourcePath}; missing '{requiredText}'."));
+    }
+
     private static string BuildOverCeilingMessage(SourceSizeCeiling ceiling, int actualLineCount)
     {
         return $"{ceiling.RelativePath} has {actualLineCount.ToString(CultureInfo.InvariantCulture)} lines, " +
@@ -130,7 +209,7 @@ internal static class SourceSizeRatchet
             $"The size ratchet cannot pass without checking every entry. See {DocumentationPath}.";
     }
 
-    private static string SeededCeilingsSymbol =>
+    internal static string SeededCeilingsSymbol =>
         $"{nameof(SourceSizeRatchet)}.{nameof(SeededCeilings)}";
 }
 
@@ -141,3 +220,5 @@ internal sealed record SourceSizeViolation(
     int? ActualLineCount,
     int MaximumLineCount,
     string Message);
+
+internal sealed record SourceSizeDocumentationViolation(string Rule, int? LineNumber, string Message);

@@ -9,15 +9,130 @@ public sealed class GoalAcceptanceVerifierSizeRatchetTests
             repositoryRoot,
             SourceSizeRatchet.DocumentationPath.Replace('/', Path.DirectorySeparatorChar));
 
-        Assert.Equal(25, SourceSizeRatchet.SeededCeilings.Count);
+        Assert.NotEmpty(SourceSizeRatchet.SeededCeilings);
         Assert.Equal(paths.Length, paths.Distinct(StringComparer.Ordinal).Count());
         Assert.True(
             File.Exists(documentationPath),
             $"Size-ratchet guidance document '{SourceSizeRatchet.DocumentationPath}' does not exist.");
-        Assert.Equal(
-            SourceSizeRatchet.SeededCeilings.ToArray(),
-            ReadDocumentedCeilings(documentationPath));
         AssertNoViolations(SourceSizeRatchet.Evaluate(repositoryRoot, SourceSizeRatchet.SeededCeilings));
+    }
+
+    [Fact]
+    public void RealDocumentation_PointsAtAuthorityAndRecordsNoCeilings()
+    {
+        var repositoryRoot = FindRepositoryRoot();
+
+        AssertNoDocumentationViolations(SourceSizeRatchet.EvaluateDocumentation(
+            ReadDocumentationLines(repositoryRoot),
+            SourceSizeRatchet.SeededCeilings));
+    }
+
+    [Fact]
+    public void AuthoritativeCeilingChange_TakesEffectWithoutASecondEdit()
+    {
+        var repositoryRoot = FindRepositoryRoot();
+        var authoritativeEntry = SourceSizeRatchet.SeededCeilings[0];
+        var changedAuthority = new[] { authoritativeEntry with { MaximumLineCount = 1 } };
+        var actualLineCount = File.ReadLines(Path.Combine(
+            repositoryRoot,
+            authoritativeEntry.RelativePath.Replace('/', Path.DirectorySeparatorChar))).Count();
+
+        var violation = Assert.Single(SourceSizeRatchet.Evaluate(repositoryRoot, changedAuthority));
+
+        Assert.Equal(authoritativeEntry.RelativePath, violation.RelativePath);
+        Assert.Equal(actualLineCount, violation.ActualLineCount);
+        Assert.Equal(1, violation.MaximumLineCount);
+        Assert.Contains(authoritativeEntry.RelativePath, violation.Message, StringComparison.Ordinal);
+        Assert.Contains(
+            actualLineCount.ToString(System.Globalization.CultureInfo.InvariantCulture),
+            violation.Message,
+            StringComparison.Ordinal);
+        Assert.Contains("recorded ceiling of 1", violation.Message, StringComparison.Ordinal);
+        AssertNoDocumentationViolations(SourceSizeRatchet.EvaluateDocumentation(
+            ReadDocumentationLines(repositoryRoot),
+            changedAuthority));
+    }
+
+    [Fact]
+    public void DocumentationVerdict_IsIndependentOfCeilingValues()
+    {
+        var repositoryRoot = FindRepositoryRoot();
+        var documentationLines = ReadDocumentationLines(repositoryRoot);
+        var raisedCeilings = SourceSizeRatchet.SeededCeilings
+            .Select(ceiling => ceiling with { MaximumLineCount = ceiling.MaximumLineCount + 1 })
+            .ToArray();
+        var minimumCeilings = SourceSizeRatchet.SeededCeilings
+            .Select(ceiling => ceiling with { MaximumLineCount = 1 })
+            .ToArray();
+
+        AssertNoDocumentationViolations(SourceSizeRatchet.EvaluateDocumentation(
+            documentationLines,
+            SourceSizeRatchet.SeededCeilings));
+        AssertNoDocumentationViolations(SourceSizeRatchet.EvaluateDocumentation(
+            documentationLines,
+            raisedCeilings));
+        AssertNoDocumentationViolations(SourceSizeRatchet.EvaluateDocumentation(
+            documentationLines,
+            minimumCeilings));
+    }
+
+    [Fact]
+    public void Documentation_ReintroducedCeilingRecord_ProducesLoudViolation()
+    {
+        var ceiling = SourceSizeRatchet.SeededCeilings[0];
+        var authorityPointer =
+            $"See {SourceSizeRatchet.SeededCeilingsSymbol} in {SourceSizeRatchet.SourcePath}.";
+        var documents = new[]
+        {
+            new[]
+            {
+                SourceSizeRatchet.DocumentationSectionHeading,
+                authorityPointer,
+                $"| `{ceiling.RelativePath}` | {ceiling.MaximumLineCount} |",
+            },
+            new[]
+            {
+                SourceSizeRatchet.DocumentationSectionHeading,
+                authorityPointer,
+                $"- Guarded file {ceiling.RelativePath.Replace('/', '\\')} has ceiling {ceiling.MaximumLineCount}.",
+            },
+        };
+
+        foreach (var document in documents)
+        {
+            var violation = Assert.Single(SourceSizeRatchet.EvaluateDocumentation(document, new[] { ceiling }));
+
+            Assert.Equal("duplicated-ceiling-record", violation.Rule);
+            Assert.Equal(3, violation.LineNumber);
+            Assert.Contains(ceiling.RelativePath, violation.Message, StringComparison.Ordinal);
+            Assert.Contains("line 3", violation.Message, StringComparison.Ordinal);
+            Assert.Contains(SourceSizeRatchet.SeededCeilingsSymbol, violation.Message, StringComparison.Ordinal);
+            Assert.Contains(SourceSizeRatchet.SourcePath, violation.Message, StringComparison.Ordinal);
+        }
+    }
+
+    [Fact]
+    public void Documentation_MissingSectionOrPointer_ProducesLoudViolation()
+    {
+        var missingSection = Assert.Single(SourceSizeRatchet.EvaluateDocumentation(
+            new[] { "# Decomposition plan" },
+            Array.Empty<SourceSizeCeiling>()));
+
+        Assert.Equal("missing-ratchet-section", missingSection.Rule);
+        Assert.Contains(SourceSizeRatchet.DocumentationSectionHeading, missingSection.Message, StringComparison.Ordinal);
+
+        var missingPointers = SourceSizeRatchet.EvaluateDocumentation(
+            new[] { SourceSizeRatchet.DocumentationSectionHeading },
+            Array.Empty<SourceSizeCeiling>());
+
+        Assert.Equal(2, missingPointers.Count);
+        Assert.All(missingPointers, violation => Assert.Equal("missing-authority-pointer", violation.Rule));
+        Assert.Contains(
+            missingPointers,
+            violation => violation.Message.Contains(SourceSizeRatchet.SeededCeilingsSymbol, StringComparison.Ordinal));
+        Assert.Contains(
+            missingPointers,
+            violation => violation.Message.Contains(SourceSizeRatchet.SourcePath, StringComparison.Ordinal));
     }
 
     [Fact]
@@ -196,33 +311,26 @@ public sealed class GoalAcceptanceVerifierSizeRatchetTests
         return path;
     }
 
-    private static SourceSizeCeiling[] ReadDocumentedCeilings(string documentationPath)
+    private static string[] ReadDocumentationLines(string repositoryRoot)
     {
-        const string tableHeader = "| Guarded file | Seeded ceiling |";
-        var lines = File.ReadLines(documentationPath).ToArray();
-        var headerIndex = Array.FindIndex(lines, line => string.Equals(line, tableHeader, StringComparison.Ordinal));
-        Assert.True(headerIndex >= 0, $"{SourceSizeRatchet.DocumentationPath} does not contain the ratchet table.");
-
-        return lines
-            .Skip(headerIndex + 2)
-            .TakeWhile(line => line.StartsWith("| `", StringComparison.Ordinal))
-            .Select(ParseDocumentedCeiling)
-            .ToArray();
-    }
-
-    private static SourceSizeCeiling ParseDocumentedCeiling(string row)
-    {
-        var cells = row.Split('|', StringSplitOptions.TrimEntries | StringSplitOptions.RemoveEmptyEntries);
-        Assert.Equal(2, cells.Length);
-        Assert.StartsWith("`", cells[0], StringComparison.Ordinal);
-        Assert.EndsWith("`", cells[0], StringComparison.Ordinal);
+        var documentationPath = Path.Combine(
+            repositoryRoot,
+            SourceSizeRatchet.DocumentationPath.Replace('/', Path.DirectorySeparatorChar));
         Assert.True(
-            int.TryParse(cells[1], out var maximumLineCount),
-            $"Ratchet table ceiling '{cells[1]}' is not an integer.");
-        return new SourceSizeCeiling(cells[0][1..^1], maximumLineCount);
+            File.Exists(documentationPath),
+            $"Size-ratchet guidance document '{SourceSizeRatchet.DocumentationPath}' does not exist.");
+        return File.ReadAllLines(documentationPath);
     }
 
     private static void AssertNoViolations(IReadOnlyList<SourceSizeViolation> violations)
+    {
+        Assert.True(
+            violations.Count == 0,
+            string.Join(Environment.NewLine, violations.Select(violation => violation.Message)));
+    }
+
+    private static void AssertNoDocumentationViolations(
+        IReadOnlyList<SourceSizeDocumentationViolation> violations)
     {
         Assert.True(
             violations.Count == 0,
