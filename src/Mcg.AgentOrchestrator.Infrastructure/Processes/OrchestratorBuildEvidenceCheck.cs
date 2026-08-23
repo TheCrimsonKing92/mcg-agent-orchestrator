@@ -1,5 +1,3 @@
-using System.Diagnostics;
-using System.Text;
 using Mcg.AgentOrchestrator.Core;
 
 namespace Mcg.AgentOrchestrator.Infrastructure;
@@ -15,15 +13,44 @@ public sealed record OrchestratorBuildCheckResult(
     string Output);
 
 internal sealed record OrchestratorBuildEvidenceResolution(
-    IReadOnlyList<string> Projects,
     bool MissingEvidence,
     bool BuildFailed,
-    string Diagnostic);
+    string Diagnostic)
+{
+    public bool FailsRound => MissingEvidence || BuildFailed;
+
+    public string AppendDiagnostic(string? standardError)
+    {
+        var combined = Append(standardError, Diagnostic);
+        if (BuildFailed)
+        {
+            combined = Append(
+                combined,
+                DispatchFailureDiagnosticMarker.Format(DispatchFailureDiagnosticMarker.WorkerBuildCheckFailed));
+        }
+
+        if (MissingEvidence)
+        {
+            combined = Append(
+                combined,
+                DispatchFailureDiagnosticMarker.Format(DispatchFailureDiagnosticMarker.WorkerBuildEvidenceMissing));
+        }
+
+        return combined;
+    }
+
+    private static string Append(string? current, string? next) =>
+        string.IsNullOrWhiteSpace(next)
+            ? current ?? string.Empty
+            : string.IsNullOrEmpty(current)
+                ? next
+                : current.TrimEnd() + Environment.NewLine + next;
+}
 
 public static class OrchestratorBuildEvidenceCheck
 {
     internal const string ScriptRelativePath = "scripts/Invoke-WorkerBuildCheck.ps1";
-    private static readonly TimeSpan DefaultTimeout = TimeSpan.FromMinutes(5);
+    private static readonly TimeSpan DefaultTimeout = TimeSpan.FromMinutes(7);
 
     internal static OrchestratorBuildEvidenceResolution Resolve(
         string worktreeRoot,
@@ -31,17 +58,22 @@ public static class OrchestratorBuildEvidenceCheck
         IEnumerable<string> changedPaths,
         IEnumerable<string> dirtyPaths,
         bool failedWorkerBuildCheck,
-        bool hasWorkerBuildEvidence,
+        Func<bool> hasWorkerBuildEvidence,
         Func<OrchestratorBuildCheckRequest, OrchestratorBuildCheckResult> runBuildCheck)
     {
+        if (failedWorkerBuildCheck)
+        {
+            return new(MissingEvidence: false, BuildFailed: false, Diagnostic: string.Empty);
+        }
+
         var projects = WorkerBuildEvidenceRequirement.FindRequiredProjects(
             worktreeRoot,
             role,
             changedPaths,
             dirtyPaths);
-        if (failedWorkerBuildCheck || projects.Count == 0 || hasWorkerBuildEvidence)
+        if (projects.Count == 0 || hasWorkerBuildEvidence())
         {
-            return new(projects, MissingEvidence: false, BuildFailed: false, Diagnostic: string.Empty);
+            return new(MissingEvidence: false, BuildFailed: false, Diagnostic: string.Empty);
         }
 
         OrchestratorBuildCheckResult result;
@@ -54,21 +86,20 @@ public static class OrchestratorBuildEvidenceCheck
             result = new(false, -1, $"Orchestrator build evidence check could not run: {exception.Message}");
         }
 
-        var provenance = $"build_evidence_producer=orchestrator; projects={string.Join(",", projects)}";
+        var projectsDiagnostic = $"projects={string.Join(",", projects)}";
+        var boundedOutput = VerificationTextBounds.BoundText(result.Output.Trim(), path: null);
         if (!result.Ran)
         {
             return new(
-                projects,
                 MissingEvidence: true,
                 BuildFailed: false,
-                Diagnostic: $"{provenance}; no compile verdict produced. {result.Output}".Trim());
+                Diagnostic: $"build_evidence_attempt=orchestrator; {projectsDiagnostic}; no compile verdict produced. {boundedOutput}".Trim());
         }
 
         return new(
-            projects,
             MissingEvidence: false,
             BuildFailed: result.ExitCode != 0,
-            Diagnostic: $"{provenance}; {result.Output}".Trim());
+            Diagnostic: $"build_evidence_producer=orchestrator; {projectsDiagnostic}; {boundedOutput}".Trim());
     }
 
     public static string BuildCommand(IReadOnlyList<string> projects)
@@ -87,48 +118,21 @@ public static class OrchestratorBuildEvidenceCheck
             return new(false, -1, $"Build evidence script not found: {ScriptRelativePath}");
         }
 
-        var standardOutput = new StringBuilder();
-        var standardError = new StringBuilder();
         try
         {
-            var startInfo = WorkerProcessRunner.BuildPowerShellStartInfo(
-                BuildCommand(request.Projects),
-                request.WorktreeRoot,
-                redirectStandardInput: false);
-            using var process = Process.Start(startInfo);
-            if (process is null)
-            {
-                return new(false, -1, "PowerShell did not start the build evidence check.");
-            }
-
-            process.OutputDataReceived += (_, args) => AppendLine(standardOutput, args.Data);
-            process.ErrorDataReceived += (_, args) => AppendLine(standardError, args.Data);
-            process.BeginOutputReadLine();
-            process.BeginErrorReadLine();
-
-            var timeoutMilliseconds = (int)Math.Clamp(request.Timeout.TotalMilliseconds, 1, int.MaxValue);
-            if (!process.WaitForExit(timeoutMilliseconds))
-            {
-                try { process.Kill(entireProcessTree: true); } catch { }
-                try { process.WaitForExit(); } catch { }
-                return new(false, -1, $"Build evidence check timed out after {request.Timeout}.");
-            }
-
-            process.WaitForExit();
-            var output = CombineOutput(standardOutput, standardError);
-            if (process.ExitCode == 0)
-            {
-                return output.Contains("PASS build: 0 errors", StringComparison.OrdinalIgnoreCase)
-                    ? new(true, 0, output)
-                    : new(false, process.ExitCode, $"Build evidence check returned malformed success output. {output}".Trim());
-            }
-
-            var isMissingProject = output.Contains("FAIL build: missing project(s)", StringComparison.OrdinalIgnoreCase);
-            var hasFailureVerdict = output.Contains(": error ", StringComparison.OrdinalIgnoreCase) ||
-                output.Contains("FAIL build:", StringComparison.OrdinalIgnoreCase);
-            return !isMissingProject && hasFailureVerdict
-                ? new(true, process.ExitCode, output)
-                : new(false, process.ExitCode, $"Build evidence check returned no compiler verdict. {output}".Trim());
+            var result = Task.Run(() => WorkerProcessRunner.RunBufferedAsync(
+                    new WorkerProcessRunRequest(
+                        BuildCommand(request.Projects),
+                        request.WorktreeRoot,
+                        Timeout: request.Timeout),
+                    CancellationToken.None))
+                .GetAwaiter()
+                .GetResult();
+            return ClassifyOutput(result.ExitCode, CombineOutput(result.StandardOutput, result.StandardError));
+        }
+        catch (OperationCanceledException)
+        {
+            return new(false, -1, $"Build evidence check timed out after {request.Timeout}.");
         }
         catch (Exception exception)
         {
@@ -136,21 +140,25 @@ public static class OrchestratorBuildEvidenceCheck
         }
     }
 
-    private static string EscapeSingleQuoted(string value) => value.Replace("'", "''", StringComparison.Ordinal);
-
-    private static void AppendLine(StringBuilder builder, string? line)
+    internal static OrchestratorBuildCheckResult ClassifyOutput(int exitCode, string output)
     {
-        if (line is null)
+        if (exitCode == 0)
         {
-            return;
+            return output.Contains("PASS build: 0 errors", StringComparison.OrdinalIgnoreCase)
+                ? new(true, 0, output)
+                : new(false, exitCode, $"Build evidence check returned malformed success output. {output}".Trim());
         }
 
-        lock (builder)
-        {
-            builder.AppendLine(line);
-        }
+        var isMissingProject = output.Contains("FAIL build: missing project(s)", StringComparison.OrdinalIgnoreCase);
+        var hasFailureVerdict = output.Contains(": error ", StringComparison.OrdinalIgnoreCase) ||
+            output.Contains("FAIL build:", StringComparison.OrdinalIgnoreCase);
+        return !isMissingProject && hasFailureVerdict
+            ? new(true, exitCode, output)
+            : new(false, exitCode, $"Build evidence check returned no compiler verdict. {output}".Trim());
     }
 
-    private static string CombineOutput(StringBuilder standardOutput, StringBuilder standardError) =>
-        $"{standardOutput}{standardError}".Trim();
+    private static string EscapeSingleQuoted(string value) => value.Replace("'", "''", StringComparison.Ordinal);
+
+    private static string CombineOutput(string standardOutput, string standardError) =>
+        $"{standardOutput}{Environment.NewLine}{standardError}".Trim();
 }

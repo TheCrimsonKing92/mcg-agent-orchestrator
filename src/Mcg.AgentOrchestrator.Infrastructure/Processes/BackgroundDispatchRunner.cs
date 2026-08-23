@@ -708,6 +708,10 @@ public sealed class BackgroundDispatchRunner
         var task = kernel.GetTask(goalId, taskId);
         var processRecord = task.LastProcess
             ?? throw new InvalidOperationException($"Task '{taskId}' has no background process to refresh.");
+        if (HasProcessOnlyCompletionAlreadyApplied(task, processRecord) || HasRecordedCompletionForProcess(task, processRecord))
+        {
+            return new DispatchRefreshOutcome(processRecord, null);
+        }
         var verdict = _recoveryService.ClassifyRefresh(
             task,
             goalId,
@@ -1433,21 +1437,17 @@ public sealed class BackgroundDispatchRunner
                 worktreeEvidence.ChangedPaths,
                 worktreeEvidence.DirtyPaths,
                 failedWorkerBuildCheck,
-                _completionClassifier.HasWorkerBuildEvidence(
+                () => _completionClassifier.HasWorkerBuildEvidence(
                     processRecord.WorkingDirectory,
                     decisionStandardOutput,
                     decisionStandardError),
                 _runOrchestratorBuildCheck);
             var missingWorkerBuildEvidence = buildEvidence.MissingEvidence;
-            if (buildEvidence.Diagnostic.Length > 0)
-                standardErrorDiagnostic = AppendDiagnostic(standardErrorDiagnostic ?? string.Empty, buildEvidence.Diagnostic);
-            if (buildEvidence.BuildFailed)
-                standardErrorDiagnostic = AppendDiagnostic(standardErrorDiagnostic ?? string.Empty, DispatchFailureDiagnosticMarker.Format(DispatchFailureDiagnosticMarker.WorkerBuildCheckFailed));
-            if (missingWorkerBuildEvidence)
-                standardErrorDiagnostic = AppendDiagnostic(standardErrorDiagnostic ?? string.Empty, DispatchFailureDiagnosticMarker.Format(DispatchFailureDiagnosticMarker.WorkerBuildEvidenceMissing));
-            if (buildEvidence.BuildFailed || missingWorkerBuildEvidence)
+            standardErrorDiagnostic = buildEvidence.AppendDiagnostic(standardErrorDiagnostic);
+            if (buildEvidence.FailsRound)
+            {
                 exitCode = 1;
-
+            }
             var provider = ResolveWorkerProvider(task.LastDispatch);
             var normalIntegrityCommitEvidence =
                 task.LastDispatch.SandboxLowIntegrity != true &&
