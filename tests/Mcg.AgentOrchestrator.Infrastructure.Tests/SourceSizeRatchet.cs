@@ -159,6 +159,15 @@ internal static class SourceSizeRatchet
                     continue;
                 }
 
+                var isRequiredAuthorityPointer =
+                    string.Equals(ceiling.RelativePath, SourcePath, StringComparison.Ordinal) &&
+                    line.Contains(SeededCeilingsSymbol, StringComparison.Ordinal) &&
+                    line.Contains(SourcePath, StringComparison.Ordinal);
+                if (isRequiredAuthorityPointer)
+                {
+                    continue;
+                }
+
                 var lineNumber = sectionStart + sectionLineIndex + 1;
                 violations.Add(new SourceSizeDocumentationViolation(
                     "duplicated-ceiling-record",

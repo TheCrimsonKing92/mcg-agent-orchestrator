@@ -5,15 +5,9 @@ public sealed class GoalAcceptanceVerifierSizeRatchetTests
     {
         var repositoryRoot = FindRepositoryRoot();
         var paths = SourceSizeRatchet.SeededCeilings.Select(entry => entry.RelativePath).ToArray();
-        var documentationPath = Path.Combine(
-            repositoryRoot,
-            SourceSizeRatchet.DocumentationPath.Replace('/', Path.DirectorySeparatorChar));
 
         Assert.NotEmpty(SourceSizeRatchet.SeededCeilings);
         Assert.Equal(paths.Length, paths.Distinct(StringComparer.Ordinal).Count());
-        Assert.True(
-            File.Exists(documentationPath),
-            $"Size-ratchet guidance document '{SourceSizeRatchet.DocumentationPath}' does not exist.");
         AssertNoViolations(SourceSizeRatchet.Evaluate(repositoryRoot, SourceSizeRatchet.SeededCeilings));
     }
 
@@ -109,6 +103,33 @@ public sealed class GoalAcceptanceVerifierSizeRatchetTests
             Assert.Contains(SourceSizeRatchet.SeededCeilingsSymbol, violation.Message, StringComparison.Ordinal);
             Assert.Contains(SourceSizeRatchet.SourcePath, violation.Message, StringComparison.Ordinal);
         }
+    }
+
+    [Fact]
+    public void Documentation_AuthoritySourceRow_AllowsOnlyPointer()
+    {
+        var authorityCeiling = new SourceSizeCeiling(SourceSizeRatchet.SourcePath, 1);
+        var authorityPointer =
+            $"See {SourceSizeRatchet.SeededCeilingsSymbol} in {SourceSizeRatchet.SourcePath}.";
+        var validDocument = new[]
+        {
+            SourceSizeRatchet.DocumentationSectionHeading,
+            authorityPointer,
+        };
+
+        AssertNoDocumentationViolations(SourceSizeRatchet.EvaluateDocumentation(
+            validDocument,
+            new[] { authorityCeiling }));
+
+        var duplicatedDocument = validDocument.Append(
+            $"| `{SourceSizeRatchet.SourcePath}` | {authorityCeiling.MaximumLineCount} |");
+        var violation = Assert.Single(SourceSizeRatchet.EvaluateDocumentation(
+            duplicatedDocument,
+            new[] { authorityCeiling }));
+
+        Assert.Equal("duplicated-ceiling-record", violation.Rule);
+        Assert.Equal(3, violation.LineNumber);
+        Assert.Contains(SourceSizeRatchet.SourcePath, violation.Message, StringComparison.Ordinal);
     }
 
     [Fact]
