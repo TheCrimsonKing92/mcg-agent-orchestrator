@@ -47,7 +47,7 @@ corroborated as present on main and absent from the candidate, and the tamper gu
 the named method to be removed by the test-file diff. Code tokens in ordinary criterion prose never create
 pattern-presence or pattern-absence checks; those checks must come from an explicit structured manifest.
 
-`conduct --loop` runs `ConductorBatchLoop`: each tick advances every eligible goal one policy-gated step through its state machine, creates worktrees, dispatches workers, waits on them, runs the acceptance suite against the worktree, applies the change-risk gate, fast-forward-merges into `main`, records the dogfood entry in SQLite, and removes the worktree. The loop ends on its own when all goals are done or escalated (`LOOP_STOP reason=all-done-or-escalated`). Infrastructure-triggered self-relaunch is **opt-in**: set `MCG_ORCHESTRATOR_SELF_RELAUNCH_ENABLED=true` before starting the loop to have a landing that changes conductor/verifier/gate/build/dispatch infrastructure stop admissions, drain current workers, build and self-check a content-addressed successor, and hand off. It is disabled by default, so without that setting no `LOOP_RELAUNCH_*` or infrastructure-triggered `LOOP_HANDOFF` event is expected; use the manual bounce below after a loop-affecting landing. The separate bounded-run successor handoff still runs when `--max-duration` is reached while active work remains, but it starts the incumbent executable without rebuilding. A successful bounded `LOOP_HANDOFF` therefore renews the run but does **not** arm code landed after that executable was built; use the manual bounce to arm such a landing.
+`conduct --loop` runs `ConductorBatchLoop`: each tick advances every eligible goal one policy-gated step through its state machine, creates worktrees, dispatches workers, waits on them, runs the acceptance suite against the worktree, applies the change-risk gate, fast-forward-merges into `main`, records the dogfood entry in SQLite, and removes the worktree. The loop ends on its own when all goals are done or escalated (`LOOP_STOP reason=all-done-or-escalated`). Infrastructure-triggered self-relaunch is **opt-in**: set `MCG_ORCHESTRATOR_SELF_RELAUNCH_ENABLED=true` before starting the loop to have a landing that changes conductor/verifier/gate/build/dispatch infrastructure stop admissions, drain current workers, build and self-check a content-addressed successor, and hand off. It is disabled by default, so without that setting no `LOOP_RELAUNCH_*` or infrastructure-triggered `LOOP_HANDOFF` event is expected; use the manual bounce below after a loop-affecting landing. The separate bounded-run successor handoff runs when `--max-duration` is reached while active work remains and, by default, builds and self-checks a content-addressed successor from repository HEAD before launching it.
 
 You do **not** need `workspace create`, `subscription-dispatch`, `start-dispatch`, `refresh-dispatch`, or `accept` by hand. A single non-loop `conduct <goal-prefix>` advances exactly one step (useful for stepping/inspection).
 
@@ -139,12 +139,21 @@ git log --oneline <marker-sha>..HEAD -- <paths-you-care-about>
 Note that the conductor runs as `dotnet.exe`, not as `Mcg.AgentOrchestrator.App`, so filtering the process
 list by the product name finds nothing and reads as "the loop is dead".
 
-#### The max-duration handoff does not re-stage the binary
+#### The max-duration handoff re-stages and verifies the successor
 
-At `--max-duration` the loop exits and spawns a successor with `--continuity-child`. That successor normally
-reuses the predecessor's run directory, so landed code stays inert across the rollover and the run-directory
-hash is unchanged on both sides. A rollover is therefore not a substitute for the manual bounce above. Some
-handoffs have been observed to rebuild, so neither outcome is safe to assume: check the marker every time.
+At `--max-duration` the supervised child exits, then its still-running continuity supervisor builds repository
+HEAD into the existing commit-keyed staging area, validates the staged `.dll.git-head`, self-checks the
+content-addressed run directory, and launches that staged DLL with `--continuity-child`. The supervisor waits
+for the successor's first `LOOP_START` before recording success. If staging or readiness fails, it records the
+typed cause and relaunches the incumbent command; after repeated staging failures it stops retrying builds for
+the lifetime of that supervisor and keeps renewing with the incumbent command.
+
+Tail `.orchestrator/logs/conduct-events.log` for terminal evidence. Success is `LOOP_HANDOFF` with both
+`stagedSourceCommit=<sha>` and `repositoryHead=<sha>`; failure is `LOOP_HANDOFF_FAILED phase=<phase>
+reason=<cause>`. `LOOP_HANDOFF_STAGING` makes the bounded build gap visible. Set
+`MCG_ORCHESTRATOR_MAX_DURATION_RESTAGE=0` (or `false`) before launch only as an operator opt-out to restore the
+previous incumbent-binary renewal behavior. This setting is independent of
+`MCG_ORCHESTRATOR_SELF_RELAUNCH_ENABLED`.
 
 ### Auto-resume after reboot or loop crash
 
@@ -421,7 +430,7 @@ Created
 
 Off-path states you will see in escalations: `AwaitingClarification` (refiner raised questions), `AwaitingHumanInput` (conductor needs an operator decision), `Failed` (a task exhausted retries), `Blocked` (operator hold). These stop the normal sequence; use §5 to clear them.
 
-**Loop-exit and handoff conditions.** A plain `conduct --loop` batch run halts automatically and prints `LOOP_STOP reason=all-done-or-escalated` when every active goal has reached a terminal state (`CleanedUp`, `Failed`, `Blocked`) or been escalated. Goals created *after* a plain loop started are **not** picked up after that terminal stop — start a new `conduct --loop` to process them. Landing conductor infrastructure triggers an immediate drain/build/self-check handoff only when `MCG_ORCHESTRATOR_SELF_RELAUNCH_ENABLED=true`; the default-off path requires the manual bounce in §1 to arm the landed code. When enabled, `LOOP_RELAUNCH_ROLLBACK` or `LOOP_HANDOFF_FAILED` reports a failed infrastructure relaunch and whether the incumbent can continue. Separately, when `--max-duration` expires while active work remains, the bounded run attempts a successor handoff and emits `LOOP_HANDOFF` on success or `LOOP_HANDOFF_FAILED` on failure. This handoff starts the incumbent executable without rebuilding, so even `LOOP_HANDOFF` does not prove that source changes landed during the run are armed; use the §1 manual bounce for those changes, and relaunch manually after a failed renewal. Manual relaunch is also needed after a deliberate `.conduct-stop`/Ctrl-C or after creating new goals following an all-done stop. Use `conduct --loop --daemon` only for controlled active-goal intake: it stays alive on an empty backlog and picks up goals submitted later, but it is not a safe "drain the backlog" mode.
+**Loop-exit and handoff conditions.** A plain `conduct --loop` batch run halts automatically and prints `LOOP_STOP reason=all-done-or-escalated` when every active goal has reached a terminal state (`CleanedUp`, `Failed`, `Blocked`) or been escalated. Goals created *after* a plain loop started are **not** picked up after that terminal stop — start a new `conduct --loop` to process them. Landing conductor infrastructure triggers an immediate drain/build/self-check handoff only when `MCG_ORCHESTRATOR_SELF_RELAUNCH_ENABLED=true`; the default-off path requires the manual bounce in §1 to arm the landed code. When enabled, `LOOP_RELAUNCH_ROLLBACK` or `LOOP_HANDOFF_FAILED` reports a failed infrastructure relaunch and whether the incumbent can continue. Separately, when `--max-duration` expires while active work remains, the continuity supervisor stages repository HEAD, waits for the successor's `LOOP_START`, and emits `LOOP_HANDOFF` with both source commits on success or `LOOP_HANDOFF_FAILED` with the typed cause before falling back to the incumbent command. Manual relaunch is still needed after a deliberate `.conduct-stop`/Ctrl-C, after creating new goals following an all-done stop, and once after landing a change to the handoff implementation itself because the already-running supervisor is old code. Use `conduct --loop --daemon` only for controlled active-goal intake: it stays alive on an empty backlog and picks up goals submitted later, but it is not a safe "drain the backlog" mode.
 
 ### 6.2 Orchestrator-commit-on-behalf + merge to main
 

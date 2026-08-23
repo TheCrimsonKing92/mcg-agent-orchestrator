@@ -176,6 +176,36 @@ public sealed class ConductorContinuitySupervisorTests
     }
 
     [Xunit.Fact]
+    public async Task ProcessHost_CommandPrefix_LaunchesRequestedExecutable()
+    {
+        var root = Path.Combine(Path.GetTempPath(), $"mcg-continuity-prefix-{Guid.NewGuid():N}");
+        Directory.CreateDirectory(root);
+        var stdoutPath = Path.Combine(root, "child.out.log");
+        var stderrPath = Path.Combine(root, "child.err.log");
+        var commandPrefix = BuildCommandPrefixOutputProbe();
+        var request = new ConductorSupervisorProcessRequest(
+            [],
+            root,
+            Path.Combine(root, "exit.json"),
+            stdoutPath,
+            stderrPath,
+            commandPrefix);
+        var host = new SystemConductorSupervisorProcessHost();
+
+        try
+        {
+            var result = await host.RunAsync(request, TestContext.Current.CancellationToken);
+
+            Assert.Equal(0, result.ExitCode);
+            Assert.Contains("prefix-probe", File.ReadAllText(stdoutPath), StringComparison.Ordinal);
+        }
+        finally
+        {
+            if (Directory.Exists(root)) Directory.Delete(root, recursive: true);
+        }
+    }
+
+    [Xunit.Fact]
     public async Task RepeatedUnexpectedExit_EscalatesAtRestartCap()
     {
         var store = new RecordingRunEventStore();
@@ -237,10 +267,351 @@ public sealed class ConductorContinuitySupervisorTests
         Assert.Contains("renewal-cap count=3 max=2", store.Events[^1].Detail, StringComparison.Ordinal);
     }
 
-    private sealed class ScriptedSupervisorProcessHost(
-        params Func<ConductorSupervisorProcessRequest, int, ConductorSupervisorProcessResult>[] steps)
-        : IConductorSupervisorProcessHost
+    [Xunit.Fact]
+    public async Task PlannedRenewal_StagesFromHeadAndLaunchesStagedSuccessor()
     {
+        var store = new RecordingRunEventStore();
+        var conductEvents = new List<string>();
+        var prepared = new ConductorPreparedSuccessor(
+            "C:\\staged-run",
+            "C:\\staged-run\\Mcg.AgentOrchestrator.App.dll",
+            "repository-head",
+            "repository-head",
+            "LOOP_START selfCheck=true");
+        var host = new ScriptedSupervisorProcessHost(
+            (request, _) =>
+            {
+                ConductorContinuityExitArtifact.Write(
+                    request.ExitArtifactPath,
+                    new ConductorContinuityExitArtifact("max-duration", 1, 1, RestartRequested: true));
+                return new ConductorSupervisorProcessResult(0, 501);
+            },
+            (request, _) =>
+            {
+                request.OnStandardOutputLine?.Invoke(
+                    "LOOP_START gitHead=repository-head runDir=C:\\staged-run");
+                ConductorContinuityExitArtifact.Write(
+                    request.ExitArtifactPath,
+                    new ConductorContinuityExitArtifact("stop-file", 2, 0, RestartRequested: false));
+                return new ConductorSupervisorProcessResult(0, 502);
+            });
+        var supervisor = new ConductorContinuitySupervisor(
+            host,
+            store,
+            stageSuccessor: _ => prepared,
+            appendConductEvent: (_, _, detail) => conductEvents.Add(detail),
+            dotnetPath: "dotnet-test");
+
+        var exitCode = await supervisor.RunAsync(
+            ["conduct", "--loop", "--max-duration", "60"],
+            "C:\\repo",
+            Path.Combine(Path.GetTempPath(), $"mcg-continuity-{Guid.NewGuid():N}"),
+            "default",
+            "default");
+
+        Assert.Equal(0, exitCode);
+        Assert.Equal(["dotnet-test", prepared.AppDllPath], host.Requests[1].CommandPrefix);
+        var handoff = Assert.Single(store.Events.Where(evt => evt.Operation == "handoff"));
+        Assert.Contains("stagedSourceCommit=repository-head", handoff.Detail, StringComparison.Ordinal);
+        Assert.Contains("repositoryHead=repository-head", handoff.Detail, StringComparison.Ordinal);
+        Assert.Contains(conductEvents, detail => detail.StartsWith("LOOP_HANDOFF ", StringComparison.Ordinal));
+    }
+
+    [Xunit.Fact]
+    public async Task StagedSuccessorWithoutReadiness_FallsBackWhileSupervisorRuns()
+    {
+        var store = new RecordingRunEventStore();
+        var conductEvents = new List<string>();
+        var stagedRequestSeen = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var releaseReadinessTimeout = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        Task<int>? supervisorTask = null;
+        var prepared = new ConductorPreparedSuccessor(
+            "C:\\staged-run",
+            "C:\\staged-run\\Mcg.AgentOrchestrator.App.dll",
+            "new-head",
+            "new-head",
+            "LOOP_START selfCheck=true");
+        var host = new ScriptedSupervisorProcessHost(
+            (request, _, _) =>
+            {
+                ConductorContinuityExitArtifact.Write(
+                    request.ExitArtifactPath,
+                    new ConductorContinuityExitArtifact("max-duration", 1, 1, RestartRequested: true));
+                return Task.FromResult(new ConductorSupervisorProcessResult(0, 601));
+            },
+            (request, _, cancellationToken) =>
+            {
+                stagedRequestSeen.TrySetResult();
+                var stopped = new TaskCompletionSource<ConductorSupervisorProcessResult>(
+                    TaskCreationOptions.RunContinuationsAsynchronously);
+                cancellationToken.Register(() => stopped.TrySetResult(
+                    new ConductorSupervisorProcessResult(-1, 602, TerminationConfirmed: true)));
+                return stopped.Task;
+            },
+            (request, _, _) =>
+            {
+                Assert.NotNull(supervisorTask);
+                Assert.False(supervisorTask.IsCompleted);
+                Assert.Null(request.CommandPrefix);
+                ConductorContinuityExitArtifact.Write(
+                    request.ExitArtifactPath,
+                    new ConductorContinuityExitArtifact("stop-file", 2, 0, RestartRequested: false));
+                return Task.FromResult(new ConductorSupervisorProcessResult(0, 603));
+            });
+        var supervisor = new ConductorContinuitySupervisor(
+            host,
+            store,
+            delay: (_, _) => releaseReadinessTimeout.Task,
+            stageSuccessor: _ => prepared,
+            appendConductEvent: (_, _, detail) => conductEvents.Add(detail),
+            readinessTimeout: TimeSpan.FromSeconds(30));
+
+        supervisorTask = supervisor.RunAsync(
+            ["conduct", "--loop", "--max-duration", "60"],
+            "C:\\repo",
+            Path.Combine(Path.GetTempPath(), $"mcg-continuity-{Guid.NewGuid():N}"),
+            "default",
+            "default");
+        await stagedRequestSeen.Task.WaitAsync(TestContext.Current.CancellationToken);
+        releaseReadinessTimeout.TrySetResult();
+
+        Assert.Equal(0, await supervisorTask);
+        Assert.Equal(3, host.Requests.Count);
+        Assert.Contains(conductEvents, detail =>
+            detail.Contains("LOOP_HANDOFF_FAILED", StringComparison.Ordinal) &&
+            detail.Contains("phase=readiness", StringComparison.Ordinal));
+    }
+
+    [Xunit.Fact]
+    public async Task StagedSuccessorLaunchFailure_FallsBackWhileSupervisorRuns()
+    {
+        var store = new RecordingRunEventStore();
+        var conductEvents = new List<string>();
+        var incumbentSeen = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var releaseIncumbent = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        Task<int>? supervisorTask = null;
+        var prepared = new ConductorPreparedSuccessor(
+            "C:\\staged-run",
+            "C:\\staged-run\\Mcg.AgentOrchestrator.App.dll",
+            "new-head",
+            "new-head",
+            "LOOP_START selfCheck=true");
+        var host = new ScriptedSupervisorProcessHost(
+            async (request, _, _) =>
+            {
+                incumbentSeen.TrySetResult();
+                await releaseIncumbent.Task;
+                ConductorContinuityExitArtifact.Write(
+                    request.ExitArtifactPath,
+                    new ConductorContinuityExitArtifact("max-duration", 1, 1, RestartRequested: true));
+                return new ConductorSupervisorProcessResult(0, 651);
+            },
+            (_, _, _) => throw new InvalidOperationException("staged spawn failed"),
+            (request, _, _) =>
+            {
+                Assert.NotNull(supervisorTask);
+                Assert.False(supervisorTask.IsCompleted);
+                Assert.Null(request.CommandPrefix);
+                ConductorContinuityExitArtifact.Write(
+                    request.ExitArtifactPath,
+                    new ConductorContinuityExitArtifact("stop-file", 2, 0, RestartRequested: false));
+                return Task.FromResult(new ConductorSupervisorProcessResult(0, 653));
+            });
+        var supervisor = new ConductorContinuitySupervisor(
+            host,
+            store,
+            stageSuccessor: _ => prepared,
+            appendConductEvent: (_, _, detail) => conductEvents.Add(detail));
+
+        supervisorTask = supervisor.RunAsync(
+            ["conduct", "--loop", "--max-duration", "60"],
+            "C:\\repo",
+            Path.Combine(Path.GetTempPath(), $"mcg-continuity-{Guid.NewGuid():N}"),
+            "default",
+            "default");
+        await incumbentSeen.Task.WaitAsync(TestContext.Current.CancellationToken);
+        releaseIncumbent.TrySetResult();
+
+        Assert.Equal(0, await supervisorTask);
+        Assert.DoesNotContain(store.Events, evt => evt.Status == "unexpected");
+        Assert.Contains(conductEvents, detail =>
+            detail.Contains("phase=readiness", StringComparison.Ordinal) &&
+            detail.Contains("staged spawn failed", StringComparison.Ordinal));
+    }
+
+    [Xunit.Fact]
+    public async Task UnconfirmedSuccessorTermination_SuppressesFallback()
+    {
+        var store = new RecordingRunEventStore();
+        var conductEvents = new List<string>();
+        var prepared = new ConductorPreparedSuccessor(
+            "C:\\staged-run",
+            "C:\\staged-run\\Mcg.AgentOrchestrator.App.dll",
+            "new-head",
+            "new-head",
+            "LOOP_START selfCheck=true");
+        var host = new ScriptedSupervisorProcessHost(
+            (request, _, _) =>
+            {
+                ConductorContinuityExitArtifact.Write(
+                    request.ExitArtifactPath,
+                    new ConductorContinuityExitArtifact("max-duration", 1, 1, RestartRequested: true));
+                return Task.FromResult(new ConductorSupervisorProcessResult(0, 671));
+            },
+            (_, _, cancellationToken) =>
+            {
+                var stopped = new TaskCompletionSource<ConductorSupervisorProcessResult>(
+                    TaskCreationOptions.RunContinuationsAsynchronously);
+                cancellationToken.Register(() => stopped.TrySetResult(
+                    new ConductorSupervisorProcessResult(-1, 672, TerminationConfirmed: false)));
+                return stopped.Task;
+            });
+        var supervisor = new ConductorContinuitySupervisor(
+            host,
+            store,
+            delay: (_, _) => Task.CompletedTask,
+            stageSuccessor: _ => prepared,
+            appendConductEvent: (_, _, detail) => conductEvents.Add(detail));
+
+        var exitCode = await supervisor.RunAsync(
+            ["conduct", "--loop", "--max-duration", "60"],
+            "C:\\repo",
+            Path.Combine(Path.GetTempPath(), $"mcg-continuity-{Guid.NewGuid():N}"),
+            "default",
+            "default");
+
+        Assert.Equal(1, exitCode);
+        Assert.Equal(2, host.Requests.Count);
+        Assert.Contains(conductEvents, detail =>
+            detail.Contains("terminationConfirmed=false", StringComparison.Ordinal) &&
+            detail.Contains("fallbackSuppressed=true", StringComparison.Ordinal));
+    }
+
+    [Xunit.Fact]
+    public async Task StagingFailure_KeepsIncumbentCommandAndEmitsTypedFailure()
+    {
+        var store = new RecordingRunEventStore();
+        var conductEvents = new List<string>();
+        var incumbentSeen = new TaskCompletionSource<ConductorSupervisorProcessRequest>(
+            TaskCreationOptions.RunContinuationsAsynchronously);
+        var releaseIncumbent = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        Task<int>? supervisorTask = null;
+        var host = new ScriptedSupervisorProcessHost(
+            async (request, _, _) =>
+            {
+                incumbentSeen.TrySetResult(request);
+                await releaseIncumbent.Task;
+                ConductorContinuityExitArtifact.Write(
+                    request.ExitArtifactPath,
+                    new ConductorContinuityExitArtifact("max-duration", 1, 1, RestartRequested: true));
+                return new ConductorSupervisorProcessResult(0, 701);
+            },
+            (request, _, _) =>
+            {
+                Assert.NotNull(supervisorTask);
+                Assert.False(supervisorTask.IsCompleted);
+                Assert.Null(request.CommandPrefix);
+                ConductorContinuityExitArtifact.Write(
+                    request.ExitArtifactPath,
+                    new ConductorContinuityExitArtifact("stop-file", 2, 0, RestartRequested: false));
+                return Task.FromResult(new ConductorSupervisorProcessResult(0, 702));
+            });
+        var supervisor = new ConductorContinuitySupervisor(
+            host,
+            store,
+            stageSuccessor: _ => throw new ConductorSelfRelaunchPreparationException(
+                "build",
+                "build rejected HEAD"),
+            appendConductEvent: (_, _, detail) => conductEvents.Add(detail));
+
+        supervisorTask = supervisor.RunAsync(
+            ["conduct", "--loop", "--max-duration", "60"],
+            "C:\\repo",
+            Path.Combine(Path.GetTempPath(), $"mcg-continuity-{Guid.NewGuid():N}"),
+            "default",
+            "default");
+        await incumbentSeen.Task.WaitAsync(TestContext.Current.CancellationToken);
+        releaseIncumbent.TrySetResult();
+
+        Assert.Equal(0, await supervisorTask);
+        Assert.Contains(conductEvents, detail =>
+            detail.Contains("LOOP_HANDOFF_FAILED", StringComparison.Ordinal) &&
+            detail.Contains("phase=build", StringComparison.Ordinal) &&
+            detail.Contains("build rejected HEAD", StringComparison.Ordinal));
+    }
+
+    [Xunit.Fact]
+    public async Task RepeatedStagingFailure_DisablesStagingAfterCap()
+    {
+        var store = new RecordingRunEventStore();
+        var stageCalls = 0;
+        var host = new ScriptedSupervisorProcessHost((request, index) =>
+        {
+            var shouldStop = index == 3;
+            ConductorContinuityExitArtifact.Write(
+                request.ExitArtifactPath,
+                new ConductorContinuityExitArtifact(
+                    shouldStop ? "stop-file" : "max-duration",
+                    index + 1,
+                    shouldStop ? 0 : 1,
+                    RestartRequested: !shouldStop));
+            return new ConductorSupervisorProcessResult(0, 800 + index);
+        });
+        var supervisor = new ConductorContinuitySupervisor(
+            host,
+            store,
+            stageSuccessor: _ =>
+            {
+                stageCalls++;
+                throw new ConductorSelfRelaunchPreparationException("build", "broken tree");
+            },
+            maxConsecutiveStagingFailures: 2);
+
+        var exitCode = await supervisor.RunAsync(
+            ["conduct", "--loop", "--max-duration", "60"],
+            "C:\\repo",
+            Path.Combine(Path.GetTempPath(), $"mcg-continuity-{Guid.NewGuid():N}"),
+            "default",
+            "default");
+
+        Assert.Equal(0, exitCode);
+        Assert.Equal(2, stageCalls);
+        Assert.Equal(4, host.Requests.Count);
+        Assert.Contains(store.Events, evt =>
+            evt.Operation == "handoff" &&
+            evt.Detail.Contains("staging-disabled", StringComparison.Ordinal));
+    }
+
+    private sealed class ScriptedSupervisorProcessHost : IConductorSupervisorProcessHost
+    {
+        private readonly Func<
+            ConductorSupervisorProcessRequest,
+            int,
+            CancellationToken,
+            Task<ConductorSupervisorProcessResult>>[] _steps;
+
+        public ScriptedSupervisorProcessHost(
+            params Func<ConductorSupervisorProcessRequest, int, ConductorSupervisorProcessResult>[] steps)
+            : this(steps.Select(step =>
+                new Func<
+                    ConductorSupervisorProcessRequest,
+                    int,
+                    CancellationToken,
+                    Task<ConductorSupervisorProcessResult>>(
+                    (request, index, _) => Task.FromResult(step(request, index)))).ToArray())
+        {
+        }
+
+        public ScriptedSupervisorProcessHost(
+            params Func<
+                ConductorSupervisorProcessRequest,
+                int,
+                CancellationToken,
+                Task<ConductorSupervisorProcessResult>>[] steps)
+        {
+            _steps = steps;
+        }
+
         public List<ConductorSupervisorProcessRequest> Requests { get; } = [];
 
         public Task<ConductorSupervisorProcessResult> RunAsync(
@@ -250,9 +621,26 @@ public sealed class ConductorContinuitySupervisorTests
             cancellationToken.ThrowIfCancellationRequested();
             var index = Requests.Count;
             Requests.Add(request);
-            var step = steps[Math.Min(index, steps.Length - 1)];
-            return Task.FromResult(step(request, index));
+            var step = _steps[Math.Min(index, _steps.Length - 1)];
+            return step(request, index, cancellationToken);
         }
+    }
+
+    private static IReadOnlyList<string> BuildCommandPrefixOutputProbe()
+    {
+        if (OperatingSystem.IsWindows())
+        {
+            return
+            [
+                Environment.GetEnvironmentVariable("ComSpec") ?? "cmd.exe",
+                "/d",
+                "/s",
+                "/c",
+                "echo prefix-probe"
+            ];
+        }
+
+        return ["/bin/sh", "-c", "printf '%s\\n' prefix-probe"];
     }
 
     private static System.Diagnostics.ProcessStartInfo BuildOutputProbeStartInfo()
