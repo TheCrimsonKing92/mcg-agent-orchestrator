@@ -108,7 +108,8 @@ internal sealed record ConductorParallelAcceptanceAttempt(
     string? FocusedEvidenceRequestDisposition = null,
     string? FindingRoundFingerprint = null,
     IReadOnlyList<FindingEvidenceRequestDisposition>? FocusedEvidenceRequestDispositions = null,
-    string? FocusedEvidenceReceiptId = null)
+    string? FocusedEvidenceReceiptId = null,
+    string? PolicyJson = null)
 {
     public string CandidateKey => $"{GoalId}:{BranchHeadSha ?? "unknown-branch"}:{MainHeadSha ?? "unknown-main"}";
 }
@@ -982,9 +983,7 @@ internal sealed class ConductorParallelAcceptanceAttemptCoordinator
                 profiles,
                 NullOperatorChannel.Instance,
                 providers);
-            var policy = ConductorAutonomyPolicy.All.FirstOrDefault(candidatePolicy =>
-                    string.Equals(candidatePolicy.Name, attempt.PolicyName, StringComparison.OrdinalIgnoreCase))
-                ?? ConductorAutonomyPolicy.Default;
+            var policy = ResolveAttemptPolicy(attempt);
             var candidate = ConductorParallelAcceptanceCandidate.Create(
                 goal,
                 attempt.SlotIndex,
@@ -1059,6 +1058,25 @@ internal sealed class ConductorParallelAcceptanceAttemptCoordinator
 
             return 1;
         }
+    }
+
+    internal static ConductorAutonomyPolicy ResolveAttemptPolicy(ConductorParallelAcceptanceAttempt attempt)
+    {
+        if (!string.IsNullOrWhiteSpace(attempt.PolicyJson))
+        {
+            try
+            {
+                return ConductorAutonomyPolicy.ParseJson(attempt.PolicyJson, attempt.MetadataPath);
+            }
+            catch (FormatException)
+            {
+                // Preserve compatibility with old or damaged attempt metadata by using the prior name fallback.
+            }
+        }
+
+        return ConductorAutonomyPolicy.All.FirstOrDefault(candidatePolicy =>
+                string.Equals(candidatePolicy.Name, attempt.PolicyName, StringComparison.OrdinalIgnoreCase))
+            ?? ConductorAutonomyPolicy.Default;
     }
 
     private void RunAttempt(
@@ -1719,7 +1737,8 @@ internal sealed class ConductorParallelAcceptanceAttemptCoordinator
                 .Select(disposition => disposition.Disposition)
                 .FirstOrDefault(disposition => disposition.StartsWith("executed-", StringComparison.Ordinal)),
             FindingRoundFingerprint: requestContext?.FindingRoundFingerprint,
-            FocusedEvidenceRequestDispositions: requestContext?.RequestDispositions);
+            FocusedEvidenceRequestDispositions: requestContext?.RequestDispositions,
+            PolicyJson: policy.ToJson());
     }
 
     private static int AllocateOrdinal(string directory)
