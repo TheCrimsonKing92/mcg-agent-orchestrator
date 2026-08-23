@@ -23,12 +23,14 @@ internal static class SourceSizeRatchet
             // Raised for goal a22c7293: slice admission must run where all dispatch paths converge.
             // Raised for goal 8b6de491: the slice-batch parent execution guard must be consulted where the
             // driver decides a goal's advance, which is the only point holding both the goal and the guard.
-            new SourceSizeCeiling("src/Mcg.AgentOrchestrator.App/Orchestration/ConductorDriver.cs", 6191),
+            // Goal 0e0aa816 extracted acceptance landing to its own partial-class source file.
+            new SourceSizeCeiling("src/Mcg.AgentOrchestrator.App/Orchestration/ConductorDriver.cs", 6139),
             // Raised for goal dadadfac: set-aside re-admission must be decided where the loop already holds
             // the goal, its recorded set-aside entry, and the current sweep blockers together.
             // Raised for goal 289b469d: registration-fault hold/escalation must be decided at the existing
             // parallel acceptance completion seam; parsing and durable counting remain in its collaborator.
-            new SourceSizeCeiling("src/Mcg.AgentOrchestrator.App/Orchestration/ConductorBatchLoop.cs", 5148),
+            // Goal 0e0aa816 extracted the fallback acceptance-start transition to its own partial-class source file.
+            new SourceSizeCeiling("src/Mcg.AgentOrchestrator.App/Orchestration/ConductorBatchLoop.cs", 5132),
             // Raised for goal 18afe5f2: missing-build-evidence rejection and commit suppression
             // must run where parsed worker results and authoritative changed paths meet. Raised again
             // for goal 0d39b5a3, which adds the narrow Planner sample launch and completion-selection

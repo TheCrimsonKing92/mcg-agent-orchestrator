@@ -21,7 +21,7 @@ internal readonly record struct ParallelAcceptanceOldestWaiterObservation(
         ConsecutiveTicks >= ConductorBatchLoop.ParallelAcceptanceOldestWaiterStallTickThreshold;
 }
 
-internal sealed class ConductorBatchLoop
+internal sealed partial class ConductorBatchLoop
 {
     internal const string StopFileName = ".conduct-stop";
     internal const int DefaultMaxVerifyRetries = 2;
@@ -3361,30 +3361,6 @@ internal sealed class ConductorBatchLoop
         IReadOnlyList<ConductorAcceptanceCohortPairExclusion> exclusions) =>
         string.Join(',', exclusions.Select(exclusion =>
             $"{exclusion.FirstGoalId.Value[..8]}:{exclusion.SecondGoalId.Value[..8]}:{exclusion.Reason}"));
-
-    internal static bool MarkParallelAcceptanceStarted(
-        AgentOrchestratorKernel kernel,
-        Goal goal,
-        ConductorParallelAcceptanceAttempt attempt,
-        int tick)
-    {
-        if (goal.Status == GoalStatus.Completed &&
-            !kernel.NormalizePrematureCompletedGoalToVerified(
-                goal.Id,
-                $"Batch loop tick {tick}: background acceptance gate {attempt.AttemptId} repaired premature Completed state before verification."))
-        {
-            return false;
-        }
-
-        if (goal.Status != GoalStatus.Verified)
-        {
-            return false;
-        }
-
-        return kernel.BeginGoalAcceptanceVerification(
-            goal.Id,
-            $"Batch loop tick {tick}: acceptance gate record {attempt.AttemptId} is running in background; goal entered Verifying.");
-    }
 
     internal static void ReconcileParallelAcceptanceTerminalState(
         AgentOrchestratorKernel kernel,
