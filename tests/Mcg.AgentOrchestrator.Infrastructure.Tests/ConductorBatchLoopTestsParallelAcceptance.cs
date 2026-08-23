@@ -2116,8 +2116,8 @@ public sealed class ConductorBatchLoopTestsParallelAcceptance : ConductorBatchLo
             Assert.Equal(1, summary.Escalated);
             Assert.Single(escalations);
             Assert.Equal(0, latest.TransientFailureCount);
-            Assert.Equal(GoalStatus.Verifying, goal.Status);
-            Assert.Null(goal.LatestAcceptanceFailure);
+            Assert.Equal(isRegistrationFault ? GoalStatus.Verifying : GoalStatus.AcceptanceFailed, goal.Status);
+            Assert.Equal(isRegistrationFault, goal.LatestAcceptanceFailure is null);
 
             new ConductorBatchLoop().Run(
                 kernel,
@@ -2125,7 +2125,7 @@ public sealed class ConductorBatchLoopTestsParallelAcceptance : ConductorBatchLo
                 ConductorAutonomyPolicy.Conservative,
                 NoStopPath(),
                 maxIterations: 1);
-            Assert.Equal(isRegistrationFault ? 1 : 2, acceptanceAttempts);
+            Assert.Equal(1, acceptanceAttempts);
         }
         finally
         {

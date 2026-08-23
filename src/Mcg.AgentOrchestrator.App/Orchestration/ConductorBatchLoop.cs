@@ -3412,10 +3412,10 @@ internal sealed class ConductorBatchLoop
             return;
         }
 
-        if (run.Acceptance is null)
+        if (run.Acceptance is null && ConductorParallelAcceptanceAttemptCoordinator
+                .ClassifyWorkerRegistrationFault(run.Exception) != WorkerRegistrationFaultDisposition.None)
         {
-            // An apparatus fault produced no candidate verdict. Keep durable goal state distinct from
-            // a verdict-bearing acceptance failure; the caller owns hold-versus-escalate disposition.
+            // Keep classified registration faults distinct; unclassified faults retain AcceptanceFailed.
             return;
         }
 
