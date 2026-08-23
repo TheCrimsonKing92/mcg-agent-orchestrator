@@ -162,6 +162,8 @@ public sealed class ConductorBatchLoopTestsFaultIsolationEligibility : Conductor
 
         var attempts = new Dictionary<GoalId, int>();
         var reapedGoalIds = new List<GoalId>();
+        const string failureMessage =
+            "Advance failed at stage=owned-process-group-attachment native_error_code=5";
         var healthyLanded = false;
         var healthyRecorded = false;
         var healthyCleanedUp = false;
@@ -182,7 +184,7 @@ public sealed class ConductorBatchLoopTestsFaultIsolationEligibility : Conductor
                     if (attempt == 1)
                         return false;
 
-                    throw new UnauthorizedAccessException("Access to retry path denied.");
+                    throw new UnauthorizedAccessException(failureMessage);
                 }
 
                 return true;
@@ -239,8 +241,12 @@ public sealed class ConductorBatchLoopTestsFaultIsolationEligibility : Conductor
         Assert.Equal([faultyGoal.Id], reapedGoalIds);
         Assert.Contains(ticks.SelectMany(tick => tick.ProgressLines ?? []), line =>
             line.StartsWith(
-                $"GOAL goal={faultyGoal.Id.Value[..8]} result=escalated reason=Access_to_retry_path_denied.",
-                StringComparison.Ordinal));
+                $"GOAL goal={faultyGoal.Id.Value[..8]} result=escalated reason=",
+                StringComparison.Ordinal) &&
+            line.Contains("native_error_code=5", StringComparison.Ordinal));
+        Assert.Contains(kernel.GetGoal(faultyGoal.Id).Timeline, item =>
+            item.Kind == ProgressKind.GoalPolicyDecision &&
+            item.Message.Contains("native_error_code=5", StringComparison.Ordinal));
     }
 
     [Xunit.Fact(DisplayName = "BatchLoop_FaultIsolation_TypedCriticalRetryAdvanceThrowStillTerminatesLoop")]
