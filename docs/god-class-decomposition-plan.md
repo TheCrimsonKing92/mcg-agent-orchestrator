@@ -258,7 +258,7 @@ Wave 2 item 3 places the commit-on-behalf boundary at `DispatchWorktreeCommitter
 | `src/Mcg.AgentOrchestrator.Infrastructure/Workspaces/GoalAcceptanceVerifier.cs` | 8779 |
 | `src/Mcg.AgentOrchestrator.App/Orchestration/ConductorDriver.cs` | 6178 |
 | `src/Mcg.AgentOrchestrator.App/Orchestration/ConductorBatchLoop.cs` | 4974 |
-| `src/Mcg.AgentOrchestrator.Infrastructure/Processes/BackgroundDispatchRunner.cs` | 3222 |
+| `src/Mcg.AgentOrchestrator.Infrastructure/Processes/BackgroundDispatchRunner.cs` | 3262 |
 | `src/Mcg.AgentOrchestrator.Infrastructure/Workers/WorkerProfileDispatcher.cs` | 3220 |
 | `src/Mcg.AgentOrchestrator.App/Cli/CliPersistentStateRunner.cs` | 4821 |
 | `tests/Mcg.AgentOrchestrator.Infrastructure.Tests/GoalAcceptanceVerifierTests.cs` | 1566 |
@@ -281,6 +281,8 @@ When extraction shrinks a guarded file, lower that row in the same change. If gr
 ### Recorded row raises
 
 Goal `18afe5f2` raised the `BackgroundDispatchRunner.cs` row from 3499 to 3525 because missing-build-evidence rejection and commit suppression must run where parsed worker results and authoritative changed paths meet.
+
+Goal `6a3d0fd4` raised the `BackgroundDispatchRunner.cs` row from 3222 to 3262 because the bounded wait for planner samples must run between the primary dispatch completing and candidate collection, which is the only point where both the primary's exit artifact and the sample artifact set are in scope.
 
 Goal `46ff9f83` raised the `ConductorBatchLoopTestsParallelAcceptance.cs` row from 4355 to 4473 for the unequal logical-width/build-permit control and the typed maximum diagnostic. The existing parallel-acceptance test class owns both conductor admission and physical permit characterization, so extracting these controls would split the contract they compare.
 

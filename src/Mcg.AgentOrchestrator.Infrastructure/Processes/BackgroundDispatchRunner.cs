@@ -504,6 +504,46 @@ public sealed class BackgroundDispatchRunner
         }
     }
 
+    private DispatchRefreshOutcome? TryBuildPlannerSampleHold(
+        TaskSpec task,
+        TaskProcessRecord processRecord)
+    {
+        if (task.RequiredRole != AgentRole.Planner ||
+            task.LastDispatch?.PlannerSampleCount is not > 1 ||
+            !DispatchExitArtifacts.TryRead(processRecord.ExitCodePath, out var primaryExit) ||
+            !PlannerSampleDispatcher.AnySampleUnresolved(
+                processRecord.StandardOutputPath,
+                task.LastDispatch.PlannerSampleCount))
+        {
+            return null;
+        }
+
+        var wait = PlannerSampleDispatcher.ResolveSampleWait(processRecord.StartedAt, primaryExit);
+        var deadline = primaryExit.RecordedAt + wait;
+        if (_clock.UtcNow < deadline)
+        {
+            return new DispatchRefreshOutcome(
+                processRecord,
+                null,
+                RecoveryDecision: new DispatchRecoveryDecision(
+                    DispatchRecoveryAction.Hold,
+                    DispatchRecoveryPolicy.ToActionName(DispatchRecoveryAction.Hold),
+                    processRecord.ExitCodePath,
+                    $"Planner samples are unresolved; bounded wait ends at {deadline:O}."));
+        }
+
+        foreach (var processId in processRecord.NonBlockingProcessIds ?? [])
+        {
+            try { _tryKillOwnedProcess(processId); } catch { }
+        }
+        PlannerSampleDispatcher.RecordTimedOutSamples(
+            processRecord.StandardOutputPath,
+            task.LastDispatch.PlannerSampleCount,
+            wait,
+            deadline);
+        return null;
+    }
+
     private WorkerSandboxProvider ResolveSandboxProvider(TaskDispatchRecord dispatch)
     {
         if (IsGrokCliProfile(dispatch.WorkerName))
@@ -591,7 +631,7 @@ public sealed class BackgroundDispatchRunner
                 }
 
                 var outcome = verdict.Kind == DispatchProcessVerdictKind.CompletedFromExitFile
-                    ? BuildCompletedProcessOutcome(
+                    ? TryBuildPlannerSampleHold(task, process) ?? BuildCompletedProcessOutcome(
                         kernel,
                         goal.Id,
                         task.Id,
@@ -685,7 +725,7 @@ public sealed class BackgroundDispatchRunner
 
         if (verdict.Kind == DispatchProcessVerdictKind.CompletedFromExitFile)
         {
-            return BuildCompletedProcessOutcome(
+            return TryBuildPlannerSampleHold(task, processRecord) ?? BuildCompletedProcessOutcome(
                 kernel,
                 goalId,
                 taskId,

@@ -27,7 +27,9 @@ internal static class SourceSizeRatchet
             // call sites; the fan-out and selection behavior remain extracted into dedicated components.
             // Both goals grew this file, so this row is the measured size of the merged result, not
             // either goal's individual ceiling.
-            new SourceSizeCeiling("src/Mcg.AgentOrchestrator.Infrastructure/Processes/BackgroundDispatchRunner.cs", 3222),
+            // Goal 6a3d0fd4 raised this row to 3262 for the bounded planner-sample wait, which must run
+            // between the primary dispatch completing and candidate collection.
+            new SourceSizeCeiling("src/Mcg.AgentOrchestrator.Infrastructure/Processes/BackgroundDispatchRunner.cs", 3262),
             new SourceSizeCeiling("src/Mcg.AgentOrchestrator.Infrastructure/Workers/WorkerProfileDispatcher.cs", 3220),
             new SourceSizeCeiling("src/Mcg.AgentOrchestrator.App/Cli/CliPersistentStateRunner.cs", 4821),
             new SourceSizeCeiling("tests/Mcg.AgentOrchestrator.Infrastructure.Tests/GoalAcceptanceVerifierTests.cs", 1566),

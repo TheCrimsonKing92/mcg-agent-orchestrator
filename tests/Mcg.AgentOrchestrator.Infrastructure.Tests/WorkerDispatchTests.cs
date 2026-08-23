@@ -1929,6 +1929,8 @@ protected static void WriteSkill(string workingDirectory, string skillName)
         public DateTimeOffset UtcNow => _utcNow;
 
         public void Advance() => _utcNow = _utcNow.AddSeconds(1);
+
+        public void Advance(TimeSpan elapsed) => _utcNow = _utcNow.Add(elapsed);
     }
 
     protected sealed class CaptureDiagnosticWriter : IDispatchDiagnosticWriter

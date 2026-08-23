@@ -136,6 +136,42 @@ internal static class PlannerSampleDispatcher
         return candidates;
     }
 
+    internal static TimeSpan ResolveSampleWait(
+        DateTimeOffset primaryStartedAt,
+        DispatchExitArtifact primaryExit)
+    {
+        var primaryRuntime = primaryExit.RecordedAt - primaryStartedAt;
+        return primaryRuntime > TimeSpan.FromMinutes(1)
+            ? primaryRuntime
+            : TimeSpan.FromMinutes(1);
+    }
+
+    internal static bool AnySampleUnresolved(string primaryStandardOutputPath, int sampleCount) =>
+        CreateArtifacts(primaryStandardOutputPath, sampleCount).Any(sample =>
+            !File.Exists(sample.LaunchDiagnosticPath) &&
+            !DispatchExitArtifacts.TryRead(sample.ExitCodePath, out _));
+
+    internal static void RecordTimedOutSamples(
+        string primaryStandardOutputPath,
+        int sampleCount,
+        TimeSpan wait,
+        DateTimeOffset deadline)
+    {
+        foreach (var sample in CreateArtifacts(primaryStandardOutputPath, sampleCount))
+        {
+            if (File.Exists(sample.LaunchDiagnosticPath) ||
+                DispatchExitArtifacts.TryRead(sample.ExitCodePath, out _))
+            {
+                continue;
+            }
+
+            WriteLaunchDiagnostic(
+                sample,
+                $"Planner sample timed out after the bounded {wait:c} wait ended at {deadline:O}; " +
+                "the sample was terminated and excluded from candidate selection.");
+        }
+    }
+
     internal static void ReleaseStartGates(IEnumerable<PlannerSampleLaunch> launches)
     {
         foreach (var launch in launches)
