@@ -180,6 +180,6 @@ public sealed class GoalWorktreeTestsSeedIsolation : GoalWorktreeTestBase
 
         Assert.Fail(
             $"Seed repository '{repo}' reported no HEAD commit (exit={head.ExitCode}, stdoutLength={head.Stdout.Length}). " +
-            DescribeSeedHeadState(repo));
+            DescribeSeedHeadState(repo, head));
     }
 }

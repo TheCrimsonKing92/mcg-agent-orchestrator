@@ -779,20 +779,27 @@ public abstract class GoalWorktreeTestBase
         return (exitCode, output, error);
     }
 
-    private protected static string DescribeSeedHeadState(string repo)
+    private protected static string DescribeSeedHeadState(
+        string repo,
+        (int ExitCode, string Stdout, string Stderr) failingHead)
     {
-        var receipt = new List<string>();
+        var receipt = new List<string>
+        {
+            $"failing rev-parse --verify HEAD^{{commit}} exit={failingHead.ExitCode}",
+            $"failing rev-parse stdoutLength={failingHead.Stdout.Length} stdout={FormatReceiptValue(failingHead.Stdout)}",
+            $"failing rev-parse stderr={FormatReceiptValue(failingHead.Stderr)}",
+        };
 
         try
         {
             var head = ReadSeedHeadCommitId(repo);
-            receipt.Add($"rev-parse --verify HEAD^{{commit}} exit={head.ExitCode}");
-            receipt.Add($"rev-parse stdoutLength={head.Stdout.Length} stdout={FormatReceiptValue(head.Stdout)}");
-            receipt.Add($"rev-parse stderr={FormatReceiptValue(head.Stderr)}");
+            receipt.Add($"subsequent rev-parse --verify HEAD^{{commit}} exit={head.ExitCode}");
+            receipt.Add($"subsequent rev-parse stdoutLength={head.Stdout.Length} stdout={FormatReceiptValue(head.Stdout)}");
+            receipt.Add($"subsequent rev-parse stderr={FormatReceiptValue(head.Stderr)}");
         }
         catch (Exception ex)
         {
-            receipt.Add($"rev-parse exception={FormatReceiptException(ex)}");
+            receipt.Add($"subsequent rev-parse exception={FormatReceiptException(ex)}");
         }
 
         try
