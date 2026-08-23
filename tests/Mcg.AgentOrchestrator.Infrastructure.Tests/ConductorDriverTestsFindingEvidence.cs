@@ -777,6 +777,150 @@ public sealed class ConductorDriverTestsFindingEvidence
     }
 
     [Xunit.Fact]
+    public void UnsupportedProjectDoesNotRerunOnNextRound()
+    {
+        const string stableId = "unsupported-project";
+        var (kernel, goal) = SoftwareGoal();
+        var reviewer = goal.Tasks.Single(task => task.RequiredRole == AgentRole.Reviewer);
+        foreach (var task in goal.Tasks.Where(task => task.RequiredRole != AgentRole.Reviewer))
+        {
+            PassVerification(kernel, goal, task);
+        }
+
+        var finding = EvidenceFindingWithRequest(
+            "An unsupported project request must be replaced before it runs again.",
+            id: stableId);
+        FailReviewerNeedsWork(kernel, goal, reviewer, "focused evidence required", findings: [finding]);
+        var focusedRuns = 0;
+        var driver = MakeDriver(
+            getPreReviewEvidenceContext: _ => NoPreReviewContext("abc1234"),
+            runFocusedEvidence: (_, request) =>
+            {
+                focusedRuns++;
+                return new FocusedEvidenceRunResult(
+                    request,
+                    Accepted: false,
+                    Passed: false,
+                    Summary: "project is unsupported",
+                    Checks: [],
+                    Rejection: new FocusedEvidenceRejection(
+                        FocusedEvidenceRejectionCode.UnsupportedProject,
+                        "Infrastructure.Tests",
+                        "project is unsupported"));
+            },
+            retryTaskWithRoundKind: (goalId, taskId, message, roundKind) =>
+                kernel.RetryTask(goalId, taskId, message, retryRoundKind: roundKind),
+            recordFindingEvidenceOutcome: (goalId, taskId, findingId, outcome, receipt) =>
+                kernel.RecordFindingEvidenceOutcome(goalId, taskId, findingId, outcome, receipt));
+
+        driver.AdvanceOnce(goal, ConductorAutonomyPolicy.Permissive);
+        FailReviewerNeedsWork(kernel, goal, reviewer, "focused evidence required", findings: [finding]);
+
+        driver.AdvanceOnce(goal, ConductorAutonomyPolicy.Permissive);
+
+        Assert.Equal(1, focusedRuns);
+        var mergedFinding = reviewer.VerificationHistory.Last().MergedReviewFindings!
+            .Single(item => item.StableId == stableId);
+        Assert.Equal(FindingEvidenceNotHonouredReason.UnsupportedProject, mergedFinding.EvidenceOutcome?.Reason);
+    }
+
+    public static TheoryData<FindingEvidenceNotHonouredReason?, int> FindingEvidenceRefusalDispositionCases => new()
+    {
+        { FindingEvidenceNotHonouredReason.Unknown, 0 },
+        { FindingEvidenceNotHonouredReason.UnsupportedProject, 0 },
+        { FindingEvidenceNotHonouredReason.UnparseableSelection, 0 },
+        { FindingEvidenceNotHonouredReason.CandidateShaMissing, 1 },
+        { FindingEvidenceNotHonouredReason.ExecutorUnavailable, 1 },
+        { FindingEvidenceNotHonouredReason.SelectionApparatusFailure, 1 },
+        { FindingEvidenceNotHonouredReason.RunFailed, 1 },
+        { FindingEvidenceNotHonouredReason.SupersededByActionableRed, 0 },
+        { FindingEvidenceNotHonouredReason.PerRoundCap, 0 },
+        { null, 0 },
+        { (FindingEvidenceNotHonouredReason)int.MaxValue, 0 }
+    };
+
+    [Xunit.Theory]
+    [Xunit.MemberData(nameof(FindingEvidenceRefusalDispositionCases))]
+    public void PriorFindingEvidenceRefusalDispositionControlsNextRound(
+        FindingEvidenceNotHonouredReason? reason,
+        int expectedFocusedRuns)
+    {
+        var (kernel, goal) = SoftwareGoal();
+        var reviewer = goal.Tasks.Single(task => task.RequiredRole == AgentRole.Reviewer);
+        foreach (var task in goal.Tasks.Where(task => task.RequiredRole != AgentRole.Reviewer))
+        {
+            PassVerification(kernel, goal, task);
+        }
+
+        var finding = EvidenceFindingWithRequest(
+            "A prior refusal must control whether focused evidence is requested again.",
+            id: "prior-refusal-disposition");
+        FailReviewerNeedsWork(kernel, goal, reviewer, "focused evidence required", findings: [finding]);
+        kernel.RecordFindingEvidenceOutcome(
+            goal.Id,
+            reviewer.Id,
+            finding.StableId,
+            new FindingEvidenceOutcome(Honoured: false, Reason: reason));
+        var focusedRuns = 0;
+        var driver = MakeDriver(
+            getPreReviewEvidenceContext: _ => NoPreReviewContext("abc1234"),
+            runFocusedEvidence: (_, request) =>
+            {
+                focusedRuns++;
+                return new FocusedEvidenceRunResult(request, true, true, "focused evidence passed", []);
+            },
+            retryTask: (goalId, taskId, message) => kernel.RetryTask(goalId, taskId, message),
+            retryTaskWithRoundKind: (goalId, taskId, message, roundKind) =>
+                kernel.RetryTask(goalId, taskId, message, retryRoundKind: roundKind),
+            recordFindingEvidenceOutcome: (goalId, taskId, findingId, outcome, receipt) =>
+                kernel.RecordFindingEvidenceOutcome(goalId, taskId, findingId, outcome, receipt));
+
+        driver.AdvanceOnce(goal, ConductorAutonomyPolicy.Permissive);
+
+        Assert.Equal(expectedFocusedRuns, focusedRuns);
+    }
+
+    [Xunit.Fact]
+    public void ReceiptIdMakesPriorPermanentRefusalRetryableWithoutMatchingReceipt()
+    {
+        var (kernel, goal) = SoftwareGoal();
+        var reviewer = goal.Tasks.Single(task => task.RequiredRole == AgentRole.Reviewer);
+        foreach (var task in goal.Tasks.Where(task => task.RequiredRole != AgentRole.Reviewer))
+        {
+            PassVerification(kernel, goal, task);
+        }
+
+        var finding = EvidenceFindingWithRequest(
+            "A prior receipt id must make even a permanent refusal retryable.",
+            id: "receipt-id-priority");
+        FailReviewerNeedsWork(kernel, goal, reviewer, "focused evidence required", findings: [finding]);
+        kernel.RecordFindingEvidenceOutcome(
+            goal.Id,
+            reviewer.Id,
+            finding.StableId,
+            new FindingEvidenceOutcome(
+                Honoured: false,
+                ReceiptId: "receipt-1",
+                Reason: FindingEvidenceNotHonouredReason.UnsupportedProject));
+        var focusedRuns = 0;
+        var driver = MakeDriver(
+            getPreReviewEvidenceContext: _ => NoPreReviewContext("abc1234"),
+            runFocusedEvidence: (_, request) =>
+            {
+                focusedRuns++;
+                return new FocusedEvidenceRunResult(request, true, true, "focused evidence passed", []);
+            },
+            retryTaskWithRoundKind: (goalId, taskId, message, roundKind) =>
+                kernel.RetryTask(goalId, taskId, message, retryRoundKind: roundKind),
+            recordFindingEvidenceOutcome: (goalId, taskId, findingId, outcome, receipt) =>
+                kernel.RecordFindingEvidenceOutcome(goalId, taskId, findingId, outcome, receipt));
+
+        driver.AdvanceOnce(goal, ConductorAutonomyPolicy.Permissive);
+
+        Assert.Equal(1, focusedRuns);
+    }
+
+    [Xunit.Fact]
     public void ReceiptlessUnclassifiedEvidenceOutcomesDoNotRerun()
     {
         FindingEvidenceNotHonouredReason?[] unclassifiedReasons =
