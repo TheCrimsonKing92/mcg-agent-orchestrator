@@ -5678,7 +5678,7 @@ internal sealed partial class ConductorDriver
                     goalPrefix,
                     policy,
                     new ConductorAdvanceOutcome.Held(
-                        GoalLifecycleState.Verified,
+                        GoalLifecycleState.Verifying,
                         $"Acceptance verification running in background; attempt={decision.Attempt.AttemptId}."));
 
             case ConductorParallelAcceptanceAttemptDecisionKind.Completed:

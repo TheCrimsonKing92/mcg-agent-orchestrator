@@ -50,6 +50,8 @@ public sealed class ConductorBatchLoopTestsParallelAcceptance : ConductorBatchLo
 
             Assert.Equal(0, acceptanceRuns);
             Assert.True(result.IsHeld);
+            var held = Assert.IsType<ConductorAdvanceOutcome.Held>(result.Outcome);
+            Assert.Equal(GoalLifecycleState.Verifying, held.State);
             Assert.Equal(1, launches);
             var attempt = Assert.Single(coordinator.GetUnreconciledAttempts([goal.Id.Value]));
             Assert.Equal(ConductorParallelAcceptanceAttemptOutcome.Running, attempt.Outcome);
