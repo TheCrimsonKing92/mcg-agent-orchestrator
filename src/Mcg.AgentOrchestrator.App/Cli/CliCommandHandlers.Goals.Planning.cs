@@ -284,6 +284,14 @@ private static bool HandlePlan(CliExecutionContext context, IReadOnlyList<string
 
     if (sliceBatch)
     {
+        if (!context.Agents.Any(agent =>
+                agent.Role == AgentRole.Developer &&
+                agent.Status == AgentStatus.Available))
+        {
+            throw new InvalidOperationException(
+                "Slice-batch execution requires an available Developer agent. No goal was created.");
+        }
+
         var parent = GoalLifecycleCommands.CreateDormantGoal(
             context.Kernel,
             direction,
@@ -304,11 +312,15 @@ private static bool HandlePlan(CliExecutionContext context, IReadOnlyList<string
                 context.Providers,
                 context.EventWriter,
                 parent.Id);
-            Console.WriteLine($"Created dormant slice-batch child {child.Id.Value} for plan node {node.Id}.");
+            GoalLifecycleCommands.ActivateSliceBatchChild(context.Kernel, context.Agents, child);
+            Console.WriteLine(
+                $"Created and assigned slice-batch child {child.Id.Value} for plan node {node.Id}; it is dispatch-eligible.");
         }
 
         Console.WriteLine(
-            "Execution, child merging, and shared-gate consolidation are not enabled until the later wiring increment.");
+            "Slice-batch child execution is enabled; child merging and shared-gate consolidation remain deferred.");
+        Console.WriteLine(
+            "Each child currently runs its own acceptance gate until shared-gate consolidation is enabled.");
         return true;
     }
 

@@ -1250,6 +1250,7 @@ internal sealed class ConductorBatchLoop
 
                 TrackGoalOutcome(
                     kernel,
+                    driver,
                     goal,
                     result.Outcome,
                     _utcNow(),
@@ -2468,6 +2469,7 @@ internal sealed class ConductorBatchLoop
 
     private static void TrackGoalOutcome(
         AgentOrchestratorKernel kernel,
+        ConductorDriver driver,
         Goal goal,
         ConductorAdvanceOutcome outcome,
         DateTimeOffset observedAt,
@@ -2477,6 +2479,12 @@ internal sealed class ConductorBatchLoop
     {
         if (outcome is ConductorAdvanceOutcome.Held held)
         {
+            if (driver.SliceBatchParentExecutionGuard?.IsSliceBatchParent(goal) == true)
+            {
+                ClearGoalHold(kernel, goal, changedGoalIds);
+                return;
+            }
+
             if (held.State is GoalLifecycleState.Running
                 or GoalLifecycleState.AwaitingVerification
                 or GoalLifecycleState.Verifying)

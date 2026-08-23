@@ -256,7 +256,7 @@ Wave 2 item 3 places the commit-on-behalf boundary at `DispatchWorktreeCommitter
 | Guarded file | Seeded ceiling |
 | --- | ---: |
 | `src/Mcg.AgentOrchestrator.Infrastructure/Workspaces/GoalAcceptanceVerifier.cs` | 8779 |
-| `src/Mcg.AgentOrchestrator.App/Orchestration/ConductorDriver.cs` | 6178 |
+| `src/Mcg.AgentOrchestrator.App/Orchestration/ConductorDriver.cs` | 6191 |
 | `src/Mcg.AgentOrchestrator.App/Orchestration/ConductorBatchLoop.cs` | 4974 |
 | `src/Mcg.AgentOrchestrator.Infrastructure/Processes/BackgroundDispatchRunner.cs` | 3262 |
 | `src/Mcg.AgentOrchestrator.Infrastructure/Workers/WorkerProfileDispatcher.cs` | 3220 |
@@ -274,7 +274,7 @@ Wave 2 item 3 places the commit-on-behalf boundary at `DispatchWorktreeCommitter
 | `tests/Mcg.AgentOrchestrator.Infrastructure.Tests/CliCommandTestsPersistentRunnerCommandsAcceptance.cs` | 697 |
 | `tests/Mcg.AgentOrchestrator.Infrastructure.Tests/CliCommandTestsPersistentRunnerCommandsConductLoopHydration.cs` | 817 |
 | `tests/Mcg.AgentOrchestrator.Infrastructure.Tests/CliCommandTestsPersistentRunnerCommandsDispatchRecovery.cs` | 455 |
-| `tests/Mcg.AgentOrchestrator.Infrastructure.Tests/CliCommandTestsPersistentRunnerCommandsGoalIntakeAndReplacement.cs` | 2826 |
+| `tests/Mcg.AgentOrchestrator.Infrastructure.Tests/CliCommandTestsPersistentRunnerCommandsGoalIntakeAndReplacement.cs` | 2832 |
 | `tests/Mcg.AgentOrchestrator.Infrastructure.Tests/CliCommandTestsPersistentRunnerCommandsGoalQueriesAndLanding.cs` | 575 |
 | `tests/Mcg.AgentOrchestrator.Infrastructure.Tests/CliCommandTestsPersistentRunnerCommandsStartupAndMetadata.cs` | 275 |
 | `tests/Mcg.AgentOrchestrator.Infrastructure.Tests/WorkerDispatchTestsWorkerResultClassification.cs` | 4834 |

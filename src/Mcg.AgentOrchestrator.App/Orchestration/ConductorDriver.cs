@@ -211,6 +211,7 @@ internal sealed partial class ConductorDriver
     internal Action<GoalId>? DispatchRecordWriteSucceededSink { get; set; }
     internal Func<string?>? LandingMutationBlocker { get; set; }
     internal SliceBatchAdmissionEvaluator? SliceBatchAdmissionEvaluator { get; set; }
+    internal SliceBatchParentExecutionGuard? SliceBatchParentExecutionGuard { get; set; }
 
     internal WorkerAdmissionSnapshot GetWorkerAdmissionSnapshot(ConductorAutonomyPolicy policy)
     {
@@ -967,6 +968,7 @@ internal sealed partial class ConductorDriver
                     : GoalAcceptanceEvidenceBundleBuilder.GetChangedFiles(worktreePath);
             },
             kernel.RecordGoalPolicyDecision);
+        SliceBatchParentExecutionGuard = new SliceBatchParentExecutionGuard(() => kernel.Goals);
         _isVerificationGateSatisfied = goal => kernel.BuildVerificationGate(goal.Id).IsSatisfied;
         _gateReadyCandidateProjector = GateReadyCandidateProjector.CreateForRepository(dir);
         _getPreReviewEvidenceContext = goal =>
@@ -1362,6 +1364,7 @@ internal sealed partial class ConductorDriver
     internal void BeginTick()
     {
         _buildServerShutdownRanThisTick = false;
+        SliceBatchParentExecutionGuard?.BeginTick();
         SliceBatchAdmissionEvaluator?.BeginTick();
     }
 
@@ -1436,6 +1439,16 @@ internal sealed partial class ConductorDriver
 
         if (state == GoalLifecycleState.CleanedUp)
             return MakeResult(goalId, goalPrefix, policy, new ConductorAdvanceOutcome.Done(state));
+
+        if (state is GoalLifecycleState.Created or GoalLifecycleState.WorkspaceReady or GoalLifecycleState.Dispatched &&
+            SliceBatchParentExecutionGuard?.TryDescribeHold(goal) is { } sliceBatchParentHold)
+        {
+            return MakeResult(
+                goalId,
+                goalPrefix,
+                policy,
+                new ConductorAdvanceOutcome.Held(state, sliceBatchParentHold));
+        }
 
         // Empty stdout from a subscription worker means the CLI never produced a worker verdict. Treat
         // it as provider/startup flake, retry on a dedicated budget, and only escalate after all bounded
