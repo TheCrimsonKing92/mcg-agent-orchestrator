@@ -2339,6 +2339,79 @@ public sealed class DispatchExecutionTests
             evt.TaskId == reviewer.Id && evt.Kind == ProgressKind.TaskCompleted);
     }
 
+    [Xunit.Fact]
+    public void Reviewer_ResolveAndReplaceSameAnchor_KeepsNeedsWorkReportable()
+    {
+        var clock = new FakeClock();
+        var kernel = new AgentOrchestratorKernel(clock);
+        var reviewer = new TaskSpec(TaskId.New(), "Review result", AgentRole.Reviewer);
+        var goal = kernel.CreateGoal("Keep a replacement finding reportable", [reviewer]);
+        kernel.ActivateGoal(goal.Id, DefaultAgents());
+        var anchor = new ReviewFindingLocation("src/A.cs", "A.Run", "guard");
+
+        kernel.RecordTaskDispatch(goal.Id, reviewer.Id, new TaskDispatchRecord(
+            "codex-cli", "review-1", "C:\\repo", clock.UtcNow, BaseCommit: "prior-commit"));
+        var firstRound = StructuredReviewerResult(
+            "needs-work",
+            """[{"stable_id":"F-A","state":"open","location":{"file":"src/A.cs","region":"A.Run","hunk":"guard"},"description":"Original issue.","severity":"blocking"}]""",
+            "F-A - Original issue.");
+        kernel.RecordDispatchExecutionResult(goal.Id, reviewer.Id, new TaskVerificationRecord(
+            "review-1",
+            "C:\\repo",
+            1,
+            firstRound,
+            string.Empty,
+            clock.UtcNow,
+            WorkerResultPresent: true));
+
+        clock.Advance();
+        kernel.RetryTask(goal.Id, reviewer.Id, "review the updated candidate");
+        kernel.RecordTaskDispatch(goal.Id, reviewer.Id, new TaskDispatchRecord(
+            "codex-cli",
+            "review-2",
+            "C:\\repo",
+            clock.UtcNow,
+            BaseCommit: "current-commit",
+            ReviewFindingTouchedAnchors: [anchor]));
+        var secondRound = StructuredReviewerResult(
+            "needs-work",
+            """[{"stable_id":"F-A","state":"resolved","location":{"file":"src/A.cs","region":"A.Run","hunk":"guard"},"description":"Original issue resolved.","severity":"blocking"},{"stable_id":"F-B","state":"open","location":{"file":"src/A.cs","region":"A.Run","hunk":"guard"},"description":"Different issue at the same anchor.","severity":"blocking"}]""",
+            "F-B - Different issue at the same anchor.");
+
+        kernel.RecordDispatchExecutionResult(goal.Id, reviewer.Id, new TaskVerificationRecord(
+            "review-2",
+            "C:\\repo",
+            1,
+            secondRound,
+            string.Empty,
+            clock.UtcNow,
+            WorkerResultPresent: true));
+
+        Assert.Equal(WorkTaskStatus.Failed, reviewer.Status);
+        Assert.DoesNotContain(goal.Timeline, evt =>
+            evt.TaskId == reviewer.Id &&
+            evt.Message.Contains(
+                "zero open blocking structured findings requires verdict: pass",
+                StringComparison.Ordinal));
+        Assert.Null(reviewer.LastVerification!.ReviewFindingContractViolation);
+        Assert.Collection(
+            reviewer.LastVerification.MergedReviewFindings!,
+            finding =>
+            {
+                Assert.Equal("F-A", finding.StableId);
+                Assert.Equal(ReviewFindingState.Resolved, finding.State);
+            },
+            finding =>
+            {
+                Assert.Equal("F-B", finding.StableId);
+                Assert.Equal(ReviewFindingState.Open, finding.State);
+            });
+        Assert.Contains(goal.Timeline, evt =>
+            evt.TaskId == reviewer.Id &&
+            evt.Kind == ProgressKind.TaskFailed &&
+            evt.Message.Contains("F-B", StringComparison.Ordinal));
+    }
+
     [Xunit.Fact(DisplayName = "RecordDispatchExecutionResult_fails_nonzero_worker_result_blocker_before_subscription_retry")]
     public void RecordDispatchExecutionResultFailsNonzeroWorkerResultBlockerBeforeSubscriptionRetry()
 {
