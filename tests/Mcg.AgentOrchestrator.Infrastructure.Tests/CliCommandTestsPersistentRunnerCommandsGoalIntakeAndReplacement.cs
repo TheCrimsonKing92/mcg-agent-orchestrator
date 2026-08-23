@@ -295,7 +295,13 @@ public sealed class CliCommandTestsPersistentRunnerCommandsGoalIntakeAndReplacem
             AgentRole.Planner,
             new ModelProfile("Fake", "fake-plan-model", ModelCapability.Text, SubscriptionMode.ApiKey),
             ExecutionPolicy: AgentExecutionPolicy.ApiOnly);
-        IReadOnlyList<AgentDefinition> agents = [plannerAgent];
+        var developerAgent = new AgentDefinition(
+            AgentId.New(),
+            "Test-Developer",
+            AgentRole.Developer,
+            new ModelProfile("Fake", "fake-dev-model", ModelCapability.Text, SubscriptionMode.ApiKey),
+            ExecutionPolicy: AgentExecutionPolicy.ApiOnly);
+        IReadOnlyList<AgentDefinition> agents = [plannerAgent, developerAgent];
         var providers = new InMemoryModelProviderRegistry([
             new FakeSmokeProvider(plannerOutput, providerName: "Fake")
         ]);

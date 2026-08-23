@@ -160,8 +160,8 @@ public sealed class GoalDagPlanTests
         Assert.True(ex.Message.Contains("validation error", StringComparison.OrdinalIgnoreCase));
     }
 
-    [Xunit.Fact(DisplayName = "Cli_Plan_SliceBatch_Confirm_CreatesDormantParentAndConcurrentChildren")]
-    public void CliPlanSliceBatchConfirmCreatesDormantParentAndConcurrentChildren()
+    [Xunit.Fact(DisplayName = "Cli_Plan_SliceBatch_Confirm_CreatesDormantParentAndActiveChildren")]
+    public void CliPlanSliceBatchConfirmCreatesDormantParentAndActiveChildren()
     {
         var (kernel, workspace, agents, providers) = BuildSliceBatchTestContext(ThreeSliceBatchJson);
         var profiles = WorkerProfileCatalog.Default();
@@ -183,14 +183,20 @@ public sealed class GoalDagPlanTests
 
         var children = kernel.Goals.Where(goal => goal.SliceBatchParentId == parent.Id).ToArray();
         Assert.Equal(3, children.Length);
+        Assert.Equal(GoalStatus.Draft, parent.Status);
+        Assert.All(parent.Tasks, task => Assert.Null(task.AssignedAgentId));
         Assert.All(kernel.Goals, goal =>
         {
-            Assert.Equal(GoalStatus.Draft, goal.Status);
             Assert.Empty(goal.DependsOn);
-            Assert.All(goal.Tasks, task => Assert.Null(task.AssignedAgentId));
             Assert.True(GoalRefinementWorkCoordinator.HasPendingWork(goal));
         });
-        Assert.All(children, child => Assert.Equal(AgentRole.Developer, Assert.Single(child.Tasks).RequiredRole));
+        Assert.All(children, child =>
+        {
+            Assert.Equal(GoalStatus.Active, child.Status);
+            var task = Assert.Single(child.Tasks);
+            Assert.Equal(AgentRole.Developer, task.RequiredRole);
+            Assert.NotNull(task.AssignedAgentId);
+        });
 
         var restored = AgentOrchestratorKernel.FromSnapshot(kernel.ExportSnapshot());
         Assert.All(
@@ -218,13 +224,42 @@ public sealed class GoalDagPlanTests
 
         Assert.Contains($"parent {parent.Id.Value}", output, StringComparison.Ordinal);
         Assert.All(children, child => Assert.Contains(child.Id.Value, output, StringComparison.Ordinal));
-        Assert.Contains("not enabled until the later wiring increment", output, StringComparison.OrdinalIgnoreCase);
+        Assert.Contains("child execution is enabled", output, StringComparison.OrdinalIgnoreCase);
+        Assert.Contains("each child currently runs its own acceptance gate", output, StringComparison.OrdinalIgnoreCase);
+    }
+
+    [Xunit.Fact]
+    public void CliPlanSliceBatchWithoutDeveloperRejectsAtomically()
+    {
+        var (kernel, workspace, configuredAgents, providers) = BuildSliceBatchTestContext(ThreeSliceBatchJson);
+        IReadOnlyList<AgentDefinition> agents = configuredAgents
+            .Where(agent => agent.Role != AgentRole.Developer)
+            .ToArray();
+        var profiles = WorkerProfileCatalog.Default();
+        Goal? currentGoal = null;
+
+        var exception = Assert.Throws<InvalidOperationException>(() =>
+            CaptureConsole(() => CliCommandDispatcher.ExecuteCommand(
+                ["plan", "Implement three disjoint feature slices", "--slice-batch", "--confirm-plan"],
+                kernel,
+                workspace,
+                ref agents,
+                providers,
+                ref profiles,
+                ref currentGoal)));
+
+        Assert.Empty(kernel.Goals);
+        Assert.Contains("available Developer agent", exception.Message, StringComparison.Ordinal);
+        Assert.Contains("No goal was created", exception.Message, StringComparison.Ordinal);
     }
 
     [Xunit.Fact(DisplayName = "Cli_Plan_SliceBatch_Preview_IsDormantAndDoesNotMutate")]
     public void CliPlanSliceBatchPreviewIsDormantAndDoesNotMutate()
     {
-        var (kernel, workspace, agents, providers) = BuildSliceBatchTestContext(ThreeSliceBatchJson);
+        var (kernel, workspace, configuredAgents, providers) = BuildSliceBatchTestContext(ThreeSliceBatchJson);
+        IReadOnlyList<AgentDefinition> agents = configuredAgents
+            .Where(agent => agent.Role != AgentRole.Developer)
+            .ToArray();
         var profiles = WorkerProfileCatalog.Default();
         Goal? currentGoal = null;
 

@@ -159,6 +159,19 @@ internal static class GoalLifecycleCommands
         return goal;
     }
 
+    public static void ActivateSliceBatchChild(
+        AgentOrchestratorKernel kernel,
+        IReadOnlyList<AgentDefinition> agents,
+        Goal child)
+    {
+        var delegation = kernel.ActivateGoal(child.Id, agents);
+        if (delegation.Assignments.Count == 0)
+        {
+            throw new InvalidOperationException(
+                $"Slice-batch child '{child.Id.Value}' could not be assigned and remains dormant.");
+        }
+    }
+
     public static Goal CreateActivateAndHandoffGoal(
         AgentOrchestratorKernel kernel,
         IReadOnlyList<AgentDefinition> agents,
