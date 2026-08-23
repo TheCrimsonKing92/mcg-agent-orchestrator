@@ -2656,7 +2656,7 @@ internal sealed class ConductorParallelAcceptanceAttemptCoordinator
             : ClassifyWorkerRegistrationFault(message);
     }
 
-    private static string? WorkerRegistrationFaultMessage(Exception? exception)
+    internal static string? WorkerRegistrationFaultMessage(Exception? exception)
     {
         const int MaxInnerExceptionDepth = 8;
         for (var depth = 0; exception is not null && depth < MaxInnerExceptionDepth; depth++, exception = exception.InnerException)

@@ -4109,14 +4109,25 @@ internal sealed class ConductorBatchLoop
         ConductorParallelAcceptanceAttempt attempt,
         Exception exception)
     {
-        if (ConductorParallelAcceptanceAttemptCoordinator.ClassifyWorkerRegistrationFault(exception) ==
-                WorkerRegistrationFaultDisposition.BoundedRetry &&
+        var registrationFault =
+            ConductorParallelAcceptanceAttemptCoordinator.WorkerRegistrationFaultMessage(exception);
+        var disposition =
+            ConductorParallelAcceptanceAttemptCoordinator.ClassifyWorkerRegistrationFault(registrationFault);
+        if (disposition == WorkerRegistrationFaultDisposition.BoundedRetry &&
             attempt.TransientFailureCount < ParallelAcceptanceTransientFailureCap)
         {
             return ParallelAcceptanceHeld(
                 candidate,
                 policy,
-                $"Transient worker-process registration fault ({attempt.TransientFailureCount}/{ParallelAcceptanceTransientFailureCap}); retry on next conduct tick. attempt={attempt.AttemptId}: {SanitizeReason(exception.Message)}");
+                $"Transient worker-process registration fault ({attempt.TransientFailureCount}/{ParallelAcceptanceTransientFailureCap}); retry on next conduct tick. attempt={attempt.AttemptId}: {SanitizeReason(registrationFault!)}");
+        }
+
+        if (disposition is WorkerRegistrationFaultDisposition.BoundedRetry or WorkerRegistrationFaultDisposition.Terminal)
+        {
+            return driver.EscalateParallelLandingAcceptance(
+                candidate,
+                policy,
+                $"background acceptance worker-process registration fault: {SanitizeReason(registrationFault!)}");
         }
 
         return ParallelAcceptanceUnclassifiedFault(driver, candidate, policy, exception);
