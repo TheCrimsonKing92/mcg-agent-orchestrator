@@ -172,6 +172,9 @@ internal sealed partial class ConductorDriver
         _pendingRecoveredMergeTrainLandingReceipts = [];
     private Action<ConductorLandingReceipt>? _successfulLandingSink;
     private bool _buildServerShutdownRanThisTick;
+    private bool _isConductorTick;
+    private AgentOrchestratorKernel? _conductorTickKernel;
+    private int _conductorTick;
 
     internal Action<string>? PhaseTimingSink { get; set; }
     internal Action<ConductorLandingReceipt>? SuccessfulLandingSink
@@ -1360,8 +1363,13 @@ internal sealed partial class ConductorDriver
 
     internal int GetAcceptanceSlotCount(Goal goal) => _getAcceptanceSlotCount(goal);
 
-    internal void BeginTick()
+    internal void BeginTick() => BeginTick(kernel: null, tick: 0);
+
+    internal void BeginTick(AgentOrchestratorKernel? kernel, int tick)
     {
+        _isConductorTick = true;
+        _conductorTickKernel = kernel;
+        _conductorTick = tick;
         _buildServerShutdownRanThisTick = false;
         SliceBatchParentExecutionGuard?.BeginTick();
         SliceBatchAdmissionEvaluator?.BeginTick();
@@ -1724,8 +1732,7 @@ internal sealed partial class ConductorDriver
                 new ConductorAdvanceOutcome.Held(state, "Worker process running; auto-reconcile will handle completion")),
             GoalLifecycleState.AwaitingVerification => MakeResult(goalId, goalPrefix, policy,
                 new ConductorAdvanceOutcome.Held(state, "All tasks done; awaiting task verification gates — auto-reconcile will advance goal to Verified")),
-            GoalLifecycleState.Verifying => MakeResult(goalId, goalPrefix, policy,
-                new ConductorAdvanceOutcome.Held(state, "Acceptance gate running in background; reconciliation will handle terminal artifact")),
+            GoalLifecycleState.Verifying => ExecuteVerifying(goal, goalPrefix, policy),
             GoalLifecycleState.Verified => ExecuteLanding(goal, goalPrefix, policy),
             GoalLifecycleState.Merged => ExecuteRecord(goal, goalPrefix, policy),
             GoalLifecycleState.Recorded => ExecuteCleanup(goal, goalPrefix, policy),
@@ -5536,64 +5543,6 @@ internal sealed partial class ConductorDriver
             slotsBusy.BusySlots.Select(slot =>
                 $"slot-{slot.SlotIndex} pid {slot.OwnerProcessId?.ToString(System.Globalization.CultureInfo.InvariantCulture) ?? "unknown"}"));
         return $"wanted-by={slotsBusy.WantedBy}; busy slots: {slots}";
-    }
-
-    private ConductorAdvanceResult ExecuteLanding(Goal goal, string goalPrefix, ConductorAutonomyPolicy policy)
-    {
-        using var evidenceMutationLease = _tryAcquireEvidenceMutationLease(goal, "conductor:acceptance-and-land");
-        if (evidenceMutationLease is null)
-            return ReplacementEvidenceMutationHeld(goal, goalPrefix, policy);
-
-        if (!HasCompletedPassedVerificationForAllTasks(goal))
-        {
-            return MakeResult(goal.Id.Value, goalPrefix, policy,
-                new ConductorAdvanceOutcome.Held(
-                    GoalLifecycleState.Verified,
-                    "Goal is not ready for acceptance: complete every task with a passed verification before accepting this gate."));
-        }
-
-        var early = RebaseBeforeAcceptance(goal, goalPrefix, policy, applySideEffects: true, out _);
-        if (early is not null)
-        {
-            return early;
-        }
-
-        // Gate 2: acceptance verification (test suite quality check) on the integrated worktree.
-        AcceptanceVerificationSummary acceptance;
-        try
-        {
-            acceptance = _runAcceptanceVerification(goal, null, null, CancellationToken.None);
-        }
-        catch (AcceptanceInfrastructureDeferredException ex)
-        {
-            return MakeResult(goal.Id.Value, goalPrefix, policy,
-                new ConductorAdvanceOutcome.Held(
-                    GoalLifecycleState.Verified,
-                    $"Acceptance infrastructure deferred ({ex.ReasonCode}); retry on next conduct tick. {ex.Message}"));
-        }
-        catch (DotnetBuildSlotsBusyException ex)
-        {
-            return MakeResult(goal.Id.Value, goalPrefix, policy,
-                new ConductorAdvanceOutcome.Held(
-                    GoalLifecycleState.Verified,
-                    $"Stable dotnet build slots busy; retry on next conduct tick. {FormatSlotsBusy(ex.SlotsBusy)}"));
-        }
-        catch (BuildLockBlockedException ex)
-        {
-            return MakeResult(goal.Id.Value, goalPrefix, policy,
-                new ConductorAdvanceOutcome.Held(
-                    GoalLifecycleState.Verified,
-                    $"Build artifact lock blocked acceptance; retry on next conduct tick. {FormatBuildLockBlocked(ex.Attribution)}"));
-        }
-        catch (AcceptanceAttemptCancelledException ex)
-        {
-            return MakeResult(goal.Id.Value, goalPrefix, policy,
-                new ConductorAdvanceOutcome.Held(
-                    GoalLifecycleState.Verified,
-                    $"Acceptance attempt stopped by cancellation probe ({ex.Decision.Cause}); retry when the goal is eligible."));
-        }
-
-        return CompleteLandingAfterAcceptance(goal, goalPrefix, policy, acceptance);
     }
 
     private static string FormatBuildLockBlocked(BuildLockAttribution attribution)
