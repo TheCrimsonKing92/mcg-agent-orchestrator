@@ -251,7 +251,7 @@ Wave 2 item 3 places the commit-on-behalf boundary at `DispatchWorktreeCommitter
 
 ## Guarded source size ratchet
 
-`GoalAcceptanceVerifierSizeRatchetTests` runs as an ordinary acceptance-gate test and applies the literal ceilings in [`SourceSizeRatchet.SeededCeilings`](../tests/Mcg.AgentOrchestrator.Infrastructure.Tests/SourceSizeRatchet.cs). That symbol is the only authority for both the guarded set and its current ceilings; read it to inspect or change either. The authority was seeded at commit `6e7a90d7b3fe192ae4f1e430cb7452710f88b73c` on 2026-08-22 from each file's complete `File.ReadLines(path).Count()` result.
+`GoalAcceptanceVerifierSizeRatchetTests` runs as an ordinary acceptance-gate test and applies the literal ceilings in [`SourceSizeRatchet.SeededCeilings`](../src/Mcg.AgentOrchestrator.Infrastructure/Workspaces/SourceSizeRatchet.cs). That symbol is the only authority for both the guarded set and its current ceilings; read it to inspect or change either. The authority was seeded at commit `6e7a90d7b3fe192ae4f1e430cb7452710f88b73c` on 2026-08-22 from each file's complete `File.ReadLines(path).Count()` result.
 
 This section deliberately contains no current-ceiling table or guarded relative path, so a ceiling-only change cannot make the documentation stale. Numbers in the closed historical record below describe past raises and are not current authority. The acceptance-gate documentation contract requires the authority pointer above and rejects a guarded relative path reintroduced anywhere in this section, including subsections.
 

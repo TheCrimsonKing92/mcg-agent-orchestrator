@@ -4095,7 +4095,7 @@ internal sealed partial class ConductorDriver
         if (string.IsNullOrWhiteSpace(branchHeadSha) ||
             !IsCommitReachableFromMain(_executionDirectory, branchHeadSha))
         {
-            return null;
+            return RunParallelLandingSourceSizePreflight(effectiveCandidate);
         }
 
         var skippedAt = DateTimeOffset.UtcNow;
