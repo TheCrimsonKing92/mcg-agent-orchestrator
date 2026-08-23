@@ -1,4 +1,5 @@
 using System.Diagnostics;
+using System.Runtime.ExceptionServices;
 using System.Runtime.InteropServices;
 using System.Security.Cryptography;
 using Microsoft.Win32.SafeHandles;
@@ -10,20 +11,27 @@ internal sealed class DisposableTrialRoot
     private readonly IWorkerIntegrityLabeler _integrityLabeler;
     private readonly ITrialProcessInventory _processInventory;
     private readonly bool _useContainedJob;
+    private readonly bool _useLowIntegrityProcess;
 
     public DisposableTrialRoot()
-        : this(new IcaclsIntegrityLabeler(), new SystemTrialProcessInventory(), useContainedJob: true)
+        : this(
+            new IcaclsIntegrityLabeler(),
+            new SystemTrialProcessInventory(),
+            useContainedJob: true,
+            useLowIntegrityProcess: true)
     {
     }
 
     internal DisposableTrialRoot(
         IWorkerIntegrityLabeler integrityLabeler,
         ITrialProcessInventory processInventory,
-        bool useContainedJob = true)
+        bool useContainedJob = true,
+        bool useLowIntegrityProcess = true)
     {
         _integrityLabeler = integrityLabeler;
         _processInventory = processInventory;
         _useContainedJob = useContainedJob;
+        _useLowIntegrityProcess = useLowIntegrityProcess;
     }
 
     public TrialRootLease Create(TrialRootRequest request)
@@ -60,7 +68,7 @@ internal sealed class DisposableTrialRoot
                         $"Failed to apply inheritable Low integrity label to trial root '{root}'.");
                 }
 
-                containmentLevel = _useContainedJob
+                containmentLevel = _useContainedJob && _useLowIntegrityProcess
                     ? TrialContainmentLevel.WindowsLowIntegrityNoBreakawayJob
                     : TrialContainmentLevel.None;
             }
@@ -80,13 +88,26 @@ internal sealed class DisposableTrialRoot
                 protectedPaths,
                 _processInventory,
                 _useContainedJob,
+                _useLowIntegrityProcess,
                 EnsurePositive(started.Elapsed),
                 containmentLevel);
         }
-        catch
+        catch (Exception creationError)
         {
-            TryDeletePartialRoot(root);
-            throw;
+            try
+            {
+                DeletePartialRoot(root);
+            }
+            catch (Exception cleanupError)
+            {
+                throw new AggregateException(
+                    $"Trial root creation failed and cleanup also failed; a partial root may survive at '{root}'.",
+                    creationError,
+                    cleanupError);
+            }
+
+            ExceptionDispatchInfo.Capture(creationError).Throw();
+            throw new UnreachableException();
         }
     }
 
@@ -260,24 +281,19 @@ internal sealed class DisposableTrialRoot
     private static TimeSpan EnsurePositive(TimeSpan elapsed) =>
         elapsed > TimeSpan.Zero ? elapsed : TimeSpan.FromTicks(1);
 
-    private static void TryDeletePartialRoot(string root)
+    private static void DeletePartialRoot(string root)
     {
-        try
+        if (!Directory.Exists(root))
         {
-            if (Directory.Exists(root))
-            {
-                foreach (var file in Directory.EnumerateFiles(root, "*", SearchOption.AllDirectories))
-                {
-                    File.SetAttributes(file, FileAttributes.Normal);
-                }
+            return;
+        }
 
-                Directory.Delete(root, recursive: true);
-            }
-        }
-        catch
+        foreach (var file in Directory.EnumerateFiles(root, "*", SearchOption.AllDirectories))
         {
-            // The original creation failure remains authoritative.
+            File.SetAttributes(file, FileAttributes.Normal);
         }
+
+        Directory.Delete(root, recursive: true);
     }
 
     private static class NativeFileLinks
@@ -332,7 +348,7 @@ internal sealed partial class TrialRootLease
             var scriptPath = Path.Combine(HarnessStatePath, $"launch-{launchId}.ps1");
             var stdoutPath = Path.Combine(HarnessStatePath, $"launch-{launchId}.stdout.log");
             var stderrPath = Path.Combine(HarnessStatePath, $"launch-{launchId}.stderr.log");
-            var script = BuildLaunchScript(command);
+            var script = BuildLaunchScript(command, _useLowIntegrityProcess);
             File.WriteAllText(scriptPath, script);
 
             var startInfo = new ProcessStartInfo
@@ -365,12 +381,15 @@ internal sealed partial class TrialRootLease
         }
     }
 
-    private static string BuildLaunchScript(ProcessStartInfo command)
+    private static string BuildLaunchScript(ProcessStartInfo command, bool useLowIntegrityProcess)
     {
         static string Quote(string value) => "'" + value.Replace("'", "''") + "'";
 
         var arguments = string.Join(",", command.ArgumentList.Select(Quote));
-        return DispatchProcessHost.DropToLowScript + Environment.NewLine +
+        var integrityPrefix = useLowIntegrityProcess
+            ? DispatchProcessHost.DropToLowScript + Environment.NewLine
+            : string.Empty;
+        return integrityPrefix +
             "$mcgTrialArgs=@(" + arguments + ")" + Environment.NewLine +
             "& " + Quote(command.FileName) + " @mcgTrialArgs" + Environment.NewLine +
             "exit $LASTEXITCODE" + Environment.NewLine;

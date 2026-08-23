@@ -5,6 +5,9 @@ namespace Mcg.AgentOrchestrator.Infrastructure.Tests;
 [Xunit.Collection(TestCollections.ProcessSpawning)]
 public sealed class DisposableTrialRootTests(Xunit.ITestOutputHelper output)
 {
+    public static bool IsWindowsAtMediumOrHigher =>
+        DisposableTrialRootNegativeControlTests.IsWindowsAtMediumOrHigher;
+
     [Xunit.Fact]
     public void CreateProducesStandaloneCloneAndRootLocalStateThenDestroyReportsClean()
     {
@@ -49,6 +52,52 @@ public sealed class DisposableTrialRootTests(Xunit.ITestOutputHelper output)
             Xunit.Assert.Same(report, lease.Destroy());
             output.WriteLine(
                 $"create_ms={lease.CreateDuration.TotalMilliseconds:F1} destroy_ms={report.DestroyDuration.TotalMilliseconds:F1}");
+        }
+        finally
+        {
+            DeleteFixture(fixture.Root);
+        }
+    }
+
+    [Xunit.Fact(
+        Skip = "Requires Windows at Medium integrity or above.",
+        SkipUnless = nameof(IsWindowsAtMediumOrHigher))]
+    public void ChildWritesThroughEveryRootLocalEnvironmentVariable()
+    {
+        var fixture = CreateFixtureRepository();
+        try
+        {
+            using var lease = new DisposableTrialRoot().Create(new TrialRootRequest(
+                fixture.Source,
+                fixture.Commit,
+                fixture.Trials,
+                "child-environment"));
+            var variableNames = string.Join(
+                ",",
+                TrialRootEnvironment.RootLocalVariables.Select(name => $"'{name}'"));
+            var script =
+                $"$names=@({variableNames}); " +
+                "foreach ($name in $names) { " +
+                "$value=[Environment]::GetEnvironmentVariable($name); " +
+                "if ([string]::IsNullOrWhiteSpace($value)) { Write-Error \"missing:$name\"; exit 10 }; " +
+                "$marker=Join-Path $value (\"child-$name.marker\"); " +
+                "Set-Content -LiteralPath $marker -Value $name -ErrorAction Stop }; exit 0";
+            using var process = lease.Start(PowerShellCommand(script));
+
+            Xunit.Assert.True(process.Process.WaitForExit(15_000), "Trial environment writer did not exit.");
+            Xunit.Assert.Equal(0, process.Process.ExitCode);
+            foreach (var variable in TrialRootEnvironment.RootLocalVariables)
+            {
+                var directory = Xunit.Assert.IsType<string>(lease.ChildEnvironment[variable]);
+                var marker = Path.Combine(directory, $"child-{variable}.marker");
+                Xunit.Assert.True(File.Exists(marker), $"Child did not write through {variable}: {marker}");
+                Xunit.Assert.True(
+                    TrialRootEnvironment.IsBelow(lease.RootPath, marker),
+                    $"Child marker escaped the trial root: {marker}");
+            }
+
+            var report = lease.Destroy();
+            Xunit.Assert.True(report.Clean);
         }
         finally
         {
@@ -130,6 +179,17 @@ public sealed class DisposableTrialRootTests(Xunit.ITestOutputHelper output)
         var result = GitCli.Run(workingDirectory, arguments);
         Xunit.Assert.True(result.Succeeded, result.Error);
         return result.Output;
+    }
+
+    private static ProcessStartInfo PowerShellCommand(string script)
+    {
+        var command = new ProcessStartInfo { FileName = "powershell.exe" };
+        command.ArgumentList.Add("-NoLogo");
+        command.ArgumentList.Add("-NoProfile");
+        command.ArgumentList.Add("-NonInteractive");
+        command.ArgumentList.Add("-Command");
+        command.ArgumentList.Add(script);
+        return command;
     }
 
     private static void DeleteFixture(string path)

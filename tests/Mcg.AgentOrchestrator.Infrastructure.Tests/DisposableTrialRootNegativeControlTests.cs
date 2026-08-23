@@ -8,6 +8,9 @@ namespace Mcg.AgentOrchestrator.Infrastructure.Tests;
 [Xunit.Collection(TestCollections.ProcessSpawning)]
 public sealed class DisposableTrialRootNegativeControlTests
 {
+    private const string DisableLowIntegrityMutation = "MCG_TRIAL_TEST_DISABLE_LOW_INTEGRITY";
+    private const string DisableContainedJobMutation = "MCG_TRIAL_TEST_DISABLE_CONTAINED_JOB";
+
     public static bool IsWindows => OperatingSystem.IsWindows();
 
     public static bool IsWindowsAtMediumOrHigher =>
@@ -23,7 +26,7 @@ public sealed class DisposableTrialRootNegativeControlTests
         File.WriteAllText(outsideFile, "unchanged");
         try
         {
-            var lease = new DisposableTrialRoot().Create(new TrialRootRequest(
+            using var lease = CreateNegativeControlFactory().Create(new TrialRootRequest(
                 fixture.Source,
                 fixture.Commit,
                 fixture.Trials,
@@ -62,7 +65,7 @@ public sealed class DisposableTrialRootNegativeControlTests
         var gitConfigBefore = File.ReadAllBytes(gitConfig);
         try
         {
-            var lease = new DisposableTrialRoot().Create(new TrialRootRequest(
+            using var lease = new DisposableTrialRoot().Create(new TrialRootRequest(
                 fixture.Source,
                 fixture.Commit,
                 fixture.Trials,
@@ -100,7 +103,7 @@ public sealed class DisposableTrialRootNegativeControlTests
         var tracked = Path.Combine(fixture.Source, "tracked.txt");
         try
         {
-            var lease = new DisposableTrialRoot().Create(new TrialRootRequest(
+            using var lease = new DisposableTrialRoot().Create(new TrialRootRequest(
                 fixture.Source,
                 fixture.Commit,
                 fixture.Trials,
@@ -126,7 +129,7 @@ public sealed class DisposableTrialRootNegativeControlTests
         var fixture = CreateFixtureRepository();
         try
         {
-            var lease = new DisposableTrialRoot().Create(new TrialRootRequest(
+            using var lease = CreateNegativeControlFactory().Create(new TrialRootRequest(
                 fixture.Source,
                 fixture.Commit,
                 fixture.Trials,
@@ -196,7 +199,9 @@ public sealed class DisposableTrialRootNegativeControlTests
         }
     }
 
-    [Xunit.Fact(Skip = "Requires Windows.", SkipUnless = nameof(IsWindows))]
+    [Xunit.Fact(
+        Skip = "Requires Windows at Medium integrity or above.",
+        SkipUnless = nameof(IsWindowsAtMediumOrHigher))]
     public void CreationFailsClosedWhenIntegrityLabellingIsDisabled()
     {
         var fixture = CreateFixtureRepository();
@@ -213,6 +218,39 @@ public sealed class DisposableTrialRootNegativeControlTests
         }
     }
 
+    [Xunit.Fact(
+        Skip = "Requires Windows at Medium integrity or above.",
+        SkipUnless = nameof(IsWindowsAtMediumOrHigher))]
+    public void PartialRootCleanupFailureReportsTheSurvivingPathAndBothFailures()
+    {
+        var fixture = CreateFixtureRepository();
+        var labeler = new LockingDisabledIntegrityLabeler();
+        try
+        {
+            var factory = new DisposableTrialRoot(labeler, new SystemTrialProcessInventory());
+
+            var error = Xunit.Assert.Throws<AggregateException>(() =>
+                factory.Create(new TrialRootRequest(
+                    fixture.Source,
+                    fixture.Commit,
+                    fixture.Trials,
+                    "locked-partial")));
+
+            Xunit.Assert.Contains("partial root may survive", error.Message, StringComparison.OrdinalIgnoreCase);
+            var lockedRoot = Xunit.Assert.IsType<string>(labeler.LockedRootPath);
+            Xunit.Assert.Contains(lockedRoot, error.Message, StringComparison.OrdinalIgnoreCase);
+            Xunit.Assert.True(Directory.Exists(lockedRoot));
+            Xunit.Assert.Equal(2, error.InnerExceptions.Count);
+            Xunit.Assert.Contains("Low integrity", error.InnerExceptions[0].Message, StringComparison.Ordinal);
+            Xunit.Assert.True(error.InnerExceptions[1] is IOException or UnauthorizedAccessException);
+        }
+        finally
+        {
+            labeler.Dispose();
+            DeleteFixture(fixture.Root);
+        }
+    }
+
     private static ProcessStartInfo PowerShellCommand(string script)
     {
         var command = new ProcessStartInfo { FileName = "powershell.exe" };
@@ -223,6 +261,19 @@ public sealed class DisposableTrialRootNegativeControlTests
         command.ArgumentList.Add(script);
         return command;
     }
+
+    // Acceptance can produce the required RED receipts without source mutation:
+    // $env:MCG_TRIAL_TEST_DISABLE_LOW_INTEGRITY='1' makes the outside-write control fail.
+    // $env:MCG_TRIAL_TEST_DISABLE_CONTAINED_JOB='1' makes the breakaway-denial control fail.
+    private static DisposableTrialRoot CreateNegativeControlFactory() =>
+        new(
+            new IcaclsIntegrityLabeler(),
+            new SystemTrialProcessInventory(),
+            useContainedJob: !MutationEnabled(DisableContainedJobMutation),
+            useLowIntegrityProcess: !MutationEnabled(DisableLowIntegrityMutation));
+
+    private static bool MutationEnabled(string name) =>
+        string.Equals(Environment.GetEnvironmentVariable(name), "1", StringComparison.Ordinal);
 
     private static string BuildBreakawayProbeScript(string deniedMarker)
     {
@@ -380,6 +431,28 @@ public static class McgBreakawayProbe {
         public IntegrityLabelState Query(string path) => new(true, false, false);
 
         public bool SetIntegrity(string path, string level, bool recursive) => false;
+    }
+
+    private sealed class LockingDisabledIntegrityLabeler : IWorkerIntegrityLabeler, IDisposable
+    {
+        private FileStream? _lockedFile;
+
+        public string? LockedRootPath { get; private set; }
+
+        public IntegrityLabelState Query(string path) => new(true, false, false);
+
+        public bool SetIntegrity(string path, string level, bool recursive)
+        {
+            LockedRootPath = path;
+            _lockedFile = new FileStream(
+                Path.Combine(path, "tracked.txt"),
+                FileMode.Open,
+                FileAccess.Read,
+                FileShare.Read);
+            return false;
+        }
+
+        public void Dispose() => _lockedFile?.Dispose();
     }
 
     [DllImport("kernel32.dll")]

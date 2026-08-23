@@ -98,6 +98,7 @@ internal sealed partial class TrialRootLease : IDisposable
     private readonly IReadOnlyList<ProtectedPathSnapshot> _protectedSnapshots;
     private readonly ITrialProcessInventory _processInventory;
     private readonly bool _useContainedJob;
+    private readonly bool _useLowIntegrityProcess;
     private TrialTeardownReport? _teardownReport;
 
     internal TrialRootLease(
@@ -108,6 +109,7 @@ internal sealed partial class TrialRootLease : IDisposable
         IReadOnlyList<ProtectedPathSnapshot> protectedSnapshots,
         ITrialProcessInventory processInventory,
         bool useContainedJob,
+        bool useLowIntegrityProcess,
         TimeSpan createDuration,
         TrialContainmentLevel containmentLevel)
     {
@@ -124,6 +126,7 @@ internal sealed partial class TrialRootLease : IDisposable
         _protectedSnapshots = protectedSnapshots;
         _processInventory = processInventory;
         _useContainedJob = useContainedJob;
+        _useLowIntegrityProcess = useLowIntegrityProcess;
         CreateDuration = createDuration;
         ContainmentLevel = containmentLevel;
     }
