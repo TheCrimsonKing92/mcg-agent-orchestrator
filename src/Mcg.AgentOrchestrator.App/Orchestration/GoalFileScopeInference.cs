@@ -82,8 +82,9 @@ internal static class GoalFileScopeInference
         @"(?:touch\s+only|changes?\s+must\s+be\s+confined\s+to)\s+(?<targets>.*?)(?=;|\.(?:\s|$)|\r?$|\n)",
         RegexOptions.Compiled | RegexOptions.CultureInvariant | RegexOptions.IgnoreCase);
 
+    // Brief-author recognition contract: docs/worker-guidance-discipline.md#declaring-and-forbidding-file-scopes
     private static readonly Regex ExclusionConstraintRegex = new(
-        @"(?:do\s+not\s+touch|don't\s+touch|must\s+not\s+touch)\s+(?<targets>.*?)(?=;|\.(?:\s|$)|\r?$|\n)",
+        @"(?:(?:do\s+not|don't|must\s+not|never)\s+(?:touch|change|modify|edit|alter|rename|delete))\s+(?<targets>.*?)(?=;|\.(?:\s|$)|\r?$|\n)",
         RegexOptions.Compiled | RegexOptions.CultureInvariant | RegexOptions.IgnoreCase);
 
     private static readonly Regex TargetSeparatorRegex = new(
@@ -236,10 +237,8 @@ internal static class GoalFileScopeInference
             }
         }
 
-        return scopes
-            .Select(pair => new DeclaredFileScope(pair.Key, pair.Value))
-            .OrderBy(scope => scope.Path, StringComparer.OrdinalIgnoreCase)
-            .ToArray();
+        return PruneRedundantAncestors(
+            scopes.Select(pair => new DeclaredFileScope(pair.Key, pair.Value)));
     }
 
     public static IReadOnlyList<DeclaredFileScope> FromGoal(
@@ -568,9 +567,21 @@ internal static class GoalFileScopeInference
             }
         }
 
-        return scopes
-            .Select(pair => new DeclaredFileScope(pair.Key, pair.Value))
+        return PruneRedundantAncestors(
+            scopes.Select(pair => new DeclaredFileScope(pair.Key, pair.Value)));
+    }
+
+    private static IReadOnlyList<DeclaredFileScope> PruneRedundantAncestors(
+        IEnumerable<DeclaredFileScope> scopes)
+    {
+        var ordered = scopes
             .OrderBy(scope => scope.Path, StringComparer.OrdinalIgnoreCase)
+            .ToArray();
+        return ordered
+            .Where(candidate => !ordered.Any(other =>
+                other.Path.Length > candidate.Path.Length &&
+                TrustRank(other.Provenance) >= TrustRank(candidate.Provenance) &&
+                RepositoryPathOverlap.Classify(candidate.Path, other.Path) == PathOverlapKind.DirectoryPrefix))
             .ToArray();
     }
 

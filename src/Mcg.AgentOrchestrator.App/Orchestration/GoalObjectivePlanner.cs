@@ -98,10 +98,6 @@ internal sealed record GoalObjectivePlan(
 
 internal static class GoalObjectivePlanner
 {
-    private static readonly Regex FileScopeRegex = new(
-        @"(?<![\w.-])(?:src|tests|scripts|docs|config|\.agents)[\\/][A-Za-z0-9_.\\/\-]+",
-        RegexOptions.Compiled | RegexOptions.CultureInvariant | RegexOptions.IgnoreCase);
-
     private static readonly string[] HighRiskSignals =
     [
         "auth",
@@ -297,15 +293,10 @@ internal static class GoalObjectivePlanner
         return meaningful.Length == 0 || (tokens.Count <= 3 && meaningful.Length <= 1);
     }
 
-    private static string[] InferFileScopes(string text)
-    {
-        return FileScopeRegex.Matches(text)
-            .Select(match => match.Value.Replace('\\', '/').TrimEnd('.', ',', ';', ':', ')', ']'))
-            .Where(value => !string.IsNullOrWhiteSpace(value))
-            .Distinct(StringComparer.OrdinalIgnoreCase)
-            .Order(StringComparer.OrdinalIgnoreCase)
+    private static string[] InferFileScopes(string text) =>
+        GoalFileScopeInference.FromText(text)
+            .Select(scope => scope.Path)
             .ToArray();
-    }
 
     private static string[] BuildRiskLabels(
         HashSet<string> tokens,

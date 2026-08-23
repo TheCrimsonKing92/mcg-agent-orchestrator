@@ -825,6 +825,35 @@ public sealed class GoalRefinementTests
         Xunit.Assert.Equal(GoalIntakePipeline.DeveloperOnly, plan.PipelineDecision.Pipeline);
     }
 
+    [Xunit.Fact]
+    public void GoalObjectivePlanner_FileScopes_AgreeWithSharedInference()
+    {
+        const string objective = """
+            Expected to change:
+            - src/Mcg.AgentOrchestrator.App/Orchestration/ConductorDriver.cs
+            Do not change config/acceptance-manifest.json.
+            """;
+
+        var plan = GoalObjectivePlanner.Build(objective, simple: false);
+        var inferred = GoalFileScopeInference.FromText(objective)
+            .Select(scope => scope.Path)
+            .ToArray();
+
+        Xunit.Assert.Equal(inferred, plan.FileScopes);
+    }
+
+    [Xunit.Fact]
+    public void GoalObjectivePlanner_ProhibitionOnly_UsesImplicitScopeRouting()
+    {
+        var plan = GoalObjectivePlanner.Build(
+            "Do not change config/acceptance-manifest.json.",
+            simple: false);
+
+        Xunit.Assert.Empty(plan.FileScopes);
+        Xunit.Assert.Contains("scope-implicit", plan.RiskLabels);
+        Xunit.Assert.Equal(GoalIntakePipeline.FiveRole, plan.PipelineDecision.Pipeline);
+    }
+
     [Xunit.Fact(DisplayName = "GoalLifecycleCommands_records_capability_warning_for_remote_git_instructions")]
     public void GoalLifecycleCommandsRecordsCapabilityWarningForRemoteGitInstructions()
     {
