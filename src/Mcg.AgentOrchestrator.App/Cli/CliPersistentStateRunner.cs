@@ -3338,7 +3338,8 @@ internal static class CliPersistentStateRunner
                 ConsoleViews.PrintGoalIntakeReceipt(reservation.Record);
                 if (reservation.Record.State == GoalIntakeRequestStates.Created)
                 {
-                    currentGoal = kernel.Goals.FirstOrDefault(goal =>
+                    var replayKernel = stateRepository.LoadAsync().GetAwaiter().GetResult();
+                    currentGoal = replayKernel.Goals.FirstOrDefault(goal =>
                         goal.Id.Value.Equals(reservation.Record.GoalId, StringComparison.Ordinal));
                     if (currentGoal is null)
                     {

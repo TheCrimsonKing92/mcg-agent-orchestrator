@@ -12,12 +12,15 @@ public sealed class SourceBacklogClaimTests
     [Xunit.InlineData("merged", GoalStatus.Completed, GoalLifecycleState.Merged)]
     [Xunit.InlineData("recorded", GoalStatus.Completed, GoalLifecycleState.Recorded)]
     [Xunit.InlineData("cleaned-up", GoalStatus.Completed, GoalLifecycleState.CleanedUp)]
-    public void SiblingAdmissionAllowsEachTerminalOwnerShape(
+    public async Task SiblingAdmissionAllowsEachTerminalOwnerShape(
         string terminalShape,
         GoalStatus expectedStatus,
         GoalLifecycleState expectedLifecycleState)
     {
         var root = CreateTempDirectory();
+        var workspace = CreateRefinedWorkspace(root);
+        var item = await new BacklogStore(workspace.BacklogStorePath).AddAsync($"Terminal {terminalShape} source item");
+        var repository = CreateMigratedStateRepository(workspace.SqliteStatePath);
         var kernel = new AgentOrchestratorKernel();
         var task = new TaskSpec(TaskId.New(), "Establish terminal owner state", AgentRole.Developer);
         var owner = kernel.CreateGoal($"Terminal {terminalShape} source owner", [task]);
@@ -61,6 +64,19 @@ public sealed class SourceBacklogClaimTests
                 break;
         }
 
+        kernel.SetGoalSourceBacklogItemLink(owner.Id, item.Id, SourceBacklogCoverage.Full);
+        await repository.SaveAsync(kernel);
+        var claimStore = new SourceBacklogClaimStore(workspace.SqliteStatePath);
+        var initialClaim = await repository.TransactAsync((persistedKernel, _) =>
+        {
+            var claim = claimStore.EnsureClaimForNewGoal(
+                persistedKernel,
+                item.Id,
+                owner.Id.Value,
+                SourceBacklogCoverage.Full);
+            return Task.FromResult((ShouldSave: true, Result: claim));
+        });
+
         var facts = CliCommandHandlers.BuildSourceBacklogSiblingFacts(
             root,
             owner,
@@ -70,6 +86,30 @@ public sealed class SourceBacklogClaimTests
         Xunit.Assert.Equal(expectedStatus, facts.OwnerStatus);
         Xunit.Assert.Equal(expectedLifecycleState, facts.OwnerLifecycleState);
         Xunit.Assert.Equal(SourceBacklogSiblingAdmission.Admit, SourceBacklogSiblingAdmissionPolicy.Evaluate(facts));
+        Xunit.Assert.Equal(owner.Id.Value, initialClaim.OwnerGoalId);
+
+        IReadOnlyList<AgentDefinition> agents = AgentCatalog.Default().Agents;
+        var profiles = WorkerProfileCatalog.Default();
+        Goal? sibling = null;
+        _ = CliPersistentStateRunner.ExecuteCommand(
+            ["simple-goal", $"Sibling after terminal {terminalShape} owner", "--backlog-item", item.Id, "--backlog-coverage", "full"],
+            repository,
+            workspace,
+            ref agents,
+            new InMemoryModelProviderRegistry([]),
+            ref profiles,
+            ref sibling);
+
+        var restored = await repository.LoadAsync();
+        Xunit.Assert.NotNull(sibling);
+        Xunit.Assert.Equal(item.Id, sibling.SourceBacklogItemId);
+        Xunit.Assert.Equal(SourceBacklogCoverage.Full, sibling.SourceBacklogCoverage);
+        Xunit.Assert.Equal(2, restored.Goals.Count);
+        Xunit.Assert.Contains(restored.Goals, goal => goal.Id == sibling.Id);
+        var persistedClaim = claimStore.ResolveClaim(restored, item.Id);
+        Xunit.Assert.NotNull(persistedClaim);
+        Xunit.Assert.Equal(owner.Id.Value, persistedClaim.OwnerGoalId);
+        Xunit.Assert.Equal(1, persistedClaim.Version);
     }
 
     [Xunit.Fact]
