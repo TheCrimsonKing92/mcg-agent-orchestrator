@@ -262,12 +262,19 @@ Wave 2 item 3 places the commit-on-behalf boundary at `DispatchWorktreeCommitter
 | `src/Mcg.AgentOrchestrator.Infrastructure/Workers/WorkerProfileDispatcher.cs` | 3220 |
 | `src/Mcg.AgentOrchestrator.App/Cli/CliPersistentStateRunner.cs` | 4821 |
 | `tests/Mcg.AgentOrchestrator.Infrastructure.Tests/GoalAcceptanceVerifierTests.cs` | 1566 |
-| `tests/Mcg.AgentOrchestrator.Infrastructure.Tests/ConductorDriverTests.cs` | 9282 |
+| `tests/Mcg.AgentOrchestrator.Infrastructure.Tests/ConductorDriverTests.cs` | 1396 |
+| `tests/Mcg.AgentOrchestrator.Infrastructure.Tests/ConductorDriverTestsAcceptanceCoordination.cs` | 900 |
+| `tests/Mcg.AgentOrchestrator.Infrastructure.Tests/ConductorDriverTestsLifecycleStates.cs` | 1543 |
+| `tests/Mcg.AgentOrchestrator.Infrastructure.Tests/ConductorDriverTestsReviewRetryConvergence.cs` | 778 |
+| `tests/Mcg.AgentOrchestrator.Infrastructure.Tests/ConductorDriverTestsFindingEvidence.cs` | 1948 |
+| `tests/Mcg.AgentOrchestrator.Infrastructure.Tests/ConductorDriverTestsPreReviewEvidence.cs` | 1187 |
+| `tests/Mcg.AgentOrchestrator.Infrastructure.Tests/ConductorDriverTestsContractRepairBounds.cs` | 1097 |
+| `tests/Mcg.AgentOrchestrator.Infrastructure.Tests/ConductorDriverTestsDispatchRecovery.cs` | 537 |
 | `tests/Mcg.AgentOrchestrator.Infrastructure.Tests/CliCommandTests.PersistentRunnerCommands.cs` | 7038 |
 | `tests/Mcg.AgentOrchestrator.Infrastructure.Tests/WorkerDispatchTestsWorkerResultClassification.cs` | 4834 |
 | `tests/Mcg.AgentOrchestrator.Infrastructure.Tests/ConductorBatchLoopTestsParallelAcceptance.cs` | 4473 |
 
-The production rows are the six ranked god classes whose growth the inventory tracks. `ConductorDriverTests.cs` remains an unsplit test god class guarded as the test-side counterpart to its already-guarded production file. The `GoalAcceptanceVerifierTests.cs` row remains at its measured post-split size so regrowth is visible; none of its new fragments approaches the roughly 4,300-line threshold for adding a split-product row. The other three test rows are products of earlier splits that have regrown past that threshold; a one-time split without a bound only resets the clock. This is intentionally not a repository-wide size rule. For example, `DotnetBuildEnvironmentManagerTests.cs` (5199 lines) is large but is neither a ranked god class nor a split product; `CliCommandTests.GoalLifecycleCommands.cs` (4211) and `CliCommandTests.SubscriptionDispatchCommands.cs` (3471) remain within their intended post-split size; `DashboardRenderingTests.cs` (3795) has already moved to the Dashboard test project; and `DispatchFailureClassifier.cs` (2393) remains below the seeded production band.
+The production rows are the six ranked god classes whose growth the inventory tracks. The `ConductorDriverTests.cs` row and its split-product rows remain at their measured post-split sizes so regrowth is visible. The `GoalAcceptanceVerifierTests.cs` row remains at its measured post-split size for the same reason; none of its new fragments approaches the roughly 4,300-line threshold for adding a split-product row. The other three test rows are products of earlier splits that have regrown past that threshold; a one-time split without a bound only resets the clock. This is intentionally not a repository-wide size rule. For example, `DotnetBuildEnvironmentManagerTests.cs` (5199 lines) is large but is neither a ranked god class nor a split product; `CliCommandTests.GoalLifecycleCommands.cs` (4211) and `CliCommandTests.SubscriptionDispatchCommands.cs` (3471) remain within their intended post-split size; `DashboardRenderingTests.cs` (3795) has already moved to the Dashboard test project; and `DispatchFailureClassifier.cs` (2393) remains below the seeded production band.
 
 When extraction shrinks a guarded file, lower that row in the same change. If growth is unavoidable, raise only that row deliberately with an inline justification naming the goal. A rename or deletion must update its row in the same change. Never derive a ceiling automatically from the current file, make a row advisory, add an opt-out, or delete the guard.
 
