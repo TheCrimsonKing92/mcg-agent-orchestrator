@@ -172,6 +172,9 @@ internal sealed partial class ConductorDriver
         _pendingRecoveredMergeTrainLandingReceipts = [];
     private Action<ConductorLandingReceipt>? _successfulLandingSink;
     private bool _buildServerShutdownRanThisTick;
+    private bool _isConductorTick;
+    private AgentOrchestratorKernel? _conductorTickKernel;
+    private int _conductorTick;
 
     internal Action<string>? PhaseTimingSink { get; set; }
     internal Action<ConductorLandingReceipt>? SuccessfulLandingSink
@@ -1360,8 +1363,13 @@ internal sealed partial class ConductorDriver
 
     internal int GetAcceptanceSlotCount(Goal goal) => _getAcceptanceSlotCount(goal);
 
-    internal void BeginTick()
+    internal void BeginTick() => BeginTick(kernel: null, tick: 0);
+
+    internal void BeginTick(AgentOrchestratorKernel? kernel, int tick)
     {
+        _isConductorTick = true;
+        _conductorTickKernel = kernel;
+        _conductorTick = tick;
         _buildServerShutdownRanThisTick = false;
         SliceBatchParentExecutionGuard?.BeginTick();
         SliceBatchAdmissionEvaluator?.BeginTick();
@@ -1724,8 +1732,7 @@ internal sealed partial class ConductorDriver
                 new ConductorAdvanceOutcome.Held(state, "Worker process running; auto-reconcile will handle completion")),
             GoalLifecycleState.AwaitingVerification => MakeResult(goalId, goalPrefix, policy,
                 new ConductorAdvanceOutcome.Held(state, "All tasks done; awaiting task verification gates — auto-reconcile will advance goal to Verified")),
-            GoalLifecycleState.Verifying => MakeResult(goalId, goalPrefix, policy,
-                new ConductorAdvanceOutcome.Held(state, "Acceptance gate running in background; reconciliation will handle terminal artifact")),
+            GoalLifecycleState.Verifying => ExecuteVerifying(goal, goalPrefix, policy),
             GoalLifecycleState.Verified => ExecuteLanding(goal, goalPrefix, policy),
             GoalLifecycleState.Merged => ExecuteRecord(goal, goalPrefix, policy),
             GoalLifecycleState.Recorded => ExecuteCleanup(goal, goalPrefix, policy),
@@ -5540,6 +5547,12 @@ internal sealed partial class ConductorDriver
 
     private ConductorAdvanceResult ExecuteLanding(Goal goal, string goalPrefix, ConductorAutonomyPolicy policy)
     {
+        var backgroundAcceptance = TryRunTickFallbackAcceptance(goal, goalPrefix, policy);
+        if (backgroundAcceptance is not null)
+        {
+            return backgroundAcceptance;
+        }
+
         using var evidenceMutationLease = _tryAcquireEvidenceMutationLease(goal, "conductor:acceptance-and-land");
         if (evidenceMutationLease is null)
             return ReplacementEvidenceMutationHeld(goal, goalPrefix, policy);
@@ -5594,6 +5607,127 @@ internal sealed partial class ConductorDriver
         }
 
         return CompleteLandingAfterAcceptance(goal, goalPrefix, policy, acceptance);
+    }
+
+    private ConductorAdvanceResult ExecuteVerifying(
+        Goal goal,
+        string goalPrefix,
+        ConductorAutonomyPolicy policy) =>
+        TryRunTickFallbackAcceptance(goal, goalPrefix, policy) ??
+        MakeResult(
+            goal.Id.Value,
+            goalPrefix,
+            policy,
+            new ConductorAdvanceOutcome.Held(
+                GoalLifecycleState.Verifying,
+                "Acceptance gate running in background; reconciliation will handle terminal artifact"));
+
+    private ConductorAdvanceResult? TryRunTickFallbackAcceptance(
+        Goal goal,
+        string goalPrefix,
+        ConductorAutonomyPolicy policy)
+    {
+        if (!_isConductorTick || !_parallelAcceptanceEnabled)
+        {
+            return null;
+        }
+
+        ConductorParallelAcceptanceCandidate? candidate;
+        try
+        {
+            candidate = TryBuildParallelAcceptanceCandidate(goal, policy, slotIndex: 0);
+        }
+        catch (EvidenceMutationLeaseUnavailableException)
+        {
+            return ReplacementEvidenceMutationHeld(goal, goalPrefix, policy);
+        }
+
+        if (candidate is null)
+        {
+            return null;
+        }
+
+        var decision = _parallelAcceptanceAttemptCoordinator.Evaluate(
+            candidate,
+            policy,
+            RunParallelLandingAcceptance);
+        if (decision.Kind == ConductorParallelAcceptanceAttemptDecisionKind.Started &&
+            decision.Attempt.Outcome != ConductorParallelAcceptanceAttemptOutcome.Running)
+        {
+            decision = _parallelAcceptanceAttemptCoordinator.Evaluate(
+                candidate,
+                policy,
+                RunParallelLandingAcceptance);
+        }
+
+        switch (decision.Kind)
+        {
+            case ConductorParallelAcceptanceAttemptDecisionKind.Started:
+            case ConductorParallelAcceptanceAttemptDecisionKind.Running:
+                if (_conductorTickKernel is not null)
+                {
+                    ConductorBatchLoop.MarkParallelAcceptanceStarted(
+                        _conductorTickKernel,
+                        goal,
+                        decision.Attempt,
+                        _conductorTick);
+                }
+
+                return MakeResult(
+                    goal.Id.Value,
+                    goalPrefix,
+                    policy,
+                    new ConductorAdvanceOutcome.Held(
+                        GoalLifecycleState.Verified,
+                        $"Acceptance verification running in background; attempt={decision.Attempt.AttemptId}."));
+
+            case ConductorParallelAcceptanceAttemptDecisionKind.Completed:
+                var run = decision.Run ?? ConductorParallelAcceptanceRunResult.Fault(
+                    candidate,
+                    new InvalidOperationException("Completed acceptance attempt had no run result."));
+                if (_conductorTickKernel is not null)
+                {
+                    ConductorBatchLoop.ReconcileParallelAcceptanceTerminalState(
+                        _conductorTickKernel,
+                        goal,
+                        run,
+                        decision.Attempt);
+                }
+
+                var result = ConductorBatchLoop.CompleteParallelAcceptanceRun(
+                    this,
+                    policy,
+                    run,
+                    decision.Attempt,
+                    out var evidenceMutationLeaseHeld);
+                ConductorBatchLoop.MarkParallelAcceptanceReconciledUnlessLeaseHeld(
+                    this,
+                    run,
+                    evidenceMutationLeaseHeld,
+                    decision.Attempt);
+                return result;
+
+            case ConductorParallelAcceptanceAttemptDecisionKind.TerminalWithoutRun:
+                if (_conductorTickKernel is not null)
+                {
+                    ConductorBatchLoop.ReconcileParallelAcceptanceTerminalState(
+                        _conductorTickKernel,
+                        goal,
+                        decision.Attempt);
+                }
+
+                var terminal = ConductorBatchLoop.ParallelAcceptanceTerminal(
+                    this,
+                    candidate,
+                    policy,
+                    decision.Attempt);
+                _parallelAcceptanceAttemptCoordinator.MarkReconciled(decision.Attempt);
+                return terminal;
+
+            default:
+                throw new InvalidOperationException(
+                    $"Unsupported acceptance attempt decision '{decision.Kind}'.");
+        }
     }
 
     private static string FormatBuildLockBlocked(BuildLockAttribution attribution)
