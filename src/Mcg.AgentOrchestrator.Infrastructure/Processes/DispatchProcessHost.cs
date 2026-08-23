@@ -968,7 +968,7 @@ public static class DispatchProcessHost
 
     // PowerShell that lowers the current process to Low integrity (lowering one's own token needs no
     // privilege). Dot-sourced before the worker command so the worker + its children run Low.
-    private const string DropToLowScript = @"Add-Type -Namespace P -Name N -MemberDefinition @'
+    internal const string DropToLowScript = @"Add-Type -Namespace P -Name N -MemberDefinition @'
 [DllImport(""kernel32.dll"")] public static extern System.IntPtr GetCurrentProcess();
 [DllImport(""advapi32.dll"", SetLastError=true)] public static extern bool OpenProcessToken(System.IntPtr h, uint a, out System.IntPtr t);
 [DllImport(""advapi32.dll"", SetLastError=true, CharSet=CharSet.Unicode)] public static extern bool ConvertStringSidToSidW(string s, out System.IntPtr sid);

@@ -17,17 +17,19 @@ internal sealed class OwnedProcessGroup : IDisposable
     private int? _processGroupId;
     private bool _disposed;
 
-    private OwnedProcessGroup()
+    private OwnedProcessGroup(bool allowBreakaway)
     {
         if (OperatingSystem.IsWindows())
         {
-            _jobHandle = WindowsJob.CreateKillOnCloseJob();
+            _jobHandle = WindowsJob.CreateKillOnCloseJob(allowBreakaway);
         }
     }
 
     public IReadOnlyList<int> ProcessIds => _processIds;
 
-    public static OwnedProcessGroup Create() => new();
+    public static OwnedProcessGroup Create() => new(allowBreakaway: true);
+
+    internal static OwnedProcessGroup CreateContained() => new(allowBreakaway: false);
 
     public static OwnedProcessGroup Attach(Process process)
     {
@@ -45,7 +47,10 @@ internal sealed class OwnedProcessGroup : IDisposable
     }
 
     public static SuspendedProcessStart StartSuspended(ProcessStartInfo startInfo)
-        => StartSuspendedCore(startInfo, null, null);
+        => StartSuspendedCore(startInfo, null, null, contained: false);
+
+    internal static SuspendedProcessStart StartSuspendedContained(ProcessStartInfo startInfo)
+        => StartSuspendedCore(startInfo, null, null, contained: true);
 
     internal static SuspendedProcessStart StartSuspendedWithFileCapture(
         ProcessStartInfo startInfo,
@@ -54,12 +59,24 @@ internal sealed class OwnedProcessGroup : IDisposable
         => StartSuspendedCore(
             startInfo,
             Path.GetFullPath(stdoutPath),
-            Path.GetFullPath(stderrPath));
+            Path.GetFullPath(stderrPath),
+            contained: false);
+
+    internal static SuspendedProcessStart StartSuspendedContainedWithFileCapture(
+        ProcessStartInfo startInfo,
+        string stdoutPath,
+        string stderrPath)
+        => StartSuspendedCore(
+            startInfo,
+            Path.GetFullPath(stdoutPath),
+            Path.GetFullPath(stderrPath),
+            contained: true);
 
     private static SuspendedProcessStart StartSuspendedCore(
         ProcessStartInfo startInfo,
         string? stdoutPath,
-        string? stderrPath)
+        string? stderrPath,
+        bool contained)
     {
         ArgumentNullException.ThrowIfNull(startInfo);
         if (!OperatingSystem.IsWindows())
@@ -76,7 +93,7 @@ internal sealed class OwnedProcessGroup : IDisposable
                 "Suspended owned-process launch requires UseShellExecute=false and no redirected standard streams.");
         }
 
-        var group = Create();
+        var group = contained ? CreateContained() : Create();
         try
         {
             var processStart = WindowsJob.StartSuspendedInJob(
@@ -214,6 +231,45 @@ internal sealed class OwnedProcessGroup : IDisposable
         }
 
         return WindowsJob.TryDuplicateCurrentProcessHandle(_jobHandle, out duplicate);
+    }
+
+    internal static string QuoteCommandArgument(string value)
+    {
+        var quoted = new StringBuilder();
+        quoted.Append('"');
+        var backslashes = 0;
+        foreach (var character in value)
+        {
+            if (character == '\\')
+            {
+                backslashes++;
+                continue;
+            }
+
+            if (character == '"')
+            {
+                quoted.Append('\\', (backslashes * 2) + 1);
+                quoted.Append('"');
+                backslashes = 0;
+                continue;
+            }
+
+            if (backslashes > 0)
+            {
+                quoted.Append('\\', backslashes);
+                backslashes = 0;
+            }
+
+            quoted.Append(character);
+        }
+
+        if (backslashes > 0)
+        {
+            quoted.Append('\\', backslashes * 2);
+        }
+
+        quoted.Append('"');
+        return quoted.ToString();
     }
 
     /// <summary>
@@ -666,45 +722,6 @@ internal sealed class OwnedProcessGroup : IDisposable
             return commandLine.ToString();
         }
 
-        private static string QuoteCommandArgument(string value)
-        {
-            var quoted = new StringBuilder();
-            quoted.Append('"');
-            var backslashes = 0;
-            foreach (var character in value)
-            {
-                if (character == '\\')
-                {
-                    backslashes++;
-                    continue;
-                }
-
-                if (character == '"')
-                {
-                    quoted.Append('\\', (backslashes * 2) + 1);
-                    quoted.Append('"');
-                    backslashes = 0;
-                    continue;
-                }
-
-                if (backslashes > 0)
-                {
-                    quoted.Append('\\', backslashes);
-                    backslashes = 0;
-                }
-
-                quoted.Append(character);
-            }
-
-            if (backslashes > 0)
-            {
-                quoted.Append('\\', backslashes * 2);
-            }
-
-            quoted.Append('"');
-            return quoted.ToString();
-        }
-
         private static string BuildEnvironmentBlock(IDictionary<string, string?> environment)
         {
             var builder = new StringBuilder();
@@ -723,7 +740,7 @@ internal sealed class OwnedProcessGroup : IDisposable
         private static string Sanitize(string value) =>
             value.Replace('\r', ' ').Replace('\n', ' ').Trim();
 
-        public static SafeFileHandle CreateKillOnCloseJob()
+        public static SafeFileHandle CreateKillOnCloseJob(bool allowBreakaway = true)
         {
             var handle = CreateJobObjectW(IntPtr.Zero, null);
             if (handle.IsInvalid)
@@ -735,7 +752,8 @@ internal sealed class OwnedProcessGroup : IDisposable
             {
                 BasicLimitInformation = new JOBOBJECT_BASIC_LIMIT_INFORMATION
                 {
-                    LimitFlags = JobObjectLimitKillOnJobClose | JobObjectLimitBreakawayOk
+                    LimitFlags = JobObjectLimitKillOnJobClose |
+                        (allowBreakaway ? JobObjectLimitBreakawayOk : 0)
                 }
             };
 
