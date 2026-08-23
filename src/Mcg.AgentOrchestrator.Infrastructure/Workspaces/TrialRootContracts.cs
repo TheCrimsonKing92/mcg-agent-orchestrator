@@ -87,11 +87,11 @@ internal sealed class SystemTrialProcessInventory : ITrialProcessInventory
     }
 }
 
-internal sealed class TrialProcessHandle(Process process, string stdoutPath, string stderrPath) : IDisposable
+internal sealed class TrialProcessHandle(Process process, int processId, string stdoutPath, string stderrPath) : IDisposable
 {
     public Process Process { get; } = process;
 
-    public int ProcessId => Process.Id;
+    public int ProcessId { get; } = processId;
 
     public string StdoutPath { get; } = stdoutPath;
 
@@ -100,7 +100,7 @@ internal sealed class TrialProcessHandle(Process process, string stdoutPath, str
     public void Dispose() => Process.Dispose();
 }
 
-internal sealed record TrialOwnedProcess(OwnedProcessGroup Group, Process Process);
+internal sealed record TrialOwnedProcess(OwnedProcessGroup Group, Process Process, int ProcessId);
 
 internal sealed partial class TrialRootLease : IDisposable
 {

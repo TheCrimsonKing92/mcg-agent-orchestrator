@@ -433,8 +433,9 @@ internal sealed partial class TrialRootLease
                 : OwnedProcessGroup.StartSuspendedWithFileCapture(startInfo, stdoutPath, stderrPath);
             suspended.Resume();
             var process = suspended.TransferOwnership();
-            _processes.Add(new TrialOwnedProcess(suspended.Group, process));
-            return new TrialProcessHandle(process, stdoutPath, stderrPath);
+            var processId = process.Id;
+            _processes.Add(new TrialOwnedProcess(suspended.Group, process, processId));
+            return new TrialProcessHandle(process, processId, stdoutPath, stderrPath);
         }
     }
 

@@ -157,6 +157,7 @@ public sealed class DisposableTrialRootNegativeControlTests
                 "while ($true) { Start-Sleep -Seconds 1 }";
 
             var parent = lease.Start(PowerShellCommand(parentScript));
+            var parentProcessId = parent.ProcessId;
             Xunit.Assert.True(WaitForFile(parentReady, TimeSpan.FromSeconds(15)), "Parent readiness was not observed.");
             Xunit.Assert.True(WaitForFile(childReady, TimeSpan.FromSeconds(2)), "Grandchild readiness was not observed.");
             Xunit.Assert.True(WaitForFile(breakawayDenied, TimeSpan.FromSeconds(2)),
@@ -167,7 +168,7 @@ public sealed class DisposableTrialRootNegativeControlTests
 
             Xunit.Assert.Empty(report.SurvivingProcessIds);
             Xunit.Assert.True(report.JobExitConfirmed);
-            Xunit.Assert.Contains(parent.ProcessId, report.PreTeardownProcessIds);
+            Xunit.Assert.Contains(parentProcessId, report.PreTeardownProcessIds);
             Xunit.Assert.Contains(grandchildProcessId, report.PreTeardownProcessIds);
             Xunit.Assert.True(report.Clean);
             parent.Dispose();

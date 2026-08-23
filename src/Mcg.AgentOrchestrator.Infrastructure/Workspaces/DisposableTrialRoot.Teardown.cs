@@ -20,7 +20,7 @@ internal sealed partial class TrialRootLease
             var jobExitConfirmed = true;
             foreach (var owned in _processes)
             {
-                observedProcessIds.Add(owned.Process.Id);
+                observedProcessIds.Add(owned.ProcessId);
                 if (owned.Group.TryGetActiveProcessIds(out var activeIds))
                 {
                     observedProcessIds.UnionWith(activeIds);
@@ -37,7 +37,7 @@ internal sealed partial class TrialRootLease
                         if (!_jobExitWaiter.WaitForExit(waitHandle, TimeSpan.FromSeconds(5)))
                         {
                             jobExitConfirmed = false;
-                            diagnostics.Add($"Owned job for root process {owned.Process.Id} did not report an empty process set.");
+                            diagnostics.Add($"Owned job for root process {owned.ProcessId} did not report an empty process set.");
                         }
                     }
                 }
@@ -45,7 +45,7 @@ internal sealed partial class TrialRootLease
                 {
                     owned.Group.Kill();
                     jobExitConfirmed = false;
-                    diagnostics.Add($"Could not duplicate the owned job handle for root process {owned.Process.Id}.");
+                    diagnostics.Add($"Could not duplicate the owned job handle for root process {owned.ProcessId}.");
                 }
 
                 owned.Process.Dispose();
