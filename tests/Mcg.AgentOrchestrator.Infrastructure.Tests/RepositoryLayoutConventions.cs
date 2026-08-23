@@ -17,7 +17,6 @@ internal static class RepositoryLayoutConventions
             "tests/Mcg.AgentOrchestrator.Infrastructure.Tests/AssemblyTempRedirectTests.cs",
             "tests/Mcg.AgentOrchestrator.Infrastructure.Tests/CliCommandTests.GoalBoard.cs",
             "tests/Mcg.AgentOrchestrator.Infrastructure.Tests/CliCommandTests.GoalLifecycleCommands.cs",
-            "tests/Mcg.AgentOrchestrator.Infrastructure.Tests/DotnetBuildEnvironmentManagerTests.cs",
             "tests/Mcg.AgentOrchestrator.Infrastructure.Tests/Fixtures/RealProcessShardProbe/ShardProbeTests.cs",
             "tests/Mcg.AgentOrchestrator.Infrastructure.Tests/GoalAcceptanceVerifierTests.cs",
             "tests/Mcg.AgentOrchestrator.Infrastructure.Tests/GoalRefinementTests.cs",
