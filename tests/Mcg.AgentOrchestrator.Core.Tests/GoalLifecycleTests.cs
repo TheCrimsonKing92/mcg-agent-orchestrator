@@ -773,6 +773,130 @@ public sealed class GoalLifecycleTests
     }
 
     [Xunit.Fact]
+    public void NoChangeRetry_PreservesPassedDownstreamAndExposesDisposition()
+    {
+        var kernel = new AgentOrchestratorKernel();
+        var goal = kernel.CreateGoal("Verified no-change retry",
+            [
+                new TaskSpec(TaskId.New(), "Implement fix", AgentRole.Developer),
+                new TaskSpec(TaskId.New(), "Test fix", AgentRole.Tester),
+                new TaskSpec(TaskId.New(), "Review fix", AgentRole.Reviewer)
+            ]);
+        kernel.ActivateGoal(goal.Id, DefaultAgents());
+        var developer = goal.Tasks.Single(task => task.RequiredRole == AgentRole.Developer);
+        var tester = goal.Tasks.Single(task => task.RequiredRole == AgentRole.Tester);
+        var reviewer = goal.Tasks.Single(task => task.RequiredRole == AgentRole.Reviewer);
+        CompleteCandidateDispatch(kernel, goal, developer, "aaa111", "aaa111");
+        CompleteCandidateDispatch(kernel, goal, tester, "aaa111", "aaa111");
+        CompleteCandidateDispatch(kernel, goal, reviewer, "aaa111", "aaa111");
+
+        kernel.RecordCriterionRetryFeedback(
+            goal.Id,
+            developer.Id,
+            ["Out-of-scope acceptance check failed; inspect the current candidate."]);
+        kernel.RetryTask(goal.Id, developer.Id, "Inspect the out-of-scope gate failure.");
+        kernel.RecordTaskDispatch(
+            goal.Id,
+            developer.Id,
+            new TaskDispatchRecord("Developer", "worker", "C:\\repo", DateTimeOffset.UtcNow));
+        kernel.RecordDispatchBaseCommit(goal.Id, developer.Id, "aaa111");
+        var output = string.Join(
+            Environment.NewLine,
+            "WORKER_RESULT:",
+            "files: none",
+            "commands: dotnet test --filter Focused",
+            "tests: pass - focused verification completed",
+            "commit: none",
+            "blockers: none",
+            "model_fit: OpenAI/test - adequate - deterministic fixture",
+            "skills: none",
+            "confidence: high",
+            "END_WORKER_RESULT");
+        var diagnostics = DispatchRejectionDiagnosticMarker.Format(true, 0, "none") + Environment.NewLine +
+            DispatchFailureDiagnosticMarker.Format(DispatchFailureDiagnosticMarker.RequiredFileChangeEvidenceMissing);
+
+        kernel.RecordDispatchExecutionResult(
+            goal.Id,
+            developer.Id,
+            new TaskVerificationRecord(
+                "worker",
+                "C:\\repo",
+                1,
+                output,
+                diagnostics,
+                DateTimeOffset.UtcNow,
+                WorkerResultPresent: true,
+                HeartbeatStandardOutputBytes: output.Length));
+
+        Assert.Equal(WorkTaskStatus.Completed, developer.Status);
+        Assert.Equal("aaa111", developer.LastDispatch!.ResultCommit);
+        Assert.Equal(WorkTaskStatus.Completed, tester.Status);
+        Assert.Equal(WorkTaskStatus.Completed, reviewer.Status);
+        Assert.DoesNotContain(goal.Timeline, evt =>
+            evt.TaskId is { } taskId &&
+            (taskId == tester.Id || taskId == reviewer.Id) &&
+            evt.Kind == ProgressKind.TaskRetried);
+        Assert.Contains("rule=verified-no-change-round", kernel.BuildTaskBrief(goal.Id, reviewer.Id).Content, StringComparison.Ordinal);
+    }
+
+    [Xunit.Fact]
+    public void NoChangeRetry_WithBlocker_FailsAsBlocker()
+    {
+        var kernel = new AgentOrchestratorKernel();
+        var goal = kernel.CreateGoal(
+            "Blocked no-change retry",
+            [new TaskSpec(TaskId.New(), "Implement fix", AgentRole.Developer)]);
+        kernel.ActivateGoal(goal.Id, DefaultAgents());
+        var developer = goal.Tasks.Single();
+        CompleteCandidateDispatch(kernel, goal, developer, "aaa111", "aaa111");
+        kernel.RecordCriterionRetryFeedback(goal.Id, developer.Id, ["Inspect the current candidate."]);
+        kernel.RetryTask(goal.Id, developer.Id, "Inspect the current candidate.");
+        kernel.RecordTaskDispatch(
+            goal.Id,
+            developer.Id,
+            new TaskDispatchRecord("Developer", "worker", "C:\\repo", DateTimeOffset.UtcNow));
+        kernel.RecordDispatchBaseCommit(goal.Id, developer.Id, "aaa111");
+        var output = string.Join(
+            Environment.NewLine,
+            "WORKER_RESULT:",
+            "files: none",
+            "commands: none",
+            "tests: pass - focused verification completed",
+            "commit: none",
+            "blockers: exact-blocker - dependency unavailable",
+            "model_fit: OpenAI/test - adequate - deterministic fixture",
+            "skills: none",
+            "confidence: high",
+            "END_WORKER_RESULT");
+        var diagnostics = DispatchRejectionDiagnosticMarker.Format(true, 0, "none") + Environment.NewLine +
+            DispatchFailureDiagnosticMarker.Format(DispatchFailureDiagnosticMarker.RequiredFileChangeEvidenceMissing);
+
+        kernel.RecordDispatchExecutionResult(
+            goal.Id,
+            developer.Id,
+            new TaskVerificationRecord(
+                "worker",
+                "C:\\repo",
+                1,
+                output,
+                diagnostics,
+                DateTimeOffset.UtcNow,
+                WorkerResultPresent: true,
+                HeartbeatStandardOutputBytes: output.Length));
+
+        Assert.Equal(WorkTaskStatus.Failed, developer.Status);
+        Assert.Null(developer.LastDispatch!.ResultCommit);
+        Assert.Contains(goal.Timeline, evt =>
+            evt.TaskId == developer.Id &&
+            evt.Kind == ProgressKind.TaskFailed &&
+            evt.Message.Contains("WORKER_RESULT reported blocker: exact-blocker - dependency unavailable", StringComparison.Ordinal));
+        Assert.DoesNotContain(goal.Timeline, evt =>
+            evt.TaskId is null &&
+            evt.Kind == ProgressKind.TaskNote &&
+            evt.Message.Contains("rule=verified-no-change-round", StringComparison.Ordinal));
+    }
+
+    [Xunit.Fact]
     public void RetryTask_invalidates_downstream_when_the_retry_changed_the_candidate()
     {
         var kernel = new AgentOrchestratorKernel();
