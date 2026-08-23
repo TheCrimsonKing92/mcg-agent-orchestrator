@@ -19,6 +19,7 @@ public abstract class GoalWorktreeTestBase
     private static readonly Lazy<string> SeedRepositoryProcessRoot = new(
         InitializeSeedRepositoryProcessRoot,
         LazyThreadSafetyMode.ExecutionAndPublication);
+    private static readonly long SeedRepositoryProcessStartTimeUtcTicks = GetCurrentProcessStartTimeUtcTicks();
     private static int seedRepositoryCounter;
 
     private static string SeedRepositoryBaseRootPath => OperatingSystem.IsWindows()
@@ -119,7 +120,9 @@ public abstract class GoalWorktreeTestBase
     {
         var container = Path.Combine(
             EnsureSeedRepositoryProcessRoot(),
-            Interlocked.Increment(ref seedRepositoryCounter).ToString("x", CultureInfo.InvariantCulture));
+            BuildSeedRepositoryContainerName(
+                SeedRepositoryProcessStartTimeUtcTicks,
+                Interlocked.Increment(ref seedRepositoryCounter)));
         var repo = Path.Combine(container, "repo");
         try
         {
@@ -149,15 +152,21 @@ public abstract class GoalWorktreeTestBase
 
     private static string EnsureSeedRepositoryProcessRoot() => SeedRepositoryProcessRoot.Value;
 
+    private protected static string BuildSeedRepositoryContainerName(
+        long processStartTimeUtcTicks,
+        int sequence) =>
+        $"{processStartTimeUtcTicks.ToString("x", CultureInfo.InvariantCulture)}-{sequence.ToString("x", CultureInfo.InvariantCulture)}";
+
+    private static long GetCurrentProcessStartTimeUtcTicks()
+    {
+        using var process = Process.GetCurrentProcess();
+        return process.StartTime.ToUniversalTime().Ticks;
+    }
+
     private static string InitializeSeedRepositoryProcessRoot()
     {
         var processRoot = SeedRepositoryProcessRootPath;
         _ = TempRootJanitor.DeleteTree(processRoot);
-        if (Directory.Exists(processRoot))
-        {
-            throw new IOException($"Could not clean stale seed repository process root '{processRoot}'.");
-        }
-
         Directory.CreateDirectory(processRoot);
         return processRoot;
     }

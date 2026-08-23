@@ -1,6 +1,15 @@
 public sealed class GoalWorktreeTestsSeedIsolation : GoalWorktreeTestBase
 {
     [Xunit.Fact]
+    public void ProcessGenerationsDoNotReuseContainerNamesWhenCounterRestarts()
+    {
+        var firstGeneration = BuildSeedRepositoryContainerName(processStartTimeUtcTicks: 1, sequence: 1);
+        var secondGeneration = BuildSeedRepositoryContainerName(processStartTimeUtcTicks: 2, sequence: 1);
+
+        Assert.NotEqual(firstGeneration, secondGeneration);
+    }
+
+    [Xunit.Fact]
     public void SeedRepositoriesDoNotShareAMutableParentDirectory()
     {
         var firstRepo = CreateSeededRepository();
