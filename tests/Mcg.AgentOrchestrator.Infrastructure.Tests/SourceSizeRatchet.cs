@@ -22,7 +22,9 @@ internal static class SourceSizeRatchet
             // Raised for goal 8b6de491: the slice-batch parent execution guard must be consulted where the
             // driver decides a goal's advance, which is the only point holding both the goal and the guard.
             new SourceSizeCeiling("src/Mcg.AgentOrchestrator.App/Orchestration/ConductorDriver.cs", 6191),
-            new SourceSizeCeiling("src/Mcg.AgentOrchestrator.App/Orchestration/ConductorBatchLoop.cs", 4974),
+            // Raised for goal dadadfac: set-aside re-admission must be decided where the loop already holds
+            // the goal, its recorded set-aside entry, and the current sweep blockers together.
+            new SourceSizeCeiling("src/Mcg.AgentOrchestrator.App/Orchestration/ConductorBatchLoop.cs", 5110),
             // Raised for goal 18afe5f2: missing-build-evidence rejection and commit suppression
             // must run where parsed worker results and authoritative changed paths meet. Raised again
             // for goal 0d39b5a3, which adds the narrow Planner sample launch and completion-selection
