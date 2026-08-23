@@ -790,7 +790,7 @@ public sealed class MtpTestRunnerScriptTests
         public bool DescendantExited { get; } = descendantExited;
     }
 
-    private sealed class ScriptSandbox : IDisposable
+    internal sealed class ScriptSandbox : IDisposable
     {
         private ScriptSandbox(
             string root,
@@ -1095,8 +1095,7 @@ public sealed class MtpTestRunnerScriptTests
 
         public void Dispose()
         {
-            TryDelete(Root);
-            TryDelete(LocalApplicationDataRoot);
+            ScriptSandboxCleanup.DeleteOrThrow([Root, LocalApplicationDataRoot]);
         }
 
         private static string TrxBody(int total, int passed, int failed) => $"""
@@ -1109,20 +1108,6 @@ public sealed class MtpTestRunnerScriptTests
             </TestRun>
             """;
 
-        private static void TryDelete(string path)
-        {
-            try
-            {
-                if (Directory.Exists(path))
-                {
-                    Directory.Delete(path, recursive: true);
-                }
-            }
-            catch
-            {
-                // Best-effort fixture cleanup; assertions retain the original failure signal.
-            }
-        }
     }
 }
 
