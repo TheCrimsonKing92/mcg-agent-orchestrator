@@ -239,7 +239,8 @@ internal sealed partial class ConductorDriver
         IOperatorChannel? channel = null,
         IModelProviderRegistry? providers = null,
         Action<AgentOrchestratorKernel, IReadOnlyCollection<GoalId>>? persistCriticalDispatchStart = null,
-        Func<GoalId, TaskId, InterruptedDispatchStateRead>? readCurrentInterruptedDispatchState = null)
+        Func<GoalId, TaskId, InterruptedDispatchStateRead>? readCurrentInterruptedDispatchState = null,
+        bool runAcceptanceAttemptsInCurrentProcess = false)
     {
         var dir = workspace.ExecutionDirectory;
         _executionDirectory = dir;
@@ -249,7 +250,8 @@ internal sealed partial class ConductorDriver
         _parallelAcceptanceAttemptCoordinator = new ConductorParallelAcceptanceAttemptCoordinator(
             Path.Combine(workspace.OrchestratorDirectory, "acceptance-gate-attempts"),
             dir,
-            tryRunPreSlot: RunParallelLandingAcceptancePreSlot);
+            tryRunPreSlot: RunParallelLandingAcceptancePreSlot,
+            runInline: runAcceptanceAttemptsInCurrentProcess);
         (_acceptanceEventSink, _noTickAcceptancePollDelay, _noTickAcceptancePollTimeout) = CreateProductionAcceptanceWaitConfiguration(workspace);
         _focusedEvidenceAttemptCoordinator = new ConductorParallelAcceptanceAttemptCoordinator(
             Path.Combine(workspace.OrchestratorDirectory, "pre-review-evidence-attempts"),

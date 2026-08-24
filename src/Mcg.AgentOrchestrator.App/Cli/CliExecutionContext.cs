@@ -127,6 +127,8 @@ public bool IsStandardInputRedirected { get; } = isStandardInputRedirected ?? Co
 
 public IGoalAcceptanceVerifier AcceptanceVerifier { get; init; } = new GoalAcceptanceVerifier();
 
+public bool RunInjectedAcceptanceVerifierInCurrentProcess { get; init; }
+
 public ICliGoalWorktreeService Worktrees { get; init; } = DefaultCliGoalWorktreeService.Instance;
 
 public GoalWorktreeCleanupHooks CleanupHooks { get; init; } = GoalWorktreeCleanupHooks.Default;
