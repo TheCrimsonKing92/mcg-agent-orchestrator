@@ -1564,6 +1564,123 @@ public sealed class AcceptanceGateEngineSettingsTests
         }
     }
 
+    [Xunit.Fact(DisplayName = "GoalAcceptanceVerifier_within_attempt_rerun_reaps_previous_invocation_heartbeat_child")]
+    public async Task GoalAcceptanceVerifierWithinAttemptRerunReapsPreviousInvocationHeartbeatChild()
+    {
+        const string checkName = "infrastructure tests: Remainder";
+        var root = CreateWorkspace("""
+            {
+              "version": 1,
+              "engine": {
+                "maxConcurrentShards": 1,
+                "partitionVerdictFullRerunEveryN": 1
+              },
+              "checks": [
+                {
+                  "name": "infrastructure tests: Remainder",
+                  "type": "dotnet-test",
+                  "runner": "vstest",
+                  "project": "tests/Mcg.AgentOrchestrator.Infrastructure.Tests/Mcg.AgentOrchestrator.Infrastructure.Tests.csproj",
+                  "arguments": ["--filter", "FullyQualifiedName~RemainderTests"]
+                }
+              ]
+            }
+            """);
+        var goalId = new Mcg.AgentOrchestrator.Core.GoalId("87654321876543218765432187654321");
+        var previousPrefix = Environment.GetEnvironmentVariable(
+            GoalAcceptanceVerifier.AcceptanceAttemptTrxPrefixVariable);
+        var attemptPrefix = Path.Combine(root, ".orchestrator", "heartbeat-rerun-attempt");
+        var invocation = 0;
+        var sleeperStartInfo = new System.Diagnostics.ProcessStartInfo
+        {
+            FileName = "powershell",
+            UseShellExecute = false,
+            CreateNoWindow = true
+        };
+        sleeperStartInfo.ArgumentList.Add("-NoProfile");
+        sleeperStartInfo.ArgumentList.Add("-Command");
+        sleeperStartInfo.ArgumentList.Add("Start-Sleep -Seconds 30");
+        using var sleeper = System.Diagnostics.Process.Start(sleeperStartInfo)
+            ?? throw new InvalidOperationException("Failed to start heartbeat child process.");
+        GoalAcceptanceVerifier.ResolvePartitionVerdictCandidateTreeShaForTests = _ => "tree-heartbeat-rerun";
+        GoalAcceptanceVerifier.ResolvePartitionVerdictMainShaForTests = _ => "main-heartbeat-rerun";
+        GoalAcceptanceVerifier.ResolvePartitionVerdictVerifyingCommitShaForTests = _ => "commit-heartbeat-rerun";
+        try
+        {
+            var verifier = new GoalAcceptanceVerifier((arguments, _, _) =>
+            {
+                if (arguments.Length < 2 ||
+                    !arguments[0].Equals("dotnet", StringComparison.OrdinalIgnoreCase) ||
+                    !arguments[1].Equals("test", StringComparison.OrdinalIgnoreCase))
+                {
+                    return Task.FromResult(new GoalAcceptanceVerifier.CommandResult(0, "Build server shutdown succeeded."));
+                }
+
+                var currentInvocation = invocation++;
+                if (currentInvocation == 0)
+                {
+                    var environment = DotnetBuildEnvironmentManager.ResolveGoalEnvironment(goalId);
+                    var heartbeatPath = GoalAcceptanceVerifier.ResolveGateHeartbeatPathForTests(checkName, environment);
+                    GateHeartbeatArtifacts.Write(
+                        heartbeatPath,
+                        new GateHeartbeatSnapshot(
+                            goalId.Value,
+                            "verification-check",
+                            checkName,
+                            null,
+                            sleeper.Id,
+                            sleeper.Id,
+                            "completed",
+                            DateTimeOffset.UtcNow,
+                            DateTimeOffset.UtcNow,
+                            DateTimeOffset.UtcNow,
+                            0,
+                            0,
+                            0,
+                            $"dotnet test --artifacts-path {environment.ArtifactsPath}"));
+                }
+                else
+                {
+                    Xunit.Assert.True(
+                        sleeper.HasExited,
+                        "Previous invocation heartbeat child remained alive before the later same-named check ran.");
+                }
+
+                WriteVstestTrx(
+                    arguments,
+                    currentInvocation == 0 ? "RemainderTests.Fails" : "RemainderTests.Passes",
+                    currentInvocation == 0 ? "Failed" : "Passed");
+                return Task.FromResult(new GoalAcceptanceVerifier.CommandResult(
+                    currentInvocation == 0 ? 1 : 0,
+                    currentInvocation == 0 ? "Failed: 1" : "Passed: 1"));
+            });
+
+            Environment.SetEnvironmentVariable(
+                GoalAcceptanceVerifier.AcceptanceAttemptTrxPrefixVariable,
+                attemptPrefix);
+            var result = await verifier.RunAsync(root, goalId);
+
+            Xunit.Assert.True(result.Passed);
+            Xunit.Assert.True(result.Retried);
+            Xunit.Assert.Equal(2, invocation);
+        }
+        finally
+        {
+            if (!sleeper.HasExited)
+            {
+                sleeper.Kill(entireProcessTree: true);
+                sleeper.WaitForExit();
+            }
+            Environment.SetEnvironmentVariable(
+                GoalAcceptanceVerifier.AcceptanceAttemptTrxPrefixVariable,
+                previousPrefix);
+            GoalAcceptanceVerifier.ResolvePartitionVerdictCandidateTreeShaForTests = null;
+            GoalAcceptanceVerifier.ResolvePartitionVerdictMainShaForTests = null;
+            GoalAcceptanceVerifier.ResolvePartitionVerdictVerifyingCommitShaForTests = null;
+            Directory.Delete(root, recursive: true);
+        }
+    }
+
     [Xunit.Fact(DisplayName = "GoalAcceptanceVerifier_distinct_named_checks_keep_legacy_telemetry_names")]
     public async Task GoalAcceptanceVerifierDistinctNamedChecksKeepLegacyTelemetryNames()
     {

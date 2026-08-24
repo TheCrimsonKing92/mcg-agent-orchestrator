@@ -430,8 +430,11 @@ public sealed class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
     }
 
     private static string AppendTestTelemetryInvocationSuffix(string stem) =>
-        CurrentTestTelemetryInvocation.Value is { Ordinal: > 0 } invocation
-            ? $"{stem}-run-{invocation.Ordinal.ToString(System.Globalization.CultureInfo.InvariantCulture)}"
+        AppendTestTelemetryInvocationSuffix(stem, CurrentTestTelemetryInvocation.Value?.Ordinal ?? 0);
+
+    private static string AppendTestTelemetryInvocationSuffix(string stem, int ordinal) =>
+        ordinal > 0
+            ? $"{stem}-run-{ordinal.ToString(System.Globalization.CultureInfo.InvariantCulture)}"
             : stem;
 
     private static string? AcceptanceAttemptResultsPrefix =>
@@ -4612,10 +4615,48 @@ public sealed class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
         GoalId? goalId,
         int? stableSlotIndex)
     {
-        var heartbeatPath = ResolveGateHeartbeatPath(check, environment, stableSlotIndex, worktreePath: null);
+        foreach (var heartbeatPath in ResolveGateHeartbeatPathsForReap(check, environment, stableSlotIndex))
+        {
+            if (TryReapRecordedGateChild(heartbeatPath, environment, goalId, stableSlotIndex))
+            {
+                return;
+            }
+        }
+    }
+
+    private static IEnumerable<string> ResolveGateHeartbeatPathsForReap(
+        AcceptanceManifestCheck check,
+        DotnetBuildEnvironment environment,
+        int? stableSlotIndex)
+    {
+        yield return ResolveGateHeartbeatPath(check, environment, stableSlotIndex, worktreePath: null);
+
+        if (string.IsNullOrWhiteSpace(AcceptanceAttemptResultsPrefix) ||
+            CurrentTestTelemetryInvocation.Value is not { Ordinal: > 0 } invocation)
+        {
+            yield break;
+        }
+
+        for (var ordinal = invocation.Ordinal - 1; ordinal >= 0; ordinal--)
+        {
+            yield return ResolveGateHeartbeatPath(
+                check,
+                environment,
+                stableSlotIndex,
+                worktreePath: null,
+                invocationOrdinal: ordinal);
+        }
+    }
+
+    private static bool TryReapRecordedGateChild(
+        string heartbeatPath,
+        DotnetBuildEnvironment environment,
+        GoalId? goalId,
+        int? stableSlotIndex)
+    {
         if (!File.Exists(heartbeatPath))
         {
-            return;
+            return false;
         }
 
         GateHeartbeatSnapshot? snapshot;
@@ -4627,44 +4668,44 @@ public sealed class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
         }
         catch
         {
-            return;
+            return false;
         }
 
         if (snapshot?.ChildPid is not { } childPid)
         {
-            return;
+            return false;
         }
 
         if (stableSlotIndex.HasValue && snapshot.SlotIndex != stableSlotIndex)
         {
-            return;
+            return false;
         }
 
         if (goalId is not null &&
             !string.IsNullOrWhiteSpace(snapshot.GoalId) &&
             !snapshot.GoalId.Equals(goalId.Value, StringComparison.Ordinal))
         {
-            return;
+            return false;
         }
 
         if (!snapshot.State.Equals("running", StringComparison.OrdinalIgnoreCase) &&
             DateTimeOffset.UtcNow - snapshot.LastObservedAt > TimeSpan.FromMinutes(5))
         {
-            return;
+            return false;
         }
 
         if (snapshot.CommandLine is not null &&
             !snapshot.CommandLine.Contains(environment.ArtifactsPath, StringComparison.OrdinalIgnoreCase))
         {
-            return;
+            return false;
         }
 
         if (!IsProcessRunning(childPid))
         {
-            return;
+            return false;
         }
 
-        WorkerProcessJobs.TryKillRecordedOwnedChildAndWait(childPid, TimeSpan.FromSeconds(5));
+        return WorkerProcessJobs.TryKillRecordedOwnedChildAndWait(childPid, TimeSpan.FromSeconds(5));
     }
 
     private static bool IsProcessRunning(int processId)
@@ -6944,14 +6985,17 @@ public sealed class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
         AcceptanceManifestCheck check,
         DotnetBuildEnvironment? environment,
         int? stableSlotIndex,
-        string? worktreePath)
+        string? worktreePath,
+        int? invocationOrdinal = null)
     {
         var attemptPrefix = AcceptanceAttemptResultsPrefix;
         if (!string.IsNullOrWhiteSpace(attemptPrefix))
         {
             var attemptDirectory = Path.GetDirectoryName(attemptPrefix);
             var stem = $"{Path.GetFileName(attemptPrefix)}.{Slug(check.Name)}-{ShortHash(check.Name)}";
-            stem = AppendTestTelemetryInvocationSuffix(stem);
+            stem = AppendTestTelemetryInvocationSuffix(
+                stem,
+                invocationOrdinal ?? CurrentTestTelemetryInvocation.Value?.Ordinal ?? 0);
             var heartbeatFileName = BoundFileName(stem, $".{GateHeartbeatArtifacts.FileName}");
             return string.IsNullOrWhiteSpace(attemptDirectory)
                 ? heartbeatFileName
