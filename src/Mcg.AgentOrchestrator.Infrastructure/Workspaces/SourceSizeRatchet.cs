@@ -25,7 +25,10 @@ internal static class SourceSizeRatchet
             // effective-plan and structural-coverage owner; the check no longer rewrites lane policy.
             // Raised for goal 604b8a93: OperatorComms must join the base-build-cache project registry
             // where the gate plan owns cacheable project ordering and complete build-receipt coverage.
-            new SourceSizeCeiling("src/Mcg.AgentOrchestrator.Infrastructure/Workspaces/GoalAcceptanceVerifier.cs", 8372),
+            // Raised for goal 98430a7c: invocation-scoped TRX/heartbeat identity and prior-run heartbeat
+            // reaping must stay at the verifier's check-execution boundary so one immutable ordinal is
+            // shared by telemetry resolution, result identity, and managed-child lifecycle handling.
+            new SourceSizeCeiling("src/Mcg.AgentOrchestrator.Infrastructure/Workspaces/GoalAcceptanceVerifier.cs", 8471),
             // Goal 682f25a1 re-derived this row after integrating goal c2eae988, whose acceptance
             // cancellation seam had already added 74 net lines before the multi-file ratchet landed.
             // Raised for goal a22c7293: slice admission must run where all dispatch paths converge.

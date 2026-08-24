@@ -279,6 +279,8 @@ Goal `46ff9f83` raised the `ConductorBatchLoopTestsParallelAcceptance.cs` row fr
 
 Goal `b4b80aca` raised the `GoalAcceptanceVerifier.cs` row from 8763 to 8779 for the phase-transition calls that connect gate accounting to verifier-owned control-flow and resource-custody boundaries. The accountant, records, formatting, and lifecycle behavior remain extracted in `AcceptanceGatePhaseAccounting.cs`; moving the remaining transitions out would split the orchestration invariant they measure.
 
+Goal `98430a7c` raised the `GoalAcceptanceVerifier.cs` row from 8372 to 8471 for invocation-scoped TRX and heartbeat identity. Allocation, telemetry resolution, result identity, and prior-run child reaping must share one immutable invocation ordinal at the verifier's check-execution boundary; extracting only the added lines would split that lifecycle invariant. The existing decomposition backlog for whole verifier product slices remains the intended reduction path.
+
 Goal `682f25a1` re-derived the `GoalAcceptanceVerifierTests.cs` row from 10426 to 10451 after integrating goal `b4b80aca`, whose gate-phase accounting coverage had already added 25 net lines before the multi-file ratchet landed. This is a catch-up raise for pre-existing growth, not growth introduced by the ratchet change.
 
 Earlier raises of that same file, recorded before the table existed: goal `75b85ca1` from 8713 to 8760 for lane selection and structural-coverage threading owned by the gate plan, and goal `85f0b81d` to 8763 after extracting 227 behaviour lines to `AcceptanceLaneDurationStore.cs`, leaving only call sites.
