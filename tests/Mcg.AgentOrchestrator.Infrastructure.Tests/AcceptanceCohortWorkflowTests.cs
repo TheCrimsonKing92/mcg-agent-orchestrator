@@ -196,7 +196,7 @@ public sealed class AcceptanceCohortWorkflowTests : GoalWorktreeTestBase
     }
 
     [Fact]
-    public void CohortWorkspace_LowIntegrityHostCanWriteScratch_AfterBoundaryAndGitMetadataStayMedium()
+    public void CohortWorkspace_MediumGrove_AllowsLowScratchAndProtectsGit()
     {
         if (!OperatingSystem.IsWindows())
         {
@@ -205,6 +205,12 @@ public sealed class AcceptanceCohortWorkflowTests : GoalWorktreeTestBase
 
         var repo = CreateAcceptanceCohortRepository();
         var labeler = new ModeledIntegrityLabeler();
+        var workspaceGrove = Path.Combine(repo, GoalWorktrees.DirectoryName);
+        labeler.Seed(
+            workspaceGrove,
+            new IntegrityLabelState(Exists: true, Low: false, Inheritable: true, Medium: true));
+        Assert.True(labeler.WouldDenyLowWrite(
+            Path.Combine(workspaceGrove, "c-unprepared", ".scratch", "mcg-wt", "before-preparation")));
         using var labelerScope = AcceptanceWorkspaceIntegrityPreparer.PushIntegrityLabelerForTests(labeler);
         try
         {
@@ -227,52 +233,18 @@ public sealed class AcceptanceCohortWorkflowTests : GoalWorktreeTestBase
                 ? Path.GetFullPath(commonDirRaw)
                 : Path.GetFullPath(Path.Combine(workspace.Path, commonDirRaw));
 
-            Assert.True(labeler.LowWriteDeniedBeforePreparation);
             Assert.False(labeler.WouldDenyLowWrite(scratchWrite));
             Assert.True(labeler.WouldDenyLowWrite(gitFile));
             Assert.True(labeler.WouldDenyLowWrite(commonDir));
-            Assert.Collection(
-                labeler.Operations,
-                operation =>
-                {
-                    Assert.Equal("set", operation.Kind);
-                    Assert.Equal(Path.GetFullPath(workspace.Path), operation.Path, ignoreCase: true);
-                },
-                operation =>
-                {
-                    Assert.Equal("query", operation.Kind);
-                    Assert.Equal(Path.GetDirectoryName(workspace.Path), operation.Path, ignoreCase: true);
-                },
-                operation =>
-                {
-                    Assert.Equal("set", operation.Kind);
-                    Assert.Equal(Path.GetFullPath(gitFile), operation.Path, ignoreCase: true);
-                },
-                operation =>
-                {
-                    Assert.Equal("set", operation.Kind);
-                    Assert.Equal(commonDir, operation.Path, ignoreCase: true);
-                });
-            Assert.Collection(
-                labeler.SetCalls,
-                call =>
-                {
-                    Assert.Equal(Path.GetFullPath(workspace.Path), call.Path, ignoreCase: true);
-                    Assert.Equal(WorkerSandboxPreparer.LowInheritableLevel, call.Level);
-                    Assert.True(call.Recursive);
-                },
-                call =>
-                {
-                    Assert.Equal(Path.GetFullPath(gitFile), call.Path, ignoreCase: true);
-                    Assert.Equal("M", call.Level);
-                    Assert.False(call.Recursive);
-                },
-                call =>
-                {
-                    Assert.Equal(commonDir, call.Path, ignoreCase: true);
-                    Assert.Equal("(OI)(CI)M", call.Level);
-                    Assert.False(call.Recursive);
-                });
+            var workspaceLowIndex = labeler.FindSetIndex(
+                workspace.Path,
+                WorkerSandboxPreparer.LowInheritableLevel,
+                recursive: true);
+            var gitMediumIndex = labeler.FindSetIndex(gitFile, "M", recursive: false);
+            var commonDirMediumIndex = labeler.FindSetIndex(commonDir, "(OI)(CI)M", recursive: false);
+            Assert.True(workspaceLowIndex >= 0);
+            Assert.True(gitMediumIndex > workspaceLowIndex);
+            Assert.True(commonDirMediumIndex > workspaceLowIndex);
         }
         finally
         {
@@ -281,7 +253,50 @@ public sealed class AcceptanceCohortWorkflowTests : GoalWorktreeTestBase
     }
 
     [Fact]
-    public void CohortWorkspace_IntegrityPreparationFailure_IsTypedWorkspaceFailure_AndRemovesWorkspace()
+    public void CohortWorkspace_AlreadyLowGrove_SkipsRelabeling()
+    {
+        if (!OperatingSystem.IsWindows())
+        {
+            return;
+        }
+
+        var repo = CreateAcceptanceCohortRepository();
+        var labeler = new ModeledIntegrityLabeler();
+        var workspaceGrove = Path.Combine(repo, GoalWorktrees.DirectoryName);
+        labeler.Seed(
+            workspaceGrove,
+            new IntegrityLabelState(Exists: true, Low: true, Inheritable: true));
+        using var labelerScope = AcceptanceWorkspaceIntegrityPreparer.PushIntegrityLabelerForTests(labeler);
+        try
+        {
+            var main = RunGitOutput(repo, "rev-parse", "main").Trim();
+            var first = CreateCandidate(repo, "11111111111111111111111111111111", "src/First.cs", "first");
+            var second = CreateCandidate(repo, "22222222222222222222222222222222", "tests/Second.cs", "second");
+
+            using var workspace = GoalWorktrees.CreateAcceptanceCohortWorkspace(
+                repo,
+                main,
+                [
+                    Bind(first.GoalId, first.Revision, "src/First.cs", "resource:first"),
+                    Bind(second.GoalId, second.Revision, "tests/Second.cs", "resource:second")
+                ]);
+
+            Assert.False(labeler.WouldDenyLowWrite(
+                Path.Combine(workspace.Path, ".scratch", "mcg-wt", Guid.NewGuid().ToString("N"))));
+            Assert.Empty(labeler.SetCalls);
+            Assert.Contains(
+                labeler.Operations,
+                operation => operation.Kind == "query" &&
+                    string.Equals(operation.Path, workspaceGrove, StringComparison.OrdinalIgnoreCase));
+        }
+        finally
+        {
+            DeleteDirectory(repo);
+        }
+    }
+
+    [Fact]
+    public void CohortWorkspace_PreparationFailure_IsTypedAndCleansUp()
     {
         if (!OperatingSystem.IsWindows())
         {
@@ -290,6 +305,9 @@ public sealed class AcceptanceCohortWorkflowTests : GoalWorktreeTestBase
 
         var repo = CreateAcceptanceCohortRepository();
         var labeler = new ModeledIntegrityLabeler(failLowSet: true);
+        labeler.Seed(
+            Path.Combine(repo, GoalWorktrees.DirectoryName),
+            new IntegrityLabelState(Exists: true, Low: false, Inheritable: true, Medium: true));
         using var labelerScope = AcceptanceWorkspaceIntegrityPreparer.PushIntegrityLabelerForTests(labeler);
         try
         {
@@ -2724,14 +2742,12 @@ public sealed class AcceptanceCohortWorkflowTests : GoalWorktreeTestBase
             ChangeRiskTier.Behavior,
             ConductorTransitionDecision.Auto,
             GateReadyMergeStatus.Clean.ToString(),
-              GateReadyMergeReason.NoConflictsDetected.ToString());
+             GateReadyMergeReason.NoConflictsDetected.ToString());
 
     private sealed class ModeledIntegrityLabeler(bool failLowSet = false) : IWorkerIntegrityLabeler
     {
         private readonly Dictionary<string, IntegrityLabelState> _states =
             new(StringComparer.OrdinalIgnoreCase);
-
-        internal bool LowWriteDeniedBeforePreparation { get; private set; }
 
         internal List<(string Kind, string Path)> Operations { get; } = [];
 
@@ -2741,9 +2757,8 @@ public sealed class AcceptanceCohortWorkflowTests : GoalWorktreeTestBase
         {
             var normalized = Path.GetFullPath(path);
             Operations.Add(("query", normalized));
-            return _states.GetValueOrDefault(
-                normalized,
-                new IntegrityLabelState(Exists: true, Low: false, Inheritable: false, Medium: true));
+            return ResolveState(normalized) ??
+                new IntegrityLabelState(Exists: true, Low: false, Inheritable: false);
         }
 
         public bool SetIntegrity(string path, string level, bool recursive)
@@ -2752,14 +2767,9 @@ public sealed class AcceptanceCohortWorkflowTests : GoalWorktreeTestBase
             Operations.Add(("set", normalized));
             SetCalls.Add((normalized, level, recursive));
             var low = level.EndsWith('L');
-            if (low)
+            if (low && failLowSet)
             {
-                LowWriteDeniedBeforePreparation = WouldDenyLowWrite(
-                    Path.Combine(normalized, ".scratch", "mcg-wt", "before-preparation"));
-                if (failLowSet)
-                {
-                    return false;
-                }
+                return false;
             }
 
             _states[normalized] = new IntegrityLabelState(
@@ -2770,7 +2780,25 @@ public sealed class AcceptanceCohortWorkflowTests : GoalWorktreeTestBase
             return true;
         }
 
+        internal void Seed(string path, IntegrityLabelState state) =>
+            _states[Path.GetFullPath(path)] = state;
+
+        internal int FindSetIndex(string path, string level, bool recursive)
+        {
+            var normalized = Path.GetFullPath(path);
+            return SetCalls.FindIndex(call =>
+                string.Equals(call.Path, normalized, StringComparison.OrdinalIgnoreCase) &&
+                call.Level == level &&
+                call.Recursive == recursive);
+        }
+
         internal bool WouldDenyLowWrite(string path)
+        {
+            var current = Path.GetFullPath(path);
+            return ResolveState(current) is not { Low: true };
+        }
+
+        private IntegrityLabelState? ResolveState(string path)
         {
             var current = Path.GetFullPath(path);
             var exact = true;
@@ -2778,14 +2806,14 @@ public sealed class AcceptanceCohortWorkflowTests : GoalWorktreeTestBase
             {
                 if (_states.TryGetValue(current, out var state) && (exact || state.Inheritable))
                 {
-                    return !state.Low;
+                    return state;
                 }
 
                 exact = false;
                 current = Path.GetDirectoryName(current) ?? string.Empty;
             }
 
-            return true;
+            return null;
         }
     }
 

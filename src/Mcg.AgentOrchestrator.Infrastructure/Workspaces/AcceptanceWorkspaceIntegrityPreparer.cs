@@ -21,6 +21,20 @@ internal static class AcceptanceWorkspaceIntegrityPreparer
         }
 
         var integrityLabeler = IntegrityLabelerOverrideForTests.Value ?? new IcaclsIntegrityLabeler();
+        var workspaceGrove = Directory.GetParent(workspacePath);
+        if (workspaceGrove is not null)
+        {
+            var groveState = integrityLabeler.Query(workspaceGrove.FullName);
+            if (groveState.Exists && groveState.Low && groveState.Inheritable)
+            {
+                // Low-integrity acceptance tests create fixture repositories inside the already-Low
+                // goal worktree. Their disposable worktrees inherit Low and the Low test host cannot
+                // raise the fixture grove or its Git metadata to Medium. Production groves are Medium,
+                // so skipping here is limited to the already-writable, already-contained fixture case.
+                return;
+            }
+        }
+
         if (!integrityLabeler.SetIntegrity(
                 workspacePath,
                 WorkerSandboxPreparer.LowInheritableLevel,
