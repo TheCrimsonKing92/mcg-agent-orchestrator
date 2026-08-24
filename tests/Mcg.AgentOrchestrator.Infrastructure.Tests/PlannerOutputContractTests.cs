@@ -261,6 +261,7 @@ public sealed class PlannerOutputContractTests : WorkerDispatchTestSupport
         var workingDirectory = CreateTempDirectory();
         Directory.CreateDirectory(Path.Combine(workingDirectory, "prior"));
         Directory.CreateDirectory(Path.Combine(workingDirectory, "active"));
+        // Sibling.cs stays absent: inheriting the historical new-file marker under active context would incorrectly accept it.
         File.WriteAllText(Path.Combine(workingDirectory, "active", "Anchor.cs"), "anchor");
         var plan = PlannerContractPlanFixture().Replace(
             PlannerContractAcceptanceMappingBody,
