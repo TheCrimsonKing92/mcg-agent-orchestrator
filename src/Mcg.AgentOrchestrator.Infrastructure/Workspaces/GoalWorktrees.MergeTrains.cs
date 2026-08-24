@@ -149,6 +149,8 @@ public static partial class GoalWorktrees
                 materialized.Add(member.WithRebasedHead(ResolveRequiredRef(workspacePath, "HEAD")));
             }
 
+            AcceptanceWorkspaceIntegrityPreparer.Prepare(workspacePath);
+
             var result = new MergeTrainWorkspace(
                 root,
                 workspacePath,

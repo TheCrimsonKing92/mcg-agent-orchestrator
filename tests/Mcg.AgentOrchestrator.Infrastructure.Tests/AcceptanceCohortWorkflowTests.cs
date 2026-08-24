@@ -196,6 +196,146 @@ public sealed class AcceptanceCohortWorkflowTests : GoalWorktreeTestBase
     }
 
     [Fact]
+    public void CohortWorkspace_MediumGrove_AllowsLowScratchAndProtectsGit()
+    {
+        if (!OperatingSystem.IsWindows())
+        {
+            return;
+        }
+
+        var repo = CreateAcceptanceCohortRepository();
+        var labeler = new ModeledIntegrityLabeler();
+        var workspaceGrove = Path.Combine(repo, GoalWorktrees.DirectoryName);
+        labeler.Seed(
+            workspaceGrove,
+            new IntegrityLabelState(Exists: true, Low: false, Inheritable: true, Medium: true));
+        Assert.True(labeler.WouldDenyLowWrite(
+            Path.Combine(workspaceGrove, "c-unprepared", ".scratch", "mcg-wt", "before-preparation")));
+        using var labelerScope = AcceptanceWorkspaceIntegrityPreparer.PushIntegrityLabelerForTests(labeler);
+        try
+        {
+            var main = RunGitOutput(repo, "rev-parse", "main").Trim();
+            var first = CreateCandidate(repo, "11111111111111111111111111111111", "src/First.cs", "first");
+            var second = CreateCandidate(repo, "22222222222222222222222222222222", "tests/Second.cs", "second");
+
+            using var workspace = GoalWorktrees.CreateAcceptanceCohortWorkspace(
+                repo,
+                main,
+                [
+                    Bind(first.GoalId, first.Revision, "src/First.cs", "resource:first"),
+                    Bind(second.GoalId, second.Revision, "tests/Second.cs", "resource:second")
+                ]);
+
+            var scratchWrite = Path.Combine(workspace.Path, ".scratch", "mcg-wt", Guid.NewGuid().ToString("N"));
+            var gitFile = Path.Combine(workspace.Path, ".git");
+            var commonDirRaw = RunGitOutput(workspace.Path, "rev-parse", "--git-common-dir").Trim();
+            var commonDir = Path.IsPathRooted(commonDirRaw)
+                ? Path.GetFullPath(commonDirRaw)
+                : Path.GetFullPath(Path.Combine(workspace.Path, commonDirRaw));
+
+            Assert.False(labeler.WouldDenyLowWrite(scratchWrite));
+            Assert.True(labeler.WouldDenyLowWrite(gitFile));
+            Assert.True(labeler.WouldDenyLowWrite(commonDir));
+            var workspaceLowIndex = labeler.FindSetIndex(
+                workspace.Path,
+                WorkerSandboxPreparer.LowInheritableLevel,
+                recursive: true);
+            var gitMediumIndex = labeler.FindSetIndex(gitFile, "M", recursive: false);
+            var commonDirMediumIndex = labeler.FindSetIndex(commonDir, "(OI)(CI)M", recursive: false);
+            Assert.True(workspaceLowIndex >= 0);
+            Assert.True(gitMediumIndex > workspaceLowIndex);
+            Assert.True(commonDirMediumIndex > workspaceLowIndex);
+        }
+        finally
+        {
+            DeleteDirectory(repo);
+        }
+    }
+
+    [Fact]
+    public void CohortWorkspace_AlreadyLowGrove_SkipsRelabeling()
+    {
+        if (!OperatingSystem.IsWindows())
+        {
+            return;
+        }
+
+        var repo = CreateAcceptanceCohortRepository();
+        var labeler = new ModeledIntegrityLabeler();
+        var workspaceGrove = Path.Combine(repo, GoalWorktrees.DirectoryName);
+        labeler.Seed(
+            workspaceGrove,
+            new IntegrityLabelState(Exists: true, Low: true, Inheritable: true));
+        using var labelerScope = AcceptanceWorkspaceIntegrityPreparer.PushIntegrityLabelerForTests(labeler);
+        try
+        {
+            var main = RunGitOutput(repo, "rev-parse", "main").Trim();
+            var first = CreateCandidate(repo, "11111111111111111111111111111111", "src/First.cs", "first");
+            var second = CreateCandidate(repo, "22222222222222222222222222222222", "tests/Second.cs", "second");
+
+            using var workspace = GoalWorktrees.CreateAcceptanceCohortWorkspace(
+                repo,
+                main,
+                [
+                    Bind(first.GoalId, first.Revision, "src/First.cs", "resource:first"),
+                    Bind(second.GoalId, second.Revision, "tests/Second.cs", "resource:second")
+                ]);
+
+            Assert.False(labeler.WouldDenyLowWrite(
+                Path.Combine(workspace.Path, ".scratch", "mcg-wt", Guid.NewGuid().ToString("N"))));
+            Assert.Empty(labeler.SetCalls);
+            Assert.Contains(
+                labeler.Operations,
+                operation => operation.Kind == "query" &&
+                    string.Equals(operation.Path, workspaceGrove, StringComparison.OrdinalIgnoreCase));
+        }
+        finally
+        {
+            DeleteDirectory(repo);
+        }
+    }
+
+    [Fact]
+    public void CohortWorkspace_PreparationFailure_IsTypedAndCleansUp()
+    {
+        if (!OperatingSystem.IsWindows())
+        {
+            return;
+        }
+
+        var repo = CreateAcceptanceCohortRepository();
+        var labeler = new ModeledIntegrityLabeler(failLowSet: true);
+        labeler.Seed(
+            Path.Combine(repo, GoalWorktrees.DirectoryName),
+            new IntegrityLabelState(Exists: true, Low: false, Inheritable: true, Medium: true));
+        using var labelerScope = AcceptanceWorkspaceIntegrityPreparer.PushIntegrityLabelerForTests(labeler);
+        try
+        {
+            var main = RunGitOutput(repo, "rev-parse", "main").Trim();
+            var first = CreateCandidate(repo, "11111111111111111111111111111111", "src/First.cs", "first");
+            var second = CreateCandidate(repo, "22222222222222222222222222222222", "tests/Second.cs", "second");
+
+            var failure = Assert.Throws<AcceptanceCohortMaterializationException>(() =>
+                GoalWorktrees.CreateAcceptanceCohortWorkspace(
+                    repo,
+                    main,
+                    [
+                        Bind(first.GoalId, first.Revision, "src/First.cs", "resource:first"),
+                        Bind(second.GoalId, second.Revision, "tests/Second.cs", "resource:second")
+                    ]));
+
+            Assert.Equal(AcceptanceCohortMaterializationFailureKind.WorkspaceFailure, failure.Kind);
+            Assert.Contains("Low-integrity gate writes", failure.Message, StringComparison.Ordinal);
+            AssertNoCohortWorkspaces(repo);
+            Assert.Single(labeler.SetCalls);
+        }
+        finally
+        {
+            DeleteDirectory(repo);
+        }
+    }
+
+    [Fact]
     public void DisposableWorkspaces_UnderNestedGitWorktree_UseShortTokensAndCleanUp()
     {
         var repo = CreateAcceptanceCohortRepository();
@@ -2603,6 +2743,79 @@ public sealed class AcceptanceCohortWorkflowTests : GoalWorktreeTestBase
             ConductorTransitionDecision.Auto,
             GateReadyMergeStatus.Clean.ToString(),
              GateReadyMergeReason.NoConflictsDetected.ToString());
+
+    private sealed class ModeledIntegrityLabeler(bool failLowSet = false) : IWorkerIntegrityLabeler
+    {
+        private readonly Dictionary<string, IntegrityLabelState> _states =
+            new(StringComparer.OrdinalIgnoreCase);
+
+        internal List<(string Kind, string Path)> Operations { get; } = [];
+
+        internal List<(string Path, string Level, bool Recursive)> SetCalls { get; } = [];
+
+        public IntegrityLabelState Query(string path)
+        {
+            var normalized = Path.GetFullPath(path);
+            Operations.Add(("query", normalized));
+            return ResolveState(normalized) ??
+                new IntegrityLabelState(Exists: true, Low: false, Inheritable: false);
+        }
+
+        public bool SetIntegrity(string path, string level, bool recursive)
+        {
+            var normalized = Path.GetFullPath(path);
+            Operations.Add(("set", normalized));
+            SetCalls.Add((normalized, level, recursive));
+            var low = level.EndsWith('L');
+            if (low && failLowSet)
+            {
+                return false;
+            }
+
+            _states[normalized] = new IntegrityLabelState(
+                Exists: true,
+                Low: low,
+                Inheritable: level.Contains("(OI)(CI)", StringComparison.Ordinal),
+                Medium: level.EndsWith('M'));
+            return true;
+        }
+
+        internal void Seed(string path, IntegrityLabelState state) =>
+            _states[Path.GetFullPath(path)] = state;
+
+        internal int FindSetIndex(string path, string level, bool recursive)
+        {
+            var normalized = Path.GetFullPath(path);
+            return SetCalls.FindIndex(call =>
+                string.Equals(call.Path, normalized, StringComparison.OrdinalIgnoreCase) &&
+                call.Level == level &&
+                call.Recursive == recursive);
+        }
+
+        internal bool WouldDenyLowWrite(string path)
+        {
+            var current = Path.GetFullPath(path);
+            return ResolveState(current) is not { Low: true };
+        }
+
+        private IntegrityLabelState? ResolveState(string path)
+        {
+            var current = Path.GetFullPath(path);
+            var exact = true;
+            while (!string.IsNullOrWhiteSpace(current))
+            {
+                if (_states.TryGetValue(current, out var state) && (exact || state.Inheritable))
+                {
+                    return state;
+                }
+
+                exact = false;
+                current = Path.GetDirectoryName(current) ?? string.Empty;
+            }
+
+            return null;
+        }
+    }
 
     private sealed class BlockingAcceptanceVerifier(
         ManualResetEventSlim started,
