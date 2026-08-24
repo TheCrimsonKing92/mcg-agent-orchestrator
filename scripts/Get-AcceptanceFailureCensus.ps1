@@ -310,7 +310,7 @@ function Write-MissingReport {
     [Console]::WriteLine('status=missing')
     [Console]::WriteLine("message=$($Resolution.Message)")
     [Console]::WriteLine('failedChecks=unavailable')
-    [Console]::WriteLine('trx=0 executed~0 failed=0 distinctSignatures=0')
+    [Console]::WriteLine('trx=0 executed~0 failed=unknown distinctSignatures=unknown')
     [Console]::WriteLine('unreadable=0 unparseable=0 otherNonPassing=0 signaturesSuppressed=0')
 }
 
@@ -458,7 +458,12 @@ foreach ($diagnostic in $diagnostics) {
     [Console]::WriteLine("diagnostic=$($diagnostic.Kind) file=$($diagnostic.File) detail=$($diagnostic.Detail)")
 }
 [Console]::WriteLine("failedChecks=$failedChecks")
-[Console]::WriteLine([string]::Format($invariant, 'trx={0} executed~{1} failed={2} distinctSignatures={3}', $trxList.Count, $executed, $parsedFailed, $ordered.Count))
+if ($status -eq 'ok') {
+    [Console]::WriteLine([string]::Format($invariant, 'trx={0} executed~{1} failed={2} distinctSignatures={3}', $trxList.Count, $executed, $parsedFailed, $ordered.Count))
+}
+else {
+    [Console]::WriteLine([string]::Format($invariant, 'trx={0} executed~{1} failed>={2} distinctSignatures>={3}', $trxList.Count, $executed, $parsedFailed, $ordered.Count))
+}
 [Console]::WriteLine([string]::Format($invariant, 'unreadable={0} unparseable={1} otherNonPassing={2} signaturesSuppressed={3}', $unreadable, $unparseable, $otherNonPassing, $suppressed))
 if ($counterFailed -ne $parsedFailed -and $parsedFiles -gt 0) {
     [Console]::WriteLine([string]::Format($invariant, 'warning=counters-mismatch parsed={0} counters={1}', $parsedFailed, $counterFailed))

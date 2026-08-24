@@ -71,7 +71,7 @@ public sealed class AcceptanceFailureCensusScriptTests
         Xunit.Assert.Equal(0, result.ExitCode);
         Xunit.Assert.Contains("status=missing", result.Stdout, StringComparison.Ordinal);
         Xunit.Assert.Contains("attempts root not found", result.Stdout, StringComparison.Ordinal);
-        Xunit.Assert.Contains("trx=0 executed~0 failed=0 distinctSignatures=0", result.Stdout, StringComparison.Ordinal);
+        Xunit.Assert.Contains("trx=0 executed~0 failed=unknown distinctSignatures=unknown", result.Stdout, StringComparison.Ordinal);
         Xunit.Assert.True(string.IsNullOrWhiteSpace(result.Stderr), result.Stderr);
     }
 
@@ -90,7 +90,8 @@ public sealed class AcceptanceFailureCensusScriptTests
         Xunit.Assert.Contains("status=partial", result.Stdout, StringComparison.Ordinal);
         Xunit.Assert.Contains($"diagnostic=unparseable file={fixture.AttemptId}.empty.trx", result.Stdout, StringComparison.Ordinal);
         Xunit.Assert.Contains($"diagnostic=unparseable file={fixture.AttemptId}.truncated.trx", result.Stdout, StringComparison.Ordinal);
-        Xunit.Assert.Contains("trx=3 executed~1 failed=0 distinctSignatures=0", result.Stdout, StringComparison.Ordinal);
+        Xunit.Assert.Contains("trx=3 executed~1 failed>=0 distinctSignatures>=0", result.Stdout, StringComparison.Ordinal);
+        Xunit.Assert.DoesNotContain("failed=0 distinctSignatures=0", result.Stdout, StringComparison.Ordinal);
         Xunit.Assert.Contains("unreadable=0 unparseable=2", result.Stdout, StringComparison.Ordinal);
         Xunit.Assert.DoesNotContain("No failing test results in this attempt corpus.", result.Stdout, StringComparison.Ordinal);
         Xunit.Assert.Contains("No failing test results found in readable TRX files; attempt corpus is partial.", result.Stdout, StringComparison.Ordinal);
@@ -126,7 +127,8 @@ public sealed class AcceptanceFailureCensusScriptTests
         Xunit.Assert.Equal(0, result.ExitCode);
         Xunit.Assert.Contains("status=partial", result.Stdout, StringComparison.Ordinal);
         Xunit.Assert.Contains($"diagnostic=metadata-unparseable file={fixture.AttemptId}.attempt.json", result.Stdout, StringComparison.Ordinal);
-        Xunit.Assert.Contains("trx=1 executed~1 failed=0 distinctSignatures=0", result.Stdout, StringComparison.Ordinal);
+        Xunit.Assert.Contains("trx=1 executed~1 failed>=0 distinctSignatures>=0", result.Stdout, StringComparison.Ordinal);
+        Xunit.Assert.DoesNotContain("failed=0 distinctSignatures=0", result.Stdout, StringComparison.Ordinal);
         Xunit.Assert.DoesNotContain("No failing test results in this attempt corpus.", result.Stdout, StringComparison.Ordinal);
     }
 
