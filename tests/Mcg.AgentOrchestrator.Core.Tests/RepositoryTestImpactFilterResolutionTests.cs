@@ -91,6 +91,19 @@ public sealed class RepositoryTestImpactFilterResolutionTests
     }
 
     [Xunit.Fact]
+    public void ProjectReaderNormalizesTrailingDirectorySeparator()
+    {
+        Assert.True(TryFindRepositoryRoot(out var root), "Repository root was not found.");
+        var reader = new FileSystemTestClassDeclarationReader(root);
+
+        var declarations = reader.ReadProject(
+            "tests/Mcg.AgentOrchestrator.Infrastructure.Tests/");
+
+        Assert.Equal(TestClassDeclarationOutcome.Resolved, declarations.Outcome);
+        Assert.Contains("ConductorDriverTests", declarations.ClassNames);
+    }
+
+    [Xunit.Fact]
     public void ChangedFileWithNoQualifyingClassAbandonsFocusedFilter()
     {
         const string path = "tests/Mcg.AgentOrchestrator.Core.Tests/CoreTestSupport.cs";
@@ -442,6 +455,25 @@ public sealed class RepositoryTestImpactFilterResolutionTests
 
         Assert.True(CSharpTestClassScanner.TryReadClassNames(source, out var classNames));
         Assert.Equal(["RealTests"], classNames);
+    }
+
+    [Xunit.Fact]
+    public void ScannerReadsInterpolatedVerbatimStringsBeginningWithEscapedQuotes()
+    {
+        const string source = """""
+            public sealed class VerbatimStringTests
+            {
+                [Xunit.Fact]
+                public void Runs()
+                {
+                    var id = "session";
+                    Assert.Contains($@"""providerSessionId"":""{id}""", "{}");
+                }
+            }
+            """"";
+
+        Assert.True(CSharpTestClassScanner.TryReadClassNames(source, out var classNames));
+        Assert.Equal(["VerbatimStringTests"], classNames);
     }
 
     [Xunit.Fact]

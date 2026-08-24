@@ -716,6 +716,24 @@ public sealed class DispatchOutcomeClassifyTests
         Xunit.Assert.Contains("verdict=VerifiedSuccess", outcome.ClassifierReceipt, StringComparison.Ordinal);
     }
 
+    [Xunit.Fact(DisplayName = "Classify committed worker evidence with orchestrator diagnostic as verified success")]
+    public void ClassifyCommittedWorkerEvidenceWithOrchestratorDiagnosticAsVerifiedSuccess()
+    {
+        var verification = WorkerResultVerification(
+            0,
+            WorkerResultStdout("pass - committed candidate verified"),
+            hasCommittedChanges: true) with
+        {
+            OrchestratorFailureReason = "hung-worker detector preserved for diagnosis"
+        };
+
+        var outcome = DispatchFailureClassifier.Classify(SimpleTask(AgentRole.Developer), verification);
+
+        Xunit.Assert.False(verification.Succeeded);
+        Xunit.Assert.Equal(DispatchOutcomeKind.VerifiedSuccess, outcome.Kind);
+        Xunit.Assert.Contains("rule=committed-worker-result-evidence", outcome.ClassifierReceipt, StringComparison.Ordinal);
+    }
+
     [Xunit.Fact(DisplayName = "Classify fails exit zero worker result with failing tests")]
     public void ClassifyFailsExitZeroWorkerResultWithFailingTests()
     {

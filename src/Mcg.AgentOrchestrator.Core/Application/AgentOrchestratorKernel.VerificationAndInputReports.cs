@@ -5,6 +5,11 @@ public sealed partial class AgentOrchestratorKernel
     public GoalVerificationGate BuildVerificationGate(GoalId goalId)
     {
         var goal = GetGoal(goalId);
+        return BuildVerificationGate(goal);
+    }
+
+    private static GoalVerificationGate BuildVerificationGate(Goal goal)
+    {
         var gates = goal.Tasks.Select(task => BuildTaskVerificationGate(goal, task)).ToList();
 
         return new GoalVerificationGate(
@@ -17,7 +22,13 @@ public sealed partial class AgentOrchestratorKernel
 
     public GoalVerificationWorklist BuildVerificationWorklist(GoalId goalId)
     {
-        var gate = BuildVerificationGate(goalId);
+        return BuildVerificationWorklist(GetGoal(goalId));
+    }
+
+    public static GoalVerificationWorklist BuildVerificationWorklist(Goal goal)
+    {
+        ArgumentNullException.ThrowIfNull(goal);
+        var gate = BuildVerificationGate(goal);
         var items = gate.Tasks
             .Where(task => task.GateStatus != VerificationGateStatus.Passed)
             .Select(task => new TaskVerificationWorkItem(

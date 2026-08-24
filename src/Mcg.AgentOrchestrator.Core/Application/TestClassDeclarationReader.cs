@@ -135,6 +135,8 @@ internal sealed class FileSystemTestClassDeclarationReader : ITestClassDeclarati
 
     private string[] EnumerateProjectSourceFiles(string projectDirectory)
     {
+        projectDirectory = Path.GetFullPath(projectDirectory)
+            .TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar);
         var nestedProjectDirectories = Directory
             .EnumerateFiles(projectDirectory, "*.csproj", SearchOption.AllDirectories)
             .Select(Path.GetDirectoryName)
@@ -537,7 +539,7 @@ internal static class CSharpTestClassScanner
             quoteCount++;
         }
 
-        if (quoteCount >= 3)
+        if (quoteCount >= 3 && !verbatim)
         {
             index = prefixIndex + quoteCount;
             while (index < source.Length)
