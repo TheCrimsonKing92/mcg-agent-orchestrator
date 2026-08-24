@@ -2215,7 +2215,7 @@ internal static class CliPersistentStateRunner
                                     claim.OwnerGoalId,
                                     claim.Version);
                             }
-                            ValidateGoalCreationPreconditions(
+                            GoalCreationPreconditionValidator.Validate(
                                 currentKernel,
                                 preparedSnapshot,
                                 workspace,
@@ -2381,9 +2381,9 @@ internal static class CliPersistentStateRunner
                 throw;
             }
             catch (InvalidOperationException precondition)
-                when (GetGoalCreationPreconditionReason(precondition) is not null)
+                when (GoalCreationPreconditionValidator.GetReason(precondition) is not null)
             {
-                var reasonCode = GetGoalCreationPreconditionReason(precondition)!;
+                var reasonCode = GoalCreationPreconditionValidator.GetReason(precondition)!;
                 TryRecordGoalReplacementFailure(
                     claimStore,
                     command,
@@ -2495,8 +2495,6 @@ internal static class CliPersistentStateRunner
     {
         public string ReasonCode { get; } = reasonCode;
     }
-
-    private const string GoalCreationPreconditionReasonDataKey = "Mcg.GoalCreationPreconditionReason";
 
     internal enum GoalReplacementTransferLeaseAcquisitionKind
     {
@@ -3338,7 +3336,8 @@ internal static class CliPersistentStateRunner
                 ConsoleViews.PrintGoalIntakeReceipt(reservation.Record);
                 if (reservation.Record.State == GoalIntakeRequestStates.Created)
                 {
-                    currentGoal = kernel.Goals.FirstOrDefault(goal =>
+                    var replayKernel = stateRepository.LoadAsync().GetAwaiter().GetResult();
+                    currentGoal = replayKernel.Goals.FirstOrDefault(goal =>
                         goal.Id.Value.Equals(reservation.Record.GoalId, StringComparison.Ordinal));
                     if (currentGoal is null)
                     {
@@ -3376,7 +3375,7 @@ internal static class CliPersistentStateRunner
             outboxRepository.TransactWithOutboxAsync(
                     (currentKernel, _) =>
                     {
-                        ValidateGoalCreationPreconditions(currentKernel, preparedSnapshot, workspace);
+                        GoalCreationPreconditionValidator.Validate(currentKernel, preparedSnapshot, workspace);
                         currentKernel.ReplaceGoalWithSnapshot(preparedSnapshot);
                         if (request is not null)
                         {
@@ -3448,7 +3447,7 @@ internal static class CliPersistentStateRunner
             return false;
         }
         catch (Exception ex)
-            when (committedSnapshot is null && GetGoalCreationPreconditionReason(ex) is not null)
+            when (committedSnapshot is null && GoalCreationPreconditionValidator.GetReason(ex) is not null)
         {
             currentGoal = null;
             if (request is not null)
@@ -3626,106 +3625,6 @@ internal static class CliPersistentStateRunner
             $"retry=\"goal-delivery-retry {goalId.Value}\" detail={exception.Message}",
             exception);
 
-    private static void ValidateGoalCreationPreconditions(
-        AgentOrchestratorKernel currentKernel,
-        GoalSnapshot preparedSnapshot,
-        OrchestratorWorkspace workspace,
-        string? replacementPredecessorGoalId = null)
-    {
-        if (currentKernel.Goals.Any(goal => goal.Id.Value == preparedSnapshot.Id))
-        {
-            throw GoalCreatePreconditionChanged("prepared-goal-id-exists", ("goal", preparedSnapshot.Id));
-        }
-
-        var preparedDependencies = (preparedSnapshot.DependsOn ?? [])
-            .ToHashSet(StringComparer.Ordinal);
-        if (preparedDependencies.Any(id => currentKernel.Goals.All(goal => goal.Id.Value != id)))
-        {
-            throw GoalCreatePreconditionChanged("dependency-target-missing", ("goal", preparedSnapshot.Id));
-        }
-
-        if (preparedSnapshot.SourceBacklogItemId is not { } backlogItemId)
-        {
-            return;
-        }
-
-        var backlogItem = new BacklogStore(workspace.BacklogStorePath)
-            .GetByIdPrefixAsync(backlogItemId)
-            .GetAwaiter()
-            .GetResult();
-        if (backlogItem is null || !string.Equals(backlogItem.Id, backlogItemId, StringComparison.Ordinal))
-        {
-            throw GoalCreatePreconditionChanged("source-backlog-missing", ("backlogItem", backlogItemId));
-        }
-
-        var claimStore = new SourceBacklogClaimStore(workspace.SqliteStatePath);
-        SourceBacklogClaimSnapshot claim;
-        try
-        {
-            claim = replacementPredecessorGoalId is null
-                ? claimStore.EnsureClaimForNewGoal(
-                    currentKernel,
-                    backlogItemId,
-                    preparedSnapshot.Id,
-                    preparedSnapshot.SourceBacklogCoverage ?? SourceBacklogCoverage.Full)
-                : claimStore.ResolveOrMaterializeClaim(currentKernel, backlogItemId);
-        }
-        catch (LegacySourceBacklogOwnerAmbiguousException ambiguous)
-        {
-            throw GoalCreatePreconditionChanged(
-                "legacy-owner-ambiguous",
-                ("backlogItem", backlogItemId),
-                ("linkedGoals", string.Join(',', ambiguous.LinkedGoalIds)));
-        }
-
-        if (!string.Equals(claim.OwnerGoalId, preparedSnapshot.Id, StringComparison.Ordinal) &&
-            !string.Equals(claim.OwnerGoalId, replacementPredecessorGoalId, StringComparison.Ordinal))
-        {
-            throw GoalCreatePreconditionChanged(
-                "source-backlog-consumed",
-                ("backlogItem", backlogItemId),
-                ("competingGoal", claim.OwnerGoalId),
-                ("claimVersion", claim.Version.ToString(System.Globalization.CultureInfo.InvariantCulture)),
-                ("replacement", "goal-replace"));
-        }
-
-        var currentDependencies = new HashSet<string>(StringComparer.Ordinal);
-        foreach (var dependency in backlogItem.Dependencies)
-        {
-            var dependencyGoal = dependency.TargetKind == BacklogDependencyTargetKind.Goal
-                ? currentKernel.Goals.FirstOrDefault(goal => goal.Id.Value == dependency.PrerequisiteId)
-                : ResolveAuthoritativeGoal(currentKernel, claimStore, dependency.PrerequisiteId);
-            if (dependencyGoal is null)
-            {
-                throw GoalCreatePreconditionChanged(
-                    "dependency-target-missing",
-                    ("backlogItem", backlogItemId),
-                    ("dependency", dependency.PrerequisiteId));
-            }
-
-            currentDependencies.Add(dependencyGoal.Id.Value);
-        }
-
-        if (!currentDependencies.SetEquals(preparedDependencies))
-        {
-            throw GoalCreatePreconditionChanged(
-                "source-backlog-dependencies-changed",
-                ("backlogItem", backlogItemId));
-        }
-
-    }
-
-    private static Goal? ResolveAuthoritativeGoal(
-        AgentOrchestratorKernel kernel,
-        SourceBacklogClaimStore claimStore,
-        string backlogItemId)
-    {
-        var claim = claimStore.ResolveClaim(kernel, backlogItemId);
-        return claim is null
-            ? null
-            : kernel.Goals.FirstOrDefault(goal => goal.Id.Value == claim.OwnerGoalId);
-    }
-
     private static void PersistPostCreationGoalChanges(
         ITransactionalOrchestratorStateRepository stateRepository,
         GoalSnapshot committedSnapshot,
@@ -3739,7 +3638,7 @@ internal static class CliPersistentStateRunner
                     if (currentSnapshot is null ||
                         !string.Equals(JsonSerializer.Serialize(currentSnapshot), committedJson, StringComparison.Ordinal))
                     {
-                        throw GoalCreatePreconditionChanged(
+                        throw GoalCreationPreconditionValidator.Changed(
                             "created-goal-concurrently-modified",
                             ("goal", committedSnapshot.Id));
                     }
@@ -3750,22 +3649,6 @@ internal static class CliPersistentStateRunner
             .GetAwaiter()
             .GetResult();
     }
-
-    private static InvalidOperationException GoalCreatePreconditionChanged(
-        string reason,
-        params (string Key, string Value)[] context)
-    {
-        var suffix = context.Length == 0
-            ? string.Empty
-            : " " + string.Join(' ', context.Select(item => $"{item.Key}={item.Value}"));
-        var exception = new InvalidOperationException(
-            $"GOAL_CREATE_PRECONDITION_CHANGED reason={reason}{suffix}");
-        exception.Data[GoalCreationPreconditionReasonDataKey] = reason;
-        return exception;
-    }
-
-    private static string? GetGoalCreationPreconditionReason(Exception exception) =>
-        exception.Data[GoalCreationPreconditionReasonDataKey] as string;
 
     private static bool ExecuteProcessRefreshOutsideTransaction(
         IReadOnlyList<string> args,

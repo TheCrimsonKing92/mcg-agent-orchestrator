@@ -633,12 +633,10 @@ public sealed class CollaborationItemStoreTests
     [Xunit.Fact(DisplayName = "LandingEscalation_collaboration_timeout_preserves_json_record")]
     public void LandingEscalationCollaborationTimeoutPreservesJsonRecord()
     {
-        using var raiseStarted = new ManualResetEventSlim();
         var pendingRaise = new TaskCompletionSource<CollaborationItem>(
             TaskCreationOptions.RunContinuationsAsynchronously);
         var fakeStore = new FakeCollaborationItemStore
         {
-            RaiseStarted = raiseStarted,
             PendingRaise = pendingRaise.Task
         };
         var root = CreateTempDirectory();
@@ -646,18 +644,17 @@ public sealed class CollaborationItemStoreTests
         var kernel = new AgentOrchestratorKernel();
         var goal = kernel.CreateGoal("Escalation timeout keeps durable fallback");
 
-        var record = Task.Run(() => OperatorInbox.RecordLandingEscalation(
+        var record = OperatorInbox.RecordLandingEscalation(
             workspace,
             goal,
             "merge conflict",
             "integration",
             channel: null,
             collaborationStore: fakeStore,
-            collaborationRaiseTimeout: TimeSpan.FromMilliseconds(25)));
+            // This is the product deadline whose expiry produces the asserted outcome.
+            collaborationRaiseTimeout: TimeSpan.FromMilliseconds(25));
 
-        Xunit.Assert.True(raiseStarted.Wait(TimeSpan.FromSeconds(1)));
-        Xunit.Assert.True(record.Wait(TimeSpan.FromSeconds(1)));
-        Xunit.Assert.Equal("timeout", record.Result.CollaborationOutcome);
+        Xunit.Assert.Equal("timeout", record.CollaborationOutcome);
         var jsonPath = Path.Combine(workspace.OrchestratorDirectory, "landing-escalations.json");
         Xunit.Assert.True(File.Exists(jsonPath));
         Xunit.Assert.Contains(goal.Id.Value, File.ReadAllText(jsonPath), StringComparison.Ordinal);
@@ -684,17 +681,17 @@ public sealed class CollaborationItemStoreTests
 
         try
         {
-            var record = Task.Run(() => OperatorInbox.RecordLandingEscalation(
+            var record = OperatorInbox.RecordLandingEscalation(
                 workspace,
                 goal,
                 "merge conflict",
                 "integration",
                 channel: null,
                 collaborationStore: store,
-                collaborationRaiseTimeout: TimeSpan.FromMilliseconds(25)));
+                // This is the product deadline whose expiry produces the asserted outcome.
+                collaborationRaiseTimeout: TimeSpan.FromMilliseconds(25));
 
-            Xunit.Assert.True(record.Wait(TimeSpan.FromSeconds(1)));
-            Xunit.Assert.Equal("timeout", record.Result.CollaborationOutcome);
+            Xunit.Assert.Equal("timeout", record.CollaborationOutcome);
             var jsonPath = Path.Combine(workspace.OrchestratorDirectory, "landing-escalations.json");
             Xunit.Assert.True(File.Exists(jsonPath));
             Xunit.Assert.Contains(goal.Id.Value, File.ReadAllText(jsonPath), StringComparison.Ordinal);
@@ -716,18 +713,17 @@ public sealed class CollaborationItemStoreTests
         var kernel = new AgentOrchestratorKernel();
         var goal = kernel.CreateGoal("Channel timeout");
 
-        var record = Task.Run(() => OperatorInbox.RecordLandingEscalation(
+        var record = OperatorInbox.RecordLandingEscalation(
             workspace,
             goal,
             "merge conflict",
             "integration",
             channel,
             fakeStore,
-            channelSendTimeout: TimeSpan.FromMilliseconds(25)));
+            channelSendTimeout: TimeSpan.FromMilliseconds(25));
 
-        Xunit.Assert.True(channel.SendStarted.Wait(TimeSpan.FromSeconds(1)));
-        Xunit.Assert.True(record.Wait(TimeSpan.FromSeconds(1)));
-        Xunit.Assert.Equal("timeout", record.Result.ChannelOutcome);
+        Xunit.Assert.True(channel.SendStarted.IsSet);
+        Xunit.Assert.Equal("timeout", record.ChannelOutcome);
         channel.Completion.SetResult();
     }
 
@@ -756,6 +752,7 @@ public sealed class CollaborationItemStoreTests
                 "integration",
                 channel: null,
                 collaborationStore: fakeStore,
+                collaborationRaiseTimeout: Timeout.InfiniteTimeSpan,
                 landingEscalationLockTimeout: TimeSpan.Zero));
 
         Xunit.Assert.Equal("lock-timeout", result!.JsonOutcome);
@@ -796,7 +793,6 @@ internal sealed class FakeCollaborationItemStore : ICollaborationItemStore
     private readonly Dictionary<string, NotificationDelivery> _notificationDeliveries = new(StringComparer.Ordinal);
 
     public IReadOnlyList<CollaborationItem> Items => _items;
-    public ManualResetEventSlim? RaiseStarted { get; init; }
     public Task<CollaborationItem>? PendingRaise { get; init; }
 
     public void Add(CollaborationItem item) => _items.Add(item);
@@ -809,7 +805,6 @@ internal sealed class FakeCollaborationItemStore : ICollaborationItemStore
         string? correlationKey = null,
         CancellationToken cancellationToken = default)
     {
-        RaiseStarted?.Set();
         if (PendingRaise is not null)
         {
             return PendingRaise;
