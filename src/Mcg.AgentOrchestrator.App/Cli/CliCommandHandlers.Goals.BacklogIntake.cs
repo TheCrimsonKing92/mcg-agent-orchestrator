@@ -10,6 +10,34 @@ using Mcg.AgentOrchestrator.Infrastructure;
 
 namespace Mcg.AgentOrchestrator.App.Cli;
 
+internal enum SourceBacklogSiblingAdmission
+{
+    Admit,
+    RefuseActiveOwnerFullCoverage
+}
+
+internal readonly record struct SourceBacklogSiblingFacts(
+    SourceBacklogCoverage Coverage,
+    GoalStatus OwnerStatus,
+    GoalLifecycleState OwnerLifecycleState);
+
+internal static class SourceBacklogSiblingAdmissionPolicy
+{
+    internal const string ActiveOwnerFullCoverageReason = "source-backlog-active-owner-full-coverage";
+
+    internal static SourceBacklogSiblingAdmission Evaluate(SourceBacklogSiblingFacts facts)
+    {
+        if (facts.Coverage == SourceBacklogCoverage.Slice ||
+            facts.OwnerStatus is GoalStatus.Failed or GoalStatus.Cancelled or GoalStatus.Superseded ||
+            facts.OwnerLifecycleState is GoalLifecycleState.Merged or GoalLifecycleState.Recorded or GoalLifecycleState.CleanedUp)
+        {
+            return SourceBacklogSiblingAdmission.Admit;
+        }
+
+        return SourceBacklogSiblingAdmission.RefuseActiveOwnerFullCoverage;
+    }
+}
+
 internal static partial class CliCommandHandlers
 {
 private static void AppendGoalAliasFlags(
@@ -95,10 +123,25 @@ private static SourceBacklogItemLink? ResolveSourceBacklogItemLink(
 
 private static void ValidateSourceBacklogItemAvailable(CliExecutionContext context, BacklogItem item)
 {
-    if (FindAuthoritativeSourceGoal(context, item.Id) is { } competingGoal)
+    if (FindAuthoritativeSourceClaim(context, item.Id) is not { Owner: { } competingGoal } ownership)
+    {
+        return;
+    }
+
+    if (!context.HasGoalCreationFinalizer)
     {
         throw new InvalidOperationException(
             $"GOAL_CREATE_PRECONDITION_CHANGED reason=source-backlog-consumed backlogItem={item.Id} competingGoal={competingGoal.Id.Value}");
+    }
+
+    var facts = BuildSourceBacklogSiblingFacts(
+        context.Workspace.ExecutionDirectory,
+        competingGoal,
+        ownership.Claim.Coverage,
+        context.Worktrees.TryResolve(context.Workspace.ExecutionDirectory, competingGoal.Id) is not null);
+    if (SourceBacklogSiblingAdmissionPolicy.Evaluate(facts) == SourceBacklogSiblingAdmission.RefuseActiveOwnerFullCoverage)
+    {
+        throw SourceBacklogSiblingRefused(item.Id, ownership.Claim, facts);
     }
 }
 
@@ -166,11 +209,24 @@ private static void ApplySourceBacklogItemLink(CliExecutionContext context, Goal
         return;
     }
 
-    if (FindAuthoritativeSourceGoal(context, link.Item.Id) is { } competingGoal &&
+    if (FindAuthoritativeSourceClaim(context, link.Item.Id) is { Owner: { } competingGoal } ownership &&
         competingGoal.Id != goal.Id)
     {
-        throw new InvalidOperationException(
-            $"GOAL_CREATE_PRECONDITION_CHANGED reason=source-backlog-consumed backlogItem={link.Item.Id} competingGoal={competingGoal.Id.Value}");
+        if (!context.HasGoalCreationFinalizer)
+        {
+            throw new InvalidOperationException(
+                $"GOAL_CREATE_PRECONDITION_CHANGED reason=source-backlog-consumed backlogItem={link.Item.Id} competingGoal={competingGoal.Id.Value}");
+        }
+
+        var facts = BuildSourceBacklogSiblingFacts(
+            context.Workspace.ExecutionDirectory,
+            competingGoal,
+            ownership.Claim.Coverage,
+            context.Worktrees.TryResolve(context.Workspace.ExecutionDirectory, competingGoal.Id) is not null);
+        if (SourceBacklogSiblingAdmissionPolicy.Evaluate(facts) == SourceBacklogSiblingAdmission.RefuseActiveOwnerFullCoverage)
+        {
+            throw SourceBacklogSiblingRefused(link.Item.Id, ownership.Claim, facts);
+        }
     }
 
     if (!string.IsNullOrWhiteSpace(goal.SourceBacklogItemId) &&
@@ -523,7 +579,7 @@ private static bool TryReuseBacklogIntakeGoal(
     return existingGoal is not null;
 }
 
-private static Goal? FindAuthoritativeSourceGoal(CliExecutionContext context, string backlogItemId)
+private static SourceBacklogClaimOwner? FindAuthoritativeSourceClaim(CliExecutionContext context, string backlogItemId)
 {
     SourceBacklogClaimSnapshot? claim;
     try
@@ -537,10 +593,47 @@ private static Goal? FindAuthoritativeSourceGoal(CliExecutionContext context, st
             $"GOAL_CREATE_PRECONDITION_CHANGED reason=legacy-owner-ambiguous backlogItem={ex.BacklogItemId} linkedGoals={string.Join(',', ex.LinkedGoalIds)}",
             ex);
     }
-    return claim is null
-        ? null
-        : context.Kernel.Goals.FirstOrDefault(goal => goal.Id.Value == claim.OwnerGoalId);
+    if (claim is null)
+        return null;
+
+    return new SourceBacklogClaimOwner(
+        claim,
+        context.Kernel.Goals.FirstOrDefault(goal => goal.Id.Value == claim.OwnerGoalId));
 }
+
+private static Goal? FindAuthoritativeSourceGoal(CliExecutionContext context, string backlogItemId) =>
+    FindAuthoritativeSourceClaim(context, backlogItemId)?.Owner;
+
+internal static SourceBacklogSiblingFacts BuildSourceBacklogSiblingFacts(
+    string executionDirectory,
+    Goal owner,
+    SourceBacklogCoverage coverage,
+    bool workspaceExists)
+{
+    var journal = GoalOperationJournal.Read(executionDirectory, owner.Id);
+    var isMerged = GoalOperationJournal.HasCompletedLandingEvidence(journal);
+    var isRecorded = journal.LatestByOperation.Any(entry =>
+        entry.Operation.Equals("conductor:record", StringComparison.OrdinalIgnoreCase) &&
+        entry.Status == GoalOperationStatus.Completed);
+    var isCleanedUp = journal.LatestByOperation.Any(entry =>
+        entry.Operation.Equals("workspace:remove", StringComparison.OrdinalIgnoreCase) &&
+        entry.Status == GoalOperationStatus.Completed);
+    var lifecycleState = GoalLifecycle.ResolveState(
+        owner,
+        new GoalLifecycleFacts(workspaceExists, IsMerged: isMerged, IsRecorded: isRecorded, IsCleanedUp: isCleanedUp));
+    return new SourceBacklogSiblingFacts(coverage, owner.Status, lifecycleState);
+}
+
+private static InvalidOperationException SourceBacklogSiblingRefused(
+    string backlogItemId,
+    SourceBacklogClaimSnapshot claim,
+    SourceBacklogSiblingFacts facts) =>
+    new(
+        $"GOAL_CREATE_PRECONDITION_CHANGED reason={SourceBacklogSiblingAdmissionPolicy.ActiveOwnerFullCoverageReason} " +
+        $"backlogItem={backlogItemId} competingGoal={claim.OwnerGoalId} claimVersion={claim.Version} " +
+        $"ownerStatus={facts.OwnerStatus} ownerState={facts.OwnerLifecycleState} coverage={facts.Coverage.ToString().ToLowerInvariant()}");
+
+private sealed record SourceBacklogClaimOwner(SourceBacklogClaimSnapshot Claim, Goal? Owner);
 
 private static bool TryReuseBacklogIntakeRecord(
     CliExecutionContext context,

@@ -55,7 +55,8 @@ public sealed class AcceptanceGateEngineSettingsTests
                 "GoalWorktreeTestsRebaseMerge",
                 "GoalWorktreeTestsRemoveCleanup",
                 "GoalWorktreeTestsSqliteTooling",
-                "LandingExecutorTests"
+                "LandingExecutorTests",
+                "SourceBacklogSiblingCreationTests"
             ]);
         Xunit.Assert.Empty(settings.InfrastructureTestLanes
             .Single(lane => lane.Name == "Goal worktree parallel")
