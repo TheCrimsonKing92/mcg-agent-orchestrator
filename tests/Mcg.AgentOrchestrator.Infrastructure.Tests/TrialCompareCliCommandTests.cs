@@ -44,4 +44,89 @@ public sealed class TrialCompareCliCommandTests
             }
         }
     }
+
+    [Xunit.Theory]
+    [Xunit.InlineData("text", "trial-compare succeeded=False")]
+    [Xunit.InlineData("json", "\"succeeded\": false")]
+    public void ExecuteRendersFailedReceiptThenExitsOne(string format, string expectedOutput)
+    {
+        var root = Path.Combine(Path.GetTempPath(), "trial-compare-cli-tests", Guid.NewGuid().ToString("N"));
+        try
+        {
+            Directory.CreateDirectory(root);
+            var specPath = WriteSpec(root);
+            using var output = new StringWriter();
+
+            var exception = Xunit.Assert.Throws<CliExitException>(() => TrialCompareCliCommand.Execute(
+                ["trial-compare", "--spec", specPath, "--format", format],
+                new FailingTrialRootHost(),
+                Path.Combine(root, "receipts"),
+                output));
+
+            Xunit.Assert.Equal(1, exception.ExitCode);
+            Xunit.Assert.Contains(expectedOutput, output.ToString(), StringComparison.Ordinal);
+        }
+        finally
+        {
+            if (Directory.Exists(root))
+            {
+                Directory.Delete(root, recursive: true);
+            }
+        }
+    }
+
+    [Xunit.Fact]
+    public void ExecuteRejectsUnknownFormatBeforeCreatingAnyRoot()
+    {
+        var root = Path.Combine(Path.GetTempPath(), "trial-compare-cli-tests", Guid.NewGuid().ToString("N"));
+        try
+        {
+            Directory.CreateDirectory(root);
+            var specPath = WriteSpec(root);
+            var host = new FailingTrialRootHost();
+
+            var exception = Xunit.Assert.Throws<ArgumentException>(() => TrialCompareCliCommand.Execute(
+                ["trial-compare", "--spec", specPath, "--format", "xml"],
+                host,
+                Path.Combine(root, "receipts"),
+                TextWriter.Null));
+
+            Xunit.Assert.Contains("--format", exception.Message, StringComparison.Ordinal);
+            Xunit.Assert.Equal(0, host.CreateCalls);
+        }
+        finally
+        {
+            if (Directory.Exists(root))
+            {
+                Directory.Delete(root, recursive: true);
+            }
+        }
+    }
+
+    private static string WriteSpec(string root)
+    {
+        var specPath = Path.Combine(root, "spec.json");
+        File.WriteAllText(specPath, $$"""
+            {
+              "sourceRepositoryPath": "{{root.Replace("\\", "\\\\")}}",
+              "baseCommit": "abc123",
+              "harnesses": [
+                { "name": "alpha", "fileName": "alpha.exe", "arguments": [] },
+                { "name": "beta", "fileName": "beta.exe", "arguments": [] }
+              ]
+            }
+            """);
+        return specPath;
+    }
+
+    private sealed class FailingTrialRootHost : ITrialRootHost
+    {
+        public int CreateCalls { get; private set; }
+
+        public ITrialRootSession Create(TrialRootRequest request)
+        {
+            CreateCalls++;
+            throw new InvalidOperationException("fixture trial-root creation failed");
+        }
+    }
 }

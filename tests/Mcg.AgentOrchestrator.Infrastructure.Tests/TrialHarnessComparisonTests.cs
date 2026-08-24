@@ -42,6 +42,8 @@ public sealed class TrialHarnessComparisonTests
             Xunit.Assert.True(File.Exists(item.StdoutPath));
             Xunit.Assert.True(File.Exists(item.StderrPath));
             Xunit.Assert.True(File.Exists(item.ReceiptPath));
+            Xunit.Assert.Equal($"{item.Name} stdout", File.ReadAllText(item.StdoutPath));
+            Xunit.Assert.Equal($"{item.Name} stderr", File.ReadAllText(item.StderrPath));
         });
         Xunit.Assert.All(host.RootPaths, root => Xunit.Assert.False(Directory.Exists(root)));
     }
@@ -79,8 +81,63 @@ public sealed class TrialHarnessComparisonTests
 
         Xunit.Assert.False(result.Succeeded);
         Xunit.Assert.Equal("after", File.ReadAllText(protectedPath));
+        Xunit.Assert.All(host.Requests, request => Xunit.Assert.Equal(new[] { protectedPath }, request.ProtectedPaths));
         Xunit.Assert.Contains(result.Failures, failure => failure.Contains(protectedPath, StringComparison.OrdinalIgnoreCase));
         Xunit.Assert.Contains(result.Harnesses, harness => harness.Outcome == TrialHarnessOutcome.ProtectedPathModified);
+    }
+
+    [Xunit.Fact]
+    public void RunPreservesTimeoutOutcomeWhenTeardownIsAlsoUnclean()
+    {
+        using var fixture = new Fixture();
+        var host = new FakeTrialRootHost(fixture.Root);
+        host.TimeoutOnWait.Add("alpha");
+        host.UncleanTeardown.Add("alpha");
+
+        var result = new TrialHarnessComparison(host).Run(fixture.Request(
+            new("alpha", "alpha.exe", []),
+            new("beta", "beta.exe", [])));
+
+        var alpha = result.Harnesses.Single(item => item.Name == "alpha");
+        Xunit.Assert.False(result.Succeeded);
+        Xunit.Assert.Equal(TrialHarnessOutcome.TimedOut, alpha.Outcome);
+        Xunit.Assert.Contains(alpha.Diagnostics, diagnostic => diagnostic.Contains("timed out", StringComparison.OrdinalIgnoreCase));
+        Xunit.Assert.Contains(alpha.Diagnostics, diagnostic => diagnostic.Contains("teardown was unclean", StringComparison.OrdinalIgnoreCase));
+    }
+
+    [Xunit.Fact]
+    public void RunReportsMissingCaptureInsteadOfReturningAnEmptyReceipt()
+    {
+        using var fixture = new Fixture();
+        var host = new FakeTrialRootHost(fixture.Root);
+        host.MissingStdout.Add("alpha");
+
+        var result = new TrialHarnessComparison(host).Run(fixture.Request(
+            new("alpha", "alpha.exe", []),
+            new("beta", "beta.exe", [])));
+
+        var alpha = result.Harnesses.Single(item => item.Name == "alpha");
+        Xunit.Assert.False(result.Succeeded);
+        Xunit.Assert.Equal(TrialHarnessOutcome.ReceiptCaptureFailed, alpha.Outcome);
+        Xunit.Assert.False(File.Exists(alpha.StdoutPath));
+        Xunit.Assert.Contains(alpha.Diagnostics, diagnostic => diagnostic.Contains("capture file does not exist", StringComparison.OrdinalIgnoreCase));
+    }
+
+    [Xunit.Fact]
+    public void RunLeavesHarnessesNotAttemptedWhenResolvedCommitsDisagree()
+    {
+        using var fixture = new Fixture();
+        var host = new FakeTrialRootHost(fixture.Root);
+        host.ResolvedCommits["beta"] = "different-commit";
+
+        var result = new TrialHarnessComparison(host).Run(fixture.Request(
+            new("alpha", "alpha.exe", []),
+            new("beta", "beta.exe", [])));
+
+        Xunit.Assert.False(result.Succeeded);
+        Xunit.Assert.All(result.Harnesses, harness => Xunit.Assert.Equal(TrialHarnessOutcome.NotAttempted, harness.Outcome));
+        Xunit.Assert.Contains(result.Failures, failure => failure.Contains("different base commits", StringComparison.OrdinalIgnoreCase));
+        Xunit.Assert.All(host.RootPaths, root => Xunit.Assert.False(Directory.Exists(root)));
     }
 
     private sealed class Fixture : IDisposable
@@ -119,7 +176,11 @@ public sealed class TrialHarnessComparisonTests
         public List<TrialRootRequest> Requests { get; } = [];
         public List<string> RootPaths { get; } = [];
         public Dictionary<string, int> ExitCodes { get; } = new(StringComparer.OrdinalIgnoreCase);
+        public Dictionary<string, string> ResolvedCommits { get; } = new(StringComparer.OrdinalIgnoreCase);
         public HashSet<string> ThrowOnStart { get; } = new(StringComparer.OrdinalIgnoreCase);
+        public HashSet<string> TimeoutOnWait { get; } = new(StringComparer.OrdinalIgnoreCase);
+        public HashSet<string> UncleanTeardown { get; } = new(StringComparer.OrdinalIgnoreCase);
+        public HashSet<string> MissingStdout { get; } = new(StringComparer.OrdinalIgnoreCase);
         public string? ProtectedPathToMutate { get; init; }
 
         public ITrialRootSession Create(TrialRootRequest request)
@@ -129,7 +190,7 @@ public sealed class TrialHarnessComparisonTests
             var root = Path.Combine(fixtureRoot, "fake-roots", $"{name}-{Guid.NewGuid():N}");
             Directory.CreateDirectory(Path.Combine(root, "harness"));
             RootPaths.Add(root);
-            return new FakeSession(this, name, root, request.BaseCommit);
+            return new FakeSession(this, name, root, ResolvedCommits.GetValueOrDefault(name, request.BaseCommit));
         }
 
         private sealed class FakeSession(FakeTrialRootHost owner, string name, string root, string commit) : ITrialRootSession
@@ -152,9 +213,12 @@ public sealed class TrialHarnessComparisonTests
 
                 var stdout = Path.Combine(HarnessStatePath, "stdout.log");
                 var stderr = Path.Combine(HarnessStatePath, "stderr.log");
-                File.WriteAllText(stdout, $"{name} stdout");
+                if (!owner.MissingStdout.Contains(name))
+                {
+                    File.WriteAllText(stdout, $"{name} stdout");
+                }
                 File.WriteAllText(stderr, $"{name} stderr");
-                return new FakeLaunch(stdout, stderr, owner.ExitCodes.GetValueOrDefault(name));
+                return new FakeLaunch(stdout, stderr, owner.ExitCodes.GetValueOrDefault(name), !owner.TimeoutOnWait.Contains(name));
             }
 
             public TrialTeardownReport Destroy()
@@ -162,18 +226,19 @@ public sealed class TrialHarnessComparisonTests
                 var outsideWrites = owner.ProtectedPathToMutate is not null && name.Equals("alpha", StringComparison.OrdinalIgnoreCase)
                     ? [owner.ProtectedPathToMutate]
                     : Array.Empty<string>();
+                var clean = !owner.UncleanTeardown.Contains(name);
                 Directory.Delete(root, recursive: true);
                 return new TrialTeardownReport(
                     root,
                     RootRemoved: true,
                     [],
                     [],
-                    JobExitConfirmed: true,
+                    JobExitConfirmed: clean,
                     outsideWrites,
                     TimeSpan.FromMilliseconds(1),
                     TimeSpan.FromMilliseconds(1),
                     Path.Combine(owner.FixtureRoot, $"{name}.teardown.json"),
-                    []);
+                    clean ? [] : ["job exit was not confirmed"]);
             }
 
             public void Dispose()
@@ -181,12 +246,12 @@ public sealed class TrialHarnessComparisonTests
             }
         }
 
-        private sealed class FakeLaunch(string stdout, string stderr, int exitCode) : ITrialLaunch
+        private sealed class FakeLaunch(string stdout, string stderr, int exitCode, bool exits) : ITrialLaunch
         {
             public string StdoutPath => stdout;
             public string StderrPath => stderr;
             public int ExitCode => exitCode;
-            public bool WaitForExit(int milliseconds) => true;
+            public bool WaitForExit(int milliseconds) => exits;
             public void Dispose()
             {
             }

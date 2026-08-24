@@ -48,8 +48,10 @@ internal sealed record TrialComparisonRequest(
 
 internal enum TrialHarnessOutcome
 {
+    NotAttempted,
     Completed,
     LaunchFailed,
+    ReceiptCaptureFailed,
     TimedOut,
     ProtectedPathModified,
     TeardownUnclean

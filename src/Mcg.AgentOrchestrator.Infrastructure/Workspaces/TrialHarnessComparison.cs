@@ -99,7 +99,7 @@ internal sealed class TrialHarnessComparison(ITrialRootHost host)
                     }
                     else if (!report.Clean)
                     {
-                        state.Outcome = TrialHarnessOutcome.TeardownUnclean;
+                        MarkTeardownUnclean(state);
                         var failure = $"Harness '{state.Spec.Name}' trial-root teardown was unclean: {string.Join("; ", report.Diagnostics)}";
                         state.Diagnostics.Add(failure);
                         failures.Add(failure);
@@ -107,7 +107,7 @@ internal sealed class TrialHarnessComparison(ITrialRootHost host)
                 }
                 catch (Exception ex)
                 {
-                    state.Outcome = TrialHarnessOutcome.TeardownUnclean;
+                    MarkTeardownUnclean(state);
                     var failure = $"Harness '{state.Spec.Name}' trial-root teardown failed: {ex.Message}";
                     state.Diagnostics.Add(failure);
                     failures.Add(failure);
@@ -120,7 +120,7 @@ internal sealed class TrialHarnessComparison(ITrialRootHost host)
                     }
                     catch (Exception ex)
                     {
-                        state.Outcome = TrialHarnessOutcome.TeardownUnclean;
+                        MarkTeardownUnclean(state);
                         var failure = $"Harness '{state.Spec.Name}' trial-root disposal failed: {ex.Message}";
                         state.Diagnostics.Add(failure);
                         failures.Add(failure);
@@ -160,8 +160,7 @@ internal sealed class TrialHarnessComparison(ITrialRootHost host)
             {
                 FileName = state.Spec.FileName,
                 UseShellExecute = false,
-                CreateNoWindow = true,
-                WorkingDirectory = session.RootPath
+                CreateNoWindow = true
             };
             foreach (var argument in state.Spec.Arguments)
             {
@@ -170,8 +169,20 @@ internal sealed class TrialHarnessComparison(ITrialRootHost host)
 
             using var launch = session.Start(command);
             var exited = launch.WaitForExit(ToTimeoutMilliseconds(timeout));
-            CopyReceipt(launch.StdoutPath, state.StdoutPath);
-            CopyReceipt(launch.StderrPath, state.StderrPath);
+            try
+            {
+                CopyReceipt(launch.StdoutPath, state.StdoutPath);
+                CopyReceipt(launch.StderrPath, state.StderrPath);
+            }
+            catch (Exception ex)
+            {
+                state.Outcome = TrialHarnessOutcome.ReceiptCaptureFailed;
+                var failure = $"Harness '{state.Spec.Name}' receipt capture failed: {ex.Message}";
+                state.Diagnostics.Add(failure);
+                failures.Add(failure);
+                return;
+            }
+
             if (exited)
             {
                 state.ExitCode = launch.ExitCode;
@@ -205,10 +216,12 @@ internal sealed class TrialHarnessComparison(ITrialRootHost host)
 
     private static void CopyReceipt(string source, string destination)
     {
-        if (File.Exists(source))
+        if (!File.Exists(source))
         {
-            File.Copy(source, destination, overwrite: true);
+            throw new FileNotFoundException($"Harness capture file does not exist: '{source}'.", source);
         }
+
+        File.Copy(source, destination, overwrite: true);
     }
 
     private static HarnessReceiptPaths CreateHarnessReceiptPaths(string runDirectory, string harnessName)
@@ -217,9 +230,15 @@ internal sealed class TrialHarnessComparison(ITrialRootHost host)
         Directory.CreateDirectory(directory);
         var stdout = Path.Combine(directory, "stdout.log");
         var stderr = Path.Combine(directory, "stderr.log");
-        File.WriteAllText(stdout, string.Empty);
-        File.WriteAllText(stderr, string.Empty);
         return new HarnessReceiptPaths(stdout, stderr, Path.Combine(directory, "result.json"));
+    }
+
+    private static void MarkTeardownUnclean(HarnessState state)
+    {
+        if (state.Outcome is TrialHarnessOutcome.NotAttempted or TrialHarnessOutcome.Completed)
+        {
+            state.Outcome = TrialHarnessOutcome.TeardownUnclean;
+        }
     }
 
     private static TrialHarnessResult ToResult(HarnessState state) => new(
@@ -294,7 +313,7 @@ internal sealed class TrialHarnessComparison(ITrialRootHost host)
         public string ResolvedBaseCommit { get; set; } = string.Empty;
         public string? TeardownReceiptPath { get; set; }
         public int? ExitCode { get; set; }
-        public TrialHarnessOutcome Outcome { get; set; } = TrialHarnessOutcome.LaunchFailed;
+        public TrialHarnessOutcome Outcome { get; set; } = TrialHarnessOutcome.NotAttempted;
         public List<string> Diagnostics { get; } = [];
     }
 
