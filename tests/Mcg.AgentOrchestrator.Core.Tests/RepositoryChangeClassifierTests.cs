@@ -743,10 +743,11 @@ public sealed class RepositoryChangeClassifierTests
     [Xunit.Fact(DisplayName = "RepositoryTestImpactPlanner_selects_focused_test_classes_for_orchestration_changes")]
     public void RepositoryTestImpactPlannerSelectsFocusedTestClassesForOrchestrationChanges()
     {
+        var root = FindRepositoryRootFromSource();
         var plan = RepositoryTestImpactPlanner.Plan([
             "src/Mcg.AgentOrchestrator.App/Orchestration/ConductorDriver.cs",
             "src/Mcg.AgentOrchestrator.App/Orchestration/AutoReviewRetryConvergenceBriefBuilder.cs"
-        ]);
+        ], root);
 
         Assert.True(plan.RequiresBuild);
         Assert.False(plan.RequiresBroadVerification);
@@ -755,6 +756,24 @@ public sealed class RepositoryChangeClassifierTests
         Assert.Contains("--filter", check.Command);
         Assert.Contains(check.Command, argument => argument.Contains("ConductorDriverTests", StringComparison.Ordinal));
         Assert.Contains(check.Command, argument => argument.Contains("AutoReviewRetryConvergenceBriefBuilderTests", StringComparison.Ordinal));
+    }
+
+    private static string FindRepositoryRootFromSource(
+        [System.Runtime.CompilerServices.CallerFilePath] string sourceFilePath = "")
+    {
+        var directory = new DirectoryInfo(Path.GetDirectoryName(sourceFilePath)!);
+        while (directory is not null)
+        {
+            var gitPath = Path.Combine(directory.FullName, ".git");
+            if (Directory.Exists(gitPath) || File.Exists(gitPath))
+            {
+                return directory.FullName;
+            }
+
+            directory = directory.Parent;
+        }
+
+        throw new DirectoryNotFoundException("Repository root was not found from the test source path.");
     }
 
     [Xunit.Fact(DisplayName = "RepositoryTestImpactPlanner_selects_focused_dashboard_filter_for_dashboard_only_changes")]

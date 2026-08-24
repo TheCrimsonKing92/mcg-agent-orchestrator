@@ -48,29 +48,43 @@ public sealed class ConductorBatchLoopVerificationReconcileTests
         await repo.SaveGoalSnapshotsAsync([activeSnapshot]);
 
         var kernel = await repo.LoadAsync();
-        var baselines = kernel.ExportSnapshot().Goals.ToDictionary(snapshot => snapshot.Id, StringComparer.Ordinal);
-        void PersistGoalTick(AgentOrchestratorKernel checkpoint, IReadOnlyCollection<GoalId> changedGoalIds)
-        {
-            var changed = changedGoalIds.Select(id => id.Value).ToHashSet(StringComparer.Ordinal);
-            var requests = checkpoint.ExportSnapshot().Goals
-                .Where(snapshot => changed.Contains(snapshot.Id))
-                .Select(snapshot => new GoalSnapshotSaveRequest(baselines[snapshot.Id], snapshot))
-                .ToArray();
-            var results = repo.SaveGoalSnapshotsWithMergeAsync(requests).GetAwaiter().GetResult();
-            foreach (var result in results)
-            {
-                if (result.PersistedSnapshot is not null)
-                    baselines[result.GoalId] = result.PersistedSnapshot;
-            }
-        }
+        RunOneTick(kernel, repo);
 
-        new ConductorBatchLoop().Run(
-            kernel,
-            MakeDriver(),
-            ConductorAutonomyPolicy.Conservative,
-            NoStopPath(),
-            maxIterations: 1,
-            persistGoalTick: PersistGoalTick);
+        var reloadedGoal = (await repo.LoadAsync()).GetGoal(goal.Id);
+        Assert.Equal(GoalStatus.Verified, reloadedGoal.Status);
+        Assert.Contains(reloadedGoal.Timeline, evt =>
+            evt.Message.Contains("reconciled all task verification gates", StringComparison.Ordinal));
+    }
+
+    [Xunit.Fact(DisplayName = "BatchLoop_reconciles_verified_no_change_dispatch_to_verified_after_reload")]
+    public async Task BatchLoopReconcilesVerifiedNoChangeDispatchToVerifiedAfterReload()
+    {
+        var repo = CreateMigratedStateRepository(TempDb());
+        var seed = new AgentOrchestratorKernel();
+        var goal = GoalLifecycleCommands.CreateAndActivateSimpleGoal(seed, DefaultAgents(), "Promote classified successful goal");
+        var task = goal.Tasks.Single();
+        seed.RecordTaskDispatch(goal.Id, task.Id, new TaskDispatchRecord("codex-cli", "codex exec", "C:\\work", DateTimeOffset.UtcNow));
+        seed.RecordDispatchBaseCommit(goal.Id, task.Id, "48422231916172e8d172a0cc0428d13d222c071c");
+        seed.RecordCriterionRetryFeedback(goal.Id, task.Id, ["Re-run verification against the current candidate."]);
+        seed.RecordDispatchExecutionResult(goal.Id, task.Id, new TaskVerificationRecord(
+            "codex exec",
+            "C:\\work",
+            1,
+            "WORKER_RESULT:\nfiles: none\ntests: pass - focused verification completed\nblockers: none\nEND_WORKER_RESULT",
+            DispatchRejectionDiagnosticMarker.Format(true, 0, "none") + Environment.NewLine +
+            DispatchFailureDiagnosticMarker.Format(DispatchFailureDiagnosticMarker.RequiredFileChangeEvidenceMissing),
+            DateTimeOffset.UtcNow,
+            WorkerResultPresent: true));
+        Assert.Equal(WorkTaskStatus.Completed, task.Status);
+        Assert.Equal(1, task.LastVerification!.ExitCode);
+        var activeSnapshot = seed.ExportSnapshot().Goals.Single() with { Status = GoalStatus.Active };
+        await repo.SaveGoalSnapshotsAsync([activeSnapshot]);
+
+        var kernel = await repo.LoadAsync();
+        var restoredVerification = kernel.GetTask(goal.Id, task.Id).LastVerification!;
+        Assert.True(restoredVerification.CompletionVerdictVerifiedSuccess);
+        Assert.Equal("verified-no-change-round", restoredVerification.CompletionVerdictRule);
+        RunOneTick(kernel, repo);
 
         var reloaded = await repo.LoadAsync();
         var reloadedGoal = reloaded.GetGoal(goal.Id);
@@ -78,6 +92,25 @@ public sealed class ConductorBatchLoopVerificationReconcileTests
         Assert.Contains(reloadedGoal.Timeline, evt =>
             evt.Kind == ProgressKind.GoalPolicyDecision &&
             evt.Message.Contains("reconciled all task verification gates", StringComparison.Ordinal));
+    }
+
+    [Xunit.Fact(DisplayName = "ReconcileGoalVerificationStatus_does_not_advance_incomplete_goal")]
+    public void ReconcileGoalVerificationStatusDoesNotAdvanceIncompleteGoal()
+    {
+        var kernel = new AgentOrchestratorKernel();
+        var completed = new TaskSpec(TaskId.New(), "Complete this task", AgentRole.Developer);
+        var pending = new TaskSpec(TaskId.New(), "Leave this task pending", AgentRole.Tester);
+        var goal = kernel.CreateGoal("Keep incomplete goal active", [completed, pending]);
+        kernel.ActivateGoal(goal.Id, DefaultAgents());
+        kernel.ReportTaskProgress(goal.Id, completed.Id, WorkTaskStatus.Completed, "Worker finished.");
+        kernel.RecordTaskVerification(goal.Id, completed.Id, new TaskVerificationRecord(
+            "dotnet test", "C:\\work", 0, "ok", "", DateTimeOffset.UtcNow));
+
+        var reconciled = kernel.ReconcileGoalVerificationStatus(goal.Id, "All task gates passed.");
+
+        Assert.False(reconciled);
+        Assert.NotEqual(GoalStatus.Verified, goal.Status);
+        Assert.NotEqual(WorkTaskStatus.Completed, pending.Status);
     }
 
     [Xunit.Fact(DisplayName = "BatchLoop_failed_verification_hold_remains_visible_on_subsequent_ticks")]
@@ -146,5 +179,34 @@ public sealed class ConductorBatchLoopVerificationReconcileTests
         Assert.Contains(reloadedGoal.Timeline, evt =>
             evt.Kind == ProgressKind.GoalPolicyDecision &&
             evt.Message.Contains("Tick merge reconciled stored all-task verification gates", StringComparison.Ordinal));
+    }
+
+    private static void RunOneTick(
+        AgentOrchestratorKernel kernel,
+        SqliteOrchestratorStateRepository repo)
+    {
+        var baselines = kernel.ExportSnapshot().Goals.ToDictionary(snapshot => snapshot.Id, StringComparer.Ordinal);
+        void PersistGoalTick(AgentOrchestratorKernel checkpoint, IReadOnlyCollection<GoalId> changedGoalIds)
+        {
+            var changed = changedGoalIds.Select(id => id.Value).ToHashSet(StringComparer.Ordinal);
+            var requests = checkpoint.ExportSnapshot().Goals
+                .Where(snapshot => changed.Contains(snapshot.Id))
+                .Select(snapshot => new GoalSnapshotSaveRequest(baselines[snapshot.Id], snapshot))
+                .ToArray();
+            var results = repo.SaveGoalSnapshotsWithMergeAsync(requests).GetAwaiter().GetResult();
+            foreach (var result in results)
+            {
+                if (result.PersistedSnapshot is not null)
+                    baselines[result.GoalId] = result.PersistedSnapshot;
+            }
+        }
+
+        new ConductorBatchLoop().Run(
+            kernel,
+            MakeDriver(),
+            ConductorAutonomyPolicy.Conservative,
+            NoStopPath(),
+            maxIterations: 1,
+            persistGoalTick: PersistGoalTick);
     }
 }

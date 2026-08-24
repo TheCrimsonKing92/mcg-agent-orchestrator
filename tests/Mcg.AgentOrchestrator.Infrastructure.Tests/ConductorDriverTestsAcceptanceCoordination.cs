@@ -357,13 +357,18 @@ public sealed partial class ConductorDriverTestsAcceptanceCoordination
         var busy = new DotnetBuildLeaseAcquisition.SlotsBusy(
             "goal-slots-busy",
             [new DotnetBuildStableSlotWait(0, 12345)]);
+        var coordinator = new ConductorParallelAcceptanceAttemptCoordinator(
+            Path.Combine(root, ".orchestrator", "test-acceptance-attempts"),
+            runInline: true,
+            acquireStableSlotLease: (_, _) => null);
 
         var driver = new ConductorDriver(
             kernel,
             workspace,
             new ThrowingAcceptanceVerifier(new DotnetBuildSlotsBusyException(busy)),
             DefaultAgents(),
-            WorkerProfileCatalog.Default());
+            WorkerProfileCatalog.Default(),
+            coordinator);
 
         var result = driver.AdvanceOnce(goal, ConductorAutonomyPolicy.Conservative);
 

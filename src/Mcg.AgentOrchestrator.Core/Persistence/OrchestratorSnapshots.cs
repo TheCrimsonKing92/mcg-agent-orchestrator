@@ -160,7 +160,9 @@ public sealed record TaskVerificationSnapshot(
     string? AuthoritativeStandardError = null,
     string? AuthoritativeStandardOutputUnavailableReason = null,
     string? AuthoritativeStandardErrorUnavailableReason = null,
-    PlannerCandidateDivergenceReceipt? PlannerCandidateDivergence = null)
+    PlannerCandidateDivergenceReceipt? PlannerCandidateDivergence = null,
+    bool CompletionVerdictVerifiedSuccess = false,
+    string? CompletionVerdictRule = null)
 {
     public string StandardOutput { get; init; } = VerificationTextBounds.BoundText(StandardOutput, StandardOutputPath);
 

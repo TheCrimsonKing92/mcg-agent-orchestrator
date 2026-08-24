@@ -1,3 +1,4 @@
+using System.Text.Json;
 using Mcg.AgentOrchestrator.App.Orchestration;
 using Mcg.AgentOrchestrator.Core;
 using Mcg.AgentOrchestrator.Core.Conductor;
@@ -8,19 +9,20 @@ using static ConductorDriverTests;
 public sealed partial class ConductorDriverTestsAcceptanceCoordination
 {
     [Xunit.Fact]
-    public void ConductorDriverInlineLandingPassesStableSlotIndexWhenLeaseAvailable()
+    public void ConductorDriverNoTickLandingUsesLeasedSharedAttempt()
     {
-        var executionDirectory = CreateTempDirectory();
-        var (kernel, goal) = SimpleGoal("Inline landing stable slot");
+        var attemptRoot = CreateTempDirectory();
+        var (kernel, goal) = SimpleGoal("No-tick landing stable slot");
         PassVerification(kernel, goal, goal.Tasks.Single());
-        var worktree = GoalWorktrees.WorktreePath(executionDirectory, goal.Id);
-        Directory.CreateDirectory(worktree);
-        WriteSourceSizeAuthority(worktree, maximumLineCount: 3, actualLineCount: 3);
         var stableSlotLease = Assert.IsType<DotnetBuildLeaseAcquisition.Acquired>(
             DotnetBuildEnvironmentManager.TryAcquireStableSlotExecutionLock(0, TimeSpan.Zero)).Lease;
         int? capturedSlotIndex = null;
         DotnetBuildEnvironmentLease? capturedLease = null;
-        var driver = MakeDriver(
+        var coordinator = new ConductorParallelAcceptanceAttemptCoordinator(
+            attemptRoot,
+            runInline: true,
+            acquireStableSlotLease: (_, _) => stableSlotLease);
+        var driver = MakeAcceptanceDriver(
             getFacts: _ => GoalLifecycleFacts.None,
             runAcceptanceVerificationWithLease: (_, slotIndex, lease, _) =>
             {
@@ -28,67 +30,95 @@ public sealed partial class ConductorDriverTestsAcceptanceCoordination
                 capturedLease = lease;
                 return AcceptanceVerificationSummary.PassedWithNoUnmetCriteria;
             },
-            tryAcquireLandingStableSlotLease: _ => new DotnetBuildLeaseAcquisition.Acquired(stableSlotLease),
             classifyRisk: _ => ChangeRiskTier.DocsOnly,
-            executionDirectory: executionDirectory);
+            parallelAcceptanceAttemptCoordinator: coordinator);
 
-        _ = driver.AdvanceOnce(goal, ConductorAutonomyPolicy.Conservative);
+        var result = driver.AdvanceOnce(goal, ConductorAutonomyPolicy.Conservative);
 
+        Assert.IsType<ConductorAdvanceOutcome.Executed>(result.Outcome);
         Assert.Equal(0, capturedSlotIndex);
         Assert.Same(stableSlotLease, capturedLease);
+        var attempt = ReadOnlyAttempt(attemptRoot, goal);
+        Assert.StartsWith($"{goal.Id.Value[..8]}-0-", attempt.AttemptId, StringComparison.Ordinal);
+        Assert.Equal(AcceptanceStableSlotExhaustionPolicy.DegradeToSerial, attempt.StableSlotExhaustionPolicy);
+        Assert.NotNull(attempt.ReconciledAt);
         using var reacquiredLease = Assert.IsType<DotnetBuildLeaseAcquisition.Acquired>(
             DotnetBuildEnvironmentManager.TryAcquireStableSlotExecutionLock(0, TimeSpan.Zero)).Lease;
     }
 
     [Xunit.Fact]
-    public void InlineLanding_ViolatingAuthority_SkipsLeaseAndVerifier()
+    public void ConductorDriverNoTickLandingSelfReconcilesAndEmitsLifecycleEvents()
     {
-        var executionDirectory = CreateTempDirectory();
-        var (kernel, goal) = SimpleGoal("Inline landing source size breach");
+        var attemptRoot = CreateTempDirectory();
+        var (kernel, goal) = SimpleGoal("No-tick landing lifecycle");
         PassVerification(kernel, goal, goal.Tasks.Single());
-        var worktree = GoalWorktrees.WorktreePath(executionDirectory, goal.Id);
-        Directory.CreateDirectory(worktree);
-        WriteSourceSizeAuthority(worktree, maximumLineCount: 2, actualLineCount: 3);
-        var leaseAttempted = false;
-        var verifierRan = false;
-        string? retryMessage = null;
-        var driver = MakeDriver(
+        ConductorParallelAcceptanceOwnedProcessLaunch? ownedLaunch = null;
+        var launched = false;
+        var events = new List<(string GoalId, string Detail)>();
+        var coordinator = new ConductorParallelAcceptanceAttemptCoordinator(
+            attemptRoot,
+            isProcessAlive: _ => true,
+            launchOwnedProcess: launch =>
+            {
+                ownedLaunch = launch;
+                return new ConductorParallelAcceptanceOwnedProcessLaunchResult(9701);
+            },
+            acquireStableSlotLease: (_, _) => null);
+        var driver = MakeAcceptanceDriver(
             getFacts: _ => GoalLifecycleFacts.None,
             runAcceptanceVerificationWithLease: (_, _, _, _) =>
-            {
-                verifierRan = true;
-                return AcceptanceVerificationSummary.PassedWithNoUnmetCriteria;
-            },
-            tryAcquireLandingStableSlotLease: _ =>
-            {
-                leaseAttempted = true;
-                return new DotnetBuildLeaseAcquisition.SlotsBusy("must-not-run", []);
-            },
-            retryTask: (goalId, taskId, message) =>
-            {
-                retryMessage = message;
-                return kernel.RetryTask(goalId, taskId, message);
-            },
-            recordCriterionRetryFeedback: kernel.RecordCriterionRetryFeedback,
+                AcceptanceVerificationSummary.PassedWithNoUnmetCriteria,
             classifyRisk: _ => ChangeRiskTier.DocsOnly,
-            executionDirectory: executionDirectory);
+            parallelAcceptanceAttemptCoordinator: coordinator,
+            acceptanceEventSink: (goalId, detail) => events.Add((goalId, detail)),
+            noTickAcceptancePollDelay: _ =>
+            {
+                if (!launched)
+                {
+                    launched = true;
+                    ownedLaunch!.ExecuteInCurrentProcess(9701);
+                }
+            });
 
         var result = driver.AdvanceOnce(goal, ConductorAutonomyPolicy.Conservative);
 
-        Assert.False(leaseAttempted, "The source-size rejection must run before stable-slot acquisition.");
-        Assert.False(verifierRan, "The acceptance verifier must not run for a pre-slot rejection.");
         Assert.IsType<ConductorAdvanceOutcome.Executed>(result.Outcome);
-        Assert.Contains("guarded.cs has 3 lines", retryMessage, StringComparison.Ordinal);
-        Assert.Contains("recorded ceiling of 2", retryMessage, StringComparison.Ordinal);
+        var attempt = ReadOnlyAttempt(attemptRoot, goal);
+        Assert.Equal(ConductorParallelAcceptanceAttemptOutcome.Passed, attempt.Outcome);
+        Assert.NotNull(attempt.ReconciledAt);
+        Assert.Collection(
+            events,
+            startedEvent =>
+            {
+                var (goalId, started) = startedEvent;
+                Assert.Equal(goal.Id.Value[..8], goalId);
+                Assert.StartsWith("ACCEPTANCE ", started, StringComparison.Ordinal);
+                Assert.Contains($"result=started attempt={attempt.AttemptId} tick=0", started, StringComparison.Ordinal);
+            },
+            terminalEvent =>
+            {
+                var (goalId, terminal) = terminalEvent;
+                Assert.Equal(goal.Id.Value[..8], goalId);
+                Assert.StartsWith("ACCEPTANCE ", terminal, StringComparison.Ordinal);
+                Assert.Contains($"result=passed attempt={attempt.AttemptId} tick=0", terminal, StringComparison.Ordinal);
+            });
     }
 
     [Xunit.Fact]
-    public void ConductorDriverInlineLandingRunsSerialFallbackWhenStableSlotUnavailable()
+    public void ConductorDriverNoTickLandingDegradesAfterInjectedSlotExhaustion()
     {
-        var (kernel, goal) = SimpleGoal("Inline landing serial fallback");
+        var attemptRoot = CreateTempDirectory();
+        var (kernel, goal) = SimpleGoal("No-tick landing bounded degradation");
         PassVerification(kernel, goal, goal.Tasks.Single());
         var verifierRan = false;
-        var driver = MakeDriver(
+        var coordinator = new ConductorParallelAcceptanceAttemptCoordinator(
+            attemptRoot,
+            runInline: true,
+            acquireStableSlotLease: (_, _) => throw new DotnetBuildSlotsBusyException(
+                new DotnetBuildLeaseAcquisition.SlotsBusy(
+                    "injected-bounded-exhaustion",
+                    [new DotnetBuildStableSlotWait(0, 4242)])));
+        var driver = MakeAcceptanceDriver(
             getFacts: _ => GoalLifecycleFacts.None,
             runAcceptanceVerificationWithLease: (_, slotIndex, lease, _) =>
             {
@@ -97,152 +127,290 @@ public sealed partial class ConductorDriverTestsAcceptanceCoordination
                 Assert.Null(lease);
                 return AcceptanceVerificationSummary.PassedWithNoUnmetCriteria;
             },
-            tryAcquireLandingStableSlotLease: _ => new DotnetBuildLeaseAcquisition.SlotsBusy("test", []),
-            classifyRisk: _ => ChangeRiskTier.DocsOnly);
+            classifyRisk: _ => ChangeRiskTier.DocsOnly,
+            parallelAcceptanceAttemptCoordinator: coordinator);
 
         var result = driver.AdvanceOnce(goal, ConductorAutonomyPolicy.Conservative);
 
         Assert.True(verifierRan);
         Assert.IsType<ConductorAdvanceOutcome.Executed>(result.Outcome);
+        var attempt = ReadOnlyAttempt(attemptRoot, goal);
+        Assert.Equal(ConductorParallelAcceptanceAttemptOutcome.Passed, attempt.Outcome);
+        Assert.Contains(
+            attempt.LeaseReceipts ?? [],
+            receipt => receipt.StartsWith("ACCEPTANCE_LEASE_DEGRADE ", StringComparison.Ordinal));
     }
 
     [Xunit.Fact]
-    public void ConductorDriverInlineLandingRecordsDegradationWhenStableSlotUnavailable()
+    public void ConductorDriverNoTickLandingReturnsFailedRecordedVerdict()
     {
-        var events = RunDegradedLanding(new DotnetBuildLeaseAcquisition.SlotsBusy(
-            "inline-landing",
-            [new DotnetBuildStableSlotWait(1, 4242)]));
-
-        Assert.Contains("landing-stable-slot-degraded", events);
-        Assert.Contains("reason=slots-busy", events);
-        Assert.Contains("slot-1 pid 4242", events);
-    }
-
-    [Xunit.Fact]
-    public void ConductorDriverInlineLandingRecordsBuildLockReasonWhenStableSlotBlocked()
-    {
-        var events = RunDegradedLanding(new DotnetBuildLeaseAcquisition.BuildLockBlocked(
-            "inline-landing",
-            new BuildLockAttribution("locked.dll", [], "test")));
-
-        Assert.Contains("landing-stable-slot-degraded", events);
-        Assert.Contains("reason=build-lock-blocked", events);
-        Assert.Contains("path=locked.dll", events);
-    }
-
-    [Xunit.Fact]
-    public void ConductorDriverInlineLandingRecordsNoDegradationWhenLeaseAcquired()
-    {
-        var executionDirectory = CreateTempDirectory();
-        var (kernel, goal) = SimpleGoal("Inline landing leased without degradation");
+        var attemptRoot = CreateTempDirectory();
+        var (kernel, goal) = SimpleGoal("No-tick landing failed verdict");
         PassVerification(kernel, goal, goal.Tasks.Single());
-        var stableSlotLease = Assert.IsType<DotnetBuildLeaseAcquisition.Acquired>(
-            DotnetBuildEnvironmentManager.TryAcquireStableSlotExecutionLock(0, TimeSpan.Zero)).Lease;
-        var driver = MakeDriver(
+        var coordinator = new ConductorParallelAcceptanceAttemptCoordinator(
+            attemptRoot,
+            runInline: true,
+            acquireStableSlotLease: (_, _) => null);
+        var driver = MakeAcceptanceDriver(
+            getFacts: _ => GoalLifecycleFacts.None,
+            runAcceptanceVerificationWithLease: (_, _, _, _) => AcceptanceVerificationSummary.Failed,
+            classifyRisk: _ => ChangeRiskTier.DocsOnly,
+            parallelAcceptanceAttemptCoordinator: coordinator);
+
+        var result = driver.AdvanceOnce(goal, ConductorAutonomyPolicy.Conservative);
+
+        Assert.IsType<ConductorAdvanceOutcome.Escalated>(result.Outcome);
+        var attempt = ReadOnlyAttempt(attemptRoot, goal);
+        Assert.Equal(ConductorParallelAcceptanceAttemptOutcome.Failed, attempt.Outcome);
+        Assert.NotNull(attempt.ReconciledAt);
+    }
+
+    [Xunit.Fact]
+    public void ConductorDriverNoTickLandingStopsPollingAtInjectedDeadline()
+    {
+        var attemptRoot = CreateTempDirectory();
+        var (kernel, goal) = SimpleGoal("No-tick landing bounded poll");
+        PassVerification(kernel, goal, goal.Tasks.Single());
+        var now = DateTimeOffset.Parse("2026-08-24T00:00:00Z");
+        var coordinator = new ConductorParallelAcceptanceAttemptCoordinator(
+            attemptRoot,
+            isProcessAlive: _ => true,
+            launchOwnedProcess: _ => new ConductorParallelAcceptanceOwnedProcessLaunchResult(9801));
+        var driver = MakeAcceptanceDriver(
+            getFacts: _ => GoalLifecycleFacts.None,
+            runAcceptanceVerificationWithLease: (_, _, _, _) =>
+                throw new InvalidOperationException("The held owned process must not run in this test."),
+            classifyRisk: _ => ChangeRiskTier.DocsOnly,
+            parallelAcceptanceAttemptCoordinator: coordinator,
+            noTickAcceptancePollDelay: delay => now += delay,
+            noTickAcceptancePollTimeout: TimeSpan.FromMilliseconds(200),
+            utcNow: () => now);
+
+        var result = driver.AdvanceOnce(goal, ConductorAutonomyPolicy.Conservative);
+
+        var held = Assert.IsType<ConductorAdvanceOutcome.Held>(result.Outcome);
+        Assert.Contains("bounded no-tick wait", held.Reason, StringComparison.Ordinal);
+        var attempt = ReadOnlyAttempt(attemptRoot, goal);
+        Assert.Equal(ConductorParallelAcceptanceAttemptOutcome.Running, attempt.Outcome);
+        Assert.Null(attempt.ReconciledAt);
+    }
+
+    [Xunit.Fact]
+    public void ConductorDriverNoTickLandingDegradesAfterInjectedBuildLockBlock()
+    {
+        var attemptRoot = CreateTempDirectory();
+        var (kernel, goal) = SimpleGoal("No-tick landing build-lock degradation");
+        PassVerification(kernel, goal, goal.Tasks.Single());
+        var verifierRan = false;
+        var coordinator = new ConductorParallelAcceptanceAttemptCoordinator(
+            attemptRoot,
+            runInline: true,
+            acquireStableSlotLease: (_, _) => throw new BuildLockBlockedException(
+                new BuildLockAttribution("locked.dll", [], "injected-build-lock")));
+        var driver = MakeAcceptanceDriver(
+            getFacts: _ => GoalLifecycleFacts.None,
+            runAcceptanceVerificationWithLease: (_, slotIndex, lease, _) =>
+            {
+                verifierRan = true;
+                Assert.Null(slotIndex);
+                Assert.Null(lease);
+                return AcceptanceVerificationSummary.PassedWithNoUnmetCriteria;
+            },
+            classifyRisk: _ => ChangeRiskTier.DocsOnly,
+            parallelAcceptanceAttemptCoordinator: coordinator);
+
+        var result = driver.AdvanceOnce(goal, ConductorAutonomyPolicy.Conservative);
+
+        Assert.True(verifierRan);
+        Assert.IsType<ConductorAdvanceOutcome.Executed>(result.Outcome);
+        var attempt = ReadOnlyAttempt(attemptRoot, goal);
+        Assert.Equal(ConductorParallelAcceptanceAttemptOutcome.Passed, attempt.Outcome);
+        Assert.Contains(
+            attempt.LeaseReceipts ?? [],
+            receipt => receipt.StartsWith("ACCEPTANCE_LEASE_DEGRADE ", StringComparison.Ordinal));
+    }
+
+    [Xunit.Fact]
+    public void ConductorDriverNoTickLandingRetriesTransientUnreadableAttemptMetadata()
+    {
+        var attemptRoot = CreateTempDirectory();
+        var (kernel, goal) = SimpleGoal("No-tick landing transient metadata read");
+        PassVerification(kernel, goal, goal.Tasks.Single());
+        ConductorParallelAcceptanceOwnedProcessLaunch? ownedLaunch = null;
+        string? metadataPath = null;
+        string? backupPath = null;
+        var delayCount = 0;
+        var coordinator = new ConductorParallelAcceptanceAttemptCoordinator(
+            attemptRoot,
+            isProcessAlive: _ => true,
+            launchOwnedProcess: launch =>
+            {
+                ownedLaunch = launch;
+                return new ConductorParallelAcceptanceOwnedProcessLaunchResult(9802);
+            },
+            acquireStableSlotLease: (_, _) => null);
+        var driver = MakeAcceptanceDriver(
             getFacts: _ => GoalLifecycleFacts.None,
             runAcceptanceVerificationWithLease: (_, _, _, _) =>
                 AcceptanceVerificationSummary.PassedWithNoUnmetCriteria,
-            tryAcquireLandingStableSlotLease: _ => new DotnetBuildLeaseAcquisition.Acquired(stableSlotLease),
             classifyRisk: _ => ChangeRiskTier.DocsOnly,
-            executionDirectory: executionDirectory);
-        var eventPath = LandingEventPath(executionDirectory);
+            parallelAcceptanceAttemptCoordinator: coordinator,
+            noTickAcceptancePollDelay: _ =>
+            {
+                delayCount++;
+                if (delayCount == 1)
+                {
+                    metadataPath = Assert.Single(Directory.EnumerateFiles(
+                        Path.Combine(attemptRoot, goal.Id.Value),
+                        "*.attempt.json"));
+                    backupPath = metadataPath + ".transient";
+                    File.Move(metadataPath, backupPath);
+                }
+                else if (delayCount == 2)
+                {
+                    File.Move(backupPath!, metadataPath!);
+                    ownedLaunch!.ExecuteInCurrentProcess(9802);
+                }
+            });
+        ConductorAdvanceResult? result = null;
 
-        _ = driver.AdvanceOnce(goal, ConductorAutonomyPolicy.Conservative);
+        var exception = Record.Exception(() =>
+            result = driver.AdvanceOnce(goal, ConductorAutonomyPolicy.Conservative));
 
-        var events = File.Exists(eventPath) ? File.ReadAllText(eventPath) : string.Empty;
-        Assert.DoesNotContain("landing-stable-slot-degraded", events);
-        using var reacquiredLease = Assert.IsType<DotnetBuildLeaseAcquisition.Acquired>(
-            DotnetBuildEnvironmentManager.TryAcquireStableSlotExecutionLock(0, TimeSpan.Zero)).Lease;
+        Assert.Null(exception);
+        Assert.IsType<ConductorAdvanceOutcome.Executed>(result!.Outcome);
+        Assert.Equal(2, delayCount);
+        Assert.NotNull(ReadOnlyAttempt(attemptRoot, goal).ReconciledAt);
     }
 
     [Xunit.Fact]
-    public void ConductorDriverInlineLandingRequestsBoundedStableSlotWait()
+    public void ConductorDriverNoTickLandingReturnsVerdictWhenLifecycleSinkFails()
     {
-        var capturedTimeout = TimeSpan.Zero;
-
-        var result = ConductorDriver.TryAcquireInlineLandingStableSlotLease(timeout =>
-        {
-            capturedTimeout = timeout;
-            return new DotnetBuildLeaseAcquisition.SlotsBusy("test", []);
-        });
-
-        Assert.IsType<DotnetBuildLeaseAcquisition.SlotsBusy>(result);
-        Assert.Equal(ConductorDriver.InlineLandingStableSlotLeaseTimeout, capturedTimeout);
-        Assert.InRange(capturedTimeout, TimeSpan.FromMilliseconds(1), TimeSpan.FromSeconds(5));
-    }
-
-    [Xunit.Theory]
-    [Xunit.InlineData(false)]
-    [Xunit.InlineData(true)]
-    public void ConductorDriverInlineLandingReleasesStableSlotWhenVerifierThrows(bool cancellation)
-    {
-        var (kernel, goal) = SimpleGoal("Inline landing exceptional release");
+        var attemptRoot = CreateTempDirectory();
+        var (kernel, goal) = SimpleGoal("No-tick landing event sink failure");
         PassVerification(kernel, goal, goal.Tasks.Single());
-        var stableSlotLease = Assert.IsType<DotnetBuildLeaseAcquisition.Acquired>(
-            DotnetBuildEnvironmentManager.TryAcquireStableSlotExecutionLock(0, TimeSpan.Zero)).Lease;
-        var driver = MakeDriver(
-            getFacts: _ => GoalLifecycleFacts.None,
-            runAcceptanceVerificationWithLease: (_, _, _, _) => throw (cancellation
-                ? new OperationCanceledException("injected cancellation")
-                : new InvalidOperationException("injected failure")),
-            tryAcquireLandingStableSlotLease: _ => new DotnetBuildLeaseAcquisition.Acquired(stableSlotLease),
-            classifyRisk: _ => ChangeRiskTier.DocsOnly);
-
-        if (cancellation)
-        {
-            Assert.Throws<OperationCanceledException>(() =>
-                driver.AdvanceOnce(goal, ConductorAutonomyPolicy.Conservative));
-        }
-        else
-        {
-            Assert.Throws<InvalidOperationException>(() =>
-                driver.AdvanceOnce(goal, ConductorAutonomyPolicy.Conservative));
-        }
-
-        using var reacquiredLease = Assert.IsType<DotnetBuildLeaseAcquisition.Acquired>(
-            DotnetBuildEnvironmentManager.TryAcquireStableSlotExecutionLock(0, TimeSpan.Zero)).Lease;
-    }
-
-    private static string RunDegradedLanding(DotnetBuildLeaseAcquisition acquisition)
-    {
-        var executionDirectory = CreateTempDirectory();
-        var (kernel, goal) = SimpleGoal("Inline landing degradation record");
-        PassVerification(kernel, goal, goal.Tasks.Single());
-        var driver = MakeDriver(
+        var coordinator = new ConductorParallelAcceptanceAttemptCoordinator(
+            attemptRoot,
+            runInline: true,
+            acquireStableSlotLease: (_, _) => null);
+        var driver = MakeAcceptanceDriver(
             getFacts: _ => GoalLifecycleFacts.None,
             runAcceptanceVerificationWithLease: (_, _, _, _) =>
                 AcceptanceVerificationSummary.PassedWithNoUnmetCriteria,
-            tryAcquireLandingStableSlotLease: _ => acquisition,
             classifyRisk: _ => ChangeRiskTier.DocsOnly,
-            executionDirectory: executionDirectory);
-        var eventPath = LandingEventPath(executionDirectory);
+            parallelAcceptanceAttemptCoordinator: coordinator,
+            acceptanceEventSink: (_, detail) =>
+            {
+                if (detail.Contains("result=passed", StringComparison.Ordinal))
+                {
+                    throw new IOException("Injected acceptance event sink failure.");
+                }
+            });
+        ConductorAdvanceResult? result = null;
 
-        _ = driver.AdvanceOnce(goal, ConductorAutonomyPolicy.Conservative);
+        var exception = Record.Exception(() =>
+            result = driver.AdvanceOnce(goal, ConductorAutonomyPolicy.Conservative));
 
-        Assert.True(File.Exists(eventPath), $"Expected degradation event at {eventPath}.");
-        return File.ReadAllText(eventPath);
+        Assert.Null(exception);
+        Assert.IsType<ConductorAdvanceOutcome.Executed>(result!.Outcome);
+        Assert.NotNull(ReadOnlyAttempt(attemptRoot, goal).ReconciledAt);
     }
 
-    private static string LandingEventPath(string executionDirectory) => Path.Combine(
-        executionDirectory,
-        ".orchestrator",
-        "logs",
-        ConductEventLogWriter.CurrentFileName);
-
-    private static void WriteSourceSizeAuthority(
-        string worktree,
-        int maximumLineCount,
-        int actualLineCount)
+    [Xunit.Fact]
+    public void ConductorDriverNoTickAdvanceDoesNotAdoptLoopOwnedAttempt()
     {
-        var authorityPath = Path.Combine(
-            worktree,
-            SourceSizeRatchet.SourcePath.Replace('/', Path.DirectorySeparatorChar));
-        Directory.CreateDirectory(Path.GetDirectoryName(authorityPath)!);
-        File.WriteAllText(
-            authorityPath,
-            $"new SourceSizeCeiling(\"guarded.cs\", {maximumLineCount})");
-        File.WriteAllLines(
-            Path.Combine(worktree, "guarded.cs"),
-            Enumerable.Repeat("line", actualLineCount));
+        var attemptRoot = CreateTempDirectory();
+        var (kernel, goal) = SimpleGoal("No-tick caller does not adopt loop acceptance");
+        PassVerification(kernel, goal, goal.Tasks.Single());
+        ConductorParallelAcceptanceOwnedProcessLaunch? ownedLaunch = null;
+        var coordinator = new ConductorParallelAcceptanceAttemptCoordinator(
+            attemptRoot,
+            isProcessAlive: _ => true,
+            launchOwnedProcess: launch =>
+            {
+                ownedLaunch = launch;
+                return new ConductorParallelAcceptanceOwnedProcessLaunchResult(9803);
+            },
+            acquireStableSlotLease: (_, _) => null);
+        var tickDriver = MakeAcceptanceDriver(
+            getFacts: _ => GoalLifecycleFacts.None,
+            runAcceptanceVerificationWithLease: (_, _, _, _) =>
+                AcceptanceVerificationSummary.PassedWithNoUnmetCriteria,
+            classifyRisk: _ => ChangeRiskTier.DocsOnly,
+            parallelAcceptanceAttemptCoordinator: coordinator);
+        tickDriver.BeginTick(kernel, 1);
+        var started = tickDriver.AdvanceOnce(goal, ConductorAutonomyPolicy.Conservative);
+        var noTickDriver = MakeAcceptanceDriver(
+            getFacts: _ => GoalLifecycleFacts.None,
+            runAcceptanceVerificationWithLease: (_, _, _, _) =>
+                AcceptanceVerificationSummary.PassedWithNoUnmetCriteria,
+            classifyRisk: _ => ChangeRiskTier.DocsOnly,
+            parallelAcceptanceAttemptCoordinator: coordinator,
+            noTickAcceptancePollDelay: _ => ownedLaunch!.ExecuteInCurrentProcess(9803));
+
+        var result = noTickDriver.AdvanceOnce(goal, ConductorAutonomyPolicy.Conservative);
+
+        Assert.IsType<ConductorAdvanceOutcome.Held>(started.Outcome);
+        Assert.IsType<ConductorAdvanceOutcome.Held>(result.Outcome);
+        Assert.Equal(GoalStatus.Verifying, goal.Status);
+        Assert.Null(ReadOnlyAttempt(attemptRoot, goal).ReconciledAt);
+    }
+
+    private static ConductorDriver MakeAcceptanceDriver(
+        Func<Goal, GoalLifecycleFacts>? getFacts = null,
+        Func<Goal, int?, DotnetBuildEnvironmentLease?, CancellationToken, AcceptanceVerificationSummary>?
+            runAcceptanceVerificationWithLease = null,
+        Func<Goal, ChangeRiskTier?>? classifyRisk = null,
+        ConductorParallelAcceptanceAttemptCoordinator? parallelAcceptanceAttemptCoordinator = null,
+        Action<string, string>? acceptanceEventSink = null,
+        Action<TimeSpan>? noTickAcceptancePollDelay = null,
+        TimeSpan? noTickAcceptancePollTimeout = null,
+        Func<DateTimeOffset>? utcNow = null) =>
+        new(
+            getFacts ?? (_ => GoalLifecycleFacts.None),
+            () => 0,
+            _ => "/tmp/workspace",
+            _ => DispatchStartOutcome.Started(),
+            null,
+            null,
+            _ => AcceptanceVerificationSummary.PassedWithNoUnmetCriteria,
+            null,
+            null,
+            null,
+            null,
+            null,
+            _ => new GoalWorktreeRebaseResult(
+                GoalWorktreeRebaseStatus.AlreadyFastForwardable,
+                "goal/test",
+                "Already fast-forwardable",
+                [],
+                null),
+            (goal, _) => new LandingResult(
+                goal.Id.Value,
+                goal.Id.Value[..8],
+                new LandingDecision.Promote(),
+                "integration",
+                true,
+                "Landed"),
+            null,
+            _ => { },
+            _ => new GoalWorktreeRemoveResult("Workspace cleaned up.", null, [], null),
+            (_, _, _) => { },
+            classifyRisk ?? (_ => null),
+            runAcceptanceVerificationWithLease: runAcceptanceVerificationWithLease,
+            parallelAcceptanceAttemptCoordinator: parallelAcceptanceAttemptCoordinator,
+            acceptanceEventSink: acceptanceEventSink,
+            noTickAcceptancePollDelay: noTickAcceptancePollDelay,
+            noTickAcceptancePollTimeout: noTickAcceptancePollTimeout,
+            utcNow: utcNow);
+
+    private static ConductorParallelAcceptanceAttempt ReadOnlyAttempt(string attemptRoot, Goal goal)
+    {
+        var path = Assert.Single(Directory.EnumerateFiles(
+            Path.Combine(attemptRoot, goal.Id.Value),
+            "*.attempt.json"));
+        return JsonSerializer.Deserialize<ConductorParallelAcceptanceAttempt>(
+            File.ReadAllText(path),
+            new JsonSerializerOptions { PropertyNameCaseInsensitive = true })!;
     }
 }

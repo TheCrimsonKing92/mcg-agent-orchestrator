@@ -82,7 +82,9 @@ public sealed record TaskVerificationRecord(
     string? FullStandardErrorUnavailableReason = null,
     bool StandardOutputIsAuthoritative = true,
     bool StandardErrorIsAuthoritative = true,
-    PlannerCandidateDivergenceReceipt? PlannerCandidateDivergence = null)
+    PlannerCandidateDivergenceReceipt? PlannerCandidateDivergence = null,
+    bool CompletionVerdictVerifiedSuccess = false,
+    string? CompletionVerdictRule = null)
 {
     public string? AuthoritativeStandardOutput { get; init; } = FullStandardOutput ??
         (StandardOutputIsAuthoritative && FullStandardOutputUnavailableReason is null ? StandardOutput : null);
