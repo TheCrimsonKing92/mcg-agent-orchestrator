@@ -22,6 +22,14 @@ Acceptance lane model used here:
 
 Prior art already exists: `AgentOrchestratorKernel.*.cs` is a successful Core partial-class split, with the largest fragment now `AgentOrchestratorKernel.GoalLifecycle.cs` at 706 lines and 33 commits in the last 60 days. `CliCommandHandlers.*.cs` is also partially split, but `CliCommandHandlers.Goals.cs` remains a 3,054-line hotspot while siblings such as `CliCommandHandlers.Workers.cs` at 509 lines and `CliCommandHandlers.Backlog.cs` at 305 lines show the intended direction.
 
+## 2026-08-24 assembly boundary receipt
+
+`OperatorComms` became the first production assembly-level cut rather than another class-only
+split. The new Core-only project direction, package/publish inventories, observed rebuild set,
+and API/friend-assembly cost are recorded in
+`docs/operator-comms-assembly-extraction-receipt.md`. The extraction makes no gate-concurrency
+claim, and the hosted Discord round trip remains separate real-world acceptance work.
+
 ## 2026-08-13 refresh: what happened in a month
 
 Re-measured on main at `603d4714`. **The inventory table below is the 2026-07-10 snapshot and its numbers are

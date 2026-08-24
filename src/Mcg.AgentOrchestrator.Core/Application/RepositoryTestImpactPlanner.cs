@@ -141,6 +141,7 @@ public static class RepositoryTestImpactPlanner
         var touchesInfrastructure = summary.Files.Any(file =>
             StartsWith(file.Path, "src/Mcg.AgentOrchestrator.Infrastructure/") ||
             StartsWith(file.Path, "src/Mcg.AgentOrchestrator.Infrastructure.Providers/") ||
+            StartsWith(file.Path, "src/Mcg.AgentOrchestrator.Infrastructure.OperatorComms/") ||
             StartsWith(file.Path, "tests/Mcg.AgentOrchestrator.Infrastructure.Tests/"));
         var touchesDashboardTests = summary.Files.Any(file =>
             StartsWith(file.Path, "tests/Mcg.AgentOrchestrator.Dashboard.Tests/"));

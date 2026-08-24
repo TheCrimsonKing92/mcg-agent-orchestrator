@@ -773,7 +773,8 @@ internal static partial class CliCommandHandlers
                         },
                         (command, cancellationToken) =>
                             DispatchOperatorDecisionCommandAsync(command, context, cancellationToken),
-                        itemId => OperatorInbox.AppendAcknowledgement(context.Workspace, itemId));
+                        itemId => OperatorInbox.AppendAcknowledgement(context.Workspace, itemId),
+                        OperatorChannelComposition.BuildGoalStateVersionReader(context.Workspace.OrchestratorDirectory));
                 }
                 catch (Exception ex) when (DiscordOperatorFaultClassifier.IsAuthError(ex))
                 {
@@ -1212,7 +1213,7 @@ internal static partial class CliCommandHandlers
 
                 var catalog = OperatorChannelStore.Load(context.Workspace.OperatorChannelPath);
                 var botToken = OperatorChannelFactory.ResolveBotToken();
-                var channel = OperatorChannelFactory.Create(catalog, botToken, context.Workspace.OrchestratorDirectory);
+                var channel = OperatorChannelComposition.Create(catalog, botToken, context.Workspace.OrchestratorDirectory);
                 OperatorChannelFactory.SendTestEscalationAsync(channel, Console.Out).GetAwaiter().GetResult();
                 return false;
             }
@@ -1256,7 +1257,12 @@ internal static partial class CliCommandHandlers
                     .ListAsync(includeAll: false)
                     .GetAwaiter()
                     .GetResult()
-                    .Select(ControlPlaneBacklogDigestItem.FromBacklogItem);
+                    .Select(item => new ControlPlaneBacklogDigestItem(
+                        item.Id,
+                        item.Title,
+                        item.Status,
+                        item.UpdatedAt,
+                        item.SourceGoalId));
                 var inboxCards = OperatorInbox.Build(
                         context.Kernel,
                         context.Agents,

@@ -1,6 +1,8 @@
 using System.Security.Cryptography;
 using System.Text;
 
+using Mcg.AgentOrchestrator.Core;
+
 namespace Mcg.AgentOrchestrator.Infrastructure;
 
 public interface IControlPlaneMessageTransport

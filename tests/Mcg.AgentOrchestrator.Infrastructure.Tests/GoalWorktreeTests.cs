@@ -674,9 +674,28 @@ public abstract class GoalWorktreeTestBase
 
     private protected static void RunGit(string workingDirectory, params string[] arguments)
     {
-        var exitCode = RunGitExitCode(workingDirectory, arguments, out var output, out var error);
-        if (exitCode != 0)
+        const int maximumAttempts = 2;
+        var isCommit = arguments.Any(argument => string.Equals(argument, "commit", StringComparison.Ordinal));
+        var previousHead = isCommit ? TryGetGitHead(workingDirectory) : null;
+        for (var attempt = 1; attempt <= maximumAttempts; attempt++)
         {
+            var exitCode = RunGitExitCode(workingDirectory, arguments, out var output, out var error);
+            if (exitCode == 0)
+            {
+                return;
+            }
+
+            if (isCommit && HasNewCommittedCleanGitHead(workingDirectory, previousHead))
+            {
+                return;
+            }
+
+            if (isCommit && string.IsNullOrWhiteSpace(output) && string.IsNullOrWhiteSpace(error) &&
+                attempt < maximumAttempts)
+            {
+                continue;
+            }
+
             throw new InvalidOperationException(
                 $"git {string.Join(' ', arguments)} failed: exit={exitCode}{Environment.NewLine}" +
                 $"stdout: {output.Trim()}{Environment.NewLine}" +

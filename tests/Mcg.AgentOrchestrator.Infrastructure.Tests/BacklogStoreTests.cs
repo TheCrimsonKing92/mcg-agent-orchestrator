@@ -1,5 +1,6 @@
 using Mcg.AgentOrchestrator.Infrastructure;
 using Mcg.AgentOrchestrator.App.Cli;
+using Mcg.AgentOrchestrator.Core;
 using Microsoft.Data.Sqlite;
 
 public sealed class BacklogStoreTests
