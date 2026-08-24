@@ -9,6 +9,69 @@ using static ConductorDriverTests;
 public sealed partial class ConductorDriverTestsAcceptanceCoordination
 {
     [Xunit.Fact]
+    public void InlineLanding_ViolatingAuthority_SkipsVerifier()
+    {
+        var executionDirectory = CreateTempDirectory();
+        try
+        {
+            var (kernel, goal) = SimpleGoal("Inline landing source-size preflight");
+            PassVerification(kernel, goal, goal.Tasks.Single());
+            var worktreePath = GoalWorktrees.WorktreePath(executionDirectory, goal.Id);
+            Directory.CreateDirectory(worktreePath);
+            WriteSourceSizeAuthority(worktreePath, maximumLineCount: 2, actualLineCount: 3);
+            var verifierRan = false;
+            var driver = MakeAcceptanceDriver(
+                runAcceptanceVerification: _ =>
+                {
+                    verifierRan = true;
+                    return AcceptanceVerificationSummary.PassedWithNoUnmetCriteria;
+                },
+                retryTask: (goalId, taskId, message) => kernel.RetryTask(goalId, taskId, message),
+                executionDirectory: executionDirectory);
+
+            var result = driver.AdvanceOnce(goal, ConductorAutonomyPolicy.Conservative);
+
+            Assert.False(verifierRan);
+            Assert.IsType<ConductorAdvanceOutcome.Executed>(result.Outcome);
+        }
+        finally
+        {
+            Directory.Delete(executionDirectory, recursive: true);
+        }
+    }
+
+    [Xunit.Fact]
+    public void InlineLanding_CompliantAuthority_ProceedsToVerifier()
+    {
+        var executionDirectory = CreateTempDirectory();
+        try
+        {
+            var (kernel, goal) = SimpleGoal("Inline landing compliant source-size preflight");
+            PassVerification(kernel, goal, goal.Tasks.Single());
+            var worktreePath = GoalWorktrees.WorktreePath(executionDirectory, goal.Id);
+            Directory.CreateDirectory(worktreePath);
+            WriteSourceSizeAuthority(worktreePath, maximumLineCount: 3, actualLineCount: 3);
+            var verifierRan = false;
+            var driver = MakeAcceptanceDriver(
+                runAcceptanceVerification: _ =>
+                {
+                    verifierRan = true;
+                    return AcceptanceVerificationSummary.PassedWithNoUnmetCriteria;
+                },
+                executionDirectory: executionDirectory);
+
+            var result = driver.AdvanceOnce(goal, ConductorAutonomyPolicy.Conservative);
+
+            Assert.True(verifierRan);
+            Assert.IsType<ConductorAdvanceOutcome.Executed>(result.Outcome);
+        }
+        finally
+        {
+            Directory.Delete(executionDirectory, recursive: true);
+        }
+    }
+
+    [Xunit.Fact]
     public void ConductorDriverNoTickLandingUsesLeasedSharedAttempt()
     {
         var attemptRoot = CreateTempDirectory();
@@ -365,7 +428,10 @@ public sealed partial class ConductorDriverTestsAcceptanceCoordination
         Action<string, string>? acceptanceEventSink = null,
         Action<TimeSpan>? noTickAcceptancePollDelay = null,
         TimeSpan? noTickAcceptancePollTimeout = null,
-        Func<DateTimeOffset>? utcNow = null) =>
+        Func<DateTimeOffset>? utcNow = null,
+        Func<Goal, AcceptanceVerificationSummary>? runAcceptanceVerification = null,
+        Func<GoalId, TaskId, string, TaskSpec>? retryTask = null,
+        string? executionDirectory = null) =>
         new(
             getFacts ?? (_ => GoalLifecycleFacts.None),
             () => 0,
@@ -373,11 +439,11 @@ public sealed partial class ConductorDriverTestsAcceptanceCoordination
             _ => DispatchStartOutcome.Started(),
             null,
             null,
-            _ => AcceptanceVerificationSummary.PassedWithNoUnmetCriteria,
+            runAcceptanceVerification ?? (_ => AcceptanceVerificationSummary.PassedWithNoUnmetCriteria),
             null,
+            retryTask,
             null,
-            null,
-            null,
+            (_, _, _) => 0,
             null,
             _ => new GoalWorktreeRebaseResult(
                 GoalWorktreeRebaseStatus.AlreadyFastForwardable,
@@ -402,7 +468,25 @@ public sealed partial class ConductorDriverTestsAcceptanceCoordination
             acceptanceEventSink: acceptanceEventSink,
             noTickAcceptancePollDelay: noTickAcceptancePollDelay,
             noTickAcceptancePollTimeout: noTickAcceptancePollTimeout,
-            utcNow: utcNow);
+            utcNow: utcNow,
+            executionDirectory: executionDirectory);
+
+    private static void WriteSourceSizeAuthority(
+        string root,
+        int maximumLineCount,
+        int actualLineCount)
+    {
+        var authorityPath = Path.Combine(
+            root,
+            SourceSizeRatchet.SourcePath.Replace('/', Path.DirectorySeparatorChar));
+        Directory.CreateDirectory(Path.GetDirectoryName(authorityPath)!);
+        File.WriteAllText(
+            authorityPath,
+            $"new SourceSizeCeiling(\"guarded.cs\", {maximumLineCount})");
+        File.WriteAllLines(
+            Path.Combine(root, "guarded.cs"),
+            Enumerable.Repeat("line", actualLineCount));
+    }
 
     private static ConductorParallelAcceptanceAttempt ReadOnlyAttempt(string attemptRoot, Goal goal)
     {
