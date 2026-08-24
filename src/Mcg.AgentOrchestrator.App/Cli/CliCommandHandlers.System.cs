@@ -595,6 +595,14 @@ internal static partial class CliCommandHandlers
                     activeProjectOverride: null);
                 return false;
 
+            case "trial-compare":
+                TrialCompareCliCommand.Execute(
+                    parts,
+                    new SystemTrialRootHost(),
+                    context.Workspace.TrialComparisonReceiptDirectory,
+                    Console.Out);
+                return false;
+
             case "architecture":
                 ConsoleViews.PrintArchitecture(BuildCliArchitectureReport(context));
                 return false;

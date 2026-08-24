@@ -1,0 +1,195 @@
+using System.Diagnostics;
+
+namespace Mcg.AgentOrchestrator.Infrastructure.Tests;
+
+public sealed class TrialHarnessComparisonTests
+{
+    [Xunit.Fact]
+    public void RunCreatesOneRootPerHarnessAtTheSameBaseCommit()
+    {
+        using var fixture = new Fixture();
+        var host = new FakeTrialRootHost(fixture.Root);
+
+        var result = new TrialHarnessComparison(host).Run(fixture.Request(
+            new("alpha", "alpha.exe", ["one"], new Dictionary<string, string?> { ["HARNESS"] = "alpha" }),
+            new("beta", "beta.exe", ["two"], new Dictionary<string, string?> { ["HARNESS"] = "beta" })));
+
+        Xunit.Assert.True(result.Succeeded);
+        Xunit.Assert.Equal(2, host.Requests.Count);
+        Xunit.Assert.All(host.Requests, request => Xunit.Assert.Equal(fixture.BaseCommit, request.BaseCommit));
+        Xunit.Assert.Equal(2, host.Requests.Select(request => request.Name).Distinct(StringComparer.OrdinalIgnoreCase).Count());
+        Xunit.Assert.NotSame(host.Requests[0].ExtraEnvironment, host.Requests[1].ExtraEnvironment);
+    }
+
+    [Xunit.Fact]
+    public void RunWritesDistinctPerHarnessReceiptsThatSurviveTeardown()
+    {
+        using var fixture = new Fixture();
+        var host = new FakeTrialRootHost(fixture.Root);
+        host.ExitCodes["alpha"] = 3;
+        host.ExitCodes["beta"] = 7;
+
+        var result = new TrialHarnessComparison(host).Run(fixture.Request(
+            new("alpha", "alpha.exe", []),
+            new("beta", "beta.exe", [])));
+
+        Xunit.Assert.True(result.Succeeded);
+        Xunit.Assert.Equal([3, 7], result.Harnesses.Select(item => item.ExitCode).ToArray());
+        Xunit.Assert.Equal(2, result.Harnesses.Select(item => item.StdoutPath).Distinct(StringComparer.OrdinalIgnoreCase).Count());
+        Xunit.Assert.Equal(2, result.Harnesses.Select(item => item.StderrPath).Distinct(StringComparer.OrdinalIgnoreCase).Count());
+        Xunit.Assert.All(result.Harnesses, item =>
+        {
+            Xunit.Assert.True(File.Exists(item.StdoutPath));
+            Xunit.Assert.True(File.Exists(item.StderrPath));
+            Xunit.Assert.True(File.Exists(item.ReceiptPath));
+        });
+        Xunit.Assert.All(host.RootPaths, root => Xunit.Assert.False(Directory.Exists(root)));
+    }
+
+    [Xunit.Fact]
+    public void RunTearsDownEveryRootWhenOneHarnessFails()
+    {
+        using var fixture = new Fixture();
+        var host = new FakeTrialRootHost(fixture.Root);
+        host.ExitCodes["alpha"] = 9;
+        host.ThrowOnStart.Add("beta");
+
+        var result = new TrialHarnessComparison(host).Run(fixture.Request(
+            new("alpha", "alpha.exe", []),
+            new("beta", "beta.exe", [])));
+
+        Xunit.Assert.False(result.Succeeded);
+        Xunit.Assert.Equal(9, result.Harnesses.Single(item => item.Name == "alpha").ExitCode);
+        Xunit.Assert.Equal(TrialHarnessOutcome.LaunchFailed, result.Harnesses.Single(item => item.Name == "beta").Outcome);
+        Xunit.Assert.All(host.RootPaths, root => Xunit.Assert.False(Directory.Exists(root)));
+    }
+
+    [Xunit.Fact]
+    public void RunReportsProtectedPathModificationByName()
+    {
+        using var fixture = new Fixture();
+        var protectedPath = Path.Combine(fixture.Source, "protected.txt");
+        File.WriteAllText(protectedPath, "before");
+        var host = new FakeTrialRootHost(fixture.Root) { ProtectedPathToMutate = protectedPath };
+
+        var result = new TrialHarnessComparison(host).Run(fixture.RequestWithProtectedPaths(
+            [protectedPath],
+            new("alpha", "alpha.exe", []),
+            new("beta", "beta.exe", [])));
+
+        Xunit.Assert.False(result.Succeeded);
+        Xunit.Assert.Equal("after", File.ReadAllText(protectedPath));
+        Xunit.Assert.Contains(result.Failures, failure => failure.Contains(protectedPath, StringComparison.OrdinalIgnoreCase));
+        Xunit.Assert.Contains(result.Harnesses, harness => harness.Outcome == TrialHarnessOutcome.ProtectedPathModified);
+    }
+
+    private sealed class Fixture : IDisposable
+    {
+        public Fixture()
+        {
+            Root = Path.Combine(Path.GetTempPath(), "mcg-trial-comparison-tests", Guid.NewGuid().ToString("N"));
+            Source = Path.Combine(Root, "source");
+            Receipts = Path.Combine(Root, "receipts");
+            Directory.CreateDirectory(Source);
+        }
+
+        public string Root { get; }
+        public string Source { get; }
+        public string Receipts { get; }
+        public string BaseCommit { get; } = "0123456789abcdef";
+
+        public TrialComparisonRequest Request(params TrialHarnessSpec[] harnesses) =>
+            new(Source, BaseCommit, harnesses, Receipts, Path.Combine(Root, "roots"), null, TimeSpan.FromSeconds(1));
+
+        public TrialComparisonRequest RequestWithProtectedPaths(IReadOnlyList<string> protectedPaths, params TrialHarnessSpec[] harnesses) =>
+            new(Source, BaseCommit, harnesses, Receipts, Path.Combine(Root, "roots"), protectedPaths, TimeSpan.FromSeconds(1));
+
+        public void Dispose()
+        {
+            if (Directory.Exists(Root))
+            {
+                Directory.Delete(Root, recursive: true);
+            }
+        }
+    }
+
+    private sealed class FakeTrialRootHost(string fixtureRoot) : ITrialRootHost
+    {
+        public string FixtureRoot { get; } = fixtureRoot;
+        public List<TrialRootRequest> Requests { get; } = [];
+        public List<string> RootPaths { get; } = [];
+        public Dictionary<string, int> ExitCodes { get; } = new(StringComparer.OrdinalIgnoreCase);
+        public HashSet<string> ThrowOnStart { get; } = new(StringComparer.OrdinalIgnoreCase);
+        public string? ProtectedPathToMutate { get; init; }
+
+        public ITrialRootSession Create(TrialRootRequest request)
+        {
+            Requests.Add(request);
+            var name = request.Name ?? "unnamed";
+            var root = Path.Combine(fixtureRoot, "fake-roots", $"{name}-{Guid.NewGuid():N}");
+            Directory.CreateDirectory(Path.Combine(root, "harness"));
+            RootPaths.Add(root);
+            return new FakeSession(this, name, root, request.BaseCommit);
+        }
+
+        private sealed class FakeSession(FakeTrialRootHost owner, string name, string root, string commit) : ITrialRootSession
+        {
+            public string RootPath => root;
+            public string ResolvedBaseCommit => commit;
+            public string HarnessStatePath => Path.Combine(root, "harness");
+
+            public ITrialLaunch Start(ProcessStartInfo command)
+            {
+                if (owner.ThrowOnStart.Contains(name))
+                {
+                    throw new InvalidOperationException($"{name} launch failed");
+                }
+
+                if (owner.ProtectedPathToMutate is not null && name.Equals("alpha", StringComparison.OrdinalIgnoreCase))
+                {
+                    File.WriteAllText(owner.ProtectedPathToMutate, "after");
+                }
+
+                var stdout = Path.Combine(HarnessStatePath, "stdout.log");
+                var stderr = Path.Combine(HarnessStatePath, "stderr.log");
+                File.WriteAllText(stdout, $"{name} stdout");
+                File.WriteAllText(stderr, $"{name} stderr");
+                return new FakeLaunch(stdout, stderr, owner.ExitCodes.GetValueOrDefault(name));
+            }
+
+            public TrialTeardownReport Destroy()
+            {
+                var outsideWrites = owner.ProtectedPathToMutate is not null && name.Equals("alpha", StringComparison.OrdinalIgnoreCase)
+                    ? [owner.ProtectedPathToMutate]
+                    : Array.Empty<string>();
+                Directory.Delete(root, recursive: true);
+                return new TrialTeardownReport(
+                    root,
+                    RootRemoved: true,
+                    [],
+                    [],
+                    JobExitConfirmed: true,
+                    outsideWrites,
+                    TimeSpan.FromMilliseconds(1),
+                    TimeSpan.FromMilliseconds(1),
+                    Path.Combine(owner.FixtureRoot, $"{name}.teardown.json"),
+                    []);
+            }
+
+            public void Dispose()
+            {
+            }
+        }
+
+        private sealed class FakeLaunch(string stdout, string stderr, int exitCode) : ITrialLaunch
+        {
+            public string StdoutPath => stdout;
+            public string StderrPath => stderr;
+            public int ExitCode => exitCode;
+            public bool WaitForExit(int milliseconds) => true;
+            public void Dispose()
+            {
+            }
+        }
+    }
+}

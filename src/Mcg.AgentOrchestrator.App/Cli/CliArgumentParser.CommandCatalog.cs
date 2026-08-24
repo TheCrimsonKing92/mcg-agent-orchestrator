@@ -9,6 +9,7 @@ internal static IReadOnlyList<string> RecognizedCommands { get; } =
     "status",
     "doctor",
     "project",
+    "trial-compare",
     "provider-smoke",
     "prototype",
     "prototype-ui",

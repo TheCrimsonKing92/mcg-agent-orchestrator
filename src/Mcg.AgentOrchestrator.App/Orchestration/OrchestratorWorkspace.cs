@@ -172,6 +172,8 @@ internal sealed record OrchestratorWorkspace(
     // must not dirty task verification, dispatch, process, or acceptance records.
     public string InquiryReceiptDirectory => Path.Combine(OrchestratorDirectory, "inquiries");
 
+    public string TrialComparisonReceiptDirectory => Path.Combine(OrchestratorDirectory, "trial-comparisons");
+
     // Answered spec-clarification forks recorded as precedents so a second goal with the same
     // forkKind reuses the recorded choice rather than re-asking.
     public string SpecRefinerPrecedentsPath => Path.Combine(OrchestratorDirectory, "spec-refiner-precedents.json");
