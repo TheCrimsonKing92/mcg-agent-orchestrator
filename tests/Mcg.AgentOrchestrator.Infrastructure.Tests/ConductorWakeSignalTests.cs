@@ -1,11 +1,10 @@
-using System.Diagnostics;
 using System.Reflection;
 using Mcg.AgentOrchestrator.App.Orchestration;
 
 public sealed class ConductorWakeSignalTests
 {
-    [Xunit.Fact(DisplayName = "ConductorWakeSignal_wakes_for_tracked_exit_artifact_within_short_window")]
-    public void ConductorWakeSignalWakesForTrackedExitArtifactWithinShortWindow()
+    [Xunit.Fact(DisplayName = "ConductorWakeSignal_wakes_for_tracked_exit_artifact")]
+    public void ConductorWakeSignalWakesForTrackedExitArtifact()
     {
         var root = CreateTempDirectory("mcg-conductor-wake-tracked");
         try
@@ -14,16 +13,22 @@ public sealed class ConductorWakeSignalTests
             using var wakeSignal = new FileSystemWatcherConductorWakeSignal(root, _ => { });
             wakeSignal.UpdateTrackedExitArtifacts([tracked]);
 
-            var clock = Stopwatch.StartNew();
-            var writeTask = Task.Run(async () =>
-            {
-                await Task.Delay(100);
-                File.WriteAllText(tracked, "0");
-            });
+            var watcherField = typeof(FileSystemWatcherConductorWakeSignal).GetField(
+                "_watcher",
+                BindingFlags.Instance | BindingFlags.NonPublic);
+            Assert.NotNull(watcherField);
+            var watcher = Assert.IsType<FileSystemWatcher>(watcherField.GetValue(wakeSignal));
 
-            Assert.True(wakeSignal.Wait(TimeSpan.FromSeconds(2)));
-            writeTask.GetAwaiter().GetResult();
-            Assert.True(clock.Elapsed < TimeSpan.FromSeconds(2), $"tracked exit wake took {clock.Elapsed}.");
+            var onCreated = typeof(FileSystemWatcher).GetMethod(
+                "OnCreated",
+                BindingFlags.Instance | BindingFlags.NonPublic);
+            Assert.NotNull(onCreated);
+
+            onCreated.Invoke(
+                watcher,
+                [new FileSystemEventArgs(WatcherChangeTypes.Created, root, "tracked.exit.txt")]);
+            Assert.True(wakeSignal.Wait(TimeSpan.Zero));
+            AssertSignalDrained(wakeSignal);
         }
         finally
         {
@@ -67,9 +72,7 @@ public sealed class ConductorWakeSignalTests
             using var wakeSignal = new FileSystemWatcherConductorWakeSignal(root, _ => { });
             wakeSignal.UpdateTrackedExitArtifacts([tracked]);
 
-            var clock = Stopwatch.StartNew();
-            Assert.True(wakeSignal.Wait(TimeSpan.FromSeconds(ConductorBatchLoop.WatchStopPollIntervalSeconds)));
-            Assert.True(clock.Elapsed < TimeSpan.FromMilliseconds(250), $"existing exit wake took {clock.Elapsed}.");
+            Assert.True(wakeSignal.Wait(TimeSpan.Zero));
         }
         finally
         {

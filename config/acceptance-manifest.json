@@ -318,6 +318,12 @@
       "runner": "mtp",
       "project": "tests/Mcg.AgentOrchestrator.Infrastructure.Tests/Cli/Mcg.AgentOrchestrator.Infrastructure.Cli.Tests.csproj",
       "arguments": [ "--verbosity", "minimal" ]
+    },
+    {
+      "name": "real process shard probe tests",
+      "type": "dotnet-test",
+      "runner": "mtp",
+      "project": "tests/Mcg.AgentOrchestrator.Infrastructure.Tests/Fixtures/RealProcessShardProbe/Mcg.AgentOrchestrator.RealProcessShardProbe.csproj"
     }
   ],
   "forbiddenChangedPathGlobs": [
