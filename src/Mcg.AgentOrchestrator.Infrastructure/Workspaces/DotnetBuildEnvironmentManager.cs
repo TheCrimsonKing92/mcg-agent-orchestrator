@@ -310,11 +310,15 @@ public static class DotnetBuildEnvironmentManager
         TimeSpan? timeout = null,
         Action<DotnetBuildStableSlotWait>? onWait = null,
         CancellationToken cancellationToken = default,
-        int slotCount = StableSlotCount)
+        int slotCount = StableSlotCount,
+        TimeProvider? timeProvider = null,
+        Action<TimeSpan>? sleep = null)
     {
         ValidateRequestedSlotCount(slotCount);
+        var clock = timeProvider ?? DefaultLeaseTimeProvider;
+        var delay = sleep ?? DefaultLeaseSleep;
         var waitTimeout = timeout ?? DefaultSlotBusyPollTimeout;
-        var timeoutAt = DateTimeOffset.UtcNow.Add(waitTimeout);
+        var timeoutAt = clock.GetUtcNow().Add(waitTimeout);
         var waitingReported = false;
         while (true)
         {
@@ -346,15 +350,19 @@ public static class DotnetBuildEnvironmentManager
                 waitingReported = true;
             }
 
-            if (DateTimeOffset.UtcNow >= timeoutAt)
+            var now = clock.GetUtcNow();
+            if (now >= timeoutAt)
             {
                 return EmitSlotsBusy("first-available-stable-slot", slotCount);
             }
 
+            var remaining = timeoutAt - now;
+            var pollDelay = remaining < SlotBusyPollDelay ? remaining : SlotBusyPollDelay;
+
             var target = CreateStableSlotEnvironment(leastRecentlyLeased.SlotIndex);
             if (IsSlotArtifactsBusy(target))
             {
-                Thread.Sleep(100);
+                delay(pollDelay);
                 continue;
             }
 
@@ -367,7 +375,7 @@ public static class DotnetBuildEnvironmentManager
                 return EmitBuildLockBlocked(target.LeaseId, targetBlockedAttribution);
             }
 
-            Thread.Sleep(100);
+            delay(pollDelay);
         }
     }
 

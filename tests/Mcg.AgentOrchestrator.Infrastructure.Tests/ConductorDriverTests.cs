@@ -424,7 +424,7 @@ public sealed class ConductorDriverTests
         Func<Goal, bool>? runAcceptance = null,
         Func<Goal, AcceptanceVerificationSummary>? runAcceptanceSummary = null,
         Func<Goal, int?, DotnetBuildEnvironmentLease?, CancellationToken, AcceptanceVerificationSummary>? runAcceptanceVerificationWithLease = null,
-        Func<Goal, DotnetBuildEnvironmentLease?>? tryAcquireLandingStableSlotLease = null,
+        Func<Goal, DotnetBuildLeaseAcquisition>? tryAcquireLandingStableSlotLease = null,
         Action<Goal, AcceptanceVerificationSummary>? runAdvisorySemanticAcceptance = null,
         Func<Goal, string, FocusedEvidenceRunResult>? runFocusedEvidence = null,
         Func<GoalId, TaskId, string, TaskSpec>? retryTask = null,
@@ -462,7 +462,8 @@ public sealed class ConductorDriverTests
         Func<Goal, string, string, IReadOnlyList<string>>? resolveFindingEvidenceSiblingClasses = null,
         Func<Goal, bool>? isVerificationGateSatisfied = null,
         GateReadyCandidateProjector? gateReadyCandidateProjector = null,
-        Func<Goal, string, IDisposable?>? tryAcquireEvidenceMutationLease = null)
+        Func<Goal, string, IDisposable?>? tryAcquireEvidenceMutationLease = null,
+        string? executionDirectory = null)
     {
         return new ConductorDriver(
             getFacts ?? (_ => GoalLifecycleFacts.None),
@@ -515,7 +516,8 @@ public sealed class ConductorDriverTests
             gateReadyCandidateProjector: gateReadyCandidateProjector,
             runAcceptanceVerificationWithLease: runAcceptanceVerificationWithLease,
             tryAcquireLandingStableSlotLease: tryAcquireLandingStableSlotLease,
-            tryAcquireEvidenceMutationLease: tryAcquireEvidenceMutationLease);
+            tryAcquireEvidenceMutationLease: tryAcquireEvidenceMutationLease,
+            executionDirectory: executionDirectory);
     }
 
     internal sealed class ThrowingDisposable : IDisposable

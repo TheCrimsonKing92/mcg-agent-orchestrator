@@ -32,7 +32,7 @@ public sealed class ConductorDriverTestsAcceptanceCoordination
                 capturedLease = lease;
                 return AcceptanceVerificationSummary.PassedWithNoUnmetCriteria;
             },
-            tryAcquireLandingStableSlotLease: _ => stableSlotLease,
+            tryAcquireLandingStableSlotLease: _ => new DotnetBuildLeaseAcquisition.Acquired(stableSlotLease),
             classifyRisk: _ => ChangeRiskTier.DocsOnly);
 
         _ = driver.AdvanceOnce(goal, ConductorAutonomyPolicy.Conservative);
@@ -58,13 +58,87 @@ public sealed class ConductorDriverTestsAcceptanceCoordination
                 Assert.Null(lease);
                 return AcceptanceVerificationSummary.PassedWithNoUnmetCriteria;
             },
-            tryAcquireLandingStableSlotLease: _ => null,
+            tryAcquireLandingStableSlotLease: _ =>
+                new DotnetBuildLeaseAcquisition.SlotsBusy("test", []),
             classifyRisk: _ => ChangeRiskTier.DocsOnly);
 
         var result = driver.AdvanceOnce(goal, ConductorAutonomyPolicy.Conservative);
 
         Assert.True(verifierRan);
         Assert.IsType<ConductorAdvanceOutcome.Executed>(result.Outcome);
+    }
+
+    [Xunit.Fact]
+    public void ConductorDriverInlineLandingRecordsDegradationWhenStableSlotUnavailable()
+    {
+        var executionDirectory = CreateTempDirectory();
+        var (kernel, goal) = SimpleGoal("Inline landing degradation record");
+        PassVerification(kernel, goal, goal.Tasks.Single());
+        var driver = MakeDriver(
+            getFacts: _ => GoalLifecycleFacts.None,
+            runAcceptanceVerificationWithLease: (_, _, _, _) =>
+                AcceptanceVerificationSummary.PassedWithNoUnmetCriteria,
+            tryAcquireLandingStableSlotLease: _ => new DotnetBuildLeaseAcquisition.SlotsBusy(
+                "inline-landing",
+                [new DotnetBuildStableSlotWait(1, 4242)]),
+            classifyRisk: _ => ChangeRiskTier.DocsOnly,
+            executionDirectory: executionDirectory);
+        var eventPath = Path.Combine(
+            executionDirectory,
+            ".orchestrator",
+            "logs",
+            ConductEventLogWriter.CurrentFileName);
+
+        _ = driver.AdvanceOnce(goal, ConductorAutonomyPolicy.Conservative);
+
+        Assert.True(File.Exists(eventPath), $"Expected degradation event at {eventPath}.");
+        var events = File.ReadAllText(eventPath);
+        Assert.Contains("landing-stable-slot-degraded", events);
+        Assert.Contains("reason=slots-busy", events);
+        Assert.Contains("slot-1 pid 4242", events);
+    }
+
+    [Xunit.Fact]
+    public void ConductorDriverInlineLandingRecordsNoDegradationWhenLeaseAcquired()
+    {
+        var executionDirectory = CreateTempDirectory();
+        var (kernel, goal) = SimpleGoal("Inline landing leased without degradation");
+        PassVerification(kernel, goal, goal.Tasks.Single());
+        var stableSlotLease = Assert.IsType<DotnetBuildLeaseAcquisition.Acquired>(
+            DotnetBuildEnvironmentManager.TryAcquireStableSlotExecutionLock(0, TimeSpan.Zero)).Lease;
+        var driver = MakeDriver(
+            getFacts: _ => GoalLifecycleFacts.None,
+            runAcceptanceVerificationWithLease: (_, _, _, _) =>
+                AcceptanceVerificationSummary.PassedWithNoUnmetCriteria,
+            tryAcquireLandingStableSlotLease: _ => new DotnetBuildLeaseAcquisition.Acquired(stableSlotLease),
+            classifyRisk: _ => ChangeRiskTier.DocsOnly,
+            executionDirectory: executionDirectory);
+        var eventPath = Path.Combine(
+            executionDirectory,
+            ".orchestrator",
+            "logs",
+            ConductEventLogWriter.CurrentFileName);
+
+        _ = driver.AdvanceOnce(goal, ConductorAutonomyPolicy.Conservative);
+
+        var events = File.Exists(eventPath) ? File.ReadAllText(eventPath) : string.Empty;
+        Assert.DoesNotContain("landing-stable-slot-degraded", events);
+    }
+
+    [Xunit.Fact]
+    public void ConductorDriverInlineLandingRequestsBoundedStableSlotWait()
+    {
+        var capturedTimeout = TimeSpan.Zero;
+
+        var result = ConductorDriver.TryAcquireInlineLandingStableSlotLease(timeout =>
+        {
+            capturedTimeout = timeout;
+            return new DotnetBuildLeaseAcquisition.SlotsBusy("test", []);
+        });
+
+        Assert.IsType<DotnetBuildLeaseAcquisition.SlotsBusy>(result);
+        Assert.Equal(ConductorDriver.InlineLandingStableSlotLeaseTimeout, capturedTimeout);
+        Assert.InRange(capturedTimeout, TimeSpan.FromMilliseconds(1), TimeSpan.FromSeconds(5));
     }
 
     [Xunit.Theory]
@@ -81,7 +155,7 @@ public sealed class ConductorDriverTestsAcceptanceCoordination
             runAcceptanceVerificationWithLease: (_, _, _, _) => throw (cancellation
                 ? new OperationCanceledException("injected cancellation")
                 : new InvalidOperationException("injected failure")),
-            tryAcquireLandingStableSlotLease: _ => stableSlotLease,
+            tryAcquireLandingStableSlotLease: _ => new DotnetBuildLeaseAcquisition.Acquired(stableSlotLease),
             classifyRisk: _ => ChangeRiskTier.DocsOnly);
 
         if (cancellation)
