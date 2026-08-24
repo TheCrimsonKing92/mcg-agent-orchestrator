@@ -212,7 +212,7 @@ public sealed class GoalWorktreeTestsAcceptanceLanding : GoalWorktreeTestBase
             IReadOnlyList<AgentDefinition> agents = AgentCatalog.Default().Agents;
             var providers = new InMemoryModelProviderRegistry([]);
             var profiles = WorkerProfileCatalog.Default();
-            var channel = OperatorChannelFactory.Create(
+            var channel = OperatorChannelComposition.Create(
                 OperatorChannelStore.Load(workspace.OperatorChannelPath),
                 OperatorChannelFactory.ResolveBotToken(),
                 workspace.OrchestratorDirectory);

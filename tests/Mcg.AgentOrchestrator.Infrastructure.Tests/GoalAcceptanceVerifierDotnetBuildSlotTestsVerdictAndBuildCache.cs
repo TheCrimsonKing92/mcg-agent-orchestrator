@@ -496,6 +496,7 @@ public sealed class GoalAcceptanceVerifierDotnetBuildSlotTestsVerdictAndBuildCac
         [
             "src/Mcg.AgentOrchestrator.Core/Mcg.AgentOrchestrator.Core.csproj",
             "src/Mcg.AgentOrchestrator.Infrastructure.Providers/Mcg.AgentOrchestrator.Infrastructure.Providers.csproj",
+            "src/Mcg.AgentOrchestrator.Infrastructure.OperatorComms/Mcg.AgentOrchestrator.Infrastructure.OperatorComms.csproj",
             "src/Mcg.AgentOrchestrator.Infrastructure/Mcg.AgentOrchestrator.Infrastructure.csproj",
             "src/Mcg.AgentOrchestrator.App/Mcg.AgentOrchestrator.App.csproj",
             "tests/Mcg.AgentOrchestrator.Core.Tests/Mcg.AgentOrchestrator.Core.Tests.csproj",
@@ -602,6 +603,7 @@ public sealed class GoalAcceptanceVerifierDotnetBuildSlotTestsVerdictAndBuildCac
         [
             "src/Mcg.AgentOrchestrator.Core/Mcg.AgentOrchestrator.Core.csproj",
             "src/Mcg.AgentOrchestrator.Infrastructure.Providers/Mcg.AgentOrchestrator.Infrastructure.Providers.csproj",
+            "src/Mcg.AgentOrchestrator.Infrastructure.OperatorComms/Mcg.AgentOrchestrator.Infrastructure.OperatorComms.csproj",
             "tests/Mcg.AgentOrchestrator.Core.Tests/Mcg.AgentOrchestrator.Core.Tests.csproj"
         ];
         foreach (var project in restoredProjects)
@@ -704,6 +706,7 @@ public sealed class GoalAcceptanceVerifierDotnetBuildSlotTestsVerdictAndBuildCac
         [
             "src/Mcg.AgentOrchestrator.Core/Mcg.AgentOrchestrator.Core.csproj",
             "src/Mcg.AgentOrchestrator.Infrastructure.Providers/Mcg.AgentOrchestrator.Infrastructure.Providers.csproj",
+            "src/Mcg.AgentOrchestrator.Infrastructure.OperatorComms/Mcg.AgentOrchestrator.Infrastructure.OperatorComms.csproj",
             "src/Mcg.AgentOrchestrator.Infrastructure/Mcg.AgentOrchestrator.Infrastructure.csproj",
             "src/Mcg.AgentOrchestrator.App/Mcg.AgentOrchestrator.App.csproj",
             "tests/Mcg.AgentOrchestrator.Core.Tests/Mcg.AgentOrchestrator.Core.Tests.csproj",
@@ -809,6 +812,7 @@ public sealed class GoalAcceptanceVerifierDotnetBuildSlotTestsVerdictAndBuildCac
             Assert.Contains("build_phase_ms=", secondOutput, StringComparison.Ordinal);
             Assert.Contains("Core=miss", firstOutput, StringComparison.Ordinal);
             Assert.Contains("Infrastructure.Providers=miss", firstOutput, StringComparison.Ordinal);
+            Assert.Contains("Infrastructure.OperatorComms=miss", firstOutput, StringComparison.Ordinal);
             Assert.Contains("Infrastructure=miss", firstOutput, StringComparison.Ordinal);
             Assert.Contains("App=miss", firstOutput, StringComparison.Ordinal);
             Assert.Contains("Core.Tests=miss", firstOutput, StringComparison.Ordinal);
@@ -817,9 +821,10 @@ public sealed class GoalAcceptanceVerifierDotnetBuildSlotTestsVerdictAndBuildCac
             Assert.Contains("TestSupport=miss", firstOutput, StringComparison.Ordinal);
             Assert.Contains("Infrastructure.ProviderEnvironment.Tests=miss", firstOutput, StringComparison.Ordinal);
             Assert.Contains("Infrastructure.Cli.Tests=miss", firstOutput, StringComparison.Ordinal);
-            Assert.Contains("built_projects=Core,Infrastructure.Providers,Infrastructure,App,Core.Tests,Infrastructure.Tests,Dashboard.Tests,TestSupport,Infrastructure.ProviderEnvironment.Tests,Infrastructure.Cli.Tests", firstOutput, StringComparison.Ordinal);
+            Assert.Contains("built_projects=Core,Infrastructure.Providers,Infrastructure.OperatorComms,Infrastructure,App,Core.Tests,Infrastructure.Tests,Dashboard.Tests,TestSupport,Infrastructure.ProviderEnvironment.Tests,Infrastructure.Cli.Tests", firstOutput, StringComparison.Ordinal);
             Assert.Contains("Core=hit", secondOutput, StringComparison.Ordinal);
             Assert.Contains("Infrastructure.Providers=hit", secondOutput, StringComparison.Ordinal);
+            Assert.Contains("Infrastructure.OperatorComms=hit", secondOutput, StringComparison.Ordinal);
             Assert.Contains("Infrastructure=hit", secondOutput, StringComparison.Ordinal);
             Assert.Contains("App=hit", secondOutput, StringComparison.Ordinal);
             Assert.Contains("Core.Tests=hit", secondOutput, StringComparison.Ordinal);

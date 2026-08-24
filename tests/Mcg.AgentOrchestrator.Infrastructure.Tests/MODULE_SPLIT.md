@@ -86,6 +86,14 @@ execution count, the extracted-output hash/timestamp rows, the policy-level depe
 and the focused/standard gate results remain acceptance-owned measurements requested in
 `docs/negative-controls/b526bf42.md`; the 19/19 source count is not substituted for those receipts.
 
+## OperatorComms production boundary (2026-08-24)
+
+The production `Infrastructure.OperatorComms` assembly was extracted without adding a test
+project. Discord/operator-channel tests deliberately remain in the unfiltered umbrella
+`Mcg.AgentOrchestrator.Infrastructure.Tests` project for this slice. The future
+`Infrastructure.Integrations.Tests` destination below remains a test-ownership proposal, not a
+prerequisite for the production boundary.
+
 ## Proposed projects after the first slice
 
 | Existing lane | Target project | Boundary evidence |

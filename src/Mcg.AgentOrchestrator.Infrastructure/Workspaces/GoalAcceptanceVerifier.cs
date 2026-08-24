@@ -303,6 +303,7 @@ public sealed class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
     [
         CoreProject,
         ProvidersProject,
+        OperatorCommsProject,
         InfrastructureProject,
         AppProject,
         CoreTestsProject,

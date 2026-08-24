@@ -4,6 +4,8 @@ public sealed class InfrastructureProductionProjectGraphTests
 {
     private const string ProvidersProject =
         "src/Mcg.AgentOrchestrator.Infrastructure.Providers/Mcg.AgentOrchestrator.Infrastructure.Providers.csproj";
+    private const string OperatorCommsProject =
+        "src/Mcg.AgentOrchestrator.Infrastructure.OperatorComms/Mcg.AgentOrchestrator.Infrastructure.OperatorComms.csproj";
     private const string CoreProject =
         "src/Mcg.AgentOrchestrator.Core/Mcg.AgentOrchestrator.Core.csproj";
     private const string InfrastructureProject =
@@ -45,6 +47,41 @@ public sealed class InfrastructureProductionProjectGraphTests
                 .Select(project => project.Path)
                 .ToArray();
             Assert.Equal([ProvidersProject], owners);
+        }
+    }
+
+    [Xunit.Fact(DisplayName = "OperatorComms production assembly owns its seam once with Core-only dependency direction")]
+    public void OperatorCommsAssemblyOwnsOperatorCommsSources()
+    {
+        var root = InfrastructureTestSupport.FindRepositoryRoot();
+        var projects = LoadProductionProjects(root);
+
+        Assert.True(
+            projects.TryGetValue(OperatorCommsProject, out var operatorComms),
+            $"Missing production project: {OperatorCommsProject}");
+        Assert.Equal([CoreProject], operatorComms.References);
+        Assert.DoesNotContain(OperatorCommsProject, projects[InfrastructureProject].References);
+        Assert.Contains(OperatorCommsProject, projects[AppProject].References);
+        AssertAcyclic(projects);
+
+        var operatorCommsSources = Directory
+            .EnumerateFiles(
+                Path.Combine(root, "src", "Mcg.AgentOrchestrator.Infrastructure.OperatorComms"),
+                "*.cs",
+                SearchOption.AllDirectories)
+            .Where(path => !IsGeneratedPath(path))
+            .Select(path => Normalize(Path.GetRelativePath(root, path)))
+            .Order(StringComparer.OrdinalIgnoreCase)
+            .ToArray();
+        Assert.NotEmpty(operatorCommsSources);
+
+        foreach (var source in operatorCommsSources)
+        {
+            var owners = projects.Values
+                .Where(project => project.OwnsSource(root, source))
+                .Select(project => project.Path)
+                .ToArray();
+            Assert.Equal([OperatorCommsProject], owners);
         }
     }
 
