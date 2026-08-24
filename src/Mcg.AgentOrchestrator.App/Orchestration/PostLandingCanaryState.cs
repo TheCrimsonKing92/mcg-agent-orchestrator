@@ -521,12 +521,14 @@ internal sealed class PostLandingCanaryUnparseableReceiptException : Exception
 
 internal sealed class AcceptanceEngineCircuitBreaker
 {
+    private const string StateUnavailableFailureReason = "state-unavailable";
+    private const string StateReadBudgetExpiredFailureReason = "state-read-budget-expired";
     internal const string OperatorItemCorrelationKey = "acceptance-engine:unhealthy-episode";
     internal const string StateUnavailableOperatorItemCorrelationKey = "acceptance-engine:canary-state-unavailable";
     internal const int StateReadMaxAttempts = 3;
     internal const int StateReadAttemptBusyTimeoutMilliseconds = 50;
     private static readonly TimeSpan StateReadRetryDelay = TimeSpan.FromMilliseconds(20);
-    private static readonly TimeSpan StateReadTotalBudget = TimeSpan.FromMilliseconds(250);
+    private static readonly TimeSpan DefaultStateReadTotalBudget = TimeSpan.FromMilliseconds(250);
     private static readonly TimeSpan OperatorItemWriteBudget = TimeSpan.FromMilliseconds(250);
     private static readonly ConcurrentDictionary<string, byte> PendingStateUnavailableItemResolutions =
         new(StringComparer.OrdinalIgnoreCase);
@@ -535,19 +537,32 @@ internal sealed class AcceptanceEngineCircuitBreaker
     private readonly ICollaborationItemStore? _operatorItems;
     private readonly Func<DateTimeOffset> _utcNow;
     private readonly Action<string>? _stateUnavailableFallback;
+    private readonly TimeSpan _stateReadTotalBudget;
 
     internal AcceptanceEngineCircuitBreaker(
         PostLandingCanaryEventStore events,
         ICollaborationItemStore? operatorItems = null,
         Func<DateTimeOffset>? utcNow = null,
         IAcceptanceEngineStateReader? stateReader = null,
-        Action<string>? stateUnavailableFallback = null)
+        Action<string>? stateUnavailableFallback = null,
+        TimeSpan? stateReadTotalBudget = null)
     {
+        var effectiveStateReadTotalBudget = stateReadTotalBudget ?? DefaultStateReadTotalBudget;
+        if (effectiveStateReadTotalBudget < TimeSpan.Zero &&
+            effectiveStateReadTotalBudget != Timeout.InfiniteTimeSpan)
+        {
+            throw new ArgumentOutOfRangeException(
+                nameof(stateReadTotalBudget),
+                effectiveStateReadTotalBudget,
+                "State read total budget must be non-negative or Timeout.InfiniteTimeSpan.");
+        }
+
         _events = events;
         _stateReader = stateReader ?? events;
         _operatorItems = operatorItems;
         _utcNow = utcNow ?? (() => DateTimeOffset.UtcNow);
         _stateUnavailableFallback = stateUnavailableFallback;
+        _stateReadTotalBudget = effectiveStateReadTotalBudget;
     }
 
     internal AcceptanceEngineHealthSnapshot Read(
@@ -555,10 +570,11 @@ internal sealed class AcceptanceEngineCircuitBreaker
             AcceptanceEngineAcceptanceGate.DefaultUnavailablePolicy)
     {
         using var cancellation = new CancellationTokenSource();
+        using var budget = new CancellationTokenSource(_stateReadTotalBudget);
         try
         {
             var snapshot = ReadWithRetryAsync(cancellation.Token)
-                .WaitAsync(StateReadTotalBudget)
+                .WaitAsync(budget.Token)
                 .GetAwaiter()
                 .GetResult();
             ScheduleStateUnavailableItemResolution();
@@ -567,14 +583,17 @@ internal sealed class AcceptanceEngineCircuitBreaker
         catch (Exception ex)
         {
             cancellation.Cancel();
+            var failureReason = ex is OperationCanceledException && budget.IsCancellationRequested
+                ? StateReadBudgetExpiredFailureReason
+                : StateUnavailableFailureReason;
             var decision = AcceptanceEngineAcceptanceGate.Decide(
                 AcceptanceEngineHealth.Unavailable,
                 unavailablePolicy);
-            RaiseStateUnavailableItem(ex, decision);
+            RaiseStateUnavailableItem(ex, decision, failureReason);
             return new AcceptanceEngineHealthSnapshot(
                 AcceptanceEngineHealth.Unavailable,
                 null,
-                "state-unavailable",
+                failureReason,
                 null,
                 _utcNow(),
                 $"canary state unavailable; {decision.Reason}; {ex.GetType().Name}: {ex.Message}");
@@ -693,7 +712,8 @@ internal sealed class AcceptanceEngineCircuitBreaker
 
     private void RaiseStateUnavailableItem(
         Exception exception,
-        AcceptanceEngineAcceptanceDecision decision)
+        AcceptanceEngineAcceptanceDecision decision,
+        string failureReason)
     {
         if (_operatorItems is null)
         {
@@ -701,6 +721,10 @@ internal sealed class AcceptanceEngineCircuitBreaker
         }
 
         var detail = $"{exception.GetType().Name}: {exception.Message}";
+        var body = failureReason == StateReadBudgetExpiredFailureReason
+            ? FormattableString.Invariant(
+                $"Canary state read exceeded its total budget of {_stateReadTotalBudget.TotalMilliseconds:0.###}ms before all {StateReadMaxAttempts} attempts completed; {decision.Reason}.\n{detail}")
+            : $"Canary state could not be read after {StateReadMaxAttempts} attempts; {decision.Reason}.\n{detail}";
         try
         {
             using var cancellation = new CancellationTokenSource(OperatorItemWriteBudget);
@@ -708,8 +732,7 @@ internal sealed class AcceptanceEngineCircuitBreaker
                     CollaborationItemType.Verify,
                     goalId: null,
                     subject: "Post-landing canary state is unavailable",
-                    body:
-                        $"Canary state could not be read after {StateReadMaxAttempts} attempts; {decision.Reason}.\n{detail}",
+                    body: body,
                     correlationKey: StateUnavailableOperatorItemCorrelationKey,
                     cancellationToken: cancellation.Token)
                 .WaitAsync(OperatorItemWriteBudget)
@@ -719,7 +742,7 @@ internal sealed class AcceptanceEngineCircuitBreaker
         catch (Exception itemException)
         {
             var fallback =
-                $"CANARY_GATE result=operator-item-error reason=state-unavailable " +
+                $"CANARY_GATE result=operator-item-error reason={failureReason} " +
                 $"decision=\"{decision.Reason}\" item-error={itemException.GetType().Name}: {itemException.Message}";
             try
             {
