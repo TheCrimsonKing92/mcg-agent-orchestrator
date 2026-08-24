@@ -36,6 +36,11 @@ unchanged for recompiles, so timestamp and hash changes were both recorded.
 
 These are observed incremental-build outputs, not a static dependency-graph projection.
 
+The acceptance base-build cache registry previously omitted OperatorComms, so its output was
+built only transitively through App and absent from cache receipts. The final candidate registers
+OperatorComms immediately after Providers; an OperatorComms-only policy closure now caches and
+reports the new assembly directly.
+
 ## Publish inventory measurement
 
 Framework-dependent inventory used
@@ -56,7 +61,10 @@ BouncyCastle, and Sqlite bundle entries remained present.
 ## API and test-project cost
 
 Regex-censusing the same 26 source files at HEAD and in the candidate found 104 declared types
-both times: 101 public and 3 internal. Public promotions: **0**. New
+both times: 101 public and 3 internal. The visibility census also compared the three declaration
+groups relocated to Core: the collaboration-store interface and five records,
+`OperatorIntentVerbs`, and `BacklogItemStatus` were public before and after the move. Across the
+complete extraction surface, public promotions: **0**. New
 `InternalsVisibleTo` grants: **1**, to `Mcg.AgentOrchestrator.Infrastructure.Tests`; no unused
 friend grants were copied.
 

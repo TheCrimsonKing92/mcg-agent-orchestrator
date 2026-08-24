@@ -13,6 +13,7 @@
     <ProjectReference Include="..\..\src\Mcg.AgentOrchestrator.App\Mcg.AgentOrchestrator.App.csproj" />
     <ProjectReference Include="..\..\src\Mcg.AgentOrchestrator.Infrastructure\Mcg.AgentOrchestrator.Infrastructure.csproj" />
     <ProjectReference Include="..\..\src\Mcg.AgentOrchestrator.Infrastructure.Providers\Mcg.AgentOrchestrator.Infrastructure.Providers.csproj" />
+    <ProjectReference Include="..\..\src\Mcg.AgentOrchestrator.Infrastructure.OperatorComms\Mcg.AgentOrchestrator.Infrastructure.OperatorComms.csproj" />
     <ProjectReference Include="..\..\scripts\OrchestratorSqliteTools\OrchestratorSqliteTools.csproj" />
     <ProjectReference Include="..\Mcg.AgentOrchestrator.TestSupport\Mcg.AgentOrchestrator.TestSupport.csproj" />
     <ProjectReference Include="Fixtures\IsolatedDotnetProbe\Mcg.AgentOrchestrator.IsolatedDotnetProbe.csproj" ReferenceOutputAssembly="false" />
