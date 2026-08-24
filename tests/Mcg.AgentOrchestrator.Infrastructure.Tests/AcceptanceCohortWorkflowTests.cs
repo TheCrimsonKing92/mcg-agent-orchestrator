@@ -196,6 +196,128 @@ public sealed class AcceptanceCohortWorkflowTests : GoalWorktreeTestBase
     }
 
     [Fact]
+    public void CohortWorkspace_LowIntegrityHostCanWriteScratch_AfterBoundaryAndGitMetadataStayMedium()
+    {
+        if (!OperatingSystem.IsWindows())
+        {
+            return;
+        }
+
+        var repo = CreateAcceptanceCohortRepository();
+        var labeler = new ModeledIntegrityLabeler();
+        using var labelerScope = AcceptanceWorkspaceIntegrityPreparer.PushIntegrityLabelerForTests(labeler);
+        try
+        {
+            var main = RunGitOutput(repo, "rev-parse", "main").Trim();
+            var first = CreateCandidate(repo, "11111111111111111111111111111111", "src/First.cs", "first");
+            var second = CreateCandidate(repo, "22222222222222222222222222222222", "tests/Second.cs", "second");
+
+            using var workspace = GoalWorktrees.CreateAcceptanceCohortWorkspace(
+                repo,
+                main,
+                [
+                    Bind(first.GoalId, first.Revision, "src/First.cs", "resource:first"),
+                    Bind(second.GoalId, second.Revision, "tests/Second.cs", "resource:second")
+                ]);
+
+            var scratchWrite = Path.Combine(workspace.Path, ".scratch", "mcg-wt", Guid.NewGuid().ToString("N"));
+            var gitFile = Path.Combine(workspace.Path, ".git");
+            var commonDirRaw = RunGitOutput(workspace.Path, "rev-parse", "--git-common-dir").Trim();
+            var commonDir = Path.IsPathRooted(commonDirRaw)
+                ? Path.GetFullPath(commonDirRaw)
+                : Path.GetFullPath(Path.Combine(workspace.Path, commonDirRaw));
+
+            Assert.True(labeler.LowWriteDeniedBeforePreparation);
+            Assert.False(labeler.WouldDenyLowWrite(scratchWrite));
+            Assert.True(labeler.WouldDenyLowWrite(gitFile));
+            Assert.True(labeler.WouldDenyLowWrite(commonDir));
+            Assert.Collection(
+                labeler.Operations,
+                operation =>
+                {
+                    Assert.Equal("set", operation.Kind);
+                    Assert.Equal(Path.GetFullPath(workspace.Path), operation.Path, ignoreCase: true);
+                },
+                operation =>
+                {
+                    Assert.Equal("query", operation.Kind);
+                    Assert.Equal(Path.GetDirectoryName(workspace.Path), operation.Path, ignoreCase: true);
+                },
+                operation =>
+                {
+                    Assert.Equal("set", operation.Kind);
+                    Assert.Equal(Path.GetFullPath(gitFile), operation.Path, ignoreCase: true);
+                },
+                operation =>
+                {
+                    Assert.Equal("set", operation.Kind);
+                    Assert.Equal(commonDir, operation.Path, ignoreCase: true);
+                });
+            Assert.Collection(
+                labeler.SetCalls,
+                call =>
+                {
+                    Assert.Equal(Path.GetFullPath(workspace.Path), call.Path, ignoreCase: true);
+                    Assert.Equal(WorkerSandboxPreparer.LowInheritableLevel, call.Level);
+                    Assert.True(call.Recursive);
+                },
+                call =>
+                {
+                    Assert.Equal(Path.GetFullPath(gitFile), call.Path, ignoreCase: true);
+                    Assert.Equal("M", call.Level);
+                    Assert.False(call.Recursive);
+                },
+                call =>
+                {
+                    Assert.Equal(commonDir, call.Path, ignoreCase: true);
+                    Assert.Equal("(OI)(CI)M", call.Level);
+                    Assert.False(call.Recursive);
+                });
+        }
+        finally
+        {
+            DeleteDirectory(repo);
+        }
+    }
+
+    [Fact]
+    public void CohortWorkspace_IntegrityPreparationFailure_IsTypedWorkspaceFailure_AndRemovesWorkspace()
+    {
+        if (!OperatingSystem.IsWindows())
+        {
+            return;
+        }
+
+        var repo = CreateAcceptanceCohortRepository();
+        var labeler = new ModeledIntegrityLabeler(failLowSet: true);
+        using var labelerScope = AcceptanceWorkspaceIntegrityPreparer.PushIntegrityLabelerForTests(labeler);
+        try
+        {
+            var main = RunGitOutput(repo, "rev-parse", "main").Trim();
+            var first = CreateCandidate(repo, "11111111111111111111111111111111", "src/First.cs", "first");
+            var second = CreateCandidate(repo, "22222222222222222222222222222222", "tests/Second.cs", "second");
+
+            var failure = Assert.Throws<AcceptanceCohortMaterializationException>(() =>
+                GoalWorktrees.CreateAcceptanceCohortWorkspace(
+                    repo,
+                    main,
+                    [
+                        Bind(first.GoalId, first.Revision, "src/First.cs", "resource:first"),
+                        Bind(second.GoalId, second.Revision, "tests/Second.cs", "resource:second")
+                    ]));
+
+            Assert.Equal(AcceptanceCohortMaterializationFailureKind.WorkspaceFailure, failure.Kind);
+            Assert.Contains("Low-integrity gate writes", failure.Message, StringComparison.Ordinal);
+            AssertNoCohortWorkspaces(repo);
+            Assert.Single(labeler.SetCalls);
+        }
+        finally
+        {
+            DeleteDirectory(repo);
+        }
+    }
+
+    [Fact]
     public void DisposableWorkspaces_UnderNestedGitWorktree_UseShortTokensAndCleanUp()
     {
         var repo = CreateAcceptanceCohortRepository();
@@ -2602,7 +2724,70 @@ public sealed class AcceptanceCohortWorkflowTests : GoalWorktreeTestBase
             ChangeRiskTier.Behavior,
             ConductorTransitionDecision.Auto,
             GateReadyMergeStatus.Clean.ToString(),
-             GateReadyMergeReason.NoConflictsDetected.ToString());
+              GateReadyMergeReason.NoConflictsDetected.ToString());
+
+    private sealed class ModeledIntegrityLabeler(bool failLowSet = false) : IWorkerIntegrityLabeler
+    {
+        private readonly Dictionary<string, IntegrityLabelState> _states =
+            new(StringComparer.OrdinalIgnoreCase);
+
+        internal bool LowWriteDeniedBeforePreparation { get; private set; }
+
+        internal List<(string Kind, string Path)> Operations { get; } = [];
+
+        internal List<(string Path, string Level, bool Recursive)> SetCalls { get; } = [];
+
+        public IntegrityLabelState Query(string path)
+        {
+            var normalized = Path.GetFullPath(path);
+            Operations.Add(("query", normalized));
+            return _states.GetValueOrDefault(
+                normalized,
+                new IntegrityLabelState(Exists: true, Low: false, Inheritable: false, Medium: true));
+        }
+
+        public bool SetIntegrity(string path, string level, bool recursive)
+        {
+            var normalized = Path.GetFullPath(path);
+            Operations.Add(("set", normalized));
+            SetCalls.Add((normalized, level, recursive));
+            var low = level.EndsWith('L');
+            if (low)
+            {
+                LowWriteDeniedBeforePreparation = WouldDenyLowWrite(
+                    Path.Combine(normalized, ".scratch", "mcg-wt", "before-preparation"));
+                if (failLowSet)
+                {
+                    return false;
+                }
+            }
+
+            _states[normalized] = new IntegrityLabelState(
+                Exists: true,
+                Low: low,
+                Inheritable: level.Contains("(OI)(CI)", StringComparison.Ordinal),
+                Medium: level.EndsWith('M'));
+            return true;
+        }
+
+        internal bool WouldDenyLowWrite(string path)
+        {
+            var current = Path.GetFullPath(path);
+            var exact = true;
+            while (!string.IsNullOrWhiteSpace(current))
+            {
+                if (_states.TryGetValue(current, out var state) && (exact || state.Inheritable))
+                {
+                    return !state.Low;
+                }
+
+                exact = false;
+                current = Path.GetDirectoryName(current) ?? string.Empty;
+            }
+
+            return true;
+        }
+    }
 
     private sealed class BlockingAcceptanceVerifier(
         ManualResetEventSlim started,

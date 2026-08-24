@@ -128,6 +128,7 @@ public static partial class GoalWorktrees
                 throw new InvalidOperationException(
                     $"Failed to materialize attribution member {member.GoalId.Value[..8]}: {merge.Error}");
             }
+            AcceptanceWorkspaceIntegrityPreparer.Prepare(workspacePath);
             var result = new AcceptanceCohortWorkspace(
                 root,
                 workspacePath,
@@ -213,6 +214,18 @@ public static partial class GoalWorktrees
                         AcceptanceCohortMaterializationFailureKind.MergeConflict,
                         $"Failed to materialize cohort member {member.GoalId.Value[..8]}: {merge.Error}");
                 }
+            }
+
+            try
+            {
+                AcceptanceWorkspaceIntegrityPreparer.Prepare(workspacePath);
+            }
+            catch (Exception integrityFailure)
+            {
+                throw new AcceptanceCohortMaterializationException(
+                    AcceptanceCohortMaterializationFailureKind.WorkspaceFailure,
+                    $"Failed to prepare cohort worktree for Low-integrity gate writes: {integrityFailure.Message}",
+                    integrityFailure);
             }
 
             var commit = ResolveRequiredRef(workspacePath, "HEAD");
