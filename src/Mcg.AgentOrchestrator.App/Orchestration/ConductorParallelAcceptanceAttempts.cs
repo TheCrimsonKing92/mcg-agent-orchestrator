@@ -74,6 +74,12 @@ internal enum AcceptanceBuildPermitWaitReason
     DesignatedPermitBusyWhileFree
 }
 
+internal enum AcceptanceStableSlotExhaustionPolicy
+{
+    Fail,
+    DegradeToSerial
+}
+
 internal sealed record ConductorParallelAcceptanceAttempt(
     string AttemptId,
     string GoalId,
@@ -116,7 +122,8 @@ internal sealed record ConductorParallelAcceptanceAttempt(
     string? FindingRoundFingerprint = null,
     IReadOnlyList<FindingEvidenceRequestDisposition>? FocusedEvidenceRequestDispositions = null,
     string? FocusedEvidenceReceiptId = null,
-    string? PolicyJson = null)
+    string? PolicyJson = null,
+    AcceptanceStableSlotExhaustionPolicy? StableSlotExhaustionPolicy = null)
 {
     public string CandidateKey => $"{GoalId}:{BranchHeadSha ?? "unknown-branch"}:{MainHeadSha ?? "unknown-main"}";
 }
@@ -380,8 +387,16 @@ internal sealed class ConductorParallelAcceptanceAttemptCoordinator
     internal ConductorParallelAcceptanceAttemptDecision Evaluate(
         ConductorParallelAcceptanceCandidate candidate,
         ConductorAutonomyPolicy policy,
-        ConductorParallelAcceptanceRunAcceptance runAcceptance)
-        => EvaluateCore(candidate, policy, runAcceptance, GateDispatchKind, focusedEvidenceRequest: null, requestContext: null);
+        ConductorParallelAcceptanceRunAcceptance runAcceptance,
+        AcceptanceStableSlotExhaustionPolicy stableSlotExhaustionPolicy = AcceptanceStableSlotExhaustionPolicy.Fail)
+        => EvaluateCore(
+            candidate,
+            policy,
+            runAcceptance,
+            GateDispatchKind,
+            focusedEvidenceRequest: null,
+            requestContext: null,
+            stableSlotExhaustionPolicy);
 
     internal IReadOnlyList<ConductorParallelAcceptanceAttempt> GetUnreconciledAttempts(
         IEnumerable<string> goalIds)
@@ -480,7 +495,8 @@ internal sealed class ConductorParallelAcceptanceAttemptCoordinator
                 runFocusedEvidence(attemptCandidate.Goal, request, lease, cancellationToken)),
             PreReviewEvidenceDispatchKind,
             request,
-            requestContext);
+            requestContext,
+            AcceptanceStableSlotExhaustionPolicy.Fail);
     }
 
     private ConductorParallelAcceptanceAttemptDecision EvaluateCore(
@@ -489,7 +505,8 @@ internal sealed class ConductorParallelAcceptanceAttemptCoordinator
         ConductorParallelAcceptanceRunAcceptance runAcceptance,
         string dispatchKind,
         string? focusedEvidenceRequest,
-        ConductorFocusedEvidenceRequestContext? requestContext)
+        ConductorFocusedEvidenceRequestContext? requestContext,
+        AcceptanceStableSlotExhaustionPolicy stableSlotExhaustionPolicy)
     {
         var current = TryReadLatest(candidate.Goal.Id.Value);
         if (current is not null && IsLiveInvalidatedAttempt(current))
@@ -502,9 +519,23 @@ internal sealed class ConductorParallelAcceptanceAttemptCoordinator
             if (current.Outcome == ConductorParallelAcceptanceAttemptOutcome.StaleCandidate &&
                 current.SupersessionCause is not null)
             {
-                var successor = CreateAttempt(candidate, policy, dispatchKind, focusedEvidenceRequest, requestContext);
+                var successor = CreateAttempt(
+                    candidate,
+                    policy,
+                    dispatchKind,
+                    focusedEvidenceRequest,
+                    requestContext,
+                    stableSlotExhaustionPolicy);
                 CompleteSupersession(current, successor);
-                return Launch(candidate, policy, runAcceptance, dispatchKind, focusedEvidenceRequest, requestContext, successor);
+                return Launch(
+                    candidate,
+                    policy,
+                    runAcceptance,
+                    dispatchKind,
+                    focusedEvidenceRequest,
+                    requestContext,
+                    stableSlotExhaustionPolicy,
+                    successor);
             }
 
             current = null;
@@ -521,7 +552,8 @@ internal sealed class ConductorParallelAcceptanceAttemptCoordinator
                     runAcceptance,
                     dispatchKind,
                     focusedEvidenceRequest,
-                    requestContext);
+                    requestContext,
+                    stableSlotExhaustionPolicy);
             }
 
             return ConductorParallelAcceptanceAttemptDecision.TerminalWithoutRun(current);
@@ -541,7 +573,8 @@ internal sealed class ConductorParallelAcceptanceAttemptCoordinator
                         runAcceptance,
                         dispatchKind,
                         focusedEvidenceRequest,
-                        requestContext);
+                        requestContext,
+                        stableSlotExhaustionPolicy);
                 }
 
                 return terminal;
@@ -558,7 +591,8 @@ internal sealed class ConductorParallelAcceptanceAttemptCoordinator
                         runAcceptance,
                         dispatchKind,
                         focusedEvidenceRequest,
-                        requestContext);
+                        requestContext,
+                        stableSlotExhaustionPolicy);
                 }
 
                 return terminal;
@@ -567,7 +601,14 @@ internal sealed class ConductorParallelAcceptanceAttemptCoordinator
             return ConductorParallelAcceptanceAttemptDecision.Running(current);
         }
 
-        return Launch(candidate, policy, runAcceptance, dispatchKind, focusedEvidenceRequest, requestContext);
+        return Launch(
+            candidate,
+            policy,
+            runAcceptance,
+            dispatchKind,
+            focusedEvidenceRequest,
+            requestContext,
+            stableSlotExhaustionPolicy);
     }
 
     private static bool MatchesCandidate(
@@ -594,19 +635,41 @@ internal sealed class ConductorParallelAcceptanceAttemptCoordinator
         ConductorParallelAcceptanceRunAcceptance runAcceptance,
         string dispatchKind,
         string? focusedEvidenceRequest,
-        ConductorFocusedEvidenceRequestContext? requestContext)
+        ConductorFocusedEvidenceRequestContext? requestContext,
+        AcceptanceStableSlotExhaustionPolicy stableSlotExhaustionPolicy)
     {
         var cause = SupersessionCauseFor(
             attempt, candidate, dispatchKind, focusedEvidenceRequest, requestContext);
         MarkStale(attempt, cause);
         if (!string.Equals(dispatchKind, PreReviewEvidenceDispatchKind, StringComparison.Ordinal))
         {
-            return Launch(candidate, policy, runAcceptance, dispatchKind, focusedEvidenceRequest, requestContext);
+            return Launch(
+                candidate,
+                policy,
+                runAcceptance,
+                dispatchKind,
+                focusedEvidenceRequest,
+                requestContext,
+                stableSlotExhaustionPolicy);
         }
 
-        var successor = CreateAttempt(candidate, policy, dispatchKind, focusedEvidenceRequest, requestContext);
+        var successor = CreateAttempt(
+            candidate,
+            policy,
+            dispatchKind,
+            focusedEvidenceRequest,
+            requestContext,
+            stableSlotExhaustionPolicy);
         CompleteSupersession(attempt, successor);
-        return Launch(candidate, policy, runAcceptance, dispatchKind, focusedEvidenceRequest, requestContext, successor);
+        return Launch(
+            candidate,
+            policy,
+            runAcceptance,
+            dispatchKind,
+            focusedEvidenceRequest,
+            requestContext,
+            stableSlotExhaustionPolicy,
+            successor);
     }
 
     private static ConductorEvidenceSupersessionCause SupersessionCauseFor(
@@ -850,6 +913,7 @@ internal sealed class ConductorParallelAcceptanceAttemptCoordinator
         string dispatchKind,
         string? focusedEvidenceRequest,
         ConductorFocusedEvidenceRequestContext? requestContext,
+        AcceptanceStableSlotExhaustionPolicy stableSlotExhaustionPolicy,
         ConductorParallelAcceptanceAttempt? reservedAttempt = null)
     {
         var attempt = reservedAttempt ?? CreateAttempt(
@@ -857,7 +921,8 @@ internal sealed class ConductorParallelAcceptanceAttemptCoordinator
             policy,
             dispatchKind,
             focusedEvidenceRequest,
-            requestContext);
+            requestContext,
+            stableSlotExhaustionPolicy);
         try
         {
             Persist(attempt);
@@ -1317,7 +1382,23 @@ internal sealed class ConductorParallelAcceptanceAttemptCoordinator
             attempt.MetadataPath);
         try
         {
-            var stableSlotLease = _acquireStableSlotLease(attempt, candidate);
+            DotnetBuildEnvironmentLease? stableSlotLease;
+            try
+            {
+                stableSlotLease = _acquireStableSlotLease(attempt, candidate);
+            }
+            catch (DotnetBuildSlotsBusyException) when (
+                attempt.StableSlotExhaustionPolicy == AcceptanceStableSlotExhaustionPolicy.DegradeToSerial)
+            {
+                EmitAttemptLeaseReceipt(
+                    "degrade",
+                    attempt,
+                    candidate,
+                    holderPid: null,
+                    permitName: AllBuildPermitNames(),
+                    waitReason: AcceptanceBuildPermitWaitReason.AllPermitsBusy);
+                stableSlotLease = null;
+            }
             if (stableSlotLease is not null)
             {
                 leaseAcquired(stableSlotLease);
@@ -1695,7 +1776,8 @@ internal sealed class ConductorParallelAcceptanceAttemptCoordinator
         ConductorAutonomyPolicy policy,
         string dispatchKind,
         string? focusedEvidenceRequest,
-        ConductorFocusedEvidenceRequestContext? requestContext)
+        ConductorFocusedEvidenceRequestContext? requestContext,
+        AcceptanceStableSlotExhaustionPolicy stableSlotExhaustionPolicy)
     {
         var startedAt = _utcNow();
         var rawId = $"{candidate.GoalPrefix}-{candidate.SlotIndex}-{startedAt:yyyyMMddHHmmssfff}-{Guid.NewGuid():N}";
@@ -1745,7 +1827,8 @@ internal sealed class ConductorParallelAcceptanceAttemptCoordinator
                 .FirstOrDefault(disposition => disposition.StartsWith("executed-", StringComparison.Ordinal)),
             FindingRoundFingerprint: requestContext?.FindingRoundFingerprint,
             FocusedEvidenceRequestDispositions: requestContext?.RequestDispositions,
-            PolicyJson: policy.ToJson());
+            PolicyJson: policy.ToJson(),
+            StableSlotExhaustionPolicy: stableSlotExhaustionPolicy);
     }
 
     private static int AllocateOrdinal(string directory)

@@ -423,7 +423,6 @@ public sealed class ConductorDriverTests
         Action? buildServerShutdown = null,
         Func<Goal, bool>? runAcceptance = null,
         Func<Goal, AcceptanceVerificationSummary>? runAcceptanceSummary = null, Func<Goal, int?, DotnetBuildEnvironmentLease?, CancellationToken, AcceptanceVerificationSummary>? runAcceptanceVerificationWithLease = null,
-        Func<Goal, DotnetBuildLeaseAcquisition>? tryAcquireLandingStableSlotLease = null,
         Action<Goal, AcceptanceVerificationSummary>? runAdvisorySemanticAcceptance = null,
         Func<Goal, string, FocusedEvidenceRunResult>? runFocusedEvidence = null,
         Func<GoalId, TaskId, string, TaskSpec>? retryTask = null,
@@ -513,7 +512,6 @@ public sealed class ConductorDriverTests
             isVerificationGateSatisfied: isVerificationGateSatisfied,
             gateReadyCandidateProjector: gateReadyCandidateProjector,
             runAcceptanceVerificationWithLease: runAcceptanceVerificationWithLease,
-            tryAcquireLandingStableSlotLease: tryAcquireLandingStableSlotLease,
             tryAcquireEvidenceMutationLease: tryAcquireEvidenceMutationLease,
             executionDirectory: executionDirectory);
     }

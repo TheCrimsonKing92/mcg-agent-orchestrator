@@ -96,7 +96,6 @@ internal sealed partial class ConductorDriver
     private readonly Func<TimeSpan, string> _buildServerShutdown;
     private readonly TimeSpan _buildServerShutdownTimeout;
     private readonly Func<Goal, int?, DotnetBuildEnvironmentLease?, CancellationToken, AcceptanceVerificationSummary> _runAcceptanceVerification;
-    private readonly Func<Goal, DotnetBuildLeaseAcquisition> _tryAcquireLandingStableSlotLease;
     private readonly Action<Goal, AcceptanceVerificationSummary> _runAdvisorySemanticAcceptance;
     private readonly Func<Goal, string, DotnetBuildEnvironmentLease?, CancellationToken, FocusedEvidenceRunResult> _runFocusedEvidence;
     private readonly Func<Goal, string, DotnetBuildEnvironmentLease?, CancellationToken, FocusedEvidenceRunResult> _runDualArmFocusedEvidence;
@@ -251,7 +250,7 @@ internal sealed partial class ConductorDriver
             Path.Combine(workspace.OrchestratorDirectory, "acceptance-gate-attempts"),
             dir,
             tryRunPreSlot: RunParallelLandingAcceptancePreSlot);
-        _tryAcquireLandingStableSlotLease = _ => TryAcquireInlineLandingStableSlotLease();
+        (_acceptanceEventSink, _noTickAcceptancePollDelay, _noTickAcceptancePollTimeout) = CreateProductionAcceptanceWaitConfiguration(workspace);
         _focusedEvidenceAttemptCoordinator = new ConductorParallelAcceptanceAttemptCoordinator(
             Path.Combine(workspace.OrchestratorDirectory, "pre-review-evidence-attempts"),
             dir,
@@ -1197,7 +1196,7 @@ internal sealed partial class ConductorDriver
         Action<Goal, string>? recordMissingBranchRetirement = null,
         Func<Goal, IReadOnlyList<string>>? getLandingFileScopes = null,
         Func<Goal, int?, AcceptanceVerificationSummary>? runAcceptanceVerificationWithSlot = null,
-        Func<Goal, int?, DotnetBuildEnvironmentLease?, CancellationToken, AcceptanceVerificationSummary>? runAcceptanceVerificationWithLease = null, Func<Goal, DotnetBuildLeaseAcquisition>? tryAcquireLandingStableSlotLease = null,
+        Func<Goal, int?, DotnetBuildEnvironmentLease?, CancellationToken, AcceptanceVerificationSummary>? runAcceptanceVerificationWithLease = null,
         Func<bool>? hasGateReadyGoal = null,
         ConductorParallelAcceptanceAttemptCoordinator? parallelAcceptanceAttemptCoordinator = null,
         Func<Goal, string, FocusedEvidenceRunResult>? runFocusedEvidence = null,
@@ -1234,7 +1233,8 @@ internal sealed partial class ConductorDriver
         Func<Goal, string, IDisposable?>? tryAcquireEvidenceMutationLease = null,
         Func<Goal, DeveloperBranchIntegrationResult>? integrateMainBeforeDeveloperDispatch = null,
         Func<Goal, ReconcileAcceptanceLeaseState?>? getEvidenceMutationLease = null,
-        Func<DateTimeOffset>? utcNow = null, string? executionDirectory = null)
+        Func<DateTimeOffset>? utcNow = null, string? executionDirectory = null, Action<string, string>? acceptanceEventSink = null,
+        Action<TimeSpan>? noTickAcceptancePollDelay = null, TimeSpan? noTickAcceptancePollTimeout = null)
     {
         _getFacts = getFacts;
         _getRunningPaidWorkerCount = getRunningPaidWorkerCount;
@@ -1256,8 +1256,7 @@ internal sealed partial class ConductorDriver
             ?? (runAcceptanceVerificationWithSlot is not null
                 ? ((goal, slot, _, _) => runAcceptanceVerificationWithSlot(goal, slot))
                 : ((goal, _, _, _) => runAcceptanceVerification(goal)));
-        _tryAcquireLandingStableSlotLease = tryAcquireLandingStableSlotLease ?? (_ =>
-            new DotnetBuildLeaseAcquisition.SlotsBusy("landing-stable-slot-not-configured", []));
+        (_acceptanceEventSink, _noTickAcceptancePollDelay, _noTickAcceptancePollTimeout) = (acceptanceEventSink ?? ((_, _) => { }), noTickAcceptancePollDelay ?? Thread.Sleep, noTickAcceptancePollTimeout ?? DefaultNoTickAcceptancePollTimeout);
         _runAdvisorySemanticAcceptance = runAdvisorySemanticAcceptance ?? ((_, _) => { });
         _runFocusedEvidence = runFocusedEvidence is null
             ? ((_, request, _, _) => new FocusedEvidenceRunResult(
@@ -1350,7 +1349,8 @@ internal sealed partial class ConductorDriver
         _parallelAcceptanceAttemptCoordinator = parallelAcceptanceAttemptCoordinator
             ?? new ConductorParallelAcceptanceAttemptCoordinator(
                 Path.Combine(Path.GetTempPath(), "mcg-conductor-acceptance-attempts", Guid.NewGuid().ToString("N")),
-                runInline: true);
+                runInline: true,
+                acquireStableSlotLease: (_, _) => null);
         _focusedEvidenceAttemptCoordinator = focusedEvidenceAttemptCoordinator
             ?? new ConductorParallelAcceptanceAttemptCoordinator(
                 Path.Combine(Path.GetTempPath(), "mcg-conductor-focused-evidence-attempts", Guid.NewGuid().ToString("N")),
@@ -4048,7 +4048,7 @@ internal sealed partial class ConductorDriver
                 effectiveCandidate,
                 _runAcceptanceVerification(
                     effectiveCandidate.Goal,
-                    effectiveCandidate.SlotIndex,
+                    stableSlotLease is null ? null : effectiveCandidate.SlotIndex,
                     stableSlotLease,
                     cancellationToken));
         }
