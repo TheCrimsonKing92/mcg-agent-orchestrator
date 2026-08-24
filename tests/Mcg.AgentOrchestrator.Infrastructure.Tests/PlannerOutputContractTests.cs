@@ -259,13 +259,12 @@ public sealed class PlannerOutputContractTests : WorkerDispatchTestSupport
     public void PlannerContract_ActiveContextDoesNotUseHistoricalSameBasenameFallback()
     {
         var workingDirectory = CreateTempDirectory();
-        Directory.CreateDirectory(Path.Combine(workingDirectory, "prior"));
         Directory.CreateDirectory(Path.Combine(workingDirectory, "active"));
-        File.WriteAllText(Path.Combine(workingDirectory, "prior", "Sibling.cs"), "prior");
+        // Sibling.cs stays absent: inheriting the historical new-file marker under active context would incorrectly accept it.
         File.WriteAllText(Path.Combine(workingDirectory, "active", "Anchor.cs"), "anchor");
         var plan = PlannerContractPlanFixture().Replace(
             PlannerContractAcceptanceMappingBody,
-            "1. Preserve the earlier explicit citation `prior/Sibling.cs` as historical evidence for the negative control.",
+            "1. Preserve the earlier explicit citation `prior/Sibling.cs` (new file) as historical evidence for the negative control.",
             StringComparison.Ordinal);
         plan = ReplaceSectionBody(
             plan,
@@ -463,6 +462,99 @@ public sealed class PlannerOutputContractTests : WorkerDispatchTestSupport
         var result = PlannerOutputContract.Resolve(plan, string.Empty, workingDirectory);
 
         Xunit.Assert.True(result.Succeeded, result.Diagnostic);
+    }
+
+    [Xunit.Fact]
+    public void PlannerContract_ContextualMissFallsBackToUniqueRepositoryFile()
+    {
+        var workingDirectory = CreateTempDirectory();
+        Directory.CreateDirectory(Path.Combine(workingDirectory, "active"));
+        Directory.CreateDirectory(Path.Combine(workingDirectory, "elsewhere"));
+        File.WriteAllText(Path.Combine(workingDirectory, "active", "Anchor.cs"), "// anchor");
+        File.WriteAllText(Path.Combine(workingDirectory, "elsewhere", "ContextMissTarget.cs"), "// target");
+        var plan = ReplaceSectionBody(
+            PlannerContractPlanFixture(),
+            "## Target seams and symbols",
+            "- Extend `active/Anchor.cs` and `ContextMissTarget.cs` with focused fallback coverage.");
+
+        var result = PlannerOutputContract.Resolve(plan, string.Empty, workingDirectory);
+
+        Xunit.Assert.True(result.Succeeded, result.Diagnostic);
+        Xunit.Assert.Contains("`ContextMissTarget.cs`", result.Plan, StringComparison.Ordinal);
+        Xunit.Assert.DoesNotContain("Planner contract note", result.Plan, StringComparison.Ordinal);
+    }
+
+    [Xunit.Fact]
+    public void PlannerContract_ContextualMissWithAmbiguousRepositoryFilenameFails()
+    {
+        var workingDirectory = CreateTempDirectory();
+        Directory.CreateDirectory(Path.Combine(workingDirectory, "active"));
+        Directory.CreateDirectory(Path.Combine(workingDirectory, "first"));
+        Directory.CreateDirectory(Path.Combine(workingDirectory, "second"));
+        File.WriteAllText(Path.Combine(workingDirectory, "active", "Anchor.cs"), "// anchor");
+        File.WriteAllText(Path.Combine(workingDirectory, "first", "ContextDuplicate.cs"), "// first");
+        File.WriteAllText(Path.Combine(workingDirectory, "second", "ContextDuplicate.cs"), "// second");
+        var plan = ReplaceSectionBody(
+            PlannerContractPlanFixture(),
+            "## Target seams and symbols",
+            "- Extend `active/Anchor.cs` and `ContextDuplicate.cs` with focused ambiguity coverage.");
+
+        var result = PlannerOutputContract.Resolve(plan, string.Empty, workingDirectory);
+
+        Xunit.Assert.False(result.Succeeded);
+        Xunit.Assert.Contains("target citation 'ContextDuplicate.cs' is ambiguous", result.Diagnostic, StringComparison.Ordinal);
+        Xunit.Assert.Contains("'first/ContextDuplicate.cs'", result.Diagnostic, StringComparison.Ordinal);
+        Xunit.Assert.Contains("'second/ContextDuplicate.cs'", result.Diagnostic, StringComparison.Ordinal);
+        Xunit.Assert.Contains("Offending citation: 'ContextDuplicate.cs'", result.Diagnostic, StringComparison.Ordinal);
+    }
+
+    [Xunit.Fact]
+    public void PlannerContract_ContextualMissWithNoRepositoryMatchStillFails()
+    {
+        var workingDirectory = CreateTempDirectory();
+        Directory.CreateDirectory(Path.Combine(workingDirectory, "active"));
+        File.WriteAllText(Path.Combine(workingDirectory, "active", "Anchor.cs"), "// anchor");
+        var plan = ReplaceSectionBody(
+            PlannerContractPlanFixture(),
+            "## Target seams and symbols",
+            "- Extend `active/Anchor.cs` and `AbsentContextTarget.cs` with focused rejection coverage.");
+
+        var result = PlannerOutputContract.Resolve(plan, string.Empty, workingDirectory);
+
+        Xunit.Assert.False(result.Succeeded);
+        Xunit.Assert.Contains(
+            "target citation 'AbsentContextTarget.cs' does not exist",
+            result.Diagnostic,
+            StringComparison.Ordinal);
+    }
+
+    [Xunit.Fact]
+    public void PlannerContract_ContextualMatchWinsOverRepositoryAmbiguity()
+    {
+        var workingDirectory = CreateTempDirectory();
+        Directory.CreateDirectory(Path.Combine(workingDirectory, "active"));
+        Directory.CreateDirectory(Path.Combine(workingDirectory, "elsewhere"));
+        File.WriteAllText(Path.Combine(workingDirectory, "active", "Anchor.cs"), "// anchor");
+        File.WriteAllText(Path.Combine(workingDirectory, "active", "Preferred.cs"), "// contextual");
+        File.WriteAllText(Path.Combine(workingDirectory, "elsewhere", "Preferred.cs"), "// repository match");
+        var contextualPlan = ReplaceSectionBody(
+            PlannerContractPlanFixture(),
+            "## Target seams and symbols",
+            "- Extend `active/Anchor.cs` and `Preferred.cs` with focused precedence coverage.");
+        var repositoryPlan = ReplaceSectionBody(
+            PlannerContractPlanFixture(),
+            "## Target seams and symbols",
+            """
+            - Extend `active/Anchor.cs` with focused precedence coverage.
+            - Extend `Preferred.cs` with repository ambiguity coverage.
+            """);
+
+        var contextualResult = PlannerOutputContract.Resolve(contextualPlan, string.Empty, workingDirectory);
+        var repositoryResult = PlannerOutputContract.Resolve(repositoryPlan, string.Empty, workingDirectory);
+
+        Xunit.Assert.True(contextualResult.Succeeded, contextualResult.Diagnostic);
+        Xunit.Assert.False(repositoryResult.Succeeded);
+        Xunit.Assert.Contains("target citation 'Preferred.cs' is ambiguous", repositoryResult.Diagnostic, StringComparison.Ordinal);
     }
 
     [Xunit.Fact]
