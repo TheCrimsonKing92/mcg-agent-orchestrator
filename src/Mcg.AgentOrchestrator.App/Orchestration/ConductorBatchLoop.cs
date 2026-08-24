@@ -1863,7 +1863,7 @@ internal sealed partial class ConductorBatchLoop
             "ACCEPTANCE_LEASE_HANDOFF" => "acceptance-lease",
             "ACCEPTANCE_LEASE_PERMIT_RELEASE" => "acceptance-lease",
             "ACCEPTANCE_LEASE_RELEASE" => "acceptance-lease",
-            "ACCEPTANCE_LEASE_YIELD" => "acceptance-lease",
+            "ACCEPTANCE_LEASE_YIELD" or "ACCEPTANCE_LEASE_DEGRADE" => "acceptance-lease",
             "BUILD_LOCK_BLOCKED" => "lock-blocker",
             "GOAL" => ClassifyGoalEvent(line),
             "GOAL_STALLED" => "goal-stalled",
@@ -2848,7 +2848,7 @@ internal sealed partial class ConductorBatchLoop
                 changedGoalIds.Add(goal.Id);
                 results[goal.Id.Value] = new ParallelLandingOutcome(result, retainedTerminal.Attempt.SlotIndex);
                 RecordParallelAcceptanceProgress(
-                    $"ACCEPTANCE goal={goal.Id.Value[..8]} slot=slot-{retainedTerminal.Attempt.SlotIndex} result={AcceptanceRunDisposition(run)} attempt={retainedTerminal.Attempt.AttemptId} tick={tick}",
+                    AcceptanceLifecycleEventFormatter.Format(goal.Id.Value[..8], retainedTerminal.Attempt.SlotIndex, AcceptanceRunDisposition(run), retainedTerminal.Attempt.AttemptId, tick),
                     changedGoalLines);
                 continue;
             }
@@ -2869,7 +2869,7 @@ internal sealed partial class ConductorBatchLoop
             driver.ParallelAcceptanceAttemptCoordinator.MarkReconciled(retainedTerminal.Attempt);
             changedGoalIds.Add(goal.Id);
             RecordParallelAcceptanceProgress(
-                $"ACCEPTANCE goal={goal.Id.Value[..8]} slot=slot-{retainedTerminal.Attempt.SlotIndex} result={AcceptanceAttemptOutcomeToken(retainedTerminal.Attempt.Outcome)} attempt={retainedTerminal.Attempt.AttemptId} tick={tick}",
+                AcceptanceLifecycleEventFormatter.Format(goal.Id.Value[..8], retainedTerminal.Attempt.SlotIndex, AcceptanceAttemptOutcomeToken(retainedTerminal.Attempt.Outcome), retainedTerminal.Attempt.AttemptId, tick),
                 changedGoalLines);
             }
             catch (Exception ex)
@@ -3230,7 +3230,7 @@ internal sealed partial class ConductorBatchLoop
                                 changedGoalLines);
                             results[candidate.Goal.Id.Value] = new ParallelLandingOutcome(terminalResult, candidate.SlotIndex);
                             RecordParallelAcceptanceProgress(
-                                $"ACCEPTANCE goal={candidate.GoalPrefix} slot=slot-{candidate.SlotIndex} result={AcceptanceRunDisposition(terminalRun)} attempt={terminalDecision.Attempt.AttemptId} tick={tick}",
+                                AcceptanceLifecycleEventFormatter.Format(candidate.GoalPrefix, candidate.SlotIndex, AcceptanceRunDisposition(terminalRun), terminalDecision.Attempt.AttemptId, tick),
                                 changedGoalLines);
                             break;
                         }
@@ -3241,7 +3241,7 @@ internal sealed partial class ConductorBatchLoop
                             candidate.SlotIndex);
                         driver.ParallelAcceptanceAttemptCoordinator.MarkReconciled(terminalDecision.Attempt);
                         RecordParallelAcceptanceProgress(
-                            $"ACCEPTANCE goal={candidate.GoalPrefix} slot=slot-{candidate.SlotIndex} result={AcceptanceAttemptOutcomeToken(terminalDecision.Attempt.Outcome)} attempt={terminalDecision.Attempt.AttemptId} tick={tick}",
+                            AcceptanceLifecycleEventFormatter.Format(candidate.GoalPrefix, candidate.SlotIndex, AcceptanceAttemptOutcomeToken(terminalDecision.Attempt.Outcome), terminalDecision.Attempt.AttemptId, tick),
                             changedGoalLines);
                         break;
                     }
@@ -3266,7 +3266,7 @@ internal sealed partial class ConductorBatchLoop
                             "acceptance verification running in background"),
                         candidate.SlotIndex);
                     RecordParallelAcceptanceProgress(
-                        $"ACCEPTANCE goal={candidate.GoalPrefix} slot=slot-{candidate.SlotIndex} result=started attempt={decision.Attempt.AttemptId} tick={tick}",
+                        AcceptanceLifecycleEventFormatter.Format(candidate.GoalPrefix, candidate.SlotIndex, "started", decision.Attempt.AttemptId, tick),
                         changedGoalLines);
                     break;
                 case ConductorParallelAcceptanceAttemptDecisionKind.Running:
@@ -3290,7 +3290,7 @@ internal sealed partial class ConductorBatchLoop
                             "acceptance verification still running in background"),
                         candidate.SlotIndex);
                     RecordParallelAcceptanceProgress(
-                        $"ACCEPTANCE goal={candidate.GoalPrefix} slot=slot-{candidate.SlotIndex} result=running attempt={decision.Attempt.AttemptId} tick={tick}",
+                        AcceptanceLifecycleEventFormatter.Format(candidate.GoalPrefix, candidate.SlotIndex, "running", decision.Attempt.AttemptId, tick),
                         changedGoalLines);
                     break;
                 case ConductorParallelAcceptanceAttemptDecisionKind.Completed:
@@ -3319,7 +3319,7 @@ internal sealed partial class ConductorBatchLoop
                         changedGoalLines);
                     results[candidate.Goal.Id.Value] = new ParallelLandingOutcome(result, candidate.SlotIndex);
                     RecordParallelAcceptanceProgress(
-                        $"ACCEPTANCE goal={candidate.GoalPrefix} slot=slot-{candidate.SlotIndex} result={AcceptanceRunDisposition(run)} attempt={decision.Attempt.AttemptId} tick={tick}",
+                        AcceptanceLifecycleEventFormatter.Format(candidate.GoalPrefix, candidate.SlotIndex, AcceptanceRunDisposition(run), decision.Attempt.AttemptId, tick),
                         changedGoalLines);
                     break;
                 case ConductorParallelAcceptanceAttemptDecisionKind.TerminalWithoutRun:
@@ -3329,7 +3329,7 @@ internal sealed partial class ConductorBatchLoop
                         candidate.SlotIndex);
                     driver.ParallelAcceptanceAttemptCoordinator.MarkReconciled(decision.Attempt);
                     RecordParallelAcceptanceProgress(
-                        $"ACCEPTANCE goal={candidate.GoalPrefix} slot=slot-{candidate.SlotIndex} result={AcceptanceAttemptOutcomeToken(decision.Attempt.Outcome)} attempt={decision.Attempt.AttemptId} tick={tick}",
+                        AcceptanceLifecycleEventFormatter.Format(candidate.GoalPrefix, candidate.SlotIndex, AcceptanceAttemptOutcomeToken(decision.Attempt.Outcome), decision.Attempt.AttemptId, tick),
                         changedGoalLines);
                     break;
             }
@@ -4127,7 +4127,7 @@ internal sealed partial class ConductorBatchLoop
             policy,
             $"parallel acceptance fault: {SanitizeReason(exception.Message)}");
 
-    private static string AcceptanceRunDisposition(ConductorParallelAcceptanceRunResult run)
+    internal static string AcceptanceRunDisposition(ConductorParallelAcceptanceRunResult run)
     {
         if (run.Exception is not null)
         {
@@ -4149,7 +4149,7 @@ internal sealed partial class ConductorBatchLoop
         return run.Acceptance?.Passed == true ? "passed" : "failed";
     }
 
-    private static string AcceptanceAttemptOutcomeToken(ConductorParallelAcceptanceAttemptOutcome outcome) =>
+    internal static string AcceptanceAttemptOutcomeToken(ConductorParallelAcceptanceAttemptOutcome outcome) =>
         outcome switch
         {
             ConductorParallelAcceptanceAttemptOutcome.Running => "running",

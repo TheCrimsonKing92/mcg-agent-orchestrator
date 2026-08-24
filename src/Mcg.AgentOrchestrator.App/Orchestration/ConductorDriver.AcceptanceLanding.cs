@@ -6,14 +6,18 @@ namespace Mcg.AgentOrchestrator.App.Orchestration;
 
 internal sealed partial class ConductorDriver
 {
-    internal static readonly TimeSpan InlineLandingStableSlotLeaseTimeout = TimeSpan.FromSeconds(2);
+    private readonly Action<string, string> _acceptanceEventSink;
+    private readonly Action<TimeSpan> _noTickAcceptancePollDelay;
+    private readonly TimeSpan _noTickAcceptancePollTimeout;
+    internal static readonly TimeSpan DefaultNoTickAcceptancePollTimeout = TimeSpan.FromHours(2);
+    private static readonly TimeSpan NoTickAcceptancePollInterval = TimeSpan.FromMilliseconds(100);
 
     private ConductorAdvanceResult ExecuteLanding(Goal goal, string goalPrefix, ConductorAutonomyPolicy policy)
     {
-        var backgroundAcceptance = TryRunTickFallbackAcceptance(goal, goalPrefix, policy);
-        if (backgroundAcceptance is not null)
+        var sharedAcceptance = TryRunFallbackAcceptance(goal, goalPrefix, policy);
+        if (sharedAcceptance is not null)
         {
-            return backgroundAcceptance;
+            return sharedAcceptance;
         }
 
         using var evidenceMutationLease = _tryAcquireEvidenceMutationLease(goal, "conductor:acceptance-and-land");
@@ -38,7 +42,7 @@ internal sealed partial class ConductorDriver
         AcceptanceVerificationSummary acceptance;
         try
         {
-            acceptance = RunInlineLandingAcceptance(goal);
+            acceptance = _runAcceptanceVerification(goal, null, null, CancellationToken.None);
         }
         catch (AcceptanceInfrastructureDeferredException ex)
         {
@@ -72,118 +76,38 @@ internal sealed partial class ConductorDriver
         return CompleteLandingAfterAcceptance(goal, goalPrefix, policy, acceptance);
     }
 
-    private AcceptanceVerificationSummary RunInlineLandingAcceptance(Goal goal)
-    {
-        var acquisition = _tryAcquireLandingStableSlotLease(goal);
-        if (acquisition is not DotnetBuildLeaseAcquisition.Acquired acquired)
-        {
-            RecordLandingStableSlotDegradation(goal, acquisition);
-            return _runAcceptanceVerification(goal, null, null, CancellationToken.None);
-        }
-
-        var stableSlotLease = acquired.Lease;
-        var stableSlotIndex = stableSlotLease.Environment.BuildPermitIndex;
-        try
-        {
-            return _runAcceptanceVerification(
-                goal,
-                stableSlotIndex,
-                stableSlotLease,
-                CancellationToken.None);
-        }
-        finally
-        {
-            TryDisposeInlineLandingStableSlotLease(stableSlotLease);
-        }
-    }
-
-    internal static DotnetBuildLeaseAcquisition TryAcquireInlineLandingStableSlotLease(
-        Func<TimeSpan, DotnetBuildLeaseAcquisition>? acquire = null) =>
-        (acquire ?? (timeout =>
-            DotnetBuildEnvironmentManager.TryAcquireFirstAvailableStableSlotExecutionLock(timeout)))(
-                InlineLandingStableSlotLeaseTimeout);
-
-    private void RecordLandingStableSlotDegradation(Goal goal, DotnetBuildLeaseAcquisition acquisition)
-    {
-        if (_cohortWorkspace is null && _executionDirectory is null)
-        {
-            return;
-        }
-
-        var (reason, acquisitionDetail) = acquisition switch
-        {
-            DotnetBuildLeaseAcquisition.SlotsBusy busy => ("slots-busy", FormatSlotsBusy(busy)),
-            DotnetBuildLeaseAcquisition.BuildLockBlocked blocked =>
-                ("build-lock-blocked", FormatBuildLockBlocked(blocked.Attribution)),
-            _ => throw new InvalidOperationException("Only failed stable-slot acquisitions can be recorded as degraded.")
-        };
-        var detail =
-            $"LANDING_STABLE_SLOT_DEGRADED goal={goal.Id.Value[..8]} reason={reason} " +
-            $"bound_ms={(long)InlineLandingStableSlotLeaseTimeout.TotalMilliseconds} {acquisitionDetail}";
-        var eventPath = _cohortWorkspace?.ConductEventsLogPath ?? Path.Combine(
-            _executionDirectory!,
-            ".orchestrator",
-            "logs",
-            ConductEventLogWriter.CurrentFileName);
-
-        try
-        {
-            if (!new ConductEventLogWriter(eventPath)
-                    .AppendRequired("landing-stable-slot-degraded", goal.Id.Value, detail))
-            {
-                TryWriteLandingStableSlotDegradationFallback($"{detail} event_write=failed");
-            }
-        }
-        catch (Exception ex)
-        {
-            TryWriteLandingStableSlotDegradationFallback(
-                $"{detail} event_write=failed error={ex.GetType().Name}");
-        }
-    }
-
-    private static void TryWriteLandingStableSlotDegradationFallback(string detail)
-    {
-        try
-        {
-            Console.Error.WriteLine(detail);
-        }
-        catch
-        {
-            // Observability remains best-effort; it must not replace the acceptance outcome.
-        }
-    }
-
-    private static void TryDisposeInlineLandingStableSlotLease(DotnetBuildEnvironmentLease? stableSlotLease)
-    {
-        try
-        {
-            stableSlotLease?.Dispose();
-        }
-        catch
-        {
-            // Acceptance outcome is dispositive; best-effort lease cleanup must not replace it.
-        }
-    }
-
     private ConductorAdvanceResult ExecuteVerifying(
-        Goal goal,
-        string goalPrefix,
-        ConductorAutonomyPolicy policy) =>
-        TryRunTickFallbackAcceptance(goal, goalPrefix, policy) ??
-        MakeResult(
-            goal.Id.Value,
-            goalPrefix,
-            policy,
-            new ConductorAdvanceOutcome.Held(
-                GoalLifecycleState.Verifying,
-                "Acceptance gate running in background; reconciliation will handle terminal artifact"));
-
-    private ConductorAdvanceResult? TryRunTickFallbackAcceptance(
         Goal goal,
         string goalPrefix,
         ConductorAutonomyPolicy policy)
     {
-        if (!_isConductorTick || !_parallelAcceptanceEnabled)
+        if (!_isConductorTick)
+        {
+            return MakeResult(
+                goal.Id.Value,
+                goalPrefix,
+                policy,
+                new ConductorAdvanceOutcome.Held(
+                    GoalLifecycleState.Verifying,
+                    "Acceptance gate is owned by the conduct loop; reconciliation will handle terminal artifact"));
+        }
+
+        return TryRunFallbackAcceptance(goal, goalPrefix, policy) ??
+            MakeResult(
+                goal.Id.Value,
+                goalPrefix,
+                policy,
+                new ConductorAdvanceOutcome.Held(
+                    GoalLifecycleState.Verifying,
+                    "Acceptance gate running in background; reconciliation will handle terminal artifact"));
+    }
+
+    private ConductorAdvanceResult? TryRunFallbackAcceptance(
+        Goal goal,
+        string goalPrefix,
+        ConductorAutonomyPolicy policy)
+    {
+        if (!_parallelAcceptanceEnabled)
         {
             return null;
         }
@@ -203,17 +127,89 @@ internal sealed partial class ConductorDriver
             return null;
         }
 
+        ConductorParallelAcceptanceRunAcceptance runAcceptance = _isConductorTick
+            ? RunParallelLandingAcceptance
+            : (attemptCandidate, attemptPolicy, lease, cancellationToken) =>
+                RunParallelLandingAcceptance(
+                    attemptCandidate,
+                    attemptPolicy,
+                    lease,
+                    cancellationToken,
+                    omitStableSlotIndexWithoutLease: true);
         var decision = _parallelAcceptanceAttemptCoordinator.Evaluate(
             candidate,
             policy,
-            RunParallelLandingAcceptance);
-        if (decision.Kind == ConductorParallelAcceptanceAttemptDecisionKind.Started &&
+            runAcceptance,
+            _isConductorTick
+                ? AcceptanceStableSlotExhaustionPolicy.Fail
+                : AcceptanceStableSlotExhaustionPolicy.DegradeToSerial);
+        if (_isConductorTick &&
+            decision.Kind == ConductorParallelAcceptanceAttemptDecisionKind.Started &&
             decision.Attempt.Outcome != ConductorParallelAcceptanceAttemptOutcome.Running)
         {
             decision = _parallelAcceptanceAttemptCoordinator.Evaluate(
                 candidate,
                 policy,
-                RunParallelLandingAcceptance);
+                runAcceptance);
+        }
+
+        if (!_isConductorTick &&
+            decision.Kind is ConductorParallelAcceptanceAttemptDecisionKind.Started or
+                ConductorParallelAcceptanceAttemptDecisionKind.Running)
+        {
+            if (decision.Kind == ConductorParallelAcceptanceAttemptDecisionKind.Started)
+            {
+                EmitNoTickAcceptanceLifecycle(candidate, "started", decision.Attempt);
+            }
+            var deadline = _utcNow().Add(_noTickAcceptancePollTimeout);
+            while (decision.Kind is ConductorParallelAcceptanceAttemptDecisionKind.Started or
+                   ConductorParallelAcceptanceAttemptDecisionKind.Running)
+            {
+                if (_utcNow() >= deadline)
+                {
+                    return MakeResult(
+                        goal.Id.Value,
+                        goalPrefix,
+                        policy,
+                        new ConductorAdvanceOutcome.Held(
+                            GoalLifecycleState.Verified,
+                            $"Acceptance verification remains in background after bounded no-tick wait; attempt={decision.Attempt.AttemptId}."));
+                }
+
+                _noTickAcceptancePollDelay(NoTickAcceptancePollInterval);
+                try
+                {
+                    decision = _parallelAcceptanceAttemptCoordinator.ObserveExistingAttempt(
+                        decision.Attempt,
+                        candidate);
+                }
+                catch (InvalidDataException ex) when (
+                    ex.Message.Contains(" is unreadable.", StringComparison.Ordinal))
+                {
+                    continue;
+                }
+                catch (InvalidDataException ex) when (
+                    ex.Message.Contains("after reconciliation", StringComparison.Ordinal))
+                {
+                    return MakeResult(
+                        goal.Id.Value,
+                        goalPrefix,
+                        policy,
+                        new ConductorAdvanceOutcome.Held(
+                            GoalLifecycleState.Verified,
+                            $"Acceptance attempt reconciliation ownership changed; attempt={decision.Attempt.AttemptId}."));
+                }
+                catch (InvalidDataException)
+                {
+                    return MakeResult(
+                        goal.Id.Value,
+                        goalPrefix,
+                        policy,
+                        new ConductorAdvanceOutcome.Held(
+                            GoalLifecycleState.Verified,
+                            $"Acceptance attempt metadata or ownership changed; attempt={decision.Attempt.AttemptId}."));
+                }
+            }
         }
 
         switch (decision.Kind)
@@ -261,6 +257,13 @@ internal sealed partial class ConductorDriver
                     run,
                     evidenceMutationLeaseHeld,
                     decision.Attempt);
+                if (!_isConductorTick)
+                {
+                    EmitNoTickAcceptanceLifecycle(
+                        candidate,
+                        ConductorBatchLoop.AcceptanceRunDisposition(run),
+                        decision.Attempt);
+                }
                 return result;
 
             case ConductorParallelAcceptanceAttemptDecisionKind.TerminalWithoutRun:
@@ -278,11 +281,136 @@ internal sealed partial class ConductorDriver
                     policy,
                     decision.Attempt);
                 _parallelAcceptanceAttemptCoordinator.MarkReconciled(decision.Attempt);
+                if (!_isConductorTick)
+                {
+                    EmitNoTickAcceptanceLifecycle(
+                        candidate,
+                        ConductorBatchLoop.AcceptanceAttemptOutcomeToken(decision.Attempt.Outcome),
+                        decision.Attempt);
+                }
                 return terminal;
 
             default:
                 throw new InvalidOperationException(
                     $"Unsupported acceptance attempt decision '{decision.Kind}'.");
         }
+    }
+
+    private void EmitNoTickAcceptanceLifecycle(
+        ConductorParallelAcceptanceCandidate candidate,
+        string result,
+        ConductorParallelAcceptanceAttempt attempt)
+    {
+        try
+        {
+            _acceptanceEventSink(
+                candidate.GoalPrefix,
+                AcceptanceLifecycleEventFormatter.Format(
+                    candidate.GoalPrefix,
+                    candidate.SlotIndex,
+                    result,
+                    attempt.AttemptId,
+                    tick: 0));
+        }
+        catch
+        {
+            // Advisory observability cannot replace a computed acceptance verdict.
+        }
+    }
+
+    private static (Action<string, string> EventSink, Action<TimeSpan> PollDelay, TimeSpan PollTimeout)
+        CreateProductionAcceptanceWaitConfiguration(OrchestratorWorkspace workspace)
+    {
+        var writer = new ConductEventLogWriter(workspace.ConductEventsLogPath);
+        return ((goalId, detail) => writer.Append("acceptance", goalId, detail), Thread.Sleep,
+            DefaultNoTickAcceptancePollTimeout);
+    }
+
+    internal ConductorDriver(
+        AgentOrchestratorKernel kernel,
+        OrchestratorWorkspace workspace,
+        IGoalAcceptanceVerifier acceptanceVerifier,
+        IReadOnlyList<AgentDefinition> agents,
+        WorkerProfileCatalog profiles,
+        ConductorParallelAcceptanceAttemptCoordinator parallelAcceptanceAttemptCoordinator)
+        : this(kernel, workspace, acceptanceVerifier, agents, profiles)
+    {
+        _parallelAcceptanceAttemptCoordinator = parallelAcceptanceAttemptCoordinator;
+    }
+
+    internal ConductorParallelAcceptanceRunResult RunParallelLandingAcceptance(
+        ConductorParallelAcceptanceCandidate candidate,
+        ConductorAutonomyPolicy policy,
+        DotnetBuildEnvironmentLease? stableSlotLease,
+        CancellationToken cancellationToken) =>
+        RunParallelLandingAcceptance(
+            candidate,
+            policy,
+            stableSlotLease,
+            cancellationToken,
+            omitStableSlotIndexWithoutLease: false);
+
+    internal ConductorParallelAcceptanceRunResult RunParallelLandingAcceptance(
+        ConductorParallelAcceptanceCandidate candidate,
+        ConductorAutonomyPolicy policy,
+        DotnetBuildEnvironmentLease? stableSlotLease,
+        CancellationToken cancellationToken,
+        bool omitStableSlotIndexWithoutLease)
+    {
+        var effectiveCandidate = candidate;
+        var evidenceMutationLease = _tryAcquireEvidenceMutationLease(
+            candidate.Goal,
+            "conductor:parallel-acceptance");
+        if (evidenceMutationLease is null)
+        {
+            return ConductorParallelAcceptanceRunResult.Early(
+                candidate,
+                ReplacementEvidenceMutationHeld(candidate.Goal, candidate.GoalPrefix, policy),
+                null);
+        }
+        ConductorParallelAcceptanceRunResult result;
+        try
+        {
+            var early = RebaseBeforeAcceptance(
+                candidate.Goal,
+                candidate.GoalPrefix,
+                policy,
+                applySideEffects: false,
+                out var earlyOutcome);
+            if (early is not null)
+            {
+                result = ConductorParallelAcceptanceRunResult.Early(candidate, early, earlyOutcome);
+                return result;
+            }
+
+            effectiveCandidate = RefreshParallelAcceptanceCandidate(candidate);
+            result = ConductorParallelAcceptanceRunResult.Accepted(
+                effectiveCandidate,
+                _runAcceptanceVerification(
+                    effectiveCandidate.Goal,
+                    omitStableSlotIndexWithoutLease && stableSlotLease is null
+                        ? null
+                        : effectiveCandidate.SlotIndex,
+                    stableSlotLease,
+                    cancellationToken));
+        }
+        catch (Exception ex)
+        {
+            result = ConductorParallelAcceptanceRunResult.Fault(effectiveCandidate, ex);
+        }
+        finally
+        {
+            try
+            {
+                evidenceMutationLease.Dispose();
+            }
+            catch
+            {
+                // Cleanup cannot replace a computed acceptance result. Store-backed leases emit
+                // typed failure evidence and retain their owner-qualified row for expiry recovery.
+            }
+        }
+
+        return result;
     }
 }
