@@ -3683,11 +3683,10 @@ internal sealed partial class ConductorDriver
                 $"trxCount={receipt.GateTestResultPaths.Count}");
         }
 
-        return CohortHeld(
-            goals,
-            policy,
-            receipt,
-            receipt.Outcome == AcceptanceCohortGateOutcome.Failed
+        var shouldUseOrdinaryFallback = receipt.Outcome == AcceptanceCohortGateOutcome.Failed && receipt.Attribution == AcceptanceCohortAttributionOutcome.NotApplicable;
+        return shouldUseOrdinaryFallback
+            ? CohortOrdinaryFallback(receipt, "deterministic cohort content failure has no member attribution; members remain eligible for ordinary acceptance")
+            : CohortHeld(goals, policy, receipt, receipt.Outcome == AcceptanceCohortGateOutcome.Failed
                 ? $"deterministic RED; attribution={receipt.Attribution}"
                 : $"cohort infrastructure outcome={receipt.Outcome}; no attribution or landing");
 

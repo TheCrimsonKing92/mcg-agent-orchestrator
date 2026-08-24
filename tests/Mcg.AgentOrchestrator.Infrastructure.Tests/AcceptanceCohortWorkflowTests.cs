@@ -2624,6 +2624,8 @@ public sealed class AcceptanceCohortWorkflowTests : GoalWorktreeTestBase
             Assert.Equal(0, verifier.RunCount);
             Assert.Equal(AcceptanceCohortGateOutcome.Failed, result.Receipt?.Outcome);
             Assert.Equal(AcceptanceCohortAttributionOutcome.NotApplicable, result.Receipt?.Attribution);
+            Assert.Empty(result.MemberResults);
+            Assert.Contains("fallback=ordinary", result.Detail, StringComparison.Ordinal);
             var failedChecks = string.Join(Environment.NewLine, result.Receipt!.FailedChecks);
             Assert.Contains("First.cs has 3 lines", failedChecks, StringComparison.Ordinal);
             Assert.Contains("recorded ceiling of 2", failedChecks, StringComparison.Ordinal);
@@ -2642,6 +2644,26 @@ public sealed class AcceptanceCohortWorkflowTests : GoalWorktreeTestBase
                     new GateReadyCandidateProjectionResult.Ready(selection.Members[1]))
             ], suppressedPairFingerprints: store.ReadSuppressedPairs());
             Assert.NotNull(eligibility.Selection);
+
+            BatchTickSummary? ordinaryTick = null;
+            _ = new ConductorBatchLoop().Run(
+                kernel,
+                driver,
+                ConductorAutonomyPolicy.Permissive,
+                Path.Combine(repo, "stop-does-not-exist"),
+                maxIterations: 1,
+                onTick: tick => ordinaryTick = tick);
+
+            foreach (var goal in new[] { firstGoal, secondGoal })
+            {
+                Assert.Contains(ordinaryTick!.ProgressLines!, line =>
+                    line.StartsWith($"ACCEPTANCE goal={goal.Id.Value[..8]}", StringComparison.Ordinal) &&
+                    line.Contains("result=started", StringComparison.Ordinal));
+                Assert.DoesNotContain(ordinaryTick.ProgressLines!, line =>
+                    line.Contains($"goal={goal.Id.Value[..8]}", StringComparison.Ordinal) &&
+                    line.Contains("result=held", StringComparison.Ordinal) &&
+                    line.Contains("cohort", StringComparison.OrdinalIgnoreCase));
+            }
         }
         finally
         {
