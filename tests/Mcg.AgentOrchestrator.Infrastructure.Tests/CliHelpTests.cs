@@ -38,6 +38,7 @@ public sealed class CliHelpTests
     [Xunit.InlineData(new[] { "refresh-dispatch", "--help" }, "refresh-dispatch <task-number>", "--history-limit <n>")]
     [Xunit.InlineData(new[] { "workspace", "create", "-h" }, "workspace create", "--help")]
     [Xunit.InlineData(new[] { "status", "--help" }, "status", "-h")]
+    [Xunit.InlineData(new[] { "status", "--help" }, "status", "--tasks-only")]
     public void CliHelpPrintsUsageWithoutExecutingCommand(string[] args, string synopsisToken, string optionToken)
     {
         var root = CreateTempDirectory();
@@ -675,6 +676,16 @@ public sealed class CliHelpTests
                 CliCommandHelp.ThrowIfInvalidFlags([command, "--zz-not-a-real-flag"]));
             Xunit.Assert.Contains("Unknown option '--zz-not-a-real-flag'", exception.Message, StringComparison.Ordinal);
         }
+    }
+
+    [Xunit.Fact(DisplayName = "Cli_status_rejects_unknown_option")]
+    public void CliStatusRejectsUnknownOption()
+    {
+        var exception = Xunit.Assert.Throws<ArgumentException>(() =>
+            CliCommandHelp.ThrowIfInvalidFlags(["status", "--zz-not-a-real-flag"]));
+
+        Xunit.Assert.Contains("Unknown option '--zz-not-a-real-flag'", exception.Message, StringComparison.Ordinal);
+        Xunit.Assert.Contains("Usage:", exception.Message, StringComparison.Ordinal);
     }
 
     [Xunit.Fact(DisplayName = "Cli_newly_validated_goal_verbs_accept_existing_flags")]

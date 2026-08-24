@@ -4359,6 +4359,7 @@ internal static class CliPersistentStateRunner
             return parts[0].ToLowerInvariant() switch
             {
                 "next" => GetOptionalArgument(parts, "--full"),
+                "status" => GetOptionalArgument(parts, "--tasks-only"),
                 "goal-changes" => GetOptionalArgument(parts, "--role", "--task", "--committed", "--working", "--all", "--flat", "--json"),
                 "failure-triage" => GetOptionalArgument(parts, "--autonomy", "--policy"),
                 "supervisor" => GetOptionalArgument(parts, "--apply-safe", "--autonomy", "--policy"),

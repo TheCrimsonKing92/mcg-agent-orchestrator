@@ -466,6 +466,7 @@ internal static class CliCommandHelp
         new Dictionary<string, IReadOnlySet<string>>(StringComparer.OrdinalIgnoreCase)
         {
             ["project"] = Flags("--root"),
+            ["status"] = Flags("--tasks-only"),
             ["provider-smoke"] = Flags("--confirm-all", "--confirm-paid-smoke"),
             ["prototype-ui"] = DashboardFlags(),
             ["serve-dashboard"] = DashboardFlags(),
@@ -1170,6 +1171,10 @@ internal static class CliCommandHelp
             else if (flag.Equals("--history", StringComparison.OrdinalIgnoreCase))
             {
                 Console.WriteLine($"  {flag}        Include the complete durable task history.");
+            }
+            else if (flag.Equals("--tasks-only", StringComparison.OrdinalIgnoreCase))
+            {
+                Console.WriteLine($"  {flag}        Show only the goal identifier, status, and task list.");
             }
             else if (flag.Equals("--status", StringComparison.OrdinalIgnoreCase))
             {

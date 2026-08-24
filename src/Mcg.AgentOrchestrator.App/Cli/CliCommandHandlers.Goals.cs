@@ -1002,13 +1002,24 @@ private static bool? TryExecuteGoalCommand(string command, IReadOnlyList<string>
             return false;
 
         case "status":
-            context.CurrentGoal = OrchestratorEntityResolver.ResolveGoal(context.Kernel, context.CurrentGoal, parts.Count > 1 ? parts[1] : null);
+            var tasksOnly = HasCliConfirmation(parts, "--tasks-only");
+            context.CurrentGoal = OrchestratorEntityResolver.ResolveGoal(
+                context.Kernel,
+                context.CurrentGoal,
+                GetOptionalArgument(parts, "--tasks-only"));
             ConsoleViews.PrintGoal(
                 context.CurrentGoal,
                 ResolveGoalFriendlyLabel(context.CurrentGoal, context.Workspace.BacklogStorePath),
                 ResolveGoalStatusText(context.Workspace, context.CurrentGoal),
-                new PortfolioStore(context.Workspace.PortfolioStorePath).GetGoalMembershipAsync(context.CurrentGoal.Id.Value).GetAwaiter().GetResult());
-            PrintGoalCleanupBackoffStatus(context.Workspace.ExecutionDirectory, context.CurrentGoal.Id);
+                tasksOnly
+                    ? null
+                    : new PortfolioStore(context.Workspace.PortfolioStorePath).GetGoalMembershipAsync(context.CurrentGoal.Id.Value).GetAwaiter().GetResult(),
+                tasksOnly);
+            if (!tasksOnly)
+            {
+                PrintGoalCleanupBackoffStatus(context.Workspace.ExecutionDirectory, context.CurrentGoal.Id);
+            }
+
             return false;
 
         case "monitor":
