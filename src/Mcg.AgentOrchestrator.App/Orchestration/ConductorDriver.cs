@@ -1197,8 +1197,7 @@ internal sealed partial class ConductorDriver
         Action<Goal, string>? recordMissingBranchRetirement = null,
         Func<Goal, IReadOnlyList<string>>? getLandingFileScopes = null,
         Func<Goal, int?, AcceptanceVerificationSummary>? runAcceptanceVerificationWithSlot = null,
-        Func<Goal, int?, DotnetBuildEnvironmentLease?, CancellationToken, AcceptanceVerificationSummary>? runAcceptanceVerificationWithLease = null,
-        Func<Goal, DotnetBuildLeaseAcquisition>? tryAcquireLandingStableSlotLease = null,
+        Func<Goal, int?, DotnetBuildEnvironmentLease?, CancellationToken, AcceptanceVerificationSummary>? runAcceptanceVerificationWithLease = null, Func<Goal, DotnetBuildLeaseAcquisition>? tryAcquireLandingStableSlotLease = null,
         Func<bool>? hasGateReadyGoal = null,
         ConductorParallelAcceptanceAttemptCoordinator? parallelAcceptanceAttemptCoordinator = null,
         Func<Goal, string, FocusedEvidenceRunResult>? runFocusedEvidence = null,
@@ -1235,8 +1234,7 @@ internal sealed partial class ConductorDriver
         Func<Goal, string, IDisposable?>? tryAcquireEvidenceMutationLease = null,
         Func<Goal, DeveloperBranchIntegrationResult>? integrateMainBeforeDeveloperDispatch = null,
         Func<Goal, ReconcileAcceptanceLeaseState?>? getEvidenceMutationLease = null,
-        Func<DateTimeOffset>? utcNow = null,
-        string? executionDirectory = null)
+        Func<DateTimeOffset>? utcNow = null, string? executionDirectory = null)
     {
         _getFacts = getFacts;
         _getRunningPaidWorkerCount = getRunningPaidWorkerCount;

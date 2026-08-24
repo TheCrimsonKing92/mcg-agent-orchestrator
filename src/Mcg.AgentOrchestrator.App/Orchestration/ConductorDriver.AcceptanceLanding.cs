@@ -105,7 +105,7 @@ internal sealed partial class ConductorDriver
 
     private void RecordLandingStableSlotDegradation(Goal goal, DotnetBuildLeaseAcquisition acquisition)
     {
-        if (_executionDirectory is null)
+        if (_cohortWorkspace is null && _executionDirectory is null)
         {
             return;
         }
@@ -120,19 +120,36 @@ internal sealed partial class ConductorDriver
         var detail =
             $"LANDING_STABLE_SLOT_DEGRADED goal={goal.Id.Value[..8]} reason={reason} " +
             $"bound_ms={(long)InlineLandingStableSlotLeaseTimeout.TotalMilliseconds} {acquisitionDetail}";
+        var eventPath = _cohortWorkspace?.ConductEventsLogPath ?? Path.Combine(
+            _executionDirectory!,
+            ".orchestrator",
+            "logs",
+            ConductEventLogWriter.CurrentFileName);
 
         try
         {
-            _ = new ConductEventLogWriter(Path.Combine(
-                    _executionDirectory,
-                    ".orchestrator",
-                    "logs",
-                    ConductEventLogWriter.CurrentFileName))
-                .AppendRequired("landing-stable-slot-degraded", goal.Id.Value, detail);
+            if (!new ConductEventLogWriter(eventPath)
+                    .AppendRequired("landing-stable-slot-degraded", goal.Id.Value, detail))
+            {
+                TryWriteLandingStableSlotDegradationFallback($"{detail} event_write=failed");
+            }
+        }
+        catch (Exception ex)
+        {
+            TryWriteLandingStableSlotDegradationFallback(
+                $"{detail} event_write=failed error={ex.GetType().Name}");
+        }
+    }
+
+    private static void TryWriteLandingStableSlotDegradationFallback(string detail)
+    {
+        try
+        {
+            Console.Error.WriteLine(detail);
         }
         catch
         {
-            // Degradation observability is advisory; it must not replace the acceptance outcome.
+            // Observability remains best-effort; it must not replace the acceptance outcome.
         }
     }
 
