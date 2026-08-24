@@ -7,6 +7,7 @@ public sealed class ProcessSpawningCollectionSplitTests
 
     private static readonly Type[] MovedClasses =
     [
+        typeof(AcceptanceFailureCensusScriptTests),
         typeof(AssemblyTempRedirectTests),
         typeof(AssemblyTempRedirectChildSmokeTests),
         typeof(CitedPriorEvidenceResolverTests),
