@@ -79,15 +79,28 @@ internal sealed partial class ConductorDriver
     private ConductorAdvanceResult ExecuteVerifying(
         Goal goal,
         string goalPrefix,
-        ConductorAutonomyPolicy policy) =>
-        TryRunFallbackAcceptance(goal, goalPrefix, policy) ??
-        MakeResult(
-            goal.Id.Value,
-            goalPrefix,
-            policy,
-            new ConductorAdvanceOutcome.Held(
-                GoalLifecycleState.Verifying,
-                "Acceptance gate running in background; reconciliation will handle terminal artifact"));
+        ConductorAutonomyPolicy policy)
+    {
+        if (!_isConductorTick)
+        {
+            return MakeResult(
+                goal.Id.Value,
+                goalPrefix,
+                policy,
+                new ConductorAdvanceOutcome.Held(
+                    GoalLifecycleState.Verifying,
+                    "Acceptance gate is owned by the conduct loop; reconciliation will handle terminal artifact"));
+        }
+
+        return TryRunFallbackAcceptance(goal, goalPrefix, policy) ??
+            MakeResult(
+                goal.Id.Value,
+                goalPrefix,
+                policy,
+                new ConductorAdvanceOutcome.Held(
+                    GoalLifecycleState.Verifying,
+                    "Acceptance gate running in background; reconciliation will handle terminal artifact"));
+    }
 
     private ConductorAdvanceResult? TryRunFallbackAcceptance(
         Goal goal,
@@ -171,6 +184,11 @@ internal sealed partial class ConductorDriver
                         candidate);
                 }
                 catch (InvalidDataException ex) when (
+                    ex.Message.Contains(" is unreadable.", StringComparison.Ordinal))
+                {
+                    continue;
+                }
+                catch (InvalidDataException ex) when (
                     ex.Message.Contains("after reconciliation", StringComparison.Ordinal))
                 {
                     return MakeResult(
@@ -180,6 +198,16 @@ internal sealed partial class ConductorDriver
                         new ConductorAdvanceOutcome.Held(
                             GoalLifecycleState.Verified,
                             $"Acceptance attempt reconciliation ownership changed; attempt={decision.Attempt.AttemptId}."));
+                }
+                catch (InvalidDataException)
+                {
+                    return MakeResult(
+                        goal.Id.Value,
+                        goalPrefix,
+                        policy,
+                        new ConductorAdvanceOutcome.Held(
+                            GoalLifecycleState.Verified,
+                            $"Acceptance attempt metadata or ownership changed; attempt={decision.Attempt.AttemptId}."));
                 }
             }
         }
@@ -271,15 +299,24 @@ internal sealed partial class ConductorDriver
     private void EmitNoTickAcceptanceLifecycle(
         ConductorParallelAcceptanceCandidate candidate,
         string result,
-        ConductorParallelAcceptanceAttempt attempt) =>
-        _acceptanceEventSink(
-            candidate.Goal.Id.Value,
-            AcceptanceLifecycleEventFormatter.Format(
-                candidate.GoalPrefix,
-                candidate.SlotIndex,
-                result,
-                attempt.AttemptId,
-                tick: 0));
+        ConductorParallelAcceptanceAttempt attempt)
+    {
+        try
+        {
+            _acceptanceEventSink(
+                candidate.Goal.Id.Value,
+                AcceptanceLifecycleEventFormatter.Format(
+                    candidate.GoalPrefix,
+                    candidate.SlotIndex,
+                    result,
+                    attempt.AttemptId,
+                    tick: 0));
+        }
+        catch
+        {
+            // Advisory observability cannot replace a computed acceptance verdict.
+        }
+    }
 
     private static (Action<string, string> EventSink, Action<TimeSpan> PollDelay, TimeSpan PollTimeout)
         CreateProductionAcceptanceWaitConfiguration(OrchestratorWorkspace workspace)

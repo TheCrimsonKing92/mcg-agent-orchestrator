@@ -1396,8 +1396,9 @@ internal sealed class ConductorParallelAcceptanceAttemptCoordinator
             {
                 stableSlotLease = _acquireStableSlotLease(attempt, candidate);
             }
-            catch (DotnetBuildSlotsBusyException) when (
-                attempt.StableSlotExhaustionPolicy == AcceptanceStableSlotExhaustionPolicy.DegradeToSerial)
+            catch (Exception ex) when (
+                attempt.StableSlotExhaustionPolicy == AcceptanceStableSlotExhaustionPolicy.DegradeToSerial &&
+                ex is DotnetBuildSlotsBusyException or BuildLockBlockedException)
             {
                 EmitAttemptLeaseReceipt(
                     "degrade",
@@ -1405,7 +1406,9 @@ internal sealed class ConductorParallelAcceptanceAttemptCoordinator
                     candidate,
                     holderPid: null,
                     permitName: AllBuildPermitNames(),
-                    waitReason: AcceptanceBuildPermitWaitReason.AllPermitsBusy);
+                    waitReason: ex is DotnetBuildSlotsBusyException
+                        ? AcceptanceBuildPermitWaitReason.AllPermitsBusy
+                        : null);
                 stableSlotLease = null;
             }
             if (stableSlotLease is not null)
