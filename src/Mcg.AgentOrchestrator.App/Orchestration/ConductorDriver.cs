@@ -96,7 +96,7 @@ internal sealed partial class ConductorDriver
     private readonly Func<TimeSpan, string> _buildServerShutdown;
     private readonly TimeSpan _buildServerShutdownTimeout;
     private readonly Func<Goal, int?, DotnetBuildEnvironmentLease?, CancellationToken, AcceptanceVerificationSummary> _runAcceptanceVerification;
-    private readonly Func<Goal, DotnetBuildEnvironmentLease?> _tryAcquireLandingStableSlotLease;
+    private readonly Func<Goal, DotnetBuildLeaseAcquisition> _tryAcquireLandingStableSlotLease;
     private readonly Action<Goal, AcceptanceVerificationSummary> _runAdvisorySemanticAcceptance;
     private readonly Func<Goal, string, DotnetBuildEnvironmentLease?, CancellationToken, FocusedEvidenceRunResult> _runFocusedEvidence;
     private readonly Func<Goal, string, DotnetBuildEnvironmentLease?, CancellationToken, FocusedEvidenceRunResult> _runDualArmFocusedEvidence;
@@ -1197,8 +1197,7 @@ internal sealed partial class ConductorDriver
         Action<Goal, string>? recordMissingBranchRetirement = null,
         Func<Goal, IReadOnlyList<string>>? getLandingFileScopes = null,
         Func<Goal, int?, AcceptanceVerificationSummary>? runAcceptanceVerificationWithSlot = null,
-        Func<Goal, int?, DotnetBuildEnvironmentLease?, CancellationToken, AcceptanceVerificationSummary>? runAcceptanceVerificationWithLease = null,
-        Func<Goal, DotnetBuildEnvironmentLease?>? tryAcquireLandingStableSlotLease = null,
+        Func<Goal, int?, DotnetBuildEnvironmentLease?, CancellationToken, AcceptanceVerificationSummary>? runAcceptanceVerificationWithLease = null, Func<Goal, DotnetBuildLeaseAcquisition>? tryAcquireLandingStableSlotLease = null,
         Func<bool>? hasGateReadyGoal = null,
         ConductorParallelAcceptanceAttemptCoordinator? parallelAcceptanceAttemptCoordinator = null,
         Func<Goal, string, FocusedEvidenceRunResult>? runFocusedEvidence = null,
@@ -1235,7 +1234,7 @@ internal sealed partial class ConductorDriver
         Func<Goal, string, IDisposable?>? tryAcquireEvidenceMutationLease = null,
         Func<Goal, DeveloperBranchIntegrationResult>? integrateMainBeforeDeveloperDispatch = null,
         Func<Goal, ReconcileAcceptanceLeaseState?>? getEvidenceMutationLease = null,
-        Func<DateTimeOffset>? utcNow = null)
+        Func<DateTimeOffset>? utcNow = null, string? executionDirectory = null)
     {
         _getFacts = getFacts;
         _getRunningPaidWorkerCount = getRunningPaidWorkerCount;
@@ -1257,7 +1256,8 @@ internal sealed partial class ConductorDriver
             ?? (runAcceptanceVerificationWithSlot is not null
                 ? ((goal, slot, _, _) => runAcceptanceVerificationWithSlot(goal, slot))
                 : ((goal, _, _, _) => runAcceptanceVerification(goal)));
-        _tryAcquireLandingStableSlotLease = tryAcquireLandingStableSlotLease ?? (_ => null);
+        _tryAcquireLandingStableSlotLease = tryAcquireLandingStableSlotLease ?? (_ =>
+            new DotnetBuildLeaseAcquisition.SlotsBusy("landing-stable-slot-not-configured", []));
         _runAdvisorySemanticAcceptance = runAdvisorySemanticAcceptance ?? ((_, _) => { });
         _runFocusedEvidence = runFocusedEvidence is null
             ? ((_, request, _, _) => new FocusedEvidenceRunResult(
@@ -1343,7 +1343,7 @@ internal sealed partial class ConductorDriver
             tryAcquireEvidenceMutationLease ?? ((_, _) => NoopEvidenceMutationLease.Instance);
         _getEvidenceMutationLease = getEvidenceMutationLease ?? (_ => null);
         _utcNow = utcNow ?? (() => DateTimeOffset.UtcNow);
-        _executionDirectory = null;
+        _executionDirectory = executionDirectory;
         _parallelAcceptanceEnabled =
             runAcceptanceVerificationWithSlot is not null ||
             runAcceptanceVerificationWithLease is not null;

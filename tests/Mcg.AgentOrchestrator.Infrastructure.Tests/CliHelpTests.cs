@@ -677,6 +677,17 @@ public sealed class CliHelpTests
         }
     }
 
+    [Xunit.Fact]
+    public void TrialCompareIsAnOperatorCommandWithDocumentedFlags()
+    {
+        Xunit.Assert.Contains(
+            CliArgumentParser.RecognizedCommands,
+            command => command.Equals("trial-compare", StringComparison.OrdinalIgnoreCase));
+
+        CliCommandHelp.ThrowIfInvalidFlags(
+            ["trial-compare", "--spec", "harnesses.json", "--receipts", "receipts", "--timeout-seconds", "30"]);
+    }
+
     [Xunit.Fact(DisplayName = "Cli_newly_validated_goal_verbs_accept_existing_flags")]
     public void CliNewlyValidatedGoalVerbsAcceptExistingFlags()
     {

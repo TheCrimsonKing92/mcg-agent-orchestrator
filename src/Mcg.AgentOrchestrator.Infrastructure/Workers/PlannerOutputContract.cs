@@ -656,7 +656,7 @@ internal static partial class PlannerOutputContract
                 continue;
             }
 
-            if (!hasExplicitDirectory && contextualDirectory is null)
+            if (!hasExplicitDirectory)
             {
                 var filename = Path.GetFileName(citedPath);
                 if (!string.IsNullOrWhiteSpace(filename) && CitedFilePath().IsMatch(citation))

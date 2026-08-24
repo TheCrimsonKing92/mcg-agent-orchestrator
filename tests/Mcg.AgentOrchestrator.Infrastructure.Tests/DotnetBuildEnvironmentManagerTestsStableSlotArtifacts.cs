@@ -110,13 +110,21 @@ public sealed class DotnetBuildEnvironmentManagerTestsStableSlotArtifacts
             }
 
             var waits = new List<DotnetBuildStableSlotWait>();
+            var clock = new RecordingTimeProvider();
+            var delays = new List<TimeSpan>();
             DotnetBuildLeaseAcquisition? result = null;
             LockAttribution.AttributeForTests = (path, _) => new BuildLockAttribution(path, [], "test");
             var output = AsyncLocalConsoleRouter.Capture(() =>
             {
                 result = DotnetBuildEnvironmentManager.TryAcquireFirstAvailableStableSlotExecutionLock(
-                    TimeSpan.FromMilliseconds(150),
-                    waits.Add);
+                    TimeSpan.FromSeconds(2),
+                    waits.Add,
+                    timeProvider: clock,
+                    sleep: delay =>
+                    {
+                        delays.Add(delay);
+                        clock.Advance(delay);
+                    });
             });
 
             var busy = Assert.IsType<DotnetBuildLeaseAcquisition.SlotsBusy>(result);
@@ -126,6 +134,9 @@ public sealed class DotnetBuildEnvironmentManagerTestsStableSlotArtifacts
             var wait = Assert.Single(waits);
             Assert.Equal(0, wait.SlotIndex);
             Assert.Equal(Environment.ProcessId, wait.OwnerProcessId);
+            Assert.True(delays.Count >= 2, "Expected the bounded acquisition to retry.");
+            Assert.All(delays, delay => Assert.Equal(TimeSpan.FromMilliseconds(100), delay));
+            Assert.Equal(TimeSpan.FromSeconds(2), TimeSpan.FromTicks(delays.Sum(delay => delay.Ticks)));
             Assert.Contains("SLOTS_BUSY", output);
             Assert.Contains("wantedBy=first-available-stable-slot", output);
         }
