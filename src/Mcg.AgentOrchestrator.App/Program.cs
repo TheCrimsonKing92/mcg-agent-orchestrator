@@ -225,7 +225,7 @@ else
 {
     try
     {
-        operatorChannel = OperatorChannelFactory.Create(operatorCatalog, operatorBotToken, workspace.OrchestratorDirectory);
+        operatorChannel = OperatorChannelComposition.Create(operatorCatalog, operatorBotToken, workspace.OrchestratorDirectory);
     }
     catch
     {

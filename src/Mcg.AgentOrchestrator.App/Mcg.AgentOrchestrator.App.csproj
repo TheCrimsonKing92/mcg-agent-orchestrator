@@ -18,5 +18,6 @@
     <ProjectReference Include="..\Mcg.AgentOrchestrator.Core\Mcg.AgentOrchestrator.Core.csproj" AdditionalProperties="DefaultItemExcludesInProjectFolder=$(DefaultItemExcludesInProjectFolder);**\obj\**;**\artifacts\**" />
     <ProjectReference Include="..\Mcg.AgentOrchestrator.Infrastructure\Mcg.AgentOrchestrator.Infrastructure.csproj" AdditionalProperties="DefaultItemExcludesInProjectFolder=$(DefaultItemExcludesInProjectFolder);**\obj\**;**\artifacts\**" />
     <ProjectReference Include="..\Mcg.AgentOrchestrator.Infrastructure.Providers\Mcg.AgentOrchestrator.Infrastructure.Providers.csproj" AdditionalProperties="DefaultItemExcludesInProjectFolder=$(DefaultItemExcludesInProjectFolder);**\obj\**;**\artifacts\**" />
+    <ProjectReference Include="..\Mcg.AgentOrchestrator.Infrastructure.OperatorComms\Mcg.AgentOrchestrator.Infrastructure.OperatorComms.csproj" AdditionalProperties="DefaultItemExcludesInProjectFolder=$(DefaultItemExcludesInProjectFolder);**\obj\**;**\artifacts\**" />
   </ItemGroup>
 </Project>

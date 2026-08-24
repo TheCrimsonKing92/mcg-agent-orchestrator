@@ -1,3 +1,5 @@
+using Mcg.AgentOrchestrator.Core;
+
 namespace Mcg.AgentOrchestrator.Infrastructure;
 
 public static class OperatorChannelFactory
@@ -33,20 +35,22 @@ public static class OperatorChannelFactory
     public static IOperatorChannel Create(
         OperatorChannelCatalog catalog,
         string? botToken,
-        string stateDirectory)
+        ICollaborationItemStore store,
+        Func<string, CancellationToken, Task<long?>> goalStateVersionReader)
     {
         if (!IsDiscordConfigured(catalog, botToken, out _))
             return NullOperatorChannel.Instance;
 
         return new DiscordOperatorChannel(
-            CollaborationItemStore.ForDirectory(stateDirectory),
-            BuildGoalStateVersionReader(stateDirectory));
+            store,
+            goalStateVersionReader);
     }
 
     public static IOperatorChannel CreateWithApi(
         OperatorChannelCatalog catalog,
         IDiscordForumApi api,
-        string stateDirectory)
+        ICollaborationItemStore store,
+        Func<string, CancellationToken, Task<long?>> goalStateVersionReader)
     {
         if (catalog.IsNull ||
             !catalog.ChannelType.Equals("discord", StringComparison.OrdinalIgnoreCase) ||
@@ -55,8 +59,8 @@ public static class OperatorChannelFactory
             return NullOperatorChannel.Instance;
 
         return new DiscordOperatorChannel(
-            CollaborationItemStore.ForDirectory(stateDirectory),
-            BuildGoalStateVersionReader(stateDirectory));
+            store,
+            goalStateVersionReader);
     }
 
     public static DiscordGatewayListener? CreateGatewayListener(
@@ -66,7 +70,8 @@ public static class OperatorChannelFactory
         string stateDirectory,
         Func<string, string, CancellationToken, Task<bool>>? resolveClarificationAnswer = null,
         Func<string, CancellationToken, Task>? dispatchAction = null,
-        Action<string>? acknowledge = null)
+        Action<string>? acknowledge = null,
+        Func<string, CancellationToken, Task<long?>>? goalStateVersionReader = null)
     {
         if (!IsDiscordConfigured(catalog, botToken, out _))
             return null;
@@ -79,7 +84,8 @@ public static class OperatorChannelFactory
             stateDirectory,
             resolveClarificationAnswer,
             dispatchAction,
-            acknowledge)!;
+            acknowledge,
+            goalStateVersionReader)!;
         var heartbeatOptions = BuildDeadManHeartbeatOptions(catalog);
         var heartbeat = CreateDeadManHeartbeatClient(heartbeatOptions);
         return DiscordGatewayListener.CreateAndConnectAsync(botToken!, view, heartbeat, heartbeatOptions.EffectiveInterval)
@@ -94,7 +100,8 @@ public static class OperatorChannelFactory
         string stateDirectory,
         Func<string, string, CancellationToken, Task<bool>>? resolveClarificationAnswer = null,
         Func<string, CancellationToken, Task>? dispatchAction = null,
-        Action<string>? acknowledge = null)
+        Action<string>? acknowledge = null,
+        Func<string, CancellationToken, Task<long?>>? goalStateVersionReader = null)
     {
         if (!IsDiscordConfigured(catalog, botToken, out var forumChannelId))
             return null;
@@ -107,7 +114,8 @@ public static class OperatorChannelFactory
             stateDirectory,
             resolveClarificationAnswer,
             dispatchAction,
-            acknowledge)!;
+            acknowledge,
+            goalStateVersionReader)!;
         var heartbeatOptions = BuildDeadManHeartbeatOptions(catalog);
         var heartbeat = CreateDeadManHeartbeatClient(heartbeatOptions);
         var listener = DiscordGatewayListener.CreateAndConnectAsync(botToken!, collaborationView, heartbeat, heartbeatOptions.EffectiveInterval)
@@ -123,7 +131,8 @@ public static class OperatorChannelFactory
         string stateDirectory,
         Func<string, string, CancellationToken, Task<bool>>? resolveClarificationAnswer = null,
         Func<string, CancellationToken, Task>? dispatchAction = null,
-        Action<string>? acknowledge = null)
+        Action<string>? acknowledge = null,
+        Func<string, CancellationToken, Task<long?>>? goalStateVersionReader = null)
     {
         if (catalog.IsNull ||
             !catalog.ChannelType.Equals("discord", StringComparison.OrdinalIgnoreCase) ||
@@ -140,7 +149,7 @@ public static class OperatorChannelFactory
             stateDirectory,
             catalog.OperatorUserIds ?? [],
             resolveClarificationAnswer,
-            BuildCorrelationGoalStateVersionReader(store, stateDirectory),
+            BuildCorrelationGoalStateVersionReader(store, goalStateVersionReader),
             dispatchAction,
             acknowledge);
     }
@@ -194,13 +203,6 @@ public static class OperatorChannelFactory
                ulong.TryParse(catalog.ForumChannelId, out forumChannelId);
     }
 
-    private static Func<string, CancellationToken, Task<long?>> BuildGoalStateVersionReader(string stateDirectory)
-    {
-        var stateDbPath = Path.Combine(stateDirectory, "state.db");
-        return (goalId, cancellationToken) =>
-            SqliteOrchestratorStateRepository.TryLoadGoalStateVersionAsync(stateDbPath, goalId, cancellationToken);
-    }
-
     public static DeadManHeartbeatOptions BuildDeadManHeartbeatOptions(OperatorChannelCatalog catalog)
     {
         if (!catalog.DeadManHeartbeatEnabled ||
@@ -220,16 +222,17 @@ public static class OperatorChannelFactory
 
     private static Func<string, CancellationToken, Task<long?>> BuildCorrelationGoalStateVersionReader(
         ICollaborationItemStore store,
-        string stateDirectory)
+        Func<string, CancellationToken, Task<long?>>? goalStateVersionReader)
     {
-        var goalVersionReader = BuildGoalStateVersionReader(stateDirectory);
         return async (correlationKey, cancellationToken) =>
         {
             var item = (await store.ListAsync(null, cancellationToken))
                 .FirstOrDefault(candidate => string.Equals(candidate.CorrelationKey, correlationKey, StringComparison.Ordinal));
             return string.IsNullOrWhiteSpace(item?.GoalId)
                 ? null
-                : await goalVersionReader(item.GoalId, cancellationToken);
+                : goalStateVersionReader is null
+                    ? null
+                    : await goalStateVersionReader(item.GoalId, cancellationToken);
         };
     }
 }

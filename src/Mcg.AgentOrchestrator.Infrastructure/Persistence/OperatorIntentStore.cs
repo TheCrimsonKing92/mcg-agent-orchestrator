@@ -12,13 +12,6 @@ public enum OperatorIntentStatus
     Rejected
 }
 
-public static class OperatorIntentVerbs
-{
-    public const string Progress = "progress";
-    public const string Retry = "retry";
-    public const string VerifyManual = "verify-manual";
-}
-
 public sealed record ProgressOperatorIntentPayload(
     WorkTaskStatus Status,
     string Message);

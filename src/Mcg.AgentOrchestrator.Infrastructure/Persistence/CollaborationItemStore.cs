@@ -1,5 +1,7 @@
 using System.Text.Json;
 
+using Mcg.AgentOrchestrator.Core;
+
 namespace Mcg.AgentOrchestrator.Infrastructure;
 
 public sealed partial class CollaborationItemStore : ICollaborationItemStore

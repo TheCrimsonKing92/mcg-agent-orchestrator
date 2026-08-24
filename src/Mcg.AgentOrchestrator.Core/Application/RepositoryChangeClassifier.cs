@@ -96,6 +96,7 @@ public static class RepositoryChangeClassifier
         "src/Mcg.AgentOrchestrator.Infrastructure/Workspaces/GoalAcceptanceVerifier",
         "src/Mcg.AgentOrchestrator.Infrastructure/Workspaces/DotnetBuildEnvironmentManager.cs",
         "src/Mcg.AgentOrchestrator.Infrastructure.Providers/",
+        "src/Mcg.AgentOrchestrator.Infrastructure.OperatorComms/",
         "src/Mcg.AgentOrchestrator.Infrastructure/Workers/",
         "src/Mcg.AgentOrchestrator.Infrastructure/Processes/",
         "src/Mcg.AgentOrchestrator.Infrastructure/Persistence/ModelFunction",
@@ -231,6 +232,7 @@ public static class RepositoryChangeClassifier
             path.StartsWith("src/Mcg.AgentOrchestrator.Core/", StringComparison.OrdinalIgnoreCase) ||
             path.StartsWith("src/Mcg.AgentOrchestrator.Infrastructure/", StringComparison.OrdinalIgnoreCase) ||
             path.StartsWith("src/Mcg.AgentOrchestrator.Infrastructure.Providers/", StringComparison.OrdinalIgnoreCase) ||
+            path.StartsWith("src/Mcg.AgentOrchestrator.Infrastructure.OperatorComms/", StringComparison.OrdinalIgnoreCase) ||
             path.StartsWith("src/Mcg.AgentOrchestrator.App/Dashboard/Api/", StringComparison.OrdinalIgnoreCase);
 
         return new RepositoryChangedFile(

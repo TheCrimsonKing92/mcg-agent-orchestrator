@@ -90,11 +90,7 @@ public sealed record ControlPlaneBacklogDigestItem(
     string Title,
     BacklogItemStatus Status,
     DateTimeOffset UpdatedAt,
-    string? SourceGoalId)
-{
-    public static ControlPlaneBacklogDigestItem FromBacklogItem(BacklogItem item) =>
-        new(item.Id, item.Title, item.Status, item.UpdatedAt, item.SourceGoalId);
-}
+    string? SourceGoalId);
 
 public sealed record ControlPlaneDeliveryPolicy(
     int DailyDecisionBudget = 6,
