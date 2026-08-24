@@ -84,6 +84,47 @@ public sealed class DispatchOutcomeClassifyTests
         return task;
     }
 
+    private static TaskSpec RecoveredTaskWithBaseCommit(string baseCommit)
+    {
+        var clock = new FakeClock();
+        var kernel = new AgentOrchestratorKernel(clock);
+        var goal = kernel.CreateGoal("Classify operator recover test goal");
+        kernel.ActivateGoal(goal.Id, DefaultAgents());
+        var task = goal.Tasks.First(t => t.RequiredRole == AgentRole.Developer);
+        kernel.RetryTask(goal.Id, task.Id, "operator recover: re-dispatch the developer round");
+        kernel.RecordTaskDispatch(
+            goal.Id,
+            task.Id,
+            new TaskDispatchRecord(
+                "codex-cli",
+                "codex exec prompt",
+                "C:\\repo",
+                clock.UtcNow,
+                WorkerProviderKind: ProviderKind.OpenAICodexCli));
+        kernel.RecordDispatchBaseCommit(goal.Id, task.Id, baseCommit);
+        return task;
+    }
+
+    private static TaskSpec FirstDispatchTaskWithBaseCommit(string baseCommit)
+    {
+        var clock = new FakeClock();
+        var kernel = new AgentOrchestratorKernel(clock);
+        var goal = kernel.CreateGoal("Classify first dispatch test goal");
+        kernel.ActivateGoal(goal.Id, DefaultAgents());
+        var task = goal.Tasks.First(t => t.RequiredRole == AgentRole.Developer);
+        kernel.RecordTaskDispatch(
+            goal.Id,
+            task.Id,
+            new TaskDispatchRecord(
+                "codex-cli",
+                "codex exec prompt",
+                "C:\\repo",
+                clock.UtcNow,
+                WorkerProviderKind: ProviderKind.OpenAICodexCli));
+        kernel.RecordDispatchBaseCommit(goal.Id, task.Id, baseCommit);
+        return task;
+    }
+
     private static TaskSpec DispatchedTaskWithResultCommit(string baseCommit, string resultCommit)
     {
         var clock = new FakeClock();
@@ -285,6 +326,81 @@ public sealed class DispatchOutcomeClassifyTests
         Xunit.Assert.Equal(RecoveryRecommendation.None, outcome.RecoveryRecommendation);
         Xunit.Assert.Contains("rule=verified-no-change-round", outcome.ClassifierReceipt, StringComparison.Ordinal);
         Xunit.Assert.Contains("verdict=VerifiedSuccess", outcome.ClassifierReceipt, StringComparison.Ordinal);
+    }
+
+    [Xunit.Theory]
+    [Xunit.InlineData("pass - focused verification completed")]
+    [Xunit.InlineData("deferred - acceptance gate owns the out-of-scope check")]
+    public void Classify_OperatorRecoverDeveloperVerifiedNoChange_Completes(string tests)
+    {
+        const string baseCommit = "48422231916172e8d172a0cc0428d13d222c071c";
+        var task = RecoveredTaskWithBaseCommit(baseCommit);
+        var verification = WorkerResultVerification(
+            1,
+            WorkerResultStdout(tests),
+            standardError: VerifiedNoChangeDiagnostics(verificationRecognized: true));
+
+        Xunit.Assert.Equal(0, task.CriterionRetryCount);
+        Xunit.Assert.Empty(task.CriterionRetryFeedback);
+        Xunit.Assert.NotNull(task.LatestRetryAt);
+        Xunit.Assert.Equal(baseCommit, task.LastDispatch?.BaseCommit);
+
+        var outcome = DispatchFailureClassifier.Classify(task, verification);
+
+        Xunit.Assert.Equal(DispatchOutcomeKind.VerifiedSuccess, outcome.Kind);
+        Xunit.Assert.Equal(RecoveryRecommendation.None, outcome.RecoveryRecommendation);
+        Xunit.Assert.Contains("rule=verified-no-change-round", outcome.ClassifierReceipt, StringComparison.Ordinal);
+        Xunit.Assert.Contains("verdict=VerifiedSuccess", outcome.ClassifierReceipt, StringComparison.Ordinal);
+    }
+
+    [Xunit.Fact]
+    public void Classify_OperatorRecoverWithoutRecognizedVerification_Fails()
+    {
+        var verification = WorkerResultVerification(
+            1,
+            WorkerResultStdout("pass - focused verification completed"),
+            standardError: VerifiedNoChangeDiagnostics(verificationRecognized: false));
+
+        var outcome = DispatchFailureClassifier.Classify(
+            RecoveredTaskWithBaseCommit("48422231916172e8d172a0cc0428d13d222c071c"),
+            verification);
+
+        Xunit.Assert.Equal(DispatchOutcomeKind.UnknownFailure, outcome.Kind);
+        Xunit.Assert.Contains("rule=required-file-change-evidence-missing", outcome.ClassifierReceipt, StringComparison.Ordinal);
+        Xunit.Assert.DoesNotContain("rule=verified-no-change-round", outcome.ClassifierReceipt, StringComparison.Ordinal);
+    }
+
+    [Xunit.Fact]
+    public void Classify_OperatorRecoverVerifiedNoChangeWithBlocker_Fails()
+    {
+        var verification = WorkerResultVerification(
+            1,
+            WorkerResultStdout("pass - focused verification completed", "exact-blocker - dependency unavailable"),
+            standardError: VerifiedNoChangeDiagnostics(verificationRecognized: true));
+
+        var outcome = DispatchFailureClassifier.Classify(
+            RecoveredTaskWithBaseCommit("48422231916172e8d172a0cc0428d13d222c071c"),
+            verification);
+
+        Xunit.Assert.Equal(DispatchOutcomeKind.UnknownFailure, outcome.Kind);
+        Xunit.Assert.Contains("rule=required-file-change-evidence-missing", outcome.ClassifierReceipt, StringComparison.Ordinal);
+        Xunit.Assert.DoesNotContain("rule=verified-no-change-round", outcome.ClassifierReceipt, StringComparison.Ordinal);
+    }
+
+    [Xunit.Fact]
+    public void Classify_FirstDispatchDeveloperVerifiedNoChange_Fails()
+    {
+        var verification = WorkerResultVerification(
+            1,
+            WorkerResultStdout("deferred - acceptance gate owns the out-of-scope check"),
+            standardError: VerifiedNoChangeDiagnostics(verificationRecognized: true));
+
+        var outcome = DispatchFailureClassifier.Classify(
+            FirstDispatchTaskWithBaseCommit("48422231916172e8d172a0cc0428d13d222c071c"),
+            verification);
+
+        Xunit.Assert.Equal(DispatchOutcomeKind.UnknownFailure, outcome.Kind);
+        Xunit.Assert.DoesNotContain("rule=verified-no-change-round", outcome.ClassifierReceipt, StringComparison.Ordinal);
     }
 
     [Xunit.Fact]

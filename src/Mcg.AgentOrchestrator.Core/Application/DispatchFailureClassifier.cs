@@ -1633,7 +1633,7 @@ public static class DispatchFailureClassifier
         if (task.RequiredRole != AgentRole.Developer ||
             hasCommittedChanges ||
             !workerResultPresent ||
-            (task.CriterionRetryCount == 0 && task.CriterionRetryFeedback.Count == 0) ||
+            !WasRedispatchedByAnyRoute(task) ||
             string.IsNullOrWhiteSpace(task.LastDispatch?.BaseCommit) ||
             !HasPopulatedStandardOutput(verification) ||
             !DispatchRejectionDiagnosticMarker.TryParse(
@@ -1664,6 +1664,13 @@ public static class DispatchFailureClassifier
 
         return true;
     }
+
+    // The verified-no-change allowance is gated on re-dispatch, not on the reason for it. Operator
+    // recovery and upstream bounces record LatestRetryAt without touching criterion-retry state.
+    private static bool WasRedispatchedByAnyRoute(TaskSpec task) =>
+        task.LatestRetryAt is not null ||
+        task.CriterionRetryCount > 0 ||
+        task.CriterionRetryFeedback.Count > 0;
 
     private static bool HasVerifiedNoNewCommitWorkerResult(TaskSpec task, TaskVerificationRecord verification) =>
         HasPopulatedStandardOutput(verification) &&
