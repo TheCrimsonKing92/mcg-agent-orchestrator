@@ -51,7 +51,7 @@ public sealed partial class AgentOrchestratorKernel
                 VerificationGateReason.Passed);
         }
 
-        if (task.LastVerification is { Succeeded: false })
+        if (task.LastVerification is { Succeeded: false, CompletionVerdictVerifiedSuccess: false })
         {
             var isDirty = DispatchFailureClassifier.TryBuildDirtyDispatchRecovery(task, out var recovery);
             var message = isDirty

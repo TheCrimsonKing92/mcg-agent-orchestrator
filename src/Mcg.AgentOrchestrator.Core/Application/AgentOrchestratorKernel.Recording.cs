@@ -298,6 +298,9 @@ public sealed partial class AgentOrchestratorKernel
         }
 
         var outcomeRule = TaskOutcomeClassifier.TryExtractRule(outcome.ClassifierReceipt);
+        task.RecordCompletionVerdict(
+            outcome.Kind == DispatchOutcomeKind.VerifiedSuccess,
+            outcomeRule);
         var isVerifiedNoChangeRound = string.Equals(
             outcomeRule,
             TaskOutcomeRules.VerifiedNoChangeRound.Token,

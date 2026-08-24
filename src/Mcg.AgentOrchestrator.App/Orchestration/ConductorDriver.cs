@@ -1737,13 +1737,31 @@ internal sealed partial class ConductorDriver
             GoalLifecycleState.Running => MakeResult(goalId, goalPrefix, policy,
                 new ConductorAdvanceOutcome.Held(state, "Worker process running; auto-reconcile will handle completion")),
             GoalLifecycleState.AwaitingVerification => MakeResult(goalId, goalPrefix, policy,
-                new ConductorAdvanceOutcome.Held(state, "All tasks done; awaiting task verification gates — auto-reconcile will advance goal to Verified")),
+                new ConductorAdvanceOutcome.Held(state, BuildAwaitingVerificationHoldReason(goal))),
             GoalLifecycleState.Verifying => ExecuteVerifying(goal, goalPrefix, policy),
             GoalLifecycleState.Verified => ExecuteLanding(goal, goalPrefix, policy),
             GoalLifecycleState.Merged => ExecuteRecord(goal, goalPrefix, policy),
             GoalLifecycleState.Recorded => ExecuteCleanup(goal, goalPrefix, policy),
             _ => Escalate(goal, goalPrefix, policy, state, $"Unhandled lifecycle state {state}")
         };
+    }
+
+    private static string BuildAwaitingVerificationHoldReason(Goal goal)
+    {
+        var worklist = AgentOrchestratorKernel.BuildVerificationWorklist(goal);
+        if (worklist.Items.Count == 0)
+        {
+            return "All tasks done; awaiting task verification gates — auto-reconcile will advance goal to Verified";
+        }
+
+        var blocked = worklist.Items
+            .Take(3)
+            .Select(item =>
+                $"task={item.TaskId.Value[..8]} role={item.Role} gate={item.GateStatus} detail={item.Message}");
+        var remainder = worklist.Items.Count > 3
+            ? $"; plus {worklist.Items.Count - 3} more unsatisfied task gate(s)"
+            : string.Empty;
+        return $"Task verification gates require operator attention: {string.Join("; ", blocked)}{remainder}";
     }
 
     internal GoalLifecycleFacts GetFacts(Goal goal) => _getFacts(goal);

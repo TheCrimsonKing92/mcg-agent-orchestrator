@@ -134,7 +134,9 @@ public sealed class TaskSpec
                     LastVerification.AuthoritativeStandardError,
                     LastVerification.FullStandardOutputUnavailableReason,
                     LastVerification.FullStandardErrorUnavailableReason,
-                    LastVerification.PlannerCandidateDivergence),
+                    LastVerification.PlannerCandidateDivergence,
+                    LastVerification.CompletionVerdictVerifiedSuccess,
+                    LastVerification.CompletionVerdictRule),
             _verificationHistory
                 .Select(verification => new TaskVerificationSnapshot(
                     verification.Command,
@@ -161,7 +163,9 @@ public sealed class TaskSpec
                     verification.AuthoritativeStandardError,
                     verification.FullStandardOutputUnavailableReason,
                     verification.FullStandardErrorUnavailableReason,
-                    verification.PlannerCandidateDivergence))
+                    verification.PlannerCandidateDivergence,
+                    verification.CompletionVerdictVerifiedSuccess,
+                    verification.CompletionVerdictRule))
                 .ToList(),
             LastDispatch is null
                 ? null
@@ -305,7 +309,9 @@ public sealed class TaskSpec
                         verification.AuthoritativeStandardErrorUnavailableReason),
                     StandardOutputIsAuthoritative: verification.AuthoritativeStandardOutput is not null,
                     StandardErrorIsAuthoritative: verification.AuthoritativeStandardError is not null,
-                    PlannerCandidateDivergence: verification.PlannerCandidateDivergence));
+                    PlannerCandidateDivergence: verification.PlannerCandidateDivergence,
+                    CompletionVerdictVerifiedSuccess: verification.CompletionVerdictVerifiedSuccess,
+                    CompletionVerdictRule: verification.CompletionVerdictRule));
             }
         }
 
@@ -342,7 +348,9 @@ public sealed class TaskSpec
                     snapshot.LastVerification.AuthoritativeStandardErrorUnavailableReason),
                 StandardOutputIsAuthoritative: snapshot.LastVerification.AuthoritativeStandardOutput is not null,
                 StandardErrorIsAuthoritative: snapshot.LastVerification.AuthoritativeStandardError is not null,
-                PlannerCandidateDivergence: snapshot.LastVerification.PlannerCandidateDivergence);
+                PlannerCandidateDivergence: snapshot.LastVerification.PlannerCandidateDivergence,
+                CompletionVerdictVerifiedSuccess: snapshot.LastVerification.CompletionVerdictVerifiedSuccess,
+                CompletionVerdictRule: snapshot.LastVerification.CompletionVerdictRule);
             if (!task._verificationHistory.Contains(latestVerification))
             {
                 task.RestoreVerificationHistory(latestVerification);
@@ -468,6 +476,27 @@ public sealed class TaskSpec
         _verificationHistory.Add(verification, RequiredRole);
 
     internal void ClearLatestVerification() => LastVerification = null;
+
+    internal void RecordCompletionVerdict(bool verifiedSuccess, string? rule)
+    {
+        if (LastVerification is null)
+        {
+            throw new InvalidOperationException("A completion verdict requires an existing verification.");
+        }
+
+        var prior = LastVerification;
+        var updated = prior with
+        {
+            CompletionVerdictVerifiedSuccess = verifiedSuccess,
+            CompletionVerdictRule = string.IsNullOrWhiteSpace(rule) ? null : rule.Trim()
+        };
+        var historyIndex = _verificationHistory.FindLastIndex(item => ReferenceEquals(item, prior));
+        if (historyIndex >= 0)
+        {
+            _verificationHistory[historyIndex] = updated;
+        }
+        LastVerification = updated;
+    }
 
     internal void RecordFindingEvidenceOutcome(
         string stableId,

@@ -427,8 +427,8 @@ public sealed class ConductorDriverTestsLifecycleStates
 
     // ── AwaitingVerification state ────────────────────────────────────────
 
-    [Xunit.Fact(DisplayName = "ConductorDriver_AwaitingVerification_returns_Held")]
-    public void ConductorDriverAwaitingVerificationReturnsHeld()
+    [Xunit.Fact(DisplayName = "ConductorDriver_AwaitingVerification_names_missing_task_evidence")]
+    public void ConductorDriverAwaitingVerificationNamesMissingTaskEvidence()
     {
         var (kernel, goal) = SimpleGoal();
         var task = goal.Tasks.Single();
@@ -440,8 +440,12 @@ public sealed class ConductorDriverTestsLifecycleStates
 
         var result = driver.AdvanceOnce(goal, ConductorAutonomyPolicy.Conservative);
 
-        Assert.True(result.Outcome is ConductorAdvanceOutcome.Held);
-        Assert.Equal(GoalLifecycleState.AwaitingVerification, ((ConductorAdvanceOutcome.Held)result.Outcome).State);
+        var held = Assert.IsType<ConductorAdvanceOutcome.Held>(result.Outcome);
+        Assert.Equal(GoalLifecycleState.AwaitingVerification, held.State);
+        Assert.Contains(task.Id.Value[..8], held.Reason, StringComparison.Ordinal);
+        Assert.Contains(nameof(VerificationGateStatus.MissingVerification), held.Reason, StringComparison.Ordinal);
+        Assert.Contains("no verification evidence", held.Reason, StringComparison.OrdinalIgnoreCase);
+        Assert.DoesNotContain("auto-reconcile", held.Reason, StringComparison.OrdinalIgnoreCase);
     }
 
     // ── Verified state ────────────────────────────────────────────────────
