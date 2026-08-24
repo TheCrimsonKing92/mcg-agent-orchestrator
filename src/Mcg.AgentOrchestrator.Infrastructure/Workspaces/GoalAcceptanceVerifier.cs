@@ -481,6 +481,17 @@ public sealed class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
             engineSettings.MaxConcurrentShards,
             shardCoreBudget);
         var effectivePlan = CreateEffectiveGatePlan(worktreePath, changedFiles, engineSettings);
+        if (effectivePlan.UndeclaredTestProjects.Count > 0)
+        {
+            var message = "Structural coverage requires every discovered test project to be declared by a dotnet-test check in config/acceptance-manifest.json:" +
+                Environment.NewLine + string.Join(Environment.NewLine, effectivePlan.UndeclaredTestProjects);
+            phaseAccountant.MarkCompleted(passed: false);
+            var check = new AcceptanceCheckResult(
+                "structural coverage declaration", false, 1, message,
+                FailureClassification: AcceptanceFailureClassifications.StructuralCoverageFailed);
+            return new AcceptanceVerificationResult(false, false, 1, message, Checks: [check]);
+        }
+
         var manifest = effectivePlan.Manifest;
         var infrastructureTestLanes = effectivePlan.InfrastructureTestLanes;
         var policyShardPlan = effectivePlan.PolicyShardPlan;
@@ -2486,15 +2497,15 @@ public sealed class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
             policyShardPlan,
             infrastructureTestLanes);
         var structuralCoverageApplies = StructuralCoverageApplies(engineSettings, changedFiles);
-        var structurallyCompleteChecks = structuralCoverageApplies
-            ? EnsureTrustedStructuralCoverageExecutionChecks(
+        var structuralCoverageDeclarations = structuralCoverageApplies
+            ? EnsureTrustedStructuralCoverageDeclarations(
                 policyEffectiveChecks,
                 manifest.Checks,
                 worktreePath)
-            : policyEffectiveChecks;
+            : new StructuralCoverageDeclarationPlan(policyEffectiveChecks, []);
         var effectiveChecks = ApplyDotnetShardDisposition(
             ExpandBroadInfrastructureChecks(
-                structurallyCompleteChecks,
+                structuralCoverageDeclarations.Checks,
                 infrastructureTestLanes),
             dotnetShardDisposition);
         return new EffectiveGatePlan(
@@ -2503,6 +2514,7 @@ public sealed class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
             infrastructureTestLanes,
             policyShardPlan,
             policyRequiredChecks,
+            structuralCoverageDeclarations.UndeclaredProjects,
             structuralCoverageApplies,
             dotnetShardDisposition);
     }
@@ -4834,7 +4846,11 @@ public sealed class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
             {
                 IEnumerable<AcceptanceManifestCheck> partitionChecks = IsBroadInfrastructureTestCheck(broadCheck)
                     ? ExpandBroadInfrastructureCheck(broadCheck, infrastructureTestLanes)
-                    : [broadCheck];
+                    : effectiveChecks.Where(check =>
+                        check.Type.Equals("dotnet-test", StringComparison.OrdinalIgnoreCase) &&
+                        string.Equals(NormalizePath(check.Project), NormalizePath(broadCheck.Project), StringComparison.OrdinalIgnoreCase));
+                if (!partitionChecks.Any())
+                    partitionChecks = [broadCheck];
                 return partitionChecks
                     .Select(shard =>
                     {
@@ -5087,32 +5103,34 @@ public sealed class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
             .ToArray();
     }
 
-    private static IReadOnlyList<AcceptanceManifestCheck> EnsureTrustedStructuralCoverageExecutionChecks(
+    internal static StructuralCoverageDeclarationPlan EnsureTrustedStructuralCoverageDeclarations(
         IReadOnlyList<AcceptanceManifestCheck> effectiveChecks,
         IReadOnlyList<AcceptanceManifestCheck> manifestChecks,
         string worktreePath)
     {
-        var mainWorktreePath = ResolveMainWorktreePath(worktreePath);
-        var trustedProjects = string.IsNullOrWhiteSpace(mainWorktreePath)
-            ? DiscoverTrustedTestProjects(worktreePath)
-            : DiscoverTrustedStructuralCoverageProjects(worktreePath, mainWorktreePath);
         var completed = effectiveChecks.ToList();
-        foreach (var project in trustedProjects)
+        var undeclared = new List<string>();
+        foreach (var project in DiscoverTrustedTestProjects(worktreePath))
         {
-            if (completed.Any(check =>
-                    IsBroadTestProjectCheck(check) &&
-                    string.Equals(NormalizePath(check.Project), project, StringComparison.OrdinalIgnoreCase)))
+            var declarations = manifestChecks.Where(check =>
+                check.Type.Equals("dotnet-test", StringComparison.OrdinalIgnoreCase) &&
+                string.Equals(NormalizePath(check.Project), project, StringComparison.OrdinalIgnoreCase)).ToArray();
+            if (declarations.Length == 0)
             {
+                undeclared.Add(project);
                 continue;
             }
 
-            completed.RemoveAll(check =>
-                check.Type.Equals("dotnet-test", StringComparison.OrdinalIgnoreCase) &&
-                string.Equals(NormalizePath(check.Project), project, StringComparison.OrdinalIgnoreCase));
-            completed.Add(BuildTrustedStructuralCoverageCheck(worktreePath, project, manifestChecks));
+            if (completed.Any(check =>
+                    IsBroadTestProjectCheck(check) &&
+                    string.Equals(NormalizePath(check.Project), project, StringComparison.OrdinalIgnoreCase)))
+                continue;
+
+            if (declarations.FirstOrDefault(IsBroadTestProjectCheck) is { } umbrella)
+                completed.Add(umbrella);
         }
 
-        return completed;
+        return new StructuralCoverageDeclarationPlan(completed, undeclared);
     }
 
     internal static IReadOnlyList<string> DeletedTestFilesForProject(
@@ -7967,8 +7985,13 @@ public sealed class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
         IReadOnlyList<AcceptanceTestLane> InfrastructureTestLanes,
         PolicyShardPlan PolicyShardPlan,
         IReadOnlyList<AcceptanceManifestCheck> PolicyRequiredChecks,
+        IReadOnlyList<string> UndeclaredTestProjects,
         bool StructuralCoverageApplies,
         DotnetShardDisposition DotnetShardDisposition);
+
+    internal sealed record StructuralCoverageDeclarationPlan(
+        IReadOnlyList<AcceptanceManifestCheck> Checks,
+        IReadOnlyList<string> UndeclaredProjects);
 
     private sealed class AcceptanceManifest
     {

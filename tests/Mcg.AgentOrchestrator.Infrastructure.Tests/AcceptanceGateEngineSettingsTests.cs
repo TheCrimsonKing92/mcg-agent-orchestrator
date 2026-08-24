@@ -15,7 +15,7 @@ public sealed class AcceptanceGateEngineSettingsTests
         Xunit.Assert.Equal(5, settings.PartitionVerdictFullRerunEveryN);
         Xunit.Assert.Equal(AcceptanceGateEngineSettings.DefaultOutputCaptureLimitBytes, settings.OutputCaptureLimitBytes);
         Xunit.Assert.Equal(19, settings.InfrastructureTestLanes.Count);
-        Xunit.Assert.Equal(6, startupContract.ManifestCheckCount);
+        Xunit.Assert.Equal(7, startupContract.ManifestCheckCount);
         using var manifestDocument = System.Text.Json.JsonDocument.Parse(
             File.ReadAllText(Path.Combine(repositoryRoot, "config", "acceptance-manifest.json")));
         var manifestLanes = manifestDocument.RootElement
@@ -965,6 +965,208 @@ public sealed class AcceptanceGateEngineSettingsTests
     }
 
     [Xunit.Fact]
+    public void StructuralCoverageRetainsFilteredOnlyProjectLanesWithoutSynthesizingBroadCheck()
+    {
+        var root = CreateWorkspace("""
+            {
+              "version": 1,
+              "engine": { "enforceStructuralCoverage": true },
+              "checks": [
+                {
+                  "name": "core tests: alpha",
+                  "type": "dotnet-test",
+                  "project": "tests/Core.Tests/Core.Tests.csproj",
+                  "arguments": ["--filter", "FullyQualifiedName~AlphaTests"]
+                },
+                {
+                  "name": "core tests: beta",
+                  "type": "dotnet-test",
+                  "project": "tests/Core.Tests/Core.Tests.csproj",
+                  "arguments": ["--filter", "FullyQualifiedName~BetaTests"]
+                }
+              ]
+            }
+            """);
+        try
+        {
+            var checks = GoalAcceptanceVerifier.BuildEffectiveAcceptanceChecksForTests(root);
+
+            Xunit.Assert.Collection(
+                checks,
+                check =>
+                {
+                    Xunit.Assert.Equal("core tests: alpha", check.Name);
+                    Xunit.Assert.Equal(["--filter", "FullyQualifiedName~AlphaTests"], check.Arguments);
+                },
+                check =>
+                {
+                    Xunit.Assert.Equal("core tests: beta", check.Name);
+                    Xunit.Assert.Equal(["--filter", "FullyQualifiedName~BetaTests"], check.Arguments);
+                });
+            Xunit.Assert.DoesNotContain(checks, check =>
+                check.Project == "tests/Core.Tests/Core.Tests.csproj" &&
+                !check.Arguments.Contains("--filter", StringComparer.OrdinalIgnoreCase));
+        }
+        finally
+        {
+            Directory.Delete(root, recursive: true);
+        }
+    }
+
+    [Xunit.Fact]
+    public void StructuralCoverageLeavesProjectWithUmbrellaCheckUnchanged()
+    {
+        var root = CreateWorkspace("""
+            {
+              "version": 1,
+              "engine": { "enforceStructuralCoverage": true },
+              "checks": [
+                {
+                  "name": "core tests",
+                  "type": "dotnet-test",
+                  "project": "tests/Core.Tests/Core.Tests.csproj"
+                },
+                {
+                  "name": "core tests: alpha",
+                  "type": "dotnet-test",
+                  "project": "tests/Core.Tests/Core.Tests.csproj",
+                  "arguments": ["--filter", "FullyQualifiedName~AlphaTests"]
+                }
+              ]
+            }
+            """);
+        try
+        {
+            var checks = GoalAcceptanceVerifier.BuildEffectiveAcceptanceChecksForTests(root);
+
+            Xunit.Assert.Equal(["core tests", "core tests: alpha"], checks.Select(check => check.Name));
+            Xunit.Assert.Empty(checks[0].Arguments);
+            Xunit.Assert.Equal(
+                ["--filter", "FullyQualifiedName~AlphaTests"],
+                checks[1].Arguments);
+        }
+        finally
+        {
+            Directory.Delete(root, recursive: true);
+        }
+    }
+
+    [Xunit.Fact]
+    public void StructuralCoverageDeclarationValidationNeverRemovesEffectiveChecks()
+    {
+        var root = Path.Combine(Path.GetTempPath(), "mcg-engine-tests", Guid.NewGuid().ToString("N"));
+        var projectPath = Path.Combine(root, "tests", "Core.Tests", "Core.Tests.csproj");
+        Directory.CreateDirectory(Path.GetDirectoryName(projectPath)!);
+        File.WriteAllText(projectPath, "<Project />");
+        var sentinel = new GoalAcceptanceVerifier.AcceptanceManifestCheck { Name = "sentinel", Type = "command" };
+        var filtered = new GoalAcceptanceVerifier.AcceptanceManifestCheck
+        {
+            Name = "core tests: alpha",
+            Type = "dotnet-test",
+            Project = "tests/Core.Tests/Core.Tests.csproj",
+            Arguments = ["--filter", "FullyQualifiedName~AlphaTests"]
+        };
+        var umbrella = new GoalAcceptanceVerifier.AcceptanceManifestCheck
+        {
+            Name = "core tests",
+            Type = "dotnet-test",
+            Project = "tests/Core.Tests/Core.Tests.csproj"
+        };
+        try
+        {
+            var cases = new[]
+            {
+                (Effective: new[] { sentinel, filtered }, Manifest: new[] { filtered }, Undeclared: 0),
+                (Effective: new[] { sentinel, umbrella, filtered }, Manifest: new[] { umbrella, filtered }, Undeclared: 0),
+                (Effective: new[] { sentinel }, Manifest: new[] { umbrella }, Undeclared: 0),
+                (Effective: new[] { sentinel }, Manifest: Array.Empty<GoalAcceptanceVerifier.AcceptanceManifestCheck>(), Undeclared: 1)
+            };
+
+            foreach (var testCase in cases)
+            {
+                var result = GoalAcceptanceVerifier.EnsureTrustedStructuralCoverageDeclarations(
+                    testCase.Effective,
+                    testCase.Manifest,
+                    root);
+
+                Xunit.Assert.All(testCase.Effective, input =>
+                    Xunit.Assert.Contains(result.Checks, output => ReferenceEquals(input, output)));
+                Xunit.Assert.Equal(testCase.Undeclared, result.UndeclaredProjects.Count);
+            }
+        }
+        finally
+        {
+            Directory.Delete(root, recursive: true);
+        }
+    }
+
+    [Xunit.Fact]
+    public async Task StructuralCoverageReconcilesFilteredOnlyProjectLanes()
+    {
+        var root = CreateWorkspace("""
+            {
+              "version": 1,
+              "engine": { "maxConcurrentShards": 1, "enforceStructuralCoverage": true },
+              "checks": [
+                {
+                  "name": "core tests: alpha",
+                  "type": "dotnet-test",
+                  "project": "tests/Core.Tests/Core.Tests.csproj",
+                  "arguments": ["--filter", "FullyQualifiedName~AlphaTests"]
+                },
+                {
+                  "name": "core tests: beta",
+                  "type": "dotnet-test",
+                  "project": "tests/Core.Tests/Core.Tests.csproj",
+                  "arguments": ["--filter", "FullyQualifiedName~BetaTests"]
+                }
+              ]
+            }
+            """);
+        var executions = new List<string[]>();
+        GoalAcceptanceVerifier.ResolveMainWorktreePathForTests = _ => root;
+        GoalAcceptanceVerifier.ResolveDeletedTestFilesForTests = _ => [];
+        try
+        {
+            var verifier = new GoalAcceptanceVerifier((arguments, _, _) =>
+            {
+                if (arguments.Contains("--list-tests"))
+                {
+                    return Task.FromResult(new GoalAcceptanceVerifier.CommandResult(
+                        0,
+                        "The following Tests are available:\n  AlphaTests.Runs\n  BetaTests.Runs"));
+                }
+
+                if (arguments.Length >= 2 && arguments[0] == "dotnet" && arguments[1] == "test")
+                {
+                    executions.Add(arguments);
+                    var testName = arguments.Contains("FullyQualifiedName~AlphaTests")
+                        ? "AlphaTests.Runs"
+                        : "BetaTests.Runs";
+                    WriteVstestTrx(arguments, testName);
+                }
+
+                return Task.FromResult(new GoalAcceptanceVerifier.CommandResult(0, "Build succeeded."));
+            });
+
+            var result = await verifier.RunAsync(root);
+
+            Xunit.Assert.True(result.Passed);
+            Xunit.Assert.Equal(2, executions.Count);
+            Xunit.Assert.All(executions, call => Xunit.Assert.Contains("--filter", call));
+            Xunit.Assert.Contains(result.Checks!, check =>
+                check.Name == "structural test coverage" &&
+                check.ResultSummary!.Contains("discovered=2, executed=2", StringComparison.Ordinal));
+        }
+        finally
+        {
+            GoalAcceptanceVerifier.ResolveMainWorktreePathForTests = null;
+            GoalAcceptanceVerifier.ResolveDeletedTestFilesForTests = null;
+            Directory.Delete(root, recursive: true);
+        }
+    }
+
+    [Xunit.Fact]
     public void EffectivePlanIdentityBindsScopeAndEnvironmentExpansion()
     {
         var root = CreateWorkspace("""
@@ -1117,8 +1319,8 @@ public sealed class AcceptanceGateEngineSettingsTests
         }
     }
 
-    [Xunit.Fact(DisplayName = "GoalAcceptanceVerifier_structural_coverage_executes_test_project_omitted_from_manifest")]
-    public async Task GoalAcceptanceVerifierStructuralCoverageExecutesTestProjectOmittedFromManifest()
+    [Xunit.Fact(DisplayName = "GoalAcceptanceVerifier_structural_coverage_rejects_test_project_omitted_from_manifest")]
+    public async Task GoalAcceptanceVerifierStructuralCoverageRejectsTestProjectOmittedFromManifest()
     {
         var root = CreateWorkspace("""
             {
@@ -1170,8 +1372,16 @@ public sealed class AcceptanceGateEngineSettingsTests
 
             var result = await verifier.RunAsync(root);
 
-            Xunit.Assert.True(result.Passed);
-            Xunit.Assert.Contains(calls, call =>
+            Xunit.Assert.False(result.Passed);
+            var declaration = Xunit.Assert.Single(
+                result.Checks!,
+                check => check.Name == "structural coverage declaration");
+            Xunit.Assert.Contains(
+                "tests/Added.Tests/Added.Tests.csproj",
+                declaration.OutputTail,
+                StringComparison.Ordinal);
+            Xunit.Assert.Contains("declared by a dotnet-test check", declaration.OutputTail, StringComparison.Ordinal);
+            Xunit.Assert.DoesNotContain(calls, call =>
                 call.Length >= 3 &&
                 call[0] == "dotnet" &&
                 call[1] == "test" &&
