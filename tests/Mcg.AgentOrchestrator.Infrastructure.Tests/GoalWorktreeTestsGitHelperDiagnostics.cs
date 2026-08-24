@@ -58,6 +58,28 @@ public sealed class GoalWorktreeTestsGitHelperDiagnostics : GoalWorktreeTestBase
         }
     }
 
+    [Xunit.Fact]
+    public void GitCommitPostconditionRequiresANewCommittedCleanHead()
+    {
+        var repo = CreateEmptyRepository();
+        try
+        {
+            var previousHead = TryGetGitHead(repo);
+            File.WriteAllText(Path.Combine(repo, "seed.txt"), "seed");
+            RunGit(repo, "add", "seed.txt");
+            RunGit(repo, "commit", "-m", "Seed");
+
+            Assert.True(HasNewCommittedCleanGitHead(repo, previousHead));
+
+            var committedHead = TryGetGitHead(repo);
+            Assert.False(HasNewCommittedCleanGitHead(repo, committedHead));
+        }
+        finally
+        {
+            DeleteDirectory(repo);
+        }
+    }
+
     private static string CreateEmptyRepository()
     {
         var root = OperatingSystem.IsWindows()
