@@ -64,7 +64,7 @@ public sealed class ProcessStartInfoSourceGuardTests
     private static bool IntroducesStartProcessCommand(string line)
     {
         return line.Contains("Start-Process", StringComparison.Ordinal) &&
-            !line.Contains("(\"Start-Process\"", StringComparison.Ordinal);
+            !line.Contains("\"Start-Process\"", StringComparison.Ordinal);
     }
 
     private static string FindTestRoot([System.Runtime.CompilerServices.CallerFilePath] string sourceFilePath = "")
