@@ -43,6 +43,37 @@ public sealed class GoalAcceptanceVerifierTestsSourceSizePreflight : GoalAccepta
     }
 
     [Xunit.Fact]
+    public void ViolatingAuthority_ReportsEveryOffendingFile()
+    {
+        var root = CreateManifestWorkspace(EmptyManifest);
+        var authorityPath = Path.Combine(
+            root,
+            SourceSizeRatchet.SourcePath.Replace('/', Path.DirectorySeparatorChar));
+        Directory.CreateDirectory(Path.GetDirectoryName(authorityPath)!);
+        File.WriteAllText(
+            authorityPath,
+            "new SourceSizeCeiling(\"first.cs\", 2)" + Environment.NewLine +
+            "new SourceSizeCeiling(\"second.cs\", 4)");
+        File.WriteAllLines(Path.Combine(root, "first.cs"), Enumerable.Repeat("line", 3));
+        File.WriteAllLines(Path.Combine(root, "second.cs"), Enumerable.Repeat("line", 6));
+
+        try
+        {
+            var result = SourceSizeRatchetPreflight.Evaluate(root);
+
+            Assert.True(result.HasBlockingViolation);
+            Assert.Contains("first.cs has 3 lines", result.Message, StringComparison.Ordinal);
+            Assert.Contains("recorded ceiling of 2", result.Message, StringComparison.Ordinal);
+            Assert.Contains("second.cs has 6 lines", result.Message, StringComparison.Ordinal);
+            Assert.Contains("recorded ceiling of 4", result.Message, StringComparison.Ordinal);
+        }
+        finally
+        {
+            DeleteDirectoryWithRetry(root);
+        }
+    }
+
+    [Xunit.Fact]
     public async Task CompliantAuthority_ProceedsToBuildServerShutdown()
     {
         var root = CreateManifestWorkspace(EmptyManifest);

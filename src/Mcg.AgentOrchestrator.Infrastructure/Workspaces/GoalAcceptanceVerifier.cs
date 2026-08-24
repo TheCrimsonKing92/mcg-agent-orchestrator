@@ -441,7 +441,7 @@ public sealed class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
         {
             phaseAccountant.MarkCompleted(passed: false);
             var check = new AcceptanceCheckResult(
-                "source size ratchet preflight", false, 1, sourceSizePreflight.Message);
+                SourceSizeRatchetPreflight.CheckName, false, 1, sourceSizePreflight.Message);
             return new AcceptanceVerificationResult(
                 Passed: false,
                 Skipped: false,

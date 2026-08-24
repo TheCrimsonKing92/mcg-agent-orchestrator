@@ -74,6 +74,12 @@ internal sealed partial class ConductorDriver
 
     private AcceptanceVerificationSummary RunInlineLandingAcceptance(Goal goal)
     {
+        var sourceSizeFailure = RunInlineLandingSourceSizePreflight(goal);
+        if (sourceSizeFailure is not null)
+        {
+            return sourceSizeFailure;
+        }
+
         var acquisition = _tryAcquireLandingStableSlotLease(goal);
         if (acquisition is not DotnetBuildLeaseAcquisition.Acquired acquired)
         {

@@ -3732,8 +3732,8 @@ internal sealed partial class ConductorDriver
             ?? throw new InvalidOperationException("Production acceptance cohort verifier is unavailable.");
         var store = _cohortAcceptanceStore
             ?? throw new InvalidOperationException("Production acceptance cohort store is unavailable.");
-        var workspace = _cohortWorkspace
-            ?? throw new InvalidOperationException("Production acceptance cohort workspace is unavailable.");
+        var workspace = _cohortWorkspace ?? throw new InvalidOperationException("Production acceptance cohort workspace is unavailable.");
+        if (RunAcceptanceCohortSourceSizePreflight(integration.Path, identity, store) is { } sourceSizeReceipt) return sourceSizeReceipt;
         var gateProgressEventWriter = new ConductEventLogWriter(
             Path.Combine(workspace.ExecutionDirectory, ".orchestrator", "logs", ConductEventLogWriter.CurrentFileName));
         using var progressSink = GoalAcceptanceVerifier.PushGateProgressSink(progress =>
@@ -3972,7 +3972,7 @@ internal sealed partial class ConductorDriver
         }
         if (!AcceptanceCohortGateEvidence.HasCoherentTrxEvidence(normalizedTestResultPaths))
         {
-            return AcceptanceCohortGateOutcome.InfrastructureFailure;
+            return IsSourceSizeContentFailure(result) ? AcceptanceCohortGateOutcome.Failed : AcceptanceCohortGateOutcome.InfrastructureFailure;
         }
         return result.Passed && result.ExitCode == 0
             ? AcceptanceCohortGateOutcome.Passed
