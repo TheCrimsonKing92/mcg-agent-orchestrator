@@ -59,6 +59,31 @@ function Read-SharedText {
     }
 }
 
+function Get-AttemptIdFromTrxName {
+    param([string]$Name)
+
+    $separator = $Name.IndexOf('.')
+    if ($separator -le 0) {
+        return $null
+    }
+
+    $attemptId = $Name.Substring(0, $separator)
+    foreach ($suffix in @('-candidate', '-baseline')) {
+        if ($attemptId.EndsWith($suffix, [System.StringComparison]::OrdinalIgnoreCase)) {
+            return $attemptId.Substring(0, $attemptId.Length - $suffix.Length)
+        }
+    }
+    return $attemptId
+}
+
+function Test-TrxBelongsToAttempt {
+    param([string]$Name, [string]$AttemptId)
+
+    return $Name.StartsWith("$AttemptId.", [System.StringComparison]::OrdinalIgnoreCase) -or
+        $Name.StartsWith("$AttemptId-candidate.", [System.StringComparison]::OrdinalIgnoreCase) -or
+        $Name.StartsWith("$AttemptId-baseline.", [System.StringComparison]::OrdinalIgnoreCase)
+}
+
 function Get-AttemptCandidates {
     param([System.IO.DirectoryInfo]$GoalDirectory)
 
@@ -69,6 +94,7 @@ function Get-AttemptCandidates {
         $attemptId = $file.Name.Substring(0, $file.Name.Length - '.attempt.json'.Length)
         $startedAt = [datetimeoffset]$file.LastWriteTimeUtc
         $ordinal = -1
+        $metadataDiagnostic = $null
         try {
             $metadata = (Read-SharedText $file.FullName) | ConvertFrom-Json -ErrorAction Stop
             if (-not [string]::IsNullOrWhiteSpace([string]$metadata.attemptId)) {
@@ -82,7 +108,7 @@ function Get-AttemptCandidates {
             }
         }
         catch {
-            # The filename and timestamp remain usable while metadata is in flight.
+            $metadataDiagnostic = "metadata-unparseable file=$($file.Name) detail=$(Normalize-Text $_.Exception.Message)"
         }
 
         $byId[$attemptId] = [pscustomobject]@{
@@ -91,15 +117,15 @@ function Get-AttemptCandidates {
             AttemptId = $attemptId
             StartedAt = $startedAt
             Ordinal = $ordinal
+            MetadataDiagnostic = $metadataDiagnostic
         }
     }
 
     foreach ($file in @(Get-ChildItem -LiteralPath $GoalDirectory.FullName -Filter '*.trx' -File -ErrorAction SilentlyContinue)) {
-        $separator = $file.Name.IndexOf('.')
-        if ($separator -le 0) {
+        $attemptId = Get-AttemptIdFromTrxName $file.Name
+        if ([string]::IsNullOrWhiteSpace($attemptId)) {
             continue
         }
-        $attemptId = $file.Name.Substring(0, $separator)
         if (-not $byId.ContainsKey($attemptId)) {
             $byId[$attemptId] = [pscustomobject]@{
                 GoalDirectory = $GoalDirectory
@@ -107,6 +133,7 @@ function Get-AttemptCandidates {
                 AttemptId = $attemptId
                 StartedAt = [datetimeoffset]$file.LastWriteTimeUtc
                 Ordinal = -1
+                MetadataDiagnostic = $null
             }
         }
     }
@@ -145,25 +172,25 @@ function Resolve-SelectedAttempt {
 
     $goalDirectories = @(Get-ChildItem -LiteralPath $Root -Directory -ErrorAction SilentlyContinue)
     if (-not [string]::IsNullOrWhiteSpace($GoalSelector)) {
-        $matches = @($goalDirectories | Where-Object {
+        $goalMatches = @($goalDirectories | Where-Object {
             $_.Name.Equals($GoalSelector, [System.StringComparison]::OrdinalIgnoreCase)
         })
-        if ($matches.Count -eq 0) {
-            $matches = @($goalDirectories | Where-Object {
+        if ($goalMatches.Count -eq 0) {
+            $goalMatches = @($goalDirectories | Where-Object {
                 $_.Name.StartsWith($GoalSelector, [System.StringComparison]::OrdinalIgnoreCase)
             })
         }
-        if ($matches.Count -eq 0) {
+        if ($goalMatches.Count -eq 0) {
             return [pscustomobject]@{ Kind = 'Missing'; Message = "goal '$GoalSelector' not found under: $Root" }
         }
-        if ($matches.Count -gt 1) {
-            $names = @($matches.Name | Sort-Object)
+        if ($goalMatches.Count -gt 1) {
+            $names = @($goalMatches.Name | Sort-Object)
             return [pscustomobject]@{ Kind = 'Invalid'; Message = "goal prefix '$GoalSelector' is ambiguous: $($names -join ', ')" }
         }
 
-        $candidates = @(Get-AttemptCandidates $matches[0])
+        $candidates = @(Get-AttemptCandidates $goalMatches[0])
         if ($candidates.Count -eq 0) {
-            return [pscustomobject]@{ Kind = 'Missing'; Message = "no retained attempts found for goal '$($matches[0].Name)'"; GoalId = $matches[0].Name }
+            return [pscustomobject]@{ Kind = 'Missing'; Message = "no retained attempts found for goal '$($goalMatches[0].Name)'"; GoalId = $goalMatches[0].Name }
         }
         return [pscustomobject]@{ Kind = 'Found'; Candidate = (Sort-AttemptCandidates $candidates)[0] }
     }
@@ -171,22 +198,22 @@ function Resolve-SelectedAttempt {
     $allCandidates = foreach ($goalDirectory in $goalDirectories) {
         Get-AttemptCandidates $goalDirectory
     }
-    $matches = @($allCandidates | Where-Object {
+    $attemptMatches = @($allCandidates | Where-Object {
         $_.AttemptId.Equals($AttemptSelector, [System.StringComparison]::OrdinalIgnoreCase)
     })
-    if ($matches.Count -eq 0) {
-        $matches = @($allCandidates | Where-Object {
+    if ($attemptMatches.Count -eq 0) {
+        $attemptMatches = @($allCandidates | Where-Object {
             $_.AttemptId.StartsWith($AttemptSelector, [System.StringComparison]::OrdinalIgnoreCase)
         })
     }
-    if ($matches.Count -eq 0) {
+    if ($attemptMatches.Count -eq 0) {
         return [pscustomobject]@{ Kind = 'Missing'; Message = "attempt '$AttemptSelector' not found under: $Root" }
     }
-    if ($matches.Count -gt 1) {
-        $names = @($matches | ForEach-Object { "$($_.GoalId)/$($_.AttemptId)" } | Sort-Object)
+    if ($attemptMatches.Count -gt 1) {
+        $names = @($attemptMatches | ForEach-Object { "$($_.GoalId)/$($_.AttemptId)" } | Sort-Object)
         return [pscustomobject]@{ Kind = 'Invalid'; Message = "attempt prefix '$AttemptSelector' is ambiguous: $($names -join ', ')" }
     }
-    return [pscustomobject]@{ Kind = 'Found'; Candidate = $matches[0] }
+    return [pscustomobject]@{ Kind = 'Found'; Candidate = $attemptMatches[0] }
 }
 
 function Normalize-Text {
@@ -306,7 +333,9 @@ if ($resolution.Kind -eq 'Missing') {
 }
 
 $selected = $resolution.Candidate
-$trxFiles = @(Get-ChildItem -LiteralPath $selected.GoalDirectory.FullName -Filter "$($selected.AttemptId).*.trx" -File -ErrorAction SilentlyContinue)
+$trxFiles = @(Get-ChildItem -LiteralPath $selected.GoalDirectory.FullName -Filter '*.trx' -File -ErrorAction SilentlyContinue | Where-Object {
+    Test-TrxBelongsToAttempt $_.Name $selected.AttemptId
+})
 $trxList = [System.Collections.Generic.List[System.IO.FileInfo]]::new()
 foreach ($trxFile in $trxFiles) {
     [void]$trxList.Add($trxFile)
@@ -408,7 +437,7 @@ $ordered.Sort([System.Comparison[object]]{
     return [string]::CompareOrdinal($left.Frame, $right.Frame)
 })
 
-$status = if ($trxList.Count -eq 0 -or $unreadable -gt 0 -or $unparseable -gt 0) { 'partial' } else { 'ok' }
+$status = if ($trxList.Count -eq 0 -or $unreadable -gt 0 -or $unparseable -gt 0 -or -not [string]::IsNullOrWhiteSpace($selected.MetadataDiagnostic)) { 'partial' } else { 'ok' }
 $suppressed = [Math]::Max(0, $ordered.Count - $Top)
 $resolvedJournalRoot = if (-not [string]::IsNullOrWhiteSpace($JournalRoot)) {
     [System.IO.Path]::GetFullPath($JournalRoot)
@@ -422,6 +451,9 @@ $failedChecks = Get-FailedChecks $resolvedJournalRoot $selected.GoalId
 if ($trxList.Count -eq 0) {
     [Console]::WriteLine('diagnostic=no-trx-files-yet')
 }
+if (-not [string]::IsNullOrWhiteSpace($selected.MetadataDiagnostic)) {
+    [Console]::WriteLine("diagnostic=$($selected.MetadataDiagnostic)")
+}
 foreach ($diagnostic in $diagnostics) {
     [Console]::WriteLine("diagnostic=$($diagnostic.Kind) file=$($diagnostic.File) detail=$($diagnostic.Detail)")
 }
@@ -431,8 +463,11 @@ foreach ($diagnostic in $diagnostics) {
 if ($counterFailed -ne $parsedFailed -and $parsedFiles -gt 0) {
     [Console]::WriteLine([string]::Format($invariant, 'warning=counters-mismatch parsed={0} counters={1}', $parsedFailed, $counterFailed))
 }
-if ($parsedFailed -eq 0 -and $parsedFiles -gt 0) {
+if ($parsedFailed -eq 0 -and $parsedFiles -gt 0 -and $status -eq 'ok') {
     [Console]::WriteLine('No failing test results in this attempt corpus.')
+}
+elseif ($parsedFailed -eq 0 -and $parsedFiles -gt 0) {
+    [Console]::WriteLine('No failing test results found in readable TRX files; attempt corpus is partial.')
 }
 
 $shown = [Math]::Min($Top, $ordered.Count)

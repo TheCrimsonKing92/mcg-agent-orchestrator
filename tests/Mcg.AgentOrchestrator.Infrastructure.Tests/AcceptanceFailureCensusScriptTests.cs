@@ -16,10 +16,11 @@ public sealed class AcceptanceFailureCensusScriptTests
             "alpha",
             new Result("AlphaTest", "Failed", "Assert.True() Failure", "at Alpha.Run() in C:\\src\\Alpha.cs:line 41"),
             new Result("BetaTest", "Failed", "Assert.True() Failure", "at Alpha.Run() in C:\\src\\Alpha.cs:line 41"),
+            new Result("DifferentFrameTest", "Failed", "Assert.True() Failure", "at Other.Run() in C:\\src\\Other.cs:line 17"),
             new Result("PassingTest", "Passed"));
         fixture.WriteTrx(
             "beta",
-            new Result("GammaTest", "Failed", "Expected: 2 Actual: 1", "at Beta.Run() in C:\\src\\Beta.cs:line 9"),
+            new Result("DifferentMessageTest", "Failed", "Expected: 2 Actual: 1", "at Alpha.Run() in C:\\src\\Alpha.cs:line 41"),
             new Result("TimedOutTest", "Timeout"));
         fixture.WriteJournal("core tests", "infrastructure tests");
 
@@ -28,14 +29,19 @@ public sealed class AcceptanceFailureCensusScriptTests
         Xunit.Assert.True(result.ExitCode == 0, result.Stdout + result.Stderr);
         Xunit.Assert.Contains("status=ok", result.Stdout, StringComparison.Ordinal);
         Xunit.Assert.Contains("failedChecks=core tests,infrastructure tests", result.Stdout, StringComparison.Ordinal);
-        Xunit.Assert.Contains("trx=2 executed~5 failed=3 distinctSignatures=2", result.Stdout, StringComparison.Ordinal);
+        Xunit.Assert.Contains("trx=2 executed~6 failed=4 distinctSignatures=3", result.Stdout, StringComparison.Ordinal);
         Xunit.Assert.Contains("unreadable=0 unparseable=0 otherNonPassing=1 signaturesSuppressed=0", result.Stdout, StringComparison.Ordinal);
-        var frequent = result.Stdout.IndexOf("[1] count=2 (66.7%)", StringComparison.Ordinal);
-        var minority = result.Stdout.IndexOf("[2] count=1 (33.3%)", StringComparison.Ordinal);
+        var frequent = result.Stdout.IndexOf("[1] count=2 (50.0%)", StringComparison.Ordinal);
+        var minority = result.Stdout.IndexOf("[2] count=1 (25.0%)", StringComparison.Ordinal);
         Xunit.Assert.True(frequent >= 0 && minority > frequent, result.Stdout);
+        Xunit.Assert.Equal(2, CountOccurrences(result.Stdout, "message=Assert.True() Failure"));
+        Xunit.Assert.Equal(2, CountOccurrences(result.Stdout, "frame=at Alpha.Run() in C:\\src\\Alpha.cs:line 41"));
+        Xunit.Assert.Contains("message=Expected: 2 Actual: 1", result.Stdout, StringComparison.Ordinal);
+        Xunit.Assert.Contains("frame=at Other.Run() in C:\\src\\Other.cs:line 17", result.Stdout, StringComparison.Ordinal);
         Xunit.Assert.Contains("source=C:\\src\\Alpha.cs:41", result.Stdout, StringComparison.Ordinal);
         Xunit.Assert.Contains("example=AlphaTest", result.Stdout, StringComparison.Ordinal);
-        Xunit.Assert.Contains("example=GammaTest", result.Stdout, StringComparison.Ordinal);
+        Xunit.Assert.Contains("example=DifferentFrameTest", result.Stdout, StringComparison.Ordinal);
+        Xunit.Assert.Contains("example=DifferentMessageTest", result.Stdout, StringComparison.Ordinal);
         Xunit.Assert.True(string.IsNullOrWhiteSpace(result.Stderr), result.Stderr);
     }
 
@@ -86,7 +92,85 @@ public sealed class AcceptanceFailureCensusScriptTests
         Xunit.Assert.Contains($"diagnostic=unparseable file={fixture.AttemptId}.truncated.trx", result.Stdout, StringComparison.Ordinal);
         Xunit.Assert.Contains("trx=3 executed~1 failed=0 distinctSignatures=0", result.Stdout, StringComparison.Ordinal);
         Xunit.Assert.Contains("unreadable=0 unparseable=2", result.Stdout, StringComparison.Ordinal);
+        Xunit.Assert.DoesNotContain("No failing test results in this attempt corpus.", result.Stdout, StringComparison.Ordinal);
+        Xunit.Assert.Contains("No failing test results found in readable TRX files; attempt corpus is partial.", result.Stdout, StringComparison.Ordinal);
         Xunit.Assert.DoesNotContain("Exception:", result.Stderr, StringComparison.OrdinalIgnoreCase);
+    }
+
+    [Xunit.Fact]
+    public void ArmFiles_AreIncludedWithoutCreatingPhantomAttempts()
+    {
+        using var fixture = CensusFixture.Create();
+        fixture.WriteAttempt();
+        fixture.WriteTrx("base", new Result("BaseTest", "Passed"));
+        fixture.WriteArmTrx("candidate", "focused", new Result("CandidateTest", "Failed", "candidate failure"));
+        fixture.WriteArmTrx("baseline", "focused", new Result("BaselineTest", "Failed", "baseline failure"));
+
+        var result = fixture.Run("-Goal", fixture.GoalId);
+
+        Xunit.Assert.Equal(0, result.ExitCode);
+        Xunit.Assert.Contains($"attempt={fixture.AttemptId}", result.Stdout, StringComparison.Ordinal);
+        Xunit.Assert.Contains("trx=3 executed~3 failed=2 distinctSignatures=2", result.Stdout, StringComparison.Ordinal);
+        Xunit.Assert.Contains("status=ok", result.Stdout, StringComparison.Ordinal);
+    }
+
+    [Xunit.Fact]
+    public void InFlightMetadata_ReportsPartialWhileReadingTrx()
+    {
+        using var fixture = CensusFixture.Create();
+        fixture.WriteRawAttempt("{\"attemptId\":");
+        fixture.WriteTrx("passing", new Result("PassingTest", "Passed"));
+
+        var result = fixture.Run("-Goal", fixture.GoalId);
+
+        Xunit.Assert.Equal(0, result.ExitCode);
+        Xunit.Assert.Contains("status=partial", result.Stdout, StringComparison.Ordinal);
+        Xunit.Assert.Contains($"diagnostic=metadata-unparseable file={fixture.AttemptId}.attempt.json", result.Stdout, StringComparison.Ordinal);
+        Xunit.Assert.Contains("trx=1 executed~1 failed=0 distinctSignatures=0", result.Stdout, StringComparison.Ordinal);
+        Xunit.Assert.DoesNotContain("No failing test results in this attempt corpus.", result.Stdout, StringComparison.Ordinal);
+    }
+
+    [Xunit.Fact]
+    public void OutputContract_ReportsCapMismatchAndUnavailableFrame()
+    {
+        using var fixture = CensusFixture.Create();
+        fixture.WriteAttempt();
+        fixture.WriteTrxWithFailedCounter(
+            "contract",
+            9,
+            new Result("MessageOnlyOne", "Failed", "message only"),
+            new Result("MessageOnlyTwo", "Failed", "message only"),
+            new Result("Framed", "Failed", "framed", "at Framed.Run() in C:\\src\\Framed.cs:line 5"));
+
+        var result = fixture.Run("-Goal", fixture.GoalId, "-Top", "1");
+
+        Xunit.Assert.Equal(0, result.ExitCode);
+        Xunit.Assert.Contains("failed=3 distinctSignatures=2", result.Stdout, StringComparison.Ordinal);
+        Xunit.Assert.Contains("signaturesSuppressed=1", result.Stdout, StringComparison.Ordinal);
+        Xunit.Assert.Contains("warning=counters-mismatch parsed=3 counters=9", result.Stdout, StringComparison.Ordinal);
+        Xunit.Assert.Contains("message=message only", result.Stdout, StringComparison.Ordinal);
+        Xunit.Assert.Contains("frame=unavailable", result.Stdout, StringComparison.Ordinal);
+        Xunit.Assert.Contains("source=unavailable", result.Stdout, StringComparison.Ordinal);
+        Xunit.Assert.DoesNotContain("[2]", result.Stdout, StringComparison.Ordinal);
+    }
+
+    [Xunit.Fact]
+    public void InvalidSelectors_ExitTwoWithClearMessages()
+    {
+        using var fixture = CensusFixture.Create();
+        fixture.WriteAttempt();
+
+        var missing = fixture.Run();
+        var both = fixture.Run("-Goal", fixture.GoalId, "-Attempt", fixture.AttemptId);
+        fixture.CreateGoalDirectory("aaaaaaaa99999999bbbbbbbb88888888");
+        var ambiguous = fixture.Run("-Goal", "aaaa");
+
+        Xunit.Assert.Equal(2, missing.ExitCode);
+        Xunit.Assert.Contains("specify exactly one", missing.Stderr, StringComparison.Ordinal);
+        Xunit.Assert.Equal(2, both.ExitCode);
+        Xunit.Assert.Contains("specify exactly one", both.Stderr, StringComparison.Ordinal);
+        Xunit.Assert.Equal(2, ambiguous.ExitCode);
+        Xunit.Assert.Contains("is ambiguous", ambiguous.Stderr, StringComparison.Ordinal);
     }
 
     [Xunit.Fact]
@@ -163,6 +247,12 @@ public sealed class AcceptanceFailureCensusScriptTests
                 JsonSerializer.Serialize(metadata));
         }
 
+        public void WriteRawAttempt(string content)
+            => File.WriteAllText(Path.Combine(GoalDirectory, $"{AttemptId}.attempt.json"), content);
+
+        public void CreateGoalDirectory(string goalId)
+            => Directory.CreateDirectory(Path.Combine(AttemptsRoot, goalId));
+
         public void WriteJournal(params string[] failedCheckNames)
         {
             var path = Path.Combine(JournalRoot, $"{GoalId}.jsonl");
@@ -170,8 +260,16 @@ public sealed class AcceptanceFailureCensusScriptTests
         }
 
         public void WriteTrx(string slug, params Result[] results)
+            => WriteTrxForPrefix(AttemptId, slug, results.Count(result => result.Outcome == "Failed"), results);
+
+        public void WriteArmTrx(string arm, string slug, params Result[] results)
+            => WriteTrxForPrefix($"{AttemptId}-{arm}", slug, results.Count(result => result.Outcome == "Failed"), results);
+
+        public void WriteTrxWithFailedCounter(string slug, int failedCounter, params Result[] results)
+            => WriteTrxForPrefix(AttemptId, slug, failedCounter, results);
+
+        private void WriteTrxForPrefix(string prefix, string slug, int failedCounter, params Result[] results)
         {
-            var failed = results.Count(result => result.Outcome == "Failed");
             var document = new XDocument(
                 new XElement("TestRun",
                     new XElement("Results",
@@ -186,10 +284,10 @@ public sealed class AcceptanceFailureCensusScriptTests
                                             result.Message is null ? null : new XElement("Message", result.Message),
                                             result.StackTrace is null ? null : new XElement("StackTrace", result.StackTrace)))))),
                     new XElement("ResultSummary",
-                        new XElement("Counters",
-                            new XAttribute("executed", results.Length),
-                            new XAttribute("failed", failed)))));
-            document.Save(Path.Combine(GoalDirectory, $"{AttemptId}.{slug}.trx"));
+                            new XElement("Counters",
+                                new XAttribute("executed", results.Length),
+                                new XAttribute("failed", failedCounter)))));
+            document.Save(Path.Combine(GoalDirectory, $"{prefix}.{slug}.trx"));
         }
 
         public void WriteRawTrx(string slug, string content)
@@ -290,6 +388,18 @@ public sealed class AcceptanceFailureCensusScriptTests
         string Outcome,
         string? Message = null,
         string? StackTrace = null);
+
+    private static int CountOccurrences(string value, string search)
+    {
+        var count = 0;
+        var offset = 0;
+        while ((offset = value.IndexOf(search, offset, StringComparison.Ordinal)) >= 0)
+        {
+            count++;
+            offset += search.Length;
+        }
+        return count;
+    }
 
     private sealed record ProcessResult(int ExitCode, string Stdout, string Stderr);
 }
