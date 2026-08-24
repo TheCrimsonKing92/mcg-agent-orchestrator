@@ -152,7 +152,13 @@ public sealed class TaskProcessTests
     kernel.RecordTaskProcessRefreshed(goal.Id, task.Id, completed, verification);
 
     Assert.Equal(completed, task.LastProcess);
-    Assert.Equal(verification, task.LastVerification);
+    Assert.Equal(
+        verification with
+        {
+            CompletionVerdictVerifiedSuccess = true,
+            CompletionVerdictRule = "succeeded-dispatch-completion-evidence"
+        },
+        task.LastVerification);
     Assert.Equal(WorkTaskStatus.Completed, task.Status);
 }
     [Xunit.Fact(DisplayName = "RecordTaskProcessRefreshed_pauses_for_worker_requested_human_input")]

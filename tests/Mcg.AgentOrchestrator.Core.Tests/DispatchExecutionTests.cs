@@ -592,7 +592,13 @@ public sealed class DispatchExecutionTests
     Assert.Empty(kernel.GetPendingHumanInput(goal.Id));
     Assert.Equal(WorkTaskStatus.Completed, task.Status);
     Assert.Equal(GoalStatus.Active, goal.Status);
-    Assert.Equal(verification, task.LastVerification);
+    Assert.Equal(
+        verification with
+        {
+            CompletionVerdictVerifiedSuccess = true,
+            CompletionVerdictRule = "succeeded-dispatch-completion-evidence"
+        },
+        task.LastVerification);
     Assert.Contains(goal.Timeline, evt => evt.TaskId == task.Id && evt.Kind == ProgressKind.TaskCompleted);
     Assert.False(goal.Timeline.Any(evt => evt.TaskId == task.Id && evt.Kind == ProgressKind.HumanInputRequested));
 }
@@ -2678,7 +2684,9 @@ public sealed class DispatchExecutionTests
     kernel.RecordDispatchExecutionResult(goal.Id, task.Id, verification);
 
     Assert.Equal(WorkTaskStatus.Failed, task.Status);
-    Assert.Equal(verification, task.LastVerification);
+    Assert.Equal(
+        verification with { CompletionVerdictRule = "unknown-failure" },
+        task.LastVerification);
     Assert.Equal<DateTimeOffset?>(null, task.SubscriptionRetryAfter);
     Assert.False(DispatchFailureClassifier.IsRecoverableSubscriptionLimitFailure(verification));
     Assert.False(DispatchFailureClassifier.TryGetSubscriptionLimitRetryAfter(verification, out _));
