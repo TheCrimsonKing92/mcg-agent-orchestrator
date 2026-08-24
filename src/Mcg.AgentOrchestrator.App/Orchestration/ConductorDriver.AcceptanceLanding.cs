@@ -6,6 +6,8 @@ namespace Mcg.AgentOrchestrator.App.Orchestration;
 
 internal sealed partial class ConductorDriver
 {
+    internal static readonly TimeSpan InlineLandingStableSlotLeaseTimeout = TimeSpan.FromSeconds(2);
+
     private ConductorAdvanceResult ExecuteLanding(Goal goal, string goalPrefix, ConductorAutonomyPolicy policy)
     {
         var backgroundAcceptance = TryRunTickFallbackAcceptance(goal, goalPrefix, policy);
@@ -72,14 +74,15 @@ internal sealed partial class ConductorDriver
 
     private AcceptanceVerificationSummary RunInlineLandingAcceptance(Goal goal)
     {
-        var stableSlotLease = _tryAcquireLandingStableSlotLease(goal);
-        var stableSlotIndex = stableSlotLease?.Environment.BuildPermitIndex;
-        if (!stableSlotIndex.HasValue)
+        var acquisition = _tryAcquireLandingStableSlotLease(goal);
+        if (acquisition is not DotnetBuildLeaseAcquisition.Acquired acquired)
         {
-            TryDisposeInlineLandingStableSlotLease(stableSlotLease);
+            RecordLandingStableSlotDegradation(goal, acquisition);
             return _runAcceptanceVerification(goal, null, null, CancellationToken.None);
         }
 
+        var stableSlotLease = acquired.Lease;
+        var stableSlotIndex = stableSlotLease.Environment.BuildPermitIndex;
         try
         {
             return _runAcceptanceVerification(
@@ -94,11 +97,61 @@ internal sealed partial class ConductorDriver
         }
     }
 
-    private static DotnetBuildEnvironmentLease? TryAcquireInlineLandingStableSlotLease() =>
-        DotnetBuildEnvironmentManager.TryAcquireFirstAvailableStableSlotExecutionLock(TimeSpan.Zero) is
-            DotnetBuildLeaseAcquisition.Acquired acquired
-                ? acquired.Lease
-                : null;
+    internal static DotnetBuildLeaseAcquisition TryAcquireInlineLandingStableSlotLease(
+        Func<TimeSpan, DotnetBuildLeaseAcquisition>? acquire = null) =>
+        (acquire ?? (timeout =>
+            DotnetBuildEnvironmentManager.TryAcquireFirstAvailableStableSlotExecutionLock(timeout)))(
+                InlineLandingStableSlotLeaseTimeout);
+
+    private void RecordLandingStableSlotDegradation(Goal goal, DotnetBuildLeaseAcquisition acquisition)
+    {
+        if (_cohortWorkspace is null && _executionDirectory is null)
+        {
+            return;
+        }
+
+        var (reason, acquisitionDetail) = acquisition switch
+        {
+            DotnetBuildLeaseAcquisition.SlotsBusy busy => ("slots-busy", FormatSlotsBusy(busy)),
+            DotnetBuildLeaseAcquisition.BuildLockBlocked blocked =>
+                ("build-lock-blocked", FormatBuildLockBlocked(blocked.Attribution)),
+            _ => throw new InvalidOperationException("Only failed stable-slot acquisitions can be recorded as degraded.")
+        };
+        var detail =
+            $"LANDING_STABLE_SLOT_DEGRADED goal={goal.Id.Value[..8]} reason={reason} " +
+            $"bound_ms={(long)InlineLandingStableSlotLeaseTimeout.TotalMilliseconds} {acquisitionDetail}";
+        var eventPath = _cohortWorkspace?.ConductEventsLogPath ?? Path.Combine(
+            _executionDirectory!,
+            ".orchestrator",
+            "logs",
+            ConductEventLogWriter.CurrentFileName);
+
+        try
+        {
+            if (!new ConductEventLogWriter(eventPath)
+                    .AppendRequired("landing-stable-slot-degraded", goal.Id.Value, detail))
+            {
+                TryWriteLandingStableSlotDegradationFallback($"{detail} event_write=failed");
+            }
+        }
+        catch (Exception ex)
+        {
+            TryWriteLandingStableSlotDegradationFallback(
+                $"{detail} event_write=failed error={ex.GetType().Name}");
+        }
+    }
+
+    private static void TryWriteLandingStableSlotDegradationFallback(string detail)
+    {
+        try
+        {
+            Console.Error.WriteLine(detail);
+        }
+        catch
+        {
+            // Observability remains best-effort; it must not replace the acceptance outcome.
+        }
+    }
 
     private static void TryDisposeInlineLandingStableSlotLease(DotnetBuildEnvironmentLease? stableSlotLease)
     {
