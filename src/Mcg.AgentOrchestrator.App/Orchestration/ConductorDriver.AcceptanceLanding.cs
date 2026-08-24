@@ -304,7 +304,7 @@ internal sealed partial class ConductorDriver
         try
         {
             _acceptanceEventSink(
-                candidate.Goal.Id.Value,
+                candidate.GoalPrefix,
                 AcceptanceLifecycleEventFormatter.Format(
                     candidate.GoalPrefix,
                     candidate.SlotIndex,

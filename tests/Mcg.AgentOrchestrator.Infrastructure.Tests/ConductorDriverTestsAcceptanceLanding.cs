@@ -54,7 +54,7 @@ public sealed partial class ConductorDriverTestsAcceptanceCoordination
         PassVerification(kernel, goal, goal.Tasks.Single());
         ConductorParallelAcceptanceOwnedProcessLaunch? ownedLaunch = null;
         var launched = false;
-        var events = new List<string>();
+        var events = new List<(string GoalId, string Detail)>();
         var coordinator = new ConductorParallelAcceptanceAttemptCoordinator(
             attemptRoot,
             isProcessAlive: _ => true,
@@ -70,7 +70,7 @@ public sealed partial class ConductorDriverTestsAcceptanceCoordination
                 AcceptanceVerificationSummary.PassedWithNoUnmetCriteria,
             classifyRisk: _ => ChangeRiskTier.DocsOnly,
             parallelAcceptanceAttemptCoordinator: coordinator,
-            acceptanceEventSink: (_, detail) => events.Add(detail),
+            acceptanceEventSink: (goalId, detail) => events.Add((goalId, detail)),
             noTickAcceptancePollDelay: _ =>
             {
                 if (!launched)
@@ -88,13 +88,17 @@ public sealed partial class ConductorDriverTestsAcceptanceCoordination
         Assert.NotNull(attempt.ReconciledAt);
         Assert.Collection(
             events,
-            started =>
+            startedEvent =>
             {
+                var (goalId, started) = startedEvent;
+                Assert.Equal(goal.Id.Value[..8], goalId);
                 Assert.StartsWith("ACCEPTANCE ", started, StringComparison.Ordinal);
                 Assert.Contains($"result=started attempt={attempt.AttemptId} tick=0", started, StringComparison.Ordinal);
             },
-            terminal =>
+            terminalEvent =>
             {
+                var (goalId, terminal) = terminalEvent;
+                Assert.Equal(goal.Id.Value[..8], goalId);
                 Assert.StartsWith("ACCEPTANCE ", terminal, StringComparison.Ordinal);
                 Assert.Contains($"result=passed attempt={attempt.AttemptId} tick=0", terminal, StringComparison.Ordinal);
             });
