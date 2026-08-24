@@ -1095,11 +1095,20 @@ internal sealed class ConductorParallelAcceptanceAttemptCoordinator
             }
             else
             {
+                var omitStableSlotIndexWithoutLease =
+                    activeAttempt.StableSlotExhaustionPolicy ==
+                    AcceptanceStableSlotExhaustionPolicy.DegradeToSerial;
                 coordinator.RunAttempt(
                     activeAttempt,
                     candidate,
                     policy,
-                    driver.RunParallelLandingAcceptance);
+                    (attemptCandidate, attemptPolicy, lease, cancellationToken) =>
+                        driver.RunParallelLandingAcceptance(
+                            attemptCandidate,
+                            attemptPolicy,
+                            lease,
+                            cancellationToken,
+                            omitStableSlotIndexWithoutLease));
             }
             return 0;
         }

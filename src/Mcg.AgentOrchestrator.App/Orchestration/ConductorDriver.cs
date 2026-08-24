@@ -4011,67 +4011,6 @@ internal sealed partial class ConductorDriver
         return singleLine.Length <= 256 ? singleLine : singleLine[..256];
     }
 
-    internal ConductorParallelAcceptanceRunResult RunParallelLandingAcceptance(
-        ConductorParallelAcceptanceCandidate candidate,
-        ConductorAutonomyPolicy policy,
-        DotnetBuildEnvironmentLease? stableSlotLease,
-        CancellationToken cancellationToken)
-    {
-        var effectiveCandidate = candidate;
-        var evidenceMutationLease = _tryAcquireEvidenceMutationLease(
-            candidate.Goal,
-            "conductor:parallel-acceptance");
-        if (evidenceMutationLease is null)
-        {
-            return ConductorParallelAcceptanceRunResult.Early(
-                candidate,
-                ReplacementEvidenceMutationHeld(candidate.Goal, candidate.GoalPrefix, policy),
-                null);
-        }
-        ConductorParallelAcceptanceRunResult result;
-        try
-        {
-            var early = RebaseBeforeAcceptance(
-                candidate.Goal,
-                candidate.GoalPrefix,
-                policy,
-                applySideEffects: false,
-                out var earlyOutcome);
-            if (early is not null)
-            {
-                result = ConductorParallelAcceptanceRunResult.Early(candidate, early, earlyOutcome);
-                return result;
-            }
-
-            effectiveCandidate = RefreshParallelAcceptanceCandidate(candidate);
-            result = ConductorParallelAcceptanceRunResult.Accepted(
-                effectiveCandidate,
-                _runAcceptanceVerification(
-                    effectiveCandidate.Goal,
-                    stableSlotLease is null ? null : effectiveCandidate.SlotIndex,
-                    stableSlotLease,
-                    cancellationToken));
-        }
-        catch (Exception ex)
-        {
-            result = ConductorParallelAcceptanceRunResult.Fault(effectiveCandidate, ex);
-        }
-        finally
-        {
-            try
-            {
-                evidenceMutationLease.Dispose();
-            }
-            catch
-            {
-                // Cleanup cannot replace a computed acceptance result. Store-backed leases emit
-                // typed failure evidence and retain their owner-qualified row for expiry recovery.
-            }
-        }
-
-        return result;
-    }
-
     internal ConductorParallelAcceptanceRunResult RunPreReviewFocusedEvidence(
         ConductorParallelAcceptanceCandidate candidate,
         string request,
