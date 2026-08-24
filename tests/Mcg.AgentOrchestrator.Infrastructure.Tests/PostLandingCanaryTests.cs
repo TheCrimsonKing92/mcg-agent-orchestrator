@@ -772,7 +772,8 @@ public sealed class PostLandingCanaryTests : CliCommandTestBase
         var circuit = new AcceptanceEngineCircuitBreaker(
             fixture.Events,
             fixture.OperatorItems,
-            stateReader: stateReader);
+            stateReader: stateReader,
+            stateReadTotalBudget: Timeout.InfiniteTimeSpan);
 
         var unavailable = circuit.Read();
         var decision = AcceptanceEngineAcceptanceGate.Decide(
@@ -794,6 +795,63 @@ public sealed class PostLandingCanaryTests : CliCommandTestBase
         var recovered = circuit.Read();
         Assert.Equal(AcceptanceEngineHealth.Unhealthy, recovered.Health);
         Assert.Equal("sha-persisted-unhealthy", recovered.LandingSha);
+    }
+
+    [Xunit.Fact(DisplayName = "State-read budget expiry reports its own reason and fails closed")]
+    public async Task StateReadBudgetExpiryReportsItsOwnReasonAndFailsClosed()
+    {
+        using var fixture = new CanaryTestFixture();
+        var stateReader = new ToggleAcceptanceEngineStateReader(fixture.Events)
+        {
+            PendsUntilCancelled = true
+        };
+        var circuit = new AcceptanceEngineCircuitBreaker(
+            fixture.Events,
+            fixture.OperatorItems,
+            stateReader: stateReader,
+            stateReadTotalBudget: TimeSpan.Zero);
+
+        var snapshot = circuit.Read();
+        var decision = AcceptanceEngineAcceptanceGate.Decide(
+            snapshot.Health,
+            AcceptanceEngineAcceptanceGate.DefaultUnavailablePolicy);
+
+        Assert.Equal(AcceptanceEngineHealth.Unavailable, snapshot.Health);
+        Assert.Equal("state-read-budget-expired", snapshot.FailureReason);
+        Assert.NotEqual("state-unavailable", snapshot.FailureReason);
+        Assert.False(decision.Allowed);
+        Assert.Equal(AcceptanceEngineUnavailablePolicy.FailClosed, decision.PolicyApplied);
+        Assert.Equal(1, stateReader.Attempts);
+        var item = Assert.Single(await fixture.OperatorItems.GetAttentionQueueAsync());
+        Assert.Contains("read exceeded its total budget", item.Body, StringComparison.Ordinal);
+        Assert.DoesNotContain("could not be read after", item.Body, StringComparison.Ordinal);
+    }
+
+    [Xunit.Fact(DisplayName = "State-read attempt exhaustion keeps the unavailable reason and fails closed")]
+    public void StateReadAttemptExhaustionKeepsStateUnavailableReason()
+    {
+        using var fixture = new CanaryTestFixture();
+        var stateReader = new ToggleAcceptanceEngineStateReader(fixture.Events)
+        {
+            Throws = true
+        };
+        var circuit = new AcceptanceEngineCircuitBreaker(
+            fixture.Events,
+            fixture.OperatorItems,
+            stateReader: stateReader,
+            stateReadTotalBudget: Timeout.InfiniteTimeSpan);
+
+        var snapshot = circuit.Read();
+        var decision = AcceptanceEngineAcceptanceGate.Decide(
+            snapshot.Health,
+            AcceptanceEngineAcceptanceGate.DefaultUnavailablePolicy);
+
+        Assert.Equal(AcceptanceEngineHealth.Unavailable, snapshot.Health);
+        Assert.Equal("state-unavailable", snapshot.FailureReason);
+        Assert.NotEqual("state-read-budget-expired", snapshot.FailureReason);
+        Assert.False(decision.Allowed);
+        Assert.Equal(AcceptanceEngineUnavailablePolicy.FailClosed, decision.PolicyApplied);
+        Assert.Equal(AcceptanceEngineCircuitBreaker.StateReadMaxAttempts, stateReader.Attempts);
     }
 
     [Xunit.Fact(DisplayName = "Unrecognized canary receipt status surfaces unavailable state without tripping unhealthy")]
@@ -840,7 +898,8 @@ public sealed class PostLandingCanaryTests : CliCommandTestBase
         var circuit = new AcceptanceEngineCircuitBreaker(
             fixture.Events,
             fixture.OperatorItems,
-            stateReader: stateReader);
+            stateReader: stateReader,
+            stateReadTotalBudget: Timeout.InfiniteTimeSpan);
 
         var unavailable = circuit.Read(AcceptanceEngineUnavailablePolicy.FailOpen);
         var decision = AcceptanceEngineAcceptanceGate.Decide(
@@ -874,7 +933,8 @@ public sealed class PostLandingCanaryTests : CliCommandTestBase
             fixture.Events,
             operatorItems,
             stateReader: stateReader,
-            stateUnavailableFallback: fallbackLines.Add);
+            stateUnavailableFallback: fallbackLines.Add,
+            stateReadTotalBudget: Timeout.InfiniteTimeSpan);
 
         var snapshot = circuit.Read();
 
@@ -896,7 +956,8 @@ public sealed class PostLandingCanaryTests : CliCommandTestBase
         var circuit = new AcceptanceEngineCircuitBreaker(
             fixture.Events,
             fixture.OperatorItems,
-            stateReader: stateReader);
+            stateReader: stateReader,
+            stateReadTotalBudget: Timeout.InfiniteTimeSpan);
 
         var health = circuit.Read();
 
@@ -1788,6 +1849,7 @@ public sealed class PostLandingCanaryTests : CliCommandTestBase
         : IAcceptanceEngineStateReader
     {
         internal bool Throws { get; set; }
+        internal bool PendsUntilCancelled { get; set; }
         internal int FailuresRemaining { get; set; }
         internal int Attempts { get; private set; }
 
@@ -1795,6 +1857,14 @@ public sealed class PostLandingCanaryTests : CliCommandTestBase
             CancellationToken cancellationToken = default)
         {
             Attempts++;
+            if (PendsUntilCancelled)
+            {
+                var completion = new TaskCompletionSource<IReadOnlyList<PostLandingCanaryEvent>>(
+                    TaskCreationOptions.RunContinuationsAsynchronously);
+                cancellationToken.Register(() => completion.TrySetCanceled(cancellationToken));
+                return completion.Task;
+            }
+
             if (Throws || FailuresRemaining > 0)
             {
                 FailuresRemaining = Math.Max(0, FailuresRemaining - 1);
@@ -1836,9 +1906,13 @@ public sealed class PostLandingCanaryTests : CliCommandTestBase
                 int maxAttempts = PostLandingCanaryConfiguration.DefaultMaxAttempts,
                 Func<DateTimeOffset>? utcNow = null,
                 Func<TimeSpan, CancellationToken, Task>? delay = null,
-                Action<string>? progress = null)
+                Action<string>? progress = null,
+                TimeSpan? stateReadTotalBudget = null)
         {
-            var circuit = new AcceptanceEngineCircuitBreaker(_events, OperatorItems);
+            var circuit = new AcceptanceEngineCircuitBreaker(
+                _events,
+                OperatorItems,
+                stateReadTotalBudget: stateReadTotalBudget ?? Timeout.InfiniteTimeSpan);
             return (
                 new PostLandingCanaryCoordinator(
                     new PostLandingCanaryConfiguration(
