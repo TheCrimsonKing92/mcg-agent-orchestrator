@@ -79,6 +79,66 @@ public sealed class CliCommandTestsPortfolioCommands : CliCommandTestBase
         Xunit.Assert.Contains("project=Control Plane", output);
     }
 
+    [Xunit.Fact(DisplayName = "Cli_status_tasks_only_prints_identifier_status_and_every_task_without_objective")]
+    public void StatusTasksOnlyPrintsIdentifierStatusAndEveryTaskWithoutObjective()
+    {
+        var root = CreateTempDirectory();
+        var workspace = CreateRefinedWorkspace(root);
+        var kernel = new AgentOrchestratorKernel();
+        const string objectiveToken = "OBJECTIVE_TOKEN_NOT_IN_TASKS";
+        TaskSpec[] tasks =
+        [
+            new(TaskId.New(), "Inspect the status renderer", AgentRole.Researcher),
+            new(TaskId.New(), "Implement the status flag", AgentRole.Developer),
+            new(TaskId.New(), "Verify the status output", AgentRole.Tester)
+        ];
+        var goal = kernel.CreateGoal(new GoalId("abababab111111111111111111111111"), $"Suppress {objectiveToken}", tasks);
+
+        var output = ExecuteCliAndCapture(["status", goal.Id.Value[..8], "--tasks-only"], kernel, workspace);
+
+        Xunit.Assert.Contains($"Goal {goal.Id.Value}", output);
+        Xunit.Assert.Contains("Status: Draft", output);
+        Xunit.Assert.Contains("Tasks:", output);
+        foreach (var task in tasks)
+        {
+            Xunit.Assert.Contains(task.Description, output);
+        }
+
+        Xunit.Assert.DoesNotContain("Objective:", output);
+        Xunit.Assert.DoesNotContain(objectiveToken, output);
+    }
+
+    [Xunit.Fact(DisplayName = "Cli_status_default_output_keeps_existing_byte_shape")]
+    public void StatusDefaultOutputKeepsExistingByteShape()
+    {
+        var root = CreateTempDirectory();
+        var workspace = CreateRefinedWorkspace(root);
+        var kernel = new AgentOrchestratorKernel();
+        TaskSpec[] tasks =
+        [
+            new(TaskId.New(), "Inspect default status", AgentRole.Researcher),
+            new(TaskId.New(), "Implement default status", AgentRole.Developer),
+            new(TaskId.New(), "Verify default status", AgentRole.Tester)
+        ];
+        var goal = kernel.CreateGoal(new GoalId("cdcdcdcd222222222222222222222222"), "Preserve default status objective", tasks);
+
+        var output = ExecuteCliAndCapture(["status", goal.Id.Value[..8]], kernel, workspace);
+
+        var expected = string.Join(Environment.NewLine,
+        [
+            string.Empty,
+            $"Goal {goal.Id.Value}",
+            "Objective: Preserve default status objective",
+            "Status: Draft",
+            "Tasks:",
+            "  1. [Pending] Researcher: Inspect default status (unassigned)",
+            "  2. [Pending] Developer: Implement default status (unassigned)",
+            "  3. [Pending] Tester: Verify default status (unassigned)",
+            string.Empty
+        ]) + Environment.NewLine;
+        Xunit.Assert.Equal(expected, output);
+    }
+
     [Xunit.Fact(DisplayName = "Cli_epic_members_lists_terminal_goal_and_backlog_members")]
     public void EpicMembersListsTerminalGoalAndBacklogMembers()
     {

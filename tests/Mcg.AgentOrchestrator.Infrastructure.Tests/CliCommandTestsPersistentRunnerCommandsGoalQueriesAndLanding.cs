@@ -53,7 +53,6 @@ public sealed class CliCommandTestsPersistentRunnerCommandsGoalQueriesAndLanding
         var workspace = CreateRefinedWorkspace(root);
         IReadOnlyList<Func<string, string[]>> commands =
         [
-            prefix => ["status", prefix],
             prefix => ["monitor", prefix],
             prefix => ["readiness", prefix],
             prefix => ["next", prefix],
