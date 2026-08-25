@@ -18,7 +18,9 @@ public enum PlannerCandidateTerminalState
     NonZeroExit,
     TimedOut,
     Cancelled,
-    MissingExitArtifact
+    MissingExitArtifact,
+    UnreadableTerminalArtifact,
+    MalformedTerminalArtifact
 }
 
 public enum PlannerCandidateNormalizationState

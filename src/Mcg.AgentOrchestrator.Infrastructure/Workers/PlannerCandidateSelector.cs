@@ -53,7 +53,9 @@ internal static partial class PlannerCandidateSelector
                     null,
                     BuildIneligibleDiagnostic(candidate));
             var quality = contract.Succeeded && contract.Plan is not null
-                ? PlannerOutputContract.EvaluateStructuralQuality(contract.Plan)
+                ? PlannerOutputContract.EvaluateStructuralQuality(
+                    contract.Plan,
+                    acceptanceCriteria is { Count: > 0 } ? acceptanceCriteria.Count : null)
                 : null;
             return new ResolvedCandidate(candidate, contract, quality);
         }).OrderBy(candidate => candidate.Index).ToArray();

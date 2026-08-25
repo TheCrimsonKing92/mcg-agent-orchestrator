@@ -166,6 +166,45 @@ public sealed class PlannerCandidateSelectorTests
     }
 
     [Xunit.Fact]
+    public void StructuralQuality_DuplicateAndOutOfRangeMappingsDoNotInflateVector()
+    {
+        var repositoryRoot = InfrastructureTestSupport.FindRepositoryRoot();
+        var plan = ReplaceSectionBody(
+            ReadPlannerFixture(repositoryRoot),
+            "## Acceptance criterion mapping",
+            "1. disposition=planned; plan=Acceptance owns `PlannerCandidateSelectorTests`; the integration seam is TEST-VERIFIABLE and stops on failure.\n" +
+            "1. disposition=planned; plan=Acceptance owns `Duplicate.cs`; the integration seam is TEST-VERIFIABLE and stops on failure.\n" +
+            "99. disposition=planned; plan=Acceptance owns `OutOfRange.cs`; the integration seam is TEST-VERIFIABLE and stops on failure.");
+
+        var quality = PlannerOutputContract.EvaluateStructuralQuality(plan);
+
+        Xunit.Assert.Equal(1, quality.CompleteMappings);
+        Xunit.Assert.Equal(1, quality.ConcreteOwningSeams);
+        Xunit.Assert.Equal(1, quality.FeasibleEvidenceOwners);
+    }
+
+    [Xunit.Fact]
+    public void StructuralQuality_EvidenceOwnerMustBeFeasibleForVerificationClass()
+    {
+        var repositoryRoot = InfrastructureTestSupport.FindRepositoryRoot();
+        var fixture = ReadPlannerFixture(repositoryRoot);
+        var testPlan = ReplaceSectionBody(
+            fixture,
+            "## Acceptance criterion mapping",
+            "1. disposition=planned; plan=Researcher owns `PlannerCandidateSelectorTests`; Developer is informed, but the integration seam is TEST-VERIFIABLE and stops on failure.");
+        var realWorldPlan = ReplaceSectionBody(
+            fixture,
+            "## Acceptance criterion mapping",
+            "1. disposition=planned; plan=operator owns `paired-run-receipt`; the integration seam is REAL-WORLD-DEPENDENT and stops when evidence is unavailable.");
+
+        var testQuality = PlannerOutputContract.EvaluateStructuralQuality(testPlan);
+        var realWorldQuality = PlannerOutputContract.EvaluateStructuralQuality(realWorldPlan);
+
+        Xunit.Assert.Equal(0, testQuality.FeasibleEvidenceOwners);
+        Xunit.Assert.Equal(1, realWorldQuality.FeasibleEvidenceOwners);
+    }
+
+    [Xunit.Fact]
     public void SparseCandidateIndexesFailWithTypedArgumentError()
     {
         var repositoryRoot = InfrastructureTestSupport.FindRepositoryRoot();
@@ -203,4 +242,14 @@ public sealed class PlannerCandidateSelectorTests
         repositoryRoot,
         "tests", "Mcg.AgentOrchestrator.Infrastructure.Tests", "Fixtures", "PlannerOutputContract",
         "658501ce-f6708f44-20260805012800.out.txt"));
+
+    private static string ReplaceSectionBody(string plan, string heading, string body)
+    {
+        var headingStart = plan.IndexOf(heading, StringComparison.Ordinal);
+        Xunit.Assert.True(headingStart >= 0, $"Missing fixture heading '{heading}'.");
+        var bodyStart = plan.IndexOf('\n', headingStart) + 1;
+        var nextHeading = plan.IndexOf("\n## ", bodyStart, StringComparison.Ordinal);
+        Xunit.Assert.True(bodyStart > 0 && nextHeading > bodyStart);
+        return plan[..bodyStart] + body + plan[nextHeading..];
+    }
 }

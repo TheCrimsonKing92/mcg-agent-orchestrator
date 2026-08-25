@@ -114,7 +114,9 @@ internal static partial class PlannerOutputContract
         return sections;
     }
 
-    internal static PlannerStructuralQualityVector EvaluateStructuralQuality(string plan)
+    internal static PlannerStructuralQualityVector EvaluateStructuralQuality(
+        string plan,
+        int? criterionCount = null)
     {
         var sections = SplitRequiredSections(plan);
         if (!sections.TryGetValue("acceptance criterion mapping", out var mappingBody))
@@ -126,10 +128,25 @@ internal static partial class PlannerOutputContract
         var integrationSeams = 0;
         var verificationClasses = 0;
         var stopConditions = 0;
+        var mappings = new Dictionary<int, string>();
         foreach (var line in mappingBody.Split('\n'))
         {
-            if (!TryParseCriterionMappingLine(line, out _, out var mapping) || string.IsNullOrWhiteSpace(mapping))
+            if (!TryParseCriterionMappingLine(line, out var criterion, out var mapping) ||
+                criterion <= 0 ||
+                string.IsNullOrWhiteSpace(mapping))
+            {
                 continue;
+            }
+
+            mappings.TryAdd(criterion, mapping);
+        }
+
+        var boundedCriterionCount = criterionCount ?? CountContiguousCriteria(mappings);
+        foreach (var mapping in mappings
+                     .Where(pair => pair.Key <= boundedCriterionCount)
+                     .OrderBy(pair => pair.Key)
+                     .Select(pair => pair.Value))
+        {
 
             completeMappings++;
             var codeSpans = BacktickedCitation().Matches(mapping)
@@ -143,12 +160,8 @@ internal static partial class PlannerOutputContract
                 concreteOwningSeams++;
             }
 
-            if (Regex.IsMatch(
-                    mapping,
-                    @"(?i)\b(?:Developer|Tester|Reviewer|Acceptance|operator|conductor|Researcher|Planner)\b"))
-            {
+            if (HasFeasibleEvidenceOwner(mapping))
                 feasibleEvidenceOwners++;
-            }
 
             if (Regex.IsMatch(mapping, @"(?i)\b(?:integration|seam)\b"))
                 integrationSeams++;
@@ -166,6 +179,31 @@ internal static partial class PlannerOutputContract
             verificationClasses,
             stopConditions);
     }
+
+    private static int CountContiguousCriteria(IReadOnlyDictionary<int, string> mappings)
+    {
+        var count = 0;
+        while (mappings.ContainsKey(count + 1))
+            count++;
+        return count;
+    }
+
+    private static bool HasFeasibleEvidenceOwner(string mapping)
+    {
+        var testVerifiable = Regex.IsMatch(mapping, @"(?i)\bTEST-VERIFIABLE\b");
+        var realWorldDependent = Regex.IsMatch(mapping, @"(?i)\bREAL-WORLD-DEPENDENT\b");
+        if (testVerifiable == realWorldDependent)
+            return false;
+
+        return testVerifiable
+            ? DeclaresEvidenceOwner(mapping, "Developer|Tester|Acceptance|conductor")
+            : DeclaresEvidenceOwner(mapping, "operator");
+    }
+
+    private static bool DeclaresEvidenceOwner(string mapping, string rolePattern) =>
+        Regex.IsMatch(
+            mapping,
+            $@"(?i)(?:\b(?:{rolePattern})\b(?:\s+|-)(?:owns?|owned)\b|\bowned\s+by\s+(?:{rolePattern})\b)");
 
     internal static string ReadCapturedOutputTail(string path)
     {

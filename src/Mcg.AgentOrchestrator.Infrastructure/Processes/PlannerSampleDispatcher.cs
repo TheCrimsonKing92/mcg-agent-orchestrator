@@ -90,11 +90,13 @@ internal static class PlannerSampleDispatcher
                     continue;
                 }
 
-                if (!WriteLaunchRecord(
+                if (!TryWriteLaunchRecord(
                         sample,
-                        new PlannerSampleLaunchRecord(process.Id, (utcNow ?? (() => DateTimeOffset.UtcNow))())))
+                        new PlannerSampleLaunchRecord(process.Id, (utcNow ?? (() => DateTimeOffset.UtcNow))()),
+                        out var launchRecordDiagnostic))
                 {
                     TerminateOwned(process);
+                    WriteLaunchDiagnostic(sample, launchRecordDiagnostic);
                     continue;
                 }
 
@@ -145,22 +147,25 @@ internal static class PlannerSampleDispatcher
         foreach (var sample in CreateArtifacts(primaryStandardOutputPath, sampleCount))
         {
             var launchDiagnostic = ReadLaunchDiagnostic(sample);
+            var artifactHash = HashArtifact(sample.StandardOutputPath);
+            var normalization = StructuredCodexOutputNormalizer.Normalize(dispatch, sample.StandardOutputPath);
             if (!DispatchExitArtifacts.TryRead(sample.ExitCodePath, out var exit))
             {
+                var terminal = ClassifyMissingExit(sample, launchDiagnostic);
                 candidates.Add(new PlannerCandidateInput(
                     sample.Index,
                     string.Empty,
                     launchDiagnostic ?? "Planner sample did not produce an exit artifact.",
                     sample.StandardOutputPath,
-                    ArtifactSha256: HashArtifact(sample.StandardOutputPath),
-                    TerminalState: ClassifyMissingExit(sample, launchDiagnostic),
-                    NormalizationState: PlannerCandidateNormalizationState.Unreadable,
-                    ElapsedMilliseconds: ResolveElapsedMilliseconds(sample, null)));
+                    ArtifactSha256: artifactHash,
+                    TerminalState: terminal.State,
+                    NormalizationState: normalization.State,
+                    ElapsedMilliseconds: ResolveElapsedMilliseconds(sample, terminal.RecordedAt),
+                    ProviderUsage: normalization.Parsed?.Usage,
+                    ProviderUsageUnavailableReason: normalization.Parsed?.UsageUnavailableReason ?? "unsupported"));
                 continue;
             }
 
-            var artifactHash = HashArtifact(sample.StandardOutputPath);
-            var normalization = StructuredCodexOutputNormalizer.Normalize(dispatch, sample.StandardOutputPath);
             if (exit.ExitCode != 0)
             {
                 candidates.Add(new PlannerCandidateInput(
@@ -349,20 +354,34 @@ internal static class PlannerSampleDispatcher
         catch { return null; }
     }
 
-    private static PlannerCandidateTerminalState ClassifyMissingExit(
+    private static PlannerSampleTerminalClassification ClassifyMissingExit(
         PlannerSampleArtifacts sample,
         string? diagnostic)
     {
         var terminal = ReadTerminalRecord(sample);
-        if (terminal is not null)
-            return terminal.State;
-        return string.IsNullOrWhiteSpace(diagnostic)
-            ? PlannerCandidateTerminalState.MissingExitArtifact
-            : PlannerCandidateTerminalState.LaunchFailed;
+        return terminal.ReadState switch
+        {
+            PlannerSampleTerminalReadState.Read => new(terminal.Record!.State, terminal.Record.RecordedAt),
+            PlannerSampleTerminalReadState.Unreadable => new(
+                PlannerCandidateTerminalState.UnreadableTerminalArtifact,
+                null),
+            PlannerSampleTerminalReadState.Malformed => new(
+                PlannerCandidateTerminalState.MalformedTerminalArtifact,
+                null),
+            _ => new(
+                string.IsNullOrWhiteSpace(diagnostic)
+                    ? PlannerCandidateTerminalState.MissingExitArtifact
+                    : PlannerCandidateTerminalState.LaunchFailed,
+                null)
+        };
     }
 
-    private static bool WriteLaunchRecord(PlannerSampleArtifacts sample, PlannerSampleLaunchRecord record)
+    private static bool TryWriteLaunchRecord(
+        PlannerSampleArtifacts sample,
+        PlannerSampleLaunchRecord record,
+        out string diagnostic)
     {
+        diagnostic = string.Empty;
         try
         {
             File.WriteAllText(sample.LaunchRecordPath, JsonSerializer.Serialize(record));
@@ -370,7 +389,7 @@ internal static class PlannerSampleDispatcher
         }
         catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
         {
-            WriteLaunchDiagnostic(sample, $"Planner sample launch record could not be persisted: {ex.Message}");
+            diagnostic = $"Planner sample launch record could not be persisted: {ex.Message}";
             return false;
         }
     }
@@ -380,18 +399,25 @@ internal static class PlannerSampleDispatcher
         PlannerSampleTerminalRecord record) =>
         File.WriteAllText(sample.TerminalRecordPath, JsonSerializer.Serialize(record));
 
-    private static PlannerSampleTerminalRecord? ReadTerminalRecord(PlannerSampleArtifacts sample)
+    private static PlannerSampleTerminalReadResult ReadTerminalRecord(PlannerSampleArtifacts sample)
     {
         if (!File.Exists(sample.TerminalRecordPath))
-            return null;
+            return new(PlannerSampleTerminalReadState.Missing, null);
         try
         {
-            return JsonSerializer.Deserialize<PlannerSampleTerminalRecord>(
+            var record = JsonSerializer.Deserialize<PlannerSampleTerminalRecord>(
                 File.ReadAllText(sample.TerminalRecordPath));
+            return record is null
+                ? new(PlannerSampleTerminalReadState.Malformed, null)
+                : new(PlannerSampleTerminalReadState.Read, record);
         }
-        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or JsonException)
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
         {
-            return null;
+            return new(PlannerSampleTerminalReadState.Unreadable, null);
+        }
+        catch (JsonException)
+        {
+            return new(PlannerSampleTerminalReadState.Malformed, null);
         }
     }
 
@@ -451,6 +477,22 @@ internal static class PlannerSampleDispatcher
     private sealed record PlannerSampleTerminalRecord(
         PlannerCandidateTerminalState State,
         DateTimeOffset RecordedAt);
+
+    private sealed record PlannerSampleTerminalClassification(
+        PlannerCandidateTerminalState State,
+        DateTimeOffset? RecordedAt);
+
+    private sealed record PlannerSampleTerminalReadResult(
+        PlannerSampleTerminalReadState ReadState,
+        PlannerSampleTerminalRecord? Record);
+
+    private enum PlannerSampleTerminalReadState
+    {
+        Missing,
+        Read,
+        Unreadable,
+        Malformed
+    }
 
     private sealed record PlannerSampleLaunchRecord(int ProcessId, DateTimeOffset StartedAt);
 }

@@ -237,6 +237,83 @@ public sealed class PlannerSamplingDispatchTests : WorkerDispatchTestSupport
     }
 
     [Xunit.Fact]
+    public void CollectCandidates_AuditOnlyCodexJsonl_NormalizesAndPreservesUsage()
+    {
+        var root = CreateTempDirectory();
+        var primaryPath = Path.Combine(root, "planner.out.log");
+        File.WriteAllText(primaryPath, ToCodexJsonl(ReadPlannerFixture(), 11, 7, 3));
+        var sample = Xunit.Assert.Single(PlannerSampleDispatcher.CreateArtifacts(primaryPath, 2));
+        File.WriteAllText(sample.StandardOutputPath + ".jsonl", ToCodexJsonl(ReadPlannerFixture(), 13, 8, 5));
+        DispatchExitArtifacts.Write(
+            sample.ExitCodePath,
+            DispatchExitArtifacts.Native(0, "fixture completed", DateTimeOffset.UtcNow));
+
+        var candidate = PlannerSampleDispatcher.CollectCandidates(primaryPath, 2, CreateCodexDispatch(root))[1];
+
+        Xunit.Assert.Equal(PlannerCandidateNormalizationState.Normalized, candidate.NormalizationState);
+        Xunit.Assert.NotEmpty(candidate.StandardOutput);
+        Xunit.Assert.Equal(13, candidate.ProviderUsage?.InputTokens);
+        Xunit.Assert.True(File.Exists(sample.StandardOutputPath + ".jsonl"));
+    }
+
+    [Xunit.Fact]
+    public void CollectCandidates_MissingExitCodexJsonl_ClassifiesEnvelopeBeforeExcludingCandidate()
+    {
+        var root = CreateTempDirectory();
+        var primaryPath = Path.Combine(root, "planner.out.log");
+        File.WriteAllText(primaryPath, ToCodexJsonl(ReadPlannerFixture(), 11, 7, 3));
+        var sample = Xunit.Assert.Single(PlannerSampleDispatcher.CreateArtifacts(primaryPath, 2));
+        File.WriteAllText(sample.StandardOutputPath, ToCodexJsonl(ReadPlannerFixture(), 13, 8, 5));
+
+        var candidate = PlannerSampleDispatcher.CollectCandidates(primaryPath, 2, CreateCodexDispatch(root))[1];
+
+        Xunit.Assert.Equal(PlannerCandidateTerminalState.MissingExitArtifact, candidate.TerminalState);
+        Xunit.Assert.Equal(PlannerCandidateNormalizationState.Normalized, candidate.NormalizationState);
+        Xunit.Assert.Equal(13, candidate.ProviderUsage?.InputTokens);
+        Xunit.Assert.Empty(candidate.StandardOutput);
+    }
+
+    [Xunit.Fact]
+    public void CollectCandidates_MalformedTerminalRecord_IsLoudlyTyped()
+    {
+        var root = CreateTempDirectory();
+        var primaryPath = Path.Combine(root, "planner.out.log");
+        File.WriteAllText(primaryPath, ReadPlannerFixture());
+        var sample = Xunit.Assert.Single(PlannerSampleDispatcher.CreateArtifacts(primaryPath, 2));
+        File.WriteAllText(sample.TerminalRecordPath, "{not-json}");
+
+        var candidate = PlannerSampleDispatcher.CollectCandidates(primaryPath, 2)[1];
+
+        Xunit.Assert.Equal(PlannerCandidateTerminalState.MalformedTerminalArtifact, candidate.TerminalState);
+        var selection = PlannerCandidateSelector.Select(
+            PlannerSampleDispatcher.CollectCandidates(primaryPath, 2),
+            InfrastructureTestSupport.FindRepositoryRoot());
+        var evidence = Xunit.Assert.Single(
+            selection.Receipt.Candidates!,
+            item => item.CandidateIndex == sample.Index);
+        Xunit.Assert.Equal(PlannerCandidateTerminalState.MalformedTerminalArtifact, evidence.TerminalState);
+    }
+
+    [Xunit.Fact]
+    public void CollectCandidates_UnreadableTerminalRecord_IsLoudlyTyped()
+    {
+        var root = CreateTempDirectory();
+        var primaryPath = Path.Combine(root, "planner.out.log");
+        File.WriteAllText(primaryPath, ReadPlannerFixture());
+        var sample = Xunit.Assert.Single(PlannerSampleDispatcher.CreateArtifacts(primaryPath, 2));
+        File.WriteAllText(sample.TerminalRecordPath, "{}");
+
+        using var locked = new FileStream(
+            sample.TerminalRecordPath,
+            FileMode.Open,
+            FileAccess.ReadWrite,
+            FileShare.None);
+        var candidate = PlannerSampleDispatcher.CollectCandidates(primaryPath, 2)[1];
+
+        Xunit.Assert.Equal(PlannerCandidateTerminalState.UnreadableTerminalArtifact, candidate.TerminalState);
+    }
+
+    [Xunit.Fact]
     public void CollectCandidates_MissingOutputArtifact_HasNoArtifactIdentity()
     {
         var root = CreateTempDirectory();
@@ -304,6 +381,40 @@ public sealed class PlannerSamplingDispatchTests : WorkerDispatchTestSupport
             "dispatch-host.dll",
             "planner-launch-diagnostic-failure",
             _ => null));
+    }
+
+    [Xunit.Fact]
+    public void StartSamples_LaunchRecordAndDiagnosticPersistenceFailure_TerminatesRegisteredProcess()
+    {
+        var root = CreateTempDirectory();
+        var primaryPath = Path.Combine(root, "planner.out.log");
+        var sample = Xunit.Assert.Single(PlannerSampleDispatcher.CreateArtifacts(primaryPath, 2)) with
+        {
+            LaunchDiagnosticPath = root
+        };
+        Directory.CreateDirectory(sample.LaunchRecordPath);
+        Process? started = null;
+
+        try
+        {
+            Xunit.Assert.Throws<UnauthorizedAccessException>(() => PlannerSampleDispatcher.StartSamples(
+                [sample],
+                CreateRunParameters(root, primaryPath),
+                "dispatch-host.dll",
+                "planner-double-persistence-failure",
+                _ => started = StartSleeper()));
+
+            Xunit.Assert.NotNull(started);
+            Xunit.Assert.False(WorkerProcessJobs.HasRegisteredJob(started.Id));
+        }
+        finally
+        {
+            if (started is not null)
+            {
+                try { WorkerProcessJobs.TryKillOrFallback(started.Id); } catch { }
+                try { started.Dispose(); } catch { }
+            }
+        }
     }
 
     [Xunit.Fact]

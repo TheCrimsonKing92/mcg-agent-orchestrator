@@ -20,15 +20,16 @@ internal static class StructuredCodexOutputNormalizer
             return new StructuredCodexNormalizationResult(null, PlannerCandidateNormalizationState.NotRequired);
         }
 
-        if (!File.Exists(standardOutputPath))
+        var rawAuditPath = standardOutputPath + ".jsonl";
+        var hasRawAudit = File.Exists(rawAuditPath);
+        if (!hasRawAudit && !File.Exists(standardOutputPath))
         {
             return new StructuredCodexNormalizationResult(
                 new CodexJsonlParseResult(string.Empty, null, "unreadable", Recognized: false),
                 PlannerCandidateNormalizationState.Unreadable);
         }
 
-        var rawAuditPath = standardOutputPath + ".jsonl";
-        var rawSourcePath = File.Exists(rawAuditPath) ? rawAuditPath : standardOutputPath;
+        var rawSourcePath = hasRawAudit ? rawAuditPath : standardOutputPath;
         string raw;
         try
         {
