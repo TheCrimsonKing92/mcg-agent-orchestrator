@@ -492,6 +492,23 @@ public sealed class TaskSpec
 
     internal void ClearLatestVerification() => LastVerification = null;
 
+    internal bool TryRestoreSuccessfulVerificationForAcceptanceRegate()
+    {
+        var verification = _verificationHistory
+            .Where(candidate =>
+                (LatestRetryAt is null || candidate.CompletedAt <= LatestRetryAt.Value))
+            .OrderByDescending(candidate => candidate.CompletedAt)
+            .FirstOrDefault();
+        if (verification is null || !verification.Succeeded)
+            return false;
+
+        LastVerification = verification;
+        LastProcess = null;
+        RetryAdmissionHoldRoute = null;
+        SetStatus(WorkTaskStatus.Completed);
+        return true;
+    }
+
     internal void RecordCompletionVerdict(bool verifiedSuccess, string? rule)
     {
         if (LastVerification is null)

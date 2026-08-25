@@ -1204,7 +1204,9 @@ public sealed partial class AgentOrchestratorKernel
         ArgumentNullException.ThrowIfNull(result);
         var goal = GetGoal(goalId);
         var task = goal.FindTask(taskId);
-        task.RecordRetryAdmission(result.Receipt);
+        if (!task.RecordRetryAdmission(result.Receipt))
+            return;
+
         if (!result.AllowsProcessStart)
         {
             task.SetRetryAdmissionHold(result.Receipt.Route);
@@ -1264,7 +1266,7 @@ public sealed partial class AgentOrchestratorKernel
                 RoutePreventedRetryToRole(goal, heldTask, AgentRole.Developer, receipt, marker);
                 break;
             case RetryAdmissionRoute.AcceptanceRegate:
-                Append(goal, null, ProgressKind.GoalPolicyDecision, $"{marker}; held task requires deterministic acceptance re-gate before any redispatch.");
+                RoutePreventedRetryToAcceptanceRegate(goal, heldTask, receipt, marker);
                 break;
             case RetryAdmissionRoute.ReservationLease:
                 throw new InvalidOperationException("A reservation-lease observation must be handled before no-progress routing.");
@@ -1273,6 +1275,39 @@ public sealed partial class AgentOrchestratorKernel
             default:
                 throw new InvalidOperationException($"Unsupported retry-admission route '{receipt.Route}'.");
         }
+    }
+
+    private void RoutePreventedRetryToAcceptanceRegate(
+        Goal goal,
+        TaskSpec heldTask,
+        RetryAdmissionReceipt receipt,
+        string marker)
+    {
+        if (heldTask.TryRestoreSuccessfulVerificationForAcceptanceRegate())
+        {
+            RefreshGoalStatus(goal);
+            if (goal.Status == GoalStatus.Verified)
+            {
+                Append(
+                    goal,
+                    null,
+                    ProgressKind.GoalPolicyDecision,
+                    $"{marker}; restored the unchanged task's prior successful verification and queued deterministic acceptance re-gating.");
+                return;
+            }
+        }
+
+        heldTask.SetRetryAdmissionHold(RetryAdmissionRoute.HumanClarification);
+        RequestHumanInputDeduplicated(
+            goal.Id,
+            heldTask.Id,
+            $"Retry admission could not establish every deterministic acceptance precondition; operator review is required before another paid attempt. {marker}",
+            HumanWaitKind.RecoveryChoice,
+            isAutoDefaultable: false,
+            isDismissible: false,
+            questionFingerprint: $"retry-admission:{receipt.Fingerprint.Value}:acceptance-regate",
+            blockerFingerprint: receipt.Fingerprint.Value,
+            recordDuplicateSuppression: false);
     }
 
     private void RoutePreventedRetryToRole(

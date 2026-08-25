@@ -359,7 +359,9 @@ public static class LoopHealthReport
         var terminalResolution = new[] { terminalTaskAt, terminalGoalAt }
             .Where(candidate => candidate is not null)
             .Min();
-        var end = successfulVerification ?? terminalResolution;
+        var end = new[] { successfulVerification, terminalResolution }
+            .Where(candidate => candidate is not null)
+            .Min();
         return end is not null && end >= start
             ? (end.Value - start).TotalHours
             : null;

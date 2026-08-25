@@ -166,7 +166,147 @@ public sealed class RetryAdmissionTests
             task.Id,
             new RetryAdmissionResult(RetryAdmissionDecision.Prevented, receipt));
 
-        Assert.Equal(WorkTaskStatus.Running, task.Status);
+        Assert.Equal(WorkTaskStatus.WaitingForHuman, task.Status);
+        Assert.NotEqual(WorkTaskStatus.Failed, task.Status);
+    }
+
+    [Xunit.Fact]
+    public void AcceptanceRegate_PreconditionsMet_QueuesAcceptanceOnce()
+    {
+        var kernel = new AgentOrchestratorKernel();
+        var task = new TaskSpec(TaskId.New(), "Review candidate", AgentRole.Reviewer);
+        var goal = kernel.CreateGoal("Re-gate unchanged accepted candidate", [task]);
+        kernel.ActivateGoal(goal.Id, [new AgentDefinition(
+            new AgentId("reviewer"),
+            "Reviewer",
+            AgentRole.Reviewer,
+            new ModelProfile("OpenAI", "test", ModelCapability.Text, SubscriptionMode.ApiKey))]);
+        var firstAttempt = DateTimeOffset.Parse("2026-08-25T12:01:00Z");
+        var secondAttempt = firstAttempt.AddMinutes(1);
+        var fingerprint = RetryContextFingerprintBuilder.Build(Input() with { Role = AgentRole.Reviewer });
+        kernel.RecordTaskDispatch(goal.Id, task.Id, Dispatch(firstAttempt, fingerprint));
+        kernel.RecordTaskVerification(
+            goal.Id,
+            task.Id,
+            new TaskVerificationRecord("command", "worktree", 0, "accepted", "", firstAttempt));
+        kernel.RetryTask(
+            goal.Id,
+            task.Id,
+            "Re-check unchanged accepted context.",
+            invalidateDownstream: false,
+            retryCause: RetryCause.UnchangedContextRepeat);
+        kernel.RecordTaskDispatch(goal.Id, task.Id, Dispatch(secondAttempt, fingerprint));
+        var receipt = new RetryAdmissionReceipt(
+            "acceptance-regate",
+            RetryCause.UnchangedContextRepeat,
+            fingerprint,
+            RetryAdmissionDecision.Prevented,
+            RetryAdmissionRoute.AcceptanceRegate,
+            PaidRouteClassification.Paid,
+            secondAttempt,
+            secondAttempt,
+            firstAttempt);
+        var result = new RetryAdmissionResult(RetryAdmissionDecision.Prevented, receipt);
+
+        kernel.ApplyPreparedRetryAdmission(goal.Id, task.Id, result);
+        kernel.ApplyPreparedRetryAdmission(goal.Id, task.Id, result);
+
+        Assert.Equal(WorkTaskStatus.Completed, task.Status);
+        Assert.Equal(GoalStatus.Verified, goal.Status);
+        Assert.Null(task.RetryAdmissionHoldRoute);
+        Assert.Null(task.LastProcess);
+        Assert.Equal(0, goal.OperatorAcceptanceRegateCount);
+        Assert.Single(goal.Timeline.Where(item => item.Message.Contains("receipt=acceptance-regate", StringComparison.Ordinal)));
+        Assert.True(kernel.BeginGoalAcceptanceVerification(goal.Id, "Run deterministic acceptance."));
+        Assert.False(kernel.BeginGoalAcceptanceVerification(goal.Id, "Do not duplicate acceptance."));
+    }
+
+    [Xunit.Fact]
+    public void AcceptanceRegate_MissingVerification_FailsClosedToHuman()
+    {
+        var kernel = new AgentOrchestratorKernel();
+        var task = new TaskSpec(TaskId.New(), "Review candidate", AgentRole.Reviewer);
+        var goal = kernel.CreateGoal("Hold unsafe acceptance re-gate", [task]);
+        kernel.ActivateGoal(goal.Id, [new AgentDefinition(
+            new AgentId("reviewer"),
+            "Reviewer",
+            AgentRole.Reviewer,
+            new ModelProfile("OpenAI", "test", ModelCapability.Text, SubscriptionMode.ApiKey))]);
+        var attempt = DateTimeOffset.Parse("2026-08-25T12:01:00Z");
+        var fingerprint = RetryContextFingerprintBuilder.Build(Input() with { Role = AgentRole.Reviewer });
+        kernel.RecordTaskDispatch(goal.Id, task.Id, Dispatch(attempt, fingerprint));
+        var receipt = new RetryAdmissionReceipt(
+            "acceptance-regate-missing-verification",
+            RetryCause.UnchangedContextRepeat,
+            fingerprint,
+            RetryAdmissionDecision.Prevented,
+            RetryAdmissionRoute.AcceptanceRegate,
+            PaidRouteClassification.Paid,
+            attempt,
+            attempt);
+
+        kernel.ApplyPreparedRetryAdmission(
+            goal.Id,
+            task.Id,
+            new RetryAdmissionResult(RetryAdmissionDecision.Prevented, receipt));
+
+        Assert.Equal(WorkTaskStatus.WaitingForHuman, task.Status);
+        Assert.Equal(GoalStatus.WaitingForHuman, goal.Status);
+        Assert.Equal(RetryAdmissionRoute.HumanClarification, task.RetryAdmissionHoldRoute);
+        Assert.Single(kernel.HumanInputRequests, request => request.GoalId == goal.Id && !request.IsCompleted);
+        Assert.Equal(0, goal.OperatorAcceptanceRegateCount);
+    }
+
+    [Xunit.Fact]
+    public void AcceptanceRegate_LatestVerificationFailed_DoesNotRestoreOlderSuccess()
+    {
+        var kernel = new AgentOrchestratorKernel();
+        var task = new TaskSpec(TaskId.New(), "Review candidate", AgentRole.Reviewer);
+        var goal = kernel.CreateGoal("Do not suppress a later blocker", [task]);
+        kernel.ActivateGoal(goal.Id, [new AgentDefinition(
+            new AgentId("reviewer"),
+            "Reviewer",
+            AgentRole.Reviewer,
+            new ModelProfile("OpenAI", "test", ModelCapability.Text, SubscriptionMode.ApiKey))]);
+        var firstAttempt = DateTimeOffset.Parse("2026-08-25T12:01:00Z");
+        var secondAttempt = firstAttempt.AddMinutes(1);
+        var fingerprint = RetryContextFingerprintBuilder.Build(Input() with { Role = AgentRole.Reviewer });
+        kernel.RecordTaskDispatch(goal.Id, task.Id, Dispatch(firstAttempt, fingerprint));
+        kernel.RecordTaskVerification(
+            goal.Id,
+            task.Id,
+            new TaskVerificationRecord("command", "worktree", 0, "accepted", "", firstAttempt));
+        kernel.RecordTaskVerification(
+            goal.Id,
+            task.Id,
+            new TaskVerificationRecord("command", "worktree", 1, "", "new blocker", firstAttempt.AddSeconds(30)));
+        kernel.RetryTask(
+            goal.Id,
+            task.Id,
+            "Re-check context containing the blocker.",
+            invalidateDownstream: false,
+            retryCause: RetryCause.UnchangedContextRepeat);
+        kernel.RecordTaskDispatch(goal.Id, task.Id, Dispatch(secondAttempt, fingerprint));
+        var receipt = new RetryAdmissionReceipt(
+            "acceptance-regate-latest-failed",
+            RetryCause.UnchangedContextRepeat,
+            fingerprint,
+            RetryAdmissionDecision.Prevented,
+            RetryAdmissionRoute.AcceptanceRegate,
+            PaidRouteClassification.Paid,
+            secondAttempt,
+            secondAttempt,
+            firstAttempt);
+
+        kernel.ApplyPreparedRetryAdmission(
+            goal.Id,
+            task.Id,
+            new RetryAdmissionResult(RetryAdmissionDecision.Prevented, receipt));
+
+        Assert.Equal(WorkTaskStatus.WaitingForHuman, task.Status);
+        Assert.Equal(GoalStatus.WaitingForHuman, goal.Status);
+        Assert.Null(task.LastVerification);
+        Assert.Single(kernel.HumanInputRequests, request => request.GoalId == goal.Id && !request.IsCompleted);
     }
 
     [Xunit.Fact]
