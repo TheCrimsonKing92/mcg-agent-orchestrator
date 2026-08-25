@@ -51,7 +51,7 @@ internal static class HistoricalTrialReplayResolver
             snapshot = kernel.ExportGoalSnapshot(goalId);
             timing = kernel.BuildGoalTimingReport(goalId);
         }
-        catch (InvalidOperationException ex)
+        catch (Exception ex) when (ex is InvalidOperationException or KeyNotFoundException)
         {
             throw Unavailable(
                 TrialComparisonUnavailableReason.HistoricalGoalNotFound,

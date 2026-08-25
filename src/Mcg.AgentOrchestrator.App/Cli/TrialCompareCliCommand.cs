@@ -146,6 +146,34 @@ internal static class TrialCompareCliCommand
             TimeSpan.FromSeconds(timeoutSeconds));
     }
 
+    internal static bool RequiresHistoricalState(IReadOnlyList<string> parts)
+    {
+        if (parts.Count == 0 || !parts[0].Equals("trial-compare", StringComparison.OrdinalIgnoreCase))
+        {
+            return false;
+        }
+
+        try
+        {
+            var specPath = ValueAfter(parts, "--spec");
+            if (string.IsNullOrWhiteSpace(specPath) || !File.Exists(Path.GetFullPath(specPath)))
+            {
+                return false;
+            }
+
+            using var document = JsonDocument.Parse(File.ReadAllText(Path.GetFullPath(specPath)));
+            return document.RootElement.ValueKind == JsonValueKind.Object
+                && document.RootElement.EnumerateObject().Any(property =>
+                    property.Name.Equals("historical", StringComparison.OrdinalIgnoreCase)
+                    && property.Value.ValueKind is not JsonValueKind.Null);
+        }
+        catch (Exception ex) when (ex is ArgumentException or IOException or UnauthorizedAccessException or JsonException)
+        {
+            // Invalid specs remain on the state-free path so normal command parsing owns the typed error.
+            return false;
+        }
+    }
+
     private static TrialWorkload BuildExplicitWorkload(TrialCompareWorkloadSpec workload)
     {
         if (string.IsNullOrWhiteSpace(workload.BriefIdentity)

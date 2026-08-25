@@ -114,6 +114,18 @@ internal static class CliPersistentStateRunner
             return false;
         }
 
+        if (TrialCompareCliCommand.RequiresHistoricalState(args))
+        {
+            return ExecuteHistoricalTrialCompareReadOnly(
+                args,
+                stateRepository,
+                workspace,
+                ref agents,
+                providers,
+                ref workerProfiles,
+                channel);
+        }
+
         if (SkipsKernelState(args))
         {
             var commandKernel = new AgentOrchestratorKernel();
@@ -555,7 +567,8 @@ internal static class CliPersistentStateRunner
             "cleanup-status" or
             "repo-process-info" or "repo-process-stop" or "stable-slot-dotnet" or
             "gate-status" or "acceptance-engine" or "run-event" or
-            "project" or "trial-compare" => true,
+            "project" => true,
+            "trial-compare" => !TrialCompareCliCommand.RequiresHistoricalState(args),
             _ => false,
         };
     }
@@ -1587,6 +1600,36 @@ internal static class CliPersistentStateRunner
         }
 
         return shouldSave;
+    }
+
+    internal static bool ExecuteHistoricalTrialCompareReadOnly(
+        IReadOnlyList<string> args,
+        IOrchestratorStateRepository stateRepository,
+        OrchestratorWorkspace workspace,
+        ref IReadOnlyList<AgentDefinition> agents,
+        IModelProviderRegistry providers,
+        ref WorkerProfileCatalog workerProfiles,
+        IOperatorChannel? channel = null)
+    {
+        var commandKernel = new AgentOrchestratorKernel();
+        Goal? commandCurrentGoal = null;
+        var changed = CliCommandDispatcher.ExecuteCommand(
+            args,
+            commandKernel,
+            workspace,
+            ref agents,
+            providers,
+            ref workerProfiles,
+            ref commandCurrentGoal,
+            channel,
+            reloadKernelForGoals: requestedGoalIds => stateRepository.LoadGoalsAsync(
+                requestedGoalIds.Select(goalId => new GoalId(goalId)).ToArray()).GetAwaiter().GetResult());
+        if (changed)
+        {
+            throw new InvalidOperationException("Historical trial comparison attempted to mutate orchestrator state through its read-only route.");
+        }
+
+        return false;
     }
 
     private static bool ExecuteSingleGoalCommandWithoutTransaction(

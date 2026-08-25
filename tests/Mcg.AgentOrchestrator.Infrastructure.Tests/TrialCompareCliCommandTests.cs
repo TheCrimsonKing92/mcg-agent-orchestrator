@@ -1,11 +1,79 @@
 using Mcg.AgentOrchestrator.App.Cli;
+using Mcg.AgentOrchestrator.App.Orchestration;
 using Mcg.AgentOrchestrator.Core;
+using Mcg.AgentOrchestrator.Infrastructure;
 using System.Text.Json;
 
 namespace Mcg.AgentOrchestrator.Infrastructure.Tests;
 
 public sealed class TrialCompareCliCommandTests
 {
+    [Xunit.Fact]
+    public async Task HistoricalTrialCompareThroughProgramLoadsPersistedGoal()
+    {
+        var root = Path.Combine(Path.GetTempPath(), "trial-compare-cli-tests", Guid.NewGuid().ToString("N"));
+        try
+        {
+            Directory.CreateDirectory(root);
+            var workspace = OrchestratorWorkspace.ForDirectory(root);
+            _ = StateDbMigrations.EnsureUpToDate(workspace.SqliteStatePath);
+            var repository = new SqliteOrchestratorStateRepository(workspace.SqliteStatePath);
+            var goal = HistoricalGoal(Dispatch(0, "brief one", "base-sha", "OpenAI", "gpt-a")) with
+            {
+                Objective = "brief one",
+                BriefVersions =
+                [
+                    new GoalBriefVersion(1, "brief one", DateTimeOffset.Parse("2026-01-01T00:00:00Z"))
+                ]
+            };
+            await repository.SaveAsync(AgentOrchestratorKernel.FromSnapshot(new OrchestratorSnapshot([goal], [])));
+            var specPath = WriteHistoricalSpec(root, goal.Id);
+            var before = JsonSerializer.Serialize((await repository.LoadAsync()).ExportSnapshot());
+
+            Xunit.Assert.False(CliPersistentStateRunner.SkipsKernelState(["trial-compare", "--spec", specPath]));
+
+            var result = RunAppCli(root, "trial-compare", "--spec", specPath);
+            var after = JsonSerializer.Serialize((await new SqliteOrchestratorStateRepository(workspace.SqliteStatePath).LoadAsync()).ExportSnapshot());
+
+            Xunit.Assert.Equal(1, result.ExitCode);
+            Xunit.Assert.Contains("At least two harnesses are required", result.StandardError, StringComparison.Ordinal);
+            Xunit.Assert.DoesNotContain(nameof(TrialComparisonUnavailableReason.HistoricalGoalNotFound), result.StandardOutput, StringComparison.Ordinal);
+            Xunit.Assert.Equal(before, after);
+        }
+        finally
+        {
+            if (Directory.Exists(root))
+            {
+                Directory.Delete(root, recursive: true);
+            }
+        }
+    }
+
+    [Xunit.Fact]
+    public void HistoricalTrialCompareThroughProgramReportsActuallyMissingGoal()
+    {
+        var root = Path.Combine(Path.GetTempPath(), "trial-compare-cli-tests", Guid.NewGuid().ToString("N"));
+        try
+        {
+            Directory.CreateDirectory(root);
+            var workspace = OrchestratorWorkspace.ForDirectory(root);
+            _ = StateDbMigrations.EnsureUpToDate(workspace.SqliteStatePath);
+            var specPath = WriteHistoricalSpec(root, "missing-goal");
+
+            var result = RunAppCli(root, "trial-compare", "--spec", specPath);
+
+            Xunit.Assert.Equal(1, result.ExitCode);
+            Xunit.Assert.Contains(nameof(TrialComparisonUnavailableReason.HistoricalGoalNotFound), result.StandardOutput, StringComparison.Ordinal);
+        }
+        finally
+        {
+            if (Directory.Exists(root))
+            {
+                Directory.Delete(root, recursive: true);
+            }
+        }
+    }
+
     [Xunit.Fact]
     public void ParseSpecRequiresCanonicalWorkloadEvidence()
     {
@@ -24,6 +92,7 @@ public sealed class TrialCompareCliCommandTests
         var root = Path.Combine(Path.GetTempPath(), "trial-compare-cli-tests", Guid.NewGuid().ToString("N"));
         try
         {
+            Directory.CreateDirectory(root);
             var receipts = Path.Combine(root, "receipts");
             const string brief = "same historical brief\r\nwithout normalization";
             var digest = TrialIdentity.ComputeBriefDigest(brief);
@@ -60,6 +129,9 @@ public sealed class TrialCompareCliCommandTests
             Xunit.Assert.Equal("a", request.Harnesses[0].Environment!["MODE"]);
             Xunit.Assert.Equal("b", request.Harnesses[1].Environment!["MODE"]);
             Xunit.Assert.True(CliPersistentStateRunner.SkipsKernelState(["trial-compare"]));
+            var specPath = Path.Combine(root, "explicit.json");
+            File.WriteAllText(specPath, json);
+            Xunit.Assert.True(CliPersistentStateRunner.SkipsKernelState(["trial-compare", "--spec", specPath]));
         }
         finally
         {
@@ -277,6 +349,54 @@ public sealed class TrialCompareCliCommandTests
             }
             """);
         return specPath;
+    }
+
+    private static string WriteHistoricalSpec(string root, string goalId)
+    {
+        var specPath = Path.Combine(root, $"historical-{Guid.NewGuid():N}.json");
+        File.WriteAllText(specPath, $$"""
+            {
+              "sourceRepositoryPath": "{{root.Replace("\\", "\\\\")}}",
+              "historical": { "goalId": "{{goalId}}", "taskId": "task-1", "dispatchIndex": 0 },
+              "harnesses": []
+            }
+            """);
+        return specPath;
+    }
+
+    private static (int ExitCode, string StandardOutput, string StandardError) RunAppCli(
+        string workingDirectory,
+        params string[] args)
+    {
+        var startInfo = new System.Diagnostics.ProcessStartInfo
+        {
+            FileName = "dotnet",
+            WorkingDirectory = workingDirectory,
+            RedirectStandardOutput = true,
+            RedirectStandardError = true,
+            UseShellExecute = false,
+            CreateNoWindow = true
+        };
+        startInfo.Environment[OrchestratorWorkspace.RepoRootEnvironmentVariable] = workingDirectory;
+        startInfo.Environment["OLLAMA_BASE_URL"] = "http://127.0.0.1:1";
+        startInfo.ArgumentList.Add("exec");
+        startInfo.ArgumentList.Add(Path.Combine(AppContext.BaseDirectory, "Mcg.AgentOrchestrator.App.dll"));
+        foreach (var arg in args)
+        {
+            startInfo.ArgumentList.Add(arg);
+        }
+
+        using var process = System.Diagnostics.Process.Start(startInfo)
+            ?? throw new InvalidOperationException("Failed to start app CLI.");
+        var standardOutput = process.StandardOutput.ReadToEndAsync();
+        var standardError = process.StandardError.ReadToEndAsync();
+        if (!process.WaitForExit(30000))
+        {
+            process.Kill(entireProcessTree: true);
+            throw new TimeoutException("App CLI did not exit within 30 seconds.");
+        }
+
+        return (process.ExitCode, standardOutput.GetAwaiter().GetResult(), standardError.GetAwaiter().GetResult());
     }
 
     private static GoalSnapshot HistoricalGoal(params TaskDispatchSnapshot[] dispatches) => new(
