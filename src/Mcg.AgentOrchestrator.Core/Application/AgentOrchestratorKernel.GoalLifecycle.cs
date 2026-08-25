@@ -423,7 +423,8 @@ public sealed partial class AgentOrchestratorKernel
         TaskId taskId,
         string message,
         bool invalidateDownstream = true,
-        RetryRoundKind? retryRoundKind = null)
+        RetryRoundKind? retryRoundKind = null,
+        RetryCause retryCause = RetryCause.Unknown)
     {
         var goal = GetGoal(goalId);
         var task = goal.FindTask(taskId);
@@ -451,7 +452,7 @@ public sealed partial class AgentOrchestratorKernel
 
         var retryAt = _clock.UtcNow;
         var priorCandidate = task.LastDispatch?.ResultCommit;
-        ResetTaskForRetry(task, retryAt, retryRoundKind);
+        ResetTaskForRetry(task, retryAt, retryRoundKind, retryCause);
         RecordEffectiveAcceptanceCriteriaCorrections(goal, taskId, ProgressKind.TaskRetried, retryMessage);
         Append(goal, taskId, ProgressKind.TaskRetried, retryMessage);
         if (invalidateDownstream)
@@ -1137,7 +1138,11 @@ public sealed partial class AgentOrchestratorKernel
             $"Goal failed because task {task.Id.Value[..8]} reached an explicit terminal escalation.");
     }
 
-    private static void ResetTaskForRetry(TaskSpec task, DateTimeOffset retryAt, RetryRoundKind? retryRoundKind = null)
+    private static void ResetTaskForRetry(
+        TaskSpec task,
+        DateTimeOffset retryAt,
+        RetryRoundKind? retryRoundKind = null,
+        RetryCause retryCause = RetryCause.Unknown)
     {
         task.ClearLatestVerification();
         task.ClearLastExecution();
@@ -1145,7 +1150,7 @@ public sealed partial class AgentOrchestratorKernel
         task.ClearLastProcess();
         task.ClearSubscriptionRetryAfter();
         task.SetInterruptedDispatchRecovery(null);
-        task.RecordRetry(retryAt, retryRoundKind);
+        task.RecordRetry(retryAt, retryRoundKind, retryCause);
         task.SetStatus(task.AssignedAgentId is null ? WorkTaskStatus.Pending : WorkTaskStatus.Assigned);
     }
 

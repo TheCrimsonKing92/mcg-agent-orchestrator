@@ -132,7 +132,9 @@ public sealed record TaskDispatchRecord(
     string? ReviewFindingTouchProofDiagnostic = null,
     ReviewRetryCapReceipt? ReviewRetryCap = null,
     WorkerContextPackageReceipt? ContextPackageReceipt = null,
-    int PlannerSampleCount = 1)
+    int PlannerSampleCount = 1,
+    RetryContextFingerprint? RetryContextFingerprint = null,
+    PaidRouteClassification PaidRoute = PaidRouteClassification.Unknown)
 {
     public int BriefVersion { get; internal set; } = BriefVersion;
 

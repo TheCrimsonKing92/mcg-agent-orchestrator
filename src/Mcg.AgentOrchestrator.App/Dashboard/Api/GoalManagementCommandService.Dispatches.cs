@@ -338,14 +338,21 @@ public static SubscriptionStartResult StartSubscriptionReadyTasks(
         plannerSampleCount: ResolvePlannerSampleCount(workspace, plannerSampleCount, conductorPolicy));
     var containsInterruptedDispatchRecovery = batch.Dispatches.Any(dispatch =>
         dispatch.Task.InterruptedDispatchRecoveryId is not null);
+    var admittedTaskIds = new HashSet<TaskId>();
+    foreach (var prepared in batch.Dispatches)
+    {
+        var admission = EnsurePreparedRetryAdmission(kernel, workspace, goal.Id, prepared.Task);
+        if (admission.AllowsProcessStart)
+            admittedTaskIds.Add(prepared.Task.Id);
+    }
     if (!containsInterruptedDispatchRecovery &&
         checkpointBeforeWorkerStart is not null &&
-        batch.Dispatches.Count > 0)
+        admittedTaskIds.Count > 0)
     {
         checkpointBeforeWorkerStart(
             kernel,
             goal.Id,
-            batch.Dispatches[0].Task.Id,
+            batch.Dispatches.First(dispatch => admittedTaskIds.Contains(dispatch.Task.Id)).Task.Id,
             DispatchRecordCheckpointPhase.BeforeProcessStart);
     }
 
@@ -361,7 +368,8 @@ public static SubscriptionStartResult StartSubscriptionReadyTasks(
         checkpointBeforeWorkerStart,
         readCurrentInterruptedDispatchState,
         runner: runner,
-        sandboxOptions: sandboxOptions);
+        sandboxOptions: sandboxOptions,
+        admittedTaskIds: admittedTaskIds);
     return new SubscriptionStartResult(
         batch.Dispatches,
         processes,
@@ -887,7 +895,8 @@ private static ProcessBatchExecutionResult StartDispatches(
     int? reviewAutoRetryStopRound = null,
     BackgroundDispatchRunner? runner = null,
     WorkerSandboxOptions? sandboxOptions = null,
-    ConductorAutonomyPolicy? conductorPolicy = null)
+    ConductorAutonomyPolicy? conductorPolicy = null,
+    IReadOnlySet<TaskId>? admittedTaskIds = null)
 {
     runner ??= new BackgroundDispatchRunner();
     var logRoot = workspace.LogDirectory;
@@ -922,6 +931,13 @@ private static ProcessBatchExecutionResult StartDispatches(
                 reviewAutoRetryStopRound,
                 sandboxOptions,
                 conductorPolicy: conductorPolicy);
+        }
+
+        if (admittedTaskIds is null || !admittedTaskIds.Contains(task.Id))
+        {
+            var admission = EnsurePreparedRetryAdmission(kernel, workspace, goal.Id, task);
+            if (!admission.AllowsProcessStart)
+                continue;
         }
 
         Action<AgentOrchestratorKernel, GoalId, TaskId, DispatchRecordCheckpointPhase>? batchCheckpoint =
@@ -965,6 +981,42 @@ private static ProcessBatchExecutionResult StartDispatches(
     }
 
     return new ProcessBatchExecutionResult(plan, started, recoveryActions, requeueSkippedCount, startFailures);
+}
+
+private static RetryAdmissionResult EnsurePreparedRetryAdmission(
+    AgentOrchestratorKernel kernel,
+    OrchestratorWorkspace workspace,
+    GoalId goalId,
+    TaskSpec task)
+{
+    var dispatch = task.LastDispatch ??
+        throw new InvalidOperationException("Retry admission requires a prepared dispatch.");
+    var fingerprint = dispatch.RetryContextFingerprint ??
+        throw new InvalidOperationException("Prepared subscription dispatch is missing its retry-context fingerprint.");
+    var persisted = RetryAdmissionReservationStore.TryReserveAsync(
+            workspace.SqliteStatePath,
+            goalId,
+            task.Id,
+            fingerprint,
+            dispatch.PaidRoute,
+            task.PendingRetryCause,
+            dispatch.DispatchedAt,
+            dispatch.DispatchedAt)
+        .GetAwaiter()
+        .GetResult();
+    if (persisted is not null)
+    {
+        kernel.ApplyPreparedRetryAdmission(goalId, task.Id, persisted);
+        return persisted;
+    }
+
+    return kernel.RecordPreparedRetryAdmission(
+        goalId,
+        task.Id,
+        fingerprint,
+        dispatch.PaidRoute,
+        dispatch.DispatchedAt,
+        RetryContextFingerprintFactory.GetOpenBlockingFindings(kernel.GetGoal(goalId)));
 }
 
 internal static DispatchRecordCheckpointPhase ResolveBatchCheckpointPhase(

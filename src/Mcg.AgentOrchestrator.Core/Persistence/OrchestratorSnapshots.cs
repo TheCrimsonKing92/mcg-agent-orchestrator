@@ -115,7 +115,9 @@ public sealed record TaskSnapshot(
     PreReviewEvidenceReceipt? PreReviewEvidenceReceipt = null,
     string? InterruptedDispatchRecoveryId = null,
     bool WasCancelledByConductor = false,
-    IReadOnlyList<TaskDispatchSnapshot>? DispatchHistory = null);
+    IReadOnlyList<TaskDispatchSnapshot>? DispatchHistory = null,
+    RetryCause PendingRetryCause = RetryCause.Unknown,
+    IReadOnlyList<RetryAdmissionReceipt>? RetryAdmissionHistory = null);
 
 public sealed record TaskExecutionSnapshot(
     string AgentId,
@@ -199,7 +201,9 @@ public sealed record TaskDispatchSnapshot(
     string? ReviewFindingTouchProofDiagnostic = null,
     ReviewRetryCapReceipt? ReviewRetryCap = null,
     WorkerContextPackageReceipt? ContextPackageReceipt = null,
-    int PlannerSampleCount = 1);
+    int PlannerSampleCount = 1,
+    RetryContextFingerprint? RetryContextFingerprint = null,
+    PaidRouteClassification PaidRoute = PaidRouteClassification.Unknown);
 
 public sealed record TaskProcessSnapshot(
     int ProcessId,

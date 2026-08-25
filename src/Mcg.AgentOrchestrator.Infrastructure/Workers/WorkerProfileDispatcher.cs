@@ -212,10 +212,12 @@ public static class WorkerProfileDispatcher
         ReviewRetryCapReceipt? reviewRetryCap = null,
         CitedPriorEvidenceResolver? citedPriorEvidenceResolver = null,
         WorkerSandboxOptions? sandboxOptions = null,
-        int plannerSampleCount = 1)
+        int plannerSampleCount = 1,
+        PaidRouteClassification paidRoute = PaidRouteClassification.Unknown)
     {
         EnsureTaskNeedsExecution(task, allowPendingRecordedDispatchRefresh);
         EnsureSubscriptionRetryWindowHasPassed(task, dispatchedAt);
+        var priorDispatch = task.LastDispatch;
         var durableArtifactFindings = new List<string>();
         AddDurableArtifactDependencyFindings(
             durableArtifactFindings,
@@ -340,6 +342,15 @@ public static class WorkerProfileDispatcher
             promptRoot,
             dispatchVariables,
             dispatchedAt);
+        var retryContextFingerprint = RetryContextFingerprintFactory.Build(
+            goal,
+            task,
+            providerName,
+            modelName,
+            paidRoute,
+            priorDispatch?.ResultCommit ?? priorDispatch?.BaseCommit ?? task.LastVerification?.ReviewedCommit,
+            targetContext?.HeadCommit ?? priorDispatch?.BaseCommit,
+            reviewerScopeMergeBase ?? targetContext?.HeadCommit);
         kernel.RecordTaskDispatch(goal.Id, task.Id, new TaskDispatchRecord(
             profile.Name,
             preparation.Command,
@@ -360,7 +371,9 @@ public static class WorkerProfileDispatcher
             ReviewFindingTouchProofDiagnostic: reviewerRoundTouchScope.Diagnostic,
             ReviewRetryCap: effectiveReviewRetryCap,
             ContextPackageReceipt: contextPackageReceipt,
-            PlannerSampleCount: PlannerSamplingPolicy.EffectiveSampleCount(task.RequiredRole, plannerSampleCount)),
+            PlannerSampleCount: PlannerSamplingPolicy.EffectiveSampleCount(task.RequiredRole, plannerSampleCount),
+            RetryContextFingerprint: retryContextFingerprint,
+            PaidRoute: paidRoute),
             allowPendingRecordedDispatchRefresh);
         return new WorkerProfileDispatchResult(task, preparation.PromptPath);
     }
@@ -582,7 +595,8 @@ public static class WorkerProfileDispatcher
                 : null,
             citedPriorEvidenceResolver: citedPriorEvidenceResolver,
             sandboxOptions: sandbox,
-            plannerSampleCount: plannerSampleCount);
+            plannerSampleCount: plannerSampleCount,
+            paidRoute: ClassifyPaidRoute(roleSelection.Model.SubscriptionMode));
     }
 
     public static WorkerSubscriptionPreflightResult PreflightSubscriptionTask(
@@ -1252,11 +1266,17 @@ public static class WorkerProfileDispatcher
                     : null,
                 citedPriorEvidenceResolver: citedPriorEvidenceResolver,
                 sandboxOptions: sandbox,
-                plannerSampleCount: plannerSampleCount));
+                plannerSampleCount: plannerSampleCount,
+                paidRoute: ClassifyPaidRoute(roleSelection.Model.SubscriptionMode)));
         }
 
         return new WorkerProfileReadyBatchResult(results, blocked);
     }
+
+    private static PaidRouteClassification ClassifyPaidRoute(SubscriptionMode subscriptionMode) =>
+        subscriptionMode == SubscriptionMode.LocalBridge
+            ? PaidRouteClassification.NonPaid
+            : PaidRouteClassification.Paid;
 
     private static bool TryResolveMissingArtifactDependency(
         AgentOrchestratorKernel kernel,
@@ -1286,7 +1306,8 @@ public static class WorkerProfileDispatcher
             kernel.RetryTask(
                 goal.Id,
                 upstreamTask.Id,
-                $"{rerouteMarker}; {blockedTask.RequiredRole} is held until {artifactRole} task {upstreamTask.Id.Value} produces a complete durable artifact.");
+                $"{rerouteMarker}; {blockedTask.RequiredRole} is held until {artifactRole} task {upstreamTask.Id.Value} produces a complete durable artifact.",
+                retryCause: RetryCause.CriterionEvidenceOwnerMismatch);
             return true;
         }
 

@@ -237,6 +237,7 @@ public sealed partial class AgentOrchestratorKernel
             }
 
             var recoverableLimitFailures = DispatchFailureClassifier.CountRecoverableSubscriptionLimitFailures(task);
+            task.RecordRetry(_clock.UtcNow, retryCause: RetryCause.ProviderInterruption);
             task.ClearLatestVerification();
             task.SetStatus(task.AssignedAgentId is null ? WorkTaskStatus.Pending : WorkTaskStatus.Assigned);
             var message = recoverableLimitFailures >= DispatchFailureClassifier.RecoverableSubscriptionLimitReviewThreshold
@@ -254,7 +255,7 @@ public sealed partial class AgentOrchestratorKernel
             if (connectivityFailures <= ProviderConnectivityRetryLimit)
             {
                 task.SetSubscriptionRetryAfter(_clock.UtcNow + BuildProviderConnectivityBackoff(connectivityFailures));
-                task.RecordRetry(_clock.UtcNow);
+                task.RecordRetry(_clock.UtcNow, retryCause: RetryCause.ProviderInterruption);
                 task.ClearLatestVerification();
                 task.SetStatus(task.AssignedAgentId is null ? WorkTaskStatus.Pending : WorkTaskStatus.Assigned);
                 Append(
@@ -1164,6 +1165,51 @@ public sealed partial class AgentOrchestratorKernel
         task.SetStatus(WorkTaskStatus.Running);
         goal.SetStatus(GoalStatus.Active);
         Append(goal, taskId, ProgressKind.TaskDispatchRecorded, $"Dispatched to {dispatch.WorkerName}{FormatDispatchTimelineModelSelection(dispatch)}: {dispatch.Command}");
+    }
+
+    public RetryAdmissionResult RecordPreparedRetryAdmission(
+        GoalId goalId,
+        TaskId taskId,
+        RetryContextFingerprint fingerprint,
+        PaidRouteClassification paidRoute,
+        DateTimeOffset recordedAt,
+        IReadOnlyList<ReviewFinding>? openBlockingFindings = null)
+    {
+        var goal = GetGoal(goalId);
+        var task = goal.FindTask(taskId);
+        if (task.LastDispatch is null)
+            throw new InvalidOperationException("Retry admission requires the exact current prepared dispatch.");
+
+        var result = RetryAdmissionPolicy.Evaluate(
+            task,
+            fingerprint,
+            paidRoute,
+            task.PendingRetryCause,
+            task.LastDispatch.DispatchedAt,
+            recordedAt,
+            openBlockingFindings);
+        ApplyPreparedRetryAdmission(goalId, taskId, result);
+        return result;
+    }
+
+    public void ApplyPreparedRetryAdmission(
+        GoalId goalId,
+        TaskId taskId,
+        RetryAdmissionResult result)
+    {
+        ArgumentNullException.ThrowIfNull(result);
+        var goal = GetGoal(goalId);
+        var task = goal.FindTask(taskId);
+        task.RecordRetryAdmission(result.Receipt);
+        if (!result.AllowsProcessStart)
+        {
+            task.SetStatus(WorkTaskStatus.Failed);
+            Append(
+                goal,
+                taskId,
+                ProgressKind.NoProgressRedispatchPrevented,
+                $"NO_PROGRESS_REDISPATCH_PREVENTED fingerprint={result.Receipt.Fingerprint.Value} cause={result.Receipt.Cause} route={result.Receipt.Route} attempt={result.Receipt.LinkedDispatchAt:O}");
+        }
     }
 
     public void ReplacePreparedTaskDispatch(GoalId goalId, TaskId taskId, TaskDispatchRecord dispatch)

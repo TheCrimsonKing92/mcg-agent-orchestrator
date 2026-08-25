@@ -186,6 +186,84 @@ public sealed class LoopHealthReportTests
         Assert.Equal(0.0, report.FalsePassRate);
     }
 
+    [Xunit.Fact]
+    public void LoopHealthReportsPaidRetrySloFromDurableAdmissionReceipts()
+    {
+        var firstAt = DateTimeOffset.Parse("2026-08-25T10:00:00Z");
+        var clock = new MutableClock(firstAt);
+        var kernel = new AgentOrchestratorKernel(clock);
+        var goal = kernel.CreateGoal("Paid retry SLO", [MakeTask()]);
+        kernel.ActivateGoal(goal.Id, DefaultAgents);
+        var task = goal.Tasks.Single();
+        var retryAt = firstAt.AddHours(1);
+        var completedAt = firstAt.AddHours(2);
+        var firstFingerprint = Fingerprint("candidate-a");
+        var retryFingerprint = Fingerprint("candidate-b");
+
+        kernel.RecordTaskDispatch(goal.Id, task.Id, PaidDispatch(firstAt, firstFingerprint));
+        kernel.RecordPreparedRetryAdmission(
+            goal.Id, task.Id, firstFingerprint, PaidRouteClassification.Paid, firstAt);
+        RecordStartedProcess(kernel, goal, task, firstAt, 1001);
+        kernel.RecordTaskProcessRefreshed(
+            goal.Id,
+            task.Id,
+            task.LastProcess! with { CompletedAt = firstAt, ExitCode = 1 },
+            verification: null);
+        kernel.RecordDispatchExecutionResult(
+            goal.Id,
+            task.Id,
+            new TaskVerificationRecord(DispatchCommand, WorkDir, 1, "", "source finding", firstAt));
+        clock.UtcNow = retryAt;
+        kernel.RetryTask(
+            goal.Id,
+            task.Id,
+            "Repair the new source finding.",
+            retryCause: RetryCause.NewSourceFinding);
+
+        kernel.RecordTaskDispatch(goal.Id, task.Id, PaidDispatch(retryAt, retryFingerprint));
+        kernel.RecordPreparedRetryAdmission(
+            goal.Id, task.Id, retryFingerprint, PaidRouteClassification.Paid, retryAt);
+        RecordStartedProcess(kernel, goal, task, retryAt, 1002);
+        kernel.RecordTaskProcessRefreshed(
+            goal.Id,
+            task.Id,
+            task.LastProcess! with { CompletedAt = completedAt, ExitCode = 0 },
+            verification: null);
+        kernel.RecordTaskVerification(
+            goal.Id,
+            task.Id,
+            new TaskVerificationRecord(DispatchCommand, WorkDir, 0, "fixed", "", completedAt));
+        Assert.Equal(GoalStatus.Verified, goal.Status);
+        kernel.CompleteGoal(goal.Id, "Landed after verified retry.");
+
+        var report = kernel.BuildLoopHealthReport();
+
+        Assert.Equal(1, report.PaidRetryDispatchCount);
+        Assert.Equal(1.0, report.PaidRetryDispatchesPerLandedGoal);
+        Assert.Equal(0, report.SameFingerprintPreventedCount);
+        Assert.Equal(1, report.RetryCauseDistribution.Single(item => item.Cause == RetryCause.NewSourceFinding).Count);
+        Assert.Equal(2.0, report.MedianRetryResolutionHours);
+        var developer = report.FirstPassCompletionByRole.Single(item => item.Role == AgentRole.Developer);
+        Assert.Equal(0, developer.FirstPassCompletedCount);
+        Assert.Equal(1, developer.PresentTaskCount);
+        Assert.Equal(0.0, developer.CompletionRate);
+        Assert.Null(report.FirstPassCompletionByRole.Single(item => item.Role == AgentRole.Tester).CompletionRate);
+        Assert.Equal(0, report.RetryFingerprintUnavailableCount);
+        Assert.Equal(0, report.RetryPaidAuthorityUnknownCount);
+    }
+
+    [Xunit.Fact]
+    public void LoopHealthLegacyRetryAuthorityRemainsUnavailable()
+    {
+        var (kernel, _, _, _) = BuildFixture();
+
+        var report = kernel.BuildLoopHealthReport();
+
+        Assert.True(report.RetryFingerprintUnavailableCount > 0);
+        Assert.True(report.RetryPaidAuthorityUnknownCount > 0);
+        Assert.Contains(report.RetryCauseDistribution, item => item.Cause == RetryCause.Unknown);
+    }
+
     // --- Semantic-acceptance judge agreement tests ---
 
     [Xunit.Fact(DisplayName = "LoopHealth_judge_verdict_distribution_counts_met_not_met_and_no_verdict_per_judge")]
@@ -425,6 +503,37 @@ public sealed class LoopHealthReportTests
     private static TaskSpec MakeTask() =>
         new(TaskId.New(), "Developer implementation task", AgentRole.Developer);
 
+    private static RetryContextFingerprint Fingerprint(string candidate) =>
+        RetryContextFingerprintBuilder.Build(new RetryContextFingerprintInput(
+            "goal", "task", AgentRole.Developer, "Anthropic", "claude-sonnet-4-6",
+            PaidRouteClassification.Paid, candidate, "criteria", [], [], [], [], "base", "main"));
+
+    private static TaskDispatchRecord PaidDispatch(
+        DateTimeOffset dispatchedAt,
+        RetryContextFingerprint fingerprint) =>
+        new(
+            "worker-cli",
+            DispatchCommand,
+            WorkDir,
+            dispatchedAt,
+            ProviderName: "Anthropic",
+            ModelName: "claude-sonnet-4-6",
+            RetryContextFingerprint: fingerprint,
+            PaidRoute: PaidRouteClassification.Paid);
+
+    private static void RecordStartedProcess(
+        AgentOrchestratorKernel kernel,
+        Goal goal,
+        TaskSpec task,
+        DateTimeOffset startedAt,
+        int processId) =>
+        kernel.RecordTaskProcessStarted(
+            goal.Id,
+            task.Id,
+            new TaskProcessRecord(
+                processId, DispatchCommand, WorkDir, "out.log", "err.log", "exit.txt",
+                startedAt, CompletedAt: null, ExitCode: null));
+
     private static void RecordCompletedDispatch(
         AgentOrchestratorKernel kernel,
         Goal goal,
@@ -501,5 +610,10 @@ public sealed class LoopHealthReportTests
             "Error: build failed",
             DateTimeOffset.UtcNow);
         kernel.RecordDispatchExecutionResult(goal.Id, task.Id, verification);
+    }
+
+    private sealed class MutableClock(DateTimeOffset utcNow) : IClock
+    {
+        public DateTimeOffset UtcNow { get; set; } = utcNow;
     }
 }

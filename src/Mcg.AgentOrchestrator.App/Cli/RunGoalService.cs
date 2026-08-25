@@ -296,7 +296,8 @@ internal static class RunGoalService
         kernel.RetryTask(
             goal.Id,
             task.Id,
-            $"Automatic run-goal failover after {evidence.Reason} from agent '{failedAgentId.Value}'; retrying with alternate agent '{alternate.Id.Value}'.");
+            $"Automatic run-goal failover after {evidence.Reason} from agent '{failedAgentId.Value}'; retrying with alternate agent '{alternate.Id.Value}'.",
+            retryCause: RetryCause.ProviderInterruption);
         return true;
     }
 

@@ -585,6 +585,79 @@ public sealed class WorkerDispatchTestsDispatchPreparation : WorkerDispatchTestS
     Assert.Empty(dispatchJsonFiles);
 }
 
+    [Xunit.Fact]
+    public void IdenticalPaidRetryIsPreventedBeforeCheckpointAndProcessStart()
+    {
+        var root = CreateTempDirectory();
+        var workingDirectory = Path.Combine(root, "repo");
+        Directory.CreateDirectory(workingDirectory);
+        var workspace = OrchestratorWorkspace.ForDirectory(root, workingDirectory);
+        _ = StateDbMigrations.EnsureUpToDate(workspace.SqliteStatePath);
+        WriteSkill(workingDirectory, "orchestrator-dogfood");
+        var firstAt = DateTimeOffset.Parse("2026-07-07T12:00:00Z");
+        var kernel = new AgentOrchestratorKernel(new TestClock(firstAt));
+        var planner = new TaskSpec(TaskId.New(), "Plan the identical retry guard.", AgentRole.Planner);
+        var goal = kernel.CreateGoal("Prevent identical paid retry", [planner]);
+        kernel.SetGoalRefinedSpec(goal.Id, new RefinedSpec(
+            "Prevent identical paid retry",
+            ["An unchanged paid retry starts no process."],
+            VerificationClass.TestVerifiable,
+            [],
+            []));
+        var agent = SubscriptionPlannerAgent("planner", "Planner");
+        var agents = new[] { agent };
+        var profiles = DispatchTestProfiles();
+        kernel.ActivateGoal(goal.Id, agents);
+
+        var first = WorkerProfileDispatcher.PrepareSubscriptionReadyBatch(
+            kernel,
+            goal,
+            agents,
+            profiles,
+            workspace.PromptDirectory,
+            workingDirectory,
+            firstAt,
+            commandExists: _ => true);
+        var firstDispatch = Assert.Single(first.Dispatches);
+        var firstFingerprint = Assert.IsType<RetryContextFingerprint>(firstDispatch.Task.LastDispatch!.RetryContextFingerprint);
+        var firstAdmission = kernel.RecordPreparedRetryAdmission(
+            goal.Id,
+            planner.Id,
+            firstFingerprint,
+            PaidRouteClassification.Paid,
+            firstAt);
+        Assert.Equal(RetryAdmissionDecision.Allowed, firstAdmission.Decision);
+        kernel.ReportTaskProgress(goal.Id, planner.Id, WorkTaskStatus.Failed, "The first paid attempt did not complete.");
+        kernel.RetryTask(
+            goal.Id,
+            planner.Id,
+            "Retry after the unsuccessful paid attempt.",
+            retryCause: RetryCause.ProviderInterruption);
+        new SqliteOrchestratorStateRepository(workspace.SqliteStatePath).SaveAsync(kernel).GetAwaiter().GetResult();
+        var checkpointCalls = 0;
+
+        var result = GoalManagementCommandService.StartSubscriptionReadyTasks(
+            kernel,
+            workspace,
+            goal,
+            agents,
+            profiles,
+            checkpointBeforeWorkerStart: (_, _, _, _) => checkpointCalls++,
+            runner: new BackgroundDispatchRunner(disableProcessStart: true),
+            sandboxOptions: DisabledSandbox);
+
+        Assert.Empty(result.Processes.Tasks);
+        Assert.Equal(0, checkpointCalls);
+        Assert.Null(planner.LastProcess);
+        var prevention = Assert.Single(
+            planner.RetryAdmissionHistory,
+            receipt => receipt.Decision == RetryAdmissionDecision.Prevented);
+        Assert.Equal(RetryCause.UnchangedContextRepeat, prevention.Cause);
+        Assert.Contains(
+            goal.Timeline,
+            item => item.Kind == ProgressKind.NoProgressRedispatchPrevented && item.TaskId == planner.Id);
+    }
+
     [Xunit.Fact(DisplayName = "StartDispatches_checkpoint_phase_stays_post_process_after_first_spawn")]
     public void StartDispatchesCheckpointPhaseStaysPostProcessAfterFirstSpawn()
     {

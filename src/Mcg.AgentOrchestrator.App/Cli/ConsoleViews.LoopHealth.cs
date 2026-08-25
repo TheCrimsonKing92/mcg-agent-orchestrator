@@ -17,6 +17,23 @@ internal static partial class ConsoleViews
         Console.WriteLine($"  Operator prompts / goal:        {snapshot.OperatorPromptsPerGoal:F2}");
         Console.WriteLine($"  Rework / retry rate:            {snapshot.ReworkRetryRate:P0}");
         Console.WriteLine($"  Median time to acceptance:      {FormatMedianHours(snapshot.MedianTimeToAcceptanceHours)}");
+        Console.WriteLine($"  Paid retry dispatches / landed: {snapshot.PaidRetryDispatchesPerLandedGoal:F2} ({snapshot.PaidRetryDispatchCount} total)");
+        Console.WriteLine($"  Same-context repeats prevented: {snapshot.SameFingerprintPreventedCount}");
+        Console.WriteLine($"  Legacy same-context observed:   {snapshot.LegacyObservedSameFingerprintRepeatCount}");
+        Console.WriteLine($"  Median retry resolution:        {FormatMedianHours(snapshot.MedianRetryResolutionHours)}");
+        Console.WriteLine($"  Retry authority unavailable:    fingerprint={snapshot.RetryFingerprintUnavailableCount}, paid={snapshot.RetryPaidAuthorityUnknownCount}");
+
+        Console.WriteLine("  First-pass completion by role:");
+        foreach (var role in snapshot.FirstPassCompletionByRole ?? [])
+        {
+            var rate = role.CompletionRate is null ? "N/A" : role.CompletionRate.Value.ToString("P0");
+            Console.WriteLine($"    {role.Role}: {rate} ({role.FirstPassCompletedCount}/{role.PresentTaskCount})");
+        }
+        Console.WriteLine($"    All five roles: {snapshot.FiveRoleFirstPassGoalCount}/{snapshot.FiveRoleGoalCount} goals");
+
+        Console.WriteLine("  Retry causes:");
+        foreach (var cause in snapshot.RetryCauseDistribution ?? [])
+            Console.WriteLine($"    {cause.Cause}: {cause.Count}");
 
         Console.WriteLine();
         Console.WriteLine("  Per-model outcome mix:");
