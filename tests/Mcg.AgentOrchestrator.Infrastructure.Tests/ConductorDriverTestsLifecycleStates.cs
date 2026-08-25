@@ -11,7 +11,7 @@ using System.Xml.Linq;
 using static ConductorDriverTests;
 
 [Xunit.Collection("IsolatedProcessSpawning")]
-public sealed class ConductorDriverTestsLifecycleStates
+public sealed partial class ConductorDriverTestsLifecycleStates
 {
     private static string CreateTempDirectory() => ConductorDriverTests.CreateTempDirectory();
 
@@ -423,25 +423,6 @@ public sealed class ConductorDriverTestsLifecycleStates
 
         Assert.True(result.Outcome is ConductorAdvanceOutcome.Held);
         Assert.Equal(GoalLifecycleState.Running, ((ConductorAdvanceOutcome.Held)result.Outcome).State);
-    }
-
-    // ── AwaitingVerification state ────────────────────────────────────────
-
-    [Xunit.Fact(DisplayName = "ConductorDriver_AwaitingVerification_returns_Held")]
-    public void ConductorDriverAwaitingVerificationReturnsHeld()
-    {
-        var (kernel, goal) = SimpleGoal();
-        var task = goal.Tasks.Single();
-        // Mark task Completed without verification → MissingVerification gate keeps goal Active,
-        // all tasks Completed → GoalLifecycleState.AwaitingVerification.
-        kernel.ReportTaskProgress(goal.Id, task.Id, WorkTaskStatus.Completed, "done");
-
-        var driver = MakeDriver(getFacts: _ => GoalLifecycleFacts.None);
-
-        var result = driver.AdvanceOnce(goal, ConductorAutonomyPolicy.Conservative);
-
-        Assert.True(result.Outcome is ConductorAdvanceOutcome.Held);
-        Assert.Equal(GoalLifecycleState.AwaitingVerification, ((ConductorAdvanceOutcome.Held)result.Outcome).State);
     }
 
     // ── Verified state ────────────────────────────────────────────────────

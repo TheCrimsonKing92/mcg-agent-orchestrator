@@ -544,6 +544,8 @@ private static void CopyDirectoryContents(string source, string destination)
     protected static void RunGit(string workingDirectory, string[] arguments, DateTimeOffset commitTime)
 {
     const int maximumAttempts = 2;
+    var isCommit = arguments.Any(argument => string.Equals(argument, "commit", StringComparison.Ordinal));
+    var previousHead = isCommit ? TryGetGitHead(workingDirectory) : null;
     for (var attempt = 1; attempt <= maximumAttempts; attempt++)
     {
         var startInfo = new ProcessStartInfo
@@ -573,6 +575,11 @@ private static void CopyDirectoryContents(string source, string destination)
         var error = process.StandardError.ReadToEnd();
         process.WaitForExit(60000);
         if (process.ExitCode == 0)
+        {
+            return;
+        }
+
+        if (isCommit && HasNewCommittedCleanGitHead(workingDirectory, previousHead))
         {
             return;
         }

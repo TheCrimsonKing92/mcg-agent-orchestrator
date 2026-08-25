@@ -65,6 +65,7 @@ internal static class CliCommandHelp
     public const string DogfoodLogUsage = "Usage: dogfood-log list [--limit <n>] | dogfood-log add [goal-prefix]";
     public const string OperatorCommandsUsage = "Usage: operator-commands [--help]";
     public const string GateStatusUsage = "Usage: gate-status";
+    public const string TrialCompareUsage = "Usage: trial-compare --spec <path> [--receipts <directory>] [--timeout-seconds <seconds>] [--format text|json]";
     public const string AcceptanceEngineUsage = "Usage: acceptance-engine status | acceptance-engine clear <repair-or-operator-note>";
     public const string RunEventsMaintenanceUsage = "Usage: run-events-maintenance [--tick-max-age-days <days>] [--keep-tick-rows <count>] [--payload-max-bytes <bytes>] [--batch-size <rows>] [--legacy-purge-oversized-ticks] [--vacuum]";
     public const string RunEventUsage = "Usage: run-event show <sequence> [--format text|json]";
@@ -467,6 +468,7 @@ internal static class CliCommandHelp
         {
             ["project"] = Flags("--root"),
             ["status"] = Flags("--tasks-only"),
+            ["trial-compare"] = Flags("--spec", "--receipts", "--timeout-seconds", "--format"),
             ["provider-smoke"] = Flags("--confirm-all", "--confirm-paid-smoke"),
             ["prototype-ui"] = DashboardFlags(),
             ["serve-dashboard"] = DashboardFlags(),

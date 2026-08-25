@@ -1501,7 +1501,8 @@ private static bool? TryExecuteGoalCommand(string command, IReadOnlyList<string>
                     (goalId, taskId) => BackgroundDispatchRunner.ReadCurrentState(
                         context.ReloadKernel(),
                         goalId,
-                        taskId));
+                        taskId),
+                    context.RunInjectedAcceptanceVerifierInCurrentProcess);
                 var postLandingCanary = PostLandingCanaryFactory.CreateDefault(
                     context.Workspace,
                     line =>
@@ -1791,7 +1792,8 @@ private static bool? TryExecuteGoalCommand(string command, IReadOnlyList<string>
                 (goalId, taskId) => BackgroundDispatchRunner.ReadCurrentState(
                     context.ReloadKernel(),
                     goalId,
-                    taskId));
+                    taskId),
+                context.RunInjectedAcceptanceVerifierInCurrentProcess);
 
             // Single-goal continuous mode: drive just this goal to its next checkpoint without the
             // whole-kernel loop, so adding a goal never requires stopping a running loop and other

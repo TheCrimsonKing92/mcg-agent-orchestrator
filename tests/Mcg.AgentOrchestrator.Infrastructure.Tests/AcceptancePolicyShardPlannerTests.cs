@@ -30,8 +30,8 @@ public sealed class AcceptancePolicyShardPlannerTests
             Assert.Equal(
                 "build-system file changed: src/Mcg.AgentOrchestrator.Core/Mcg.AgentOrchestrator.Core.csproj; " +
                 "changed projects: Core; dependency closure: App, Core, Core.Tests, Dashboard.Tests, " +
-                "Infrastructure, Infrastructure.Cli.Tests, Infrastructure.ProviderEnvironment.Tests, " +
-                "Infrastructure.Providers, Infrastructure.Tests, TestSupport",
+                "Infrastructure, Infrastructure.Cli.Tests, Infrastructure.OperatorComms, " +
+                "Infrastructure.ProviderEnvironment.Tests, Infrastructure.Providers, Infrastructure.Tests, TestSupport",
                 AcceptancePolicyShardPlanner.BuildPolicyShardPlan(
                     ["src/Mcg.AgentOrchestrator.Core/Mcg.AgentOrchestrator.Core.csproj"]).Evidence);
             Assert.Equal(
@@ -75,6 +75,23 @@ public sealed class AcceptancePolicyShardPlannerTests
             Environment.SetEnvironmentVariable("MCG_ACCEPTANCE_FULL_SHARDS", previousFullShards);
             Environment.SetEnvironmentVariable("MCG_ACCEPTANCE_CHANGE_SCOPED", previousChangeScoped);
         }
+    }
+
+    [Fact]
+    public void BuildPolicyShardPlan_MapsOperatorCommsAndItsReferencingProjects()
+    {
+        var plan = AcceptancePolicyShardPlanner.BuildPolicyShardPlan(
+            ["src/Mcg.AgentOrchestrator.Infrastructure.OperatorComms/OperatorChannelFactory.cs"]);
+
+        Assert.Equal(
+            "changed projects: Infrastructure.OperatorComms; dependency closure: App, Dashboard.Tests, " +
+            "Infrastructure.Cli.Tests, Infrastructure.OperatorComms, Infrastructure.ProviderEnvironment.Tests, " +
+            "Infrastructure.Tests, TestSupport",
+            plan.Evidence);
+        Assert.DoesNotContain(
+            AcceptancePolicyShardPlanner.InfrastructureProject,
+            plan.DependencyClosure,
+            StringComparer.OrdinalIgnoreCase);
     }
 
     [Fact]

@@ -588,6 +588,7 @@ public sealed class RepositoryChangeClassifierTests
     [Xunit.InlineData("src/Mcg.AgentOrchestrator.Core/Application/RepositoryOwnershipMap.cs")]
     [Xunit.InlineData("src/Mcg.AgentOrchestrator.Infrastructure/Workspaces/GoalAcceptanceVerifier.cs")]
     [Xunit.InlineData("src/Mcg.AgentOrchestrator.Infrastructure.Providers/ModelProviders.cs")]
+    [Xunit.InlineData("src/Mcg.AgentOrchestrator.Infrastructure.OperatorComms/OperatorChannelFactory.cs")]
     [Xunit.InlineData("src/Mcg.AgentOrchestrator.Core/AgentOutputDirectives.cs")]
     [Xunit.InlineData("src/Mcg.AgentOrchestrator.Infrastructure/NotASubsystem/Unknown.cs")]
     public void RepositoryOwnershipMapPreservesSharedInfrastructureRiskAndSerialization(string path)
@@ -674,11 +675,11 @@ public sealed class RepositoryChangeClassifierTests
         Assert.False(check.Command.Any(argument => argument.Equals("tests/Mcg.AgentOrchestrator.Core.Tests/Mcg.AgentOrchestrator.Core.Tests.csproj", StringComparison.Ordinal)));
     }
 
-    [Xunit.Fact(DisplayName = "RepositoryTestImpactPlanner_selects_infrastructure_tests_for_extracted_provider_changes")]
-    public void RepositoryTestImpactPlannerSelectsInfrastructureTestsForExtractedProviderChanges()
+    [Xunit.Theory(DisplayName = "RepositoryTestImpactPlanner_selects_infrastructure_tests_for_extracted_infrastructure_changes")]
+    [Xunit.InlineData("src/Mcg.AgentOrchestrator.Infrastructure.Providers/ModelProviders.cs")]
+    [Xunit.InlineData("src/Mcg.AgentOrchestrator.Infrastructure.OperatorComms/OperatorChannelFactory.cs")]
+    public void RepositoryTestImpactPlannerSelectsInfrastructureTestsForExtractedInfrastructureChanges(string path)
     {
-        var path = "src/Mcg.AgentOrchestrator.Infrastructure.Providers/ModelProviders.cs";
-
         var summary = RepositoryChangeClassifier.Classify([path]);
         var plan = RepositoryTestImpactPlanner.Plan(summary);
 
@@ -692,17 +693,17 @@ public sealed class RepositoryChangeClassifierTests
             check.Command);
     }
 
-    [Xunit.Fact(DisplayName = "RepositoryOwnershipMap_classifies_extracted_provider_as_shared_infrastructure")]
-    public void RepositoryOwnershipMapClassifiesExtractedProviderAsSharedInfrastructure()
+    [Xunit.Theory(DisplayName = "RepositoryOwnershipMap_classifies_extracted_infrastructure_as_shared_infrastructure")]
+    [Xunit.InlineData("src/Mcg.AgentOrchestrator.Infrastructure.Providers/ModelProviders.cs")]
+    [Xunit.InlineData("src/Mcg.AgentOrchestrator.Infrastructure.OperatorComms/OperatorChannelFactory.cs")]
+    public void RepositoryOwnershipMapClassifiesExtractedInfrastructureAsSharedInfrastructure(string path)
     {
-        var guard = RepositoryOwnershipMap.GuardWriteSet([
-            "src/Mcg.AgentOrchestrator.Infrastructure.Providers/ModelProviders.cs"
-        ]);
+        var guard = RepositoryOwnershipMap.GuardWriteSet([path]);
 
-        var path = Assert.Single(guard.Paths);
-        Assert.Equal(RepositoryOwnershipArea.SharedInfrastructure, path.Area);
-        Assert.True(path.IsHighRisk);
-        Assert.True(path.RequiresSerialization);
+        var ownedPath = Assert.Single(guard.Paths);
+        Assert.Equal(RepositoryOwnershipArea.SharedInfrastructure, ownedPath.Area);
+        Assert.True(ownedPath.IsHighRisk);
+        Assert.True(ownedPath.RequiresSerialization);
         Assert.True(guard.RequiresOperatorApproval);
         Assert.Contains("ownership:shared-infrastructure", guard.RequiredResources);
     }
@@ -742,10 +743,11 @@ public sealed class RepositoryChangeClassifierTests
     [Xunit.Fact(DisplayName = "RepositoryTestImpactPlanner_selects_focused_test_classes_for_orchestration_changes")]
     public void RepositoryTestImpactPlannerSelectsFocusedTestClassesForOrchestrationChanges()
     {
+        var root = FindRepositoryRootFromSource();
         var plan = RepositoryTestImpactPlanner.Plan([
             "src/Mcg.AgentOrchestrator.App/Orchestration/ConductorDriver.cs",
             "src/Mcg.AgentOrchestrator.App/Orchestration/AutoReviewRetryConvergenceBriefBuilder.cs"
-        ]);
+        ], root);
 
         Assert.True(plan.RequiresBuild);
         Assert.False(plan.RequiresBroadVerification);
@@ -754,6 +756,24 @@ public sealed class RepositoryChangeClassifierTests
         Assert.Contains("--filter", check.Command);
         Assert.Contains(check.Command, argument => argument.Contains("ConductorDriverTests", StringComparison.Ordinal));
         Assert.Contains(check.Command, argument => argument.Contains("AutoReviewRetryConvergenceBriefBuilderTests", StringComparison.Ordinal));
+    }
+
+    private static string FindRepositoryRootFromSource(
+        [System.Runtime.CompilerServices.CallerFilePath] string sourceFilePath = "")
+    {
+        var directory = new DirectoryInfo(Path.GetDirectoryName(sourceFilePath)!);
+        while (directory is not null)
+        {
+            var gitPath = Path.Combine(directory.FullName, ".git");
+            if (Directory.Exists(gitPath) || File.Exists(gitPath))
+            {
+                return directory.FullName;
+            }
+
+            directory = directory.Parent;
+        }
+
+        throw new DirectoryNotFoundException("Repository root was not found from the test source path.");
     }
 
     [Xunit.Fact(DisplayName = "RepositoryTestImpactPlanner_selects_focused_dashboard_filter_for_dashboard_only_changes")]

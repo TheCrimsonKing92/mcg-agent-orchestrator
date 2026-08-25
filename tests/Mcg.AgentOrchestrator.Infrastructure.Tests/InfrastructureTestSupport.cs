@@ -34,6 +34,63 @@ public static IEnumerable<string> GetRequiredHeader(HttpRequestMessage request, 
 public static string CreateTempDirectory()
     => SharedTestSupport.CreateTempDirectory();
 
+public static string? TryGetGitHead(string workingDirectory)
+{
+    var head = RunGitProbe(workingDirectory, ["rev-parse", "--verify", "HEAD"]);
+    return head.ExitCode == 0 && !string.IsNullOrWhiteSpace(head.Output)
+        ? head.Output.Trim()
+        : null;
+}
+
+public static bool HasNewCommittedCleanGitHead(string workingDirectory, string? previousHead)
+{
+    var currentHead = TryGetGitHead(workingDirectory);
+    if (currentHead is null || string.Equals(currentHead, previousHead, StringComparison.Ordinal))
+    {
+        return false;
+    }
+
+    var status = RunGitProbe(workingDirectory, ["status", "--short"]);
+    return status.ExitCode == 0 && string.IsNullOrWhiteSpace(status.Output);
+}
+
+private static (int ExitCode, string Output) RunGitProbe(string workingDirectory, string[] arguments)
+{
+    var startInfo = new ProcessStartInfo
+    {
+        FileName = "git",
+        RedirectStandardOutput = true,
+        RedirectStandardError = true,
+        UseShellExecute = false,
+        CreateNoWindow = true,
+        WorkingDirectory = workingDirectory
+    };
+    foreach (var variable in new[]
+             {
+                 "GIT_DIR",
+                 "GIT_WORK_TREE",
+                 "GIT_INDEX_FILE",
+                 "GIT_OBJECT_DIRECTORY",
+                 "GIT_ALTERNATE_OBJECT_DIRECTORIES",
+                 "GIT_COMMON_DIR"
+             })
+    {
+        startInfo.Environment.Remove(variable);
+    }
+
+    foreach (var argument in arguments)
+    {
+        startInfo.ArgumentList.Add(argument);
+    }
+
+    using var process = Process.Start(startInfo)
+        ?? throw new InvalidOperationException("Failed to start git fixture probe.");
+    var output = process.StandardOutput.ReadToEnd();
+    _ = process.StandardError.ReadToEnd();
+    process.WaitForExit(60000);
+    return (process.ExitCode, output);
+}
+
 public static IDisposable ClearProtectedPidEnvironment()
 {
     ProtectedPidEnvironmentLock.Wait();

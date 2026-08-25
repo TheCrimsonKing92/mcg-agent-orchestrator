@@ -96,7 +96,6 @@ internal sealed partial class ConductorDriver
     private readonly Func<TimeSpan, string> _buildServerShutdown;
     private readonly TimeSpan _buildServerShutdownTimeout;
     private readonly Func<Goal, int?, DotnetBuildEnvironmentLease?, CancellationToken, AcceptanceVerificationSummary> _runAcceptanceVerification;
-    private readonly Func<Goal, DotnetBuildEnvironmentLease?> _tryAcquireLandingStableSlotLease;
     private readonly Action<Goal, AcceptanceVerificationSummary> _runAdvisorySemanticAcceptance;
     private readonly Func<Goal, string, DotnetBuildEnvironmentLease?, CancellationToken, FocusedEvidenceRunResult> _runFocusedEvidence;
     private readonly Func<Goal, string, DotnetBuildEnvironmentLease?, CancellationToken, FocusedEvidenceRunResult> _runDualArmFocusedEvidence;
@@ -240,7 +239,8 @@ internal sealed partial class ConductorDriver
         IOperatorChannel? channel = null,
         IModelProviderRegistry? providers = null,
         Action<AgentOrchestratorKernel, IReadOnlyCollection<GoalId>>? persistCriticalDispatchStart = null,
-        Func<GoalId, TaskId, InterruptedDispatchStateRead>? readCurrentInterruptedDispatchState = null)
+        Func<GoalId, TaskId, InterruptedDispatchStateRead>? readCurrentInterruptedDispatchState = null,
+        bool runAcceptanceAttemptsInCurrentProcess = false)
     {
         var dir = workspace.ExecutionDirectory;
         _executionDirectory = dir;
@@ -250,8 +250,9 @@ internal sealed partial class ConductorDriver
         _parallelAcceptanceAttemptCoordinator = new ConductorParallelAcceptanceAttemptCoordinator(
             Path.Combine(workspace.OrchestratorDirectory, "acceptance-gate-attempts"),
             dir,
-            tryRunPreSlot: RunParallelLandingAcceptancePreSlot);
-        _tryAcquireLandingStableSlotLease = _ => TryAcquireInlineLandingStableSlotLease();
+            tryRunPreSlot: RunParallelLandingAcceptancePreSlot,
+            runInline: runAcceptanceAttemptsInCurrentProcess);
+        (_acceptanceEventSink, _noTickAcceptancePollDelay, _noTickAcceptancePollTimeout) = CreateProductionAcceptanceWaitConfiguration(workspace);
         _focusedEvidenceAttemptCoordinator = new ConductorParallelAcceptanceAttemptCoordinator(
             Path.Combine(workspace.OrchestratorDirectory, "pre-review-evidence-attempts"),
             dir,
@@ -1198,7 +1199,6 @@ internal sealed partial class ConductorDriver
         Func<Goal, IReadOnlyList<string>>? getLandingFileScopes = null,
         Func<Goal, int?, AcceptanceVerificationSummary>? runAcceptanceVerificationWithSlot = null,
         Func<Goal, int?, DotnetBuildEnvironmentLease?, CancellationToken, AcceptanceVerificationSummary>? runAcceptanceVerificationWithLease = null,
-        Func<Goal, DotnetBuildEnvironmentLease?>? tryAcquireLandingStableSlotLease = null,
         Func<bool>? hasGateReadyGoal = null,
         ConductorParallelAcceptanceAttemptCoordinator? parallelAcceptanceAttemptCoordinator = null,
         Func<Goal, string, FocusedEvidenceRunResult>? runFocusedEvidence = null,
@@ -1235,7 +1235,8 @@ internal sealed partial class ConductorDriver
         Func<Goal, string, IDisposable?>? tryAcquireEvidenceMutationLease = null,
         Func<Goal, DeveloperBranchIntegrationResult>? integrateMainBeforeDeveloperDispatch = null,
         Func<Goal, ReconcileAcceptanceLeaseState?>? getEvidenceMutationLease = null,
-        Func<DateTimeOffset>? utcNow = null)
+        Func<DateTimeOffset>? utcNow = null, string? executionDirectory = null, Action<string, string>? acceptanceEventSink = null,
+        Action<TimeSpan>? noTickAcceptancePollDelay = null, TimeSpan? noTickAcceptancePollTimeout = null)
     {
         _getFacts = getFacts;
         _getRunningPaidWorkerCount = getRunningPaidWorkerCount;
@@ -1257,7 +1258,7 @@ internal sealed partial class ConductorDriver
             ?? (runAcceptanceVerificationWithSlot is not null
                 ? ((goal, slot, _, _) => runAcceptanceVerificationWithSlot(goal, slot))
                 : ((goal, _, _, _) => runAcceptanceVerification(goal)));
-        _tryAcquireLandingStableSlotLease = tryAcquireLandingStableSlotLease ?? (_ => null);
+        (_acceptanceEventSink, _noTickAcceptancePollDelay, _noTickAcceptancePollTimeout) = (acceptanceEventSink ?? ((_, _) => { }), noTickAcceptancePollDelay ?? Thread.Sleep, noTickAcceptancePollTimeout ?? DefaultNoTickAcceptancePollTimeout);
         _runAdvisorySemanticAcceptance = runAdvisorySemanticAcceptance ?? ((_, _) => { });
         _runFocusedEvidence = runFocusedEvidence is null
             ? ((_, request, _, _) => new FocusedEvidenceRunResult(
@@ -1343,14 +1344,15 @@ internal sealed partial class ConductorDriver
             tryAcquireEvidenceMutationLease ?? ((_, _) => NoopEvidenceMutationLease.Instance);
         _getEvidenceMutationLease = getEvidenceMutationLease ?? (_ => null);
         _utcNow = utcNow ?? (() => DateTimeOffset.UtcNow);
-        _executionDirectory = null;
+        _executionDirectory = executionDirectory;
         _parallelAcceptanceEnabled =
             runAcceptanceVerificationWithSlot is not null ||
             runAcceptanceVerificationWithLease is not null;
         _parallelAcceptanceAttemptCoordinator = parallelAcceptanceAttemptCoordinator
             ?? new ConductorParallelAcceptanceAttemptCoordinator(
                 Path.Combine(Path.GetTempPath(), "mcg-conductor-acceptance-attempts", Guid.NewGuid().ToString("N")),
-                runInline: true);
+                runInline: true,
+                acquireStableSlotLease: (_, _) => null);
         _focusedEvidenceAttemptCoordinator = focusedEvidenceAttemptCoordinator
             ?? new ConductorParallelAcceptanceAttemptCoordinator(
                 Path.Combine(Path.GetTempPath(), "mcg-conductor-focused-evidence-attempts", Guid.NewGuid().ToString("N")),
@@ -1735,7 +1737,7 @@ internal sealed partial class ConductorDriver
             GoalLifecycleState.Running => MakeResult(goalId, goalPrefix, policy,
                 new ConductorAdvanceOutcome.Held(state, "Worker process running; auto-reconcile will handle completion")),
             GoalLifecycleState.AwaitingVerification => MakeResult(goalId, goalPrefix, policy,
-                new ConductorAdvanceOutcome.Held(state, "All tasks done; awaiting task verification gates — auto-reconcile will advance goal to Verified")),
+                new ConductorAdvanceOutcome.Held(state, AwaitingVerificationHoldReasonBuilder.Build(goal))),
             GoalLifecycleState.Verifying => ExecuteVerifying(goal, goalPrefix, policy),
             GoalLifecycleState.Verified => ExecuteLanding(goal, goalPrefix, policy),
             GoalLifecycleState.Merged => ExecuteRecord(goal, goalPrefix, policy),
@@ -1743,7 +1745,6 @@ internal sealed partial class ConductorDriver
             _ => Escalate(goal, goalPrefix, policy, state, $"Unhandled lifecycle state {state}")
         };
     }
-
     internal GoalLifecycleFacts GetFacts(Goal goal) => _getFacts(goal);
 
     private bool TryBuildReviewContractRepairRetry(
@@ -3683,11 +3684,10 @@ internal sealed partial class ConductorDriver
                 $"trxCount={receipt.GateTestResultPaths.Count}");
         }
 
-        return CohortHeld(
-            goals,
-            policy,
-            receipt,
-            receipt.Outcome == AcceptanceCohortGateOutcome.Failed
+        var shouldUseOrdinaryFallback = receipt.Outcome == AcceptanceCohortGateOutcome.Failed && receipt.Attribution == AcceptanceCohortAttributionOutcome.NotApplicable;
+        return shouldUseOrdinaryFallback
+            ? CohortOrdinaryFallback(receipt, "deterministic cohort content failure has no member attribution; members remain eligible for ordinary acceptance")
+            : CohortHeld(goals, policy, receipt, receipt.Outcome == AcceptanceCohortGateOutcome.Failed
                 ? $"deterministic RED; attribution={receipt.Attribution}"
                 : $"cohort infrastructure outcome={receipt.Outcome}; no attribution or landing");
 
@@ -3732,8 +3732,8 @@ internal sealed partial class ConductorDriver
             ?? throw new InvalidOperationException("Production acceptance cohort verifier is unavailable.");
         var store = _cohortAcceptanceStore
             ?? throw new InvalidOperationException("Production acceptance cohort store is unavailable.");
-        var workspace = _cohortWorkspace
-            ?? throw new InvalidOperationException("Production acceptance cohort workspace is unavailable.");
+        var workspace = _cohortWorkspace ?? throw new InvalidOperationException("Production acceptance cohort workspace is unavailable.");
+        if (RunAcceptanceCohortSourceSizePreflight(integration.Path, identity, store) is { } sourceSizeReceipt) return sourceSizeReceipt;
         var gateProgressEventWriter = new ConductEventLogWriter(
             Path.Combine(workspace.ExecutionDirectory, ".orchestrator", "logs", ConductEventLogWriter.CurrentFileName));
         using var progressSink = GoalAcceptanceVerifier.PushGateProgressSink(progress =>
@@ -3972,7 +3972,7 @@ internal sealed partial class ConductorDriver
         }
         if (!AcceptanceCohortGateEvidence.HasCoherentTrxEvidence(normalizedTestResultPaths))
         {
-            return AcceptanceCohortGateOutcome.InfrastructureFailure;
+            return IsSourceSizeContentFailure(result) ? AcceptanceCohortGateOutcome.Failed : AcceptanceCohortGateOutcome.InfrastructureFailure;
         }
         return result.Passed && result.ExitCode == 0
             ? AcceptanceCohortGateOutcome.Passed
@@ -4009,67 +4009,6 @@ internal sealed partial class ConductorDriver
     {
         var singleLine = value.Replace('\r', ' ').Replace('\n', ' ').Replace('\t', ' ');
         return singleLine.Length <= 256 ? singleLine : singleLine[..256];
-    }
-
-    internal ConductorParallelAcceptanceRunResult RunParallelLandingAcceptance(
-        ConductorParallelAcceptanceCandidate candidate,
-        ConductorAutonomyPolicy policy,
-        DotnetBuildEnvironmentLease? stableSlotLease,
-        CancellationToken cancellationToken)
-    {
-        var effectiveCandidate = candidate;
-        var evidenceMutationLease = _tryAcquireEvidenceMutationLease(
-            candidate.Goal,
-            "conductor:parallel-acceptance");
-        if (evidenceMutationLease is null)
-        {
-            return ConductorParallelAcceptanceRunResult.Early(
-                candidate,
-                ReplacementEvidenceMutationHeld(candidate.Goal, candidate.GoalPrefix, policy),
-                null);
-        }
-        ConductorParallelAcceptanceRunResult result;
-        try
-        {
-            var early = RebaseBeforeAcceptance(
-                candidate.Goal,
-                candidate.GoalPrefix,
-                policy,
-                applySideEffects: false,
-                out var earlyOutcome);
-            if (early is not null)
-            {
-                result = ConductorParallelAcceptanceRunResult.Early(candidate, early, earlyOutcome);
-                return result;
-            }
-
-            effectiveCandidate = RefreshParallelAcceptanceCandidate(candidate);
-            result = ConductorParallelAcceptanceRunResult.Accepted(
-                effectiveCandidate,
-                _runAcceptanceVerification(
-                    effectiveCandidate.Goal,
-                    effectiveCandidate.SlotIndex,
-                    stableSlotLease,
-                    cancellationToken));
-        }
-        catch (Exception ex)
-        {
-            result = ConductorParallelAcceptanceRunResult.Fault(effectiveCandidate, ex);
-        }
-        finally
-        {
-            try
-            {
-                evidenceMutationLease.Dispose();
-            }
-            catch
-            {
-                // Cleanup cannot replace a computed acceptance result. Store-backed leases emit
-                // typed failure evidence and retain their owner-qualified row for expiry recovery.
-            }
-        }
-
-        return result;
     }
 
     internal ConductorParallelAcceptanceRunResult RunPreReviewFocusedEvidence(

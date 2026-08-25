@@ -396,7 +396,7 @@ public sealed class ConductorBatchLoopTestsFallbackAcceptance : ConductorBatchLo
     }
 
     [Xunit.Fact]
-    public void FallbackGate_OneShotAdvance_StillRunsInline()
+    public void FallbackGate_OneShotAdvance_CreatesAndReconcilesSharedAttempt()
     {
         var (kernel, goal) = SimpleGoal("Update src/Mcg.AgentOrchestrator.App/Orchestration/OneShotGate.cs");
         PassVerification(kernel, goal, goal.Tasks.Single());
@@ -412,8 +412,8 @@ public sealed class ConductorBatchLoopTestsFallbackAcceptance : ConductorBatchLo
             getLandingFileScopes: _ => ["src/Mcg.AgentOrchestrator.App/Orchestration/OneShotGate.cs"],
             parallelAcceptanceAttemptCoordinator: new ConductorParallelAcceptanceAttemptCoordinator(
                 attemptRoot,
-                isProcessAlive: _ => true,
-                launchOwnedProcess: _ => new ConductorParallelAcceptanceOwnedProcessLaunchResult(9601)));
+                runInline: true,
+                acquireStableSlotLease: (_, _) => null));
 
         try
         {
@@ -421,7 +421,12 @@ public sealed class ConductorBatchLoopTestsFallbackAcceptance : ConductorBatchLo
 
             Assert.True(result.WasExecuted);
             Assert.Equal(1, acceptanceRuns);
-            Assert.Empty(driver.ParallelAcceptanceAttemptCoordinator.GetUnreconciledAttempts([goal.Id.Value]));
+            var attempt = Assert.Single(Directory.EnumerateFiles(
+                Path.Combine(attemptRoot, goal.Id.Value),
+                "*.attempt.json"));
+            var recorded = ReadAttempt(attempt);
+            Assert.StartsWith($"{goal.Id.Value[..8]}-0-", recorded.AttemptId, StringComparison.Ordinal);
+            Assert.NotNull(recorded.ReconciledAt);
         }
         finally
         {

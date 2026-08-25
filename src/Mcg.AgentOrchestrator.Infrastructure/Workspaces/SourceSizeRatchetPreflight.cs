@@ -5,6 +5,8 @@ namespace Mcg.AgentOrchestrator.Infrastructure;
 
 internal static class SourceSizeRatchetPreflight
 {
+    internal const string CheckName = "source size ratchet preflight";
+
     private static readonly Regex CeilingPattern = new(
         "new\\s+SourceSizeCeiling\\(\\s*\"(?<path>[^\"]+)\"\\s*,\\s*(?<ceiling>\\d+)\\s*\\)",
         RegexOptions.CultureInvariant);
@@ -54,6 +56,16 @@ internal static class SourceSizeRatchetPreflight
             blockingViolations.Length > 0,
             string.Join(Environment.NewLine, blockingViolations.Select(violation => violation.Message)),
             violations);
+    }
+
+    internal static IReadOnlyList<string> BlockingViolationMessages(
+        SourceSizeRatchetPreflightResult result)
+    {
+        ArgumentNullException.ThrowIfNull(result);
+        return result.Violations
+            .Where(violation => violation.ActualLineCount is not null)
+            .Select(violation => violation.Message)
+            .ToArray();
     }
 }
 

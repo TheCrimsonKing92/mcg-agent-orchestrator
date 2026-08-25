@@ -1,4 +1,5 @@
 using Microsoft.Data.Sqlite;
+using Mcg.AgentOrchestrator.Core;
 
 namespace Mcg.AgentOrchestrator.Infrastructure;
 
@@ -50,8 +51,6 @@ public sealed record BacklogDependency(
 public sealed record BacklogDependencyTarget(
     string Id,
     BacklogDependencyTargetKind Kind);
-
-public enum BacklogItemStatus { Open, Done, Superseded }
 
 public enum BacklogLinkKind { Duplicate, Related }
 

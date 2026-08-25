@@ -22,6 +22,14 @@ Acceptance lane model used here:
 
 Prior art already exists: `AgentOrchestratorKernel.*.cs` is a successful Core partial-class split, with the largest fragment now `AgentOrchestratorKernel.GoalLifecycle.cs` at 706 lines and 33 commits in the last 60 days. `CliCommandHandlers.*.cs` is also partially split, but `CliCommandHandlers.Goals.cs` remains a 3,054-line hotspot while siblings such as `CliCommandHandlers.Workers.cs` at 509 lines and `CliCommandHandlers.Backlog.cs` at 305 lines show the intended direction.
 
+## 2026-08-24 assembly boundary receipt
+
+`OperatorComms` became the first production assembly-level cut rather than another class-only
+split. The new Core-only project direction, package/publish inventories, observed rebuild set,
+and API/friend-assembly cost are recorded in
+`docs/operator-comms-assembly-extraction-receipt.md`. The extraction makes no gate-concurrency
+claim, and the hosted Discord round trip remains separate real-world acceptance work.
+
 ## 2026-08-13 refresh: what happened in a month
 
 Re-measured on main at `603d4714`. **The inventory table below is the 2026-07-10 snapshot and its numbers are
@@ -270,6 +278,8 @@ Goal `6a3d0fd4` raised the `BackgroundDispatchRunner.cs` row from 3222 to 3262 b
 Goal `46ff9f83` raised the `ConductorBatchLoopTestsParallelAcceptance.cs` row from 4355 to 4473 for the unequal logical-width/build-permit control and the typed maximum diagnostic. The existing parallel-acceptance test class owns both conductor admission and physical permit characterization, so extracting these controls would split the contract they compare.
 
 Goal `b4b80aca` raised the `GoalAcceptanceVerifier.cs` row from 8763 to 8779 for the phase-transition calls that connect gate accounting to verifier-owned control-flow and resource-custody boundaries. The accountant, records, formatting, and lifecycle behavior remain extracted in `AcceptanceGatePhaseAccounting.cs`; moving the remaining transitions out would split the orchestration invariant they measure.
+
+Goal `98430a7c` raised the `GoalAcceptanceVerifier.cs` row from 8372 to 8471 for invocation-scoped TRX and heartbeat identity. Allocation, telemetry resolution, result identity, and prior-run child reaping must share one immutable invocation ordinal at the verifier's check-execution boundary; extracting only the added lines would split that lifecycle invariant. The existing decomposition backlog for whole verifier product slices remains the intended reduction path.
 
 Goal `682f25a1` re-derived the `GoalAcceptanceVerifierTests.cs` row from 10426 to 10451 after integrating goal `b4b80aca`, whose gate-phase accounting coverage had already added 25 net lines before the multi-file ratchet landed. This is a catch-up raise for pre-existing growth, not growth introduced by the ratchet change.
 

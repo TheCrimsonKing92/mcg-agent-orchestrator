@@ -939,7 +939,12 @@ public static class DispatchProcessHost
     private static IWorkerIntegrityLabeler ResolveIntegrityLabeler() =>
         IntegrityLabelerOverrideForTests ?? IntegrityLabeler;
 
-    internal static void ProtectWorkspaceBoundary(string worktree)
+    internal static void ProtectWorkspaceBoundary(string worktree) =>
+        ProtectWorkspaceBoundary(worktree, ResolveIntegrityLabeler());
+
+    internal static void ProtectWorkspaceBoundary(
+        string worktree,
+        IWorkerIntegrityLabeler integrityLabeler)
     {
         var parent = Directory.GetParent(worktree);
         if (parent is null || !parent.Exists)
@@ -952,7 +957,6 @@ public static class DispatchProcessHost
         // which blew the two-minute icacls cap on large worktree groves and silently left the
         // boundary UNLABELED. Create/delete under the parent is governed by the parent's own label,
         // so one node suffices; sibling worktree interiors are covered by their own labels.
-        var integrityLabeler = ResolveIntegrityLabeler();
         var state = integrityLabeler.Query(parent.FullName);
         var confirmedMedium = state.Exists && state.Medium && !state.Low;
         if (!confirmedMedium && !integrityLabeler.SetIntegrity(parent.FullName, "M", recursive: false))
@@ -962,7 +966,7 @@ public static class DispatchProcessHost
 
         foreach (var file in parent.EnumerateFiles())
         {
-            _ = SetMediumIntegrity(file.FullName);
+            _ = SetMediumIntegrity(file.FullName, integrityLabeler);
         }
     }
 
@@ -986,7 +990,12 @@ public static void DropToLow() {
 [P.N]::DropToLow()
 ";
 
-    private static void ProtectGitMetadata(string worktree)
+    internal static void ProtectGitMetadata(string worktree) =>
+        ProtectGitMetadata(worktree, ResolveIntegrityLabeler());
+
+    internal static void ProtectGitMetadata(
+        string worktree,
+        IWorkerIntegrityLabeler integrityLabeler)
     {
         var checkoutGitFile = Path.Combine(worktree, ".git");
         if (!File.Exists(checkoutGitFile) && !Directory.Exists(checkoutGitFile))
@@ -996,7 +1005,7 @@ public static void DropToLow() {
 
         if (File.Exists(checkoutGitFile))
         {
-            if (!SetMediumIntegrity(checkoutGitFile))
+            if (!SetMediumIntegrity(checkoutGitFile, integrityLabeler))
             {
                 throw new InvalidOperationException($"Failed to protect linked worktree git file '{checkoutGitFile}'.");
             }
@@ -1022,15 +1031,18 @@ public static void DropToLow() {
             // above so linked worktrees keep their write confinement even when git probing fails.
         }
 
-        if (commonDir is not null && Directory.Exists(commonDir) && !SetMediumIntegrity(commonDir))
+        if (commonDir is not null && Directory.Exists(commonDir) && !SetMediumIntegrity(commonDir, integrityLabeler))
         {
             throw new InvalidOperationException($"Failed to protect git common dir '{commonDir}'.");
         }
     }
 
-    private static bool SetMediumIntegrity(string path)
+    private static bool SetMediumIntegrity(string path, IWorkerIntegrityLabeler? integrityLabeler = null)
     {
-        return ResolveIntegrityLabeler().SetIntegrity(path, Directory.Exists(path) ? "(OI)(CI)M" : "M", recursive: false);
+        return (integrityLabeler ?? ResolveIntegrityLabeler()).SetIntegrity(
+            path,
+            Directory.Exists(path) ? "(OI)(CI)M" : "M",
+            recursive: false);
     }
 
     internal static bool WaitForIntegrityLabeler(Process process, TimeSpan timeout)

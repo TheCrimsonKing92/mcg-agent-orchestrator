@@ -21,7 +21,14 @@ internal static class SourceSizeRatchet
             // AcceptanceLaneDurationStore, so only call-site lines remained here.
             // Raised for goal 4c366f95: the preflight must run at the gate's single entry point before
             // any process-launching phase; parsing and evaluation remain in dedicated collaborators.
-            new SourceSizeCeiling("src/Mcg.AgentOrchestrator.Infrastructure/Workspaces/GoalAcceptanceVerifier.cs", 8348),
+            // Raised for goal 8c7fb174: declaration failure and partition preservation belong to the
+            // effective-plan and structural-coverage owner; the check no longer rewrites lane policy.
+            // Raised for goal 604b8a93: OperatorComms must join the base-build-cache project registry
+            // where the gate plan owns cacheable project ordering and complete build-receipt coverage.
+            // Raised for goal 98430a7c: invocation-scoped TRX/heartbeat identity and prior-run heartbeat
+            // reaping must stay at the verifier's check-execution boundary so one immutable ordinal is
+            // shared by telemetry resolution, result identity, and managed-child lifecycle handling.
+            new SourceSizeCeiling("src/Mcg.AgentOrchestrator.Infrastructure/Workspaces/GoalAcceptanceVerifier.cs", 8471),
             // Goal 682f25a1 re-derived this row after integrating goal c2eae988, whose acceptance
             // cancellation seam had already added 74 net lines before the multi-file ratchet landed.
             // Raised for goal a22c7293: slice admission must run where all dispatch paths converge.
@@ -30,7 +37,7 @@ internal static class SourceSizeRatchet
             // Goal 0e0aa816 extracted acceptance landing to its own partial-class source file.
             // Goal ce3c3917 adds only the injectable inline-landing lease seam here; lease behavior remains
             // extracted in ConductorDriver.AcceptanceLanding.cs.
-            new SourceSizeCeiling("src/Mcg.AgentOrchestrator.App/Orchestration/ConductorDriver.cs", 6143),
+            new SourceSizeCeiling("src/Mcg.AgentOrchestrator.App/Orchestration/ConductorDriver.cs", 6142),
             // Raised for goal dadadfac: set-aside re-admission must be decided where the loop already holds
             // the goal, its recorded set-aside entry, and the current sweep blockers together.
             // Raised for goal 289b469d: registration-fault hold/escalation must be decided at the existing
@@ -57,7 +64,7 @@ internal static class SourceSizeRatchet
             // Goal ce3c3917 keeps acquired, unavailable, and exceptional lease-lifecycle coverage together
             // in the acceptance-coordination owner rather than splitting one behavioral contract.
             new SourceSizeCeiling("tests/Mcg.AgentOrchestrator.Infrastructure.Tests/ConductorDriverTestsAcceptanceCoordination.cs", 984),
-            new SourceSizeCeiling("tests/Mcg.AgentOrchestrator.Infrastructure.Tests/ConductorDriverTestsLifecycleStates.cs", 1543),
+            new SourceSizeCeiling("tests/Mcg.AgentOrchestrator.Infrastructure.Tests/ConductorDriverTestsLifecycleStates.cs", 1524),
             new SourceSizeCeiling("tests/Mcg.AgentOrchestrator.Infrastructure.Tests/ConductorDriverTestsReviewRetryConvergence.cs", 778),
             // Raised for goal 4e3cdbb8: behavioral coverage now pins every permanent and transient
             // finding-evidence refusal disposition plus receipt-id priority on the next-round request loop.

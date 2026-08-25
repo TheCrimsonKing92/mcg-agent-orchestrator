@@ -692,7 +692,7 @@ public sealed class OperatorChannelTests : CliCommandTestBase
     public void OperatorChannelFactoryReturnsNullChannelWhenCatalogIsNullType()
     {
         var catalog = OperatorChannelCatalog.Default();
-        var channel = OperatorChannelFactory.Create(catalog, "any-token", CreateTempDirectory());
+        var channel = OperatorChannelComposition.Create(catalog, "any-token", CreateTempDirectory());
         Assert.Equal("null", channel.ChannelType);
         Assert.True(channel is NullOperatorChannel);
     }
@@ -701,7 +701,7 @@ public sealed class OperatorChannelTests : CliCommandTestBase
     public void OperatorChannelFactoryReturnsNullChannelWhenTokenMissing()
     {
         var catalog = new OperatorChannelCatalog("discord", "https://localhost:5001", "123456789");
-        var channel = OperatorChannelFactory.Create(catalog, null, CreateTempDirectory());
+        var channel = OperatorChannelComposition.Create(catalog, null, CreateTempDirectory());
         Assert.Equal("null", channel.ChannelType);
     }
 
@@ -709,7 +709,7 @@ public sealed class OperatorChannelTests : CliCommandTestBase
     public void OperatorChannelFactoryReturnsNullChannelWhenForumChannelIdMissing()
     {
         var catalog = new OperatorChannelCatalog("discord", "https://localhost:5001", ForumChannelId: null);
-        var channel = OperatorChannelFactory.Create(catalog, "token", CreateTempDirectory());
+        var channel = OperatorChannelComposition.Create(catalog, "token", CreateTempDirectory());
         Assert.Equal("null", channel.ChannelType);
     }
 
@@ -718,7 +718,7 @@ public sealed class OperatorChannelTests : CliCommandTestBase
     {
         var fakeApi = new FakeDiscordForumApi(nextThreadId: 1UL);
         var catalog = new OperatorChannelCatalog("discord", "https://localhost:5001", "42");
-        var channel = OperatorChannelFactory.CreateWithApi(catalog, fakeApi, CreateTempDirectory());
+        var channel = OperatorChannelComposition.CreateWithApi(catalog, fakeApi, CreateTempDirectory());
         Assert.Equal("discord", channel.ChannelType);
     }
 
@@ -792,7 +792,7 @@ public sealed class OperatorChannelTests : CliCommandTestBase
         var fakeApi = new FakeDiscordForumApi(nextThreadId: 100UL);
         var catalog = new OperatorChannelCatalog("discord", null, "42");
         var stateDir = CreateTempDirectory();
-        var channel = OperatorChannelFactory.CreateWithApi(catalog, fakeApi, stateDir);
+        var channel = OperatorChannelComposition.CreateWithApi(catalog, fakeApi, stateDir);
         var output = new StringWriter();
 
         await OperatorChannelFactory.SendTestEscalationAsync(channel, output);

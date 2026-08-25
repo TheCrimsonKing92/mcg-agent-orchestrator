@@ -38,7 +38,10 @@ reviewed for source/build correctness, but no velocity or production-isolation c
   corrections identified by research.
 - Worktree/build/acceptance: pending.
 - Worker runtime: pending.
-- OperatorComms/Discord: pending Persistence and real hosted round-trip evidence.
+- OperatorComms/Discord: structural extraction completed on 2026-08-24 without waiting for a
+  Persistence assembly split. Three shared declaration groups moved to Core and App now owns
+  persistence composition; `docs/operator-comms-assembly-extraction-receipt.md` records the
+  measured cost and inventory. A real hosted Discord round trip remains pending.
 - Diagnostics: pending provider, persistence, and worker seams.
 
 The pending order is provisional. Each node requires a new five-role slice and must be

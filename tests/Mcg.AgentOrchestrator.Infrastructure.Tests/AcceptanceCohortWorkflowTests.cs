@@ -196,6 +196,146 @@ public sealed class AcceptanceCohortWorkflowTests : GoalWorktreeTestBase
     }
 
     [Fact]
+    public void CohortWorkspace_MediumGrove_AllowsLowScratchAndProtectsGit()
+    {
+        if (!OperatingSystem.IsWindows())
+        {
+            return;
+        }
+
+        var repo = CreateAcceptanceCohortRepository();
+        var labeler = new ModeledIntegrityLabeler();
+        var workspaceGrove = Path.Combine(repo, GoalWorktrees.DirectoryName);
+        labeler.Seed(
+            workspaceGrove,
+            new IntegrityLabelState(Exists: true, Low: false, Inheritable: true, Medium: true));
+        Assert.True(labeler.WouldDenyLowWrite(
+            Path.Combine(workspaceGrove, "c-unprepared", ".scratch", "mcg-wt", "before-preparation")));
+        using var labelerScope = AcceptanceWorkspaceIntegrityPreparer.PushIntegrityLabelerForTests(labeler);
+        try
+        {
+            var main = RunGitOutput(repo, "rev-parse", "main").Trim();
+            var first = CreateCandidate(repo, "11111111111111111111111111111111", "src/First.cs", "first");
+            var second = CreateCandidate(repo, "22222222222222222222222222222222", "tests/Second.cs", "second");
+
+            using var workspace = GoalWorktrees.CreateAcceptanceCohortWorkspace(
+                repo,
+                main,
+                [
+                    Bind(first.GoalId, first.Revision, "src/First.cs", "resource:first"),
+                    Bind(second.GoalId, second.Revision, "tests/Second.cs", "resource:second")
+                ]);
+
+            var scratchWrite = Path.Combine(workspace.Path, ".scratch", "mcg-wt", Guid.NewGuid().ToString("N"));
+            var gitFile = Path.Combine(workspace.Path, ".git");
+            var commonDirRaw = RunGitOutput(workspace.Path, "rev-parse", "--git-common-dir").Trim();
+            var commonDir = Path.IsPathRooted(commonDirRaw)
+                ? Path.GetFullPath(commonDirRaw)
+                : Path.GetFullPath(Path.Combine(workspace.Path, commonDirRaw));
+
+            Assert.False(labeler.WouldDenyLowWrite(scratchWrite));
+            Assert.True(labeler.WouldDenyLowWrite(gitFile));
+            Assert.True(labeler.WouldDenyLowWrite(commonDir));
+            var workspaceLowIndex = labeler.FindSetIndex(
+                workspace.Path,
+                WorkerSandboxPreparer.LowInheritableLevel,
+                recursive: true);
+            var gitMediumIndex = labeler.FindSetIndex(gitFile, "M", recursive: false);
+            var commonDirMediumIndex = labeler.FindSetIndex(commonDir, "(OI)(CI)M", recursive: false);
+            Assert.True(workspaceLowIndex >= 0);
+            Assert.True(gitMediumIndex > workspaceLowIndex);
+            Assert.True(commonDirMediumIndex > workspaceLowIndex);
+        }
+        finally
+        {
+            DeleteDirectory(repo);
+        }
+    }
+
+    [Fact]
+    public void CohortWorkspace_AlreadyLowGrove_SkipsRelabeling()
+    {
+        if (!OperatingSystem.IsWindows())
+        {
+            return;
+        }
+
+        var repo = CreateAcceptanceCohortRepository();
+        var labeler = new ModeledIntegrityLabeler();
+        var workspaceGrove = Path.Combine(repo, GoalWorktrees.DirectoryName);
+        labeler.Seed(
+            workspaceGrove,
+            new IntegrityLabelState(Exists: true, Low: true, Inheritable: true));
+        using var labelerScope = AcceptanceWorkspaceIntegrityPreparer.PushIntegrityLabelerForTests(labeler);
+        try
+        {
+            var main = RunGitOutput(repo, "rev-parse", "main").Trim();
+            var first = CreateCandidate(repo, "11111111111111111111111111111111", "src/First.cs", "first");
+            var second = CreateCandidate(repo, "22222222222222222222222222222222", "tests/Second.cs", "second");
+
+            using var workspace = GoalWorktrees.CreateAcceptanceCohortWorkspace(
+                repo,
+                main,
+                [
+                    Bind(first.GoalId, first.Revision, "src/First.cs", "resource:first"),
+                    Bind(second.GoalId, second.Revision, "tests/Second.cs", "resource:second")
+                ]);
+
+            Assert.False(labeler.WouldDenyLowWrite(
+                Path.Combine(workspace.Path, ".scratch", "mcg-wt", Guid.NewGuid().ToString("N"))));
+            Assert.Empty(labeler.SetCalls);
+            Assert.Contains(
+                labeler.Operations,
+                operation => operation.Kind == "query" &&
+                    string.Equals(operation.Path, workspaceGrove, StringComparison.OrdinalIgnoreCase));
+        }
+        finally
+        {
+            DeleteDirectory(repo);
+        }
+    }
+
+    [Fact]
+    public void CohortWorkspace_PreparationFailure_IsTypedAndCleansUp()
+    {
+        if (!OperatingSystem.IsWindows())
+        {
+            return;
+        }
+
+        var repo = CreateAcceptanceCohortRepository();
+        var labeler = new ModeledIntegrityLabeler(failLowSet: true);
+        labeler.Seed(
+            Path.Combine(repo, GoalWorktrees.DirectoryName),
+            new IntegrityLabelState(Exists: true, Low: false, Inheritable: true, Medium: true));
+        using var labelerScope = AcceptanceWorkspaceIntegrityPreparer.PushIntegrityLabelerForTests(labeler);
+        try
+        {
+            var main = RunGitOutput(repo, "rev-parse", "main").Trim();
+            var first = CreateCandidate(repo, "11111111111111111111111111111111", "src/First.cs", "first");
+            var second = CreateCandidate(repo, "22222222222222222222222222222222", "tests/Second.cs", "second");
+
+            var failure = Assert.Throws<AcceptanceCohortMaterializationException>(() =>
+                GoalWorktrees.CreateAcceptanceCohortWorkspace(
+                    repo,
+                    main,
+                    [
+                        Bind(first.GoalId, first.Revision, "src/First.cs", "resource:first"),
+                        Bind(second.GoalId, second.Revision, "tests/Second.cs", "resource:second")
+                    ]));
+
+            Assert.Equal(AcceptanceCohortMaterializationFailureKind.WorkspaceFailure, failure.Kind);
+            Assert.Contains("Low-integrity gate writes", failure.Message, StringComparison.Ordinal);
+            AssertNoCohortWorkspaces(repo);
+            Assert.Single(labeler.SetCalls);
+        }
+        finally
+        {
+            DeleteDirectory(repo);
+        }
+    }
+
+    [Fact]
     public void DisposableWorkspaces_UnderNestedGitWorktree_UseShortTokensAndCleanUp()
     {
         var repo = CreateAcceptanceCohortRepository();
@@ -967,6 +1107,10 @@ public sealed class AcceptanceCohortWorkflowTests : GoalWorktreeTestBase
         try
         {
             AddAcceptanceManifest(repo);
+            AddSourceSizeAuthority(
+                repo,
+                ("src/Mcg.AgentOrchestrator.Infrastructure/First.cs", 1),
+                ("tests/Second.cs", 1));
             var kernel = new AgentOrchestratorKernel();
             var firstGoal = CreateCompletedGoal(kernel, "First RED cohort member", repo);
             var secondGoal = CreateCompletedGoal(kernel, "Second RED cohort member", repo);
@@ -1292,6 +1436,7 @@ public sealed class AcceptanceCohortWorkflowTests : GoalWorktreeTestBase
                 DotnetBuildEnvironmentManager.IsolatedRootOverrideVariable,
                 Path.Combine(repo, ".dotnet-test-root"));
             AddAcceptanceManifest(repo);
+            AddSourceSizeAuthority(repo, ("tests/Mcg.AgentOrchestrator.Core.Tests/TrainFirst.cs", 1));
             var kernel = new AgentOrchestratorKernel();
             var firstGoal = CreateCompletedGoal(kernel, "First production train member", repo);
             var secondGoal = CreateCompletedGoal(kernel, "Second production train member", repo);
@@ -2430,12 +2575,197 @@ public sealed class AcceptanceCohortWorkflowTests : GoalWorktreeTestBase
         }
     }
 
+    [Fact]
+    public void ProductionCohort_RatchetBreach_SkipsGateAndPreservesPair()
+    {
+        var repo = CreateReducedAcceptanceCohortRepository();
+        try
+        {
+            AddAcceptanceManifest(repo);
+            AddSourceSizeAuthority(
+                repo,
+                ("src/Mcg.AgentOrchestrator.Infrastructure/First.cs", 2),
+                ("tests/Second.cs", 4));
+            var kernel = new AgentOrchestratorKernel();
+            var firstGoal = CreateCompletedGoal(kernel, "First ratchet member", repo);
+            var secondGoal = CreateCompletedGoal(kernel, "Second ratchet member", repo);
+            _ = CreateWorktreeCandidate(
+                repo,
+                firstGoal.Id,
+                "src/Mcg.AgentOrchestrator.Infrastructure/First.cs",
+                "one\ntwo\nthree");
+            _ = CreateWorktreeCandidate(
+                repo,
+                secondGoal.Id,
+                "tests/Second.cs",
+                "one\ntwo\nthree\nfour\nfive\nsix");
+            var verifier = new SequenceAcceptanceVerifier(
+            [
+                new AcceptanceVerificationResult(
+                    Passed: false,
+                    Skipped: false,
+                    ExitCode: 1,
+                    OutputTail: "source size breach",
+                    Checks: [new AcceptanceCheckResult("source size ratchet preflight", false, 1, "breach")])
+            ]);
+            var workspace = OrchestratorWorkspace.ForDirectory(repo);
+            var driver = new ConductorDriver(
+                kernel, workspace, verifier, AgentCatalog.Default().Agents, WorkerProfileCatalog.Default());
+            var selection = ProjectSelection(driver, firstGoal, secondGoal);
+            var gateAdmitted = false;
+
+            var result = driver.RunAcceptanceCohort(
+                selection,
+                [firstGoal, secondGoal],
+                ConductorAutonomyPolicy.Permissive,
+                onGateAdmitted: () => gateAdmitted = true);
+
+            Assert.False(gateAdmitted, "The cohort stable-slot lease must not be acquired for a ratchet breach.");
+            Assert.Equal(0, verifier.RunCount);
+            Assert.Equal(AcceptanceCohortGateOutcome.Failed, result.Receipt?.Outcome);
+            Assert.Equal(AcceptanceCohortAttributionOutcome.NotApplicable, result.Receipt?.Attribution);
+            Assert.Empty(result.MemberResults);
+            Assert.Contains("fallback=ordinary", result.Detail, StringComparison.Ordinal);
+            var failedChecks = string.Join(Environment.NewLine, result.Receipt!.FailedChecks);
+            Assert.Contains("First.cs has 3 lines", failedChecks, StringComparison.Ordinal);
+            Assert.Contains("recorded ceiling of 2", failedChecks, StringComparison.Ordinal);
+            Assert.Contains("Second.cs has 6 lines", failedChecks, StringComparison.Ordinal);
+            Assert.Contains("recorded ceiling of 4", failedChecks, StringComparison.Ordinal);
+            var store = new CohortAcceptanceStore(
+                Path.Combine(workspace.OrchestratorDirectory, "cohort-acceptance.db"));
+            Assert.Empty(store.ReadSuppressedPairs());
+            var eligibility = ConductorAcceptanceCohortSelector.Select(
+            [
+                new ConductorSpeculativeAcceptanceCandidate(
+                    firstGoal.Id,
+                    new GateReadyCandidateProjectionResult.Ready(selection.Members[0])),
+                new ConductorSpeculativeAcceptanceCandidate(
+                    secondGoal.Id,
+                    new GateReadyCandidateProjectionResult.Ready(selection.Members[1]))
+            ], suppressedPairFingerprints: store.ReadSuppressedPairs());
+            Assert.NotNull(eligibility.Selection);
+
+            BatchTickSummary? ordinaryTick = null;
+            _ = new ConductorBatchLoop().Run(
+                kernel,
+                driver,
+                ConductorAutonomyPolicy.Permissive,
+                Path.Combine(repo, "stop-does-not-exist"),
+                maxIterations: 1,
+                onTick: tick => ordinaryTick = tick);
+
+            foreach (var goal in new[] { firstGoal, secondGoal })
+            {
+                Assert.Contains(ordinaryTick!.ProgressLines!, line =>
+                    line.StartsWith($"ACCEPTANCE goal={goal.Id.Value[..8]}", StringComparison.Ordinal) &&
+                    line.Contains("result=started", StringComparison.Ordinal));
+                Assert.DoesNotContain(ordinaryTick.ProgressLines!, line =>
+                    line.Contains($"goal={goal.Id.Value[..8]}", StringComparison.Ordinal) &&
+                    line.Contains("result=held", StringComparison.Ordinal) &&
+                    line.Contains("cohort", StringComparison.OrdinalIgnoreCase));
+            }
+        }
+        finally
+        {
+            DeleteDirectory(repo);
+        }
+    }
+
+    [Fact]
+    public void ProductionMergeTrain_RatchetBreach_SkipsGateLease()
+    {
+        var repo = CreateReducedAcceptanceCohortRepository();
+        try
+        {
+            AddAcceptanceManifest(repo);
+            AddSourceSizeAuthority(repo, ("tests/Mcg.AgentOrchestrator.Core.Tests/TrainFirst.cs", 2));
+            var kernel = new AgentOrchestratorKernel();
+            var firstGoal = CreateCompletedGoal(kernel, "First ratchet train member", repo);
+            var secondGoal = CreateCompletedGoal(kernel, "Second ratchet train member", repo);
+            var thirdGoal = CreateCompletedGoal(kernel, "Third ratchet train member", repo);
+            _ = CreateWorktreeCandidate(
+                repo,
+                firstGoal.Id,
+                "tests/Mcg.AgentOrchestrator.Core.Tests/TrainFirst.cs",
+                "one\ntwo\nthree");
+            _ = CreateWorktreeCandidate(
+                repo,
+                secondGoal.Id,
+                "tests/Mcg.AgentOrchestrator.Infrastructure.Tests/TrainSecond.cs",
+                "second");
+            _ = CreateWorktreeCandidate(
+                repo,
+                thirdGoal.Id,
+                "tests/Mcg.AgentOrchestrator.Dashboard.Tests/TrainThird.cs",
+                "third");
+            var verifier = new SequenceAcceptanceVerifier(
+            [
+                new AcceptanceVerificationResult(
+                    Passed: false,
+                    Skipped: false,
+                    ExitCode: 1,
+                    OutputTail: "source size breach",
+                    Checks: [new AcceptanceCheckResult("source size ratchet preflight", false, 1, "breach")])
+            ]);
+            var workspace = OrchestratorWorkspace.ForDirectory(repo);
+            var driver = new ConductorDriver(
+                kernel, workspace, verifier, AgentCatalog.Default().Agents, WorkerProfileCatalog.Default());
+            var selection = ProjectTrainSelection(driver, firstGoal, secondGoal, thirdGoal);
+            var gateAdmitted = false;
+
+            var result = driver.RunMergeTrain(
+                selection,
+                [firstGoal, secondGoal, thirdGoal],
+                ConductorAutonomyPolicy.Permissive,
+                onGateAdmitted: () => gateAdmitted = true);
+
+            Assert.False(gateAdmitted, "The merge-train stable-slot lease must not be acquired for a ratchet breach.");
+            Assert.Equal(0, verifier.RunCount);
+            Assert.Contains("outcome=Failed", result.Detail, StringComparison.Ordinal);
+        }
+        finally
+        {
+            DeleteDirectory(repo);
+        }
+    }
+
+    [Fact]
+    public void RatchetBreachWithoutTrx_IsContentFailure()
+    {
+        var result = new AcceptanceVerificationResult(
+            Passed: false,
+            Skipped: false,
+            ExitCode: 1,
+            OutputTail: "source size breach",
+            Checks: [new AcceptanceCheckResult("source size ratchet preflight", false, 1, "breach")]);
+
+        Assert.Equal(
+            AcceptanceCohortGateOutcome.Failed,
+            ConductorDriver.ClassifyCohortVerification(result));
+    }
+
     private static void AddAcceptanceManifest(string repo)
     {
         Directory.CreateDirectory(Path.Combine(repo, "config"));
         File.WriteAllText(Path.Combine(repo, "config", "acceptance-manifest.json"), "{}");
         RunGit(repo, "add", "config/acceptance-manifest.json");
         RunGit(repo, "commit", "-m", "Add manifest");
+    }
+
+    private static void AddSourceSizeAuthority(
+        string repo,
+        params (string Path, int Ceiling)[] ceilings)
+    {
+        var authorityPath = Path.Combine(
+            repo,
+            SourceSizeRatchet.SourcePath.Replace('/', Path.DirectorySeparatorChar));
+        Directory.CreateDirectory(Path.GetDirectoryName(authorityPath)!);
+        File.WriteAllLines(
+            authorityPath,
+            ceilings.Select(ceiling =>
+                $"new SourceSizeCeiling(\"{ceiling.Path}\", {ceiling.Ceiling})"));
+        RunGit(repo, "add", SourceSizeRatchet.SourcePath);
+        RunGit(repo, "commit", "-m", "Add source size authority");
     }
 
     private static string ValidPassingTrx() => """
@@ -2603,6 +2933,79 @@ public sealed class AcceptanceCohortWorkflowTests : GoalWorktreeTestBase
             ConductorTransitionDecision.Auto,
             GateReadyMergeStatus.Clean.ToString(),
              GateReadyMergeReason.NoConflictsDetected.ToString());
+
+    private sealed class ModeledIntegrityLabeler(bool failLowSet = false) : IWorkerIntegrityLabeler
+    {
+        private readonly Dictionary<string, IntegrityLabelState> _states =
+            new(StringComparer.OrdinalIgnoreCase);
+
+        internal List<(string Kind, string Path)> Operations { get; } = [];
+
+        internal List<(string Path, string Level, bool Recursive)> SetCalls { get; } = [];
+
+        public IntegrityLabelState Query(string path)
+        {
+            var normalized = Path.GetFullPath(path);
+            Operations.Add(("query", normalized));
+            return ResolveState(normalized) ??
+                new IntegrityLabelState(Exists: true, Low: false, Inheritable: false);
+        }
+
+        public bool SetIntegrity(string path, string level, bool recursive)
+        {
+            var normalized = Path.GetFullPath(path);
+            Operations.Add(("set", normalized));
+            SetCalls.Add((normalized, level, recursive));
+            var low = level.EndsWith('L');
+            if (low && failLowSet)
+            {
+                return false;
+            }
+
+            _states[normalized] = new IntegrityLabelState(
+                Exists: true,
+                Low: low,
+                Inheritable: level.Contains("(OI)(CI)", StringComparison.Ordinal),
+                Medium: level.EndsWith('M'));
+            return true;
+        }
+
+        internal void Seed(string path, IntegrityLabelState state) =>
+            _states[Path.GetFullPath(path)] = state;
+
+        internal int FindSetIndex(string path, string level, bool recursive)
+        {
+            var normalized = Path.GetFullPath(path);
+            return SetCalls.FindIndex(call =>
+                string.Equals(call.Path, normalized, StringComparison.OrdinalIgnoreCase) &&
+                call.Level == level &&
+                call.Recursive == recursive);
+        }
+
+        internal bool WouldDenyLowWrite(string path)
+        {
+            var current = Path.GetFullPath(path);
+            return ResolveState(current) is not { Low: true };
+        }
+
+        private IntegrityLabelState? ResolveState(string path)
+        {
+            var current = Path.GetFullPath(path);
+            var exact = true;
+            while (!string.IsNullOrWhiteSpace(current))
+            {
+                if (_states.TryGetValue(current, out var state) && (exact || state.Inheritable))
+                {
+                    return state;
+                }
+
+                exact = false;
+                current = Path.GetDirectoryName(current) ?? string.Empty;
+            }
+
+            return null;
+        }
+    }
 
     private sealed class BlockingAcceptanceVerifier(
         ManualResetEventSlim started,

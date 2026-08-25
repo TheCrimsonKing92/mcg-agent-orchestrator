@@ -759,6 +759,24 @@ public sealed class TaskVerificationTests
     Assert.Equal(GoalStatus.Verified, goal.Status);
     Assert.True(kernel.BuildVerificationGate(goal.Id).IsSatisfied);
 }
+    [Xunit.Fact(DisplayName = "Completion verdict does not pass an incomplete task gate")]
+    public void CompletionVerdictDoesNotPassIncompleteTaskGate()
+{
+    var kernel = new AgentOrchestratorKernel();
+    var goal = kernel.CreateGoal(
+        "Keep stamped task incomplete",
+        [new TaskSpec(TaskId.New(), "Incomplete task", AgentRole.Developer)]);
+    kernel.ActivateGoal(goal.Id, [DefaultAgents().First(agent => agent.Role == AgentRole.Developer)]);
+    var task = goal.Tasks.Single();
+    kernel.RecordTaskVerification(goal.Id, task.Id, new TaskVerificationRecord(
+        "dotnet test", "C:\\repo", 1, "", "failed", DateTimeOffset.UtcNow));
+    task.RecordCompletionVerdict(true, "verified-no-change-round");
+
+    var gate = kernel.BuildVerificationGate(goal.Id).Tasks.Single();
+
+    Assert.NotEqual(WorkTaskStatus.Completed, task.Status);
+    Assert.Equal(VerificationGateStatus.NotReady, gate.GateStatus);
+}
     [Xunit.Fact(DisplayName = "RetryTask_reopens_task_and_preserves_verification_history")]
     public void RetryTaskReopensTaskAndPreservesVerificationHistory()
 {

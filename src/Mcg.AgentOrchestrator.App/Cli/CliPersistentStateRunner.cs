@@ -555,7 +555,7 @@ internal static class CliPersistentStateRunner
             "cleanup-status" or
             "repo-process-info" or "repo-process-stop" or "stable-slot-dotnet" or
             "gate-status" or "acceptance-engine" or "run-event" or
-            "project" => true,
+            "project" or "trial-compare" => true,
             _ => false,
         };
     }

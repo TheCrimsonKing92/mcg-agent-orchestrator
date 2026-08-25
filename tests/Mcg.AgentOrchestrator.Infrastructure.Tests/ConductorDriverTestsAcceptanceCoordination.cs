@@ -11,93 +11,9 @@ using System.Xml.Linq;
 using static ConductorDriverTests;
 
 [Xunit.Collection("IsolatedProcessSpawning")]
-public sealed class ConductorDriverTestsAcceptanceCoordination
+public sealed partial class ConductorDriverTestsAcceptanceCoordination
 {
     private static string CreateTempDirectory() => ConductorDriverTests.CreateTempDirectory();
-
-    [Xunit.Fact]
-    public void ConductorDriverInlineLandingPassesStableSlotIndexWhenLeaseAvailable()
-    {
-        var (kernel, goal) = SimpleGoal("Inline landing stable slot");
-        PassVerification(kernel, goal, goal.Tasks.Single());
-        var stableSlotLease = Assert.IsType<DotnetBuildLeaseAcquisition.Acquired>(
-            DotnetBuildEnvironmentManager.TryAcquireStableSlotExecutionLock(0, TimeSpan.Zero)).Lease;
-        int? capturedSlotIndex = null;
-        DotnetBuildEnvironmentLease? capturedLease = null;
-        var driver = MakeDriver(
-            getFacts: _ => GoalLifecycleFacts.None,
-            runAcceptanceVerificationWithLease: (_, slotIndex, lease, _) =>
-            {
-                capturedSlotIndex = slotIndex;
-                capturedLease = lease;
-                return AcceptanceVerificationSummary.PassedWithNoUnmetCriteria;
-            },
-            tryAcquireLandingStableSlotLease: _ => stableSlotLease,
-            classifyRisk: _ => ChangeRiskTier.DocsOnly);
-
-        _ = driver.AdvanceOnce(goal, ConductorAutonomyPolicy.Conservative);
-
-        Assert.Equal(0, capturedSlotIndex);
-        Assert.Same(stableSlotLease, capturedLease);
-        using var reacquiredLease = Assert.IsType<DotnetBuildLeaseAcquisition.Acquired>(
-            DotnetBuildEnvironmentManager.TryAcquireStableSlotExecutionLock(0, TimeSpan.Zero)).Lease;
-    }
-
-    [Xunit.Fact]
-    public void ConductorDriverInlineLandingRunsSerialFallbackWhenStableSlotUnavailable()
-    {
-        var (kernel, goal) = SimpleGoal("Inline landing serial fallback");
-        PassVerification(kernel, goal, goal.Tasks.Single());
-        var verifierRan = false;
-        var driver = MakeDriver(
-            getFacts: _ => GoalLifecycleFacts.None,
-            runAcceptanceVerificationWithLease: (_, slotIndex, lease, _) =>
-            {
-                verifierRan = true;
-                Assert.Null(slotIndex);
-                Assert.Null(lease);
-                return AcceptanceVerificationSummary.PassedWithNoUnmetCriteria;
-            },
-            tryAcquireLandingStableSlotLease: _ => null,
-            classifyRisk: _ => ChangeRiskTier.DocsOnly);
-
-        var result = driver.AdvanceOnce(goal, ConductorAutonomyPolicy.Conservative);
-
-        Assert.True(verifierRan);
-        Assert.IsType<ConductorAdvanceOutcome.Executed>(result.Outcome);
-    }
-
-    [Xunit.Theory]
-    [Xunit.InlineData(false)]
-    [Xunit.InlineData(true)]
-    public void ConductorDriverInlineLandingReleasesStableSlotWhenVerifierThrows(bool cancellation)
-    {
-        var (kernel, goal) = SimpleGoal("Inline landing exceptional release");
-        PassVerification(kernel, goal, goal.Tasks.Single());
-        var stableSlotLease = Assert.IsType<DotnetBuildLeaseAcquisition.Acquired>(
-            DotnetBuildEnvironmentManager.TryAcquireStableSlotExecutionLock(0, TimeSpan.Zero)).Lease;
-        var driver = MakeDriver(
-            getFacts: _ => GoalLifecycleFacts.None,
-            runAcceptanceVerificationWithLease: (_, _, _, _) => throw (cancellation
-                ? new OperationCanceledException("injected cancellation")
-                : new InvalidOperationException("injected failure")),
-            tryAcquireLandingStableSlotLease: _ => stableSlotLease,
-            classifyRisk: _ => ChangeRiskTier.DocsOnly);
-
-        if (cancellation)
-        {
-            Assert.Throws<OperationCanceledException>(() =>
-                driver.AdvanceOnce(goal, ConductorAutonomyPolicy.Conservative));
-        }
-        else
-        {
-            Assert.Throws<InvalidOperationException>(() =>
-                driver.AdvanceOnce(goal, ConductorAutonomyPolicy.Conservative));
-        }
-
-        using var reacquiredLease = Assert.IsType<DotnetBuildLeaseAcquisition.Acquired>(
-            DotnetBuildEnvironmentManager.TryAcquireStableSlotExecutionLock(0, TimeSpan.Zero)).Lease;
-    }
 
     // ── Empty-batch escalation diagnostics ───────────────────────────────
 
@@ -441,13 +357,18 @@ public sealed class ConductorDriverTestsAcceptanceCoordination
         var busy = new DotnetBuildLeaseAcquisition.SlotsBusy(
             "goal-slots-busy",
             [new DotnetBuildStableSlotWait(0, 12345)]);
+        var coordinator = new ConductorParallelAcceptanceAttemptCoordinator(
+            Path.Combine(root, ".orchestrator", "test-acceptance-attempts"),
+            runInline: true,
+            acquireStableSlotLease: (_, _) => null);
 
         var driver = new ConductorDriver(
             kernel,
             workspace,
             new ThrowingAcceptanceVerifier(new DotnetBuildSlotsBusyException(busy)),
             DefaultAgents(),
-            WorkerProfileCatalog.Default());
+            WorkerProfileCatalog.Default(),
+            coordinator);
 
         var result = driver.AdvanceOnce(goal, ConductorAutonomyPolicy.Conservative);
 
