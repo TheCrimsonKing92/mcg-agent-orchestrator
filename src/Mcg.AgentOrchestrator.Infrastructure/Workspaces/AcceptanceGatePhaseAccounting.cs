@@ -18,6 +18,79 @@ internal static class AcceptanceGatePhaseNames
 
 public sealed record AcceptanceGatePhaseDuration(string Name, TimeSpan Duration);
 
+public sealed record AcceptanceGateDiagnosticSnapshot(string? Phase, string? Target);
+
+public sealed class AcceptanceGateEngineException : Exception
+{
+    private const int BoundedMessageLength = 512;
+
+    private AcceptanceGateEngineException(
+        string message,
+        string? faultType,
+        string? faultStack,
+        string? gatePhase,
+        string? gateTarget,
+        Exception? innerException)
+        : base(message, innerException)
+    {
+        FaultType = faultType;
+        FaultStack = faultStack;
+        GatePhase = gatePhase;
+        GateTarget = gateTarget;
+    }
+
+    public string? FaultType { get; }
+    public string? FaultStack { get; }
+    public string? GatePhase { get; }
+    public string? GateTarget { get; }
+
+    internal static AcceptanceGateEngineException Capture(
+        Exception exception,
+        AcceptanceGateDiagnosticSnapshot snapshot)
+    {
+        ArgumentNullException.ThrowIfNull(exception);
+        ArgumentNullException.ThrowIfNull(snapshot);
+        var context = string.Join(
+            "; ",
+            new[]
+            {
+                string.IsNullOrWhiteSpace(snapshot.Phase) ? null : $"phase={snapshot.Phase}",
+                string.IsNullOrWhiteSpace(snapshot.Target) ? null : $"target={snapshot.Target}"
+            }.Where(value => value is not null));
+        var message = $"Acceptance gate engine fault{(context.Length == 0 ? string.Empty : $" ({context})")}: " +
+            $"{exception.GetType().Name}: {exception.Message}";
+        return new AcceptanceGateEngineException(
+            BoundSingleLine(message),
+            exception.GetType().FullName,
+            exception.ToString(),
+            snapshot.Phase,
+            snapshot.Target,
+            exception);
+    }
+
+    internal static AcceptanceGateEngineException Rehydrate(
+        string? message,
+        string? faultType,
+        string? faultStack,
+        string? gatePhase,
+        string? gateTarget) =>
+        new(
+            BoundSingleLine(message ?? "Acceptance gate engine fault."),
+            faultType,
+            faultStack,
+            gatePhase,
+            gateTarget,
+            innerException: null);
+
+    private static string BoundSingleLine(string value)
+    {
+        var singleLine = value.Replace('\r', ' ').Replace('\n', ' ').Trim();
+        return singleLine.Length <= BoundedMessageLength
+            ? singleLine
+            : singleLine[..BoundedMessageLength];
+    }
+}
+
 public sealed record AcceptanceGatePhaseBreakdown(
     string Scope,
     string Outcome,
@@ -40,6 +113,7 @@ internal sealed class AcceptanceGatePhaseAccountant : IDisposable
     private readonly List<string> _phaseOrder = [];
     private readonly Dictionary<string, TimeSpan> _phaseDurations = new(StringComparer.Ordinal);
     private string? _currentPhase;
+    private string? _currentTarget;
     private long _currentPhaseStartedTimestamp;
     private TimeSpan _recordedLaneDuration;
     private bool _hasRecordedLaneDuration;
@@ -73,6 +147,27 @@ internal sealed class AcceptanceGatePhaseAccountant : IDisposable
 
     internal static void RecordCurrentLaneExecution(TimeSpan duration) =>
         CurrentAccountant.Value?.RecordLaneExecution(duration);
+
+    internal static AcceptanceGateDiagnosticSnapshot CurrentSnapshot =>
+        CurrentAccountant.Value?.Snapshot ?? new(null, null);
+
+    internal static IDisposable BeginCurrentTarget(string target) =>
+        CurrentAccountant.Value?.BeginTarget(target) ?? NoopDisposable.Instance;
+
+    internal AcceptanceGateDiagnosticSnapshot Snapshot => new(_currentPhase, _currentTarget);
+
+    internal void SetTarget(string? target)
+    {
+        ObjectDisposedException.ThrowIf(_disposed, this);
+        _currentTarget = string.IsNullOrWhiteSpace(target) ? null : target.Trim();
+    }
+
+    internal IDisposable BeginTarget(string target)
+    {
+        var previous = _currentTarget;
+        SetTarget(target);
+        return new RestoreTargetScope(this, previous);
+    }
 
     internal void TransitionTo(string phase)
     {
@@ -256,6 +351,31 @@ internal sealed class AcceptanceGatePhaseAccountant : IDisposable
             }
 
             _disposed = true;
+        }
+    }
+
+    private sealed class RestoreTargetScope(
+        AcceptanceGatePhaseAccountant owner,
+        string? previous) : IDisposable
+    {
+        private AcceptanceGatePhaseAccountant? _owner = owner;
+
+        public void Dispose()
+        {
+            var current = Interlocked.Exchange(ref _owner, null);
+            if (current is not null && !current._disposed)
+            {
+                current.SetTarget(previous);
+            }
+        }
+    }
+
+    private sealed class NoopDisposable : IDisposable
+    {
+        internal static readonly NoopDisposable Instance = new();
+
+        public void Dispose()
+        {
         }
     }
 }

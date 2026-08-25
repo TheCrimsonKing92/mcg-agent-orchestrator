@@ -3,6 +3,7 @@ using System.Diagnostics;
 using System.Globalization;
 using System.Runtime.InteropServices;
 using System.Collections.Concurrent;
+using Microsoft.Win32.SafeHandles;
 
 namespace Mcg.AgentOrchestrator.Infrastructure;
 
@@ -13,6 +14,134 @@ public sealed record WorkerProcessJobAccounting(
     string AccountingSource = "live")
 {
     public static WorkerProcessJobAccounting Empty { get; } = new(0, 0, 0);
+}
+
+internal sealed record OwnedChildStartMetadata(
+    string FileName,
+    string Arguments,
+    IReadOnlyList<string> ArgumentList,
+    string WorkingDirectory);
+
+internal sealed class RegisteredOwnedProcess : IDisposable
+{
+    private const uint TerminatedExitCode = 1;
+    private Process? _process;
+    private SafeFileHandle? _processHandle;
+
+    internal RegisteredOwnedProcess(
+        Process process,
+        SafeFileHandle? processHandle,
+        ProcessStartInfo startInfo)
+    {
+        _process = process;
+        _processHandle = processHandle;
+        StartMetadata = new OwnedChildStartMetadata(
+            startInfo.FileName,
+            startInfo.Arguments,
+            startInfo.ArgumentList.ToArray(),
+            startInfo.WorkingDirectory);
+    }
+
+    internal int Id => Process.Id;
+    internal StreamReader StandardOutput => Process.StandardOutput;
+    internal StreamReader StandardError => Process.StandardError;
+    internal OwnedChildStartMetadata StartMetadata { get; }
+
+    internal int ExitCode
+    {
+        get
+        {
+            if (_processHandle is null)
+            {
+                return Process.ExitCode;
+            }
+
+            if (!GetExitCodeProcess(_processHandle, out var exitCode))
+            {
+                throw new Win32Exception(Marshal.GetLastWin32Error(), "Failed to read owned child exit code.");
+            }
+
+            return unchecked((int)exitCode);
+        }
+    }
+
+    internal async Task WaitForExitAsync(CancellationToken cancellationToken)
+    {
+        if (_processHandle is null)
+        {
+            await Process.WaitForExitAsync(cancellationToken).ConfigureAwait(false);
+            return;
+        }
+
+        using var waitHandle = new NativeProcessWaitHandle(_processHandle);
+        var completion = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var registeredWait = ThreadPool.RegisterWaitForSingleObject(
+            waitHandle,
+            static (state, _) => ((TaskCompletionSource)state!).TrySetResult(),
+            completion,
+            Timeout.InfiniteTimeSpan,
+            executeOnlyOnce: true);
+        using var cancellationRegistration = cancellationToken.Register(
+            static state =>
+            {
+                var (source, token) = ((TaskCompletionSource Source, CancellationToken Token))state!;
+                source.TrySetCanceled(token);
+            },
+            (completion, cancellationToken));
+        try
+        {
+            await completion.Task.ConfigureAwait(false);
+        }
+        finally
+        {
+            registeredWait.Unregister(null);
+        }
+    }
+
+    internal void Kill(bool entireProcessTree)
+    {
+        if (_processHandle is not null)
+        {
+            if (!TerminateProcess(_processHandle, TerminatedExitCode))
+            {
+                var nativeError = Marshal.GetLastWin32Error();
+                if (nativeError != 5)
+                {
+                    throw new Win32Exception(nativeError, "Failed to terminate owned child process.");
+                }
+            }
+
+            return;
+        }
+
+        Process.Kill(entireProcessTree);
+    }
+
+    public void Dispose()
+    {
+        _processHandle?.Dispose();
+        _processHandle = null;
+        _process?.Dispose();
+        _process = null;
+    }
+
+    private Process Process => _process ?? throw new ObjectDisposedException(nameof(RegisteredOwnedProcess));
+
+    private sealed class NativeProcessWaitHandle : WaitHandle
+    {
+        internal NativeProcessWaitHandle(SafeFileHandle processHandle)
+        {
+            SafeWaitHandle = new SafeWaitHandle(processHandle.DangerousGetHandle(), ownsHandle: false);
+        }
+    }
+
+    [DllImport("kernel32.dll", SetLastError = true)]
+    [return: MarshalAs(UnmanagedType.Bool)]
+    private static extern bool GetExitCodeProcess(SafeFileHandle processHandle, out uint exitCode);
+
+    [DllImport("kernel32.dll", SetLastError = true)]
+    [return: MarshalAs(UnmanagedType.Bool)]
+    private static extern bool TerminateProcess(SafeFileHandle processHandle, uint exitCode);
 }
 
 public static class WorkerProcessJobs
@@ -332,6 +461,27 @@ public static class WorkerProcessJobs
             ownerId);
     }
 
+    internal static RegisteredOwnedProcess StartRegisteredOwnedOrThrow(
+        ProcessStartInfo startInfo,
+        string? ownerId = null)
+    {
+        ArgumentNullException.ThrowIfNull(startInfo);
+        if (!OperatingSystem.IsWindows())
+        {
+            var process = StartAndRegisterNonWindows(
+                startInfo,
+                ownerId,
+                ProcessTreeGuiSuppression.Start,
+                RegisterOrThrow);
+            return new RegisteredOwnedProcess(process, processHandle: null, startInfo);
+        }
+
+        return StartRegisteredOwnedWindows(
+            () => OwnedProcessGroup.StartSuspended(startInfo),
+            startInfo,
+            ownerId);
+    }
+
     internal static Process StartRegisteredWithFileCaptureOrThrow(
         ProcessStartInfo startInfo,
         string stdoutPath,
@@ -380,6 +530,45 @@ public static class WorkerProcessJobs
             }
 
             return launch.TransferOwnership();
+        }
+    }
+
+    private static RegisteredOwnedProcess StartRegisteredOwnedWindows(
+        Func<OwnedProcessGroup.SuspendedProcessStart> start,
+        ProcessStartInfo startInfo,
+        string? ownerId)
+    {
+        OwnedProcessGroup.SuspendedProcessStart launch;
+        try
+        {
+            launch = start();
+        }
+        catch (Exception ex) when (ex is Win32Exception or InvalidOperationException or NotSupportedException)
+        {
+            throw new InvalidOperationException(
+                $"worker-process-start-failed: stage=owned-process-group-launch; cleanup=owned-job-termination-requested; {BuildExceptionEvidence(ex)}",
+                ex);
+        }
+
+        using (launch)
+        {
+            if (!TryRegisterCore(
+                    launch.Process,
+                    ownerId,
+                    ProductionRegistrationIdentityReader,
+                    ProductionRegistrationIdentityReader,
+                    out var registrationFailure,
+                    launch.Group,
+                    launch.Resume))
+            {
+                throw new InvalidOperationException(registrationFailure);
+            }
+
+            var transfer = launch.TransferOwnedProcess();
+            return new RegisteredOwnedProcess(
+                transfer.Process,
+                transfer.ProcessHandle,
+                startInfo);
         }
     }
 

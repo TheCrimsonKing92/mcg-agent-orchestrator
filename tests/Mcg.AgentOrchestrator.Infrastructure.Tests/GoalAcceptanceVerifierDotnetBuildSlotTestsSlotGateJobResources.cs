@@ -10,6 +10,124 @@ using System.Xml.Linq;
 [Xunit.Collection(TestCollections.JobAccounting)]
 public sealed class GoalAcceptanceVerifierDotnetBuildSlotTestsSlotGateJobResources : GoalAcceptanceVerifierDotnetBuildSlotTests
 {
+    [Xunit.Fact(DisplayName = "GoalAcceptanceVerifier_unexpected_runner_fault_carries_phase_target_and_stack")]
+    public async Task GoalAcceptanceVerifierUnexpectedRunnerFaultCarriesPhaseTargetAndStack()
+    {
+        static Task<GoalAcceptanceVerifier.CommandResult> ThrowUnexpectedRunnerFault(
+            string[] _,
+            string __,
+            CancellationToken ___) =>
+            throw new InvalidOperationException("owned process lifecycle failed");
+
+        var verifier = new GoalAcceptanceVerifier(ThrowUnexpectedRunnerFault);
+
+        var exception = await Xunit.Record.ExceptionAsync(() =>
+            verifier.RunAsync("C:\\fake\\worktree"));
+
+        Assert.NotNull(exception);
+        Assert.Equal("AcceptanceGateEngineException", exception.GetType().Name);
+        Assert.Equal(
+            "System.InvalidOperationException",
+            exception.GetType().GetProperty("FaultType")?.GetValue(exception));
+        Assert.Equal(
+            "build-server-shutdown",
+            exception.GetType().GetProperty("GatePhase")?.GetValue(exception));
+        Assert.Equal(
+            "dotnet build-server shutdown",
+            exception.GetType().GetProperty("GateTarget")?.GetValue(exception));
+        var faultStack = Assert.IsType<string>(
+            exception.GetType().GetProperty("FaultStack")?.GetValue(exception));
+        Assert.Contains("owned process lifecycle failed", faultStack, StringComparison.Ordinal);
+        Assert.Contains(nameof(ThrowUnexpectedRunnerFault), faultStack, StringComparison.Ordinal);
+    }
+
+    [Xunit.Fact(DisplayName = "GoalAcceptanceVerifier_production_runner_handles_fast_ordinary_and_signaled_children")]
+    public async Task GoalAcceptanceVerifierProductionRunnerHandlesChildControlMatrix()
+    {
+        if (!OperatingSystem.IsWindows())
+        {
+            return;
+        }
+
+        var root = CreateTempDirectory();
+        var shim = Path.Combine(root, "fake-dotnet.cmd");
+        var receivedArguments = Path.Combine(root, "received-arguments.txt");
+        var ready = Path.Combine(root, "slow.ready");
+        var signal = Path.Combine(root, "slow.signal");
+        File.WriteAllText(shim, """
+            @echo off
+            set mode=%~1
+            shift
+            if "%mode%"=="build-server" (
+              if not "%~1"=="shutdown" exit /b 91
+              > "%~2" echo build-server shutdown
+              echo shutdown-out
+              echo shutdown-err 1>&2
+              exit /b 0
+            )
+            if "%mode%"=="ordinary" (
+              echo ordinary-out
+              echo ordinary-err 1>&2
+              exit /b 7
+            )
+            if "%mode%"=="slow" (
+              > "%~1" echo ready
+              :wait_for_signal
+              if not exist "%~2" goto wait_for_signal
+              echo slow-out
+              echo slow-err 1>&2
+              exit /b 0
+            )
+            exit /b 92
+            """);
+
+        try
+        {
+            var shutdown = await GoalAcceptanceVerifier.RunProcessForTestsAsync(
+                [shim, "build-server", "shutdown", receivedArguments],
+                root,
+                TimeSpan.FromSeconds(10));
+            var ordinary = await GoalAcceptanceVerifier.RunProcessForTestsAsync(
+                [shim, "ordinary"],
+                root,
+                TimeSpan.FromSeconds(10));
+
+            var readyObserved = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+            using var watcher = new FileSystemWatcher(root, Path.GetFileName(ready))
+            {
+                EnableRaisingEvents = true
+            };
+            watcher.Created += (_, _) => readyObserved.TrySetResult();
+            var slowTask = GoalAcceptanceVerifier.RunProcessForTestsAsync(
+                [shim, "slow", ready, signal],
+                root,
+                TimeSpan.FromSeconds(10));
+            if (File.Exists(ready))
+            {
+                readyObserved.TrySetResult();
+            }
+
+            await readyObserved.Task.WaitAsync(TimeSpan.FromSeconds(10));
+            File.WriteAllText(signal, "go");
+            var slow = await slowTask;
+
+            Assert.Equal("build-server shutdown", File.ReadAllText(receivedArguments).Trim());
+            Assert.Equal(0, shutdown.ExitCode);
+            Assert.Contains("shutdown-out", shutdown.Output, StringComparison.Ordinal);
+            Assert.Contains("shutdown-err", shutdown.Output, StringComparison.Ordinal);
+            Assert.Equal(7, ordinary.ExitCode);
+            Assert.Contains("ordinary-out", ordinary.Output, StringComparison.Ordinal);
+            Assert.Contains("ordinary-err", ordinary.Output, StringComparison.Ordinal);
+            Assert.Equal(0, slow.ExitCode);
+            Assert.Contains("slow-out", slow.Output, StringComparison.Ordinal);
+            Assert.Contains("slow-err", slow.Output, StringComparison.Ordinal);
+        }
+        finally
+        {
+            DeleteDirectoryWithRetry(root);
+        }
+    }
+
     [Xunit.Fact(DisplayName = "GoalAcceptanceVerifier_rejects_unbounded_focused_evidence_request")]
     public async Task GoalAcceptanceVerifierRejectsUnboundedFocusedEvidenceRequest()
     {

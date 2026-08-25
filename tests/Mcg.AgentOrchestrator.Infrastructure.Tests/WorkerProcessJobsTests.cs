@@ -1289,6 +1289,45 @@ public sealed class WorkerProcessJobsTests : IDisposable
         }
     }
 
+    [Xunit.Fact(DisplayName = "WorkerProcessJobs_owned_child_uses_retained_handle_for_fast_exit_and_metadata")]
+    public async Task WorkerProcessJobsOwnedChildUsesRetainedHandleForFastExitAndMetadata()
+    {
+        if (!OperatingSystem.IsWindows())
+        {
+            return;
+        }
+
+        var startInfo = new ProcessStartInfo
+        {
+            FileName = "cmd.exe",
+            Arguments = "/d /c exit 23",
+            UseShellExecute = false,
+            CreateNoWindow = true,
+            WorkingDirectory = Environment.CurrentDirectory
+        };
+        using var child = WorkerProcessJobs.StartRegisteredOwnedOrThrow(
+            startInfo,
+            "owned-child-fast-exit");
+        var processId = child.Id;
+        using var timeout = new CancellationTokenSource(TimeSpan.FromSeconds(10));
+        try
+        {
+            await child.WaitForExitAsync(timeout.Token);
+
+            Assert.Equal(23, child.ExitCode);
+            Assert.Equal("cmd.exe", child.StartMetadata.FileName);
+            Assert.Equal("/d /c exit 23", child.StartMetadata.Arguments);
+            Assert.Equal(Environment.CurrentDirectory, child.StartMetadata.WorkingDirectory);
+            Assert.True(WorkerProcessJobs.HasRegisteredJob(processId));
+        }
+        finally
+        {
+            WorkerProcessJobs.Release(processId);
+        }
+
+        Assert.False(WorkerProcessJobs.HasRegisteredJob(processId));
+    }
+
     [Xunit.Fact(DisplayName = "WorkerProcessJobs_release_waits_for_gate_owned_child_process_tree")]
     public void WorkerProcessJobsReleaseWaitsForGateOwnedChildProcessTree()
     {

@@ -23,6 +23,7 @@ internal enum ConductorParallelAcceptanceAttemptOutcome
     BlockedBuildSlot,
     BlockedBuildLock,
     InfrastructureDeferred,
+    GateEngineFault,
     LaunchFailed,
     Faulted,
     Reconciled
@@ -46,6 +47,7 @@ internal enum ConductorEvidenceAttemptOutcome
     BlockedBuildSlot,
     BlockedBuildLock,
     InfrastructureDeferred,
+    GateEngineFault,
     CorruptArtifacts,
     Unknown
 }
@@ -2125,6 +2127,7 @@ internal sealed class ConductorParallelAcceptanceAttemptCoordinator
             ConductorParallelAcceptanceAttemptOutcome.BlockedBuildSlot => ConductorEvidenceAttemptOutcome.BlockedBuildSlot,
             ConductorParallelAcceptanceAttemptOutcome.BlockedBuildLock => ConductorEvidenceAttemptOutcome.BlockedBuildLock,
             ConductorParallelAcceptanceAttemptOutcome.InfrastructureDeferred => ConductorEvidenceAttemptOutcome.InfrastructureDeferred,
+            ConductorParallelAcceptanceAttemptOutcome.GateEngineFault => ConductorEvidenceAttemptOutcome.GateEngineFault,
             ConductorParallelAcceptanceAttemptOutcome.CorruptArtifacts => ConductorEvidenceAttemptOutcome.CorruptArtifacts,
             ConductorParallelAcceptanceAttemptOutcome.ProcessDied => ConductorEvidenceAttemptOutcome.Unknown,
             _ => ConductorEvidenceAttemptOutcome.Unknown
@@ -2311,6 +2314,7 @@ internal sealed class ConductorParallelAcceptanceAttemptCoordinator
                     DotnetBuildSlotsBusyException => "blocked-build-slot",
                     BuildLockBlockedException => "blocked-build-lock",
                     AcceptanceInfrastructureDeferredException => "infrastructure-deferred",
+                    AcceptanceGateEngineException => "gate-engine-fault",
                     OperationCanceledException => "cancelled",
                     _ => "exception"
                 },
@@ -2325,7 +2329,11 @@ internal sealed class ConductorParallelAcceptanceAttemptCoordinator
                 InfrastructureReasonCode: (run.Exception as AcceptanceInfrastructureDeferredException)?.ReasonCode,
                 InfrastructureExitCode: (run.Exception as AcceptanceInfrastructureDeferredException)?.ExitCode,
                 InfrastructureOutputTail: (run.Exception as AcceptanceInfrastructureDeferredException)?.OutputTail,
-                InfrastructureBuildLockAttribution: (run.Exception as AcceptanceInfrastructureDeferredException)?.BuildLockAttribution);
+                InfrastructureBuildLockAttribution: (run.Exception as AcceptanceInfrastructureDeferredException)?.BuildLockAttribution,
+                FaultType: (run.Exception as AcceptanceGateEngineException)?.FaultType,
+                FaultStack: (run.Exception as AcceptanceGateEngineException)?.FaultStack,
+                GatePhase: (run.Exception as AcceptanceGateEngineException)?.GatePhase,
+                GateTarget: (run.Exception as AcceptanceGateEngineException)?.GateTarget);
         }
 
         if (run.EarlyResult is { Outcome: var outcome })
@@ -2461,6 +2469,12 @@ internal sealed class ConductorParallelAcceptanceAttemptCoordinator
                 artifact.InfrastructureExitCode,
                 artifact.InfrastructureOutputTail ?? artifact.FaultMessage,
                 artifact.InfrastructureBuildLockAttribution),
+            "gate-engine-fault" => AcceptanceGateEngineException.Rehydrate(
+                artifact.FaultMessage,
+                artifact.FaultType,
+                artifact.FaultStack,
+                artifact.GatePhase,
+                artifact.GateTarget),
             "cancelled" => new OperationCanceledException(artifact.FaultMessage),
             _ => new InvalidOperationException(artifact.FaultMessage ?? "background acceptance failed")
         };
@@ -2485,6 +2499,11 @@ internal sealed class ConductorParallelAcceptanceAttemptCoordinator
         if (run.Exception is AcceptanceInfrastructureDeferredException)
         {
             return ConductorParallelAcceptanceAttemptOutcome.InfrastructureDeferred;
+        }
+
+        if (run.Exception is AcceptanceGateEngineException)
+        {
+            return ConductorParallelAcceptanceAttemptOutcome.GateEngineFault;
         }
 
         if (run.Exception is OperationCanceledException)
@@ -2741,7 +2760,8 @@ internal sealed class ConductorParallelAcceptanceAttemptCoordinator
 
     internal static bool IsBoundedInfrastructureOutcome(ConductorParallelAcceptanceAttemptOutcome outcome) =>
         outcome is ConductorParallelAcceptanceAttemptOutcome.BlockedBuildLock or
-            ConductorParallelAcceptanceAttemptOutcome.InfrastructureDeferred;
+            ConductorParallelAcceptanceAttemptOutcome.InfrastructureDeferred or
+            ConductorParallelAcceptanceAttemptOutcome.GateEngineFault;
 
     internal static WorkerRegistrationFaultDisposition ClassifyWorkerRegistrationFault(Exception? exception)
     {
@@ -2890,4 +2910,8 @@ internal sealed record ConductorParallelAcceptanceRunArtifact(
     string? InfrastructureReasonCode = null,
     int? InfrastructureExitCode = null,
     string? InfrastructureOutputTail = null,
-    BuildLockAttribution? InfrastructureBuildLockAttribution = null);
+    BuildLockAttribution? InfrastructureBuildLockAttribution = null,
+    string? FaultType = null,
+    string? FaultStack = null,
+    string? GatePhase = null,
+    string? GateTarget = null);

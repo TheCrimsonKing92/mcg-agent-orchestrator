@@ -487,6 +487,8 @@ public sealed class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
     {
         using var phaseAccountant = AcceptanceGatePhaseAccountant.Start(
             _timeProvider, goalId?.Value, EmitGateProgress, cancellationToken);
+        try
+        {
         phaseAccountant.TransitionTo(AcceptanceGatePhaseNames.GatePlan);
         var sourceSizePreflight = SourceSizeRatchetPreflight.Evaluate(worktreePath);
         if (sourceSizePreflight.HasBlockingViolation)
@@ -521,11 +523,13 @@ public sealed class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
 
         // Shut down build servers to release file locks before running tests.
         phaseAccountant.TransitionTo(AcceptanceGatePhaseNames.BuildServerShutdown);
+        phaseAccountant.SetTarget("dotnet build-server shutdown");
         await _runner(
             ["dotnet", "build-server", "shutdown"],
             worktreePath,
             engineSettings.ResolveBuildServerShutdownTimeout(),
             cancellationToken).ConfigureAwait(false);
+        phaseAccountant.SetTarget(null);
 
         phaseAccountant.TransitionTo(AcceptanceGatePhaseNames.PlanConstruction);
         var shardCoreBudget =
@@ -800,7 +804,19 @@ public sealed class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
 
         phaseAccountant.MarkCompleted(verification.Passed);
         return verification;
+        }
+        catch (Exception exception) when (ShouldCaptureGateEngineFault(exception))
+        {
+            throw AcceptanceGateEngineException.Capture(exception, phaseAccountant.Snapshot);
+        }
     }
+
+    private static bool ShouldCaptureGateEngineFault(Exception exception) =>
+        exception is not AcceptanceGateEngineException and
+        not AcceptanceInfrastructureDeferredException and
+        not DotnetBuildSlotsBusyException and
+        not BuildLockBlockedException and
+        not OperationCanceledException;
 
     public async Task<FocusedEvidenceRunResult> RunFocusedEvidenceAsync(
         string worktreePath,
@@ -3135,6 +3151,9 @@ public sealed class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
         CancellationToken cancellationToken,
         string? testResultsDirectoryOverride = null)
     {
+        using var targetScope = AcceptanceGatePhaseAccountant.BeginCurrentTarget(check.Name);
+        try
+        {
         if (check.Type.Equals("no-op", StringComparison.OrdinalIgnoreCase))
         {
             return (new AcceptanceCheckResult(
@@ -3169,6 +3188,13 @@ public sealed class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
                 cancellationToken,
                 testResultsDirectoryOverride).ConfigureAwait(false)
             : await RunCommandCheckAsync(check, worktreePath, goalId, stableSlotIndex, stableSlotLease, dotnetTestBuildPhase, cancellationToken).ConfigureAwait(false);
+        }
+        catch (Exception exception) when (ShouldCaptureGateEngineFault(exception))
+        {
+            throw AcceptanceGateEngineException.Capture(
+                exception,
+                AcceptanceGatePhaseAccountant.CurrentSnapshot);
+        }
     }
 
     private async Task<AcceptanceCheckResult> RunGrepCheckAsync(
@@ -7264,6 +7290,13 @@ public sealed class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
             forceUtf8ConsoleOutput: false,
             cancellationToken).ConfigureAwait(false);
 
+    internal static Task<CommandResult> RunProcessForTestsAsync(
+        string[] arguments,
+        string workingDirectory,
+        TimeSpan commandTimeout,
+        CancellationToken cancellationToken = default) =>
+        RunProcessAsync(arguments, workingDirectory, commandTimeout, cancellationToken);
+
     private static async Task<CommandResult> RunUtf8DiscoveryProcessAsync(
         string[] arguments,
         string workingDirectory,
@@ -7524,7 +7557,9 @@ public sealed class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
         }
     }
 
-    private static Process StartAcceptanceProcess(ProcessStartInfo startInfo, string workingDirectory)
+    private static RegisteredOwnedProcess StartAcceptanceProcess(
+        ProcessStartInfo startInfo,
+        string workingDirectory)
     {
         if (OperatingSystem.IsWindows() &&
             string.Equals(
@@ -7546,7 +7581,10 @@ public sealed class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
                 WorkerProcessJobs.RegisterOrThrow(
                     legacyProcess,
                     $"acceptance:{workingDirectory}");
-                return legacyProcess;
+                return new RegisteredOwnedProcess(
+                    legacyProcess,
+                    processHandle: null,
+                    startInfo);
             }
             catch
             {
@@ -7555,7 +7593,7 @@ public sealed class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
             }
         }
 
-        return WorkerProcessJobs.StartRegisteredOrThrow(
+        return WorkerProcessJobs.StartRegisteredOwnedOrThrow(
             startInfo,
             $"acceptance:{workingDirectory}");
     }
@@ -7751,7 +7789,7 @@ public sealed class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
     }
 
     private static async Task<IReadOnlyList<CaptureLimitResult>> CompleteCaptureDrainsAsync(
-        Process process,
+        RegisteredOwnedProcess process,
         Task<CaptureLimitResult>[] captureDrains,
         CancellationTokenSource captureDrainCts,
         IReadOnlyList<Stream> captureSources)

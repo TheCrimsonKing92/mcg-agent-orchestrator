@@ -2017,6 +2017,72 @@ public sealed class ConductorBatchLoopTestsParallelAcceptance : ConductorBatchLo
         }
     }
 
+    [Xunit.Fact(DisplayName = "BatchLoop_gate_engine_fault_round_trips_diagnostics_and_retries_without_candidate_failure")]
+    public void BatchLoopGateEngineFaultRoundTripsDiagnosticsAndRetriesWithoutCandidateFailure()
+    {
+        static void ThrowGateEngineCause() =>
+            throw new InvalidOperationException("owned process lifecycle failed");
+
+        static AcceptanceGateEngineException CaptureGateEngineFault()
+        {
+            try
+            {
+                ThrowGateEngineCause();
+                throw new InvalidOperationException("negative control did not throw");
+            }
+            catch (InvalidOperationException exception)
+            {
+                return AcceptanceGateEngineException.Capture(
+                    exception,
+                    new AcceptanceGateDiagnosticSnapshot(
+                        "check-execution",
+                        "focused infrastructure tests"));
+            }
+        }
+
+        var kernel = new AgentOrchestratorKernel();
+        var goal = CreateVerifiedSimpleGoal(kernel, "Update src/Mcg.AgentOrchestrator.App/Orchestration/GateEngineFault.cs");
+        var attemptRoot = CreateTempDirectory("mcg-conductor-gate-engine-fault");
+        var driver = MakeDriver(
+            getFacts: _ => new GoalLifecycleFacts(WorkspaceExists: true),
+            runAcceptanceWithSlot: (_, _) => throw CaptureGateEngineFault(),
+            getLandingFileScopes: _ => ["src/Mcg.AgentOrchestrator.App/Orchestration/GateEngineFault.cs"],
+            parallelAcceptanceAttemptCoordinator: new ConductorParallelAcceptanceAttemptCoordinator(
+                attemptRoot,
+                runInline: true));
+
+        try
+        {
+            var summary = new ConductorBatchLoop().Run(
+                kernel,
+                driver,
+                ConductorAutonomyPolicy.Conservative,
+                NoStopPath(),
+                maxIterations: 1);
+            var latest = ReadLatestAttempt(attemptRoot, goal);
+            using var artifact = JsonDocument.Parse(File.ReadAllText(latest.ResultPath));
+            var result = artifact.RootElement;
+
+            Assert.Equal(1, summary.Held);
+            Assert.Equal(0, summary.Escalated);
+            Assert.Equal(ConductorParallelAcceptanceAttemptOutcome.GateEngineFault, latest.Outcome);
+            Assert.Equal(1, latest.TransientFailureCount);
+            Assert.Equal(GoalStatus.Verifying, goal.Status);
+            Assert.Null(goal.LatestAcceptanceFailure);
+            Assert.Equal("System.InvalidOperationException", result.GetProperty("faultType").GetString());
+            Assert.Equal("check-execution", result.GetProperty("gatePhase").GetString());
+            Assert.Equal("focused infrastructure tests", result.GetProperty("gateTarget").GetString());
+            var stack = result.GetProperty("faultStack").GetString() ?? string.Empty;
+            Assert.Contains("owned process lifecycle failed", stack, StringComparison.Ordinal);
+            Assert.Contains(nameof(ThrowGateEngineCause), stack, StringComparison.Ordinal);
+            Assert.DoesNotContain(nameof(ThrowGateEngineCause), latest.Detail, StringComparison.Ordinal);
+        }
+        finally
+        {
+            TryDeleteDirectory(attemptRoot);
+        }
+    }
+
     [Xunit.Theory]
     [Xunit.InlineData("duplicate-or-recycled-pid")]
     [Xunit.InlineData("owned-process-group-attachment")]
