@@ -945,7 +945,7 @@ public sealed class ConductorBatchLoopTestsReapingDetach : ConductorBatchLoopTes
             "tests: not-run - planning only",
             "commit: none",
             "blockers: none",
-            "model_fit: OpenAI/gpt-5.5 - adequate - planning",
+            "model_fit: OpenAI/gpt-5.5 - adequate - planning", // Deliberate synthetic evidence; this fixture does not select a provider model.
             "skills: none",
             "confidence: high",
             "END_WORKER_RESULT"));
