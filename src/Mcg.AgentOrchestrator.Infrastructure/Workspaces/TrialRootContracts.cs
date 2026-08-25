@@ -174,7 +174,7 @@ internal sealed partial class TrialRootLease : IDisposable
         TempPath = Path.Combine(rootPath, ".trial-state", "temp");
         ProfilePath = Path.Combine(rootPath, ".trial-state", "profile");
         NuGetPackagesPath = Path.Combine(rootPath, ".trial-state", "nuget", "packages");
-        ChildEnvironment = childEnvironment;
+        ChildEnvironment = new Dictionary<string, string?>(childEnvironment, StringComparer.OrdinalIgnoreCase);
         _protectedSnapshots = protectedSnapshots;
         _processInventory = processInventory;
         _jobExitWaiter = jobExitWaiter;
@@ -203,6 +203,24 @@ internal sealed partial class TrialRootLease : IDisposable
     public string NuGetPackagesPath { get; }
 
     public IReadOnlyDictionary<string, string?> ChildEnvironment { get; }
+
+    internal void AddEnvironment(IReadOnlyDictionary<string, string?> environment)
+    {
+        ArgumentNullException.ThrowIfNull(environment);
+        lock (_sync)
+        {
+            if (_teardownReport is not null || _processes.Count > 0)
+            {
+                throw new InvalidOperationException("Trial environment can only be extended before the first launch.");
+            }
+
+            var childEnvironment = (Dictionary<string, string?>)ChildEnvironment;
+            foreach (var pair in environment)
+            {
+                childEnvironment[pair.Key] = pair.Value;
+            }
+        }
+    }
 
     public TimeSpan CreateDuration { get; }
 

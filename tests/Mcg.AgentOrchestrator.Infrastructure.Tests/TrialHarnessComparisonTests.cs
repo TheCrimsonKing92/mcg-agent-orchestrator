@@ -1,4 +1,5 @@
 using System.Diagnostics;
+using Mcg.AgentOrchestrator.Core;
 
 namespace Mcg.AgentOrchestrator.Infrastructure.Tests;
 
@@ -19,6 +20,49 @@ public sealed class TrialHarnessComparisonTests
         Xunit.Assert.All(host.Requests, request => Xunit.Assert.Equal(fixture.BaseCommit, request.BaseCommit));
         Xunit.Assert.Equal(2, host.Requests.Select(request => request.Name).Distinct(StringComparer.OrdinalIgnoreCase).Count());
         Xunit.Assert.NotSame(host.Requests[0].ExtraEnvironment, host.Requests[1].ExtraEnvironment);
+    }
+
+    [Xunit.Fact]
+    public void RunInjectsIdenticalCanonicalWorkloadAndDistinctArmIdentities()
+    {
+        using var fixture = new Fixture();
+        var host = new FakeTrialRootHost(fixture.Root);
+
+        var result = new TrialHarnessComparison(host).Run(fixture.Request(
+            new("alpha", "alpha.exe", []),
+            new("beta", "beta.exe", [])));
+
+        Xunit.Assert.True(result.Succeeded);
+        Xunit.Assert.NotNull(result.WorkloadIdentity);
+        Xunit.Assert.Single(result.Harnesses.Select(item => item.WorkloadIdentity?.Value).Distinct());
+        Xunit.Assert.All(result.Harnesses, item => Xunit.Assert.Equal(result.WorkloadIdentity, item.WorkloadIdentity));
+        Xunit.Assert.Equal(2, result.Harnesses.Select(item => item.ArmIdentity?.Value).Distinct().Count());
+        Xunit.Assert.Equal(2, host.BriefPaths.Values.Distinct(StringComparer.OrdinalIgnoreCase).Count());
+        Xunit.Assert.All(host.BriefBytes.Values, bytes => Xunit.Assert.Equal(fixture.BriefBytes, bytes));
+        Xunit.Assert.All(host.LaunchEnvironments.Values, environment =>
+        {
+            Xunit.Assert.Equal(fixture.BaseCommit, environment["MCG_TRIAL_BASE_COMMIT"]);
+            Xunit.Assert.Equal(fixture.Workload.BriefDigest, environment["MCG_TRIAL_BRIEF_SHA256"]);
+            Xunit.Assert.Equal(fixture.Workload.ModelIdentity, environment["MCG_TRIAL_MODEL_IDENTITY"]);
+            Xunit.Assert.Equal(result.WorkloadIdentity!.Value, environment["MCG_TRIAL_WORKLOAD_ID"]);
+        });
+        Xunit.Assert.All(result.Harnesses, item =>
+            Xunit.Assert.Contains(item.WorkloadIdentity!.Value, File.ReadAllText(item.ReceiptPath), StringComparison.Ordinal));
+        Xunit.Assert.NotNull(result.HistoricalTiming);
+        Xunit.Assert.All(result.Harnesses, item => Xunit.Assert.NotNull(item.HistoricalTiming));
+    }
+
+    [Xunit.Fact]
+    public void WorkloadIdentityRecordsButDoesNotKeyOnSourceProvenance()
+    {
+        using var fixture = new Fixture();
+        var first = TrialIdentity.CreateWorkload(fixture.Workload, fixture.BaseCommit);
+        var second = TrialIdentity.CreateWorkload(
+            fixture.Workload with { SourceProvenance = "historical:another-goal" },
+            fixture.BaseCommit);
+
+        Xunit.Assert.Equal(first.Value, second.Value);
+        Xunit.Assert.NotEqual(first.SourceProvenance, second.SourceProvenance);
     }
 
     [Xunit.Fact]
@@ -154,12 +198,45 @@ public sealed class TrialHarnessComparisonTests
         public string Source { get; }
         public string Receipts { get; }
         public string BaseCommit { get; } = "0123456789abcdef";
+        public string Brief { get; } = "identical brief bytes\r\nkept exact";
+        public byte[] BriefBytes => System.Text.Encoding.UTF8.GetBytes(Brief);
+        public TrialWorkload Workload => new(
+            "brief-v1",
+            Brief,
+            TrialIdentity.ComputeBriefDigest(Brief),
+            "OpenAI/gpt-test",
+            "historical:test",
+            HistoricalTiming);
+        public GoalTimingReportSnapshot HistoricalTiming => new(
+            new GoalId("historical-goal"),
+            "historical objective",
+            null,
+            "unavailable",
+            null,
+            "unavailable",
+            null,
+            null,
+            null,
+            null,
+            null,
+            null,
+            TimeSpan.Zero,
+            TimeSpan.Zero,
+            TimeSpan.Zero,
+            TimeSpan.Zero,
+            TimeSpan.Zero,
+            TimeSpan.Zero,
+            TimeSpan.Zero,
+            0,
+            0,
+            [],
+            null);
 
         public TrialComparisonRequest Request(params TrialHarnessSpec[] harnesses) =>
-            new(Source, BaseCommit, harnesses, Receipts, Path.Combine(Root, "roots"), null, TimeSpan.FromSeconds(1));
+            new(Source, BaseCommit, Workload, harnesses, Receipts, Path.Combine(Root, "roots"), null, TimeSpan.FromSeconds(1));
 
         public TrialComparisonRequest RequestWithProtectedPaths(IReadOnlyList<string> protectedPaths, params TrialHarnessSpec[] harnesses) =>
-            new(Source, BaseCommit, harnesses, Receipts, Path.Combine(Root, "roots"), protectedPaths, TimeSpan.FromSeconds(1));
+            new(Source, BaseCommit, Workload, harnesses, Receipts, Path.Combine(Root, "roots"), protectedPaths, TimeSpan.FromSeconds(1));
 
         public void Dispose()
         {
@@ -181,6 +258,9 @@ public sealed class TrialHarnessComparisonTests
         public HashSet<string> TimeoutOnWait { get; } = new(StringComparer.OrdinalIgnoreCase);
         public HashSet<string> UncleanTeardown { get; } = new(StringComparer.OrdinalIgnoreCase);
         public HashSet<string> MissingStdout { get; } = new(StringComparer.OrdinalIgnoreCase);
+        public Dictionary<string, IReadOnlyDictionary<string, string?>> LaunchEnvironments { get; } = new(StringComparer.OrdinalIgnoreCase);
+        public Dictionary<string, string> BriefPaths { get; } = new(StringComparer.OrdinalIgnoreCase);
+        public Dictionary<string, byte[]> BriefBytes { get; } = new(StringComparer.OrdinalIgnoreCase);
         public string? ProtectedPathToMutate { get; init; }
 
         public ITrialRootSession Create(TrialRootRequest request)
@@ -198,6 +278,15 @@ public sealed class TrialHarnessComparisonTests
             public string RootPath => root;
             public string ResolvedBaseCommit => commit;
             public string HarnessStatePath => Path.Combine(root, "harness");
+
+            public void AddEnvironment(IReadOnlyDictionary<string, string?> environment)
+            {
+                var copy = new Dictionary<string, string?>(environment, StringComparer.OrdinalIgnoreCase);
+                owner.LaunchEnvironments[name] = copy;
+                var briefPath = copy["MCG_TRIAL_BRIEF_PATH"]!;
+                owner.BriefPaths[name] = briefPath;
+                owner.BriefBytes[name] = File.ReadAllBytes(briefPath);
+            }
 
             public ITrialLaunch Start(ProcessStartInfo command)
             {
