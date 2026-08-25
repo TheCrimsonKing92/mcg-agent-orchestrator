@@ -3220,6 +3220,14 @@ public sealed class CliCommandTestsGoalLifecycleCleanupHooksAcceptance : CliComm
         var root = CreateShortAcceptanceRepository();
         try
         {
+            var authorityPath = Path.Combine(
+                root,
+                SourceSizeRatchet.SourcePath.Replace('/', Path.DirectorySeparatorChar));
+            Directory.CreateDirectory(Path.GetDirectoryName(authorityPath)!);
+            File.WriteAllText(authorityPath, "new SourceSizeCeiling(\"guarded.cs\", 3)");
+            File.WriteAllLines(Path.Combine(root, "guarded.cs"), ["one", "two", "three"]);
+            RunGit(root, "add", ".");
+            RunGit(root, "commit", "-m", "Add compliant source size authority");
             var kernel = new AgentOrchestratorKernel();
             var task = new TaskSpec(TaskId.New(), "Implement something", AgentRole.Developer);
             var goal = kernel.CreateGoal("Pin acceptance slot", [task]);
@@ -3287,6 +3295,57 @@ public sealed class CliCommandTestsGoalLifecycleCleanupHooksAcceptance : CliComm
                 Directory.Delete(isolatedRoot, recursive: true);
             }
         }
+    }
+
+    [Xunit.Fact]
+    public void Acceptance_ViolatingAuthority_SkipsSlotAndVerifier()
+    {
+        var root = CreateShortAcceptanceRepository();
+        var kernel = new AgentOrchestratorKernel();
+        var task = new TaskSpec(TaskId.New(), "Implement something", AgentRole.Developer);
+        var goal = kernel.CreateGoal("Reject source size breach before CLI slot", [task]);
+        IReadOnlyList<AgentDefinition> agents = AgentCatalog.Default().Agents;
+        var providers = new InMemoryModelProviderRegistry([]);
+        var profiles = WorkerProfileCatalog.Default();
+        Goal? currentGoal = goal;
+        kernel.ActivateGoal(goal.Id, agents);
+        kernel.RecordTaskVerification(
+            goal.Id,
+            task.Id,
+            ManualVerificationRecorder.Create(true, "Passed.", root, DateTimeOffset.Parse("2026-08-24T12:00:00Z")));
+        CommitGoalWork(root, goal.Id, "feature.txt", "goal work");
+        var worktree = Assert.IsType<string>(GoalWorktrees.TryResolve(root, goal.Id));
+        var authorityPath = Path.Combine(
+            worktree,
+            SourceSizeRatchet.SourcePath.Replace('/', Path.DirectorySeparatorChar));
+        Directory.CreateDirectory(Path.GetDirectoryName(authorityPath)!);
+        File.WriteAllText(authorityPath, "new SourceSizeCeiling(\"guarded.cs\", 2)");
+        File.WriteAllLines(Path.Combine(worktree, "guarded.cs"), ["one", "two", "three"]);
+        RunGit(worktree, "add", ".");
+        RunGit(worktree, "commit", "-m", "Breach source size ceiling");
+        var verifier = new ProbeAcceptanceVerifier(() => { });
+        var slotAttempted = false;
+
+        var output = CaptureConsole(() => CliCommandDispatcher.ExecuteCommand(
+            ["acceptance", "--keep-workspace"],
+            kernel,
+            CreateRefinedWorkspace(root),
+            ref agents,
+            providers,
+            ref profiles,
+            ref currentGoal,
+            acceptanceVerifier: verifier,
+            stableSlotSelector: (_, _) =>
+            {
+                slotAttempted = true;
+                throw new Xunit.Sdk.XunitException(
+                    "The source-size rejection must run before the CLI stable-slot selector.");
+            }));
+
+        Xunit.Assert.False(slotAttempted);
+        Xunit.Assert.Equal(0, verifier.RunCount);
+        Xunit.Assert.Contains("guarded.cs has 3 lines", output, StringComparison.Ordinal);
+        Xunit.Assert.Contains("recorded ceiling of 2", output, StringComparison.Ordinal);
     }
 
     [Xunit.Fact(DisplayName = "Cli_acceptance_tests_use_fixture_isolated_dotnet_root")]

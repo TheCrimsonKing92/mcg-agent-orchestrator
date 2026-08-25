@@ -27,10 +27,11 @@ Rules for using and maintaining this file:
 - **Durable lessons belong in `### Operating lessons worth keeping`; live state belongs in the top
   section.** Everything else is history.
 
-## RESUME HERE — 2026-08-24 19:00 UTC, eight landings; a gate artifact defect is corrupting diagnosis
+## RESUME HERE — 2026-08-24 22:05 UTC, ten landings; the gate artifact defect is FIXED and landed
 
-Eight goals landed on 08-24: `1d6b3fae`, `9c3885b2`, `ee57cc09`, `a04cdfe9`, `8c7fb174`, `d7585642`,
-`604b8a93`, `f28c201d`. Two more (`8612dcf0`, `e68a6324`) landed just before midnight on 08-23.
+Ten goals landed on 08-24: `1d6b3fae`, `9c3885b2`, `ee57cc09`, `a04cdfe9`, `8c7fb174`, `d7585642`,
+`604b8a93`, `f28c201d`, `dd6ba0f8` (`e4701815`), `98430a7c` (`7cf14424`). Two more (`8612dcf0`,
+`e68a6324`) landed just before midnight on 08-23.
 
 ### ⚠ READ THIS BEFORE DIAGNOSING ANY GATE FAILURE — a passing TRX may not be that failure's receipt
 
@@ -45,7 +46,15 @@ path first. Two checks named `infrastructure tests: Remainder` in one plan there
 
 The verdict never reopens the TRX to reconcile. Cited at
 `src/Mcg.AgentOrchestrator.Infrastructure/Workspaces/GoalAcceptanceVerifier.cs` lines 6263, 6287, 3397, 7348
-and 729. Filed as goal `98430a7c` (in flight at time of writing).
+and 729.
+
+**FIXED AND LANDED as `98430a7c` (`7cf14424`, 2026-08-24 16:20 local).** Gate artifacts produced after that
+commit should be the failing invocation's own receipts again, and the normal TRX-first diagnosis works.
+**Artifacts retained from attempts BEFORE it remain corrupted** — every gate attempt earlier on 08-24 and
+before may pair a failed verdict with another invocation's green TRX. When reading an older attempt, still
+prefer the failed process's stdout or the partition-cache receipt. The fix also had to close a second path:
+the lock-remediation retry constructed its result without a run ordinal, which the Reviewer caught before it
+landed.
 
 **Consequences you will hit:**
 - The failing invocation's TRX **and heartbeat** are gone. Read the failed process's stdout, or the
@@ -71,9 +80,13 @@ present, and stayed down **6 hours 36 minutes** until relaunched by hand. Two go
 `Verifying` throughout.
 
 **After any `LOOP_STOP`, relaunch manually.** Re-enabling needs elevation the Claude Code classifier blocks,
-so it is an operator action. The `--max-duration` self-renewal handoff still works and was verified on 08-24:
-`LOOP_HANDOFF attempt=2 stagedSourceCommit=312b3f52... repositoryHead=312b3f52...` — check those two shas
-match, then confirm a second `LOOP_START` appears in the same log.
+so it is an operator action.
+
+The `--max-duration` self-renewal handoff still works and was verified **twice** on 08-24, at 16:41 and
+20:42, staging `312b3f52` and then `e4701815`. Both times the retry counter mattered: the first attempt logs
+`repositoryHead=resolve-pending` and it succeeded on attempt 2 and 3 respectively. **Verify a handoff by
+checking `stagedSourceCommit` equals `repositoryHead`, then confirming an additional `LOOP_START` appears in
+the same log file** — the successor inherits the log path, so a new file is not created.
 
 ### Gate flakes are the throughput tax, measured
 
@@ -95,7 +108,10 @@ exit-0/empty-stdout shape behind seed-isolation failures, so it is one family, n
 
 ### Roster and config changes made 08-24
 
-- **Planner moved to `gpt-5.6-sol`** (operator direction). The `agent` verb changes less than it appears:
+- **Planner moved to `gpt-5.6-sol`** (operator direction) — **confirmed live after the 20:42 bounce**, where
+  a goal's Planner task shows agent `openai-p` rather than the previous `anthropi`. A roster change needs a
+  bounce to take effect, and in-flight tasks stay pinned to their old agent. The `agent` verb changes less
+  than it appears:
   the first invocation moved only the API model and left `Subscription.ModelAlias` on `gpt-5.5` at
   `reasoning=low`, which is what actually runs under `ExecutionPolicy=PreferSubscription`. Pass
   `--subscription-model` and `--subscription-reasoning` too, and note `--complex-model` silently resets
@@ -105,8 +121,21 @@ exit-0/empty-stdout shape behind seed-isolation failures, so it is one family, n
 
 ### Live board at handoff
 
-In flight: `98430a7c` (TRX collision, Developer), `dd6ba0f8` (AwaitingVerification wedge, Tester),
-`a9ea57dd` (ratchet burns gate cycles), `da16a801` (cohort observability), `ac89d2c8` (status reprint).
+In flight: `a9ea57dd` (ratchet burns gate cycles — at its gate), `da16a801` (cohort observability),
+`ac89d2c8` (status reprint).
+
+**`a9ea57dd` needed an operator merge resolution on 08-24 and it is worth understanding before touching it.**
+`f28c201d` deleted the entire inline-landing acceptance path when it consolidated the two execution paths, so
+`a9ea57dd`'s source-size guard on `RunInlineLandingAcceptance` was attached to a method that no longer exists.
+Resolution taken: main's deletion, for both `ConductorDriver.AcceptanceLanding.cs` and its test file, which
+main had rewritten for the consolidated path. Its other three guards survive — cohort
+(`ConductorDriver.cs:3736`), parallel landing (`:4037`), merge train (`ConductorDriver.MergeTrains.cs:104`) —
+as do its four tests in `GoalAcceptanceVerifierTestsSourceSizePreflight.cs`. The merge was verified to build
+with 0 errors before gating, and the Reviewer independently raised the same integration concern.
+
+**A suspected regression in `dd6ba0f8` was investigated and DISPROVEN.** An earlier operator note suspected
+`WorkerDispatchBuildEvidenceClassificationTests.MissingEvidencePassingCheckCompletesAndCommits`. A full gate
+subsequently passed, so it was not real. That suspicion originated from the TRX overwrite defect above.
 
 **Four goals are `Verified` with unmerged branches and are NOT landed:** `58ae2e59`, `9deb2c19`,
 `b9398a95`, and `fb13475c` (the last dating to 08-03 — see its two sections below, both still accurate).

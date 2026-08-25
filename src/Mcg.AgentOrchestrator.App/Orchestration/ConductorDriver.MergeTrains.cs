@@ -101,6 +101,7 @@ internal sealed partial class ConductorDriver
                 workspace.TreeRevision,
                 manifest);
             var receipt = _mergeTrainAcceptanceStore.TryReadReceipt(identity.Value);
+            receipt ??= RunMergeTrainSourceSizePreflight(workspace.Path, identity, _mergeTrainAcceptanceStore);
             if (receipt is null)
             {
                 var clock = Stopwatch.StartNew();

@@ -42,7 +42,8 @@ internal sealed partial class ConductorDriver
         AcceptanceVerificationSummary acceptance;
         try
         {
-            acceptance = _runAcceptanceVerification(goal, null, null, CancellationToken.None);
+            acceptance = RunInlineLandingSourceSizePreflight(goal) ??
+                _runAcceptanceVerification(goal, null, null, CancellationToken.None);
         }
         catch (AcceptanceInfrastructureDeferredException ex)
         {

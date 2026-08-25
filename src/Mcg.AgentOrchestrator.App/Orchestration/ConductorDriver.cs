@@ -3684,11 +3684,10 @@ internal sealed partial class ConductorDriver
                 $"trxCount={receipt.GateTestResultPaths.Count}");
         }
 
-        return CohortHeld(
-            goals,
-            policy,
-            receipt,
-            receipt.Outcome == AcceptanceCohortGateOutcome.Failed
+        var shouldUseOrdinaryFallback = receipt.Outcome == AcceptanceCohortGateOutcome.Failed && receipt.Attribution == AcceptanceCohortAttributionOutcome.NotApplicable;
+        return shouldUseOrdinaryFallback
+            ? CohortOrdinaryFallback(receipt, "deterministic cohort content failure has no member attribution; members remain eligible for ordinary acceptance")
+            : CohortHeld(goals, policy, receipt, receipt.Outcome == AcceptanceCohortGateOutcome.Failed
                 ? $"deterministic RED; attribution={receipt.Attribution}"
                 : $"cohort infrastructure outcome={receipt.Outcome}; no attribution or landing");
 
@@ -3733,8 +3732,8 @@ internal sealed partial class ConductorDriver
             ?? throw new InvalidOperationException("Production acceptance cohort verifier is unavailable.");
         var store = _cohortAcceptanceStore
             ?? throw new InvalidOperationException("Production acceptance cohort store is unavailable.");
-        var workspace = _cohortWorkspace
-            ?? throw new InvalidOperationException("Production acceptance cohort workspace is unavailable.");
+        var workspace = _cohortWorkspace ?? throw new InvalidOperationException("Production acceptance cohort workspace is unavailable.");
+        if (RunAcceptanceCohortSourceSizePreflight(integration.Path, identity, store) is { } sourceSizeReceipt) return sourceSizeReceipt;
         var gateProgressEventWriter = new ConductEventLogWriter(
             Path.Combine(workspace.ExecutionDirectory, ".orchestrator", "logs", ConductEventLogWriter.CurrentFileName));
         using var progressSink = GoalAcceptanceVerifier.PushGateProgressSink(progress =>
@@ -3973,7 +3972,7 @@ internal sealed partial class ConductorDriver
         }
         if (!AcceptanceCohortGateEvidence.HasCoherentTrxEvidence(normalizedTestResultPaths))
         {
-            return AcceptanceCohortGateOutcome.InfrastructureFailure;
+            return IsSourceSizeContentFailure(result) ? AcceptanceCohortGateOutcome.Failed : AcceptanceCohortGateOutcome.InfrastructureFailure;
         }
         return result.Passed && result.ExitCode == 0
             ? AcceptanceCohortGateOutcome.Passed

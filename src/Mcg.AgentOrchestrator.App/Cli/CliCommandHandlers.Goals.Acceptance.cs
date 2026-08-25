@@ -173,6 +173,33 @@ internal static bool RunAcceptanceWorkspaceMergeCore(CliExecutionContext context
         }
         else
         {
+            var sourceSizePreflight = SourceSizeRatchetPreflight.Evaluate(worktreePath);
+            if (sourceSizePreflight.HasBlockingViolation)
+            {
+                IReadOnlyList<string> failedChecks =
+                [
+                    SourceSizeRatchetPreflight.CheckName,
+                    .. SourceSizeRatchetPreflight.BlockingViolationMessages(sourceSizePreflight)
+                ];
+                context.Kernel.RecordAcceptanceFailure(goal.Id, failedChecks, testedWorktreeHead, testedMainHead);
+                GoalOperationJournal.AcceptanceFailed(
+                    context.Workspace.ExecutionDirectory,
+                    goal,
+                    "acceptance",
+                    testedWorktreeHead,
+                    testedMainHead,
+                    $"Acceptance failed for candidate {FormatAcceptanceCandidate(testedWorktreeHead, testedMainHead)}: {sourceSizePreflight.Message}.");
+                context.EventWriter.AppendAcceptanceResult(goal.Id, false, failedChecks);
+                AppendConductEvent(
+                    context,
+                    "acceptance",
+                    goal.Id,
+                    $"ACCEPTANCE goal={goal.Id.Value[..8]} result=failed stage=source-size-preflight checks={FormatConductEventChecks(failedChecks)}");
+                Console.WriteLine($"Acceptance verification: {sourceSizePreflight.Message}");
+                Console.WriteLine("Acceptance evidence: blocked; merge blocked");
+                return false;
+            }
+
             var verificationStarted = System.Diagnostics.Stopwatch.StartNew();
             int? stableSlotIndex = null;
             DotnetBuildEnvironmentLease? stableSlotLease = null;
