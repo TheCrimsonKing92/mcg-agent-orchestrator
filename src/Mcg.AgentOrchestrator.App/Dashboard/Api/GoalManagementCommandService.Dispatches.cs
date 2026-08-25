@@ -985,15 +985,16 @@ public static ProcessBatchExecutionResult RefreshDispatches(
     runner ??= new BackgroundDispatchRunner();
     var plan = kernel.BuildProcessBatchPlan(goal.Id, ProcessBatchActionKind.RefreshDispatches);
     var refreshed = new List<TaskSpec>();
+    var outcomes = new List<DispatchRefreshOutcome>();
 
     foreach (var item in plan.Items.Where(item => item.Status == ProcessBatchItemStatus.Ready))
     {
         var task = goal.Tasks.Single(task => task.Id == item.TaskId);
-        runner.RefreshLatestProcess(kernel, goal.Id, task.Id);
+        outcomes.Add(runner.RefreshLatestProcessWithOutcome(kernel, goal.Id, task.Id));
         refreshed.Add(task);
     }
 
-    return new ProcessBatchExecutionResult(plan, refreshed);
+    return new ProcessBatchExecutionResult(plan, refreshed, RefreshOutcomes: outcomes);
 }
 
 public static ProcessBatchExecutionResult CancelDispatches(AgentOrchestratorKernel kernel, Goal goal)

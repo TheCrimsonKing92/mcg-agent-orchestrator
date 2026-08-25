@@ -383,7 +383,8 @@ public sealed class ConductorBatchLoopTestsWatchProgress : ConductorBatchLoopTes
             });
 
         var summary = new ConductorBatchLoop(
-            refreshGoalDispatchesBeforeAdvance: (loopKernel, loopGoal) => { GoalManagementCommandService.RefreshDispatches(loopKernel, loopGoal); })
+            refreshGoalDispatchesBeforeAdvance: (loopKernel, loopGoal) =>
+                GoalManagementCommandService.RefreshDispatches(loopKernel, loopGoal))
             .Run(kernel, driver, ConductorAutonomyPolicy.Conservative, NoStopPath(), maxIterations: 1);
 
         Assert.Equal(WorkTaskStatus.Completed, planner.Status);

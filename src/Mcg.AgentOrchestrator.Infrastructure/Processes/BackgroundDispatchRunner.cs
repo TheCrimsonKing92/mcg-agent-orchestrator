@@ -675,11 +675,17 @@ public sealed class BackgroundDispatchRunner
         process.CompletedAt is not null &&
         process.ExitCode is not null;
 
-    public TaskProcessRecord RefreshLatestProcess(AgentOrchestratorKernel kernel, GoalId goalId, TaskId taskId)
+    public TaskProcessRecord RefreshLatestProcess(AgentOrchestratorKernel kernel, GoalId goalId, TaskId taskId) =>
+        RefreshLatestProcessWithOutcome(kernel, goalId, taskId).ProcessRecord;
+
+    public DispatchRefreshOutcome RefreshLatestProcessWithOutcome(
+        AgentOrchestratorKernel kernel,
+        GoalId goalId,
+        TaskId taskId)
     {
         var outcome = ReconcileLatestProcess(kernel, goalId, taskId);
         ApplyRefreshOutcomeAndWriteDiagnostics(kernel, goalId, taskId, outcome);
-        return outcome.ProcessRecord;
+        return outcome;
     }
 
     public void ApplyRefreshOutcomeAndWriteDiagnostics(
@@ -2116,6 +2122,11 @@ public sealed class BackgroundDispatchRunner
         foreach (var task in goal.Tasks)
         {
             if (task.LastProcess is not { IsRunning: true } process)
+            {
+                continue;
+            }
+
+            if (process.WasGracefullyDetachedByConductor)
             {
                 continue;
             }

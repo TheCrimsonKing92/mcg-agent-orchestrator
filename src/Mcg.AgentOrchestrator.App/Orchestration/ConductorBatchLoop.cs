@@ -1,5 +1,6 @@
 using System.Diagnostics;
 using System.Globalization;
+using Mcg.AgentOrchestrator.App.Dashboard.Api;
 using Mcg.AgentOrchestrator.Core;
 using Mcg.AgentOrchestrator.Core.Conductor;
 using Mcg.AgentOrchestrator.Infrastructure;
@@ -67,7 +68,7 @@ internal sealed partial class ConductorBatchLoop
     private readonly Action<AgentOrchestratorKernel, Goal> _reapGoalRunningDispatches;
     private readonly Action<AgentOrchestratorKernel, Goal> _detachGoalRunningDispatches;
     private readonly Action<AgentOrchestratorKernel> _recoverInterruptedDispatches;
-    private readonly Action<AgentOrchestratorKernel, Goal> _refreshGoalDispatchesBeforeAdvance;
+    private readonly Func<AgentOrchestratorKernel, Goal, ProcessBatchExecutionResult?> _refreshGoalDispatchesBeforeAdvance;
     private readonly ConductorWatchProgressReporter _watchProgressReporter;
     private readonly OperatorIntentCoordinator? _operatorIntents;
     private readonly ProgressiveReviewGlanceCoordinator? _progressiveReviewGlances;
@@ -98,7 +99,7 @@ internal sealed partial class ConductorBatchLoop
         Action<AgentOrchestratorKernel, Goal>? reapGoalRunningDispatches = null,
         Action<AgentOrchestratorKernel, Goal>? detachGoalRunningDispatches = null,
         Action<AgentOrchestratorKernel>? recoverInterruptedDispatches = null,
-        Action<AgentOrchestratorKernel, Goal>? refreshGoalDispatchesBeforeAdvance = null,
+        Func<AgentOrchestratorKernel, Goal, ProcessBatchExecutionResult?>? refreshGoalDispatchesBeforeAdvance = null,
         ConductorWatchProgressReporter? watchProgressReporter = null,
         Func<AgentOrchestratorKernel, TerminalGoalSweepResult?>? measuredSweep = null,
         Func<ConductorLoopHandoffRequest, ConductorLoopHandoffResult>? handoffOnMaxDuration = null,
@@ -130,7 +131,7 @@ internal sealed partial class ConductorBatchLoop
         _reapGoalRunningDispatches = reapGoalRunningDispatches ?? ((_, _) => { });
         _detachGoalRunningDispatches = detachGoalRunningDispatches ?? _reapGoalRunningDispatches;
         _recoverInterruptedDispatches = recoverInterruptedDispatches ?? (_ => { });
-        _refreshGoalDispatchesBeforeAdvance = refreshGoalDispatchesBeforeAdvance ?? ((_, _) => { });
+        _refreshGoalDispatchesBeforeAdvance = refreshGoalDispatchesBeforeAdvance ?? ((_, _) => null);
         _watchProgressReporter = watchProgressReporter ?? new ConductorWatchProgressReporter();
         _operatorIntents = operatorIntents;
         _progressiveReviewGlances = progressiveReviewGlances;
@@ -1108,7 +1109,8 @@ internal sealed partial class ConductorBatchLoop
                         () =>
                         {
                             var beforeRefresh = BuildEscalatedGoalStateFingerprint(kernel, driver, goal);
-                            _refreshGoalDispatchesBeforeAdvance(kernel, goal);
+                            var refreshResult = _refreshGoalDispatchesBeforeAdvance(kernel, goal);
+                            var runningHoldReason = BuildDetachedDispatchHoldReason(refreshResult);
                             if (_progressiveReviewGlances is not null && watchInterval is not null)
                             {
                                 var glanceResult = _progressiveReviewGlances.Observe(
@@ -1159,7 +1161,7 @@ internal sealed partial class ConductorBatchLoop
                                     goal,
                                     policy,
                                     BuildAcceptanceEngineHoldReason(engineHealth!))
-                                : driver.AdvanceOnce(goal, policy);
+                                : driver.AdvanceOnce(goal, policy, runningHoldReason);
                         },
                         kernel,
                         driver,
@@ -1600,6 +1602,18 @@ internal sealed partial class ConductorBatchLoop
         catch
         {
         }
+    }
+
+    private static string? BuildDetachedDispatchHoldReason(ProcessBatchExecutionResult? refreshResult)
+    {
+        var held = refreshResult?.RefreshOutcomes?.FirstOrDefault(outcome =>
+            outcome.ProcessRecord.WasGracefullyDetachedByConductor &&
+            outcome.RecoveryDecision is { Action: DispatchRecoveryAction.Hold, Blocker: not null } decision &&
+            decision.Blocker.StartsWith("exit-artifact-", StringComparison.Ordinal));
+        return held?.RecoveryDecision is not { } decision
+            ? null
+            : $"Detached worker process pid={held.ProcessRecord.ProcessId} cannot be reconciled: " +
+              $"{decision.Reason}; artifact={decision.EvidencePath}";
     }
 
     private bool TryAdvanceGoal(

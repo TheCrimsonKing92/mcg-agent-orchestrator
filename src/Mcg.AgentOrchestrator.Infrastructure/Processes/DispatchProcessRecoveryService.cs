@@ -238,8 +238,16 @@ internal sealed class DispatchProcessRecoveryService
         }
         else
         {
-            if (exitRead.Kind == ExitCodeReadKind.Missing ||
-                AnyObservedProcessStillRunning(processRecord, observedHeartbeat))
+            var hasLiveObservedProcess = AnyObservedProcessStillRunning(processRecord, observedHeartbeat);
+            if (exitRead.Kind == ExitCodeReadKind.Missing &&
+                processRecord.WasGracefullyDetachedByConductor &&
+                !hasLiveObservedProcess)
+            {
+                verdict = Hold(BuildExitArtifactHold(processRecord, exitRead), worktreeInspectionStatus);
+                return true;
+            }
+
+            if (exitRead.Kind == ExitCodeReadKind.Missing || hasLiveObservedProcess)
             {
                 verdict = Live(recoveryDecision, worktreeInspectionStatus);
                 return false;
@@ -248,14 +256,7 @@ internal sealed class DispatchProcessRecoveryService
             exitRead = ReadExitCodeWithRetry(processRecord.ExitCodePath);
             if (exitRead.Kind != ExitCodeReadKind.Valid)
             {
-                var kind = exitRead.Kind.ToString().ToLowerInvariant();
-                var apparatusDecision = new DispatchRecoveryDecision(
-                    DispatchRecoveryAction.Hold,
-                    DispatchRecoveryPolicy.ToActionName(DispatchRecoveryAction.Hold),
-                    processRecord.ExitCodePath,
-                    $"exit artifact unavailable; state={exitRead.Kind}; evidence={exitRead.Evidence}",
-                    $"exit-artifact-{kind}");
-                verdict = Hold(apparatusDecision, worktreeInspectionStatus);
+                verdict = Hold(BuildExitArtifactHold(processRecord, exitRead), worktreeInspectionStatus);
                 return true;
             }
         }
@@ -274,6 +275,19 @@ internal sealed class DispatchProcessRecoveryService
             ExitCode: exitCode,
             Diagnostic: BuildRecoveryDiagnostic(recoveryDecision));
         return true;
+    }
+
+    private static DispatchRecoveryDecision BuildExitArtifactHold(
+        TaskProcessRecord processRecord,
+        ExitCodeReadResult exitRead)
+    {
+        var kind = exitRead.Kind.ToString().ToLowerInvariant();
+        return new DispatchRecoveryDecision(
+            DispatchRecoveryAction.Hold,
+            DispatchRecoveryPolicy.ToActionName(DispatchRecoveryAction.Hold),
+            processRecord.ExitCodePath,
+            $"exit artifact unavailable; state={exitRead.Kind}; evidence={exitRead.Evidence}",
+            $"exit-artifact-{kind}");
     }
 
     internal bool TryCompleteFromExitFile(

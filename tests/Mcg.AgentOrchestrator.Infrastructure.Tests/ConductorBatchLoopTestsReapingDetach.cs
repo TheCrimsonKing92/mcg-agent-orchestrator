@@ -564,6 +564,153 @@ public sealed class ConductorBatchLoopTestsReapingDetach : ConductorBatchLoopTes
         Assert.Equal(777, recoveredTask.LastProcess!.ProcessId);
     }
 
+    [Xunit.Fact(Timeout = 30_000)]
+    [Xunit.Trait("Category", "CrossTick")]
+    public async Task DetachedExit_SuccessorTick_CompletesTask()
+    {
+        var root = CreateTempDirectory("mcg-detached-exit-successor");
+        try
+        {
+            var (kernel, goal, planner, exitPath, _, rootPid) = CreateDetachedPlannerDispatch(root);
+            var repository = OpenStateRepository(Path.Combine(root, "state.db"));
+            await repository.SaveAsync(kernel);
+            var successor = await repository.LoadAsync();
+            DispatchExitArtifacts.Write(
+                exitPath,
+                DispatchExitArtifacts.Native(0, "dispatch host observed worker termination", DateTimeOffset.UtcNow));
+            var runner = new BackgroundDispatchRunner(isStillRunning: _ => false);
+
+            new ConductorBatchLoop(
+                refreshGoalDispatchesBeforeAdvance: (loopKernel, loopGoal) =>
+                    GoalManagementCommandService.RefreshDispatches(loopKernel, loopGoal, runner)).Run(
+                    successor,
+                    MakeDriver(getFacts: _ => new GoalLifecycleFacts(WorkspaceExists: true)),
+                    ConductorAutonomyPolicy.Conservative,
+                    NoStopPath(),
+                    maxIterations: 1,
+                    onlyGoalId: goal.Id.Value);
+
+            var refreshed = successor.GetTask(goal.Id, planner.Id);
+            Assert.Equal(WorkTaskStatus.Completed, refreshed.Status);
+            Assert.False(refreshed.LastProcess!.IsRunning);
+            Assert.Equal(rootPid, refreshed.LastProcess.ProcessId);
+        }
+        finally
+        {
+            TryDeleteDirectory(root);
+        }
+    }
+
+    [Xunit.Fact(Timeout = 30_000)]
+    [Xunit.Trait("Category", "CrossTick")]
+    public async Task DetachedLiveProcess_SuccessorTick_RemainsRunning()
+    {
+        var root = CreateTempDirectory("mcg-detached-live-successor");
+        try
+        {
+            var (kernel, goal, planner, exitPath, _, rootPid) = CreateDetachedPlannerDispatch(root);
+            var repository = OpenStateRepository(Path.Combine(root, "state.db"));
+            await repository.SaveAsync(kernel);
+            var successor = await repository.LoadAsync();
+            DispatchExitArtifacts.Write(
+                exitPath,
+                DispatchExitArtifacts.Native(0, "dispatch host observed worker termination", DateTimeOffset.UtcNow));
+            var killed = new List<int>();
+            var runner = new BackgroundDispatchRunner(
+                isStillRunning: pid => pid == rootPid,
+                tryKillOwnedProcess: pid =>
+                {
+                    killed.Add(pid);
+                    return true;
+                });
+
+            new ConductorBatchLoop(
+                refreshGoalDispatchesBeforeAdvance: (loopKernel, loopGoal) =>
+                    GoalManagementCommandService.RefreshDispatches(loopKernel, loopGoal, runner)).Run(
+                    successor,
+                    MakeDriver(getFacts: _ => new GoalLifecycleFacts(WorkspaceExists: true)),
+                    ConductorAutonomyPolicy.Conservative,
+                    NoStopPath(),
+                    maxIterations: 1,
+                    onlyGoalId: goal.Id.Value);
+
+            var refreshed = successor.GetTask(goal.Id, planner.Id);
+            Assert.Equal(WorkTaskStatus.Running, refreshed.Status);
+            Assert.True(refreshed.LastProcess!.IsRunning);
+            Assert.False(refreshed.LastProcess.WasCancelled);
+            Assert.Empty(killed);
+        }
+        finally
+        {
+            TryDeleteDirectory(root);
+        }
+    }
+
+    [Xunit.Fact(Timeout = 30_000)]
+    [Xunit.Trait("Category", "CrossTick")]
+    public async Task DetachedExitedProcess_LaterHandoff_DoesNotRepeatNote()
+    {
+        var root = CreateTempDirectory("mcg-detached-idempotent");
+        try
+        {
+            var (kernel, goal, planner, exitPath, _, _) = CreateDetachedPlannerDispatch(root);
+            var repository = OpenStateRepository(Path.Combine(root, "state.db"));
+            await repository.SaveAsync(kernel);
+            var successor = await repository.LoadAsync();
+            DispatchExitArtifacts.Write(
+                exitPath,
+                DispatchExitArtifacts.Native(0, "dispatch host observed worker termination", DateTimeOffset.UtcNow));
+
+            new BackgroundDispatchRunner(isStillRunning: _ => false)
+                .DetachRunningProcessesForGoal(successor, goal.Id);
+
+            var detachNotes = successor.GetGoal(goal.Id).Timeline.Count(evt =>
+                evt.TaskId == planner.Id &&
+                evt.Kind == ProgressKind.TaskNote &&
+                evt.Message.StartsWith("Gracefully detached process ", StringComparison.Ordinal));
+            Assert.Equal(1, detachNotes);
+        }
+        finally
+        {
+            TryDeleteDirectory(root);
+        }
+    }
+
+    [Xunit.Fact(Timeout = 30_000)]
+    [Xunit.Trait("Category", "CrossTick")]
+    public async Task DetachedMissingExit_HoldNamesPidAndArtifact()
+    {
+        var root = CreateTempDirectory("mcg-detached-missing-exit");
+        try
+        {
+            var (kernel, goal, planner, exitPath, _, rootPid) = CreateDetachedPlannerDispatch(root);
+            var repository = OpenStateRepository(Path.Combine(root, "state.db"));
+            await repository.SaveAsync(kernel);
+            var successor = await repository.LoadAsync();
+            var runner = new BackgroundDispatchRunner(isStillRunning: _ => false);
+
+            var output = CaptureConsole(() => new ConductorBatchLoop(
+                refreshGoalDispatchesBeforeAdvance: (loopKernel, loopGoal) =>
+                    GoalManagementCommandService.RefreshDispatches(loopKernel, loopGoal, runner)).Run(
+                    successor,
+                    MakeDriver(getFacts: _ => new GoalLifecycleFacts(WorkspaceExists: true)),
+                    ConductorAutonomyPolicy.Conservative,
+                    NoStopPath(),
+                    maxIterations: 1,
+                    onlyGoalId: goal.Id.Value));
+
+            Assert.Equal(WorkTaskStatus.Running, successor.GetTask(goal.Id, planner.Id).Status);
+            Assert.Contains($"pid={rootPid}", output, StringComparison.OrdinalIgnoreCase);
+            Assert.Contains(exitPath, output, StringComparison.OrdinalIgnoreCase);
+            Assert.Contains("state=Missing", output, StringComparison.OrdinalIgnoreCase);
+            Assert.DoesNotContain("auto-reconcile will handle completion", output, StringComparison.OrdinalIgnoreCase);
+        }
+        finally
+        {
+            TryDeleteDirectory(root);
+        }
+    }
+
     [Xunit.Fact]
     public void BatchLoop_ConductorCancelledTask_AutoRequeues()
     {
@@ -620,5 +767,89 @@ public sealed class ConductorBatchLoopTestsReapingDetach : ConductorBatchLoopTes
         Assert.Equal(777, recoveredDeveloper.LastProcess!.ProcessId);
         Assert.Contains(goal.Timeline, evt => evt.Kind == ProgressKind.TaskRetried && evt.TaskId == developer.Id);
         Assert.DoesNotContain(goal.Timeline, evt => evt.Kind == ProgressKind.TaskRequeueSkipped);
+    }
+
+    private static (AgentOrchestratorKernel Kernel, Goal Goal, TaskSpec Planner, string ExitPath, string ChildExitPath, int RootPid)
+        CreateDetachedPlannerDispatch(string root)
+    {
+        const int rootPid = 43_316;
+        const int childPid = 26_084;
+        var kernel = new AgentOrchestratorKernel();
+        var planner = new TaskSpec(TaskId.New(), "Plan detached reconciliation.", AgentRole.Planner);
+        var researcher = new TaskSpec(TaskId.New(), "Research after planner completion.", AgentRole.Researcher);
+        var goal = kernel.CreateGoal("Detached dispatch successor", [planner, researcher]);
+        kernel.ActivateGoal(goal.Id, DefaultAgents());
+        var stdout = Path.Combine(root, "detached.out.log");
+        var stderr = Path.Combine(root, "detached.err.log");
+        var exitPath = Path.Combine(root, "detached.exit.txt");
+        var childExitPath = Path.Combine(root, "detached.child-exit.json");
+        var heartbeatPath = Path.Combine(root, "detached.heartbeat.json");
+        var now = DateTimeOffset.UtcNow;
+        var plannerPlan = WorkerDispatchTestSupport.PlannerContractPlanFixture().Replace(
+            "`seed.txt`, ",
+            string.Empty,
+            StringComparison.Ordinal).Replace(
+            WorkerDispatchTestSupport.PlannerContractAcceptanceMappingBody,
+            "1. disposition=undecidable; would-settle=a historical diagnostic; required-source=the original process; unavailable-because=the process did not record it",
+            StringComparison.Ordinal);
+        File.WriteAllText(stdout, string.Join(Environment.NewLine,
+            plannerPlan,
+            "WORKER_RESULT:",
+            "files: none",
+            "commands: none",
+            "tests: not-run - planning only",
+            "commit: none",
+            "blockers: none",
+            "model_fit: OpenAI/gpt-5.5 - adequate - planning",
+            "skills: none",
+            "confidence: high",
+            "END_WORKER_RESULT"));
+        File.WriteAllText(stderr, string.Empty);
+        File.WriteAllText(heartbeatPath, JsonSerializer.Serialize(new
+        {
+            kind = "worker",
+            pid = rootPid,
+            childPid,
+            ownedPids = new[] { childPid },
+            startedAt = now,
+            lastObservedAt = now,
+            lastProgressAt = now,
+            state = "exited",
+            stdoutBytes = new FileInfo(stdout).Length,
+            stderrBytes = 0,
+            ownedCpuMs = 9_203,
+            exitFileExists = false
+        }));
+        File.WriteAllText(childExitPath, JsonSerializer.Serialize(new
+        {
+            processId = childPid,
+            exitCode = (int?)null,
+            recordedAt = now,
+            state = "running-after-root-exit"
+        }));
+        kernel.RecordTaskDispatch(
+            goal.Id,
+            planner.Id,
+            new TaskDispatchRecord("planner-worker", "planner.exe", root, now));
+        kernel.RecordTaskProcessStarted(
+            goal.Id,
+            planner.Id,
+            new TaskProcessRecord(
+                rootPid,
+                "planner.exe",
+                root,
+                stdout,
+                stderr,
+                exitPath,
+                now,
+                null,
+                null,
+                OwnedProcessIds: [rootPid],
+                ChildExitRecordPath: childExitPath));
+        Assert.Equal(
+            1,
+            new BackgroundDispatchRunner(isStillRunning: _ => false)
+                .DetachRunningProcessesForGoal(kernel, goal.Id));
+        return (kernel, goal, planner, exitPath, childExitPath, rootPid);
     }
 }
