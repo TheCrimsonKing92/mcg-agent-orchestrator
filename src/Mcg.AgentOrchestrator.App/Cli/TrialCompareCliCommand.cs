@@ -63,7 +63,11 @@ internal static class TrialCompareCliCommand
             output.WriteLine($"trial-compare succeeded={result.Succeeded} receipt={result.ReceiptPath}");
             foreach (var harness in result.Harnesses)
             {
-                output.WriteLine($"  {harness.Name}: outcome={harness.Outcome} exit={harness.ExitCode?.ToString() ?? "unavailable"} stdout={harness.StdoutPath} stderr={harness.StderrPath}");
+                output.WriteLine(
+                    $"  {harness.Name}: outcome={harness.Outcome} exit={harness.ExitCode?.ToString() ?? "unavailable"} " +
+                    $"workerResult={harness.WorkerResult.Status} stdoutBytes={harness.StandardOutput?.ByteCount.ToString() ?? "unavailable"} " +
+                    $"stdoutSha256={harness.StandardOutput?.Sha256 ?? "unavailable"} stderrBytes={harness.StandardError?.ByteCount.ToString() ?? "unavailable"} " +
+                    $"stderrSha256={harness.StandardError?.Sha256 ?? "unavailable"}");
             }
         }
         if (!result.Succeeded)

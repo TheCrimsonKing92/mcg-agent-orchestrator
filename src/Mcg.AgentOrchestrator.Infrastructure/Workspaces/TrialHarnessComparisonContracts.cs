@@ -126,16 +126,35 @@ internal enum TrialHarnessOutcome
     Completed,
     LaunchFailed,
     ReceiptCaptureFailed,
+    WorkerResultInvalid,
     TimedOut,
     ProtectedPathModified,
     TeardownUnclean
 }
 
+internal sealed record TrialOutputMetadata(
+    long ByteCount,
+    string Sha256);
+
+internal enum TrialWorkerResultStatus
+{
+    NotInspected,
+    Valid,
+    Missing,
+    Malformed,
+    InspectionLimitExceeded
+}
+
+internal sealed record TrialWorkerResultEvidence(
+    TrialWorkerResultStatus Status,
+    int ParsedFieldCount);
+
 internal sealed record TrialHarnessResult(
     string Name,
     string ResolvedBaseCommit,
-    string StdoutPath,
-    string StderrPath,
+    TrialOutputMetadata? StandardOutput,
+    TrialOutputMetadata? StandardError,
+    TrialWorkerResultEvidence WorkerResult,
     string ReceiptPath,
     string? TeardownReceiptPath,
     int? ExitCode,

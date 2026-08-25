@@ -99,6 +99,72 @@ public sealed class TrialHarnessComparisonTests
     }
 
     [Xunit.Fact]
+    public void DurableReceiptsDoNotPersistHarnessOutputThatEchoesBrief()
+    {
+        const string secret = "TRIAL-BRIEF-OUTPUT-SECRET-8224d42e9f6a";
+        using var fixture = new Fixture();
+        var host = new FakeTrialRootHost(fixture.Root);
+        host.StdoutContent["alpha"] = $"{secret}\n{SuccessfulWorkerResult}";
+        host.StderrContent["alpha"] = secret;
+        var workload = fixture.Workload with
+        {
+            BriefContent = secret,
+            BriefDigest = TrialIdentity.ComputeBriefDigest(secret)
+        };
+
+        var result = new TrialHarnessComparison(host).Run(fixture.Request(
+            new("alpha", "alpha.exe", []),
+            new("beta", "beta.exe", [])) with { Workload = workload });
+
+        Xunit.Assert.True(result.Succeeded);
+        var alpha = result.Harnesses.Single(item => item.Name == "alpha");
+        Xunit.Assert.Equal(TrialWorkerResultStatus.Valid, alpha.WorkerResult.Status);
+        Xunit.Assert.NotNull(alpha.StandardOutput);
+        Xunit.Assert.NotNull(alpha.StandardError);
+        Xunit.Assert.Equal(
+            System.Text.Encoding.UTF8.GetByteCount(host.StdoutContent["alpha"]),
+            alpha.StandardOutput.ByteCount);
+        Xunit.Assert.Equal(ComputeSha256(host.StdoutContent["alpha"]), alpha.StandardOutput.Sha256);
+        Xunit.Assert.Equal(ComputeSha256(host.StderrContent["alpha"]), alpha.StandardError.Sha256);
+        var durableFiles = Directory.GetFiles(result.ReceiptDirectory, "*", SearchOption.AllDirectories);
+        Xunit.Assert.DoesNotContain(durableFiles, path =>
+            Path.GetFileName(path) is "stdout.log" or "stderr.log");
+        Xunit.Assert.All(durableFiles, path =>
+            Xunit.Assert.DoesNotContain(secret, File.ReadAllText(path), StringComparison.Ordinal));
+    }
+
+    [Xunit.Fact]
+    public void MalformedWorkerResultRetainsOnlyTypedFailureAndOutputMetadata()
+    {
+        const string secret = "TRIAL-MALFORMED-OUTPUT-SECRET-9acf8e81b452";
+        const string malformed = "WORKER_RESULT:\nblockers: none\nEND_WORKER_RESULT";
+        using var fixture = new Fixture();
+        var host = new FakeTrialRootHost(fixture.Root);
+        host.StdoutContent["alpha"] = malformed;
+        host.StderrContent["alpha"] = secret;
+        host.ExitCodes["alpha"] = 23;
+
+        var result = new TrialHarnessComparison(host).Run(fixture.Request(
+            new("alpha", "alpha.exe", []),
+            new("beta", "beta.exe", [])));
+
+        var alpha = result.Harnesses.Single(item => item.Name == "alpha");
+        Xunit.Assert.False(result.Succeeded);
+        Xunit.Assert.Equal(TrialHarnessOutcome.WorkerResultInvalid, alpha.Outcome);
+        Xunit.Assert.Equal(23, alpha.ExitCode);
+        Xunit.Assert.Equal(TrialWorkerResultStatus.Malformed, alpha.WorkerResult.Status);
+        Xunit.Assert.Equal(0, alpha.WorkerResult.ParsedFieldCount);
+        Xunit.Assert.Equal(System.Text.Encoding.UTF8.GetByteCount(malformed), alpha.StandardOutput?.ByteCount);
+        Xunit.Assert.Equal(ComputeSha256(malformed), alpha.StandardOutput?.Sha256);
+        Xunit.Assert.Equal(ComputeSha256(secret), alpha.StandardError?.Sha256);
+        var durableFiles = Directory.GetFiles(result.ReceiptDirectory, "*", SearchOption.AllDirectories);
+        Xunit.Assert.DoesNotContain(durableFiles, path =>
+            Path.GetFileName(path) is "stdout.log" or "stderr.log");
+        Xunit.Assert.All(durableFiles, path =>
+            Xunit.Assert.DoesNotContain(secret, File.ReadAllText(path), StringComparison.Ordinal));
+    }
+
+    [Xunit.Fact]
     public void WorkloadIdentityRecordsButDoesNotKeyOnSourceProvenance()
     {
         using var fixture = new Fixture();
@@ -112,7 +178,7 @@ public sealed class TrialHarnessComparisonTests
     }
 
     [Xunit.Fact]
-    public void RunWritesDistinctPerHarnessReceiptsThatSurviveTeardown()
+    public void RunWritesPerHarnessOutputMetadataThatSurvivesTeardown()
     {
         using var fixture = new Fixture();
         var host = new FakeTrialRootHost(fixture.Root);
@@ -125,16 +191,18 @@ public sealed class TrialHarnessComparisonTests
 
         Xunit.Assert.True(result.Succeeded);
         Xunit.Assert.Equal([3, 7], result.Harnesses.Select(item => item.ExitCode).ToArray());
-        Xunit.Assert.Equal(2, result.Harnesses.Select(item => item.StdoutPath).Distinct(StringComparer.OrdinalIgnoreCase).Count());
-        Xunit.Assert.Equal(2, result.Harnesses.Select(item => item.StderrPath).Distinct(StringComparer.OrdinalIgnoreCase).Count());
         Xunit.Assert.All(result.Harnesses, item =>
         {
-            Xunit.Assert.True(File.Exists(item.StdoutPath));
-            Xunit.Assert.True(File.Exists(item.StderrPath));
             Xunit.Assert.True(File.Exists(item.ReceiptPath));
-            Xunit.Assert.Equal($"{item.Name} stdout", File.ReadAllText(item.StdoutPath));
-            Xunit.Assert.Equal($"{item.Name} stderr", File.ReadAllText(item.StderrPath));
+            Xunit.Assert.NotNull(item.StandardOutput);
+            Xunit.Assert.NotNull(item.StandardError);
+            Xunit.Assert.Equal(TrialWorkerResultStatus.Valid, item.WorkerResult.Status);
+            Xunit.Assert.Equal(64, item.StandardOutput.Sha256.Length);
+            Xunit.Assert.Equal(64, item.StandardError.Sha256.Length);
         });
+        Xunit.Assert.DoesNotContain(
+            Directory.GetFiles(result.ReceiptDirectory, "*", SearchOption.AllDirectories),
+            path => Path.GetFileName(path) is "stdout.log" or "stderr.log");
         Xunit.Assert.All(host.RootPaths, root => Xunit.Assert.False(Directory.Exists(root)));
     }
 
@@ -209,7 +277,8 @@ public sealed class TrialHarnessComparisonTests
         var alpha = result.Harnesses.Single(item => item.Name == "alpha");
         Xunit.Assert.False(result.Succeeded);
         Xunit.Assert.Equal(TrialHarnessOutcome.ReceiptCaptureFailed, alpha.Outcome);
-        Xunit.Assert.False(File.Exists(alpha.StdoutPath));
+        Xunit.Assert.Null(alpha.StandardOutput);
+        Xunit.Assert.Null(alpha.StandardError);
         Xunit.Assert.Contains(alpha.Diagnostics, diagnostic => diagnostic.Contains("capture file does not exist", StringComparison.OrdinalIgnoreCase));
     }
 
@@ -293,6 +362,23 @@ public sealed class TrialHarnessComparisonTests
         }
     }
 
+    private const string SuccessfulWorkerResult = """
+        WORKER_RESULT:
+        files: none
+        commands: none
+        tests: pass - trial completed
+        commit: none
+        blockers: none
+        model_fit: fake/test - adequate - test harness - deterministic
+        skills: none
+        confidence: high
+        END_WORKER_RESULT
+        """;
+
+    private static string ComputeSha256(string value) =>
+        Convert.ToHexString(System.Security.Cryptography.SHA256.HashData(System.Text.Encoding.UTF8.GetBytes(value)))
+            .ToLowerInvariant();
+
     private sealed class FakeTrialRootHost(string fixtureRoot) : ITrialRootHost
     {
         public string FixtureRoot { get; } = fixtureRoot;
@@ -305,6 +391,8 @@ public sealed class TrialHarnessComparisonTests
         public HashSet<string> TimeoutOnWait { get; } = new(StringComparer.OrdinalIgnoreCase);
         public HashSet<string> UncleanTeardown { get; } = new(StringComparer.OrdinalIgnoreCase);
         public HashSet<string> MissingStdout { get; } = new(StringComparer.OrdinalIgnoreCase);
+        public Dictionary<string, string> StdoutContent { get; } = new(StringComparer.OrdinalIgnoreCase);
+        public Dictionary<string, string> StderrContent { get; } = new(StringComparer.OrdinalIgnoreCase);
         public Dictionary<string, IReadOnlyDictionary<string, string?>> LaunchEnvironments { get; } = new(StringComparer.OrdinalIgnoreCase);
         public Dictionary<string, string> BriefPaths { get; } = new(StringComparer.OrdinalIgnoreCase);
         public Dictionary<string, byte[]> BriefBytes { get; } = new(StringComparer.OrdinalIgnoreCase);
@@ -356,9 +444,9 @@ public sealed class TrialHarnessComparisonTests
                 var stderr = Path.Combine(HarnessStatePath, "stderr.log");
                 if (!owner.MissingStdout.Contains(name))
                 {
-                    File.WriteAllText(stdout, $"{name} stdout");
+                    File.WriteAllText(stdout, owner.StdoutContent.GetValueOrDefault(name, SuccessfulWorkerResult));
                 }
-                File.WriteAllText(stderr, $"{name} stderr");
+                File.WriteAllText(stderr, owner.StderrContent.GetValueOrDefault(name, $"{name} stderr"));
                 return new FakeLaunch(stdout, stderr, owner.ExitCodes.GetValueOrDefault(name), !owner.TimeoutOnWait.Contains(name));
             }
 
