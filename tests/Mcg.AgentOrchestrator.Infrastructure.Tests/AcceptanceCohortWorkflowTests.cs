@@ -1234,6 +1234,61 @@ public sealed class AcceptanceCohortWorkflowTests : GoalWorktreeTestBase
     }
 
     [Fact]
+    public void ProductionGate_InvalidResultPath_PersistsStructuredInfrastructureFailure()
+    {
+        var repo = CreateReducedAcceptanceCohortRepository();
+        try
+        {
+            AddAcceptanceManifest(repo);
+            var kernel = new AgentOrchestratorKernel();
+            var firstGoal = CreateCompletedGoal(kernel, "First invalid-path cohort member", repo);
+            var secondGoal = CreateCompletedGoal(kernel, "Second invalid-path cohort member", repo);
+            _ = CreateWorktreeCandidate(
+                repo,
+                firstGoal.Id,
+                "src/Mcg.AgentOrchestrator.Infrastructure/First.cs",
+                "first");
+            _ = CreateWorktreeCandidate(repo, secondGoal.Id, "tests/Second.cs", "second");
+            var verifier = new FakeAcceptanceVerifier(
+                new AcceptanceVerificationResult(
+                    Passed: false,
+                    Skipped: false,
+                    ExitCode: 1,
+                    OutputTail: "invalid result path",
+                    Checks: [new AcceptanceCheckResult("combined", false, 1, "invalid result path")],
+                    TestResultPaths: ["bad\0path.trx"]),
+                exception: null);
+            var workspace = OrchestratorWorkspace.ForDirectory(repo);
+            var driver = new ConductorDriver(
+                kernel, workspace, verifier, AgentCatalog.Default().Agents, WorkerProfileCatalog.Default());
+            var selection = ProjectSelection(driver, firstGoal, secondGoal);
+            var mainBefore = RunGitOutput(repo, "rev-parse", "main").Trim();
+            ConductorAcceptanceCohortRunResult? result = null;
+
+            var exception = Record.Exception(() => result = driver.RunAcceptanceCohort(
+                selection, [firstGoal, secondGoal], ConductorAutonomyPolicy.Permissive));
+
+            Assert.Null(exception);
+            var receipt = Assert.IsType<AcceptanceCohortReceipt>(result?.Receipt);
+            Assert.Equal(AcceptanceCohortGateOutcome.InfrastructureFailure, receipt.Outcome);
+            Assert.Equal(AcceptanceCohortInfrastructureReasonCodes.ResultPathInvalid, receipt.InfrastructureReasonCode);
+            Assert.Empty(receipt.GateTestResultPaths);
+            Assert.All(result!.MemberResults.Values, member => Assert.IsType<ConductorAdvanceOutcome.Held>(member.Outcome));
+            Assert.Equal(mainBefore, RunGitOutput(repo, "rev-parse", "main").Trim());
+            AssertNoCohortWorkspaces(repo);
+
+            var persisted = new CohortAcceptanceStore(
+                Path.Combine(workspace.OrchestratorDirectory, "cohort-acceptance.db"))
+                .TryReadReceipt(receipt.Identity.Value);
+            Assert.Equal(AcceptanceCohortInfrastructureReasonCodes.ResultPathInvalid, persisted?.InfrastructureReasonCode);
+        }
+        finally
+        {
+            DeleteDirectory(repo);
+        }
+    }
+
+    [Fact]
     public void ProductionRed_RunsBothPartitions_AndClassifiesInteraction()
     {
         var repo = CreateReducedAcceptanceCohortRepository();

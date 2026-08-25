@@ -3766,8 +3766,14 @@ internal sealed partial class ConductorDriver
                 stableSlotLease: stableSlotLease,
                 cancellationToken: cancellationToken).GetAwaiter().GetResult();
             gateExitCode = verification.ExitCode;
-            gateTestResultPaths = NormalizeCohortTestResultPaths(verification.TestResultPaths);
             classification = ClassifyCohortVerificationResult(verification);
+            if (!string.Equals(
+                    classification.InfrastructureReasonCode,
+                    AcceptanceCohortInfrastructureReasonCodes.ResultPathInvalid,
+                    StringComparison.Ordinal))
+            {
+                gateTestResultPaths = NormalizeCohortTestResultPaths(verification.TestResultPaths);
+            }
             failedChecks = verification.Checks?
                 .Where(check => !check.Passed && !check.Advisory)
                 .Select(check => check.Name)
