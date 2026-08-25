@@ -1438,7 +1438,10 @@ internal sealed partial class ConductorDriver
         return DispatchStartOutcome.EmptyBatch(FormatNoRecordedDispatchStartedReason(result.Plan));
     }
 
-    public ConductorAdvanceResult AdvanceOnce(Goal goal, ConductorAutonomyPolicy policy)
+    public ConductorAdvanceResult AdvanceOnce(
+        Goal goal,
+        ConductorAutonomyPolicy policy,
+        string? runningHoldReason = null)
     {
         var goalId = goal.Id.Value;
         var goalPrefix = goalId[..8];
@@ -1735,7 +1738,9 @@ internal sealed partial class ConductorDriver
             GoalLifecycleState.WorkspaceReady => ExecuteDispatchAndStart(goal, goalPrefix, policy, GoalLifecycleState.WorkspaceReady),
             GoalLifecycleState.Dispatched => ExecuteDispatchAndStart(goal, goalPrefix, policy, GoalLifecycleState.Dispatched),
             GoalLifecycleState.Running => MakeResult(goalId, goalPrefix, policy,
-                new ConductorAdvanceOutcome.Held(state, "Worker process running; auto-reconcile will handle completion")),
+                new ConductorAdvanceOutcome.Held(
+                    state,
+                    runningHoldReason ?? "Worker process running; auto-reconcile will handle completion")),
             GoalLifecycleState.AwaitingVerification => MakeResult(goalId, goalPrefix, policy,
                 new ConductorAdvanceOutcome.Held(state, AwaitingVerificationHoldReasonBuilder.Build(goal))),
             GoalLifecycleState.Verifying => ExecuteVerifying(goal, goalPrefix, policy),

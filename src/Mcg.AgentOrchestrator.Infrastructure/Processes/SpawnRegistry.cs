@@ -445,41 +445,16 @@ internal static class SpawnProcessIdentityReader
                 return SpawnTrackedProcessStatus.DeadOrRecycled;
             }
 
-            if (!TryRead(process, out var live))
+            var recorded = new SpawnProcessIdentity(entry.ProcessId, entry.ProcessStartedAt, entry.ImagePath);
+            var live = TryRead(process, out var identity) ? identity : null;
+            var status = EvaluateRecordedIdentity(recorded, live, out evidence);
+            if (status != SpawnTrackedProcessStatus.LiveMatch)
             {
-                evidence = $"victim pid={entry.ProcessId} identity could not be read";
                 process.Dispose();
                 process = null;
-                return SpawnTrackedProcessStatus.Unknown;
             }
 
-            if (live.StartedAt != entry.ProcessStartedAt)
-            {
-                evidence = $"victim pid={entry.ProcessId} start-time mismatch recorded={entry.ProcessStartedAt:O} observed={live.StartedAt:O}";
-                process.Dispose();
-                process = null;
-                return SpawnTrackedProcessStatus.DeadOrRecycled;
-            }
-
-            if (!TryNormalizePath(live.ImagePath, out var observedImagePath) ||
-                !TryNormalizePath(entry.ImagePath, out var recordedImagePath))
-            {
-                evidence = $"victim pid={entry.ProcessId} image identity could not be normalized";
-                process.Dispose();
-                process = null;
-                return SpawnTrackedProcessStatus.Unknown;
-            }
-
-            if (!string.Equals(observedImagePath, recordedImagePath, StringComparison.OrdinalIgnoreCase))
-            {
-                evidence = $"victim pid={entry.ProcessId} image mismatch recorded={entry.ImagePath} observed={live.ImagePath}";
-                process.Dispose();
-                process = null;
-                return SpawnTrackedProcessStatus.Unknown;
-            }
-
-            evidence = $"victim pid={entry.ProcessId} identity matches started_at={entry.ProcessStartedAt:O} image={live.ImagePath}";
-            return SpawnTrackedProcessStatus.LiveMatch;
+            return status;
         }
         catch (ArgumentException)
         {
@@ -559,6 +534,40 @@ internal static class SpawnProcessIdentityReader
         {
             owner?.Dispose();
         }
+    }
+
+    internal static SpawnTrackedProcessStatus EvaluateRecordedIdentity(
+        SpawnProcessIdentity recorded,
+        SpawnProcessIdentity? current,
+        out string evidence)
+    {
+        if (current is null)
+        {
+            evidence = $"victim pid={recorded.ProcessId} identity could not be read";
+            return SpawnTrackedProcessStatus.Unknown;
+        }
+
+        if (current.StartedAt != recorded.StartedAt)
+        {
+            evidence = $"victim pid={recorded.ProcessId} start-time mismatch recorded={recorded.StartedAt:O} observed={current.StartedAt:O}";
+            return SpawnTrackedProcessStatus.DeadOrRecycled;
+        }
+
+        if (!TryNormalizePath(current.ImagePath, out var observedImagePath) ||
+            !TryNormalizePath(recorded.ImagePath, out var recordedImagePath))
+        {
+            evidence = $"victim pid={recorded.ProcessId} image identity could not be normalized";
+            return SpawnTrackedProcessStatus.Unknown;
+        }
+
+        if (!string.Equals(observedImagePath, recordedImagePath, StringComparison.OrdinalIgnoreCase))
+        {
+            evidence = $"victim pid={recorded.ProcessId} image mismatch recorded={recorded.ImagePath} observed={current.ImagePath}";
+            return SpawnTrackedProcessStatus.Unknown;
+        }
+
+        evidence = $"victim pid={recorded.ProcessId} identity matches started_at={recorded.StartedAt:O} image={current.ImagePath}";
+        return SpawnTrackedProcessStatus.LiveMatch;
     }
 
     private static string? ResolveImagePath(Process process)

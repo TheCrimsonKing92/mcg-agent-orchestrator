@@ -69,7 +69,6 @@ public sealed class BackgroundDispatchRunner
     private const string ApparatusHoldReceiptPrefix = "DispatchApparatusHoldObserved:";
     public const string DisableDispatchStartVariable = "MCG_ORCHESTRATOR_DISABLE_DISPATCH_START";
     public const string TestRewriteRealWorkerCommandsVariable = "MCG_ORCHESTRATOR_TEST_REWRITE_REAL_WORKER_COMMANDS";
-
     private static readonly TimeSpan DefaultPostOutputIdleTimeout = TimeSpan.FromMinutes(2);
     // Reap a launched worker that has made no progress -- no output growth AND less than
     // CpuProgressEpsilonMs of CPU growth per heartbeat -- for this long. Cut from 20m to 15m to recover
@@ -139,7 +138,8 @@ public sealed class BackgroundDispatchRunner
         Func<string, Stream>? openLogReadStream = null,
         Action? beforeGoalWorktreeInspection = null,
         Func<ProcessStartInfo, Process?>? startProcess = null,
-        Func<OrchestratorBuildCheckRequest, OrchestratorBuildCheckResult>? runOrchestratorBuildCheck = null)
+        Func<OrchestratorBuildCheckRequest, OrchestratorBuildCheckResult>? runOrchestratorBuildCheck = null,
+        Func<int, (DateTimeOffset StartedAt, string ImagePath)?>? readProcessIdentity = null)
     {
         _clock = clock ?? new SystemClock();
         _postOutputIdleTimeout = postOutputIdleTimeout ?? DefaultPostOutputIdleTimeout;
@@ -169,12 +169,12 @@ public sealed class BackgroundDispatchRunner
             _tryKillOwnedProcess,
             evaluateRecovery: (process, hasLiveProcess, staleRetryBudgetRemaining, worktreeInspection) =>
                 _recoveryPolicy.Evaluate(process, hasLiveProcess, staleRetryBudgetRemaining, worktreeInspection),
-            diagnosticWriter: _diagnosticWriter);
+            diagnosticWriter: _diagnosticWriter,
+            readProcessIdentity: DispatchProcessIdentityEvidence.Adapt(readProcessIdentity));
         _worktreeCommitter = new DispatchWorktreeCommitter(beforeWorktreeInspection: beforeGoalWorktreeInspection);
         _startProcess = startProcess ?? Process.Start;
         _runOrchestratorBuildCheck = runOrchestratorBuildCheck ?? OrchestratorBuildEvidenceCheck.RunDefault;
     }
-
     private static bool IsDispatchStartDisabledByEnvironment()
     {
         var value = Environment.GetEnvironmentVariable(DisableDispatchStartVariable);
@@ -675,11 +675,17 @@ public sealed class BackgroundDispatchRunner
         process.CompletedAt is not null &&
         process.ExitCode is not null;
 
-    public TaskProcessRecord RefreshLatestProcess(AgentOrchestratorKernel kernel, GoalId goalId, TaskId taskId)
+    public TaskProcessRecord RefreshLatestProcess(AgentOrchestratorKernel kernel, GoalId goalId, TaskId taskId) =>
+        RefreshLatestProcessWithOutcome(kernel, goalId, taskId).ProcessRecord;
+
+    public DispatchRefreshOutcome RefreshLatestProcessWithOutcome(
+        AgentOrchestratorKernel kernel,
+        GoalId goalId,
+        TaskId taskId)
     {
         var outcome = ReconcileLatestProcess(kernel, goalId, taskId);
         ApplyRefreshOutcomeAndWriteDiagnostics(kernel, goalId, taskId, outcome);
-        return outcome.ProcessRecord;
+        return outcome;
     }
 
     public void ApplyRefreshOutcomeAndWriteDiagnostics(
@@ -2109,42 +2115,17 @@ public sealed class BackgroundDispatchRunner
         return cancelled;
     }
 
-    public int DetachRunningProcessesForGoal(AgentOrchestratorKernel kernel, GoalId goalId)
-    {
-        var goal = kernel.GetGoal(goalId);
-        var detached = 0;
-        foreach (var task in goal.Tasks)
-        {
-            if (task.LastProcess is not { IsRunning: true } process)
-            {
-                continue;
-            }
-
-            if (WorkerProcessJobs.TryDetachForGracefulStop(process.ProcessId, out var detachFailure))
-            {
-                kernel.RecordTaskProcessGracefullyDetached(
-                    goalId,
-                    task.Id,
-                    process with { WasGracefullyDetachedByConductor = true });
-                EvictProcessLogCache(process);
-                detached++;
-                continue;
-            }
-
-            CancelLatestProcess(
+    public int DetachRunningProcessesForGoal(AgentOrchestratorKernel kernel, GoalId goalId) =>
+        GracefulDispatchDetacher.DetachRunningProcessesForGoal(
+            kernel,
+            goalId,
+            EvictProcessLogCache,
+            taskId => CancelLatestProcess(
                 kernel,
                 goalId,
-                task.Id,
+                taskId,
                 cancelledByConductor: true,
-                bypassTrackedJobRegistry: true);
-            kernel.RecordTaskNote(
-                goalId,
-                task.Id,
-                $"{detachFailure}; task marked conductor-cancelled so a successor can requeue it.");
-        }
-
-        return detached;
-    }
+                bypassTrackedJobRegistry: true));
 
     public int RequeueInterruptedDispatches(
         AgentOrchestratorKernel kernel,

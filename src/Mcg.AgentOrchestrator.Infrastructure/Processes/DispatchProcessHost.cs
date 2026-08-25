@@ -1164,6 +1164,7 @@ public static void DropToLow() {
         OwnedProcessGroup? workerGroup = null;
         Process? selectedChild = null;
         var selectedChildLock = new object();
+        var heartbeatProcessIdentities = new DispatchHeartbeatProcessIdentityTracker();
         string? hostDiagnosticWriteFailure = null;
         var heartbeatInterval = parameters.HeartbeatIntervalMilliseconds > 0
             ? TimeSpan.FromMilliseconds(parameters.HeartbeatIntervalMilliseconds)
@@ -1301,6 +1302,12 @@ public static void DropToLow() {
             var stdoutBytes = FileLength(parameters.StdoutPath);
             var stderrBytes = FileLength(parameters.StderrPath);
             var ownedPids = GetHeartbeatOwnedProcessIds(workerGroup, worker);
+            var ownedProcessIdentities = heartbeatProcessIdentities.Capture(
+                Environment.ProcessId,
+                ownedPids,
+                () => workerGroup?.TryGetActiveProcessIds(out var currentOwnedPids) == true
+                    ? currentOwnedPids
+                    : null);
             var ownedCpuMs = ReadHeartbeatOwnedCpuMs(workerGroup, ownedPids);
             var childPid = SelectHeartbeatChildPid(worker, ownedPids);
             ObserveSelectedChild(childPid);
@@ -1330,6 +1337,7 @@ public static void DropToLow() {
                 pid = Environment.ProcessId,
                 childPid,
                 ownedPids,
+                ownedProcessIdentities,
                 startedAt = startedAt.ToString("o"),
                 lastObservedAt = DateTimeOffset.UtcNow.ToString("o"),
                 lastProgressAt = lastProgressAt.ToString("o"),
@@ -1832,6 +1840,28 @@ public static void DropToLow() {
             .Concat(descendants)
             .Distinct()
             .ToArray();
+    }
+
+    internal static IReadOnlyList<SpawnProcessIdentity> CaptureHeartbeatProcessIdentities(
+        int hostProcessId,
+        IEnumerable<int> ownedProcessIds,
+        Func<IReadOnlyList<int>?> readCurrentOwnedProcessIds,
+        Func<int, SpawnProcessIdentity?>? readCurrentIdentity = null)
+    {
+        var identityReader = readCurrentIdentity ?? DispatchProcessIdentityEvidence.ReadCurrent;
+        var identities = DispatchProcessIdentityEvidence.Capture(
+                ownedProcessIds,
+                readCurrentOwnedProcessIds,
+                identityReader)
+            .ToList();
+        var hostIdentity = identityReader(hostProcessId);
+        if (hostIdentity is not null)
+        {
+            identities.RemoveAll(identity => identity.ProcessId == hostProcessId);
+            identities.Add(hostIdentity);
+        }
+
+        return identities;
     }
 
     internal static long ReadHeartbeatOwnedCpuMs(OwnedProcessGroup? workerGroup, IReadOnlyList<int> ownedPids)
