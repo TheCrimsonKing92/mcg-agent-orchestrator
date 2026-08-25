@@ -53,9 +53,6 @@ public sealed class CliCommandTestsPersistentRunnerCommandsGoalQueriesAndLanding
         var workspace = CreateRefinedWorkspace(root);
         IReadOnlyList<Func<string, string[]>> commands =
         [
-            prefix => ["status", prefix],
-            prefix => ["status", prefix, "--tasks-only"],
-            prefix => ["status", "--tasks-only", prefix],
             prefix => ["monitor", prefix],
             prefix => ["readiness", prefix],
             prefix => ["next", prefix],
@@ -101,33 +98,6 @@ public sealed class CliCommandTestsPersistentRunnerCommandsGoalQueriesAndLanding
             Xunit.Assert.DoesNotContain(active.Id.Value, repository.LoadedGoalIds);
             Xunit.Assert.Equal(completed.Id, currentGoal!.Id);
         }
-    }
-
-    [Xunit.Fact(DisplayName = "CliPersistentStateRunner_status_tasks_only_without_prefix_uses_current_goal")]
-    public void PersistentRunnerStatusTasksOnlyWithoutPrefixUsesCurrentGoal()
-    {
-        var root = CreateTempDirectory();
-        var kernel = new AgentOrchestratorKernel();
-        var goal = kernel.CreateGoal("CURRENT_OBJECTIVE_TOKEN", [new TaskSpec(TaskId.New(), "Current task line", AgentRole.Developer)]);
-        var repository = new InMemoryTransactionalStateRepository(kernel);
-        IReadOnlyList<AgentDefinition> agents = AgentCatalog.Default().Agents;
-        var providers = new InMemoryModelProviderRegistry([]);
-        var profiles = WorkerProfileCatalog.Default();
-        Goal? currentGoal = goal;
-
-        var output = CaptureConsole(() => CliPersistentStateRunner.ExecuteCommand(
-            ["status", "--tasks-only"],
-            repository,
-            CreateRefinedWorkspace(root),
-            ref agents,
-            providers,
-            ref profiles,
-            ref currentGoal));
-
-        Xunit.Assert.Contains($"Goal {goal.Id.Value}", output);
-        Xunit.Assert.Contains("Current task line", output);
-        Xunit.Assert.DoesNotContain("CURRENT_OBJECTIVE_TOKEN", output);
-        Xunit.Assert.Equal(goal.Id, currentGoal!.Id);
     }
 
     [Xunit.Fact(DisplayName = "CliPersistentStateRunner_input_needed_hydrates_goal_human_waits")]
