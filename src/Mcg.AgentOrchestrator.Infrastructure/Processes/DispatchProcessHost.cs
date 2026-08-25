@@ -1301,7 +1301,11 @@ public static void DropToLow() {
             var stdoutBytes = FileLength(parameters.StdoutPath);
             var stderrBytes = FileLength(parameters.StderrPath);
             var ownedPids = GetHeartbeatOwnedProcessIds(workerGroup, worker);
-            var ownedProcessIdentities = DispatchProcessIdentityEvidence.Capture(ownedPids);
+            var ownedProcessIdentities = DispatchProcessIdentityEvidence.Capture(
+                ownedPids,
+                () => workerGroup?.TryGetActiveProcessIds(out var currentOwnedPids) == true
+                    ? currentOwnedPids
+                    : null);
             var ownedCpuMs = ReadHeartbeatOwnedCpuMs(workerGroup, ownedPids);
             var childPid = SelectHeartbeatChildPid(worker, ownedPids);
             ObserveSelectedChild(childPid);

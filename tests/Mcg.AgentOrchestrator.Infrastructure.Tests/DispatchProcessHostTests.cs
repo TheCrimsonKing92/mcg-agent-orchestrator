@@ -1646,6 +1646,49 @@ public sealed class DispatchProcessHostTests
         Assert.True(DispatchProcessHost.HasProgressed(0, 10, 0, 0, 50));
     }
 
+    [Xunit.Fact]
+    public void DispatchProcessIdentityEvidence_CaptureDropsIdentityWhenOwnershipChangesDuringCapture()
+    {
+        const int processId = 43_316;
+        var identity = new SpawnProcessIdentity(
+            processId,
+            DateTimeOffset.Parse("2026-08-24T14:20:35Z"),
+            @"C:\workers\claude.exe");
+        var identityCaptured = false;
+
+        var captured = DispatchProcessIdentityEvidence.Capture(
+            [processId],
+            readCurrentOwnedProcessIds: () =>
+            {
+                Assert.True(identityCaptured, "Ownership must be revalidated after the bare PID is reopened.");
+                return [];
+            },
+            readCurrentIdentity: _ =>
+            {
+                identityCaptured = true;
+                return identity;
+            });
+
+        Assert.Empty(captured);
+    }
+
+    [Xunit.Fact]
+    public void DispatchProcessIdentityEvidence_CaptureRetainsIdentityWhileProcessRemainsOwned()
+    {
+        const int processId = 43_316;
+        var identity = new SpawnProcessIdentity(
+            processId,
+            DateTimeOffset.Parse("2026-08-24T14:20:35Z"),
+            @"C:\workers\claude.exe");
+
+        var captured = DispatchProcessIdentityEvidence.Capture(
+            [processId],
+            readCurrentOwnedProcessIds: () => [processId],
+            readCurrentIdentity: _ => identity);
+
+        Assert.Equal([identity], captured);
+    }
+
     [Xunit.Fact(DisplayName = "DispatchProcessHost_heartbeat_cpu_and_pids_reflect_wrapped_grandchild")]
     public void DispatchProcessHostHeartbeatCpuAndPidsReflectWrappedGrandchild()
     {

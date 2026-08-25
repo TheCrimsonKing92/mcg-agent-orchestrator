@@ -14,8 +14,25 @@ internal static class DispatchProcessIdentityEvidence
                 ? new SpawnProcessIdentity(processId, identity.StartedAt, identity.ImagePath)
                 : null;
 
-    internal static IReadOnlyList<SpawnProcessIdentity> Capture(IEnumerable<int> processIds) =>
-        processIds.Distinct().Select(ReadCurrent).OfType<SpawnProcessIdentity>().ToArray();
+    internal static IReadOnlyList<SpawnProcessIdentity> Capture(
+        IEnumerable<int> processIds,
+        Func<IReadOnlyList<int>?> readCurrentOwnedProcessIds,
+        Func<int, SpawnProcessIdentity?>? readCurrentIdentity = null)
+    {
+        var captured = processIds
+            .Distinct()
+            .Select(readCurrentIdentity ?? ReadCurrent)
+            .OfType<SpawnProcessIdentity>()
+            .ToArray();
+        var currentOwnedProcessIds = readCurrentOwnedProcessIds();
+        if (currentOwnedProcessIds is null)
+        {
+            return [];
+        }
+
+        var currentOwners = currentOwnedProcessIds.ToHashSet();
+        return captured.Where(identity => currentOwners.Contains(identity.ProcessId)).ToArray();
+    }
 
     internal static SpawnProcessIdentity? ReadCurrent(int processId)
     {
