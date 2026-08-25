@@ -53,6 +53,52 @@ public sealed class TrialHarnessComparisonTests
     }
 
     [Xunit.Fact]
+    public void ProvisioningFailureReceiptRetainsFinalizedIdentities()
+    {
+        using var fixture = new Fixture();
+        var host = new FakeTrialRootHost(fixture.Root);
+        host.ThrowOnAddEnvironment.Add("alpha");
+
+        var result = new TrialHarnessComparison(host).Run(fixture.Request(
+            new("alpha", "alpha.exe", []),
+            new("beta", "beta.exe", [])));
+
+        var alpha = result.Harnesses.Single(item => item.Name == "alpha");
+        Xunit.Assert.False(result.Succeeded);
+        Xunit.Assert.NotNull(alpha.WorkloadIdentity);
+        Xunit.Assert.NotNull(alpha.ArmIdentity);
+        var receipt = File.ReadAllText(alpha.ReceiptPath);
+        Xunit.Assert.Contains(alpha.WorkloadIdentity.Value, receipt, StringComparison.Ordinal);
+        Xunit.Assert.Contains(alpha.ArmIdentity.Value, receipt, StringComparison.Ordinal);
+    }
+
+    [Xunit.Fact]
+    public void DurableReceiptsExcludeHistoricalBriefText()
+    {
+        const string secret = "TRIAL-BRIEF-SECRET-7d4b086ad17c";
+        using var fixture = new Fixture();
+        var host = new FakeTrialRootHost(fixture.Root);
+        var workload = fixture.Workload with
+        {
+            BriefContent = secret,
+            BriefDigest = TrialIdentity.ComputeBriefDigest(secret),
+            HistoricalTiming = fixture.HistoricalTiming with { Objective = secret }
+        };
+
+        var result = new TrialHarnessComparison(host).Run(fixture.Request(
+            new("alpha", "alpha.exe", []),
+            new("beta", "beta.exe", [])) with { Workload = workload });
+
+        Xunit.Assert.True(result.Succeeded);
+        foreach (var receiptPath in result.Harnesses.Select(item => item.ReceiptPath).Append(result.ReceiptPath))
+        {
+            var receipt = File.ReadAllText(receiptPath);
+            Xunit.Assert.DoesNotContain(secret, receipt, StringComparison.Ordinal);
+            Xunit.Assert.Contains(workload.BriefDigest, receipt, StringComparison.Ordinal);
+        }
+    }
+
+    [Xunit.Fact]
     public void WorkloadIdentityRecordsButDoesNotKeyOnSourceProvenance()
     {
         using var fixture = new Fixture();
@@ -255,6 +301,7 @@ public sealed class TrialHarnessComparisonTests
         public Dictionary<string, int> ExitCodes { get; } = new(StringComparer.OrdinalIgnoreCase);
         public Dictionary<string, string> ResolvedCommits { get; } = new(StringComparer.OrdinalIgnoreCase);
         public HashSet<string> ThrowOnStart { get; } = new(StringComparer.OrdinalIgnoreCase);
+        public HashSet<string> ThrowOnAddEnvironment { get; } = new(StringComparer.OrdinalIgnoreCase);
         public HashSet<string> TimeoutOnWait { get; } = new(StringComparer.OrdinalIgnoreCase);
         public HashSet<string> UncleanTeardown { get; } = new(StringComparer.OrdinalIgnoreCase);
         public HashSet<string> MissingStdout { get; } = new(StringComparer.OrdinalIgnoreCase);
@@ -281,6 +328,11 @@ public sealed class TrialHarnessComparisonTests
 
             public void AddEnvironment(IReadOnlyDictionary<string, string?> environment)
             {
+                if (owner.ThrowOnAddEnvironment.Contains(name))
+                {
+                    throw new InvalidOperationException($"{name} environment provisioning failed");
+                }
+
                 var copy = new Dictionary<string, string?>(environment, StringComparer.OrdinalIgnoreCase);
                 owner.LaunchEnvironments[name] = copy;
                 var briefPath = copy["MCG_TRIAL_BRIEF_PATH"]!;

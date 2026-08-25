@@ -20,11 +20,12 @@ internal sealed class TrialHarnessComparison(ITrialRootHost host)
             $"{DateTimeOffset.UtcNow:yyyyMMddTHHmmssfff}-{Guid.NewGuid():N}");
         Directory.CreateDirectory(runDirectory);
 
+        var historicalTimingReceipt = RedactHistoricalTiming(request.Workload.HistoricalTiming);
         var states = request.Harnesses
             .Select(spec => new HarnessState(
                 spec,
                 CreateHarnessReceiptPaths(runDirectory, spec.Name),
-                request.Workload.HistoricalTiming))
+                historicalTimingReceipt))
             .ToArray();
         var created = new List<(HarnessState State, ITrialRootSession Session)>();
         var failures = new List<string>();
@@ -168,7 +169,7 @@ internal sealed class TrialHarnessComparison(ITrialRootHost host)
             failures.ToArray(),
             failures.Count == 0,
             workloadIdentity,
-            request.Workload.HistoricalTiming);
+            historicalTimingReceipt);
         File.WriteAllText(comparisonReceiptPath, JsonSerializer.Serialize(comparison, ReceiptJson));
         return comparison;
     }
@@ -180,6 +181,8 @@ internal sealed class TrialHarnessComparison(ITrialRootHost host)
         TrialWorkloadIdentity workloadIdentity)
     {
         var armIdentity = TrialIdentity.CreateArm(workloadIdentity, state.Spec.Name);
+        state.WorkloadIdentity = workloadIdentity;
+        state.ArmIdentity = armIdentity;
         var briefPath = Path.Combine(session.HarnessStatePath, "trial-brief.utf8");
         File.WriteAllBytes(briefPath, Encoding.UTF8.GetBytes(workload.BriefContent));
         session.AddEnvironment(new Dictionary<string, string?>(StringComparer.OrdinalIgnoreCase)
@@ -194,9 +197,32 @@ internal sealed class TrialHarnessComparison(ITrialRootHost host)
             ["MCG_TRIAL_HARNESS_IDENTITY"] = state.Spec.Name,
             ["MCG_TRIAL_SOURCE_PROVENANCE"] = workload.SourceProvenance
         });
-        state.WorkloadIdentity = workloadIdentity;
-        state.ArmIdentity = armIdentity;
-        state.HistoricalTiming = workload.HistoricalTiming;
+    }
+
+    private static Mcg.AgentOrchestrator.Core.GoalTimingReportSnapshot? RedactHistoricalTiming(
+        Mcg.AgentOrchestrator.Core.GoalTimingReportSnapshot? timing)
+    {
+        if (timing is null)
+        {
+            return null;
+        }
+
+        return timing with
+        {
+            Objective = string.Empty,
+            Tasks = timing.Tasks.Select(task => task with
+            {
+                Description = string.Empty,
+                Rounds = task.Rounds.Select(round => round with
+                {
+                    ValueEvidence = string.Empty,
+                    WasteSource = string.Empty
+                }).ToArray()
+            }).ToArray(),
+            CurrentHold = timing.CurrentHold is null
+                ? null
+                : timing.CurrentHold with { Blocker = string.Empty }
+        };
     }
 
     private static void RunHarness(
