@@ -239,14 +239,6 @@ internal sealed class DispatchProcessRecoveryService
         else
         {
             var hasLiveObservedProcess = AnyObservedProcessStillRunning(processRecord, observedHeartbeat);
-            if (exitRead.Kind == ExitCodeReadKind.Missing &&
-                processRecord.WasGracefullyDetachedByConductor &&
-                !hasLiveObservedProcess)
-            {
-                verdict = Hold(BuildExitArtifactHold(processRecord, exitRead), worktreeInspectionStatus);
-                return true;
-            }
-
             if (exitRead.Kind == ExitCodeReadKind.Missing || hasLiveObservedProcess)
             {
                 verdict = Live(recoveryDecision, worktreeInspectionStatus);
@@ -615,7 +607,11 @@ internal sealed class DispatchProcessRecoveryService
                 processIds.Add(heartbeat.ChildProcessId.Value);
             }
 
-            if (heartbeat.OwnedProcessIds is { Count: > 0 })
+            // A terminal wrapper heartbeat can contain auxiliary descendants that were only
+            // observed in its final snapshot. The selected child remains the completion owner;
+            // stale/reused auxiliary PIDs must not keep an authoritative exit artifact live.
+            if (!IsTerminalHeartbeatWithSelectedChild(heartbeat) &&
+                heartbeat.OwnedProcessIds is { Count: > 0 })
             {
                 foreach (var processId in heartbeat.OwnedProcessIds.Where(pid => pid > 0))
                 {
@@ -626,6 +622,10 @@ internal sealed class DispatchProcessRecoveryService
 
         return processIds.ToArray();
     }
+
+    private static bool IsTerminalHeartbeatWithSelectedChild(DispatchHeartbeat heartbeat) =>
+        heartbeat.ChildProcessId is > 0 &&
+        string.Equals(heartbeat.State, "exited", StringComparison.OrdinalIgnoreCase);
 
     internal void TryKillTrackedProcesses(
         TaskProcessRecord processRecord,
