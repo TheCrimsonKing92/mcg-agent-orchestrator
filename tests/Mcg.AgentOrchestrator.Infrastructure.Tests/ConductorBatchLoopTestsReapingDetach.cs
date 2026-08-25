@@ -571,29 +571,50 @@ public sealed class ConductorBatchLoopTestsReapingDetach : ConductorBatchLoopTes
         var root = CreateTempDirectory("mcg-detached-exit-successor");
         try
         {
-            var (kernel, goal, planner, exitPath, _, rootPid) = CreateDetachedPlannerDispatch(root);
+            var (kernel, goal, planner, exitPath, _, rootPid, childPid) = CreateDetachedPlannerDispatch(root);
             var repository = OpenStateRepository(Path.Combine(root, "state.db"));
             await repository.SaveAsync(kernel);
             var successor = await repository.LoadAsync();
             DispatchExitArtifacts.Write(
                 exitPath,
                 DispatchExitArtifacts.Native(0, "dispatch host observed worker termination", DateTimeOffset.UtcNow));
-            var runner = new BackgroundDispatchRunner(isStillRunning: _ => false);
+            var childAlive = true;
+            var runner = new BackgroundDispatchRunner(isStillRunning: pid => pid == childPid && childAlive);
 
-            new ConductorBatchLoop(
-                refreshGoalDispatchesBeforeAdvance: (loopKernel, loopGoal) =>
-                    GoalManagementCommandService.RefreshDispatches(loopKernel, loopGoal, runner)).Run(
-                    successor,
-                    MakeDriver(getFacts: _ => new GoalLifecycleFacts(WorkspaceExists: true)),
-                    ConductorAutonomyPolicy.Conservative,
-                    NoStopPath(),
-                    maxIterations: 1,
-                    onlyGoalId: goal.Id.Value);
+            void RunSuccessorTick() => new ConductorBatchLoop(
+                    refreshGoalDispatchesBeforeAdvance: (loopKernel, loopGoal) =>
+                        GoalManagementCommandService.RefreshDispatches(loopKernel, loopGoal, runner)).Run(
+                        successor,
+                        MakeDriver(getFacts: _ => new GoalLifecycleFacts(WorkspaceExists: true)),
+                        ConductorAutonomyPolicy.Conservative,
+                        NoStopPath(),
+                        maxIterations: 1,
+                        onlyGoalId: goal.Id.Value);
+
+            RunSuccessorTick();
+
+            var held = successor.GetTask(goal.Id, planner.Id);
+            Assert.Equal(WorkTaskStatus.Running, held.Status);
+            Assert.True(held.LastProcess!.IsRunning);
+            Assert.Equal(rootPid, held.LastProcess.ProcessId);
+            Assert.Equal(1, successor.GetGoal(goal.Id).Timeline.Count(evt =>
+                evt.TaskId == planner.Id && evt.Kind == ProgressKind.TaskDispatchRecorded));
+
+            childAlive = false;
+            RunSuccessorTick();
 
             var refreshed = successor.GetTask(goal.Id, planner.Id);
             Assert.Equal(WorkTaskStatus.Completed, refreshed.Status);
             Assert.False(refreshed.LastProcess!.IsRunning);
             Assert.Equal(rootPid, refreshed.LastProcess.ProcessId);
+            Assert.Equal(1, successor.GetGoal(goal.Id).Timeline.Count(evt =>
+                evt.TaskId == planner.Id && evt.Kind == ProgressKind.TaskDispatchRecorded));
+
+            runner.DetachRunningProcessesForGoal(successor, goal.Id);
+            Assert.Equal(1, successor.GetGoal(goal.Id).Timeline.Count(evt =>
+                evt.TaskId == planner.Id &&
+                evt.Kind == ProgressKind.TaskNote &&
+                evt.Message.StartsWith("Gracefully detached process ", StringComparison.Ordinal)));
         }
         finally
         {
@@ -608,7 +629,7 @@ public sealed class ConductorBatchLoopTestsReapingDetach : ConductorBatchLoopTes
         var root = CreateTempDirectory("mcg-detached-live-successor");
         try
         {
-            var (kernel, goal, planner, exitPath, _, rootPid) = CreateDetachedPlannerDispatch(root);
+            var (kernel, goal, planner, exitPath, _, rootPid, _) = CreateDetachedPlannerDispatch(root);
             var repository = OpenStateRepository(Path.Combine(root, "state.db"));
             await repository.SaveAsync(kernel);
             var successor = await repository.LoadAsync();
@@ -653,7 +674,7 @@ public sealed class ConductorBatchLoopTestsReapingDetach : ConductorBatchLoopTes
         var root = CreateTempDirectory("mcg-detached-idempotent");
         try
         {
-            var (kernel, goal, planner, exitPath, _, _) = CreateDetachedPlannerDispatch(root);
+            var (kernel, goal, planner, exitPath, _, _, _) = CreateDetachedPlannerDispatch(root);
             var repository = OpenStateRepository(Path.Combine(root, "state.db"));
             await repository.SaveAsync(kernel);
             var successor = await repository.LoadAsync();
@@ -683,7 +704,7 @@ public sealed class ConductorBatchLoopTestsReapingDetach : ConductorBatchLoopTes
         var root = CreateTempDirectory("mcg-detached-missing-exit");
         try
         {
-            var (kernel, goal, planner, exitPath, _, rootPid) = CreateDetachedPlannerDispatch(root);
+            var (kernel, goal, planner, exitPath, _, rootPid, _) = CreateDetachedPlannerDispatch(root);
             var repository = OpenStateRepository(Path.Combine(root, "state.db"));
             await repository.SaveAsync(kernel);
             var successor = await repository.LoadAsync();
@@ -769,7 +790,7 @@ public sealed class ConductorBatchLoopTestsReapingDetach : ConductorBatchLoopTes
         Assert.DoesNotContain(goal.Timeline, evt => evt.Kind == ProgressKind.TaskRequeueSkipped);
     }
 
-    private static (AgentOrchestratorKernel Kernel, Goal Goal, TaskSpec Planner, string ExitPath, string ChildExitPath, int RootPid)
+    private static (AgentOrchestratorKernel Kernel, Goal Goal, TaskSpec Planner, string ExitPath, string ChildExitPath, int RootPid, int ChildPid)
         CreateDetachedPlannerDispatch(string root)
     {
         const int rootPid = 43_316;
@@ -850,6 +871,6 @@ public sealed class ConductorBatchLoopTestsReapingDetach : ConductorBatchLoopTes
             1,
             new BackgroundDispatchRunner(isStillRunning: _ => false)
                 .DetachRunningProcessesForGoal(kernel, goal.Id));
-        return (kernel, goal, planner, exitPath, childExitPath, rootPid);
+        return (kernel, goal, planner, exitPath, childExitPath, rootPid, childPid);
     }
 }
