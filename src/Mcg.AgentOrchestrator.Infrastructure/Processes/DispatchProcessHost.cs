@@ -1164,6 +1164,7 @@ public static void DropToLow() {
         OwnedProcessGroup? workerGroup = null;
         Process? selectedChild = null;
         var selectedChildLock = new object();
+        var heartbeatProcessIdentities = new DispatchHeartbeatProcessIdentityTracker();
         string? hostDiagnosticWriteFailure = null;
         var heartbeatInterval = parameters.HeartbeatIntervalMilliseconds > 0
             ? TimeSpan.FromMilliseconds(parameters.HeartbeatIntervalMilliseconds)
@@ -1301,7 +1302,7 @@ public static void DropToLow() {
             var stdoutBytes = FileLength(parameters.StdoutPath);
             var stderrBytes = FileLength(parameters.StderrPath);
             var ownedPids = GetHeartbeatOwnedProcessIds(workerGroup, worker);
-            var ownedProcessIdentities = CaptureHeartbeatProcessIdentities(
+            var ownedProcessIdentities = heartbeatProcessIdentities.Capture(
                 Environment.ProcessId,
                 ownedPids,
                 () => workerGroup?.TryGetActiveProcessIds(out var currentOwnedPids) == true

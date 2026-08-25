@@ -416,6 +416,13 @@ public sealed class DispatchProcessHostTests
             AssertNativeExitArtifact(exitPath, 1);
             Assert.Equal(0, new FileInfo(stdoutPath).Length);
             Assert.Equal(0, new FileInfo(stderrPath).Length);
+            using (var terminalHeartbeat = JsonDocument.Parse(File.ReadAllText(heartbeatPath)))
+            {
+                Assert.Equal("exited", terminalHeartbeat.RootElement.GetProperty("state").GetString());
+                Assert.Contains(
+                    terminalHeartbeat.RootElement.GetProperty("ownedProcessIdentities").EnumerateArray(),
+                    identity => identity.GetProperty("processId").GetInt32() == heartbeatChildPid);
+            }
             using var childExit = JsonDocument.Parse(File.ReadAllText(childExitPath));
             Assert.Equal(heartbeatChildPid, childExit.RootElement.GetProperty("processId").GetInt32());
             Assert.Equal(23, childExit.RootElement.GetProperty("exitCode").GetInt32());

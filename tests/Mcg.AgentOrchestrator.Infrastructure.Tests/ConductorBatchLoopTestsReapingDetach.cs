@@ -1004,6 +1004,92 @@ public sealed class ConductorBatchLoopTestsReapingDetach : ConductorBatchLoopTes
 
     [Xunit.Fact(Timeout = 30_000)]
     [Xunit.Trait("Category", "CrossTick")]
+    public async Task DetachedInvalidExit_LiveRecordedProcess_RemainsRunning()
+    {
+        const int liveProcessId = 35_556;
+        var root = CreateTempDirectory("mcg-detached-invalid-exit-live-process");
+        try
+        {
+            var recordedIdentity = new SpawnProcessIdentity(
+                liveProcessId,
+                DateTimeOffset.UtcNow.AddMinutes(-10),
+                @"C:\tools\original-worker.exe");
+            var (kernel, goal, planner, exitPath, _, _, _) =
+                CreateDetachedPlannerDispatch(root, recordedIdentity);
+            var repository = OpenStateRepository(Path.Combine(root, "state.db"));
+            await repository.SaveAsync(kernel);
+            var successor = await repository.LoadAsync();
+            File.WriteAllText(exitPath, "not-an-exit-artifact");
+            var runner = new BackgroundDispatchRunner(
+                isStillRunning: pid => pid == liveProcessId,
+                readProcessIdentity: pid => pid == liveProcessId
+                    ? (recordedIdentity.StartedAt, recordedIdentity.ImagePath)
+                    : null);
+
+            var output = CaptureConsole(() => new ConductorBatchLoop(
+                refreshGoalDispatchesBeforeAdvance: (loopKernel, loopGoal) =>
+                    GoalManagementCommandService.RefreshDispatches(loopKernel, loopGoal, runner)).Run(
+                        successor,
+                        MakeDriver(getFacts: _ => new GoalLifecycleFacts(WorkspaceExists: true)),
+                        ConductorAutonomyPolicy.Conservative,
+                        NoStopPath(),
+                        maxIterations: 1,
+                        onlyGoalId: goal.Id.Value));
+
+            Assert.Equal(WorkTaskStatus.Running, successor.GetTask(goal.Id, planner.Id).Status);
+            Assert.Contains("auto-reconcile will handle completion", output, StringComparison.OrdinalIgnoreCase);
+            Assert.DoesNotContain("state=Invalid", output, StringComparison.OrdinalIgnoreCase);
+        }
+        finally
+        {
+            TryDeleteDirectory(root);
+        }
+    }
+
+    [Xunit.Fact(Timeout = 30_000)]
+    [Xunit.Trait("Category", "CrossTick")]
+    public async Task DetachedInvalidExit_UnreadableRecordedProcessIdentity_RemainsRunning()
+    {
+        const int liveProcessId = 35_556;
+        var root = CreateTempDirectory("mcg-detached-invalid-exit-unknown-process");
+        try
+        {
+            var recordedIdentity = new SpawnProcessIdentity(
+                liveProcessId,
+                DateTimeOffset.UtcNow.AddMinutes(-10),
+                @"C:\tools\original-worker.exe");
+            var (kernel, goal, planner, exitPath, _, _, _) =
+                CreateDetachedPlannerDispatch(root, recordedIdentity);
+            var repository = OpenStateRepository(Path.Combine(root, "state.db"));
+            await repository.SaveAsync(kernel);
+            var successor = await repository.LoadAsync();
+            File.WriteAllText(exitPath, "not-an-exit-artifact");
+            var runner = new BackgroundDispatchRunner(
+                isStillRunning: pid => pid == liveProcessId,
+                readProcessIdentity: _ => null);
+
+            var output = CaptureConsole(() => new ConductorBatchLoop(
+                refreshGoalDispatchesBeforeAdvance: (loopKernel, loopGoal) =>
+                    GoalManagementCommandService.RefreshDispatches(loopKernel, loopGoal, runner)).Run(
+                        successor,
+                        MakeDriver(getFacts: _ => new GoalLifecycleFacts(WorkspaceExists: true)),
+                        ConductorAutonomyPolicy.Conservative,
+                        NoStopPath(),
+                        maxIterations: 1,
+                        onlyGoalId: goal.Id.Value));
+
+            Assert.Equal(WorkTaskStatus.Running, successor.GetTask(goal.Id, planner.Id).Status);
+            Assert.Contains("auto-reconcile will handle completion", output, StringComparison.OrdinalIgnoreCase);
+            Assert.DoesNotContain("state=Invalid", output, StringComparison.OrdinalIgnoreCase);
+        }
+        finally
+        {
+            TryDeleteDirectory(root);
+        }
+    }
+
+    [Xunit.Fact(Timeout = 30_000)]
+    [Xunit.Trait("Category", "CrossTick")]
     public async Task DetachedMissingExit_UsesBoundedRecoveryInsteadOfHolding()
     {
         var root = CreateTempDirectory("mcg-detached-missing-exit");
