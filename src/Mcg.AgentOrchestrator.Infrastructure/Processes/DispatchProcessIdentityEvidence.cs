@@ -59,16 +59,8 @@ internal static class DispatchProcessIdentityEvidence
         }
 
         var current = readCurrentIdentity(processId);
-        if (current is null)
-        {
-            return true;
-        }
-
-        var pathComparison = OperatingSystem.IsWindows()
-            ? StringComparison.OrdinalIgnoreCase
-            : StringComparison.Ordinal;
-        return current.StartedAt.Equals(recorded.StartedAt) &&
-               string.Equals(current.ImagePath, recorded.ImagePath, pathComparison);
+        return SpawnProcessIdentityReader.EvaluateRecordedIdentity(recorded, current, out _) !=
+               SpawnTrackedProcessStatus.DeadOrRecycled;
     }
 
     internal static IReadOnlyList<SpawnProcessIdentity> Read(JsonElement root)

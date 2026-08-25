@@ -670,6 +670,92 @@ public sealed class ConductorBatchLoopTestsReapingDetach : ConductorBatchLoopTes
 
     [Xunit.Fact(Timeout = 30_000)]
     [Xunit.Trait("Category", "CrossTick")]
+    public async Task DetachedExit_LiveOwnedProcessWithUnreadableIdentity_RemainsRunning()
+    {
+        const int liveOwnedProcessId = 35_556;
+        var root = CreateTempDirectory("mcg-detached-unreadable-owned-successor");
+        try
+        {
+            var recordedIdentity = new SpawnProcessIdentity(
+                liveOwnedProcessId,
+                DateTimeOffset.UtcNow.AddMinutes(-10),
+                @"C:\tools\live-worker.exe");
+            var (kernel, goal, planner, exitPath, _, _, _) =
+                CreateDetachedPlannerDispatch(root, recordedIdentity);
+            var repository = OpenStateRepository(Path.Combine(root, "state.db"));
+            await repository.SaveAsync(kernel);
+            var successor = await repository.LoadAsync();
+            DispatchExitArtifacts.Write(
+                exitPath,
+                DispatchExitArtifacts.Native(0, "dispatch host observed worker termination", DateTimeOffset.UtcNow));
+            var runner = new BackgroundDispatchRunner(
+                isStillRunning: pid => pid == liveOwnedProcessId,
+                readProcessIdentity: _ => null);
+
+            new ConductorBatchLoop(
+                refreshGoalDispatchesBeforeAdvance: (loopKernel, loopGoal) =>
+                    GoalManagementCommandService.RefreshDispatches(loopKernel, loopGoal, runner)).Run(
+                        successor,
+                        MakeDriver(getFacts: _ => new GoalLifecycleFacts(WorkspaceExists: true)),
+                        ConductorAutonomyPolicy.Conservative,
+                        NoStopPath(),
+                        maxIterations: 1,
+                        onlyGoalId: goal.Id.Value);
+
+            Assert.Equal(WorkTaskStatus.Running, successor.GetTask(goal.Id, planner.Id).Status);
+        }
+        finally
+        {
+            TryDeleteDirectory(root);
+        }
+    }
+
+    [Xunit.Fact(Timeout = 30_000)]
+    [Xunit.Trait("Category", "CrossTick")]
+    public async Task DetachedExit_LiveOwnedProcessWithSameStartImageMismatch_RemainsRunning()
+    {
+        const int liveOwnedProcessId = 35_556;
+        var root = CreateTempDirectory("mcg-detached-image-mismatch-successor");
+        try
+        {
+            var recordedIdentity = new SpawnProcessIdentity(
+                liveOwnedProcessId,
+                DateTimeOffset.UtcNow.AddMinutes(-10),
+                @"C:\tools\recorded-worker.exe");
+            var (kernel, goal, planner, exitPath, _, _, _) =
+                CreateDetachedPlannerDispatch(root, recordedIdentity);
+            var repository = OpenStateRepository(Path.Combine(root, "state.db"));
+            await repository.SaveAsync(kernel);
+            var successor = await repository.LoadAsync();
+            DispatchExitArtifacts.Write(
+                exitPath,
+                DispatchExitArtifacts.Native(0, "dispatch host observed worker termination", DateTimeOffset.UtcNow));
+            var runner = new BackgroundDispatchRunner(
+                isStillRunning: pid => pid == liveOwnedProcessId,
+                readProcessIdentity: pid => pid == liveOwnedProcessId
+                    ? (recordedIdentity.StartedAt, @"C:\tools\different-worker.exe")
+                    : null);
+
+            new ConductorBatchLoop(
+                refreshGoalDispatchesBeforeAdvance: (loopKernel, loopGoal) =>
+                    GoalManagementCommandService.RefreshDispatches(loopKernel, loopGoal, runner)).Run(
+                        successor,
+                        MakeDriver(getFacts: _ => new GoalLifecycleFacts(WorkspaceExists: true)),
+                        ConductorAutonomyPolicy.Conservative,
+                        NoStopPath(),
+                        maxIterations: 1,
+                        onlyGoalId: goal.Id.Value);
+
+            Assert.Equal(WorkTaskStatus.Running, successor.GetTask(goal.Id, planner.Id).Status);
+        }
+        finally
+        {
+            TryDeleteDirectory(root);
+        }
+    }
+
+    [Xunit.Fact(Timeout = 30_000)]
+    [Xunit.Trait("Category", "CrossTick")]
     public async Task DetachedExit_ReusedNonSelectedOwnedProcess_AllowsCompletion()
     {
         const int reusedProcessId = 35_556;
