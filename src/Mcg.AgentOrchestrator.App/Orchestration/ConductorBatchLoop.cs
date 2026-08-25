@@ -2956,18 +2956,7 @@ internal sealed partial class ConductorBatchLoop
                         policy,
                         onGateAdmitted: () => driver.RecordCohortAdmissionFairness(cohortEligible, cohortSelection),
                         runGateInBackground: true);
-                    exitOutcome = cohortRun.Receipt?.Outcome.ToString() ??
-                        (cohortRun.Detail.Contains("outcome=inflight", StringComparison.Ordinal)
-                            ? "inflight"
-                            : "no-receipt");
-                    if (cohortRun.Receipt?.Outcome == AcceptanceCohortGateOutcome.InfrastructureFailure)
-                    {
-                        var reasonCode = AcceptanceCohortInfrastructureReasonCodes.IsSingleToken(
-                            cohortRun.Receipt.InfrastructureReasonCode)
-                            ? cohortRun.Receipt.InfrastructureReasonCode
-                            : AcceptanceCohortInfrastructureReasonCodes.LegacyUnknown;
-                        exitReason = $" reason={reasonCode}";
-                    }
+                    (exitOutcome, exitReason) = DescribeAcceptanceCohortExit(cohortRun);
                 }
                 finally
                 {
