@@ -172,7 +172,10 @@ public sealed class ConductorSpeculativeAcceptanceCohortPlannerTests
                     GateReadyCandidateExclusionReason.LifecycleNotReady))
         ]);
 
-        Assert.Contains("ready=2", plan.FormatReceipt(4), StringComparison.Ordinal);
+        var receiptTokens = plan.FormatReceipt(4).Split(' ', StringSplitOptions.RemoveEmptyEntries);
+
+        Assert.Contains("ready=2", receiptTokens);
+        Assert.DoesNotContain("ready=20", receiptTokens);
     }
 
     [Fact]
@@ -241,7 +244,7 @@ public sealed class ConductorSpeculativeAcceptanceCohortPlannerTests
 
         var receipt = ConductorSpeculativeAcceptanceCohortPlanner.Plan(candidates).FormatReceipt(7);
 
-        Assert.StartsWith("SPECULATIVE_COHORT_PLAN tick=7 advisory=true members=none", receipt, StringComparison.Ordinal);
+        Assert.StartsWith("SPECULATIVE_COHORT_PLAN tick=7 advisory=true ready=0 members=none", receipt, StringComparison.Ordinal);
         Assert.Contains("RevisionUnknown", receipt, StringComparison.Ordinal);
         Assert.Contains("omitted=12", receipt, StringComparison.Ordinal);
         Assert.DoesNotContain('\n', receipt);

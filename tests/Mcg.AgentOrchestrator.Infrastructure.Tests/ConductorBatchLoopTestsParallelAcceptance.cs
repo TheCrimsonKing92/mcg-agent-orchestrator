@@ -796,10 +796,10 @@ public sealed class ConductorBatchLoopTestsParallelAcceptance : ConductorBatchLo
                     new JsonSerializerOptions(JsonSerializerDefaults.Web))!)
                 .Single(record => record.Detail.StartsWith("ACCEPTANCE_COHORT_EXIT", StringComparison.Ordinal));
 
-            Assert.Contains(
-                "outcome=InfrastructureFailure reason=trx-evidence-incoherent",
-                exit.Detail,
-                StringComparison.Ordinal);
+            var exitTokens = exit.Detail.Split(' ', StringSplitOptions.RemoveEmptyEntries);
+            Assert.Contains("outcome=InfrastructureFailure", exitTokens);
+            Assert.Contains("reason=trx-evidence-incoherent", exitTokens);
+            Assert.DoesNotContain("reason=trx-evidence-incoherent-extra", exitTokens);
             Assert.Equal(statusesBefore, new[] { first.Status, second.Status });
         }
         finally
