@@ -76,16 +76,28 @@ public sealed class PlannerSamplingDispatchTests : WorkerDispatchTestSupport
         var primaryPath = Path.Combine(root, "planner.out.log");
         var plan = ReadPlannerFixture();
         File.WriteAllText(primaryPath, ToCodexJsonl(plan, 11, 7, 3));
-        var sample = Xunit.Assert.Single(PlannerSampleDispatcher.CreateArtifacts(primaryPath, 2));
-        File.WriteAllText(sample.StandardOutputPath, ToCodexJsonl(plan, 13, 8, 5));
-        File.WriteAllText(sample.LaunchRecordPath, JsonSerializer.Serialize(new
-        {
-            ProcessId = 123,
-            StartedAt = DateTimeOffset.Parse("2026-08-25T20:00:00Z")
-        }));
-        DispatchExitArtifacts.Write(
-            sample.ExitCodePath,
-            DispatchExitArtifacts.Native(0, "fixture completed", DateTimeOffset.Parse("2026-08-25T20:00:03Z")));
+        var artifacts = PlannerSampleDispatcher.CreateArtifacts(primaryPath, 2);
+        var fakeHostStarts = 0;
+        var subscriptionCommandStarts = 0;
+        var startedAt = DateTimeOffset.Parse("2026-08-25T20:00:00Z");
+        var launches = PlannerSampleDispatcher.StartSamples(
+            artifacts,
+            CreateRunParameters(root, primaryPath),
+            "dispatch-host.dll",
+            "planner-jsonl-preflight",
+            startInfo =>
+            {
+                fakeHostStarts++;
+                if (!string.Equals(startInfo.FileName, "dotnet", StringComparison.OrdinalIgnoreCase))
+                    subscriptionCommandStarts++;
+                var sampleParameters = DispatchProcessHost.ReadParameters(startInfo.ArgumentList.Last());
+                File.WriteAllText(sampleParameters.StdoutPath, ToCodexJsonl(plan, 13, 8, 5));
+                DispatchExitArtifacts.Write(
+                    sampleParameters.ExitCodePath,
+                    DispatchExitArtifacts.Native(0, "fixture completed", startedAt.AddSeconds(3)));
+                return StartSleeper();
+            },
+            () => startedAt);
         var dispatch = new TaskDispatchRecord(
             "planner",
             "codex exec --json",
@@ -94,18 +106,28 @@ public sealed class PlannerSamplingDispatchTests : WorkerDispatchTestSupport
             WorkerProviderKind: ProviderKind.OpenAICodexCli,
             PlannerSampleCount: 2);
 
-        var candidates = PlannerSampleDispatcher.CollectCandidates(primaryPath, 2, dispatch, 2_000);
+        try
+        {
+            var candidates = PlannerSampleDispatcher.CollectCandidates(primaryPath, 2, dispatch, 2_000);
 
-        var secondary = candidates[1];
-        Xunit.Assert.Equal(plan.ReplaceLineEndings("\n"), secondary.StandardOutput.ReplaceLineEndings("\n"));
-        Xunit.Assert.Equal(PlannerCandidateNormalizationState.Normalized, secondary.NormalizationState);
-        Xunit.Assert.Equal(PlannerCandidateTerminalState.Succeeded, secondary.TerminalState);
-        Xunit.Assert.Equal(3_000, secondary.ElapsedMilliseconds);
-        Xunit.Assert.Equal(13, secondary.ProviderUsage!.InputTokens);
-        Xunit.Assert.Equal(8, secondary.ProviderUsage.CachedInputTokens);
-        Xunit.Assert.Equal(5, secondary.ProviderUsage.OutputTokens);
-        Xunit.Assert.Equal(64, secondary.ArtifactSha256!.Length);
-        Xunit.Assert.True(File.Exists(sample.StandardOutputPath + ".jsonl"));
+            var sample = Xunit.Assert.Single(artifacts);
+            var secondary = candidates[1];
+            Xunit.Assert.Equal(1, fakeHostStarts);
+            Xunit.Assert.Equal(0, subscriptionCommandStarts);
+            Xunit.Assert.Equal(plan.ReplaceLineEndings("\n"), secondary.StandardOutput.ReplaceLineEndings("\n"));
+            Xunit.Assert.Equal(PlannerCandidateNormalizationState.Normalized, secondary.NormalizationState);
+            Xunit.Assert.Equal(PlannerCandidateTerminalState.Succeeded, secondary.TerminalState);
+            Xunit.Assert.Equal(3_000, secondary.ElapsedMilliseconds);
+            Xunit.Assert.Equal(13, secondary.ProviderUsage!.InputTokens);
+            Xunit.Assert.Equal(8, secondary.ProviderUsage.CachedInputTokens);
+            Xunit.Assert.Equal(5, secondary.ProviderUsage.OutputTokens);
+            Xunit.Assert.Equal(64, secondary.ArtifactSha256!.Length);
+            Xunit.Assert.True(File.Exists(sample.StandardOutputPath + ".jsonl"));
+        }
+        finally
+        {
+            PlannerSampleDispatcher.TerminateUnreleased(launches);
+        }
     }
 
     [Xunit.Fact]
@@ -150,6 +172,138 @@ public sealed class PlannerSamplingDispatchTests : WorkerDispatchTestSupport
         AssertInvalidCodexSampleState(
             "{not-jsonl}",
             PlannerCandidateNormalizationState.Malformed);
+    }
+
+    [Xunit.Fact]
+    public void CollectCandidates_PartiallyMalformedJsonl_IsTypedMalformedAndCannotCompete()
+    {
+        var plan = ReadPlannerFixture();
+        AssertInvalidCodexSampleState(
+            ToCodexJsonl(plan, 13, 8, 5) + Environment.NewLine + "{not-jsonl}",
+            PlannerCandidateNormalizationState.Malformed);
+    }
+
+    [Xunit.Fact]
+    public void CollectCandidates_NonZeroCodexSample_PreservesReportedUsage()
+    {
+        var root = CreateTempDirectory();
+        var primaryPath = Path.Combine(root, "planner.out.log");
+        File.WriteAllText(primaryPath, ToCodexJsonl(ReadPlannerFixture(), 11, 7, 3));
+        var sample = Xunit.Assert.Single(PlannerSampleDispatcher.CreateArtifacts(primaryPath, 2));
+        File.WriteAllText(sample.StandardOutputPath, ToCodexJsonl("failed sample", 13, 8, 5));
+        DispatchExitArtifacts.Write(
+            sample.ExitCodePath,
+            DispatchExitArtifacts.Native(17, "fixture failed", DateTimeOffset.UtcNow));
+        var dispatch = CreateCodexDispatch(root);
+
+        var candidates = PlannerSampleDispatcher.CollectCandidates(primaryPath, 2, dispatch);
+        var result = PlannerCandidateSelector.Select(candidates, InfrastructureTestSupport.FindRepositoryRoot());
+
+        var secondary = candidates[1];
+        Xunit.Assert.Equal(PlannerCandidateTerminalState.NonZeroExit, secondary.TerminalState);
+        Xunit.Assert.Equal(13, secondary.ProviderUsage?.InputTokens);
+        var evidence = Xunit.Assert.Single(result.Receipt.Candidates!, candidate => candidate.CandidateIndex == 1);
+        Xunit.Assert.Equal(PlannerCandidateUsageState.Reported, evidence.ProviderUsage.State);
+        Xunit.Assert.Equal(13, evidence.ProviderUsage.InputTokens);
+    }
+
+    [Xunit.Fact]
+    public void CollectCandidates_MalformedUsage_RemainsTypedUnknown()
+    {
+        var root = CreateTempDirectory();
+        var primaryPath = Path.Combine(root, "planner.out.log");
+        var plan = ReadPlannerFixture();
+        File.WriteAllText(primaryPath, ToCodexJsonl(plan, 11, 7, 3));
+        var sample = Xunit.Assert.Single(PlannerSampleDispatcher.CreateArtifacts(primaryPath, 2));
+        File.WriteAllText(
+            sample.StandardOutputPath,
+            JsonSerializer.Serialize(new
+            {
+                type = "item.completed",
+                item = new { type = "agent_message", text = plan }
+            }) + Environment.NewLine +
+            "{\"type\":\"turn.completed\",\"usage\":{\"input_tokens\":13,\"output_tokens\":\"bad\"}}");
+        DispatchExitArtifacts.Write(
+            sample.ExitCodePath,
+            DispatchExitArtifacts.Native(0, "fixture completed", DateTimeOffset.UtcNow));
+
+        var candidates = PlannerSampleDispatcher.CollectCandidates(primaryPath, 2, CreateCodexDispatch(root));
+        var result = PlannerCandidateSelector.Select(candidates, InfrastructureTestSupport.FindRepositoryRoot());
+
+        var evidence = Xunit.Assert.Single(result.Receipt.Candidates!, candidate => candidate.CandidateIndex == 1);
+        Xunit.Assert.Equal(PlannerCandidateUsageState.Unknown, evidence.ProviderUsage.State);
+        Xunit.Assert.Equal("malformed", evidence.ProviderUsage.UnknownReason);
+        Xunit.Assert.Null(evidence.ProviderUsage.InputTokens);
+    }
+
+    [Xunit.Fact]
+    public void CollectCandidates_MissingOutputArtifact_HasNoArtifactIdentity()
+    {
+        var root = CreateTempDirectory();
+        var primaryPath = Path.Combine(root, "planner.out.log");
+        File.WriteAllText(primaryPath, ReadPlannerFixture());
+        var sample = Xunit.Assert.Single(PlannerSampleDispatcher.CreateArtifacts(primaryPath, 2));
+        DispatchExitArtifacts.Write(
+            sample.ExitCodePath,
+            DispatchExitArtifacts.Native(0, "fixture completed", DateTimeOffset.UtcNow));
+
+        var candidates = PlannerSampleDispatcher.CollectCandidates(primaryPath, 2);
+        var result = PlannerCandidateSelector.Select(candidates, InfrastructureTestSupport.FindRepositoryRoot());
+
+        Xunit.Assert.Null(candidates[1].ArtifactSha256);
+        var evidence = Xunit.Assert.Single(result.Receipt.Candidates!, candidate => candidate.CandidateIndex == 1);
+        Xunit.Assert.Null(evidence.ArtifactSha256);
+    }
+
+    [Xunit.Fact]
+    public void CollectCandidates_FreeTextTimeoutDiagnostic_DoesNotAssertDeadlineFired()
+    {
+        var root = CreateTempDirectory();
+        var primaryPath = Path.Combine(root, "planner.out.log");
+        File.WriteAllText(primaryPath, ReadPlannerFixture());
+        var sample = Xunit.Assert.Single(PlannerSampleDispatcher.CreateArtifacts(primaryPath, 2));
+        File.WriteAllText(sample.LaunchDiagnosticPath, "Host timed out while writing a launch diagnostic.");
+
+        var candidate = PlannerSampleDispatcher.CollectCandidates(primaryPath, 2)[1];
+
+        Xunit.Assert.Equal(PlannerCandidateTerminalState.LaunchFailed, candidate.TerminalState);
+    }
+
+    [Xunit.Fact]
+    public void StartSamples_LaunchRecordPersistenceFailure_DoesNotAdmitLiveSample()
+    {
+        var root = CreateTempDirectory();
+        var primaryPath = Path.Combine(root, "planner.out.log");
+        var sample = Xunit.Assert.Single(PlannerSampleDispatcher.CreateArtifacts(primaryPath, 2));
+        Directory.CreateDirectory(sample.LaunchRecordPath);
+
+        var launches = PlannerSampleDispatcher.StartSamples(
+            [sample],
+            CreateRunParameters(root, primaryPath),
+            "dispatch-host.dll",
+            "planner-launch-record-failure",
+            _ => StartSleeper());
+
+        Xunit.Assert.Empty(launches);
+        Xunit.Assert.True(File.Exists(sample.LaunchDiagnosticPath));
+    }
+
+    [Xunit.Fact]
+    public void StartSamples_LaunchDiagnosticPersistenceFailure_IsLoud()
+    {
+        var root = CreateTempDirectory();
+        var primaryPath = Path.Combine(root, "planner.out.log");
+        var sample = Xunit.Assert.Single(PlannerSampleDispatcher.CreateArtifacts(primaryPath, 2)) with
+        {
+            LaunchDiagnosticPath = root
+        };
+
+        Xunit.Assert.Throws<UnauthorizedAccessException>(() => PlannerSampleDispatcher.StartSamples(
+            [sample],
+            CreateRunParameters(root, primaryPath),
+            "dispatch-host.dll",
+            "planner-launch-diagnostic-failure",
+            _ => null));
     }
 
     [Xunit.Fact]
@@ -542,6 +696,14 @@ public sealed class PlannerSamplingDispatchTests : WorkerDispatchTestSupport
             Path.Combine(root, "planner.heartbeat.json"),
             DisableSharedCompilation: true,
             Provider: WorkerSandboxProvider.Codex);
+
+    private static TaskDispatchRecord CreateCodexDispatch(string root) => new(
+        "planner",
+        "codex exec --json",
+        root,
+        DateTimeOffset.UtcNow,
+        WorkerProviderKind: ProviderKind.OpenAICodexCli,
+        PlannerSampleCount: 2);
 
     private static Process StartSleeper()
     {

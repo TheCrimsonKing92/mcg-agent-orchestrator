@@ -135,6 +135,37 @@ public sealed class PlannerCandidateSelectorTests
     }
 
     [Xunit.Fact]
+    public void ThreeConfiguredCandidates_WithTwoValid_PreservesPeerAgreementSelection()
+    {
+        var repositoryRoot = InfrastructureTestSupport.FindRepositoryRoot();
+        var primary = ReadPlannerFixture(repositoryRoot);
+        var structurallyStronger = primary;
+        string[] mappingHeadings =
+        [
+            "1. Exit-0 Tester blockers must not complete or verify the task.",
+            "2. Preserve discriminating evidence and correct routing.",
+            "3. Preserve unaffected contracts.",
+            "4. Cover reconciliation and acceptance state.",
+            "5. Rule (l)."
+        ];
+        for (var index = 0; index < mappingHeadings.Length; index++)
+        {
+            structurallyStronger = structurallyStronger.Replace(
+                mappingHeadings[index],
+                $"{index + 1}. disposition=planned; plan=Developer owns `PlannerCandidateSelector.Select`; " +
+                "the integration seam is TEST-VERIFIABLE and stops when candidate evidence is unavailable.",
+                StringComparison.Ordinal);
+        }
+
+        var result = PlannerCandidateSelector.Select(
+            [new(0, primary), new(1, structurallyStronger), new(2, "invalid")],
+            repositoryRoot);
+
+        Xunit.Assert.Equal(0, result.Receipt.SelectedCandidateIndex);
+        Xunit.Assert.Equal("peer-agreement", result.Receipt.SelectionReason);
+    }
+
+    [Xunit.Fact]
     public void SparseCandidateIndexesFailWithTypedArgumentError()
     {
         var repositoryRoot = InfrastructureTestSupport.FindRepositoryRoot();

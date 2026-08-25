@@ -62,7 +62,7 @@ public sealed record PlannerCandidateUsageReceipt(
 public sealed record PlannerCandidateEvidenceReceipt(
     int CandidateIndex,
     string? CandidateSha256,
-    string ArtifactSha256,
+    string? ArtifactSha256,
     PlannerCandidateTerminalState TerminalState,
     PlannerCandidateNormalizationState NormalizationState,
     PlannerCandidateContractVerdict ContractVerdict,

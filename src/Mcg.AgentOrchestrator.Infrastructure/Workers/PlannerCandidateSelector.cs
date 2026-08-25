@@ -92,7 +92,7 @@ internal static partial class PlannerCandidateSelector
         ResolvedCandidate selected;
         string selectionReason;
         string? fallbackCause = null;
-        if (valid.Length == 2)
+        if (resolved.Length == 2)
         {
             if (string.Equals(valid[0].CandidateSha256, valid[1].CandidateSha256, StringComparison.Ordinal))
             {
@@ -271,9 +271,13 @@ internal static partial class PlannerCandidateSelector
     {
         var input = candidate.Input;
         var usage = input.ProviderUsage;
-        var usageReported = usage?.InputTokens is not null ||
-                            usage?.CachedInputTokens is not null ||
-                            usage?.OutputTokens is not null;
+        var usageReported = !string.Equals(
+                                input.ProviderUsageUnavailableReason,
+                                "malformed",
+                                StringComparison.OrdinalIgnoreCase) &&
+                            (usage?.InputTokens is not null ||
+                             usage?.CachedInputTokens is not null ||
+                             usage?.OutputTokens is not null);
         var verdict = !IsEligibleForContract(input)
             ? PlannerCandidateContractVerdict.NotEvaluated
             : candidate.Contract.Succeeded
@@ -282,16 +286,16 @@ internal static partial class PlannerCandidateSelector
         return new PlannerCandidateEvidenceReceipt(
             candidate.Index,
             candidate.CandidateSha256,
-            input.ArtifactSha256 ?? Hash(input.StandardOutput),
+            input.ArtifactSha256 ?? (input.SourcePath is null ? Hash(input.StandardOutput) : null),
             input.TerminalState,
             input.NormalizationState,
             verdict,
             input.ElapsedMilliseconds,
             new PlannerCandidateUsageReceipt(
                 usageReported ? PlannerCandidateUsageState.Reported : PlannerCandidateUsageState.Unknown,
-                usage?.InputTokens,
-                usage?.CachedInputTokens,
-                usage?.OutputTokens,
+                usageReported ? usage?.InputTokens : null,
+                usageReported ? usage?.CachedInputTokens : null,
+                usageReported ? usage?.OutputTokens : null,
                 usageReported ? null : input.ProviderUsageUnavailableReason),
             candidate.StructuralQuality,
             BoundText(candidate.Contract.Diagnostic));

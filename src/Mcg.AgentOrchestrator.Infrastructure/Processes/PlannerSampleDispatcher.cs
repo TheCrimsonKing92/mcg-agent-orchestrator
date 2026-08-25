@@ -21,7 +21,8 @@ internal sealed record PlannerSampleArtifacts(
     string? PrepHeartbeatPath,
     string? PrepExitCodePath,
     string LaunchRecordPath,
-    string LaunchDiagnosticPath);
+    string LaunchDiagnosticPath,
+    string TerminalRecordPath);
 
 internal sealed record PlannerSampleLaunch(Process Process, PlannerSampleArtifacts Artifacts);
 
@@ -89,7 +90,14 @@ internal static class PlannerSampleDispatcher
                     continue;
                 }
 
-                WriteLaunchRecord(sample, new PlannerSampleLaunchRecord(process.Id, (utcNow ?? (() => DateTimeOffset.UtcNow))()));
+                if (!WriteLaunchRecord(
+                        sample,
+                        new PlannerSampleLaunchRecord(process.Id, (utcNow ?? (() => DateTimeOffset.UtcNow))())))
+                {
+                    TerminateOwned(process);
+                    continue;
+                }
+
                 launches.Add(new PlannerSampleLaunch(process, sample));
             }
             catch (Exception ex) when (IsSampleLaunchFailure(ex))
@@ -145,12 +153,14 @@ internal static class PlannerSampleDispatcher
                     launchDiagnostic ?? "Planner sample did not produce an exit artifact.",
                     sample.StandardOutputPath,
                     ArtifactSha256: HashArtifact(sample.StandardOutputPath),
-                    TerminalState: ClassifyMissingExit(launchDiagnostic),
+                    TerminalState: ClassifyMissingExit(sample, launchDiagnostic),
                     NormalizationState: PlannerCandidateNormalizationState.Unreadable,
                     ElapsedMilliseconds: ResolveElapsedMilliseconds(sample, null)));
                 continue;
             }
 
+            var artifactHash = HashArtifact(sample.StandardOutputPath);
+            var normalization = StructuredCodexOutputNormalizer.Normalize(dispatch, sample.StandardOutputPath);
             if (exit.ExitCode != 0)
             {
                 candidates.Add(new PlannerCandidateInput(
@@ -158,17 +168,17 @@ internal static class PlannerSampleDispatcher
                     string.Empty,
                     ReadBounded(sample.StandardErrorPath),
                     sample.StandardOutputPath,
-                    ArtifactSha256: HashArtifact(sample.StandardOutputPath),
+                    ArtifactSha256: artifactHash,
                     TerminalState: exit.Reason.Contains("cancel", StringComparison.OrdinalIgnoreCase)
                         ? PlannerCandidateTerminalState.Cancelled
                         : PlannerCandidateTerminalState.NonZeroExit,
-                    NormalizationState: PlannerCandidateNormalizationState.NotRequired,
-                    ElapsedMilliseconds: ResolveElapsedMilliseconds(sample, exit.RecordedAt)));
+                    NormalizationState: normalization.State,
+                    ElapsedMilliseconds: ResolveElapsedMilliseconds(sample, exit.RecordedAt),
+                    ProviderUsage: normalization.Parsed?.Usage,
+                    ProviderUsageUnavailableReason: normalization.Parsed?.UsageUnavailableReason ?? "unsupported"));
                 continue;
             }
 
-            var artifactHash = HashArtifact(sample.StandardOutputPath);
-            var normalization = StructuredCodexOutputNormalizer.Normalize(dispatch, sample.StandardOutputPath);
             candidates.Add(new PlannerCandidateInput(
                 sample.Index,
                 normalization.State == PlannerCandidateNormalizationState.Normalized
@@ -216,10 +226,12 @@ internal static class PlannerSampleDispatcher
                 continue;
             }
 
-            WriteLaunchDiagnostic(
+            var diagnostic = $"Planner sample timed out after the bounded {wait:c} wait ended at {deadline:O}; " +
+                             "the sample was terminated and excluded from candidate selection.";
+            WriteTerminalRecord(
                 sample,
-                $"Planner sample timed out after the bounded {wait:c} wait ended at {deadline:O}; " +
-                "the sample was terminated and excluded from candidate selection.");
+                new PlannerSampleTerminalRecord(PlannerCandidateTerminalState.TimedOut, deadline));
+            WriteLaunchDiagnostic(sample, diagnostic);
         }
     }
 
@@ -266,7 +278,8 @@ internal static class PlannerSampleDispatcher
             stem + ".prep.heartbeat.json",
             stem + ".prep.exit.txt",
             stem + ".launch.json",
-            stem + ".launch.err.log");
+            stem + ".launch.err.log",
+            stem + ".terminal.json");
     }
 
     private static ProcessStartInfo CreateStartInfo(
@@ -327,7 +340,7 @@ internal static class PlannerSampleDispatcher
 
     private static void WriteLaunchDiagnostic(PlannerSampleArtifacts sample, string diagnostic)
     {
-        try { File.WriteAllText(sample.LaunchDiagnosticPath, diagnostic); } catch { }
+        File.WriteAllText(sample.LaunchDiagnosticPath, diagnostic);
     }
 
     private static string? ReadLaunchDiagnostic(PlannerSampleArtifacts sample)
@@ -336,24 +349,49 @@ internal static class PlannerSampleDispatcher
         catch { return null; }
     }
 
-    private static PlannerCandidateTerminalState ClassifyMissingExit(string? diagnostic)
+    private static PlannerCandidateTerminalState ClassifyMissingExit(
+        PlannerSampleArtifacts sample,
+        string? diagnostic)
     {
-        if (diagnostic?.Contains("timed out", StringComparison.OrdinalIgnoreCase) == true)
-            return PlannerCandidateTerminalState.TimedOut;
+        var terminal = ReadTerminalRecord(sample);
+        if (terminal is not null)
+            return terminal.State;
         return string.IsNullOrWhiteSpace(diagnostic)
             ? PlannerCandidateTerminalState.MissingExitArtifact
             : PlannerCandidateTerminalState.LaunchFailed;
     }
 
-    private static void WriteLaunchRecord(PlannerSampleArtifacts sample, PlannerSampleLaunchRecord record)
+    private static bool WriteLaunchRecord(PlannerSampleArtifacts sample, PlannerSampleLaunchRecord record)
     {
         try
         {
             File.WriteAllText(sample.LaunchRecordPath, JsonSerializer.Serialize(record));
+            return true;
         }
         catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
         {
             WriteLaunchDiagnostic(sample, $"Planner sample launch record could not be persisted: {ex.Message}");
+            return false;
+        }
+    }
+
+    private static void WriteTerminalRecord(
+        PlannerSampleArtifacts sample,
+        PlannerSampleTerminalRecord record) =>
+        File.WriteAllText(sample.TerminalRecordPath, JsonSerializer.Serialize(record));
+
+    private static PlannerSampleTerminalRecord? ReadTerminalRecord(PlannerSampleArtifacts sample)
+    {
+        if (!File.Exists(sample.TerminalRecordPath))
+            return null;
+        try
+        {
+            return JsonSerializer.Deserialize<PlannerSampleTerminalRecord>(
+                File.ReadAllText(sample.TerminalRecordPath));
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or JsonException)
+        {
+            return null;
         }
     }
 
@@ -374,10 +412,16 @@ internal static class PlannerSampleDispatcher
         }
     }
 
-    private static string HashArtifact(string standardOutputPath)
+    private static string? HashArtifact(string standardOutputPath)
     {
         var rawAuditPath = standardOutputPath + ".jsonl";
-        var path = File.Exists(rawAuditPath) ? rawAuditPath : standardOutputPath;
+        var path = File.Exists(rawAuditPath)
+            ? rawAuditPath
+            : File.Exists(standardOutputPath)
+                ? standardOutputPath
+                : null;
+        if (path is null)
+            return null;
         try
         {
             using var stream = new FileStream(path, FileMode.Open, FileAccess.Read, FileShare.ReadWrite | FileShare.Delete);
@@ -385,7 +429,7 @@ internal static class PlannerSampleDispatcher
         }
         catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
         {
-            return Convert.ToHexString(SHA256.HashData([])).ToLowerInvariant();
+            return null;
         }
     }
 
@@ -403,6 +447,10 @@ internal static class PlannerSampleDispatcher
             return ex.Message;
         }
     }
+
+    private sealed record PlannerSampleTerminalRecord(
+        PlannerCandidateTerminalState State,
+        DateTimeOffset RecordedAt);
 
     private sealed record PlannerSampleLaunchRecord(int ProcessId, DateTimeOffset StartedAt);
 }
