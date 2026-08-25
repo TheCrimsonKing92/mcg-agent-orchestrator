@@ -1976,6 +1976,10 @@ public sealed class SqliteOrchestratorStateRepository : IOrchestratorStateOutbox
             RetryAdmissionHistory = MergeRetryAdmissionHistory(
                 stored.RetryAdmissionHistory,
                 current.RetryAdmissionHistory),
+            RetryAdmissionHoldRoute = PickStoreOwned(
+                baseline.RetryAdmissionHoldRoute,
+                stored.RetryAdmissionHoldRoute,
+                current.RetryAdmissionHoldRoute),
             InterruptedDispatchRecoveryId = attemptAuthority is null
                 ? PickTickOwned(baseline.InterruptedDispatchRecoveryId, stored.InterruptedDispatchRecoveryId, current.InterruptedDispatchRecoveryId)
                 : attemptAuthority.InterruptedDispatchRecoveryId,

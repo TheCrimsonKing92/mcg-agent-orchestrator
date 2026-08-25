@@ -233,8 +233,42 @@ public sealed class LoopHealthReportTests
             goal.Id,
             task.Id,
             new TaskVerificationRecord(DispatchCommand, WorkDir, 0, "fixed", "", completedAt));
+        kernel.RecordTaskVerification(
+            goal.Id,
+            task.Id,
+            new TaskVerificationRecord(DispatchCommand, WorkDir, 0, "later verification", "", completedAt.AddHours(1)));
         Assert.Equal(GoalStatus.Verified, goal.Status);
         kernel.CompleteGoal(goal.Id, "Landed after verified retry.");
+
+        var activeGoal = kernel.CreateGoal("Active retry must not enter landed numerator", [MakeTask()]);
+        kernel.ActivateGoal(activeGoal.Id, DefaultAgents);
+        var activeTask = activeGoal.Tasks.Single();
+        var activeFirstAt = completedAt.AddHours(2);
+        var activeRetryAt = activeFirstAt.AddMinutes(10);
+        var activeFirstFingerprint = Fingerprint("active-candidate-a");
+        var activeRetryFingerprint = Fingerprint("active-candidate-b");
+        kernel.RecordTaskDispatch(activeGoal.Id, activeTask.Id, PaidDispatch(activeFirstAt, activeFirstFingerprint));
+        kernel.RecordPreparedRetryAdmission(
+            activeGoal.Id, activeTask.Id, activeFirstFingerprint, PaidRouteClassification.Paid, activeFirstAt);
+        RecordStartedProcess(kernel, activeGoal, activeTask, activeFirstAt, 2001);
+        kernel.RecordTaskProcessRefreshed(
+            activeGoal.Id,
+            activeTask.Id,
+            activeTask.LastProcess! with { CompletedAt = activeFirstAt, ExitCode = 1 },
+            verification: null);
+        kernel.RecordDispatchExecutionResult(
+            activeGoal.Id,
+            activeTask.Id,
+            new TaskVerificationRecord(DispatchCommand, WorkDir, 1, "", "main drift", activeFirstAt));
+        clock.UtcNow = activeRetryAt;
+        kernel.RetryTask(
+            activeGoal.Id,
+            activeTask.Id,
+            "Reconcile current main.",
+            retryCause: RetryCause.MainDriftConflict);
+        kernel.RecordTaskDispatch(activeGoal.Id, activeTask.Id, PaidDispatch(activeRetryAt, activeRetryFingerprint));
+        kernel.RecordPreparedRetryAdmission(
+            activeGoal.Id, activeTask.Id, activeRetryFingerprint, PaidRouteClassification.Paid, activeRetryAt);
 
         var report = kernel.BuildLoopHealthReport();
 
@@ -245,7 +279,7 @@ public sealed class LoopHealthReportTests
         Assert.Equal(2.0, report.MedianRetryResolutionHours);
         var developer = report.FirstPassCompletionByRole.Single(item => item.Role == AgentRole.Developer);
         Assert.Equal(0, developer.FirstPassCompletedCount);
-        Assert.Equal(1, developer.PresentTaskCount);
+        Assert.Equal(2, developer.PresentTaskCount);
         Assert.Equal(0.0, developer.CompletionRate);
         Assert.Null(report.FirstPassCompletionByRole.Single(item => item.Role == AgentRole.Tester).CompletionRate);
         Assert.Equal(0, report.RetryFingerprintUnavailableCount);
@@ -261,7 +295,8 @@ public sealed class LoopHealthReportTests
 
         Assert.True(report.RetryFingerprintUnavailableCount > 0);
         Assert.True(report.RetryPaidAuthorityUnknownCount > 0);
-        Assert.Contains(report.RetryCauseDistribution, item => item.Cause == RetryCause.Unknown);
+        Assert.True(report.RetryCauseUnavailableCount > 0);
+        Assert.True(report.RetryCauseDistribution.Single(item => item.Cause == RetryCause.Unknown).Count > 0);
     }
 
     // --- Semantic-acceptance judge agreement tests ---

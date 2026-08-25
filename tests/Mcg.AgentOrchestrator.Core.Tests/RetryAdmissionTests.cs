@@ -96,7 +96,7 @@ public sealed class RetryAdmissionTests
     }
 
     [Xunit.Fact]
-    public void UnstartedReservationIsResumed()
+    public void ConcurrentContenderCannotResumeLiveReservation()
     {
         var task = RetryingTask();
         var attempt = DateTimeOffset.Parse("2026-08-25T12:01:00Z");
@@ -104,15 +104,108 @@ public sealed class RetryAdmissionTests
         task.RecordDispatch(Dispatch(attempt, fingerprint));
         var first = RetryAdmissionPolicy.Evaluate(
             task, fingerprint, PaidRouteClassification.Paid, RetryCause.ProviderInterruption,
-            attempt, attempt);
+            attempt, attempt, reservationOwnerId: "owner-a", reservationLeaseExpiresAt: attempt.AddMinutes(1));
         task.RecordRetryAdmission(first.Receipt);
 
-        var resumed = RetryAdmissionPolicy.Evaluate(
+        var contender = RetryAdmissionPolicy.Evaluate(
             task, fingerprint, PaidRouteClassification.Paid, RetryCause.ProviderInterruption,
-            attempt, attempt.AddSeconds(1));
+            attempt, attempt.AddSeconds(1), reservationOwnerId: "owner-b", reservationLeaseExpiresAt: attempt.AddMinutes(1));
 
-        Assert.Equal(RetryAdmissionDecision.ResumedReservation, resumed.Decision);
-        Assert.True(resumed.AllowsProcessStart);
+        Assert.Equal(RetryAdmissionDecision.Prevented, contender.Decision);
+        Assert.False(contender.AllowsProcessStart);
+        Assert.Equal(RetryAdmissionRoute.ReservationLease, contender.Receipt.Route);
+    }
+
+    [Xunit.Fact]
+    public void ExpiredReservationCanBeResumedByNewOwner()
+    {
+        var task = RetryingTask();
+        var attempt = DateTimeOffset.Parse("2026-08-25T12:01:00Z");
+        var fingerprint = RetryContextFingerprintBuilder.Build(Input());
+        task.RecordDispatch(Dispatch(attempt, fingerprint));
+        var first = RetryAdmissionPolicy.Evaluate(
+            task, fingerprint, PaidRouteClassification.Paid, RetryCause.ProviderInterruption,
+            attempt, attempt, reservationOwnerId: "owner-a", reservationLeaseExpiresAt: attempt.AddMinutes(1));
+        task.RecordRetryAdmission(first.Receipt);
+
+        var recovery = RetryAdmissionPolicy.Evaluate(
+            task, fingerprint, PaidRouteClassification.Paid, RetryCause.ProviderInterruption,
+            attempt, attempt.AddMinutes(1), reservationOwnerId: "owner-b", reservationLeaseExpiresAt: attempt.AddMinutes(2));
+
+        Assert.Equal(RetryAdmissionDecision.ResumedReservation, recovery.Decision);
+        Assert.True(recovery.AllowsProcessStart);
+        Assert.Equal("owner-b", recovery.Receipt.ReservationOwnerId);
+    }
+
+    [Xunit.Fact]
+    public void PreventedAdmissionDoesNotForceTaskFailure()
+    {
+        var kernel = new AgentOrchestratorKernel();
+        var task = new TaskSpec(TaskId.New(), "Retry work", AgentRole.Developer);
+        var goal = kernel.CreateGoal("Preserve task state on retry prevention", [task]);
+        kernel.ActivateGoal(goal.Id, [new AgentDefinition(
+            new AgentId("developer"),
+            "Developer",
+            AgentRole.Developer,
+            new ModelProfile("OpenAI", "test", ModelCapability.Text, SubscriptionMode.ApiKey))]);
+        var attempt = DateTimeOffset.Parse("2026-08-25T12:01:00Z");
+        var fingerprint = RetryContextFingerprintBuilder.Build(Input());
+        kernel.RecordTaskDispatch(goal.Id, task.Id, Dispatch(attempt, fingerprint));
+        var receipt = new RetryAdmissionReceipt(
+            "prevented",
+            RetryCause.UnchangedContextRepeat,
+            fingerprint,
+            RetryAdmissionDecision.Prevented,
+            RetryAdmissionRoute.AcceptanceRegate,
+            PaidRouteClassification.Paid,
+            attempt,
+            attempt);
+
+        kernel.ApplyPreparedRetryAdmission(
+            goal.Id,
+            task.Id,
+            new RetryAdmissionResult(RetryAdmissionDecision.Prevented, receipt));
+
+        Assert.Equal(WorkTaskStatus.Running, task.Status);
+    }
+
+    [Xunit.Fact]
+    public void UpstreamRouteReopensCompletedImplementationTask()
+    {
+        var kernel = new AgentOrchestratorKernel();
+        var developer = new TaskSpec(TaskId.New(), "Implement correction", AgentRole.Developer);
+        var reviewer = new TaskSpec(TaskId.New(), "Review correction", AgentRole.Reviewer);
+        var goal = kernel.CreateGoal("Route held reviewer work upstream", [developer, reviewer]);
+        kernel.ActivateGoal(goal.Id,
+        [
+            new AgentDefinition(new AgentId("developer"), "Developer", AgentRole.Developer,
+                new ModelProfile("OpenAI", "test", ModelCapability.Text, SubscriptionMode.ApiKey)),
+            new AgentDefinition(new AgentId("reviewer"), "Reviewer", AgentRole.Reviewer,
+                new ModelProfile("OpenAI", "test", ModelCapability.Text, SubscriptionMode.ApiKey))
+        ]);
+        developer.SetStatus(WorkTaskStatus.Completed);
+        var attempt = DateTimeOffset.Parse("2026-08-25T12:01:00Z");
+        var fingerprint = RetryContextFingerprintBuilder.Build(Input() with { Role = AgentRole.Reviewer });
+        kernel.RecordTaskDispatch(goal.Id, reviewer.Id, Dispatch(attempt, fingerprint));
+        var receipt = new RetryAdmissionReceipt(
+            "route-upstream",
+            RetryCause.UnchangedContextRepeat,
+            fingerprint,
+            RetryAdmissionDecision.Prevented,
+            RetryAdmissionRoute.UpstreamImplementation,
+            PaidRouteClassification.Paid,
+            attempt,
+            attempt);
+
+        kernel.ApplyPreparedRetryAdmission(
+            goal.Id,
+            reviewer.Id,
+            new RetryAdmissionResult(RetryAdmissionDecision.Prevented, receipt));
+
+        Assert.Equal(WorkTaskStatus.Assigned, developer.Status);
+        Assert.Equal(RetryCause.UnchangedContextRepeat, developer.PendingRetryCause);
+        Assert.Equal(WorkTaskStatus.Running, reviewer.Status);
+        Assert.Equal(RetryAdmissionRoute.UpstreamImplementation, reviewer.RetryAdmissionHoldRoute);
     }
 
     private static TaskSpec RetryingTask()

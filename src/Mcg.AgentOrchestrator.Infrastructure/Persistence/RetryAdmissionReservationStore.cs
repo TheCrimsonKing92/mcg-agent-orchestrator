@@ -11,8 +11,10 @@ public static class RetryAdmissionReservationStore
         RetryContextFingerprint fingerprint,
         PaidRouteClassification paidRoute,
         RetryCause cause,
-        DateTimeOffset linkedDispatchAt,
+        TaskDispatchRecord preparedDispatch,
         DateTimeOffset recordedAt,
+        string reservationOwnerId,
+        DateTimeOffset reservationLeaseExpiresAt,
         CancellationToken cancellationToken = default)
     {
         var repository = new SqliteOrchestratorStateRepository(stateDatabasePath);
@@ -30,8 +32,10 @@ public static class RetryAdmissionReservationStore
                     fingerprint,
                     paidRoute,
                     cause,
-                    linkedDispatchAt,
-                    recordedAt);
+                    preparedDispatch,
+                    recordedAt,
+                    reservationOwnerId,
+                    reservationLeaseExpiresAt);
                 return Task.FromResult((true, (GoalSnapshot?)reservation.Snapshot, (RetryAdmissionResult?)reservation.Admission));
             },
             cancellationToken);

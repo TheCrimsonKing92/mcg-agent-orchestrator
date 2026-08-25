@@ -38,7 +38,8 @@ public enum RetryAdmissionRoute
     UpstreamImplementation,
     HumanClarification,
     AcceptanceRegate,
-    EnvironmentalHold
+    EnvironmentalHold,
+    ReservationLease
 }
 
 public sealed record RetryContextFingerprint(int SchemaVersion, string Value)
@@ -72,7 +73,9 @@ public sealed record RetryAdmissionReceipt(
     DateTimeOffset LinkedDispatchAt,
     DateTimeOffset RecordedAt,
     DateTimeOffset? PriorAttemptAt = null,
-    DateTimeOffset? WorkerStartedAt = null);
+    DateTimeOffset? WorkerStartedAt = null,
+    string? ReservationOwnerId = null,
+    DateTimeOffset? ReservationLeaseExpiresAt = null);
 
 public sealed record RetryAdmissionResult(
     RetryAdmissionDecision Decision,
@@ -93,21 +96,28 @@ public static class RetryAdmissionSnapshotReservation
         RetryContextFingerprint fingerprint,
         PaidRouteClassification paidRoute,
         RetryCause cause,
-        DateTimeOffset linkedDispatchAt,
-        DateTimeOffset recordedAt)
+        TaskDispatchRecord preparedDispatch,
+        DateTimeOffset recordedAt,
+        string reservationOwnerId,
+        DateTimeOffset reservationLeaseExpiresAt)
     {
         ArgumentNullException.ThrowIfNull(snapshot);
         var goal = Goal.FromSnapshot(snapshot);
         var task = goal.FindTask(taskId);
+        task.BindPreparedDispatch(preparedDispatch);
         var result = RetryAdmissionPolicy.Evaluate(
             task,
             fingerprint,
             paidRoute,
             cause,
-            linkedDispatchAt,
+            preparedDispatch.DispatchedAt,
             recordedAt,
-            RetryContextFingerprintFactory.GetOpenBlockingFindings(goal));
+            RetryContextFingerprintFactory.GetOpenBlockingFindings(goal),
+            reservationOwnerId,
+            reservationLeaseExpiresAt);
         task.RecordRetryAdmission(result.Receipt);
+        if (!result.AllowsProcessStart)
+            task.SetRetryAdmissionHold(result.Receipt.Route);
         return new RetryAdmissionSnapshotResult(goal.ToSnapshot(), result);
     }
 }
@@ -268,7 +278,9 @@ public static class RetryAdmissionPolicy
         RetryCause cause,
         DateTimeOffset linkedDispatchAt,
         DateTimeOffset recordedAt,
-        IReadOnlyList<ReviewFinding>? openBlockingFindings = null)
+        IReadOnlyList<ReviewFinding>? openBlockingFindings = null,
+        string? reservationOwnerId = null,
+        DateTimeOffset? reservationLeaseExpiresAt = null)
     {
         ArgumentNullException.ThrowIfNull(task);
         ArgumentNullException.ThrowIfNull(fingerprint);
@@ -278,16 +290,42 @@ public static class RetryAdmissionPolicy
             receipt.Decision is RetryAdmissionDecision.Allowed or RetryAdmissionDecision.ResumedReservation);
         if (sameAttempt is not null && sameAttempt.WorkerStartedAt is null)
         {
+            if (!string.IsNullOrWhiteSpace(reservationOwnerId) &&
+                string.Equals(sameAttempt.ReservationOwnerId, reservationOwnerId, StringComparison.Ordinal))
+            {
+                return new RetryAdmissionResult(sameAttempt.Decision, sameAttempt);
+            }
+
+            if (!string.IsNullOrWhiteSpace(reservationOwnerId) &&
+                (string.IsNullOrWhiteSpace(sameAttempt.ReservationOwnerId) ||
+                 sameAttempt.ReservationLeaseExpiresAt is { } leaseExpiresAt && recordedAt >= leaseExpiresAt))
+            {
+                return Create(
+                    task,
+                    fingerprint,
+                    paidRoute,
+                    cause,
+                    RetryAdmissionDecision.ResumedReservation,
+                    sameAttempt.Route,
+                    linkedDispatchAt,
+                    recordedAt,
+                    sameAttempt.PriorAttemptAt,
+                    reservationOwnerId,
+                    reservationLeaseExpiresAt);
+            }
+
             return Create(
                 task,
                 fingerprint,
                 paidRoute,
                 cause,
-                RetryAdmissionDecision.ResumedReservation,
-                sameAttempt.Route,
+                RetryAdmissionDecision.Prevented,
+                RetryAdmissionRoute.ReservationLease,
                 linkedDispatchAt,
                 recordedAt,
-                sameAttempt.PriorAttemptAt);
+                sameAttempt.LinkedDispatchAt,
+                reservationOwnerId,
+                reservationLeaseExpiresAt);
         }
 
         var isPaidRetry = paidRoute == PaidRouteClassification.Paid && task.LatestRetryAt is not null;
@@ -309,7 +347,9 @@ public static class RetryAdmissionPolicy
                 ResolveRoute(cause, openBlockingFindings ?? []),
                 linkedDispatchAt,
                 recordedAt,
-                priorSameContext.LinkedDispatchAt);
+                priorSameContext.LinkedDispatchAt,
+                reservationOwnerId,
+                reservationLeaseExpiresAt);
         }
 
         return Create(
@@ -321,7 +361,9 @@ public static class RetryAdmissionPolicy
             RetryAdmissionRoute.SameRole,
             linkedDispatchAt,
             recordedAt,
-            task.DispatchHistory.Count > 1 ? task.DispatchHistory[^2].DispatchedAt : null);
+            task.DispatchHistory.Count > 1 ? task.DispatchHistory[^2].DispatchedAt : null,
+            reservationOwnerId,
+            reservationLeaseExpiresAt);
     }
 
     private static RetryAdmissionResult Create(
@@ -333,7 +375,9 @@ public static class RetryAdmissionPolicy
         RetryAdmissionRoute route,
         DateTimeOffset linkedDispatchAt,
         DateTimeOffset recordedAt,
-        DateTimeOffset? priorAttemptAt)
+        DateTimeOffset? priorAttemptAt,
+        string? reservationOwnerId,
+        DateTimeOffset? reservationLeaseExpiresAt)
     {
         var identity = string.Join("\n", task.Id.Value, fingerprint.Value, linkedDispatchAt.ToUniversalTime().Ticks, decision);
         var receipt = new RetryAdmissionReceipt(
@@ -345,7 +389,9 @@ public static class RetryAdmissionPolicy
             paidRoute,
             linkedDispatchAt,
             recordedAt,
-            priorAttemptAt);
+            priorAttemptAt,
+            ReservationOwnerId: reservationOwnerId,
+            ReservationLeaseExpiresAt: reservationLeaseExpiresAt);
         return new RetryAdmissionResult(decision, receipt);
     }
 

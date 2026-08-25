@@ -21,7 +21,7 @@ internal static partial class ConsoleViews
         Console.WriteLine($"  Same-context repeats prevented: {snapshot.SameFingerprintPreventedCount}");
         Console.WriteLine($"  Legacy same-context observed:   {snapshot.LegacyObservedSameFingerprintRepeatCount}");
         Console.WriteLine($"  Median retry resolution:        {FormatMedianHours(snapshot.MedianRetryResolutionHours)}");
-        Console.WriteLine($"  Retry authority unavailable:    fingerprint={snapshot.RetryFingerprintUnavailableCount}, paid={snapshot.RetryPaidAuthorityUnknownCount}");
+        Console.WriteLine($"  Retry authority unavailable:    fingerprint={snapshot.RetryFingerprintUnavailableCount}, paid={snapshot.RetryPaidAuthorityUnknownCount}, cause={snapshot.RetryCauseUnavailableCount}");
 
         Console.WriteLine("  First-pass completion by role:");
         foreach (var role in snapshot.FirstPassCompletionByRole ?? [])

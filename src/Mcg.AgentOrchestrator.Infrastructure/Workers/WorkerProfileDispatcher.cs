@@ -257,6 +257,7 @@ public static class WorkerProfileDispatcher
             providerName,
             modelName);
         var targetContext = TryReadCurrentTargetContext(workingDirectory);
+        var currentMainIdentity = ReadCurrentMainIdentityForRetry(workingDirectory);
         var reviewerRoundTouchScope = ReadReviewRoundTouchScope(
             goal,
             task,
@@ -350,7 +351,7 @@ public static class WorkerProfileDispatcher
             paidRoute,
             priorDispatch?.ResultCommit ?? priorDispatch?.BaseCommit ?? task.LastVerification?.ReviewedCommit,
             targetContext?.HeadCommit ?? priorDispatch?.BaseCommit,
-            reviewerScopeMergeBase ?? targetContext?.HeadCommit);
+            currentMainIdentity);
         kernel.RecordTaskDispatch(goal.Id, task.Id, new TaskDispatchRecord(
             profile.Name,
             preparation.Command,
@@ -1751,6 +1752,18 @@ public static class WorkerProfileDispatcher
         return new TargetContext(
             string.IsNullOrWhiteSpace(branchName) ? null : branchName,
             string.IsNullOrWhiteSpace(headCommit) ? null : headCommit);
+    }
+
+    internal static string? ReadCurrentMainIdentityForRetry(string workingDirectory)
+    {
+        if (string.IsNullOrWhiteSpace(workingDirectory) || !Directory.Exists(workingDirectory))
+            return null;
+
+        var main = GitCli.Run(workingDirectory, "rev-parse", "main");
+        if (main.ExitCode != 0)
+            return null;
+        var identity = main.Output.Trim();
+        return string.IsNullOrWhiteSpace(identity) ? null : identity;
     }
 
     private static SubscriptionModelSelection ResolveSubscriptionModel(AgentDefinition agent, Goal goal, TaskSpec task)

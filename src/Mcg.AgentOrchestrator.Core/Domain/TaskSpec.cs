@@ -60,6 +60,8 @@ public sealed class TaskSpec
 
     public IReadOnlyList<RetryAdmissionReceipt> RetryAdmissionHistory => _retryAdmissionHistory;
 
+    public RetryAdmissionRoute? RetryAdmissionHoldRoute { get; private set; }
+
     public TaskProcessRecord? LastProcess { get; private set; }
 
     public string? InterruptedDispatchRecoveryId { get; private set; }
@@ -249,7 +251,8 @@ public sealed class TaskSpec
             WasCancelledByConductor,
             _dispatchHistory.Select(ToDispatchSnapshot).ToArray(),
             PendingRetryCause,
-            _retryAdmissionHistory.ToArray());
+            _retryAdmissionHistory.ToArray(),
+            RetryAdmissionHoldRoute);
     }
 
     internal static TaskSpec FromSnapshot(TaskSnapshot snapshot)
@@ -436,6 +439,7 @@ public sealed class TaskSpec
         task.LatestRetryAt = snapshot.LatestRetryAt;
         task.PendingRetryRoundKind = snapshot.PendingRetryRoundKind;
         task.PendingRetryCause = snapshot.PendingRetryCause;
+        task.RetryAdmissionHoldRoute = snapshot.RetryAdmissionHoldRoute;
         task.PreReviewEvidenceReceipt = snapshot.PreReviewEvidenceReceipt;
         task.InterruptedDispatchRecoveryId = snapshot.InterruptedDispatchRecoveryId;
         task.WasCancelledByConductor = snapshot.WasCancelledByConductor;
@@ -605,6 +609,7 @@ public sealed class TaskSpec
         LatestRetryAt = retriedAt;
         PendingRetryRoundKind = retryRoundKind;
         PendingRetryCause = retryCause;
+        RetryAdmissionHoldRoute = null;
     }
 
     internal bool RecordRetryAdmission(RetryAdmissionReceipt receipt)
@@ -620,6 +625,28 @@ public sealed class TaskSpec
         return true;
     }
 
+    internal void SetRetryAdmissionHold(RetryAdmissionRoute? route) => RetryAdmissionHoldRoute = route;
+
+    internal void BindPreparedDispatch(TaskDispatchRecord dispatch)
+    {
+        ArgumentNullException.ThrowIfNull(dispatch);
+        if (LastDispatch is not null && LastDispatch.DispatchedAt == dispatch.DispatchedAt)
+        {
+            if (LastDispatch != dispatch)
+                ReplaceLastDispatch(dispatch);
+            SetStatus(WorkTaskStatus.Running);
+            return;
+        }
+
+        if (_dispatchHistory.Any(existing => existing.DispatchedAt >= dispatch.DispatchedAt))
+            throw new InvalidOperationException("Prepared retry dispatch identity is stale or conflicts with durable dispatch history.");
+
+        RecordDispatch(dispatch);
+        if (LastDispatch?.DispatchedAt != dispatch.DispatchedAt)
+            throw new InvalidOperationException("Prepared retry dispatch identity changed while binding the admission reservation.");
+        SetStatus(WorkTaskStatus.Running);
+    }
+
     internal void MarkRetryAdmissionStarted(DateTimeOffset linkedDispatchAt, DateTimeOffset workerStartedAt)
     {
         var index = _retryAdmissionHistory.FindLastIndex(receipt =>
@@ -627,6 +654,7 @@ public sealed class TaskSpec
             receipt.Decision is RetryAdmissionDecision.Allowed or RetryAdmissionDecision.ResumedReservation);
         if (index >= 0)
             _retryAdmissionHistory[index] = _retryAdmissionHistory[index] with { WorkerStartedAt = workerStartedAt };
+        RetryAdmissionHoldRoute = null;
     }
 
     internal void RecordSubscriptionLimitReview(string? note, DateTimeOffset? reviewedAt, int failureCount)

@@ -1173,7 +1173,9 @@ public sealed partial class AgentOrchestratorKernel
         RetryContextFingerprint fingerprint,
         PaidRouteClassification paidRoute,
         DateTimeOffset recordedAt,
-        IReadOnlyList<ReviewFinding>? openBlockingFindings = null)
+        IReadOnlyList<ReviewFinding>? openBlockingFindings = null,
+        string? reservationOwnerId = null,
+        DateTimeOffset? reservationLeaseExpiresAt = null)
     {
         var goal = GetGoal(goalId);
         var task = goal.FindTask(taskId);
@@ -1187,7 +1189,9 @@ public sealed partial class AgentOrchestratorKernel
             task.PendingRetryCause,
             task.LastDispatch.DispatchedAt,
             recordedAt,
-            openBlockingFindings);
+            openBlockingFindings,
+            reservationOwnerId,
+            reservationLeaseExpiresAt);
         ApplyPreparedRetryAdmission(goalId, taskId, result);
         return result;
     }
@@ -1203,13 +1207,96 @@ public sealed partial class AgentOrchestratorKernel
         task.RecordRetryAdmission(result.Receipt);
         if (!result.AllowsProcessStart)
         {
-            task.SetStatus(WorkTaskStatus.Failed);
+            task.SetRetryAdmissionHold(result.Receipt.Route);
+            if (result.Receipt.Route == RetryAdmissionRoute.ReservationLease)
+            {
+                Append(
+                    goal,
+                    null,
+                    ProgressKind.GoalPolicyDecision,
+                    $"retry-admission-route={result.Receipt.Route} receipt={result.Receipt.ReceiptId}; another owner holds the exact prepared dispatch until {result.Receipt.ReservationLeaseExpiresAt:O}.");
+                return;
+            }
+
             Append(
                 goal,
                 taskId,
                 ProgressKind.NoProgressRedispatchPrevented,
                 $"NO_PROGRESS_REDISPATCH_PREVENTED fingerprint={result.Receipt.Fingerprint.Value} cause={result.Receipt.Cause} route={result.Receipt.Route} attempt={result.Receipt.LinkedDispatchAt:O}");
+            ApplyRetryAdmissionRoute(goal, task, result.Receipt);
         }
+    }
+
+    private void ApplyRetryAdmissionRoute(Goal goal, TaskSpec heldTask, RetryAdmissionReceipt receipt)
+    {
+        var marker = $"retry-admission-route={receipt.Route} receipt={receipt.ReceiptId}";
+        switch (receipt.Route)
+        {
+            case RetryAdmissionRoute.HumanClarification:
+                RequestHumanInputDeduplicated(
+                    goal.Id,
+                    heldTask.Id,
+                    $"Retry admission needs authoritative clarification before another paid attempt. {marker}",
+                    HumanWaitKind.SpecClarification,
+                    isAutoDefaultable: false,
+                    isDismissible: false,
+                    questionFingerprint: $"retry-admission:{receipt.Fingerprint.Value}:clarification",
+                    blockerFingerprint: receipt.Fingerprint.Value,
+                    recordDuplicateSuppression: false);
+                break;
+            case RetryAdmissionRoute.EnvironmentalHold:
+                RequestHumanInputDeduplicated(
+                    goal.Id,
+                    heldTask.Id,
+                    $"Retry admission is held for typed environment/provider recovery evidence. {marker}",
+                    HumanWaitKind.RecoveryChoice,
+                    isAutoDefaultable: false,
+                    isDismissible: false,
+                    isExternallyBlocked: true,
+                    questionFingerprint: $"retry-admission:{receipt.Fingerprint.Value}:environment",
+                    blockerFingerprint: receipt.Fingerprint.Value,
+                    recordDuplicateSuppression: false);
+                break;
+            case RetryAdmissionRoute.EvidenceLane:
+                RoutePreventedRetryToRole(goal, heldTask, AgentRole.Tester, receipt, marker);
+                break;
+            case RetryAdmissionRoute.UpstreamImplementation:
+                RoutePreventedRetryToRole(goal, heldTask, AgentRole.Developer, receipt, marker);
+                break;
+            case RetryAdmissionRoute.AcceptanceRegate:
+                Append(goal, null, ProgressKind.GoalPolicyDecision, $"{marker}; held task requires deterministic acceptance re-gate before any redispatch.");
+                break;
+            case RetryAdmissionRoute.ReservationLease:
+                throw new InvalidOperationException("A reservation-lease observation must be handled before no-progress routing.");
+            case RetryAdmissionRoute.SameRole:
+                throw new InvalidOperationException("A prevented retry cannot route back to the same unchanged role context.");
+            default:
+                throw new InvalidOperationException($"Unsupported retry-admission route '{receipt.Route}'.");
+        }
+    }
+
+    private void RoutePreventedRetryToRole(
+        Goal goal,
+        TaskSpec heldTask,
+        AgentRole targetRole,
+        RetryAdmissionReceipt receipt,
+        string marker)
+    {
+        var target = goal.Tasks
+            .Where(candidate => candidate.Id != heldTask.Id && candidate.RequiredRole == targetRole)
+            .OrderBy(candidate => candidate.Status is WorkTaskStatus.Failed or WorkTaskStatus.Completed ? 0 : 1)
+            .FirstOrDefault();
+        if (target is not null && target.Status is WorkTaskStatus.Failed or WorkTaskStatus.Completed)
+        {
+            ResetTaskForRetry(target, _clock.UtcNow, retryCause: receipt.Cause);
+            Append(goal, target.Id, ProgressKind.TaskRetried, $"{marker}; routed from held task {heldTask.Id.Value}.");
+        }
+
+        Append(
+            goal,
+            null,
+            ProgressKind.GoalPolicyDecision,
+            $"{marker}; targetRole={targetRole}; targetTask={target?.Id.Value ?? "unavailable"}; heldTask={heldTask.Id.Value}.");
     }
 
     public void ReplacePreparedTaskDispatch(GoalId goalId, TaskId taskId, TaskDispatchRecord dispatch)

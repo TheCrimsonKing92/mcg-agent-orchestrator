@@ -117,7 +117,8 @@ public sealed record TaskSnapshot(
     bool WasCancelledByConductor = false,
     IReadOnlyList<TaskDispatchSnapshot>? DispatchHistory = null,
     RetryCause PendingRetryCause = RetryCause.Unknown,
-    IReadOnlyList<RetryAdmissionReceipt>? RetryAdmissionHistory = null);
+    IReadOnlyList<RetryAdmissionReceipt>? RetryAdmissionHistory = null,
+    RetryAdmissionRoute? RetryAdmissionHoldRoute = null);
 
 public sealed record TaskExecutionSnapshot(
     string AgentId,

@@ -993,6 +993,9 @@ private static RetryAdmissionResult EnsurePreparedRetryAdmission(
         throw new InvalidOperationException("Retry admission requires a prepared dispatch.");
     var fingerprint = dispatch.RetryContextFingerprint ??
         throw new InvalidOperationException("Prepared subscription dispatch is missing its retry-context fingerprint.");
+    var recordedAt = DateTimeOffset.UtcNow;
+    var reservationOwnerId = Guid.NewGuid().ToString("n");
+    var reservationLeaseExpiresAt = recordedAt.AddMinutes(1);
     var persisted = RetryAdmissionReservationStore.TryReserveAsync(
             workspace.SqliteStatePath,
             goalId,
@@ -1000,8 +1003,10 @@ private static RetryAdmissionResult EnsurePreparedRetryAdmission(
             fingerprint,
             dispatch.PaidRoute,
             task.PendingRetryCause,
-            dispatch.DispatchedAt,
-            dispatch.DispatchedAt)
+            dispatch,
+            recordedAt,
+            reservationOwnerId,
+            reservationLeaseExpiresAt)
         .GetAwaiter()
         .GetResult();
     if (persisted is not null)
@@ -1015,8 +1020,10 @@ private static RetryAdmissionResult EnsurePreparedRetryAdmission(
         task.Id,
         fingerprint,
         dispatch.PaidRoute,
-        dispatch.DispatchedAt,
-        RetryContextFingerprintFactory.GetOpenBlockingFindings(kernel.GetGoal(goalId)));
+        recordedAt,
+        RetryContextFingerprintFactory.GetOpenBlockingFindings(kernel.GetGoal(goalId)),
+        reservationOwnerId,
+        reservationLeaseExpiresAt);
 }
 
 internal static DispatchRecordCheckpointPhase ResolveBatchCheckpointPhase(

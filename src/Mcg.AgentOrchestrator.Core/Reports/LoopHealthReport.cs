@@ -39,7 +39,8 @@ public sealed record LoopHealthSnapshot(
     int FiveRoleFirstPassGoalCount = 0,
     int FiveRoleGoalCount = 0,
     int RetryFingerprintUnavailableCount = 0,
-    int RetryPaidAuthorityUnknownCount = 0);
+    int RetryPaidAuthorityUnknownCount = 0,
+    int RetryCauseUnavailableCount = 0);
 
 public static class LoopHealthReport
 {
@@ -111,7 +112,11 @@ public static class LoopHealthReport
         var agreementRate = ComputeInterJudgeAgreementRate(receiptList);
         var (falseBlockRate, falsePassRate) = ComputeFalseBlockPassRates(receiptList, goalStatusById);
         var admissions = allTasks.SelectMany(task => task.RetryAdmissionHistory).ToList();
-        var paidRetryDispatchCount = admissions
+        var landedAdmissions = completedGoals
+            .SelectMany(goal => goal.Tasks)
+            .SelectMany(task => task.RetryAdmissionHistory)
+            .ToList();
+        var paidRetryDispatchCount = landedAdmissions
             .Where(receipt =>
                 receipt.PaidRoute == PaidRouteClassification.Paid &&
                 receipt.Decision is RetryAdmissionDecision.Allowed or RetryAdmissionDecision.ResumedReservation &&
@@ -126,13 +131,15 @@ public static class LoopHealthReport
         var preventedSameFingerprint = admissions.Count(receipt =>
             receipt.Decision == RetryAdmissionDecision.Prevented);
         var legacyObservedSameFingerprint = allTasks.Sum(CountLegacyObservedSameFingerprintRepeats);
+        var legacyCauseUnavailable = allTasks.Sum(CountLegacyRetryAttemptsWithoutAdmission);
         var causeDistribution = Enum.GetValues<RetryCause>()
             .Select(cause => new RetryCauseDistribution(
                 cause,
                 admissions.Count(receipt =>
                     receipt.PaidRoute == PaidRouteClassification.Paid &&
                     receipt.PriorAttemptAt is not null &&
-                    receipt.Cause == cause)))
+                    receipt.Cause == cause) +
+                (cause == RetryCause.Unknown ? legacyCauseUnavailable : 0)))
             .ToArray();
         var retryResolutionDurations = window
             .SelectMany(goal => goal.Tasks.Select(task => ComputeRetryResolutionHours(goal, task)))
@@ -175,7 +182,8 @@ public static class LoopHealthReport
             fiveRoleFirstPassGoals,
             fiveRoleGoals,
             fingerprintUnavailable,
-            paidAuthorityUnknown);
+            paidAuthorityUnknown,
+            legacyCauseUnavailable);
     }
 
     // Emitted by BackgroundDispatchRunner when a dispatch exits 0 but the file-change guard fires.
@@ -307,6 +315,17 @@ public static class LoopHealthReport
             .Sum(group => Math.Max(0, group.Count() - 1));
     }
 
+    private static int CountLegacyRetryAttemptsWithoutAdmission(TaskSpec task)
+    {
+        var receiptAttempts = task.RetryAdmissionHistory
+            .Select(receipt => receipt.LinkedDispatchAt)
+            .ToHashSet();
+        return task.DispatchHistory
+            .Skip(1)
+            .Count(dispatch =>
+                !receiptAttempts.Contains(dispatch.DispatchedAt));
+    }
+
     private static double? ComputeRetryResolutionHours(Goal goal, TaskSpec task)
     {
         var retryReceipts = task.RetryAdmissionHistory
@@ -319,14 +338,28 @@ public static class LoopHealthReport
             return null;
 
         var start = retryReceipts[0].PriorAttemptAt!.Value;
+        var resolutionEligibleAt = retryReceipts[0].RecordedAt;
         var successfulVerification = task.VerificationHistory
-            .Where(verification => verification.Succeeded)
+            .Where(verification => verification.Succeeded && verification.CompletedAt >= start)
             .OrderBy(verification => verification.CompletedAt)
-            .LastOrDefault()?.CompletedAt;
-        var terminalGoalAt = goal.Status is GoalStatus.Completed or GoalStatus.Failed or GoalStatus.Cancelled or GoalStatus.Superseded
-            ? goal.Timeline.OrderBy(evt => evt.OccurredAt).LastOrDefault()?.OccurredAt
-            : null;
-        var end = successfulVerification ?? terminalGoalAt;
+            .FirstOrDefault()?.CompletedAt;
+        var terminalTaskAt = goal.Timeline
+            .Where(evt =>
+                evt.TaskId == task.Id &&
+                evt.OccurredAt >= resolutionEligibleAt &&
+                evt.Kind is ProgressKind.TaskCompleted or ProgressKind.TaskFailed or ProgressKind.TaskCancelled)
+            .OrderBy(evt => evt.OccurredAt)
+            .FirstOrDefault()?.OccurredAt;
+        var terminalGoalAt = goal.Timeline
+            .Where(evt =>
+                evt.OccurredAt >= resolutionEligibleAt &&
+                evt.Kind is ProgressKind.GoalCancelled or ProgressKind.GoalSuperseded)
+            .OrderBy(evt => evt.OccurredAt)
+            .FirstOrDefault()?.OccurredAt;
+        var terminalResolution = new[] { terminalTaskAt, terminalGoalAt }
+            .Where(candidate => candidate is not null)
+            .Min();
+        var end = successfulVerification ?? terminalResolution;
         return end is not null && end >= start
             ? (end.Value - start).TotalHours
             : null;

@@ -2657,6 +2657,27 @@ public sealed class WorkerDispatchTestsDispatchPreparation : WorkerDispatchTestS
     Assert.Contains("Do not use two-dot diffs", prompt, StringComparison.Ordinal);
 }
 
+    [Xunit.Fact]
+    public void RetryContextMainIdentityTracksCurrentMainAcrossGoalWorktree()
+    {
+        var root = CreateSeededDispatchRepository();
+        var kernel = new AgentOrchestratorKernel();
+        var task = new TaskSpec(TaskId.New(), "Retry after main drift.", AgentRole.Developer);
+        var goal = kernel.CreateGoal("Track current main in retry context", [task]);
+        var worktree = GoalWorktrees.Ensure(root, goal.Id);
+        var before = WorkerProfileDispatcher.ReadCurrentMainIdentityForRetry(worktree);
+
+        File.WriteAllText(Path.Combine(root, "main-drift.txt"), "main advanced");
+        RunGit(root, ["add", "main-drift.txt"], DateTimeOffset.Parse("2026-07-15T18:53:00Z"));
+        RunGit(root, ["commit", "-m", "Advance main for retry fingerprint"], DateTimeOffset.Parse("2026-07-15T18:53:00Z"));
+
+        var after = WorkerProfileDispatcher.ReadCurrentMainIdentityForRetry(worktree);
+
+        Assert.NotNull(before);
+        Assert.NotNull(after);
+        Assert.NotEqual(before, after);
+    }
+
     [Xunit.Fact(DisplayName = "Reviewer_dispatch_prompt_injects_conflicted_merge_tree_paths")]
     public void ReviewerDispatchPromptInjectsConflictedMergeTreePaths()
 {
