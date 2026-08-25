@@ -4356,15 +4356,7 @@ internal static class CliPersistentStateRunner
 
         if (IsSingleGoalReportCommand(parts))
         {
-            return parts[0].ToLowerInvariant() switch
-            {
-                "next" => GetOptionalArgument(parts, "--full"),
-                "goal-changes" => GetOptionalArgument(parts, "--role", "--task", "--committed", "--working", "--all", "--flat", "--json"),
-                "failure-triage" => GetOptionalArgument(parts, "--autonomy", "--policy"),
-                "supervisor" => GetOptionalArgument(parts, "--apply-safe", "--autonomy", "--policy"),
-                "build-lease-cleanup" => GetOptionalArgument(parts, "--confirm-build-lease-cleanup"),
-                _ => parts.Count > 1 ? parts[1] : null
-            };
+            return CliSingleGoalReportSelector.ResolveGoalPrefix(parts, GetOptionalArgument);
         }
 
         return null;

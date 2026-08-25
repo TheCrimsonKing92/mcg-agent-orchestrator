@@ -45,26 +45,35 @@ public static void PrintHealth(OrchestratorHealthReport report)
     }
 }
 
-public static void PrintGoal(Goal goal, string? friendlyLabel = null, string? statusText = null, PortfolioMembership? portfolio = null)
+public static void PrintGoal(
+    Goal goal,
+    string? friendlyLabel = null,
+    string? statusText = null,
+    PortfolioMembership? portfolio = null,
+    bool tasksOnly = false)
 {
     Console.WriteLine();
     var label = string.IsNullOrWhiteSpace(friendlyLabel) ? string.Empty : $" ({friendlyLabel.Trim().ReplaceLineEndings(" ")})";
     Console.WriteLine($"Goal {goal.Id}{label}");
-    Console.WriteLine($"Objective: {OutputTextPreview.CreateSummary(goal.Objective).Text}");
+    if (!tasksOnly)
+    {
+        Console.WriteLine($"Objective: {OutputTextPreview.CreateSummary(goal.Objective).Text}");
+    }
+
     Console.WriteLine($"Status: {statusText ?? goal.Status.ToString()}");
-    if (!string.IsNullOrWhiteSpace(goal.SourceBacklogItemId))
+    if (!tasksOnly && !string.IsNullOrWhiteSpace(goal.SourceBacklogItemId))
     {
         Console.WriteLine($"Source backlog: {goal.SourceBacklogItemId}");
         Console.WriteLine($"Source backlog coverage: {goal.SourceBacklogCoverage?.ToString().ToLowerInvariant() ?? "legacy-full"}");
     }
 
-    if (portfolio is not null)
+    if (!tasksOnly && portfolio is not null)
     {
         var project = string.IsNullOrWhiteSpace(portfolio.ProjectTitle) ? "unassigned" : $"{portfolio.ProjectTitle} ({portfolio.ProjectId![..Math.Min(8, portfolio.ProjectId.Length)]})";
         Console.WriteLine($"Portfolio: epic={portfolio.EpicTitle} ({portfolio.EpicId[..Math.Min(8, portfolio.EpicId.Length)]}) project={project}");
     }
 
-    if (goal.EffectiveAcceptanceCriteriaCorrections.Count > 0)
+    if (!tasksOnly && goal.EffectiveAcceptanceCriteriaCorrections.Count > 0)
     {
         Console.WriteLine("Effective acceptance criteria corrections:");
         foreach (var correction in goal.EffectiveAcceptanceCriteriaCorrections.OrderByDescending(item => item.RecordedAt))
