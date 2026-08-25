@@ -1301,6 +1301,7 @@ public static void DropToLow() {
             var stdoutBytes = FileLength(parameters.StdoutPath);
             var stderrBytes = FileLength(parameters.StderrPath);
             var ownedPids = GetHeartbeatOwnedProcessIds(workerGroup, worker);
+            var ownedProcessIdentities = DispatchProcessIdentityEvidence.Capture(ownedPids);
             var ownedCpuMs = ReadHeartbeatOwnedCpuMs(workerGroup, ownedPids);
             var childPid = SelectHeartbeatChildPid(worker, ownedPids);
             ObserveSelectedChild(childPid);
@@ -1330,6 +1331,7 @@ public static void DropToLow() {
                 pid = Environment.ProcessId,
                 childPid,
                 ownedPids,
+                ownedProcessIdentities,
                 startedAt = startedAt.ToString("o"),
                 lastObservedAt = DateTimeOffset.UtcNow.ToString("o"),
                 lastProgressAt = lastProgressAt.ToString("o"),

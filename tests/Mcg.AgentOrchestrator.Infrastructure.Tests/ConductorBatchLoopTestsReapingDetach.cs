@@ -568,7 +568,6 @@ public sealed class ConductorBatchLoopTestsReapingDetach : ConductorBatchLoopTes
     [Xunit.Trait("Category", "CrossTick")]
     public async Task DetachedExit_SuccessorTick_CompletesTask()
     {
-        const int staleAuxiliaryPid = 35_556;
         var root = CreateTempDirectory("mcg-detached-exit-successor");
         try
         {
@@ -580,8 +579,7 @@ public sealed class ConductorBatchLoopTestsReapingDetach : ConductorBatchLoopTes
                 exitPath,
                 DispatchExitArtifacts.Native(0, "dispatch host observed worker termination", DateTimeOffset.UtcNow));
             var childAlive = true;
-            var runner = new BackgroundDispatchRunner(isStillRunning: pid =>
-                pid == staleAuxiliaryPid || (pid == childPid && childAlive));
+            var runner = new BackgroundDispatchRunner(isStillRunning: pid => pid == childPid && childAlive);
 
             void RunSuccessorTick() => new ConductorBatchLoop(
                     refreshGoalDispatchesBeforeAdvance: (loopKernel, loopGoal) =>
@@ -617,6 +615,97 @@ public sealed class ConductorBatchLoopTestsReapingDetach : ConductorBatchLoopTes
                 evt.TaskId == planner.Id &&
                 evt.Kind == ProgressKind.TaskNote &&
                 evt.Message.StartsWith("Gracefully detached process ", StringComparison.Ordinal)));
+        }
+        finally
+        {
+            TryDeleteDirectory(root);
+        }
+    }
+
+    [Xunit.Fact(Timeout = 30_000)]
+    [Xunit.Trait("Category", "CrossTick")]
+    public async Task DetachedExit_LiveNonSelectedOwnedProcess_RemainsRunning()
+    {
+        const int liveOwnedProcessId = 35_556;
+        var root = CreateTempDirectory("mcg-detached-live-owned-successor");
+        try
+        {
+            var recordedIdentity = new SpawnProcessIdentity(
+                liveOwnedProcessId,
+                DateTimeOffset.UtcNow.AddMinutes(-10),
+                @"C:\tools\live-worker.exe");
+            var (kernel, goal, planner, exitPath, _, _, _) =
+                CreateDetachedPlannerDispatch(root, recordedIdentity);
+            var repository = OpenStateRepository(Path.Combine(root, "state.db"));
+            await repository.SaveAsync(kernel);
+            var successor = await repository.LoadAsync();
+            DispatchExitArtifacts.Write(
+                exitPath,
+                DispatchExitArtifacts.Native(0, "dispatch host observed worker termination", DateTimeOffset.UtcNow));
+            var runner = new BackgroundDispatchRunner(
+                isStillRunning: pid => pid == liveOwnedProcessId,
+                readProcessIdentity: pid => pid == liveOwnedProcessId
+                    ? (recordedIdentity.StartedAt, recordedIdentity.ImagePath)
+                    : null);
+
+            new ConductorBatchLoop(
+                refreshGoalDispatchesBeforeAdvance: (loopKernel, loopGoal) =>
+                    GoalManagementCommandService.RefreshDispatches(loopKernel, loopGoal, runner)).Run(
+                        successor,
+                        MakeDriver(getFacts: _ => new GoalLifecycleFacts(WorkspaceExists: true)),
+                        ConductorAutonomyPolicy.Conservative,
+                        NoStopPath(),
+                        maxIterations: 1,
+                        onlyGoalId: goal.Id.Value);
+
+            var refreshed = successor.GetTask(goal.Id, planner.Id);
+            Assert.Equal(WorkTaskStatus.Running, refreshed.Status);
+            Assert.True(refreshed.LastProcess!.IsRunning);
+        }
+        finally
+        {
+            TryDeleteDirectory(root);
+        }
+    }
+
+    [Xunit.Fact(Timeout = 30_000)]
+    [Xunit.Trait("Category", "CrossTick")]
+    public async Task DetachedExit_ReusedNonSelectedOwnedProcess_AllowsCompletion()
+    {
+        const int reusedProcessId = 35_556;
+        var root = CreateTempDirectory("mcg-detached-reused-owned-successor");
+        try
+        {
+            var recordedIdentity = new SpawnProcessIdentity(
+                reusedProcessId,
+                DateTimeOffset.UtcNow.AddMinutes(-10),
+                @"C:\tools\original-worker.exe");
+            var (kernel, goal, planner, exitPath, _, _, _) =
+                CreateDetachedPlannerDispatch(root, recordedIdentity);
+            var repository = OpenStateRepository(Path.Combine(root, "state.db"));
+            await repository.SaveAsync(kernel);
+            var successor = await repository.LoadAsync();
+            DispatchExitArtifacts.Write(
+                exitPath,
+                DispatchExitArtifacts.Native(0, "dispatch host observed worker termination", DateTimeOffset.UtcNow));
+            var reusedIdentity = recordedIdentity with { StartedAt = recordedIdentity.StartedAt.AddMinutes(5) };
+            var runner = new BackgroundDispatchRunner(
+                isStillRunning: pid => pid == reusedProcessId,
+                readProcessIdentity: pid => pid == reusedProcessId
+                    ? (reusedIdentity.StartedAt, reusedIdentity.ImagePath)
+                    : null);
+
+            new ConductorBatchLoop(
+                refreshGoalDispatchesBeforeAdvance: (loopKernel, loopGoal) =>
+                    GoalManagementCommandService.RefreshDispatches(loopKernel, loopGoal, runner)).Run(
+                        successor,
+                        MakeDriver(getFacts: _ => new GoalLifecycleFacts(WorkspaceExists: true)),
+                        ConductorAutonomyPolicy.Conservative,
+                        NoStopPath(),
+                        maxIterations: 1,
+                        onlyGoalId: goal.Id.Value);
+
+            Assert.Equal(WorkTaskStatus.Completed, successor.GetTask(goal.Id, planner.Id).Status);
         }
         finally
         {
@@ -826,7 +915,7 @@ public sealed class ConductorBatchLoopTestsReapingDetach : ConductorBatchLoopTes
     }
 
     private static (AgentOrchestratorKernel Kernel, Goal Goal, TaskSpec Planner, string ExitPath, string ChildExitPath, int RootPid, int ChildPid)
-        CreateDetachedPlannerDispatch(string root)
+        CreateDetachedPlannerDispatch(string root, SpawnProcessIdentity? auxiliaryIdentity = null)
     {
         const int rootPid = 43_316;
         const int childPid = 26_084;
@@ -867,6 +956,14 @@ public sealed class ConductorBatchLoopTestsReapingDetach : ConductorBatchLoopTes
             pid = rootPid,
             childPid,
             ownedPids = new[] { 35_556, 9_500, childPid },
+            ownedProcessIdentities = auxiliaryIdentity is null
+                ? Array.Empty<object>()
+                : [new
+                {
+                    processId = auxiliaryIdentity.ProcessId,
+                    startedAt = auxiliaryIdentity.StartedAt,
+                    imagePath = auxiliaryIdentity.ImagePath
+                }],
             startedAt = now,
             lastObservedAt = now,
             lastProgressAt = now,

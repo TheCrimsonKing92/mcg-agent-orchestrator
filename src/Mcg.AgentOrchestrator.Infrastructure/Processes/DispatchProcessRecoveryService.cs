@@ -35,7 +35,8 @@ internal sealed record DispatchHeartbeat(
     IReadOnlyList<int>? OwnedProcessIds = null,
     string? ProviderSessionId = null,
     string? WorktreeHeadSha = null,
-    string? DirtyStateHash = null)
+    string? DirtyStateHash = null,
+    IReadOnlyList<SpawnProcessIdentity>? OwnedProcessIdentities = null)
 {
     public static DispatchHeartbeat Empty { get; } =
         new(0, null, "unknown", DateTimeOffset.MinValue, DateTimeOffset.MinValue, 0, 0);
@@ -55,6 +56,7 @@ internal sealed class DispatchProcessRecoveryService
     private readonly Func<string, DateTimeOffset> _getLastWriteTimeUtc;
     private readonly Func<string, long> _getFileLength;
     private readonly Func<int, long?> _getPeakMemoryBytes;
+    private readonly Func<int, SpawnProcessIdentity?> _readProcessIdentity;
     private readonly Func<string, ExitCodeReadResult> _readExitArtifact;
     private readonly Action<string, int, string> _writeExitArtifact;
     private readonly Func<TaskProcessRecord, bool, int, DispatchWorktreeInspectionStatus, DispatchRecoveryDecision> _evaluateRecovery;
@@ -75,7 +77,8 @@ internal sealed class DispatchProcessRecoveryService
         Func<string, ExitCodeReadResult>? readExitArtifact = null,
         Action<string, int, string>? writeExitArtifact = null,
         Func<TaskProcessRecord, bool, int, DispatchWorktreeInspectionStatus, DispatchRecoveryDecision>? evaluateRecovery = null,
-        IDispatchDiagnosticWriter? diagnosticWriter = null)
+        IDispatchDiagnosticWriter? diagnosticWriter = null,
+        Func<int, SpawnProcessIdentity?>? readProcessIdentity = null)
     {
         _clock = clock ?? new SystemClock();
         _postOutputIdleTimeout = postOutputIdleTimeout ?? TimeSpan.FromMinutes(2);
@@ -90,6 +93,7 @@ internal sealed class DispatchProcessRecoveryService
             (path => new DateTimeOffset(File.GetLastWriteTimeUtc(path), TimeSpan.Zero));
         _getFileLength = getFileLength ?? (path => new FileInfo(path).Length);
         _getPeakMemoryBytes = getPeakMemoryBytes ?? ReadPeakMemoryBytes;
+        _readProcessIdentity = readProcessIdentity ?? DispatchProcessIdentityEvidence.ReadCurrent;
         _readExitArtifact = readExitArtifact ?? DispatchExitArtifactReader.Read;
         _writeExitArtifact = writeExitArtifact ?? WriteExitArtifactBestEffort;
         var recoveryPolicy = new DispatchRecoveryPolicy(_clock);
@@ -456,7 +460,8 @@ internal sealed class DispatchProcessRecoveryService
                 GetInt32Array(root, "ownedPids"),
                 GetNullableString(root, "providerSessionId"),
                 GetNullableString(root, "worktreeHeadSha"),
-                GetNullableString(root, "dirtyStateHash"));
+                GetNullableString(root, "dirtyStateHash"),
+                DispatchProcessIdentityEvidence.Read(root));
             return true;
         }
         catch (IOException)
@@ -557,7 +562,12 @@ internal sealed class DispatchProcessRecoveryService
         GetObservedProcessIds(processRecord, heartbeat).Any(_isStillRunning);
 
     private bool AnyOwnedWorkerProcessStillRunning(TaskProcessRecord processRecord, DispatchHeartbeat? heartbeat) =>
-        GetOwnedWorkerProcessIds(processRecord, heartbeat).Any(_isStillRunning);
+        GetOwnedWorkerProcessIds(processRecord, heartbeat).Any(processId =>
+            _isStillRunning(processId) &&
+            DispatchProcessIdentityEvidence.IsRecordedOwnerOrUnknown(
+                processId,
+                heartbeat?.OwnedProcessIdentities,
+                _readProcessIdentity));
 
     private static IReadOnlyList<int> GetObservedProcessIds(TaskProcessRecord processRecord, DispatchHeartbeat? heartbeat)
     {
@@ -607,11 +617,7 @@ internal sealed class DispatchProcessRecoveryService
                 processIds.Add(heartbeat.ChildProcessId.Value);
             }
 
-            // A terminal wrapper heartbeat can contain auxiliary descendants that were only
-            // observed in its final snapshot. The selected child remains the completion owner;
-            // stale/reused auxiliary PIDs must not keep an authoritative exit artifact live.
-            if (!IsTerminalHeartbeatWithSelectedChild(heartbeat) &&
-                heartbeat.OwnedProcessIds is { Count: > 0 })
+            if (heartbeat.OwnedProcessIds is { Count: > 0 })
             {
                 foreach (var processId in heartbeat.OwnedProcessIds.Where(pid => pid > 0))
                 {
@@ -622,10 +628,6 @@ internal sealed class DispatchProcessRecoveryService
 
         return processIds.ToArray();
     }
-
-    private static bool IsTerminalHeartbeatWithSelectedChild(DispatchHeartbeat heartbeat) =>
-        heartbeat.ChildProcessId is > 0 &&
-        string.Equals(heartbeat.State, "exited", StringComparison.OrdinalIgnoreCase);
 
     internal void TryKillTrackedProcesses(
         TaskProcessRecord processRecord,
