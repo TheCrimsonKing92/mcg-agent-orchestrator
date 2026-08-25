@@ -801,6 +801,51 @@ public sealed class ConductorBatchLoopTestsReapingDetach : ConductorBatchLoopTes
 
     [Xunit.Fact(Timeout = 30_000)]
     [Xunit.Trait("Category", "CrossTick")]
+    public async Task DetachedExit_ReusedHostProcess_AllowsCompletion()
+    {
+        const int rootPid = 43_316;
+        var root = CreateTempDirectory("mcg-detached-reused-host-successor");
+        try
+        {
+            var recordedIdentity = new SpawnProcessIdentity(
+                rootPid,
+                DateTimeOffset.UtcNow.AddMinutes(-10),
+                @"C:\tools\dispatch-host.exe");
+            var (kernel, goal, planner, exitPath, _, _, _) =
+                CreateDetachedPlannerDispatch(root, rootIdentity: recordedIdentity);
+            var repository = OpenStateRepository(Path.Combine(root, "state.db"));
+            await repository.SaveAsync(kernel);
+            var successor = await repository.LoadAsync();
+            DispatchExitArtifacts.Write(
+                exitPath,
+                DispatchExitArtifacts.Native(0, "dispatch host observed worker termination", DateTimeOffset.UtcNow));
+            var reusedIdentity = recordedIdentity with { StartedAt = recordedIdentity.StartedAt.AddMinutes(5) };
+            var runner = new BackgroundDispatchRunner(
+                isStillRunning: pid => pid == rootPid,
+                readProcessIdentity: pid => pid == rootPid
+                    ? (reusedIdentity.StartedAt, reusedIdentity.ImagePath)
+                    : null);
+
+            new ConductorBatchLoop(
+                refreshGoalDispatchesBeforeAdvance: (loopKernel, loopGoal) =>
+                    GoalManagementCommandService.RefreshDispatches(loopKernel, loopGoal, runner)).Run(
+                        successor,
+                        MakeDriver(getFacts: _ => new GoalLifecycleFacts(WorkspaceExists: true)),
+                        ConductorAutonomyPolicy.Conservative,
+                        NoStopPath(),
+                        maxIterations: 1,
+                        onlyGoalId: goal.Id.Value);
+
+            Assert.Equal(WorkTaskStatus.Completed, successor.GetTask(goal.Id, planner.Id).Status);
+        }
+        finally
+        {
+            TryDeleteDirectory(root);
+        }
+    }
+
+    [Xunit.Fact(Timeout = 30_000)]
+    [Xunit.Trait("Category", "CrossTick")]
     public async Task DetachedLiveProcess_SuccessorTick_RemainsRunning()
     {
         var root = CreateTempDirectory("mcg-detached-live-successor");
@@ -912,6 +957,53 @@ public sealed class ConductorBatchLoopTestsReapingDetach : ConductorBatchLoopTes
 
     [Xunit.Fact(Timeout = 30_000)]
     [Xunit.Trait("Category", "CrossTick")]
+    public async Task DetachedInvalidExit_ReusedProcess_HoldNamesPidAndArtifact()
+    {
+        const int reusedProcessId = 35_556;
+        var root = CreateTempDirectory("mcg-detached-invalid-exit-reused-process");
+        try
+        {
+            var recordedIdentity = new SpawnProcessIdentity(
+                reusedProcessId,
+                DateTimeOffset.UtcNow.AddMinutes(-10),
+                @"C:\tools\original-worker.exe");
+            var (kernel, goal, planner, exitPath, _, rootPid, _) =
+                CreateDetachedPlannerDispatch(root, recordedIdentity);
+            var repository = OpenStateRepository(Path.Combine(root, "state.db"));
+            await repository.SaveAsync(kernel);
+            var successor = await repository.LoadAsync();
+            File.WriteAllText(exitPath, "not-an-exit-artifact");
+            var reusedIdentity = recordedIdentity with { StartedAt = recordedIdentity.StartedAt.AddMinutes(5) };
+            var runner = new BackgroundDispatchRunner(
+                isStillRunning: pid => pid == reusedProcessId,
+                readProcessIdentity: pid => pid == reusedProcessId
+                    ? (reusedIdentity.StartedAt, reusedIdentity.ImagePath)
+                    : null);
+
+            var output = CaptureConsole(() => new ConductorBatchLoop(
+                refreshGoalDispatchesBeforeAdvance: (loopKernel, loopGoal) =>
+                    GoalManagementCommandService.RefreshDispatches(loopKernel, loopGoal, runner)).Run(
+                        successor,
+                        MakeDriver(getFacts: _ => new GoalLifecycleFacts(WorkspaceExists: true)),
+                        ConductorAutonomyPolicy.Conservative,
+                        NoStopPath(),
+                        maxIterations: 1,
+                        onlyGoalId: goal.Id.Value));
+
+            Assert.Equal(WorkTaskStatus.Running, successor.GetTask(goal.Id, planner.Id).Status);
+            Assert.Contains($"pid={rootPid}", output, StringComparison.OrdinalIgnoreCase);
+            Assert.Contains(exitPath, output, StringComparison.OrdinalIgnoreCase);
+            Assert.Contains("state=Invalid", output, StringComparison.OrdinalIgnoreCase);
+            Assert.DoesNotContain("auto-reconcile will handle completion", output, StringComparison.OrdinalIgnoreCase);
+        }
+        finally
+        {
+            TryDeleteDirectory(root);
+        }
+    }
+
+    [Xunit.Fact(Timeout = 30_000)]
+    [Xunit.Trait("Category", "CrossTick")]
     public async Task DetachedMissingExit_UsesBoundedRecoveryInsteadOfHolding()
     {
         var root = CreateTempDirectory("mcg-detached-missing-exit");
@@ -1001,7 +1093,10 @@ public sealed class ConductorBatchLoopTestsReapingDetach : ConductorBatchLoopTes
     }
 
     private static (AgentOrchestratorKernel Kernel, Goal Goal, TaskSpec Planner, string ExitPath, string ChildExitPath, int RootPid, int ChildPid)
-        CreateDetachedPlannerDispatch(string root, SpawnProcessIdentity? auxiliaryIdentity = null)
+        CreateDetachedPlannerDispatch(
+            string root,
+            SpawnProcessIdentity? auxiliaryIdentity = null,
+            SpawnProcessIdentity? rootIdentity = null)
     {
         const int rootPid = 43_316;
         const int childPid = 26_084;
@@ -1036,20 +1131,34 @@ public sealed class ConductorBatchLoopTestsReapingDetach : ConductorBatchLoopTes
             "confidence: high",
             "END_WORKER_RESULT"));
         File.WriteAllText(stderr, string.Empty);
+        var recordedIdentities = new List<object>();
+        if (auxiliaryIdentity is not null)
+        {
+            recordedIdentities.Add(new
+            {
+                processId = auxiliaryIdentity.ProcessId,
+                startedAt = auxiliaryIdentity.StartedAt,
+                imagePath = auxiliaryIdentity.ImagePath
+            });
+        }
+
+        if (rootIdentity is not null)
+        {
+            recordedIdentities.Add(new
+            {
+                processId = rootIdentity.ProcessId,
+                startedAt = rootIdentity.StartedAt,
+                imagePath = rootIdentity.ImagePath
+            });
+        }
+
         File.WriteAllText(heartbeatPath, JsonSerializer.Serialize(new
         {
             kind = "worker",
             pid = rootPid,
             childPid,
             ownedPids = new[] { 35_556, 9_500, childPid },
-            ownedProcessIdentities = auxiliaryIdentity is null
-                ? Array.Empty<object>()
-                : [new
-                {
-                    processId = auxiliaryIdentity.ProcessId,
-                    startedAt = auxiliaryIdentity.StartedAt,
-                    imagePath = auxiliaryIdentity.ImagePath
-                }],
+            ownedProcessIdentities = recordedIdentities,
             startedAt = now,
             lastObservedAt = now,
             lastProgressAt = now,

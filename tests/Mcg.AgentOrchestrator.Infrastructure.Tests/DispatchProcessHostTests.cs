@@ -1689,6 +1689,33 @@ public sealed class DispatchProcessHostTests
         Assert.Equal([identity], captured);
     }
 
+    [Xunit.Fact]
+    public void DispatchProcessHost_CaptureHeartbeatProcessIdentitiesIncludesHostIdentity()
+    {
+        var hostIdentity = new SpawnProcessIdentity(
+            43_316,
+            DateTimeOffset.UtcNow.AddMinutes(-10),
+            @"C:\tools\dispatch-host.exe");
+        var workerIdentity = new SpawnProcessIdentity(
+            26_084,
+            DateTimeOffset.UtcNow.AddMinutes(-9),
+            @"C:\tools\worker.exe");
+
+        var captured = DispatchProcessHost.CaptureHeartbeatProcessIdentities(
+            hostIdentity.ProcessId,
+            [workerIdentity.ProcessId],
+            () => [workerIdentity.ProcessId],
+            processId => processId switch
+            {
+                43_316 => hostIdentity,
+                26_084 => workerIdentity,
+                _ => null
+            });
+
+        Assert.Contains(hostIdentity, captured);
+        Assert.Contains(workerIdentity, captured);
+    }
+
     [Xunit.Fact(DisplayName = "DispatchProcessHost_heartbeat_cpu_and_pids_reflect_wrapped_grandchild")]
     public void DispatchProcessHostHeartbeatCpuAndPidsReflectWrappedGrandchild()
     {

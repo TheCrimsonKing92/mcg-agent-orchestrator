@@ -559,7 +559,12 @@ internal sealed class DispatchProcessRecoveryService
         processRecord.CompletionTrackedProcessIds.Any(_isStillRunning);
 
     private bool AnyObservedProcessStillRunning(TaskProcessRecord processRecord, DispatchHeartbeat? heartbeat) =>
-        GetObservedProcessIds(processRecord, heartbeat).Any(_isStillRunning);
+        GetObservedProcessIds(processRecord, heartbeat).Any(processId =>
+            _isStillRunning(processId) &&
+            DispatchProcessIdentityEvidence.IsRecordedOwnerOrUnknown(
+                processId,
+                heartbeat?.OwnedProcessIdentities,
+                _readProcessIdentity));
 
     private bool AnyOwnedWorkerProcessStillRunning(TaskProcessRecord processRecord, DispatchHeartbeat? heartbeat) =>
         GetOwnedWorkerProcessIds(processRecord, heartbeat).Any(processId =>
