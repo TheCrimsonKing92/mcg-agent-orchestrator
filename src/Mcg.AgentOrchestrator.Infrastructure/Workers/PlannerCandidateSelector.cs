@@ -9,7 +9,13 @@ internal sealed record PlannerCandidateInput(
     int Index,
     string StandardOutput,
     string StandardError = "",
-    string? SourcePath = null);
+    string? SourcePath = null,
+    string? ArtifactSha256 = null,
+    PlannerCandidateTerminalState TerminalState = PlannerCandidateTerminalState.Succeeded,
+    PlannerCandidateNormalizationState NormalizationState = PlannerCandidateNormalizationState.NotRequired,
+    long? ElapsedMilliseconds = null,
+    ProviderReportedUsage? ProviderUsage = null,
+    string ProviderUsageUnavailableReason = "unsupported");
 
 internal sealed record PlannerCandidateSelectionResult(
     PlannerOutputContractResult SelectedContract,
@@ -17,7 +23,7 @@ internal sealed record PlannerCandidateSelectionResult(
 
 internal static partial class PlannerCandidateSelector
 {
-    internal const string SelectionSignal = "orchestrator-peer-agreement-jaccard-v1";
+    internal const string SelectionSignal = "orchestrator-planner-candidate-selection-v2";
     private const int MaximumFeaturesPerSection = 32;
     private const int MaximumFeatureLength = 200;
 
@@ -32,25 +38,43 @@ internal static partial class PlannerCandidateSelector
         if (!candidates.Select(candidate => candidate.Index).Order().SequenceEqual(Enumerable.Range(0, candidates.Count)))
             throw new ArgumentException("Planner candidate indexes must be unique, contiguous, and zero-based.", nameof(candidates));
 
-        var resolved = candidates
-            .Select(candidate => new ResolvedCandidate(
-                candidate.Index,
-                candidate.SourcePath,
-                PlannerOutputContract.Resolve(
+        var resolved = candidates.Select(candidate =>
+        {
+            var eligible = IsEligibleForContract(candidate);
+            var contract = eligible
+                ? PlannerOutputContract.Resolve(
                     candidate.StandardOutput,
                     candidate.StandardError,
                     workingDirectory,
-                    acceptanceCriteria: acceptanceCriteria)))
-            .OrderBy(candidate => candidate.Index)
-            .ToArray();
+                    acceptanceCriteria: acceptanceCriteria)
+                : new PlannerOutputContractResult(
+                    false,
+                    null,
+                    null,
+                    BuildIneligibleDiagnostic(candidate));
+            var quality = contract.Succeeded && contract.Plan is not null
+                ? PlannerOutputContract.EvaluateStructuralQuality(contract.Plan)
+                : null;
+            return new ResolvedCandidate(candidate, contract, quality);
+        }).OrderBy(candidate => candidate.Index).ToArray();
         var valid = resolved.Where(candidate => candidate.Contract.Succeeded && candidate.Contract.Plan is not null).ToArray();
         var primary = resolved.FirstOrDefault(candidate => candidate.Index == 0) ?? resolved[0];
 
         if (valid.Length < 2)
         {
+            var selectedIndex = primary.Contract.Succeeded ? primary.Index : (int?)null;
+            var insufficientFallbackCause = selectedIndex is null
+                ? "fewer-than-two-comparable-candidates-and-primary-invalid"
+                : "fewer-than-two-comparable-candidates";
             return new PlannerCandidateSelectionResult(
                 primary.Contract,
-                BuildReceipt(resolved, valid, primary.Index, new double[resolved.Length]));
+                BuildReceipt(
+                    resolved,
+                    valid,
+                    selectedIndex,
+                    new double[resolved.Length],
+                    selectedIndex is null ? "no-selection" : "primary-fallback",
+                    insufficientFallbackCause));
         }
 
         var candidateFeatures = valid.ToDictionary(
@@ -65,23 +89,64 @@ internal static partial class PlannerCandidateSelector
                 candidateFeatures[peer.Index].All));
         }
 
-        var selected = valid
-            .OrderByDescending(candidate => scores[candidate.Index])
-            .ThenBy(candidate => candidate.Index)
-            .First();
+        ResolvedCandidate selected;
+        string selectionReason;
+        string? fallbackCause = null;
+        if (valid.Length == 2)
+        {
+            if (string.Equals(valid[0].CandidateSha256, valid[1].CandidateSha256, StringComparison.Ordinal))
+            {
+                selected = primary.Contract.Succeeded ? primary : valid[0];
+                selectionReason = "identical-candidates";
+                fallbackCause = "normalized-candidate-hashes-identical";
+            }
+            else
+            {
+                var comparison = CompareStructuralQuality(valid[0].StructuralQuality!, valid[1].StructuralQuality!);
+                if (comparison == 0)
+                {
+                    selected = primary.Contract.Succeeded ? primary : valid[0];
+                    selectionReason = "primary-fallback";
+                    fallbackCause = "structural-quality-tie";
+                }
+                else
+                {
+                    selected = comparison > 0 ? valid[0] : valid[1];
+                    selectionReason = "structural-quality";
+                }
+            }
+        }
+        else
+        {
+            selected = valid
+                .OrderByDescending(candidate => scores[candidate.Index])
+                .ThenBy(candidate => candidate.Index)
+                .First();
+            selectionReason = "peer-agreement";
+        }
+
         var selectedContract = selected.Contract.IngestedPath is null && selected.SourcePath is not null
             ? selected.Contract with { IngestedPath = selected.SourcePath }
             : selected.Contract;
         return new PlannerCandidateSelectionResult(
             selectedContract,
-            BuildReceipt(resolved, valid, selected.Index, scores, candidateFeatures));
+            BuildReceipt(
+                resolved,
+                valid,
+                selected.Index,
+                scores,
+                selectionReason,
+                fallbackCause,
+                candidateFeatures));
     }
 
     private static PlannerCandidateDivergenceReceipt BuildReceipt(
         IReadOnlyList<ResolvedCandidate> resolved,
         IReadOnlyList<ResolvedCandidate> valid,
-        int selectedIndex,
+        int? selectedIndex,
         IReadOnlyList<double> scores,
+        string selectionReason,
+        string? fallbackCause,
         IReadOnlyDictionary<int, CandidateFeatures>? featureMap = null)
     {
         featureMap ??= valid.ToDictionary(
@@ -122,7 +187,10 @@ internal static partial class PlannerCandidateSelector
             sections,
             resolved.Where(candidate => !candidate.Contract.Succeeded)
                 .Select(candidate => $"candidate {candidate.Index}: {BoundText(candidate.Contract.Diagnostic)}")
-                .ToArray());
+                .ToArray(),
+            selectionReason,
+            fallbackCause,
+            resolved.Select(BuildCandidateEvidence).ToArray());
     }
 
     private static CandidateFeatures ExtractFeatures(string plan)
@@ -156,6 +224,79 @@ internal static partial class PlannerCandidateSelector
         return union == 0 ? 0 : (double)left.Intersect(right, StringComparer.Ordinal).Count() / union;
     }
 
+    private static bool IsEligibleForContract(PlannerCandidateInput candidate) =>
+        candidate.TerminalState == PlannerCandidateTerminalState.Succeeded &&
+        candidate.NormalizationState is PlannerCandidateNormalizationState.NotRequired or
+            PlannerCandidateNormalizationState.Normalized &&
+        !string.IsNullOrWhiteSpace(candidate.StandardOutput);
+
+    private static string BuildIneligibleDiagnostic(PlannerCandidateInput candidate) =>
+        candidate.TerminalState != PlannerCandidateTerminalState.Succeeded
+            ? $"Planner candidate terminal state was {candidate.TerminalState}."
+            : $"Planner candidate normalization state was {candidate.NormalizationState}.";
+
+    private static int CompareStructuralQuality(
+        PlannerStructuralQualityVector left,
+        PlannerStructuralQualityVector right)
+    {
+        int[] leftComponents =
+        [
+            left.CompleteMappings,
+            left.ConcreteOwningSeams,
+            left.FeasibleEvidenceOwners,
+            left.IntegrationSeams,
+            left.VerificationClasses,
+            left.StopConditions
+        ];
+        int[] rightComponents =
+        [
+            right.CompleteMappings,
+            right.ConcreteOwningSeams,
+            right.FeasibleEvidenceOwners,
+            right.IntegrationSeams,
+            right.VerificationClasses,
+            right.StopConditions
+        ];
+        for (var index = 0; index < leftComponents.Length; index++)
+        {
+            var comparison = leftComponents[index].CompareTo(rightComponents[index]);
+            if (comparison != 0)
+                return comparison;
+        }
+
+        return 0;
+    }
+
+    private static PlannerCandidateEvidenceReceipt BuildCandidateEvidence(ResolvedCandidate candidate)
+    {
+        var input = candidate.Input;
+        var usage = input.ProviderUsage;
+        var usageReported = usage?.InputTokens is not null ||
+                            usage?.CachedInputTokens is not null ||
+                            usage?.OutputTokens is not null;
+        var verdict = !IsEligibleForContract(input)
+            ? PlannerCandidateContractVerdict.NotEvaluated
+            : candidate.Contract.Succeeded
+                ? PlannerCandidateContractVerdict.Valid
+                : PlannerCandidateContractVerdict.Invalid;
+        return new PlannerCandidateEvidenceReceipt(
+            candidate.Index,
+            candidate.CandidateSha256,
+            input.ArtifactSha256 ?? Hash(input.StandardOutput),
+            input.TerminalState,
+            input.NormalizationState,
+            verdict,
+            input.ElapsedMilliseconds,
+            new PlannerCandidateUsageReceipt(
+                usageReported ? PlannerCandidateUsageState.Reported : PlannerCandidateUsageState.Unknown,
+                usage?.InputTokens,
+                usage?.CachedInputTokens,
+                usage?.OutputTokens,
+                usageReported ? null : input.ProviderUsageUnavailableReason),
+            candidate.StructuralQuality,
+            BoundText(candidate.Contract.Diagnostic));
+    }
+
     private static IReadOnlyList<string> Bound(IEnumerable<string> features) => features
         .Select(BoundText)
         .Distinct(StringComparer.Ordinal)
@@ -172,7 +313,15 @@ internal static partial class PlannerCandidateSelector
     private static string Hash(string value) =>
         Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(value.ReplaceLineEndings("\n")))).ToLowerInvariant();
 
-    private sealed record ResolvedCandidate(int Index, string? SourcePath, PlannerOutputContractResult Contract);
+    private sealed record ResolvedCandidate(
+        PlannerCandidateInput Input,
+        PlannerOutputContractResult Contract,
+        PlannerStructuralQualityVector? StructuralQuality)
+    {
+        internal int Index => Input.Index;
+        internal string? SourcePath => Input.SourcePath;
+        internal string? CandidateSha256 => Contract.Plan is null ? null : Hash(Contract.Plan);
+    }
 
     private sealed record CandidateFeatures(
         IReadOnlyDictionary<string, string> Bodies,

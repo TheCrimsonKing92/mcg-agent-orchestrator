@@ -1,5 +1,6 @@
 using System.ComponentModel;
 using System.Diagnostics;
+using System.Text.Json;
 using Mcg.AgentOrchestrator.Core;
 using Mcg.AgentOrchestrator.Core.Conductor;
 using Mcg.AgentOrchestrator.Infrastructure;
@@ -66,6 +67,73 @@ public sealed class PlannerSamplingDispatchTests : WorkerDispatchTestSupport
             foreach (var processId in launchedProcessIds)
                 try { WorkerProcessJobs.TryKillOrFallback(processId); } catch { }
         }
+    }
+
+    [Xunit.Fact]
+    public void CollectCandidates_CodexJsonl_NormalizesWithoutProcessStart()
+    {
+        var root = CreateTempDirectory();
+        var primaryPath = Path.Combine(root, "planner.out.log");
+        var plan = ReadPlannerFixture();
+        File.WriteAllText(primaryPath, ToCodexJsonl(plan, 11, 7, 3));
+        var sample = Xunit.Assert.Single(PlannerSampleDispatcher.CreateArtifacts(primaryPath, 2));
+        File.WriteAllText(sample.StandardOutputPath, ToCodexJsonl(plan, 13, 8, 5));
+        File.WriteAllText(sample.LaunchRecordPath, JsonSerializer.Serialize(new
+        {
+            ProcessId = 123,
+            StartedAt = DateTimeOffset.Parse("2026-08-25T20:00:00Z")
+        }));
+        DispatchExitArtifacts.Write(
+            sample.ExitCodePath,
+            DispatchExitArtifacts.Native(0, "fixture completed", DateTimeOffset.Parse("2026-08-25T20:00:03Z")));
+        var dispatch = new TaskDispatchRecord(
+            "planner",
+            "codex exec --json",
+            root,
+            DateTimeOffset.Parse("2026-08-25T20:00:00Z"),
+            WorkerProviderKind: ProviderKind.OpenAICodexCli,
+            PlannerSampleCount: 2);
+
+        var candidates = PlannerSampleDispatcher.CollectCandidates(primaryPath, 2, dispatch, 2_000);
+
+        var secondary = candidates[1];
+        Xunit.Assert.Equal(plan.ReplaceLineEndings("\n"), secondary.StandardOutput.ReplaceLineEndings("\n"));
+        Xunit.Assert.Equal(PlannerCandidateNormalizationState.Normalized, secondary.NormalizationState);
+        Xunit.Assert.Equal(PlannerCandidateTerminalState.Succeeded, secondary.TerminalState);
+        Xunit.Assert.Equal(3_000, secondary.ElapsedMilliseconds);
+        Xunit.Assert.Equal(13, secondary.ProviderUsage!.InputTokens);
+        Xunit.Assert.Equal(8, secondary.ProviderUsage.CachedInputTokens);
+        Xunit.Assert.Equal(5, secondary.ProviderUsage.OutputTokens);
+        Xunit.Assert.Equal(64, secondary.ArtifactSha256!.Length);
+        Xunit.Assert.True(File.Exists(sample.StandardOutputPath + ".jsonl"));
+    }
+
+    [Xunit.Fact]
+    public void SuccessfulEmptySample_IsTypedAndCannotCompete()
+    {
+        var root = CreateTempDirectory();
+        var primaryPath = Path.Combine(root, "planner.out.log");
+        File.WriteAllText(primaryPath, ToCodexJsonl(ReadPlannerFixture(), 11, 7, 3));
+        var sample = Xunit.Assert.Single(PlannerSampleDispatcher.CreateArtifacts(primaryPath, 2));
+        File.WriteAllText(sample.StandardOutputPath, string.Empty);
+        DispatchExitArtifacts.Write(
+            sample.ExitCodePath,
+            DispatchExitArtifacts.Native(0, "fixture completed", DateTimeOffset.UtcNow));
+        var dispatch = new TaskDispatchRecord(
+            "planner",
+            "codex exec --json",
+            root,
+            DateTimeOffset.UtcNow,
+            WorkerProviderKind: ProviderKind.OpenAICodexCli,
+            PlannerSampleCount: 2);
+
+        var candidates = PlannerSampleDispatcher.CollectCandidates(primaryPath, 2, dispatch);
+        var result = PlannerCandidateSelector.Select(candidates, InfrastructureTestSupport.FindRepositoryRoot());
+
+        Xunit.Assert.Equal(PlannerCandidateNormalizationState.Empty, candidates[1].NormalizationState);
+        var evidence = Xunit.Assert.Single(result.Receipt.Candidates!, candidate => candidate.CandidateIndex == 1);
+        Xunit.Assert.Equal(PlannerCandidateContractVerdict.NotEvaluated, evidence.ContractVerdict);
+        Xunit.Assert.Equal(0, result.Receipt.SelectedCandidateIndex);
     }
 
     [Xunit.Fact]
@@ -290,6 +358,12 @@ public sealed class PlannerSamplingDispatchTests : WorkerDispatchTestSupport
             var divergence = Xunit.Assert.IsType<PlannerCandidateDivergenceReceipt>(
                 task.LastVerification!.PlannerCandidateDivergence);
             Xunit.Assert.True(divergence.CandidateScores[1] > 0);
+            var sampleEvidence = Xunit.Assert.Single(
+                divergence.Candidates!,
+                candidate => candidate.CandidateIndex == 1);
+            Xunit.Assert.Equal(PlannerCandidateTerminalState.Succeeded, sampleEvidence.TerminalState);
+            Xunit.Assert.Equal(PlannerCandidateContractVerdict.Valid, sampleEvidence.ContractVerdict);
+            Xunit.Assert.Equal(64, sampleEvidence.ArtifactSha256.Length);
             var lateCandidate = PlannerSampleDispatcher.CollectCandidates(
                 start.ProcessRecord.StandardOutputPath,
                 2)[1];
@@ -393,6 +467,7 @@ public sealed class PlannerSamplingDispatchTests : WorkerDispatchTestSupport
                 2)[1];
             Xunit.Assert.Empty(sampleCandidate.StandardOutput);
             Xunit.Assert.Contains("timed out", sampleCandidate.StandardError, StringComparison.OrdinalIgnoreCase);
+            Xunit.Assert.Equal(PlannerCandidateTerminalState.TimedOut, sampleCandidate.TerminalState);
         }
         finally
         {
@@ -420,6 +495,26 @@ public sealed class PlannerSamplingDispatchTests : WorkerDispatchTestSupport
         InfrastructureTestSupport.FindRepositoryRoot(),
         "tests", "Mcg.AgentOrchestrator.Infrastructure.Tests", "Fixtures", "PlannerOutputContract",
         "658501ce-f6708f44-20260805012800.out.txt"));
+
+    private static string ToCodexJsonl(
+        string workerOutput,
+        long inputTokens,
+        long cachedInputTokens,
+        long outputTokens) =>
+        JsonSerializer.Serialize(new
+        {
+            type = "item.completed",
+            item = new { type = "agent_message", text = workerOutput }
+        }) + Environment.NewLine + JsonSerializer.Serialize(new
+        {
+            type = "turn.completed",
+            usage = new
+            {
+                input_tokens = inputTokens,
+                cached_input_tokens = cachedInputTokens,
+                output_tokens = outputTokens
+            }
+        });
 
     private static DispatchProcessHost.DispatchRunParameters CreateRunParameters(string root, string primaryPath) =>
         new(

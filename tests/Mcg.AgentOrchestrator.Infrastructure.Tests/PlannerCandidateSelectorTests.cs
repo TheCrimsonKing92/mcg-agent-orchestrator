@@ -1,7 +1,102 @@
+using Mcg.AgentOrchestrator.Core;
 using Mcg.AgentOrchestrator.Infrastructure;
 
 public sealed class PlannerCandidateSelectorTests
 {
+    [Xunit.Fact]
+    public void TwoValidCandidates_StructuralEvidence_SelectsStrongerPlan()
+    {
+        var repositoryRoot = InfrastructureTestSupport.FindRepositoryRoot();
+        var primary = ReadPlannerFixture(repositoryRoot).Replace(
+            "## Risks and stop conditions",
+            string.Concat(Enumerable.Repeat(
+                "Extra explanatory prose does not constitute structural evidence. ",
+                20)) +
+            "\n\n## Risks and stop conditions",
+            StringComparison.Ordinal);
+        var stronger = ReadPlannerFixture(repositoryRoot);
+        string[] mappingHeadings =
+        [
+            "1. Exit-0 Tester blockers must not complete or verify the task.",
+            "2. Preserve discriminating evidence and correct routing.",
+            "3. Preserve unaffected contracts.",
+            "4. Cover reconciliation and acceptance state.",
+            "5. Rule (l)."
+        ];
+        for (var index = 0; index < mappingHeadings.Length; index++)
+        {
+            stronger = stronger.Replace(
+                mappingHeadings[index],
+                $"{index + 1}. disposition=planned; plan=Developer owns `PlannerCandidateSelector.Select`; " +
+                "the integration seam is TEST-VERIFIABLE and stops when candidate evidence is unavailable.",
+                StringComparison.Ordinal);
+        }
+
+        var result = PlannerCandidateSelector.Select(
+            [new(0, primary), new(1, stronger)],
+            repositoryRoot);
+
+        Xunit.Assert.True(result.SelectedContract.Succeeded, result.SelectedContract.Diagnostic);
+        Xunit.Assert.Equal(1, result.Receipt.SelectedCandidateIndex);
+        Xunit.Assert.Equal("structural-quality", result.Receipt.SelectionReason);
+        var evidence = Xunit.Assert.Single(result.Receipt.Candidates!, candidate => candidate.CandidateIndex == 1);
+        Xunit.Assert.Equal(PlannerCandidateContractVerdict.Valid, evidence.ContractVerdict);
+        Xunit.Assert.Equal(mappingHeadings.Length, evidence.StructuralQuality!.ConcreteOwningSeams);
+    }
+
+    [Xunit.Fact]
+    public void IdenticalCandidates_SelectPrimaryWithExplicitReason()
+    {
+        var repositoryRoot = InfrastructureTestSupport.FindRepositoryRoot();
+        var plan = ReadPlannerFixture(repositoryRoot);
+
+        var result = PlannerCandidateSelector.Select([new(0, plan), new(1, plan)], repositoryRoot);
+
+        Xunit.Assert.Equal(0, result.Receipt.SelectedCandidateIndex);
+        Xunit.Assert.Equal("identical-candidates", result.Receipt.SelectionReason);
+        Xunit.Assert.Equal("normalized-candidate-hashes-identical", result.Receipt.FallbackCause);
+    }
+
+    [Xunit.Fact]
+    public void InvalidSecondary_SelectPrimaryWithTypedFallback()
+    {
+        var repositoryRoot = InfrastructureTestSupport.FindRepositoryRoot();
+        var plan = ReadPlannerFixture(repositoryRoot);
+
+        var result = PlannerCandidateSelector.Select([new(0, plan), new(1, "")], repositoryRoot);
+
+        Xunit.Assert.True(result.SelectedContract.Succeeded, result.SelectedContract.Diagnostic);
+        Xunit.Assert.Equal(0, result.Receipt.SelectedCandidateIndex);
+        Xunit.Assert.Equal("primary-fallback", result.Receipt.SelectionReason);
+        Xunit.Assert.Equal("fewer-than-two-comparable-candidates", result.Receipt.FallbackCause);
+    }
+
+    [Xunit.Fact]
+    public void InvalidPrimary_ValidSecondary_FailsClosedWithoutSelection()
+    {
+        var repositoryRoot = InfrastructureTestSupport.FindRepositoryRoot();
+        var plan = ReadPlannerFixture(repositoryRoot);
+
+        var result = PlannerCandidateSelector.Select([new(0, "invalid"), new(1, plan)], repositoryRoot);
+
+        Xunit.Assert.False(result.SelectedContract.Succeeded);
+        Xunit.Assert.Null(result.Receipt.SelectedCandidateIndex);
+        Xunit.Assert.Equal("no-selection", result.Receipt.SelectionReason);
+    }
+
+    [Xunit.Fact]
+    public void AllInvalidCandidates_FailClosedWithoutSelection()
+    {
+        var repositoryRoot = InfrastructureTestSupport.FindRepositoryRoot();
+
+        var result = PlannerCandidateSelector.Select([new(0, ""), new(1, "invalid")], repositoryRoot);
+
+        Xunit.Assert.False(result.SelectedContract.Succeeded);
+        Xunit.Assert.Null(result.Receipt.SelectedCandidateIndex);
+        Xunit.Assert.All(result.Receipt.Candidates!, candidate =>
+            Xunit.Assert.NotEqual(PlannerCandidateContractVerdict.Valid, candidate.ContractVerdict));
+    }
+
     [Xunit.Fact]
     public void PeerAgreementSelectsConsensusInsteadOfFirstShortestValidPlan()
     {

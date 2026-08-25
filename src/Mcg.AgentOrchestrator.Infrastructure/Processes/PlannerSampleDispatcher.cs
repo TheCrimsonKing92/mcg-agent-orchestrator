@@ -1,6 +1,9 @@
 using System.ComponentModel;
 using System.Diagnostics;
+using System.Security.Cryptography;
+using System.Text.Json;
 using System.Text.RegularExpressions;
+using Mcg.AgentOrchestrator.Core;
 
 namespace Mcg.AgentOrchestrator.Infrastructure;
 
@@ -17,6 +20,7 @@ internal sealed record PlannerSampleArtifacts(
     string? PrepRecordPath,
     string? PrepHeartbeatPath,
     string? PrepExitCodePath,
+    string LaunchRecordPath,
     string LaunchDiagnosticPath);
 
 internal sealed record PlannerSampleLaunch(Process Process, PlannerSampleArtifacts Artifacts);
@@ -42,7 +46,8 @@ internal static class PlannerSampleDispatcher
         DispatchProcessHost.DispatchRunParameters primaryParameters,
         string dispatchHostAssembly,
         string jobPrefix,
-        Func<ProcessStartInfo, Process?> startProcess)
+        Func<ProcessStartInfo, Process?> startProcess,
+        Func<DateTimeOffset>? utcNow = null)
     {
         var launches = new List<PlannerSampleLaunch>();
         foreach (var sample in artifacts)
@@ -84,6 +89,7 @@ internal static class PlannerSampleDispatcher
                     continue;
                 }
 
+                WriteLaunchRecord(sample, new PlannerSampleLaunchRecord(process.Id, (utcNow ?? (() => DateTimeOffset.UtcNow))()));
                 launches.Add(new PlannerSampleLaunch(process, sample));
             }
             catch (Exception ex) when (IsSampleLaunchFailure(ex))
@@ -108,29 +114,74 @@ internal static class PlannerSampleDispatcher
 
     internal static IReadOnlyList<PlannerCandidateInput> CollectCandidates(
         string primaryStandardOutputPath,
-        int sampleCount)
+        int sampleCount,
+        TaskDispatchRecord? dispatch = null,
+        long? primaryElapsedMilliseconds = null)
     {
+        var primaryArtifactHash = HashArtifact(primaryStandardOutputPath);
+        var primaryNormalization = StructuredCodexOutputNormalizer.Normalize(dispatch, primaryStandardOutputPath);
         var candidates = new List<PlannerCandidateInput>(sampleCount)
         {
-            new(0, PlannerOutputContract.ReadCapturedOutputTail(primaryStandardOutputPath), SourcePath: primaryStandardOutputPath)
+            new(
+                0,
+                primaryNormalization.State == PlannerCandidateNormalizationState.Normalized
+                    ? primaryNormalization.Parsed!.WorkerOutput
+                    : PlannerOutputContract.ReadCapturedOutputTail(primaryStandardOutputPath),
+                SourcePath: primaryStandardOutputPath,
+                ArtifactSha256: primaryArtifactHash,
+                NormalizationState: primaryNormalization.State,
+                ElapsedMilliseconds: primaryElapsedMilliseconds,
+                ProviderUsage: primaryNormalization.Parsed?.Usage,
+                ProviderUsageUnavailableReason: primaryNormalization.Parsed?.UsageUnavailableReason ?? "unsupported")
         };
         foreach (var sample in CreateArtifacts(primaryStandardOutputPath, sampleCount))
         {
-            if (!DispatchExitArtifacts.TryRead(sample.ExitCodePath, out var exit) || exit.ExitCode != 0)
+            var launchDiagnostic = ReadLaunchDiagnostic(sample);
+            if (!DispatchExitArtifacts.TryRead(sample.ExitCodePath, out var exit))
             {
                 candidates.Add(new PlannerCandidateInput(
                     sample.Index,
                     string.Empty,
-                    ReadLaunchDiagnostic(sample) ?? "Planner sample did not produce a successful exit artifact.",
-                    sample.StandardOutputPath));
+                    launchDiagnostic ?? "Planner sample did not produce an exit artifact.",
+                    sample.StandardOutputPath,
+                    ArtifactSha256: HashArtifact(sample.StandardOutputPath),
+                    TerminalState: ClassifyMissingExit(launchDiagnostic),
+                    NormalizationState: PlannerCandidateNormalizationState.Unreadable,
+                    ElapsedMilliseconds: ResolveElapsedMilliseconds(sample, null)));
                 continue;
             }
 
+            if (exit.ExitCode != 0)
+            {
+                candidates.Add(new PlannerCandidateInput(
+                    sample.Index,
+                    string.Empty,
+                    ReadBounded(sample.StandardErrorPath),
+                    sample.StandardOutputPath,
+                    ArtifactSha256: HashArtifact(sample.StandardOutputPath),
+                    TerminalState: exit.Reason.Contains("cancel", StringComparison.OrdinalIgnoreCase)
+                        ? PlannerCandidateTerminalState.Cancelled
+                        : PlannerCandidateTerminalState.NonZeroExit,
+                    NormalizationState: PlannerCandidateNormalizationState.NotRequired,
+                    ElapsedMilliseconds: ResolveElapsedMilliseconds(sample, exit.RecordedAt)));
+                continue;
+            }
+
+            var artifactHash = HashArtifact(sample.StandardOutputPath);
+            var normalization = StructuredCodexOutputNormalizer.Normalize(dispatch, sample.StandardOutputPath);
             candidates.Add(new PlannerCandidateInput(
                 sample.Index,
-                PlannerOutputContract.ReadCapturedOutputTail(sample.StandardOutputPath),
+                normalization.State == PlannerCandidateNormalizationState.Normalized
+                    ? normalization.Parsed!.WorkerOutput
+                    : PlannerOutputContract.ReadCapturedOutputTail(sample.StandardOutputPath),
                 ReadBounded(sample.StandardErrorPath),
-                sample.StandardOutputPath));
+                sample.StandardOutputPath,
+                artifactHash,
+                PlannerCandidateTerminalState.Succeeded,
+                normalization.State,
+                ResolveElapsedMilliseconds(sample, exit.RecordedAt),
+                normalization.Parsed?.Usage,
+                normalization.Parsed?.UsageUnavailableReason ?? "unsupported"));
         }
 
         return candidates;
@@ -214,6 +265,7 @@ internal static class PlannerSampleDispatcher
             stem + ".prep.json",
             stem + ".prep.heartbeat.json",
             stem + ".prep.exit.txt",
+            stem + ".launch.json",
             stem + ".launch.err.log");
     }
 
@@ -284,6 +336,59 @@ internal static class PlannerSampleDispatcher
         catch { return null; }
     }
 
+    private static PlannerCandidateTerminalState ClassifyMissingExit(string? diagnostic)
+    {
+        if (diagnostic?.Contains("timed out", StringComparison.OrdinalIgnoreCase) == true)
+            return PlannerCandidateTerminalState.TimedOut;
+        return string.IsNullOrWhiteSpace(diagnostic)
+            ? PlannerCandidateTerminalState.MissingExitArtifact
+            : PlannerCandidateTerminalState.LaunchFailed;
+    }
+
+    private static void WriteLaunchRecord(PlannerSampleArtifacts sample, PlannerSampleLaunchRecord record)
+    {
+        try
+        {
+            File.WriteAllText(sample.LaunchRecordPath, JsonSerializer.Serialize(record));
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+        {
+            WriteLaunchDiagnostic(sample, $"Planner sample launch record could not be persisted: {ex.Message}");
+        }
+    }
+
+    private static long? ResolveElapsedMilliseconds(PlannerSampleArtifacts sample, DateTimeOffset? completedAt)
+    {
+        if (completedAt is null)
+            return null;
+        try
+        {
+            var launch = JsonSerializer.Deserialize<PlannerSampleLaunchRecord>(File.ReadAllText(sample.LaunchRecordPath));
+            if (launch is null || completedAt < launch.StartedAt)
+                return null;
+            return (long)(completedAt.Value - launch.StartedAt).TotalMilliseconds;
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or JsonException)
+        {
+            return null;
+        }
+    }
+
+    private static string HashArtifact(string standardOutputPath)
+    {
+        var rawAuditPath = standardOutputPath + ".jsonl";
+        var path = File.Exists(rawAuditPath) ? rawAuditPath : standardOutputPath;
+        try
+        {
+            using var stream = new FileStream(path, FileMode.Open, FileAccess.Read, FileShare.ReadWrite | FileShare.Delete);
+            return Convert.ToHexString(SHA256.HashData(stream)).ToLowerInvariant();
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+        {
+            return Convert.ToHexString(SHA256.HashData([])).ToLowerInvariant();
+        }
+    }
+
     private static string ReadBounded(string path)
     {
         try
@@ -298,4 +403,6 @@ internal static class PlannerSampleDispatcher
             return ex.Message;
         }
     }
+
+    private sealed record PlannerSampleLaunchRecord(int ProcessId, DateTimeOffset StartedAt);
 }

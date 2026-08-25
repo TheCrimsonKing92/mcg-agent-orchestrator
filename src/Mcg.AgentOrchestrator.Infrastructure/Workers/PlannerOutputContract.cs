@@ -1,5 +1,6 @@
 using System.Text;
 using System.Text.RegularExpressions;
+using Mcg.AgentOrchestrator.Core;
 
 namespace Mcg.AgentOrchestrator.Infrastructure;
 
@@ -111,6 +112,59 @@ internal static partial class PlannerOutputContract
         }
 
         return sections;
+    }
+
+    internal static PlannerStructuralQualityVector EvaluateStructuralQuality(string plan)
+    {
+        var sections = SplitRequiredSections(plan);
+        if (!sections.TryGetValue("acceptance criterion mapping", out var mappingBody))
+            return new PlannerStructuralQualityVector(0, 0, 0, 0, 0, 0);
+
+        var completeMappings = 0;
+        var concreteOwningSeams = 0;
+        var feasibleEvidenceOwners = 0;
+        var integrationSeams = 0;
+        var verificationClasses = 0;
+        var stopConditions = 0;
+        foreach (var line in mappingBody.Split('\n'))
+        {
+            if (!TryParseCriterionMappingLine(line, out _, out var mapping) || string.IsNullOrWhiteSpace(mapping))
+                continue;
+
+            completeMappings++;
+            var codeSpans = BacktickedCitation().Matches(mapping)
+                .Select(match => match.Groups["citation"].Value)
+                .ToArray();
+            if (codeSpans.Any(citation =>
+                    citation.Contains('.', StringComparison.Ordinal) ||
+                    citation.Contains('/', StringComparison.Ordinal) ||
+                    citation.Contains("::", StringComparison.Ordinal)))
+            {
+                concreteOwningSeams++;
+            }
+
+            if (Regex.IsMatch(
+                    mapping,
+                    @"(?i)\b(?:Developer|Tester|Reviewer|Acceptance|operator|conductor|Researcher|Planner)\b"))
+            {
+                feasibleEvidenceOwners++;
+            }
+
+            if (Regex.IsMatch(mapping, @"(?i)\b(?:integration|seam)\b"))
+                integrationSeams++;
+            if (Regex.IsMatch(mapping, @"(?i)\b(?:TEST-VERIFIABLE|REAL-WORLD-DEPENDENT)\b"))
+                verificationClasses++;
+            if (Regex.IsMatch(mapping, @"(?i)\b(?:stop|fail(?:s|ed)? closed|fallback)\b"))
+                stopConditions++;
+        }
+
+        return new PlannerStructuralQualityVector(
+            completeMappings,
+            concreteOwningSeams,
+            feasibleEvidenceOwners,
+            integrationSeams,
+            verificationClasses,
+            stopConditions);
     }
 
     internal static string ReadCapturedOutputTail(string path)

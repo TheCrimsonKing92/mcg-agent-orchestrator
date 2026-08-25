@@ -1313,7 +1313,11 @@ public sealed class BackgroundDispatchRunner
                 var selection = PlannerCandidateSelector.Select(
                     PlannerSampleDispatcher.CollectCandidates(
                         processRecord.StandardOutputPath,
-                        task.LastDispatch.PlannerSampleCount),
+                        task.LastDispatch.PlannerSampleCount,
+                        dispatchAttempt,
+                        processRecord.CompletedAt is { } completedAt
+                            ? Math.Max(0, (long)(completedAt - processRecord.StartedAt).TotalMilliseconds)
+                            : null),
                     processRecord.WorkingDirectory,
                     acceptanceCriteria);
                 plannerContract = selection.SelectedContract;
@@ -2500,57 +2504,7 @@ public sealed class BackgroundDispatchRunner
         TaskDispatchRecord? dispatch,
         string standardOutputPath,
         Func<string, string>? readAllText = null)
-    {
-        if (dispatch?.WorkerProviderKind is not (ProviderKind.OpenAICodexCli or ProviderKind.OpenAICodexSpark) ||
-            !dispatch.Command.Contains("--json", StringComparison.OrdinalIgnoreCase) ||
-            !File.Exists(standardOutputPath))
-        {
-            return null;
-        }
-
-        var rawAuditPath = standardOutputPath + ".jsonl";
-        var rawSourcePath = File.Exists(rawAuditPath) ? rawAuditPath : standardOutputPath;
-        string raw;
-        try
-        {
-            raw = (readAllText ?? File.ReadAllText)(rawSourcePath);
-        }
-        catch (IOException)
-        {
-            return new CodexJsonlParseResult(string.Empty, null, "unreadable", Recognized: false);
-        }
-        catch (UnauthorizedAccessException)
-        {
-            return new CodexJsonlParseResult(string.Empty, null, "unreadable", Recognized: false);
-        }
-
-        var parsed = CodexJsonlUsageParser.Parse(raw);
-        if (!parsed.Recognized || string.IsNullOrEmpty(parsed.WorkerOutput))
-        {
-            return parsed;
-        }
-
-        try
-        {
-            if (!File.Exists(rawAuditPath))
-            {
-                File.Copy(standardOutputPath, rawAuditPath, overwrite: false);
-            }
-
-            File.WriteAllText(standardOutputPath, parsed.WorkerOutput, new UTF8Encoding(false));
-        }
-        catch (IOException)
-        {
-            // The process log remains authoritative when a lock or a competing replay prevents
-            // normalization. Parsed provider usage is still safe to attribute to this attempt.
-        }
-        catch (UnauthorizedAccessException)
-        {
-            // Preserve the raw process log and continue recording the completion outcome.
-        }
-
-        return parsed;
-    }
+        => StructuredCodexOutputNormalizer.Normalize(dispatch, standardOutputPath, readAllText).Parsed;
 
     private static CompleteLogReadResult ReadCompleteLog(string path)
     {
