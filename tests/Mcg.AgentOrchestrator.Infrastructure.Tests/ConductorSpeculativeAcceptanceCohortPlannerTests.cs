@@ -156,6 +156,26 @@ public sealed class ConductorSpeculativeAcceptanceCohortPlannerTests
     }
 
     [Fact]
+    public void FormatReceipt_ReportsReadyBeforeCompatibility()
+    {
+        var plan = ConductorSpeculativeAcceptanceCohortPlanner.Plan(
+        [
+            Ready(
+                "11111111111111111111111111111111",
+                "src/Mcg.AgentOrchestrator.Infrastructure/Workspaces/First.cs"),
+            Ready(
+                "22222222222222222222222222222222",
+                "src/Mcg.AgentOrchestrator.Infrastructure/Workspaces/Second.cs"),
+            new ConductorSpeculativeAcceptanceCandidate(
+                new GoalId("33333333333333333333333333333333"),
+                new GateReadyCandidateProjectionResult.Excluded(
+                    GateReadyCandidateExclusionReason.LifecycleNotReady))
+        ]);
+
+        Assert.Contains("ready=2", plan.FormatReceipt(4), StringComparison.Ordinal);
+    }
+
+    [Fact]
     public void CohortIsBoundedAtFour_AndFifthCandidateRemainsVisibleAsDeferred()
     {
         var candidates = Enumerable.Range(1, 5)

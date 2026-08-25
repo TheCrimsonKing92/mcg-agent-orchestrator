@@ -3745,7 +3745,7 @@ internal sealed partial class ConductorDriver
             AppendCohortGateProgressEvents(gateProgressEventWriter, identity, bindings, progress));
 
         var gateClock = Stopwatch.StartNew();
-        var outcome = AcceptanceCohortGateOutcome.InfrastructureFailure;
+        AcceptanceCohortGateClassification? classification = null;
         IReadOnlyList<string> failedChecks = [];
         int? gateExitCode = null;
         IReadOnlyList<string> gateTestResultPaths = [];
@@ -3767,7 +3767,7 @@ internal sealed partial class ConductorDriver
                 cancellationToken: cancellationToken).GetAwaiter().GetResult();
             gateExitCode = verification.ExitCode;
             gateTestResultPaths = NormalizeCohortTestResultPaths(verification.TestResultPaths);
-            outcome = ClassifyCohortVerification(verification);
+            classification = ClassifyCohortVerificationResult(verification);
             failedChecks = verification.Checks?
                 .Where(check => !check.Passed && !check.Advisory)
                 .Select(check => check.Name)
@@ -3777,20 +3777,26 @@ internal sealed partial class ConductorDriver
             receipt = store.SaveGateReceipt(new AcceptanceCohortReceipt(
                 $"cohort-receipt-v2-{identity.Value[(AcceptanceCohortIdentity.Version.Length + 1)..]}",
                 identity,
-                outcome,
+                classification.Outcome,
                 _utcNow(),
                 checked((long)gateClock.Elapsed.TotalMilliseconds),
                 failedChecks,
                 GateExitCode: gateExitCode,
                 GateTestResultPaths: gateTestResultPaths,
-                ValidForLanding: outcome == AcceptanceCohortGateOutcome.Passed));
+                ValidForLanding: classification.Outcome == AcceptanceCohortGateOutcome.Passed,
+                InfrastructureReasonCode: classification.InfrastructureReasonCode,
+                InfrastructureDetail: classification.InfrastructureDetail));
         }
         catch (Exception ex) when (!gateExecutionComplete && ex is (
             AcceptanceInfrastructureDeferredException or DotnetBuildSlotsBusyException or
             BuildLockBlockedException or OperationCanceledException or IOException or
             InvalidDataException))
         {
-            outcome = AcceptanceCohortGateOutcome.InfrastructureFailure;
+            classification = ClassifyCohortInfrastructureException(ex);
+            if (ex is AcceptanceInfrastructureDeferredException deferred)
+            {
+                gateExitCode = deferred.ExitCode;
+            }
             failedChecks = [$"infrastructure:{ex.GetType().Name}:{BoundCohortDetail(ex.Message)}"];
         }
         finally
@@ -3801,16 +3807,23 @@ internal sealed partial class ConductorDriver
         if (receipt is null)
         {
             gateClock.Stop();
+            if (classification is null)
+            {
+                throw new InvalidOperationException(
+                    "Acceptance cohort gate ended without a structured classification.");
+            }
             receipt = store.SaveGateReceipt(new AcceptanceCohortReceipt(
                 $"cohort-receipt-v2-{identity.Value[(AcceptanceCohortIdentity.Version.Length + 1)..]}",
                 identity,
-                outcome,
+                classification.Outcome,
                 _utcNow(),
                 checked((long)gateClock.Elapsed.TotalMilliseconds),
                 failedChecks,
                 GateExitCode: gateExitCode,
                 GateTestResultPaths: gateTestResultPaths,
-                ValidForLanding: false));
+                ValidForLanding: false,
+                InfrastructureReasonCode: classification.InfrastructureReasonCode,
+                InfrastructureDetail: classification.InfrastructureDetail));
         }
 
         if (receipt.Outcome == AcceptanceCohortGateOutcome.Failed &&
@@ -3959,12 +3972,24 @@ internal sealed partial class ConductorDriver
         return $"cohort-partition-v1-{Convert.ToHexStringLower(SHA256.HashData(Encoding.UTF8.GetBytes(payload)))}";
     }
 
-    internal static AcceptanceCohortGateOutcome ClassifyCohortVerification(AcceptanceVerificationResult result)
+    internal static AcceptanceCohortGateOutcome ClassifyCohortVerification(AcceptanceVerificationResult result) =>
+        ClassifyCohortVerificationResult(result).Outcome;
+
+    internal static AcceptanceCohortGateClassification ClassifyCohortVerificationResult(
+        AcceptanceVerificationResult result)
     {
         ArgumentNullException.ThrowIfNull(result);
-        if (result.Skipped || result.ExitCode is null)
+        if (result.Skipped)
         {
-            return AcceptanceCohortGateOutcome.InfrastructureFailure;
+            return InfrastructureClassification(
+                AcceptanceCohortInfrastructureReasonCodes.VerificationSkipped,
+                result.OutputTail ?? "Acceptance verification was skipped.");
+        }
+        if (result.ExitCode is null)
+        {
+            return InfrastructureClassification(
+                AcceptanceCohortInfrastructureReasonCodes.ExitCodeMissing,
+                result.OutputTail ?? "Acceptance verification did not report an exit code.");
         }
         IReadOnlyList<string> normalizedTestResultPaths;
         try
@@ -3973,16 +3998,48 @@ internal sealed partial class ConductorDriver
         }
         catch (Exception ex) when (ex is ArgumentException or NotSupportedException or PathTooLongException)
         {
-            return AcceptanceCohortGateOutcome.InfrastructureFailure;
+            return InfrastructureClassification(
+                AcceptanceCohortInfrastructureReasonCodes.ResultPathInvalid,
+                $"{ex.GetType().Name}: {ex.Message}");
         }
         if (!AcceptanceCohortGateEvidence.HasCoherentTrxEvidence(normalizedTestResultPaths))
         {
-            return IsSourceSizeContentFailure(result) ? AcceptanceCohortGateOutcome.Failed : AcceptanceCohortGateOutcome.InfrastructureFailure;
+            return IsSourceSizeContentFailure(result)
+                ? new AcceptanceCohortGateClassification(AcceptanceCohortGateOutcome.Failed)
+                : InfrastructureClassification(
+                    AcceptanceCohortInfrastructureReasonCodes.TrxEvidenceIncoherent,
+                    result.OutputTail ?? "Acceptance verification did not produce coherent TRX evidence.");
         }
-        return result.Passed && result.ExitCode == 0
-            ? AcceptanceCohortGateOutcome.Passed
-            : AcceptanceCohortGateOutcome.Failed;
+        return new AcceptanceCohortGateClassification(
+            result.Passed && result.ExitCode == 0
+                ? AcceptanceCohortGateOutcome.Passed
+                : AcceptanceCohortGateOutcome.Failed);
     }
+
+    internal static AcceptanceCohortGateClassification ClassifyCohortInfrastructureException(Exception exception)
+    {
+        ArgumentNullException.ThrowIfNull(exception);
+        var reasonCode = exception switch
+        {
+            AcceptanceInfrastructureDeferredException deferred => deferred.ReasonCode,
+            DotnetBuildSlotsBusyException => AcceptanceCohortInfrastructureReasonCodes.DotnetBuildSlotsBusy,
+            BuildLockBlockedException => AcceptanceCohortInfrastructureReasonCodes.BuildLockBlocked,
+            OperationCanceledException => AcceptanceCohortInfrastructureReasonCodes.OperationCancelled,
+            InvalidDataException => AcceptanceCohortInfrastructureReasonCodes.InvalidData,
+            IOException => AcceptanceCohortInfrastructureReasonCodes.IoFailure,
+            _ => throw new ArgumentException(
+                $"Exception type {exception.GetType().Name} is not a recognized cohort infrastructure failure.",
+                nameof(exception))
+        };
+        return InfrastructureClassification(reasonCode, exception.Message);
+    }
+
+    private static AcceptanceCohortGateClassification InfrastructureClassification(
+        string reasonCode,
+        string detail) => new(
+            AcceptanceCohortGateOutcome.InfrastructureFailure,
+            reasonCode,
+            BoundCohortDetail(detail));
 
     private static IReadOnlyList<string> NormalizeCohortTestResultPaths(IReadOnlyList<string>? paths) =>
         (paths ?? [])

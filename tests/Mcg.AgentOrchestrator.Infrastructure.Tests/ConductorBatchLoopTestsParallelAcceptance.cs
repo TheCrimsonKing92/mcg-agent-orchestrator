@@ -712,6 +712,103 @@ public sealed class ConductorBatchLoopTestsParallelAcceptance : ConductorBatchLo
     }
 
     [Xunit.Fact]
+    public void CohortExit_InfrastructureFailureEmitsReason()
+    {
+        var root = CreateTempDirectory("mcg-cohort-infrastructure-reason");
+        var logPath = Path.Combine(root, ConductEventLogWriter.CurrentFileName);
+        var kernel = new AgentOrchestratorKernel();
+        var first = CreateVerifiedSimpleGoal(kernel, "First infrastructure failure member");
+        var second = CreateVerifiedSimpleGoal(kernel, "Second infrastructure failure member");
+        var statusesBefore = new[] { first.Status, second.Status };
+        var paths = new Dictionary<GoalId, IReadOnlyList<string>>
+        {
+            [first.Id] = ["src/Mcg.AgentOrchestrator.App/Dashboard/Components/FirstInfrastructureFailure.razor"],
+            [second.Id] = ["tests/Mcg.AgentOrchestrator.Infrastructure.Tests/SecondInfrastructureFailureTests.cs"]
+        };
+        var mainRevision = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
+        var projector = new GateReadyCandidateProjector(
+            goalId => new GateReadyCandidateRevisionPair(
+                goalId.Value.PadRight(40, 'b')[..40],
+                mainRevision),
+            goalId => new GateReadyLandingScopeObservation(true, paths[goalId]),
+            (_, _, _) => new GateReadyMergeTreeObservation(true));
+
+        try
+        {
+            var driver = MakeDriver(
+                getFacts: _ => new GoalLifecycleFacts(WorkspaceExists: true),
+                runAcceptanceWithSlot: (_, _) => AcceptanceVerificationSummary.PassedWithNoUnmetCriteria,
+                land: goal => new LandingResult(
+                    goal.Id.Value,
+                    goal.Id.Value[..8],
+                    new LandingDecision.Promote(),
+                    "integration",
+                    true,
+                    "ok"),
+                classifyRisk: _ => ChangeRiskTier.DocsOnly,
+                getLandingFileScopes: goal => paths[goal.Id],
+                isVerificationGateSatisfied: _ => true,
+                gateReadyCandidateProjector: projector,
+                runAcceptanceCohort: (selection, goals, policy) =>
+                {
+                    var identity = AcceptanceCohortIdentity.Create(
+                        selection.BindMembers(),
+                        mainRevision,
+                        "dddddddddddddddddddddddddddddddddddddddd",
+                        "manifest-v1");
+                    var receipt = new AcceptanceCohortReceipt(
+                        $"receipt-{identity.Value}",
+                        identity,
+                        AcceptanceCohortGateOutcome.InfrastructureFailure,
+                        DateTimeOffset.UtcNow,
+                        10,
+                        ["infrastructure tests"],
+                        GateExitCode: 2,
+                        GateTestResultPaths: [],
+                        ValidForLanding: false,
+                        InfrastructureReasonCode: AcceptanceCohortInfrastructureReasonCodes.TrxEvidenceIncoherent,
+                        InfrastructureDetail: "Acceptance verification did not produce coherent TRX evidence.");
+                    return new ConductorAcceptanceCohortRunResult(
+                        receipt,
+                        goals.Where(goal => selection.Members.Any(member => member.GoalId == goal.Id)).ToDictionary(
+                            goal => goal.Id.Value,
+                            goal => new ConductorAdvanceResult(
+                                goal.Id.Value,
+                                goal.Id.Value[..8],
+                                policy.Name,
+                                new ConductorAdvanceOutcome.Held(
+                                    GoalLifecycleState.Verified,
+                                    "shared infrastructure failure receipt")),
+                            StringComparer.Ordinal),
+                        $"outcome={receipt.Outcome} receipt={receipt.ReceiptId}");
+                });
+
+            _ = new ConductorBatchLoop(
+                conductEventLogWriter: new ConductEventLogWriter(logPath)).Run(
+                kernel,
+                driver,
+                ConductorAutonomyPolicy.Conservative,
+                NoStopPath(),
+                maxIterations: 1);
+            var exit = File.ReadAllLines(logPath)
+                .Select(line => JsonSerializer.Deserialize<ConductEventRecord>(
+                    line,
+                    new JsonSerializerOptions(JsonSerializerDefaults.Web))!)
+                .Single(record => record.Detail.StartsWith("ACCEPTANCE_COHORT_EXIT", StringComparison.Ordinal));
+
+            Assert.Contains(
+                "outcome=InfrastructureFailure reason=trx-evidence-incoherent",
+                exit.Detail,
+                StringComparison.Ordinal);
+            Assert.Equal(statusesBefore, new[] { first.Status, second.Status });
+        }
+        finally
+        {
+            TryDeleteDirectory(root);
+        }
+    }
+
+    [Xunit.Fact]
     public void ProductionTrainLeavesCompatiblePairForCohortInSameTick()
     {
         var kernel = new AgentOrchestratorKernel();

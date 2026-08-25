@@ -616,6 +616,139 @@ public sealed class AcceptanceCohortWorkflowTests : GoalWorktreeTestBase
     }
 
     [Fact]
+    public void Store_InfrastructureCauseRoundTripsLegacyUnknown()
+    {
+        var root = Path.Combine(Path.GetTempPath(), $"cohort-store-cause-{Guid.NewGuid():N}");
+        Directory.CreateDirectory(root);
+        try
+        {
+            var databasePath = Path.Combine(root, "cohort.db");
+            var members = new[]
+            {
+                Bind(new GoalId("11111111111111111111111111111111"), new string('b', 40), "src/A.cs", "resource:a"),
+                Bind(new GoalId("22222222222222222222222222222222"), new string('c', 40), "tests/B.cs", "resource:b")
+            };
+            var legacyIdentity = AcceptanceCohortIdentity.Create(
+                members,
+                new string('a', 40),
+                new string('d', 40),
+                "manifest-v1");
+            using (var connection = new SqliteConnection($"Data Source={databasePath}"))
+            {
+                connection.Open();
+                using (var create = connection.CreateCommand())
+                {
+                    create.CommandText = """
+                        CREATE TABLE cohort_receipts(
+                            cohort_id TEXT PRIMARY KEY,
+                            receipt_id TEXT NOT NULL UNIQUE,
+                            main_revision TEXT NOT NULL,
+                            combined_tree_revision TEXT NOT NULL,
+                            manifest_identity TEXT NOT NULL,
+                            outcome TEXT NOT NULL,
+                            attribution TEXT NOT NULL,
+                            valid_for_landing INTEGER NOT NULL,
+                            completed_at TEXT NOT NULL,
+                            gate_elapsed_ms INTEGER NOT NULL,
+                            failed_checks_json TEXT NOT NULL,
+                            gate_exit_code INTEGER NULL,
+                            gate_test_result_paths_json TEXT NOT NULL DEFAULT '[]',
+                            gate_evidence_artifacts_json TEXT NOT NULL DEFAULT '[]');
+                        CREATE TABLE cohort_members(
+                            cohort_id TEXT NOT NULL,
+                            member_ordinal INTEGER NOT NULL,
+                            goal_id TEXT NOT NULL,
+                            branch_revision TEXT NOT NULL,
+                            candidate_revision TEXT NOT NULL,
+                            landing_paths_json TEXT NOT NULL,
+                            resource_keys_json TEXT NOT NULL,
+                            risk_tier TEXT NOT NULL,
+                            promotion_disposition TEXT NOT NULL,
+                            merge_status TEXT NOT NULL,
+                            merge_reason TEXT NOT NULL,
+                            landed INTEGER NOT NULL DEFAULT 0,
+                            PRIMARY KEY(cohort_id, member_ordinal));
+                        """;
+                    create.ExecuteNonQuery();
+                }
+                using (var receipt = connection.CreateCommand())
+                {
+                    receipt.CommandText = """
+                        INSERT INTO cohort_receipts(
+                            cohort_id, receipt_id, main_revision, combined_tree_revision, manifest_identity,
+                            outcome, attribution, valid_for_landing, completed_at, gate_elapsed_ms,
+                            failed_checks_json, gate_exit_code, gate_test_result_paths_json, gate_evidence_artifacts_json)
+                        VALUES ($cohort, 'legacy-receipt', $main, $tree, 'manifest-v1', 'InfrastructureFailure',
+                            'NotApplicable', 0, $completed, 50, '["legacy infrastructure check"]', 2, '[]', '[]');
+                        """;
+                    receipt.Parameters.AddWithValue("$cohort", legacyIdentity.Value);
+                    receipt.Parameters.AddWithValue("$main", legacyIdentity.ObservedMainRevision);
+                    receipt.Parameters.AddWithValue("$tree", legacyIdentity.CombinedTreeRevision);
+                    receipt.Parameters.AddWithValue("$completed", DateTimeOffset.UtcNow.ToString("O"));
+                    receipt.ExecuteNonQuery();
+                }
+                for (var index = 0; index < members.Length; index++)
+                {
+                    var member = members[index];
+                    using var insertMember = connection.CreateCommand();
+                    insertMember.CommandText = """
+                        INSERT INTO cohort_members(
+                            cohort_id, member_ordinal, goal_id, branch_revision, candidate_revision,
+                            landing_paths_json, resource_keys_json, risk_tier, promotion_disposition,
+                            merge_status, merge_reason, landed)
+                        VALUES ($cohort, $ordinal, $goal, $branch, $candidate, $paths, $resources,
+                            $risk, $promotion, $mergeStatus, $mergeReason, 0);
+                        """;
+                    insertMember.Parameters.AddWithValue("$cohort", legacyIdentity.Value);
+                    insertMember.Parameters.AddWithValue("$ordinal", index);
+                    insertMember.Parameters.AddWithValue("$goal", member.GoalId.Value);
+                    insertMember.Parameters.AddWithValue("$branch", member.BranchRevision);
+                    insertMember.Parameters.AddWithValue("$candidate", member.CandidateRevision);
+                    insertMember.Parameters.AddWithValue("$paths", JsonSerializer.Serialize(member.LandingPaths));
+                    insertMember.Parameters.AddWithValue("$resources", JsonSerializer.Serialize(member.ResourceKeys));
+                    insertMember.Parameters.AddWithValue("$risk", member.ChangeRiskTier.ToString());
+                    insertMember.Parameters.AddWithValue("$promotion", member.AutoPromotionDisposition.ToString());
+                    insertMember.Parameters.AddWithValue("$mergeStatus", member.MergeStatus);
+                    insertMember.Parameters.AddWithValue("$mergeReason", member.MergeReason);
+                    insertMember.ExecuteNonQuery();
+                }
+            }
+
+            var store = new CohortAcceptanceStore(databasePath);
+            var legacy = store.TryReadReceipt(legacyIdentity.Value);
+            Assert.NotNull(legacy);
+            Assert.Equal(AcceptanceCohortInfrastructureReasonCodes.LegacyUnknown, legacy.InfrastructureReasonCode);
+            Assert.Null(legacy.InfrastructureDetail);
+
+            var currentIdentity = AcceptanceCohortIdentity.Create(
+                members,
+                legacyIdentity.ObservedMainRevision,
+                new string('e', 40),
+                legacyIdentity.ManifestIdentity);
+            _ = store.SaveGateReceipt(new AcceptanceCohortReceipt(
+                "current-receipt",
+                currentIdentity,
+                AcceptanceCohortGateOutcome.InfrastructureFailure,
+                DateTimeOffset.UtcNow,
+                75,
+                ["infrastructure tests"],
+                GateExitCode: 2,
+                GateTestResultPaths: [],
+                InfrastructureReasonCode: AcceptanceCohortInfrastructureReasonCodes.TrxEvidenceIncoherent,
+                InfrastructureDetail: "The TRX result set was incomplete."));
+
+            var current = new CohortAcceptanceStore(databasePath).TryReadReceipt(currentIdentity.Value);
+            Assert.NotNull(current);
+            Assert.Equal(AcceptanceCohortInfrastructureReasonCodes.TrxEvidenceIncoherent, current.InfrastructureReasonCode);
+            Assert.Equal("The TRX result set was incomplete.", current.InfrastructureDetail);
+        }
+        finally
+        {
+            DeleteDirectory(root);
+        }
+    }
+
+    [Fact]
     public void Store_RejectsPassingReceiptWithoutAuthoritativeEvidence()
     {
         var root = Path.Combine(Path.GetTempPath(), $"cohort-store-guard-{Guid.NewGuid():N}");
@@ -2555,7 +2688,9 @@ public sealed class AcceptanceCohortWorkflowTests : GoalWorktreeTestBase
                 100,
                 ["infrastructure:runner-loss"],
                 GateExitCode: null,
-                GateTestResultPaths: []));
+                GateTestResultPaths: [],
+                InfrastructureReasonCode: AcceptanceCohortInfrastructureReasonCodes.ExitCodeMissing,
+                InfrastructureDetail: "The persisted gate did not report an exit code."));
 
             var result = driver.RunAcceptanceCohort(
                 selection, [firstGoal, secondGoal], ConductorAutonomyPolicy.Permissive);
