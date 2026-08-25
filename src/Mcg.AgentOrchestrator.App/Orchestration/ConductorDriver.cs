@@ -3766,14 +3766,9 @@ internal sealed partial class ConductorDriver
                 stableSlotLease: stableSlotLease,
                 cancellationToken: cancellationToken).GetAwaiter().GetResult();
             gateExitCode = verification.ExitCode;
-            classification = ClassifyCohortVerificationResult(verification);
-            if (!string.Equals(
-                    classification.InfrastructureReasonCode,
-                    AcceptanceCohortInfrastructureReasonCodes.ResultPathInvalid,
-                    StringComparison.Ordinal))
-            {
-                gateTestResultPaths = NormalizeCohortTestResultPaths(verification.TestResultPaths);
-            }
+            var classifiedVerification = ClassifyCohortVerificationResultWithPaths(verification);
+            classification = classifiedVerification.Classification;
+            gateTestResultPaths = classifiedVerification.NormalizedTestResultPaths;
             failedChecks = verification.Checks?
                 .Where(check => !check.Passed && !check.Advisory)
                 .Select(check => check.Name)
@@ -3982,21 +3977,13 @@ internal sealed partial class ConductorDriver
         ClassifyCohortVerificationResult(result).Outcome;
 
     internal static AcceptanceCohortGateClassification ClassifyCohortVerificationResult(
+        AcceptanceVerificationResult result) =>
+        ClassifyCohortVerificationResultWithPaths(result).Classification;
+
+    private static ClassifiedCohortVerification ClassifyCohortVerificationResultWithPaths(
         AcceptanceVerificationResult result)
     {
         ArgumentNullException.ThrowIfNull(result);
-        if (result.Skipped)
-        {
-            return InfrastructureClassification(
-                AcceptanceCohortInfrastructureReasonCodes.VerificationSkipped,
-                result.OutputTail ?? "Acceptance verification was skipped.");
-        }
-        if (result.ExitCode is null)
-        {
-            return InfrastructureClassification(
-                AcceptanceCohortInfrastructureReasonCodes.ExitCodeMissing,
-                result.OutputTail ?? "Acceptance verification did not report an exit code.");
-        }
         IReadOnlyList<string> normalizedTestResultPaths;
         try
         {
@@ -4004,23 +3991,48 @@ internal sealed partial class ConductorDriver
         }
         catch (Exception ex) when (ex is ArgumentException or NotSupportedException or PathTooLongException)
         {
-            return InfrastructureClassification(
-                AcceptanceCohortInfrastructureReasonCodes.ResultPathInvalid,
-                $"{ex.GetType().Name}: {ex.Message}");
+            return new ClassifiedCohortVerification(
+                InfrastructureClassification(
+                    AcceptanceCohortInfrastructureReasonCodes.ResultPathInvalid,
+                    $"{ex.GetType().Name}: {ex.Message}"),
+                []);
+        }
+        if (result.Skipped)
+        {
+            return new ClassifiedCohortVerification(
+                InfrastructureClassification(
+                    AcceptanceCohortInfrastructureReasonCodes.VerificationSkipped,
+                    result.OutputTail ?? "Acceptance verification was skipped."),
+                normalizedTestResultPaths);
+        }
+        if (result.ExitCode is null)
+        {
+            return new ClassifiedCohortVerification(
+                InfrastructureClassification(
+                    AcceptanceCohortInfrastructureReasonCodes.ExitCodeMissing,
+                    result.OutputTail ?? "Acceptance verification did not report an exit code."),
+                normalizedTestResultPaths);
         }
         if (!AcceptanceCohortGateEvidence.HasCoherentTrxEvidence(normalizedTestResultPaths))
         {
-            return IsSourceSizeContentFailure(result)
+            var classification = IsSourceSizeContentFailure(result)
                 ? new AcceptanceCohortGateClassification(AcceptanceCohortGateOutcome.Failed)
                 : InfrastructureClassification(
                     AcceptanceCohortInfrastructureReasonCodes.TrxEvidenceIncoherent,
                     result.OutputTail ?? "Acceptance verification did not produce coherent TRX evidence.");
+            return new ClassifiedCohortVerification(classification, normalizedTestResultPaths);
         }
-        return new AcceptanceCohortGateClassification(
-            result.Passed && result.ExitCode == 0
-                ? AcceptanceCohortGateOutcome.Passed
-                : AcceptanceCohortGateOutcome.Failed);
+        return new ClassifiedCohortVerification(
+            new AcceptanceCohortGateClassification(
+                result.Passed && result.ExitCode == 0
+                    ? AcceptanceCohortGateOutcome.Passed
+                    : AcceptanceCohortGateOutcome.Failed),
+            normalizedTestResultPaths);
     }
+
+    private sealed record ClassifiedCohortVerification(
+        AcceptanceCohortGateClassification Classification,
+        IReadOnlyList<string> NormalizedTestResultPaths);
 
     internal static AcceptanceCohortGateClassification ClassifyCohortInfrastructureException(Exception exception)
     {
