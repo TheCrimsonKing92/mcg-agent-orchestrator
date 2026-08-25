@@ -316,14 +316,22 @@ internal sealed class TrialHarnessComparison(ITrialRootHost host)
             throw new FileNotFoundException($"Harness capture file does not exist: '{path}'.", path);
         }
 
-        using var stream = File.OpenRead(path);
+        using var stream = new FileStream(
+            path,
+            FileMode.Open,
+            FileAccess.Read,
+            FileShare.ReadWrite | FileShare.Delete);
         var digest = Convert.ToHexString(SHA256.HashData(stream)).ToLowerInvariant();
         return new TrialOutputMetadata(stream.Length, digest);
     }
 
     private static TrialWorkerResultEvidence InspectWorkerResult(string stdoutPath)
     {
-        using var stream = File.OpenRead(stdoutPath);
+        using var stream = new FileStream(
+            stdoutPath,
+            FileMode.Open,
+            FileAccess.Read,
+            FileShare.ReadWrite | FileShare.Delete);
         var truncated = stream.Length > MaximumWorkerResultInspectionBytes;
         var byteCount = (int)Math.Min(stream.Length, MaximumWorkerResultInspectionBytes);
         if (truncated)

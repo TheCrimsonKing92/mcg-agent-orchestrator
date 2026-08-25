@@ -264,6 +264,26 @@ public sealed class TrialHarnessComparisonTests
     }
 
     [Xunit.Fact]
+    public void RunPreservesTimeoutOutcomeWhileCaptureHandlesRemainOpen()
+    {
+        using var fixture = new Fixture();
+        var host = new FakeTrialRootHost(fixture.Root);
+        host.TimeoutOnWait.Add("alpha");
+        host.HoldCaptureFilesOpen.Add("alpha");
+
+        var result = new TrialHarnessComparison(host).Run(fixture.Request(
+            new("alpha", "alpha.exe", []),
+            new("beta", "beta.exe", [])));
+
+        var alpha = result.Harnesses.Single(item => item.Name == "alpha");
+        Xunit.Assert.False(result.Succeeded);
+        Xunit.Assert.Equal(TrialHarnessOutcome.TimedOut, alpha.Outcome);
+        Xunit.Assert.NotNull(alpha.StandardOutput);
+        Xunit.Assert.NotNull(alpha.StandardError);
+        Xunit.Assert.Contains(alpha.Diagnostics, diagnostic => diagnostic.Contains("timed out", StringComparison.OrdinalIgnoreCase));
+    }
+
+    [Xunit.Fact]
     public void RunReportsMissingCaptureInsteadOfReturningAnEmptyReceipt()
     {
         using var fixture = new Fixture();
@@ -389,6 +409,7 @@ public sealed class TrialHarnessComparisonTests
         public HashSet<string> ThrowOnStart { get; } = new(StringComparer.OrdinalIgnoreCase);
         public HashSet<string> ThrowOnAddEnvironment { get; } = new(StringComparer.OrdinalIgnoreCase);
         public HashSet<string> TimeoutOnWait { get; } = new(StringComparer.OrdinalIgnoreCase);
+        public HashSet<string> HoldCaptureFilesOpen { get; } = new(StringComparer.OrdinalIgnoreCase);
         public HashSet<string> UncleanTeardown { get; } = new(StringComparer.OrdinalIgnoreCase);
         public HashSet<string> MissingStdout { get; } = new(StringComparer.OrdinalIgnoreCase);
         public Dictionary<string, string> StdoutContent { get; } = new(StringComparer.OrdinalIgnoreCase);
@@ -447,7 +468,12 @@ public sealed class TrialHarnessComparisonTests
                     File.WriteAllText(stdout, owner.StdoutContent.GetValueOrDefault(name, SuccessfulWorkerResult));
                 }
                 File.WriteAllText(stderr, owner.StderrContent.GetValueOrDefault(name, $"{name} stderr"));
-                return new FakeLaunch(stdout, stderr, owner.ExitCodes.GetValueOrDefault(name), !owner.TimeoutOnWait.Contains(name));
+                return new FakeLaunch(
+                    stdout,
+                    stderr,
+                    owner.ExitCodes.GetValueOrDefault(name),
+                    !owner.TimeoutOnWait.Contains(name),
+                    owner.HoldCaptureFilesOpen.Contains(name));
             }
 
             public TrialTeardownReport Destroy()
@@ -475,14 +501,33 @@ public sealed class TrialHarnessComparisonTests
             }
         }
 
-        private sealed class FakeLaunch(string stdout, string stderr, int exitCode, bool exits) : ITrialLaunch
+        private sealed class FakeLaunch : ITrialLaunch
         {
-            public string StdoutPath => stdout;
-            public string StderrPath => stderr;
-            public int ExitCode => exitCode;
-            public bool WaitForExit(int milliseconds) => exits;
+            private readonly bool _exits;
+            private readonly FileStream? _stdoutWriter;
+            private readonly FileStream? _stderrWriter;
+
+            public FakeLaunch(string stdout, string stderr, int exitCode, bool exits, bool holdCaptureFilesOpen)
+            {
+                StdoutPath = stdout;
+                StderrPath = stderr;
+                ExitCode = exitCode;
+                _exits = exits;
+                if (holdCaptureFilesOpen)
+                {
+                    _stdoutWriter = new FileStream(stdout, FileMode.Open, FileAccess.Write, FileShare.ReadWrite | FileShare.Delete);
+                    _stderrWriter = new FileStream(stderr, FileMode.Open, FileAccess.Write, FileShare.ReadWrite | FileShare.Delete);
+                }
+            }
+
+            public string StdoutPath { get; }
+            public string StderrPath { get; }
+            public int ExitCode { get; }
+            public bool WaitForExit(int milliseconds) => _exits;
             public void Dispose()
             {
+                _stdoutWriter?.Dispose();
+                _stderrWriter?.Dispose();
             }
         }
     }

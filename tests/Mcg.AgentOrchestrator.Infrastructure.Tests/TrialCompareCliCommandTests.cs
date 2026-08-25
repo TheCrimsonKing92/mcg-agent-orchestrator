@@ -9,6 +9,69 @@ namespace Mcg.AgentOrchestrator.Infrastructure.Tests;
 public sealed class TrialCompareCliCommandTests
 {
     [Xunit.Fact]
+    public async Task HistoricalTrialCompareThroughPersistentRunnerLeavesOutboxUntouched()
+    {
+        var root = Path.Combine(Path.GetTempPath(), "trial-compare-cli-tests", Guid.NewGuid().ToString("N"));
+        try
+        {
+            Directory.CreateDirectory(root);
+            var workspace = OrchestratorWorkspace.ForDirectory(root);
+            _ = StateDbMigrations.EnsureUpToDate(workspace.SqliteStatePath);
+            var repository = new SqliteOrchestratorStateRepository(workspace.SqliteStatePath);
+            var goal = HistoricalGoal(Dispatch(0, "brief one", "base-sha", "OpenAI", "gpt-a")) with
+            {
+                Objective = "brief one",
+                BriefVersions =
+                [
+                    new GoalBriefVersion(1, "brief one", DateTimeOffset.Parse("2026-01-01T00:00:00Z"))
+                ]
+            };
+            await repository.SaveAsync(AgentOrchestratorKernel.FromSnapshot(new OrchestratorSnapshot([goal], [])));
+            using (var connection = new Microsoft.Data.Sqlite.SqliteConnection($"Data Source={workspace.SqliteStatePath};Pooling=False;"))
+            {
+                connection.Open();
+                using var insert = connection.CreateCommand();
+                insert.CommandText = """
+                    INSERT INTO state_outbox (id, kind, payload_json, created_at)
+                    VALUES ('pending-audit', 'acceptance-retry-audit', '{}', '2026-01-01T00:00:00.0000000+00:00')
+                    """;
+                Xunit.Assert.Equal(1, insert.ExecuteNonQuery());
+            }
+
+            var specPath = WriteHistoricalSpec(root, goal.Id);
+            IReadOnlyList<AgentDefinition> agents = [];
+            var providers = new InMemoryModelProviderRegistry([]);
+            var workerProfiles = new WorkerProfileCatalog([]);
+            Goal? currentGoal = null;
+
+            var exception = Xunit.Assert.Throws<ArgumentException>(() => CliPersistentStateRunner.ExecuteCommand(
+                ["trial-compare", "--spec", specPath],
+                repository,
+                workspace,
+                ref agents,
+                providers,
+                ref workerProfiles,
+                ref currentGoal));
+
+            Xunit.Assert.Contains("At least two harnesses are required", exception.Message, StringComparison.Ordinal);
+            using var checkConnection = new Microsoft.Data.Sqlite.SqliteConnection($"Data Source={workspace.SqliteStatePath};Mode=ReadOnly;Pooling=False;");
+            checkConnection.Open();
+            using var check = checkConnection.CreateCommand();
+            check.CommandText = "SELECT quarantined_at, quarantine_reason, processing_token, processing_started_at FROM state_outbox WHERE id = 'pending-audit'";
+            using var reader = check.ExecuteReader();
+            Xunit.Assert.True(reader.Read());
+            Xunit.Assert.All(Enumerable.Range(0, reader.FieldCount), index => Xunit.Assert.True(reader.IsDBNull(index)));
+        }
+        finally
+        {
+            if (Directory.Exists(root))
+            {
+                Directory.Delete(root, recursive: true);
+            }
+        }
+    }
+
+    [Xunit.Fact]
     public async Task HistoricalTrialCompareThroughProgramLoadsPersistedGoal()
     {
         var root = Path.Combine(Path.GetTempPath(), "trial-compare-cli-tests", Guid.NewGuid().ToString("N"));

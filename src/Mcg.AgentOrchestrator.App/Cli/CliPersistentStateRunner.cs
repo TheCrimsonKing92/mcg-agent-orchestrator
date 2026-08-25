@@ -86,6 +86,18 @@ internal static class CliPersistentStateRunner
             return false;
         }
 
+        if (TrialCompareCliCommand.RequiresHistoricalState(args))
+        {
+            return ExecuteHistoricalTrialCompareReadOnly(
+                args,
+                stateRepository,
+                workspace,
+                ref agents,
+                providers,
+                ref workerProfiles,
+                channel);
+        }
+
         using var writeOperationTag = SqliteOrchestratorStateRepository.UseWriteOperationTag(
             $"cli:{(args.Count == 0 ? "repl" : args[0].Trim().ToLowerInvariant())}");
         DrainAcceptanceRetryAuditOutbox(stateRepository, workspace);
@@ -112,18 +124,6 @@ internal static class CliPersistentStateRunner
             var records = stateRepository.BuildModelOutcomeScorecardAsync().GetAwaiter().GetResult();
             ConsoleViews.PrintModelOutcomeScorecard(records);
             return false;
-        }
-
-        if (TrialCompareCliCommand.RequiresHistoricalState(args))
-        {
-            return ExecuteHistoricalTrialCompareReadOnly(
-                args,
-                stateRepository,
-                workspace,
-                ref agents,
-                providers,
-                ref workerProfiles,
-                channel);
         }
 
         if (SkipsKernelState(args))
