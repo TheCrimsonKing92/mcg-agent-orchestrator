@@ -22,7 +22,8 @@ internal sealed record ProcessBatchExecutionResult(
     IReadOnlyList<TaskSpec> Tasks,
     IReadOnlyList<WorkerSandboxPrepRecoverableAction>? RecoveryActions = null,
     int RequeueSkippedCount = 0,
-    IReadOnlyList<DispatchProcessStartFailure>? StartFailures = null);
+    IReadOnlyList<DispatchProcessStartFailure>? StartFailures = null,
+    IReadOnlyList<DispatchRefreshOutcome>? RefreshOutcomes = null);
 
 internal sealed record SubscriptionStartResult(
     IReadOnlyList<WorkerProfileDispatchResult> Dispatches,

@@ -62,12 +62,11 @@ internal sealed partial class ConductorBatchLoop
     internal const string SelfRelaunchEnabledEnvironmentVariable = "MCG_ORCHESTRATOR_SELF_RELAUNCH_ENABLED";
     internal const bool DefaultSelfRelaunchEnabled = false;
     private const string SetAsideSelfClearDecisionPrefix = "Set-aside self-cleared:";
-
     private readonly Func<AgentOrchestratorKernel, IReadOnlySet<string>, TerminalGoalSweepResult?> _sweep;
     private readonly Action<AgentOrchestratorKernel, Goal> _reapGoalRunningDispatches;
     private readonly Action<AgentOrchestratorKernel, Goal> _detachGoalRunningDispatches;
     private readonly Action<AgentOrchestratorKernel> _recoverInterruptedDispatches;
-    private readonly Action<AgentOrchestratorKernel, Goal> _refreshGoalDispatchesBeforeAdvance;
+    private readonly GoalDispatchRefresh _refreshGoalDispatchesBeforeAdvance;
     private readonly ConductorWatchProgressReporter _watchProgressReporter;
     private readonly OperatorIntentCoordinator? _operatorIntents;
     private readonly ProgressiveReviewGlanceCoordinator? _progressiveReviewGlances;
@@ -98,7 +97,7 @@ internal sealed partial class ConductorBatchLoop
         Action<AgentOrchestratorKernel, Goal>? reapGoalRunningDispatches = null,
         Action<AgentOrchestratorKernel, Goal>? detachGoalRunningDispatches = null,
         Action<AgentOrchestratorKernel>? recoverInterruptedDispatches = null,
-        Action<AgentOrchestratorKernel, Goal>? refreshGoalDispatchesBeforeAdvance = null,
+        GoalDispatchRefresh? refreshGoalDispatchesBeforeAdvance = null,
         ConductorWatchProgressReporter? watchProgressReporter = null,
         Func<AgentOrchestratorKernel, TerminalGoalSweepResult?>? measuredSweep = null,
         Func<ConductorLoopHandoffRequest, ConductorLoopHandoffResult>? handoffOnMaxDuration = null,
@@ -130,7 +129,7 @@ internal sealed partial class ConductorBatchLoop
         _reapGoalRunningDispatches = reapGoalRunningDispatches ?? ((_, _) => { });
         _detachGoalRunningDispatches = detachGoalRunningDispatches ?? _reapGoalRunningDispatches;
         _recoverInterruptedDispatches = recoverInterruptedDispatches ?? (_ => { });
-        _refreshGoalDispatchesBeforeAdvance = refreshGoalDispatchesBeforeAdvance ?? ((_, _) => { });
+        _refreshGoalDispatchesBeforeAdvance = refreshGoalDispatchesBeforeAdvance ?? ((_, _) => null);
         _watchProgressReporter = watchProgressReporter ?? new ConductorWatchProgressReporter();
         _operatorIntents = operatorIntents;
         _progressiveReviewGlances = progressiveReviewGlances;
@@ -1108,7 +1107,7 @@ internal sealed partial class ConductorBatchLoop
                         () =>
                         {
                             var beforeRefresh = BuildEscalatedGoalStateFingerprint(kernel, driver, goal);
-                            _refreshGoalDispatchesBeforeAdvance(kernel, goal);
+                            var runningHoldReason = DetachedDispatchHoldReasonBuilder.Build(goal, _refreshGoalDispatchesBeforeAdvance(kernel, goal));
                             if (_progressiveReviewGlances is not null && watchInterval is not null)
                             {
                                 var glanceResult = _progressiveReviewGlances.Observe(
@@ -1159,7 +1158,7 @@ internal sealed partial class ConductorBatchLoop
                                     goal,
                                     policy,
                                     BuildAcceptanceEngineHoldReason(engineHealth!))
-                                : driver.AdvanceOnce(goal, policy);
+                                : driver.AdvanceOnce(goal, policy, runningHoldReason);
                         },
                         kernel,
                         driver,
