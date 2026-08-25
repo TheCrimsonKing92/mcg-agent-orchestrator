@@ -43,7 +43,7 @@ internal static class SourceSizeRatchet
             // Raised for goal 289b469d: registration-fault hold/escalation must be decided at the existing
             // parallel acceptance completion seam; parsing and durable counting remain in its collaborator.
             // Goal 0e0aa816 extracted the fallback acceptance-start transition to its own partial-class source file.
-            new SourceSizeCeiling("src/Mcg.AgentOrchestrator.App/Orchestration/ConductorBatchLoop.cs", 5132),
+            new SourceSizeCeiling("src/Mcg.AgentOrchestrator.App/Orchestration/ConductorBatchLoop.cs", 5131),
             // Raised for goal 18afe5f2: missing-build-evidence rejection and commit suppression
             // must run where parsed worker results and authoritative changed paths meet. Raised again
             // for goal 0d39b5a3, which adds the narrow Planner sample launch and completion-selection
@@ -52,7 +52,7 @@ internal static class SourceSizeRatchet
             // either goal's individual ceiling.
             // Goal 6a3d0fd4 raised this row to 3262 for the bounded planner-sample wait, which must run
             // between the primary dispatch completing and candidate collection.
-            new SourceSizeCeiling("src/Mcg.AgentOrchestrator.Infrastructure/Processes/BackgroundDispatchRunner.cs", 3262),
+            new SourceSizeCeiling("src/Mcg.AgentOrchestrator.Infrastructure/Processes/BackgroundDispatchRunner.cs", 3243),
             new SourceSizeCeiling("src/Mcg.AgentOrchestrator.Infrastructure/Workers/WorkerProfileDispatcher.cs", 3220),
             new SourceSizeCeiling("src/Mcg.AgentOrchestrator.App/Cli/CliPersistentStateRunner.cs", 4696),
             new SourceSizeCeiling("tests/Mcg.AgentOrchestrator.Infrastructure.Tests/GoalAcceptanceVerifierTests.cs", 1566),

@@ -2115,47 +2115,17 @@ public sealed class BackgroundDispatchRunner
         return cancelled;
     }
 
-    public int DetachRunningProcessesForGoal(AgentOrchestratorKernel kernel, GoalId goalId)
-    {
-        var goal = kernel.GetGoal(goalId);
-        var detached = 0;
-        foreach (var task in goal.Tasks)
-        {
-            if (task.LastProcess is not { IsRunning: true } process)
-            {
-                continue;
-            }
-
-            if (process.WasGracefullyDetachedByConductor)
-            {
-                continue;
-            }
-
-            if (WorkerProcessJobs.TryDetachForGracefulStop(process.ProcessId, out var detachFailure))
-            {
-                kernel.RecordTaskProcessGracefullyDetached(
-                    goalId,
-                    task.Id,
-                    process with { WasGracefullyDetachedByConductor = true });
-                EvictProcessLogCache(process);
-                detached++;
-                continue;
-            }
-
-            CancelLatestProcess(
+    public int DetachRunningProcessesForGoal(AgentOrchestratorKernel kernel, GoalId goalId) =>
+        GracefulDispatchDetacher.DetachRunningProcessesForGoal(
+            kernel,
+            goalId,
+            EvictProcessLogCache,
+            taskId => CancelLatestProcess(
                 kernel,
                 goalId,
-                task.Id,
+                taskId,
                 cancelledByConductor: true,
-                bypassTrackedJobRegistry: true);
-            kernel.RecordTaskNote(
-                goalId,
-                task.Id,
-                $"{detachFailure}; task marked conductor-cancelled so a successor can requeue it.");
-        }
-
-        return detached;
-    }
+                bypassTrackedJobRegistry: true));
 
     public int RequeueInterruptedDispatches(
         AgentOrchestratorKernel kernel,
