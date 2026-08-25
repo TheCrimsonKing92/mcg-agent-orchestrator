@@ -137,6 +137,22 @@ public sealed class PlannerSamplingDispatchTests : WorkerDispatchTestSupport
     }
 
     [Xunit.Fact]
+    public void CollectCandidates_UnsupportedJsonl_IsTypedUnrecognizedInReceipt()
+    {
+        AssertInvalidCodexSampleState(
+            "{\"type\":\"future.event\",\"payload\":{}}",
+            PlannerCandidateNormalizationState.Unrecognized);
+    }
+
+    [Xunit.Fact]
+    public void CollectCandidates_MalformedJsonl_IsTypedMalformedInReceipt()
+    {
+        AssertInvalidCodexSampleState(
+            "{not-jsonl}",
+            PlannerCandidateNormalizationState.Malformed);
+    }
+
+    [Xunit.Fact]
     public void SingleSampleProductionCompletionPreservesLegacyContractBytes()
     {
         var root = CreateSeededDispatchRepository();
@@ -536,6 +552,38 @@ public sealed class PlannerSamplingDispatchTests : WorkerDispatchTestSupport
             CreateNoWindow = true
         }.WithArguments(WorkerShell.BaseArguments().Concat(["Start-Sleep -Seconds 30"]));
         return Process.Start(startInfo) ?? throw new InvalidOperationException("Failed to start Planner sample test host.");
+    }
+
+    private static void AssertInvalidCodexSampleState(
+        string sampleOutput,
+        PlannerCandidateNormalizationState expectedState)
+    {
+        var root = CreateTempDirectory();
+        var primaryPath = Path.Combine(root, "planner.out.log");
+        File.WriteAllText(primaryPath, ToCodexJsonl(ReadPlannerFixture(), 11, 7, 3));
+        var sample = Xunit.Assert.Single(PlannerSampleDispatcher.CreateArtifacts(primaryPath, 2));
+        File.WriteAllText(sample.StandardOutputPath, sampleOutput);
+        DispatchExitArtifacts.Write(
+            sample.ExitCodePath,
+            DispatchExitArtifacts.Native(0, "fixture completed", DateTimeOffset.UtcNow));
+        var dispatch = new TaskDispatchRecord(
+            "planner",
+            "codex exec --json",
+            root,
+            DateTimeOffset.UtcNow,
+            WorkerProviderKind: ProviderKind.OpenAICodexCli,
+            PlannerSampleCount: 2);
+
+        var candidates = PlannerSampleDispatcher.CollectCandidates(primaryPath, 2, dispatch);
+        var result = PlannerCandidateSelector.Select(candidates, InfrastructureTestSupport.FindRepositoryRoot());
+
+        var secondary = candidates[1];
+        Xunit.Assert.Equal(PlannerCandidateTerminalState.Succeeded, secondary.TerminalState);
+        Xunit.Assert.Equal(expectedState, secondary.NormalizationState);
+        var evidence = Xunit.Assert.Single(result.Receipt.Candidates!, candidate => candidate.CandidateIndex == 1);
+        Xunit.Assert.Equal(PlannerCandidateTerminalState.Succeeded, evidence.TerminalState);
+        Xunit.Assert.Equal(expectedState, evidence.NormalizationState);
+        Xunit.Assert.Equal(PlannerCandidateContractVerdict.NotEvaluated, evidence.ContractVerdict);
     }
 
     private static void SeedFixtureCitationTargets(string worktree)

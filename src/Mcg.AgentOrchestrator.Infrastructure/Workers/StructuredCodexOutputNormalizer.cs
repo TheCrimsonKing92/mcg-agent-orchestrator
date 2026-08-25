@@ -53,7 +53,10 @@ internal static class StructuredCodexOutputNormalizer
         var parsed = CodexJsonlUsageParser.Parse(raw);
         if (!parsed.Recognized)
         {
-            return new StructuredCodexNormalizationResult(parsed, PlannerCandidateNormalizationState.Malformed);
+            var state = parsed.HasMalformedJsonl
+                ? PlannerCandidateNormalizationState.Malformed
+                : PlannerCandidateNormalizationState.Unrecognized;
+            return new StructuredCodexNormalizationResult(parsed, state);
         }
 
         if (string.IsNullOrWhiteSpace(parsed.WorkerOutput))
