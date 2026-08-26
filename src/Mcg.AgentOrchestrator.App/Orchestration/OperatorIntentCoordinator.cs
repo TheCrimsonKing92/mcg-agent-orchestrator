@@ -187,14 +187,29 @@ internal sealed class OperatorIntentCoordinator
                     AutonomyAction.Retry,
                     OperatorIntentVerbs.Retry,
                     allowed: true);
+                if (retry.RetryCause is null or RetryCause.Unknown)
+                {
+                    kernel.RequestHumanInputDeduplicated(
+                        goal.Id,
+                        taskId,
+                        "The operator retry request has an Unknown retry cause. Classify the cause as " +
+                        "NewSourceFinding, NewTestFinding, CriterionEvidenceOwnerMismatch, " +
+                        "EnvironmentApparatusFailure, ContractClarification, MainDriftConflict, " +
+                        "ProviderInterruption, or UnchangedContextRepeat; then resubmit the retry with " +
+                        "the explicit cause. No retry was admitted.",
+                        HumanWaitKind.SpecClarification,
+                        isAutoDefaultable: false,
+                        isDismissible: false,
+                        isAnswerRequired: true,
+                        isExternallyBlocked: false,
+                        blockerFingerprint: $"operator-retry-cause:{intent.Id}");
+                    break;
+                }
                 kernel.RetryTask(
                     goal.Id,
                     taskId,
                     retry.Message,
-                    retryCause: retry.RetryCause is { } retryCause && retryCause != RetryCause.Unknown
-                        ? retryCause
-                        : throw new InvalidOperationException(
-                            "Operator retry intent is missing an explicit classified retry cause."),
+                    retryCause: retry.RetryCause.Value,
                     retryRoundKind: retry.RetryRoundKind,
                     invalidateDownstream: true);
                 GoalLifecycleCommands.RecordCapabilityWarnings(

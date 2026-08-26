@@ -799,6 +799,15 @@ public sealed class WorkerDispatchTestsDispatchPreparation : WorkerDispatchTestS
             .GetAwaiter()
             .GetResult();
         var checkpointCalls = 0;
+        var processStartCalls = 0;
+        var startedDispatchIdentities = new List<DateTimeOffset>();
+        var checkpointPhases = new List<DispatchRecordCheckpointPhase>();
+        var runner = new BackgroundDispatchRunner(
+            startProcess: startInfo =>
+            {
+                processStartCalls++;
+                return Process.Start(startInfo);
+            });
 
         var exception = Record.Exception(() =>
             GoalManagementCommandService.StartSubscriptionReadyTasks(
@@ -807,14 +816,30 @@ public sealed class WorkerDispatchTestsDispatchPreparation : WorkerDispatchTestS
                 goal,
                 agents,
                 profiles,
-                checkpointBeforeWorkerStart: (_, _, _, _) => checkpointCalls++,
-                runner: new BackgroundDispatchRunner(disableProcessStart: true),
+                checkpointBeforeWorkerStart: (checkpointKernel, checkpointGoalId, checkpointTaskId, checkpointPhase) =>
+                {
+                    checkpointCalls++;
+                    checkpointPhases.Add(checkpointPhase);
+                    startedDispatchIdentities.Add(Assert.IsType<DateTimeOffset>(
+                        checkpointKernel.GetTask(checkpointGoalId, checkpointTaskId).LastDispatch?.DispatchedAt));
+                    new SqliteOrchestratorStateRepository(workspace.SqliteStatePath)
+                        .SaveAsync(checkpointKernel)
+                        .GetAwaiter()
+                        .GetResult();
+                },
+                runner: runner,
                 sandboxOptions: DisabledSandbox));
 
         Assert.Null(exception);
+        Assert.Equal(1, processStartCalls);
         Assert.True(checkpointCalls > 0);
+        Assert.Equal(
+            1,
+            checkpointPhases.Count(phase => phase == DispatchRecordCheckpointPhase.ProcessMayHaveStarted));
         var persistedTask = kernel.GetTask(goal.Id, planner.Id);
         var latestDispatchAt = Assert.IsType<DateTimeOffset>(persistedTask.LastDispatch?.DispatchedAt);
+        Assert.All(startedDispatchIdentities, identity => Assert.Equal(latestDispatchAt, identity));
+        Assert.NotNull(persistedTask.LastProcess);
         Assert.Contains(
             persistedTask.RetryAdmissionHistory,
             receipt =>
