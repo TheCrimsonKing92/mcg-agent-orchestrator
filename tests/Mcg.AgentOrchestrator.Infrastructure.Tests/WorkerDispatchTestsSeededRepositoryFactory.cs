@@ -65,9 +65,7 @@ internal sealed class WorkerDispatchTestsSeededRepositoryFactory
             stagingPath = CanonicalPath(allocatedStagingPath);
             var parent = Path.GetDirectoryName(stagingPath)
                 ?? throw new InvalidOperationException($"Staging path has no parent: {stagingPath}");
-            finalPath = CanonicalPath(Path.Combine(
-                parent,
-                $"{Path.GetFileName(stagingPath)}-published-{Guid.NewGuid():N}"));
+            finalPath = CanonicalPath(Path.Combine(parent, Guid.NewGuid().ToString("N")));
 
             if (!_fileSystem.DirectoryExists(stagingPath))
             {

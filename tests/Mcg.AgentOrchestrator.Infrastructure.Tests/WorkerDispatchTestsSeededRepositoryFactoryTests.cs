@@ -5,7 +5,12 @@ public sealed class WorkerDispatchTestsSeededRepositoryFactoryTests
     [Xunit.Fact]
     public void Create_MultipleCopies_ProducesIndependentCommittedRepositories()
     {
-        using var scope = new FactoryScope();
+        using var scope = new FactoryScope(directoryAllocator: static (root, attempt) =>
+        {
+            var path = Path.Combine(root, attempt.ToString("D32"));
+            Directory.CreateDirectory(path);
+            return path;
+        });
 
         var first = scope.Factory.Create();
         var second = scope.Factory.Create();
@@ -30,6 +35,8 @@ public sealed class WorkerDispatchTestsSeededRepositoryFactoryTests
             second.PublishedIdentity.TopLevelPath);
         Xunit.Assert.True(Directory.Exists(first.PublishedIdentity.GitDirectoryPath));
         Xunit.Assert.True(Directory.Exists(second.PublishedIdentity.GitDirectoryPath));
+        Xunit.Assert.Equal(32, Path.GetFileName(first.PublishedIdentity.RepositoryPath).Length);
+        Xunit.Assert.Equal(32, Path.GetFileName(second.PublishedIdentity.RepositoryPath).Length);
     }
 
     [Xunit.Fact]
@@ -197,10 +204,16 @@ public sealed class WorkerDispatchTestsSeededRepositoryFactoryTests
     [Xunit.Fact]
     public void Create_CleanupFailure_IsRetainedInTypedDiagnostic()
     {
-        var fileSystem = new TestFileSystem(path => path.Contains("-published-", StringComparison.Ordinal));
+        string? publishedPath = null;
+        var fileSystem = new TestFileSystem(
+            path => string.Equals(path, publishedPath, StringComparison.Ordinal));
         using var scope = new FactoryScope(
             hooks: new WorkerDispatchTestsSeededRepositoryFactory.CreationHooks(
-                AfterPublish: published => File.Delete(Path.Combine(published, ".git", "HEAD"))),
+                AfterPublish: published =>
+                {
+                    publishedPath = published;
+                    File.Delete(Path.Combine(published, ".git", "HEAD"));
+                }),
             fileSystem: fileSystem);
 
         var failure = Xunit.Assert.Throws<
