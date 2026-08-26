@@ -66,9 +66,10 @@ public sealed class WorkerDispatchTestsSeededRepositoryFactoryTests
             WorkerDispatchTestsSeededRepositoryFactory.SeededRepositoryFailureException>(
                 () => scope.Factory.Create());
 
-        Xunit.Assert.Equal(
-            WorkerDispatchTestsSeededRepositoryFactory.ValidationCheck.StagingHeadCommit,
-            failure.Diagnostic.Check);
+        Xunit.Assert.True(
+            failure.Diagnostic.Check ==
+                WorkerDispatchTestsSeededRepositoryFactory.ValidationCheck.StagingHeadCommit,
+            failure.Message);
         Xunit.Assert.NotNull(failure.Diagnostic.TemplateIdentity);
         Xunit.Assert.NotNull(failure.Diagnostic.StagingPath);
         Xunit.Assert.NotNull(failure.Diagnostic.FinalPath);
@@ -397,7 +398,7 @@ public sealed class WorkerDispatchTestsSeededRepositoryFactoryTests
             WorkerDispatchTestsSeededRepositoryFactory.IFileSystem? fileSystem = null,
             WorkerDispatchTestsSeededRepositoryFactory.IGitRunner? gitRunner = null)
         {
-            Root = InfrastructureTestSupport.CreateTempDirectory();
+            Root = CreateIsolatedFactoryRoot();
             _directoryAllocator = directoryAllocator;
             Factory = new WorkerDispatchTestsSeededRepositoryFactory(
                 AllocateDirectory,
@@ -423,6 +424,23 @@ public sealed class WorkerDispatchTestsSeededRepositoryFactoryTests
         {
             var attempt = Interlocked.Increment(ref _nextDirectory);
             return _directoryAllocator?.Invoke(Root, attempt) ?? CreateOwnedDirectory(Root, attempt);
+        }
+
+        private static string CreateIsolatedFactoryRoot()
+        {
+            var processTempRoot = Path.TrimEndingDirectorySeparator(Path.GetTempPath());
+            var rootParent = AssemblyTempRedirect.TryParseProcessTempRootName(
+                Path.GetFileName(processTempRoot),
+                out _)
+                    ? Path.GetDirectoryName(processTempRoot)
+                        ?? throw new InvalidOperationException(
+                            $"The process temp root has no parent: {processTempRoot}")
+                    : processTempRoot;
+            var root = Path.Combine(
+                rootParent,
+                $"factory-{Environment.ProcessId:x}-{Guid.NewGuid():N}");
+            Directory.CreateDirectory(root);
+            return root;
         }
     }
 
