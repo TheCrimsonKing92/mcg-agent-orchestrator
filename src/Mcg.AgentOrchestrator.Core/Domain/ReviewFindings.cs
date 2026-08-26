@@ -71,7 +71,8 @@ public enum FindingCategory
     TestEvidence,
     TestCoverage,
     CodeQuality,
-    OperatorOwned
+    OperatorOwned,
+    AcceptanceOwned
 }
 
 public sealed class FindingCategoryJsonConverter : JsonConverter<FindingCategory>
@@ -86,6 +87,7 @@ public sealed class FindingCategoryJsonConverter : JsonConverter<FindingCategory
             ["test-coverage"] = FindingCategory.TestCoverage,
             ["code-quality"] = FindingCategory.CodeQuality,
             ["operator-owned"] = FindingCategory.OperatorOwned,
+            ["acceptance-owned"] = FindingCategory.AcceptanceOwned,
             ["unspecified"] = FindingCategory.Unspecified
         };
 
@@ -125,6 +127,7 @@ public sealed class FindingCategoryJsonConverter : JsonConverter<FindingCategory
         FindingCategory.TestCoverage => "test-coverage",
         FindingCategory.CodeQuality => "code-quality",
         FindingCategory.OperatorOwned => "operator-owned",
+        FindingCategory.AcceptanceOwned => "acceptance-owned",
         _ => "unspecified"
     };
 }

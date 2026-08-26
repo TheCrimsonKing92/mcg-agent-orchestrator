@@ -5,6 +5,13 @@ public sealed record ReviewRetryRoute(
     bool EscalateToOperator,
     string Reason);
 
+public sealed record ReviewFindingOwnerProjection(
+    ReviewFinding Finding,
+    AgentRole? TargetRole,
+    bool EscalateToOperator,
+    bool AcceptanceOwned,
+    string Reason);
+
 public static class ReviewFindingRouting
 {
     public static ReviewRetryRoute Resolve(
@@ -14,33 +21,39 @@ public static class ReviewFindingRouting
         ArgumentNullException.ThrowIfNull(openBlockingFindings);
         blockerProse ??= string.Empty;
 
-        if (openBlockingFindings.Any(finding =>
-                finding.Category is FindingCategory.OperatorOwned or FindingCategory.SpecDefect))
-        {
-            return new ReviewRetryRoute(null, true, "typed operator-owned or spec-defect finding");
-        }
-
         if (openBlockingFindings.Count > 0 &&
-            openBlockingFindings.All(finding =>
-                finding.Category is FindingCategory.TestEvidence or FindingCategory.TestCoverage))
+            openBlockingFindings.All(finding => finding.Category == FindingCategory.Unspecified))
         {
-            return new ReviewRetryRoute(AgentRole.Tester, false, "all typed findings require test work");
-        }
+            if (IsOperatorOwnedReviewBlocker(blockerProse))
+            {
+                return new ReviewRetryRoute(null, true, "legacy prose identifies operator-owned evidence");
+            }
 
-        if (openBlockingFindings.Any(finding =>
-                finding.Category is FindingCategory.SpecCompliance
-                    or FindingCategory.Correctness
-                    or FindingCategory.CodeQuality))
-        {
-            return new ReviewRetryRoute(AgentRole.Developer, false, "typed finding requires source work");
-        }
-
-        if (openBlockingFindings.Any(finding => finding.Category != FindingCategory.Unspecified))
-        {
             return new ReviewRetryRoute(
-                AgentRole.Developer,
+                InferReviewRetryTargetRole(blockerProse),
                 false,
-                "mixed typed and unspecified findings require source-capable review");
+                "legacy prose fallback");
+        }
+
+        var projections = Project(openBlockingFindings, blockerProse);
+        if (projections.Any(projection => projection.TargetRole == AgentRole.Developer))
+        {
+            return new ReviewRetryRoute(AgentRole.Developer, false, "writable source/test-code finding requires Developer");
+        }
+
+        if (projections.Any(projection => projection.EscalateToOperator))
+        {
+            return new ReviewRetryRoute(null, true, "operator/specification-owned finding requires operator decision");
+        }
+
+        if (projections.Any(projection => projection.TargetRole == AgentRole.Tester))
+        {
+            return new ReviewRetryRoute(AgentRole.Tester, false, "typed finding requires evidence work");
+        }
+
+        if (projections.Any(projection => projection.AcceptanceOwned))
+        {
+            return new ReviewRetryRoute(null, true, "acceptance-owned finding requires acceptance execution");
         }
 
         if (IsOperatorOwnedReviewBlocker(blockerProse))
@@ -53,6 +66,34 @@ public static class ReviewFindingRouting
             false,
             "legacy prose fallback");
     }
+
+    public static IReadOnlyList<ReviewFindingOwnerProjection> Project(
+        IReadOnlyList<ReviewFinding> findings,
+        string blockerProse = "")
+    {
+        ArgumentNullException.ThrowIfNull(findings);
+        blockerProse ??= string.Empty;
+        return findings.Select(finding => Project(finding, blockerProse)).ToArray();
+    }
+
+    private static ReviewFindingOwnerProjection Project(ReviewFinding finding, string blockerProse) =>
+        finding.Category switch
+        {
+            FindingCategory.OperatorOwned or FindingCategory.SpecDefect =>
+                new(finding, null, true, false, "typed operator/specification ownership"),
+            FindingCategory.AcceptanceOwned =>
+                new(finding, null, false, true, "typed acceptance ownership"),
+            FindingCategory.TestEvidence =>
+                new(finding, AgentRole.Tester, false, false, "evidence execution without source change"),
+            FindingCategory.SpecCompliance or
+            FindingCategory.Correctness or
+            FindingCategory.TestCoverage or
+            FindingCategory.CodeQuality =>
+                new(finding, AgentRole.Developer, false, false, "writable source/test-code repair"),
+            _ when IsOperatorOwnedReviewBlocker(blockerProse) =>
+                new(finding, null, true, false, "legacy prose identifies operator ownership"),
+            _ => new(finding, AgentRole.Developer, false, false, "fail-safe unspecified source ownership")
+        };
 
     private static AgentRole InferReviewRetryTargetRole(string blocker)
     {

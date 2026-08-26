@@ -110,7 +110,8 @@ public enum ProgressKind
     FindingEvidenceRequestRecorded = 35,
     FindingEvidenceRunRecorded = 36,
     GoalBriefRevised = 37,
-    NoProgressRedispatchPrevented = 38
+    NoProgressRedispatchPrevented = 38,
+    FindingEvidenceSuppressed = 39
 }
 
 public enum HumanInputAnswerOrigin

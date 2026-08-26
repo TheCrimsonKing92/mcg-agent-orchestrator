@@ -108,6 +108,62 @@ public sealed class AutoReviewRetryConvergenceBriefBuilderTests : WorkerDispatch
         Assert.Contains("not required repair scope", deferred, StringComparison.Ordinal);
     }
 
+    [Xunit.Fact]
+    public void BuildConvergenceBriefKeepsNonTargetObligationsCompactAndOutOfDeveloperScope()
+    {
+        var kernel = new AgentOrchestratorKernel();
+        var goal = GoalLifecycleCommands.CreateAndActivateGoal(
+            kernel,
+            AgentCatalog.Default().Agents,
+            "Partition finding ownership");
+        var developer = goal.Tasks.Single(task => task.RequiredRole == AgentRole.Developer);
+        var reviewer = goal.Tasks.Single(task => task.RequiredRole == AgentRole.Reviewer);
+        RecordReviewerRound(
+            kernel,
+            goal,
+            reviewer,
+            "needs-work",
+            [
+                new ReviewFinding(
+                    "SOURCE",
+                    ReviewFindingState.Open,
+                    new ReviewFindingLocation("src/A.cs", "A.Run"),
+                    "Repair the source guard.",
+                    Category: FindingCategory.Correctness),
+                new ReviewFinding(
+                    "ACCEPTANCE",
+                    ReviewFindingState.Open,
+                    new ReviewFindingLocation("tests/A.cs", "A.Tests"),
+                    "Acceptance-owned description must not become Developer repair scope.",
+                    Category: FindingCategory.AcceptanceOwned),
+                new ReviewFinding(
+                    "OPERATOR",
+                    ReviewFindingState.Open,
+                    new ReviewFindingLocation("docs/runbook.md", "Receipt"),
+                    "Operator-owned description must not become Developer repair scope.",
+                    Category: FindingCategory.OperatorOwned)
+            ],
+            []);
+
+        var brief = AutoReviewRetryConvergenceBriefBuilder.BuildConvergenceBrief(
+            goal, developer, reviewer, "findings", "verdict=needs-work",
+            AgentRole.Developer, 1, "review.out", ["src/A.cs"]);
+        var repairScope = brief[..brief.IndexOf("## OUTSTANDING_NON_TARGET_OBLIGATIONS", StringComparison.Ordinal)];
+        var obligations = brief[
+            brief.IndexOf("## OUTSTANDING_NON_TARGET_OBLIGATIONS", StringComparison.Ordinal)..
+            brief.IndexOf("## PRESERVE_ACCEPTED", StringComparison.Ordinal)];
+
+        Assert.Contains("open_count: 1", repairScope, StringComparison.Ordinal);
+        Assert.Contains("stable_id: SOURCE", repairScope, StringComparison.Ordinal);
+        Assert.DoesNotContain("stable_id: ACCEPTANCE", repairScope, StringComparison.Ordinal);
+        Assert.DoesNotContain("stable_id: OPERATOR", repairScope, StringComparison.Ordinal);
+        Assert.Contains("obligation_count: 2", obligations, StringComparison.Ordinal);
+        Assert.Contains("category: acceptance-owned", obligations, StringComparison.Ordinal);
+        Assert.Contains("category: operator-owned", obligations, StringComparison.Ordinal);
+        Assert.DoesNotContain("Acceptance-owned description", obligations, StringComparison.Ordinal);
+        Assert.DoesNotContain("Operator-owned description", obligations, StringComparison.Ordinal);
+    }
+
     [Xunit.Fact(DisplayName = "AutoReviewRetryConvergenceBriefBuilder_orders_spec_findings_and_preserves_legacy_shape")]
     public void OrdersSpecFindingsAndPreservesLegacyCategorylessShape()
     {

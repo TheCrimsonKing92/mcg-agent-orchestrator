@@ -73,13 +73,15 @@ public sealed class ConductorDriverTests
         string command = "test.exe",
         string? reviewFindingTouchProofDiagnostic = null,
         IReadOnlyList<ReviewFindingLocation>? reviewFindingTouchedAnchors = null,
-        string workingDirectory = "C:\\tmp")
+        string workingDirectory = "C:\\tmp",
+        string? baseCommit = null)
     {
         var dispatch = new TaskDispatchRecord(
             "test-worker",
             command,
             workingDirectory,
             DateTimeOffset.UtcNow,
+            BaseCommit: baseCommit,
             ReviewFindingTouchedAnchors: reviewFindingTouchedAnchors,
             ReviewFindingTouchProofDiagnostic: reviewFindingTouchProofDiagnostic);
         kernel.RecordTaskDispatch(goal.Id, task.Id, dispatch);
@@ -118,9 +120,10 @@ public sealed class ConductorDriverTests
         string blocker,
         string? evidenceRequest = null,
         string? stdoutPath = "C:\\tmp\\reviewer.out.log",
-        IReadOnlyList<ReviewFinding>? findings = null)
+        IReadOnlyList<ReviewFinding>? findings = null,
+        string? reviewedCommit = null)
     {
-        DispatchTask(kernel, goal, reviewer, "review");
+        DispatchTask(kernel, goal, reviewer, "review", baseCommit: reviewedCommit);
         var effectiveFindings = (findings ?? blocker
                 .Split(';', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries)
                 .Select((finding, index) => new ReviewFinding(
@@ -166,7 +169,8 @@ public sealed class ConductorDriverTests
             "",
             DateTimeOffset.UtcNow,
             StandardOutputPath: stdoutPath,
-            WorkerResultPresent: true);
+            WorkerResultPresent: true,
+            ReviewedCommit: reviewedCommit);
         kernel.RecordDispatchExecutionResult(goal.Id, reviewer.Id, verification);
     }
 
@@ -457,6 +461,7 @@ public sealed class ConductorDriverTests
         Action<GoalId, TaskId, string, FindingEvidenceOutcome, FindingEvidenceReceipt?>? recordFindingEvidenceOutcome = null,
         Action<GoalId, TaskId, string>? recordFindingEvidenceRequest = null,
         Action<GoalId, TaskId, string>? recordFindingEvidenceRun = null,
+        Action<GoalId, TaskId, string, IReadOnlyList<string>, string, AgentRole, string, string>? recordFindingEvidenceSuppressed = null,
         Func<Goal, AcceptanceGateEngineSettings>? getFindingEvidenceEngineSettings = null,
         Func<Goal, string, string, IReadOnlyList<string>>? resolveFindingEvidenceSiblingClasses = null,
         Func<Goal, bool>? isVerificationGateSatisfied = null,
@@ -513,6 +518,7 @@ public sealed class ConductorDriverTests
             recordFindingEvidenceOutcome: recordFindingEvidenceOutcome,
             recordFindingEvidenceRequest: recordFindingEvidenceRequest,
             recordFindingEvidenceRun: recordFindingEvidenceRun,
+            recordFindingEvidenceSuppressed: recordFindingEvidenceSuppressed,
             getFindingEvidenceEngineSettings: getFindingEvidenceEngineSettings,
             resolveFindingEvidenceSiblingClasses: resolveFindingEvidenceSiblingClasses,
             isVerificationGateSatisfied: isVerificationGateSatisfied,

@@ -1038,6 +1038,24 @@ public sealed class WorkerResultBlockersTests
         Assert.Equal(FindingCategory.SpecCompliance, restored!.Category);
     }
 
+    [Xunit.Fact]
+    public void AcceptanceOwnedFindingCategoryRoundTripsWithWireName()
+    {
+        var finding = new ReviewFinding(
+            "acceptance-evidence",
+            ReviewFindingState.Open,
+            new ReviewFindingLocation("tests/A.cs", "A.Tests"),
+            "Acceptance must execute focused evidence.",
+            FindingSeverity.Blocking,
+            FindingCategory.AcceptanceOwned);
+
+        var json = JsonSerializer.Serialize(finding);
+        var restored = JsonSerializer.Deserialize<ReviewFinding>(json);
+
+        Assert.Contains("\"category\":\"acceptance-owned\"", json, StringComparison.Ordinal);
+        Assert.Equal(FindingCategory.AcceptanceOwned, restored!.Category);
+    }
+
     [Xunit.Fact(DisplayName = "TryFindNeedsWorkVerdict_uses_open_structured_findings_when_blockers_is_none")]
     public void TryFindNeedsWorkVerdictUsesOpenStructuredFindingsWhenBlockersIsNone()
     {

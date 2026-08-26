@@ -261,6 +261,7 @@ internal static class PromptContextFormatter
             ProgressKind.ReviewerEvidenceRunRecorded or
             ProgressKind.FindingEvidenceRequestRecorded or
             ProgressKind.FindingEvidenceRunRecorded or
+            ProgressKind.FindingEvidenceSuppressed or
             ProgressKind.PreReviewEvidenceRecorded or
             ProgressKind.GoalPolicyDecision;
     }
