@@ -897,7 +897,7 @@ public sealed class WorkerDispatchTestsDispatchPreparation : WorkerDispatchTestS
         kernel.ActivateGoal(goal.Id, AgentCatalog.Default().Agents);
         kernel.RetryTask(goal.Id, task.Id, "Repair the source finding.", RetryCause.NewSourceFinding);
         var fingerprint = RetryContextFingerprintBuilder.Build(new RetryContextFingerprintInput(
-            goal.Id.Value, task.Id.Value, task.RequiredRole, "OpenAI", "gpt-5.6-sol",
+            goal.Id.Value, task.Id.Value, task.RequiredRole, "OpenAI", AgentCatalog.OpenAiSolSubscriptionModelAlias,
             PaidRouteClassification.Paid, "candidate", "criteria", [], [], [], [], "base", "main"));
         var dispatch = new TaskDispatchRecord(
             "worker", "Write-Output safe", workingDirectory, at,
@@ -1007,7 +1007,7 @@ public sealed class WorkerDispatchTestsDispatchPreparation : WorkerDispatchTestS
         kernel.ActivateGoal(goal.Id, AgentCatalog.Default().Agents);
         kernel.RetryTask(goal.Id, task.Id, "Repair the source finding.", RetryCause.NewSourceFinding);
         var fingerprint = RetryContextFingerprintBuilder.Build(new RetryContextFingerprintInput(
-            goal.Id.Value, task.Id.Value, task.RequiredRole, "OpenAI", "gpt-5.6-sol",
+            goal.Id.Value, task.Id.Value, task.RequiredRole, "OpenAI", AgentCatalog.OpenAiSolSubscriptionModelAlias,
             PaidRouteClassification.Paid, "candidate", "criteria", [], [], [], [], "base", "main"));
         var dispatch = new TaskDispatchRecord(
             "worker", "Write-Output safe", workingDirectory, at,

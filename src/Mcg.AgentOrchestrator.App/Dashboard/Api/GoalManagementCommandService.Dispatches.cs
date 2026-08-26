@@ -987,7 +987,9 @@ private static ProcessBatchExecutionResult StartDispatches(
             batchCheckpoint,
             readCurrentInterruptedDispatchState,
             sandboxOptions,
-            startReceipt is null || string.IsNullOrWhiteSpace(startReceipt.ReservationOwnerId)
+            !requiresDurableStartClaim ||
+                startReceipt is null ||
+                string.IsNullOrWhiteSpace(startReceipt.ReservationOwnerId)
                 ? null
                 : () =>
                 {
@@ -1005,7 +1007,9 @@ private static ProcessBatchExecutionResult StartDispatches(
                     kernel.ReplaceGoalWithSnapshot(claim.Snapshot);
                     return true;
                 },
-            startReceipt is null || string.IsNullOrWhiteSpace(startReceipt.ReservationOwnerId)
+            !requiresDurableStartClaim ||
+                startReceipt is null ||
+                string.IsNullOrWhiteSpace(startReceipt.ReservationOwnerId)
                 ? null
                 : () =>
                 {
@@ -1061,6 +1065,20 @@ private static RetryAdmissionResult EnsurePreparedRetryAdmission(
     var recordedAt = DateTimeOffset.UtcNow;
     var reservationOwnerId = Guid.NewGuid().ToString("n");
     var reservationLeaseExpiresAt = recordedAt.AddMinutes(1);
+    if (dispatch.PaidRoute != PaidRouteClassification.Paid || task.LatestRetryAt is null)
+    {
+        return kernel.RecordPreparedRetryAdmission(
+            goalId,
+            task.Id,
+            fingerprint,
+            dispatch.PaidRoute,
+            recordedAt,
+            RetryContextFingerprintFactory.GetOpenBlockingFindings(kernel.GetGoal(goalId)),
+            reservationOwnerId,
+            reservationLeaseExpiresAt,
+            reservationRecoveryConfirmed);
+    }
+
     var persisted = RetryAdmissionReservationStore.TryReserveAsync(
             workspace.SqliteStatePath,
             goalId,
@@ -1079,20 +1097,6 @@ private static RetryAdmissionResult EnsurePreparedRetryAdmission(
     {
         kernel.ReplaceGoalStateWithSnapshot(persisted.Snapshot, persisted.HumanInputRequests ?? []);
         return persisted.Admission;
-    }
-
-    if (dispatch.PaidRoute != PaidRouteClassification.Paid || task.LatestRetryAt is null)
-    {
-        return kernel.RecordPreparedRetryAdmission(
-            goalId,
-            task.Id,
-            fingerprint,
-            dispatch.PaidRoute,
-            recordedAt,
-            RetryContextFingerprintFactory.GetOpenBlockingFindings(kernel.GetGoal(goalId)),
-            reservationOwnerId,
-            reservationLeaseExpiresAt,
-            reservationRecoveryConfirmed);
     }
 
     throw new InvalidOperationException(

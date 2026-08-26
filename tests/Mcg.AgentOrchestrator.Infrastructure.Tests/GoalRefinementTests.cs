@@ -980,7 +980,7 @@ public sealed class GoalRefinementTests
             goal,
             task,
             "retry",
-            """{"message":"Retry after running gh pr checkout and git push."}""");
+            """{"message":"Retry after running gh pr checkout and git push.","cause":"ContractClarification"}""");
 
         var queuedIntent = Xunit.Assert.IsType<OperatorIntentDto>(queued);
         Xunit.Assert.Equal(OperatorIntentStatus.Pending, queuedIntent.Status);
