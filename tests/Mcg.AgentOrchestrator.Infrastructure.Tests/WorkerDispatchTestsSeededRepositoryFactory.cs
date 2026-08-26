@@ -189,10 +189,10 @@ internal sealed class WorkerDispatchTestsSeededRepositoryFactory
 
             return new CreationResult(templateAfter, finalIdentity);
         }
-        catch (SeededRepositoryFailureException)
+        catch (SeededRepositoryFailureException failure)
         {
-            CleanupAttempt(stagingPath ?? allocatedStagingPath, finalPath, published);
-            throw;
+            throw failure.WithCleanup(
+                CleanupAttempt(stagingPath ?? allocatedStagingPath, finalPath, published));
         }
         catch (Exception ex)
         {
@@ -207,8 +207,8 @@ internal sealed class WorkerDispatchTestsSeededRepositoryFactory
                 stagingIdentity,
                 finalIdentity,
                 ex);
-            CleanupAttempt(stagingPath ?? allocatedStagingPath, finalPath, published);
-            throw diagnostic;
+            throw diagnostic.WithCleanup(
+                CleanupAttempt(stagingPath ?? allocatedStagingPath, finalPath, published));
         }
     }
 
@@ -299,10 +299,9 @@ internal sealed class WorkerDispatchTestsSeededRepositoryFactory
                 finalPath: null);
             return new TemplateState(path, identity);
         }
-        catch (SeededRepositoryFailureException)
+        catch (SeededRepositoryFailureException failure)
         {
-            TryDeleteOwnedPath(path ?? allocatedPath);
-            throw;
+            throw failure.WithCleanup(CleanupOwnedPaths(path ?? allocatedPath));
         }
         catch (Exception ex)
         {
@@ -314,8 +313,7 @@ internal sealed class WorkerDispatchTestsSeededRepositoryFactory
                 ObserveRepositorySafely(path ?? allocatedPath),
                 GitProbeResult.NotRun("template construction", ex.Message),
                 innerException: ex);
-            TryDeleteOwnedPath(path ?? allocatedPath);
-            throw failure;
+            throw failure.WithCleanup(CleanupOwnedPaths(path ?? allocatedPath));
         }
     }
 
@@ -635,32 +633,47 @@ internal sealed class WorkerDispatchTestsSeededRepositoryFactory
             ["GIT_COMMITTER_DATE"] = commitTime.ToString("O")
         };
 
-    private void CleanupAttempt(string? stagingPath, string? finalPath, bool published)
+    private IReadOnlyList<CleanupOutcome> CleanupAttempt(
+        string? stagingPath,
+        string? finalPath,
+        bool published)
     {
-        TryDeleteOwnedPath(stagingPath);
-        if (published)
-        {
-            TryDeleteOwnedPath(finalPath);
-        }
+        return published
+            ? CleanupOwnedPaths(stagingPath, finalPath)
+            : CleanupOwnedPaths(stagingPath);
     }
 
-    private void TryDeleteOwnedPath(string? path)
+    private IReadOnlyList<CleanupOutcome> CleanupOwnedPaths(params string?[] paths)
     {
-        if (string.IsNullOrWhiteSpace(path))
+        var outcomes = new List<CleanupOutcome>();
+        foreach (var path in paths.Where(path => !string.IsNullOrWhiteSpace(path)))
         {
-            return;
+            outcomes.Add(DeleteOwnedPath(path!));
         }
 
+        return outcomes;
+    }
+
+    private CleanupOutcome DeleteOwnedPath(string path)
+    {
         try
         {
-            if (_fileSystem.DirectoryExists(path))
+            if (!_fileSystem.DirectoryExists(path))
             {
-                _fileSystem.DeleteDirectory(path);
+                return new CleanupOutcome(path, CleanupDisposition.NotPresent, null);
             }
+
+            _fileSystem.DeleteDirectory(path);
+            return _fileSystem.DirectoryExists(path)
+                ? new CleanupOutcome(path, CleanupDisposition.Failed, "Directory still exists after deletion returned.")
+                : new CleanupOutcome(path, CleanupDisposition.Deleted, null);
         }
-        catch
+        catch (Exception ex)
         {
-            // Preserve the original typed failure. Cleanup is bounded to factory-owned paths.
+            return new CleanupOutcome(
+                path,
+                CleanupDisposition.Failed,
+                $"{ex.GetType().Name}: {ex.Message}");
         }
     }
 
@@ -708,7 +721,8 @@ internal sealed class WorkerDispatchTestsSeededRepositoryFactory
                 stagingIdentity,
                 finalIdentity,
                 observation,
-                gitResult),
+                gitResult,
+                Cleanup: []),
             innerException);
 
     private sealed record TemplateState(string Path, RepositoryIdentity Identity);
@@ -771,13 +785,27 @@ internal sealed class WorkerDispatchTestsSeededRepositoryFactory
         RepositoryIdentity? StagingIdentity,
         RepositoryIdentity? FinalIdentity,
         FileSystemObservation FileSystem,
-        GitProbeResult Git)
+        GitProbeResult Git,
+        IReadOnlyList<CleanupOutcome> Cleanup)
     {
         public override string ToString() =>
             $"check={Check}; sourceTemplate={SourceTemplatePath ?? "null"}; staging={StagingPath ?? "null"}; " +
             $"final={FinalPath ?? "null"}; templateIdentity={TemplateIdentity?.ToString() ?? "null"}; " +
             $"stagingIdentity={StagingIdentity?.ToString() ?? "null"}; " +
-            $"finalIdentity={FinalIdentity?.ToString() ?? "null"}; filesystem=({FileSystem}); git=({Git})";
+            $"finalIdentity={FinalIdentity?.ToString() ?? "null"}; filesystem=({FileSystem}); git=({Git}); " +
+            $"cleanup=({string.Join(" | ", Cleanup)})";
+    }
+
+    internal sealed record CleanupOutcome(
+        string Path,
+        CleanupDisposition Disposition,
+        string? Error);
+
+    internal enum CleanupDisposition
+    {
+        NotPresent,
+        Deleted,
+        Failed
     }
 
     internal sealed class SeededRepositoryFailureException : InvalidOperationException
@@ -789,6 +817,9 @@ internal sealed class WorkerDispatchTestsSeededRepositoryFactory
         }
 
         internal FailureDiagnostic Diagnostic { get; }
+
+        internal SeededRepositoryFailureException WithCleanup(IReadOnlyList<CleanupOutcome> cleanup) =>
+            new(Diagnostic with { Cleanup = cleanup }, InnerException);
     }
 
     internal sealed record CreationHooks(

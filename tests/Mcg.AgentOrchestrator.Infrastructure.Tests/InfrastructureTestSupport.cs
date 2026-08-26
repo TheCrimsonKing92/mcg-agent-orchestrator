@@ -60,7 +60,8 @@ internal static WorkerDispatchTestsSeededRepositoryFactory.GitProbeResult RunGit
     string workingDirectory,
     IReadOnlyList<string> arguments,
     IReadOnlyDictionary<string, string>? commandEnvironment = null,
-    Func<Process, bool>? startProcess = null)
+    Func<Process, bool>? startProcess = null,
+    IReadOnlyDictionary<string, string?>? inheritedEnvironment = null)
 {
     var command = $"git {string.Join(' ', arguments)}";
     var commandEnvironmentNames = commandEnvironment is null
@@ -68,7 +69,7 @@ internal static WorkerDispatchTestsSeededRepositoryFactory.GitProbeResult RunGit
         : string.Join(',', commandEnvironment.Keys.Order(StringComparer.Ordinal));
     var environmentContract =
         "allow=PATH,PATHEXT,SystemRoot,WINDIR,COMSPEC,TEMP,TMP; " +
-        "pinned=GIT_CONFIG_NOSYSTEM,GIT_CONFIG_GLOBAL,GIT_TERMINAL_PROMPT,GCM_INTERACTIVE,LC_ALL,LANG; " +
+        "pinned=GIT_CONFIG_NOSYSTEM,GIT_CONFIG_GLOBAL,GIT_TERMINAL_PROMPT,GCM_INTERACTIVE,GIT_OPTIONAL_LOCKS,LC_ALL,LANG; " +
         "repositorySelection=unset; command=" + commandEnvironmentNames;
     var startInfo = new ProcessStartInfo
     {
@@ -81,11 +82,13 @@ internal static WorkerDispatchTestsSeededRepositoryFactory.GitProbeResult RunGit
         WorkingDirectory = workingDirectory
     };
 
-    var inherited = startInfo.Environment;
     var allowedEnvironment = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
     foreach (var variable in new[] { "PATH", "PATHEXT", "SystemRoot", "WINDIR", "COMSPEC", "TEMP", "TMP" })
     {
-        if (inherited.TryGetValue(variable, out var value) && !string.IsNullOrWhiteSpace(value))
+        var found = inheritedEnvironment is null
+            ? startInfo.Environment.TryGetValue(variable, out var value)
+            : inheritedEnvironment.TryGetValue(variable, out value);
+        if (found && !string.IsNullOrWhiteSpace(value))
         {
             allowedEnvironment[variable] = value;
         }
@@ -97,12 +100,6 @@ internal static WorkerDispatchTestsSeededRepositoryFactory.GitProbeResult RunGit
         startInfo.Environment[name] = value;
     }
 
-    startInfo.Environment["GIT_CONFIG_NOSYSTEM"] = "1";
-    startInfo.Environment["GIT_CONFIG_GLOBAL"] = OperatingSystem.IsWindows() ? "NUL" : "/dev/null";
-    startInfo.Environment["GIT_TERMINAL_PROMPT"] = "0";
-    startInfo.Environment["GCM_INTERACTIVE"] = "Never";
-    startInfo.Environment["LC_ALL"] = "C";
-    startInfo.Environment["LANG"] = "C";
     if (commandEnvironment is not null)
     {
         foreach (var (name, value) in commandEnvironment)
@@ -110,6 +107,27 @@ internal static WorkerDispatchTestsSeededRepositoryFactory.GitProbeResult RunGit
             startInfo.Environment[name] = value;
         }
     }
+
+    foreach (var variable in new[]
+             {
+                 "GIT_DIR",
+                 "GIT_WORK_TREE",
+                 "GIT_INDEX_FILE",
+                 "GIT_OBJECT_DIRECTORY",
+                 "GIT_ALTERNATE_OBJECT_DIRECTORIES",
+                 "GIT_COMMON_DIR"
+             })
+    {
+        startInfo.Environment.Remove(variable);
+    }
+
+    startInfo.Environment["GIT_CONFIG_NOSYSTEM"] = "1";
+    startInfo.Environment["GIT_CONFIG_GLOBAL"] = OperatingSystem.IsWindows() ? "NUL" : "/dev/null";
+    startInfo.Environment["GIT_TERMINAL_PROMPT"] = "0";
+    startInfo.Environment["GCM_INTERACTIVE"] = "Never";
+    startInfo.Environment["GIT_OPTIONAL_LOCKS"] = "0";
+    startInfo.Environment["LC_ALL"] = "C";
+    startInfo.Environment["LANG"] = "C";
 
     foreach (var argument in arguments)
     {

@@ -85,6 +85,91 @@ public sealed class WorkerDispatchTestsSeededRepositoryFactoryTests
         Xunit.Assert.False(failure.Diagnostic.Git.DrainFailed);
     }
 
+    [Xunit.Theory]
+    [Xunit.InlineData("timeout")]
+    [Xunit.InlineData("drain-timeout")]
+    [Xunit.InlineData("drain-failure")]
+    [Xunit.InlineData("malformed-output")]
+    public void Create_GitProbeDecisionTable_ReportsTypedTemplateHeadCheck(string scenario)
+    {
+        var runner = new InterceptingGitRunner(result => scenario switch
+        {
+            "timeout" => result with { ExitCode = null, TimedOut = true },
+            "drain-timeout" => result with { DrainTimedOut = true },
+            "drain-failure" => result with { DrainFailed = true, StandardError = "controlled drain failure" },
+            "malformed-output" => result with { StandardOutput = "not-a-commit\n" },
+            _ => throw new InvalidOperationException($"Unknown scenario: {scenario}")
+        });
+        using var scope = new FactoryScope(gitRunner: runner);
+
+        var failure = Xunit.Assert.Throws<
+            WorkerDispatchTestsSeededRepositoryFactory.SeededRepositoryFailureException>(
+                () => scope.Factory.Create());
+
+        Xunit.Assert.Equal(
+            WorkerDispatchTestsSeededRepositoryFactory.ValidationCheck.TemplateHeadCommit,
+            failure.Diagnostic.Check);
+        Xunit.Assert.True(failure.Diagnostic.Git.ProcessStarted);
+        Xunit.Assert.Contains("HEAD^{commit}", failure.Diagnostic.Git.Command, StringComparison.Ordinal);
+        switch (scenario)
+        {
+            case "timeout":
+                Xunit.Assert.True(failure.Diagnostic.Git.TimedOut);
+                Xunit.Assert.Null(failure.Diagnostic.Git.ExitCode);
+                break;
+            case "drain-timeout":
+                Xunit.Assert.True(failure.Diagnostic.Git.DrainTimedOut);
+                break;
+            case "drain-failure":
+                Xunit.Assert.True(failure.Diagnostic.Git.DrainFailed);
+                Xunit.Assert.Contains("controlled drain failure", failure.Diagnostic.Git.StandardError);
+                break;
+            case "malformed-output":
+                Xunit.Assert.Equal(0, failure.Diagnostic.Git.ExitCode);
+                Xunit.Assert.Equal("not-a-commit\n", failure.Diagnostic.Git.StandardOutput);
+                break;
+        }
+    }
+
+    [Xunit.Fact]
+    public void RunGitProbe_InjectedAmbientSelection_IsRemovedAndOptionalLocksAreDisabled()
+    {
+        using var scope = new FactoryScope();
+        IReadOnlyDictionary<string, string?>? capturedEnvironment = null;
+        var inheritedEnvironment = new Dictionary<string, string?>(StringComparer.OrdinalIgnoreCase)
+        {
+            ["PATH"] = "controlled-path",
+            ["GIT_DIR"] = "redirected-git-dir",
+            ["GIT_WORK_TREE"] = "redirected-work-tree",
+            ["GIT_INDEX_FILE"] = "redirected-index"
+        };
+
+        var result = InfrastructureTestSupport.RunGitProbe(
+            scope.Root,
+            ["status", "--porcelain=v1"],
+            commandEnvironment: new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase)
+            {
+                ["GIT_DIR"] = "command-redirected-git-dir",
+                ["GIT_OPTIONAL_LOCKS"] = "1"
+            },
+            startProcess: process =>
+            {
+                capturedEnvironment = process.StartInfo.Environment.ToDictionary(
+                    pair => pair.Key,
+                    pair => pair.Value,
+                    StringComparer.OrdinalIgnoreCase);
+                return false;
+            },
+            inheritedEnvironment: inheritedEnvironment);
+
+        Xunit.Assert.False(result.ProcessStarted);
+        Xunit.Assert.NotNull(capturedEnvironment);
+        Xunit.Assert.DoesNotContain("GIT_DIR", capturedEnvironment.Keys);
+        Xunit.Assert.DoesNotContain("GIT_WORK_TREE", capturedEnvironment.Keys);
+        Xunit.Assert.DoesNotContain("GIT_INDEX_FILE", capturedEnvironment.Keys);
+        Xunit.Assert.Equal("0", capturedEnvironment["GIT_OPTIONAL_LOCKS"]);
+    }
+
     [Xunit.Fact]
     public void Create_FailedValidation_CleansOnlyAttemptOwnedPaths()
     {
@@ -106,6 +191,30 @@ public sealed class WorkerDispatchTestsSeededRepositoryFactoryTests
         Xunit.Assert.False(Directory.Exists(failure.Diagnostic.FinalPath!));
         Xunit.Assert.True(Directory.Exists(failure.Diagnostic.SourceTemplatePath));
         Xunit.Assert.True(File.Exists(Path.Combine(unrelated, "keep.txt")));
+    }
+
+    [Xunit.Fact]
+    public void Create_CleanupFailure_IsRetainedInTypedDiagnostic()
+    {
+        var fileSystem = new TestFileSystem(path => path.Contains("-published-", StringComparison.Ordinal));
+        using var scope = new FactoryScope(
+            hooks: new WorkerDispatchTestsSeededRepositoryFactory.CreationHooks(
+                AfterPublish: published => File.Delete(Path.Combine(published, ".git", "HEAD"))),
+            fileSystem: fileSystem);
+
+        var failure = Xunit.Assert.Throws<
+            WorkerDispatchTestsSeededRepositoryFactory.SeededRepositoryFailureException>(
+                () => scope.Factory.Create());
+
+        var publishedCleanup = Xunit.Assert.Single(
+            failure.Diagnostic.Cleanup,
+            outcome => string.Equals(outcome.Path, failure.Diagnostic.FinalPath, StringComparison.Ordinal));
+        Xunit.Assert.Equal(
+            WorkerDispatchTestsSeededRepositoryFactory.CleanupDisposition.Failed,
+            publishedCleanup.Disposition);
+        Xunit.Assert.Contains("controlled cleanup failure", publishedCleanup.Error, StringComparison.Ordinal);
+        Xunit.Assert.True(Directory.Exists(failure.Diagnostic.FinalPath));
+        Xunit.Assert.Contains("cleanup=(", failure.Message, StringComparison.Ordinal);
     }
 
     [Xunit.Fact]
@@ -207,6 +316,76 @@ public sealed class WorkerDispatchTestsSeededRepositoryFactoryTests
             StringComparison.Ordinal);
     }
 
+    private sealed class InterceptingGitRunner(
+        Func<WorkerDispatchTestsSeededRepositoryFactory.GitProbeResult,
+            WorkerDispatchTestsSeededRepositoryFactory.GitProbeResult> transform)
+        : WorkerDispatchTestsSeededRepositoryFactory.IGitRunner
+    {
+        private int _intercepted;
+
+        public WorkerDispatchTestsSeededRepositoryFactory.GitProbeResult Run(
+            string workingDirectory,
+            IReadOnlyList<string> arguments,
+            IReadOnlyDictionary<string, string>? commandEnvironment = null)
+        {
+            var result = InfrastructureTestSupport.RunGitProbe(
+                workingDirectory,
+                arguments,
+                commandEnvironment);
+            if (result.Succeeded &&
+                arguments.SequenceEqual(["rev-parse", "--verify", "HEAD^{commit}"]) &&
+                Interlocked.CompareExchange(ref _intercepted, 1, 0) == 0)
+            {
+                return transform(result);
+            }
+
+            return result;
+        }
+    }
+
+    private sealed class TestFileSystem(Func<string, bool> failDelete)
+        : WorkerDispatchTestsSeededRepositoryFactory.IFileSystem
+    {
+        public bool DirectoryExists(string path) => Directory.Exists(path);
+
+        public bool FileExists(string path) => File.Exists(path);
+
+        public WorkerDispatchTestsSeededRepositoryFactory.FileSystemObservation ObserveRepository(string path) =>
+            new(
+                Directory.Exists(path),
+                Directory.Exists(Path.Combine(path, ".git")),
+                File.Exists(Path.Combine(path, ".git")),
+                File.Exists(Path.Combine(path, ".git", "HEAD")));
+
+        public void CopyDirectoryContents(string source, string destination)
+        {
+            foreach (var directory in Directory.EnumerateDirectories(source, "*", SearchOption.AllDirectories))
+            {
+                Directory.CreateDirectory(Path.Combine(destination, Path.GetRelativePath(source, directory)));
+            }
+
+            foreach (var file in Directory.EnumerateFiles(source, "*", SearchOption.AllDirectories))
+            {
+                var target = Path.Combine(destination, Path.GetRelativePath(source, file));
+                Directory.CreateDirectory(Path.GetDirectoryName(target)!);
+                File.Copy(file, target);
+            }
+        }
+
+        public void MoveDirectory(string source, string destination) =>
+            Directory.Move(source, destination);
+
+        public void DeleteDirectory(string path)
+        {
+            if (failDelete(path))
+            {
+                throw new IOException("controlled cleanup failure");
+            }
+
+            WorkerDispatchTestsSeededRepositoryFactory.DeleteOwnedDirectory(path);
+        }
+    }
+
     private sealed class FactoryScope : IDisposable
     {
         private readonly Func<string, int, string>? _directoryAllocator;
@@ -214,13 +393,17 @@ public sealed class WorkerDispatchTestsSeededRepositoryFactoryTests
 
         internal FactoryScope(
             WorkerDispatchTestsSeededRepositoryFactory.CreationHooks? hooks = null,
-            Func<string, int, string>? directoryAllocator = null)
+            Func<string, int, string>? directoryAllocator = null,
+            WorkerDispatchTestsSeededRepositoryFactory.IFileSystem? fileSystem = null,
+            WorkerDispatchTestsSeededRepositoryFactory.IGitRunner? gitRunner = null)
         {
             Root = InfrastructureTestSupport.CreateTempDirectory();
             _directoryAllocator = directoryAllocator;
             Factory = new WorkerDispatchTestsSeededRepositoryFactory(
                 AllocateDirectory,
                 path => File.WriteAllText(Path.Combine(path, "seed.txt"), "seed"),
+                fileSystem,
+                gitRunner,
                 hooks: hooks);
         }
 
