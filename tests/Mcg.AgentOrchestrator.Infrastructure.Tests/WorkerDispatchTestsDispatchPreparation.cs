@@ -712,7 +712,13 @@ public sealed class WorkerDispatchTestsDispatchPreparation : WorkerDispatchTestS
             goal.Id,
             planner.Id,
             new TaskVerificationRecord(
-                "worker", workingDirectory, 1, "", "The first paid attempt did not complete.", firstAt));
+                "worker",
+                workingDirectory,
+                1,
+                "",
+                "The first paid attempt did not complete.",
+                firstAt,
+                DispatchStartedAt: firstAt));
         kernel.ReportTaskProgress(goal.Id, planner.Id, WorkTaskStatus.Failed, "The first paid attempt did not complete.");
         kernel.RetryTask(
             goal.Id,
