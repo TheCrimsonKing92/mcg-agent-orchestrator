@@ -674,6 +674,29 @@ public sealed class TaskSpec
         RetryAdmissionHoldRoute = null;
     }
 
+    internal bool TryClaimRetryAdmissionStart(
+        DateTimeOffset linkedDispatchAt,
+        string reservationOwnerId,
+        DateTimeOffset workerStartedAt)
+    {
+        var index = _retryAdmissionHistory.FindLastIndex(receipt =>
+            receipt.LinkedDispatchAt == linkedDispatchAt &&
+            receipt.Decision is RetryAdmissionDecision.Allowed or RetryAdmissionDecision.ResumedReservation);
+        if (index < 0)
+            return false;
+
+        var receipt = _retryAdmissionHistory[index];
+        if (receipt.WorkerStartedAt is not null ||
+            !string.Equals(receipt.ReservationOwnerId, reservationOwnerId, StringComparison.Ordinal))
+        {
+            return false;
+        }
+
+        _retryAdmissionHistory[index] = receipt with { WorkerStartedAt = workerStartedAt };
+        RetryAdmissionHoldRoute = null;
+        return true;
+    }
+
     internal void RecordSubscriptionLimitReview(string? note, DateTimeOffset? reviewedAt, int failureCount)
     {
         SubscriptionLimitReviewNote = string.IsNullOrWhiteSpace(note) ? null : note.Trim();

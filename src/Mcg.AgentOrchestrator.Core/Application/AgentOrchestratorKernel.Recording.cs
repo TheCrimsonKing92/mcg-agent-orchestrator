@@ -1175,7 +1175,8 @@ public sealed partial class AgentOrchestratorKernel
         DateTimeOffset recordedAt,
         IReadOnlyList<ReviewFinding>? openBlockingFindings = null,
         string? reservationOwnerId = null,
-        DateTimeOffset? reservationLeaseExpiresAt = null)
+        DateTimeOffset? reservationLeaseExpiresAt = null,
+        bool reservationRecoveryConfirmed = false)
     {
         var goal = GetGoal(goalId);
         var task = goal.FindTask(taskId);
@@ -1191,7 +1192,8 @@ public sealed partial class AgentOrchestratorKernel
             recordedAt,
             openBlockingFindings,
             reservationOwnerId,
-            reservationLeaseExpiresAt);
+            reservationLeaseExpiresAt,
+            reservationRecoveryConfirmed);
         ApplyPreparedRetryAdmission(goalId, taskId, result);
         return result;
     }
@@ -1325,6 +1327,21 @@ public sealed partial class AgentOrchestratorKernel
         {
             ResetTaskForRetry(target, _clock.UtcNow, retryCause: receipt.Cause);
             Append(goal, target.Id, ProgressKind.TaskRetried, $"{marker}; routed from held task {heldTask.Id.Value}.");
+        }
+
+        else if (target is null)
+        {
+            heldTask.SetRetryAdmissionHold(RetryAdmissionRoute.HumanClarification);
+            RequestHumanInputDeduplicated(
+                goal.Id,
+                heldTask.Id,
+                $"Retry admission requires {targetRole} work, but no role-feasible target task exists. {marker}",
+                HumanWaitKind.RecoveryChoice,
+                isAutoDefaultable: false,
+                isDismissible: false,
+                questionFingerprint: $"retry-admission:{receipt.Fingerprint.Value}:missing-{targetRole}",
+                blockerFingerprint: receipt.Fingerprint.Value,
+                recordDuplicateSuppression: false);
         }
 
         Append(

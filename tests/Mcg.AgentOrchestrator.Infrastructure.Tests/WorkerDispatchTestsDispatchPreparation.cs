@@ -473,6 +473,39 @@ public sealed class WorkerDispatchTestsDispatchPreparation : WorkerDispatchTestS
 }
 
     [Xunit.Fact]
+    public void StartDispatches_DoesNotRefreshCrashRecoveryReservationIntoNewAttempt()
+    {
+        var kernel = new AgentOrchestratorKernel();
+        var task = new TaskSpec(TaskId.New(), "Resume exact prepared retry.", AgentRole.Developer);
+        var goal = kernel.CreateGoal("Preserve crash recovery attempt identity", [task]);
+        kernel.ActivateGoal(goal.Id, [new AgentDefinition(
+            new AgentId("developer"),
+            "Developer",
+            AgentRole.Developer,
+            new ModelProfile("OpenAI", "gpt", ModelCapability.Text, SubscriptionMode.ApiKey))]);
+        var at = DateTimeOffset.Parse("2026-08-25T12:00:00Z");
+        var fingerprint = RetryContextFingerprintBuilder.Build(new RetryContextFingerprintInput(
+            goal.Id.Value, task.Id.Value, AgentRole.Developer, "OpenAI", "gpt",
+            PaidRouteClassification.Paid, "candidate", "criteria", [], [], [], [], "base", "main"));
+        kernel.RecordTaskDispatch(goal.Id, task.Id, new TaskDispatchRecord(
+            "developer", "command", "worktree", at,
+            RetryContextFingerprint: fingerprint,
+            PaidRoute: PaidRouteClassification.Paid));
+        kernel.ApplyPreparedRetryAdmission(goal.Id, task.Id, RetryAdmissionPolicy.Evaluate(
+            task,
+            fingerprint,
+            PaidRouteClassification.Paid,
+            RetryCause.NewSourceFinding,
+            at,
+            at,
+            reservationOwnerId: "owner-a",
+            reservationLeaseExpiresAt: at.AddMinutes(1)));
+
+        Assert.False(GoalManagementCommandService.ShouldRefreshPreparedDispatchBeforeStart(task, refreshBeforeStart: true));
+        Assert.Equal(at, task.LastDispatch!.DispatchedAt);
+    }
+
+    [Xunit.Fact]
     public void StartDispatches_ConductPolicy_DoesNotReloadPolicyFile()
     {
         var root = CreateTempDirectory();

@@ -916,7 +916,8 @@ private static ProcessBatchExecutionResult StartDispatches(
         (taskIdsToStart is null || taskIdsToStart.Contains(item.TaskId))))
     {
         var task = goal.Tasks.Single(task => task.Id == item.TaskId);
-        if (refreshBeforeStart)
+        var recoveringPreparedReservation = HasRecoverablePreparedReservation(task);
+        if (ShouldRefreshPreparedDispatchBeforeStart(task, refreshBeforeStart))
         {
             resolvedAgents ??= agents ?? AgentCatalogStore.Load(workspace.AgentCatalogPath).Agents;
             resolvedProfiles ??= profiles ?? WorkerProfileStore.Load(workspace.WorkerProfilePath);
@@ -933,12 +934,23 @@ private static ProcessBatchExecutionResult StartDispatches(
                 conductorPolicy: conductorPolicy);
         }
 
+        RetryAdmissionResult? admission = null;
         if (admittedTaskIds is null || !admittedTaskIds.Contains(task.Id))
         {
-            var admission = EnsurePreparedRetryAdmission(kernel, workspace, goal.Id, task);
+            admission = EnsurePreparedRetryAdmission(
+                kernel,
+                workspace,
+                goal.Id,
+                task,
+                recoveringPreparedReservation);
             if (!admission.AllowsProcessStart)
                 continue;
         }
+
+
+        var startReceipt = admission?.Receipt ?? task.RetryAdmissionHistory.LastOrDefault(receipt =>
+            receipt.LinkedDispatchAt == task.LastDispatch?.DispatchedAt &&
+            receipt.Decision is RetryAdmissionDecision.Allowed or RetryAdmissionDecision.ResumedReservation);
 
         Action<AgentOrchestratorKernel, GoalId, TaskId, DispatchRecordCheckpointPhase>? batchCheckpoint =
             checkpointBeforeWorkerStart is null
@@ -958,7 +970,18 @@ private static ProcessBatchExecutionResult StartDispatches(
             logRoot,
             batchCheckpoint,
             readCurrentInterruptedDispatchState,
-            sandboxOptions);
+            sandboxOptions,
+            startReceipt is null || string.IsNullOrWhiteSpace(startReceipt.ReservationOwnerId)
+                ? null
+                : () => RetryAdmissionReservationStore.TryClaimStartAsync(
+                        workspace.SqliteStatePath,
+                        goal.Id,
+                        task.Id,
+                        startReceipt.LinkedDispatchAt,
+                        startReceipt.ReservationOwnerId,
+                        DateTimeOffset.UtcNow)
+                    .GetAwaiter()
+                    .GetResult() ?? true);
         if (startResult.RecoveryAction is { } action)
         {
             recoveryActions.Add(action);
@@ -987,7 +1010,8 @@ private static RetryAdmissionResult EnsurePreparedRetryAdmission(
     AgentOrchestratorKernel kernel,
     OrchestratorWorkspace workspace,
     GoalId goalId,
-    TaskSpec task)
+    TaskSpec task,
+    bool reservationRecoveryConfirmed = false)
 {
     var dispatch = task.LastDispatch ??
         throw new InvalidOperationException("Retry admission requires a prepared dispatch.");
@@ -1006,7 +1030,8 @@ private static RetryAdmissionResult EnsurePreparedRetryAdmission(
             dispatch,
             recordedAt,
             reservationOwnerId,
-            reservationLeaseExpiresAt)
+            reservationLeaseExpiresAt,
+            reservationRecoveryConfirmed)
         .GetAwaiter()
         .GetResult();
     if (persisted is not null)
@@ -1023,8 +1048,19 @@ private static RetryAdmissionResult EnsurePreparedRetryAdmission(
         recordedAt,
         RetryContextFingerprintFactory.GetOpenBlockingFindings(kernel.GetGoal(goalId)),
         reservationOwnerId,
-        reservationLeaseExpiresAt);
+        reservationLeaseExpiresAt,
+        reservationRecoveryConfirmed);
 }
+
+private static bool HasRecoverablePreparedReservation(TaskSpec task) =>
+    task.LastDispatch is { } dispatch &&
+    task.RetryAdmissionHistory.Any(receipt =>
+        receipt.LinkedDispatchAt == dispatch.DispatchedAt &&
+        receipt.WorkerStartedAt is null &&
+        receipt.Decision is RetryAdmissionDecision.Allowed or RetryAdmissionDecision.ResumedReservation);
+
+internal static bool ShouldRefreshPreparedDispatchBeforeStart(TaskSpec task, bool refreshBeforeStart) =>
+    refreshBeforeStart && !HasRecoverablePreparedReservation(task);
 
 internal static DispatchRecordCheckpointPhase ResolveBatchCheckpointPhase(
     ref bool processMayHaveStarted,

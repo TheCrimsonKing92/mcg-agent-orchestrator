@@ -340,6 +340,20 @@ public sealed class LoopHealthReportTests
         Assert.Null(kernel.BuildLoopHealthReport().MedianRetryResolutionHours);
     }
 
+    [Xunit.Fact]
+    public void RetryResolution_PreAdmissionSuccess_DoesNotResolveRetryInterval()
+    {
+        var (kernel, goal, task, clock, firstAt) = BuildRetryResolutionFixture();
+
+        clock.UtcNow = firstAt.AddMinutes(30);
+        kernel.RecordTaskVerification(
+            goal.Id,
+            task.Id,
+            new TaskVerificationRecord(DispatchCommand, WorkDir, 0, "pre-admission success", "", clock.UtcNow));
+
+        Assert.Null(kernel.BuildLoopHealthReport().MedianRetryResolutionHours);
+    }
+
     // --- Semantic-acceptance judge agreement tests ---
 
     [Xunit.Fact(DisplayName = "LoopHealth_judge_verdict_distribution_counts_met_not_met_and_no_verdict_per_judge")]

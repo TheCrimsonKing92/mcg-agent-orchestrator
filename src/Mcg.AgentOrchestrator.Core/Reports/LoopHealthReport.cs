@@ -340,7 +340,7 @@ public static class LoopHealthReport
         var start = retryReceipts[0].PriorAttemptAt!.Value;
         var resolutionEligibleAt = retryReceipts[0].RecordedAt;
         var successfulVerification = task.VerificationHistory
-            .Where(verification => verification.Succeeded && verification.CompletedAt >= start)
+            .Where(verification => verification.Succeeded && verification.CompletedAt >= resolutionEligibleAt)
             .OrderBy(verification => verification.CompletedAt)
             .FirstOrDefault()?.CompletedAt;
         var terminalTaskAt = goal.Timeline

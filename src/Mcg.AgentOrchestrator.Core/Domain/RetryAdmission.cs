@@ -88,6 +88,10 @@ public sealed record RetryAdmissionSnapshotResult(
     GoalSnapshot Snapshot,
     RetryAdmissionResult Admission);
 
+public sealed record RetryAdmissionStartClaimResult(
+    GoalSnapshot Snapshot,
+    bool Claimed);
+
 public static class RetryAdmissionSnapshotReservation
 {
     public static RetryAdmissionSnapshotResult Apply(
@@ -99,7 +103,8 @@ public static class RetryAdmissionSnapshotReservation
         TaskDispatchRecord preparedDispatch,
         DateTimeOffset recordedAt,
         string reservationOwnerId,
-        DateTimeOffset reservationLeaseExpiresAt)
+        DateTimeOffset reservationLeaseExpiresAt,
+        bool reservationRecoveryConfirmed = false)
     {
         ArgumentNullException.ThrowIfNull(snapshot);
         var goal = Goal.FromSnapshot(snapshot);
@@ -114,11 +119,31 @@ public static class RetryAdmissionSnapshotReservation
             recordedAt,
             RetryContextFingerprintFactory.GetOpenBlockingFindings(goal),
             reservationOwnerId,
-            reservationLeaseExpiresAt);
+            reservationLeaseExpiresAt,
+            reservationRecoveryConfirmed);
         task.RecordRetryAdmission(result.Receipt);
         if (!result.AllowsProcessStart)
             task.SetRetryAdmissionHold(result.Receipt.Route);
         return new RetryAdmissionSnapshotResult(goal.ToSnapshot(), result);
+    }
+}
+
+public static class RetryAdmissionSnapshotStartClaim
+{
+    public static RetryAdmissionStartClaimResult Apply(
+        GoalSnapshot snapshot,
+        TaskId taskId,
+        DateTimeOffset linkedDispatchAt,
+        string reservationOwnerId,
+        DateTimeOffset workerStartedAt)
+    {
+        ArgumentNullException.ThrowIfNull(snapshot);
+        var goal = Goal.FromSnapshot(snapshot);
+        var claimed = goal.FindTask(taskId).TryClaimRetryAdmissionStart(
+            linkedDispatchAt,
+            reservationOwnerId,
+            workerStartedAt);
+        return new RetryAdmissionStartClaimResult(goal.ToSnapshot(), claimed);
     }
 }
 
@@ -280,7 +305,8 @@ public static class RetryAdmissionPolicy
         DateTimeOffset recordedAt,
         IReadOnlyList<ReviewFinding>? openBlockingFindings = null,
         string? reservationOwnerId = null,
-        DateTimeOffset? reservationLeaseExpiresAt = null)
+        DateTimeOffset? reservationLeaseExpiresAt = null,
+        bool reservationRecoveryConfirmed = false)
     {
         ArgumentNullException.ThrowIfNull(task);
         ArgumentNullException.ThrowIfNull(fingerprint);
@@ -297,6 +323,7 @@ public static class RetryAdmissionPolicy
             }
 
             if (!string.IsNullOrWhiteSpace(reservationOwnerId) &&
+                reservationRecoveryConfirmed &&
                 (string.IsNullOrWhiteSpace(sameAttempt.ReservationOwnerId) ||
                  sameAttempt.ReservationLeaseExpiresAt is { } leaseExpiresAt && recordedAt >= leaseExpiresAt))
             {
@@ -379,7 +406,13 @@ public static class RetryAdmissionPolicy
         string? reservationOwnerId,
         DateTimeOffset? reservationLeaseExpiresAt)
     {
-        var identity = string.Join("\n", task.Id.Value, fingerprint.Value, linkedDispatchAt.ToUniversalTime().Ticks, decision);
+        var identity = string.Join(
+            "\n",
+            task.Id.Value,
+            fingerprint.Value,
+            linkedDispatchAt.ToUniversalTime().Ticks,
+            decision,
+            reservationOwnerId ?? string.Empty);
         var receipt = new RetryAdmissionReceipt(
             Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(identity))).ToLowerInvariant(),
             cause,

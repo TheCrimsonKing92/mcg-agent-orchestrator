@@ -252,7 +252,8 @@ public sealed class BackgroundDispatchRunner
         string logRoot,
         Action<AgentOrchestratorKernel, GoalId, TaskId, DispatchRecordCheckpointPhase>? checkpointBeforeWorkerStart = null,
         Func<GoalId, TaskId, InterruptedDispatchStateRead>? readCurrentState = null,
-        WorkerSandboxOptions? sandboxOptions = null)
+        WorkerSandboxOptions? sandboxOptions = null,
+        Func<bool>? claimWorkerStart = null)
     {
         var task = kernel.GetTask(goalId, taskId);
         var dispatch = task.LastDispatch
@@ -435,6 +436,20 @@ public sealed class BackgroundDispatchRunner
             kernel.ReportTaskProgress(goalId, taskId, WorkTaskStatus.Failed, registrationFailure);
             checkpointBeforeWorkerStart?.Invoke(kernel, goalId, taskId, DispatchRecordCheckpointPhase.ProcessMayHaveStarted);
             return DispatchProcessStartResult.Failed(registrationFailure);
+        }
+
+        try
+        {
+            if (claimWorkerStart is not null && !claimWorkerStart())
+            {
+                TerminateUnreleasedDispatchHost(process);
+                return DispatchProcessStartResult.Skipped();
+            }
+        }
+        catch
+        {
+            TerminateUnreleasedDispatchHost(process);
+            throw;
         }
 
         var sampleArtifacts = task.RequiredRole == AgentRole.Planner

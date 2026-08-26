@@ -130,11 +130,66 @@ public sealed class RetryAdmissionTests
 
         var recovery = RetryAdmissionPolicy.Evaluate(
             task, fingerprint, PaidRouteClassification.Paid, RetryCause.ProviderInterruption,
-            attempt, attempt.AddMinutes(1), reservationOwnerId: "owner-b", reservationLeaseExpiresAt: attempt.AddMinutes(2));
+            attempt, attempt.AddMinutes(1), reservationOwnerId: "owner-b", reservationLeaseExpiresAt: attempt.AddMinutes(2),
+            reservationRecoveryConfirmed: true);
 
         Assert.Equal(RetryAdmissionDecision.ResumedReservation, recovery.Decision);
         Assert.True(recovery.AllowsProcessStart);
         Assert.Equal("owner-b", recovery.Receipt.ReservationOwnerId);
+    }
+
+    [Xunit.Fact]
+    public void ExpiredReservationWithoutRecoveryEvidenceRemainsPrevented()
+    {
+        var task = RetryingTask();
+        var attempt = DateTimeOffset.Parse("2026-08-25T12:01:00Z");
+        var fingerprint = RetryContextFingerprintBuilder.Build(Input());
+        task.RecordDispatch(Dispatch(attempt, fingerprint));
+        var first = RetryAdmissionPolicy.Evaluate(
+            task, fingerprint, PaidRouteClassification.Paid, RetryCause.ProviderInterruption,
+            attempt, attempt, reservationOwnerId: "owner-a", reservationLeaseExpiresAt: attempt.AddMinutes(1));
+        task.RecordRetryAdmission(first.Receipt);
+
+        var contender = RetryAdmissionPolicy.Evaluate(
+            task, fingerprint, PaidRouteClassification.Paid, RetryCause.ProviderInterruption,
+            attempt, attempt.AddMinutes(2), reservationOwnerId: "owner-b", reservationLeaseExpiresAt: attempt.AddMinutes(3));
+
+        Assert.Equal(RetryAdmissionDecision.Prevented, contender.Decision);
+        Assert.Equal(RetryAdmissionRoute.ReservationLease, contender.Receipt.Route);
+    }
+
+    [Xunit.Fact]
+    public void MissingRoleTargetEscalatesToHumanInsteadOfSilentlyHolding()
+    {
+        var kernel = new AgentOrchestratorKernel();
+        var held = new TaskSpec(TaskId.New(), "Review retry", AgentRole.Reviewer);
+        var goal = kernel.CreateGoal("Route missing evidence owner", [held]);
+        kernel.ActivateGoal(goal.Id, [new AgentDefinition(
+            new AgentId("reviewer"),
+            "Reviewer",
+            AgentRole.Reviewer,
+            new ModelProfile("OpenAI", "test", ModelCapability.Text, SubscriptionMode.ApiKey))]);
+        var attempt = DateTimeOffset.Parse("2026-08-25T12:01:00Z");
+        var fingerprint = RetryContextFingerprintBuilder.Build(Input() with { Role = AgentRole.Reviewer });
+        kernel.RecordTaskDispatch(goal.Id, held.Id, Dispatch(attempt, fingerprint));
+        var receipt = new RetryAdmissionReceipt(
+            "missing-target",
+            RetryCause.NewTestFinding,
+            fingerprint,
+            RetryAdmissionDecision.Prevented,
+            RetryAdmissionRoute.EvidenceLane,
+            PaidRouteClassification.Paid,
+            attempt,
+            attempt);
+
+        kernel.ApplyPreparedRetryAdmission(
+            goal.Id,
+            held.Id,
+            new RetryAdmissionResult(RetryAdmissionDecision.Prevented, receipt));
+
+        Assert.Equal(WorkTaskStatus.WaitingForHuman, held.Status);
+        Assert.Equal(RetryAdmissionRoute.HumanClarification, held.RetryAdmissionHoldRoute);
+        Assert.Single(kernel.HumanInputRequests, request => request.GoalId == goal.Id && !request.IsCompleted);
     }
 
     [Xunit.Fact]
