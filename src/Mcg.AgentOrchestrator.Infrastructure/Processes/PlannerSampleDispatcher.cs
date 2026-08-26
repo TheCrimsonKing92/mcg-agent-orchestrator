@@ -238,6 +238,7 @@ internal static class PlannerSampleDispatcher
 
     internal static bool AnySampleUnresolved(string primaryStandardOutputPath, int sampleCount) =>
         CreateArtifacts(primaryStandardOutputPath, sampleCount).Any(sample =>
+            !File.Exists(sample.TerminalRecordPath) &&
             !File.Exists(sample.LaunchDiagnosticPath) &&
             !DispatchExitArtifacts.TryRead(sample.ExitCodePath, out _));
 
@@ -249,7 +250,8 @@ internal static class PlannerSampleDispatcher
     {
         foreach (var sample in CreateArtifacts(primaryStandardOutputPath, sampleCount))
         {
-            if (File.Exists(sample.LaunchDiagnosticPath) ||
+            if (File.Exists(sample.TerminalRecordPath) ||
+                File.Exists(sample.LaunchDiagnosticPath) ||
                 DispatchExitArtifacts.TryRead(sample.ExitCodePath, out _))
             {
                 continue;
@@ -267,11 +269,13 @@ internal static class PlannerSampleDispatcher
     internal static void ReleaseStartGates(
         IEnumerable<PlannerSampleLaunch> launches,
         Action<Process>? terminateOwned = null,
-        Action<PlannerSampleArtifacts, string>? writeLaunchDiagnostic = null)
+        Action<PlannerSampleArtifacts, string>? writeLaunchDiagnostic = null,
+        Func<DateTimeOffset>? utcNow = null)
     {
         terminateOwned ??= TerminateOwned;
         writeLaunchDiagnostic ??= WriteLaunchDiagnostic;
-        Exception? deferredDiagnosticFailure = null;
+        utcNow ??= static () => DateTimeOffset.UtcNow;
+        Exception? deferredPersistenceFailure = null;
         foreach (var launch in launches)
         {
             try
@@ -284,13 +288,26 @@ internal static class PlannerSampleDispatcher
                 terminateOwned(launch.Process);
                 try
                 {
+                    WriteTerminalRecord(
+                        launch.Artifacts,
+                        new PlannerSampleTerminalRecord(
+                            PlannerCandidateTerminalState.LaunchFailed,
+                            utcNow()));
+                }
+                catch (Exception terminalFailure)
+                {
+                    deferredPersistenceFailure ??= terminalFailure;
+                }
+
+                try
+                {
                     writeLaunchDiagnostic(
                         launch.Artifacts,
                         $"Planner sample start gate could not be released: {ex.Message}");
                 }
                 catch (Exception diagnosticFailure)
                 {
-                    deferredDiagnosticFailure ??= diagnosticFailure;
+                    deferredPersistenceFailure ??= diagnosticFailure;
                 }
                 continue;
             }
@@ -298,8 +315,8 @@ internal static class PlannerSampleDispatcher
             launch.Process.Dispose();
         }
 
-        if (deferredDiagnosticFailure is not null)
-            System.Runtime.ExceptionServices.ExceptionDispatchInfo.Capture(deferredDiagnosticFailure).Throw();
+        if (deferredPersistenceFailure is not null)
+            System.Runtime.ExceptionServices.ExceptionDispatchInfo.Capture(deferredPersistenceFailure).Throw();
     }
 
     internal static void TerminateUnreleased(IEnumerable<PlannerSampleLaunch> launches)

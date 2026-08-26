@@ -917,10 +917,13 @@ public sealed class PlannerSamplingDispatchTests : WorkerDispatchTestSupport
     }
 
     [Xunit.Fact]
-    public void TryStartLatestDispatch_SampleDiagnosticPersistenceFailure_ReleasesRecordedPrimaryStartGate()
+    public void TryStartLatestDispatch_SampleGateAndDiagnosticPersistenceFailure_RecordsTerminalAndRefreshSettles()
     {
         var root = CreateSeededDispatchRepository();
         var logRoot = Path.Combine(root, "logs");
+        SeedFixtureCitationTargets(root);
+        var startedAt = DateTimeOffset.Parse("2026-08-22T18:00:00Z");
+        var clock = new MutableClock(startedAt);
         var kernel = new AgentOrchestratorKernel();
         var goal = kernel.CreateGoal("Planner sample gate diagnostic failure", [
             new TaskSpec(TaskId.New(), "Produce a sampled plan.", AgentRole.Planner)
@@ -940,15 +943,18 @@ public sealed class PlannerSamplingDispatchTests : WorkerDispatchTestSupport
             "local",
             "Write-Output planner",
             root,
-            DateTimeOffset.Parse("2026-08-22T18:00:00Z"),
+            startedAt,
             PlannerSampleCount: 2));
 
         var processes = new List<Process>();
         var processIds = new List<int>();
         string? primaryOutputPath = null;
         string? primaryStartGatePath = null;
+        PlannerSampleArtifacts? failedSample = null;
         var invocation = 0;
         var runner = new BackgroundDispatchRunner(
+            clock,
+            isStillRunning: _ => false,
             disableProcessStart: false,
             startProcess: startInfo =>
             {
@@ -958,6 +964,10 @@ public sealed class PlannerSamplingDispatchTests : WorkerDispatchTestSupport
                 {
                     primaryOutputPath = parameters.StdoutPath;
                     primaryStartGatePath = startInfo.Environment[DispatchProcessHost.StartGatePathVariable];
+                    File.WriteAllText(parameters.StdoutPath, ReadPlannerFixture());
+                    DispatchExitArtifacts.Write(
+                        parameters.ExitCodePath,
+                        DispatchExitArtifacts.Native(0, "fixture primary completed", startedAt.AddSeconds(1)));
                 }
 
                 var process = StartSleeper();
@@ -979,15 +989,26 @@ public sealed class PlannerSamplingDispatchTests : WorkerDispatchTestSupport
                         if (phase != DispatchRecordCheckpointPhase.ProcessMayHaveStarted)
                             return;
 
-                        var sample = Xunit.Assert.Single(
+                        failedSample = Xunit.Assert.Single(
                             PlannerSampleDispatcher.CreateArtifacts(primaryOutputPath!, 2));
-                        Directory.CreateDirectory(sample.StartGatePath);
-                        Directory.CreateDirectory(sample.LaunchDiagnosticPath);
+                        Directory.CreateDirectory(failedSample.StartGatePath);
+                        Directory.CreateDirectory(failedSample.LaunchDiagnosticPath);
                     }));
 
             Xunit.Assert.NotNull(task.LastProcess);
             Xunit.Assert.NotNull(primaryStartGatePath);
             Xunit.Assert.True(File.Exists(primaryStartGatePath));
+            Xunit.Assert.NotNull(failedSample);
+            Xunit.Assert.True(File.Exists(failedSample.TerminalRecordPath));
+
+            clock.Advance(TimeSpan.FromMinutes(2));
+            runner.RefreshLatestProcess(kernel, goal.Id, task.Id);
+
+            Xunit.Assert.True(task.LastVerification!.Succeeded, task.LastVerification.StandardError);
+            var candidate = PlannerSampleDispatcher.CollectCandidates(
+                task.LastProcess.StandardOutputPath,
+                2)[1];
+            Xunit.Assert.Equal(PlannerCandidateTerminalState.LaunchFailed, candidate.TerminalState);
         }
         finally
         {
