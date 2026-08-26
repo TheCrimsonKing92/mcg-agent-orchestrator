@@ -2947,6 +2947,7 @@ internal sealed partial class ConductorBatchLoop
                     $"ACCEPTANCE_COHORT_ENTRY tick={tick} goal={markerGoal} members={memberIds}");
                 ConductorAcceptanceCohortRunResult cohortRun;
                 var exitOutcome = "exception";
+                var exitReason = string.Empty;
                 try
                 {
                     cohortRun = driver.RunAcceptanceCohort(
@@ -2955,15 +2956,12 @@ internal sealed partial class ConductorBatchLoop
                         policy,
                         onGateAdmitted: () => driver.RecordCohortAdmissionFairness(cohortEligible, cohortSelection),
                         runGateInBackground: true);
-                    exitOutcome = cohortRun.Receipt?.Outcome.ToString() ??
-                        (cohortRun.Detail.Contains("outcome=inflight", StringComparison.Ordinal)
-                            ? "inflight"
-                            : "no-receipt");
+                    (exitOutcome, exitReason) = DescribeAcceptanceCohortExit(cohortRun);
                 }
                 finally
                 {
                     EmitProgress(
-                        $"ACCEPTANCE_COHORT_EXIT tick={tick} goal={markerGoal} members={memberIds} outcome={exitOutcome}");
+                        $"ACCEPTANCE_COHORT_EXIT tick={tick} goal={markerGoal} members={memberIds} outcome={exitOutcome}{exitReason}");
                 }
                 foreach (var pair in cohortRun.MemberResults)
                 {

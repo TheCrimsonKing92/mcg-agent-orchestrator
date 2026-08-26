@@ -50,6 +50,8 @@ public sealed class CohortAcceptanceStore
             return existing;
         }
 
+        ValidateInfrastructureClassification(receipt);
+
         if ((receipt.Outcome == AcceptanceCohortGateOutcome.Passed || receipt.ValidForLanding) &&
             (receipt.GateExitCode != 0 ||
              !AcceptanceCohortGateEvidence.HasCoherentTrxEvidence(receipt.GateTestResultPaths)))
@@ -81,9 +83,10 @@ public sealed class CohortAcceptanceStore
                 INSERT INTO cohort_receipts(
                     cohort_id, receipt_id, main_revision, combined_tree_revision, manifest_identity,
                     outcome, attribution, valid_for_landing, completed_at, gate_elapsed_ms, failed_checks_json,
+                    infrastructure_reason_code, infrastructure_detail,
                     gate_exit_code, gate_test_result_paths_json, gate_evidence_artifacts_json)
                 VALUES ($cohort, $receipt, $main, $tree, $manifest, $outcome, $attribution, $valid, $completed, $elapsed, $failed,
-                    $exitCode, $testResultPaths, $evidenceArtifacts);
+                    $infrastructureReason, $infrastructureDetail, $exitCode, $testResultPaths, $evidenceArtifacts);
                 """;
             command.Parameters.AddWithValue("$cohort", receipt.Identity.Value);
             command.Parameters.AddWithValue("$receipt", receipt.ReceiptId);
@@ -96,6 +99,12 @@ public sealed class CohortAcceptanceStore
             command.Parameters.AddWithValue("$completed", receipt.CompletedAt.ToUniversalTime().ToString("O"));
             command.Parameters.AddWithValue("$elapsed", receipt.GateElapsedMilliseconds);
             command.Parameters.AddWithValue("$failed", JsonSerializer.Serialize(receipt.FailedChecks));
+            command.Parameters.AddWithValue(
+                "$infrastructureReason",
+                (object?)receipt.InfrastructureReasonCode ?? DBNull.Value);
+            command.Parameters.AddWithValue(
+                "$infrastructureDetail",
+                (object?)receipt.InfrastructureDetail ?? DBNull.Value);
             command.Parameters.AddWithValue("$exitCode", (object?)receipt.GateExitCode ?? DBNull.Value);
             command.Parameters.AddWithValue(
                 "$testResultPaths",
@@ -892,6 +901,8 @@ public sealed class CohortAcceptanceStore
                 completed_at TEXT NOT NULL,
                 gate_elapsed_ms INTEGER NOT NULL,
                 failed_checks_json TEXT NOT NULL,
+                infrastructure_reason_code TEXT NULL,
+                infrastructure_detail TEXT NULL,
                 gate_exit_code INTEGER NULL,
                 gate_test_result_paths_json TEXT NOT NULL DEFAULT '[]',
                 gate_evidence_artifacts_json TEXT NOT NULL DEFAULT '[]');
@@ -975,6 +986,8 @@ public sealed class CohortAcceptanceStore
         EnsureColumn(connection, "cohort_members", "merge_status", "TEXT NOT NULL DEFAULT 'Clean'");
         EnsureColumn(connection, "cohort_members", "merge_reason", "TEXT NOT NULL DEFAULT 'NoConflictsDetected'");
         EnsureColumn(connection, "cohort_receipts", "gate_exit_code", "INTEGER NULL");
+        EnsureColumn(connection, "cohort_receipts", "infrastructure_reason_code", "TEXT NULL");
+        EnsureColumn(connection, "cohort_receipts", "infrastructure_detail", "TEXT NULL");
         EnsureColumn(connection, "cohort_receipts", "gate_test_result_paths_json", "TEXT NOT NULL DEFAULT '[]'");
         EnsureColumn(connection, "cohort_receipts", "gate_evidence_artifacts_json", "TEXT NOT NULL DEFAULT '[]'");
         EnsureColumn(connection, "cohort_landing_intents", "prior_integration_revision", "TEXT NULL");
@@ -1055,6 +1068,7 @@ public sealed class CohortAcceptanceStore
         command.CommandText = """
             SELECT receipt_id, main_revision, combined_tree_revision, manifest_identity, outcome,
                    attribution, valid_for_landing, completed_at, gate_elapsed_ms, failed_checks_json,
+                   infrastructure_reason_code, infrastructure_detail,
                    gate_exit_code, gate_test_result_paths_json, gate_evidence_artifacts_json
             FROM cohort_receipts WHERE cohort_id=$cohort;
             """;
@@ -1071,9 +1085,22 @@ public sealed class CohortAcceptanceStore
         var completed = DateTimeOffset.Parse(reader.GetString(7), System.Globalization.CultureInfo.InvariantCulture);
         var elapsed = reader.GetInt64(8);
         var failed = JsonSerializer.Deserialize<string[]>(reader.GetString(9)) ?? [];
-        int? gateExitCode = reader.IsDBNull(10) ? null : reader.GetInt32(10);
-        var gateTestResultPaths = JsonSerializer.Deserialize<string[]>(reader.GetString(11)) ?? [];
-        var gateEvidenceArtifacts = JsonSerializer.Deserialize<AcceptanceCohortEvidenceArtifact[]>(reader.GetString(12)) ?? [];
+        var infrastructureReasonCode = reader.IsDBNull(10) ? null : reader.GetString(10);
+        var infrastructureDetail = reader.IsDBNull(11) ? null : reader.GetString(11);
+        if (outcome == AcceptanceCohortGateOutcome.InfrastructureFailure)
+        {
+            infrastructureReasonCode = string.IsNullOrWhiteSpace(infrastructureReasonCode)
+                ? AcceptanceCohortInfrastructureReasonCodes.LegacyUnknown
+                : infrastructureReasonCode;
+        }
+        else
+        {
+            infrastructureReasonCode = null;
+            infrastructureDetail = null;
+        }
+        int? gateExitCode = reader.IsDBNull(12) ? null : reader.GetInt32(12);
+        var gateTestResultPaths = JsonSerializer.Deserialize<string[]>(reader.GetString(13)) ?? [];
+        var gateEvidenceArtifacts = JsonSerializer.Deserialize<AcceptanceCohortEvidenceArtifact[]>(reader.GetString(14)) ?? [];
         reader.Close();
 
         using var membersCommand = connection.CreateCommand();
@@ -1153,11 +1180,40 @@ public sealed class CohortAcceptanceStore
 
         return new AcceptanceCohortReceipt(
             receiptId, identity, outcome, completed, elapsed, failed, gateExitCode,
-            gateTestResultPaths, attribution, valid)
+            gateTestResultPaths, attribution, valid,
+            infrastructureReasonCode, infrastructureDetail)
         {
             GateEvidenceArtifacts = gateEvidenceArtifacts,
             Invalidation = invalidation
         };
+    }
+
+    private static void ValidateInfrastructureClassification(AcceptanceCohortReceipt receipt)
+    {
+        if (receipt.Outcome == AcceptanceCohortGateOutcome.InfrastructureFailure)
+        {
+            if (!AcceptanceCohortInfrastructureReasonCodes.IsSingleToken(receipt.InfrastructureReasonCode))
+            {
+                throw new ArgumentException(
+                    "An infrastructure-failure cohort receipt requires a nonblank single-token reason code.",
+                    nameof(receipt));
+            }
+            if (receipt.InfrastructureDetail is { Length: > 256 } ||
+                receipt.InfrastructureDetail?.IndexOfAny(['\r', '\n', '\t']) >= 0)
+            {
+                throw new ArgumentException(
+                    "An infrastructure-failure cohort receipt detail must be single-line and at most 256 characters.",
+                    nameof(receipt));
+            }
+            return;
+        }
+
+        if (receipt.InfrastructureReasonCode is not null || receipt.InfrastructureDetail is not null)
+        {
+            throw new ArgumentException(
+                "Only infrastructure-failure cohort receipts may carry infrastructure reason evidence.",
+                nameof(receipt));
+        }
     }
 
     private static IReadOnlyList<AcceptanceCohortCoverage> ReadCoverage(

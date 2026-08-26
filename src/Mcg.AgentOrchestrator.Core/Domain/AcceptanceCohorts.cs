@@ -204,6 +204,28 @@ public enum AcceptanceCohortGateOutcome
     Invalidated
 }
 
+public static class AcceptanceCohortInfrastructureReasonCodes
+{
+    public const string LegacyUnknown = "legacy-unknown";
+    public const string VerificationSkipped = "verification-skipped";
+    public const string ExitCodeMissing = "exit-code-missing";
+    public const string ResultPathInvalid = "result-path-invalid";
+    public const string TrxEvidenceIncoherent = "trx-evidence-incoherent";
+    public const string DotnetBuildSlotsBusy = "dotnet-build-slots-busy";
+    public const string BuildLockBlocked = "build-lock-blocked";
+    public const string OperationCancelled = "operation-cancelled";
+    public const string IoFailure = "io-failure";
+    public const string InvalidData = "invalid-data";
+
+    public static bool IsSingleToken(string? value) =>
+        !string.IsNullOrWhiteSpace(value) && value.All(character => !char.IsWhiteSpace(character));
+}
+
+public sealed record AcceptanceCohortGateClassification(
+    AcceptanceCohortGateOutcome Outcome,
+    string? InfrastructureReasonCode = null,
+    string? InfrastructureDetail = null);
+
 public enum AcceptanceCohortAttributionOutcome
 {
     NotApplicable,
@@ -263,7 +285,9 @@ public sealed record AcceptanceCohortReceipt(
     int? GateExitCode,
     IReadOnlyList<string> GateTestResultPaths,
     AcceptanceCohortAttributionOutcome Attribution = AcceptanceCohortAttributionOutcome.NotApplicable,
-    bool ValidForLanding = false)
+    bool ValidForLanding = false,
+    string? InfrastructureReasonCode = null,
+    string? InfrastructureDetail = null)
 {
     private const string TestProjectResourceKeyPrefix =
         "ownership:" + RepositoryOwnershipMap.TestProjectReservationKeyPrefix;
