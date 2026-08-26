@@ -2112,15 +2112,6 @@ public sealed class BackgroundDispatchRunner
             resourceAccounting ??= _recoveryService.ReleaseTrackedProcessJobs(processRecord);
         }
         var cancelledAt = _clock.UtcNow;
-        if (task.RequiredRole == AgentRole.Planner &&
-            task.LastDispatch?.PlannerSampleCount is > 1)
-        {
-            PlannerSampleDispatcher.RecordCancelledSamples(
-                processRecord.StandardOutputPath,
-                task.LastDispatch.PlannerSampleCount,
-                cancelledAt);
-        }
-
         var cancelled = processRecord with
         {
             CompletedAt = cancelledAt,
@@ -2132,12 +2123,27 @@ public sealed class BackgroundDispatchRunner
         var candidateEvidence = CancellationCandidateEvidenceClassifier.Classify(
             task, processRecord, goalId, _worktreeCommitter);
         kernel.RecordTaskProcessCancelled(goalId, taskId, cancelled, candidateEvidence);
-        if (resourceAccounting is not null)
+        try
         {
-            kernel.RecordTaskNote(goalId, taskId, FormatResourceReceipt(goalId, taskId, resourceAccounting));
+            if (task.RequiredRole == AgentRole.Planner &&
+                task.LastDispatch?.PlannerSampleCount is > 1)
+            {
+                PlannerSampleDispatcher.RecordCancelledSamples(
+                    processRecord.StandardOutputPath,
+                    task.LastDispatch.PlannerSampleCount,
+                    cancelledAt);
+            }
+
+            if (resourceAccounting is not null)
+            {
+                kernel.RecordTaskNote(goalId, taskId, FormatResourceReceipt(goalId, taskId, resourceAccounting));
+            }
+        }
+        finally
+        {
+            EvictProcessLogCache(processRecord);
         }
 
-        EvictProcessLogCache(processRecord);
         return cancelled;
     }
 

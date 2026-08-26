@@ -444,7 +444,8 @@ internal static class PlannerSampleDispatcher
         foreach (var sample in CreateArtifacts(primaryStandardOutputPath, sampleCount))
         {
             if (File.Exists(sample.TerminalRecordPath) ||
-                DispatchExitArtifacts.TryRead(sample.ExitCodePath, out _))
+                DispatchExitArtifacts.TryRead(sample.ExitCodePath, out _) ||
+                !HasValidLaunchIdentity(sample))
             {
                 continue;
             }
@@ -452,6 +453,20 @@ internal static class PlannerSampleDispatcher
             WriteTerminalRecord(
                 sample,
                 new PlannerSampleTerminalRecord(PlannerCandidateTerminalState.Cancelled, cancelledAt));
+        }
+    }
+
+    private static bool HasValidLaunchIdentity(PlannerSampleArtifacts sample)
+    {
+        try
+        {
+            var launch = JsonSerializer.Deserialize<PlannerSampleLaunchRecord>(
+                File.ReadAllText(sample.LaunchRecordPath));
+            return launch is { ProcessId: > 0 } && launch.StartedAt != default;
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or JsonException)
+        {
+            return false;
         }
     }
 

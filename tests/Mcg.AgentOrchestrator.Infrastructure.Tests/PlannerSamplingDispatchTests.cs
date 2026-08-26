@@ -246,6 +246,26 @@ public sealed class PlannerSamplingDispatchTests : WorkerDispatchTestSupport
     }
 
     [Xunit.Fact]
+    public void RecordCancelledSamples_RequiresLaunchIdentityAndPreservesPreLaunchCauses()
+    {
+        var root = CreateTempDirectory();
+        var primaryPath = Path.Combine(root, "planner.out.log");
+        File.WriteAllText(primaryPath, ReadPlannerFixture());
+        var samples = PlannerSampleDispatcher.CreateArtifacts(primaryPath, 3).ToArray();
+        File.WriteAllText(samples[0].LaunchDiagnosticPath, "fixture launch failed");
+
+        PlannerSampleDispatcher.RecordCancelledSamples(
+            primaryPath,
+            3,
+            DateTimeOffset.Parse("2026-08-25T12:00:00Z"));
+
+        var candidates = PlannerSampleDispatcher.CollectCandidates(primaryPath, 3);
+        Xunit.Assert.Equal(PlannerCandidateTerminalState.LaunchFailed, candidates[1].TerminalState);
+        Xunit.Assert.Equal(PlannerCandidateTerminalState.MissingExitArtifact, candidates[2].TerminalState);
+        Xunit.Assert.All(samples, sample => Xunit.Assert.False(File.Exists(sample.TerminalRecordPath)));
+    }
+
+    [Xunit.Fact]
     public void CancelLatestProcess_PlannerN2_WritesTypedCancellationForCollection()
     {
         var root = CreateTempDirectory();
@@ -279,6 +299,10 @@ public sealed class PlannerSamplingDispatchTests : WorkerDispatchTestSupport
                 null,
                 null,
                 OwnedProcessIds: [111]));
+        var sample = Xunit.Assert.Single(PlannerSampleDispatcher.CreateArtifacts(primaryPath, 2));
+        File.WriteAllText(
+            sample.LaunchRecordPath,
+            JsonSerializer.Serialize(new { ProcessId = 111, StartedAt = now }));
         var running = true;
         var runner = new BackgroundDispatchRunner(
             new TestClock(now.AddSeconds(5)),
@@ -291,10 +315,71 @@ public sealed class PlannerSamplingDispatchTests : WorkerDispatchTestSupport
 
         runner.CancelLatestProcess(kernel, goal.Id, task.Id);
 
-        var sample = Xunit.Assert.Single(PlannerSampleDispatcher.CreateArtifacts(primaryPath, 2));
         Xunit.Assert.True(File.Exists(sample.TerminalRecordPath));
         var candidate = PlannerSampleDispatcher.CollectCandidates(primaryPath, 2)[1];
         Xunit.Assert.Equal(PlannerCandidateTerminalState.Cancelled, candidate.TerminalState);
+    }
+
+    [Xunit.Fact]
+    public void CancelLatestProcess_CancellationReceiptFailure_StillRecordsAuthoritativeCancellation()
+    {
+        var root = CreateTempDirectory();
+        var primaryPath = Path.Combine(root, "planner.out.log");
+        File.WriteAllText(primaryPath, ReadPlannerFixture());
+        var sample = Xunit.Assert.Single(PlannerSampleDispatcher.CreateArtifacts(primaryPath, 2));
+        File.WriteAllText(
+            sample.LaunchRecordPath,
+            JsonSerializer.Serialize(new
+            {
+                ProcessId = 222,
+                StartedAt = DateTimeOffset.Parse("2026-08-25T11:59:59Z")
+            }));
+        Directory.CreateDirectory(sample.TerminalRecordPath);
+        var now = DateTimeOffset.Parse("2026-08-25T12:00:00Z");
+        var kernel = new AgentOrchestratorKernel();
+        var goal = kernel.CreateGoal("Cancel a sampled Planner with a receipt failure", [
+            new TaskSpec(TaskId.New(), "Produce a sampled plan.", AgentRole.Planner)
+        ]);
+        kernel.ActivateGoal(goal.Id, AgentCatalog.Default().Agents);
+        var task = goal.Tasks.Single();
+        var dispatch = new TaskDispatchRecord(
+            "planner",
+            "fixture planner command",
+            root,
+            now,
+            PlannerSampleCount: 2);
+        kernel.RecordTaskDispatch(goal.Id, task.Id, dispatch);
+        kernel.RecordTaskProcessStarted(
+            goal.Id,
+            task.Id,
+            new TaskProcessRecord(
+                222,
+                dispatch.Command,
+                dispatch.WorkingDirectory,
+                primaryPath,
+                Path.Combine(root, "planner.err.log"),
+                Path.Combine(root, "planner.exit.txt"),
+                now,
+                null,
+                null,
+                OwnedProcessIds: [222]));
+        var running = true;
+        var runner = new BackgroundDispatchRunner(
+            new TestClock(now.AddSeconds(5)),
+            isStillRunning: _ => running,
+            tryKillOwnedProcess: _ =>
+            {
+                running = false;
+                return true;
+            });
+
+        Xunit.Assert.Throws<UnauthorizedAccessException>(() =>
+            runner.CancelLatestProcess(kernel, goal.Id, task.Id));
+
+        var cancelled = kernel.GetTask(goal.Id, task.Id).LastProcess;
+        Xunit.Assert.NotNull(cancelled);
+        Xunit.Assert.True(cancelled.WasCancelled);
+        Xunit.Assert.Equal(now.AddSeconds(5), cancelled.CompletedAt);
     }
 
     [Xunit.Fact]
