@@ -2257,14 +2257,9 @@ internal sealed partial class ConductorDriver
             var openBlockingFindings = ReviewFindings.GetOpenBlockingFindings(
                 mergedFindings.Count > 0 ? mergedFindings : round.Findings,
                 goal.EffectiveAcceptanceCriteriaCorrections);
-            var evidenceRequestFindingIds = requestingFindings
-                .Select(finding => finding.StableId)
-                .ToHashSet(StringComparer.Ordinal);
             var writableBlockerIds = ReviewFindingRouting
                 .Project(openBlockingFindings)
-                .Where(projection =>
-                    projection.TargetRole == AgentRole.Developer &&
-                    !evidenceRequestFindingIds.Contains(projection.Finding.StableId))
+                .Where(projection => projection.TargetRole == AgentRole.Developer)
                 .Select(projection => projection.Finding.StableId)
                 .Distinct(StringComparer.Ordinal)
                 .OrderBy(id => id, StringComparer.Ordinal)

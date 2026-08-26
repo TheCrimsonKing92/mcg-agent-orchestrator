@@ -3,7 +3,7 @@ namespace Mcg.AgentOrchestrator.Core;
 internal static class SdlcRolePromptRequirements
 {
     private const string IntakeRiskLabelsMarker = "risk labels:";
-    internal const int ReviewerComplexRequirementsMaxChars = 4356;
+    internal const int ReviewerComplexRequirementsMaxChars = 4371;
     internal const int ReviewerCompactRequirementsMaxChars = 3346;
 
     private const string ReviewerExhaustiveFindingsContract =
