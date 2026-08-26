@@ -494,8 +494,17 @@ public sealed class BackgroundDispatchRunner
 
         try
         {
-            PlannerSampleDispatcher.ReleaseStartGates(sampleLaunches);
-            ReleaseDispatchHostStartGate(startGatePath);
+            try
+            {
+                PlannerSampleDispatcher.ReleaseStartGates(sampleLaunches);
+            }
+            finally
+            {
+                // The primary is already durable. A deferred optional-sample diagnostic failure must
+                // remain loud without stranding the authoritative dispatch behind its start gate.
+                ReleaseDispatchHostStartGate(startGatePath);
+            }
+
             if (confirmWorkerStart is not null && !confirmWorkerStart())
             {
                 throw new InvalidOperationException(

@@ -917,6 +917,88 @@ public sealed class PlannerSamplingDispatchTests : WorkerDispatchTestSupport
     }
 
     [Xunit.Fact]
+    public void TryStartLatestDispatch_SampleDiagnosticPersistenceFailure_ReleasesRecordedPrimaryStartGate()
+    {
+        var root = CreateSeededDispatchRepository();
+        var logRoot = Path.Combine(root, "logs");
+        var kernel = new AgentOrchestratorKernel();
+        var goal = kernel.CreateGoal("Planner sample gate diagnostic failure", [
+            new TaskSpec(TaskId.New(), "Produce a sampled plan.", AgentRole.Planner)
+        ]);
+        var planner = new AgentDefinition(
+            new AgentId("planner"),
+            "Planner",
+            AgentRole.Planner,
+            new ModelProfile(
+                "OpenAI",
+                AgentCatalog.OpenAiSubscriptionModelAlias,
+                ModelCapability.Text,
+                SubscriptionMode.ApiKey));
+        kernel.ActivateGoal(goal.Id, [planner]);
+        var task = goal.Tasks.Single();
+        kernel.RecordTaskDispatch(goal.Id, task.Id, new TaskDispatchRecord(
+            "local",
+            "Write-Output planner",
+            root,
+            DateTimeOffset.Parse("2026-08-22T18:00:00Z"),
+            PlannerSampleCount: 2));
+
+        var processes = new List<Process>();
+        var processIds = new List<int>();
+        string? primaryOutputPath = null;
+        string? primaryStartGatePath = null;
+        var invocation = 0;
+        var runner = new BackgroundDispatchRunner(
+            disableProcessStart: false,
+            startProcess: startInfo =>
+            {
+                invocation++;
+                var parameters = DispatchProcessHost.ReadParameters(startInfo.ArgumentList.Last());
+                if (invocation == 1)
+                {
+                    primaryOutputPath = parameters.StdoutPath;
+                    primaryStartGatePath = startInfo.Environment[DispatchProcessHost.StartGatePathVariable];
+                }
+
+                var process = StartSleeper();
+                processes.Add(process);
+                processIds.Add(process.Id);
+                return process;
+            });
+
+        try
+        {
+            Xunit.Assert.Throws<UnauthorizedAccessException>(() =>
+                runner.TryStartLatestDispatch(
+                    kernel,
+                    goal.Id,
+                    task.Id,
+                    logRoot,
+                    (_, _, _, phase) =>
+                    {
+                        if (phase != DispatchRecordCheckpointPhase.ProcessMayHaveStarted)
+                            return;
+
+                        var sample = Xunit.Assert.Single(
+                            PlannerSampleDispatcher.CreateArtifacts(primaryOutputPath!, 2));
+                        Directory.CreateDirectory(sample.StartGatePath);
+                        Directory.CreateDirectory(sample.LaunchDiagnosticPath);
+                    }));
+
+            Xunit.Assert.NotNull(task.LastProcess);
+            Xunit.Assert.NotNull(primaryStartGatePath);
+            Xunit.Assert.True(File.Exists(primaryStartGatePath));
+        }
+        finally
+        {
+            foreach (var processId in processIds)
+                try { WorkerProcessJobs.TryKillOrFallback(processId); } catch { }
+            foreach (var process in processes)
+                try { process.Dispose(); } catch { }
+        }
+    }
+
+    [Xunit.Fact]
     public void LateFinishingSampleStillReachesSelector()
     {
         var root = CreateSeededDispatchRepository();
