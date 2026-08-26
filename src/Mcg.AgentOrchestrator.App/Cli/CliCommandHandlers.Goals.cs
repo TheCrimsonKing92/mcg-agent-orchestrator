@@ -1723,7 +1723,7 @@ private static bool? TryExecuteGoalCommand(string command, IReadOnlyList<string>
                             taskId)),
                     refreshGoalDispatchesBeforeAdvance: (loopKernel, loopGoal) =>
                     {
-                        GoalManagementCommandService.RefreshDispatches(loopKernel, loopGoal, loopReaper);
+                        return GoalManagementCommandService.RefreshDispatches(loopKernel, loopGoal, loopReaper);
                     },
                     handoffOnMaxDuration: supervisedChild ? null : handoff,
                     conductEventLogWriter: conductEventLogWriter,
@@ -1834,7 +1834,7 @@ private static bool? TryExecuteGoalCommand(string command, IReadOnlyList<string>
                             context.ReloadKernel(),
                             goalId,
                             taskId)),
-                    (wk, goal) => { GoalManagementCommandService.RefreshDispatches(wk, goal, watchReaper); },
+                    (wk, goal) => GoalManagementCommandService.RefreshDispatches(wk, goal, watchReaper),
                     conductEventLogWriter: new ConductEventLogWriter(context.Workspace.ConductEventsLogPath),
                     operatorIntents: OperatorIntentCoordinator.CreateDefault(context.Workspace),
                     progressiveReviewGlances: ProgressiveReviewGlanceCoordinator.CreateDefault(context.Workspace, context.WorkerProfiles),

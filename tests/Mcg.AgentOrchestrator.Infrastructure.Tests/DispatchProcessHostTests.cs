@@ -416,6 +416,13 @@ public sealed class DispatchProcessHostTests
             AssertNativeExitArtifact(exitPath, 1);
             Assert.Equal(0, new FileInfo(stdoutPath).Length);
             Assert.Equal(0, new FileInfo(stderrPath).Length);
+            using (var terminalHeartbeat = JsonDocument.Parse(File.ReadAllText(heartbeatPath)))
+            {
+                Assert.Equal("exited", terminalHeartbeat.RootElement.GetProperty("state").GetString());
+                Assert.Contains(
+                    terminalHeartbeat.RootElement.GetProperty("ownedProcessIdentities").EnumerateArray(),
+                    identity => identity.GetProperty("processId").GetInt32() == heartbeatChildPid);
+            }
             using var childExit = JsonDocument.Parse(File.ReadAllText(childExitPath));
             Assert.Equal(heartbeatChildPid, childExit.RootElement.GetProperty("processId").GetInt32());
             Assert.Equal(23, childExit.RootElement.GetProperty("exitCode").GetInt32());
@@ -1644,6 +1651,76 @@ public sealed class DispatchProcessHostTests
     public void HasProgressedDetectsByteGrowth()
     {
         Assert.True(DispatchProcessHost.HasProgressed(0, 10, 0, 0, 50));
+    }
+
+    [Xunit.Fact]
+    public void DispatchProcessIdentityEvidence_CaptureDropsIdentityWhenOwnershipChangesDuringCapture()
+    {
+        const int processId = 43_316;
+        var identity = new SpawnProcessIdentity(
+            processId,
+            DateTimeOffset.Parse("2026-08-24T14:20:35Z"),
+            @"C:\workers\claude.exe");
+        var identityCaptured = false;
+
+        var captured = DispatchProcessIdentityEvidence.Capture(
+            [processId],
+            readCurrentOwnedProcessIds: () =>
+            {
+                Assert.True(identityCaptured, "Ownership must be revalidated after the bare PID is reopened.");
+                return [];
+            },
+            readCurrentIdentity: _ =>
+            {
+                identityCaptured = true;
+                return identity;
+            });
+
+        Assert.Empty(captured);
+    }
+
+    [Xunit.Fact]
+    public void DispatchProcessIdentityEvidence_CaptureRetainsIdentityWhileProcessRemainsOwned()
+    {
+        const int processId = 43_316;
+        var identity = new SpawnProcessIdentity(
+            processId,
+            DateTimeOffset.Parse("2026-08-24T14:20:35Z"),
+            @"C:\workers\claude.exe");
+
+        var captured = DispatchProcessIdentityEvidence.Capture(
+            [processId],
+            readCurrentOwnedProcessIds: () => [processId],
+            readCurrentIdentity: _ => identity);
+
+        Assert.Equal([identity], captured);
+    }
+
+    [Xunit.Fact]
+    public void DispatchProcessHost_CaptureHeartbeatProcessIdentitiesIncludesHostIdentity()
+    {
+        var hostIdentity = new SpawnProcessIdentity(
+            43_316,
+            DateTimeOffset.UtcNow.AddMinutes(-10),
+            @"C:\tools\dispatch-host.exe");
+        var workerIdentity = new SpawnProcessIdentity(
+            26_084,
+            DateTimeOffset.UtcNow.AddMinutes(-9),
+            @"C:\tools\worker.exe");
+
+        var captured = DispatchProcessHost.CaptureHeartbeatProcessIdentities(
+            hostIdentity.ProcessId,
+            [workerIdentity.ProcessId],
+            () => [workerIdentity.ProcessId],
+            processId => processId switch
+            {
+                43_316 => hostIdentity,
+                26_084 => workerIdentity,
+                _ => null
+            });
+
+        Assert.Contains(hostIdentity, captured);
+        Assert.Contains(workerIdentity, captured);
     }
 
     [Xunit.Fact(DisplayName = "DispatchProcessHost_heartbeat_cpu_and_pids_reflect_wrapped_grandchild")]
