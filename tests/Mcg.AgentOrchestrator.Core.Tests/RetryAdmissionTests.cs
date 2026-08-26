@@ -107,7 +107,8 @@ public sealed class RetryAdmissionTests
         task.RecordRetryAdmission(allowed.Receipt);
         task.MarkRetryAdmissionStarted(firstAttempt, firstAttempt.AddSeconds(1));
         task.RecordVerification(new TaskVerificationRecord(
-            "worker", "worktree", 1, "", "failed", firstAttempt.AddSeconds(2)));
+            "worker", "worktree", 1, "", "failed", firstAttempt.AddSeconds(2),
+            DispatchStartedAt: firstAttempt.AddSeconds(1)));
         task.RecordRetry(secondAttempt.AddSeconds(-1), RetryCause.NewSourceFinding);
         task.RecordDispatch(Dispatch(secondAttempt, fingerprint));
 
@@ -134,7 +135,8 @@ public sealed class RetryAdmissionTests
         task.RecordRetryAdmission(allowed.Receipt);
         task.MarkRetryAdmissionStarted(firstAttempt, firstAttempt.AddSeconds(1));
         task.RecordVerification(new TaskVerificationRecord(
-            "worker", "worktree", 0, "passed", "", firstAttempt.AddSeconds(2)));
+            "worker", "worktree", 0, "passed", "", firstAttempt.AddSeconds(2),
+            DispatchStartedAt: firstAttempt.AddSeconds(1)));
         task.RecordRetry(secondAttempt.AddSeconds(-1), RetryCause.ContractClarification);
         task.RecordDispatch(Dispatch(secondAttempt, fingerprint));
 
@@ -143,6 +145,73 @@ public sealed class RetryAdmissionTests
             secondAttempt, secondAttempt);
 
         Assert.Equal(RetryAdmissionDecision.Allowed, result.Decision);
+    }
+
+    [Xunit.Fact]
+    public void InterveningAttemptOutcomeCannotChangeEarlierMatchingAttemptResult()
+    {
+        var task = RetryingTask();
+        var firstAttempt = DateTimeOffset.Parse("2026-08-25T12:01:00Z");
+        var interveningAttempt = firstAttempt.AddMinutes(1);
+        var retryAttempt = interveningAttempt.AddMinutes(1);
+        var fingerprint = RetryContextFingerprintBuilder.Build(Input());
+        var changedFingerprint = RetryContextFingerprintBuilder.Build(Input() with { ReviewedCandidateSha = "changed" });
+        task.RecordDispatch(Dispatch(firstAttempt, fingerprint));
+        var first = RetryAdmissionPolicy.Evaluate(
+            task, fingerprint, PaidRouteClassification.Paid, RetryCause.NewSourceFinding,
+            firstAttempt, firstAttempt);
+        task.RecordRetryAdmission(first.Receipt);
+        task.MarkRetryAdmissionStarted(firstAttempt, firstAttempt.AddSeconds(1));
+        task.RecordVerification(new TaskVerificationRecord(
+            "worker", "worktree", 0, "passed", "", firstAttempt.AddSeconds(2),
+            DispatchStartedAt: firstAttempt.AddSeconds(1)));
+
+        task.RecordDispatch(Dispatch(interveningAttempt, changedFingerprint));
+        task.RecordVerification(new TaskVerificationRecord(
+            "worker", "worktree", 1, "", "failed", interveningAttempt.AddSeconds(2),
+            DispatchStartedAt: interveningAttempt.AddSeconds(1)));
+        task.RecordRetry(retryAttempt.AddSeconds(-1), RetryCause.NewSourceFinding);
+        task.RecordDispatch(Dispatch(retryAttempt, fingerprint));
+
+        var result = RetryAdmissionPolicy.Evaluate(
+            task, fingerprint, PaidRouteClassification.Paid, RetryCause.NewSourceFinding,
+            retryAttempt, retryAttempt);
+
+        Assert.Equal(RetryAdmissionDecision.Allowed, result.Decision);
+    }
+
+    [Xunit.Fact]
+    public void InterveningSuccessCannotHideEarlierMatchingAttemptFailure()
+    {
+        var task = RetryingTask();
+        var firstAttempt = DateTimeOffset.Parse("2026-08-25T12:01:00Z");
+        var interveningAttempt = firstAttempt.AddMinutes(1);
+        var retryAttempt = interveningAttempt.AddMinutes(1);
+        var fingerprint = RetryContextFingerprintBuilder.Build(Input());
+        var changedFingerprint = RetryContextFingerprintBuilder.Build(Input() with { ReviewedCandidateSha = "changed" });
+        task.RecordDispatch(Dispatch(firstAttempt, fingerprint));
+        var first = RetryAdmissionPolicy.Evaluate(
+            task, fingerprint, PaidRouteClassification.Paid, RetryCause.NewSourceFinding,
+            firstAttempt, firstAttempt);
+        task.RecordRetryAdmission(first.Receipt);
+        task.MarkRetryAdmissionStarted(firstAttempt, firstAttempt.AddSeconds(1));
+        task.RecordVerification(new TaskVerificationRecord(
+            "worker", "worktree", 1, "", "failed", firstAttempt.AddSeconds(2),
+            DispatchStartedAt: firstAttempt.AddSeconds(1)));
+
+        task.RecordDispatch(Dispatch(interveningAttempt, changedFingerprint));
+        task.RecordVerification(new TaskVerificationRecord(
+            "worker", "worktree", 0, "passed", "", interveningAttempt.AddSeconds(2),
+            DispatchStartedAt: interveningAttempt.AddSeconds(1)));
+        task.RecordRetry(retryAttempt.AddSeconds(-1), RetryCause.NewSourceFinding);
+        task.RecordDispatch(Dispatch(retryAttempt, fingerprint));
+
+        var result = RetryAdmissionPolicy.Evaluate(
+            task, fingerprint, PaidRouteClassification.Paid, RetryCause.NewSourceFinding,
+            retryAttempt, retryAttempt);
+
+        Assert.Equal(RetryAdmissionDecision.Prevented, result.Decision);
+        Assert.Equal(firstAttempt, result.Receipt.PriorAttemptAt);
     }
 
     [Xunit.Fact]

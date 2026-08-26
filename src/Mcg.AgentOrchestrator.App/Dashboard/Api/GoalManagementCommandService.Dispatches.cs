@@ -1077,8 +1077,7 @@ private static RetryAdmissionResult EnsurePreparedRetryAdmission(
         .GetResult();
     if (persisted is not null)
     {
-        kernel.ReplaceGoalWithSnapshot(persisted.Snapshot);
-        kernel.ApplyPersistedRetryAdmissionOutcome(goalId, task.Id, persisted.Admission);
+        kernel.ReplaceGoalStateWithSnapshot(persisted.Snapshot, persisted.HumanInputRequests ?? []);
         return persisted.Admission;
     }
 

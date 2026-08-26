@@ -19,16 +19,16 @@ public static class RetryAdmissionReservationStore
         CancellationToken cancellationToken = default)
     {
         var repository = new SqliteOrchestratorStateRepository(stateDatabasePath);
-        return repository.TransactGoalAsync<RetryAdmissionSnapshotResult?>(
+        return repository.TransactGoalStateAsync<RetryAdmissionSnapshotResult?>(
             "retry-admission-reservation",
             goalId,
-            (snapshot, _) =>
+            (state, _) =>
             {
-                if (snapshot is null)
-                    return Task.FromResult((false, (GoalSnapshot?)null, (RetryAdmissionSnapshotResult?)null));
+                if (state is null)
+                    return Task.FromResult((false, (GoalStateSnapshot?)null, (RetryAdmissionSnapshotResult?)null));
 
                 var reservation = RetryAdmissionSnapshotReservation.Apply(
-                    snapshot,
+                    state.Goal,
                     taskId,
                     fingerprint,
                     paidRoute,
@@ -38,7 +38,18 @@ public static class RetryAdmissionReservationStore
                     reservationOwnerId,
                     reservationLeaseExpiresAt,
                     reservationRecoveryConfirmed);
-                return Task.FromResult((true, (GoalSnapshot?)reservation.Snapshot, (RetryAdmissionSnapshotResult?)reservation));
+                var kernel = AgentOrchestratorKernel.FromSnapshot(
+                    new OrchestratorSnapshot([reservation.Snapshot], state.HumanInputRequests));
+                kernel.ApplyPersistedRetryAdmissionOutcome(goalId, taskId, reservation.Admission);
+                var persisted = kernel.ExportSnapshot();
+                var result = new RetryAdmissionSnapshotResult(
+                    persisted.Goals.Single(),
+                    reservation.Admission,
+                    persisted.HumanInputRequests);
+                return Task.FromResult((
+                    true,
+                    (GoalStateSnapshot?)new GoalStateSnapshot(result.Snapshot, result.HumanInputRequests ?? []),
+                    (RetryAdmissionSnapshotResult?)result));
             },
             cancellationToken);
     }

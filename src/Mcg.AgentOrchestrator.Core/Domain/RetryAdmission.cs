@@ -87,7 +87,8 @@ public sealed record RetryAdmissionResult(
 
 public sealed record RetryAdmissionSnapshotResult(
     GoalSnapshot Snapshot,
-    RetryAdmissionResult Admission)
+    RetryAdmissionResult Admission,
+    IReadOnlyList<HumanInputRequestSnapshot>? HumanInputRequests = null)
 {
     public RetryAdmissionDecision Decision => Admission.Decision;
     public RetryAdmissionReceipt Receipt => Admission.Receipt;
@@ -512,17 +513,21 @@ public static class RetryAdmissionPolicy
 
     private static bool HasKnownUnsuccessfulOutcome(TaskSpec task, RetryAdmissionReceipt receipt)
     {
-        if (task.LatestRetryAt is not { } retriedAt)
-            return false;
-
-        var attemptStartedAt = receipt.WorkerStartedAt ?? receipt.LinkedDispatchAt;
+        var nextDispatchAt = task.DispatchHistory
+            .Where(dispatch => dispatch.DispatchedAt > receipt.LinkedDispatchAt)
+            .OrderBy(dispatch => dispatch.DispatchedAt)
+            .Select(dispatch => (DateTimeOffset?)dispatch.DispatchedAt)
+            .FirstOrDefault();
         var outcome = task.VerificationHistory
             .Where(verification =>
-                verification.CompletedAt >= attemptStartedAt &&
-                verification.CompletedAt <= retriedAt)
+                verification.DispatchStartedAt is { } startedAt &&
+                startedAt >= receipt.LinkedDispatchAt &&
+                (nextDispatchAt is null || startedAt < nextDispatchAt))
             .OrderBy(verification => verification.CompletedAt)
             .LastOrDefault();
-        return outcome is not null && !outcome.Succeeded;
+        if (outcome is null)
+            return false;
+        return !outcome.Succeeded;
     }
 
     private static RetryAdmissionResult Create(
