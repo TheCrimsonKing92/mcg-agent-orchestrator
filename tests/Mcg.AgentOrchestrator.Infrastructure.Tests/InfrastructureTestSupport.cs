@@ -34,11 +34,13 @@ public static IEnumerable<string> GetRequiredHeader(HttpRequestMessage request, 
 public static string CreateTempDirectory()
     => SharedTestSupport.CreateTempDirectory();
 
+// Compatibility helpers for the existing GoalWorktree fixture commit retry. New verdict paths use
+// the typed GitProbeResult directly so stderr, launch, exit, drain, and timeout evidence survive.
 public static string? TryGetGitHead(string workingDirectory)
 {
     var head = RunGitProbe(workingDirectory, ["rev-parse", "--verify", "HEAD"]);
-    return head.ExitCode == 0 && !string.IsNullOrWhiteSpace(head.Output)
-        ? head.Output.Trim()
+    return head.Succeeded && !string.IsNullOrWhiteSpace(head.StandardOutput)
+        ? head.StandardOutput.Trim()
         : null;
 }
 
@@ -51,20 +53,61 @@ public static bool HasNewCommittedCleanGitHead(string workingDirectory, string? 
     }
 
     var status = RunGitProbe(workingDirectory, ["status", "--short"]);
-    return status.ExitCode == 0 && string.IsNullOrWhiteSpace(status.Output);
+    return status.Succeeded && string.IsNullOrWhiteSpace(status.StandardOutput);
 }
 
-private static (int ExitCode, string Output) RunGitProbe(string workingDirectory, string[] arguments)
+internal static WorkerDispatchTestsSeededRepositoryFactory.GitProbeResult RunGitProbe(
+    string workingDirectory,
+    IReadOnlyList<string> arguments,
+    IReadOnlyDictionary<string, string>? commandEnvironment = null,
+    Func<Process, bool>? startProcess = null,
+    IReadOnlyDictionary<string, string?>? inheritedEnvironment = null)
 {
+    var command = $"git {string.Join(' ', arguments)}";
+    var commandEnvironmentNames = commandEnvironment is null
+        ? "none"
+        : string.Join(',', commandEnvironment.Keys.Order(StringComparer.Ordinal));
+    var environmentContract =
+        "allow=PATH,PATHEXT,SystemRoot,WINDIR,COMSPEC,TEMP,TMP; " +
+        "pinned=GIT_CONFIG_NOSYSTEM,GIT_CONFIG_GLOBAL,GIT_TERMINAL_PROMPT,GCM_INTERACTIVE,GIT_OPTIONAL_LOCKS,LC_ALL,LANG; " +
+        "repositorySelection=unset; command=" + commandEnvironmentNames;
     var startInfo = new ProcessStartInfo
     {
         FileName = "git",
+        RedirectStandardInput = true,
         RedirectStandardOutput = true,
         RedirectStandardError = true,
         UseShellExecute = false,
         CreateNoWindow = true,
         WorkingDirectory = workingDirectory
     };
+
+    var allowedEnvironment = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
+    foreach (var variable in new[] { "PATH", "PATHEXT", "SystemRoot", "WINDIR", "COMSPEC", "TEMP", "TMP" })
+    {
+        var found = inheritedEnvironment is null
+            ? startInfo.Environment.TryGetValue(variable, out var value)
+            : inheritedEnvironment.TryGetValue(variable, out value);
+        if (found && !string.IsNullOrWhiteSpace(value))
+        {
+            allowedEnvironment[variable] = value;
+        }
+    }
+
+    startInfo.Environment.Clear();
+    foreach (var (name, value) in allowedEnvironment)
+    {
+        startInfo.Environment[name] = value;
+    }
+
+    if (commandEnvironment is not null)
+    {
+        foreach (var (name, value) in commandEnvironment)
+        {
+            startInfo.Environment[name] = value;
+        }
+    }
+
     foreach (var variable in new[]
              {
                  "GIT_DIR",
@@ -78,17 +121,93 @@ private static (int ExitCode, string Output) RunGitProbe(string workingDirectory
         startInfo.Environment.Remove(variable);
     }
 
+    startInfo.Environment["GIT_CONFIG_NOSYSTEM"] = "1";
+    startInfo.Environment["GIT_CONFIG_GLOBAL"] = OperatingSystem.IsWindows() ? "NUL" : "/dev/null";
+    startInfo.Environment["GIT_TERMINAL_PROMPT"] = "0";
+    startInfo.Environment["GCM_INTERACTIVE"] = "Never";
+    startInfo.Environment["GIT_OPTIONAL_LOCKS"] = "0";
+    startInfo.Environment["LC_ALL"] = "C";
+    startInfo.Environment["LANG"] = "C";
+
     foreach (var argument in arguments)
     {
         startInfo.ArgumentList.Add(argument);
     }
 
-    using var process = Process.Start(startInfo)
-        ?? throw new InvalidOperationException("Failed to start git fixture probe.");
-    var output = process.StandardOutput.ReadToEnd();
-    _ = process.StandardError.ReadToEnd();
-    process.WaitForExit(60000);
-    return (process.ExitCode, output);
+    Process? process = null;
+    var processStarted = false;
+    try
+    {
+        process = new Process { StartInfo = startInfo };
+        processStarted = (startProcess ?? (static candidate => candidate.Start()))(process);
+        if (!processStarted)
+        {
+            return WorkerDispatchTestsSeededRepositoryFactory.GitProbeResult.NotStarted(
+                command,
+                "Process.Start returned false.") with { EnvironmentContract = environmentContract };
+        }
+
+        process.StandardInput.Close();
+        var outputTask = process.StandardOutput.ReadToEndAsync();
+        var errorTask = process.StandardError.ReadToEndAsync();
+        var timedOut = false;
+        using (var timeout = new CancellationTokenSource(TimeSpan.FromSeconds(60)))
+        {
+            try
+            {
+                process.WaitForExitAsync(timeout.Token).GetAwaiter().GetResult();
+            }
+            catch (OperationCanceledException)
+            {
+                timedOut = true;
+                try { process.Kill(entireProcessTree: true); } catch { }
+            }
+        }
+
+        var drainTask = Task.WhenAll(outputTask, errorTask);
+        var drainCompleted = Task.WhenAny(drainTask, Task.Delay(TimeSpan.FromSeconds(5)))
+            .GetAwaiter()
+            .GetResult() == drainTask;
+        var drainFailed =
+            (drainCompleted && drainTask.IsFaulted) ||
+            outputTask.IsFaulted ||
+            errorTask.IsFaulted;
+        var drainError = drainFailed
+            ? string.Join(
+                " | ",
+                new[] { outputTask.Exception?.GetBaseException().Message, errorTask.Exception?.GetBaseException().Message }
+                    .Where(message => !string.IsNullOrWhiteSpace(message)))
+            : string.Empty;
+        return new WorkerDispatchTestsSeededRepositoryFactory.GitProbeResult(
+            command,
+            ProcessStarted: true,
+            ExitCode: process.HasExited ? process.ExitCode : null,
+            StandardOutput: outputTask.IsCompletedSuccessfully ? outputTask.Result : string.Empty,
+            StandardError: errorTask.IsCompletedSuccessfully
+                ? string.Join(" | ", new[] { errorTask.Result, drainError }.Where(value => !string.IsNullOrWhiteSpace(value)))
+                : drainError,
+            DrainTimedOut: !drainCompleted,
+            TimedOut: timedOut,
+            DrainFailed: drainFailed,
+            EnvironmentContract: environmentContract);
+    }
+    catch (Exception ex)
+    {
+        return new WorkerDispatchTestsSeededRepositoryFactory.GitProbeResult(
+            command,
+            processStarted,
+            processStarted && process is { HasExited: true } ? process.ExitCode : null,
+            string.Empty,
+            ex.Message,
+            DrainTimedOut: false,
+            TimedOut: false,
+            DrainFailed: false,
+            EnvironmentContract: environmentContract);
+    }
+    finally
+    {
+        process?.Dispose();
+    }
 }
 
 public static IDisposable ClearProtectedPidEnvironment()

@@ -15,8 +15,8 @@ using System.Text.Json;
 
 public abstract class WorkerDispatchTestSupport
 {
-    private static readonly Lazy<string> SeededDispatchRepositoryTemplate =
-        new(CreateSeededDispatchRepositoryTemplate);
+    private static readonly WorkerDispatchTestsSeededRepositoryFactory SeededDispatchRepositories =
+        new(InfrastructureTestSupport.CreateTempDirectory, SeedDispatchRepositoryTemplate);
 
     protected static string CreateTempDirectory()
     {
@@ -495,19 +495,11 @@ protected static void CompleteResearcherAndPlannerArtifacts(AgentOrchestratorKer
         });
     }
 
-    protected static string CreateSeededDispatchRepository()
-{
-    var root = InfrastructureTestSupport.CreateTempDirectory();
-    CopyDirectoryContents(SeededDispatchRepositoryTemplate.Value, root);
-    return root;
-}
+    protected static string CreateSeededDispatchRepository() =>
+        SeededDispatchRepositories.Create().PublishedIdentity.RepositoryPath;
 
-private static string CreateSeededDispatchRepositoryTemplate()
+private static void SeedDispatchRepositoryTemplate(string root)
 {
-    var root = InfrastructureTestSupport.CreateTempDirectory();
-    RunGit(root, ["init", "-b", "main"], DateTimeOffset.Parse("2026-01-01T00:00:00Z"));
-    RunGit(root, ["config", "user.email", "tests@example.com"], DateTimeOffset.Parse("2026-01-01T00:00:00Z"));
-    RunGit(root, ["config", "user.name", "Dispatch Tests"], DateTimeOffset.Parse("2026-01-01T00:00:00Z"));
     File.WriteAllText(Path.Combine(root, "seed.txt"), "seed");
     WriteSkill(root, "dotnet-windows-build-hygiene");
     WriteSkill(root, "orchestrator-dogfood");
@@ -519,83 +511,13 @@ private static string CreateSeededDispatchRepositoryTemplate()
     WriteSkill(root, "criterion-ownership-planning");
     WriteSkill(root, "systematic-debugging");
     WriteSkill(root, "verification-before-completion");
-    RunGit(root, ["add", "-A"], DateTimeOffset.Parse("2026-01-01T00:00:00Z"));
-    // The fixture postcondition is a committed HEAD, not a particular commit count. Keep the bounded retry
-    // valid when an earlier attempt has already reached that state, as recorded by the shared-gate failure.
-    RunGit(root, ["commit", "--allow-empty", "-m", "Seed"], DateTimeOffset.Parse("2026-01-01T00:00:00Z"));
-    return root;
-}
-
-private static void CopyDirectoryContents(string source, string destination)
-{
-    foreach (var directory in Directory.EnumerateDirectories(source, "*", SearchOption.AllDirectories))
-    {
-        Directory.CreateDirectory(Path.Combine(destination, Path.GetRelativePath(source, directory)));
-    }
-
-    foreach (var file in Directory.EnumerateFiles(source, "*", SearchOption.AllDirectories))
-    {
-        var target = Path.Combine(destination, Path.GetRelativePath(source, file));
-        Directory.CreateDirectory(Path.GetDirectoryName(target)!);
-        File.Copy(file, target);
-    }
 }
 
     protected static void RunGit(string workingDirectory, string[] arguments, DateTimeOffset commitTime)
-{
-    const int maximumAttempts = 2;
-    var isCommit = arguments.Any(argument => string.Equals(argument, "commit", StringComparison.Ordinal));
-    var previousHead = isCommit ? TryGetGitHead(workingDirectory) : null;
-    for (var attempt = 1; attempt <= maximumAttempts; attempt++)
-    {
-        var startInfo = new ProcessStartInfo
-        {
-            FileName = "git",
-            RedirectStandardOutput = true,
-            RedirectStandardError = true,
-            UseShellExecute = false,
-            CreateNoWindow = true,
-            WorkingDirectory = workingDirectory
-        };
-        RemoveAmbientGitRepositoryEnvironment(startInfo);
-        if (arguments.Any(argument => string.Equals(argument, "commit", StringComparison.Ordinal)))
-        {
-            startInfo.Environment["GIT_AUTHOR_DATE"] = commitTime.ToString("O");
-            startInfo.Environment["GIT_COMMITTER_DATE"] = commitTime.ToString("O");
-        }
-
-        foreach (var argument in arguments)
-        {
-            startInfo.ArgumentList.Add(argument);
-        }
-
-        using var process = Process.Start(startInfo)
-            ?? throw new InvalidOperationException("Failed to start git.");
-        var output = process.StandardOutput.ReadToEnd();
-        var error = process.StandardError.ReadToEnd();
-        process.WaitForExit(60000);
-        if (process.ExitCode == 0)
-        {
-            return;
-        }
-
-        if (isCommit && HasNewCommittedCleanGitHead(workingDirectory, previousHead))
-        {
-            return;
-        }
-
-        var detail = string.Join(Environment.NewLine, [output.Trim(), error.Trim()])
-            .Trim();
-        if (detail.Length == 0 && attempt < maximumAttempts)
-        {
-            continue;
-        }
-
-        throw new InvalidOperationException(
-            $"git {string.Join(' ', arguments)} failed with exit code {process.ExitCode} " +
-            $"after {attempt} attempt(s): {detail}");
-    }
-}
+        => WorkerDispatchTestsSeededRepositoryFactory.RunFixtureGit(
+            workingDirectory,
+            arguments,
+            commitTime);
 
 public sealed class WorkerDispatchPlannerHandoffTests : WorkerDispatchTestSupport
 {
