@@ -442,6 +442,31 @@ public static class RetryAdmissionPolicy
                 reservationLeaseExpiresAt);
         }
 
+        var activeSameContextReservation = isPaidRetry
+            ? task.RetryAdmissionHistory.LastOrDefault(receipt =>
+                receipt.PaidRoute == PaidRouteClassification.Paid &&
+                receipt.LinkedDispatchAt != linkedDispatchAt &&
+                receipt.Fingerprint == fingerprint &&
+                receipt.Decision is RetryAdmissionDecision.Allowed or RetryAdmissionDecision.ResumedReservation &&
+                receipt.WorkerStartedAt is null)
+            : null;
+        if (activeSameContextReservation is not null)
+        {
+            var startWasClaimed = activeSameContextReservation.WorkerStartClaimedAt is not null;
+            return Create(
+                task,
+                fingerprint,
+                paidRoute,
+                startWasClaimed ? RetryCause.EnvironmentApparatusFailure : RetryCause.UnchangedContextRepeat,
+                RetryAdmissionDecision.Prevented,
+                startWasClaimed ? RetryAdmissionRoute.EnvironmentalHold : RetryAdmissionRoute.ReservationLease,
+                linkedDispatchAt,
+                recordedAt,
+                activeSameContextReservation.LinkedDispatchAt,
+                reservationOwnerId,
+                reservationLeaseExpiresAt);
+        }
+
         var priorSameContext = isPaidRetry
             ? task.RetryAdmissionHistory.LastOrDefault(receipt =>
                 receipt.PaidRoute == PaidRouteClassification.Paid &&

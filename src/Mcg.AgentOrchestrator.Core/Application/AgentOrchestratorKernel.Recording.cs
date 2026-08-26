@@ -1226,6 +1226,16 @@ public sealed partial class AgentOrchestratorKernel
             task.SetRetryAdmissionHold(result.Receipt.Route);
             if (result.Receipt.Route == RetryAdmissionRoute.ReservationLease)
             {
+                if (result.Receipt.Cause == RetryCause.UnchangedContextRepeat)
+                {
+                    Append(
+                        goal,
+                        taskId,
+                        ProgressKind.NoProgressRedispatchPrevented,
+                        $"NO_PROGRESS_REDISPATCH_PREVENTED fingerprint={result.Receipt.Fingerprint.Value} cause={result.Receipt.Cause} route={result.Receipt.Route} attempt={result.Receipt.LinkedDispatchAt:O}");
+                    return;
+                }
+
                 Append(
                     goal,
                     null,
