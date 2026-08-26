@@ -303,6 +303,28 @@ public sealed class GoalLifecycleEventWriter : IGoalLifecycleEventWriter
             obj["cancellationWithheld"] = receipt.CancellationWithheld;
         });
 
+    public void AppendProgressiveReviewGlanceCircuitReceipt(
+        GoalId goalId,
+        TaskId taskId,
+        ProgressiveReviewGlanceCircuitReceipt receipt) =>
+        Append(goalId, "ProgressiveReviewGlanceCircuitReceipt", obj =>
+        {
+            obj["taskId"] = taskId.Value;
+            obj["circuitIdentity"] = receipt.CircuitIdentity;
+            obj["admissionOutcome"] = receipt.AdmissionOutcome;
+            obj["openingCause"] = receipt.OpeningCause;
+            obj["originalReason"] = receipt.OriginalReason;
+            obj["actualTokens"] = receipt.ActualTokens;
+            obj["avoidedCallCount"] = receipt.AvoidedCallCount;
+            obj["avoidedInputTokens"] = receipt.AvoidedInputTokens;
+            obj["avoidedOutputTokens"] = receipt.AvoidedOutputTokens;
+            obj["outputEstimateUnavailableReason"] = receipt.OutputEstimateUnavailableReason;
+            obj["admissionLatencyMs"] = receipt.AdmissionLatencyMilliseconds;
+            obj["changedFilesTriggerCount"] = receipt.ChangedFilesTriggerCount;
+            obj["elapsedTriggerCount"] = receipt.ElapsedTriggerCount;
+            obj["probeOutcome"] = receipt.ProbeOutcome;
+        });
+
     public void AppendProgressiveReviewGlanceSummary(
         GoalId goalId,
         int totalGlances,

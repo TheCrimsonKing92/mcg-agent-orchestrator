@@ -7,7 +7,9 @@ public sealed record CodexJsonlParseResult(
     string WorkerOutput,
     ProviderReportedUsage? Usage,
     string UsageUnavailableReason,
-    bool Recognized);
+    bool Recognized,
+    IReadOnlyList<string>? AgentMessages = null,
+    int MalformedLineCount = 0);
 
 public static class CodexJsonlUsageParser
 {
@@ -21,6 +23,7 @@ public static class CodexJsonlUsageParser
         var workerOutputRecognized = false;
         var usageContractRecognized = false;
         var malformedUsage = false;
+        var malformedLineCount = 0;
 
         using var reader = new StringReader(jsonl);
         while (reader.ReadLine() is { } line)
@@ -68,6 +71,7 @@ public static class CodexJsonlUsageParser
             catch (JsonException)
             {
                 // Raw JSONL stays in the process log. Unknown lines are not reinterpreted as telemetry.
+                malformedLineCount++;
             }
         }
 
@@ -79,7 +83,9 @@ public static class CodexJsonlUsageParser
             string.Join(Environment.NewLine, messages),
             usageResult,
             reason,
-            workerOutputRecognized || usageContractRecognized);
+            workerOutputRecognized || usageContractRecognized,
+            messages.ToArray(),
+            malformedLineCount);
     }
 
     private static string? GetString(JsonElement element, string propertyName) =>

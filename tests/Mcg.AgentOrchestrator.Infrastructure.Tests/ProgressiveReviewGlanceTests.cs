@@ -20,6 +20,143 @@ public sealed class ProgressiveReviewGlanceTests
     }
 
     [Xunit.Fact]
+    public void ParseProviderOutput_CodexJsonlFixture_ParsesSingleAgentVerdict()
+    {
+        var output = File.ReadAllText(Path.Combine(
+            AppContext.BaseDirectory,
+            "Fixtures",
+            "CodexJsonl",
+            "progressive-review-glance-verdict.jsonl"));
+
+        var result = ProgressiveReviewGlanceCoordinator.ParseProviderOutput(output, Contract("broken-command"));
+
+        Xunit.Assert.Equal(ProgressiveReviewGlanceVerdict.OnTrack, result.Verdict);
+        Xunit.Assert.Equal(ProgressiveReviewGlanceFailureCause.None, result.FailureCause);
+        Xunit.Assert.Equal("implementation remains aligned", result.Note);
+    }
+
+    [Xunit.Theory]
+    [Xunit.InlineData("{\"type\":\"turn.started\"}", "codex-jsonl-agent-message-count:0")]
+    [Xunit.InlineData("not-json", "codex-jsonl-malformed-lines:1")]
+    [Xunit.InlineData("{\"type\":\"item.completed\",\"item\":{\"type\":\"command_execution\",\"text\":\"{\\\"verdict\\\":\\\"on-track\\\"}\"}}", "codex-jsonl-agent-message-count:0")]
+    public void ParseProviderOutput_CodexJsonlInvalidShapes_FailClosed(string output, string expectedReason)
+    {
+        var result = ProgressiveReviewGlanceCoordinator.ParseProviderOutput(output, Contract("broken-command"));
+
+        Xunit.Assert.Equal(ProgressiveReviewGlanceVerdict.Invalid, result.Verdict);
+        Xunit.Assert.Equal(ProgressiveReviewGlanceFailureCause.OutputContract, result.FailureCause);
+        Xunit.Assert.Equal(expectedReason, result.Note);
+    }
+
+    [Xunit.Fact]
+    public void ParseProviderOutput_MultipleAgentMessagesAndPlainProse_FailClosed()
+    {
+        const string multiple = """
+            {"type":"item.completed","item":{"type":"agent_message","text":"{\"verdict\":\"on-track\"}"}}
+            {"type":"item.completed","item":{"type":"agent_message","text":"{\"verdict\":\"concern\"}"}}
+            """;
+        var jsonl = ProgressiveReviewGlanceCoordinator.ParseProviderOutput(multiple, Contract("broken-command"));
+        var malformedMessage = ProgressiveReviewGlanceCoordinator.ParseProviderOutput(
+            "{\"type\":\"item.completed\",\"item\":{\"type\":\"agent_message\",\"text\":\"not-json\"}}",
+            Contract("broken-command"));
+        var unknownVerdict = ProgressiveReviewGlanceCoordinator.ParseProviderOutput(
+            "{\"type\":\"item.completed\",\"item\":{\"type\":\"agent_message\",\"text\":\"{\\\"verdict\\\":\\\"surprise\\\"}\"}}",
+            Contract("broken-command"));
+        var prose = ProgressiveReviewGlanceCoordinator.ParseResult(
+            "analysis first {\"verdict\":\"on-track\",\"note\":\"ok\",\"evidenceLine\":\"ok\"}");
+
+        Xunit.Assert.Equal("codex-jsonl-agent-message-count:2", jsonl.Note);
+        Xunit.Assert.Equal(ProgressiveReviewGlanceFailureCause.OutputContract, jsonl.FailureCause);
+        Xunit.Assert.Equal(ProgressiveReviewGlanceVerdict.Invalid, malformedMessage.Verdict);
+        Xunit.Assert.Equal(ProgressiveReviewGlanceFailureCause.OutputContract, malformedMessage.FailureCause);
+        Xunit.Assert.Equal(ProgressiveReviewGlanceFailureCause.ModelVerdict, unknownVerdict.FailureCause);
+        Xunit.Assert.Equal(ProgressiveReviewGlanceVerdict.Invalid, prose.Verdict);
+        Xunit.Assert.Equal(ProgressiveReviewGlanceFailureCause.OutputContract, prose.FailureCause);
+    }
+
+    [Xunit.Fact]
+    public void DurableCircuit_OneBrokenProbeAcrossCoordinatorReconstruction_IdentityChangeReenablesProbe()
+    {
+        var now = new DateTimeOffset(2026, 8, 26, 12, 0, 0, TimeSpan.Zero);
+        var circuit = new InMemoryProgressiveReviewGlanceCircuitStore();
+        var brokenIdentity = Contract("broken-command");
+        var firstRunner = new ControlledGlanceRunner { Identity = brokenIdentity };
+        firstRunner.EnqueueCompleted(new ProgressiveReviewGlanceDispatchResult(
+            ProgressiveReviewGlanceVerdict.Invalid,
+            "codex-jsonl-agent-message-count:0",
+            "codex-jsonl-agent-message-count:0",
+            100,
+            10,
+            FailureCause: ProgressiveReviewGlanceFailureCause.OutputContract));
+        var firstEvents = new RecordingGlanceEvents();
+        var (firstKernel, firstGoal, _) = RunningDeveloperRound(now);
+        var options = new ProgressiveReviewGlanceOptions(PerRoundBudget: 1, FirstElapsedThreshold: TimeSpan.Zero);
+        var first = NewCoordinator(firstRunner, firstEvents, options, () => now, circuitStore: circuit);
+
+        _ = first.Observe(firstKernel, [firstGoal]);
+        _ = first.Observe(firstKernel, [firstGoal]);
+
+        var secondRunner = new ControlledGlanceRunner { Identity = brokenIdentity };
+        var secondEvents = new RecordingGlanceEvents();
+        var (secondKernel, secondGoal, _) = RunningDeveloperRound(now);
+        var reconstructed = NewCoordinator(secondRunner, secondEvents, options, () => now, circuitStore: circuit);
+        _ = reconstructed.Observe(secondKernel, [secondGoal]);
+
+        Xunit.Assert.Single(firstRunner.Calls);
+        Xunit.Assert.Empty(secondRunner.Calls);
+        var suppression = Xunit.Assert.Single(secondEvents.CircuitReceipts);
+        Xunit.Assert.Equal(0, suppression.ActualTokens);
+        Xunit.Assert.True(suppression.AvoidedCallCount > 0);
+        Xunit.Assert.True(suppression.AvoidedInputTokens > 0);
+
+        var changedRunner = new ControlledGlanceRunner { Identity = Contract("repaired-command") };
+        changedRunner.EnqueueCompleted(new ProgressiveReviewGlanceDispatchResult(
+            ProgressiveReviewGlanceVerdict.OnTrack, "ok", "ok", 5, 1));
+        var (changedKernel, changedGoal, _) = RunningDeveloperRound(now);
+        var changed = NewCoordinator(changedRunner, new RecordingGlanceEvents(), options, () => now, circuitStore: circuit);
+        _ = changed.Observe(changedKernel, [changedGoal]);
+        _ = changed.Observe(changedKernel, [changedGoal]);
+
+        Xunit.Assert.Single(changedRunner.Calls);
+    }
+
+    [Xunit.Fact]
+    public async Task SqliteCircuit_ConcurrentAdmission_GrantsExactlyOneProbe()
+    {
+        var root = CreateTempDirectory("mcg-glance-circuit");
+        try
+        {
+            var path = Path.Combine(root, "circuit.db");
+            var first = new SqliteProgressiveReviewGlanceCircuitStore(path);
+            var second = new SqliteProgressiveReviewGlanceCircuitStore(path);
+            using var ready = new CountdownEvent(2);
+            using var release = new ManualResetEventSlim(false);
+            var now = new DateTimeOffset(2026, 8, 26, 12, 0, 0, TimeSpan.Zero);
+            var identity = Contract("concurrent-command");
+
+            Task<ProgressiveReviewGlanceCircuitAdmission> Start(IProgressiveReviewGlanceCircuitStore store) =>
+                Task.Run(() =>
+                {
+                    ready.Signal();
+                    release.Wait();
+                    return store.TryAcquireProbe(identity, now, TimeSpan.FromMinutes(1));
+                });
+
+            var admissions = new[] { Start(first), Start(second) };
+            ready.Wait();
+            release.Set();
+            var results = await Task.WhenAll(admissions);
+
+            Xunit.Assert.Single(results, result => result.Kind == ProgressiveReviewGlanceCircuitAdmissionKind.ProbeAcquired);
+            Xunit.Assert.Single(results, result => result.Kind == ProgressiveReviewGlanceCircuitAdmissionKind.SuppressedProbeInFlight);
+        }
+        finally
+        {
+            Directory.Delete(root, recursive: true);
+        }
+    }
+
+    [Xunit.Fact]
     public void ScopeWordingWithoutLegacyPhrase_InsideScope_Downgrades()
     {
         var evaluation = ProgressiveReviewGlanceCoordinator.EvaluateUnsupportedScopeVerdict(
@@ -1363,7 +1500,8 @@ public sealed class ProgressiveReviewGlanceTests
         Func<string?, string?, DispatchLiveChangeSnapshot>? liveChanges = null,
         Func<string, string?, string>? diffReader = null,
         Func<TaskProcessRecord?, string>? transcriptReader = null,
-        bool useDefaultTranscriptReader = false)
+        bool useDefaultTranscriptReader = false,
+        IProgressiveReviewGlanceCircuitStore? circuitStore = null)
     {
         var root = Path.Combine(Path.GetTempPath(), $"mcg-glance-{Guid.NewGuid():N}");
         return new ProgressiveReviewGlanceCoordinator(
@@ -1374,8 +1512,17 @@ public sealed class ProgressiveReviewGlanceTests
             utcNow,
             liveChanges,
             diffReader ?? ((_, _) => "diff"),
-            useDefaultTranscriptReader ? transcriptReader : transcriptReader ?? (_ => "transcript"));
+            useDefaultTranscriptReader ? transcriptReader : transcriptReader ?? (_ => "transcript"),
+            circuitStore: circuitStore);
     }
+
+    private static ProgressiveReviewGlanceContractIdentity Contract(string commandFingerprint) => new(
+        ProviderKind.OpenAICodexSpark.ToString(),
+        "codex-spark",
+        "gpt-5.3-codex-spark",
+        commandFingerprint,
+        "codex-jsonl",
+        ProgressiveReviewGlanceCoordinator.ParserContractVersion);
 
     private static Goal10bd7223Fixture LoadGoal10bd7223Fixture()
     {
@@ -1540,6 +1687,11 @@ public sealed class ProgressiveReviewGlanceTests
         private readonly Queue<Task<ProgressiveReviewGlanceDispatchResult>> _responses = [];
 
         public List<ProgressiveReviewGlanceInputs> Calls { get; } = [];
+        public ProgressiveReviewGlanceContractIdentity Identity { get; init; } = new(
+            "controlled", "controlled", "controlled", "controlled", "plain-json",
+            ProgressiveReviewGlanceCoordinator.ParserContractVersion);
+
+        public ProgressiveReviewGlanceContractIdentity GetContractIdentity() => Identity;
 
         public TaskCompletionSource<ProgressiveReviewGlanceDispatchResult> EnqueuePending()
         {
@@ -1567,6 +1719,7 @@ public sealed class ProgressiveReviewGlanceTests
         public List<Receipt> Receipts { get; } = [];
         public List<Summary> Summaries { get; } = [];
         public List<ProgressiveReviewGlanceGuardReceipt> GuardReceipts { get; } = [];
+        public List<ProgressiveReviewGlanceCircuitReceipt> CircuitReceipts { get; } = [];
         public bool ThrowOnProgressiveWrites { get; init; }
 
         public void AppendTimelineEvent(ProgressEvent progressEvent) { }
@@ -1613,6 +1766,16 @@ public sealed class ProgressiveReviewGlanceTests
             if (ThrowOnProgressiveWrites)
                 throw new InvalidOperationException("guard receipt sink unavailable");
             GuardReceipts.Add(receipt);
+        }
+
+        public void AppendProgressiveReviewGlanceCircuitReceipt(
+            GoalId goalId,
+            TaskId taskId,
+            ProgressiveReviewGlanceCircuitReceipt receipt)
+        {
+            if (ThrowOnProgressiveWrites)
+                throw new InvalidOperationException("circuit receipt sink unavailable");
+            CircuitReceipts.Add(receipt);
         }
 
         public void AppendProgressiveReviewGlanceSummary(

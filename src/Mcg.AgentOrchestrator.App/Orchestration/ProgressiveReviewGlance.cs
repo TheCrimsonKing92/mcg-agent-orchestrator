@@ -21,6 +21,16 @@ internal enum ProgressiveReviewGlanceVerdict
     Invalid
 }
 
+internal enum ProgressiveReviewGlanceFailureCause
+{
+    None,
+    OutputContract,
+    ModelVerdict,
+    Timeout,
+    RunnerException,
+    AdmissionUnavailable
+}
+
 internal enum ProgressiveReviewGlanceReasonCode
 {
     ScopeDeviation,
@@ -53,12 +63,14 @@ internal sealed record ProgressiveReviewGlanceOptions(
     int TranscriptTailByteLimit = ProgressiveReviewGlanceLimits.DefaultTranscriptTailByteLimit,
     int TaskBriefCharacterLimit = 4000,
     int OperatorContextCharacterLimit = 4000,
-    TimeSpan? DispatchTimeout = null)
+    TimeSpan? DispatchTimeout = null,
+    TimeSpan? CircuitProbeLease = null)
 {
     public TimeSpan EffectiveFirstElapsedThreshold => FirstElapsedThreshold ?? TimeSpan.FromMinutes(15);
     public TimeSpan EffectiveElapsedInterval => ElapsedInterval ?? TimeSpan.FromMinutes(15);
     public TimeSpan EffectiveSmallRoundSuppressionThreshold => SmallRoundSuppressionThreshold ?? TimeSpan.FromMinutes(10);
     public TimeSpan EffectiveDispatchTimeout => DispatchTimeout ?? SubscriptionCliCompleter.DefaultTimeout;
+    public TimeSpan EffectiveCircuitProbeLease => CircuitProbeLease ?? EffectiveDispatchTimeout + TimeSpan.FromMinutes(1);
 }
 
 internal sealed record ProgressiveReviewGlanceInputs(
@@ -99,7 +111,8 @@ internal sealed record ProgressiveReviewGlanceDispatchResult(
     string? Model = null,
     string? Profile = null,
     ProgressiveReviewGlanceReasonCode? ReasonCode = null,
-    IReadOnlyList<ProgressiveReviewGlanceFinding>? Findings = null);
+    IReadOnlyList<ProgressiveReviewGlanceFinding>? Findings = null,
+    ProgressiveReviewGlanceFailureCause FailureCause = ProgressiveReviewGlanceFailureCause.None);
 
 internal sealed record ProgressiveReviewGlanceGuardEvaluation(
     ProgressiveReviewGlanceDispatchResult Result,
@@ -107,6 +120,14 @@ internal sealed record ProgressiveReviewGlanceGuardEvaluation(
 
 internal interface IProgressiveReviewGlanceRunner
 {
+    ProgressiveReviewGlanceContractIdentity GetContractIdentity() => new(
+        "controlled",
+        GetType().Name,
+        "controlled",
+        "controlled",
+        "plain-json",
+        ProgressiveReviewGlanceCoordinator.ParserContractVersion);
+
     Task<ProgressiveReviewGlanceDispatchResult> RunAsync(
         ProgressiveReviewGlanceInputs inputs,
         CancellationToken cancellationToken = default);
@@ -118,6 +139,7 @@ internal sealed record ProgressiveReviewGlanceObservationResult(
 
 internal sealed class ProgressiveReviewGlanceCoordinator
 {
+    internal const string ParserContractVersion = "progressive-review-glance-v2";
     private const string CriteriaCorrectionLabel = "criteria correction(s)";
     private const string ChangedFileLabel = "changed file(s)";
     private const int UntrackedDiffFileLimit = 20;
@@ -128,6 +150,7 @@ internal sealed class ProgressiveReviewGlanceCoordinator
     private readonly IGoalLifecycleEventWriter _eventWriter;
     private readonly ICollaborationItemStore _collaborationStore;
     private readonly IProgressiveReviewSteeringStore? _steeringStore;
+    private readonly IProgressiveReviewGlanceCircuitStore _circuitStore;
     private readonly Func<DateTimeOffset> _utcNow;
     private readonly Func<string?, string?, DispatchLiveChangeSnapshot> _liveChanges;
     private readonly Func<string, string?, string> _diffReader;
@@ -148,7 +171,8 @@ internal sealed class ProgressiveReviewGlanceCoordinator
         Func<string?, string?, DispatchLiveChangeSnapshot>? liveChanges = null,
         Func<string, string?, string>? diffReader = null,
         Func<TaskProcessRecord?, string>? transcriptReader = null,
-        IProgressiveReviewSteeringStore? steeringStore = null)
+        IProgressiveReviewSteeringStore? steeringStore = null,
+        IProgressiveReviewGlanceCircuitStore? circuitStore = null)
     {
         _runner = runner;
         _eventWriter = eventWriter;
@@ -159,6 +183,7 @@ internal sealed class ProgressiveReviewGlanceCoordinator
         _diffReader = diffReader ?? ReadDiff;
         _transcriptReader = transcriptReader ?? (process => ReadTranscriptTail(process, _options.TranscriptTailByteLimit));
         _steeringStore = steeringStore;
+        _circuitStore = circuitStore ?? new InMemoryProgressiveReviewGlanceCircuitStore();
     }
 
     public static ProgressiveReviewGlanceCoordinator CreateDefault(
@@ -171,7 +196,8 @@ internal sealed class ProgressiveReviewGlanceCoordinator
             new GoalLifecycleEventWriter(workspace.GoalLifecycleEventsDirectory),
             CollaborationItemStore.ForDirectory(workspace.OrchestratorDirectory),
             options,
-            steeringStore: SqliteProgressiveReviewSteeringStore.ForDirectory(workspace.OrchestratorDirectory));
+            steeringStore: SqliteProgressiveReviewSteeringStore.ForDirectory(workspace.OrchestratorDirectory),
+            circuitStore: SqliteProgressiveReviewGlanceCircuitStore.ForDirectory(workspace.OrchestratorDirectory));
     }
 
     public ProgressiveReviewGlanceObservationResult Observe(
@@ -293,15 +319,43 @@ Transcript tail:
 
     internal static ProgressiveReviewGlanceDispatchResult ParseResult(
         string output,
+        int? estimatedInputTokens = null) =>
+        ParseProviderOutput(
+            output,
+            new ProgressiveReviewGlanceContractIdentity(
+                "plain", "plain", "plain", "plain", "plain-json", ParserContractVersion),
+            estimatedInputTokens);
+
+    internal static ProgressiveReviewGlanceDispatchResult ParseProviderOutput(
+        string output,
+        ProgressiveReviewGlanceContractIdentity contract,
         int? estimatedInputTokens = null)
     {
+        ArgumentNullException.ThrowIfNull(output);
+        ArgumentNullException.ThrowIfNull(contract);
+        var candidate = output.Trim();
+        if (contract.OutputFormat.Equals("codex-jsonl", StringComparison.Ordinal))
+        {
+            var jsonl = CodexJsonlUsageParser.Parse(output);
+            if (jsonl.MalformedLineCount > 0)
+                return Invalid($"codex-jsonl-malformed-lines:{jsonl.MalformedLineCount}", estimatedInputTokens, ProgressiveReviewGlanceFailureCause.OutputContract);
+
+            var messages = jsonl.AgentMessages ?? [];
+            if (messages.Count != 1)
+                return Invalid($"codex-jsonl-agent-message-count:{messages.Count}", estimatedInputTokens, ProgressiveReviewGlanceFailureCause.OutputContract);
+
+            candidate = messages[0].Trim();
+        }
+
+        if (candidate.Length == 0)
+            return Invalid("empty glance output", estimatedInputTokens, ProgressiveReviewGlanceFailureCause.OutputContract);
+
         try
         {
-            var json = ExtractJson(output);
-            var dto = JsonSerializer.Deserialize<GlanceVerdictDto>(json, new JsonSerializerOptions(JsonSerializerDefaults.Web));
+            var dto = JsonSerializer.Deserialize<GlanceVerdictDto>(candidate, new JsonSerializerOptions(JsonSerializerDefaults.Web));
             if (dto is null)
             {
-                return Invalid("empty glance verdict", estimatedInputTokens);
+                return Invalid("empty glance verdict", estimatedInputTokens, ProgressiveReviewGlanceFailureCause.OutputContract);
             }
 
             var verdict = NormalizeVerdict(dto.Verdict);
@@ -309,7 +363,10 @@ Transcript tail:
             var evidence = BoundReceiptField(dto.EvidenceLine);
             if (verdict == ProgressiveReviewGlanceVerdict.Invalid)
             {
-                return Invalid("unrecognized glance verdict", estimatedInputTokens);
+                var cause = string.IsNullOrWhiteSpace(dto.Verdict)
+                    ? ProgressiveReviewGlanceFailureCause.OutputContract
+                    : ProgressiveReviewGlanceFailureCause.ModelVerdict;
+                return Invalid("unrecognized glance verdict", estimatedInputTokens, cause);
             }
 
             return new ProgressiveReviewGlanceDispatchResult(
@@ -328,7 +385,7 @@ Transcript tail:
         }
         catch (Exception ex) when (ex is JsonException or ArgumentException or InvalidOperationException)
         {
-            return Invalid($"invalid glance output: {ex.Message}", estimatedInputTokens);
+            return Invalid($"invalid glance output: {ex.Message}", estimatedInputTokens, ProgressiveReviewGlanceFailureCause.OutputContract);
         }
     }
 
@@ -405,6 +462,68 @@ Transcript tail:
             scope.Confidence,
             operatorContext.Records,
             operatorContext.Truncated);
+        var prompt = BuildPrompt(inputs);
+        var estimatedInputTokens = EstimateTokens(prompt);
+        var admissionStopwatch = Stopwatch.StartNew();
+        ProgressiveReviewGlanceContractIdentity? contract = null;
+        ProgressiveReviewGlanceCircuitAdmission? admission = null;
+        try
+        {
+            contract = _runner.GetContractIdentity();
+            admission = _circuitStore.TryAcquireProbe(contract, now, _options.EffectiveCircuitProbeLease);
+        }
+        catch (Exception ex)
+        {
+            admissionStopwatch.Stop();
+            RecordSuppression(state, trigger.Value);
+            TryAppendCircuitReceipt(
+                goal.Id,
+                task.Id,
+                new ProgressiveReviewGlanceCircuitReceipt(
+                    contract?.CircuitIdentity ?? "unavailable",
+                    ProgressiveReviewGlanceFailureCause.AdmissionUnavailable.ToString(),
+                    ProgressiveReviewGlanceFailureCause.AdmissionUnavailable.ToString(),
+                    BoundSingleLine(ex.Message, 300),
+                    0,
+                    1,
+                    estimatedInputTokens,
+                    null,
+                    "provider-output-not-produced",
+                    (long)admissionStopwatch.Elapsed.TotalMilliseconds,
+                    state.SuppressedChangedFiles,
+                    state.SuppressedElapsed,
+                    "admission-unavailable"),
+                lines);
+            lines.Add($"GLANCE goal={Short(goal.Id.Value)} task={Short(task.Id.Value)} result=suppressed cause=AdmissionUnavailable");
+            return;
+        }
+
+        admissionStopwatch.Stop();
+        if (admission.Kind != ProgressiveReviewGlanceCircuitAdmissionKind.ProbeAcquired)
+        {
+            RecordSuppression(state, trigger.Value);
+            TryAppendCircuitReceipt(
+                goal.Id,
+                task.Id,
+                new ProgressiveReviewGlanceCircuitReceipt(
+                    admission.CircuitIdentity,
+                    admission.Kind.ToString(),
+                    admission.OpeningCause ?? admission.Kind.ToString(),
+                    BoundSingleLine(admission.OpeningReason, 300),
+                    0,
+                    Math.Max(1, admission.SuppressionCount),
+                    estimatedInputTokens * Math.Max(1, admission.SuppressionCount),
+                    null,
+                    "provider-output-not-produced",
+                    (long)admissionStopwatch.Elapsed.TotalMilliseconds,
+                    state.SuppressedChangedFiles,
+                    state.SuppressedElapsed,
+                    "suppressed"),
+                lines);
+            lines.Add($"GLANCE goal={Short(goal.Id.Value)} task={Short(task.Id.Value)} result=suppressed cause={admission.Kind} avoided_input_tokens={estimatedInputTokens}");
+            return;
+        }
+
         var inputHash = HashInputs(inputs);
         var stopwatch = Stopwatch.StartNew();
         Task<ProgressiveReviewGlanceDispatchResult> run;
@@ -417,7 +536,8 @@ Transcript tail:
             run = Task.FromResult(new ProgressiveReviewGlanceDispatchResult(
                 ProgressiveReviewGlanceVerdict.Invalid,
                 $"glance runner failed: {BoundSingleLine(ex.Message, 300)}",
-                BoundSingleLine(ex.Message, 300)));
+                BoundSingleLine(ex.Message, 300),
+                FailureCause: ProgressiveReviewGlanceFailureCause.RunnerException));
         }
 
         _running.Add(new RunningGlance(
@@ -428,9 +548,11 @@ Transcript tail:
             task.LastDispatch.WorkingDirectory,
             task.LastDispatch.ProviderSessionId,
             inputHash,
-            inputs,
-            run,
-            stopwatch));
+                 inputs,
+                 run,
+                 stopwatch,
+                 contract,
+                 admission.ProbeLeaseId!));
         state.FiredCount++;
         lines.Add($"GLANCE goal={Short(goal.Id.Value)} task={Short(task.Id.Value)} result=started trigger={trigger.Value} inputHash={inputHash}");
     }
@@ -448,7 +570,8 @@ Transcript tail:
             return new ProgressiveReviewGlanceDispatchResult(
                 ProgressiveReviewGlanceVerdict.Invalid,
                 $"glance runner timed out after {(int)Math.Ceiling(_options.EffectiveDispatchTimeout.TotalSeconds)}s",
-                "glance runner timeout");
+                "glance runner timeout",
+                FailureCause: ProgressiveReviewGlanceFailureCause.Timeout);
         }
     }
 
@@ -465,11 +588,49 @@ Transcript tail:
 
             _running.RemoveAt(index);
             running.Stopwatch.Stop();
-            var evaluation = EvaluateUnsupportedScopeVerdict(running.Inputs, Complete(running));
+            var completed = Complete(running);
+            try
+            {
+                _circuitStore.CompleteProbe(
+                    running.ContractIdentity,
+                    running.ProbeLeaseId,
+                    completed.FailureCause == ProgressiveReviewGlanceFailureCause.OutputContract,
+                    completed.FailureCause.ToString(),
+                    completed.Note,
+                    _utcNow());
+            }
+            catch (Exception ex)
+            {
+                lines.Add($"GLANCE goal={Short(running.GoalId.Value)} task={Short(running.TaskId.Value)} result=circuit-completion-failed error={BoundSingleLine(ex.Message, 300)}");
+            }
+
+            var evaluation = EvaluateUnsupportedScopeVerdict(running.Inputs, completed);
             var result = evaluation.Result;
             var inputTokens = result.InputTokens ?? EstimateTokens(BuildPrompt(running.Inputs));
             var outputTokens = result.OutputTokens ?? EstimateTokens(result.Note + result.EvidenceLine);
             var totalTokens = inputTokens + outputTokens;
+
+            if (result.FailureCause == ProgressiveReviewGlanceFailureCause.OutputContract)
+            {
+                TryAppendCircuitReceipt(
+                    running.GoalId,
+                    running.TaskId,
+                    new ProgressiveReviewGlanceCircuitReceipt(
+                        running.ContractIdentity.CircuitIdentity,
+                        "ProbeCompleted",
+                        result.FailureCause.ToString(),
+                        result.Note,
+                        totalTokens,
+                        0,
+                        0,
+                        0,
+                        null,
+                        0,
+                        0,
+                        0,
+                        "opened"),
+                    lines);
+            }
 
             TryAppendReceipt(running, result, inputTokens, outputTokens, totalTokens, lines);
             TryAppendGuardReceipt(running, evaluation.Receipt, lines);
@@ -516,6 +677,22 @@ Transcript tail:
             $"scope_confidence={receipt.ScopeConfidence} comparison={receipt.StructuralComparison} " +
             $"legacy_hint={receipt.LegacyPhraseHintMatched.ToString().ToLowerInvariant()} downgraded={receipt.Downgraded.ToString().ToLowerInvariant()} " +
             $"reason={BoundToken(receipt.DowngradeReason, 240)}");
+    }
+
+    private void TryAppendCircuitReceipt(
+        GoalId goalId,
+        TaskId taskId,
+        ProgressiveReviewGlanceCircuitReceipt receipt,
+        List<string> lines)
+    {
+        try
+        {
+            _eventWriter.AppendProgressiveReviewGlanceCircuitReceipt(goalId, taskId, receipt);
+        }
+        catch (Exception ex)
+        {
+            lines.Add($"GLANCE goal={Short(goalId.Value)} task={Short(taskId.Value)} result=circuit-receipt-write-failed error={BoundSingleLine(ex.Message, 300)}");
+        }
     }
 
     private void TryAppendReceipt(
@@ -612,7 +789,8 @@ Transcript tail:
             return new ProgressiveReviewGlanceDispatchResult(
                 ProgressiveReviewGlanceVerdict.Invalid,
                 $"glance runner failed: {BoundSingleLine(ex.Message, 300)}",
-                BoundSingleLine(ex.Message, 300));
+                BoundSingleLine(ex.Message, 300),
+                FailureCause: ProgressiveReviewGlanceFailureCause.RunnerException);
         }
     }
 
@@ -1482,18 +1660,6 @@ Corrective direction:
     private static int EstimateTokens(string text) =>
         Math.Max(1, (int)Math.Ceiling((text?.Length ?? 0) / 4.0));
 
-    private static string ExtractJson(string output)
-    {
-        var start = output.IndexOf('{');
-        var end = output.LastIndexOf('}');
-        if (start < 0 || end <= start)
-        {
-            throw new InvalidOperationException("missing JSON object");
-        }
-
-        return output[start..(end + 1)];
-    }
-
     private static ProgressiveReviewGlanceVerdict NormalizeVerdict(string? value)
     {
         var normalized = (value ?? string.Empty).Trim().Replace("_", "-", StringComparison.Ordinal).ToLowerInvariant();
@@ -1522,13 +1688,25 @@ Corrective direction:
         };
     }
 
-    private static ProgressiveReviewGlanceDispatchResult Invalid(string note, int? estimatedInputTokens) =>
+    private static ProgressiveReviewGlanceDispatchResult Invalid(
+        string note,
+        int? estimatedInputTokens,
+        ProgressiveReviewGlanceFailureCause cause) =>
         new(
             ProgressiveReviewGlanceVerdict.Invalid,
             BoundSingleLine(note, 500),
             BoundSingleLine(note, 300),
             estimatedInputTokens,
-            null);
+            null,
+            FailureCause: cause);
+
+    private static void RecordSuppression(RoundState state, ProgressiveReviewGlanceTriggerKind trigger)
+    {
+        if (trigger == ProgressiveReviewGlanceTriggerKind.ChangedFiles)
+            state.SuppressedChangedFiles++;
+        else
+            state.SuppressedElapsed++;
+    }
 
     private static string Short(string value) => value.Length <= 8 ? value : value[..8];
 
@@ -1542,7 +1720,9 @@ Corrective direction:
         string InputHash,
         ProgressiveReviewGlanceInputs Inputs,
         Task<ProgressiveReviewGlanceDispatchResult> Task,
-        Stopwatch Stopwatch);
+        Stopwatch Stopwatch,
+        ProgressiveReviewGlanceContractIdentity ContractIdentity,
+        string ProbeLeaseId);
 
     private sealed record OperatorContextBuildResult(
         IReadOnlyList<ProgressiveReviewOperatorRecord> Records,
@@ -1573,6 +1753,8 @@ Corrective direction:
         public TimeSpan NextElapsedThreshold { get; set; }
         public DateTimeOffset? LastChangeProbeAt { get; set; }
         public bool ConcernsSurfaced { get; set; }
+        public int SuppressedChangedFiles { get; set; }
+        public int SuppressedElapsed { get; set; }
         public List<string> QueuedConcerns { get; } = [];
     }
 
@@ -1631,12 +1813,39 @@ internal sealed class SubscriptionCliProgressiveReviewGlanceRunner : IProgressiv
             AgentCatalog.RoutineSubscriptionReasoningEffort);
         var prompt = ProgressiveReviewGlanceCoordinator.BuildPrompt(inputs);
         var stdout = await _complete(completer, prompt, cancellationToken).ConfigureAwait(false);
-        var parsed = ProgressiveReviewGlanceCoordinator.ParseResult(stdout, EstimateTokens(prompt));
+        var parsed = ProgressiveReviewGlanceCoordinator.ParseProviderOutput(stdout, GetContractIdentity(), EstimateTokens(prompt));
         return parsed with
         {
             Model = parsed.Model ?? selection.ModelAlias,
             Profile = parsed.Profile ?? selection.ProfileName
         };
+    }
+
+    public ProgressiveReviewGlanceContractIdentity GetContractIdentity()
+    {
+        var selection = SelectProfile(_profiles);
+        var profile = _profiles.GetRequired(selection.ProfileName);
+        var outputFormat = profile.CommandTemplate.Contains("--json", StringComparison.OrdinalIgnoreCase)
+            ? "codex-jsonl"
+            : "plain-json";
+        var provider = selection.ProfileName.Equals(
+            WorkerProfileDispatcher.OpenAiSparkSubscriptionProfileName,
+            StringComparison.OrdinalIgnoreCase)
+            ? ProviderKind.OpenAICodexSpark.ToString()
+            : ProviderKind.OpenAICodexCli.ToString();
+        var commandContract = string.Join(
+            "\n",
+            profile.CommandTemplate,
+            selection.ModelAlias,
+            AgentCatalog.RoutineSubscriptionReasoningEffort);
+        var commandFingerprint = Convert.ToHexStringLower(SHA256.HashData(Encoding.UTF8.GetBytes(commandContract)));
+        return new ProgressiveReviewGlanceContractIdentity(
+            provider,
+            selection.ProfileName,
+            selection.ModelAlias,
+            commandFingerprint,
+            outputFormat,
+            ProgressiveReviewGlanceCoordinator.ParserContractVersion);
     }
 
     internal static GlanceProfileSelection SelectProfile(WorkerProfileCatalog profiles)
