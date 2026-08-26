@@ -1,10 +1,14 @@
 using System.Diagnostics;
+using System.Security.Cryptography;
+using System.Text;
 using System.Text.Json;
 
 namespace Mcg.AgentOrchestrator.Infrastructure;
 
 internal sealed class TrialHarnessComparison(ITrialRootHost host)
 {
+    private const int MaximumWorkerResultInspectionBytes = 1024 * 1024;
+
     private static readonly JsonSerializerOptions ReceiptJson = new(JsonSerializerDefaults.Web)
     {
         WriteIndented = true
@@ -19,11 +23,16 @@ internal sealed class TrialHarnessComparison(ITrialRootHost host)
             $"{DateTimeOffset.UtcNow:yyyyMMddTHHmmssfff}-{Guid.NewGuid():N}");
         Directory.CreateDirectory(runDirectory);
 
+        var historicalTimingReceipt = RedactHistoricalTiming(request.Workload.HistoricalTiming);
         var states = request.Harnesses
-            .Select(spec => new HarnessState(spec, CreateHarnessReceiptPaths(runDirectory, spec.Name)))
+            .Select(spec => new HarnessState(
+                spec,
+                CreateHarnessReceiptPaths(runDirectory, spec.Name),
+                historicalTimingReceipt))
             .ToArray();
         var created = new List<(HarnessState State, ITrialRootSession Session)>();
         var failures = new List<string>();
+        TrialWorkloadIdentity? workloadIdentity = null;
 
         try
         {
@@ -71,9 +80,27 @@ internal sealed class TrialHarnessComparison(ITrialRootHost host)
                 }
                 else
                 {
+                    workloadIdentity = TrialIdentity.CreateWorkload(request.Workload, resolvedCommits[0]);
                     foreach (var item in created)
                     {
-                        RunHarness(item.State, item.Session, request.LaunchTimeout ?? TimeSpan.FromMinutes(30), failures);
+                        try
+                        {
+                            ProvisionWorkload(item.State, item.Session, request.Workload, workloadIdentity);
+                        }
+                        catch (Exception ex)
+                        {
+                            item.State.Outcome = TrialHarnessOutcome.LaunchFailed;
+                            item.State.Diagnostics.Add(ex.Message);
+                            failures.Add($"Harness '{item.State.Spec.Name}' workload provisioning failed: {ex.Message}");
+                        }
+                    }
+
+                    if (failures.Count == 0)
+                    {
+                        foreach (var item in created)
+                        {
+                            RunHarness(item.State, item.Session, request.LaunchTimeout ?? TimeSpan.FromMinutes(30), failures);
+                        }
                     }
                 }
             }
@@ -143,9 +170,62 @@ internal sealed class TrialHarnessComparison(ITrialRootHost host)
             comparisonReceiptPath,
             results,
             failures.ToArray(),
-            failures.Count == 0);
+            failures.Count == 0,
+            workloadIdentity,
+            historicalTimingReceipt);
         File.WriteAllText(comparisonReceiptPath, JsonSerializer.Serialize(comparison, ReceiptJson));
         return comparison;
+    }
+
+    private static void ProvisionWorkload(
+        HarnessState state,
+        ITrialRootSession session,
+        TrialWorkload workload,
+        TrialWorkloadIdentity workloadIdentity)
+    {
+        var armIdentity = TrialIdentity.CreateArm(workloadIdentity, state.Spec.Name);
+        state.WorkloadIdentity = workloadIdentity;
+        state.ArmIdentity = armIdentity;
+        var briefPath = Path.Combine(session.HarnessStatePath, "trial-brief.utf8");
+        File.WriteAllBytes(briefPath, Encoding.UTF8.GetBytes(workload.BriefContent));
+        session.AddEnvironment(new Dictionary<string, string?>(StringComparer.OrdinalIgnoreCase)
+        {
+            ["MCG_TRIAL_BRIEF_PATH"] = briefPath,
+            ["MCG_TRIAL_BRIEF_IDENTITY"] = workload.BriefIdentity,
+            ["MCG_TRIAL_BRIEF_SHA256"] = workload.BriefDigest,
+            ["MCG_TRIAL_BASE_COMMIT"] = workloadIdentity.ResolvedBaseCommit,
+            ["MCG_TRIAL_MODEL_IDENTITY"] = workload.ModelIdentity,
+            ["MCG_TRIAL_WORKLOAD_ID"] = workloadIdentity.Value,
+            ["MCG_TRIAL_ARM_ID"] = armIdentity.Value,
+            ["MCG_TRIAL_HARNESS_IDENTITY"] = state.Spec.Name,
+            ["MCG_TRIAL_SOURCE_PROVENANCE"] = workload.SourceProvenance
+        });
+    }
+
+    private static Mcg.AgentOrchestrator.Core.GoalTimingReportSnapshot? RedactHistoricalTiming(
+        Mcg.AgentOrchestrator.Core.GoalTimingReportSnapshot? timing)
+    {
+        if (timing is null)
+        {
+            return null;
+        }
+
+        return timing with
+        {
+            Objective = string.Empty,
+            Tasks = timing.Tasks.Select(task => task with
+            {
+                Description = string.Empty,
+                Rounds = task.Rounds.Select(round => round with
+                {
+                    ValueEvidence = string.Empty,
+                    WasteSource = string.Empty
+                }).ToArray()
+            }).ToArray(),
+            CurrentHold = timing.CurrentHold is null
+                ? null
+                : timing.CurrentHold with { Blocker = string.Empty }
+        };
     }
 
     private static void RunHarness(
@@ -169,10 +249,16 @@ internal sealed class TrialHarnessComparison(ITrialRootHost host)
 
             using var launch = session.Start(command);
             var exited = launch.WaitForExit(ToTimeoutMilliseconds(timeout));
+            if (exited)
+            {
+                state.ExitCode = launch.ExitCode;
+            }
+
             try
             {
-                CopyReceipt(launch.StdoutPath, state.StdoutPath);
-                CopyReceipt(launch.StderrPath, state.StderrPath);
+                state.StandardOutput = CaptureMetadata(launch.StdoutPath);
+                state.StandardError = CaptureMetadata(launch.StderrPath);
+                state.WorkerResult = InspectWorkerResult(launch.StdoutPath);
             }
             catch (Exception ex)
             {
@@ -185,8 +271,17 @@ internal sealed class TrialHarnessComparison(ITrialRootHost host)
 
             if (exited)
             {
-                state.ExitCode = launch.ExitCode;
-                state.Outcome = TrialHarnessOutcome.Completed;
+                if (state.WorkerResult.Status == TrialWorkerResultStatus.Valid)
+                {
+                    state.Outcome = TrialHarnessOutcome.Completed;
+                }
+                else
+                {
+                    state.Outcome = TrialHarnessOutcome.WorkerResultInvalid;
+                    var failure = $"Harness '{state.Spec.Name}' produced unusable WORKER_RESULT evidence ({state.WorkerResult.Status}).";
+                    state.Diagnostics.Add(failure);
+                    failures.Add(failure);
+                }
             }
             else
             {
@@ -214,23 +309,63 @@ internal sealed class TrialHarnessComparison(ITrialRootHost host)
         return timeout.TotalMilliseconds >= int.MaxValue ? int.MaxValue : (int)Math.Ceiling(timeout.TotalMilliseconds);
     }
 
-    private static void CopyReceipt(string source, string destination)
+    private static TrialOutputMetadata CaptureMetadata(string path)
     {
-        if (!File.Exists(source))
+        if (!File.Exists(path))
         {
-            throw new FileNotFoundException($"Harness capture file does not exist: '{source}'.", source);
+            throw new FileNotFoundException($"Harness capture file does not exist: '{path}'.", path);
         }
 
-        File.Copy(source, destination, overwrite: true);
+        using var stream = new FileStream(
+            path,
+            FileMode.Open,
+            FileAccess.Read,
+            FileShare.ReadWrite | FileShare.Delete);
+        var digest = Convert.ToHexString(SHA256.HashData(stream)).ToLowerInvariant();
+        return new TrialOutputMetadata(stream.Length, digest);
+    }
+
+    private static TrialWorkerResultEvidence InspectWorkerResult(string stdoutPath)
+    {
+        using var stream = new FileStream(
+            stdoutPath,
+            FileMode.Open,
+            FileAccess.Read,
+            FileShare.ReadWrite | FileShare.Delete);
+        var truncated = stream.Length > MaximumWorkerResultInspectionBytes;
+        var byteCount = (int)Math.Min(stream.Length, MaximumWorkerResultInspectionBytes);
+        if (truncated)
+        {
+            stream.Seek(-byteCount, SeekOrigin.End);
+        }
+
+        var bytes = new byte[byteCount];
+        stream.ReadExactly(bytes);
+        var text = Encoding.UTF8.GetString(bytes);
+        if (WorkerResultParser.TryParseFields(text, out var fields, out _))
+        {
+            return new TrialWorkerResultEvidence(TrialWorkerResultStatus.Valid, fields.Count);
+        }
+
+        if (truncated)
+        {
+            return new TrialWorkerResultEvidence(TrialWorkerResultStatus.InspectionLimitExceeded, 0);
+        }
+
+        var hasOpener = text
+            .Replace("\r\n", "\n", StringComparison.Ordinal)
+            .Split('\n')
+            .Any(line => WorkerResultParser.IsOpener(line.Trim()));
+        return new TrialWorkerResultEvidence(
+            hasOpener ? TrialWorkerResultStatus.Malformed : TrialWorkerResultStatus.Missing,
+            0);
     }
 
     private static HarnessReceiptPaths CreateHarnessReceiptPaths(string runDirectory, string harnessName)
     {
         var directory = Path.Combine(runDirectory, harnessName);
         Directory.CreateDirectory(directory);
-        var stdout = Path.Combine(directory, "stdout.log");
-        var stderr = Path.Combine(directory, "stderr.log");
-        return new HarnessReceiptPaths(stdout, stderr, Path.Combine(directory, "result.json"));
+        return new HarnessReceiptPaths(Path.Combine(directory, "result.json"));
     }
 
     private static void MarkTeardownUnclean(HarnessState state)
@@ -244,13 +379,17 @@ internal sealed class TrialHarnessComparison(ITrialRootHost host)
     private static TrialHarnessResult ToResult(HarnessState state) => new(
         state.Spec.Name,
         state.ResolvedBaseCommit,
-        state.StdoutPath,
-        state.StderrPath,
+        state.StandardOutput,
+        state.StandardError,
+        state.WorkerResult,
         state.ReceiptPath,
         state.TeardownReceiptPath,
         state.ExitCode,
         state.Outcome,
-        state.Diagnostics.ToArray());
+        state.Diagnostics.ToArray(),
+        state.WorkloadIdentity,
+        state.ArmIdentity,
+        state.HistoricalTiming);
 
     private static void Validate(TrialComparisonRequest request)
     {
@@ -268,6 +407,28 @@ internal sealed class TrialHarnessComparison(ITrialRootHost host)
         if (string.IsNullOrWhiteSpace(request.BaseCommit))
         {
             throw new ArgumentException("A base commit is required.", nameof(request));
+        }
+
+        if (request.Workload is null)
+        {
+            throw new ArgumentException("Canonical workload evidence is required.", nameof(request));
+        }
+
+        if (string.IsNullOrWhiteSpace(request.Workload.BriefIdentity)
+            || string.IsNullOrWhiteSpace(request.Workload.BriefContent)
+            || string.IsNullOrWhiteSpace(request.Workload.BriefDigest)
+            || string.IsNullOrWhiteSpace(request.Workload.ModelIdentity)
+            || string.IsNullOrWhiteSpace(request.Workload.SourceProvenance))
+        {
+            throw new ArgumentException("Canonical workload fields cannot be empty.", nameof(request));
+        }
+
+        var actualDigest = TrialIdentity.ComputeBriefDigest(request.Workload.BriefContent);
+        if (!actualDigest.Equals(request.Workload.BriefDigest, StringComparison.OrdinalIgnoreCase))
+        {
+            throw new ArgumentException(
+                $"Canonical workload brief digest mismatch: expected '{request.Workload.BriefDigest}', actual '{actualDigest}'.",
+                nameof(request));
         }
 
         if (string.IsNullOrWhiteSpace(request.ReceiptsDirectory))
@@ -299,23 +460,37 @@ internal sealed class TrialHarnessComparison(ITrialRootHost host)
             {
                 throw new ArgumentException($"Harness '{harness.Name}' requires a fileName.", nameof(request));
             }
+
+            if (harness.Environment?.Keys.Any(key => key.StartsWith(TrialIdentity.EnvironmentPrefix, StringComparison.OrdinalIgnoreCase)) == true)
+            {
+                throw new ArgumentException(
+                    $"Harness '{harness.Name}' cannot override reserved {TrialIdentity.EnvironmentPrefix} environment values.",
+                    nameof(request));
+            }
         }
 
         _ = ToTimeoutMilliseconds(request.LaunchTimeout ?? TimeSpan.FromMinutes(30));
     }
 
-    private sealed class HarnessState(TrialHarnessSpec spec, HarnessReceiptPaths paths)
+    private sealed class HarnessState(
+        TrialHarnessSpec spec,
+        HarnessReceiptPaths paths,
+        Mcg.AgentOrchestrator.Core.GoalTimingReportSnapshot? historicalTiming)
     {
         public TrialHarnessSpec Spec { get; } = spec;
-        public string StdoutPath { get; } = paths.StdoutPath;
-        public string StderrPath { get; } = paths.StderrPath;
         public string ReceiptPath { get; } = paths.ReceiptPath;
         public string ResolvedBaseCommit { get; set; } = string.Empty;
         public string? TeardownReceiptPath { get; set; }
         public int? ExitCode { get; set; }
         public TrialHarnessOutcome Outcome { get; set; } = TrialHarnessOutcome.NotAttempted;
         public List<string> Diagnostics { get; } = [];
+        public TrialWorkloadIdentity? WorkloadIdentity { get; set; }
+        public TrialArmIdentity? ArmIdentity { get; set; }
+        public Mcg.AgentOrchestrator.Core.GoalTimingReportSnapshot? HistoricalTiming { get; set; } = historicalTiming;
+        public TrialOutputMetadata? StandardOutput { get; set; }
+        public TrialOutputMetadata? StandardError { get; set; }
+        public TrialWorkerResultEvidence WorkerResult { get; set; } = new(TrialWorkerResultStatus.NotInspected, 0);
     }
 
-    private sealed record HarnessReceiptPaths(string StdoutPath, string StderrPath, string ReceiptPath);
+    private sealed record HarnessReceiptPaths(string ReceiptPath);
 }

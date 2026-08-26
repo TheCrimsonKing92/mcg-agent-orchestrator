@@ -261,6 +261,37 @@ if (CliPersistentStateRunner.IsGoalIntakeStatusCommand(startupArgs))
     }
 }
 
+if (TrialCompareCliCommand.RequiresHistoricalState(startupArgs))
+{
+    try
+    {
+        var historicalStateRepository = SqliteOrchestratorStateRepository.OpenReadOnly(workspace.SqliteStatePath);
+        CliReadOnlyCommandRunner.ExecuteHistoricalTrialCompare(
+            startupArgs,
+            historicalStateRepository,
+            workspace,
+            ref agents,
+            providers,
+            ref workerProfiles,
+            operatorChannel);
+        return ExitCompletedStartupCommand(0);
+    }
+    catch (CliExitException ex)
+    {
+        return ExitCompletedStartupCommand(ex.ExitCode);
+    }
+    catch (ArgumentException ex)
+    {
+        Console.Error.WriteLine($"Error: {ex.Message}");
+        return ExitCompletedStartupCommand(1);
+    }
+    catch (Exception ex)
+    {
+        Console.Error.WriteLine(ProgramStartupErrorFormatter.Format(ex));
+        return ExitCompletedStartupCommand(1);
+    }
+}
+
 if (CliPersistentStateRunner.SkipsKernelState(startupArgs))
 {
     var commandKernel = new AgentOrchestratorKernel();

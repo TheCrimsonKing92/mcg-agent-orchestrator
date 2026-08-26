@@ -80,11 +80,8 @@ internal static class CliPersistentStateRunner
         IGoalAcceptanceVerifier? acceptanceVerifier = null,
         OperatorIntentSubmissionSource operatorIntentSubmissionSource = OperatorIntentSubmissionSource.Cli)
     {
-        if (GoalBoardCommand.IsBoardCommand(args))
-        {
-            GoalBoardCommand.Run(args, stateRepository, workspace);
-            return false;
-        }
+        if (CliReadOnlyCommandRunner.TryExecute(args, stateRepository, workspace, providers, channel, ref agents, ref workerProfiles, out var readOnlyResult))
+            return readOnlyResult;
 
         using var writeOperationTag = SqliteOrchestratorStateRepository.UseWriteOperationTag(
             $"cli:{(args.Count == 0 ? "repl" : args[0].Trim().ToLowerInvariant())}");
@@ -555,7 +552,8 @@ internal static class CliPersistentStateRunner
             "cleanup-status" or
             "repo-process-info" or "repo-process-stop" or "stable-slot-dotnet" or
             "gate-status" or "acceptance-engine" or "run-event" or
-            "project" or "trial-compare" => true,
+            "project" => true,
+            "trial-compare" => !TrialCompareCliCommand.RequiresHistoricalState(args),
             _ => false,
         };
     }

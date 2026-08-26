@@ -600,7 +600,8 @@ internal static partial class CliCommandHandlers
                     parts,
                     new SystemTrialRootHost(),
                     context.Workspace.TrialComparisonReceiptDirectory,
-                    Console.Out);
+                    Console.Out,
+                    selector => ResolveHistoricalTrial(context, selector));
                 return false;
 
             case "architecture":
@@ -1599,6 +1600,25 @@ internal static partial class CliCommandHandlers
         return duration.TotalDays >= 1
             ? $"{(int)duration.TotalDays}.{duration:hh\\:mm\\:ss}"
             : duration.ToString(@"hh\:mm\:ss", CultureInfo.InvariantCulture);
+    }
+
+    private static HistoricalTrialReplayResolution ResolveHistoricalTrial(
+        CliExecutionContext context,
+        HistoricalTrialSelector selector)
+    {
+        AgentOrchestratorKernel kernel;
+        try
+        {
+            kernel = context.ReloadKernel([selector.GoalId]);
+        }
+        catch (InvalidOperationException ex)
+        {
+            throw new TrialComparisonUnavailableException(
+                TrialComparisonUnavailableReason.HistoricalGoalNotFound,
+                $"Historical goal '{selector.GoalId}' could not be loaded from durable state: {ex.Message}");
+        }
+
+        return HistoricalTrialReplayResolver.Resolve(kernel, selector);
     }
 
     private static DistributedArchitectureDto BuildCliArchitectureReport(CliExecutionContext context)
