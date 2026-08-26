@@ -1078,37 +1078,21 @@ public static partial class GoalWorktrees
     internal static List<WorktreeLockHolder> FindLockHolders(string path)
     {
         var normalizedPath = NormalizePath(path);
-        var processesByPid = new Dictionary<int, string>();
-
-        foreach (var name in LockHolderCandidates)
-        {
-            try
-            {
-                foreach (var proc in Process.GetProcessesByName(name))
-                {
-                    using (proc)
-                    {
-                        processesByPid[proc.Id] = proc.ProcessName;
-                    }
-                }
-            }
-            catch
-            {
-                // Skip if enumeration fails for this candidate name.
-            }
-        }
-
-        if (processesByPid.Count == 0)
-        {
-            return [];
-        }
-
-        var commandLines = ProcessCommandLines.Read(processesByPid.Keys);
+        var snapshot = ProcessCommandLineSnapshotForCleanupTests?.Invoke(LockHolderCandidates) ??
+            ProcessCommandLines.SnapshotByNames(LockHolderCandidates);
         var holders = new List<WorktreeLockHolder>();
 
-        foreach (var (pid, name) in processesByPid)
+        foreach (var (pid, record) in snapshot.Records)
         {
-            commandLines.TryGetValue(pid, out var cmdLine);
+            if (record.Status is ProcessInspectionStatus.Exited or ProcessInspectionStatus.DeadOrRecycled)
+            {
+                continue;
+            }
+
+            var name = record.Name;
+            var cmdLine = record.Status == ProcessInspectionStatus.Available
+                ? record.CommandLine
+                : null;
             var referencesPath = cmdLine is not null &&
                 (cmdLine.Contains(normalizedPath, StringComparison.OrdinalIgnoreCase) ||
                  cmdLine.Contains(path, StringComparison.OrdinalIgnoreCase));

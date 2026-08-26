@@ -13,6 +13,40 @@ public sealed class DotnetBuildEnvironmentManagerTestsLockAttributionLandingFixt
     public static bool RestartManagerAvailable =>
         OperatingSystem.IsWindows() && CanStartRestartManagerForTests();
 
+    [Xunit.Fact]
+    public void LockAttributionProcessFallbackCreatesOneOperationSnapshot()
+    {
+        var snapshotCalls = 0;
+        LockAttribution.DisableRestartManagerForTests = true;
+        LockAttribution.HandleExecutableForTests = Path.Combine(Path.GetTempPath(), $"missing-handle-{Guid.NewGuid():N}.exe");
+        LockAttribution.ProcessCommandLineSnapshotForTests = () =>
+        {
+            snapshotCalls++;
+            return new ProcessCommandLineSnapshot(
+                new Dictionary<int, ProcessInspectionRecord>
+                {
+                    [101] = new(101, 1, "dotnet", null, null, "dotnet test C:\\repo\\.orchestrator-worktrees\\goal", ProcessInspectionStatus.Available),
+                    [202] = new(202, 1, "codex", null, null, "codex unrelated", ProcessInspectionStatus.Available)
+                });
+        };
+
+        try
+        {
+            var attribution = LockAttribution.Attribute("C:\\repo\\locked.dll");
+
+            Assert.Equal("process-snapshot", attribution.Source);
+            Assert.Equal(1, snapshotCalls);
+            Assert.Single(attribution.Holders);
+            Assert.Equal(101, attribution.Holders[0].ProcessId);
+        }
+        finally
+        {
+            LockAttribution.ProcessCommandLineSnapshotForTests = null;
+            LockAttribution.HandleExecutableForTests = null;
+            LockAttribution.DisableRestartManagerForTests = false;
+        }
+    }
+
     [Xunit.Fact(DisplayName = "DotnetBuildEnvironmentManager_owned_artifact_holder_is_reaped_and_retried")]
     public void DotnetBuildEnvironmentManagerOwnedArtifactHolderIsReapedAndRetried()
     {

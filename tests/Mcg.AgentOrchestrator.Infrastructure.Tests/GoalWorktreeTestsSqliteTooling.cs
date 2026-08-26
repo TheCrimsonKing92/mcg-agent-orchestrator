@@ -147,6 +147,7 @@ public sealed class GoalWorktreeTestsSqliteTooling : GoalWorktreeTestBase
     [Xunit.Theory]
     [Xunit.InlineData("wmic process get ProcessId")]
     [Xunit.InlineData("wmic.exe   process where ProcessId=42")]
+    [Xunit.InlineData("new ProcessStartInfo {\r\n    FileName = \"wmic\",\r\n    Arguments = \"process get ProcessId,CommandLine /format:list\"\r\n}")]
     [Xunit.InlineData("Get-CimInstance Win32_Process")]
     [Xunit.InlineData("new ManagementObjectSearcher(query)")]
     public void ProcessQueryGuard_ForbiddenSpellings_AreRejected(string source)
@@ -168,6 +169,7 @@ public sealed class GoalWorktreeTestsSqliteTooling : GoalWorktreeTestBase
         string[] patterns =
         [
             @"(?im)\bwmic(?:\.exe)?\b[^\r\n]*\bprocess\b",
+            """(?is)\bFileName\s*=\s*["']wmic(?:\.exe)?["']\s*,?\s*(?:\r?\n[^\r\n]*){0,4}\bArguments\s*=\s*["'][^"'\r\n]*\bprocess\b""",
             @"(?i)\bWin32_Process\b",
             @"(?i)\bManagementObjectSearcher\b"
         ];

@@ -354,7 +354,7 @@ public static class DotnetBuildEnvironmentManager
             var now = clock.GetUtcNow();
             if (now >= timeoutAt)
             {
-                return EmitSlotsBusy("first-available-stable-slot", slotCount);
+                return EmitSlotsBusy("first-available-stable-slot", slotCount, processSnapshot);
             }
 
             var remaining = timeoutAt - now;
@@ -1052,9 +1052,10 @@ public static class DotnetBuildEnvironmentManager
 
     private static DotnetBuildLeaseAcquisition.SlotsBusy EmitSlotsBusy(
         string wantedBy,
-        int slotCount = StableSlotCount)
+        int slotCount = StableSlotCount,
+        ProcessCommandLineSnapshot? processSnapshot = null)
     {
-        var busySlots = BuildBusySlotSnapshot(slotCount);
+        var busySlots = BuildBusySlotSnapshot(slotCount, processSnapshot);
         Console.WriteLine(
             $"SLOTS_BUSY wantedBy={wantedBy} busySlots={FormatBusySlots(busySlots)} pid={Environment.ProcessId}");
         return new DotnetBuildLeaseAcquisition.SlotsBusy(wantedBy, busySlots);
@@ -1106,9 +1107,10 @@ public static class DotnetBuildEnvironmentManager
     }
 
     private static IReadOnlyList<DotnetBuildStableSlotWait> BuildBusySlotSnapshot(
-        int slotCount = StableSlotCount)
+        int slotCount = StableSlotCount,
+        ProcessCommandLineSnapshot? processSnapshot = null)
     {
-        var processSnapshot = CreateSlotCandidateProcessSnapshot();
+        processSnapshot ??= CreateSlotCandidateProcessSnapshot();
         var waits = new DotnetBuildStableSlotWait[slotCount];
         for (var slot = 0; slot < slotCount; slot++)
         {
@@ -1321,8 +1323,12 @@ public static class DotnetBuildEnvironmentManager
 
     private static bool IsSlotArtifactsBusy(
         DotnetBuildEnvironment environment,
-        ProcessCommandLineSnapshot? processSnapshot = null) =>
-        TryFindActiveSlotArtifactConsumer(environment, processSnapshot) is not null;
+        ProcessCommandLineSnapshot? processSnapshot = null)
+    {
+        var snapshot = processSnapshot ?? CreateSlotCandidateProcessSnapshot();
+        return TryFindActiveSlotArtifactConsumer(environment, snapshot) is not null ||
+            HasUnavailableSlotCandidate(snapshot);
+    }
 
     internal static BuildLockHolder? TryFindActiveSlotArtifactConsumer(
         DotnetBuildEnvironment environment,
@@ -1347,12 +1353,7 @@ public static class DotnetBuildEnvironmentManager
             if (record.Status != ProcessInspectionStatus.Available ||
                 string.IsNullOrWhiteSpace(record.CommandLine))
             {
-                return new BuildLockHolder(
-                    pair.Key,
-                    string.IsNullOrWhiteSpace(record.Name) ? "unknown" : record.Name,
-                    $"PROCESS_QUERY_UNAVAILABLE status={record.Status}",
-                    IsOrchestratorOwned: false,
-                    record.StartedAt);
+                continue;
             }
 
             if (!IsProcessRunning(pair.Key) ||
@@ -1366,6 +1367,13 @@ public static class DotnetBuildEnvironmentManager
 
         return null;
     }
+
+    private static bool HasUnavailableSlotCandidate(ProcessCommandLineSnapshot snapshot) =>
+        snapshot.Records.Any(pair =>
+            pair.Key != Environment.ProcessId &&
+            pair.Value.Status is not ProcessInspectionStatus.Exited and not ProcessInspectionStatus.DeadOrRecycled &&
+            (pair.Value.Status != ProcessInspectionStatus.Available ||
+                string.IsNullOrWhiteSpace(pair.Value.CommandLine)));
 
     private static ProcessCommandLineSnapshot CreateSlotCandidateProcessSnapshot()
     {

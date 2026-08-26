@@ -174,6 +174,7 @@ internal static partial class LockAttribution
     internal static TimeSpan? HandleProbeTimeoutForTests { get; set; }
     internal static Action<ProcessStartInfo, string>? ConfigureHandleProbeForTests { get; set; }
     internal static bool DisableRestartManagerForTests { get; set; }
+    internal static Func<ProcessCommandLineSnapshot>? ProcessCommandLineSnapshotForTests { get; set; }
 
     public static BuildLockAttribution Attribute(string path, string? ownershipHint = null, string? phase = null, string? operation = null) =>
         AttributeCore(path, ownershipHint, phase, operation, diagnostics: null);
@@ -521,7 +522,7 @@ internal static partial class LockAttribution
 
     private static BuildLockAttribution AttributeFromProcessSnapshot(string path, string? ownershipHint)
     {
-        var snapshot = ProcessCommandLines.Snapshot();
+        var snapshot = ProcessCommandLineSnapshotForTests?.Invoke() ?? ProcessCommandLines.Snapshot();
         var holders = snapshot.Read(snapshot.Records.Keys)
             .Where(pair => IsOrchestratorOwned(pair.Value, ownershipHint))
             .Select(pair => new BuildLockHolder(pair.Key, TryProcessName(pair.Key), pair.Value, true, TryProcessStartTime(pair.Key)))
