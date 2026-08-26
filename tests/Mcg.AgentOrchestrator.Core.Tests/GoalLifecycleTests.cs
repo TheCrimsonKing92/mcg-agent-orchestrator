@@ -54,6 +54,17 @@ public sealed class GoalLifecycleTests
         Assert.Equal("retryCause", exception.ParamName);
     }
 
+    [Xunit.Fact(DisplayName = "TaskSpec_retry_transition_rejects_Unknown_for_prospective_history")]
+    public void TaskSpecRetryTransitionRejectsUnknownForProspectiveHistory()
+    {
+        var task = new TaskSpec(TaskId.New(), "Implement", AgentRole.Developer);
+
+        var exception = Assert.Throws<ArgumentOutOfRangeException>(() =>
+            task.RecordRetry(DateTimeOffset.Parse("2026-08-25T12:00:00Z"), RetryCause.Unknown));
+
+        Assert.Equal("retryCause", exception.ParamName);
+    }
+
     [Xunit.Fact(DisplayName = "GoalLifecycle_identifies_active_goal_with_failed_task")]
     public void GoalLifecycleIdentifiesActiveGoalWithFailedTask()
     {

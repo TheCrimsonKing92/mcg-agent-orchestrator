@@ -463,9 +463,16 @@ public sealed class BackgroundDispatchRunner
             ChildExitRecordPath: childExitRecordPath,
             NonBlockingProcessIds: sampleLaunches.Select(launch => launch.Process.Id).ToArray());
 
-        kernel.RecordTaskProcessStarted(goalId, taskId, record);
         try
         {
+            if (claimWorkerStart is not null && !claimWorkerStart())
+            {
+                TerminateUnreleasedDispatchHost(process);
+                PlannerSampleDispatcher.TerminateUnreleased(sampleLaunches);
+                return DispatchProcessStartResult.Skipped();
+            }
+
+            kernel.RecordTaskProcessStarted(goalId, taskId, record);
             checkpointBeforeWorkerStart?.Invoke(kernel, goalId, taskId, DispatchRecordCheckpointPhase.ProcessMayHaveStarted);
         }
         catch
@@ -477,13 +484,6 @@ public sealed class BackgroundDispatchRunner
 
         try
         {
-            if (claimWorkerStart is not null && !claimWorkerStart())
-            {
-                TerminateUnreleasedDispatchHost(process);
-                PlannerSampleDispatcher.TerminateUnreleased(sampleLaunches);
-                return DispatchProcessStartResult.Skipped();
-            }
-
             PlannerSampleDispatcher.ReleaseStartGates(sampleLaunches);
             ReleaseDispatchHostStartGate(startGatePath);
             if (confirmWorkerStart is not null && !confirmWorkerStart())

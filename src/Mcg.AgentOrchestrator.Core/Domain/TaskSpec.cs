@@ -623,6 +623,14 @@ public sealed class TaskSpec
         RetryCause retryCause,
         RetryRoundKind? retryRoundKind = null)
     {
+        if (retryCause == RetryCause.Unknown)
+        {
+            throw new ArgumentOutOfRangeException(
+                nameof(retryCause),
+                retryCause,
+                "A prospective retry requires an explicit classified cause; Unknown is reserved for legacy or unavailable history.");
+        }
+
         LatestRetryAt = retriedAt;
         PendingRetryRoundKind = retryRoundKind;
         PendingRetryCause = retryCause;
@@ -880,8 +888,6 @@ public sealed class TaskSpec
     internal void RecordProcess(TaskProcessRecord process)
     {
         LastProcess = process;
-        if (LastDispatch is not null)
-            MarkRetryAdmissionStarted(LastDispatch.DispatchedAt, process.StartedAt);
     }
 
     private static TaskDispatchSnapshot ToDispatchSnapshot(TaskDispatchRecord dispatch) => new(

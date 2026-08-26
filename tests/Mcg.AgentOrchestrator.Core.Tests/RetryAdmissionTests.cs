@@ -454,10 +454,36 @@ public sealed class RetryAdmissionTests
             AgentRole.Developer,
             new ModelProfile("OpenAI", "test", ModelCapability.Text, SubscriptionMode.ApiKey))]);
 
-        kernel.RetryTask(goal.Id, task.Id, "Inspect alpha evidence.", invalidateDownstream: false);
+        kernel.RetryTask(
+            goal.Id, task.Id, "Inspect alpha evidence.", RetryCause.NewSourceFinding,
+            invalidateDownstream: false);
         var alpha = RetryContextFingerprintFactory.Build(
             goal, task, "OpenAI", "test", PaidRouteClassification.Paid, null, null, null);
-        kernel.RetryTask(goal.Id, task.Id, "Inspect beta evidence.", invalidateDownstream: false);
+        kernel.RetryTask(
+            goal.Id, task.Id, "Inspect beta evidence.", RetryCause.NewSourceFinding,
+            invalidateDownstream: false);
+        var beta = RetryContextFingerprintFactory.Build(
+            goal, task, "OpenAI", "test", PaidRouteClassification.Paid, null, null, null);
+
+        Assert.NotEqual(alpha, beta);
+    }
+
+    [Xunit.Fact]
+    public void LatestOperatorRetryFeedbackRemainsFingerprintInputWithCriterionFeedback()
+    {
+        var kernel = new AgentOrchestratorKernel();
+        var task = new TaskSpec(TaskId.New(), "Retry work", AgentRole.Developer);
+        var goal = kernel.CreateGoal("Fingerprint operator correction", [task]);
+        kernel.RecordCriterionRetryFeedback(goal.Id, task.Id, ["Criterion evidence is unchanged."]);
+
+        kernel.RetryTask(
+            goal.Id, task.Id, "Inspect alpha evidence.", RetryCause.NewSourceFinding,
+            invalidateDownstream: false);
+        var alpha = RetryContextFingerprintFactory.Build(
+            goal, task, "OpenAI", "test", PaidRouteClassification.Paid, null, null, null);
+        kernel.RetryTask(
+            goal.Id, task.Id, "Inspect beta evidence.", RetryCause.NewSourceFinding,
+            invalidateDownstream: false);
         var beta = RetryContextFingerprintFactory.Build(
             goal, task, "OpenAI", "test", PaidRouteClassification.Paid, null, null, null);
 
@@ -484,6 +510,33 @@ public sealed class RetryAdmissionTests
             task.Id,
             "Auto-retry real worker failure for task bbbbbbbb (attempt 2/3); same evidence.",
             RetryCause.NewSourceFinding,
+            invalidateDownstream: false);
+        var second = RetryContextFingerprintFactory.Build(
+            goal, task, "OpenAI", "test", PaidRouteClassification.Paid, null, null, null);
+
+        Assert.Equal(first, second);
+    }
+
+    [Xunit.Fact]
+    public void VolatileConductorWrapperDoesNotChangeRetryContextFingerprint()
+    {
+        var kernel = new AgentOrchestratorKernel();
+        var task = new TaskSpec(TaskId.New(), "Retry work", AgentRole.Developer);
+        var goal = kernel.CreateGoal("Fingerprint actionable recovery evidence", [task]);
+
+        kernel.RetryTask(
+            goal.Id,
+            task.Id,
+            "Auto-retry empty-output dispatch flake 1/3 in recovery cycle 1/2; task produced zero-byte stdout with exit 0",
+            RetryCause.EnvironmentApparatusFailure,
+            invalidateDownstream: false);
+        var first = RetryContextFingerprintFactory.Build(
+            goal, task, "OpenAI", "test", PaidRouteClassification.Paid, null, null, null);
+        kernel.RetryTask(
+            goal.Id,
+            task.Id,
+            "Auto-recover+re-admit empty-output dispatch flake cycle 2/2; task produced zero-byte stdout with exit 0",
+            RetryCause.EnvironmentApparatusFailure,
             invalidateDownstream: false);
         var second = RetryContextFingerprintFactory.Build(
             goal, task, "OpenAI", "test", PaidRouteClassification.Paid, null, null, null);

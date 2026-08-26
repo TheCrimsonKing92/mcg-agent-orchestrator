@@ -291,11 +291,14 @@ public static class RetryContextFingerprintFactory
             .Where(item => item.TaskId == task.Id && item.Kind == ProgressKind.TaskRetried)
             .OrderBy(item => item.OccurredAt)
             .LastOrDefault()?.Message;
-        var retryFeedback = task.CriterionRetryFeedback.Count > 0
-            ? task.CriterionRetryFeedback
-            : string.IsNullOrWhiteSpace(latestOperatorRetryFeedback)
+        var retryFeedback = task.CriterionRetryFeedback
+            .Select(NormalizeActionableRetryFeedback)
+            .Concat(string.IsNullOrWhiteSpace(latestOperatorRetryFeedback)
                 ? []
-                : [NormalizeActionableRetryFeedback(latestOperatorRetryFeedback)];
+                : [NormalizeActionableRetryFeedback(latestOperatorRetryFeedback)])
+            .Where(item => item.Length > 0)
+            .Distinct(StringComparer.Ordinal)
+            .ToArray();
         return RetryContextFingerprintBuilder.Build(new RetryContextFingerprintInput(
             goal.Id.Value,
             task.Id.Value,
@@ -316,6 +319,9 @@ public static class RetryContextFingerprintFactory
     internal static string NormalizeActionableRetryFeedback(string feedback)
     {
         var normalized = RetryContextFingerprintBuilder.NormalizeLineEndings(feedback);
+        var wrapperEnd = normalized.IndexOf(';');
+        if (wrapperEnd >= 0 && normalized.StartsWith("Auto-", StringComparison.OrdinalIgnoreCase))
+            normalized = normalized[(wrapperEnd + 1)..].Trim();
         normalized = System.Text.RegularExpressions.Regex.Replace(
             normalized,
             @"(?i)\b(attempt|cycle|round)\s+\d+(?:\s*/\s*\d+)?\b",

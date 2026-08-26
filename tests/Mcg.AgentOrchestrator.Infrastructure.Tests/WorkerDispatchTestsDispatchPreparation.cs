@@ -729,13 +729,15 @@ public sealed class WorkerDispatchTestsDispatchPreparation : WorkerDispatchTestS
 
         Assert.Empty(result.Processes.Tasks);
         Assert.Equal(0, checkpointCalls);
-        Assert.Null(planner.LastProcess);
+        var persistedGoal = kernel.GetGoal(goal.Id);
+        var persistedPlanner = persistedGoal.Tasks.Single(candidate => candidate.Id == planner.Id);
+        Assert.Null(persistedPlanner.LastProcess);
         var prevention = Assert.Single(
-            planner.RetryAdmissionHistory,
+            persistedPlanner.RetryAdmissionHistory,
             receipt => receipt.Decision == RetryAdmissionDecision.Prevented);
         Assert.Equal(RetryCause.UnchangedContextRepeat, prevention.Cause);
         Assert.Contains(
-            goal.Timeline,
+            persistedGoal.Timeline,
             item => item.Kind == ProgressKind.NoProgressRedispatchPrevented && item.TaskId == planner.Id);
     }
 
