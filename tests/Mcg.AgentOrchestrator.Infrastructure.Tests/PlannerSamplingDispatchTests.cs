@@ -295,6 +295,50 @@ public sealed class PlannerSamplingDispatchTests : WorkerDispatchTestSupport
     }
 
     [Xunit.Fact]
+    public void CollectCandidates_EmptyTerminalRecord_IsMalformed()
+    {
+        var root = CreateTempDirectory();
+        var primaryPath = Path.Combine(root, "planner.out.log");
+        File.WriteAllText(primaryPath, ReadPlannerFixture());
+        var sample = Xunit.Assert.Single(PlannerSampleDispatcher.CreateArtifacts(primaryPath, 2));
+        File.WriteAllText(sample.TerminalRecordPath, "{}");
+
+        var candidate = PlannerSampleDispatcher.CollectCandidates(primaryPath, 2)[1];
+
+        Xunit.Assert.Equal(PlannerCandidateTerminalState.MalformedTerminalArtifact, candidate.TerminalState);
+    }
+
+    [Xunit.Fact]
+    public void CollectCandidates_IncompleteTerminalRecord_IsMalformed()
+    {
+        var root = CreateTempDirectory();
+        var primaryPath = Path.Combine(root, "planner.out.log");
+        File.WriteAllText(primaryPath, ReadPlannerFixture());
+        var sample = Xunit.Assert.Single(PlannerSampleDispatcher.CreateArtifacts(primaryPath, 2));
+        File.WriteAllText(sample.TerminalRecordPath, "{\"State\":3}");
+
+        var candidate = PlannerSampleDispatcher.CollectCandidates(primaryPath, 2)[1];
+
+        Xunit.Assert.Equal(PlannerCandidateTerminalState.MalformedTerminalArtifact, candidate.TerminalState);
+    }
+
+    [Xunit.Fact]
+    public void CollectCandidates_OutOfDomainTerminalState_IsMalformed()
+    {
+        var root = CreateTempDirectory();
+        var primaryPath = Path.Combine(root, "planner.out.log");
+        File.WriteAllText(primaryPath, ReadPlannerFixture());
+        var sample = Xunit.Assert.Single(PlannerSampleDispatcher.CreateArtifacts(primaryPath, 2));
+        File.WriteAllText(
+            sample.TerminalRecordPath,
+            "{\"State\":999,\"RecordedAt\":\"2026-08-25T00:00:00Z\"}");
+
+        var candidate = PlannerSampleDispatcher.CollectCandidates(primaryPath, 2)[1];
+
+        Xunit.Assert.Equal(PlannerCandidateTerminalState.MalformedTerminalArtifact, candidate.TerminalState);
+    }
+
+    [Xunit.Fact]
     public void CollectCandidates_UnreadableTerminalRecord_IsLoudlyTyped()
     {
         var root = CreateTempDirectory();
@@ -394,6 +438,7 @@ public sealed class PlannerSamplingDispatchTests : WorkerDispatchTestSupport
         };
         Directory.CreateDirectory(sample.LaunchRecordPath);
         Process? started = null;
+        int? startedProcessId = null;
 
         try
         {
@@ -402,16 +447,22 @@ public sealed class PlannerSamplingDispatchTests : WorkerDispatchTestSupport
                 CreateRunParameters(root, primaryPath),
                 "dispatch-host.dll",
                 "planner-double-persistence-failure",
-                _ => started = StartSleeper()));
+                _ =>
+                {
+                    started = StartSleeper();
+                    startedProcessId = started.Id;
+                    return started;
+                }));
 
             Xunit.Assert.NotNull(started);
-            Xunit.Assert.False(WorkerProcessJobs.HasRegisteredJob(started.Id));
+            Xunit.Assert.NotNull(startedProcessId);
+            Xunit.Assert.False(WorkerProcessJobs.HasRegisteredJob(startedProcessId.Value));
         }
         finally
         {
-            if (started is not null)
+            if (started is not null && startedProcessId is not null)
             {
-                try { WorkerProcessJobs.TryKillOrFallback(started.Id); } catch { }
+                try { WorkerProcessJobs.TryKillOrFallback(startedProcessId.Value); } catch { }
                 try { started.Dispose(); } catch { }
             }
         }

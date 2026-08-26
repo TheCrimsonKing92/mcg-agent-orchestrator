@@ -405,11 +405,19 @@ internal static class PlannerSampleDispatcher
             return new(PlannerSampleTerminalReadState.Missing, null);
         try
         {
-            var record = JsonSerializer.Deserialize<PlannerSampleTerminalRecord>(
+            var payload = JsonSerializer.Deserialize<PlannerSampleTerminalRecordPayload>(
                 File.ReadAllText(sample.TerminalRecordPath));
-            return record is null
-                ? new(PlannerSampleTerminalReadState.Malformed, null)
-                : new(PlannerSampleTerminalReadState.Read, record);
+            if (payload?.State is not { } state ||
+                !Enum.IsDefined(state) ||
+                payload.RecordedAt is not { } recordedAt ||
+                recordedAt == default)
+            {
+                return new(PlannerSampleTerminalReadState.Malformed, null);
+            }
+
+            return new(
+                PlannerSampleTerminalReadState.Read,
+                new PlannerSampleTerminalRecord(state, recordedAt));
         }
         catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
         {
@@ -477,6 +485,10 @@ internal static class PlannerSampleDispatcher
     private sealed record PlannerSampleTerminalRecord(
         PlannerCandidateTerminalState State,
         DateTimeOffset RecordedAt);
+
+    private sealed record PlannerSampleTerminalRecordPayload(
+        PlannerCandidateTerminalState? State,
+        DateTimeOffset? RecordedAt);
 
     private sealed record PlannerSampleTerminalClassification(
         PlannerCandidateTerminalState State,

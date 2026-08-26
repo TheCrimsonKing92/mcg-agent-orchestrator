@@ -195,9 +195,55 @@ internal static partial class PlannerOutputContract
         if (testVerifiable == realWorldDependent)
             return false;
 
-        return testVerifiable
-            ? DeclaresEvidenceOwner(mapping, "Developer|Tester|Acceptance|conductor")
-            : DeclaresEvidenceOwner(mapping, "operator");
+        if (realWorldDependent)
+            return DeclaresEvidenceOwner(mapping, "operator");
+
+        if (DeclaresEvidenceOwner(mapping, "Acceptance|conductor"))
+            return true;
+
+        return TryGetDeclaredWorkerRole(mapping, out var role) &&
+            DispatchRoleOutputCapabilities.TryGet(role, out var capability) &&
+            IsFeasibleWorkerEvidence(mapping, capability);
+    }
+
+    private static bool TryGetDeclaredWorkerRole(string mapping, out AgentRole role)
+    {
+        foreach (var candidate in Enum.GetValues<AgentRole>())
+        {
+            if (DeclaresEvidenceOwner(mapping, Regex.Escape(candidate.ToString())))
+            {
+                role = candidate;
+                return true;
+            }
+        }
+
+        role = default;
+        return false;
+    }
+
+    private static bool IsFeasibleWorkerEvidence(
+        string mapping,
+        DispatchRoleOutputCapability capability)
+    {
+        if (Regex.IsMatch(
+            mapping,
+            @"(?i)\b(?:full[-\s]?suite|acceptance[-\s]?gate|test[-\s]?host|gate[-\s]?(?:receipt|wall[-\s]?clock)|coverage[-\s]?total)\b"))
+        {
+            return false;
+        }
+
+        if (Regex.IsMatch(
+            mapping,
+            @"(?i)\b(?:worker[-\s]?build|build[-\s]?(?:result|receipt)|manual[-\s]?reproduction|source[-\s]?(?:reproduction|trace)|focused[-\s]?evidence[-\s]?request|verification[-\s]?matrix)\b"))
+        {
+            return capability is DispatchRoleOutputCapability.RequiresChangeEvidence or
+                DispatchRoleOutputCapability.VerificationOnly;
+        }
+
+        return capability == DispatchRoleOutputCapability.RequiresChangeEvidence &&
+            BacktickedCitation().Matches(mapping).Any(match =>
+                match.Groups["citation"].Value.IndexOfAny(['.', '/', '\\']) >= 0 ||
+                match.Groups["citation"].Value.Contains("::", StringComparison.Ordinal));
     }
 
     private static bool DeclaresEvidenceOwner(string mapping, string rolePattern) =>

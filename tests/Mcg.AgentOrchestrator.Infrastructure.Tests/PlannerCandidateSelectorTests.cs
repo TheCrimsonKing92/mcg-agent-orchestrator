@@ -171,8 +171,8 @@ public sealed class PlannerCandidateSelectorTests
         var repositoryRoot = InfrastructureTestSupport.FindRepositoryRoot();
         var plan = ReplaceSectionBody(
             ReadPlannerFixture(repositoryRoot),
-            "## Acceptance criterion mapping",
-            "1. disposition=planned; plan=Acceptance owns `PlannerCandidateSelectorTests`; the integration seam is TEST-VERIFIABLE and stops on failure.\n" +
+            "## Acceptance criteria mapping",
+            "1. disposition=planned; plan=Acceptance owns `PlannerCandidateSelectorTests.cs`; the integration seam is TEST-VERIFIABLE and stops on failure.\n" +
             "1. disposition=planned; plan=Acceptance owns `Duplicate.cs`; the integration seam is TEST-VERIFIABLE and stops on failure.\n" +
             "99. disposition=planned; plan=Acceptance owns `OutOfRange.cs`; the integration seam is TEST-VERIFIABLE and stops on failure.");
 
@@ -190,11 +190,11 @@ public sealed class PlannerCandidateSelectorTests
         var fixture = ReadPlannerFixture(repositoryRoot);
         var testPlan = ReplaceSectionBody(
             fixture,
-            "## Acceptance criterion mapping",
+            "## Acceptance criteria mapping",
             "1. disposition=planned; plan=Researcher owns `PlannerCandidateSelectorTests`; Developer is informed, but the integration seam is TEST-VERIFIABLE and stops on failure.");
         var realWorldPlan = ReplaceSectionBody(
             fixture,
-            "## Acceptance criterion mapping",
+            "## Acceptance criteria mapping",
             "1. disposition=planned; plan=operator owns `paired-run-receipt`; the integration seam is REAL-WORLD-DEPENDENT and stops when evidence is unavailable.");
 
         var testQuality = PlannerOutputContract.EvaluateStructuralQuality(testPlan);
@@ -202,6 +202,33 @@ public sealed class PlannerCandidateSelectorTests
 
         Xunit.Assert.Equal(0, testQuality.FeasibleEvidenceOwners);
         Xunit.Assert.Equal(1, realWorldQuality.FeasibleEvidenceOwners);
+    }
+
+    [Xunit.Fact]
+    public void StructuralQuality_TestOwnerCapabilityMustMatchRequestedEvidence()
+    {
+        var repositoryRoot = InfrastructureTestSupport.FindRepositoryRoot();
+        var fixture = ReadPlannerFixture(repositoryRoot);
+        var testerFullSuitePlan = ReplaceSectionBody(
+            fixture,
+            "## Acceptance criteria mapping",
+            "1. disposition=planned; plan=Tester owns full-suite test execution for `PlannerCandidateSelectorTests`; the integration seam is TEST-VERIFIABLE and stops on failure.");
+        var acceptanceFullSuitePlan = ReplaceSectionBody(
+            fixture,
+            "## Acceptance criteria mapping",
+            "1. disposition=planned; plan=Acceptance owns full-suite test execution for `PlannerCandidateSelectorTests`; the integration seam is TEST-VERIFIABLE and stops on failure.");
+        var testerBuildPlan = ReplaceSectionBody(
+            fixture,
+            "## Acceptance criteria mapping",
+            "1. disposition=planned; plan=Tester owns the worker build result and manual reproduction for `PlannerCandidateSelectorTests`; the integration seam is TEST-VERIFIABLE and stops on failure.");
+
+        var testerFullSuite = PlannerOutputContract.EvaluateStructuralQuality(testerFullSuitePlan);
+        var acceptanceFullSuite = PlannerOutputContract.EvaluateStructuralQuality(acceptanceFullSuitePlan);
+        var testerBuild = PlannerOutputContract.EvaluateStructuralQuality(testerBuildPlan);
+
+        Xunit.Assert.Equal(0, testerFullSuite.FeasibleEvidenceOwners);
+        Xunit.Assert.Equal(1, acceptanceFullSuite.FeasibleEvidenceOwners);
+        Xunit.Assert.Equal(1, testerBuild.FeasibleEvidenceOwners);
     }
 
     [Xunit.Fact]
@@ -239,9 +266,10 @@ public sealed class PlannerCandidateSelectorTests
     }
 
     private static string ReadPlannerFixture(string repositoryRoot) => File.ReadAllText(Path.Combine(
-        repositoryRoot,
-        "tests", "Mcg.AgentOrchestrator.Infrastructure.Tests", "Fixtures", "PlannerOutputContract",
-        "658501ce-f6708f44-20260805012800.out.txt"));
+            repositoryRoot,
+            "tests", "Mcg.AgentOrchestrator.Infrastructure.Tests", "Fixtures", "PlannerOutputContract",
+            "658501ce-f6708f44-20260805012800.out.txt"))
+        .ReplaceLineEndings("\n");
 
     private static string ReplaceSectionBody(string plan, string heading, string body)
     {
