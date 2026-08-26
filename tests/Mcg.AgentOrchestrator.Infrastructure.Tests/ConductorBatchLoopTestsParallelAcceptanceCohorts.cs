@@ -4,8 +4,14 @@ using Mcg.AgentOrchestrator.Core;
 using Mcg.AgentOrchestrator.Core.Conductor;
 using Mcg.AgentOrchestrator.Infrastructure;
 
-public sealed partial class ConductorBatchLoopTestsParallelAcceptance
+[Xunit.Collection(TestCollections.DotnetBuildSlots)]
+public sealed class ConductorBatchLoopTestsParallelAcceptanceCohorts : ConductorBatchLoopTests
 {
+    public ConductorBatchLoopTestsParallelAcceptanceCohorts(ITestOutputHelper output)
+        : base(output)
+    {
+    }
+
     [Xunit.Fact]
     public void ProductionCohortRunsOneSharedGateAndBypassesOrdinaryMemberGates()
     {
