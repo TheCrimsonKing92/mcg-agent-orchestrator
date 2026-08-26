@@ -3,6 +3,7 @@ using System.Diagnostics;
 using System.Globalization;
 using System.Runtime.InteropServices;
 using System.Collections.Concurrent;
+using Microsoft.Win32.SafeHandles;
 
 namespace Mcg.AgentOrchestrator.Infrastructure;
 
@@ -13,6 +14,214 @@ public sealed record WorkerProcessJobAccounting(
     string AccountingSource = "live")
 {
     public static WorkerProcessJobAccounting Empty { get; } = new(0, 0, 0);
+}
+
+internal sealed record OwnedChildStartMetadata(
+    string FileName,
+    string Arguments,
+    IReadOnlyList<string> ArgumentList,
+    string WorkingDirectory);
+
+internal sealed class RegisteredJob
+{
+    internal RegisteredJob(
+        OwnedProcessGroup Group,
+        SafeFileHandle? DuplicateAccountingHandle,
+        WorkerProcessJobAccounting? RegistrationSnapshot,
+        SpawnProcessIdentity? Identity = null,
+        bool RequiresDurableDetach = false,
+        object? LifecycleAuthority = null)
+    {
+        this.Group = Group;
+        this.DuplicateAccountingHandle = DuplicateAccountingHandle;
+        this.RegistrationSnapshot = RegistrationSnapshot;
+        this.Identity = Identity;
+        this.RequiresDurableDetach = RequiresDurableDetach;
+        this.LifecycleAuthority = LifecycleAuthority;
+    }
+
+    internal OwnedProcessGroup Group { get; }
+    internal SafeFileHandle? DuplicateAccountingHandle { get; }
+    internal WorkerProcessJobAccounting? RegistrationSnapshot { get; }
+    internal SpawnProcessIdentity? Identity { get; }
+    internal bool RequiresDurableDetach { get; }
+    internal object? LifecycleAuthority { get; }
+    internal bool RequiresOwnedRelease => LifecycleAuthority is not null;
+
+    internal bool IsAuthorizedBy(object authority) =>
+        ReferenceEquals(LifecycleAuthority, authority);
+}
+
+internal sealed class RegisteredOwnedProcess : IDisposable
+{
+    private const uint TerminatedExitCode = 1;
+    private readonly int _processId;
+    private readonly RegisteredJob _registration;
+    private readonly object _lifecycleAuthority;
+    private Process? _process;
+    private SafeFileHandle? _processHandle;
+    private int _registrationReleased;
+
+    internal RegisteredOwnedProcess(
+        Process process,
+        SafeFileHandle? processHandle,
+        ProcessStartInfo startInfo,
+        RegisteredJob registration,
+        object lifecycleAuthority)
+    {
+        if (!registration.IsAuthorizedBy(lifecycleAuthority))
+        {
+            throw new InvalidOperationException(
+                "worker-process-owned-lifecycle-authority-mismatch: stage=owned-child-transfer");
+        }
+
+        _process = process;
+        _processId = process.Id;
+        _processHandle = processHandle;
+        _registration = registration;
+        _lifecycleAuthority = lifecycleAuthority;
+        StartMetadata = new OwnedChildStartMetadata(
+            startInfo.FileName,
+            startInfo.Arguments,
+            startInfo.ArgumentList.ToArray(),
+            startInfo.WorkingDirectory);
+    }
+
+    internal int Id => Process.Id;
+    internal StreamReader StandardOutput => Process.StandardOutput;
+    internal StreamReader StandardError => Process.StandardError;
+    internal OwnedChildStartMetadata StartMetadata { get; }
+    internal bool HasOpenNativeHandle =>
+        _processHandle is { IsClosed: false, IsInvalid: false };
+    internal bool IsDisposed => _process is null;
+    internal bool OwnsRegisteredJob =>
+        Volatile.Read(ref _registrationReleased) == 0 &&
+        WorkerProcessJobs.HasRegisteredJob(_processId, _registration);
+
+    internal int ExitCode
+    {
+        get
+        {
+            if (_processHandle is null)
+            {
+                return Process.ExitCode;
+            }
+
+            if (!GetExitCodeProcess(_processHandle, out var exitCode))
+            {
+                throw new Win32Exception(Marshal.GetLastWin32Error(), "Failed to read owned child exit code.");
+            }
+
+            return unchecked((int)exitCode);
+        }
+    }
+
+    internal async Task WaitForExitAsync(CancellationToken cancellationToken)
+    {
+        if (_processHandle is null)
+        {
+            await Process.WaitForExitAsync(cancellationToken).ConfigureAwait(false);
+            return;
+        }
+
+        using var waitHandle = new NativeProcessWaitHandle(_processHandle);
+        var completion = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var registeredWait = ThreadPool.RegisterWaitForSingleObject(
+            waitHandle,
+            static (state, _) => ((TaskCompletionSource)state!).TrySetResult(),
+            completion,
+            Timeout.InfiniteTimeSpan,
+            executeOnlyOnce: true);
+        using var cancellationRegistration = cancellationToken.Register(
+            static state =>
+            {
+                var (source, token) = ((TaskCompletionSource Source, CancellationToken Token))state!;
+                source.TrySetCanceled(token);
+            },
+            (completion, cancellationToken));
+        try
+        {
+            await completion.Task.ConfigureAwait(false);
+        }
+        finally
+        {
+            registeredWait.Unregister(null);
+        }
+    }
+
+    internal void Kill(bool entireProcessTree)
+    {
+        if (Volatile.Read(ref _registrationReleased) == 0)
+        {
+            _registration.Group.Kill();
+            return;
+        }
+
+        if (_processHandle is not null)
+        {
+            if (!TerminateProcess(_processHandle, TerminatedExitCode))
+            {
+                var nativeError = Marshal.GetLastWin32Error();
+                if (nativeError != 5)
+                {
+                    throw new Win32Exception(nativeError, "Failed to terminate owned child process.");
+                }
+            }
+
+            return;
+        }
+
+        Process.Kill(entireProcessTree);
+    }
+
+    internal bool Release(out WorkerProcessJobAccounting? accounting)
+    {
+        accounting = null;
+        if (Interlocked.Exchange(ref _registrationReleased, 1) != 0)
+        {
+            return false;
+        }
+
+        WorkerProcessJobs.ReleaseOwned(
+            _processId,
+            _registration,
+            _lifecycleAuthority,
+            out accounting);
+        return true;
+    }
+
+    public void Dispose()
+    {
+        try
+        {
+            _ = Release(out _);
+        }
+        finally
+        {
+            _processHandle?.Dispose();
+            _processHandle = null;
+            _process?.Dispose();
+            _process = null;
+        }
+    }
+
+    private Process Process => _process ?? throw new ObjectDisposedException(nameof(RegisteredOwnedProcess));
+
+    private sealed class NativeProcessWaitHandle : WaitHandle
+    {
+        internal NativeProcessWaitHandle(SafeFileHandle processHandle)
+        {
+            SafeWaitHandle = new SafeWaitHandle(processHandle.DangerousGetHandle(), ownsHandle: false);
+        }
+    }
+
+    [DllImport("kernel32.dll", SetLastError = true)]
+    [return: MarshalAs(UnmanagedType.Bool)]
+    private static extern bool GetExitCodeProcess(SafeFileHandle processHandle, out uint exitCode);
+
+    [DllImport("kernel32.dll", SetLastError = true)]
+    [return: MarshalAs(UnmanagedType.Bool)]
+    private static extern bool TerminateProcess(SafeFileHandle processHandle, uint exitCode);
 }
 
 public static class WorkerProcessJobs
@@ -332,6 +541,59 @@ public static class WorkerProcessJobs
             ownerId);
     }
 
+    internal static RegisteredOwnedProcess StartRegisteredOwnedOrThrow(
+        ProcessStartInfo startInfo,
+        string? ownerId = null,
+        Func<Process, SpawnProcessIdentityReadResult>? registrationIdentityReader = null)
+    {
+        ArgumentNullException.ThrowIfNull(startInfo);
+        var lifecycleAuthority = new object();
+        var identityReader = registrationIdentityReader ?? ProductionRegistrationIdentityReader;
+        if (!OperatingSystem.IsWindows())
+        {
+            var process = StartAndRegisterNonWindows(
+                startInfo,
+                ownerId,
+                ProcessTreeGuiSuppression.Start,
+                (candidate, candidateOwnerId) =>
+                    RegisterOwnedOrThrow(candidate, candidateOwnerId, lifecycleAuthority, identityReader));
+            return new RegisteredOwnedProcess(
+                process,
+                processHandle: null,
+                startInfo,
+                GetRegisteredJobOrThrow(process.Id, lifecycleAuthority),
+                lifecycleAuthority);
+        }
+
+        return StartRegisteredOwnedWindows(
+            () => OwnedProcessGroup.StartSuspended(startInfo),
+            startInfo,
+            lifecycleAuthority,
+            identityReader,
+            ownerId);
+    }
+
+    internal static RegisteredOwnedProcess AdoptRegisteredOwnedOrThrow(
+        Process process,
+        ProcessStartInfo startInfo,
+        string? ownerId = null)
+    {
+        ArgumentNullException.ThrowIfNull(process);
+        ArgumentNullException.ThrowIfNull(startInfo);
+        var lifecycleAuthority = new object();
+        RegisterOwnedOrThrow(
+            process,
+            ownerId,
+            lifecycleAuthority,
+            ProductionRegistrationIdentityReader);
+        return new RegisteredOwnedProcess(
+            process,
+            processHandle: null,
+            startInfo,
+            GetRegisteredJobOrThrow(process.Id, lifecycleAuthority),
+            lifecycleAuthority);
+    }
+
     internal static Process StartRegisteredWithFileCaptureOrThrow(
         ProcessStartInfo startInfo,
         string stdoutPath,
@@ -380,6 +642,69 @@ public static class WorkerProcessJobs
             }
 
             return launch.TransferOwnership();
+        }
+    }
+
+    private static RegisteredOwnedProcess StartRegisteredOwnedWindows(
+        Func<OwnedProcessGroup.SuspendedProcessStart> start,
+        ProcessStartInfo startInfo,
+        object lifecycleAuthority,
+        Func<Process, SpawnProcessIdentityReadResult> registrationIdentityReader,
+        string? ownerId)
+    {
+        OwnedProcessGroup.SuspendedProcessStart launch;
+        try
+        {
+            launch = start();
+        }
+        catch (Exception ex) when (ex is Win32Exception or InvalidOperationException or NotSupportedException)
+        {
+            throw new InvalidOperationException(
+                $"worker-process-start-failed: stage=owned-process-group-launch; cleanup=owned-job-termination-requested; {BuildExceptionEvidence(ex)}",
+                ex);
+        }
+
+        using (launch)
+        {
+            if (!TryRegisterCore(
+                    launch.Process,
+                    ownerId,
+                    registrationIdentityReader,
+                    registrationIdentityReader,
+                    out var registrationFailure,
+                    launch.Group,
+                    launch.Resume,
+                    lifecycleAuthority: lifecycleAuthority))
+            {
+                throw new InvalidOperationException(registrationFailure);
+            }
+
+            var registration = GetRegisteredJobOrThrow(launch.Process.Id, lifecycleAuthority);
+            var transfer = launch.TransferOwnedProcess();
+            return new RegisteredOwnedProcess(
+                transfer.Process,
+                transfer.ProcessHandle,
+                startInfo,
+                registration,
+                lifecycleAuthority);
+        }
+    }
+
+    private static void RegisterOwnedOrThrow(
+        Process process,
+        string? ownerId,
+        object lifecycleAuthority,
+        Func<Process, SpawnProcessIdentityReadResult> registrationIdentityReader)
+    {
+        if (!TryRegisterCore(
+                process,
+                ownerId,
+                registrationIdentityReader,
+                registrationIdentityReader,
+                out var registrationFailure,
+                lifecycleAuthority: lifecycleAuthority))
+        {
+            throw new InvalidOperationException(registrationFailure);
         }
     }
 
@@ -452,8 +777,8 @@ public static class WorkerProcessJobs
         return TryRegisterCore(
             process,
             ownerId,
-            ProductionRegistrationIdentityReader,
-            ProductionRegistrationIdentityReader,
+                ProductionRegistrationIdentityReader,
+                ProductionRegistrationIdentityReader,
             out registrationFailure,
             attachProcess: attachProcess);
     }
@@ -488,7 +813,8 @@ public static class WorkerProcessJobs
         OwnedProcessGroup? preAttachedGroup = null,
         Action? resumeProcess = null,
         Func<Process, OwnedProcessGroup>? attachProcess = null,
-        Action<SpawnRegistry, int, string>? markResumeFailureReleased = null)
+        Action<SpawnRegistry, int, string>? markResumeFailureReleased = null,
+        object? lifecycleAuthority = null)
     {
         ArgumentNullException.ThrowIfNull(process);
         ArgumentNullException.ThrowIfNull(readVictimIdentity);
@@ -570,14 +896,22 @@ public static class WorkerProcessJobs
                 duplicate,
                 snapshot,
                 victimIdentity,
-                RequiresDurableDetach: registry is not null && durableRegistrationAvailable);
+                RequiresDurableDetach: registry is not null && durableRegistrationAvailable,
+                LifecycleAuthority: lifecycleAuthority);
             if (Jobs.TryAdd(process.Id, registeredJob))
             {
                 group = null;
                 duplicate = null;
-                if (registry is null ||
+                var durableRegistrationFailure = string.Empty;
+                var durableRegistrationSucceeded = registry is null ||
                     !durableRegistrationAvailable ||
-                    RegisterDurable(registry, victimIdentity!, ownerIdentity!, ownerId))
+                    RegisterDurable(
+                        registry,
+                        victimIdentity!,
+                        ownerIdentity!,
+                        ownerId,
+                        out durableRegistrationFailure);
+                if (durableRegistrationSucceeded)
                 {
                     if (!durableRegistrationAvailable)
                     {
@@ -618,7 +952,10 @@ public static class WorkerProcessJobs
                 registrationFailure = BuildRegistrationFailure(
                     process.Id,
                     "durable-registry-write",
-                    "registered-process-tree-termination-requested");
+                    "registered-process-tree-termination-requested") +
+                    (string.IsNullOrWhiteSpace(durableRegistrationFailure)
+                        ? string.Empty
+                        : $"; evidence={durableRegistrationFailure}");
                 if (Jobs.TryRemove(process.Id, out var failedRegistration))
                 {
                     ReadAccountingAndDispose(
@@ -876,7 +1213,13 @@ public static class WorkerProcessJobs
             return false;
         }
 
-        if (Jobs.TryRemove(processId, out var job))
+        var removal = TryRemoveStaticRegistration(processId, out var job);
+        if (removal == StaticRegistrationRemoval.OwnedByReturnedChild)
+        {
+            return false;
+        }
+
+        if (removal == StaticRegistrationRemoval.Removed)
         {
             if (ReadAccountingAndDispose(job, kill: true, captureAccounting: true, preferDuplicate: false, out accounting))
             {
@@ -937,19 +1280,87 @@ public static class WorkerProcessJobs
     public static void Release(int processId, out WorkerProcessJobAccounting? accounting)
     {
         accounting = null;
-        if (Jobs.TryRemove(processId, out var job))
+        var removal = TryRemoveStaticRegistration(processId, out var job);
+        if (removal == StaticRegistrationRemoval.OwnedByReturnedChild)
         {
-            ReadAccountingAndDispose(job, kill: true, captureAccounting: true, preferDuplicate: false, out accounting);
+            return;
+        }
+
+        if (removal == StaticRegistrationRemoval.Removed)
+        {
+            try
+            {
+                Registry?.MarkReleased(processId, $"spawn_registry: released pid={processId}");
+            }
+            finally
+            {
+                ReadAccountingAndDispose(job, kill: true, captureAccounting: true, preferDuplicate: false, out accounting);
+            }
+
+            return;
         }
 
         Registry?.MarkReleased(processId, $"spawn_registry: released pid={processId}");
+    }
+
+    internal static RegisteredJob GetRegisteredJobOrThrow(int processId, object lifecycleAuthority)
+    {
+        if (Jobs.TryGetValue(processId, out var job) &&
+            job.IsAuthorizedBy(lifecycleAuthority))
+        {
+            return job;
+        }
+
+        throw new InvalidOperationException(
+            $"worker-process-registration-missing: pid={processId}; stage=owned-child-transfer");
+    }
+
+    internal static void ReleaseOwned(
+        int processId,
+        RegisteredJob registration,
+        object lifecycleAuthority,
+        out WorkerProcessJobAccounting? accounting)
+    {
+        accounting = null;
+        if (!registration.IsAuthorizedBy(lifecycleAuthority))
+        {
+            throw new InvalidOperationException(
+                $"worker-process-owned-lifecycle-authority-mismatch: pid={processId}; stage=owned-child-release");
+        }
+
+        if (!((ICollection<KeyValuePair<int, RegisteredJob>>)Jobs).Remove(
+                new KeyValuePair<int, RegisteredJob>(processId, registration)))
+        {
+            return;
+        }
+
+        try
+        {
+            Registry?.MarkReleased(processId, $"spawn_registry: released pid={processId}");
+        }
+        finally
+        {
+            ReadAccountingAndDispose(
+                registration,
+                kill: true,
+                captureAccounting: true,
+                preferDuplicate: false,
+                out accounting);
+        }
     }
 
     internal static bool TryDetachForGracefulStop(int processId, out string failure)
     {
         failure = string.Empty;
         var registry = Registry;
-        if (!Jobs.TryRemove(processId, out var job))
+        var removal = TryRemoveStaticRegistration(processId, out var job);
+        if (removal == StaticRegistrationRemoval.OwnedByReturnedChild)
+        {
+            failure = $"worker-process-detach-failed: pid={processId}; stage=owned-child-authority";
+            return false;
+        }
+
+        if (removal == StaticRegistrationRemoval.Missing)
         {
             SpawnRegistryEntry[] entries;
             try
@@ -1036,7 +1447,13 @@ public static class WorkerProcessJobs
 
     internal static void ReleaseWithoutAccounting(int processId)
     {
-        if (Jobs.TryRemove(processId, out var job))
+        var removal = TryRemoveStaticRegistration(processId, out var job);
+        if (removal == StaticRegistrationRemoval.OwnedByReturnedChild)
+        {
+            return;
+        }
+
+        if (removal == StaticRegistrationRemoval.Removed)
         {
             ReadAccountingAndDispose(job, kill: true, captureAccounting: false, preferDuplicate: false, out _);
         }
@@ -1064,7 +1481,13 @@ public static class WorkerProcessJobs
         out WorkerProcessJobAccounting? accounting)
     {
         accounting = null;
-        if (!Jobs.TryRemove(processId, out var job))
+        var removal = TryRemoveStaticRegistration(processId, out var job);
+        if (removal == StaticRegistrationRemoval.OwnedByReturnedChild)
+        {
+            return;
+        }
+
+        if (removal == StaticRegistrationRemoval.Missing)
         {
             Registry?.MarkReleased(processId, $"spawn_registry: released pid={processId}");
             return;
@@ -1231,10 +1654,49 @@ public static class WorkerProcessJobs
         return true;
     }
 
+    private static StaticRegistrationRemoval TryRemoveStaticRegistration(
+        int processId,
+        out RegisteredJob? registration)
+    {
+        registration = null;
+        while (Jobs.TryGetValue(processId, out var candidate))
+        {
+            if (candidate.RequiresOwnedRelease)
+            {
+                return StaticRegistrationRemoval.OwnedByReturnedChild;
+            }
+
+            if (((ICollection<KeyValuePair<int, RegisteredJob>>)Jobs).Remove(
+                    new KeyValuePair<int, RegisteredJob>(processId, candidate)))
+            {
+                registration = candidate;
+                return StaticRegistrationRemoval.Removed;
+            }
+        }
+
+        return StaticRegistrationRemoval.Missing;
+    }
+
     internal static bool HasRegisteredJob(int processId) => Jobs.ContainsKey(processId);
+
+    internal static bool HasRegisteredJob(int processId, RegisteredJob registration) =>
+        Jobs.TryGetValue(processId, out var current) && ReferenceEquals(current, registration);
+
+    private enum StaticRegistrationRemoval
+    {
+        Missing,
+        Removed,
+        OwnedByReturnedChild
+    }
+
 
     internal static IReadOnlyList<SpawnRegistryEntry> ListActiveRegistryEntriesForTests() =>
         Registry?.ListActive() ?? [];
+
+    internal static bool HasActiveRegistryEntryForTests(int processId) =>
+        ListActiveRegistryEntriesForTests().Any(entry => entry.ProcessId == processId);
+
+    internal static bool HasActiveJobForTests(int processId) => Jobs.ContainsKey(processId);
 
     internal static void ClearRegistryForTests()
     {
@@ -1292,8 +1754,10 @@ public static class WorkerProcessJobs
         SpawnRegistry registry,
         SpawnProcessIdentity identity,
         SpawnProcessIdentity ownerIdentity,
-        string? ownerId)
+        string? ownerId,
+        out string failure)
     {
+        failure = string.Empty;
         try
         {
             registry.Register(
@@ -1302,8 +1766,9 @@ public static class WorkerProcessJobs
                 ownerIdentity);
             return true;
         }
-        catch
+        catch (Exception ex)
         {
+            failure = BuildExceptionEvidence(ex);
             return false;
         }
     }
@@ -1323,13 +1788,6 @@ public static class WorkerProcessJobs
             // Best-effort fallback after job attachment itself failed. The caller still receives false.
         }
     }
-
-    private sealed record RegisteredJob(
-        OwnedProcessGroup Group,
-        Microsoft.Win32.SafeHandles.SafeFileHandle? DuplicateAccountingHandle,
-        WorkerProcessJobAccounting? RegistrationSnapshot,
-        SpawnProcessIdentity? Identity = null,
-        bool RequiresDurableDetach = false);
 
     private static bool DefaultTryKillPidTree(int processId)
     {

@@ -1000,7 +1000,11 @@ public sealed class GoalAcceptanceVerifierDotnetBuildSlotTestsConcurrentShardSch
             }
             else
             {
-                await Assert.ThrowsAsync<InvalidOperationException>(() => verification);
+                var exception = await Assert.ThrowsAsync<AcceptanceGateEngineException>(() => verification);
+                var innerException = Assert.IsType<InvalidOperationException>(exception.InnerException);
+                Assert.Equal("Synthetic shard fault.", innerException.Message);
+                Assert.Equal("lane-execution", exception.GatePhase);
+                Assert.Equal("infrastructure tests: Faulting", exception.GateTarget);
             }
 
             Assert.True(

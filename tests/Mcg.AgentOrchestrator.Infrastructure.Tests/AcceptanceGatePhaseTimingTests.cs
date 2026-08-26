@@ -116,9 +116,13 @@ public sealed class AcceptanceGatePhaseTimingTests : GoalAcceptanceVerifierTestB
                 throw new InvalidOperationException("observer fault must be swallowed");
             });
 
-            var exception = await Assert.ThrowsAsync<InvalidOperationException>(() => verifier.RunAsync(root));
+            var exception = await Assert.ThrowsAsync<AcceptanceGateEngineException>(() => verifier.RunAsync(root));
 
-            Assert.Equal("deterministic runner fault", exception.Message);
+            var innerException = Assert.IsType<InvalidOperationException>(exception.InnerException);
+            Assert.Equal("deterministic runner fault", innerException.Message);
+            Assert.Equal("build-server-shutdown", exception.GatePhase);
+            Assert.Equal("dotnet build-server shutdown", exception.GateTarget);
+            Assert.Contains("deterministic runner fault", exception.FaultStack, StringComparison.Ordinal);
             var breakdown = Assert.IsType<AcceptanceGatePhaseBreakdown>(
                 Assert.Single(progress, item => item.Phase == "gate-phase-breakdown").PhaseBreakdown);
             Assert.Equal("faulted", breakdown.Outcome);

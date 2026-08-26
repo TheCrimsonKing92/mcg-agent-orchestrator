@@ -3440,6 +3440,7 @@ internal sealed partial class ConductorBatchLoop
     private static bool IsRetryableAcceptanceRun(ConductorParallelAcceptanceRunResult run) =>
         run.EarlyResult is not null ||
         run.Exception is AcceptanceInfrastructureDeferredException or
+            AcceptanceGateEngineException or
             DotnetBuildSlotsBusyException or
             BuildLockBlockedException or
             OperationCanceledException;
@@ -3877,6 +3878,8 @@ internal sealed partial class ConductorBatchLoop
             $"detail={decision.Attempt.Detail ?? "no attempt detail was recorded"} completion={completion.Outcome}";
 
         if (run.Exception is DotnetBuildSlotsBusyException or OperationCanceledException ||
+            (run.Exception is AcceptanceGateEngineException &&
+                decision.Attempt.TransientFailureCount < ParallelAcceptanceTransientFailureCap) ||
             (run.Exception is (AcceptanceInfrastructureDeferredException or BuildLockBlockedException) &&
                 decision.Attempt.TransientFailureCount < ParallelAcceptanceTransientFailureCap) ||
             IsEnvironmentInterferenceAcceptanceRun(run) ||
@@ -3900,6 +3903,23 @@ internal sealed partial class ConductorBatchLoop
         evidenceMutationLeaseHeld = false;
         if (run.Exception is not null)
         {
+            if (run.Exception is AcceptanceGateEngineException gateEngineFault)
+            {
+                if (attempt.TransientFailureCount >= ParallelAcceptanceTransientFailureCap)
+                {
+                    return driver.EscalateParallelLandingAcceptance(
+                        run.Candidate,
+                        policy,
+                        $"background acceptance gate-engine fault: {SanitizeReason(gateEngineFault.Message)}");
+                }
+
+                return ParallelAcceptanceHeld(
+                    run.Candidate,
+                    policy,
+                    $"Acceptance gate engine fault ({attempt.TransientFailureCount}/{ParallelAcceptanceTransientFailureCap}); " +
+                    $"retry on next conduct tick. {gateEngineFault.Message}");
+            }
+
             if (run.Exception is AcceptanceInfrastructureDeferredException infrastructureDeferred)
             {
                 if (attempt.TransientFailureCount >= ParallelAcceptanceTransientFailureCap)
@@ -4134,6 +4154,7 @@ internal sealed partial class ConductorBatchLoop
                 OperationCanceledException => "cancelled",
                 BuildLockBlockedException => "build-lock-blocked",
                 AcceptanceInfrastructureDeferredException => "infrastructure-deferred",
+                AcceptanceGateEngineException => "gate-engine-fault",
                 _ => "fault"
             };
         }
@@ -4159,6 +4180,7 @@ internal sealed partial class ConductorBatchLoop
             ConductorParallelAcceptanceAttemptOutcome.BlockedBuildSlot => "blocked-build-slot",
             ConductorParallelAcceptanceAttemptOutcome.BlockedBuildLock => "blocked-build-lock",
             ConductorParallelAcceptanceAttemptOutcome.InfrastructureDeferred => "infrastructure-deferred",
+            ConductorParallelAcceptanceAttemptOutcome.GateEngineFault => "gate-engine-fault",
             ConductorParallelAcceptanceAttemptOutcome.LaunchFailed => "launch-failed",
             ConductorParallelAcceptanceAttemptOutcome.Faulted => "faulted",
             ConductorParallelAcceptanceAttemptOutcome.Reconciled => "reconciled",
