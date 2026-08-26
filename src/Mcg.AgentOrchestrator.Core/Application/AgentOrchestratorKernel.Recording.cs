@@ -1409,6 +1409,12 @@ public sealed partial class AgentOrchestratorKernel
         }
 
         task.RecordProcess(process);
+        var ownerlessAdmission = task.RetryAdmissionHistory.LastOrDefault(receipt =>
+            receipt.LinkedDispatchAt == task.LastDispatch.DispatchedAt &&
+            receipt.Decision is RetryAdmissionDecision.Allowed or RetryAdmissionDecision.ResumedReservation &&
+            string.IsNullOrWhiteSpace(receipt.ReservationOwnerId));
+        if (ownerlessAdmission is not null)
+            task.MarkRetryAdmissionStarted(task.LastDispatch.DispatchedAt, process.StartedAt);
         task.SetStatus(WorkTaskStatus.Running);
         goal.SetStatus(GoalStatus.Active);
         Append(goal, taskId, ProgressKind.TaskProcessStarted, $"Started process {process.ProcessId}: {process.Command}");

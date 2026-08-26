@@ -117,6 +117,34 @@ public sealed class RetryAdmissionTests
     }
 
     [Xunit.Fact]
+    public void OwnedRetryAdmissionProcessRecordDoesNotBypassDurableStartConfirmation()
+    {
+        var kernel = new AgentOrchestratorKernel();
+        var task = new TaskSpec(TaskId.New(), "Retry implementation", AgentRole.Developer);
+        var goal = kernel.CreateGoal("Preserve two-phase paid start", [task]);
+        kernel.RetryTask(goal.Id, task.Id, "Repair the source finding.", RetryCause.NewSourceFinding);
+        task.AssignTo(new AgentId("developer"));
+        var at = DateTimeOffset.Parse("2026-08-25T12:01:00Z");
+        var fingerprint = RetryContextFingerprintBuilder.Build(Input());
+        kernel.RecordTaskDispatch(goal.Id, task.Id, Dispatch(at, fingerprint));
+        kernel.RecordPreparedRetryAdmission(
+            goal.Id,
+            task.Id,
+            fingerprint,
+            PaidRouteClassification.Paid,
+            at,
+            reservationOwnerId: "owner-a",
+            reservationLeaseExpiresAt: at.AddMinutes(1));
+
+        kernel.RecordTaskProcessStarted(
+            goal.Id,
+            task.Id,
+            new TaskProcessRecord(123, "command", "worktree", "out", "err", "exit", at, null, null));
+
+        Assert.Null(Assert.Single(task.RetryAdmissionHistory).WorkerStartedAt);
+    }
+
+    [Xunit.Fact]
     public void ExpiredReservationCanBeResumedByNewOwner()
     {
         var task = RetryingTask();
