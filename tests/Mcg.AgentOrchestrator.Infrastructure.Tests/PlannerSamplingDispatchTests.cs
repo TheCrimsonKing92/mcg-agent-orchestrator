@@ -208,6 +208,96 @@ public sealed class PlannerSamplingDispatchTests : WorkerDispatchTestSupport
     }
 
     [Xunit.Fact]
+    public void CollectCandidates_NonZeroExitReasonContainingCancel_RemainsNonZeroExit()
+    {
+        var root = CreateTempDirectory();
+        var primaryPath = Path.Combine(root, "planner.out.log");
+        File.WriteAllText(primaryPath, ReadPlannerFixture());
+        var sample = Xunit.Assert.Single(PlannerSampleDispatcher.CreateArtifacts(primaryPath, 2));
+        DispatchExitArtifacts.Write(
+            sample.ExitCodePath,
+            DispatchExitArtifacts.Native(17, "worker cancelled its own request", DateTimeOffset.UtcNow));
+
+        var candidate = PlannerSampleDispatcher.CollectCandidates(primaryPath, 2)[1];
+
+        Xunit.Assert.Equal(PlannerCandidateTerminalState.NonZeroExit, candidate.TerminalState);
+    }
+
+    [Xunit.Fact]
+    public void CollectCandidates_TypedCancellationRecord_ClassifiesCancelled()
+    {
+        var root = CreateTempDirectory();
+        var primaryPath = Path.Combine(root, "planner.out.log");
+        File.WriteAllText(primaryPath, ReadPlannerFixture());
+        var sample = Xunit.Assert.Single(PlannerSampleDispatcher.CreateArtifacts(primaryPath, 2));
+        var cancelledAt = DateTimeOffset.Parse("2026-08-25T12:00:00Z");
+        File.WriteAllText(
+            sample.LaunchRecordPath,
+            JsonSerializer.Serialize(new { ProcessId = 123, StartedAt = cancelledAt.AddSeconds(-1) }));
+        PlannerSampleDispatcher.RecordCancelledSamples(primaryPath, 2, cancelledAt);
+        DispatchExitArtifacts.Write(
+            sample.ExitCodePath,
+            DispatchExitArtifacts.Native(17, "fixture failed", cancelledAt.AddSeconds(1)));
+
+        var candidate = PlannerSampleDispatcher.CollectCandidates(primaryPath, 2)[1];
+
+        Xunit.Assert.Equal(PlannerCandidateTerminalState.Cancelled, candidate.TerminalState);
+        Xunit.Assert.Equal(2_000, candidate.ElapsedMilliseconds);
+    }
+
+    [Xunit.Fact]
+    public void CancelLatestProcess_PlannerN2_WritesTypedCancellationForCollection()
+    {
+        var root = CreateTempDirectory();
+        var primaryPath = Path.Combine(root, "planner.out.log");
+        File.WriteAllText(primaryPath, ReadPlannerFixture());
+        var now = DateTimeOffset.Parse("2026-08-25T12:00:00Z");
+        var kernel = new AgentOrchestratorKernel();
+        var goal = kernel.CreateGoal("Cancel a sampled Planner", [
+            new TaskSpec(TaskId.New(), "Produce a sampled plan.", AgentRole.Planner)
+        ]);
+        kernel.ActivateGoal(goal.Id, AgentCatalog.Default().Agents);
+        var task = goal.Tasks.Single();
+        var dispatch = new TaskDispatchRecord(
+            "planner",
+            "fixture planner command",
+            root,
+            now,
+            PlannerSampleCount: 2);
+        kernel.RecordTaskDispatch(goal.Id, task.Id, dispatch);
+        kernel.RecordTaskProcessStarted(
+            goal.Id,
+            task.Id,
+            new TaskProcessRecord(
+                111,
+                dispatch.Command,
+                dispatch.WorkingDirectory,
+                primaryPath,
+                Path.Combine(root, "planner.err.log"),
+                Path.Combine(root, "planner.exit.txt"),
+                now,
+                null,
+                null,
+                OwnedProcessIds: [111]));
+        var running = true;
+        var runner = new BackgroundDispatchRunner(
+            new TestClock(now.AddSeconds(5)),
+            isStillRunning: _ => running,
+            tryKillOwnedProcess: _ =>
+            {
+                running = false;
+                return true;
+            });
+
+        runner.CancelLatestProcess(kernel, goal.Id, task.Id);
+
+        var sample = Xunit.Assert.Single(PlannerSampleDispatcher.CreateArtifacts(primaryPath, 2));
+        Xunit.Assert.True(File.Exists(sample.TerminalRecordPath));
+        var candidate = PlannerSampleDispatcher.CollectCandidates(primaryPath, 2)[1];
+        Xunit.Assert.Equal(PlannerCandidateTerminalState.Cancelled, candidate.TerminalState);
+    }
+
+    [Xunit.Fact]
     public void CollectCandidates_MalformedUsage_RemainsTypedUnknown()
     {
         var root = CreateTempDirectory();

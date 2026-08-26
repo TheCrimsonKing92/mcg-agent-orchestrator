@@ -2111,9 +2111,19 @@ public sealed class BackgroundDispatchRunner
         {
             resourceAccounting ??= _recoveryService.ReleaseTrackedProcessJobs(processRecord);
         }
+        var cancelledAt = _clock.UtcNow;
+        if (task.RequiredRole == AgentRole.Planner &&
+            task.LastDispatch?.PlannerSampleCount is > 1)
+        {
+            PlannerSampleDispatcher.RecordCancelledSamples(
+                processRecord.StandardOutputPath,
+                task.LastDispatch.PlannerSampleCount,
+                cancelledAt);
+        }
+
         var cancelled = processRecord with
         {
-            CompletedAt = _clock.UtcNow,
+            CompletedAt = cancelledAt,
             WasCancelled = true,
             ResourceAccounting = resourceAccounting,
             WasCancelledByConductor = cancelledByConductor

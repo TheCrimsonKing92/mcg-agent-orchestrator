@@ -187,15 +187,20 @@ internal static class PlannerSampleDispatcher
 
             if (exit.ExitCode != 0)
             {
+                var terminal = ReadTerminalRecord(sample);
                 candidates.Add(new PlannerCandidateInput(
                     sample.Index,
                     string.Empty,
                     ReadBounded(sample.StandardErrorPath),
                     sample.StandardOutputPath,
                     ArtifactSha256: artifactHash,
-                    TerminalState: exit.Reason.Contains("cancel", StringComparison.OrdinalIgnoreCase)
-                        ? PlannerCandidateTerminalState.Cancelled
-                        : PlannerCandidateTerminalState.NonZeroExit,
+                    TerminalState: terminal.ReadState switch
+                    {
+                        PlannerSampleTerminalReadState.Read => terminal.Record!.State,
+                        PlannerSampleTerminalReadState.Unreadable => PlannerCandidateTerminalState.UnreadableTerminalArtifact,
+                        PlannerSampleTerminalReadState.Malformed => PlannerCandidateTerminalState.MalformedTerminalArtifact,
+                        _ => PlannerCandidateTerminalState.NonZeroExit
+                    },
                     NormalizationState: normalization.State,
                     ElapsedMilliseconds: ResolveElapsedMilliseconds(sample, exit.RecordedAt),
                     ProviderUsage: normalization.Parsed?.Usage,
@@ -428,6 +433,25 @@ internal static class PlannerSampleDispatcher
         {
             diagnostic = $"Planner sample launch record could not be persisted: {ex.Message}";
             return false;
+        }
+    }
+
+    internal static void RecordCancelledSamples(
+        string primaryStandardOutputPath,
+        int sampleCount,
+        DateTimeOffset cancelledAt)
+    {
+        foreach (var sample in CreateArtifacts(primaryStandardOutputPath, sampleCount))
+        {
+            if (File.Exists(sample.TerminalRecordPath) ||
+                DispatchExitArtifacts.TryRead(sample.ExitCodePath, out _))
+            {
+                continue;
+            }
+
+            WriteTerminalRecord(
+                sample,
+                new PlannerSampleTerminalRecord(PlannerCandidateTerminalState.Cancelled, cancelledAt));
         }
     }
 
