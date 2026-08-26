@@ -136,6 +136,26 @@ public sealed class WorkerDispatchTestsSeededRepositoryFactoryTests
         Xunit.Assert.False(Directory.Exists(failure.Diagnostic.FinalPath!));
     }
 
+    [Xunit.Fact]
+    public void RunGitProbe_StartThrows_ReturnsTypedLaunchFailure()
+    {
+        using var scope = new FactoryScope();
+
+        var result = InfrastructureTestSupport.RunGitProbe(
+            scope.Root,
+            ["status", "--short"],
+            startProcess: _ => throw new System.ComponentModel.Win32Exception("controlled launch failure"));
+
+        Xunit.Assert.False(result.ProcessStarted);
+        Xunit.Assert.Null(result.ExitCode);
+        Xunit.Assert.Equal(string.Empty, result.StandardOutput);
+        Xunit.Assert.Contains("controlled launch failure", result.StandardError, StringComparison.Ordinal);
+        Xunit.Assert.False(result.DrainTimedOut);
+        Xunit.Assert.False(result.TimedOut);
+        Xunit.Assert.False(result.DrainFailed);
+        Xunit.Assert.Contains("git status --short", result.Command, StringComparison.Ordinal);
+    }
+
     private sealed class FactoryScope : IDisposable
     {
         private int _nextDirectory;

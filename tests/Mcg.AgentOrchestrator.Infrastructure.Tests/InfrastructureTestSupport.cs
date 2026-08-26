@@ -59,7 +59,8 @@ public static bool HasNewCommittedCleanGitHead(string workingDirectory, string? 
 internal static WorkerDispatchTestsSeededRepositoryFactory.GitProbeResult RunGitProbe(
     string workingDirectory,
     IReadOnlyList<string> arguments,
-    IReadOnlyDictionary<string, string>? commandEnvironment = null)
+    IReadOnlyDictionary<string, string>? commandEnvironment = null,
+    Func<Process, bool>? startProcess = null)
 {
     var command = $"git {string.Join(' ', arguments)}";
     var commandEnvironmentNames = commandEnvironment is null
@@ -120,7 +121,7 @@ internal static WorkerDispatchTestsSeededRepositoryFactory.GitProbeResult RunGit
     try
     {
         process = new Process { StartInfo = startInfo };
-        processStarted = process.Start();
+        processStarted = (startProcess ?? (static candidate => candidate.Start()))(process);
         if (!processStarted)
         {
             return WorkerDispatchTestsSeededRepositoryFactory.GitProbeResult.NotStarted(
@@ -177,7 +178,7 @@ internal static WorkerDispatchTestsSeededRepositoryFactory.GitProbeResult RunGit
         return new WorkerDispatchTestsSeededRepositoryFactory.GitProbeResult(
             command,
             processStarted,
-            process is { HasExited: true } ? process.ExitCode : null,
+            processStarted && process is { HasExited: true } ? process.ExitCode : null,
             string.Empty,
             ex.Message,
             DrainTimedOut: false,
