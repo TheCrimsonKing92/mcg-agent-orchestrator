@@ -473,6 +473,78 @@ public sealed class WorkerDispatchTestsDispatchPreparation : WorkerDispatchTestS
 }
 
     [Xunit.Fact]
+    public void ProfileDispatchTaskClassifiesRecognizedSubscriptionRetryAsPaidBeforeStart()
+    {
+        var root = CreateTempDirectory();
+        var workspace = OrchestratorWorkspace.ForDirectory(root);
+        _ = StateDbMigrations.EnsureUpToDate(workspace.SqliteStatePath);
+        var kernel = new AgentOrchestratorKernel(new TestClock(DateTimeOffset.Parse("2026-08-26T12:00:00Z")));
+        var developer = new TaskSpec(TaskId.New(), "Repair a recognized paid profile retry.", AgentRole.Developer);
+        var goal = kernel.CreateGoal("Classify profile retry cost before admission", [developer]);
+        Directory.CreateDirectory(workspace.ResolveExecutionDirectory(goal.Id));
+        kernel.SetGoalRefinedSpec(goal.Id, new RefinedSpec(
+            "Classify profile retry cost before admission",
+            ["A recognized paid profile retry obtains durable admission before process start."],
+            VerificationClass.TestVerifiable,
+            [],
+            []));
+        var agent = new AgentDefinition(
+            new AgentId("developer"),
+            "Developer",
+            AgentRole.Developer,
+            new ModelProfile("OpenAI", AgentCatalog.OpenAiSubscriptionModelAlias, ModelCapability.Text, SubscriptionMode.ApiKey),
+            ExecutionPolicy: AgentExecutionPolicy.SubscriptionOnly,
+            Subscription: new SubscriptionLaunchProfile("codex-cli", AgentCatalog.OpenAiSubscriptionModelAlias, "low"));
+        var profiles = new WorkerProfileCatalog(
+        [
+            new WorkerProfile("codex-cli", "codex exec --model {subscriptionModelName} --sandbox {sandboxMode} --cd {workingDirectory}")
+        ]);
+        kernel.ActivateGoal(goal.Id, [agent]);
+        kernel.RetryTask(
+            goal.Id,
+            developer.Id,
+            "Retry after a provider interruption.",
+            retryCause: RetryCause.ProviderInterruption);
+        new SqliteOrchestratorStateRepository(workspace.SqliteStatePath)
+            .SaveAsync(kernel)
+            .GetAwaiter()
+            .GetResult();
+
+        var prepared = GoalManagementCommandService.ProfileDispatchTask(
+            kernel,
+            workspace,
+            goal,
+            developer,
+            profiles.GetRequired("codex-cli"),
+            [agent],
+            sandboxOptions: DisabledSandbox);
+
+        Assert.Equal(PaidRouteClassification.Paid, prepared.Task.LastDispatch!.PaidRoute);
+        var ex = Assert.Throws<InvalidOperationException>(() =>
+            GoalManagementCommandService.StartDispatches(
+                kernel,
+                workspace,
+                goal,
+                [agent],
+                profiles,
+                refreshBeforeStart: false,
+                checkpointBeforeWorkerStart: (_, _, _, _) => { },
+                runner: new BackgroundDispatchRunner(disableProcessStart: true),
+                sandboxOptions: DisabledSandbox));
+        Assert.Contains("process start is disabled", ex.Message, StringComparison.OrdinalIgnoreCase);
+
+        var persisted = new SqliteOrchestratorStateRepository(workspace.SqliteStatePath)
+            .LoadAsync()
+            .GetAwaiter()
+            .GetResult();
+        var receipt = Assert.Single(
+            persisted.GetTask(goal.Id, developer.Id).RetryAdmissionHistory,
+            candidate => candidate.Decision == RetryAdmissionDecision.Allowed);
+        Assert.Equal(PaidRouteClassification.Paid, receipt.PaidRoute);
+        Assert.Equal(prepared.Task.LastDispatch.DispatchedAt, receipt.LinkedDispatchAt);
+    }
+
+    [Xunit.Fact]
     public void StartDispatches_DoesNotRefreshCrashRecoveryReservationIntoNewAttempt()
     {
         var kernel = new AgentOrchestratorKernel();

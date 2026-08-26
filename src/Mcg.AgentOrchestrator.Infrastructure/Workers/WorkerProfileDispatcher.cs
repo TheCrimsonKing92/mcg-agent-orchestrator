@@ -1610,6 +1610,7 @@ public static class WorkerProfileDispatcher
             ["modelSelectionReason"] = selection.Reason,
             ["dispatchLane"] = selection.DispatchLane,
             ["executionPolicy"] = agent.ExecutionPolicy.ToString(),
+            ["paidRoute"] = ClassifyPaidRoute(selection.Model.SubscriptionMode).ToString(),
             ["openaiBaseUrl"] = OpenAiCompatibleCliBackend.ResolveBaseUrl(selection.Model.ProviderName),
             ["openaiApiKey"] = OpenAiCompatibleCliBackend.ResolveApiKey(selection.Model.ProviderName)
         };

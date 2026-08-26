@@ -73,7 +73,8 @@ public static WorkerProfileDispatchResult ProfileDispatchTask(
             : null,
         citedPriorEvidenceResolver: CreateCitedPriorEvidenceResolver(workspace),
         sandboxOptions: sandboxOptions,
-        plannerSampleCount: ResolvePlannerSampleCount(workspace, plannerSampleCount));
+        plannerSampleCount: ResolvePlannerSampleCount(workspace, plannerSampleCount),
+        paidRoute: subscriptionMetadata?.PaidRoute ?? PaidRouteClassification.Unknown);
 }
 
 public static WorkerProfileDispatchResult RefreshPreparedDispatchBeforeStart(
@@ -206,7 +207,20 @@ private static ProfileSubscriptionMetadata? TryBuildProfileSubscriptionMetadata(
     var complexity = Enum.TryParse<TaskComplexity>(variables.GetValueOrDefault("taskComplexity"), out var parsedComplexity)
         ? parsedComplexity
         : (TaskComplexity?)null;
-    return new ProfileSubscriptionMetadata(variables, providerName, modelName, reasoningEffort, reasoningEffortReason, complexity);
+    if (!Enum.TryParse<PaidRouteClassification>(variables.GetValueOrDefault("paidRoute"), out var paidRoute) ||
+        paidRoute == PaidRouteClassification.Unknown)
+    {
+        throw new InvalidOperationException(
+            $"Subscription profile '{profile.Name}' did not resolve an explicit paid-route classification.");
+    }
+    return new ProfileSubscriptionMetadata(
+        variables,
+        providerName,
+        modelName,
+        reasoningEffort,
+        reasoningEffortReason,
+        complexity,
+        paidRoute);
 }
 
 private sealed record ProfileSubscriptionMetadata(
@@ -215,7 +229,8 @@ private sealed record ProfileSubscriptionMetadata(
     string? ModelName,
     string? ReasoningEffort,
     string? ReasoningEffortReason,
-    TaskComplexity? Complexity);
+    TaskComplexity? Complexity,
+    PaidRouteClassification PaidRoute);
 
 public static IReadOnlyList<WorkerProfileDispatchResult> SubscriptionDispatchReadyTasks(
     AgentOrchestratorKernel kernel,
@@ -1065,6 +1080,11 @@ private static RetryAdmissionResult EnsurePreparedRetryAdmission(
     var recordedAt = DateTimeOffset.UtcNow;
     var reservationOwnerId = Guid.NewGuid().ToString("n");
     var reservationLeaseExpiresAt = recordedAt.AddMinutes(1);
+    if (task.LatestRetryAt is not null && dispatch.PaidRoute == PaidRouteClassification.Unknown)
+    {
+        throw new InvalidOperationException(
+            $"Retry dispatch for task '{task.Id}' is missing an explicit paid-route classification.");
+    }
     if (dispatch.PaidRoute != PaidRouteClassification.Paid || task.LatestRetryAt is null)
     {
         return kernel.RecordPreparedRetryAdmission(
