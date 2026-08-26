@@ -1,0 +1,106 @@
+{
+  "contractVersion": 1,
+  "source": "Operator human-input answer for goal 8be330e26b884612960c94848b87a5ff, derived from retained acceptance TRX, test-identity sidecar, and result receipts; raw artifact hashes were supplied as prefixes.",
+  "corpus": {
+    "goalIds": [
+      "9c3885b2fcbb42cfac7e74fbe3c1fc58",
+      "a04cdfe958634087ac4ba457b1b155f1",
+      "d7585642849048e396b6c75b5a890a17",
+      "dd6ba0f8113a47eb8e596e32f0f95ac9"
+    ],
+    "expectedReceiptCount": 12,
+    "expectedPassCount": 7,
+    "expectedFailureCount": 5
+  },
+  "receipts": [
+    {
+      "receiptIdentity": "9c3885b2/20260824034955909/result-2b67e238",
+      "goalId": "9c3885b2fcbb42cfac7e74fbe3c1fc58",
+      "timestampUtc": "2026-08-24T03:49:55.909Z",
+      "testName": "GoalAcceptanceEvidenceBundleTests.ChangedFiles_FailedBaseRefProbe_ThrowsInsteadOfReturningKnownEmpty",
+      "outcome": "failed",
+      "signature": "git init -b topic failed (0):"
+    },
+    {
+      "receiptIdentity": "9c3885b2/20260824043426520/sidecar-12f13a88",
+      "goalId": "9c3885b2fcbb42cfac7e74fbe3c1fc58",
+      "timestampUtc": "2026-08-24T04:34:26.520Z",
+      "testName": "GoalAcceptanceEvidenceBundleTests.ChangedFiles_FailedBaseRefProbe_ThrowsInsteadOfReturningKnownEmpty",
+      "outcome": "passed"
+    },
+    {
+      "receiptIdentity": "9c3885b2/20260824045545648/trx-8d675b65",
+      "goalId": "9c3885b2fcbb42cfac7e74fbe3c1fc58",
+      "timestampUtc": "2026-08-24T04:55:45.648Z",
+      "testName": "GoalAcceptanceEvidenceBundleTests.ChangedFiles_FailedBaseRefProbe_ThrowsInsteadOfReturningKnownEmpty",
+      "outcome": "passed"
+    },
+    {
+      "receiptIdentity": "9c3885b2/20260824054058321/sidecar-fcee8699",
+      "goalId": "9c3885b2fcbb42cfac7e74fbe3c1fc58",
+      "timestampUtc": "2026-08-24T05:40:58.321Z",
+      "testName": "GoalAcceptanceEvidenceBundleTests.ChangedFiles_FailedBaseRefProbe_ThrowsInsteadOfReturningKnownEmpty",
+      "outcome": "passed"
+    },
+    {
+      "receiptIdentity": "a04cdfe9/20260824124120262/result-24c0f65d",
+      "goalId": "a04cdfe958634087ac4ba457b1b155f1",
+      "timestampUtc": "2026-08-24T12:41:20.262Z",
+      "testName": "GoalAcceptanceEvidenceBundleTests.ChangedFiles_FailedBaseRefProbe_ThrowsInsteadOfReturningKnownEmpty",
+      "outcome": "failed",
+      "signature": "git init -b topic failed (0):"
+    },
+    {
+      "receiptIdentity": "d7585642/20260824124810143/result-trx-ed502079",
+      "goalId": "d7585642849048e396b6c75b5a890a17",
+      "timestampUtc": "2026-08-24T12:48:10.143Z",
+      "testName": "GoalAcceptanceEvidenceBundleTests.ChangedFiles_FailedBaseRefProbe_ThrowsInsteadOfReturningKnownEmpty",
+      "outcome": "failed",
+      "signature": "git config user.email tests@example.invalid failed (0):"
+    },
+    {
+      "receiptIdentity": "a04cdfe9/20260824144559635/trx-4de9b7c8",
+      "goalId": "a04cdfe958634087ac4ba457b1b155f1",
+      "timestampUtc": "2026-08-24T14:45:59.635Z",
+      "testName": "GoalAcceptanceEvidenceBundleTests.ChangedFiles_FailedBaseRefProbe_ThrowsInsteadOfReturningKnownEmpty",
+      "outcome": "passed"
+    },
+    {
+      "receiptIdentity": "d7585642/20260824152947526/sidecar-909e582f",
+      "goalId": "d7585642849048e396b6c75b5a890a17",
+      "timestampUtc": "2026-08-24T15:29:47.526Z",
+      "testName": "GoalAcceptanceEvidenceBundleTests.ChangedFiles_FailedBaseRefProbe_ThrowsInsteadOfReturningKnownEmpty",
+      "outcome": "passed"
+    },
+    {
+      "receiptIdentity": "dd6ba0f8/20260824171336007/result-3cc9c087",
+      "goalId": "dd6ba0f8113a47eb8e596e32f0f95ac9",
+      "timestampUtc": "2026-08-24T17:13:36.007Z",
+      "testName": "GoalAcceptanceEvidenceBundleTests.ChangedFiles_FailedBaseRefProbe_ThrowsInsteadOfReturningKnownEmpty",
+      "outcome": "failed",
+      "signature": "git commit -m Seed failed (0):"
+    },
+    {
+      "receiptIdentity": "dd6ba0f8/20260824180231301/result-0609826f",
+      "goalId": "dd6ba0f8113a47eb8e596e32f0f95ac9",
+      "timestampUtc": "2026-08-24T18:02:31.301Z",
+      "testName": "GoalAcceptanceEvidenceBundleTests.ChangedFiles_FailedBaseRefProbe_ThrowsInsteadOfReturningKnownEmpty",
+      "outcome": "failed",
+      "signature": "git init -b topic failed (0):"
+    },
+    {
+      "receiptIdentity": "dd6ba0f8/20260824181152918/trx-2580b9d9",
+      "goalId": "dd6ba0f8113a47eb8e596e32f0f95ac9",
+      "timestampUtc": "2026-08-24T18:11:52.918Z",
+      "testName": "GoalAcceptanceEvidenceBundleTests.ChangedFiles_FailedBaseRefProbe_ThrowsInsteadOfReturningKnownEmpty",
+      "outcome": "passed"
+    },
+    {
+      "receiptIdentity": "dd6ba0f8/20260824191500193/sidecar-2a22c85e",
+      "goalId": "dd6ba0f8113a47eb8e596e32f0f95ac9",
+      "timestampUtc": "2026-08-24T19:15:00.193Z",
+      "testName": "GoalAcceptanceEvidenceBundleTests.ChangedFiles_FailedBaseRefProbe_ThrowsInsteadOfReturningKnownEmpty",
+      "outcome": "passed"
+    }
+  ]
+}

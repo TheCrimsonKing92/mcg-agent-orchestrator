@@ -13,6 +13,32 @@ This is a generated, point-in-time census of the mutable receipt corpus. Do not 
 - Goal failure results: 619; ranked (test, signature) rows: 558; distinct failed test names: 350
 - Truncation: none; every observed goal failure result is listed below.
 
+<!-- acceptance-gate-flake-inventory-supplements:BEGIN -->
+## Generated post-census receipt supplements
+
+These rows are regenerated from versioned normalized extracts of retained goal-acceptance receipts. They supplement the historical full-corpus census below; they do not reclassify its older rows or claim a cause for the observed failures.
+
+- Regeneration scan (UTC): `2026-08-26T14:18:57.1549022+00:00`
+- Corpus scope: goal acceptance receipts for `9c3885b2fcbb42cfac7e74fbe3c1fc58, a04cdfe958634087ac4ba457b1b155f1, d7585642849048e396b6c75b5a890a17, dd6ba0f8113a47eb8e596e32f0f95ac9`
+- Input extract: `docs\acceptance-gate-flake-inventory-receipts\2026-08-24-goals.json` — SHA-256 `444873fd8407e254011120b8856a0f3ce7801114db4e56a84feab1629cb45680`
+- Input counts after receipt-identity deduplication: 12 attempts; 7 pass; 5 fail
+- Per-goal counts: `9c3885b2fcbb42cfac7e74fbe3c1fc58` 3 pass/1 fail; `a04cdfe958634087ac4ba457b1b155f1` 1 pass/1 fail; `d7585642849048e396b6c75b5a890a17` 1 pass/1 fail; `dd6ba0f8113a47eb8e596e32f0f95ac9` 2 pass/2 fail
+- Source attestation: Operator human-input answer for goal 8be330e26b884612960c94848b87a5ff, derived from retained acceptance TRX, test-identity sidecar, and result receipts; raw artifact hashes were supplied as prefixes.
+- Exact invocation: `.\scripts\Invoke-RepoScript.ps1 scripts\Update-AcceptanceGateFlakeInventory.ps1 -EvidencePath docs\acceptance-gate-flake-inventory-receipts\2026-08-24-goals.json -DocumentPath docs\acceptance-gate-flake-inventory.md -ScanTimestampUtc 2026-08-26T14:18:57.1549022Z`
+- Completeness: validated; missing goals, duplicate identities, malformed timestamps, absent failure signatures, and count mismatches fail generation before the document is written.
+
+| Test | Attempts | Pass | Goal fail | Observed failure rate | Failing goals | First | Last | Mechanism |
+|---|---:|---:|---:|---:|---:|---|---|---|
+| GoalAcceptanceEvidenceBundleTests.ChangedFiles_FailedBaseRefProbe_ThrowsInsteadOfReturningKnownEmpty | 12 | 7 | 5 | 41.67% | 4 | 2026-08-24 | 2026-08-24 | mechanism-undetermined |
+
+### Supplement failure signatures
+
+- `GoalAcceptanceEvidenceBundleTests.ChangedFiles_FailedBaseRefProbe_ThrowsInsteadOfReturningKnownEmpty`
+  - 3x `git init -b topic failed (0):`
+  - 1x `git commit -m Seed failed (0):`
+  - 1x `git config user.email tests@example.invalid failed (0):`
+<!-- acceptance-gate-flake-inventory-supplements:END -->
+
 ## Reproduction commands
 
 The census was produced by recursively enumerating `*.trx`, streaming each goal TRX `UnitTestResult` once, grouping failures by decoded `(testName, first ErrorInfo Message line)`, and selecting operator/pre-review failed TRX files with ripgrep before streaming them. The exact census commands were:
