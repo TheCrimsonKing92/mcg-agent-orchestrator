@@ -246,6 +246,28 @@ public sealed class PlannerSamplingDispatchTests : WorkerDispatchTestSupport
     }
 
     [Xunit.Fact]
+    public void CollectCandidates_ExitZero_PreservesCancelledTerminal()
+    {
+        var root = CreateTempDirectory();
+        var primaryPath = Path.Combine(root, "planner.out.log");
+        File.WriteAllText(primaryPath, ReadPlannerFixture());
+        var sample = Xunit.Assert.Single(PlannerSampleDispatcher.CreateArtifacts(primaryPath, 2));
+        var cancelledAt = DateTimeOffset.Parse("2026-08-25T12:00:00Z");
+        File.WriteAllText(
+            sample.LaunchRecordPath,
+            JsonSerializer.Serialize(new { ProcessId = 123, StartedAt = cancelledAt.AddSeconds(-1) }));
+        PlannerSampleDispatcher.RecordCancelledSamples(primaryPath, 2, cancelledAt);
+        DispatchExitArtifacts.Write(
+            sample.ExitCodePath,
+            DispatchExitArtifacts.Native(0, "fixture completed", cancelledAt.AddSeconds(1)));
+
+        var candidate = PlannerSampleDispatcher.CollectCandidates(primaryPath, 2)[1];
+
+        Xunit.Assert.Equal(PlannerCandidateTerminalState.Cancelled, candidate.TerminalState);
+        Xunit.Assert.Empty(candidate.StandardOutput);
+    }
+
+    [Xunit.Fact]
     public void RecordCancelledSamples_RequiresLaunchIdentityAndPreservesPreLaunchCauses()
     {
         var root = CreateTempDirectory();
@@ -530,6 +552,49 @@ public sealed class PlannerSamplingDispatchTests : WorkerDispatchTestSupport
         var candidate = PlannerSampleDispatcher.CollectCandidates(primaryPath, 2)[1];
 
         Xunit.Assert.Equal(PlannerCandidateTerminalState.UnreadableTerminalArtifact, candidate.TerminalState);
+    }
+
+    [Xunit.Fact]
+    public void CollectCandidates_ExitZero_MalformedTerminalFailsClosed()
+    {
+        var root = CreateTempDirectory();
+        var primaryPath = Path.Combine(root, "planner.out.log");
+        File.WriteAllText(primaryPath, ReadPlannerFixture());
+        var sample = Xunit.Assert.Single(PlannerSampleDispatcher.CreateArtifacts(primaryPath, 2));
+        File.WriteAllText(sample.StandardOutputPath, ReadPlannerFixture());
+        File.WriteAllText(sample.TerminalRecordPath, "{not-json}");
+        DispatchExitArtifacts.Write(
+            sample.ExitCodePath,
+            DispatchExitArtifacts.Native(0, "fixture completed", DateTimeOffset.UtcNow));
+
+        var candidate = PlannerSampleDispatcher.CollectCandidates(primaryPath, 2)[1];
+
+        Xunit.Assert.Equal(PlannerCandidateTerminalState.MalformedTerminalArtifact, candidate.TerminalState);
+        Xunit.Assert.Empty(candidate.StandardOutput);
+    }
+
+    [Xunit.Fact]
+    public void CollectCandidates_ExitZero_UnreadableTerminalFailsClosed()
+    {
+        var root = CreateTempDirectory();
+        var primaryPath = Path.Combine(root, "planner.out.log");
+        File.WriteAllText(primaryPath, ReadPlannerFixture());
+        var sample = Xunit.Assert.Single(PlannerSampleDispatcher.CreateArtifacts(primaryPath, 2));
+        File.WriteAllText(sample.StandardOutputPath, ReadPlannerFixture());
+        File.WriteAllText(sample.TerminalRecordPath, "{}");
+        DispatchExitArtifacts.Write(
+            sample.ExitCodePath,
+            DispatchExitArtifacts.Native(0, "fixture completed", DateTimeOffset.UtcNow));
+
+        using var locked = new FileStream(
+            sample.TerminalRecordPath,
+            FileMode.Open,
+            FileAccess.ReadWrite,
+            FileShare.None);
+        var candidate = PlannerSampleDispatcher.CollectCandidates(primaryPath, 2)[1];
+
+        Xunit.Assert.Equal(PlannerCandidateTerminalState.UnreadableTerminalArtifact, candidate.TerminalState);
+        Xunit.Assert.Empty(candidate.StandardOutput);
     }
 
     [Xunit.Fact]

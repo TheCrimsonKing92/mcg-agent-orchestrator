@@ -208,15 +208,26 @@ internal static class PlannerSampleDispatcher
                 continue;
             }
 
+            var completedTerminal = ReadTerminalRecord(sample);
+            var completedTerminalState = completedTerminal.ReadState switch
+            {
+                PlannerSampleTerminalReadState.Read => completedTerminal.Record!.State,
+                PlannerSampleTerminalReadState.Unreadable => PlannerCandidateTerminalState.UnreadableTerminalArtifact,
+                PlannerSampleTerminalReadState.Malformed => PlannerCandidateTerminalState.MalformedTerminalArtifact,
+                _ => PlannerCandidateTerminalState.Succeeded
+            };
             candidates.Add(new PlannerCandidateInput(
                 sample.Index,
+                completedTerminalState == PlannerCandidateTerminalState.Succeeded &&
                 normalization.State == PlannerCandidateNormalizationState.Normalized
                     ? normalization.Parsed!.WorkerOutput
-                    : PlannerOutputContract.ReadCapturedOutputTail(sample.StandardOutputPath),
+                    : completedTerminalState == PlannerCandidateTerminalState.Succeeded
+                        ? PlannerOutputContract.ReadCapturedOutputTail(sample.StandardOutputPath)
+                        : string.Empty,
                 ReadBounded(sample.StandardErrorPath),
                 sample.StandardOutputPath,
                 artifactHash,
-                PlannerCandidateTerminalState.Succeeded,
+                completedTerminalState,
                 normalization.State,
                 ResolveElapsedMilliseconds(sample, exit.RecordedAt),
                 normalization.Parsed?.Usage,
