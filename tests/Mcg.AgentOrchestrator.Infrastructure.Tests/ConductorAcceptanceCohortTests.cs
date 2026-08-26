@@ -308,6 +308,53 @@ public sealed class ConductorAcceptanceCohortTests
                 OutputTail: "runner returned no result artifact")));
     }
 
+    [Fact]
+    public void InfrastructureCases_CarryStableReasonCodes()
+    {
+        var classifications = new[]
+        {
+            ConductorDriver.ClassifyCohortVerificationResult(new AcceptanceVerificationResult(
+                Passed: false, Skipped: true, ExitCode: null, OutputTail: "skipped")),
+            ConductorDriver.ClassifyCohortVerificationResult(new AcceptanceVerificationResult(
+                Passed: false, Skipped: false, ExitCode: null, OutputTail: "missing exit")),
+            ConductorDriver.ClassifyCohortVerificationResult(new AcceptanceVerificationResult(
+                Passed: false, Skipped: false, ExitCode: 1, OutputTail: "bad path", TestResultPaths: ["bad\0path.trx"])),
+            ConductorDriver.ClassifyCohortVerificationResult(new AcceptanceVerificationResult(
+                Passed: false, Skipped: false, ExitCode: 1, OutputTail: "missing trx")),
+            ConductorDriver.ClassifyCohortInfrastructureException(
+                new AcceptanceInfrastructureDeferredException("stable-slot-unavailable", 23, "busy")),
+            ConductorDriver.ClassifyCohortInfrastructureException(
+                new DotnetBuildSlotsBusyException(new DotnetBuildLeaseAcquisition.SlotsBusy("cohort", []))),
+            ConductorDriver.ClassifyCohortInfrastructureException(
+                new BuildLockBlockedException(new BuildLockAttribution("locked.dll", [], "test"))),
+            ConductorDriver.ClassifyCohortInfrastructureException(new OperationCanceledException("cancelled")),
+            ConductorDriver.ClassifyCohortInfrastructureException(new IOException("io")),
+            ConductorDriver.ClassifyCohortInfrastructureException(new InvalidDataException("invalid"))
+        };
+
+        Assert.Equal(
+        [
+            AcceptanceCohortInfrastructureReasonCodes.VerificationSkipped,
+            AcceptanceCohortInfrastructureReasonCodes.ExitCodeMissing,
+            AcceptanceCohortInfrastructureReasonCodes.ResultPathInvalid,
+            AcceptanceCohortInfrastructureReasonCodes.TrxEvidenceIncoherent,
+            "stable-slot-unavailable",
+            AcceptanceCohortInfrastructureReasonCodes.DotnetBuildSlotsBusy,
+            AcceptanceCohortInfrastructureReasonCodes.BuildLockBlocked,
+            AcceptanceCohortInfrastructureReasonCodes.OperationCancelled,
+            AcceptanceCohortInfrastructureReasonCodes.IoFailure,
+            AcceptanceCohortInfrastructureReasonCodes.InvalidData
+        ], classifications.Select(classification => classification.InfrastructureReasonCode));
+        Assert.All(classifications, classification =>
+        {
+            Assert.Equal(AcceptanceCohortGateOutcome.InfrastructureFailure, classification.Outcome);
+            Assert.True(AcceptanceCohortInfrastructureReasonCodes.IsSingleToken(classification.InfrastructureReasonCode));
+            Assert.NotNull(classification.InfrastructureDetail);
+            Assert.True(classification.InfrastructureDetail.Length <= 256);
+            Assert.DoesNotContain('\n', classification.InfrastructureDetail);
+        });
+    }
+
     private static ConductorSpeculativeAcceptanceCandidate Ready(
         string goalValue,
         string path,
