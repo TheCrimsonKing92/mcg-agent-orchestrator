@@ -6,6 +6,8 @@ namespace Mcg.AgentOrchestrator.Infrastructure.Tests;
 
 public sealed class GoalAcceptanceEvidenceBundleTests
 {
+    private const int MaxGitStreamDiagnosticLength = 256;
+
     [Xunit.Fact]
     public void ChangedFiles_FailedDiff_ThrowsInsteadOfReturningKnownEmpty()
     {
@@ -89,6 +91,55 @@ public sealed class GoalAcceptanceEvidenceBundleTests
             new GitCli.GitResult(0, string.Empty, string.Empty));
 
         Xunit.Assert.Empty(files);
+    }
+
+    [Xunit.Fact]
+    public void RunGitResult_ExitZeroDrainTimeout_IsAccepted()
+    {
+        var result = new GitCli.GitResult(
+            0,
+            "setup output",
+            "advisory error output",
+            DrainTimedOut: true);
+
+        AssertGitSucceeded("init -b topic", result);
+    }
+
+    [Xunit.Fact]
+    public void RunGitResult_NonzeroExit_ReportsStateAndStreams()
+    {
+        var result = new GitCli.GitResult(
+            7,
+            "stdout detail" + new string('o', 1_000),
+            "stderr detail" + new string('e', 1_000),
+            DrainTimedOut: true);
+
+        var exception = Xunit.Assert.Throws<Xunit.Sdk.TrueException>(() =>
+            AssertGitSucceeded("config user.name Tests", result));
+
+        Xunit.Assert.Contains("ExitCode=7", exception.Message, StringComparison.Ordinal);
+        Xunit.Assert.Contains("ProcessStarted=true", exception.Message, StringComparison.Ordinal);
+        Xunit.Assert.Contains("DrainTimedOut=true", exception.Message, StringComparison.Ordinal);
+        Xunit.Assert.Contains("Output=stdout detail", exception.Message, StringComparison.Ordinal);
+        Xunit.Assert.Contains("Error=stderr detail", exception.Message, StringComparison.Ordinal);
+        Xunit.Assert.Contains("...(truncated)", exception.Message, StringComparison.Ordinal);
+        Xunit.Assert.True(exception.Message.Length < 1_000, exception.Message);
+    }
+
+    [Xunit.Fact]
+    public void RunGitResult_StartFailure_LabelsEmptyStreams()
+    {
+        var result = new GitCli.GitResult(
+            1,
+            string.Empty,
+            string.Empty,
+            ProcessStarted: false);
+
+        var exception = Xunit.Assert.Throws<Xunit.Sdk.TrueException>(() =>
+            AssertGitSucceeded("init -b topic", result));
+
+        Xunit.Assert.Contains("ProcessStarted=false", exception.Message, StringComparison.Ordinal);
+        Xunit.Assert.Contains("Output=<empty>; Error=<empty>", exception.Message, StringComparison.Ordinal);
     }
 
     [Xunit.Theory(DisplayName = "Acceptance_policy_recognizes_equivalent_aggregate_project_test_evidence")]
@@ -204,8 +255,22 @@ public sealed class GoalAcceptanceEvidenceBundleTests
     private static void RunGit(string workingDirectory, params string[] args)
     {
         var result = GitCli.Run(workingDirectory, args);
-        Xunit.Assert.True(
-            result.ProcessStarted && result.ExitCode == 0 && !result.DrainTimedOut,
-            $"git {string.Join(' ', args)} failed ({result.ExitCode}): {result.Error}");
+        AssertGitSucceeded(string.Join(' ', args), result);
     }
+
+    private static void AssertGitSucceeded(string command, GitCli.GitResult result)
+    {
+        Xunit.Assert.True(
+            result.Succeeded,
+            $"git {command} failed. ExitCode={result.ExitCode}; " +
+            $"ProcessStarted={result.ProcessStarted.ToString().ToLowerInvariant()}; " +
+            $"DrainTimedOut={result.DrainTimedOut.ToString().ToLowerInvariant()}; " +
+            $"Output={FormatGitStream(result.Output)}; Error={FormatGitStream(result.Error)}");
+    }
+
+    private static string FormatGitStream(string value) => string.IsNullOrEmpty(value)
+        ? "<empty>"
+        : value.Length <= MaxGitStreamDiagnosticLength
+            ? value
+            : $"{value[..MaxGitStreamDiagnosticLength]}...(truncated)";
 }
