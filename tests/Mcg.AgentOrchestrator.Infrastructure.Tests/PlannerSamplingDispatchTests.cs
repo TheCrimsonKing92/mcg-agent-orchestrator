@@ -321,7 +321,7 @@ public sealed class PlannerSamplingDispatchTests : WorkerDispatchTestSupport
     }
 
     [Xunit.Fact]
-    public void CancelLatestProcess_CancellationReceiptFailure_StillRecordsAuthoritativeCancellation()
+    public void CancelLatestProcess_CancellationReceiptFailure_RecordsAuthoritativeCancellation()
     {
         var root = CreateTempDirectory();
         var primaryPath = Path.Combine(root, "planner.out.log");
@@ -432,7 +432,7 @@ public sealed class PlannerSamplingDispatchTests : WorkerDispatchTestSupport
     }
 
     [Xunit.Fact]
-    public void CollectCandidates_MissingExitCodexJsonl_ClassifiesEnvelopeBeforeExcludingCandidate()
+    public void CollectCandidates_MissingExitCodexJsonl_TypesEnvelopeBeforeExclusion()
     {
         var root = CreateTempDirectory();
         var primaryPath = Path.Combine(root, "planner.out.log");
@@ -603,7 +603,7 @@ public sealed class PlannerSamplingDispatchTests : WorkerDispatchTestSupport
     }
 
     [Xunit.Fact]
-    public void StartSamples_LaunchRecordAndDiagnosticPersistenceFailure_TerminatesRegisteredProcess()
+    public void StartSamples_DoublePersistenceFailure_TerminatesRegisteredProcess()
     {
         var root = CreateTempDirectory();
         var primaryPath = Path.Combine(root, "planner.out.log");
@@ -840,7 +840,7 @@ public sealed class PlannerSamplingDispatchTests : WorkerDispatchTestSupport
     }
 
     [Xunit.Fact]
-    public void TryStartLatestDispatch_SamplePreflightPersistenceFailure_TerminatesUnrecordedPrimaryExactlyOnce()
+    public void TryStartLatestDispatch_SamplePreflightFailure_TerminatesPrimaryOnce()
     {
         var root = CreateSeededDispatchRepository();
         var logRoot = Path.Combine(root, "logs");
@@ -917,7 +917,7 @@ public sealed class PlannerSamplingDispatchTests : WorkerDispatchTestSupport
     }
 
     [Xunit.Fact]
-    public void TryStartLatestDispatch_SampleGateAndDiagnosticPersistenceFailure_RecordsTerminalAndRefreshSettles()
+    public void TryStartLatestDispatch_SampleGatePersistenceFailure_RecordsTerminalAndSettles()
     {
         var root = CreateSeededDispatchRepository();
         var logRoot = Path.Combine(root, "logs");
