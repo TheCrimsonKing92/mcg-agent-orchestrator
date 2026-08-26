@@ -288,6 +288,67 @@ public sealed class LoopHealthReportTests
     }
 
     [Xunit.Fact]
+    public void LoopHealthFiveRoleSloCountsRetriesAndFirstPassByRole()
+    {
+        var firstAt = DateTimeOffset.Parse("2026-08-25T10:00:00Z");
+        var clock = new MutableClock(firstAt);
+        var kernel = new AgentOrchestratorKernel(clock);
+        var roles = new[]
+        {
+            AgentRole.Researcher,
+            AgentRole.Planner,
+            AgentRole.Developer,
+            AgentRole.Tester,
+            AgentRole.Reviewer
+        };
+        var goal = kernel.CreateGoal(
+            "Measure a complete five-role goal",
+            roles.Select(role => new TaskSpec(TaskId.New(), $"Run {role} work", role)).ToArray());
+        kernel.ActivateGoal(goal.Id, DefaultAgents);
+        var developer = goal.Tasks.Single(task => task.RequiredRole == AgentRole.Developer);
+        var firstFingerprint = Fingerprint("five-role-candidate-a");
+
+        kernel.RecordTaskDispatch(goal.Id, developer.Id, PaidDispatch(firstAt, firstFingerprint));
+        kernel.RecordPreparedRetryAdmission(
+            goal.Id, developer.Id, firstFingerprint, PaidRouteClassification.Paid, firstAt);
+        kernel.RecordDispatchExecutionResult(
+            goal.Id,
+            developer.Id,
+            new TaskVerificationRecord(DispatchCommand, WorkDir, 1, "", "source finding", firstAt));
+        clock.UtcNow = firstAt.AddHours(1);
+        kernel.RetryTask(
+            goal.Id,
+            developer.Id,
+            "Repair the source finding.",
+            invalidateDownstream: false,
+            retryCause: RetryCause.NewSourceFinding);
+        var retryFingerprint = Fingerprint("five-role-candidate-b");
+        kernel.RecordTaskDispatch(goal.Id, developer.Id, PaidDispatch(clock.UtcNow, retryFingerprint));
+        kernel.RecordPreparedRetryAdmission(
+            goal.Id, developer.Id, retryFingerprint, PaidRouteClassification.Paid, clock.UtcNow);
+        RecordStartedProcess(kernel, goal, developer, clock.UtcNow, 4001);
+        clock.UtcNow = firstAt.AddHours(2);
+        kernel.RecordTaskVerification(
+            goal.Id,
+            developer.Id,
+            new TaskVerificationRecord(DispatchCommand, WorkDir, 0, "fixed", "", clock.UtcNow));
+        foreach (var task in goal.Tasks.Where(task => task.Id != developer.Id))
+            RecordCompletedDispatch(kernel, goal, task);
+
+        var report = kernel.BuildLoopHealthReport();
+
+        Assert.Equal(1, report.FiveRoleGoalCount);
+        Assert.Equal(0, report.FiveRoleFirstPassGoalCount);
+        Assert.Equal(1, report.PaidRetryDispatchCount);
+        foreach (var role in roles)
+        {
+            var roleReport = report.FirstPassCompletionByRole.Single(item => item.Role == role);
+            Assert.Equal(1, roleReport.PresentTaskCount);
+            Assert.Equal(role == AgentRole.Developer ? 0 : 1, roleReport.FirstPassCompletedCount);
+        }
+    }
+
+    [Xunit.Fact]
     public void LoopHealthLegacyRetryAuthorityRemainsUnavailable()
     {
         var (kernel, _, _, _) = BuildFixture();
@@ -474,6 +535,45 @@ public sealed class LoopHealthReportTests
             new TaskVerificationRecord(DispatchCommand, WorkDir, 0, "eventual success", "", clock.UtcNow));
 
         Assert.Equal(5.0, kernel.BuildLoopHealthReport().MedianRetryResolutionHours);
+    }
+
+    [Xunit.Fact]
+    public void RetryResolution_StartsAtFirstUnsuccessfulPaidOutcome()
+    {
+        var firstAt = DateTimeOffset.Parse("2026-08-25T10:00:00Z");
+        var clock = new MutableClock(firstAt);
+        var kernel = new AgentOrchestratorKernel(clock);
+        var goal = kernel.CreateGoal("Measure retry resolution from failure", [MakeTask()]);
+        kernel.ActivateGoal(goal.Id, DefaultAgents);
+        var task = goal.Tasks.Single();
+        var firstFingerprint = Fingerprint("candidate-a");
+
+        kernel.RecordTaskDispatch(goal.Id, task.Id, PaidDispatch(firstAt, firstFingerprint));
+        kernel.RecordPreparedRetryAdmission(
+            goal.Id, task.Id, firstFingerprint, PaidRouteClassification.Paid, firstAt);
+        clock.UtcNow = firstAt.AddHours(1);
+        kernel.RecordDispatchExecutionResult(
+            goal.Id,
+            task.Id,
+            new TaskVerificationRecord(DispatchCommand, WorkDir, 1, "", "first attempt failed", clock.UtcNow));
+        clock.UtcNow = firstAt.AddHours(2);
+        kernel.RetryTask(
+            goal.Id,
+            task.Id,
+            "Address the new source finding.",
+            invalidateDownstream: false,
+            retryCause: RetryCause.NewSourceFinding);
+        var retryFingerprint = Fingerprint("candidate-b");
+        kernel.RecordTaskDispatch(goal.Id, task.Id, PaidDispatch(clock.UtcNow, retryFingerprint));
+        kernel.RecordPreparedRetryAdmission(
+            goal.Id, task.Id, retryFingerprint, PaidRouteClassification.Paid, clock.UtcNow);
+        clock.UtcNow = firstAt.AddHours(4);
+        kernel.RecordTaskVerification(
+            goal.Id,
+            task.Id,
+            new TaskVerificationRecord(DispatchCommand, WorkDir, 0, "fixed", "", clock.UtcNow));
+
+        Assert.Equal(3.0, kernel.BuildLoopHealthReport().MedianRetryResolutionHours);
     }
 
     // --- Semantic-acceptance judge agreement tests ---

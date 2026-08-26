@@ -848,6 +848,112 @@ public sealed class WorkerDispatchTestsDispatchPreparation : WorkerDispatchTestS
     }
 
     [Xunit.Fact]
+    public void HardCrashAfterGateReleaseReloadCannotResumeClaimedPaidAttempt()
+    {
+        if (!OperatingSystem.IsWindows())
+            return;
+
+        var root = CreateTempDirectory();
+        var workingDirectory = Path.Combine(root, "repo");
+        var logRoot = Path.Combine(root, "logs");
+        Directory.CreateDirectory(workingDirectory);
+        var workspace = OrchestratorWorkspace.ForDirectory(root, workingDirectory);
+        _ = StateDbMigrations.EnsureUpToDate(workspace.SqliteStatePath);
+        var at = DateTimeOffset.Parse("2026-08-25T12:00:00Z");
+        var kernel = new AgentOrchestratorKernel(new TestClock(at));
+        var task = new TaskSpec(TaskId.New(), "Retry after a source finding.", AgentRole.Developer);
+        var goal = kernel.CreateGoal("Fence an ambiguous paid start", [task]);
+        kernel.ActivateGoal(goal.Id, AgentCatalog.Default().Agents);
+        kernel.RetryTask(goal.Id, task.Id, "Repair the source finding.", RetryCause.NewSourceFinding);
+        var fingerprint = RetryContextFingerprintBuilder.Build(new RetryContextFingerprintInput(
+            goal.Id.Value, task.Id.Value, task.RequiredRole, "OpenAI", "gpt-5.6-sol",
+            PaidRouteClassification.Paid, "candidate", "criteria", [], [], [], [], "base", "main"));
+        var dispatch = new TaskDispatchRecord(
+            "worker", "Write-Output safe", workingDirectory, at,
+            RetryContextFingerprint: fingerprint,
+            PaidRoute: PaidRouteClassification.Paid);
+        var repository = new SqliteOrchestratorStateRepository(workspace.SqliteStatePath);
+        repository.SaveAsync(kernel).GetAwaiter().GetResult();
+        var reservation = RetryAdmissionReservationStore.TryReserveAsync(
+                workspace.SqliteStatePath, goal.Id, task.Id, fingerprint,
+                PaidRouteClassification.Paid, RetryCause.NewSourceFinding, dispatch, at,
+                "owner-a", at.AddMinutes(1))
+            .GetAwaiter()
+            .GetResult();
+        kernel.ReplaceGoalWithSnapshot(Assert.IsType<RetryAdmissionSnapshotResult>(reservation).Snapshot);
+        Process? spawned = null;
+        try
+        {
+            var runner = new BackgroundDispatchRunner(
+                clock: new TestClock(at.AddSeconds(1)),
+                disableProcessStart: false,
+                startProcess: _ =>
+                {
+                    spawned = Process.Start(new ProcessStartInfo
+                    {
+                        FileName = WorkerShell.Executable,
+                        UseShellExecute = false,
+                        CreateNoWindow = true
+                    }.WithArguments(WorkerShell.BaseArguments().Concat(["Start-Sleep -Seconds 30"])))
+                        ?? throw new InvalidOperationException("Failed to start hard-crash fixture.");
+                    return spawned;
+                });
+
+            var crash = Assert.Throws<InvalidOperationException>(() => runner.TryStartLatestDispatch(
+                kernel,
+                goal.Id,
+                task.Id,
+                logRoot,
+                checkpointBeforeWorkerStart: (checkpointKernel, _, _, _) =>
+                    repository.SaveAsync(checkpointKernel).GetAwaiter().GetResult(),
+                sandboxOptions: DisabledSandbox,
+                claimWorkerStart: () =>
+                {
+                    var claim = RetryAdmissionReservationStore.TryClaimStartSnapshotAsync(
+                            workspace.SqliteStatePath, goal.Id, task.Id, at, "owner-a", at.AddSeconds(1))
+                        .GetAwaiter()
+                        .GetResult();
+                    if (claim is null || !claim.Claimed)
+                        return false;
+                    kernel.ReplaceGoalWithSnapshot(claim.Snapshot);
+                    return true;
+                },
+                confirmWorkerStart: () =>
+                {
+                    var process = Assert.IsType<TaskProcessRecord>(kernel.GetTask(goal.Id, task.Id).LastProcess);
+                    var gatePath = process.StandardOutputPath[..^".out.log".Length] + ".start-gate";
+                    Assert.True(File.Exists(gatePath), "The simulated crash must occur after the worker gate is released.");
+                    throw new InvalidOperationException("simulated-hard-crash-after-gate-release");
+                }));
+            Assert.Contains("simulated-hard-crash", crash.Message, StringComparison.Ordinal);
+
+            var reloaded = Assert.IsType<GoalSnapshot>(repository.LoadGoalAsync(goal.Id).GetAwaiter().GetResult());
+            var reloadedReceipt = Assert.Single(reloaded.Tasks.Single().RetryAdmissionHistory!);
+            Assert.NotNull(reloadedReceipt.WorkerStartClaimedAt);
+            Assert.Null(reloadedReceipt.WorkerStartedAt);
+            Assert.NotNull(reloaded.Tasks.Single().LastProcess);
+
+            var recovery = RetryAdmissionReservationStore.TryReserveAsync(
+                    workspace.SqliteStatePath, goal.Id, task.Id, fingerprint,
+                    PaidRouteClassification.Paid, RetryCause.NewSourceFinding, dispatch, at.AddMinutes(2),
+                    "owner-b", at.AddMinutes(3), reservationRecoveryConfirmed: true)
+                .GetAwaiter()
+                .GetResult();
+
+            Assert.Equal(RetryAdmissionDecision.Prevented, recovery!.Decision);
+            Assert.Equal(RetryCause.EnvironmentApparatusFailure, recovery.Receipt.Cause);
+            Assert.Equal(RetryAdmissionRoute.EnvironmentalHold, recovery.Receipt.Route);
+        }
+        finally
+        {
+            if (spawned is { HasExited: false })
+                spawned.Kill(entireProcessTree: true);
+            spawned?.Dispose();
+            try { Directory.Delete(root, recursive: true); } catch { }
+        }
+    }
+
+    [Xunit.Fact]
     public void RetriedDispatchFingerprintRetainsReviewedCandidateFromDispatchHistory()
     {
         var root = CreateTempDirectory();

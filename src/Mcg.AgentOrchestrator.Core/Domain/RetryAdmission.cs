@@ -377,6 +377,22 @@ public static class RetryAdmissionPolicy
                 return new RetryAdmissionResult(sameAttempt.Decision, sameAttempt);
             }
 
+            if (sameAttempt.WorkerStartClaimedAt is not null)
+            {
+                return Create(
+                    task,
+                    fingerprint,
+                    paidRoute,
+                    RetryCause.EnvironmentApparatusFailure,
+                    RetryAdmissionDecision.Prevented,
+                    RetryAdmissionRoute.EnvironmentalHold,
+                    linkedDispatchAt,
+                    recordedAt,
+                    sameAttempt.LinkedDispatchAt,
+                    reservationOwnerId,
+                    reservationLeaseExpiresAt);
+            }
+
             if (!string.IsNullOrWhiteSpace(reservationOwnerId) &&
                 reservationRecoveryConfirmed &&
                 (string.IsNullOrWhiteSpace(sameAttempt.ReservationOwnerId) ||

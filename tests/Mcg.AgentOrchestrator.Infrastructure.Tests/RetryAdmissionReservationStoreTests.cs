@@ -60,6 +60,19 @@ public sealed class RetryAdmissionReservationStoreTests
             RetryContextFingerprint: fingerprint,
             PaidRoute: PaidRouteClassification.Paid);
 
+        var initialSnapshot = Assert.IsType<GoalSnapshot>(await repository.LoadGoalAsync(goal.Id));
+        var permissiveResults = new[]
+        {
+            RetryAdmissionSnapshotReservation.Apply(
+                initialSnapshot, task.Id, fingerprint, PaidRouteClassification.Paid,
+                RetryCause.NewSourceFinding, preparedDispatch, at, "owner-a", at.AddMinutes(1)),
+            RetryAdmissionSnapshotReservation.Apply(
+                initialSnapshot, task.Id, fingerprint, PaidRouteClassification.Paid,
+                RetryCause.NewSourceFinding, preparedDispatch, at.AddTicks(1), "owner-b", at.AddMinutes(1))
+        };
+
+        Assert.Equal(2, permissiveResults.Count(result => result.Decision == RetryAdmissionDecision.Allowed));
+
         var results = await Task.WhenAll(
             RetryAdmissionReservationStore.TryReserveAsync(
                 databasePath, goal.Id, task.Id, fingerprint,

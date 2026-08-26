@@ -49,6 +49,51 @@ public sealed class RetryAdmissionTests
     }
 
     [Xunit.Fact]
+    public void RequiredCanonicalInputMutationAllowsPaidRetryAdmission()
+    {
+        var baseline = Input();
+        var mutations = new RetryContextFingerprintInput[]
+        {
+            baseline with { GoalId = "goal-b" },
+            baseline with { TaskId = "task-b" },
+            baseline with { Role = AgentRole.Tester },
+            baseline with { ProviderName = "provider-b" },
+            baseline with { ModelName = "model-b" },
+            baseline with { PaidRoute = PaidRouteClassification.NonPaid },
+            baseline with { ReviewedCandidateSha = "b" },
+            baseline with { EffectiveCriteriaHash = "criteria-b" },
+            baseline with { OpenFindingIdentities = ["finding-b"] },
+            baseline with { EvidenceReceiptIdentities = ["receipt-b"] },
+            baseline with { RetryFeedback = ["feedback-b"] },
+            baseline with { AuthoritativeDecisions = ["decision-b"] },
+            baseline with { BaseIdentity = "base-b" },
+            baseline with { MainIdentity = "main-b" }
+        };
+
+        foreach (var mutation in mutations)
+        {
+            var task = RetryingTask();
+            var firstAttempt = DateTimeOffset.Parse("2026-08-25T12:01:00Z");
+            var secondAttempt = firstAttempt.AddMinutes(1);
+            var original = RetryContextFingerprintBuilder.Build(baseline);
+            task.RecordDispatch(Dispatch(firstAttempt, original));
+            var first = RetryAdmissionPolicy.Evaluate(
+                task, original, PaidRouteClassification.Paid, RetryCause.NewSourceFinding,
+                firstAttempt, firstAttempt);
+            task.RecordRetryAdmission(first.Receipt);
+            task.MarkRetryAdmissionStarted(firstAttempt, firstAttempt.AddSeconds(1));
+            var changed = RetryContextFingerprintBuilder.Build(mutation);
+            task.RecordDispatch(Dispatch(secondAttempt, changed));
+
+            var result = RetryAdmissionPolicy.Evaluate(
+                task, changed, PaidRouteClassification.Paid, RetryCause.NewSourceFinding,
+                secondAttempt, secondAttempt);
+
+            Assert.Equal(RetryAdmissionDecision.Allowed, result.Decision);
+        }
+    }
+
+    [Xunit.Fact]
     public void IdenticalPaidRetryIsPrevented()
     {
         var task = RetryingTask();

@@ -338,8 +338,26 @@ public static class LoopHealthReport
         if (retryReceipts.Length == 0)
             return null;
 
-        var start = retryReceipts[0].PriorAttemptAt!.Value;
+        var priorAttemptAt = retryReceipts[0].PriorAttemptAt!.Value;
         var resolutionEligibleAt = retryReceipts[0].RecordedAt;
+        var unsuccessfulVerificationAt = task.VerificationHistory
+            .Where(verification =>
+                !verification.Succeeded &&
+                verification.CompletedAt >= priorAttemptAt &&
+                verification.CompletedAt <= resolutionEligibleAt)
+            .OrderBy(verification => verification.CompletedAt)
+            .FirstOrDefault()?.CompletedAt;
+        var unsuccessfulTaskAt = goal.Timeline
+            .Where(evt =>
+                evt.TaskId == task.Id &&
+                evt.OccurredAt >= priorAttemptAt &&
+                evt.OccurredAt <= resolutionEligibleAt &&
+                evt.Kind is ProgressKind.TaskFailed or ProgressKind.TaskCancelled)
+            .OrderBy(evt => evt.OccurredAt)
+            .FirstOrDefault()?.OccurredAt;
+        var start = new[] { unsuccessfulVerificationAt, unsuccessfulTaskAt }
+            .Where(candidate => candidate is not null)
+            .Min() ?? resolutionEligibleAt;
         var successfulVerification = task.VerificationHistory
             .Where(verification => verification.Succeeded && verification.CompletedAt >= resolutionEligibleAt)
             .OrderBy(verification => verification.CompletedAt)
