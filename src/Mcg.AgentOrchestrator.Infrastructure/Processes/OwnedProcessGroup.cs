@@ -102,7 +102,11 @@ internal sealed class OwnedProcessGroup : IDisposable
                 stdoutPath,
                 stderrPath);
             group._processIds.Add(processStart.Process.Id);
-            return new SuspendedProcessStart(group, processStart.Process, processStart.InitialThread);
+            return new SuspendedProcessStart(
+                group,
+                processStart.Process,
+                processStart.ProcessHandle,
+                processStart.InitialThread);
         }
         catch
         {
@@ -356,15 +360,18 @@ internal sealed class OwnedProcessGroup : IDisposable
     internal sealed class SuspendedProcessStart : IDisposable
     {
         private SafeFileHandle? _initialThread;
+        private SafeFileHandle? _processHandle;
         private bool _transferred;
 
         internal SuspendedProcessStart(
             OwnedProcessGroup group,
             Process process,
+            SafeFileHandle processHandle,
             SafeFileHandle initialThread)
         {
             Group = group;
             Process = process;
+            _processHandle = processHandle;
             _initialThread = initialThread;
         }
 
@@ -386,8 +393,23 @@ internal sealed class OwnedProcessGroup : IDisposable
 
         internal Process TransferOwnership()
         {
+            _processHandle?.Dispose();
+            _processHandle = null;
             _transferred = true;
             return Process;
+        }
+
+        internal OwnedProcessStartTransfer TransferOwnedProcess()
+        {
+            if (_processHandle is null)
+            {
+                throw new InvalidOperationException("Owned native process handle is unavailable for transfer.");
+            }
+
+            var transfer = new OwnedProcessStartTransfer(Process, _processHandle);
+            _processHandle = null;
+            _transferred = true;
+            return transfer;
         }
 
         public void Dispose()
@@ -400,9 +422,15 @@ internal sealed class OwnedProcessGroup : IDisposable
             }
 
             Group.Kill();
+            _processHandle?.Dispose();
+            _processHandle = null;
             Process.Dispose();
         }
     }
+
+    internal sealed record OwnedProcessStartTransfer(
+        Process Process,
+        SafeFileHandle ProcessHandle);
 
     private static class WindowsJob
     {
@@ -476,15 +504,16 @@ internal sealed class OwnedProcessGroup : IDisposable
                     CaptureLaunchFailureEvidence(job));
             }
 
-            using var nativeProcess = new SafeFileHandle(processInformation.hProcess, ownsHandle: true);
+            var nativeProcess = new SafeFileHandle(processInformation.hProcess, ownsHandle: true);
             var initialThread = new SafeFileHandle(processInformation.hThread, ownsHandle: true);
             try
             {
                 var process = Process.GetProcessById(unchecked((int)processInformation.dwProcessId));
-                return new WindowsSuspendedProcess(process, initialThread);
+                return new WindowsSuspendedProcess(process, nativeProcess, initialThread);
             }
             catch
             {
+                nativeProcess.Dispose();
                 initialThread.Dispose();
                 throw;
             }
@@ -1175,7 +1204,10 @@ internal sealed class OwnedProcessGroup : IDisposable
             public uint UIRestrictionsClass;
         }
 
-        public sealed record WindowsSuspendedProcess(Process Process, SafeFileHandle InitialThread);
+        public sealed record WindowsSuspendedProcess(
+            Process Process,
+            SafeFileHandle ProcessHandle,
+            SafeFileHandle InitialThread);
 
         private sealed class WindowsJobAttributeList : IDisposable
         {

@@ -105,4 +105,43 @@ public sealed class AcceptanceGatePhaseAccountingTests
         parent.Dispose();
         accountant.Dispose();
     }
+
+    [Fact]
+    public async Task OverlappingTargetsRemainScopedToTheirAsyncFlows()
+    {
+        using var accountant = AcceptanceGatePhaseAccountant.Start(
+            new RecordingTimeProvider(),
+            null,
+            _ => { });
+        accountant.TransitionTo(AcceptanceGatePhaseNames.CheckExecution);
+        var firstEntered = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var secondEntered = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var inspectFirst = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var firstInspected = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+
+        var first = Task.Run(async () =>
+        {
+            using var _ = AcceptanceGatePhaseAccountant.BeginCurrentTarget("first shard");
+            firstEntered.SetResult();
+            await inspectFirst.Task;
+            var snapshot = AcceptanceGatePhaseAccountant.CurrentSnapshot;
+            firstInspected.SetResult();
+            return snapshot;
+        });
+        await firstEntered.Task;
+
+        var second = Task.Run(async () =>
+        {
+            using var _ = AcceptanceGatePhaseAccountant.BeginCurrentTarget("second shard");
+            secondEntered.SetResult();
+            await firstInspected.Task;
+            return AcceptanceGatePhaseAccountant.CurrentSnapshot;
+        });
+        await secondEntered.Task;
+        inspectFirst.SetResult();
+
+        Assert.Equal("first shard", (await first).Target);
+        Assert.Equal("second shard", (await second).Target);
+        Assert.Null(accountant.Snapshot.Target);
+    }
 }

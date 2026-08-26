@@ -28,7 +28,9 @@ internal static class SourceSizeRatchet
             // Raised for goal 98430a7c: invocation-scoped TRX/heartbeat identity and prior-run heartbeat
             // reaping must stay at the verifier's check-execution boundary so one immutable ordinal is
             // shared by telemetry resolution, result identity, and managed-child lifecycle handling.
-            new SourceSizeCeiling("src/Mcg.AgentOrchestrator.Infrastructure/Workspaces/GoalAcceptanceVerifier.cs", 8471),
+            // Raised for goal cdde61cc: live phase/target capture and owned-child cleanup ordering must
+            // remain at the verifier execution boundary; lifecycle implementation stays extracted.
+            new SourceSizeCeiling("src/Mcg.AgentOrchestrator.Infrastructure/Workspaces/GoalAcceptanceVerifier.cs", 8669),
             // Goal 682f25a1 re-derived this row after integrating goal c2eae988, whose acceptance
             // cancellation seam had already added 74 net lines before the multi-file ratchet landed.
             // Raised for goal a22c7293: slice admission must run where all dispatch paths converge.
@@ -43,7 +45,9 @@ internal static class SourceSizeRatchet
             // Raised for goal 289b469d: registration-fault hold/escalation must be decided at the existing
             // parallel acceptance completion seam; parsing and durable counting remain in its collaborator.
             // Goal 0e0aa816 extracted the fallback acceptance-start transition to its own partial-class source file.
-            new SourceSizeCeiling("src/Mcg.AgentOrchestrator.App/Orchestration/ConductorBatchLoop.cs", 5131),
+            // Raised for goal cdde61cc: bounded gate-engine fault reconciliation belongs at the terminal
+            // state seam that owns retry exhaustion and prevents candidate-failure classification.
+            new SourceSizeCeiling("src/Mcg.AgentOrchestrator.App/Orchestration/ConductorBatchLoop.cs", 5151),
             // Raised for goal 18afe5f2: missing-build-evidence rejection and commit suppression
             // must run where parsed worker results and authoritative changed paths meet. Raised again
             // for goal 0d39b5a3, which adds the narrow Planner sample launch and completion-selection
@@ -85,7 +89,9 @@ internal static class SourceSizeRatchet
             // Goal 46ff9f83 adds unequal logical-width/build-permit controls and the typed maximum diagnostic.
             // Goal 289b469d adds the per-stage registration-fault decision table, bounded-cap proof, durable
             // fault/verdict state distinction, and paid-round negative controls owned by this existing class.
-            new SourceSizeCeiling("tests/Mcg.AgentOrchestrator.Infrastructure.Tests/ConductorBatchLoopTestsParallelAcceptance.cs", 4698),
+            // Raised for goal cdde61cc: diagnostic round-trip, bounded retry, and candidate-failure
+            // negative controls jointly verify the existing parallel-acceptance state contract.
+            new SourceSizeCeiling("tests/Mcg.AgentOrchestrator.Infrastructure.Tests/ConductorBatchLoopTestsParallelAcceptance.cs", 4903),
             new SourceSizeCeiling("tests/Mcg.AgentOrchestrator.Infrastructure.Tests/DotnetBuildEnvironmentManagerTests.cs", 1480),
         });
 
