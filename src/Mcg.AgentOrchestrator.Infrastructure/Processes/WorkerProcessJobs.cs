@@ -22,11 +22,37 @@ internal sealed record OwnedChildStartMetadata(
     IReadOnlyList<string> ArgumentList,
     string WorkingDirectory);
 
+internal sealed class RegisteredJob
+{
+    internal RegisteredJob(
+        OwnedProcessGroup Group,
+        SafeFileHandle? DuplicateAccountingHandle,
+        WorkerProcessJobAccounting? RegistrationSnapshot,
+        SpawnProcessIdentity? Identity = null,
+        bool RequiresDurableDetach = false)
+    {
+        this.Group = Group;
+        this.DuplicateAccountingHandle = DuplicateAccountingHandle;
+        this.RegistrationSnapshot = RegistrationSnapshot;
+        this.Identity = Identity;
+        this.RequiresDurableDetach = RequiresDurableDetach;
+    }
+
+    internal OwnedProcessGroup Group { get; }
+    internal SafeFileHandle? DuplicateAccountingHandle { get; }
+    internal WorkerProcessJobAccounting? RegistrationSnapshot { get; }
+    internal SpawnProcessIdentity? Identity { get; }
+    internal bool RequiresDurableDetach { get; }
+}
+
 internal sealed class RegisteredOwnedProcess : IDisposable
 {
     private const uint TerminatedExitCode = 1;
+    private readonly int _processId;
+    private readonly RegisteredJob _registration;
     private Process? _process;
     private SafeFileHandle? _processHandle;
+    private int _registrationReleased;
 
     internal RegisteredOwnedProcess(
         Process process,
@@ -34,7 +60,9 @@ internal sealed class RegisteredOwnedProcess : IDisposable
         ProcessStartInfo startInfo)
     {
         _process = process;
+        _processId = process.Id;
         _processHandle = processHandle;
+        _registration = WorkerProcessJobs.GetRegisteredJobOrThrow(_processId);
         StartMetadata = new OwnedChildStartMetadata(
             startInfo.FileName,
             startInfo.Arguments,
@@ -49,6 +77,9 @@ internal sealed class RegisteredOwnedProcess : IDisposable
     internal bool HasOpenNativeHandle =>
         _processHandle is { IsClosed: false, IsInvalid: false };
     internal bool IsDisposed => _process is null;
+    internal bool OwnsRegisteredJob =>
+        Volatile.Read(ref _registrationReleased) == 0 &&
+        WorkerProcessJobs.HasRegisteredJob(_processId);
 
     internal int ExitCode
     {
@@ -103,6 +134,12 @@ internal sealed class RegisteredOwnedProcess : IDisposable
 
     internal void Kill(bool entireProcessTree)
     {
+        if (Volatile.Read(ref _registrationReleased) == 0)
+        {
+            _registration.Group.Kill();
+            return;
+        }
+
         if (_processHandle is not null)
         {
             if (!TerminateProcess(_processHandle, TerminatedExitCode))
@@ -120,12 +157,31 @@ internal sealed class RegisteredOwnedProcess : IDisposable
         Process.Kill(entireProcessTree);
     }
 
+    internal bool Release(out WorkerProcessJobAccounting? accounting)
+    {
+        accounting = null;
+        if (Interlocked.Exchange(ref _registrationReleased, 1) != 0)
+        {
+            return false;
+        }
+
+        WorkerProcessJobs.ReleaseOwned(_processId, _registration, out accounting);
+        return true;
+    }
+
     public void Dispose()
     {
-        _processHandle?.Dispose();
-        _processHandle = null;
-        _process?.Dispose();
-        _process = null;
+        try
+        {
+            _ = Release(out _);
+        }
+        finally
+        {
+            _processHandle?.Dispose();
+            _processHandle = null;
+            _process?.Dispose();
+            _process = null;
+        }
     }
 
     private Process Process => _process ?? throw new ObjectDisposedException(nameof(RegisteredOwnedProcess));
@@ -1131,10 +1187,52 @@ public static class WorkerProcessJobs
         accounting = null;
         if (Jobs.TryRemove(processId, out var job))
         {
-            ReadAccountingAndDispose(job, kill: true, captureAccounting: true, preferDuplicate: false, out accounting);
+            try
+            {
+                Registry?.MarkReleased(processId, $"spawn_registry: released pid={processId}");
+            }
+            finally
+            {
+                ReadAccountingAndDispose(job, kill: true, captureAccounting: true, preferDuplicate: false, out accounting);
+            }
+
+            return;
         }
 
         Registry?.MarkReleased(processId, $"spawn_registry: released pid={processId}");
+    }
+
+    internal static RegisteredJob GetRegisteredJobOrThrow(int processId) =>
+        Jobs.TryGetValue(processId, out var job)
+            ? job
+            : throw new InvalidOperationException(
+                $"worker-process-registration-missing: pid={processId}; stage=owned-child-transfer");
+
+    internal static void ReleaseOwned(
+        int processId,
+        RegisteredJob registration,
+        out WorkerProcessJobAccounting? accounting)
+    {
+        accounting = null;
+        if (!((ICollection<KeyValuePair<int, RegisteredJob>>)Jobs).Remove(
+                new KeyValuePair<int, RegisteredJob>(processId, registration)))
+        {
+            return;
+        }
+
+        try
+        {
+            Registry?.MarkReleased(processId, $"spawn_registry: released pid={processId}");
+        }
+        finally
+        {
+            ReadAccountingAndDispose(
+                registration,
+                kill: true,
+                captureAccounting: true,
+                preferDuplicate: false,
+                out accounting);
+        }
     }
 
     internal static bool TryDetachForGracefulStop(int processId, out string failure)
@@ -1520,13 +1618,6 @@ public static class WorkerProcessJobs
             // Best-effort fallback after job attachment itself failed. The caller still receives false.
         }
     }
-
-    private sealed record RegisteredJob(
-        OwnedProcessGroup Group,
-        Microsoft.Win32.SafeHandles.SafeFileHandle? DuplicateAccountingHandle,
-        WorkerProcessJobAccounting? RegistrationSnapshot,
-        SpawnProcessIdentity? Identity = null,
-        bool RequiresDurableDetach = false);
 
     private static bool DefaultTryKillPidTree(int processId)
     {

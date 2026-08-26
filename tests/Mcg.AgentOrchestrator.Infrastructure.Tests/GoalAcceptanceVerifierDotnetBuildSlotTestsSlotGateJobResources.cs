@@ -242,6 +242,138 @@ public sealed class GoalAcceptanceVerifierDotnetBuildSlotTestsSlotGateJobResourc
         }
     }
 
+    [Xunit.Fact]
+    public async Task ProductionRunnerMixedFailuresReleaseOwnedResourcesOnce()
+    {
+        if (!OperatingSystem.IsWindows())
+        {
+            return;
+        }
+
+        var root = CreateTempDirectory();
+        var registryPath = Path.Combine(root, "spawn-registry.db");
+        var shim = Path.Combine(root, "held-child.cmd");
+        var modes = new[] { "timeout", "cancel", "fault" };
+        var readyPaths = modes.ToDictionary(mode => mode, mode => Path.Combine(root, $"{mode}.ready"));
+        var signalPaths = modes.ToDictionary(mode => mode, mode => Path.Combine(root, $"{mode}.signal"));
+        var heartbeatPaths = modes.ToDictionary(mode => mode, mode => Path.Combine(root, $"{mode}-heartbeat.json"));
+        var observations = new ConcurrentQueue<(string Mode, AcceptanceProcessCleanupObservation Observation)>();
+        File.WriteAllText(shim, """
+            @echo off
+            > "%~2" echo ready
+            :wait_for_signal
+            if not exist "%~3" goto wait_for_signal
+            echo %~1-out
+            echo %~1-err 1>&2
+            exit /b 0
+            """);
+        WorkerProcessJobs.ConfigureRegistry(registryPath);
+        using var timeoutSignal = new CancellationTokenSource();
+        using var cancellation = new CancellationTokenSource();
+
+        try
+        {
+            var allReady = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+            using var watcher = new FileSystemWatcher(root, "*.ready")
+            {
+                EnableRaisingEvents = true
+            };
+            watcher.Created += (_, _) =>
+            {
+                if (readyPaths.Values.All(File.Exists))
+                {
+                    allReady.TrySetResult();
+                }
+            };
+
+            Action<AcceptanceProcessCleanupObservation> Observe(string mode) => observation =>
+            {
+                observations.Enqueue((mode, observation));
+                if (mode == "fault" && observation.Stage == "heartbeat-final")
+                {
+                    throw new InvalidOperationException("post-start cleanup observation fault");
+                }
+            };
+
+            var timeoutRun = GoalAcceptanceVerifier.RunProcessWithHeartbeatForTestsAsync(
+                [shim, "timeout", readyPaths["timeout"], signalPaths["timeout"]],
+                root,
+                TimeSpan.FromMinutes(1),
+                heartbeatPaths["timeout"],
+                Observe("timeout"),
+                timeoutSignal: timeoutSignal.Token);
+            var cancellationRun = GoalAcceptanceVerifier.RunProcessWithHeartbeatForTestsAsync(
+                [shim, "cancel", readyPaths["cancel"], signalPaths["cancel"]],
+                root,
+                TimeSpan.FromMinutes(1),
+                heartbeatPaths["cancel"],
+                Observe("cancel"),
+                cancellation.Token);
+            var faultRun = GoalAcceptanceVerifier.RunProcessWithHeartbeatForTestsAsync(
+                [shim, "fault", readyPaths["fault"], signalPaths["fault"]],
+                root,
+                TimeSpan.FromMinutes(1),
+                heartbeatPaths["fault"],
+                Observe("fault"));
+            if (readyPaths.Values.All(File.Exists))
+            {
+                allReady.TrySetResult();
+            }
+
+            await allReady.Task.WaitAsync(TimeSpan.FromSeconds(15));
+            Assert.Equal(3, WorkerProcessJobs.ListActiveRegistryEntriesForTests().Count);
+            timeoutSignal.Cancel();
+            cancellation.Cancel();
+            File.WriteAllText(signalPaths["fault"], "go");
+
+            var timedOut = await timeoutRun;
+            await Assert.ThrowsAnyAsync<OperationCanceledException>(async () => await cancellationRun);
+            var fault = await Assert.ThrowsAsync<InvalidOperationException>(async () => await faultRun);
+
+            Assert.True(timedOut.Result.TimedOut);
+            Assert.Equal(-1, timedOut.Result.ExitCode);
+            Assert.Equal("post-start cleanup observation fault", fault.Message);
+            Assert.Empty(WorkerProcessJobs.ListActiveRegistryEntriesForTests());
+            foreach (var mode in modes)
+            {
+                var modeObservations = observations
+                    .Where(entry => entry.Mode == mode)
+                    .Select(entry => entry.Observation)
+                    .ToArray();
+                Assert.Equal(
+                    ["started", "heartbeat-final", "registration-released", "owned-child-disposed"],
+                    modeObservations.Select(observation => observation.Stage).ToArray());
+                Assert.Single(modeObservations, observation => observation.Stage == "heartbeat-final");
+                Assert.Single(modeObservations, observation => observation.Stage == "registration-released");
+                Assert.Single(modeObservations, observation => observation.Stage == "owned-child-disposed");
+                var released = modeObservations.Single(observation => observation.Stage == "registration-released");
+                Assert.False(released.RegistryActive);
+                Assert.False(released.JobActive);
+                Assert.True(released.NativeHandleOpen);
+                var disposed = modeObservations.Single(observation => observation.Stage == "owned-child-disposed");
+                Assert.False(disposed.NativeHandleOpen);
+                Assert.True(disposed.ProcessDisposed);
+            }
+
+            using var timeoutHeartbeat = JsonDocument.Parse(File.ReadAllText(heartbeatPaths["timeout"]));
+            using var cancellationHeartbeat = JsonDocument.Parse(File.ReadAllText(heartbeatPaths["cancel"]));
+            using var faultHeartbeat = JsonDocument.Parse(File.ReadAllText(heartbeatPaths["fault"]));
+            Assert.Equal("timed-out", timeoutHeartbeat.RootElement.GetProperty("state").GetString());
+            Assert.Equal("failed", cancellationHeartbeat.RootElement.GetProperty("state").GetString());
+            Assert.Equal("completed", faultHeartbeat.RootElement.GetProperty("state").GetString());
+        }
+        finally
+        {
+            foreach (var signalPath in signalPaths.Values)
+            {
+                File.WriteAllText(signalPath, "cleanup");
+            }
+
+            WorkerProcessJobs.ClearRegistryForTests();
+            DeleteDirectoryWithRetry(root);
+        }
+    }
+
     [Xunit.Fact(DisplayName = "GoalAcceptanceVerifier_rejects_unbounded_focused_evidence_request")]
     public async Task GoalAcceptanceVerifierRejectsUnboundedFocusedEvidenceRequest()
     {

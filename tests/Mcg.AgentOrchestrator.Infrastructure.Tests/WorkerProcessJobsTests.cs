@@ -1318,14 +1318,20 @@ public sealed class WorkerProcessJobsTests : IDisposable
             Assert.Equal("cmd.exe", child.StartMetadata.FileName);
             Assert.Equal("/d /c exit 23", child.StartMetadata.Arguments);
             Assert.Equal(Environment.CurrentDirectory, child.StartMetadata.WorkingDirectory);
+            Assert.True(child.OwnsRegisteredJob);
             Assert.True(WorkerProcessJobs.HasRegisteredJob(processId));
+            Assert.True(child.Release(out _));
+            Assert.False(child.Release(out _));
+            Assert.True(child.HasOpenNativeHandle);
         }
         finally
         {
-            WorkerProcessJobs.Release(processId);
+            child.Dispose();
         }
 
         Assert.False(WorkerProcessJobs.HasRegisteredJob(processId));
+        Assert.False(child.HasOpenNativeHandle);
+        Assert.True(child.IsDisposed);
     }
 
     [Xunit.Fact]

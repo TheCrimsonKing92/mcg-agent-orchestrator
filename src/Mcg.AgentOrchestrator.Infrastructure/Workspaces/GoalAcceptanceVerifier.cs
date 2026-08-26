@@ -7303,14 +7303,16 @@ public sealed class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
         string workingDirectory,
         TimeSpan commandTimeout,
         CancellationToken cancellationToken = default,
-        Action<AcceptanceProcessCleanupObservation>? cleanupObserver = null) =>
+        Action<AcceptanceProcessCleanupObservation>? cleanupObserver = null,
+        CancellationToken timeoutSignal = default) =>
         RunProcessAsync(
             arguments,
             workingDirectory,
             commandTimeout,
             forceUtf8ConsoleOutput: false,
             cancellationToken,
-            cleanupObserver);
+            cleanupObserver,
+            timeoutSignal);
 
     internal static async Task<(CommandResult Result, string HeartbeatPath)> RunProcessWithHeartbeatForTestsAsync(
         string[] arguments,
@@ -7318,7 +7320,8 @@ public sealed class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
         TimeSpan commandTimeout,
         string heartbeatPath,
         Action<AcceptanceProcessCleanupObservation> cleanupObserver,
-        CancellationToken cancellationToken = default)
+        CancellationToken cancellationToken = default,
+        CancellationToken timeoutSignal = default)
     {
         var previous = CurrentGateHeartbeatContext.Value;
         CurrentGateHeartbeatContext.Value = new GateHeartbeatContext(
@@ -7338,7 +7341,8 @@ public sealed class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
                 commandTimeout,
                 forceUtf8ConsoleOutput: false,
                 cancellationToken,
-                cleanupObserver).ConfigureAwait(false);
+                cleanupObserver,
+                timeoutSignal).ConfigureAwait(false);
             return (result, heartbeatPath);
         }
         finally
@@ -7365,7 +7369,8 @@ public sealed class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
         TimeSpan commandTimeout,
         bool forceUtf8ConsoleOutput,
         CancellationToken cancellationToken,
-        Action<AcceptanceProcessCleanupObservation>? cleanupObserver = null)
+        Action<AcceptanceProcessCleanupObservation>? cleanupObserver = null,
+        CancellationToken timeoutSignal = default)
     {
         // Keep the shell command semantics, but own the capture file offsets in this process. The
         // drain keeps consuming after the cap so a noisy child cannot block or grow the files.
@@ -7374,7 +7379,6 @@ public sealed class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
 
         var commandLine = string.Join(' ', arguments.Select(QuoteForDisplay));
         var timedOut = false;
-        WorkerProcessJobAccounting? killedAccounting = null;
         var elapsed = Stopwatch.StartNew();
         var heartbeatContext = CurrentGateHeartbeatContext.Value;
         CancellationTokenSource? heartbeatCts = null;
@@ -7487,8 +7491,13 @@ public sealed class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
                 heartbeatTask = WriteGateHeartbeatLoopAsync(heartbeat, heartbeatCts.Token);
             }
 
-            using var timeoutCts = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
-            timeoutCts.CancelAfter(commandTimeout);
+            using var timeoutCts = timeoutSignal.CanBeCanceled
+                ? CancellationTokenSource.CreateLinkedTokenSource(cancellationToken, timeoutSignal)
+                : CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
+            if (!timeoutSignal.CanBeCanceled)
+            {
+                timeoutCts.CancelAfter(commandTimeout);
+            }
 
             try
             {
@@ -7496,7 +7505,6 @@ public sealed class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
             }
             catch (OperationCanceledException)
             {
-                try { WorkerProcessJobs.TryKillOrFallback(process.Id, out killedAccounting); } catch { /* best effort */ }
                 try { process.Kill(entireProcessTree: true); } catch { /* best effort */ }
                 if (cancellationToken.IsCancellationRequested)
                     throw;
@@ -7564,7 +7572,7 @@ public sealed class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
                 try
                 {
                     registrationReleased = true;
-                    WorkerProcessJobs.Release(process.Id, out accounting);
+                    _ = process.Release(out accounting);
                     ObserveProcessCleanup(cleanupObserver, process.Id, process, "registration-released");
                 }
                 finally
@@ -7577,7 +7585,6 @@ public sealed class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
                     startedProcessId = null;
                 }
             }
-            accounting ??= killedAccounting;
             return new CommandResult(
                 exitCode,
                 (stdout + stderr).Trim(),
@@ -7639,7 +7646,7 @@ public sealed class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
                     if (process is not null && startedProcessId is { } processId && !registrationReleased)
                     {
                         registrationReleased = true;
-                        WorkerProcessJobs.Release(processId);
+                        _ = process.Release(out _);
                         ObserveProcessCleanup(cleanupObserver, process.Id, process, "registration-released");
                     }
                 }
@@ -7932,7 +7939,6 @@ public sealed class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
         catch (TimeoutException)
         {
             await captureDrainCts.CancelAsync().ConfigureAwait(false);
-            try { WorkerProcessJobs.TryKillOrFallback(process.Id, out _); } catch { /* best effort */ }
             try { process.Kill(entireProcessTree: true); } catch { /* best effort */ }
             DisposeCaptureSources(captureSources);
             return await Task.WhenAll(captureDrains)
