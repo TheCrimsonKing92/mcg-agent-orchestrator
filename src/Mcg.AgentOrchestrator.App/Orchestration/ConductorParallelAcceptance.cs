@@ -146,6 +146,7 @@ internal abstract record ConductorSpeculativeAcceptanceDisposition(GoalId GoalId
 }
 
 internal sealed record ConductorSpeculativeAcceptancePlan(
+    int ReadyCandidateCount,
     IReadOnlyList<ConductorSpeculativeAcceptanceCohort> Cohorts,
     IReadOnlyList<ConductorSpeculativeAcceptanceDisposition> Dispositions)
 {
@@ -170,7 +171,7 @@ internal sealed record ConductorSpeculativeAcceptancePlan(
             .Select(deferral => $"{Prefix(deferral.GoalId)}:{deferral.Reason}")
             .ToArray();
         var receipt =
-            $"SPECULATIVE_COHORT_PLAN tick={tick} advisory=true members={members} " +
+            $"SPECULATIVE_COHORT_PLAN tick={tick} advisory=true ready={ReadyCandidateCount} members={members} " +
             $"exclusions={(exclusions.Length == 0 ? "none" : string.Join(',', exclusions))} " +
             $"deferred={(deferrals.Length == 0 ? "none" : string.Join(',', deferrals))} " +
             $"omitted={nonProposed.Length - rendered.Length}";
@@ -221,6 +222,7 @@ internal static class ConductorSpeculativeAcceptanceCohortPlanner
 
         var selected = new List<GateReadyCandidateProjection>(MaximumCohortSize);
         var dispositions = new List<ConductorSpeculativeAcceptanceDisposition>(orderedCandidates.Count);
+        var readyCandidateCount = 0;
         foreach (var candidate in orderedCandidates)
         {
             ArgumentNullException.ThrowIfNull(candidate);
@@ -234,6 +236,7 @@ internal static class ConductorSpeculativeAcceptanceCohortPlanner
                 continue;
             }
 
+            readyCandidateCount++;
             var projection = ((GateReadyCandidateProjectionResult.Ready)candidate.ProjectionResult).Projection;
             if (projection.GoalId != candidate.GoalId)
             {
@@ -277,11 +280,13 @@ internal static class ConductorSpeculativeAcceptanceCohortPlanner
             }
 
             return new ConductorSpeculativeAcceptancePlan(
+                readyCandidateCount,
                 Array.Empty<ConductorSpeculativeAcceptanceCohort>(),
                 Array.AsReadOnly(dispositions.ToArray()));
         }
 
         return new ConductorSpeculativeAcceptancePlan(
+            readyCandidateCount,
             Array.AsReadOnly(
             [
                 new ConductorSpeculativeAcceptanceCohort(Array.AsReadOnly(selected.ToArray()))
