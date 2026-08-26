@@ -387,7 +387,10 @@ private static (string Remainder, IReadOnlyList<string> Flags) ExtractRepeatedVa
 
 private static IReadOnlyList<string> SplitRetryCommand(string command, string remainder)
 {
-    var parts = SplitTaskTargetCommandWithTextFileFlag(command, remainder, 1);
+    var extractedCause = ExtractRepeatedValueFlag(remainder, "--cause");
+    var parts = SplitTaskTargetCommandWithTextFileFlag(command, extractedCause.Remainder, 1)
+        .Concat(extractedCause.Flags)
+        .ToArray();
     var mechanicalIndex = parts
         .Select((part, index) => (part, index))
         .FirstOrDefault(item => item.part.Equals("--mechanical", StringComparison.OrdinalIgnoreCase));
@@ -396,7 +399,7 @@ private static IReadOnlyList<string> SplitRetryCommand(string command, string re
         return parts;
     }
 
-    if (parts.Count < 3)
+    if (parts.Length < 3)
     {
         return parts;
     }

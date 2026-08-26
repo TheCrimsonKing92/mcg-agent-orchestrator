@@ -4,7 +4,7 @@ namespace Mcg.AgentOrchestrator.Infrastructure;
 
 public static class RetryAdmissionReservationStore
 {
-    public static Task<RetryAdmissionResult?> TryReserveAsync(
+    public static Task<RetryAdmissionSnapshotResult?> TryReserveAsync(
         string stateDatabasePath,
         GoalId goalId,
         TaskId taskId,
@@ -19,13 +19,13 @@ public static class RetryAdmissionReservationStore
         CancellationToken cancellationToken = default)
     {
         var repository = new SqliteOrchestratorStateRepository(stateDatabasePath);
-        return repository.TransactGoalAsync<RetryAdmissionResult?>(
+        return repository.TransactGoalAsync<RetryAdmissionSnapshotResult?>(
             "retry-admission-reservation",
             goalId,
             (snapshot, _) =>
             {
                 if (snapshot is null)
-                    return Task.FromResult((false, (GoalSnapshot?)null, (RetryAdmissionResult?)null));
+                    return Task.FromResult((false, (GoalSnapshot?)null, (RetryAdmissionSnapshotResult?)null));
 
                 var reservation = RetryAdmissionSnapshotReservation.Apply(
                     snapshot,
@@ -38,7 +38,7 @@ public static class RetryAdmissionReservationStore
                     reservationOwnerId,
                     reservationLeaseExpiresAt,
                     reservationRecoveryConfirmed);
-                return Task.FromResult((true, (GoalSnapshot?)reservation.Snapshot, (RetryAdmissionResult?)reservation.Admission));
+                return Task.FromResult((true, (GoalSnapshot?)reservation.Snapshot, (RetryAdmissionSnapshotResult?)reservation));
             },
             cancellationToken);
     }
@@ -68,6 +68,60 @@ public static class RetryAdmissionReservationStore
                     reservationOwnerId,
                     workerStartedAt);
                 return Task.FromResult((true, (GoalSnapshot?)claim.Snapshot, (bool?)claim.Claimed));
+            },
+            cancellationToken);
+    }
+
+    public static Task<RetryAdmissionStartClaimResult?> TryClaimStartSnapshotAsync(
+        string stateDatabasePath,
+        GoalId goalId,
+        TaskId taskId,
+        DateTimeOffset linkedDispatchAt,
+        string reservationOwnerId,
+        DateTimeOffset claimedAt,
+        CancellationToken cancellationToken = default) =>
+        TransactStartStateAsync(
+            "retry-admission-start-claim",
+            stateDatabasePath,
+            goalId,
+            snapshot => RetryAdmissionSnapshotStartClaim.Apply(
+                snapshot, taskId, linkedDispatchAt, reservationOwnerId, claimedAt),
+            cancellationToken);
+
+    public static Task<RetryAdmissionStartClaimResult?> TryConfirmStartAsync(
+        string stateDatabasePath,
+        GoalId goalId,
+        TaskId taskId,
+        DateTimeOffset linkedDispatchAt,
+        string reservationOwnerId,
+        DateTimeOffset workerStartedAt,
+        CancellationToken cancellationToken = default) =>
+        TransactStartStateAsync(
+            "retry-admission-start-confirmation",
+            stateDatabasePath,
+            goalId,
+            snapshot => RetryAdmissionSnapshotStartConfirmation.Apply(
+                snapshot, taskId, linkedDispatchAt, reservationOwnerId, workerStartedAt),
+            cancellationToken);
+
+    private static Task<RetryAdmissionStartClaimResult?> TransactStartStateAsync(
+        string operation,
+        string stateDatabasePath,
+        GoalId goalId,
+        Func<GoalSnapshot, RetryAdmissionStartClaimResult> apply,
+        CancellationToken cancellationToken)
+    {
+        var repository = new SqliteOrchestratorStateRepository(stateDatabasePath);
+        return repository.TransactGoalAsync<RetryAdmissionStartClaimResult?>(
+            operation,
+            goalId,
+            (snapshot, _) =>
+            {
+                if (snapshot is null)
+                    return Task.FromResult((false, (GoalSnapshot?)null, (RetryAdmissionStartClaimResult?)null));
+
+                var result = apply(snapshot);
+                return Task.FromResult((true, (GoalSnapshot?)result.Snapshot, (RetryAdmissionStartClaimResult?)result));
             },
             cancellationToken);
     }

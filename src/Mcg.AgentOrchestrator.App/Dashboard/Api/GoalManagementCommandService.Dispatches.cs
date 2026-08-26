@@ -943,6 +943,8 @@ private static ProcessBatchExecutionResult StartDispatches(
                 goal.Id,
                 task,
                 recoveringPreparedReservation);
+            goal = kernel.GetGoal(goal.Id);
+            task = goal.Tasks.Single(candidate => candidate.Id == item.TaskId);
             if (!admission.AllowsProcessStart)
                 continue;
         }
@@ -958,6 +960,11 @@ private static ProcessBatchExecutionResult StartDispatches(
         {
             throw new InvalidOperationException(
                 $"Paid retry start requires a durable retry-admission receipt for task '{task.Id}'.");
+        }
+        if (requiresDurableStartClaim && checkpointBeforeWorkerStart is null)
+        {
+            throw new InvalidOperationException(
+                $"Paid retry start requires a durable process checkpoint for task '{task.Id}'.");
         }
 
         Action<AgentOrchestratorKernel, GoalId, TaskId, DispatchRecordCheckpointPhase>? batchCheckpoint =
@@ -981,15 +988,40 @@ private static ProcessBatchExecutionResult StartDispatches(
             sandboxOptions,
             startReceipt is null || string.IsNullOrWhiteSpace(startReceipt.ReservationOwnerId)
                 ? null
-                : () => RetryAdmissionReservationStore.TryClaimStartAsync(
+                : () =>
+                {
+                    var claim = RetryAdmissionReservationStore.TryClaimStartSnapshotAsync(
                         workspace.SqliteStatePath,
                         goal.Id,
                         task.Id,
                         startReceipt.LinkedDispatchAt,
                         startReceipt.ReservationOwnerId,
                         DateTimeOffset.UtcNow)
-                    .GetAwaiter()
-                    .GetResult() ?? false);
+                        .GetAwaiter()
+                        .GetResult();
+                    if (claim is null || !claim.Claimed)
+                        return false;
+                    kernel.ReplaceGoalWithSnapshot(claim.Snapshot);
+                    return true;
+                },
+            startReceipt is null || string.IsNullOrWhiteSpace(startReceipt.ReservationOwnerId)
+                ? null
+                : () =>
+                {
+                    var confirmation = RetryAdmissionReservationStore.TryConfirmStartAsync(
+                            workspace.SqliteStatePath,
+                            goal.Id,
+                            task.Id,
+                            startReceipt.LinkedDispatchAt,
+                            startReceipt.ReservationOwnerId,
+                            DateTimeOffset.UtcNow)
+                        .GetAwaiter()
+                        .GetResult();
+                    if (confirmation is null || !confirmation.Claimed)
+                        return false;
+                    kernel.ReplaceGoalWithSnapshot(confirmation.Snapshot);
+                    return true;
+                });
         if (startResult.RecoveryAction is { } action)
         {
             recoveryActions.Add(action);
@@ -1008,7 +1040,7 @@ private static ProcessBatchExecutionResult StartDispatches(
             continue;
         }
 
-        started.Add(task);
+        started.Add(kernel.GetTask(goal.Id, task.Id));
     }
 
     return new ProcessBatchExecutionResult(plan, started, recoveryActions, requeueSkippedCount, startFailures);
@@ -1044,8 +1076,9 @@ private static RetryAdmissionResult EnsurePreparedRetryAdmission(
         .GetResult();
     if (persisted is not null)
     {
-        kernel.ApplyPreparedRetryAdmission(goalId, task.Id, persisted);
-        return persisted;
+        kernel.ReplaceGoalWithSnapshot(persisted.Snapshot);
+        kernel.ApplyPersistedRetryAdmissionOutcome(goalId, task.Id, persisted.Admission);
+        return persisted.Admission;
     }
 
     if (dispatch.PaidRoute != PaidRouteClassification.Paid || task.LatestRetryAt is null)

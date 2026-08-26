@@ -2242,7 +2242,7 @@ public sealed class CliCommandTestsSubscriptionDispatchCommands : CliCommandTest
         kernel.ReportTaskProgress(goal.Id, task.Id, WorkTaskStatus.Failed, "Initial failure.");
 
         var ex = Xunit.Assert.Throws<ArgumentException>(() => CliCommandDispatcher.ExecuteCommand(
-            CliArgumentParser.SplitCommand($"retry 1 Inline feedback --text-file {path}"),
+            CliArgumentParser.SplitCommand($"retry 1 Inline feedback --text-file {path} --cause ContractClarification"),
             kernel,
             workspace,
             ref agents,
@@ -2342,7 +2342,7 @@ public sealed class CliCommandTestsSubscriptionDispatchCommands : CliCommandTest
             ref currentGoal);
         var statusAfterNote = task.Status;
         var retryChanged = CliCommandDispatcher.ExecuteCommand(
-            CliArgumentParser.SplitCommand("retry 1 Retry remains available."),
+            CliArgumentParser.SplitCommand("retry 1 Retry remains available. --cause ContractClarification"),
             kernel,
             workspace,
             ref agents,
@@ -2529,7 +2529,7 @@ public sealed class CliCommandTestsSubscriptionDispatchCommands : CliCommandTest
 
         // All-numeric prefix: the collision case that previously misparsed as task display number.
         var numericRetryChanged = CliCommandDispatcher.ExecuteCommand(
-            CliArgumentParser.SplitCommand("retry 97184249 1 Retry numeric prefix goal."),
+            CliArgumentParser.SplitCommand("retry 97184249 1 Retry numeric prefix goal. --cause ContractClarification"),
             kernel,
             workspace,
             ref agents,
@@ -2538,7 +2538,7 @@ public sealed class CliCommandTestsSubscriptionDispatchCommands : CliCommandTest
             ref currentGoal);
         // Letters prefix: the original passing case.
         var lettersRetryChanged = CliCommandDispatcher.ExecuteCommand(
-            CliArgumentParser.SplitCommand("retry abcdef12 1 Retry letters prefix goal. --mechanical"),
+            CliArgumentParser.SplitCommand("retry abcdef12 1 Retry letters prefix goal. --cause ContractClarification --mechanical"),
             kernel,
             workspace,
             ref agents,

@@ -75,7 +75,8 @@ public sealed record RetryAdmissionReceipt(
     DateTimeOffset? PriorAttemptAt = null,
     DateTimeOffset? WorkerStartedAt = null,
     string? ReservationOwnerId = null,
-    DateTimeOffset? ReservationLeaseExpiresAt = null);
+    DateTimeOffset? ReservationLeaseExpiresAt = null,
+    DateTimeOffset? WorkerStartClaimedAt = null);
 
 public sealed record RetryAdmissionResult(
     RetryAdmissionDecision Decision,
@@ -86,7 +87,11 @@ public sealed record RetryAdmissionResult(
 
 public sealed record RetryAdmissionSnapshotResult(
     GoalSnapshot Snapshot,
-    RetryAdmissionResult Admission);
+    RetryAdmissionResult Admission)
+{
+    public RetryAdmissionDecision Decision => Admission.Decision;
+    public RetryAdmissionReceipt Receipt => Admission.Receipt;
+}
 
 public sealed record RetryAdmissionStartClaimResult(
     GoalSnapshot Snapshot,
@@ -148,6 +153,25 @@ public static class RetryAdmissionSnapshotStartClaim
     }
 }
 
+public static class RetryAdmissionSnapshotStartConfirmation
+{
+    public static RetryAdmissionStartClaimResult Apply(
+        GoalSnapshot snapshot,
+        TaskId taskId,
+        DateTimeOffset linkedDispatchAt,
+        string reservationOwnerId,
+        DateTimeOffset workerStartedAt)
+    {
+        ArgumentNullException.ThrowIfNull(snapshot);
+        var goal = Goal.FromSnapshot(snapshot);
+        var confirmed = goal.FindTask(taskId).TryConfirmRetryAdmissionStart(
+            linkedDispatchAt,
+            reservationOwnerId,
+            workerStartedAt);
+        return new RetryAdmissionStartClaimResult(goal.ToSnapshot(), confirmed);
+    }
+}
+
 public static class RetryContextFingerprintBuilder
 {
     private const string Domain = "mcg-retry-context-fingerprint";
@@ -204,7 +228,7 @@ public static class RetryContextFingerprintBuilder
         stream.Write(bytes);
     }
 
-    private static string NormalizeLineEndings(string value) =>
+    internal static string NormalizeLineEndings(string value) =>
         value.Replace("\r\n", "\n", StringComparison.Ordinal).Replace('\r', '\n').Trim();
 }
 
@@ -267,9 +291,11 @@ public static class RetryContextFingerprintFactory
             .Where(item => item.TaskId == task.Id && item.Kind == ProgressKind.TaskRetried)
             .OrderBy(item => item.OccurredAt)
             .LastOrDefault()?.Message;
-        var retryFeedback = string.IsNullOrWhiteSpace(latestOperatorRetryFeedback)
+        var retryFeedback = task.CriterionRetryFeedback.Count > 0
             ? task.CriterionRetryFeedback
-            : task.CriterionRetryFeedback.Concat([latestOperatorRetryFeedback]).ToArray();
+            : string.IsNullOrWhiteSpace(latestOperatorRetryFeedback)
+                ? []
+                : [NormalizeActionableRetryFeedback(latestOperatorRetryFeedback)];
         return RetryContextFingerprintBuilder.Build(new RetryContextFingerprintInput(
             goal.Id.Value,
             task.Id.Value,
@@ -285,6 +311,20 @@ public static class RetryContextFingerprintFactory
             authoritativeDecisions,
             baseIdentity,
             mainIdentity));
+    }
+
+    internal static string NormalizeActionableRetryFeedback(string feedback)
+    {
+        var normalized = RetryContextFingerprintBuilder.NormalizeLineEndings(feedback);
+        normalized = System.Text.RegularExpressions.Regex.Replace(
+            normalized,
+            @"(?i)\b(attempt|cycle|round)\s+\d+(?:\s*/\s*\d+)?\b",
+            "$1 <counter>");
+        normalized = System.Text.RegularExpressions.Regex.Replace(
+            normalized,
+            @"(?i)\btask\s+[0-9a-f]{8}\b",
+            "task <id>");
+        return normalized;
     }
 
     public static IReadOnlyList<ReviewFinding> GetOpenBlockingFindings(Goal goal)

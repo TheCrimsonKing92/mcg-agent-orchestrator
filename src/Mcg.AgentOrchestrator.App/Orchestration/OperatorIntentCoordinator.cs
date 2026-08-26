@@ -191,7 +191,10 @@ internal sealed class OperatorIntentCoordinator
                     goal.Id,
                     taskId,
                     retry.Message,
-                    retryCause: RetryCause.ContractClarification,
+                    retryCause: retry.RetryCause is { } retryCause && retryCause != RetryCause.Unknown
+                        ? retryCause
+                        : throw new InvalidOperationException(
+                            "Operator retry intent is missing an explicit classified retry cause."),
                     retryRoundKind: retry.RetryRoundKind,
                     invalidateDownstream: true);
                 GoalLifecycleCommands.RecordCapabilityWarnings(

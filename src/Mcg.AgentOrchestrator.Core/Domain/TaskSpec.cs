@@ -687,6 +687,31 @@ public sealed class TaskSpec
 
         var receipt = _retryAdmissionHistory[index];
         if (receipt.WorkerStartedAt is not null ||
+            receipt.WorkerStartClaimedAt is not null ||
+            !string.Equals(receipt.ReservationOwnerId, reservationOwnerId, StringComparison.Ordinal))
+        {
+            return false;
+        }
+
+        _retryAdmissionHistory[index] = receipt with { WorkerStartClaimedAt = workerStartedAt };
+        RetryAdmissionHoldRoute = null;
+        return true;
+    }
+
+    internal bool TryConfirmRetryAdmissionStart(
+        DateTimeOffset linkedDispatchAt,
+        string reservationOwnerId,
+        DateTimeOffset workerStartedAt)
+    {
+        var index = _retryAdmissionHistory.FindLastIndex(receipt =>
+            receipt.LinkedDispatchAt == linkedDispatchAt &&
+            receipt.Decision is RetryAdmissionDecision.Allowed or RetryAdmissionDecision.ResumedReservation);
+        if (index < 0)
+            return false;
+
+        var receipt = _retryAdmissionHistory[index];
+        if (receipt.WorkerStartedAt is not null ||
+            receipt.WorkerStartClaimedAt is null ||
             !string.Equals(receipt.ReservationOwnerId, reservationOwnerId, StringComparison.Ordinal))
         {
             return false;

@@ -1,4 +1,5 @@
 using System.Text.Json;
+using Mcg.AgentOrchestrator.Core;
 
 namespace Mcg.AgentOrchestrator.App.Dashboard.Api;
 
@@ -137,18 +138,24 @@ public static RetrySubmissionDto ParseRetrySubmission(string body)
 
     var trimmed = body.Trim();
     if (!trimmed.StartsWith("{", StringComparison.Ordinal))
-    {
-        return new RetrySubmissionDto(trimmed);
-    }
+        throw new ArgumentException("Retry submission must be JSON and include an explicit 'cause' value.");
 
     var submission = JsonSerializer.Deserialize<RetrySubmissionDto>(trimmed, DashboardJson.Options());
     if (string.IsNullOrWhiteSpace(submission?.Message))
     {
         throw new ArgumentException("Retry JSON must include a non-empty 'message' value.");
     }
+    if (string.IsNullOrWhiteSpace(submission.Cause) ||
+        !Enum.TryParse<RetryCause>(submission.Cause, ignoreCase: true, out var cause) ||
+        !Enum.IsDefined(cause) ||
+        cause == RetryCause.Unknown)
+    {
+        throw new ArgumentException("Retry JSON must include a supported non-Unknown 'cause' value.");
+    }
 
     return new RetrySubmissionDto(
         submission.Message.Trim(),
+        cause.ToString(),
         submission.Mechanical,
         submission.IdempotencyKey?.Trim());
 }

@@ -1738,7 +1738,8 @@ internal static class CliPersistentStateRunner
         return new RetryOperatorIntentPayload(
             command.Text ?? throw new InvalidOperationException("Prepared retry command is missing text."),
             command.RetryRoundKind,
-            command.RetryPolicy.Name);
+            command.RetryPolicy.Name,
+            command.RetryCause);
     }
 
     private static void PrintOperatorIntentStatus(

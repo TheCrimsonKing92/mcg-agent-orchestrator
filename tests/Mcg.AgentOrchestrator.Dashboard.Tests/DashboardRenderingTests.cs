@@ -142,7 +142,7 @@ public sealed class DashboardRenderingTests
             goal.Id.Value,
             task.Id.Value,
             JsonSerializer.Serialize(
-                new RetryOperatorIntentPayload("dashboard retry", null),
+                new RetryOperatorIntentPayload("dashboard retry", null, RetryCause: RetryCause.ContractClarification),
                 new JsonSerializerOptions(JsonSerializerDefaults.Web)),
             [],
             "miles",
@@ -1497,12 +1497,16 @@ public sealed class DashboardRenderingTests
 {
     var empty = Assert.ThrowsAny<ArgumentException>(() => DashboardRequestParser.ParseRetrySubmission(""));
     var json = Assert.ThrowsAny<ArgumentException>(() => DashboardRequestParser.ParseRetrySubmission("{\"message\":\"\"}"));
+    var missingCause = Assert.ThrowsAny<ArgumentException>(() =>
+        DashboardRequestParser.ParseRetrySubmission("{\"message\":\"Fix failed verification\"}"));
     var parsed = DashboardRequestParser.ParseRetrySubmission(
-        "{\"message\":\"Fix failed verification\",\"idempotencyKey\":\"dashboard-submit-1\"}");
+        "{\"message\":\"Fix failed verification\",\"cause\":\"NewTestFinding\",\"idempotencyKey\":\"dashboard-submit-1\"}");
 
     Assert.Contains("Retry note cannot be empty", empty.Message, StringComparison.Ordinal);
     Assert.Contains("non-empty 'message'", json.Message, StringComparison.Ordinal);
+    Assert.Contains("non-Unknown 'cause'", missingCause.Message, StringComparison.Ordinal);
     Assert.Equal("Fix failed verification", parsed.Message);
+    Assert.Equal(nameof(RetryCause.NewTestFinding), parsed.Cause);
     Assert.Equal("dashboard-submit-1", parsed.IdempotencyKey);
 }
     [Xunit.Fact(DisplayName = "DashboardRequestParser_requires_limit_review_confirmation_note")]
@@ -2966,7 +2970,11 @@ public sealed class DashboardRenderingTests
         new string('s', 5000),
         new string('e', 5000),
         DateTimeOffset.UtcNow));
-    kernel.RetryTask(goal.Id, task.Id, "Retry after failed verification.");
+    kernel.RetryTask(
+        goal.Id,
+        task.Id,
+        "Retry after failed verification.",
+        retryCause: RetryCause.NewTestFinding);
     var risk = SubscriptionPromptCostGuard.EvaluateReadySubscriptionStart(
         goal,
         agents,

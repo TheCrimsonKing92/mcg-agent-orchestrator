@@ -15,7 +15,8 @@ internal sealed record GoalScopedTaskMutationCommand(
     TaskVerificationRecord? ManualVerification,
     RetryRoundKind? RetryRoundKind,
     AutonomyPolicy RetryPolicy,
-    IReadOnlyList<string>? GatedDeliverableIds = null)
+    IReadOnlyList<string>? GatedDeliverableIds = null,
+    RetryCause? RetryCause = null)
 {
     internal string? SuppliedGoalSelector { get; init; }
 }
@@ -89,7 +90,7 @@ internal static GoalScopedTaskMutationOutcome ExecuteGoalScopedTaskMutationWitho
             return new GoalScopedTaskMutationOutcome(true, context.CurrentGoal!, manualTarget.Task, GoalScopedTaskMutationRenderKind.Task);
 
         case "retry":
-            var retryUsage = "retry <task-number> <message> [--mechanical]|retry <goal-prefix> <task-number> <message> [--mechanical]|retry --goal <goal-prefix> <task-number> <message> [--mechanical]|retry <task-number> --text-file <path> [--mechanical]";
+            var retryUsage = CliCommandHelp.RetryUsage;
             var retryTarget = ResolveCommandTaskTarget(command.Parts, context, retryUsage);
             var retryTask = retryTarget.Task;
             EnsurePolicyAllows(context, context.CurrentGoal!, command.RetryPolicy, AutonomyAction.Retry, "retry");
@@ -98,7 +99,7 @@ internal static GoalScopedTaskMutationOutcome ExecuteGoalScopedTaskMutationWitho
                 context.CurrentGoal!.Id,
                 retryTask.Id,
                 retryMessage,
-                retryCause: RetryCause.ContractClarification,
+                retryCause: command.RetryCause ?? throw new InvalidOperationException("Prepared retry command is missing an explicit retry cause."),
                 retryRoundKind: command.RetryRoundKind,
                 invalidateDownstream: true);
             GoalLifecycleCommands.RecordCapabilityWarnings(
@@ -215,12 +216,13 @@ private static GoalScopedTaskMutationCommand PrepareManualVerificationMutation(
 
 private static GoalScopedTaskMutationCommand PrepareRetryMutation(IReadOnlyList<string> parts, bool hasInlineGoalPrefix)
 {
-    var usage = "retry <task-number> <message> [--mechanical]|retry <goal-prefix> <task-number> <message> [--mechanical]|retry --goal <goal-prefix> <task-number> <message> [--mechanical]|retry <task-number> --text-file <path> [--mechanical]";
+    var usage = "retry <task-number> <message> --cause <cause> [--mechanical]|retry <goal-prefix> <task-number> <message> --cause <cause> [--mechanical]|retry --goal <goal-prefix> <task-number> <message> --cause <cause> [--mechanical]|retry <task-number> --text-file <path> --cause <cause> [--mechanical]";
     var retryPolicy = ResolveCliAutonomyPolicy(parts);
+    var retryCause = ParseRequiredRetryCause(parts, usage);
     var retryRoundKind = HasCliConfirmation(parts, "--mechanical")
         ? RetryRoundKind.Mechanical
         : (RetryRoundKind?)null;
-    var retryParts = RemoveStandaloneFlag(parts, "--mechanical");
+    var retryParts = RemoveFlagWithValue(RemoveStandaloneFlag(parts, "--mechanical"), "--cause");
     var taskIndex = ResolveGoalScopedTaskArgumentIndex(retryParts, hasInlineGoalPrefix, usage);
     var messageIndex = taskIndex + 1;
     RequireRemainingArgument(retryParts, messageIndex, usage);
@@ -231,7 +233,23 @@ private static GoalScopedTaskMutationCommand PrepareRetryMutation(IReadOnlyList<
         ProgressStatus: null,
         ManualVerification: null,
         retryRoundKind,
-        retryPolicy);
+        retryPolicy,
+        RetryCause: retryCause);
+}
+
+private static RetryCause ParseRequiredRetryCause(IReadOnlyList<string> parts, string usage)
+{
+    var value = GetFlagValue(parts, "--cause");
+    if (value is null ||
+        !Enum.TryParse<RetryCause>(value, ignoreCase: true, out var cause) ||
+        !Enum.IsDefined(cause) ||
+        cause == RetryCause.Unknown)
+    {
+        throw new ArgumentException(
+            $"Retry requires --cause <{string.Join('|', Enum.GetNames<RetryCause>().Where(name => name != nameof(RetryCause.Unknown)))}>; Usage: {usage}");
+    }
+
+    return cause;
 }
 
 private static GoalScopedTaskMutationCommand PrepareVerificationPlanMutation(IReadOnlyList<string> parts, bool hasInlineGoalPrefix)
@@ -418,11 +436,12 @@ private static bool? TryExecuteTaskCommand(string command, IReadOnlyList<string>
 
         case "retry":
             var retryPolicy = ResolveCliAutonomyPolicy(parts);
-            var retryUsage = "retry <task-number> <message> [--mechanical]|retry <goal-prefix> <task-number> <message> [--mechanical]|retry --goal <goal-prefix> <task-number> <message> [--mechanical]|retry <task-number> --text-file <path> [--mechanical]";
+            var retryUsage = "retry <task-number> <message> --cause <cause> [--mechanical]|retry <goal-prefix> <task-number> <message> --cause <cause> [--mechanical]|retry --goal <goal-prefix> <task-number> <message> --cause <cause> [--mechanical]|retry <task-number> --text-file <path> --cause <cause> [--mechanical]";
+            var retryCause = ParseRequiredRetryCause(parts, retryUsage);
             var retryRoundKind = HasCliConfirmation(parts, "--mechanical")
                 ? RetryRoundKind.Mechanical
                 : (RetryRoundKind?)null;
-            var retryParts = RemoveStandaloneFlag(parts, "--mechanical");
+            var retryParts = RemoveFlagWithValue(RemoveStandaloneFlag(parts, "--mechanical"), "--cause");
             var retryTarget = ResolveCommandTaskTarget(retryParts, context, retryUsage);
             RequireRemainingArgument(retryParts, retryTarget.NextIndex, retryUsage);
             var retryTask = retryTarget.Task;
@@ -432,7 +451,7 @@ private static bool? TryExecuteTaskCommand(string command, IReadOnlyList<string>
                 context.CurrentGoal!.Id,
                 retryTask.Id,
                 retryMessage,
-                retryCause: RetryCause.ContractClarification,
+                retryCause: retryCause,
                 retryRoundKind: retryRoundKind,
                 invalidateDownstream: true);
             GoalLifecycleCommands.RecordCapabilityWarnings(

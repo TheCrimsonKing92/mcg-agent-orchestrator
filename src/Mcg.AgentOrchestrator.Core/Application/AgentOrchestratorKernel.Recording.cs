@@ -1209,6 +1209,18 @@ public sealed partial class AgentOrchestratorKernel
         if (!task.RecordRetryAdmission(result.Receipt))
             return;
 
+        ApplyPersistedRetryAdmissionOutcome(goalId, taskId, result);
+    }
+
+    public void ApplyPersistedRetryAdmissionOutcome(
+        GoalId goalId,
+        TaskId taskId,
+        RetryAdmissionResult result)
+    {
+        ArgumentNullException.ThrowIfNull(result);
+        var goal = GetGoal(goalId);
+        var task = goal.FindTask(taskId);
+
         if (!result.AllowsProcessStart)
         {
             task.SetRetryAdmissionHold(result.Receipt.Route);

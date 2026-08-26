@@ -464,6 +464,33 @@ public sealed class RetryAdmissionTests
         Assert.NotEqual(alpha, beta);
     }
 
+    [Xunit.Fact]
+    public void VolatileConductorCountersDoNotChangeRetryContextFingerprint()
+    {
+        var kernel = new AgentOrchestratorKernel();
+        var task = new TaskSpec(TaskId.New(), "Retry work", AgentRole.Developer);
+        var goal = kernel.CreateGoal("Fingerprint actionable retry feedback", [task]);
+
+        kernel.RetryTask(
+            goal.Id,
+            task.Id,
+            "Auto-retry real worker failure for task aaaaaaaa (attempt 1/3); same evidence.",
+            RetryCause.NewSourceFinding,
+            invalidateDownstream: false);
+        var first = RetryContextFingerprintFactory.Build(
+            goal, task, "OpenAI", "test", PaidRouteClassification.Paid, null, null, null);
+        kernel.RetryTask(
+            goal.Id,
+            task.Id,
+            "Auto-retry real worker failure for task bbbbbbbb (attempt 2/3); same evidence.",
+            RetryCause.NewSourceFinding,
+            invalidateDownstream: false);
+        var second = RetryContextFingerprintFactory.Build(
+            goal, task, "OpenAI", "test", PaidRouteClassification.Paid, null, null, null);
+
+        Assert.Equal(first, second);
+    }
+
     private static TaskSpec RetryingTask()
     {
         var task = new TaskSpec(TaskId.New(), "Retry work", AgentRole.Developer);
