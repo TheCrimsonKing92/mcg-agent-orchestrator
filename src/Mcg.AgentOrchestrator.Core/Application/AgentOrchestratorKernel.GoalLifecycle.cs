@@ -422,9 +422,9 @@ public sealed partial class AgentOrchestratorKernel
         GoalId goalId,
         TaskId taskId,
         string message,
+        RetryCause retryCause,
         bool invalidateDownstream = true,
-        RetryRoundKind? retryRoundKind = null,
-        RetryCause retryCause = RetryCause.Unknown)
+        RetryRoundKind? retryRoundKind = null)
     {
         var goal = GetGoal(goalId);
         var task = goal.FindTask(taskId);
@@ -432,6 +432,14 @@ public sealed partial class AgentOrchestratorKernel
         if (string.IsNullOrWhiteSpace(retryMessage))
         {
             throw new ArgumentException("Retry message cannot be empty.", nameof(message));
+        }
+
+        if (retryCause == RetryCause.Unknown)
+        {
+            throw new ArgumentOutOfRangeException(
+                nameof(retryCause),
+                retryCause,
+                "A prospective retry requires an explicit classified cause; Unknown is reserved for legacy or unavailable history.");
         }
 
         if (task.Status == WorkTaskStatus.Running || task.LastProcess is { IsRunning: true })

@@ -98,8 +98,9 @@ internal static GoalScopedTaskMutationOutcome ExecuteGoalScopedTaskMutationWitho
                 context.CurrentGoal!.Id,
                 retryTask.Id,
                 retryMessage,
+                retryCause: RetryCause.ContractClarification,
                 retryRoundKind: command.RetryRoundKind,
-                retryCause: RetryCause.Unknown);
+                invalidateDownstream: true);
             GoalLifecycleCommands.RecordCapabilityWarnings(
                 context.Kernel,
                 context.CurrentGoal.Id,
@@ -431,8 +432,9 @@ private static bool? TryExecuteTaskCommand(string command, IReadOnlyList<string>
                 context.CurrentGoal!.Id,
                 retryTask.Id,
                 retryMessage,
+                retryCause: RetryCause.ContractClarification,
                 retryRoundKind: retryRoundKind,
-                retryCause: RetryCause.Unknown);
+                invalidateDownstream: true);
             GoalLifecycleCommands.RecordCapabilityWarnings(
                 context.Kernel,
                 context.CurrentGoal.Id,

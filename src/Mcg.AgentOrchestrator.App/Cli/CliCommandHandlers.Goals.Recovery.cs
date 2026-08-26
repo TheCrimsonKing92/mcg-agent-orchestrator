@@ -158,8 +158,9 @@ private static bool HandleRecover(CliExecutionContext context, IReadOnlyList<str
             goal.Id,
             task.Id,
             note,
+            retryCause: RetryCause.EnvironmentApparatusFailure,
             invalidateDownstream: !HasRunningDownstreamTask(goal, task),
-            retryCause: RetryCause.Unknown);
+            retryRoundKind: null);
         Console.WriteLine($"recover: reset task {ConsoleViews.GetTaskDisplayNumber(goal, task.Id)} to dispatchable.");
         alreadyReset.Add(task.Id);
         actions++;

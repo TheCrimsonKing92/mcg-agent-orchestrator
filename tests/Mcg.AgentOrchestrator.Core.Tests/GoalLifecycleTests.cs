@@ -2,6 +2,58 @@ using Mcg.AgentOrchestrator.Core;
 
 public sealed class GoalLifecycleTests
 {
+    [Xunit.Fact(DisplayName = "RetryTask_requires_an_explicit_typed_cause")]
+    public void RetryTaskRequiresExplicitTypedCause()
+    {
+        var retryTask = typeof(AgentOrchestratorKernel)
+            .GetMethods()
+            .Single(method => method.Name == nameof(AgentOrchestratorKernel.RetryTask));
+        var retryCause = retryTask.GetParameters().Single(parameter => parameter.Name == "retryCause");
+
+        Assert.False(
+            retryCause.HasDefaultValue,
+            "RetryTask.retryCause must be required so a caller cannot silently classify a retry as Unknown.");
+    }
+
+    [Xunit.Theory(DisplayName = "RetryTask_persists_each_supported_typed_cause")]
+    [Xunit.InlineData(RetryCause.NewSourceFinding)]
+    [Xunit.InlineData(RetryCause.NewTestFinding)]
+    [Xunit.InlineData(RetryCause.CriterionEvidenceOwnerMismatch)]
+    [Xunit.InlineData(RetryCause.EnvironmentApparatusFailure)]
+    [Xunit.InlineData(RetryCause.ContractClarification)]
+    [Xunit.InlineData(RetryCause.MainDriftConflict)]
+    [Xunit.InlineData(RetryCause.ProviderInterruption)]
+    [Xunit.InlineData(RetryCause.UnchangedContextRepeat)]
+    public void RetryTaskPersistsEachSupportedTypedCause(RetryCause retryCause)
+    {
+        var kernel = new AgentOrchestratorKernel(new FakeClock());
+        var goal = kernel.CreateGoal(
+            "Persist a classified retry cause",
+            [new TaskSpec(TaskId.New(), "Implement", AgentRole.Developer)]);
+        kernel.ActivateGoal(goal.Id, DefaultAgents());
+        var task = goal.Tasks.Single();
+
+        kernel.RetryTask(goal.Id, task.Id, "Retry with a classified cause.", retryCause);
+
+        Assert.Equal(retryCause, task.PendingRetryCause);
+    }
+
+    [Xunit.Fact(DisplayName = "RetryTask_rejects_Unknown_for_a_prospective_retry")]
+    public void RetryTaskRejectsUnknownForAProspectiveRetry()
+    {
+        var kernel = new AgentOrchestratorKernel(new FakeClock());
+        var goal = kernel.CreateGoal(
+            "Reject an unclassified retry",
+            [new TaskSpec(TaskId.New(), "Implement", AgentRole.Developer)]);
+        kernel.ActivateGoal(goal.Id, DefaultAgents());
+        var task = goal.Tasks.Single();
+
+        var exception = Assert.Throws<ArgumentOutOfRangeException>(() =>
+            kernel.RetryTask(goal.Id, task.Id, "Retry without a classified cause.", RetryCause.Unknown));
+
+        Assert.Equal("retryCause", exception.ParamName);
+    }
+
     [Xunit.Fact(DisplayName = "GoalLifecycle_identifies_active_goal_with_failed_task")]
     public void GoalLifecycleIdentifiesActiveGoalWithFailedTask()
     {

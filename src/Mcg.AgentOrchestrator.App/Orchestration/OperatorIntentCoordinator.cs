@@ -191,8 +191,9 @@ internal sealed class OperatorIntentCoordinator
                     goal.Id,
                     taskId,
                     retry.Message,
+                    retryCause: RetryCause.ContractClarification,
                     retryRoundKind: retry.RetryRoundKind,
-                    retryCause: RetryCause.Unknown);
+                    invalidateDownstream: true);
                 GoalLifecycleCommands.RecordCapabilityWarnings(
                     kernel,
                     goal.Id,
