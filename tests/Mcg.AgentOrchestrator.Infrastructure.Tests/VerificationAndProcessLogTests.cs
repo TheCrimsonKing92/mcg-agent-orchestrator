@@ -602,11 +602,19 @@ public sealed class VerificationAndProcessLogTests
             Assert.True(File.Exists(exitPath), "The native exit artifact must exist before scoped cleanup starts.");
             return fixtures
                 .Where(fixture => BackgroundDispatchRunner.ShouldReapBuildDaemon(directory, fixture.CommandLine))
-                .Select(fixture => (fixture.ProcessId, fixture.Name, (string?)fixture.CommandLine))
+                .Select(fixture => new ProcessInspectionRecord(
+                    fixture.ProcessId,
+                    1,
+                    fixture.Name,
+                    $"C:\\tools\\{fixture.Name}.exe",
+                    DateTimeOffset.UnixEpoch,
+                    fixture.CommandLine,
+                    ProcessInspectionStatus.Available))
                 .ToArray();
         },
-        tryKillBuildDaemon: pid =>
+        tryKillBuildDaemon: process =>
         {
+            var pid = process.ProcessId;
             if (pid == 42716) ownedKilled.Set();
             if (pid == 42717) siblingKilled.Set();
             return true;
@@ -699,7 +707,7 @@ public sealed class VerificationAndProcessLogTests
     var runner = new BackgroundDispatchRunner(
         isStillRunning: _ => false,
         findBuildDaemons: _ => [],
-        tryKillBuildDaemon: pid => { killedPids.Add(pid); return true; });
+        tryKillBuildDaemon: process => { killedPids.Add(process.ProcessId); return true; });
 
     runner.RefreshLatestProcess(kernel, goal.Id, task.Id);
 
@@ -729,7 +737,17 @@ public sealed class VerificationAndProcessLogTests
     kernel.RecordTaskProcessStarted(goal.Id, task.Id, processRecord);
     var runner = new BackgroundDispatchRunner(
         isStillRunning: _ => false,
-        findBuildDaemons: _ => [(56656, "MSBuild", null)],
+        findBuildDaemons: _ =>
+        [
+            new ProcessInspectionRecord(
+                56656,
+                1,
+                "MSBuild",
+                "C:\\tools\\MSBuild.exe",
+                DateTimeOffset.UnixEpoch,
+                null,
+                ProcessInspectionStatus.Available)
+        ],
         tryKillBuildDaemon: _ => false);
 
     runner.RefreshLatestProcess(kernel, goal.Id, task.Id);

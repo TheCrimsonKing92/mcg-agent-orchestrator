@@ -3,6 +3,72 @@ using Mcg.AgentOrchestrator.Infrastructure;
 public sealed class WindowsNativeProcessInspectionTests
 {
     [Xunit.Fact]
+    public void TerminateIfMatches_RecycledIdentityDoesNotTerminateHandle()
+    {
+        var expected = AvailableRecord(DateTimeOffset.Parse("2026-08-26T12:00:00Z"));
+        var calls = new List<string>();
+        var terminated = WindowsNativeProcessInspection.TryTerminateIfMatches(
+            expected,
+            processId =>
+            {
+                calls.Add($"open:{processId}");
+                return new WindowsNativeProcessInspection.ProcessOpenResult(new IntPtr(17), 0);
+            },
+            handle =>
+            {
+                calls.Add($"read:{handle}");
+                return new WindowsNativeProcessInspection.OpenedProcessReadResult(
+                    expected.ParentProcessId,
+                    expected.ExecutablePath,
+                    expected.StartedAt!.Value.AddSeconds(1),
+                    expected.CommandLine,
+                    ProcessInspectionStatus.Available);
+            },
+            handle =>
+            {
+                calls.Add($"terminate:{handle}");
+                return true;
+            },
+            handle => calls.Add($"close:{handle}"));
+
+        Assert.False(terminated);
+        Assert.Equal(["open:17", "read:17", "close:17"], calls);
+    }
+
+    [Xunit.Fact]
+    public void TerminateIfMatches_ExactIdentityTerminatesSameOpenedHandle()
+    {
+        var expected = AvailableRecord(DateTimeOffset.Parse("2026-08-26T12:00:00Z"));
+        var calls = new List<string>();
+        var terminated = WindowsNativeProcessInspection.TryTerminateIfMatches(
+            expected,
+            processId =>
+            {
+                calls.Add($"open:{processId}");
+                return new WindowsNativeProcessInspection.ProcessOpenResult(new IntPtr(23), 0);
+            },
+            handle =>
+            {
+                calls.Add($"read:{handle}");
+                return new WindowsNativeProcessInspection.OpenedProcessReadResult(
+                    expected.ParentProcessId,
+                    expected.ExecutablePath,
+                    expected.StartedAt,
+                    expected.CommandLine,
+                    ProcessInspectionStatus.Available);
+            },
+            handle =>
+            {
+                calls.Add($"terminate:{handle}");
+                return true;
+            },
+            handle => calls.Add($"close:{handle}"));
+
+        Assert.True(terminated);
+        Assert.Equal(["open:17", "read:23", "terminate:23", "close:23"], calls);
+    }
+
+    [Xunit.Fact]
     public void Read_UnavailableProcess_RetainsTypedRecord()
     {
         var enumerationCount = 0;
@@ -169,4 +235,14 @@ public sealed class WindowsNativeProcessInspectionTests
         Assert.Equal(2, reads);
         Assert.Equal([1, 3], records.Keys.Order().ToArray());
     }
+
+    private static ProcessInspectionRecord AvailableRecord(DateTimeOffset startedAt) =>
+        new(
+            17,
+            1,
+            "MSBuild",
+            @"C:\Program Files\dotnet\sdk\MSBuild.exe",
+            startedAt,
+            @"MSBuild.exe C:\repo\project.csproj",
+            ProcessInspectionStatus.Available);
 }

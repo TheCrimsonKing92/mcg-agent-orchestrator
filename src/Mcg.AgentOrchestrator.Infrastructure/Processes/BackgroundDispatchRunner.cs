@@ -108,8 +108,8 @@ public sealed class BackgroundDispatchRunner
     private readonly Func<int, bool> _isStillRunning;
     private readonly Func<int, bool> _tryKillOwnedProcess;
     private readonly bool _processStartDisabled;
-    private readonly Func<string, IReadOnlyList<(int ProcessId, string ProcessName, string? CommandLine)>> _findBuildDaemons;
-    private readonly Func<int, bool> _tryKillBuildDaemon;
+    private readonly Func<string, IReadOnlyList<ProcessInspectionRecord>> _findBuildDaemons;
+    private readonly Func<ProcessInspectionRecord, bool> _tryKillBuildDaemon;
     private readonly IDispatchDiagnosticWriter _diagnosticWriter;
     private readonly DispatchRecoveryPolicy _recoveryPolicy;
     private readonly WorkerProviderCatalog _workerProviders;
@@ -128,8 +128,8 @@ public sealed class BackgroundDispatchRunner
         Func<int, bool>? isStillRunning = null,
         Func<int, bool>? tryKillOwnedProcess = null,
         bool? disableProcessStart = null,
-        Func<string, IReadOnlyList<(int ProcessId, string ProcessName, string? CommandLine)>>? findBuildDaemons = null,
-        Func<int, bool>? tryKillBuildDaemon = null,
+        Func<string, IReadOnlyList<ProcessInspectionRecord>>? findBuildDaemons = null,
+        Func<ProcessInspectionRecord, bool>? tryKillBuildDaemon = null,
         TimeSpan? progressStallTimeout = null,
         IDispatchDiagnosticWriter? diagnosticWriter = null,
         TimeSpan? startupHangTimeout = null,
@@ -2429,12 +2429,14 @@ public sealed class BackgroundDispatchRunner
             var reaped = new List<string>();
             var failed = new List<string>();
 
-            foreach (var (pid, name, _) in daemons)
+            foreach (var daemon in daemons)
             {
+                var pid = daemon.ProcessId;
+                var name = daemon.Name;
                 bool killed;
                 try
                 {
-                    killed = _tryKillBuildDaemon(pid);
+                    killed = _tryKillBuildDaemon(daemon);
                 }
                 catch
                 {
@@ -2470,24 +2472,24 @@ public sealed class BackgroundDispatchRunner
         }
     }
 
-    private static List<(int ProcessId, string ProcessName, string? CommandLine)> FindBuildDaemons(string workingDirectory)
+    private static List<ProcessInspectionRecord> FindBuildDaemons(string workingDirectory)
     {
         return FindBuildDaemons(workingDirectory, ProcessCommandLines.SnapshotByNames);
     }
 
-    internal static List<(int ProcessId, string ProcessName, string? CommandLine)> FindBuildDaemons(
+    internal static List<ProcessInspectionRecord> FindBuildDaemons(
         string workingDirectory,
         Func<IReadOnlyCollection<string>, ProcessCommandLineSnapshot> createSnapshot)
     {
         var snapshot = createSnapshot(BuildServerCandidates);
-        var result = new List<(int, string, string?)>();
+        var result = new List<ProcessInspectionRecord>();
 
         foreach (var record in snapshot.Records.Values)
         {
             if (record.Status == ProcessInspectionStatus.Available &&
                 ShouldReapBuildDaemon(workingDirectory, record.CommandLine))
             {
-                result.Add((record.ProcessId, record.Name, record.CommandLine));
+                result.Add(record);
             }
         }
 
@@ -2506,21 +2508,54 @@ public sealed class BackgroundDispatchRunner
                commandLine.Contains(workingDirectory, StringComparison.OrdinalIgnoreCase);
     }
 
-    private static bool TryKillBuildDaemonProcess(int processId)
+    private static bool TryKillBuildDaemonProcess(ProcessInspectionRecord discovered)
     {
         try
         {
-            var proc = Process.GetProcessById(processId);
-            if (!proc.HasExited)
+            if (OperatingSystem.IsWindows())
             {
-                proc.Kill(entireProcessTree: false);
-                proc.WaitForExit(3000);
+                return WindowsNativeProcessInspection.TryTerminateIfMatches(discovered);
             }
 
-            return true;
+            var currentSnapshot = ProcessCommandLines.Snapshot([discovered.ProcessId]);
+            if (!currentSnapshot.Records.TryGetValue(discovered.ProcessId, out var current))
+            {
+                return false;
+            }
+
+            return TryKillRevalidatedBuildDaemon(discovered, current, KillBuildDaemonProcess);
         }
-        catch (ArgumentException)
+        catch
         {
+            return false;
+        }
+    }
+
+    internal static bool TryKillRevalidatedBuildDaemon(
+        ProcessInspectionRecord discovered,
+        ProcessInspectionRecord current,
+        Func<int, bool> kill)
+    {
+        if (!WindowsNativeProcessInspection.MatchesIdentity(discovered, current))
+        {
+            return false;
+        }
+
+        return kill(discovered.ProcessId);
+    }
+
+    private static bool KillBuildDaemonProcess(int processId)
+    {
+        try
+        {
+            using var proc = Process.GetProcessById(processId);
+            if (proc.HasExited)
+            {
+                return false;
+            }
+
+            proc.Kill(entireProcessTree: false);
+            proc.WaitForExit(3000);
             return true;
         }
         catch

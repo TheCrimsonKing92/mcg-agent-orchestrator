@@ -1,7 +1,65 @@
 using Mcg.AgentOrchestrator.Infrastructure;
+using System.Reflection;
 
 public sealed class BackgroundDispatchRunnerProcessSnapshotTests
 {
+    [Xunit.Fact]
+    public void BuildDaemonKillReceivesDiscoveredIdentity()
+    {
+        var method = typeof(BackgroundDispatchRunner).GetMethod(
+            "TryKillBuildDaemonProcess",
+            BindingFlags.NonPublic | BindingFlags.Static);
+
+        Xunit.Assert.NotNull(method);
+        var parameter = Xunit.Assert.Single(method!.GetParameters());
+        Xunit.Assert.Equal(typeof(ProcessInspectionRecord), parameter.ParameterType);
+    }
+
+    [Xunit.Fact]
+    public void RecycledBuildDaemonIdentityRefusesKill()
+    {
+        var startedAt = DateTimeOffset.Parse("2026-08-26T12:00:00Z");
+        var discovered = AvailableRecord(startedAt);
+        var recycled = AvailableRecord(startedAt.AddSeconds(1));
+        var killCalls = 0;
+
+        var killed = BackgroundDispatchRunner.TryKillRevalidatedBuildDaemon(
+            discovered,
+            recycled,
+            _ =>
+            {
+                killCalls++;
+                return true;
+            });
+
+        Xunit.Assert.False(killed);
+        Xunit.Assert.Equal(0, killCalls);
+    }
+
+    [Xunit.Fact]
+    public void UnavailableBuildDaemonIdentityRefusesKill()
+    {
+        var discovered = AvailableRecord(DateTimeOffset.Parse("2026-08-26T12:00:00Z"));
+        var unavailable = discovered with
+        {
+            CommandLine = null,
+            Status = ProcessInspectionStatus.AccessDenied
+        };
+        var killCalls = 0;
+
+        var killed = BackgroundDispatchRunner.TryKillRevalidatedBuildDaemon(
+            discovered,
+            unavailable,
+            _ =>
+            {
+                killCalls++;
+                return true;
+            });
+
+        Xunit.Assert.False(killed);
+        Xunit.Assert.Equal(0, killCalls);
+    }
+
     [Xunit.Fact]
     public void BuildDaemonDiscoveryCreatesOneCandidateSnapshot()
     {
@@ -35,4 +93,14 @@ public sealed class BackgroundDispatchRunnerProcessSnapshotTests
         Xunit.Assert.Single(matches);
         Xunit.Assert.Equal(17, matches[0].ProcessId);
     }
+
+    private static ProcessInspectionRecord AvailableRecord(DateTimeOffset startedAt) =>
+        new(
+            17,
+            1,
+            "MSBuild",
+            "C:\\Program Files\\dotnet\\sdk\\MSBuild.exe",
+            startedAt,
+            "MSBuild.exe C:\\repo\\project.csproj",
+            ProcessInspectionStatus.Available);
 }

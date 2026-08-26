@@ -30,6 +30,8 @@ internal static class WindowsNativeProcessInspection
     private const uint SnapshotProcesses = 0x00000002;
     private const int ProcessQueryLimitedInformation = 0x1000;
     private const int ProcessVmRead = 0x0010;
+    private const int ProcessTerminate = 0x0001;
+    private const int Synchronize = 0x00100000;
     private const int ProcessBasicInformation = 0;
     private const int ProcessWow64Information = 26;
     private const int ErrorAccessDenied = 5;
@@ -111,6 +113,75 @@ internal static class WindowsNativeProcessInspection
 
     public static int TryGetParentProcessId(int processId) =>
         Read([processId]).TryGetValue(processId, out var record) ? record.ParentProcessId : 0;
+
+    internal static bool TryTerminateIfMatches(ProcessInspectionRecord expected) =>
+        OperatingSystem.IsWindows() && TryTerminateIfMatches(
+            expected,
+            processId =>
+            {
+                var handle = OpenProcess(
+                    ProcessQueryLimitedInformation | ProcessVmRead | ProcessTerminate | Synchronize,
+                    false,
+                    processId);
+                return new ProcessOpenResult(
+                    handle,
+                    handle == IntPtr.Zero ? Marshal.GetLastWin32Error() : 0);
+            },
+            ReadOpenedProcess,
+            handle => TerminateProcess(handle, 1) && WaitForSingleObject(handle, 3000) == 0,
+            handle => CloseHandle(handle));
+
+    internal static bool TryTerminateIfMatches(
+        ProcessInspectionRecord expected,
+        Func<int, ProcessOpenResult> open,
+        Func<IntPtr, OpenedProcessReadResult> readOpened,
+        Func<IntPtr, bool> terminate,
+        Action<IntPtr> close)
+    {
+        var opened = open(expected.ProcessId);
+        if (opened.Handle == IntPtr.Zero)
+        {
+            return false;
+        }
+
+        try
+        {
+            var current = readOpened(opened.Handle);
+            return MatchesIdentity(expected, current) && terminate(opened.Handle);
+        }
+        finally
+        {
+            close(opened.Handle);
+        }
+    }
+
+    internal static bool MatchesIdentity(
+        ProcessInspectionRecord expected,
+        ProcessInspectionRecord current) =>
+        MatchesIdentity(
+            expected,
+            new OpenedProcessReadResult(
+                current.ParentProcessId,
+                current.ExecutablePath,
+                current.StartedAt,
+                current.CommandLine,
+                current.Status));
+
+    private static bool MatchesIdentity(
+        ProcessInspectionRecord expected,
+        OpenedProcessReadResult current) =>
+        expected.Status == ProcessInspectionStatus.Available &&
+        current.Status == ProcessInspectionStatus.Available &&
+        expected.ParentProcessId == current.ParentProcessId &&
+        expected.StartedAt.HasValue &&
+        current.StartedAt.HasValue &&
+        expected.StartedAt.Value == current.StartedAt.Value &&
+        !string.IsNullOrWhiteSpace(expected.ExecutablePath) &&
+        !string.IsNullOrWhiteSpace(current.ExecutablePath) &&
+        expected.ExecutablePath.Equals(current.ExecutablePath, StringComparison.OrdinalIgnoreCase) &&
+        !string.IsNullOrWhiteSpace(expected.CommandLine) &&
+        !string.IsNullOrWhiteSpace(current.CommandLine) &&
+        expected.CommandLine.Equals(current.CommandLine, StringComparison.Ordinal);
 
     private static ProcessInspectionRecord ReadOne(ProcessInspectionSeed entry)
     {
@@ -468,6 +539,12 @@ internal static class WindowsNativeProcessInspection
 
     [DllImport("kernel32.dll", SetLastError = true)]
     private static extern bool GetExitCodeProcess(IntPtr processHandle, out uint exitCode);
+
+    [DllImport("kernel32.dll", SetLastError = true)]
+    private static extern bool TerminateProcess(IntPtr processHandle, uint exitCode);
+
+    [DllImport("kernel32.dll", SetLastError = true)]
+    private static extern uint WaitForSingleObject(IntPtr handle, uint milliseconds);
 
     [DllImport("kernel32.dll", SetLastError = true, CharSet = CharSet.Unicode)]
     private static extern bool QueryFullProcessImageName(
