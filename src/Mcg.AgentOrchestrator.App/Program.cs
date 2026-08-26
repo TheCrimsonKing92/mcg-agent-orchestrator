@@ -266,7 +266,7 @@ if (TrialCompareCliCommand.RequiresHistoricalState(startupArgs))
     try
     {
         var historicalStateRepository = SqliteOrchestratorStateRepository.OpenReadOnly(workspace.SqliteStatePath);
-        CliPersistentStateRunner.ExecuteHistoricalTrialCompareReadOnly(
+        CliReadOnlyCommandRunner.ExecuteHistoricalTrialCompare(
             startupArgs,
             historicalStateRepository,
             workspace,

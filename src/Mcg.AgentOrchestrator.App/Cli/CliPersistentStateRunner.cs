@@ -80,23 +80,8 @@ internal static class CliPersistentStateRunner
         IGoalAcceptanceVerifier? acceptanceVerifier = null,
         OperatorIntentSubmissionSource operatorIntentSubmissionSource = OperatorIntentSubmissionSource.Cli)
     {
-        if (GoalBoardCommand.IsBoardCommand(args))
-        {
-            GoalBoardCommand.Run(args, stateRepository, workspace);
-            return false;
-        }
-
-        if (TrialCompareCliCommand.RequiresHistoricalState(args))
-        {
-            return ExecuteHistoricalTrialCompareReadOnly(
-                args,
-                stateRepository,
-                workspace,
-                ref agents,
-                providers,
-                ref workerProfiles,
-                channel);
-        }
+        if (CliReadOnlyCommandRunner.TryExecute(args, stateRepository, workspace, providers, channel, ref agents, ref workerProfiles, out var readOnlyResult))
+            return readOnlyResult;
 
         using var writeOperationTag = SqliteOrchestratorStateRepository.UseWriteOperationTag(
             $"cli:{(args.Count == 0 ? "repl" : args[0].Trim().ToLowerInvariant())}");
@@ -1600,36 +1585,6 @@ internal static class CliPersistentStateRunner
         }
 
         return shouldSave;
-    }
-
-    internal static bool ExecuteHistoricalTrialCompareReadOnly(
-        IReadOnlyList<string> args,
-        IOrchestratorStateRepository stateRepository,
-        OrchestratorWorkspace workspace,
-        ref IReadOnlyList<AgentDefinition> agents,
-        IModelProviderRegistry providers,
-        ref WorkerProfileCatalog workerProfiles,
-        IOperatorChannel? channel = null)
-    {
-        var commandKernel = new AgentOrchestratorKernel();
-        Goal? commandCurrentGoal = null;
-        var changed = CliCommandDispatcher.ExecuteCommand(
-            args,
-            commandKernel,
-            workspace,
-            ref agents,
-            providers,
-            ref workerProfiles,
-            ref commandCurrentGoal,
-            channel,
-            reloadKernelForGoals: requestedGoalIds => stateRepository.LoadGoalsAsync(
-                requestedGoalIds.Select(goalId => new GoalId(goalId)).ToArray()).GetAwaiter().GetResult());
-        if (changed)
-        {
-            throw new InvalidOperationException("Historical trial comparison attempted to mutate orchestrator state through its read-only route.");
-        }
-
-        return false;
     }
 
     private static bool ExecuteSingleGoalCommandWithoutTransaction(
