@@ -145,12 +145,12 @@ public static RetrySubmissionDto ParseRetrySubmission(string body)
     {
         throw new ArgumentException("Retry JSON must include a non-empty 'message' value.");
     }
-    if (string.IsNullOrWhiteSpace(submission.Cause) ||
-        !Enum.TryParse<RetryCause>(submission.Cause, ignoreCase: true, out var cause) ||
-        !Enum.IsDefined(cause) ||
-        cause == RetryCause.Unknown)
+    var cause = RetryCause.Unknown;
+    if (!string.IsNullOrWhiteSpace(submission.Cause) &&
+        (!Enum.TryParse<RetryCause>(submission.Cause, ignoreCase: true, out cause) ||
+         !Enum.IsDefined(cause)))
     {
-        throw new ArgumentException("Retry JSON must include a supported non-Unknown 'cause' value.");
+        throw new ArgumentException("Retry JSON 'cause' must be a supported retry cause value.");
     }
 
     return new RetrySubmissionDto(

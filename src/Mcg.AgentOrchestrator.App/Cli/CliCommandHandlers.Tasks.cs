@@ -216,7 +216,7 @@ private static GoalScopedTaskMutationCommand PrepareManualVerificationMutation(
 
 private static GoalScopedTaskMutationCommand PrepareRetryMutation(IReadOnlyList<string> parts, bool hasInlineGoalPrefix)
 {
-    var usage = "retry <task-number> <message> --cause <cause> [--mechanical]|retry <goal-prefix> <task-number> <message> --cause <cause> [--mechanical]|retry --goal <goal-prefix> <task-number> <message> --cause <cause> [--mechanical]|retry <task-number> --text-file <path> --cause <cause> [--mechanical]";
+    var usage = "retry <task-number> <message> [--cause <cause>] [--mechanical]|retry <goal-prefix> <task-number> <message> [--cause <cause>] [--mechanical]|retry --goal <goal-prefix> <task-number> <message> [--cause <cause>] [--mechanical]|retry <task-number> --text-file <path> [--cause <cause>] [--mechanical]";
     var retryPolicy = ResolveCliAutonomyPolicy(parts);
     var retryCause = ParseRequiredRetryCause(parts, usage);
     var retryRoundKind = HasCliConfirmation(parts, "--mechanical")
@@ -240,13 +240,14 @@ private static GoalScopedTaskMutationCommand PrepareRetryMutation(IReadOnlyList<
 private static RetryCause ParseRequiredRetryCause(IReadOnlyList<string> parts, string usage)
 {
     var value = GetFlagValue(parts, "--cause");
-    if (value is null ||
-        !Enum.TryParse<RetryCause>(value, ignoreCase: true, out var cause) ||
-        !Enum.IsDefined(cause) ||
-        cause == RetryCause.Unknown)
+    if (value is null)
+        return RetryCause.Unknown;
+
+    if (!Enum.TryParse<RetryCause>(value, ignoreCase: true, out var cause) ||
+        !Enum.IsDefined(cause))
     {
         throw new ArgumentException(
-            $"Retry requires --cause <{string.Join('|', Enum.GetNames<RetryCause>().Where(name => name != nameof(RetryCause.Unknown)))}>; Usage: {usage}");
+            $"Retry --cause must be one of <{string.Join('|', Enum.GetNames<RetryCause>())}>; Usage: {usage}");
     }
 
     return cause;
@@ -436,7 +437,7 @@ private static bool? TryExecuteTaskCommand(string command, IReadOnlyList<string>
 
         case "retry":
             var retryPolicy = ResolveCliAutonomyPolicy(parts);
-            var retryUsage = "retry <task-number> <message> --cause <cause> [--mechanical]|retry <goal-prefix> <task-number> <message> --cause <cause> [--mechanical]|retry --goal <goal-prefix> <task-number> <message> --cause <cause> [--mechanical]|retry <task-number> --text-file <path> --cause <cause> [--mechanical]";
+            var retryUsage = "retry <task-number> <message> [--cause <cause>] [--mechanical]|retry <goal-prefix> <task-number> <message> [--cause <cause>] [--mechanical]|retry --goal <goal-prefix> <task-number> <message> [--cause <cause>] [--mechanical]|retry <task-number> --text-file <path> [--cause <cause>] [--mechanical]";
             var retryCause = ParseRequiredRetryCause(parts, retryUsage);
             var retryRoundKind = HasCliConfirmation(parts, "--mechanical")
                 ? RetryRoundKind.Mechanical

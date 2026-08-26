@@ -141,7 +141,11 @@ private static bool HandleRecover(CliExecutionContext context, IReadOnlyList<str
 
         if (task.Status == WorkTaskStatus.Cancelled)
         {
-            context.Kernel.RequeueInterruptedDispatch(goal.Id, task.Id, note);
+            context.Kernel.RequeueInterruptedDispatch(
+                goal.Id,
+                task.Id,
+                note,
+                RetryCause.EnvironmentApparatusFailure);
             Console.WriteLine($"recover: requeued interrupted task {ConsoleViews.GetTaskDisplayNumber(goal, task.Id)} to dispatchable.");
             alreadyReset.Add(task.Id);
             actions++;

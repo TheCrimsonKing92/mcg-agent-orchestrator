@@ -742,6 +742,87 @@ public sealed class WorkerDispatchTestsDispatchPreparation : WorkerDispatchTestS
     }
 
     [Xunit.Fact]
+    public void AllowedPaidRetryStartsFromThePostCasGoalSnapshot()
+    {
+        var root = CreateTempDirectory();
+        var workingDirectory = Path.Combine(root, "repo");
+        Directory.CreateDirectory(workingDirectory);
+        var workspace = OrchestratorWorkspace.ForDirectory(root, workingDirectory);
+        _ = StateDbMigrations.EnsureUpToDate(workspace.SqliteStatePath);
+        WriteSkill(workingDirectory, "orchestrator-dogfood");
+        var firstAt = DateTimeOffset.Parse("2026-07-07T12:00:00Z");
+        var kernel = new AgentOrchestratorKernel(new TestClock(firstAt));
+        var planner = new TaskSpec(TaskId.New(), "Plan the post-CAS start handoff.", AgentRole.Planner);
+        var goal = kernel.CreateGoal("Start the exact CAS-authorized retry", [planner]);
+        kernel.SetGoalRefinedSpec(goal.Id, new RefinedSpec(
+            "Start the exact CAS-authorized retry",
+            ["A changed paid retry starts from the durable admitted snapshot."],
+            VerificationClass.TestVerifiable,
+            [],
+            []));
+        var agent = SubscriptionPlannerAgent("planner", "Planner");
+        var agents = new[] { agent };
+        var profiles = DispatchTestProfiles();
+        kernel.ActivateGoal(goal.Id, agents);
+        kernel.RetryTask(
+            goal.Id,
+            planner.Id,
+            "First paid retry context.",
+            retryCause: RetryCause.ProviderInterruption);
+        var first = WorkerProfileDispatcher.PrepareSubscriptionReadyBatch(
+            kernel,
+            goal,
+            agents,
+            profiles,
+            workspace.PromptDirectory,
+            workingDirectory,
+            firstAt,
+            commandExists: _ => true);
+        var firstDispatch = Assert.Single(first.Dispatches).Task.LastDispatch!;
+        var firstFingerprint = Assert.IsType<RetryContextFingerprint>(firstDispatch.RetryContextFingerprint);
+        Assert.Equal(
+            RetryAdmissionDecision.Allowed,
+            kernel.RecordPreparedRetryAdmission(
+                goal.Id,
+                planner.Id,
+                firstFingerprint,
+                PaidRouteClassification.Paid,
+                firstAt).Decision);
+        kernel.ReportTaskProgress(goal.Id, planner.Id, WorkTaskStatus.Failed, "First retry failed.");
+        kernel.RetryTask(
+            goal.Id,
+            planner.Id,
+            "Changed actionable retry context.",
+            retryCause: RetryCause.ContractClarification);
+        new SqliteOrchestratorStateRepository(workspace.SqliteStatePath)
+            .SaveAsync(kernel)
+            .GetAwaiter()
+            .GetResult();
+        var checkpointCalls = 0;
+
+        var exception = Record.Exception(() =>
+            GoalManagementCommandService.StartSubscriptionReadyTasks(
+                kernel,
+                workspace,
+                goal,
+                agents,
+                profiles,
+                checkpointBeforeWorkerStart: (_, _, _, _) => checkpointCalls++,
+                runner: new BackgroundDispatchRunner(disableProcessStart: true),
+                sandboxOptions: DisabledSandbox));
+
+        Assert.Null(exception);
+        Assert.True(checkpointCalls > 0);
+        var persistedTask = kernel.GetTask(goal.Id, planner.Id);
+        var latestDispatchAt = Assert.IsType<DateTimeOffset>(persistedTask.LastDispatch?.DispatchedAt);
+        Assert.Contains(
+            persistedTask.RetryAdmissionHistory,
+            receipt =>
+                receipt.LinkedDispatchAt == latestDispatchAt &&
+                receipt.Decision is RetryAdmissionDecision.Allowed or RetryAdmissionDecision.ResumedReservation);
+    }
+
+    [Xunit.Fact]
     public void RetriedDispatchFingerprintRetainsReviewedCandidateFromDispatchHistory()
     {
         var root = CreateTempDirectory();

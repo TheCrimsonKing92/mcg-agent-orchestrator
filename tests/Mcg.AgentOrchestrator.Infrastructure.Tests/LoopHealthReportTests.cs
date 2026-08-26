@@ -296,8 +296,50 @@ public sealed class LoopHealthReportTests
 
         Assert.True(report.RetryFingerprintUnavailableCount > 0);
         Assert.True(report.RetryPaidAuthorityUnknownCount > 0);
-        Assert.True(report.RetryCauseUnavailableCount > 0);
-        Assert.True(report.RetryCauseDistribution.Single(item => item.Cause == RetryCause.Unknown).Count > 0);
+        Assert.Equal(0, report.RetryCauseUnavailableCount);
+        Assert.Equal(0, report.RetryCauseDistribution.Single(item => item.Cause == RetryCause.Unknown).Count);
+    }
+
+    [Xunit.Fact]
+    public void LoopHealthLegacyUnknownCauseCountsOnlyDurablyPaidRetries()
+    {
+        var firstAt = DateTimeOffset.Parse("2026-08-25T10:00:00Z");
+        var clock = new MutableClock(firstAt);
+        var kernel = new AgentOrchestratorKernel(clock);
+        var goal = kernel.CreateGoal("Count only paid legacy retry causes", [MakeTask(), MakeTask()]);
+        kernel.ActivateGoal(goal.Id, DefaultAgents);
+        var paid = goal.Tasks[0];
+        var unavailable = goal.Tasks[1];
+
+        kernel.RecordTaskDispatch(goal.Id, paid.Id, PaidDispatch(firstAt, Fingerprint("paid-first")));
+        kernel.RecordDispatchExecutionResult(
+            goal.Id,
+            paid.Id,
+            new TaskVerificationRecord(DispatchCommand, WorkDir, 1, "", "failed", firstAt));
+        clock.UtcNow = firstAt.AddMinutes(1);
+        kernel.RetryTask(goal.Id, paid.Id, "Legacy retry with unavailable cause.", RetryCause.Unknown);
+        kernel.RecordTaskDispatch(goal.Id, paid.Id, PaidDispatch(clock.UtcNow, Fingerprint("paid-retry")));
+
+        kernel.RecordTaskDispatch(
+            goal.Id,
+            unavailable.Id,
+            new TaskDispatchRecord("worker-cli", DispatchCommand, WorkDir, firstAt));
+        kernel.RecordDispatchExecutionResult(
+            goal.Id,
+            unavailable.Id,
+            new TaskVerificationRecord(DispatchCommand, WorkDir, 1, "", "failed", firstAt));
+        clock.UtcNow = firstAt.AddMinutes(2);
+        kernel.RetryTask(goal.Id, unavailable.Id, "Legacy retry with unavailable paid authority.", RetryCause.Unknown);
+        kernel.RecordTaskDispatch(
+            goal.Id,
+            unavailable.Id,
+            new TaskDispatchRecord("worker-cli", DispatchCommand, WorkDir, clock.UtcNow));
+
+        var report = kernel.BuildLoopHealthReport();
+
+        Assert.Equal(1, report.RetryCauseUnavailableCount);
+        Assert.Equal(1, report.RetryCauseDistribution.Single(item => item.Cause == RetryCause.Unknown).Count);
+        Assert.True(report.RetryPaidAuthorityUnknownCount > 0);
     }
 
     [Xunit.Fact]

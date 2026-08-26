@@ -434,14 +434,6 @@ public sealed partial class AgentOrchestratorKernel
             throw new ArgumentException("Retry message cannot be empty.", nameof(message));
         }
 
-        if (retryCause == RetryCause.Unknown)
-        {
-            throw new ArgumentOutOfRangeException(
-                nameof(retryCause),
-                retryCause,
-                "A prospective retry requires an explicit classified cause; Unknown is reserved for legacy or unavailable history.");
-        }
-
         if (task.Status == WorkTaskStatus.Running || task.LastProcess is { IsRunning: true })
         {
             throw new InvalidOperationException($"Task '{taskId}' is already running; refresh or cancel it before retrying.");
@@ -619,6 +611,7 @@ public sealed partial class AgentOrchestratorKernel
         GoalId goalId,
         TaskId taskId,
         string message,
+        RetryCause retryCause,
         string? interruptedDispatchId = null)
     {
         var goal = GetGoal(goalId);
@@ -640,7 +633,7 @@ public sealed partial class AgentOrchestratorKernel
         task.ClearLastDispatch();
         task.ClearLastProcess();
         task.ClearSubscriptionRetryAfter();
-        task.RecordRetry(_clock.UtcNow, RetryCause.ProviderInterruption);
+        task.RecordRetry(_clock.UtcNow, retryCause);
         task.SetInterruptedDispatchRecovery(interruptedDispatchId);
         task.SetStatus(task.AssignedAgentId is null ? WorkTaskStatus.Pending : WorkTaskStatus.Assigned);
         Append(goal, taskId, ProgressKind.TaskRetried, retryMessage);

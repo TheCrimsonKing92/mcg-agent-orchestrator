@@ -323,6 +323,7 @@ public static class LoopHealthReport
         return task.DispatchHistory
             .Skip(1)
             .Count(dispatch =>
+                dispatch.PaidRoute == PaidRouteClassification.Paid &&
                 !receiptAttempts.Contains(dispatch.DispatchedAt));
     }
 

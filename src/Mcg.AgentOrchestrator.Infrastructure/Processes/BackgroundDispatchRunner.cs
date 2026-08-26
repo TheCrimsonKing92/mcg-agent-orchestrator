@@ -947,7 +947,11 @@ public sealed class BackgroundDispatchRunner
             kernel.RecordTaskNote(goalId, taskId, $"{disposition.EventName}: {disposition.Message}");
             if (disposition.ShouldRequeue)
             {
-                kernel.RequeueInterruptedDispatch(goalId, taskId, disposition.Message);
+                kernel.RequeueInterruptedDispatch(
+                    goalId,
+                    taskId,
+                    disposition.Message,
+                    RetryCause.ProviderInterruption);
             }
         }
 
@@ -2273,7 +2277,12 @@ public sealed class BackgroundDispatchRunner
             return false;
         }
 
-        kernel.RequeueInterruptedDispatch(goalId, taskId, message, dispatchId);
+        kernel.RequeueInterruptedDispatch(
+            goalId,
+            taskId,
+            message,
+            RetryCause.ProviderInterruption,
+            dispatchId);
         return true;
     }
 

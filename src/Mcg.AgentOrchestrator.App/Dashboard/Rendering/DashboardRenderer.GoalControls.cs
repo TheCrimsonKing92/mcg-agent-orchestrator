@@ -325,6 +325,10 @@ public static partial class DashboardRenderer
         html.AppendLine($"<form class=\"controls compact\" data-action=\"{prefix}/retry\">");
         html.AppendLine($"<input type=\"hidden\" name=\"idempotencyKey\" value=\"dashboard-retry-{Guid.NewGuid():N}\">");
         html.AppendLine("<div class=\"field\"><label>Retry note</label><input class=\"wide\" name=\"message\" placeholder=\"What changed or what should be tried next?\" required></div>");
+        html.AppendLine("<div class=\"field\"><label>Retry cause</label><select name=\"cause\">");
+        foreach (var cause in Enum.GetNames<RetryCause>())
+            html.AppendLine($"<option value=\"{cause}\">{cause}</option>");
+        html.AppendLine("</select></div>");
         html.AppendLine("<button type=\"submit\">Retry task</button>");
         html.AppendLine("</form>");
         html.AppendLine("</section>");

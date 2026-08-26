@@ -1497,14 +1497,17 @@ public sealed class DashboardRenderingTests
 {
     var empty = Assert.ThrowsAny<ArgumentException>(() => DashboardRequestParser.ParseRetrySubmission(""));
     var json = Assert.ThrowsAny<ArgumentException>(() => DashboardRequestParser.ParseRetrySubmission("{\"message\":\"\"}"));
-    var missingCause = Assert.ThrowsAny<ArgumentException>(() =>
-        DashboardRequestParser.ParseRetrySubmission("{\"message\":\"Fix failed verification\"}"));
+    var missingCause = DashboardRequestParser.ParseRetrySubmission(
+        "{\"message\":\"Fix failed verification\"}");
+    var explicitUnknown = DashboardRequestParser.ParseRetrySubmission(
+        "{\"message\":\"Retry with unavailable classification\",\"cause\":\"Unknown\"}");
     var parsed = DashboardRequestParser.ParseRetrySubmission(
         "{\"message\":\"Fix failed verification\",\"cause\":\"NewTestFinding\",\"idempotencyKey\":\"dashboard-submit-1\"}");
 
     Assert.Contains("Retry note cannot be empty", empty.Message, StringComparison.Ordinal);
     Assert.Contains("non-empty 'message'", json.Message, StringComparison.Ordinal);
-    Assert.Contains("non-Unknown 'cause'", missingCause.Message, StringComparison.Ordinal);
+    Assert.Equal(nameof(RetryCause.Unknown), missingCause.Cause);
+    Assert.Equal(nameof(RetryCause.Unknown), explicitUnknown.Cause);
     Assert.Equal("Fix failed verification", parsed.Message);
     Assert.Equal(nameof(RetryCause.NewTestFinding), parsed.Cause);
     Assert.Equal("dashboard-submit-1", parsed.IdempotencyKey);
@@ -2014,6 +2017,9 @@ public sealed class DashboardRenderingTests
     Assert.Contains($"/api/goals/{goalPrefix}/tasks/3/retry", goalHtml, StringComparison.Ordinal);
     Assert.Contains("name=\"idempotencyKey\" value=\"dashboard-retry-", goalHtml, StringComparison.Ordinal);
     Assert.Contains("Retry note", goalHtml, StringComparison.Ordinal);
+    Assert.Contains("name=\"cause\"", goalHtml, StringComparison.Ordinal);
+    Assert.Contains("value=\"Unknown\"", goalHtml, StringComparison.Ordinal);
+    Assert.Contains("value=\"NewSourceFinding\"", goalHtml, StringComparison.Ordinal);
     Assert.Contains("What changed or what should be tried next?", goalHtml, StringComparison.Ordinal);
     Assert.Contains($"/api/goals/{goalPrefix}/tasks/3/profile-dispatch", goalHtml, StringComparison.Ordinal);
     Assert.Contains($"/api/goals/{goalPrefix}/tasks/3/subscription-dispatch", goalHtml, StringComparison.Ordinal);

@@ -206,7 +206,11 @@ internal sealed class ProgressiveReviewSteeringCoordinator
         };
 
         kernel.RecordTaskNote(goal.Id, taskId, effectiveGuidanceText);
-        kernel.RequeueInterruptedDispatch(goal.Id, taskId, "ProgressiveReviewSteer: cancelled misdirected Developer dispatch; restarting with guidance.");
+        kernel.RequeueInterruptedDispatch(
+            goal.Id,
+            taskId,
+            "ProgressiveReviewSteer: cancelled misdirected Developer dispatch; restarting with guidance.",
+            RetryCause.ContractClarification);
         var refreshedGoal = kernel.GetGoal(goal.Id);
         var refreshedTask = refreshedGoal.Tasks.Single(candidate => candidate.Id == taskId);
         var admission = BuildAdmission(refreshedGoal, refreshedTask, originalDispatch, originalProcess, intent);
@@ -309,7 +313,8 @@ internal sealed class ProgressiveReviewSteeringCoordinator
                 kernel.RequeueInterruptedDispatch(
                     new GoalId(intent.GoalId),
                     new TaskId(intent.TaskId),
-                    $"ProgressiveReviewSteer: cancellation path {cancelPath} did not restart; preserved edits and requeued.");
+                    $"ProgressiveReviewSteer: cancellation path {cancelPath} did not restart; preserved edits and requeued.",
+                    RetryCause.ContractClarification);
                 task = kernel.GetTask(new GoalId(intent.GoalId), new TaskId(intent.TaskId));
             }
             catch (Exception ex)
@@ -345,7 +350,8 @@ internal sealed class ProgressiveReviewSteeringCoordinator
         kernel.RequeueInterruptedDispatch(
             goalId,
             taskId,
-            $"ProgressiveReviewSteer: cancel tree death is unconfirmed ({proof}); requeued behind retained process liveness evidence.");
+            $"ProgressiveReviewSteer: cancel tree death is unconfirmed ({proof}); requeued behind retained process liveness evidence.",
+            RetryCause.ContractClarification);
         kernel.RecordTaskProcessRefreshed(goalId, taskId, originalProcess, verification: null);
         var task = kernel.GetTask(goalId, taskId);
         return $"path=progressive-review-steering/tree-death-unconfirmed disposition={task.Status} preservation={preservation} hold=retained-live-process";

@@ -24,6 +24,7 @@ public sealed class GoalLifecycleTests
     [Xunit.InlineData(RetryCause.MainDriftConflict)]
     [Xunit.InlineData(RetryCause.ProviderInterruption)]
     [Xunit.InlineData(RetryCause.UnchangedContextRepeat)]
+    [Xunit.InlineData(RetryCause.Unknown)]
     public void RetryTaskPersistsEachSupportedTypedCause(RetryCause retryCause)
     {
         var kernel = new AgentOrchestratorKernel(new FakeClock());
@@ -38,8 +39,8 @@ public sealed class GoalLifecycleTests
         Assert.Equal(retryCause, task.PendingRetryCause);
     }
 
-    [Xunit.Fact(DisplayName = "RetryTask_rejects_Unknown_for_a_prospective_retry")]
-    public void RetryTaskRejectsUnknownForAProspectiveRetry()
+    [Xunit.Fact(DisplayName = "RetryTask_persists_explicit_Unknown_for_an_unclassified_operator_retry")]
+    public void RetryTaskPersistsExplicitUnknownForAnUnclassifiedOperatorRetry()
     {
         var kernel = new AgentOrchestratorKernel(new FakeClock());
         var goal = kernel.CreateGoal(
@@ -48,21 +49,19 @@ public sealed class GoalLifecycleTests
         kernel.ActivateGoal(goal.Id, DefaultAgents());
         var task = goal.Tasks.Single();
 
-        var exception = Assert.Throws<ArgumentOutOfRangeException>(() =>
-            kernel.RetryTask(goal.Id, task.Id, "Retry without a classified cause.", RetryCause.Unknown));
+        kernel.RetryTask(goal.Id, task.Id, "Retry without an available classification.", RetryCause.Unknown);
 
-        Assert.Equal("retryCause", exception.ParamName);
+        Assert.Equal(RetryCause.Unknown, task.PendingRetryCause);
     }
 
-    [Xunit.Fact(DisplayName = "TaskSpec_retry_transition_rejects_Unknown_for_prospective_history")]
-    public void TaskSpecRetryTransitionRejectsUnknownForProspectiveHistory()
+    [Xunit.Fact(DisplayName = "TaskSpec_retry_transition_preserves_explicit_Unknown_history")]
+    public void TaskSpecRetryTransitionPreservesExplicitUnknownHistory()
     {
         var task = new TaskSpec(TaskId.New(), "Implement", AgentRole.Developer);
 
-        var exception = Assert.Throws<ArgumentOutOfRangeException>(() =>
-            task.RecordRetry(DateTimeOffset.Parse("2026-08-25T12:00:00Z"), RetryCause.Unknown));
+        task.RecordRetry(DateTimeOffset.Parse("2026-08-25T12:00:00Z"), RetryCause.Unknown);
 
-        Assert.Equal("retryCause", exception.ParamName);
+        Assert.Equal(RetryCause.Unknown, task.PendingRetryCause);
     }
 
     [Xunit.Fact(DisplayName = "GoalLifecycle_identifies_active_goal_with_failed_task")]
@@ -1020,8 +1019,12 @@ public sealed class GoalLifecycleTests
             developer.Id,
             new TaskDispatchRecord("Developer", "worker", "C:\\repo", DateTimeOffset.UtcNow));
         kernel.RecordDispatchResultCommit(goal.Id, developer.Id, "bbb222");
-        kernel.RequeueInterruptedDispatch(goal.Id, developer.Id, "Retry the interrupted changed attempt.");
-        Assert.Equal(RetryCause.ProviderInterruption, developer.PendingRetryCause);
+        kernel.RequeueInterruptedDispatch(
+            goal.Id,
+            developer.Id,
+            "Retry the progressively steered changed attempt.",
+            RetryCause.ContractClarification);
+        Assert.Equal(RetryCause.ContractClarification, developer.PendingRetryCause);
         CompleteCandidateDispatch(kernel, goal, developer, "bbb222", "bbb222");
 
         Assert.Equal(WorkTaskStatus.Assigned, tester.Status);

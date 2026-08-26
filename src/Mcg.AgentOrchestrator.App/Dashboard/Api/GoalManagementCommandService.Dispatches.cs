@@ -356,6 +356,7 @@ public static SubscriptionStartResult StartSubscriptionReadyTasks(
             DispatchRecordCheckpointPhase.BeforeProcessStart);
     }
 
+    goal = kernel.GetGoal(goal.Id);
     var processes = StartDispatches(
         kernel,
         workspace,

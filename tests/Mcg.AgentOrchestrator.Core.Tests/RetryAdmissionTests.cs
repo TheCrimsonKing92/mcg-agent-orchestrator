@@ -254,7 +254,7 @@ public sealed class RetryAdmissionTests
     }
 
     [Xunit.Fact]
-    public void AcceptanceRegate_PreconditionsMet_QueuesAcceptanceOnce()
+    public void AcceptanceRegate_DoesNotRestoreVerificationOrCompletionState()
     {
         var kernel = new AgentOrchestratorKernel();
         var task = new TaskSpec(TaskId.New(), "Review candidate", AgentRole.Reviewer);
@@ -294,14 +294,14 @@ public sealed class RetryAdmissionTests
         kernel.ApplyPreparedRetryAdmission(goal.Id, task.Id, result);
         kernel.ApplyPreparedRetryAdmission(goal.Id, task.Id, result);
 
-        Assert.Equal(WorkTaskStatus.Completed, task.Status);
-        Assert.Equal(GoalStatus.Verified, goal.Status);
-        Assert.Null(task.RetryAdmissionHoldRoute);
+        Assert.Equal(WorkTaskStatus.WaitingForHuman, task.Status);
+        Assert.Equal(GoalStatus.WaitingForHuman, goal.Status);
+        Assert.Equal(RetryAdmissionRoute.HumanClarification, task.RetryAdmissionHoldRoute);
+        Assert.Null(task.LastVerification);
         Assert.Null(task.LastProcess);
         Assert.Equal(0, goal.OperatorAcceptanceRegateCount);
         Assert.Single(goal.Timeline.Where(item => item.Message.Contains("receipt=acceptance-regate", StringComparison.Ordinal)));
-        Assert.True(kernel.BeginGoalAcceptanceVerification(goal.Id, "Run deterministic acceptance."));
-        Assert.False(kernel.BeginGoalAcceptanceVerification(goal.Id, "Do not duplicate acceptance."));
+        Assert.Single(kernel.HumanInputRequests, request => request.GoalId == goal.Id && !request.IsCompleted);
     }
 
     [Xunit.Fact]

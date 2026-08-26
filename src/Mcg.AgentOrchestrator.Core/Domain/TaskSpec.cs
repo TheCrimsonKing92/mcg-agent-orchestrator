@@ -492,23 +492,6 @@ public sealed class TaskSpec
 
     internal void ClearLatestVerification() => LastVerification = null;
 
-    internal bool TryRestoreSuccessfulVerificationForAcceptanceRegate()
-    {
-        var verification = _verificationHistory
-            .Where(candidate =>
-                (LatestRetryAt is null || candidate.CompletedAt <= LatestRetryAt.Value))
-            .OrderByDescending(candidate => candidate.CompletedAt)
-            .FirstOrDefault();
-        if (verification is null || !verification.Succeeded)
-            return false;
-
-        LastVerification = verification;
-        LastProcess = null;
-        RetryAdmissionHoldRoute = null;
-        SetStatus(WorkTaskStatus.Completed);
-        return true;
-    }
-
     internal void RecordCompletionVerdict(bool verifiedSuccess, string? rule)
     {
         if (LastVerification is null)
@@ -623,14 +606,6 @@ public sealed class TaskSpec
         RetryCause retryCause,
         RetryRoundKind? retryRoundKind = null)
     {
-        if (retryCause == RetryCause.Unknown)
-        {
-            throw new ArgumentOutOfRangeException(
-                nameof(retryCause),
-                retryCause,
-                "A prospective retry requires an explicit classified cause; Unknown is reserved for legacy or unavailable history.");
-        }
-
         LatestRetryAt = retriedAt;
         PendingRetryRoundKind = retryRoundKind;
         PendingRetryCause = retryCause;

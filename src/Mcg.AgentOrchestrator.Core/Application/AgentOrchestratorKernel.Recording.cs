@@ -1297,25 +1297,11 @@ public sealed partial class AgentOrchestratorKernel
         RetryAdmissionReceipt receipt,
         string marker)
     {
-        if (heldTask.TryRestoreSuccessfulVerificationForAcceptanceRegate())
-        {
-            RefreshGoalStatus(goal);
-            if (goal.Status == GoalStatus.Verified)
-            {
-                Append(
-                    goal,
-                    null,
-                    ProgressKind.GoalPolicyDecision,
-                    $"{marker}; restored the unchanged task's prior successful verification and queued deterministic acceptance re-gating.");
-                return;
-            }
-        }
-
         heldTask.SetRetryAdmissionHold(RetryAdmissionRoute.HumanClarification);
         RequestHumanInputDeduplicated(
             goal.Id,
             heldTask.Id,
-            $"Retry admission could not establish every deterministic acceptance precondition; operator review is required before another paid attempt. {marker}",
+            $"Retry admission selected acceptance re-gating, but a no-progress prevention cannot restore verification or mark work completed; operator review is required. {marker}",
             HumanWaitKind.RecoveryChoice,
             isAutoDefaultable: false,
             isDismissible: false,
