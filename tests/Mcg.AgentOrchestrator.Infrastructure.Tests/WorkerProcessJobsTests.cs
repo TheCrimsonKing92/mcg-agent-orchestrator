@@ -1328,6 +1328,47 @@ public sealed class WorkerProcessJobsTests : IDisposable
         Assert.False(WorkerProcessJobs.HasRegisteredJob(processId));
     }
 
+    [Xunit.Fact]
+    public void WorkerProcessJobsPidAssociatedStartInfoThrowsPredictedDiagnostic()
+    {
+        if (!OperatingSystem.IsWindows())
+        {
+            return;
+        }
+
+        Process? child = null;
+        var processId = 0;
+        try
+        {
+            child = WorkerProcessJobs.StartRegisteredOrThrow(
+                new ProcessStartInfo
+                {
+                    FileName = "cmd.exe",
+                    Arguments = "/d /c exit 0",
+                    UseShellExecute = false,
+                    CreateNoWindow = true
+                },
+                "pid-associated-start-info-red");
+            processId = child.Id;
+
+            var exception = Assert.Throws<InvalidOperationException>(() => _ = child.StartInfo);
+
+            Assert.Equal(
+                "Process was not started by this object, so requested information cannot be determined.",
+                exception.Message);
+            Assert.Contains("System.Diagnostics.Process.get_StartInfo", exception.StackTrace, StringComparison.Ordinal);
+        }
+        finally
+        {
+            if (processId != 0)
+            {
+                WorkerProcessJobs.Release(processId);
+            }
+
+            child?.Dispose();
+        }
+    }
+
     [Xunit.Fact(DisplayName = "WorkerProcessJobs_release_waits_for_gate_owned_child_process_tree")]
     public void WorkerProcessJobsReleaseWaitsForGateOwnedChildProcessTree()
     {
@@ -1926,7 +1967,7 @@ public sealed class WorkerProcessJobsTests : IDisposable
             [Path.Combine("src", "Mcg.AgentOrchestrator.Infrastructure", "Processes", "LocalProcessVerifier.cs")] =
                 "WorkerProcessJobs.RegisterOrThrow(",
             [Path.Combine("src", "Mcg.AgentOrchestrator.Infrastructure", "Workspaces", "GoalAcceptanceVerifier.cs")] =
-                "WorkerProcessJobs.StartRegisteredOrThrow(",
+                "WorkerProcessJobs.StartRegisteredOwnedOrThrow(",
             [Path.Combine("src", "Mcg.AgentOrchestrator.App", "Orchestration", "PostLandingCanaryRunner.cs")] =
                 "WorkerProcessJobs.StartRegisteredOrThrow("
         };
@@ -1944,7 +1985,7 @@ public sealed class WorkerProcessJobsTests : IDisposable
             "Workspaces",
             "GoalAcceptanceVerifier.cs"));
         var registrationIndex = acceptanceSource.IndexOf(
-            "using var process = StartAcceptanceProcess(",
+            "process = StartAcceptanceProcess(",
             StringComparison.Ordinal);
         var ownedPidAssignmentIndex = acceptanceSource.IndexOf(
             "startedProcessId = process.Id;",
@@ -1952,10 +1993,10 @@ public sealed class WorkerProcessJobsTests : IDisposable
             StringComparison.Ordinal);
         Assert.True(registrationIndex >= 0 && ownedPidAssignmentIndex > registrationIndex);
         var helperIndex = acceptanceSource.IndexOf(
-            "private static Process StartAcceptanceProcess(",
+            "private static RegisteredOwnedProcess StartAcceptanceProcess(",
             StringComparison.Ordinal);
         var atomicStartIndex = acceptanceSource.IndexOf(
-            "return WorkerProcessJobs.StartRegisteredOrThrow(",
+            "return WorkerProcessJobs.StartRegisteredOwnedOrThrow(",
             helperIndex,
             StringComparison.Ordinal);
         var legacyStartIndex = acceptanceSource.IndexOf(

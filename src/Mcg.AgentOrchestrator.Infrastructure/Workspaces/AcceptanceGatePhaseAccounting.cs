@@ -113,7 +113,7 @@ internal sealed class AcceptanceGatePhaseAccountant : IDisposable
     private readonly List<string> _phaseOrder = [];
     private readonly Dictionary<string, TimeSpan> _phaseDurations = new(StringComparer.Ordinal);
     private string? _currentPhase;
-    private string? _currentTarget;
+    private readonly AsyncLocal<string?> _currentTarget = new();
     private long _currentPhaseStartedTimestamp;
     private TimeSpan _recordedLaneDuration;
     private bool _hasRecordedLaneDuration;
@@ -154,17 +154,17 @@ internal sealed class AcceptanceGatePhaseAccountant : IDisposable
     internal static IDisposable BeginCurrentTarget(string target) =>
         CurrentAccountant.Value?.BeginTarget(target) ?? NoopDisposable.Instance;
 
-    internal AcceptanceGateDiagnosticSnapshot Snapshot => new(_currentPhase, _currentTarget);
+    internal AcceptanceGateDiagnosticSnapshot Snapshot => new(_currentPhase, _currentTarget.Value);
 
     internal void SetTarget(string? target)
     {
         ObjectDisposedException.ThrowIf(_disposed, this);
-        _currentTarget = string.IsNullOrWhiteSpace(target) ? null : target.Trim();
+        _currentTarget.Value = string.IsNullOrWhiteSpace(target) ? null : target.Trim();
     }
 
     internal IDisposable BeginTarget(string target)
     {
-        var previous = _currentTarget;
+        var previous = _currentTarget.Value;
         SetTarget(target);
         return new RestoreTargetScope(this, previous);
     }

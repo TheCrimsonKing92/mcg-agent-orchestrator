@@ -46,6 +46,9 @@ internal sealed class RegisteredOwnedProcess : IDisposable
     internal StreamReader StandardOutput => Process.StandardOutput;
     internal StreamReader StandardError => Process.StandardError;
     internal OwnedChildStartMetadata StartMetadata { get; }
+    internal bool HasOpenNativeHandle =>
+        _processHandle is { IsClosed: false, IsInvalid: false };
+    internal bool IsDisposed => _process is null;
 
     internal int ExitCode
     {
@@ -1424,6 +1427,11 @@ public static class WorkerProcessJobs
 
     internal static IReadOnlyList<SpawnRegistryEntry> ListActiveRegistryEntriesForTests() =>
         Registry?.ListActive() ?? [];
+
+    internal static bool HasActiveRegistryEntryForTests(int processId) =>
+        ListActiveRegistryEntriesForTests().Any(entry => entry.ProcessId == processId);
+
+    internal static bool HasActiveJobForTests(int processId) => Jobs.ContainsKey(processId);
 
     internal static void ClearRegistryForTests()
     {

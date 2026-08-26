@@ -35,6 +35,14 @@ public sealed record AcceptanceCheckResult(
     IReadOnlyList<string>? FailingTestIdentities = null,
     int? ExecutedTestCount = null);
 
+internal sealed record AcceptanceProcessCleanupObservation(
+    int ProcessId,
+    string Stage,
+    bool RegistryActive,
+    bool JobActive,
+    bool NativeHandleOpen,
+    bool ProcessDisposed);
+
 public static class AcceptanceFailureClassifications
 {
     public const string GateEnvironmentInterference = "gate-environment-interference";
@@ -7294,8 +7302,50 @@ public sealed class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
         string[] arguments,
         string workingDirectory,
         TimeSpan commandTimeout,
-        CancellationToken cancellationToken = default) =>
-        RunProcessAsync(arguments, workingDirectory, commandTimeout, cancellationToken);
+        CancellationToken cancellationToken = default,
+        Action<AcceptanceProcessCleanupObservation>? cleanupObserver = null) =>
+        RunProcessAsync(
+            arguments,
+            workingDirectory,
+            commandTimeout,
+            forceUtf8ConsoleOutput: false,
+            cancellationToken,
+            cleanupObserver);
+
+    internal static async Task<(CommandResult Result, string HeartbeatPath)> RunProcessWithHeartbeatForTestsAsync(
+        string[] arguments,
+        string workingDirectory,
+        TimeSpan commandTimeout,
+        string heartbeatPath,
+        Action<AcceptanceProcessCleanupObservation> cleanupObserver,
+        CancellationToken cancellationToken = default)
+    {
+        var previous = CurrentGateHeartbeatContext.Value;
+        CurrentGateHeartbeatContext.Value = new GateHeartbeatContext(
+            "test-goal",
+            "verification-check",
+            "owned-child-cleanup",
+            null,
+            heartbeatPath,
+            null,
+            string.Join(' ', arguments.Select(QuoteForDisplay)),
+            null);
+        try
+        {
+            var result = await RunProcessAsync(
+                arguments,
+                workingDirectory,
+                commandTimeout,
+                forceUtf8ConsoleOutput: false,
+                cancellationToken,
+                cleanupObserver).ConfigureAwait(false);
+            return (result, heartbeatPath);
+        }
+        finally
+        {
+            CurrentGateHeartbeatContext.Value = previous;
+        }
+    }
 
     private static async Task<CommandResult> RunUtf8DiscoveryProcessAsync(
         string[] arguments,
@@ -7314,7 +7364,8 @@ public sealed class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
         string workingDirectory,
         TimeSpan commandTimeout,
         bool forceUtf8ConsoleOutput,
-        CancellationToken cancellationToken)
+        CancellationToken cancellationToken,
+        Action<AcceptanceProcessCleanupObservation>? cleanupObserver = null)
     {
         // Keep the shell command semantics, but own the capture file offsets in this process. The
         // drain keeps consuming after the cap so a noisy child cannot block or grow the files.
@@ -7341,6 +7392,10 @@ public sealed class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
         CancellationTokenSource? captureDrainCts = null;
         Task<CaptureLimitResult>[]? captureDrains = null;
         Stream[]? captureSources = null;
+        RegisteredOwnedProcess? process = null;
+        var heartbeatFinalized = false;
+        var registrationReleased = false;
+        var processDisposed = false;
 
         ConfigureHermeticVerificationEnvironment(
             startInfo.Environment,
@@ -7386,8 +7441,9 @@ public sealed class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
                 ];
             }
 
-            using var process = StartAcceptanceProcess(startInfo, workingDirectory);
+            process = StartAcceptanceProcess(startInfo, workingDirectory);
             startedProcessId = process.Id;
+            ObserveProcessCleanup(cleanupObserver, process.Id, process, "started");
             if (captureConnections is not null)
             {
                 await Task.WhenAll(captureConnections)
@@ -7479,27 +7535,49 @@ public sealed class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
             elapsed.Stop();
             var exitCode = timedOut ? -1 : process.ExitCode;
             keepOutputFiles = timedOut || exitCode != 0;
-            WorkerProcessJobs.Release(process.Id, out var accounting);
-            if (heartbeat is not null)
+            WorkerProcessJobAccounting? accounting = null;
+            try
             {
-                if (heartbeatCts is not null)
+                if (heartbeat is not null)
                 {
-                    try { await heartbeatCts.CancelAsync().ConfigureAwait(false); } catch { }
-                }
+                    if (heartbeatCts is not null)
+                    {
+                        try { await heartbeatCts.CancelAsync().ConfigureAwait(false); } catch { }
+                    }
 
-                if (heartbeatTask is not null)
+                    if (heartbeatTask is not null)
+                    {
+                        try { await heartbeatTask.ConfigureAwait(false); } catch { }
+                    }
+
+                    heartbeatFinalized = true;
+                    heartbeat.WriteFinal(timedOut ? "timed-out" : "completed", childPid: process.Id, exitCode: exitCode);
+                    ObserveProcessCleanup(cleanupObserver, process.Id, process, "heartbeat-final");
+                    heartbeat = null;
+                    heartbeatCts?.Dispose();
+                    heartbeatCts = null;
+                    heartbeatTask = null;
+                }
+            }
+            finally
+            {
+                try
                 {
-                    try { await heartbeatTask.ConfigureAwait(false); } catch { }
+                    registrationReleased = true;
+                    WorkerProcessJobs.Release(process.Id, out accounting);
+                    ObserveProcessCleanup(cleanupObserver, process.Id, process, "registration-released");
                 }
-
-                heartbeat.WriteFinal(timedOut ? "timed-out" : "completed", childPid: process.Id, exitCode: exitCode);
-                heartbeat = null;
-                heartbeatCts?.Dispose();
-                heartbeatCts = null;
-                heartbeatTask = null;
+                finally
+                {
+                    var disposedProcessId = process.Id;
+                    processDisposed = true;
+                    process.Dispose();
+                    ObserveProcessCleanup(cleanupObserver, disposedProcessId, process, "owned-child-disposed");
+                    process = null;
+                    startedProcessId = null;
+                }
             }
             accounting ??= killedAccounting;
-            startedProcessId = null;
             return new CommandResult(
                 exitCode,
                 (stdout + stderr).Trim(),
@@ -7542,11 +7620,42 @@ public sealed class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
                 heartbeatCts.Dispose();
             }
 
-            heartbeat?.WriteFinal("failed", childPid: startedProcessId, exitCode: null);
-
-            if (startedProcessId is { } processId)
+            try
             {
-                WorkerProcessJobs.Release(processId);
+                if (heartbeat is not null && !heartbeatFinalized)
+                {
+                    heartbeatFinalized = true;
+                    heartbeat.WriteFinal("failed", childPid: startedProcessId, exitCode: null);
+                    if (process is not null)
+                    {
+                        ObserveProcessCleanup(cleanupObserver, process.Id, process, "heartbeat-final");
+                    }
+                }
+            }
+            finally
+            {
+                try
+                {
+                    if (process is not null && startedProcessId is { } processId && !registrationReleased)
+                    {
+                        registrationReleased = true;
+                        WorkerProcessJobs.Release(processId);
+                        ObserveProcessCleanup(cleanupObserver, process.Id, process, "registration-released");
+                    }
+                }
+                finally
+                {
+                    if (process is not null && !processDisposed)
+                    {
+                        var disposedProcessId = process.Id;
+                        processDisposed = true;
+                        process.Dispose();
+                        ObserveProcessCleanup(cleanupObserver, disposedProcessId, process, "owned-child-disposed");
+                        process = null;
+                    }
+
+                    startedProcessId = null;
+                }
             }
 
             if (!keepOutputFiles)
@@ -7555,6 +7664,26 @@ public sealed class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
                 TryDeleteFile(stderrPath);
             }
         }
+    }
+
+    private static void ObserveProcessCleanup(
+        Action<AcceptanceProcessCleanupObservation>? observer,
+        int processId,
+        RegisteredOwnedProcess process,
+        string stage)
+    {
+        if (observer is null)
+        {
+            return;
+        }
+
+        observer(new AcceptanceProcessCleanupObservation(
+            processId,
+            stage,
+            WorkerProcessJobs.HasActiveRegistryEntryForTests(processId),
+            WorkerProcessJobs.HasActiveJobForTests(processId),
+            process.HasOpenNativeHandle,
+            process.IsDisposed));
     }
 
     private static RegisteredOwnedProcess StartAcceptanceProcess(

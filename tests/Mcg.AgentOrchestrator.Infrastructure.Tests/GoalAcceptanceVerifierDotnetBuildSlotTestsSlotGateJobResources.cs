@@ -1,6 +1,7 @@
 using Mcg.AgentOrchestrator.Core;
 using Mcg.AgentOrchestrator.App.Orchestration;
 using Mcg.AgentOrchestrator.Infrastructure;
+using System.Collections.Concurrent;
 using System.Diagnostics;
 using System.Text;
 using System.Text.Json;
@@ -124,6 +125,119 @@ public sealed class GoalAcceptanceVerifierDotnetBuildSlotTestsSlotGateJobResourc
         }
         finally
         {
+            DeleteDirectoryWithRetry(root);
+        }
+    }
+
+    [Xunit.Fact]
+    public async Task ProductionRunnerConcurrentChildrenReleaseOwnedResourcesOnce()
+    {
+        if (!OperatingSystem.IsWindows())
+        {
+            return;
+        }
+
+        var root = CreateTempDirectory();
+        var registryPath = Path.Combine(root, "spawn-registry.db");
+        var shim = Path.Combine(root, "concurrent-child.cmd");
+        var readyPaths = new[] { Path.Combine(root, "first.ready"), Path.Combine(root, "second.ready") };
+        var signalPaths = new[] { Path.Combine(root, "first.signal"), Path.Combine(root, "second.signal") };
+        var heartbeatPaths = new[] { Path.Combine(root, "first-heartbeat.json"), Path.Combine(root, "second-heartbeat.json") };
+        var observations = new ConcurrentQueue<AcceptanceProcessCleanupObservation>();
+        File.WriteAllText(shim, """
+            @echo off
+            if not "%~1"=="slow" exit /b 91
+            > "%~2" echo ready
+            :wait_for_signal
+            if not exist "%~3" goto wait_for_signal
+            echo %~4-out
+            echo %~4-err 1>&2
+            exit /b 0
+            """);
+        WorkerProcessJobs.ConfigureRegistry(registryPath);
+
+        try
+        {
+            var readyObserved = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+            using var watcher = new FileSystemWatcher(root, "*.ready")
+            {
+                EnableRaisingEvents = true
+            };
+            watcher.Created += (_, _) =>
+            {
+                if (readyPaths.All(File.Exists))
+                {
+                    readyObserved.TrySetResult();
+                }
+            };
+
+            var runs = Enumerable.Range(0, 2)
+                .Select(index => GoalAcceptanceVerifier.RunProcessWithHeartbeatForTestsAsync(
+                    [shim, "slow", readyPaths[index], signalPaths[index], $"child-{index}"],
+                    root,
+                    TimeSpan.FromSeconds(15),
+                    heartbeatPaths[index],
+                    observations.Enqueue))
+                .ToArray();
+            if (readyPaths.All(File.Exists))
+            {
+                readyObserved.TrySetResult();
+            }
+
+            await readyObserved.Task.WaitAsync(TimeSpan.FromSeconds(10));
+            Assert.Equal(2, WorkerProcessJobs.ListActiveRegistryEntriesForTests().Count);
+            foreach (var signalPath in signalPaths)
+            {
+                File.WriteAllText(signalPath, "go");
+            }
+
+            var completed = await Task.WhenAll(runs);
+
+            Assert.All(completed, run => Assert.Equal(0, run.Result.ExitCode));
+            Assert.Empty(WorkerProcessJobs.ListActiveRegistryEntriesForTests());
+            Assert.Equal(2, observations.Select(observation => observation.ProcessId).Distinct().Count());
+            foreach (var processObservations in observations.GroupBy(observation => observation.ProcessId))
+            {
+                Assert.Equal(
+                    ["started", "heartbeat-final", "registration-released", "owned-child-disposed"],
+                    processObservations.Select(observation => observation.Stage).ToArray());
+                var heartbeatFinal = Assert.Single(
+                    processObservations,
+                    observation => observation.Stage == "heartbeat-final");
+                Assert.True(heartbeatFinal.RegistryActive);
+                Assert.True(heartbeatFinal.JobActive);
+                Assert.True(heartbeatFinal.NativeHandleOpen);
+
+                var registrationReleased = Assert.Single(
+                    processObservations,
+                    observation => observation.Stage == "registration-released");
+                Assert.False(registrationReleased.RegistryActive);
+                Assert.False(registrationReleased.JobActive);
+                Assert.True(registrationReleased.NativeHandleOpen);
+
+                var disposed = Assert.Single(
+                    processObservations,
+                    observation => observation.Stage == "owned-child-disposed");
+                Assert.False(disposed.RegistryActive);
+                Assert.False(disposed.JobActive);
+                Assert.False(disposed.NativeHandleOpen);
+                Assert.True(disposed.ProcessDisposed);
+            }
+
+            foreach (var heartbeatPath in heartbeatPaths)
+            {
+                using var heartbeat = JsonDocument.Parse(File.ReadAllText(heartbeatPath));
+                Assert.Equal("completed", heartbeat.RootElement.GetProperty("state").GetString());
+            }
+        }
+        finally
+        {
+            foreach (var signalPath in signalPaths)
+            {
+                File.WriteAllText(signalPath, "cleanup");
+            }
+
+            WorkerProcessJobs.ClearRegistryForTests();
             DeleteDirectoryWithRetry(root);
         }
     }

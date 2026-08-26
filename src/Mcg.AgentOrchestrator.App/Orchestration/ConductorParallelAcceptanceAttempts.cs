@@ -332,6 +332,7 @@ internal sealed class ConductorParallelAcceptanceAttemptCoordinator
     private readonly TimeSpan _recentHeartbeatGrace;
     private readonly Action<ConductorParallelAcceptanceAttempt, string>? _heartbeatWritten;
     private readonly ConductorParallelAcceptanceAttemptCompletionGateForTests? _attemptCompletionGateForTests;
+    private readonly Action<ConductorParallelAcceptanceAttempt, string>? _cleanupObservedForTests;
     private readonly Func<ConductorParallelAcceptanceAttempt, ConductorParallelAcceptanceCandidate, DotnetBuildEnvironmentLease?> _acquireStableSlotLease;
     private readonly TimeSpan _buildPermitBusyTimeout;
     private readonly Action<TimeSpan>? _buildPermitSleep;
@@ -349,6 +350,7 @@ internal sealed class ConductorParallelAcceptanceAttemptCoordinator
         TimeSpan? recentHeartbeatGrace = null,
         Action<ConductorParallelAcceptanceAttempt, string>? heartbeatWritten = null,
         ConductorParallelAcceptanceAttemptCompletionGateForTests? attemptCompletionGateForTests = null,
+        Action<ConductorParallelAcceptanceAttempt, string>? cleanupObservedForTests = null,
         Func<ConductorParallelAcceptanceAttempt, ConductorParallelAcceptanceCandidate, DotnetBuildEnvironmentLease?>? acquireStableSlotLease = null,
         ConductEventLogWriter? conductEventLogWriter = null,
         TimeProvider? timeProvider = null,
@@ -374,6 +376,7 @@ internal sealed class ConductorParallelAcceptanceAttemptCoordinator
         _recentHeartbeatGrace = recentHeartbeatGrace ?? DispatchRecoveryPolicy.DefaultRecentHeartbeatGrace;
         _heartbeatWritten = heartbeatWritten;
         _attemptCompletionGateForTests = attemptCompletionGateForTests;
+        _cleanupObservedForTests = cleanupObservedForTests;
         _acquireStableSlotLease = acquireStableSlotLease ?? AcquireAttemptStableSlotLease;
         _conductEventLogWriter = conductEventLogWriter;
         _buildPermitBusyTimeout = buildPermitBusyTimeout ?? DotnetBuildEnvironmentManager.DefaultSlotBusyPollTimeout;
@@ -1237,6 +1240,7 @@ internal sealed class ConductorParallelAcceptanceAttemptCoordinator
                         AcceptanceAttemptArtifactCustody.Release(
                             stableSlotLease.Environment.ArtifactsPath,
                             attempt.AttemptId);
+                        _cleanupObservedForTests?.Invoke(attempt, "artifact-custody-released");
                     }
                 }
                 finally
@@ -1244,6 +1248,7 @@ internal sealed class ConductorParallelAcceptanceAttemptCoordinator
                     if (stableSlotLease is not null)
                     {
                         stableSlotLease.Dispose();
+                        _cleanupObservedForTests?.Invoke(attempt, "stable-slot-released");
                         EmitAttemptLeaseReceipt(
                             "release",
                             attempt,

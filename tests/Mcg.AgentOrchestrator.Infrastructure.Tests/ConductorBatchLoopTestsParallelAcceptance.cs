@@ -2042,10 +2042,18 @@ public sealed class ConductorBatchLoopTestsParallelAcceptance : ConductorBatchLo
 
         var kernel = new AgentOrchestratorKernel();
         var goal = CreateVerifiedSimpleGoal(kernel, "Update src/Mcg.AgentOrchestrator.App/Orchestration/GateEngineFault.cs");
+        var task = goal.Tasks.Single();
         var attemptRoot = CreateTempDirectory("mcg-conductor-gate-engine-fault");
+        var escalations = new List<string>();
+        var acceptanceAttempts = 0;
         var driver = MakeDriver(
             getFacts: _ => new GoalLifecycleFacts(WorkspaceExists: true),
-            runAcceptanceWithSlot: (_, _) => throw CaptureGateEngineFault(),
+            runAcceptanceWithSlot: (_, _) =>
+            {
+                acceptanceAttempts++;
+                throw CaptureGateEngineFault();
+            },
+            writeEscalation: (_, _, reason) => escalations.Add(reason),
             getLandingFileScopes: _ => ["src/Mcg.AgentOrchestrator.App/Orchestration/GateEngineFault.cs"],
             parallelAcceptanceAttemptCoordinator: new ConductorParallelAcceptanceAttemptCoordinator(
                 attemptRoot,
@@ -2058,16 +2066,22 @@ public sealed class ConductorBatchLoopTestsParallelAcceptance : ConductorBatchLo
                 driver,
                 ConductorAutonomyPolicy.Conservative,
                 NoStopPath(),
-                maxIterations: 1);
+                maxIterations: ConductorBatchLoop.ParallelAcceptanceTransientFailureCap,
+                watchInterval: TimeSpan.FromMilliseconds(1),
+                sleepFunc: _ => false);
             var latest = ReadLatestAttempt(attemptRoot, goal);
             using var artifact = JsonDocument.Parse(File.ReadAllText(latest.ResultPath));
             var result = artifact.RootElement;
 
-            Assert.Equal(1, summary.Held);
-            Assert.Equal(0, summary.Escalated);
+            Assert.Equal(ConductorBatchLoop.ParallelAcceptanceTransientFailureCap - 1, summary.Held);
+            Assert.Equal(1, summary.Escalated);
             Assert.Equal(ConductorParallelAcceptanceAttemptOutcome.GateEngineFault, latest.Outcome);
-            Assert.Equal(1, latest.TransientFailureCount);
+            Assert.Equal(ConductorBatchLoop.ParallelAcceptanceTransientFailureCap, latest.TransientFailureCount);
+            Assert.Equal(ConductorBatchLoop.ParallelAcceptanceTransientFailureCap, acceptanceAttempts);
+            Assert.Single(escalations);
+            Assert.Contains("gate-engine fault", escalations.Single(), StringComparison.OrdinalIgnoreCase);
             Assert.Equal(GoalStatus.Verifying, goal.Status);
+            Assert.Equal(WorkTaskStatus.Completed, task.Status);
             Assert.Null(goal.LatestAcceptanceFailure);
             Assert.Equal("System.InvalidOperationException", result.GetProperty("faultType").GetString());
             Assert.Equal("check-execution", result.GetProperty("gatePhase").GetString());
@@ -2076,6 +2090,19 @@ public sealed class ConductorBatchLoopTestsParallelAcceptance : ConductorBatchLo
             Assert.Contains("owned process lifecycle failed", stack, StringComparison.Ordinal);
             Assert.Contains(nameof(ThrowGateEngineCause), stack, StringComparison.Ordinal);
             Assert.DoesNotContain(nameof(ThrowGateEngineCause), latest.Detail, StringComparison.Ordinal);
+
+            var restartSummary = new ConductorBatchLoop().Run(
+                kernel,
+                driver,
+                ConductorAutonomyPolicy.Conservative,
+                NoStopPath(),
+                maxIterations: 1);
+
+            Assert.Equal(1, restartSummary.Escalated);
+            Assert.Equal(ConductorBatchLoop.ParallelAcceptanceTransientFailureCap, acceptanceAttempts);
+            Assert.Equal(GoalStatus.Verifying, goal.Status);
+            Assert.Equal(WorkTaskStatus.Completed, task.Status);
+            Assert.Null(goal.LatestAcceptanceFailure);
         }
         finally
         {
@@ -3062,7 +3089,7 @@ public sealed class ConductorBatchLoopTestsParallelAcceptance : ConductorBatchLo
             Assert.NotNull(completedAttempt);
 
             var expectedOutcome = useLegacyStartThenAttach
-                ? ConductorParallelAcceptanceAttemptOutcome.Failed
+                ? ConductorParallelAcceptanceAttemptOutcome.GateEngineFault
                 : ConductorParallelAcceptanceAttemptOutcome.Passed;
             Assert.True(
                 completedAttempt!.Outcome == expectedOutcome,
@@ -3199,6 +3226,109 @@ public sealed class ConductorBatchLoopTestsParallelAcceptance : ConductorBatchLo
         }
         finally
         {
+            TryDeleteDirectory(attemptRoot);
+        }
+    }
+
+    [Xunit.Fact]
+    public void ConcurrentAttemptsReleaseHeartbeatCustodyAndSlotsOnce()
+    {
+        using var isolatedRoot = IsolatedDotnetRootScope();
+        var (_, goalA) = SimpleGoal("Update src/Mcg.AgentOrchestrator.App/Orchestration/CleanupA.cs");
+        var (_, goalB) = SimpleGoal("Update src/Mcg.AgentOrchestrator.App/Orchestration/CleanupB.cs");
+        for (var attempt = 1;
+             attempt < 128 && BuildPermitIndex(goalA) == BuildPermitIndex(goalB);
+             attempt++)
+        {
+            (_, goalB) = SimpleGoal("Update src/Mcg.AgentOrchestrator.App/Orchestration/CleanupB.cs");
+        }
+        Assert.NotEqual(BuildPermitIndex(goalA), BuildPermitIndex(goalB));
+
+        var attemptRoot = CreateTempDirectory("mcg-conductor-concurrent-cleanup");
+        using var bothRunning = new CountdownEvent(2);
+        using var release = new ManualResetEventSlim(false);
+        var environments = new ConcurrentDictionary<string, DotnetBuildEnvironment>();
+        var heartbeats = new ConcurrentQueue<(string AttemptId, string State)>();
+        var cleanup = new ConcurrentQueue<(string AttemptId, string Stage)>();
+        var coordinator = ThreadedAcceptanceAttemptCoordinator(
+            attemptRoot,
+            out var waitForAttempts,
+            heartbeatWritten: (attempt, state) => heartbeats.Enqueue((attempt.AttemptId, state)),
+            cleanupObservedForTests: (attempt, stage) => cleanup.Enqueue((attempt.AttemptId, stage)));
+        var candidateA = ConductorParallelAcceptanceCandidate.Create(
+            goalA,
+            0,
+            ["src/CleanupA.cs"],
+            "branch-a",
+            "main");
+        var candidateB = ConductorParallelAcceptanceCandidate.Create(
+            goalB,
+            0,
+            ["src/CleanupB.cs"],
+            "branch-b",
+            "main");
+
+        ConductorParallelAcceptanceRunResult RunHeld(
+            ConductorParallelAcceptanceCandidate candidate,
+            ConductorAutonomyPolicy policy,
+            DotnetBuildEnvironmentLease? stableSlotLease,
+            CancellationToken _)
+        {
+            Assert.NotNull(stableSlotLease);
+            environments[candidate.Goal.Id.Value] = stableSlotLease.Environment;
+            bothRunning.Signal();
+            release.Wait();
+            return PassingRun(candidate, policy);
+        }
+
+        try
+        {
+            var startedA = coordinator.Evaluate(candidateA, ConductorAutonomyPolicy.Conservative, RunHeld);
+            var startedB = coordinator.Evaluate(candidateB, ConductorAutonomyPolicy.Conservative, RunHeld);
+            Assert.Equal(ConductorParallelAcceptanceAttemptDecisionKind.Started, startedA.Kind);
+            Assert.Equal(ConductorParallelAcceptanceAttemptDecisionKind.Started, startedB.Kind);
+            Assert.True(bothRunning.Wait(TimeSpan.FromSeconds(10)), "Both acceptance attempts did not reach the signal gate.");
+
+            Assert.All(environments.Values, environment =>
+                Assert.True(File.Exists(AcceptanceAttemptArtifactCustody.MarkerPath(environment.ArtifactsPath))));
+            release.Set();
+            waitForAttempts();
+
+            var completedA = coordinator.Evaluate(candidateA, ConductorAutonomyPolicy.Conservative, RunHeld);
+            var completedB = coordinator.Evaluate(candidateB, ConductorAutonomyPolicy.Conservative, RunHeld);
+            Assert.Equal(ConductorParallelAcceptanceAttemptDecisionKind.Completed, completedA.Kind);
+            Assert.Equal(ConductorParallelAcceptanceAttemptDecisionKind.Completed, completedB.Kind);
+            foreach (var completed in new[] { completedA, completedB })
+            {
+                Assert.Equal(ConductorParallelAcceptanceAttemptOutcome.Passed, completed.Attempt.Outcome);
+                Assert.Equal(
+                    1,
+                    heartbeats.Count(entry =>
+                        entry.AttemptId == completed.Attempt.AttemptId && entry.State == "exiting"));
+                Assert.Equal(
+                    ["artifact-custody-released", "stable-slot-released"],
+                    cleanup
+                        .Where(entry => entry.AttemptId == completed.Attempt.AttemptId)
+                        .Select(entry => entry.Stage)
+                        .ToArray());
+                Assert.Equal(
+                    1,
+                    completed.Attempt.LeaseReceipts?.Count(receipt =>
+                        receipt.Contains("ACCEPTANCE_LEASE_RELEASE", StringComparison.Ordinal)));
+            }
+
+            foreach (var environment in environments.Values)
+            {
+                Assert.False(File.Exists(AcceptanceAttemptArtifactCustody.MarkerPath(environment.ArtifactsPath)));
+                using var reacquired = DotnetBuildEnvironmentManager.AcquireLeaseExecutionLock(
+                    environment,
+                    TimeSpan.Zero);
+            }
+        }
+        finally
+        {
+            release.Set();
+            waitForAttempts();
             TryDeleteDirectory(attemptRoot);
         }
     }
@@ -3763,7 +3893,9 @@ public sealed class ConductorBatchLoopTestsParallelAcceptance : ConductorBatchLo
         out Action waitForAttempts,
         ConductorParallelAcceptanceTryRunPreSlot? tryRunPreSlot = null,
         TimeSpan? buildPermitBusyTimeout = null,
-        Func<ConductorParallelAcceptanceAttempt, ConductorParallelAcceptanceCandidate, DotnetBuildEnvironmentLease?>? acquireStableSlotLease = null)
+        Func<ConductorParallelAcceptanceAttempt, ConductorParallelAcceptanceCandidate, DotnetBuildEnvironmentLease?>? acquireStableSlotLease = null,
+        Action<ConductorParallelAcceptanceAttempt, string>? heartbeatWritten = null,
+        Action<ConductorParallelAcceptanceAttempt, string>? cleanupObservedForTests = null)
     {
         var nextPid = 8000;
         var alive = new ConcurrentDictionary<int, byte>();
@@ -3785,6 +3917,8 @@ public sealed class ConductorBatchLoopTestsParallelAcceptance : ConductorBatchLo
             isProcessAlive: pid => alive.ContainsKey(pid),
             tryRunPreSlot: tryRunPreSlot,
             acquireStableSlotLease: acquireStableSlotLease,
+            heartbeatWritten: heartbeatWritten,
+            cleanupObservedForTests: cleanupObservedForTests,
             buildPermitBusyTimeout: buildPermitBusyTimeout,
             launchOwnedProcess: launch =>
             {
