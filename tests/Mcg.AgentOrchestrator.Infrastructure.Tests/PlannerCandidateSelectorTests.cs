@@ -135,7 +135,7 @@ public sealed class PlannerCandidateSelectorTests
     }
 
     [Xunit.Fact]
-    public void ThreeConfiguredCandidates_WithTwoValid_PreservesPeerAgreementSelection()
+    public void ThreeConfiguredCandidates_TwoValid_SelectsByStructuralQuality()
     {
         var repositoryRoot = InfrastructureTestSupport.FindRepositoryRoot();
         var primary = ReadPlannerFixture(repositoryRoot);
@@ -161,8 +161,8 @@ public sealed class PlannerCandidateSelectorTests
             [new(0, primary), new(1, structurallyStronger), new(2, "invalid")],
             repositoryRoot);
 
-        Xunit.Assert.Equal(0, result.Receipt.SelectedCandidateIndex);
-        Xunit.Assert.Equal("peer-agreement", result.Receipt.SelectionReason);
+        Xunit.Assert.Equal(1, result.Receipt.SelectedCandidateIndex);
+        Xunit.Assert.Equal("structural-quality", result.Receipt.SelectionReason);
     }
 
     [Xunit.Fact]
@@ -229,18 +229,24 @@ public sealed class PlannerCandidateSelectorTests
             fixture,
             "## Acceptance criteria mapping",
             "1. disposition=planned; plan=Researcher owns the focused-evidence request for `PlannerCandidateSelectorTests`; the integration seam is TEST-VERIFIABLE and stops on failure.");
+        var researcherSourceTracePlan = ReplaceSectionBody(
+            fixture,
+            "## Acceptance criteria mapping",
+            "1. disposition=planned; plan=Researcher owns the source trace for `PlannerCandidateSelectorTests`; the integration seam is TEST-VERIFIABLE and stops on failure.");
 
         var testerFullSuite = PlannerOutputContract.EvaluateStructuralQuality(testerFullSuitePlan);
         var acceptanceFullSuite = PlannerOutputContract.EvaluateStructuralQuality(acceptanceFullSuitePlan);
         var testerBuild = PlannerOutputContract.EvaluateStructuralQuality(testerBuildPlan);
         var reviewerFocusedEvidence = PlannerOutputContract.EvaluateStructuralQuality(reviewerFocusedEvidencePlan);
         var researcherFocusedEvidence = PlannerOutputContract.EvaluateStructuralQuality(researcherFocusedEvidencePlan);
+        var researcherSourceTrace = PlannerOutputContract.EvaluateStructuralQuality(researcherSourceTracePlan);
 
         Xunit.Assert.Equal(0, testerFullSuite.FeasibleEvidenceOwners);
         Xunit.Assert.Equal(1, acceptanceFullSuite.FeasibleEvidenceOwners);
         Xunit.Assert.Equal(1, testerBuild.FeasibleEvidenceOwners);
         Xunit.Assert.Equal(1, reviewerFocusedEvidence.FeasibleEvidenceOwners);
         Xunit.Assert.Equal(0, researcherFocusedEvidence.FeasibleEvidenceOwners);
+        Xunit.Assert.Equal(1, researcherSourceTrace.FeasibleEvidenceOwners);
     }
 
     [Xunit.Fact]

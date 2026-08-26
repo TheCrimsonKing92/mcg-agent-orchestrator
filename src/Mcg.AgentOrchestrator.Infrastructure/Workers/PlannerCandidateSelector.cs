@@ -94,7 +94,7 @@ internal static partial class PlannerCandidateSelector
         ResolvedCandidate selected;
         string selectionReason;
         string? fallbackCause = null;
-        if (resolved.Length == 2)
+        if (valid.Length == 2)
         {
             if (string.Equals(valid[0].CandidateSha256, valid[1].CandidateSha256, StringComparison.Ordinal))
             {

@@ -89,7 +89,8 @@ public static class DispatchRoleOutputCapabilities
             DispatchRoleEvidenceRequirement.ScopedRepositoryChange => role == AgentRole.Developer,
             DispatchRoleEvidenceRequirement.WorkerBuildResult => role is AgentRole.Developer or AgentRole.Tester,
             DispatchRoleEvidenceRequirement.ManualReproduction => role is AgentRole.Developer or AgentRole.Tester,
-            DispatchRoleEvidenceRequirement.SourceTrace => role is AgentRole.Developer or AgentRole.Tester,
+            DispatchRoleEvidenceRequirement.SourceTrace =>
+                role is AgentRole.Researcher or AgentRole.Developer or AgentRole.Tester,
             DispatchRoleEvidenceRequirement.FocusedEvidenceRequest =>
                 role is AgentRole.Developer or AgentRole.Tester or AgentRole.Reviewer,
             DispatchRoleEvidenceRequirement.VerificationMatrix => role == AgentRole.Tester,
