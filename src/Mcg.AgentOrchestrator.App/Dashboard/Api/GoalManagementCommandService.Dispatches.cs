@@ -951,6 +951,14 @@ private static ProcessBatchExecutionResult StartDispatches(
         var startReceipt = admission?.Receipt ?? task.RetryAdmissionHistory.LastOrDefault(receipt =>
             receipt.LinkedDispatchAt == task.LastDispatch?.DispatchedAt &&
             receipt.Decision is RetryAdmissionDecision.Allowed or RetryAdmissionDecision.ResumedReservation);
+        var requiresDurableStartClaim = task.LatestRetryAt is not null &&
+            task.LastDispatch?.PaidRoute == PaidRouteClassification.Paid;
+        if (requiresDurableStartClaim &&
+            (startReceipt is null || string.IsNullOrWhiteSpace(startReceipt.ReservationOwnerId)))
+        {
+            throw new InvalidOperationException(
+                $"Paid retry start requires a durable retry-admission receipt for task '{task.Id}'.");
+        }
 
         Action<AgentOrchestratorKernel, GoalId, TaskId, DispatchRecordCheckpointPhase>? batchCheckpoint =
             checkpointBeforeWorkerStart is null

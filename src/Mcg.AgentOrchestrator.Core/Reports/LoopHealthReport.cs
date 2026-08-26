@@ -113,16 +113,16 @@ public static class LoopHealthReport
         var (falseBlockRate, falsePassRate) = ComputeFalseBlockPassRates(receiptList, goalStatusById);
         var admissions = allTasks.SelectMany(task => task.RetryAdmissionHistory).ToList();
         var landedAdmissions = completedGoals
-            .SelectMany(goal => goal.Tasks)
-            .SelectMany(task => task.RetryAdmissionHistory)
+            .SelectMany(goal => goal.Tasks.SelectMany(task =>
+                task.RetryAdmissionHistory.Select(receipt => (TaskId: task.Id, Receipt: receipt))))
             .ToList();
         var paidRetryDispatchCount = landedAdmissions
-            .Where(receipt =>
-                receipt.PaidRoute == PaidRouteClassification.Paid &&
-                receipt.Decision is RetryAdmissionDecision.Allowed or RetryAdmissionDecision.ResumedReservation &&
-                receipt.PriorAttemptAt is not null &&
-                receipt.WorkerStartedAt is not null)
-            .Select(receipt => receipt.LinkedDispatchAt)
+            .Where(attempt =>
+                attempt.Receipt.PaidRoute == PaidRouteClassification.Paid &&
+                attempt.Receipt.Decision is RetryAdmissionDecision.Allowed or RetryAdmissionDecision.ResumedReservation &&
+                attempt.Receipt.PriorAttemptAt is not null &&
+                attempt.Receipt.WorkerStartedAt is not null)
+            .Select(attempt => (attempt.TaskId, attempt.Receipt.LinkedDispatchAt))
             .Distinct()
             .Count();
         var paidRetriesPerLandedGoal = completedGoals.Count == 0

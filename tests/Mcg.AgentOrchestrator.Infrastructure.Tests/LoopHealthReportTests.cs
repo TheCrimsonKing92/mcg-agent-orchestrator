@@ -301,6 +301,59 @@ public sealed class LoopHealthReportTests
     }
 
     [Xunit.Fact]
+    public void PaidRetryDispatchCountUsesTaskAndTimestampAsAttemptIdentity()
+    {
+        var firstAt = DateTimeOffset.Parse("2026-08-25T10:00:00Z");
+        var retryAt = firstAt.AddHours(1);
+        var completedAt = retryAt.AddHours(1);
+        var clock = new MutableClock(firstAt);
+        var kernel = new AgentOrchestratorKernel(clock);
+        var goal = kernel.CreateGoal("Count same-batch paid retries", [MakeTask(), MakeTask()]);
+        kernel.ActivateGoal(goal.Id, DefaultAgents);
+
+        foreach (var task in goal.Tasks)
+        {
+            var firstFingerprint = Fingerprint($"first-{task.Id.Value}");
+            var retryFingerprint = Fingerprint($"retry-{task.Id.Value}");
+            kernel.RecordTaskDispatch(goal.Id, task.Id, PaidDispatch(firstAt, firstFingerprint));
+            kernel.RecordPreparedRetryAdmission(
+                goal.Id, task.Id, firstFingerprint, PaidRouteClassification.Paid, firstAt);
+            kernel.RecordDispatchExecutionResult(
+                goal.Id,
+                task.Id,
+                new TaskVerificationRecord(DispatchCommand, WorkDir, 1, "", "first attempt failed", firstAt));
+            clock.UtcNow = retryAt;
+            kernel.RetryTask(
+                goal.Id,
+                task.Id,
+                "Repair the blocking source finding.",
+                invalidateDownstream: false,
+                retryCause: RetryCause.NewSourceFinding);
+            kernel.RecordTaskDispatch(goal.Id, task.Id, PaidDispatch(retryAt, retryFingerprint));
+            kernel.RecordPreparedRetryAdmission(
+                goal.Id, task.Id, retryFingerprint, PaidRouteClassification.Paid, retryAt);
+            RecordStartedProcess(kernel, goal, task, retryAt, task == goal.Tasks[0] ? 3001 : 3002);
+            clock.UtcNow = completedAt;
+            kernel.RecordTaskProcessRefreshed(
+                goal.Id,
+                task.Id,
+                task.LastProcess! with { CompletedAt = completedAt, ExitCode = 0 },
+                verification: null);
+            kernel.RecordTaskVerification(
+                goal.Id,
+                task.Id,
+                new TaskVerificationRecord(DispatchCommand, WorkDir, 0, "fixed", "", completedAt));
+        }
+
+        kernel.CompleteGoal(goal.Id, "Landed after both retries succeeded.");
+
+        var report = kernel.BuildLoopHealthReport();
+
+        Assert.Equal(2, report.PaidRetryDispatchCount);
+        Assert.Equal(2.0, report.PaidRetryDispatchesPerLandedGoal);
+    }
+
+    [Xunit.Fact]
     public void RetryResolution_TerminalBeforeSuccess_UsesTerminal()
     {
         var (kernel, goal, task, clock, firstAt) = BuildRetryResolutionFixture();

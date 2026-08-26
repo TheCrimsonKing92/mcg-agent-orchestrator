@@ -117,7 +117,12 @@ private static bool HandleRecover(CliExecutionContext context, IReadOnlyList<str
                 outcome.Verification is { } refreshVerification &&
                 DispatchRecoveryPolicy.IsStaleDispatchRetryVerification(refreshVerification))
             {
-                context.Kernel.RetryTask(goal.Id, refreshedTask.Id, note, invalidateDownstream: !HasRunningDownstreamTask(goal, refreshedTask));
+                context.Kernel.RetryTask(
+                    goal.Id,
+                    refreshedTask.Id,
+                    note,
+                    invalidateDownstream: !HasRunningDownstreamTask(goal, refreshedTask),
+                    retryCause: RetryCause.EnvironmentApparatusFailure);
                 Console.WriteLine($"recover: reset task {ConsoleViews.GetTaskDisplayNumber(goal, refreshedTask.Id)} to dispatchable.");
                 alreadyReset.Add(refreshedTask.Id);
                 actions++;
@@ -149,7 +154,12 @@ private static bool HandleRecover(CliExecutionContext context, IReadOnlyList<str
             context.Kernel.ReportTaskProgress(goal.Id, task.Id, WorkTaskStatus.Failed, note);
         }
 
-        context.Kernel.RetryTask(goal.Id, task.Id, note, invalidateDownstream: !HasRunningDownstreamTask(goal, task));
+        context.Kernel.RetryTask(
+            goal.Id,
+            task.Id,
+            note,
+            invalidateDownstream: !HasRunningDownstreamTask(goal, task),
+            retryCause: RetryCause.Unknown);
         Console.WriteLine($"recover: reset task {ConsoleViews.GetTaskDisplayNumber(goal, task.Id)} to dispatchable.");
         alreadyReset.Add(task.Id);
         actions++;
@@ -182,7 +192,12 @@ private static bool HandleRecover(CliExecutionContext context, IReadOnlyList<str
             continue;
         }
 
-        context.Kernel.RetryTask(goal.Id, task.Id, $"recover: re-derived lifecycle state for {task.RequiredRole} task {task.Id.Value[..8]} (Assigned, dispatchable, earlier stages Completed); {note}", invalidateDownstream: !HasRunningDownstreamTask(goal, task));
+        context.Kernel.RetryTask(
+            goal.Id,
+            task.Id,
+            $"recover: re-derived lifecycle state for {task.RequiredRole} task {task.Id.Value[..8]} (Assigned, dispatchable, earlier stages Completed); {note}",
+            invalidateDownstream: !HasRunningDownstreamTask(goal, task),
+            retryCause: RetryCause.EnvironmentApparatusFailure);
         Console.WriteLine($"recover: task {ConsoleViews.GetTaskDisplayNumber(goal, task.Id)} {task.RequiredRole} is assigned and dispatchable but has no dispatch record; lifecycle/task desync detected, lifecycle state re-derived. Re-run 'conduct {goal.Id.Value[..8]}' or restart the conductor loop to unblock.");
         actions++;
     }

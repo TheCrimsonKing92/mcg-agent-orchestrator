@@ -714,12 +714,19 @@ public sealed class GoalLifecycleTests
     CompleteWithVerification(kernel, goal, reviewer, "reviewer passed");
     Assert.Equal(GoalStatus.Verified, goal.Status);
 
-    kernel.RetryTask(goal.Id, developer.Id, "Developer output needs revision.");
+    kernel.RetryTask(
+        goal.Id,
+        developer.Id,
+        "Developer output needs revision.",
+        retryCause: RetryCause.NewSourceFinding);
 
     Assert.Equal(GoalStatus.Active, goal.Status);
     Assert.Equal(WorkTaskStatus.Assigned, developer.Status);
     Assert.Equal(WorkTaskStatus.Assigned, tester.Status);
     Assert.Equal(WorkTaskStatus.Assigned, reviewer.Status);
+    Assert.Equal(RetryCause.NewSourceFinding, developer.PendingRetryCause);
+    Assert.Equal(RetryCause.NewSourceFinding, tester.PendingRetryCause);
+    Assert.Equal(RetryCause.NewSourceFinding, reviewer.PendingRetryCause);
     Assert.Null(developer.LastVerification);
     Assert.Null(tester.LastVerification);
     Assert.Null(reviewer.LastVerification);
@@ -951,6 +958,7 @@ public sealed class GoalLifecycleTests
             new TaskDispatchRecord("Developer", "worker", "C:\\repo", DateTimeOffset.UtcNow));
         kernel.RecordDispatchResultCommit(goal.Id, developer.Id, "bbb222");
         kernel.RequeueInterruptedDispatch(goal.Id, developer.Id, "Retry the interrupted changed attempt.");
+        Assert.Equal(RetryCause.ProviderInterruption, developer.PendingRetryCause);
         CompleteCandidateDispatch(kernel, goal, developer, "bbb222", "bbb222");
 
         Assert.Equal(WorkTaskStatus.Assigned, tester.Status);

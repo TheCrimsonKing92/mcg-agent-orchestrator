@@ -620,8 +620,8 @@ public sealed class TaskSpec
 
     internal void RecordRetry(
         DateTimeOffset retriedAt,
-        RetryRoundKind? retryRoundKind = null,
-        RetryCause retryCause = RetryCause.Unknown)
+        RetryCause retryCause,
+        RetryRoundKind? retryRoundKind = null)
     {
         LatestRetryAt = retriedAt;
         PendingRetryRoundKind = retryRoundKind;

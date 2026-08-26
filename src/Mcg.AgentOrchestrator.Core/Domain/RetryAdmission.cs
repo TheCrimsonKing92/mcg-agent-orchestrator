@@ -109,7 +109,6 @@ public static class RetryAdmissionSnapshotReservation
         ArgumentNullException.ThrowIfNull(snapshot);
         var goal = Goal.FromSnapshot(snapshot);
         var task = goal.FindTask(taskId);
-        task.BindPreparedDispatch(preparedDispatch);
         var result = RetryAdmissionPolicy.Evaluate(
             task,
             fingerprint,
@@ -121,6 +120,8 @@ public static class RetryAdmissionSnapshotReservation
             reservationOwnerId,
             reservationLeaseExpiresAt,
             reservationRecoveryConfirmed);
+        if (result.AllowsProcessStart)
+            task.BindPreparedDispatch(preparedDispatch);
         task.RecordRetryAdmission(result.Receipt);
         if (!result.AllowsProcessStart)
             task.SetRetryAdmissionHold(result.Receipt.Route);
@@ -317,6 +318,7 @@ public static class RetryAdmissionPolicy
     {
         ArgumentNullException.ThrowIfNull(task);
         ArgumentNullException.ThrowIfNull(fingerprint);
+        var isPaidRetry = paidRoute == PaidRouteClassification.Paid && task.LatestRetryAt is not null;
         var sameAttempt = task.RetryAdmissionHistory.LastOrDefault(receipt =>
             receipt.LinkedDispatchAt == linkedDispatchAt &&
             receipt.Fingerprint == fingerprint &&
@@ -362,7 +364,22 @@ public static class RetryAdmissionPolicy
                 reservationLeaseExpiresAt);
         }
 
-        var isPaidRetry = paidRoute == PaidRouteClassification.Paid && task.LatestRetryAt is not null;
+        if (sameAttempt?.WorkerStartedAt is not null)
+        {
+            return Create(
+                task,
+                fingerprint,
+                paidRoute,
+                cause,
+                RetryAdmissionDecision.Prevented,
+                RetryAdmissionRoute.ReservationLease,
+                linkedDispatchAt,
+                recordedAt,
+                sameAttempt.LinkedDispatchAt,
+                reservationOwnerId,
+                reservationLeaseExpiresAt);
+        }
+
         var priorSameContext = isPaidRetry
             ? task.RetryAdmissionHistory.LastOrDefault(receipt =>
                 receipt.PaidRoute == PaidRouteClassification.Paid &&
@@ -386,6 +403,11 @@ public static class RetryAdmissionPolicy
                 reservationLeaseExpiresAt);
         }
 
+        var priorAttemptAt = isPaidRetry
+            ? task.LastDispatch?.DispatchedAt == linkedDispatchAt
+                ? task.DispatchHistory.SkipLast(1).LastOrDefault()?.DispatchedAt
+                : task.DispatchHistory.LastOrDefault()?.DispatchedAt
+            : null;
         return Create(
             task,
             fingerprint,
@@ -395,7 +417,7 @@ public static class RetryAdmissionPolicy
             RetryAdmissionRoute.SameRole,
             linkedDispatchAt,
             recordedAt,
-            task.DispatchHistory.Count > 1 ? task.DispatchHistory[^2].DispatchedAt : null,
+            priorAttemptAt,
             reservationOwnerId,
             reservationLeaseExpiresAt);
     }

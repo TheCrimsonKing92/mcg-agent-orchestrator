@@ -77,6 +77,104 @@ public sealed class RetryAdmissionReservationStoreTests
     }
 
     [Xunit.Fact]
+    public async Task ConcurrentDifferentAttemptsKeepWinningPreparedDispatchBoundToAllowedReservation()
+    {
+        var root = Path.Combine(Path.GetTempPath(), "mcg-retry-admission-tests", Guid.NewGuid().ToString("N"));
+        Directory.CreateDirectory(root);
+        var databasePath = Path.Combine(root, "state.db");
+        _ = StateDbMigrations.EnsureUpToDate(databasePath);
+        var kernel = new AgentOrchestratorKernel();
+        var task = new TaskSpec(TaskId.New(), "Retry implementation", AgentRole.Developer);
+        var goal = kernel.CreateGoal("Fence concurrent prepared attempts", [task]);
+        kernel.RetryTask(
+            goal.Id,
+            task.Id,
+            "A new source finding requires repair.",
+            retryCause: RetryCause.NewSourceFinding);
+        var repository = new SqliteOrchestratorStateRepository(databasePath);
+        await repository.SaveAsync(kernel);
+        var fingerprint = RetryContextFingerprintBuilder.Build(new RetryContextFingerprintInput(
+            goal.Id.Value, task.Id.Value, task.RequiredRole, "OpenAI", "gpt",
+            PaidRouteClassification.Paid, "candidate", "criteria", [], [], [], [], "base", "main"));
+        var firstAt = DateTimeOffset.Parse("2026-08-25T12:00:00Z");
+        var secondAt = firstAt.AddSeconds(1);
+        var firstDispatch = new TaskDispatchRecord(
+            "worker", "command-a", "worktree", firstAt,
+            RetryContextFingerprint: fingerprint,
+            PaidRoute: PaidRouteClassification.Paid);
+        var secondDispatch = new TaskDispatchRecord(
+            "worker", "command-b", "worktree", secondAt,
+            RetryContextFingerprint: fingerprint,
+            PaidRoute: PaidRouteClassification.Paid);
+
+        var results = await Task.WhenAll(
+            RetryAdmissionReservationStore.TryReserveAsync(
+                databasePath, goal.Id, task.Id, fingerprint,
+                PaidRouteClassification.Paid, RetryCause.NewSourceFinding, firstDispatch, firstAt,
+                "owner-a", firstAt.AddMinutes(1)),
+            RetryAdmissionReservationStore.TryReserveAsync(
+                databasePath, goal.Id, task.Id, fingerprint,
+                PaidRouteClassification.Paid, RetryCause.NewSourceFinding, secondDispatch, secondAt,
+                "owner-b", secondAt.AddMinutes(1)));
+
+        var allowed = Assert.Single(results, result => result?.Decision == RetryAdmissionDecision.Allowed)!;
+        var prevented = Assert.Single(results, result => result?.Decision == RetryAdmissionDecision.Prevented)!;
+        var saved = await repository.LoadGoalAsync(goal.Id);
+        var savedTask = Assert.Single(saved!.Tasks);
+        Assert.Equal(allowed.Receipt.LinkedDispatchAt, savedTask.LastDispatch!.DispatchedAt);
+        Assert.NotEqual(prevented.Receipt.LinkedDispatchAt, savedTask.LastDispatch.DispatchedAt);
+        var claimed = await RetryAdmissionReservationStore.TryClaimStartAsync(
+            databasePath,
+            goal.Id,
+            task.Id,
+            allowed.Receipt.LinkedDispatchAt,
+            allowed.Receipt.ReservationOwnerId!,
+            secondAt.AddSeconds(1));
+        Assert.True(claimed);
+    }
+
+    [Xunit.Fact]
+    public async Task StartedReservationCannotBeRecoveredByAnotherOwner()
+    {
+        var root = Path.Combine(Path.GetTempPath(), "mcg-retry-admission-tests", Guid.NewGuid().ToString("N"));
+        Directory.CreateDirectory(root);
+        var databasePath = Path.Combine(root, "state.db");
+        _ = StateDbMigrations.EnsureUpToDate(databasePath);
+        var kernel = new AgentOrchestratorKernel();
+        var task = new TaskSpec(TaskId.New(), "Retry implementation", AgentRole.Developer);
+        var goal = kernel.CreateGoal("Do not recover a started retry", [task]);
+        kernel.RetryTask(
+            goal.Id,
+            task.Id,
+            "A new source finding requires repair.",
+            retryCause: RetryCause.NewSourceFinding);
+        var repository = new SqliteOrchestratorStateRepository(databasePath);
+        await repository.SaveAsync(kernel);
+        var fingerprint = RetryContextFingerprintBuilder.Build(new RetryContextFingerprintInput(
+            goal.Id.Value, task.Id.Value, task.RequiredRole, "OpenAI", "gpt",
+            PaidRouteClassification.Paid, "candidate", "criteria", [], [], [], [], "base", "main"));
+        var at = DateTimeOffset.Parse("2026-08-25T12:00:00Z");
+        var dispatch = new TaskDispatchRecord(
+            "worker", "command", "worktree", at,
+            RetryContextFingerprint: fingerprint,
+            PaidRoute: PaidRouteClassification.Paid);
+        _ = await RetryAdmissionReservationStore.TryReserveAsync(
+            databasePath, goal.Id, task.Id, fingerprint, PaidRouteClassification.Paid,
+            RetryCause.NewSourceFinding, dispatch, at, "owner-a", at.AddMinutes(1));
+        Assert.True(await RetryAdmissionReservationStore.TryClaimStartAsync(
+            databasePath, goal.Id, task.Id, at, "owner-a", at.AddSeconds(1)));
+
+        var recovery = await RetryAdmissionReservationStore.TryReserveAsync(
+            databasePath, goal.Id, task.Id, fingerprint, PaidRouteClassification.Paid,
+            RetryCause.NewSourceFinding, dispatch, at.AddMinutes(2), "owner-b", at.AddMinutes(3),
+            reservationRecoveryConfirmed: true);
+
+        Assert.Equal(RetryAdmissionDecision.Prevented, recovery!.Decision);
+        Assert.False(await RetryAdmissionReservationStore.TryClaimStartAsync(
+            databasePath, goal.Id, task.Id, at, "owner-b", at.AddMinutes(2)));
+    }
+
+    [Xunit.Fact]
     public async Task ReservationPersistsExactPreparedDispatchWithReceipt()
     {
         var root = Path.Combine(Path.GetTempPath(), "mcg-retry-admission-tests", Guid.NewGuid().ToString("N"));

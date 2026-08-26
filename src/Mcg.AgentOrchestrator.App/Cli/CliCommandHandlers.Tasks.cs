@@ -94,7 +94,12 @@ internal static GoalScopedTaskMutationOutcome ExecuteGoalScopedTaskMutationWitho
             var retryTask = retryTarget.Task;
             EnsurePolicyAllows(context, context.CurrentGoal!, command.RetryPolicy, AutonomyAction.Retry, "retry");
             var retryMessage = command.Text ?? throw new InvalidOperationException("Prepared retry command is missing text.");
-            context.Kernel.RetryTask(context.CurrentGoal!.Id, retryTask.Id, retryMessage, retryRoundKind: command.RetryRoundKind);
+            context.Kernel.RetryTask(
+                context.CurrentGoal!.Id,
+                retryTask.Id,
+                retryMessage,
+                retryRoundKind: command.RetryRoundKind,
+                retryCause: RetryCause.Unknown);
             GoalLifecycleCommands.RecordCapabilityWarnings(
                 context.Kernel,
                 context.CurrentGoal.Id,
@@ -422,7 +427,12 @@ private static bool? TryExecuteTaskCommand(string command, IReadOnlyList<string>
             var retryTask = retryTarget.Task;
             EnsurePolicyAllows(context, context.CurrentGoal!, retryPolicy, AutonomyAction.Retry, "retry");
             var retryMessage = ResolveTextArgument(retryParts, retryTarget.NextIndex, retryUsage, "--text-file");
-            context.Kernel.RetryTask(context.CurrentGoal!.Id, retryTask.Id, retryMessage, retryRoundKind: retryRoundKind);
+            context.Kernel.RetryTask(
+                context.CurrentGoal!.Id,
+                retryTask.Id,
+                retryMessage,
+                retryRoundKind: retryRoundKind,
+                retryCause: RetryCause.Unknown);
             GoalLifecycleCommands.RecordCapabilityWarnings(
                 context.Kernel,
                 context.CurrentGoal.Id,
