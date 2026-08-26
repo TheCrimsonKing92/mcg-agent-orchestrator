@@ -79,14 +79,17 @@ internal static class PlannerSampleDispatcher
                 var process = startProcess(startInfo);
                 if (process is null)
                 {
-                    WriteLaunchDiagnostic(sample, "Process launcher returned no process.");
+                    WriteLaunchDiagnosticOrTerminateAdmitted(
+                        sample,
+                        "Process launcher returned no process.",
+                        launches);
                     continue;
                 }
 
                 if (!WorkerProcessJobs.TryRegister(process, $"{jobPrefix}:planner-sample-{sample.Index}", out var failure))
                 {
                     TryTerminate(process);
-                    WriteLaunchDiagnostic(sample, failure);
+                    WriteLaunchDiagnosticOrTerminateAdmitted(sample, failure, launches);
                     continue;
                 }
 
@@ -96,7 +99,7 @@ internal static class PlannerSampleDispatcher
                         out var launchRecordDiagnostic))
                 {
                     TerminateOwned(process);
-                    WriteLaunchDiagnostic(sample, launchRecordDiagnostic);
+                    WriteLaunchDiagnosticOrTerminateAdmitted(sample, launchRecordDiagnostic, launches);
                     continue;
                 }
 
@@ -104,11 +107,27 @@ internal static class PlannerSampleDispatcher
             }
             catch (Exception ex) when (IsSampleLaunchFailure(ex))
             {
-                WriteLaunchDiagnostic(sample, ex.Message);
+                WriteLaunchDiagnosticOrTerminateAdmitted(sample, ex.Message, launches);
             }
         }
 
         return launches;
+    }
+
+    private static void WriteLaunchDiagnosticOrTerminateAdmitted(
+        PlannerSampleArtifacts sample,
+        string diagnostic,
+        IReadOnlyList<PlannerSampleLaunch> admittedLaunches)
+    {
+        try
+        {
+            WriteLaunchDiagnostic(sample, diagnostic);
+        }
+        catch
+        {
+            TerminateUnreleased(admittedLaunches);
+            throw;
+        }
     }
 
     // Every documented Process.Start(ProcessStartInfo) failure degrades optional sampling. The
@@ -240,8 +259,14 @@ internal static class PlannerSampleDispatcher
         }
     }
 
-    internal static void ReleaseStartGates(IEnumerable<PlannerSampleLaunch> launches)
+    internal static void ReleaseStartGates(
+        IEnumerable<PlannerSampleLaunch> launches,
+        Action<Process>? terminateOwned = null,
+        Action<PlannerSampleArtifacts, string>? writeLaunchDiagnostic = null)
     {
+        terminateOwned ??= TerminateOwned;
+        writeLaunchDiagnostic ??= WriteLaunchDiagnostic;
+        Exception? deferredDiagnosticFailure = null;
         foreach (var launch in launches)
         {
             try
@@ -251,13 +276,25 @@ internal static class PlannerSampleDispatcher
             }
             catch (Exception ex)
             {
-                WriteLaunchDiagnostic(launch.Artifacts, $"Planner sample start gate could not be released: {ex.Message}");
-                TerminateOwned(launch.Process);
+                terminateOwned(launch.Process);
+                try
+                {
+                    writeLaunchDiagnostic(
+                        launch.Artifacts,
+                        $"Planner sample start gate could not be released: {ex.Message}");
+                }
+                catch (Exception diagnosticFailure)
+                {
+                    deferredDiagnosticFailure ??= diagnosticFailure;
+                }
                 continue;
             }
 
             launch.Process.Dispose();
         }
+
+        if (deferredDiagnosticFailure is not null)
+            System.Runtime.ExceptionServices.ExceptionDispatchInfo.Capture(deferredDiagnosticFailure).Throw();
     }
 
     internal static void TerminateUnreleased(IEnumerable<PlannerSampleLaunch> launches)

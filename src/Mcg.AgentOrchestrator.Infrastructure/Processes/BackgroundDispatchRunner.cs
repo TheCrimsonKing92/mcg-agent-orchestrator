@@ -441,12 +441,23 @@ public sealed class BackgroundDispatchRunner
         var sampleArtifacts = task.RequiredRole == AgentRole.Planner
             ? PlannerSampleDispatcher.CreateArtifacts(stdoutPath, dispatch.PlannerSampleCount)
             : [];
-        var sampleLaunches = PlannerSampleDispatcher.StartSamples(
-            sampleArtifacts,
-            runParameters,
-            ResolveDispatchHostAssembly(),
-            $"{goalId.Value}:{taskId.Value}",
-            _startProcess);
+        IReadOnlyList<PlannerSampleLaunch> sampleLaunches;
+        try
+        {
+            sampleLaunches = PlannerSampleDispatcher.StartSamples(
+                sampleArtifacts,
+                runParameters,
+                ResolveDispatchHostAssembly(),
+                $"{goalId.Value}:{taskId.Value}",
+                _startProcess);
+        }
+        catch
+        {
+            // The primary is already registered but cannot be persisted until sample ownership is
+            // known. If optional-sample preflight fails loudly, release that unrecorded ownership.
+            TerminateUnreleasedDispatchHost(process);
+            throw;
+        }
 
         var record = new TaskProcessRecord(
             process.Id,
@@ -500,11 +511,11 @@ public sealed class BackgroundDispatchRunner
         return DispatchProcessStartResult.Started(record);
     }
 
-    private static void TerminateUnreleasedDispatchHost(Process process)
+    private void TerminateUnreleasedDispatchHost(Process process)
     {
         try
         {
-            if (!process.HasExited)
+            if (!_tryKillOwnedProcess(process.Id) && !process.HasExited)
             {
                 process.Kill(entireProcessTree: true);
             }
@@ -512,6 +523,10 @@ public sealed class BackgroundDispatchRunner
         catch
         {
             // The checkpoint failure is the actionable fault; process cleanup is best-effort.
+        }
+        finally
+        {
+            process.Dispose();
         }
     }
 

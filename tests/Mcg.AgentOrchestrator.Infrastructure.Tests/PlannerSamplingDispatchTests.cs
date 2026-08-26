@@ -469,6 +469,60 @@ public sealed class PlannerSamplingDispatchTests : WorkerDispatchTestSupport
     }
 
     [Xunit.Fact]
+    public void ReleaseStartGates_DiagnosticPersistenceFailure_CleansFailedSampleAndContinues()
+    {
+        var root = CreateTempDirectory();
+        var primaryPath = Path.Combine(root, "planner.out.log");
+        var artifacts = PlannerSampleDispatcher.CreateArtifacts(primaryPath, 3).ToArray();
+        artifacts[0] = artifacts[0] with
+        {
+            StartGatePath = root,
+            LaunchDiagnosticPath = root
+        };
+        var launches = PlannerSampleDispatcher.StartSamples(
+            artifacts,
+            CreateRunParameters(root, primaryPath),
+            "dispatch-host.dll",
+            "planner-start-gate-diagnostic-failure",
+            _ => StartSleeper());
+        var processIds = launches.Select(launch => launch.Process.Id).ToArray();
+        var terminatedProcessIds = new List<int>();
+        var diagnosticAttempts = 0;
+
+        try
+        {
+            Xunit.Assert.Equal(2, launches.Count);
+
+            Xunit.Assert.Throws<UnauthorizedAccessException>(() =>
+                PlannerSampleDispatcher.ReleaseStartGates(
+                    launches,
+                    terminateOwned: process =>
+                    {
+                        terminatedProcessIds.Add(process.Id);
+                        WorkerProcessJobs.TryKillOrFallback(process.Id);
+                        process.Dispose();
+                    },
+                    writeLaunchDiagnostic: (_, _) =>
+                    {
+                        diagnosticAttempts++;
+                        throw new UnauthorizedAccessException("fixture diagnostic persistence failure");
+                    }));
+
+            Xunit.Assert.Equal([processIds[0]], terminatedProcessIds);
+            Xunit.Assert.Equal(1, diagnosticAttempts);
+            Xunit.Assert.False(WorkerProcessJobs.HasRegisteredJob(processIds[0]));
+            Xunit.Assert.True(File.Exists(artifacts[1].StartGatePath));
+        }
+        finally
+        {
+            foreach (var processId in processIds)
+                try { WorkerProcessJobs.TryKillOrFallback(processId); } catch { }
+            foreach (var launch in launches)
+                try { launch.Process.Dispose(); } catch { }
+        }
+    }
+
+    [Xunit.Fact]
     public void SingleSampleProductionCompletionPreservesLegacyContractBytes()
     {
         var root = CreateSeededDispatchRepository();
@@ -607,6 +661,83 @@ public sealed class PlannerSamplingDispatchTests : WorkerDispatchTestSupport
                 try { WorkerProcessJobs.TryKillOrFallback(processId); } catch { }
             foreach (var process in processes)
                 try { process.Dispose(); } catch { }
+        }
+    }
+
+    [Xunit.Fact]
+    public void TryStartLatestDispatch_SamplePreflightPersistenceFailure_TerminatesUnrecordedPrimaryExactlyOnce()
+    {
+        var root = CreateSeededDispatchRepository();
+        var logRoot = Path.Combine(root, "logs");
+        var kernel = new AgentOrchestratorKernel();
+        var goal = kernel.CreateGoal("Planner sample preflight persistence failure", [
+            new TaskSpec(TaskId.New(), "Produce a sampled plan.", AgentRole.Planner)
+        ]);
+        var planner = new AgentDefinition(
+            new AgentId("planner"),
+            "Planner",
+            AgentRole.Planner,
+            new ModelProfile(
+                "OpenAI",
+                AgentCatalog.OpenAiSubscriptionModelAlias,
+                ModelCapability.Text,
+                SubscriptionMode.ApiKey));
+        kernel.ActivateGoal(goal.Id, [planner]);
+        var task = goal.Tasks.Single();
+        kernel.RecordTaskDispatch(goal.Id, task.Id, new TaskDispatchRecord(
+            "local",
+            "Write-Output planner",
+            root,
+            DateTimeOffset.Parse("2026-08-22T18:00:00Z"),
+            PlannerSampleCount: 2));
+
+        Process? primaryProcess = null;
+        int? primaryProcessId = null;
+        string? primaryOutputPath = null;
+        var killCalls = new List<int>();
+        var invocation = 0;
+        var runner = new BackgroundDispatchRunner(
+            tryKillOwnedProcess: processId =>
+            {
+                killCalls.Add(processId);
+                return WorkerProcessJobs.TryKillOrFallback(processId);
+            },
+            disableProcessStart: false,
+            startProcess: startInfo =>
+            {
+                invocation++;
+                var parameters = DispatchProcessHost.ReadParameters(startInfo.ArgumentList.Last());
+                if (invocation == 1)
+                {
+                    primaryOutputPath = parameters.StdoutPath;
+                    primaryProcess = StartSleeper();
+                    primaryProcessId = primaryProcess.Id;
+                    return primaryProcess;
+                }
+
+                var sample = Xunit.Assert.Single(
+                    PlannerSampleDispatcher.CreateArtifacts(primaryOutputPath!, 2));
+                Directory.CreateDirectory(sample.LaunchDiagnosticPath);
+                return null;
+            });
+
+        try
+        {
+            Xunit.Assert.Throws<UnauthorizedAccessException>(() =>
+                runner.TryStartLatestDispatch(kernel, goal.Id, task.Id, logRoot));
+
+            Xunit.Assert.NotNull(primaryProcess);
+            Xunit.Assert.NotNull(primaryProcessId);
+            Xunit.Assert.Equal([primaryProcessId.Value], killCalls);
+            Xunit.Assert.False(WorkerProcessJobs.HasRegisteredJob(primaryProcessId.Value));
+        }
+        finally
+        {
+            if (primaryProcess is not null && primaryProcessId is not null)
+            {
+                try { WorkerProcessJobs.TryKillOrFallback(primaryProcessId.Value); } catch { }
+                try { primaryProcess.Dispose(); } catch { }
+            }
         }
     }
 
