@@ -708,6 +708,24 @@ public sealed class WorkerDispatchTestsDispatchPreparation : WorkerDispatchTestS
             PaidRouteClassification.Paid,
             firstAt);
         Assert.Equal(RetryAdmissionDecision.Allowed, firstAdmission.Decision);
+        var recordedFirstDispatch = Assert.IsType<TaskDispatchRecord>(planner.LastDispatch);
+        kernel.RecordTaskProcessStarted(
+            goal.Id,
+            planner.Id,
+            new TaskProcessRecord(
+                4101,
+                recordedFirstDispatch.Command,
+                recordedFirstDispatch.WorkingDirectory,
+                Path.Combine(root, "first.out.log"),
+                Path.Combine(root, "first.err.log"),
+                Path.Combine(root, "first.exit"),
+                firstAt,
+                firstAt.AddSeconds(1),
+                1));
+        var startedAdmission = Assert.Single(
+            planner.RetryAdmissionHistory,
+            receipt => receipt.Decision == RetryAdmissionDecision.Allowed);
+        Assert.Equal(firstAt, startedAdmission.WorkerStartedAt);
         kernel.RecordTaskVerification(
             goal.Id,
             planner.Id,
@@ -747,6 +765,8 @@ public sealed class WorkerDispatchTestsDispatchPreparation : WorkerDispatchTestS
             persistedPlanner.RetryAdmissionHistory,
             receipt => receipt.Decision == RetryAdmissionDecision.Prevented);
         Assert.Equal(RetryCause.UnchangedContextRepeat, prevention.Cause);
+        Assert.Equal(RetryAdmissionRoute.EnvironmentalHold, prevention.Route);
+        Assert.Equal(firstAt, prevention.PriorAttemptAt);
         Assert.Contains(
             persistedGoal.Timeline,
             item => item.Kind == ProgressKind.NoProgressRedispatchPrevented && item.TaskId == planner.Id);
