@@ -221,14 +221,26 @@ public sealed class PlannerCandidateSelectorTests
             fixture,
             "## Acceptance criteria mapping",
             "1. disposition=planned; plan=Tester owns the worker build result and manual reproduction for `PlannerCandidateSelectorTests`; the integration seam is TEST-VERIFIABLE and stops on failure.");
+        var reviewerFocusedEvidencePlan = ReplaceSectionBody(
+            fixture,
+            "## Acceptance criteria mapping",
+            "1. disposition=planned; plan=Reviewer owns the focused-evidence request for `PlannerCandidateSelectorTests`; the integration seam is TEST-VERIFIABLE and stops on failure.");
+        var researcherFocusedEvidencePlan = ReplaceSectionBody(
+            fixture,
+            "## Acceptance criteria mapping",
+            "1. disposition=planned; plan=Researcher owns the focused-evidence request for `PlannerCandidateSelectorTests`; the integration seam is TEST-VERIFIABLE and stops on failure.");
 
         var testerFullSuite = PlannerOutputContract.EvaluateStructuralQuality(testerFullSuitePlan);
         var acceptanceFullSuite = PlannerOutputContract.EvaluateStructuralQuality(acceptanceFullSuitePlan);
         var testerBuild = PlannerOutputContract.EvaluateStructuralQuality(testerBuildPlan);
+        var reviewerFocusedEvidence = PlannerOutputContract.EvaluateStructuralQuality(reviewerFocusedEvidencePlan);
+        var researcherFocusedEvidence = PlannerOutputContract.EvaluateStructuralQuality(researcherFocusedEvidencePlan);
 
         Xunit.Assert.Equal(0, testerFullSuite.FeasibleEvidenceOwners);
         Xunit.Assert.Equal(1, acceptanceFullSuite.FeasibleEvidenceOwners);
         Xunit.Assert.Equal(1, testerBuild.FeasibleEvidenceOwners);
+        Xunit.Assert.Equal(1, reviewerFocusedEvidence.FeasibleEvidenceOwners);
+        Xunit.Assert.Equal(0, researcherFocusedEvidence.FeasibleEvidenceOwners);
     }
 
     [Xunit.Fact]

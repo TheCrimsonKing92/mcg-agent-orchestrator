@@ -52,6 +52,16 @@ public enum DispatchRoleOutputCapability
     VerificationOnly
 }
 
+public enum DispatchRoleEvidenceRequirement
+{
+    ScopedRepositoryChange,
+    WorkerBuildResult,
+    ManualReproduction,
+    SourceTrace,
+    FocusedEvidenceRequest,
+    VerificationMatrix
+}
+
 public static class DispatchRoleOutputCapabilities
 {
     public static bool TryGet(AgentRole role, out DispatchRoleOutputCapability capability)
@@ -65,6 +75,26 @@ public static class DispatchRoleOutputCapabilities
         };
 
         return Enum.IsDefined(role);
+    }
+
+    public static bool CanProduceEvidence(
+        AgentRole role,
+        DispatchRoleEvidenceRequirement requirement)
+    {
+        if (!TryGet(role, out _))
+            return false;
+
+        return requirement switch
+        {
+            DispatchRoleEvidenceRequirement.ScopedRepositoryChange => role == AgentRole.Developer,
+            DispatchRoleEvidenceRequirement.WorkerBuildResult => role is AgentRole.Developer or AgentRole.Tester,
+            DispatchRoleEvidenceRequirement.ManualReproduction => role is AgentRole.Developer or AgentRole.Tester,
+            DispatchRoleEvidenceRequirement.SourceTrace => role is AgentRole.Developer or AgentRole.Tester,
+            DispatchRoleEvidenceRequirement.FocusedEvidenceRequest =>
+                role is AgentRole.Developer or AgentRole.Tester or AgentRole.Reviewer,
+            DispatchRoleEvidenceRequirement.VerificationMatrix => role == AgentRole.Tester,
+            _ => false
+        };
     }
 }
 

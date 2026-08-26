@@ -202,8 +202,7 @@ internal static partial class PlannerOutputContract
             return true;
 
         return TryGetDeclaredWorkerRole(mapping, out var role) &&
-            DispatchRoleOutputCapabilities.TryGet(role, out var capability) &&
-            IsFeasibleWorkerEvidence(mapping, capability);
+            IsFeasibleWorkerEvidence(mapping, role);
     }
 
     private static bool TryGetDeclaredWorkerRole(string mapping, out AgentRole role)
@@ -223,7 +222,7 @@ internal static partial class PlannerOutputContract
 
     private static bool IsFeasibleWorkerEvidence(
         string mapping,
-        DispatchRoleOutputCapability capability)
+        AgentRole role)
     {
         if (Regex.IsMatch(
             mapping,
@@ -232,15 +231,34 @@ internal static partial class PlannerOutputContract
             return false;
         }
 
-        if (Regex.IsMatch(
-            mapping,
-            @"(?i)\b(?:worker[-\s]?build|build[-\s]?(?:result|receipt)|manual[-\s]?reproduction|source[-\s]?(?:reproduction|trace)|focused[-\s]?evidence[-\s]?request|verification[-\s]?matrix)\b"))
-        {
-            return capability is DispatchRoleOutputCapability.RequiresChangeEvidence or
-                DispatchRoleOutputCapability.VerificationOnly;
-        }
+        if (Regex.IsMatch(mapping, @"(?i)\bfocused[-\s]?evidence[-\s]?request\b"))
+            return DispatchRoleOutputCapabilities.CanProduceEvidence(
+                role,
+                DispatchRoleEvidenceRequirement.FocusedEvidenceRequest);
 
-        return capability == DispatchRoleOutputCapability.RequiresChangeEvidence &&
+        if (Regex.IsMatch(mapping, @"(?i)\b(?:worker[-\s]?build|build[-\s]?(?:result|receipt))\b"))
+            return DispatchRoleOutputCapabilities.CanProduceEvidence(
+                role,
+                DispatchRoleEvidenceRequirement.WorkerBuildResult);
+
+        if (Regex.IsMatch(mapping, @"(?i)\bmanual[-\s]?reproduction\b"))
+            return DispatchRoleOutputCapabilities.CanProduceEvidence(
+                role,
+                DispatchRoleEvidenceRequirement.ManualReproduction);
+
+        if (Regex.IsMatch(mapping, @"(?i)\bsource[-\s]?(?:reproduction|trace)\b"))
+            return DispatchRoleOutputCapabilities.CanProduceEvidence(
+                role,
+                DispatchRoleEvidenceRequirement.SourceTrace);
+
+        if (Regex.IsMatch(mapping, @"(?i)\bverification[-\s]?matrix\b"))
+            return DispatchRoleOutputCapabilities.CanProduceEvidence(
+                role,
+                DispatchRoleEvidenceRequirement.VerificationMatrix);
+
+        return DispatchRoleOutputCapabilities.CanProduceEvidence(
+                   role,
+                   DispatchRoleEvidenceRequirement.ScopedRepositoryChange) &&
             BacktickedCitation().Matches(mapping).Any(match =>
                 match.Groups["citation"].Value.IndexOfAny(['.', '/', '\\']) >= 0 ||
                 match.Groups["citation"].Value.Contains("::", StringComparison.Ordinal));
