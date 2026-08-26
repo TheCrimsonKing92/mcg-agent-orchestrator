@@ -156,13 +156,68 @@ public sealed class WorkerDispatchTestsSeededRepositoryFactoryTests
         Xunit.Assert.Contains("git status --short", result.Command, StringComparison.Ordinal);
     }
 
+    [Xunit.Fact]
+    public void Create_StagingAllocationThrows_ReportsTypedCheck()
+    {
+        using var scope = new FactoryScope(
+            directoryAllocator: (root, attempt) => attempt == 2
+                ? throw new IOException("controlled staging allocation failure")
+                : CreateOwnedDirectory(root, attempt));
+
+        var failure = Xunit.Assert.Throws<
+            WorkerDispatchTestsSeededRepositoryFactory.SeededRepositoryFailureException>(
+                () => scope.Factory.Create());
+
+        Xunit.Assert.Equal(
+            WorkerDispatchTestsSeededRepositoryFactory.ValidationCheck.StagingPathAllocated,
+            failure.Diagnostic.Check);
+        Xunit.Assert.NotNull(failure.Diagnostic.SourceTemplatePath);
+        Xunit.Assert.NotNull(failure.Diagnostic.TemplateIdentity);
+        Xunit.Assert.Null(failure.Diagnostic.StagingPath);
+        Xunit.Assert.Null(failure.Diagnostic.FinalPath);
+        Xunit.Assert.False(failure.Diagnostic.Git.ProcessStarted);
+        Xunit.Assert.Contains(
+            "controlled staging allocation failure",
+            failure.Diagnostic.Git.StandardError,
+            StringComparison.Ordinal);
+        Xunit.Assert.True(Directory.Exists(failure.Diagnostic.SourceTemplatePath));
+    }
+
+    [Xunit.Fact]
+    public void Create_TemplateAllocationThrows_ReportsTypedCheck()
+    {
+        using var scope = new FactoryScope(
+            directoryAllocator: (_, _) => throw new IOException("controlled template allocation failure"));
+
+        var failure = Xunit.Assert.Throws<
+            WorkerDispatchTestsSeededRepositoryFactory.SeededRepositoryFailureException>(
+                () => scope.Factory.Create());
+
+        Xunit.Assert.Equal(
+            WorkerDispatchTestsSeededRepositoryFactory.ValidationCheck.TemplatePathAllocated,
+            failure.Diagnostic.Check);
+        Xunit.Assert.Null(failure.Diagnostic.SourceTemplatePath);
+        Xunit.Assert.Null(failure.Diagnostic.TemplateIdentity);
+        Xunit.Assert.Null(failure.Diagnostic.StagingPath);
+        Xunit.Assert.Null(failure.Diagnostic.FinalPath);
+        Xunit.Assert.False(failure.Diagnostic.Git.ProcessStarted);
+        Xunit.Assert.Contains(
+            "controlled template allocation failure",
+            failure.Diagnostic.Git.StandardError,
+            StringComparison.Ordinal);
+    }
+
     private sealed class FactoryScope : IDisposable
     {
+        private readonly Func<string, int, string>? _directoryAllocator;
         private int _nextDirectory;
 
-        internal FactoryScope(WorkerDispatchTestsSeededRepositoryFactory.CreationHooks? hooks = null)
+        internal FactoryScope(
+            WorkerDispatchTestsSeededRepositoryFactory.CreationHooks? hooks = null,
+            Func<string, int, string>? directoryAllocator = null)
         {
             Root = InfrastructureTestSupport.CreateTempDirectory();
+            _directoryAllocator = directoryAllocator;
             Factory = new WorkerDispatchTestsSeededRepositoryFactory(
                 AllocateDirectory,
                 path => File.WriteAllText(Path.Combine(path, "seed.txt"), "seed"),
@@ -183,9 +238,15 @@ public sealed class WorkerDispatchTestsSeededRepositoryFactoryTests
 
         private string AllocateDirectory()
         {
-            var path = Path.Combine(Root, $"factory-owned-{Interlocked.Increment(ref _nextDirectory)}");
-            Directory.CreateDirectory(path);
-            return path;
+            var attempt = Interlocked.Increment(ref _nextDirectory);
+            return _directoryAllocator?.Invoke(Root, attempt) ?? CreateOwnedDirectory(Root, attempt);
         }
+    }
+
+    private static string CreateOwnedDirectory(string root, int attempt)
+    {
+        var path = Path.Combine(root, $"factory-owned-{attempt}");
+        Directory.CreateDirectory(path);
+        return path;
     }
 }

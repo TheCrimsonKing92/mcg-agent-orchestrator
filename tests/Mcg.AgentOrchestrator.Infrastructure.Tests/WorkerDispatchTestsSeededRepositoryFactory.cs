@@ -51,18 +51,24 @@ internal sealed class WorkerDispatchTestsSeededRepositoryFactory
             stagingPath: null,
             finalPath: null);
 
-        var stagingPath = CanonicalPath(_directoryAllocator());
-        var parent = Path.GetDirectoryName(stagingPath)
-            ?? throw new InvalidOperationException($"Staging path has no parent: {stagingPath}");
-        var finalPath = CanonicalPath(Path.Combine(
-            parent,
-            $"{Path.GetFileName(stagingPath)}-published-{Guid.NewGuid():N}"));
+        string? allocatedStagingPath = null;
+        string? stagingPath = null;
+        string? finalPath = null;
         var published = false;
+        var untypedFailureCheck = ValidationCheck.StagingPathAllocated;
         RepositoryIdentity? stagingIdentity = null;
         RepositoryIdentity? finalIdentity = null;
 
         try
         {
+            allocatedStagingPath = _directoryAllocator();
+            stagingPath = CanonicalPath(allocatedStagingPath);
+            var parent = Path.GetDirectoryName(stagingPath)
+                ?? throw new InvalidOperationException($"Staging path has no parent: {stagingPath}");
+            finalPath = CanonicalPath(Path.Combine(
+                parent,
+                $"{Path.GetFileName(stagingPath)}-published-{Guid.NewGuid():N}"));
+
             if (!_fileSystem.DirectoryExists(stagingPath))
             {
                 throw Failure(
@@ -91,6 +97,7 @@ internal sealed class WorkerDispatchTestsSeededRepositoryFactory
                     finalIdentity);
             }
 
+            untypedFailureCheck = ValidationCheck.StagingValidation;
             try
             {
                 _fileSystem.CopyDirectoryContents(template.Path, stagingPath);
@@ -145,6 +152,7 @@ internal sealed class WorkerDispatchTestsSeededRepositoryFactory
             {
                 _fileSystem.MoveDirectory(stagingPath, finalPath);
                 published = true;
+                untypedFailureCheck = ValidationCheck.PublishedValidation;
                 _hooks.AfterPublish?.Invoke(finalPath);
             }
             catch (Exception ex)
@@ -183,23 +191,23 @@ internal sealed class WorkerDispatchTestsSeededRepositoryFactory
         }
         catch (SeededRepositoryFailureException)
         {
-            CleanupAttempt(stagingPath, finalPath, published);
+            CleanupAttempt(stagingPath ?? allocatedStagingPath, finalPath, published);
             throw;
         }
         catch (Exception ex)
         {
             var diagnostic = Failure(
-                published ? ValidationCheck.PublishedValidation : ValidationCheck.StagingValidation,
+                untypedFailureCheck,
                 template.Path,
-                stagingPath,
+                stagingPath ?? allocatedStagingPath,
                 finalPath,
-                _fileSystem.ObserveRepository(published ? finalPath : stagingPath),
+                ObserveRepositorySafely(published ? finalPath : stagingPath ?? allocatedStagingPath),
                 GitProbeResult.NotRun("seeded repository creation", ex.Message),
                 templateBefore,
                 stagingIdentity,
                 finalIdentity,
                 ex);
-            CleanupAttempt(stagingPath, finalPath, published);
+            CleanupAttempt(stagingPath ?? allocatedStagingPath, finalPath, published);
             throw diagnostic;
         }
     }
@@ -252,9 +260,27 @@ internal sealed class WorkerDispatchTestsSeededRepositoryFactory
 
     private TemplateState CreateTemplate()
     {
-        var path = CanonicalPath(_directoryAllocator());
+        string? allocatedPath = null;
+        string? path = null;
+        var untypedFailureCheck = ValidationCheck.TemplatePathAllocated;
         try
         {
+            allocatedPath = _directoryAllocator();
+            path = CanonicalPath(allocatedPath);
+            if (!_fileSystem.DirectoryExists(path))
+            {
+                throw Failure(
+                    ValidationCheck.TemplatePathAllocated,
+                    path,
+                    stagingPath: null,
+                    finalPath: null,
+                    _fileSystem.ObserveRepository(path),
+                    GitProbeResult.NotRun(
+                        "filesystem allocation",
+                        "The allocator did not create the template directory."));
+            }
+
+            untypedFailureCheck = ValidationCheck.TemplateConstruction;
             RunTemplateCommand(path, ["init", "-b", "main"], ValidationCheck.TemplateInit);
             RunTemplateCommand(path, ["config", "user.email", "tests@example.com"], ValidationCheck.TemplateUserEmail);
             RunTemplateCommand(path, ["config", "user.name", "Dispatch Tests"], ValidationCheck.TemplateUserName);
@@ -275,20 +301,20 @@ internal sealed class WorkerDispatchTestsSeededRepositoryFactory
         }
         catch (SeededRepositoryFailureException)
         {
-            TryDeleteOwnedPath(path);
+            TryDeleteOwnedPath(path ?? allocatedPath);
             throw;
         }
         catch (Exception ex)
         {
             var failure = Failure(
-                ValidationCheck.TemplateConstruction,
-                path,
+                untypedFailureCheck,
+                path ?? allocatedPath,
                 stagingPath: null,
                 finalPath: null,
-                _fileSystem.ObserveRepository(path),
+                ObserveRepositorySafely(path ?? allocatedPath),
                 GitProbeResult.NotRun("template construction", ex.Message),
                 innerException: ex);
-            TryDeleteOwnedPath(path);
+            TryDeleteOwnedPath(path ?? allocatedPath);
             throw failure;
         }
     }
@@ -609,7 +635,7 @@ internal sealed class WorkerDispatchTestsSeededRepositoryFactory
             ["GIT_COMMITTER_DATE"] = commitTime.ToString("O")
         };
 
-    private void CleanupAttempt(string stagingPath, string finalPath, bool published)
+    private void CleanupAttempt(string? stagingPath, string? finalPath, bool published)
     {
         TryDeleteOwnedPath(stagingPath);
         if (published)
@@ -618,8 +644,13 @@ internal sealed class WorkerDispatchTestsSeededRepositoryFactory
         }
     }
 
-    private void TryDeleteOwnedPath(string path)
+    private void TryDeleteOwnedPath(string? path)
     {
+        if (string.IsNullOrWhiteSpace(path))
+        {
+            return;
+        }
+
         try
         {
             if (_fileSystem.DirectoryExists(path))
@@ -633,6 +664,23 @@ internal sealed class WorkerDispatchTestsSeededRepositoryFactory
         }
     }
 
+    private FileSystemObservation ObserveRepositorySafely(string? path)
+    {
+        if (string.IsNullOrWhiteSpace(path))
+        {
+            return new FileSystemObservation(false, false, false, false);
+        }
+
+        try
+        {
+            return _fileSystem.ObserveRepository(path);
+        }
+        catch
+        {
+            return new FileSystemObservation(false, false, false, false);
+        }
+    }
+
     private static ValidationCheck Check(ValidationStage stage, string suffix) =>
         Enum.Parse<ValidationCheck>($"{stage}{suffix}", ignoreCase: false);
 
@@ -641,7 +689,7 @@ internal sealed class WorkerDispatchTestsSeededRepositoryFactory
 
     private static SeededRepositoryFailureException Failure(
         ValidationCheck check,
-        string sourceTemplatePath,
+        string? sourceTemplatePath,
         string? stagingPath,
         string? finalPath,
         FileSystemObservation observation,
@@ -716,7 +764,7 @@ internal sealed class WorkerDispatchTestsSeededRepositoryFactory
 
     internal sealed record FailureDiagnostic(
         ValidationCheck Check,
-        string SourceTemplatePath,
+        string? SourceTemplatePath,
         string? StagingPath,
         string? FinalPath,
         RepositoryIdentity? TemplateIdentity,
@@ -726,7 +774,7 @@ internal sealed class WorkerDispatchTestsSeededRepositoryFactory
         GitProbeResult Git)
     {
         public override string ToString() =>
-            $"check={Check}; sourceTemplate={SourceTemplatePath}; staging={StagingPath ?? "null"}; " +
+            $"check={Check}; sourceTemplate={SourceTemplatePath ?? "null"}; staging={StagingPath ?? "null"}; " +
             $"final={FinalPath ?? "null"}; templateIdentity={TemplateIdentity?.ToString() ?? "null"}; " +
             $"stagingIdentity={StagingIdentity?.ToString() ?? "null"}; " +
             $"finalIdentity={FinalIdentity?.ToString() ?? "null"}; filesystem=({FileSystem}); git=({Git})";
@@ -821,6 +869,7 @@ internal sealed class WorkerDispatchTestsSeededRepositoryFactory
     internal enum ValidationCheck
     {
         TemplateConstruction,
+        TemplatePathAllocated,
         TemplateInit,
         TemplateUserEmail,
         TemplateUserName,
