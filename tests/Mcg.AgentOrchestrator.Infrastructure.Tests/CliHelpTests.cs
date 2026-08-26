@@ -697,6 +697,8 @@ public sealed class CliHelpTests
 
         CliCommandHelp.ThrowIfInvalidFlags(
             ["trial-compare", "--spec", "harnesses.json", "--receipts", "receipts", "--timeout-seconds", "30"]);
+        Xunit.Assert.Contains("canonical workload", CliCommandHelp.TrialCompareUsage, StringComparison.OrdinalIgnoreCase);
+        Xunit.Assert.Contains("historical", CliCommandHelp.TrialCompareUsage, StringComparison.OrdinalIgnoreCase);
     }
 
     [Xunit.Fact(DisplayName = "Cli_newly_validated_goal_verbs_accept_existing_flags")]

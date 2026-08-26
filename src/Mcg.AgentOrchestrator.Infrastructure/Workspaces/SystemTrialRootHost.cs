@@ -17,6 +17,8 @@ internal sealed class SystemTrialRootHost : ITrialRootHost
 
         public string HarnessStatePath => lease.HarnessStatePath;
 
+        public void AddEnvironment(IReadOnlyDictionary<string, string?> environment) => lease.AddEnvironment(environment);
+
         public ITrialLaunch Start(ProcessStartInfo command) => new SystemTrialLaunch(lease.Start(command));
 
         public TrialTeardownReport Destroy() => lease.Destroy();
