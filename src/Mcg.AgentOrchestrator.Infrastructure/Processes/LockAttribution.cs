@@ -522,7 +522,7 @@ internal static partial class LockAttribution
     private static BuildLockAttribution AttributeFromProcessSnapshot(string path, string? ownershipHint)
     {
         var snapshot = ProcessCommandLines.Snapshot();
-        var holders = snapshot.Read(Process.GetProcesses().Select(process => process.Id))
+        var holders = snapshot.Read(snapshot.Records.Keys)
             .Where(pair => IsOrchestratorOwned(pair.Value, ownershipHint))
             .Select(pair => new BuildLockHolder(pair.Key, TryProcessName(pair.Key), pair.Value, true, TryProcessStartTime(pair.Key)))
             .Take(8)
@@ -532,33 +532,26 @@ internal static partial class LockAttribution
 
     private static List<BuildLockHolder> ParseHandleOutput(string output, string? ownershipHint)
     {
-        var commandLines = new Dictionary<int, string>();
+        var parsed = output
+            .Split(['\r', '\n'], StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries)
+            .Select(line => (Line: line, Match: HandlePidPattern.Match(line)))
+            .Where(item => item.Match.Success && int.TryParse(
+                item.Match.Groups["pid"].Value,
+                System.Globalization.NumberStyles.Integer,
+                System.Globalization.CultureInfo.InvariantCulture,
+                out _))
+            .Select(item => (
+                item.Line,
+                Pid: int.Parse(item.Match.Groups["pid"].Value, System.Globalization.CultureInfo.InvariantCulture)))
+            .ToArray();
+        var commandLines = ProcessCommandLines.Read(parsed.Select(item => item.Pid));
         var holders = new List<BuildLockHolder>();
-        foreach (var line in output.Split(['\r', '\n'], StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries))
+        foreach (var item in parsed)
         {
-            var pidMatch = HandlePidPattern.Match(line);
-            if (!pidMatch.Success ||
-                !int.TryParse(pidMatch.Groups["pid"].Value, System.Globalization.NumberStyles.Integer, System.Globalization.CultureInfo.InvariantCulture, out var pid))
-            {
-                continue;
-            }
-
-            if (commandLines.Count == 0)
-            {
-                commandLines = ProcessCommandLines.Read([pid]);
-            }
-            else if (!commandLines.ContainsKey(pid))
-            {
-                foreach (var item in ProcessCommandLines.Read([pid]))
-                {
-                    commandLines[item.Key] = item.Value;
-                }
-            }
-
-            commandLines.TryGetValue(pid, out var commandLine);
-            var nameMatch = HandleNamePattern.Match(line);
-            var processName = nameMatch.Success ? nameMatch.Groups["name"].Value : TryProcessName(pid);
-            holders.Add(new BuildLockHolder(pid, processName, commandLine, IsOrchestratorOwned(commandLine, ownershipHint), TryProcessStartTime(pid)));
+            commandLines.TryGetValue(item.Pid, out var commandLine);
+            var nameMatch = HandleNamePattern.Match(item.Line);
+            var processName = nameMatch.Success ? nameMatch.Groups["name"].Value : TryProcessName(item.Pid);
+            holders.Add(new BuildLockHolder(item.Pid, processName, commandLine, IsOrchestratorOwned(commandLine, ownershipHint), TryProcessStartTime(item.Pid)));
         }
 
         return holders

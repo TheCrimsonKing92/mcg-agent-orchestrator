@@ -1131,44 +1131,4 @@ public static partial class GoalWorktrees
                string.Equals(processName, "MSBuild", StringComparison.OrdinalIgnoreCase);
     }
 
-    internal static Dictionary<int, string> ParseWmicListOutput(string output)
-    {
-        var result = new Dictionary<int, string>();
-        var currentBlock = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
-
-        void FlushBlock()
-        {
-            if (currentBlock.TryGetValue("ProcessId", out var pidStr) &&
-                currentBlock.TryGetValue("CommandLine", out var cmdLine) &&
-                int.TryParse(pidStr, out var pid) &&
-                !string.IsNullOrWhiteSpace(cmdLine))
-            {
-                result[pid] = cmdLine.Trim();
-            }
-
-            currentBlock.Clear();
-        }
-
-        using var reader = new StringReader(output);
-        string? line;
-        while ((line = reader.ReadLine()) is not null)
-        {
-            line = line.Trim();
-            if (string.IsNullOrEmpty(line))
-            {
-                FlushBlock();
-                continue;
-            }
-
-            var sep = line.IndexOf('=');
-            if (sep > 0)
-            {
-                currentBlock[line[..sep]] = line[(sep + 1)..];
-            }
-        }
-
-        FlushBlock();
-        return result;
-    }
-
 }

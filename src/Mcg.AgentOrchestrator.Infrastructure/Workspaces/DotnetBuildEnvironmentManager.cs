@@ -323,12 +323,13 @@ public static class DotnetBuildEnvironmentManager
         while (true)
         {
             cancellationToken.ThrowIfCancellationRequested();
+            var processSnapshot = CreateSlotCandidateProcessSnapshot();
             var scanStart = NextStableSlotScanStart(slotCount);
             for (var offset = 0; offset < slotCount; offset++)
             {
                 var slot = (scanStart + offset) % slotCount;
                 var environment = CreateStableSlotEnvironment(slot);
-                if (IsSlotArtifactsBusy(environment))
+                if (IsSlotArtifactsBusy(environment, processSnapshot))
                 {
                     continue;
                 }
@@ -360,7 +361,7 @@ public static class DotnetBuildEnvironmentManager
             var pollDelay = remaining < SlotBusyPollDelay ? remaining : SlotBusyPollDelay;
 
             var target = CreateStableSlotEnvironment(leastRecentlyLeased.SlotIndex);
-            if (IsSlotArtifactsBusy(target))
+            if (IsSlotArtifactsBusy(target, processSnapshot))
             {
                 delay(pollDelay);
                 continue;
@@ -1107,20 +1108,23 @@ public static class DotnetBuildEnvironmentManager
     private static IReadOnlyList<DotnetBuildStableSlotWait> BuildBusySlotSnapshot(
         int slotCount = StableSlotCount)
     {
+        var processSnapshot = CreateSlotCandidateProcessSnapshot();
         var waits = new DotnetBuildStableSlotWait[slotCount];
         for (var slot = 0; slot < slotCount; slot++)
         {
-            waits[slot] = new DotnetBuildStableSlotWait(slot, TryReadStableSlotExecutionOwner(slot));
+            waits[slot] = new DotnetBuildStableSlotWait(slot, TryReadStableSlotExecutionOwner(slot, processSnapshot));
         }
 
         return waits;
     }
 
-    private static int? TryReadStableSlotExecutionOwner(int slotIndex)
+    private static int? TryReadStableSlotExecutionOwner(
+        int slotIndex,
+        ProcessCommandLineSnapshot? processSnapshot = null)
     {
         var environment = CreateStableSlotEnvironment(slotIndex, createArtifactsDirectory: false);
         var metadata = TryReadExecutionLeaseMetadata(environment.ExecutionLockPath);
-        return TryFindActiveSlotArtifactConsumer(environment)?.ProcessId ??
+        return TryFindActiveSlotArtifactConsumer(environment, processSnapshot)?.ProcessId ??
             metadata?.OwnerProcessId;
     }
 
@@ -1315,10 +1319,14 @@ public static class DotnetBuildEnvironmentManager
                 holder.ProcessName.Equals("unknown", StringComparison.OrdinalIgnoreCase) ||
                 holder.ProcessName.Equals("unknown-probe-timeout", StringComparison.OrdinalIgnoreCase)));
 
-    private static bool IsSlotArtifactsBusy(DotnetBuildEnvironment environment) =>
-        TryFindActiveSlotArtifactConsumer(environment) is not null;
+    private static bool IsSlotArtifactsBusy(
+        DotnetBuildEnvironment environment,
+        ProcessCommandLineSnapshot? processSnapshot = null) =>
+        TryFindActiveSlotArtifactConsumer(environment, processSnapshot) is not null;
 
-    internal static BuildLockHolder? TryFindActiveSlotArtifactConsumer(DotnetBuildEnvironment environment)
+    internal static BuildLockHolder? TryFindActiveSlotArtifactConsumer(
+        DotnetBuildEnvironment environment,
+        ProcessCommandLineSnapshot? processSnapshot = null)
     {
         var artifactsPath = NormalizeForCommandLineMatch(environment.ArtifactsPath);
         if (string.IsNullOrWhiteSpace(artifactsPath))
@@ -1326,8 +1334,8 @@ public static class DotnetBuildEnvironmentManager
             return null;
         }
 
-        var snapshot = ProcessCommandLineSnapshotForTests?.Invoke() ?? ProcessCommandLines.Snapshot();
-        foreach (var pair in snapshot.Read(Process.GetProcesses().Select(process => process.Id)))
+        var snapshot = processSnapshot ?? CreateSlotCandidateProcessSnapshot();
+        foreach (var pair in snapshot.Read(snapshot.Records.Keys))
         {
             if (pair.Key == Environment.ProcessId ||
                 !IsProcessRunning(pair.Key) ||
@@ -1340,6 +1348,28 @@ public static class DotnetBuildEnvironmentManager
         }
 
         return null;
+    }
+
+    private static ProcessCommandLineSnapshot CreateSlotCandidateProcessSnapshot()
+    {
+        if (ProcessCommandLineSnapshotForTests is not null)
+        {
+            return ProcessCommandLineSnapshotForTests();
+        }
+
+        var processIds = new HashSet<int>();
+        foreach (var name in new[] { "testhost", "vstest.console", "datacollector", "dotnet" })
+        {
+            foreach (var process in Process.GetProcessesByName(name))
+            {
+                using (process)
+                {
+                    processIds.Add(process.Id);
+                }
+            }
+        }
+
+        return ProcessCommandLines.Snapshot(processIds);
     }
 
     private static bool CommandLineUsesSlotArtifacts(string commandLine, string artifactsPath)

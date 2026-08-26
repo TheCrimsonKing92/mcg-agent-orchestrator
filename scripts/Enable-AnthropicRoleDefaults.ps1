@@ -29,25 +29,31 @@ function Write-ProgressLog([string] $Message) {
 
 if ($Schedule) {
     $scriptPath = [System.IO.Path]::GetFullPath($PSCommandPath)
-    $existing = @(Get-CimInstance Win32_Process | Where-Object {
-        $_.ProcessId -ne $PID -and
-        $null -ne $_.CommandLine -and
-        $_.CommandLine.Contains($scriptPath, [System.StringComparison]::OrdinalIgnoreCase)
+    $queryOutput = @(& (Join-Path $repoRoot 'scripts\Get-RepoProcessInfo.ps1') `
+        -CommandContains $scriptPath `
+        -Newest 25)
+    if ($LASTEXITCODE -is [int] -and $LASTEXITCODE -ne 0) {
+        throw 'Could not inspect existing Anthropic role-default schedules; stopped nothing.'
+    }
+    $existingProcessIds = @($queryOutput | ForEach-Object {
+        if ($_ -match '^PROCESS id=(\d+)\s' -and [int]$Matches[1] -ne $PID) { [int]$Matches[1] }
     })
-    if ($existing.Count -gt 0) {
+    if ($existingProcessIds.Count -gt 0) {
         if (-not $ReplaceExistingSchedule) {
             Write-ProgressLog ('ANTHROPIC_ROLE_DEFAULTS_ALREADY_SCHEDULED pids={0} target={1}' -f
-                (($existing.ProcessId | Sort-Object) -join ','),
+                (($existingProcessIds | Sort-Object) -join ','),
                 $NotBeforeUtc.ToUniversalTime().ToString('O'))
             return
         }
 
-        foreach ($scheduledProcess in $existing) {
-            Stop-Process -Id $scheduledProcess.ProcessId -ErrorAction Stop
-            Wait-Process -Id $scheduledProcess.ProcessId -Timeout 15 -ErrorAction SilentlyContinue
+        foreach ($scheduledProcessId in $existingProcessIds) {
+            & (Join-Path $repoRoot 'scripts\Stop-RepoProcess.ps1') `
+                -Id $scheduledProcessId `
+                -CommandContains $scriptPath
+            Wait-Process -Id $scheduledProcessId -Timeout 15 -ErrorAction SilentlyContinue
         }
         Write-ProgressLog ('ANTHROPIC_ROLE_DEFAULTS_REPLACED_SCHEDULE pids={0}' -f
-            (($existing.ProcessId | Sort-Object) -join ','))
+            (($existingProcessIds | Sort-Object) -join ','))
     }
 
     $pwshPath = (Get-Command pwsh -ErrorAction Stop).Source

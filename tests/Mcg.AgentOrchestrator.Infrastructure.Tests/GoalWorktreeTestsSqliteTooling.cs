@@ -119,22 +119,21 @@ public sealed class GoalWorktreeTestsSqliteTooling : GoalWorktreeTestBase
             "Mcg.AgentOrchestrator.App",
             "Cli",
             "RepoProcessCliCommand.cs"));
-        Assert.DoesNotContain("ProcessCommandLines.Read", cliCommandText, StringComparison.Ordinal);
-        Assert.DoesNotContain("wmic", cliCommandText, StringComparison.OrdinalIgnoreCase);
-        Assert.DoesNotContain("Get-CimInstance", cliCommandText, StringComparison.OrdinalIgnoreCase);
-        Assert.DoesNotContain("Win32_Process", cliCommandText, StringComparison.OrdinalIgnoreCase);
+        Assert.Contains("ProcessCommandLines.Snapshot", cliCommandText, StringComparison.Ordinal);
+        Assert.DoesNotContain("OpenProcess", cliCommandText, StringComparison.Ordinal);
 
-        foreach (var relativePath in new[]
+        var inspectedFiles = Directory
+            .EnumerateFiles(Path.Combine(repoRoot, "src"), "*", SearchOption.AllDirectories)
+            .Concat(Directory.EnumerateFiles(Path.Combine(repoRoot, "scripts"), "*.ps1", SearchOption.AllDirectories))
+            .Append(Path.Combine(repoRoot, "docs", "operator-runbook.md"))
+            .Where(path => !path.Contains($"{Path.DirectorySeparatorChar}bin{Path.DirectorySeparatorChar}", StringComparison.OrdinalIgnoreCase))
+            .Where(path => !path.Contains($"{Path.DirectorySeparatorChar}obj{Path.DirectorySeparatorChar}", StringComparison.OrdinalIgnoreCase));
+        foreach (var path in inspectedFiles)
         {
-            Path.Combine("scripts", "Get-RepoProcessInfo.ps1"),
-            Path.Combine("scripts", "Stop-RepoProcess.ps1"),
-            Path.Combine("scripts", "Find-OrchestratorLocks.ps1"),
-            Path.Combine("scripts", "Get-OrchestratorSnapshot.ps1")
-        })
-        {
-            var text = File.ReadAllText(Path.Combine(repoRoot, relativePath));
-            Assert.DoesNotContain("Get-CimInstance", text, StringComparison.OrdinalIgnoreCase);
+            var text = File.ReadAllText(path);
+            Assert.DoesNotContain("FileName = \"wmic\"", text, StringComparison.OrdinalIgnoreCase);
             Assert.DoesNotContain("Win32_Process", text, StringComparison.OrdinalIgnoreCase);
+            Assert.DoesNotContain("ManagementObjectSearcher", text, StringComparison.OrdinalIgnoreCase);
         }
     }
 

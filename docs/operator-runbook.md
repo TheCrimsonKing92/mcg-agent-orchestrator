@@ -122,7 +122,7 @@ produced. Those two diverge exactly when it matters: after a landing rebuilds th
 keeps running. Read the marker from the run directory named on the process command line:
 
 ```powershell
-Get-CimInstance Win32_Process -Filter "Name='dotnet.exe'" | Where-Object { $_.CommandLine -like '*conduct*' } | Format-List ProcessId, ParentProcessId, CreationDate, CommandLine
+.\scripts\Invoke-RepoScript.ps1 scripts\Get-RepoProcessInfo.ps1 -Name dotnet -CommandContains conduct -Newest 10
 Get-Content -LiteralPath "$env:TEMP\mcg-run\<hash-from-that-command-line>\Mcg.AgentOrchestrator.App.dll.git-head"
 git rev-parse HEAD
 ```
