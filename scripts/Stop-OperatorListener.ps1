@@ -16,7 +16,7 @@
   marker. PID 10484 (the operator's personal codex) cannot match because it is not a dotnet host
   carrying both orchestrator markers.
 
-  Exit code: always 0 (nothing running, stopped successfully, or -DryRun listing).
+  Exit code: 0 when absent, stopped, or listed; 1 when inspection, revalidation, or stop fails.
 
 .PARAMETER DryRun
   List the matching pid(s) without stopping anything. Alias: -WhatIf.
@@ -38,9 +38,10 @@ $queryOutput = @(& (Join-Path $repoRoot 'scripts\Get-RepoProcessInfo.ps1') `
     -Name dotnet `
     -CommandContains @('operator-listen', 'Mcg.AgentOrchestrator.App') `
     -Newest 25)
-if ($LASTEXITCODE -is [int] -and $LASTEXITCODE -ne 0) {
+if (($LASTEXITCODE -is [int] -and $LASTEXITCODE -ne 0) -or
+    ($queryOutput -match '^PROCESS_QUERY_UNAVAILABLE\s')) {
     Write-Output 'Operator-listen query unavailable; stopped nothing.'
-    exit 0
+    exit 1
 }
 
 $processIds = @($queryOutput | ForEach-Object {
@@ -60,9 +61,16 @@ if ($DryRun) {
 }
 
 foreach ($processId in $processIds) {
-    & (Join-Path $repoRoot 'scripts\Stop-RepoProcess.ps1') `
+    $stopOutput = @(& (Join-Path $repoRoot 'scripts\Stop-RepoProcess.ps1') `
         -Id $processId `
         -CommandContains @('operator-listen', 'Mcg.AgentOrchestrator.App') `
-        -Force
+        -Force)
+    $stopExitCode = $LASTEXITCODE
+    $stopOutput | Write-Output
+    if (($stopExitCode -is [int] -and $stopExitCode -ne 0) -or
+        ($stopOutput -match 'status=(refused|not-stopped)')) {
+        Write-Output "Operator-listen stop refused or failed for pid $processId."
+        exit 1
+    }
 }
 exit 0

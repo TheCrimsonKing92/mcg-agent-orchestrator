@@ -62,4 +62,111 @@ public sealed class WindowsNativeProcessInspectionTests
         Assert.True(snapshot.TryGetRecord(73, out var record));
         Assert.Equal(ProcessInspectionStatus.PartialRead, record.Status);
     }
+
+    [Xunit.Fact]
+    public void ReadOne_OpenedHandle_BindsIdentityAndCommand()
+    {
+        var calls = new List<string>();
+        var handle = new IntPtr(17);
+        var startedAt = DateTimeOffset.Parse("2026-08-26T12:00:00Z");
+
+        var record = WindowsNativeProcessInspection.ReadOne(
+            new WindowsNativeProcessInspection.ProcessInspectionSeed(42, 3, "worker"),
+            processId =>
+            {
+                calls.Add($"open:{processId}");
+                return new WindowsNativeProcessInspection.ProcessOpenResult(handle, 0);
+            },
+            openedHandle =>
+            {
+                calls.Add($"read:{openedHandle}");
+                return new WindowsNativeProcessInspection.OpenedProcessReadResult(
+                    7,
+                    @"C:\workers\worker.exe",
+                    startedAt,
+                    "worker.exe --run",
+                    ProcessInspectionStatus.Available);
+            },
+            openedHandle => calls.Add($"close:{openedHandle}"));
+
+        Assert.Equal(["open:42", "read:17", "close:17"], calls);
+        Assert.Equal(7, record.ParentProcessId);
+        Assert.Equal(startedAt, record.StartedAt);
+        Assert.Equal(@"C:\workers\worker.exe", record.ExecutablePath);
+        Assert.Equal("worker.exe --run", record.CommandLine);
+        Assert.Equal(ProcessInspectionStatus.Available, record.Status);
+    }
+
+    [Xunit.Fact]
+    public void ReadOne_SeedNameChanged_ReturnsDeadOrRecycled()
+    {
+        var record = WindowsNativeProcessInspection.ReadOne(
+            new WindowsNativeProcessInspection.ProcessInspectionSeed(42, 3, "worker"),
+            _ => new WindowsNativeProcessInspection.ProcessOpenResult(new IntPtr(17), 0),
+            _ => new WindowsNativeProcessInspection.OpenedProcessReadResult(
+                7,
+                @"C:\workers\replacement.exe",
+                DateTimeOffset.Parse("2026-08-26T12:00:00Z"),
+                "replacement.exe --run",
+                ProcessInspectionStatus.Available),
+            _ => { });
+
+        Assert.Equal(ProcessInspectionStatus.DeadOrRecycled, record.Status);
+        Assert.Null(record.CommandLine);
+    }
+
+    [Xunit.Fact]
+    public void ReadOne_ExitDuringRead_ClosesHandleAndReturnsExited()
+    {
+        var closed = false;
+        var record = WindowsNativeProcessInspection.ReadOne(
+            new WindowsNativeProcessInspection.ProcessInspectionSeed(42, 3, "worker"),
+            _ => new WindowsNativeProcessInspection.ProcessOpenResult(new IntPtr(17), 0),
+            _ => new WindowsNativeProcessInspection.OpenedProcessReadResult(
+                7,
+                @"C:\workers\worker.exe",
+                null,
+                null,
+                ProcessInspectionStatus.Exited),
+            _ => closed = true);
+
+        Assert.True(closed);
+        Assert.Equal(ProcessInspectionStatus.Exited, record.Status);
+        Assert.Null(record.CommandLine);
+    }
+
+    [Xunit.Fact]
+    public void ReadByNames_Candidates_EnumeratesOnce()
+    {
+        var enumerations = 0;
+        var reads = 0;
+        var records = WindowsNativeProcessInspection.ReadByNames(
+            new HashSet<string>(["dotnet", "testhost"], StringComparer.OrdinalIgnoreCase),
+            () =>
+            {
+                enumerations++;
+                return
+                [
+                    new WindowsNativeProcessInspection.ProcessInspectionSeed(1, 0, "dotnet"),
+                    new WindowsNativeProcessInspection.ProcessInspectionSeed(2, 0, "unrelated"),
+                    new WindowsNativeProcessInspection.ProcessInspectionSeed(3, 0, "testhost")
+                ];
+            },
+            seed =>
+            {
+                reads++;
+                return new ProcessInspectionRecord(
+                    seed.ProcessId,
+                    seed.ParentProcessId,
+                    seed.Name,
+                    null,
+                    null,
+                    seed.Name,
+                    ProcessInspectionStatus.Available);
+            });
+
+        Assert.Equal(1, enumerations);
+        Assert.Equal(2, reads);
+        Assert.Equal([1, 3], records.Keys.Order().ToArray());
+    }
 }

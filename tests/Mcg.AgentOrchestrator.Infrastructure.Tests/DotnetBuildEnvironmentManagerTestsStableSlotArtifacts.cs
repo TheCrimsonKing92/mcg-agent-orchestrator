@@ -228,6 +228,55 @@ public sealed class DotnetBuildEnvironmentManagerTestsStableSlotArtifacts
         }
     }
 
+    [Xunit.Fact]
+    public void SlotCandidate_UnavailableInspection_BlocksLease()
+    {
+        using var _ = EnvVarScope.ForIsolatedDotnetRoot();
+        var slot = DotnetBuildEnvironmentManager.CreateStableSlotAttempt(0);
+        const int candidateProcessId = 424242;
+        var snapshot = new ProcessCommandLineSnapshot(
+            new Dictionary<int, ProcessInspectionRecord>
+            {
+                [candidateProcessId] = new(
+                    candidateProcessId,
+                    1,
+                    "testhost",
+                    null,
+                    null,
+                    null,
+                    ProcessInspectionStatus.AccessDenied)
+            });
+
+        var holder = DotnetBuildEnvironmentManager.TryFindActiveSlotArtifactConsumer(slot, snapshot);
+
+        Assert.NotNull(holder);
+        Assert.Equal(candidateProcessId, holder.ProcessId);
+        Assert.False(holder.IsOrchestratorOwned);
+    }
+
+    [Xunit.Fact]
+    public void SlotCandidate_DefaultSnapshotFactory_IsCalledOnce()
+    {
+        using var _ = EnvVarScope.ForIsolatedDotnetRoot();
+        var slot = DotnetBuildEnvironmentManager.CreateStableSlotAttempt(0);
+        var snapshotCalls = 0;
+        DotnetBuildEnvironmentManager.ProcessCommandLineSnapshotForTests = () =>
+        {
+            snapshotCalls++;
+            return ProcessCommandLineSnapshot.Empty;
+        };
+
+        try
+        {
+            Assert.Null(DotnetBuildEnvironmentManager.TryFindActiveSlotArtifactConsumer(slot));
+            Assert.Equal(1, snapshotCalls);
+        }
+        finally
+        {
+            DotnetBuildEnvironmentManager.ProcessCommandLineSnapshotForTests = null;
+        }
+    }
+
     [Xunit.Fact(DisplayName = "DotnetBuildEnvironmentManager_unleased_slot_consumer_racing_artifact_prep_returns_slots_busy")]
     public void DotnetBuildEnvironmentManagerUnleasedSlotConsumerRacingArtifactPrepReturnsSlotsBusy()
     {

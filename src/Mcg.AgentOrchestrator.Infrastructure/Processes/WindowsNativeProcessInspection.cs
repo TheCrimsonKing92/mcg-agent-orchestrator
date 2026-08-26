@@ -1,5 +1,4 @@
 using System.ComponentModel;
-using System.Diagnostics;
 using System.Runtime.InteropServices;
 using System.Text;
 
@@ -10,6 +9,7 @@ public enum ProcessInspectionStatus
     Available,
     AccessDenied,
     Exited,
+    DeadOrRecycled,
     MalformedData,
     PartialRead,
     UnsupportedTarget,
@@ -36,6 +36,7 @@ internal static class WindowsNativeProcessInspection
     private const int ErrorInvalidParameter = 87;
     private const int ErrorPartialCopy = 299;
     private const int MaxCommandLineBytes = 32766;
+    private const uint StillActive = 259;
 
     public static IReadOnlyDictionary<int, ProcessInspectionRecord> Read(IEnumerable<int>? requestedProcessIds = null)
     {
@@ -53,10 +54,26 @@ internal static class WindowsNativeProcessInspection
         return Read(ids, () => CreateRequestedSeeds(ids), ReadOne);
     }
 
+    public static IReadOnlyDictionary<int, ProcessInspectionRecord> ReadByNames(IEnumerable<string> processNames)
+    {
+        var names = processNames
+            .Where(name => !string.IsNullOrWhiteSpace(name))
+            .Select(name => Path.GetFileNameWithoutExtension(name)!)
+            .ToHashSet(StringComparer.OrdinalIgnoreCase);
+        return ReadByNames(names, EnumerateProcesses, ReadOne);
+    }
+
+    internal static IReadOnlyDictionary<int, ProcessInspectionRecord> ReadByNames(
+        IReadOnlySet<string> processNames,
+        Func<IReadOnlyList<ProcessInspectionSeed>> enumerate,
+        Func<ProcessInspectionSeed, ProcessInspectionRecord> readOne) =>
+        Read(null, enumerate, readOne, entry => processNames.Contains(entry.Name));
+
     internal static IReadOnlyDictionary<int, ProcessInspectionRecord> Read(
         IEnumerable<int>? requestedProcessIds,
         Func<IReadOnlyList<ProcessInspectionSeed>> enumerate,
-        Func<ProcessInspectionSeed, ProcessInspectionRecord> readOne)
+        Func<ProcessInspectionSeed, ProcessInspectionRecord> readOne,
+        Func<ProcessInspectionSeed, bool>? include = null)
     {
         var entries = enumerate();
         IEnumerable<ProcessInspectionSeed> selected = entries;
@@ -64,6 +81,11 @@ internal static class WindowsNativeProcessInspection
         {
             var ids = requestedProcessIds.Where(id => id > 0).ToHashSet();
             selected = entries.Where(entry => ids.Contains(entry.ProcessId));
+        }
+
+        if (include is not null)
+        {
+            selected = selected.Where(include);
         }
 
         var result = new Dictionary<int, ProcessInspectionRecord>();
@@ -82,86 +104,169 @@ internal static class WindowsNativeProcessInspection
 
     private static IReadOnlyList<ProcessInspectionSeed> CreateRequestedSeeds(IEnumerable<int> processIds)
     {
-        var seeds = new List<ProcessInspectionSeed>();
-        foreach (var processId in processIds)
-        {
-            var name = string.Empty;
-            try
-            {
-                using var process = Process.GetProcessById(processId);
-                name = process.ProcessName;
-            }
-            catch (Exception ex) when (ex is ArgumentException or InvalidOperationException or Win32Exception or NotSupportedException)
-            {
-            }
-
-            seeds.Add(new ProcessInspectionSeed(processId, 0, name));
-        }
-
-        return seeds;
+        return processIds
+            .Select(static processId => new ProcessInspectionSeed(processId, 0, string.Empty))
+            .ToArray();
     }
 
     public static int TryGetParentProcessId(int processId) =>
-        EnumerateProcesses().FirstOrDefault(entry => entry.ProcessId == processId)?.ParentProcessId ?? 0;
+        Read([processId]).TryGetValue(processId, out var record) ? record.ParentProcessId : 0;
 
     private static ProcessInspectionRecord ReadOne(ProcessInspectionSeed entry)
     {
-        string? path = null;
-        DateTimeOffset? startedAt = null;
-        try
-        {
-            using var process = Process.GetProcessById(entry.ProcessId);
-            if (process.HasExited)
-            {
-                return Unavailable(entry, ProcessInspectionStatus.Exited, path, startedAt);
-            }
+        return ReadOne(entry, OpenForInspection, ReadOpenedProcess, handle => CloseHandle(handle));
+    }
 
-            try { path = process.MainModule?.FileName; } catch (Exception ex) when (IsExpectedInspectionFailure(ex)) { }
-            try { startedAt = new DateTimeOffset(process.StartTime.ToUniversalTime(), TimeSpan.Zero); } catch (Exception ex) when (IsExpectedInspectionFailure(ex)) { }
-        }
-        catch (ArgumentException)
+    internal static ProcessInspectionRecord ReadOne(
+        ProcessInspectionSeed entry,
+        Func<int, ProcessOpenResult> open,
+        Func<IntPtr, OpenedProcessReadResult> readOpened,
+        Action<IntPtr> close)
+    {
+        var opened = open(entry.ProcessId);
+        if (opened.Handle == IntPtr.Zero)
         {
-            return Unavailable(entry, ProcessInspectionStatus.Exited, path, startedAt);
-        }
-        catch (Exception ex) when (IsExpectedInspectionFailure(ex))
-        {
-            // Command-line inspection below supplies the more specific availability status.
-        }
-
-        var handle = OpenProcess(ProcessQueryLimitedInformation | ProcessVmRead, false, entry.ProcessId);
-        if (handle == IntPtr.Zero)
-        {
-            var error = Marshal.GetLastWin32Error();
             return Unavailable(
                 entry,
-                error == ErrorAccessDenied
+                opened.Error == ErrorAccessDenied
                     ? ProcessInspectionStatus.AccessDenied
-                    : error == ErrorInvalidParameter
+                    : opened.Error == ErrorInvalidParameter
                         ? ProcessInspectionStatus.Exited
                         : ProcessInspectionStatus.NativeFailure,
-                path,
-                startedAt);
+                null,
+                null);
         }
 
         try
         {
-            var read = ReadCommandLine(handle);
+            var read = readOpened(opened.Handle);
+            var openedName = string.IsNullOrWhiteSpace(read.ExecutablePath)
+                ? entry.Name
+                : Path.GetFileNameWithoutExtension(read.ExecutablePath);
+            var status = read.Status;
+            if (status == ProcessInspectionStatus.Available &&
+                !string.IsNullOrWhiteSpace(entry.Name) &&
+                !string.IsNullOrWhiteSpace(openedName) &&
+                !entry.Name.Equals(openedName, StringComparison.OrdinalIgnoreCase))
+            {
+                status = ProcessInspectionStatus.DeadOrRecycled;
+            }
+
             return new ProcessInspectionRecord(
                 entry.ProcessId,
-                entry.ParentProcessId,
-                entry.Name,
-                path,
-                startedAt,
-                read.CommandLine,
-                read.Status);
+                read.ParentProcessId,
+                openedName,
+                read.ExecutablePath,
+                read.StartedAt,
+                status == ProcessInspectionStatus.Available ? read.CommandLine : null,
+                status);
         }
         finally
         {
-            CloseHandle(handle);
+            close(opened.Handle);
         }
     }
 
-    private static CommandLineReadResult ReadCommandLine(IntPtr handle)
+    private static ProcessOpenResult OpenForInspection(int processId)
+    {
+        var handle = OpenProcess(ProcessQueryLimitedInformation | ProcessVmRead, false, processId);
+        return new ProcessOpenResult(handle, handle == IntPtr.Zero ? Marshal.GetLastWin32Error() : 0);
+    }
+
+    private static OpenedProcessReadResult ReadOpenedProcess(IntPtr handle)
+    {
+        if (!TryReadExitCode(handle, out var exitStatus))
+        {
+            return new(0, null, null, null, exitStatus);
+        }
+
+        var basicStatus = NtQueryInformationProcess(
+            handle,
+            ProcessBasicInformation,
+            out PROCESS_BASIC_INFORMATION basic,
+            Marshal.SizeOf<PROCESS_BASIC_INFORMATION>(),
+            out _);
+        if (basicStatus != 0 || basic.PebBaseAddress == IntPtr.Zero)
+        {
+            return new(0, null, null, null, ProcessInspectionStatus.NativeFailure);
+        }
+
+        var parentProcessId = basic.InheritedFromUniqueProcessId.ToInt64() is > 0 and <= int.MaxValue
+            ? basic.InheritedFromUniqueProcessId.ToInt32()
+            : 0;
+        var path = ReadExecutablePath(handle);
+        if (path.Status != ProcessInspectionStatus.Available)
+        {
+            return new(parentProcessId, null, null, null, path.Status);
+        }
+
+        var startedAt = ReadStartTime(handle);
+        if (startedAt.Status != ProcessInspectionStatus.Available)
+        {
+            return new(parentProcessId, path.Value, null, null, startedAt.Status);
+        }
+
+        var commandLine = ReadCommandLine(handle, basic.PebBaseAddress);
+        if (commandLine.Status != ProcessInspectionStatus.Available)
+        {
+            return new(parentProcessId, path.Value, startedAt.Value, null, commandLine.Status);
+        }
+
+        if (!TryReadExitCode(handle, out exitStatus))
+        {
+            return new(parentProcessId, path.Value, startedAt.Value, null, exitStatus);
+        }
+
+        return new(parentProcessId, path.Value, startedAt.Value, commandLine.CommandLine, ProcessInspectionStatus.Available);
+    }
+
+    private static bool TryReadExitCode(IntPtr handle, out ProcessInspectionStatus status)
+    {
+        if (!GetExitCodeProcess(handle, out var exitCode))
+        {
+            status = StatusFromLastError();
+            return false;
+        }
+
+        status = exitCode == StillActive ? ProcessInspectionStatus.Available : ProcessInspectionStatus.Exited;
+        return exitCode == StillActive;
+    }
+
+    private static ValueReadResult<string?> ReadExecutablePath(IntPtr handle)
+    {
+        var capacity = 32768u;
+        var path = new StringBuilder((int)capacity);
+        return QueryFullProcessImageName(handle, 0, path, ref capacity)
+            ? new(path.ToString(), ProcessInspectionStatus.Available)
+            : new(null, StatusFromLastError());
+    }
+
+    private static ValueReadResult<DateTimeOffset?> ReadStartTime(IntPtr handle)
+    {
+        if (!GetProcessTimes(handle, out var creationTime, out _, out _, out _))
+        {
+            return new(null, StatusFromLastError());
+        }
+
+        try
+        {
+            return new(new DateTimeOffset(DateTime.FromFileTimeUtc(creationTime), TimeSpan.Zero), ProcessInspectionStatus.Available);
+        }
+        catch (ArgumentOutOfRangeException)
+        {
+            return new(null, ProcessInspectionStatus.MalformedData);
+        }
+    }
+
+    private static ProcessInspectionStatus StatusFromLastError() => Marshal.GetLastWin32Error() switch
+    {
+        ErrorAccessDenied => ProcessInspectionStatus.AccessDenied,
+        ErrorInvalidParameter => ProcessInspectionStatus.Exited,
+        ErrorPartialCopy => ProcessInspectionStatus.PartialRead,
+        _ => ProcessInspectionStatus.NativeFailure
+    };
+
+    private static CommandLineReadResult ReadCommandLine(IntPtr handle, IntPtr nativePebAddress)
     {
         if (IntPtr.Size == 4 && Environment.Is64BitOperatingSystem)
         {
@@ -183,19 +288,8 @@ internal static class WindowsNativeProcessInspection
             }
         }
 
-        var basicStatus = NtQueryInformationProcess(
-            handle,
-            ProcessBasicInformation,
-            out PROCESS_BASIC_INFORMATION basic,
-            Marshal.SizeOf<PROCESS_BASIC_INFORMATION>(),
-            out _);
-        if (basicStatus != 0 || basic.PebBaseAddress == IntPtr.Zero)
-        {
-            return new(null, ProcessInspectionStatus.NativeFailure);
-        }
-
         var pointerSize = IntPtr.Size;
-        var pebAddress = basic.PebBaseAddress;
+        var pebAddress = nativePebAddress;
         if (IntPtr.Size == 8)
         {
             var wow64Status = NtQueryInformationProcess(
@@ -341,19 +435,24 @@ internal static class WindowsNativeProcessInspection
         DateTimeOffset? startedAt) =>
         new(entry.ProcessId, entry.ParentProcessId, entry.Name, path, startedAt, null, status);
 
-    private static bool IsExpectedInspectionFailure(Exception ex) =>
-        ex is InvalidOperationException or Win32Exception or NotSupportedException;
-
     private static IntPtr Add(IntPtr address, int offset) => new(address.ToInt64() + offset);
     private static IntPtr Add(long address, int offset) => new(address + offset);
 
     internal sealed record ProcessInspectionSeed(int ProcessId, int ParentProcessId, string Name);
+    internal readonly record struct ProcessOpenResult(IntPtr Handle, int Error);
+    internal sealed record OpenedProcessReadResult(
+        int ParentProcessId,
+        string? ExecutablePath,
+        DateTimeOffset? StartedAt,
+        string? CommandLine,
+        ProcessInspectionStatus Status);
     internal readonly record struct ProcessMemoryLayout(
         int PointerSize,
         int ProcessParametersOffset,
         int CommandLineOffset);
     private readonly record struct CommandLineReadResult(string? CommandLine, ProcessInspectionStatus Status);
     private readonly record struct PointerReadResult(long Value, bool Succeeded, ProcessInspectionStatus Status);
+    private readonly record struct ValueReadResult<T>(T Value, ProcessInspectionStatus Status);
 
     [DllImport("kernel32.dll", SetLastError = true)]
     private static extern IntPtr CreateToolhelp32Snapshot(uint flags, uint processId);
@@ -366,6 +465,24 @@ internal static class WindowsNativeProcessInspection
 
     [DllImport("kernel32.dll", SetLastError = true)]
     private static extern IntPtr OpenProcess(int desiredAccess, bool inheritHandle, int processId);
+
+    [DllImport("kernel32.dll", SetLastError = true)]
+    private static extern bool GetExitCodeProcess(IntPtr processHandle, out uint exitCode);
+
+    [DllImport("kernel32.dll", SetLastError = true, CharSet = CharSet.Unicode)]
+    private static extern bool QueryFullProcessImageName(
+        IntPtr processHandle,
+        int flags,
+        StringBuilder executablePath,
+        ref uint size);
+
+    [DllImport("kernel32.dll", SetLastError = true)]
+    private static extern bool GetProcessTimes(
+        IntPtr processHandle,
+        out long creationTime,
+        out long exitTime,
+        out long kernelTime,
+        out long userTime);
 
     [DllImport("kernel32.dll", SetLastError = true)]
     private static extern bool IsWow64Process2(

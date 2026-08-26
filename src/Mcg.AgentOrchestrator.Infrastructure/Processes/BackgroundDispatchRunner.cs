@@ -2472,39 +2472,22 @@ public sealed class BackgroundDispatchRunner
 
     private static List<(int ProcessId, string ProcessName, string? CommandLine)> FindBuildDaemons(string workingDirectory)
     {
-        var processesByPid = new Dictionary<int, string>();
+        return FindBuildDaemons(workingDirectory, ProcessCommandLines.SnapshotByNames);
+    }
 
-        foreach (var name in BuildServerCandidates)
-        {
-            try
-            {
-                foreach (var proc in Process.GetProcessesByName(name))
-                {
-                    using (proc)
-                    {
-                        processesByPid[proc.Id] = proc.ProcessName;
-                    }
-                }
-            }
-            catch
-            {
-            }
-        }
-
-        if (processesByPid.Count == 0)
-        {
-            return [];
-        }
-
-        var commandLines = ProcessCommandLines.Read(processesByPid.Keys);
+    internal static List<(int ProcessId, string ProcessName, string? CommandLine)> FindBuildDaemons(
+        string workingDirectory,
+        Func<IReadOnlyCollection<string>, ProcessCommandLineSnapshot> createSnapshot)
+    {
+        var snapshot = createSnapshot(BuildServerCandidates);
         var result = new List<(int, string, string?)>();
 
-        foreach (var (pid, name) in processesByPid)
+        foreach (var record in snapshot.Records.Values)
         {
-            commandLines.TryGetValue(pid, out var cmdLine);
-            if (ShouldReapBuildDaemon(workingDirectory, cmdLine))
+            if (record.Status == ProcessInspectionStatus.Available &&
+                ShouldReapBuildDaemon(workingDirectory, record.CommandLine))
             {
-                result.Add((pid, name, cmdLine));
+                result.Add((record.ProcessId, record.Name, record.CommandLine));
             }
         }
 

@@ -576,7 +576,10 @@ internal static partial class CliCommandHandlers
                 return false;
 
             case "repo-process-stop":
-                RepoProcessCliCommand.Stop(parts, Console.Out);
+                if (!RepoProcessCliCommand.Stop(parts, Console.Out))
+                {
+                    throw new CliExitException(1);
+                }
                 return false;
 
             case "stable-slot-dotnet":

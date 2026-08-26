@@ -12,6 +12,28 @@ internal static class ProcessCommandLines
     public static ProcessCommandLineSnapshot Snapshot(IEnumerable<int> pids) =>
         new(ReadRecords(pids.Distinct().ToArray()));
 
+    public static ProcessCommandLineSnapshot SnapshotByNames(IEnumerable<string> processNames)
+    {
+        var names = processNames
+            .Where(name => !string.IsNullOrWhiteSpace(name))
+            .Select(name => Path.GetFileNameWithoutExtension(name)!)
+            .ToHashSet(StringComparer.OrdinalIgnoreCase);
+        if (names.Count == 0)
+        {
+            return ProcessCommandLineSnapshot.Empty;
+        }
+
+        if (OperatingSystem.IsWindows())
+        {
+            return new ProcessCommandLineSnapshot(WindowsNativeProcessInspection.ReadByNames(names));
+        }
+
+        var records = ReadAllRecords()
+            .Where(pair => names.Contains(pair.Value.Name))
+            .ToDictionary(pair => pair.Key, pair => pair.Value);
+        return new ProcessCommandLineSnapshot(records);
+    }
+
     public static Dictionary<int, string> Read(IEnumerable<int> pids)
     {
         var pidList = pids.Distinct().ToList();

@@ -8,7 +8,13 @@ internal static class RepoProcessCliCommand
 {
     private const int MaxCommandLength = 420;
 
-    public static void PrintInfo(IReadOnlyList<string> parts, TextWriter output)
+    public static void PrintInfo(IReadOnlyList<string> parts, TextWriter output) =>
+        PrintInfo(parts, output, BuildSnapshots);
+
+    internal static void PrintInfo(
+        IReadOnlyList<string> parts,
+        TextWriter output,
+        Func<IEnumerable<int>?, IReadOnlyList<ProcessSnapshot>> buildSnapshots)
     {
         var options = RepoProcessOptions.Parse(parts);
         if (!options.HasQuery)
@@ -19,7 +25,7 @@ internal static class RepoProcessCliCommand
         IReadOnlyList<ProcessSnapshot> snapshots;
         try
         {
-            snapshots = BuildSnapshots();
+            snapshots = buildSnapshots(null);
         }
         catch (Exception ex)
         {
@@ -58,15 +64,34 @@ internal static class RepoProcessCliCommand
             }
         }
 
-        IReadOnlySet<int> currentInvocationLineage = options.LocksOnly
+        var excludesInvocationLineage = options.LocksOnly || options.CommandContains.Count > 0;
+        IReadOnlySet<int> currentInvocationLineage = excludesInvocationLineage
             ? BuildCurrentInvocationLineage(byId)
             : new HashSet<int>();
+
+        var unavailableCandidates = snapshots
+            .Where(snapshot =>
+                snapshot.InspectionStatus is not ProcessInspectionStatus.Available and
+                    not ProcessInspectionStatus.Exited and
+                    not ProcessInspectionStatus.DeadOrRecycled &&
+                !currentInvocationLineage.Contains(snapshot.ProcessId) &&
+                MatchesNames(snapshot, options.Names) &&
+                (options.CommandContains.Count > 0 ||
+                    (options.LocksOnly && IsPotentialLockHolder(snapshot))))
+            .OrderBy(snapshot => snapshot.ProcessId)
+            .ToList();
+        foreach (var unavailable in unavailableCandidates)
+        {
+            output.WriteLine(
+                $"PROCESS_QUERY_UNAVAILABLE operation=filter id={unavailable.ProcessId} name={unavailable.Name} status={unavailable.InspectionStatus}");
+        }
 
         if (options.Names.Count > 0 || options.CommandContains.Count > 0 || options.LocksOnly)
         {
             var query = snapshots.Where(snapshot =>
                 MatchesNames(snapshot, options.Names) &&
                 MatchesCommand(snapshot, options.CommandContains) &&
+                (!excludesInvocationLineage || !currentInvocationLineage.Contains(snapshot.ProcessId)) &&
                 (!options.LocksOnly || IsReportableLockHolder(snapshot, currentInvocationLineage)))
                 .OrderByDescending(snapshot => snapshot.StartedAt ?? DateTimeOffset.MinValue)
                 .ThenByDescending(snapshot => snapshot.ProcessId)
@@ -79,6 +104,11 @@ internal static class RepoProcessCliCommand
 
         if (selected.Count == 0 && options.ShouldPrintEmptyMessage)
         {
+            if (unavailableCandidates.Count > 0)
+            {
+                return;
+            }
+
             output.WriteLine(options.LocksOnly
                 ? "No orchestrator lock-holders running; in-tree build lock is FREE."
                 : "No matching repo processes found.");
@@ -94,10 +124,11 @@ internal static class RepoProcessCliCommand
         }
     }
 
-    public static void Stop(IReadOnlyList<string> parts, TextWriter output)
+    public static bool Stop(IReadOnlyList<string> parts, TextWriter output)
     {
         var options = RepoProcessStopOptions.Parse(parts);
-        var snapshots = BuildSnapshots().ToDictionary(snapshot => snapshot.ProcessId);
+        var snapshots = BuildSnapshots(options.Ids).ToDictionary(snapshot => snapshot.ProcessId);
+        var succeeded = true;
         foreach (var processId in options.Ids)
         {
             if (!snapshots.TryGetValue(processId, out var snapshot))
@@ -107,10 +138,17 @@ internal static class RepoProcessCliCommand
             }
 
             var refused = false;
+            if (snapshot.InspectionStatus != ProcessInspectionStatus.Available ||
+                string.IsNullOrWhiteSpace(snapshot.CommandLine))
+            {
+                output.WriteLine($"PROCESS id={processId} status=refused reason=inspection-unavailable");
+                refused = true;
+            }
+
             foreach (var needle in options.CommandContains)
             {
-                if (string.IsNullOrWhiteSpace(snapshot.CommandLine) ||
-                    snapshot.CommandLine.IndexOf(needle, StringComparison.OrdinalIgnoreCase) < 0)
+                if (!refused &&
+                    snapshot.CommandLine!.IndexOf(needle, StringComparison.OrdinalIgnoreCase) < 0)
                 {
                     output.WriteLine($"PROCESS id={processId} status=refused reason=command-mismatch expected={needle}");
                     refused = true;
@@ -120,6 +158,7 @@ internal static class RepoProcessCliCommand
 
             if (refused)
             {
+                succeeded = false;
                 continue;
             }
 
@@ -127,12 +166,16 @@ internal static class RepoProcessCliCommand
             if (EvaluateStopRevalidation(snapshot, currentSnapshot, options.CommandContains) is { } reason)
             {
                 output.WriteLine($"PROCESS id={processId} status=refused reason={reason}");
+                succeeded = false;
                 continue;
             }
 
             var stopped = WorkerProcessJobs.TryKillOrFallback(processId);
             output.WriteLine($"PROCESS id={processId} status={(stopped ? "stopped" : "not-stopped")}");
+            succeeded &= stopped;
         }
+
+        return succeeded;
     }
 
     private static IReadOnlyList<ProcessSnapshot> BuildSnapshots(IEnumerable<int>? processIds = null)
@@ -291,6 +334,11 @@ internal static class RepoProcessCliCommand
         try { return Path.GetFullPath(value).TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar); }
         catch { return null; }
     }
+
+    private static bool IsPotentialLockHolder(ProcessSnapshot snapshot) =>
+        snapshot.Name.Equals("dotnet", StringComparison.OrdinalIgnoreCase) ||
+        snapshot.Name.Equals("DispatchProcessHost", StringComparison.OrdinalIgnoreCase) ||
+        snapshot.Name.StartsWith("Mcg.AgentOrchestrator", StringComparison.OrdinalIgnoreCase);
 
     internal static string? EvaluateStopRevalidation(
         ProcessSnapshot recorded,

@@ -1335,16 +1335,33 @@ public static class DotnetBuildEnvironmentManager
         }
 
         var snapshot = processSnapshot ?? CreateSlotCandidateProcessSnapshot();
-        foreach (var pair in snapshot.Read(snapshot.Records.Keys))
+        foreach (var pair in snapshot.Records)
         {
+            var record = pair.Value;
             if (pair.Key == Environment.ProcessId ||
-                !IsProcessRunning(pair.Key) ||
-                !CommandLineUsesSlotArtifacts(pair.Value, artifactsPath))
+                record.Status is ProcessInspectionStatus.Exited or ProcessInspectionStatus.DeadOrRecycled)
             {
                 continue;
             }
 
-            return CreateProcessHolder(pair.Key, pair.Value, isOrchestratorOwned: true);
+            if (record.Status != ProcessInspectionStatus.Available ||
+                string.IsNullOrWhiteSpace(record.CommandLine))
+            {
+                return new BuildLockHolder(
+                    pair.Key,
+                    string.IsNullOrWhiteSpace(record.Name) ? "unknown" : record.Name,
+                    $"PROCESS_QUERY_UNAVAILABLE status={record.Status}",
+                    IsOrchestratorOwned: false,
+                    record.StartedAt);
+            }
+
+            if (!IsProcessRunning(pair.Key) ||
+                !CommandLineUsesSlotArtifacts(record.CommandLine, artifactsPath))
+            {
+                continue;
+            }
+
+            return CreateProcessHolder(pair.Key, record.CommandLine, isOrchestratorOwned: true);
         }
 
         return null;
@@ -1357,19 +1374,7 @@ public static class DotnetBuildEnvironmentManager
             return ProcessCommandLineSnapshotForTests();
         }
 
-        var processIds = new HashSet<int>();
-        foreach (var name in new[] { "testhost", "vstest.console", "datacollector", "dotnet" })
-        {
-            foreach (var process in Process.GetProcessesByName(name))
-            {
-                using (process)
-                {
-                    processIds.Add(process.Id);
-                }
-            }
-        }
-
-        return ProcessCommandLines.Snapshot(processIds);
+        return ProcessCommandLines.SnapshotByNames(["testhost", "vstest.console", "datacollector", "dotnet"]);
     }
 
     private static bool CommandLineUsesSlotArtifacts(string commandLine, string artifactsPath)

@@ -30,9 +30,11 @@ function Write-ProgressLog([string] $Message) {
 if ($Schedule) {
     $scriptPath = [System.IO.Path]::GetFullPath($PSCommandPath)
     $queryOutput = @(& (Join-Path $repoRoot 'scripts\Get-RepoProcessInfo.ps1') `
+        -Name pwsh `
         -CommandContains $scriptPath `
         -Newest 25)
-    if ($LASTEXITCODE -is [int] -and $LASTEXITCODE -ne 0) {
+    if (($LASTEXITCODE -is [int] -and $LASTEXITCODE -ne 0) -or
+        ($queryOutput -match '^PROCESS_QUERY_UNAVAILABLE\s')) {
         throw 'Could not inspect existing Anthropic role-default schedules; stopped nothing.'
     }
     $existingProcessIds = @($queryOutput | ForEach-Object {
@@ -47,10 +49,20 @@ if ($Schedule) {
         }
 
         foreach ($scheduledProcessId in $existingProcessIds) {
-            & (Join-Path $repoRoot 'scripts\Stop-RepoProcess.ps1') `
+            $stopOutput = @(& (Join-Path $repoRoot 'scripts\Stop-RepoProcess.ps1') `
                 -Id $scheduledProcessId `
-                -CommandContains $scriptPath
+                -CommandContains $scriptPath)
+            $stopExitCode = $LASTEXITCODE
+            $stopOutput | Write-Output
+            if (($stopExitCode -is [int] -and $stopExitCode -ne 0) -or
+                ($stopOutput -match 'status=(refused|not-stopped)')) {
+                throw "Could not safely stop existing Anthropic role-default schedule pid=$scheduledProcessId."
+            }
+
             Wait-Process -Id $scheduledProcessId -Timeout 15 -ErrorAction SilentlyContinue
+            if (Get-Process -Id $scheduledProcessId -ErrorAction SilentlyContinue) {
+                throw "Timed out waiting for Anthropic role-default schedule pid=$scheduledProcessId to stop."
+            }
         }
         Write-ProgressLog ('ANTHROPIC_ROLE_DEFAULTS_REPLACED_SCHEDULE pids={0}' -f
             (($existingProcessIds | Sort-Object) -join ','))
