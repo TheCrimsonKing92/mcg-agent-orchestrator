@@ -619,6 +619,49 @@ public sealed class WorkerDispatchTestsDispatchPreparation : WorkerDispatchTestS
 }
 
     [Xunit.Fact]
+    public void PaidRetryWithoutDurableGoalFailsClosedBeforeCheckpointOrProcessStart()
+    {
+        var root = CreateTempDirectory();
+        var workingDirectory = Path.Combine(root, "repo");
+        Directory.CreateDirectory(workingDirectory);
+        var workspace = OrchestratorWorkspace.ForDirectory(root, workingDirectory);
+        _ = StateDbMigrations.EnsureUpToDate(workspace.SqliteStatePath);
+        WriteSkill(workingDirectory, "orchestrator-dogfood");
+        var kernel = new AgentOrchestratorKernel(new TestClock(DateTimeOffset.Parse("2026-07-07T12:00:00Z")));
+        var planner = new TaskSpec(TaskId.New(), "Plan the fail-closed retry guard.", AgentRole.Planner);
+        var goal = kernel.CreateGoal("Fail closed without durable retry authority", [planner]);
+        kernel.SetGoalRefinedSpec(goal.Id, new RefinedSpec(
+            "Fail closed without durable retry authority",
+            ["A paid retry cannot start without a durable CAS reservation."],
+            VerificationClass.TestVerifiable,
+            [],
+            []));
+        var agent = SubscriptionPlannerAgent("planner", "Planner");
+        kernel.ActivateGoal(goal.Id, [agent]);
+        kernel.RetryTask(
+            goal.Id,
+            planner.Id,
+            "Retry only with durable authorization.",
+            retryCause: RetryCause.ProviderInterruption);
+        var checkpointCalls = 0;
+
+        var ex = Assert.Throws<InvalidOperationException>(() =>
+            GoalManagementCommandService.StartSubscriptionReadyTasks(
+                kernel,
+                workspace,
+                goal,
+                [agent],
+                DispatchTestProfiles(),
+                checkpointBeforeWorkerStart: (_, _, _, _) => checkpointCalls++,
+                runner: new BackgroundDispatchRunner(disableProcessStart: true),
+                sandboxOptions: DisabledSandbox));
+
+        Assert.Contains("Durable retry-admission reservation", ex.Message, StringComparison.Ordinal);
+        Assert.Equal(0, checkpointCalls);
+        Assert.Null(planner.LastProcess);
+    }
+
+    [Xunit.Fact]
     public void IdenticalPaidRetryIsPreventedBeforeCheckpointAndProcessStart()
     {
         var root = CreateTempDirectory();
@@ -641,6 +684,11 @@ public sealed class WorkerDispatchTestsDispatchPreparation : WorkerDispatchTestS
         var agents = new[] { agent };
         var profiles = DispatchTestProfiles();
         kernel.ActivateGoal(goal.Id, agents);
+        kernel.RetryTask(
+            goal.Id,
+            planner.Id,
+            "Retry after the unsuccessful paid attempt.",
+            retryCause: RetryCause.ProviderInterruption);
 
         var first = WorkerProfileDispatcher.PrepareSubscriptionReadyBatch(
             kernel,
@@ -689,6 +737,57 @@ public sealed class WorkerDispatchTestsDispatchPreparation : WorkerDispatchTestS
         Assert.Contains(
             goal.Timeline,
             item => item.Kind == ProgressKind.NoProgressRedispatchPrevented && item.TaskId == planner.Id);
+    }
+
+    [Xunit.Fact]
+    public void RetriedDispatchFingerprintRetainsReviewedCandidateFromDispatchHistory()
+    {
+        var root = CreateTempDirectory();
+        var workingDirectory = Path.Combine(root, "repo");
+        Directory.CreateDirectory(workingDirectory);
+        WriteSkill(workingDirectory, "orchestrator-dogfood");
+        var firstAt = DateTimeOffset.Parse("2026-07-07T12:00:00Z");
+        var kernel = new AgentOrchestratorKernel(new TestClock(firstAt));
+        var planner = new TaskSpec(TaskId.New(), "Plan candidate-aware retry.", AgentRole.Planner);
+        var goal = kernel.CreateGoal("Fingerprint reviewed candidate", [planner]);
+        kernel.SetGoalRefinedSpec(goal.Id, new RefinedSpec(
+            "Fingerprint reviewed candidate",
+            ["The reviewed candidate remains an independent retry-context input."],
+            VerificationClass.TestVerifiable,
+            [],
+            []));
+        var agent = SubscriptionPlannerAgent("planner", "Planner");
+        var agents = new[] { agent };
+        var profiles = DispatchTestProfiles();
+        kernel.ActivateGoal(goal.Id, agents);
+
+        _ = WorkerProfileDispatcher.PrepareSubscriptionReadyBatch(
+            kernel, goal, agents, profiles, Path.Combine(root, "prompts"), workingDirectory,
+            firstAt, commandExists: _ => true);
+        kernel.RecordDispatchResultCommit(goal.Id, planner.Id, "candidate-a");
+        var priorDispatch = planner.LastDispatch!;
+        kernel.ReportTaskProgress(goal.Id, planner.Id, WorkTaskStatus.Failed, "Candidate needs repair.");
+        kernel.RetryTask(
+            goal.Id,
+            planner.Id,
+            "Repair the reviewed candidate.",
+            retryCause: RetryCause.NewSourceFinding);
+
+        var second = WorkerProfileDispatcher.PrepareSubscriptionReadyBatch(
+            kernel, goal, agents, profiles, Path.Combine(root, "prompts"), workingDirectory,
+            firstAt.AddMinutes(1), commandExists: _ => true);
+        var dispatch = Assert.Single(second.Dispatches).Task.LastDispatch!;
+        var expected = RetryContextFingerprintFactory.Build(
+            goal,
+            planner,
+            dispatch.ProviderName,
+            dispatch.ModelName,
+            dispatch.PaidRoute,
+            "candidate-a",
+            priorDispatch.BaseCommit,
+            WorkerProfileDispatcher.ReadCurrentMainIdentityForRetry(workingDirectory));
+
+        Assert.Equal(expected, dispatch.RetryContextFingerprint);
     }
 
     [Xunit.Fact(DisplayName = "StartDispatches_checkpoint_phase_stays_post_process_after_first_spawn")]

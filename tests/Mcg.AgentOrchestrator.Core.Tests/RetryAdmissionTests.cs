@@ -403,6 +403,67 @@ public sealed class RetryAdmissionTests
         Assert.Equal(RetryAdmissionRoute.UpstreamImplementation, reviewer.RetryAdmissionHoldRoute);
     }
 
+    [Xunit.Fact]
+    public void CancelledRoleTargetEscalatesToHumanInsteadOfSilentlyHolding()
+    {
+        var kernel = new AgentOrchestratorKernel();
+        var developer = new TaskSpec(TaskId.New(), "Implement correction", AgentRole.Developer);
+        var reviewer = new TaskSpec(TaskId.New(), "Review correction", AgentRole.Reviewer);
+        var goal = kernel.CreateGoal("Escalate unavailable cancelled route", [developer, reviewer]);
+        kernel.ActivateGoal(goal.Id,
+        [
+            new AgentDefinition(new AgentId("developer"), "Developer", AgentRole.Developer,
+                new ModelProfile("OpenAI", "test", ModelCapability.Text, SubscriptionMode.ApiKey)),
+            new AgentDefinition(new AgentId("reviewer"), "Reviewer", AgentRole.Reviewer,
+                new ModelProfile("OpenAI", "test", ModelCapability.Text, SubscriptionMode.ApiKey))
+        ]);
+        developer.SetStatus(WorkTaskStatus.Cancelled);
+        var attempt = DateTimeOffset.Parse("2026-08-25T12:01:00Z");
+        var fingerprint = RetryContextFingerprintBuilder.Build(Input() with { Role = AgentRole.Reviewer });
+        kernel.RecordTaskDispatch(goal.Id, reviewer.Id, Dispatch(attempt, fingerprint));
+        var receipt = new RetryAdmissionReceipt(
+            "route-cancelled-upstream",
+            RetryCause.UnchangedContextRepeat,
+            fingerprint,
+            RetryAdmissionDecision.Prevented,
+            RetryAdmissionRoute.UpstreamImplementation,
+            PaidRouteClassification.Paid,
+            attempt,
+            attempt);
+
+        kernel.ApplyPreparedRetryAdmission(
+            goal.Id,
+            reviewer.Id,
+            new RetryAdmissionResult(RetryAdmissionDecision.Prevented, receipt));
+
+        Assert.Equal(WorkTaskStatus.Cancelled, developer.Status);
+        Assert.Equal(WorkTaskStatus.WaitingForHuman, reviewer.Status);
+        Assert.Equal(RetryAdmissionRoute.HumanClarification, reviewer.RetryAdmissionHoldRoute);
+        Assert.Single(kernel.HumanInputRequests, request => request.GoalId == goal.Id && !request.IsCompleted);
+    }
+
+    [Xunit.Fact]
+    public void LatestOperatorRetryFeedbackChangesRetryContextFingerprint()
+    {
+        var kernel = new AgentOrchestratorKernel();
+        var task = new TaskSpec(TaskId.New(), "Retry work", AgentRole.Developer);
+        var goal = kernel.CreateGoal("Fingerprint ordinary retry feedback", [task]);
+        kernel.ActivateGoal(goal.Id, [new AgentDefinition(
+            new AgentId("developer"),
+            "Developer",
+            AgentRole.Developer,
+            new ModelProfile("OpenAI", "test", ModelCapability.Text, SubscriptionMode.ApiKey))]);
+
+        kernel.RetryTask(goal.Id, task.Id, "Inspect alpha evidence.", invalidateDownstream: false);
+        var alpha = RetryContextFingerprintFactory.Build(
+            goal, task, "OpenAI", "test", PaidRouteClassification.Paid, null, null, null);
+        kernel.RetryTask(goal.Id, task.Id, "Inspect beta evidence.", invalidateDownstream: false);
+        var beta = RetryContextFingerprintFactory.Build(
+            goal, task, "OpenAI", "test", PaidRouteClassification.Paid, null, null, null);
+
+        Assert.NotEqual(alpha, beta);
+    }
+
     private static TaskSpec RetryingTask()
     {
         var task = new TaskSpec(TaskId.New(), "Retry work", AgentRole.Developer);

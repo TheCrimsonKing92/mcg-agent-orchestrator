@@ -981,7 +981,7 @@ private static ProcessBatchExecutionResult StartDispatches(
                         startReceipt.ReservationOwnerId,
                         DateTimeOffset.UtcNow)
                     .GetAwaiter()
-                    .GetResult() ?? true);
+                    .GetResult() ?? false);
         if (startResult.RecoveryAction is { } action)
         {
             recoveryActions.Add(action);
@@ -1040,16 +1040,22 @@ private static RetryAdmissionResult EnsurePreparedRetryAdmission(
         return persisted;
     }
 
-    return kernel.RecordPreparedRetryAdmission(
-        goalId,
-        task.Id,
-        fingerprint,
-        dispatch.PaidRoute,
-        recordedAt,
-        RetryContextFingerprintFactory.GetOpenBlockingFindings(kernel.GetGoal(goalId)),
-        reservationOwnerId,
-        reservationLeaseExpiresAt,
-        reservationRecoveryConfirmed);
+    if (dispatch.PaidRoute != PaidRouteClassification.Paid || task.LatestRetryAt is null)
+    {
+        return kernel.RecordPreparedRetryAdmission(
+            goalId,
+            task.Id,
+            fingerprint,
+            dispatch.PaidRoute,
+            recordedAt,
+            RetryContextFingerprintFactory.GetOpenBlockingFindings(kernel.GetGoal(goalId)),
+            reservationOwnerId,
+            reservationLeaseExpiresAt,
+            reservationRecoveryConfirmed);
+    }
+
+    throw new InvalidOperationException(
+        $"Durable retry-admission reservation could not be created for goal '{goalId}' and task '{task.Id}'.");
 }
 
 private static bool HasRecoverablePreparedReservation(TaskSpec task) =>

@@ -343,13 +343,17 @@ public static class LoopHealthReport
             .Where(verification => verification.Succeeded && verification.CompletedAt >= resolutionEligibleAt)
             .OrderBy(verification => verification.CompletedAt)
             .FirstOrDefault()?.CompletedAt;
-        var terminalTaskAt = goal.Timeline
-            .Where(evt =>
-                evt.TaskId == task.Id &&
-                evt.OccurredAt >= resolutionEligibleAt &&
-                evt.Kind is ProgressKind.TaskCompleted or ProgressKind.TaskFailed or ProgressKind.TaskCancelled)
-            .OrderBy(evt => evt.OccurredAt)
-            .FirstOrDefault()?.OccurredAt;
+        var taskTimeline = goal.Timeline
+            .Where(evt => evt.TaskId == task.Id)
+            .ToArray();
+        var terminalTaskAt = taskTimeline
+            .Select((evt, index) => (Event: evt, Index: index))
+            .Where(candidate =>
+                candidate.Event.OccurredAt >= resolutionEligibleAt &&
+                candidate.Event.Kind is ProgressKind.TaskCompleted or ProgressKind.TaskFailed or ProgressKind.TaskCancelled &&
+                !taskTimeline.Skip(candidate.Index + 1).Any(later => later.Kind == ProgressKind.TaskRetried))
+            .OrderBy(candidate => candidate.Event.OccurredAt)
+            .FirstOrDefault().Event?.OccurredAt;
         var terminalGoalAt = goal.Timeline
             .Where(evt =>
                 evt.OccurredAt >= resolutionEligibleAt &&

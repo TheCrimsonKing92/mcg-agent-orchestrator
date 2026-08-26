@@ -217,7 +217,7 @@ public static class WorkerProfileDispatcher
     {
         EnsureTaskNeedsExecution(task, allowPendingRecordedDispatchRefresh);
         EnsureSubscriptionRetryWindowHasPassed(task, dispatchedAt);
-        var priorDispatch = task.LastDispatch;
+        var priorDispatch = task.LastDispatch ?? task.DispatchHistory.LastOrDefault();
         var durableArtifactFindings = new List<string>();
         AddDurableArtifactDependencyFindings(
             durableArtifactFindings,

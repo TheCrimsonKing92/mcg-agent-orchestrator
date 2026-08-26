@@ -354,6 +354,33 @@ public sealed class LoopHealthReportTests
         Assert.Null(kernel.BuildLoopHealthReport().MedianRetryResolutionHours);
     }
 
+    [Xunit.Fact]
+    public void RetryResolution_RetriedFailureDoesNotEndResolutionChain()
+    {
+        var (kernel, goal, task, clock, firstAt) = BuildRetryResolutionFixture();
+
+        clock.UtcNow = firstAt.AddHours(2);
+        kernel.ReportTaskProgress(goal.Id, task.Id, WorkTaskStatus.Failed, "The first retry failed.");
+        clock.UtcNow = firstAt.AddHours(3);
+        kernel.RetryTask(
+            goal.Id,
+            task.Id,
+            "Retry the still-unresolved source finding.",
+            invalidateDownstream: false,
+            retryCause: RetryCause.NewSourceFinding);
+        var finalFingerprint = Fingerprint("candidate-c");
+        kernel.RecordTaskDispatch(goal.Id, task.Id, PaidDispatch(clock.UtcNow, finalFingerprint));
+        kernel.RecordPreparedRetryAdmission(
+            goal.Id, task.Id, finalFingerprint, PaidRouteClassification.Paid, clock.UtcNow);
+        clock.UtcNow = firstAt.AddHours(5);
+        kernel.RecordTaskVerification(
+            goal.Id,
+            task.Id,
+            new TaskVerificationRecord(DispatchCommand, WorkDir, 0, "eventual success", "", clock.UtcNow));
+
+        Assert.Equal(5.0, kernel.BuildLoopHealthReport().MedianRetryResolutionHours);
+    }
+
     // --- Semantic-acceptance judge agreement tests ---
 
     [Xunit.Fact(DisplayName = "LoopHealth_judge_verdict_distribution_counts_met_not_met_and_no_verdict_per_judge")]

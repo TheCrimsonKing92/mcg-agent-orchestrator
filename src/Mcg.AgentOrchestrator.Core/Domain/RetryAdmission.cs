@@ -262,6 +262,13 @@ public static class RetryContextFingerprintFactory
             : EffectiveAcceptanceCriteriaVersion.ComputeHash(
                 goal.RefinedSpec,
                 goal.EffectiveAcceptanceCriteriaCorrections);
+        var latestOperatorRetryFeedback = goal.Timeline
+            .Where(item => item.TaskId == task.Id && item.Kind == ProgressKind.TaskRetried)
+            .OrderBy(item => item.OccurredAt)
+            .LastOrDefault()?.Message;
+        var retryFeedback = string.IsNullOrWhiteSpace(latestOperatorRetryFeedback)
+            ? task.CriterionRetryFeedback
+            : task.CriterionRetryFeedback.Concat([latestOperatorRetryFeedback]).ToArray();
         return RetryContextFingerprintBuilder.Build(new RetryContextFingerprintInput(
             goal.Id.Value,
             task.Id.Value,
@@ -273,7 +280,7 @@ public static class RetryContextFingerprintFactory
             criteriaHash,
             findingIdentities,
             evidenceIdentities,
-            task.CriterionRetryFeedback,
+            retryFeedback,
             authoritativeDecisions,
             baseIdentity,
             mainIdentity));

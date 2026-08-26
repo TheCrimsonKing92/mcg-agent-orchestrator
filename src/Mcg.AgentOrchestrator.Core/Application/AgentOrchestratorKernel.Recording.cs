@@ -1329,13 +1329,13 @@ public sealed partial class AgentOrchestratorKernel
             Append(goal, target.Id, ProgressKind.TaskRetried, $"{marker}; routed from held task {heldTask.Id.Value}.");
         }
 
-        else if (target is null)
+        else if (target is null || target.Status == WorkTaskStatus.Cancelled)
         {
             heldTask.SetRetryAdmissionHold(RetryAdmissionRoute.HumanClarification);
             RequestHumanInputDeduplicated(
                 goal.Id,
                 heldTask.Id,
-                $"Retry admission requires {targetRole} work, but no role-feasible target task exists. {marker}",
+                $"Retry admission requires {targetRole} work, but no actionable role-feasible target task exists. {marker}",
                 HumanWaitKind.RecoveryChoice,
                 isAutoDefaultable: false,
                 isDismissible: false,

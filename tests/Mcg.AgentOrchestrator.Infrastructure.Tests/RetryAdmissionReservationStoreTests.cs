@@ -4,6 +4,25 @@ using Mcg.AgentOrchestrator.Infrastructure;
 public sealed class RetryAdmissionReservationStoreTests
 {
     [Xunit.Fact]
+    public async Task MissingDurableGoalCannotAuthorizePaidWorkerStart()
+    {
+        var root = Path.Combine(Path.GetTempPath(), "mcg-retry-admission-tests", Guid.NewGuid().ToString("N"));
+        Directory.CreateDirectory(root);
+        var databasePath = Path.Combine(root, "state.db");
+        _ = StateDbMigrations.EnsureUpToDate(databasePath);
+
+        var claim = await RetryAdmissionReservationStore.TryClaimStartAsync(
+            databasePath,
+            GoalId.New(),
+            TaskId.New(),
+            DateTimeOffset.Parse("2026-08-25T12:00:00Z"),
+            "missing-owner",
+            DateTimeOffset.Parse("2026-08-25T12:01:00Z"));
+
+        Assert.False(claim ?? true);
+    }
+
+    [Xunit.Fact]
     public async Task ConcurrentContendersCreateOneAllowedReservation()
     {
         var root = Path.Combine(Path.GetTempPath(), "mcg-retry-admission-tests", Guid.NewGuid().ToString("N"));

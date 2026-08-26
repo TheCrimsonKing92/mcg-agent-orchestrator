@@ -59,7 +59,7 @@ public static class RetryAdmissionReservationStore
             (snapshot, _) =>
             {
                 if (snapshot is null)
-                    return Task.FromResult((false, (GoalSnapshot?)null, (bool?)null));
+                    return Task.FromResult((false, (GoalSnapshot?)null, (bool?)false));
 
                 var claim = RetryAdmissionSnapshotStartClaim.Apply(
                     snapshot,
