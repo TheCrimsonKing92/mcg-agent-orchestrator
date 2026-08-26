@@ -1100,12 +1100,27 @@ private static RetryAdmissionResult EnsurePreparedRetryAdmission(
         $"Durable retry-admission reservation could not be created for goal '{goalId}' and task '{task.Id}'.");
 }
 
-private static bool HasRecoverablePreparedReservation(TaskSpec task) =>
-    task.LastDispatch is { } dispatch &&
-    task.RetryAdmissionHistory.Any(receipt =>
-        receipt.LinkedDispatchAt == dispatch.DispatchedAt &&
-        receipt.WorkerStartedAt is null &&
-        receipt.Decision is RetryAdmissionDecision.Allowed or RetryAdmissionDecision.ResumedReservation);
+private static bool HasRecoverablePreparedReservation(TaskSpec task)
+{
+    if (task.LastDispatch is not { } dispatch)
+        return false;
+
+    var receipt = task.RetryAdmissionHistory.LastOrDefault(candidate =>
+        candidate.LinkedDispatchAt == dispatch.DispatchedAt &&
+        candidate.WorkerStartedAt is null &&
+        candidate.Decision is RetryAdmissionDecision.Allowed or RetryAdmissionDecision.ResumedReservation);
+    if (receipt is null || receipt.WorkerStartClaimedAt is null)
+        return receipt is not null;
+
+    if (task.LastProcess is not { } process || HasLiveTrackedProcess(process))
+        return task.LastProcess is null;
+
+    const string outputSuffix = ".out.log";
+    if (!process.StandardOutputPath.EndsWith(outputSuffix, StringComparison.OrdinalIgnoreCase))
+        return false;
+    var startGatePath = process.StandardOutputPath[..^outputSuffix.Length] + ".start-gate";
+    return !File.Exists(startGatePath);
+}
 
 internal static bool ShouldRefreshPreparedDispatchBeforeStart(TaskSpec task, bool refreshBeforeStart) =>
     refreshBeforeStart && !HasRecoverablePreparedReservation(task);

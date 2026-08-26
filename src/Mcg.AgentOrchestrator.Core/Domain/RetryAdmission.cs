@@ -377,22 +377,6 @@ public static class RetryAdmissionPolicy
                 return new RetryAdmissionResult(sameAttempt.Decision, sameAttempt);
             }
 
-            if (sameAttempt.WorkerStartClaimedAt is not null)
-            {
-                return Create(
-                    task,
-                    fingerprint,
-                    paidRoute,
-                    RetryCause.EnvironmentApparatusFailure,
-                    RetryAdmissionDecision.Prevented,
-                    RetryAdmissionRoute.EnvironmentalHold,
-                    linkedDispatchAt,
-                    recordedAt,
-                    sameAttempt.LinkedDispatchAt,
-                    reservationOwnerId,
-                    reservationLeaseExpiresAt);
-            }
-
             if (!string.IsNullOrWhiteSpace(reservationOwnerId) &&
                 reservationRecoveryConfirmed &&
                 (string.IsNullOrWhiteSpace(sameAttempt.ReservationOwnerId) ||
@@ -408,6 +392,22 @@ public static class RetryAdmissionPolicy
                     linkedDispatchAt,
                     recordedAt,
                     sameAttempt.PriorAttemptAt,
+                    reservationOwnerId,
+                    reservationLeaseExpiresAt);
+            }
+
+            if (sameAttempt.WorkerStartClaimedAt is not null)
+            {
+                return Create(
+                    task,
+                    fingerprint,
+                    paidRoute,
+                    RetryCause.EnvironmentApparatusFailure,
+                    RetryAdmissionDecision.Prevented,
+                    RetryAdmissionRoute.EnvironmentalHold,
+                    linkedDispatchAt,
+                    recordedAt,
+                    sameAttempt.LinkedDispatchAt,
                     reservationOwnerId,
                     reservationLeaseExpiresAt);
             }
@@ -447,7 +447,8 @@ public static class RetryAdmissionPolicy
                 receipt.PaidRoute == PaidRouteClassification.Paid &&
                 receipt.LinkedDispatchAt != linkedDispatchAt &&
                 receipt.Fingerprint == fingerprint &&
-                receipt.Decision is RetryAdmissionDecision.Allowed or RetryAdmissionDecision.ResumedReservation)
+                receipt.Decision is RetryAdmissionDecision.Allowed or RetryAdmissionDecision.ResumedReservation &&
+                HasKnownUnsuccessfulOutcome(task, receipt))
             : null;
         if (priorSameContext is not null)
         {
@@ -482,6 +483,21 @@ public static class RetryAdmissionPolicy
             priorAttemptAt,
             reservationOwnerId,
             reservationLeaseExpiresAt);
+    }
+
+    private static bool HasKnownUnsuccessfulOutcome(TaskSpec task, RetryAdmissionReceipt receipt)
+    {
+        if (task.LatestRetryAt is not { } retriedAt)
+            return false;
+
+        var attemptStartedAt = receipt.WorkerStartedAt ?? receipt.LinkedDispatchAt;
+        var outcome = task.VerificationHistory
+            .Where(verification =>
+                verification.CompletedAt >= attemptStartedAt &&
+                verification.CompletedAt <= retriedAt)
+            .OrderBy(verification => verification.CompletedAt)
+            .LastOrDefault();
+        return outcome is not null && !outcome.Succeeded;
     }
 
     private static RetryAdmissionResult Create(

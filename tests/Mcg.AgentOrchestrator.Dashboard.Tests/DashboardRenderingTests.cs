@@ -1497,6 +1497,7 @@ public sealed class DashboardRenderingTests
 {
     var empty = Assert.ThrowsAny<ArgumentException>(() => DashboardRequestParser.ParseRetrySubmission(""));
     var json = Assert.ThrowsAny<ArgumentException>(() => DashboardRequestParser.ParseRetrySubmission("{\"message\":\"\"}"));
+    var plainText = DashboardRequestParser.ParseRetrySubmission("Retry with unavailable classification");
     var missingCause = DashboardRequestParser.ParseRetrySubmission(
         "{\"message\":\"Fix failed verification\"}");
     var explicitUnknown = DashboardRequestParser.ParseRetrySubmission(
@@ -1506,6 +1507,7 @@ public sealed class DashboardRenderingTests
 
     Assert.Contains("Retry note cannot be empty", empty.Message, StringComparison.Ordinal);
     Assert.Contains("non-empty 'message'", json.Message, StringComparison.Ordinal);
+    Assert.Equal(nameof(RetryCause.Unknown), plainText.Cause);
     Assert.Equal(nameof(RetryCause.Unknown), missingCause.Cause);
     Assert.Equal(nameof(RetryCause.Unknown), explicitUnknown.Cause);
     Assert.Equal("Fix failed verification", parsed.Message);

@@ -138,7 +138,7 @@ public static RetrySubmissionDto ParseRetrySubmission(string body)
 
     var trimmed = body.Trim();
     if (!trimmed.StartsWith("{", StringComparison.Ordinal))
-        throw new ArgumentException("Retry submission must be JSON and include an explicit 'cause' value.");
+        return new RetrySubmissionDto(trimmed, RetryCause.Unknown.ToString());
 
     var submission = JsonSerializer.Deserialize<RetrySubmissionDto>(trimmed, DashboardJson.Options());
     if (string.IsNullOrWhiteSpace(submission?.Message))

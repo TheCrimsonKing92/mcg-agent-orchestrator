@@ -106,6 +106,9 @@ public sealed class RetryAdmissionTests
             firstAttempt, firstAttempt);
         task.RecordRetryAdmission(allowed.Receipt);
         task.MarkRetryAdmissionStarted(firstAttempt, firstAttempt.AddSeconds(1));
+        task.RecordVerification(new TaskVerificationRecord(
+            "worker", "worktree", 1, "", "failed", firstAttempt.AddSeconds(2)));
+        task.RecordRetry(secondAttempt.AddSeconds(-1), RetryCause.NewSourceFinding);
         task.RecordDispatch(Dispatch(secondAttempt, fingerprint));
 
         var prevented = RetryAdmissionPolicy.Evaluate(
@@ -115,6 +118,31 @@ public sealed class RetryAdmissionTests
         Assert.Equal(RetryAdmissionDecision.Prevented, prevented.Decision);
         Assert.Equal(RetryCause.UnchangedContextRepeat, prevented.Receipt.Cause);
         Assert.Equal(RetryAdmissionRoute.UpstreamImplementation, prevented.Receipt.Route);
+    }
+
+    [Xunit.Fact]
+    public void SuccessfulPaidAttemptDoesNotSuppressLaterIdenticalRetry()
+    {
+        var task = RetryingTask();
+        var firstAttempt = DateTimeOffset.Parse("2026-08-25T12:01:00Z");
+        var secondAttempt = firstAttempt.AddMinutes(1);
+        var fingerprint = RetryContextFingerprintBuilder.Build(Input());
+        task.RecordDispatch(Dispatch(firstAttempt, fingerprint));
+        var allowed = RetryAdmissionPolicy.Evaluate(
+            task, fingerprint, PaidRouteClassification.Paid, RetryCause.NewSourceFinding,
+            firstAttempt, firstAttempt);
+        task.RecordRetryAdmission(allowed.Receipt);
+        task.MarkRetryAdmissionStarted(firstAttempt, firstAttempt.AddSeconds(1));
+        task.RecordVerification(new TaskVerificationRecord(
+            "worker", "worktree", 0, "passed", "", firstAttempt.AddSeconds(2)));
+        task.RecordRetry(secondAttempt.AddSeconds(-1), RetryCause.ContractClarification);
+        task.RecordDispatch(Dispatch(secondAttempt, fingerprint));
+
+        var result = RetryAdmissionPolicy.Evaluate(
+            task, fingerprint, PaidRouteClassification.Paid, RetryCause.ContractClarification,
+            secondAttempt, secondAttempt);
+
+        Assert.Equal(RetryAdmissionDecision.Allowed, result.Decision);
     }
 
     [Xunit.Fact]
@@ -200,6 +228,29 @@ public sealed class RetryAdmissionTests
             task, fingerprint, PaidRouteClassification.Paid, RetryCause.ProviderInterruption,
             attempt, attempt, reservationOwnerId: "owner-a", reservationLeaseExpiresAt: attempt.AddMinutes(1));
         task.RecordRetryAdmission(first.Receipt);
+
+        var recovery = RetryAdmissionPolicy.Evaluate(
+            task, fingerprint, PaidRouteClassification.Paid, RetryCause.ProviderInterruption,
+            attempt, attempt.AddMinutes(1), reservationOwnerId: "owner-b", reservationLeaseExpiresAt: attempt.AddMinutes(2),
+            reservationRecoveryConfirmed: true);
+
+        Assert.Equal(RetryAdmissionDecision.ResumedReservation, recovery.Decision);
+        Assert.True(recovery.AllowsProcessStart);
+        Assert.Equal("owner-b", recovery.Receipt.ReservationOwnerId);
+    }
+
+    [Xunit.Fact]
+    public void ExpiredClaimCanBeResumedWhenRecoveryProvesGateWasNeverReleased()
+    {
+        var task = RetryingTask();
+        var attempt = DateTimeOffset.Parse("2026-08-25T12:01:00Z");
+        var fingerprint = RetryContextFingerprintBuilder.Build(Input());
+        task.RecordDispatch(Dispatch(attempt, fingerprint));
+        var first = RetryAdmissionPolicy.Evaluate(
+            task, fingerprint, PaidRouteClassification.Paid, RetryCause.ProviderInterruption,
+            attempt, attempt, reservationOwnerId: "owner-a", reservationLeaseExpiresAt: attempt.AddMinutes(1));
+        task.RecordRetryAdmission(first.Receipt);
+        Assert.True(task.TryClaimRetryAdmissionStart(attempt, "owner-a", attempt.AddSeconds(1)));
 
         var recovery = RetryAdmissionPolicy.Evaluate(
             task, fingerprint, PaidRouteClassification.Paid, RetryCause.ProviderInterruption,
