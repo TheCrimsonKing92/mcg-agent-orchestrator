@@ -1320,6 +1320,12 @@ public sealed class WorkerProcessJobsTests : IDisposable
             Assert.Equal(Environment.CurrentDirectory, child.StartMetadata.WorkingDirectory);
             Assert.True(child.OwnsRegisteredJob);
             Assert.True(WorkerProcessJobs.HasRegisteredJob(processId));
+
+            WorkerProcessJobs.Release(processId);
+
+            Assert.True(child.OwnsRegisteredJob);
+            Assert.True(WorkerProcessJobs.HasRegisteredJob(processId));
+            Assert.True(child.HasOpenNativeHandle);
             Assert.True(child.Release(out _));
             Assert.False(child.Release(out _));
             Assert.True(child.HasOpenNativeHandle);

@@ -154,7 +154,9 @@ public sealed class GoalAcceptanceVerifierDotnetBuildSlotTestsSlotGateJobResourc
             echo %~4-err 1>&2
             exit /b 0
             """);
+        _ = StateDbMigrations.EnsureUpToDate(registryPath);
         WorkerProcessJobs.ConfigureRegistry(registryPath);
+        Assert.Empty(WorkerProcessJobs.ListActiveRegistryEntriesForTests());
 
         try
         {
@@ -177,11 +179,20 @@ public sealed class GoalAcceptanceVerifierDotnetBuildSlotTestsSlotGateJobResourc
                     root,
                     TimeSpan.FromSeconds(15),
                     heartbeatPaths[index],
-                    observations.Enqueue))
+                    observations.Enqueue,
+                    registrationIdentityReader: DeterministicRegistrationIdentity))
                 .ToArray();
             if (readyPaths.All(File.Exists))
             {
                 readyObserved.TrySetResult();
+            }
+
+            var firstRunCompletion = Task.WhenAny(runs).Unwrap();
+            if (ReferenceEquals(
+                    await Task.WhenAny(readyObserved.Task, firstRunCompletion),
+                    firstRunCompletion))
+            {
+                _ = await firstRunCompletion;
             }
 
             await readyObserved.Task.WaitAsync(TimeSpan.FromSeconds(10));
@@ -267,7 +278,9 @@ public sealed class GoalAcceptanceVerifierDotnetBuildSlotTestsSlotGateJobResourc
             echo %~1-err 1>&2
             exit /b 0
             """);
+        _ = StateDbMigrations.EnsureUpToDate(registryPath);
         WorkerProcessJobs.ConfigureRegistry(registryPath);
+        Assert.Empty(WorkerProcessJobs.ListActiveRegistryEntriesForTests());
         using var timeoutSignal = new CancellationTokenSource();
         using var cancellation = new CancellationTokenSource();
 
@@ -301,23 +314,35 @@ public sealed class GoalAcceptanceVerifierDotnetBuildSlotTestsSlotGateJobResourc
                 TimeSpan.FromMinutes(1),
                 heartbeatPaths["timeout"],
                 Observe("timeout"),
-                timeoutSignal: timeoutSignal.Token);
+                timeoutSignal: timeoutSignal.Token,
+                registrationIdentityReader: DeterministicRegistrationIdentity);
             var cancellationRun = GoalAcceptanceVerifier.RunProcessWithHeartbeatForTestsAsync(
                 [shim, "cancel", readyPaths["cancel"], signalPaths["cancel"]],
                 root,
                 TimeSpan.FromMinutes(1),
                 heartbeatPaths["cancel"],
                 Observe("cancel"),
-                cancellation.Token);
+                cancellation.Token,
+                registrationIdentityReader: DeterministicRegistrationIdentity);
             var faultRun = GoalAcceptanceVerifier.RunProcessWithHeartbeatForTestsAsync(
                 [shim, "fault", readyPaths["fault"], signalPaths["fault"]],
                 root,
                 TimeSpan.FromMinutes(1),
                 heartbeatPaths["fault"],
-                Observe("fault"));
+                Observe("fault"),
+                registrationIdentityReader: DeterministicRegistrationIdentity);
             if (readyPaths.Values.All(File.Exists))
             {
                 allReady.TrySetResult();
+            }
+
+            var runs = new[] { timeoutRun, cancellationRun, faultRun };
+            var firstRunCompletion = Task.WhenAny(runs).Unwrap();
+            if (ReferenceEquals(
+                    await Task.WhenAny(allReady.Task, firstRunCompletion),
+                    firstRunCompletion))
+            {
+                _ = await firstRunCompletion;
             }
 
             await allReady.Task.WaitAsync(TimeSpan.FromSeconds(15));
@@ -1252,5 +1277,11 @@ public sealed class GoalAcceptanceVerifierDotnetBuildSlotTestsSlotGateJobResourc
         Assert.Equal(1, result.Checks!.Count);
         Assert.Equal("dotnet test", result.Checks![0].Name);
     }
+
+    private static SpawnProcessIdentity DeterministicRegistrationIdentity(Process process) =>
+        new(
+            process.Id,
+            DateTimeOffset.UnixEpoch.AddTicks(process.Id),
+            $"test-owned-process-{process.Id}.exe");
 
 }

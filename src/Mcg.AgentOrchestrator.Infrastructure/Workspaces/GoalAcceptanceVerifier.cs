@@ -7314,6 +7314,24 @@ public sealed class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
             cleanupObserver,
             timeoutSignal);
 
+    internal static Task<(CommandResult Result, string HeartbeatPath)> RunProcessWithHeartbeatForTestsAsync(
+        string[] arguments,
+        string workingDirectory,
+        TimeSpan commandTimeout,
+        string heartbeatPath,
+        Action<AcceptanceProcessCleanupObservation> cleanupObserver,
+        CancellationToken cancellationToken = default,
+        CancellationToken timeoutSignal = default) =>
+        RunProcessWithHeartbeatForTestsAsync(
+            arguments,
+            workingDirectory,
+            commandTimeout,
+            heartbeatPath,
+            cleanupObserver,
+            cancellationToken,
+            timeoutSignal,
+            registrationIdentityReader: null);
+
     internal static async Task<(CommandResult Result, string HeartbeatPath)> RunProcessWithHeartbeatForTestsAsync(
         string[] arguments,
         string workingDirectory,
@@ -7321,7 +7339,8 @@ public sealed class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
         string heartbeatPath,
         Action<AcceptanceProcessCleanupObservation> cleanupObserver,
         CancellationToken cancellationToken = default,
-        CancellationToken timeoutSignal = default)
+        CancellationToken timeoutSignal = default,
+        Func<Process, SpawnProcessIdentity>? registrationIdentityReader = null)
     {
         var previous = CurrentGateHeartbeatContext.Value;
         CurrentGateHeartbeatContext.Value = new GateHeartbeatContext(
@@ -7342,7 +7361,13 @@ public sealed class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
                 forceUtf8ConsoleOutput: false,
                 cancellationToken,
                 cleanupObserver,
-                timeoutSignal).ConfigureAwait(false);
+                timeoutSignal,
+                registrationIdentityReader is null
+                    ? null
+                    : process => new SpawnProcessIdentityReadResult(
+                        registrationIdentityReader(process),
+                        1,
+                        "test-identity-seam")).ConfigureAwait(false);
             return (result, heartbeatPath);
         }
         finally
@@ -7370,7 +7395,8 @@ public sealed class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
         bool forceUtf8ConsoleOutput,
         CancellationToken cancellationToken,
         Action<AcceptanceProcessCleanupObservation>? cleanupObserver = null,
-        CancellationToken timeoutSignal = default)
+        CancellationToken timeoutSignal = default,
+        Func<Process, SpawnProcessIdentityReadResult>? registrationIdentityReader = null)
     {
         // Keep the shell command semantics, but own the capture file offsets in this process. The
         // drain keeps consuming after the cap so a noisy child cannot block or grow the files.
@@ -7445,7 +7471,7 @@ public sealed class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
                 ];
             }
 
-            process = StartAcceptanceProcess(startInfo, workingDirectory);
+            process = StartAcceptanceProcess(startInfo, workingDirectory, registrationIdentityReader);
             startedProcessId = process.Id;
             ObserveProcessCleanup(cleanupObserver, process.Id, process, "started");
             if (captureConnections is not null)
@@ -7695,7 +7721,8 @@ public sealed class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
 
     private static RegisteredOwnedProcess StartAcceptanceProcess(
         ProcessStartInfo startInfo,
-        string workingDirectory)
+        string workingDirectory,
+        Func<Process, SpawnProcessIdentityReadResult>? registrationIdentityReader)
     {
         if (OperatingSystem.IsWindows() &&
             string.Equals(
@@ -7714,13 +7741,10 @@ public sealed class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
                     throw new TimeoutException("Legacy owned-start negative-control child did not exit.");
                 }
 
-                WorkerProcessJobs.RegisterOrThrow(
+                return WorkerProcessJobs.AdoptRegisteredOwnedOrThrow(
                     legacyProcess,
+                    startInfo,
                     $"acceptance:{workingDirectory}");
-                return new RegisteredOwnedProcess(
-                    legacyProcess,
-                    processHandle: null,
-                    startInfo);
             }
             catch
             {
@@ -7731,7 +7755,8 @@ public sealed class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
 
         return WorkerProcessJobs.StartRegisteredOwnedOrThrow(
             startInfo,
-            $"acceptance:{workingDirectory}");
+            $"acceptance:{workingDirectory}",
+            registrationIdentityReader);
     }
 
     private static async Task WriteGateHeartbeatLoopAsync(GateHeartbeatRuntime heartbeat, CancellationToken cancellationToken)
