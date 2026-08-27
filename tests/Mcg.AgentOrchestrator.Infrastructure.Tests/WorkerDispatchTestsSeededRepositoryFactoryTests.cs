@@ -114,6 +114,74 @@ public sealed class WorkerDispatchTestsSeededRepositoryFactoryTests
         Xunit.Assert.False(failure.Diagnostic.Git.DrainFailed);
     }
 
+    [Xunit.Fact]
+    public void Create_TemplateIdentityMismatch_RetainsOrderedValidationReceipts()
+    {
+        using var scope = new FactoryScope(new WorkerDispatchTestsSeededRepositoryFactory.CreationHooks(
+            BeforeTemplateValidation: template =>
+            {
+                File.WriteAllText(Path.Combine(template, "identity-change.txt"), "changed");
+                WorkerDispatchTestsSeededRepositoryFactory.RunFixtureGit(
+                    template,
+                    ["add", "-A"],
+                    DateTimeOffset.Parse("2026-01-02T00:00:00Z"));
+                WorkerDispatchTestsSeededRepositoryFactory.RunFixtureGit(
+                    template,
+                    ["commit", "-m", "Change identity"],
+                    DateTimeOffset.Parse("2026-01-02T00:00:00Z"));
+            }));
+
+        var failure = Xunit.Assert.Throws<
+            WorkerDispatchTestsSeededRepositoryFactory.SeededRepositoryFailureException>(
+                () => scope.Factory.Create());
+
+        Xunit.Assert.Equal(
+            WorkerDispatchTestsSeededRepositoryFactory.ValidationCheck.TemplateIdentityChanged,
+            failure.Diagnostic.Check);
+        Xunit.Assert.NotEmpty(failure.Diagnostic.ProbeReceipts!);
+        Xunit.Assert.Contains(
+            failure.Diagnostic.ProbeReceipts!,
+            receipt => receipt.Check ==
+                WorkerDispatchTestsSeededRepositoryFactory.ValidationCheck.TemplateHeadCommit);
+        Xunit.Assert.Equal(
+            Enumerable.Range(1, failure.Diagnostic.ProbeReceipts!.Count),
+            failure.Diagnostic.ProbeReceipts!.Select(receipt => receipt.ProbeOrdinal));
+    }
+
+    [Xunit.Fact]
+    public void Create_StagingHeadMismatch_RetainsOrderedValidationReceipts()
+    {
+        using var scope = new FactoryScope(new WorkerDispatchTestsSeededRepositoryFactory.CreationHooks(
+            AfterCopy: (_, staging) =>
+            {
+                File.WriteAllText(Path.Combine(staging, "staging-change.txt"), "changed");
+                WorkerDispatchTestsSeededRepositoryFactory.RunFixtureGit(
+                    staging,
+                    ["add", "-A"],
+                    DateTimeOffset.Parse("2026-01-03T00:00:00Z"));
+                WorkerDispatchTestsSeededRepositoryFactory.RunFixtureGit(
+                    staging,
+                    ["commit", "-m", "Change staging head"],
+                    DateTimeOffset.Parse("2026-01-03T00:00:00Z"));
+            }));
+
+        var failure = Xunit.Assert.Throws<
+            WorkerDispatchTestsSeededRepositoryFactory.SeededRepositoryFailureException>(
+                () => scope.Factory.Create());
+
+        Xunit.Assert.Equal(
+            WorkerDispatchTestsSeededRepositoryFactory.ValidationCheck.StagingHeadMatchesTemplate,
+            failure.Diagnostic.Check);
+        Xunit.Assert.NotEmpty(failure.Diagnostic.ProbeReceipts!);
+        Xunit.Assert.Contains(
+            failure.Diagnostic.ProbeReceipts!,
+            receipt => receipt.Check ==
+                WorkerDispatchTestsSeededRepositoryFactory.ValidationCheck.StagingHeadCommit);
+        Xunit.Assert.Equal(
+            Enumerable.Range(1, failure.Diagnostic.ProbeReceipts!.Count),
+            failure.Diagnostic.ProbeReceipts!.Select(receipt => receipt.ProbeOrdinal));
+    }
+
     [Xunit.Theory]
     [Xunit.InlineData("timeout")]
     [Xunit.InlineData("drain-timeout")]
@@ -566,10 +634,17 @@ public sealed class WorkerDispatchTestsSeededRepositoryFactoryTests
             WorkerDispatchTestsSeededRepositoryFactory.ValidationCheck.TemplateCommit,
             failure.Diagnostic.Check);
         Xunit.Assert.Equal(1, runner.CommitCalls);
-        var receipt = Xunit.Assert.Single(
-            failure.Diagnostic.ProbeReceipts!,
-            candidate => candidate.Check ==
-                WorkerDispatchTestsSeededRepositoryFactory.ValidationCheck.TemplateCommit);
+        var receipts = failure.Diagnostic.ProbeReceipts!
+            .Where(candidate => candidate.Check ==
+                WorkerDispatchTestsSeededRepositoryFactory.ValidationCheck.TemplateCommit)
+            .ToArray();
+        Xunit.Assert.Equal(3, receipts.Length);
+        Xunit.Assert.Equal([1, 2, 3], receipts.Select(receipt => receipt.ProbeOrdinal));
+        Xunit.Assert.Equal(
+            2,
+            receipts.Count(receipt => receipt.Arguments?.SequenceEqual(
+                ["rev-parse", "--verify", "HEAD^{commit}"]) == true));
+        var receipt = Xunit.Assert.Single(receipts, candidate => candidate.ExitCode == 128);
         Xunit.Assert.Equal(128, receipt.ExitCode);
         Xunit.Assert.Equal(0, receipt.StandardOutputByteCount);
         Xunit.Assert.Equal(0, receipt.StandardErrorByteCount);
@@ -715,6 +790,7 @@ public sealed class WorkerDispatchTestsSeededRepositoryFactoryTests
                     RepositoryDirectory: workingDirectory,
                     ChildProcessId: Environment.ProcessId,
                     ChildStartedAt: DateTimeOffset.UtcNow,
+                    Arguments: arguments,
                     Classification:
                         WorkerDispatchTestsSeededRepositoryFactory.GitProbeClassification.NonZeroExit);
             }
