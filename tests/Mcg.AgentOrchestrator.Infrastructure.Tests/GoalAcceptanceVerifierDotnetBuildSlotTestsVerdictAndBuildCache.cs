@@ -155,11 +155,23 @@ public sealed class GoalAcceptanceVerifierDotnetBuildSlotTestsVerdictAndBuildCac
                 {
                     cliRuns++;
                     // Intermittent flake: fail the first run, pass the within-attempt re-run.
+                    if (cliRuns == 2)
+                    {
+                        WriteVstestTrx(args, "CliPartition.Passes");
+                    }
+
                     return Task.FromResult(cliRuns < 2
-                        ? new GoalAcceptanceVerifier.CommandResult(1, "Failed! - Failed: 1, Passed: 0, Skipped: 0, Total: 1.")
+                        ? new GoalAcceptanceVerifier.CommandResult(
+                            1,
+                            "Failed! - Failed: 1, Passed: 0, Skipped: 0, Total: 1.",
+                            Stderr: "retry-driving stderr from the original Cli partition")
                         : new GoalAcceptanceVerifier.CommandResult(0, "Passed! - Failed: 0, Passed: 1, Skipped: 0, Total: 1."));
                 }
 
+                if (args.Length > 1 && args[0] == "dotnet" && args[1] == "test")
+                {
+                    WriteVstestTrx(args, "UnrelatedPartition.Passes");
+                }
                 return Task.FromResult(new GoalAcceptanceVerifier.CommandResult(
                     0,
                     args.Length > 1 && args[0] == "dotnet" && args[1] == "test"
@@ -170,7 +182,16 @@ public sealed class GoalAcceptanceVerifierDotnetBuildSlotTestsVerdictAndBuildCac
             var result = await verifier.RunAsync(root, goalId);
 
             Assert.True(result.Passed);
+            Assert.True(result.Retried);
             Assert.Equal(2, cliRuns);
+            var unrelatedPartitionCommands = calls
+                .Where(IsInfrastructurePartitionTestCall)
+                .Where(arguments => !arguments.Contains(cliLaneFilter))
+                .Select(arguments => string.Join('\u001f', arguments))
+                .ToArray();
+            Assert.Equal(
+                unrelatedPartitionCommands.Length,
+                unrelatedPartitionCommands.Distinct(StringComparer.Ordinal).Count());
         }
         finally
         {
@@ -210,7 +231,7 @@ public sealed class GoalAcceptanceVerifierDotnetBuildSlotTestsVerdictAndBuildCac
                         return Task.FromResult(new GoalAcceptanceVerifier.CommandResult(1, "Failed! - Failed: 1, Passed: 0, Skipped: 0, Total: 1."));
                     }
 
-                    WriteMtpTrx(args);
+                    WriteMtpTrx(args, 1, ["CliPartition.Passes"]);
                     return Task.FromResult(new GoalAcceptanceVerifier.CommandResult(0, "Passed! - Failed: 0, Passed: 1, Skipped: 0, Total: 1."));
                 }
 
@@ -238,6 +259,41 @@ public sealed class GoalAcceptanceVerifierDotnetBuildSlotTestsVerdictAndBuildCac
             GoalAcceptanceVerifier.PartitionVerdictWithinAttemptRerunEnabled = true;
             ResetPartitionVerdictKeyHooks();
             DotnetBuildEnvironmentManager.TryDeleteGoalArtifacts(goalId);
+            DeleteDirectoryWithRetry(root);
+        }
+    }
+
+    [Xunit.Fact(DisplayName = "GoalAcceptanceVerifier_exit_zero_cleanup_retains_retry_diagnostic_bytes")]
+    public async Task GoalAcceptanceVerifierExitZeroCleanupRetainsRetryDiagnosticBytes()
+    {
+        var root = Path.Combine(Path.GetTempPath(), "mcg-acceptance-retry-diagnostic", Guid.NewGuid().ToString("N"));
+        Directory.CreateDirectory(root);
+        try
+        {
+            var result = await GoalAcceptanceVerifier.RunProcessForTestsAsync(
+                ["powershell", "-NoProfile", "-Command", "[Console]::Error.Write('retry-driving stderr')"],
+                root,
+                TimeSpan.FromSeconds(30));
+
+            Assert.Equal(0, result.ExitCode);
+            Assert.False(File.Exists(result.StderrPath));
+            Assert.Equal("retry-driving stderr", result.Stderr);
+
+            var retained = AcceptanceAttemptArtifactCustody.RetainRetryDiagnostic(
+                Path.Combine(root, "attempt", "acceptance"),
+                fallbackArtifactsPath: null,
+                "exit-zero-run-0",
+                result.StderrPath,
+                result.Stderr,
+                "{\"fallback\":true}");
+            Assert.True(File.Exists(retained.Path));
+            Assert.Equal("retry-driving stderr", File.ReadAllText(retained.Path));
+            Assert.Equal(
+                Convert.ToHexStringLower(System.Security.Cryptography.SHA256.HashData(File.ReadAllBytes(retained.Path))),
+                retained.Sha256);
+        }
+        finally
+        {
             DeleteDirectoryWithRetry(root);
         }
     }
@@ -847,4 +903,18 @@ public sealed class GoalAcceptanceVerifierDotnetBuildSlotTestsVerdictAndBuildCac
         }
     }
 
+    private static void WriteVstestTrx(string[] arguments, string testName)
+    {
+        var resultsDirectoryIndex = Array.IndexOf(arguments, "--results-directory");
+        var loggerIndex = Array.IndexOf(arguments, "--logger");
+        Assert.True(resultsDirectoryIndex >= 0 && resultsDirectoryIndex + 1 < arguments.Length);
+        Assert.True(loggerIndex >= 0 && loggerIndex + 1 < arguments.Length);
+        const string prefix = "trx;LogFileName=";
+        Assert.StartsWith(prefix, arguments[loggerIndex + 1], StringComparison.OrdinalIgnoreCase);
+        var resultsDirectory = arguments[resultsDirectoryIndex + 1];
+        Directory.CreateDirectory(resultsDirectory);
+        File.WriteAllText(
+            Path.Combine(resultsDirectory, arguments[loggerIndex + 1][prefix.Length..]),
+            $"<TestRun><TestDefinitions><UnitTest id=\"1\" name=\"{testName}\"><TestMethod className=\"CliPartition\" name=\"Passes\" /></UnitTest></TestDefinitions><Results><UnitTestResult testId=\"1\" testName=\"{testName}\" outcome=\"Passed\" /></Results><ResultSummary outcome=\"Passed\"><Counters total=\"1\" executed=\"1\" passed=\"1\" failed=\"0\" /></ResultSummary></TestRun>");
+    }
 }

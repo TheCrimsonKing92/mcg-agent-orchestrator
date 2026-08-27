@@ -37,6 +37,7 @@ public sealed record AcceptanceCheckResult(
     int? DiscoveredTestCount = null,
     AcceptanceShardCompletionDecision? CompletionDecision = null,
     string? ProcessStderrPath = null,
+    string? ProcessStderr = null,
     AcceptanceFailureCauseEvidence? FailureCauseEvidence = null);
 
 public sealed record AcceptanceShardCompletionDecision(
@@ -324,7 +325,8 @@ public sealed class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
         TaskProcessResourceAccounting? ResourceAccounting = null,
         bool ResourceAccountingExpected = false,
         long StdoutBytes = 0,
-        long StderrBytes = 0);
+        long StderrBytes = 0,
+        string? Stderr = null);
 
     private static readonly Regex TestAttrPattern = new(
         @"^\s*\[\s*(?:Xunit\.)?(?:Fact|Theory)\s*(?:\(|,|\])",
@@ -1865,6 +1867,7 @@ public sealed class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
                 original.ArtifactsPath,
                 $"{Slug(check.Name)}-run-{original.TestResultRunOrdinal.ToString(System.Globalization.CultureInfo.InvariantCulture)}",
                 original.ProcessStderrPath,
+                original.ProcessStderr,
                 JsonSerializer.Serialize(original.CompletionDecision));
             GateHeartbeatArtifacts.AttachRetainedStderr(
                 ResolveGateHeartbeatPath(
@@ -3901,7 +3904,8 @@ public sealed class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
             ExecutedTestCount: executedTestCount,
             DiscoveredTestCount: trxEvidence.DiscoveredTestCount,
             CompletionDecision: completionDecision,
-            ProcessStderrPath: result.StderrPath), false);
+            ProcessStderrPath: result.StderrPath,
+            ProcessStderr: result.Stderr), false);
     }
 
     private async Task<(AcceptanceCheckResult Result, bool Retried)> RunManagedDotnetTestCheckAsync(
@@ -4312,7 +4316,8 @@ public sealed class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
                 ExecutedTestCount: trxEvidence.ExecutedTestCount,
                 DiscoveredTestCount: trxEvidence.DiscoveredTestCount,
                 CompletionDecision: completionDecision,
-                ProcessStderrPath: result.StderrPath), lockRemediationApplied);
+                ProcessStderrPath: result.StderrPath,
+                ProcessStderr: result.Stderr), lockRemediationApplied);
         }
         catch (Exception ex) when (IsBuildArtifactIoException(ex) &&
             ex is not DotnetBuildSlotsBusyException and not BuildLockBlockedException)
@@ -4385,7 +4390,8 @@ public sealed class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
                 ExecutedTestCount: trxEvidence.ExecutedTestCount,
                 DiscoveredTestCount: trxEvidence.DiscoveredTestCount,
                 CompletionDecision: completionDecision,
-                ProcessStderrPath: result.StderrPath), true);
+                ProcessStderrPath: result.StderrPath,
+                ProcessStderr: result.Stderr), true);
         }
         finally
         {
@@ -7162,6 +7168,26 @@ public sealed class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
             policyFailure ?? policySignal);
     }
 
+    internal static AcceptanceShardCompletionDecision DecideTestShardCompletionForTests(
+        CommandResult result,
+        int? discoveredTestCount,
+        int? executedTestCount,
+        string trxOutcome,
+        string? trxFailedPredicate = null,
+        string? policyFailure = null,
+        string? policySignal = null,
+        bool allowNonzeroExit = false) =>
+        DecideTestShardCompletion(
+            result,
+            new TrxCompletionEvidence(
+                discoveredTestCount,
+                executedTestCount,
+                trxOutcome,
+                trxFailedPredicate),
+            policyFailure,
+            policySignal,
+            allowNonzeroExit);
+
     private static FocusedEvidenceSelectionCoverage InspectFocusedEvidenceSelectionCoverage(
         IReadOnlyList<IReadOnlyList<FocusedEvidenceFilterToken>> selections,
         IEnumerable<string>? trxPaths)
@@ -8091,7 +8117,8 @@ public sealed class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
                         AccountingSource: accounting.AccountingSource),
                 ResourceAccountingExpected: OperatingSystem.IsWindows(),
                 stdoutBytes,
-                stderrBytes);
+                stderrBytes,
+                stderr);
         }
         finally
         {

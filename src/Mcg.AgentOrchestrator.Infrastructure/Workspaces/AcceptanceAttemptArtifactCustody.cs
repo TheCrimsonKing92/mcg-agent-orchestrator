@@ -98,6 +98,7 @@ public static class AcceptanceAttemptArtifactCustody
         string? fallbackArtifactsPath,
         string fileStem,
         string? sourcePath,
+        string? capturedDiagnostic,
         string typedEvidence)
     {
         var attemptDirectory = string.IsNullOrWhiteSpace(attemptResultsPrefix)
@@ -111,16 +112,22 @@ public static class AcceptanceAttemptArtifactCustody
         Directory.CreateDirectory(attemptDirectory);
         var safeStem = string.Concat(fileStem.Select(character =>
             Path.GetInvalidFileNameChars().Contains(character) ? '-' : character));
-        var extension = !string.IsNullOrWhiteSpace(sourcePath) && File.Exists(sourcePath)
+        var sourceExists = !string.IsNullOrWhiteSpace(sourcePath) && File.Exists(sourcePath);
+        var hasCapturedDiagnostic = !string.IsNullOrEmpty(capturedDiagnostic);
+        var extension = sourceExists
             ? Path.GetExtension(sourcePath)
-            : ".json";
+            : hasCapturedDiagnostic ? ".err" : ".json";
         var destinationPath = Path.Combine(attemptDirectory, $"{safeStem}.retry-diagnostic{extension}");
         var temporaryPath = $"{destinationPath}.{Guid.NewGuid():N}.tmp";
         try
         {
-            if (!string.IsNullOrWhiteSpace(sourcePath) && File.Exists(sourcePath))
+            if (sourceExists)
             {
                 File.Copy(sourcePath, temporaryPath, overwrite: true);
+            }
+            else if (hasCapturedDiagnostic)
+            {
+                File.WriteAllText(temporaryPath, capturedDiagnostic, Encoding.UTF8);
             }
             else
             {

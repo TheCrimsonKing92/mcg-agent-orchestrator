@@ -127,6 +127,96 @@ public sealed class AcceptancePartitionVerdictCacheTests : IDisposable
         Assert.False(enabled.ShouldRerunWithinAttempt(_partition, passed: true));
     }
 
+    [Theory]
+    [InlineData(true, -1, 1, 1, "passed", null, null, AcceptanceShardCompletionPredicates.TimedOut)]
+    [InlineData(false, 1, 1, 1, "passed", null, null, AcceptanceShardCompletionPredicates.NonzeroExit)]
+    [InlineData(false, 0, null, null, "missing", AcceptanceShardCompletionPredicates.MissingTrx, null, AcceptanceShardCompletionPredicates.MissingTrx)]
+    [InlineData(false, 0, null, null, "malformed", AcceptanceShardCompletionPredicates.MalformedTrx, null, AcceptanceShardCompletionPredicates.MalformedTrx)]
+    [InlineData(false, 0, 0, 0, "passed", null, null, AcceptanceShardCompletionPredicates.ZeroTests)]
+    [InlineData(false, 0, 2, 1, "passed", null, null, AcceptanceShardCompletionPredicates.IncompleteExecution)]
+    [InlineData(false, 0, 1, 1, "failed", null, null, AcceptanceShardCompletionPredicates.FailingTrx)]
+    [InlineData(false, 0, 1, 1, "passed", null, AcceptanceFailureClassifications.FocusedSelectionApparatusFailure, AcceptanceFailureClassifications.FocusedSelectionApparatusFailure)]
+    public void CompletionDecision_FailedPredicate_DrivesTypedPartitionRetry(
+        bool timedOut,
+        int exitCode,
+        int? discovered,
+        int? executed,
+        string trxOutcome,
+        string? trxFailedPredicate,
+        string? policyFailure,
+        string expectedPredicate)
+    {
+        var cache = CreateCache("typed-retry", withinAttemptRerunEnabled: true);
+        var decision = GoalAcceptanceVerifier.DecideTestShardCompletionForTests(
+            new GoalAcceptanceVerifier.CommandResult(exitCode, string.Empty, TimedOut: timedOut),
+            discovered,
+            executed,
+            trxOutcome,
+            trxFailedPredicate,
+            policyFailure);
+
+        Assert.False(decision.Passed);
+        Assert.Equal(expectedPredicate, decision.FailedPredicate);
+        Assert.True(cache.ShouldRerunWithinAttempt(_partition, decision));
+    }
+
+    [Fact]
+    public void WithinAttemptRetryReceipt_RetainsCapturedStderrAndTypedDecision()
+    {
+        const string stderr = "retry-driving stderr from the original process";
+        var retained = AcceptanceAttemptArtifactCustody.RetainRetryDiagnostic(
+            Path.Combine(_root, "attempt", "acceptance"),
+            fallbackArtifactsPath: null,
+            "cache-run-0",
+            Path.Combine(_root, "deleted-temp.err"),
+            stderr,
+            "{\"fallback\":true}");
+        var retainedBytes = File.ReadAllBytes(retained.Path);
+        var expectedHash = Convert.ToHexStringLower(System.Security.Cryptography.SHA256.HashData(retainedBytes));
+        Assert.EndsWith(".err", retained.Path, StringComparison.OrdinalIgnoreCase);
+        Assert.Equal(stderr, File.ReadAllText(retained.Path));
+        Assert.Equal(expectedHash, retained.Sha256);
+
+        var cache = CreateCache("receipt-attempt", withinAttemptRerunEnabled: true);
+        var decision = new AcceptanceShardCompletionDecision(
+            false,
+            AcceptanceShardCompletionPredicates.IncompleteExecution,
+            false,
+            0,
+            110,
+            109,
+            "passed");
+        var original = new AcceptanceCheckResult(
+            _partition.Name,
+            false,
+            0,
+            "incomplete execution",
+            CompletionDecision: decision,
+            ProcessStderrPath: Path.Combine(_root, "deleted-temp.err"),
+            ProcessStderr: stderr);
+
+        cache.RecordWithinAttemptRetry(
+            _partition,
+            original,
+            "receipt-attempt:cache:0",
+            "receipt-attempt:cache:1",
+            retained);
+
+        var retryLine = SharedJsonlFile.ReadAllLines(cache.JournalPath)
+            .Single(line => line.Contains("acceptance:partition-within-attempt-retry", StringComparison.Ordinal));
+        using var document = System.Text.Json.JsonDocument.Parse(retryLine);
+        var receipt = document.RootElement.GetProperty("partitionRetryReceipt");
+        Assert.Equal(AcceptanceShardCompletionPredicates.IncompleteExecution, receipt.GetProperty("failedPredicate").GetString());
+        Assert.Equal("receipt-attempt:cache:0", receipt.GetProperty("originalInvocationId").GetString());
+        Assert.Equal("receipt-attempt:cache:1", receipt.GetProperty("retryInvocationId").GetString());
+        Assert.Equal(0, receipt.GetProperty("exitCode").GetInt32());
+        Assert.Equal(110, receipt.GetProperty("discoveredTestCount").GetInt32());
+        Assert.Equal(109, receipt.GetProperty("executedTestCount").GetInt32());
+        Assert.Equal("passed", receipt.GetProperty("trxOutcome").GetString());
+        Assert.Equal(retained.Path, receipt.GetProperty("diagnosticPath").GetString());
+        Assert.Equal(expectedHash, receipt.GetProperty("diagnosticSha256").GetString());
+    }
+
     public void Dispose()
     {
         if (Directory.Exists(_root))
