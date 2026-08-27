@@ -135,7 +135,7 @@ internal static class ProcessCommandLines
 
             result[pid] = new ProcessInspectionRecord(
                 pid,
-                ProcessParentIdResolver.TryGetParentProcessId(pid),
+                ProcessParentIdResolver.TryGetParentProcessId(pid) ?? 0,
                 name,
                 executablePath,
                 startedAt,

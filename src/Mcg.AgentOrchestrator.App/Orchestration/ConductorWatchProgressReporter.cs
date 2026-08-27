@@ -16,7 +16,7 @@ internal sealed class ConductorWatchProgressReporter
     private readonly Func<int, bool> _isProcessAlive;
     private readonly Func<DateTimeOffset> _now;
     private readonly int _loopProcessId;
-    private readonly int _launcherProcessId;
+    private readonly int? _launcherProcessId;
     private readonly Dictionary<string, EmittedSnapshot> _lastEmitted = new(StringComparer.Ordinal);
 
     public ConductorWatchProgressReporter(
@@ -25,14 +25,16 @@ internal sealed class ConductorWatchProgressReporter
         Func<int, bool>? isProcessAlive = null,
         Func<DateTimeOffset>? now = null,
         int? loopProcessId = null,
-        int? launcherProcessId = null)
+        int? launcherProcessId = null,
+        Func<int, int?>? readParentProcessId = null)
     {
         _readHeartbeat = readHeartbeat ?? ((process, observedAt) => ProcessLogReader.ReadHeartbeat(process, observedAt));
         _readChanges = readChanges ?? ((worktreePath, baseCommit) => GoalChangesReader.BuildLiveDispatchSnapshot(worktreePath, baseCommit));
         _isProcessAlive = isProcessAlive ?? IsProcessAlive;
         _now = now ?? (() => DateTimeOffset.UtcNow);
         _loopProcessId = loopProcessId ?? Environment.ProcessId;
-        _launcherProcessId = launcherProcessId ?? ProcessParentIdResolver.TryGetParentProcessId(_loopProcessId);
+        _launcherProcessId = launcherProcessId ??
+            (readParentProcessId ?? ProcessParentIdResolver.TryGetParentProcessId)(_loopProcessId);
     }
 
     public IReadOnlyList<string> BuildLines(

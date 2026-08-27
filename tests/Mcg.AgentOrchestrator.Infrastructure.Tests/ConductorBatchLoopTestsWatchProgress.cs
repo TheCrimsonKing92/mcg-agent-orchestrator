@@ -933,6 +933,46 @@ public sealed class ConductorBatchLoopTestsWatchProgress : ConductorBatchLoopTes
         Assert.NotEqual(working[0], stalled[0]);
     }
 
+    [Xunit.Fact]
+    public void WatchProgress_ResolvedLauncherProcessIsNotReportedAsWorker()
+    {
+        var (kernel, goal) = SimpleGoal("watch launcher exclusion");
+        var task = goal.Tasks.First();
+        var now = DateTimeOffset.Parse("2026-08-27T12:00:00Z");
+        const int loopProcessId = 9001;
+        const int launcherProcessId = 9002;
+        StartProcess(kernel, goal, task, now.AddMinutes(-1), "abc123", launcherProcessId);
+        var parentReads = 0;
+        var reporter = new ConductorWatchProgressReporter(
+            readHeartbeat: (process, observedAt) => Heartbeat(
+                process,
+                observedAt,
+                10,
+                0,
+                TimeSpan.FromSeconds(5),
+                [launcherProcessId]),
+            readChanges: (_, _) => new DispatchLiveChangeSnapshot([], [], 0),
+            isProcessAlive: _ => true,
+            now: () => now,
+            loopProcessId: loopProcessId,
+            readParentProcessId: processId =>
+            {
+                parentReads++;
+                Assert.Equal(loopProcessId, processId);
+                return launcherProcessId;
+            });
+
+        var lines = reporter.BuildLines(
+            kernel.GetGoal(goal.Id),
+            quiet: false,
+            policy: ConductorAutonomyPolicy.Conservative);
+
+        Assert.Equal(1, parentReads);
+        Assert.Contains(lines, line =>
+            line.StartsWith("WATCH_PROGRESS ", StringComparison.Ordinal) &&
+            line.Contains("pid=unknown", StringComparison.Ordinal));
+    }
+
     [Xunit.Fact(DisplayName = "WatchProgress_throttles_until_output_or_file_count_changes")]
     public void WatchProgressThrottlesUntilOutputOrFileCountChanges()
     {

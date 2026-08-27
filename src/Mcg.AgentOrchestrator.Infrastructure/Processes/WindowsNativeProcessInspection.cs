@@ -58,10 +58,7 @@ internal static class WindowsNativeProcessInspection
         }
 
         var ids = requestedProcessIds.Where(id => id > 0).Distinct().ToArray();
-        return Read(
-            ids,
-            () => ProcessEnumerationResult.Success(CreateRequestedSeeds(ids)),
-            ReadOne);
+        return ReadRequested(ids, EnumerateProcesses, ReadOne);
     }
 
     public static ProcessInspectionResult ReadByNames(IEnumerable<string> processNames)
@@ -118,15 +115,58 @@ internal static class WindowsNativeProcessInspection
             ? new ProcessMemoryLayout(4, 0x10, 0x40)
             : new ProcessMemoryLayout(8, 0x20, 0x70);
 
-    private static IReadOnlyList<ProcessInspectionSeed> CreateRequestedSeeds(IEnumerable<int> processIds)
+    internal static ProcessInspectionResult ReadRequested(
+        IReadOnlyCollection<int> requestedProcessIds,
+        Func<ProcessEnumerationResult> enumerate,
+        Func<ProcessInspectionSeed, ProcessInspectionRecord> readOne)
     {
-        return processIds
-            .Select(static processId => new ProcessInspectionSeed(processId, 0, string.Empty))
-            .ToArray();
+        var enumeration = enumerate();
+        if (enumeration.Failure is not null)
+        {
+            return ProcessInspectionResult.Failed(enumeration.Failure);
+        }
+
+        var seeds = enumeration.Processes.ToDictionary(seed => seed.ProcessId);
+        var records = new Dictionary<int, ProcessInspectionRecord>();
+        foreach (var processId in requestedProcessIds.Where(id => id > 0).Distinct())
+        {
+            if (seeds.TryGetValue(processId, out var seed))
+            {
+                records[processId] = readOne(seed);
+                continue;
+            }
+
+            records[processId] = Unavailable(
+                new ProcessInspectionSeed(processId, 0, string.Empty),
+                ProcessInspectionStatus.Exited,
+                null,
+                null);
+        }
+
+        return ProcessInspectionResult.Success(records);
     }
 
-    public static int TryGetParentProcessId(int processId) =>
-        Read([processId]).Records.TryGetValue(processId, out var record) ? record.ParentProcessId : 0;
+    public static ProcessParentIdReadResult ReadParentProcessId(int processId) =>
+        ReadParentProcessId(processId, EnumerateProcesses);
+
+    internal static ProcessParentIdReadResult ReadParentProcessId(
+        int processId,
+        Func<ProcessEnumerationResult> enumerate)
+    {
+        var enumeration = enumerate();
+        if (enumeration.Failure is not null)
+        {
+            return new(null, enumeration.Failure.Status, enumeration.Failure);
+        }
+
+        var seed = enumeration.Processes.FirstOrDefault(entry => entry.ProcessId == processId);
+        return seed is null
+            ? new(null, ProcessInspectionStatus.Exited, null)
+            : new(
+                seed.ParentProcessId > 0 ? seed.ParentProcessId : null,
+                ProcessInspectionStatus.Available,
+                null);
+    }
 
     internal static bool TryTerminateIfMatches(ProcessInspectionRecord expected) =>
         OperatingSystem.IsWindows() && TryTerminateIfMatches(
@@ -574,6 +614,10 @@ internal static class WindowsNativeProcessInspection
     private static IntPtr Add(long address, int offset) => new(address + offset);
 
     internal sealed record ProcessInspectionSeed(int ProcessId, int ParentProcessId, string Name);
+    internal sealed record ProcessParentIdReadResult(
+        int? ParentProcessId,
+        ProcessInspectionStatus Status,
+        ProcessInspectionFailure? Failure);
     internal sealed record ProcessInspectionResult(
         IReadOnlyDictionary<int, ProcessInspectionRecord> Records,
         ProcessInspectionFailure? Failure)

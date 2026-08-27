@@ -1373,6 +1373,10 @@ public static class DotnetBuildEnvironmentManager
     {
         var snapshot = processSnapshot ?? CreateSlotCandidateProcessSnapshot();
         return TryFindActiveSlotArtifactConsumer(environment, snapshot) is not null ||
+            FindUnavailableSlotCandidate(
+                environment,
+                snapshot,
+                TryReadExecutionLeaseMetadata(environment.ExecutionLockPath)) is not null ||
             snapshot.Failure is not null;
     }
 

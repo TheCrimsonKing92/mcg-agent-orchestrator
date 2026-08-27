@@ -108,6 +108,61 @@ public sealed class WindowsNativeProcessInspectionTests
     }
 
     [Xunit.Fact]
+    public void ReadRequested_AccessDeniedProcess_RetainsEnumeratedParent()
+    {
+        var records = WindowsNativeProcessInspection.ReadRequested(
+            [42],
+            () => WindowsNativeProcessInspection.ProcessEnumerationResult.Success(
+            [
+                new WindowsNativeProcessInspection.ProcessInspectionSeed(42, 7, "worker")
+            ]),
+            seed => new ProcessInspectionRecord(
+                seed.ProcessId,
+                seed.ParentProcessId,
+                seed.Name,
+                null,
+                null,
+                null,
+                ProcessInspectionStatus.AccessDenied));
+
+        var record = Assert.Single(records.Records).Value;
+        Assert.Equal(7, record.ParentProcessId);
+        Assert.Equal(ProcessInspectionStatus.AccessDenied, record.Status);
+    }
+
+    [Xunit.Fact]
+    public void ReadParentProcessId_EnumerationFailure_RemainsTypedUnavailable()
+    {
+        var failure = new ProcessInspectionFailure(
+            ProcessInspectionStatus.NativeFailure,
+            24,
+            "CreateToolhelp32Snapshot");
+
+        var result = WindowsNativeProcessInspection.ReadParentProcessId(
+            42,
+            () => WindowsNativeProcessInspection.ProcessEnumerationResult.Failed(failure));
+
+        Assert.Null(result.ParentProcessId);
+        Assert.Equal(ProcessInspectionStatus.NativeFailure, result.Status);
+        Assert.Same(failure, result.Failure);
+    }
+
+    [Xunit.Fact]
+    public void ReadParentProcessId_UsesToolhelpParentWithoutOpeningTarget()
+    {
+        var result = WindowsNativeProcessInspection.ReadParentProcessId(
+            42,
+            () => WindowsNativeProcessInspection.ProcessEnumerationResult.Success(
+            [
+                new WindowsNativeProcessInspection.ProcessInspectionSeed(42, 7, "worker")
+            ]));
+
+        Assert.Equal(7, result.ParentProcessId);
+        Assert.Equal(ProcessInspectionStatus.Available, result.Status);
+        Assert.Null(result.Failure);
+    }
+
+    [Xunit.Fact]
     public void GetMemoryLayout_Wow64Target_Uses32BitOffsets()
     {
         var layout = WindowsNativeProcessInspection.GetMemoryLayout(targetIsWow64: true);
