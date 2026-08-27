@@ -61,6 +61,7 @@ public static class AcceptanceShardCompletionPredicates
     public const string ZeroTests = "zero-tests";
     public const string IncompleteExecution = "incomplete-execution";
     public const string FailingTrx = "failing-trx";
+    public const string CheckFailed = "check-failed";
     public const string RetryEvidenceRetentionFailed = "retry-evidence-retention-failed";
 }
 
@@ -151,6 +152,11 @@ internal static class AcceptanceFailureCauseReceiptCodec
             _ => false
         };
     }
+}
+
+public static class AcceptanceShardCompletionSignals
+{
+    public const string MissingTrxInjectedRunnerCompatibility = "missing-trx-injected-runner-compatibility";
 }
 
 internal sealed record AcceptanceProcessCleanupObservation(
@@ -408,6 +414,10 @@ public sealed class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
     private readonly AcceptanceStructuralCoverageEvaluator _structuralCoverageEvaluator;
     private readonly TimeProvider _timeProvider;
     private readonly Action<TimeSpan> _leaseSleep;
+    // The production runner owns process and TRX filesystem side effects. Injected runners return only a
+    // CommandResult unless their test explicitly creates a receipt, so missing TRX remains a typed compatibility
+    // signal on that seam rather than silently changing legacy synthetic verdicts.
+    private readonly bool _requiresTestTelemetryReceipt;
     private static readonly AsyncLocal<GateHeartbeatContext?> CurrentGateHeartbeatContext = new();
     private static readonly AsyncLocal<TestTelemetryInvocationAllocator?> CurrentTestTelemetryInvocationAllocator = new();
     private static readonly AsyncLocal<TestTelemetryInvocation?> CurrentTestTelemetryInvocation = new();
@@ -470,7 +480,14 @@ public sealed class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
         CliTestsProject
     ];
 
-    public GoalAcceptanceVerifier() : this(RunProcessAsync, RunUtf8DiscoveryProcessAsync, TimeProvider.System) { }
+    public GoalAcceptanceVerifier()
+        : this(
+            RunProcessAsync,
+            RunUtf8DiscoveryProcessAsync,
+            TimeProvider.System,
+            requiresTestTelemetryReceipt: true)
+    {
+    }
 
     internal GoalAcceptanceVerifier(Func<string[], string, CancellationToken, Task<CommandResult>> runner)
         : this(runner, TimeProvider.System)
@@ -495,7 +512,7 @@ public sealed class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
         Func<string[], string, TimeSpan, CancellationToken, Task<CommandResult>> runner,
         TimeProvider timeProvider,
         Action<TimeSpan>? leaseSleep = null)
-        : this(runner, runner, timeProvider, leaseSleep)
+        : this(runner, runner, timeProvider, leaseSleep, requiresTestTelemetryReceipt: false)
     {
     }
 
@@ -503,7 +520,8 @@ public sealed class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
         Func<string[], string, TimeSpan, CancellationToken, Task<CommandResult>> runner,
         Func<string[], string, TimeSpan, CancellationToken, Task<CommandResult>> discoveryRunner,
         TimeProvider timeProvider,
-        Action<TimeSpan>? leaseSleep = null)
+        Action<TimeSpan>? leaseSleep = null,
+        bool requiresTestTelemetryReceipt = false)
     {
         _runner = runner;
         _structuralCoverageEvaluator = new AcceptanceStructuralCoverageEvaluator(
@@ -511,6 +529,7 @@ public sealed class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
             IsBuildArtifactIoException);
         _timeProvider = timeProvider;
         _leaseSleep = leaseSleep ?? Thread.Sleep;
+        _requiresTestTelemetryReceipt = requiresTestTelemetryReceipt;
     }
 
     public static IDisposable PushGateProgressSink(Action<AcceptanceGateProgress> sink)
@@ -1860,10 +1879,12 @@ public sealed class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
             cancellationToken,
             testResultsDirectoryOverride).ConfigureAwait(false);
         var currentAttemptId = cacheContext?.AttemptId ?? CurrentAcceptanceAttemptIdOrNull();
+        var completionDecision = fresh.Result.CompletionDecision ?? InferPartitionCompletionDecision(fresh.Result);
         fresh = (fresh.Result with
         {
             TestResultAttemptId = currentAttemptId,
-            CompletionDecision = fresh.Result.CompletionDecision ?? InferPartitionCompletionDecision(fresh.Result)
+            CompletionDecision = completionDecision,
+            FailureClassification = fresh.Result.FailureClassification ?? completionDecision.FailedPredicate
         }, fresh.Retried);
 
         // Within-attempt flake tolerance: a failed infrastructure PARTITION can be an intermittent flake
@@ -2012,8 +2033,7 @@ public sealed class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
                 ? AcceptanceShardCompletionPredicates.TimedOut
                 : result.ExitCode != 0
                     ? AcceptanceShardCompletionPredicates.NonzeroExit
-                    : throw new InvalidOperationException(
-                        $"Failed partition '{result.Name}' has no typed completion predicate; retry refused."));
+                    : AcceptanceShardCompletionPredicates.CheckFailed);
         return new AcceptanceShardCompletionDecision(
             false,
             predicate,
@@ -3951,7 +3971,11 @@ public sealed class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
                 ? AcceptanceFailureClassifications.FocusedSelectionReceiptUnreadable
                 : AcceptanceFailureClassifications.FocusedSelectionApparatusFailure
             : null;
-        var completionDecision = DecideTestShardCompletion(result, trxEvidence, policyFailure);
+        var completionDecision = DecideTestShardCompletion(
+            result,
+            trxEvidence,
+            policyFailure,
+            requireTrxEvidence: _requiresTestTelemetryReceipt);
         var passed = completionDecision.Passed;
         IReadOnlyList<string> failingTestIdentities = passed || zeroTestApparatusFailure
             ? []
@@ -4383,7 +4407,8 @@ public sealed class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
                     result,
                     trxEvidence,
                     policySignal: reportedAllPassed ? "testhost-shutdown-all-passed" : null,
-                    allowNonzeroExit: reportedAllPassed);
+                    allowNonzeroExit: reportedAllPassed,
+                    requireTrxEvidence: _requiresTestTelemetryReceipt);
             var passed = completionDecision.Passed;
             IReadOnlyList<string> failingTestIdentities = passed
                 ? []
@@ -4467,7 +4492,8 @@ public sealed class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
                     result,
                     trxEvidence,
                     policySignal: reportedAllPassed ? "testhost-shutdown-all-passed" : null,
-                    allowNonzeroExit: reportedAllPassed);
+                    allowNonzeroExit: reportedAllPassed,
+                    requireTrxEvidence: _requiresTestTelemetryReceipt);
             var passed = completionDecision.Passed;
             IReadOnlyList<string> failingTestIdentities = passed
                 ? []
@@ -7281,22 +7307,34 @@ public sealed class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
         TrxCompletionEvidence trx,
         string? policyFailure = null,
         string? policySignal = null,
-        bool allowNonzeroExit = false)
+        bool allowNonzeroExit = false,
+        bool requireTrxEvidence = true)
     {
+        var missingTrxCompatibility = !requireTrxEvidence &&
+            string.Equals(
+                trx.FailedPredicate,
+                AcceptanceShardCompletionPredicates.MissingTrx,
+                StringComparison.Ordinal);
         var failedPredicate = policyFailure;
         if (failedPredicate is null && result.TimedOut)
             failedPredicate = AcceptanceShardCompletionPredicates.TimedOut;
         if (failedPredicate is null && result.ExitCode != 0 && !allowNonzeroExit)
             failedPredicate = AcceptanceShardCompletionPredicates.NonzeroExit;
-        if (failedPredicate is null && trx.FailedPredicate is not null)
+        if (failedPredicate is null && !missingTrxCompatibility && trx.FailedPredicate is not null)
             failedPredicate = trx.FailedPredicate;
-        if (failedPredicate is null && trx.DiscoveredTestCount == 0)
+        if (failedPredicate is null && !missingTrxCompatibility && trx.DiscoveredTestCount == 0)
             failedPredicate = AcceptanceShardCompletionPredicates.ZeroTests;
-        if (failedPredicate is null &&
+        if (failedPredicate is null && !missingTrxCompatibility &&
             trx.DiscoveredTestCount != (trx.ExecutedTestCount ?? 0) + (trx.NotExecutedTestCount ?? 0))
             failedPredicate = AcceptanceShardCompletionPredicates.IncompleteExecution;
-        if (failedPredicate is null && !trx.Passed)
+        if (failedPredicate is null && !missingTrxCompatibility && !trx.Passed)
             failedPredicate = AcceptanceShardCompletionPredicates.FailingTrx;
+
+        var effectivePolicySignal = policyFailure ?? policySignal;
+        if (failedPredicate is null && missingTrxCompatibility && effectivePolicySignal is null)
+        {
+            effectivePolicySignal = AcceptanceShardCompletionSignals.MissingTrxInjectedRunnerCompatibility;
+        }
 
         return new AcceptanceShardCompletionDecision(
             failedPredicate is null,
@@ -7306,7 +7344,7 @@ public sealed class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
             trx.DiscoveredTestCount,
             trx.ExecutedTestCount,
             trx.Outcome,
-            policyFailure ?? policySignal,
+            effectivePolicySignal,
             trx.NotExecutedTestCount);
     }
 
