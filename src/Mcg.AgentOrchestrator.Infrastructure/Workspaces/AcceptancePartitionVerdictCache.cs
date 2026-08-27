@@ -46,7 +46,8 @@ internal sealed record PartitionWithinAttemptRetryReceipt(
     string TrxOutcome,
     string? PolicySignal,
     string DiagnosticPath,
-    string DiagnosticSha256);
+    string DiagnosticSha256,
+    int? NotExecutedTestCount = null);
 
 internal sealed record PartitionVerdictRecord(
     string GoalId,
@@ -269,7 +270,8 @@ internal sealed class AcceptancePartitionVerdictCache
             decision.TrxOutcome,
             decision.PolicySignal,
             diagnostic.Path,
-            diagnostic.Sha256);
+            diagnostic.Sha256,
+            decision.NotExecutedTestCount);
         lock (_gate)
         {
             _retries.Add(retryReceipt);
@@ -280,6 +282,7 @@ internal sealed class AcceptancePartitionVerdictCache
             $"exit_code={original.ExitCode?.ToString(System.Globalization.CultureInfo.InvariantCulture) ?? "none"} " +
             $"discovered={decision.DiscoveredTestCount?.ToString(System.Globalization.CultureInfo.InvariantCulture) ?? "unknown"} " +
             $"executed={decision.ExecutedTestCount?.ToString(System.Globalization.CultureInfo.InvariantCulture) ?? "unknown"} " +
+            $"not_executed={decision.NotExecutedTestCount?.ToString(System.Globalization.CultureInfo.InvariantCulture) ?? "unknown"} " +
             $"trx_outcome={decision.TrxOutcome} diagnostic_path={diagnostic.Path} diagnostic_sha256={diagnostic.Sha256}";
         AppendPartitionVerdictJournalEntries(
             JournalPath,
@@ -327,6 +330,35 @@ internal sealed class AcceptancePartitionVerdictCache
                 result.TestResultPaths ?? [],
                 DateTimeOffset.UtcNow));
         }
+    }
+
+    internal void RecordSemanticDeduplications(
+        IReadOnlyList<GoalAcceptanceVerifier.SemanticExecutionDeduplicationReceipt> receipts)
+    {
+        if (receipts.Count == 0)
+        {
+            return;
+        }
+
+        AppendPartitionVerdictJournalEntries(
+            JournalPath,
+            receipts.Select(receipt =>
+                new PartitionVerdictJournalEntry(
+                    $"{AttemptId}:semantic-dedup:{receipt.PartitionId}:{receipt.DroppedPlanIndex}",
+                    new GoalId(GoalId),
+                    "acceptance:semantic-check-deduplication",
+                    "recorded",
+                    DateTimeOffset.UtcNow,
+                    Detail:
+                        $"partition_id={receipt.PartitionId} retained_check={receipt.RetainedCheckName} " +
+                        $"dropped_check={receipt.DroppedCheckName} retained_plan_index={receipt.RetainedPlanIndex} " +
+                        $"dropped_plan_index={receipt.DroppedPlanIndex} semantic_key_sha256={receipt.SemanticKeySha256}",
+                    BranchHeadSha: CandidateTreeSha,
+                    MainHeadSha: MainSha,
+                    PartitionPairKey: PairKey,
+                    PartitionId: receipt.PartitionId,
+                    PartitionAttemptId: AttemptId))
+                .ToArray());
     }
 
     internal AcceptanceCheckResult? CompleteAttempt()

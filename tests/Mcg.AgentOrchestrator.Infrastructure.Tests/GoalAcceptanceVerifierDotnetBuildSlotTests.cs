@@ -394,10 +394,14 @@ public abstract class GoalAcceptanceVerifierDotnetBuildSlotTests : GoalAcceptanc
                 new XElement("Results", results),
                 new XElement(
                     "ResultSummary",
+                    new XAttribute("outcome", "Completed"),
                     new XElement(
                         "Counters",
                         new XAttribute("total", Math.Max(1, executedTestCount.Value)),
-                        new XAttribute("executed", executedTestCount.Value)))))
+                        new XAttribute("executed", executedTestCount.Value),
+                        new XAttribute("passed", executedTestCount.Value),
+                        new XAttribute("failed", 0),
+                        new XAttribute("notExecuted", 0)))))
             .Save(destinationPath);
     }
 

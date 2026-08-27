@@ -157,10 +157,10 @@ public sealed class GoalAcceptanceVerifierDotnetBuildSlotTestsVerdictAndBuildCac
                     }
 
                     return Task.FromResult(cliRuns < 2
-                        ? new GoalAcceptanceVerifier.CommandResult(
-                            1,
-                            "Failed! - Failed: 1, Passed: 0, Skipped: 0, Total: 1.",
-                            Stderr: "retry-driving stderr from the original Cli partition")
+                        ? CreateFailedResultWithHeartbeat(
+                            goalId,
+                            "infrastructure tests: Cli",
+                            "retry-driving stderr from the original Cli partition")
                         : new GoalAcceptanceVerifier.CommandResult(0, "Passed! - Failed: 0, Passed: 1, Skipped: 0, Total: 1."));
                 }
 
@@ -218,7 +218,10 @@ public sealed class GoalAcceptanceVerifierDotnetBuildSlotTestsVerdictAndBuildCac
                     mtpRuns++;
                     if (mtpRuns == 1)
                     {
-                        return Task.FromResult(new GoalAcceptanceVerifier.CommandResult(1, "Failed! - Failed: 1, Passed: 0, Skipped: 0, Total: 1."));
+                        return Task.FromResult(CreateFailedResultWithHeartbeat(
+                            goalId,
+                            "infrastructure tests: Cli",
+                            "retry-driving stderr from the original MTP Cli partition"));
                     }
 
                     WriteMtpTrx(args, 1, ["CliPartition.Passes"]);
@@ -889,7 +892,7 @@ public sealed class GoalAcceptanceVerifierDotnetBuildSlotTestsVerdictAndBuildCac
         Directory.CreateDirectory(resultsDirectory);
         File.WriteAllText(
             Path.Combine(resultsDirectory, arguments[loggerIndex + 1][prefix.Length..]),
-            $"<TestRun><TestDefinitions><UnitTest id=\"1\" name=\"{testName}\"><TestMethod className=\"CliPartition\" name=\"Passes\" /></UnitTest></TestDefinitions><Results><UnitTestResult testId=\"1\" testName=\"{testName}\" outcome=\"Passed\" /></Results><ResultSummary outcome=\"Passed\"><Counters total=\"1\" executed=\"1\" passed=\"1\" failed=\"0\" /></ResultSummary></TestRun>");
+            $"<TestRun><TestDefinitions><UnitTest id=\"1\" name=\"{testName}\"><TestMethod className=\"CliPartition\" name=\"Passes\" /></UnitTest></TestDefinitions><Results><UnitTestResult testId=\"1\" testName=\"{testName}\" outcome=\"Passed\" /></Results><ResultSummary outcome=\"Completed\"><Counters total=\"1\" executed=\"1\" passed=\"1\" failed=\"0\" notExecuted=\"0\" /></ResultSummary></TestRun>");
     }
 
     private static bool IsVstestCall(string[] arguments) =>
@@ -905,5 +908,38 @@ public sealed class GoalAcceptanceVerifierDotnetBuildSlotTestsVerdictAndBuildCac
         return new GoalAcceptanceVerifier.CommandResult(
             0,
             "Passed! - Failed: 0, Passed: 1, Skipped: 0, Total: 1.");
+    }
+
+    private static GoalAcceptanceVerifier.CommandResult CreateFailedResultWithHeartbeat(
+        GoalId goalId,
+        string checkName,
+        string stderr)
+    {
+        var environment = DotnetBuildEnvironmentManager.ResolveGoalEnvironment(goalId);
+        var heartbeatPath = GoalAcceptanceVerifier.ResolveGateHeartbeatPathForTests(checkName, environment);
+        var now = DateTimeOffset.UtcNow;
+        GateHeartbeatArtifacts.Write(
+            heartbeatPath,
+            new GateHeartbeatSnapshot(
+                goalId.Value,
+                "verification-check",
+                checkName,
+                environment.BuildPermitIndex,
+                Environment.ProcessId,
+                null,
+                "completed",
+                now,
+                now,
+                now,
+                0,
+                Encoding.UTF8.GetByteCount(stderr),
+                Encoding.UTF8.GetByteCount(stderr),
+                "test command",
+                1,
+                StderrPath: null));
+        return new GoalAcceptanceVerifier.CommandResult(
+            1,
+            "Failed! - Failed: 1, Passed: 0, Skipped: 0, Total: 1.",
+            Stderr: stderr);
     }
 }

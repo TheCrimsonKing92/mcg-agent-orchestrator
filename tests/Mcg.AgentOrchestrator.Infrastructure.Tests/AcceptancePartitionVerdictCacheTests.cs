@@ -161,6 +161,37 @@ public sealed class AcceptancePartitionVerdictCacheTests : IDisposable
     }
 
     [Fact]
+    public void CompletionDecision_CompletedTrxCountsSkippedTestsWithoutHidingMissingExecution()
+    {
+        var completePath = Path.Combine(_root, "completed-with-skip.trx");
+        File.WriteAllText(
+            completePath,
+            "<TestRun><Results><UnitTestResult outcome=\"Passed\"/><UnitTestResult outcome=\"NotExecuted\"/></Results>" +
+            "<ResultSummary outcome=\"Completed\"><Counters total=\"2\" executed=\"1\" passed=\"1\" failed=\"0\" notExecuted=\"1\"/></ResultSummary></TestRun>");
+        var complete = GoalAcceptanceVerifier.DecideTestShardCompletionFromTrxForTests(
+            new GoalAcceptanceVerifier.CommandResult(0, string.Empty),
+            [completePath]);
+
+        Assert.True(complete.Passed);
+        Assert.Equal("Completed", complete.TrxOutcome);
+        Assert.Equal(2, complete.DiscoveredTestCount);
+        Assert.Equal(1, complete.ExecutedTestCount);
+        Assert.Equal(1, complete.NotExecutedTestCount);
+
+        var incompletePath = Path.Combine(_root, "completed-but-incomplete.trx");
+        File.WriteAllText(
+            incompletePath,
+            "<TestRun><Results><UnitTestResult outcome=\"Passed\"/></Results>" +
+            "<ResultSummary outcome=\"Completed\"><Counters total=\"2\" executed=\"1\" passed=\"1\" failed=\"0\" notExecuted=\"0\"/></ResultSummary></TestRun>");
+        var incomplete = GoalAcceptanceVerifier.DecideTestShardCompletionFromTrxForTests(
+            new GoalAcceptanceVerifier.CommandResult(0, string.Empty),
+            [incompletePath]);
+
+        Assert.False(incomplete.Passed);
+        Assert.Equal(AcceptanceShardCompletionPredicates.IncompleteExecution, incomplete.FailedPredicate);
+    }
+
+    [Fact]
     public void WithinAttemptRetryReceipt_RetainsCapturedStderrAndTypedDecision()
     {
         const string stderr = "retry-driving stderr from the original process";
@@ -185,7 +216,8 @@ public sealed class AcceptancePartitionVerdictCacheTests : IDisposable
             0,
             110,
             109,
-            "passed");
+            "passed",
+            NotExecutedTestCount: 0);
         var original = new AcceptanceCheckResult(
             _partition.Name,
             false,
@@ -213,6 +245,7 @@ public sealed class AcceptancePartitionVerdictCacheTests : IDisposable
         Assert.Equal(110, receipt.GetProperty("discoveredTestCount").GetInt32());
         Assert.Equal(109, receipt.GetProperty("executedTestCount").GetInt32());
         Assert.Equal("passed", receipt.GetProperty("trxOutcome").GetString());
+        Assert.Equal(0, receipt.GetProperty("notExecutedTestCount").GetInt32());
         Assert.Equal(retained.Path, receipt.GetProperty("diagnosticPath").GetString());
         Assert.Equal(expectedHash, receipt.GetProperty("diagnosticSha256").GetString());
     }
