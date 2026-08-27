@@ -721,8 +721,8 @@ public sealed partial class ConductorDriverTestsLifecycleStates
         Assert.Contains($"detail unavailable: no TRX exists for partition \"infrastructure tests: missing receipt\" at {missingPath}", retryMessage!, StringComparison.Ordinal);
     }
 
-    [Xunit.Fact(DisplayName = "ConductorDriver_gate_environment_interference_regates_without_developer_retry")]
-    public void ConductorDriverGateEnvironmentInterferenceRegatesWithoutDeveloperRetry()
+    [Xunit.Fact(DisplayName = "ConductorDriver_gate_environment_interference_holds_without_developer_retry")]
+    public void ConductorDriverGateEnvironmentInterferenceHoldsWithoutDeveloperRetry()
     {
         var (kernel, goal) = SimpleGoal();
         var task = goal.Tasks.Single();
@@ -755,7 +755,9 @@ public sealed partial class ConductorDriverTestsLifecycleStates
 
         var held = Xunit.Assert.IsType<ConductorAdvanceOutcome.Held>(result.Outcome);
         Xunit.Assert.Equal(GoalLifecycleState.Verified, held.State);
-        Xunit.Assert.Contains("re-gate", held.Reason, StringComparison.Ordinal);
+        Xunit.Assert.Contains("apparatus/environmental failure recorded", held.Reason, StringComparison.Ordinal);
+        Xunit.Assert.Contains("will not re-run until", held.Reason, StringComparison.Ordinal);
+        Xunit.Assert.Contains("no worker was reopened", held.Reason, StringComparison.Ordinal);
         Xunit.Assert.False(retryCalled);
         Xunit.Assert.False(landCalled);
         Xunit.Assert.Equal(WorkTaskStatus.Completed, task.Status);
