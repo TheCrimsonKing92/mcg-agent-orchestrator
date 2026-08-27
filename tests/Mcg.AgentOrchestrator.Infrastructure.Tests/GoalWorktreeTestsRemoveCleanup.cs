@@ -55,6 +55,34 @@ public sealed class GoalWorktreeTestsRemoveCleanup : GoalWorktreeTestBase
         }
     }
 
+    [Xunit.Fact]
+    public void FindLockHolders_EnumerationFailure_ReturnsConservativeTypedHolder()
+    {
+        var failure = new ProcessInspectionFailure(
+            ProcessInspectionStatus.NativeFailure,
+            24,
+            "CreateToolhelp32Snapshot");
+        GoalWorktrees.ProcessCommandLineSnapshotForCleanupTests = _ =>
+            new ProcessCommandLineSnapshot(
+                new Dictionary<int, ProcessInspectionRecord>(),
+                failure);
+
+        try
+        {
+            var holder = Assert.Single(GoalWorktrees.FindLockHolders("C:\\repo\\goal"));
+
+            Assert.Equal(0, holder.ProcessId);
+            Assert.Equal("process-inspection-unavailable", holder.ProcessName);
+            Assert.Equal(
+                "status=NativeFailure nativeError=24 operation=CreateToolhelp32Snapshot",
+                holder.CommandLine);
+        }
+        finally
+        {
+            GoalWorktrees.ProcessCommandLineSnapshotForCleanupTests = null;
+        }
+    }
+
     [Xunit.Fact(DisplayName = "GoalWorktrees_cleanup_contexts_are_isolated_through_private_helpers")]
     public async Task GoalWorktreesCleanupContextsAreIsolatedThroughPrivateHelpers()
     {

@@ -1081,6 +1081,14 @@ public static partial class GoalWorktrees
         var snapshot = ProcessCommandLineSnapshotForCleanupTests?.Invoke(LockHolderCandidates) ??
             ProcessCommandLines.SnapshotByNames(LockHolderCandidates);
         var holders = new List<WorktreeLockHolder>();
+        if (snapshot.Failure is { } failure)
+        {
+            holders.Add(new WorktreeLockHolder(
+                0,
+                "process-inspection-unavailable",
+                $"status={failure.Status} nativeError={failure.NativeError} operation={failure.Operation}"));
+            return holders;
+        }
 
         foreach (var (pid, record) in snapshot.Records)
         {

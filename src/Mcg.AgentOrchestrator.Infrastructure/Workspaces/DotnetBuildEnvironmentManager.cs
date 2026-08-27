@@ -57,7 +57,12 @@ public sealed record DotnetBuildLeaseStatus(
 
 public sealed record DotnetBuildStableSlotWait(
     int SlotIndex,
-    int? OwnerProcessId);
+    int? OwnerProcessId,
+    int? UnavailableProcessId = null,
+    string? UnavailableProcessName = null,
+    ProcessInspectionStatus? UnavailableStatus = null,
+    int? NativeError = null,
+    string? FailureOperation = null);
 
 public abstract record DotnetBuildLeaseAcquisition
 {
@@ -288,7 +293,7 @@ public static class DotnetBuildEnvironmentManager
     public static int? GetStableSlotExecutionLeaseOwner(int slotIndex)
     {
         ValidateStableSlotIndex(slotIndex);
-        return TryReadStableSlotExecutionOwner(slotIndex);
+        return TryReadStableSlotExecutionWait(slotIndex).OwnerProcessId;
     }
 
     public static DotnetBuildEnvironmentLease AcquireFirstAvailableStableSlotExecutionLock(
@@ -1114,7 +1119,7 @@ public static class DotnetBuildEnvironmentManager
         var waits = new DotnetBuildStableSlotWait[slotCount];
         for (var slot = 0; slot < slotCount; slot++)
         {
-            waits[slot] = new DotnetBuildStableSlotWait(slot, TryReadStableSlotExecutionOwner(slot, processSnapshot));
+            waits[slot] = TryReadStableSlotExecutionWait(slot, processSnapshot);
         }
 
         return waits;
@@ -1122,19 +1127,60 @@ public static class DotnetBuildEnvironmentManager
 
     private static int? TryReadStableSlotExecutionOwner(
         int slotIndex,
+        ProcessCommandLineSnapshot? processSnapshot = null) =>
+        TryReadStableSlotExecutionWait(slotIndex, processSnapshot).OwnerProcessId;
+
+    private static DotnetBuildStableSlotWait TryReadStableSlotExecutionWait(
+        int slotIndex,
         ProcessCommandLineSnapshot? processSnapshot = null)
     {
         var environment = CreateStableSlotEnvironment(slotIndex, createArtifactsDirectory: false);
         var metadata = TryReadExecutionLeaseMetadata(environment.ExecutionLockPath);
-        return TryFindActiveSlotArtifactConsumer(environment, processSnapshot)?.ProcessId ??
+        var snapshot = processSnapshot ?? CreateSlotCandidateProcessSnapshot();
+        var ownerProcessId = TryFindActiveSlotArtifactConsumer(environment, snapshot)?.ProcessId ??
             metadata?.OwnerProcessId;
+        var unavailable = FindUnavailableSlotCandidate(snapshot);
+        return new DotnetBuildStableSlotWait(
+            slotIndex,
+            ownerProcessId,
+            unavailable?.ProcessId,
+            unavailable?.Name,
+            unavailable?.Status ?? snapshot.Failure?.Status,
+            snapshot.Failure?.NativeError,
+            snapshot.Failure?.Operation);
     }
 
     private static string FormatBusySlots(IReadOnlyList<DotnetBuildStableSlotWait> busySlots) =>
         string.Join(
             "|",
-            busySlots.Select(slot =>
-                $"slot-{slot.SlotIndex}:pid-{slot.OwnerProcessId?.ToString(System.Globalization.CultureInfo.InvariantCulture) ?? "unknown"}"));
+            busySlots.Select(FormatBusySlot));
+
+    private static string FormatBusySlot(DotnetBuildStableSlotWait slot)
+    {
+        var value =
+            $"slot-{slot.SlotIndex}:pid-{slot.OwnerProcessId?.ToString(System.Globalization.CultureInfo.InvariantCulture) ?? "unknown"}";
+        if (slot.UnavailableProcessId.HasValue)
+        {
+            value += $":unavailable-pid-{slot.UnavailableProcessId.Value}:name-{slot.UnavailableProcessName ?? "unknown"}";
+        }
+
+        if (slot.UnavailableStatus.HasValue)
+        {
+            value += $":status-{slot.UnavailableStatus.Value}";
+        }
+
+        if (slot.NativeError.HasValue)
+        {
+            value += $":native-error-{slot.NativeError.Value}";
+        }
+
+        if (!string.IsNullOrWhiteSpace(slot.FailureOperation))
+        {
+            value += $":operation-{slot.FailureOperation}";
+        }
+
+        return value;
+    }
 
     private static bool TryOpenLeaseExecutionLock(
         DotnetBuildEnvironment environment,
@@ -1327,7 +1373,8 @@ public static class DotnetBuildEnvironmentManager
     {
         var snapshot = processSnapshot ?? CreateSlotCandidateProcessSnapshot();
         return TryFindActiveSlotArtifactConsumer(environment, snapshot) is not null ||
-            HasUnavailableSlotCandidate(snapshot);
+            FindUnavailableSlotCandidate(snapshot) is not null ||
+            snapshot.Failure is not null;
     }
 
     internal static BuildLockHolder? TryFindActiveSlotArtifactConsumer(
@@ -1368,12 +1415,12 @@ public static class DotnetBuildEnvironmentManager
         return null;
     }
 
-    private static bool HasUnavailableSlotCandidate(ProcessCommandLineSnapshot snapshot) =>
-        snapshot.Records.Any(pair =>
-            pair.Key != Environment.ProcessId &&
-            pair.Value.Status is not ProcessInspectionStatus.Exited and not ProcessInspectionStatus.DeadOrRecycled &&
-            (pair.Value.Status != ProcessInspectionStatus.Available ||
-                string.IsNullOrWhiteSpace(pair.Value.CommandLine)));
+    private static ProcessInspectionRecord? FindUnavailableSlotCandidate(ProcessCommandLineSnapshot snapshot) =>
+        snapshot.Records.Values.FirstOrDefault(record =>
+            record.ProcessId != Environment.ProcessId &&
+            record.Status is not ProcessInspectionStatus.Exited and not ProcessInspectionStatus.DeadOrRecycled &&
+            (record.Status != ProcessInspectionStatus.Available ||
+                string.IsNullOrWhiteSpace(record.CommandLine)));
 
     private static ProcessCommandLineSnapshot CreateSlotCandidateProcessSnapshot()
     {

@@ -47,6 +47,39 @@ public sealed class DotnetBuildEnvironmentManagerTestsLockAttributionLandingFixt
         }
     }
 
+    [Xunit.Fact]
+    public void LockAttributionProcessFallbackEnumerationFailureIsExplicitAndConservative()
+    {
+        LockAttribution.DisableRestartManagerForTests = true;
+        LockAttribution.HandleExecutableForTests = Path.Combine(Path.GetTempPath(), $"missing-handle-{Guid.NewGuid():N}.exe");
+        LockAttribution.ProcessCommandLineSnapshotForTests = () =>
+            new ProcessCommandLineSnapshot(
+                new Dictionary<int, ProcessInspectionRecord>(),
+                new ProcessInspectionFailure(
+                    ProcessInspectionStatus.NativeFailure,
+                    24,
+                    "CreateToolhelp32Snapshot"));
+
+        try
+        {
+            var attribution = LockAttribution.Attribute("C:\\repo\\locked.dll");
+
+            Assert.Equal("process-snapshot-unavailable", attribution.Source);
+            var holder = Assert.Single(attribution.Holders);
+            Assert.Null(holder.ProcessId);
+            Assert.False(holder.IsOrchestratorOwned);
+            Assert.Equal(
+                "process-inspection-unavailable-NativeFailure-24-CreateToolhelp32Snapshot",
+                holder.ProcessName);
+        }
+        finally
+        {
+            LockAttribution.ProcessCommandLineSnapshotForTests = null;
+            LockAttribution.HandleExecutableForTests = null;
+            LockAttribution.DisableRestartManagerForTests = false;
+        }
+    }
+
     [Xunit.Fact(DisplayName = "DotnetBuildEnvironmentManager_owned_artifact_holder_is_reaped_and_retried")]
     public void DotnetBuildEnvironmentManagerOwnedArtifactHolderIsReapedAndRetried()
     {

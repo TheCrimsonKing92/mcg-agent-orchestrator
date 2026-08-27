@@ -523,6 +523,18 @@ internal static partial class LockAttribution
     private static BuildLockAttribution AttributeFromProcessSnapshot(string path, string? ownershipHint)
     {
         var snapshot = ProcessCommandLineSnapshotForTests?.Invoke() ?? ProcessCommandLines.Snapshot();
+        if (snapshot.Failure is { } failure)
+        {
+            return new BuildLockAttribution(
+                path,
+                [new BuildLockHolder(
+                    null,
+                    $"process-inspection-unavailable-{failure.Status}-{failure.NativeError}-{failure.Operation}",
+                    null,
+                    false)],
+                "process-snapshot-unavailable");
+        }
+
         var holders = snapshot.Read(snapshot.Records.Keys)
             .Where(pair => IsOrchestratorOwned(pair.Value, ownershipHint))
             .Select(pair => new BuildLockHolder(pair.Key, TryProcessName(pair.Key), pair.Value, true, TryProcessStartTime(pair.Key)))

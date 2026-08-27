@@ -79,11 +79,11 @@ public sealed class WindowsNativeProcessInspectionTests
             () =>
             {
                 enumerationCount++;
-                return
+                return WindowsNativeProcessInspection.ProcessEnumerationResult.Success(
                 [
                     new WindowsNativeProcessInspection.ProcessInspectionSeed(41, 1, "ignored"),
                     new WindowsNativeProcessInspection.ProcessInspectionSeed(42, 1, "worker")
-                ];
+                ]);
             },
             seed =>
             {
@@ -98,7 +98,8 @@ public sealed class WindowsNativeProcessInspectionTests
                     ProcessInspectionStatus.AccessDenied);
             });
 
-        var record = Assert.Single(records).Value;
+        var record = Assert.Single(records.Records).Value;
+        Assert.Null(records.Failure);
         Assert.Equal(1, enumerationCount);
         Assert.Equal(1, readCount);
         Assert.Equal(42, record.ProcessId);
@@ -211,12 +212,12 @@ public sealed class WindowsNativeProcessInspectionTests
             () =>
             {
                 enumerations++;
-                return
+                return WindowsNativeProcessInspection.ProcessEnumerationResult.Success(
                 [
                     new WindowsNativeProcessInspection.ProcessInspectionSeed(1, 0, "dotnet"),
                     new WindowsNativeProcessInspection.ProcessInspectionSeed(2, 0, "unrelated"),
                     new WindowsNativeProcessInspection.ProcessInspectionSeed(3, 0, "testhost")
-                ];
+                ]);
             },
             seed =>
             {
@@ -233,7 +234,76 @@ public sealed class WindowsNativeProcessInspectionTests
 
         Assert.Equal(1, enumerations);
         Assert.Equal(2, reads);
-        Assert.Equal([1, 3], records.Keys.Order().ToArray());
+        Assert.Null(records.Failure);
+        Assert.Equal([1, 3], records.Records.Keys.Order().ToArray());
+    }
+
+    [Xunit.Fact]
+    public void EnumerateProcesses_CreateSnapshotFailure_ReturnsTypedNativeFailure()
+    {
+        var readCalled = false;
+        var closeCalled = false;
+
+        var result = WindowsNativeProcessInspection.EnumerateProcesses(
+            () => new IntPtr(-1),
+            _ =>
+            {
+                readCalled = true;
+                return WindowsNativeProcessInspection.ProcessEnumerationResult.Success([]);
+            },
+            _ => closeCalled = true,
+            () => 24);
+
+        Assert.Empty(result.Processes);
+        var failure = Assert.IsType<ProcessInspectionFailure>(result.Failure);
+        Assert.Equal(ProcessInspectionStatus.NativeFailure, failure.Status);
+        Assert.Equal(24, failure.NativeError);
+        Assert.Equal("CreateToolhelp32Snapshot", failure.Operation);
+        Assert.False(readCalled);
+        Assert.False(closeCalled);
+    }
+
+    [Xunit.Fact]
+    public void EnumerateProcesses_SnapshotReadFailure_ClosesHandleAndRetainsCause()
+    {
+        var closedHandle = IntPtr.Zero;
+        var expectedFailure = new ProcessInspectionFailure(
+            ProcessInspectionStatus.NativeFailure,
+            299,
+            "Process32First");
+
+        var result = WindowsNativeProcessInspection.EnumerateProcesses(
+            () => new IntPtr(17),
+            _ => WindowsNativeProcessInspection.ProcessEnumerationResult.Failed(expectedFailure),
+            handle => closedHandle = handle,
+            () => 0);
+
+        Assert.Empty(result.Processes);
+        Assert.Same(expectedFailure, result.Failure);
+        Assert.Equal(new IntPtr(17), closedHandle);
+    }
+
+    [Xunit.Fact]
+    public void ReadByNames_EnumerationFailure_DoesNotBecomeEmptySuccess()
+    {
+        var readCount = 0;
+        var expectedFailure = new ProcessInspectionFailure(
+            ProcessInspectionStatus.NativeFailure,
+            24,
+            "CreateToolhelp32Snapshot");
+
+        var result = WindowsNativeProcessInspection.ReadByNames(
+            new HashSet<string>(["dotnet"], StringComparer.OrdinalIgnoreCase),
+            () => WindowsNativeProcessInspection.ProcessEnumerationResult.Failed(expectedFailure),
+            _ =>
+            {
+                readCount++;
+                throw new InvalidOperationException("Enumeration failure must stop per-process reads.");
+            });
+
+        Assert.Empty(result.Records);
+        Assert.Same(expectedFailure, result.Failure);
+        Assert.Equal(0, readCount);
     }
 
     private static ProcessInspectionRecord AvailableRecord(DateTimeOffset startedAt) =>

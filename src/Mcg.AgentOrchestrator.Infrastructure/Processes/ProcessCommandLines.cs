@@ -7,10 +7,10 @@ namespace Mcg.AgentOrchestrator.Infrastructure;
 /// </summary>
 internal static class ProcessCommandLines
 {
-    public static ProcessCommandLineSnapshot Snapshot() => new(ReadAllRecords());
+    public static ProcessCommandLineSnapshot Snapshot() => ToSnapshot(ReadAllRecords());
 
     public static ProcessCommandLineSnapshot Snapshot(IEnumerable<int> pids) =>
-        new(ReadRecords(pids.Distinct().ToArray()));
+        ToSnapshot(ReadRecords(pids.Distinct().ToArray()));
 
     public static ProcessCommandLineSnapshot SnapshotByNames(IEnumerable<string> processNames)
     {
@@ -25,10 +25,10 @@ internal static class ProcessCommandLines
 
         if (OperatingSystem.IsWindows())
         {
-            return new ProcessCommandLineSnapshot(WindowsNativeProcessInspection.ReadByNames(names));
+            return ToSnapshot(WindowsNativeProcessInspection.ReadByNames(names));
         }
 
-        var records = ReadAllRecords()
+        var records = ReadAllRecords().Records
             .Where(pair => names.Contains(pair.Value.Name))
             .ToDictionary(pair => pair.Key, pair => pair.Value);
         return new ProcessCommandLineSnapshot(records);
@@ -42,13 +42,13 @@ internal static class ProcessCommandLines
             return [];
         }
 
-        return ReadRecords(pidList)
+        return ReadRecords(pidList).Records
             .Where(pair => pair.Value.Status == ProcessInspectionStatus.Available &&
                 !string.IsNullOrWhiteSpace(pair.Value.CommandLine))
             .ToDictionary(pair => pair.Key, pair => pair.Value.CommandLine!);
     }
 
-    private static IReadOnlyDictionary<int, ProcessInspectionRecord> ReadAllRecords()
+    private static WindowsNativeProcessInspection.ProcessInspectionResult ReadAllRecords()
     {
         if (OperatingSystem.IsWindows())
         {
@@ -57,13 +57,15 @@ internal static class ProcessCommandLines
 
         if (OperatingSystem.IsLinux())
         {
-            return ReadLinuxRecords(EnumerateLinuxProcessIds());
+            return WindowsNativeProcessInspection.ProcessInspectionResult.Success(
+                ReadLinuxRecords(EnumerateLinuxProcessIds()));
         }
 
-        return new Dictionary<int, ProcessInspectionRecord>();
+        return WindowsNativeProcessInspection.ProcessInspectionResult.Success(
+            new Dictionary<int, ProcessInspectionRecord>());
     }
 
-    private static IReadOnlyDictionary<int, ProcessInspectionRecord> ReadRecords(IReadOnlyCollection<int> pids)
+    private static WindowsNativeProcessInspection.ProcessInspectionResult ReadRecords(IReadOnlyCollection<int> pids)
     {
         if (OperatingSystem.IsWindows())
         {
@@ -72,11 +74,16 @@ internal static class ProcessCommandLines
 
         if (OperatingSystem.IsLinux())
         {
-            return ReadLinuxRecords(pids);
+            return WindowsNativeProcessInspection.ProcessInspectionResult.Success(ReadLinuxRecords(pids));
         }
 
-        return new Dictionary<int, ProcessInspectionRecord>();
+        return WindowsNativeProcessInspection.ProcessInspectionResult.Success(
+            new Dictionary<int, ProcessInspectionRecord>());
     }
+
+    private static ProcessCommandLineSnapshot ToSnapshot(
+        WindowsNativeProcessInspection.ProcessInspectionResult result) =>
+        new(result.Records, result.Failure);
 
     private static IReadOnlyDictionary<int, ProcessInspectionRecord> ReadLinuxRecords(IEnumerable<int> pids)
     {
@@ -179,14 +186,25 @@ public sealed class ProcessCommandLineSnapshot
     internal ProcessCommandLineSnapshot(
         IReadOnlyDictionary<int, ProcessInspectionRecord> records,
         Action<int>? onRead = null)
+        : this(records, failure: null, onRead)
+    {
+    }
+
+    internal ProcessCommandLineSnapshot(
+        IReadOnlyDictionary<int, ProcessInspectionRecord> records,
+        ProcessInspectionFailure? failure,
+        Action<int>? onRead = null)
     {
         _records = records;
+        Failure = failure;
         _onRead = onRead;
     }
 
     public static ProcessCommandLineSnapshot Empty { get; } = new(new Dictionary<int, string>());
 
     public IReadOnlyDictionary<int, ProcessInspectionRecord> Records => _records;
+
+    public ProcessInspectionFailure? Failure { get; }
 
     public bool TryGetRecord(int processId, out ProcessInspectionRecord record) =>
         _records.TryGetValue(processId, out record!);
