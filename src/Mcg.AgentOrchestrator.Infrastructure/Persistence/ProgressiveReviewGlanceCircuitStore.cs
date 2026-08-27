@@ -32,6 +32,34 @@ public sealed record ProgressiveReviewGlanceCircuitAdmission(
     string? OpeningReason = null,
     int SuppressionCount = 0);
 
+public sealed record ProgressiveReviewGlanceSuppressionObservation(
+    string RoundKey,
+    string GoalId,
+    string TaskId,
+    string CircuitIdentity,
+    string AdmissionOutcome,
+    string OpeningCause,
+    string OriginalReason,
+    bool ChangedFilesTrigger,
+    int AvoidedInputTokens,
+    long AdmissionLatencyMilliseconds,
+    string ProbeOutcome);
+
+public sealed record ProgressiveReviewGlanceSuppressionAggregate(
+    string RoundKey,
+    string GoalId,
+    string TaskId,
+    string CircuitIdentity,
+    string AdmissionOutcome,
+    string OpeningCause,
+    string OriginalReason,
+    int AvoidedCallCount,
+    int AvoidedInputTokens,
+    long AdmissionLatencyMilliseconds,
+    int ChangedFilesTriggerCount,
+    int ElapsedTriggerCount,
+    string ProbeOutcome);
+
 public interface IProgressiveReviewGlanceCircuitStore
 {
     ProgressiveReviewGlanceCircuitAdmission TryAcquireProbe(
@@ -47,12 +75,18 @@ public interface IProgressiveReviewGlanceCircuitStore
         string completionCause,
         string completionReason,
         DateTimeOffset now);
+
+    void AccumulateSuppression(ProgressiveReviewGlanceSuppressionObservation observation);
+
+    IReadOnlyList<ProgressiveReviewGlanceSuppressionAggregate> DrainInactiveSuppressions(
+        IReadOnlySet<string> activeRoundKeys);
 }
 
 public sealed class InMemoryProgressiveReviewGlanceCircuitStore : IProgressiveReviewGlanceCircuitStore
 {
     private readonly object _gate = new();
     private readonly Dictionary<string, Entry> _entries = new(StringComparer.Ordinal);
+    private readonly Dictionary<string, SuppressionEntry> _suppressions = new(StringComparer.Ordinal);
 
     public ProgressiveReviewGlanceCircuitAdmission TryAcquireProbe(
         ProgressiveReviewGlanceContractIdentity identity,
@@ -130,6 +164,44 @@ public sealed class InMemoryProgressiveReviewGlanceCircuitStore : IProgressiveRe
         }
     }
 
+    public void AccumulateSuppression(ProgressiveReviewGlanceSuppressionObservation observation)
+    {
+        ProgressiveReviewGlanceCircuitSuppression.Validate(observation);
+        var key = ProgressiveReviewGlanceCircuitSuppression.AggregationKey(observation);
+        lock (_gate)
+        {
+            if (!_suppressions.TryGetValue(key, out var aggregate))
+            {
+                aggregate = new SuppressionEntry(observation);
+                _suppressions.Add(key, aggregate);
+            }
+            else
+            {
+                aggregate.AssertCompatible(observation);
+            }
+
+            aggregate.Add(observation);
+        }
+    }
+
+    public IReadOnlyList<ProgressiveReviewGlanceSuppressionAggregate> DrainInactiveSuppressions(
+        IReadOnlySet<string> activeRoundKeys)
+    {
+        ArgumentNullException.ThrowIfNull(activeRoundKeys);
+        lock (_gate)
+        {
+            var keys = _suppressions
+                .Where(pair => !activeRoundKeys.Contains(pair.Value.RoundKey))
+                .Select(pair => pair.Key)
+                .Order(StringComparer.Ordinal)
+                .ToArray();
+            var drained = keys.Select(key => _suppressions[key].Snapshot()).ToArray();
+            foreach (var key in keys)
+                _suppressions.Remove(key);
+            return drained;
+        }
+    }
+
     private sealed class Entry(
         string state,
         string? leaseId,
@@ -144,6 +216,60 @@ public sealed class InMemoryProgressiveReviewGlanceCircuitStore : IProgressiveRe
         public string? Cause { get; } = cause;
         public string? Reason { get; } = reason;
         public int SuppressionCount { get; set; } = suppressionCount;
+    }
+
+    private sealed class SuppressionEntry(ProgressiveReviewGlanceSuppressionObservation first)
+    {
+        public string RoundKey { get; } = first.RoundKey;
+        private string GoalId { get; } = first.GoalId;
+        private string TaskId { get; } = first.TaskId;
+        private string CircuitIdentity { get; } = first.CircuitIdentity;
+        private string AdmissionOutcome { get; } = first.AdmissionOutcome;
+        private string OpeningCause { get; } = first.OpeningCause;
+        private string OriginalReason { get; } = first.OriginalReason;
+        private string ProbeOutcome { get; } = first.ProbeOutcome;
+        private int AvoidedCallCount { get; set; }
+        private int AvoidedInputTokens { get; set; }
+        private long AdmissionLatencyMilliseconds { get; set; }
+        private int ChangedFilesTriggerCount { get; set; }
+        private int ElapsedTriggerCount { get; set; }
+
+        public void AssertCompatible(ProgressiveReviewGlanceSuppressionObservation observation)
+        {
+            if (!GoalId.Equals(observation.GoalId, StringComparison.Ordinal) ||
+                !TaskId.Equals(observation.TaskId, StringComparison.Ordinal) ||
+                !OpeningCause.Equals(observation.OpeningCause, StringComparison.Ordinal) ||
+                !OriginalReason.Equals(observation.OriginalReason, StringComparison.Ordinal))
+            {
+                throw new InvalidOperationException("progressive glance suppression window metadata changed");
+            }
+        }
+
+        public void Add(ProgressiveReviewGlanceSuppressionObservation observation)
+        {
+            AvoidedCallCount++;
+            AvoidedInputTokens += observation.AvoidedInputTokens;
+            AdmissionLatencyMilliseconds += observation.AdmissionLatencyMilliseconds;
+            if (observation.ChangedFilesTrigger)
+                ChangedFilesTriggerCount++;
+            else
+                ElapsedTriggerCount++;
+        }
+
+        public ProgressiveReviewGlanceSuppressionAggregate Snapshot() => new(
+            RoundKey,
+            GoalId,
+            TaskId,
+            CircuitIdentity,
+            AdmissionOutcome,
+            OpeningCause,
+            OriginalReason,
+            AvoidedCallCount,
+            AvoidedInputTokens,
+            AdmissionLatencyMilliseconds,
+            ChangedFilesTriggerCount,
+            ElapsedTriggerCount,
+            ProbeOutcome);
     }
 }
 
@@ -219,6 +345,92 @@ public sealed class SqliteProgressiveReviewGlanceCircuitStore : IProgressiveRevi
             command.ExecuteNonQuery();
             Execute(connection, "COMMIT");
             return new(ProgressiveReviewGlanceCircuitAdmissionKind.ProbeAcquired, key, leaseId);
+        }
+        catch
+        {
+            TryRollback(connection);
+            throw;
+        }
+    }
+
+    public void AccumulateSuppression(ProgressiveReviewGlanceSuppressionObservation observation)
+    {
+        ProgressiveReviewGlanceCircuitSuppression.Validate(observation);
+        var key = ProgressiveReviewGlanceCircuitSuppression.AggregationKey(observation);
+        using var connection = OpenConnection();
+        Execute(connection, "BEGIN IMMEDIATE");
+        try
+        {
+            var existing = ReadSuppression(connection, key);
+            if (existing is not null)
+            {
+                existing.AssertCompatible(observation);
+                using var update = connection.CreateCommand();
+                update.CommandText = """
+                    UPDATE progressive_review_glance_suppressions
+                    SET avoided_call_count = avoided_call_count + 1,
+                        avoided_input_tokens = avoided_input_tokens + $tokens,
+                        admission_latency_ms = admission_latency_ms + $latency,
+                        changed_files_trigger_count = changed_files_trigger_count + $changed,
+                        elapsed_trigger_count = elapsed_trigger_count + $elapsed,
+                        updated_at = $updated
+                    WHERE aggregation_key = $key
+                    """;
+                AddSuppressionIncrement(update, observation);
+                update.Parameters.AddWithValue("$updated", Format(DateTimeOffset.UtcNow));
+                update.Parameters.AddWithValue("$key", key);
+                if (update.ExecuteNonQuery() != 1)
+                    throw new InvalidOperationException("progressive glance suppression window disappeared during update");
+            }
+            else
+            {
+                using var insert = connection.CreateCommand();
+                insert.CommandText = """
+                    INSERT INTO progressive_review_glance_suppressions (
+                        aggregation_key, round_key, goal_id, task_id, circuit_identity,
+                        admission_outcome, opening_cause, original_reason, probe_outcome,
+                        avoided_call_count, avoided_input_tokens, admission_latency_ms,
+                        changed_files_trigger_count, elapsed_trigger_count, updated_at)
+                    VALUES ($key, $round, $goal, $task, $circuit, $admission, $cause, $reason, $probe,
+                            1, $tokens, $latency, $changed, $elapsed, $updated)
+                    """;
+                AddSuppressionMetadata(insert, key, observation);
+                AddSuppressionIncrement(insert, observation);
+                insert.Parameters.AddWithValue("$updated", Format(DateTimeOffset.UtcNow));
+                insert.ExecuteNonQuery();
+            }
+
+            Execute(connection, "COMMIT");
+        }
+        catch
+        {
+            TryRollback(connection);
+            throw;
+        }
+    }
+
+    public IReadOnlyList<ProgressiveReviewGlanceSuppressionAggregate> DrainInactiveSuppressions(
+        IReadOnlySet<string> activeRoundKeys)
+    {
+        ArgumentNullException.ThrowIfNull(activeRoundKeys);
+        using var connection = OpenConnection();
+        Execute(connection, "BEGIN IMMEDIATE");
+        try
+        {
+            var inactive = ReadSuppressions(connection)
+                .Where(row => !activeRoundKeys.Contains(row.RoundKey))
+                .ToArray();
+            foreach (var row in inactive)
+            {
+                using var delete = connection.CreateCommand();
+                delete.CommandText = "DELETE FROM progressive_review_glance_suppressions WHERE aggregation_key = $key";
+                delete.Parameters.AddWithValue("$key", row.AggregationKey);
+                if (delete.ExecuteNonQuery() != 1)
+                    throw new InvalidOperationException("progressive glance suppression window disappeared during drain");
+            }
+
+            Execute(connection, "COMMIT");
+            return inactive.Select(row => row.Aggregate).ToArray();
         }
         catch
         {
@@ -328,6 +540,88 @@ public sealed class SqliteProgressiveReviewGlanceCircuitStore : IProgressiveRevi
                 updated_at             TEXT NOT NULL
             )
             """);
+        Execute(connection, """
+            CREATE TABLE IF NOT EXISTS progressive_review_glance_suppressions (
+                aggregation_key            TEXT PRIMARY KEY,
+                round_key                  TEXT NOT NULL,
+                goal_id                    TEXT NOT NULL,
+                task_id                    TEXT NOT NULL,
+                circuit_identity           TEXT NOT NULL,
+                admission_outcome          TEXT NOT NULL,
+                opening_cause              TEXT NOT NULL,
+                original_reason            TEXT NOT NULL,
+                probe_outcome               TEXT NOT NULL,
+                avoided_call_count          INTEGER NOT NULL,
+                avoided_input_tokens        INTEGER NOT NULL,
+                admission_latency_ms        INTEGER NOT NULL,
+                changed_files_trigger_count INTEGER NOT NULL,
+                elapsed_trigger_count       INTEGER NOT NULL,
+                updated_at                  TEXT NOT NULL
+            )
+            """);
+    }
+
+    private static SuppressionRow? ReadSuppression(SqliteConnection connection, string key)
+    {
+        using var command = connection.CreateCommand();
+        command.CommandText = SuppressionSelect + " WHERE aggregation_key = $key";
+        command.Parameters.AddWithValue("$key", key);
+        using var reader = command.ExecuteReader();
+        return reader.Read() ? ReadSuppressionRow(reader) : null;
+    }
+
+    private static List<SuppressionRow> ReadSuppressions(SqliteConnection connection)
+    {
+        using var command = connection.CreateCommand();
+        command.CommandText = SuppressionSelect + " ORDER BY aggregation_key";
+        using var reader = command.ExecuteReader();
+        var rows = new List<SuppressionRow>();
+        while (reader.Read())
+            rows.Add(ReadSuppressionRow(reader));
+        return rows;
+    }
+
+    private static SuppressionRow ReadSuppressionRow(SqliteDataReader reader) => new(
+        reader.GetString(0),
+        new ProgressiveReviewGlanceSuppressionAggregate(
+            reader.GetString(1),
+            reader.GetString(2),
+            reader.GetString(3),
+            reader.GetString(4),
+            reader.GetString(5),
+            reader.GetString(6),
+            reader.GetString(7),
+            reader.GetInt32(9),
+            reader.GetInt32(10),
+            reader.GetInt64(11),
+            reader.GetInt32(12),
+            reader.GetInt32(13),
+            reader.GetString(8)));
+
+    private static void AddSuppressionMetadata(
+        SqliteCommand command,
+        string key,
+        ProgressiveReviewGlanceSuppressionObservation observation)
+    {
+        command.Parameters.AddWithValue("$key", key);
+        command.Parameters.AddWithValue("$round", observation.RoundKey);
+        command.Parameters.AddWithValue("$goal", observation.GoalId);
+        command.Parameters.AddWithValue("$task", observation.TaskId);
+        command.Parameters.AddWithValue("$circuit", observation.CircuitIdentity);
+        command.Parameters.AddWithValue("$admission", observation.AdmissionOutcome);
+        command.Parameters.AddWithValue("$cause", observation.OpeningCause);
+        command.Parameters.AddWithValue("$reason", observation.OriginalReason);
+        command.Parameters.AddWithValue("$probe", observation.ProbeOutcome);
+    }
+
+    private static void AddSuppressionIncrement(
+        SqliteCommand command,
+        ProgressiveReviewGlanceSuppressionObservation observation)
+    {
+        command.Parameters.AddWithValue("$tokens", observation.AvoidedInputTokens);
+        command.Parameters.AddWithValue("$latency", observation.AdmissionLatencyMilliseconds);
+        command.Parameters.AddWithValue("$changed", observation.ChangedFilesTrigger ? 1 : 0);
+        command.Parameters.AddWithValue("$elapsed", observation.ChangedFilesTrigger ? 0 : 1);
     }
 
     private static CircuitRow? Read(SqliteConnection connection, string key)
@@ -394,4 +688,58 @@ public sealed class SqliteProgressiveReviewGlanceCircuitStore : IProgressiveRevi
         DateTimeOffset? LeaseExpiresAt,
         string? Cause,
         string? Reason);
+
+    private sealed record SuppressionRow(
+        string AggregationKey,
+        ProgressiveReviewGlanceSuppressionAggregate Aggregate)
+    {
+        public string RoundKey => Aggregate.RoundKey;
+
+        public void AssertCompatible(ProgressiveReviewGlanceSuppressionObservation observation)
+        {
+            if (!Aggregate.GoalId.Equals(observation.GoalId, StringComparison.Ordinal) ||
+                !Aggregate.TaskId.Equals(observation.TaskId, StringComparison.Ordinal) ||
+                !Aggregate.OpeningCause.Equals(observation.OpeningCause, StringComparison.Ordinal) ||
+                !Aggregate.OriginalReason.Equals(observation.OriginalReason, StringComparison.Ordinal))
+            {
+                throw new InvalidOperationException("progressive glance suppression window metadata changed");
+            }
+        }
+    }
+
+    private const string SuppressionSelect = """
+        SELECT aggregation_key, round_key, goal_id, task_id, circuit_identity,
+               admission_outcome, opening_cause, original_reason, probe_outcome,
+               avoided_call_count, avoided_input_tokens, admission_latency_ms,
+               changed_files_trigger_count, elapsed_trigger_count
+        FROM progressive_review_glance_suppressions
+        """;
+}
+
+internal static class ProgressiveReviewGlanceCircuitSuppression
+{
+    public static string AggregationKey(ProgressiveReviewGlanceSuppressionObservation observation) =>
+        Convert.ToHexStringLower(SHA256.HashData(Encoding.UTF8.GetBytes(string.Join(
+            "\n",
+            observation.RoundKey,
+            observation.CircuitIdentity,
+            observation.AdmissionOutcome,
+            observation.ProbeOutcome))));
+
+    public static void Validate(ProgressiveReviewGlanceSuppressionObservation observation)
+    {
+        ArgumentNullException.ThrowIfNull(observation);
+        if (string.IsNullOrWhiteSpace(observation.RoundKey) ||
+            string.IsNullOrWhiteSpace(observation.GoalId) ||
+            string.IsNullOrWhiteSpace(observation.TaskId) ||
+            string.IsNullOrWhiteSpace(observation.CircuitIdentity) ||
+            string.IsNullOrWhiteSpace(observation.AdmissionOutcome) ||
+            string.IsNullOrWhiteSpace(observation.OpeningCause) ||
+            string.IsNullOrWhiteSpace(observation.ProbeOutcome) ||
+            observation.AvoidedInputTokens < 0 ||
+            observation.AdmissionLatencyMilliseconds < 0)
+        {
+            throw new ArgumentException("progressive glance suppression observation is incomplete or invalid", nameof(observation));
+        }
+    }
 }

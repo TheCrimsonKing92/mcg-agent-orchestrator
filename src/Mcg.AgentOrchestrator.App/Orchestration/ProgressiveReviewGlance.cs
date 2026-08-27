@@ -483,7 +483,7 @@ Transcript tail:
         {
             admissionStopwatch.Stop();
             AccumulateCircuitSuppression(
-                state,
+                roundKey,
                 goal.Id,
                 task.Id,
                 trigger.Value,
@@ -503,7 +503,7 @@ Transcript tail:
         if (admission.Kind != ProgressiveReviewGlanceCircuitAdmissionKind.ProbeAcquired)
         {
             AccumulateCircuitSuppression(
-                state,
+                roundKey,
                 goal.Id,
                 task.Id,
                 trigger.Value,
@@ -1697,7 +1697,7 @@ Corrective direction:
             FailureCause: cause);
 
     private void AccumulateCircuitSuppression(
-        RoundState state,
+        string roundKey,
         GoalId goalId,
         TaskId taskId,
         ProgressiveReviewGlanceTriggerKind trigger,
@@ -1710,59 +1710,73 @@ Corrective direction:
         string probeOutcome,
         List<string> lines)
     {
-        if (state.PendingCircuitSuppression is { } pending &&
-            (!pending.CircuitIdentity.Equals(circuitIdentity, StringComparison.Ordinal) ||
-             !pending.AdmissionOutcome.Equals(admissionOutcome, StringComparison.Ordinal)))
-        {
-            FlushCircuitSuppression(state, lines);
-        }
-
-        state.PendingCircuitSuppression ??= new CircuitSuppressionAggregate(
-            goalId,
-            taskId,
+        var observation = new ProgressiveReviewGlanceSuppressionObservation(
+            roundKey,
+            goalId.Value,
+            taskId.Value,
             circuitIdentity,
             admissionOutcome,
             openingCause,
             originalReason,
+            trigger == ProgressiveReviewGlanceTriggerKind.ChangedFiles,
+            avoidedInputTokens,
+            admissionLatencyMilliseconds,
             probeOutcome);
-        state.PendingCircuitSuppression.Add(trigger, avoidedInputTokens, admissionLatencyMilliseconds);
+        try
+        {
+            _circuitStore.AccumulateSuppression(observation);
+        }
+        catch (Exception ex)
+        {
+            TryAppendCircuitReceipt(
+                goalId,
+                taskId,
+                SuppressionReceipt(new ProgressiveReviewGlanceSuppressionAggregate(
+                    roundKey,
+                    goalId.Value,
+                    taskId.Value,
+                    circuitIdentity,
+                    admissionOutcome,
+                    openingCause,
+                    originalReason,
+                    1,
+                    avoidedInputTokens,
+                    admissionLatencyMilliseconds,
+                    trigger == ProgressiveReviewGlanceTriggerKind.ChangedFiles ? 1 : 0,
+                    trigger == ProgressiveReviewGlanceTriggerKind.Elapsed ? 1 : 0,
+                    probeOutcome)),
+                lines);
+            lines.Add($"GLANCE goal={Short(goalId.Value)} task={Short(taskId.Value)} result=suppression-persistence-failed error={BoundSingleLine(ex.Message, 300)}");
+        }
     }
 
     private void FlushInactiveCircuitSuppressions(IReadOnlySet<string> activeRoundKeys, List<string> lines)
     {
-        foreach (var pair in _rounds)
+        foreach (var aggregate in _circuitStore.DrainInactiveSuppressions(activeRoundKeys))
         {
-            if (!activeRoundKeys.Contains(pair.Key))
-                FlushCircuitSuppression(pair.Value, lines);
+            TryAppendCircuitReceipt(
+                new GoalId(aggregate.GoalId),
+                new TaskId(aggregate.TaskId),
+                SuppressionReceipt(aggregate),
+                lines);
         }
     }
 
-    private void FlushCircuitSuppression(RoundState state, List<string> lines)
-    {
-        var aggregate = state.PendingCircuitSuppression;
-        if (aggregate is null)
-            return;
-
-        TryAppendCircuitReceipt(
-            aggregate.GoalId,
-            aggregate.TaskId,
-            new ProgressiveReviewGlanceCircuitReceipt(
-                aggregate.CircuitIdentity,
-                aggregate.AdmissionOutcome,
-                aggregate.OpeningCause,
-                aggregate.OriginalReason,
-                0,
-                aggregate.AvoidedCallCount,
-                aggregate.AvoidedInputTokens,
-                null,
-                "provider-output-not-produced",
-                aggregate.AdmissionLatencyMilliseconds,
-                aggregate.ChangedFilesTriggerCount,
-                aggregate.ElapsedTriggerCount,
-                aggregate.ProbeOutcome),
-            lines);
-        state.PendingCircuitSuppression = null;
-    }
+    private static ProgressiveReviewGlanceCircuitReceipt SuppressionReceipt(
+        ProgressiveReviewGlanceSuppressionAggregate aggregate) => new(
+            aggregate.CircuitIdentity,
+            aggregate.AdmissionOutcome,
+            aggregate.OpeningCause,
+            aggregate.OriginalReason,
+            0,
+            aggregate.AvoidedCallCount,
+            aggregate.AvoidedInputTokens,
+            null,
+            "provider-output-not-produced",
+            aggregate.AdmissionLatencyMilliseconds,
+            aggregate.ChangedFilesTriggerCount,
+            aggregate.ElapsedTriggerCount,
+            aggregate.ProbeOutcome);
 
     private static string Short(string value) => value.Length <= 8 ? value : value[..8];
 
@@ -1809,45 +1823,7 @@ Corrective direction:
         public TimeSpan NextElapsedThreshold { get; set; }
         public DateTimeOffset? LastChangeProbeAt { get; set; }
         public bool ConcernsSurfaced { get; set; }
-        public CircuitSuppressionAggregate? PendingCircuitSuppression { get; set; }
         public List<string> QueuedConcerns { get; } = [];
-    }
-
-    private sealed class CircuitSuppressionAggregate(
-        GoalId goalId,
-        TaskId taskId,
-        string circuitIdentity,
-        string admissionOutcome,
-        string openingCause,
-        string originalReason,
-        string probeOutcome)
-    {
-        public GoalId GoalId { get; } = goalId;
-        public TaskId TaskId { get; } = taskId;
-        public string CircuitIdentity { get; } = circuitIdentity;
-        public string AdmissionOutcome { get; } = admissionOutcome;
-        public string OpeningCause { get; } = openingCause;
-        public string OriginalReason { get; } = originalReason;
-        public string ProbeOutcome { get; } = probeOutcome;
-        public int AvoidedCallCount { get; private set; }
-        public int AvoidedInputTokens { get; private set; }
-        public long AdmissionLatencyMilliseconds { get; private set; }
-        public int ChangedFilesTriggerCount { get; private set; }
-        public int ElapsedTriggerCount { get; private set; }
-
-        public void Add(
-            ProgressiveReviewGlanceTriggerKind trigger,
-            int avoidedInputTokens,
-            long admissionLatencyMilliseconds)
-        {
-            AvoidedCallCount++;
-            AvoidedInputTokens += avoidedInputTokens;
-            AdmissionLatencyMilliseconds += admissionLatencyMilliseconds;
-            if (trigger == ProgressiveReviewGlanceTriggerKind.ChangedFiles)
-                ChangedFilesTriggerCount++;
-            else
-                ElapsedTriggerCount++;
-        }
     }
 
     private sealed class GoalSummary
