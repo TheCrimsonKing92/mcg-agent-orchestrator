@@ -60,6 +60,13 @@ public sealed class WorkerDispatchTestsSeededRepositoryFactoryTests
         Xunit.Assert.True(receipt.StandardOutputByteCount > 0);
         Xunit.Assert.Equal(0, receipt.StandardErrorByteCount);
         Xunit.Assert.Equal(created.FixtureAttemptId, receipt.FixtureAttemptId);
+        if (OperatingSystem.IsWindows())
+        {
+            Xunit.Assert.Contains(
+                "capture=owned-file-handles",
+                receipt.EnvironmentContract,
+                StringComparison.Ordinal);
+        }
     }
 
     [Xunit.Fact]
@@ -84,6 +91,27 @@ public sealed class WorkerDispatchTestsSeededRepositoryFactoryTests
         Xunit.Assert.False(failure.Diagnostic.FileSystem.GitMetadataDirectoryExists);
         Xunit.Assert.False(failure.Diagnostic.Git.ProcessStarted);
         Xunit.Assert.True(Directory.Exists(failure.Diagnostic.SourceTemplatePath));
+    }
+
+    [Xunit.Fact]
+    public void Create_MetadataRemovedAfterCopy_RetainsPriorProbeReceipts()
+    {
+        using var scope = new FactoryScope(new WorkerDispatchTestsSeededRepositoryFactory.CreationHooks(
+            AfterCopy: (template, _) =>
+                WorkerDispatchTestsSeededRepositoryFactory.DeleteOwnedDirectory(Path.Combine(template, ".git"))));
+
+        var failure = Xunit.Assert.Throws<
+            WorkerDispatchTestsSeededRepositoryFactory.SeededRepositoryFailureException>(
+                () => scope.Factory.Create());
+
+        Xunit.Assert.Equal(
+            WorkerDispatchTestsSeededRepositoryFactory.ValidationCheck.TemplateAfterCopyMetadata,
+            failure.Diagnostic.Check);
+        Xunit.Assert.NotEmpty(failure.Diagnostic.ProbeReceipts!);
+        Xunit.Assert.Contains(
+            failure.Diagnostic.ProbeReceipts!,
+            receipt => receipt.Check ==
+                WorkerDispatchTestsSeededRepositoryFactory.ValidationCheck.TemplateStatus);
     }
 
     [Xunit.Fact]
@@ -406,6 +434,7 @@ public sealed class WorkerDispatchTestsSeededRepositoryFactoryTests
         using var bothCopiesReady = new ManualResetEventSlim(false);
         var coordinated = 0;
         var copyCount = 0;
+        var coordinationTimedOut = 0;
         using var scope = new FactoryScope(new WorkerDispatchTestsSeededRepositoryFactory.CreationHooks(
             AfterCopy: (_, staging) =>
             {
@@ -420,7 +449,12 @@ public sealed class WorkerDispatchTestsSeededRepositoryFactoryTests
                     bothCopiesReady.Set();
                 }
 
-                Xunit.Assert.True(bothCopiesReady.Wait(TimeSpan.FromSeconds(20)));
+                if (!bothCopiesReady.Wait(TimeSpan.FromSeconds(20)))
+                {
+                    Volatile.Write(ref coordinationTimedOut, 1);
+                    return;
+                }
+
                 if (ordinal == 1)
                 {
                     File.Delete(Path.Combine(staging, ".git", "HEAD"));
@@ -440,6 +474,8 @@ public sealed class WorkerDispatchTestsSeededRepositoryFactoryTests
             TaskCreationOptions.LongRunning,
             TaskScheduler.Default);
         var outcomes = Task.WhenAll(first, second).GetAwaiter().GetResult();
+        Xunit.Assert.Equal(0, Volatile.Read(ref coordinationTimedOut));
+        Xunit.Assert.Equal(2, Volatile.Read(ref copyCount));
         var success = Xunit.Assert.Single(outcomes, outcome => outcome.Result is not null).Result!;
         var failure = Xunit.Assert.Single(outcomes, outcome => outcome.Failure is not null).Failure!;
 

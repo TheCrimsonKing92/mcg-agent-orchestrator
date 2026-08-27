@@ -398,7 +398,8 @@ internal sealed class WorkerDispatchTestsSeededRepositoryFactory
                 observation,
                 GitProbeResult.NotRun("filesystem repository path", "Repository directory is missing."),
                 templateIdentity,
-                stagingIdentity);
+                stagingIdentity,
+                probeReceipts: attempt.Receipts);
         }
 
         if (!observation.GitMetadataDirectoryExists)
@@ -411,7 +412,8 @@ internal sealed class WorkerDispatchTestsSeededRepositoryFactory
                 observation,
                 GitProbeResult.NotRun("git rev-parse --git-dir", "Expected .git directory is missing."),
                 templateIdentity,
-                stagingIdentity);
+                stagingIdentity,
+                probeReceipts: attempt.Receipts);
         }
 
         var headResult = RequiredProbe(

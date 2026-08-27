@@ -82,11 +82,6 @@ internal static WorkerDispatchTestsSeededRepositoryFactory.GitProbeResult RunGit
     var startInfo = new ProcessStartInfo
     {
         FileName = executable,
-        RedirectStandardInput = true,
-        RedirectStandardOutput = true,
-        RedirectStandardError = true,
-        StandardOutputEncoding = Encoding.UTF8,
-        StandardErrorEncoding = Encoding.UTF8,
         UseShellExecute = false,
         CreateNoWindow = true,
         WorkingDirectory = workingDirectory
@@ -143,6 +138,21 @@ internal static WorkerDispatchTestsSeededRepositoryFactory.GitProbeResult RunGit
     {
         startInfo.ArgumentList.Add(argument);
     }
+
+    if (OperatingSystem.IsWindows() && startProcess is null)
+    {
+        return RunGitProbeWithOwnedFileCapture(
+            startInfo,
+            workingDirectory,
+            command,
+            environmentContract + "; capture=owned-file-handles; inheritedHandles=stdout,stderr");
+    }
+
+    startInfo.RedirectStandardInput = true;
+    startInfo.RedirectStandardOutput = true;
+    startInfo.RedirectStandardError = true;
+    startInfo.StandardOutputEncoding = Encoding.UTF8;
+    startInfo.StandardErrorEncoding = Encoding.UTF8;
 
     Process? process = null;
     var processStarted = false;
@@ -283,6 +293,157 @@ internal static WorkerDispatchTestsSeededRepositoryFactory.GitProbeResult RunGit
     finally
     {
         process?.Dispose();
+    }
+}
+
+private static WorkerDispatchTestsSeededRepositoryFactory.GitProbeResult RunGitProbeWithOwnedFileCapture(
+    ProcessStartInfo startInfo,
+    string workingDirectory,
+    string command,
+    string environmentContract)
+{
+    var repositoryDirectory = Path.GetFullPath(workingDirectory);
+    var gitDirectory = Path.Combine(repositoryDirectory, ".git");
+    var captureDirectory = Directory.Exists(gitDirectory) ? gitDirectory : repositoryDirectory;
+    var captureIdentity = $".mcg-git-probe-{Guid.NewGuid():N}";
+    var standardOutputPath = Path.Combine(captureDirectory, captureIdentity + ".stdout");
+    var standardErrorPath = Path.Combine(captureDirectory, captureIdentity + ".stderr");
+    OwnedProcessGroup.SuspendedProcessStart? launch = null;
+    Process? process = null;
+    var processStarted = false;
+    int? childProcessId = null;
+    DateTimeOffset? childStartedAt = null;
+    try
+    {
+        launch = OwnedProcessGroup.StartSuspendedContainedWithFileCapture(
+            startInfo,
+            standardOutputPath,
+            standardErrorPath);
+        process = launch.Process;
+        processStarted = true;
+        command = FormatCommand(startInfo.FileName, startInfo.ArgumentList);
+        childProcessId = process.Id;
+        try
+        {
+            childStartedAt = process.StartTime.ToUniversalTime();
+        }
+        catch (Exception ex) when (ex is InvalidOperationException or System.ComponentModel.Win32Exception)
+        {
+            childStartedAt = null;
+        }
+
+        launch.Resume();
+        var timedOut = false;
+        using (var timeout = new CancellationTokenSource(TimeSpan.FromSeconds(60)))
+        {
+            try
+            {
+                process.WaitForExitAsync(timeout.Token).GetAwaiter().GetResult();
+            }
+            catch (OperationCanceledException)
+            {
+                timedOut = true;
+                launch.Group.Kill();
+                try { process.WaitForExit(5000); } catch { }
+            }
+        }
+
+        var standardOutputCapture = CaptureFile(standardOutputPath);
+        var standardErrorCapture = CaptureFile(standardErrorPath);
+        var standardOutput = Encoding.UTF8.GetString(standardOutputCapture.Prefix);
+        var standardError = Encoding.UTF8.GetString(standardErrorCapture.Prefix);
+        var boundedOutput = WorkerDispatchTestsSeededRepositoryFactory.GitProbeResult.BoundDiagnostic(standardOutput);
+        var boundedError = WorkerDispatchTestsSeededRepositoryFactory.GitProbeResult.BoundDiagnostic(standardError);
+        return new WorkerDispatchTestsSeededRepositoryFactory.GitProbeResult(
+            command,
+            ProcessStarted: true,
+            ExitCode: process.HasExited ? process.ExitCode : null,
+            StandardOutput: boundedOutput,
+            StandardError: boundedError,
+            DrainTimedOut: false,
+            TimedOut: timedOut,
+            DrainFailed: false,
+            EnvironmentContract: environmentContract,
+            Executable: startInfo.FileName,
+            Arguments: startInfo.ArgumentList.ToArray(),
+            RepositoryDirectory: repositoryDirectory,
+            StandardOutputByteCount: standardOutputCapture.ByteCount,
+            StandardErrorByteCount: standardErrorCapture.ByteCount,
+            StandardOutputTruncated: standardOutputCapture.PrefixTruncated || boundedOutput.Length != standardOutput.Length,
+            StandardErrorTruncated: standardErrorCapture.PrefixTruncated || boundedError.Length != standardError.Length,
+            ChildProcessId: childProcessId,
+            ChildStartedAt: childStartedAt,
+            Classification: ClassifyGitProbe(
+                processStarted: true,
+                process.HasExited ? process.ExitCode : null,
+                timedOut,
+                drainTimedOut: false,
+                drainFailed: false));
+    }
+    catch (Exception ex)
+    {
+        int? observedExitCode = null;
+        if (processStarted && process is not null)
+        {
+            try
+            {
+                observedExitCode = process.HasExited ? process.ExitCode : null;
+            }
+            catch (InvalidOperationException)
+            {
+                // The parent-side observation failed after the native launch created the Git child.
+            }
+        }
+
+        var boundedError = WorkerDispatchTestsSeededRepositoryFactory.GitProbeResult.BoundDiagnostic(ex.Message);
+        return new WorkerDispatchTestsSeededRepositoryFactory.GitProbeResult(
+            command,
+            processStarted,
+            observedExitCode,
+            string.Empty,
+            boundedError,
+            DrainTimedOut: false,
+            TimedOut: false,
+            DrainFailed: false,
+            EnvironmentContract: environmentContract,
+            Executable: startInfo.FileName,
+            Arguments: startInfo.ArgumentList.ToArray(),
+            RepositoryDirectory: repositoryDirectory,
+            StandardErrorByteCount: Encoding.UTF8.GetByteCount(ex.Message),
+            StandardErrorTruncated: boundedError.Length != ex.Message.Length,
+            ChildProcessId: childProcessId,
+            ChildStartedAt: childStartedAt,
+            Classification: processStarted
+                ? WorkerDispatchTestsSeededRepositoryFactory.GitProbeClassification.ProcessObservationFailure
+                : WorkerDispatchTestsSeededRepositoryFactory.GitProbeClassification.LaunchFailure);
+    }
+    finally
+    {
+        launch?.Dispose();
+        TryDeleteCaptureFile(standardOutputPath);
+        TryDeleteCaptureFile(standardErrorPath);
+    }
+}
+
+private static CapturedStream CaptureFile(string path)
+{
+    using var stream = new FileStream(
+        path,
+        FileMode.Open,
+        FileAccess.Read,
+        FileShare.ReadWrite | FileShare.Delete);
+    return CaptureStreamAsync(stream).GetAwaiter().GetResult();
+}
+
+private static void TryDeleteCaptureFile(string path)
+{
+    try
+    {
+        File.Delete(path);
+    }
+    catch
+    {
+        // The attempt-owned repository cleanup remains the backstop for a file still held by a failed child.
     }
 }
 
