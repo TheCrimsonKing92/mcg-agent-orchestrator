@@ -267,6 +267,7 @@ public sealed class ProgressiveReviewGlanceTests
         var now = dispatchedAt;
         var runner = new ControlledGlanceRunner();
         var events = new RecordingGlanceEvents();
+        var circuitStore = new UnavailableProgressiveReviewGlanceCircuitStore(varyFailureReason: true);
         var (kernel, goal, _) = RunningDeveloperRound(dispatchedAt);
         var changes = new DispatchLiveChangeSnapshot(["changed.cs"], ["changed.cs"], 0);
         var coordinator = NewCoordinator(
@@ -279,26 +280,37 @@ public sealed class ProgressiveReviewGlanceTests
                 PerRoundBudget: 10),
             () => now,
             liveChanges: (_, _) => changes,
-            circuitStore: new UnavailableProgressiveReviewGlanceCircuitStore(varyFailureReason: true));
+            circuitStore: circuitStore);
 
-        _ = coordinator.Observe(kernel, [goal]);
+        var progressLines = new List<string>();
+        progressLines.AddRange(coordinator.Observe(kernel, [goal]).ProgressLines);
         now = dispatchedAt.AddMinutes(2);
-        _ = coordinator.Observe(kernel, [goal]);
+        progressLines.AddRange(coordinator.Observe(kernel, [goal]).ProgressLines);
         now = dispatchedAt.AddMinutes(3);
-        _ = coordinator.Observe(kernel, [goal]);
+        progressLines.AddRange(coordinator.Observe(kernel, [goal]).ProgressLines);
 
         Xunit.Assert.Empty(events.CircuitReceipts);
-        _ = coordinator.Observe(kernel, []);
+        Xunit.Assert.Empty(runner.Calls);
+        progressLines.AddRange(coordinator.Observe(kernel, []).ProgressLines);
 
         Xunit.Assert.Empty(runner.Calls);
         var receipt = Xunit.Assert.Single(events.CircuitReceipts);
         Xunit.Assert.Equal("AdmissionUnavailable", receipt.OpeningCause);
         Xunit.Assert.Equal("admission-unavailable", receipt.ProbeOutcome);
-        Xunit.Assert.Equal("circuit admission unavailable:1", receipt.OriginalReason);
+        Xunit.Assert.Equal("suppression-persistence-unavailable", receipt.OriginalReason);
         Xunit.Assert.Equal(3, receipt.AvoidedCallCount);
         Xunit.Assert.Equal(1, receipt.ChangedFilesTriggerCount);
         Xunit.Assert.Equal(2, receipt.ElapsedTriggerCount);
+        Xunit.Assert.Equal(
+            circuitStore.SuppressionObservations.Sum(observation => observation.AvoidedInputTokens),
+            receipt.AvoidedInputTokens);
         Xunit.Assert.True(receipt.AvoidedInputTokens > 0);
+        var persistenceDiagnostics = progressLines
+            .Where(line => line.Contains("result=suppression-persistence-failed", StringComparison.Ordinal))
+            .ToArray();
+        var diagnostic = Xunit.Assert.Single(persistenceDiagnostics);
+        Xunit.Assert.Contains("error=suppression persistence unavailable:1", diagnostic, StringComparison.Ordinal);
+        Xunit.Assert.DoesNotContain("suppression persistence unavailable:2", diagnostic, StringComparison.Ordinal);
     }
 
     [Xunit.Fact]
@@ -2025,6 +2037,9 @@ public sealed class ProgressiveReviewGlanceTests
     {
         private readonly bool _varyFailureReason;
         private int _admissionAttempts;
+        private int _suppressionAttempts;
+
+        public List<ProgressiveReviewGlanceSuppressionObservation> SuppressionObservations { get; } = [];
 
         public UnavailableProgressiveReviewGlanceCircuitStore(bool varyFailureReason = false)
         {
@@ -2052,8 +2067,14 @@ public sealed class ProgressiveReviewGlanceTests
             DateTimeOffset now) =>
             throw new InvalidOperationException("circuit completion unavailable");
 
-        public void AccumulateSuppression(ProgressiveReviewGlanceSuppressionObservation observation) =>
-            throw new InvalidOperationException("suppression persistence unavailable");
+        public void AccumulateSuppression(ProgressiveReviewGlanceSuppressionObservation observation)
+        {
+            SuppressionObservations.Add(observation);
+            var attempt = Interlocked.Increment(ref _suppressionAttempts);
+            throw new InvalidOperationException(_varyFailureReason
+                ? $"suppression persistence unavailable:{attempt}"
+                : "suppression persistence unavailable");
+        }
 
         public IReadOnlyList<ProgressiveReviewGlanceSuppressionAggregate> DrainInactiveSuppressions(
             IReadOnlySet<string> activeRoundKeys) =>

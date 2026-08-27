@@ -1731,7 +1731,10 @@ Corrective direction:
         }
         catch (Exception ex)
         {
-            _fallbackSuppressionStore.AccumulateSuppression(observation);
+            _fallbackSuppressionStore.AccumulateSuppression(observation with
+            {
+                OriginalReason = "suppression-persistence-unavailable"
+            });
             if (_fallbackSuppressionWindows.Add(FallbackSuppressionKey(
                 observation.RoundKey,
                 observation.CircuitIdentity,
