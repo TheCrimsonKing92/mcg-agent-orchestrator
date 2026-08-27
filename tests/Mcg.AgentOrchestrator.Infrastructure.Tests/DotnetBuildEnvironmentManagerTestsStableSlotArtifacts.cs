@@ -339,6 +339,10 @@ public sealed class DotnetBuildEnvironmentManagerTestsStableSlotArtifacts
         using var _ = EnvVarScope.ForIsolatedDotnetRoot();
         var slot0 = DotnetBuildEnvironmentManager.CreateStableSlotAttempt(0);
         using var holder = StartSleepProcess();
+        var ownerArtifactsPath = Path.Combine(
+            Path.GetDirectoryName(Path.GetDirectoryName(slot0.ArtifactsPath))!,
+            $"p{holder.Id}-build-0",
+            "artifacts");
         Directory.CreateDirectory(Path.GetDirectoryName(slot0.ExecutionLockPath)!);
         using var heldSlotLock = new FileStream(
             slot0.ExecutionLockPath,
@@ -357,7 +361,7 @@ public sealed class DotnetBuildEnvironmentManagerTestsStableSlotArtifacts
                         Version = 1,
                         slot0.LeaseId,
                         slot0.SlotOwnerToken,
-                        slot0.ArtifactsPath,
+                        ArtifactsPath = ownerArtifactsPath,
                         OwnerProcessId = holder.Id,
                         MachineName = Environment.MachineName,
                         AcquiredAt = DateTimeOffset.UtcNow
@@ -417,6 +421,10 @@ public sealed class DotnetBuildEnvironmentManagerTestsStableSlotArtifacts
         using var _ = EnvVarScope.ForIsolatedDotnetRoot();
         var slot0 = DotnetBuildEnvironmentManager.CreateStableSlotAttempt(0);
         using var holder = StartSleepProcess();
+        var ownerArtifactsPath = Path.Combine(
+            Path.GetDirectoryName(Path.GetDirectoryName(slot0.ArtifactsPath))!,
+            $"p{holder.Id}-build-0",
+            "artifacts");
         Directory.CreateDirectory(Path.GetDirectoryName(slot0.ExecutionLockPath)!);
         File.WriteAllText(
             slot0.ExecutionLockPath + ".owner.json",
@@ -426,7 +434,7 @@ public sealed class DotnetBuildEnvironmentManagerTestsStableSlotArtifacts
                     Version = 1,
                     slot0.LeaseId,
                     slot0.SlotOwnerToken,
-                    slot0.ArtifactsPath,
+                    ArtifactsPath = ownerArtifactsPath,
                     OwnerProcessId = holder.Id,
                     MachineName = Environment.MachineName,
                     AcquiredAt = DateTimeOffset.UtcNow

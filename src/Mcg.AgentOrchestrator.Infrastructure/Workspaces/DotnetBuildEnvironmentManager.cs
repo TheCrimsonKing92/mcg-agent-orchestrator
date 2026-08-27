@@ -1425,11 +1425,10 @@ public static class DotnetBuildEnvironmentManager
     {
         if (metadata is null ||
             metadata.OwnerProcessId == Environment.ProcessId ||
-            string.IsNullOrWhiteSpace(metadata.ArtifactsPath) ||
-            !NormalizeForCommandLineMatch(metadata.ArtifactsPath)
-                .Equals(
-                    NormalizeForCommandLineMatch(environment.ArtifactsPath),
-                    StringComparison.OrdinalIgnoreCase) ||
+            string.IsNullOrWhiteSpace(metadata.SlotOwnerToken) ||
+            !metadata.SlotOwnerToken.Equals(
+                environment.SlotOwnerToken,
+                StringComparison.OrdinalIgnoreCase) ||
             (!string.IsNullOrWhiteSpace(metadata.MachineName) &&
                 !metadata.MachineName.Equals(Environment.MachineName, StringComparison.OrdinalIgnoreCase)) ||
             !snapshot.Records.TryGetValue(metadata.OwnerProcessId, out var record) ||
