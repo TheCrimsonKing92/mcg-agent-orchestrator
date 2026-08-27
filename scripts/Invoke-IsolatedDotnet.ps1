@@ -6,7 +6,7 @@
     Microsoft.Testing.Platform (MTP) test projects build and run in one dotnet test invocation,
     with outputs routed into the goal's isolated artifact root. Use the same -GoalPrefix with
     -ReuseArtifacts for later no-build timing passes. Reuse verifies the goal owner, test assembly,
-    and MTP executable before running xUnit directly without invoking MSBuild.
+    and generated MTP apphost before running the test assembly through dotnet without invoking MSBuild.
     Builds share a two-lock machine-wide pool; test results never use the lock path.
 
 Set MCG_DOTNET_FORCE_CLEAN_STALE_LEASE_ARTIFACTS=1 to force stale-lease recovery to wipe
@@ -1978,7 +1978,7 @@ try {
             $exitCode = 86
         }
         else {
-            Write-Host "Reusing test assembly '$($reuse.AssemblyPath)' and MTP executable '$($reuse.ExecutablePath)' with dependency directory '$($reuse.DependencyDirectory)'."
+            Write-Host "Reusing test assembly '$($reuse.AssemblyPath)' with validated generated apphost '$($reuse.ExecutablePath)' and dependency directory '$($reuse.DependencyDirectory)'."
         }
     }
 
@@ -1991,7 +1991,7 @@ try {
             $lockStream.Dispose()
             $lockStream = $null
             $lockHeld = $false
-            & $reuse.ExecutablePath @mtpArguments
+            & dotnet $reuse.AssemblyPath @mtpArguments
         }
         else {
             if ($DotnetArguments[0].Equals("test", [System.StringComparison]::OrdinalIgnoreCase)) {

@@ -5,4 +5,8 @@ if (string.IsNullOrWhiteSpace(receiptPath))
 }
 
 File.WriteAllLines(receiptPath, args);
-return 0;
+return int.TryParse(
+    Environment.GetEnvironmentVariable("MCG_ISOLATED_DOTNET_MTP_PROBE_EXIT_CODE"),
+    out var exitCode)
+    ? exitCode
+    : 0;

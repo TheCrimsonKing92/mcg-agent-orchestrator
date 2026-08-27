@@ -1984,6 +1984,7 @@ public sealed class GoalWorktreeIsolatedDotnetTests : GoalWorktreeTestBase
             Assert.DoesNotContain("args=test ", log, StringComparison.Ordinal);
             Assert.DoesNotContain("args=build ", log, StringComparison.Ordinal);
             Assert.Contains("args=build-server shutdown", log, StringComparison.Ordinal);
+            Assert.Contains($"args={fixture.AssemblyPath} ", log, StringComparison.OrdinalIgnoreCase);
 
             var source = File.ReadAllText(Path.Combine(FindCurrentSourceRoot(), "scripts", "Invoke-IsolatedDotnet.ps1"));
             Assert.Contains(".SYNOPSIS", source, StringComparison.Ordinal);
@@ -2024,6 +2025,57 @@ public sealed class GoalWorktreeIsolatedDotnetTests : GoalWorktreeTestBase
             var log = File.ReadAllText(fixture.DotnetLogPath);
             Assert.DoesNotContain("args=test ", log, StringComparison.Ordinal);
             Assert.Contains("args=build-server shutdown", log, StringComparison.Ordinal);
+        }
+        finally
+        {
+            DeleteDirectory(fixture.Root);
+        }
+    }
+
+    [Xunit.Fact(DisplayName = "InvokeIsolatedDotnet_reuse_requires_the_generated_apphost_as_an_artifact_invariant")]
+    public async Task InvokeIsolatedDotnetReuseRequiresGeneratedApphost()
+    {
+        if (!OperatingSystem.IsWindows())
+        {
+            return;
+        }
+
+        var fixture = CreateReuseFixture(includeAssembly: true, includeExecutable: false);
+        try
+        {
+            var result = await RunReusePassAsync(fixture);
+
+            Assert.Equal(86, result.ExitCode);
+            Assert.Contains("The reusable Microsoft.Testing.Platform executable was not found.", result.Stderr, StringComparison.Ordinal);
+            Assert.Contains(fixture.ExecutablePath, result.Stderr, StringComparison.OrdinalIgnoreCase);
+            Assert.False(File.Exists(fixture.ProbeReceiptPath));
+        }
+        finally
+        {
+            DeleteDirectory(fixture.Root);
+        }
+    }
+
+    [Xunit.Fact(DisplayName = "InvokeIsolatedDotnet_reuse_propagates_dotnet_host_exit_code")]
+    public async Task InvokeIsolatedDotnetReusePropagatesDotnetHostExitCode()
+    {
+        if (!OperatingSystem.IsWindows())
+        {
+            return;
+        }
+
+        const int expectedExitCode = 37;
+        var fixture = CreateReuseFixture(includeAssembly: true);
+        try
+        {
+            var result = await RunReusePassAsync(fixture, probeExitCode: expectedExitCode);
+
+            Assert.Equal(expectedExitCode, result.ExitCode);
+            Assert.True(File.Exists(fixture.ProbeReceiptPath));
+            Assert.Contains(
+                $"args={fixture.AssemblyPath} ",
+                File.ReadAllText(fixture.DotnetLogPath),
+                StringComparison.OrdinalIgnoreCase);
         }
         finally
         {
@@ -2103,7 +2155,8 @@ public sealed class GoalWorktreeIsolatedDotnetTests : GoalWorktreeTestBase
     private static ReuseFixture CreateReuseFixture(
         bool includeAssembly,
         TimeSpan? shimDelay = null,
-        bool shimNeverExits = false)
+        bool shimNeverExits = false,
+        bool includeExecutable = true)
     {
         Assert.False(shimDelay.HasValue && shimNeverExits, "A shim cannot be delayed and never-exiting at the same time.");
         var root = Path.Combine(Path.GetTempPath(), "mcg-isolated-dotnet-reuse-tests", Guid.NewGuid().ToString("N"));
@@ -2139,11 +2192,16 @@ public sealed class GoalWorktreeIsolatedDotnetTests : GoalWorktreeTestBase
         {
             File.Delete(assemblyPath);
         }
+        if (!includeExecutable)
+        {
+            File.Delete(executablePath);
+        }
 
         var shimLines = new List<string>
         {
             "@echo off",
-            ">> \"%DOTNET_SHIM_LOG%\" echo args=%*"
+            ">> \"%DOTNET_SHIM_LOG%\" echo args=%*",
+            "if not \"%~1\"==\"build-server\" goto run-real-dotnet"
         };
         if (shimDelay.HasValue)
         {
@@ -2159,6 +2217,10 @@ public sealed class GoalWorktreeIsolatedDotnetTests : GoalWorktreeTestBase
                 "Set-Content -LiteralPath $env:DOTNET_SHIM_READY_PATH -Value ready; while ($true) { Start-Sleep -Seconds 60 }\"");
         }
         shimLines.Add("exit /b 0");
+        shimLines.Add(":run-real-dotnet");
+        shimLines.Add("set \"PATH=%DOTNET_REAL_PATH%\"");
+        shimLines.Add("dotnet.exe %*");
+        shimLines.Add("exit /b %ERRORLEVEL%");
         File.WriteAllLines(Path.Combine(shimDirectory, "dotnet.cmd"), shimLines);
 
         return new ReuseFixture(
@@ -2179,7 +2241,8 @@ public sealed class GoalWorktreeIsolatedDotnetTests : GoalWorktreeTestBase
     private static async Task<(int ExitCode, string Stdout, string Stderr)> RunReusePassAsync(
         ReuseFixture fixture,
         TimeSpan? hangGuard = null,
-        bool waitForShimReadiness = false)
+        bool waitForShimReadiness = false,
+        int? probeExitCode = null)
     {
         var activeHangGuard = hangGuard ?? RealProcessExitHangGuard;
         var startInfo = new ProcessStartInfo
@@ -2212,11 +2275,17 @@ public sealed class GoalWorktreeIsolatedDotnetTests : GoalWorktreeTestBase
         startInfo.ArgumentList.Add("minimal");
         startInfo.ArgumentList.Add("--filter");
         startInfo.ArgumentList.Add("FullyQualifiedName~IsolatedDotnetProbe");
-        startInfo.Environment["PATH"] = fixture.ShimDirectory + Path.PathSeparator + (Environment.GetEnvironmentVariable("PATH") ?? string.Empty);
+        var realDotnetPath = Environment.GetEnvironmentVariable("PATH") ?? string.Empty;
+        startInfo.Environment["PATH"] = fixture.ShimDirectory + Path.PathSeparator + realDotnetPath;
+        startInfo.Environment["DOTNET_REAL_PATH"] = realDotnetPath;
         startInfo.Environment["DOTNET_SHIM_LOG"] = fixture.DotnetLogPath;
         startInfo.Environment["DOTNET_SHIM_READY_PATH"] = fixture.ShimReadyPath;
         startInfo.Environment["DOTNET_SHIM_CHILD_PID"] = fixture.ShimChildPidPath;
         startInfo.Environment["MCG_ISOLATED_DOTNET_MTP_PROBE_PATH"] = fixture.ProbeReceiptPath;
+        if (probeExitCode.HasValue)
+        {
+            startInfo.Environment["MCG_ISOLATED_DOTNET_MTP_PROBE_EXIT_CODE"] = probeExitCode.Value.ToString(System.Globalization.CultureInfo.InvariantCulture);
+        }
         startInfo.Environment[DotnetBuildEnvironmentManager.IsolatedRootOverrideVariable] = fixture.IsolatedRoot;
         startInfo.Environment.Remove(WorkerSandboxOptions.DispatchWorkerVariable);
 
