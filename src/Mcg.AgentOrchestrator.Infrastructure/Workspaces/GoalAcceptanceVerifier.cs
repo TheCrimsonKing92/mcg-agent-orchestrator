@@ -38,7 +38,9 @@ public sealed record AcceptanceCheckResult(
 
 public sealed record AcceptanceFailureCauseEvidence(
     AcceptanceFailureCause Cause,
-    string Evidence);
+    string Evidence,
+    string? CheckName = null,
+    string? SourceClassification = null);
 
 internal sealed record AcceptanceProcessCleanupObservation(
     int ProcessId,
@@ -797,6 +799,11 @@ public sealed class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
         }
 
         phaseAccountant.TransitionTo(AcceptanceGatePhaseNames.Finalize);
+        for (var index = 0; index < checks.Count; index++)
+        {
+            checks[index] = AttachFailureCauseEvidence(checks[index]);
+        }
+
         var failedCheck = checks.FirstOrDefault(check => !check.Advisory && !check.Passed);
         var artifactsPath = checks.LastOrDefault(check => !string.IsNullOrWhiteSpace(check.ArtifactsPath))?.ArtifactsPath;
         var testResultPaths = CollectTestResultPaths(checks);
@@ -823,6 +830,63 @@ public sealed class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
         {
             throw AcceptanceGateEngineException.Capture(exception, phaseAccountant.Snapshot);
         }
+    }
+
+    internal static AcceptanceCheckResult AttachFailureCauseEvidence(AcceptanceCheckResult check)
+    {
+        ArgumentNullException.ThrowIfNull(check);
+
+        if (check.Passed)
+        {
+            return check with { FailureCauseEvidence = null };
+        }
+
+        var classification = string.IsNullOrWhiteSpace(check.FailureClassification)
+            ? null
+            : check.FailureClassification.Trim();
+        var classifiedCause = classification switch
+        {
+            AcceptanceFailureClassifications.GateEnvironmentInterference or
+            AcceptanceFailureClassifications.FocusedSelectionApparatusFailure or
+            AcceptanceFailureClassifications.FocusedSelectionReceiptUnreadable =>
+                AcceptanceFailureCause.EnvironmentalApparatus,
+            _ => (AcceptanceFailureCause?)null
+        };
+
+        var supplied = check.FailureCauseEvidence;
+        if (supplied is not null &&
+            (!Enum.IsDefined(supplied.Cause) ||
+             supplied.Cause == AcceptanceFailureCause.NotClassified ||
+             string.IsNullOrWhiteSpace(supplied.Evidence) ||
+             supplied.CheckName is not null &&
+             !supplied.CheckName.Equals(check.Name, StringComparison.Ordinal) ||
+             supplied.SourceClassification is not null &&
+             (classification is null ||
+              !supplied.SourceClassification.Equals(classification, StringComparison.Ordinal))))
+        {
+            return check with { FailureCauseEvidence = null };
+        }
+
+        if (classifiedCause is null)
+        {
+            return check;
+        }
+
+        if (supplied is not null && supplied.Cause != classifiedCause)
+        {
+            return check with { FailureCauseEvidence = null };
+        }
+
+        var evidence = supplied?.Evidence.Trim() ??
+            $"check={JsonSerializer.Serialize(check.Name)}; failureClassification={JsonSerializer.Serialize(classification)}";
+        return check with
+        {
+            FailureCauseEvidence = new AcceptanceFailureCauseEvidence(
+                classifiedCause.Value,
+                evidence,
+                check.Name,
+                classification)
+        };
     }
 
     private static bool ShouldCaptureGateEngineFault(Exception exception) =>

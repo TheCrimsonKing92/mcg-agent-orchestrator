@@ -105,9 +105,8 @@ public sealed partial class ConductorDriverTestsAcceptanceCoordination
             false,
             1,
             "diagnostic text is not consulted",
-            FailureCauseEvidence: new AcceptanceFailureCauseEvidence(
-                AcceptanceFailureCause.EnvironmentalApparatus,
-                "git child receipt: exit=0; stdoutBytes=0; repositoryHead=valid"));
+            FailureClassification: AcceptanceFailureClassifications.GateEnvironmentInterference);
+        failedCheck = GoalAcceptanceVerifier.AttachFailureCauseEvidence(failedCheck);
 
         var baseline = CleanTestBaseline.Resolve(journals, current, "main-a", null);
         var attributions = CleanTestBaseline.Attribute(
@@ -130,8 +129,12 @@ public sealed partial class ConductorDriverTestsAcceptanceCoordination
         var attribution = Assert.Single(classified.CheckAttributions!);
         Assert.Equal(AcceptanceFailureOrigin.Inherited, attribution.Origin);
         Assert.Equal(AcceptanceFailureCause.EnvironmentalApparatus, attribution.Cause);
+        Assert.Equal(failedCheck.Name, failedCheck.FailureCauseEvidence?.CheckName);
         Assert.Equal(
-            AcceptanceFailureClassifications.InheritedBaselineApparatus,
+            AcceptanceFailureClassifications.GateEnvironmentInterference,
+            failedCheck.FailureCauseEvidence?.SourceClassification);
+        Assert.Equal(
+            AcceptanceFailureClassifications.GateEnvironmentInterference,
             Assert.Single(classified.RequiredUnmetCriteria).FailureClassification);
     }
 

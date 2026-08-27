@@ -77,6 +77,79 @@ public sealed class CleanTestBaselineTests
     }
 
     [Xunit.Fact]
+    public void AttributeVerifierClassificationReceiptSuppliesCauseWithExactIdentity()
+    {
+        var current = GoalId.New();
+        var first = GoalId.New();
+        var second = GoalId.New();
+        const string checkName = "infrastructure tests: Remainder";
+        var journals = Journals(
+            (first, Entry(first, "main-a", "failed", [checkName])),
+            (second, Entry(second, "main-a", "failed", [checkName])));
+        var verifierReceipt = GoalAcceptanceVerifier.AttachFailureCauseEvidence(
+            new AcceptanceCheckResult(
+                checkName,
+                false,
+                1,
+                "diagnostic text is not cause evidence",
+                FailureClassification: AcceptanceFailureClassifications.GateEnvironmentInterference));
+
+        var baseline = CleanTestBaseline.Resolve(journals, current, "main-a", null);
+        var attribution = Assert.Single(CleanTestBaseline.Attribute(
+            baseline,
+            [checkName],
+            journals,
+            current,
+            "main-a",
+            [verifierReceipt]));
+
+        Assert.Equal(AcceptanceFailureCause.EnvironmentalApparatus, attribution.Cause);
+        Assert.Equal(checkName, verifierReceipt.FailureCauseEvidence?.CheckName);
+        Assert.Equal(
+            AcceptanceFailureClassifications.GateEnvironmentInterference,
+            verifierReceipt.FailureCauseEvidence?.SourceClassification);
+        Assert.Contains(checkName, attribution.Evidence, StringComparison.Ordinal);
+    }
+
+    [Xunit.Fact]
+    public void VerifierClassificationReceiptMissingConflictingOrUndefinedCauseFailsClosed()
+    {
+        const string checkName = "infrastructure tests: Remainder";
+        var missing = GoalAcceptanceVerifier.AttachFailureCauseEvidence(
+            new AcceptanceCheckResult(checkName, false, 1, null));
+        var blank = GoalAcceptanceVerifier.AttachFailureCauseEvidence(
+            new AcceptanceCheckResult(checkName, false, 1, null, FailureClassification: " "));
+        var unknown = GoalAcceptanceVerifier.AttachFailureCauseEvidence(
+            new AcceptanceCheckResult(checkName, false, 1, null, FailureClassification: "unknown-cause"));
+        var conflicting = GoalAcceptanceVerifier.AttachFailureCauseEvidence(
+            new AcceptanceCheckResult(
+                checkName,
+                false,
+                1,
+                null,
+                FailureClassification: AcceptanceFailureClassifications.GateEnvironmentInterference,
+                FailureCauseEvidence: new AcceptanceFailureCauseEvidence(
+                    AcceptanceFailureCause.FixturePublication,
+                    "repository bytes invalid")));
+        var undefined = GoalAcceptanceVerifier.AttachFailureCauseEvidence(
+            new AcceptanceCheckResult(
+                checkName,
+                false,
+                1,
+                null,
+                FailureClassification: AcceptanceFailureClassifications.GateEnvironmentInterference,
+                FailureCauseEvidence: new AcceptanceFailureCauseEvidence(
+                    (AcceptanceFailureCause)int.MaxValue,
+                    "undefined")));
+
+        Assert.Null(missing.FailureCauseEvidence);
+        Assert.Null(blank.FailureCauseEvidence);
+        Assert.Null(unknown.FailureCauseEvidence);
+        Assert.Null(conflicting.FailureCauseEvidence);
+        Assert.Null(undefined.FailureCauseEvidence);
+    }
+
+    [Xunit.Fact]
     public void AttributeConflictingOrMalformedCauseEvidenceRemainsUnclassified()
     {
         var current = GoalId.New();
