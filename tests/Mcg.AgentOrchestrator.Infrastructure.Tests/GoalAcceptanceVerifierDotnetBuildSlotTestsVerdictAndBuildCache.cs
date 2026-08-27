@@ -31,14 +31,12 @@ public sealed class GoalAcceptanceVerifierDotnetBuildSlotTestsVerdictAndBuildCac
                     remainderRuns++;
                     return Task.FromResult(remainderRuns < 3
                         ? new GoalAcceptanceVerifier.CommandResult(1, "Failed! - Failed: 1, Passed: 0, Skipped: 0, Total: 1.")
-                        : new GoalAcceptanceVerifier.CommandResult(0, "Passed! - Failed: 0, Passed: 1, Skipped: 0, Total: 1."));
+                        : CreatePassingVstestResult(args, "RemainderPartition.Passes"));
                 }
 
-                return Task.FromResult(new GoalAcceptanceVerifier.CommandResult(
-                    0,
-                    args.Length > 1 && args[0] == "dotnet" && args[1] == "test"
-                        ? "Passed! - Failed: 0, Passed: 1, Skipped: 0, Total: 1."
-                        : ""));
+                return Task.FromResult(IsVstestCall(args)
+                    ? CreatePassingVstestResult(args)
+                    : new GoalAcceptanceVerifier.CommandResult(0, ""));
             });
 
             Environment.SetEnvironmentVariable(
@@ -111,11 +109,9 @@ public sealed class GoalAcceptanceVerifierDotnetBuildSlotTestsVerdictAndBuildCac
                         "Failed! - Failed: 1, Passed: 0, Skipped: 0, Total: 1."));
                 }
 
-                return Task.FromResult(new GoalAcceptanceVerifier.CommandResult(
-                    0,
-                    args.Length > 1 && args[0] == "dotnet" && args[1] == "test"
-                        ? "Passed! - Failed: 0, Passed: 1, Skipped: 0, Total: 1."
-                        : ""));
+                return Task.FromResult(IsVstestCall(args)
+                    ? CreatePassingVstestResult(args)
+                    : new GoalAcceptanceVerifier.CommandResult(0, ""));
             });
 
             var result = await verifier.RunAsync(root, goalId);
@@ -168,15 +164,9 @@ public sealed class GoalAcceptanceVerifierDotnetBuildSlotTestsVerdictAndBuildCac
                         : new GoalAcceptanceVerifier.CommandResult(0, "Passed! - Failed: 0, Passed: 1, Skipped: 0, Total: 1."));
                 }
 
-                if (args.Length > 1 && args[0] == "dotnet" && args[1] == "test")
-                {
-                    WriteVstestTrx(args, "UnrelatedPartition.Passes");
-                }
-                return Task.FromResult(new GoalAcceptanceVerifier.CommandResult(
-                    0,
-                    args.Length > 1 && args[0] == "dotnet" && args[1] == "test"
-                        ? "Passed! - Failed: 0, Passed: 1, Skipped: 0, Total: 1."
-                        : ""));
+                return Task.FromResult(IsVstestCall(args)
+                    ? CreatePassingVstestResult(args, "UnrelatedPartition.Passes")
+                    : new GoalAcceptanceVerifier.CommandResult(0, ""));
             });
 
             var result = await verifier.RunAsync(root, goalId);
@@ -325,11 +315,9 @@ public sealed class GoalAcceptanceVerifierDotnetBuildSlotTestsVerdictAndBuildCac
                     return Task.FromResult(new GoalAcceptanceVerifier.CommandResult(1, "unrelated failure"));
                 }
 
-                return Task.FromResult(new GoalAcceptanceVerifier.CommandResult(
-                    0,
-                    args.Length > 1 && args[0] == "dotnet" && args[1] == "test"
-                        ? "Passed! - Failed: 0, Passed: 1, Skipped: 0, Total: 1."
-                        : ""));
+                return Task.FromResult(IsVstestCall(args)
+                    ? CreatePassingVstestResult(args)
+                    : new GoalAcceptanceVerifier.CommandResult(0, ""));
             });
 
             var result = await verifier.RunAsync(root, goalId);
@@ -362,11 +350,9 @@ public sealed class GoalAcceptanceVerifierDotnetBuildSlotTestsVerdictAndBuildCac
             var verifier = new GoalAcceptanceVerifier((args, _, _) =>
             {
                 calls.Add(args);
-                return Task.FromResult(new GoalAcceptanceVerifier.CommandResult(
-                    0,
-                    args.Length > 1 && args[0] == "dotnet" && args[1] == "test"
-                        ? "Passed! - Failed: 0, Passed: 1, Skipped: 0, Total: 1."
-                        : ""));
+                return Task.FromResult(IsVstestCall(args)
+                    ? CreatePassingVstestResult(args)
+                    : new GoalAcceptanceVerifier.CommandResult(0, ""));
             });
 
             Assert.True((await verifier.RunAsync(root, goalId)).Passed);
@@ -405,11 +391,9 @@ public sealed class GoalAcceptanceVerifierDotnetBuildSlotTestsVerdictAndBuildCac
             var verifier = new GoalAcceptanceVerifier((args, _, _) =>
             {
                 calls.Add(args);
-                return Task.FromResult(new GoalAcceptanceVerifier.CommandResult(
-                    0,
-                    args.Length > 1 && args[0] == "dotnet" && args[1] == "test"
-                        ? "Passed! - Failed: 0, Passed: 1, Skipped: 0, Total: 1."
-                        : ""));
+                return Task.FromResult(IsVstestCall(args)
+                    ? CreatePassingVstestResult(args)
+                    : new GoalAcceptanceVerifier.CommandResult(0, ""));
             });
 
             Assert.True((await verifier.RunAsync(root, goalId)).Passed);
@@ -448,11 +432,9 @@ public sealed class GoalAcceptanceVerifierDotnetBuildSlotTestsVerdictAndBuildCac
             var verifier = new GoalAcceptanceVerifier((args, _, _) =>
             {
                 calls.Add(args);
-                return Task.FromResult(new GoalAcceptanceVerifier.CommandResult(
-                    0,
-                    args.Length > 1 && args[0] == "dotnet" && args[1] == "test"
-                        ? "Passed! - Failed: 0, Passed: 1, Skipped: 0, Total: 1."
-                        : ""));
+                return Task.FromResult(IsVstestCall(args)
+                    ? CreatePassingVstestResult(args)
+                    : new GoalAcceptanceVerifier.CommandResult(0, ""));
             });
 
             Assert.True((await verifier.RunAsync(root, goalId)).Passed);
@@ -503,11 +485,9 @@ public sealed class GoalAcceptanceVerifierDotnetBuildSlotTestsVerdictAndBuildCac
                         "Failed! - Failed: 1, Passed: 0, Skipped: 0, Total: 1."));
                 }
 
-                return Task.FromResult(new GoalAcceptanceVerifier.CommandResult(
-                    0,
-                    args.Length > 1 && args[0] == "dotnet" && args[1] == "test"
-                        ? "Passed! - Failed: 0, Passed: 1, Skipped: 0, Total: 1."
-                        : ""));
+                return Task.FromResult(IsVstestCall(args)
+                    ? CreatePassingVstestResult(args)
+                    : new GoalAcceptanceVerifier.CommandResult(0, ""));
             });
 
             Assert.True((await verifier.RunAsync(root, goalId)).Passed);
@@ -593,9 +573,7 @@ public sealed class GoalAcceptanceVerifierDotnetBuildSlotTestsVerdictAndBuildCac
 
                 if (args.Length >= 2 && args[0] == "dotnet" && args[1] == "test")
                 {
-                    return Task.FromResult(new GoalAcceptanceVerifier.CommandResult(
-                        0,
-                        "Passed! - Failed: 0, Passed: 1, Skipped: 0, Total: 1."));
+                    return Task.FromResult(CreatePassingVstestResult(args));
                 }
 
                 return Task.FromResult(new GoalAcceptanceVerifier.CommandResult(0, ""));
@@ -691,9 +669,7 @@ public sealed class GoalAcceptanceVerifierDotnetBuildSlotTestsVerdictAndBuildCac
 
                 if (args.Length >= 2 && args[0] == "dotnet" && args[1] == "test")
                 {
-                    return Task.FromResult(new GoalAcceptanceVerifier.CommandResult(
-                        0,
-                        "Passed! - Failed: 0, Passed: 1, Skipped: 0, Total: 1."));
+                    return Task.FromResult(CreatePassingVstestResult(args));
                 }
 
                 return Task.FromResult(new GoalAcceptanceVerifier.CommandResult(0, ""));
@@ -806,9 +782,7 @@ public sealed class GoalAcceptanceVerifierDotnetBuildSlotTestsVerdictAndBuildCac
 
                 if (args.Length >= 2 && args[0] == "dotnet" && args[1] == "test")
                 {
-                    return Task.FromResult(new GoalAcceptanceVerifier.CommandResult(
-                        0,
-                        "Passed! - Failed: 0, Passed: 1, Skipped: 0, Total: 1."));
+                    return Task.FromResult(CreatePassingVstestResult(args));
                 }
 
                 return Task.FromResult(new GoalAcceptanceVerifier.CommandResult(0, ""));
@@ -916,5 +890,20 @@ public sealed class GoalAcceptanceVerifierDotnetBuildSlotTestsVerdictAndBuildCac
         File.WriteAllText(
             Path.Combine(resultsDirectory, arguments[loggerIndex + 1][prefix.Length..]),
             $"<TestRun><TestDefinitions><UnitTest id=\"1\" name=\"{testName}\"><TestMethod className=\"CliPartition\" name=\"Passes\" /></UnitTest></TestDefinitions><Results><UnitTestResult testId=\"1\" testName=\"{testName}\" outcome=\"Passed\" /></Results><ResultSummary outcome=\"Passed\"><Counters total=\"1\" executed=\"1\" passed=\"1\" failed=\"0\" /></ResultSummary></TestRun>");
+    }
+
+    private static bool IsVstestCall(string[] arguments) =>
+        arguments.Length > 1 &&
+        arguments[0] == "dotnet" &&
+        arguments[1] == "test";
+
+    private static GoalAcceptanceVerifier.CommandResult CreatePassingVstestResult(
+        string[] arguments,
+        string testName = "GreenPartition.Passes")
+    {
+        WriteVstestTrx(arguments, testName);
+        return new GoalAcceptanceVerifier.CommandResult(
+            0,
+            "Passed! - Failed: 0, Passed: 1, Skipped: 0, Total: 1.");
     }
 }

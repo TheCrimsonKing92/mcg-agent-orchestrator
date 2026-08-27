@@ -1,4 +1,5 @@
 using System.Reflection;
+using Mcg.AgentOrchestrator.App.Orchestration;
 using Mcg.AgentOrchestrator.Infrastructure;
 
 [Xunit.Collection(TestCollections.GoalAcceptanceVerifier)]
@@ -1553,8 +1554,8 @@ public sealed class AcceptanceGateEngineSettingsTests
                 }
 
                 invocations++;
-                WriteVstestTrx(arguments, "RemainderTests.Passes");
-                return Task.FromResult(new GoalAcceptanceVerifier.CommandResult(0, "Passed: 1"));
+                WriteVstestTrx(arguments, "RemainderTests.Passes", testCount: 110);
+                return Task.FromResult(new GoalAcceptanceVerifier.CommandResult(0, "Passed: 110"));
             });
 
             Environment.SetEnvironmentVariable(
@@ -1565,7 +1566,23 @@ public sealed class AcceptanceGateEngineSettingsTests
             Xunit.Assert.True(result.Passed);
             Xunit.Assert.False(result.Retried);
             Xunit.Assert.Equal(1, invocations);
-            Xunit.Assert.Single(result.Checks!, check => check.Name == checkName);
+            var partition = Xunit.Assert.Single(result.Checks!, check => check.Name == checkName);
+            Xunit.Assert.Equal(110, partition.DiscoveredTestCount);
+            Xunit.Assert.Equal(110, partition.ExecutedTestCount);
+            Xunit.Assert.Equal(0, partition.TestResultRunOrdinal);
+            var trxPath = Xunit.Assert.Single(partition.TestResultPaths!);
+            Xunit.Assert.True(File.Exists(trxPath));
+            Xunit.Assert.DoesNotContain("-run-1", Path.GetFileName(trxPath), StringComparison.Ordinal);
+
+            var attemptDirectory = Path.GetDirectoryName(attemptPrefix)!;
+            var attemptFilePrefix = Path.GetFileName(attemptPrefix);
+            var heartbeatPath = Xunit.Assert.Single(Directory.GetFiles(
+                attemptDirectory,
+                $"{attemptFilePrefix}.infrastructure-tests-remainder*.gate-heartbeat.json"));
+            Xunit.Assert.DoesNotContain("-run-1", Path.GetFileName(heartbeatPath), StringComparison.Ordinal);
+            Xunit.Assert.DoesNotContain(
+                GoalOperationJournal.Read(root, goalId).Entries,
+                entry => entry.Operation == "acceptance:partition-within-attempt-retry");
         }
         finally
         {
@@ -1942,7 +1959,8 @@ public sealed class AcceptanceGateEngineSettingsTests
     private static void WriteVstestTrx(
         string[] arguments,
         string testName,
-        string outcome = "Passed")
+        string outcome = "Passed",
+        int testCount = 1)
     {
         var resultsDirectoryIndex = Array.IndexOf(arguments, "--results-directory");
         var loggerIndex = Array.IndexOf(arguments, "--logger");
@@ -1954,9 +1972,15 @@ public sealed class AcceptanceGateEngineSettingsTests
         Directory.CreateDirectory(resultsDirectory);
         var testClass = testName[..testName.LastIndexOf('.')];
         var method = testName[(testName.LastIndexOf('.') + 1)..];
+        var definitions = string.Concat(Enumerable.Range(1, testCount).Select(index =>
+            $"<UnitTest id=\"{index}\" name=\"{testName}.{index}\"><TestMethod className=\"{testClass}\" name=\"{method}{index}\" /></UnitTest>"));
+        var results = string.Concat(Enumerable.Range(1, testCount).Select(index =>
+            $"<UnitTestResult testId=\"{index}\" testName=\"{testName}.{index}\" outcome=\"{outcome}\" />"));
+        var passed = outcome.Equals("Passed", StringComparison.OrdinalIgnoreCase) ? testCount : 0;
+        var failed = outcome.Equals("Passed", StringComparison.OrdinalIgnoreCase) ? 0 : testCount;
         File.WriteAllText(
             Path.Combine(resultsDirectory, logger[prefix.Length..]),
-            $"<TestRun><TestDefinitions><UnitTest id=\"1\" name=\"{testName}\"><TestMethod className=\"{testClass}\" name=\"{method}\" /></UnitTest></TestDefinitions><Results><UnitTestResult testId=\"1\" testName=\"{testName}\" outcome=\"{outcome}\" /></Results><ResultSummary outcome=\"{outcome}\"><Counters total=\"1\" executed=\"1\" passed=\"{(outcome.Equals("Passed", StringComparison.OrdinalIgnoreCase) ? 1 : 0)}\" failed=\"{(outcome.Equals("Passed", StringComparison.OrdinalIgnoreCase) ? 0 : 1)}\" /></ResultSummary></TestRun>");
+            $"<TestRun><TestDefinitions>{definitions}</TestDefinitions><Results>{results}</Results><ResultSummary outcome=\"{outcome}\"><Counters total=\"{testCount}\" executed=\"{testCount}\" passed=\"{passed}\" failed=\"{failed}\" /></ResultSummary></TestRun>");
     }
 
     private static string ReadTrxOutcome(string path) =>
