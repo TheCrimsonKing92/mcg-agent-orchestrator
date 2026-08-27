@@ -7173,6 +7173,11 @@ public sealed class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
         environment["DOTNET_CLI_TELEMETRY_OPTOUT"] = "1";
         environment["DOTNET_GENERATE_ASPNET_CERTIFICATE"] = "false";
         environment["DOTNET_NOLOGO"] = "1";
+        // Acceptance tests recursively invoke dotnet/MSBuild. Reusing a daemon that was born outside this
+        // hermetic process tree loses both the gate's environment and its Windows error-mode suppression,
+        // allowing a nested test apphost startup failure to block the desktop with a modal error dialog.
+        environment["MSBUILDDISABLENODEREUSE"] = "1";
+        environment["DOTNET_CLI_USE_MSBUILD_SERVER"] = "0";
         environment["NUGET_PACKAGES"] = nugetPackages;
         if (!string.IsNullOrWhiteSpace(buildEnvironmentRoot))
         {
@@ -7260,6 +7265,7 @@ public sealed class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
         name.Equals("APPDATA", StringComparison.OrdinalIgnoreCase) ||
         name.Equals("LOCALAPPDATA", StringComparison.OrdinalIgnoreCase) ||
         name.Equals("PSModuleAnalysisCachePath", StringComparison.OrdinalIgnoreCase) ||
+        name.Equals("MSBUILDDISABLENODEREUSE", StringComparison.OrdinalIgnoreCase) ||
         // The four deterministic git identity variables this function sets. They are DECLARED here rather
         // than inherited: the allow-list is what the hermetic environment is permitted to contain, so every
         // variable ConfigureHermeticVerificationEnvironment writes must be nameable here or the gate's own

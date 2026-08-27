@@ -1665,6 +1665,8 @@ public sealed partial class ConductorBatchLoopTestsParallelAcceptance : Conducto
             Assert.True(startInfo.RedirectStandardError);
             Assert.Equal(root, startInfo.WorkingDirectory);
             Assert.Equal(root, startInfo.Environment[OrchestratorWorkspace.RepoRootEnvironmentVariable]);
+            Assert.Equal("1", startInfo.Environment["MSBUILDDISABLENODEREUSE"]);
+            Assert.Equal("0", startInfo.Environment["DOTNET_CLI_USE_MSBUILD_SERVER"]);
             Assert.Equal(
                 ["Mcg.AgentOrchestrator.App.dll", ConductorParallelAcceptanceAttemptCoordinator.OwnedProcessSubcommandName, metadataPath],
                 startInfo.ArgumentList.ToArray());
