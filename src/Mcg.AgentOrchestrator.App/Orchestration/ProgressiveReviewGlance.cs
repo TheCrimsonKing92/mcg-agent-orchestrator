@@ -231,7 +231,7 @@ internal sealed class ProgressiveReviewGlanceCoordinator
         var lines = new List<string>();
         var mutated = HarvestCompleted(lines);
         mutated |= SurfaceQueuedConcernsOnFailure(kernel);
-        var activeRoundKeys = goals
+        var activeRoundKeys = kernel.Goals
             .SelectMany(goal => goal.Tasks
                 .Where(IsRunningDeveloperDispatch)
                 .Select(task => RoundKey(goal, task)))

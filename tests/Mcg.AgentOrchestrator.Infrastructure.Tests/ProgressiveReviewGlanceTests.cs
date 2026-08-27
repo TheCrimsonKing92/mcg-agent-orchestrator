@@ -93,7 +93,7 @@ public sealed class ProgressiveReviewGlanceTests
                 10,
                 FailureCause: ProgressiveReviewGlanceFailureCause.OutputContract));
             var firstEvents = new RecordingGlanceEvents();
-            var (firstKernel, firstGoal, _) = RunningDeveloperRound(
+            var (firstKernel, firstGoal, firstTask) = RunningDeveloperRound(
                 dispatchedAt,
                 goalId: "goal-progressive-review-0001",
                 taskId: "developer-task-0001");
@@ -131,7 +131,12 @@ public sealed class ProgressiveReviewGlanceTests
             _ = reconstructed.Observe(firstKernel, [firstGoal]);
             now = dispatchedAt.AddMinutes(2);
             _ = reconstructed.Observe(firstKernel, [firstGoal]);
-            _ = reconstructed.Observe(firstKernel, []);
+            firstKernel.ReportTaskProgress(
+                firstGoal.Id,
+                firstTask.Id,
+                WorkTaskStatus.Completed,
+                "Developer completed.");
+            _ = reconstructed.Observe(firstKernel, [firstGoal]);
 
             Xunit.Assert.Single(firstRunner.Calls);
             Xunit.Assert.Empty(secondRunner.Calls);
@@ -148,7 +153,7 @@ public sealed class ProgressiveReviewGlanceTests
 
             var crossGoalRunner = new ControlledGlanceRunner { Identity = brokenIdentity };
             var crossGoalEvents = new RecordingGlanceEvents();
-            var (secondKernel, secondGoal, _) = RunningDeveloperRound(
+            var (secondKernel, secondGoal, secondTask) = RunningDeveloperRound(
                 dispatchedAt,
                 goalId: "goal-progressive-review-0002",
                 taskId: "developer-task-0002");
@@ -163,7 +168,12 @@ public sealed class ProgressiveReviewGlanceTests
             _ = crossGoal.Observe(secondKernel, [secondGoal]);
             now = dispatchedAt.AddMinutes(2);
             _ = crossGoal.Observe(secondKernel, [secondGoal]);
-            _ = crossGoal.Observe(secondKernel, []);
+            secondKernel.ReportTaskProgress(
+                secondGoal.Id,
+                secondTask.Id,
+                WorkTaskStatus.Completed,
+                "Developer completed.");
+            _ = crossGoal.Observe(secondKernel, [secondGoal]);
 
             Xunit.Assert.Empty(crossGoalRunner.Calls);
             var crossGoalSuppression = Xunit.Assert.Single(
@@ -201,6 +211,105 @@ public sealed class ProgressiveReviewGlanceTests
         {
             Directory.Delete(root, recursive: true);
         }
+    }
+
+    [Xunit.Fact]
+    public void DurableCircuit_MultiGoalCallerScopedObservationsDoNotDrainActiveWindows()
+    {
+        var dispatchedAt = new DateTimeOffset(2026, 8, 26, 12, 0, 0, TimeSpan.Zero);
+        var now = dispatchedAt;
+        var kernel = new AgentOrchestratorKernel();
+        var taskA = new TaskSpec(
+            new TaskId("developer-task-multigoal-a"),
+            "Implement feature A.\n\nACCEPTANCE\n- Pass focused tests",
+            AgentRole.Developer);
+        var taskB = new TaskSpec(
+            new TaskId("developer-task-multigoal-b"),
+            "Implement feature B.\n\nACCEPTANCE\n- Pass focused tests",
+            AgentRole.Developer);
+        var goalA = kernel.CreateGoal(
+            new GoalId("goal-progressive-review-multigoal-a"),
+            "Progressive review goal A",
+            [taskA]);
+        var goalB = kernel.CreateGoal(
+            new GoalId("goal-progressive-review-multigoal-b"),
+            "Progressive review goal B",
+            [taskB]);
+        kernel.ActivateGoal(goalA.Id, AgentCatalog.Default().Agents);
+        kernel.ActivateGoal(goalB.Id, AgentCatalog.Default().Agents);
+        foreach (var (goal, task) in new[] { (goalA, taskA), (goalB, taskB) })
+        {
+            kernel.RecordTaskDispatch(
+                goal.Id,
+                task.Id,
+                new TaskDispatchRecord(
+                    "codex-cli",
+                    "codex exec",
+                    @"C:\work",
+                    dispatchedAt,
+                    BaseCommit: "base"));
+        }
+
+        var runner = new ControlledGlanceRunner { Identity = Contract("broken-multigoal-command") };
+        runner.EnqueueCompleted(new ProgressiveReviewGlanceDispatchResult(
+            ProgressiveReviewGlanceVerdict.Invalid,
+            "codex-jsonl-agent-message-count:0",
+            "codex-jsonl-agent-message-count:0",
+            100,
+            10,
+            FailureCause: ProgressiveReviewGlanceFailureCause.OutputContract));
+        var events = new RecordingGlanceEvents();
+        var changes = new DispatchLiveChangeSnapshot(["changed.cs"], ["changed.cs"], 0);
+        var coordinator = NewCoordinator(
+            runner,
+            events,
+            new ProgressiveReviewGlanceOptions(
+                ChangedFileThreshold: 1,
+                FirstElapsedThreshold: TimeSpan.FromMinutes(1),
+                ElapsedInterval: TimeSpan.FromMinutes(1),
+                PerRoundBudget: 10),
+            () => now,
+            liveChanges: (_, _) => changes,
+            circuitStore: new InMemoryProgressiveReviewGlanceCircuitStore());
+
+        _ = coordinator.Observe(kernel, [goalA]);
+        _ = coordinator.Observe(kernel, [goalB]);
+        now = dispatchedAt.AddMinutes(2);
+        _ = coordinator.Observe(kernel, [goalA]);
+        _ = coordinator.Observe(kernel, [goalB]);
+
+        Xunit.Assert.Single(runner.Calls);
+        Xunit.Assert.Empty(events.CircuitReceipts.Where(receipt => receipt.ProbeOutcome == "suppressed"));
+
+        kernel.ReportTaskProgress(goalA.Id, taskA.Id, WorkTaskStatus.Completed, "Developer A completed.");
+        kernel.ReportTaskProgress(goalB.Id, taskB.Id, WorkTaskStatus.Completed, "Developer B completed.");
+        _ = coordinator.Observe(kernel, [goalA]);
+
+        var suppressions = events.CircuitReceiptEvents
+            .Where(item => item.Receipt.ProbeOutcome == "suppressed")
+            .OrderBy(item => item.GoalId.Value, StringComparer.Ordinal)
+            .ToArray();
+        Xunit.Assert.Equal(2, suppressions.Length);
+        Xunit.Assert.Collection(
+            suppressions,
+            item =>
+            {
+                Xunit.Assert.Equal(goalA.Id, item.GoalId);
+                var receipt = item.Receipt;
+                Xunit.Assert.Equal(1, receipt.AvoidedCallCount);
+                Xunit.Assert.Equal(0, receipt.ChangedFilesTriggerCount);
+                Xunit.Assert.Equal(1, receipt.ElapsedTriggerCount);
+                Xunit.Assert.True(receipt.AvoidedInputTokens > 0);
+            },
+            item =>
+            {
+                Xunit.Assert.Equal(goalB.Id, item.GoalId);
+                var receipt = item.Receipt;
+                Xunit.Assert.Equal(2, receipt.AvoidedCallCount);
+                Xunit.Assert.Equal(1, receipt.ChangedFilesTriggerCount);
+                Xunit.Assert.Equal(1, receipt.ElapsedTriggerCount);
+                Xunit.Assert.True(receipt.AvoidedInputTokens > 0);
+            });
     }
 
     [Xunit.Fact]
@@ -268,7 +377,7 @@ public sealed class ProgressiveReviewGlanceTests
         var runner = new ControlledGlanceRunner();
         var events = new RecordingGlanceEvents();
         var circuitStore = new UnavailableProgressiveReviewGlanceCircuitStore(varyFailureReason: true);
-        var (kernel, goal, _) = RunningDeveloperRound(dispatchedAt);
+        var (kernel, goal, task) = RunningDeveloperRound(dispatchedAt);
         var changes = new DispatchLiveChangeSnapshot(["changed.cs"], ["changed.cs"], 0);
         var coordinator = NewCoordinator(
             runner,
@@ -291,7 +400,8 @@ public sealed class ProgressiveReviewGlanceTests
 
         Xunit.Assert.Empty(events.CircuitReceipts);
         Xunit.Assert.Empty(runner.Calls);
-        progressLines.AddRange(coordinator.Observe(kernel, []).ProgressLines);
+        kernel.ReportTaskProgress(goal.Id, task.Id, WorkTaskStatus.Completed, "Developer completed.");
+        progressLines.AddRange(coordinator.Observe(kernel, [goal]).ProgressLines);
 
         Xunit.Assert.Empty(runner.Calls);
         var receipt = Xunit.Assert.Single(events.CircuitReceipts);
@@ -2087,6 +2197,7 @@ public sealed class ProgressiveReviewGlanceTests
         public List<Summary> Summaries { get; } = [];
         public List<ProgressiveReviewGlanceGuardReceipt> GuardReceipts { get; } = [];
         public List<ProgressiveReviewGlanceCircuitReceipt> CircuitReceipts { get; } = [];
+        public List<(GoalId GoalId, TaskId TaskId, ProgressiveReviewGlanceCircuitReceipt Receipt)> CircuitReceiptEvents { get; } = [];
         public bool ThrowOnProgressiveWrites { get; init; }
 
         public void AppendTimelineEvent(ProgressEvent progressEvent) { }
@@ -2143,6 +2254,7 @@ public sealed class ProgressiveReviewGlanceTests
             if (ThrowOnProgressiveWrites)
                 throw new InvalidOperationException("circuit receipt sink unavailable");
             CircuitReceipts.Add(receipt);
+            CircuitReceiptEvents.Add((goalId, taskId, receipt));
         }
 
         public void AppendProgressiveReviewGlanceSummary(
