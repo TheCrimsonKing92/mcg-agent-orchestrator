@@ -159,6 +159,7 @@ public sealed class GoalAcceptanceVerifierDotnetBuildSlotTestsVerdictAndBuildCac
                     return Task.FromResult(cliRuns < 2
                         ? CreateFailedResultWithHeartbeat(
                             goalId,
+                            root,
                             "infrastructure tests: Cli",
                             "retry-driving stderr from the original Cli partition")
                         : new GoalAcceptanceVerifier.CommandResult(0, "Passed! - Failed: 0, Passed: 1, Skipped: 0, Total: 1."));
@@ -171,7 +172,10 @@ public sealed class GoalAcceptanceVerifierDotnetBuildSlotTestsVerdictAndBuildCac
 
             var result = await verifier.RunAsync(root, goalId);
 
-            Assert.True(result.Passed);
+            Assert.True(
+                result.Passed,
+                string.Join(Environment.NewLine, result.Checks.Select(static check =>
+                    $"{check.Name}: classification={check.FailureClassification}; output={check.OutputTail}")));
             Assert.True(result.Retried);
             Assert.Equal(2, cliRuns);
             var unrelatedPartitionCommands = calls
@@ -220,6 +224,7 @@ public sealed class GoalAcceptanceVerifierDotnetBuildSlotTestsVerdictAndBuildCac
                     {
                         return Task.FromResult(CreateFailedResultWithHeartbeat(
                             goalId,
+                            root,
                             "infrastructure tests: Cli",
                             "retry-driving stderr from the original MTP Cli partition"));
                     }
@@ -233,7 +238,10 @@ public sealed class GoalAcceptanceVerifierDotnetBuildSlotTestsVerdictAndBuildCac
 
             var result = await verifier.RunAsync(root, goalId);
 
-            Assert.True(result.Passed);
+            Assert.True(
+                result.Passed,
+                string.Join(Environment.NewLine, result.Checks.Select(static check =>
+                    $"{check.Name}: classification={check.FailureClassification}; output={check.OutputTail}")));
             Assert.True(result.Retried);
             Assert.Equal(2, mtpRuns);
             var partition = Assert.Single(
@@ -579,6 +587,12 @@ public sealed class GoalAcceptanceVerifierDotnetBuildSlotTestsVerdictAndBuildCac
                     return Task.FromResult(CreatePassingVstestResult(args));
                 }
 
+                if (args.Contains("--report-trx-filename"))
+                {
+                    WriteMtpTrx(args, 1, ["GreenPartition.Passes"]);
+                    return Task.FromResult(new GoalAcceptanceVerifier.CommandResult(0, "Passed: 1"));
+                }
+
                 return Task.FromResult(new GoalAcceptanceVerifier.CommandResult(0, ""));
             });
 
@@ -673,6 +687,12 @@ public sealed class GoalAcceptanceVerifierDotnetBuildSlotTestsVerdictAndBuildCac
                 if (args.Length >= 2 && args[0] == "dotnet" && args[1] == "test")
                 {
                     return Task.FromResult(CreatePassingVstestResult(args));
+                }
+
+                if (args.Contains("--report-trx-filename"))
+                {
+                    WriteMtpTrx(args, 1, ["GreenPartition.Passes"]);
+                    return Task.FromResult(new GoalAcceptanceVerifier.CommandResult(0, "Passed: 1"));
                 }
 
                 return Task.FromResult(new GoalAcceptanceVerifier.CommandResult(0, ""));
@@ -786,6 +806,12 @@ public sealed class GoalAcceptanceVerifierDotnetBuildSlotTestsVerdictAndBuildCac
                 if (args.Length >= 2 && args[0] == "dotnet" && args[1] == "test")
                 {
                     return Task.FromResult(CreatePassingVstestResult(args));
+                }
+
+                if (args.Contains("--report-trx-filename"))
+                {
+                    WriteMtpTrx(args, 1, ["GreenPartition.Passes"]);
+                    return Task.FromResult(new GoalAcceptanceVerifier.CommandResult(0, "Passed: 1"));
                 }
 
                 return Task.FromResult(new GoalAcceptanceVerifier.CommandResult(0, ""));
@@ -912,11 +938,14 @@ public sealed class GoalAcceptanceVerifierDotnetBuildSlotTestsVerdictAndBuildCac
 
     private static GoalAcceptanceVerifier.CommandResult CreateFailedResultWithHeartbeat(
         GoalId goalId,
+        string worktreePath,
         string checkName,
         string stderr)
     {
-        var environment = DotnetBuildEnvironmentManager.ResolveGoalEnvironment(goalId);
-        var heartbeatPath = GoalAcceptanceVerifier.ResolveGateHeartbeatPathForTests(checkName, environment);
+        var heartbeatPath = GoalAcceptanceVerifier.ResolveGateHeartbeatPathForTests(
+            checkName,
+            worktreePath,
+            invocationOrdinal: 0);
         var now = DateTimeOffset.UtcNow;
         GateHeartbeatArtifacts.Write(
             heartbeatPath,
@@ -924,7 +953,7 @@ public sealed class GoalAcceptanceVerifierDotnetBuildSlotTestsVerdictAndBuildCac
                 goalId.Value,
                 "verification-check",
                 checkName,
-                environment.BuildPermitIndex,
+                null,
                 Environment.ProcessId,
                 null,
                 "completed",

@@ -347,7 +347,7 @@ internal sealed class AcceptancePartitionVerdictCache
                     $"{AttemptId}:semantic-dedup:{receipt.PartitionId}:{receipt.DroppedPlanIndex}",
                     new GoalId(GoalId),
                     "acceptance:semantic-check-deduplication",
-                    "recorded",
+                    "Completed",
                     DateTimeOffset.UtcNow,
                     Detail:
                         $"partition_id={receipt.PartitionId} retained_check={receipt.RetainedCheckName} " +

@@ -443,6 +443,13 @@ public sealed class AcceptanceGateEngineSettingsTests
             var verifier = new GoalAcceptanceVerifier((arguments, _, timeout, _) =>
             {
                 calls.Add((arguments, timeout));
+                if (arguments.Length >= 2 &&
+                    arguments[0].Equals("dotnet", StringComparison.OrdinalIgnoreCase) &&
+                    arguments[1].Equals("test", StringComparison.OrdinalIgnoreCase))
+                {
+                    WriteVstestTrx(arguments, "CandidateLaneTests.Passes");
+                }
+
                 return Task.FromResult(new GoalAcceptanceVerifier.CommandResult(
                     0,
                     "Passed! - Failed: 0, Passed: 1, Skipped: 0, Total: 1."));
@@ -680,8 +687,17 @@ public sealed class AcceptanceGateEngineSettingsTests
             """);
         try
         {
-            var verifier = new GoalAcceptanceVerifier((_, _, _) =>
-                Task.FromResult(new GoalAcceptanceVerifier.CommandResult(0, "Passed: 1")));
+            var verifier = new GoalAcceptanceVerifier((arguments, _, _) =>
+            {
+                if (arguments.Length >= 2 &&
+                    arguments[0].Equals("dotnet", StringComparison.OrdinalIgnoreCase) &&
+                    arguments[1].Equals("test", StringComparison.OrdinalIgnoreCase))
+                {
+                    WriteVstestTrx(arguments, "CoreTests.Passes");
+                }
+
+                return Task.FromResult(new GoalAcceptanceVerifier.CommandResult(0, "Passed: 1"));
+            });
 
             var result = await verifier.RunAsync(root, stableSlotIndex: 1);
 
@@ -733,6 +749,11 @@ public sealed class AcceptanceGateEngineSettingsTests
             var verifier = new GoalAcceptanceVerifier((arguments, _, _) =>
             {
                 calls.Add(arguments);
+                if (arguments.Contains("--report-trx-filename"))
+                {
+                    WriteMtpTrx(arguments, "Example.Tests passes", "Example.Tests.Passes");
+                }
+
                 return Task.FromResult(new GoalAcceptanceVerifier.CommandResult(0, "Passed: 1"));
             });
 
@@ -1555,6 +1576,9 @@ public sealed class AcceptanceGateEngineSettingsTests
 
                 invocations++;
                 WriteVstestTrx(arguments, "RemainderTests.Passes", testCount: 110);
+                var heartbeatPath =
+                    $"{attemptPrefix}.infrastructure-tests-remainder-{GoalAcceptanceVerifier.ShortHash(checkName)}.{GateHeartbeatArtifacts.FileName}";
+                File.WriteAllText(heartbeatPath, "{}");
                 return Task.FromResult(new GoalAcceptanceVerifier.CommandResult(0, "Passed: 110"));
             });
 

@@ -708,7 +708,6 @@ public sealed class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
                 CurrentAcceptanceAttemptId,
                 () => ComputeEffectiveAcceptanceManifestIdentity(effectiveChecks),
                 () => EngineSettings.EnforceStructuralCoverage));
-        partitionVerdictCache?.RecordSemanticDeduplications(effectivePlan.SemanticDeduplications);
         var dotnetTestBuildPhase = GateUsesStableSlot(stableSlotIndex, stableSlotLease)
             ? CreateDotnetTestBuildPhase(worktreePath, effectiveChecks, changedFiles, policyShardPlan)
             : null;
@@ -860,6 +859,7 @@ public sealed class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
         {
             checks.Add(partitionCacheReceipt);
         }
+        partitionVerdictCache?.RecordSemanticDeduplications(effectivePlan.SemanticDeduplications);
 
         if (effectivePlan.DotnetShardDisposition == DotnetShardDisposition.RunDotnetShards)
         {
