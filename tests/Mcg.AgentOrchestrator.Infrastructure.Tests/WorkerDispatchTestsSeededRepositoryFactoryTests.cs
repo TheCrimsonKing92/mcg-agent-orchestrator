@@ -497,6 +497,47 @@ public sealed class WorkerDispatchTestsSeededRepositoryFactoryTests
         Xunit.Assert.Equal("0", capturedEnvironment["GIT_OPTIONAL_LOCKS"]);
     }
 
+    [Xunit.Fact(Skip = "Requires Windows executable selection semantics.", SkipUnless = nameof(IsWindows))]
+    public void RunGitProbe_CommandShimOnPath_SelectsNativeGitWithHardeningArguments()
+    {
+        using var scope = new FactoryScope();
+        var shimDirectory = Path.Combine(scope.Root, "shim");
+        var nativeDirectory = Path.Combine(scope.Root, "native");
+        Directory.CreateDirectory(shimDirectory);
+        Directory.CreateDirectory(nativeDirectory);
+        File.WriteAllText(Path.Combine(shimDirectory, "git.cmd"), "@exit /b 0");
+        var nativeGit = Path.Combine(nativeDirectory, "git.exe");
+        File.WriteAllBytes(nativeGit, []);
+
+        var inheritedEnvironment = new Dictionary<string, string?>(StringComparer.OrdinalIgnoreCase)
+        {
+            ["PATH"] = string.Join(Path.PathSeparator, shimDirectory, nativeDirectory),
+            ["PATHEXT"] = ".COM;.EXE;.BAT;.CMD",
+            ["SystemRoot"] = Environment.GetEnvironmentVariable("SystemRoot"),
+            ["WINDIR"] = Environment.GetEnvironmentVariable("WINDIR"),
+            ["COMSPEC"] = Environment.GetEnvironmentVariable("COMSPEC"),
+            ["TEMP"] = Environment.GetEnvironmentVariable("TEMP"),
+            ["TMP"] = Environment.GetEnvironmentVariable("TMP")
+        };
+
+        var result = InfrastructureTestSupport.RunGitProbe(
+            scope.Root,
+            ["rev-parse", "--show-toplevel"],
+            startProcess: _ => false,
+            inheritedEnvironment: inheritedEnvironment);
+
+        Xunit.Assert.Equal(nativeGit, result.Executable);
+        Xunit.Assert.Equal(
+            [
+                "-c", "core.fsmonitor=false",
+                "-c", "gc.auto=0",
+                "-c", "maintenance.auto=false",
+                "rev-parse", "--show-toplevel"
+            ],
+            result.Arguments);
+        Xunit.Assert.DoesNotContain("git.cmd", result.Command, StringComparison.OrdinalIgnoreCase);
+    }
+
     [Xunit.Fact(Skip = "Requires Windows PowerShell.", SkipUnless = nameof(IsWindows))]
     public void RunGitProbe_RawStreamByteCounts_AreNotDecodedRoundTrips()
     {
@@ -631,7 +672,9 @@ public sealed class WorkerDispatchTestsSeededRepositoryFactoryTests
         Xunit.Assert.False(result.DrainTimedOut);
         Xunit.Assert.False(result.TimedOut);
         Xunit.Assert.False(result.DrainFailed);
-        Xunit.Assert.Contains("git status --short", result.Command, StringComparison.Ordinal);
+        Xunit.Assert.EndsWith("git.exe", result.Executable, StringComparison.OrdinalIgnoreCase);
+        Xunit.Assert.Equal("status", result.Arguments![^2]);
+        Xunit.Assert.Equal("--short", result.Arguments[^1]);
     }
 
     [Xunit.Fact]
@@ -675,7 +718,7 @@ public sealed class WorkerDispatchTestsSeededRepositoryFactoryTests
             receipts.Select(receipt => receipt.ProbeOrdinal));
         Xunit.Assert.Equal(
             2,
-            receipts.Count(receipt => receipt.Arguments?.SequenceEqual(
+            receipts.Count(receipt => receipt.Arguments?.TakeLast(3).SequenceEqual(
                 ["rev-parse", "--verify", "HEAD^{commit}"]) == true));
         var receipt = Xunit.Assert.Single(
             receipts,

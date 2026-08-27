@@ -64,7 +64,14 @@ internal static WorkerDispatchTestsSeededRepositoryFactory.GitProbeResult RunGit
     Func<Process, bool>? startProcess = null,
     IReadOnlyDictionary<string, string?>? inheritedEnvironment = null)
 {
-    var command = $"git {string.Join(' ', arguments)}";
+    var executable = ResolveNativeGitExecutable(inheritedEnvironment);
+    var effectiveArguments = new[]
+    {
+        "-c", "core.fsmonitor=false",
+        "-c", "gc.auto=0",
+        "-c", "maintenance.auto=false"
+    }.Concat(arguments).ToArray();
+    var command = FormatCommand(executable, effectiveArguments);
     var commandEnvironmentNames = commandEnvironment is null
         ? "none"
         : string.Join(',', commandEnvironment.Keys.Order(StringComparer.Ordinal));
@@ -74,7 +81,7 @@ internal static WorkerDispatchTestsSeededRepositoryFactory.GitProbeResult RunGit
         "repositorySelection=unset; command=" + commandEnvironmentNames;
     var startInfo = new ProcessStartInfo
     {
-        FileName = "git",
+        FileName = executable,
         RedirectStandardInput = true,
         RedirectStandardOutput = true,
         RedirectStandardError = true,
@@ -132,7 +139,7 @@ internal static WorkerDispatchTestsSeededRepositoryFactory.GitProbeResult RunGit
     startInfo.Environment["LC_ALL"] = "C";
     startInfo.Environment["LANG"] = "C";
 
-    foreach (var argument in arguments)
+    foreach (var argument in effectiveArguments)
     {
         startInfo.ArgumentList.Add(argument);
     }
@@ -145,6 +152,7 @@ internal static WorkerDispatchTestsSeededRepositoryFactory.GitProbeResult RunGit
     {
         process = new Process { StartInfo = startInfo };
         processStarted = (startProcess ?? (static candidate => candidate.Start()))(process);
+        command = FormatCommand(startInfo.FileName, startInfo.ArgumentList);
         if (!processStarted)
         {
             return WorkerDispatchTestsSeededRepositoryFactory.GitProbeResult.NotStarted(
@@ -152,7 +160,7 @@ internal static WorkerDispatchTestsSeededRepositoryFactory.GitProbeResult RunGit
                 "Process.Start returned false.") with
                 {
                     Executable = startInfo.FileName,
-                    Arguments = arguments.ToArray(),
+                    Arguments = startInfo.ArgumentList.ToArray(),
                     RepositoryDirectory = Path.GetFullPath(workingDirectory),
                     EnvironmentContract = environmentContract
                 };
@@ -219,7 +227,7 @@ internal static WorkerDispatchTestsSeededRepositoryFactory.GitProbeResult RunGit
             DrainFailed: drainFailed,
             EnvironmentContract: environmentContract,
             Executable: startInfo.FileName,
-            Arguments: arguments.ToArray(),
+            Arguments: startInfo.ArgumentList.ToArray(),
             RepositoryDirectory: Path.GetFullPath(workingDirectory),
             StandardOutputByteCount: standardOutputCapture.ByteCount,
             StandardErrorByteCount: standardErrorCapture.ByteCount,
@@ -262,7 +270,7 @@ internal static WorkerDispatchTestsSeededRepositoryFactory.GitProbeResult RunGit
             DrainFailed: false,
             EnvironmentContract: environmentContract,
             Executable: startInfo.FileName,
-            Arguments: arguments.ToArray(),
+            Arguments: startInfo.ArgumentList.ToArray(),
             RepositoryDirectory: Path.GetFullPath(workingDirectory),
             StandardErrorByteCount: Encoding.UTF8.GetByteCount(ex.Message),
             StandardErrorTruncated: boundedError.Length != ex.Message.Length,
@@ -277,6 +285,35 @@ internal static WorkerDispatchTestsSeededRepositoryFactory.GitProbeResult RunGit
         process?.Dispose();
     }
 }
+
+private static string ResolveNativeGitExecutable(
+    IReadOnlyDictionary<string, string?>? inheritedEnvironment)
+{
+    string? path = null;
+    if (inheritedEnvironment is not null)
+    {
+        path = inheritedEnvironment
+            .FirstOrDefault(pair => string.Equals(pair.Key, "PATH", StringComparison.OrdinalIgnoreCase))
+            .Value;
+    }
+
+    path ??= Environment.GetEnvironmentVariable("PATH");
+    var executableName = OperatingSystem.IsWindows() ? "git.exe" : "git";
+    foreach (var directory in (path ?? string.Empty)
+                 .Split(Path.PathSeparator, StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries))
+    {
+        var candidate = Path.Combine(directory.Trim('"'), executableName);
+        if (File.Exists(candidate))
+        {
+            return Path.GetFullPath(candidate);
+        }
+    }
+
+    return executableName;
+}
+
+private static string FormatCommand(string executable, IEnumerable<string> arguments) =>
+    $"{executable} {string.Join(' ', arguments)}";
 
 private static async Task<CapturedStream> CaptureStreamAsync(Stream stream)
 {

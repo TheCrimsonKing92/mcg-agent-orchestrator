@@ -32,7 +32,9 @@ internal static class SourceSizeRatchet
             // remain at the verifier execution boundary; lifecycle implementation stays extracted.
             // Raised for the acceptance-popup suppression repair: hermetic verification must disable
             // descendant MSBuild-server reuse where the verifier owns the child environment.
-            new SourceSizeCeiling("src/Mcg.AgentOrchestrator.Infrastructure/Workspaces/GoalAcceptanceVerifier.cs", 8675),
+            // Raised for goal 13630c9f: TRX failure-cause receipt extraction and typed apparatus
+            // attribution belong where raw check output becomes final acceptance evidence.
+            new SourceSizeCeiling("src/Mcg.AgentOrchestrator.Infrastructure/Workspaces/GoalAcceptanceVerifier.cs", 8919),
             // Goal 682f25a1 re-derived this row after integrating goal c2eae988, whose acceptance
             // cancellation seam had already added 74 net lines before the multi-file ratchet landed.
             // Raised for goal a22c7293: slice admission must run where all dispatch paths converge.
@@ -41,7 +43,9 @@ internal static class SourceSizeRatchet
             // Goal 0e0aa816 extracted acceptance landing to its own partial-class source file.
             // Goal ce3c3917 adds only the injectable inline-landing lease seam here; lease behavior remains
             // extracted in ConductorDriver.AcceptanceLanding.cs.
-            new SourceSizeCeiling("src/Mcg.AgentOrchestrator.App/Orchestration/ConductorDriver.cs", 6142),
+            // Raised for goal 13630c9f: typed apparatus attribution, bounded hold release, and candidate
+            // retry suppression must meet at the existing acceptance disposition seam.
+            new SourceSizeCeiling("src/Mcg.AgentOrchestrator.App/Orchestration/ConductorDriver.cs", 6203),
             // Raised for goal dadadfac: set-aside re-admission must be decided where the loop already holds
             // the goal, its recorded set-aside entry, and the current sweep blockers together.
             // Raised for goal 289b469d: registration-fault hold/escalation must be decided at the existing
@@ -66,11 +70,17 @@ internal static class SourceSizeRatchet
             // eligibility coverage had already added 173 net lines before the multi-file ratchet landed.
             // Goal ce3c3917 adds the two MakeDriver forwarding seams required to inject and capture the
             // inline-landing lease lifecycle without changing unrelated driver tests.
-            new SourceSizeCeiling("tests/Mcg.AgentOrchestrator.Infrastructure.Tests/ConductorDriverTests.cs", 1400),
+            // Raised for goal 13630c9f: the shared driver fixture forwards the apparatus-hold release
+            // collaborators used by the focused lifecycle controls.
+            new SourceSizeCeiling("tests/Mcg.AgentOrchestrator.Infrastructure.Tests/ConductorDriverTests.cs", 1403),
             // Goal ce3c3917 keeps acquired, unavailable, and exceptional lease-lifecycle coverage together
             // in the acceptance-coordination owner rather than splitting one behavioral contract.
-            new SourceSizeCeiling("tests/Mcg.AgentOrchestrator.Infrastructure.Tests/ConductorDriverTestsAcceptanceCoordination.cs", 984),
-            new SourceSizeCeiling("tests/Mcg.AgentOrchestrator.Infrastructure.Tests/ConductorDriverTestsLifecycleStates.cs", 1524),
+            // Raised for goal 13630c9f: acceptance coordination owns the structured apparatus cause
+            // mapping and rejects mixed candidate-owned failure routing.
+            new SourceSizeCeiling("tests/Mcg.AgentOrchestrator.Infrastructure.Tests/ConductorDriverTestsAcceptanceCoordination.cs", 1123),
+            // Raised for goal 13630c9f: lifecycle coverage keeps unchanged-candidate holds, bounded
+            // operator release, and main/candidate HEAD regating in one state-transition decision table.
+            new SourceSizeCeiling("tests/Mcg.AgentOrchestrator.Infrastructure.Tests/ConductorDriverTestsLifecycleStates.cs", 1701),
             new SourceSizeCeiling("tests/Mcg.AgentOrchestrator.Infrastructure.Tests/ConductorDriverTestsReviewRetryConvergence.cs", 778),
             // Raised for goal 4e3cdbb8: behavioral coverage now pins every permanent and transient
             // finding-evidence refusal disposition plus receipt-id priority on the next-round request loop.
@@ -95,7 +105,9 @@ internal static class SourceSizeRatchet
             // negative controls jointly verify the existing parallel-acceptance state contract.
             // Raised for the acceptance-popup suppression repair: the outer gate launch contract now
             // pins the descendant MSBuild-server environment alongside the native GUI suppression seam.
-            new SourceSizeCeiling("tests/Mcg.AgentOrchestrator.Infrastructure.Tests/ConductorBatchLoopTestsParallelAcceptance.cs", 4905),
+            // Raised for goal 13630c9f: parallel acceptance controls prove apparatus-only holds do not
+            // reopen completed worker evidence while mixed candidate failures retain normal routing.
+            new SourceSizeCeiling("tests/Mcg.AgentOrchestrator.Infrastructure.Tests/ConductorBatchLoopTestsParallelAcceptance.cs", 5165),
             new SourceSizeCeiling("tests/Mcg.AgentOrchestrator.Infrastructure.Tests/DotnetBuildEnvironmentManagerTests.cs", 1480),
         });
 
