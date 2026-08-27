@@ -39,6 +39,7 @@ internal static class WindowsNativeProcessInspection
     private const int ProcessBasicInformation = 0;
     private const int ProcessWow64Information = 26;
     private const int ErrorAccessDenied = 5;
+    private const int ErrorNoMoreFiles = 18;
     private const int ErrorInvalidParameter = 87;
     private const int ErrorPartialCopy = 299;
     private const int MaxCommandLineBytes = 32766;
@@ -512,7 +513,6 @@ internal static class WindowsNativeProcessInspection
 
     private static ProcessEnumerationResult ReadProcessSnapshot(IntPtr snapshot)
     {
-        var entries = new List<ProcessInspectionSeed>();
         var entry = new PROCESSENTRY32 { Size = (uint)Marshal.SizeOf<PROCESSENTRY32>() };
         if (!Process32First(snapshot, ref entry))
         {
@@ -523,18 +523,45 @@ internal static class WindowsNativeProcessInspection
                     nameof(Process32First)));
         }
 
-        do
-        {
-            entries.Add(new ProcessInspectionSeed(
-                checked((int)entry.ProcessId),
-                checked((int)entry.ParentProcessId),
-                Path.GetFileNameWithoutExtension(entry.ExecutableFile ?? string.Empty)));
-            entry.Size = (uint)Marshal.SizeOf<PROCESSENTRY32>();
-        }
-        while (Process32Next(snapshot, ref entry));
+        return ReadProcessSnapshot(ToSeed(entry), ReadNext);
 
-        return ProcessEnumerationResult.Success(entries);
+        (ProcessInspectionSeed? Process, int NativeError) ReadNext()
+        {
+            entry.Size = (uint)Marshal.SizeOf<PROCESSENTRY32>();
+            return Process32Next(snapshot, ref entry)
+                ? (ToSeed(entry), 0)
+                : (null, Marshal.GetLastWin32Error());
+        }
     }
+
+    internal static ProcessEnumerationResult ReadProcessSnapshot(
+        ProcessInspectionSeed first,
+        Func<(ProcessInspectionSeed? Process, int NativeError)> readNext)
+    {
+        var entries = new List<ProcessInspectionSeed> { first };
+        while (true)
+        {
+            var next = readNext();
+            if (next.Process is null)
+            {
+                return next.NativeError == ErrorNoMoreFiles
+                    ? ProcessEnumerationResult.Success(entries)
+                    : ProcessEnumerationResult.Failed(
+                        new ProcessInspectionFailure(
+                            ProcessInspectionStatus.NativeFailure,
+                            next.NativeError,
+                            nameof(Process32Next)));
+            }
+
+            entries.Add(next.Process);
+        }
+    }
+
+    private static ProcessInspectionSeed ToSeed(PROCESSENTRY32 entry) =>
+        new(
+            checked((int)entry.ProcessId),
+            checked((int)entry.ParentProcessId),
+            Path.GetFileNameWithoutExtension(entry.ExecutableFile ?? string.Empty));
 
     private static ProcessInspectionRecord Unavailable(
         ProcessInspectionSeed entry,

@@ -284,6 +284,36 @@ public sealed class WindowsNativeProcessInspectionTests
     }
 
     [Xunit.Fact]
+    public void ReadProcessSnapshot_NextFailure_ReturnsTypedNativeFailure()
+    {
+        var first = new WindowsNativeProcessInspection.ProcessInspectionSeed(17, 1, "dotnet");
+
+        var result = WindowsNativeProcessInspection.ReadProcessSnapshot(
+            first,
+            () => (null, 5));
+
+        Assert.Empty(result.Processes);
+        var failure = Assert.IsType<ProcessInspectionFailure>(result.Failure);
+        Assert.Equal(ProcessInspectionStatus.NativeFailure, failure.Status);
+        Assert.Equal(5, failure.NativeError);
+        Assert.Equal("Process32Next", failure.Operation);
+    }
+
+    [Xunit.Fact]
+    public void ReadProcessSnapshot_NoMoreFiles_ReturnsCompleteSnapshot()
+    {
+        var first = new WindowsNativeProcessInspection.ProcessInspectionSeed(17, 1, "dotnet");
+
+        var result = WindowsNativeProcessInspection.ReadProcessSnapshot(
+            first,
+            () => (null, 18));
+
+        Assert.Null(result.Failure);
+        var process = Assert.Single(result.Processes);
+        Assert.Same(first, process);
+    }
+
+    [Xunit.Fact]
     public void ReadByNames_EnumerationFailure_DoesNotBecomeEmptySuccess()
     {
         var readCount = 0;
