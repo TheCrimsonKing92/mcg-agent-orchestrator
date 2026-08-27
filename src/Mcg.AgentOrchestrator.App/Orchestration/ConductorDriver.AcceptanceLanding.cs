@@ -14,8 +14,7 @@ internal sealed partial class ConductorDriver
 
     private ConductorAdvanceResult ExecuteLanding(Goal goal, string goalPrefix, ConductorAutonomyPolicy policy)
     {
-        var acceptanceHeads = _resolveAcceptanceHeads(goal);
-        if (IsSameApparatusFailurePair(goal.LatestAcceptanceFailure, acceptanceHeads))
+        if (HasActiveApparatusHold(goal, out _))
         {
             var failure = goal.LatestAcceptanceFailure!;
             return MakeResult(

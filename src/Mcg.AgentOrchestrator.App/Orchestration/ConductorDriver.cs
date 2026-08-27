@@ -3179,11 +3179,12 @@ internal sealed partial class ConductorDriver
             return null;
         }
 
-        var acceptanceHeads = _resolveAcceptanceHeads(goal);
-        if (IsSameApparatusFailurePair(goal.LatestAcceptanceFailure, acceptanceHeads))
+        if (HasActiveApparatusHold(goal, out _))
         {
             return null;
         }
+
+        var acceptanceHeads = _resolveAcceptanceHeads(goal);
 
         if (!_parallelAcceptanceAttemptCoordinator.HasLiveAttempt(goal.Id.Value) &&
             TryGetActiveEvidenceMutationLease(goal) is { } lease)
@@ -3214,6 +3215,11 @@ internal sealed partial class ConductorDriver
     {
         ArgumentNullException.ThrowIfNull(goal);
         ArgumentNullException.ThrowIfNull(policy);
+
+        if (HasActiveApparatusHold(goal, out _))
+        {
+            return ExcludedGateReadyCandidate(GateReadyCandidateExclusionReason.ApparatusHold);
+        }
 
         GoalLifecycleState lifecycleState;
         try
@@ -4291,6 +4297,20 @@ internal sealed partial class ConductorDriver
 
         return ShaIsUnchangedOrUnknown(failure.BranchHeadSha, current.BranchHeadSha) &&
             ShaIsUnchangedOrUnknown(failure.MainHeadSha, current.MainHeadSha);
+    }
+
+    private bool HasActiveApparatusHold(
+        Goal goal,
+        out (string? BranchHeadSha, string? MainHeadSha) current)
+    {
+        current = (null, null);
+        if (goal.LatestAcceptanceFailure is not { IsEnvironmentalApparatus: true })
+        {
+            return false;
+        }
+
+        current = _resolveAcceptanceHeads(goal);
+        return IsSameApparatusFailurePair(goal.LatestAcceptanceFailure, current);
     }
 
     private static bool ShaIsUnchangedOrUnknown(string? recorded, string? current) =>

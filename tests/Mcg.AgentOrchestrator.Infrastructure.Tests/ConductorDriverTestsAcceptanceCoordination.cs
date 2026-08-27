@@ -867,6 +867,56 @@ public sealed partial class ConductorDriverTestsAcceptanceCoordination
         Assert.Equal(expectedRevisionReads, revisionReads);
     }
 
+    [Xunit.Fact]
+    public void ProjectGateReadyCandidate_UnchangedApparatusHold_IsExcluded()
+    {
+        var (kernel, goal) = SimpleGoal("Held gate-ready candidate");
+        PassVerification(kernel, goal, goal.Tasks.Single());
+        const string branchRevision = "1111111111111111111111111111111111111111";
+        const string mainRevision = "2222222222222222222222222222222222222222";
+        var currentMainRevision = mainRevision;
+        const string failedCheck = "infrastructure tests: Remainder";
+        kernel.RecordAcceptanceFailure(
+            goal.Id,
+            [failedCheck],
+            branchRevision,
+            mainRevision,
+            [
+                new AcceptanceCheckAttribution(
+                    failedCheck,
+                    AcceptanceFailureOrigin.Introduced,
+                    "typed seeded repository apparatus receipt",
+                    AcceptanceFailureCause.EnvironmentalApparatus)
+            ]);
+        var projector = new GateReadyCandidateProjector(
+            _ => new GateReadyCandidateRevisionPair(branchRevision, currentMainRevision),
+            _ => new GateReadyLandingScopeObservation(
+                true,
+                ["src/Mcg.AgentOrchestrator.Core/Feature.cs"]),
+            (_, _, _) => new GateReadyMergeTreeObservation(true));
+        var driver = MakeDriver(
+            getFacts: _ => GoalLifecycleFacts.None,
+            classifyRisk: _ => ChangeRiskTier.DocsOnly,
+            isVerificationGateSatisfied: _ => true,
+            gateReadyCandidateProjector: projector,
+            resolveAcceptanceHeads: _ => (branchRevision, currentMainRevision));
+
+        var heldResult = driver.ProjectGateReadyCandidate(goal, ConductorAutonomyPolicy.Conservative);
+
+        Assert.Equal(
+            GateReadyCandidateExclusionReason.ApparatusHold,
+            Assert.IsType<GateReadyCandidateProjectionResult.Excluded>(heldResult).Reason);
+
+        currentMainRevision = "3333333333333333333333333333333333333333";
+        Assert.IsType<GateReadyCandidateProjectionResult.Ready>(
+            driver.ProjectGateReadyCandidate(goal, ConductorAutonomyPolicy.Conservative));
+
+        currentMainRevision = mainRevision;
+        Assert.Equal(1, kernel.RetryAcceptanceGate(goal.Id, "Operator confirmed the apparatus repair."));
+        Assert.IsType<GateReadyCandidateProjectionResult.Ready>(
+            driver.ProjectGateReadyCandidate(goal, ConductorAutonomyPolicy.Conservative));
+    }
+
     [Xunit.Fact(DisplayName = "ConductorDriver fails closed when the gate-ready projector is absent")]
     public void ProjectGateReadyCandidateWithoutProjectorReturnsRevisionUnknown()
     {
