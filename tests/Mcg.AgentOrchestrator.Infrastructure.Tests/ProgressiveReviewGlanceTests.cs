@@ -279,7 +279,7 @@ public sealed class ProgressiveReviewGlanceTests
                 PerRoundBudget: 10),
             () => now,
             liveChanges: (_, _) => changes,
-            circuitStore: new UnavailableProgressiveReviewGlanceCircuitStore());
+            circuitStore: new UnavailableProgressiveReviewGlanceCircuitStore(varyFailureReason: true));
 
         _ = coordinator.Observe(kernel, [goal]);
         now = dispatchedAt.AddMinutes(2);
@@ -294,10 +294,50 @@ public sealed class ProgressiveReviewGlanceTests
         var receipt = Xunit.Assert.Single(events.CircuitReceipts);
         Xunit.Assert.Equal("AdmissionUnavailable", receipt.OpeningCause);
         Xunit.Assert.Equal("admission-unavailable", receipt.ProbeOutcome);
+        Xunit.Assert.Equal("circuit admission unavailable:1", receipt.OriginalReason);
         Xunit.Assert.Equal(3, receipt.AvoidedCallCount);
         Xunit.Assert.Equal(1, receipt.ChangedFilesTriggerCount);
         Xunit.Assert.Equal(2, receipt.ElapsedTriggerCount);
         Xunit.Assert.True(receipt.AvoidedInputTokens > 0);
+    }
+
+    [Xunit.Fact]
+    public void CircuitSuppressionStores_VaryingReasonsAggregateAndRetainFirstReason()
+    {
+        var root = CreateTempDirectory("mcg-glance-suppression");
+        try
+        {
+            IProgressiveReviewGlanceCircuitStore[] stores =
+            [
+                new InMemoryProgressiveReviewGlanceCircuitStore(),
+                new SqliteProgressiveReviewGlanceCircuitStore(Path.Combine(root, "circuit.db"))
+            ];
+            foreach (var store in stores)
+            {
+                var first = new ProgressiveReviewGlanceSuppressionObservation(
+                    "round", "goal", "task", "circuit", "AdmissionUnavailable",
+                    "AdmissionUnavailable", "first failure", true, 10, 2, "admission-unavailable");
+                store.AccumulateSuppression(first);
+                store.AccumulateSuppression(first with
+                {
+                    OriginalReason = "second failure",
+                    ChangedFilesTrigger = false,
+                    AvoidedInputTokens = 20,
+                    AdmissionLatencyMilliseconds = 3
+                });
+
+                var aggregate = Xunit.Assert.Single(store.DrainInactiveSuppressions(new HashSet<string>()));
+                Xunit.Assert.Equal("first failure", aggregate.OriginalReason);
+                Xunit.Assert.Equal(2, aggregate.AvoidedCallCount);
+                Xunit.Assert.Equal(30, aggregate.AvoidedInputTokens);
+                Xunit.Assert.Equal(1, aggregate.ChangedFilesTriggerCount);
+                Xunit.Assert.Equal(1, aggregate.ElapsedTriggerCount);
+            }
+        }
+        finally
+        {
+            Directory.Delete(root, recursive: true);
+        }
     }
 
     [Xunit.Fact]
@@ -1983,11 +2023,24 @@ public sealed class ProgressiveReviewGlanceTests
 
     private sealed class UnavailableProgressiveReviewGlanceCircuitStore : IProgressiveReviewGlanceCircuitStore
     {
+        private readonly bool _varyFailureReason;
+        private int _admissionAttempts;
+
+        public UnavailableProgressiveReviewGlanceCircuitStore(bool varyFailureReason = false)
+        {
+            _varyFailureReason = varyFailureReason;
+        }
+
         public ProgressiveReviewGlanceCircuitAdmission TryAcquireProbe(
             ProgressiveReviewGlanceContractIdentity identity,
             DateTimeOffset now,
-            TimeSpan leaseDuration) =>
-            throw new InvalidOperationException("circuit admission unavailable");
+            TimeSpan leaseDuration)
+        {
+            var attempt = Interlocked.Increment(ref _admissionAttempts);
+            throw new InvalidOperationException(_varyFailureReason
+                ? $"circuit admission unavailable:{attempt}"
+                : "circuit admission unavailable");
+        }
 
         public void CompleteProbe(
             ProgressiveReviewGlanceContractIdentity identity,

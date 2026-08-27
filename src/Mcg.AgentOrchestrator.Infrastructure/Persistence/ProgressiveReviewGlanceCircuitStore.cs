@@ -238,8 +238,7 @@ public sealed class InMemoryProgressiveReviewGlanceCircuitStore : IProgressiveRe
         {
             if (!GoalId.Equals(observation.GoalId, StringComparison.Ordinal) ||
                 !TaskId.Equals(observation.TaskId, StringComparison.Ordinal) ||
-                !OpeningCause.Equals(observation.OpeningCause, StringComparison.Ordinal) ||
-                !OriginalReason.Equals(observation.OriginalReason, StringComparison.Ordinal))
+                !OpeningCause.Equals(observation.OpeningCause, StringComparison.Ordinal))
             {
                 throw new InvalidOperationException("progressive glance suppression window metadata changed");
             }
@@ -699,8 +698,7 @@ public sealed class SqliteProgressiveReviewGlanceCircuitStore : IProgressiveRevi
         {
             if (!Aggregate.GoalId.Equals(observation.GoalId, StringComparison.Ordinal) ||
                 !Aggregate.TaskId.Equals(observation.TaskId, StringComparison.Ordinal) ||
-                !Aggregate.OpeningCause.Equals(observation.OpeningCause, StringComparison.Ordinal) ||
-                !Aggregate.OriginalReason.Equals(observation.OriginalReason, StringComparison.Ordinal))
+                !Aggregate.OpeningCause.Equals(observation.OpeningCause, StringComparison.Ordinal))
             {
                 throw new InvalidOperationException("progressive glance suppression window metadata changed");
             }
