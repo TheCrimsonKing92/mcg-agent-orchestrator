@@ -44,6 +44,61 @@ public sealed partial class ConductorDriverTestsAcceptanceCoordination
         Assert.Equal(testResultPaths, normalized.TestResultPaths);
         Assert.Equal(attributions, normalized.CheckAttributions);
         Assert.Equal("attested-red", normalized.BaselineAttestation);
+        Assert.Equal(
+            AcceptanceFailureClassifications.InheritedBaselineApparatus,
+            Assert.Single(normalized.RequiredUnmetCriteria).FailureClassification);
+    }
+
+    [Xunit.Fact(DisplayName = "ConductorDriver_all_inherited_red_gets_typed_apparatus_cause")]
+    public void ConductorDriverAllInheritedRedGetsTypedApparatusCause()
+    {
+        var acceptance = new AcceptanceVerificationSummary(
+            false,
+            [new AcceptanceCheckResult("infrastructure tests: Remainder", false, 1, "red")],
+            FailedChecks: ["infrastructure tests: Remainder"],
+            BranchHeadSha: "candidate-a",
+            MainHeadSha: "main-a",
+            CheckAttributions:
+            [
+                new AcceptanceCheckAttribution(
+                    "infrastructure tests: Remainder",
+                    AcceptanceFailureOrigin.Inherited,
+                    "same check failed across three goals at main-a")
+            ],
+            BaselineAttestation: "attested-red");
+
+        var classified = ConductorDriver.ClassifyInheritedBaselineApparatus(acceptance);
+
+        Assert.Equal(
+            AcceptanceFailureClassifications.InheritedBaselineApparatus,
+            Assert.Single(classified.RequiredUnmetCriteria).FailureClassification);
+        Assert.Equal(
+            AcceptanceFailureCause.EnvironmentalApparatus,
+            Assert.Single(classified.CheckAttributions!).Cause);
+        Assert.Equal("candidate-a", classified.BranchHeadSha);
+    }
+
+    [Xunit.Fact(DisplayName = "ConductorDriver_mixed_red_does_not_get_apparatus_classification")]
+    public void ConductorDriverMixedRedDoesNotGetApparatusClassification()
+    {
+        var acceptance = new AcceptanceVerificationSummary(
+            false,
+            [
+                new AcceptanceCheckResult("inherited", false, 1, "red"),
+                new AcceptanceCheckResult("introduced", false, 1, "red")
+            ],
+            FailedChecks: ["inherited", "introduced"],
+            CheckAttributions:
+            [
+                new AcceptanceCheckAttribution("inherited", AcceptanceFailureOrigin.Inherited, "baseline"),
+                new AcceptanceCheckAttribution("introduced", AcceptanceFailureOrigin.Introduced, "green baseline")
+            ]);
+
+        var classified = ConductorDriver.ClassifyInheritedBaselineApparatus(acceptance);
+
+        Assert.All(classified.RequiredUnmetCriteria, check => Assert.Null(check.FailureClassification));
+        Assert.All(classified.CheckAttributions!, attribution =>
+            Assert.Equal(AcceptanceFailureCause.NotClassified, attribution.Cause));
     }
 
     [Xunit.Fact(DisplayName = "ConductorDriver_real_facts_match_per_goal_read_path")]

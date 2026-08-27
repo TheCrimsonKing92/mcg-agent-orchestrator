@@ -34,6 +34,7 @@ internal sealed class WorkerDispatchTestsSeededRepositoryFactory
 
     internal CreationResult Create()
     {
+        var attempt = FixtureAttempt.Create("create");
         var template = _template.Value;
         _hooks.BeforeTemplateValidation?.Invoke(template.Path);
         var templateBefore = ValidateRepository(
@@ -42,7 +43,8 @@ internal sealed class WorkerDispatchTestsSeededRepositoryFactory
             template.Path,
             stagingPath: null,
             finalPath: null,
-            templateIdentity: template.Identity);
+            templateIdentity: template.Identity,
+            attempt: attempt);
         EnsureSameIdentity(
             ValidationCheck.TemplateIdentityChanged,
             template.Identity,
@@ -78,7 +80,8 @@ internal sealed class WorkerDispatchTestsSeededRepositoryFactory
                     GitProbeResult.NotRun("filesystem allocation", "The allocator did not create the staging directory."),
                     templateBefore,
                     stagingIdentity,
-                    finalIdentity);
+                    finalIdentity,
+                    probeReceipts: attempt.Receipts);
             }
 
             if (_fileSystem.DirectoryExists(finalPath) || _fileSystem.FileExists(finalPath))
@@ -92,7 +95,8 @@ internal sealed class WorkerDispatchTestsSeededRepositoryFactory
                     GitProbeResult.NotRun("filesystem publication", "The final path already exists."),
                     templateBefore,
                     stagingIdentity,
-                    finalIdentity);
+                    finalIdentity,
+                    probeReceipts: attempt.Receipts);
             }
 
             untypedFailureCheck = ValidationCheck.StagingValidation;
@@ -113,7 +117,8 @@ internal sealed class WorkerDispatchTestsSeededRepositoryFactory
                     templateBefore,
                     stagingIdentity,
                     finalIdentity,
-                    ex);
+                    ex,
+                    attempt.Receipts);
             }
 
             var templateAfter = ValidateRepository(
@@ -122,7 +127,8 @@ internal sealed class WorkerDispatchTestsSeededRepositoryFactory
                 template.Path,
                 stagingPath,
                 finalPath,
-                templateBefore);
+                templateBefore,
+                attempt: attempt);
             EnsureSameIdentity(
                 ValidationCheck.TemplateIdentityChangedAfterCopy,
                 templateBefore,
@@ -137,7 +143,8 @@ internal sealed class WorkerDispatchTestsSeededRepositoryFactory
                 template.Path,
                 stagingPath,
                 finalPath,
-                templateAfter);
+                templateAfter,
+                attempt: attempt);
             EnsureMatchingHead(
                 ValidationCheck.StagingHeadMatchesTemplate,
                 templateAfter,
@@ -165,7 +172,8 @@ internal sealed class WorkerDispatchTestsSeededRepositoryFactory
                     templateAfter,
                     stagingIdentity,
                     finalIdentity,
-                    ex);
+                    ex,
+                    attempt.Receipts);
             }
 
             finalIdentity = ValidateRepository(
@@ -175,7 +183,8 @@ internal sealed class WorkerDispatchTestsSeededRepositoryFactory
                 stagingPath,
                 finalPath,
                 templateAfter,
-                stagingIdentity);
+                stagingIdentity,
+                attempt);
             EnsureMatchingHead(
                 ValidationCheck.PublishedHeadMatchesTemplate,
                 templateAfter,
@@ -185,7 +194,11 @@ internal sealed class WorkerDispatchTestsSeededRepositoryFactory
                 finalPath,
                 stagingIdentity);
 
-            return new CreationResult(templateAfter, finalIdentity);
+            return new CreationResult(
+                templateAfter,
+                finalIdentity,
+                attempt.Id,
+                template.ProbeReceipts.Concat(attempt.Receipts).ToArray());
         }
         catch (SeededRepositoryFailureException failure)
         {
@@ -204,7 +217,8 @@ internal sealed class WorkerDispatchTestsSeededRepositoryFactory
                 templateBefore,
                 stagingIdentity,
                 finalIdentity,
-                ex);
+                ex,
+                attempt.Receipts);
             throw diagnostic.WithCleanup(
                 CleanupAttempt(stagingPath ?? allocatedStagingPath, finalPath, published));
         }
@@ -258,6 +272,7 @@ internal sealed class WorkerDispatchTestsSeededRepositoryFactory
 
     private TemplateState CreateTemplate()
     {
+        var attempt = FixtureAttempt.Create("template");
         string? allocatedPath = null;
         string? path = null;
         var untypedFailureCheck = ValidationCheck.TemplatePathAllocated;
@@ -275,7 +290,8 @@ internal sealed class WorkerDispatchTestsSeededRepositoryFactory
                     _fileSystem.ObserveRepository(path),
                     GitProbeResult.NotRun(
                         "filesystem allocation",
-                        "The allocator did not create the template directory."));
+                        "The allocator did not create the template directory."),
+                    probeReceipts: attempt.Receipts);
             }
 
             untypedFailureCheck = ValidationCheck.TemplateConstruction;
@@ -294,8 +310,9 @@ internal sealed class WorkerDispatchTestsSeededRepositoryFactory
                 ValidationStage.Template,
                 path,
                 stagingPath: null,
-                finalPath: null);
-            return new TemplateState(path, identity);
+                finalPath: null,
+                attempt: attempt);
+            return new TemplateState(path, identity, attempt.Receipts.ToArray());
         }
         catch (SeededRepositoryFailureException failure)
         {
@@ -310,7 +327,8 @@ internal sealed class WorkerDispatchTestsSeededRepositoryFactory
                 finalPath: null,
                 ObserveRepositorySafely(path ?? allocatedPath),
                 GitProbeResult.NotRun("template construction", ex.Message),
-                innerException: ex);
+                innerException: ex,
+                probeReceipts: attempt.Receipts);
             throw failure.WithCleanup(CleanupOwnedPaths(path ?? allocatedPath));
         }
     }
@@ -362,8 +380,10 @@ internal sealed class WorkerDispatchTestsSeededRepositoryFactory
         string? stagingPath,
         string? finalPath,
         RepositoryIdentity? templateIdentity = null,
-        RepositoryIdentity? stagingIdentity = null)
+        RepositoryIdentity? stagingIdentity = null,
+        FixtureAttempt? attempt = null)
     {
+        attempt ??= FixtureAttempt.Create("validation");
         var path = CanonicalPath(repositoryPath);
         var observation = _fileSystem.ObserveRepository(path);
         if (!observation.RepositoryDirectoryExists)
@@ -401,19 +421,22 @@ internal sealed class WorkerDispatchTestsSeededRepositoryFactory
             finalPath,
             observation,
             templateIdentity,
-            stagingIdentity);
+            stagingIdentity,
+            attempt);
         var head = SingleOutput(headResult);
         if (head.Length != 40 || head.Any(character => !Uri.IsHexDigit(character)))
         {
+            headResult = attempt.Reclassify(headResult, GitProbeClassification.InvalidRequiredOutput);
             throw Failure(
                 Check(stage, "HeadCommit"),
                 sourceTemplatePath,
                 stagingPath,
                 finalPath,
-                observation,
+                _fileSystem.ObserveRepository(path),
                 headResult,
                 templateIdentity,
-                stagingIdentity);
+                stagingIdentity,
+                probeReceipts: attempt.Receipts);
         }
 
         var inside = RequiredProbe(
@@ -425,18 +448,21 @@ internal sealed class WorkerDispatchTestsSeededRepositoryFactory
             finalPath,
             observation,
             templateIdentity,
-            stagingIdentity);
+            stagingIdentity,
+            attempt);
         if (!string.Equals(SingleOutput(inside), "true", StringComparison.Ordinal))
         {
+            inside = attempt.Reclassify(inside, GitProbeClassification.InvalidRequiredOutput);
             throw Failure(
                 Check(stage, "InsideWorkTree"),
                 sourceTemplatePath,
                 stagingPath,
                 finalPath,
-                observation,
+                _fileSystem.ObserveRepository(path),
                 inside,
                 templateIdentity,
-                stagingIdentity);
+                stagingIdentity,
+                probeReceipts: attempt.Receipts);
         }
 
         var topLevelResult = RequiredProbe(
@@ -448,19 +474,38 @@ internal sealed class WorkerDispatchTestsSeededRepositoryFactory
             finalPath,
             observation,
             templateIdentity,
-            stagingIdentity);
-        var topLevel = CanonicalPath(SingleOutput(topLevelResult));
-        if (!string.Equals(topLevel, path, PathComparison))
+            stagingIdentity,
+            attempt);
+        var rawTopLevel = SingleOutput(topLevelResult);
+        if (string.IsNullOrEmpty(rawTopLevel))
         {
+            topLevelResult = attempt.Reclassify(topLevelResult, GitProbeClassification.InvalidRequiredOutput);
             throw Failure(
                 Check(stage, "TopLevel"),
                 sourceTemplatePath,
                 stagingPath,
                 finalPath,
-                observation,
+                _fileSystem.ObserveRepository(path),
                 topLevelResult,
                 templateIdentity,
-                stagingIdentity);
+                stagingIdentity,
+                probeReceipts: attempt.Receipts);
+        }
+
+        var topLevel = CanonicalPath(rawTopLevel);
+        if (!string.Equals(topLevel, path, PathComparison))
+        {
+            topLevelResult = attempt.Reclassify(topLevelResult, GitProbeClassification.InvalidRequiredOutput);
+            throw Failure(
+                Check(stage, "TopLevel"),
+                sourceTemplatePath,
+                stagingPath,
+                finalPath,
+                _fileSystem.ObserveRepository(path),
+                topLevelResult,
+                templateIdentity,
+                stagingIdentity,
+                probeReceipts: attempt.Receipts);
         }
 
         var gitDirectoryResult = RequiredProbe(
@@ -472,7 +517,8 @@ internal sealed class WorkerDispatchTestsSeededRepositoryFactory
             finalPath,
             observation,
             templateIdentity,
-            stagingIdentity);
+            stagingIdentity,
+            attempt);
         var rawGitDirectory = SingleOutput(gitDirectoryResult);
         var gitDirectory = CanonicalPath(Path.IsPathRooted(rawGitDirectory)
             ? rawGitDirectory
@@ -480,15 +526,19 @@ internal sealed class WorkerDispatchTestsSeededRepositoryFactory
         var expectedGitDirectory = CanonicalPath(Path.Combine(path, ".git"));
         if (!string.Equals(gitDirectory, expectedGitDirectory, PathComparison))
         {
+            gitDirectoryResult = attempt.Reclassify(
+                gitDirectoryResult,
+                GitProbeClassification.InvalidRequiredOutput);
             throw Failure(
                 Check(stage, "GitDirectory"),
                 sourceTemplatePath,
                 stagingPath,
                 finalPath,
-                observation,
+                _fileSystem.ObserveRepository(path),
                 gitDirectoryResult,
                 templateIdentity,
-                stagingIdentity);
+                stagingIdentity,
+                probeReceipts: attempt.Receipts);
         }
 
         var statusResult = RequiredProbe(
@@ -500,7 +550,9 @@ internal sealed class WorkerDispatchTestsSeededRepositoryFactory
             finalPath,
             observation,
             templateIdentity,
-            stagingIdentity);
+            stagingIdentity,
+            attempt,
+            requiresOutput: false);
         if (!string.IsNullOrWhiteSpace(statusResult.StandardOutput))
         {
             throw Failure(
@@ -511,7 +563,8 @@ internal sealed class WorkerDispatchTestsSeededRepositoryFactory
                 observation,
                 statusResult,
                 templateIdentity,
-                stagingIdentity);
+                stagingIdentity,
+                probeReceipts: attempt.Receipts);
         }
 
         return new RepositoryIdentity(path, gitDirectory, topLevel, head, statusResult.StandardOutput);
@@ -526,9 +579,17 @@ internal sealed class WorkerDispatchTestsSeededRepositoryFactory
         string? finalPath,
         FileSystemObservation observation,
         RepositoryIdentity? templateIdentity,
-        RepositoryIdentity? stagingIdentity)
+        RepositoryIdentity? stagingIdentity,
+        FixtureAttempt attempt,
+        bool requiresOutput = true)
     {
         var result = _gitRunner.Run(path, arguments);
+        if (result.Succeeded && requiresOutput && string.IsNullOrWhiteSpace(result.StandardOutput))
+        {
+            result = result with { Classification = GitProbeClassification.EmptyRequiredOutput };
+        }
+
+        result = attempt.Record(result, path, check);
         if (!result.Succeeded)
         {
             throw Failure(
@@ -539,7 +600,23 @@ internal sealed class WorkerDispatchTestsSeededRepositoryFactory
                 observation,
                 result,
                 templateIdentity,
-                stagingIdentity);
+                stagingIdentity,
+                probeReceipts: attempt.Receipts);
+        }
+
+        if (result.Classification == GitProbeClassification.EmptyRequiredOutput)
+        {
+            var failureObservation = _fileSystem.ObserveRepository(path);
+            throw Failure(
+                check,
+                sourceTemplatePath,
+                stagingPath,
+                finalPath,
+                failureObservation,
+                result,
+                templateIdentity,
+                stagingIdentity,
+                probeReceipts: attempt.Receipts);
         }
 
         return result;
@@ -708,8 +785,12 @@ internal sealed class WorkerDispatchTestsSeededRepositoryFactory
         RepositoryIdentity? templateIdentity = null,
         RepositoryIdentity? stagingIdentity = null,
         RepositoryIdentity? finalIdentity = null,
-        Exception? innerException = null) =>
-        new(
+        Exception? innerException = null,
+        IReadOnlyList<GitProbeResult>? probeReceipts = null)
+    {
+        var receipts = probeReceipts?.ToArray() ??
+            (gitResult.ProcessStarted ? [gitResult] : Array.Empty<GitProbeResult>());
+        return new SeededRepositoryFailureException(
             new FailureDiagnostic(
                 check,
                 sourceTemplatePath,
@@ -720,14 +801,97 @@ internal sealed class WorkerDispatchTestsSeededRepositoryFactory
                 finalIdentity,
                 observation,
                 gitResult,
-                Cleanup: []),
+                Cleanup: [],
+                Owner: DetermineOwner(observation, gitResult),
+                ProbeReceipts: receipts),
             innerException);
+    }
 
-    private sealed record TemplateState(string Path, RepositoryIdentity Identity);
+    private static ValidationFailureOwner DetermineOwner(
+        FileSystemObservation observation,
+        GitProbeResult result)
+    {
+        if (result.Classification is
+            GitProbeClassification.LaunchFailure or
+            GitProbeClassification.ProcessTimeout or
+            GitProbeClassification.DrainTimeout or
+            GitProbeClassification.DrainFailure)
+        {
+            return ValidationFailureOwner.ProcessOutputApparatus;
+        }
+
+        if (result.Classification == GitProbeClassification.EmptyRequiredOutput)
+        {
+            return observation.HasValidHeadBytes
+                ? ValidationFailureOwner.ProcessOutputApparatus
+                : observation.HeadState == RepositoryHeadState.HeadUnreadable
+                    ? ValidationFailureOwner.Unknown
+                    : ValidationFailureOwner.FixturePublication;
+        }
+
+        return observation.HeadState is
+            RepositoryHeadState.RepositoryMissing or
+            RepositoryHeadState.GitMetadataMissing or
+            RepositoryHeadState.HeadMissing or
+            RepositoryHeadState.HeadInvalid or
+            RepositoryHeadState.ReferenceMissing or
+            RepositoryHeadState.ReferenceInvalid
+                ? ValidationFailureOwner.FixturePublication
+                : ValidationFailureOwner.Unknown;
+    }
+
+    private sealed record TemplateState(
+        string Path,
+        RepositoryIdentity Identity,
+        IReadOnlyList<GitProbeResult> ProbeReceipts);
+
+    private sealed class FixtureAttempt(string id)
+    {
+        private readonly List<GitProbeResult> _receipts = [];
+
+        internal string Id { get; } = id;
+
+        internal IReadOnlyList<GitProbeResult> Receipts => _receipts;
+
+        internal static FixtureAttempt Create(string prefix) =>
+            new($"{prefix}-{Guid.NewGuid():N}");
+
+        internal GitProbeResult Record(
+            GitProbeResult result,
+            string repositoryDirectory,
+            ValidationCheck check)
+        {
+            var receipt = result with
+            {
+                RepositoryDirectory = CanonicalPath(repositoryDirectory),
+                FixtureAttemptId = Id,
+                ProbeOrdinal = _receipts.Count + 1,
+                Check = check
+            };
+            _receipts.Add(receipt);
+            return receipt;
+        }
+
+        internal GitProbeResult Reclassify(
+            GitProbeResult result,
+            GitProbeClassification classification)
+        {
+            var receipt = result with { Classification = classification };
+            var index = _receipts.FindIndex(candidate => candidate.ProbeOrdinal == result.ProbeOrdinal);
+            if (index >= 0)
+            {
+                _receipts[index] = receipt;
+            }
+
+            return receipt;
+        }
+    }
 
     internal sealed record CreationResult(
         RepositoryIdentity TemplateIdentity,
-        RepositoryIdentity PublishedIdentity);
+        RepositoryIdentity PublishedIdentity,
+        string FixtureAttemptId,
+        IReadOnlyList<GitProbeResult> ProbeReceipts);
 
     internal sealed record RepositoryIdentity(
         string RepositoryPath,
@@ -745,20 +909,66 @@ internal sealed class WorkerDispatchTestsSeededRepositoryFactory
         bool DrainTimedOut,
         bool TimedOut,
         bool DrainFailed = false,
-        string EnvironmentContract = "not-run")
+        string EnvironmentContract = "not-run",
+        string Executable = "git",
+        IReadOnlyList<string>? Arguments = null,
+        string? RepositoryDirectory = null,
+        long StandardOutputByteCount = 0,
+        long StandardErrorByteCount = 0,
+        bool StandardOutputTruncated = false,
+        bool StandardErrorTruncated = false,
+        int? ChildProcessId = null,
+        DateTimeOffset? ChildStartedAt = null,
+        string FixtureAttemptId = "not-assigned",
+        int ProbeOrdinal = 0,
+        ValidationCheck? Check = null,
+        GitProbeClassification Classification = GitProbeClassification.NotRun)
     {
         internal bool Succeeded =>
             ProcessStarted && ExitCode == 0 && !DrainTimedOut && !TimedOut && !DrainFailed;
 
         internal static GitProbeResult NotRun(string command, string reason) =>
-            new(command, false, null, string.Empty, reason, false, false);
+            new(
+                command,
+                false,
+                null,
+                string.Empty,
+                BoundDiagnostic(reason),
+                false,
+                false,
+                StandardErrorByteCount: System.Text.Encoding.UTF8.GetByteCount(reason),
+                StandardErrorTruncated: reason.Length > MaximumDiagnosticCharacters,
+                Classification: GitProbeClassification.NotRun);
 
         internal static GitProbeResult NotStarted(string command, string reason) =>
-            new(command, false, null, string.Empty, reason, false, false);
+            new(
+                command,
+                false,
+                null,
+                string.Empty,
+                BoundDiagnostic(reason),
+                false,
+                false,
+                StandardErrorByteCount: System.Text.Encoding.UTF8.GetByteCount(reason),
+                StandardErrorTruncated: reason.Length > MaximumDiagnosticCharacters,
+                Classification: GitProbeClassification.LaunchFailure);
+
+        private const int MaximumDiagnosticCharacters = 4096;
+
+        internal static string BoundDiagnostic(string value) =>
+            value.Length <= MaximumDiagnosticCharacters ? value : value[..MaximumDiagnosticCharacters];
+
+        internal string ChildIdentity => ChildProcessId is null
+            ? "not-started"
+            : $"pid={ChildProcessId}; startedAt={ChildStartedAt?.ToString("O") ?? "unknown"}";
 
         public override string ToString() =>
-            $"command={Command}; processStarted={ProcessStarted}; exitCode={ExitCode?.ToString() ?? "null"}; " +
-            $"stdout={StandardOutput.Trim()}; stderr={StandardError.Trim()}; " +
+            $"executable={Executable}; arguments=[{string.Join(", ", Arguments ?? [])}]; command={Command}; " +
+            $"repository={RepositoryDirectory ?? "null"}; fixtureAttempt={FixtureAttemptId}; " +
+            $"probeOrdinal={ProbeOrdinal}; check={Check?.ToString() ?? "none"}; classification={Classification}; " +
+            $"processStarted={ProcessStarted}; child=({ChildIdentity}); exitCode={ExitCode?.ToString() ?? "null"}; " +
+            $"stdoutBytes={StandardOutputByteCount}; stdoutTruncated={StandardOutputTruncated}; stdout={StandardOutput.Trim()}; " +
+            $"stderrBytes={StandardErrorByteCount}; stderrTruncated={StandardErrorTruncated}; stderr={StandardError.Trim()}; " +
             $"drainTimedOut={DrainTimedOut}; timedOut={TimedOut}; drainFailed={DrainFailed}; " +
             $"environment={EnvironmentContract}";
     }
@@ -767,11 +977,32 @@ internal sealed class WorkerDispatchTestsSeededRepositoryFactory
         bool RepositoryDirectoryExists,
         bool GitMetadataDirectoryExists,
         bool GitMetadataFileExists,
-        bool HeadFileExists)
+        bool HeadFileExists,
+        RepositoryHeadState HeadState = RepositoryHeadState.NotObserved,
+        long HeadByteCount = 0,
+        string HeadContent = "",
+        bool HeadContentTruncated = false,
+        string? HeadReference = null,
+        bool ReferenceFileExists = false,
+        bool PackedReferenceExists = false,
+        long ReferenceByteCount = 0,
+        string ReferenceContent = "",
+        bool ReferenceContentTruncated = false,
+        string? ReadError = null)
     {
+        internal bool HasValidHeadBytes => HeadState is
+            RepositoryHeadState.ValidLooseReference or
+            RepositoryHeadState.ValidPackedReference or
+            RepositoryHeadState.ValidDetachedHead;
+
         public override string ToString() =>
             $"repositoryDirectory={RepositoryDirectoryExists}; gitDirectory={GitMetadataDirectoryExists}; " +
-            $"gitFile={GitMetadataFileExists}; headFile={HeadFileExists}";
+            $"gitFile={GitMetadataFileExists}; headFile={HeadFileExists}; headState={HeadState}; " +
+            $"headBytes={HeadByteCount}; headTruncated={HeadContentTruncated}; head={HeadContent.Trim()}; " +
+            $"headReference={HeadReference ?? "null"}; referenceFile={ReferenceFileExists}; " +
+            $"packedReference={PackedReferenceExists}; referenceBytes={ReferenceByteCount}; " +
+            $"referenceTruncated={ReferenceContentTruncated}; reference={ReferenceContent.Trim()}; " +
+            $"readError={ReadError ?? "none"}";
     }
 
     internal sealed record FailureDiagnostic(
@@ -784,14 +1015,51 @@ internal sealed class WorkerDispatchTestsSeededRepositoryFactory
         RepositoryIdentity? FinalIdentity,
         FileSystemObservation FileSystem,
         GitProbeResult Git,
-        IReadOnlyList<CleanupOutcome> Cleanup)
+        IReadOnlyList<CleanupOutcome> Cleanup,
+        ValidationFailureOwner Owner = ValidationFailureOwner.Unknown,
+        IReadOnlyList<GitProbeResult>? ProbeReceipts = null)
     {
         public override string ToString() =>
             $"check={Check}; sourceTemplate={SourceTemplatePath ?? "null"}; staging={StagingPath ?? "null"}; " +
             $"final={FinalPath ?? "null"}; templateIdentity={TemplateIdentity?.ToString() ?? "null"}; " +
             $"stagingIdentity={StagingIdentity?.ToString() ?? "null"}; " +
-            $"finalIdentity={FinalIdentity?.ToString() ?? "null"}; filesystem=({FileSystem}); git=({Git}); " +
-            $"cleanup=({string.Join(" | ", Cleanup)})";
+            $"finalIdentity={FinalIdentity?.ToString() ?? "null"}; owner={Owner}; filesystem=({FileSystem}); git=({Git}); " +
+            $"probeReceipts=({string.Join(" || ", ProbeReceipts ?? [])}); cleanup=({string.Join(" | ", Cleanup)})";
+    }
+
+    internal enum GitProbeClassification
+    {
+        NotRun,
+        Success,
+        EmptyRequiredOutput,
+        NonZeroExit,
+        LaunchFailure,
+        ProcessTimeout,
+        DrainTimeout,
+        DrainFailure,
+        InvalidRequiredOutput
+    }
+
+    internal enum RepositoryHeadState
+    {
+        NotObserved,
+        RepositoryMissing,
+        GitMetadataMissing,
+        HeadMissing,
+        HeadUnreadable,
+        HeadInvalid,
+        ReferenceMissing,
+        ReferenceInvalid,
+        ValidLooseReference,
+        ValidPackedReference,
+        ValidDetachedHead
+    }
+
+    internal enum ValidationFailureOwner
+    {
+        Unknown,
+        ProcessOutputApparatus,
+        FixturePublication
     }
 
     internal sealed record CleanupOutcome(
@@ -858,12 +1126,163 @@ internal sealed class WorkerDispatchTestsSeededRepositoryFactory
 
         public bool FileExists(string path) => File.Exists(path);
 
-        public FileSystemObservation ObserveRepository(string path) =>
-            new(
-                Directory.Exists(path),
-                Directory.Exists(Path.Combine(path, ".git")),
-                File.Exists(Path.Combine(path, ".git")),
-                File.Exists(Path.Combine(path, ".git", "HEAD")));
+        public FileSystemObservation ObserveRepository(string path)
+        {
+            var repositoryExists = Directory.Exists(path);
+            var gitPath = Path.Combine(path, ".git");
+            var gitDirectoryExists = Directory.Exists(gitPath);
+            var gitFileExists = File.Exists(gitPath);
+            if (!repositoryExists)
+            {
+                return new FileSystemObservation(
+                    false,
+                    gitDirectoryExists,
+                    gitFileExists,
+                    false,
+                    RepositoryHeadState.RepositoryMissing);
+            }
+
+            if (!gitDirectoryExists)
+            {
+                return new FileSystemObservation(
+                    true,
+                    false,
+                    gitFileExists,
+                    false,
+                    RepositoryHeadState.GitMetadataMissing);
+            }
+
+            var headPath = Path.Combine(gitPath, "HEAD");
+            if (!File.Exists(headPath))
+            {
+                return new FileSystemObservation(
+                    true,
+                    true,
+                    gitFileExists,
+                    false,
+                    RepositoryHeadState.HeadMissing);
+            }
+
+            try
+            {
+                var headBytes = File.ReadAllBytes(headPath);
+                var head = System.Text.Encoding.UTF8.GetString(headBytes).Trim();
+                var boundedHead = GitProbeResult.BoundDiagnostic(head);
+                if (!head.StartsWith("ref: ", StringComparison.Ordinal))
+                {
+                    return new FileSystemObservation(
+                        true,
+                        true,
+                        gitFileExists,
+                        true,
+                        IsObjectId(head)
+                            ? RepositoryHeadState.ValidDetachedHead
+                            : RepositoryHeadState.HeadInvalid,
+                        headBytes.LongLength,
+                        boundedHead,
+                        boundedHead.Length != head.Length);
+                }
+
+                var reference = head[5..].Trim();
+                if (!IsSafeReference(reference))
+                {
+                    return new FileSystemObservation(
+                        true,
+                        true,
+                        gitFileExists,
+                        true,
+                        RepositoryHeadState.HeadInvalid,
+                        headBytes.LongLength,
+                        boundedHead,
+                        boundedHead.Length != head.Length,
+                        reference);
+                }
+
+                var referencePath = Path.Combine(gitPath, reference.Replace('/', Path.DirectorySeparatorChar));
+                if (File.Exists(referencePath))
+                {
+                    var referenceBytes = File.ReadAllBytes(referencePath);
+                    var referenceContent = System.Text.Encoding.UTF8.GetString(referenceBytes).Trim();
+                    var boundedReference = GitProbeResult.BoundDiagnostic(referenceContent);
+                    return new FileSystemObservation(
+                        true,
+                        true,
+                        gitFileExists,
+                        true,
+                        IsObjectId(referenceContent)
+                            ? RepositoryHeadState.ValidLooseReference
+                            : RepositoryHeadState.ReferenceInvalid,
+                        headBytes.LongLength,
+                        boundedHead,
+                        boundedHead.Length != head.Length,
+                        reference,
+                        ReferenceFileExists: true,
+                        ReferenceByteCount: referenceBytes.LongLength,
+                        ReferenceContent: boundedReference,
+                        ReferenceContentTruncated: boundedReference.Length != referenceContent.Length);
+                }
+
+                var packedRefsPath = Path.Combine(gitPath, "packed-refs");
+                if (!File.Exists(packedRefsPath))
+                {
+                    return new FileSystemObservation(
+                        true,
+                        true,
+                        gitFileExists,
+                        true,
+                        RepositoryHeadState.ReferenceMissing,
+                        headBytes.LongLength,
+                        boundedHead,
+                        boundedHead.Length != head.Length,
+                        reference);
+                }
+
+                var packedBytes = File.ReadAllBytes(packedRefsPath);
+                var packedContent = System.Text.Encoding.UTF8.GetString(packedBytes);
+                var packedValue = packedContent
+                    .Split(['\r', '\n'], StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries)
+                    .Where(line => !line.StartsWith('#') && !line.StartsWith('^'))
+                    .Select(line => line.Split(' ', 2, StringSplitOptions.RemoveEmptyEntries))
+                    .FirstOrDefault(parts => parts.Length == 2 &&
+                        string.Equals(parts[1], reference, StringComparison.Ordinal));
+                var packedObjectId = packedValue is { Length: 2 } ? packedValue[0] : string.Empty;
+                var boundedPacked = GitProbeResult.BoundDiagnostic(packedObjectId);
+                return new FileSystemObservation(
+                    true,
+                    true,
+                    gitFileExists,
+                    true,
+                    IsObjectId(packedObjectId)
+                        ? RepositoryHeadState.ValidPackedReference
+                        : RepositoryHeadState.ReferenceMissing,
+                    headBytes.LongLength,
+                    boundedHead,
+                    boundedHead.Length != head.Length,
+                    reference,
+                    PackedReferenceExists: packedValue is { Length: 2 },
+                    ReferenceByteCount: packedBytes.LongLength,
+                    ReferenceContent: boundedPacked,
+                    ReferenceContentTruncated: boundedPacked.Length != packedObjectId.Length);
+            }
+            catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+            {
+                return new FileSystemObservation(
+                    true,
+                    true,
+                    gitFileExists,
+                    true,
+                    RepositoryHeadState.HeadUnreadable,
+                    ReadError: $"{ex.GetType().Name}: {GitProbeResult.BoundDiagnostic(ex.Message)}");
+            }
+        }
+
+        private static bool IsObjectId(string value) =>
+            value.Length is 40 or 64 && value.All(Uri.IsHexDigit);
+
+        private static bool IsSafeReference(string value) =>
+            value.StartsWith("refs/", StringComparison.Ordinal) &&
+            !value.Contains("..", StringComparison.Ordinal) &&
+            !Path.IsPathRooted(value);
 
         public void CopyDirectoryContents(string source, string destination)
         {

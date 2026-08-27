@@ -46,6 +46,7 @@ internal sealed record AcceptanceProcessCleanupObservation(
 public static class AcceptanceFailureClassifications
 {
     public const string GateEnvironmentInterference = "gate-environment-interference";
+    public const string InheritedBaselineApparatus = "inherited-baseline-apparatus";
     public const string StructuralCoverageFailed = "structural-coverage-failed";
     public const string FocusedSelectionApparatusFailure = "focused-selection-apparatus-failure";
     public const string FocusedSelectionReceiptUnreadable = "focused-selection-receipt-unreadable";

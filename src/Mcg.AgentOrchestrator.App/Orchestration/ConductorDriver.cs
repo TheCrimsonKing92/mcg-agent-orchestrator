@@ -692,7 +692,7 @@ internal sealed partial class ConductorDriver
                     acceptanceAttemptStartedAt,
                     GoalOperationJournal.TryExtractBaseBuildCacheReceipt(verification),
                     failedChecks);
-            return new AcceptanceVerificationSummary(
+            return ClassifyInheritedBaselineApparatus(new AcceptanceVerificationSummary(
                 verification.Passed,
                 unmetCriteria,
                 verification.Passed ? null : verification.OutputTail,
@@ -701,7 +701,7 @@ internal sealed partial class ConductorDriver
                 mainHeadSha,
                 testResultPaths,
                 checkAttributions,
-                verification.Passed ? null : CleanTestBaseline.FormatFailureAttestation(baselineReceipt));
+                verification.Passed ? null : CleanTestBaseline.FormatFailureAttestation(baselineReceipt)));
         };
 
         FocusedEvidenceRunResult RunFocusedEvidence(
@@ -4185,12 +4185,19 @@ internal sealed partial class ConductorDriver
 
         var output = string.Join(Environment.NewLine, failedChecks);
         var summary = $"Named failing acceptance checks: {string.Join(", ", failedChecks)}";
+        var allInherited = acceptance.CheckAttributions is { Count: > 0 } attributions &&
+            failedChecks.All(name => attributions.Any(attribution =>
+                attribution.CheckName.Equals(name, StringComparison.Ordinal) &&
+                attribution.Origin == AcceptanceFailureOrigin.Inherited));
         var check = new AcceptanceCheckResult(
             "acceptance failed checks",
             false,
             1,
             string.IsNullOrWhiteSpace(acceptance.FailureDetail) ? output : acceptance.FailureDetail,
-            ResultSummary: summary);
+            ResultSummary: summary,
+            FailureClassification: allInherited
+                ? AcceptanceFailureClassifications.InheritedBaselineApparatus
+                : null);
         return new AcceptanceVerificationSummary(
             false,
             [check],
@@ -4200,6 +4207,47 @@ internal sealed partial class ConductorDriver
             acceptance.MainHeadSha,
             acceptance.TestResultPaths,
             acceptance.CheckAttributions,
+            acceptance.BaselineAttestation);
+    }
+
+    internal static AcceptanceVerificationSummary ClassifyInheritedBaselineApparatus(
+        AcceptanceVerificationSummary acceptance)
+    {
+        if (acceptance.Passed ||
+            acceptance.FailedChecks is not { Count: > 0 } failedChecks ||
+            acceptance.CheckAttributions is not { Count: > 0 } attributions ||
+            !failedChecks.All(name => attributions.Any(attribution =>
+                attribution.CheckName.Equals(name, StringComparison.Ordinal) &&
+                attribution.Origin == AcceptanceFailureOrigin.Inherited)))
+        {
+            return acceptance;
+        }
+
+        var inheritedChecks = failedChecks.ToHashSet(StringComparer.Ordinal);
+        var classifiedChecks = acceptance.UnmetCriteria
+            .Select(check => !check.Advisory && inheritedChecks.Contains(check.Name)
+                ? check with
+                {
+                    FailureClassification = string.IsNullOrWhiteSpace(check.FailureClassification)
+                        ? AcceptanceFailureClassifications.InheritedBaselineApparatus
+                        : check.FailureClassification
+                }
+                : check)
+            .ToArray();
+        var classifiedAttributions = attributions
+            .Select(attribution => inheritedChecks.Contains(attribution.CheckName)
+                ? attribution with { Cause = AcceptanceFailureCause.EnvironmentalApparatus }
+                : attribution)
+            .ToArray();
+        return new AcceptanceVerificationSummary(
+            acceptance.Passed,
+            classifiedChecks,
+            acceptance.FailureDetail,
+            acceptance.FailedChecks,
+            acceptance.BranchHeadSha,
+            acceptance.MainHeadSha,
+            acceptance.TestResultPaths,
+            classifiedAttributions,
             acceptance.BaselineAttestation);
     }
 
@@ -5609,10 +5657,15 @@ internal sealed partial class ConductorDriver
         AcceptanceVerificationSummary acceptance)
     {
         if (acceptance.RequiredUnmetCriteria.Any(check =>
-            string.Equals(
-                check.FailureClassification,
-                AcceptanceFailureClassifications.GateEnvironmentInterference,
-                StringComparison.Ordinal)))
+            check.FailureClassification is not null &&
+            (string.Equals(
+                 check.FailureClassification,
+                 AcceptanceFailureClassifications.GateEnvironmentInterference,
+                 StringComparison.Ordinal) ||
+             string.Equals(
+                 check.FailureClassification,
+                 AcceptanceFailureClassifications.InheritedBaselineApparatus,
+                 StringComparison.Ordinal))))
         {
             return MakeResult(
                 goal.Id.Value,
@@ -5620,7 +5673,7 @@ internal sealed partial class ConductorDriver
                 policy,
                 new ConductorAdvanceOutcome.Held(
                     GoalLifecycleState.Verified,
-                    "Acceptance gate environmental interference; re-gate on the next conduct tick without dispatching a worker."));
+                    "Acceptance gate apparatus/environmental failure; preserve the unchanged candidate and re-gate on the next conduct tick without dispatching a worker."));
         }
 
         if (!acceptance.Passed && acceptance.RequiredUnmetCriteria.Count == 0)

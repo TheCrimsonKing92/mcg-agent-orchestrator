@@ -762,6 +762,61 @@ public sealed partial class ConductorDriverTestsLifecycleStates
         Xunit.Assert.Equal(0, task.CriterionRetryCount);
     }
 
+    [Xunit.Fact(DisplayName = "ConductorDriver_inherited_baseline_apparatus_regates_unchanged_candidate_without_retry")]
+    public void ConductorDriverInheritedBaselineApparatusRegatesUnchangedCandidateWithoutRetry()
+    {
+        var (kernel, goal) = SimpleGoal();
+        var task = goal.Tasks.Single();
+        PassVerification(kernel, goal, task);
+        var retryCalled = false;
+        var landCalled = false;
+        var failure = new AcceptanceCheckResult(
+            "infrastructure tests: Remainder",
+            false,
+            1,
+            "typed inherited baseline apparatus receipt",
+            FailureClassification: AcceptanceFailureClassifications.InheritedBaselineApparatus,
+            ExecutedTestCount: 42);
+        var acceptance = new AcceptanceVerificationSummary(
+            false,
+            [failure],
+            FailedChecks: [failure.Name],
+            BranchHeadSha: "candidate-a",
+            MainHeadSha: "main-a",
+            CheckAttributions:
+            [
+                new AcceptanceCheckAttribution(
+                    failure.Name,
+                    AcceptanceFailureOrigin.Inherited,
+                    "same check failed across three goals at main-a",
+                    AcceptanceFailureCause.EnvironmentalApparatus)
+            ],
+            BaselineAttestation: "attested-red");
+        var driver = MakeDriver(
+            getFacts: _ => GoalLifecycleFacts.None,
+            runAcceptanceSummary: _ => acceptance,
+            retryTask: (goalId, taskId, message) =>
+            {
+                retryCalled = true;
+                return kernel.RetryTask(goalId, taskId, message);
+            },
+            land: g =>
+            {
+                landCalled = true;
+                return new LandingResult(g.Id.Value, g.Id.Value[..8], new LandingDecision.Promote(), "integration", true, "Landed");
+            });
+
+        var result = driver.AdvanceOnce(goal, ConductorAutonomyPolicy.Conservative);
+
+        var held = Xunit.Assert.IsType<ConductorAdvanceOutcome.Held>(result.Outcome);
+        Xunit.Assert.Equal(GoalLifecycleState.Verified, held.State);
+        Xunit.Assert.Contains("unchanged candidate", held.Reason, StringComparison.Ordinal);
+        Xunit.Assert.False(retryCalled);
+        Xunit.Assert.False(landCalled);
+        Xunit.Assert.Equal(WorkTaskStatus.Completed, task.Status);
+        Xunit.Assert.Equal(0, task.CriterionRetryCount);
+    }
+
     [Xunit.Fact(DisplayName = "ConductorDriver_Verified_unmet_acceptance_retry_feedback_caps_concrete_evidence")]
     public void ConductorDriverVerifiedUnmetAcceptanceRetryFeedbackCapsConcreteEvidence()
     {

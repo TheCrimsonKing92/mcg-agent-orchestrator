@@ -7,6 +7,7 @@ using Mcg.AgentOrchestrator.Infrastructure;
 using System.Diagnostics;
 using System.Net;
 using System.Net.Sockets;
+using System.Text;
 
 internal static class InfrastructureTestSupport
 {
@@ -77,6 +78,8 @@ internal static WorkerDispatchTestsSeededRepositoryFactory.GitProbeResult RunGit
         RedirectStandardInput = true,
         RedirectStandardOutput = true,
         RedirectStandardError = true,
+        StandardOutputEncoding = Encoding.UTF8,
+        StandardErrorEncoding = Encoding.UTF8,
         UseShellExecute = false,
         CreateNoWindow = true,
         WorkingDirectory = workingDirectory
@@ -136,6 +139,8 @@ internal static WorkerDispatchTestsSeededRepositoryFactory.GitProbeResult RunGit
 
     Process? process = null;
     var processStarted = false;
+    int? childProcessId = null;
+    DateTimeOffset? childStartedAt = null;
     try
     {
         process = new Process { StartInfo = startInfo };
@@ -144,7 +149,23 @@ internal static WorkerDispatchTestsSeededRepositoryFactory.GitProbeResult RunGit
         {
             return WorkerDispatchTestsSeededRepositoryFactory.GitProbeResult.NotStarted(
                 command,
-                "Process.Start returned false.") with { EnvironmentContract = environmentContract };
+                "Process.Start returned false.") with
+                {
+                    Executable = startInfo.FileName,
+                    Arguments = arguments.ToArray(),
+                    RepositoryDirectory = Path.GetFullPath(workingDirectory),
+                    EnvironmentContract = environmentContract
+                };
+        }
+
+        childProcessId = process.Id;
+        try
+        {
+            childStartedAt = process.StartTime.ToUniversalTime();
+        }
+        catch (Exception ex) when (ex is InvalidOperationException or System.ComponentModel.Win32Exception)
+        {
+            childStartedAt = null;
         }
 
         process.StandardInput.Close();
@@ -178,36 +199,86 @@ internal static WorkerDispatchTestsSeededRepositoryFactory.GitProbeResult RunGit
                 new[] { outputTask.Exception?.GetBaseException().Message, errorTask.Exception?.GetBaseException().Message }
                     .Where(message => !string.IsNullOrWhiteSpace(message)))
             : string.Empty;
+        var standardOutput = outputTask.IsCompletedSuccessfully ? outputTask.Result : string.Empty;
+        var standardError = errorTask.IsCompletedSuccessfully
+            ? string.Join(" | ", new[] { errorTask.Result, drainError }.Where(value => !string.IsNullOrWhiteSpace(value)))
+            : drainError;
+        var boundedOutput = WorkerDispatchTestsSeededRepositoryFactory.GitProbeResult.BoundDiagnostic(standardOutput);
+        var boundedError = WorkerDispatchTestsSeededRepositoryFactory.GitProbeResult.BoundDiagnostic(standardError);
         return new WorkerDispatchTestsSeededRepositoryFactory.GitProbeResult(
             command,
             ProcessStarted: true,
             ExitCode: process.HasExited ? process.ExitCode : null,
-            StandardOutput: outputTask.IsCompletedSuccessfully ? outputTask.Result : string.Empty,
-            StandardError: errorTask.IsCompletedSuccessfully
-                ? string.Join(" | ", new[] { errorTask.Result, drainError }.Where(value => !string.IsNullOrWhiteSpace(value)))
-                : drainError,
+            StandardOutput: boundedOutput,
+            StandardError: boundedError,
             DrainTimedOut: !drainCompleted,
             TimedOut: timedOut,
             DrainFailed: drainFailed,
-            EnvironmentContract: environmentContract);
+            EnvironmentContract: environmentContract,
+            Executable: startInfo.FileName,
+            Arguments: arguments.ToArray(),
+            RepositoryDirectory: Path.GetFullPath(workingDirectory),
+            StandardOutputByteCount: Encoding.UTF8.GetByteCount(standardOutput),
+            StandardErrorByteCount: Encoding.UTF8.GetByteCount(standardError),
+            StandardOutputTruncated: boundedOutput.Length != standardOutput.Length,
+            StandardErrorTruncated: boundedError.Length != standardError.Length,
+            ChildProcessId: childProcessId,
+            ChildStartedAt: childStartedAt,
+            Classification: ClassifyGitProbe(
+                processStarted: true,
+                process.HasExited ? process.ExitCode : null,
+                timedOut,
+                drainTimedOut: !drainCompleted,
+                drainFailed));
     }
     catch (Exception ex)
     {
+        var boundedError = WorkerDispatchTestsSeededRepositoryFactory.GitProbeResult.BoundDiagnostic(ex.Message);
         return new WorkerDispatchTestsSeededRepositoryFactory.GitProbeResult(
             command,
             processStarted,
             processStarted && process is { HasExited: true } ? process.ExitCode : null,
             string.Empty,
-            ex.Message,
+            boundedError,
             DrainTimedOut: false,
             TimedOut: false,
             DrainFailed: false,
-            EnvironmentContract: environmentContract);
+            EnvironmentContract: environmentContract,
+            Executable: startInfo.FileName,
+            Arguments: arguments.ToArray(),
+            RepositoryDirectory: Path.GetFullPath(workingDirectory),
+            StandardErrorByteCount: Encoding.UTF8.GetByteCount(ex.Message),
+            StandardErrorTruncated: boundedError.Length != ex.Message.Length,
+            ChildProcessId: childProcessId,
+            ChildStartedAt: childStartedAt,
+            Classification: processStarted
+                ? WorkerDispatchTestsSeededRepositoryFactory.GitProbeClassification.NonZeroExit
+                : WorkerDispatchTestsSeededRepositoryFactory.GitProbeClassification.LaunchFailure);
     }
     finally
     {
         process?.Dispose();
     }
+}
+
+private static WorkerDispatchTestsSeededRepositoryFactory.GitProbeClassification ClassifyGitProbe(
+    bool processStarted,
+    int? exitCode,
+    bool timedOut,
+    bool drainTimedOut,
+    bool drainFailed)
+{
+    if (!processStarted)
+        return WorkerDispatchTestsSeededRepositoryFactory.GitProbeClassification.LaunchFailure;
+    if (timedOut)
+        return WorkerDispatchTestsSeededRepositoryFactory.GitProbeClassification.ProcessTimeout;
+    if (drainTimedOut)
+        return WorkerDispatchTestsSeededRepositoryFactory.GitProbeClassification.DrainTimeout;
+    if (drainFailed)
+        return WorkerDispatchTestsSeededRepositoryFactory.GitProbeClassification.DrainFailure;
+    return exitCode == 0
+        ? WorkerDispatchTestsSeededRepositoryFactory.GitProbeClassification.Success
+        : WorkerDispatchTestsSeededRepositoryFactory.GitProbeClassification.NonZeroExit;
 }
 
 public static IDisposable ClearProtectedPidEnvironment()

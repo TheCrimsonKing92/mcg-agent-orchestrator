@@ -755,10 +755,18 @@ public enum AcceptanceFailureOrigin
     Unattributed
 }
 
+public enum AcceptanceFailureCause
+{
+    NotClassified,
+    EnvironmentalApparatus,
+    FixturePublication
+}
+
 public sealed record AcceptanceCheckAttribution(
     string CheckName,
     AcceptanceFailureOrigin Origin,
-    string Evidence);
+    string Evidence,
+    AcceptanceFailureCause Cause = AcceptanceFailureCause.NotClassified);
 
 public sealed record AcceptanceFailureSummary(
     DateTimeOffset OccurredAt,
