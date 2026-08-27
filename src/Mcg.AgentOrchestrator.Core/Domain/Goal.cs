@@ -774,4 +774,12 @@ public sealed record AcceptanceFailureSummary(
     string? BranchHeadSha = null,
     string? MainHeadSha = null,
     IReadOnlyList<AcceptanceCheckAttribution>? CheckAttributions = null,
-    string? BaselineAttestation = null);
+    string? BaselineAttestation = null)
+{
+    public bool IsEnvironmentalApparatus =>
+        FailedChecks.Count > 0 &&
+        CheckAttributions is { Count: > 0 } attributions &&
+        FailedChecks.All(check => attributions.Any(attribution =>
+            attribution.CheckName.Equals(check, StringComparison.Ordinal) &&
+            attribution.Cause == AcceptanceFailureCause.EnvironmentalApparatus));
+}

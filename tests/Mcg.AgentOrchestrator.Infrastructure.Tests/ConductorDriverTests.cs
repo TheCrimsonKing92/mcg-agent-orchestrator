@@ -460,7 +460,10 @@ public sealed class ConductorDriverTests
         Func<Goal, string, string, IReadOnlyList<string>>? resolveFindingEvidenceSiblingClasses = null,
         Func<Goal, bool>? isVerificationGateSatisfied = null,
         GateReadyCandidateProjector? gateReadyCandidateProjector = null,
-        Func<Goal, string, IDisposable?>? tryAcquireEvidenceMutationLease = null, string? executionDirectory = null)
+        Func<Goal, string, IDisposable?>? tryAcquireEvidenceMutationLease = null,
+        Action<Goal, IReadOnlyList<string>, string?, string?, IReadOnlyList<AcceptanceCheckAttribution>?, string?>? recordAcceptanceFailure = null,
+        Func<Goal, (string? BranchHeadSha, string? MainHeadSha)>? resolveAcceptanceHeads = null,
+        string? executionDirectory = null)
     {
         return new ConductorDriver(
             getFacts ?? (_ => GoalLifecycleFacts.None),
@@ -513,6 +516,8 @@ public sealed class ConductorDriverTests
             gateReadyCandidateProjector: gateReadyCandidateProjector,
             runAcceptanceVerificationWithLease: runAcceptanceVerificationWithLease,
             tryAcquireEvidenceMutationLease: tryAcquireEvidenceMutationLease,
+            recordAcceptanceFailureWithAttribution: recordAcceptanceFailure,
+            resolveAcceptanceHeads: resolveAcceptanceHeads,
             executionDirectory: executionDirectory);
     }
 

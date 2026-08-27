@@ -2497,6 +2497,7 @@ public sealed partial class ConductorBatchLoopTestsParallelAcceptance : Conducto
         var goal = CreateVerifiedSimpleGoal(kernel, "Update src/Mcg.AgentOrchestrator.App/Orchestration/IntroducedRegate.cs");
         var task = goal.Tasks.Single();
         var attemptRoot = CreateTempDirectory("mcg-conductor-acceptance-attempts");
+        var acceptanceRuns = 0;
         var apparatus = new AcceptanceCheckResult(
             "infrastructure tests: Remainder",
             false,
@@ -2517,8 +2518,21 @@ public sealed partial class ConductorBatchLoopTestsParallelAcceptance : Conducto
             ]);
         var driver = MakeDriver(
             getFacts: _ => new GoalLifecycleFacts(WorkspaceExists: true),
-            runAcceptanceWithSlot: (_, _) => acceptance,
+            runAcceptanceWithSlot: (_, _) =>
+            {
+                acceptanceRuns++;
+                return acceptance;
+            },
             getLandingFileScopes: _ => ["src/Mcg.AgentOrchestrator.App/Orchestration/IntroducedRegate.cs"],
+            recordAcceptanceFailure: (heldGoal, checks, branch, main, attributions, attestation) =>
+                kernel.RecordAcceptanceFailure(
+                    heldGoal.Id,
+                    checks,
+                    branch,
+                    main,
+                    attributions,
+                    attestation),
+            resolveAcceptanceHeads: _ => ("candidate-a", "main-a"),
             parallelAcceptanceAttemptCoordinator: new ConductorParallelAcceptanceAttemptCoordinator(
                 attemptRoot,
                 runInline: true));
@@ -2530,13 +2544,14 @@ public sealed partial class ConductorBatchLoopTestsParallelAcceptance : Conducto
                 driver,
                 ConductorAutonomyPolicy.Conservative,
                 NoStopPath(),
-                maxIterations: 1);
+                maxIterations: 2);
 
-            Assert.Equal(1, summary.Held);
+            Assert.Equal(2, summary.Held);
+            Assert.Equal(1, acceptanceRuns);
             Assert.Equal(GoalStatus.Verified, goal.Status);
             Assert.Equal(WorkTaskStatus.Completed, task.Status);
             Assert.Equal(0, task.CriterionRetryCount);
-            Assert.Null(goal.LatestAcceptanceFailure);
+            Assert.True(goal.LatestAcceptanceFailure?.IsEnvironmentalApparatus);
         }
         finally
         {

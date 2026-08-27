@@ -702,10 +702,14 @@ public sealed partial class AgentOrchestratorKernel
             throw new ArgumentException("Acceptance retry reason cannot be empty.", nameof(operatorReason));
         }
 
-        if (goal.Status != GoalStatus.AcceptanceFailed)
+        var isVerifiedApparatusHold =
+            goal.Status == GoalStatus.Verified &&
+            goal.LatestAcceptanceFailure is { IsEnvironmentalApparatus: true };
+        if (goal.Status != GoalStatus.AcceptanceFailed && !isVerifiedApparatusHold)
         {
             throw new InvalidOperationException(
-                $"Goal '{goal.Id.Value[..8]}' is {goal.Status}, not AcceptanceFailed; acceptance-retry is only valid after a failed acceptance gate.");
+                $"Goal '{goal.Id.Value[..8]}' is {goal.Status}, not AcceptanceFailed or a typed Verified apparatus hold; " +
+                "acceptance-retry is only valid after a failed acceptance gate.");
         }
 
         var incompleteTask = goal.Tasks.FirstOrDefault(task =>

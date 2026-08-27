@@ -163,6 +163,7 @@ internal sealed partial class ConductorDriver
     private readonly Func<Goal, string?> _tryBuildAwaitingClarificationEscalationReason;
     private readonly Func<Goal, string, IDisposable?> _tryAcquireEvidenceMutationLease;
     private readonly Func<Goal, ReconcileAcceptanceLeaseState?> _getEvidenceMutationLease;
+    private readonly Func<Goal, (string? BranchHeadSha, string? MainHeadSha)> _resolveAcceptanceHeads;
     private readonly Func<DateTimeOffset> _utcNow;
     private readonly string? _executionDirectory;
     private readonly ConductorParallelAcceptanceAttemptCoordinator _parallelAcceptanceAttemptCoordinator;
@@ -246,6 +247,8 @@ internal sealed partial class ConductorDriver
     {
         var dir = workspace.ExecutionDirectory;
         _executionDirectory = dir;
+        _resolveAcceptanceHeads = goal =>
+            (TryResolveAcceptanceBranchHead(goal), TryResolveGitHead(dir));
         _getAcceptanceSlotCount = _ => ConductorBatchLoop.DefaultParallelAcceptanceCapacity;
         _getWorkerAdmissionCapacity = () => ConductorBatchLoop.WorkerAdmissionCapacity;
         _parallelAcceptanceEnabled = true;
@@ -1248,6 +1251,7 @@ internal sealed partial class ConductorDriver
         Func<Goal, string, IDisposable?>? tryAcquireEvidenceMutationLease = null,
         Func<Goal, DeveloperBranchIntegrationResult>? integrateMainBeforeDeveloperDispatch = null,
         Func<Goal, ReconcileAcceptanceLeaseState?>? getEvidenceMutationLease = null,
+        Func<Goal, (string? BranchHeadSha, string? MainHeadSha)>? resolveAcceptanceHeads = null,
         Func<DateTimeOffset>? utcNow = null, string? executionDirectory = null, Action<string, string>? acceptanceEventSink = null,
         Action<TimeSpan>? noTickAcceptancePollDelay = null, TimeSpan? noTickAcceptancePollTimeout = null)
     {
@@ -1356,6 +1360,7 @@ internal sealed partial class ConductorDriver
         _tryAcquireEvidenceMutationLease =
             tryAcquireEvidenceMutationLease ?? ((_, _) => NoopEvidenceMutationLease.Instance);
         _getEvidenceMutationLease = getEvidenceMutationLease ?? (_ => null);
+        _resolveAcceptanceHeads = resolveAcceptanceHeads ?? (_ => (null, null));
         _utcNow = utcNow ?? (() => DateTimeOffset.UtcNow);
         _executionDirectory = executionDirectory;
         _parallelAcceptanceEnabled =
@@ -3174,6 +3179,12 @@ internal sealed partial class ConductorDriver
             return null;
         }
 
+        var acceptanceHeads = _resolveAcceptanceHeads(goal);
+        if (IsSameApparatusFailurePair(goal.LatestAcceptanceFailure, acceptanceHeads))
+        {
+            return null;
+        }
+
         if (!_parallelAcceptanceAttemptCoordinator.HasLiveAttempt(goal.Id.Value) &&
             TryGetActiveEvidenceMutationLease(goal) is { } lease)
         {
@@ -3193,8 +3204,8 @@ internal sealed partial class ConductorDriver
             goal,
             slotIndex,
             _getLandingFileScopes(goal),
-            TryResolveAcceptanceBranchHead(goal),
-            _executionDirectory is null ? null : TryResolveGitHead(_executionDirectory));
+            acceptanceHeads.BranchHeadSha,
+            acceptanceHeads.MainHeadSha);
     }
 
     internal GateReadyCandidateProjectionResult ProjectGateReadyCandidate(
@@ -4268,6 +4279,24 @@ internal sealed partial class ConductorDriver
                 attribution.CheckName.Equals(check.Name, StringComparison.Ordinal) &&
                 attribution.Cause == AcceptanceFailureCause.EnvironmentalApparatus));
     }
+
+    private static bool IsSameApparatusFailurePair(
+        AcceptanceFailureSummary? failure,
+        (string? BranchHeadSha, string? MainHeadSha) current)
+    {
+        if (failure is not { IsEnvironmentalApparatus: true })
+        {
+            return false;
+        }
+
+        return ShaIsUnchangedOrUnknown(failure.BranchHeadSha, current.BranchHeadSha) &&
+            ShaIsUnchangedOrUnknown(failure.MainHeadSha, current.MainHeadSha);
+    }
+
+    private static bool ShaIsUnchangedOrUnknown(string? recorded, string? current) =>
+        string.IsNullOrWhiteSpace(recorded) ||
+        string.IsNullOrWhiteSpace(current) ||
+        recorded.Equals(current, StringComparison.OrdinalIgnoreCase);
 
     internal static void ReconcileCleanBaselineAttention(
         ICollaborationItemStore store,
@@ -5676,13 +5705,32 @@ internal sealed partial class ConductorDriver
     {
         if (IsEnvironmentalApparatusAcceptanceRun(acceptance))
         {
+            var failedChecks = acceptance.FailedChecks is { Count: > 0 }
+                ? acceptance.FailedChecks
+                : acceptance.RequiredUnmetCriteria.Select(check => check.Name).ToArray();
+            var observedHeads = _resolveAcceptanceHeads(goal);
+            var branchHeadSha = acceptance.BranchHeadSha ?? observedHeads.BranchHeadSha;
+            var mainHeadSha = acceptance.MainHeadSha ?? observedHeads.MainHeadSha;
+            _recordAcceptanceFailure(
+                goal,
+                failedChecks,
+                branchHeadSha,
+                mainHeadSha,
+                acceptance.CheckAttributions,
+                acceptance.BaselineAttestation);
+            var reason =
+                $"Acceptance gate apparatus/environmental failure recorded for unchanged candidate " +
+                $"{FormatAcceptanceCandidate(branchHeadSha, mainHeadSha)}. Acceptance will not re-run until " +
+                "the candidate or main HEAD changes, or an operator confirms acceptance-retry; no worker was reopened.";
+            RecordEscalation(goal, GoalLifecycleState.Verified, reason);
             return MakeResult(
                 goal.Id.Value,
                 goalPrefix,
                 policy,
                 new ConductorAdvanceOutcome.Held(
                     GoalLifecycleState.Verified,
-                    "Acceptance gate apparatus/environmental failure; preserve the unchanged candidate and re-gate on the next conduct tick without dispatching a worker."));
+                    reason,
+                    StableIdentity: $"acceptance-apparatus:{branchHeadSha ?? "unknown"}:{mainHeadSha ?? "unknown"}"));
         }
 
         if (!acceptance.Passed && acceptance.RequiredUnmetCriteria.Count == 0)
@@ -5836,6 +5884,13 @@ internal sealed partial class ConductorDriver
         GoalLifecycleState state,
         string reason)
     {
+        RecordEscalation(goal, state, reason);
+        return MakeResult(goal.Id.Value, goalPrefix, policy,
+            new ConductorAdvanceOutcome.Escalated(state, reason));
+    }
+
+    private void RecordEscalation(Goal goal, GoalLifecycleState state, string reason)
+    {
         var escalationClock = Stopwatch.StartNew();
         var sinkResult = LandingEscalationWriteResult.Error;
         try
@@ -5853,8 +5908,6 @@ internal sealed partial class ConductorDriver
                 $"collab_ms={sinkResult.CollaborationElapsedMilliseconds} collab={sinkResult.CollaborationOutcome} " +
                 $"channel_ms={sinkResult.ChannelElapsedMilliseconds} channel={sinkResult.ChannelOutcome}");
         }
-        return MakeResult(goal.Id.Value, goalPrefix, policy,
-            new ConductorAdvanceOutcome.Escalated(state, reason));
     }
 
     private static ConductorAdvanceResult MakeResult(
