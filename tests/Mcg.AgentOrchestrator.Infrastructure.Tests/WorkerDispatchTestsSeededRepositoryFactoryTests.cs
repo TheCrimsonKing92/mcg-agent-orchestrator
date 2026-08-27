@@ -40,6 +40,27 @@ public sealed class WorkerDispatchTestsSeededRepositoryFactoryTests
     }
 
     [Xunit.Fact]
+    public void Create_RequiredStdoutSuccess_RetainsTypedReceipt()
+    {
+        using var scope = new FactoryScope();
+
+        var created = scope.Factory.Create();
+
+        var receipt = Xunit.Assert.Single(
+            created.ProbeReceipts,
+            candidate => candidate.Check ==
+                WorkerDispatchTestsSeededRepositoryFactory.ValidationCheck.PublishedHeadCommit);
+        Xunit.Assert.Equal(
+            WorkerDispatchTestsSeededRepositoryFactory.GitProbeClassification.Success,
+            receipt.Classification);
+        Xunit.Assert.Equal(0, receipt.ExitCode);
+        Xunit.Assert.False(string.IsNullOrWhiteSpace(receipt.StandardOutput));
+        Xunit.Assert.True(receipt.StandardOutputByteCount > 0);
+        Xunit.Assert.Equal(0, receipt.StandardErrorByteCount);
+        Xunit.Assert.Equal(created.FixtureAttemptId, receipt.FixtureAttemptId);
+    }
+
+    [Xunit.Fact]
     public void Create_MissingTemplateMetadata_ReportsTemplateCheck()
     {
         string? invalidatedTemplate = null;
@@ -97,6 +118,7 @@ public sealed class WorkerDispatchTestsSeededRepositoryFactoryTests
     [Xunit.InlineData("timeout")]
     [Xunit.InlineData("drain-timeout")]
     [Xunit.InlineData("drain-failure")]
+    [Xunit.InlineData("nonzero-stderr")]
     [Xunit.InlineData("malformed-output")]
     public void Create_GitProbeDecisionTable_ReportsTypedTemplateHeadCheck(string scenario)
     {
@@ -105,6 +127,13 @@ public sealed class WorkerDispatchTestsSeededRepositoryFactoryTests
             "timeout" => result with { ExitCode = null, TimedOut = true },
             "drain-timeout" => result with { DrainTimedOut = true },
             "drain-failure" => result with { DrainFailed = true, StandardError = "controlled drain failure" },
+            "nonzero-stderr" => result with
+            {
+                ExitCode = 7,
+                StandardError = "controlled git stderr",
+                StandardErrorByteCount = 21,
+                Classification = WorkerDispatchTestsSeededRepositoryFactory.GitProbeClassification.NonZeroExit
+            },
             "malformed-output" => result with { StandardOutput = "not-a-commit\n" },
             _ => throw new InvalidOperationException($"Unknown scenario: {scenario}")
         });
@@ -131,6 +160,14 @@ public sealed class WorkerDispatchTestsSeededRepositoryFactoryTests
             case "drain-failure":
                 Xunit.Assert.True(failure.Diagnostic.Git.DrainFailed);
                 Xunit.Assert.Contains("controlled drain failure", failure.Diagnostic.Git.StandardError);
+                break;
+            case "nonzero-stderr":
+                Xunit.Assert.Equal(7, failure.Diagnostic.Git.ExitCode);
+                Xunit.Assert.Equal(
+                    WorkerDispatchTestsSeededRepositoryFactory.GitProbeClassification.NonZeroExit,
+                    failure.Diagnostic.Git.Classification);
+                Xunit.Assert.Equal("controlled git stderr", failure.Diagnostic.Git.StandardError);
+                Xunit.Assert.Equal(21, failure.Diagnostic.Git.StandardErrorByteCount);
                 break;
             case "malformed-output":
                 Xunit.Assert.Equal(0, failure.Diagnostic.Git.ExitCode);
@@ -207,6 +244,57 @@ public sealed class WorkerDispatchTestsSeededRepositoryFactoryTests
         Xunit.Assert.Equal(
             WorkerDispatchTestsSeededRepositoryFactory.GitProbeClassification.EmptyRequiredOutput,
             failure.Diagnostic.Git.Classification);
+    }
+
+    [Xunit.Fact]
+    public void Create_InvalidHeadBytes_RoutesFixturePublicationWithTypedState()
+    {
+        using var scope = new FactoryScope(new WorkerDispatchTestsSeededRepositoryFactory.CreationHooks(
+            BeforeTemplateValidation: template =>
+                File.WriteAllText(Path.Combine(template, ".git", "HEAD"), "not-a-head\n")));
+
+        var failure = Xunit.Assert.Throws<
+            WorkerDispatchTestsSeededRepositoryFactory.SeededRepositoryFailureException>(
+                () => scope.Factory.Create());
+
+        Xunit.Assert.Equal(
+            WorkerDispatchTestsSeededRepositoryFactory.RepositoryHeadState.HeadInvalid,
+            failure.Diagnostic.FileSystem.HeadState);
+        Xunit.Assert.Equal(
+            WorkerDispatchTestsSeededRepositoryFactory.ValidationFailureOwner.FixturePublication,
+            failure.Diagnostic.Owner);
+        Xunit.Assert.Equal(
+            WorkerDispatchTestsSeededRepositoryFactory.GitProbeClassification.NonZeroExit,
+            failure.Diagnostic.Git.Classification);
+    }
+
+    [Xunit.Fact]
+    public void Create_InvalidReferenceBytes_RoutesFixturePublicationWithTypedState()
+    {
+        using var scope = new FactoryScope(new WorkerDispatchTestsSeededRepositoryFactory.CreationHooks(
+            BeforeTemplateValidation: template =>
+            {
+                var head = File.ReadAllText(Path.Combine(template, ".git", "HEAD")).Trim();
+                var reference = head["ref: ".Length..];
+                File.WriteAllText(
+                    Path.Combine(template, ".git", reference.Replace('/', Path.DirectorySeparatorChar)),
+                    "not-an-object-id\n");
+            }));
+
+        var failure = Xunit.Assert.Throws<
+            WorkerDispatchTestsSeededRepositoryFactory.SeededRepositoryFailureException>(
+                () => scope.Factory.Create());
+
+        Xunit.Assert.Equal(
+            WorkerDispatchTestsSeededRepositoryFactory.RepositoryHeadState.ReferenceInvalid,
+            failure.Diagnostic.FileSystem.HeadState);
+        Xunit.Assert.Equal(
+            WorkerDispatchTestsSeededRepositoryFactory.ValidationFailureOwner.FixturePublication,
+            failure.Diagnostic.Owner);
+        Xunit.Assert.Equal(
+            WorkerDispatchTestsSeededRepositoryFactory.GitProbeClassification.NonZeroExit,
+            failure.Diagnostic.Git.Classification);
+        Xunit.Assert.Equal("not-an-object-id", failure.Diagnostic.FileSystem.ReferenceContent);
     }
 
     [Xunit.Fact]
@@ -296,6 +384,42 @@ public sealed class WorkerDispatchTestsSeededRepositoryFactoryTests
         Xunit.Assert.DoesNotContain("GIT_WORK_TREE", capturedEnvironment.Keys);
         Xunit.Assert.DoesNotContain("GIT_INDEX_FILE", capturedEnvironment.Keys);
         Xunit.Assert.Equal("0", capturedEnvironment["GIT_OPTIONAL_LOCKS"]);
+    }
+
+    [Xunit.Fact]
+    public void RunGitProbe_RawStreamByteCounts_AreNotDecodedRoundTrips()
+    {
+        using var scope = new FactoryScope();
+        var powershell = Path.Combine(
+            Environment.SystemDirectory,
+            "WindowsPowerShell",
+            "v1.0",
+            "powershell.exe");
+
+        var result = InfrastructureTestSupport.RunGitProbe(
+            scope.Root,
+            ["status", "--short"],
+            startProcess: process =>
+            {
+                process.StartInfo.FileName = powershell;
+                process.StartInfo.ArgumentList.Clear();
+                process.StartInfo.ArgumentList.Add("-NoProfile");
+                process.StartInfo.ArgumentList.Add("-NonInteractive");
+                process.StartInfo.ArgumentList.Add("-Command");
+                process.StartInfo.ArgumentList.Add(
+                    "$o=[Console]::OpenStandardOutput();$ob=[byte[]](239,187,191,65,255);" +
+                    "$o.Write($ob,0,$ob.Length);$e=[Console]::OpenStandardError();" +
+                    "$eb=[byte[]](66,255);$e.Write($eb,0,$eb.Length)");
+                return process.Start();
+            });
+
+        Xunit.Assert.Equal(0, result.ExitCode);
+        Xunit.Assert.Equal(5, result.StandardOutputByteCount);
+        Xunit.Assert.Equal(2, result.StandardErrorByteCount);
+        Xunit.Assert.Equal(
+            WorkerDispatchTestsSeededRepositoryFactory.GitProbeClassification.Success,
+            result.Classification);
+        Xunit.Assert.Equal(powershell, result.Executable);
     }
 
     [Xunit.Fact]

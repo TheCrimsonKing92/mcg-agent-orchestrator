@@ -817,6 +817,46 @@ public sealed partial class ConductorDriverTestsLifecycleStates
         Xunit.Assert.Equal(0, task.CriterionRetryCount);
     }
 
+    [Xunit.Fact(DisplayName = "ConductorDriver_inherited_failure_without_apparatus_cause_retries_worker")]
+    public void ConductorDriverInheritedFailureWithoutApparatusCauseRetriesWorker()
+    {
+        var (kernel, goal) = SimpleGoal();
+        var task = goal.Tasks.Single();
+        PassVerification(kernel, goal, task);
+        var retryCalled = false;
+        var rawAcceptance = new AcceptanceVerificationSummary(
+            false,
+            [new AcceptanceCheckResult("infrastructure tests: Remainder", false, 1, "inherited red")],
+            FailedChecks: ["infrastructure tests: Remainder"],
+            BranchHeadSha: "candidate-a",
+            MainHeadSha: "main-a",
+            CheckAttributions:
+            [
+                new AcceptanceCheckAttribution(
+                    "infrastructure tests: Remainder",
+                    AcceptanceFailureOrigin.Inherited,
+                    "baseline red without an apparatus receipt")
+            ],
+            BaselineAttestation: "attested-red");
+        var acceptance = ConductorDriver.ClassifyInheritedBaselineApparatus(rawAcceptance);
+        var driver = MakeDriver(
+            getFacts: _ => GoalLifecycleFacts.None,
+            runAcceptanceSummary: _ => acceptance,
+            retryTask: (goalId, taskId, message) =>
+            {
+                retryCalled = true;
+                return kernel.RetryTask(goalId, taskId, message);
+            },
+            recordCriterionRetryFeedback: kernel.RecordCriterionRetryFeedback);
+
+        var result = driver.AdvanceOnce(goal, ConductorAutonomyPolicy.Conservative);
+
+        Xunit.Assert.IsType<ConductorAdvanceOutcome.Executed>(result.Outcome);
+        Xunit.Assert.True(retryCalled);
+        Xunit.Assert.Equal(WorkTaskStatus.Assigned, task.Status);
+        Xunit.Assert.Equal(1, task.CriterionRetryCount);
+    }
+
     [Xunit.Fact(DisplayName = "ConductorDriver_Verified_unmet_acceptance_retry_feedback_caps_concrete_evidence")]
     public void ConductorDriverVerifiedUnmetAcceptanceRetryFeedbackCapsConcreteEvidence()
     {

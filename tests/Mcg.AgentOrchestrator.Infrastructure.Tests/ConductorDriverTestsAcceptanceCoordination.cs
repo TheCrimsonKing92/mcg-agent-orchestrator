@@ -44,9 +44,7 @@ public sealed partial class ConductorDriverTestsAcceptanceCoordination
         Assert.Equal(testResultPaths, normalized.TestResultPaths);
         Assert.Equal(attributions, normalized.CheckAttributions);
         Assert.Equal("attested-red", normalized.BaselineAttestation);
-        Assert.Equal(
-            AcceptanceFailureClassifications.InheritedBaselineApparatus,
-            Assert.Single(normalized.RequiredUnmetCriteria).FailureClassification);
+        Assert.Null(Assert.Single(normalized.RequiredUnmetCriteria).FailureClassification);
     }
 
     [Xunit.Fact(DisplayName = "ConductorDriver_all_inherited_red_gets_typed_apparatus_cause")]
@@ -63,7 +61,8 @@ public sealed partial class ConductorDriverTestsAcceptanceCoordination
                 new AcceptanceCheckAttribution(
                     "infrastructure tests: Remainder",
                     AcceptanceFailureOrigin.Inherited,
-                    "same check failed across three goals at main-a")
+                    "typed process-output apparatus receipt",
+                    AcceptanceFailureCause.EnvironmentalApparatus)
             ],
             BaselineAttestation: "attested-red");
 
@@ -76,6 +75,29 @@ public sealed partial class ConductorDriverTestsAcceptanceCoordination
             AcceptanceFailureCause.EnvironmentalApparatus,
             Assert.Single(classified.CheckAttributions!).Cause);
         Assert.Equal("candidate-a", classified.BranchHeadSha);
+    }
+
+    [Xunit.Fact(DisplayName = "ConductorDriver_all_inherited_red_without_typed_cause_stays_unclassified")]
+    public void ConductorDriverAllInheritedRedWithoutTypedCauseStaysUnclassified()
+    {
+        var acceptance = new AcceptanceVerificationSummary(
+            false,
+            [new AcceptanceCheckResult("infrastructure tests: Remainder", false, 1, "red")],
+            FailedChecks: ["infrastructure tests: Remainder"],
+            CheckAttributions:
+            [
+                new AcceptanceCheckAttribution(
+                    "infrastructure tests: Remainder",
+                    AcceptanceFailureOrigin.Inherited,
+                    "same check failed on main")
+            ]);
+
+        var classified = ConductorDriver.ClassifyInheritedBaselineApparatus(acceptance);
+
+        Assert.Null(Assert.Single(classified.RequiredUnmetCriteria).FailureClassification);
+        Assert.Equal(
+            AcceptanceFailureCause.NotClassified,
+            Assert.Single(classified.CheckAttributions!).Cause);
     }
 
     [Xunit.Fact(DisplayName = "ConductorDriver_mixed_red_does_not_get_apparatus_classification")]

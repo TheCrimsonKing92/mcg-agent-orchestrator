@@ -169,8 +169,8 @@ internal static WorkerDispatchTestsSeededRepositoryFactory.GitProbeResult RunGit
         }
 
         process.StandardInput.Close();
-        var outputTask = process.StandardOutput.ReadToEndAsync();
-        var errorTask = process.StandardError.ReadToEndAsync();
+        var outputTask = CaptureStreamAsync(process.StandardOutput.BaseStream);
+        var errorTask = CaptureStreamAsync(process.StandardError.BaseStream);
         var timedOut = false;
         using (var timeout = new CancellationTokenSource(TimeSpan.FromSeconds(60)))
         {
@@ -199,9 +199,12 @@ internal static WorkerDispatchTestsSeededRepositoryFactory.GitProbeResult RunGit
                 new[] { outputTask.Exception?.GetBaseException().Message, errorTask.Exception?.GetBaseException().Message }
                     .Where(message => !string.IsNullOrWhiteSpace(message)))
             : string.Empty;
-        var standardOutput = outputTask.IsCompletedSuccessfully ? outputTask.Result : string.Empty;
+        var standardOutputCapture = outputTask.IsCompletedSuccessfully ? outputTask.Result : CapturedStream.Empty;
+        var standardErrorCapture = errorTask.IsCompletedSuccessfully ? errorTask.Result : CapturedStream.Empty;
+        var standardOutput = Encoding.UTF8.GetString(standardOutputCapture.Prefix);
+        var childStandardError = Encoding.UTF8.GetString(standardErrorCapture.Prefix);
         var standardError = errorTask.IsCompletedSuccessfully
-            ? string.Join(" | ", new[] { errorTask.Result, drainError }.Where(value => !string.IsNullOrWhiteSpace(value)))
+            ? string.Join(" | ", new[] { childStandardError, drainError }.Where(value => !string.IsNullOrWhiteSpace(value)))
             : drainError;
         var boundedOutput = WorkerDispatchTestsSeededRepositoryFactory.GitProbeResult.BoundDiagnostic(standardOutput);
         var boundedError = WorkerDispatchTestsSeededRepositoryFactory.GitProbeResult.BoundDiagnostic(standardError);
@@ -218,10 +221,10 @@ internal static WorkerDispatchTestsSeededRepositoryFactory.GitProbeResult RunGit
             Executable: startInfo.FileName,
             Arguments: arguments.ToArray(),
             RepositoryDirectory: Path.GetFullPath(workingDirectory),
-            StandardOutputByteCount: Encoding.UTF8.GetByteCount(standardOutput),
-            StandardErrorByteCount: Encoding.UTF8.GetByteCount(standardError),
-            StandardOutputTruncated: boundedOutput.Length != standardOutput.Length,
-            StandardErrorTruncated: boundedError.Length != standardError.Length,
+            StandardOutputByteCount: standardOutputCapture.ByteCount,
+            StandardErrorByteCount: standardErrorCapture.ByteCount,
+            StandardOutputTruncated: standardOutputCapture.PrefixTruncated || boundedOutput.Length != standardOutput.Length,
+            StandardErrorTruncated: standardErrorCapture.PrefixTruncated || boundedError.Length != standardError.Length,
             ChildProcessId: childProcessId,
             ChildStartedAt: childStartedAt,
             Classification: ClassifyGitProbe(
@@ -259,6 +262,34 @@ internal static WorkerDispatchTestsSeededRepositoryFactory.GitProbeResult RunGit
     {
         process?.Dispose();
     }
+}
+
+private static async Task<CapturedStream> CaptureStreamAsync(Stream stream)
+{
+    const int maximumRetainedBytes = 16 * 1024;
+    var readBuffer = new byte[8192];
+    using var retained = new MemoryStream(maximumRetainedBytes);
+    long byteCount = 0;
+    var prefixTruncated = false;
+    int read;
+    while ((read = await stream.ReadAsync(readBuffer).ConfigureAwait(false)) > 0)
+    {
+        byteCount += read;
+        var retainCount = Math.Min(read, maximumRetainedBytes - (int)retained.Length);
+        if (retainCount > 0)
+        {
+            retained.Write(readBuffer, 0, retainCount);
+        }
+
+        prefixTruncated |= retainCount != read;
+    }
+
+    return new CapturedStream(byteCount, retained.ToArray(), prefixTruncated);
+}
+
+private sealed record CapturedStream(long ByteCount, byte[] Prefix, bool PrefixTruncated)
+{
+    internal static CapturedStream Empty { get; } = new(0, [], false);
 }
 
 private static WorkerDispatchTestsSeededRepositoryFactory.GitProbeClassification ClassifyGitProbe(

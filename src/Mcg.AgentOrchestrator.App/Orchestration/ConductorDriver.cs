@@ -4185,17 +4185,18 @@ internal sealed partial class ConductorDriver
 
         var output = string.Join(Environment.NewLine, failedChecks);
         var summary = $"Named failing acceptance checks: {string.Join(", ", failedChecks)}";
-        var allInherited = acceptance.CheckAttributions is { Count: > 0 } attributions &&
+        var allInheritedApparatus = acceptance.CheckAttributions is { Count: > 0 } attributions &&
             failedChecks.All(name => attributions.Any(attribution =>
                 attribution.CheckName.Equals(name, StringComparison.Ordinal) &&
-                attribution.Origin == AcceptanceFailureOrigin.Inherited));
+                attribution.Origin == AcceptanceFailureOrigin.Inherited &&
+                attribution.Cause == AcceptanceFailureCause.EnvironmentalApparatus));
         var check = new AcceptanceCheckResult(
             "acceptance failed checks",
             false,
             1,
             string.IsNullOrWhiteSpace(acceptance.FailureDetail) ? output : acceptance.FailureDetail,
             ResultSummary: summary,
-            FailureClassification: allInherited
+            FailureClassification: allInheritedApparatus
                 ? AcceptanceFailureClassifications.InheritedBaselineApparatus
                 : null);
         return new AcceptanceVerificationSummary(
@@ -4218,7 +4219,8 @@ internal sealed partial class ConductorDriver
             acceptance.CheckAttributions is not { Count: > 0 } attributions ||
             !failedChecks.All(name => attributions.Any(attribution =>
                 attribution.CheckName.Equals(name, StringComparison.Ordinal) &&
-                attribution.Origin == AcceptanceFailureOrigin.Inherited)))
+                attribution.Origin == AcceptanceFailureOrigin.Inherited &&
+                attribution.Cause == AcceptanceFailureCause.EnvironmentalApparatus)))
         {
             return acceptance;
         }
@@ -4234,11 +4236,6 @@ internal sealed partial class ConductorDriver
                 }
                 : check)
             .ToArray();
-        var classifiedAttributions = attributions
-            .Select(attribution => inheritedChecks.Contains(attribution.CheckName)
-                ? attribution with { Cause = AcceptanceFailureCause.EnvironmentalApparatus }
-                : attribution)
-            .ToArray();
         return new AcceptanceVerificationSummary(
             acceptance.Passed,
             classifiedChecks,
@@ -4247,7 +4244,7 @@ internal sealed partial class ConductorDriver
             acceptance.BranchHeadSha,
             acceptance.MainHeadSha,
             acceptance.TestResultPaths,
-            classifiedAttributions,
+            attributions,
             acceptance.BaselineAttestation);
     }
 
