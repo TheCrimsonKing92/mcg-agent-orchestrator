@@ -1,5 +1,7 @@
 public sealed class GoalWorktreeTestsGitHelperDiagnostics : GoalWorktreeTestBase
 {
+    public static bool IsWindows => OperatingSystem.IsWindows();
+
     // Parallel-safe: every fact owns a GUID-named repository and cleans it up independently.
     [Xunit.Fact]
     public void RunGitFailureCarriesStdoutAndExitCode()
@@ -76,6 +78,34 @@ public sealed class GoalWorktreeTestsGitHelperDiagnostics : GoalWorktreeTestBase
         }
         finally
         {
+            DeleteDirectory(repo);
+        }
+    }
+
+    [Xunit.Fact(Skip = "Requires Windows owned-file capture semantics.", SkipUnless = nameof(IsWindows))]
+    public void RunGitProbeLinkedWorktreeDoesNotDirtyTheWorktree()
+    {
+        var repo = CreateEmptyRepository();
+        var linkedWorktree = repo + "-linked";
+        try
+        {
+            File.WriteAllText(Path.Combine(repo, "seed.txt"), "seed");
+            RunGit(repo, "add", "seed.txt");
+            RunGit(repo, "commit", "-m", "Seed");
+            RunGit(repo, "worktree", "add", "-b", "probe", linkedWorktree, "HEAD");
+
+            var result = InfrastructureTestSupport.RunGitProbe(linkedWorktree, ["status", "--short"]);
+
+            Assert.True(result.Succeeded, result.StandardError);
+            Assert.Empty(result.StandardOutput);
+            Assert.Empty(Directory.EnumerateFiles(
+                linkedWorktree,
+                ".mcg-git-probe-*",
+                SearchOption.TopDirectoryOnly));
+        }
+        finally
+        {
+            DeleteDirectory(linkedWorktree);
             DeleteDirectory(repo);
         }
     }

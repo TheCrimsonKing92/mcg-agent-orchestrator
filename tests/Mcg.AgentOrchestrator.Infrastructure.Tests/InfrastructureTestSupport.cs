@@ -306,8 +306,7 @@ private static WorkerDispatchTestsSeededRepositoryFactory.GitProbeResult RunGitP
     Action<string, string>? beforeCaptureRead)
 {
     var repositoryDirectory = Path.GetFullPath(workingDirectory);
-    var gitDirectory = Path.Combine(repositoryDirectory, ".git");
-    var captureDirectory = Directory.Exists(gitDirectory) ? gitDirectory : repositoryDirectory;
+    var captureDirectory = ResolveOwnedCaptureDirectory(repositoryDirectory);
     var captureIdentity = $".mcg-git-probe-{Guid.NewGuid():N}";
     var standardOutputPath = Path.Combine(captureDirectory, captureIdentity + ".stdout");
     var standardErrorPath = Path.Combine(captureDirectory, captureIdentity + ".stderr");
@@ -427,6 +426,43 @@ private static WorkerDispatchTestsSeededRepositoryFactory.GitProbeResult RunGitP
         TryDeleteCaptureFile(standardOutputPath);
         TryDeleteCaptureFile(standardErrorPath);
     }
+}
+
+private static string ResolveOwnedCaptureDirectory(string repositoryDirectory)
+{
+    var gitPath = Path.Combine(repositoryDirectory, ".git");
+    if (Directory.Exists(gitPath))
+    {
+        return gitPath;
+    }
+
+    try
+    {
+        if (File.Exists(gitPath))
+        {
+            var directive = File.ReadLines(gitPath)
+                .FirstOrDefault(line => line.TrimStart().StartsWith("gitdir:", StringComparison.OrdinalIgnoreCase));
+            var value = directive?["gitdir:".Length..].Trim();
+            if (!string.IsNullOrWhiteSpace(value))
+            {
+                var resolved = Path.GetFullPath(
+                    Path.IsPathRooted(value)
+                        ? value
+                        : Path.Combine(repositoryDirectory, value));
+                if (Directory.Exists(resolved))
+                {
+                    return resolved;
+                }
+            }
+        }
+    }
+    catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+    {
+        // A capture file must never become a tracked-worktree change merely because Git metadata
+        // cannot be resolved. The per-user temp directory is the non-repository fallback.
+    }
+
+    return Path.GetTempPath();
 }
 
 private static CapturedStream CaptureFile(string path)

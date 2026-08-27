@@ -734,9 +734,10 @@ public sealed class WorkerDispatchTestsSeededRepositoryFactoryTests
     public void RunGitProbe_OwnedCaptureReadFailure_RetainsCleanChildExit()
     {
         using var scope = new FactoryScope();
+        var created = scope.Factory.Create();
 
         var result = InfrastructureTestSupport.RunGitProbe(
-            scope.Root,
+            created.PublishedIdentity.RepositoryPath,
             ["status", "--short"],
             beforeOwnedCaptureRead: (standardOutputPath, _) => File.Delete(standardOutputPath));
 
