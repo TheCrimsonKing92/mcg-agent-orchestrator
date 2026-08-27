@@ -1382,7 +1382,8 @@ public static class DotnetBuildEnvironmentManager
 
     internal static BuildLockHolder? TryFindActiveSlotArtifactConsumer(
         DotnetBuildEnvironment environment,
-        ProcessCommandLineSnapshot? processSnapshot = null)
+        ProcessCommandLineSnapshot? processSnapshot = null,
+        Func<int, bool>? queryProcessLiveness = null)
     {
         var artifactsPath = NormalizeForCommandLineMatch(environment.ArtifactsPath);
         if (string.IsNullOrWhiteSpace(artifactsPath))
@@ -1406,8 +1407,8 @@ public static class DotnetBuildEnvironmentManager
                 continue;
             }
 
-            if (!IsProcessRunning(pair.Key) ||
-                !CommandLineUsesSlotArtifacts(record.CommandLine, artifactsPath))
+            if (!CommandLineUsesSlotArtifacts(record.CommandLine, artifactsPath) ||
+                !IsProcessRunning(pair.Key, queryProcessLiveness))
             {
                 continue;
             }
@@ -2363,10 +2364,17 @@ public static class DotnetBuildEnvironmentManager
         }
     }
 
-    private static bool IsProcessRunning(int processId)
+    private static bool IsProcessRunning(
+        int processId,
+        Func<int, bool>? queryProcessLiveness = null)
     {
         try
         {
+            if (queryProcessLiveness is not null)
+            {
+                return queryProcessLiveness(processId);
+            }
+
             using var process = Process.GetProcessById(processId);
             return !process.HasExited;
         }

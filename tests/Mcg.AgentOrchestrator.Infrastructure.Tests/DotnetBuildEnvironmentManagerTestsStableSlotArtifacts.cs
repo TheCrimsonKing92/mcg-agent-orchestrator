@@ -294,6 +294,101 @@ public sealed class DotnetBuildEnvironmentManagerTestsStableSlotArtifacts
     }
 
     [Xunit.Fact]
+    public void UnrelatedCommandLine_SkipsLivenessQuery()
+    {
+        using var _ = EnvVarScope.ForIsolatedDotnetRoot();
+        var slot = DotnetBuildEnvironmentManager.CreateStableSlotAttempt(0);
+        const int candidateProcessId = 424242;
+        var livenessQueries = 0;
+        var snapshot = new ProcessCommandLineSnapshot(
+            new Dictionary<int, string>
+            {
+                [candidateProcessId] = "dotnet build unrelated.csproj"
+            });
+
+        var holder = DotnetBuildEnvironmentManager.TryFindActiveSlotArtifactConsumer(
+            slot,
+            snapshot,
+            _ =>
+            {
+                livenessQueries++;
+                return true;
+            });
+
+        Assert.Null(holder);
+        Assert.Equal(0, livenessQueries);
+    }
+
+    [Xunit.Fact]
+    public void MatchingCommandLine_RevalidatesLivenessOnce()
+    {
+        using var _ = EnvVarScope.ForIsolatedDotnetRoot();
+        var slot = DotnetBuildEnvironmentManager.CreateStableSlotAttempt(0);
+        const int candidateProcessId = 424242;
+        var livenessQueries = 0;
+        var snapshot = CreateMatchingSlotCandidateSnapshot(slot, candidateProcessId);
+
+        var holder = Assert.IsType<BuildLockHolder>(
+            DotnetBuildEnvironmentManager.TryFindActiveSlotArtifactConsumer(
+                slot,
+                snapshot,
+                processId =>
+                {
+                    Assert.Equal(candidateProcessId, processId);
+                    livenessQueries++;
+                    return true;
+                }));
+
+        Assert.Equal(candidateProcessId, holder.ProcessId);
+        Assert.Equal(1, livenessQueries);
+    }
+
+    [Xunit.Fact]
+    public void MatchingExitedProcess_IsNotAttributed()
+    {
+        using var _ = EnvVarScope.ForIsolatedDotnetRoot();
+        var slot = DotnetBuildEnvironmentManager.CreateStableSlotAttempt(0);
+        const int candidateProcessId = 424242;
+        var livenessQueries = 0;
+        var snapshot = CreateMatchingSlotCandidateSnapshot(slot, candidateProcessId);
+
+        var holder = DotnetBuildEnvironmentManager.TryFindActiveSlotArtifactConsumer(
+            slot,
+            snapshot,
+            _ =>
+            {
+                livenessQueries++;
+                return false;
+            });
+
+        Assert.Null(holder);
+        Assert.Equal(1, livenessQueries);
+    }
+
+    [Xunit.Fact]
+    public void MatchingUnreadableProcess_RemainsConservativelyAttributed()
+    {
+        using var _ = EnvVarScope.ForIsolatedDotnetRoot();
+        var slot = DotnetBuildEnvironmentManager.CreateStableSlotAttempt(0);
+        const int candidateProcessId = 424242;
+        var livenessQueries = 0;
+        var snapshot = CreateMatchingSlotCandidateSnapshot(slot, candidateProcessId);
+
+        var holder = Assert.IsType<BuildLockHolder>(
+            DotnetBuildEnvironmentManager.TryFindActiveSlotArtifactConsumer(
+                slot,
+                snapshot,
+                _ =>
+                {
+                    livenessQueries++;
+                    throw new System.ComponentModel.Win32Exception("query unavailable");
+                }));
+
+        Assert.Equal(candidateProcessId, holder.ProcessId);
+        Assert.Equal(1, livenessQueries);
+    }
+
+    [Xunit.Fact]
     public void StableSlotPoll_UnattributableUnavailableCandidate_DoesNotBlockEverySlot()
     {
         using var _ = EnvVarScope.ForIsolatedDotnetRoot();
@@ -332,6 +427,14 @@ public sealed class DotnetBuildEnvironmentManagerTestsStableSlotArtifacts
             DotnetBuildEnvironmentManager.ProcessCommandLineSnapshotForTests = null;
         }
     }
+
+    private static ProcessCommandLineSnapshot CreateMatchingSlotCandidateSnapshot(
+        DotnetBuildEnvironment slot,
+        int candidateProcessId) =>
+        new(new Dictionary<int, string>
+        {
+            [candidateProcessId] = $"testhost.exe --artifacts-path \"{slot.ArtifactsPath}\""
+        });
 
     [Xunit.Fact]
     public void StableSlotPoll_AttributedUnavailableCandidate_BlocksOnlyOwnedSlot()
