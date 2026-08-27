@@ -30,7 +30,9 @@ internal static class SourceSizeRatchet
             // shared by telemetry resolution, result identity, and managed-child lifecycle handling.
             // Raised for goal cdde61cc: live phase/target capture and owned-child cleanup ordering must
             // remain at the verifier execution boundary; lifecycle implementation stays extracted.
-            new SourceSizeCeiling("src/Mcg.AgentOrchestrator.Infrastructure/Workspaces/GoalAcceptanceVerifier.cs", 8669),
+            // Raised for the acceptance-popup suppression repair: hermetic verification must disable
+            // descendant MSBuild-server reuse where the verifier owns the child environment.
+            new SourceSizeCeiling("src/Mcg.AgentOrchestrator.Infrastructure/Workspaces/GoalAcceptanceVerifier.cs", 8675),
             // Goal 682f25a1 re-derived this row after integrating goal c2eae988, whose acceptance
             // cancellation seam had already added 74 net lines before the multi-file ratchet landed.
             // Raised for goal a22c7293: slice admission must run where all dispatch paths converge.
@@ -91,7 +93,9 @@ internal static class SourceSizeRatchet
             // fault/verdict state distinction, and paid-round negative controls owned by this existing class.
             // Raised for goal cdde61cc: diagnostic round-trip, bounded retry, and candidate-failure
             // negative controls jointly verify the existing parallel-acceptance state contract.
-            new SourceSizeCeiling("tests/Mcg.AgentOrchestrator.Infrastructure.Tests/ConductorBatchLoopTestsParallelAcceptance.cs", 4903),
+            // Raised for the acceptance-popup suppression repair: the outer gate launch contract now
+            // pins the descendant MSBuild-server environment alongside the native GUI suppression seam.
+            new SourceSizeCeiling("tests/Mcg.AgentOrchestrator.Infrastructure.Tests/ConductorBatchLoopTestsParallelAcceptance.cs", 4905),
             new SourceSizeCeiling("tests/Mcg.AgentOrchestrator.Infrastructure.Tests/DotnetBuildEnvironmentManagerTests.cs", 1480),
         });
 
