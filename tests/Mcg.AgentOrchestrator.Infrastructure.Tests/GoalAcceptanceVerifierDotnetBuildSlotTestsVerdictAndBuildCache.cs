@@ -174,8 +174,7 @@ public sealed class GoalAcceptanceVerifierDotnetBuildSlotTestsVerdictAndBuildCac
 
             Assert.True(
                 result.Passed,
-                string.Join(Environment.NewLine, result.Checks.Select(static check =>
-                    $"{check.Name}: classification={check.FailureClassification}; output={check.OutputTail}")));
+                DescribeFailedChecks(result));
             Assert.True(result.Retried);
             Assert.Equal(2, cliRuns);
             var unrelatedPartitionCommands = calls
@@ -210,10 +209,14 @@ public sealed class GoalAcceptanceVerifierDotnetBuildSlotTestsVerdictAndBuildCac
         var goalId = new GoalId("dddddddddddddddddddddddddddddddd");
         var calls = new List<string[]>();
         var mtpRuns = 0;
+        var previousPrefix = Environment.GetEnvironmentVariable(GoalAcceptanceVerifier.AcceptanceAttemptTrxPrefixVariable);
         SetPartitionVerdictKeyHooks("tree-mtp", "main-mtp", "commit-mtp");
         GoalAcceptanceVerifier.PartitionVerdictWithinAttemptRerunEnabled = true;
         try
         {
+            Environment.SetEnvironmentVariable(
+                GoalAcceptanceVerifier.AcceptanceAttemptTrxPrefixVariable,
+                Path.Combine(root, ".orchestrator", "attempt-mtp"));
             var verifier = new GoalAcceptanceVerifier((args, _, _) =>
             {
                 calls.Add(args);
@@ -240,8 +243,7 @@ public sealed class GoalAcceptanceVerifierDotnetBuildSlotTestsVerdictAndBuildCac
 
             Assert.True(
                 result.Passed,
-                string.Join(Environment.NewLine, result.Checks.Select(static check =>
-                    $"{check.Name}: classification={check.FailureClassification}; output={check.OutputTail}")));
+                DescribeFailedChecks(result));
             Assert.True(result.Retried);
             Assert.Equal(2, mtpRuns);
             var partition = Assert.Single(
@@ -257,6 +259,7 @@ public sealed class GoalAcceptanceVerifierDotnetBuildSlotTestsVerdictAndBuildCac
         }
         finally
         {
+            Environment.SetEnvironmentVariable(GoalAcceptanceVerifier.AcceptanceAttemptTrxPrefixVariable, previousPrefix);
             GoalAcceptanceVerifier.PartitionVerdictWithinAttemptRerunEnabled = true;
             ResetPartitionVerdictKeyHooks();
             DotnetBuildEnvironmentManager.TryDeleteGoalArtifacts(goalId);
@@ -607,7 +610,9 @@ public sealed class GoalAcceptanceVerifierDotnetBuildSlotTestsVerdictAndBuildCac
                     .GetResult());
 
             Assert.NotNull(result);
-            Assert.True(result!.Passed);
+            Assert.True(
+                result!.Passed,
+                DescribeFailedChecks(result));
             var buildCalls = calls
                 .Where(call => call.Length >= 2 && call[0] == "dotnet" && call[1] == "build")
                 .ToArray();
@@ -709,7 +714,9 @@ public sealed class GoalAcceptanceVerifierDotnetBuildSlotTestsVerdictAndBuildCac
                     .GetResult());
 
             Assert.NotNull(result);
-            Assert.True(result!.Passed);
+            Assert.True(
+                result!.Passed,
+                DescribeFailedChecks(result));
             var buildCalls = calls
                 .Where(call => call.Length >= 2 && call[0] == "dotnet" && call[1] == "build")
                 .ToArray();
@@ -971,4 +978,14 @@ public sealed class GoalAcceptanceVerifierDotnetBuildSlotTestsVerdictAndBuildCac
             "Failed! - Failed: 1, Passed: 0, Skipped: 0, Total: 1.",
             Stderr: stderr);
     }
+
+    private static string DescribeFailedChecks(AcceptanceVerificationResult result) =>
+        string.Join(
+            Environment.NewLine,
+            result.Checks
+                .Where(static check => !check.Passed)
+                .Select(check =>
+                    $"{check.Name}: predicate={check.CompletionDecision?.FailedPredicate}; " +
+                    $"classification={check.FailureClassification}; heartbeat={check.GateHeartbeatPath}; " +
+                    $"heartbeat_exists={File.Exists(check.GateHeartbeatPath)}; output={check.OutputTail}"));
 }

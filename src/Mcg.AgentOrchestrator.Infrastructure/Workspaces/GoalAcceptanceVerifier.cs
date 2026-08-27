@@ -4372,15 +4372,18 @@ public sealed class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
             // A testhost can exit non-zero on SHUTDOWN ("host process exited unexpectedly") even after every
             // test passed. Honor the run's own Passed!/Failed:0 summary so a benign shutdown abort does not
             // block a green goal, while never masking a build/compile failure and still surfacing the tail.
-            var reportedAllPassed = !result.TimedOut && result.ExitCode != 0 && TestRunReportsAllPassed(result.Output);
             var telemetry = ResolveDotnetTestTelemetry(arguments, check, environment);
+            var reportedAllPassed = telemetry is not null &&
+                !result.TimedOut && result.ExitCode != 0 && TestRunReportsAllPassed(result.Output);
             EmitMissingTrxReceiptIfNeeded(!result.TimedOut && (result.ExitCode == 0 || reportedAllPassed), telemetry);
             var trxEvidence = InspectTrxCompletionEvidence(telemetry?.Paths);
-            var completionDecision = DecideTestShardCompletion(
-                result,
-                trxEvidence,
-                policySignal: reportedAllPassed ? "testhost-shutdown-all-passed" : null,
-                allowNonzeroExit: reportedAllPassed);
+            var completionDecision = telemetry is null
+                ? DecideNonTestCommandCompletion(result)
+                : DecideTestShardCompletion(
+                    result,
+                    trxEvidence,
+                    policySignal: reportedAllPassed ? "testhost-shutdown-all-passed" : null,
+                    allowNonzeroExit: reportedAllPassed);
             var passed = completionDecision.Passed;
             IReadOnlyList<string> failingTestIdentities = passed
                 ? []
@@ -4453,15 +4456,18 @@ public sealed class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
             }
 
             elapsed.Stop();
-            var reportedAllPassed = !result.TimedOut && result.ExitCode != 0 && TestRunReportsAllPassed(result.Output);
             var telemetry = ResolveDotnetTestTelemetry(arguments, check, environment);
+            var reportedAllPassed = telemetry is not null &&
+                !result.TimedOut && result.ExitCode != 0 && TestRunReportsAllPassed(result.Output);
             EmitMissingTrxReceiptIfNeeded(!result.TimedOut && (result.ExitCode == 0 || reportedAllPassed), telemetry);
             var trxEvidence = InspectTrxCompletionEvidence(telemetry?.Paths);
-            var completionDecision = DecideTestShardCompletion(
-                result,
-                trxEvidence,
-                policySignal: reportedAllPassed ? "testhost-shutdown-all-passed" : null,
-                allowNonzeroExit: reportedAllPassed);
+            var completionDecision = telemetry is null
+                ? DecideNonTestCommandCompletion(result)
+                : DecideTestShardCompletion(
+                    result,
+                    trxEvidence,
+                    policySignal: reportedAllPassed ? "testhost-shutdown-all-passed" : null,
+                    allowNonzeroExit: reportedAllPassed);
             var passed = completionDecision.Passed;
             IReadOnlyList<string> failingTestIdentities = passed
                 ? []
@@ -7302,6 +7308,23 @@ public sealed class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
             trx.Outcome,
             policyFailure ?? policySignal,
             trx.NotExecutedTestCount);
+    }
+
+    private static AcceptanceShardCompletionDecision DecideNonTestCommandCompletion(CommandResult result)
+    {
+        var failedPredicate = result.TimedOut
+            ? AcceptanceShardCompletionPredicates.TimedOut
+            : result.ExitCode != 0
+                ? AcceptanceShardCompletionPredicates.NonzeroExit
+                : null;
+        return new AcceptanceShardCompletionDecision(
+            failedPredicate is null,
+            failedPredicate,
+            result.TimedOut,
+            result.ExitCode,
+            null,
+            null,
+            "not-applicable");
     }
 
     internal static AcceptanceShardCompletionDecision DecideTestShardCompletionForTests(
