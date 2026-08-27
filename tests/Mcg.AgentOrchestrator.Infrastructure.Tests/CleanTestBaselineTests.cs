@@ -112,6 +112,56 @@ public sealed class CleanTestBaselineTests
     }
 
     [Xunit.Fact]
+    public void VerifierTrxReceiptSuppliesCauseWithoutInjectedFinalEvidence()
+    {
+        const string checkName = "infrastructure tests: Remainder";
+        var json = """
+            {"contractVersion":1,"kind":"seeded-dispatch-repository-git-probe","owner":"ProcessOutputApparatus","probeClassification":"EmptyRequiredOutput","processStarted":true,"exitCode":0,"standardOutputByteCount":0,"standardErrorByteCount":0,"drainTimedOut":false,"timedOut":false,"drainFailed":false,"repositoryHeadState":"ValidLooseReference","check":"PublishedTopLevel","fixtureAttemptId":"create-control","probeOrdinal":7}
+            """;
+        var marker = "MCG_ACCEPTANCE_CAUSE_V1:" +
+            Convert.ToBase64String(System.Text.Encoding.UTF8.GetBytes(json));
+        var trxPath = Path.Combine(Path.GetTempPath(), $"cause-{Guid.NewGuid():N}.trx");
+        try
+        {
+            File.WriteAllText(
+                trxPath,
+                $"""
+                <TestRun>
+                  <Results>
+                    <UnitTestResult testId="1" testName="fixture" outcome="Failed">
+                      <Output><ErrorInfo><Message>{marker}</Message></ErrorInfo></Output>
+                    </UnitTestResult>
+                  </Results>
+                  <TestDefinitions>
+                    <UnitTest id="1" name="fixture"><TestMethod className="Fixture" name="Fails" /></UnitTest>
+                  </TestDefinitions>
+                </TestRun>
+                """);
+
+            var receipt = GoalAcceptanceVerifier.AttachFailureCauseEvidence(
+                new AcceptanceCheckResult(
+                    checkName,
+                    false,
+                    1,
+                    "ordinary nonempty Remainder failure",
+                    TestResultPaths: [trxPath],
+                    ExecutedTestCount: 42));
+
+            Assert.Equal(
+                "seeded-repository-process-output-apparatus",
+                receipt.FailureClassification);
+            Assert.Equal(
+                AcceptanceFailureCause.EnvironmentalApparatus,
+                receipt.FailureCauseEvidence?.Cause);
+            Assert.Equal(checkName, receipt.FailureCauseEvidence?.CheckName);
+        }
+        finally
+        {
+            File.Delete(trxPath);
+        }
+    }
+
+    [Xunit.Fact]
     public void VerifierClassificationReceiptMissingConflictingOrUndefinedCauseFailsClosed()
     {
         const string checkName = "infrastructure tests: Remainder";

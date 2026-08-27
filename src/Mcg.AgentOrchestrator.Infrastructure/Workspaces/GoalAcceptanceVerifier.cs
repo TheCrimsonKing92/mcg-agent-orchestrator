@@ -42,6 +42,89 @@ public sealed record AcceptanceFailureCauseEvidence(
     string? CheckName = null,
     string? SourceClassification = null);
 
+internal sealed record AcceptanceFailureCauseReceiptV1(
+    int ContractVersion,
+    string Kind,
+    string Owner,
+    string ProbeClassification,
+    bool ProcessStarted,
+    int? ExitCode,
+    long StandardOutputByteCount,
+    long StandardErrorByteCount,
+    bool DrainTimedOut,
+    bool TimedOut,
+    bool DrainFailed,
+    string RepositoryHeadState,
+    string Check,
+    string FixtureAttemptId,
+    int ProbeOrdinal);
+
+internal static class AcceptanceFailureCauseReceiptCodec
+{
+    internal const string Prefix = "MCG_ACCEPTANCE_CAUSE_V1:";
+    private static readonly JsonSerializerOptions Options = new(JsonSerializerDefaults.Web);
+    private static readonly Regex Marker = new(
+        Regex.Escape(Prefix) + "(?<payload>[A-Za-z0-9+/=]+)",
+        RegexOptions.CultureInvariant);
+
+    internal static string Format(AcceptanceFailureCauseReceiptV1 receipt) =>
+        Prefix + Convert.ToBase64String(Encoding.UTF8.GetBytes(JsonSerializer.Serialize(receipt, Options)));
+
+    internal static bool TryParse(string message, out AcceptanceFailureCauseReceiptV1 receipt)
+    {
+        receipt = null!;
+        var matches = Marker.Matches(message ?? string.Empty);
+        if (matches.Count != 1)
+        {
+            return false;
+        }
+
+        try
+        {
+            receipt = JsonSerializer.Deserialize<AcceptanceFailureCauseReceiptV1>(
+                Convert.FromBase64String(matches[0].Groups["payload"].Value),
+                Options)!;
+            return IsEnvironmentalApparatus(receipt);
+        }
+        catch (Exception ex) when (ex is FormatException or JsonException)
+        {
+            receipt = null!;
+            return false;
+        }
+    }
+
+    private static bool IsEnvironmentalApparatus(AcceptanceFailureCauseReceiptV1? receipt)
+    {
+        if (receipt is null ||
+            receipt.ContractVersion != 1 ||
+            !receipt.Kind.Equals("seeded-dispatch-repository-git-probe", StringComparison.Ordinal) ||
+            !receipt.Owner.Equals("ProcessOutputApparatus", StringComparison.Ordinal) ||
+            string.IsNullOrWhiteSpace(receipt.Check) ||
+            string.IsNullOrWhiteSpace(receipt.FixtureAttemptId) ||
+            receipt.FixtureAttemptId.Equals("not-assigned", StringComparison.Ordinal) ||
+            receipt.ProbeOrdinal <= 0)
+        {
+            return false;
+        }
+
+        return receipt.ProbeClassification switch
+        {
+            "EmptyRequiredOutput" =>
+                receipt.ProcessStarted && receipt.ExitCode == 0 &&
+                receipt.StandardOutputByteCount == 0 &&
+                !receipt.DrainTimedOut && !receipt.TimedOut && !receipt.DrainFailed &&
+                receipt.RepositoryHeadState is "ValidLooseReference" or
+                    "ValidPackedReference" or "ValidDetachedHead",
+            "LaunchFailure" => !receipt.ProcessStarted,
+            "ProcessTimeout" => receipt.ProcessStarted && receipt.TimedOut,
+            "DrainTimeout" => receipt.ProcessStarted && receipt.DrainTimedOut,
+            "DrainFailure" => receipt.ProcessStarted && receipt.DrainFailed,
+            "ProcessObservationFailure" => receipt.ProcessStarted && receipt.ExitCode is null,
+            _ => false
+        };
+    }
+}
+
 internal sealed record AcceptanceProcessCleanupObservation(
     int ProcessId,
     string Stage,
@@ -57,6 +140,7 @@ public static class AcceptanceFailureClassifications
     public const string StructuralCoverageFailed = "structural-coverage-failed";
     public const string FocusedSelectionApparatusFailure = "focused-selection-apparatus-failure";
     public const string FocusedSelectionReceiptUnreadable = "focused-selection-receipt-unreadable";
+    public const string SeededRepositoryProcessOutputApparatus = "seeded-repository-process-output-apparatus";
 }
 
 public enum FocusedEvidenceRejectionCode
@@ -841,6 +925,28 @@ public sealed class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
             return check with { FailureCauseEvidence = null };
         }
 
+        var trxCause = ExtractTrxFailureCauseEvidence(check.TestResultPaths, check.Name);
+        if (check.FailureCauseEvidence is not null && trxCause is not null &&
+            (check.FailureCauseEvidence.Cause != trxCause.Cause ||
+             !string.Equals(
+                 check.FailureCauseEvidence.SourceClassification,
+                 trxCause.SourceClassification,
+                 StringComparison.Ordinal)))
+        {
+            return check with { FailureCauseEvidence = null };
+        }
+
+        if (string.IsNullOrWhiteSpace(check.FailureClassification) &&
+            check.FailureCauseEvidence is null &&
+            trxCause is not null)
+        {
+            check = check with
+            {
+                FailureClassification = trxCause.SourceClassification,
+                FailureCauseEvidence = trxCause
+            };
+        }
+
         var classification = string.IsNullOrWhiteSpace(check.FailureClassification)
             ? null
             : check.FailureClassification.Trim();
@@ -848,7 +954,8 @@ public sealed class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
         {
             AcceptanceFailureClassifications.GateEnvironmentInterference or
             AcceptanceFailureClassifications.FocusedSelectionApparatusFailure or
-            AcceptanceFailureClassifications.FocusedSelectionReceiptUnreadable =>
+            AcceptanceFailureClassifications.FocusedSelectionReceiptUnreadable or
+            AcceptanceFailureClassifications.SeededRepositoryProcessOutputApparatus =>
                 AcceptanceFailureCause.EnvironmentalApparatus,
             _ => (AcceptanceFailureCause?)null
         };
@@ -887,6 +994,72 @@ public sealed class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
                 check.Name,
                 classification)
         };
+    }
+
+    private static AcceptanceFailureCauseEvidence? ExtractTrxFailureCauseEvidence(
+        IEnumerable<string>? trxPaths,
+        string checkName)
+    {
+        if (trxPaths is null)
+        {
+            return null;
+        }
+
+        var markers = new List<string>();
+        var failedResultCount = 0;
+        foreach (var trxPath in trxPaths.Where(File.Exists))
+        {
+            try
+            {
+                var failedResults = XDocument.Load(trxPath, LoadOptions.None)
+                    .Descendants()
+                    .Where(element =>
+                        element.Name.LocalName.Equals("UnitTestResult", StringComparison.Ordinal) &&
+                        string.Equals(
+                            element.Attribute("outcome")?.Value,
+                            "Failed",
+                            StringComparison.OrdinalIgnoreCase))
+                    .ToArray();
+                foreach (var result in failedResults)
+                {
+                    failedResultCount++;
+                    var message = result.Descendants()
+                        .FirstOrDefault(element =>
+                            element.Name.LocalName.Equals("Message", StringComparison.Ordinal) &&
+                            element.Ancestors().Any(ancestor =>
+                                ancestor.Name.LocalName.Equals("ErrorInfo", StringComparison.Ordinal)))
+                        ?.Value;
+                    if (message is null ||
+                        !AcceptanceFailureCauseReceiptCodec.TryParse(message, out var receipt))
+                    {
+                        return null;
+                    }
+
+                    markers.Add(AcceptanceFailureCauseReceiptCodec.Format(receipt));
+                }
+            }
+            catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or System.Xml.XmlException)
+            {
+                return null;
+            }
+        }
+
+        if (failedResultCount == 0 || markers.Count != failedResultCount)
+        {
+            return null;
+        }
+
+        var evidence = string.Join(" | ", markers.Distinct(StringComparer.Ordinal));
+        if (evidence.Length > 4096)
+        {
+            evidence = evidence[..4096];
+        }
+
+        return new AcceptanceFailureCauseEvidence(
+            AcceptanceFailureCause.EnvironmentalApparatus,
+            evidence,
+            checkName,
+            AcceptanceFailureClassifications.SeededRepositoryProcessOutputApparatus);
     }
 
     private static bool ShouldCaptureGateEngineFault(Exception exception) =>

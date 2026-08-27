@@ -224,40 +224,38 @@ internal sealed class WorkerDispatchTestsSeededRepositoryFactory
         }
     }
 
-    internal static void RunFixtureGit(
+    internal static IReadOnlyList<GitProbeResult> RunFixtureGit(
         string workingDirectory,
         IReadOnlyList<string> arguments,
         DateTimeOffset commitTime)
     {
         var runner = new HermeticGitRunner();
+        var fixtureAttempt = FixtureAttempt.Create("fixture-git");
         var isCommit = arguments.Any(argument =>
             string.Equals(argument, "commit", StringComparison.Ordinal));
         var previousHead = isCommit ? TryReadHead(runner, workingDirectory) : null;
-        GitProbeResult? last = null;
-        for (var attempt = 1; attempt <= 2; attempt++)
-        {
-            last = runner.Run(
+        var result = fixtureAttempt.Record(
+            runner.Run(
                 workingDirectory,
                 arguments,
-                isCommit ? CommitEnvironment(commitTime) : null);
-            if (last.Succeeded ||
-                (isCommit && HasNewCommittedCleanHead(runner, workingDirectory, previousHead)))
-            {
-                return;
-            }
-
-            if (attempt < 2 &&
-                string.IsNullOrWhiteSpace(last.StandardOutput) &&
-                string.IsNullOrWhiteSpace(last.StandardError))
-            {
-                continue;
-            }
-
-            break;
+                isCommit ? CommitEnvironment(commitTime) : null),
+            workingDirectory,
+            ValidationCheck.FixtureGitCommand);
+        if (result.Succeeded ||
+            (isCommit && HasNewCommittedCleanHead(runner, workingDirectory, previousHead)))
+        {
+            return fixtureAttempt.Receipts.ToArray();
         }
 
-        throw new InvalidOperationException(
-            $"Fixture Git command failed after typed observation: {last}");
+        var observation = new PhysicalFileSystem().ObserveRepository(workingDirectory);
+        throw Failure(
+            ValidationCheck.FixtureGitCommand,
+            workingDirectory,
+            stagingPath: null,
+            finalPath: null,
+            observation,
+            result,
+            probeReceipts: fixtureAttempt.Receipts);
     }
 
     internal static void DeleteOwnedDirectory(string path)
@@ -295,15 +293,16 @@ internal sealed class WorkerDispatchTestsSeededRepositoryFactory
             }
 
             untypedFailureCheck = ValidationCheck.TemplateConstruction;
-            RunTemplateCommand(path, ["init", "-b", "main"], ValidationCheck.TemplateInit);
-            RunTemplateCommand(path, ["config", "user.email", "tests@example.com"], ValidationCheck.TemplateUserEmail);
-            RunTemplateCommand(path, ["config", "user.name", "Dispatch Tests"], ValidationCheck.TemplateUserName);
+            RunTemplateCommand(path, ["init", "-b", "main"], ValidationCheck.TemplateInit, attempt);
+            RunTemplateCommand(path, ["config", "user.email", "tests@example.com"], ValidationCheck.TemplateUserEmail, attempt);
+            RunTemplateCommand(path, ["config", "user.name", "Dispatch Tests"], ValidationCheck.TemplateUserName, attempt);
             _seedTemplate(path);
-            RunTemplateCommand(path, ["add", "-A"], ValidationCheck.TemplateAdd);
+            RunTemplateCommand(path, ["add", "-A"], ValidationCheck.TemplateAdd, attempt);
             RunTemplateCommand(
                 path,
                 ["commit", "--allow-empty", "-m", "Seed"],
                 ValidationCheck.TemplateCommit,
+                attempt,
                 SeedCommitTime);
             var identity = ValidateRepository(
                 path,
@@ -337,31 +336,22 @@ internal sealed class WorkerDispatchTestsSeededRepositoryFactory
         string path,
         IReadOnlyList<string> arguments,
         ValidationCheck check,
+        FixtureAttempt attempt,
         DateTimeOffset? commitTime = null)
     {
         var isCommit = commitTime.HasValue;
         var previousHead = isCommit ? TryReadHead(_gitRunner, path) : null;
-        GitProbeResult? result = null;
-        for (var attempt = 1; attempt <= 2; attempt++)
-        {
-            result = _gitRunner.Run(
+        var result = attempt.Record(
+            _gitRunner.Run(
                 path,
                 arguments,
-                commitTime.HasValue ? CommitEnvironment(commitTime.Value) : null);
-            if (result.Succeeded ||
-                (isCommit && HasNewCommittedCleanHead(_gitRunner, path, previousHead)))
-            {
-                return;
-            }
-
-            if (attempt < 2 &&
-                string.IsNullOrWhiteSpace(result.StandardOutput) &&
-                string.IsNullOrWhiteSpace(result.StandardError))
-            {
-                continue;
-            }
-
-            break;
+                commitTime.HasValue ? CommitEnvironment(commitTime.Value) : null),
+            path,
+            check);
+        if (result.Succeeded ||
+            (isCommit && HasNewCommittedCleanHead(_gitRunner, path, previousHead)))
+        {
+            return;
         }
 
         throw Failure(
@@ -370,7 +360,8 @@ internal sealed class WorkerDispatchTestsSeededRepositoryFactory
             stagingPath: null,
             finalPath: null,
             _fileSystem.ObserveRepository(path),
-            result ?? GitProbeResult.NotRun($"git {string.Join(' ', arguments)}", "No Git attempt was recorded."));
+            result,
+            probeReceipts: attempt.Receipts);
     }
 
     private RepositoryIdentity ValidateRepository(
@@ -815,7 +806,8 @@ internal sealed class WorkerDispatchTestsSeededRepositoryFactory
             GitProbeClassification.LaunchFailure or
             GitProbeClassification.ProcessTimeout or
             GitProbeClassification.DrainTimeout or
-            GitProbeClassification.DrainFailure)
+            GitProbeClassification.DrainFailure or
+            GitProbeClassification.ProcessObservationFailure)
         {
             return ValidationFailureOwner.ProcessOutputApparatus;
         }
@@ -1019,12 +1011,33 @@ internal sealed class WorkerDispatchTestsSeededRepositoryFactory
         ValidationFailureOwner Owner = ValidationFailureOwner.Unknown,
         IReadOnlyList<GitProbeResult>? ProbeReceipts = null)
     {
-        public override string ToString() =>
-            $"check={Check}; sourceTemplate={SourceTemplatePath ?? "null"}; staging={StagingPath ?? "null"}; " +
+        public override string ToString()
+        {
+            var causeReceipt = Owner == ValidationFailureOwner.ProcessOutputApparatus
+                ? AcceptanceFailureCauseReceiptCodec.Format(new AcceptanceFailureCauseReceiptV1(
+                    ContractVersion: 1,
+                    Kind: "seeded-dispatch-repository-git-probe",
+                    Owner: Owner.ToString(),
+                    ProbeClassification: Git.Classification.ToString(),
+                    ProcessStarted: Git.ProcessStarted,
+                    ExitCode: Git.ExitCode,
+                    StandardOutputByteCount: Git.StandardOutputByteCount,
+                    StandardErrorByteCount: Git.StandardErrorByteCount,
+                    DrainTimedOut: Git.DrainTimedOut,
+                    TimedOut: Git.TimedOut,
+                    DrainFailed: Git.DrainFailed,
+                    RepositoryHeadState: FileSystem.HeadState.ToString(),
+                    Check: Check.ToString(),
+                    FixtureAttemptId: Git.FixtureAttemptId,
+                    ProbeOrdinal: Git.ProbeOrdinal))
+                : "none";
+            return $"check={Check}; sourceTemplate={SourceTemplatePath ?? "null"}; staging={StagingPath ?? "null"}; " +
             $"final={FinalPath ?? "null"}; templateIdentity={TemplateIdentity?.ToString() ?? "null"}; " +
             $"stagingIdentity={StagingIdentity?.ToString() ?? "null"}; " +
             $"finalIdentity={FinalIdentity?.ToString() ?? "null"}; owner={Owner}; filesystem=({FileSystem}); git=({Git}); " +
-            $"probeReceipts=({string.Join(" || ", ProbeReceipts ?? [])}); cleanup=({string.Join(" | ", Cleanup)})";
+            $"causeReceipt={causeReceipt}; probeReceipts=({string.Join(" || ", ProbeReceipts ?? [])}); " +
+            $"cleanup=({string.Join(" | ", Cleanup)})";
+        }
     }
 
     internal enum GitProbeClassification
@@ -1037,6 +1050,7 @@ internal sealed class WorkerDispatchTestsSeededRepositoryFactory
         ProcessTimeout,
         DrainTimeout,
         DrainFailure,
+        ProcessObservationFailure,
         InvalidRequiredOutput
     }
 
@@ -1317,6 +1331,7 @@ internal sealed class WorkerDispatchTestsSeededRepositoryFactory
     internal enum ValidationCheck
     {
         TemplateConstruction,
+        FixtureGitCommand,
         TemplatePathAllocated,
         TemplateInit,
         TemplateUserEmail,

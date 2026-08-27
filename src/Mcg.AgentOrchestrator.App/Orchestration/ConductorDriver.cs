@@ -4231,9 +4231,7 @@ internal sealed partial class ConductorDriver
             .Select(check => !check.Advisory && inheritedChecks.Contains(check.Name)
                 ? check with
                 {
-                    FailureClassification = string.IsNullOrWhiteSpace(check.FailureClassification)
-                        ? AcceptanceFailureClassifications.InheritedBaselineApparatus
-                        : check.FailureClassification
+                    FailureClassification = AcceptanceFailureClassifications.InheritedBaselineApparatus
                 }
                 : check)
             .ToArray();

@@ -134,7 +134,7 @@ public sealed partial class ConductorDriverTestsAcceptanceCoordination
             AcceptanceFailureClassifications.GateEnvironmentInterference,
             failedCheck.FailureCauseEvidence?.SourceClassification);
         Assert.Equal(
-            AcceptanceFailureClassifications.GateEnvironmentInterference,
+            AcceptanceFailureClassifications.InheritedBaselineApparatus,
             Assert.Single(classified.RequiredUnmetCriteria).FailureClassification);
     }
 

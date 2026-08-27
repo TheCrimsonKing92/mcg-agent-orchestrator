@@ -236,11 +236,25 @@ internal static WorkerDispatchTestsSeededRepositoryFactory.GitProbeResult RunGit
     }
     catch (Exception ex)
     {
+        int? observedExitCode = null;
+        if (processStarted && process is not null)
+        {
+            try
+            {
+                observedExitCode = process.HasExited ? process.ExitCode : null;
+            }
+            catch (InvalidOperationException)
+            {
+                // The parent-side observation failed after the start seam reported success.
+                // That is apparatus evidence, not a child nonzero exit.
+            }
+        }
+
         var boundedError = WorkerDispatchTestsSeededRepositoryFactory.GitProbeResult.BoundDiagnostic(ex.Message);
         return new WorkerDispatchTestsSeededRepositoryFactory.GitProbeResult(
             command,
             processStarted,
-            processStarted && process is { HasExited: true } ? process.ExitCode : null,
+            observedExitCode,
             string.Empty,
             boundedError,
             DrainTimedOut: false,
@@ -255,7 +269,7 @@ internal static WorkerDispatchTestsSeededRepositoryFactory.GitProbeResult RunGit
             ChildProcessId: childProcessId,
             ChildStartedAt: childStartedAt,
             Classification: processStarted
-                ? WorkerDispatchTestsSeededRepositoryFactory.GitProbeClassification.NonZeroExit
+                ? WorkerDispatchTestsSeededRepositoryFactory.GitProbeClassification.ProcessObservationFailure
                 : WorkerDispatchTestsSeededRepositoryFactory.GitProbeClassification.LaunchFailure);
     }
     finally
