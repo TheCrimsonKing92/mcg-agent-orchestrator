@@ -51,7 +51,8 @@ internal sealed class WorkerDispatchTestsSeededRepositoryFactory
             templateBefore,
             template.Path,
             stagingPath: null,
-            finalPath: null);
+            finalPath: null,
+            attempt);
 
         string? allocatedStagingPath = null;
         string? stagingPath = null;
@@ -135,7 +136,8 @@ internal sealed class WorkerDispatchTestsSeededRepositoryFactory
                 templateAfter,
                 template.Path,
                 stagingPath,
-                finalPath);
+                finalPath,
+                attempt);
 
             stagingIdentity = ValidateRepository(
                 stagingPath,
@@ -151,7 +153,8 @@ internal sealed class WorkerDispatchTestsSeededRepositoryFactory
                 stagingIdentity,
                 template.Path,
                 stagingPath,
-                finalPath);
+                finalPath,
+                attempt);
 
             try
             {
@@ -192,6 +195,7 @@ internal sealed class WorkerDispatchTestsSeededRepositoryFactory
                 template.Path,
                 stagingPath,
                 finalPath,
+                attempt,
                 stagingIdentity);
 
             return new CreationResult(
@@ -233,7 +237,9 @@ internal sealed class WorkerDispatchTestsSeededRepositoryFactory
         var fixtureAttempt = FixtureAttempt.Create("fixture-git");
         var isCommit = arguments.Any(argument =>
             string.Equals(argument, "commit", StringComparison.Ordinal));
-        var previousHead = isCommit ? TryReadHead(runner, workingDirectory) : null;
+        var previousHead = isCommit
+            ? TryReadHead(runner, workingDirectory, fixtureAttempt, ValidationCheck.FixtureGitCommand)
+            : null;
         var result = fixtureAttempt.Record(
             runner.Run(
                 workingDirectory,
@@ -242,7 +248,12 @@ internal sealed class WorkerDispatchTestsSeededRepositoryFactory
             workingDirectory,
             ValidationCheck.FixtureGitCommand);
         if (result.Succeeded ||
-            (isCommit && HasNewCommittedCleanHead(runner, workingDirectory, previousHead)))
+            (isCommit && HasNewCommittedCleanHead(
+                runner,
+                workingDirectory,
+                previousHead,
+                fixtureAttempt,
+                ValidationCheck.FixtureGitCommand)))
         {
             return fixtureAttempt.Receipts.ToArray();
         }
@@ -340,7 +351,7 @@ internal sealed class WorkerDispatchTestsSeededRepositoryFactory
         DateTimeOffset? commitTime = null)
     {
         var isCommit = commitTime.HasValue;
-        var previousHead = isCommit ? TryReadHead(_gitRunner, path) : null;
+        var previousHead = isCommit ? TryReadHead(_gitRunner, path, attempt, check) : null;
         var result = attempt.Record(
             _gitRunner.Run(
                 path,
@@ -349,7 +360,7 @@ internal sealed class WorkerDispatchTestsSeededRepositoryFactory
             path,
             check);
         if (result.Succeeded ||
-            (isCommit && HasNewCommittedCleanHead(_gitRunner, path, previousHead)))
+            (isCommit && HasNewCommittedCleanHead(_gitRunner, path, previousHead, attempt, check)))
         {
             return;
         }
@@ -575,7 +586,7 @@ internal sealed class WorkerDispatchTestsSeededRepositoryFactory
         bool requiresOutput = true)
     {
         var result = _gitRunner.Run(path, arguments);
-        if (result.Succeeded && requiresOutput && string.IsNullOrWhiteSpace(result.StandardOutput))
+        if (result.Succeeded && requiresOutput && result.StandardOutputByteCount == 0)
         {
             result = result with { Classification = GitProbeClassification.EmptyRequiredOutput };
         }
@@ -619,7 +630,8 @@ internal sealed class WorkerDispatchTestsSeededRepositoryFactory
         RepositoryIdentity actual,
         string sourceTemplatePath,
         string? stagingPath,
-        string? finalPath)
+        string? finalPath,
+        FixtureAttempt attempt)
     {
         if (expected == actual)
         {
@@ -634,7 +646,8 @@ internal sealed class WorkerDispatchTestsSeededRepositoryFactory
             _fileSystem.ObserveRepository(actual.RepositoryPath),
             GitProbeResult.NotRun("identity comparison", $"expected={expected}; actual={actual}"),
             expected,
-            actual);
+            actual,
+            probeReceipts: attempt.Receipts);
     }
 
     private void EnsureMatchingHead(
@@ -644,6 +657,7 @@ internal sealed class WorkerDispatchTestsSeededRepositoryFactory
         string sourceTemplatePath,
         string? stagingPath,
         string? finalPath,
+        FixtureAttempt attempt,
         RepositoryIdentity? stagingIdentity = null)
     {
         if (string.Equals(template.HeadCommit, candidate.HeadCommit, StringComparison.Ordinal))
@@ -662,7 +676,8 @@ internal sealed class WorkerDispatchTestsSeededRepositoryFactory
                 $"templateHead={template.HeadCommit}; candidateHead={candidate.HeadCommit}"),
             template,
             stagingIdentity ?? candidate,
-            finalPath is null ? null : candidate);
+            finalPath is null ? null : candidate,
+            probeReceipts: attempt.Receipts);
     }
 
     private static string SingleOutput(GitProbeResult result)
@@ -672,15 +687,30 @@ internal sealed class WorkerDispatchTestsSeededRepositoryFactory
         return lines.Length == 1 ? lines[0] : string.Empty;
     }
 
-    private static string? TryReadHead(IGitRunner runner, string path)
+    private static string? TryReadHead(
+        IGitRunner runner,
+        string path,
+        FixtureAttempt attempt,
+        ValidationCheck check)
     {
-        var result = runner.Run(path, ["rev-parse", "--verify", "HEAD^{commit}"]);
+        var result = attempt.Record(
+            runner.Run(path, ["rev-parse", "--verify", "HEAD^{commit}"]),
+            path,
+            check);
         return result.Succeeded ? SingleOutput(result) : null;
     }
 
-    private static bool HasNewCommittedCleanHead(IGitRunner runner, string path, string? previousHead)
+    private static bool HasNewCommittedCleanHead(
+        IGitRunner runner,
+        string path,
+        string? previousHead,
+        FixtureAttempt attempt,
+        ValidationCheck check)
     {
-        var head = runner.Run(path, ["rev-parse", "--verify", "HEAD^{commit}"]);
+        var head = attempt.Record(
+            runner.Run(path, ["rev-parse", "--verify", "HEAD^{commit}"]),
+            path,
+            check);
         var currentHead = head.Succeeded ? SingleOutput(head) : null;
         if (string.IsNullOrWhiteSpace(currentHead) ||
             string.Equals(currentHead, previousHead, StringComparison.Ordinal))
@@ -688,7 +718,10 @@ internal sealed class WorkerDispatchTestsSeededRepositoryFactory
             return false;
         }
 
-        var status = runner.Run(path, ["status", "--porcelain=v1", "--untracked-files=all"]);
+        var status = attempt.Record(
+            runner.Run(path, ["status", "--porcelain=v1", "--untracked-files=all"]),
+            path,
+            check);
         return status.Succeeded && string.IsNullOrWhiteSpace(status.StandardOutput);
     }
 
@@ -1268,7 +1301,9 @@ internal sealed class WorkerDispatchTestsSeededRepositoryFactory
                     true,
                     IsObjectId(packedObjectId)
                         ? RepositoryHeadState.ValidPackedReference
-                        : RepositoryHeadState.ReferenceMissing,
+                        : packedValue is { Length: 2 }
+                            ? RepositoryHeadState.ReferenceInvalid
+                            : RepositoryHeadState.ReferenceMissing,
                     headBytes.LongLength,
                     boundedHead,
                     boundedHead.Length != head.Length,

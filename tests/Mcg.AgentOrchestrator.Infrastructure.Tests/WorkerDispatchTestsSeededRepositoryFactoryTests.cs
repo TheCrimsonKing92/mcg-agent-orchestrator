@@ -2,6 +2,8 @@
 // hermetic environment. No verdict observes a shared temp root, process list, clock, or schedule.
 public sealed class WorkerDispatchTestsSeededRepositoryFactoryTests
 {
+    public static bool IsWindows => OperatingSystem.IsWindows();
+
     [Xunit.Fact]
     public void Create_MultipleCopies_ProducesIndependentCommittedRepositories()
     {
@@ -319,6 +321,35 @@ public sealed class WorkerDispatchTestsSeededRepositoryFactoryTests
     }
 
     [Xunit.Fact]
+    public void Create_WhitespaceTopLevelOutput_IsInvalidRequiredOutputNotEmptyOutput()
+    {
+        var runner = new InterceptingGitRunner(
+            arguments => arguments.SequenceEqual(["rev-parse", "--show-toplevel"]),
+            (_, _, result) => result with
+            {
+                StandardOutput = " \r\n",
+                StandardOutputByteCount = 3
+            });
+        using var scope = new FactoryScope(gitRunner: runner);
+
+        var failure = Xunit.Assert.Throws<
+            WorkerDispatchTestsSeededRepositoryFactory.SeededRepositoryFailureException>(
+                () => scope.Factory.Create());
+
+        Xunit.Assert.Equal(
+            WorkerDispatchTestsSeededRepositoryFactory.GitProbeClassification.InvalidRequiredOutput,
+            failure.Diagnostic.Git.Classification);
+        Xunit.Assert.Equal(3, failure.Diagnostic.Git.StandardOutputByteCount);
+        Xunit.Assert.Equal(
+            WorkerDispatchTestsSeededRepositoryFactory.ValidationFailureOwner.Unknown,
+            failure.Diagnostic.Owner);
+        Xunit.Assert.DoesNotContain(
+            Mcg.AgentOrchestrator.Infrastructure.AcceptanceFailureCauseReceiptCodec.Prefix,
+            failure.Message,
+            StringComparison.Ordinal);
+    }
+
+    [Xunit.Fact]
     public void Create_InvalidHeadBytes_RoutesFixturePublicationWithTypedState()
     {
         using var scope = new FactoryScope(new WorkerDispatchTestsSeededRepositoryFactory.CreationHooks(
@@ -466,7 +497,7 @@ public sealed class WorkerDispatchTestsSeededRepositoryFactoryTests
         Xunit.Assert.Equal("0", capturedEnvironment["GIT_OPTIONAL_LOCKS"]);
     }
 
-    [Xunit.Fact]
+    [Xunit.Fact(Skip = "Requires Windows PowerShell.", SkipUnless = nameof(IsWindows))]
     public void RunGitProbe_RawStreamByteCounts_AreNotDecodedRoundTrips()
     {
         using var scope = new FactoryScope();
@@ -639,12 +670,17 @@ public sealed class WorkerDispatchTestsSeededRepositoryFactoryTests
                 WorkerDispatchTestsSeededRepositoryFactory.ValidationCheck.TemplateCommit)
             .ToArray();
         Xunit.Assert.Equal(3, receipts.Length);
-        Xunit.Assert.Equal([1, 2, 3], receipts.Select(receipt => receipt.ProbeOrdinal));
+        Xunit.Assert.Equal(
+            Enumerable.Range(receipts[0].ProbeOrdinal, receipts.Length),
+            receipts.Select(receipt => receipt.ProbeOrdinal));
         Xunit.Assert.Equal(
             2,
             receipts.Count(receipt => receipt.Arguments?.SequenceEqual(
                 ["rev-parse", "--verify", "HEAD^{commit}"]) == true));
-        var receipt = Xunit.Assert.Single(receipts, candidate => candidate.ExitCode == 128);
+        var receipt = Xunit.Assert.Single(
+            receipts,
+            candidate => candidate.ExitCode == 128 &&
+                candidate.Arguments?.Contains("commit", StringComparer.Ordinal) == true);
         Xunit.Assert.Equal(128, receipt.ExitCode);
         Xunit.Assert.Equal(0, receipt.StandardOutputByteCount);
         Xunit.Assert.Equal(0, receipt.StandardErrorByteCount);
