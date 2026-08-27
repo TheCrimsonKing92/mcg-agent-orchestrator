@@ -115,7 +115,13 @@ internal static class CleanTestBaseline
         IReadOnlyList<AcceptanceCheckResult>? failedCheckReceipts = null)
     {
         ArgumentNullException.ThrowIfNull(journals);
-        return Attribute(receipt, failedChecks, ProjectEvidence(journals), currentGoal, mainSha);
+        return Attribute(
+            receipt,
+            failedChecks,
+            ProjectEvidence(journals),
+            currentGoal,
+            mainSha,
+            failedCheckReceipts);
     }
 
     public static IReadOnlyList<AcceptanceCheckAttribution> Attribute(
@@ -123,7 +129,8 @@ internal static class CleanTestBaseline
         IReadOnlyList<string> failedChecks,
         IReadOnlyList<CleanTestBaselineEvidence> evidence,
         GoalId currentGoal,
-        string mainSha)
+        string mainSha,
+        IReadOnlyList<AcceptanceCheckResult>? failedCheckReceipts = null)
     {
         ArgumentNullException.ThrowIfNull(receipt);
         ArgumentNullException.ThrowIfNull(failedChecks);
