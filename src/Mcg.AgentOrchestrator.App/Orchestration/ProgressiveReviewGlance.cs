@@ -159,6 +159,9 @@ internal sealed class ProgressiveReviewGlanceCoordinator
     private readonly Dictionary<string, RoundState> _rounds = new(StringComparer.Ordinal);
     private readonly List<RunningGlance> _running = [];
     private readonly Dictionary<string, GoalSummary> _summaries = new(StringComparer.Ordinal);
+    private readonly InMemoryProgressiveReviewGlanceCircuitStore _fallbackSuppressionStore = new();
+    private readonly HashSet<string> _fallbackSuppressionWindows = new(StringComparer.Ordinal);
+    private bool _circuitDrainFailureReported;
 
     internal static Func<string, string[], GitCli.GitResult> RunGit { get; set; } =
         (dir, args) => GitCli.Run(dir, args);
@@ -1728,39 +1731,62 @@ Corrective direction:
         }
         catch (Exception ex)
         {
-            TryAppendCircuitReceipt(
-                goalId,
-                taskId,
-                SuppressionReceipt(new ProgressiveReviewGlanceSuppressionAggregate(
-                    roundKey,
-                    goalId.Value,
-                    taskId.Value,
-                    circuitIdentity,
-                    admissionOutcome,
-                    openingCause,
-                    originalReason,
-                    1,
-                    avoidedInputTokens,
-                    admissionLatencyMilliseconds,
-                    trigger == ProgressiveReviewGlanceTriggerKind.ChangedFiles ? 1 : 0,
-                    trigger == ProgressiveReviewGlanceTriggerKind.Elapsed ? 1 : 0,
-                    probeOutcome)),
-                lines);
-            lines.Add($"GLANCE goal={Short(goalId.Value)} task={Short(taskId.Value)} result=suppression-persistence-failed error={BoundSingleLine(ex.Message, 300)}");
+            _fallbackSuppressionStore.AccumulateSuppression(observation);
+            if (_fallbackSuppressionWindows.Add(FallbackSuppressionKey(
+                observation.RoundKey,
+                observation.CircuitIdentity,
+                observation.AdmissionOutcome,
+                observation.ProbeOutcome)))
+            {
+                lines.Add($"GLANCE goal={Short(goalId.Value)} task={Short(taskId.Value)} result=suppression-persistence-failed fallback=round-local error={BoundSingleLine(ex.Message, 300)}");
+            }
         }
     }
 
     private void FlushInactiveCircuitSuppressions(IReadOnlySet<string> activeRoundKeys, List<string> lines)
     {
-        foreach (var aggregate in _circuitStore.DrainInactiveSuppressions(activeRoundKeys))
+        try
+        {
+            foreach (var aggregate in _circuitStore.DrainInactiveSuppressions(activeRoundKeys))
+            {
+                TryAppendCircuitReceipt(
+                    new GoalId(aggregate.GoalId),
+                    new TaskId(aggregate.TaskId),
+                    SuppressionReceipt(aggregate),
+                    lines);
+            }
+            _circuitDrainFailureReported = false;
+        }
+        catch (Exception ex)
+        {
+            if (!_circuitDrainFailureReported)
+            {
+                lines.Add($"GLANCE result=suppression-drain-failed fallback=round-local error={BoundSingleLine(ex.Message, 300)}");
+                _circuitDrainFailureReported = true;
+            }
+        }
+
+        foreach (var aggregate in _fallbackSuppressionStore.DrainInactiveSuppressions(activeRoundKeys))
         {
             TryAppendCircuitReceipt(
                 new GoalId(aggregate.GoalId),
                 new TaskId(aggregate.TaskId),
                 SuppressionReceipt(aggregate),
                 lines);
+            _fallbackSuppressionWindows.Remove(FallbackSuppressionKey(
+                aggregate.RoundKey,
+                aggregate.CircuitIdentity,
+                aggregate.AdmissionOutcome,
+                aggregate.ProbeOutcome));
         }
     }
+
+    private static string FallbackSuppressionKey(
+        string roundKey,
+        string circuitIdentity,
+        string admissionOutcome,
+        string probeOutcome) =>
+        string.Join("\n", roundKey, circuitIdentity, admissionOutcome, probeOutcome);
 
     private static ProgressiveReviewGlanceCircuitReceipt SuppressionReceipt(
         ProgressiveReviewGlanceSuppressionAggregate aggregate) => new(

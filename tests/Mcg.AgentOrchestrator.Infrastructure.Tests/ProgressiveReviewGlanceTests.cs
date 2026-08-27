@@ -261,6 +261,46 @@ public sealed class ProgressiveReviewGlanceTests
     }
 
     [Xunit.Fact]
+    public void AdmissionUnavailable_AggregatesMixedSuppressionsUntilRoundEnds()
+    {
+        var dispatchedAt = new DateTimeOffset(2026, 8, 26, 12, 0, 0, TimeSpan.Zero);
+        var now = dispatchedAt;
+        var runner = new ControlledGlanceRunner();
+        var events = new RecordingGlanceEvents();
+        var (kernel, goal, _) = RunningDeveloperRound(dispatchedAt);
+        var changes = new DispatchLiveChangeSnapshot(["changed.cs"], ["changed.cs"], 0);
+        var coordinator = NewCoordinator(
+            runner,
+            events,
+            new ProgressiveReviewGlanceOptions(
+                ChangedFileThreshold: 1,
+                FirstElapsedThreshold: TimeSpan.FromMinutes(1),
+                ElapsedInterval: TimeSpan.FromMinutes(1),
+                PerRoundBudget: 10),
+            () => now,
+            liveChanges: (_, _) => changes,
+            circuitStore: new UnavailableProgressiveReviewGlanceCircuitStore());
+
+        _ = coordinator.Observe(kernel, [goal]);
+        now = dispatchedAt.AddMinutes(2);
+        _ = coordinator.Observe(kernel, [goal]);
+        now = dispatchedAt.AddMinutes(3);
+        _ = coordinator.Observe(kernel, [goal]);
+
+        Xunit.Assert.Empty(events.CircuitReceipts);
+        _ = coordinator.Observe(kernel, []);
+
+        Xunit.Assert.Empty(runner.Calls);
+        var receipt = Xunit.Assert.Single(events.CircuitReceipts);
+        Xunit.Assert.Equal("AdmissionUnavailable", receipt.OpeningCause);
+        Xunit.Assert.Equal("admission-unavailable", receipt.ProbeOutcome);
+        Xunit.Assert.Equal(3, receipt.AvoidedCallCount);
+        Xunit.Assert.Equal(1, receipt.ChangedFilesTriggerCount);
+        Xunit.Assert.Equal(2, receipt.ElapsedTriggerCount);
+        Xunit.Assert.True(receipt.AvoidedInputTokens > 0);
+    }
+
+    [Xunit.Fact]
     public async Task SubscriptionRunner_NonzeroExitIsRunnerFailureBeforeOutputParsing()
     {
         var runner = new SubscriptionCliProgressiveReviewGlanceRunner(
@@ -1939,6 +1979,32 @@ public sealed class ProgressiveReviewGlanceTests
                 ? Task.FromResult(new ProgressiveReviewGlanceDispatchResult(ProgressiveReviewGlanceVerdict.OnTrack, "ok", "ok", 1, 1))
                 : _responses.Dequeue();
         }
+    }
+
+    private sealed class UnavailableProgressiveReviewGlanceCircuitStore : IProgressiveReviewGlanceCircuitStore
+    {
+        public ProgressiveReviewGlanceCircuitAdmission TryAcquireProbe(
+            ProgressiveReviewGlanceContractIdentity identity,
+            DateTimeOffset now,
+            TimeSpan leaseDuration) =>
+            throw new InvalidOperationException("circuit admission unavailable");
+
+        public void CompleteProbe(
+            ProgressiveReviewGlanceContractIdentity identity,
+            string probeLeaseId,
+            bool openCircuit,
+            bool resetOpenCircuits,
+            string completionCause,
+            string completionReason,
+            DateTimeOffset now) =>
+            throw new InvalidOperationException("circuit completion unavailable");
+
+        public void AccumulateSuppression(ProgressiveReviewGlanceSuppressionObservation observation) =>
+            throw new InvalidOperationException("suppression persistence unavailable");
+
+        public IReadOnlyList<ProgressiveReviewGlanceSuppressionAggregate> DrainInactiveSuppressions(
+            IReadOnlySet<string> activeRoundKeys) =>
+            throw new InvalidOperationException("suppression drain unavailable");
     }
 
     private sealed class RecordingGlanceEvents : IGoalLifecycleEventWriter
