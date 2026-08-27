@@ -52,23 +52,22 @@ internal static class StructuredCodexOutputNormalizer
         }
 
         var parsed = CodexJsonlUsageParser.Parse(raw);
-        if (parsed.HasMalformedJsonl)
-        {
-            return new StructuredCodexNormalizationResult(
-                parsed,
-                PlannerCandidateNormalizationState.Malformed);
-        }
-
         if (!parsed.Recognized)
         {
             return new StructuredCodexNormalizationResult(
                 parsed,
-                PlannerCandidateNormalizationState.Unrecognized);
+                parsed.HasMalformedJsonl
+                    ? PlannerCandidateNormalizationState.Malformed
+                    : PlannerCandidateNormalizationState.Unrecognized);
         }
 
         if (string.IsNullOrWhiteSpace(parsed.WorkerOutput))
         {
-            return new StructuredCodexNormalizationResult(parsed, PlannerCandidateNormalizationState.Empty);
+            return new StructuredCodexNormalizationResult(
+                parsed,
+                parsed.HasMalformedJsonl
+                    ? PlannerCandidateNormalizationState.Malformed
+                    : PlannerCandidateNormalizationState.Empty);
         }
 
         try
@@ -87,7 +86,11 @@ internal static class StructuredCodexOutputNormalizer
             // Preserve the raw process log and retain the typed parsed result.
         }
 
-        return new StructuredCodexNormalizationResult(parsed, PlannerCandidateNormalizationState.Normalized);
+        return new StructuredCodexNormalizationResult(
+            parsed,
+            parsed.HasMalformedJsonl
+                ? PlannerCandidateNormalizationState.Malformed
+                : PlannerCandidateNormalizationState.Normalized);
     }
 
     private static StructuredCodexNormalizationResult Unreadable() => new(
