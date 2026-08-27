@@ -2415,10 +2415,7 @@ public static class WorkerProfileDispatcher
             "goal/timeline.json",
             ContextArtifactKind.RegisteredContext,
             SerializeSemanticTimeline(timeline, workingDirectory, contextDirectory));
-        static byte[] SerializeReviewFindingHistory<T>(T value) =>
-            JsonSerializer.SerializeToUtf8Bytes(value);
-
-        var reviewFindingHistory = goal.Tasks
+        var reviewFindingHistory = WorkerContextPackageBuilder.DistinctBySerializedValue(goal.Tasks
             .SelectMany(candidate => candidate.VerificationHistory.Select(verification => new
             {
                 TaskId = candidate.Id.Value,
@@ -2427,19 +2424,14 @@ public static class WorkerProfileDispatcher
                 EvidenceReceipts = verification.FindingEvidenceReceipts ?? []
             }))
             .Where(item => item.Findings.Count > 0 || item.EvidenceReceipts.Count > 0)
-            // Keep the full serialized bytes as the equality key, never a digest. The same serializer
-            // writes the artifact below, so only byte-identical complete snapshots are collapsed.
-            .DistinctBy(
-                item => Convert.ToBase64String(SerializeReviewFindingHistory(item)),
-                StringComparer.Ordinal)
-            .ToArray();
+        );
         if (reviewFindingHistory.Length > 0)
         {
             AddSource(
                 WorkerContextSemanticSource.ReviewFindingHistory,
                 "goal/review-finding-history.json",
                 ContextArtifactKind.AcceptanceCriteria,
-                SerializeReviewFindingHistory(reviewFindingHistory));
+                JsonSerializer.SerializeToUtf8Bytes(reviewFindingHistory));
         }
 
         if (task.LastExecution is not null)

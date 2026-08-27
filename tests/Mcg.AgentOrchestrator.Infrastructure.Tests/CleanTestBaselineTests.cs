@@ -119,6 +119,13 @@ public sealed class CleanTestBaselineTests
                 entry.Operation == "conductor:clean-baseline"));
             Assert.Equal("main-a", baseline.MainHeadSha);
             Assert.Equal(GoalOperationStatus.Completed, baseline.Status);
+
+            var evidence = Assert.Single(GoalOperationJournal.ReadAcceptanceEvidenceForMain(root, " MAIN-A "));
+            Assert.Equal(goal.Id, evidence.GoalId);
+            Assert.Equal("failed", evidence.AcceptanceOutcome);
+            Assert.Equal(["core tests"], evidence.FailedCheckNames);
+            Assert.Empty(GoalOperationJournal.ReadAcceptanceEvidenceForMain(root, "main-b"));
+            Assert.Empty(GoalOperationJournal.ReadAcceptanceEvidenceForMain(root, "   "));
         }
         finally
         {

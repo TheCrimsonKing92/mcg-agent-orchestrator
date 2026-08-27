@@ -44,6 +44,8 @@ internal sealed record DeveloperBranchIntegrationResult(
 
 internal sealed partial class ConductorDriver
 {
+    private sealed record JournalLifecycleFacts(bool IsMerged, bool IsRecorded, bool IsCleanedUp);
+
     private sealed record CohortGateRun(
         DateTimeOffset StartedAt,
         IReadOnlySet<string> MemberGoalIds,
@@ -276,11 +278,17 @@ internal sealed partial class ConductorDriver
                 ? reason
                 : null;
         var factGoalIds = kernel.Goals.Select(goal => goal.Id).ToArray();
-        var journalSnapshot = GoalOperationJournal.ReadAll(dir, factGoalIds)
-            .ToDictionary(pair => pair.Key, pair => pair.Value);
+        var journalFacts = new ConcurrentDictionary<GoalId, JournalLifecycleFacts>();
         var worktreeSnapshot = GoalWorktrees.ResolveAll(dir, factGoalIds)
             .ToDictionary(pair => pair.Key, pair => pair.Value);
-        void RefreshJournal(GoalId goalId) => journalSnapshot[goalId] = GoalOperationJournal.Read(dir, goalId);
+        static JournalLifecycleFacts ProjectJournalFacts(GoalOperationJournalSummary journal) => new(
+            GoalOperationJournal.HasCompletedLandingEvidence(journal),
+            GoalOperationJournal.HasCompletedRecordEvidence(journal),
+            GoalOperationJournal.HasCompletedCleanupEvidence(journal));
+        JournalLifecycleFacts ReadInitialJournalFacts(GoalId goalId) =>
+            ProjectJournalFacts(GoalOperationJournal.ReadActive(dir, goalId));
+        void RefreshJournal(GoalId goalId) =>
+            journalFacts[goalId] = ProjectJournalFacts(GoalOperationJournal.Read(dir, goalId));
         var evidenceMutationLeaseStore = new ReconcileSweepRemediationStore(workspace.SqliteStatePath);
         _getEvidenceMutationLease = goal => evidenceMutationLeaseStore.TryGetAcceptanceLease(
             goal.Id.Value,
@@ -313,14 +321,17 @@ internal sealed partial class ConductorDriver
             }
 
             var workspaceExists = worktreeSnapshot.ContainsKey(goal.Id);
-            var journal = journalSnapshot.TryGetValue(goal.Id, out var summary)
-                ? summary
-                : new GoalOperationJournalSummary(GoalOperationJournal.PathFor(dir, goal.Id), [], [], []);
-            var isMerged = GoalOperationJournal.HasCompletedLandingEvidence(journal);
-            var isRecorded = GoalOperationJournal.HasCompletedRecordEvidence(journal);
-            var isCleanedUp = GoalOperationJournal.HasCompletedCleanupEvidence(journal);
+            // Initial facts deliberately match ReadAll's active-journal-only population policy.
+            // Refreshes remain archive-aware, preserving the existing behavior for completed goals.
+            var persistedFacts = journalFacts.GetOrAdd(goal.Id, ReadInitialJournalFacts);
             var hasOpenClarification = GoalRefinementGate.HasOpenClarification(workspace, goal);
-            return new GoalLifecycleFacts(workspaceExists, IsBlocked: false, isMerged, isRecorded, isCleanedUp, hasOpenClarification);
+            return new GoalLifecycleFacts(
+                workspaceExists,
+                IsBlocked: false,
+                persistedFacts.IsMerged,
+                persistedFacts.IsRecorded,
+                persistedFacts.IsCleanedUp,
+                hasOpenClarification);
         };
 
         _getRunningPaidWorkerCount = () =>
@@ -491,14 +502,15 @@ internal sealed partial class ConductorDriver
             var changedFiles = GoalAcceptanceEvidenceBundleBuilder.GetChangedFiles(worktreePath);
             var branchHeadSha = TryResolveGitHead(worktreePath);
             var mainHeadSha = TryResolveGitHead(dir);
-            IReadOnlyDictionary<GoalId, GoalOperationJournalSummary> baselineJournals =
-                new Dictionary<GoalId, GoalOperationJournalSummary>();
+            IReadOnlyList<CleanTestBaselineEvidence> baselineEvidence = [];
             var baselineReceipt = CleanTestBaseline.Unattested(mainHeadSha);
             try
             {
-                baselineJournals = GoalOperationJournal.ReadAll(dir);
+                baselineEvidence = GoalOperationJournal.ReadAcceptanceEvidenceForMain(
+                    dir,
+                    mainHeadSha ?? string.Empty);
                 baselineReceipt = CleanTestBaseline.Resolve(
-                    baselineJournals,
+                    baselineEvidence,
                     goal.Id,
                     mainHeadSha ?? string.Empty,
                     mergeBaseSha: null);
@@ -646,7 +658,7 @@ internal sealed partial class ConductorDriver
                     checkAttributions = CleanTestBaseline.Attribute(
                         baselineReceipt,
                         failedChecks,
-                        baselineJournals,
+                        baselineEvidence,
                         goal.Id,
                         mainHeadSha ?? string.Empty);
                 }

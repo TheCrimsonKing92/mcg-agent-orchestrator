@@ -601,6 +601,17 @@ internal static class GoalOperationJournal
         return BuildSummary(path, entries);
     }
 
+    public static GoalOperationJournalSummary ReadActive(string executionDirectory, GoalId goalId)
+    {
+        var path = PathFor(executionDirectory, goalId);
+        if (!File.Exists(path))
+        {
+            return new GoalOperationJournalSummary(path, [], [], []);
+        }
+
+        return BuildSummary(path, ReadEntries(path));
+    }
+
     public static bool HasCompletedLandingEvidence(GoalOperationJournalSummary journal) =>
         HasRetiredTerminalDisposition(journal) ||
         journal.Entries.Any(entry =>
@@ -717,11 +728,81 @@ internal static class GoalOperationJournal
         return summaries;
     }
 
+    public static IReadOnlyList<CleanTestBaselineEvidence> ReadAcceptanceEvidenceForMain(
+        string executionDirectory,
+        string mainSha)
+    {
+        var normalizedMainSha = mainSha.Trim();
+        if (normalizedMainSha.Length == 0)
+        {
+            return [];
+        }
+
+        var root = System.IO.Path.Combine(
+            System.IO.Path.GetFullPath(executionDirectory),
+            ".orchestrator",
+            "goal-operations");
+        if (!Directory.Exists(root))
+        {
+            return [];
+        }
+
+        var evidence = new List<CleanTestBaselineEvidence>();
+        foreach (var path in Directory.EnumerateFiles(root, "*.jsonl", SearchOption.AllDirectories))
+        {
+            if (IsArchivedPath(root, path))
+            {
+                continue;
+            }
+
+            var fileName = System.IO.Path.GetFileNameWithoutExtension(path);
+            if (fileName.Equals("lifecycle-index", StringComparison.OrdinalIgnoreCase))
+            {
+                continue;
+            }
+
+            var goalId = new GoalId(fileName);
+            foreach (var line in SharedJsonlFile.ReadLines(path))
+            {
+                var entry = TryDeserializeAcceptanceEvidence(line);
+                if (entry is null ||
+                    !string.Equals(entry.MainHeadSha?.Trim(), normalizedMainSha, StringComparison.OrdinalIgnoreCase) ||
+                    entry.AcceptanceOutcome is null ||
+                    (!entry.AcceptanceOutcome.Equals("passed", StringComparison.OrdinalIgnoreCase) &&
+                     !entry.AcceptanceOutcome.Equals("failed", StringComparison.OrdinalIgnoreCase)))
+                {
+                    continue;
+                }
+
+                evidence.Add(new CleanTestBaselineEvidence(
+                    goalId,
+                    entry.At,
+                    entry.MainHeadSha,
+                    entry.AcceptanceOutcome,
+                    entry.FailedCheckNames));
+            }
+        }
+
+        return evidence;
+    }
+
     private static bool IsArchivedPath(string journalRoot, string path)
     {
         var archiveRoot = System.IO.Path.GetFullPath(System.IO.Path.Combine(journalRoot, "archive")) +
             System.IO.Path.DirectorySeparatorChar;
         return System.IO.Path.GetFullPath(path).StartsWith(archiveRoot, StringComparison.OrdinalIgnoreCase);
+    }
+
+    private static AcceptanceEvidenceLine? TryDeserializeAcceptanceEvidence(string line)
+    {
+        try
+        {
+            return JsonSerializer.Deserialize<AcceptanceEvidenceLine>(line, JsonOptions);
+        }
+        catch (JsonException)
+        {
+            return null;
+        }
     }
 
     private static GoalOperationJournalEntry[] ReadEntries(string path) =>
@@ -731,6 +812,12 @@ internal static class GoalOperationJournal
             .Select(entry => entry!)
             .OrderBy(entry => entry.At)
             .ToArray();
+
+    private sealed record AcceptanceEvidenceLine(
+        DateTimeOffset At,
+        string? MainHeadSha,
+        string? AcceptanceOutcome,
+        IReadOnlyList<string>? FailedCheckNames);
 
     private static GoalOperationJournalSummary BuildSummary(string path, GoalOperationJournalEntry[] entries)
     {

@@ -18,6 +18,13 @@ internal sealed record CleanTestBaselineReceipt(
     IReadOnlyList<string> SharedFailingChecks,
     string Evidence);
 
+internal sealed record CleanTestBaselineEvidence(
+    GoalId GoalId,
+    DateTimeOffset At,
+    string? MainHeadSha,
+    string? AcceptanceOutcome,
+    IReadOnlyList<string>? FailedCheckNames);
+
 internal static class CleanTestBaseline
 {
     public static CleanTestBaselineReceipt Resolve(
@@ -27,21 +34,30 @@ internal static class CleanTestBaseline
         string? mergeBaseSha)
     {
         ArgumentNullException.ThrowIfNull(journals);
+        return Resolve(ProjectEvidence(journals), currentGoal, mainSha, mergeBaseSha);
+    }
+
+    public static CleanTestBaselineReceipt Resolve(
+        IReadOnlyList<CleanTestBaselineEvidence> evidence,
+        GoalId currentGoal,
+        string mainSha,
+        string? mergeBaseSha)
+    {
+        ArgumentNullException.ThrowIfNull(evidence);
         _ = currentGoal;
         var normalizedMain = NormalizeSha(mainSha) ?? string.Empty;
-        var matching = journals
-            .SelectMany(pair => pair.Value.Entries.Select(entry => new JournalEvidence(pair.Key, entry)))
-            .Where(item => ShaEquals(item.Entry.MainHeadSha, normalizedMain))
+        var matching = evidence
+            .Where(item => ShaEquals(item.MainHeadSha, normalizedMain))
             .ToArray();
 
         var failed = matching
-            .Where(item => item.Entry.AcceptanceOutcome?.Equals("failed", StringComparison.OrdinalIgnoreCase) == true)
+            .Where(item => item.AcceptanceOutcome?.Equals("failed", StringComparison.OrdinalIgnoreCase) == true)
             .ToArray();
         var sharedChecks = failed
-            .SelectMany(item => (item.Entry.FailedCheckNames ?? [])
+            .SelectMany(item => (item.FailedCheckNames ?? [])
                 .Select(check => check.Trim())
                 .Where(check => check.Length > 0)
-                .Select(check => new FailedCheckEvidence(item.GoalId, item.Entry.At, check)))
+                .Select(check => new FailedCheckEvidence(item.GoalId, item.At, check)))
             .GroupBy(item => item.CheckName, StringComparer.Ordinal)
             .Where(group => group.Select(item => item.GoalId).Distinct().Count() >= 2)
             .Select(group => group.Key)
@@ -50,12 +66,12 @@ internal static class CleanTestBaseline
         if (sharedChecks.Length > 0)
         {
             var source = failed
-                .Where(item => (item.Entry.FailedCheckNames ?? [])
+                .Where(item => (item.FailedCheckNames ?? [])
                     .Any(check => sharedChecks.Contains(check.Trim(), StringComparer.Ordinal)))
-                .OrderByDescending(item => item.Entry.At)
+                .OrderByDescending(item => item.At)
                 .First();
             var sourceGoalCount = failed
-                .Where(item => (item.Entry.FailedCheckNames ?? [])
+                .Where(item => (item.FailedCheckNames ?? [])
                     .Any(check => sharedChecks.Contains(check.Trim(), StringComparer.Ordinal)))
                 .Select(item => item.GoalId)
                 .Distinct()
@@ -65,14 +81,14 @@ internal static class CleanTestBaseline
                 NormalizeSha(mergeBaseSha),
                 CleanBaselineAttestation.AttestedRed,
                 source.GoalId.Value,
-                source.Entry.At,
+                source.At,
                 sharedChecks,
                 $"{sharedChecks.Length} identical check(s) failed across {sourceGoalCount} goals");
         }
 
         var green = matching
-            .Where(item => item.Entry.AcceptanceOutcome?.Equals("passed", StringComparison.OrdinalIgnoreCase) == true)
-            .OrderByDescending(item => item.Entry.At)
+            .Where(item => item.AcceptanceOutcome?.Equals("passed", StringComparison.OrdinalIgnoreCase) == true)
+            .OrderByDescending(item => item.At)
             .FirstOrDefault();
         if (green is not null)
         {
@@ -81,7 +97,7 @@ internal static class CleanTestBaseline
                 NormalizeSha(mergeBaseSha),
                 CleanBaselineAttestation.AttestedGreen,
                 green.GoalId.Value,
-                green.Entry.At,
+                green.At,
                 [],
                 $"integrated acceptance passed for goal {Short(green.GoalId.Value)}");
         }
@@ -96,9 +112,20 @@ internal static class CleanTestBaseline
         GoalId currentGoal,
         string mainSha)
     {
+        ArgumentNullException.ThrowIfNull(journals);
+        return Attribute(receipt, failedChecks, ProjectEvidence(journals), currentGoal, mainSha);
+    }
+
+    public static IReadOnlyList<AcceptanceCheckAttribution> Attribute(
+        CleanTestBaselineReceipt receipt,
+        IReadOnlyList<string> failedChecks,
+        IReadOnlyList<CleanTestBaselineEvidence> evidence,
+        GoalId currentGoal,
+        string mainSha)
+    {
         ArgumentNullException.ThrowIfNull(receipt);
         ArgumentNullException.ThrowIfNull(failedChecks);
-        ArgumentNullException.ThrowIfNull(journals);
+        ArgumentNullException.ThrowIfNull(evidence);
         var normalizedMain = NormalizeSha(mainSha) ?? receipt.MainSha;
 
         return failedChecks
@@ -109,14 +136,13 @@ internal static class CleanTestBaseline
             {
                 if (receipt.SharedFailingChecks.Contains(check, StringComparer.Ordinal))
                 {
-                    var inheritedFrom = journals
-                        .Where(pair => pair.Key != currentGoal)
-                        .SelectMany(pair => pair.Value.Entries.Select(entry => new JournalEvidence(pair.Key, entry)))
+                    var inheritedFrom = evidence
+                        .Where(item => item.GoalId != currentGoal)
                         .Where(item =>
-                            ShaEquals(item.Entry.MainHeadSha, normalizedMain) &&
-                            item.Entry.AcceptanceOutcome?.Equals("failed", StringComparison.OrdinalIgnoreCase) == true &&
-                            (item.Entry.FailedCheckNames ?? []).Contains(check, StringComparer.Ordinal))
-                        .OrderByDescending(item => item.Entry.At)
+                            ShaEquals(item.MainHeadSha, normalizedMain) &&
+                            item.AcceptanceOutcome?.Equals("failed", StringComparison.OrdinalIgnoreCase) == true &&
+                            (item.FailedCheckNames ?? []).Contains(check, StringComparer.Ordinal))
+                        .OrderByDescending(item => item.At)
                         .FirstOrDefault();
                     if (inheritedFrom is not null)
                     {
@@ -177,7 +203,16 @@ internal static class CleanTestBaseline
         return normalized[..Math.Min(8, normalized.Length)];
     }
 
-    private sealed record JournalEvidence(GoalId GoalId, GoalOperationJournalEntry Entry);
+    private static CleanTestBaselineEvidence[] ProjectEvidence(
+        IReadOnlyDictionary<GoalId, GoalOperationJournalSummary> journals) =>
+        journals
+            .SelectMany(pair => pair.Value.Entries.Select(entry => new CleanTestBaselineEvidence(
+                pair.Key,
+                entry.At,
+                entry.MainHeadSha,
+                entry.AcceptanceOutcome,
+                entry.FailedCheckNames)))
+            .ToArray();
 
     private sealed record FailedCheckEvidence(GoalId GoalId, DateTimeOffset At, string CheckName);
 }

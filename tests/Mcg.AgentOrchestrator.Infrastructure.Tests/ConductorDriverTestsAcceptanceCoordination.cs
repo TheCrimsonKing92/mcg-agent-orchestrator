@@ -86,6 +86,33 @@ public sealed partial class ConductorDriverTestsAcceptanceCoordination
         }
     }
 
+    [Xunit.Fact(DisplayName = "ConductorDriver_construction_does_not_eagerly_read_goal_journals")]
+    public void ConductorDriverConstructionDoesNotEagerlyReadGoalJournals()
+    {
+        var root = CreateTempDirectory();
+        var workspace = OrchestratorWorkspace.ForDirectory(root);
+        var kernel = new AgentOrchestratorKernel();
+        var queried = kernel.CreateGoal("Queried journal goal");
+        var unqueried = kernel.CreateGoal("Unqueried locked journal goal");
+        GoalOperationJournal.Completed(root, unqueried, "conductor:land", "landed");
+
+        var unqueriedJournalPath = GoalOperationJournal.PathFor(root, unqueried.Id);
+        using var exclusiveJournalLock = new FileStream(
+            unqueriedJournalPath,
+            FileMode.Open,
+            FileAccess.ReadWrite,
+            FileShare.None);
+
+        var driver = new ConductorDriver(
+            kernel,
+            workspace,
+            new FakeAcceptanceVerifier(),
+            DefaultAgents(),
+            WorkerProfileCatalog.Default());
+
+        Assert.Equal(ReadFactsPerGoal(workspace, queried), driver.GetFacts(queried));
+    }
+
     [Xunit.Fact(DisplayName = "ConductorDriver_real_dispatch_checkpoint_rolls_back_then_notifies_on_success")]
     public void ConductorDriverRealDispatchCheckpointRollsBackThenNotifiesOnSuccess()
     {
