@@ -1139,7 +1139,7 @@ public static class DotnetBuildEnvironmentManager
         var snapshot = processSnapshot ?? CreateSlotCandidateProcessSnapshot();
         var ownerProcessId = TryFindActiveSlotArtifactConsumer(environment, snapshot)?.ProcessId ??
             metadata?.OwnerProcessId;
-        var unavailable = FindUnavailableSlotCandidate(snapshot);
+        var unavailable = FindUnavailableSlotCandidate(environment, snapshot, metadata);
         return new DotnetBuildStableSlotWait(
             slotIndex,
             ownerProcessId,
@@ -1373,7 +1373,6 @@ public static class DotnetBuildEnvironmentManager
     {
         var snapshot = processSnapshot ?? CreateSlotCandidateProcessSnapshot();
         return TryFindActiveSlotArtifactConsumer(environment, snapshot) is not null ||
-            FindUnavailableSlotCandidate(snapshot) is not null ||
             snapshot.Failure is not null;
     }
 
@@ -1415,12 +1414,32 @@ public static class DotnetBuildEnvironmentManager
         return null;
     }
 
-    private static ProcessInspectionRecord? FindUnavailableSlotCandidate(ProcessCommandLineSnapshot snapshot) =>
-        snapshot.Records.Values.FirstOrDefault(record =>
-            record.ProcessId != Environment.ProcessId &&
+    private static ProcessInspectionRecord? FindUnavailableSlotCandidate(
+        DotnetBuildEnvironment environment,
+        ProcessCommandLineSnapshot snapshot,
+        ExecutionLeaseMetadata? metadata)
+    {
+        if (metadata is null ||
+            metadata.OwnerProcessId == Environment.ProcessId ||
+            string.IsNullOrWhiteSpace(metadata.ArtifactsPath) ||
+            !NormalizeForCommandLineMatch(metadata.ArtifactsPath)
+                .Equals(
+                    NormalizeForCommandLineMatch(environment.ArtifactsPath),
+                    StringComparison.OrdinalIgnoreCase) ||
+            (!string.IsNullOrWhiteSpace(metadata.MachineName) &&
+                !metadata.MachineName.Equals(Environment.MachineName, StringComparison.OrdinalIgnoreCase)) ||
+            !snapshot.Records.TryGetValue(metadata.OwnerProcessId, out var record) ||
+            !IsProcessRunning(metadata.OwnerProcessId))
+        {
+            return null;
+        }
+
+        var unavailable =
             record.Status is not ProcessInspectionStatus.Exited and not ProcessInspectionStatus.DeadOrRecycled &&
             (record.Status != ProcessInspectionStatus.Available ||
-                string.IsNullOrWhiteSpace(record.CommandLine)));
+                string.IsNullOrWhiteSpace(record.CommandLine));
+        return unavailable ? record : null;
+    }
 
     private static ProcessCommandLineSnapshot CreateSlotCandidateProcessSnapshot()
     {
@@ -2355,6 +2374,12 @@ public static class DotnetBuildEnvironmentManager
         catch (InvalidOperationException)
         {
             return false;
+        }
+        catch (System.ComponentModel.Win32Exception)
+        {
+            // A lower-integrity caller may be unable to query a live owner. Preserve the lease
+            // until the byte-range lock and process identity can be observed authoritatively.
+            return true;
         }
     }
 

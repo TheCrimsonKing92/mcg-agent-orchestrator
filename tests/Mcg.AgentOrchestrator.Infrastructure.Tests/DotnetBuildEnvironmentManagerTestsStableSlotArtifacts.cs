@@ -294,7 +294,7 @@ public sealed class DotnetBuildEnvironmentManagerTestsStableSlotArtifacts
     }
 
     [Xunit.Fact]
-    public void StableSlotPoll_UnavailableCandidate_BlocksAllSlotsWithOneOperationSnapshot()
+    public void StableSlotPoll_UnattributableUnavailableCandidate_DoesNotBlockEverySlot()
     {
         using var _ = EnvVarScope.ForIsolatedDotnetRoot();
         const int unavailableProcessId = 424242;
@@ -318,32 +318,96 @@ public sealed class DotnetBuildEnvironmentManagerTestsStableSlotArtifacts
 
         try
         {
-            DotnetBuildLeaseAcquisition? result = null;
-            var output = AsyncLocalConsoleRouter.Capture(() =>
-                result = DotnetBuildEnvironmentManager.TryAcquireFirstAvailableStableSlotExecutionLock(
-                    TimeSpan.Zero,
-                    slotCount: DotnetBuildEnvironmentManager.BuildConcurrencySlotCount,
-                    timeProvider: new RecordingTimeProvider(),
-                    sleep: _ => throw new InvalidOperationException("A zero-timeout poll must not sleep.")));
+            var result = DotnetBuildEnvironmentManager.TryAcquireFirstAvailableStableSlotExecutionLock(
+                TimeSpan.Zero,
+                slotCount: DotnetBuildEnvironmentManager.BuildConcurrencySlotCount,
+                timeProvider: new RecordingTimeProvider(),
+                sleep: _ => throw new InvalidOperationException("A zero-timeout poll must not sleep."));
 
-            var busy = Assert.IsType<DotnetBuildLeaseAcquisition.SlotsBusy>(result);
-            Assert.Equal(DotnetBuildEnvironmentManager.BuildConcurrencySlotCount, busy.BusySlots.Count);
-            Assert.All(busy.BusySlots, slot =>
-            {
-                Assert.Null(slot.OwnerProcessId);
-                Assert.Equal(unavailableProcessId, slot.UnavailableProcessId);
-                Assert.Equal("dotnet", slot.UnavailableProcessName);
-                Assert.Equal(ProcessInspectionStatus.AccessDenied, slot.UnavailableStatus);
-            });
+            using var acquired = Assert.IsType<DotnetBuildLeaseAcquisition.Acquired>(result).Lease;
             Assert.Equal(1, snapshotCalls);
-            Assert.Contains(
-                $"pid-unknown:unavailable-pid-{unavailableProcessId}:name-dotnet:status-AccessDenied",
-                output,
-                StringComparison.Ordinal);
         }
         finally
         {
             DotnetBuildEnvironmentManager.ProcessCommandLineSnapshotForTests = null;
+        }
+    }
+
+    [Xunit.Fact]
+    public void StableSlotPoll_AttributedUnavailableCandidate_BlocksOnlyOwnedSlot()
+    {
+        using var _ = EnvVarScope.ForIsolatedDotnetRoot();
+        var slot0 = DotnetBuildEnvironmentManager.CreateStableSlotAttempt(0);
+        using var holder = StartSleepProcess();
+        Directory.CreateDirectory(Path.GetDirectoryName(slot0.ExecutionLockPath)!);
+        using var heldSlotLock = new FileStream(
+            slot0.ExecutionLockPath,
+            FileMode.OpenOrCreate,
+            FileAccess.ReadWrite,
+            FileShare.ReadWrite);
+        heldSlotLock.Lock(0, 1);
+
+        try
+        {
+            File.WriteAllText(
+                slot0.ExecutionLockPath + ".owner.json",
+                JsonSerializer.Serialize(
+                    new
+                    {
+                        Version = 1,
+                        slot0.LeaseId,
+                        slot0.SlotOwnerToken,
+                        slot0.ArtifactsPath,
+                        OwnerProcessId = holder.Id,
+                        MachineName = Environment.MachineName,
+                        AcquiredAt = DateTimeOffset.UtcNow
+                    },
+                    new JsonSerializerOptions { PropertyNamingPolicy = JsonNamingPolicy.CamelCase }));
+
+            var snapshotCalls = 0;
+            DotnetBuildEnvironmentManager.ProcessCommandLineSnapshotForTests = () =>
+            {
+                snapshotCalls++;
+                return new ProcessCommandLineSnapshot(
+                    new Dictionary<int, ProcessInspectionRecord>
+                    {
+                        [holder.Id] = new(
+                            holder.Id,
+                            Environment.ProcessId,
+                            "testhost",
+                            null,
+                            null,
+                            null,
+                            ProcessInspectionStatus.AccessDenied)
+                    });
+            };
+
+            var blocked = Assert.IsType<DotnetBuildLeaseAcquisition.SlotsBusy>(
+                DotnetBuildEnvironmentManager.TryAcquireFirstAvailableStableSlotExecutionLock(
+                    TimeSpan.Zero,
+                    slotCount: 1,
+                    timeProvider: new RecordingTimeProvider(),
+                    sleep: _ => throw new InvalidOperationException("A zero-timeout poll must not sleep.")));
+            var blockedSlot = Assert.Single(blocked.BusySlots);
+            Assert.Equal(holder.Id, blockedSlot.OwnerProcessId);
+            Assert.Equal(holder.Id, blockedSlot.UnavailableProcessId);
+            Assert.Equal(ProcessInspectionStatus.AccessDenied, blockedSlot.UnavailableStatus);
+            Assert.Equal(1, snapshotCalls);
+
+            var result = DotnetBuildEnvironmentManager.TryAcquireFirstAvailableStableSlotExecutionLock(
+                TimeSpan.Zero,
+                slotCount: DotnetBuildEnvironmentManager.BuildConcurrencySlotCount,
+                timeProvider: new RecordingTimeProvider(),
+                sleep: _ => throw new InvalidOperationException("A zero-timeout poll must not sleep."));
+            using var acquired = Assert.IsType<DotnetBuildLeaseAcquisition.Acquired>(result).Lease;
+            Assert.NotEqual(slot0.ExecutionLockPath, acquired.Environment.ExecutionLockPath);
+            Assert.Equal(2, snapshotCalls);
+        }
+        finally
+        {
+            DotnetBuildEnvironmentManager.ProcessCommandLineSnapshotForTests = null;
+            heldSlotLock.Unlock(0, 1);
+            StopProcess(holder);
         }
     }
 
