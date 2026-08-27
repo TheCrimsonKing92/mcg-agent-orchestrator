@@ -417,7 +417,7 @@ public abstract class GoalAcceptanceVerifierDotnetBuildSlotTests : GoalAcceptanc
         var destinationPath = Path.Combine(args[resultsDirectoryIndex + 1], args[trxFileIndex + 1]);
         if (sourcePath is null)
         {
-            File.WriteAllText(destinationPath, "<TestRun />");
+            WriteMtpTrx(args, executedTestCount: 1, ["InjectedRunnerFixture.Passed"]);
         }
         else
         {
