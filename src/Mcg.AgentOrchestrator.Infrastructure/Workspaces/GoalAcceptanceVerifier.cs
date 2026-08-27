@@ -119,7 +119,8 @@ internal static class AcceptanceFailureCauseReceiptCodec
             "ProcessTimeout" => receipt.ProcessStarted && receipt.TimedOut,
             "DrainTimeout" => receipt.ProcessStarted && receipt.DrainTimedOut,
             "DrainFailure" => receipt.ProcessStarted && receipt.DrainFailed,
-            "ProcessObservationFailure" => receipt.ProcessStarted && receipt.ExitCode is null,
+            "ProcessObservationFailure" =>
+                receipt.ProcessStarted && receipt.ExitCode is null or 0,
             _ => false
         };
     }

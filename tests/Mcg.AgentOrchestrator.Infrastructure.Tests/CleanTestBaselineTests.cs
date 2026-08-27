@@ -4,6 +4,36 @@ using Mcg.AgentOrchestrator.Infrastructure;
 
 public sealed class CleanTestBaselineTests
 {
+    [Xunit.Theory]
+    [Xunit.InlineData(null, true)]
+    [Xunit.InlineData(0, true)]
+    [Xunit.InlineData(128, false)]
+    public void ProcessObservationReceiptRequiresNoObservedChildFailure(int? exitCode, bool expected)
+    {
+        var receipt = new AcceptanceFailureCauseReceiptV1(
+            ContractVersion: 1,
+            Kind: "seeded-dispatch-repository-git-probe",
+            Owner: "ProcessOutputApparatus",
+            ProbeClassification: "ProcessObservationFailure",
+            ProcessStarted: true,
+            ExitCode: exitCode,
+            StandardOutputByteCount: 0,
+            StandardErrorByteCount: 31,
+            DrainTimedOut: false,
+            TimedOut: false,
+            DrainFailed: false,
+            RepositoryHeadState: "ValidLooseReference",
+            Check: "PublishedHeadCommit",
+            FixtureAttemptId: "create-capture-read-control",
+            ProbeOrdinal: 3);
+
+        var parsed = AcceptanceFailureCauseReceiptCodec.TryParse(
+            AcceptanceFailureCauseReceiptCodec.Format(receipt),
+            out _);
+
+        Assert.Equal(expected, parsed);
+    }
+
     [Xunit.Fact]
     public void ResolveGreenMainAttributesCandidateFailureAsIntroduced()
     {

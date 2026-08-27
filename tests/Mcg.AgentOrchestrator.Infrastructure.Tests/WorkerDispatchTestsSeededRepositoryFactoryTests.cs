@@ -730,6 +730,24 @@ public sealed class WorkerDispatchTestsSeededRepositoryFactoryTests
             result.Classification);
     }
 
+    [Xunit.Fact(Skip = "Requires Windows owned-file capture semantics.", SkipUnless = nameof(IsWindows))]
+    public void RunGitProbe_OwnedCaptureReadFailure_RetainsCleanChildExit()
+    {
+        using var scope = new FactoryScope();
+
+        var result = InfrastructureTestSupport.RunGitProbe(
+            scope.Root,
+            ["status", "--short"],
+            beforeOwnedCaptureRead: (standardOutputPath, _) => File.Delete(standardOutputPath));
+
+        Xunit.Assert.True(result.ProcessStarted);
+        Xunit.Assert.Equal(0, result.ExitCode);
+        Xunit.Assert.Equal(
+            WorkerDispatchTestsSeededRepositoryFactory.GitProbeClassification.ProcessObservationFailure,
+            result.Classification);
+        Xunit.Assert.NotEmpty(result.StandardError);
+    }
+
     [Xunit.Fact]
     public void Create_TemplateCommitBlankFailure_DoesNotRetryOrLoseReceipt()
     {

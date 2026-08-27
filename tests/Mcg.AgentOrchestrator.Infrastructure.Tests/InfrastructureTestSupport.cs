@@ -62,7 +62,8 @@ internal static WorkerDispatchTestsSeededRepositoryFactory.GitProbeResult RunGit
     IReadOnlyList<string> arguments,
     IReadOnlyDictionary<string, string>? commandEnvironment = null,
     Func<Process, bool>? startProcess = null,
-    IReadOnlyDictionary<string, string?>? inheritedEnvironment = null)
+    IReadOnlyDictionary<string, string?>? inheritedEnvironment = null,
+    Action<string, string>? beforeOwnedCaptureRead = null)
 {
     var executable = ResolveNativeGitExecutable(inheritedEnvironment);
     var effectiveArguments = new[]
@@ -145,7 +146,8 @@ internal static WorkerDispatchTestsSeededRepositoryFactory.GitProbeResult RunGit
             startInfo,
             workingDirectory,
             command,
-            environmentContract + "; capture=owned-file-handles; inheritedHandles=stdout,stderr");
+            environmentContract + "; capture=owned-file-handles; inheritedHandles=stdout,stderr",
+            beforeOwnedCaptureRead);
     }
 
     startInfo.RedirectStandardInput = true;
@@ -300,7 +302,8 @@ private static WorkerDispatchTestsSeededRepositoryFactory.GitProbeResult RunGitP
     ProcessStartInfo startInfo,
     string workingDirectory,
     string command,
-    string environmentContract)
+    string environmentContract,
+    Action<string, string>? beforeCaptureRead)
 {
     var repositoryDirectory = Path.GetFullPath(workingDirectory);
     var gitDirectory = Path.Combine(repositoryDirectory, ".git");
@@ -348,6 +351,7 @@ private static WorkerDispatchTestsSeededRepositoryFactory.GitProbeResult RunGitP
             }
         }
 
+        beforeCaptureRead?.Invoke(standardOutputPath, standardErrorPath);
         var standardOutputCapture = CaptureFile(standardOutputPath);
         var standardErrorCapture = CaptureFile(standardErrorPath);
         var standardOutput = Encoding.UTF8.GetString(standardOutputCapture.Prefix);

@@ -771,26 +771,20 @@ public abstract class GoalWorktreeTestBase
         out string output,
         out string error)
     {
-        var startInfo = new ProcessStartInfo
+        var result = InfrastructureTestSupport.RunGitProbe(workingDirectory, arguments);
+        output = result.StandardOutput;
+        error = result.StandardError;
+        if (result.ExitCode is int exitCode)
         {
-            FileName = "git",
-            RedirectStandardOutput = true,
-            RedirectStandardError = true,
-            UseShellExecute = false,
-            CreateNoWindow = true,
-            WorkingDirectory = workingDirectory
-        };
-
-        foreach (var argument in arguments)
-        {
-            startInfo.ArgumentList.Add(argument);
+            return exitCode;
         }
 
-        using var process = Process.Start(startInfo)!;
-        output = process.StandardOutput.ReadToEnd();
-        error = process.StandardError.ReadToEnd();
-        process.WaitForExit(60000);
-        return process.ExitCode;
+        throw new InvalidOperationException(
+            $"git {string.Join(' ', arguments)} produced no exit code: " +
+            $"classification={result.Classification}; processStarted={result.ProcessStarted}; " +
+            $"timedOut={result.TimedOut}; drainTimedOut={result.DrainTimedOut}; " +
+            $"drainFailed={result.DrainFailed}; stdoutBytes={result.StandardOutputByteCount}; " +
+            $"stderrBytes={result.StandardErrorByteCount}; stderr={result.StandardError}");
     }
 
     private protected static (int ExitCode, string Stdout, string Stderr) ReadSeedHeadCommitId(
