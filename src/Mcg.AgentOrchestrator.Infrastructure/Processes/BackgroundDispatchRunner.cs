@@ -94,7 +94,6 @@ public sealed class BackgroundDispatchRunner
         "Write-Output 'skills: none'; " +
         "Write-Output 'confidence: high'; " +
         "Write-Output 'END_WORKER_RESULT'";
-    private static readonly string[] BuildServerCandidates = ["VBCSCompiler", "MSBuild"];
     private sealed record DispatchSpawnReceipt(
         string Command,
         string? ProviderSessionId,
@@ -148,8 +147,8 @@ public sealed class BackgroundDispatchRunner
         _isStillRunning = isStillRunning ?? IsStillRunning;
         _tryKillOwnedProcess = tryKillOwnedProcess ?? TryKillProcess;
         _processStartDisabled = disableProcessStart ?? IsDispatchStartDisabledByEnvironment();
-        _findBuildDaemons = findBuildDaemons ?? FindBuildDaemons;
-        _tryKillBuildDaemon = tryKillBuildDaemon ?? TryKillBuildDaemonProcess;
+        _findBuildDaemons = findBuildDaemons ?? WorktreeBuildDaemonReaper.Find;
+        _tryKillBuildDaemon = tryKillBuildDaemon ?? WorktreeBuildDaemonReaper.TryKill;
         _diagnosticWriter = diagnosticWriter ?? new FileDiagnosticWriter();
         _recoveryPolicy = recoveryPolicy ?? new DispatchRecoveryPolicy(_clock);
         _workerProviders = workerProviders ?? WorkerProviderCatalog.Default();
@@ -2416,153 +2415,8 @@ public sealed class BackgroundDispatchRunner
         GoalStatus? GoalStatus,
         WorkTaskStatus? TaskStatus);
 
-    private string? ReapWorktreeBuildDaemons(string workingDirectory)
-    {
-        try
-        {
-            var daemons = _findBuildDaemons(workingDirectory);
-            if (daemons.Count == 0)
-            {
-                return null;
-            }
-
-            var reaped = new List<string>();
-            var failed = new List<string>();
-
-            foreach (var daemon in daemons)
-            {
-                var pid = daemon.ProcessId;
-                var name = daemon.Name;
-                bool killed;
-                try
-                {
-                    killed = _tryKillBuildDaemon(daemon);
-                }
-                catch
-                {
-                    killed = false;
-                }
-
-                if (killed)
-                {
-                    reaped.Add($"{name} PID {pid}");
-                }
-                else
-                {
-                    failed.Add($"PID {pid}");
-                }
-            }
-
-            var parts = new List<string>();
-            if (reaped.Count > 0)
-            {
-                parts.Add($"Reaped worktree build daemon(s): {string.Join(", ", reaped)}.");
-            }
-
-            if (failed.Count > 0)
-            {
-                parts.Add($"Note: failed to stop {string.Join(", ", failed)}.");
-            }
-
-            return parts.Count > 0 ? string.Join(" ", parts) : null;
-        }
-        catch
-        {
-            return null;
-        }
-    }
-
-    private static List<ProcessInspectionRecord> FindBuildDaemons(string workingDirectory)
-    {
-        return FindBuildDaemons(workingDirectory, ProcessCommandLines.SnapshotByNames);
-    }
-
-    internal static List<ProcessInspectionRecord> FindBuildDaemons(
-        string workingDirectory,
-        Func<IReadOnlyCollection<string>, ProcessCommandLineSnapshot> createSnapshot)
-    {
-        var snapshot = createSnapshot(BuildServerCandidates);
-        var result = new List<ProcessInspectionRecord>();
-
-        foreach (var record in snapshot.Records.Values)
-        {
-            if (record.Status == ProcessInspectionStatus.Available &&
-                ShouldReapBuildDaemon(workingDirectory, record.CommandLine))
-            {
-                result.Add(record);
-            }
-        }
-
-        return result;
-    }
-
-    internal static bool ShouldReapBuildDaemon(string workingDirectory, string? commandLine)
-    {
-        if (string.IsNullOrWhiteSpace(commandLine))
-        {
-            return false;
-        }
-
-        var normalizedPath = Path.GetFullPath(workingDirectory).TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar);
-        return commandLine.Contains(normalizedPath, StringComparison.OrdinalIgnoreCase) ||
-               commandLine.Contains(workingDirectory, StringComparison.OrdinalIgnoreCase);
-    }
-
-    private static bool TryKillBuildDaemonProcess(ProcessInspectionRecord discovered)
-    {
-        try
-        {
-            if (OperatingSystem.IsWindows())
-            {
-                return WindowsNativeProcessInspection.TryTerminateIfMatches(discovered);
-            }
-
-            var currentSnapshot = ProcessCommandLines.Snapshot([discovered.ProcessId]);
-            if (!currentSnapshot.Records.TryGetValue(discovered.ProcessId, out var current))
-            {
-                return false;
-            }
-
-            return TryKillRevalidatedBuildDaemon(discovered, current, KillBuildDaemonProcess);
-        }
-        catch
-        {
-            return false;
-        }
-    }
-
-    internal static bool TryKillRevalidatedBuildDaemon(
-        ProcessInspectionRecord discovered,
-        ProcessInspectionRecord current,
-        Func<int, bool> kill)
-    {
-        if (!WindowsNativeProcessInspection.MatchesIdentity(discovered, current))
-        {
-            return false;
-        }
-
-        return kill(discovered.ProcessId);
-    }
-
-    private static bool KillBuildDaemonProcess(int processId)
-    {
-        try
-        {
-            using var proc = Process.GetProcessById(processId);
-            if (proc.HasExited)
-            {
-                return false;
-            }
-
-            proc.Kill(entireProcessTree: false);
-            proc.WaitForExit(3000);
-            return true;
-        }
-        catch
-        {
-            return false;
-        }
-    }
+    private string? ReapWorktreeBuildDaemons(string workingDirectory) =>
+        WorktreeBuildDaemonReaper.Reap(workingDirectory, _findBuildDaemons, _tryKillBuildDaemon);
 
     private static bool IsStillRunning(int processId)
     {

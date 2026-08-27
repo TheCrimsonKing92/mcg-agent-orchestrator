@@ -601,7 +601,7 @@ public sealed class VerificationAndProcessLogTests
             cleanupScope = directory;
             Assert.True(File.Exists(exitPath), "The native exit artifact must exist before scoped cleanup starts.");
             return fixtures
-                .Where(fixture => BackgroundDispatchRunner.ShouldReapBuildDaemon(directory, fixture.CommandLine))
+                .Where(fixture => WorktreeBuildDaemonReaper.ShouldReap(directory, fixture.CommandLine))
                 .Select(fixture => new ProcessInspectionRecord(
                     fixture.ProcessId,
                     1,
@@ -678,10 +678,10 @@ public sealed class VerificationAndProcessLogTests
     var worktree = Path.Combine(root, "worktree");
     Directory.CreateDirectory(worktree);
 
-    Assert.False(BackgroundDispatchRunner.ShouldReapBuildDaemon(worktree, null));
-    Assert.False(BackgroundDispatchRunner.ShouldReapBuildDaemon(worktree, ""));
-    Assert.False(BackgroundDispatchRunner.ShouldReapBuildDaemon(worktree, "VBCSCompiler.exe -shared"));
-    Assert.True(BackgroundDispatchRunner.ShouldReapBuildDaemon(
+    Assert.False(WorktreeBuildDaemonReaper.ShouldReap(worktree, null));
+    Assert.False(WorktreeBuildDaemonReaper.ShouldReap(worktree, ""));
+    Assert.False(WorktreeBuildDaemonReaper.ShouldReap(worktree, "VBCSCompiler.exe -shared"));
+    Assert.True(WorktreeBuildDaemonReaper.ShouldReap(
         worktree,
         $"VBCSCompiler.exe -keepalive \"{Path.Combine(worktree, "obj", "Debug", "Core.dll")}\""));
 }

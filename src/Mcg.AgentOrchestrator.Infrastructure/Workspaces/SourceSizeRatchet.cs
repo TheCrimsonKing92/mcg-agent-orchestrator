@@ -73,8 +73,10 @@ internal static class SourceSizeRatchet
             // Goal 1441c61c extracted post-reap cancellation evidence classification so the runner
             // only sequences process reaping, lifecycle recording, and resource accounting.
             // Goal fd252fe4 adds the durable retry-admission start claim and worker-release gate at
-            // that process-start boundary; 3265 is the measured combined post-rebase size.
-            new SourceSizeCeiling("src/Mcg.AgentOrchestrator.Infrastructure/Processes/BackgroundDispatchRunner.cs", 3265),
+            // that process-start boundary. Goal d8a889bd then extracted worktree build-daemon
+            // discovery, identity revalidation, and reaping to WorktreeBuildDaemonReaper; 3137 is
+            // the measured combined post-rebase size.
+            new SourceSizeCeiling("src/Mcg.AgentOrchestrator.Infrastructure/Processes/BackgroundDispatchRunner.cs", 3137),
             // Goal 5a75fed0 extracted typed projection parsing and literal restoration into
             // WorkerContextProjectionResidual, leaving the dispatcher to sequence package assembly.
             // Goal fd252fe4 adds retry fingerprints for the resolved provider, model, paid route, and

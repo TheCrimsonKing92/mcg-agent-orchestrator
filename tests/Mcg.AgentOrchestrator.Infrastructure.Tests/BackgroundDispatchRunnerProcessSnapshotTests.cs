@@ -6,8 +6,8 @@ public sealed class BackgroundDispatchRunnerProcessSnapshotTests
     [Xunit.Fact]
     public void BuildDaemonKillReceivesDiscoveredIdentity()
     {
-        var method = typeof(BackgroundDispatchRunner).GetMethod(
-            "TryKillBuildDaemonProcess",
+        var method = typeof(WorktreeBuildDaemonReaper).GetMethod(
+            "TryKill",
             BindingFlags.NonPublic | BindingFlags.Static);
 
         Xunit.Assert.NotNull(method);
@@ -23,7 +23,7 @@ public sealed class BackgroundDispatchRunnerProcessSnapshotTests
         var recycled = AvailableRecord(startedAt.AddSeconds(1));
         var killCalls = 0;
 
-        var killed = BackgroundDispatchRunner.TryKillRevalidatedBuildDaemon(
+        var killed = WorktreeBuildDaemonReaper.TryKillRevalidated(
             discovered,
             recycled,
             _ =>
@@ -47,7 +47,7 @@ public sealed class BackgroundDispatchRunnerProcessSnapshotTests
         };
         var killCalls = 0;
 
-        var killed = BackgroundDispatchRunner.TryKillRevalidatedBuildDaemon(
+        var killed = WorktreeBuildDaemonReaper.TryKillRevalidated(
             discovered,
             unavailable,
             _ =>
@@ -67,7 +67,7 @@ public sealed class BackgroundDispatchRunnerProcessSnapshotTests
         IReadOnlyCollection<string>? requestedNames = null;
         var workingDirectory = Path.GetFullPath(Path.Combine(Path.GetTempPath(), "mcg-background-snapshot"));
 
-        var matches = BackgroundDispatchRunner.FindBuildDaemons(
+        var matches = WorktreeBuildDaemonReaper.Find(
             workingDirectory,
             names =>
             {
