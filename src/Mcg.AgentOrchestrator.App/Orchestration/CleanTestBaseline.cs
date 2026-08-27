@@ -1,4 +1,5 @@
 using Mcg.AgentOrchestrator.Core;
+using Mcg.AgentOrchestrator.Infrastructure;
 
 namespace Mcg.AgentOrchestrator.App.Orchestration;
 
@@ -110,7 +111,8 @@ internal static class CleanTestBaseline
         IReadOnlyList<string> failedChecks,
         IReadOnlyDictionary<GoalId, GoalOperationJournalSummary> journals,
         GoalId currentGoal,
-        string mainSha)
+        string mainSha,
+        IReadOnlyList<AcceptanceCheckResult>? failedCheckReceipts = null)
     {
         ArgumentNullException.ThrowIfNull(journals);
         return Attribute(receipt, failedChecks, ProjectEvidence(journals), currentGoal, mainSha);
@@ -134,6 +136,7 @@ internal static class CleanTestBaseline
             .Distinct(StringComparer.Ordinal)
             .Select(check =>
             {
+                var causeEvidence = ResolveCauseEvidence(check, failedCheckReceipts);
                 if (receipt.SharedFailingChecks.Contains(check, StringComparer.Ordinal))
                 {
                     var inheritedFrom = evidence
@@ -149,7 +152,10 @@ internal static class CleanTestBaseline
                         return new AcceptanceCheckAttribution(
                             check,
                             AcceptanceFailureOrigin.Inherited,
-                            $"also failed for goal {Short(inheritedFrom.GoalId.Value)} at main {Short(normalizedMain)}");
+                            CombineEvidence(
+                                $"also failed for goal {Short(inheritedFrom.GoalId.Value)} at main {Short(normalizedMain)}",
+                                causeEvidence),
+                            causeEvidence?.Cause ?? AcceptanceFailureCause.NotClassified);
                     }
                 }
 
@@ -157,14 +163,56 @@ internal static class CleanTestBaseline
                     ? new AcceptanceCheckAttribution(
                         check,
                         AcceptanceFailureOrigin.Introduced,
-                        $"main {Short(normalizedMain)} is attested green")
+                        CombineEvidence($"main {Short(normalizedMain)} is attested green", causeEvidence),
+                        causeEvidence?.Cause ?? AcceptanceFailureCause.NotClassified)
                     : new AcceptanceCheckAttribution(
                         check,
                         AcceptanceFailureOrigin.Unattributed,
-                        $"no baseline evidence at main {Short(normalizedMain)}");
+                        CombineEvidence($"no baseline evidence at main {Short(normalizedMain)}", causeEvidence),
+                        causeEvidence?.Cause ?? AcceptanceFailureCause.NotClassified);
             })
             .ToArray();
     }
+
+    private static AcceptanceFailureCauseEvidence? ResolveCauseEvidence(
+        string checkName,
+        IReadOnlyList<AcceptanceCheckResult>? failedCheckReceipts)
+    {
+        var matching = failedCheckReceipts?
+            .Where(check => check.Name.Equals(checkName, StringComparison.Ordinal))
+            .ToArray() ?? [];
+        if (matching.Length == 0 || matching.Any(check =>
+                check.FailureCauseEvidence is null ||
+                !Enum.IsDefined(check.FailureCauseEvidence.Cause) ||
+                check.FailureCauseEvidence.Cause == AcceptanceFailureCause.NotClassified ||
+                string.IsNullOrWhiteSpace(check.FailureCauseEvidence.Evidence)))
+        {
+            return null;
+        }
+
+        var causes = matching
+            .Select(check => check.FailureCauseEvidence!.Cause)
+            .Distinct()
+            .ToArray();
+        if (causes.Length != 1)
+        {
+            return null;
+        }
+
+        var evidence = string.Join(
+            " | ",
+            matching
+                .Select(check => check.FailureCauseEvidence!.Evidence.Trim())
+                .Distinct(StringComparer.Ordinal));
+        return new AcceptanceFailureCauseEvidence(causes[0], evidence);
+    }
+
+    private static string CombineEvidence(
+        string attributionEvidence,
+        AcceptanceFailureCauseEvidence? causeEvidence) =>
+        causeEvidence is null
+            ? attributionEvidence
+            : $"{attributionEvidence}; cause receipt: {causeEvidence.Evidence}";
 
     public static CleanTestBaselineReceipt Unattested(string? mainSha, string? mergeBaseSha = null) =>
         new(

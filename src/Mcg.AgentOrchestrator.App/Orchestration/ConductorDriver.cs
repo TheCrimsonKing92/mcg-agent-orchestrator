@@ -660,7 +660,8 @@ internal sealed partial class ConductorDriver
                         failedChecks,
                         baselineEvidence,
                         goal.Id,
-                        mainHeadSha ?? string.Empty);
+                        mainHeadSha ?? string.Empty,
+                        verification.Checks);
                 }
                 catch
                 {

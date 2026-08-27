@@ -77,6 +77,64 @@ public sealed partial class ConductorDriverTestsAcceptanceCoordination
         Assert.Equal("candidate-a", classified.BranchHeadSha);
     }
 
+    [Xunit.Fact(DisplayName = "ConductorDriver_real_baseline_attribution_consumes_typed_acceptance_receipt")]
+    public void ConductorDriverRealBaselineAttributionConsumesTypedAcceptanceReceipt()
+    {
+        var current = GoalId.New();
+        var first = GoalId.New();
+        var second = GoalId.New();
+        GoalOperationJournalEntry Entry(GoalId goalId) => new(
+            Guid.NewGuid().ToString("N"),
+            goalId,
+            "conductor:acceptance",
+            GoalOperationStatus.Failed,
+            DateTimeOffset.UtcNow,
+            "receipt",
+            MainHeadSha: "main-a",
+            AcceptanceOutcome: "failed",
+            FailedCheckNames: ["infrastructure tests: Remainder"]);
+        var firstEntry = Entry(first);
+        var secondEntry = Entry(second);
+        var journals = new Dictionary<GoalId, GoalOperationJournalSummary>
+        {
+            [first] = new("first", [firstEntry], [firstEntry], []),
+            [second] = new("second", [secondEntry], [secondEntry], [])
+        };
+        var failedCheck = new AcceptanceCheckResult(
+            "infrastructure tests: Remainder",
+            false,
+            1,
+            "diagnostic text is not consulted",
+            FailureCauseEvidence: new AcceptanceFailureCauseEvidence(
+                AcceptanceFailureCause.EnvironmentalApparatus,
+                "git child receipt: exit=0; stdoutBytes=0; repositoryHead=valid"));
+
+        var baseline = CleanTestBaseline.Resolve(journals, current, "main-a", null);
+        var attributions = CleanTestBaseline.Attribute(
+            baseline,
+            [failedCheck.Name],
+            journals,
+            current,
+            "main-a",
+            [failedCheck]);
+        var classified = ConductorDriver.ClassifyInheritedBaselineApparatus(
+            new AcceptanceVerificationSummary(
+                false,
+                [failedCheck],
+                FailedChecks: [failedCheck.Name],
+                BranchHeadSha: "candidate-a",
+                MainHeadSha: "main-a",
+                CheckAttributions: attributions,
+                BaselineAttestation: CleanTestBaseline.FormatFailureAttestation(baseline)));
+
+        var attribution = Assert.Single(classified.CheckAttributions!);
+        Assert.Equal(AcceptanceFailureOrigin.Inherited, attribution.Origin);
+        Assert.Equal(AcceptanceFailureCause.EnvironmentalApparatus, attribution.Cause);
+        Assert.Equal(
+            AcceptanceFailureClassifications.InheritedBaselineApparatus,
+            Assert.Single(classified.RequiredUnmetCriteria).FailureClassification);
+    }
+
     [Xunit.Fact(DisplayName = "ConductorDriver_all_inherited_red_without_typed_cause_stays_unclassified")]
     public void ConductorDriverAllInheritedRedWithoutTypedCauseStaysUnclassified()
     {

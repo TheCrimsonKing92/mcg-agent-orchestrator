@@ -33,7 +33,12 @@ public sealed record AcceptanceCheckResult(
     int TestResultRunOrdinal = 0,
     bool TestResultIsExplicitCrossAttemptReuse = false,
     IReadOnlyList<string>? FailingTestIdentities = null,
-    int? ExecutedTestCount = null);
+    int? ExecutedTestCount = null,
+    AcceptanceFailureCauseEvidence? FailureCauseEvidence = null);
+
+public sealed record AcceptanceFailureCauseEvidence(
+    AcceptanceFailureCause Cause,
+    string Evidence);
 
 internal sealed record AcceptanceProcessCleanupObservation(
     int ProcessId,

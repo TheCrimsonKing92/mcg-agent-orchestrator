@@ -37,9 +37,107 @@ public sealed class CleanTestBaselineTests
         Assert.Equal(CleanBaselineAttestation.AttestedRed, receipt.Attestation);
         Assert.Equal(["infrastructure tests"], receipt.SharedFailingChecks);
         Assert.Equal(AcceptanceFailureOrigin.Inherited, attribution.Origin);
+        Assert.Equal(AcceptanceFailureCause.NotClassified, attribution.Cause);
         Assert.True(
             attribution.Evidence.Contains(first.Value[..8], StringComparison.OrdinalIgnoreCase) ||
             attribution.Evidence.Contains(second.Value[..8], StringComparison.OrdinalIgnoreCase));
+    }
+
+    [Xunit.Fact]
+    public void AttributeTypedApparatusReceiptSuppliesCause()
+    {
+        var current = GoalId.New();
+        var first = GoalId.New();
+        var second = GoalId.New();
+        var journals = Journals(
+            (first, Entry(first, "main-a", "failed", ["infrastructure tests"])),
+            (second, Entry(second, "main-a", "failed", ["infrastructure tests"])));
+        var failedCheckReceipt = new AcceptanceCheckResult(
+            "infrastructure tests",
+            false,
+            1,
+            "typed apparatus evidence",
+            FailureCauseEvidence: new AcceptanceFailureCauseEvidence(
+                AcceptanceFailureCause.EnvironmentalApparatus,
+                "git child receipt: exit=0; stdoutBytes=0; repositoryHead=valid"));
+
+        var receipt = CleanTestBaseline.Resolve(journals, current, "main-a", null);
+        var attribution = Assert.Single(CleanTestBaseline.Attribute(
+            receipt,
+            [failedCheckReceipt.Name],
+            journals,
+            current,
+            "main-a",
+            [failedCheckReceipt]));
+
+        Assert.Equal(
+            AcceptanceFailureCause.EnvironmentalApparatus,
+            attribution.Cause);
+        Assert.Contains("git child receipt", attribution.Evidence, StringComparison.Ordinal);
+    }
+
+    [Xunit.Fact]
+    public void AttributeConflictingOrMalformedCauseEvidenceRemainsUnclassified()
+    {
+        var current = GoalId.New();
+        var first = GoalId.New();
+        var second = GoalId.New();
+        var journals = Journals(
+            (first, Entry(first, "main-a", "failed", ["infrastructure tests"])),
+            (second, Entry(second, "main-a", "failed", ["infrastructure tests"])));
+        var receipt = CleanTestBaseline.Resolve(journals, current, "main-a", null);
+        var environmental = new AcceptanceCheckResult(
+            "infrastructure tests",
+            false,
+            1,
+            null,
+            FailureCauseEvidence: new AcceptanceFailureCauseEvidence(
+                AcceptanceFailureCause.EnvironmentalApparatus,
+                "git child receipt"));
+        var conflicting = environmental with
+        {
+            FailureCauseEvidence = new AcceptanceFailureCauseEvidence(
+                AcceptanceFailureCause.FixturePublication,
+                "repository bytes invalid")
+        };
+        var malformed = environmental with
+        {
+            FailureCauseEvidence = new AcceptanceFailureCauseEvidence(
+                AcceptanceFailureCause.EnvironmentalApparatus,
+                " ")
+        };
+        var undefined = environmental with
+        {
+            FailureCauseEvidence = new AcceptanceFailureCauseEvidence(
+                (AcceptanceFailureCause)int.MaxValue,
+                "unknown cause")
+        };
+
+        var conflictingAttribution = Assert.Single(CleanTestBaseline.Attribute(
+            receipt,
+            [environmental.Name],
+            journals,
+            current,
+            "main-a",
+            [environmental, conflicting]));
+        var malformedAttribution = Assert.Single(CleanTestBaseline.Attribute(
+            receipt,
+            [environmental.Name],
+            journals,
+            current,
+            "main-a",
+            [malformed]));
+        var undefinedAttribution = Assert.Single(CleanTestBaseline.Attribute(
+            receipt,
+            [environmental.Name],
+            journals,
+            current,
+            "main-a",
+            [undefined]));
+
+        Assert.Equal(AcceptanceFailureCause.NotClassified, conflictingAttribution.Cause);
+        Assert.Equal(AcceptanceFailureCause.NotClassified, malformedAttribution.Cause);
+        Assert.Equal(AcceptanceFailureCause.NotClassified, undefinedAttribution.Cause);
     }
 
     [Xunit.Fact]
