@@ -3446,10 +3446,11 @@ internal sealed partial class ConductorBatchLoop
             OperationCanceledException;
 
     private static bool IsEnvironmentInterferenceAcceptanceRun(ConductorParallelAcceptanceRunResult run) =>
-        run.Acceptance?.RequiredUnmetCriteria.Any(check =>
+        run.Acceptance?.RequiredUnmetCriteria is { Count: > 0 } requiredUnmetCriteria &&
+        requiredUnmetCriteria.All(check =>
             check.FailureClassification is
                 AcceptanceFailureClassifications.GateEnvironmentInterference or
-                AcceptanceFailureClassifications.InheritedBaselineApparatus) == true;
+                AcceptanceFailureClassifications.InheritedBaselineApparatus);
 
     private static bool IsRetryableTerminalAttempt(ConductorParallelAcceptanceAttempt attempt) =>
         attempt.Outcome is ConductorParallelAcceptanceAttemptOutcome.BlockedBuildSlot

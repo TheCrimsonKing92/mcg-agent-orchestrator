@@ -5652,7 +5652,8 @@ internal sealed partial class ConductorDriver
         ConductorAutonomyPolicy policy,
         AcceptanceVerificationSummary acceptance)
     {
-        if (acceptance.RequiredUnmetCriteria.Any(check =>
+        if (acceptance.RequiredUnmetCriteria is { Count: > 0 } requiredUnmetCriteria &&
+            requiredUnmetCriteria.All(check =>
             check.FailureClassification is not null &&
             (string.Equals(
                  check.FailureClassification,

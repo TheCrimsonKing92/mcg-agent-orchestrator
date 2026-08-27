@@ -2396,6 +2396,58 @@ public sealed partial class ConductorBatchLoopTestsParallelAcceptance : Conducto
         }
     }
 
+    [Xunit.Fact(DisplayName = "BatchLoop_mixed_environmental_and_candidate_failures_remain_candidate_failure")]
+    public void BatchLoopMixedEnvironmentalAndCandidateFailuresRemainCandidateFailure()
+    {
+        var kernel = new AgentOrchestratorKernel();
+        var goal = CreateVerifiedSimpleGoal(kernel, "Update src/Mcg.AgentOrchestrator.App/Orchestration/MixedFailure.cs");
+        var task = goal.Tasks.Single();
+        var attemptRoot = CreateTempDirectory("mcg-conductor-acceptance-attempts");
+        var interference = new AcceptanceCheckResult(
+            "infrastructure tests: Remainder",
+            false,
+            1,
+            "classification: gate-environment-interference",
+            FailureClassification: AcceptanceFailureClassifications.GateEnvironmentInterference);
+        var candidateFailure = new AcceptanceCheckResult(
+            "candidate tests: MixedFailureTests",
+            false,
+            1,
+            "MixedFailureTests.CandidateRegression failed");
+        var driver = MakeDriver(
+            getFacts: _ => new GoalLifecycleFacts(WorkspaceExists: true),
+            runAcceptanceWithSlot: (_, _) => new AcceptanceVerificationSummary(
+                false,
+                [interference, candidateFailure]),
+            getLandingFileScopes: _ => ["src/Mcg.AgentOrchestrator.App/Orchestration/MixedFailure.cs"],
+            parallelAcceptanceAttemptCoordinator: new ConductorParallelAcceptanceAttemptCoordinator(
+                attemptRoot,
+                runInline: true));
+        var policy = ConductorAutonomyPolicy.Conservative with { MaxCriterionRetries = 0 };
+
+        try
+        {
+            var summary = new ConductorBatchLoop().Run(
+                kernel,
+                driver,
+                policy,
+                NoStopPath(),
+                maxIterations: 1);
+
+            Assert.Equal(0, summary.Held);
+            Assert.Equal(1, summary.Escalated);
+            Assert.Equal(GoalStatus.AcceptanceFailed, goal.Status);
+            Assert.Equal(WorkTaskStatus.Completed, task.Status);
+            Assert.Equal(0, task.CriterionRetryCount);
+            Assert.NotNull(goal.LatestAcceptanceFailure);
+            Assert.Contains("candidate tests: MixedFailureTests", goal.LatestAcceptanceFailure!.FailedChecks);
+        }
+        finally
+        {
+            TryDeleteDirectory(attemptRoot);
+        }
+    }
+
     [Xunit.Fact(DisplayName = "BatchLoop_inherited_apparatus_restores_Verified_for_regate")]
     public void BatchLoopInheritedApparatusRestoresVerifiedForRegate()
     {
