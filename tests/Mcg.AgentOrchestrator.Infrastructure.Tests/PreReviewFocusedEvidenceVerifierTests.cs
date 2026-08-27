@@ -21,7 +21,8 @@ public sealed class PreReviewFocusedEvidenceVerifierTests : GoalAcceptanceVerifi
             {
                 calls.Add(args);
                 if (IsMtpExecutableCall(args, "Mcg.AgentOrchestrator.Core.Tests") ||
-                    IsMtpExecutableCall(args, "Mcg.AgentOrchestrator.Infrastructure.Tests"))
+                    IsMtpExecutableCall(args, "Mcg.AgentOrchestrator.Infrastructure.Tests") ||
+                    IsMtpExecutableCall(args, "Mcg.AgentOrchestrator.Dashboard.Tests"))
                 {
                     WriteMtpTrx(args);
                     return Task.FromResult(new GoalAcceptanceVerifier.CommandResult(

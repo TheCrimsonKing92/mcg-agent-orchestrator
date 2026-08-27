@@ -2117,11 +2117,13 @@ public sealed class AcceptanceGateEngineSettingsTests
         Directory.CreateDirectory(resultsDirectory);
         var testClass = testName[..testName.LastIndexOf('.')];
         var method = testName[(testName.LastIndexOf('.') + 1)..];
+        string ReceiptTestName(int index) => testCount == 1 ? testName : $"{testName}.{index}";
+        string ReceiptMethodName(int index) => testCount == 1 ? method : $"{method}{index}";
         var definitions = string.Concat(Enumerable.Range(1, testCount).Select(index =>
-            $"<UnitTest id=\"{index}\" name=\"{testName}.{index}\"><TestMethod className=\"{testClass}\" name=\"{method}{index}\" /></UnitTest>"));
+            $"<UnitTest id=\"{index}\" name=\"{ReceiptTestName(index)}\"><TestMethod className=\"{testClass}\" name=\"{ReceiptMethodName(index)}\" /></UnitTest>"));
         var executedCount = testCount - skippedCount;
         var results = string.Concat(Enumerable.Range(1, testCount).Select(index =>
-            $"<UnitTestResult testId=\"{index}\" testName=\"{testName}.{index}\" outcome=\"{(index <= executedCount ? outcome : "NotExecuted")}\" />"));
+            $"<UnitTestResult testId=\"{index}\" testName=\"{ReceiptTestName(index)}\" outcome=\"{(index <= executedCount ? outcome : "NotExecuted")}\" />"));
         var passed = outcome.Equals("Passed", StringComparison.OrdinalIgnoreCase) ? executedCount : 0;
         var failed = outcome.Equals("Passed", StringComparison.OrdinalIgnoreCase) ? 0 : executedCount;
         File.WriteAllText(
