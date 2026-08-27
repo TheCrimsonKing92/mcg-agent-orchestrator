@@ -177,13 +177,26 @@ public sealed class PreReviewFocusedEvidenceVerifierTests : GoalAcceptanceVerifi
         Assert.True(trxFileIndex + 1 < args.Length);
         Directory.CreateDirectory(args[resultsDirectoryIndex + 1]);
         var trxPath = Path.Combine(args[resultsDirectoryIndex + 1], args[trxFileIndex + 1]);
+        var separator = testName.LastIndexOf('.');
+        var className = separator >= 0 ? testName[..separator] : "Mcg.Tests";
+        var methodName = separator >= 0 ? testName[(separator + 1)..] : testName;
+        var passed = outcome.Equals("Passed", StringComparison.OrdinalIgnoreCase) ? 1 : 0;
+        var failed = passed == 1 ? 0 : 1;
         File.WriteAllText(
             trxPath,
             $"""
              <TestRun>
+               <TestDefinitions>
+                 <UnitTest id="test-1" name="{testName}">
+                   <TestMethod className="{className}" name="{methodName}" />
+                 </UnitTest>
+               </TestDefinitions>
                <Results>
                  <UnitTestResult testId="test-1" testName="{testName}" outcome="{outcome}" />
                </Results>
+               <ResultSummary outcome="Completed">
+                 <Counters total="1" executed="1" passed="{passed}" failed="{failed}" notExecuted="0" />
+               </ResultSummary>
              </TestRun>
              """);
         return trxPath;
