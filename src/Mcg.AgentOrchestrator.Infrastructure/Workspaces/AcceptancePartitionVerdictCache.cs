@@ -32,7 +32,21 @@ internal sealed record PartitionVerdictJournalEntry(
     string? PartitionAttemptId = null,
     IReadOnlyList<string>? PartitionTestResultPaths = null,
     int? PartitionReuseAttemptCount = null,
-    bool? PartitionForcedFullRerun = null);
+    bool? PartitionForcedFullRerun = null,
+    PartitionWithinAttemptRetryReceipt? PartitionRetryReceipt = null);
+
+internal sealed record PartitionWithinAttemptRetryReceipt(
+    string PartitionId,
+    string FailedPredicate,
+    string OriginalInvocationId,
+    string RetryInvocationId,
+    int? ExitCode,
+    int? DiscoveredTestCount,
+    int? ExecutedTestCount,
+    string TrxOutcome,
+    string? PolicySignal,
+    string DiagnosticPath,
+    string DiagnosticSha256);
 
 internal sealed record PartitionVerdictRecord(
     string GoalId,
@@ -85,6 +99,7 @@ internal sealed class AcceptancePartitionVerdictCache
     private readonly Func<bool> _enforceStructuralCoverage;
     private readonly List<PartitionVerdictReuseReceipt> _reused = [];
     private readonly List<PartitionVerdictExecutionReceipt> _executed = [];
+    private readonly List<PartitionWithinAttemptRetryReceipt> _retries = [];
     private readonly List<PartitionVerdictRecord> _freshRecords = [];
 
     private AcceptancePartitionVerdictCache(
@@ -210,10 +225,82 @@ internal sealed class AcceptancePartitionVerdictCache
             TestResultIsExplicitCrossAttemptReuse: true);
     }
 
-    internal bool ShouldRerunWithinAttempt(AcceptanceManifestCheck check, bool passed) =>
+    internal bool ShouldRerunWithinAttempt(
+        AcceptanceManifestCheck check,
+        AcceptanceShardCompletionDecision? decision) =>
         _withinAttemptRerunEnabled &&
-        !passed &&
+        decision is { Passed: false, FailedPredicate: { Length: > 0 } } &&
         GoalAcceptanceVerifier.TryGetInfrastructurePartitionId(check, out _, out _);
+
+    internal bool ShouldRerunWithinAttempt(AcceptanceManifestCheck check, bool passed) =>
+        ShouldRerunWithinAttempt(
+            check,
+            new AcceptanceShardCompletionDecision(
+                passed,
+                passed ? null : AcceptanceShardCompletionPredicates.NonzeroExit,
+                false,
+                passed ? 0 : 1,
+                null,
+                null,
+                "test-compatibility"));
+
+    internal void RecordWithinAttemptRetry(
+        AcceptanceManifestCheck check,
+        AcceptanceCheckResult original,
+        string originalInvocationId,
+        string retryInvocationId,
+        AcceptanceRetainedDiagnostic diagnostic)
+    {
+        if (!TryBuildCacheKey(check, out var partitionId, out var filterHash, out var cacheKey) ||
+            original.CompletionDecision is not { Passed: false, FailedPredicate: { Length: > 0 } } decision)
+        {
+            throw new InvalidOperationException(
+                $"Within-attempt retry for '{check.Name}' lacks a typed failed shard-completion decision.");
+        }
+
+        var retryReceipt = new PartitionWithinAttemptRetryReceipt(
+            partitionId,
+            decision.FailedPredicate,
+            originalInvocationId,
+            retryInvocationId,
+            original.ExitCode,
+            decision.DiscoveredTestCount,
+            decision.ExecutedTestCount,
+            decision.TrxOutcome,
+            decision.PolicySignal,
+            diagnostic.Path,
+            diagnostic.Sha256);
+        lock (_gate)
+        {
+            _retries.Add(retryReceipt);
+        }
+        var detail =
+            $"partition_id={partitionId} predicate={decision.FailedPredicate} " +
+            $"original_invocation_id={originalInvocationId} retry_invocation_id={retryInvocationId} " +
+            $"exit_code={original.ExitCode?.ToString(System.Globalization.CultureInfo.InvariantCulture) ?? "none"} " +
+            $"discovered={decision.DiscoveredTestCount?.ToString(System.Globalization.CultureInfo.InvariantCulture) ?? "unknown"} " +
+            $"executed={decision.ExecutedTestCount?.ToString(System.Globalization.CultureInfo.InvariantCulture) ?? "unknown"} " +
+            $"trx_outcome={decision.TrxOutcome} diagnostic_path={diagnostic.Path} diagnostic_sha256={diagnostic.Sha256}";
+        AppendPartitionVerdictJournalEntries(
+            JournalPath,
+            [new PartitionVerdictJournalEntry(
+                $"{AttemptId}:retry:{partitionId}:{retryInvocationId}",
+                new GoalId(GoalId),
+                "acceptance:partition-within-attempt-retry",
+                "recorded",
+                DateTimeOffset.UtcNow,
+                Detail: detail,
+                BranchHeadSha: CandidateTreeSha,
+                MainHeadSha: MainSha,
+                PartitionVerdictCacheKey: cacheKey,
+                PartitionPairKey: PairKey,
+                PartitionId: partitionId,
+                PartitionFilterHash: filterHash,
+                PartitionAttemptId: AttemptId,
+                PartitionRetryReceipt: retryReceipt)]);
+        Console.WriteLine($"PARTITION_VERDICT_RETRY {detail}");
+        Console.Out.Flush();
+    }
 
     internal void RecordExecution(AcceptanceManifestCheck check, AcceptanceCheckResult result)
     {
@@ -267,6 +354,7 @@ internal sealed class AcceptancePartitionVerdictCache
         var receipt =
             $"partition-verdict-cache reused_partitions={FormatPartitionReuseReceipt(_reused)} " +
             $"executed_partitions={FormatPartitionExecutionReceipt(_executed)} " +
+            $"within_attempt_retries={FormatPartitionRetryReceipt(_retries)} " +
             $"aggregate_verdict={aggregateVerdict} verifying_commit_sha={VerifyingCommitSha} " +
             $"effective_manifest_identity={ManifestIdentity} " +
             $"reroll_attempt_count={attemptCount.ToString(System.Globalization.CultureInfo.InvariantCulture)} " +
@@ -367,6 +455,14 @@ internal sealed class AcceptancePartitionVerdictCache
             ? "[]"
             : "[" + string.Join("|", executed.Select(receipt =>
                 $"{{partition_id={receipt.PartitionId},verdict={receipt.Verdict}}}")) + "]";
+
+    private static string FormatPartitionRetryReceipt(IReadOnlyList<PartitionWithinAttemptRetryReceipt> retries) =>
+        retries.Count == 0
+            ? "[]"
+            : "[" + string.Join("|", retries.Select(receipt =>
+                $"{{partition_id={receipt.PartitionId},predicate={receipt.FailedPredicate}," +
+                $"original_invocation_id={receipt.OriginalInvocationId},retry_invocation_id={receipt.RetryInvocationId}," +
+                $"diagnostic_path={receipt.DiagnosticPath},diagnostic_sha256={receipt.DiagnosticSha256}}}")) + "]";
 
     private static string PartitionVerdictJournalPath(string worktreePath, string goalId) =>
         Path.Combine(
