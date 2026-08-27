@@ -26,6 +26,7 @@ internal enum ProgressiveReviewGlanceFailureCause
     None,
     OutputContract,
     ModelVerdict,
+    RunnerFailure,
     Timeout,
     RunnerException,
     AdmissionUnavailable
@@ -227,6 +228,12 @@ internal sealed class ProgressiveReviewGlanceCoordinator
         var lines = new List<string>();
         var mutated = HarvestCompleted(lines);
         mutated |= SurfaceQueuedConcernsOnFailure(kernel);
+        var activeRoundKeys = goals
+            .SelectMany(goal => goal.Tasks
+                .Where(IsRunningDeveloperDispatch)
+                .Select(task => RoundKey(goal, task)))
+            .ToHashSet(StringComparer.Ordinal);
+        FlushInactiveCircuitSuppressions(activeRoundKeys, lines);
 
         if (_running.Count >= _options.GlobalConcurrentCap)
         {
@@ -475,24 +482,18 @@ Transcript tail:
         catch (Exception ex)
         {
             admissionStopwatch.Stop();
-            RecordSuppression(state, trigger.Value);
-            TryAppendCircuitReceipt(
+            AccumulateCircuitSuppression(
+                state,
                 goal.Id,
                 task.Id,
-                new ProgressiveReviewGlanceCircuitReceipt(
-                    contract?.CircuitIdentity ?? "unavailable",
-                    ProgressiveReviewGlanceFailureCause.AdmissionUnavailable.ToString(),
-                    ProgressiveReviewGlanceFailureCause.AdmissionUnavailable.ToString(),
-                    BoundSingleLine(ex.Message, 300),
-                    0,
-                    1,
-                    estimatedInputTokens,
-                    null,
-                    "provider-output-not-produced",
-                    (long)admissionStopwatch.Elapsed.TotalMilliseconds,
-                    state.SuppressedChangedFiles,
-                    state.SuppressedElapsed,
-                    "admission-unavailable"),
+                trigger.Value,
+                contract?.CircuitIdentity ?? "unavailable",
+                ProgressiveReviewGlanceFailureCause.AdmissionUnavailable.ToString(),
+                ProgressiveReviewGlanceFailureCause.AdmissionUnavailable.ToString(),
+                BoundSingleLine(ex.Message, 300),
+                estimatedInputTokens,
+                (long)admissionStopwatch.Elapsed.TotalMilliseconds,
+                "admission-unavailable",
                 lines);
             lines.Add($"GLANCE goal={Short(goal.Id.Value)} task={Short(task.Id.Value)} result=suppressed cause=AdmissionUnavailable");
             return;
@@ -501,24 +502,18 @@ Transcript tail:
         admissionStopwatch.Stop();
         if (admission.Kind != ProgressiveReviewGlanceCircuitAdmissionKind.ProbeAcquired)
         {
-            RecordSuppression(state, trigger.Value);
-            TryAppendCircuitReceipt(
+            AccumulateCircuitSuppression(
+                state,
                 goal.Id,
                 task.Id,
-                new ProgressiveReviewGlanceCircuitReceipt(
-                    admission.CircuitIdentity,
-                    admission.Kind.ToString(),
-                    admission.OpeningCause ?? admission.Kind.ToString(),
-                    BoundSingleLine(admission.OpeningReason, 300),
-                    0,
-                    Math.Max(1, admission.SuppressionCount),
-                    estimatedInputTokens * Math.Max(1, admission.SuppressionCount),
-                    null,
-                    "provider-output-not-produced",
-                    (long)admissionStopwatch.Elapsed.TotalMilliseconds,
-                    state.SuppressedChangedFiles,
-                    state.SuppressedElapsed,
-                    "suppressed"),
+                trigger.Value,
+                admission.CircuitIdentity,
+                admission.Kind.ToString(),
+                admission.OpeningCause ?? admission.Kind.ToString(),
+                BoundSingleLine(admission.OpeningReason, 300),
+                estimatedInputTokens,
+                (long)admissionStopwatch.Elapsed.TotalMilliseconds,
+                "suppressed",
                 lines);
             lines.Add($"GLANCE goal={Short(goal.Id.Value)} task={Short(task.Id.Value)} result=suppressed cause={admission.Kind} avoided_input_tokens={estimatedInputTokens}");
             return;
@@ -548,11 +543,11 @@ Transcript tail:
             task.LastDispatch.WorkingDirectory,
             task.LastDispatch.ProviderSessionId,
             inputHash,
-                 inputs,
-                 run,
-                 stopwatch,
-                 contract,
-                 admission.ProbeLeaseId!));
+            inputs,
+            run,
+            stopwatch,
+            contract,
+            admission.ProbeLeaseId!));
         state.FiredCount++;
         lines.Add($"GLANCE goal={Short(goal.Id.Value)} task={Short(task.Id.Value)} result=started trigger={trigger.Value} inputHash={inputHash}");
     }
@@ -595,6 +590,7 @@ Transcript tail:
                     running.ContractIdentity,
                     running.ProbeLeaseId,
                     completed.FailureCause == ProgressiveReviewGlanceFailureCause.OutputContract,
+                    completed.Verdict != ProgressiveReviewGlanceVerdict.Invalid,
                     completed.FailureCause.ToString(),
                     completed.Note,
                     _utcNow());
@@ -1700,12 +1696,72 @@ Corrective direction:
             null,
             FailureCause: cause);
 
-    private static void RecordSuppression(RoundState state, ProgressiveReviewGlanceTriggerKind trigger)
+    private void AccumulateCircuitSuppression(
+        RoundState state,
+        GoalId goalId,
+        TaskId taskId,
+        ProgressiveReviewGlanceTriggerKind trigger,
+        string circuitIdentity,
+        string admissionOutcome,
+        string openingCause,
+        string originalReason,
+        int avoidedInputTokens,
+        long admissionLatencyMilliseconds,
+        string probeOutcome,
+        List<string> lines)
     {
-        if (trigger == ProgressiveReviewGlanceTriggerKind.ChangedFiles)
-            state.SuppressedChangedFiles++;
-        else
-            state.SuppressedElapsed++;
+        if (state.PendingCircuitSuppression is { } pending &&
+            (!pending.CircuitIdentity.Equals(circuitIdentity, StringComparison.Ordinal) ||
+             !pending.AdmissionOutcome.Equals(admissionOutcome, StringComparison.Ordinal)))
+        {
+            FlushCircuitSuppression(state, lines);
+        }
+
+        state.PendingCircuitSuppression ??= new CircuitSuppressionAggregate(
+            goalId,
+            taskId,
+            circuitIdentity,
+            admissionOutcome,
+            openingCause,
+            originalReason,
+            probeOutcome);
+        state.PendingCircuitSuppression.Add(trigger, avoidedInputTokens, admissionLatencyMilliseconds);
+    }
+
+    private void FlushInactiveCircuitSuppressions(IReadOnlySet<string> activeRoundKeys, List<string> lines)
+    {
+        foreach (var pair in _rounds)
+        {
+            if (!activeRoundKeys.Contains(pair.Key))
+                FlushCircuitSuppression(pair.Value, lines);
+        }
+    }
+
+    private void FlushCircuitSuppression(RoundState state, List<string> lines)
+    {
+        var aggregate = state.PendingCircuitSuppression;
+        if (aggregate is null)
+            return;
+
+        TryAppendCircuitReceipt(
+            aggregate.GoalId,
+            aggregate.TaskId,
+            new ProgressiveReviewGlanceCircuitReceipt(
+                aggregate.CircuitIdentity,
+                aggregate.AdmissionOutcome,
+                aggregate.OpeningCause,
+                aggregate.OriginalReason,
+                0,
+                aggregate.AvoidedCallCount,
+                aggregate.AvoidedInputTokens,
+                null,
+                "provider-output-not-produced",
+                aggregate.AdmissionLatencyMilliseconds,
+                aggregate.ChangedFilesTriggerCount,
+                aggregate.ElapsedTriggerCount,
+                aggregate.ProbeOutcome),
+            lines);
+        state.PendingCircuitSuppression = null;
     }
 
     private static string Short(string value) => value.Length <= 8 ? value : value[..8];
@@ -1753,9 +1809,45 @@ Corrective direction:
         public TimeSpan NextElapsedThreshold { get; set; }
         public DateTimeOffset? LastChangeProbeAt { get; set; }
         public bool ConcernsSurfaced { get; set; }
-        public int SuppressedChangedFiles { get; set; }
-        public int SuppressedElapsed { get; set; }
+        public CircuitSuppressionAggregate? PendingCircuitSuppression { get; set; }
         public List<string> QueuedConcerns { get; } = [];
+    }
+
+    private sealed class CircuitSuppressionAggregate(
+        GoalId goalId,
+        TaskId taskId,
+        string circuitIdentity,
+        string admissionOutcome,
+        string openingCause,
+        string originalReason,
+        string probeOutcome)
+    {
+        public GoalId GoalId { get; } = goalId;
+        public TaskId TaskId { get; } = taskId;
+        public string CircuitIdentity { get; } = circuitIdentity;
+        public string AdmissionOutcome { get; } = admissionOutcome;
+        public string OpeningCause { get; } = openingCause;
+        public string OriginalReason { get; } = originalReason;
+        public string ProbeOutcome { get; } = probeOutcome;
+        public int AvoidedCallCount { get; private set; }
+        public int AvoidedInputTokens { get; private set; }
+        public long AdmissionLatencyMilliseconds { get; private set; }
+        public int ChangedFilesTriggerCount { get; private set; }
+        public int ElapsedTriggerCount { get; private set; }
+
+        public void Add(
+            ProgressiveReviewGlanceTriggerKind trigger,
+            int avoidedInputTokens,
+            long admissionLatencyMilliseconds)
+        {
+            AvoidedCallCount++;
+            AvoidedInputTokens += avoidedInputTokens;
+            AdmissionLatencyMilliseconds += admissionLatencyMilliseconds;
+            if (trigger == ProgressiveReviewGlanceTriggerKind.ChangedFiles)
+                ChangedFilesTriggerCount++;
+            else
+                ElapsedTriggerCount++;
+        }
     }
 
     private sealed class GoalSummary
@@ -1791,14 +1883,14 @@ Corrective direction:
 internal sealed class SubscriptionCliProgressiveReviewGlanceRunner : IProgressiveReviewGlanceRunner
 {
     private readonly WorkerProfileCatalog _profiles;
-    private readonly Func<SubscriptionCliCompleter, string, CancellationToken, Task<string>> _complete;
+    private readonly Func<SubscriptionCliCompleter, string, CancellationToken, Task<SubscriptionCliCompletionResult>> _complete;
 
     public SubscriptionCliProgressiveReviewGlanceRunner(
         WorkerProfileCatalog profiles,
-        Func<SubscriptionCliCompleter, string, CancellationToken, Task<string>>? complete = null)
+        Func<SubscriptionCliCompleter, string, CancellationToken, Task<SubscriptionCliCompletionResult>>? complete = null)
     {
         _profiles = profiles;
-        _complete = complete ?? ((completer, prompt, ct) => completer.CompleteAsync(prompt, "progressive-review-glance.md", ct));
+        _complete = complete ?? ((completer, prompt, ct) => completer.CompleteWithResultAsync(prompt, "progressive-review-glance.md", ct));
     }
 
     public async Task<ProgressiveReviewGlanceDispatchResult> RunAsync(
@@ -1812,8 +1904,20 @@ internal sealed class SubscriptionCliProgressiveReviewGlanceRunner : IProgressiv
             selection.ModelAlias,
             AgentCatalog.RoutineSubscriptionReasoningEffort);
         var prompt = ProgressiveReviewGlanceCoordinator.BuildPrompt(inputs);
-        var stdout = await _complete(completer, prompt, cancellationToken).ConfigureAwait(false);
-        var parsed = ProgressiveReviewGlanceCoordinator.ParseProviderOutput(stdout, GetContractIdentity(), EstimateTokens(prompt));
+        var completion = await _complete(completer, prompt, cancellationToken).ConfigureAwait(false);
+        if (!completion.Succeeded)
+        {
+            return new ProgressiveReviewGlanceDispatchResult(
+                ProgressiveReviewGlanceVerdict.Invalid,
+                completion.FailureReason ?? $"subscription-cli-exit:{completion.ExitCode}",
+                completion.FailureReason ?? "subscription cli failed",
+                EstimateTokens(prompt),
+                Model: selection.ModelAlias,
+                Profile: selection.ProfileName,
+                FailureCause: ProgressiveReviewGlanceFailureCause.RunnerFailure);
+        }
+
+        var parsed = ProgressiveReviewGlanceCoordinator.ParseProviderOutput(completion.StandardOutput, GetContractIdentity(), EstimateTokens(prompt));
         return parsed with
         {
             Model = parsed.Model ?? selection.ModelAlias,

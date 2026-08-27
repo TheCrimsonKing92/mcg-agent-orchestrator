@@ -75,9 +75,10 @@ public sealed class ProgressiveReviewGlanceTests
     }
 
     [Xunit.Fact]
-    public void DurableCircuit_OneBrokenProbeAcrossCoordinatorReconstruction_IdentityChangeReenablesProbe()
+    public void DurableCircuit_AggregatesMixedSuppressionsAcrossCoordinatorReconstruction()
     {
-        var now = new DateTimeOffset(2026, 8, 26, 12, 0, 0, TimeSpan.Zero);
+        var dispatchedAt = new DateTimeOffset(2026, 8, 26, 12, 0, 0, TimeSpan.Zero);
+        var now = dispatchedAt;
         var circuit = new InMemoryProgressiveReviewGlanceCircuitStore();
         var brokenIdentity = Contract("broken-command");
         var firstRunner = new ControlledGlanceRunner { Identity = brokenIdentity };
@@ -89,35 +90,176 @@ public sealed class ProgressiveReviewGlanceTests
             10,
             FailureCause: ProgressiveReviewGlanceFailureCause.OutputContract));
         var firstEvents = new RecordingGlanceEvents();
-        var (firstKernel, firstGoal, _) = RunningDeveloperRound(now);
-        var options = new ProgressiveReviewGlanceOptions(PerRoundBudget: 1, FirstElapsedThreshold: TimeSpan.Zero);
-        var first = NewCoordinator(firstRunner, firstEvents, options, () => now, circuitStore: circuit);
+        var (firstKernel, firstGoal, _) = RunningDeveloperRound(
+            dispatchedAt,
+            goalId: "goal-progressive-review-0001",
+            taskId: "developer-task-0001");
+        var options = new ProgressiveReviewGlanceOptions(
+            ChangedFileThreshold: 1,
+            FirstElapsedThreshold: TimeSpan.FromMinutes(1),
+            ElapsedInterval: TimeSpan.FromMinutes(1),
+            PerRoundBudget: 10);
+        var changes = new DispatchLiveChangeSnapshot(["changed.cs"], ["changed.cs"], 0);
+        var first = NewCoordinator(
+            firstRunner,
+            firstEvents,
+            options,
+            () => now,
+            liveChanges: (_, _) => changes,
+            circuitStore: circuit);
 
         _ = first.Observe(firstKernel, [firstGoal]);
         _ = first.Observe(firstKernel, [firstGoal]);
+        now = dispatchedAt.AddMinutes(2);
+        _ = first.Observe(firstKernel, [firstGoal]);
+        now = dispatchedAt.AddMinutes(3);
+        _ = first.Observe(firstKernel, [firstGoal]);
+        _ = first.Observe(firstKernel, []);
 
         var secondRunner = new ControlledGlanceRunner { Identity = brokenIdentity };
         var secondEvents = new RecordingGlanceEvents();
-        var (secondKernel, secondGoal, _) = RunningDeveloperRound(now);
-        var reconstructed = NewCoordinator(secondRunner, secondEvents, options, () => now, circuitStore: circuit);
+        var (secondKernel, secondGoal, _) = RunningDeveloperRound(
+            dispatchedAt,
+            goalId: "goal-progressive-review-0002",
+            taskId: "developer-task-0002");
+        now = dispatchedAt;
+        var reconstructed = NewCoordinator(
+            secondRunner,
+            secondEvents,
+            options,
+            () => now,
+            liveChanges: (_, _) => changes,
+            circuitStore: circuit);
         _ = reconstructed.Observe(secondKernel, [secondGoal]);
+        now = dispatchedAt.AddMinutes(2);
+        _ = reconstructed.Observe(secondKernel, [secondGoal]);
+        _ = reconstructed.Observe(secondKernel, []);
 
         Xunit.Assert.Single(firstRunner.Calls);
         Xunit.Assert.Empty(secondRunner.Calls);
-        var suppression = Xunit.Assert.Single(secondEvents.CircuitReceipts);
-        Xunit.Assert.Equal(0, suppression.ActualTokens);
-        Xunit.Assert.True(suppression.AvoidedCallCount > 0);
-        Xunit.Assert.True(suppression.AvoidedInputTokens > 0);
+        Xunit.Assert.Single(firstEvents.Receipts);
+
+        var firstSuppression = Xunit.Assert.Single(firstEvents.CircuitReceipts.Where(receipt => receipt.ProbeOutcome == "suppressed"));
+        Xunit.Assert.Equal(2, firstSuppression.AvoidedCallCount);
+        Xunit.Assert.Equal(0, firstSuppression.ChangedFilesTriggerCount);
+        Xunit.Assert.Equal(2, firstSuppression.ElapsedTriggerCount);
+
+        var secondSuppression = Xunit.Assert.Single(secondEvents.CircuitReceipts.Where(receipt => receipt.ProbeOutcome == "suppressed"));
+        Xunit.Assert.Equal(2, secondSuppression.AvoidedCallCount);
+        Xunit.Assert.Equal(1, secondSuppression.ChangedFilesTriggerCount);
+        Xunit.Assert.Equal(1, secondSuppression.ElapsedTriggerCount);
+        Xunit.Assert.True(secondSuppression.AvoidedInputTokens > 0);
 
         var changedRunner = new ControlledGlanceRunner { Identity = Contract("repaired-command") };
         changedRunner.EnqueueCompleted(new ProgressiveReviewGlanceDispatchResult(
             ProgressiveReviewGlanceVerdict.OnTrack, "ok", "ok", 5, 1));
-        var (changedKernel, changedGoal, _) = RunningDeveloperRound(now);
-        var changed = NewCoordinator(changedRunner, new RecordingGlanceEvents(), options, () => now, circuitStore: circuit);
+        var (changedKernel, changedGoal, _) = RunningDeveloperRound(
+            dispatchedAt,
+            goalId: "goal-progressive-review-0003",
+            taskId: "developer-task-0003");
+        now = dispatchedAt;
+        var changed = NewCoordinator(
+            changedRunner,
+            new RecordingGlanceEvents(),
+            options,
+            () => now,
+            liveChanges: (_, _) => changes,
+            circuitStore: circuit);
         _ = changed.Observe(changedKernel, [changedGoal]);
         _ = changed.Observe(changedKernel, [changedGoal]);
 
         Xunit.Assert.Single(changedRunner.Calls);
+        Xunit.Assert.Equal(
+            ProgressiveReviewGlanceCircuitAdmissionKind.ProbeAcquired,
+            circuit.TryAcquireProbe(brokenIdentity, now, TimeSpan.FromMinutes(1)).Kind);
+    }
+
+    [Xunit.Fact]
+    public void DurableCircuit_NonContractInvalidReleasesProbe()
+    {
+        foreach (var failureCause in new[]
+        {
+            ProgressiveReviewGlanceFailureCause.RunnerFailure,
+            ProgressiveReviewGlanceFailureCause.Timeout,
+            ProgressiveReviewGlanceFailureCause.RunnerException,
+            ProgressiveReviewGlanceFailureCause.ModelVerdict
+        })
+        {
+            var now = new DateTimeOffset(2026, 8, 26, 12, 0, 0, TimeSpan.Zero);
+            var circuit = new InMemoryProgressiveReviewGlanceCircuitStore();
+            var brokenIdentity = Contract($"known-broken-command-{failureCause}");
+            var brokenProbe = circuit.TryAcquireProbe(brokenIdentity, now, TimeSpan.FromMinutes(1));
+            circuit.CompleteProbe(
+                brokenIdentity,
+                brokenProbe.ProbeLeaseId!,
+                openCircuit: true,
+                resetOpenCircuits: false,
+                ProgressiveReviewGlanceFailureCause.OutputContract.ToString(),
+                "known-broken-output-contract",
+                now);
+            var identity = Contract($"transient-command-{failureCause}");
+            var firstRunner = new ControlledGlanceRunner { Identity = identity };
+            firstRunner.EnqueueCompleted(new ProgressiveReviewGlanceDispatchResult(
+                ProgressiveReviewGlanceVerdict.Invalid,
+                failureCause.ToString(),
+                failureCause.ToString(),
+                FailureCause: failureCause));
+            var firstEvents = new RecordingGlanceEvents();
+            var (firstKernel, firstGoal, _) = RunningDeveloperRound(now);
+            var options = new ProgressiveReviewGlanceOptions(PerRoundBudget: 1, FirstElapsedThreshold: TimeSpan.Zero);
+            var first = NewCoordinator(firstRunner, firstEvents, options, () => now, circuitStore: circuit);
+
+            _ = first.Observe(firstKernel, [firstGoal]);
+            _ = first.Observe(firstKernel, [firstGoal]);
+
+            Xunit.Assert.Equal(
+                ProgressiveReviewGlanceCircuitAdmissionKind.SuppressedOpen,
+                circuit.TryAcquireProbe(brokenIdentity, now, TimeSpan.FromMinutes(1)).Kind);
+
+            var retryRunner = new ControlledGlanceRunner { Identity = identity };
+            retryRunner.EnqueueCompleted(new ProgressiveReviewGlanceDispatchResult(
+                ProgressiveReviewGlanceVerdict.OnTrack,
+                "recovered",
+                "recovered"));
+            var (retryKernel, retryGoal, _) = RunningDeveloperRound(now);
+            var reconstructed = NewCoordinator(retryRunner, new RecordingGlanceEvents(), options, () => now, circuitStore: circuit);
+            _ = reconstructed.Observe(retryKernel, [retryGoal]);
+
+            Xunit.Assert.Single(firstRunner.Calls);
+            Xunit.Assert.Single(retryRunner.Calls);
+            Xunit.Assert.Empty(firstEvents.CircuitReceipts);
+        }
+    }
+
+    [Xunit.Fact]
+    public async Task SubscriptionRunner_NonzeroExitIsRunnerFailureBeforeOutputParsing()
+    {
+        var runner = new SubscriptionCliProgressiveReviewGlanceRunner(
+            WorkerProfileCatalog.Default(),
+            (_, _, _) => Task.FromResult(new SubscriptionCliCompletionResult(
+                string.Empty,
+                29,
+                "subscription-cli-exit:29")));
+        var inputs = new ProgressiveReviewGlanceInputs(
+            "goal",
+            "task",
+            ProgressiveReviewGlanceTriggerKind.Elapsed,
+            "elapsed",
+            "objective",
+            "brief",
+            "acceptance",
+            [],
+            [],
+            "diff",
+            "transcript",
+            [],
+            RepositoryScopeConfidence.Unknown);
+
+        var result = await runner.RunAsync(inputs);
+
+        Xunit.Assert.Equal(ProgressiveReviewGlanceVerdict.Invalid, result.Verdict);
+        Xunit.Assert.Equal(ProgressiveReviewGlanceFailureCause.RunnerFailure, result.FailureCause);
+        Xunit.Assert.Equal("subscription-cli-exit:29", result.Note);
     }
 
     [Xunit.Fact]
@@ -149,6 +291,60 @@ public sealed class ProgressiveReviewGlanceTests
 
             Xunit.Assert.Single(results, result => result.Kind == ProgressiveReviewGlanceCircuitAdmissionKind.ProbeAcquired);
             Xunit.Assert.Single(results, result => result.Kind == ProgressiveReviewGlanceCircuitAdmissionKind.SuppressedProbeInFlight);
+        }
+        finally
+        {
+            Directory.Delete(root, recursive: true);
+        }
+    }
+
+    [Xunit.Fact]
+    public void SqliteCircuit_NonContractCompletionPreservesOpenCircuitUntilSuccessfulProbe()
+    {
+        var root = CreateTempDirectory("mcg-glance-circuit-reset");
+        try
+        {
+            var store = new SqliteProgressiveReviewGlanceCircuitStore(Path.Combine(root, "circuit.db"));
+            var now = new DateTimeOffset(2026, 8, 26, 12, 0, 0, TimeSpan.Zero);
+            var brokenIdentity = Contract("known-broken-command");
+            var brokenProbe = store.TryAcquireProbe(brokenIdentity, now, TimeSpan.FromMinutes(1));
+            store.CompleteProbe(
+                brokenIdentity,
+                brokenProbe.ProbeLeaseId!,
+                openCircuit: true,
+                resetOpenCircuits: false,
+                ProgressiveReviewGlanceFailureCause.OutputContract.ToString(),
+                "known-broken-output-contract",
+                now);
+
+            var candidateIdentity = Contract("candidate-command");
+            var failedProbe = store.TryAcquireProbe(candidateIdentity, now, TimeSpan.FromMinutes(1));
+            store.CompleteProbe(
+                candidateIdentity,
+                failedProbe.ProbeLeaseId!,
+                openCircuit: false,
+                resetOpenCircuits: false,
+                ProgressiveReviewGlanceFailureCause.RunnerFailure.ToString(),
+                "subscription-cli-exit:29",
+                now);
+
+            Xunit.Assert.Equal(
+                ProgressiveReviewGlanceCircuitAdmissionKind.SuppressedOpen,
+                store.TryAcquireProbe(brokenIdentity, now, TimeSpan.FromMinutes(1)).Kind);
+
+            var successfulProbe = store.TryAcquireProbe(candidateIdentity, now, TimeSpan.FromMinutes(1));
+            store.CompleteProbe(
+                candidateIdentity,
+                successfulProbe.ProbeLeaseId!,
+                openCircuit: false,
+                resetOpenCircuits: true,
+                ProgressiveReviewGlanceFailureCause.None.ToString(),
+                "on-track",
+                now);
+
+            Xunit.Assert.Equal(
+                ProgressiveReviewGlanceCircuitAdmissionKind.ProbeAcquired,
+                store.TryAcquireProbe(brokenIdentity, now, TimeSpan.FromMinutes(1)).Kind);
         }
         finally
         {
@@ -1542,11 +1738,13 @@ public sealed class ProgressiveReviewGlanceTests
         IClock? clock = null,
         string workingDirectory = @"C:\work",
         string? providerSessionId = null,
-        string? worktreeHeadSha = null)
+        string? worktreeHeadSha = null,
+        string goalId = "goal-progressive-review-0001",
+        string taskId = "developer-task-0001")
     {
         var kernel = new AgentOrchestratorKernel(clock);
-        var task = new TaskSpec(new TaskId("developer-task-0001"), description, AgentRole.Developer);
-        var goal = kernel.CreateGoal(new GoalId("goal-progressive-review-0001"), "Progressive review goal objective", [task]);
+        var task = new TaskSpec(new TaskId(taskId), description, AgentRole.Developer);
+        var goal = kernel.CreateGoal(new GoalId(goalId), "Progressive review goal objective", [task]);
         kernel.ActivateGoal(goal.Id, AgentCatalog.Default().Agents);
         kernel.RecordTaskDispatch(
             goal.Id,

@@ -43,6 +43,7 @@ public interface IProgressiveReviewGlanceCircuitStore
         ProgressiveReviewGlanceContractIdentity identity,
         string probeLeaseId,
         bool openCircuit,
+        bool resetOpenCircuits,
         string completionCause,
         string completionReason,
         DateTimeOffset now);
@@ -90,6 +91,7 @@ public sealed class InMemoryProgressiveReviewGlanceCircuitStore : IProgressiveRe
         ProgressiveReviewGlanceContractIdentity identity,
         string probeLeaseId,
         bool openCircuit,
+        bool resetOpenCircuits,
         string completionCause,
         string completionReason,
         DateTimeOffset now)
@@ -102,6 +104,24 @@ public sealed class InMemoryProgressiveReviewGlanceCircuitStore : IProgressiveRe
                 !string.Equals(entry.LeaseId, probeLeaseId, StringComparison.Ordinal))
             {
                 throw new InvalidOperationException("progressive glance circuit probe completion does not own the active lease");
+            }
+
+            if (resetOpenCircuits)
+            {
+                foreach (var openKey in _entries
+                    .Where(pair => pair.Value.State == "Open")
+                    .Select(pair => pair.Key)
+                    .ToArray())
+                {
+                    var open = _entries[openKey];
+                    _entries[openKey] = new Entry(
+                        "Closed",
+                        null,
+                        null,
+                        completionCause,
+                        completionReason,
+                        open.SuppressionCount);
+                }
             }
 
             _entries[key] = openCircuit
@@ -188,6 +208,7 @@ public sealed class SqliteProgressiveReviewGlanceCircuitStore : IProgressiveRevi
                     probe_expires_at = excluded.probe_expires_at,
                     opening_cause = NULL,
                     opening_reason = NULL,
+                    suppression_count = 0,
                     updated_at = excluded.updated_at
                 """;
             AddIdentity(command, identity);
@@ -210,6 +231,7 @@ public sealed class SqliteProgressiveReviewGlanceCircuitStore : IProgressiveRevi
         ProgressiveReviewGlanceContractIdentity identity,
         string probeLeaseId,
         bool openCircuit,
+        bool resetOpenCircuits,
         string completionCause,
         string completionReason,
         DateTimeOffset now)
@@ -218,6 +240,25 @@ public sealed class SqliteProgressiveReviewGlanceCircuitStore : IProgressiveRevi
         Execute(connection, "BEGIN IMMEDIATE");
         try
         {
+            if (resetOpenCircuits)
+            {
+                using var closePrevious = connection.CreateCommand();
+                closePrevious.CommandText = """
+                    UPDATE progressive_review_glance_circuits
+                    SET state = 'Closed',
+                        probe_lease_id = NULL,
+                        probe_expires_at = NULL,
+                        opening_cause = $cause,
+                        opening_reason = $reason,
+                        updated_at = $updated
+                    WHERE state = 'Open'
+                    """;
+                closePrevious.Parameters.AddWithValue("$cause", completionCause);
+                closePrevious.Parameters.AddWithValue("$reason", completionReason);
+                closePrevious.Parameters.AddWithValue("$updated", Format(now));
+                closePrevious.ExecuteNonQuery();
+            }
+
             using var command = connection.CreateCommand();
             command.CommandText = """
                 UPDATE progressive_review_glance_circuits
@@ -255,7 +296,8 @@ public sealed class SqliteProgressiveReviewGlanceCircuitStore : IProgressiveRevi
         {
             DataSource = _dbPath,
             Mode = SqliteOpenMode.ReadWriteCreate,
-            Cache = SqliteCacheMode.Shared
+            Cache = SqliteCacheMode.Shared,
+            Pooling = false
         }.ToString());
         connection.Open();
         Execute(connection, "PRAGMA busy_timeout=30000");
