@@ -81,10 +81,7 @@ internal static class PostLandingCanaryCommand
         // A gate rejection with checks remains a verdict failure even if its reporter did not flush a TRX.
         if (verification.Checks is null or { Count: 0 } ||
             verification.Checks.Any(check =>
-                string.Equals(
-                    check.FailureClassification,
-                    AcceptanceFailureClassifications.GateEnvironmentInterference,
-                    StringComparison.Ordinal)))
+                AcceptanceFailureClassifications.IsEnvironmentalApparatus(check.FailureClassification)))
         {
             return PostLandingCanaryFailureReason.InfrastructureError;
         }

@@ -2490,6 +2490,60 @@ public sealed partial class ConductorBatchLoopTestsParallelAcceptance : Conducto
         }
     }
 
+    [Xunit.Fact(DisplayName = "BatchLoop_introduced_typed_apparatus_restores_Verified_for_regate")]
+    public void BatchLoopIntroducedTypedApparatusRestoresVerifiedForRegate()
+    {
+        var kernel = new AgentOrchestratorKernel();
+        var goal = CreateVerifiedSimpleGoal(kernel, "Update src/Mcg.AgentOrchestrator.App/Orchestration/IntroducedRegate.cs");
+        var task = goal.Tasks.Single();
+        var attemptRoot = CreateTempDirectory("mcg-conductor-acceptance-attempts");
+        var apparatus = new AcceptanceCheckResult(
+            "infrastructure tests: Remainder",
+            false,
+            1,
+            "classification: seeded-repository-process-output-apparatus",
+            FailureClassification: AcceptanceFailureClassifications.SeededRepositoryProcessOutputApparatus);
+        var acceptance = new AcceptanceVerificationSummary(
+            false,
+            [apparatus],
+            FailedChecks: [apparatus.Name],
+            CheckAttributions:
+            [
+                new AcceptanceCheckAttribution(
+                    apparatus.Name,
+                    AcceptanceFailureOrigin.Introduced,
+                    "first observed typed apparatus receipt",
+                    AcceptanceFailureCause.EnvironmentalApparatus)
+            ]);
+        var driver = MakeDriver(
+            getFacts: _ => new GoalLifecycleFacts(WorkspaceExists: true),
+            runAcceptanceWithSlot: (_, _) => acceptance,
+            getLandingFileScopes: _ => ["src/Mcg.AgentOrchestrator.App/Orchestration/IntroducedRegate.cs"],
+            parallelAcceptanceAttemptCoordinator: new ConductorParallelAcceptanceAttemptCoordinator(
+                attemptRoot,
+                runInline: true));
+
+        try
+        {
+            var summary = new ConductorBatchLoop().Run(
+                kernel,
+                driver,
+                ConductorAutonomyPolicy.Conservative,
+                NoStopPath(),
+                maxIterations: 1);
+
+            Assert.Equal(1, summary.Held);
+            Assert.Equal(GoalStatus.Verified, goal.Status);
+            Assert.Equal(WorkTaskStatus.Completed, task.Status);
+            Assert.Equal(0, task.CriterionRetryCount);
+            Assert.Null(goal.LatestAcceptanceFailure);
+        }
+        finally
+        {
+            TryDeleteDirectory(attemptRoot);
+        }
+    }
+
     [Xunit.Fact(DisplayName = "ParallelAcceptance_fast_child_terminal_outcome_survives_parent_pid_update")]
     public void ParallelAcceptanceFastChildTerminalOutcomeSurvivesParentPidUpdate()
     {

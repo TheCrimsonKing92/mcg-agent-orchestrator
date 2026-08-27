@@ -47,6 +47,36 @@ public sealed partial class ConductorDriverTestsAcceptanceCoordination
         Assert.Null(Assert.Single(normalized.RequiredUnmetCriteria).FailureClassification);
     }
 
+    [Xunit.Fact(DisplayName = "ConductorDriver_named_introduced_apparatus_normalization_preserves_origin_and_routes_environmentally")]
+    public void ConductorDriverNamedIntroducedApparatusNormalizationPreservesOriginAndRoutesEnvironmentally()
+    {
+        var attributions = new[]
+        {
+            new AcceptanceCheckAttribution(
+                "infrastructure tests: Remainder",
+                AcceptanceFailureOrigin.Introduced,
+                "typed process-output apparatus receipt",
+                AcceptanceFailureCause.EnvironmentalApparatus)
+        };
+        var acceptance = new AcceptanceVerificationSummary(
+            false,
+            [],
+            "Remainder failed",
+            ["infrastructure tests: Remainder"],
+            "candidate-a",
+            "main-a",
+            CheckAttributions: attributions);
+
+        var normalized = ConductorDriver.NormalizeNamedFailedChecksForRetry(acceptance);
+
+        Assert.Equal(
+            AcceptanceFailureClassifications.GateEnvironmentInterference,
+            Assert.Single(normalized.RequiredUnmetCriteria).FailureClassification);
+        var attribution = Assert.Single(normalized.CheckAttributions!);
+        Assert.Equal(AcceptanceFailureOrigin.Introduced, attribution.Origin);
+        Assert.Equal(AcceptanceFailureCause.EnvironmentalApparatus, attribution.Cause);
+    }
+
     [Xunit.Fact(DisplayName = "ConductorDriver_all_inherited_red_gets_typed_apparatus_cause")]
     public void ConductorDriverAllInheritedRedGetsTypedApparatusCause()
     {

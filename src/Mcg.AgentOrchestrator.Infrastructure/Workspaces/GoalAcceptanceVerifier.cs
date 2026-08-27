@@ -141,6 +141,13 @@ public static class AcceptanceFailureClassifications
     public const string FocusedSelectionApparatusFailure = "focused-selection-apparatus-failure";
     public const string FocusedSelectionReceiptUnreadable = "focused-selection-receipt-unreadable";
     public const string SeededRepositoryProcessOutputApparatus = "seeded-repository-process-output-apparatus";
+
+    public static bool IsEnvironmentalApparatus(string? classification) =>
+        classification is GateEnvironmentInterference or
+            InheritedBaselineApparatus or
+            FocusedSelectionApparatusFailure or
+            FocusedSelectionReceiptUnreadable or
+            SeededRepositoryProcessOutputApparatus;
 }
 
 public enum FocusedEvidenceRejectionCode

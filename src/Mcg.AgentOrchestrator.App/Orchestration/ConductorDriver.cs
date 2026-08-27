@@ -4186,19 +4186,24 @@ internal sealed partial class ConductorDriver
 
         var output = string.Join(Environment.NewLine, failedChecks);
         var summary = $"Named failing acceptance checks: {string.Join(", ", failedChecks)}";
-        var allInheritedApparatus = acceptance.CheckAttributions is { Count: > 0 } attributions &&
+        var attributions = acceptance.CheckAttributions;
+        var allEnvironmentalApparatus = attributions is { Count: > 0 } &&
             failedChecks.All(name => attributions.Any(attribution =>
                 attribution.CheckName.Equals(name, StringComparison.Ordinal) &&
-                attribution.Origin == AcceptanceFailureOrigin.Inherited &&
                 attribution.Cause == AcceptanceFailureCause.EnvironmentalApparatus));
+        var allInherited = allEnvironmentalApparatus && failedChecks.All(name => attributions!.Any(attribution =>
+            attribution.CheckName.Equals(name, StringComparison.Ordinal) &&
+            attribution.Origin == AcceptanceFailureOrigin.Inherited));
         var check = new AcceptanceCheckResult(
             "acceptance failed checks",
             false,
             1,
             string.IsNullOrWhiteSpace(acceptance.FailureDetail) ? output : acceptance.FailureDetail,
             ResultSummary: summary,
-            FailureClassification: allInheritedApparatus
-                ? AcceptanceFailureClassifications.InheritedBaselineApparatus
+            FailureClassification: allEnvironmentalApparatus
+                ? allInherited
+                    ? AcceptanceFailureClassifications.InheritedBaselineApparatus
+                    : AcceptanceFailureClassifications.GateEnvironmentInterference
                 : null);
         return new AcceptanceVerificationSummary(
             false,
@@ -4245,6 +4250,23 @@ internal sealed partial class ConductorDriver
             acceptance.TestResultPaths,
             attributions,
             acceptance.BaselineAttestation);
+    }
+
+    internal static bool IsEnvironmentalApparatusAcceptanceRun(AcceptanceVerificationSummary acceptance)
+    {
+        if (acceptance.RequiredUnmetCriteria is not { Count: > 0 } requiredUnmetCriteria)
+        {
+            return false;
+        }
+
+        return requiredUnmetCriteria.All(check =>
+            check.FailureClassification is
+                AcceptanceFailureClassifications.GateEnvironmentInterference or
+                AcceptanceFailureClassifications.InheritedBaselineApparatus ||
+            acceptance.CheckAttributions is { Count: > 0 } attributions &&
+            attributions.Any(attribution =>
+                attribution.CheckName.Equals(check.Name, StringComparison.Ordinal) &&
+                attribution.Cause == AcceptanceFailureCause.EnvironmentalApparatus));
     }
 
     internal static void ReconcileCleanBaselineAttention(
@@ -5652,17 +5674,7 @@ internal sealed partial class ConductorDriver
         ConductorAutonomyPolicy policy,
         AcceptanceVerificationSummary acceptance)
     {
-        if (acceptance.RequiredUnmetCriteria is { Count: > 0 } requiredUnmetCriteria &&
-            requiredUnmetCriteria.All(check =>
-            check.FailureClassification is not null &&
-            (string.Equals(
-                 check.FailureClassification,
-                 AcceptanceFailureClassifications.GateEnvironmentInterference,
-                 StringComparison.Ordinal) ||
-             string.Equals(
-                 check.FailureClassification,
-                 AcceptanceFailureClassifications.InheritedBaselineApparatus,
-                 StringComparison.Ordinal))))
+        if (IsEnvironmentalApparatusAcceptanceRun(acceptance))
         {
             return MakeResult(
                 goal.Id.Value,
