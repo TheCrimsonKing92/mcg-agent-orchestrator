@@ -32,9 +32,9 @@ internal static class SourceSizeRatchet
             // remain at the verifier execution boundary; lifecycle implementation stays extracted.
             // Raised for the acceptance-popup suppression repair: hermetic verification must disable
             // descendant MSBuild-server reuse where the verifier owns the child environment.
-            // Raised for goal 13630c9f: TRX failure-cause receipt extraction and typed apparatus
+            // Raised by six lines for goal 13630c9f: TRX failure-cause receipt extraction and typed apparatus
             // attribution belong where raw check output becomes final acceptance evidence.
-            new SourceSizeCeiling("src/Mcg.AgentOrchestrator.Infrastructure/Workspaces/GoalAcceptanceVerifier.cs", 8919),
+            new SourceSizeCeiling("src/Mcg.AgentOrchestrator.Infrastructure/Workspaces/GoalAcceptanceVerifier.cs", 8925),
             // Goal 682f25a1 re-derived this row after integrating goal c2eae988, whose acceptance
             // cancellation seam had already added 74 net lines before the multi-file ratchet landed.
             // Raised for goal a22c7293: slice admission must run where all dispatch paths converge.
@@ -105,9 +105,9 @@ internal static class SourceSizeRatchet
             // negative controls jointly verify the existing parallel-acceptance state contract.
             // Raised for the acceptance-popup suppression repair: the outer gate launch contract now
             // pins the descendant MSBuild-server environment alongside the native GUI suppression seam.
-            // Raised for goal 13630c9f: parallel acceptance controls prove apparatus-only holds do not
-            // reopen completed worker evidence while mixed candidate failures retain normal routing.
-            new SourceSizeCeiling("tests/Mcg.AgentOrchestrator.Infrastructure.Tests/ConductorBatchLoopTestsParallelAcceptance.cs", 5165),
+            // Raised by two lines for goal 13630c9f: parallel acceptance controls prove apparatus-only holds
+            // do not reopen completed worker evidence while mixed candidate failures retain normal routing.
+            new SourceSizeCeiling("tests/Mcg.AgentOrchestrator.Infrastructure.Tests/ConductorBatchLoopTestsParallelAcceptance.cs", 5167),
             new SourceSizeCeiling("tests/Mcg.AgentOrchestrator.Infrastructure.Tests/DotnetBuildEnvironmentManagerTests.cs", 1480),
         });
 
