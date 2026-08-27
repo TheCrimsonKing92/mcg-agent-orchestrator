@@ -45,7 +45,9 @@ internal static class SourceSizeRatchet
             // extracted in ConductorDriver.AcceptanceLanding.cs.
             // Raised for goal 13630c9f: typed apparatus attribution, bounded hold release, and candidate
             // retry suppression must meet at the existing acceptance disposition seam.
-            new SourceSizeCeiling("src/Mcg.AgentOrchestrator.App/Orchestration/ConductorDriver.cs", 6203),
+            // Reconciled after main 0d44d054 added 12 reviewed journal-cache lines that eliminate eager
+            // full-journal retention; this is the measured combined size, not new goal behavior.
+            new SourceSizeCeiling("src/Mcg.AgentOrchestrator.App/Orchestration/ConductorDriver.cs", 6215),
             // Raised for goal dadadfac: set-aside re-admission must be decided where the loop already holds
             // the goal, its recorded set-aside entry, and the current sweep blockers together.
             // Raised for goal 289b469d: registration-fault hold/escalation must be decided at the existing
@@ -77,7 +79,9 @@ internal static class SourceSizeRatchet
             // in the acceptance-coordination owner rather than splitting one behavioral contract.
             // Raised for goal 13630c9f: acceptance coordination owns the structured apparatus cause
             // mapping and rejects mixed candidate-owned failure routing.
-            new SourceSizeCeiling("tests/Mcg.AgentOrchestrator.Infrastructure.Tests/ConductorDriverTestsAcceptanceCoordination.cs", 1123),
+            // Reconciled after main 0d44d054 added the 27-line no-eager-journal-read regression; this is
+            // the measured combined test-owner size, not additional goal coverage.
+            new SourceSizeCeiling("tests/Mcg.AgentOrchestrator.Infrastructure.Tests/ConductorDriverTestsAcceptanceCoordination.cs", 1150),
             // Raised for goal 13630c9f: lifecycle coverage keeps unchanged-candidate holds, bounded
             // operator release, and main/candidate HEAD regating in one state-transition decision table.
             new SourceSizeCeiling("tests/Mcg.AgentOrchestrator.Infrastructure.Tests/ConductorDriverTestsLifecycleStates.cs", 1701),
