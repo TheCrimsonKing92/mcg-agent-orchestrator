@@ -17,6 +17,8 @@ public sealed class ConductorBatchLoopTestsSelfHandoff : ConductorBatchLoopTests
     {
     }
 
+    public static bool IsWindows => OperatingSystem.IsWindows();
+
     [Xunit.Fact(DisplayName = "BatchLoop_default_self_relaunch_activation_does_not_schedule_or_execute")]
     public void BatchLoopDefaultSelfRelaunchActivationDoesNotScheduleOrExecute()
     {
@@ -811,14 +813,12 @@ public sealed class ConductorBatchLoopTestsSelfHandoff : ConductorBatchLoopTests
         Assert.Contains("JobObjectLimitBreakawayOk", jobSource, StringComparison.Ordinal);
     }
 
-    [Xunit.Fact(DisplayName = "ConductorLoopHandoff_windows_launcher_inherits_redirected_stdout_handle")]
+    [Xunit.Fact(
+        DisplayName = "ConductorLoopHandoff_windows_launcher_inherits_redirected_stdout_handle",
+        Skip = "Requires Windows process-job semantics.",
+        SkipUnless = nameof(IsWindows))]
     public void ConductorLoopHandoffWindowsLauncherInheritsRedirectedStdoutHandle()
     {
-        if (!OperatingSystem.IsWindows())
-        {
-            return;
-        }
-
         var root = CreateTempDirectory("mcg-conduct-loop-stdout-handoff");
         int? processId = null;
         var suppressionScopeActive = false;
@@ -853,6 +853,8 @@ public sealed class ConductorBatchLoopTestsSelfHandoff : ConductorBatchLoopTests
                     "Hidden-console suppression was disposed before CreateProcessW."));
 
             Assert.True(result.ProcessId > 0);
+            Assert.Contains("breakawaySucceeded=true", result.LaunchDetail, StringComparison.Ordinal);
+            Assert.Matches("residualJobMembership=(true|false)", result.LaunchDetail);
             Assert.False(suppressionScopeActive);
             processId = result.ProcessId;
             var conductEventsPath = Path.Combine(root, ConductEventLogWriter.CurrentFileName);
@@ -883,14 +885,11 @@ public sealed class ConductorBatchLoopTestsSelfHandoff : ConductorBatchLoopTests
         }
     }
 
-    [Xunit.Fact]
+    [Xunit.Fact(
+        Skip = "Requires Windows process-job semantics.",
+        SkipUnless = nameof(IsWindows))]
     public void ConductorLoopHandoffSuppressionFailureStillStartsSuccessor()
     {
-        if (!OperatingSystem.IsWindows())
-        {
-            return;
-        }
-
         var root = CreateTempDirectory("mcg-conduct-loop-suppression-failure");
         int? processId = null;
         try
@@ -910,6 +909,8 @@ public sealed class ConductorBatchLoopTestsSelfHandoff : ConductorBatchLoopTests
                 acquireConsoleSuppression: () => throw new System.ComponentModel.Win32Exception(5, "synthetic suppression failure"));
 
             Assert.True(result.ProcessId > 0);
+            Assert.Contains("breakawaySucceeded=true", result.LaunchDetail, StringComparison.Ordinal);
+            Assert.Matches("residualJobMembership=(true|false)", result.LaunchDetail);
             processId = result.ProcessId;
             Assert.True(WaitUntil(
                 () => File.Exists(stdoutPath) && ReadAllTextShared(stdoutPath).Contains(marker, StringComparison.Ordinal),
@@ -933,15 +934,12 @@ public sealed class ConductorBatchLoopTestsSelfHandoff : ConductorBatchLoopTests
         }
     }
 
-    [Xunit.Fact(DisplayName = "ConductorLoopHandoff_successor_survives_parent_job_exit_and_emits_loop_start")]
+    [Xunit.Fact(
+        DisplayName = "ConductorLoopHandoff_successor_survives_parent_job_exit_and_emits_loop_start",
+        Skip = "Requires Windows process-job semantics.",
+        SkipUnless = nameof(IsWindows))]
     public void ConductorLoopHandoffSuccessorSurvivesParentJobExitAndEmitsLoopStart()
     {
-        if (!OperatingSystem.IsWindows())
-        {
-            // The production failure mode is Windows job-object kill-on-close inheritance.
-            return;
-        }
-
         var root = CreateTempDirectory("mcg-conduct-loop-runtime-handoff");
         var appAssembly = typeof(ConductorBatchLoop).Assembly.Location;
         Process? parent = null;
@@ -1006,6 +1004,7 @@ public sealed class ConductorBatchLoopTestsSelfHandoff : ConductorBatchLoopTests
             Assert.Contains("spawnPath=windows-createprocess", stdout, StringComparison.Ordinal);
             Assert.Contains("breakawayRequested=true", stdout, StringComparison.Ordinal);
             Assert.Contains("breakawaySucceeded=true", stdout, StringComparison.Ordinal);
+            Assert.Matches("residualJobMembership=(true|false)", stdout);
 
             var logDirectory = Path.Combine(root, ".orchestrator", "logs");
             var conductEventsPath = Path.Combine(logDirectory, ConductEventLogWriter.CurrentFileName);

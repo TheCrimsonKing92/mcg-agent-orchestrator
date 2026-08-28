@@ -953,18 +953,18 @@ internal static partial class ConductorLoopHandoff
 
                     try
                     {
-                        var inJob = IsProcessInJob(processInformation.hProcess);
-                        if (inJob)
-                        {
-                            TerminateProcess(processInformation.hProcess, 1);
-                            throw new InvalidOperationException("Breakaway conduct loop successor remained in a Windows job.");
-                        }
+                        // In a nested hierarchy, CREATE_BREAKAWAY_FROM_JOB escapes the immediate job
+                        // and each permissive ancestor until the first non-breakaway ancestor. A true
+                        // any-job probe can therefore mean the successor escaped the incumbent's
+                        // kill-on-close job but remains in a longer-lived host job.
+                        var residualJobMembership = ProbeProcessJobMembership(processInformation.hProcess);
 
                         return new ConductLoopLaunchResult(
                             (int)processInformation.dwProcessId,
                             request.StdoutPath,
                             request.StderrPath,
-                            "spawnPath=windows-createprocess hostResolution=native-executable breakawayRequested=true breakawaySucceeded=true");
+                            "spawnPath=windows-createprocess hostResolution=native-executable " +
+                            $"breakawayRequested=true breakawaySucceeded=true residualJobMembership={residualJobMembership}");
                     }
                     finally
                     {
@@ -1186,12 +1186,12 @@ internal static partial class ConductorLoopHandoff
                 request.AuthorityWaitTimeoutSeconds.ToString(CultureInfo.InvariantCulture);
     }
 
-    private static bool IsProcessInJob(IntPtr processHandle)
+    private static string ProbeProcessJobMembership(IntPtr processHandle)
     {
-        if (!IsProcessInJob(processHandle, IntPtr.Zero, out var result))
-            throw new Win32Exception(Marshal.GetLastWin32Error(), "Failed to verify breakaway conduct loop successor job membership.");
+        if (IsProcessInJob(processHandle, IntPtr.Zero, out var result))
+            return result.ToString().ToLowerInvariant();
 
-        return result;
+        return $"unknown(nativeError={Marshal.GetLastWin32Error()})";
     }
 
     private static ConductLoopHandoffVerification VerifySuccessor(
@@ -1666,9 +1666,6 @@ internal static partial class ConductorLoopHandoff
         IntPtr processHandle,
         IntPtr jobHandle,
         [MarshalAs(UnmanagedType.Bool)] out bool result);
-
-    [DllImport("kernel32.dll", SetLastError = true)]
-    private static extern bool TerminateProcess(IntPtr processHandle, uint exitCode);
 
     [DllImport("kernel32.dll")]
     private static extern IntPtr GetConsoleWindow();
