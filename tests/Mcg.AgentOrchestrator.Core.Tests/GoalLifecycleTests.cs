@@ -1202,6 +1202,9 @@ public sealed class GoalLifecycleTests
         Assert.Equal(WorkTaskStatus.Assigned, tester.Status);
         Assert.Null(tester.LastVerification);
         Assert.Same(acceptanceFailure, goal.LatestAcceptanceFailure);
+        var restoredGoal = AgentOrchestratorKernel.FromSnapshot(kernel.ExportSnapshot()).GetGoal(goal.Id);
+        Assert.NotNull(restoredGoal.LatestAcceptanceFailure);
+        Assert.Equal(acceptanceFailure!.FailedChecks, restoredGoal.LatestAcceptanceFailure!.FailedChecks);
         Assert.Contains(goal.Timeline, evt =>
             evt.TaskId == developer.Id &&
             evt.Kind == ProgressKind.TaskNote &&

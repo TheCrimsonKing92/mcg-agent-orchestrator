@@ -26,7 +26,8 @@ public sealed record GoalSnapshot(
     IReadOnlyList<GoalBriefVersion>? BriefVersions = null,
     IReadOnlyList<RefinedSpecVersionSnapshot>? RefinedSpecVersions = null,
     SourceBacklogCoverage? SourceBacklogCoverage = null,
-    string? SliceBatchParentId = null);
+    string? SliceBatchParentId = null,
+    bool? AcceptanceFailureDeferredForRetry = null);
 
 public sealed record GoalHoldSnapshot(
     string Identity,

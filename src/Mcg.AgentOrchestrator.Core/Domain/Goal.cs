@@ -507,7 +507,8 @@ public sealed class Goal
                     version.SupersededByVersion))
                 .ToArray(),
             SourceBacklogCoverage: SourceBacklogCoverage,
-            SliceBatchParentId: SliceBatchParentId?.Value);
+            SliceBatchParentId: SliceBatchParentId?.Value,
+            AcceptanceFailureDeferredForRetry: _acceptanceFailureDeferredForRetry);
     }
 
     internal static Goal FromSnapshot(GoalSnapshot snapshot)
@@ -583,10 +584,12 @@ public sealed class Goal
                 failure.MainHeadSha,
                 failure.CheckAttributions,
                 failure.BaselineAttestation);
-            if (snapshot.Status == GoalStatus.Active &&
-                goal.Tasks.Any(task =>
-                    task.LatestRetryAt is not null &&
-                    task.Status is WorkTaskStatus.Pending or WorkTaskStatus.Assigned or WorkTaskStatus.Running))
+            var acceptanceFailureDeferredForRetry = snapshot.AcceptanceFailureDeferredForRetry ??
+                (snapshot.Status == GoalStatus.Active &&
+                 goal.Tasks.Any(task =>
+                     task.LatestRetryAt is not null &&
+                     task.Status is WorkTaskStatus.Pending or WorkTaskStatus.Assigned or WorkTaskStatus.Running));
+            if (acceptanceFailureDeferredForRetry)
             {
                 goal.DeferAcceptanceFailureForRetry();
             }

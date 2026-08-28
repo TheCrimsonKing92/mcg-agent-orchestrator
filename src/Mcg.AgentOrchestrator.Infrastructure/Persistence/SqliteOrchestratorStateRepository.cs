@@ -1838,6 +1838,10 @@ public sealed class SqliteOrchestratorStateRepository : IOrchestratorStateOutbox
                 stored.RefinedSpecVersions,
                 current.RefinedSpecVersions),
             LatestAcceptanceFailure = PickStoreOwned(baseline.LatestAcceptanceFailure, stored.LatestAcceptanceFailure, current.LatestAcceptanceFailure),
+            AcceptanceFailureDeferredForRetry = PickStoreOwned(
+                baseline.AcceptanceFailureDeferredForRetry,
+                stored.AcceptanceFailureDeferredForRetry,
+                current.AcceptanceFailureDeferredForRetry),
             AutomaticAcceptanceRetryCount = PickStoreOwned(
                 baseline.AutomaticAcceptanceRetryCount,
                 stored.AutomaticAcceptanceRetryCount,
