@@ -1161,7 +1161,6 @@ public sealed partial class AgentOrchestratorKernel
             return;
         }
 
-        goal.ClearAcceptanceFailure();
         goal.SetStatus(GoalStatus.Active);
         Append(goal, null, ProgressKind.GoalPolicyDecision, reason);
     }
@@ -1205,7 +1204,11 @@ public sealed partial class AgentOrchestratorKernel
         }
     }
 
-    private void ReconcileRetainedDownstreamTasks(Goal goal, TaskSpec retriedTask, DateTimeOffset reconciledAt)
+    private void ReconcileRetainedDownstreamTasks(
+        Goal goal,
+        TaskSpec retriedTask,
+        DateTimeOffset reconciledAt,
+        string? provenCancelledCandidate = null)
     {
         if (retriedTask.LatestRetryAt is null)
         {
@@ -1214,7 +1217,9 @@ public sealed partial class AgentOrchestratorKernel
 
         var currentCandidateSha = retriedTask.Status == WorkTaskStatus.Completed
             ? retriedTask.LastDispatch?.ResultCommit
-            : null;
+            : retriedTask.Status == WorkTaskStatus.Cancelled
+                ? provenCancelledCandidate
+                : null;
         var currentCandidateKnown = !string.IsNullOrWhiteSpace(currentCandidateSha);
         var currentCandidate = !currentCandidateKnown
             ? "unknown"

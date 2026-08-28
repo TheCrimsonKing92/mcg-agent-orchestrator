@@ -2086,7 +2086,8 @@ public sealed class BackgroundDispatchRunner
             WasCancelledByConductor = cancelledByConductor
         };
 
-        kernel.RecordTaskProcessCancelled(goalId, taskId, cancelled);
+        var candidateEvidence = ClassifyCancellationCandidateEvidence(task, processRecord, goalId);
+        kernel.RecordTaskProcessCancelled(goalId, taskId, cancelled, candidateEvidence);
         if (resourceAccounting is not null)
         {
             kernel.RecordTaskNote(goalId, taskId, FormatResourceReceipt(goalId, taskId, resourceAccounting));
@@ -2094,6 +2095,60 @@ public sealed class BackgroundDispatchRunner
 
         EvictProcessLogCache(processRecord);
         return cancelled;
+    }
+
+    private CancellationCandidateEvidence ClassifyCancellationCandidateEvidence(
+        TaskSpec task,
+        TaskProcessRecord processRecord,
+        GoalId goalId)
+    {
+        var dispatch = task.LastDispatch;
+        if (task.RequiredRole != AgentRole.Developer ||
+            task.LatestRetryAt is null ||
+            dispatch is null ||
+            string.IsNullOrWhiteSpace(dispatch.BaseCommit) ||
+            string.IsNullOrWhiteSpace(dispatch.WorktreeHeadSha) ||
+            string.IsNullOrWhiteSpace(dispatch.DirtyStateHash))
+        {
+            return CancellationCandidateEvidence.Indeterminate("missing retried Developer spawn generation evidence");
+        }
+
+        var inspection = _worktreeCommitter.InspectGoalWorktree(
+            processRecord.WorkingDirectory,
+            goalId,
+            dispatch.DispatchedAt,
+            forceRefresh: true);
+        if (inspection.IsUnsafe)
+        {
+            return CancellationCandidateEvidence.Unsafe(
+                inspection.UnavailableReason ?? "unsafe-worktree",
+                inspection.GitReceipt);
+        }
+
+        if (!inspection.IsAvailable)
+        {
+            return CancellationCandidateEvidence.Unavailable(
+                inspection.UnavailableReason ?? "worktree-inspection-unavailable",
+                inspection.GitReceipt);
+        }
+
+        var worktree = inspection.Evidence;
+        var receipt = $"branch={worktree.Branch}; head={worktree.Head}; worktree={worktree.WorktreeStatus}; " +
+            $"commits_after_dispatch={worktree.CommitsAfterDispatch}; status_short={worktree.StatusShort}; " +
+            $"spawn_head={dispatch.WorktreeHeadSha}; base_commit={dispatch.BaseCommit}; dirty_state_hash={dispatch.DirtyStateHash}";
+        if (!worktree.IsClean)
+        {
+            return CancellationCandidateEvidence.Dirty(worktree.Head, "post-reap worktree is dirty", receipt);
+        }
+
+        if (worktree.CommitsAfterDispatch != 0 ||
+            !string.Equals(worktree.Head, dispatch.BaseCommit.Trim(), StringComparison.OrdinalIgnoreCase) ||
+            !string.Equals(worktree.Head, dispatch.WorktreeHeadSha.Trim(), StringComparison.OrdinalIgnoreCase))
+        {
+            return CancellationCandidateEvidence.Changed(worktree.Head, "post-reap candidate identity changed", receipt);
+        }
+
+        return CancellationCandidateEvidence.ConfirmedUnchanged(worktree.Head, receipt);
     }
 
     public int CancelRunningProcessesForGoal(AgentOrchestratorKernel kernel, GoalId goalId)

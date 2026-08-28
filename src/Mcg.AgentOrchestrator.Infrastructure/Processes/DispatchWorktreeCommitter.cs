@@ -210,7 +210,7 @@ internal sealed class DispatchWorktreeCommitter
                 $"expected={expectedBranch}; actual={NormalizeDiagnosticText(branch.Output)}");
         }
 
-        var head = _runGit(workingDirectory, ["rev-parse", "--short", "HEAD"]);
+        var head = _runGit(workingDirectory, ["rev-parse", "HEAD"]);
         var status = _runGit(workingDirectory, ["status", "--short", "--untracked-files=all"]);
         var dispatch = _runGit(workingDirectory, ["log", "--format=%H", $"--since={dispatchedAt:O}"]);
         var changedPaths = _runGit(workingDirectory, ["log", "--name-only", "--format=", $"--since={dispatchedAt:O}"]);
