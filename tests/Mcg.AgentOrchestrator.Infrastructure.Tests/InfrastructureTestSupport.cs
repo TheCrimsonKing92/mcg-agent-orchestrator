@@ -306,7 +306,7 @@ private static WorkerDispatchTestsSeededRepositoryFactory.GitProbeResult RunGitP
     Action<string, string>? beforeCaptureRead)
 {
     var repositoryDirectory = Path.GetFullPath(workingDirectory);
-    // Capture files must live outside the entire repository tree. Seeded-repository fixtures
+    // Capture files must live outside the probed repository tree. Seeded-repository fixtures
     // copy .git while probes are active; putting transient captures in Git metadata makes that
     // copy race probe cleanup even though the files are not tracked.
     var captureDirectory = Path.GetTempPath();
