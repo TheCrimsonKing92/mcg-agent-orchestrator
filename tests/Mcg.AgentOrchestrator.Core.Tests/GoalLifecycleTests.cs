@@ -1196,14 +1196,7 @@ public sealed class GoalLifecycleTests
 
         Assert.Equal(WorkTaskStatus.Assigned, tester.Status);
         Assert.Null(tester.LastVerification);
-        if (kind is CancellationCandidateEvidenceKind.Changed or CancellationCandidateEvidenceKind.Dirty)
-        {
-            Assert.Null(goal.LatestAcceptanceFailure);
-        }
-        else
-        {
-            Assert.Same(acceptanceFailure, goal.LatestAcceptanceFailure);
-        }
+        Assert.Same(acceptanceFailure, goal.LatestAcceptanceFailure);
         Assert.Contains(goal.Timeline, evt =>
             evt.TaskId == developer.Id &&
             evt.Kind == ProgressKind.TaskNote &&
