@@ -1278,7 +1278,11 @@ public sealed partial class AgentOrchestratorKernel
             $"Gracefully detached process {process.ProcessId}; a successor conductor may reconcile it.");
     }
 
-    public void RecordTaskProcessCancelled(GoalId goalId, TaskId taskId, TaskProcessRecord process)
+    public void RecordTaskProcessCancelled(
+        GoalId goalId,
+        TaskId taskId,
+        TaskProcessRecord process,
+        CancellationCandidateEvidence? candidateEvidence = null)
     {
         var goal = GetGoal(goalId);
         var task = goal.FindTask(taskId);
@@ -1293,6 +1297,19 @@ public sealed partial class AgentOrchestratorKernel
             throw new InvalidOperationException("Cancelled process record must have WasCancelled set.");
         }
 
+        candidateEvidence ??= CancellationCandidateEvidence.Indeterminate();
+        var provenCancelledCandidate = ValidateCancelledCandidateEvidence(task, candidateEvidence);
+        if (candidateEvidence.Kind == CancellationCandidateEvidenceKind.ConfirmedUnchanged &&
+            provenCancelledCandidate is null)
+        {
+            candidateEvidence = CancellationCandidateEvidence.Indeterminate(
+                "confirmed-unchanged evidence failed Core dispatch identity validation");
+        }
+        if (provenCancelledCandidate is not null)
+        {
+            task.SetDispatchResultCommit(provenCancelledCandidate);
+        }
+
         task.RecordProcess(process);
         if (process.WasCancelledByConductor)
         {
@@ -1302,8 +1319,39 @@ public sealed partial class AgentOrchestratorKernel
         {
             task.SetStatus(WorkTaskStatus.Cancelled);
         }
+        goal.RestoreAcceptanceFailureAfterRetryCancellation();
         Append(goal, taskId, ProgressKind.TaskCancelled, $"Cancelled process {process.ProcessId}: {process.Command}");
-        ReconcileRetainedDownstreamTasks(goal, task, _clock.UtcNow);
+        Append(
+            goal,
+            taskId,
+            ProgressKind.TaskNote,
+            $"CANCELLATION_CANDIDATE_EVIDENCE kind={candidateEvidence.Kind}; candidate={candidateEvidence.CandidateSha ?? "unknown"}; " +
+            $"reason={candidateEvidence.Reason}; git_receipt={candidateEvidence.GitReceipt}");
+        ReconcileRetainedDownstreamTasks(goal, task, _clock.UtcNow, provenCancelledCandidate);
+    }
+
+    private static string? ValidateCancelledCandidateEvidence(
+        TaskSpec task,
+        CancellationCandidateEvidence evidence)
+    {
+        if (evidence.Kind != CancellationCandidateEvidenceKind.ConfirmedUnchanged)
+        {
+            return null;
+        }
+
+        var dispatch = task.LastDispatch;
+        var candidate = evidence.CandidateSha?.Trim();
+        return task.RequiredRole == AgentRole.Developer &&
+               task.LatestRetryAt is not null &&
+               dispatch is not null &&
+               !string.IsNullOrWhiteSpace(candidate) &&
+               !string.IsNullOrWhiteSpace(dispatch.BaseCommit) &&
+               !string.IsNullOrWhiteSpace(dispatch.WorktreeHeadSha) &&
+               !string.IsNullOrWhiteSpace(dispatch.DirtyStateHash) &&
+               SameNonEmptyReviewedCommit(candidate, dispatch.BaseCommit) &&
+               SameNonEmptyReviewedCommit(candidate, dispatch.WorktreeHeadSha)
+            ? candidate
+            : null;
     }
 
     private bool TryCompleteTaskWithPassingVerification(Goal goal, TaskSpec task, string message)

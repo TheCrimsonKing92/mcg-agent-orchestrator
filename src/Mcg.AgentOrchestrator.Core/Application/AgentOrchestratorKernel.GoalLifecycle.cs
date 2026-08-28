@@ -702,10 +702,14 @@ public sealed partial class AgentOrchestratorKernel
             throw new ArgumentException("Acceptance retry reason cannot be empty.", nameof(operatorReason));
         }
 
-        if (goal.Status != GoalStatus.AcceptanceFailed)
+        var isVerifiedApparatusHold =
+            goal.Status == GoalStatus.Verified &&
+            goal.LatestAcceptanceFailure is { IsEnvironmentalApparatus: true };
+        if (goal.Status != GoalStatus.AcceptanceFailed && !isVerifiedApparatusHold)
         {
             throw new InvalidOperationException(
-                $"Goal '{goal.Id.Value[..8]}' is {goal.Status}, not AcceptanceFailed; acceptance-retry is only valid after a failed acceptance gate.");
+                $"Goal '{goal.Id.Value[..8]}' is {goal.Status}, not AcceptanceFailed or a typed Verified apparatus hold; " +
+                "acceptance-retry is only valid after a failed acceptance gate.");
         }
 
         var incompleteTask = goal.Tasks.FirstOrDefault(task =>
@@ -1157,8 +1161,8 @@ public sealed partial class AgentOrchestratorKernel
             return;
         }
 
-        goal.ClearAcceptanceFailure();
         goal.SetStatus(GoalStatus.Active);
+        goal.DeferAcceptanceFailureForRetry();
         Append(goal, null, ProgressKind.GoalPolicyDecision, reason);
     }
 
@@ -1201,7 +1205,11 @@ public sealed partial class AgentOrchestratorKernel
         }
     }
 
-    private void ReconcileRetainedDownstreamTasks(Goal goal, TaskSpec retriedTask, DateTimeOffset reconciledAt)
+    private void ReconcileRetainedDownstreamTasks(
+        Goal goal,
+        TaskSpec retriedTask,
+        DateTimeOffset reconciledAt,
+        string? provenCancelledCandidate = null)
     {
         if (retriedTask.LatestRetryAt is null)
         {
@@ -1210,7 +1218,9 @@ public sealed partial class AgentOrchestratorKernel
 
         var currentCandidateSha = retriedTask.Status == WorkTaskStatus.Completed
             ? retriedTask.LastDispatch?.ResultCommit
-            : null;
+            : retriedTask.Status == WorkTaskStatus.Cancelled
+                ? provenCancelledCandidate
+                : null;
         var currentCandidateKnown = !string.IsNullOrWhiteSpace(currentCandidateSha);
         var currentCandidate = !currentCandidateKnown
             ? "unknown"
@@ -1224,7 +1234,7 @@ public sealed partial class AgentOrchestratorKernel
             var reviewedCandidate = string.IsNullOrWhiteSpace(downstream.LastVerification!.ReviewedCommit)
                 ? "unknown"
                 : downstream.LastVerification.ReviewedCommit.Trim();
-            var invalidationReason = retriedTask.Status == WorkTaskStatus.Completed && currentCandidateKnown
+            var invalidationReason = currentCandidateKnown
                 ? $"changed candidate from {reviewedCandidate} to {currentCandidate}"
                 : $"did not prove candidate {reviewedCandidate} unchanged (result {currentCandidate}; status {retriedTask.Status})";
             ResetTaskForRetry(downstream, reconciledAt);

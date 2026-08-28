@@ -680,6 +680,104 @@ public sealed partial class ConductorBatchLoopTestsParallelAcceptance : Conducto
     }
 
     [Xunit.Fact]
+    public void ProductionSelections_UnchangedApparatusHold_IsNotAdmitted()
+    {
+        var kernel = new AgentOrchestratorKernel();
+        var goals = Enumerable.Range(1, 6)
+            .Select(index => CreateVerifiedSimpleGoal(kernel, $"Apparatus hold selection member {index}"))
+            .ToArray();
+        const string mainRevision = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
+        var branchRevisions = goals.ToDictionary(
+            goal => goal.Id,
+            goal => goal.Id.Value.PadRight(40, 'b')[..40]);
+        var paths = new Dictionary<GoalId, IReadOnlyList<string>>
+        {
+            [goals[0].Id] = ["tests/Mcg.AgentOrchestrator.Core.Tests/Held.cs"],
+            [goals[1].Id] = ["tests/Mcg.AgentOrchestrator.Core.Tests/TrainFirst.cs"],
+            [goals[2].Id] = ["tests/Mcg.AgentOrchestrator.Infrastructure.Tests/TrainSecond.cs"],
+            [goals[3].Id] = ["tests/Mcg.AgentOrchestrator.Dashboard.Tests/TrainThird.cs"],
+            [goals[4].Id] = ["src/Mcg.AgentOrchestrator.App/Dashboard/Components/CohortFourth.razor"],
+            [goals[5].Id] = ["src/Mcg.AgentOrchestrator.App/Dashboard/Api/CohortFifth.cs"]
+        };
+        const string failedCheck = "infrastructure tests: Remainder";
+        kernel.RecordAcceptanceFailure(
+            goals[0].Id,
+            [failedCheck],
+            branchRevisions[goals[0].Id],
+            mainRevision,
+            [
+                new AcceptanceCheckAttribution(
+                    failedCheck,
+                    AcceptanceFailureOrigin.Introduced,
+                    "typed seeded repository apparatus receipt",
+                    AcceptanceFailureCause.EnvironmentalApparatus)
+            ]);
+        var projector = new GateReadyCandidateProjector(
+            goalId => new GateReadyCandidateRevisionPair(branchRevisions[goalId], mainRevision),
+            goalId => new GateReadyLandingScopeObservation(true, paths[goalId]),
+            (_, _, _) => new GateReadyMergeTreeObservation(true));
+        IReadOnlyList<GoalId>? trainMembers = null;
+        IReadOnlyList<GoalId>? cohortMembers = null;
+        var ordinaryCalls = 0;
+        var driver = MakeDriver(
+            getFacts: _ => new GoalLifecycleFacts(WorkspaceExists: true),
+            runAcceptanceWithSlot: (_, _) =>
+            {
+                ordinaryCalls++;
+                return AcceptanceVerificationSummary.PassedWithNoUnmetCriteria;
+            },
+            classifyRisk: _ => ChangeRiskTier.DocsOnly,
+            getLandingFileScopes: goal => paths[goal.Id],
+            isVerificationGateSatisfied: _ => true,
+            gateReadyCandidateProjector: projector,
+            resolveAcceptanceHeads: goal => (branchRevisions[goal.Id], mainRevision),
+            runMergeTrain: (selection, orderedGoals, policy) =>
+            {
+                trainMembers = selection.Members.Select(member => member.GoalId).ToArray();
+                return new ConductorMergeTrainRunResult(
+                    null,
+                    BuildSelectionResults(selection.Members, policy, "admitted by train"),
+                    [],
+                    "outcome=passed");
+            },
+            runAcceptanceCohort: (selection, orderedGoals, policy) =>
+            {
+                cohortMembers = selection.Members.Select(member => member.GoalId).ToArray();
+                return new ConductorAcceptanceCohortRunResult(
+                    null,
+                    BuildSelectionResults(selection.Members, policy, "admitted by cohort"),
+                    "outcome=passed");
+            });
+
+        var summary = new ConductorBatchLoop().Run(
+            kernel,
+            driver,
+            ConductorAutonomyPolicy.Permissive,
+            NoStopPath(),
+            maxIterations: 1);
+
+        Assert.Equal(goals[1..4].Select(goal => goal.Id), trainMembers);
+        Assert.Equal(goals[4..6].Select(goal => goal.Id), cohortMembers);
+        Assert.DoesNotContain(goals[0].Id, trainMembers!);
+        Assert.DoesNotContain(goals[0].Id, cohortMembers!);
+        Assert.Equal(0, ordinaryCalls);
+        Assert.Equal(5, summary.Advanced);
+        Assert.True(goals[0].LatestAcceptanceFailure?.IsEnvironmentalApparatus);
+
+        static IReadOnlyDictionary<string, ConductorAdvanceResult> BuildSelectionResults(
+            IReadOnlyList<GateReadyCandidateProjection> members,
+            ConductorAutonomyPolicy policy,
+            string detail) => members.ToDictionary(
+                member => member.GoalId.Value,
+                member => new ConductorAdvanceResult(
+                    member.GoalId.Value,
+                    member.GoalId.Value[..8],
+                    policy.Name,
+                    new ConductorAdvanceOutcome.Executed(GoalLifecycleState.Verified, detail)),
+                StringComparer.Ordinal);
+    }
+
+    [Xunit.Fact]
     public void IncompatibleCohortCandidates_UseOrdinaryAcceptance()
     {
         var kernel = new AgentOrchestratorKernel();
@@ -1665,6 +1763,8 @@ public sealed partial class ConductorBatchLoopTestsParallelAcceptance : Conducto
             Assert.True(startInfo.RedirectStandardError);
             Assert.Equal(root, startInfo.WorkingDirectory);
             Assert.Equal(root, startInfo.Environment[OrchestratorWorkspace.RepoRootEnvironmentVariable]);
+            Assert.Equal("1", startInfo.Environment["MSBUILDDISABLENODEREUSE"]);
+            Assert.Equal("0", startInfo.Environment["DOTNET_CLI_USE_MSBUILD_SERVER"]);
             Assert.Equal(
                 ["Mcg.AgentOrchestrator.App.dll", ConductorParallelAcceptanceAttemptCoordinator.OwnedProcessSubcommandName, metadataPath],
                 startInfo.ArgumentList.ToArray());
@@ -2387,6 +2487,170 @@ public sealed partial class ConductorBatchLoopTestsParallelAcceptance : Conducto
             Assert.Equal(WorkTaskStatus.Completed, task.Status);
             Assert.Equal(0, task.CriterionRetryCount);
             Assert.Null(goal.LatestAcceptanceFailure);
+        }
+        finally
+        {
+            TryDeleteDirectory(attemptRoot);
+        }
+    }
+
+    [Xunit.Fact(DisplayName = "BatchLoop_mixed_environmental_and_candidate_failures_remain_candidate_failure")]
+    public void BatchLoopMixedEnvironmentalAndCandidateFailuresRemainCandidateFailure()
+    {
+        var kernel = new AgentOrchestratorKernel();
+        var goal = CreateVerifiedSimpleGoal(kernel, "Update src/Mcg.AgentOrchestrator.App/Orchestration/MixedFailure.cs");
+        var task = goal.Tasks.Single();
+        var attemptRoot = CreateTempDirectory("mcg-conductor-acceptance-attempts");
+        var interference = new AcceptanceCheckResult(
+            "infrastructure tests: Remainder",
+            false,
+            1,
+            "classification: gate-environment-interference",
+            FailureClassification: AcceptanceFailureClassifications.GateEnvironmentInterference);
+        var candidateFailure = new AcceptanceCheckResult(
+            "candidate tests: MixedFailureTests",
+            false,
+            1,
+            "MixedFailureTests.CandidateRegression failed");
+        var driver = MakeDriver(
+            getFacts: _ => new GoalLifecycleFacts(WorkspaceExists: true),
+            runAcceptanceWithSlot: (_, _) => new AcceptanceVerificationSummary(
+                false,
+                [interference, candidateFailure]),
+            getLandingFileScopes: _ => ["src/Mcg.AgentOrchestrator.App/Orchestration/MixedFailure.cs"],
+            parallelAcceptanceAttemptCoordinator: new ConductorParallelAcceptanceAttemptCoordinator(
+                attemptRoot,
+                runInline: true));
+        var policy = ConductorAutonomyPolicy.Conservative with { MaxCriterionRetries = 0 };
+
+        try
+        {
+            var summary = new ConductorBatchLoop().Run(
+                kernel,
+                driver,
+                policy,
+                NoStopPath(),
+                maxIterations: 1);
+
+            Assert.Equal(0, summary.Held);
+            Assert.Equal(1, summary.Escalated);
+            Assert.Equal(GoalStatus.AcceptanceFailed, goal.Status);
+            Assert.Equal(WorkTaskStatus.Completed, task.Status);
+            Assert.Equal(0, task.CriterionRetryCount);
+            Assert.NotNull(goal.LatestAcceptanceFailure);
+            Assert.Contains("candidate tests: MixedFailureTests", goal.LatestAcceptanceFailure!.FailedChecks);
+        }
+        finally
+        {
+            TryDeleteDirectory(attemptRoot);
+        }
+    }
+
+    [Xunit.Fact(DisplayName = "BatchLoop_inherited_apparatus_restores_Verified_for_regate")]
+    public void BatchLoopInheritedApparatusRestoresVerifiedForRegate()
+    {
+        var kernel = new AgentOrchestratorKernel();
+        var goal = CreateVerifiedSimpleGoal(kernel, "Update src/Mcg.AgentOrchestrator.App/Orchestration/InheritedRegate.cs");
+        var task = goal.Tasks.Single();
+        var attemptRoot = CreateTempDirectory("mcg-conductor-acceptance-attempts");
+        var interference = new AcceptanceCheckResult(
+            "infrastructure tests: Remainder",
+            false,
+            1,
+            "classification: inherited-baseline-apparatus",
+            FailureClassification: AcceptanceFailureClassifications.InheritedBaselineApparatus);
+        var driver = MakeDriver(
+            getFacts: _ => new GoalLifecycleFacts(WorkspaceExists: true),
+            runAcceptanceWithSlot: (_, _) => new AcceptanceVerificationSummary(false, [interference]),
+            getLandingFileScopes: _ => ["src/Mcg.AgentOrchestrator.App/Orchestration/InheritedRegate.cs"],
+            parallelAcceptanceAttemptCoordinator: new ConductorParallelAcceptanceAttemptCoordinator(
+                attemptRoot,
+                runInline: true));
+
+        try
+        {
+            var summary = new ConductorBatchLoop().Run(
+                kernel,
+                driver,
+                ConductorAutonomyPolicy.Conservative,
+                NoStopPath(),
+                maxIterations: 1);
+
+            Assert.Equal(1, summary.Held);
+            Assert.Equal(GoalStatus.Verified, goal.Status);
+            Assert.Equal(WorkTaskStatus.Completed, task.Status);
+            Assert.Equal(0, task.CriterionRetryCount);
+            Assert.Null(goal.LatestAcceptanceFailure);
+        }
+        finally
+        {
+            TryDeleteDirectory(attemptRoot);
+        }
+    }
+
+    [Xunit.Fact(DisplayName = "BatchLoop_introduced_typed_apparatus_restores_Verified_for_regate")]
+    public void BatchLoopIntroducedTypedApparatusRestoresVerifiedForRegate()
+    {
+        var kernel = new AgentOrchestratorKernel();
+        var goal = CreateVerifiedSimpleGoal(kernel, "Update src/Mcg.AgentOrchestrator.App/Orchestration/IntroducedRegate.cs");
+        var task = goal.Tasks.Single();
+        var attemptRoot = CreateTempDirectory("mcg-conductor-acceptance-attempts");
+        var acceptanceRuns = 0;
+        var apparatus = new AcceptanceCheckResult(
+            "infrastructure tests: Remainder",
+            false,
+            1,
+            "classification: seeded-repository-process-output-apparatus",
+            FailureClassification: AcceptanceFailureClassifications.SeededRepositoryProcessOutputApparatus);
+        var acceptance = new AcceptanceVerificationSummary(
+            false,
+            [apparatus],
+            FailedChecks: [apparatus.Name],
+            CheckAttributions:
+            [
+                new AcceptanceCheckAttribution(
+                    apparatus.Name,
+                    AcceptanceFailureOrigin.Introduced,
+                    "first observed typed apparatus receipt",
+                    AcceptanceFailureCause.EnvironmentalApparatus)
+            ]);
+        var driver = MakeDriver(
+            getFacts: _ => new GoalLifecycleFacts(WorkspaceExists: true),
+            runAcceptanceWithSlot: (_, _) =>
+            {
+                acceptanceRuns++;
+                return acceptance;
+            },
+            getLandingFileScopes: _ => ["src/Mcg.AgentOrchestrator.App/Orchestration/IntroducedRegate.cs"],
+            recordAcceptanceFailure: (heldGoal, checks, branch, main, attributions, attestation) =>
+                kernel.RecordAcceptanceFailure(
+                    heldGoal.Id,
+                    checks,
+                    branch,
+                    main,
+                    attributions,
+                    attestation),
+            resolveAcceptanceHeads: _ => ("candidate-a", "main-a"),
+            parallelAcceptanceAttemptCoordinator: new ConductorParallelAcceptanceAttemptCoordinator(
+                attemptRoot,
+                runInline: true));
+
+        try
+        {
+            var summary = new ConductorBatchLoop().Run(
+                kernel,
+                driver,
+                ConductorAutonomyPolicy.Conservative,
+                NoStopPath(),
+                maxIterations: 2);
+
+            Assert.Equal(1, summary.Held);
+            Assert.Equal(1, acceptanceRuns);
+            Assert.Equal(GoalStatus.Verified, goal.Status);
+            Assert.Equal(WorkTaskStatus.Completed, task.Status);
+            Assert.Equal(0, task.CriterionRetryCount);
+            Assert.True(goal.LatestAcceptanceFailure?.IsEnvironmentalApparatus);
+            Assert.Equal("Verified", goal.CurrentHold?.State);
         }
         finally
         {

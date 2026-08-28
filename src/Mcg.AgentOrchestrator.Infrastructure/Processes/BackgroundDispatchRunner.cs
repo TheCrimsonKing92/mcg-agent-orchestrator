@@ -1822,8 +1822,7 @@ public sealed class BackgroundDispatchRunner
             if (!result.Succeeded)
                 return null;
 
-            var normalized = result.Output.Replace("\r\n", "\n", StringComparison.Ordinal).Replace('\r', '\n');
-            return Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(normalized))).ToLowerInvariant();
+            return DispatchWorktreeCommitter.ComputeDirtyStateHash(result.Output);
         }
         catch
         {
@@ -2032,10 +2031,7 @@ public sealed class BackgroundDispatchRunner
         }
     }
 
-    public TaskProcessRecord CancelLatestProcess(
-        AgentOrchestratorKernel kernel,
-        GoalId goalId,
-        TaskId taskId) =>
+    public TaskProcessRecord CancelLatestProcess(AgentOrchestratorKernel kernel, GoalId goalId, TaskId taskId) =>
         CancelLatestProcess(kernel, goalId, taskId, cancelledByConductor: false);
 
     private TaskProcessRecord CancelLatestProcess(
@@ -2086,7 +2082,9 @@ public sealed class BackgroundDispatchRunner
             WasCancelledByConductor = cancelledByConductor
         };
 
-        kernel.RecordTaskProcessCancelled(goalId, taskId, cancelled);
+        var candidateEvidence = CancellationCandidateEvidenceClassifier.Classify(
+            task, processRecord, goalId, _worktreeCommitter);
+        kernel.RecordTaskProcessCancelled(goalId, taskId, cancelled, candidateEvidence);
         if (resourceAccounting is not null)
         {
             kernel.RecordTaskNote(goalId, taskId, FormatResourceReceipt(goalId, taskId, resourceAccounting));

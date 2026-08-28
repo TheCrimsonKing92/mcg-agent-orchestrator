@@ -141,6 +141,59 @@ public sealed class ConductorBatchLoopVerificationReconcileTests
         Assert.Equal(2, heldTicks);
     }
 
+    [Xunit.Fact]
+    public void BatchLoopCancelledUnchangedRetryDoesNotReplayDownstream()
+    {
+        var kernel = new AgentOrchestratorKernel();
+        var goal = kernel.CreateGoal(
+            "Keep verified downstream rounds after unchanged cancellation",
+            [
+                new TaskSpec(TaskId.New(), "Implement", AgentRole.Developer),
+                new TaskSpec(TaskId.New(), "Test", AgentRole.Tester),
+                new TaskSpec(TaskId.New(), "Review", AgentRole.Reviewer)
+            ]);
+        kernel.ActivateGoal(goal.Id, DefaultAgents());
+        var developer = goal.Tasks.Single(task => task.RequiredRole == AgentRole.Developer);
+        var tester = goal.Tasks.Single(task => task.RequiredRole == AgentRole.Tester);
+        var reviewer = goal.Tasks.Single(task => task.RequiredRole == AgentRole.Reviewer);
+        CompleteCandidate(kernel, goal, developer, "aaa111");
+        CompleteCandidate(kernel, goal, tester, "aaa111");
+        CompleteCandidate(kernel, goal, reviewer, "aaa111");
+        kernel.RetryTask(goal.Id, developer.Id, "Inspect unchanged candidate.");
+        kernel.RecordTaskDispatch(
+            goal.Id,
+            developer.Id,
+            new TaskDispatchRecord(
+                "codex-cli", "retry", "C:\\work", DateTimeOffset.UtcNow,
+                BaseCommit: "aaa111", WorktreeHeadSha: "aaa111", DirtyStateHash: "empty-status-hash"));
+        var process = new TaskProcessRecord(
+            999999, "retry", "C:\\work", "out.log", "err.log", "exit.txt", DateTimeOffset.UtcNow, null, null);
+        kernel.RecordTaskProcessStarted(goal.Id, developer.Id, process);
+        kernel.RecordTaskProcessCancelled(
+            goal.Id,
+            developer.Id,
+            process with { CompletedAt = DateTimeOffset.UtcNow, WasCancelled = true },
+            CancellationCandidateEvidence.ConfirmedUnchanged("aaa111", "head=aaa111; worktree=clean; commits_after_dispatch=0"));
+        var downstreamRetryEvents = goal.Timeline.Count(evt =>
+            evt.Kind == ProgressKind.TaskRetried &&
+            evt.TaskId is { } taskId &&
+            (taskId == tester.Id || taskId == reviewer.Id));
+
+        new ConductorBatchLoop().Run(
+            kernel,
+            MakeDriver(),
+            ConductorAutonomyPolicy.Conservative,
+            NoStopPath(),
+            maxIterations: 1);
+
+        Assert.Equal(WorkTaskStatus.Completed, tester.Status);
+        Assert.Equal(WorkTaskStatus.Completed, reviewer.Status);
+        Assert.Equal(downstreamRetryEvents, goal.Timeline.Count(evt =>
+            evt.Kind == ProgressKind.TaskRetried &&
+            evt.TaskId is { } taskId &&
+            (taskId == tester.Id || taskId == reviewer.Id)));
+    }
+
     [Xunit.Fact(DisplayName = "Tick_merge_reconciles_verified_status_from_stored_row_when_snapshot_is_stale")]
     public async Task TickMergeReconcilesVerifiedStatusFromStoredRowWhenSnapshotIsStale()
     {
@@ -208,5 +261,25 @@ public sealed class ConductorBatchLoopVerificationReconcileTests
             NoStopPath(),
             maxIterations: 1,
             persistGoalTick: PersistGoalTick);
+    }
+
+    private static void CompleteCandidate(
+        AgentOrchestratorKernel kernel,
+        Goal goal,
+        TaskSpec task,
+        string candidate)
+    {
+        kernel.RecordTaskDispatch(
+            goal.Id,
+            task.Id,
+            new TaskDispatchRecord(
+                task.RequiredRole.ToString(), "worker", "C:\\work", DateTimeOffset.UtcNow,
+                BaseCommit: candidate, ResultCommit: candidate));
+        kernel.RecordTaskVerification(
+            goal.Id,
+            task.Id,
+            new TaskVerificationRecord(
+                "verification", "C:\\work", 0, "passed", "", DateTimeOffset.UtcNow,
+                ReviewedCommit: candidate));
     }
 }

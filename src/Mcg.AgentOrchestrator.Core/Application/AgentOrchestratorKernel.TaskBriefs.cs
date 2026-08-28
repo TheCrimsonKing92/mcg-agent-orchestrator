@@ -711,7 +711,7 @@ public sealed partial class AgentOrchestratorKernel
 
     private static IReadOnlyList<string> BuildAcceptanceFailureBriefBlock(Goal goal, TaskSpec task, string? workingDirectory)
     {
-        if (goal.LatestAcceptanceFailure is not { } failure)
+        if (goal.RetainedAcceptanceFailure is not { } failure)
         {
             return [];
         }

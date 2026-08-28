@@ -71,7 +71,13 @@ public sealed class Goal
 
     public IReadOnlyList<RefinedSpecVersion> RefinedSpecVersions => _refinedSpecVersions;
 
-    public AcceptanceFailureSummary? LatestAcceptanceFailure { get; private set; }
+    private AcceptanceFailureSummary? _retainedAcceptanceFailure;
+    private bool _acceptanceFailureDeferredForRetry;
+
+    public AcceptanceFailureSummary? LatestAcceptanceFailure =>
+        _acceptanceFailureDeferredForRetry ? null : _retainedAcceptanceFailure;
+
+    public AcceptanceFailureSummary? RetainedAcceptanceFailure => _retainedAcceptanceFailure;
 
     public int AutomaticAcceptanceRetryCount { get; private set; }
 
@@ -89,7 +95,7 @@ public sealed class Goal
 
     public ProgressEvent? LatestTaskRetryAfterAcceptanceFailure(TaskId taskId)
     {
-        if (LatestAcceptanceFailure is not { } failure)
+        if (RetainedAcceptanceFailure is not { } failure)
         {
             return null;
         }
@@ -243,7 +249,7 @@ public sealed class Goal
             .Where(item => item.Length > 0)
             .Distinct(StringComparer.Ordinal)
             .ToArray();
-        LatestAcceptanceFailure = checks.Length == 0
+        _retainedAcceptanceFailure = checks.Length == 0
             ? null
             : new AcceptanceFailureSummary(
                 occurredAt,
@@ -252,9 +258,20 @@ public sealed class Goal
                 NormalizeSha(mainHeadSha),
                 checkAttributions,
                 string.IsNullOrWhiteSpace(baselineAttestation) ? null : baselineAttestation.Trim());
+        _acceptanceFailureDeferredForRetry = false;
     }
 
-    internal void ClearAcceptanceFailure() => LatestAcceptanceFailure = null;
+    internal void DeferAcceptanceFailureForRetry() =>
+        _acceptanceFailureDeferredForRetry = _retainedAcceptanceFailure is not null;
+
+    internal void RestoreAcceptanceFailureAfterRetryCancellation() =>
+        _acceptanceFailureDeferredForRetry = false;
+
+    internal void ClearAcceptanceFailure()
+    {
+        _retainedAcceptanceFailure = null;
+        _acceptanceFailureDeferredForRetry = false;
+    }
 
     internal void IncrementAutomaticAcceptanceRetryCount() => AutomaticAcceptanceRetryCount++;
 
@@ -449,15 +466,15 @@ public sealed class Goal
             _dependsOn.Count > 0 ? _dependsOn.Select(id => id.Value).ToList() : null,
             SourceBacklogItemId,
             RefinedSpec is null ? null : ToRefinedSpecSnapshot(RefinedSpec),
-            LatestAcceptanceFailure is null
+            RetainedAcceptanceFailure is null
                 ? null
                 : new AcceptanceFailureSnapshot(
-                    LatestAcceptanceFailure.OccurredAt,
-                    LatestAcceptanceFailure.FailedChecks.ToList(),
-                    LatestAcceptanceFailure.BranchHeadSha,
-                    LatestAcceptanceFailure.MainHeadSha,
-                    LatestAcceptanceFailure.CheckAttributions?.ToList(),
-                    LatestAcceptanceFailure.BaselineAttestation),
+                    RetainedAcceptanceFailure.OccurredAt,
+                    RetainedAcceptanceFailure.FailedChecks.ToList(),
+                    RetainedAcceptanceFailure.BranchHeadSha,
+                    RetainedAcceptanceFailure.MainHeadSha,
+                    RetainedAcceptanceFailure.CheckAttributions?.ToList(),
+                    RetainedAcceptanceFailure.BaselineAttestation),
             _effectiveAcceptanceCriteriaCorrections.Count == 0
                 ? null
                 : _effectiveAcceptanceCriteriaCorrections.Select(correction => new EffectiveAcceptanceCriteriaCorrectionSnapshot(
@@ -490,7 +507,8 @@ public sealed class Goal
                     version.SupersededByVersion))
                 .ToArray(),
             SourceBacklogCoverage: SourceBacklogCoverage,
-            SliceBatchParentId: SliceBatchParentId?.Value);
+            SliceBatchParentId: SliceBatchParentId?.Value,
+            AcceptanceFailureDeferredForRetry: _acceptanceFailureDeferredForRetry);
     }
 
     internal static Goal FromSnapshot(GoalSnapshot snapshot)
@@ -566,6 +584,15 @@ public sealed class Goal
                 failure.MainHeadSha,
                 failure.CheckAttributions,
                 failure.BaselineAttestation);
+            var acceptanceFailureDeferredForRetry = snapshot.AcceptanceFailureDeferredForRetry ??
+                (snapshot.Status == GoalStatus.Active &&
+                 goal.Tasks.Any(task =>
+                     task.LatestRetryAt is not null &&
+                     task.Status is WorkTaskStatus.Pending or WorkTaskStatus.Assigned or WorkTaskStatus.Running));
+            if (acceptanceFailureDeferredForRetry)
+            {
+                goal.DeferAcceptanceFailureForRetry();
+            }
         }
 
         foreach (var correction in snapshot.EffectiveAcceptanceCriteriaCorrections ?? [])
@@ -755,10 +782,18 @@ public enum AcceptanceFailureOrigin
     Unattributed
 }
 
+public enum AcceptanceFailureCause
+{
+    NotClassified,
+    EnvironmentalApparatus,
+    FixturePublication
+}
+
 public sealed record AcceptanceCheckAttribution(
     string CheckName,
     AcceptanceFailureOrigin Origin,
-    string Evidence);
+    string Evidence,
+    AcceptanceFailureCause Cause = AcceptanceFailureCause.NotClassified);
 
 public sealed record AcceptanceFailureSummary(
     DateTimeOffset OccurredAt,
@@ -766,4 +801,12 @@ public sealed record AcceptanceFailureSummary(
     string? BranchHeadSha = null,
     string? MainHeadSha = null,
     IReadOnlyList<AcceptanceCheckAttribution>? CheckAttributions = null,
-    string? BaselineAttestation = null);
+    string? BaselineAttestation = null)
+{
+    public bool IsEnvironmentalApparatus =>
+        FailedChecks.Count > 0 &&
+        CheckAttributions is { Count: > 0 } attributions &&
+        FailedChecks.All(check => attributions.Any(attribution =>
+            attribution.CheckName.Equals(check, StringComparison.Ordinal) &&
+            attribution.Cause == AcceptanceFailureCause.EnvironmentalApparatus));
+}

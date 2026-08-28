@@ -159,6 +159,25 @@ function Get-AutoResumeTaskArguments {
     ) -join " "
 }
 
+function Get-AutoResumeFileSha256 {
+    [CmdletBinding()]
+    param([Parameter(Mandatory)][string]$Path)
+
+    $stream = [System.IO.File]::Open(
+        $Path,
+        [System.IO.FileMode]::Open,
+        [System.IO.FileAccess]::Read,
+        [System.IO.FileShare]::ReadWrite -bor [System.IO.FileShare]::Delete)
+    $sha256 = [System.Security.Cryptography.SHA256]::Create()
+    try {
+        ([BitConverter]::ToString($sha256.ComputeHash($stream))).Replace('-', '').ToLowerInvariant()
+    }
+    finally {
+        $sha256.Dispose()
+        $stream.Dispose()
+    }
+}
+
 function Get-LauncherPayloadIdentity {
     [CmdletBinding()]
     param([Parameter(Mandatory)][string]$Directory)
@@ -175,7 +194,7 @@ function Get-LauncherPayloadIdentity {
     $manifestLines = foreach ($file in $files) {
         $directoryPrefix = [System.IO.Path]::GetFullPath($Directory).TrimEnd([System.IO.Path]::DirectorySeparatorChar) + [System.IO.Path]::DirectorySeparatorChar
         $relative = $file.FullName.Substring($directoryPrefix.Length).Replace('\', '/')
-        $hash = (Get-FileHash -LiteralPath $file.FullName -Algorithm SHA256).Hash.ToLowerInvariant()
+        $hash = Get-AutoResumeFileSha256 -Path $file.FullName
         "$relative`:$hash"
     }
     $manifest = ($manifestLines -join "`n") + "`n"

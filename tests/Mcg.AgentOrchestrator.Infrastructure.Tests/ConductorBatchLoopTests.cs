@@ -95,6 +95,8 @@ public abstract class ConductorBatchLoopTests
             ConductorMergeTrainRunResult>? runMergeTrain = null,
         Func<Goal, string, IDisposable?>? tryAcquireEvidenceMutationLease = null,
         Func<Goal, ReconcileAcceptanceLeaseState?>? getEvidenceMutationLease = null,
+        Action<Goal, IReadOnlyList<string>, string?, string?, IReadOnlyList<AcceptanceCheckAttribution>?, string?>? recordAcceptanceFailure = null,
+        Func<Goal, (string? BranchHeadSha, string? MainHeadSha)>? resolveAcceptanceHeads = null,
         Func<DateTimeOffset>? utcNow = null) =>
         new ConductorDriver(
             getFacts ?? (_ => GoalLifecycleFacts.None),
@@ -134,6 +136,8 @@ public abstract class ConductorBatchLoopTests
             runMergeTrain: runMergeTrain,
             tryAcquireEvidenceMutationLease: tryAcquireEvidenceMutationLease,
             getEvidenceMutationLease: getEvidenceMutationLease,
+            recordAcceptanceFailureWithAttribution: recordAcceptanceFailure,
+            resolveAcceptanceHeads: resolveAcceptanceHeads,
             utcNow: utcNow);
 
     // Returns a path to a stop file that does NOT exist yet.

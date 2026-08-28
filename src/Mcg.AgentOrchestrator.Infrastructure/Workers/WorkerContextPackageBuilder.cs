@@ -19,6 +19,16 @@ public sealed class WorkerContextPackageBuilder
         _ => ContextDeliveryMode.InlineFull
     };
 
+    internal static T[] DistinctBySerializedValue<T>(IEnumerable<T> snapshots)
+    {
+        ArgumentNullException.ThrowIfNull(snapshots);
+        return snapshots
+            .DistinctBy(
+                snapshot => Convert.ToBase64String(JsonSerializer.SerializeToUtf8Bytes(snapshot)),
+                StringComparer.Ordinal)
+            .ToArray();
+    }
+
     public WorkerContextPackage Prepare(
         AgentRole targetRole,
         string contextRoot,

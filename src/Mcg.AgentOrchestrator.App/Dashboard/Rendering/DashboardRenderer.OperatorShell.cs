@@ -262,7 +262,7 @@ public static partial class DashboardRenderer
         }
 
         html.AppendLine("<li>Verify no dashboard app process remains: <code>Get-Process Mcg.AgentOrchestrator.App -ErrorAction SilentlyContinue</code>.</li>");
-        html.AppendLine("<li>Run <code>.\\scripts\\Invoke-IsolatedDotnet.ps1 test Mcg.AgentOrchestrator.sln --verbosity minimal</code>.</li>");
+        html.AppendLine("<li>Run <code>.\\scripts\\Invoke-TestSummary.ps1 -Target .\\Mcg.AgentOrchestrator.sln</code>.</li>");
         html.AppendLine($"<li>Restart with <code>{Encode(workspace.DashboardRestartCommand)}</code>.</li>");
         html.AppendLine("</ol>");
         html.AppendLine("</details>");

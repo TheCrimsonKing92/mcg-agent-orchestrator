@@ -139,20 +139,11 @@ public sealed class GoalAcceptanceVerifierDotnetBuildSlotTestsConcurrentShardSch
                 string _,
                 CancellationToken _cancellationToken)
             {
-                if (args.Length > 0 && args[0] == "dotnet")
+                if (TryWriteMtpBuildArtifacts(
+                        args,
+                        "deterministic shard fixture",
+                        "Mcg.AgentOrchestrator.Infrastructure.Tests"))
                 {
-                    if (args.Length >= 2 && args[1] == "build")
-                    {
-                        var executable = Path.Combine(
-                            GetArtifactsPath(args),
-                            "bin",
-                            "Mcg.AgentOrchestrator.Infrastructure.Tests",
-                            "debug",
-                            "Mcg.AgentOrchestrator.Infrastructure.Tests.exe");
-                        Directory.CreateDirectory(Path.GetDirectoryName(executable)!);
-                        File.WriteAllText(executable, "deterministic shard fixture");
-                    }
-
                     return Task.FromResult(new GoalAcceptanceVerifier.CommandResult(0, "Build succeeded."));
                 }
 
@@ -170,20 +161,11 @@ public sealed class GoalAcceptanceVerifierDotnetBuildSlotTestsConcurrentShardSch
                 string _,
                 CancellationToken _cancellationToken)
             {
-                if (args.Length > 0 && args[0] == "dotnet")
+                if (TryWriteMtpBuildArtifacts(
+                        args,
+                        "deterministic shard fixture",
+                        "Mcg.AgentOrchestrator.Infrastructure.Tests"))
                 {
-                    if (args.Length >= 2 && args[1] == "build")
-                    {
-                        var executable = Path.Combine(
-                            GetArtifactsPath(args),
-                            "bin",
-                            "Mcg.AgentOrchestrator.Infrastructure.Tests",
-                            "debug",
-                            "Mcg.AgentOrchestrator.Infrastructure.Tests.exe");
-                        Directory.CreateDirectory(Path.GetDirectoryName(executable)!);
-                        File.WriteAllText(executable, "deterministic shard fixture");
-                    }
-
                     return new GoalAcceptanceVerifier.CommandResult(0, "Build succeeded.");
                 }
 
@@ -467,31 +449,13 @@ public sealed class GoalAcceptanceVerifierDotnetBuildSlotTestsConcurrentShardSch
                 string _,
                 CancellationToken _cancellationToken)
             {
-                if (args.Length >= 2 && args[0] == "dotnet" && args[1] == "build")
-                {
-                    var artifactsPath = GetArtifactsPath(args);
-                    foreach (var projectName in new[]
-                    {
+                if (TryWriteMtpBuildArtifacts(
+                        args,
+                        "deterministic extracted-project fixture",
                         "Mcg.AgentOrchestrator.Infrastructure.Tests",
-                        "Mcg.AgentOrchestrator.Infrastructure.ProviderEnvironment.Tests"
-                    })
-                    {
-                        var executable = Path.Combine(
-                            artifactsPath,
-                            "bin",
-                            projectName,
-                            "debug",
-                            projectName + (OperatingSystem.IsWindows() ? ".exe" : string.Empty));
-                        Directory.CreateDirectory(Path.GetDirectoryName(executable)!);
-                        File.WriteAllText(executable, "deterministic extracted-project fixture");
-                    }
-
-                    return Task.FromResult(new GoalAcceptanceVerifier.CommandResult(0, "Build succeeded."));
-                }
-
-                if (args.Length > 0 && args[0] == "dotnet")
+                        "Mcg.AgentOrchestrator.Infrastructure.ProviderEnvironment.Tests"))
                 {
-                    return Task.FromResult(new GoalAcceptanceVerifier.CommandResult(0, ""));
+                    return Task.FromResult(new GoalAcceptanceVerifier.CommandResult(0, "Build succeeded."));
                 }
 
                 WriteMtpTrx(args);
@@ -606,20 +570,11 @@ public sealed class GoalAcceptanceVerifierDotnetBuildSlotTestsConcurrentShardSch
                 string _,
                 CancellationToken _cancellationToken)
             {
-                if (args.Length > 0 && args[0] == "dotnet")
+                if (TryWriteMtpBuildArtifacts(
+                        args,
+                        "deterministic shard fixture",
+                        "Mcg.AgentOrchestrator.Infrastructure.Tests"))
                 {
-                    if (args.Length >= 2 && args[1] == "build")
-                    {
-                        var executable = Path.Combine(
-                            GetArtifactsPath(args),
-                            "bin",
-                            "Mcg.AgentOrchestrator.Infrastructure.Tests",
-                            "debug",
-                            "Mcg.AgentOrchestrator.Infrastructure.Tests.exe");
-                        Directory.CreateDirectory(Path.GetDirectoryName(executable)!);
-                        File.WriteAllText(executable, "deterministic shard fixture");
-                    }
-
                     return new GoalAcceptanceVerifier.CommandResult(0, "Build succeeded.");
                 }
 
@@ -785,20 +740,11 @@ public sealed class GoalAcceptanceVerifierDotnetBuildSlotTestsConcurrentShardSch
                 string _,
                 CancellationToken _cancellationToken)
             {
-                if (args.Length > 0 && args[0] == "dotnet")
+                if (TryWriteMtpBuildArtifacts(
+                        args,
+                        "deterministic shard fixture",
+                        "Mcg.AgentOrchestrator.Infrastructure.Tests"))
                 {
-                    if (args.Length >= 2 && args[1] == "build")
-                    {
-                        var executable = Path.Combine(
-                            GetArtifactsPath(args),
-                            "bin",
-                            "Mcg.AgentOrchestrator.Infrastructure.Tests",
-                            "debug",
-                            "Mcg.AgentOrchestrator.Infrastructure.Tests.exe");
-                        Directory.CreateDirectory(Path.GetDirectoryName(executable)!);
-                        File.WriteAllText(executable, "deterministic shard fixture");
-                    }
-
                     return new GoalAcceptanceVerifier.CommandResult(0, "Build succeeded.");
                 }
 
@@ -944,20 +890,11 @@ public sealed class GoalAcceptanceVerifierDotnetBuildSlotTestsConcurrentShardSch
                 string _,
                 CancellationToken _cancellationToken)
             {
-                if (args.Length > 0 && args[0] == "dotnet")
+                if (TryWriteMtpBuildArtifacts(
+                        args,
+                        "deterministic shard fixture",
+                        "Mcg.AgentOrchestrator.Infrastructure.Tests"))
                 {
-                    if (args.Length >= 2 && args[1] == "build")
-                    {
-                        var executable = Path.Combine(
-                            GetArtifactsPath(args),
-                            "bin",
-                            "Mcg.AgentOrchestrator.Infrastructure.Tests",
-                            "debug",
-                            "Mcg.AgentOrchestrator.Infrastructure.Tests.exe");
-                        Directory.CreateDirectory(Path.GetDirectoryName(executable)!);
-                        File.WriteAllText(executable, "deterministic shard fixture");
-                    }
-
                     return new GoalAcceptanceVerifier.CommandResult(0, "Build succeeded.");
                 }
 
@@ -1090,20 +1027,11 @@ public sealed class GoalAcceptanceVerifierDotnetBuildSlotTestsConcurrentShardSch
                 string _,
                 CancellationToken _cancellationToken)
             {
-                if (args.Length > 0 && args[0] == "dotnet")
+                if (TryWriteMtpBuildArtifacts(
+                        args,
+                        "deterministic shard fixture",
+                        "Mcg.AgentOrchestrator.Infrastructure.Tests"))
                 {
-                    if (args.Length >= 2 && args[1] == "build")
-                    {
-                        var executable = Path.Combine(
-                            GetArtifactsPath(args),
-                            "bin",
-                            "Mcg.AgentOrchestrator.Infrastructure.Tests",
-                            "debug",
-                            "Mcg.AgentOrchestrator.Infrastructure.Tests.exe");
-                        Directory.CreateDirectory(Path.GetDirectoryName(executable)!);
-                        File.WriteAllText(executable, "deterministic shard fixture");
-                    }
-
                     return new GoalAcceptanceVerifier.CommandResult(0, "Build succeeded.");
                 }
 
@@ -1421,20 +1349,11 @@ public sealed class GoalAcceptanceVerifierDotnetBuildSlotTestsConcurrentShardSch
                 string _,
                 CancellationToken _cancellationToken)
             {
-                if (args.Length > 0 && args[0] == "dotnet")
+                if (TryWriteMtpBuildArtifacts(
+                        args,
+                        "deterministic shard fixture",
+                        "Mcg.AgentOrchestrator.Infrastructure.Tests"))
                 {
-                    if (args.Length >= 2 && args[1] == "build")
-                    {
-                        var executable = Path.Combine(
-                            GetArtifactsPath(args),
-                            "bin",
-                            "Mcg.AgentOrchestrator.Infrastructure.Tests",
-                            "debug",
-                            "Mcg.AgentOrchestrator.Infrastructure.Tests.exe");
-                        Directory.CreateDirectory(Path.GetDirectoryName(executable)!);
-                        File.WriteAllText(executable, "deterministic shard fixture");
-                    }
-
                     return new GoalAcceptanceVerifier.CommandResult(0, "Build succeeded.");
                 }
 
@@ -1479,6 +1398,40 @@ public sealed class GoalAcceptanceVerifierDotnetBuildSlotTestsConcurrentShardSch
             GoalAcceptanceVerifier.ResolveShardCoreBudgetForTests = null;
             ResetPartitionVerdictKeyHooks();
         }
+    }
+
+    private static bool TryWriteMtpBuildArtifacts(
+        string[] arguments,
+        string content,
+        params string[] projectNames)
+    {
+        if (arguments.Length == 0 ||
+            !arguments[0].Equals("dotnet", StringComparison.OrdinalIgnoreCase) ||
+            arguments.Length >= 2 && arguments[1].EndsWith(".dll", StringComparison.OrdinalIgnoreCase))
+        {
+            return false;
+        }
+
+        if (arguments.Length < 2 ||
+            !arguments[1].Equals("build", StringComparison.OrdinalIgnoreCase))
+        {
+            return true;
+        }
+
+        var artifactsPath = GetArtifactsPath(arguments);
+        foreach (var projectName in projectNames)
+        {
+            var outputDirectory = Path.Combine(artifactsPath, "bin", projectName, "debug");
+            Directory.CreateDirectory(outputDirectory);
+            File.WriteAllText(
+                Path.Combine(
+                    outputDirectory,
+                    projectName + (OperatingSystem.IsWindows() ? ".exe" : string.Empty)),
+                content);
+            File.WriteAllText(Path.Combine(outputDirectory, $"{projectName}.dll"), content);
+        }
+
+        return true;
     }
 
 }

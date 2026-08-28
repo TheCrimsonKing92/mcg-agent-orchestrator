@@ -5,7 +5,7 @@
     "maxConcurrentShards": 6,
     "enforceStructuralCoverage": true,
     "partitionVerdictFullRerunEveryN": 5,
-    "laneEstimateComment": "estimatedSerialSeconds values are one-decimal process-span means from acceptance receipts dated 2026-08-16 at or after 1f669450 (sample joined attempt 695e3554-0-20260816193157705-fcf6d38ae8bd4ef7b2e70518b04d80df), restricted to completed, exit-code-zero heartbeats joined by attempt id to completed TRX receipts. Full-result-count qualification is unobtainable from the recorded in-window receipts for Dotnet build slots (all 9 report 359 executed of 360 total) and Goal acceptance build slots (all 8 report 157 of 158 or 158 of 159); those two estimates retain the otherwise-qualified process-span means.",
+    "laneEstimateComment": "estimatedSerialSeconds values are one-decimal process-span means from acceptance receipts dated 2026-08-16 at or after 1f669450 (sample joined attempt 695e3554-0-20260816193157705-fcf6d38ae8bd4ef7b2e70518b04d80df), restricted to completed, exit-code-zero heartbeats joined by attempt id to completed TRX receipts. Full-result-count qualification is unobtainable from the recorded in-window receipts for Dotnet build slots (all 9 report 359 executed of 360 total) and Goal acceptance build slots (all 8 report 157 of 158 or 158 of 159); those two estimates retain the otherwise-qualified process-span means. Mtp managed project rebuild uses the 74.8-second elapsed time from focused receipt focused-20260828T043342070-5feea20d after conversion to managed assembly execution.",
     "timeouts": {
       "defaultMinutes": 40,
       "buildServerShutdownMinutes": 5,
@@ -63,14 +63,14 @@
       },
       {
         "name": "Process spawning",
-        "filter": "FullyQualifiedName~GoalWorktreeIsolatedDotnetTests|FullyQualifiedName~ConductorSelfRelaunchTests|FullyQualifiedName~ConductorSuccessorSelfCheckTests|FullyQualifiedName~DispatchProcessHostTests|FullyQualifiedName~DisposableTrialRootTests|FullyQualifiedName~DisposableTrialRootNegativeControlTests|FullyQualifiedName~LauncherScriptTests|(FullyQualifiedName~MtpTestRunnerScriptTests&FullyQualifiedName!~MtpTestRunnerScriptTestsOneStepProjectRebuild)|FullyQualifiedName~ProcessTreeGuiSuppressionTests",
+        "filter": "FullyQualifiedName~GoalWorktreeIsolatedDotnetTests|FullyQualifiedName~ConductorSelfRelaunchTests|FullyQualifiedName~ConductorSuccessorSelfCheckTests|FullyQualifiedName~DispatchProcessHostTests|FullyQualifiedName~DisposableTrialRootTests|FullyQualifiedName~DisposableTrialRootNegativeControlTests|FullyQualifiedName~LauncherScriptTests|(FullyQualifiedName~MtpTestRunnerScriptTests&FullyQualifiedName!~MtpTestRunnerScriptTestsManagedProjectRebuild)|FullyQualifiedName~ProcessTreeGuiSuppressionTests",
         "estimatedSerialSeconds": 327.7,
         "exclusiveResourceKeys": [ "xunit:ProcessSpawning" ]
       },
       {
-        "name": "Mtp one-step project rebuild",
-        "filter": "FullyQualifiedName~MtpTestRunnerScriptTestsOneStepProjectRebuild",
-        "estimatedSerialSeconds": 1065.0,
+        "name": "Mtp managed project rebuild",
+        "filter": "FullyQualifiedName~MtpTestRunnerScriptTestsManagedProjectRebuild",
+        "estimatedSerialSeconds": 74.8,
         "exclusiveResourceKeys": [ "xunit:ProcessSpawning" ],
         "requiresBuildSystemChange": true
       },
@@ -141,7 +141,7 @@
       {
         "name": "Conductor",
         "description": "Conductor watch, build-slot, and process-spawning coverage.",
-        "laneNames": [ "Conduct watch sweep scoping", "Dotnet build slots", "Process spawning", "Mtp one-step project rebuild", "Process spawning parallel" ]
+        "laneNames": [ "Conduct watch sweep scoping", "Dotnet build slots", "Process spawning", "Mtp managed project rebuild", "Process spawning parallel" ]
       },
       {
         "name": "ChaosGate",

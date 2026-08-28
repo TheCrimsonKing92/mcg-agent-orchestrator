@@ -2,6 +2,8 @@
 // hermetic environment. No verdict observes a shared temp root, process list, clock, or schedule.
 public sealed class WorkerDispatchTestsSeededRepositoryFactoryTests
 {
+    public static bool IsWindows => OperatingSystem.IsWindows();
+
     [Xunit.Fact]
     public void Create_MultipleCopies_ProducesIndependentCommittedRepositories()
     {
@@ -40,6 +42,34 @@ public sealed class WorkerDispatchTestsSeededRepositoryFactoryTests
     }
 
     [Xunit.Fact]
+    public void Create_RequiredStdoutSuccess_RetainsTypedReceipt()
+    {
+        using var scope = new FactoryScope();
+
+        var created = scope.Factory.Create();
+
+        var receipt = Xunit.Assert.Single(
+            created.ProbeReceipts,
+            candidate => candidate.Check ==
+                WorkerDispatchTestsSeededRepositoryFactory.ValidationCheck.PublishedHeadCommit);
+        Xunit.Assert.Equal(
+            WorkerDispatchTestsSeededRepositoryFactory.GitProbeClassification.Success,
+            receipt.Classification);
+        Xunit.Assert.Equal(0, receipt.ExitCode);
+        Xunit.Assert.False(string.IsNullOrWhiteSpace(receipt.StandardOutput));
+        Xunit.Assert.True(receipt.StandardOutputByteCount > 0);
+        Xunit.Assert.Equal(0, receipt.StandardErrorByteCount);
+        Xunit.Assert.Equal(created.FixtureAttemptId, receipt.FixtureAttemptId);
+        if (OperatingSystem.IsWindows())
+        {
+            Xunit.Assert.Contains(
+                "capture=owned-file-handles",
+                receipt.EnvironmentContract,
+                StringComparison.Ordinal);
+        }
+    }
+
+    [Xunit.Fact]
     public void Create_MissingTemplateMetadata_ReportsTemplateCheck()
     {
         string? invalidatedTemplate = null;
@@ -61,6 +91,27 @@ public sealed class WorkerDispatchTestsSeededRepositoryFactoryTests
         Xunit.Assert.False(failure.Diagnostic.FileSystem.GitMetadataDirectoryExists);
         Xunit.Assert.False(failure.Diagnostic.Git.ProcessStarted);
         Xunit.Assert.True(Directory.Exists(failure.Diagnostic.SourceTemplatePath));
+    }
+
+    [Xunit.Fact]
+    public void Create_MetadataRemovedAfterCopy_RetainsPriorProbeReceipts()
+    {
+        using var scope = new FactoryScope(new WorkerDispatchTestsSeededRepositoryFactory.CreationHooks(
+            AfterCopy: (template, _) =>
+                WorkerDispatchTestsSeededRepositoryFactory.DeleteOwnedDirectory(Path.Combine(template, ".git"))));
+
+        var failure = Xunit.Assert.Throws<
+            WorkerDispatchTestsSeededRepositoryFactory.SeededRepositoryFailureException>(
+                () => scope.Factory.Create());
+
+        Xunit.Assert.Equal(
+            WorkerDispatchTestsSeededRepositoryFactory.ValidationCheck.TemplateAfterCopyMetadata,
+            failure.Diagnostic.Check);
+        Xunit.Assert.NotEmpty(failure.Diagnostic.ProbeReceipts!);
+        Xunit.Assert.Contains(
+            failure.Diagnostic.ProbeReceipts!,
+            receipt => receipt.Check ==
+                WorkerDispatchTestsSeededRepositoryFactory.ValidationCheck.TemplateStatus);
     }
 
     [Xunit.Fact]
@@ -93,10 +144,79 @@ public sealed class WorkerDispatchTestsSeededRepositoryFactoryTests
         Xunit.Assert.False(failure.Diagnostic.Git.DrainFailed);
     }
 
+    [Xunit.Fact]
+    public void Create_TemplateIdentityMismatch_RetainsOrderedValidationReceipts()
+    {
+        using var scope = new FactoryScope(new WorkerDispatchTestsSeededRepositoryFactory.CreationHooks(
+            BeforeTemplateValidation: template =>
+            {
+                File.WriteAllText(Path.Combine(template, "identity-change.txt"), "changed");
+                WorkerDispatchTestsSeededRepositoryFactory.RunFixtureGit(
+                    template,
+                    ["add", "-A"],
+                    DateTimeOffset.Parse("2026-01-02T00:00:00Z"));
+                WorkerDispatchTestsSeededRepositoryFactory.RunFixtureGit(
+                    template,
+                    ["commit", "-m", "Change identity"],
+                    DateTimeOffset.Parse("2026-01-02T00:00:00Z"));
+            }));
+
+        var failure = Xunit.Assert.Throws<
+            WorkerDispatchTestsSeededRepositoryFactory.SeededRepositoryFailureException>(
+                () => scope.Factory.Create());
+
+        Xunit.Assert.Equal(
+            WorkerDispatchTestsSeededRepositoryFactory.ValidationCheck.TemplateIdentityChanged,
+            failure.Diagnostic.Check);
+        Xunit.Assert.NotEmpty(failure.Diagnostic.ProbeReceipts!);
+        Xunit.Assert.Contains(
+            failure.Diagnostic.ProbeReceipts!,
+            receipt => receipt.Check ==
+                WorkerDispatchTestsSeededRepositoryFactory.ValidationCheck.TemplateHeadCommit);
+        Xunit.Assert.Equal(
+            Enumerable.Range(1, failure.Diagnostic.ProbeReceipts!.Count),
+            failure.Diagnostic.ProbeReceipts!.Select(receipt => receipt.ProbeOrdinal));
+    }
+
+    [Xunit.Fact]
+    public void Create_StagingHeadMismatch_RetainsOrderedValidationReceipts()
+    {
+        using var scope = new FactoryScope(new WorkerDispatchTestsSeededRepositoryFactory.CreationHooks(
+            AfterCopy: (_, staging) =>
+            {
+                File.WriteAllText(Path.Combine(staging, "staging-change.txt"), "changed");
+                WorkerDispatchTestsSeededRepositoryFactory.RunFixtureGit(
+                    staging,
+                    ["add", "-A"],
+                    DateTimeOffset.Parse("2026-01-03T00:00:00Z"));
+                WorkerDispatchTestsSeededRepositoryFactory.RunFixtureGit(
+                    staging,
+                    ["commit", "-m", "Change staging head"],
+                    DateTimeOffset.Parse("2026-01-03T00:00:00Z"));
+            }));
+
+        var failure = Xunit.Assert.Throws<
+            WorkerDispatchTestsSeededRepositoryFactory.SeededRepositoryFailureException>(
+                () => scope.Factory.Create());
+
+        Xunit.Assert.Equal(
+            WorkerDispatchTestsSeededRepositoryFactory.ValidationCheck.StagingHeadMatchesTemplate,
+            failure.Diagnostic.Check);
+        Xunit.Assert.NotEmpty(failure.Diagnostic.ProbeReceipts!);
+        Xunit.Assert.Contains(
+            failure.Diagnostic.ProbeReceipts!,
+            receipt => receipt.Check ==
+                WorkerDispatchTestsSeededRepositoryFactory.ValidationCheck.StagingHeadCommit);
+        Xunit.Assert.Equal(
+            Enumerable.Range(1, failure.Diagnostic.ProbeReceipts!.Count),
+            failure.Diagnostic.ProbeReceipts!.Select(receipt => receipt.ProbeOrdinal));
+    }
+
     [Xunit.Theory]
     [Xunit.InlineData("timeout")]
     [Xunit.InlineData("drain-timeout")]
     [Xunit.InlineData("drain-failure")]
+    [Xunit.InlineData("nonzero-stderr")]
     [Xunit.InlineData("malformed-output")]
     public void Create_GitProbeDecisionTable_ReportsTypedTemplateHeadCheck(string scenario)
     {
@@ -105,6 +225,13 @@ public sealed class WorkerDispatchTestsSeededRepositoryFactoryTests
             "timeout" => result with { ExitCode = null, TimedOut = true },
             "drain-timeout" => result with { DrainTimedOut = true },
             "drain-failure" => result with { DrainFailed = true, StandardError = "controlled drain failure" },
+            "nonzero-stderr" => result with
+            {
+                ExitCode = 7,
+                StandardError = "controlled git stderr",
+                StandardErrorByteCount = 21,
+                Classification = WorkerDispatchTestsSeededRepositoryFactory.GitProbeClassification.NonZeroExit
+            },
             "malformed-output" => result with { StandardOutput = "not-a-commit\n" },
             _ => throw new InvalidOperationException($"Unknown scenario: {scenario}")
         });
@@ -132,11 +259,239 @@ public sealed class WorkerDispatchTestsSeededRepositoryFactoryTests
                 Xunit.Assert.True(failure.Diagnostic.Git.DrainFailed);
                 Xunit.Assert.Contains("controlled drain failure", failure.Diagnostic.Git.StandardError);
                 break;
+            case "nonzero-stderr":
+                Xunit.Assert.Equal(7, failure.Diagnostic.Git.ExitCode);
+                Xunit.Assert.Equal(
+                    WorkerDispatchTestsSeededRepositoryFactory.GitProbeClassification.NonZeroExit,
+                    failure.Diagnostic.Git.Classification);
+                Xunit.Assert.Equal("controlled git stderr", failure.Diagnostic.Git.StandardError);
+                Xunit.Assert.Equal(21, failure.Diagnostic.Git.StandardErrorByteCount);
+                break;
             case "malformed-output":
                 Xunit.Assert.Equal(0, failure.Diagnostic.Git.ExitCode);
                 Xunit.Assert.Equal("not-a-commit\n", failure.Diagnostic.Git.StandardOutput);
                 break;
         }
+    }
+
+    [Xunit.Fact]
+    public void Create_EmptyTopLevelOutput_RetainsTypedApparatusReceiptAndValidHeadBytes()
+    {
+        var runner = new InterceptingGitRunner(
+            arguments => arguments.SequenceEqual(["rev-parse", "--show-toplevel"]),
+            (_, _, result) => result with
+            {
+                StandardOutput = string.Empty,
+                StandardOutputByteCount = 0
+            });
+        using var scope = new FactoryScope(gitRunner: runner);
+
+        var failure = Xunit.Assert.Throws<
+            WorkerDispatchTestsSeededRepositoryFactory.SeededRepositoryFailureException>(
+                () => scope.Factory.Create());
+
+        Xunit.Assert.Equal(
+            WorkerDispatchTestsSeededRepositoryFactory.ValidationCheck.TemplateTopLevel,
+            failure.Diagnostic.Check);
+        Xunit.Assert.Equal(
+            WorkerDispatchTestsSeededRepositoryFactory.GitProbeClassification.EmptyRequiredOutput,
+            failure.Diagnostic.Git.Classification);
+        Xunit.Assert.Equal(
+            WorkerDispatchTestsSeededRepositoryFactory.ValidationFailureOwner.ProcessOutputApparatus,
+            failure.Diagnostic.Owner);
+        Xunit.Assert.True(failure.Diagnostic.FileSystem.HasValidHeadBytes, failure.Message);
+        Xunit.Assert.Equal(
+            WorkerDispatchTestsSeededRepositoryFactory.RepositoryHeadState.ValidLooseReference,
+            failure.Diagnostic.FileSystem.HeadState);
+        Xunit.Assert.Equal(0, failure.Diagnostic.Git.StandardOutputByteCount);
+        Xunit.Assert.NotNull(failure.Diagnostic.Git.ChildProcessId);
+        Xunit.Assert.NotNull(failure.Diagnostic.Git.ChildStartedAt);
+        Xunit.Assert.NotEqual("not-assigned", failure.Diagnostic.Git.FixtureAttemptId);
+        Xunit.Assert.True(failure.Diagnostic.Git.ProbeOrdinal > 0);
+        Xunit.Assert.Contains(failure.Diagnostic.Git, failure.Diagnostic.ProbeReceipts!);
+        Xunit.Assert.Contains(
+            Mcg.AgentOrchestrator.Infrastructure.AcceptanceFailureCauseReceiptCodec.Prefix,
+            failure.Message,
+            StringComparison.Ordinal);
+        Xunit.Assert.DoesNotContain("The path is empty", failure.Message, StringComparison.Ordinal);
+    }
+
+    [Xunit.Fact]
+    public void Create_EmptyTopLevelOutputWithMissingHead_RoutesFixturePublication()
+    {
+        var runner = new InterceptingGitRunner(
+            arguments => arguments.SequenceEqual(["rev-parse", "--show-toplevel"]),
+            (workingDirectory, _, result) =>
+            {
+                File.Delete(Path.Combine(workingDirectory, ".git", "HEAD"));
+                return result with
+                {
+                    StandardOutput = string.Empty,
+                    StandardOutputByteCount = 0
+                };
+            });
+        using var scope = new FactoryScope(gitRunner: runner);
+
+        var failure = Xunit.Assert.Throws<
+            WorkerDispatchTestsSeededRepositoryFactory.SeededRepositoryFailureException>(
+                () => scope.Factory.Create());
+
+        Xunit.Assert.Equal(
+            WorkerDispatchTestsSeededRepositoryFactory.ValidationFailureOwner.FixturePublication,
+            failure.Diagnostic.Owner);
+        Xunit.Assert.Equal(
+            WorkerDispatchTestsSeededRepositoryFactory.RepositoryHeadState.HeadMissing,
+            failure.Diagnostic.FileSystem.HeadState);
+        Xunit.Assert.False(failure.Diagnostic.FileSystem.HasValidHeadBytes);
+        Xunit.Assert.Equal(
+            WorkerDispatchTestsSeededRepositoryFactory.GitProbeClassification.EmptyRequiredOutput,
+            failure.Diagnostic.Git.Classification);
+    }
+
+    [Xunit.Fact]
+    public void Create_WhitespaceTopLevelOutput_IsInvalidRequiredOutputNotEmptyOutput()
+    {
+        var runner = new InterceptingGitRunner(
+            arguments => arguments.SequenceEqual(["rev-parse", "--show-toplevel"]),
+            (_, _, result) => result with
+            {
+                StandardOutput = " \r\n",
+                StandardOutputByteCount = 3
+            });
+        using var scope = new FactoryScope(gitRunner: runner);
+
+        var failure = Xunit.Assert.Throws<
+            WorkerDispatchTestsSeededRepositoryFactory.SeededRepositoryFailureException>(
+                () => scope.Factory.Create());
+
+        Xunit.Assert.Equal(
+            WorkerDispatchTestsSeededRepositoryFactory.GitProbeClassification.InvalidRequiredOutput,
+            failure.Diagnostic.Git.Classification);
+        Xunit.Assert.Equal(3, failure.Diagnostic.Git.StandardOutputByteCount);
+        Xunit.Assert.Equal(
+            WorkerDispatchTestsSeededRepositoryFactory.ValidationFailureOwner.Unknown,
+            failure.Diagnostic.Owner);
+        Xunit.Assert.DoesNotContain(
+            Mcg.AgentOrchestrator.Infrastructure.AcceptanceFailureCauseReceiptCodec.Prefix,
+            failure.Message,
+            StringComparison.Ordinal);
+    }
+
+    [Xunit.Fact]
+    public void Create_InvalidHeadBytes_RoutesFixturePublicationWithTypedState()
+    {
+        using var scope = new FactoryScope(new WorkerDispatchTestsSeededRepositoryFactory.CreationHooks(
+            BeforeTemplateValidation: template =>
+                File.WriteAllText(Path.Combine(template, ".git", "HEAD"), "not-a-head\n")));
+
+        var failure = Xunit.Assert.Throws<
+            WorkerDispatchTestsSeededRepositoryFactory.SeededRepositoryFailureException>(
+                () => scope.Factory.Create());
+
+        Xunit.Assert.Equal(
+            WorkerDispatchTestsSeededRepositoryFactory.RepositoryHeadState.HeadInvalid,
+            failure.Diagnostic.FileSystem.HeadState);
+        Xunit.Assert.Equal(
+            WorkerDispatchTestsSeededRepositoryFactory.ValidationFailureOwner.FixturePublication,
+            failure.Diagnostic.Owner);
+        Xunit.Assert.Equal(
+            WorkerDispatchTestsSeededRepositoryFactory.GitProbeClassification.NonZeroExit,
+            failure.Diagnostic.Git.Classification);
+    }
+
+    [Xunit.Fact]
+    public void Create_InvalidReferenceBytes_RoutesFixturePublicationWithTypedState()
+    {
+        using var scope = new FactoryScope(new WorkerDispatchTestsSeededRepositoryFactory.CreationHooks(
+            BeforeTemplateValidation: template =>
+            {
+                var head = File.ReadAllText(Path.Combine(template, ".git", "HEAD")).Trim();
+                var reference = head["ref: ".Length..];
+                File.WriteAllText(
+                    Path.Combine(template, ".git", reference.Replace('/', Path.DirectorySeparatorChar)),
+                    "not-an-object-id\n");
+            }));
+
+        var failure = Xunit.Assert.Throws<
+            WorkerDispatchTestsSeededRepositoryFactory.SeededRepositoryFailureException>(
+                () => scope.Factory.Create());
+
+        Xunit.Assert.Equal(
+            WorkerDispatchTestsSeededRepositoryFactory.RepositoryHeadState.ReferenceInvalid,
+            failure.Diagnostic.FileSystem.HeadState);
+        Xunit.Assert.Equal(
+            WorkerDispatchTestsSeededRepositoryFactory.ValidationFailureOwner.FixturePublication,
+            failure.Diagnostic.Owner);
+        Xunit.Assert.Equal(
+            WorkerDispatchTestsSeededRepositoryFactory.GitProbeClassification.NonZeroExit,
+            failure.Diagnostic.Git.Classification);
+        Xunit.Assert.Equal("not-an-object-id", failure.Diagnostic.FileSystem.ReferenceContent);
+    }
+
+    [Xunit.Fact]
+    public void Create_ConcurrentSiblingFailureCleanup_PreservesAttemptOwnedRepository()
+    {
+        using var bothCopiesReady = new ManualResetEventSlim(false);
+        var coordinated = 0;
+        var copyCount = 0;
+        var coordinationTimedOut = 0;
+        using var scope = new FactoryScope(new WorkerDispatchTestsSeededRepositoryFactory.CreationHooks(
+            AfterCopy: (_, staging) =>
+            {
+                if (Volatile.Read(ref coordinated) == 0)
+                {
+                    return;
+                }
+
+                var ordinal = Interlocked.Increment(ref copyCount);
+                if (ordinal == 2)
+                {
+                    bothCopiesReady.Set();
+                }
+
+                if (!bothCopiesReady.Wait(TimeSpan.FromSeconds(20)))
+                {
+                    Volatile.Write(ref coordinationTimedOut, 1);
+                    return;
+                }
+
+                if (ordinal == 1)
+                {
+                    File.Delete(Path.Combine(staging, ".git", "HEAD"));
+                }
+            }));
+        _ = scope.Factory.Create();
+        Volatile.Write(ref coordinated, 1);
+
+        var first = Task.Factory.StartNew(
+            () => CaptureCreate(scope.Factory),
+            CancellationToken.None,
+            TaskCreationOptions.LongRunning,
+            TaskScheduler.Default);
+        var second = Task.Factory.StartNew(
+            () => CaptureCreate(scope.Factory),
+            CancellationToken.None,
+            TaskCreationOptions.LongRunning,
+            TaskScheduler.Default);
+        var outcomes = Task.WhenAll(first, second).GetAwaiter().GetResult();
+        Xunit.Assert.Equal(0, Volatile.Read(ref coordinationTimedOut));
+        Xunit.Assert.Equal(2, Volatile.Read(ref copyCount));
+        var success = Xunit.Assert.Single(outcomes, outcome => outcome.Result is not null).Result!;
+        var failure = Xunit.Assert.Single(outcomes, outcome => outcome.Failure is not null).Failure!;
+
+        Xunit.Assert.NotEqual(failure.Diagnostic.FinalPath, success.PublishedIdentity.RepositoryPath);
+        Xunit.Assert.DoesNotContain(
+            failure.Diagnostic.Cleanup,
+            cleanup => string.Equals(
+                cleanup.Path,
+                success.PublishedIdentity.RepositoryPath,
+                StringComparison.OrdinalIgnoreCase));
+        Xunit.Assert.True(Directory.Exists(success.PublishedIdentity.GitDirectoryPath));
+        var head = InfrastructureTestSupport.RunGitProbe(
+            success.PublishedIdentity.RepositoryPath,
+            ["rev-parse", "--verify", "HEAD^{commit}"]);
+        Xunit.Assert.True(head.Succeeded, head.ToString());
+        Xunit.Assert.Equal(40, head.StandardOutput.Trim().Length);
     }
 
     [Xunit.Fact]
@@ -176,6 +531,83 @@ public sealed class WorkerDispatchTestsSeededRepositoryFactoryTests
         Xunit.Assert.DoesNotContain("GIT_WORK_TREE", capturedEnvironment.Keys);
         Xunit.Assert.DoesNotContain("GIT_INDEX_FILE", capturedEnvironment.Keys);
         Xunit.Assert.Equal("0", capturedEnvironment["GIT_OPTIONAL_LOCKS"]);
+    }
+
+    [Xunit.Fact(Skip = "Requires Windows executable selection semantics.", SkipUnless = nameof(IsWindows))]
+    public void RunGitProbe_CommandShimOnPath_SelectsNativeGitWithHardeningArguments()
+    {
+        using var scope = new FactoryScope();
+        var shimDirectory = Path.Combine(scope.Root, "shim");
+        var nativeDirectory = Path.Combine(scope.Root, "native");
+        Directory.CreateDirectory(shimDirectory);
+        Directory.CreateDirectory(nativeDirectory);
+        File.WriteAllText(Path.Combine(shimDirectory, "git.cmd"), "@exit /b 0");
+        var nativeGit = Path.Combine(nativeDirectory, "git.exe");
+        File.WriteAllBytes(nativeGit, []);
+
+        var inheritedEnvironment = new Dictionary<string, string?>(StringComparer.OrdinalIgnoreCase)
+        {
+            ["PATH"] = string.Join(Path.PathSeparator, shimDirectory, nativeDirectory),
+            ["PATHEXT"] = ".COM;.EXE;.BAT;.CMD",
+            ["SystemRoot"] = Environment.GetEnvironmentVariable("SystemRoot"),
+            ["WINDIR"] = Environment.GetEnvironmentVariable("WINDIR"),
+            ["COMSPEC"] = Environment.GetEnvironmentVariable("COMSPEC"),
+            ["TEMP"] = Environment.GetEnvironmentVariable("TEMP"),
+            ["TMP"] = Environment.GetEnvironmentVariable("TMP")
+        };
+
+        var result = InfrastructureTestSupport.RunGitProbe(
+            scope.Root,
+            ["rev-parse", "--show-toplevel"],
+            startProcess: _ => false,
+            inheritedEnvironment: inheritedEnvironment);
+
+        Xunit.Assert.Equal(nativeGit, result.Executable);
+        Xunit.Assert.Equal(
+            [
+                "-c", "core.fsmonitor=false",
+                "-c", "gc.auto=0",
+                "-c", "maintenance.auto=false",
+                "rev-parse", "--show-toplevel"
+            ],
+            result.Arguments);
+        Xunit.Assert.DoesNotContain("git.cmd", result.Command, StringComparison.OrdinalIgnoreCase);
+    }
+
+    [Xunit.Fact(Skip = "Requires Windows PowerShell.", SkipUnless = nameof(IsWindows))]
+    public void RunGitProbe_RawStreamByteCounts_AreNotDecodedRoundTrips()
+    {
+        using var scope = new FactoryScope();
+        var powershell = Path.Combine(
+            Environment.SystemDirectory,
+            "WindowsPowerShell",
+            "v1.0",
+            "powershell.exe");
+
+        var result = InfrastructureTestSupport.RunGitProbe(
+            scope.Root,
+            ["status", "--short"],
+            startProcess: process =>
+            {
+                process.StartInfo.FileName = powershell;
+                process.StartInfo.ArgumentList.Clear();
+                process.StartInfo.ArgumentList.Add("-NoProfile");
+                process.StartInfo.ArgumentList.Add("-NonInteractive");
+                process.StartInfo.ArgumentList.Add("-Command");
+                process.StartInfo.ArgumentList.Add(
+                    "$o=[Console]::OpenStandardOutput();$ob=[byte[]](239,187,191,65,255);" +
+                    "$o.Write($ob,0,$ob.Length);$e=[Console]::OpenStandardError();" +
+                    "$eb=[byte[]](66,255);$e.Write($eb,0,$eb.Length)");
+                return process.Start();
+            });
+
+        Xunit.Assert.Equal(0, result.ExitCode);
+        Xunit.Assert.Equal(5, result.StandardOutputByteCount);
+        Xunit.Assert.Equal(2, result.StandardErrorByteCount);
+        Xunit.Assert.Equal(
+            WorkerDispatchTestsSeededRepositoryFactory.GitProbeClassification.Success,
+            result.Classification);
+        Xunit.Assert.Equal(powershell, result.Executable);
     }
 
     [Xunit.Fact]
@@ -276,7 +708,80 @@ public sealed class WorkerDispatchTestsSeededRepositoryFactoryTests
         Xunit.Assert.False(result.DrainTimedOut);
         Xunit.Assert.False(result.TimedOut);
         Xunit.Assert.False(result.DrainFailed);
-        Xunit.Assert.Contains("git status --short", result.Command, StringComparison.Ordinal);
+        Xunit.Assert.EndsWith("git.exe", result.Executable, StringComparison.OrdinalIgnoreCase);
+        Xunit.Assert.Equal("status", result.Arguments![^2]);
+        Xunit.Assert.Equal("--short", result.Arguments[^1]);
+    }
+
+    [Xunit.Fact]
+    public void RunGitProbe_PostStartParentFault_IsNotAChildNonzeroExit()
+    {
+        using var scope = new FactoryScope();
+
+        var result = InfrastructureTestSupport.RunGitProbe(
+            scope.Root,
+            ["status", "--short"],
+            startProcess: _ => true);
+
+        Xunit.Assert.True(result.ProcessStarted);
+        Xunit.Assert.Null(result.ExitCode);
+        Xunit.Assert.Equal(
+            WorkerDispatchTestsSeededRepositoryFactory.GitProbeClassification.ProcessObservationFailure,
+            result.Classification);
+    }
+
+    [Xunit.Fact(Skip = "Requires Windows owned-file capture semantics.", SkipUnless = nameof(IsWindows))]
+    public void RunGitProbe_OwnedCaptureReadFailure_RetainsCleanChildExit()
+    {
+        using var scope = new FactoryScope();
+        var created = scope.Factory.Create();
+
+        var result = InfrastructureTestSupport.RunGitProbe(
+            created.PublishedIdentity.RepositoryPath,
+            ["status", "--short"],
+            beforeOwnedCaptureRead: (standardOutputPath, _) => File.Delete(standardOutputPath));
+
+        Xunit.Assert.True(result.ProcessStarted);
+        Xunit.Assert.Equal(0, result.ExitCode);
+        Xunit.Assert.Equal(
+            WorkerDispatchTestsSeededRepositoryFactory.GitProbeClassification.ProcessObservationFailure,
+            result.Classification);
+        Xunit.Assert.NotEmpty(result.StandardError);
+    }
+
+    [Xunit.Fact]
+    public void Create_TemplateCommitBlankFailure_DoesNotRetryOrLoseReceipt()
+    {
+        var runner = new FirstTemplateCommitFailureGitRunner();
+        using var scope = new FactoryScope(gitRunner: runner);
+
+        var failure = Xunit.Assert.Throws<
+            WorkerDispatchTestsSeededRepositoryFactory.SeededRepositoryFailureException>(
+                () => scope.Factory.Create());
+
+        Xunit.Assert.Equal(
+            WorkerDispatchTestsSeededRepositoryFactory.ValidationCheck.TemplateCommit,
+            failure.Diagnostic.Check);
+        Xunit.Assert.Equal(1, runner.CommitCalls);
+        var receipts = failure.Diagnostic.ProbeReceipts!
+            .Where(candidate => candidate.Check ==
+                WorkerDispatchTestsSeededRepositoryFactory.ValidationCheck.TemplateCommit)
+            .ToArray();
+        Xunit.Assert.Equal(3, receipts.Length);
+        Xunit.Assert.Equal(
+            Enumerable.Range(receipts[0].ProbeOrdinal, receipts.Length),
+            receipts.Select(receipt => receipt.ProbeOrdinal));
+        Xunit.Assert.Equal(
+            2,
+            receipts.Count(receipt => receipt.Arguments?.TakeLast(3).SequenceEqual(
+                ["rev-parse", "--verify", "HEAD^{commit}"]) == true));
+        var receipt = Xunit.Assert.Single(
+            receipts,
+            candidate => candidate.ExitCode == 128 &&
+                candidate.Arguments?.Contains("commit", StringComparer.Ordinal) == true);
+        Xunit.Assert.Equal(128, receipt.ExitCode);
+        Xunit.Assert.Equal(0, receipt.StandardOutputByteCount);
+        Xunit.Assert.Equal(0, receipt.StandardErrorByteCount);
     }
 
     [Xunit.Fact]
@@ -330,12 +835,48 @@ public sealed class WorkerDispatchTestsSeededRepositoryFactoryTests
             StringComparison.Ordinal);
     }
 
-    private sealed class InterceptingGitRunner(
-        Func<WorkerDispatchTestsSeededRepositoryFactory.GitProbeResult,
-            WorkerDispatchTestsSeededRepositoryFactory.GitProbeResult> transform)
-        : WorkerDispatchTestsSeededRepositoryFactory.IGitRunner
+    private static CreateOutcome CaptureCreate(WorkerDispatchTestsSeededRepositoryFactory factory)
     {
+        try
+        {
+            return new CreateOutcome(factory.Create(), null);
+        }
+        catch (WorkerDispatchTestsSeededRepositoryFactory.SeededRepositoryFailureException failure)
+        {
+            return new CreateOutcome(null, failure);
+        }
+    }
+
+    private sealed record CreateOutcome(
+        WorkerDispatchTestsSeededRepositoryFactory.CreationResult? Result,
+        WorkerDispatchTestsSeededRepositoryFactory.SeededRepositoryFailureException? Failure);
+
+    private sealed class InterceptingGitRunner : WorkerDispatchTestsSeededRepositoryFactory.IGitRunner
+    {
+        private readonly Func<IReadOnlyList<string>, bool> _shouldIntercept;
+        private readonly Func<string, IReadOnlyList<string>,
+            WorkerDispatchTestsSeededRepositoryFactory.GitProbeResult,
+            WorkerDispatchTestsSeededRepositoryFactory.GitProbeResult> _transform;
         private int _intercepted;
+
+        internal InterceptingGitRunner(
+            Func<WorkerDispatchTestsSeededRepositoryFactory.GitProbeResult,
+                WorkerDispatchTestsSeededRepositoryFactory.GitProbeResult> transform)
+            : this(
+                arguments => arguments.SequenceEqual(["rev-parse", "--verify", "HEAD^{commit}"]),
+                (_, _, result) => transform(result))
+        {
+        }
+
+        internal InterceptingGitRunner(
+            Func<IReadOnlyList<string>, bool> shouldIntercept,
+            Func<string, IReadOnlyList<string>,
+                WorkerDispatchTestsSeededRepositoryFactory.GitProbeResult,
+                WorkerDispatchTestsSeededRepositoryFactory.GitProbeResult> transform)
+        {
+            _shouldIntercept = shouldIntercept;
+            _transform = transform;
+        }
 
         public WorkerDispatchTestsSeededRepositoryFactory.GitProbeResult Run(
             string workingDirectory,
@@ -347,13 +888,51 @@ public sealed class WorkerDispatchTestsSeededRepositoryFactoryTests
                 arguments,
                 commandEnvironment);
             if (result.Succeeded &&
-                arguments.SequenceEqual(["rev-parse", "--verify", "HEAD^{commit}"]) &&
+                _shouldIntercept(arguments) &&
                 Interlocked.CompareExchange(ref _intercepted, 1, 0) == 0)
             {
-                return transform(result);
+                return _transform(workingDirectory, arguments, result);
             }
 
             return result;
+        }
+    }
+
+    private sealed class FirstTemplateCommitFailureGitRunner
+        : WorkerDispatchTestsSeededRepositoryFactory.IGitRunner
+    {
+        private int _commitCalls;
+
+        internal int CommitCalls => _commitCalls;
+
+        public WorkerDispatchTestsSeededRepositoryFactory.GitProbeResult Run(
+            string workingDirectory,
+            IReadOnlyList<string> arguments,
+            IReadOnlyDictionary<string, string>? commandEnvironment = null)
+        {
+            if (arguments.Contains("commit", StringComparer.Ordinal) &&
+                Interlocked.Increment(ref _commitCalls) == 1)
+            {
+                return new WorkerDispatchTestsSeededRepositoryFactory.GitProbeResult(
+                    $"git {string.Join(' ', arguments)}",
+                    ProcessStarted: true,
+                    ExitCode: 128,
+                    StandardOutput: string.Empty,
+                    StandardError: string.Empty,
+                    DrainTimedOut: false,
+                    TimedOut: false,
+                    RepositoryDirectory: workingDirectory,
+                    ChildProcessId: Environment.ProcessId,
+                    ChildStartedAt: DateTimeOffset.UtcNow,
+                    Arguments: arguments,
+                    Classification:
+                        WorkerDispatchTestsSeededRepositoryFactory.GitProbeClassification.NonZeroExit);
+            }
+
+            return InfrastructureTestSupport.RunGitProbe(
+                workingDirectory,
+                arguments,
+                commandEnvironment);
         }
     }
 

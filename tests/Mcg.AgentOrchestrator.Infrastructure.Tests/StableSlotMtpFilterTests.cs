@@ -32,4 +32,24 @@ public sealed class StableSlotMtpFilterTests
             expectedBuild,
             CliCommandHandlers.ShouldBuildStableSlotMtpProject(noBuild, executableExists));
     }
+
+    [Xunit.Fact(DisplayName = "Stable_slot_MTP_resolves_relative_results_against_the_workspace_root")]
+    public void RelativeResultsDirectoryUsesWorkspaceRoot()
+    {
+        var workspaceRoot = Path.Combine(Path.GetTempPath(), "stable-slot-workspace");
+        var defaultResults = Path.Combine(workspaceRoot, "artifacts", "TestResults");
+
+        Assert.Equal(
+            Path.Combine(workspaceRoot, ".scratch", "focused"),
+            CliCommandHandlers.ResolveStableSlotResultsDirectory(
+                Path.Combine(".scratch", "focused"),
+                workspaceRoot,
+                defaultResults));
+        Assert.Equal(
+            Path.GetFullPath(defaultResults),
+            CliCommandHandlers.ResolveStableSlotResultsDirectory(
+                configuredResultsDirectory: null,
+                workspaceRoot,
+                defaultResults));
+    }
 }

@@ -216,6 +216,41 @@ public static class DispatchResumeAdmission
     }
 }
 
+public enum CancellationCandidateEvidenceKind
+{
+    Indeterminate,
+    ConfirmedUnchanged,
+    Changed,
+    Dirty,
+    Unsafe,
+    Unavailable
+}
+
+public sealed record CancellationCandidateEvidence(
+    CancellationCandidateEvidenceKind Kind,
+    string? CandidateSha,
+    string Reason,
+    string GitReceipt)
+{
+    public static CancellationCandidateEvidence Indeterminate(string reason = "cancellation evidence was not supplied") =>
+        new(CancellationCandidateEvidenceKind.Indeterminate, null, reason, "git-not-inspected");
+
+    public static CancellationCandidateEvidence ConfirmedUnchanged(string candidateSha, string gitReceipt) =>
+        new(CancellationCandidateEvidenceKind.ConfirmedUnchanged, candidateSha, "cancelled-no-candidate-change", gitReceipt);
+
+    public static CancellationCandidateEvidence Changed(string? candidateSha, string reason, string gitReceipt) =>
+        new(CancellationCandidateEvidenceKind.Changed, candidateSha, reason, gitReceipt);
+
+    public static CancellationCandidateEvidence Dirty(string? candidateSha, string reason, string gitReceipt) =>
+        new(CancellationCandidateEvidenceKind.Dirty, candidateSha, reason, gitReceipt);
+
+    public static CancellationCandidateEvidence Unsafe(string reason, string gitReceipt) =>
+        new(CancellationCandidateEvidenceKind.Unsafe, null, reason, gitReceipt);
+
+    public static CancellationCandidateEvidence Unavailable(string reason, string gitReceipt) =>
+        new(CancellationCandidateEvidenceKind.Unavailable, null, reason, gitReceipt);
+}
+
 public sealed record TaskProcessRecord(
     int ProcessId,
     string Command,

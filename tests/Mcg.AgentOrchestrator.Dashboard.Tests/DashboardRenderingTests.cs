@@ -1864,7 +1864,7 @@ public sealed class DashboardRenderingTests
     Assert.Contains("/api/system/build-test-runs/log?path=", systemHtml, StringComparison.Ordinal);
     Assert.Contains(@".\scripts\Invoke-DashboardBuildTestCycle.ps1 -DashboardUrl http://localhost:5087/", systemHtml, StringComparison.Ordinal);
     Assert.Contains("Get-Process Mcg.AgentOrchestrator.App -ErrorAction SilentlyContinue", systemHtml, StringComparison.Ordinal);
-    Assert.Contains("Invoke-IsolatedDotnet.ps1 test Mcg.AgentOrchestrator.sln --verbosity minimal", systemHtml, StringComparison.Ordinal);
+    Assert.Contains("Invoke-TestSummary.ps1 -Target .\\Mcg.AgentOrchestrator.sln", systemHtml, StringComparison.Ordinal);
     Assert.Contains("Restart command", systemHtml, StringComparison.Ordinal);
     Assert.Contains(@".\mcg-orchestrator.cmd prototype-ui http://localhost:5087/ --refresh 5 --no-open", systemHtml, StringComparison.Ordinal);
     Assert.Contains("data-action=\"/api/system/stop-dashboard\"", systemHtml, StringComparison.Ordinal);

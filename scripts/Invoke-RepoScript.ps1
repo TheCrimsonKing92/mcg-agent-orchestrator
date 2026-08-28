@@ -16,7 +16,7 @@
   .\scripts\Invoke-RepoScript.ps1 scripts\Find-OrchestratorLocks.ps1
 
 .EXAMPLE
-  .\scripts\Invoke-RepoScript.ps1 scripts\Invoke-IsolatedDotnet.ps1 -GoalPrefix abc12345 test Mcg.AgentOrchestrator.sln --verbosity minimal
+  .\scripts\Invoke-RepoScript.ps1 scripts\Invoke-TestSummary.ps1 -Target .\Mcg.AgentOrchestrator.sln
 #>
 param(
     [Parameter(Mandatory = $true, Position = 0)]

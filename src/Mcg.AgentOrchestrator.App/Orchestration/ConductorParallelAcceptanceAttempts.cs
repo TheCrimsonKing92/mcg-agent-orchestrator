@@ -2212,7 +2212,7 @@ internal sealed class ConductorParallelAcceptanceAttemptCoordinator
         ConductorParallelAcceptanceOwnedProcessLaunch launch)
     {
         var startInfo = BuildOwnedProcessStartInfo(launch.Attempt);
-        var process = Process.Start(startInfo)
+        var process = ProcessTreeGuiSuppression.Start(startInfo)
             ?? throw new InvalidOperationException("failed to start acceptance attempt process");
         var processId = process.Id;
         DetachOwnedProcessStreams(process, launch.Attempt);

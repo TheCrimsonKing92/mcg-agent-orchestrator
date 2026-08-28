@@ -20,6 +20,27 @@ public sealed class AssemblyTempRedirectTests
         Assert.Equal(Path.Combine(sharedRoot, "p1a2c"), second, ignoreCase: true);
     }
 
+    [Fact]
+    public void ManagedMtpProbeLaunchSpecificationRejectsNativeTestApphost()
+    {
+        var hostFileName = OperatingSystem.IsWindows() ? "dotnet.exe" : "dotnet";
+        var directory = Path.Combine("probe", "output");
+        var testAssembly = Path.Combine(directory, "Mcg.AgentOrchestrator.Infrastructure.Tests.dll");
+        var nativeApphost = Path.Combine(directory, "Mcg.AgentOrchestrator.Infrastructure.Tests.exe");
+
+        Assert.True(IsManagedMtpProbeLaunch(Path.Combine(directory, hostFileName), testAssembly));
+        var exception = Record.Exception(() => BuildMtpProbeStartInfo(
+            nativeApphost,
+            testAssembly,
+            Path.Combine(directory, "temp"),
+            Path.Combine(directory, "receipt.json"),
+            "ready",
+            "release"));
+
+        Assert.NotNull(exception);
+        Assert.Contains("Refusing unsafe MTP probe launch", exception.Message, StringComparison.Ordinal);
+    }
+
     [Fact(Timeout = 60_000)]
     public async Task SingleTestHostUsesDerivedRootAndWritesOwnershipReceipt()
     {
@@ -29,11 +50,10 @@ public sealed class AssemblyTempRedirectTests
         }
 
         var root = Path.Combine(Path.GetTempPath(), $"mtp-temp-host-{Guid.NewGuid():N}");
-        var executable = Path.Combine(
-            AppContext.BaseDirectory,
-            "Mcg.AgentOrchestrator.Infrastructure.Tests.exe");
+        var executable = ResolveDotnetHostPath();
+        var testAssembly = typeof(AssemblyTempRedirectTests).Assembly.Location;
         Directory.CreateDirectory(root);
-        Assert.True(File.Exists(executable), $"Missing independently launchable MTP apphost '{executable}'.");
+        Assert.True(File.Exists(testAssembly), $"Missing MTP test assembly '{testAssembly}'.");
 
         var releaseName = $"Local\\mcg-mtp-temp-release-{Guid.NewGuid():N}";
         var readyName = $"Local\\mcg-mtp-temp-ready-{Guid.NewGuid():N}";
@@ -44,6 +64,7 @@ public sealed class AssemblyTempRedirectTests
         {
             process = StartMtpProbe(
                 executable,
+                testAssembly,
                 root,
                 Path.Combine(root, "receipt.json"),
                 readyName,
@@ -94,10 +115,10 @@ public sealed class AssemblyTempRedirectTests
         }
 
         var root = Path.Combine(Path.GetTempPath(), $"mtp-temp-kill-{Guid.NewGuid():N}");
-        var executable = Path.Combine(
-            AppContext.BaseDirectory,
-            "Mcg.AgentOrchestrator.Infrastructure.Tests.exe");
+        var executable = ResolveDotnetHostPath();
+        var testAssembly = typeof(AssemblyTempRedirectTests).Assembly.Location;
         Directory.CreateDirectory(root);
+        Assert.True(File.Exists(testAssembly), $"Missing MTP test assembly '{testAssembly}'.");
         var releaseName = $"Local\\mcg-mtp-temp-release-{Guid.NewGuid():N}";
         var readyName = $"Local\\mcg-mtp-temp-ready-{Guid.NewGuid():N}";
         using var release = new EventWaitHandle(false, EventResetMode.ManualReset, releaseName);
@@ -107,6 +128,7 @@ public sealed class AssemblyTempRedirectTests
         {
             process = StartMtpProbe(
                 executable,
+                testAssembly,
                 root,
                 Path.Combine(root, "receipt.json"),
                 readyName,
@@ -151,15 +173,14 @@ public sealed class AssemblyTempRedirectTests
         }
 
         var root = Path.Combine(Path.GetTempPath(), $"mtp-temp-hosts-{Guid.NewGuid():N}");
-        var executable = Path.Combine(
-            AppContext.BaseDirectory,
-            "Mcg.AgentOrchestrator.Infrastructure.Tests.exe");
+        var executable = ResolveDotnetHostPath();
+        var testAssembly = typeof(AssemblyTempRedirectTests).Assembly.Location;
         Directory.CreateDirectory(root);
         var syntheticLocalLow = Path.Combine(root, "LocalLow");
         Assert.False(
             Directory.Exists(syntheticLocalLow),
             $"The synthetic LocalLow precondition was not clean: '{syntheticLocalLow}'.");
-        Assert.True(File.Exists(executable), $"Missing independently launchable MTP apphost '{executable}'.");
+        Assert.True(File.Exists(testAssembly), $"Missing MTP test assembly '{testAssembly}'.");
 
         var releaseName = $"Local\\mcg-mtp-temp-release-{Guid.NewGuid():N}";
         var firstReadyName = $"Local\\mcg-mtp-temp-ready-{Guid.NewGuid():N}";
@@ -173,12 +194,14 @@ public sealed class AssemblyTempRedirectTests
         {
             firstProcess = StartMtpProbe(
                 executable,
+                testAssembly,
                 root,
                 Path.Combine(root, "first-receipt.json"),
                 firstReadyName,
                 releaseName);
             secondProcess = StartMtpProbe(
                 executable,
+                testAssembly,
                 root,
                 Path.Combine(root, "second-receipt.json"),
                 secondReadyName,
@@ -555,11 +578,40 @@ public sealed class AssemblyTempRedirectTests
 
     private static MtpProbeProcess StartMtpProbe(
         string executable,
+        string testAssembly,
         string root,
         string receiptPath,
         string readyEventName,
         string releaseEventName)
     {
+        var startInfo = BuildMtpProbeStartInfo(
+            executable,
+            testAssembly,
+            root,
+            receiptPath,
+            readyEventName,
+            releaseEventName);
+        var process = new Process { StartInfo = startInfo };
+        Assert.True(process.Start(), $"Failed to start MTP assembly '{testAssembly}' with '{executable}'.");
+        process.StandardInput.Close();
+        return new MtpProbeProcess(
+            process,
+            receiptPath,
+            process.StandardOutput.ReadToEndAsync(),
+            process.StandardError.ReadToEndAsync());
+    }
+
+    private static ProcessStartInfo BuildMtpProbeStartInfo(
+        string executable,
+        string testAssembly,
+        string root,
+        string receiptPath,
+        string readyEventName,
+        string releaseEventName)
+    {
+        Assert.True(
+            IsManagedMtpProbeLaunch(executable, testAssembly),
+            $"Refusing unsafe MTP probe launch host='{executable}' assembly='{testAssembly}'.");
         var startInfo = new ProcessStartInfo
         {
             FileName = executable,
@@ -576,18 +628,18 @@ public sealed class AssemblyTempRedirectTests
         startInfo.Environment[AssemblyTempRedirectChildSmokeTests.ReleaseEventVariable] = releaseEventName;
         startInfo.Environment[AssemblyTempRedirectChildSmokeTests.ParentProcessIdVariable] =
             Environment.ProcessId.ToString(CultureInfo.InvariantCulture);
+        startInfo.ArgumentList.Add(testAssembly);
         startInfo.ArgumentList.Add("--filter-class");
         startInfo.ArgumentList.Add("*AssemblyTempRedirectChildSmokeTests*");
-
-        var process = new Process { StartInfo = startInfo };
-        Assert.True(process.Start(), $"Failed to start MTP apphost '{executable}'.");
-        process.StandardInput.Close();
-        return new MtpProbeProcess(
-            process,
-            receiptPath,
-            process.StandardOutput.ReadToEndAsync(),
-            process.StandardError.ReadToEndAsync());
+        return startInfo;
     }
+
+    private static bool IsManagedMtpProbeLaunch(string executable, string testAssembly) =>
+        string.Equals(
+            Path.GetFileName(executable),
+            OperatingSystem.IsWindows() ? "dotnet.exe" : "dotnet",
+            StringComparison.OrdinalIgnoreCase) &&
+        string.Equals(Path.GetExtension(testAssembly), ".dll", StringComparison.OrdinalIgnoreCase);
 
     private static void UseHermeticEnvironment(ProcessStartInfo startInfo, string root)
     {

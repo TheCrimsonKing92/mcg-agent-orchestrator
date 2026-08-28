@@ -1,5 +1,6 @@
 using Mcg.AgentOrchestrator.Core;
 using Mcg.AgentOrchestrator.Infrastructure;
+using System.Security.Cryptography;
 
 public sealed class ChaosGateDispatchNoChangeTests : ChaosGateTestBase
 {
@@ -34,5 +35,110 @@ public sealed class ChaosGateDispatchNoChangeTests : ChaosGateTestBase
         Assert.Equal(RecoveryRecommendation.OperatorNeeded, outcome.RecoveryRecommendation);
         Assert.Equal(TaskOutcomeClass.UnknownEra, outcome.OutcomeClass);
         Assert.Contains("rule=required-file-change-evidence-missing", outcome.ClassifierReceipt, StringComparison.Ordinal);
+    }
+
+    [Xunit.Fact]
+    public void CancelledRetryCleanUnchangedPinsCandidateFromPostReapGitEvidence()
+    {
+        var root = CreateSeededRepo();
+        var kernel = new AgentOrchestratorKernel();
+        var goal = kernel.CreateGoal(
+            "Cancel a clean unchanged Developer retry.",
+            [new TaskSpec(TaskId.New(), "Inspect candidate.", AgentRole.Developer)]);
+        kernel.ActivateGoal(goal.Id,
+            [new AgentDefinition(
+                new AgentId("developer"),
+                "Developer",
+                AgentRole.Developer,
+                new ModelProfile("OpenAI", AgentCatalog.OpenAiSubscriptionModelAlias, ModelCapability.Text, SubscriptionMode.ApiKey))]);
+        var task = goal.Tasks.Single();
+        var worktree = GoalWorktrees.Ensure(root, goal.Id);
+        var head = ReadGit(worktree, ["rev-parse", "HEAD"]);
+        kernel.RecordTaskDispatch(
+            goal.Id,
+            task.Id,
+            new TaskDispatchRecord("codex-cli", "prior", worktree, DispatchedAt, BaseCommit: head, ResultCommit: head));
+        kernel.ReportTaskProgress(goal.Id, task.Id, WorkTaskStatus.Completed, "Prior candidate completed.");
+        kernel.RetryTask(goal.Id, task.Id, "Inspect unchanged candidate.");
+        var dispatchedAt = DateTimeOffset.UtcNow.AddMinutes(1);
+        kernel.RecordTaskDispatch(
+            goal.Id,
+            task.Id,
+            new TaskDispatchRecord(
+                "codex-cli",
+                "retry",
+                worktree,
+                dispatchedAt,
+                BaseCommit: head,
+                WorktreeHeadSha: head,
+                DirtyStateHash: Convert.ToHexString(SHA256.HashData([])).ToLowerInvariant()));
+        var process = new TaskProcessRecord(
+            999999, "retry", worktree, "out.log", "err.log", "exit.txt", dispatchedAt, null, null);
+        kernel.RecordTaskProcessStarted(goal.Id, task.Id, process);
+
+        new BackgroundDispatchRunner(isStillRunning: _ => false)
+            .CancelLatestProcess(kernel, goal.Id, task.Id);
+
+        Assert.Equal(head, task.LastDispatch!.ResultCommit);
+        Assert.Contains(goal.Timeline, evt =>
+            evt.TaskId == task.Id &&
+            evt.Kind == ProgressKind.TaskNote &&
+            evt.Message.Contains("kind=ConfirmedUnchanged", StringComparison.Ordinal) &&
+            evt.Message.Contains($"head={head}", StringComparison.Ordinal) &&
+            evt.Message.Contains("commits_after_dispatch=0", StringComparison.Ordinal) &&
+            evt.Message.Contains("spawn_dirty_state_hash=", StringComparison.Ordinal) &&
+            evt.Message.Contains("post_reap_dirty_state_hash=", StringComparison.Ordinal));
+    }
+
+    [Xunit.Fact]
+    public void CancelledRetryCleanHeadWithMismatchedDirtyHashFailsClosed()
+    {
+        var root = CreateSeededRepo();
+        var kernel = new AgentOrchestratorKernel();
+        var goal = kernel.CreateGoal(
+            "Cancel a clean Developer retry with a mismatched spawn identity.",
+            [new TaskSpec(TaskId.New(), "Inspect candidate.", AgentRole.Developer)]);
+        kernel.ActivateGoal(goal.Id,
+            [new AgentDefinition(
+                new AgentId("developer"),
+                "Developer",
+                AgentRole.Developer,
+                new ModelProfile("OpenAI", AgentCatalog.OpenAiSubscriptionModelAlias, ModelCapability.Text, SubscriptionMode.ApiKey))]);
+        var task = goal.Tasks.Single();
+        var worktree = GoalWorktrees.Ensure(root, goal.Id);
+        var head = ReadGit(worktree, ["rev-parse", "HEAD"]);
+        kernel.RecordTaskDispatch(
+            goal.Id,
+            task.Id,
+            new TaskDispatchRecord("codex-cli", "prior", worktree, DispatchedAt, BaseCommit: head, ResultCommit: head));
+        kernel.ReportTaskProgress(goal.Id, task.Id, WorkTaskStatus.Completed, "Prior candidate completed.");
+        kernel.RetryTask(goal.Id, task.Id, "Inspect unchanged candidate.");
+        var dispatchedAt = DateTimeOffset.UtcNow.AddMinutes(1);
+        kernel.RecordTaskDispatch(
+            goal.Id,
+            task.Id,
+            new TaskDispatchRecord(
+                "codex-cli",
+                "retry",
+                worktree,
+                dispatchedAt,
+                BaseCommit: head,
+                WorktreeHeadSha: head,
+                DirtyStateHash: "not-the-post-reap-hash"));
+        var process = new TaskProcessRecord(
+            999999, "retry", worktree, "out.log", "err.log", "exit.txt", dispatchedAt, null, null);
+        kernel.RecordTaskProcessStarted(goal.Id, task.Id, process);
+
+        new BackgroundDispatchRunner(isStillRunning: _ => false)
+            .CancelLatestProcess(kernel, goal.Id, task.Id);
+
+        Assert.Null(task.LastDispatch!.ResultCommit);
+        Assert.Contains(goal.Timeline, evt =>
+            evt.TaskId == task.Id &&
+            evt.Kind == ProgressKind.TaskNote &&
+            evt.Message.Contains("kind=Changed", StringComparison.Ordinal) &&
+            evt.Message.Contains("dirty-state identity changed", StringComparison.Ordinal) &&
+            evt.Message.Contains("spawn_dirty_state_hash=not-the-post-reap-hash", StringComparison.Ordinal) &&
+            evt.Message.Contains("post_reap_dirty_state_hash=", StringComparison.Ordinal));
     }
 }
