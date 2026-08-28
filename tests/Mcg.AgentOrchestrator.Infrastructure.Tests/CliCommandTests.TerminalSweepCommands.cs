@@ -6,6 +6,7 @@ using Mcg.AgentOrchestrator.App.SubscriptionPlanning;
 using Mcg.AgentOrchestrator.Core;
 using Mcg.AgentOrchestrator.Infrastructure;
 using System.Diagnostics;
+using System.Globalization;
 using System.Text.Json;
 
 public sealed class CliCommandTestsTerminalSweepCommands : CliCommandTestBase
@@ -1473,14 +1474,14 @@ public sealed class CliCommandTestsTerminalSweepCommands : CliCommandTestBase
         var acceptedPrefix = Path.Combine(attemptsDirectory, "goal-0-accepted");
         File.WriteAllText(
             acceptedPrefix + ".attempt.json",
-            JsonSerializer.Serialize(new { attemptId = "goal-0-accepted" }));
+            JsonSerializer.Serialize(new { attemptId = "goal-0-accepted", executionProtocol = "in-process" }));
         File.WriteAllText(
             acceptedPrefix + ".result.json",
             JsonSerializer.Serialize(new { kind = "accepted", acceptance = new { passed = true } }));
         var failedPrefix = Path.Combine(attemptsDirectory, "goal-0-failed");
         File.WriteAllText(
             failedPrefix + ".attempt.json",
-            JsonSerializer.Serialize(new { attemptId = "goal-0-failed" }));
+            JsonSerializer.Serialize(new { attemptId = "goal-0-failed", executionProtocol = "out-of-process" }));
         File.WriteAllText(
             failedPrefix + ".result.json",
             JsonSerializer.Serialize(new { kind = "rejected", acceptance = new { passed = false } }));
@@ -1564,6 +1565,81 @@ public sealed class CliCommandTestsTerminalSweepCommands : CliCommandTestBase
     }
 
     [Xunit.Fact]
+    public async Task Run_MergeEvidenceJournalReceipt_RecoversEachMissingEffectExactlyOnce()
+    {
+        var root = CreateAcceptanceRepository();
+        var workspace = CreateRefinedWorkspace(root);
+        var repository = new SqliteOrchestratorStateRepository(workspace.SqliteStatePath);
+        var attentionStore = CollaborationItemStore.ForDirectory(workspace.OrchestratorDirectory);
+        var seededKernel = new AgentOrchestratorKernel();
+        var task = new TaskSpec(TaskId.New(), "Recover landed work", AgentRole.Developer);
+        var goal = seededKernel.CreateGoal("Recover merge receipt", [task]);
+        seededKernel.ActivateGoal(goal.Id, AgentCatalog.Default().Agents);
+        seededKernel.RecordTaskDispatch(goal.Id, task.Id, new TaskDispatchRecord(
+            "codex-cli",
+            "codex exec",
+            root,
+            DateTimeOffset.UtcNow.AddMinutes(-5),
+            ProviderSessionId: "receipt-recovery-session"));
+        seededKernel.ReportTaskProgress(goal.Id, task.Id, WorkTaskStatus.Completed, "Done.");
+        seededKernel.RecordTaskVerification(goal.Id, task.Id, new TaskVerificationRecord(
+            "manual", root, 0, "passed", string.Empty, DateTimeOffset.UtcNow));
+        Xunit.Assert.Equal(GoalStatus.Verified, goal.Status);
+        await repository.SaveAsync(seededKernel);
+
+        const string integrateSha = "receipt-integrate-sha";
+        GoalOperationJournal.RecordTerminalDisposition(
+            root,
+            goal,
+            new GoalTerminalDisposition(
+                GoalTerminalDispositionKind.Landed,
+                "receipt appended before checkpoint",
+                GoalTerminalDispositionSource.MergeEvidence,
+                integrateSha));
+        await attentionStore.RaiseAsync(
+            CollaborationItemType.Decision,
+            goal.Id.Value,
+            "Recover attention",
+            "body",
+            "receipt-recovery-attention");
+
+        var recoveredKernel = await repository.LoadAsync();
+        recoveredKernel.SetEventWriter(new GoalLifecycleEventWriter(workspace.GoalLifecycleEventsDirectory));
+        var evidence = new GoalIntegrationEvidence(integrateSha, "receipt-main-sha", $"Integrate goal/{goal.Id.Value[..8]}");
+        var resolver = new StubGoalIntegrationEvidenceResolver(goal.Id, evidence);
+
+        var recovered = RunSweep(
+            recoveredKernel,
+            root,
+            goal.Id,
+            integrationEvidenceResolver: resolver,
+            attentionStore: attentionStore);
+        var repeated = RunSweep(
+            recoveredKernel,
+            root,
+            goal.Id,
+            integrationEvidenceResolver: resolver,
+            attentionStore: attentionStore);
+
+        var receipt = Xunit.Assert.Single(recovered.Goals).Reconciliation;
+        Xunit.Assert.True(receipt?.RecoveredFromJournalReceipt);
+        Xunit.Assert.Contains(recovered.Goals.Single().Repairs, repair =>
+            repair.Evidence.Contains("recoveredFromJournalReceipt=true", StringComparison.Ordinal));
+        Xunit.Assert.Equal(GoalStatus.Completed, recoveredKernel.GetGoal(goal.Id).Status);
+        Xunit.Assert.NotNull(recoveredKernel.GetTask(goal.Id, task.Id).LastDispatch?.ProviderSessionRetiredAt);
+        Xunit.Assert.Equal(0, repeated.TerminalizedGoalCount);
+        var journal = GoalOperationJournal.Read(root, goal.Id);
+        Xunit.Assert.Single(journal.Entries.Where(entry =>
+            entry.Operation == GoalOperationJournal.TerminalDispositionOperation));
+        var eventPath = Path.Combine(workspace.GoalLifecycleEventsDirectory, $"{goal.Id.Value}.jsonl");
+        Xunit.Assert.Single(File.ReadLines(eventPath).Where(line =>
+            line.Contains("\"eventType\":\"GoalLanded\"", StringComparison.Ordinal)));
+        var attention = Xunit.Assert.Single(await attentionStore.ListAsync(goal.Id.Value));
+        Xunit.Assert.Equal(CollaborationItemStatus.Resolved, attention.Status);
+        CleanupAcceptanceRepository(root, goal.Id);
+    }
+
+    [Xunit.Fact]
     public void GoalTerminalReconciliationEvidence_IsAttemptScopedAndExplicitAboutMissingExit()
     {
         var root = CreateTempDirectory();
@@ -1571,7 +1647,7 @@ public sealed class CliCommandTestsTerminalSweepCommands : CliCommandTestBase
         var acceptedPrefix = Path.Combine(root, acceptedAttempt);
         File.WriteAllText(
             acceptedPrefix + ".attempt.json",
-            JsonSerializer.Serialize(new { attemptId = acceptedAttempt }));
+            JsonSerializer.Serialize(new { attemptId = acceptedAttempt, executionProtocol = "in-process" }));
         File.WriteAllText(
             acceptedPrefix + ".result.json",
             JsonSerializer.Serialize(new { kind = "accepted", acceptance = new { passed = true } }));
@@ -1585,7 +1661,7 @@ public sealed class CliCommandTestsTerminalSweepCommands : CliCommandTestBase
         var failedPrefix = Path.Combine(root, failedAttempt);
         File.WriteAllText(
             failedPrefix + ".attempt.json",
-            JsonSerializer.Serialize(new { attemptId = failedAttempt }));
+            JsonSerializer.Serialize(new { attemptId = failedAttempt, executionProtocol = "out-of-process" }));
         File.WriteAllText(
             failedPrefix + ".result.json",
             JsonSerializer.Serialize(new { kind = "rejected", acceptance = new { passed = false } }));
@@ -1606,7 +1682,7 @@ public sealed class CliCommandTestsTerminalSweepCommands : CliCommandTestBase
         var prefix = Path.Combine(root, attemptId);
         File.WriteAllText(
             prefix + ".attempt.json",
-            JsonSerializer.Serialize(new { attemptId }));
+            JsonSerializer.Serialize(new { attemptId, executionProtocol = "out-of-process" }));
         File.WriteAllText(
             prefix + ".result.json",
             JsonSerializer.Serialize(new { kind = "accepted", acceptance = new { passed = true } }));
@@ -1616,6 +1692,73 @@ public sealed class CliCommandTestsTerminalSweepCommands : CliCommandTestBase
 
         Xunit.Assert.Equal(GoalTerminalReconciliationEvidenceState.Contradictory, result.State);
         Xunit.Assert.Equal(1, result.RawExitCode);
+    }
+
+    [Xunit.Theory]
+    [Xunit.InlineData("rejected", true, 0)]
+    [Xunit.InlineData("rejected", false, 0)]
+    public void GoalTerminalReconciliationEvidence_NonAcceptedSuccessSignalsAreContradictory(
+        string kind,
+        bool acceptancePassed,
+        int exitCode)
+    {
+        var root = CreateTempDirectory();
+        const string attemptId = "goal-0-invalid-success";
+        var prefix = Path.Combine(root, attemptId);
+        File.WriteAllText(
+            prefix + ".attempt.json",
+            JsonSerializer.Serialize(new { attemptId, executionProtocol = "out-of-process" }));
+        File.WriteAllText(
+            prefix + ".result.json",
+            JsonSerializer.Serialize(new { kind, acceptance = new { passed = acceptancePassed } }));
+        File.WriteAllText(prefix + ".exit.txt", exitCode.ToString(CultureInfo.InvariantCulture));
+
+        var result = GoalTerminalReconciliationEvidenceResolver.Resolve(prefix + ".attempt.json");
+
+        Xunit.Assert.Equal(GoalTerminalReconciliationEvidenceState.Contradictory, result.State);
+    }
+
+    [Xunit.Fact]
+    public void GoalTerminalReconciliationEvidence_MissingAcceptedVerdictIsInvalid()
+    {
+        var root = CreateTempDirectory();
+        const string attemptId = "goal-0-missing-verdict";
+        var prefix = Path.Combine(root, attemptId);
+        File.WriteAllText(
+            prefix + ".attempt.json",
+            JsonSerializer.Serialize(new { attemptId, executionProtocol = "out-of-process" }));
+        File.WriteAllText(prefix + ".result.json", JsonSerializer.Serialize(new { kind = "accepted" }));
+        File.WriteAllText(prefix + ".exit.txt", "0");
+
+        var result = GoalTerminalReconciliationEvidenceResolver.Resolve(prefix + ".attempt.json");
+
+        Xunit.Assert.Equal(GoalTerminalReconciliationEvidenceState.Invalid, result.State);
+    }
+
+    [Xunit.Fact]
+    public void GoalTerminalReconciliationEvidence_UsesResolvedScopedAttemptsRoot()
+    {
+        var root = CreateTempDirectory();
+        var workspace = OrchestratorWorkspace.ForProject("scoped", root, tenantName: "tenant-a");
+        var goalId = GoalId.New();
+        var attemptsRoot = Path.Combine(workspace.OrchestratorDirectory, "acceptance-gate-attempts");
+        var goalDirectory = Path.Combine(attemptsRoot, goalId.Value);
+        Directory.CreateDirectory(goalDirectory);
+        const string attemptId = "scoped-attempt";
+        var prefix = Path.Combine(goalDirectory, attemptId);
+        File.WriteAllText(
+            prefix + ".attempt.json",
+            JsonSerializer.Serialize(new { attemptId, executionProtocol = "out-of-process" }));
+        File.WriteAllText(
+            prefix + ".result.json",
+            JsonSerializer.Serialize(new { kind = "accepted", acceptance = new { passed = true } }));
+        File.WriteAllText(prefix + ".exit.txt", "0");
+
+        var result = Xunit.Assert.Single(
+            GoalTerminalReconciliationEvidenceResolver.ResolveForGoal(attemptsRoot, goalId));
+
+        Xunit.Assert.Equal(attemptId, result.AttemptId);
+        Xunit.Assert.Equal(GoalTerminalReconciliationEvidenceState.Present, result.State);
     }
 
     [Xunit.Fact]

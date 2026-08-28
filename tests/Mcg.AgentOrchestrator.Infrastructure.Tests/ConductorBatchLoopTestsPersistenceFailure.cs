@@ -73,6 +73,16 @@ public sealed class ConductorBatchLoopTestsPersistenceFailure : ConductorBatchLo
     private static SqliteException TypedSqliteBusy(int sqliteErrorCode = 5) =>
         new($"SQLite Error {sqliteErrorCode}: 'database is locked'.", sqliteErrorCode);
 
+    private sealed class FixedIntegrationEvidenceResolver(GoalId goalId, GoalIntegrationEvidence evidence)
+        : IGoalIntegrationEvidenceResolver
+    {
+        public bool TryResolve(GoalId candidateGoalId, out GoalIntegrationEvidence? resolved)
+        {
+            resolved = candidateGoalId == goalId ? evidence : null;
+            return resolved is not null;
+        }
+    }
+
     [Xunit.Fact]
     public async Task SweepTerminalization_IsCheckpointedBeforeEligibilityFiltering()
     {
@@ -131,9 +141,285 @@ public sealed class ConductorBatchLoopTestsPersistenceFailure : ConductorBatchLo
 
         var checkpoint = Assert.Single(checkpointBatches);
         Assert.Equal(goal.Id, Assert.Single(checkpoint));
-        Assert.Equal(["sweep", "checkpoint"], events.Take(2));
+        Assert.Equal(["sweep", "checkpoint"], events);
         var reloaded = await repository.LoadAsync();
         Assert.Equal(GoalStatus.Completed, reloaded.GetGoal(goal.Id).Status);
+    }
+
+    [Xunit.Fact(Timeout = 60_000)]
+    [Xunit.Trait("Category", "CrossTick")]
+    public async Task SweepTerminalization_PersistsThenCleansAcrossThreeReloadedTicks()
+    {
+        var root = CreateTempDirectory("mcg-sweep-three-tick-reload");
+        RunGit(root, "init", "-b", "main");
+        RunGit(root, "config", "user.email", "tests@example.invalid");
+        RunGit(root, "config", "user.name", "MCG Tests");
+        File.WriteAllText(Path.Combine(root, ".gitignore"), ".orchestrator-worktrees/\n");
+        File.WriteAllText(Path.Combine(root, "README.md"), "seed\n");
+        RunGit(root, "add", ".gitignore", "README.md");
+        RunGit(root, "commit", "-m", "seed");
+
+        var workspace = OrchestratorWorkspace.ForDirectory(root);
+        _ = StateDbMigrations.EnsureUpToDate(workspace.SqliteStatePath);
+        var repository = OpenStateRepository(workspace.SqliteStatePath);
+        var seededKernel = new AgentOrchestratorKernel();
+        var task = new TaskSpec(TaskId.New(), "Land and clean", AgentRole.Developer);
+        var goal = seededKernel.CreateGoal("three tick terminalization", [task]);
+        seededKernel.ActivateGoal(goal.Id, DefaultAgents());
+        seededKernel.RecordTaskDispatch(goal.Id, task.Id, new TaskDispatchRecord(
+            "codex-cli",
+            "codex exec",
+            root,
+            DateTimeOffset.UtcNow.AddMinutes(-5),
+            ProviderSessionId: "three-tick-session"));
+        seededKernel.ReportTaskProgress(goal.Id, task.Id, WorkTaskStatus.Completed, "Done.");
+        seededKernel.RecordTaskVerification(goal.Id, task.Id, new TaskVerificationRecord(
+            "manual", root, 0, "passed", string.Empty, DateTimeOffset.UtcNow));
+        Assert.Equal(GoalStatus.Verified, goal.Status);
+        var worktree = GoalWorktrees.Ensure(root, goal.Id, new GoalWorktreeCleanupHooks());
+        File.WriteAllText(Path.Combine(worktree, "landed.txt"), "landed\n");
+        RunGit(worktree, "add", "landed.txt");
+        RunGit(worktree, "commit", "-m", "goal work");
+        RunGit(root, "merge", "--ff-only", GoalWorktrees.BranchName(goal.Id));
+        await repository.SaveAsync(seededKernel);
+
+        var evidence = new GoalIntegrationEvidence(
+            "three-tick-integrate",
+            RunGitOutput(root, "rev-parse", "main").Trim(),
+            $"Integrate goal/{goal.Id.Value[..8]}");
+        var resolver = new FixedIntegrationEvidenceResolver(goal.Id, evidence);
+        var tickOneKernel = await repository.LoadAsync();
+        tickOneKernel.SetEventWriter(new GoalLifecycleEventWriter(workspace.GoalLifecycleEventsDirectory));
+        var baselines = tickOneKernel.ExportSnapshot().Goals.ToDictionary(snapshot => snapshot.Id, StringComparer.Ordinal);
+        var ordering = new List<string>();
+
+        IReadOnlyList<GoalSnapshotCheckpointResult> Checkpoint(
+            AgentOrchestratorKernel currentKernel,
+            IReadOnlyCollection<GoalId> requested)
+        {
+            ordering.Add("checkpoint");
+            var current = currentKernel.ExportSnapshot().Goals.ToDictionary(snapshot => snapshot.Id, StringComparer.Ordinal);
+            var outcomes = repository.CheckpointGoalSnapshotsAsync(requested.Select(goalId =>
+                    new GoalSnapshotSaveRequest(baselines[goalId.Value], current[goalId.Value])).ToArray())
+                .GetAwaiter()
+                .GetResult();
+            foreach (var outcome in outcomes.Where(outcome => outcome.IsDurable && outcome.SaveResult?.PersistedSnapshot is not null))
+            {
+                baselines[outcome.GoalId] = outcome.SaveResult!.PersistedSnapshot!;
+            }
+            return outcomes;
+        }
+
+        new ConductorBatchLoop(measuredSweep: currentKernel =>
+        {
+            ordering.Add("sweep");
+            return TerminalGoalSweep.Run(
+                currentKernel,
+                root,
+                goal.Id,
+                integrationEvidenceResolver: resolver,
+                attentionStore: CollaborationItemStore.ForDirectory(workspace.OrchestratorDirectory),
+                cleanupHooks: new GoalWorktreeCleanupHooks(),
+                orchestratorDirectory: workspace.OrchestratorDirectory);
+        }).Run(
+            tickOneKernel,
+            MakeDriver(land: _ =>
+            {
+                ordering.Add("driver");
+                return new LandingResult(goal.Id.Value, goal.Id.Value[..8], new LandingDecision.Promote(), "integration", true, "Landed");
+            }),
+            ConductorAutonomyPolicy.Conservative,
+            NoStopPath(),
+            maxIterations: 1,
+            checkpointGoalTick: Checkpoint);
+
+        Assert.Equal(["sweep", "checkpoint"], ordering);
+        var tickTwoKernel = await repository.LoadAsync();
+        Assert.Equal(GoalStatus.Completed, tickTwoKernel.GetGoal(goal.Id).Status);
+        Assert.NotNull(GoalWorktrees.TryResolve(root, goal.Id));
+        Assert.DoesNotContain(
+            GoalOperationJournal.Read(root, goal.Id).Entries,
+            entry => entry.Operation == "conductor:cleanup");
+
+        tickTwoKernel.SetEventWriter(new GoalLifecycleEventWriter(workspace.GoalLifecycleEventsDirectory));
+        var tickTwo = TerminalGoalSweep.Run(
+            tickTwoKernel,
+            root,
+            goal.Id,
+            integrationEvidenceResolver: resolver,
+            attentionStore: CollaborationItemStore.ForDirectory(workspace.OrchestratorDirectory),
+            cleanupHooks: new GoalWorktreeCleanupHooks(),
+            orchestratorDirectory: workspace.OrchestratorDirectory);
+        Assert.Contains(tickTwo.Goals.Single().Repairs, repair => repair.Kind == "merged-branch-cleanup");
+        Assert.Null(GoalWorktrees.TryResolve(root, goal.Id));
+        Assert.Equal(string.Empty, RunGitOutput(root, "branch", "--list", GoalWorktrees.BranchName(goal.Id)).Trim());
+        Assert.NotNull(tickTwoKernel.GetTask(goal.Id, task.Id).LastDispatch?.ProviderSessionRetiredAt);
+        await repository.SaveAsync(tickTwoKernel);
+
+        var tickThreeKernel = await repository.LoadAsync();
+        tickThreeKernel.SetEventWriter(new GoalLifecycleEventWriter(workspace.GoalLifecycleEventsDirectory));
+        var tickThree = TerminalGoalSweep.Run(
+            tickThreeKernel,
+            root,
+            goal.Id,
+            integrationEvidenceResolver: resolver,
+            attentionStore: CollaborationItemStore.ForDirectory(workspace.OrchestratorDirectory),
+            cleanupHooks: new GoalWorktreeCleanupHooks(),
+            orchestratorDirectory: workspace.OrchestratorDirectory);
+        Assert.Empty(tickThree.Goals);
+        var journal = GoalOperationJournal.Read(root, goal.Id);
+        Assert.Single(journal.Entries.Where(entry =>
+            entry.Operation == GoalOperationJournal.TerminalDispositionOperation));
+        Assert.Single(journal.Entries.Where(entry => entry.Operation == "conductor:cleanup"));
+        var eventPath = Path.Combine(workspace.GoalLifecycleEventsDirectory, $"{goal.Id.Value}.jsonl");
+        Assert.Single(File.ReadLines(eventPath).Where(line =>
+            line.Contains("\"eventType\":\"GoalLanded\"", StringComparison.Ordinal)));
+    }
+
+    [Xunit.Fact(Timeout = 30_000)]
+    [Xunit.Trait("Category", "CrossTick")]
+    public async Task SweepTerminalization_NonDurableCheckpointEmitsOneHoldAndDefersIntent()
+    {
+        var root = CreateTempDirectory("mcg-sweep-terminalization-hold");
+        var kernel = new AgentOrchestratorKernel();
+        var goal = CreateVerifiedSimpleGoal(kernel, "hold merge-evidence checkpoint");
+        var task = goal.Tasks.Single();
+        var store = new SqliteOperatorIntentStore(
+            Path.Combine(root, "operator-intents.db"),
+            Path.Combine(root, "logs"));
+        var intent = new OperatorIntentRecord(
+            "sweep-hold-intent",
+            "sweep-hold-intent-key",
+            OperatorIntentVerbs.Retry,
+            goal.Id.Value,
+            task.Id.Value,
+            JsonSerializer.Serialize(
+                new RetryOperatorIntentPayload("must wait for durable Completed", null),
+                new JsonSerializerOptions(JsonSerializerDefaults.Web)),
+            [],
+            "operator",
+            "test",
+            "test",
+            DateTimeOffset.UtcNow);
+        var intentEnqueued = false;
+        var driverRan = false;
+        var priorOut = Console.Out;
+        using var output = new StringWriter();
+        Console.SetOut(output);
+        try
+        {
+            new ConductorBatchLoop(
+                measuredSweep: currentKernel =>
+                {
+                    const string integrateSha = "held-integrate-sha";
+                    GoalOperationJournal.RecordTerminalDisposition(
+                        root,
+                        currentKernel.GetGoal(goal.Id),
+                        new GoalTerminalDisposition(
+                            GoalTerminalDispositionKind.Landed,
+                            "terminalized before a held checkpoint",
+                            GoalTerminalDispositionSource.MergeEvidence,
+                            integrateSha));
+                    currentKernel.CompleteGoalFromMergeEvidence(
+                        goal.Id,
+                        integrateSha,
+                        "terminalized before a held checkpoint");
+                    return new TerminalGoalSweepResult(
+                        [],
+                        TerminalizedGoalCount: 1,
+                        TerminalizedGoalIds: [goal.Id]);
+                },
+                operatorIntents: new OperatorIntentCoordinator(store)).Run(
+                    kernel,
+                    MakeDriver(land: _ =>
+                    {
+                        driverRan = true;
+                        return new LandingResult(goal.Id.Value, goal.Id.Value[..8], new LandingDecision.Promote(), "integration", true, "Landed");
+                    }),
+                    ConductorAutonomyPolicy.Conservative,
+                    NoStopPath(),
+                    maxIterations: 1,
+                    checkpointGoalTick: (_, requested) =>
+                    {
+                        if (!intentEnqueued)
+                        {
+                            store.EnqueueAsync(intent).GetAwaiter().GetResult();
+                            intentEnqueued = true;
+                        }
+                        return requested.Select(goalId => new GoalSnapshotCheckpointResult(
+                            goalId.Value,
+                            GoalSnapshotCheckpointDisposition.Held,
+                            null,
+                            "state",
+                            Path.Combine(root, "state.db"),
+                            $"loop:tick/TransactGoalStateAsync({goalId.Value[..8]})",
+                            SqliteErrorCode: 5,
+                            SqliteExtendedErrorCode: 5,
+                            AttemptCount: 3,
+                            ElapsedMilliseconds: 250)).ToArray();
+                    });
+        }
+        finally
+        {
+            Console.SetOut(priorOut);
+        }
+
+        var text = output.ToString();
+        Assert.Equal(1, text.Split("TICK_CHECKPOINT_HOLD ", StringSplitOptions.None).Length - 1);
+        Assert.Contains("kind=sweep-terminalization", text, StringComparison.Ordinal);
+        Assert.Contains("result=deferred reason=checkpoint-held", text, StringComparison.Ordinal);
+        Assert.False(driverRan);
+        Assert.Equal(OperatorIntentStatus.Pending, (await store.GetAsync(intent.Id))!.Status);
+        Assert.DoesNotContain(
+            GoalOperationJournal.Read(root, goal.Id).Entries,
+            entry => entry.Operation == "conductor:cleanup");
+    }
+
+    [Xunit.Fact]
+    public void SweepTerminalization_RemedyResweepPreservesOriginalCheckpointId()
+    {
+        var kernel = new AgentOrchestratorKernel();
+        var goal = CreateVerifiedSimpleGoal(kernel, "preserve terminalization across remedy re-sweep");
+        var checkpointed = new List<GoalId>();
+        var firstSweep = new TerminalGoalSweepResult(
+            [],
+            TerminalizedGoalCount: 1,
+            TerminalizedGoalIds: [goal.Id]);
+        var successfulRemedyResweep = new TerminalGoalSweepResult([])
+            .PreserveTerminalizationsFrom(firstSweep);
+
+        new ConductorBatchLoop(measuredSweep: _ => successfulRemedyResweep).Run(
+            kernel,
+            MakeDriver(),
+            ConductorAutonomyPolicy.Conservative,
+            NoStopPath(),
+            maxIterations: 1,
+            checkpointGoalTick: (_, requested) =>
+            {
+                checkpointed.AddRange(requested);
+                return requested.Select(goalId => new GoalSnapshotCheckpointResult(
+                    goalId.Value,
+                    GoalSnapshotCheckpointDisposition.Durable,
+                    null,
+                    "state",
+                    "C:/fixture/state.db",
+                    $"loop:tick/TransactGoalStateAsync({goalId.Value[..8]})")).ToArray();
+            });
+
+        Assert.Equal(goal.Id, Assert.Single(checkpointed));
+    }
+
+    private static void RunGit(string workingDirectory, params string[] args)
+    {
+        var result = GitCli.Run(workingDirectory, args);
+        Assert.True(result.Succeeded, $"git {string.Join(' ', args)} failed: {result.Error}");
+    }
+
+    private static string RunGitOutput(string workingDirectory, params string[] args)
+    {
+        var result = GitCli.Run(workingDirectory, args);
+        Assert.True(result.Succeeded, $"git {string.Join(' ', args)} failed: {result.Error}");
+        return result.Output;
     }
 
     // ── Persistence: a loop dispatch must be durable across reload ────────

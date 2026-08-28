@@ -125,7 +125,8 @@ internal sealed record ConductorParallelAcceptanceAttempt(
     IReadOnlyList<FindingEvidenceRequestDisposition>? FocusedEvidenceRequestDispositions = null,
     string? FocusedEvidenceReceiptId = null,
     string? PolicyJson = null,
-    AcceptanceStableSlotExhaustionPolicy? StableSlotExhaustionPolicy = null)
+    AcceptanceStableSlotExhaustionPolicy? StableSlotExhaustionPolicy = null,
+    string ExecutionProtocol = "out-of-process")
 {
     public string CandidateKey => $"{GoalId}:{BranchHeadSha ?? "unknown-branch"}:{MainHeadSha ?? "unknown-main"}";
 }
@@ -1847,7 +1848,8 @@ internal sealed class ConductorParallelAcceptanceAttemptCoordinator
             FindingRoundFingerprint: requestContext?.FindingRoundFingerprint,
             FocusedEvidenceRequestDispositions: requestContext?.RequestDispositions,
             PolicyJson: policy.ToJson(),
-            StableSlotExhaustionPolicy: stableSlotExhaustionPolicy);
+            StableSlotExhaustionPolicy: stableSlotExhaustionPolicy,
+            ExecutionProtocol: _runInline ? "in-process" : "out-of-process");
     }
 
     private static int AllocateOrdinal(string directory)

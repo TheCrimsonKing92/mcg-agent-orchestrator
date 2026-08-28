@@ -466,8 +466,7 @@ internal sealed partial class ConductorBatchLoop
                     checkpointHeldGoals,
                     nextTick,
                     "sweep-terminalization",
-                    preTickTimingLines,
-                    deferEmission: true);
+                    []);
             }
             else if (sweepTerminalizedGoalIds.Count > 0 && persistGoalTick is not null)
             {

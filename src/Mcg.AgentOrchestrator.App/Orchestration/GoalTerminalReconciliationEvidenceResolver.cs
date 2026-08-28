@@ -27,13 +27,11 @@ internal sealed record GoalTerminalReconciliationEvidence(
 internal static class GoalTerminalReconciliationEvidenceResolver
 {
     public static IReadOnlyList<GoalTerminalReconciliationEvidence> ResolveForGoal(
-        string executionDirectory,
+        string acceptanceAttemptsDirectory,
         GoalId goalId)
     {
         var directory = Path.Combine(
-            Path.GetFullPath(executionDirectory),
-            ".orchestrator",
-            "acceptance-gate-attempts",
+            Path.GetFullPath(acceptanceAttemptsDirectory),
             goalId.Value);
         if (!Directory.Exists(directory))
         {
@@ -102,9 +100,8 @@ internal static class GoalTerminalReconciliationEvidenceResolver
             var acceptancePassed = TryGetNestedBoolean(typed.RootElement, "acceptance", "passed");
             if (!File.Exists(exitPath))
             {
-                var inProcessProtocol = !File.Exists(prefix + ".out.log") &&
-                    !File.Exists(prefix + ".err.log") &&
-                    !File.Exists(prefix + ".heartbeat.json");
+                var inProcessProtocol = TryGetString(metadata.RootElement, "executionProtocol", out var executionProtocol) &&
+                    executionProtocol.Equals("in-process", StringComparison.OrdinalIgnoreCase);
                 return Evidence(
                     attemptId,
                     inProcessProtocol
@@ -136,8 +133,25 @@ internal static class GoalTerminalReconciliationEvidenceResolver
                     "The attempt-scoped raw exit sidecar is not an integer.");
             }
 
-            var typedSucceeded = kind.Equals("accepted", StringComparison.OrdinalIgnoreCase) && acceptancePassed == true;
-            var contradictory = typedSucceeded ? rawExitCode != 0 : acceptancePassed == false && rawExitCode == 0;
+            var acceptedKind = kind.Equals("accepted", StringComparison.OrdinalIgnoreCase);
+            if (acceptedKind && acceptancePassed is null)
+            {
+                return Evidence(
+                    attemptId,
+                    GoalTerminalReconciliationEvidenceState.Invalid,
+                    metadataPath,
+                    resultPath,
+                    exitPath,
+                    kind,
+                    acceptancePassed,
+                    rawExitCode,
+                    "The accepted typed result has no acceptance.passed verdict.");
+            }
+
+            var contradictory =
+                (!acceptedKind && acceptancePassed == true) ||
+                (acceptedKind && acceptancePassed == true && rawExitCode != 0) ||
+                ((acceptancePassed == false || !acceptedKind) && rawExitCode == 0);
             return Evidence(
                 attemptId,
                 contradictory
