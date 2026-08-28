@@ -1,7 +1,11 @@
 using System.Diagnostics;
+using System.Security.Cryptography;
+using System.Text;
 using System.Text.Json;
 
 namespace Mcg.AgentOrchestrator.Infrastructure;
+
+internal sealed record AcceptanceRetainedDiagnostic(string Path, string Sha256);
 
 public sealed class AcceptanceAttemptArtifactCustodyException : IOException
 {
@@ -86,6 +90,60 @@ public static class AcceptanceAttemptArtifactCustody
         {
             throw new IOException(
                 $"Failed to release terminal acceptance-attempt custody marker for attempt '{attemptId}' at '{path}'.");
+        }
+    }
+
+    internal static AcceptanceRetainedDiagnostic RetainRetryDiagnostic(
+        string? attemptResultsPrefix,
+        string? fallbackArtifactsPath,
+        string fileStem,
+        string? sourcePath,
+        string? capturedDiagnostic,
+        string typedEvidence)
+    {
+        var attemptDirectory = string.IsNullOrWhiteSpace(attemptResultsPrefix)
+            ? fallbackArtifactsPath
+            : Path.GetDirectoryName(attemptResultsPrefix);
+        if (string.IsNullOrWhiteSpace(attemptDirectory))
+        {
+            throw new IOException("Within-attempt retry diagnostic has no durable attempt artifact directory.");
+        }
+
+        Directory.CreateDirectory(attemptDirectory);
+        var safeStem = string.Concat(fileStem.Select(character =>
+            Path.GetInvalidFileNameChars().Contains(character) ? '-' : character));
+        var sourceExists = !string.IsNullOrWhiteSpace(sourcePath) && File.Exists(sourcePath);
+        var hasCapturedDiagnostic = !string.IsNullOrEmpty(capturedDiagnostic);
+        var extension = sourceExists
+            ? Path.GetExtension(sourcePath)
+            : hasCapturedDiagnostic ? ".err" : ".json";
+        var destinationPath = Path.Combine(attemptDirectory, $"{safeStem}.retry-diagnostic{extension}");
+        var temporaryPath = $"{destinationPath}.{Guid.NewGuid():N}.tmp";
+        try
+        {
+            if (sourceExists)
+            {
+                File.Copy(sourcePath, temporaryPath, overwrite: true);
+            }
+            else if (hasCapturedDiagnostic)
+            {
+                File.WriteAllText(temporaryPath, capturedDiagnostic, Encoding.UTF8);
+            }
+            else
+            {
+                File.WriteAllText(temporaryPath, typedEvidence, Encoding.UTF8);
+            }
+
+            File.Move(temporaryPath, destinationPath, overwrite: true);
+            var hash = Convert.ToHexStringLower(SHA256.HashData(File.ReadAllBytes(destinationPath)));
+            return new AcceptanceRetainedDiagnostic(destinationPath, hash);
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+        {
+            try { File.Delete(temporaryPath); } catch { }
+            throw new IOException(
+                $"Failed to retain within-attempt retry diagnostic at '{destinationPath}'. The retry was not launched.",
+                ex);
         }
     }
 

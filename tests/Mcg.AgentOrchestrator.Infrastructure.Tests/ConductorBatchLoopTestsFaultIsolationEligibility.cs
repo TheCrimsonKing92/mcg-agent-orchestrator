@@ -617,6 +617,10 @@ public sealed class ConductorBatchLoopTestsFaultIsolationEligibility : Conductor
                     GoalTerminalDispositionSource.MergeEvidence));
             kernel.CompleteGoal(landedGoal.Id, "Goal marked landed.");
 
+            var landedJournal = GoalOperationJournal.Read(root, landedGoal.Id);
+            Assert.True(GoalOperationJournal.HasMergeEvidenceTerminalDisposition(landedJournal));
+            Assert.False(GoalOperationJournal.HasCompletedCleanupEvidence(landedJournal));
+
             var advancedGoalIds = new List<GoalId>();
             var driver = MakeDriver(
                 getFacts: goal =>
@@ -627,6 +631,7 @@ public sealed class ConductorBatchLoopTestsFaultIsolationEligibility : Conductor
                         IsRecorded: GoalOperationJournal.HasCompletedRecordEvidence(journal),
                         IsCleanedUp: GoalOperationJournal.HasCompletedCleanupEvidence(journal));
                 },
+                executionDirectory: root,
                 createWorkspace: goal =>
                 {
                     advancedGoalIds.Add(goal.Id);
