@@ -97,7 +97,8 @@ public abstract class ConductorBatchLoopTests
         Func<Goal, ReconcileAcceptanceLeaseState?>? getEvidenceMutationLease = null,
         Action<Goal, IReadOnlyList<string>, string?, string?, IReadOnlyList<AcceptanceCheckAttribution>?, string?>? recordAcceptanceFailure = null,
         Func<Goal, (string? BranchHeadSha, string? MainHeadSha)>? resolveAcceptanceHeads = null,
-        Func<DateTimeOffset>? utcNow = null) =>
+        Func<DateTimeOffset>? utcNow = null,
+        string? executionDirectory = null) =>
         new ConductorDriver(
             getFacts ?? (_ => GoalLifecycleFacts.None),
             getRunningCount ?? (() => 0),
@@ -138,7 +139,8 @@ public abstract class ConductorBatchLoopTests
             getEvidenceMutationLease: getEvidenceMutationLease,
             recordAcceptanceFailureWithAttribution: recordAcceptanceFailure,
             resolveAcceptanceHeads: resolveAcceptanceHeads,
-            utcNow: utcNow);
+            utcNow: utcNow,
+            executionDirectory: executionDirectory);
 
     // Returns a path to a stop file that does NOT exist yet.
     private protected static string NoStopPath() =>
