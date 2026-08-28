@@ -110,6 +110,50 @@ public sealed class GoalWorktreeTestsGitHelperDiagnostics : GoalWorktreeTestBase
         }
     }
 
+    [Xunit.Fact(Skip = "Requires Windows owned-file capture semantics.", SkipUnless = nameof(IsWindows))]
+    public void RunGitProbeKeepsLiveCapturesOutsideTheRepositoryTree()
+    {
+        var repo = CreateEmptyRepository();
+        try
+        {
+            var repositoryPrefix = Path.GetFullPath(repo)
+                .TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar) +
+                Path.DirectorySeparatorChar;
+            var callbackObserved = false;
+            var result = InfrastructureTestSupport.RunGitProbe(
+                repo,
+                ["status", "--short"],
+                beforeOwnedCaptureRead: (standardOutputPath, standardErrorPath) =>
+                {
+                    callbackObserved = true;
+                    Assert.True(File.Exists(standardOutputPath));
+                    Assert.True(File.Exists(standardErrorPath));
+                    Assert.False(
+                        Path.GetFullPath(standardOutputPath).StartsWith(
+                            repositoryPrefix,
+                            StringComparison.OrdinalIgnoreCase),
+                        $"stdout capture was created inside the repository: {standardOutputPath}");
+                    Assert.False(
+                        Path.GetFullPath(standardErrorPath).StartsWith(
+                            repositoryPrefix,
+                            StringComparison.OrdinalIgnoreCase),
+                        $"stderr capture was created inside the repository: {standardErrorPath}");
+                    Assert.Empty(Directory.EnumerateFiles(
+                        repo,
+                        ".mcg-git-probe-*",
+                        SearchOption.AllDirectories));
+                });
+
+            Assert.True(callbackObserved);
+            Assert.True(result.Succeeded, result.StandardError);
+            Assert.Empty(result.StandardOutput);
+        }
+        finally
+        {
+            DeleteDirectory(repo);
+        }
+    }
+
     private static string CreateEmptyRepository()
     {
         var root = OperatingSystem.IsWindows()
