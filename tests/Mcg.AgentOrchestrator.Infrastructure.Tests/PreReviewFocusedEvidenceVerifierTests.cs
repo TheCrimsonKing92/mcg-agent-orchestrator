@@ -131,8 +131,10 @@ public sealed class PreReviewFocusedEvidenceVerifierTests : GoalAcceptanceVerifi
     }
 
     private static bool IsMtpExecutableCall(string[] args, string projectName) =>
-        args.Length > 0 &&
-        Path.GetFileNameWithoutExtension(args[0]).Equals(projectName, StringComparison.OrdinalIgnoreCase);
+        args.Length > 1 &&
+        args[0].Equals("dotnet", StringComparison.OrdinalIgnoreCase) &&
+        args[1].EndsWith(".dll", StringComparison.OrdinalIgnoreCase) &&
+        Path.GetFileNameWithoutExtension(args[1]).Equals(projectName, StringComparison.OrdinalIgnoreCase);
 
     private static void AssertArgumentPair(string[] args, string option, string value)
     {

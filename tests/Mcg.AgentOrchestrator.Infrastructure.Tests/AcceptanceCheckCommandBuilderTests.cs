@@ -46,12 +46,12 @@ public sealed class AcceptanceCheckCommandBuilderTests
             "--filter-class",
             "*RepositoryChangeClassifierTests*"
         ]);
-        string[] dllCommand =
+        var dllCommand = AcceptanceCheckCommandBuilder.UseDotnetHostForManagedExecutable(
         [
             @"C:\artifacts\bin\Mcg.AgentOrchestrator.Core.Tests\Mcg.AgentOrchestrator.Core.Tests.dll",
             "--list-tests",
             "json"
-        ];
+        ]);
 
         var executableEffective = AcceptanceCheckCommandBuilder.WithBuildEnvironmentArguments(
             executableCommand,
@@ -60,6 +60,8 @@ public sealed class AcceptanceCheckCommandBuilderTests
 
         Assert.Equal(executableCommand, executableEffective);
         Assert.Equal(dllCommand, dllEffective);
+        Assert.Equal("dotnet", dllEffective[0], ignoreCase: true);
+        Assert.EndsWith("Mcg.AgentOrchestrator.Core.Tests.dll", dllEffective[1], StringComparison.OrdinalIgnoreCase);
         AssertNoMsBuildShapedArguments(executableEffective);
         AssertNoMsBuildShapedArguments(dllEffective);
     }

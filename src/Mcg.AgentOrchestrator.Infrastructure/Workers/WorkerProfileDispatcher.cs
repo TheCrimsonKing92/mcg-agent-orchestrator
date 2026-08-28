@@ -2415,7 +2415,7 @@ public static class WorkerProfileDispatcher
             "goal/timeline.json",
             ContextArtifactKind.RegisteredContext,
             SerializeSemanticTimeline(timeline, workingDirectory, contextDirectory));
-        var reviewFindingHistory = goal.Tasks
+        var reviewFindingHistory = WorkerContextPackageBuilder.DistinctBySerializedValue(goal.Tasks
             .SelectMany(candidate => candidate.VerificationHistory.Select(verification => new
             {
                 TaskId = candidate.Id.Value,
@@ -2424,7 +2424,7 @@ public static class WorkerProfileDispatcher
                 EvidenceReceipts = verification.FindingEvidenceReceipts ?? []
             }))
             .Where(item => item.Findings.Count > 0 || item.EvidenceReceipts.Count > 0)
-            .ToArray();
+        );
         if (reviewFindingHistory.Length > 0)
         {
             AddSource(

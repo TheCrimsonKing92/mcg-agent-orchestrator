@@ -33,7 +33,97 @@ public sealed record AcceptanceCheckResult(
     int TestResultRunOrdinal = 0,
     bool TestResultIsExplicitCrossAttemptReuse = false,
     IReadOnlyList<string>? FailingTestIdentities = null,
-    int? ExecutedTestCount = null);
+    int? ExecutedTestCount = null,
+    AcceptanceFailureCauseEvidence? FailureCauseEvidence = null);
+
+public sealed record AcceptanceFailureCauseEvidence(
+    AcceptanceFailureCause Cause,
+    string Evidence,
+    string? CheckName = null,
+    string? SourceClassification = null);
+
+internal sealed record AcceptanceFailureCauseReceiptV1(
+    int ContractVersion,
+    string Kind,
+    string Owner,
+    string ProbeClassification,
+    bool ProcessStarted,
+    int? ExitCode,
+    long StandardOutputByteCount,
+    long StandardErrorByteCount,
+    bool DrainTimedOut,
+    bool TimedOut,
+    bool DrainFailed,
+    string RepositoryHeadState,
+    string Check,
+    string FixtureAttemptId,
+    int ProbeOrdinal);
+
+internal static class AcceptanceFailureCauseReceiptCodec
+{
+    internal const string Prefix = "MCG_ACCEPTANCE_CAUSE_V1:";
+    private static readonly JsonSerializerOptions Options = new(JsonSerializerDefaults.Web);
+    private static readonly Regex Marker = new(
+        Regex.Escape(Prefix) + "(?<payload>[A-Za-z0-9+/=]+)",
+        RegexOptions.CultureInvariant);
+
+    internal static string Format(AcceptanceFailureCauseReceiptV1 receipt) =>
+        Prefix + Convert.ToBase64String(Encoding.UTF8.GetBytes(JsonSerializer.Serialize(receipt, Options)));
+
+    internal static bool TryParse(string message, out AcceptanceFailureCauseReceiptV1 receipt)
+    {
+        receipt = null!;
+        var matches = Marker.Matches(message ?? string.Empty);
+        if (matches.Count != 1)
+        {
+            return false;
+        }
+
+        try
+        {
+            receipt = JsonSerializer.Deserialize<AcceptanceFailureCauseReceiptV1>(
+                Convert.FromBase64String(matches[0].Groups["payload"].Value),
+                Options)!;
+            return IsEnvironmentalApparatus(receipt);
+        }
+        catch (Exception ex) when (ex is FormatException or JsonException)
+        {
+            receipt = null!;
+            return false;
+        }
+    }
+
+    private static bool IsEnvironmentalApparatus(AcceptanceFailureCauseReceiptV1? receipt)
+    {
+        if (receipt is null ||
+            receipt.ContractVersion != 1 ||
+            !receipt.Kind.Equals("seeded-dispatch-repository-git-probe", StringComparison.Ordinal) ||
+            !receipt.Owner.Equals("ProcessOutputApparatus", StringComparison.Ordinal) ||
+            string.IsNullOrWhiteSpace(receipt.Check) ||
+            string.IsNullOrWhiteSpace(receipt.FixtureAttemptId) ||
+            receipt.FixtureAttemptId.Equals("not-assigned", StringComparison.Ordinal) ||
+            receipt.ProbeOrdinal <= 0)
+        {
+            return false;
+        }
+
+        return receipt.ProbeClassification switch
+        {
+            "EmptyRequiredOutput" =>
+                receipt.ProcessStarted && receipt.ExitCode == 0 &&
+                receipt.StandardOutputByteCount == 0 &&
+                !receipt.DrainTimedOut && !receipt.TimedOut && !receipt.DrainFailed &&
+                receipt.RepositoryHeadState is "ValidLooseReference" or
+                    "ValidPackedReference" or "ValidDetachedHead",
+            "LaunchFailure" => !receipt.ProcessStarted,
+            "ProcessTimeout" => receipt.ProcessStarted && receipt.TimedOut,
+            "DrainTimeout" => receipt.ProcessStarted && receipt.DrainTimedOut,
+            "DrainFailure" => receipt.ProcessStarted && receipt.DrainFailed,
+            "ProcessObservationFailure" => receipt.ProcessStarted && receipt.ExitCode is null or 0,
+            _ => false
+        };
+    }
+}
 
 internal sealed record AcceptanceProcessCleanupObservation(
     int ProcessId,
@@ -46,9 +136,18 @@ internal sealed record AcceptanceProcessCleanupObservation(
 public static class AcceptanceFailureClassifications
 {
     public const string GateEnvironmentInterference = "gate-environment-interference";
+    public const string InheritedBaselineApparatus = "inherited-baseline-apparatus";
     public const string StructuralCoverageFailed = "structural-coverage-failed";
     public const string FocusedSelectionApparatusFailure = "focused-selection-apparatus-failure";
     public const string FocusedSelectionReceiptUnreadable = "focused-selection-receipt-unreadable";
+    public const string SeededRepositoryProcessOutputApparatus = "seeded-repository-process-output-apparatus";
+
+    public static bool IsEnvironmentalApparatus(string? classification) =>
+        classification is GateEnvironmentInterference or
+            InheritedBaselineApparatus or
+            FocusedSelectionApparatusFailure or
+            FocusedSelectionReceiptUnreadable or
+            SeededRepositoryProcessOutputApparatus;
 }
 
 public enum FocusedEvidenceRejectionCode
@@ -791,6 +890,11 @@ public sealed class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
         }
 
         phaseAccountant.TransitionTo(AcceptanceGatePhaseNames.Finalize);
+        for (var index = 0; index < checks.Count; index++)
+        {
+            checks[index] = AttachFailureCauseEvidence(checks[index]);
+        }
+
         var failedCheck = checks.FirstOrDefault(check => !check.Advisory && !check.Passed);
         var artifactsPath = checks.LastOrDefault(check => !string.IsNullOrWhiteSpace(check.ArtifactsPath))?.ArtifactsPath;
         var testResultPaths = CollectTestResultPaths(checks);
@@ -817,6 +921,152 @@ public sealed class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
         {
             throw AcceptanceGateEngineException.Capture(exception, phaseAccountant.Snapshot);
         }
+    }
+
+    internal static AcceptanceCheckResult AttachFailureCauseEvidence(AcceptanceCheckResult check)
+    {
+        ArgumentNullException.ThrowIfNull(check);
+
+        if (check.Passed)
+        {
+            return check with { FailureCauseEvidence = null };
+        }
+
+        var trxCause = ExtractTrxFailureCauseEvidence(check.TestResultPaths, check.Name);
+        if (check.FailureCauseEvidence is not null && trxCause is not null &&
+            (check.FailureCauseEvidence.Cause != trxCause.Cause ||
+             !string.Equals(
+                 check.FailureCauseEvidence.SourceClassification,
+                 trxCause.SourceClassification,
+                 StringComparison.Ordinal)))
+        {
+            return check with { FailureCauseEvidence = null };
+        }
+
+        if (string.IsNullOrWhiteSpace(check.FailureClassification) &&
+            check.FailureCauseEvidence is null &&
+            trxCause is not null)
+        {
+            check = check with
+            {
+                FailureClassification = trxCause.SourceClassification,
+                FailureCauseEvidence = trxCause
+            };
+        }
+
+        var classification = string.IsNullOrWhiteSpace(check.FailureClassification)
+            ? null
+            : check.FailureClassification.Trim();
+        var classifiedCause = classification switch
+        {
+            AcceptanceFailureClassifications.GateEnvironmentInterference or
+            AcceptanceFailureClassifications.FocusedSelectionApparatusFailure or
+            AcceptanceFailureClassifications.FocusedSelectionReceiptUnreadable or
+            AcceptanceFailureClassifications.SeededRepositoryProcessOutputApparatus =>
+                AcceptanceFailureCause.EnvironmentalApparatus,
+            _ => (AcceptanceFailureCause?)null
+        };
+
+        var supplied = check.FailureCauseEvidence;
+        if (supplied is not null &&
+            (!Enum.IsDefined(supplied.Cause) ||
+             supplied.Cause == AcceptanceFailureCause.NotClassified ||
+             string.IsNullOrWhiteSpace(supplied.Evidence) ||
+             supplied.CheckName is not null &&
+             !supplied.CheckName.Equals(check.Name, StringComparison.Ordinal) ||
+             supplied.SourceClassification is not null &&
+             (classification is null ||
+              !supplied.SourceClassification.Equals(classification, StringComparison.Ordinal))))
+        {
+            return check with { FailureCauseEvidence = null };
+        }
+
+        if (classifiedCause is null)
+        {
+            return check;
+        }
+
+        if (supplied is not null && supplied.Cause != classifiedCause)
+        {
+            return check with { FailureCauseEvidence = null };
+        }
+
+        var evidence = supplied?.Evidence.Trim() ??
+            $"check={JsonSerializer.Serialize(check.Name)}; failureClassification={JsonSerializer.Serialize(classification)}";
+        return check with
+        {
+            FailureCauseEvidence = new AcceptanceFailureCauseEvidence(
+                classifiedCause.Value,
+                evidence,
+                check.Name,
+                classification)
+        };
+    }
+
+    private static AcceptanceFailureCauseEvidence? ExtractTrxFailureCauseEvidence(
+        IEnumerable<string>? trxPaths,
+        string checkName)
+    {
+        if (trxPaths is null)
+        {
+            return null;
+        }
+
+        var markers = new List<string>();
+        var failedResultCount = 0;
+        foreach (var trxPath in trxPaths.Where(File.Exists))
+        {
+            try
+            {
+                var failedResults = XDocument.Load(trxPath, LoadOptions.None)
+                    .Descendants()
+                    .Where(element =>
+                        element.Name.LocalName.Equals("UnitTestResult", StringComparison.Ordinal) &&
+                        string.Equals(
+                            element.Attribute("outcome")?.Value,
+                            "Failed",
+                            StringComparison.OrdinalIgnoreCase))
+                    .ToArray();
+                foreach (var result in failedResults)
+                {
+                    failedResultCount++;
+                    var message = result.Descendants()
+                        .FirstOrDefault(element =>
+                            element.Name.LocalName.Equals("Message", StringComparison.Ordinal) &&
+                            element.Ancestors().Any(ancestor =>
+                                ancestor.Name.LocalName.Equals("ErrorInfo", StringComparison.Ordinal)))
+                        ?.Value;
+                    if (message is null ||
+                        !AcceptanceFailureCauseReceiptCodec.TryParse(message, out var receipt))
+                    {
+                        return null;
+                    }
+
+                    markers.Add(AcceptanceFailureCauseReceiptCodec.Format(receipt));
+                }
+            }
+            catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or System.Xml.XmlException)
+            {
+                return null;
+            }
+        }
+
+        if (failedResultCount == 0 || markers.Count != failedResultCount)
+        {
+            return null;
+        }
+
+        var evidence = string.Join(" | ", markers.Distinct(StringComparer.Ordinal));
+        if (evidence.Length > 4096)
+        {
+            evidence = evidence[..4096];
+        }
+
+        return new AcceptanceFailureCauseEvidence(
+            AcceptanceFailureCause.EnvironmentalApparatus,
+            evidence,
+            checkName,
+            AcceptanceFailureClassifications.SeededRepositoryProcessOutputApparatus);
     }
 
     private static bool ShouldCaptureGateEngineFault(Exception exception) =>
@@ -1333,7 +1583,7 @@ public sealed class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
                 cancellationToken).ConfigureAwait(false);
             if (prebuild.Run.Result.Passed)
             {
-                VerifyPrebuiltMtpExecutables(shardChecks, primaryBuildPhase);
+                VerifyPrebuiltMtpArtifacts(shardChecks, primaryBuildPhase);
                 primaryLease.ReleaseExecutionLock();
             }
         }
@@ -1499,21 +1749,21 @@ public sealed class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
             .ThenBy(key => key, StringComparer.Ordinal)
             .ToArray();
 
-    private void VerifyPrebuiltMtpExecutables(
+    private void VerifyPrebuiltMtpArtifacts(
         IReadOnlyList<AcceptanceManifestCheck> shardChecks,
         DotnetTestBuildPhase buildPhase)
     {
         var buildEnvironment = buildPhase.BuildEnvironment
-            ?? throw new InvalidOperationException(
-                "Infrastructure shard prebuild completed without recording its build environment.");
-        foreach (var executablePath in shardChecks
-            .Select(check => EngineSettings.ResolveMtpInvocation(check.Project).ResolveExecutablePath(buildEnvironment))
+            ?? throw new InvalidOperationException("Infrastructure shard prebuild completed without recording its build environment.");
+        foreach (var artifactPath in shardChecks
+            .Select(check => EngineSettings.ResolveMtpInvocation(check.Project))
+            .DistinctBy(invocation => invocation.Project, StringComparer.OrdinalIgnoreCase)
+            .SelectMany(invocation => invocation.ResolveRequiredBuildArtifacts(buildEnvironment))
             .Distinct(StringComparer.OrdinalIgnoreCase))
         {
-            if (!File.Exists(executablePath))
+            if (!File.Exists(artifactPath))
             {
-                throw new InvalidDataException(
-                    $"Infrastructure shard prebuild did not produce configured MTP executable '{executablePath}'.");
+                throw new InvalidDataException($"Infrastructure shard prebuild did not produce configured MTP artifact '{artifactPath}'.");
             }
         }
     }
@@ -5363,7 +5613,7 @@ public sealed class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
             // coverage invariant report by-design-excluded tests as missing on every attempt.
             return UseDotnetHostForManagedExecutable(
             [
-                invocation.ResolveExecutablePath(environment),
+                invocation.ResolveManagedAssemblyPath(environment),
                 "--no-ansi",
                 "--progress",
                 "off",
@@ -6269,13 +6519,13 @@ public sealed class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
         }
 
         var invocation = EngineSettings.ResolveMtpInvocation(check.Project);
-        var executablePath = invocation.ResolveExecutablePath(environment);
+        var managedAssemblyPath = invocation.ResolveManagedAssemblyPath(environment);
         var resultsDirectory = Path.GetDirectoryName(telemetry.Paths[0])
             ?? Path.Combine(environment.ArtifactsPath, "TestResults");
         var trxFileName = Path.GetFileName(telemetry.Paths[0]);
         var args = invocation.Arguments
             .Select(argument => argument
-                .Replace("{executable}", executablePath, StringComparison.Ordinal)
+                .Replace("{executable}", managedAssemblyPath, StringComparison.Ordinal)
                 .Replace("{resultsDirectory}", resultsDirectory, StringComparison.Ordinal)
                 .Replace("{trxFileName}", trxFileName, StringComparison.Ordinal))
             .ToList();
@@ -7173,6 +7423,11 @@ public sealed class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
         environment["DOTNET_CLI_TELEMETRY_OPTOUT"] = "1";
         environment["DOTNET_GENERATE_ASPNET_CERTIFICATE"] = "false";
         environment["DOTNET_NOLOGO"] = "1";
+        // Acceptance tests recursively invoke dotnet/MSBuild. Reusing a daemon that was born outside this
+        // hermetic process tree loses both the gate's environment and its Windows error-mode suppression,
+        // allowing a nested test apphost startup failure to block the desktop with a modal error dialog.
+        environment["MSBUILDDISABLENODEREUSE"] = "1";
+        environment["DOTNET_CLI_USE_MSBUILD_SERVER"] = "0";
         environment["NUGET_PACKAGES"] = nugetPackages;
         if (!string.IsNullOrWhiteSpace(buildEnvironmentRoot))
         {
@@ -7260,6 +7515,7 @@ public sealed class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
         name.Equals("APPDATA", StringComparison.OrdinalIgnoreCase) ||
         name.Equals("LOCALAPPDATA", StringComparison.OrdinalIgnoreCase) ||
         name.Equals("PSModuleAnalysisCachePath", StringComparison.OrdinalIgnoreCase) ||
+        name.Equals("MSBUILDDISABLENODEREUSE", StringComparison.OrdinalIgnoreCase) ||
         // The four deterministic git identity variables this function sets. They are DECLARED here rather
         // than inherited: the allow-list is what the hermetic environment is permitted to contain, so every
         // variable ConfigureHermeticVerificationEnvironment writes must be nameable here or the gate's own

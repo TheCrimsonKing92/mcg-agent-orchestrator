@@ -303,7 +303,8 @@ public abstract class GoalAcceptanceVerifierDotnetBuildSlotTests : GoalAcceptanc
 
     // A partition shard for Infrastructure.Tests appears as exactly one command per shard, in one of
     // two runner shapes depending on how the check was synthesized:
-    //   * runner=mtp (impact-plan / policy-synthesized checks): the self-contained executable with a
+    //   * runner=mtp (impact-plan / policy-synthesized checks): the managed test assembly through the
+    //     shared dotnet host, with a
     //     translated class filter (--filter-class / --filter-not-class). The preceding `dotnet build`
     //     call carries no class filter and is excluded.
     //   * runner=vstest (manifest-loaded checks that omit an explicit runner): `dotnet test <csproj>`
@@ -319,8 +320,10 @@ public abstract class GoalAcceptanceVerifierDotnetBuildSlotTests : GoalAcceptanc
             args.Contains("--filter"));
 
     private protected static bool IsMtpExecutableCall(string[] args, string projectName) =>
-        args.Length > 0 &&
-        Path.GetFileNameWithoutExtension(args[0]).Equals(projectName, StringComparison.OrdinalIgnoreCase);
+        args.Length > 1 &&
+        args[0].Equals("dotnet", StringComparison.OrdinalIgnoreCase) &&
+        args[1].EndsWith(".dll", StringComparison.OrdinalIgnoreCase) &&
+        Path.GetFileNameWithoutExtension(args[1]).Equals(projectName, StringComparison.OrdinalIgnoreCase);
 
     private protected static void AssertArgumentPair(string[] args, string option, string value) =>
         Assert.True(HasArgumentPair(args, option, value), $"Expected {option} {value}.");

@@ -841,7 +841,7 @@ public sealed class GoalAcceptanceVerifierDotnetBuildSlotTestsFocusedEvidence : 
                 "mtpInvocations": [
                   {
                     "project": "tests/Mcg.AgentOrchestrator.Core.Tests/Mcg.AgentOrchestrator.Core.Tests.csproj",
-                    "executablePathTemplate": "bin/{projectName}/{configuration}/{projectName}.dll",
+                    "executablePathTemplate": "bin/{projectName}/{configuration}/{projectName}{executableExtension}",
                     "arguments": [
                       "{executable}",
                       "--results-directory",

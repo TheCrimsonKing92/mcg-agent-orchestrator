@@ -1,4 +1,5 @@
 using System.Diagnostics;
+using System.Globalization;
 using System.Runtime.InteropServices;
 using System.Text.Json;
 using Mcg.AgentOrchestrator.Infrastructure;
@@ -6,6 +7,80 @@ using Mcg.AgentOrchestrator.Infrastructure;
 [Xunit.Collection(TestCollections.ProcessSpawning)]
 public sealed class ProcessTreeGuiSuppressionTests
 {
+    [Fact(DisplayName = "Error_mode_only_spawn_suppresses_child_error_dialogs_without_hidden_console_attachment")]
+    public void ErrorModeOnlySpawnSuppressesDialogsWithoutHiddenConsole()
+    {
+        if (!OperatingSystem.IsWindows())
+        {
+            return;
+        }
+
+        var originalErrorMode = WindowsProbe.GetErrorMode();
+        var dir = Path.Combine(Path.GetTempPath(), "mcg-error-mode-spawn-tests", Guid.NewGuid().ToString("n"));
+        Directory.CreateDirectory(dir);
+        try
+        {
+            var probePath = Path.Combine(dir, "error-mode.txt");
+            var childScript = Path.Combine(dir, "probe-child.ps1");
+            File.WriteAllText(
+                childScript,
+                """
+                Add-Type -TypeDefinition @"
+                using System.Runtime.InteropServices;
+
+                public static class McgErrorModeProbe
+                {
+                    [DllImport("kernel32.dll")]
+                    public static extern uint GetErrorMode();
+                }
+                "@
+                [McgErrorModeProbe]::GetErrorMode() | Set-Content -LiteralPath $env:MCG_PROBE_OUTPUT -Encoding Ascii
+                """);
+
+            var clearedErrorMode = originalErrorMode & ~ProcessTreeGuiSuppression.SuppressedErrorModeFlags;
+            _ = WindowsProbe.SetErrorMode(clearedErrorMode);
+            var startInfo = WorkerProcessRunner.BuildPowerShellStartInfo(
+                $"& '{childScript.Replace("'", "''", StringComparison.Ordinal)}'",
+                dir,
+                redirectStandardInput: false);
+            startInfo.CreateNoWindow = true;
+            startInfo.Environment["MCG_PROBE_OUTPUT"] = probePath;
+
+            Process process;
+            using (var suppressedSpawn = ProcessTreeGuiSuppression.AcquireErrorModeForChildSpawn())
+            {
+                Assert.False(suppressedSpawn.HiddenConsoleAcquired);
+                Assert.Equal(
+                    ProcessTreeGuiSuppression.SuppressedErrorModeFlags,
+                    WindowsProbe.GetErrorMode() & ProcessTreeGuiSuppression.SuppressedErrorModeFlags);
+                process = Process.Start(startInfo)
+                    ?? throw new InvalidOperationException("Failed to start error-mode probe.");
+            }
+
+            Assert.Equal(clearedErrorMode, WindowsProbe.GetErrorMode());
+            using (process)
+            {
+                var stdoutRead = process.StandardOutput.ReadToEndAsync();
+                var stderrRead = process.StandardError.ReadToEndAsync();
+                Assert.True(process.WaitForExit(15_000), "Timed out waiting for error-mode probe.");
+                var stdout = stdoutRead.GetAwaiter().GetResult();
+                var stderr = stderrRead.GetAwaiter().GetResult();
+                Assert.Equal(0, process.ExitCode);
+                Assert.True(File.Exists(probePath), $"Probe did not write output. stdout={stdout} stderr={stderr}");
+            }
+
+            var childErrorMode = uint.Parse(File.ReadAllText(probePath), CultureInfo.InvariantCulture);
+            Assert.Equal(
+                ProcessTreeGuiSuppression.SuppressedErrorModeFlags,
+                childErrorMode & ProcessTreeGuiSuppression.SuppressedErrorModeFlags);
+        }
+        finally
+        {
+            _ = WindowsProbe.SetErrorMode(originalErrorMode);
+            try { Directory.Delete(dir, recursive: true); } catch { }
+        }
+    }
+
     [Fact(DisplayName = "ProcessTreeGuiSuppression_sets_inherited_error_mode_and_hidden_console_for_descendants")]
     public void ProcessTreeGuiSuppressionSetsInheritedErrorModeAndHiddenConsoleForDescendants()
     {
@@ -170,6 +245,9 @@ public sealed class ProcessTreeGuiSuppressionTests
     {
         [DllImport("kernel32.dll")]
         internal static extern uint GetErrorMode();
+
+        [DllImport("kernel32.dll")]
+        internal static extern uint SetErrorMode(uint uMode);
 
         [DllImport("kernel32.dll")]
         private static extern IntPtr GetConsoleWindow();

@@ -640,6 +640,86 @@ public sealed class WorkerContextPackageTests
     }
 
     [Xunit.Fact]
+    public void ReviewFindingHistoryCollapsesOnlyByteIdenticalCompleteSnapshots()
+    {
+        var root = CreateTempDirectory();
+        try
+        {
+            var contextDirectory = Path.Combine(root, ".orchestrator-context", "goal");
+            WriteEmptyRegistry(contextDirectory);
+            var firstTask = new TaskSpec(TaskId.New(), "First review", AgentRole.Reviewer);
+            var secondTask = new TaskSpec(TaskId.New(), "Second review", AgentRole.Reviewer);
+            var kernel = new AgentOrchestratorKernel();
+            var goal = kernel.CreateGoal("Deduplicate only exact review snapshots", [firstTask, secondTask]);
+
+            static TaskVerificationRecord Verification(string fingerprint) => new(
+                "review",
+                ".",
+                0,
+                "review complete",
+                string.Empty,
+                DateTimeOffset.Parse("2026-01-01T00:00:00Z"),
+                MergedReviewFindings:
+                [
+                    new ReviewFinding(
+                        "stable-finding",
+                        ReviewFindingState.Open,
+                        new ReviewFindingLocation("src/One.cs", "One.Run"),
+                        "finding description")
+                ],
+                FindingEvidenceReceipts:
+                [
+                    new FindingEvidenceReceipt(
+                        "receipt-one",
+                        "candidate-sha",
+                        new FindingEvidenceRequest(
+                            [new FindingEvidenceSelection("tests/Tests.csproj", "Tests.One")]),
+                        true,
+                        true,
+                        "receipt summary",
+                        FindingRoundFingerprint: fingerprint)
+                ],
+                FullStandardOutput: "review complete",
+                FullStandardError: string.Empty);
+
+            kernel.RecordTaskVerification(goal.Id, firstTask.Id, Verification("round-one"));
+            kernel.RecordTaskVerification(goal.Id, firstTask.Id, Verification("round-one"));
+            kernel.RecordTaskVerification(goal.Id, firstTask.Id, Verification("round-two"));
+            kernel.RecordTaskVerification(goal.Id, secondTask.Id, Verification("round-one"));
+
+            var package = WorkerProfileDispatcher.BuildContextPackage(
+                goal,
+                secondTask,
+                root,
+                contextDirectory,
+                BriefFor(goal, secondTask, "inspect review history"));
+
+            var historyArtifact = Assert.Single(package.Artifacts.Where(candidate =>
+                candidate.Identity.Value == "goal/review-finding-history.json"));
+            using var document = System.Text.Json.JsonDocument.Parse(Recover(root, historyArtifact));
+            var entries = document.RootElement.EnumerateArray().ToArray();
+
+            Assert.Equal(3, entries.Length);
+            Assert.Equal(
+                [
+                    $"{firstTask.Id.Value}:round-one",
+                    $"{firstTask.Id.Value}:round-two",
+                    $"{secondTask.Id.Value}:round-one"
+                ],
+                entries.Select(entry =>
+                {
+                    var receipts = entry.GetProperty("EvidenceReceipts");
+                    Assert.Equal(1, receipts.GetArrayLength());
+                    return $"{entry.GetProperty("TaskId").GetString()}:{receipts[0].GetProperty("FindingRoundFingerprint").GetString()}";
+                }).ToArray());
+        }
+        finally
+        {
+            Directory.Delete(root, recursive: true);
+        }
+    }
+
+    [Xunit.Fact]
     public async Task ExhaustiveSemanticSourceInventoryRecoversEveryAuthoritativeSourceAndHash()
     {
         var root = CreateTempDirectory();

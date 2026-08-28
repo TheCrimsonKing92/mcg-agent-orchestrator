@@ -14,6 +14,21 @@ internal sealed partial class ConductorDriver
 
     private ConductorAdvanceResult ExecuteLanding(Goal goal, string goalPrefix, ConductorAutonomyPolicy policy)
     {
+        if (HasActiveApparatusHold(goal, out _))
+        {
+            var failure = goal.LatestAcceptanceFailure!;
+            return MakeResult(
+                goal.Id.Value,
+                goalPrefix,
+                policy,
+                new ConductorAdvanceOutcome.Held(
+                    GoalLifecycleState.Verified,
+                    $"Acceptance apparatus hold remains active for unchanged candidate " +
+                    $"{FormatAcceptanceCandidate(failure.BranchHeadSha, failure.MainHeadSha)}. " +
+                    "Repair main or confirm acceptance-retry before another acceptance process starts.",
+                    StableIdentity: $"acceptance-apparatus:{failure.BranchHeadSha ?? "unknown"}:{failure.MainHeadSha ?? "unknown"}"));
+        }
+
         var sharedAcceptance = TryRunFallbackAcceptance(goal, goalPrefix, policy);
         if (sharedAcceptance is not null)
         {

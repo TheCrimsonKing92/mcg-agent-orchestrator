@@ -219,6 +219,7 @@ public sealed class StorageRetentionMaintenanceTests
         Assert.False(File.Exists(source));
         Assert.True(File.Exists(GoalOperationJournal.ArchivePathFor(fixture.ExecutionDirectory, goal.Id)));
         Assert.DoesNotContain(goal.Id, GoalOperationJournal.ReadAll(fixture.ExecutionDirectory).Keys);
+        Assert.False(GoalOperationJournal.ReadActive(fixture.ExecutionDirectory, goal.Id).HasEntries);
         Assert.True(GoalOperationJournal.HasRetiredTerminalDisposition(
             GoalOperationJournal.Read(fixture.ExecutionDirectory, goal.Id)));
     }

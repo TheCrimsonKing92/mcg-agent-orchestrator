@@ -44,6 +44,8 @@ internal sealed record DeveloperBranchIntegrationResult(
 
 internal sealed partial class ConductorDriver
 {
+    private sealed record JournalLifecycleFacts(bool IsMerged, bool IsRecorded, bool IsCleanedUp);
+
     private sealed record CohortGateRun(
         DateTimeOffset StartedAt,
         IReadOnlySet<string> MemberGoalIds,
@@ -161,6 +163,7 @@ internal sealed partial class ConductorDriver
     private readonly Func<Goal, string?> _tryBuildAwaitingClarificationEscalationReason;
     private readonly Func<Goal, string, IDisposable?> _tryAcquireEvidenceMutationLease;
     private readonly Func<Goal, ReconcileAcceptanceLeaseState?> _getEvidenceMutationLease;
+    private readonly Func<Goal, (string? BranchHeadSha, string? MainHeadSha)> _resolveAcceptanceHeads;
     private readonly Func<DateTimeOffset> _utcNow;
     private readonly string? _executionDirectory;
     private readonly ConductorParallelAcceptanceAttemptCoordinator _parallelAcceptanceAttemptCoordinator;
@@ -244,6 +247,8 @@ internal sealed partial class ConductorDriver
     {
         var dir = workspace.ExecutionDirectory;
         _executionDirectory = dir;
+        _resolveAcceptanceHeads = goal =>
+            (TryResolveAcceptanceBranchHead(goal), TryResolveGitHead(dir));
         _getAcceptanceSlotCount = _ => ConductorBatchLoop.DefaultParallelAcceptanceCapacity;
         _getWorkerAdmissionCapacity = () => ConductorBatchLoop.WorkerAdmissionCapacity;
         _parallelAcceptanceEnabled = true;
@@ -276,11 +281,17 @@ internal sealed partial class ConductorDriver
                 ? reason
                 : null;
         var factGoalIds = kernel.Goals.Select(goal => goal.Id).ToArray();
-        var journalSnapshot = GoalOperationJournal.ReadAll(dir, factGoalIds)
-            .ToDictionary(pair => pair.Key, pair => pair.Value);
+        var journalFacts = new ConcurrentDictionary<GoalId, JournalLifecycleFacts>();
         var worktreeSnapshot = GoalWorktrees.ResolveAll(dir, factGoalIds)
             .ToDictionary(pair => pair.Key, pair => pair.Value);
-        void RefreshJournal(GoalId goalId) => journalSnapshot[goalId] = GoalOperationJournal.Read(dir, goalId);
+        static JournalLifecycleFacts ProjectJournalFacts(GoalOperationJournalSummary journal) => new(
+            GoalOperationJournal.HasCompletedLandingEvidence(journal),
+            GoalOperationJournal.HasCompletedRecordEvidence(journal),
+            GoalOperationJournal.HasCompletedCleanupEvidence(journal));
+        JournalLifecycleFacts ReadInitialJournalFacts(GoalId goalId) =>
+            ProjectJournalFacts(GoalOperationJournal.ReadActive(dir, goalId));
+        void RefreshJournal(GoalId goalId) =>
+            journalFacts[goalId] = ProjectJournalFacts(GoalOperationJournal.Read(dir, goalId));
         var evidenceMutationLeaseStore = new ReconcileSweepRemediationStore(workspace.SqliteStatePath);
         _getEvidenceMutationLease = goal => evidenceMutationLeaseStore.TryGetAcceptanceLease(
             goal.Id.Value,
@@ -313,14 +324,17 @@ internal sealed partial class ConductorDriver
             }
 
             var workspaceExists = worktreeSnapshot.ContainsKey(goal.Id);
-            var journal = journalSnapshot.TryGetValue(goal.Id, out var summary)
-                ? summary
-                : new GoalOperationJournalSummary(GoalOperationJournal.PathFor(dir, goal.Id), [], [], []);
-            var isMerged = GoalOperationJournal.HasCompletedLandingEvidence(journal);
-            var isRecorded = GoalOperationJournal.HasCompletedRecordEvidence(journal);
-            var isCleanedUp = GoalOperationJournal.HasCompletedCleanupEvidence(journal);
+            // Initial facts deliberately match ReadAll's active-journal-only population policy.
+            // Refreshes remain archive-aware, preserving the existing behavior for completed goals.
+            var persistedFacts = journalFacts.GetOrAdd(goal.Id, ReadInitialJournalFacts);
             var hasOpenClarification = GoalRefinementGate.HasOpenClarification(workspace, goal);
-            return new GoalLifecycleFacts(workspaceExists, IsBlocked: false, isMerged, isRecorded, isCleanedUp, hasOpenClarification);
+            return new GoalLifecycleFacts(
+                workspaceExists,
+                IsBlocked: false,
+                persistedFacts.IsMerged,
+                persistedFacts.IsRecorded,
+                persistedFacts.IsCleanedUp,
+                hasOpenClarification);
         };
 
         _getRunningPaidWorkerCount = () =>
@@ -491,14 +505,15 @@ internal sealed partial class ConductorDriver
             var changedFiles = GoalAcceptanceEvidenceBundleBuilder.GetChangedFiles(worktreePath);
             var branchHeadSha = TryResolveGitHead(worktreePath);
             var mainHeadSha = TryResolveGitHead(dir);
-            IReadOnlyDictionary<GoalId, GoalOperationJournalSummary> baselineJournals =
-                new Dictionary<GoalId, GoalOperationJournalSummary>();
+            IReadOnlyList<CleanTestBaselineEvidence> baselineEvidence = [];
             var baselineReceipt = CleanTestBaseline.Unattested(mainHeadSha);
             try
             {
-                baselineJournals = GoalOperationJournal.ReadAll(dir);
+                baselineEvidence = GoalOperationJournal.ReadAcceptanceEvidenceForMain(
+                    dir,
+                    mainHeadSha ?? string.Empty);
                 baselineReceipt = CleanTestBaseline.Resolve(
-                    baselineJournals,
+                    baselineEvidence,
                     goal.Id,
                     mainHeadSha ?? string.Empty,
                     mergeBaseSha: null);
@@ -646,9 +661,10 @@ internal sealed partial class ConductorDriver
                     checkAttributions = CleanTestBaseline.Attribute(
                         baselineReceipt,
                         failedChecks,
-                        baselineJournals,
+                        baselineEvidence,
                         goal.Id,
-                        mainHeadSha ?? string.Empty);
+                        mainHeadSha ?? string.Empty,
+                        verification.Checks);
                 }
                 catch
                 {
@@ -680,7 +696,7 @@ internal sealed partial class ConductorDriver
                     acceptanceAttemptStartedAt,
                     GoalOperationJournal.TryExtractBaseBuildCacheReceipt(verification),
                     failedChecks);
-            return new AcceptanceVerificationSummary(
+            return ClassifyInheritedBaselineApparatus(new AcceptanceVerificationSummary(
                 verification.Passed,
                 unmetCriteria,
                 verification.Passed ? null : verification.OutputTail,
@@ -689,7 +705,7 @@ internal sealed partial class ConductorDriver
                 mainHeadSha,
                 testResultPaths,
                 checkAttributions,
-                verification.Passed ? null : CleanTestBaseline.FormatFailureAttestation(baselineReceipt));
+                verification.Passed ? null : CleanTestBaseline.FormatFailureAttestation(baselineReceipt)));
         };
 
         FocusedEvidenceRunResult RunFocusedEvidence(
@@ -1235,6 +1251,7 @@ internal sealed partial class ConductorDriver
         Func<Goal, string, IDisposable?>? tryAcquireEvidenceMutationLease = null,
         Func<Goal, DeveloperBranchIntegrationResult>? integrateMainBeforeDeveloperDispatch = null,
         Func<Goal, ReconcileAcceptanceLeaseState?>? getEvidenceMutationLease = null,
+        Func<Goal, (string? BranchHeadSha, string? MainHeadSha)>? resolveAcceptanceHeads = null,
         Func<DateTimeOffset>? utcNow = null, string? executionDirectory = null, Action<string, string>? acceptanceEventSink = null,
         Action<TimeSpan>? noTickAcceptancePollDelay = null, TimeSpan? noTickAcceptancePollTimeout = null)
     {
@@ -1343,6 +1360,7 @@ internal sealed partial class ConductorDriver
         _tryAcquireEvidenceMutationLease =
             tryAcquireEvidenceMutationLease ?? ((_, _) => NoopEvidenceMutationLease.Instance);
         _getEvidenceMutationLease = getEvidenceMutationLease ?? (_ => null);
+        _resolveAcceptanceHeads = resolveAcceptanceHeads ?? (_ => (null, null));
         _utcNow = utcNow ?? (() => DateTimeOffset.UtcNow);
         _executionDirectory = executionDirectory;
         _parallelAcceptanceEnabled =
@@ -3161,6 +3179,13 @@ internal sealed partial class ConductorDriver
             return null;
         }
 
+        if (HasActiveApparatusHold(goal, out _))
+        {
+            return null;
+        }
+
+        var acceptanceHeads = _resolveAcceptanceHeads(goal);
+
         if (!_parallelAcceptanceAttemptCoordinator.HasLiveAttempt(goal.Id.Value) &&
             TryGetActiveEvidenceMutationLease(goal) is { } lease)
         {
@@ -3180,8 +3205,8 @@ internal sealed partial class ConductorDriver
             goal,
             slotIndex,
             _getLandingFileScopes(goal),
-            TryResolveAcceptanceBranchHead(goal),
-            _executionDirectory is null ? null : TryResolveGitHead(_executionDirectory));
+            acceptanceHeads.BranchHeadSha,
+            acceptanceHeads.MainHeadSha);
     }
 
     internal GateReadyCandidateProjectionResult ProjectGateReadyCandidate(
@@ -3190,6 +3215,11 @@ internal sealed partial class ConductorDriver
     {
         ArgumentNullException.ThrowIfNull(goal);
         ArgumentNullException.ThrowIfNull(policy);
+
+        if (HasActiveApparatusHold(goal, out _))
+        {
+            return ExcludedGateReadyCandidate(GateReadyCandidateExclusionReason.ApparatusHold);
+        }
 
         GoalLifecycleState lifecycleState;
         try
@@ -4173,12 +4203,25 @@ internal sealed partial class ConductorDriver
 
         var output = string.Join(Environment.NewLine, failedChecks);
         var summary = $"Named failing acceptance checks: {string.Join(", ", failedChecks)}";
+        var attributions = acceptance.CheckAttributions;
+        var allEnvironmentalApparatus = attributions is { Count: > 0 } &&
+            failedChecks.All(name => attributions.Any(attribution =>
+                attribution.CheckName.Equals(name, StringComparison.Ordinal) &&
+                attribution.Cause == AcceptanceFailureCause.EnvironmentalApparatus));
+        var allInherited = allEnvironmentalApparatus && failedChecks.All(name => attributions!.Any(attribution =>
+            attribution.CheckName.Equals(name, StringComparison.Ordinal) &&
+            attribution.Origin == AcceptanceFailureOrigin.Inherited));
         var check = new AcceptanceCheckResult(
             "acceptance failed checks",
             false,
             1,
             string.IsNullOrWhiteSpace(acceptance.FailureDetail) ? output : acceptance.FailureDetail,
-            ResultSummary: summary);
+            ResultSummary: summary,
+            FailureClassification: allEnvironmentalApparatus
+                ? allInherited
+                    ? AcceptanceFailureClassifications.InheritedBaselineApparatus
+                    : AcceptanceFailureClassifications.GateEnvironmentInterference
+                : null);
         return new AcceptanceVerificationSummary(
             false,
             [check],
@@ -4190,6 +4233,90 @@ internal sealed partial class ConductorDriver
             acceptance.CheckAttributions,
             acceptance.BaselineAttestation);
     }
+
+    internal static AcceptanceVerificationSummary ClassifyInheritedBaselineApparatus(
+        AcceptanceVerificationSummary acceptance)
+    {
+        if (acceptance.Passed ||
+            acceptance.FailedChecks is not { Count: > 0 } failedChecks ||
+            acceptance.CheckAttributions is not { Count: > 0 } attributions ||
+            !failedChecks.All(name => attributions.Any(attribution =>
+                attribution.CheckName.Equals(name, StringComparison.Ordinal) &&
+                attribution.Origin == AcceptanceFailureOrigin.Inherited &&
+                attribution.Cause == AcceptanceFailureCause.EnvironmentalApparatus)))
+        {
+            return acceptance;
+        }
+
+        var inheritedChecks = failedChecks.ToHashSet(StringComparer.Ordinal);
+        var classifiedChecks = acceptance.UnmetCriteria
+            .Select(check => !check.Advisory && inheritedChecks.Contains(check.Name)
+                ? check with
+                {
+                    FailureClassification = AcceptanceFailureClassifications.InheritedBaselineApparatus
+                }
+                : check)
+            .ToArray();
+        return new AcceptanceVerificationSummary(
+            acceptance.Passed,
+            classifiedChecks,
+            acceptance.FailureDetail,
+            acceptance.FailedChecks,
+            acceptance.BranchHeadSha,
+            acceptance.MainHeadSha,
+            acceptance.TestResultPaths,
+            attributions,
+            acceptance.BaselineAttestation);
+    }
+
+    internal static bool IsEnvironmentalApparatusAcceptanceRun(AcceptanceVerificationSummary acceptance)
+    {
+        if (acceptance.RequiredUnmetCriteria is not { Count: > 0 } requiredUnmetCriteria)
+        {
+            return false;
+        }
+
+        return requiredUnmetCriteria.All(check =>
+            check.FailureClassification is
+                AcceptanceFailureClassifications.GateEnvironmentInterference or
+                AcceptanceFailureClassifications.InheritedBaselineApparatus ||
+            acceptance.CheckAttributions is { Count: > 0 } attributions &&
+            attributions.Any(attribution =>
+                attribution.CheckName.Equals(check.Name, StringComparison.Ordinal) &&
+                attribution.Cause == AcceptanceFailureCause.EnvironmentalApparatus));
+    }
+
+    private static bool IsSameApparatusFailurePair(
+        AcceptanceFailureSummary? failure,
+        (string? BranchHeadSha, string? MainHeadSha) current)
+    {
+        if (failure is not { IsEnvironmentalApparatus: true })
+        {
+            return false;
+        }
+
+        return ShaIsUnchangedOrUnknown(failure.BranchHeadSha, current.BranchHeadSha) &&
+            ShaIsUnchangedOrUnknown(failure.MainHeadSha, current.MainHeadSha);
+    }
+
+    private bool HasActiveApparatusHold(
+        Goal goal,
+        out (string? BranchHeadSha, string? MainHeadSha) current)
+    {
+        current = (null, null);
+        if (goal.LatestAcceptanceFailure is not { IsEnvironmentalApparatus: true })
+        {
+            return false;
+        }
+
+        current = _resolveAcceptanceHeads(goal);
+        return IsSameApparatusFailurePair(goal.LatestAcceptanceFailure, current);
+    }
+
+    private static bool ShaIsUnchangedOrUnknown(string? recorded, string? current) =>
+        string.IsNullOrWhiteSpace(recorded) ||
+        string.IsNullOrWhiteSpace(current) ||
+        recorded.Equals(current, StringComparison.OrdinalIgnoreCase);
 
     internal static void ReconcileCleanBaselineAttention(
         ICollaborationItemStore store,
@@ -5596,19 +5723,34 @@ internal sealed partial class ConductorDriver
         ConductorAutonomyPolicy policy,
         AcceptanceVerificationSummary acceptance)
     {
-        if (acceptance.RequiredUnmetCriteria.Any(check =>
-            string.Equals(
-                check.FailureClassification,
-                AcceptanceFailureClassifications.GateEnvironmentInterference,
-                StringComparison.Ordinal)))
+        if (IsEnvironmentalApparatusAcceptanceRun(acceptance))
         {
+            var failedChecks = acceptance.FailedChecks is { Count: > 0 }
+                ? acceptance.FailedChecks
+                : acceptance.RequiredUnmetCriteria.Select(check => check.Name).ToArray();
+            var observedHeads = _resolveAcceptanceHeads(goal);
+            var branchHeadSha = acceptance.BranchHeadSha ?? observedHeads.BranchHeadSha;
+            var mainHeadSha = acceptance.MainHeadSha ?? observedHeads.MainHeadSha;
+            _recordAcceptanceFailure(
+                goal,
+                failedChecks,
+                branchHeadSha,
+                mainHeadSha,
+                acceptance.CheckAttributions,
+                acceptance.BaselineAttestation);
+            var reason =
+                $"Acceptance gate apparatus/environmental failure recorded for unchanged candidate " +
+                $"{FormatAcceptanceCandidate(branchHeadSha, mainHeadSha)}. Acceptance will not re-run until " +
+                "the candidate or main HEAD changes, or an operator confirms acceptance-retry; no worker was reopened.";
+            RecordEscalation(goal, GoalLifecycleState.Verified, reason);
             return MakeResult(
                 goal.Id.Value,
                 goalPrefix,
                 policy,
                 new ConductorAdvanceOutcome.Held(
                     GoalLifecycleState.Verified,
-                    "Acceptance gate environmental interference; re-gate on the next conduct tick without dispatching a worker."));
+                    reason,
+                    StableIdentity: $"acceptance-apparatus:{branchHeadSha ?? "unknown"}:{mainHeadSha ?? "unknown"}"));
         }
 
         if (!acceptance.Passed && acceptance.RequiredUnmetCriteria.Count == 0)
@@ -5762,6 +5904,13 @@ internal sealed partial class ConductorDriver
         GoalLifecycleState state,
         string reason)
     {
+        RecordEscalation(goal, state, reason);
+        return MakeResult(goal.Id.Value, goalPrefix, policy,
+            new ConductorAdvanceOutcome.Escalated(state, reason));
+    }
+
+    private void RecordEscalation(Goal goal, GoalLifecycleState state, string reason)
+    {
         var escalationClock = Stopwatch.StartNew();
         var sinkResult = LandingEscalationWriteResult.Error;
         try
@@ -5779,8 +5928,6 @@ internal sealed partial class ConductorDriver
                 $"collab_ms={sinkResult.CollaborationElapsedMilliseconds} collab={sinkResult.CollaborationOutcome} " +
                 $"channel_ms={sinkResult.ChannelElapsedMilliseconds} channel={sinkResult.ChannelOutcome}");
         }
-        return MakeResult(goal.Id.Value, goalPrefix, policy,
-            new ConductorAdvanceOutcome.Escalated(state, reason));
     }
 
     private static ConductorAdvanceResult MakeResult(

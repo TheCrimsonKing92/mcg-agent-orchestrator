@@ -6,7 +6,7 @@
     Microsoft.Testing.Platform (MTP) test projects build and run in one dotnet test invocation,
     with outputs routed into the goal's isolated artifact root. Use the same -GoalPrefix with
     -ReuseArtifacts for later no-build timing passes. Reuse verifies the goal owner, test assembly,
-    and MTP executable before running xUnit directly without invoking MSBuild.
+    and generated MTP apphost before running the test assembly through dotnet without invoking MSBuild.
     Builds share a two-lock machine-wide pool; test results never use the lock path.
 
 Set MCG_DOTNET_FORCE_CLEAN_STALE_LEASE_ARTIFACTS=1 to force stale-lease recovery to wipe
@@ -1694,14 +1694,15 @@ function Invoke-FocusedTestMode {
             "--report-trx", "--report-trx-filename", $trxName,
             "--long-running", "120"
         ) + @(Get-FocusedMtpFilterArguments -Filter $FocusedTestFilter)
-        $receipt.testExecutable = $reuse.ExecutablePath
-        $receipt.testArguments = @($testArguments)
+        $testProcessArguments = @($reuse.AssemblyPath) + $testArguments
+        $receipt.testExecutable = "dotnet"
+        $receipt.testArguments = @($testProcessArguments)
         if ([DateTime]::UtcNow -ge $processDeadline) {
             $receipt.exitCode = 2
             $receipt.reason = "budget-exceeded"
             return $receipt
         }
-        $testRun = Invoke-FocusedChildProcess -FileName $reuse.ExecutablePath -ProcessArguments $testArguments -Deadline $processDeadline -HeartbeatPath $slotLease.HeartbeatPath -AcceptancePriorityPath "$($slotLease.Path).acceptance-priority.lock"
+        $testRun = Invoke-FocusedChildProcess -FileName "dotnet" -ProcessArguments $testProcessArguments -Deadline $processDeadline -HeartbeatPath $slotLease.HeartbeatPath -AcceptancePriorityPath "$($slotLease.Path).acceptance-priority.lock"
         Set-FocusedChildProcessReceipt -Receipt $receipt -Result $testRun
         $testLogPath = Join-Path $outputDirectory "test.log"
         Write-FocusedLog -Path $testLogPath -Stdout $testRun.Stdout -Stderr $testRun.Stderr
@@ -1978,7 +1979,7 @@ try {
             $exitCode = 86
         }
         else {
-            Write-Host "Reusing test assembly '$($reuse.AssemblyPath)' and MTP executable '$($reuse.ExecutablePath)' with dependency directory '$($reuse.DependencyDirectory)'."
+            Write-Host "Reusing test assembly '$($reuse.AssemblyPath)' with validated generated apphost '$($reuse.ExecutablePath)' and dependency directory '$($reuse.DependencyDirectory)'."
         }
     }
 
@@ -1991,7 +1992,7 @@ try {
             $lockStream.Dispose()
             $lockStream = $null
             $lockHeld = $false
-            & $reuse.ExecutablePath @mtpArguments
+            & dotnet $reuse.AssemblyPath @mtpArguments
         }
         else {
             if ($DotnetArguments[0].Equals("test", [System.StringComparison]::OrdinalIgnoreCase)) {

@@ -69,6 +69,8 @@ public sealed class HermeticVerificationEnvironmentTests : GoalAcceptanceVerifie
         // hermetic boundary, one dead entry at a time, invisible until PATH is inspected by hand.
         // DOTNET_SKIP_FIRST_TIME_EXPERIENCE does not suppress it on .NET 10; only this variable does.
         Assert.Equal("0", environment["DOTNET_ADD_GLOBAL_TOOLS_TO_PATH"]);
+        Assert.Equal("1", environment["MSBUILDDISABLENODEREUSE"]);
+        Assert.Equal("0", environment["DOTNET_CLI_USE_MSBUILD_SERVER"]);
         Assert.DoesNotContain("DOTNET_SKIP_FIRST_TIME_EXPERIENCE", environment.Keys);
         if (OperatingSystem.IsWindows())
         {
