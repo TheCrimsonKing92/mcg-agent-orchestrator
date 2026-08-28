@@ -36,7 +36,9 @@ internal static class SourceSizeRatchet
             // attribution belong where raw check output becomes final acceptance evidence.
             // Raised for goal 344d20c0: typed shard completion, retry evidence custody, and semantic-plan
             // deduplication must remain at the verifier boundary that owns execution and retry decisions.
-            new SourceSizeCeiling("src/Mcg.AgentOrchestrator.Infrastructure/Workspaces/GoalAcceptanceVerifier.cs", 9140),
+            // Reconciled after landing goal 1441c61c: its failure-cause evidence custody shares this same
+            // execution boundary. This is the measured combined size after rebasing both reviewed changes.
+            new SourceSizeCeiling("src/Mcg.AgentOrchestrator.Infrastructure/Workspaces/GoalAcceptanceVerifier.cs", 9396),
             // Goal 682f25a1 re-derived this row after integrating goal c2eae988, whose acceptance
             // cancellation seam had already added 74 net lines before the multi-file ratchet landed.
             // Raised for goal a22c7293: slice admission must run where all dispatch paths converge.
