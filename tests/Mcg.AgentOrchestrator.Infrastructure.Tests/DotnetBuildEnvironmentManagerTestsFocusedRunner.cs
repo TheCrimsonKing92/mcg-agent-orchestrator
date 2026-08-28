@@ -45,8 +45,10 @@ public sealed class DotnetBuildEnvironmentManagerTestsFocusedRunner
         var source = ReadIsolatedDotnetScript();
         var mode = FocusedModeSource(source);
         var arguments = mode.IndexOf("$testArguments = @(", StringComparison.Ordinal);
-        var receipt = mode.IndexOf("$receipt.testArguments = @($testArguments)", StringComparison.Ordinal);
-        var invocation = mode.IndexOf("Invoke-FocusedChildProcess -FileName $reuse.ExecutablePath", StringComparison.Ordinal);
+        var receipt = mode.IndexOf("$receipt.testArguments = @($testProcessArguments)", StringComparison.Ordinal);
+        var invocation = mode.IndexOf(
+            "Invoke-FocusedChildProcess -FileName \"dotnet\" -ProcessArguments $testProcessArguments",
+            StringComparison.Ordinal);
 
         Assert.Contains(@"Join-Path $runRoot ""focused-artifacts\$($slotLease.Id)""", mode, StringComparison.Ordinal);
         Assert.DoesNotContain(@"Join-Path $runRoot ""artifacts""", mode, StringComparison.Ordinal);
@@ -326,8 +328,22 @@ public sealed class DotnetBuildEnvironmentManagerTestsFocusedRunner
             Assert.True(rootElement.GetProperty("worktreeStateAfter").GetProperty("unchanged").GetBoolean());
             Assert.True(rootElement.GetProperty("buildReused").GetBoolean());
             Assert.Equal("Developer", rootElement.GetProperty("authorization").GetProperty("role").GetString());
+            Assert.Equal("dotnet", rootElement.GetProperty("testExecutable").GetString());
+            Assert.Equal(0, rootElement.GetProperty("testProcessExitCode").GetInt32());
+            var childProcess = rootElement.GetProperty("childProcess");
+            Assert.Equal("confirmed", childProcess.GetProperty("identityStatus").GetString());
+            Assert.Equal(
+                "dotnet.exe",
+                Path.GetFileName(childProcess.GetProperty("executable").GetString()),
+                ignoreCase: true);
+            var executedArguments = rootElement.GetProperty("testArguments")
+                .EnumerateArray()
+                .Select(value => value.GetString())
+                .ToArray();
+            var expectedAssemblyPath = Path.Combine(artifactOutput, $"{projectName}.dll");
+            Assert.Equal(expectedAssemblyPath, executedArguments[0], ignoreCase: true);
             Assert.Contains(
-                rootElement.GetProperty("testArguments").EnumerateArray().Select(value => value.GetString()),
+                executedArguments,
                 value => value == "*AcceptanceCriterionFeasibilityTests*");
             Assert.False(File.Exists(logPath));
             Assert.True(string.IsNullOrWhiteSpace(RunCommand("git", workDirectory, "status", "--porcelain")));

@@ -1694,14 +1694,15 @@ function Invoke-FocusedTestMode {
             "--report-trx", "--report-trx-filename", $trxName,
             "--long-running", "120"
         ) + @(Get-FocusedMtpFilterArguments -Filter $FocusedTestFilter)
-        $receipt.testExecutable = $reuse.ExecutablePath
-        $receipt.testArguments = @($testArguments)
+        $testProcessArguments = @($reuse.AssemblyPath) + $testArguments
+        $receipt.testExecutable = "dotnet"
+        $receipt.testArguments = @($testProcessArguments)
         if ([DateTime]::UtcNow -ge $processDeadline) {
             $receipt.exitCode = 2
             $receipt.reason = "budget-exceeded"
             return $receipt
         }
-        $testRun = Invoke-FocusedChildProcess -FileName $reuse.ExecutablePath -ProcessArguments $testArguments -Deadline $processDeadline -HeartbeatPath $slotLease.HeartbeatPath -AcceptancePriorityPath "$($slotLease.Path).acceptance-priority.lock"
+        $testRun = Invoke-FocusedChildProcess -FileName "dotnet" -ProcessArguments $testProcessArguments -Deadline $processDeadline -HeartbeatPath $slotLease.HeartbeatPath -AcceptancePriorityPath "$($slotLease.Path).acceptance-priority.lock"
         Set-FocusedChildProcessReceipt -Receipt $receipt -Result $testRun
         $testLogPath = Join-Path $outputDirectory "test.log"
         Write-FocusedLog -Path $testLogPath -Stdout $testRun.Stdout -Stderr $testRun.Stderr
