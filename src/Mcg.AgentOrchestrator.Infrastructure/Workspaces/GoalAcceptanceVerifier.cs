@@ -1583,7 +1583,7 @@ public sealed class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
                 cancellationToken).ConfigureAwait(false);
             if (prebuild.Run.Result.Passed)
             {
-                VerifyPrebuiltMtpExecutables(shardChecks, primaryBuildPhase);
+                VerifyPrebuiltMtpArtifacts(shardChecks, primaryBuildPhase);
                 primaryLease.ReleaseExecutionLock();
             }
         }
@@ -1749,21 +1749,21 @@ public sealed class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
             .ThenBy(key => key, StringComparer.Ordinal)
             .ToArray();
 
-    private void VerifyPrebuiltMtpExecutables(
+    private void VerifyPrebuiltMtpArtifacts(
         IReadOnlyList<AcceptanceManifestCheck> shardChecks,
         DotnetTestBuildPhase buildPhase)
     {
         var buildEnvironment = buildPhase.BuildEnvironment
-            ?? throw new InvalidOperationException(
-                "Infrastructure shard prebuild completed without recording its build environment.");
-        foreach (var executablePath in shardChecks
-            .Select(check => EngineSettings.ResolveMtpInvocation(check.Project).ResolveExecutablePath(buildEnvironment))
+            ?? throw new InvalidOperationException("Infrastructure shard prebuild completed without recording its build environment.");
+        foreach (var artifactPath in shardChecks
+            .Select(check => EngineSettings.ResolveMtpInvocation(check.Project))
+            .DistinctBy(invocation => invocation.Project, StringComparer.OrdinalIgnoreCase)
+            .SelectMany(invocation => invocation.ResolveRequiredBuildArtifacts(buildEnvironment))
             .Distinct(StringComparer.OrdinalIgnoreCase))
         {
-            if (!File.Exists(executablePath))
+            if (!File.Exists(artifactPath))
             {
-                throw new InvalidDataException(
-                    $"Infrastructure shard prebuild did not produce configured MTP executable '{executablePath}'.");
+                throw new InvalidDataException($"Infrastructure shard prebuild did not produce configured MTP artifact '{artifactPath}'.");
             }
         }
     }
@@ -5613,7 +5613,7 @@ public sealed class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
             // coverage invariant report by-design-excluded tests as missing on every attempt.
             return UseDotnetHostForManagedExecutable(
             [
-                invocation.ResolveExecutablePath(environment),
+                invocation.ResolveManagedAssemblyPath(environment),
                 "--no-ansi",
                 "--progress",
                 "off",
@@ -6519,13 +6519,13 @@ public sealed class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
         }
 
         var invocation = EngineSettings.ResolveMtpInvocation(check.Project);
-        var executablePath = invocation.ResolveExecutablePath(environment);
+        var managedAssemblyPath = invocation.ResolveManagedAssemblyPath(environment);
         var resultsDirectory = Path.GetDirectoryName(telemetry.Paths[0])
             ?? Path.Combine(environment.ArtifactsPath, "TestResults");
         var trxFileName = Path.GetFileName(telemetry.Paths[0]);
         var args = invocation.Arguments
             .Select(argument => argument
-                .Replace("{executable}", executablePath, StringComparison.Ordinal)
+                .Replace("{executable}", managedAssemblyPath, StringComparison.Ordinal)
                 .Replace("{resultsDirectory}", resultsDirectory, StringComparison.Ordinal)
                 .Replace("{trxFileName}", trxFileName, StringComparison.Ordinal))
             .ToList();

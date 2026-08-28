@@ -578,6 +578,11 @@ public sealed class AcceptanceGateEngineSettingsTests
                             "Mcg.AgentOrchestrator.Infrastructure.Tests.exe");
                         Directory.CreateDirectory(Path.GetDirectoryName(executable)!);
                         File.WriteAllText(executable, "deterministic raised-cap fixture");
+                        File.WriteAllText(
+                            Path.Combine(
+                                Path.GetDirectoryName(executable)!,
+                                "Mcg.AgentOrchestrator.Infrastructure.Tests.dll"),
+                            "deterministic raised-cap managed fixture");
                     }
 
                     return new GoalAcceptanceVerifier.CommandResult(0, "Build succeeded.");
@@ -734,10 +739,11 @@ public sealed class AcceptanceGateEngineSettingsTests
 
             Xunit.Assert.True(result.Passed);
             var mtpCall = Xunit.Assert.Single(calls.Where(call =>
-                call.Length > 0 &&
-                Path.GetFileNameWithoutExtension(call[0]).Equals("Example.Tests", StringComparison.OrdinalIgnoreCase)));
+                call.Length > 1 &&
+                call[0].Equals("dotnet", StringComparison.OrdinalIgnoreCase) &&
+                Path.GetFileNameWithoutExtension(call[1]).Equals("Example.Tests", StringComparison.OrdinalIgnoreCase)));
             Xunit.Assert.Contains("--candidate-switch", mtpCall);
-            Xunit.Assert.Contains(Path.Combine("candidate", $"Example.Tests{(OperatingSystem.IsWindows() ? ".exe" : string.Empty)}"), mtpCall[0]);
+            Xunit.Assert.Contains(Path.Combine("candidate", "Example.Tests.dll"), mtpCall[1]);
         }
         finally
         {
@@ -766,6 +772,33 @@ public sealed class AcceptanceGateEngineSettingsTests
                 () => AcceptanceGateEngineSettings.Load(root));
 
             Xunit.Assert.Contains("first argument", error.Message, StringComparison.Ordinal);
+        }
+        finally
+        {
+            Directory.Delete(root, recursive: true);
+        }
+    }
+
+    [Xunit.Fact(DisplayName = "AcceptanceGateEngine_requires_executable_extension_token_for_managed_MTP_hosting")]
+    public void AcceptanceGateEngineRequiresExecutableExtensionToken()
+    {
+        var root = CreateWorkspace("""
+            {
+              "engine": {
+                "mtpInvocations": [{
+                  "project": "tests/Example.Tests/Example.Tests.csproj",
+                  "executablePathTemplate": "bin/{projectName}",
+                  "arguments": ["{executable}"]
+                }]
+              }
+            }
+            """);
+        try
+        {
+            var error = Xunit.Assert.Throws<InvalidDataException>(
+                () => AcceptanceGateEngineSettings.Load(root));
+
+            Xunit.Assert.Contains("{executableExtension}", error.Message, StringComparison.Ordinal);
         }
         finally
         {
@@ -910,7 +943,8 @@ public sealed class AcceptanceGateEngineSettingsTests
             Xunit.Assert.Equal(2, discoveryCalls.Length);
             Xunit.Assert.All(discoveryCalls, call =>
             {
-                Xunit.Assert.NotEqual("dotnet", call[0], StringComparer.OrdinalIgnoreCase);
+                Xunit.Assert.Equal("dotnet", call[0], StringComparer.OrdinalIgnoreCase);
+                Xunit.Assert.EndsWith(".dll", call[1], StringComparison.OrdinalIgnoreCase);
                 var listTestsIndex = Array.IndexOf(call, "--list-tests");
                 Xunit.Assert.Equal("json", call[listTestsIndex + 1]);
             });
@@ -946,10 +980,10 @@ public sealed class AcceptanceGateEngineSettingsTests
 
             Xunit.Assert.DoesNotContain(
                 ordinaryChange,
-                check => check.Name.EndsWith(": Mtp one-step project rebuild", StringComparison.Ordinal));
+                check => check.Name.EndsWith(": Mtp managed project rebuild", StringComparison.Ordinal));
             Xunit.Assert.Contains(
                 buildSystemChange,
-                check => check.Name.EndsWith(": Mtp one-step project rebuild", StringComparison.Ordinal));
+                check => check.Name.EndsWith(": Mtp managed project rebuild", StringComparison.Ordinal));
             Xunit.Assert.Contains(
                 ordinaryChange,
                 check => check.Name.EndsWith(": Process spawning", StringComparison.Ordinal));

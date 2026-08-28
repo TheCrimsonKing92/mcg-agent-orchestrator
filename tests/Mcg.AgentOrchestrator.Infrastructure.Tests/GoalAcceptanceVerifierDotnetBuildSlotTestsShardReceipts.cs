@@ -79,7 +79,7 @@ public sealed class GoalAcceptanceVerifierDotnetBuildSlotTestsShardReceipts : Go
                     Assert.True(
                         DotnetBuildEnvironmentManager.IsStableSlotExecutionLeaseAvailable(primaryBuildPermit),
                         "MTP execution must not retain the build-pool lease.");
-                    executablePaths.Add(args[0]);
+                    executablePaths.Add(args[1]);
                     var resultsDirectoryIndex = Array.IndexOf(args, "--results-directory");
                     Assert.InRange(resultsDirectoryIndex, 0, args.Length - 2);
                     resultsDirectories.Add(args[resultsDirectoryIndex + 1]);
@@ -129,9 +129,18 @@ public sealed class GoalAcceptanceVerifierDotnetBuildSlotTestsShardReceipts : Go
             Assert.True(firstShardIndex >= 0);
             Assert.DoesNotContain(
                 invocationArray.Skip(firstShardIndex),
-                call => call.Length > 0 && call[0].Equals("dotnet", StringComparison.OrdinalIgnoreCase));
+                call => call.Length > 0 &&
+                    call[0].Equals("dotnet", StringComparison.OrdinalIgnoreCase) &&
+                    (call.Length < 2 || !call[1].EndsWith(".dll", StringComparison.OrdinalIgnoreCase)));
             Assert.Single(executablePaths.Distinct(StringComparer.OrdinalIgnoreCase));
-            Assert.All(executablePaths, path => Assert.True(File.Exists(path), $"Missing prebuilt MTP executable '{path}'."));
+            Assert.All(executablePaths, path => Assert.True(File.Exists(path), $"Missing prebuilt MTP managed assembly '{path}'."));
+            var expectedAppHost = Path.Combine(
+                primaryEnvironment.ArtifactsPath,
+                "bin",
+                "Mcg.AgentOrchestrator.RealProcessShardProbe",
+                "debug",
+                $"Mcg.AgentOrchestrator.RealProcessShardProbe{(OperatingSystem.IsWindows() ? ".exe" : string.Empty)}");
+            Assert.True(File.Exists(expectedAppHost), $"Missing validated MTP apphost '{expectedAppHost}'.");
             var attemptResultsDirectory = Path.GetDirectoryName(ambientAttemptPrefix)!;
             Assert.Single(resultsDirectories);
             Assert.All(

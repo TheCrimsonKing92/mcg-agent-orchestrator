@@ -679,6 +679,33 @@ function Resolve-MtpAppHostPath {
     return $resolved
 }
 
+function Resolve-MtpManagedAssemblyPath {
+    param(
+        [Parameter(Mandatory = $true)][string]$RepositoryRoot,
+        [Parameter(Mandatory = $true)]$Invocation,
+        [Parameter(Mandatory = $true)][string]$Configuration
+    )
+
+    $projectPath = [System.IO.Path]::GetFullPath((Join-Path $RepositoryRoot ([string]$Invocation.project)))
+    $template = [string]$Invocation.executablePathTemplate
+    if ([string]::IsNullOrWhiteSpace($template) -or -not $template.Contains('{executableExtension}')) {
+        throw "Manifest MTP invocation for '$($Invocation.project)' must include {executableExtension} in executablePathTemplate."
+    }
+
+    $projectName = [System.IO.Path]::GetFileNameWithoutExtension($projectPath)
+    $relativePath = $template.
+        Replace('{projectName}', $projectName).
+        Replace('{configuration}', $Configuration).
+        Replace('{executableExtension}', '.dll')
+    $resolved = [System.IO.Path]::GetFullPath((Join-Path $RepositoryRoot $relativePath))
+    $repositoryPrefix = [System.IO.Path]::GetFullPath($RepositoryRoot).TrimEnd('\', '/') + [System.IO.Path]::DirectorySeparatorChar
+    if (-not $resolved.StartsWith($repositoryPrefix, [System.StringComparison]::OrdinalIgnoreCase) -or
+        -not $resolved.EndsWith('.dll', [System.StringComparison]::OrdinalIgnoreCase)) {
+        throw "MTP managed assembly path for '$($Invocation.project)' is invalid: $resolved"
+    }
+    return $resolved
+}
+
 function New-MtpRunnerArguments {
     param(
         [Parameter(Mandatory = $true)]$Invocation,
@@ -1151,11 +1178,19 @@ function Invoke-MtpTestRun {
         $invocationIndex = 0
         foreach ($project in $projects) {
             $expectedAppHost = Resolve-MtpAppHostPath -RepositoryRoot $RepositoryRoot -Invocation $project -Configuration $Configuration
-            $executable = if ([string]::IsNullOrWhiteSpace($RunnerPath)) { $expectedAppHost } else { [System.IO.Path]::GetFullPath($RunnerPath) }
-            if (-not (Test-Path -LiteralPath $executable -PathType Leaf)) {
+            $managedAssembly = Resolve-MtpManagedAssemblyPath -RepositoryRoot $RepositoryRoot -Invocation $project -Configuration $Configuration
+            $usesManagedAssembly = [string]::IsNullOrWhiteSpace($RunnerPath)
+            $executable = if ($usesManagedAssembly) { $DotnetPath } else { [System.IO.Path]::GetFullPath($RunnerPath) }
+            $requiredExecutable = if ($usesManagedAssembly) { $expectedAppHost } else { $executable }
+            if (-not (Test-Path -LiteralPath $requiredExecutable -PathType Leaf)) {
                 $projectPath = Join-Path $RepositoryRoot ([string]$project.project)
                 $outputDirectory = Split-Path -Parent $expectedAppHost
-                Write-Host "MISSING APPHOST - expected '$executable'. Build it with: $DotnetPath build `"$projectPath`" --configuration $Configuration --output `"$outputDirectory`""
+                Write-Host "MISSING APPHOST - expected '$requiredExecutable'. Build it with: $DotnetPath build `"$projectPath`" --configuration $Configuration --output `"$outputDirectory`""
+                Write-Host "Retained diagnostic directory: $runDirectory"
+                return New-MtpTerminalResult -Outcome failed -ExitCode $script:ExitCodes.MissingAppHost -ResultsDirectory $runDirectory -ArtifactsRetained $true
+            }
+            if ($usesManagedAssembly -and -not (Test-Path -LiteralPath $managedAssembly -PathType Leaf)) {
+                Write-Host "MISSING MANAGED ASSEMBLY - expected '$managedAssembly'."
                 Write-Host "Retained diagnostic directory: $runDirectory"
                 return New-MtpTerminalResult -Outcome failed -ExitCode $script:ExitCodes.MissingAppHost -ResultsDirectory $runDirectory -ArtifactsRetained $true
             }
@@ -1171,7 +1206,8 @@ function Invoke-MtpTestRun {
                 $outputLog = Join-Path $runDirectory ([System.IO.Path]::ChangeExtension($trxFileName, '.runner.log'))
                 $expectedTrxPaths.Add($trxPath)
                 try {
-                    $arguments = New-MtpRunnerArguments -Invocation $project -Executable $executable -ResultsDirectory $runDirectory -TrxFileName $trxFileName -TestHostTimeoutSeconds $TestHostTimeoutSeconds -Filter $filter
+                    $argumentExecutable = if ($usesManagedAssembly) { $managedAssembly } else { $executable }
+                    $arguments = New-MtpRunnerArguments -Invocation $project -Executable $argumentExecutable -ResultsDirectory $runDirectory -TrxFileName $trxFileName -TestHostTimeoutSeconds $TestHostTimeoutSeconds -Filter $filter
                 }
                 catch {
                     Write-Host "RUNNER/TOOLING FAILURE - $($_.Exception.Message)"
@@ -1179,12 +1215,15 @@ function Invoke-MtpTestRun {
                     return New-MtpTerminalResult -Outcome failed -ExitCode $script:ExitCodes.Runner -ResultsDirectory $runDirectory -RunnerLogPaths $runnerLogPaths.ToArray() -TrxPaths $trxPaths.ToArray() -ExpectedTrxPaths $expectedTrxPaths.ToArray() -OwnedProcessId $lastOwnedProcessId -ExitConfirmed $allExitsConfirmed -ArtifactsRetained $true
                 }
 
-                Write-Host "Running MTP apphost: $executable"
+                Write-Host "Running MTP host: $executable $argumentExecutable"
                 if (-not [string]::IsNullOrWhiteSpace($filter)) {
                     Write-Host "Filter: $filter"
                 }
                 Write-Host "Runner output log: $outputLog"
                 $runnerLogPaths.Add($outputLog)
+                if ($usesManagedAssembly) {
+                    $arguments = @($executable) + @($arguments)
+                }
                 $run = Invoke-MtpAppHost -Executable $executable -Arguments $arguments -OutputLog $outputLog -AllowBreakaway:$AllowBreakaway -TestHostTimeoutSeconds $TestHostTimeoutSeconds
                 $lastOwnedProcessId = $run.OwnedProcessId
                 $lastRunnerExitCode = $run.ExitCode
