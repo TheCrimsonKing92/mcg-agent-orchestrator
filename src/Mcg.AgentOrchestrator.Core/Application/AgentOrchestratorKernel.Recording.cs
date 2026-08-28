@@ -1319,6 +1319,7 @@ public sealed partial class AgentOrchestratorKernel
         {
             task.SetStatus(WorkTaskStatus.Cancelled);
         }
+        goal.RestoreAcceptanceFailureAfterRetryCancellation();
         Append(goal, taskId, ProgressKind.TaskCancelled, $"Cancelled process {process.ProcessId}: {process.Command}");
         Append(
             goal,

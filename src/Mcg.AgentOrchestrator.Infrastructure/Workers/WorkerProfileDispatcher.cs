@@ -2372,7 +2372,7 @@ public static class WorkerProfileDispatcher
                         correction.CapturedAcceptanceCriteriaHash
                     }).ToArray()));
         }
-        if (goal.LatestAcceptanceFailure is { } acceptanceFailure)
+        if (goal.RetainedAcceptanceFailure is { } acceptanceFailure)
         {
             AddSource(
                 WorkerContextSemanticSource.LatestAcceptanceFailure,

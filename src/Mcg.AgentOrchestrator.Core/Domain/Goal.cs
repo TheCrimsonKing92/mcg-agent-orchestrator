@@ -71,7 +71,13 @@ public sealed class Goal
 
     public IReadOnlyList<RefinedSpecVersion> RefinedSpecVersions => _refinedSpecVersions;
 
-    public AcceptanceFailureSummary? LatestAcceptanceFailure { get; private set; }
+    private AcceptanceFailureSummary? _retainedAcceptanceFailure;
+    private bool _acceptanceFailureDeferredForRetry;
+
+    public AcceptanceFailureSummary? LatestAcceptanceFailure =>
+        _acceptanceFailureDeferredForRetry ? null : _retainedAcceptanceFailure;
+
+    public AcceptanceFailureSummary? RetainedAcceptanceFailure => _retainedAcceptanceFailure;
 
     public int AutomaticAcceptanceRetryCount { get; private set; }
 
@@ -89,7 +95,7 @@ public sealed class Goal
 
     public ProgressEvent? LatestTaskRetryAfterAcceptanceFailure(TaskId taskId)
     {
-        if (LatestAcceptanceFailure is not { } failure)
+        if (RetainedAcceptanceFailure is not { } failure)
         {
             return null;
         }
@@ -243,7 +249,7 @@ public sealed class Goal
             .Where(item => item.Length > 0)
             .Distinct(StringComparer.Ordinal)
             .ToArray();
-        LatestAcceptanceFailure = checks.Length == 0
+        _retainedAcceptanceFailure = checks.Length == 0
             ? null
             : new AcceptanceFailureSummary(
                 occurredAt,
@@ -252,9 +258,20 @@ public sealed class Goal
                 NormalizeSha(mainHeadSha),
                 checkAttributions,
                 string.IsNullOrWhiteSpace(baselineAttestation) ? null : baselineAttestation.Trim());
+        _acceptanceFailureDeferredForRetry = false;
     }
 
-    internal void ClearAcceptanceFailure() => LatestAcceptanceFailure = null;
+    internal void DeferAcceptanceFailureForRetry() =>
+        _acceptanceFailureDeferredForRetry = _retainedAcceptanceFailure is not null;
+
+    internal void RestoreAcceptanceFailureAfterRetryCancellation() =>
+        _acceptanceFailureDeferredForRetry = false;
+
+    internal void ClearAcceptanceFailure()
+    {
+        _retainedAcceptanceFailure = null;
+        _acceptanceFailureDeferredForRetry = false;
+    }
 
     internal void IncrementAutomaticAcceptanceRetryCount() => AutomaticAcceptanceRetryCount++;
 
@@ -449,15 +466,15 @@ public sealed class Goal
             _dependsOn.Count > 0 ? _dependsOn.Select(id => id.Value).ToList() : null,
             SourceBacklogItemId,
             RefinedSpec is null ? null : ToRefinedSpecSnapshot(RefinedSpec),
-            LatestAcceptanceFailure is null
+            RetainedAcceptanceFailure is null
                 ? null
                 : new AcceptanceFailureSnapshot(
-                    LatestAcceptanceFailure.OccurredAt,
-                    LatestAcceptanceFailure.FailedChecks.ToList(),
-                    LatestAcceptanceFailure.BranchHeadSha,
-                    LatestAcceptanceFailure.MainHeadSha,
-                    LatestAcceptanceFailure.CheckAttributions?.ToList(),
-                    LatestAcceptanceFailure.BaselineAttestation),
+                    RetainedAcceptanceFailure.OccurredAt,
+                    RetainedAcceptanceFailure.FailedChecks.ToList(),
+                    RetainedAcceptanceFailure.BranchHeadSha,
+                    RetainedAcceptanceFailure.MainHeadSha,
+                    RetainedAcceptanceFailure.CheckAttributions?.ToList(),
+                    RetainedAcceptanceFailure.BaselineAttestation),
             _effectiveAcceptanceCriteriaCorrections.Count == 0
                 ? null
                 : _effectiveAcceptanceCriteriaCorrections.Select(correction => new EffectiveAcceptanceCriteriaCorrectionSnapshot(
@@ -566,6 +583,13 @@ public sealed class Goal
                 failure.MainHeadSha,
                 failure.CheckAttributions,
                 failure.BaselineAttestation);
+            if (snapshot.Status == GoalStatus.Active &&
+                goal.Tasks.Any(task =>
+                    task.LatestRetryAt is not null &&
+                    task.Status is WorkTaskStatus.Pending or WorkTaskStatus.Assigned or WorkTaskStatus.Running))
+            {
+                goal.DeferAcceptanceFailureForRetry();
+            }
         }
 
         foreach (var correction in snapshot.EffectiveAcceptanceCriteriaCorrections ?? [])

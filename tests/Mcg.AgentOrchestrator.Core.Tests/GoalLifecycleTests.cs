@@ -669,7 +669,7 @@ public sealed class GoalLifecycleTests
 }
 
     [Xunit.Fact]
-    public void RetryTaskOnAcceptanceFailedGoalRetainsFailureUntilCandidateChanges()
+    public void RetryTaskOnAcceptanceFailedGoalDefersCurrentFailureButRetainsRetryContext()
 {
     var kernel = new AgentOrchestratorKernel();
     var goal = kernel.CreateGoal("Retry failed acceptance", [new TaskSpec(TaskId.New(), "Implement fix", AgentRole.Developer)]);
@@ -685,9 +685,14 @@ public sealed class GoalLifecycleTests
     kernel.RetryTask(goal.Id, task.Id, "acceptance failed; fix the named check");
 
     Assert.Equal(GoalStatus.Active, goal.Status);
-    Assert.NotNull(goal.LatestAcceptanceFailure);
+    Assert.Null(goal.LatestAcceptanceFailure);
+    Assert.NotNull(goal.RetainedAcceptanceFailure);
     Assert.Equal(WorkTaskStatus.Assigned, goal.Tasks.Single().Status);
     Assert.Equal(GoalLifecycleState.WorkspaceReady, GoalLifecycle.ResolveState(goal, new GoalLifecycleFacts(WorkspaceExists: true)));
+
+    var restoredGoal = AgentOrchestratorKernel.FromSnapshot(kernel.ExportSnapshot()).GetGoal(goal.Id);
+    Assert.Null(restoredGoal.LatestAcceptanceFailure);
+    Assert.NotNull(restoredGoal.RetainedAcceptanceFailure);
 }
 
     [Xunit.Fact(DisplayName = "RetryTask_invalidates_downstream_completed_tasks_and_current_gate_evidence")]

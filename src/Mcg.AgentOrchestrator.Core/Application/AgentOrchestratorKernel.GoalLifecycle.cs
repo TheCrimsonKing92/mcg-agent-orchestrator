@@ -1162,6 +1162,7 @@ public sealed partial class AgentOrchestratorKernel
         }
 
         goal.SetStatus(GoalStatus.Active);
+        goal.DeferAcceptanceFailureForRetry();
         Append(goal, null, ProgressKind.GoalPolicyDecision, reason);
     }
 
