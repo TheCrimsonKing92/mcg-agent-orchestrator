@@ -157,14 +157,15 @@ public sealed class WorkerContextPackageTests
     {
         const string expectedIdentity =
             "Utf8DiscoveryProbeTests.PreservesParameterizedUnicodeIdentity(content: \"non-ASCII café 漢字 e\u0301\\0delimiter\\r\\n\")";
-        var probeAppHost = ResolveRealProcessShardProbeAppHost();
+        var dotnetHost = ResolveDotnetHostPath();
+        var probeAssembly = ResolveRealProcessShardProbeAssembly();
         Xunit.Assert.Equal(
-            $"{RealProcessShardProbeProjectName}.exe",
-            Path.GetFileName(probeAppHost),
+            $"{RealProcessShardProbeProjectName}.dll",
+            Path.GetFileName(probeAssembly),
             ignoreCase: true);
         Xunit.Assert.DoesNotContain(
             InfrastructureTestProjectName,
-            Path.GetFileName(probeAppHost),
+            Path.GetFileName(probeAssembly),
             StringComparison.OrdinalIgnoreCase);
         var stdoutPipeName = $"mcg-utf8-discovery-{Guid.NewGuid():N}-out";
         var stderrPipeName = $"mcg-utf8-discovery-{Guid.NewGuid():N}-err";
@@ -186,7 +187,8 @@ public sealed class WorkerContextPackageTests
         var stderrDrain = ConnectAndReadAsync(stderrPipe, stderrConnection);
         var startInfo = BuildUtf8DiscoveryProcessStartInfo(
             [
-                probeAppHost,
+                dotnetHost,
+                probeAssembly,
                 "--no-ansi",
                 "--progress",
                 "off",
@@ -195,7 +197,7 @@ public sealed class WorkerContextPackageTests
                 "--filter-class",
                 "*Utf8DiscoveryProbeTests*"
             ],
-            Path.GetDirectoryName(probeAppHost)!,
+            Path.GetDirectoryName(probeAssembly)!,
             $@"\\.\pipe\{stdoutPipeName}",
             $@"\\.\pipe\{stderrPipeName}");
         using var process = Process.Start(startInfo)
@@ -234,26 +236,26 @@ public sealed class WorkerContextPackageTests
     }
 
     [Xunit.Fact]
-    public void RealProcessShardProbeAppHostResolutionRejectsMissingArtifact()
+    public void RealProcessShardProbeAssemblyResolutionRejectsMissingArtifact()
     {
         var missingPath = Path.Combine(
             Path.GetTempPath(),
             $"mcg-missing-probe-{Guid.NewGuid():N}",
-            $"{RealProcessShardProbeProjectName}.exe");
+            $"{RealProcessShardProbeProjectName}.dll");
 
         var error = Xunit.Assert.Throws<FileNotFoundException>(
-            () => ResolveRealProcessShardProbeAppHost([missingPath]));
+            () => ResolveRealProcessShardProbeAssembly([missingPath]));
 
-        Xunit.Assert.Contains("Missing prebuilt MTP probe apphost", error.Message, StringComparison.Ordinal);
+        Xunit.Assert.Contains("Missing prebuilt MTP probe assembly", error.Message, StringComparison.Ordinal);
         Xunit.Assert.Contains(missingPath, error.Message, StringComparison.OrdinalIgnoreCase);
     }
 
     [Xunit.Fact]
-    public void RealProcessShardProbeAppHostResolutionRejectsAmbiguousArtifacts()
+    public void RealProcessShardProbeAssemblyResolutionRejectsAmbiguousArtifacts()
     {
         var root = CreateTempDirectory();
-        var first = Path.Combine(root, "first", $"{RealProcessShardProbeProjectName}.exe");
-        var second = Path.Combine(root, "second", $"{RealProcessShardProbeProjectName}.exe");
+        var first = Path.Combine(root, "first", $"{RealProcessShardProbeProjectName}.dll");
+        var second = Path.Combine(root, "second", $"{RealProcessShardProbeProjectName}.dll");
         try
         {
             Directory.CreateDirectory(Path.GetDirectoryName(first)!);
@@ -262,9 +264,9 @@ public sealed class WorkerContextPackageTests
             File.WriteAllText(second, string.Empty);
 
             var error = Xunit.Assert.Throws<InvalidOperationException>(
-                () => ResolveRealProcessShardProbeAppHost([first, second]));
+                () => ResolveRealProcessShardProbeAssembly([first, second]));
 
-            Xunit.Assert.Contains("Ambiguous prebuilt MTP probe apphosts", error.Message, StringComparison.Ordinal);
+            Xunit.Assert.Contains("Ambiguous prebuilt MTP probe assemblies", error.Message, StringComparison.Ordinal);
             Xunit.Assert.Contains(first, error.Message, StringComparison.OrdinalIgnoreCase);
             Xunit.Assert.Contains(second, error.Message, StringComparison.OrdinalIgnoreCase);
         }
@@ -275,7 +277,7 @@ public sealed class WorkerContextPackageTests
     }
 
     [Xunit.Fact]
-    public void RealProcessShardProbeCandidatesPreferIsolatedSiblingOverRepositoryFallback()
+    public void RealProcessShardProbeAssemblyCandidatesPreferIsolatedSiblingOverRepositoryFallback()
     {
         var root = CreateTempDirectory();
         try
@@ -288,7 +290,7 @@ public sealed class WorkerContextPackageTests
                 "debug");
 
             var candidate = Xunit.Assert.Single(
-                BuildRealProcessShardProbeAppHostCandidates(infrastructureOutput, root));
+                BuildRealProcessShardProbeAssemblyCandidates(infrastructureOutput, root));
 
             Xunit.Assert.Equal(
                 Path.Combine(
@@ -297,7 +299,7 @@ public sealed class WorkerContextPackageTests
                     "bin",
                     RealProcessShardProbeProjectName,
                     "debug",
-                    $"{RealProcessShardProbeProjectName}.exe"),
+                    $"{RealProcessShardProbeProjectName}.dll"),
                 candidate,
                 ignoreCase: true);
         }
@@ -321,9 +323,9 @@ public sealed class WorkerContextPackageTests
             stderrPipePath,
             forceUtf8ConsoleOutput: true);
 
-    private static string ResolveRealProcessShardProbeAppHost(IReadOnlyList<string>? candidates = null)
+    private static string ResolveRealProcessShardProbeAssembly(IReadOnlyList<string>? candidates = null)
     {
-        var candidatePaths = (candidates ?? BuildRealProcessShardProbeAppHostCandidates())
+        var candidatePaths = (candidates ?? BuildRealProcessShardProbeAssemblyCandidates())
             .Select(Path.GetFullPath)
             .Distinct(StringComparer.OrdinalIgnoreCase)
             .ToArray();
@@ -332,13 +334,13 @@ public sealed class WorkerContextPackageTests
         {
             1 => existingPaths[0],
             0 => throw new FileNotFoundException(
-                $"Missing prebuilt MTP probe apphost. Checked: {string.Join(", ", candidatePaths)}"),
+                $"Missing prebuilt MTP probe assembly. Checked: {string.Join(", ", candidatePaths)}"),
             _ => throw new InvalidOperationException(
-                $"Ambiguous prebuilt MTP probe apphosts: {string.Join(", ", existingPaths)}")
+                $"Ambiguous prebuilt MTP probe assemblies: {string.Join(", ", existingPaths)}")
         };
     }
 
-    private static IReadOnlyList<string> BuildRealProcessShardProbeAppHostCandidates(
+    private static IReadOnlyList<string> BuildRealProcessShardProbeAssemblyCandidates(
         string? baseDirectory = null,
         string? repositoryRoot = null)
     {
@@ -348,7 +350,7 @@ public sealed class WorkerContextPackageTests
                 ?? throw new InvalidOperationException("Infrastructure test output has no configuration directory.")
             : infrastructureOutput;
         var configuration = configurationDirectory.Name;
-        var executableName = $"{RealProcessShardProbeProjectName}.exe";
+        var assemblyName = $"{RealProcessShardProbeProjectName}.dll";
         var isolatedProjectDirectory = configurationDirectory.Parent;
         if (isolatedProjectDirectory?.Name.Equals(InfrastructureTestProjectName, StringComparison.OrdinalIgnoreCase) == true &&
             isolatedProjectDirectory.Parent?.Name.Equals("bin", StringComparison.OrdinalIgnoreCase) == true)
@@ -360,7 +362,7 @@ public sealed class WorkerContextPackageTests
                     isolatedProjectDirectory.Parent.FullName,
                     RealProcessShardProbeProjectName,
                     configuration,
-                    executableName)
+                    assemblyName)
             ];
         }
 
@@ -375,7 +377,7 @@ public sealed class WorkerContextPackageTests
                 "bin",
                 configuration,
                 "net10.0",
-                executableName)
+                assemblyName)
         ];
     }
 
