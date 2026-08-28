@@ -64,7 +64,9 @@ internal static class SourceSizeRatchet
             // either goal's individual ceiling.
             // Goal 6a3d0fd4 raised this row to 3262 for the bounded planner-sample wait, which must run
             // between the primary dispatch completing and candidate collection.
-            new SourceSizeCeiling("src/Mcg.AgentOrchestrator.Infrastructure/Processes/BackgroundDispatchRunner.cs", 3243),
+            // Goal 1441c61c extracted post-reap cancellation evidence classification so the runner
+            // only sequences process reaping, lifecycle recording, and resource accounting.
+            new SourceSizeCeiling("src/Mcg.AgentOrchestrator.Infrastructure/Processes/BackgroundDispatchRunner.cs", 3241),
             new SourceSizeCeiling("src/Mcg.AgentOrchestrator.Infrastructure/Workers/WorkerProfileDispatcher.cs", 3220),
             new SourceSizeCeiling("src/Mcg.AgentOrchestrator.App/Cli/CliPersistentStateRunner.cs", 4694),
             new SourceSizeCeiling("tests/Mcg.AgentOrchestrator.Infrastructure.Tests/GoalAcceptanceVerifierTests.cs", 1566),
