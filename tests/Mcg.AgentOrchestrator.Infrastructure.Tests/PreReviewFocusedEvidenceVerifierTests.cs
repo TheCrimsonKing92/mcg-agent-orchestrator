@@ -7,7 +7,10 @@ public sealed class PreReviewFocusedEvidenceVerifierTests : GoalAcceptanceVerifi
     [Xunit.Fact(DisplayName = "PreReviewFocusedEvidenceVerifier_accepts_mapped_project_and_safe_exclusion")]
     public async Task AcceptsMappedProjectAndSafeExclusion()
     {
+        const string dashboardTestName =
+            "Mcg.AgentOrchestrator.Dashboard.Tests.DashboardHostTests.RendersDashboard";
         var calls = new List<string[]>();
+        string? dashboardTrxPath = null;
         var root = CreateManifestWorkspace("""
             {
               "version": 1,
@@ -20,10 +23,18 @@ public sealed class PreReviewFocusedEvidenceVerifierTests : GoalAcceptanceVerifi
             var verifier = new GoalAcceptanceVerifier((args, _, _) =>
             {
                 calls.Add(args);
+                if (IsMtpExecutableCall(args, "Mcg.AgentOrchestrator.Dashboard.Tests"))
+                {
+                    dashboardTrxPath = WriteMtpTrx(args, dashboardTestName);
+                    return Task.FromResult(new GoalAcceptanceVerifier.CommandResult(
+                        0,
+                        "Passed! - Failed: 0, Passed: 1, Skipped: 0, Total: 1."));
+                }
+
                 if (IsMtpExecutableCall(args, "Mcg.AgentOrchestrator.Core.Tests") ||
                     IsMtpExecutableCall(args, "Mcg.AgentOrchestrator.Infrastructure.Tests"))
                 {
-                    WriteMtpTrx(args);
+                    _ = WriteMtpTrx(args);
                     return Task.FromResult(new GoalAcceptanceVerifier.CommandResult(
                         0,
                         "Passed! - Failed: 0, Passed: 1, Skipped: 0, Total: 1."));
@@ -46,6 +57,9 @@ public sealed class PreReviewFocusedEvidenceVerifierTests : GoalAcceptanceVerifi
                 IsMtpExecutableCall(call, "Mcg.AgentOrchestrator.Dashboard.Tests"));
             AssertArgumentPair(dashboardCall, "--filter-class", "*DashboardHostTests*");
             AssertArgumentPair(dashboardCall, "--filter-not-trait", "Category=HostIntegration");
+            var dashboardTrx = File.ReadAllText(Assert.IsType<string>(dashboardTrxPath));
+            Assert.Contains($"testName=\"{dashboardTestName}\"", dashboardTrx, StringComparison.Ordinal);
+            Assert.DoesNotContain("Mcg.Tests.PassingTest", dashboardTrx, StringComparison.Ordinal);
             Assert.DoesNotContain(calls, call =>
                 call.Length >= 3 &&
                 call[0] == "dotnet" &&
@@ -150,7 +164,7 @@ public sealed class PreReviewFocusedEvidenceVerifierTests : GoalAcceptanceVerifi
         Assert.Fail($"Expected {option} {value}.");
     }
 
-    private static void WriteMtpTrx(
+    private static string WriteMtpTrx(
         string[] args,
         string testName = "Mcg.Tests.PassingTest",
         string outcome = "Passed")
@@ -162,14 +176,29 @@ public sealed class PreReviewFocusedEvidenceVerifierTests : GoalAcceptanceVerifi
         Assert.True(trxFileIndex >= 0);
         Assert.True(trxFileIndex + 1 < args.Length);
         Directory.CreateDirectory(args[resultsDirectoryIndex + 1]);
+        var trxPath = Path.Combine(args[resultsDirectoryIndex + 1], args[trxFileIndex + 1]);
+        var separator = testName.LastIndexOf('.');
+        var className = separator >= 0 ? testName[..separator] : "Mcg.Tests";
+        var methodName = separator >= 0 ? testName[(separator + 1)..] : testName;
+        var passed = outcome.Equals("Passed", StringComparison.OrdinalIgnoreCase) ? 1 : 0;
+        var failed = passed == 1 ? 0 : 1;
         File.WriteAllText(
-            Path.Combine(args[resultsDirectoryIndex + 1], args[trxFileIndex + 1]),
+            trxPath,
             $"""
              <TestRun>
+               <TestDefinitions>
+                 <UnitTest id="test-1" name="{testName}">
+                   <TestMethod className="{className}" name="{methodName}" />
+                 </UnitTest>
+               </TestDefinitions>
                <Results>
                  <UnitTestResult testId="test-1" testName="{testName}" outcome="{outcome}" />
                </Results>
+               <ResultSummary outcome="Completed">
+                 <Counters total="1" executed="1" passed="{passed}" failed="{failed}" notExecuted="0" />
+               </ResultSummary>
              </TestRun>
              """);
+        return trxPath;
     }
 }
