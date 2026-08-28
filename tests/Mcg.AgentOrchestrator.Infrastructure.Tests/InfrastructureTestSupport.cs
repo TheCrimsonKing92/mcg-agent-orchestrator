@@ -35,6 +35,39 @@ public static IEnumerable<string> GetRequiredHeader(HttpRequestMessage request, 
 public static string CreateTempDirectory()
     => SharedTestSupport.CreateTempDirectory();
 
+public static string ResolveDotnetHostPath()
+{
+    var hostFileName = OperatingSystem.IsWindows() ? "dotnet.exe" : "dotnet";
+    var candidates = new List<string?>
+    {
+        string.Equals(Path.GetFileName(Environment.ProcessPath), hostFileName, StringComparison.OrdinalIgnoreCase)
+            ? Environment.ProcessPath
+            : null,
+        Environment.GetEnvironmentVariable("DOTNET_HOST_PATH")
+    };
+
+    foreach (var rootVariable in new[] { "DOTNET_ROOT_X64", "DOTNET_ROOT" })
+    {
+        var root = Environment.GetEnvironmentVariable(rootVariable);
+        if (!string.IsNullOrWhiteSpace(root))
+        {
+            candidates.Add(Path.Combine(root, hostFileName));
+        }
+    }
+
+    foreach (var directory in (Environment.GetEnvironmentVariable("PATH") ?? string.Empty)
+                 .Split(Path.PathSeparator, StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries))
+    {
+        candidates.Add(Path.Combine(directory, hostFileName));
+    }
+
+    var hostPath = candidates.FirstOrDefault(path =>
+        !string.IsNullOrWhiteSpace(path) && File.Exists(path));
+    return hostPath is null
+        ? throw new InvalidOperationException("Could not resolve the dotnet host for a managed test process.")
+        : Path.GetFullPath(hostPath);
+}
+
 // Compatibility helpers for the existing GoalWorktree fixture commit retry. New verdict paths use
 // the typed GitProbeResult directly so stderr, launch, exit, drain, and timeout evidence survive.
 public static string? TryGetGitHead(string workingDirectory)

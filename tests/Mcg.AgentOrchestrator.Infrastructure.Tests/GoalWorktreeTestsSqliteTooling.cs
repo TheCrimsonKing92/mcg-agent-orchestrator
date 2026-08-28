@@ -303,6 +303,19 @@ public sealed class GoalWorktreeTestsSqliteTooling : GoalWorktreeTestBase
                 >> "%DOTNET_SHIM_LOG%" echo temp=%TEMP%
                 if not exist "%TEMP%" mkdir "%TEMP%"
                 > "%TEMP%\shim-scratch.tmp" echo scratch
+                if "%~1"=="build-server" exit /b 0
+                if /I not "%~1"=="build" exit /b 0
+                set "ARTIFACTS="
+                :parse_artifacts
+                if "%~1"=="" goto create_artifacts
+                if /I "%~1"=="--artifacts-path" set "ARTIFACTS=%~2"
+                shift
+                goto parse_artifacts
+                :create_artifacts
+                set "TEST_DIR=%ARTIFACTS%\bin\Fake.Infrastructure.Tests\debug"
+                mkdir "%TEST_DIR%" >nul 2>nul
+                > "%TEST_DIR%\Fake.Infrastructure.Tests.dll" echo managed
+                > "%TEST_DIR%\Fake.Infrastructure.Tests.exe" echo apphost
                 exit /b 0
                 """);
 
