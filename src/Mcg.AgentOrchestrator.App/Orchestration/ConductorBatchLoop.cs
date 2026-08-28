@@ -457,27 +457,8 @@ internal sealed partial class ConductorBatchLoop
             {
                 EmitProgress(sweepEvent);
             }
-            var sweepTerminalizedGoalIds = sweepResult?.ExplicitlyTerminalizedGoalIds ?? [];
-            if (sweepTerminalizedGoalIds.Count > 0 && checkpointGoalTick is not null)
-            {
-                ApplyCheckpointOutcomes(
-                    checkpointGoalTick(kernel, sweepTerminalizedGoalIds),
-                    sweepTerminalizedGoalIds,
-                    checkpointHeldGoals,
-                    nextTick,
-                    "sweep-terminalization",
-                    []);
-            }
-            else if (sweepTerminalizedGoalIds.Count > 0 && persistGoalTick is not null)
-            {
-                PersistGoalTickOrThrow(
-                    persistGoalTick,
-                    kernel,
-                    sweepTerminalizedGoalIds,
-                    nextTick,
-                    preTickTimingLines,
-                    busyWriteDelay);
-            }
+            var sweepTerminalizedGoalIds = PersistSweepTerminalizations(
+                sweepResult, kernel, checkpointGoalTick, persistGoalTick, checkpointHeldGoals, nextTick, preTickTimingLines, busyWriteDelay);
             RunJanitorialPhase("recover-interrupted-dispatches", nextTick, () =>
             {
                 _recoverInterruptedDispatches(kernel);

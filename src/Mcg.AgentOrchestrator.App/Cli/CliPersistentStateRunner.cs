@@ -937,11 +937,7 @@ internal static class CliPersistentStateRunner
         {
             var watchGoalId = ResolveConductWatchGoalId(args, kernel, currentGoal, stateRepository);
             var sweepKernel = LoadConductLoopSweepKernel(stateRepository, kernel, workspace.ExecutionDirectory, watchGoalId);
-            sweep = TerminalGoalSweep.Run(
-                sweepKernel,
-                workspace.ExecutionDirectory,
-                watchGoalId,
-                orchestratorDirectory: workspace.OrchestratorDirectory);
+            sweep = TerminalGoalSweep.Run(sweepKernel, workspace.ExecutionDirectory, watchGoalId, orchestratorDirectory: workspace.OrchestratorDirectory);
             var metadataOnlyExcludedGoalCount = CountMetadataOnlyTerminalSweepExclusions(
                 stateRepository,
                 workspace.ExecutionDirectory,
@@ -3804,11 +3800,7 @@ internal static class CliPersistentStateRunner
         var initialGoalJson = JsonSerializer.Serialize(initialGoalSnapshot);
 
         var reconcileStarted = System.Diagnostics.Stopwatch.StartNew();
-        var targetSweep = TerminalGoalSweep.Run(
-            kernel,
-            workspace.ExecutionDirectory,
-            goalId,
-            orchestratorDirectory: workspace.OrchestratorDirectory);
+        var targetSweep = TerminalGoalSweep.Run(kernel, workspace.ExecutionDirectory, goalId, orchestratorDirectory: workspace.OrchestratorDirectory);
         reconcileStarted.Stop();
         ConsoleViews.PrintTerminalGoalSweep(targetSweep);
         TerminalGoalSweepAttention.Surface(kernel, targetSweep, workspace.OrchestratorDirectory, goalId);
