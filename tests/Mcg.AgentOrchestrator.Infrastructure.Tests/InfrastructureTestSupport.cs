@@ -449,7 +449,7 @@ private static void TryDeleteCaptureFile(string path)
     }
     catch
     {
-        // The attempt-owned repository cleanup remains the backstop for a file still held by a failed child.
+        // Best-effort cleanup: do not hide the probe result if a failed child still holds a temporary capture.
     }
 }
 

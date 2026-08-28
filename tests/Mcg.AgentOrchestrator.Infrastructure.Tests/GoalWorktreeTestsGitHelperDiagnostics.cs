@@ -120,32 +120,47 @@ public sealed class GoalWorktreeTestsGitHelperDiagnostics : GoalWorktreeTestBase
                 .TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar) +
                 Path.DirectorySeparatorChar;
             var callbackObserved = false;
+            string? observedStandardOutputPath = null;
+            string? observedStandardErrorPath = null;
+            var standardOutputCaptureExisted = false;
+            var standardErrorCaptureExisted = false;
+            string[] repositoryCapturePaths = [];
             var result = InfrastructureTestSupport.RunGitProbe(
                 repo,
                 ["status", "--short"],
                 beforeOwnedCaptureRead: (standardOutputPath, standardErrorPath) =>
                 {
                     callbackObserved = true;
-                    Assert.True(File.Exists(standardOutputPath));
-                    Assert.True(File.Exists(standardErrorPath));
-                    Assert.False(
-                        Path.GetFullPath(standardOutputPath).StartsWith(
-                            repositoryPrefix,
-                            StringComparison.OrdinalIgnoreCase),
-                        $"stdout capture was created inside the repository: {standardOutputPath}");
-                    Assert.False(
-                        Path.GetFullPath(standardErrorPath).StartsWith(
-                            repositoryPrefix,
-                            StringComparison.OrdinalIgnoreCase),
-                        $"stderr capture was created inside the repository: {standardErrorPath}");
-                    Assert.Empty(Directory.EnumerateFiles(
+                    observedStandardOutputPath = standardOutputPath;
+                    observedStandardErrorPath = standardErrorPath;
+                    standardOutputCaptureExisted = File.Exists(standardOutputPath);
+                    standardErrorCaptureExisted = File.Exists(standardErrorPath);
+                    repositoryCapturePaths = Directory.GetFiles(
                         repo,
                         ".mcg-git-probe-*",
-                        SearchOption.AllDirectories));
+                        SearchOption.AllDirectories);
                 });
 
             Assert.True(callbackObserved);
+            Assert.Equal(
+                WorkerDispatchTestsSeededRepositoryFactory.GitProbeClassification.Success,
+                result.Classification);
             Assert.True(result.Succeeded, result.StandardError);
+            Assert.True(standardOutputCaptureExisted);
+            Assert.True(standardErrorCaptureExisted);
+            Assert.NotNull(observedStandardOutputPath);
+            Assert.NotNull(observedStandardErrorPath);
+            Assert.False(
+                Path.GetFullPath(observedStandardOutputPath).StartsWith(
+                    repositoryPrefix,
+                    StringComparison.OrdinalIgnoreCase),
+                $"stdout capture was created inside the repository: {observedStandardOutputPath}");
+            Assert.False(
+                Path.GetFullPath(observedStandardErrorPath).StartsWith(
+                    repositoryPrefix,
+                    StringComparison.OrdinalIgnoreCase),
+                $"stderr capture was created inside the repository: {observedStandardErrorPath}");
+            Assert.Empty(repositoryCapturePaths);
             Assert.Empty(result.StandardOutput);
         }
         finally
