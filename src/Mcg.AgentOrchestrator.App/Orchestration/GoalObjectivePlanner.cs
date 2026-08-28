@@ -428,7 +428,7 @@ internal static class GoalObjectivePlanner
                                s.EndsWith(".sln", StringComparison.OrdinalIgnoreCase));
         if (dotnetSignals)
         {
-            return "scripts/Invoke-IsolatedDotnet.ps1 or dotnet test with goal build lease";
+            return "scripts/Invoke-TestSummary.ps1 -Target <project> (managed MTP runner through dotnet)";
         }
 
         var goSignals = tokens.Contains("golang") ||

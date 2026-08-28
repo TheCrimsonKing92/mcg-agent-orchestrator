@@ -5,7 +5,7 @@ $script:ExitCodes = [pscustomobject]@{
     InvalidPartition = 21
     ResultsDirectory = 22
     Build = 23
-    MissingAppHost = 24
+    MissingRunnerArtifact = 24
     InvalidTarget = 25
     Runner = 26
     ZeroTests = 27
@@ -468,7 +468,7 @@ function Initialize-MtpResultsDirectory {
         $lowPrefix = $canonicalLowRoot + [System.IO.Path]::DirectorySeparatorChar
         if (-not $resolvedRoot.Equals($canonicalLowRoot, [System.StringComparison]::OrdinalIgnoreCase) -and
             -not $resolvedRoot.StartsWith($lowPrefix, [System.StringComparison]::OrdinalIgnoreCase)) {
-            throw "Results directory '$resolvedRoot' is not under the Low-integrity-writable root '$canonicalLowRoot'. Use -ResultsRoot beneath that root; an ordinary Medium-integrity directory is not writable by the MTP apphost."
+            throw "Results directory '$resolvedRoot' is not under the Low-integrity-writable root '$canonicalLowRoot'. Use -ResultsRoot beneath that root; an ordinary Medium-integrity directory is not writable by the MTP test process."
         }
     }
 
@@ -644,7 +644,7 @@ function Invoke-MtpBuild {
             $ErrorActionPreference = $previousErrorActionPreference
         }
         if ($buildExit -ne 0) {
-            Write-Host "BUILD FAILURE - '$DotnetPath build' exited $buildExit. The MTP apphost was not launched."
+            Write-Host "BUILD FAILURE - '$DotnetPath build' exited $buildExit. The managed MTP runner was not launched."
             return $false
         }
     }
@@ -1181,18 +1181,14 @@ function Invoke-MtpTestRun {
             $managedAssembly = Resolve-MtpManagedAssemblyPath -RepositoryRoot $RepositoryRoot -Invocation $project -Configuration $Configuration
             $usesManagedAssembly = [string]::IsNullOrWhiteSpace($RunnerPath)
             $executable = if ($usesManagedAssembly) { $DotnetPath } else { [System.IO.Path]::GetFullPath($RunnerPath) }
-            $requiredExecutable = if ($usesManagedAssembly) { $expectedAppHost } else { $executable }
+            $requiredExecutable = if ($usesManagedAssembly) { $managedAssembly } else { $executable }
             if (-not (Test-Path -LiteralPath $requiredExecutable -PathType Leaf)) {
                 $projectPath = Join-Path $RepositoryRoot ([string]$project.project)
                 $outputDirectory = Split-Path -Parent $expectedAppHost
-                Write-Host "MISSING APPHOST - expected '$requiredExecutable'. Build it with: $DotnetPath build `"$projectPath`" --configuration $Configuration --output `"$outputDirectory`""
+                $missingArtifact = if ($usesManagedAssembly) { 'MANAGED ASSEMBLY' } else { 'RUNNER' }
+                Write-Host "MISSING $missingArtifact - expected '$requiredExecutable'. Build it with: $DotnetPath build `"$projectPath`" --configuration $Configuration --output `"$outputDirectory`""
                 Write-Host "Retained diagnostic directory: $runDirectory"
-                return New-MtpTerminalResult -Outcome failed -ExitCode $script:ExitCodes.MissingAppHost -ResultsDirectory $runDirectory -ArtifactsRetained $true
-            }
-            if ($usesManagedAssembly -and -not (Test-Path -LiteralPath $managedAssembly -PathType Leaf)) {
-                Write-Host "MISSING MANAGED ASSEMBLY - expected '$managedAssembly'."
-                Write-Host "Retained diagnostic directory: $runDirectory"
-                return New-MtpTerminalResult -Outcome failed -ExitCode $script:ExitCodes.MissingAppHost -ResultsDirectory $runDirectory -ArtifactsRetained $true
+                return New-MtpTerminalResult -Outcome failed -ExitCode $script:ExitCodes.MissingRunnerArtifact -ResultsDirectory $runDirectory -ArtifactsRetained $true
             }
 
             foreach ($filter in $filterList) {
@@ -1232,12 +1228,12 @@ function Invoke-MtpTestRun {
                     $trxPaths.Add($trxPath)
                 }
                 if ($run.TimedOut) {
-                    Write-Host "TEST HOST TIMED OUT - apphost exceeded ${TestHostTimeoutSeconds}s. Captured stderr/stdout: $outputLog"
+                    Write-Host "TEST HOST TIMED OUT - managed MTP runner exceeded ${TestHostTimeoutSeconds}s. Captured stderr/stdout: $outputLog"
                     Write-Host "Retained diagnostic directory: $runDirectory"
                     return New-MtpTerminalResult -Outcome timed-out -ExitCode $script:ExitCodes.Timeout -RunnerExitCode $run.ExitCode -ResultsDirectory $runDirectory -RunnerLogPaths $runnerLogPaths.ToArray() -TrxPaths $trxPaths.ToArray() -ExpectedTrxPaths $expectedTrxPaths.ToArray() -OwnedProcessId $run.OwnedProcessId -ExitConfirmed ([bool]$run.ExitConfirmed) -ArtifactsRetained $true -Diagnostics @($run.CleanupDiagnostic)
                 }
                 if ($run.RunnerFailed) {
-                    Write-Host "RUNNER/TOOLING FAILURE - apphost could not be started or monitored. Captured stderr/stdout: $outputLog"
+                    Write-Host "RUNNER/TOOLING FAILURE - managed MTP runner could not be started or monitored. Captured stderr/stdout: $outputLog"
                     Write-Host "Retained diagnostic directory: $runDirectory"
                     return New-MtpTerminalResult -Outcome failed -ExitCode $script:ExitCodes.Runner -RunnerExitCode $run.ExitCode -ResultsDirectory $runDirectory -RunnerLogPaths $runnerLogPaths.ToArray() -TrxPaths $trxPaths.ToArray() -ExpectedTrxPaths $expectedTrxPaths.ToArray() -OwnedProcessId $run.OwnedProcessId -ExitConfirmed ([bool]$run.ExitConfirmed) -ArtifactsRetained $true
                 }
@@ -1247,7 +1243,7 @@ function Invoke-MtpTestRun {
                     return New-MtpTerminalResult -Outcome failed -ExitCode $script:ExitCodes.Cleanup -RunnerExitCode $run.ExitCode -ResultsDirectory $runDirectory -RunnerLogPaths $runnerLogPaths.ToArray() -TrxPaths $trxPaths.ToArray() -ExpectedTrxPaths $expectedTrxPaths.ToArray() -OwnedProcessId $run.OwnedProcessId -ExitConfirmed $false -ArtifactsRetained $true
                 }
                 if (-not (Test-Path -LiteralPath $trxPath -PathType Leaf)) {
-                    Write-Host "COMPLETED WITH MISSING TRX - apphost exited $($run.ExitCode) without producing TRX '$trxPath'. Captured stderr/stdout: $outputLog"
+                    Write-Host "COMPLETED WITH MISSING TRX - managed MTP runner exited $($run.ExitCode) without producing TRX '$trxPath'. Captured stderr/stdout: $outputLog"
                     Write-Host "Retained diagnostic directory: $runDirectory"
                     $exitCode = if ($run.ExitCode -ne 0) { $run.ExitCode } else { $script:ExitCodes.Runner }
                     return New-MtpTerminalResult -Outcome completed-with-missing-trx -ExitCode $exitCode -RunnerExitCode $run.ExitCode -ResultsDirectory $runDirectory -RunnerLogPaths $runnerLogPaths.ToArray() -TrxPaths $trxPaths.ToArray() -ExpectedTrxPaths $expectedTrxPaths.ToArray() -OwnedProcessId $run.OwnedProcessId -ExitConfirmed $true -ArtifactsRetained $true
@@ -1258,13 +1254,13 @@ function Invoke-MtpTestRun {
                     $summary = Read-MtpTrxResult -Path $trxPath
                 }
                 catch {
-                    Write-Host "RUNNER/TOOLING FAILURE - $($_.Exception.Message) Apphost exit: $($run.ExitCode). Captured stderr/stdout: $outputLog"
+                    Write-Host "RUNNER/TOOLING FAILURE - $($_.Exception.Message) Managed runner exit: $($run.ExitCode). Captured stderr/stdout: $outputLog"
                     Write-Host "Retained diagnostic directory: $runDirectory"
                     return New-MtpTerminalResult -Outcome failed -ExitCode $script:ExitCodes.Runner -RunnerExitCode $run.ExitCode -ResultsDirectory $runDirectory -RunnerLogPaths $runnerLogPaths.ToArray() -TrxPaths $trxPaths.ToArray() -ExpectedTrxPaths $expectedTrxPaths.ToArray() -OwnedProcessId $run.OwnedProcessId -ExitConfirmed $true -ArtifactsRetained $true
                 }
                 Write-Host ("{0}: total={1} passed={2} failed={3} skipped={4}" -f $trxFileName, $summary.Total, $summary.Passed, $summary.Failed, $summary.Skipped)
                 if ($summary.Total -le 0) {
-                    Write-Host "ZERO TESTS - filter matched no tests. Apphost exit: $($run.ExitCode). TRX: $trxPath"
+                    Write-Host "ZERO TESTS - filter matched no tests. Managed runner exit: $($run.ExitCode). TRX: $trxPath"
                     Write-Host "Retained diagnostic directory: $runDirectory"
                     return New-MtpTerminalResult -Outcome failed -ExitCode $script:ExitCodes.ZeroTests -RunnerExitCode $run.ExitCode -ResultsDirectory $runDirectory -RunnerLogPaths $runnerLogPaths.ToArray() -TrxPaths $trxPaths.ToArray() -ExpectedTrxPaths $expectedTrxPaths.ToArray() -OwnedProcessId $run.OwnedProcessId -ExitConfirmed $true -ArtifactsRetained $true
                 }
@@ -1282,7 +1278,7 @@ function Invoke-MtpTestRun {
                     return New-MtpTerminalResult -Outcome failed -ExitCode $exitCode -RunnerExitCode $run.ExitCode -ResultsDirectory $runDirectory -RunnerLogPaths $runnerLogPaths.ToArray() -TrxPaths $trxPaths.ToArray() -ExpectedTrxPaths $expectedTrxPaths.ToArray() -OwnedProcessId $run.OwnedProcessId -ExitConfirmed $true -ArtifactsRetained $true
                 }
                 if ($run.ExitCode -ne 0) {
-                    Write-Host "RUNNER/TOOLING FAILURE - apphost exited $($run.ExitCode) although its TRX contains no failing tests. This is not a compile failure. Captured stderr/stdout: $outputLog"
+                    Write-Host "RUNNER/TOOLING FAILURE - managed runner exited $($run.ExitCode) although its TRX contains no failing tests. This is not a compile failure. Captured stderr/stdout: $outputLog"
                     Write-Host "Retained diagnostic directory: $runDirectory"
                     return New-MtpTerminalResult -Outcome failed -ExitCode $run.ExitCode -RunnerExitCode $run.ExitCode -ResultsDirectory $runDirectory -RunnerLogPaths $runnerLogPaths.ToArray() -TrxPaths $trxPaths.ToArray() -ExpectedTrxPaths $expectedTrxPaths.ToArray() -OwnedProcessId $run.OwnedProcessId -ExitConfirmed $true -ArtifactsRetained $true
                 }
