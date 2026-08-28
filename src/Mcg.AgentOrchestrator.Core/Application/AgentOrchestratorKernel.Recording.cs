@@ -1309,10 +1309,6 @@ public sealed partial class AgentOrchestratorKernel
         {
             task.SetDispatchResultCommit(provenCancelledCandidate);
         }
-        else if (candidateEvidence.Kind is CancellationCandidateEvidenceKind.Changed or CancellationCandidateEvidenceKind.Dirty)
-        {
-            goal.ClearAcceptanceFailure();
-        }
 
         task.RecordProcess(process);
         if (process.WasCancelledByConductor)
@@ -1330,6 +1326,12 @@ public sealed partial class AgentOrchestratorKernel
             ProgressKind.TaskNote,
             $"CANCELLATION_CANDIDATE_EVIDENCE kind={candidateEvidence.Kind}; candidate={candidateEvidence.CandidateSha ?? "unknown"}; " +
             $"reason={candidateEvidence.Reason}; git_receipt={candidateEvidence.GitReceipt}");
+        if (!process.WasCancelledByConductor &&
+            provenCancelledCandidate is null &&
+            candidateEvidence.Kind is CancellationCandidateEvidenceKind.Changed or CancellationCandidateEvidenceKind.Dirty)
+        {
+            goal.ClearAcceptanceFailure();
+        }
         ReconcileRetainedDownstreamTasks(goal, task, _clock.UtcNow, provenCancelledCandidate);
     }
 

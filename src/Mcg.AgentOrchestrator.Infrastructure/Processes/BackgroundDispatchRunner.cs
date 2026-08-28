@@ -1822,8 +1822,7 @@ public sealed class BackgroundDispatchRunner
             if (!result.Succeeded)
                 return null;
 
-            var normalized = result.Output.Replace("\r\n", "\n", StringComparison.Ordinal).Replace('\r', '\n');
-            return Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(normalized))).ToLowerInvariant();
+            return DispatchWorktreeCommitter.ComputeDirtyStateHash(result.Output);
         }
         catch
         {
@@ -2135,7 +2134,8 @@ public sealed class BackgroundDispatchRunner
         var worktree = inspection.Evidence;
         var receipt = $"branch={worktree.Branch}; head={worktree.Head}; worktree={worktree.WorktreeStatus}; " +
             $"commits_after_dispatch={worktree.CommitsAfterDispatch}; status_short={worktree.StatusShort}; " +
-            $"spawn_head={dispatch.WorktreeHeadSha}; base_commit={dispatch.BaseCommit}; dirty_state_hash={dispatch.DirtyStateHash}";
+            $"spawn_head={dispatch.WorktreeHeadSha}; base_commit={dispatch.BaseCommit}; " +
+            $"spawn_dirty_state_hash={dispatch.DirtyStateHash}; post_reap_dirty_state_hash={worktree.DirtyStateHash}";
         if (!worktree.IsClean)
         {
             return CancellationCandidateEvidence.Dirty(worktree.Head, "post-reap worktree is dirty", receipt);
@@ -2143,9 +2143,10 @@ public sealed class BackgroundDispatchRunner
 
         if (worktree.CommitsAfterDispatch != 0 ||
             !string.Equals(worktree.Head, dispatch.BaseCommit.Trim(), StringComparison.OrdinalIgnoreCase) ||
-            !string.Equals(worktree.Head, dispatch.WorktreeHeadSha.Trim(), StringComparison.OrdinalIgnoreCase))
+            !string.Equals(worktree.Head, dispatch.WorktreeHeadSha.Trim(), StringComparison.OrdinalIgnoreCase) ||
+            !string.Equals(worktree.DirtyStateHash, dispatch.DirtyStateHash.Trim(), StringComparison.Ordinal))
         {
-            return CancellationCandidateEvidence.Changed(worktree.Head, "post-reap candidate identity changed", receipt);
+            return CancellationCandidateEvidence.Changed(worktree.Head, "post-reap candidate or dirty-state identity changed", receipt);
         }
 
         return CancellationCandidateEvidence.ConfirmedUnchanged(worktree.Head, receipt);

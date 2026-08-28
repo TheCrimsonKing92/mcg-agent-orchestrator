@@ -1166,6 +1166,9 @@ public sealed class GoalLifecycleTests
         var tester = goal.Tasks.Single(task => task.RequiredRole == AgentRole.Tester);
         CompleteCandidateDispatch(kernel, goal, developer, "aaa111", "aaa111");
         CompleteCandidateDispatch(kernel, goal, tester, "aaa111", "aaa111");
+        kernel.BeginGoalAcceptanceVerification(goal.Id, "gate launched");
+        kernel.ReconcileGoalAcceptanceFailed(goal.Id, ["Acceptance.Failed"], "candidate-specific failure");
+        var acceptanceFailure = goal.LatestAcceptanceFailure;
         kernel.RetryTask(goal.Id, developer.Id, "Inspect the candidate.");
         kernel.RecordTaskDispatch(
             goal.Id,
@@ -1193,11 +1196,61 @@ public sealed class GoalLifecycleTests
 
         Assert.Equal(WorkTaskStatus.Assigned, tester.Status);
         Assert.Null(tester.LastVerification);
+        if (kind is CancellationCandidateEvidenceKind.Changed or CancellationCandidateEvidenceKind.Dirty)
+        {
+            Assert.Null(goal.LatestAcceptanceFailure);
+        }
+        else
+        {
+            Assert.Same(acceptanceFailure, goal.LatestAcceptanceFailure);
+        }
         Assert.Contains(goal.Timeline, evt =>
             evt.TaskId == developer.Id &&
             evt.Kind == ProgressKind.TaskNote &&
             evt.Message.Contains($"kind={kind}", StringComparison.Ordinal) &&
             evt.Message.Contains(evidence.Reason, StringComparison.Ordinal));
+    }
+
+    [Xunit.Fact]
+    public void ConductorCancelledDirtyRetryRetainsAcceptanceFailure()
+    {
+        var clock = new FakeClock();
+        var kernel = new AgentOrchestratorKernel(clock);
+        var goal = kernel.CreateGoal("Detach a dirty retry during conductor handoff",
+            [new TaskSpec(TaskId.New(), "Implement fix", AgentRole.Developer)]);
+        kernel.ActivateGoal(goal.Id, DefaultAgents());
+        var developer = goal.Tasks.Single();
+        CompleteCandidateDispatch(kernel, goal, developer, "aaa111", "aaa111");
+        kernel.BeginGoalAcceptanceVerification(goal.Id, "gate launched");
+        kernel.ReconcileGoalAcceptanceFailed(goal.Id, ["Acceptance.Failed"], "candidate-specific failure");
+        var acceptanceFailure = goal.LatestAcceptanceFailure;
+        kernel.RetryTask(goal.Id, developer.Id, "Resume after conductor handoff.");
+        kernel.RecordTaskDispatch(
+            goal.Id,
+            developer.Id,
+            new TaskDispatchRecord(
+                "Developer", "worker", "C:\\repo", clock.UtcNow,
+                BaseCommit: "aaa111", WorktreeHeadSha: "aaa111", DirtyStateHash: "empty-status-hash"));
+        var started = new TaskProcessRecord(
+            1234, "worker", "C:\\repo", "out.log", "err.log", "exit.txt", clock.UtcNow, null, null);
+        kernel.RecordTaskProcessStarted(goal.Id, developer.Id, started);
+
+        kernel.RecordTaskProcessCancelled(
+            goal.Id,
+            developer.Id,
+            started with
+            {
+                CompletedAt = clock.UtcNow,
+                WasCancelled = true,
+                WasCancelledByConductor = true
+            },
+            CancellationCandidateEvidence.Dirty("aaa111", "dirty paths", "status_short=M file.cs"));
+
+        Assert.Same(acceptanceFailure, goal.LatestAcceptanceFailure);
+        Assert.Contains(goal.Timeline, evt =>
+            evt.TaskId == developer.Id &&
+            evt.Kind == ProgressKind.TaskNote &&
+            evt.Message.Contains("kind=Dirty", StringComparison.Ordinal));
     }
 
     [Xunit.Fact]

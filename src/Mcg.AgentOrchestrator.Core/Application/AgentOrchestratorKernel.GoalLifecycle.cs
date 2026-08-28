@@ -1233,7 +1233,7 @@ public sealed partial class AgentOrchestratorKernel
             var reviewedCandidate = string.IsNullOrWhiteSpace(downstream.LastVerification!.ReviewedCommit)
                 ? "unknown"
                 : downstream.LastVerification.ReviewedCommit.Trim();
-            var invalidationReason = retriedTask.Status == WorkTaskStatus.Completed && currentCandidateKnown
+            var invalidationReason = currentCandidateKnown
                 ? $"changed candidate from {reviewedCandidate} to {currentCandidate}"
                 : $"did not prove candidate {reviewedCandidate} unchanged (result {currentCandidate}; status {retriedTask.Status})";
             ResetTaskForRetry(downstream, reconciledAt);
