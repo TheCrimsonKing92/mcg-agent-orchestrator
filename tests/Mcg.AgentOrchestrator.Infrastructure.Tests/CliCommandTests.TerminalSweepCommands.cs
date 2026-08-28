@@ -1398,6 +1398,9 @@ public sealed class CliCommandTestsTerminalSweepCommands : CliCommandTestBase
             Assert.True(blocker.Evidence.Contains("leftover directory cleanup is incomplete", StringComparison.OrdinalIgnoreCase));
             Assert.Equal($"conduct {goal.Id.Value[..8].ToLowerInvariant()} --loop", blocker.Command);
             Assert.True(Directory.Exists(worktree));
+            Assert.DoesNotContain(
+                GoalOperationJournal.Read(root, goal.Id).Entries,
+                entry => entry.Operation == "conductor:cleanup" && entry.Status == GoalOperationStatus.Completed);
         }
         finally
         {
@@ -1444,7 +1447,7 @@ public sealed class CliCommandTestsTerminalSweepCommands : CliCommandTestBase
     [Xunit.Fact]
     public async Task Run_MergeEvidence_TerminalizesAndResolvesGoalAttention()
     {
-        var root = CreateTempDirectory();
+        var root = CreateAcceptanceRepository();
         var workspace = CreateRefinedWorkspace(root);
         var store = CollaborationItemStore.ForDirectory(workspace.OrchestratorDirectory);
         var backlogStore = new BacklogStore(workspace.BacklogStorePath);
@@ -1462,12 +1465,32 @@ public sealed class CliCommandTestsTerminalSweepCommands : CliCommandTestBase
             "manual", root, 0, "passed", string.Empty, DateTimeOffset.UtcNow));
         Xunit.Assert.Equal(GoalStatus.Verified, goal.Status);
 
+        var attemptsDirectory = Path.Combine(
+            workspace.OrchestratorDirectory,
+            "acceptance-gate-attempts",
+            goal.Id.Value);
+        Directory.CreateDirectory(attemptsDirectory);
+        var acceptedPrefix = Path.Combine(attemptsDirectory, "goal-0-accepted");
+        File.WriteAllText(
+            acceptedPrefix + ".attempt.json",
+            JsonSerializer.Serialize(new { attemptId = "goal-0-accepted" }));
+        File.WriteAllText(
+            acceptedPrefix + ".result.json",
+            JsonSerializer.Serialize(new { kind = "accepted", acceptance = new { passed = true } }));
+        var failedPrefix = Path.Combine(attemptsDirectory, "goal-0-failed");
+        File.WriteAllText(
+            failedPrefix + ".attempt.json",
+            JsonSerializer.Serialize(new { attemptId = "goal-0-failed" }));
+        File.WriteAllText(
+            failedPrefix + ".result.json",
+            JsonSerializer.Serialize(new { kind = "rejected", acceptance = new { passed = false } }));
+        File.WriteAllText(failedPrefix + ".exit.txt", "1");
+
         await store.RaiseAsync(CollaborationItemType.Decision, goal.Id.Value, "Decision", "body", "merged-decision");
         await store.RaiseAsync(CollaborationItemType.Clarification, goal.Id.Value, "Clarification", "body", "merged-clarification");
         await store.RaiseAsync(CollaborationItemType.Verify, other.Id.Value, "Other verify", "body", "other-verify");
-        var sentinelWorktree = GoalWorktrees.WorktreePath(root, goal.Id);
-        Directory.CreateDirectory(sentinelWorktree);
-        File.WriteAllText(Path.Combine(sentinelWorktree, "sentinel.txt"), "keep");
+        var sentinelWorktree = CommitGoalWork(root, goal.Id, "src/sentinel.txt", "keep");
+        RunGit(root, "merge", "--ff-only", GoalWorktrees.BranchName(goal.Id));
         var evidence = new GoalIntegrationEvidence("integrate-sha", "main-sha", $"Integrate goal/{goal.Id.Value[..8]}");
         var resolver = new StubGoalIntegrationEvidenceResolver(goal.Id, evidence);
 
@@ -1477,6 +1500,9 @@ public sealed class CliCommandTestsTerminalSweepCommands : CliCommandTestBase
             goal.Id,
             integrationEvidenceResolver: resolver,
             attentionStore: store);
+        var firstJournal = GoalOperationJournal.Read(root, goal.Id);
+        Xunit.Assert.DoesNotContain(firstJournal.Entries, entry => entry.Operation == "conductor:cleanup");
+        Xunit.Assert.True(File.Exists(Path.Combine(sentinelWorktree, "src", "sentinel.txt")));
         var newlyRaisedOrResolved = await TerminalGoalSweepAttention.SurfaceAsync(kernel, first, store, goal.Id);
         var second = RunSweep(
             kernel,
@@ -1490,11 +1516,28 @@ public sealed class CliCommandTestsTerminalSweepCommands : CliCommandTestBase
         Xunit.Assert.Equal(1, first.TerminalizedGoalCount);
         Xunit.Assert.Equal(2, first.ResolvedAttentionItemCount);
         Xunit.Assert.Equal(0, newlyRaisedOrResolved);
-        Xunit.Assert.Empty(Xunit.Assert.Single(first.Goals).Blockers);
+        var firstGoalResult = Xunit.Assert.Single(first.Goals);
+        Xunit.Assert.Empty(firstGoalResult.Blockers);
+        Xunit.Assert.Equal("integrate-sha", firstGoalResult.Reconciliation?.IntegrateSha);
+        Xunit.Assert.Equal("main-sha", firstGoalResult.Reconciliation?.MainSha);
+        Xunit.Assert.Equal(GoalStatus.Verified, firstGoalResult.Reconciliation?.PriorStatus);
+        Xunit.Assert.Equal(sentinelWorktree, firstGoalResult.Reconciliation?.RegisteredWorktreePath);
+        Xunit.Assert.False(firstGoalResult.Reconciliation?.CleanupPreviouslyRecorded);
+        var attemptEvidence = Xunit.Assert.IsAssignableFrom<IReadOnlyList<GoalTerminalReconciliationEvidence>>(
+            firstGoalResult.Reconciliation?.AcceptanceAttempts);
+        Xunit.Assert.Equal(2, attemptEvidence.Count);
+        Xunit.Assert.Contains(attemptEvidence, attempt =>
+            attempt.AttemptId == "goal-0-accepted" &&
+            attempt.State == GoalTerminalReconciliationEvidenceState.MissingByInProcessProtocol);
+        Xunit.Assert.Contains(attemptEvidence, attempt =>
+            attempt.AttemptId == "goal-0-failed" &&
+            attempt.State == GoalTerminalReconciliationEvidenceState.Present &&
+            attempt.RawExitCode == 1);
+        Xunit.Assert.False(firstGoalResult.Reconciliation?.RecoveredFromJournalReceipt);
         Xunit.Assert.Equal(0, second.TerminalizedGoalCount);
         Xunit.Assert.Equal(0, second.ResolvedAttentionItemCount);
         Xunit.Assert.Equal(1, resolver.TargetCalls);
-        Xunit.Assert.True(File.Exists(Path.Combine(sentinelWorktree, "sentinel.txt")));
+        Xunit.Assert.False(Directory.Exists(sentinelWorktree));
         Xunit.Assert.Equal(BacklogItemStatus.Open, (await backlogStore.GetByExactIdAsync(backlogItem.Id))!.Status);
 
         var open = await store.GetAttentionQueueAsync();
@@ -1507,9 +1550,72 @@ public sealed class CliCommandTestsTerminalSweepCommands : CliCommandTestBase
         Xunit.Assert.Contains(journal.Entries, entry =>
             entry.Operation == GoalOperationJournal.TerminalDispositionOperation &&
             entry.Detail.Contains("\"kind\":\"Landed\"", StringComparison.Ordinal));
+        var terminalDisposition = Xunit.Assert.Single(journal.Entries.Where(entry =>
+            entry.Operation == GoalOperationJournal.TerminalDispositionOperation));
+        Xunit.Assert.Contains("goal-0-accepted", terminalDisposition.Detail, StringComparison.Ordinal);
+        Xunit.Assert.Contains("MissingByInProcessProtocol", terminalDisposition.Detail, StringComparison.Ordinal);
+        Xunit.Assert.Contains("goal-0-failed", terminalDisposition.Detail, StringComparison.Ordinal);
+        Xunit.Assert.Single(journal.Entries.Where(entry =>
+            entry.Operation == "conductor:cleanup" && entry.Status == GoalOperationStatus.Completed));
         var eventLines = File.ReadAllLines(Path.Combine(workspace.GoalLifecycleEventsDirectory, $"{goal.Id.Value}.jsonl"));
         Xunit.Assert.Single(eventLines.Where(line => line.Contains("\"eventType\":\"GoalLanded\"", StringComparison.Ordinal)));
         Xunit.Assert.Contains(eventLines, line => line.Contains("\"source\":\"merge-evidence\"", StringComparison.Ordinal));
+        CleanupAcceptanceRepository(root, goal.Id);
+    }
+
+    [Xunit.Fact]
+    public void GoalTerminalReconciliationEvidence_IsAttemptScopedAndExplicitAboutMissingExit()
+    {
+        var root = CreateTempDirectory();
+        const string acceptedAttempt = "goal-0-accepted";
+        var acceptedPrefix = Path.Combine(root, acceptedAttempt);
+        File.WriteAllText(
+            acceptedPrefix + ".attempt.json",
+            JsonSerializer.Serialize(new { attemptId = acceptedAttempt }));
+        File.WriteAllText(
+            acceptedPrefix + ".result.json",
+            JsonSerializer.Serialize(new { kind = "accepted", acceptance = new { passed = true } }));
+
+        var inProcess = GoalTerminalReconciliationEvidenceResolver.Resolve(acceptedPrefix + ".attempt.json");
+
+        Xunit.Assert.Equal(GoalTerminalReconciliationEvidenceState.MissingByInProcessProtocol, inProcess.State);
+        Xunit.Assert.Null(inProcess.RawExitCode);
+
+        const string failedAttempt = "goal-0-failed";
+        var failedPrefix = Path.Combine(root, failedAttempt);
+        File.WriteAllText(
+            failedPrefix + ".attempt.json",
+            JsonSerializer.Serialize(new { attemptId = failedAttempt }));
+        File.WriteAllText(
+            failedPrefix + ".result.json",
+            JsonSerializer.Serialize(new { kind = "rejected", acceptance = new { passed = false } }));
+        File.WriteAllText(failedPrefix + ".exit.txt", "1");
+
+        var failed = GoalTerminalReconciliationEvidenceResolver.Resolve(failedPrefix + ".attempt.json");
+
+        Xunit.Assert.Equal(GoalTerminalReconciliationEvidenceState.Present, failed.State);
+        Xunit.Assert.Equal(1, failed.RawExitCode);
+        Xunit.Assert.Equal(failedAttempt, failed.AttemptId);
+    }
+
+    [Xunit.Fact]
+    public void GoalTerminalReconciliationEvidence_SameAttemptDisagreementIsContradictory()
+    {
+        var root = CreateTempDirectory();
+        const string attemptId = "goal-0-contradictory";
+        var prefix = Path.Combine(root, attemptId);
+        File.WriteAllText(
+            prefix + ".attempt.json",
+            JsonSerializer.Serialize(new { attemptId }));
+        File.WriteAllText(
+            prefix + ".result.json",
+            JsonSerializer.Serialize(new { kind = "accepted", acceptance = new { passed = true } }));
+        File.WriteAllText(prefix + ".exit.txt", "1");
+
+        var result = GoalTerminalReconciliationEvidenceResolver.Resolve(prefix + ".attempt.json");
+
+        Xunit.Assert.Equal(GoalTerminalReconciliationEvidenceState.Contradictory, result.State);
+        Xunit.Assert.Equal(1, result.RawExitCode);
     }
 
     [Xunit.Fact]

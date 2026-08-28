@@ -958,7 +958,11 @@ public sealed partial class AgentOrchestratorKernel
         return goal;
     }
 
-    public Goal CompleteGoalFromMergeEvidence(GoalId goalId, string integrateSha, string reason)
+    public Goal CompleteGoalFromMergeEvidence(
+        GoalId goalId,
+        string integrateSha,
+        string reason,
+        bool recoveringFromReceipt = false)
     {
         var goal = GetGoal(goalId);
         var normalizedIntegrateSha = integrateSha?.Trim() ?? string.Empty;
@@ -992,7 +996,9 @@ public sealed partial class AgentOrchestratorKernel
                 $"Goal '{goalId}' cannot complete from merge evidence while any task is non-terminal or has a live process.");
         }
 
-        foreach (var task in goal.Tasks.Where(task => task.Status is WorkTaskStatus.Cancelled or WorkTaskStatus.Failed))
+        foreach (var task in goal.Tasks.Where(task =>
+                     !recoveringFromReceipt &&
+                     task.Status is (WorkTaskStatus.Cancelled or WorkTaskStatus.Failed)))
         {
             Append(
                 goal,
@@ -1002,7 +1008,7 @@ public sealed partial class AgentOrchestratorKernel
                 $"terminalization=landed integrateSha={normalizedIntegrateSha}");
         }
 
-        if (goal.Status is not (GoalStatus.Verifying or GoalStatus.Verified))
+        if (!recoveringFromReceipt && goal.Status is not (GoalStatus.Verifying or GoalStatus.Verified))
         {
             Append(
                 goal,
@@ -1013,7 +1019,10 @@ public sealed partial class AgentOrchestratorKernel
         }
 
         goal.SetStatus(GoalStatus.Completed);
-        Append(goal, null, ProgressKind.GoalPolicyDecision, completeReason);
+        if (!recoveringFromReceipt)
+        {
+            Append(goal, null, ProgressKind.GoalPolicyDecision, completeReason);
+        }
         return goal;
     }
 

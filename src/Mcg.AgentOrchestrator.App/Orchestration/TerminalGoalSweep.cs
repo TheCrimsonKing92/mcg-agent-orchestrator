@@ -28,11 +28,21 @@ internal sealed record TerminalGoalSweepBlocker(
     public string Command => Remedy.RenderCommand();
 }
 
+internal sealed record TerminalGoalSweepReconciliationReceipt(
+    string IntegrateSha,
+    string MainSha,
+    GoalStatus PriorStatus,
+    string? RegisteredWorktreePath,
+    bool CleanupPreviouslyRecorded,
+    IReadOnlyList<GoalTerminalReconciliationEvidence> AcceptanceAttempts,
+    bool RecoveredFromJournalReceipt);
+
 internal sealed record TerminalGoalSweepGoalResult(
     GoalId GoalId,
     string GoalPrefix,
     IReadOnlyList<TerminalGoalSweepRepair> Repairs,
-    IReadOnlyList<TerminalGoalSweepBlocker> Blockers)
+    IReadOnlyList<TerminalGoalSweepBlocker> Blockers,
+    TerminalGoalSweepReconciliationReceipt? Reconciliation = null)
 {
     public bool Changed => Repairs.Count > 0;
 }
@@ -45,13 +55,15 @@ internal sealed record TerminalGoalSweepResult(
     IReadOnlyList<GoalId>? SweptGoalIds = null,
     int TerminalizedGoalCount = 0,
     int ResolvedAttentionItemCount = 0,
-    IReadOnlyList<string>? ProgressEvents = null)
+    IReadOnlyList<string>? ProgressEvents = null,
+    IReadOnlyList<GoalId>? TerminalizedGoalIds = null)
 {
     public bool Changed => Goals.Any(goal => goal.Changed);
     public IReadOnlyList<TerminalGoalSweepBlocker> Blockers => Goals.SelectMany(goal => goal.Blockers).ToArray();
     public IReadOnlyList<GoalId> ExplicitlySweptGoalIds =>
         SweptGoalIds ?? Goals.Select(goal => goal.GoalId).Distinct().ToArray();
     public IReadOnlyList<string> Events => ProgressEvents ?? [];
+    public IReadOnlyList<GoalId> ExplicitlyTerminalizedGoalIds => TerminalizedGoalIds ?? [];
 }
 
 internal sealed class TerminalGoalSweepCache
@@ -373,6 +385,7 @@ internal static class TerminalGoalSweep
             cleanupHooks);
         var results = new List<TerminalGoalSweepGoalResult>();
         var sweptGoalIds = new List<GoalId>();
+        var terminalizedGoalIds = new List<GoalId>();
         var cacheHits = 0;
         var cacheMisses = 0;
         var terminalizedGoalCount = 0;
@@ -432,15 +445,22 @@ internal static class TerminalGoalSweep
 
             if (integrationEvidenceByGoal.TryGetValue(originalGoal.Id, out var integrationEvidence))
             {
-                resolvedAttentionItemCount += TerminalizeFromMergeEvidence(
+                var terminalization = TerminalizeFromMergeEvidence(
                     kernel,
                     executionDirectory,
                     originalGoal,
                     integrationEvidence,
                     attentionStore,
                     repairs);
+                resolvedAttentionItemCount += terminalization.ResolvedAttentionItemCount;
                 terminalizedGoalCount++;
-                results.Add(new TerminalGoalSweepGoalResult(originalGoal.Id, prefix, repairs, blockers));
+                terminalizedGoalIds.Add(originalGoal.Id);
+                results.Add(new TerminalGoalSweepGoalResult(
+                    originalGoal.Id,
+                    prefix,
+                    repairs,
+                    blockers,
+                    terminalization.Receipt));
                 continue;
             }
 
@@ -709,11 +729,9 @@ internal static class TerminalGoalSweep
                 }
                 else if (!removeResult.Message.Contains("already clean", StringComparison.OrdinalIgnoreCase))
                 {
-                    RecordTerminalDisposition(
-                        kernel,
+                    GoalOperationJournal.RecordCleanupCompleted(
                         executionDirectory,
                         goal,
-                        GoalTerminalDispositionKind.Landed,
                         $"Terminal sweep completed merged goal cleanup: {removeResult.Message}");
 
                     repairs.Add(new TerminalGoalSweepRepair(
@@ -770,7 +788,8 @@ internal static class TerminalGoalSweep
             cacheMisses,
             sweptGoalIds,
             terminalizedGoalCount,
-            resolvedAttentionItemCount);
+            resolvedAttentionItemCount,
+            TerminalizedGoalIds: terminalizedGoalIds);
     }
 
     private static Dictionary<GoalId, GoalIntegrationEvidence> ResolveMergeEvidenceCandidates(
@@ -824,7 +843,7 @@ internal static class TerminalGoalSweep
         return resolved;
     }
 
-    private static int TerminalizeFromMergeEvidence(
+    private static MergeEvidenceTerminalizationResult TerminalizeFromMergeEvidence(
         AgentOrchestratorKernel kernel,
         string executionDirectory,
         Goal goal,
@@ -835,31 +854,54 @@ internal static class TerminalGoalSweep
         var priorStatus = goal.Status;
         var detail =
             $"Goal terminalized from merge evidence at {evidence.IntegrateSha}; mainSha={evidence.MainSha}; priorStatus={priorStatus}.";
-        kernel.CompleteGoalFromMergeEvidence(goal.Id, evidence.IntegrateSha, detail);
-        GoalOperationJournal.RecordTerminalDisposition(
-            executionDirectory,
-            goal,
-            new GoalTerminalDisposition(
-                GoalTerminalDispositionKind.Landed,
-                detail,
-                GoalTerminalDispositionSource.MergeEvidence));
-        GoalLifecycleEventWriter.RetireDispatchProviderSessions(kernel, goal.Id, DateTimeOffset.UtcNow);
-        kernel.RecordGoalLandedFromMergeEvidence(
-            goal.Id,
-            GoalWorktrees.BranchName(goal.Id),
+        var journal = GoalOperationJournal.Read(executionDirectory, goal.Id);
+        var recoveringFromReceipt = GoalOperationJournal.HasMergeEvidenceTerminalDisposition(journal, evidence.IntegrateSha);
+        var reconciliation = new TerminalGoalSweepReconciliationReceipt(
             evidence.IntegrateSha,
-            evidence.MainSha);
+            evidence.MainSha,
+            priorStatus,
+            GoalWorktrees.TryResolve(executionDirectory, goal.Id),
+            GoalOperationJournal.HasCompletedCleanupEvidence(journal),
+            GoalTerminalReconciliationEvidenceResolver.ResolveForGoal(executionDirectory, goal.Id),
+            recoveringFromReceipt);
+        kernel.CompleteGoalFromMergeEvidence(goal.Id, evidence.IntegrateSha, detail, recoveringFromReceipt);
+        if (!recoveringFromReceipt)
+        {
+            GoalOperationJournal.RecordTerminalDisposition(
+                executionDirectory,
+                goal,
+                new GoalTerminalDisposition(
+                    GoalTerminalDispositionKind.Landed,
+                    detail,
+                    GoalTerminalDispositionSource.MergeEvidence,
+                    evidence.IntegrateSha,
+                    reconciliation));
+            GoalLifecycleEventWriter.RetireDispatchProviderSessions(kernel, goal.Id, DateTimeOffset.UtcNow);
+            kernel.RecordGoalLandedFromMergeEvidence(
+                goal.Id,
+                GoalWorktrees.BranchName(goal.Id),
+                evidence.IntegrateSha,
+                evidence.MainSha);
+        }
 
         var resolution = $"goal terminalized from merge evidence at {evidence.IntegrateSha}";
-        var resolvedAttention = attentionStore.ResolveOpenForGoalAsync(goal.Id.Value, resolution)
-            .GetAwaiter()
-            .GetResult();
+        var resolvedAttention = recoveringFromReceipt
+            ? 0
+            : attentionStore.ResolveOpenForGoalAsync(goal.Id.Value, resolution)
+                .GetAwaiter()
+                .GetResult();
         repairs.Add(new TerminalGoalSweepRepair(
             "merge-evidence-terminalized",
             $"integrateSha={evidence.IntegrateSha}; mainSha={evidence.MainSha}; priorStatus={priorStatus}; resolvedAttentionItems={resolvedAttention}",
             "terminalized"));
-        return resolvedAttention;
+        return new MergeEvidenceTerminalizationResult(
+            resolvedAttention,
+            reconciliation);
     }
+
+    private sealed record MergeEvidenceTerminalizationResult(
+        int ResolvedAttentionItemCount,
+        TerminalGoalSweepReconciliationReceipt Receipt);
 
     private static IReadOnlyList<string> EnumerateEphemeralDirectories(string executionDirectory)
     {

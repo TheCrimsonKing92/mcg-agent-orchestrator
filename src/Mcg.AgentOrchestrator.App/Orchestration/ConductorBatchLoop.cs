@@ -457,6 +457,28 @@ internal sealed partial class ConductorBatchLoop
             {
                 EmitProgress(sweepEvent);
             }
+            var sweepTerminalizedGoalIds = sweepResult?.ExplicitlyTerminalizedGoalIds ?? [];
+            if (sweepTerminalizedGoalIds.Count > 0 && checkpointGoalTick is not null)
+            {
+                ApplyCheckpointOutcomes(
+                    checkpointGoalTick(kernel, sweepTerminalizedGoalIds),
+                    sweepTerminalizedGoalIds,
+                    checkpointHeldGoals,
+                    nextTick,
+                    "sweep-terminalization",
+                    preTickTimingLines,
+                    deferEmission: true);
+            }
+            else if (sweepTerminalizedGoalIds.Count > 0 && persistGoalTick is not null)
+            {
+                PersistGoalTickOrThrow(
+                    persistGoalTick,
+                    kernel,
+                    sweepTerminalizedGoalIds,
+                    nextTick,
+                    preTickTimingLines,
+                    busyWriteDelay);
+            }
             RunJanitorialPhase("recover-interrupted-dispatches", nextTick, () =>
             {
                 _recoverInterruptedDispatches(kernel);
@@ -615,6 +637,7 @@ internal sealed partial class ConductorBatchLoop
 
             var scopedGoals = kernel.Goals
                 .Where(g => (onlyGoalId is null || g.Id.Value == onlyGoalId)
+                    && !sweepTerminalizedGoalIds.Contains(g.Id)
                     && !checkpointHeldGoals.ContainsKey(g.Id.Value)
                     && (!excludedGoals.Contains(g.Id.Value) || actionableIntentGoalIds.Contains(g.Id.Value))
                     && (!setAsideGoals.ContainsKey(g.Id.Value) || actionableIntentGoalIds.Contains(g.Id.Value)))

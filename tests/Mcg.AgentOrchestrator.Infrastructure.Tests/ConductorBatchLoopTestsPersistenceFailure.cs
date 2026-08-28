@@ -73,6 +73,69 @@ public sealed class ConductorBatchLoopTestsPersistenceFailure : ConductorBatchLo
     private static SqliteException TypedSqliteBusy(int sqliteErrorCode = 5) =>
         new($"SQLite Error {sqliteErrorCode}: 'database is locked'.", sqliteErrorCode);
 
+    [Xunit.Fact]
+    public async Task SweepTerminalization_IsCheckpointedBeforeEligibilityFiltering()
+    {
+        var root = CreateTempDirectory("mcg-sweep-terminalization-checkpoint");
+        var repository = OpenStateRepository(Path.Combine(root, "state.db"));
+        var seededKernel = new AgentOrchestratorKernel();
+        var seededGoal = CreateVerifiedSimpleGoal(seededKernel, "persist merge-evidence terminalization");
+        await repository.SaveAsync(seededKernel);
+
+        var kernel = await repository.LoadAsync();
+        var goal = kernel.GetGoal(seededGoal.Id);
+        var baselines = kernel.ExportSnapshot().Goals.ToDictionary(snapshot => snapshot.Id, StringComparer.Ordinal);
+        var checkpointBatches = new List<IReadOnlyCollection<GoalId>>();
+        var events = new List<string>();
+
+        IReadOnlyList<GoalSnapshotCheckpointResult> Checkpoint(
+            AgentOrchestratorKernel currentKernel,
+            IReadOnlyCollection<GoalId> requested)
+        {
+            events.Add("checkpoint");
+            checkpointBatches.Add(requested.ToArray());
+            var current = currentKernel.ExportSnapshot().Goals.ToDictionary(snapshot => snapshot.Id, StringComparer.Ordinal);
+            var outcomes = repository.CheckpointGoalSnapshotsAsync(requested
+                    .Select(goalId => new GoalSnapshotSaveRequest(baselines[goalId.Value], current[goalId.Value]))
+                    .ToArray())
+                .GetAwaiter()
+                .GetResult();
+            foreach (var outcome in outcomes.Where(outcome => outcome.IsDurable && outcome.SaveResult?.PersistedSnapshot is not null))
+            {
+                baselines[outcome.GoalId] = outcome.SaveResult!.PersistedSnapshot!;
+            }
+
+            return outcomes;
+        }
+
+        new ConductorBatchLoop(
+            measuredSweep: sweepKernel =>
+            {
+                events.Add("sweep");
+                sweepKernel.CompleteGoalFromMergeEvidence(goal.Id, "integrate-sha", "merged");
+                return new TerminalGoalSweepResult(
+                    [],
+                    TerminalizedGoalCount: 1,
+                    TerminalizedGoalIds: [goal.Id]);
+            }).Run(
+                kernel,
+                MakeDriver(land: _ =>
+                {
+                    events.Add("driver");
+                    return new LandingResult(goal.Id.Value, goal.Id.Value[..8], new LandingDecision.Promote(), "integration", true, "Landed");
+                }),
+                ConductorAutonomyPolicy.Conservative,
+                NoStopPath(),
+                maxIterations: 1,
+                checkpointGoalTick: Checkpoint);
+
+        var checkpoint = Assert.Single(checkpointBatches);
+        Assert.Equal(goal.Id, Assert.Single(checkpoint));
+        Assert.Equal(["sweep", "checkpoint"], events.Take(2));
+        var reloaded = await repository.LoadAsync();
+        Assert.Equal(GoalStatus.Completed, reloaded.GetGoal(goal.Id).Status);
+    }
+
     // ── Persistence: a loop dispatch must be durable across reload ────────
     // Regression for the autonomy-blocker found 2026-06-18. `conduct --loop[ --watch]` runs the
     // ENTIRE loop inside one state transaction (CliPersistentStateRunner.TransactAsync), which

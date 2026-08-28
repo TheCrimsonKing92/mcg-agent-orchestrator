@@ -101,7 +101,9 @@ internal enum GoalTerminalDispositionSource
 internal sealed record GoalTerminalDisposition(
     GoalTerminalDispositionKind Kind,
     string Detail,
-    GoalTerminalDispositionSource Source = GoalTerminalDispositionSource.General);
+    GoalTerminalDispositionSource Source = GoalTerminalDispositionSource.General,
+    string? IntegrateSha = null,
+    TerminalGoalSweepReconciliationReceipt? Reconciliation = null);
 
 internal sealed record GoalLandingIntent(
     string GoalId,
@@ -580,8 +582,10 @@ internal static class GoalOperationJournal
         Completed(executionDirectory, goal, TerminalDispositionOperation, JsonSerializer.Serialize(disposition, JsonOptions));
         Completed(executionDirectory, goal, "conductor:land", disposition.Detail);
         Completed(executionDirectory, goal, "conductor:record", disposition.Detail);
-        Completed(executionDirectory, goal, "conductor:cleanup", disposition.Detail);
     }
+
+    public static void RecordCleanupCompleted(string executionDirectory, Goal goal, string detail) =>
+        Completed(executionDirectory, goal, "conductor:cleanup", detail);
 
     public static GoalOperationJournalSummary Read(string executionDirectory, GoalId goalId)
     {
@@ -651,6 +655,21 @@ internal static class GoalOperationJournal
             Kind: GoalTerminalDispositionKind.Landed,
             Source: GoalTerminalDispositionSource.MergeEvidence
         };
+
+    public static bool HasMergeEvidenceTerminalDisposition(
+        GoalOperationJournalSummary journal,
+        string integrateSha)
+    {
+        var disposition = TryGetLatestTerminalDisposition(journal);
+        return disposition is
+            {
+                Kind: GoalTerminalDispositionKind.Landed,
+                Source: GoalTerminalDispositionSource.MergeEvidence
+            } &&
+            (string.Equals(disposition.IntegrateSha, integrateSha, StringComparison.OrdinalIgnoreCase) ||
+             (disposition.IntegrateSha is null &&
+              disposition.Detail.Contains(integrateSha, StringComparison.OrdinalIgnoreCase)));
+    }
 
     public static bool HasDurableLandingIntent(GoalOperationJournalSummary journal)
     {
