@@ -1,3 +1,4 @@
+using System.Reflection;
 using System.Text;
 using Mcg.AgentOrchestrator.Core;
 using Mcg.AgentOrchestrator.Infrastructure;
@@ -5,6 +6,40 @@ using Mcg.AgentOrchestrator.Infrastructure;
 public sealed class DispatchProcessRecoveryServiceTests
 {
     private static readonly DateTimeOffset Now = DateTimeOffset.Parse("2026-08-22T12:00:00Z");
+
+    [Xunit.Fact]
+    public void DiagnosticReconciliationCreatesOneBoundedCommandLineRead()
+    {
+        var process = ProcessRecord(40, Now.AddMinutes(-1));
+        var task = new TaskSpec(TaskId.New(), "Inspect recovery.", AgentRole.Researcher);
+        var recordProcess = typeof(TaskSpec).GetMethod("RecordProcess", BindingFlags.Instance | BindingFlags.NonPublic);
+        Xunit.Assert.NotNull(recordProcess);
+        recordProcess!.Invoke(task, [process]);
+        var commandLineReads = 0;
+        var writer = new CaptureDiagnosticWriter();
+        var service = CreateService(
+            new Dictionary<string, string>(StringComparer.Ordinal),
+            liveProcessIds: new HashSet<int> { process.ProcessId },
+            diagnosticWriter: writer,
+            readCommandLines: processIds =>
+            {
+                commandLineReads++;
+                Xunit.Assert.Equal([process.ProcessId], processIds);
+                return new Dictionary<int, string> { [process.ProcessId] = process.Command };
+            });
+
+        service.TryWriteDiagnosticRecord(
+            GoalId.New(),
+            task.Id,
+            task,
+            process,
+            exitCode: 0,
+            standardOutput: string.Empty,
+            standardError: string.Empty);
+
+        Xunit.Assert.Equal(1, commandLineReads);
+        Xunit.Assert.NotNull(writer.Record);
+    }
 
     [Xunit.Fact]
     public void ValidExitArtifactReturnsCompletedVerdictWithoutRealFilesOrProcesses()
@@ -130,7 +165,9 @@ public sealed class DispatchProcessRecoveryServiceTests
         IReadOnlyDictionary<string, string> artifacts,
         IReadOnlySet<int>? liveProcessIds = null,
         List<int>? killedProcessIds = null,
-        Func<string, ExitCodeReadResult>? readExitArtifact = null)
+        Func<string, ExitCodeReadResult>? readExitArtifact = null,
+        IDispatchDiagnosticWriter? diagnosticWriter = null,
+        Func<IEnumerable<int>, IReadOnlyDictionary<int, string>>? readCommandLines = null)
     {
         liveProcessIds ??= new HashSet<int>();
         killedProcessIds ??= [];
@@ -154,7 +191,15 @@ public sealed class DispatchProcessRecoveryServiceTests
                 new ExitCodeReadResult(ExitCodeReadKind.Missing, null, "file-missing")),
             writeExitArtifact: (_, _, _) => throw new InvalidOperationException("classification must not write an exit artifact"),
             evaluateRecovery: (_, _, _, _) => RecoveryDecision(),
-            diagnosticWriter: new FileDiagnosticWriter());
+            diagnosticWriter: diagnosticWriter ?? new FileDiagnosticWriter(),
+            readCommandLines: readCommandLines);
+    }
+
+    private sealed class CaptureDiagnosticWriter : IDispatchDiagnosticWriter
+    {
+        internal DispatchDiagnosticRecord? Record { get; private set; }
+
+        public void WriteRecord(DispatchDiagnosticRecord record) => Record = record;
     }
 
     private static DispatchRecoveryDecision RecoveryDecision() =>

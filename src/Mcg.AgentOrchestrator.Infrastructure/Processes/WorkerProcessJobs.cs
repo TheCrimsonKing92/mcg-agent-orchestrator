@@ -1872,6 +1872,12 @@ public static class WorkerProcessJobs
 
     private static bool CanKillProcess(int processId, bool allowProtectedDescendant)
     {
+        if (processId == Environment.ProcessId ||
+            IsDescendantOf(Environment.ProcessId, processId))
+        {
+            return false;
+        }
+
         if (IsProtectedProcess(processId) || ProtectedPidIsDescendantOf(processId))
         {
             return false;

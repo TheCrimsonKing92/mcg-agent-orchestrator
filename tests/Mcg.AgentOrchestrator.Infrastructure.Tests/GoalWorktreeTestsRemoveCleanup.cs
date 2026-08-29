@@ -15,6 +15,74 @@ using Microsoft.Data.Sqlite;
 [Xunit.Collection(TestCollections.GoalWorktreeCleanupHooks)]
 public sealed class GoalWorktreeTestsRemoveCleanup : GoalWorktreeTestBase
 {
+    [Xunit.Fact]
+    public void FindLockHolders_UsesOneCandidateSnapshotAndPreservesUnavailableBuildServer()
+    {
+        var path = Path.Combine(Path.GetTempPath(), "mcg-lock-holder-snapshot");
+        var snapshotCalls = 0;
+        GoalWorktrees.ProcessCommandLineSnapshotForCleanupTests = names =>
+        {
+            snapshotCalls++;
+            Assert.Equal(
+                new[] { "claude", "codex", "dotnet", "MSBuild", "node", "powershell", "pwsh", "VBCSCompiler" },
+                names.Order(StringComparer.OrdinalIgnoreCase));
+            return new ProcessCommandLineSnapshot(
+                new Dictionary<int, ProcessInspectionRecord>
+                {
+                    [101] = new(101, 1, "dotnet", null, null, $"dotnet test --artifacts-path \"{path}\"", ProcessInspectionStatus.Available),
+                    [202] = new(202, 1, "VBCSCompiler", null, null, null, ProcessInspectionStatus.AccessDenied),
+                    [303] = new(303, 1, "codex", null, null, "codex unrelated", ProcessInspectionStatus.Available)
+                });
+        };
+
+        try
+        {
+            var holders = GoalWorktrees.FindLockHolders(path);
+
+            Assert.Equal(1, snapshotCalls);
+            Assert.Collection(
+                holders.OrderBy(holder => holder.ProcessId),
+                holder => Assert.Equal(101, holder.ProcessId),
+                holder =>
+                {
+                    Assert.Equal(202, holder.ProcessId);
+                    Assert.Null(holder.CommandLine);
+                });
+        }
+        finally
+        {
+            GoalWorktrees.ProcessCommandLineSnapshotForCleanupTests = null;
+        }
+    }
+
+    [Xunit.Fact]
+    public void FindLockHolders_EnumerationFailure_ReturnsConservativeTypedHolder()
+    {
+        var failure = new ProcessInspectionFailure(
+            ProcessInspectionStatus.NativeFailure,
+            24,
+            "CreateToolhelp32Snapshot");
+        GoalWorktrees.ProcessCommandLineSnapshotForCleanupTests = _ =>
+            new ProcessCommandLineSnapshot(
+                new Dictionary<int, ProcessInspectionRecord>(),
+                failure);
+
+        try
+        {
+            var holder = Assert.Single(GoalWorktrees.FindLockHolders("C:\\repo\\goal"));
+
+            Assert.Equal(0, holder.ProcessId);
+            Assert.Equal("process-inspection-unavailable", holder.ProcessName);
+            Assert.Equal(
+                "status=NativeFailure nativeError=24 operation=CreateToolhelp32Snapshot",
+                holder.CommandLine);
+        }
+        finally
+        {
+            GoalWorktrees.ProcessCommandLineSnapshotForCleanupTests = null;
+        }
+    }
+
     [Xunit.Fact(DisplayName = "GoalWorktrees_cleanup_contexts_are_isolated_through_private_helpers")]
     public async Task GoalWorktreesCleanupContextsAreIsolatedThroughPrivateHelpers()
     {

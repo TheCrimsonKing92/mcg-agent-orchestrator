@@ -1078,37 +1078,29 @@ public static partial class GoalWorktrees
     internal static List<WorktreeLockHolder> FindLockHolders(string path)
     {
         var normalizedPath = NormalizePath(path);
-        var processesByPid = new Dictionary<int, string>();
-
-        foreach (var name in LockHolderCandidates)
-        {
-            try
-            {
-                foreach (var proc in Process.GetProcessesByName(name))
-                {
-                    using (proc)
-                    {
-                        processesByPid[proc.Id] = proc.ProcessName;
-                    }
-                }
-            }
-            catch
-            {
-                // Skip if enumeration fails for this candidate name.
-            }
-        }
-
-        if (processesByPid.Count == 0)
-        {
-            return [];
-        }
-
-        var commandLines = ProcessCommandLines.Read(processesByPid.Keys);
+        var snapshot = ProcessCommandLineSnapshotForCleanupTests?.Invoke(LockHolderCandidates) ??
+            ProcessCommandLines.SnapshotByNames(LockHolderCandidates);
         var holders = new List<WorktreeLockHolder>();
-
-        foreach (var (pid, name) in processesByPid)
+        if (snapshot.Failure is { } failure)
         {
-            commandLines.TryGetValue(pid, out var cmdLine);
+            holders.Add(new WorktreeLockHolder(
+                0,
+                "process-inspection-unavailable",
+                $"status={failure.Status} nativeError={failure.NativeError} operation={failure.Operation}"));
+            return holders;
+        }
+
+        foreach (var (pid, record) in snapshot.Records)
+        {
+            if (record.Status is ProcessInspectionStatus.Exited or ProcessInspectionStatus.DeadOrRecycled)
+            {
+                continue;
+            }
+
+            var name = record.Name;
+            var cmdLine = record.Status == ProcessInspectionStatus.Available
+                ? record.CommandLine
+                : null;
             var referencesPath = cmdLine is not null &&
                 (cmdLine.Contains(normalizedPath, StringComparison.OrdinalIgnoreCase) ||
                  cmdLine.Contains(path, StringComparison.OrdinalIgnoreCase));
@@ -1129,46 +1121,6 @@ public static partial class GoalWorktrees
     {
         return string.Equals(processName, "VBCSCompiler", StringComparison.OrdinalIgnoreCase) ||
                string.Equals(processName, "MSBuild", StringComparison.OrdinalIgnoreCase);
-    }
-
-    internal static Dictionary<int, string> ParseWmicListOutput(string output)
-    {
-        var result = new Dictionary<int, string>();
-        var currentBlock = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
-
-        void FlushBlock()
-        {
-            if (currentBlock.TryGetValue("ProcessId", out var pidStr) &&
-                currentBlock.TryGetValue("CommandLine", out var cmdLine) &&
-                int.TryParse(pidStr, out var pid) &&
-                !string.IsNullOrWhiteSpace(cmdLine))
-            {
-                result[pid] = cmdLine.Trim();
-            }
-
-            currentBlock.Clear();
-        }
-
-        using var reader = new StringReader(output);
-        string? line;
-        while ((line = reader.ReadLine()) is not null)
-        {
-            line = line.Trim();
-            if (string.IsNullOrEmpty(line))
-            {
-                FlushBlock();
-                continue;
-            }
-
-            var sep = line.IndexOf('=');
-            if (sep > 0)
-            {
-                currentBlock[line[..sep]] = line[(sep + 1)..];
-            }
-        }
-
-        FlushBlock();
-        return result;
     }
 
 }
