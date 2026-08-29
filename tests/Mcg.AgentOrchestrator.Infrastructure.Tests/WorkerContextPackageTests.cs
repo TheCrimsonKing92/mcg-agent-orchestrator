@@ -642,7 +642,7 @@ public sealed class WorkerContextPackageTests
     }
 
     [Xunit.Fact]
-    public void ReviewFindingHistoryCollapsesOnlyByteIdenticalCompleteSnapshots()
+    public void ReviewFindingHistoryKeepsOneCanonicalEntryPerStableId()
     {
         var root = CreateTempDirectory();
         try
@@ -699,21 +699,26 @@ public sealed class WorkerContextPackageTests
             var historyArtifact = Assert.Single(package.Artifacts.Where(candidate =>
                 candidate.Identity.Value == "goal/review-finding-history.json"));
             using var document = System.Text.Json.JsonDocument.Parse(Recover(root, historyArtifact));
-            var entries = document.RootElement.EnumerateArray().ToArray();
+            var entries = document.RootElement.GetProperty("findings").EnumerateArray().ToArray();
 
-            Assert.Equal(3, entries.Length);
-            Assert.Equal(
-                [
-                    $"{firstTask.Id.Value}:round-one",
-                    $"{firstTask.Id.Value}:round-two",
-                    $"{secondTask.Id.Value}:round-one"
-                ],
-                entries.Select(entry =>
-                {
-                    var receipts = entry.GetProperty("EvidenceReceipts");
-                    Assert.Equal(1, receipts.GetArrayLength());
-                    return $"{entry.GetProperty("TaskId").GetString()}:{receipts[0].GetProperty("FindingRoundFingerprint").GetString()}";
-                }).ToArray());
+            Assert.Single(entries);
+            Assert.Equal("stable-finding", entries[0].GetProperty("stable_id").GetString());
+            Assert.Equal(4, document.RootElement.GetProperty("rounds").GetArrayLength());
+            var receiptReferences = document.RootElement.GetProperty("receipt_bodies").EnumerateArray().ToArray();
+            Assert.Equal(2, receiptReferences.Length);
+            Assert.All(receiptReferences, reference =>
+            {
+                var identity = reference.GetProperty("logical_identity").GetString()!;
+                var body = Assert.Single(package.Artifacts, artifact => artifact.Identity.Value == identity);
+                Assert.Equal(reference.GetProperty("sha256").GetString(), body.ContentHash);
+                _ = Recover(root, body);
+            });
+            var receipt = WorkerContextPackageBuilder.CreateReceipt(package);
+            Assert.Equal(2, receipt.UniqueReviewFindingRoundCount);
+            Assert.Equal(2, receipt.DuplicateReviewFindingRoundCount);
+            Assert.Equal(2, receipt.UniqueFindingEvidenceReceiptCount);
+            Assert.Equal(2, receipt.DuplicateFindingEvidenceReceiptCount);
+            Assert.True(receipt.RenderedPromptBytes > 0);
         }
         finally
         {
