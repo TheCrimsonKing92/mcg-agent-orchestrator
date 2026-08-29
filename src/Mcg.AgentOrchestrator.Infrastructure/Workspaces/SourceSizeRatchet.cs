@@ -71,7 +71,9 @@ internal static class SourceSizeRatchet
             // Goal 1441c61c extracted post-reap cancellation evidence classification so the runner
             // only sequences process reaping, lifecycle recording, and resource accounting.
             new SourceSizeCeiling("src/Mcg.AgentOrchestrator.Infrastructure/Processes/BackgroundDispatchRunner.cs", 3241),
-            new SourceSizeCeiling("src/Mcg.AgentOrchestrator.Infrastructure/Workers/WorkerProfileDispatcher.cs", 3220),
+            // Goal 5a75fed0 extracted typed projection parsing and literal restoration into
+            // WorkerContextProjectionResidual, leaving the dispatcher to sequence package assembly.
+            new SourceSizeCeiling("src/Mcg.AgentOrchestrator.Infrastructure/Workers/WorkerProfileDispatcher.cs", 3194),
             new SourceSizeCeiling("src/Mcg.AgentOrchestrator.App/Cli/CliPersistentStateRunner.cs", 4694),
             new SourceSizeCeiling("tests/Mcg.AgentOrchestrator.Infrastructure.Tests/GoalAcceptanceVerifierTests.cs", 1566),
             // Goal 682f25a1 re-derived this row after integrating goal c2eae988, whose fault-isolation
