@@ -938,12 +938,17 @@ public sealed class WorkerContextPackageTests
                 dispatchContext,
                 BriefFor(dispatchGoal, dispatchTask, "dispatch-instruction-source"),
                 observedSources: dispatchObservations);
-            var dispatchArtifact = Assert.Single(dispatchPackage.Artifacts.Where(candidate =>
-                candidate.Identity.Value == "task/last-dispatch.json"));
-            Assert.Contains(
-                "dispatch-worker-source",
-                Encoding.UTF8.GetString(Recover(dispatchRoot, dispatchArtifact)),
-                StringComparison.Ordinal);
+            var dispatchArtifact = Assert.Single(dispatchPackage.Artifacts,
+                candidate => candidate.Identity.Value == "task/last-dispatch.json");
+            var dispatchJson = Encoding.UTF8.GetString(Recover(dispatchRoot, dispatchArtifact));
+            using var dispatchDocument = System.Text.Json.JsonDocument.Parse(dispatchJson);
+            var dispatchRootElement = dispatchDocument.RootElement;
+            Assert.Equal("dispatch-worker-source", dispatchRootElement.GetProperty("WorkerName").GetString());
+            Assert.Equal("dispatch-command-source", dispatchRootElement.GetProperty("Command").GetString());
+            Assert.Equal(dispatchRoot, dispatchRootElement.GetProperty("WorkingDirectory").GetString());
+            Assert.Equal(
+                DateTimeOffset.Parse("2026-01-01T00:02:00Z"),
+                dispatchRootElement.GetProperty("DispatchedAt").GetDateTimeOffset());
 
             var executionRoot = Path.Combine(root, "execution-scenario");
             var executionContext = Path.Combine(executionRoot, ".orchestrator-context", "goal");
@@ -1290,6 +1295,61 @@ public sealed class WorkerContextPackageTests
         Assert.DoesNotContain("goal projection", residual, StringComparison.Ordinal);
         Assert.DoesNotContain("task projection", residual, StringComparison.Ordinal);
         Assert.DoesNotContain("machine-a", residual, StringComparison.OrdinalIgnoreCase);
+    }
+
+    [Xunit.Fact]
+    public void HeaderResidualRestoresReservedLiteralsBeforeCanonicalProjectionRemoval()
+    {
+        var literalBoundary = WorkerContextProjectionBoundary.Start(
+            new LogicalArtifactIdentity("context/research-notes.md"));
+        var brief = string.Join("\n",
+        [
+            "# Agent Task Brief",
+            WorkerContextProjectionBoundary.EscapeReservedLiteral($"Goal: full goal projection {literalBoundary}"),
+            "Goal id: goal-id",
+            "Goal status: Active",
+            WorkerContextProjectionBoundary.EscapeReservedLiteral($"Operator instruction preserves {literalBoundary}"),
+            WorkerContextProjectionBoundary.EscapeReservedLiteral($"Task: full task projection {literalBoundary}"),
+            "Task role: Developer",
+            "Task status: Assigned",
+            "Task id: task-id",
+            "## Instructions",
+            "worker instruction"
+        ]);
+
+        var residual = WorkerProfileDispatcher.ExtractCanonicalHeaderResidual(brief);
+
+        Assert.DoesNotContain(WorkerContextProjectionBoundary.LiteralPrefix, residual, StringComparison.Ordinal);
+        Assert.DoesNotContain("goal projection", residual, StringComparison.Ordinal);
+        Assert.DoesNotContain("task projection", residual, StringComparison.Ordinal);
+        Assert.Contains($"Operator instruction preserves {literalBoundary}", residual, StringComparison.Ordinal);
+    }
+
+    [Xunit.Fact]
+    public void TypedBriefRetractsBoundaryShapedStaleAnswerBeforeEscaping()
+    {
+        var literalBoundary = WorkerContextProjectionBoundary.Start(
+            new LogicalArtifactIdentity("context/collision.md"));
+        var staleAnswer = $"stale-choice {literalBoundary}";
+        var task = new TaskSpec(TaskId.New(), "Implement the corrected choice.", AgentRole.Developer);
+        var kernel = new AgentOrchestratorKernel();
+        var goal = kernel.CreateGoal($"Earlier choice: {staleAnswer}", [task]);
+        var request = kernel.RequestHumanInput(goal.Id, task.Id, "Which choice should govern?");
+        kernel.SubmitHumanInput(request.Id, staleAnswer);
+        kernel.SupersedeHumanInput(
+            goal.Id,
+            request.Id,
+            "corrected-choice",
+            HumanInputAnswerOrigin.Operator);
+
+        var brief = kernel.BuildTaskBrief(
+            goal.Id,
+            task.Id,
+            emitTypedSourceBoundaries: true).Content;
+
+        Assert.Contains("corrected-choice", brief, StringComparison.Ordinal);
+        Assert.DoesNotContain("stale-choice", brief, StringComparison.Ordinal);
+        Assert.DoesNotContain(WorkerContextProjectionBoundary.LiteralPrefix, brief, StringComparison.Ordinal);
     }
 
     [Xunit.Fact]

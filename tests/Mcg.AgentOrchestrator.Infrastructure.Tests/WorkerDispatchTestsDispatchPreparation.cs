@@ -1572,6 +1572,9 @@ public sealed class WorkerDispatchTestsDispatchPreparation : WorkerDispatchTestS
     [Xunit.Fact]
     public void TypedContextPackageRemovesSemanticSourceProjectionsFromResidualBrief()
     {
+        static string Start(string identity) => $"<!-- WORKER_CONTEXT_TYPED_PROJECTION_START:{identity} -->";
+        static string End(string identity) => $"<!-- WORKER_CONTEXT_TYPED_PROJECTION_END:{identity} -->";
+
         var brief = string.Join(Environment.NewLine,
         [
             "# Agent Task Brief",
@@ -1583,20 +1586,74 @@ public sealed class WorkerDispatchTestsDispatchPreparation : WorkerDispatchTestS
             "Goal id: goal-1",
             "## Instructions",
             "preserve this worker-only instruction",
+            Start("goal/refined-spec.json"),
             "## Refined Spec",
             "Behavioral contract: formatted typed specification",
-            "Acceptance criteria:",
-            "- formatted criterion",
+            "## Acceptance criteria mapping",
+            "REFINED-SPEC-SIBLING-SENTINEL",
+            End("goal/refined-spec.json"),
             "## Developer Requirements",
             "preserve this role contract",
+            "## Tester Requirements",
+            "preserve this tester contract",
+            "## Reviewer Requirements",
+            "preserve this reviewer contract",
+            Start("task/verification-plan.md"),
+            "## Verification Plan",
+            "## Verification commands and classes",
+            "VERIFICATION-PLAN-SIBLING-SENTINEL",
+            End("task/verification-plan.md"),
+            Start("task/criterion-retry-feedback.json"),
+            "## Unmet acceptance criteria from the prior attempt - fix these:",
+            "## Retry diagnostic",
+            "RETRY-SIBLING-SENTINEL",
+            End("task/criterion-retry-feedback.json"),
+            Start("context/research-notes.md"),
             "## Durable Research Notes",
-            "complete research payload",
+            "## Current source findings",
+            "RESEARCH-SIBLING-SENTINEL",
+            "## Prior goal evidence",
+            "complete research payload tail",
+            End("context/research-notes.md"),
+            Start("context/planner-plan.md"),
             "## Durable Planner Plan",
-            "complete planner payload",
+            "## Premise validity",
+            "PLANNER-SIBLING-SENTINEL",
+            "## Verification commands and classes",
+            "complete planner payload tail",
+            End("context/planner-plan.md"),
+            Start("task/last-model-output.txt"),
+            "## Last Model Output",
+            "## Current source findings",
+            "LAST-MODEL-SIBLING-SENTINEL",
+            End("task/last-model-output.txt"),
+            Start("task/last-dispatch.json"),
+            "## Last Dispatch",
+            "## Dispatch details",
+            "LAST-DISPATCH-SIBLING-SENTINEL",
+            End("task/last-dispatch.json"),
+            "## Last Verification",
+            "Command: preserve verification command",
+            "Exit code: 0",
+            "Verification history count: 1",
+            Start("task/last-verification/stdout"),
+            "Stdout: ## Current source findings",
+            "VERIFICATION-STREAM-SIBLING-SENTINEL",
+            End("task/last-verification/stdout"),
+            Start("task/last-verification/stderr"),
+            "Stderr: VERIFICATION-ERROR-SENTINEL",
+            End("task/last-verification/stderr"),
+            string.Empty,
+            Start("context/prior-task-evidence.md"),
             "## Prior Task Evidence",
             "- formatted aggregate and per-task output projection",
+            End("context/prior-task-evidence.md"),
+            Start("goal/timeline.json"),
             "## Recent Timeline",
-            "- formatted timeline projection"
+            "- formatted timeline projection",
+            End("goal/timeline.json"),
+            "## PRACTICES",
+            "preserve this unrelated role instruction"
         ]);
 
         var residual = WorkerProfileDispatcher.RemoveTypedSourceProjections(brief, AgentRole.Developer);
@@ -1604,12 +1661,311 @@ public sealed class WorkerDispatchTestsDispatchPreparation : WorkerDispatchTestS
         Assert.DoesNotContain("formatted causal event", residual, StringComparison.Ordinal);
         Assert.DoesNotContain("formatted review finding", residual, StringComparison.Ordinal);
         Assert.DoesNotContain("formatted typed specification", residual, StringComparison.Ordinal);
+        Assert.DoesNotContain("REFINED-SPEC-SIBLING-SENTINEL", residual, StringComparison.Ordinal);
         Assert.DoesNotContain("formatted aggregate and per-task output projection", residual, StringComparison.Ordinal);
         Assert.DoesNotContain("formatted timeline projection", residual, StringComparison.Ordinal);
-        Assert.DoesNotContain("complete research payload", residual, StringComparison.Ordinal);
-        Assert.DoesNotContain("complete planner payload", residual, StringComparison.Ordinal);
+        Assert.DoesNotContain("RESEARCH-SIBLING-SENTINEL", residual, StringComparison.Ordinal);
+        Assert.DoesNotContain("complete research payload tail", residual, StringComparison.Ordinal);
+        Assert.DoesNotContain("PLANNER-SIBLING-SENTINEL", residual, StringComparison.Ordinal);
+        Assert.DoesNotContain("complete planner payload tail", residual, StringComparison.Ordinal);
+        Assert.DoesNotContain("VERIFICATION-PLAN-SIBLING-SENTINEL", residual, StringComparison.Ordinal);
+        Assert.DoesNotContain("RETRY-SIBLING-SENTINEL", residual, StringComparison.Ordinal);
+        Assert.DoesNotContain("LAST-MODEL-SIBLING-SENTINEL", residual, StringComparison.Ordinal);
+        Assert.DoesNotContain("LAST-DISPATCH-SIBLING-SENTINEL", residual, StringComparison.Ordinal);
+        Assert.DoesNotContain("VERIFICATION-STREAM-SIBLING-SENTINEL", residual, StringComparison.Ordinal);
+        Assert.DoesNotContain("VERIFICATION-ERROR-SENTINEL", residual, StringComparison.Ordinal);
+        Assert.DoesNotContain("WORKER_CONTEXT_TYPED_PROJECTION_", residual, StringComparison.Ordinal);
         Assert.Contains("preserve this worker-only instruction", residual, StringComparison.Ordinal);
         Assert.Contains("preserve this role contract", residual, StringComparison.Ordinal);
+        Assert.Contains("preserve this tester contract", residual, StringComparison.Ordinal);
+        Assert.Contains("preserve this reviewer contract", residual, StringComparison.Ordinal);
+        Assert.Contains("Command: preserve verification command", residual, StringComparison.Ordinal);
+        Assert.Contains("Exit code: 0", residual, StringComparison.Ordinal);
+        Assert.Contains("Verification history count: 1", residual, StringComparison.Ordinal);
+        Assert.Contains("## PRACTICES", residual, StringComparison.Ordinal);
+        Assert.Contains("preserve this unrelated role instruction", residual, StringComparison.Ordinal);
+        Assert.Matches(
+            "Verification history count: 1(?:\\r?\\n){2,}## PRACTICES",
+            residual);
+    }
+
+    [Xunit.Fact]
+    public void TypedProjectionBoundaries_MalformedStructure_FailsClosed()
+    {
+        static string Start(string identity) => $"<!-- WORKER_CONTEXT_TYPED_PROJECTION_START:{identity} -->";
+        static string End(string identity) => $"<!-- WORKER_CONTEXT_TYPED_PROJECTION_END:{identity} -->";
+        var identity = "goal/timeline.json";
+        var otherIdentity = "context/research-notes.md";
+        var malformedBlocks = new[]
+        {
+            End(identity),
+            Start(identity) + Environment.NewLine + "payload",
+            Start(identity) + Environment.NewLine + "payload" + Environment.NewLine + End(otherIdentity),
+            Start(identity) + Environment.NewLine + Start(otherIdentity) + Environment.NewLine + End(otherIdentity) + Environment.NewLine + End(identity),
+            Start(identity) + Environment.NewLine + End(identity) + Environment.NewLine + Start(identity) + Environment.NewLine + End(identity)
+        };
+
+        Assert.Equal(5, malformedBlocks.Length);
+        foreach (var malformedBlock in malformedBlocks)
+        {
+            var brief = string.Join(Environment.NewLine,
+            [
+                "## Instructions",
+                "preserve this instruction",
+                malformedBlock
+            ]);
+
+            Assert.Throws<InvalidOperationException>(() =>
+                WorkerProfileDispatcher.RemoveTypedSourceProjections(brief, AgentRole.Developer));
+        }
+    }
+
+    [Xunit.Fact]
+    public void TypedProjectionBoundaryLiteralInPayload_IsPreservedWithoutBreakingDispatch()
+    {
+        var literalBoundary = WorkerContextProjectionBoundary.Start(
+            new LogicalArtifactIdentity("context/research-notes.md"));
+        var kernel = new AgentOrchestratorKernel();
+        var task = new TaskSpec(TaskId.New(), "Implement typed context delivery.", AgentRole.Developer);
+        var goal = kernel.CreateGoal("Preserve boundary-shaped instruction text.", [task]);
+        kernel.ActivateGoal(goal.Id, AgentCatalog.Default().Agents);
+        kernel.RequestHumanInput(goal.Id, task.Id, literalBoundary);
+        var rawBrief = kernel.BuildTaskBrief(
+            goal.Id,
+            task.Id,
+            emitTypedSourceBoundaries: true).Content;
+
+        var residual = WorkerProfileDispatcher.RemoveTypedSourceProjections(
+            rawBrief,
+            AgentRole.Developer);
+
+        Assert.Contains(literalBoundary, residual, StringComparison.Ordinal);
+    }
+
+    [Xunit.Fact]
+    public async Task TypedPackage_LastModelOutputProducer_DeliversSiblingHeadingsOnce()
+    {
+        var root = CreateTempDirectory();
+        var workingDirectory = Path.Combine(root, "repo");
+        Directory.CreateDirectory(workingDirectory);
+        var literalBoundary = WorkerContextProjectionBoundary.Start(
+            new LogicalArtifactIdentity("context/research-notes.md"));
+        var authoritativeOutput = string.Join(Environment.NewLine,
+        [
+            "## Current source findings",
+            "LAST-MODEL-PRODUCER-SENTINEL",
+            literalBoundary
+        ]);
+        var task = new TaskSpec(TaskId.New(), "Implement typed context delivery.", AgentRole.Developer);
+        var kernel = new AgentOrchestratorKernel();
+        var goal = kernel.CreateGoal("Deliver last model output once.", [task]);
+        var developer = AgentCatalog.Default().GetRequired(AgentRole.Developer);
+        kernel.ActivateGoal(goal.Id, [developer]);
+        await new AgentTaskRunner(
+            kernel,
+            [developer],
+            new InMemoryModelProviderRegistry([
+                new FakeSmokeProvider(authoritativeOutput, providerName: "OpenAI")
+            ]))
+            .RunAsync(goal.Id, task.Id);
+        goal = kernel.GetGoal(goal.Id);
+        task = goal.Tasks.Single(candidate => candidate.Id == task.Id);
+        Assert.NotNull(task.LastExecution);
+        Assert.Contains("LAST-MODEL-PRODUCER-SENTINEL", task.LastExecution.Output, StringComparison.Ordinal);
+        var contextDirectory = WorkerContextArtifacts.Write(
+            goal,
+            task,
+            workingDirectory,
+            providerName: "OpenAI",
+            modelName: AgentCatalog.OpenAiSolSubscriptionModelAlias);
+        var rawBrief = kernel.BuildTaskBrief(
+            goal.Id,
+            task.Id,
+            workingDirectory: workingDirectory,
+            contextDirectory: contextDirectory,
+            emitTypedSourceBoundaries: true).Content;
+        var residual = WorkerProfileDispatcher.RemoveTypedSourceProjections(rawBrief, AgentRole.Developer);
+
+        Assert.Contains(WorkerContextProjectionBoundary.LiteralPrefix, rawBrief, StringComparison.Ordinal);
+        Assert.DoesNotContain("LAST-MODEL-PRODUCER-SENTINEL", rawBrief, StringComparison.Ordinal);
+        Assert.DoesNotContain("LAST-MODEL-PRODUCER-SENTINEL", residual, StringComparison.Ordinal);
+
+        var package = WorkerProfileDispatcher.BuildContextPackage(
+            goal,
+            task,
+            workingDirectory,
+            contextDirectory,
+            new TaskBrief(goal.Id, task.Id, task.RequiredRole, task.Description, rawBrief));
+        var artifact = Assert.Single(
+            package.Artifacts,
+            section => section.Identity.Value == "task/last-model-output.txt");
+        var materialized = File.ReadAllText(Path.Combine(
+            workingDirectory,
+            artifact.MandatoryRelativePath!.Replace('/', Path.DirectorySeparatorChar)));
+
+        Assert.Equal(ContextDeliveryMode.MandatoryFile, artifact.DeliveryMode);
+        Assert.Equal(WorkerContextArtifact.Hash(Encoding.UTF8.GetBytes(authoritativeOutput)), artifact.ContentHash);
+        Assert.Equal(authoritativeOutput, materialized);
+    }
+
+    [Xunit.Fact]
+    public void TypedPlannerKeepsPriorEvidencePointerWithoutVisibleMandatoryOwner()
+    {
+        var root = CreateTempDirectory();
+        var researcher = new TaskSpec(TaskId.New(), "Research typed context.", AgentRole.Researcher);
+        var planner = new TaskSpec(TaskId.New(), "Plan typed context.", AgentRole.Planner);
+        var kernel = new AgentOrchestratorKernel();
+        var goal = kernel.CreateGoal("Keep prior evidence visible to Planner.", [researcher, planner]);
+        kernel.ActivateGoal(goal.Id, AgentCatalog.Default().Agents);
+        CompleteResearcherArtifact(kernel, goal);
+        var contextDirectory = WorkerContextArtifacts.Write(
+            goal,
+            planner,
+            root,
+            providerName: "OpenAI",
+            modelName: AgentCatalog.OpenAiSolSubscriptionModelAlias);
+        var rawBrief = kernel.BuildTaskBrief(
+            goal.Id,
+            planner.Id,
+            workingDirectory: root,
+            contextDirectory: contextDirectory,
+            emitTypedSourceBoundaries: true).Content;
+
+        var residual = WorkerProfileDispatcher.RemoveTypedSourceProjections(rawBrief, AgentRole.Planner);
+
+        Assert.Contains("## Prior Task Evidence", residual, StringComparison.Ordinal);
+        Assert.Contains("prior-task-summaries.md", residual, StringComparison.Ordinal);
+    }
+
+    [Xunit.Fact]
+    public void TypedPackage_UnownedVerificationError_RemainsInline()
+    {
+        var root = CreateTempDirectory();
+        var contextDirectory = Path.Combine(root, "context");
+        Directory.CreateDirectory(contextDirectory);
+        var kernel = new AgentOrchestratorKernel();
+        var task = new TaskSpec(TaskId.New(), "Retry verification.", AgentRole.Developer);
+        var goal = kernel.CreateGoal("Preserve unowned verification context.", [task]);
+        kernel.ActivateGoal(goal.Id, AgentCatalog.Default().Agents);
+        kernel.RecordTaskVerification(
+            goal.Id,
+            task.Id,
+            new TaskVerificationRecord(
+                "verify command",
+                root,
+                1,
+                "stdout-complete",
+                "stderr-preview-only",
+                DateTimeOffset.UtcNow,
+                FullStandardErrorUnavailableReason: "complete-stderr-unavailable",
+                StandardErrorIsAuthoritative: false));
+        var rawBrief = kernel.BuildTaskBrief(
+            goal.Id,
+            task.Id,
+            workingDirectory: root,
+            contextDirectory: contextDirectory,
+            emitTypedSourceBoundaries: true).Content;
+
+        var residual = WorkerProfileDispatcher.RemoveTypedSourceProjections(
+            rawBrief,
+            AgentRole.Developer);
+
+        Assert.DoesNotContain("stdout-complete", residual, StringComparison.Ordinal);
+        Assert.Contains("stderr-preview-only", residual, StringComparison.Ordinal);
+        Assert.Contains("Command: verify command", residual, StringComparison.Ordinal);
+        Assert.Contains("Exit code: 1", residual, StringComparison.Ordinal);
+    }
+
+    [Xunit.Fact]
+    public void TypedPackage_ResearchAndPlan_DeliversEachOnce()
+    {
+        var root = CreateTempDirectory();
+        var workingDirectory = Path.Combine(root, "repo");
+        Directory.CreateDirectory(workingDirectory);
+        var kernel = new AgentOrchestratorKernel();
+        var researcher = new TaskSpec(TaskId.New(), "Research context sources.", AgentRole.Researcher);
+        var planner = new TaskSpec(TaskId.New(), "Plan context delivery.", AgentRole.Planner);
+        var developer = new TaskSpec(
+            TaskId.New(),
+            "Implement process dispatch hygiene for typed context delivery.",
+            AgentRole.Developer);
+        var goal = kernel.CreateGoal("Deliver typed sources exactly once.", [researcher, planner, developer]);
+        kernel.ActivateGoal(goal.Id, AgentCatalog.Default().Agents);
+        var research = ResearcherContractFixture().Replace(
+            "## Prior goal evidence",
+            "## Prior goal evidence" + Environment.NewLine + "RESEARCH-PRODUCTION-SENTINEL",
+            StringComparison.Ordinal);
+        var plan = PlannerContractPlanFixture().Replace(
+            "## Acceptance criteria mapping",
+            "## Acceptance criteria mapping" + Environment.NewLine + "PLANNER-PRODUCTION-SENTINEL",
+            StringComparison.Ordinal);
+        CompleteResearcherAndPlannerArtifacts(kernel, goal, research, plan);
+        var contextDirectory = WorkerContextArtifacts.Write(
+            goal,
+            developer,
+            workingDirectory,
+            providerName: "OpenAI",
+            modelName: AgentCatalog.OpenAiSolSubscriptionModelAlias);
+        var rawBrief = kernel.BuildTaskBrief(
+            goal.Id,
+            developer.Id,
+            modelFitTarget: $"OpenAI/{AgentCatalog.OpenAiSolSubscriptionModelAlias}",
+            workingDirectory: workingDirectory,
+            contextDirectory: contextDirectory,
+            emitTypedSourceBoundaries: true).Content;
+        var residualBrief = WorkerProfileDispatcher.RemoveTypedSourceProjections(
+            rawBrief,
+            AgentRole.Developer);
+
+        Assert.Contains("RESEARCH-PRODUCTION-SENTINEL", rawBrief, StringComparison.Ordinal);
+        Assert.Contains("PLANNER-PRODUCTION-SENTINEL", rawBrief, StringComparison.Ordinal);
+        Assert.DoesNotContain("RESEARCH-PRODUCTION-SENTINEL", residualBrief, StringComparison.Ordinal);
+        Assert.DoesNotContain("PLANNER-PRODUCTION-SENTINEL", residualBrief, StringComparison.Ordinal);
+        Assert.Contains("## Developer Requirements", residualBrief, StringComparison.Ordinal);
+        Assert.Contains("## PRACTICES", residualBrief, StringComparison.Ordinal);
+        Assert.True(residualBrief.Length < rawBrief.Length);
+
+        var prepared = WorkerProfileDispatcher.PrepareTask(
+            kernel,
+            goal,
+            developer,
+            new WorkerProfile("codex-cli", "codex exec --sandbox {sandboxMode} --cd {workingDirectory}"),
+            Path.Combine(root, "prompts"),
+            workingDirectory,
+            DateTimeOffset.UtcNow,
+            providerName: "OpenAI",
+            modelName: AgentCatalog.OpenAiSolSubscriptionModelAlias);
+        var prompt = File.ReadAllText(prepared.PromptPath);
+        var receipt = prepared.Task.LastDispatch!.ContextPackageReceipt!;
+        var researchSection = Assert.Single(receipt.Sections,
+            section => section.LogicalIdentity == "context/research-notes.md");
+        var planSection = Assert.Single(receipt.Sections,
+            section => section.LogicalIdentity == "context/planner-plan.md");
+        var briefSection = Assert.Single(receipt.Sections,
+            section => section.LogicalIdentity == "brief/current.md");
+        var authoritativeResearch = File.ReadAllText(Path.Combine(contextDirectory, "research-notes.md"));
+        var authoritativePlan = File.ReadAllText(Path.Combine(contextDirectory, "planner-plan.md"));
+
+        Assert.Equal(ContextDeliveryMode.MandatoryFile, researchSection.DeliveryMode);
+        Assert.Equal(ContextDeliveryMode.MandatoryFile, planSection.DeliveryMode);
+        Assert.Equal(WorkerContextArtifact.Hash(Encoding.UTF8.GetBytes(authoritativeResearch)), researchSection.ContentHash);
+        Assert.Equal(WorkerContextArtifact.Hash(Encoding.UTF8.GetBytes(authoritativePlan)), planSection.ContentHash);
+        Assert.Equal(Encoding.UTF8.GetByteCount(residualBrief), briefSection.ByteCount);
+        Assert.Equal(WorkerContextArtifact.Hash(Encoding.UTF8.GetBytes(residualBrief)), briefSection.ContentHash);
+        Assert.Equal(authoritativeResearch, File.ReadAllText(Path.Combine(
+            workingDirectory,
+            researchSection.MandatoryRelativePath!.Replace('/', Path.DirectorySeparatorChar))));
+        Assert.Equal(authoritativePlan, File.ReadAllText(Path.Combine(
+            workingDirectory,
+            planSection.MandatoryRelativePath!.Replace('/', Path.DirectorySeparatorChar))));
+        Assert.DoesNotContain("RESEARCH-PRODUCTION-SENTINEL", prompt, StringComparison.Ordinal);
+        Assert.DoesNotContain("PLANNER-PRODUCTION-SENTINEL", prompt, StringComparison.Ordinal);
+        Assert.Contains("MANDATORY READ: identity=context/research-notes.md", prompt, StringComparison.Ordinal);
+        Assert.Contains("MANDATORY READ: identity=context/planner-plan.md", prompt, StringComparison.Ordinal);
+        Console.WriteLine(
+            $"context-package-counts rawBrief={rawBrief.Length} residualBrief={residualBrief.Length} " +
+            $"renderedPackage={prompt.Length} researchSection={researchSection.CharacterCount} " +
+            $"planSection={planSection.CharacterCount} briefSection={briefSection.CharacterCount}");
     }
 
     [Xunit.Fact]

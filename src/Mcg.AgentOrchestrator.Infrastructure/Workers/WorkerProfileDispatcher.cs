@@ -265,6 +265,10 @@ public static class WorkerProfileDispatcher
                 goal,
                 ConductorAutonomyPolicy.Default.ReviewAutoRetryStopRound)
             : null;
+        var usesTypedContextPackage = WorkerContextHelpers.UsesTypedContextPackage(
+            task.RequiredRole,
+            providerName,
+            modelName);
         var brief = kernel.BuildTaskBrief(
             goal.Id,
             task.Id,
@@ -281,10 +285,11 @@ public static class WorkerProfileDispatcher
             reviewerMergeTreeTotalConflictPathCount,
             reviewerRoundTouchScope.TouchedAnchors,
             reviewerRoundTouchScope.Diagnostic,
-            effectiveReviewRetryCap);
+            effectiveReviewRetryCap,
+            emitTypedSourceBoundaries: usesTypedContextPackage);
         WorkerContextPackageReceipt? contextPackageReceipt = null;
         var packagedBrief = brief;
-        if (WorkerContextHelpers.UsesTypedContextPackage(task.RequiredRole, providerName, modelName))
+        if (usesTypedContextPackage)
         {
             var contextPackage = BuildContextPackage(
                 goal,
@@ -2454,6 +2459,9 @@ public static class WorkerProfileDispatcher
                 JsonSerializer.SerializeToUtf8Bytes(new
                 {
                     task.LastDispatch.WorkerName,
+                    task.LastDispatch.Command,
+                    task.LastDispatch.WorkingDirectory,
+                    task.LastDispatch.DispatchedAt,
                     task.LastDispatch.ProviderName,
                     task.LastDispatch.ModelName,
                     task.LastDispatch.ReasoningEffort,
@@ -2666,24 +2674,7 @@ public static class WorkerProfileDispatcher
         }
 
         var residual = content[instructions..];
-        foreach (var heading in new[]
-        {
-            "## Refined Spec",
-            "## Durable Research Notes",
-            "## Durable Planner Plan",
-            "## Verification Plan",
-            "## Unmet acceptance criteria from the prior attempt - fix these:",
-            "## Last Model Output",
-            "## Last Dispatch",
-            "## Last Verification",
-            "## Prior Task Evidence",
-            "## Recent Timeline"
-        })
-        {
-            residual = RemoveHeadingSection(residual, heading);
-        }
-
-        return residual.Trim();
+        return WorkerContextProjectionResidual.RemoveProjectionBlocks(residual).Trim();
     }
 
     internal static string RemoveLargeReviewerScopeInlinePreviews(
@@ -2771,23 +2762,6 @@ public static class WorkerProfileDispatcher
         return separator < 0
             ? line
             : line[..separator] + "; complete path list is delivered only by its typed MandatoryFile artifact.";
-    }
-
-    private static string RemoveHeadingSection(string content, string heading)
-    {
-        var start = FindBriefHeading(content, heading, 0);
-        if (start < 0)
-        {
-            return content;
-        }
-
-        var next = content.IndexOf("## ", start + heading.Length, StringComparison.Ordinal);
-        while (next >= 0 && next > 0 && content[next - 1] != '\n')
-        {
-            next = content.IndexOf("## ", next + 3, StringComparison.Ordinal);
-        }
-
-        return content.Remove(start, (next < 0 ? content.Length : next) - start);
     }
 
     private static string RemoveMarkedBriefBlock(string content, string startMarker, string endMarker)
@@ -2911,7 +2885,7 @@ public static class WorkerProfileDispatcher
             throw new InvalidOperationException("Typed context brief is missing its Instructions source boundary.");
         }
 
-        var residual = content[..instructions];
+        var residual = WorkerContextProjectionResidual.RestoreLiterals(content[..instructions]);
         residual = RemoveMarkedBriefBlock(
             residual,
             "<!-- ACCUMULATED_RETRY_FEEDBACK_START -->",
