@@ -2659,10 +2659,10 @@ public sealed class DashboardRenderingTests
     Assert.False(ExtractTaskControls(html, 4).Contains("API plan:", StringComparison.Ordinal));
     Assert.Contains("<code>subscription-dispatch 1</code>", html, StringComparison.Ordinal);
     Assert.Contains("<code>subscription-dispatch 2</code>", html, StringComparison.Ordinal);
-    Assert.Contains("<code>run 3 --confirm-paid-api-run</code>", html, StringComparison.Ordinal);
+    Assert.Contains("<code>run 3 --confirm-paid-api-run --confirm-large-paid-api-prompt</code>", html, StringComparison.Ordinal);
     Assert.Equal("subscription-dispatch 1", stages.Stages.Single(stage => stage.TaskNumber == 1).SuggestedCommand);
     Assert.Equal("subscription-dispatch 2", stages.Stages.Single(stage => stage.TaskNumber == 2).SuggestedCommand);
-    Assert.Equal("run 3 --confirm-paid-api-run", stages.Stages.Single(stage => stage.TaskNumber == 3).SuggestedCommand);
+    Assert.Equal("run 3 --confirm-paid-api-run --confirm-large-paid-api-prompt", stages.Stages.Single(stage => stage.TaskNumber == 3).SuggestedCommand);
     Assert.False(html.Contains($"subscription-dispatch 1 | api-run 1", StringComparison.Ordinal));
 }
 
