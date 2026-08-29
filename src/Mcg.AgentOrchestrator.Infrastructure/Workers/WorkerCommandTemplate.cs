@@ -34,8 +34,10 @@ public static partial class WorkerCommandTemplate
             }
             lines.Add(string.Empty);
             var identity = new LogicalArtifactIdentity($"prior/{priorTask.Id.Value}/verification-output");
-            var projectedBytes = Encoding.UTF8.GetBytes(
-                WorkerVerificationEvidence.ProjectStandardOutputForContext(priorTask, priorTask.LastVerification));
+            var projection = WorkerVerificationEvidence.ProjectStandardOutputForContextWithValidation(
+                priorTask,
+                priorTask.LastVerification);
+            var projectedBytes = Encoding.UTF8.GetBytes(projection.Content);
             var materializationPath = $".orchestrator-context/legacy-handoff/{priorTask.Id.Value}/verification-output.bin";
             var absoluteMaterializationPath = Path.Combine(
                 workingDirectory,
@@ -49,7 +51,7 @@ public static partial class WorkerCommandTemplate
             lines.Add($"Compatibility pointer (v1, hash-bound; resolve from authoritative task evidence): {pointer}");
             lines.Add(
                 $"PROJECTED RECEIPT: path={materializationPath}; identity={identity.Value}; " +
-                $"purpose=prior-worker-output; bytes={projectedBytes.Length}; sha256={WorkerContextArtifact.Hash(projectedBytes)}; contract=v1; validation=verified. " +
+                $"purpose=prior-worker-output; bytes={projectedBytes.Length}; sha256={WorkerContextArtifact.Hash(projectedBytes)}; contract=v1; projection_validation={projection.ValidationReceiptValue}. " +
                 "The complete captured output remains available through the source_handle in this projection; do not reproduce either body on the happy path.");
             lines.Add(string.Empty);
             lines.Add("---");

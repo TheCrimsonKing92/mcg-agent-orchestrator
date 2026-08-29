@@ -327,6 +327,52 @@ public sealed class WorkerContextArtifactsCharacterizationTests(Xunit.ITestOutpu
         Assert.DoesNotContain(lines, line => line.Contains("has no test evidence", StringComparison.Ordinal));
     }
 
+    [Xunit.Fact]
+    public void LegacyHandoff_ParsedProjectionUsesTypedOuterState()
+    {
+        var workingDirectory = CreateRepresentativeRepository();
+        var priorTask = new TaskSpec(
+            new TaskId("parsed-handoff-prior"),
+            "Produce parseable evidence.",
+            AgentRole.Planner,
+            "Return a structured result.");
+        var currentTask = new TaskSpec(
+            new TaskId("parsed-handoff-current"),
+            "Consume parseable evidence.",
+            AgentRole.Developer,
+            "Read the handoff receipt.");
+        var kernel = new AgentOrchestratorKernel();
+        var goal = kernel.CreateGoal("Render typed handoff validation.", [priorTask, currentTask]);
+        kernel.ReportTaskProgress(goal.Id, priorTask.Id, WorkTaskStatus.Completed, "Done.");
+        kernel.RecordTaskVerification(goal.Id, priorTask.Id, new TaskVerificationRecord(
+            "structured result",
+            workingDirectory,
+            0,
+            """
+            WORKER_RESULT:
+            files: none
+            commands: inspect
+            tests: not-run - fixture
+            commit: none
+            blockers: none
+            model_fit: fixture/test - adequate - fixture
+            skills: none
+            confidence: high
+            END_WORKER_RESULT
+            """,
+            string.Empty,
+            DateTimeOffset.Parse("2026-01-01T00:00:00Z")));
+
+        WorkerCommandTemplate.WriteHandoffFile(
+            kernel.GetGoal(goal.Id).Tasks,
+            currentTask.Id,
+            workingDirectory);
+
+        var handoff = File.ReadAllText(Path.Combine(workingDirectory, ".orchestrator-handoff.md"));
+        Assert.Contains("projection_validation=parsed", handoff, StringComparison.Ordinal);
+        Assert.DoesNotContain("projection_validation=verified", handoff, StringComparison.Ordinal);
+    }
+
     private static string CreateRepresentativeRepository()
     {
         var root = CreateTempDirectory();

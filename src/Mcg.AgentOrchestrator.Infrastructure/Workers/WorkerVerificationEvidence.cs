@@ -14,6 +14,26 @@ internal static class WorkerVerificationEvidence
         bool IsAuthoritative,
         string? UnavailableReason);
 
+    internal enum ContextProjectionValidation
+    {
+        Parsed,
+        NonAuthoritative,
+        Malformed
+    }
+
+    internal sealed record ContextProjection(
+        string Content,
+        ContextProjectionValidation Validation)
+    {
+        public string ValidationReceiptValue => Validation switch
+        {
+            ContextProjectionValidation.Parsed => "parsed",
+            ContextProjectionValidation.NonAuthoritative => "non-authoritative",
+            ContextProjectionValidation.Malformed => "malformed",
+            _ => throw new ArgumentOutOfRangeException(nameof(Validation), Validation, null)
+        };
+    }
+
     public static string RequireAuthoritativeStandardOutput(
         TaskVerificationRecord verification,
         LogicalArtifactIdentity identity)
@@ -75,6 +95,12 @@ internal static class WorkerVerificationEvidence
         TaskSpec task,
         TaskVerificationRecord verification,
         LogicalArtifactIdentity? identity = null)
+        => ProjectStandardOutputForContextWithValidation(task, verification, identity).Content;
+
+    public static ContextProjection ProjectStandardOutputForContextWithValidation(
+        TaskSpec task,
+        TaskVerificationRecord verification,
+        LogicalArtifactIdentity? identity = null)
     {
         ArgumentNullException.ThrowIfNull(task);
         ArgumentNullException.ThrowIfNull(verification);
@@ -91,14 +117,18 @@ internal static class WorkerVerificationEvidence
             $"Artifact receipt: purpose=prior-worker-output; stable_id={artifactIdentity.Value}; source_handle={sourceHandle}; chars={output.Length}; bytes={bytes.Length}; sha256={WorkerContextArtifact.Hash(bytes)}";
         if (!contextOutput.IsAuthoritative)
         {
-            return $"{receiptPrefix}; validation=non-authoritative; problem_excerpt={contextOutput.UnavailableReason ?? "authoritative output unavailable"}" +
-                Environment.NewLine + BoundHeadAndTail(output, MalformedOutputExcerptMaxChars);
+            return new ContextProjection(
+                $"{receiptPrefix}; validation=non-authoritative; problem_excerpt={contextOutput.UnavailableReason ?? "authoritative output unavailable"}" +
+                    Environment.NewLine + BoundHeadAndTail(output, MalformedOutputExcerptMaxChars),
+                ContextProjectionValidation.NonAuthoritative);
         }
 
         if (!WorkerResultParser.TryParseResult(output, out var parsed, out var diagnostic))
         {
-            return $"{receiptPrefix}; validation=malformed; problem_excerpt={diagnostic}" +
-                Environment.NewLine + BoundHeadAndTail(output, MalformedOutputExcerptMaxChars);
+            return new ContextProjection(
+                $"{receiptPrefix}; validation=malformed; problem_excerpt={diagnostic}" +
+                    Environment.NewLine + BoundHeadAndTail(output, MalformedOutputExcerptMaxChars),
+                ContextProjectionValidation.Malformed);
         }
 
         var preferredOrder = new[]
@@ -115,17 +145,20 @@ internal static class WorkerVerificationEvidence
         var oversizedFields = orderedFields
             .Where(key => parsed.Fields[key].Length > StructuredFieldMaxChars)
             .ToArray();
-        var validation = oversizedFields.Length == 0
+        var validationReceipt = oversizedFields.Length == 0
             ? "validation=parsed"
             : $"validation=malformed; problem_excerpt=structured fields exceed {StructuredFieldMaxChars} chars; oversized_fields={string.Join(',', oversizedFields)}";
+        var validation = oversizedFields.Length == 0
+            ? ContextProjectionValidation.Parsed
+            : ContextProjectionValidation.Malformed;
         var lines = new List<string>
         {
-            $"{receiptPrefix}; {validation}",
+            $"{receiptPrefix}; {validationReceipt}",
             "WORKER_RESULT:"
         };
         lines.AddRange(orderedFields.Select(key => ProjectStructuredField(key, parsed.Fields[key])));
         lines.Add("END_WORKER_RESULT");
-        return string.Join(Environment.NewLine, lines);
+        return new ContextProjection(string.Join(Environment.NewLine, lines), validation);
     }
 
     private static string ProjectStructuredField(string key, string value)

@@ -2762,6 +2762,7 @@ public sealed class WorkerDispatchTestsDispatchPreparation : WorkerDispatchTestS
         WorkerCommandTemplate.WriteHandoffFile(restoredGoal.Tasks, restoredDeveloper.Id, root);
         var unavailableHandoff = File.ReadAllText(Path.Combine(root, ".orchestrator-handoff.md"));
         Assert.Contains("PROJECTED RECEIPT:", unavailableHandoff, StringComparison.Ordinal);
+        Assert.Contains("projection_validation=non-authoritative", unavailableHandoff, StringComparison.Ordinal);
         var unavailablePointer = Assert.Single(new LegacyHandoffCompatibilityResolver(
                 _ => null,
                 root)
@@ -2774,6 +2775,9 @@ public sealed class WorkerDispatchTestsDispatchPreparation : WorkerDispatchTestS
         Assert.Contains(authoritativeOutput.Trim(), unavailableContent, StringComparison.Ordinal);
         Assert.DoesNotContain("changed after the legacy snapshot was recorded", unavailableContent, StringComparison.Ordinal);
         File.WriteAllText(outputPath, authoritativeOutput);
+        WorkerCommandTemplate.WriteHandoffFile(restoredGoal.Tasks, restoredDeveloper.Id, root);
+        var malformedHandoff = File.ReadAllText(Path.Combine(root, ".orchestrator-handoff.md"));
+        Assert.Contains("projection_validation=malformed", malformedHandoff, StringComparison.Ordinal);
 
         var prepared = WorkerProfileDispatcher.PrepareTask(
             restoredKernel,
