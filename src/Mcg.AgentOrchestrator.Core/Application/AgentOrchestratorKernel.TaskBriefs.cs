@@ -467,7 +467,7 @@ public sealed partial class AgentOrchestratorKernel
                     "## Last Verification",
                     $"Command: {task.LastVerification.Command}",
                     $"Exit code: {task.LastVerification.ExitCode}",
-                    $"Verification history count: {task.VerificationHistory.Count}",
+                    $"Verification history count: {task.VerificationHistory.Count}"
                 ]));
             segments.Add(TaskBriefSegment.Projected(
                 "task/last-verification/stdout",
@@ -480,8 +480,7 @@ public sealed partial class AgentOrchestratorKernel
                 collapsePriority: 40));
             var stderrLines = new[]
             {
-                $"Stderr: {PromptContextFormatter.TrimEvidenceBlock(task.LastVerification.StandardError, complexity)}",
-                string.Empty
+                $"Stderr: {PromptContextFormatter.TrimEvidenceBlock(task.LastVerification.StandardError, complexity)}"
             };
             if (task.LastVerification.AuthoritativeStandardError is not null)
             {
@@ -489,8 +488,7 @@ public sealed partial class AgentOrchestratorKernel
                     "task/last-verification/stderr",
                     stderrLines,
                     [
-                        "Read current-task.md in the context directory for stderr; inline verification error collapsed to stay under the role file-access prompt budget.",
-                        string.Empty
+                        "Read current-task.md in the context directory for stderr; inline verification error collapsed to stay under the role file-access prompt budget."
                     ],
                     collapsePriority: 40));
             }
@@ -498,6 +496,8 @@ public sealed partial class AgentOrchestratorKernel
             {
                 segments.Add(TaskBriefSegment.Fixed(stderrLines));
             }
+
+            segments.Add(TaskBriefSegment.Fixed([string.Empty]));
         }
 
         var reviewerExecutedTestEvidence = BuildReviewerExecutedTestEvidenceBriefBlock(goal, task);
@@ -516,16 +516,23 @@ public sealed partial class AgentOrchestratorKernel
                 ? "Full evidence available at .orchestrator-handoff.md relative to the working directory."
                 : "Full evidence available in the context files; keep inline prior evidence as orientation only.");
             priorEvidenceLines.Add(string.Empty);
-            segments.Add(TaskBriefSegment.Projected(
-                "context/prior-task-evidence.md",
-                priorEvidenceLines,
-                [
-                    "## Prior Task Evidence",
-                    "Read prior-task-summaries.md first for compact prior files, behavior, verification, risks, and model fit. " +
-                    "When a completed Planner is present, read its complete Durable Planner Plan in prior-task-evidence.md before implementation; otherwise open fuller evidence only when needed.",
-                    string.Empty
-                ],
-                collapsePriority: 10));
+            if (task.RequiredRole is AgentRole.Developer or AgentRole.Tester or AgentRole.Reviewer)
+            {
+                segments.Add(TaskBriefSegment.Projected(
+                    "context/prior-task-evidence.md",
+                    priorEvidenceLines,
+                    [
+                        "## Prior Task Evidence",
+                        "Read prior-task-summaries.md first for compact prior files, behavior, verification, risks, and model fit. " +
+                        "When a completed Planner is present, read its complete Durable Planner Plan in prior-task-evidence.md before implementation; otherwise open fuller evidence only when needed.",
+                        string.Empty
+                    ],
+                    collapsePriority: 10));
+            }
+            else
+            {
+                segments.Add(TaskBriefSegment.Fixed(priorEvidenceLines));
+            }
         }
         else if (priorEvidence.Count > 0)
         {
@@ -654,7 +661,9 @@ public sealed partial class AgentOrchestratorKernel
                 lines.Add(WorkerContextProjectionBoundary.Start(identity));
             }
 
-            lines.AddRange(segment.Lines);
+            lines.AddRange(emitTypedSourceBoundaries
+                ? segment.Lines.Select(WorkerContextProjectionBoundary.EscapeReservedLiteral)
+                : segment.Lines);
             if (emitTypedSourceBoundaries && segment.TypedProjectionIdentity is { } closingIdentity)
             {
                 lines.Add(WorkerContextProjectionBoundary.End(closingIdentity));

@@ -2831,9 +2831,56 @@ public static class WorkerProfileDispatcher
             }
 
             cursor = endEnd;
-            while (cursor < content.Length && (content[cursor] == '\r' || content[cursor] == '\n'))
+        }
+
+        return RestoreTypedProjectionLiterals(output.ToString());
+    }
+
+    private static string RestoreTypedProjectionLiterals(string content)
+    {
+        var output = new StringBuilder(content.Length);
+        var cursor = 0;
+        while (cursor < content.Length)
+        {
+            var start = content.IndexOf(
+                WorkerContextProjectionBoundary.LiteralPrefix,
+                cursor,
+                StringComparison.Ordinal);
+            if (start < 0)
             {
-                cursor++;
+                output.Append(content, cursor, content.Length - cursor);
+                break;
+            }
+
+            if (start > 0 && content[start - 1] != '\n')
+            {
+                throw new InvalidOperationException("Typed context projection literal markers must occupy a complete line.");
+            }
+
+            output.Append(content, cursor, start - cursor);
+            var lineEnd = content.IndexOf('\n', start);
+            var markerEnd = lineEnd < 0 ? content.Length : lineEnd;
+            var markerTextEnd = markerEnd > start && content[markerEnd - 1] == '\r'
+                ? markerEnd - 1
+                : markerEnd;
+            var marker = content[start..markerTextEnd];
+            try
+            {
+                output.Append(WorkerContextProjectionBoundary.RestoreReservedLiteral(marker));
+            }
+            catch (ArgumentException exception)
+            {
+                throw new InvalidOperationException("Typed context projection literal marker is malformed.", exception);
+            }
+
+            if (lineEnd >= 0)
+            {
+                output.Append(content, markerTextEnd, lineEnd - markerTextEnd + 1);
+                cursor = lineEnd + 1;
+            }
+            else
+            {
+                cursor = content.Length;
             }
         }
 
