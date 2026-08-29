@@ -17,6 +17,7 @@ internal static class ReviewFindingContextProjector
 {
     private sealed record RoundSource(TaskSpec Task, TaskVerificationRecord Verification);
     private sealed record FindingSource(TaskSpec Task, TaskVerificationRecord Verification, ReviewFinding Finding, ReviewFindingContentReference Round);
+    private sealed record CanonicalEntryProjection(CanonicalReviewFindingEntry Entry, string? FallbackReason);
 
     public static void AddArtifacts(
         ReviewFindingContextProjection projection,
@@ -114,9 +115,12 @@ internal static class ReviewFindingContextProjector
         var findingSources = rounds.SelectMany(source =>
             (source.Verification.MergedReviewFindings ?? []).Select(finding =>
                 new FindingSource(source.Task, source.Verification, finding, roundReferenceBySource[source]))).ToArray();
-        var entries = findingSources
+        var entryProjections = findingSources
             .GroupBy(source => source.Finding.StableId, StringComparer.Ordinal)
             .Select(BuildCanonicalEntry)
+            .ToArray();
+        var entries = entryProjections
+            .Select(projection => projection.Entry)
             .OrderBy(entry => entry.StableId, StringComparer.Ordinal)
             .ToArray();
 
@@ -124,11 +128,14 @@ internal static class ReviewFindingContextProjector
         var repairCheckpoint = targetTask.PendingReviewFindingRepairCheckpoint;
         var repairRequested = targetTask.PendingRetryRoundKind == RetryRoundKind.Mechanical &&
                               latestVerification?.ReviewFindingContractViolation is not null;
-        var fallbackReason = DetermineFallbackReason(
-            repairRequested,
-            repairCheckpoint,
-            latestVerification,
-            currentCandidateSha);
+        var fallbackReason = entryProjections
+            .Select(projection => projection.FallbackReason)
+            .FirstOrDefault(reason => reason is not null)
+            ?? DetermineFallbackReason(
+                repairRequested,
+                repairCheckpoint,
+                latestVerification,
+                currentCandidateSha);
         var mode = repairRequested && fallbackReason is null
             ? ReviewFindingHistoryProjectionMode.ContractRepair
             : ReviewFindingHistoryProjectionMode.FullInspection;
@@ -177,7 +184,7 @@ internal static class ReviewFindingContextProjector
             metrics);
     }
 
-    private static CanonicalReviewFindingEntry BuildCanonicalEntry(IGrouping<string, FindingSource> group)
+    private static CanonicalEntryProjection BuildCanonicalEntry(IGrouping<string, FindingSource> group)
     {
         var roles = group.Select(source => source.Task.RequiredRole).Distinct().ToArray();
         if (roles.Length != 1)
@@ -221,6 +228,7 @@ internal static class ReviewFindingContextProjector
                 .ToArray()
             : [];
         ReviewFindingResolutionProof? resolutionProof = null;
+        string? fallbackReason = null;
         if (finding.State == ReviewFindingState.Resolved)
         {
             if (anchorProof.Length > 0)
@@ -251,6 +259,10 @@ internal static class ReviewFindingContextProjector
                         "advisory-disposition",
                         selected.Verification.ReviewedCommit);
                 }
+                else if ((selected.Verification.ReviewFindingTouchedAnchors?.Count ?? 0) == 0)
+                {
+                    fallbackReason = "resolved-anchor-proof-missing";
+                }
                 else
                 {
                     throw PreparationFailure(
@@ -263,23 +275,25 @@ internal static class ReviewFindingContextProjector
         var evidenceIdentity = receiptReferences.Length == 0
             ? null
             : WorkerContextArtifact.Hash(Encoding.UTF8.GetBytes(string.Join("\n", receiptReferences.Select(reference => reference.Sha256))));
-        return new CanonicalReviewFindingEntry(
-            finding.StableId,
-            selected.Task.RequiredRole,
-            finding.State,
-            finding.Severity,
-            finding.Category,
-            finding.Location,
-            finding.State == ReviewFindingState.Resolved ? null : finding.Description,
-            selected.Verification.ReviewedCommit,
-            BuildVerdictIdentity(selected.Verification),
-            evidenceIdentity,
-            finding.EvidenceRequest,
-            finding.EvidenceOutcome,
-            selected.Round,
-            receiptReferences,
-            resolutionProof,
-            anchorProof);
+        return new CanonicalEntryProjection(
+            new CanonicalReviewFindingEntry(
+                finding.StableId,
+                selected.Task.RequiredRole,
+                finding.State,
+                finding.Severity,
+                finding.Category,
+                finding.Location,
+                finding.State == ReviewFindingState.Resolved && resolutionProof is not null ? null : finding.Description,
+                selected.Verification.ReviewedCommit,
+                BuildVerdictIdentity(selected.Verification),
+                evidenceIdentity,
+                finding.EvidenceRequest,
+                finding.EvidenceOutcome,
+                selected.Round,
+                receiptReferences,
+                resolutionProof,
+                anchorProof),
+            fallbackReason);
     }
 
     private static FindingEvidenceReceipt? FindCandidateBoundEvidenceReceipt(

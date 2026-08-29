@@ -425,16 +425,6 @@ public sealed class ReviewFindingContextProjectorTests
             "stable-identity-ambiguous",
             () => ReviewFindingContextProjector.Project(ambiguousGoal, ambiguousTask, candidateSha));
 
-        var unprovedTask = new TaskSpec(TaskId.New(), "Review", AgentRole.Reviewer);
-        var unprovedKernel = new AgentOrchestratorKernel();
-        var unprovedGoal = unprovedKernel.CreateGoal("Unproved resolution", [unprovedTask]);
-        unprovedKernel.RecordTaskVerification(unprovedGoal.Id, unprovedTask.Id, Verification(
-            DateTimeOffset.Parse("2026-08-01T00:00:00Z"), candidateSha,
-            [new ReviewFinding("resolved-id", ReviewFindingState.Resolved, ambiguousLocation, "resolved")]));
-        AssertReason(
-            "resolved-anchor-proof-missing",
-            () => ReviewFindingContextProjector.Project(unprovedGoal, unprovedTask, candidateSha));
-
         var mismatchTask = new TaskSpec(TaskId.New(), "Review", AgentRole.Reviewer);
         var mismatchKernel = new AgentOrchestratorKernel();
         var mismatchGoal = mismatchKernel.CreateGoal("Mismatched resolution anchor", [mismatchTask]);
@@ -445,6 +435,56 @@ public sealed class ReviewFindingContextProjectorTests
         AssertReason(
             "resolved-anchor-proof-missing",
             () => ReviewFindingContextProjector.Project(mismatchGoal, mismatchTask, candidateSha));
+    }
+
+    [Xunit.Fact]
+    public void OrdinaryBlockingResolutionWithoutTouchProofFallsBackToFullInspectionAndPreservesArtifacts()
+    {
+        var root = CreateRoot();
+        try
+        {
+            var contextDirectory = WriteRegistry(root);
+            var reviewer = new TaskSpec(TaskId.New(), "Review", AgentRole.Reviewer);
+            var kernel = new AgentOrchestratorKernel();
+            var goal = kernel.CreateGoal("Preserve well-formed resolution history", [reviewer]);
+            var candidateSha = new string('e', 40);
+            var location = new ReviewFindingLocation("src/Resolved.cs", "Resolved.Run");
+            kernel.RecordTaskVerification(goal.Id, reviewer.Id, Verification(
+                DateTimeOffset.Parse("2026-08-01T00:00:00Z"), candidateSha,
+                [new ReviewFinding("resolved-id", ReviewFindingState.Open, location, "open finding")]));
+            kernel.RecordTaskVerification(goal.Id, reviewer.Id, Verification(
+                DateTimeOffset.Parse("2026-08-01T00:01:00Z"), candidateSha,
+                [new ReviewFinding("resolved-id", ReviewFindingState.Resolved, location, "resolved finding")]));
+
+            var package = WorkerProfileDispatcher.BuildContextPackage(
+                goal,
+                reviewer,
+                root,
+                contextDirectory,
+                Brief(goal, reviewer),
+                currentCandidateSha: candidateSha);
+
+            Assert.Equal(ReviewFindingHistoryProjectionMode.FullInspection, package.ReviewFindingProjection!.Mode);
+            Assert.Equal("resolved-anchor-proof-missing", package.ReviewFindingProjection.FallbackReason);
+            Assert.Contains(package.Artifacts, artifact => artifact.Identity.Value == "goal/objective.md");
+            Assert.Contains(package.Artifacts, artifact => artifact.Identity.Value == "task/description.md");
+            Assert.Contains(package.Artifacts, artifact => artifact.Identity.Value == "brief/current.md");
+            var history = Assert.Single(package.Artifacts,
+                artifact => artifact.Identity.Value == "goal/review-finding-history.json");
+            using var ledger = JsonDocument.Parse(Recover(root, history));
+            Assert.Equal(
+                (int)ReviewFindingHistoryProjectionMode.FullInspection,
+                ledger.RootElement.GetProperty("projection_mode").GetInt32());
+            Assert.Equal("resolved-anchor-proof-missing", ledger.RootElement.GetProperty("fallback_reason").GetString());
+            var finding = Assert.Single(ledger.RootElement.GetProperty("findings").EnumerateArray());
+            Assert.Equal("resolved finding", finding.GetProperty("description").GetString());
+            Assert.Equal(JsonValueKind.Null, finding.GetProperty("resolution_proof").ValueKind);
+            Assert.Equal(2, package.ReviewFindingProjection.UniqueRoundCount);
+        }
+        finally
+        {
+            Directory.Delete(root, recursive: true);
+        }
     }
 
     [Xunit.Fact]
