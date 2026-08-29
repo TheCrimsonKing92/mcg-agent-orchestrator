@@ -917,7 +917,7 @@ public sealed partial class AgentOrchestratorKernel
         {
             "<!-- ACCUMULATED_RETRY_FEEDBACK_START -->",
             "## Accumulated retry/review feedback",
-            $"Operational entries are newest first and capped at {AccumulatedRetryFeedbackMaxEntries} entries and {AccumulatedRetryFeedbackMaxChars} chars; structured findings below are uncapped. Status legend: still-open, resolved-in-round-N, superseded.",
+            $"Operational entries are newest first and capped at {AccumulatedRetryFeedbackMaxEntries} entries and {AccumulatedRetryFeedbackMaxChars} chars. The latest canonical actionable findings and their evidence provenance are emitted once below for every retry-capable provider.",
             "Use this as the current correction context before relying on original task wording, prior task history, branch evidence, or context digests.",
         };
 
@@ -969,7 +969,7 @@ public sealed partial class AgentOrchestratorKernel
         if (structuredFindings.Length > 0)
         {
             lines.Add("## Structured actionable findings (not subject to operational retry caps)");
-            lines.Add($"finding_count: {structuredFindings.Length}; operational retry entries are budgeted separately.");
+            lines.Add($"finding_count: {structuredFindings.Length}; latest canonical state is emitted once and operational retry entries are budgeted separately.");
             foreach (var item in structuredFindings)
             {
                 lines.Add(
@@ -987,7 +987,7 @@ public sealed partial class AgentOrchestratorKernel
                         ? $"; reason={FindingEvidenceNotHonouredReasonJsonConverter.ToWireValue(reasonCode)}"
                         : outcome?.ResultReason is { } resultReason
                             ? $"; reason={FindingEvidenceOutcomeReasonJsonConverter.ToWireValue(resultReason)}"
-                        : string.Empty;
+                            : string.Empty;
                     lines.Add(
                         $"  evidence_index: selection={selection}; verdict={disposition}; " +
                         $"receipt={outcome?.ReceiptId ?? "none"}{reason}");
@@ -997,6 +997,7 @@ public sealed partial class AgentOrchestratorKernel
                         var receipt = goal.Tasks
                             .Where(candidate => candidate.RequiredRole == item.RequiredRole)
                             .SelectMany(candidate => candidate.VerificationHistory)
+                            .OrderByDescending(verification => verification.CompletedAt)
                             .SelectMany(verification => verification.FindingEvidenceReceipts ?? [])
                             .FirstOrDefault(candidate => string.Equals(candidate.ReceiptId, receiptId, StringComparison.Ordinal));
                         if (receipt is not null)

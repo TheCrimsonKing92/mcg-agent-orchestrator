@@ -2,6 +2,7 @@ using System.Diagnostics;
 using System.Globalization;
 using System.Runtime.CompilerServices;
 using System.Text.Json;
+using System.Text.RegularExpressions;
 using System.Threading;
 using Mcg.AgentOrchestrator.App.Cli;
 using Mcg.AgentOrchestrator.App.Orchestration;
@@ -119,23 +120,63 @@ public sealed class GoalWorktreeTestsSqliteTooling : GoalWorktreeTestBase
             "Mcg.AgentOrchestrator.App",
             "Cli",
             "RepoProcessCliCommand.cs"));
-        Assert.DoesNotContain("ProcessCommandLines.Read", cliCommandText, StringComparison.Ordinal);
-        Assert.DoesNotContain("wmic", cliCommandText, StringComparison.OrdinalIgnoreCase);
-        Assert.DoesNotContain("Get-CimInstance", cliCommandText, StringComparison.OrdinalIgnoreCase);
-        Assert.DoesNotContain("Win32_Process", cliCommandText, StringComparison.OrdinalIgnoreCase);
+        Assert.Contains("ProcessCommandLines.Snapshot", cliCommandText, StringComparison.Ordinal);
+        Assert.DoesNotContain("OpenProcess", cliCommandText, StringComparison.Ordinal);
+        var buildEnvironmentManagerText = File.ReadAllText(Path.Combine(
+            repoRoot,
+            "src",
+            "Mcg.AgentOrchestrator.Infrastructure",
+            "Workspaces",
+            "DotnetBuildEnvironmentManager.cs"));
+        Assert.Contains("ProcessCommandLines.SnapshotByNames", buildEnvironmentManagerText, StringComparison.Ordinal);
+        Assert.DoesNotContain("GetProcessesByName", buildEnvironmentManagerText, StringComparison.Ordinal);
 
-        foreach (var relativePath in new[]
+        var inspectedFiles = Directory
+            .EnumerateFiles(Path.Combine(repoRoot, "src"), "*", SearchOption.AllDirectories)
+            .Concat(Directory.EnumerateFiles(Path.Combine(repoRoot, "scripts"), "*.ps1", SearchOption.AllDirectories))
+            .Append(Path.Combine(repoRoot, "docs", "operator-runbook.md"))
+            .Where(path => !path.Contains($"{Path.DirectorySeparatorChar}bin{Path.DirectorySeparatorChar}", StringComparison.OrdinalIgnoreCase))
+            .Where(path => !path.Contains($"{Path.DirectorySeparatorChar}obj{Path.DirectorySeparatorChar}", StringComparison.OrdinalIgnoreCase));
+        foreach (var path in inspectedFiles)
         {
-            Path.Combine("scripts", "Get-RepoProcessInfo.ps1"),
-            Path.Combine("scripts", "Stop-RepoProcess.ps1"),
-            Path.Combine("scripts", "Find-OrchestratorLocks.ps1"),
-            Path.Combine("scripts", "Get-OrchestratorSnapshot.ps1")
-        })
-        {
-            var text = File.ReadAllText(Path.Combine(repoRoot, relativePath));
-            Assert.DoesNotContain("Get-CimInstance", text, StringComparison.OrdinalIgnoreCase);
-            Assert.DoesNotContain("Win32_Process", text, StringComparison.OrdinalIgnoreCase);
+            var text = File.ReadAllText(path);
+            Assert.Null(FindForbiddenProcessQuery(text, path));
         }
+    }
+
+    [Xunit.Theory]
+    [Xunit.InlineData("wmic process get ProcessId")]
+    [Xunit.InlineData("wmic.exe   process where ProcessId=42")]
+    [Xunit.InlineData("new ProcessStart" + "Info {\r\n    FileName = \"wmi" + "c\",\r\n    Arguments = \"process get ProcessId,CommandLine /format:list\"\r\n}")]
+    [Xunit.InlineData("Get-CimInstance Win32_Process")]
+    [Xunit.InlineData("new ManagementObjectSearcher(query)")]
+    public void ProcessQueryGuard_ForbiddenSpellings_AreRejected(string source)
+    {
+        var failure = FindForbiddenProcessQuery(source, "synthetic-source");
+
+        Assert.NotNull(failure);
+        Assert.Contains("Forbidden process-query mechanism", failure, StringComparison.Ordinal);
+    }
+
+    [Xunit.Theory]
+    [Xunit.InlineData("Get-CimInstance Win32_PhysicalMemory")]
+    [Xunit.InlineData("Get-CimInstance Win32_BIOS")]
+    public void ProcessQueryGuard_HardwareInventory_IsAllowed(string source) =>
+        Assert.Null(FindForbiddenProcessQuery(source, "synthetic-source"));
+
+    private static string? FindForbiddenProcessQuery(string source, string path)
+    {
+        string[] patterns =
+        [
+            @"(?im)\bwmic(?:\.exe)?\b[^\r\n]*\bprocess\b",
+            """(?is)\bFileName\s*=\s*["']wmic(?:\.exe)?["']\s*,?\s*(?:\r?\n[^\r\n]*){0,4}\bArguments\s*=\s*["'][^"'\r\n]*\bprocess\b""",
+            @"(?i)\bWin32_Process\b",
+            @"(?i)\bManagementObjectSearcher\b"
+        ];
+        var pattern = patterns.FirstOrDefault(candidate => Regex.IsMatch(source, candidate));
+        return pattern is null
+            ? null
+            : $"Forbidden process-query mechanism matched '{pattern}' in {path}.";
     }
 
     [Xunit.Fact(DisplayName = "GetRepoProcessInfo_reports_exact_pid_lineage_through_repo_prefix")]
@@ -218,7 +259,7 @@ public sealed class GoalWorktreeTestsSqliteTooling : GoalWorktreeTestBase
             var stderr = process.StandardError.ReadToEnd();
 
             Assert.True(process.WaitForExit(30000), "Stop-RepoProcess.ps1 did not exit within 30 seconds.");
-            Assert.Equal(0, process.ExitCode);
+            Assert.Equal(1, process.ExitCode);
             Assert.True(string.IsNullOrWhiteSpace(stderr), stderr);
             Assert.True(
                 stdout.Contains($"PROCESS id={target.Id} status=refused reason=command-mismatch", StringComparison.Ordinal),

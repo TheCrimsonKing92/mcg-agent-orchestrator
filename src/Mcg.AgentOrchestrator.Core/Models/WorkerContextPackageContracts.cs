@@ -258,7 +258,8 @@ public sealed record WorkerContextPackage(
     string SemanticPackageId,
     ContextContractVersion ContractVersion,
     AgentRole TargetRole,
-    IReadOnlyList<WorkerContextArtifact> Artifacts)
+    IReadOnlyList<WorkerContextArtifact> Artifacts,
+    ReviewFindingHistoryProjectionMetrics? ReviewFindingProjection = null)
 {
     // This is semantic attestation/cache identity only. It is not delivery, read, or acknowledgment evidence.
 }
@@ -337,7 +338,14 @@ public sealed record WorkerContextPackageReceipt(
     IReadOnlyList<WorkerContextSectionReceipt> Sections,
     ProviderUsageValue InputTokens,
     ProviderUsageValue CachedInputTokens,
-    ProviderUsageValue OutputTokens)
+    ProviderUsageValue OutputTokens,
+    int RenderedPromptBytes = 0,
+    ReviewFindingHistoryProjectionMode? ReviewFindingProjectionMode = null,
+    int UniqueReviewFindingRoundCount = 0,
+    int DuplicateReviewFindingRoundCount = 0,
+    int UniqueFindingEvidenceReceiptCount = 0,
+    int DuplicateFindingEvidenceReceiptCount = 0,
+    string? ReviewFindingFallbackReason = null)
 {
     public WorkerContextPackageReceipt WithProviderUsage(ProviderReportedUsage? usage, string unavailableReason = "absent") => this with
     {

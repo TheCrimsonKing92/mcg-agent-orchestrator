@@ -308,7 +308,8 @@ public static class WorkerProfileDispatcher
                 reviewerScopeTotalChangedFileCount: reviewerScopeTotalChangedFileCount,
                 reviewerMergeTreeClean: reviewerMergeTreeClean,
                 reviewerMergeTreeConflictPaths: reviewerMergeTreeConflictPaths,
-                reviewerMergeTreeTotalConflictPathCount: reviewerMergeTreeTotalConflictPathCount);
+                reviewerMergeTreeTotalConflictPathCount: reviewerMergeTreeTotalConflictPathCount,
+                currentCandidateSha: targetContext?.HeadCommit);
             packagedBrief = brief with { Content = WorkerContextPackageBuilder.Render(contextPackage) };
             contextPackageReceipt = WorkerContextPackageBuilder.CreateReceipt(contextPackage);
         }
@@ -2299,7 +2300,8 @@ public static class WorkerProfileDispatcher
         int? reviewerScopeTotalChangedFileCount = null,
         bool? reviewerMergeTreeClean = null,
         IReadOnlyList<string>? reviewerMergeTreeConflictPaths = null,
-        int? reviewerMergeTreeTotalConflictPathCount = null)
+        int? reviewerMergeTreeTotalConflictPathCount = null,
+        string? currentCandidateSha = null)
     {
         var targetRole = task.RequiredRole;
         var registryPath = Path.Combine(contextDirectory, "artifact-registry.json");
@@ -2455,25 +2457,15 @@ public static class WorkerProfileDispatcher
             "goal/timeline.json",
             ContextArtifactKind.RegisteredContext,
             SerializeSemanticTimeline(timeline, workingDirectory, contextDirectory));
-        var reviewFindingHistory = WorkerContextPackageBuilder.DistinctBySerializedValue(goal.Tasks
-            .SelectMany(candidate => candidate.VerificationHistory.Select(verification => new
-            {
-                TaskId = candidate.Id.Value,
-                Role = candidate.RequiredRole.ToString(),
-                Findings = verification.MergedReviewFindings ?? [],
-                EvidenceReceipts = verification.FindingEvidenceReceipts ?? []
-            }))
-            .Where(item => item.Findings.Count > 0 || item.EvidenceReceipts.Count > 0)
-        );
-        if (reviewFindingHistory.Length > 0)
+        ReviewFindingContextProjection? reviewFindingProjection = null;
+        var contractRepairProjectionRequested = task.PendingRetryRoundKind == RetryRoundKind.Mechanical &&
+                                                task.VerificationHistory.LastOrDefault()?.ReviewFindingContractViolation is not null;
+        if (contractRepairProjectionRequested || goal.Tasks.Any(candidate => candidate.VerificationHistory.Any(verification =>
+                (verification.MergedReviewFindings?.Count ?? 0) > 0 || (verification.FindingEvidenceReceipts?.Count ?? 0) > 0)))
         {
-            AddSource(
-                WorkerContextSemanticSource.ReviewFindingHistory,
-                "goal/review-finding-history.json",
-                ContextArtifactKind.AcceptanceCriteria,
-                JsonSerializer.SerializeToUtf8Bytes(reviewFindingHistory));
+            reviewFindingProjection = ReviewFindingContextProjector.Project(goal, task, currentCandidateSha);
+            ReviewFindingContextProjector.AddArtifacts(reviewFindingProjection, AddSource);
         }
-
         if (task.LastExecution is not null)
         {
             var identity = new LogicalArtifactIdentity("task/last-model-output.txt");
@@ -2619,8 +2611,16 @@ public static class WorkerProfileDispatcher
         }
         AddSource(WorkerContextSemanticSource.CurrentBrief, "brief/current.md", ContextArtifactKind.OperatorInstructions, Encoding.UTF8.GetBytes(residualBrief));
 
+        if (reviewFindingProjection?.Metrics.Mode == ReviewFindingHistoryProjectionMode.ContractRepair)
+        {
+            ReviewFindingContextProjector.ApplyCompactArtifactAllowList(artifacts);
+        }
+
         var builder = new WorkerContextPackageBuilder();
-        var preparedWithoutManifest = builder.Prepare(targetRole, workingDirectory, artifacts);
+        var preparedWithoutManifest = builder.Prepare(targetRole, workingDirectory, artifacts) with
+        {
+            ReviewFindingProjection = reviewFindingProjection?.Metrics
+        };
         return FinalizeContextPackageWithManifest(builder, preparedWithoutManifest, observedSources);
     }
 

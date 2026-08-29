@@ -4446,7 +4446,7 @@ public sealed class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
             ex is not DotnetBuildSlotsBusyException and not BuildLockBlockedException)
         {
             var lockedPath = TryExtractPathFromException(ex) ?? environment.ArtifactsPath;
-            var attribution = AttributeBuildLock(lockedPath, worktreePath, "acceptance-check", check.Name);
+            var attribution = AttributeBuildLock(lockedPath, environment.ArtifactsPath, "acceptance-check", check.Name);
             var (result, _) = await RemediateBuildLockAndRetryAsync(
                 arguments,
                 worktreePath,
@@ -4606,7 +4606,7 @@ public sealed class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
         catch (Exception ex) when (IsBuildArtifactIoException(ex))
         {
             var lockedPath = TryExtractPathFromException(ex) ?? retryEnvironment.ArtifactsPath;
-            retryAttribution = AttributeBuildLock(lockedPath, worktreePath, "acceptance-retry", check.Name);
+            retryAttribution = AttributeBuildLock(lockedPath, retryEnvironment.ArtifactsPath, "acceptance-retry", check.Name);
         }
 
         if (retry is not null &&
@@ -4634,7 +4634,10 @@ public sealed class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
         var killed = false;
         foreach (var holder in attribution.Holders
             .Concat(retryAttribution.Holders)
-            .Where(holder => holder.IsOrchestratorOwned && holder.ProcessId.HasValue)
+            .Where(holder =>
+                holder.IsOrchestratorOwned &&
+                holder.ProcessId.HasValue &&
+                holder.ProcessId.Value != Environment.ProcessId)
             .DistinctBy(holder => holder.ProcessId!.Value))
         {
             killed |= WorkerProcessJobs.TryKillOrFallbackAndWait(holder.ProcessId!.Value, TimeSpan.FromSeconds(5));
@@ -4663,7 +4666,7 @@ public sealed class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
         catch (Exception ex) when (IsBuildArtifactIoException(ex))
         {
             var lockedPath = TryExtractPathFromException(ex) ?? killRetryEnvironment.ArtifactsPath;
-            throw new BuildLockBlockedException(AttributeBuildLock(lockedPath, worktreePath, "acceptance-kill-retry", check.Name));
+            throw new BuildLockBlockedException(AttributeBuildLock(lockedPath, killRetryEnvironment.ArtifactsPath, "acceptance-kill-retry", check.Name));
         }
 
         if (IsBuildLockFailure(
@@ -4706,7 +4709,7 @@ public sealed class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
             {
                 var exhaustedAttribution = AttributeBuildLock(
                     cycleAttribution.Path,
-                    worktreePath,
+                    retryEnvironment.ArtifactsPath,
                     "acceptance-transient-exhaustion",
                     check.Name);
                 EmitTransientNoHolderBuildLockRetryReceipt(
@@ -4738,7 +4741,7 @@ public sealed class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
             catch (Exception ex) when (IsBuildArtifactIoException(ex))
             {
                 var lockedPath = TryExtractPathFromException(ex) ?? retryEnvironment.ArtifactsPath;
-                var exceptionAttribution = AttributeBuildLock(lockedPath, worktreePath, "acceptance-transient-retry", check.Name);
+                var exceptionAttribution = AttributeBuildLock(lockedPath, retryEnvironment.ArtifactsPath, "acceptance-transient-retry", check.Name);
                 EmitTransientNoHolderBuildLockRetryReceipt(
                     check,
                     exceptionAttribution,
@@ -4756,7 +4759,7 @@ public sealed class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
 
                 var exhaustedAttribution = AttributeBuildLock(
                     exceptionAttribution.Path,
-                    worktreePath,
+                    retryEnvironment.ArtifactsPath,
                     "acceptance-transient-exhaustion",
                     check.Name);
                 throw new BuildLockBlockedException(exhaustedAttribution);
@@ -4779,7 +4782,7 @@ public sealed class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
             var finalAttribution = cycle == maxRetryCycles
                 ? AttributeBuildLock(
                     retryAttribution.Path,
-                    worktreePath,
+                    retryEnvironment.ArtifactsPath,
                     "acceptance-transient-exhaustion",
                     check.Name)
                 : retryAttribution;

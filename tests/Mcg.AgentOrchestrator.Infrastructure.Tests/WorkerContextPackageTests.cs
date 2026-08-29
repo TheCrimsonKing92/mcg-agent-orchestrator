@@ -642,7 +642,7 @@ public sealed class WorkerContextPackageTests
     }
 
     [Xunit.Fact]
-    public void ReviewFindingHistoryCollapsesOnlyByteIdenticalCompleteSnapshots()
+    public void ReviewFindingHistoryKeepsOneCanonicalEntryPerStableId()
     {
         var root = CreateTempDirectory();
         try
@@ -672,7 +672,7 @@ public sealed class WorkerContextPackageTests
                 FindingEvidenceReceipts:
                 [
                     new FindingEvidenceReceipt(
-                        "receipt-one",
+                        $"receipt-{fingerprint}",
                         "candidate-sha",
                         new FindingEvidenceRequest(
                             [new FindingEvidenceSelection("tests/Tests.csproj", "Tests.One")]),
@@ -699,21 +699,26 @@ public sealed class WorkerContextPackageTests
             var historyArtifact = Assert.Single(package.Artifacts.Where(candidate =>
                 candidate.Identity.Value == "goal/review-finding-history.json"));
             using var document = System.Text.Json.JsonDocument.Parse(Recover(root, historyArtifact));
-            var entries = document.RootElement.EnumerateArray().ToArray();
+            var entries = document.RootElement.GetProperty("findings").EnumerateArray().ToArray();
 
-            Assert.Equal(3, entries.Length);
-            Assert.Equal(
-                [
-                    $"{firstTask.Id.Value}:round-one",
-                    $"{firstTask.Id.Value}:round-two",
-                    $"{secondTask.Id.Value}:round-one"
-                ],
-                entries.Select(entry =>
-                {
-                    var receipts = entry.GetProperty("EvidenceReceipts");
-                    Assert.Equal(1, receipts.GetArrayLength());
-                    return $"{entry.GetProperty("TaskId").GetString()}:{receipts[0].GetProperty("FindingRoundFingerprint").GetString()}";
-                }).ToArray());
+            Assert.Single(entries);
+            Assert.Equal("stable-finding", entries[0].GetProperty("stable_id").GetString());
+            Assert.Equal(4, document.RootElement.GetProperty("rounds").GetArrayLength());
+            var receiptReferences = document.RootElement.GetProperty("receipt_bodies").EnumerateArray().ToArray();
+            Assert.Equal(2, receiptReferences.Length);
+            Assert.All(receiptReferences, reference =>
+            {
+                var identity = reference.GetProperty("logical_identity").GetString()!;
+                var body = Assert.Single(package.Artifacts, artifact => artifact.Identity.Value == identity);
+                Assert.Equal(reference.GetProperty("sha256").GetString(), body.ContentHash);
+                _ = Recover(root, body);
+            });
+            var receipt = WorkerContextPackageBuilder.CreateReceipt(package);
+            Assert.Equal(2, receipt.UniqueReviewFindingRoundCount);
+            Assert.Equal(2, receipt.DuplicateReviewFindingRoundCount);
+            Assert.Equal(2, receipt.UniqueFindingEvidenceReceiptCount);
+            Assert.Equal(2, receipt.DuplicateFindingEvidenceReceiptCount);
+            Assert.True(receipt.RenderedPromptBytes > 0);
         }
         finally
         {
@@ -870,6 +875,24 @@ public sealed class WorkerContextPackageTests
                 brief,
                 observedSources: observations);
 
+            var findingHistory = Assert.Single(package.Artifacts,
+                artifact => artifact.Identity.Value == "goal/review-finding-history.json");
+            using var findingHistoryDocument = System.Text.Json.JsonDocument.Parse(Recover(root, findingHistory));
+            var recoveredReceiptBodies = findingHistoryDocument.RootElement.GetProperty("receipt_bodies")
+                .EnumerateArray()
+                .Select(reference =>
+                {
+                    var identity = reference.GetProperty("logical_identity").GetString()!;
+                    var artifact = Assert.Single(package.Artifacts, candidate => candidate.Identity.Value == identity);
+                    Assert.Equal(ContextDeliveryMode.MandatoryFile, artifact.DeliveryMode);
+                    var bytes = Recover(root, artifact);
+                    Assert.Equal(reference.GetProperty("sha256").GetString(), WorkerContextArtifact.Hash(bytes));
+                    return bytes;
+                })
+                .ToArray();
+            Assert.Contains(recoveredReceiptBodies,
+                bytes => Encoding.UTF8.GetString(bytes).Contains("evidence-receipt-summary-source", StringComparison.Ordinal));
+
             var expectedSources = new List<ExpectedSemanticSource>
             {
                 new("goal objective", "goal/objective.md", "Preserve exact semantic sources"),
@@ -887,7 +910,6 @@ public sealed class WorkerContextPackageTests
                 new ExpectedSemanticSource("finding two", "goal/review-finding-history.json", "finding-source-two"),
                 new ExpectedSemanticSource("evidence request", "goal/review-finding-history.json", "evidence-class-source"),
                 new ExpectedSemanticSource("evidence outcome", "goal/review-finding-history.json", "evidence-outcome-detail-source"),
-                new ExpectedSemanticSource("evidence receipt", "goal/review-finding-history.json", "evidence-receipt-summary-source"),
                 new ExpectedSemanticSource("causal event", "goal/timeline.json", causalEvent),
                 new ExpectedSemanticSource("prior-task result", $"prior/{priorTask.Id.Value}/verification-output", priorResult),
                 new ExpectedSemanticSource("required instruction", "task/verification-plan.md", "required-instruction-source-✓"),

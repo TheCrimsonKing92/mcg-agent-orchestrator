@@ -5,10 +5,9 @@
 .DESCRIPTION
   The operator-listen listener is a long-lived `dotnet.exe` process. It may run from the
   in-tree bin/Debug build or from an isolated copy under %TEMP%\mcg-run\<hash>\. Stopping it
-  used to require an ad-hoc `Get-CimInstance Win32_Process | Where-Object { ... } | Stop-Process`
-  one-liner, which can never match an allowlist prefix and pops a permission prompt every time.
+  uses the repository process-inspection command so lookup and stop both use the shared native seam.
 
-  This script is allowlisted, so the CIM query + Stop-Process inside it never prompt. It is
+  This script is allowlisted, so the bounded query and guarded stop do not prompt. It is
   IDEMPOTENT: it exits 0 whether or not a listener was running.
 
   SAFETY: it matches ONLY processes named `dotnet.exe` whose CommandLine contains BOTH
@@ -17,7 +16,7 @@
   marker. PID 10484 (the operator's personal codex) cannot match because it is not a dotnet host
   carrying both orchestrator markers.
 
-  Exit code: always 0 (nothing running, stopped successfully, or -DryRun listing).
+  Exit code: 0 when absent, stopped, or listed; 1 when inspection, revalidation, or stop fails.
 
 .PARAMETER DryRun
   List the matching pid(s) without stopping anything. Alias: -WhatIf.
@@ -34,29 +33,44 @@ param(
     [switch]$DryRun
 )
 
-# Precise, conjunctive match: dotnet.exe host carrying BOTH orchestrator markers.
-# Anything that is not a dotnet.exe process (e.g. codex/codex.exe) can never be returned here.
-$procs = Get-CimInstance Win32_Process -Filter "Name='dotnet.exe'" -ErrorAction SilentlyContinue |
-    Where-Object {
-        $_.CommandLine -and
-        ($_.CommandLine -like '*operator-listen*') -and
-        ($_.CommandLine -like '*Mcg.AgentOrchestrator.App*')
-    }
+$repoRoot = Split-Path -Parent $PSScriptRoot
+$queryOutput = @(& (Join-Path $repoRoot 'scripts\Get-RepoProcessInfo.ps1') `
+    -Name dotnet `
+    -CommandContains @('operator-listen', 'Mcg.AgentOrchestrator.App') `
+    -Newest 25)
+if (($LASTEXITCODE -is [int] -and $LASTEXITCODE -ne 0) -or
+    ($queryOutput -match '^PROCESS_QUERY_UNAVAILABLE\s')) {
+    Write-Output 'Operator-listen query unavailable; stopped nothing.'
+    exit 1
+}
 
-if (-not $procs) {
+$processIds = @($queryOutput | ForEach-Object {
+    if ($_ -match '^PROCESS id=(\d+)\s') { [int]$Matches[1] }
+})
+
+if ($processIds.Count -eq 0) {
     Write-Output 'No operator-listen process running.'
     exit 0
 }
 
 if ($DryRun) {
-    foreach ($p in $procs) {
-        Write-Output "Would stop operator-listen (pid $($p.ProcessId))"
+    foreach ($processId in $processIds) {
+        Write-Output "Would stop operator-listen (pid $processId)"
     }
     exit 0
 }
 
-foreach ($p in $procs) {
-    Stop-Process -Id $p.ProcessId -Force -ErrorAction SilentlyContinue
-    Write-Output "Stopped operator-listen (pid $($p.ProcessId))"
+foreach ($processId in $processIds) {
+    $stopOutput = @(& (Join-Path $repoRoot 'scripts\Stop-RepoProcess.ps1') `
+        -Id $processId `
+        -CommandContains @('operator-listen', 'Mcg.AgentOrchestrator.App') `
+        -Force)
+    $stopExitCode = $LASTEXITCODE
+    $stopOutput | Write-Output
+    if (($stopExitCode -is [int] -and $stopExitCode -ne 0) -or
+        ($stopOutput -match 'status=(refused|not-stopped)')) {
+        Write-Output "Operator-listen stop refused or failed for pid $processId."
+        exit 1
+    }
 }
 exit 0

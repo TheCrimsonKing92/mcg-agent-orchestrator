@@ -61,6 +61,7 @@ internal sealed class DispatchProcessRecoveryService
     private readonly Action<string, int, string> _writeExitArtifact;
     private readonly Func<TaskProcessRecord, bool, int, DispatchWorktreeInspectionStatus, DispatchRecoveryDecision> _evaluateRecovery;
     private readonly IDispatchDiagnosticWriter _diagnosticWriter;
+    private readonly Func<IEnumerable<int>, IReadOnlyDictionary<int, string>> _readCommandLines;
 
     internal DispatchProcessRecoveryService(
         IClock? clock = null,
@@ -78,7 +79,8 @@ internal sealed class DispatchProcessRecoveryService
         Action<string, int, string>? writeExitArtifact = null,
         Func<TaskProcessRecord, bool, int, DispatchWorktreeInspectionStatus, DispatchRecoveryDecision>? evaluateRecovery = null,
         IDispatchDiagnosticWriter? diagnosticWriter = null,
-        Func<int, SpawnProcessIdentity?>? readProcessIdentity = null)
+        Func<int, SpawnProcessIdentity?>? readProcessIdentity = null,
+        Func<IEnumerable<int>, IReadOnlyDictionary<int, string>>? readCommandLines = null)
     {
         _clock = clock ?? new SystemClock();
         _postOutputIdleTimeout = postOutputIdleTimeout ?? TimeSpan.FromMinutes(2);
@@ -99,6 +101,7 @@ internal sealed class DispatchProcessRecoveryService
         var recoveryPolicy = new DispatchRecoveryPolicy(_clock);
         _evaluateRecovery = evaluateRecovery ?? recoveryPolicy.Evaluate;
         _diagnosticWriter = diagnosticWriter ?? new FileDiagnosticWriter();
+        _readCommandLines = readCommandLines ?? ProcessCommandLines.Read;
     }
 
     internal DispatchProcessRefreshVerdict ClassifyRefresh(
@@ -770,7 +773,10 @@ internal sealed class DispatchProcessRecoveryService
             var stderrLen = _fileExists(stderrPath) ? _getFileLength(stderrPath) : 0L;
             var classification = ClassifyDispatch(
                 exitCode, fileLen, readLen, stderrLen, standardOutput, standardError, out var reason);
-            var dispatchState = new DispatchStateSurface(_clock, _isStillRunning).Evaluate(goalId, task);
+            var dispatchState = new DispatchStateSurface(
+                _clock,
+                _isStillRunning,
+                readCommandLines: _readCommandLines).Evaluate(goalId, task);
             var record = new DispatchDiagnosticRecord(
                 goalId.Value,
                 taskId.Value,

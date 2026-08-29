@@ -42,6 +42,8 @@ public sealed class TaskSpec
 
     public RetryRoundKind? PendingRetryRoundKind { get; private set; }
 
+    public ReviewFindingRepairCheckpoint? PendingReviewFindingRepairCheckpoint { get; private set; }
+
     public RetryCause PendingRetryCause { get; private set; } = RetryCause.Unknown;
 
     public WorkTaskStatus Status { get; private set; } = WorkTaskStatus.Pending;
@@ -252,7 +254,8 @@ public sealed class TaskSpec
             _dispatchHistory.Select(ToDispatchSnapshot).ToArray(),
             PendingRetryCause,
             _retryAdmissionHistory.ToArray(),
-            RetryAdmissionHoldRoute);
+            RetryAdmissionHoldRoute,
+            PendingReviewFindingRepairCheckpoint);
     }
 
     internal static TaskSpec FromSnapshot(TaskSnapshot snapshot)
@@ -438,6 +441,7 @@ public sealed class TaskSpec
         task.EmptyOutputRetryCount = Math.Max(0, snapshot.EmptyOutputRetryCount);
         task.LatestRetryAt = snapshot.LatestRetryAt;
         task.PendingRetryRoundKind = snapshot.PendingRetryRoundKind;
+        task.PendingReviewFindingRepairCheckpoint = snapshot.PendingReviewFindingRepairCheckpoint;
         task.PendingRetryCause = snapshot.PendingRetryCause;
         task.RetryAdmissionHoldRoute = snapshot.RetryAdmissionHoldRoute;
         task.PreReviewEvidenceReceipt = snapshot.PreReviewEvidenceReceipt;
@@ -463,6 +467,7 @@ public sealed class TaskSpec
     {
         SubscriptionRetryAfter = null;
         PendingRetryRoundKind = null;
+        PendingReviewFindingRepairCheckpoint = null;
         // EmptyOutputRetryCount is the shared bounded transient-dispatch retry budget. It covers
         // missing worker output, sandbox preflight failures, and structured Tester inconclusive
         // results without consuming Developer or Reviewer convergence allowances.
@@ -608,6 +613,11 @@ public sealed class TaskSpec
     {
         LatestRetryAt = retriedAt;
         PendingRetryRoundKind = retryRoundKind;
+        var priorVerification = _verificationHistory.LastOrDefault();
+        PendingReviewFindingRepairCheckpoint = retryRoundKind == RetryRoundKind.Mechanical &&
+                                               priorVerification?.ReviewFindingContractViolation is not null
+            ? ReviewFindingRepairCheckpoint.Create(priorVerification)
+            : null;
         PendingRetryCause = retryCause;
         RetryAdmissionHoldRoute = null;
     }

@@ -302,7 +302,13 @@ public static GoalWorkSummaryDto ToGoalWorkSummaryDto(
     var gate = kernel.BuildVerificationGate(goal.Id);
     var nextAction = kernel.BuildNextActions(goal.Id).Items.FirstOrDefault();
     var testImpact = BuildGoalTestImpactDto(goal, executionDirectory, changedFiles);
-    var disposition = conductorDisposition ?? new GoalOperatorDispositionSurface().Evaluate(goal, monitor.PendingHumanInputCount, gate.IsSatisfied, executionDirectory);
+    var processSnapshot = ProcessCommandLines.Snapshot();
+    var disposition = conductorDisposition ?? new GoalOperatorDispositionSurface().Evaluate(
+        goal,
+        monitor.PendingHumanInputCount,
+        gate.IsSatisfied,
+        executionDirectory,
+        processSnapshot);
     var lifecycle = ResolveLifecycle(goal, executionDirectory);
 
     return new GoalWorkSummaryDto(
@@ -316,7 +322,7 @@ public static GoalWorkSummaryDto ToGoalWorkSummaryDto(
         nextAction is null ? null : ToNextActionDto(goal, nextAction, 1, workerProfiles, agents),
         host,
         ToGoalBuildEnvironmentDto(goal),
-        goal.Tasks.Select(task => ToTaskWorkSummaryDto(goal, task)).ToList(),
+        goal.Tasks.Select(task => ToTaskWorkSummaryDto(goal, task, processSnapshot)).ToList(),
         DashboardMonitoringEvents.StreamPath(goal.Id.Value),
         ToParallelExecutionPlanDto(GoalManagementCommandService.BuildReadyTaskParallelPlan(goal, agents)),
         testImpact,
@@ -500,9 +506,12 @@ public static TaskWorkContextDto ToTaskWorkContextDto(
         host);
 }
 
-public static TaskWorkSummaryDto ToTaskWorkSummaryDto(Goal goal, TaskSpec task)
+public static TaskWorkSummaryDto ToTaskWorkSummaryDto(
+    Goal goal,
+    TaskSpec task,
+    ProcessCommandLineSnapshot? processSnapshot = null)
 {
-    var dispatchState = ToDispatchAuthoritativeStateDto(TryEvaluateDispatchState(goal, task));
+    var dispatchState = ToDispatchAuthoritativeStateDto(TryEvaluateDispatchState(goal, task, processSnapshot));
     return new TaskWorkSummaryDto(
         ConsoleViews.GetTaskDisplayNumber(goal, task.Id),
         task.Id.Value,
@@ -725,14 +734,17 @@ private static DispatchRecoveryDecisionDto? ToDispatchRecoveryDecisionDto(Dispat
             decision.Reason,
             decision.Blocker);
 
-private static DispatchAuthoritativeState? TryEvaluateDispatchState(Goal goal, TaskSpec task)
+private static DispatchAuthoritativeState? TryEvaluateDispatchState(
+    Goal goal,
+    TaskSpec task,
+    ProcessCommandLineSnapshot? processSnapshot = null)
 {
     if (task.LastDispatch is null && task.LastProcess is null)
     {
         return null;
     }
 
-    return new DispatchStateSurface().Evaluate(goal.Id, task);
+    return new DispatchStateSurface().Evaluate(goal.Id, task, processSnapshot);
 }
 
 internal static DispatchAuthoritativeStateDto? ToDispatchAuthoritativeStateDto(DispatchAuthoritativeState? state) =>
