@@ -103,7 +103,7 @@ public sealed class WorkerContextArtifactsCharacterizationTests(Xunit.ITestOutpu
     {
         var workingDirectory = CreateRepresentativeRepository();
         const string sentinel = "REPLAY-SENTINEL-e4e14983";
-        var echoedBody = string.Concat(Enumerable.Repeat(sentinel + Environment.NewLine, 4096));
+        var echoedBody = string.Concat(Enumerable.Repeat(sentinel, 4096));
         var priorTask = new TaskSpec(
             new TaskId("prior-task-large-output"),
             "Implement prior behavior.",
@@ -121,9 +121,8 @@ public sealed class WorkerContextArtifactsCharacterizationTests(Xunit.ITestOutpu
             [priorTask, currentTask]);
         kernel.ReportTaskProgress(goal.Id, priorTask.Id, WorkTaskStatus.Completed, "Done.");
         var stdout = $"""
-            {echoedBody}
             WORKER_RESULT:
-            files: src/Feature/FeatureService.cs
+            files: {echoedBody}
             commands: focused verification
             tests: fail - assertion error at tests/Feature.Tests/FeatureServiceTests.cs:42
             commit: none
@@ -174,7 +173,10 @@ public sealed class WorkerContextArtifactsCharacterizationTests(Xunit.ITestOutpu
             $"Expected replay sentinel to be absent; before_output_chars={stdout.Length}; after_output_chars={evidence.Length}.");
         Assert.Contains("tests: fail - assertion error at tests/Feature.Tests/FeatureServiceTests.cs:42", evidence, StringComparison.Ordinal);
         Assert.Contains("blockers: exact-blocker - src/Feature/FeatureService.cs:7 contradicts criterion 3", evidence, StringComparison.Ordinal);
-        Assert.Contains("validation=parsed", evidence, StringComparison.Ordinal);
+        Assert.Contains("validation=malformed", evidence, StringComparison.Ordinal);
+        Assert.Contains("oversized_fields=files", evidence, StringComparison.Ordinal);
+        Assert.Contains($"files: [oversized structured field omitted; chars={echoedBody.Length};", evidence, StringComparison.Ordinal);
+        Assert.Contains($"sha256={WorkerContextArtifact.Hash(System.Text.Encoding.UTF8.GetBytes(echoedBody))}", evidence, StringComparison.Ordinal);
         Assert.DoesNotContain(sentinel, downstreamPrompt, StringComparison.Ordinal);
         Assert.DoesNotContain(sentinel, projectedOutput, StringComparison.Ordinal);
         Assert.Contains("tests: fail - assertion error at tests/Feature.Tests/FeatureServiceTests.cs:42", projectedOutput, StringComparison.Ordinal);

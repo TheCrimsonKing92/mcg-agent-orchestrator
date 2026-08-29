@@ -7,6 +7,7 @@ internal static class WorkerVerificationEvidence
 {
     private const string LegacySnapshotUnavailableReason = "legacy-snapshot-authoritative-output-unavailable";
     private const int MalformedOutputExcerptMaxChars = 4000;
+    private const int StructuredFieldMaxChars = 4000;
 
     internal sealed record ContextOutput(
         string Content,
@@ -109,15 +110,34 @@ internal static class WorkerVerificationEvidence
             .Where(parsed.Fields.ContainsKey)
             .Concat(parsed.Fields.Keys
                 .Where(key => !preferredOrder.Contains(key, StringComparer.OrdinalIgnoreCase))
-                .OrderBy(key => key, StringComparer.OrdinalIgnoreCase));
+                .OrderBy(key => key, StringComparer.OrdinalIgnoreCase))
+            .ToArray();
+        var oversizedFields = orderedFields
+            .Where(key => parsed.Fields[key].Length > StructuredFieldMaxChars)
+            .ToArray();
+        var validation = oversizedFields.Length == 0
+            ? "validation=parsed"
+            : $"validation=malformed; problem_excerpt=structured fields exceed {StructuredFieldMaxChars} chars; oversized_fields={string.Join(',', oversizedFields)}";
         var lines = new List<string>
         {
-            $"{receiptPrefix}; validation=parsed",
+            $"{receiptPrefix}; {validation}",
             "WORKER_RESULT:"
         };
-        lines.AddRange(orderedFields.Select(key => $"{key}: {parsed.Fields[key]}"));
+        lines.AddRange(orderedFields.Select(key => ProjectStructuredField(key, parsed.Fields[key])));
         lines.Add("END_WORKER_RESULT");
         return string.Join(Environment.NewLine, lines);
+    }
+
+    private static string ProjectStructuredField(string key, string value)
+    {
+        if (value.Length <= StructuredFieldMaxChars)
+        {
+            return $"{key}: {value}";
+        }
+
+        var bytes = Encoding.UTF8.GetBytes(value);
+        return $"{key}: [oversized structured field omitted; chars={value.Length}; bytes={bytes.Length}; " +
+            $"sha256={WorkerContextArtifact.Hash(bytes)}; complete source remains at source_handle]";
     }
 
     private static string BoundHeadAndTail(string value, int maxChars)
