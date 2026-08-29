@@ -1702,6 +1702,61 @@ public sealed class WorkerProcessJobsTests : IDisposable
         }
     }
 
+    [Xunit.Fact(DisplayName = "WorkerProcessJobs_kill_or_fallback_and_wait_refuses_current_process_without_protected_pid")]
+    public void WorkerProcessJobsKillOrFallbackAndWaitRefusesCurrentProcessWithoutProtectedPid()
+    {
+        using var protectedPidEnvironment = InfrastructureTestSupport.ClearProtectedPidEnvironment();
+        var originalKill = WorkerProcessJobs.TryKillPidTree;
+        var killCalled = false;
+        WorkerProcessJobs.TryKillPidTree = _ =>
+        {
+            killCalled = true;
+            return true;
+        };
+
+        try
+        {
+            Assert.False(WorkerProcessJobs.TryKillOrFallbackAndWait(Environment.ProcessId, TimeSpan.Zero));
+            Assert.False(killCalled);
+            Assert.True(IsRunning(Environment.ProcessId));
+        }
+        finally
+        {
+            WorkerProcessJobs.TryKillPidTree = originalKill;
+        }
+    }
+
+    [Xunit.Fact(DisplayName = "WorkerProcessJobs_kill_or_fallback_and_wait_refuses_current_process_ancestor")]
+    public void WorkerProcessJobsKillOrFallbackAndWaitRefusesCurrentProcessAncestor()
+    {
+        if (!OperatingSystem.IsWindows())
+        {
+            return;
+        }
+
+        var parentProcessId = ProcessParentIdResolver.TryGetParentProcessId(Environment.ProcessId);
+        Assert.NotNull(parentProcessId);
+
+        using var protectedPidEnvironment = InfrastructureTestSupport.ClearProtectedPidEnvironment();
+        var originalKill = WorkerProcessJobs.TryKillPidTree;
+        var killCalled = false;
+        WorkerProcessJobs.TryKillPidTree = _ =>
+        {
+            killCalled = true;
+            return true;
+        };
+
+        try
+        {
+            Assert.False(WorkerProcessJobs.TryKillOrFallbackAndWait(parentProcessId.Value, TimeSpan.Zero));
+            Assert.False(killCalled);
+        }
+        finally
+        {
+            WorkerProcessJobs.TryKillPidTree = originalKill;
+        }
+    }
+
     private static Process StartLongRunningShell()
     {
         var process = Process.Start(new ProcessStartInfo

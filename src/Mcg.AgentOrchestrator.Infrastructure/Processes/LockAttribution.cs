@@ -536,12 +536,58 @@ internal static partial class LockAttribution
         }
 
         var holders = snapshot.Read(snapshot.Records.Keys)
-            .Where(pair => IsOrchestratorOwned(pair.Value, ownershipHint))
+            .Where(pair =>
+                IsOrchestratorOwned(pair.Value, ownershipHint) &&
+                CommandLineReferencesLock(pair.Value, path, ownershipHint))
+            .OrderBy(pair => pair.Key)
             .Select(pair => new BuildLockHolder(pair.Key, TryProcessName(pair.Key), pair.Value, true, TryProcessStartTime(pair.Key)))
             .Take(8)
             .ToArray();
         return new BuildLockAttribution(path, holders, "process-snapshot");
     }
+
+    private static bool CommandLineReferencesLock(string commandLine, string path, string? ownershipHint)
+    {
+        var normalizedCommandLine = NormalizePathSeparators(commandLine);
+        var normalizedPath = NormalizePathSeparators(path);
+        if (!string.IsNullOrWhiteSpace(normalizedPath) &&
+            normalizedCommandLine.Contains(normalizedPath, StringComparison.OrdinalIgnoreCase))
+        {
+            return true;
+        }
+
+        if (string.IsNullOrWhiteSpace(ownershipHint) ||
+            !PathIsAtOrUnder(path, ownershipHint))
+        {
+            return false;
+        }
+
+        var normalizedHint = NormalizePathSeparators(ownershipHint);
+        return !string.IsNullOrWhiteSpace(normalizedHint) &&
+            normalizedCommandLine.Contains(normalizedHint, StringComparison.OrdinalIgnoreCase);
+    }
+
+    private static bool PathIsAtOrUnder(string path, string directory)
+    {
+        try
+        {
+            var normalizedPath = Path.GetFullPath(path)
+                .TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar);
+            var normalizedDirectory = Path.GetFullPath(directory)
+                .TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar);
+            return normalizedPath.Equals(normalizedDirectory, StringComparison.OrdinalIgnoreCase) ||
+                normalizedPath.StartsWith(
+                    normalizedDirectory + Path.DirectorySeparatorChar,
+                    StringComparison.OrdinalIgnoreCase);
+        }
+        catch (Exception ex) when (ex is ArgumentException or NotSupportedException or PathTooLongException)
+        {
+            return false;
+        }
+    }
+
+    private static string NormalizePathSeparators(string value) =>
+        value.Replace(Path.AltDirectorySeparatorChar, Path.DirectorySeparatorChar);
 
     private static List<BuildLockHolder> ParseHandleOutput(string output, string? ownershipHint)
     {

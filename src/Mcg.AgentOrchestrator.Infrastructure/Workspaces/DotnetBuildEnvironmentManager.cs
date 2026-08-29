@@ -1334,7 +1334,10 @@ public static class DotnetBuildEnvironmentManager
 
         var killed = false;
         foreach (var holder in attribution.Holders
-            .Where(holder => holder.IsOrchestratorOwned && holder.ProcessId.HasValue)
+            .Where(holder =>
+                holder.IsOrchestratorOwned &&
+                holder.ProcessId.HasValue &&
+                holder.ProcessId.Value != Environment.ProcessId)
             .DistinctBy(holder => holder.ProcessId!.Value))
         {
             killed |= WorkerProcessJobs.TryKillOrFallbackAndWait(holder.ProcessId!.Value, TimeSpan.FromSeconds(5));

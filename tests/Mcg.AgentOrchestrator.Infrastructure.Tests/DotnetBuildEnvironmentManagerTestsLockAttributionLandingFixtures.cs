@@ -25,8 +25,30 @@ public sealed class DotnetBuildEnvironmentManagerTestsLockAttributionLandingFixt
             return new ProcessCommandLineSnapshot(
                 new Dictionary<int, ProcessInspectionRecord>
                 {
-                    [101] = new(101, 1, "dotnet", null, null, "dotnet test C:\\repo\\.orchestrator-worktrees\\goal", ProcessInspectionStatus.Available),
-                    [202] = new(202, 1, "codex", null, null, "codex unrelated", ProcessInspectionStatus.Available)
+                    [Environment.ProcessId] = new(
+                        Environment.ProcessId,
+                        1,
+                        "dotnet",
+                        null,
+                        null,
+                        "dotnet test C:\\repo\\locked.dll C:\\repo\\.orchestrator-worktrees\\goal",
+                        ProcessInspectionStatus.Available),
+                    [101] = new(
+                        101,
+                        1,
+                        "dotnet",
+                        null,
+                        null,
+                        "dotnet test C:\\repo\\locked.dll C:\\repo\\.orchestrator-worktrees\\goal",
+                        ProcessInspectionStatus.Available),
+                    [202] = new(
+                        202,
+                        1,
+                        "dotnet",
+                        null,
+                        null,
+                        "dotnet test C:\\repo\\.orchestrator-worktrees\\unrelated-goal",
+                        ProcessInspectionStatus.Available)
                 });
         };
 
@@ -36,8 +58,54 @@ public sealed class DotnetBuildEnvironmentManagerTestsLockAttributionLandingFixt
 
             Assert.Equal("process-snapshot", attribution.Source);
             Assert.Equal(1, snapshotCalls);
-            Assert.Single(attribution.Holders);
-            Assert.Equal(101, attribution.Holders[0].ProcessId);
+            Assert.Equal(2, attribution.Holders.Count);
+            Assert.Contains(attribution.Holders, holder => holder.ProcessId == Environment.ProcessId);
+            Assert.Contains(attribution.Holders, holder => holder.ProcessId == 101);
+            Assert.DoesNotContain(attribution.Holders, holder => holder.ProcessId == 202);
+        }
+        finally
+        {
+            LockAttribution.ProcessCommandLineSnapshotForTests = null;
+            LockAttribution.HandleExecutableForTests = null;
+            LockAttribution.DisableRestartManagerForTests = false;
+        }
+    }
+
+    [Xunit.Fact]
+    public void LockAttributionProcessFallbackUsesArtifactRootHintOnlyForDescendantLock()
+    {
+        const string artifactsRoot = "C:\\isolated\\artifacts";
+        const string lockedPath = "C:\\isolated\\artifacts\\bin\\Core.dll";
+        LockAttribution.DisableRestartManagerForTests = true;
+        LockAttribution.HandleExecutableForTests = Path.Combine(Path.GetTempPath(), $"missing-handle-{Guid.NewGuid():N}.exe");
+        LockAttribution.ProcessCommandLineSnapshotForTests = () =>
+            new ProcessCommandLineSnapshot(
+                new Dictionary<int, ProcessInspectionRecord>
+                {
+                    [101] = new(
+                        101,
+                        1,
+                        "dotnet",
+                        null,
+                        null,
+                        "dotnet test --artifacts-path C:\\isolated\\artifacts C:\\repo\\.orchestrator-worktrees\\goal",
+                        ProcessInspectionStatus.Available),
+                    [202] = new(
+                        202,
+                        1,
+                        "dotnet",
+                        null,
+                        null,
+                        "dotnet test C:\\repo\\.orchestrator-worktrees\\unrelated-goal",
+                        ProcessInspectionStatus.Available)
+                });
+
+        try
+        {
+            var attribution = LockAttribution.Attribute(lockedPath, artifactsRoot);
+
+            var holder = Assert.Single(attribution.Holders);
+            Assert.Equal(101, holder.ProcessId);
         }
         finally
         {
