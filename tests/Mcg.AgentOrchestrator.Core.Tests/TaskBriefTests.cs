@@ -45,6 +45,8 @@ public sealed class TaskBriefTests
     Assert.Contains("HUMAN_INPUT:", brief.Content, StringComparison.Ordinal);
     Assert.Contains("Report only changed files", brief.Content, StringComparison.Ordinal);
     Assert.Contains("Keep the response concise", brief.Content, StringComparison.Ordinal);
+    Assert.Contains("omit restated goals, generic progress, and supplied context artifact bodies", brief.Content, StringComparison.Ordinal);
+    Assert.Contains("Use host-owned artifact receipts plus exact source locations instead", brief.Content, StringComparison.Ordinal);
     Assert.Contains("Model fit: <provider>/<model or launcher> - adequate|overkill|underpowered - <task shape> - <short reason>", brief.Content, StringComparison.Ordinal);
     Assert.Contains("**/bin/**", brief.Content, StringComparison.Ordinal);
     Assert.Contains("**/obj/**", brief.Content, StringComparison.Ordinal);
@@ -299,6 +301,11 @@ public sealed class TaskBriefTests
     Assert.Contains("Avoid generic status summaries", brief, StringComparison.Ordinal);
     Assert.Contains("Keep the response evidence-focused", brief, StringComparison.Ordinal);
     Assert.Contains("omit generic progress and long logs", brief, StringComparison.Ordinal);
+    Assert.Contains("Do not reproduce supplied context artifact bodies", brief, StringComparison.Ordinal);
+    Assert.Contains(
+        "use host-owned artifact receipts plus exact source locations while preserving complete blocker, test, error, and source evidence",
+        brief,
+        StringComparison.Ordinal);
     Assert.True(!brief.Contains("Keep the response concise", StringComparison.Ordinal));
 }
 

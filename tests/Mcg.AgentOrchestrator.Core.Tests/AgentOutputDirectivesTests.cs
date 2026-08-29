@@ -73,6 +73,32 @@ public sealed class AgentOutputDirectivesTests
         }
     }
 
+    [Xunit.Fact(DisplayName = "WorkerResultTemplate_all_worker_roles_require_receipts_instead_of_artifact_bodies")]
+    public void WorkerResultTemplateAllWorkerRolesRequireReceiptsInsteadOfArtifactBodies()
+    {
+        const string happyPathContract =
+            "On the happy path, report only their host-owned identity receipts and exact source locations; do not reproduce their bodies.";
+        const string problemExcerptContract =
+            "Use a short problem excerpt only when an artifact is missing, contradictory, or malformed.";
+
+        foreach (var role in new[]
+                 {
+                     AgentRole.Researcher,
+                     AgentRole.Planner,
+                     AgentRole.Developer,
+                     AgentRole.Tester,
+                     AgentRole.Reviewer
+                 })
+        {
+            var directives = string.Join(
+                Environment.NewLine,
+                AgentOutputDirectives.WorkerResultTemplateLinesForRole(role));
+
+            Assert.Contains(happyPathContract, directives, StringComparison.Ordinal);
+            Assert.Contains(problemExcerptContract, directives, StringComparison.Ordinal);
+        }
+    }
+
     [Xunit.Fact(DisplayName = "Reviewer_requirements_order_spec_before_quality_within_budget")]
     public void ReviewerRequirementsOrderSpecBeforeQualityWithinBudget()
     {
