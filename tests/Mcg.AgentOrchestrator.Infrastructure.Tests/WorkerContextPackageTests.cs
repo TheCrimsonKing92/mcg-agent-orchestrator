@@ -458,17 +458,16 @@ public sealed class WorkerContextPackageTests(Xunit.ITestOutputHelper output)
             var rendered = WorkerContextPackageBuilder.Render(package);
 
             Assert.Contains("purpose=RegisteredContext", rendered, StringComparison.Ordinal);
+            Assert.Contains("identity=context/large-evidence.md", rendered, StringComparison.Ordinal);
+            Assert.Contains($"path={relativePath}", rendered, StringComparison.Ordinal);
             Assert.Contains($"bytes={bytes.Length}", rendered, StringComparison.Ordinal);
             Assert.Contains("validation=verified", rendered, StringComparison.Ordinal);
             Assert.Contains($"sha256={artifact.ContentHash}", rendered, StringComparison.Ordinal);
+            Assert.Contains("contract=1", rendered, StringComparison.Ordinal);
             Assert.DoesNotContain(sentinel, rendered, StringComparison.Ordinal);
             Assert.Equal(bytes, File.ReadAllBytes(fullPath));
             var receipt = WorkerContextPackageBuilder.CreateReceipt(package);
             Assert.Equal(artifact.Kind, Assert.Single(receipt.Sections).ArtifactKind);
-            output.WriteLine($"before_prompt_chars={body.Length}; after_prompt_chars={rendered.Length}; reduction_percent={(body.Length - rendered.Length) * 100.0 / body.Length:F2}");
-            Assert.True(
-                rendered.Length < body.Length / 10,
-                $"Expected at least 90% prompt reduction; before_prompt_chars={body.Length}; after_prompt_chars={rendered.Length}.");
         }
         finally
         {

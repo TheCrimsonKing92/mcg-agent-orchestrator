@@ -1,4 +1,5 @@
 using System.Diagnostics;
+using System.Text;
 using Mcg.AgentOrchestrator.Core;
 using Mcg.AgentOrchestrator.Infrastructure;
 
@@ -247,7 +248,31 @@ public sealed class WorkerContextArtifactsCharacterizationTests(Xunit.ITestOutpu
         var projectedOutput = File.ReadAllText(Path.Combine(
             workingDirectory,
             projectedArtifact.MandatoryRelativePath!.Replace('/', Path.DirectorySeparatorChar)));
+        var legacyInlineArtifact = WorkerContextArtifact.Create(
+            projectedArtifact.Identity,
+            projectedArtifact.Kind,
+            Encoding.UTF8.GetBytes(stdout),
+            projectedArtifact.RoleVisibility,
+            ContextDeliveryMode.InlineFull,
+            projectedArtifact.ContractVersion,
+            fallbackReason: "missing");
+        var legacyPrompt = WorkerContextPackageBuilder.Render(new WorkerContextPackage(
+            "legacy-inline-fallback",
+            ContextContractVersion.V1,
+            task.RequiredRole,
+            [legacyInlineArtifact]));
+        var projectedPrompt = WorkerContextPackageBuilder.Render(new WorkerContextPackage(
+            package.SemanticPackageId,
+            ContextContractVersion.V1,
+            task.RequiredRole,
+            [projectedArtifact]));
 
+        Assert.Contains(sentinel, legacyPrompt, StringComparison.Ordinal);
+        Assert.DoesNotContain(sentinel, projectedPrompt, StringComparison.Ordinal);
+        Assert.Contains($"identity={projectedArtifact.Identity.Value}", projectedPrompt, StringComparison.Ordinal);
+        Assert.Contains($"path={projectedArtifact.MandatoryRelativePath}", projectedPrompt, StringComparison.Ordinal);
+        Assert.Contains($"sha256={projectedArtifact.ContentHash}", projectedPrompt, StringComparison.Ordinal);
+        Assert.Contains("validation=verified", projectedPrompt, StringComparison.Ordinal);
         Assert.DoesNotContain(sentinel, prompt, StringComparison.Ordinal);
         Assert.DoesNotContain(sentinel, projectedOutput, StringComparison.Ordinal);
         Assert.Contains("tests: fail - retry assertion at tests/Feature.Tests/FeatureServiceTests.cs:51", projectedOutput, StringComparison.Ordinal);
@@ -255,6 +280,10 @@ public sealed class WorkerContextArtifactsCharacterizationTests(Xunit.ITestOutpu
         Assert.Contains($"source_handle={Path.GetFullPath(sourceOutputPath)}", projectedOutput, StringComparison.Ordinal);
         Assert.Contains(sentinel, task.LastVerification!.AuthoritativeStandardOutput!, StringComparison.Ordinal);
         Assert.Contains(sentinel, File.ReadAllText(sourceOutputPath), StringComparison.Ordinal);
+        output.WriteLine($"before_prompt_chars={legacyPrompt.Length}; after_prompt_chars={projectedPrompt.Length}; prompt_reduction_percent={(legacyPrompt.Length - projectedPrompt.Length) * 100.0 / legacyPrompt.Length:F2}");
+        Assert.True(
+            projectedPrompt.Length < legacyPrompt.Length / 10,
+            $"Expected at least 90% retry prompt reduction; before_prompt_chars={legacyPrompt.Length}; after_prompt_chars={projectedPrompt.Length}.");
         output.WriteLine($"retry_before_output_chars={stdout.Length}; retry_after_output_chars={projectedOutput.Length}; reduction_percent={(stdout.Length - projectedOutput.Length) * 100.0 / stdout.Length:F2}; blocker_preserved=true; test_error_preserved=true; source_location_preserved=true; full_output_access=true");
         Assert.True(
             projectedOutput.Length < stdout.Length / 10,
