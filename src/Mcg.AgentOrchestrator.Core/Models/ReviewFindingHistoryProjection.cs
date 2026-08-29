@@ -1,3 +1,4 @@
+using System.Text.Json;
 using System.Text.Json.Serialization;
 
 namespace Mcg.AgentOrchestrator.Core;
@@ -16,6 +17,33 @@ public sealed record ReviewFindingHistoryProjectionMetrics(
     int DuplicateReceiptCount,
     string? FallbackReason = null);
 
+public sealed record ReviewFindingRepairCheckpoint(
+    string? CandidateSha,
+    string ContractViolationHash,
+    IReadOnlyList<string> EvidenceContentHashes,
+    IReadOnlyList<string> StableFindingIds)
+{
+    public static ReviewFindingRepairCheckpoint Create(TaskVerificationRecord verification)
+    {
+        ArgumentNullException.ThrowIfNull(verification);
+        var violation = verification.ReviewFindingContractViolation ??
+            throw new ArgumentException("A contract-repair checkpoint requires a contract violation.", nameof(verification));
+        return new ReviewFindingRepairCheckpoint(
+            verification.ReviewedCommit,
+            WorkerContextArtifact.Hash(JsonSerializer.SerializeToUtf8Bytes(violation)),
+            (verification.FindingEvidenceReceipts ?? [])
+                .Select(receipt => WorkerContextArtifact.Hash(JsonSerializer.SerializeToUtf8Bytes(receipt)))
+                .Distinct(StringComparer.Ordinal)
+                .OrderBy(hash => hash, StringComparer.Ordinal)
+                .ToArray(),
+            (verification.MergedReviewFindings ?? [])
+                .Select(finding => finding.StableId)
+                .Distinct(StringComparer.Ordinal)
+                .OrderBy(stableId => stableId, StringComparer.Ordinal)
+                .ToArray());
+    }
+}
+
 public sealed record ReviewFindingContentReference(
     [property: JsonPropertyName("sha256")] string Sha256,
     [property: JsonPropertyName("logical_identity")] string LogicalIdentity);
@@ -27,7 +55,7 @@ public sealed record CanonicalReviewFindingEntry(
     [property: JsonPropertyName("severity")] FindingSeverity Severity,
     [property: JsonPropertyName("category")] FindingCategory Category,
     [property: JsonPropertyName("location")] ReviewFindingLocation Location,
-    [property: JsonPropertyName("description")] string Description,
+    [property: JsonPropertyName("description")] string? Description,
     [property: JsonPropertyName("candidate_sha")] string? CandidateSha,
     [property: JsonPropertyName("verdict_identity")] string VerdictIdentity,
     [property: JsonPropertyName("evidence_identity")] string? EvidenceIdentity,

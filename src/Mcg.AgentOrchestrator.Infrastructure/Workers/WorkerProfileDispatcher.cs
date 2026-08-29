@@ -2458,13 +2458,14 @@ public static class WorkerProfileDispatcher
             ContextArtifactKind.RegisteredContext,
             SerializeSemanticTimeline(timeline, workingDirectory, contextDirectory));
         ReviewFindingContextProjection? reviewFindingProjection = null;
-        if (goal.Tasks.Any(candidate => candidate.VerificationHistory.Any(verification =>
+        var contractRepairProjectionRequested = task.PendingRetryRoundKind == RetryRoundKind.Mechanical &&
+                                                task.VerificationHistory.LastOrDefault()?.ReviewFindingContractViolation is not null;
+        if (contractRepairProjectionRequested || goal.Tasks.Any(candidate => candidate.VerificationHistory.Any(verification =>
                 (verification.MergedReviewFindings?.Count ?? 0) > 0 || (verification.FindingEvidenceReceipts?.Count ?? 0) > 0)))
         {
             reviewFindingProjection = ReviewFindingContextProjector.Project(goal, task, currentCandidateSha);
             ReviewFindingContextProjector.AddArtifacts(reviewFindingProjection, AddSource);
         }
-
         if (task.LastExecution is not null)
         {
             var identity = new LogicalArtifactIdentity("task/last-model-output.txt");

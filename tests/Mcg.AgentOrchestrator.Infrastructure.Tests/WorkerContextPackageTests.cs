@@ -672,7 +672,7 @@ public sealed class WorkerContextPackageTests
                 FindingEvidenceReceipts:
                 [
                     new FindingEvidenceReceipt(
-                        "receipt-one",
+                        $"receipt-{fingerprint}",
                         "candidate-sha",
                         new FindingEvidenceRequest(
                             [new FindingEvidenceSelection("tests/Tests.csproj", "Tests.One")]),
@@ -875,6 +875,24 @@ public sealed class WorkerContextPackageTests
                 brief,
                 observedSources: observations);
 
+            var findingHistory = Assert.Single(package.Artifacts,
+                artifact => artifact.Identity.Value == "goal/review-finding-history.json");
+            using var findingHistoryDocument = System.Text.Json.JsonDocument.Parse(Recover(root, findingHistory));
+            var recoveredReceiptBodies = findingHistoryDocument.RootElement.GetProperty("receipt_bodies")
+                .EnumerateArray()
+                .Select(reference =>
+                {
+                    var identity = reference.GetProperty("logical_identity").GetString()!;
+                    var artifact = Assert.Single(package.Artifacts, candidate => candidate.Identity.Value == identity);
+                    Assert.Equal(ContextDeliveryMode.MandatoryFile, artifact.DeliveryMode);
+                    var bytes = Recover(root, artifact);
+                    Assert.Equal(reference.GetProperty("sha256").GetString(), WorkerContextArtifact.Hash(bytes));
+                    return bytes;
+                })
+                .ToArray();
+            Assert.Contains(recoveredReceiptBodies,
+                bytes => Encoding.UTF8.GetString(bytes).Contains("evidence-receipt-summary-source", StringComparison.Ordinal));
+
             var expectedSources = new List<ExpectedSemanticSource>
             {
                 new("goal objective", "goal/objective.md", "Preserve exact semantic sources"),
@@ -892,7 +910,6 @@ public sealed class WorkerContextPackageTests
                 new ExpectedSemanticSource("finding two", "goal/review-finding-history.json", "finding-source-two"),
                 new ExpectedSemanticSource("evidence request", "goal/review-finding-history.json", "evidence-class-source"),
                 new ExpectedSemanticSource("evidence outcome", "goal/review-finding-history.json", "evidence-outcome-detail-source"),
-                new ExpectedSemanticSource("evidence receipt", "goal/review-finding-history.json", "evidence-receipt-summary-source"),
                 new ExpectedSemanticSource("causal event", "goal/timeline.json", causalEvent),
                 new ExpectedSemanticSource("prior-task result", $"prior/{priorTask.Id.Value}/verification-output", priorResult),
                 new ExpectedSemanticSource("required instruction", "task/verification-plan.md", "required-instruction-source-✓"),

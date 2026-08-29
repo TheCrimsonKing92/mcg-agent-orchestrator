@@ -120,9 +120,15 @@ internal static class ReviewFindingContextProjector
             .OrderBy(entry => entry.StableId, StringComparer.Ordinal)
             .ToArray();
 
+        var latestVerification = targetTask.VerificationHistory.LastOrDefault();
+        var repairCheckpoint = targetTask.PendingReviewFindingRepairCheckpoint;
         var repairRequested = targetTask.PendingRetryRoundKind == RetryRoundKind.Mechanical &&
-                              targetTask.LastVerification?.ReviewFindingContractViolation is not null;
-        var fallbackReason = DetermineFallbackReason(repairRequested, targetTask.LastVerification, currentCandidateSha);
+                              latestVerification?.ReviewFindingContractViolation is not null;
+        var fallbackReason = DetermineFallbackReason(
+            repairRequested,
+            repairCheckpoint,
+            latestVerification,
+            currentCandidateSha);
         var mode = repairRequested && fallbackReason is null
             ? ReviewFindingHistoryProjectionMode.ContractRepair
             : ReviewFindingHistoryProjectionMode.FullInspection;
@@ -148,7 +154,7 @@ internal static class ReviewFindingContextProjector
         byte[]? envelopeBytes = null;
         if (mode == ReviewFindingHistoryProjectionMode.ContractRepair)
         {
-            var verification = targetTask.LastVerification!;
+            var verification = latestVerification!;
             var references = roundBodies.Values.Concat(receiptBodies.Values)
                 .OrderBy(body => body.Sha256, StringComparer.Ordinal)
                 .Select(body => new ReviewFindingContentReference(body.Sha256, body.LogicalIdentity))
@@ -191,10 +197,14 @@ internal static class ReviewFindingContextProjector
         }
 
         var selected = latest.OrderBy(source => source.Task.Id.Value, StringComparer.Ordinal).First();
+        if (selected.Finding.State == ReviewFindingState.Resolved)
+        {
+            selected = FindResolvingSource(group);
+        }
         var finding = selected.Finding;
         var anchorProof = finding.State == ReviewFindingState.Resolved
             ? (selected.Verification.ReviewFindingTouchedAnchors ?? [])
-                .Where(anchor => anchor == finding.Location)
+                .Where(anchor => anchor.SameAnchor(finding.Location))
                 .ToArray()
             : [];
         if (finding.State == ReviewFindingState.Resolved && anchorProof.Length == 0)
@@ -224,7 +234,7 @@ internal static class ReviewFindingContextProjector
             finding.Severity,
             finding.Category,
             finding.Location,
-            finding.Description,
+            finding.State == ReviewFindingState.Resolved ? null : finding.Description,
             selected.Verification.ReviewedCommit,
             BuildVerdictIdentity(selected.Verification),
             evidenceIdentity,
@@ -237,6 +247,7 @@ internal static class ReviewFindingContextProjector
 
     private static string? DetermineFallbackReason(
         bool repairRequested,
+        ReviewFindingRepairCheckpoint? checkpoint,
         TaskVerificationRecord? verification,
         string? currentCandidateSha)
     {
@@ -244,20 +255,64 @@ internal static class ReviewFindingContextProjector
         {
             return null;
         }
-        if (string.IsNullOrWhiteSpace(currentCandidateSha) || string.IsNullOrWhiteSpace(verification?.ReviewedCommit))
+        if (checkpoint is null || verification?.ReviewFindingContractViolation is null)
+        {
+            return "repair-checkpoint-missing";
+        }
+        if (string.IsNullOrWhiteSpace(currentCandidateSha) || string.IsNullOrWhiteSpace(checkpoint.CandidateSha))
         {
             return "current-candidate-missing";
         }
-        if (!string.Equals(currentCandidateSha.Trim(), verification.ReviewedCommit.Trim(), StringComparison.OrdinalIgnoreCase))
+        if (!string.Equals(currentCandidateSha.Trim(), checkpoint.CandidateSha.Trim(), StringComparison.OrdinalIgnoreCase))
         {
             return "candidate-changed";
         }
-        if ((verification.FindingEvidenceReceipts ?? []).Any(receipt =>
-                !string.Equals(receipt.CandidateSha, currentCandidateSha.Trim(), StringComparison.OrdinalIgnoreCase)))
+        var violationHash = WorkerContextArtifact.Hash(JsonSerializer.SerializeToUtf8Bytes(verification.ReviewFindingContractViolation));
+        if (!string.Equals(violationHash, checkpoint.ContractViolationHash, StringComparison.Ordinal))
+        {
+            return "contract-violation-changed";
+        }
+        var evidenceHashes = (verification.FindingEvidenceReceipts ?? [])
+            .Select(receipt => WorkerContextArtifact.Hash(JsonSerializer.SerializeToUtf8Bytes(receipt)))
+            .Distinct(StringComparer.Ordinal)
+            .OrderBy(hash => hash, StringComparer.Ordinal)
+            .ToArray();
+        if (!evidenceHashes.SequenceEqual(checkpoint.EvidenceContentHashes, StringComparer.Ordinal))
         {
             return "material-evidence-changed";
         }
+        var stableIds = (verification.MergedReviewFindings ?? [])
+            .Select(finding => finding.StableId)
+            .Distinct(StringComparer.Ordinal)
+            .OrderBy(stableId => stableId, StringComparer.Ordinal)
+            .ToArray();
+        if (!stableIds.SequenceEqual(checkpoint.StableFindingIds, StringComparer.Ordinal))
+        {
+            return "stable-identities-changed";
+        }
         return null;
+    }
+
+    private static FindingSource FindResolvingSource(IEnumerable<FindingSource> sources)
+    {
+        FindingSource? resolving = null;
+        foreach (var source in sources
+                     .OrderBy(item => item.Verification.CompletedAt)
+                     .ThenBy(item => item.Task.Id.Value, StringComparer.Ordinal))
+        {
+            if (source.Finding.State == ReviewFindingState.Open)
+            {
+                resolving = null;
+            }
+            else if (resolving is null)
+            {
+                resolving = source;
+            }
+        }
+
+        return resolving ?? throw PreparationFailure(
+            "stable-identity-ambiguous",
+            $"Resolved stable finding '{sources.First().Finding.StableId}' has no resolving round.");
     }
 
     private static string BuildVerdictIdentity(TaskVerificationRecord verification) =>
