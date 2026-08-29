@@ -917,7 +917,7 @@ public sealed partial class AgentOrchestratorKernel
         {
             "<!-- ACCUMULATED_RETRY_FEEDBACK_START -->",
             "## Accumulated retry/review feedback",
-            $"Operational entries are newest first and capped at {AccumulatedRetryFeedbackMaxEntries} entries and {AccumulatedRetryFeedbackMaxChars} chars. Canonical findings and immutable evidence references are delivered by the typed context package.",
+            $"Operational entries are newest first and capped at {AccumulatedRetryFeedbackMaxEntries} entries and {AccumulatedRetryFeedbackMaxChars} chars. The latest canonical actionable findings and their evidence provenance are emitted once below for every retry-capable provider.",
             "Use this as the current correction context before relying on original task wording, prior task history, branch evidence, or context digests.",
         };
 
@@ -947,6 +947,85 @@ public sealed partial class AgentOrchestratorKernel
         }
 
         var operationalSectionChars = string.Join(Environment.NewLine, lines).Length;
+        var structuredFindings = goal.Tasks
+            .Where(candidate => candidate.RequiredRole is AgentRole.Reviewer or AgentRole.Tester)
+            .SelectMany(candidate => candidate.VerificationHistory.SelectMany(verification =>
+                (verification.MergedReviewFindings ?? []).Select(finding => new
+                {
+                    candidate.RequiredRole,
+                    verification.CompletedAt,
+                    Finding = finding
+                })))
+            .GroupBy(
+                item => $"{item.RequiredRole}:{item.Finding.StableId}",
+                StringComparer.Ordinal)
+            .Select(group => group
+                .OrderByDescending(item => item.CompletedAt)
+                .First())
+            .Where(item => item.Finding.State == ReviewFindingState.Open)
+            .OrderBy(item => item.RequiredRole)
+            .ThenBy(item => item.Finding.StableId, StringComparer.Ordinal)
+            .ToArray();
+        if (structuredFindings.Length > 0)
+        {
+            lines.Add("## Structured actionable findings (not subject to operational retry caps)");
+            lines.Add($"finding_count: {structuredFindings.Length}; latest canonical state is emitted once and operational retry entries are budgeted separately.");
+            foreach (var item in structuredFindings)
+            {
+                lines.Add(
+                    $"- role={item.RequiredRole}; stable_id={item.Finding.StableId}; severity={item.Finding.Severity}; " +
+                    $"location={item.Finding.Location}; description={PromptContextFormatter.TrimPromptBlock(item.Finding.Description)}");
+                if (item.Finding.EvidenceRequest is { } evidenceRequest)
+                {
+                    var selection = string.Join(",", (evidenceRequest.Selections ?? []).Select(value =>
+                        $"{value.TestProject}:{value.TestClass}"));
+                    var outcome = item.Finding.EvidenceOutcome;
+                    var disposition = outcome is null
+                        ? "pending"
+                        : outcome.Honoured ? "honoured" : "not-honoured";
+                    var reason = outcome?.Reason is { } reasonCode
+                        ? $"; reason={FindingEvidenceNotHonouredReasonJsonConverter.ToWireValue(reasonCode)}"
+                        : outcome?.ResultReason is { } resultReason
+                            ? $"; reason={FindingEvidenceOutcomeReasonJsonConverter.ToWireValue(resultReason)}"
+                            : string.Empty;
+                    lines.Add(
+                        $"  evidence_index: selection={selection}; verdict={disposition}; " +
+                        $"receipt={outcome?.ReceiptId ?? "none"}{reason}");
+
+                    if (task.RequiredRole == item.RequiredRole && outcome?.ReceiptId is { } receiptId)
+                    {
+                        var receipt = goal.Tasks
+                            .Where(candidate => candidate.RequiredRole == item.RequiredRole)
+                            .SelectMany(candidate => candidate.VerificationHistory)
+                            .OrderByDescending(verification => verification.CompletedAt)
+                            .SelectMany(verification => verification.FindingEvidenceReceipts ?? [])
+                            .FirstOrDefault(candidate => string.Equals(candidate.ReceiptId, receiptId, StringComparison.Ordinal));
+                        if (receipt is not null)
+                        {
+                            lines.Add(
+                                $"  evidence_receipt: id={receipt.ReceiptId}; candidate_sha={receipt.CandidateSha}; " +
+                                $"accepted={receipt.Accepted}; passed={receipt.Passed}; summary={PromptContextFormatter.TrimPromptBlock(receipt.Summary)}");
+                            foreach (var arm in receipt.Arms ?? [])
+                            {
+                                lines.Add(
+                                    $"    evidence_arm: arm={arm.Arm.ToString().ToLowerInvariant()}; sha={arm.Sha}; " +
+                                    $"disposition={arm.Disposition.ToString().ToLowerInvariant()}; accepted={arm.Accepted}; " +
+                                    $"passed={arm.Passed}; summary={PromptContextFormatter.TrimPromptBlock(arm.Summary)}");
+                                if (arm.FailingTestIdentities is { Count: > 0 })
+                                {
+                                    lines.Add($"      failing_tests: {string.Join(", ", arm.FailingTestIdentities)}");
+                                }
+                            }
+                        }
+                    }
+                    else if (task.RequiredRole == item.RequiredRole && outcome is { Honoured: false })
+                    {
+                        lines.Add($"  evidence_not_honoured: detail={PromptContextFormatter.TrimPromptBlock(outcome.Detail ?? "none")}");
+                    }
+                }
+            }
+        }
+
         if (task.RequiredRole is AgentRole.Tester or AgentRole.Reviewer &&
             latestRetry?.TaskId is { } retriedTaskId)
         {

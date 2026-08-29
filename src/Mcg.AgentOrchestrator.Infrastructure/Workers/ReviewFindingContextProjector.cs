@@ -202,17 +202,8 @@ internal static class ReviewFindingContextProjector
             selected = FindResolvingSource(group);
         }
         var finding = selected.Finding;
-        var anchorProof = finding.State == ReviewFindingState.Resolved
-            ? (selected.Verification.ReviewFindingTouchedAnchors ?? [])
-                .Where(anchor => anchor.SameAnchor(finding.Location))
-                .ToArray()
-            : [];
-        if (finding.State == ReviewFindingState.Resolved && anchorProof.Length == 0)
-        {
-            throw PreparationFailure("resolved-anchor-proof-missing", $"Resolved finding '{group.Key}' has no matching touched-anchor proof.");
-        }
-
-        var receiptReferences = (selected.Verification.FindingEvidenceReceipts ?? [])
+        var selectedReceipts = selected.Verification.FindingEvidenceReceipts ?? [];
+        var receiptReferences = selectedReceipts
             .Where(receipt => finding.EvidenceOutcome?.ReceiptId is null ||
                               string.Equals(receipt.ReceiptId, finding.EvidenceOutcome.ReceiptId, StringComparison.Ordinal))
             .Select(receipt =>
@@ -224,6 +215,51 @@ internal static class ReviewFindingContextProjector
             .Distinct()
             .OrderBy(reference => reference.Sha256, StringComparer.Ordinal)
             .ToArray();
+        var anchorProof = finding.State == ReviewFindingState.Resolved
+            ? (selected.Verification.ReviewFindingTouchedAnchors ?? [])
+                .Where(anchor => anchor.SameAnchor(finding.Location))
+                .ToArray()
+            : [];
+        ReviewFindingResolutionProof? resolutionProof = null;
+        if (finding.State == ReviewFindingState.Resolved)
+        {
+            if (anchorProof.Length > 0)
+            {
+                resolutionProof = new ReviewFindingResolutionProof(
+                    "touched-anchor",
+                    selected.Verification.ReviewedCommit);
+            }
+            else
+            {
+                var evidenceReceipt = FindCandidateBoundEvidenceReceipt(
+                    finding,
+                    selected.Verification.ReviewedCommit,
+                    selectedReceipts);
+                if (evidenceReceipt is not null)
+                {
+                    var bytes = JsonSerializer.SerializeToUtf8Bytes(evidenceReceipt);
+                    var hash = WorkerContextArtifact.Hash(bytes);
+                    resolutionProof = new ReviewFindingResolutionProof(
+                        "candidate-bound-evidence-receipt",
+                        selected.Verification.ReviewedCommit,
+                        new ReviewFindingContentReference(hash, $"goal/review-finding-receipts/{hash}.json"));
+                }
+                else if (finding.Severity == FindingSeverity.Advisory &&
+                         !string.IsNullOrWhiteSpace(selected.Verification.ReviewedCommit))
+                {
+                    resolutionProof = new ReviewFindingResolutionProof(
+                        "advisory-disposition",
+                        selected.Verification.ReviewedCommit);
+                }
+                else
+                {
+                    throw PreparationFailure(
+                        "resolved-anchor-proof-missing",
+                        $"Resolved finding '{group.Key}' has no matching touched-anchor, candidate-bound evidence receipt, or candidate-bound advisory proof.");
+                }
+            }
+        }
+
         var evidenceIdentity = receiptReferences.Length == 0
             ? null
             : WorkerContextArtifact.Hash(Encoding.UTF8.GetBytes(string.Join("\n", receiptReferences.Select(reference => reference.Sha256))));
@@ -242,7 +278,31 @@ internal static class ReviewFindingContextProjector
             finding.EvidenceOutcome,
             selected.Round,
             receiptReferences,
+            resolutionProof,
             anchorProof);
+    }
+
+    private static FindingEvidenceReceipt? FindCandidateBoundEvidenceReceipt(
+        ReviewFinding finding,
+        string? candidateSha,
+        IReadOnlyList<FindingEvidenceReceipt> receipts)
+    {
+        if (string.IsNullOrWhiteSpace(candidateSha) ||
+            finding.EvidenceOutcome is not
+            {
+                Honoured: true,
+                ReceiptId.Length: > 0,
+                ResultReason: FindingEvidenceOutcomeReason.ValidEvidence
+            } outcome)
+        {
+            return null;
+        }
+
+        return receipts.FirstOrDefault(receipt =>
+            string.Equals(receipt.ReceiptId, outcome.ReceiptId, StringComparison.Ordinal) &&
+            string.Equals(receipt.CandidateSha, candidateSha, StringComparison.OrdinalIgnoreCase) &&
+            receipt.Accepted &&
+            receipt.Passed);
     }
 
     private static string? DetermineFallbackReason(

@@ -286,6 +286,91 @@ public sealed class ReviewFindingContextProjectorTests
         Assert.NotEqual(
             indexedRounds[2].GetProperty("body").GetProperty("sha256").GetString(),
             resolvingRound);
+        Assert.Equal("touched-anchor", finding.GetProperty("resolution_proof").GetProperty("kind").GetString());
+    }
+
+    [Xunit.Fact]
+    public void NoTouchReceiptAndAdvisoryResolutionsPrepareNextDispatchWithExplicitProof()
+    {
+        var root = CreateRoot();
+        try
+        {
+            var contextDirectory = WriteRegistry(root);
+            var reviewer = new TaskSpec(TaskId.New(), "Review", AgentRole.Reviewer);
+            var kernel = new AgentOrchestratorKernel();
+            var goal = kernel.CreateGoal("Preserve valid no-touch resolutions", [reviewer]);
+            var candidateSha = new string('e', 40);
+            var request = new FindingEvidenceRequest(
+                [new FindingEvidenceSelection("tests/Tests.csproj", "Tests.Receipt")]);
+            var receipt = new FindingEvidenceReceipt(
+                "receipt-proof",
+                candidateSha,
+                request,
+                true,
+                true,
+                "candidate evidence passed");
+            var receiptResolved = new ReviewFinding(
+                "receipt-resolved",
+                ReviewFindingState.Resolved,
+                new ReviewFindingLocation("src/Receipt.cs", "Receipt.Run"),
+                "resolved by evidence",
+                FindingSeverity.Blocking,
+                FindingCategory.TestEvidence,
+                request,
+                new FindingEvidenceOutcome(
+                    true,
+                    receipt.ReceiptId,
+                    ResultReason: FindingEvidenceOutcomeReason.ValidEvidence));
+            var advisoryResolved = new ReviewFinding(
+                "advisory-resolved",
+                ReviewFindingState.Resolved,
+                new ReviewFindingLocation("src/Advisory.cs", "Advisory.Run"),
+                "advisory disposition",
+                FindingSeverity.Advisory,
+                FindingCategory.CodeQuality);
+            kernel.RecordTaskVerification(goal.Id, reviewer.Id, Verification(
+                DateTimeOffset.Parse("2026-07-31T23:59:00Z"),
+                candidateSha,
+                [
+                    receiptResolved with { State = ReviewFindingState.Open, EvidenceOutcome = null },
+                    advisoryResolved with { State = ReviewFindingState.Open }
+                ]));
+            kernel.RecordTaskVerification(goal.Id, reviewer.Id, Verification(
+                DateTimeOffset.Parse("2026-08-01T00:00:00Z"),
+                candidateSha,
+                [receiptResolved, advisoryResolved],
+                receipts: [receipt]));
+
+            var package = WorkerProfileDispatcher.BuildContextPackage(
+                goal,
+                reviewer,
+                root,
+                contextDirectory,
+                Brief(goal, reviewer),
+                currentCandidateSha: candidateSha);
+
+            var rendered = WorkerContextPackageBuilder.Render(package);
+            Assert.Contains("goal/review-finding-history.json", rendered, StringComparison.Ordinal);
+            var ledgerArtifact = Assert.Single(package.Artifacts,
+                artifact => artifact.Identity.Value == "goal/review-finding-history.json");
+            using var ledger = JsonDocument.Parse(Recover(root, ledgerArtifact));
+            var findings = ledger.RootElement.GetProperty("findings").EnumerateArray()
+                .ToDictionary(finding => finding.GetProperty("stable_id").GetString()!, StringComparer.Ordinal);
+            var receiptProof = findings["receipt-resolved"].GetProperty("resolution_proof");
+            Assert.Equal("candidate-bound-evidence-receipt", receiptProof.GetProperty("kind").GetString());
+            Assert.Equal(candidateSha, receiptProof.GetProperty("candidate_sha").GetString());
+            Assert.False(string.IsNullOrWhiteSpace(
+                receiptProof.GetProperty("receipt_body").GetProperty("sha256").GetString()));
+            var advisoryProof = findings["advisory-resolved"].GetProperty("resolution_proof");
+            Assert.Equal("advisory-disposition", advisoryProof.GetProperty("kind").GetString());
+            Assert.Equal(candidateSha, advisoryProof.GetProperty("candidate_sha").GetString());
+            Assert.All(findings.Values, finding =>
+                Assert.Empty(finding.GetProperty("resolved_anchor_proof").EnumerateArray()));
+        }
+        finally
+        {
+            Directory.Delete(root, recursive: true);
+        }
     }
 
     [Xunit.Fact]
@@ -349,6 +434,17 @@ public sealed class ReviewFindingContextProjectorTests
         AssertReason(
             "resolved-anchor-proof-missing",
             () => ReviewFindingContextProjector.Project(unprovedGoal, unprovedTask, candidateSha));
+
+        var mismatchTask = new TaskSpec(TaskId.New(), "Review", AgentRole.Reviewer);
+        var mismatchKernel = new AgentOrchestratorKernel();
+        var mismatchGoal = mismatchKernel.CreateGoal("Mismatched resolution anchor", [mismatchTask]);
+        mismatchKernel.RecordTaskVerification(mismatchGoal.Id, mismatchTask.Id, Verification(
+            DateTimeOffset.Parse("2026-08-01T00:00:00Z"), candidateSha,
+            [new ReviewFinding("mismatch-id", ReviewFindingState.Resolved, ambiguousLocation, "resolved")],
+            [new ReviewFindingLocation("src/Other.cs", "Other.Run")]));
+        AssertReason(
+            "resolved-anchor-proof-missing",
+            () => ReviewFindingContextProjector.Project(mismatchGoal, mismatchTask, candidateSha));
     }
 
     [Xunit.Fact]

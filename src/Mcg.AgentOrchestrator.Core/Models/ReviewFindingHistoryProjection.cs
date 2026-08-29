@@ -48,6 +48,11 @@ public sealed record ReviewFindingContentReference(
     [property: JsonPropertyName("sha256")] string Sha256,
     [property: JsonPropertyName("logical_identity")] string LogicalIdentity);
 
+public sealed record ReviewFindingResolutionProof(
+    [property: JsonPropertyName("kind")] string Kind,
+    [property: JsonPropertyName("candidate_sha")] string? CandidateSha,
+    [property: JsonPropertyName("receipt_body")] ReviewFindingContentReference? ReceiptBody = null);
+
 public sealed record CanonicalReviewFindingEntry(
     [property: JsonPropertyName("stable_id")] string StableId,
     [property: JsonPropertyName("role")] AgentRole Role,
@@ -63,6 +68,7 @@ public sealed record CanonicalReviewFindingEntry(
     [property: JsonPropertyName("evidence_outcome")] FindingEvidenceOutcome? EvidenceOutcome,
     [property: JsonPropertyName("round")] ReviewFindingContentReference Round,
     [property: JsonPropertyName("receipt_bodies")] IReadOnlyList<ReviewFindingContentReference> ReceiptBodies,
+    [property: JsonPropertyName("resolution_proof")] ReviewFindingResolutionProof? ResolutionProof,
     [property: JsonPropertyName("resolved_anchor_proof")] IReadOnlyList<ReviewFindingLocation> ResolvedAnchorProof);
 
 public sealed record ReviewFindingRoundIndexEntry(
