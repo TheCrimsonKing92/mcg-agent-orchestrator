@@ -938,12 +938,17 @@ public sealed class WorkerContextPackageTests
                 dispatchContext,
                 BriefFor(dispatchGoal, dispatchTask, "dispatch-instruction-source"),
                 observedSources: dispatchObservations);
-            var dispatchArtifact = Assert.Single(dispatchPackage.Artifacts.Where(candidate =>
-                candidate.Identity.Value == "task/last-dispatch.json"));
-            Assert.Contains(
-                "dispatch-worker-source",
-                Encoding.UTF8.GetString(Recover(dispatchRoot, dispatchArtifact)),
-                StringComparison.Ordinal);
+            var dispatchArtifact = Assert.Single(dispatchPackage.Artifacts,
+                candidate => candidate.Identity.Value == "task/last-dispatch.json");
+            var dispatchJson = Encoding.UTF8.GetString(Recover(dispatchRoot, dispatchArtifact));
+            using var dispatchDocument = System.Text.Json.JsonDocument.Parse(dispatchJson);
+            var dispatchRootElement = dispatchDocument.RootElement;
+            Assert.Equal("dispatch-worker-source", dispatchRootElement.GetProperty("WorkerName").GetString());
+            Assert.Equal("dispatch-command-source", dispatchRootElement.GetProperty("Command").GetString());
+            Assert.Equal(dispatchRoot, dispatchRootElement.GetProperty("WorkingDirectory").GetString());
+            Assert.Equal(
+                DateTimeOffset.Parse("2026-01-01T00:02:00Z"),
+                dispatchRootElement.GetProperty("DispatchedAt").GetDateTimeOffset());
 
             var executionRoot = Path.Combine(root, "execution-scenario");
             var executionContext = Path.Combine(executionRoot, ".orchestrator-context", "goal");

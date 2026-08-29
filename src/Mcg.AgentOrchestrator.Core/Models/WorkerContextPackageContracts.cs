@@ -57,6 +57,32 @@ public readonly record struct LogicalArtifactIdentity
     public override string ToString() => Value;
 }
 
+public static class WorkerContextProjectionBoundary
+{
+    public const string StartPrefix = "<!-- WORKER_CONTEXT_TYPED_PROJECTION_START:";
+    public const string EndPrefix = "<!-- WORKER_CONTEXT_TYPED_PROJECTION_END:";
+    public const string MarkerSuffix = " -->";
+
+    public static string Start(LogicalArtifactIdentity identity) =>
+        Format(StartPrefix, identity);
+
+    public static string End(LogicalArtifactIdentity identity) =>
+        Format(EndPrefix, identity);
+
+    private static string Format(string prefix, LogicalArtifactIdentity identity)
+    {
+        if (identity.Value.Contains("<!--", StringComparison.Ordinal) ||
+            identity.Value.Contains("-->", StringComparison.Ordinal) ||
+            identity.Value.Contains('\r', StringComparison.Ordinal) ||
+            identity.Value.Contains('\n', StringComparison.Ordinal))
+        {
+            throw new ArgumentException("Typed projection identity cannot contain Markdown comment or line boundaries.", nameof(identity));
+        }
+
+        return $"{prefix}{identity.Value}{MarkerSuffix}";
+    }
+}
+
 public sealed class WorkerContextArtifact
 {
     private readonly byte[]? _authoritativeBytes;
