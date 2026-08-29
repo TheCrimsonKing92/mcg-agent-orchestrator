@@ -2,6 +2,68 @@ using Mcg.AgentOrchestrator.Core;
 
 public sealed class GoalLifecycleTests
 {
+    [Xunit.Fact(DisplayName = "RetryTask_requires_an_explicit_typed_cause")]
+    public void RetryTaskRequiresExplicitTypedCause()
+    {
+        var retryTask = typeof(AgentOrchestratorKernel)
+            .GetMethods()
+            .Single(method => method.Name == nameof(AgentOrchestratorKernel.RetryTask));
+        var retryCause = retryTask.GetParameters().Single(parameter => parameter.Name == "retryCause");
+
+        Assert.False(
+            retryCause.HasDefaultValue,
+            "RetryTask.retryCause must be required so a caller cannot silently classify a retry as Unknown.");
+    }
+
+    [Xunit.Theory(DisplayName = "RetryTask_persists_each_supported_typed_cause")]
+    [Xunit.InlineData(RetryCause.NewSourceFinding)]
+    [Xunit.InlineData(RetryCause.NewTestFinding)]
+    [Xunit.InlineData(RetryCause.CriterionEvidenceOwnerMismatch)]
+    [Xunit.InlineData(RetryCause.EnvironmentApparatusFailure)]
+    [Xunit.InlineData(RetryCause.ContractClarification)]
+    [Xunit.InlineData(RetryCause.MainDriftConflict)]
+    [Xunit.InlineData(RetryCause.ProviderInterruption)]
+    [Xunit.InlineData(RetryCause.UnchangedContextRepeat)]
+    [Xunit.InlineData(RetryCause.Unknown)]
+    public void RetryTaskPersistsEachSupportedTypedCause(RetryCause retryCause)
+    {
+        var kernel = new AgentOrchestratorKernel(new FakeClock());
+        var goal = kernel.CreateGoal(
+            "Persist a classified retry cause",
+            [new TaskSpec(TaskId.New(), "Implement", AgentRole.Developer)]);
+        kernel.ActivateGoal(goal.Id, DefaultAgents());
+        var task = goal.Tasks.Single();
+
+        kernel.RetryTask(goal.Id, task.Id, "Retry with a classified cause.", retryCause);
+
+        Assert.Equal(retryCause, task.PendingRetryCause);
+    }
+
+    [Xunit.Fact(DisplayName = "RetryTask_persists_explicit_Unknown_for_an_unclassified_operator_retry")]
+    public void RetryTaskPersistsExplicitUnknownForAnUnclassifiedOperatorRetry()
+    {
+        var kernel = new AgentOrchestratorKernel(new FakeClock());
+        var goal = kernel.CreateGoal(
+            "Reject an unclassified retry",
+            [new TaskSpec(TaskId.New(), "Implement", AgentRole.Developer)]);
+        kernel.ActivateGoal(goal.Id, DefaultAgents());
+        var task = goal.Tasks.Single();
+
+        kernel.RetryTask(goal.Id, task.Id, "Retry without an available classification.", RetryCause.Unknown);
+
+        Assert.Equal(RetryCause.Unknown, task.PendingRetryCause);
+    }
+
+    [Xunit.Fact(DisplayName = "TaskSpec_retry_transition_preserves_explicit_Unknown_history")]
+    public void TaskSpecRetryTransitionPreservesExplicitUnknownHistory()
+    {
+        var task = new TaskSpec(TaskId.New(), "Implement", AgentRole.Developer);
+
+        task.RecordRetry(DateTimeOffset.Parse("2026-08-25T12:00:00Z"), RetryCause.Unknown);
+
+        Assert.Equal(RetryCause.Unknown, task.PendingRetryCause);
+    }
+
     [Xunit.Fact(DisplayName = "GoalLifecycle_identifies_active_goal_with_failed_task")]
     public void GoalLifecycleIdentifiesActiveGoalWithFailedTask()
     {
@@ -714,12 +776,19 @@ public sealed class GoalLifecycleTests
     CompleteWithVerification(kernel, goal, reviewer, "reviewer passed");
     Assert.Equal(GoalStatus.Verified, goal.Status);
 
-    kernel.RetryTask(goal.Id, developer.Id, "Developer output needs revision.");
+    kernel.RetryTask(
+        goal.Id,
+        developer.Id,
+        "Developer output needs revision.",
+        retryCause: RetryCause.NewSourceFinding);
 
     Assert.Equal(GoalStatus.Active, goal.Status);
     Assert.Equal(WorkTaskStatus.Assigned, developer.Status);
     Assert.Equal(WorkTaskStatus.Assigned, tester.Status);
     Assert.Equal(WorkTaskStatus.Assigned, reviewer.Status);
+    Assert.Equal(RetryCause.NewSourceFinding, developer.PendingRetryCause);
+    Assert.Equal(RetryCause.NewSourceFinding, tester.PendingRetryCause);
+    Assert.Equal(RetryCause.NewSourceFinding, reviewer.PendingRetryCause);
     Assert.Null(developer.LastVerification);
     Assert.Null(tester.LastVerification);
     Assert.Null(reviewer.LastVerification);
@@ -950,7 +1019,12 @@ public sealed class GoalLifecycleTests
             developer.Id,
             new TaskDispatchRecord("Developer", "worker", "C:\\repo", DateTimeOffset.UtcNow));
         kernel.RecordDispatchResultCommit(goal.Id, developer.Id, "bbb222");
-        kernel.RequeueInterruptedDispatch(goal.Id, developer.Id, "Retry the interrupted changed attempt.");
+        kernel.RequeueInterruptedDispatch(
+            goal.Id,
+            developer.Id,
+            "Retry the progressively steered changed attempt.",
+            RetryCause.ContractClarification);
+        Assert.Equal(RetryCause.ContractClarification, developer.PendingRetryCause);
         CompleteCandidateDispatch(kernel, goal, developer, "bbb222", "bbb222");
 
         Assert.Equal(WorkTaskStatus.Assigned, tester.Status);

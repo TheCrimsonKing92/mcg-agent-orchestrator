@@ -252,7 +252,9 @@ public sealed class BackgroundDispatchRunner
         string logRoot,
         Action<AgentOrchestratorKernel, GoalId, TaskId, DispatchRecordCheckpointPhase>? checkpointBeforeWorkerStart = null,
         Func<GoalId, TaskId, InterruptedDispatchStateRead>? readCurrentState = null,
-        WorkerSandboxOptions? sandboxOptions = null)
+        WorkerSandboxOptions? sandboxOptions = null,
+        Func<bool>? claimWorkerStart = null,
+        Func<bool>? confirmWorkerStart = null)
     {
         var task = kernel.GetTask(goalId, taskId);
         var dispatch = task.LastDispatch
@@ -461,9 +463,16 @@ public sealed class BackgroundDispatchRunner
             ChildExitRecordPath: childExitRecordPath,
             NonBlockingProcessIds: sampleLaunches.Select(launch => launch.Process.Id).ToArray());
 
-        kernel.RecordTaskProcessStarted(goalId, taskId, record);
         try
         {
+            if (claimWorkerStart is not null && !claimWorkerStart())
+            {
+                TerminateUnreleasedDispatchHost(process);
+                PlannerSampleDispatcher.TerminateUnreleased(sampleLaunches);
+                return DispatchProcessStartResult.Skipped();
+            }
+
+            kernel.RecordTaskProcessStarted(goalId, taskId, record);
             checkpointBeforeWorkerStart?.Invoke(kernel, goalId, taskId, DispatchRecordCheckpointPhase.ProcessMayHaveStarted);
         }
         catch
@@ -473,8 +482,22 @@ public sealed class BackgroundDispatchRunner
             throw;
         }
 
-        PlannerSampleDispatcher.ReleaseStartGates(sampleLaunches);
-        ReleaseDispatchHostStartGate(startGatePath);
+        try
+        {
+            PlannerSampleDispatcher.ReleaseStartGates(sampleLaunches);
+            ReleaseDispatchHostStartGate(startGatePath);
+            if (confirmWorkerStart is not null && !confirmWorkerStart())
+            {
+                throw new InvalidOperationException(
+                    "The paid retry worker start could not be durably confirmed after releasing its start gate.");
+            }
+        }
+        catch
+        {
+            TerminateUnreleasedDispatchHost(process);
+            PlannerSampleDispatcher.TerminateUnreleased(sampleLaunches);
+            throw;
+        }
         return DispatchProcessStartResult.Started(record);
     }
 
@@ -495,16 +518,8 @@ public sealed class BackgroundDispatchRunner
 
     private static void ReleaseDispatchHostStartGate(string startGatePath)
     {
-        try
-        {
-            Directory.CreateDirectory(Path.GetDirectoryName(startGatePath)!);
-            File.WriteAllText(startGatePath, "go");
-        }
-        catch
-        {
-            // Best-effort: if the gate cannot be written, the dispatch host fails closed rather than
-            // launching a worker outside the supervisor job.
-        }
+        Directory.CreateDirectory(Path.GetDirectoryName(startGatePath)!);
+        File.WriteAllText(startGatePath, "go");
     }
 
     private DispatchRefreshOutcome? TryBuildPlannerSampleHold(
@@ -932,7 +947,11 @@ public sealed class BackgroundDispatchRunner
             kernel.RecordTaskNote(goalId, taskId, $"{disposition.EventName}: {disposition.Message}");
             if (disposition.ShouldRequeue)
             {
-                kernel.RequeueInterruptedDispatch(goalId, taskId, disposition.Message);
+                kernel.RequeueInterruptedDispatch(
+                    goalId,
+                    taskId,
+                    disposition.Message,
+                    RetryCause.ProviderInterruption);
             }
         }
 
@@ -2258,7 +2277,12 @@ public sealed class BackgroundDispatchRunner
             return false;
         }
 
-        kernel.RequeueInterruptedDispatch(goalId, taskId, message, dispatchId);
+        kernel.RequeueInterruptedDispatch(
+            goalId,
+            taskId,
+            message,
+            RetryCause.ProviderInterruption,
+            dispatchId);
         return true;
     }
 

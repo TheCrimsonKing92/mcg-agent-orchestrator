@@ -422,6 +422,7 @@ public sealed partial class AgentOrchestratorKernel
         GoalId goalId,
         TaskId taskId,
         string message,
+        RetryCause retryCause,
         bool invalidateDownstream = true,
         RetryRoundKind? retryRoundKind = null)
     {
@@ -451,12 +452,12 @@ public sealed partial class AgentOrchestratorKernel
 
         var retryAt = _clock.UtcNow;
         var priorCandidate = task.LastDispatch?.ResultCommit;
-        ResetTaskForRetry(task, retryAt, retryRoundKind);
+        ResetTaskForRetry(task, retryAt, retryCause, retryRoundKind);
         RecordEffectiveAcceptanceCriteriaCorrections(goal, taskId, ProgressKind.TaskRetried, retryMessage);
         Append(goal, taskId, ProgressKind.TaskRetried, retryMessage);
         if (invalidateDownstream)
         {
-            InvalidateDownstreamTasks(goal, task, retryAt, priorCandidate);
+            InvalidateDownstreamTasks(goal, task, retryAt, priorCandidate, retryCause);
         }
         ReopenAcceptanceFailedGoalWithRetry(goal, task, $"Retry cleared failed acceptance gate because task {task.Id.Value[..8]} is dispatchable.");
         ReopenTerminalGoalWithNonTerminalTasks(goal, $"Retry reopened goal because task {task.Id.Value[..8]} is dispatchable.");
@@ -610,6 +611,7 @@ public sealed partial class AgentOrchestratorKernel
         GoalId goalId,
         TaskId taskId,
         string message,
+        RetryCause retryCause,
         string? interruptedDispatchId = null)
     {
         var goal = GetGoal(goalId);
@@ -631,7 +633,7 @@ public sealed partial class AgentOrchestratorKernel
         task.ClearLastDispatch();
         task.ClearLastProcess();
         task.ClearSubscriptionRetryAfter();
-        task.RecordRetry(_clock.UtcNow);
+        task.RecordRetry(_clock.UtcNow, retryCause);
         task.SetInterruptedDispatchRecovery(interruptedDispatchId);
         task.SetStatus(task.AssignedAgentId is null ? WorkTaskStatus.Pending : WorkTaskStatus.Assigned);
         Append(goal, taskId, ProgressKind.TaskRetried, retryMessage);
@@ -1137,7 +1139,11 @@ public sealed partial class AgentOrchestratorKernel
             $"Goal failed because task {task.Id.Value[..8]} reached an explicit terminal escalation.");
     }
 
-    private static void ResetTaskForRetry(TaskSpec task, DateTimeOffset retryAt, RetryRoundKind? retryRoundKind = null)
+    private static void ResetTaskForRetry(
+        TaskSpec task,
+        DateTimeOffset retryAt,
+        RetryCause retryCause,
+        RetryRoundKind? retryRoundKind = null)
     {
         task.ClearLatestVerification();
         task.ClearLastExecution();
@@ -1145,7 +1151,7 @@ public sealed partial class AgentOrchestratorKernel
         task.ClearLastProcess();
         task.ClearSubscriptionRetryAfter();
         task.SetInterruptedDispatchRecovery(null);
-        task.RecordRetry(retryAt, retryRoundKind);
+        task.RecordRetry(retryAt, retryCause, retryRoundKind);
         task.SetStatus(task.AssignedAgentId is null ? WorkTaskStatus.Pending : WorkTaskStatus.Assigned);
     }
 
@@ -1179,7 +1185,8 @@ public sealed partial class AgentOrchestratorKernel
         Goal goal,
         TaskSpec retriedTask,
         DateTimeOffset retryAt,
-        string? priorCandidate)
+        string? priorCandidate,
+        RetryCause retryCause)
     {
         foreach (var downstream in goal.Tasks.Where(task => IsDownstreamRole(retriedTask.RequiredRole, task.RequiredRole)))
         {
@@ -1205,7 +1212,7 @@ public sealed partial class AgentOrchestratorKernel
                 continue;
             }
 
-            ResetTaskForRetry(downstream, retryAt);
+            ResetTaskForRetry(downstream, retryAt, retryCause);
             Append(
                 goal,
                 downstream.Id,
@@ -1246,7 +1253,7 @@ public sealed partial class AgentOrchestratorKernel
             var invalidationReason = currentCandidateKnown
                 ? $"changed candidate from {reviewedCandidate} to {currentCandidate}"
                 : $"did not prove candidate {reviewedCandidate} unchanged (result {currentCandidate}; status {retriedTask.Status})";
-            ResetTaskForRetry(downstream, reconciledAt);
+            ResetTaskForRetry(downstream, reconciledAt, retriedTask.PendingRetryCause);
             Append(
                 goal,
                 downstream.Id,

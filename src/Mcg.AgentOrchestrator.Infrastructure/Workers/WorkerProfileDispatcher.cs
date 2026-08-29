@@ -212,10 +212,12 @@ public static class WorkerProfileDispatcher
         ReviewRetryCapReceipt? reviewRetryCap = null,
         CitedPriorEvidenceResolver? citedPriorEvidenceResolver = null,
         WorkerSandboxOptions? sandboxOptions = null,
-        int plannerSampleCount = 1)
+        int plannerSampleCount = 1,
+        PaidRouteClassification paidRoute = PaidRouteClassification.Unknown)
     {
         EnsureTaskNeedsExecution(task, allowPendingRecordedDispatchRefresh);
         EnsureSubscriptionRetryWindowHasPassed(task, dispatchedAt);
+        var priorDispatch = task.LastDispatch ?? task.DispatchHistory.LastOrDefault();
         var durableArtifactFindings = new List<string>();
         AddDurableArtifactDependencyFindings(
             durableArtifactFindings,
@@ -255,6 +257,7 @@ public static class WorkerProfileDispatcher
             providerName,
             modelName);
         var targetContext = TryReadCurrentTargetContext(workingDirectory);
+        var currentMainIdentity = ReadCurrentMainIdentityForRetry(workingDirectory);
         var reviewerRoundTouchScope = ReadReviewRoundTouchScope(
             goal,
             task,
@@ -340,6 +343,15 @@ public static class WorkerProfileDispatcher
             promptRoot,
             dispatchVariables,
             dispatchedAt);
+        var retryContextFingerprint = RetryContextFingerprintFactory.Build(
+            goal,
+            task,
+            providerName,
+            modelName,
+            paidRoute,
+            priorDispatch?.ResultCommit ?? priorDispatch?.BaseCommit ?? task.LastVerification?.ReviewedCommit,
+            targetContext?.HeadCommit ?? priorDispatch?.BaseCommit,
+            currentMainIdentity);
         kernel.RecordTaskDispatch(goal.Id, task.Id, new TaskDispatchRecord(
             profile.Name,
             preparation.Command,
@@ -360,7 +372,9 @@ public static class WorkerProfileDispatcher
             ReviewFindingTouchProofDiagnostic: reviewerRoundTouchScope.Diagnostic,
             ReviewRetryCap: effectiveReviewRetryCap,
             ContextPackageReceipt: contextPackageReceipt,
-            PlannerSampleCount: PlannerSamplingPolicy.EffectiveSampleCount(task.RequiredRole, plannerSampleCount)),
+            PlannerSampleCount: PlannerSamplingPolicy.EffectiveSampleCount(task.RequiredRole, plannerSampleCount),
+            RetryContextFingerprint: retryContextFingerprint,
+            PaidRoute: paidRoute),
             allowPendingRecordedDispatchRefresh);
         return new WorkerProfileDispatchResult(task, preparation.PromptPath);
     }
@@ -582,7 +596,8 @@ public static class WorkerProfileDispatcher
                 : null,
             citedPriorEvidenceResolver: citedPriorEvidenceResolver,
             sandboxOptions: sandbox,
-            plannerSampleCount: plannerSampleCount);
+            plannerSampleCount: plannerSampleCount,
+            paidRoute: ClassifyPaidRoute(roleSelection.Model.SubscriptionMode));
     }
 
     public static WorkerSubscriptionPreflightResult PreflightSubscriptionTask(
@@ -1252,11 +1267,17 @@ public static class WorkerProfileDispatcher
                     : null,
                 citedPriorEvidenceResolver: citedPriorEvidenceResolver,
                 sandboxOptions: sandbox,
-                plannerSampleCount: plannerSampleCount));
+                plannerSampleCount: plannerSampleCount,
+                paidRoute: ClassifyPaidRoute(roleSelection.Model.SubscriptionMode)));
         }
 
         return new WorkerProfileReadyBatchResult(results, blocked);
     }
+
+    private static PaidRouteClassification ClassifyPaidRoute(SubscriptionMode subscriptionMode) =>
+        subscriptionMode == SubscriptionMode.LocalBridge
+            ? PaidRouteClassification.NonPaid
+            : PaidRouteClassification.Paid;
 
     private static bool TryResolveMissingArtifactDependency(
         AgentOrchestratorKernel kernel,
@@ -1286,7 +1307,8 @@ public static class WorkerProfileDispatcher
             kernel.RetryTask(
                 goal.Id,
                 upstreamTask.Id,
-                $"{rerouteMarker}; {blockedTask.RequiredRole} is held until {artifactRole} task {upstreamTask.Id.Value} produces a complete durable artifact.");
+                $"{rerouteMarker}; {blockedTask.RequiredRole} is held until {artifactRole} task {upstreamTask.Id.Value} produces a complete durable artifact.",
+                retryCause: RetryCause.CriterionEvidenceOwnerMismatch);
             return true;
         }
 
@@ -1588,6 +1610,7 @@ public static class WorkerProfileDispatcher
             ["modelSelectionReason"] = selection.Reason,
             ["dispatchLane"] = selection.DispatchLane,
             ["executionPolicy"] = agent.ExecutionPolicy.ToString(),
+            ["paidRoute"] = ClassifyPaidRoute(selection.Model.SubscriptionMode).ToString(),
             ["openaiBaseUrl"] = OpenAiCompatibleCliBackend.ResolveBaseUrl(selection.Model.ProviderName),
             ["openaiApiKey"] = OpenAiCompatibleCliBackend.ResolveApiKey(selection.Model.ProviderName)
         };
@@ -1730,6 +1753,18 @@ public static class WorkerProfileDispatcher
         return new TargetContext(
             string.IsNullOrWhiteSpace(branchName) ? null : branchName,
             string.IsNullOrWhiteSpace(headCommit) ? null : headCommit);
+    }
+
+    internal static string? ReadCurrentMainIdentityForRetry(string workingDirectory)
+    {
+        if (string.IsNullOrWhiteSpace(workingDirectory) || !Directory.Exists(workingDirectory))
+            return null;
+
+        var main = GitCli.Run(workingDirectory, "rev-parse", "main");
+        if (main.ExitCode != 0)
+            return null;
+        var identity = main.Output.Trim();
+        return string.IsNullOrWhiteSpace(identity) ? null : identity;
     }
 
     private static SubscriptionModelSelection ResolveSubscriptionModel(AgentDefinition agent, Goal goal, TaskSpec task)

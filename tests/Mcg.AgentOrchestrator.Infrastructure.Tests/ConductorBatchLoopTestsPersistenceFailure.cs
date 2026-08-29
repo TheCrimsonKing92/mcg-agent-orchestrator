@@ -1272,7 +1272,7 @@ public sealed class ConductorBatchLoopTestsPersistenceFailure : ConductorBatchLo
             goal.Id.Value,
             task.Id.Value,
             JsonSerializer.Serialize(
-                new RetryOperatorIntentPayload("defer until durable", null),
+                new RetryOperatorIntentPayload("defer until durable", null, RetryCause: RetryCause.ContractClarification),
                 new JsonSerializerOptions(JsonSerializerDefaults.Web)),
             [],
             "operator",

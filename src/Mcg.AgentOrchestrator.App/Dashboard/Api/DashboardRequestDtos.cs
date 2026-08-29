@@ -41,7 +41,7 @@ internal sealed record ManualVerifySubmissionDto(bool Passed, string Note, strin
 
 internal sealed record ProgressSubmissionDto(string Status, string Message);
 
-internal sealed record RetrySubmissionDto(string Message, bool Mechanical = false, string? IdempotencyKey = null);
+internal sealed record RetrySubmissionDto(string Message, string Cause, bool Mechanical = false, string? IdempotencyKey = null);
 
 internal sealed record LimitReviewSubmissionDto(bool ConfirmLimitReview, string Note);
 

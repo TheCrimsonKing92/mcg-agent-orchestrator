@@ -473,6 +473,111 @@ public sealed class WorkerDispatchTestsDispatchPreparation : WorkerDispatchTestS
 }
 
     [Xunit.Fact]
+    public void ProfileDispatchTaskClassifiesRecognizedSubscriptionRetryAsPaidBeforeStart()
+    {
+        var root = CreateTempDirectory();
+        var workspace = OrchestratorWorkspace.ForDirectory(root);
+        _ = StateDbMigrations.EnsureUpToDate(workspace.SqliteStatePath);
+        var kernel = new AgentOrchestratorKernel(new TestClock(DateTimeOffset.Parse("2026-08-26T12:00:00Z")));
+        var developer = new TaskSpec(TaskId.New(), "Repair a recognized paid profile retry.", AgentRole.Developer);
+        var goal = kernel.CreateGoal("Classify profile retry cost before admission", [developer]);
+        Directory.CreateDirectory(workspace.ResolveExecutionDirectory(goal.Id));
+        kernel.SetGoalRefinedSpec(goal.Id, new RefinedSpec(
+            "Classify profile retry cost before admission",
+            ["A recognized paid profile retry obtains durable admission before process start."],
+            VerificationClass.TestVerifiable,
+            [],
+            []));
+        var agent = new AgentDefinition(
+            new AgentId("developer"),
+            "Developer",
+            AgentRole.Developer,
+            new ModelProfile("OpenAI", AgentCatalog.OpenAiSubscriptionModelAlias, ModelCapability.Text, SubscriptionMode.ApiKey),
+            ExecutionPolicy: AgentExecutionPolicy.SubscriptionOnly,
+            Subscription: new SubscriptionLaunchProfile("codex-cli", AgentCatalog.OpenAiSubscriptionModelAlias, "low"));
+        var profiles = new WorkerProfileCatalog(
+        [
+            new WorkerProfile("codex-cli", "codex exec --model {subscriptionModelName} --sandbox {sandboxMode} --cd {workingDirectory}")
+        ]);
+        kernel.ActivateGoal(goal.Id, [agent]);
+        kernel.RetryTask(
+            goal.Id,
+            developer.Id,
+            "Retry after a provider interruption.",
+            retryCause: RetryCause.ProviderInterruption);
+        new SqliteOrchestratorStateRepository(workspace.SqliteStatePath)
+            .SaveAsync(kernel)
+            .GetAwaiter()
+            .GetResult();
+
+        var prepared = GoalManagementCommandService.ProfileDispatchTask(
+            kernel,
+            workspace,
+            goal,
+            developer,
+            profiles.GetRequired("codex-cli"),
+            [agent],
+            sandboxOptions: DisabledSandbox);
+
+        Assert.Equal(PaidRouteClassification.Paid, prepared.Task.LastDispatch!.PaidRoute);
+        var ex = Assert.Throws<InvalidOperationException>(() =>
+            GoalManagementCommandService.StartDispatches(
+                kernel,
+                workspace,
+                goal,
+                [agent],
+                profiles,
+                refreshBeforeStart: false,
+                checkpointBeforeWorkerStart: (_, _, _, _) => { },
+                runner: new BackgroundDispatchRunner(disableProcessStart: true),
+                sandboxOptions: DisabledSandbox));
+        Assert.Contains("process start is disabled", ex.Message, StringComparison.OrdinalIgnoreCase);
+
+        var persisted = new SqliteOrchestratorStateRepository(workspace.SqliteStatePath)
+            .LoadAsync()
+            .GetAwaiter()
+            .GetResult();
+        var receipt = Assert.Single(
+            persisted.GetTask(goal.Id, developer.Id).RetryAdmissionHistory,
+            candidate => candidate.Decision == RetryAdmissionDecision.Allowed);
+        Assert.Equal(PaidRouteClassification.Paid, receipt.PaidRoute);
+        Assert.Equal(prepared.Task.LastDispatch.DispatchedAt, receipt.LinkedDispatchAt);
+    }
+
+    [Xunit.Fact]
+    public void StartDispatches_DoesNotRefreshCrashRecoveryReservationIntoNewAttempt()
+    {
+        var kernel = new AgentOrchestratorKernel();
+        var task = new TaskSpec(TaskId.New(), "Resume exact prepared retry.", AgentRole.Developer);
+        var goal = kernel.CreateGoal("Preserve crash recovery attempt identity", [task]);
+        kernel.ActivateGoal(goal.Id, [new AgentDefinition(
+            new AgentId("developer"),
+            "Developer",
+            AgentRole.Developer,
+            new ModelProfile("OpenAI", "gpt", ModelCapability.Text, SubscriptionMode.ApiKey))]);
+        var at = DateTimeOffset.Parse("2026-08-25T12:00:00Z");
+        var fingerprint = RetryContextFingerprintBuilder.Build(new RetryContextFingerprintInput(
+            goal.Id.Value, task.Id.Value, AgentRole.Developer, "OpenAI", "gpt",
+            PaidRouteClassification.Paid, "candidate", "criteria", [], [], [], [], "base", "main"));
+        kernel.RecordTaskDispatch(goal.Id, task.Id, new TaskDispatchRecord(
+            "developer", "command", "worktree", at,
+            RetryContextFingerprint: fingerprint,
+            PaidRoute: PaidRouteClassification.Paid));
+        kernel.ApplyPreparedRetryAdmission(goal.Id, task.Id, RetryAdmissionPolicy.Evaluate(
+            task,
+            fingerprint,
+            PaidRouteClassification.Paid,
+            RetryCause.NewSourceFinding,
+            at,
+            at,
+            reservationOwnerId: "owner-a",
+            reservationLeaseExpiresAt: at.AddMinutes(1)));
+
+        Assert.False(GoalManagementCommandService.ShouldRefreshPreparedDispatchBeforeStart(task, refreshBeforeStart: true));
+        Assert.Equal(at, task.LastDispatch!.DispatchedAt);
+    }
+
+    [Xunit.Fact]
     public void StartDispatches_ConductPolicy_DoesNotReloadPolicyFile()
     {
         var root = CreateTempDirectory();
@@ -584,6 +689,538 @@ public sealed class WorkerDispatchTestsDispatchPreparation : WorkerDispatchTestS
         : Array.Empty<string>();
     Assert.Empty(dispatchJsonFiles);
 }
+
+    [Xunit.Fact]
+    public void PaidRetryWithoutDurableGoalFailsClosedBeforeCheckpointOrProcessStart()
+    {
+        var root = CreateTempDirectory();
+        var workingDirectory = Path.Combine(root, "repo");
+        Directory.CreateDirectory(workingDirectory);
+        var workspace = OrchestratorWorkspace.ForDirectory(root, workingDirectory);
+        _ = StateDbMigrations.EnsureUpToDate(workspace.SqliteStatePath);
+        WriteSkill(workingDirectory, "orchestrator-dogfood");
+        var kernel = new AgentOrchestratorKernel(new TestClock(DateTimeOffset.Parse("2026-07-07T12:00:00Z")));
+        var planner = new TaskSpec(TaskId.New(), "Plan the fail-closed retry guard.", AgentRole.Planner);
+        var goal = kernel.CreateGoal("Fail closed without durable retry authority", [planner]);
+        kernel.SetGoalRefinedSpec(goal.Id, new RefinedSpec(
+            "Fail closed without durable retry authority",
+            ["A paid retry cannot start without a durable CAS reservation."],
+            VerificationClass.TestVerifiable,
+            [],
+            []));
+        var agent = SubscriptionPlannerAgent("planner", "Planner");
+        kernel.ActivateGoal(goal.Id, [agent]);
+        kernel.RetryTask(
+            goal.Id,
+            planner.Id,
+            "Retry only with durable authorization.",
+            retryCause: RetryCause.ProviderInterruption);
+        var checkpointCalls = 0;
+
+        var ex = Assert.Throws<InvalidOperationException>(() =>
+            GoalManagementCommandService.StartSubscriptionReadyTasks(
+                kernel,
+                workspace,
+                goal,
+                [agent],
+                DispatchTestProfiles(),
+                checkpointBeforeWorkerStart: (_, _, _, _) => checkpointCalls++,
+                runner: new BackgroundDispatchRunner(disableProcessStart: true),
+                sandboxOptions: DisabledSandbox));
+
+        Assert.Contains("Durable retry-admission reservation", ex.Message, StringComparison.Ordinal);
+        Assert.Equal(0, checkpointCalls);
+        Assert.Null(planner.LastProcess);
+    }
+
+    [Xunit.Fact]
+    public void IdenticalPaidRetryIsPreventedBeforeCheckpointAndProcessStart()
+    {
+        var root = CreateTempDirectory();
+        var workingDirectory = Path.Combine(root, "repo");
+        Directory.CreateDirectory(workingDirectory);
+        var workspace = OrchestratorWorkspace.ForDirectory(root, workingDirectory);
+        _ = StateDbMigrations.EnsureUpToDate(workspace.SqliteStatePath);
+        WriteSkill(workingDirectory, "orchestrator-dogfood");
+        var firstAt = DateTimeOffset.Parse("2026-07-07T12:00:00Z");
+        var kernel = new AgentOrchestratorKernel(new TestClock(firstAt));
+        var planner = new TaskSpec(TaskId.New(), "Plan the identical retry guard.", AgentRole.Planner);
+        var goal = kernel.CreateGoal("Prevent identical paid retry", [planner]);
+        kernel.SetGoalRefinedSpec(goal.Id, new RefinedSpec(
+            "Prevent identical paid retry",
+            ["An unchanged paid retry starts no process."],
+            VerificationClass.TestVerifiable,
+            [],
+            []));
+        var agent = SubscriptionPlannerAgent("planner", "Planner");
+        var agents = new[] { agent };
+        var profiles = DispatchTestProfiles();
+        kernel.ActivateGoal(goal.Id, agents);
+        kernel.RetryTask(
+            goal.Id,
+            planner.Id,
+            "Retry after the unsuccessful paid attempt.",
+            retryCause: RetryCause.ProviderInterruption);
+
+        var first = WorkerProfileDispatcher.PrepareSubscriptionReadyBatch(
+            kernel,
+            goal,
+            agents,
+            profiles,
+            workspace.PromptDirectory,
+            workingDirectory,
+            firstAt,
+            commandExists: _ => true);
+        var firstDispatch = Assert.Single(first.Dispatches);
+        var firstFingerprint = Assert.IsType<RetryContextFingerprint>(firstDispatch.Task.LastDispatch!.RetryContextFingerprint);
+        var firstAdmission = kernel.RecordPreparedRetryAdmission(
+            goal.Id,
+            planner.Id,
+            firstFingerprint,
+            PaidRouteClassification.Paid,
+            firstAt);
+        Assert.Equal(RetryAdmissionDecision.Allowed, firstAdmission.Decision);
+        var recordedFirstDispatch = Assert.IsType<TaskDispatchRecord>(planner.LastDispatch);
+        kernel.RecordTaskProcessStarted(
+            goal.Id,
+            planner.Id,
+            new TaskProcessRecord(
+                4101,
+                recordedFirstDispatch.Command,
+                recordedFirstDispatch.WorkingDirectory,
+                Path.Combine(root, "first.out.log"),
+                Path.Combine(root, "first.err.log"),
+                Path.Combine(root, "first.exit"),
+                firstAt,
+                firstAt.AddSeconds(1),
+                1));
+        var startedAdmission = Assert.Single(
+            planner.RetryAdmissionHistory,
+            receipt => receipt.Decision == RetryAdmissionDecision.Allowed);
+        Assert.Equal(firstAt, startedAdmission.WorkerStartedAt);
+        kernel.RecordTaskVerification(
+            goal.Id,
+            planner.Id,
+            new TaskVerificationRecord(
+                "worker",
+                workingDirectory,
+                1,
+                "",
+                "The first paid attempt did not complete.",
+                firstAt,
+                DispatchStartedAt: firstAt));
+        kernel.ReportTaskProgress(goal.Id, planner.Id, WorkTaskStatus.Failed, "The first paid attempt did not complete.");
+        kernel.RetryTask(
+            goal.Id,
+            planner.Id,
+            "Retry after the unsuccessful paid attempt.",
+            retryCause: RetryCause.ProviderInterruption);
+        new SqliteOrchestratorStateRepository(workspace.SqliteStatePath).SaveAsync(kernel).GetAwaiter().GetResult();
+        var checkpointCalls = 0;
+
+        var result = GoalManagementCommandService.StartSubscriptionReadyTasks(
+            kernel,
+            workspace,
+            goal,
+            agents,
+            profiles,
+            checkpointBeforeWorkerStart: (_, _, _, _) => checkpointCalls++,
+            runner: new BackgroundDispatchRunner(disableProcessStart: true),
+            sandboxOptions: DisabledSandbox);
+
+        Assert.Empty(result.Processes.Tasks);
+        Assert.Equal(0, checkpointCalls);
+        var persistedGoal = kernel.GetGoal(goal.Id);
+        var persistedPlanner = persistedGoal.Tasks.Single(candidate => candidate.Id == planner.Id);
+        Assert.Null(persistedPlanner.LastProcess);
+        var prevention = Assert.Single(
+            persistedPlanner.RetryAdmissionHistory,
+            receipt => receipt.Decision == RetryAdmissionDecision.Prevented);
+        Assert.Equal(RetryCause.UnchangedContextRepeat, prevention.Cause);
+        Assert.Equal(RetryAdmissionRoute.EnvironmentalHold, prevention.Route);
+        Assert.Equal(firstAt, prevention.PriorAttemptAt);
+        Assert.Contains(
+            persistedGoal.Timeline,
+            item => item.Kind == ProgressKind.NoProgressRedispatchPrevented && item.TaskId == planner.Id);
+    }
+
+    [Xunit.Fact]
+    public void AllowedPaidRetryStartsFromThePostCasGoalSnapshot()
+    {
+        var root = CreateTempDirectory();
+        var workingDirectory = Path.Combine(root, "repo");
+        Directory.CreateDirectory(workingDirectory);
+        var workspace = OrchestratorWorkspace.ForDirectory(root, workingDirectory);
+        _ = StateDbMigrations.EnsureUpToDate(workspace.SqliteStatePath);
+        WriteSkill(workingDirectory, "orchestrator-dogfood");
+        var firstAt = DateTimeOffset.Parse("2026-07-07T12:00:00Z");
+        var kernel = new AgentOrchestratorKernel(new TestClock(firstAt));
+        var planner = new TaskSpec(TaskId.New(), "Plan the post-CAS start handoff.", AgentRole.Planner);
+        var goal = kernel.CreateGoal("Start the exact CAS-authorized retry", [planner]);
+        kernel.SetGoalRefinedSpec(goal.Id, new RefinedSpec(
+            "Start the exact CAS-authorized retry",
+            ["A changed paid retry starts from the durable admitted snapshot."],
+            VerificationClass.TestVerifiable,
+            [],
+            []));
+        var agent = SubscriptionPlannerAgent("planner", "Planner");
+        var agents = new[] { agent };
+        var profiles = DispatchTestProfiles();
+        kernel.ActivateGoal(goal.Id, agents);
+        kernel.RetryTask(
+            goal.Id,
+            planner.Id,
+            "First paid retry context.",
+            retryCause: RetryCause.ProviderInterruption);
+        var first = WorkerProfileDispatcher.PrepareSubscriptionReadyBatch(
+            kernel,
+            goal,
+            agents,
+            profiles,
+            workspace.PromptDirectory,
+            workingDirectory,
+            firstAt,
+            commandExists: _ => true);
+        var firstDispatch = Assert.Single(first.Dispatches).Task.LastDispatch!;
+        var firstFingerprint = Assert.IsType<RetryContextFingerprint>(firstDispatch.RetryContextFingerprint);
+        Assert.Equal(
+            RetryAdmissionDecision.Allowed,
+            kernel.RecordPreparedRetryAdmission(
+                goal.Id,
+                planner.Id,
+                firstFingerprint,
+                PaidRouteClassification.Paid,
+                firstAt).Decision);
+        kernel.ReportTaskProgress(goal.Id, planner.Id, WorkTaskStatus.Failed, "First retry failed.");
+        kernel.RetryTask(
+            goal.Id,
+            planner.Id,
+            "Changed actionable retry context.",
+            retryCause: RetryCause.ContractClarification);
+        new SqliteOrchestratorStateRepository(workspace.SqliteStatePath)
+            .SaveAsync(kernel)
+            .GetAwaiter()
+            .GetResult();
+        var checkpointCalls = 0;
+        var processStartCalls = 0;
+        var startedDispatchIdentities = new List<DateTimeOffset>();
+        var checkpointPhases = new List<DispatchRecordCheckpointPhase>();
+        var runner = new BackgroundDispatchRunner(
+            startProcess: startInfo =>
+            {
+                processStartCalls++;
+                return Process.Start(startInfo);
+            });
+
+        var exception = Record.Exception(() =>
+            GoalManagementCommandService.StartSubscriptionReadyTasks(
+                kernel,
+                workspace,
+                goal,
+                agents,
+                profiles,
+                checkpointBeforeWorkerStart: (checkpointKernel, checkpointGoalId, checkpointTaskId, checkpointPhase) =>
+                {
+                    checkpointCalls++;
+                    checkpointPhases.Add(checkpointPhase);
+                    startedDispatchIdentities.Add(Assert.IsType<DateTimeOffset>(
+                        checkpointKernel.GetTask(checkpointGoalId, checkpointTaskId).LastDispatch?.DispatchedAt));
+                    new SqliteOrchestratorStateRepository(workspace.SqliteStatePath)
+                        .SaveAsync(checkpointKernel)
+                        .GetAwaiter()
+                        .GetResult();
+                },
+                runner: runner,
+                sandboxOptions: DisabledSandbox));
+
+        Assert.Null(exception);
+        Assert.Equal(1, processStartCalls);
+        Assert.True(checkpointCalls > 0);
+        Assert.Equal(
+            1,
+            checkpointPhases.Count(phase => phase == DispatchRecordCheckpointPhase.ProcessMayHaveStarted));
+        var persistedTask = kernel.GetTask(goal.Id, planner.Id);
+        var latestDispatchAt = Assert.IsType<DateTimeOffset>(persistedTask.LastDispatch?.DispatchedAt);
+        Assert.All(startedDispatchIdentities, identity => Assert.Equal(latestDispatchAt, identity));
+        Assert.NotNull(persistedTask.LastProcess);
+        Assert.Contains(
+            persistedTask.RetryAdmissionHistory,
+            receipt =>
+                receipt.LinkedDispatchAt == latestDispatchAt &&
+                receipt.Decision is RetryAdmissionDecision.Allowed or RetryAdmissionDecision.ResumedReservation);
+    }
+
+    [Xunit.Fact]
+    public void HardCrashBeforeGateReleaseReloadCanResumeClaimedPaidAttempt()
+    {
+        if (!OperatingSystem.IsWindows())
+            return;
+
+        var root = CreateTempDirectory();
+        var workingDirectory = Path.Combine(root, "repo");
+        var logRoot = Path.Combine(root, "logs");
+        Directory.CreateDirectory(workingDirectory);
+        var workspace = OrchestratorWorkspace.ForDirectory(root, workingDirectory);
+        _ = StateDbMigrations.EnsureUpToDate(workspace.SqliteStatePath);
+        var at = DateTimeOffset.Parse("2026-08-25T12:00:00Z");
+        var kernel = new AgentOrchestratorKernel(new TestClock(at));
+        var task = new TaskSpec(TaskId.New(), "Retry after a source finding.", AgentRole.Developer);
+        var goal = kernel.CreateGoal("Resume an unstarted claimed retry", [task]);
+        kernel.ActivateGoal(goal.Id, AgentCatalog.Default().Agents);
+        kernel.RetryTask(goal.Id, task.Id, "Repair the source finding.", RetryCause.NewSourceFinding);
+        var fingerprint = RetryContextFingerprintBuilder.Build(new RetryContextFingerprintInput(
+            goal.Id.Value, task.Id.Value, task.RequiredRole, "OpenAI", AgentCatalog.OpenAiSolSubscriptionModelAlias,
+            PaidRouteClassification.Paid, "candidate", "criteria", [], [], [], [], "base", "main"));
+        var dispatch = new TaskDispatchRecord(
+            "worker", "Write-Output safe", workingDirectory, at,
+            RetryContextFingerprint: fingerprint,
+            PaidRoute: PaidRouteClassification.Paid);
+        var repository = new SqliteOrchestratorStateRepository(workspace.SqliteStatePath);
+        repository.SaveAsync(kernel).GetAwaiter().GetResult();
+        var reservation = RetryAdmissionReservationStore.TryReserveAsync(
+                workspace.SqliteStatePath, goal.Id, task.Id, fingerprint,
+                PaidRouteClassification.Paid, RetryCause.NewSourceFinding, dispatch, at,
+                "owner-a", at.AddMinutes(1))
+            .GetAwaiter()
+            .GetResult();
+        kernel.ReplaceGoalWithSnapshot(Assert.IsType<RetryAdmissionSnapshotResult>(reservation).Snapshot);
+        Process? spawned = null;
+        try
+        {
+            var runner = new BackgroundDispatchRunner(
+                clock: new TestClock(at.AddSeconds(1)),
+                disableProcessStart: false,
+                startProcess: _ =>
+                {
+                    spawned = Process.Start(new ProcessStartInfo
+                    {
+                        FileName = WorkerShell.Executable,
+                        UseShellExecute = false,
+                        CreateNoWindow = true
+                    }.WithArguments(WorkerShell.BaseArguments().Concat(["Start-Sleep -Seconds 30"])))
+                        ?? throw new InvalidOperationException("Failed to start hard-crash fixture.");
+                    return spawned;
+                });
+
+            var crash = Assert.Throws<InvalidOperationException>(() => runner.TryStartLatestDispatch(
+                kernel,
+                goal.Id,
+                task.Id,
+                logRoot,
+                checkpointBeforeWorkerStart: (checkpointKernel, _, _, phase) =>
+                {
+                    repository.SaveAsync(checkpointKernel).GetAwaiter().GetResult();
+                    if (phase != DispatchRecordCheckpointPhase.ProcessMayHaveStarted)
+                        return;
+                    var process = Assert.IsType<TaskProcessRecord>(checkpointKernel.GetTask(goal.Id, task.Id).LastProcess);
+                    var gatePath = process.StandardOutputPath[..^".out.log".Length] + ".start-gate";
+                    Assert.False(File.Exists(gatePath), "The simulated crash must occur before the worker gate is released.");
+                    throw new InvalidOperationException("simulated-hard-crash-before-gate-release");
+                },
+                sandboxOptions: DisabledSandbox,
+                claimWorkerStart: () =>
+                {
+                    var claim = RetryAdmissionReservationStore.TryClaimStartSnapshotAsync(
+                            workspace.SqliteStatePath, goal.Id, task.Id, at, "owner-a", at.AddSeconds(1))
+                        .GetAwaiter()
+                        .GetResult();
+                    if (claim is null || !claim.Claimed)
+                        return false;
+                    kernel.ReplaceGoalWithSnapshot(claim.Snapshot);
+                    return true;
+                }));
+            Assert.Contains("simulated-hard-crash-before-gate-release", crash.Message, StringComparison.Ordinal);
+            Assert.True(spawned!.WaitForExit(5000), "The unreleased worker host must be terminated after the crash.");
+
+            var reloaded = Assert.IsType<GoalSnapshot>(repository.LoadGoalAsync(goal.Id).GetAwaiter().GetResult());
+            var reloadedKernel = new AgentOrchestratorKernel();
+            reloadedKernel.ReplaceGoalWithSnapshot(reloaded);
+            var reloadedTask = reloadedKernel.GetTask(goal.Id, task.Id);
+            var reloadedReceipt = Assert.Single(reloadedTask.RetryAdmissionHistory);
+            Assert.NotNull(reloadedReceipt.WorkerStartClaimedAt);
+            Assert.Null(reloadedReceipt.WorkerStartedAt);
+            Assert.False(GoalManagementCommandService.ShouldRefreshPreparedDispatchBeforeStart(reloadedTask, true));
+
+            var recovery = RetryAdmissionReservationStore.TryReserveAsync(
+                    workspace.SqliteStatePath, goal.Id, task.Id, fingerprint,
+                    PaidRouteClassification.Paid, RetryCause.NewSourceFinding, dispatch, at.AddMinutes(2),
+                    "owner-b", at.AddMinutes(3), reservationRecoveryConfirmed: true)
+                .GetAwaiter()
+                .GetResult();
+
+            Assert.Equal(RetryAdmissionDecision.ResumedReservation, recovery!.Decision);
+            Assert.Equal("owner-b", recovery.Receipt.ReservationOwnerId);
+        }
+        finally
+        {
+            if (spawned is { HasExited: false })
+                spawned.Kill(entireProcessTree: true);
+            spawned?.Dispose();
+            try { Directory.Delete(root, recursive: true); } catch { }
+        }
+    }
+
+    [Xunit.Fact]
+    public void HardCrashAfterGateReleaseReloadCannotResumeClaimedPaidAttempt()
+    {
+        if (!OperatingSystem.IsWindows())
+            return;
+
+        var root = CreateTempDirectory();
+        var workingDirectory = Path.Combine(root, "repo");
+        var logRoot = Path.Combine(root, "logs");
+        Directory.CreateDirectory(workingDirectory);
+        var workspace = OrchestratorWorkspace.ForDirectory(root, workingDirectory);
+        _ = StateDbMigrations.EnsureUpToDate(workspace.SqliteStatePath);
+        var at = DateTimeOffset.Parse("2026-08-25T12:00:00Z");
+        var kernel = new AgentOrchestratorKernel(new TestClock(at));
+        var task = new TaskSpec(TaskId.New(), "Retry after a source finding.", AgentRole.Developer);
+        var goal = kernel.CreateGoal("Fence an ambiguous paid start", [task]);
+        kernel.ActivateGoal(goal.Id, AgentCatalog.Default().Agents);
+        kernel.RetryTask(goal.Id, task.Id, "Repair the source finding.", RetryCause.NewSourceFinding);
+        var fingerprint = RetryContextFingerprintBuilder.Build(new RetryContextFingerprintInput(
+            goal.Id.Value, task.Id.Value, task.RequiredRole, "OpenAI", AgentCatalog.OpenAiSolSubscriptionModelAlias,
+            PaidRouteClassification.Paid, "candidate", "criteria", [], [], [], [], "base", "main"));
+        var dispatch = new TaskDispatchRecord(
+            "worker", "Write-Output safe", workingDirectory, at,
+            RetryContextFingerprint: fingerprint,
+            PaidRoute: PaidRouteClassification.Paid);
+        var repository = new SqliteOrchestratorStateRepository(workspace.SqliteStatePath);
+        repository.SaveAsync(kernel).GetAwaiter().GetResult();
+        var reservation = RetryAdmissionReservationStore.TryReserveAsync(
+                workspace.SqliteStatePath, goal.Id, task.Id, fingerprint,
+                PaidRouteClassification.Paid, RetryCause.NewSourceFinding, dispatch, at,
+                "owner-a", at.AddMinutes(1))
+            .GetAwaiter()
+            .GetResult();
+        kernel.ReplaceGoalWithSnapshot(Assert.IsType<RetryAdmissionSnapshotResult>(reservation).Snapshot);
+        Process? spawned = null;
+        try
+        {
+            var runner = new BackgroundDispatchRunner(
+                clock: new TestClock(at.AddSeconds(1)),
+                disableProcessStart: false,
+                startProcess: _ =>
+                {
+                    spawned = Process.Start(new ProcessStartInfo
+                    {
+                        FileName = WorkerShell.Executable,
+                        UseShellExecute = false,
+                        CreateNoWindow = true
+                    }.WithArguments(WorkerShell.BaseArguments().Concat(["Start-Sleep -Seconds 30"])))
+                        ?? throw new InvalidOperationException("Failed to start hard-crash fixture.");
+                    return spawned;
+                });
+
+            var crash = Assert.Throws<InvalidOperationException>(() => runner.TryStartLatestDispatch(
+                kernel,
+                goal.Id,
+                task.Id,
+                logRoot,
+                checkpointBeforeWorkerStart: (checkpointKernel, _, _, _) =>
+                    repository.SaveAsync(checkpointKernel).GetAwaiter().GetResult(),
+                sandboxOptions: DisabledSandbox,
+                claimWorkerStart: () =>
+                {
+                    var claim = RetryAdmissionReservationStore.TryClaimStartSnapshotAsync(
+                            workspace.SqliteStatePath, goal.Id, task.Id, at, "owner-a", at.AddSeconds(1))
+                        .GetAwaiter()
+                        .GetResult();
+                    if (claim is null || !claim.Claimed)
+                        return false;
+                    kernel.ReplaceGoalWithSnapshot(claim.Snapshot);
+                    return true;
+                },
+                confirmWorkerStart: () =>
+                {
+                    var process = Assert.IsType<TaskProcessRecord>(kernel.GetTask(goal.Id, task.Id).LastProcess);
+                    var gatePath = process.StandardOutputPath[..^".out.log".Length] + ".start-gate";
+                    Assert.True(File.Exists(gatePath), "The simulated crash must occur after the worker gate is released.");
+                    throw new InvalidOperationException("simulated-hard-crash-after-gate-release");
+                }));
+            Assert.Contains("simulated-hard-crash", crash.Message, StringComparison.Ordinal);
+
+            var reloaded = Assert.IsType<GoalSnapshot>(repository.LoadGoalAsync(goal.Id).GetAwaiter().GetResult());
+            var reloadedReceipt = Assert.Single(reloaded.Tasks.Single().RetryAdmissionHistory!);
+            Assert.NotNull(reloadedReceipt.WorkerStartClaimedAt);
+            Assert.Null(reloadedReceipt.WorkerStartedAt);
+            Assert.NotNull(reloaded.Tasks.Single().LastProcess);
+            var reloadedKernel = new AgentOrchestratorKernel();
+            reloadedKernel.ReplaceGoalWithSnapshot(reloaded);
+            Assert.True(GoalManagementCommandService.ShouldRefreshPreparedDispatchBeforeStart(
+                reloadedKernel.GetTask(goal.Id, task.Id),
+                true));
+
+            var recovery = RetryAdmissionReservationStore.TryReserveAsync(
+                    workspace.SqliteStatePath, goal.Id, task.Id, fingerprint,
+                    PaidRouteClassification.Paid, RetryCause.NewSourceFinding, dispatch, at.AddMinutes(2),
+                    "owner-b", at.AddMinutes(3), reservationRecoveryConfirmed: false)
+                .GetAwaiter()
+                .GetResult();
+
+            Assert.Equal(RetryAdmissionDecision.Prevented, recovery!.Decision);
+            Assert.Equal(RetryCause.EnvironmentApparatusFailure, recovery.Receipt.Cause);
+            Assert.Equal(RetryAdmissionRoute.EnvironmentalHold, recovery.Receipt.Route);
+        }
+        finally
+        {
+            if (spawned is { HasExited: false })
+                spawned.Kill(entireProcessTree: true);
+            spawned?.Dispose();
+            try { Directory.Delete(root, recursive: true); } catch { }
+        }
+    }
+
+    [Xunit.Fact]
+    public void RetriedDispatchFingerprintRetainsReviewedCandidateFromDispatchHistory()
+    {
+        var root = CreateTempDirectory();
+        var workingDirectory = Path.Combine(root, "repo");
+        Directory.CreateDirectory(workingDirectory);
+        WriteSkill(workingDirectory, "orchestrator-dogfood");
+        var firstAt = DateTimeOffset.Parse("2026-07-07T12:00:00Z");
+        var kernel = new AgentOrchestratorKernel(new TestClock(firstAt));
+        var planner = new TaskSpec(TaskId.New(), "Plan candidate-aware retry.", AgentRole.Planner);
+        var goal = kernel.CreateGoal("Fingerprint reviewed candidate", [planner]);
+        kernel.SetGoalRefinedSpec(goal.Id, new RefinedSpec(
+            "Fingerprint reviewed candidate",
+            ["The reviewed candidate remains an independent retry-context input."],
+            VerificationClass.TestVerifiable,
+            [],
+            []));
+        var agent = SubscriptionPlannerAgent("planner", "Planner");
+        var agents = new[] { agent };
+        var profiles = DispatchTestProfiles();
+        kernel.ActivateGoal(goal.Id, agents);
+
+        _ = WorkerProfileDispatcher.PrepareSubscriptionReadyBatch(
+            kernel, goal, agents, profiles, Path.Combine(root, "prompts"), workingDirectory,
+            firstAt, commandExists: _ => true);
+        kernel.RecordDispatchResultCommit(goal.Id, planner.Id, "candidate-a");
+        var priorDispatch = planner.LastDispatch!;
+        kernel.ReportTaskProgress(goal.Id, planner.Id, WorkTaskStatus.Failed, "Candidate needs repair.");
+        kernel.RetryTask(
+            goal.Id,
+            planner.Id,
+            "Repair the reviewed candidate.",
+            retryCause: RetryCause.NewSourceFinding);
+
+        var second = WorkerProfileDispatcher.PrepareSubscriptionReadyBatch(
+            kernel, goal, agents, profiles, Path.Combine(root, "prompts"), workingDirectory,
+            firstAt.AddMinutes(1), commandExists: _ => true);
+        var dispatch = Assert.Single(second.Dispatches).Task.LastDispatch!;
+        var expected = RetryContextFingerprintFactory.Build(
+            goal,
+            planner,
+            dispatch.ProviderName,
+            dispatch.ModelName,
+            dispatch.PaidRoute,
+            "candidate-a",
+            priorDispatch.BaseCommit,
+            WorkerProfileDispatcher.ReadCurrentMainIdentityForRetry(workingDirectory));
+
+        Assert.Equal(expected, dispatch.RetryContextFingerprint);
+    }
 
     [Xunit.Fact(DisplayName = "StartDispatches_checkpoint_phase_stays_post_process_after_first_spawn")]
     public void StartDispatchesCheckpointPhaseStaysPostProcessAfterFirstSpawn()
@@ -2583,6 +3220,27 @@ public sealed class WorkerDispatchTestsDispatchPreparation : WorkerDispatchTestS
     Assert.DoesNotContain("main-only.txt", prompt, StringComparison.Ordinal);
     Assert.Contains("Do not use two-dot diffs", prompt, StringComparison.Ordinal);
 }
+
+    [Xunit.Fact]
+    public void RetryContextMainIdentityTracksCurrentMainAcrossGoalWorktree()
+    {
+        var root = CreateSeededDispatchRepository();
+        var kernel = new AgentOrchestratorKernel();
+        var task = new TaskSpec(TaskId.New(), "Retry after main drift.", AgentRole.Developer);
+        var goal = kernel.CreateGoal("Track current main in retry context", [task]);
+        var worktree = GoalWorktrees.Ensure(root, goal.Id);
+        var before = WorkerProfileDispatcher.ReadCurrentMainIdentityForRetry(worktree);
+
+        File.WriteAllText(Path.Combine(root, "main-drift.txt"), "main advanced");
+        RunGit(root, ["add", "main-drift.txt"], DateTimeOffset.Parse("2026-07-15T18:53:00Z"));
+        RunGit(root, ["commit", "-m", "Advance main for retry fingerprint"], DateTimeOffset.Parse("2026-07-15T18:53:00Z"));
+
+        var after = WorkerProfileDispatcher.ReadCurrentMainIdentityForRetry(worktree);
+
+        Assert.NotNull(before);
+        Assert.NotNull(after);
+        Assert.NotEqual(before, after);
+    }
 
     [Xunit.Fact(DisplayName = "Reviewer_dispatch_prompt_injects_conflicted_merge_tree_paths")]
     public void ReviewerDispatchPromptInjectsConflictedMergeTreePaths()

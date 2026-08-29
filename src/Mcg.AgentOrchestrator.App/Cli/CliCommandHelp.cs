@@ -14,7 +14,7 @@ internal static class CliCommandHelp
     public const string GoalBoardUsage = GoalBoardOptions.Usage;
     public const string GoalReplaceUsage = "Usage: goal-replace <predecessor-goal-id> --brief-file <path> --reason-file <path> --request-id <guid> --disposition <zero-work-correction|abandon-failed-attempt|supersede-unlanded-attempt> --confirm-goal-replace [--pipeline <auto|five-role>] [--ideation <agent>|--researcher <agent>|--planner <agent>|--developer <agent>|--tester <agent>|--reviewer <agent>]";
     public const string AddTaskUsage = "Usage: add-task [--goal <goal-prefix>] <role> <description> [--before-role <role>] | add-task [--goal <goal-prefix>] <role> --text-file <path> [--before-role <role>]";
-    public const string RetryUsage = "Usage: retry [--goal <goal-prefix>] <task-number> <message> [--goal <goal-prefix>] [--mechanical] | retry [--goal <goal-prefix>] <task-number> --text-file <path> [--goal <goal-prefix>] [--mechanical]";
+    public const string RetryUsage = "Usage: retry [--goal <goal-prefix>] <task-number> <message> [--cause <cause>] [--goal <goal-prefix>] [--mechanical] | retry [--goal <goal-prefix>] <task-number> --text-file <path> [--cause <cause>] [--goal <goal-prefix>] [--mechanical]";
     public const string NoteUsage = "Usage: note <task-number> <message> [--gate-deliverable <id>...] | note <goal-prefix> <task-number> <message> [--gate-deliverable <id>...] | note --goal <goal-prefix> <task-number> <message> [--gate-deliverable <id>...] | note <task-number> --text-file <path> [--gate-deliverable <id>...]";
     public const string ProgressUsage = "Usage: progress [--goal <goal-prefix>] <task-number> <status> <message> [--goal <goal-prefix>] | progress [--goal <goal-prefix>] <task-number> <status> --text-file <path> [--goal <goal-prefix>]";
     public const string VerifyManualUsage = "Usage: verify-manual [--goal <goal-prefix>] <task-number> <passed|failed> <note> [--goal <goal-prefix>] | verify-manual [--goal <goal-prefix>] <task-number> <passed|failed> --text-file <path> [--goal <goal-prefix>]";
@@ -189,7 +189,7 @@ internal static class CliCommandHelp
     private static readonly CommandHelpEntry Retry = new(
         RetryUsage,
         "Retry a task with operator feedback.",
-        ["--goal", "--text-file", "--mechanical", "--autonomy", "--autonomy-policy", "--idempotency-key", "--operator-actor", "--help", "-h"]);
+        ["--goal", "--text-file", "--cause", "--mechanical", "--autonomy", "--autonomy-policy", "--idempotency-key", "--operator-actor", "--help", "-h"]);
 
     private static readonly CommandHelpEntry Note = new(
         NoteUsage,

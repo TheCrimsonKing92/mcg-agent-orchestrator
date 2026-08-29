@@ -107,7 +107,7 @@ internal sealed partial class ConductorDriver
     private readonly Func<Goal, string, string, IReadOnlyList<string>> _resolveFindingEvidenceSiblingClasses;
     private readonly Action<GoalId, TaskId, PreReviewEvidenceReceipt> _recordPreReviewEvidence;
     private readonly Action<GoalId, TaskId, string, int> _recordPreReviewMappingEscalationSuppressed;
-    private readonly Func<GoalId, TaskId, string, RetryRoundKind?, TaskSpec> _retryTask;
+    private readonly Func<GoalId, TaskId, string, RetryRoundKind?, RetryCause, TaskSpec> _retryTask;
     private readonly Action<GoalId, TaskId, string> _recordTaskNote;
     private readonly Action<GoalId, TaskId, string> _recordFindingEvidenceRequest;
     private readonly Action<GoalId, TaskId, string> _recordFindingEvidenceRun;
@@ -754,8 +754,8 @@ internal sealed partial class ConductorDriver
             RunFocusedEvidence(goal, request, stableSlotLease, runBaselineArm: true, cancellationToken);
         _focusedEvidenceRunnerConfigured = true;
 
-        _retryTask = (goalId, taskId, message, retryRoundKind) =>
-            kernel.RetryTask(goalId, taskId, message, retryRoundKind: retryRoundKind);
+        _retryTask = (goalId, taskId, message, retryRoundKind, cause) =>
+            kernel.RetryTask(goalId, taskId, message, retryRoundKind: retryRoundKind, retryCause: cause);
         _recordTaskNote = (goalId, taskId, message) =>
         {
             kernel.RecordTaskNote(goalId, taskId, message);
@@ -1302,9 +1302,11 @@ internal sealed partial class ConductorDriver
         _recordPreReviewEvidence = recordPreReviewEvidence ?? ((_, _, _) => { });
         _recordPreReviewMappingEscalationSuppressed = recordPreReviewMappingEscalationSuppressed ?? ((_, _, _, _) => { });
         _retryTask = retryTaskWithRoundKind
-            ?? (retryTask is not null
-                ? ((goalId, taskId, message, _) => retryTask(goalId, taskId, message))
-                : ((_, _, _, _) => throw new InvalidOperationException("Retry delegate was not configured.")));
+            is not null
+                ? ((goalId, taskId, message, roundKind, _) => retryTaskWithRoundKind(goalId, taskId, message, roundKind))
+                : retryTask is not null
+                    ? ((goalId, taskId, message, _, _) => retryTask(goalId, taskId, message))
+                    : ((_, _, _, _, _) => throw new InvalidOperationException("Retry delegate was not configured."));
         _recordTaskNote = recordTaskNote ?? ((_, _, _) => { });
         _recordFindingEvidenceRequest = recordFindingEvidenceRequest ?? recordReviewerEvidenceRequestReceived ?? ((_, _, _) => { });
         _recordFindingEvidenceRun = recordFindingEvidenceRun ?? recordReviewerEvidenceRunRecorded ?? ((_, _, _) => { });
@@ -1533,7 +1535,7 @@ internal sealed partial class ConductorDriver
                     $"Auto-retry verification-inconclusive Tester task {inconclusiveTester.Id.Value[..8]} " +
                     $"on the shared transient budget ({inconclusiveTester.EmptyOutputRetryCount}/{maxAttempts}) " +
                     $"without reopening upstream Developer work. Latest current-round receipt: {outcome.EvidenceSummary}";
-                _retryTask(goal.Id, inconclusiveTester.Id, note, null);
+                _retryTask(goal.Id, inconclusiveTester.Id, note, null, RetryCause.EnvironmentApparatusFailure);
                 return ExecuteDispatchAndStart(goal, goalPrefix, policy, GoalLifecycleState.WorkspaceReady);
             }
 
@@ -1548,7 +1550,7 @@ internal sealed partial class ConductorDriver
                 {
                     var note = $"Auto-retry stale dispatch recovery for task {staleRecoveryTask.Id.Value[..8]}; " +
                         ExtractDispatchRecoveryDiagnostic(staleRecoveryTask.LastVerification!);
-                _retryTask(goal.Id, staleRecoveryTask.Id, note, null);
+                _retryTask(goal.Id, staleRecoveryTask.Id, note, null, RetryCause.EnvironmentApparatusFailure);
                     return ExecuteDispatchAndStart(goal, goalPrefix, policy, GoalLifecycleState.WorkspaceReady);
                 }
 
@@ -1585,7 +1587,7 @@ internal sealed partial class ConductorDriver
                 var preflightNote = $"Auto-retry sandbox-preflight dispatch flake " +
                     $"{preflightFlakedTask.EmptyOutputRetryCount}/{preflightMaxAttempts} for task " +
                     $"{preflightFlakedTask.Id.Value[..8]}; worker never launched (preflight failure): {outcome.EvidenceSummary}";
-                _retryTask(goal.Id, preflightFlakedTask.Id, preflightNote, null);
+                _retryTask(goal.Id, preflightFlakedTask.Id, preflightNote, null, RetryCause.EnvironmentApparatusFailure);
                 return ExecuteDispatchAndStart(goal, goalPrefix, policy, GoalLifecycleState.WorkspaceReady);
             }
 
@@ -1632,7 +1634,23 @@ internal sealed partial class ConductorDriver
                     $"Auto-retry real worker/command failure for task {realFailureTask.Id.Value[..8]} " +
                     $"(attempt {retryCount}/{policy.MaxCriterionRetries}); " +
                     string.Join("; ", retryFeedback);
-                _retryTask(goal.Id, realFailureTask.Id, retryNote, null);
+                var retryCause = ResolveAutomaticRetryCause(realFailureTask);
+                if (retryCause is null)
+                {
+                    return Escalate(
+                        goal,
+                        goalPrefix,
+                        policy,
+                        state,
+                        $"Task {realFailureTask.Id.Value[..8]} has a real failure without a typed retry cause; " +
+                        "automatic redispatch was held for operator classification.");
+                }
+                _retryTask(
+                    goal.Id,
+                    realFailureTask.Id,
+                    retryNote,
+                    null,
+                    retryCause.Value);
                 return ExecuteDispatchAndStart(goal, goalPrefix, policy, GoalLifecycleState.WorkspaceReady);
             }
 
@@ -1673,7 +1691,7 @@ internal sealed partial class ConductorDriver
                     ? $"Auto-recover+re-admit {failureLabel} cycle {cycle}/{policy.MaxEmptyOutputAutoRecoverCycles}; {failureEvidence}"
                     : $"Auto-retry {failureLabel} {attemptInCycle}/{policy.MaxEmptyOutputDispatchRetries} " +
                         $"in recovery cycle {cycle}/{policy.MaxEmptyOutputAutoRecoverCycles}; {failureEvidence}";
-                _retryTask(goal.Id, flakedTask.Id, note, null);
+                _retryTask(goal.Id, flakedTask.Id, note, null, RetryCause.EnvironmentApparatusFailure);
                 // Immediately dispatch in the same tick after recovery, bypassing the next-tick
                 // WorkspaceReady path. If ownership blocks dispatch under Conservative policy,
                 // ExecuteDispatchAndStart returns Held (not Escalate) so the goal stays eligible.
@@ -1704,7 +1722,13 @@ internal sealed partial class ConductorDriver
 
                 try
                 {
-                    _retryTask(goal.Id, autoRetry.TargetTask!.Id, autoRetry.Message, autoRetry.RoundKind);
+                    _retryTask(
+                        goal.Id,
+                        autoRetry.TargetTask!.Id,
+                        autoRetry.Message,
+                        autoRetry.RoundKind,
+                        autoRetry.Cause ?? throw new InvalidOperationException(
+                            "An automatic retry decision must carry a typed retry cause."));
                 }
                 catch (InvalidOperationException ex) when (
                     autoRetry.Message.StartsWith("ACTIONABLE_CANDIDATE_RED", StringComparison.Ordinal) &&
@@ -1860,7 +1884,8 @@ internal sealed partial class ConductorDriver
             reviewerTask,
             brief,
             null,
-            RetryRoundKind.Mechanical);
+            RetryRoundKind.Mechanical,
+            RetryCause.CriterionEvidenceOwnerMismatch);
         return true;
     }
 
@@ -1991,7 +2016,8 @@ internal sealed partial class ConductorDriver
             targetTask,
             message,
             warning,
-            null);
+            null,
+            ResolveAutomaticRetryCause(triggeringTask) ?? RetryCause.CriterionEvidenceOwnerMismatch);
         return true;
     }
 
@@ -2470,7 +2496,8 @@ internal sealed partial class ConductorDriver
                 developer,
                 $"ACTIONABLE_CANDIDATE_RED candidate_sha={candidateSha}; receipt_id={receiptId}; finding_ids={findingIds}; " +
                 $"failing_tests={failingTests}. Repair the Developer-owned source/test anchor before any remaining focused evidence or downstream verification runs.",
-                null);
+                null,
+                cause: RetryCause.NewSourceFinding);
             return true;
         }
 
@@ -2506,7 +2533,8 @@ internal sealed partial class ConductorDriver
             $"{FindingEvidenceRetryMessagePrefix} role={task.RequiredRole}; task={task.Id.Value[..8]}; {summary} " +
             "Review the finding-bound outcome in this round's context.",
             null,
-            RetryRoundKind.Mechanical);
+            RetryRoundKind.Mechanical,
+            RetryCause.CriterionEvidenceOwnerMismatch);
 
     private static bool TryNormalizeFindingEvidenceRequest(
         FindingEvidenceRequest request,
@@ -3135,28 +3163,50 @@ internal sealed partial class ConductorDriver
         IReadOnlyList<ReviewFinding> Findings,
         IReadOnlyList<string> FailingTestIdentities);
 
+    private static RetryCause? ResolveAutomaticRetryCause(TaskSpec task)
+    {
+        var verification = task.LastVerification;
+        if (verification?.ProviderFailureKind is ProviderFailureKind.RateLimit or ProviderFailureKind.Connectivity)
+            return RetryCause.ProviderInterruption;
+        if (verification?.ProviderFailureKind == ProviderFailureKind.Sandbox1312)
+            return RetryCause.EnvironmentApparatusFailure;
+
+        var findings = verification?.MergedReviewFindings?
+            .Where(finding => finding.State == ReviewFindingState.Open && finding.Severity == FindingSeverity.Blocking)
+            .ToArray() ?? [];
+        if (findings.Any(finding => finding.Category is FindingCategory.OperatorOwned or FindingCategory.SpecDefect))
+            return RetryCause.ContractClarification;
+        if (findings.Any(finding => finding.Category is FindingCategory.TestEvidence or FindingCategory.TestCoverage))
+            return RetryCause.NewTestFinding;
+        if (findings.Any(finding => finding.Category is FindingCategory.Correctness or FindingCategory.CodeQuality or FindingCategory.SpecCompliance))
+            return RetryCause.NewSourceFinding;
+        return null;
+    }
+
     private sealed record VerifyingFindingAutoRetryDecision(
         bool ShouldHold,
         bool ShouldEscalate,
         TaskSpec? TargetTask,
         string Message,
         string? WarningMessage,
-        RetryRoundKind? RoundKind)
+        RetryRoundKind? RoundKind,
+        RetryCause? Cause)
     {
-        public static VerifyingFindingAutoRetryDecision None { get; } = new(false, false, null, string.Empty, null, null);
+        public static VerifyingFindingAutoRetryDecision None { get; } = new(false, false, null, string.Empty, null, null, null);
 
         public static VerifyingFindingAutoRetryDecision Hold(string message) =>
-            new(true, false, null, message, null, null);
+            new(true, false, null, message, null, null, null);
 
         public static VerifyingFindingAutoRetryDecision Retry(
             TaskSpec targetTask,
             string message,
             string? warningMessage,
-            RetryRoundKind? roundKind = null) =>
-            new(false, false, targetTask, message, warningMessage, roundKind);
+            RetryRoundKind? roundKind = null,
+            RetryCause? cause = null) =>
+            new(false, false, targetTask, message, warningMessage, roundKind, cause);
 
         public static VerifyingFindingAutoRetryDecision Escalate(string message) =>
-            new(false, true, null, message, null, null);
+            new(false, true, null, message, null, null, null);
     }
 
     internal ConductorParallelAcceptanceCandidate? TryBuildParallelAcceptanceCandidate(
@@ -4908,7 +4958,7 @@ internal sealed partial class ConductorDriver
                 $"{string.Join(", ", failingTests)}; evidence pointer: {evidencePointer ?? "none"}"
             : $"pre-review build repair: candidate {context.CandidateSha}; diagnostic: {buildDiagnostic}; " +
                 $"evidence pointer: {evidencePointer ?? "none"}";
-        _retryTask(goal.Id, developerTask.Id, retryMessage, RetryRoundKind.Mechanical);
+        _retryTask(goal.Id, developerTask.Id, retryMessage, RetryRoundKind.Mechanical, RetryCause.NewSourceFinding);
         var retryState = GoalLifecycle.ResolveState(goal, GetFacts(goal));
         result = ExecuteDispatchAndStart(goal, goalPrefix, policy, retryState);
         return true;
@@ -4934,7 +4984,8 @@ internal sealed partial class ConductorDriver
             goal.Id,
             testerTask.Id,
             reason,
-            RetryRoundKind.Mechanical);
+            RetryRoundKind.Mechanical,
+            RetryCause.NewTestFinding);
         var retryState = GoalLifecycle.ResolveState(goal, GetFacts(goal));
         result = ExecuteDispatchAndStart(goal, goalPrefix, policy, retryState);
         return true;
@@ -5799,7 +5850,7 @@ internal sealed partial class ConductorDriver
                     retryFeedback);
                 var retryMessage = $"Acceptance criteria unmet; retrying task with feedback (attempt {retryCount}/{policy.MaxCriterionRetries}): " +
                     string.Join(Environment.NewLine, retryFeedback);
-                _retryTask(goal.Id, task.Id, retryMessage, null);
+                _retryTask(goal.Id, task.Id, retryMessage, null, RetryCause.CriterionEvidenceOwnerMismatch);
                 return MakeResult(goal.Id.Value, goalPrefix, policy,
                     new ConductorAdvanceOutcome.Executed(GoalLifecycleState.Verified, retryMessage));
             }

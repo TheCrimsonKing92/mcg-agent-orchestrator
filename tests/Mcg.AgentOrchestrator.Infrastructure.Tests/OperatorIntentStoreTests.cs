@@ -306,6 +306,55 @@ public sealed class OperatorIntentStoreTests
         }
     }
 
+    [Xunit.Theory(DisplayName = "OperatorIntentCoordinator_missing_retry_cause_creates_operator_actionable_hold")]
+    [Xunit.InlineData(false)]
+    [Xunit.InlineData(true)]
+    public async Task OperatorIntentCoordinatorMissingRetryCauseCreatesOperatorActionableHold(bool explicitUnknown)
+    {
+        var root = CreateTempDirectory();
+        try
+        {
+            var kernel = new AgentOrchestratorKernel();
+            var goal = GoalLifecycleCommands.CreateAndActivateSimpleGoal(
+                kernel,
+                AgentCatalog.Default().Agents,
+                "Classify an untyped operator retry");
+            var task = goal.Tasks.Single();
+            kernel.ReportTaskProgress(goal.Id, task.Id, WorkTaskStatus.Failed, "failed");
+            var latestRetryAtBefore = task.LatestRetryAt;
+            var store = new SqliteOperatorIntentStore(
+                Path.Combine(root, "operator-intents.db"),
+                Path.Combine(root, "logs"));
+            var intent = CreateRetryIntent(
+                goal.Id.Value,
+                task.Id.Value,
+                "missing-cause-intent",
+                "missing-cause-key",
+                retryCause: explicitUnknown ? RetryCause.Unknown : null);
+            await store.EnqueueAsync(intent);
+            var coordinator = new OperatorIntentCoordinator(store);
+
+            var result = coordinator.ExecutePending(kernel, goal);
+
+            Xunit.Assert.True(result.MutatedGoalState);
+            var request = Xunit.Assert.Single(kernel.GetPendingHumanInput(goal.Id));
+            Xunit.Assert.Equal(task.Id, request.TaskId);
+            Xunit.Assert.Contains("retry cause", request.Question, StringComparison.OrdinalIgnoreCase);
+            Xunit.Assert.Equal(WorkTaskStatus.WaitingForHuman, kernel.GetTask(goal.Id, task.Id).Status);
+            Xunit.Assert.Equal(latestRetryAtBefore, kernel.GetTask(goal.Id, task.Id).LatestRetryAt);
+            Xunit.Assert.DoesNotContain(
+                goal.Timeline,
+                item => item.TaskId == task.Id && item.Kind == ProgressKind.TaskRetried);
+            coordinator.CompletePersisted([goal.Id]);
+            var outcome = await store.GetAsync(intent.Id);
+            Xunit.Assert.Equal(OperatorIntentStatus.Applied, outcome!.Status);
+        }
+        finally
+        {
+            TryDeleteDirectory(root);
+        }
+    }
+
     [Xunit.Fact(DisplayName = "OperatorIntentStore_read_only_open_does_not_create_schema")]
     public void OperatorIntentStoreReadOnlyOpenDoesNotCreateSchema()
     {
@@ -366,9 +415,10 @@ public sealed class OperatorIntentStoreTests
         string taskId,
         string intentId,
         string idempotencyKey,
-        string message = "retry")
+        string message = "retry",
+        RetryCause? retryCause = null)
     {
-        var payload = new RetryOperatorIntentPayload(message, RetryRoundKind.Mechanical);
+        var payload = new RetryOperatorIntentPayload(message, RetryRoundKind.Mechanical, RetryCause: retryCause);
         return new OperatorIntentRecord(
             intentId,
             idempotencyKey,
