@@ -259,15 +259,9 @@ internal static class ReviewFindingContextProjector
                         "advisory-disposition",
                         selected.Verification.ReviewedCommit);
                 }
-                else if ((selected.Verification.ReviewFindingTouchedAnchors?.Count ?? 0) == 0)
-                {
-                    fallbackReason = "resolved-anchor-proof-missing";
-                }
                 else
                 {
-                    throw PreparationFailure(
-                        "resolved-anchor-proof-missing",
-                        $"Resolved finding '{group.Key}' has no matching touched-anchor, candidate-bound evidence receipt, or candidate-bound advisory proof.");
+                    fallbackReason = "resolved-anchor-proof-missing";
                 }
             }
         }

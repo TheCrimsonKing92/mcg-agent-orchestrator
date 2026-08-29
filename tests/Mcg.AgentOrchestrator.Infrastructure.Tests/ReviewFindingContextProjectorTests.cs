@@ -424,17 +424,6 @@ public sealed class ReviewFindingContextProjectorTests
         AssertReason(
             "stable-identity-ambiguous",
             () => ReviewFindingContextProjector.Project(ambiguousGoal, ambiguousTask, candidateSha));
-
-        var mismatchTask = new TaskSpec(TaskId.New(), "Review", AgentRole.Reviewer);
-        var mismatchKernel = new AgentOrchestratorKernel();
-        var mismatchGoal = mismatchKernel.CreateGoal("Mismatched resolution anchor", [mismatchTask]);
-        mismatchKernel.RecordTaskVerification(mismatchGoal.Id, mismatchTask.Id, Verification(
-            DateTimeOffset.Parse("2026-08-01T00:00:00Z"), candidateSha,
-            [new ReviewFinding("mismatch-id", ReviewFindingState.Resolved, ambiguousLocation, "resolved")],
-            [new ReviewFindingLocation("src/Other.cs", "Other.Run")]));
-        AssertReason(
-            "resolved-anchor-proof-missing",
-            () => ReviewFindingContextProjector.Project(mismatchGoal, mismatchTask, candidateSha));
     }
 
     [Xunit.Fact]
@@ -449,12 +438,40 @@ public sealed class ReviewFindingContextProjectorTests
             var goal = kernel.CreateGoal("Preserve well-formed resolution history", [reviewer]);
             var candidateSha = new string('e', 40);
             var location = new ReviewFindingLocation("src/Resolved.cs", "Resolved.Run");
+            var unrelatedLocation = new ReviewFindingLocation("src/Unrelated.cs", "Unrelated.Run");
+            var unrelatedFinding = new ReviewFinding(
+                "unrelated-id",
+                ReviewFindingState.Open,
+                unrelatedLocation,
+                "unrelated open finding");
             kernel.RecordTaskVerification(goal.Id, reviewer.Id, Verification(
                 DateTimeOffset.Parse("2026-08-01T00:00:00Z"), candidateSha,
-                [new ReviewFinding("resolved-id", ReviewFindingState.Open, location, "open finding")]));
-            kernel.RecordTaskVerification(goal.Id, reviewer.Id, Verification(
-                DateTimeOffset.Parse("2026-08-01T00:01:00Z"), candidateSha,
-                [new ReviewFinding("resolved-id", ReviewFindingState.Resolved, location, "resolved finding")]));
+                [
+                    new ReviewFinding("resolved-id", ReviewFindingState.Open, location, "open finding"),
+                    unrelatedFinding
+                ]));
+            var resolvedFinding = new ReviewFinding(
+                "resolved-id",
+                ReviewFindingState.Resolved,
+                location,
+                "resolved finding");
+            var resolvingOutput = string.Join(
+                Environment.NewLine,
+                $"findings: {JsonSerializer.Serialize(new[] { resolvedFinding, unrelatedFinding })}",
+                $"touched_anchors: {JsonSerializer.Serialize(new[] { unrelatedLocation })}");
+            kernel.RecordTaskVerification(goal.Id, reviewer.Id, new TaskVerificationRecord(
+                "review",
+                root,
+                0,
+                resolvingOutput,
+                string.Empty,
+                DateTimeOffset.Parse("2026-08-01T00:01:00Z"),
+                ReviewFindingTouchedAnchors: [unrelatedLocation],
+                ReviewedCommit: candidateSha,
+                MergedReviewFindings: [resolvedFinding, unrelatedFinding],
+                FullStandardOutput: resolvingOutput,
+                FullStandardError: string.Empty));
+            Assert.Equal(unrelatedLocation, Assert.Single(reviewer.LastVerification!.ReviewFindingTouchedAnchors!));
 
             var package = WorkerProfileDispatcher.BuildContextPackage(
                 goal,
@@ -476,7 +493,10 @@ public sealed class ReviewFindingContextProjectorTests
                 (int)ReviewFindingHistoryProjectionMode.FullInspection,
                 ledger.RootElement.GetProperty("projection_mode").GetInt32());
             Assert.Equal("resolved-anchor-proof-missing", ledger.RootElement.GetProperty("fallback_reason").GetString());
-            var finding = Assert.Single(ledger.RootElement.GetProperty("findings").EnumerateArray());
+            var projectedFindings = ledger.RootElement.GetProperty("findings").EnumerateArray().ToArray();
+            Assert.Equal(2, projectedFindings.Length);
+            var finding = Assert.Single(projectedFindings.Where(item =>
+                item.GetProperty("stable_id").GetString() == "resolved-id"));
             Assert.Equal("resolved finding", finding.GetProperty("description").GetString());
             Assert.Equal(JsonValueKind.Null, finding.GetProperty("resolution_proof").ValueKind);
             Assert.Equal(2, package.ReviewFindingProjection.UniqueRoundCount);
