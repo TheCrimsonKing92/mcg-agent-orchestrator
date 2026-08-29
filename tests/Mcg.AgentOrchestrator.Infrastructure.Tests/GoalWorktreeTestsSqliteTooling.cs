@@ -827,7 +827,7 @@ public sealed class GoalWorktreeTestsSqliteTooling : GoalWorktreeTestBase
         var escapedChildPidPath = childPidPath.Replace("'", "''", StringComparison.Ordinal);
         var escapedMarker = marker.Replace("'", "''", StringComparison.Ordinal);
         var startInfo = CreatePowerShellStartInfo(
-            $"$child = Start-Process powershell.exe -ArgumentList '-NoProfile','-Command','Start-Sleep -Seconds 120 # {escapedMarker}' -PassThru; " +
+            $"$child = Start-Process powershell.exe -ArgumentList '-NoProfile','-Command','Start-Sleep -Seconds 120 # {escapedMarker}' -WindowStyle Hidden -PassThru; " +
             $"Set-Content -LiteralPath '{escapedChildPidPath}' -Value $child.Id -NoNewline; " +
             "Write-Output ('CHILD_PID=' + $child.Id); Start-Sleep -Seconds 120");
         int? childPid = null;

@@ -700,10 +700,22 @@ public sealed class WorkerContextPackageTests
                 candidate.Identity.Value == "goal/review-finding-history.json"));
             using var document = System.Text.Json.JsonDocument.Parse(Recover(root, historyArtifact));
             var entries = document.RootElement.GetProperty("findings").EnumerateArray().ToArray();
+            var rounds = document.RootElement.GetProperty("rounds").EnumerateArray().ToArray();
 
             Assert.Single(entries);
             Assert.Equal("stable-finding", entries[0].GetProperty("stable_id").GetString());
-            Assert.Equal(4, document.RootElement.GetProperty("rounds").GetArrayLength());
+            Assert.Equal(4, rounds.Length);
+            Assert.Equal(3, rounds.Count(round =>
+                round.GetProperty("task_id").GetString() == firstTask.Id.Value));
+            Assert.Single(rounds, round =>
+                round.GetProperty("task_id").GetString() == secondTask.Id.Value);
+            Assert.All(rounds, round =>
+            {
+                var identity = round.GetProperty("body").GetProperty("logical_identity").GetString()!;
+                var body = Assert.Single(package.Artifacts, artifact => artifact.Identity.Value == identity);
+                using var bodyDocument = System.Text.Json.JsonDocument.Parse(Recover(root, body));
+                Assert.Single(bodyDocument.RootElement.GetProperty("ReceiptBodies").EnumerateArray());
+            });
             var receiptReferences = document.RootElement.GetProperty("receipt_bodies").EnumerateArray().ToArray();
             Assert.Equal(2, receiptReferences.Length);
             Assert.All(receiptReferences, reference =>
@@ -716,6 +728,9 @@ public sealed class WorkerContextPackageTests
             var receipt = WorkerContextPackageBuilder.CreateReceipt(package);
             Assert.Equal(2, receipt.UniqueReviewFindingRoundCount);
             Assert.Equal(2, receipt.DuplicateReviewFindingRoundCount);
+            Assert.Equal(
+                receipt.UniqueReviewFindingRoundCount + receipt.DuplicateReviewFindingRoundCount,
+                rounds.Length);
             Assert.Equal(2, receipt.UniqueFindingEvidenceReceiptCount);
             Assert.Equal(2, receipt.DuplicateFindingEvidenceReceiptCount);
             Assert.True(receipt.RenderedPromptBytes > 0);

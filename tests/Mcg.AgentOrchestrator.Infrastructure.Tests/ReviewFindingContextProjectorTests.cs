@@ -469,7 +469,7 @@ public sealed class ReviewFindingContextProjectorTests
     }
 
     [Xunit.Fact]
-    public void DuplicateDurableRoundKeepsLatestEnrichmentWithoutDuplicatingRoundIndex()
+    public void RestoredDuplicateDurableRoundKeepsLatestEnrichmentWithoutDuplicatingRoundIndex()
     {
         var reviewer = new TaskSpec(TaskId.New(), "Review", AgentRole.Reviewer);
         var kernel = new AgentOrchestratorKernel();
@@ -496,22 +496,44 @@ public sealed class ReviewFindingContextProjectorTests
             completedAt,
             candidateSha,
             [finding]));
-        kernel.RecordTaskVerification(goal.Id, reviewer.Id, Verification(
-            completedAt,
-            candidateSha,
-            [finding with
-            {
-                EvidenceOutcome = new FindingEvidenceOutcome(
-                    true,
-                    receipt.ReceiptId,
-                    ResultReason: FindingEvidenceOutcomeReason.ValidEvidence)
-            }],
-            receipts: [receipt]));
+        kernel.RecordFindingEvidenceOutcome(
+            goal.Id,
+            reviewer.Id,
+            finding.StableId,
+            new FindingEvidenceOutcome(
+                true,
+                receipt.ReceiptId,
+                ResultReason: FindingEvidenceOutcomeReason.ValidEvidence),
+            receipt);
 
-        var projection = ReviewFindingContextProjector.Project(goal, reviewer, candidateSha);
+        var exported = kernel.ExportSnapshot();
+        var goalSnapshot = Assert.Single(exported.Goals);
+        var taskSnapshot = Assert.Single(goalSnapshot.Tasks);
+        var enriched = Assert.IsType<TaskVerificationSnapshot>(taskSnapshot.LastVerification);
+        var plain = enriched with
+        {
+            MergedReviewFindings = enriched.MergedReviewFindings!
+                .Select(item => item with { EvidenceOutcome = null })
+                .ToArray(),
+            FindingEvidenceReceipts = null
+        };
+        var corruptTask = taskSnapshot with
+        {
+            LastVerification = plain,
+            VerificationHistory = [plain, enriched]
+        };
+        var restoredKernel = AgentOrchestratorKernel.FromSnapshot(exported with
+        {
+            Goals = [goalSnapshot with { Tasks = [corruptTask] }]
+        });
+        var restoredGoal = restoredKernel.GetGoal(goal.Id);
+        var restoredReviewer = restoredKernel.GetTask(goal.Id, reviewer.Id);
+        Assert.Single(restoredReviewer.VerificationHistory);
+
+        var projection = ReviewFindingContextProjector.Project(restoredGoal, restoredReviewer, candidateSha);
 
         Assert.Equal(1, projection.Metrics.UniqueRoundCount);
-        Assert.Equal(1, projection.Metrics.DuplicateRoundCount);
+        Assert.Equal(0, projection.Metrics.DuplicateRoundCount);
         using var ledger = JsonDocument.Parse(projection.LedgerBytes);
         Assert.Single(ledger.RootElement.GetProperty("rounds").EnumerateArray());
         var projectedFinding = Assert.Single(ledger.RootElement.GetProperty("findings").EnumerateArray());
