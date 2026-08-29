@@ -364,12 +364,22 @@ public sealed class TaskSpec
                 PlannerCandidateDivergence: snapshot.LastVerification.PlannerCandidateDivergence,
                 CompletionVerdictVerifiedSuccess: snapshot.LastVerification.CompletionVerdictVerifiedSuccess,
                 CompletionVerdictRule: snapshot.LastVerification.CompletionVerdictRule);
-            if (!task._verificationHistory.Contains(latestVerification))
+            var historyIndex = task._verificationHistory.FindLastIndex(
+                verification => verification.HasSameRoundIdentity(latestVerification));
+            if (historyIndex < 0)
             {
                 task.RestoreVerificationHistory(latestVerification);
+                historyIndex = task._verificationHistory.FindLastIndex(
+                    verification => verification.HasSameRoundIdentity(latestVerification));
+            }
+            else
+            {
+                var mergedVerification = latestVerification.MergeSameRoundEnrichment(
+                    task._verificationHistory[historyIndex]);
+                task._verificationHistory[historyIndex] = mergedVerification;
             }
 
-            task.LastVerification = latestVerification;
+            task.LastVerification = task._verificationHistory[historyIndex];
         }
 
         if (snapshot.DispatchHistory is { Count: > 0 })
@@ -492,8 +502,25 @@ public sealed class TaskSpec
         LastVerification = verification;
     }
 
-    internal void RestoreVerificationHistory(TaskVerificationRecord verification) =>
+    internal void RestoreVerificationHistory(TaskVerificationRecord verification)
+    {
+        var historyIndex = _verificationHistory.FindLastIndex(
+            item => item.HasSameRoundIdentity(verification));
+        if (historyIndex >= 0)
+        {
+            // Verification enrichments (finding evidence, completion verdicts, and model-fit notes)
+            // mutate the latest round without changing its durable round identity. Old snapshots could
+            // contain that same round once per load because LastVerification was deserialized separately.
+            // Merge monotonically so a stale plain copy cannot erase a receipt or verdict from
+            // an earlier copy. When both copies carry a later non-null enrichment, the incoming
+            // history occurrence is the causal authority.
+            _verificationHistory[historyIndex] =
+                _verificationHistory[historyIndex].MergeSameRoundEnrichment(verification);
+            return;
+        }
+
         _verificationHistory.Add(verification, RequiredRole);
+    }
 
     internal void ClearLatestVerification() => LastVerification = null;
 
@@ -510,7 +537,8 @@ public sealed class TaskSpec
             CompletionVerdictVerifiedSuccess = verifiedSuccess,
             CompletionVerdictRule = string.IsNullOrWhiteSpace(rule) ? null : rule.Trim()
         };
-        var historyIndex = _verificationHistory.FindLastIndex(item => ReferenceEquals(item, prior));
+        var historyIndex = _verificationHistory.FindLastIndex(item =>
+            ReferenceEquals(item, prior) || item.HasSameRoundIdentity(prior));
         if (historyIndex >= 0)
         {
             _verificationHistory[historyIndex] = updated;
@@ -582,7 +610,8 @@ public sealed class TaskSpec
             MergedReviewFindings = findings,
             FindingEvidenceReceipts = receipts
         };
-        var historyIndex = _verificationHistory.FindLastIndex(item => ReferenceEquals(item, prior));
+        var historyIndex = _verificationHistory.FindLastIndex(item =>
+            ReferenceEquals(item, prior) || item.HasSameRoundIdentity(prior));
         if (historyIndex >= 0)
         {
             _verificationHistory[historyIndex] = updated;

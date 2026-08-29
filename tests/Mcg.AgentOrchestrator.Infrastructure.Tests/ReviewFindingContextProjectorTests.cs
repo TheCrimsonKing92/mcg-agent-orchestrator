@@ -469,6 +469,106 @@ public sealed class ReviewFindingContextProjectorTests
     }
 
     [Xunit.Fact]
+    public void RestoredDuplicateDurableRoundKeepsLatestEnrichmentWithoutDuplicatingRoundIndex()
+    {
+        var reviewer = new TaskSpec(TaskId.New(), "Review", AgentRole.Reviewer);
+        var kernel = new AgentOrchestratorKernel();
+        var goal = kernel.CreateGoal("Repair duplicate durable verification history", [reviewer]);
+        var completedAt = DateTimeOffset.Parse("2026-08-29T10:52:21.2954854Z");
+        var candidateSha = new string('a', 40);
+        var request = new FindingEvidenceRequest(
+            [new FindingEvidenceSelection("tests/Tests.csproj", "Tests.StableRound")]);
+        var finding = new ReviewFinding(
+            "stable-round",
+            ReviewFindingState.Open,
+            new ReviewFindingLocation("src/Stable.cs", "Stable.Run"),
+            "Focused evidence is required.",
+            EvidenceRequest: request);
+        var receipt = new FindingEvidenceReceipt(
+            "receipt-stable-round",
+            candidateSha,
+            request,
+            Accepted: true,
+            Passed: true,
+            "focused evidence passed");
+
+        kernel.RecordTaskVerification(goal.Id, reviewer.Id, Verification(
+            completedAt,
+            candidateSha,
+            [finding]));
+        kernel.RecordFindingEvidenceOutcome(
+            goal.Id,
+            reviewer.Id,
+            finding.StableId,
+            new FindingEvidenceOutcome(
+                true,
+                receipt.ReceiptId,
+                ResultReason: FindingEvidenceOutcomeReason.ValidEvidence),
+            receipt);
+
+        var exported = kernel.ExportSnapshot();
+        var goalSnapshot = Assert.Single(exported.Goals);
+        var taskSnapshot = Assert.Single(goalSnapshot.Tasks);
+        var enriched = Assert.IsType<TaskVerificationSnapshot>(taskSnapshot.LastVerification);
+        var plain = enriched with
+        {
+            MergedReviewFindings = enriched.MergedReviewFindings!
+                .Select(item => item with { EvidenceOutcome = null })
+                .ToArray(),
+            FindingEvidenceReceipts = null
+        };
+        var corruptTask = taskSnapshot with
+        {
+            LastVerification = plain,
+            VerificationHistory = [plain, enriched]
+        };
+        var restoredKernel = AgentOrchestratorKernel.FromSnapshot(exported with
+        {
+            Goals = [goalSnapshot with { Tasks = [corruptTask] }]
+        });
+        var restoredGoal = restoredKernel.GetGoal(goal.Id);
+        var restoredReviewer = restoredKernel.GetTask(goal.Id, reviewer.Id);
+        Assert.Single(restoredReviewer.VerificationHistory);
+
+        var projection = ReviewFindingContextProjector.Project(restoredGoal, restoredReviewer, candidateSha);
+
+        Assert.Equal(1, projection.Metrics.UniqueRoundCount);
+        Assert.Equal(0, projection.Metrics.DuplicateRoundCount);
+        using var ledger = JsonDocument.Parse(projection.LedgerBytes);
+        Assert.Single(ledger.RootElement.GetProperty("rounds").EnumerateArray());
+        var projectedFinding = Assert.Single(ledger.RootElement.GetProperty("findings").EnumerateArray());
+        Assert.Equal(
+            receipt.ReceiptId,
+            projectedFinding.GetProperty("evidence_outcome").GetProperty("receipt_id").GetString());
+    }
+
+    [Xunit.Fact]
+    public void DistinctSameTimestampRoundsWithContradictoryFindingBodiesFailClosed()
+    {
+        var firstReviewer = new TaskSpec(TaskId.New(), "First review", AgentRole.Reviewer);
+        var secondReviewer = new TaskSpec(TaskId.New(), "Second review", AgentRole.Reviewer);
+        var kernel = new AgentOrchestratorKernel();
+        var goal = kernel.CreateGoal(
+            "Reject same-timestamp cross-round contradictions",
+            [firstReviewer, secondReviewer]);
+        var completedAt = DateTimeOffset.Parse("2026-08-29T10:52:21.2954854Z");
+        var candidateSha = new string('c', 40);
+        var location = new ReviewFindingLocation("src/Stable.cs", "Stable.Run");
+        kernel.RecordTaskVerification(goal.Id, firstReviewer.Id, Verification(
+            completedAt,
+            candidateSha,
+            [new ReviewFinding("same-stable-id", ReviewFindingState.Open, location, "Still open.")]));
+        kernel.RecordTaskVerification(goal.Id, secondReviewer.Id, Verification(
+            completedAt,
+            candidateSha,
+            [new ReviewFinding("same-stable-id", ReviewFindingState.Resolved, location, "Resolved.")]));
+
+        AssertReason(
+            "stable-identity-ambiguous",
+            () => ReviewFindingContextProjector.Project(goal, secondReviewer, candidateSha));
+    }
+
+    [Xunit.Fact]
     public void OrdinaryBlockingResolutionWithoutTouchProofFallsBackToFullInspectionAndPreservesArtifacts()
     {
         var root = CreateRoot();

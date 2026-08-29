@@ -15,8 +15,8 @@ internal sealed record ReviewFindingContextProjection(
 
 internal static class ReviewFindingContextProjector
 {
-    private sealed record RoundSource(TaskSpec Task, TaskVerificationRecord Verification);
-    private sealed record FindingSource(TaskSpec Task, TaskVerificationRecord Verification, ReviewFinding Finding, ReviewFindingContentReference Round);
+    private sealed record RoundSource(TaskSpec Task, TaskVerificationRecord Verification, int HistoryIndex);
+    private sealed record FindingSource(TaskSpec Task, TaskVerificationRecord Verification, ReviewFinding Finding, ReviewFindingContentReference Round, int HistoryIndex);
     private sealed record CanonicalEntryProjection(CanonicalReviewFindingEntry Entry, string? FallbackReason);
 
     public static void AddArtifacts(
@@ -46,11 +46,12 @@ internal static class ReviewFindingContextProjector
         ArgumentNullException.ThrowIfNull(goal);
         ArgumentNullException.ThrowIfNull(targetTask);
         var rounds = goal.Tasks
-            .SelectMany(task => task.VerificationHistory.Select(verification => new RoundSource(task, verification)))
+            .SelectMany(task => task.VerificationHistory.Select((verification, historyIndex) => new RoundSource(task, verification, historyIndex)))
             .Where(source => (source.Verification.MergedReviewFindings?.Count ?? 0) > 0 ||
-                             (source.Verification.FindingEvidenceReceipts?.Count ?? 0) > 0)
+                              (source.Verification.FindingEvidenceReceipts?.Count ?? 0) > 0)
             .OrderBy(source => source.Verification.CompletedAt)
             .ThenBy(source => source.Task.Id.Value, StringComparer.Ordinal)
+            .ThenBy(source => source.HistoryIndex)
             .ToArray();
         if (rounds.Length == 0)
         {
@@ -114,7 +115,7 @@ internal static class ReviewFindingContextProjector
 
         var findingSources = rounds.SelectMany(source =>
             (source.Verification.MergedReviewFindings ?? []).Select(finding =>
-                new FindingSource(source.Task, source.Verification, finding, roundReferenceBySource[source]))).ToArray();
+                new FindingSource(source.Task, source.Verification, finding, roundReferenceBySource[source], source.HistoryIndex))).ToArray();
         var entryProjections = findingSources
             .GroupBy(source => source.Finding.StableId, StringComparer.Ordinal)
             .Select(BuildCanonicalEntry)
@@ -192,12 +193,20 @@ internal static class ReviewFindingContextProjector
             .Select(source => Convert.ToBase64String(JsonSerializer.SerializeToUtf8Bytes(source.Finding)))
             .Distinct(StringComparer.Ordinal)
             .Count();
-        if (distinctLatest != 1)
+        var conflictingCandidates = latest
+            .Select(source => source.Verification.ReviewedCommit ?? string.Empty)
+            .Distinct(StringComparer.OrdinalIgnoreCase)
+            .Skip(1)
+            .Any();
+        if (distinctLatest != 1 || conflictingCandidates)
         {
             throw PreparationFailure("stable-identity-ambiguous", $"Stable finding '{group.Key}' has contradictory latest states at the same timestamp.");
         }
 
-        var selected = latest.OrderBy(source => source.Task.Id.Value, StringComparer.Ordinal).First();
+        var selected = latest
+            .OrderBy(source => source.Task.Id.Value, StringComparer.Ordinal)
+            .ThenBy(source => source.HistoryIndex)
+            .First();
         if (selected.Finding.State == ReviewFindingState.Resolved)
         {
             selected = FindResolvingSource(group);
@@ -360,7 +369,8 @@ internal static class ReviewFindingContextProjector
         FindingSource? resolving = null;
         foreach (var source in sources
                      .OrderBy(item => item.Verification.CompletedAt)
-                     .ThenBy(item => item.Task.Id.Value, StringComparer.Ordinal))
+                     .ThenBy(item => item.Task.Id.Value, StringComparer.Ordinal)
+                     .ThenBy(item => item.HistoryIndex))
         {
             if (source.Finding.State == ReviewFindingState.Open)
             {
