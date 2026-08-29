@@ -45,12 +45,10 @@ internal static class ReviewFindingContextProjector
     {
         ArgumentNullException.ThrowIfNull(goal);
         ArgumentNullException.ThrowIfNull(targetTask);
-        var roundCandidates = goal.Tasks
+        var rounds = goal.Tasks
             .SelectMany(task => task.VerificationHistory.Select((verification, historyIndex) => new RoundSource(task, verification, historyIndex)))
             .Where(source => (source.Verification.MergedReviewFindings?.Count ?? 0) > 0 ||
-                             (source.Verification.FindingEvidenceReceipts?.Count ?? 0) > 0)
-            .ToArray();
-        var rounds = CollapseDuplicateRounds(roundCandidates)
+                              (source.Verification.FindingEvidenceReceipts?.Count ?? 0) > 0)
             .OrderBy(source => source.Verification.CompletedAt)
             .ThenBy(source => source.Task.Id.Value, StringComparer.Ordinal)
             .ThenBy(source => source.HistoryIndex)
@@ -65,9 +63,10 @@ internal static class ReviewFindingContextProjector
 
         var receiptBodies = new Dictionary<string, ReviewFindingProjectedBody>(StringComparer.Ordinal);
         var receiptReferenceById = new Dictionary<string, ReviewFindingContentReference>(StringComparer.Ordinal);
-        var totalReceiptCount = roundCandidates.Sum(round => round.Verification.FindingEvidenceReceipts?.Count ?? 0);
+        var totalReceiptCount = 0;
         foreach (var receipt in rounds.SelectMany(round => round.Verification.FindingEvidenceReceipts ?? []))
         {
+            totalReceiptCount++;
             var bytes = JsonSerializer.SerializeToUtf8Bytes(receipt);
             var hash = WorkerContextArtifact.Hash(bytes);
             var reference = new ReviewFindingContentReference(hash, $"goal/review-finding-receipts/{hash}.json");
@@ -144,7 +143,7 @@ internal static class ReviewFindingContextProjector
         var metrics = new ReviewFindingHistoryProjectionMetrics(
             mode,
             roundBodies.Count,
-            roundCandidates.Length - roundBodies.Count,
+            rounds.Length - roundBodies.Count,
             receiptBodies.Count,
             totalReceiptCount - receiptBodies.Count,
             fallbackReason);
@@ -393,30 +392,6 @@ internal static class ReviewFindingContextProjector
             verification.ExitCode.ToString(System.Globalization.CultureInfo.InvariantCulture),
             verification.CompletionVerdictRule ?? string.Empty,
             verification.ReviewFindingContractViolation?.Code ?? string.Empty)));
-
-    private static IReadOnlyList<RoundSource> CollapseDuplicateRounds(IEnumerable<RoundSource> sources)
-    {
-        var collapsed = new List<RoundSource>();
-        foreach (var source in sources.OrderBy(item => item.Task.Id.Value, StringComparer.Ordinal).ThenBy(item => item.HistoryIndex))
-        {
-            var existingIndex = collapsed.FindLastIndex(existing =>
-                existing.Task.Id == source.Task.Id &&
-                existing.Verification.HasSameRoundIdentity(source.Verification));
-            if (existingIndex >= 0)
-            {
-                collapsed[existingIndex] = source with
-                {
-                    Verification = collapsed[existingIndex].Verification.MergeSameRoundEnrichment(source.Verification)
-                };
-            }
-            else
-            {
-                collapsed.Add(source);
-            }
-        }
-
-        return collapsed;
-    }
 
     private static WorkerContextPreparationException PreparationFailure(string reason, string detail) =>
         new(new LogicalArtifactIdentity("goal/review-finding-history.json"), reason, detail);

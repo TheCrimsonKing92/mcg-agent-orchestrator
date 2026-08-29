@@ -20,6 +20,8 @@ public sealed class WorkerContextUsageReceiptTests
         Assert.Equal(21476, result.Usage!.InputTokens);
         Assert.Equal(11008, result.Usage.CachedInputTokens);
         Assert.Equal(8, result.Usage.OutputTokens);
+        Assert.Equal(["WORKER_RESULT_OK"], result.AgentMessages);
+        Assert.Equal(0, result.MalformedLineCount);
     }
 
     [Xunit.Fact]
@@ -83,6 +85,20 @@ public sealed class WorkerContextUsageReceiptTests
         Assert.Contains("WORKER_RESULT:", result.WorkerOutput, StringComparison.Ordinal);
         Assert.Null(result.Usage);
         Assert.Equal("malformed", result.UsageUnavailableReason);
+    }
+
+    [Xunit.Fact]
+    public void Parse_MalformedLine_IsCountedWithoutChangingWorkerOutputContract()
+    {
+        var result = CodexJsonlUsageParser.Parse("""
+            not-json
+            {"type":"item.completed","item":{"type":"agent_message","text":"first"}}
+            {"type":"item.completed","item":{"type":"agent_message","text":"second"}}
+            """);
+
+        Assert.Equal(1, result.MalformedLineCount);
+        Assert.Equal(["first", "second"], result.AgentMessages);
+        Assert.Equal($"first{Environment.NewLine}second", result.WorkerOutput);
     }
 
     [Xunit.Fact]

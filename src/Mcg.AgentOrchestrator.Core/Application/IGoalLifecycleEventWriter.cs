@@ -17,6 +17,21 @@ public sealed record ProgressiveReviewGlanceGuardReceipt(
     bool OperatorContextTruncated = false,
     bool CancellationWithheld = false);
 
+public sealed record ProgressiveReviewGlanceCircuitReceipt(
+    string CircuitIdentity,
+    string AdmissionOutcome,
+    string OpeningCause,
+    string OriginalReason,
+    int ActualTokens,
+    int AvoidedCallCount,
+    int AvoidedInputTokens,
+    int? AvoidedOutputTokens,
+    string? OutputEstimateUnavailableReason,
+    long AdmissionLatencyMilliseconds,
+    int ChangedFilesTriggerCount,
+    int ElapsedTriggerCount,
+    string ProbeOutcome);
+
 public interface IGoalLifecycleEventWriter
 {
     void AppendTimelineEvent(ProgressEvent progressEvent);
@@ -58,6 +73,10 @@ public interface IGoalLifecycleEventWriter
         GoalId goalId,
         TaskId taskId,
         ProgressiveReviewGlanceGuardReceipt receipt) { }
+    void AppendProgressiveReviewGlanceCircuitReceipt(
+        GoalId goalId,
+        TaskId taskId,
+        ProgressiveReviewGlanceCircuitReceipt receipt) { }
     void AppendProgressiveReviewGlanceSummary(
         GoalId goalId,
         int totalGlances,
@@ -104,6 +123,10 @@ public sealed class NullGoalLifecycleEventWriter : IGoalLifecycleEventWriter
         GoalId goalId,
         TaskId taskId,
         ProgressiveReviewGlanceGuardReceipt receipt) { }
+    public void AppendProgressiveReviewGlanceCircuitReceipt(
+        GoalId goalId,
+        TaskId taskId,
+        ProgressiveReviewGlanceCircuitReceipt receipt) { }
     public void AppendProgressiveReviewGlanceSummary(
         GoalId goalId,
         int totalGlances,
