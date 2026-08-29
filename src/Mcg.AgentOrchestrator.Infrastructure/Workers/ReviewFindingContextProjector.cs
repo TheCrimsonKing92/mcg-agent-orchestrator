@@ -186,12 +186,6 @@ internal static class ReviewFindingContextProjector
 
     private static CanonicalEntryProjection BuildCanonicalEntry(IGrouping<string, FindingSource> group)
     {
-        var roles = group.Select(source => source.Task.RequiredRole).Distinct().ToArray();
-        if (roles.Length != 1)
-        {
-            throw PreparationFailure("stable-identity-role-conflict", $"Stable finding '{group.Key}' was emitted by multiple roles.");
-        }
-
         var latestAt = group.Max(source => source.Verification.CompletedAt);
         var latest = group.Where(source => source.Verification.CompletedAt == latestAt).ToArray();
         var distinctLatest = latest

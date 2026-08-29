@@ -129,6 +129,48 @@ public sealed class ReviewFindingContextProjectorTests
     }
 
     [Xunit.Fact]
+    public void CrossRoleCarryForwardKeepsOneCanonicalLatestEntry()
+    {
+        var root = CreateRoot();
+        try
+        {
+            var contextDirectory = WriteRegistry(root);
+            var tester = new TaskSpec(TaskId.New(), "Test", AgentRole.Tester);
+            var reviewer = new TaskSpec(TaskId.New(), "Review", AgentRole.Reviewer);
+            var kernel = new AgentOrchestratorKernel();
+            var goal = kernel.CreateGoal("Reconcile cross-role finding history", [tester, reviewer]);
+            var candidateSha = new string('a', 40);
+            var location = new ReviewFindingLocation("src/Shared.cs", "Shared.Run");
+            kernel.RecordTaskVerification(goal.Id, tester.Id, Verification(
+                DateTimeOffset.Parse("2026-08-01T00:00:00Z"), candidateSha,
+                [new ReviewFinding("shared-stable-id", ReviewFindingState.Open, location, "tester description")]));
+            kernel.RecordTaskVerification(goal.Id, reviewer.Id, Verification(
+                DateTimeOffset.Parse("2026-08-01T00:01:00Z"), candidateSha,
+                [new ReviewFinding("shared-stable-id", ReviewFindingState.Open, location, "reviewer description")]));
+
+            var package = WorkerProfileDispatcher.BuildContextPackage(
+                goal,
+                reviewer,
+                root,
+                contextDirectory,
+                Brief(goal, reviewer),
+                currentCandidateSha: candidateSha);
+
+            var history = Assert.Single(package.Artifacts,
+                artifact => artifact.Identity.Value == "goal/review-finding-history.json");
+            using var ledger = JsonDocument.Parse(Recover(root, history));
+            var finding = Assert.Single(ledger.RootElement.GetProperty("findings").EnumerateArray());
+            Assert.Equal("shared-stable-id", finding.GetProperty("stable_id").GetString());
+            Assert.Equal((int)AgentRole.Reviewer, finding.GetProperty("role").GetInt32());
+            Assert.Equal("reviewer description", finding.GetProperty("description").GetString());
+        }
+        finally
+        {
+            Directory.Delete(root, recursive: true);
+        }
+    }
+
+    [Xunit.Fact]
     public void SameCandidateContractRepairUsesCompactAllowListWhileCandidateChangeFallsBackFull()
     {
         var root = CreateRoot();
