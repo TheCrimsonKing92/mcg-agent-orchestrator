@@ -245,24 +245,6 @@ public sealed class WorkerContextArtifact
             byteCount);
     }
 
-    public WorkerContextArtifact WithInlineFallback(string reason)
-    {
-        if (AuthoritativeBytes is null)
-        {
-            throw new WorkerContextPreparationException(Identity, reason, "Complete authoritative bytes are unavailable for inline fallback.");
-        }
-
-        return Create(
-            Identity,
-            Kind,
-            AuthoritativeBytes,
-            RoleVisibility,
-            ContextDeliveryMode.InlineFull,
-            ContractVersion,
-            expectedContentHash: ContentHash,
-            fallbackReason: reason);
-    }
-
     public static string Hash(ReadOnlySpan<byte> bytes) =>
         Convert.ToHexString(SHA256.HashData(bytes)).ToLowerInvariant();
 }

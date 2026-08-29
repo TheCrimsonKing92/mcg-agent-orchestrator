@@ -2761,16 +2761,17 @@ public sealed class WorkerDispatchTestsDispatchPreparation : WorkerDispatchTestS
         File.WriteAllText(outputPath, "changed after the legacy snapshot was recorded");
         WorkerCommandTemplate.WriteHandoffFile(restoredGoal.Tasks, restoredDeveloper.Id, root);
         var unavailableHandoff = File.ReadAllText(Path.Combine(root, ".orchestrator-handoff.md"));
-        Assert.Contains("Legacy Verification Context (non-authoritative)", unavailableHandoff, StringComparison.Ordinal);
-        Assert.Contains("legacy-snapshot-authoritative-output-unavailable", unavailableHandoff, StringComparison.Ordinal);
+        Assert.Contains("PROJECTED RECEIPT:", unavailableHandoff, StringComparison.Ordinal);
         var unavailablePointer = Assert.Single(new LegacyHandoffCompatibilityResolver(
                 _ => null,
                 root)
             .ResolveArtifactsFromMarkdown(unavailableHandoff));
         var unavailableContent = Encoding.UTF8.GetString(unavailablePointer.Bytes);
+        Assert.Contains("validation=non-authoritative", unavailableContent, StringComparison.Ordinal);
+        Assert.Contains($"source_handle={Path.GetFullPath(outputPath)}", unavailableContent, StringComparison.Ordinal);
         Assert.Contains("authoritative: false", unavailableContent, StringComparison.Ordinal);
         Assert.Contains("legacy-snapshot-authoritative-output-unavailable", unavailableContent, StringComparison.Ordinal);
-        Assert.Contains(authoritativeOutput, unavailableContent, StringComparison.Ordinal);
+        Assert.Contains(authoritativeOutput.Trim(), unavailableContent, StringComparison.Ordinal);
         Assert.DoesNotContain("changed after the legacy snapshot was recorded", unavailableContent, StringComparison.Ordinal);
         File.WriteAllText(outputPath, authoritativeOutput);
 
@@ -2788,11 +2789,13 @@ public sealed class WorkerDispatchTestsDispatchPreparation : WorkerDispatchTestS
         var identity = $"prior/{planner.Id.Value}/verification-output";
         var section = Assert.Single(prepared.Task.LastDispatch!.ContextPackageReceipt!.Sections,
             item => item.LogicalIdentity == identity);
+        var projectedBytes = File.ReadAllBytes(Path.Combine(
+            root,
+            section.MandatoryRelativePath!.Replace('/', Path.DirectorySeparatorChar)));
         Assert.Equal(ContextDeliveryMode.MandatoryFile, section.DeliveryMode);
-        Assert.Equal(WorkerContextArtifact.Hash(Encoding.UTF8.GetBytes(authoritativeOutput)), section.ContentHash);
-        Assert.Equal(
-            Encoding.UTF8.GetBytes(authoritativeOutput),
-            File.ReadAllBytes(Path.Combine(root, section.MandatoryRelativePath!.Replace('/', Path.DirectorySeparatorChar))));
+        Assert.Equal(WorkerContextArtifact.Hash(projectedBytes), section.ContentHash);
+        Assert.Contains("validation=malformed", Encoding.UTF8.GetString(projectedBytes), StringComparison.Ordinal);
+        Assert.Equal(authoritativeOutput, File.ReadAllText(outputPath));
         Assert.Contains($"MANDATORY READ: identity={identity}", File.ReadAllText(prepared.PromptPath), StringComparison.Ordinal);
     }
 

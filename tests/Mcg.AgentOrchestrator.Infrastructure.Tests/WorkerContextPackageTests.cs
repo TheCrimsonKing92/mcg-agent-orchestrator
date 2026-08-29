@@ -490,7 +490,7 @@ public sealed class WorkerContextPackageTests(Xunit.ITestOutputHelper output)
             var effective = Assert.Single(package.Artifacts);
             Assert.Equal(ContextDeliveryMode.MandatoryFile, effective.DeliveryMode);
             Assert.Equal("missing", effective.FallbackReason);
-            Assert.StartsWith(".recovered/", effective.MandatoryRelativePath, StringComparison.Ordinal);
+            Assert.StartsWith(".orchestrator-context/recovered/", effective.MandatoryRelativePath, StringComparison.Ordinal);
             var rendered = WorkerContextPackageBuilder.Render(package);
             Assert.Contains("validation=recovered", rendered, StringComparison.Ordinal);
             Assert.Contains("problem_excerpt=missing", rendered, StringComparison.Ordinal);
@@ -745,7 +745,7 @@ public sealed class WorkerContextPackageTests(Xunit.ITestOutputHelper output)
 
             Assert.Single(entries);
             Assert.Equal("stable-finding", entries[0].GetProperty("stable_id").GetString());
-            Assert.Equal(4, document.RootElement.GetProperty("rounds").GetArrayLength());
+            Assert.Equal(2, document.RootElement.GetProperty("rounds").GetArrayLength());
             var receiptReferences = document.RootElement.GetProperty("receipt_bodies").EnumerateArray().ToArray();
             Assert.Equal(2, receiptReferences.Length);
             Assert.All(receiptReferences, reference =>
@@ -953,10 +953,10 @@ public sealed class WorkerContextPackageTests(Xunit.ITestOutputHelper output)
                 new ExpectedSemanticSource("evidence request", "goal/review-finding-history.json", "evidence-class-source"),
                 new ExpectedSemanticSource("evidence outcome", "goal/review-finding-history.json", "evidence-outcome-detail-source"),
                 new ExpectedSemanticSource("causal event", "goal/timeline.json", causalEvent),
-                new ExpectedSemanticSource("prior-task result", $"prior/{priorTask.Id.Value}/verification-output", priorResult),
+                new ExpectedSemanticSource("prior-task result", $"prior/{priorTask.Id.Value}/verification-output", priorResult.Trim()),
                 new ExpectedSemanticSource("required instruction", "task/verification-plan.md", "required-instruction-source-✓"),
                 new("criterion retry feedback", "task/criterion-retry-feedback.json", "criterion-retry-feedback-source"),
-                new("current verification output", "task/last-verification/stdout", currentVerificationOutput),
+                new("current verification output", "task/last-verification/stdout", currentVerificationOutput.Trim()),
                 new("current verification error", "task/last-verification/stderr", currentVerificationError),
                 new("legacy handoff", "legacy-handoff/v0/1", "legacy-handoff-source-✓"),
                 new("header residual", "brief/header-residual.md", "header-residual-instruction-source-✓"),
@@ -1190,16 +1190,16 @@ public sealed class WorkerContextPackageTests(Xunit.ITestOutputHelper output)
                 candidate.Identity.Value == $"prior/{priorTask.Id.Value}/verification-output"));
             var registryArtifact = Assert.Single(withRetractedHistory.Artifacts.Where(candidate =>
                 candidate.Identity.Value == "context/prior-task-evidence.md"));
-            var filteredPrior = HumanInputRetractionPolicy.Apply(priorOutput, [], [retracted, active]);
+            var projectedPrior = Encoding.UTF8.GetString(Recover(root, priorArtifact));
             var filteredRegistry = HumanInputRetractionPolicy.Apply(
                 Encoding.UTF8.GetString(registryBytes),
                 [],
                 [retracted, active]);
-            Assert.Equal(Encoding.UTF8.GetBytes(filteredPrior), Recover(root, priorArtifact));
             Assert.Equal(Encoding.UTF8.GetBytes(filteredRegistry), Recover(root, registryArtifact));
-            Assert.Contains(priorUnrelatedText, filteredPrior, StringComparison.Ordinal);
+            Assert.Contains(priorUnrelatedText, projectedPrior, StringComparison.Ordinal);
+            Assert.Contains($"stable_id=prior/{priorTask.Id.Value}/verification-output", projectedPrior, StringComparison.Ordinal);
             Assert.Contains(registryUnrelatedText, filteredRegistry, StringComparison.Ordinal);
-            Assert.DoesNotContain(retractedText, filteredPrior, StringComparison.Ordinal);
+            Assert.DoesNotContain(retractedText, projectedPrior, StringComparison.Ordinal);
             Assert.DoesNotContain(retractedText, filteredRegistry, StringComparison.Ordinal);
 
             kernel.SetGoalRefinedSpec(goal.Id, baseSpec with

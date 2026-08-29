@@ -318,8 +318,8 @@ public sealed class WorkerContextPackageBuilder
         if (allowInlineFallback && artifact.AuthoritativeBytes is not null)
         {
             ValidateAuthoritativeBytes(artifact);
-            var recoveryRelativePath = $".recovered/{artifact.ContentHash}.bin";
-            var recoveryDirectory = Path.Combine(root, ".recovered");
+            var recoveryRelativePath = $".orchestrator-context/recovered/{artifact.ContentHash}.bin";
+            var recoveryDirectory = Path.Combine(root, ".orchestrator-context", "recovered");
             try
             {
                 if (Directory.Exists(recoveryDirectory) &&

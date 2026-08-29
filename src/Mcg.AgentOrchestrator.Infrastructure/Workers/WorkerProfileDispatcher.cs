@@ -2501,8 +2501,8 @@ public static class WorkerProfileDispatcher
         if (task.LastVerification is not null)
         {
             var currentIdentity = new LogicalArtifactIdentity("task/last-verification/stdout");
-            var currentOutput = WorkerVerificationEvidence.ResolveStandardOutputForContext(task.LastVerification, currentIdentity);
-            AddSource(WorkerContextSemanticSource.LastVerificationOutput, currentIdentity.Value, ContextArtifactKind.RegisteredContext, Encoding.UTF8.GetBytes(currentOutput.Content));
+            var currentOutput = WorkerVerificationEvidence.ProjectStandardOutputForContext(task, task.LastVerification, currentIdentity);
+            AddSource(WorkerContextSemanticSource.LastVerificationOutput, currentIdentity.Value, ContextArtifactKind.RegisteredContext, Encoding.UTF8.GetBytes(currentOutput));
             if (task.LastVerification.AuthoritativeStandardError is { } currentError)
             {
                 AddSource(WorkerContextSemanticSource.LastVerificationError, "task/last-verification/stderr", ContextArtifactKind.RegisteredContext, Encoding.UTF8.GetBytes(currentError));
@@ -2513,8 +2513,8 @@ public static class WorkerProfileDispatcher
             .Where(candidate => candidate.LastVerification is not null))
         {
             var identity = new LogicalArtifactIdentity($"prior/{priorTask.Id.Value}/verification-output");
-            var output = WorkerVerificationEvidence.ResolveStandardOutputForContext(priorTask.LastVerification!, identity);
-            AddSource(WorkerContextSemanticSource.PriorTaskVerificationOutput, identity.Value, ContextArtifactKind.PriorTaskEvidence, Encoding.UTF8.GetBytes(output.Content));
+            var output = WorkerVerificationEvidence.ProjectStandardOutputForContext(priorTask, priorTask.LastVerification!);
+            AddSource(WorkerContextSemanticSource.PriorTaskVerificationOutput, identity.Value, ContextArtifactKind.PriorTaskEvidence, Encoding.UTF8.GetBytes(output));
         }
 
         foreach (var entry in registry.Artifacts.OrderBy(item => item.Path, StringComparer.Ordinal))
@@ -2563,9 +2563,8 @@ public static class WorkerProfileDispatcher
                     candidate => $"prior/{candidate.Id.Value}/verification-output",
                     candidate =>
                     {
-                        var identity = new LogicalArtifactIdentity($"prior/{candidate.Id.Value}/verification-output");
-                        var output = WorkerVerificationEvidence.ResolveStandardOutputForContext(candidate.LastVerification!, identity);
-                        return Encoding.UTF8.GetBytes(output.Content);
+                        var output = WorkerVerificationEvidence.ProjectStandardOutputForContext(candidate, candidate.LastVerification!);
+                        return Encoding.UTF8.GetBytes(output);
                     },
                     StringComparer.Ordinal);
             var selfVerificationIdentity = $"prior/{task.Id.Value}/verification-output";
