@@ -3052,7 +3052,7 @@ public static class WorkerProfileDispatcher
             throw new InvalidOperationException("Typed context brief is missing its Instructions source boundary.");
         }
 
-        var residual = content[..instructions];
+        var residual = RestoreTypedProjectionLiterals(content[..instructions]);
         residual = RemoveMarkedBriefBlock(
             residual,
             "<!-- ACCUMULATED_RETRY_FEEDBACK_START -->",

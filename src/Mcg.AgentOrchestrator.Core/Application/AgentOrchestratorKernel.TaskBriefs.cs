@@ -557,15 +557,20 @@ public sealed partial class AgentOrchestratorKernel
                 collapsePriority: 0));
         }
 
-        var lines = ApplyTaskBriefBudget(
+        var humanInputRequests = HumanInputRequests
+            .Where(request => request.GoalId == goalId)
+            .ToArray();
+        var clarificationAnswerHistory = goal.RefinedSpec?.ClarificationAnswerHistory ?? [];
+        var retractedSegments = ApplyHumanInputRetractions(
             segments,
+            humanInputRequests,
+            clarificationAnswerHistory);
+        var lines = ApplyTaskBriefBudget(
+            retractedSegments,
             task.RequiredRole,
             usesFileAccessContext,
             emitTypedSourceBoundaries);
-        var content = HumanInputRetractionPolicy.Apply(
-            string.Join(Environment.NewLine, lines),
-            HumanInputRequests.Where(request => request.GoalId == goalId).ToArray(),
-            goal.RefinedSpec?.ClarificationAnswerHistory ?? []);
+        var content = string.Join(Environment.NewLine, lines);
 
         return new TaskBrief(
             goal.Id,
@@ -644,6 +649,32 @@ public sealed partial class AgentOrchestratorKernel
         }
 
         return rendered;
+    }
+
+    private static IReadOnlyList<TaskBriefSegment> ApplyHumanInputRetractions(
+        IReadOnlyList<TaskBriefSegment> segments,
+        IReadOnlyList<HumanInputRequest> requests,
+        IReadOnlyList<HumanInputAnswerRecord> clarificationAnswerHistory)
+    {
+        IReadOnlyList<string> Apply(IReadOnlyList<string> lines)
+        {
+            return lines
+                .Select(line => HumanInputRetractionPolicy.Apply(
+                    line,
+                    requests,
+                    clarificationAnswerHistory))
+                .ToArray();
+        }
+
+        return segments
+            .Select(segment => segment with
+            {
+                Lines = Apply(segment.Lines),
+                CollapsedLines = segment.CollapsedLines is null
+                    ? null
+                    : Apply(segment.CollapsedLines)
+            })
+            .ToArray();
     }
 
     public static int TaskBriefCharacterBudget(AgentRole role, bool usesFileAccessContext) =>
