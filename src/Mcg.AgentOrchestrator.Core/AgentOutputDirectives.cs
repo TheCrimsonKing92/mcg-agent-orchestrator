@@ -53,6 +53,9 @@ public static class AgentOutputDirectives
                 "## Upstream capabilities; ## Likely seams and risks. A summary or provider-private path alone is invalid.");
         }
 
+        lines.Add(
+            "Context artifacts supplied by the host remain fully readable on demand. On the happy path, report only their host-owned identity receipts and exact source locations; do not reproduce their bodies. " +
+            "Use a short problem excerpt only when an artifact is missing, contradictory, or malformed. This does not replace the complete Planner/Researcher artifact required above.");
         lines.Add("WORKER_RESULT:");
         lines.AddRange(WorkerResultFieldTemplateLinesForRole(role));
         lines.Add("END_WORKER_RESULT");

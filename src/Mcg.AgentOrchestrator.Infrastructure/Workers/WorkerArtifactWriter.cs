@@ -1,4 +1,5 @@
 using System.Security.Cryptography;
+using System.Text;
 using System.Text.Json;
 using System.Text.Json.Serialization;
 using Mcg.AgentOrchestrator.Core;
@@ -700,7 +701,7 @@ internal sealed class WorkerArtifactWriter
                     lines.Add(resolution.Plan);
                     lines.Add(string.Empty);
                     lines.Add("### Planner WORKER_RESULT Receipt");
-                    lines.Add(ResolveAuthoritativeStandardOutputOrUnavailable(verification));
+                    lines.Add(ProjectPriorWorkerOutput(priorTask, verification));
                 }
                 else
                 {
@@ -711,7 +712,7 @@ internal sealed class WorkerArtifactWriter
             else
             {
                 lines.Add("### Stdout");
-                lines.Add(ResolveAuthoritativeStandardOutputOrUnavailable(verification));
+                lines.Add(ProjectPriorWorkerOutput(priorTask, verification));
             }
 
             if (!string.IsNullOrWhiteSpace(verification.AuthoritativeStandardError))
@@ -733,6 +734,37 @@ internal sealed class WorkerArtifactWriter
         (WorkerVerificationEvidence.TryRecoverLegacySnapshotStandardOutput(verification, out var recoveredOutput)
             ? recoveredOutput
             : $"[authoritative stdout unavailable: {verification.FullStandardOutputUnavailableReason ?? "unknown"}]");
+
+    private static string ProjectPriorWorkerOutput(TaskSpec task, TaskVerificationRecord verification)
+    {
+        var output = ResolveAuthoritativeStandardOutputOrUnavailable(verification);
+        var bytes = Encoding.UTF8.GetBytes(output);
+        var receiptPrefix = $"Artifact receipt: purpose=prior-worker-output; stable_id=prior/{task.Id.Value}/verification-output; chars={output.Length}; bytes={bytes.Length}; sha256={WorkerContextArtifact.Hash(bytes)}";
+        if (!WorkerResultParser.TryParseResult(output, out var parsed, out var diagnostic))
+        {
+            return $"{receiptPrefix}; validation=malformed; problem_excerpt={diagnostic}" +
+                Environment.NewLine + WorkerContextHelpers.TrimArtifactBlock(output, 4000, preserveCompleteArtifact: false);
+        }
+
+        var preferredOrder = new[]
+        {
+            "files", "commands", "tests", "commit", "blockers", "findings", "touched_anchors",
+            "criteria_verdicts", "verdict", "citations", "model_fit", "skills", "confidence"
+        };
+        var orderedFields = preferredOrder
+            .Where(parsed.Fields.ContainsKey)
+            .Concat(parsed.Fields.Keys
+                .Where(key => !preferredOrder.Contains(key, StringComparer.OrdinalIgnoreCase))
+                .OrderBy(key => key, StringComparer.OrdinalIgnoreCase));
+        var lines = new List<string>
+        {
+            $"{receiptPrefix}; validation=parsed",
+            "WORKER_RESULT:"
+        };
+        lines.AddRange(orderedFields.Select(key => $"{key}: {parsed.Fields[key]}"));
+        lines.Add("END_WORKER_RESULT");
+        return string.Join(Environment.NewLine, lines);
+    }
 
     private static IReadOnlyDictionary<TaskId, DurablePlannerPlanResolution> ResolveDurablePlannerPlans(
         IReadOnlyList<TaskSpec> goalTasks,

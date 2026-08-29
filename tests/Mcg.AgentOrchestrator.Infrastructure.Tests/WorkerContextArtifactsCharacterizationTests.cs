@@ -3,7 +3,7 @@ using Mcg.AgentOrchestrator.Core;
 using Mcg.AgentOrchestrator.Infrastructure;
 
 [Xunit.Collection("IsolatedProcessSpawning")]
-public sealed class WorkerContextArtifactsCharacterizationTests
+public sealed class WorkerContextArtifactsCharacterizationTests(Xunit.ITestOutputHelper output)
 {
     [Xunit.Fact(DisplayName = "WorkerContextArtifacts_facade_matches_extracted_collaborator_outputs")]
     public void WorkerContextArtifactsFacadeMatchesExtractedCollaboratorOutputs()
@@ -95,6 +95,82 @@ public sealed class WorkerContextArtifactsCharacterizationTests
         Assert.True(parsed);
         Assert.Equal("src/A.cs, tests/A.cs", fields["files"]);
         Assert.Equal("none", fields["blockers"]);
+    }
+
+    [Xunit.Fact]
+    public void PriorEvidence_LargeEcho_ProjectsStructuredReceipt()
+    {
+        var workingDirectory = CreateRepresentativeRepository();
+        const string sentinel = "REPLAY-SENTINEL-e4e14983";
+        var echoedBody = string.Concat(Enumerable.Repeat(sentinel + Environment.NewLine, 4096));
+        var priorTask = new TaskSpec(
+            new TaskId("prior-task-large-output"),
+            "Implement prior behavior.",
+            AgentRole.Developer,
+            "Run focused tests.");
+        var currentTask = new TaskSpec(
+            new TaskId("review-prior-output"),
+            "Review prior behavior.",
+            AgentRole.Reviewer,
+            "Inspect prior evidence.");
+        var kernel = new AgentOrchestratorKernel();
+        var goal = kernel.CreateGoal(
+            new GoalId("large-prior-evidence"),
+            "Keep replayed worker evidence bounded.",
+            [priorTask, currentTask]);
+        kernel.ReportTaskProgress(goal.Id, priorTask.Id, WorkTaskStatus.Completed, "Done.");
+        var stdout = $"""
+            {echoedBody}
+            WORKER_RESULT:
+            files: src/Feature/FeatureService.cs
+            commands: focused verification
+            tests: fail - assertion error at tests/Feature.Tests/FeatureServiceTests.cs:42
+            commit: none
+            blockers: exact-blocker - src/Feature/FeatureService.cs:7 contradicts criterion 3
+            model_fit: OpenAI/test - adequate - fixture
+            skills: verification-before-completion
+            confidence: high
+            END_WORKER_RESULT
+            """;
+        kernel.RecordTaskVerification(goal.Id, priorTask.Id, new TaskVerificationRecord(
+            "focused verification",
+            workingDirectory,
+            1,
+            stdout,
+            string.Empty,
+            DateTimeOffset.Parse("2026-01-01T00:02:00Z")));
+        goal = kernel.GetGoal(goal.Id);
+
+        var contextDirectory = WorkerContextArtifacts.Write(goal, currentTask, workingDirectory, ["profile valid"]);
+        var evidence = File.ReadAllText(Path.Combine(contextDirectory, "prior-task-evidence.md"));
+        var brief = new TaskBrief(
+            goal.Id,
+            currentTask.Id,
+            currentTask.RequiredRole,
+            currentTask.Description,
+            $"# Agent Task Brief{Environment.NewLine}Goal: {goal.Objective}{Environment.NewLine}Goal id: {goal.Id.Value}{Environment.NewLine}Task: {currentTask.Description}{Environment.NewLine}Task role: {currentTask.RequiredRole}{Environment.NewLine}## Instructions{Environment.NewLine}Review the projected prior evidence.");
+        var downstreamPrompt = WorkerContextPackageBuilder.Render(WorkerProfileDispatcher.BuildContextPackage(
+            goal,
+            currentTask,
+            workingDirectory,
+            contextDirectory,
+            brief));
+        var authoritative = goal.Tasks.Single(task => task.Id == priorTask.Id)
+            .LastVerification!.AuthoritativeStandardOutput;
+
+        Assert.False(
+            evidence.Contains(sentinel, StringComparison.Ordinal),
+            $"Expected replay sentinel to be absent; before_output_chars={stdout.Length}; after_output_chars={evidence.Length}.");
+        Assert.Contains("tests: fail - assertion error at tests/Feature.Tests/FeatureServiceTests.cs:42", evidence, StringComparison.Ordinal);
+        Assert.Contains("blockers: exact-blocker - src/Feature/FeatureService.cs:7 contradicts criterion 3", evidence, StringComparison.Ordinal);
+        Assert.Contains("validation=parsed", evidence, StringComparison.Ordinal);
+        Assert.DoesNotContain(sentinel, downstreamPrompt, StringComparison.Ordinal);
+        Assert.Contains("context/prior-task-evidence.md", downstreamPrompt, StringComparison.Ordinal);
+        Assert.Contains(sentinel, authoritative!, StringComparison.Ordinal);
+        output.WriteLine($"before_output_chars={stdout.Length}; after_output_chars={evidence.Length}; reduction_percent={(stdout.Length - evidence.Length) * 100.0 / stdout.Length:F2}; blocker_preserved=true; test_error_preserved=true; source_location_preserved=true; full_output_access=true");
+        Assert.True(
+            evidence.Length < stdout.Length / 10,
+            $"Expected at least 90% output reduction; before_output_chars={stdout.Length}; after_output_chars={evidence.Length}.");
     }
 
     [Xunit.Fact(DisplayName = "WorkerResultContractParser_findings_use_structured_blockers_token")]

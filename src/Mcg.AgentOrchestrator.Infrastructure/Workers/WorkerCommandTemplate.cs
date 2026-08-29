@@ -59,7 +59,8 @@ public static partial class WorkerCommandTemplate
             lines.Add($"Compatibility pointer (v1, hash-bound; resolve from authoritative task evidence): {pointer}");
             lines.Add(
                 $"MANDATORY READ: path={materializationPath}; identity={identity.Value}; " +
-                $"sha256={WorkerContextArtifact.Hash(authoritativeBytes)}; contract=v1.");
+                $"purpose=prior-worker-output; bytes={authoritativeBytes.Length}; sha256={WorkerContextArtifact.Hash(authoritativeBytes)}; contract=v1; validation=verified. " +
+                "The complete artifact remains readable at the path on demand; normally report only this receipt and exact source locations, not the artifact body.");
             lines.Add(string.Empty);
             lines.Add("---");
         }

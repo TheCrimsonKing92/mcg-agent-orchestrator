@@ -96,8 +96,8 @@ internal static class PromptContextFormatter
     public static string? BuildResponseBudgetGuidance(TaskComplexity complexity)
     {
         return complexity == TaskComplexity.Simple
-            ? "Keep the response concise: changed files, verification result, blockers or human input only; omit restated goals and generic progress."
-            : "Keep the response evidence-focused: summarize design or code changes, verification, risks, blockers, and human input; omit generic progress and long logs unless they change acceptance.";
+            ? "Keep the response concise: changed files, verification result, blockers or human input only; omit restated goals, generic progress, and supplied context artifact bodies. Use host-owned artifact receipts plus exact source locations instead."
+            : "Keep the response evidence-focused: summarize design or code changes, verification, risks, blockers, and human input; omit generic progress and long logs unless they change acceptance. Do not reproduce supplied context artifact bodies; use host-owned artifact receipts plus exact source locations while preserving complete blocker, test, error, and source evidence.";
     }
 
     private static string TrimBlock(string trimmed, int maxChars, int headChars, int tailChars)
