@@ -15,8 +15,8 @@ internal sealed record ReviewFindingContextProjection(
 
 internal static class ReviewFindingContextProjector
 {
-    private sealed record RoundSource(TaskSpec Task, TaskVerificationRecord Verification);
-    private sealed record FindingSource(TaskSpec Task, TaskVerificationRecord Verification, ReviewFinding Finding, ReviewFindingContentReference Round);
+    private sealed record RoundSource(TaskSpec Task, TaskVerificationRecord Verification, int HistoryIndex);
+    private sealed record FindingSource(TaskSpec Task, TaskVerificationRecord Verification, ReviewFinding Finding, ReviewFindingContentReference Round, int HistoryIndex);
     private sealed record CanonicalEntryProjection(CanonicalReviewFindingEntry Entry, string? FallbackReason);
 
     public static void AddArtifacts(
@@ -45,12 +45,15 @@ internal static class ReviewFindingContextProjector
     {
         ArgumentNullException.ThrowIfNull(goal);
         ArgumentNullException.ThrowIfNull(targetTask);
-        var rounds = goal.Tasks
-            .SelectMany(task => task.VerificationHistory.Select(verification => new RoundSource(task, verification)))
+        var roundCandidates = goal.Tasks
+            .SelectMany(task => task.VerificationHistory.Select((verification, historyIndex) => new RoundSource(task, verification, historyIndex)))
             .Where(source => (source.Verification.MergedReviewFindings?.Count ?? 0) > 0 ||
                              (source.Verification.FindingEvidenceReceipts?.Count ?? 0) > 0)
+            .ToArray();
+        var rounds = CollapseDuplicateRounds(roundCandidates)
             .OrderBy(source => source.Verification.CompletedAt)
             .ThenBy(source => source.Task.Id.Value, StringComparer.Ordinal)
+            .ThenBy(source => source.HistoryIndex)
             .ToArray();
         if (rounds.Length == 0)
         {
@@ -62,10 +65,9 @@ internal static class ReviewFindingContextProjector
 
         var receiptBodies = new Dictionary<string, ReviewFindingProjectedBody>(StringComparer.Ordinal);
         var receiptReferenceById = new Dictionary<string, ReviewFindingContentReference>(StringComparer.Ordinal);
-        var totalReceiptCount = 0;
+        var totalReceiptCount = roundCandidates.Sum(round => round.Verification.FindingEvidenceReceipts?.Count ?? 0);
         foreach (var receipt in rounds.SelectMany(round => round.Verification.FindingEvidenceReceipts ?? []))
         {
-            totalReceiptCount++;
             var bytes = JsonSerializer.SerializeToUtf8Bytes(receipt);
             var hash = WorkerContextArtifact.Hash(bytes);
             var reference = new ReviewFindingContentReference(hash, $"goal/review-finding-receipts/{hash}.json");
@@ -114,7 +116,7 @@ internal static class ReviewFindingContextProjector
 
         var findingSources = rounds.SelectMany(source =>
             (source.Verification.MergedReviewFindings ?? []).Select(finding =>
-                new FindingSource(source.Task, source.Verification, finding, roundReferenceBySource[source]))).ToArray();
+                new FindingSource(source.Task, source.Verification, finding, roundReferenceBySource[source], source.HistoryIndex))).ToArray();
         var entryProjections = findingSources
             .GroupBy(source => source.Finding.StableId, StringComparer.Ordinal)
             .Select(BuildCanonicalEntry)
@@ -142,7 +144,7 @@ internal static class ReviewFindingContextProjector
         var metrics = new ReviewFindingHistoryProjectionMetrics(
             mode,
             roundBodies.Count,
-            rounds.Length - roundBodies.Count,
+            roundCandidates.Length - roundBodies.Count,
             receiptBodies.Count,
             totalReceiptCount - receiptBodies.Count,
             fallbackReason);
@@ -192,12 +194,20 @@ internal static class ReviewFindingContextProjector
             .Select(source => Convert.ToBase64String(JsonSerializer.SerializeToUtf8Bytes(source.Finding)))
             .Distinct(StringComparer.Ordinal)
             .Count();
-        if (distinctLatest != 1)
+        var conflictingCandidates = latest
+            .Select(source => source.Verification.ReviewedCommit ?? string.Empty)
+            .Distinct(StringComparer.OrdinalIgnoreCase)
+            .Skip(1)
+            .Any();
+        if (distinctLatest != 1 || conflictingCandidates)
         {
             throw PreparationFailure("stable-identity-ambiguous", $"Stable finding '{group.Key}' has contradictory latest states at the same timestamp.");
         }
 
-        var selected = latest.OrderBy(source => source.Task.Id.Value, StringComparer.Ordinal).First();
+        var selected = latest
+            .OrderBy(source => source.Task.Id.Value, StringComparer.Ordinal)
+            .ThenBy(source => source.HistoryIndex)
+            .First();
         if (selected.Finding.State == ReviewFindingState.Resolved)
         {
             selected = FindResolvingSource(group);
@@ -360,7 +370,8 @@ internal static class ReviewFindingContextProjector
         FindingSource? resolving = null;
         foreach (var source in sources
                      .OrderBy(item => item.Verification.CompletedAt)
-                     .ThenBy(item => item.Task.Id.Value, StringComparer.Ordinal))
+                     .ThenBy(item => item.Task.Id.Value, StringComparer.Ordinal)
+                     .ThenBy(item => item.HistoryIndex))
         {
             if (source.Finding.State == ReviewFindingState.Open)
             {
@@ -382,6 +393,30 @@ internal static class ReviewFindingContextProjector
             verification.ExitCode.ToString(System.Globalization.CultureInfo.InvariantCulture),
             verification.CompletionVerdictRule ?? string.Empty,
             verification.ReviewFindingContractViolation?.Code ?? string.Empty)));
+
+    private static IReadOnlyList<RoundSource> CollapseDuplicateRounds(IEnumerable<RoundSource> sources)
+    {
+        var collapsed = new List<RoundSource>();
+        foreach (var source in sources.OrderBy(item => item.Task.Id.Value, StringComparer.Ordinal).ThenBy(item => item.HistoryIndex))
+        {
+            var existingIndex = collapsed.FindLastIndex(existing =>
+                existing.Task.Id == source.Task.Id &&
+                existing.Verification.HasSameRoundIdentity(source.Verification));
+            if (existingIndex >= 0)
+            {
+                collapsed[existingIndex] = source with
+                {
+                    Verification = collapsed[existingIndex].Verification.MergeSameRoundEnrichment(source.Verification)
+                };
+            }
+            else
+            {
+                collapsed.Add(source);
+            }
+        }
+
+        return collapsed;
+    }
 
     private static WorkerContextPreparationException PreparationFailure(string reason, string detail) =>
         new(new LogicalArtifactIdentity("goal/review-finding-history.json"), reason, detail);

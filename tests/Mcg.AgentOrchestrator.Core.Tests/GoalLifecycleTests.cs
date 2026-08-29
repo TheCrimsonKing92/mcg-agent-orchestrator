@@ -1,3 +1,4 @@
+using System.Text.Json;
 using Mcg.AgentOrchestrator.Core;
 
 public sealed class GoalLifecycleTests
@@ -1590,6 +1591,173 @@ static AgentDefinition TestAgent(string id, string name, AgentRole role) =>
     Assert.Equal("Run dotnet test after implementation.", restoredTask.VerificationPlan);
     Assert.Contains(restored.GetGoal(goal.Id).Timeline, evt => evt.TaskId == task.Id && evt.Kind == ProgressKind.TaskVerificationPlanUpdated);
 }
+
+    [Xunit.Fact(DisplayName = "Snapshot_roundtrip_does_not_duplicate_latest_verification_and_preserves_enrichment")]
+    public void SnapshotRoundtripDoesNotDuplicateLatestVerificationAndPreservesEnrichment()
+    {
+        var clock = new FakeClock();
+        var kernel = new AgentOrchestratorKernel(clock);
+        var reviewer = new TaskSpec(TaskId.New(), "Review the candidate.", AgentRole.Reviewer);
+        var goal = kernel.CreateGoal("Keep one durable verification round", [reviewer]);
+        var completedAt = DateTimeOffset.Parse("2026-08-29T10:52:21.2954854Z");
+        var request = new FindingEvidenceRequest(
+            [new FindingEvidenceSelection("Core.Tests", "GoalLifecycleTests")]);
+        var finding = new ReviewFinding(
+            "stable-round",
+            ReviewFindingState.Open,
+            new ReviewFindingLocation("src/Stable.cs", "Stable.Run"),
+            "Focused evidence is required.",
+            EvidenceRequest: request);
+        kernel.RecordTaskVerification(
+            goal.Id,
+            reviewer.Id,
+            new TaskVerificationRecord(
+                "review",
+                "C:\\repo",
+                0,
+                "pass",
+                string.Empty,
+                completedAt,
+                StandardOutputPath: "C:\\repo\\review.out.log",
+                StandardErrorPath: "C:\\repo\\review.err.log",
+                WorkerResultPresent: false,
+                ReviewedCommit: new string('a', 40),
+                MergedReviewFindings: [finding],
+                DispatchStartedAt: completedAt.AddMinutes(-1),
+                ChildProcessId: 1234,
+                ChildExitCode: 0,
+                FullStandardOutput: "pass",
+                FullStandardError: string.Empty));
+
+        for (var roundtrip = 0; roundtrip < 4; roundtrip++)
+        {
+            var json = JsonSerializer.Serialize(kernel.ExportSnapshot());
+            var snapshot = JsonSerializer.Deserialize<OrchestratorSnapshot>(json)!;
+            kernel = AgentOrchestratorKernel.FromSnapshot(snapshot, clock);
+            reviewer = kernel.GetTask(goal.Id, reviewer.Id);
+            Assert.Same(Assert.Single(reviewer.VerificationHistory), reviewer.LastVerification);
+        }
+
+        var receipt = new FindingEvidenceReceipt(
+            "receipt-stable-round",
+            new string('a', 40),
+            request,
+            Accepted: true,
+            Passed: true,
+            "focused evidence passed");
+        kernel.RecordFindingEvidenceOutcome(
+            goal.Id,
+            reviewer.Id,
+            finding.StableId,
+            new FindingEvidenceOutcome(true, receipt.ReceiptId, ResultReason: FindingEvidenceOutcomeReason.ValidEvidence),
+            receipt);
+        reviewer.RecordCompletionVerdict(true, "focused-evidence-passed");
+
+        for (var roundtrip = 0; roundtrip < 4; roundtrip++)
+        {
+            var json = JsonSerializer.Serialize(kernel.ExportSnapshot());
+            var snapshot = JsonSerializer.Deserialize<OrchestratorSnapshot>(json)!;
+            kernel = AgentOrchestratorKernel.FromSnapshot(snapshot, clock);
+            reviewer = kernel.GetTask(goal.Id, reviewer.Id);
+        }
+
+        var restoredVerification = Assert.Single(reviewer.VerificationHistory);
+        Assert.Same(restoredVerification, reviewer.LastVerification);
+        Assert.True(restoredVerification.CompletionVerdictVerifiedSuccess);
+        Assert.Equal("focused-evidence-passed", restoredVerification.CompletionVerdictRule);
+        Assert.Equal(receipt.ReceiptId, Assert.Single(restoredVerification.MergedReviewFindings!).EvidenceOutcome?.ReceiptId);
+        Assert.Equal(receipt.ReceiptId, Assert.Single(restoredVerification.FindingEvidenceReceipts!).ReceiptId);
+    }
+
+    [Xunit.Fact(DisplayName = "Snapshot_restore_collapses_legacy_duplicates_without_erasing_enriched_copy")]
+    public void SnapshotRestoreCollapsesLegacyDuplicatesWithoutErasingEnrichedCopy()
+    {
+        var clock = new FakeClock();
+        var kernel = new AgentOrchestratorKernel(clock);
+        var reviewer = new TaskSpec(TaskId.New(), "Review the candidate.", AgentRole.Reviewer);
+        var goal = kernel.CreateGoal("Repair legacy verification duplicates", [reviewer]);
+        var completedAt = DateTimeOffset.Parse("2026-08-29T10:52:21.2954854Z");
+        var candidateSha = new string('b', 40);
+        var request = new FindingEvidenceRequest(
+            [new FindingEvidenceSelection("Core.Tests", "GoalLifecycleTests")]);
+        var finding = new ReviewFinding(
+            "legacy-stable-round",
+            ReviewFindingState.Open,
+            new ReviewFindingLocation("src/Legacy.cs", "Legacy.Run"),
+            "Focused evidence is required.",
+            EvidenceRequest: request);
+        var receipt = new FindingEvidenceReceipt(
+            "receipt-legacy-stable-round",
+            candidateSha,
+            request,
+            Accepted: true,
+            Passed: true,
+            "focused evidence passed");
+        kernel.RecordTaskVerification(
+            goal.Id,
+            reviewer.Id,
+            new TaskVerificationRecord(
+                "review",
+                "C:\\repo",
+                0,
+                "pass",
+                string.Empty,
+                completedAt,
+                StandardOutputPath: "C:\\repo\\legacy.out.log",
+                StandardErrorPath: "C:\\repo\\legacy.err.log",
+                ReviewedCommit: candidateSha,
+                MergedReviewFindings: [finding],
+                DispatchStartedAt: completedAt.AddMinutes(-1),
+                ChildProcessId: 5678,
+                ChildExitCode: 0,
+                FullStandardOutput: "pass",
+                FullStandardError: string.Empty));
+        kernel.RecordFindingEvidenceOutcome(
+            goal.Id,
+            reviewer.Id,
+            finding.StableId,
+            new FindingEvidenceOutcome(true, receipt.ReceiptId, ResultReason: FindingEvidenceOutcomeReason.ValidEvidence),
+            receipt);
+        reviewer.RecordCompletionVerdict(true, "focused-evidence-passed");
+
+        var exported = kernel.ExportSnapshot();
+        var goalSnapshot = Assert.Single(exported.Goals);
+        var taskSnapshot = Assert.Single(goalSnapshot.Tasks);
+        var enriched = Assert.IsType<TaskVerificationSnapshot>(taskSnapshot.LastVerification);
+        var plain = enriched with
+        {
+            MergedReviewFindings = enriched.MergedReviewFindings!
+                .Select(item => item with { EvidenceOutcome = null })
+                .ToArray(),
+            FindingEvidenceReceipts = null,
+            CompletionVerdictVerifiedSuccess = false,
+            CompletionVerdictRule = null
+        };
+        var corruptHistory = Enumerable.Repeat(plain, 10).ToArray();
+        corruptHistory[3] = enriched;
+        var corruptTask = taskSnapshot with
+        {
+            LastVerification = plain,
+            VerificationHistory = corruptHistory
+        };
+        var corruptSnapshot = exported with
+        {
+            Goals = [goalSnapshot with { Tasks = [corruptTask] }]
+        };
+        var json = JsonSerializer.Serialize(corruptSnapshot);
+
+        var restored = AgentOrchestratorKernel.FromSnapshot(
+            JsonSerializer.Deserialize<OrchestratorSnapshot>(json)!,
+            clock);
+
+        var restoredReviewer = restored.GetTask(goal.Id, reviewer.Id);
+        var restoredVerification = Assert.Single(restoredReviewer.VerificationHistory);
+        Assert.Same(restoredVerification, restoredReviewer.LastVerification);
+        Assert.True(restoredVerification.CompletionVerdictVerifiedSuccess);
+        Assert.Equal("focused-evidence-passed", restoredVerification.CompletionVerdictRule);
+        Assert.Equal(receipt.ReceiptId, Assert.Single(restoredVerification.MergedReviewFindings!).EvidenceOutcome?.ReceiptId);
+        Assert.Equal(receipt.ReceiptId, Assert.Single(restoredVerification.FindingEvidenceReceipts!).ReceiptId);
+    }
 
     [Xunit.Fact(DisplayName = "Snapshot_roundtrip_preserves_criterion_retry_state")]
     public void SnapshotRoundtripPreservesCriterionRetryState()
