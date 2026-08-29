@@ -1,7 +1,70 @@
+using System.Text.Json;
 using Mcg.AgentOrchestrator.Core;
 
 public sealed class GoalLifecycleTests
 {
+    [Xunit.Fact(DisplayName = "RetryTask_requires_an_explicit_typed_cause")]
+    public void RetryTaskRequiresExplicitTypedCause()
+    {
+        var retryTask = typeof(AgentOrchestratorKernel)
+            .GetMethods()
+            .Single(method => method.Name == nameof(AgentOrchestratorKernel.RetryTask));
+        var retryCause = retryTask.GetParameters().Single(parameter => parameter.Name == "retryCause");
+
+        Assert.False(
+            retryCause.HasDefaultValue,
+            "RetryTask.retryCause must be required so a caller cannot silently classify a retry as Unknown.");
+    }
+
+    [Xunit.Theory(DisplayName = "RetryTask_persists_each_supported_typed_cause")]
+    [Xunit.InlineData(RetryCause.NewSourceFinding)]
+    [Xunit.InlineData(RetryCause.NewTestFinding)]
+    [Xunit.InlineData(RetryCause.CriterionEvidenceOwnerMismatch)]
+    [Xunit.InlineData(RetryCause.EnvironmentApparatusFailure)]
+    [Xunit.InlineData(RetryCause.ContractClarification)]
+    [Xunit.InlineData(RetryCause.MainDriftConflict)]
+    [Xunit.InlineData(RetryCause.ProviderInterruption)]
+    [Xunit.InlineData(RetryCause.UnchangedContextRepeat)]
+    [Xunit.InlineData(RetryCause.Unknown)]
+    public void RetryTaskPersistsEachSupportedTypedCause(RetryCause retryCause)
+    {
+        var kernel = new AgentOrchestratorKernel(new FakeClock());
+        var goal = kernel.CreateGoal(
+            "Persist a classified retry cause",
+            [new TaskSpec(TaskId.New(), "Implement", AgentRole.Developer)]);
+        kernel.ActivateGoal(goal.Id, DefaultAgents());
+        var task = goal.Tasks.Single();
+
+        kernel.RetryTask(goal.Id, task.Id, "Retry with a classified cause.", retryCause);
+
+        Assert.Equal(retryCause, task.PendingRetryCause);
+    }
+
+    [Xunit.Fact(DisplayName = "RetryTask_persists_explicit_Unknown_for_an_unclassified_operator_retry")]
+    public void RetryTaskPersistsExplicitUnknownForAnUnclassifiedOperatorRetry()
+    {
+        var kernel = new AgentOrchestratorKernel(new FakeClock());
+        var goal = kernel.CreateGoal(
+            "Reject an unclassified retry",
+            [new TaskSpec(TaskId.New(), "Implement", AgentRole.Developer)]);
+        kernel.ActivateGoal(goal.Id, DefaultAgents());
+        var task = goal.Tasks.Single();
+
+        kernel.RetryTask(goal.Id, task.Id, "Retry without an available classification.", RetryCause.Unknown);
+
+        Assert.Equal(RetryCause.Unknown, task.PendingRetryCause);
+    }
+
+    [Xunit.Fact(DisplayName = "TaskSpec_retry_transition_preserves_explicit_Unknown_history")]
+    public void TaskSpecRetryTransitionPreservesExplicitUnknownHistory()
+    {
+        var task = new TaskSpec(TaskId.New(), "Implement", AgentRole.Developer);
+
+        task.RecordRetry(DateTimeOffset.Parse("2026-08-25T12:00:00Z"), RetryCause.Unknown);
+
+        Assert.Equal(RetryCause.Unknown, task.PendingRetryCause);
+    }
+
     [Xunit.Fact(DisplayName = "GoalLifecycle_identifies_active_goal_with_failed_task")]
     public void GoalLifecycleIdentifiesActiveGoalWithFailedTask()
     {
@@ -668,8 +731,8 @@ public sealed class GoalLifecycleTests
         evt.Message.Contains("invalidated before redispatch", StringComparison.Ordinal));
 }
 
-    [Xunit.Fact(DisplayName = "RetryTask_on_an_AcceptanceFailed_goal_clears_gate_failure_and_redispatches")]
-    public void RetryTaskOnAcceptanceFailedGoalClearsGateFailureAndRedispatches()
+    [Xunit.Fact]
+    public void RetryTaskOnAcceptanceFailedGoalDefersCurrentFailureButRetainsRetryContext()
 {
     var kernel = new AgentOrchestratorKernel();
     var goal = kernel.CreateGoal("Retry failed acceptance", [new TaskSpec(TaskId.New(), "Implement fix", AgentRole.Developer)]);
@@ -686,8 +749,13 @@ public sealed class GoalLifecycleTests
 
     Assert.Equal(GoalStatus.Active, goal.Status);
     Assert.Null(goal.LatestAcceptanceFailure);
+    Assert.NotNull(goal.RetainedAcceptanceFailure);
     Assert.Equal(WorkTaskStatus.Assigned, goal.Tasks.Single().Status);
     Assert.Equal(GoalLifecycleState.WorkspaceReady, GoalLifecycle.ResolveState(goal, new GoalLifecycleFacts(WorkspaceExists: true)));
+
+    var restoredGoal = AgentOrchestratorKernel.FromSnapshot(kernel.ExportSnapshot()).GetGoal(goal.Id);
+    Assert.Null(restoredGoal.LatestAcceptanceFailure);
+    Assert.NotNull(restoredGoal.RetainedAcceptanceFailure);
 }
 
     [Xunit.Fact(DisplayName = "RetryTask_invalidates_downstream_completed_tasks_and_current_gate_evidence")]
@@ -709,12 +777,19 @@ public sealed class GoalLifecycleTests
     CompleteWithVerification(kernel, goal, reviewer, "reviewer passed");
     Assert.Equal(GoalStatus.Verified, goal.Status);
 
-    kernel.RetryTask(goal.Id, developer.Id, "Developer output needs revision.");
+    kernel.RetryTask(
+        goal.Id,
+        developer.Id,
+        "Developer output needs revision.",
+        retryCause: RetryCause.NewSourceFinding);
 
     Assert.Equal(GoalStatus.Active, goal.Status);
     Assert.Equal(WorkTaskStatus.Assigned, developer.Status);
     Assert.Equal(WorkTaskStatus.Assigned, tester.Status);
     Assert.Equal(WorkTaskStatus.Assigned, reviewer.Status);
+    Assert.Equal(RetryCause.NewSourceFinding, developer.PendingRetryCause);
+    Assert.Equal(RetryCause.NewSourceFinding, tester.PendingRetryCause);
+    Assert.Equal(RetryCause.NewSourceFinding, reviewer.PendingRetryCause);
     Assert.Null(developer.LastVerification);
     Assert.Null(tester.LastVerification);
     Assert.Null(reviewer.LastVerification);
@@ -945,7 +1020,12 @@ public sealed class GoalLifecycleTests
             developer.Id,
             new TaskDispatchRecord("Developer", "worker", "C:\\repo", DateTimeOffset.UtcNow));
         kernel.RecordDispatchResultCommit(goal.Id, developer.Id, "bbb222");
-        kernel.RequeueInterruptedDispatch(goal.Id, developer.Id, "Retry the interrupted changed attempt.");
+        kernel.RequeueInterruptedDispatch(
+            goal.Id,
+            developer.Id,
+            "Retry the progressively steered changed attempt.",
+            RetryCause.ContractClarification);
+        Assert.Equal(RetryCause.ContractClarification, developer.PendingRetryCause);
         CompleteCandidateDispatch(kernel, goal, developer, "bbb222", "bbb222");
 
         Assert.Equal(WorkTaskStatus.Assigned, tester.Status);
@@ -1085,6 +1165,168 @@ public sealed class GoalLifecycleTests
             evt.TaskId == tester.Id &&
             evt.Kind == ProgressKind.TaskRetried &&
             evt.Message.Contains("result unknown; status Cancelled", StringComparison.Ordinal));
+    }
+
+    [Xunit.Fact]
+    public void CancelledUnchangedRetryPreservesDownstreamAndAcceptanceFailure()
+    {
+        var clock = new FakeClock();
+        var kernel = new AgentOrchestratorKernel(clock);
+        var goal = kernel.CreateGoal("Cancel a proven unchanged retry",
+            [
+                new TaskSpec(TaskId.New(), "Implement fix", AgentRole.Developer),
+                new TaskSpec(TaskId.New(), "Test fix", AgentRole.Tester),
+                new TaskSpec(TaskId.New(), "Review fix", AgentRole.Reviewer)
+            ]);
+        kernel.ActivateGoal(goal.Id, DefaultAgents());
+        var developer = goal.Tasks.Single(task => task.RequiredRole == AgentRole.Developer);
+        var tester = goal.Tasks.Single(task => task.RequiredRole == AgentRole.Tester);
+        var reviewer = goal.Tasks.Single(task => task.RequiredRole == AgentRole.Reviewer);
+        CompleteCandidateDispatch(kernel, goal, developer, "aaa111", "aaa111");
+        CompleteCandidateDispatch(kernel, goal, tester, "aaa111", "aaa111");
+        CompleteCandidateDispatch(kernel, goal, reviewer, "aaa111", "aaa111");
+        var testerVerification = tester.LastVerification;
+        var reviewerVerification = reviewer.LastVerification;
+        kernel.BeginGoalAcceptanceVerification(goal.Id, "gate launched");
+        kernel.ReconcileGoalAcceptanceFailed(goal.Id, ["Acceptance.Failed"], "candidate-independent apparatus failure");
+        var acceptanceFailure = goal.LatestAcceptanceFailure;
+
+        kernel.RetryTask(goal.Id, developer.Id, "Inspect the unchanged candidate.");
+        kernel.RecordTaskDispatch(
+            goal.Id,
+            developer.Id,
+            new TaskDispatchRecord(
+                "Developer",
+                "worker",
+                "C:\\repo",
+                clock.UtcNow,
+                BaseCommit: "aaa111",
+                WorktreeHeadSha: "aaa111",
+                DirtyStateHash: "empty-status-hash"));
+        var started = new TaskProcessRecord(
+            1234, "worker", "C:\\repo", "out.log", "err.log", "exit.txt", clock.UtcNow, null, null);
+        kernel.RecordTaskProcessStarted(goal.Id, developer.Id, started);
+
+        kernel.RecordTaskProcessCancelled(
+            goal.Id,
+            developer.Id,
+            started with { CompletedAt = clock.UtcNow, WasCancelled = true },
+            CancellationCandidateEvidence.ConfirmedUnchanged("aaa111", "head=aaa111; worktree=clean; commits_after_dispatch=0"));
+
+        Assert.Equal("aaa111", developer.LastDispatch!.ResultCommit);
+        Assert.Equal(WorkTaskStatus.Completed, tester.Status);
+        Assert.Equal(WorkTaskStatus.Completed, reviewer.Status);
+        Assert.Same(testerVerification, tester.LastVerification);
+        Assert.Same(reviewerVerification, reviewer.LastVerification);
+        Assert.Same(acceptanceFailure, goal.LatestAcceptanceFailure);
+        Assert.Contains(goal.Timeline, evt =>
+            evt.TaskId == developer.Id &&
+            evt.Kind == ProgressKind.TaskNote &&
+            evt.Message.Contains("kind=ConfirmedUnchanged", StringComparison.Ordinal) &&
+            evt.Message.Contains("candidate=aaa111", StringComparison.Ordinal));
+    }
+
+    [Xunit.Theory]
+    [Xunit.InlineData(CancellationCandidateEvidenceKind.Dirty)]
+    [Xunit.InlineData(CancellationCandidateEvidenceKind.Changed)]
+    [Xunit.InlineData(CancellationCandidateEvidenceKind.Unsafe)]
+    [Xunit.InlineData(CancellationCandidateEvidenceKind.Unavailable)]
+    public void CancelledRetryWithoutPositiveProofInvalidatesDownstream(
+        CancellationCandidateEvidenceKind kind)
+    {
+        var clock = new FakeClock();
+        var kernel = new AgentOrchestratorKernel(clock);
+        var goal = kernel.CreateGoal("Cancel a retry without positive proof",
+            [
+                new TaskSpec(TaskId.New(), "Implement fix", AgentRole.Developer),
+                new TaskSpec(TaskId.New(), "Test fix", AgentRole.Tester)
+            ]);
+        kernel.ActivateGoal(goal.Id, DefaultAgents());
+        var developer = goal.Tasks.Single(task => task.RequiredRole == AgentRole.Developer);
+        var tester = goal.Tasks.Single(task => task.RequiredRole == AgentRole.Tester);
+        CompleteCandidateDispatch(kernel, goal, developer, "aaa111", "aaa111");
+        CompleteCandidateDispatch(kernel, goal, tester, "aaa111", "aaa111");
+        kernel.BeginGoalAcceptanceVerification(goal.Id, "gate launched");
+        kernel.ReconcileGoalAcceptanceFailed(goal.Id, ["Acceptance.Failed"], "candidate-specific failure");
+        var acceptanceFailure = goal.LatestAcceptanceFailure;
+        kernel.RetryTask(goal.Id, developer.Id, "Inspect the candidate.");
+        kernel.RecordTaskDispatch(
+            goal.Id,
+            developer.Id,
+            new TaskDispatchRecord(
+                "Developer", "worker", "C:\\repo", clock.UtcNow,
+                BaseCommit: "aaa111", WorktreeHeadSha: "aaa111", DirtyStateHash: "empty-status-hash"));
+        var started = new TaskProcessRecord(
+            1234, "worker", "C:\\repo", "out.log", "err.log", "exit.txt", clock.UtcNow, null, null);
+        kernel.RecordTaskProcessStarted(goal.Id, developer.Id, started);
+        var evidence = kind switch
+        {
+            CancellationCandidateEvidenceKind.Dirty => CancellationCandidateEvidence.Dirty("aaa111", "dirty paths", "status_short=M file.cs"),
+            CancellationCandidateEvidenceKind.Changed => CancellationCandidateEvidence.Changed("bbb222", "head changed", "head=bbb222"),
+            CancellationCandidateEvidenceKind.Unsafe => CancellationCandidateEvidence.Unsafe("branch-mismatch", "expected=goal; actual=main"),
+            CancellationCandidateEvidenceKind.Unavailable => CancellationCandidateEvidence.Unavailable("git-inspection-failed", "exit_code=1"),
+            _ => throw new InvalidOperationException()
+        };
+
+        kernel.RecordTaskProcessCancelled(
+            goal.Id,
+            developer.Id,
+            started with { CompletedAt = clock.UtcNow, WasCancelled = true },
+            evidence);
+
+        Assert.Equal(WorkTaskStatus.Assigned, tester.Status);
+        Assert.Null(tester.LastVerification);
+        Assert.Same(acceptanceFailure, goal.LatestAcceptanceFailure);
+        var restoredGoal = AgentOrchestratorKernel.FromSnapshot(kernel.ExportSnapshot()).GetGoal(goal.Id);
+        Assert.NotNull(restoredGoal.LatestAcceptanceFailure);
+        Assert.Equal(acceptanceFailure!.FailedChecks, restoredGoal.LatestAcceptanceFailure!.FailedChecks);
+        Assert.Contains(goal.Timeline, evt =>
+            evt.TaskId == developer.Id &&
+            evt.Kind == ProgressKind.TaskNote &&
+            evt.Message.Contains($"kind={kind}", StringComparison.Ordinal) &&
+            evt.Message.Contains(evidence.Reason, StringComparison.Ordinal));
+    }
+
+    [Xunit.Fact]
+    public void ConductorCancelledDirtyRetryRetainsAcceptanceFailure()
+    {
+        var clock = new FakeClock();
+        var kernel = new AgentOrchestratorKernel(clock);
+        var goal = kernel.CreateGoal("Detach a dirty retry during conductor handoff",
+            [new TaskSpec(TaskId.New(), "Implement fix", AgentRole.Developer)]);
+        kernel.ActivateGoal(goal.Id, DefaultAgents());
+        var developer = goal.Tasks.Single();
+        CompleteCandidateDispatch(kernel, goal, developer, "aaa111", "aaa111");
+        kernel.BeginGoalAcceptanceVerification(goal.Id, "gate launched");
+        kernel.ReconcileGoalAcceptanceFailed(goal.Id, ["Acceptance.Failed"], "candidate-specific failure");
+        var acceptanceFailure = goal.LatestAcceptanceFailure;
+        kernel.RetryTask(goal.Id, developer.Id, "Resume after conductor handoff.");
+        kernel.RecordTaskDispatch(
+            goal.Id,
+            developer.Id,
+            new TaskDispatchRecord(
+                "Developer", "worker", "C:\\repo", clock.UtcNow,
+                BaseCommit: "aaa111", WorktreeHeadSha: "aaa111", DirtyStateHash: "empty-status-hash"));
+        var started = new TaskProcessRecord(
+            1234, "worker", "C:\\repo", "out.log", "err.log", "exit.txt", clock.UtcNow, null, null);
+        kernel.RecordTaskProcessStarted(goal.Id, developer.Id, started);
+
+        kernel.RecordTaskProcessCancelled(
+            goal.Id,
+            developer.Id,
+            started with
+            {
+                CompletedAt = clock.UtcNow,
+                WasCancelled = true,
+                WasCancelledByConductor = true
+            },
+            CancellationCandidateEvidence.Dirty("aaa111", "dirty paths", "status_short=M file.cs"));
+
+        Assert.Same(acceptanceFailure, goal.LatestAcceptanceFailure);
+        Assert.Contains(goal.Timeline, evt =>
+            evt.TaskId == developer.Id &&
+            evt.Kind == ProgressKind.TaskNote &&
+            evt.Message.Contains("kind=Dirty", StringComparison.Ordinal));
     }
 
     [Xunit.Fact]
@@ -1349,6 +1591,173 @@ static AgentDefinition TestAgent(string id, string name, AgentRole role) =>
     Assert.Equal("Run dotnet test after implementation.", restoredTask.VerificationPlan);
     Assert.Contains(restored.GetGoal(goal.Id).Timeline, evt => evt.TaskId == task.Id && evt.Kind == ProgressKind.TaskVerificationPlanUpdated);
 }
+
+    [Xunit.Fact(DisplayName = "Snapshot_roundtrip_does_not_duplicate_latest_verification_and_preserves_enrichment")]
+    public void SnapshotRoundtripDoesNotDuplicateLatestVerificationAndPreservesEnrichment()
+    {
+        var clock = new FakeClock();
+        var kernel = new AgentOrchestratorKernel(clock);
+        var reviewer = new TaskSpec(TaskId.New(), "Review the candidate.", AgentRole.Reviewer);
+        var goal = kernel.CreateGoal("Keep one durable verification round", [reviewer]);
+        var completedAt = DateTimeOffset.Parse("2026-08-29T10:52:21.2954854Z");
+        var request = new FindingEvidenceRequest(
+            [new FindingEvidenceSelection("Core.Tests", "GoalLifecycleTests")]);
+        var finding = new ReviewFinding(
+            "stable-round",
+            ReviewFindingState.Open,
+            new ReviewFindingLocation("src/Stable.cs", "Stable.Run"),
+            "Focused evidence is required.",
+            EvidenceRequest: request);
+        kernel.RecordTaskVerification(
+            goal.Id,
+            reviewer.Id,
+            new TaskVerificationRecord(
+                "review",
+                "C:\\repo",
+                0,
+                "pass",
+                string.Empty,
+                completedAt,
+                StandardOutputPath: "C:\\repo\\review.out.log",
+                StandardErrorPath: "C:\\repo\\review.err.log",
+                WorkerResultPresent: false,
+                ReviewedCommit: new string('a', 40),
+                MergedReviewFindings: [finding],
+                DispatchStartedAt: completedAt.AddMinutes(-1),
+                ChildProcessId: 1234,
+                ChildExitCode: 0,
+                FullStandardOutput: "pass",
+                FullStandardError: string.Empty));
+
+        for (var roundtrip = 0; roundtrip < 4; roundtrip++)
+        {
+            var json = JsonSerializer.Serialize(kernel.ExportSnapshot());
+            var snapshot = JsonSerializer.Deserialize<OrchestratorSnapshot>(json)!;
+            kernel = AgentOrchestratorKernel.FromSnapshot(snapshot, clock);
+            reviewer = kernel.GetTask(goal.Id, reviewer.Id);
+            Assert.Same(Assert.Single(reviewer.VerificationHistory), reviewer.LastVerification);
+        }
+
+        var receipt = new FindingEvidenceReceipt(
+            "receipt-stable-round",
+            new string('a', 40),
+            request,
+            Accepted: true,
+            Passed: true,
+            "focused evidence passed");
+        kernel.RecordFindingEvidenceOutcome(
+            goal.Id,
+            reviewer.Id,
+            finding.StableId,
+            new FindingEvidenceOutcome(true, receipt.ReceiptId, ResultReason: FindingEvidenceOutcomeReason.ValidEvidence),
+            receipt);
+        reviewer.RecordCompletionVerdict(true, "focused-evidence-passed");
+
+        for (var roundtrip = 0; roundtrip < 4; roundtrip++)
+        {
+            var json = JsonSerializer.Serialize(kernel.ExportSnapshot());
+            var snapshot = JsonSerializer.Deserialize<OrchestratorSnapshot>(json)!;
+            kernel = AgentOrchestratorKernel.FromSnapshot(snapshot, clock);
+            reviewer = kernel.GetTask(goal.Id, reviewer.Id);
+        }
+
+        var restoredVerification = Assert.Single(reviewer.VerificationHistory);
+        Assert.Same(restoredVerification, reviewer.LastVerification);
+        Assert.True(restoredVerification.CompletionVerdictVerifiedSuccess);
+        Assert.Equal("focused-evidence-passed", restoredVerification.CompletionVerdictRule);
+        Assert.Equal(receipt.ReceiptId, Assert.Single(restoredVerification.MergedReviewFindings!).EvidenceOutcome?.ReceiptId);
+        Assert.Equal(receipt.ReceiptId, Assert.Single(restoredVerification.FindingEvidenceReceipts!).ReceiptId);
+    }
+
+    [Xunit.Fact(DisplayName = "Snapshot_restore_collapses_legacy_duplicates_without_erasing_enriched_copy")]
+    public void SnapshotRestoreCollapsesLegacyDuplicatesWithoutErasingEnrichedCopy()
+    {
+        var clock = new FakeClock();
+        var kernel = new AgentOrchestratorKernel(clock);
+        var reviewer = new TaskSpec(TaskId.New(), "Review the candidate.", AgentRole.Reviewer);
+        var goal = kernel.CreateGoal("Repair legacy verification duplicates", [reviewer]);
+        var completedAt = DateTimeOffset.Parse("2026-08-29T10:52:21.2954854Z");
+        var candidateSha = new string('b', 40);
+        var request = new FindingEvidenceRequest(
+            [new FindingEvidenceSelection("Core.Tests", "GoalLifecycleTests")]);
+        var finding = new ReviewFinding(
+            "legacy-stable-round",
+            ReviewFindingState.Open,
+            new ReviewFindingLocation("src/Legacy.cs", "Legacy.Run"),
+            "Focused evidence is required.",
+            EvidenceRequest: request);
+        var receipt = new FindingEvidenceReceipt(
+            "receipt-legacy-stable-round",
+            candidateSha,
+            request,
+            Accepted: true,
+            Passed: true,
+            "focused evidence passed");
+        kernel.RecordTaskVerification(
+            goal.Id,
+            reviewer.Id,
+            new TaskVerificationRecord(
+                "review",
+                "C:\\repo",
+                0,
+                "pass",
+                string.Empty,
+                completedAt,
+                StandardOutputPath: "C:\\repo\\legacy.out.log",
+                StandardErrorPath: "C:\\repo\\legacy.err.log",
+                ReviewedCommit: candidateSha,
+                MergedReviewFindings: [finding],
+                DispatchStartedAt: completedAt.AddMinutes(-1),
+                ChildProcessId: 5678,
+                ChildExitCode: 0,
+                FullStandardOutput: "pass",
+                FullStandardError: string.Empty));
+        kernel.RecordFindingEvidenceOutcome(
+            goal.Id,
+            reviewer.Id,
+            finding.StableId,
+            new FindingEvidenceOutcome(true, receipt.ReceiptId, ResultReason: FindingEvidenceOutcomeReason.ValidEvidence),
+            receipt);
+        reviewer.RecordCompletionVerdict(true, "focused-evidence-passed");
+
+        var exported = kernel.ExportSnapshot();
+        var goalSnapshot = Assert.Single(exported.Goals);
+        var taskSnapshot = Assert.Single(goalSnapshot.Tasks);
+        var enriched = Assert.IsType<TaskVerificationSnapshot>(taskSnapshot.LastVerification);
+        var plain = enriched with
+        {
+            MergedReviewFindings = enriched.MergedReviewFindings!
+                .Select(item => item with { EvidenceOutcome = null })
+                .ToArray(),
+            FindingEvidenceReceipts = null,
+            CompletionVerdictVerifiedSuccess = false,
+            CompletionVerdictRule = null
+        };
+        var corruptHistory = Enumerable.Repeat(plain, 10).ToArray();
+        corruptHistory[3] = enriched;
+        var corruptTask = taskSnapshot with
+        {
+            LastVerification = plain,
+            VerificationHistory = corruptHistory
+        };
+        var corruptSnapshot = exported with
+        {
+            Goals = [goalSnapshot with { Tasks = [corruptTask] }]
+        };
+        var json = JsonSerializer.Serialize(corruptSnapshot);
+
+        var restored = AgentOrchestratorKernel.FromSnapshot(
+            JsonSerializer.Deserialize<OrchestratorSnapshot>(json)!,
+            clock);
+
+        var restoredReviewer = restored.GetTask(goal.Id, reviewer.Id);
+        var restoredVerification = Assert.Single(restoredReviewer.VerificationHistory);
+        Assert.Same(restoredVerification, restoredReviewer.LastVerification);
+        Assert.True(restoredVerification.CompletionVerdictVerifiedSuccess);
+        Assert.Equal("focused-evidence-passed", restoredVerification.CompletionVerdictRule);
+        Assert.Equal(receipt.ReceiptId, Assert.Single(restoredVerification.MergedReviewFindings!).EvidenceOutcome?.ReceiptId);
+        Assert.Equal(receipt.ReceiptId, Assert.Single(restoredVerification.FindingEvidenceReceipts!).ReceiptId);
+    }
 
     [Xunit.Fact(DisplayName = "Snapshot_roundtrip_preserves_criterion_retry_state")]
     public void SnapshotRoundtripPreservesCriterionRetryState()

@@ -61,7 +61,7 @@ public sealed class DispatchWorktreeCommitterTests
                 return string.Join(' ', arguments) switch
                 {
                     "branch --show-current" => Success(branch),
-                    "rev-parse --short HEAD" => Success("abc1234"),
+                    "rev-parse HEAD" => Success("abc1234567890abc1234567890abc1234567890abc"),
                     "status --short --untracked-files=all" => Success(" M src/Feature.cs\n"),
                     var command when command.StartsWith("log --format=%H --since=", StringComparison.Ordinal) =>
                         Success(),
@@ -79,6 +79,7 @@ public sealed class DispatchWorktreeCommitterTests
             DateTimeOffset.Parse("2026-08-22T12:00:00Z"));
 
         Xunit.Assert.True(inspection.IsAvailable, inspection.GitReceipt);
+        Xunit.Assert.Equal("abc1234567890abc1234567890abc1234567890abc", inspection.Evidence.Head);
         Xunit.Assert.False(inspection.Evidence.IsClean);
         Xunit.Assert.Equal("dirty", inspection.Evidence.WorktreeStatus);
         Xunit.Assert.Equal("M src/Feature.cs", inspection.Evidence.StatusShort);

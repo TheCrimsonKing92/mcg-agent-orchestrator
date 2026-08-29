@@ -422,6 +422,7 @@ public sealed partial class AgentOrchestratorKernel
         GoalId goalId,
         TaskId taskId,
         string message,
+        RetryCause retryCause,
         bool invalidateDownstream = true,
         RetryRoundKind? retryRoundKind = null)
     {
@@ -451,12 +452,12 @@ public sealed partial class AgentOrchestratorKernel
 
         var retryAt = _clock.UtcNow;
         var priorCandidate = task.LastDispatch?.ResultCommit;
-        ResetTaskForRetry(task, retryAt, retryRoundKind);
+        ResetTaskForRetry(task, retryAt, retryCause, retryRoundKind);
         RecordEffectiveAcceptanceCriteriaCorrections(goal, taskId, ProgressKind.TaskRetried, retryMessage);
         Append(goal, taskId, ProgressKind.TaskRetried, retryMessage);
         if (invalidateDownstream)
         {
-            InvalidateDownstreamTasks(goal, task, retryAt, priorCandidate);
+            InvalidateDownstreamTasks(goal, task, retryAt, priorCandidate, retryCause);
         }
         ReopenAcceptanceFailedGoalWithRetry(goal, task, $"Retry cleared failed acceptance gate because task {task.Id.Value[..8]} is dispatchable.");
         ReopenTerminalGoalWithNonTerminalTasks(goal, $"Retry reopened goal because task {task.Id.Value[..8]} is dispatchable.");
@@ -610,6 +611,7 @@ public sealed partial class AgentOrchestratorKernel
         GoalId goalId,
         TaskId taskId,
         string message,
+        RetryCause retryCause,
         string? interruptedDispatchId = null)
     {
         var goal = GetGoal(goalId);
@@ -631,7 +633,7 @@ public sealed partial class AgentOrchestratorKernel
         task.ClearLastDispatch();
         task.ClearLastProcess();
         task.ClearSubscriptionRetryAfter();
-        task.RecordRetry(_clock.UtcNow);
+        task.RecordRetry(_clock.UtcNow, retryCause);
         task.SetInterruptedDispatchRecovery(interruptedDispatchId);
         task.SetStatus(task.AssignedAgentId is null ? WorkTaskStatus.Pending : WorkTaskStatus.Assigned);
         Append(goal, taskId, ProgressKind.TaskRetried, retryMessage);
@@ -702,10 +704,14 @@ public sealed partial class AgentOrchestratorKernel
             throw new ArgumentException("Acceptance retry reason cannot be empty.", nameof(operatorReason));
         }
 
-        if (goal.Status != GoalStatus.AcceptanceFailed)
+        var isVerifiedApparatusHold =
+            goal.Status == GoalStatus.Verified &&
+            goal.LatestAcceptanceFailure is { IsEnvironmentalApparatus: true };
+        if (goal.Status != GoalStatus.AcceptanceFailed && !isVerifiedApparatusHold)
         {
             throw new InvalidOperationException(
-                $"Goal '{goal.Id.Value[..8]}' is {goal.Status}, not AcceptanceFailed; acceptance-retry is only valid after a failed acceptance gate.");
+                $"Goal '{goal.Id.Value[..8]}' is {goal.Status}, not AcceptanceFailed or a typed Verified apparatus hold; " +
+                "acceptance-retry is only valid after a failed acceptance gate.");
         }
 
         var incompleteTask = goal.Tasks.FirstOrDefault(task =>
@@ -954,7 +960,11 @@ public sealed partial class AgentOrchestratorKernel
         return goal;
     }
 
-    public Goal CompleteGoalFromMergeEvidence(GoalId goalId, string integrateSha, string reason)
+    public Goal CompleteGoalFromMergeEvidence(
+        GoalId goalId,
+        string integrateSha,
+        string reason,
+        bool recoveringFromReceipt = false)
     {
         var goal = GetGoal(goalId);
         var normalizedIntegrateSha = integrateSha?.Trim() ?? string.Empty;
@@ -988,7 +998,9 @@ public sealed partial class AgentOrchestratorKernel
                 $"Goal '{goalId}' cannot complete from merge evidence while any task is non-terminal or has a live process.");
         }
 
-        foreach (var task in goal.Tasks.Where(task => task.Status is WorkTaskStatus.Cancelled or WorkTaskStatus.Failed))
+        foreach (var task in goal.Tasks.Where(task =>
+                     !recoveringFromReceipt &&
+                     task.Status is (WorkTaskStatus.Cancelled or WorkTaskStatus.Failed)))
         {
             Append(
                 goal,
@@ -998,7 +1010,7 @@ public sealed partial class AgentOrchestratorKernel
                 $"terminalization=landed integrateSha={normalizedIntegrateSha}");
         }
 
-        if (goal.Status is not (GoalStatus.Verifying or GoalStatus.Verified))
+        if (!recoveringFromReceipt && goal.Status is not (GoalStatus.Verifying or GoalStatus.Verified))
         {
             Append(
                 goal,
@@ -1009,7 +1021,10 @@ public sealed partial class AgentOrchestratorKernel
         }
 
         goal.SetStatus(GoalStatus.Completed);
-        Append(goal, null, ProgressKind.GoalPolicyDecision, completeReason);
+        if (!recoveringFromReceipt)
+        {
+            Append(goal, null, ProgressKind.GoalPolicyDecision, completeReason);
+        }
         return goal;
     }
 
@@ -1124,7 +1139,11 @@ public sealed partial class AgentOrchestratorKernel
             $"Goal failed because task {task.Id.Value[..8]} reached an explicit terminal escalation.");
     }
 
-    private static void ResetTaskForRetry(TaskSpec task, DateTimeOffset retryAt, RetryRoundKind? retryRoundKind = null)
+    private static void ResetTaskForRetry(
+        TaskSpec task,
+        DateTimeOffset retryAt,
+        RetryCause retryCause,
+        RetryRoundKind? retryRoundKind = null)
     {
         task.ClearLatestVerification();
         task.ClearLastExecution();
@@ -1132,7 +1151,7 @@ public sealed partial class AgentOrchestratorKernel
         task.ClearLastProcess();
         task.ClearSubscriptionRetryAfter();
         task.SetInterruptedDispatchRecovery(null);
-        task.RecordRetry(retryAt, retryRoundKind);
+        task.RecordRetry(retryAt, retryCause, retryRoundKind);
         task.SetStatus(task.AssignedAgentId is null ? WorkTaskStatus.Pending : WorkTaskStatus.Assigned);
     }
 
@@ -1157,8 +1176,8 @@ public sealed partial class AgentOrchestratorKernel
             return;
         }
 
-        goal.ClearAcceptanceFailure();
         goal.SetStatus(GoalStatus.Active);
+        goal.DeferAcceptanceFailureForRetry();
         Append(goal, null, ProgressKind.GoalPolicyDecision, reason);
     }
 
@@ -1166,7 +1185,8 @@ public sealed partial class AgentOrchestratorKernel
         Goal goal,
         TaskSpec retriedTask,
         DateTimeOffset retryAt,
-        string? priorCandidate)
+        string? priorCandidate,
+        RetryCause retryCause)
     {
         foreach (var downstream in goal.Tasks.Where(task => IsDownstreamRole(retriedTask.RequiredRole, task.RequiredRole)))
         {
@@ -1192,7 +1212,7 @@ public sealed partial class AgentOrchestratorKernel
                 continue;
             }
 
-            ResetTaskForRetry(downstream, retryAt);
+            ResetTaskForRetry(downstream, retryAt, retryCause);
             Append(
                 goal,
                 downstream.Id,
@@ -1201,7 +1221,11 @@ public sealed partial class AgentOrchestratorKernel
         }
     }
 
-    private void ReconcileRetainedDownstreamTasks(Goal goal, TaskSpec retriedTask, DateTimeOffset reconciledAt)
+    private void ReconcileRetainedDownstreamTasks(
+        Goal goal,
+        TaskSpec retriedTask,
+        DateTimeOffset reconciledAt,
+        string? provenCancelledCandidate = null)
     {
         if (retriedTask.LatestRetryAt is null)
         {
@@ -1210,7 +1234,9 @@ public sealed partial class AgentOrchestratorKernel
 
         var currentCandidateSha = retriedTask.Status == WorkTaskStatus.Completed
             ? retriedTask.LastDispatch?.ResultCommit
-            : null;
+            : retriedTask.Status == WorkTaskStatus.Cancelled
+                ? provenCancelledCandidate
+                : null;
         var currentCandidateKnown = !string.IsNullOrWhiteSpace(currentCandidateSha);
         var currentCandidate = !currentCandidateKnown
             ? "unknown"
@@ -1224,10 +1250,10 @@ public sealed partial class AgentOrchestratorKernel
             var reviewedCandidate = string.IsNullOrWhiteSpace(downstream.LastVerification!.ReviewedCommit)
                 ? "unknown"
                 : downstream.LastVerification.ReviewedCommit.Trim();
-            var invalidationReason = retriedTask.Status == WorkTaskStatus.Completed && currentCandidateKnown
+            var invalidationReason = currentCandidateKnown
                 ? $"changed candidate from {reviewedCandidate} to {currentCandidate}"
                 : $"did not prove candidate {reviewedCandidate} unchanged (result {currentCandidate}; status {retriedTask.Status})";
-            ResetTaskForRetry(downstream, reconciledAt);
+            ResetTaskForRetry(downstream, reconciledAt, retriedTask.PendingRetryCause);
             Append(
                 goal,
                 downstream.Id,

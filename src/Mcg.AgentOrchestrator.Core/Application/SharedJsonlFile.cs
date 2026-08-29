@@ -10,11 +10,13 @@ public static class SharedJsonlFile
     private const int ErrorLockViolation = 33;
     private static readonly Encoding Utf8WithoutBom = new UTF8Encoding(encoderShouldEmitUTF8Identifier: false);
 
-    public static string[] ReadAllLines(string path)
+    public static string[] ReadAllLines(string path) => ReadLines(path).ToArray();
+
+    public static IEnumerable<string> ReadLines(string path)
     {
         if (!File.Exists(path))
         {
-            return [];
+            yield break;
         }
 
         using var stream = new FileStream(
@@ -23,13 +25,10 @@ public static class SharedJsonlFile
             FileAccess.Read,
             FileShare.ReadWrite | FileShare.Delete);
         using var reader = new StreamReader(stream, Utf8WithoutBom, detectEncodingFromByteOrderMarks: true);
-        var lines = new List<string>();
         while (reader.ReadLine() is { } line)
         {
-            lines.Add(line);
+            yield return line;
         }
-
-        return lines.ToArray();
     }
 
     public static void AppendLine(string path, string line) =>

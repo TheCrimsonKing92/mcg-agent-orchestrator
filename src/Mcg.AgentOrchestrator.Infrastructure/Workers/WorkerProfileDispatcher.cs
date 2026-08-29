@@ -212,10 +212,12 @@ public static class WorkerProfileDispatcher
         ReviewRetryCapReceipt? reviewRetryCap = null,
         CitedPriorEvidenceResolver? citedPriorEvidenceResolver = null,
         WorkerSandboxOptions? sandboxOptions = null,
-        int plannerSampleCount = 1)
+        int plannerSampleCount = 1,
+        PaidRouteClassification paidRoute = PaidRouteClassification.Unknown)
     {
         EnsureTaskNeedsExecution(task, allowPendingRecordedDispatchRefresh);
         EnsureSubscriptionRetryWindowHasPassed(task, dispatchedAt);
+        var priorDispatch = task.LastDispatch ?? task.DispatchHistory.LastOrDefault();
         var durableArtifactFindings = new List<string>();
         AddDurableArtifactDependencyFindings(
             durableArtifactFindings,
@@ -255,6 +257,7 @@ public static class WorkerProfileDispatcher
             providerName,
             modelName);
         var targetContext = TryReadCurrentTargetContext(workingDirectory);
+        var currentMainIdentity = ReadCurrentMainIdentityForRetry(workingDirectory);
         var reviewerRoundTouchScope = ReadReviewRoundTouchScope(
             goal,
             task,
@@ -265,6 +268,10 @@ public static class WorkerProfileDispatcher
                 goal,
                 ConductorAutonomyPolicy.Default.ReviewAutoRetryStopRound)
             : null;
+        var usesTypedContextPackage = WorkerContextHelpers.UsesTypedContextPackage(
+            task.RequiredRole,
+            providerName,
+            modelName);
         var brief = kernel.BuildTaskBrief(
             goal.Id,
             task.Id,
@@ -281,10 +288,11 @@ public static class WorkerProfileDispatcher
             reviewerMergeTreeTotalConflictPathCount,
             reviewerRoundTouchScope.TouchedAnchors,
             reviewerRoundTouchScope.Diagnostic,
-            effectiveReviewRetryCap);
+            effectiveReviewRetryCap,
+            emitTypedSourceBoundaries: usesTypedContextPackage);
         WorkerContextPackageReceipt? contextPackageReceipt = null;
         var packagedBrief = brief;
-        if (WorkerContextHelpers.UsesTypedContextPackage(task.RequiredRole, providerName, modelName))
+        if (usesTypedContextPackage)
         {
             var contextPackage = BuildContextPackage(
                 goal,
@@ -300,7 +308,8 @@ public static class WorkerProfileDispatcher
                 reviewerScopeTotalChangedFileCount: reviewerScopeTotalChangedFileCount,
                 reviewerMergeTreeClean: reviewerMergeTreeClean,
                 reviewerMergeTreeConflictPaths: reviewerMergeTreeConflictPaths,
-                reviewerMergeTreeTotalConflictPathCount: reviewerMergeTreeTotalConflictPathCount);
+                reviewerMergeTreeTotalConflictPathCount: reviewerMergeTreeTotalConflictPathCount,
+                currentCandidateSha: targetContext?.HeadCommit);
             packagedBrief = brief with { Content = WorkerContextPackageBuilder.Render(contextPackage) };
             contextPackageReceipt = WorkerContextPackageBuilder.CreateReceipt(contextPackage);
         }
@@ -335,6 +344,15 @@ public static class WorkerProfileDispatcher
             promptRoot,
             dispatchVariables,
             dispatchedAt);
+        var retryContextFingerprint = RetryContextFingerprintFactory.Build(
+            goal,
+            task,
+            providerName,
+            modelName,
+            paidRoute,
+            priorDispatch?.ResultCommit ?? priorDispatch?.BaseCommit ?? task.LastVerification?.ReviewedCommit,
+            targetContext?.HeadCommit ?? priorDispatch?.BaseCommit,
+            currentMainIdentity);
         kernel.RecordTaskDispatch(goal.Id, task.Id, new TaskDispatchRecord(
             profile.Name,
             preparation.Command,
@@ -355,7 +373,9 @@ public static class WorkerProfileDispatcher
             ReviewFindingTouchProofDiagnostic: reviewerRoundTouchScope.Diagnostic,
             ReviewRetryCap: effectiveReviewRetryCap,
             ContextPackageReceipt: contextPackageReceipt,
-            PlannerSampleCount: PlannerSamplingPolicy.EffectiveSampleCount(task.RequiredRole, plannerSampleCount)),
+            PlannerSampleCount: PlannerSamplingPolicy.EffectiveSampleCount(task.RequiredRole, plannerSampleCount),
+            RetryContextFingerprint: retryContextFingerprint,
+            PaidRoute: paidRoute),
             allowPendingRecordedDispatchRefresh);
         return new WorkerProfileDispatchResult(task, preparation.PromptPath);
     }
@@ -577,7 +597,8 @@ public static class WorkerProfileDispatcher
                 : null,
             citedPriorEvidenceResolver: citedPriorEvidenceResolver,
             sandboxOptions: sandbox,
-            plannerSampleCount: plannerSampleCount);
+            plannerSampleCount: plannerSampleCount,
+            paidRoute: ClassifyPaidRoute(roleSelection.Model.SubscriptionMode));
     }
 
     public static WorkerSubscriptionPreflightResult PreflightSubscriptionTask(
@@ -1247,11 +1268,17 @@ public static class WorkerProfileDispatcher
                     : null,
                 citedPriorEvidenceResolver: citedPriorEvidenceResolver,
                 sandboxOptions: sandbox,
-                plannerSampleCount: plannerSampleCount));
+                plannerSampleCount: plannerSampleCount,
+                paidRoute: ClassifyPaidRoute(roleSelection.Model.SubscriptionMode)));
         }
 
         return new WorkerProfileReadyBatchResult(results, blocked);
     }
+
+    private static PaidRouteClassification ClassifyPaidRoute(SubscriptionMode subscriptionMode) =>
+        subscriptionMode == SubscriptionMode.LocalBridge
+            ? PaidRouteClassification.NonPaid
+            : PaidRouteClassification.Paid;
 
     private static bool TryResolveMissingArtifactDependency(
         AgentOrchestratorKernel kernel,
@@ -1281,7 +1308,8 @@ public static class WorkerProfileDispatcher
             kernel.RetryTask(
                 goal.Id,
                 upstreamTask.Id,
-                $"{rerouteMarker}; {blockedTask.RequiredRole} is held until {artifactRole} task {upstreamTask.Id.Value} produces a complete durable artifact.");
+                $"{rerouteMarker}; {blockedTask.RequiredRole} is held until {artifactRole} task {upstreamTask.Id.Value} produces a complete durable artifact.",
+                retryCause: RetryCause.CriterionEvidenceOwnerMismatch);
             return true;
         }
 
@@ -1583,6 +1611,7 @@ public static class WorkerProfileDispatcher
             ["modelSelectionReason"] = selection.Reason,
             ["dispatchLane"] = selection.DispatchLane,
             ["executionPolicy"] = agent.ExecutionPolicy.ToString(),
+            ["paidRoute"] = ClassifyPaidRoute(selection.Model.SubscriptionMode).ToString(),
             ["openaiBaseUrl"] = OpenAiCompatibleCliBackend.ResolveBaseUrl(selection.Model.ProviderName),
             ["openaiApiKey"] = OpenAiCompatibleCliBackend.ResolveApiKey(selection.Model.ProviderName)
         };
@@ -1725,6 +1754,18 @@ public static class WorkerProfileDispatcher
         return new TargetContext(
             string.IsNullOrWhiteSpace(branchName) ? null : branchName,
             string.IsNullOrWhiteSpace(headCommit) ? null : headCommit);
+    }
+
+    internal static string? ReadCurrentMainIdentityForRetry(string workingDirectory)
+    {
+        if (string.IsNullOrWhiteSpace(workingDirectory) || !Directory.Exists(workingDirectory))
+            return null;
+
+        var main = GitCli.Run(workingDirectory, "rev-parse", "main");
+        if (main.ExitCode != 0)
+            return null;
+        var identity = main.Output.Trim();
+        return string.IsNullOrWhiteSpace(identity) ? null : identity;
     }
 
     private static SubscriptionModelSelection ResolveSubscriptionModel(AgentDefinition agent, Goal goal, TaskSpec task)
@@ -2259,7 +2300,8 @@ public static class WorkerProfileDispatcher
         int? reviewerScopeTotalChangedFileCount = null,
         bool? reviewerMergeTreeClean = null,
         IReadOnlyList<string>? reviewerMergeTreeConflictPaths = null,
-        int? reviewerMergeTreeTotalConflictPathCount = null)
+        int? reviewerMergeTreeTotalConflictPathCount = null,
+        string? currentCandidateSha = null)
     {
         var targetRole = task.RequiredRole;
         var registryPath = Path.Combine(contextDirectory, "artifact-registry.json");
@@ -2372,7 +2414,7 @@ public static class WorkerProfileDispatcher
                         correction.CapturedAcceptanceCriteriaHash
                     }).ToArray()));
         }
-        if (goal.LatestAcceptanceFailure is { } acceptanceFailure)
+        if (goal.RetainedAcceptanceFailure is { } acceptanceFailure)
         {
             AddSource(
                 WorkerContextSemanticSource.LatestAcceptanceFailure,
@@ -2415,25 +2457,15 @@ public static class WorkerProfileDispatcher
             "goal/timeline.json",
             ContextArtifactKind.RegisteredContext,
             SerializeSemanticTimeline(timeline, workingDirectory, contextDirectory));
-        var reviewFindingHistory = goal.Tasks
-            .SelectMany(candidate => candidate.VerificationHistory.Select(verification => new
-            {
-                TaskId = candidate.Id.Value,
-                Role = candidate.RequiredRole.ToString(),
-                Findings = verification.MergedReviewFindings ?? [],
-                EvidenceReceipts = verification.FindingEvidenceReceipts ?? []
-            }))
-            .Where(item => item.Findings.Count > 0 || item.EvidenceReceipts.Count > 0)
-            .ToArray();
-        if (reviewFindingHistory.Length > 0)
+        ReviewFindingContextProjection? reviewFindingProjection = null;
+        var contractRepairProjectionRequested = task.PendingRetryRoundKind == RetryRoundKind.Mechanical &&
+                                                task.VerificationHistory.LastOrDefault()?.ReviewFindingContractViolation is not null;
+        if (contractRepairProjectionRequested || goal.Tasks.Any(candidate => candidate.VerificationHistory.Any(verification =>
+                (verification.MergedReviewFindings?.Count ?? 0) > 0 || (verification.FindingEvidenceReceipts?.Count ?? 0) > 0)))
         {
-            AddSource(
-                WorkerContextSemanticSource.ReviewFindingHistory,
-                "goal/review-finding-history.json",
-                ContextArtifactKind.AcceptanceCriteria,
-                JsonSerializer.SerializeToUtf8Bytes(reviewFindingHistory));
+            reviewFindingProjection = ReviewFindingContextProjector.Project(goal, task, currentCandidateSha);
+            ReviewFindingContextProjector.AddArtifacts(reviewFindingProjection, AddSource);
         }
-
         if (task.LastExecution is not null)
         {
             var identity = new LogicalArtifactIdentity("task/last-model-output.txt");
@@ -2454,6 +2486,9 @@ public static class WorkerProfileDispatcher
                 JsonSerializer.SerializeToUtf8Bytes(new
                 {
                     task.LastDispatch.WorkerName,
+                    task.LastDispatch.Command,
+                    task.LastDispatch.WorkingDirectory,
+                    task.LastDispatch.DispatchedAt,
                     task.LastDispatch.ProviderName,
                     task.LastDispatch.ModelName,
                     task.LastDispatch.ReasoningEffort,
@@ -2576,8 +2611,16 @@ public static class WorkerProfileDispatcher
         }
         AddSource(WorkerContextSemanticSource.CurrentBrief, "brief/current.md", ContextArtifactKind.OperatorInstructions, Encoding.UTF8.GetBytes(residualBrief));
 
+        if (reviewFindingProjection?.Metrics.Mode == ReviewFindingHistoryProjectionMode.ContractRepair)
+        {
+            ReviewFindingContextProjector.ApplyCompactArtifactAllowList(artifacts);
+        }
+
         var builder = new WorkerContextPackageBuilder();
-        var preparedWithoutManifest = builder.Prepare(targetRole, workingDirectory, artifacts);
+        var preparedWithoutManifest = builder.Prepare(targetRole, workingDirectory, artifacts) with
+        {
+            ReviewFindingProjection = reviewFindingProjection?.Metrics
+        };
         return FinalizeContextPackageWithManifest(builder, preparedWithoutManifest, observedSources);
     }
 
@@ -2666,24 +2709,7 @@ public static class WorkerProfileDispatcher
         }
 
         var residual = content[instructions..];
-        foreach (var heading in new[]
-        {
-            "## Refined Spec",
-            "## Durable Research Notes",
-            "## Durable Planner Plan",
-            "## Verification Plan",
-            "## Unmet acceptance criteria from the prior attempt - fix these:",
-            "## Last Model Output",
-            "## Last Dispatch",
-            "## Last Verification",
-            "## Prior Task Evidence",
-            "## Recent Timeline"
-        })
-        {
-            residual = RemoveHeadingSection(residual, heading);
-        }
-
-        return residual.Trim();
+        return WorkerContextProjectionResidual.RemoveProjectionBlocks(residual).Trim();
     }
 
     internal static string RemoveLargeReviewerScopeInlinePreviews(
@@ -2771,23 +2797,6 @@ public static class WorkerProfileDispatcher
         return separator < 0
             ? line
             : line[..separator] + "; complete path list is delivered only by its typed MandatoryFile artifact.";
-    }
-
-    private static string RemoveHeadingSection(string content, string heading)
-    {
-        var start = FindBriefHeading(content, heading, 0);
-        if (start < 0)
-        {
-            return content;
-        }
-
-        var next = content.IndexOf("## ", start + heading.Length, StringComparison.Ordinal);
-        while (next >= 0 && next > 0 && content[next - 1] != '\n')
-        {
-            next = content.IndexOf("## ", next + 3, StringComparison.Ordinal);
-        }
-
-        return content.Remove(start, (next < 0 ? content.Length : next) - start);
     }
 
     private static string RemoveMarkedBriefBlock(string content, string startMarker, string endMarker)
@@ -2911,7 +2920,7 @@ public static class WorkerProfileDispatcher
             throw new InvalidOperationException("Typed context brief is missing its Instructions source boundary.");
         }
 
-        var residual = content[..instructions];
+        var residual = WorkerContextProjectionResidual.RestoreLiterals(content[..instructions]);
         residual = RemoveMarkedBriefBlock(
             residual,
             "<!-- ACCUMULATED_RETRY_FEEDBACK_START -->",

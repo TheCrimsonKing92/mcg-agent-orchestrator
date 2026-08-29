@@ -37,7 +37,7 @@ public sealed class ConductorBatchLoopTestsOperatorIntents : ConductorBatchLoopT
                 goal.Id.Value,
                 task.Id.Value,
                 JsonSerializer.Serialize(
-                    new RetryOperatorIntentPayload("Operator repaired through inbox.", null),
+                    new RetryOperatorIntentPayload("Operator repaired through inbox.", null, RetryCause: RetryCause.ContractClarification),
                     new JsonSerializerOptions(JsonSerializerDefaults.Web)),
                 [],
                 "operator",
@@ -126,7 +126,7 @@ public sealed class ConductorBatchLoopTestsOperatorIntents : ConductorBatchLoopT
                 goal.Id.Value,
                 task.Id.Value,
                 JsonSerializer.Serialize(
-                    new RetryOperatorIntentPayload("Acceptance evidence requires a correction.", null),
+                    new RetryOperatorIntentPayload("Acceptance evidence requires a correction.", null, RetryCause: RetryCause.CriterionEvidenceOwnerMismatch),
                     new JsonSerializerOptions(JsonSerializerDefaults.Web)),
                 [],
                 "operator",
@@ -221,7 +221,7 @@ public sealed class ConductorBatchLoopTestsOperatorIntents : ConductorBatchLoopT
                 goal.Id.Value,
                 task.Id.Value,
                 JsonSerializer.Serialize(
-                    new RetryOperatorIntentPayload("retry after persistence recovers", null),
+                    new RetryOperatorIntentPayload("retry after persistence recovers", null, RetryCause: RetryCause.ContractClarification),
                     new JsonSerializerOptions(JsonSerializerDefaults.Web)),
                 [],
                 "operator",
@@ -289,7 +289,7 @@ public sealed class ConductorBatchLoopTestsOperatorIntents : ConductorBatchLoopT
                 outsideGoal.Id.Value,
                 outsideTask.Id.Value,
                 JsonSerializer.Serialize(
-                    new RetryOperatorIntentPayload("retry outside scope", null),
+                    new RetryOperatorIntentPayload("retry outside scope", null, RetryCause: RetryCause.ContractClarification),
                     new JsonSerializerOptions(JsonSerializerDefaults.Web)),
                 [],
                 "operator",
@@ -336,7 +336,7 @@ public sealed class ConductorBatchLoopTestsOperatorIntents : ConductorBatchLoopT
                 goal.Id.Value,
                 TaskId.New().Value,
                 JsonSerializer.Serialize(
-                    new RetryOperatorIntentPayload("invalid task", null),
+                    new RetryOperatorIntentPayload("invalid task", null, RetryCause: RetryCause.ContractClarification),
                     new JsonSerializerOptions(JsonSerializerDefaults.Web)),
                 [],
                 "operator",
@@ -385,7 +385,7 @@ public sealed class ConductorBatchLoopTestsOperatorIntents : ConductorBatchLoopT
                 goal.Id.Value,
                 TaskId.New().Value,
                 JsonSerializer.Serialize(
-                    new RetryOperatorIntentPayload("invalid task", null),
+                    new RetryOperatorIntentPayload("invalid task", null, RetryCause: RetryCause.ContractClarification),
                     new JsonSerializerOptions(JsonSerializerDefaults.Web)),
                 [],
                 "operator",
@@ -507,7 +507,7 @@ public sealed class ConductorBatchLoopTestsOperatorIntents : ConductorBatchLoopT
             await SubmitAndTick(
                 "sequence-retry",
                 OperatorIntentVerbs.Retry,
-                new RetryOperatorIntentPayload("mechanical recovery", RetryRoundKind.Mechanical));
+                new RetryOperatorIntentPayload("mechanical recovery", RetryRoundKind.Mechanical, RetryCause: RetryCause.MainDriftConflict));
             await SubmitAndTick(
                 "sequence-progress",
                 OperatorIntentVerbs.Progress,
@@ -627,7 +627,7 @@ public sealed class ConductorBatchLoopTestsOperatorIntents : ConductorBatchLoopT
                 goal.Id.Value,
                 task.Id.Value,
                 JsonSerializer.Serialize(
-                    new RetryOperatorIntentPayload("Apply once.", null),
+                    new RetryOperatorIntentPayload("Apply once.", null, RetryCause: RetryCause.ContractClarification),
                     new JsonSerializerOptions(JsonSerializerDefaults.Web)),
                 [],
                 "operator",

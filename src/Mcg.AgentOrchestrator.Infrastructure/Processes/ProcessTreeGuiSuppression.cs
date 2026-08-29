@@ -108,6 +108,34 @@ internal static class ProcessTreeGuiSuppression
         }
     }
 
+    internal static ConsoleSpawnScope AcquireErrorModeForChildSpawn()
+    {
+        if (!OperatingSystem.IsWindows())
+        {
+            return new ConsoleSpawnScope(hiddenConsoleAcquired: false);
+        }
+
+        Monitor.Enter(WindowsLaunchLock);
+        var originalErrorMode = Windows.GetErrorMode();
+        try
+        {
+            _ = Windows.SetErrorMode(originalErrorMode | SuppressedErrorModeFlags);
+            return new ConsoleSpawnScope(
+                hiddenConsoleAcquired: false,
+                onDispose: () =>
+                {
+                    _ = Windows.SetErrorMode(originalErrorMode);
+                    Monitor.Exit(WindowsLaunchLock);
+                });
+        }
+        catch
+        {
+            _ = Windows.SetErrorMode(originalErrorMode);
+            Monitor.Exit(WindowsLaunchLock);
+            throw;
+        }
+    }
+
     public static Process Start(ProcessStartInfo startInfo)
     {
         ArgumentNullException.ThrowIfNull(startInfo);

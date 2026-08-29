@@ -1273,6 +1273,17 @@ public sealed class TaskBriefTests
                 "",
                 DateTimeOffset.UtcNow,
                 MergedReviewFindings: findings));
+        kernel.RecordTaskVerification(
+            goal.Id,
+            reviewer.Id,
+            new TaskVerificationRecord(
+                "review current canonical state",
+                "C:\\repo",
+                0,
+                "structured review current",
+                "",
+                DateTimeOffset.UtcNow.AddSeconds(1),
+                MergedReviewFindings: findings));
         for (var index = 0; index < 12; index++)
         {
             kernel.RecordTaskNote(goal.Id, developer.Id, $"operational retry noise {index:D2} {new string('x', 300)}");
@@ -1287,6 +1298,8 @@ public sealed class TaskBriefTests
         Assert.Contains("Distinct actionable finding 00.", brief, StringComparison.Ordinal);
         Assert.Contains("finding-13", brief, StringComparison.Ordinal);
         Assert.Contains("Distinct actionable finding 13.", brief, StringComparison.Ordinal);
+        Assert.Equal(1, brief.Split("stable_id=finding-00", StringSplitOptions.None).Length - 1);
+        Assert.Equal(1, brief.Split("stable_id=finding-13", StringSplitOptions.None).Length - 1);
         Assert.DoesNotContain("structured_finding_overflow", brief, StringComparison.Ordinal);
     }
 

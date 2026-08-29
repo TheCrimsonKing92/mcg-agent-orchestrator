@@ -35,12 +35,15 @@ protected static AgentDefinition TestSubscriptionAgent(string id, string name, A
         ExecutionPolicy: AgentExecutionPolicy.SubscriptionOnly,
         Subscription: new SubscriptionLaunchProfile("test-subscription", "test-model", "low"));
 
-protected static void CompleteResearcherArtifact(AgentOrchestratorKernel kernel, Goal goal)
+protected static void CompleteResearcherArtifact(
+    AgentOrchestratorKernel kernel,
+    Goal goal,
+    string? research = null)
 {
     var researcher = goal.Tasks.Single(task => task.RequiredRole == AgentRole.Researcher);
     var artifactRoot = CreateTempDirectory();
     var outputPath = Path.Combine(artifactRoot, "researcher.out.log");
-    File.WriteAllText(outputPath, ResearcherContractFixture());
+    File.WriteAllText(outputPath, research ?? ResearcherContractFixture());
     var result = ResearcherOutputContract.Resolve(File.ReadAllText(outputPath));
     var diagnostic = string.Empty;
     if (!result.Succeeded ||
@@ -67,13 +70,16 @@ protected static void CompleteResearcherArtifact(AgentOrchestratorKernel kernel,
             StandardOutputPath: outputPath));
 }
 
-protected static void CompletePlannerArtifact(AgentOrchestratorKernel kernel, Goal goal)
+protected static void CompletePlannerArtifact(
+    AgentOrchestratorKernel kernel,
+    Goal goal,
+    string? plan = null)
 {
     var planner = goal.Tasks.Single(task => task.RequiredRole == AgentRole.Planner);
     var artifactRoot = CreateTempDirectory();
     File.WriteAllText(Path.Combine(artifactRoot, "seed.txt"), "seed");
     var outputPath = Path.Combine(artifactRoot, "planner.out.log");
-    var plan = PlannerContractPlanFixture();
+    plan ??= PlannerContractPlanFixture();
     File.WriteAllText(outputPath, "Planner fixture completed.");
     if (!PlannerOutputContract.TryPersistDurableReceipt(
             outputPath,
@@ -97,10 +103,14 @@ protected static void CompletePlannerArtifact(AgentOrchestratorKernel kernel, Go
             StandardOutputPath: outputPath));
 }
 
-protected static void CompleteResearcherAndPlannerArtifacts(AgentOrchestratorKernel kernel, Goal goal)
+protected static void CompleteResearcherAndPlannerArtifacts(
+    AgentOrchestratorKernel kernel,
+    Goal goal,
+    string? research = null,
+    string? plan = null)
 {
-    CompleteResearcherArtifact(kernel, goal);
-    CompletePlannerArtifact(kernel, goal);
+    CompleteResearcherArtifact(kernel, goal, research);
+    CompletePlannerArtifact(kernel, goal, plan);
 }
 
 

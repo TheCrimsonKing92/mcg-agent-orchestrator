@@ -30,7 +30,11 @@ private static bool HandleRecover(CliExecutionContext context, IReadOnlyList<str
     var note = ResolveTextArgument(parts, inlineIndex: 2, "recover <goal-prefix> <note> | recover <goal-prefix> --text-file <path>", "--text-file");
     EnsurePolicyAllows(context, goal, policy, AutonomyAction.Retry, "recover");
 
-    var sweep = TerminalGoalSweep.Run(context.Kernel, context.Workspace.ExecutionDirectory, goal.Id);
+    var sweep = TerminalGoalSweep.Run(
+        context.Kernel,
+        context.Workspace.ExecutionDirectory,
+        goal.Id,
+        orchestratorDirectory: context.Workspace.OrchestratorDirectory);
     ConsoleViews.PrintTerminalGoalSweep(sweep);
     TerminalGoalSweepAttention.Surface(context.Kernel, sweep, context.Workspace.OrchestratorDirectory, goal.Id);
     goal = context.Kernel.GetGoal(goal.Id);
@@ -113,7 +117,12 @@ private static bool HandleRecover(CliExecutionContext context, IReadOnlyList<str
                 outcome.Verification is { } refreshVerification &&
                 DispatchRecoveryPolicy.IsStaleDispatchRetryVerification(refreshVerification))
             {
-                context.Kernel.RetryTask(goal.Id, refreshedTask.Id, note, invalidateDownstream: !HasRunningDownstreamTask(goal, refreshedTask));
+                context.Kernel.RetryTask(
+                    goal.Id,
+                    refreshedTask.Id,
+                    note,
+                    invalidateDownstream: !HasRunningDownstreamTask(goal, refreshedTask),
+                    retryCause: RetryCause.EnvironmentApparatusFailure);
                 Console.WriteLine($"recover: reset task {ConsoleViews.GetTaskDisplayNumber(goal, refreshedTask.Id)} to dispatchable.");
                 alreadyReset.Add(refreshedTask.Id);
                 actions++;
@@ -132,7 +141,11 @@ private static bool HandleRecover(CliExecutionContext context, IReadOnlyList<str
 
         if (task.Status == WorkTaskStatus.Cancelled)
         {
-            context.Kernel.RequeueInterruptedDispatch(goal.Id, task.Id, note);
+            context.Kernel.RequeueInterruptedDispatch(
+                goal.Id,
+                task.Id,
+                note,
+                RetryCause.EnvironmentApparatusFailure);
             Console.WriteLine($"recover: requeued interrupted task {ConsoleViews.GetTaskDisplayNumber(goal, task.Id)} to dispatchable.");
             alreadyReset.Add(task.Id);
             actions++;
@@ -145,7 +158,13 @@ private static bool HandleRecover(CliExecutionContext context, IReadOnlyList<str
             context.Kernel.ReportTaskProgress(goal.Id, task.Id, WorkTaskStatus.Failed, note);
         }
 
-        context.Kernel.RetryTask(goal.Id, task.Id, note, invalidateDownstream: !HasRunningDownstreamTask(goal, task));
+        context.Kernel.RetryTask(
+            goal.Id,
+            task.Id,
+            note,
+            retryCause: RetryCause.EnvironmentApparatusFailure,
+            invalidateDownstream: !HasRunningDownstreamTask(goal, task),
+            retryRoundKind: null);
         Console.WriteLine($"recover: reset task {ConsoleViews.GetTaskDisplayNumber(goal, task.Id)} to dispatchable.");
         alreadyReset.Add(task.Id);
         actions++;
@@ -178,7 +197,12 @@ private static bool HandleRecover(CliExecutionContext context, IReadOnlyList<str
             continue;
         }
 
-        context.Kernel.RetryTask(goal.Id, task.Id, $"recover: re-derived lifecycle state for {task.RequiredRole} task {task.Id.Value[..8]} (Assigned, dispatchable, earlier stages Completed); {note}", invalidateDownstream: !HasRunningDownstreamTask(goal, task));
+        context.Kernel.RetryTask(
+            goal.Id,
+            task.Id,
+            $"recover: re-derived lifecycle state for {task.RequiredRole} task {task.Id.Value[..8]} (Assigned, dispatchable, earlier stages Completed); {note}",
+            invalidateDownstream: !HasRunningDownstreamTask(goal, task),
+            retryCause: RetryCause.EnvironmentApparatusFailure);
         Console.WriteLine($"recover: task {ConsoleViews.GetTaskDisplayNumber(goal, task.Id)} {task.RequiredRole} is assigned and dispatchable but has no dispatch record; lifecycle/task desync detected, lifecycle state re-derived. Re-run 'conduct {goal.Id.Value[..8]}' or restart the conductor loop to unblock.");
         actions++;
     }

@@ -270,6 +270,22 @@ public sealed partial class AgentOrchestratorKernel
             return (ProcessBatchItemStatus.Skipped, $"Task already has a running process pid={task.LastProcess.ProcessId}.");
         }
 
+        if (task.RetryAdmissionHoldRoute is { } holdRoute &&
+            holdRoute != RetryAdmissionRoute.ReservationLease)
+        {
+            return (ProcessBatchItemStatus.Skipped, $"Retry admission is held for route {holdRoute}.");
+        }
+
+        if (task.RetryAdmissionHoldRoute == RetryAdmissionRoute.ReservationLease &&
+            task.RetryAdmissionHistory.LastOrDefault(receipt =>
+                receipt.LinkedDispatchAt == task.LastDispatch.DispatchedAt &&
+                receipt.Decision is RetryAdmissionDecision.Allowed or RetryAdmissionDecision.ResumedReservation) is { } reservation &&
+            reservation.ReservationLeaseExpiresAt is { } leaseExpiresAt &&
+            DateTimeOffset.UtcNow < leaseExpiresAt)
+        {
+            return (ProcessBatchItemStatus.Skipped, $"Prepared retry reservation is owned until {leaseExpiresAt:u}.");
+        }
+
         if (DispatchFailureClassifier.IsSubscriptionRetryDeferred(task, DateTimeOffset.UtcNow, out var retryAfter))
         {
             return (ProcessBatchItemStatus.Skipped, $"Recoverable subscription usage limit is deferred; retry after {retryAfter:u}.");

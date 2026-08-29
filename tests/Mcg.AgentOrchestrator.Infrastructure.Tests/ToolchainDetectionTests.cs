@@ -226,14 +226,16 @@ public sealed class ToolchainDetectionTests
             item => item.Contains("go", StringComparison.OrdinalIgnoreCase) && item.Contains("test", StringComparison.OrdinalIgnoreCase));
     }
 
-    [Xunit.Fact(DisplayName = "GoalObjectivePlanner_required_tools_emits_dotnet_command_for_cs_file_objective")]
-    public void GoalObjectivePlannerRequiredToolsEmitsDotnetCommandForCsFileObjective()
+    [Xunit.Fact(DisplayName = "GoalObjectivePlanner_required_tools_emits_managed_test_helper_for_cs_file_objective")]
+    public void GoalObjectivePlannerRequiredToolsEmitsManagedTestHelperForCsFileObjective()
     {
         var plan = GoalObjectivePlanner.Build(
             "Implement src/MyApp/Handler.cs with tests/MyApp.Tests/HandlerTests.cs coverage",
             simple: true);
 
         Xunit.Assert.Contains(plan.RequiredTools,
-            item => item.Contains("Invoke-IsolatedDotnet", StringComparison.Ordinal));
+            item => item.Contains("Invoke-TestSummary", StringComparison.Ordinal));
+        Xunit.Assert.DoesNotContain(plan.RequiredTools,
+            item => item.Contains("dotnet test", StringComparison.OrdinalIgnoreCase));
     }
 }

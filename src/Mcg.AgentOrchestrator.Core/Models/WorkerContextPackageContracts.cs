@@ -57,6 +57,73 @@ public readonly record struct LogicalArtifactIdentity
     public override string ToString() => Value;
 }
 
+public static class WorkerContextProjectionBoundary
+{
+    public const string StartPrefix = "<!-- WORKER_CONTEXT_TYPED_PROJECTION_START:";
+    public const string EndPrefix = "<!-- WORKER_CONTEXT_TYPED_PROJECTION_END:";
+    public const string LiteralPrefix = "<!-- WORKER_CONTEXT_TYPED_PROJECTION_LITERAL:";
+    public const string MarkerSuffix = " -->";
+    private static readonly UTF8Encoding StrictUtf8 = new(false, true);
+
+    public static string Start(LogicalArtifactIdentity identity) =>
+        Format(StartPrefix, identity);
+
+    public static string End(LogicalArtifactIdentity identity) =>
+        Format(EndPrefix, identity);
+
+    public static string EscapeReservedLiteral(string line)
+    {
+        ArgumentNullException.ThrowIfNull(line);
+        if (!line.Contains(StartPrefix, StringComparison.Ordinal) &&
+            !line.Contains(EndPrefix, StringComparison.Ordinal) &&
+            !line.Contains(LiteralPrefix, StringComparison.Ordinal))
+        {
+            return line;
+        }
+
+        return $"{LiteralPrefix}{Convert.ToBase64String(StrictUtf8.GetBytes(line))}{MarkerSuffix}";
+    }
+
+    public static string RestoreReservedLiteral(string marker)
+    {
+        ArgumentNullException.ThrowIfNull(marker);
+        if (!marker.StartsWith(LiteralPrefix, StringComparison.Ordinal) ||
+            !marker.EndsWith(MarkerSuffix, StringComparison.Ordinal))
+        {
+            throw new ArgumentException("Typed projection literal marker is malformed.", nameof(marker));
+        }
+
+        var encoded = marker[LiteralPrefix.Length..^MarkerSuffix.Length];
+        try
+        {
+            var bytes = Convert.FromBase64String(encoded);
+            if (!string.Equals(Convert.ToBase64String(bytes), encoded, StringComparison.Ordinal))
+            {
+                throw new ArgumentException("Typed projection literal marker is not canonical base64.", nameof(marker));
+            }
+
+            return StrictUtf8.GetString(bytes);
+        }
+        catch (Exception exception) when (exception is FormatException or DecoderFallbackException)
+        {
+            throw new ArgumentException("Typed projection literal marker is malformed.", nameof(marker), exception);
+        }
+    }
+
+    private static string Format(string prefix, LogicalArtifactIdentity identity)
+    {
+        if (identity.Value.Contains("<!--", StringComparison.Ordinal) ||
+            identity.Value.Contains("-->", StringComparison.Ordinal) ||
+            identity.Value.Contains('\r', StringComparison.Ordinal) ||
+            identity.Value.Contains('\n', StringComparison.Ordinal))
+        {
+            throw new ArgumentException("Typed projection identity cannot contain Markdown comment or line boundaries.", nameof(identity));
+        }
+
+        return $"{prefix}{identity.Value}{MarkerSuffix}";
+    }
+}
+
 public sealed class WorkerContextArtifact
 {
     private readonly byte[]? _authoritativeBytes;
@@ -191,7 +258,8 @@ public sealed record WorkerContextPackage(
     string SemanticPackageId,
     ContextContractVersion ContractVersion,
     AgentRole TargetRole,
-    IReadOnlyList<WorkerContextArtifact> Artifacts)
+    IReadOnlyList<WorkerContextArtifact> Artifacts,
+    ReviewFindingHistoryProjectionMetrics? ReviewFindingProjection = null)
 {
     // This is semantic attestation/cache identity only. It is not delivery, read, or acknowledgment evidence.
 }
@@ -270,7 +338,14 @@ public sealed record WorkerContextPackageReceipt(
     IReadOnlyList<WorkerContextSectionReceipt> Sections,
     ProviderUsageValue InputTokens,
     ProviderUsageValue CachedInputTokens,
-    ProviderUsageValue OutputTokens)
+    ProviderUsageValue OutputTokens,
+    int RenderedPromptBytes = 0,
+    ReviewFindingHistoryProjectionMode? ReviewFindingProjectionMode = null,
+    int UniqueReviewFindingRoundCount = 0,
+    int DuplicateReviewFindingRoundCount = 0,
+    int UniqueFindingEvidenceReceiptCount = 0,
+    int DuplicateFindingEvidenceReceiptCount = 0,
+    string? ReviewFindingFallbackReason = null)
 {
     public WorkerContextPackageReceipt WithProviderUsage(ProviderReportedUsage? usage, string unavailableReason = "absent") => this with
     {

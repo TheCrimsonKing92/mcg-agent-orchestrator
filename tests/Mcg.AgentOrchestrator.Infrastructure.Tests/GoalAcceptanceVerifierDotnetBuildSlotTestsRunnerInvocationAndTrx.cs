@@ -180,7 +180,11 @@ public sealed class GoalAcceptanceVerifierDotnetBuildSlotTestsRunnerInvocationAn
                 call[2].Contains("Mcg.AgentOrchestrator.Core.Tests", StringComparison.Ordinal));
 
             var mtpCall = calls.Single(call => IsMtpExecutableCall(call, "Mcg.AgentOrchestrator.Core.Tests"));
-            Assert.Equal(Path.Combine(artifactsPath, "bin", "Mcg.AgentOrchestrator.Core.Tests", "debug", "Mcg.AgentOrchestrator.Core.Tests.exe"), mtpCall[0]);
+            Assert.Equal("dotnet", mtpCall[0], ignoreCase: true);
+            Assert.Equal(
+                Path.Combine(artifactsPath, "bin", "Mcg.AgentOrchestrator.Core.Tests", "debug", "Mcg.AgentOrchestrator.Core.Tests.dll"),
+                mtpCall[1],
+                ignoreCase: true);
             AssertArgumentPair(mtpCall, "--filter-class", "*GoalLifecycleTests*");
             AssertArgumentPair(mtpCall, "--filter-not-class", "*SlowCoreTests*");
             Assert.Contains("--filter-not-trait", mtpCall);

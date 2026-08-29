@@ -527,11 +527,16 @@ private static IReadOnlyList<string> NormalizeTaskTargetArgs(string[] args, int 
 private static IReadOnlyList<string> NormalizeRetryTaskTargetArgs(IReadOnlyList<string> args)
 {
     var mechanical = args.Any(arg => arg.Equals("--mechanical", StringComparison.OrdinalIgnoreCase));
+    var causeIndex = Enumerable.Range(0, args.Count)
+        .FirstOrDefault(index => args[index].Equals("--cause", StringComparison.OrdinalIgnoreCase), -1);
+    var cause = causeIndex >= 0 && causeIndex + 1 < args.Count ? args[causeIndex + 1] : null;
     var targetArgs = args
+        .Where((_, index) => causeIndex < 0 || (index != causeIndex && index != causeIndex + 1))
         .Where(arg => !arg.Equals("--mechanical", StringComparison.OrdinalIgnoreCase))
         .ToArray();
     var normalized = NormalizeTaskTargetArgs(targetArgs, trailingArgumentCount: 1, allowTextFile: true);
-    return mechanical ? [.. normalized, "--mechanical"] : normalized;
+    var withCause = cause is null ? normalized : [.. normalized, "--cause", cause];
+    return mechanical ? [.. withCause, "--mechanical"] : withCause;
 }
 
 internal static GoalScopedTaskTargetArgs ParseGoalScopedTaskTargetArgs(IReadOnlyList<string> args)

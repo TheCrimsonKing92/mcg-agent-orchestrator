@@ -1,12 +1,12 @@
 <#
 .SYNOPSIS
-  Run manifest-declared test projects through their Microsoft.Testing.Platform apphosts.
+  Run manifest-declared test projects through their managed Microsoft.Testing.Platform assemblies.
 
 .DESCRIPTION
-  Builds the target in Debug by default, launches each MTP apphost directly, streams stdout
+  Builds the target in Debug by default, launches each MTP assembly through dotnet, streams stdout
   and stderr, and prints compact TRX summaries. The target may be the repository solution or
   a test project declared by config/acceptance-manifest.json. Use -NoBuild only when the
-  apphost is already current. Use -AllowBreakaway only for tests that explicitly validate
+  managed assembly is already current. Use -AllowBreakaway only for tests that explicitly validate
   Windows CREATE_BREAKAWAY_FROM_JOB behavior. Clean-run receipts are removed; failed runs are retained.
 
 .EXAMPLE

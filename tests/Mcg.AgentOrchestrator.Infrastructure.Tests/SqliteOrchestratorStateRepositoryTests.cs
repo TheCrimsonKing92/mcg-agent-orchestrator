@@ -2001,7 +2001,11 @@ public sealed class SqliteOrchestratorStateRepositoryTests
             (stored, _) =>
             {
                 var operatorKernel = AgentOrchestratorKernel.FromSnapshot(new OrchestratorSnapshot([stored!], []));
-                operatorKernel.RequeueInterruptedDispatch(goal.Id, task.Id, "recover old attempt");
+                operatorKernel.RequeueInterruptedDispatch(
+                    goal.Id,
+                    task.Id,
+                    "recover old attempt",
+                    RetryCause.ProviderInterruption);
                 operatorKernel.RecordTaskDispatch(
                     goal.Id,
                     task.Id,
@@ -2071,7 +2075,11 @@ public sealed class SqliteOrchestratorStateRepositoryTests
             (stored, _) =>
             {
                 var operatorKernel = AgentOrchestratorKernel.FromSnapshot(new OrchestratorSnapshot([stored!], []));
-                operatorKernel.RequeueInterruptedDispatch(goal.Id, task.Id, "recover old attempt");
+                operatorKernel.RequeueInterruptedDispatch(
+                    goal.Id,
+                    task.Id,
+                    "recover old attempt",
+                    RetryCause.ProviderInterruption);
                 return Task.FromResult((true, operatorKernel.ExportSnapshot().Goals.Single(), true));
             });
 

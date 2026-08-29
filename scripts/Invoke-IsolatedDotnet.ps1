@@ -1,12 +1,12 @@
 <#
 .SYNOPSIS
-    Runs dotnet with isolated build artifacts, including reusable per-goal no-build timing passes.
+    Runs dotnet with isolated build artifacts and managed MTP test execution.
 
 .DESCRIPTION
-    Microsoft.Testing.Platform (MTP) test projects build and run in one dotnet test invocation,
-    with outputs routed into the goal's isolated artifact root. Use the same -GoalPrefix with
-    -ReuseArtifacts for later no-build timing passes. Reuse verifies the goal owner, test assembly,
-    and MTP executable before running xUnit directly without invoking MSBuild.
+    Microsoft.Testing.Platform (MTP) test projects build into the goal's isolated artifact root,
+    then run their managed test assembly through dotnet. Use the same -GoalPrefix with -ReuseArtifacts
+    for later no-build timing passes. Both paths verify the goal owner, test assembly, generated MTP
+    apphost, and dependency directory before managed execution; the native apphost is never launched.
     Builds share a two-lock machine-wide pool; test results never use the lock path.
 
 Set MCG_DOTNET_FORCE_CLEAN_STALE_LEASE_ARTIFACTS=1 to force stale-lease recovery to wipe
@@ -18,7 +18,7 @@ Measure-Command {
     .\scripts\Invoke-IsolatedDotnet.ps1 -GoalPrefix 10f9e458 test tests\Mcg.AgentOrchestrator.Infrastructure.Tests\Mcg.AgentOrchestrator.Infrastructure.Tests.csproj --verbosity minimal
 }
 
-Runs the build and xUnit in one step and leaves the output in the goal's reusable artifact root.
+Builds the project, runs its managed MTP assembly, and leaves the output in the goal's reusable artifact root.
 
 .EXAMPLE
 Measure-Command { .\scripts\Invoke-IsolatedDotnet.ps1 -GoalPrefix 10f9e458 -ReuseArtifacts test tests\Mcg.AgentOrchestrator.Infrastructure.Tests\Mcg.AgentOrchestrator.Infrastructure.Tests.csproj --no-build --verbosity minimal }
@@ -152,7 +152,7 @@ if ($FocusedTest) {
 }
 
 if ($DotnetArguments.Count -eq 0) {
-    throw "Usage: .\scripts\Invoke-IsolatedDotnet.ps1 [-GoalPrefix <goal-prefix>] test Mcg.AgentOrchestrator.sln --verbosity minimal"
+    throw "Usage: .\scripts\Invoke-IsolatedDotnet.ps1 [-GoalPrefix <goal-prefix>] test <test-project.csproj> --verbosity minimal"
 }
 
 $RepositoryRoot = (Get-Location).Path
@@ -474,7 +474,7 @@ function Get-ReusableTestArtifacts {
     if ([string]::IsNullOrWhiteSpace($projectPath)) {
         return [pscustomobject]@{
             Success = $false
-            Reason = "Reuse requires 'dotnet test' with an explicit .csproj, .fsproj, or .vbproj path."
+            Reason = "Reuse requires the 'test' verb with an explicit .csproj, .fsproj, or .vbproj path."
             ExpectedArtifactPath = (Join-Path $ArtifactsPath "bin\<project>\<configuration>_<target-framework>\<project>.dll")
             FoundOwnerToken = Get-OwnerMarkerToken -Path (Join-Path $ArtifactsPath ".mcg-artifacts-owner.json")
         }
@@ -676,78 +676,6 @@ function Get-MtpTestArguments {
     return $result.ToArray()
 }
 
-function Get-OneStepMtpDotnetTestArguments {
-    param(
-        [string[]]$Values,
-        [string]$ArtifactsPath
-    )
-
-    $targetPath = Get-DotnetTestTargetPath -Values $Values
-    if ([string]::IsNullOrWhiteSpace($targetPath)) {
-        throw "One-step MTP execution requires an explicit project or solution path."
-    }
-
-    $targetExtension = [System.IO.Path]::GetExtension($targetPath)
-    $targetOption = if ($targetExtension -in @(".sln", ".slnx")) { "--solution" } else { "--project" }
-    $result = [System.Collections.Generic.List[string]]::new()
-    $result.Add("test")
-    $result.Add($targetOption)
-    $result.Add($targetPath)
-
-    for ($i = 1; $i -lt $Values.Count; $i++) {
-        $value = $Values[$i]
-        if ($value.Equals($targetPath, [System.StringComparison]::OrdinalIgnoreCase) -or
-            $value.Equals("--project", [System.StringComparison]::OrdinalIgnoreCase) -or
-            $value.Equals("--solution", [System.StringComparison]::OrdinalIgnoreCase)) {
-            continue
-        }
-
-        if ($value.Equals("--configuration", [System.StringComparison]::OrdinalIgnoreCase) -or
-            $value.Equals("-c", [System.StringComparison]::OrdinalIgnoreCase) -or
-            $value.Equals("--framework", [System.StringComparison]::OrdinalIgnoreCase) -or
-            $value.Equals("-f", [System.StringComparison]::OrdinalIgnoreCase) -or
-            $value.Equals("--verbosity", [System.StringComparison]::OrdinalIgnoreCase) -or
-            $value.Equals("-v", [System.StringComparison]::OrdinalIgnoreCase) -or
-            $value.Equals("--arch", [System.StringComparison]::OrdinalIgnoreCase) -or
-            $value.Equals("-a", [System.StringComparison]::OrdinalIgnoreCase) -or
-            $value.Equals("--runtime", [System.StringComparison]::OrdinalIgnoreCase) -or
-            $value.Equals("-r", [System.StringComparison]::OrdinalIgnoreCase) -or
-            $value.Equals("--os", [System.StringComparison]::OrdinalIgnoreCase)) {
-            $result.Add($value)
-            if ($i + 1 -ge $Values.Count) {
-                throw "$value requires a value."
-            }
-            $result.Add($Values[++$i])
-            continue
-        }
-
-        if ($value.Equals("--no-build", [System.StringComparison]::OrdinalIgnoreCase) -or
-            $value.Equals("--no-restore", [System.StringComparison]::OrdinalIgnoreCase)) {
-            $result.Add($value)
-            continue
-        }
-
-        if ($value.StartsWith("-p:", [System.StringComparison]::OrdinalIgnoreCase) -or
-            $value.StartsWith("/p:", [System.StringComparison]::OrdinalIgnoreCase) -or
-            $value.StartsWith("--property:", [System.StringComparison]::OrdinalIgnoreCase)) {
-            $result.Add($value)
-        }
-    }
-
-    # ArtifactsPath is reserved by the .NET 10 MTP driver and is forwarded to the apphost as
-    # --artifacts-path. xunit.v3.mtp-v2 3.2.2 rejects that application argument. The repository-
-    # scoped property maps BaseOutputPath/BaseIntermediateOutputPath in Directory.Build.props
-    # without adding anything to the test application's argument vector.
-    $result.Add("--property:McgIsolatedArtifactsPath=$ArtifactsPath")
-    $result.Add("--property:BuildInParallel=false")
-    $result.Add("--")
-    foreach ($mtpArgument in (Get-MtpTestArguments -Values $Values)) {
-        $result.Add($mtpArgument)
-    }
-
-    return $result.ToArray()
-}
-
 function Get-ReuseBuildArguments {
     param([string[]]$Values)
 
@@ -761,6 +689,11 @@ function Get-ReuseBuildArguments {
             $value.Equals("-c", [System.StringComparison]::OrdinalIgnoreCase) -or
             $value.Equals("--framework", [System.StringComparison]::OrdinalIgnoreCase) -or
             $value.Equals("-f", [System.StringComparison]::OrdinalIgnoreCase) -or
+            $value.Equals("--arch", [System.StringComparison]::OrdinalIgnoreCase) -or
+            $value.Equals("-a", [System.StringComparison]::OrdinalIgnoreCase) -or
+            $value.Equals("--runtime", [System.StringComparison]::OrdinalIgnoreCase) -or
+            $value.Equals("-r", [System.StringComparison]::OrdinalIgnoreCase) -or
+            $value.Equals("--os", [System.StringComparison]::OrdinalIgnoreCase) -or
             $value.Equals("--verbosity", [System.StringComparison]::OrdinalIgnoreCase) -or
             $value.Equals("-v", [System.StringComparison]::OrdinalIgnoreCase)) {
             if ($i + 1 -lt $Values.Count) {
@@ -772,9 +705,13 @@ function Get-ReuseBuildArguments {
 
         if ($value.StartsWith("--configuration=", [System.StringComparison]::OrdinalIgnoreCase) -or
             $value.StartsWith("--framework=", [System.StringComparison]::OrdinalIgnoreCase) -or
+            $value.StartsWith("--arch=", [System.StringComparison]::OrdinalIgnoreCase) -or
+            $value.StartsWith("--runtime=", [System.StringComparison]::OrdinalIgnoreCase) -or
+            $value.StartsWith("--os=", [System.StringComparison]::OrdinalIgnoreCase) -or
             $value.StartsWith("--verbosity=", [System.StringComparison]::OrdinalIgnoreCase) -or
             $value.StartsWith("-p:", [System.StringComparison]::OrdinalIgnoreCase) -or
             $value.StartsWith("/p:", [System.StringComparison]::OrdinalIgnoreCase) -or
+            $value.StartsWith("--property:", [System.StringComparison]::OrdinalIgnoreCase) -or
             $value.Equals("--no-restore", [System.StringComparison]::OrdinalIgnoreCase) -or
             $value.Equals("--nologo", [System.StringComparison]::OrdinalIgnoreCase)) {
             $result.Add($value)
@@ -1694,14 +1631,15 @@ function Invoke-FocusedTestMode {
             "--report-trx", "--report-trx-filename", $trxName,
             "--long-running", "120"
         ) + @(Get-FocusedMtpFilterArguments -Filter $FocusedTestFilter)
-        $receipt.testExecutable = $reuse.ExecutablePath
-        $receipt.testArguments = @($testArguments)
+        $testProcessArguments = @($reuse.AssemblyPath) + $testArguments
+        $receipt.testExecutable = "dotnet"
+        $receipt.testArguments = @($testProcessArguments)
         if ([DateTime]::UtcNow -ge $processDeadline) {
             $receipt.exitCode = 2
             $receipt.reason = "budget-exceeded"
             return $receipt
         }
-        $testRun = Invoke-FocusedChildProcess -FileName $reuse.ExecutablePath -ProcessArguments $testArguments -Deadline $processDeadline -HeartbeatPath $slotLease.HeartbeatPath -AcceptancePriorityPath "$($slotLease.Path).acceptance-priority.lock"
+        $testRun = Invoke-FocusedChildProcess -FileName "dotnet" -ProcessArguments $testProcessArguments -Deadline $processDeadline -HeartbeatPath $slotLease.HeartbeatPath -AcceptancePriorityPath "$($slotLease.Path).acceptance-priority.lock"
         Set-FocusedChildProcessReceipt -Receipt $receipt -Result $testRun
         $testLogPath = Join-Path $outputDirectory "test.log"
         Write-FocusedLog -Path $testLogPath -Stdout $testRun.Stdout -Stderr $testRun.Stderr
@@ -1978,7 +1916,7 @@ try {
             $exitCode = 86
         }
         else {
-            Write-Host "Reusing test assembly '$($reuse.AssemblyPath)' and MTP executable '$($reuse.ExecutablePath)' with dependency directory '$($reuse.DependencyDirectory)'."
+            Write-Host "Reusing test assembly '$($reuse.AssemblyPath)' with validated generated apphost '$($reuse.ExecutablePath)' and dependency directory '$($reuse.DependencyDirectory)'."
         }
     }
 
@@ -1991,18 +1929,48 @@ try {
             $lockStream.Dispose()
             $lockStream = $null
             $lockHeld = $false
-            & $reuse.ExecutablePath @mtpArguments
+            & dotnet $reuse.AssemblyPath @mtpArguments
+            $exitCode = $LASTEXITCODE
         }
         else {
             if ($DotnetArguments[0].Equals("test", [System.StringComparison]::OrdinalIgnoreCase)) {
-                $oneStepArguments = Get-OneStepMtpDotnetTestArguments -Values $DotnetArguments -ArtifactsPath $artifactsPath
-                & dotnet @oneStepArguments
+                $testProject = Get-TestProjectPath -Values $DotnetArguments
+                if ([string]::IsNullOrWhiteSpace($testProject)) {
+                    throw "Managed isolated MTP execution requires an explicit test project path. Run .\scripts\Invoke-TestSummary.ps1 -Target .\Mcg.AgentOrchestrator.sln for the full solution."
+                }
+                if ($DotnetArguments | Where-Object { $_.Equals("--no-build", [System.StringComparison]::OrdinalIgnoreCase) }) {
+                    throw "--no-build requires -ReuseArtifacts so the managed test assembly can be ownership-validated."
+                }
+
+                $buildArguments = Get-ReuseBuildArguments -Values $DotnetArguments
+                & dotnet @buildArguments @isolatedArguments
+                $exitCode = $LASTEXITCODE
+                if ($exitCode -eq 0) {
+                    $builtArtifacts = Get-ReusableTestArtifacts -ArtifactsPath $artifactsPath -OwnerToken $ownerToken -DotnetArguments $DotnetArguments
+                    if (-not $builtArtifacts.Success) {
+                        [Console]::Error.WriteLine(
+                            "Managed MTP build output validation failed: $($builtArtifacts.Reason) " +
+                            "Expected artifact path: '$($builtArtifacts.ExpectedArtifactPath)'.")
+                        $exitCode = 86
+                    }
+                    else {
+                        Write-Host "Running managed test assembly '$($builtArtifacts.AssemblyPath)' through dotnet; native apphost '$($builtArtifacts.ExecutablePath)' will not be launched."
+                        $mtpArguments = Get-MtpTestArguments -Values $DotnetArguments
+                        & dotnet build-server shutdown *> $null
+                        $lockStream.Unlock(0, 1)
+                        $lockStream.Dispose()
+                        $lockStream = $null
+                        $lockHeld = $false
+                        & dotnet $builtArtifacts.AssemblyPath @mtpArguments
+                        $exitCode = $LASTEXITCODE
+                    }
+                }
             }
             else {
                 & dotnet @DotnetArguments @isolatedArguments
+                $exitCode = $LASTEXITCODE
             }
         }
-        $exitCode = $LASTEXITCODE
         if ($exitCode -eq 0 -and (Test-AppDllChangedSinceSnapshot -Snapshot $appDllBeforeDotnet)) {
             Update-AppDllGitHeadMarker
         }

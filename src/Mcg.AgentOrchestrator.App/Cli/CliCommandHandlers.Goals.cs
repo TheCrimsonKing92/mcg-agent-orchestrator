@@ -1045,7 +1045,11 @@ private static bool? TryExecuteGoalCommand(string command, IReadOnlyList<string>
 
         case "readiness":
             context.CurrentGoal = OrchestratorEntityResolver.ResolveGoal(context.Kernel, context.CurrentGoal, parts.Count > 1 ? parts[1] : null);
-            var readinessSweep = TerminalGoalSweep.Run(context.Kernel, context.Workspace.ExecutionDirectory, context.CurrentGoal.Id);
+            var readinessSweep = TerminalGoalSweep.Run(
+                context.Kernel,
+                context.Workspace.ExecutionDirectory,
+                context.CurrentGoal.Id,
+                orchestratorDirectory: context.Workspace.OrchestratorDirectory);
             ConsoleViews.PrintTerminalGoalSweep(readinessSweep);
             TerminalGoalSweepAttention.Surface(context.Kernel, readinessSweep, context.Workspace.OrchestratorDirectory, context.CurrentGoal.Id);
             context.CurrentGoal = context.Kernel.GetGoal(context.CurrentGoal.Id);
@@ -1059,7 +1063,11 @@ private static bool? TryExecuteGoalCommand(string command, IReadOnlyList<string>
 
         case "goal-recovery":
             context.CurrentGoal = OrchestratorEntityResolver.ResolveGoal(context.Kernel, context.CurrentGoal, parts.Count > 1 ? parts[1] : null);
-            var recoverySweep = TerminalGoalSweep.Run(context.Kernel, context.Workspace.ExecutionDirectory, context.CurrentGoal.Id);
+            var recoverySweep = TerminalGoalSweep.Run(
+                context.Kernel,
+                context.Workspace.ExecutionDirectory,
+                context.CurrentGoal.Id,
+                orchestratorDirectory: context.Workspace.OrchestratorDirectory);
             ConsoleViews.PrintTerminalGoalSweep(recoverySweep);
             TerminalGoalSweepAttention.Surface(context.Kernel, recoverySweep, context.Workspace.OrchestratorDirectory, context.CurrentGoal.Id);
             context.CurrentGoal = context.Kernel.GetGoal(context.CurrentGoal.Id);
@@ -1289,7 +1297,11 @@ private static bool? TryExecuteGoalCommand(string command, IReadOnlyList<string>
                 return false;
             }
 
-            var nextSweep = TerminalGoalSweep.Run(context.Kernel, context.Workspace.ExecutionDirectory, context.CurrentGoal.Id);
+            var nextSweep = TerminalGoalSweep.Run(
+                context.Kernel,
+                context.Workspace.ExecutionDirectory,
+                context.CurrentGoal.Id,
+                orchestratorDirectory: context.Workspace.OrchestratorDirectory);
             ConsoleViews.PrintTerminalGoalSweep(nextSweep);
             TerminalGoalSweepAttention.Surface(context.Kernel, nextSweep, context.Workspace.OrchestratorDirectory, context.CurrentGoal.Id);
             context.CurrentGoal = context.Kernel.GetGoal(context.CurrentGoal.Id);
@@ -1675,11 +1687,20 @@ private static bool? TryExecuteGoalCommand(string command, IReadOnlyList<string>
                         catch { /* per-goal isolation */ }
                     }
 
-                    var terminalSweep = TerminalGoalSweep.Run(loopKernel, context.Workspace.ExecutionDirectory, cache: terminalSweepCache);
+                    var terminalSweep = TerminalGoalSweep.Run(
+                        loopKernel,
+                        context.Workspace.ExecutionDirectory,
+                        cache: terminalSweepCache,
+                        orchestratorDirectory: context.Workspace.OrchestratorDirectory);
                     var remediation = reconcileSweepCoordinator.Process(terminalSweep);
                     if (remediation.RemedySucceeded)
                     {
-                        terminalSweep = TerminalGoalSweep.Run(loopKernel, context.Workspace.ExecutionDirectory, cache: terminalSweepCache);
+                        var remediatedSweep = TerminalGoalSweep.Run(
+                            loopKernel,
+                            context.Workspace.ExecutionDirectory,
+                            cache: terminalSweepCache,
+                            orchestratorDirectory: context.Workspace.OrchestratorDirectory);
+                        terminalSweep = remediatedSweep.PreserveTerminalizationsFrom(terminalSweep);
                     }
                     terminalSweep = terminalSweep with { ProgressEvents = remediation.Events };
                     ConsoleViews.PrintTerminalGoalSweep(terminalSweep, includeBlockers: false);

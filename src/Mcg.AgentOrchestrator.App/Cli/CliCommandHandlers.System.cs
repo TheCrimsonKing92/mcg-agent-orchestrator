@@ -576,7 +576,10 @@ internal static partial class CliCommandHandlers
                 return false;
 
             case "repo-process-stop":
-                RepoProcessCliCommand.Stop(parts, Console.Out);
+                if (!RepoProcessCliCommand.Stop(parts, Console.Out))
+                {
+                    throw new CliExitException(1);
+                }
                 return false;
 
             case "stable-slot-dotnet":
@@ -1422,7 +1425,15 @@ internal static partial class CliCommandHandlers
             projectName,
             "debug",
             $"{projectName}{(OperatingSystem.IsWindows() ? ".exe" : string.Empty)}");
-        if (ShouldBuildStableSlotMtpProject(noBuild, File.Exists(executable)))
+        var managedAssembly = Path.Combine(
+            environment.ArtifactsPath,
+            "bin",
+            projectName,
+            "debug",
+            $"{projectName}.dll");
+        if (ShouldBuildStableSlotMtpProject(
+                noBuild,
+                File.Exists(executable) && File.Exists(managedAssembly)))
         {
             var buildExit = RunStableSlotProcess(
                 "dotnet",
@@ -1440,10 +1451,17 @@ internal static partial class CliCommandHandlers
             throw new InvalidOperationException($"MTP test executable was not produced: {executable}");
         }
 
+        if (!File.Exists(managedAssembly))
+        {
+            throw new InvalidOperationException($"MTP test managed assembly was not produced: {managedAssembly}");
+        }
+
         buildLease.ReleaseExecutionLock();
         var configuredResultsDirectory = ReadStableSlotOption(parts, "--results-directory");
-        var resultsDirectory = configuredResultsDirectory ??
-            Path.Combine(environment.ArtifactsPath, "TestResults");
+        var resultsDirectory = ResolveStableSlotResultsDirectory(
+            configuredResultsDirectory,
+            context.Workspace.RootDirectory,
+            Path.Combine(environment.ArtifactsPath, "TestResults"));
         Directory.CreateDirectory(resultsDirectory);
         var mtpArguments = new List<string>
         {
@@ -1463,8 +1481,8 @@ internal static partial class CliCommandHandlers
         }
 
         var testExit = RunStableSlotProcess(
-            executable,
-            mtpArguments,
+            "dotnet",
+            [managedAssembly, .. mtpArguments],
             context.Workspace.RootDirectory,
             configureDotnetEnvironment: false);
         if (testExit != 0)
@@ -1481,8 +1499,16 @@ internal static partial class CliCommandHandlers
                     StringComparison.OrdinalIgnoreCase);
     }
 
-    internal static bool ShouldBuildStableSlotMtpProject(bool noBuild, bool executableExists) =>
-        !noBuild || !executableExists;
+    internal static bool ShouldBuildStableSlotMtpProject(bool noBuild, bool artifactsExist) =>
+        !noBuild || !artifactsExist;
+
+    internal static string ResolveStableSlotResultsDirectory(
+        string? configuredResultsDirectory,
+        string workspaceRoot,
+        string defaultResultsDirectory) =>
+        configuredResultsDirectory is null
+            ? Path.GetFullPath(defaultResultsDirectory)
+            : Path.GetFullPath(configuredResultsDirectory, Path.GetFullPath(workspaceRoot));
 
     private static string? ReadStableSlotOption(IReadOnlyList<string> parts, string option)
     {
@@ -1555,14 +1581,22 @@ internal static partial class CliCommandHandlers
             startInfo.ArgumentList.Add(argument);
         }
 
-        using var process = Process.Start(startInfo)
-            ?? throw new InvalidOperationException("Failed to start dotnet process.");
-        var standardOutput = process.StandardOutput.ReadToEndAsync();
-        var standardError = process.StandardError.ReadToEndAsync();
-        process.WaitForExit();
-        Console.Out.Write(standardOutput.GetAwaiter().GetResult());
-        Console.Error.Write(standardError.GetAwaiter().GetResult());
-        return process.ExitCode;
+        Process process;
+        using (ProcessTreeGuiSuppression.AcquireErrorModeForChildSpawn())
+        {
+            process = Process.Start(startInfo)
+                ?? throw new InvalidOperationException("Failed to start dotnet process.");
+        }
+
+        using (process)
+        {
+            var standardOutput = process.StandardOutput.ReadToEndAsync();
+            var standardError = process.StandardError.ReadToEndAsync();
+            process.WaitForExit();
+            Console.Out.Write(standardOutput.GetAwaiter().GetResult());
+            Console.Error.Write(standardError.GetAwaiter().GetResult());
+            return process.ExitCode;
+        }
     }
 
     private static void PrintCleanupStatus(

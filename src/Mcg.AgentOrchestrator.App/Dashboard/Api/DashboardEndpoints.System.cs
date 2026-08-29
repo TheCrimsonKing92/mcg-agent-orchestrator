@@ -115,7 +115,7 @@ internal static partial class DashboardEndpoints
                 ? "No sibling dashboard processes are currently detected."
                 : "Stop only stale sibling dashboard PIDs listed in SiblingProcesses after confirming their ports are not the active dashboard.",
             $"Verify no dashboard app process remains with: {verifyNoAppProcesses}",
-            "Run isolated verification with .\\scripts\\Invoke-IsolatedDotnet.ps1 test Mcg.AgentOrchestrator.sln --verbosity minimal.",
+            "Run managed MTP verification with .\\scripts\\Invoke-TestSummary.ps1 -Target .\\Mcg.AgentOrchestrator.sln.",
             $"Restart with: {BuildDashboardRestartCommand(services)}"
         };
 
@@ -127,7 +127,7 @@ internal static partial class DashboardEndpoints
             siblings,
             verifyNoAppProcesses,
             ".\\scripts\\Invoke-IsolatedDotnet.ps1 build Mcg.AgentOrchestrator.sln --no-restore --verbosity minimal",
-            ".\\scripts\\Invoke-IsolatedDotnet.ps1 test Mcg.AgentOrchestrator.sln --verbosity minimal",
+            ".\\scripts\\Invoke-TestSummary.ps1 -Target .\\Mcg.AgentOrchestrator.sln",
             BuildDashboardRestartCommand(services),
             buildTestCycleCommand,
             checklist);

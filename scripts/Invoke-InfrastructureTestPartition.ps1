@@ -1,11 +1,11 @@
 <#
 .SYNOPSIS
-  Run or list manifest-backed Infrastructure test-suite partitions through the MTP apphost.
+  Run or list manifest-backed Infrastructure test-suite partitions through the managed MTP assembly.
 
 .DESCRIPTION
   Reads local partition groupings and acceptance lane filters from
   config/acceptance-manifest.json. Builds the Infrastructure test project by default, then
-  launches its Microsoft.Testing.Platform executable directly and prints live runner output
+  launches its Microsoft.Testing.Platform assembly through dotnet and prints live runner output
   plus a compact TRX summary. Clean-run receipts are removed; failed runs are retained.
 
 .EXAMPLE

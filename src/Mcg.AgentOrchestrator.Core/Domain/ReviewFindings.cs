@@ -138,6 +138,54 @@ public sealed record ReviewFindingLocation(
         string.IsNullOrWhiteSpace(Hunk)
             ? $"{File}::{Region}"
             : $"{File}::{Region} [{Hunk}]";
+
+    public bool SameAnchor(ReviewFindingLocation other)
+    {
+        ArgumentNullException.ThrowIfNull(other);
+        if (!string.Equals(File, other.File, StringComparison.OrdinalIgnoreCase))
+        {
+            return false;
+        }
+
+        return string.Equals(Region, other.Region, StringComparison.Ordinal) ||
+               string.Equals(NormalizeRegion(Region), NormalizeRegion(other.Region), StringComparison.Ordinal);
+    }
+
+    internal static string NormalizeRegion(string region)
+    {
+        var normalized = Regex.Replace(region.Trim(), @"\s+", " ").ToLowerInvariant();
+        var withoutLineRange = Regex.Replace(
+            normalized,
+            @"(?:\s*:\s*\d+(?:\s*-\s*\d+)?|\s*\[\s*(?:lines?\s+)?\d+(?:\s*-\s*\d+)?\s*\]|\s+l\d+\s*-\s*l?\d+|\s+lines?\s+\d+\s*-\s*\d+|(?<!\d)\d+\s*-\s*\d+)\s*$",
+            string.Empty).TrimEnd();
+        if (withoutLineRange.Length > 0)
+        {
+            normalized = withoutLineRange;
+        }
+
+        var withoutArguments = Regex.Replace(normalized, @"\s*\(.*\)\s*$", string.Empty, RegexOptions.Singleline).TrimEnd();
+        if (withoutArguments.Length > 0)
+        {
+            normalized = withoutArguments;
+        }
+
+        var withoutTypeParameters = Regex.Replace(normalized, @"<[^<>]*>\s*$", string.Empty).TrimEnd();
+        if (withoutTypeParameters.Length > 0)
+        {
+            normalized = withoutTypeParameters;
+        }
+
+        if (!normalized.Contains(' '))
+        {
+            var finalSeparator = normalized.LastIndexOf('.');
+            if (finalSeparator >= 0 && finalSeparator < normalized.Length - 1)
+            {
+                normalized = normalized[(finalSeparator + 1)..];
+            }
+        }
+
+        return normalized;
+    }
 }
 
 public sealed record FindingEvidenceSelection(
@@ -1111,63 +1159,10 @@ public static class ReviewFindingConvergence
     // Identity-level anchor equality: file + canonical region only. Region text is reviewer-authored,
     // so harmless signature, qualification, whitespace, and casing paraphrases share an identity.
     // Raw submitted location text remains on the merged finding; normalization is comparison-only.
-    private static bool SameAnchor(ReviewFindingLocation left, ReviewFindingLocation right)
-    {
-        if (!string.Equals(left.File, right.File, StringComparison.OrdinalIgnoreCase))
-        {
-            return false;
-        }
+    private static bool SameAnchor(ReviewFindingLocation left, ReviewFindingLocation right) =>
+        left.SameAnchor(right);
 
-        if (string.Equals(left.Region, right.Region, StringComparison.Ordinal))
-        {
-            return true;
-        }
-
-        return string.Equals(
-            NormalizeRegion(left.Region),
-            NormalizeRegion(right.Region),
-            StringComparison.Ordinal);
-    }
-
-    private static string NormalizeRegion(string region)
-    {
-        var normalized = Regex.Replace(region.Trim(), @"\s+", " ").ToLowerInvariant();
-        var withoutLineRange = Regex.Replace(
-            normalized,
-            @"(?:\s*:\s*\d+(?:\s*-\s*\d+)?|\s*\[\s*(?:lines?\s+)?\d+(?:\s*-\s*\d+)?\s*\]|\s+l\d+\s*-\s*l?\d+|\s+lines?\s+\d+\s*-\s*\d+|(?<!\d)\d+\s*-\s*\d+)\s*$",
-            string.Empty).TrimEnd();
-        if (withoutLineRange.Length > 0)
-        {
-            normalized = withoutLineRange;
-        }
-
-        var withoutArguments = Regex.Replace(
-            normalized,
-            @"\s*\(.*\)\s*$",
-            string.Empty,
-            RegexOptions.Singleline).TrimEnd();
-        if (withoutArguments.Length > 0)
-        {
-            normalized = withoutArguments;
-        }
-
-        var withoutTypeParameters = Regex.Replace(normalized, @"<[^<>]*>\s*$", string.Empty).TrimEnd();
-        if (withoutTypeParameters.Length > 0)
-        {
-            normalized = withoutTypeParameters;
-        }
-
-        if (!normalized.Contains(' '))
-        {
-            var finalSeparator = normalized.LastIndexOf('.');
-            if (finalSeparator >= 0 && finalSeparator < normalized.Length - 1)
-            {
-                normalized = normalized[(finalSeparator + 1)..];
-            }
-        }
-
-        return normalized;
-    }
+    private static string NormalizeRegion(string region) => ReviewFindingLocation.NormalizeRegion(region);
 
     private static string BuildIdentityMovedMessage(
         string stableId,

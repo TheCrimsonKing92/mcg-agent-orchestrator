@@ -31,14 +31,12 @@ public sealed class GoalAcceptanceVerifierDotnetBuildSlotTestsVerdictAndBuildCac
                     remainderRuns++;
                     return Task.FromResult(remainderRuns < 3
                         ? new GoalAcceptanceVerifier.CommandResult(1, "Failed! - Failed: 1, Passed: 0, Skipped: 0, Total: 1.")
-                        : new GoalAcceptanceVerifier.CommandResult(0, "Passed! - Failed: 0, Passed: 1, Skipped: 0, Total: 1."));
+                        : CreatePassingVstestResult(args, "RemainderPartition.Passes"));
                 }
 
-                return Task.FromResult(new GoalAcceptanceVerifier.CommandResult(
-                    0,
-                    args.Length > 1 && args[0] == "dotnet" && args[1] == "test"
-                        ? "Passed! - Failed: 0, Passed: 1, Skipped: 0, Total: 1."
-                        : ""));
+                return Task.FromResult(IsVstestCall(args)
+                    ? CreatePassingVstestResult(args)
+                    : new GoalAcceptanceVerifier.CommandResult(0, ""));
             });
 
             Environment.SetEnvironmentVariable(
@@ -111,11 +109,9 @@ public sealed class GoalAcceptanceVerifierDotnetBuildSlotTestsVerdictAndBuildCac
                         "Failed! - Failed: 1, Passed: 0, Skipped: 0, Total: 1."));
                 }
 
-                return Task.FromResult(new GoalAcceptanceVerifier.CommandResult(
-                    0,
-                    args.Length > 1 && args[0] == "dotnet" && args[1] == "test"
-                        ? "Passed! - Failed: 0, Passed: 1, Skipped: 0, Total: 1."
-                        : ""));
+                return Task.FromResult(IsVstestCall(args)
+                    ? CreatePassingVstestResult(args)
+                    : new GoalAcceptanceVerifier.CommandResult(0, ""));
             });
 
             var result = await verifier.RunAsync(root, goalId);
@@ -155,22 +151,40 @@ public sealed class GoalAcceptanceVerifierDotnetBuildSlotTestsVerdictAndBuildCac
                 {
                     cliRuns++;
                     // Intermittent flake: fail the first run, pass the within-attempt re-run.
+                    if (cliRuns == 2)
+                    {
+                        WriteVstestTrx(args, "CliPartition.Passes");
+                    }
+
                     return Task.FromResult(cliRuns < 2
-                        ? new GoalAcceptanceVerifier.CommandResult(1, "Failed! - Failed: 1, Passed: 0, Skipped: 0, Total: 1.")
+                        ? CreateFailedResultWithHeartbeat(
+                            goalId,
+                            root,
+                            "infrastructure tests: Cli",
+                            "retry-driving stderr from the original Cli partition")
                         : new GoalAcceptanceVerifier.CommandResult(0, "Passed! - Failed: 0, Passed: 1, Skipped: 0, Total: 1."));
                 }
 
-                return Task.FromResult(new GoalAcceptanceVerifier.CommandResult(
-                    0,
-                    args.Length > 1 && args[0] == "dotnet" && args[1] == "test"
-                        ? "Passed! - Failed: 0, Passed: 1, Skipped: 0, Total: 1."
-                        : ""));
+                return Task.FromResult(IsVstestCall(args)
+                    ? CreatePassingVstestResult(args, "UnrelatedPartition.Passes")
+                    : new GoalAcceptanceVerifier.CommandResult(0, ""));
             });
 
             var result = await verifier.RunAsync(root, goalId);
 
-            Assert.True(result.Passed);
+            Assert.True(
+                result.Passed,
+                DescribeFailedChecks(result));
+            Assert.True(result.Retried);
             Assert.Equal(2, cliRuns);
+            var unrelatedPartitionCommands = calls
+                .Where(IsInfrastructurePartitionTestCall)
+                .Where(arguments => !arguments.Contains(cliLaneFilter))
+                .Select(arguments => string.Join('\u001f', arguments))
+                .ToArray();
+            Assert.Equal(
+                unrelatedPartitionCommands.Length,
+                unrelatedPartitionCommands.Distinct(StringComparer.Ordinal).Count());
         }
         finally
         {
@@ -195,10 +209,14 @@ public sealed class GoalAcceptanceVerifierDotnetBuildSlotTestsVerdictAndBuildCac
         var goalId = new GoalId("dddddddddddddddddddddddddddddddd");
         var calls = new List<string[]>();
         var mtpRuns = 0;
+        var previousPrefix = Environment.GetEnvironmentVariable(GoalAcceptanceVerifier.AcceptanceAttemptTrxPrefixVariable);
         SetPartitionVerdictKeyHooks("tree-mtp", "main-mtp", "commit-mtp");
         GoalAcceptanceVerifier.PartitionVerdictWithinAttemptRerunEnabled = true;
         try
         {
+            Environment.SetEnvironmentVariable(
+                GoalAcceptanceVerifier.AcceptanceAttemptTrxPrefixVariable,
+                Path.Combine(root, ".orchestrator", "attempt-mtp"));
             var verifier = new GoalAcceptanceVerifier((args, _, _) =>
             {
                 calls.Add(args);
@@ -207,10 +225,14 @@ public sealed class GoalAcceptanceVerifierDotnetBuildSlotTestsVerdictAndBuildCac
                     mtpRuns++;
                     if (mtpRuns == 1)
                     {
-                        return Task.FromResult(new GoalAcceptanceVerifier.CommandResult(1, "Failed! - Failed: 1, Passed: 0, Skipped: 0, Total: 1."));
+                        return Task.FromResult(CreateFailedResultWithHeartbeat(
+                            goalId,
+                            root,
+                            "infrastructure tests: Cli",
+                            "retry-driving stderr from the original MTP Cli partition"));
                     }
 
-                    WriteMtpTrx(args);
+                    WriteMtpTrx(args, 1, ["CliPartition.Passes"]);
                     return Task.FromResult(new GoalAcceptanceVerifier.CommandResult(0, "Passed! - Failed: 0, Passed: 1, Skipped: 0, Total: 1."));
                 }
 
@@ -219,7 +241,9 @@ public sealed class GoalAcceptanceVerifierDotnetBuildSlotTestsVerdictAndBuildCac
 
             var result = await verifier.RunAsync(root, goalId);
 
-            Assert.True(result.Passed);
+            Assert.True(
+                result.Passed,
+                DescribeFailedChecks(result));
             Assert.True(result.Retried);
             Assert.Equal(2, mtpRuns);
             var partition = Assert.Single(
@@ -235,9 +259,45 @@ public sealed class GoalAcceptanceVerifierDotnetBuildSlotTestsVerdictAndBuildCac
         }
         finally
         {
+            Environment.SetEnvironmentVariable(GoalAcceptanceVerifier.AcceptanceAttemptTrxPrefixVariable, previousPrefix);
             GoalAcceptanceVerifier.PartitionVerdictWithinAttemptRerunEnabled = true;
             ResetPartitionVerdictKeyHooks();
             DotnetBuildEnvironmentManager.TryDeleteGoalArtifacts(goalId);
+            DeleteDirectoryWithRetry(root);
+        }
+    }
+
+    [Xunit.Fact(DisplayName = "GoalAcceptanceVerifier_exit_zero_cleanup_retains_retry_diagnostic_bytes")]
+    public async Task GoalAcceptanceVerifierExitZeroCleanupRetainsRetryDiagnosticBytes()
+    {
+        var root = Path.Combine(Path.GetTempPath(), "mcg-acceptance-retry-diagnostic", Guid.NewGuid().ToString("N"));
+        Directory.CreateDirectory(root);
+        try
+        {
+            var result = await GoalAcceptanceVerifier.RunProcessForTestsAsync(
+                ["powershell", "-NoProfile", "-Command", "[Console]::Error.Write('retry-driving stderr')"],
+                root,
+                TimeSpan.FromSeconds(30));
+
+            Assert.Equal(0, result.ExitCode);
+            Assert.False(File.Exists(result.StderrPath));
+            Assert.Equal("retry-driving stderr", result.Stderr);
+
+            var retained = AcceptanceAttemptArtifactCustody.RetainRetryDiagnostic(
+                Path.Combine(root, "attempt", "acceptance"),
+                fallbackArtifactsPath: null,
+                "exit-zero-run-0",
+                result.StderrPath,
+                result.Stderr,
+                "{\"fallback\":true}");
+            Assert.True(File.Exists(retained.Path));
+            Assert.Equal("retry-driving stderr", File.ReadAllText(retained.Path));
+            Assert.Equal(
+                Convert.ToHexStringLower(System.Security.Cryptography.SHA256.HashData(File.ReadAllBytes(retained.Path))),
+                retained.Sha256);
+        }
+        finally
+        {
             DeleteDirectoryWithRetry(root);
         }
     }
@@ -269,11 +329,9 @@ public sealed class GoalAcceptanceVerifierDotnetBuildSlotTestsVerdictAndBuildCac
                     return Task.FromResult(new GoalAcceptanceVerifier.CommandResult(1, "unrelated failure"));
                 }
 
-                return Task.FromResult(new GoalAcceptanceVerifier.CommandResult(
-                    0,
-                    args.Length > 1 && args[0] == "dotnet" && args[1] == "test"
-                        ? "Passed! - Failed: 0, Passed: 1, Skipped: 0, Total: 1."
-                        : ""));
+                return Task.FromResult(IsVstestCall(args)
+                    ? CreatePassingVstestResult(args)
+                    : new GoalAcceptanceVerifier.CommandResult(0, ""));
             });
 
             var result = await verifier.RunAsync(root, goalId);
@@ -306,11 +364,9 @@ public sealed class GoalAcceptanceVerifierDotnetBuildSlotTestsVerdictAndBuildCac
             var verifier = new GoalAcceptanceVerifier((args, _, _) =>
             {
                 calls.Add(args);
-                return Task.FromResult(new GoalAcceptanceVerifier.CommandResult(
-                    0,
-                    args.Length > 1 && args[0] == "dotnet" && args[1] == "test"
-                        ? "Passed! - Failed: 0, Passed: 1, Skipped: 0, Total: 1."
-                        : ""));
+                return Task.FromResult(IsVstestCall(args)
+                    ? CreatePassingVstestResult(args)
+                    : new GoalAcceptanceVerifier.CommandResult(0, ""));
             });
 
             Assert.True((await verifier.RunAsync(root, goalId)).Passed);
@@ -349,11 +405,9 @@ public sealed class GoalAcceptanceVerifierDotnetBuildSlotTestsVerdictAndBuildCac
             var verifier = new GoalAcceptanceVerifier((args, _, _) =>
             {
                 calls.Add(args);
-                return Task.FromResult(new GoalAcceptanceVerifier.CommandResult(
-                    0,
-                    args.Length > 1 && args[0] == "dotnet" && args[1] == "test"
-                        ? "Passed! - Failed: 0, Passed: 1, Skipped: 0, Total: 1."
-                        : ""));
+                return Task.FromResult(IsVstestCall(args)
+                    ? CreatePassingVstestResult(args)
+                    : new GoalAcceptanceVerifier.CommandResult(0, ""));
             });
 
             Assert.True((await verifier.RunAsync(root, goalId)).Passed);
@@ -392,11 +446,9 @@ public sealed class GoalAcceptanceVerifierDotnetBuildSlotTestsVerdictAndBuildCac
             var verifier = new GoalAcceptanceVerifier((args, _, _) =>
             {
                 calls.Add(args);
-                return Task.FromResult(new GoalAcceptanceVerifier.CommandResult(
-                    0,
-                    args.Length > 1 && args[0] == "dotnet" && args[1] == "test"
-                        ? "Passed! - Failed: 0, Passed: 1, Skipped: 0, Total: 1."
-                        : ""));
+                return Task.FromResult(IsVstestCall(args)
+                    ? CreatePassingVstestResult(args)
+                    : new GoalAcceptanceVerifier.CommandResult(0, ""));
             });
 
             Assert.True((await verifier.RunAsync(root, goalId)).Passed);
@@ -447,11 +499,9 @@ public sealed class GoalAcceptanceVerifierDotnetBuildSlotTestsVerdictAndBuildCac
                         "Failed! - Failed: 1, Passed: 0, Skipped: 0, Total: 1."));
                 }
 
-                return Task.FromResult(new GoalAcceptanceVerifier.CommandResult(
-                    0,
-                    args.Length > 1 && args[0] == "dotnet" && args[1] == "test"
-                        ? "Passed! - Failed: 0, Passed: 1, Skipped: 0, Total: 1."
-                        : ""));
+                return Task.FromResult(IsVstestCall(args)
+                    ? CreatePassingVstestResult(args)
+                    : new GoalAcceptanceVerifier.CommandResult(0, ""));
             });
 
             Assert.True((await verifier.RunAsync(root, goalId)).Passed);
@@ -537,9 +587,13 @@ public sealed class GoalAcceptanceVerifierDotnetBuildSlotTestsVerdictAndBuildCac
 
                 if (args.Length >= 2 && args[0] == "dotnet" && args[1] == "test")
                 {
-                    return Task.FromResult(new GoalAcceptanceVerifier.CommandResult(
-                        0,
-                        "Passed! - Failed: 0, Passed: 1, Skipped: 0, Total: 1."));
+                    return Task.FromResult(CreatePassingVstestResult(args));
+                }
+
+                if (args.Contains("--report-trx-filename"))
+                {
+                    WriteMtpTrx(args, 1, ["GreenPartition.Passes"]);
+                    return Task.FromResult(new GoalAcceptanceVerifier.CommandResult(0, "Passed: 1"));
                 }
 
                 return Task.FromResult(new GoalAcceptanceVerifier.CommandResult(0, ""));
@@ -556,7 +610,9 @@ public sealed class GoalAcceptanceVerifierDotnetBuildSlotTestsVerdictAndBuildCac
                     .GetResult());
 
             Assert.NotNull(result);
-            Assert.True(result!.Passed);
+            Assert.True(
+                result!.Passed,
+                DescribeFailedChecks(result));
             var buildCalls = calls
                 .Where(call => call.Length >= 2 && call[0] == "dotnet" && call[1] == "build")
                 .ToArray();
@@ -635,9 +691,13 @@ public sealed class GoalAcceptanceVerifierDotnetBuildSlotTestsVerdictAndBuildCac
 
                 if (args.Length >= 2 && args[0] == "dotnet" && args[1] == "test")
                 {
-                    return Task.FromResult(new GoalAcceptanceVerifier.CommandResult(
-                        0,
-                        "Passed! - Failed: 0, Passed: 1, Skipped: 0, Total: 1."));
+                    return Task.FromResult(CreatePassingVstestResult(args));
+                }
+
+                if (args.Contains("--report-trx-filename"))
+                {
+                    WriteMtpTrx(args, 1, ["GreenPartition.Passes"]);
+                    return Task.FromResult(new GoalAcceptanceVerifier.CommandResult(0, "Passed: 1"));
                 }
 
                 return Task.FromResult(new GoalAcceptanceVerifier.CommandResult(0, ""));
@@ -654,7 +714,9 @@ public sealed class GoalAcceptanceVerifierDotnetBuildSlotTestsVerdictAndBuildCac
                     .GetResult());
 
             Assert.NotNull(result);
-            Assert.True(result!.Passed);
+            Assert.True(
+                result!.Passed,
+                DescribeFailedChecks(result));
             var buildCalls = calls
                 .Where(call => call.Length >= 2 && call[0] == "dotnet" && call[1] == "build")
                 .ToArray();
@@ -750,9 +812,13 @@ public sealed class GoalAcceptanceVerifierDotnetBuildSlotTestsVerdictAndBuildCac
 
                 if (args.Length >= 2 && args[0] == "dotnet" && args[1] == "test")
                 {
-                    return Task.FromResult(new GoalAcceptanceVerifier.CommandResult(
-                        0,
-                        "Passed! - Failed: 0, Passed: 1, Skipped: 0, Total: 1."));
+                    return Task.FromResult(CreatePassingVstestResult(args));
+                }
+
+                if (args.Contains("--report-trx-filename"))
+                {
+                    WriteMtpTrx(args, 1, ["GreenPartition.Passes"]);
+                    return Task.FromResult(new GoalAcceptanceVerifier.CommandResult(0, "Passed: 1"));
                 }
 
                 return Task.FromResult(new GoalAcceptanceVerifier.CommandResult(0, ""));
@@ -847,4 +913,79 @@ public sealed class GoalAcceptanceVerifierDotnetBuildSlotTestsVerdictAndBuildCac
         }
     }
 
+    private static void WriteVstestTrx(string[] arguments, string testName)
+    {
+        var resultsDirectoryIndex = Array.IndexOf(arguments, "--results-directory");
+        var loggerIndex = Array.IndexOf(arguments, "--logger");
+        Assert.True(resultsDirectoryIndex >= 0 && resultsDirectoryIndex + 1 < arguments.Length);
+        Assert.True(loggerIndex >= 0 && loggerIndex + 1 < arguments.Length);
+        const string prefix = "trx;LogFileName=";
+        Assert.StartsWith(prefix, arguments[loggerIndex + 1], StringComparison.OrdinalIgnoreCase);
+        var resultsDirectory = arguments[resultsDirectoryIndex + 1];
+        Directory.CreateDirectory(resultsDirectory);
+        File.WriteAllText(
+            Path.Combine(resultsDirectory, arguments[loggerIndex + 1][prefix.Length..]),
+            $"<TestRun><TestDefinitions><UnitTest id=\"1\" name=\"{testName}\"><TestMethod className=\"CliPartition\" name=\"Passes\" /></UnitTest></TestDefinitions><Results><UnitTestResult testId=\"1\" testName=\"{testName}\" outcome=\"Passed\" /></Results><ResultSummary outcome=\"Completed\"><Counters total=\"1\" executed=\"1\" passed=\"1\" failed=\"0\" notExecuted=\"0\" /></ResultSummary></TestRun>");
+    }
+
+    private static bool IsVstestCall(string[] arguments) =>
+        arguments.Length > 1 &&
+        arguments[0] == "dotnet" &&
+        arguments[1] == "test";
+
+    private static GoalAcceptanceVerifier.CommandResult CreatePassingVstestResult(
+        string[] arguments,
+        string testName = "GreenPartition.Passes")
+    {
+        WriteVstestTrx(arguments, testName);
+        return new GoalAcceptanceVerifier.CommandResult(
+            0,
+            "Passed! - Failed: 0, Passed: 1, Skipped: 0, Total: 1.");
+    }
+
+    private static GoalAcceptanceVerifier.CommandResult CreateFailedResultWithHeartbeat(
+        GoalId goalId,
+        string worktreePath,
+        string checkName,
+        string stderr)
+    {
+        var heartbeatPath = GoalAcceptanceVerifier.ResolveGateHeartbeatPathForTests(
+            checkName,
+            worktreePath,
+            invocationOrdinal: 0);
+        var now = DateTimeOffset.UtcNow;
+        GateHeartbeatArtifacts.Write(
+            heartbeatPath,
+            new GateHeartbeatSnapshot(
+                goalId.Value,
+                "verification-check",
+                checkName,
+                null,
+                Environment.ProcessId,
+                null,
+                "completed",
+                now,
+                now,
+                now,
+                0,
+                Encoding.UTF8.GetByteCount(stderr),
+                Encoding.UTF8.GetByteCount(stderr),
+                "test command",
+                1,
+                StderrPath: null));
+        return new GoalAcceptanceVerifier.CommandResult(
+            1,
+            "Failed! - Failed: 1, Passed: 0, Skipped: 0, Total: 1.",
+            Stderr: stderr);
+    }
+
+    private static string DescribeFailedChecks(AcceptanceVerificationResult result) =>
+        string.Join(
+            Environment.NewLine,
+            result.Checks
+                .Where(static check => !check.Passed)
+                .Select(check =>
+                    $"{check.Name}: predicate={check.CompletionDecision?.FailedPredicate}; " +
+                    $"classification={check.FailureClassification}; heartbeat={check.GateHeartbeatPath}; " +
+                    $"heartbeat_exists={File.Exists(check.GateHeartbeatPath)}; output={check.OutputTail}"));
 }

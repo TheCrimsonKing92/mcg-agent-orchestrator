@@ -26,7 +26,8 @@ public sealed record GoalSnapshot(
     IReadOnlyList<GoalBriefVersion>? BriefVersions = null,
     IReadOnlyList<RefinedSpecVersionSnapshot>? RefinedSpecVersions = null,
     SourceBacklogCoverage? SourceBacklogCoverage = null,
-    string? SliceBatchParentId = null);
+    string? SliceBatchParentId = null,
+    bool? AcceptanceFailureDeferredForRetry = null);
 
 public sealed record GoalHoldSnapshot(
     string Identity,
@@ -114,7 +115,11 @@ public sealed record TaskSnapshot(
     PreReviewEvidenceReceipt? PreReviewEvidenceReceipt = null,
     string? InterruptedDispatchRecoveryId = null,
     bool WasCancelledByConductor = false,
-    IReadOnlyList<TaskDispatchSnapshot>? DispatchHistory = null);
+    IReadOnlyList<TaskDispatchSnapshot>? DispatchHistory = null,
+    RetryCause PendingRetryCause = RetryCause.Unknown,
+    IReadOnlyList<RetryAdmissionReceipt>? RetryAdmissionHistory = null,
+    RetryAdmissionRoute? RetryAdmissionHoldRoute = null,
+    ReviewFindingRepairCheckpoint? PendingReviewFindingRepairCheckpoint = null);
 
 public sealed record TaskExecutionSnapshot(
     string AgentId,
@@ -198,7 +203,9 @@ public sealed record TaskDispatchSnapshot(
     string? ReviewFindingTouchProofDiagnostic = null,
     ReviewRetryCapReceipt? ReviewRetryCap = null,
     WorkerContextPackageReceipt? ContextPackageReceipt = null,
-    int PlannerSampleCount = 1);
+    int PlannerSampleCount = 1,
+    RetryContextFingerprint? RetryContextFingerprint = null,
+    PaidRouteClassification PaidRoute = PaidRouteClassification.Unknown);
 
 public sealed record TaskProcessSnapshot(
     int ProcessId,

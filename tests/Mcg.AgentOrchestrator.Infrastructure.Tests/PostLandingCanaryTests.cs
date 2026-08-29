@@ -116,6 +116,20 @@ public sealed class PostLandingCanaryTests : CliCommandTestBase
             1,
             "real rejection",
             Checks: [new AcceptanceCheckResult("core tests", false, 1, "failed")]);
+        var seededRepositoryApparatus = new AcceptanceVerificationResult(
+            false,
+            false,
+            1,
+            "typed seeded repository apparatus receipt",
+            Checks:
+            [
+                new AcceptanceCheckResult(
+                    "infrastructure tests: Remainder",
+                    false,
+                    1,
+                    "typed apparatus",
+                    FailureClassification: AcceptanceFailureClassifications.SeededRepositoryProcessOutputApparatus)
+            ]);
 
         Assert.Equal(
             PostLandingCanaryFailureReason.InfrastructureError,
@@ -123,6 +137,9 @@ public sealed class PostLandingCanaryTests : CliCommandTestBase
         Assert.Equal(
             PostLandingCanaryFailureReason.InfrastructureError,
             PostLandingCanaryCommand.ClassifyFailure(interference, executedTestCount: 0));
+        Assert.Equal(
+            PostLandingCanaryFailureReason.InfrastructureError,
+            PostLandingCanaryCommand.ClassifyFailure(seededRepositoryApparatus, executedTestCount: 1));
         Assert.Equal(
             PostLandingCanaryFailureReason.Reject,
             PostLandingCanaryCommand.ClassifyFailure(productReject, executedTestCount: 1));

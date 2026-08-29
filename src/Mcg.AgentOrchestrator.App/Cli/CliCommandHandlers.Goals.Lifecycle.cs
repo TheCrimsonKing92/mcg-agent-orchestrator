@@ -308,7 +308,11 @@ private static string BuildLifecycleRunGoalNextCommand(string goalPrefix, RunGoa
 
 internal static void EnsureGoalReadinessAllowsStart(CliExecutionContext context, Goal goal, bool confirmed)
 {
-    var sweep = TerminalGoalSweep.Run(context.Kernel, context.Workspace.ExecutionDirectory, goal.Id);
+    var sweep = TerminalGoalSweep.Run(
+        context.Kernel,
+        context.Workspace.ExecutionDirectory,
+        goal.Id,
+        orchestratorDirectory: context.Workspace.OrchestratorDirectory);
     ConsoleViews.PrintTerminalGoalSweep(sweep);
     TerminalGoalSweepAttention.Surface(context.Kernel, sweep, context.Workspace.OrchestratorDirectory, goal.Id);
     goal = context.Kernel.GetGoal(goal.Id);

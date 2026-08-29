@@ -19,6 +19,16 @@ public sealed class WorkerContextPackageBuilder
         _ => ContextDeliveryMode.InlineFull
     };
 
+    internal static T[] DistinctBySerializedValue<T>(IEnumerable<T> snapshots)
+    {
+        ArgumentNullException.ThrowIfNull(snapshots);
+        return snapshots
+            .DistinctBy(
+                snapshot => Convert.ToBase64String(JsonSerializer.SerializeToUtf8Bytes(snapshot)),
+                StringComparer.Ordinal)
+            .ToArray();
+    }
+
     public WorkerContextPackage Prepare(
         AgentRole targetRole,
         string contextRoot,
@@ -106,7 +116,8 @@ public sealed class WorkerContextPackageBuilder
             ComputeSemanticPackageId(ordered),
             prepared.ContractVersion,
             prepared.TargetRole,
-            ordered);
+            ordered,
+            prepared.ReviewFindingProjection);
     }
 
     public static string Render(WorkerContextPackage package)
@@ -186,12 +197,20 @@ public sealed class WorkerContextPackageBuilder
                 artifact.MandatoryRelativePath);
         }).ToArray();
 
+        var projection = package.ReviewFindingProjection;
         return new WorkerContextPackageReceipt(
             package.SemanticPackageId,
             sections,
             ProviderUsageValue.Unknown("not-yet-reported"),
             ProviderUsageValue.Unknown("not-yet-reported"),
-            ProviderUsageValue.Unknown("not-yet-reported"));
+            ProviderUsageValue.Unknown("not-yet-reported"),
+            Encoding.UTF8.GetByteCount(Render(package)),
+            projection?.Mode,
+            projection?.UniqueRoundCount ?? 0,
+            projection?.DuplicateRoundCount ?? 0,
+            projection?.UniqueReceiptCount ?? 0,
+            projection?.DuplicateReceiptCount ?? 0,
+            projection?.FallbackReason);
     }
 
     internal static string RenderArtifact(WorkerContextArtifact artifact)

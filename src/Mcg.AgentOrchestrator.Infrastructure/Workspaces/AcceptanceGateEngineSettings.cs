@@ -165,16 +165,40 @@ internal sealed class AcceptanceMtpInvocation
     public IReadOnlyList<string> Arguments { get; init; } = [];
 
     public string ResolveExecutablePath(DotnetBuildEnvironment environment)
+        => ResolveArtifactPath(
+            environment,
+            OperatingSystem.IsWindows() ? ".exe" : string.Empty,
+            "executable",
+            requiredExtension: null);
+
+    public string ResolveManagedAssemblyPath(DotnetBuildEnvironment environment)
+        => ResolveArtifactPath(environment, ".dll", "managed assembly", requiredExtension: ".dll");
+
+    public IReadOnlyList<string> ResolveRequiredBuildArtifacts(DotnetBuildEnvironment environment) =>
+        [ResolveExecutablePath(environment), ResolveManagedAssemblyPath(environment)];
+
+    private string ResolveArtifactPath(
+        DotnetBuildEnvironment environment,
+        string executableExtension,
+        string artifactKind,
+        string? requiredExtension)
     {
         var projectName = Path.GetFileNameWithoutExtension(Project);
-        var relativePath = RenderTemplate(ExecutablePathTemplate, projectName);
+        var relativePath = RenderTemplate(ExecutablePathTemplate, projectName, executableExtension);
         var candidate = Path.GetFullPath(Path.Combine(environment.ArtifactsPath, relativePath));
         var artifactsRoot = Path.GetFullPath(environment.ArtifactsPath)
             .TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar) + Path.DirectorySeparatorChar;
         if (!candidate.StartsWith(artifactsRoot, StringComparison.OrdinalIgnoreCase))
         {
             throw new InvalidDataException(
-                $"MTP executable path for '{Project}' escapes the trusted artifacts root.");
+                $"MTP {artifactKind} path for '{Project}' escapes the trusted artifacts root.");
+        }
+
+        if (requiredExtension is not null &&
+            !candidate.EndsWith(requiredExtension, StringComparison.OrdinalIgnoreCase))
+        {
+            throw new InvalidDataException(
+                $"MTP {artifactKind} path for '{Project}' must resolve to a {requiredExtension} file.");
         }
 
         return candidate;
@@ -189,6 +213,12 @@ internal sealed class AcceptanceMtpInvocation
                 "Acceptance manifest MTP invocations require project and executablePathTemplate.");
         }
 
+        if (!ExecutablePathTemplate.Contains("{executableExtension}", StringComparison.Ordinal))
+        {
+            throw new InvalidDataException(
+                $"Acceptance manifest MTP invocation for '{Project}' must include '{{executableExtension}}' in executablePathTemplate.");
+        }
+
         if (Arguments.Count == 0 ||
             !Arguments[0].Equals("{executable}", StringComparison.Ordinal) ||
             Arguments.Skip(1).Contains("{executable}", StringComparer.Ordinal))
@@ -198,9 +228,12 @@ internal sealed class AcceptanceMtpInvocation
         }
     }
 
-    private static string RenderTemplate(string template, string projectName) =>
+    private static string RenderTemplate(
+        string template,
+        string projectName,
+        string executableExtension) =>
         template
             .Replace("{projectName}", projectName, StringComparison.Ordinal)
             .Replace("{configuration}", "debug", StringComparison.Ordinal)
-            .Replace("{executableExtension}", OperatingSystem.IsWindows() ? ".exe" : string.Empty, StringComparison.Ordinal);
+            .Replace("{executableExtension}", executableExtension, StringComparison.Ordinal);
 }

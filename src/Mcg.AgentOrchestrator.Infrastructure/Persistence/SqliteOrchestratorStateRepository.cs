@@ -1838,6 +1838,10 @@ public sealed class SqliteOrchestratorStateRepository : IOrchestratorStateOutbox
                 stored.RefinedSpecVersions,
                 current.RefinedSpecVersions),
             LatestAcceptanceFailure = PickStoreOwned(baseline.LatestAcceptanceFailure, stored.LatestAcceptanceFailure, current.LatestAcceptanceFailure),
+            AcceptanceFailureDeferredForRetry = PickStoreOwned(
+                baseline.AcceptanceFailureDeferredForRetry,
+                stored.AcceptanceFailureDeferredForRetry,
+                current.AcceptanceFailureDeferredForRetry),
             AutomaticAcceptanceRetryCount = PickStoreOwned(
                 baseline.AutomaticAcceptanceRetryCount,
                 stored.AutomaticAcceptanceRetryCount,
@@ -1968,6 +1972,14 @@ public sealed class SqliteOrchestratorStateRepository : IOrchestratorStateOutbox
             EmptyOutputRetryCount = PickStoreOwned(baseline.EmptyOutputRetryCount, stored.EmptyOutputRetryCount, current.EmptyOutputRetryCount),
             LatestRetryAt = PickStoreOwned(baseline.LatestRetryAt, stored.LatestRetryAt, current.LatestRetryAt),
             PendingRetryRoundKind = PickStoreOwned(baseline.PendingRetryRoundKind, stored.PendingRetryRoundKind, current.PendingRetryRoundKind),
+            PendingRetryCause = PickStoreOwned(baseline.PendingRetryCause, stored.PendingRetryCause, current.PendingRetryCause),
+            RetryAdmissionHistory = MergeRetryAdmissionHistory(
+                stored.RetryAdmissionHistory,
+                current.RetryAdmissionHistory),
+            RetryAdmissionHoldRoute = PickStoreOwned(
+                baseline.RetryAdmissionHoldRoute,
+                stored.RetryAdmissionHoldRoute,
+                current.RetryAdmissionHoldRoute),
             InterruptedDispatchRecoveryId = attemptAuthority is null
                 ? PickTickOwned(baseline.InterruptedDispatchRecoveryId, stored.InterruptedDispatchRecoveryId, current.InterruptedDispatchRecoveryId)
                 : attemptAuthority.InterruptedDispatchRecoveryId,
@@ -1978,6 +1990,28 @@ public sealed class SqliteOrchestratorStateRepository : IOrchestratorStateOutbox
             // current-HEAD evidence when an unrelated store mutation advances concurrently.
             PreReviewEvidenceReceipt = PickTickOwned(baseline.PreReviewEvidenceReceipt, stored.PreReviewEvidenceReceipt, current.PreReviewEvidenceReceipt)
         };
+    }
+
+    private static IReadOnlyList<RetryAdmissionReceipt> MergeRetryAdmissionHistory(
+        IReadOnlyList<RetryAdmissionReceipt>? stored,
+        IReadOnlyList<RetryAdmissionReceipt>? current)
+    {
+        var merged = new Dictionary<string, RetryAdmissionReceipt>(StringComparer.Ordinal);
+        foreach (var receipt in stored ?? [])
+            merged[receipt.ReceiptId] = receipt;
+        foreach (var receipt in current ?? [])
+        {
+            if (!merged.TryGetValue(receipt.ReceiptId, out var existing) ||
+                existing.WorkerStartedAt is null && receipt.WorkerStartedAt is not null)
+            {
+                merged[receipt.ReceiptId] = receipt;
+            }
+        }
+
+        return merged.Values
+            .OrderBy(receipt => receipt.RecordedAt)
+            .ThenBy(receipt => receipt.ReceiptId, StringComparer.Ordinal)
+            .ToArray();
     }
 
     private static IReadOnlyList<ProgressEventSnapshot> MergeTimeline(

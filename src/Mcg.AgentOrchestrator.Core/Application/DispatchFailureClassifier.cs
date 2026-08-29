@@ -2044,7 +2044,9 @@ public static class DispatchFailureClassifier
 
         // RetryTask is the operator's explicit reset boundary. Keep the historical receipt, but do not
         // let a verification from before that boundary regenerate a deferral after the stored value was cleared.
-        if (task.LatestRetryAt is { } latestRetryAt && latest.CompletedAt <= latestRetryAt)
+        if (task.LatestRetryAt is { } latestRetryAt &&
+            latest.CompletedAt <= latestRetryAt &&
+            task.PendingRetryCause != RetryCause.ProviderInterruption)
         {
             return false;
         }
