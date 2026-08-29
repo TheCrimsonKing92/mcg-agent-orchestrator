@@ -51,7 +51,9 @@ internal static class SourceSizeRatchet
             // retry suppression must meet at the existing acceptance disposition seam.
             // Reconciled after main 0d44d054 added 12 reviewed journal-cache lines that eliminate eager
             // full-journal retention; this is the measured combined size, not new goal behavior.
-            new SourceSizeCeiling("src/Mcg.AgentOrchestrator.App/Orchestration/ConductorDriver.cs", 6215),
+            // Raised for goal fd252fe4: typed retry causes must be selected and passed at the existing
+            // retry-decision call sites; classification and admission persistence remain extracted.
+            new SourceSizeCeiling("src/Mcg.AgentOrchestrator.App/Orchestration/ConductorDriver.cs", 6266),
             // Raised for goal dadadfac: set-aside re-admission must be decided where the loop already holds
             // the goal, its recorded set-aside entry, and the current sweep blockers together.
             // Raised for goal 289b469d: registration-fault hold/escalation must be decided at the existing
