@@ -14,7 +14,7 @@ Infrastructure has no reference to OperatorComms.
 <!-- current-project-inventory:begin -->
 | Project | Direct production references | Responsibility | Explicit non-responsibility |
 | --- | --- | --- | --- |
-| `src/Mcg.AgentOrchestrator.Core/Mcg.AgentOrchestrator.Core.csproj` | none | Domain model, application contracts, deterministic workflow policy, and conductor policy types. | No filesystem, database, process, network, provider, CLI, dashboard, or host composition. |
+| `src/Mcg.AgentOrchestrator.Core/Mcg.AgentOrchestrator.Core.csproj` | none | Domain model, application contracts, deterministic workflow policy, and conductor policy types. | No database, process, network, provider, CLI, dashboard, or host composition. |
 | `src/Mcg.AgentOrchestrator.Infrastructure.Providers/Mcg.AgentOrchestrator.Infrastructure.Providers.csproj` | `src/Mcg.AgentOrchestrator.Core/Mcg.AgentOrchestrator.Core.csproj` | Concrete model-provider adapters, provider defaults, smoke behavior, and agent-catalog persistence. | No executable composition, conductor lifecycle, CLI, or dashboard. |
 | `src/Mcg.AgentOrchestrator.Infrastructure.OperatorComms/Mcg.AgentOrchestrator.Infrastructure.OperatorComms.csproj` | `src/Mcg.AgentOrchestrator.Core/Mcg.AgentOrchestrator.Core.csproj` | Operator-channel implementations, including transport and message behavior behind Core contracts. | No goal-state persistence, conductor policy, or host-level channel composition. |
 | `src/Mcg.AgentOrchestrator.Infrastructure/Mcg.AgentOrchestrator.Infrastructure.csproj` | `src/Mcg.AgentOrchestrator.Core/Mcg.AgentOrchestrator.Core.csproj`<br>`src/Mcg.AgentOrchestrator.Infrastructure.Providers/Mcg.AgentOrchestrator.Infrastructure.Providers.csproj` | SQLite persistence, process execution, worker artifacts, worktrees, build/test integration, and acceptance verification. | No CLI, dashboard, executable host, or OperatorComms implementation. |
@@ -54,7 +54,7 @@ Where the code has no single owner, this table records the gap instead of invent
 
 | State or artifact | Authoritative owner or seam today | Lifecycle and write authority |
 | --- | --- | --- |
-| Goal/kernel state (`.orchestrator/state.db`) | `OrchestratorWorkspace.StatePath` in App resolves the path; Infrastructure's `SqliteOrchestratorStateRepository` implements persistence. | Durable workspace state. Conductor ticks are the normal state writer; operator mutations are queued through typed intents. |
+| Goal/kernel state (`.orchestrator/state.db`) | `OrchestratorWorkspace.SqliteStatePath` in App resolves the path; Infrastructure's `SqliteOrchestratorStateRepository` implements persistence. | Durable workspace state. Conductor ticks are the normal state writer; operator mutations are queued through typed intents. |
 | Run events (`run-events.db`) | `OrchestratorWorkspace` resolves the path; Infrastructure's `SqliteRunEventStore` implements the append store. | Append-oriented run evidence retained and pruned by workspace storage maintenance. |
 | Backlog (`backlog.db`) | `OrchestratorWorkspace` resolves the path; Infrastructure's `BacklogStore` owns persistence. | Repository-level durable work inventory spanning individual goals. |
 | Collaboration (`collaboration-items.db`) | Infrastructure's `CollaborationItemStore` owns persistence, but it and App's `GoalBoardCommand` independently construct the path. | Durable collaboration items. Current gap: there is no single workspace path property. |
