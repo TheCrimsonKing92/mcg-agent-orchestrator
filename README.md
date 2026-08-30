@@ -6,15 +6,33 @@ This repository contains the orchestration kernel: create a goal, decompose it i
 
 ## Projects
 
-```text
-src/Mcg.AgentOrchestrator.Core      Domain model and orchestration kernel
-src/Mcg.AgentOrchestrator.Infrastructure  Providers, local processes, worker profiles
-src/Mcg.AgentOrchestrator.App       Windows-friendly console host
-mcg-orchestrator.cmd               Checkout-local Windows launcher
-scripts/publish-windows.ps1        Windows publish helper for a local EXE
-tests/Mcg.AgentOrchestrator.Core.Tests  Offline test harness
-tests/Mcg.AgentOrchestrator.Infrastructure.Tests  Infrastructure test harness
-```
+The current project inventory is derived from `src/**/*.csproj` (five production projects) and
+`tests/**/*.csproj` (eight test/support projects). See the
+[architecture map](docs/architecture.md) for the dependency graph, state ownership, current seams,
+and the separately labelled modular-monolith target.
+
+<!-- current-project-inventory:begin -->
+| Project | Responsibility | Does not own |
+| --- | --- | --- |
+| `src/Mcg.AgentOrchestrator.Core/Mcg.AgentOrchestrator.Core.csproj` | Domain model, workflow contracts, and deterministic policy types. | Database persistence, external adapters, or hosting. |
+| `src/Mcg.AgentOrchestrator.Infrastructure.Providers/Mcg.AgentOrchestrator.Infrastructure.Providers.csproj` | Concrete model-provider adapters, provider defaults, smoke checks, and agent-catalog persistence. | Host composition or orchestration lifecycle. |
+| `src/Mcg.AgentOrchestrator.Infrastructure.OperatorComms/Mcg.AgentOrchestrator.Infrastructure.OperatorComms.csproj` | Operator-channel implementations and message transport behavior. | Goal state, conductor policy, or host composition. |
+| `src/Mcg.AgentOrchestrator.Infrastructure/Mcg.AgentOrchestrator.Infrastructure.csproj` | SQLite stores, process and worker execution, worktrees, and acceptance verification. | CLI, dashboard, or executable composition. |
+| `src/Mcg.AgentOrchestrator.App/Mcg.AgentOrchestrator.App.csproj` | Executable composition root containing the current conductor, CLI, dashboard, and adapter wiring. | Reusable domain contracts or the persistence implementations. |
+| `tests/Mcg.AgentOrchestrator.Core.Tests/Mcg.AgentOrchestrator.Core.Tests.csproj` | Core policy and repository-documentation contract tests. | Infrastructure or hosted-dashboard integration coverage. |
+| `tests/Mcg.AgentOrchestrator.Infrastructure.Tests/Mcg.AgentOrchestrator.Infrastructure.Tests.csproj` | Broad infrastructure, orchestration, worker, workspace, and acceptance tests. | The separately scoped CLI, dashboard, and provider-environment suites. |
+| `tests/Mcg.AgentOrchestrator.Dashboard.Tests/Mcg.AgentOrchestrator.Dashboard.Tests.csproj` | Dashboard API and UI behavior tests. | A production Dashboard assembly or general infrastructure coverage. |
+| `tests/Mcg.AgentOrchestrator.Infrastructure.Tests/Cli/Mcg.AgentOrchestrator.Infrastructure.Cli.Tests.csproj` | CLI parsing, command, and console-contract tests. | Executable hosting or non-CLI infrastructure coverage. |
+| `tests/Mcg.AgentOrchestrator.Infrastructure.Tests/ProviderEnvironment/Mcg.AgentOrchestrator.Infrastructure.ProviderEnvironment.Tests.csproj` | Process-isolated provider environment and configuration tests. | General provider implementation ownership. |
+| `tests/Mcg.AgentOrchestrator.TestSupport/Mcg.AgentOrchestrator.TestSupport.csproj` | Shared test fixtures and helpers. | A runnable test suite or production behavior. |
+| `tests/Mcg.AgentOrchestrator.Infrastructure.Tests/Fixtures/RealProcessShardProbe/Mcg.AgentOrchestrator.RealProcessShardProbe.csproj` | Executable fixture for real-process shard tests. | Product hosting or general test execution. |
+| `tests/Mcg.AgentOrchestrator.Infrastructure.Tests/Fixtures/IsolatedDotnetProbe/Mcg.AgentOrchestrator.IsolatedDotnetProbe.csproj` | Minimal executable fixture for isolated `dotnet` invocation tests. | Product tooling or a standalone test suite. |
+<!-- current-project-inventory:end -->
+
+`scripts/OrchestratorSqliteTools/OrchestratorSqliteTools.csproj` and
+`tools/Mcg.HiddenLauncher/Mcg.HiddenLauncher.csproj` are outside that `src`/`tests` inventory boundary.
+The checkout-local launcher remains `mcg-orchestrator.cmd`; Windows publishing is handled by
+`scripts/publish-windows.ps1`.
 
 ## Verify
 
