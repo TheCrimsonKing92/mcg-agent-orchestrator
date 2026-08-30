@@ -919,11 +919,20 @@ public sealed class BackgroundDispatchRunner
             var receipt = dispatch.ContextPackageReceipt
                 ?? throw new InvalidOperationException(
                     $"Dispatch attempt {dispatchAttemptAt:O} has no context package receipt.");
+            var measuredReceipt = receipt
+                .WithProviderUsage(outcome.ProviderUsage, outcome.ProviderUsageUnavailableReason)
+                .WithToolTranscriptCharacters(
+                    outcome.Verification.AuthoritativeStandardOutput?.Length ??
+                    outcome.Verification.StandardOutput.Length);
+            if (outcome.ProviderUsage is not null)
+            {
+                measuredReceipt = measuredReceipt.WithValidatedContext();
+            }
             kernel.RecordDispatchContextPackageReceipt(
                 goalId,
                 taskId,
                 dispatchAttemptAt,
-                receipt.WithProviderUsage(outcome.ProviderUsage, outcome.ProviderUsageUnavailableReason));
+                measuredReceipt);
             task = kernel.GetTask(goalId, taskId);
             if (task.LastDispatch?.DispatchedAt != dispatchAttemptAt)
             {
@@ -1594,12 +1603,16 @@ public sealed class BackgroundDispatchRunner
                     _completionClassifier.HasReportedFailingVerification(decisionStandardOutput, decisionStandardError);
                 var roleStillRequiresChangeEvidence =
                     dispatchRoleCapability == DispatchRoleOutputCapability.RequiresChangeEvidence;
+                var allowsNoChangeCompletion = _completionClassifier.AllowsNoChangeCompletion(
+                    task,
+                    decisionStandardOutput,
+                    decisionStandardError);
                 var requiresCommitEvidence =
                     !successfulChildWithoutUsableWorkerResult &&
                     _completionClassifier.RequiresPostDispatchCommitEvidence(task, hasVerificationOnlyTesterCompletion) &&
-                    (roleStillRequiresChangeEvidence ||
-                     (!verificationRecognized &&
-                       !_completionClassifier.AllowsNoChangeCompletion(task, decisionStandardOutput, decisionStandardError))) &&
+                    ((roleStillRequiresChangeEvidence && !allowsNoChangeCompletion) ||
+                      (!verificationRecognized &&
+                       !allowsNoChangeCompletion)) &&
                     !worktreeEvidence.HasRelevantCommitAfterDispatch;
 
                 if (requiresCommitEvidence)

@@ -19,7 +19,9 @@ public enum ContextArtifactKind
 public enum ContextDeliveryMode
 {
     InlineFull,
-    MandatoryFile
+    MandatoryFile,
+    OnDemandFile,
+    HistoricalFile
 }
 
 public readonly record struct ContextContractVersion(int Value)
@@ -227,9 +229,10 @@ public sealed class WorkerContextArtifact
             throw new ArgumentException("InlineFull requires complete authoritative bytes.", nameof(authoritativeBytes));
         }
 
-        if (deliveryMode == ContextDeliveryMode.MandatoryFile && string.IsNullOrWhiteSpace(mandatoryRelativePath))
+        if (deliveryMode is ContextDeliveryMode.MandatoryFile or ContextDeliveryMode.OnDemandFile or ContextDeliveryMode.HistoricalFile &&
+            string.IsNullOrWhiteSpace(mandatoryRelativePath))
         {
-            throw new ArgumentException("MandatoryFile requires a relative materialization path.", nameof(mandatoryRelativePath));
+            throw new ArgumentException("File-backed delivery requires a relative materialization path.", nameof(mandatoryRelativePath));
         }
 
         return new WorkerContextArtifact(
@@ -341,8 +344,46 @@ public sealed record WorkerContextPackageReceipt(
     int DuplicateReviewFindingRoundCount = 0,
     int UniqueFindingEvidenceReceiptCount = 0,
     int DuplicateFindingEvidenceReceiptCount = 0,
-    string? ReviewFindingFallbackReason = null)
+    string? ReviewFindingFallbackReason = null,
+    int RenderedPromptCharacters = 0,
+    int DeliveredArtifactBytes = 0,
+    int OnDemandArtifactBytes = 0,
+    int ToolTranscriptCharacters = 0,
+    int ModelInputTokenEstimate = 0,
+    bool EarlyConvergenceEligible = false,
+    string? EarlyConvergenceCandidateSha = null,
+    IReadOnlyList<string>? EarlyConvergenceReceiptHashes = null,
+    bool ValidatedForIdempotentReuse = false,
+    int BaselinePromptCharacters = 0,
+    int BaselineDeliveredArtifactBytes = 0,
+    int BaselineToolTranscriptCharacters = 0,
+    int BaselineModelInputTokenEstimate = 0)
 {
+    public bool HasEarlyConvergenceEvidenceFor(string? candidateSha)
+    {
+        if (!EarlyConvergenceEligible ||
+            string.IsNullOrWhiteSpace(candidateSha) ||
+            string.IsNullOrWhiteSpace(EarlyConvergenceCandidateSha) ||
+            !string.Equals(EarlyConvergenceCandidateSha, candidateSha, StringComparison.OrdinalIgnoreCase) ||
+            EarlyConvergenceReceiptHashes is not { Count: > 0 } hashes ||
+            hashes.Distinct(StringComparer.Ordinal).Count() != hashes.Count)
+        {
+            return false;
+        }
+
+        return hashes.All(hash =>
+            hash.Length == 64 &&
+            hash.All(Uri.IsHexDigit) &&
+            Sections.Any(section =>
+                section.ContractVersion == ContextContractVersion.V1.Value &&
+                section.DeliveryMode == ContextDeliveryMode.OnDemandFile &&
+                string.Equals(section.ContentHash, hash, StringComparison.Ordinal) &&
+                string.Equals(
+                    section.LogicalIdentity,
+                    $"goal/review-finding-receipts/{hash}.json",
+                    StringComparison.Ordinal)));
+    }
+
     public WorkerContextPackageReceipt WithProviderUsage(ProviderReportedUsage? usage, string unavailableReason = "absent") => this with
     {
         InputTokens = MergeUsageValue(InputTokens, usage?.InputTokens, unavailableReason),
@@ -356,6 +397,36 @@ public sealed record WorkerContextPackageReceipt(
         CachedInputTokens = MergeUsageValue(CachedInputTokens, usage?.CachedInputTokens, unavailableReason),
         OutputTokens = MergeUsageValue(OutputTokens, usage?.OutputTokens, unavailableReason)
     };
+
+    public WorkerContextPackageReceipt WithToolTranscriptCharacters(int characterCount) => this with
+    {
+        ToolTranscriptCharacters = characterCount < 0
+            ? throw new ArgumentOutOfRangeException(nameof(characterCount))
+            : characterCount
+    };
+
+    public WorkerContextPackageReceipt WithValidatedContext() => this with
+    {
+        ValidatedForIdempotentReuse = true
+    };
+
+    public WorkerContextPackageReceipt WithBaselineMeasurements(
+        int promptCharacters,
+        int deliveredArtifactBytes,
+        int toolTranscriptCharacters) => this with
+    {
+        BaselinePromptCharacters = RequireNonNegative(promptCharacters, nameof(promptCharacters)),
+        BaselineDeliveredArtifactBytes = RequireNonNegative(deliveredArtifactBytes, nameof(deliveredArtifactBytes)),
+        BaselineToolTranscriptCharacters = RequireNonNegative(toolTranscriptCharacters, nameof(toolTranscriptCharacters)),
+        BaselineModelInputTokenEstimate = EstimateInputTokens(RequireNonNegative(promptCharacters, nameof(promptCharacters)))
+    };
+
+    private static int RequireNonNegative(int value, string parameterName) => value < 0
+        ? throw new ArgumentOutOfRangeException(parameterName)
+        : value;
+
+    private static int EstimateInputTokens(int characterCount) =>
+        characterCount / 4 + (characterCount % 4 == 0 ? 0 : 1);
 
     private static ProviderUsageValue MergeUsageValue(
         ProviderUsageValue current,

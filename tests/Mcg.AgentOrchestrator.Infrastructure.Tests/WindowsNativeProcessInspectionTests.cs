@@ -3,6 +3,161 @@ using Mcg.AgentOrchestrator.Infrastructure;
 public sealed class WindowsNativeProcessInspectionTests
 {
     [Xunit.Fact]
+    public void ProductionShapedPidReuseFixturePrunesOlderStaleBranchesAboveAndBelowWorkerPid()
+    {
+        const int wrapperPid = 37_252;
+        const int workerPid = 22_628;
+        const int falsePidAboveWorker = 22_664;
+        const int falsePidBelowWorker = 12_000;
+        const int realChildPid = 30_000;
+        var wrapperStartedAt = DateTimeOffset.Parse("2026-08-30T05:48:32Z");
+        WindowsNativeProcessInspection.ProcessInspectionSeed[] seeds =
+        [
+            new(wrapperPid, 1, "wrapper"),
+            new(workerPid, wrapperPid, "worker"),
+            new(realChildPid, workerPid, "real-child"),
+            new(falsePidAboveWorker, workerPid, "false-above"),
+            new(22_665, falsePidAboveWorker, "false-above-child"),
+            new(falsePidBelowWorker, workerPid, "false-below"),
+            new(11_999, falsePidBelowWorker, "false-below-child")
+        ];
+        var starts = new Dictionary<int, DateTimeOffset>
+        {
+            [wrapperPid] = wrapperStartedAt,
+            [workerPid] = wrapperStartedAt.AddSeconds(1),
+            [realChildPid] = wrapperStartedAt.AddSeconds(2),
+            [falsePidAboveWorker] = wrapperStartedAt.AddDays(-3),
+            [22_665] = wrapperStartedAt.AddDays(-3).AddSeconds(1),
+            [falsePidBelowWorker] = wrapperStartedAt.AddDays(-3),
+            [11_999] = wrapperStartedAt.AddDays(-3).AddSeconds(1)
+        };
+
+        var descendants = WindowsNativeProcessInspection.ListIdentityBoundDescendantProcessIds(
+            wrapperPid,
+            () => WindowsNativeProcessInspection.ProcessEnumerationResult.Success(seeds),
+            seed => new ProcessInspectionRecord(
+                seed.ProcessId,
+                seed.ParentProcessId,
+                seed.Name,
+                Path.Combine("fixture", seed.Name + ".exe"),
+                starts[seed.ProcessId],
+                seed.Name,
+                ProcessInspectionStatus.Available));
+
+        Assert.Equal<int>([workerPid, realChildPid], descendants);
+        Assert.DoesNotContain(falsePidAboveWorker, descendants);
+        Assert.DoesNotContain(falsePidBelowWorker, descendants);
+        Assert.DoesNotContain(22_665, descendants);
+        Assert.DoesNotContain(11_999, descendants);
+    }
+
+    [Xunit.Fact]
+    public void IdentityBoundDescendantsRejectUnreadableEdgeWithoutTreatingItAsOwned()
+    {
+        WindowsNativeProcessInspection.ProcessInspectionSeed[] seeds =
+        [
+            new(100, 1, "worker"),
+            new(101, 100, "unreadable-child")
+        ];
+
+        var descendants = WindowsNativeProcessInspection.ListIdentityBoundDescendantProcessIds(
+            100,
+            () => WindowsNativeProcessInspection.ProcessEnumerationResult.Success(seeds),
+            seed => new ProcessInspectionRecord(
+                seed.ProcessId,
+                seed.ParentProcessId,
+                seed.Name,
+                seed.ProcessId == 100 ? @"C:\workers\worker.exe" : null,
+                seed.ProcessId == 100 ? DateTimeOffset.Parse("2026-08-30T05:48:33Z") : null,
+                null,
+                seed.ProcessId == 100 ? ProcessInspectionStatus.Available : ProcessInspectionStatus.AccessDenied));
+
+        Assert.Empty(descendants);
+    }
+
+    [Xunit.Fact]
+    public void ConservativeRefusalDescendantsRetainUnreadableOrphanButPruneOlderStaleBranch()
+    {
+        const int exitedWrapperPid = 6_001;
+        const int unreadableChildPid = 6_102;
+        const int laterGrandchildPid = 6_103;
+        const int olderFalseChildPid = 6_200;
+        var wrapperStartedAt = DateTimeOffset.Parse("2026-08-30T05:48:32Z");
+        WindowsNativeProcessInspection.ProcessInspectionSeed[] seeds =
+        [
+            // The wrapper is intentionally absent: this is the post-cancellation snapshot.
+            new(unreadableChildPid, exitedWrapperPid, "unreadable-child"),
+            new(laterGrandchildPid, unreadableChildPid, "later-grandchild"),
+            new(olderFalseChildPid, exitedWrapperPid, "older-false-child")
+        ];
+
+        var candidates = WindowsNativeProcessInspection.ListConservativeDescendantProcessIdsForRefusal(
+            exitedWrapperPid,
+            wrapperStartedAt,
+            () => WindowsNativeProcessInspection.ProcessEnumerationResult.Success(seeds),
+            seed => seed.ProcessId switch
+            {
+                unreadableChildPid => new ProcessInspectionRecord(
+                    seed.ProcessId,
+                    seed.ParentProcessId,
+                    seed.Name,
+                    null,
+                    null,
+                    null,
+                    ProcessInspectionStatus.AccessDenied),
+                laterGrandchildPid => new ProcessInspectionRecord(
+                    seed.ProcessId,
+                    seed.ParentProcessId,
+                    seed.Name,
+                    Path.Combine("fixture", "later-grandchild.exe"),
+                    wrapperStartedAt.AddSeconds(2),
+                    seed.Name,
+                    ProcessInspectionStatus.Available),
+                olderFalseChildPid => new ProcessInspectionRecord(
+                    seed.ProcessId,
+                    seed.ParentProcessId,
+                    seed.Name,
+                    Path.Combine("fixture", "older-false-child.exe"),
+                    wrapperStartedAt.AddDays(-3),
+                    seed.Name,
+                    ProcessInspectionStatus.Available),
+                _ => throw new InvalidOperationException($"Unexpected fixture pid {seed.ProcessId}.")
+            });
+
+        Assert.Equal<int>([unreadableChildPid, laterGrandchildPid], candidates);
+        Assert.DoesNotContain(olderFalseChildPid, candidates);
+    }
+
+    [Xunit.Fact]
+    public void ConservativeRefusalTreatsApproximateRecordedRootStartAsUnknownInsteadOfRecycled()
+    {
+        const int wrapperPid = 6_001;
+        const int childPid = 6_102;
+        var actualWrapperStartedAt = DateTimeOffset.Parse("2026-08-30T05:48:32Z");
+        var recordedAfterProcessStart = actualWrapperStartedAt.AddMilliseconds(25);
+        WindowsNativeProcessInspection.ProcessInspectionSeed[] seeds =
+        [
+            new(wrapperPid, 1, "wrapper"),
+            new(childPid, wrapperPid, "child")
+        ];
+
+        var candidates = WindowsNativeProcessInspection.ListConservativeDescendantProcessIdsForRefusal(
+            wrapperPid,
+            recordedAfterProcessStart,
+            () => WindowsNativeProcessInspection.ProcessEnumerationResult.Success(seeds),
+            seed => new ProcessInspectionRecord(
+                seed.ProcessId,
+                seed.ParentProcessId,
+                seed.Name,
+                Path.Combine("fixture", seed.Name + ".exe"),
+                seed.ProcessId == wrapperPid ? actualWrapperStartedAt : actualWrapperStartedAt.AddSeconds(1),
+                seed.Name,
+                ProcessInspectionStatus.Available));
+
+        Assert.Equal<int>([childPid], candidates);
+    }
+
+    [Xunit.Fact]
     public void TerminateIfMatches_RecycledIdentityDoesNotTerminateHandle()
     {
         var expected = AvailableRecord(DateTimeOffset.Parse("2026-08-26T12:00:00Z"));

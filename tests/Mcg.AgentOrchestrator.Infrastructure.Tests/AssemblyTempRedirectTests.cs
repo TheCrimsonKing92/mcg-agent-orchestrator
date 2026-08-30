@@ -277,68 +277,44 @@ public sealed class AssemblyTempRedirectTests
         Assert.Equal(["pdead1", "pbeef", "p7fffffff"], reapable);
     }
 
-    [Fact(DisplayName = "Retention sweep bounds a doubled recent-root population")]
-    public void RetentionSweepBoundsRecentHighThroughputPopulation()
+    [Fact(DisplayName = "Bounded sweep does not trade live-root safety for a population bound")]
+    public void BoundedSweepPreservesLiveRootsBeyondPopulationBound()
     {
         const int reserve = 4;
-        var now = new DateTime(2026, 8, 22, 12, 0, 0, DateTimeKind.Utc);
         var names = Enumerable.Range(1, reserve * 2).Select(index => $"p{index:x}").ToArray();
-        var writes = names
-            .Select((name, index) => (name, written: now.AddSeconds(index)))
-            .ToDictionary(item => item.name, item => item.written, StringComparer.Ordinal);
-
-        var overflow = AssemblyTempRedirect.SelectRootsBeyondRetention(
-            names,
-            currentProcessId: 0x30,
-            isProcessAlive: _ => true,
-            processStartTimeUtc: _ => now.AddMinutes(1),
-            lastWriteUtc: name => writes[name],
-            retainedRoots: reserve);
         var reapable = AssemblyTempRedirect.SelectReapableRoots(
             names,
             currentProcessId: 0x30,
             isProcessAlive: _ => true);
         var selected = AssemblyTempRedirect.SelectBoundedReapRoots(
             reapable,
-            overflow,
-            name => writes[name],
+            _ => throw new InvalidOperationException("A live root must not reach timestamp ordering."),
             limit: names.Length);
 
-        Assert.Equal(reserve, overflow.Count);
-        Assert.Equal(["p1", "p2", "p3", "p4"], overflow);
         Assert.Empty(reapable);
-        Assert.Equal(overflow, selected);
-        Assert.Equal(reserve, names.Except(selected, StringComparer.OrdinalIgnoreCase).Count());
+        Assert.Empty(selected);
     }
 
-    [Fact(DisplayName = "Retention sweep never removes the current process root")]
-    public void RetentionSweepNeverRemovesCurrentProcessRoot()
+    [Fact(DisplayName = "Bounded sweep never reads or removes roots owned by other live processes")]
+    public void BoundedSweepNeverReadsOrRemovesOtherLiveProcessRoots()
     {
-        var overflow = AssemblyTempRedirect.SelectRootsBeyondRetention(
-            ["p30", "p31"],
-            currentProcessId: 0x30,
-            isProcessAlive: _ => false,
-            processStartTimeUtc: _ => null,
-            lastWriteUtc: _ => DateTime.UnixEpoch,
-            retainedRoots: 0);
-
-        Assert.Equal(["p31"], overflow);
-    }
-
-    [Fact(DisplayName = "Retention sweep never removes roots owned by other live processes")]
-    public void RetentionSweepNeverRemovesOtherLiveProcessRoots()
-    {
-        var overflow = AssemblyTempRedirect.SelectRootsBeyondRetention(
+        var timestampReads = new List<string>();
+        var reapable = AssemblyTempRedirect.SelectReapableRoots(
             ["p30", "p31", "p32"],
             currentProcessId: 0x30,
-            isProcessAlive: processId => processId == 0x31,
-            processStartTimeUtc: processId => processId == 0x31
-                ? DateTime.UnixEpoch.AddSeconds(-1)
-                : null,
-            lastWriteUtc: name => name == "p31" ? DateTime.UnixEpoch : DateTime.UnixEpoch.AddSeconds(1),
-            retainedRoots: 0);
+            isProcessAlive: processId => processId == 0x31);
+        var selected = AssemblyTempRedirect.SelectBoundedReapRoots(
+            reapable,
+            name =>
+            {
+                timestampReads.Add(name);
+                return DateTime.UnixEpoch;
+            },
+            limit: 32);
 
-        Assert.Equal(["p32"], overflow);
+        Assert.Equal(["p32"], reapable);
+        Assert.Equal(["p32"], selected);
+        Assert.Equal(["p32"], timestampReads);
     }
 
     [Fact(DisplayName = "Reaper never removes the current process root even if reported dead")]

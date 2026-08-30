@@ -1640,9 +1640,10 @@ public sealed class WorkerDispatchTestsDispatchPreparation : WorkerDispatchTestS
     Assert.Equal("refresh-dispatch", state.RecommendedAction);
     Assert.Equal(DispatchRecoveryAction.ReconcileFromExit, state.RecoveryDecision.Action);
     Assert.Equal(process.ProcessId, state.ProcessTree.WrapperProcessId);
-    Assert.Equal(222, state.ProcessTree.ChildProcessId);
+    Assert.Null(state.ProcessTree.ChildProcessId);
     Assert.Contains(state.ProcessTree.Processes, node => node.ProcessId == process.ProcessId);
     Assert.Contains(state.ProcessTree.Processes, node => node.ProcessId == 222);
+    Assert.DoesNotContain(state.ProcessTree.Processes, node => node.IsAlive);
     Assert.True(state.Artifacts.StandardOutputExists);
     Assert.Equal(13, state.Artifacts.StandardOutputBytes);
     Assert.True(state.Artifacts.ExitCodeExists);

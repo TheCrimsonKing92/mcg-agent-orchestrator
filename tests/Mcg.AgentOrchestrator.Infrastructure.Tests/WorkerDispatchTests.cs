@@ -326,7 +326,10 @@ protected static void CompleteResearcherAndPlannerArtifacts(
             readCommandLines: pids => pids
                 .Distinct()
                 .Where(commandLines.ContainsKey)
-                .ToDictionary(pid => pid, pid => commandLines[pid]));
+                .ToDictionary(pid => pid, pid => commandLines[pid]),
+            readProcessIdentity: pid => pid > 0
+                ? (clock.UtcNow, $@"C:\workers\worker-{pid}.exe")
+                : null);
 
     protected static (AgentOrchestratorKernel Kernel, Goal Goal, TaskSpec Task, TaskProcessRecord Process) CreateCompletedGoalWorktreeDispatch(
         string root,
@@ -427,13 +430,21 @@ protected static void CompleteResearcherAndPlannerArtifacts(
     var ownedPidsJson = ownedPids is { Count: > 0 }
         ? string.Join(",", ownedPids)
         : string.Empty;
+    var identityPids = (ownedPids ?? [])
+        .Concat(childPid is > 0 ? [childPid.Value] : [])
+        .Concat(process.ProcessId > 0 ? [process.ProcessId] : [])
+        .Distinct()
+        .ToArray();
+    var ownedProcessIdentitiesJson = string.Join(",", identityPids.Select(pid =>
+        $"{{\"processId\":{pid},\"startedAt\":\"{process.StartedAt:O}\",\"imagePath\":\"C:\\\\workers\\\\worker-{pid}.exe\"}}"));
     var exitFileExistsJson = exitFileExists ? "true" : "false";
     File.WriteAllText(
         BackgroundDispatchRunner.GetHeartbeatPath(process),
         "{" +
-        "\"pid\":999999," +
+        $"\"pid\":{process.ProcessId}," +
         $"\"childPid\":{childPidJson}," +
         $"\"ownedPids\":[{ownedPidsJson}]," +
+        $"\"ownedProcessIdentities\":[{ownedProcessIdentitiesJson}]," +
         $"\"startedAt\":\"{process.StartedAt:O}\"," +
         $"\"lastObservedAt\":\"{lastObservedAt:O}\"," +
         $"\"lastProgressAt\":\"{lastProgressAt:O}\"," +

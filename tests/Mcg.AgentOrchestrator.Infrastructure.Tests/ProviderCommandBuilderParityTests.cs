@@ -199,7 +199,7 @@ public sealed class ProviderCommandBuilderParityTests
             });
 
         Assert.Equal(
-            $"codex exec --json --skip-git-repo-check --model '{AgentCatalog.OpenAiSolSubscriptionModelAlias}' -c model_reasoning_effort='high' --sandbox 'read-only' --cd 'C:\\worker repo'",
+            $"codex exec --json --skip-git-repo-check --model '{AgentCatalog.OpenAiSolSubscriptionModelAlias}' -c model_reasoning_effort='high' -c project_doc_max_bytes=65536 --sandbox 'read-only' --cd 'C:\\worker repo'",
             command);
     }
 

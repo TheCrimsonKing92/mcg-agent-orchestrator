@@ -578,8 +578,7 @@ public sealed class ConductorBatchLoopTestsReapingDetach : ConductorBatchLoopTes
             DispatchExitArtifacts.Write(
                 exitPath,
                 DispatchExitArtifacts.Native(0, "dispatch host observed worker termination", DateTimeOffset.UtcNow));
-            var childAlive = true;
-            var runner = new BackgroundDispatchRunner(isStillRunning: pid => pid == childPid && childAlive);
+            var runner = new BackgroundDispatchRunner(isStillRunning: pid => pid == childPid);
 
             void RunSuccessorTick() => new ConductorBatchLoop(
                     refreshGoalDispatchesBeforeAdvance: (loopKernel, loopGoal) =>
@@ -591,16 +590,6 @@ public sealed class ConductorBatchLoopTestsReapingDetach : ConductorBatchLoopTes
                         maxIterations: 1,
                         onlyGoalId: goal.Id.Value);
 
-            RunSuccessorTick();
-
-            var held = successor.GetTask(goal.Id, planner.Id);
-            Assert.Equal(WorkTaskStatus.Running, held.Status);
-            Assert.True(held.LastProcess!.IsRunning);
-            Assert.Equal(rootPid, held.LastProcess.ProcessId);
-            Assert.Equal(1, successor.GetGoal(goal.Id).Timeline.Count(evt =>
-                evt.TaskId == planner.Id && evt.Kind == ProgressKind.TaskDispatchRecorded));
-
-            childAlive = false;
             RunSuccessorTick();
 
             var refreshed = successor.GetTask(goal.Id, planner.Id);
@@ -615,6 +604,128 @@ public sealed class ConductorBatchLoopTestsReapingDetach : ConductorBatchLoopTes
                 evt.TaskId == planner.Id &&
                 evt.Kind == ProgressKind.TaskNote &&
                 evt.Message.StartsWith("Gracefully detached process ", StringComparison.Ordinal)));
+        }
+        finally
+        {
+            TryDeleteDirectory(root);
+        }
+    }
+
+    [Xunit.Fact(Timeout = 30_000)]
+    [Xunit.Trait("Category", "CrossTick")]
+    public async Task ProductionShapedPidReuse_CompletesFromNativeExitWithoutOwningOrKillingFalseBranches()
+    {
+        const int wrapperPid = 37_252;
+        const int workerPid = 22_628;
+        const int falsePidAboveWorker = 22_664;
+        const int falsePidBelowWorker = 12_000;
+        const int realChildPid = 30_000;
+        var wrapperStartedAt = DateTimeOffset.Parse("2026-08-30T05:48:32Z");
+        WindowsNativeProcessInspection.ProcessInspectionSeed[] seeds =
+        [
+            new(wrapperPid, 1, "wrapper"),
+            new(workerPid, wrapperPid, "worker"),
+            new(realChildPid, workerPid, "real-child"),
+            new(falsePidAboveWorker, workerPid, "false-above"),
+            new(22_665, falsePidAboveWorker, "false-above-child"),
+            new(falsePidBelowWorker, workerPid, "false-below"),
+            new(11_999, falsePidBelowWorker, "false-below-child")
+        ];
+        var starts = new Dictionary<int, DateTimeOffset>
+        {
+            [wrapperPid] = wrapperStartedAt,
+            [workerPid] = wrapperStartedAt.AddSeconds(1),
+            [realChildPid] = wrapperStartedAt.AddSeconds(2),
+            [falsePidAboveWorker] = wrapperStartedAt.AddDays(-3),
+            [22_665] = wrapperStartedAt.AddDays(-3).AddSeconds(1),
+            [falsePidBelowWorker] = wrapperStartedAt.AddDays(-3),
+            [11_999] = wrapperStartedAt.AddDays(-3).AddSeconds(1)
+        };
+        var descendants = WindowsNativeProcessInspection.ListIdentityBoundDescendantProcessIds(
+            wrapperPid,
+            () => WindowsNativeProcessInspection.ProcessEnumerationResult.Success(seeds),
+            seed => new ProcessInspectionRecord(
+                seed.ProcessId,
+                seed.ParentProcessId,
+                seed.Name,
+                Path.Combine("fixture", seed.Name + ".exe"),
+                starts[seed.ProcessId],
+                seed.Name,
+                ProcessInspectionStatus.Available));
+        var recordedIdentities = descendants
+            .Prepend(wrapperPid)
+            .Select(processId => new SpawnProcessIdentity(
+                processId,
+                starts[processId],
+                Path.Combine("fixture", seeds.Single(seed => seed.ProcessId == processId).Name + ".exe")))
+            .ToArray();
+        var identityByPid = recordedIdentities.ToDictionary(identity => identity.ProcessId);
+        var falseProcessIds = new HashSet<int>
+        {
+            falsePidAboveWorker,
+            22_665,
+            falsePidBelowWorker,
+            11_999
+        };
+        var ownedPids = DispatchProcessIdentityEvidence.GetLiveRecordedOwnerProcessIds(
+            descendants.Concat(falseProcessIds),
+            recordedIdentities,
+            _ => true,
+            processId => identityByPid.GetValueOrDefault(processId));
+        var childPid = DispatchProcessHost.SelectHeartbeatChildPid(worker: null, ownedPids);
+        var root = CreateTempDirectory("mcg-production-shaped-pid-reuse-successor");
+        try
+        {
+            var (kernel, goal, planner, exitPath, _, _, _) = CreateDetachedPlannerDispatch(
+                root,
+                rootPid: wrapperPid,
+                childPid: childPid ?? throw new InvalidOperationException("Identity-bound child PID was not selected."),
+                heartbeatOwnedPids: ownedPids,
+                heartbeatIdentities: recordedIdentities,
+                startedAt: wrapperStartedAt);
+            var repository = OpenStateRepository(Path.Combine(root, "state.db"));
+            await repository.SaveAsync(kernel);
+            var successor = await repository.LoadAsync();
+            var process = successor.GetTask(goal.Id, planner.Id).LastProcess!;
+            var heartbeat = ProcessLogReader.ReadHeartbeat(process, wrapperStartedAt.AddSeconds(3));
+
+            Assert.Equal<int>([workerPid, realChildPid], heartbeat.OwnedProcessIds);
+            Assert.Contains(workerPid, heartbeat.OwnedProcessIds);
+            Assert.DoesNotContain(heartbeat.OwnedProcessIds, falseProcessIds.Contains);
+            Assert.DoesNotContain(heartbeat.ChildProcessId ?? 0, falseProcessIds);
+            Assert.All(
+                heartbeat.OwnedProcessIds,
+                ownedPid => Assert.Contains(heartbeat.OwnedProcessIdentities, identity => identity.ProcessId == ownedPid));
+
+            DispatchExitArtifacts.Write(
+                exitPath,
+                DispatchExitArtifacts.Native(0, "dispatch host observed worker termination", wrapperStartedAt.AddSeconds(4)));
+            var killedProcessIds = new List<int>();
+            var runner = new BackgroundDispatchRunner(
+                isStillRunning: falseProcessIds.Contains,
+                tryKillOwnedProcess: processId =>
+                {
+                    killedProcessIds.Add(processId);
+                    return true;
+                },
+                readProcessIdentity: processId => falseProcessIds.Contains(processId)
+                    ? (starts[processId], Path.Combine("fixture", $"false-{processId}.exe"))
+                    : null);
+
+            new ConductorBatchLoop(
+                refreshGoalDispatchesBeforeAdvance: (loopKernel, loopGoal) =>
+                    GoalManagementCommandService.RefreshDispatches(loopKernel, loopGoal, runner)).Run(
+                        successor,
+                        MakeDriver(getFacts: _ => new GoalLifecycleFacts(WorkspaceExists: true)),
+                        ConductorAutonomyPolicy.Conservative,
+                        NoStopPath(),
+                        maxIterations: 1,
+                        onlyGoalId: goal.Id.Value);
+
+            var completed = successor.GetTask(goal.Id, planner.Id);
+            Assert.Equal(WorkTaskStatus.Completed, completed.Status);
+            Assert.True(completed.LastVerification?.Succeeded is true);
+            Assert.Empty(killedProcessIds);
         }
         finally
         {
@@ -670,7 +781,7 @@ public sealed class ConductorBatchLoopTestsReapingDetach : ConductorBatchLoopTes
 
     [Xunit.Fact(Timeout = 30_000)]
     [Xunit.Trait("Category", "CrossTick")]
-    public async Task DetachedExit_LiveOwnedProcessWithUnreadableIdentity_RemainsRunning()
+    public async Task DetachedExit_LiveOwnedProcessWithUnreadableIdentity_AllowsCompletion()
     {
         const int liveOwnedProcessId = 35_556;
         var root = CreateTempDirectory("mcg-detached-unreadable-owned-successor");
@@ -702,7 +813,7 @@ public sealed class ConductorBatchLoopTestsReapingDetach : ConductorBatchLoopTes
                         maxIterations: 1,
                         onlyGoalId: goal.Id.Value);
 
-            Assert.Equal(WorkTaskStatus.Running, successor.GetTask(goal.Id, planner.Id).Status);
+            Assert.Equal(WorkTaskStatus.Completed, successor.GetTask(goal.Id, planner.Id).Status);
         }
         finally
         {
@@ -712,7 +823,7 @@ public sealed class ConductorBatchLoopTestsReapingDetach : ConductorBatchLoopTes
 
     [Xunit.Fact(Timeout = 30_000)]
     [Xunit.Trait("Category", "CrossTick")]
-    public async Task DetachedExit_LiveOwnedProcessWithSameStartImageMismatch_RemainsRunning()
+    public async Task DetachedExit_LiveOwnedProcessWithSameStartImageMismatch_AllowsCompletion()
     {
         const int liveOwnedProcessId = 35_556;
         var root = CreateTempDirectory("mcg-detached-image-mismatch-successor");
@@ -746,7 +857,7 @@ public sealed class ConductorBatchLoopTestsReapingDetach : ConductorBatchLoopTes
                         maxIterations: 1,
                         onlyGoalId: goal.Id.Value);
 
-            Assert.Equal(WorkTaskStatus.Running, successor.GetTask(goal.Id, planner.Id).Status);
+            Assert.Equal(WorkTaskStatus.Completed, successor.GetTask(goal.Id, planner.Id).Status);
         }
         finally
         {
@@ -851,7 +962,12 @@ public sealed class ConductorBatchLoopTestsReapingDetach : ConductorBatchLoopTes
         var root = CreateTempDirectory("mcg-detached-live-successor");
         try
         {
-            var (kernel, goal, planner, exitPath, _, rootPid, _) = CreateDetachedPlannerDispatch(root);
+            const int expectedRootPid = 43_316;
+            var rootIdentity = new SpawnProcessIdentity(
+                expectedRootPid,
+                DateTimeOffset.UtcNow.AddMinutes(-10),
+                @"C:\tools\dispatch-host.exe");
+            var (kernel, goal, planner, exitPath, _, rootPid, _) = CreateDetachedPlannerDispatch(root, rootIdentity: rootIdentity);
             var repository = OpenStateRepository(Path.Combine(root, "state.db"));
             await repository.SaveAsync(kernel);
             var successor = await repository.LoadAsync();
@@ -865,7 +981,10 @@ public sealed class ConductorBatchLoopTestsReapingDetach : ConductorBatchLoopTes
                 {
                     killed.Add(pid);
                     return true;
-                });
+                },
+                readProcessIdentity: pid => pid == rootPid
+                    ? (rootIdentity.StartedAt, rootIdentity.ImagePath)
+                    : null);
 
             new ConductorBatchLoop(
                 refreshGoalDispatchesBeforeAdvance: (loopKernel, loopGoal) =>
@@ -1079,8 +1198,8 @@ public sealed class ConductorBatchLoopTestsReapingDetach : ConductorBatchLoopTes
                         onlyGoalId: goal.Id.Value));
 
             Assert.Equal(WorkTaskStatus.Running, successor.GetTask(goal.Id, planner.Id).Status);
-            Assert.Contains("auto-reconcile will handle completion", output, StringComparison.OrdinalIgnoreCase);
-            Assert.DoesNotContain("state=Invalid", output, StringComparison.OrdinalIgnoreCase);
+            Assert.DoesNotContain("auto-reconcile will handle completion", output, StringComparison.OrdinalIgnoreCase);
+            Assert.Contains("state=Invalid", output, StringComparison.OrdinalIgnoreCase);
         }
         finally
         {
@@ -1182,10 +1301,13 @@ public sealed class ConductorBatchLoopTestsReapingDetach : ConductorBatchLoopTes
         CreateDetachedPlannerDispatch(
             string root,
             SpawnProcessIdentity? auxiliaryIdentity = null,
-            SpawnProcessIdentity? rootIdentity = null)
+            SpawnProcessIdentity? rootIdentity = null,
+            int rootPid = 43_316,
+            int childPid = 26_084,
+            IReadOnlyList<int>? heartbeatOwnedPids = null,
+            IReadOnlyList<SpawnProcessIdentity>? heartbeatIdentities = null,
+            DateTimeOffset? startedAt = null)
     {
-        const int rootPid = 43_316;
-        const int childPid = 26_084;
         var kernel = new AgentOrchestratorKernel();
         var planner = new TaskSpec(TaskId.New(), "Plan detached reconciliation.", AgentRole.Planner);
         var researcher = new TaskSpec(TaskId.New(), "Research after planner completion.", AgentRole.Researcher);
@@ -1196,7 +1318,7 @@ public sealed class ConductorBatchLoopTestsReapingDetach : ConductorBatchLoopTes
         var exitPath = Path.Combine(root, "detached.exit.txt");
         var childExitPath = Path.Combine(root, "detached.child-exit.json");
         var heartbeatPath = Path.Combine(root, "detached.heartbeat.json");
-        var now = DateTimeOffset.UtcNow;
+        var now = startedAt ?? DateTimeOffset.UtcNow;
         var plannerPlan = WorkerDispatchTestSupport.PlannerContractPlanFixture().Replace(
             "`seed.txt`, ",
             string.Empty,
@@ -1217,7 +1339,15 @@ public sealed class ConductorBatchLoopTestsReapingDetach : ConductorBatchLoopTes
             "confidence: high",
             "END_WORKER_RESULT"));
         File.WriteAllText(stderr, string.Empty);
-        var recordedIdentities = new List<object>();
+        var recordedIdentities = heartbeatIdentities?
+            .Select(identity => new
+            {
+                processId = identity.ProcessId,
+                startedAt = identity.StartedAt,
+                imagePath = identity.ImagePath
+            })
+            .Cast<object>()
+            .ToList() ?? [];
         if (auxiliaryIdentity is not null)
         {
             recordedIdentities.Add(new
@@ -1243,7 +1373,7 @@ public sealed class ConductorBatchLoopTestsReapingDetach : ConductorBatchLoopTes
             kind = "worker",
             pid = rootPid,
             childPid,
-            ownedPids = new[] { 35_556, 9_500, childPid },
+            ownedPids = heartbeatOwnedPids ?? [35_556, 9_500, childPid],
             ownedProcessIdentities = recordedIdentities,
             startedAt = now,
             lastObservedAt = now,

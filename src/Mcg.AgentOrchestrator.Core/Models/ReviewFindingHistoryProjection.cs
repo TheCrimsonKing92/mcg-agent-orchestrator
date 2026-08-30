@@ -15,7 +15,10 @@ public sealed record ReviewFindingHistoryProjectionMetrics(
     int DuplicateRoundCount,
     int UniqueReceiptCount,
     int DuplicateReceiptCount,
-    string? FallbackReason = null);
+    string? FallbackReason = null,
+    bool EarlyConvergenceEligible = false,
+    string? EarlyConvergenceCandidateSha = null,
+    IReadOnlyList<string>? EarlyConvergenceReceiptHashes = null);
 
 public sealed record ReviewFindingRepairCheckpoint(
     string? CandidateSha,
@@ -64,8 +67,8 @@ public sealed record CanonicalReviewFindingEntry(
     [property: JsonPropertyName("candidate_sha")] string? CandidateSha,
     [property: JsonPropertyName("verdict_identity")] string VerdictIdentity,
     [property: JsonPropertyName("evidence_identity")] string? EvidenceIdentity,
-    [property: JsonPropertyName("evidence_request")] FindingEvidenceRequest? EvidenceRequest,
-    [property: JsonPropertyName("evidence_outcome")] FindingEvidenceOutcome? EvidenceOutcome,
+    [property: JsonIgnore] FindingEvidenceRequest? EvidenceRequest,
+    [property: JsonIgnore] FindingEvidenceOutcome? EvidenceOutcome,
     [property: JsonPropertyName("round")] ReviewFindingContentReference Round,
     [property: JsonPropertyName("receipt_bodies")] IReadOnlyList<ReviewFindingContentReference> ReceiptBodies,
     [property: JsonPropertyName("resolution_proof")] ReviewFindingResolutionProof? ResolutionProof,
@@ -85,7 +88,11 @@ public sealed record ReviewFindingHistoryLedger(
     [property: JsonPropertyName("fallback_reason")] string? FallbackReason,
     [property: JsonPropertyName("findings")] IReadOnlyList<CanonicalReviewFindingEntry> Findings,
     [property: JsonPropertyName("rounds")] IReadOnlyList<ReviewFindingRoundIndexEntry> Rounds,
-    [property: JsonPropertyName("receipt_bodies")] IReadOnlyList<ReviewFindingContentReference> ReceiptBodies);
+    [property: JsonPropertyName("receipt_bodies")] IReadOnlyList<ReviewFindingContentReference> ReceiptBodies,
+    [property: JsonPropertyName("current_candidate_sha")] string? CurrentCandidateSha = null,
+    [property: JsonPropertyName("comparison_base_sha")] string? ComparisonBaseSha = null,
+    [property: JsonPropertyName("effective_operator_corrections")] IReadOnlyList<EffectiveAcceptanceCriteriaCorrection>? EffectiveOperatorCorrections = null,
+    [property: JsonPropertyName("early_convergence_eligible")] bool EarlyConvergenceEligible = false);
 
 public sealed record ReviewFindingContractRepairEnvelope(
     [property: JsonPropertyName("contract_version")] int ContractVersion,

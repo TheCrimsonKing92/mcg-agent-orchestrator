@@ -116,12 +116,16 @@ internal sealed class DispatchProcessRecoveryService
         Func<bool> hasWorktreeProgress,
         Action<DispatchHeartbeat?> heartbeatObserved)
     {
-        var hasLiveTrackedProcess = AnyTrackedProcessStillRunning(processRecord);
         var observedHeartbeat = TryReadHeartbeat(GetHeartbeatPath(processRecord), out var refreshHeartbeat)
             ? refreshHeartbeat
             : null;
+        var hasLiveTrackedProcess = AnyTrackedProcessStillRunning(processRecord);
         heartbeatObserved(observedHeartbeat);
-        var hasLiveProcess = AnyObservedProcessStillRunning(processRecord, observedHeartbeat);
+        // A missing or temporarily unreadable identity cannot authorize ownership,
+        // completion blocking, or termination. It also cannot prove that a launch-time
+        // tracked process is dead while terminal exit evidence is still absent.
+        var hasLiveProcess = hasLiveTrackedProcess ||
+            AnyObservedProcessStillRunning(processRecord, observedHeartbeat);
         var worktreeInspectionStatus = DispatchWorktreeInspectionStatus.NotRequired;
         if (!hasLiveProcess &&
             !_fileExists(processRecord.ExitCodePath) &&
@@ -564,7 +568,7 @@ internal sealed class DispatchProcessRecoveryService
     private bool AnyObservedProcessStillRunning(TaskProcessRecord processRecord, DispatchHeartbeat? heartbeat) =>
         GetObservedProcessIds(processRecord, heartbeat).Any(processId =>
             _isStillRunning(processId) &&
-            DispatchProcessIdentityEvidence.IsRecordedOwnerOrUnknown(
+            DispatchProcessIdentityEvidence.IsRecordedOwner(
                 processId,
                 heartbeat?.OwnedProcessIdentities,
                 _readProcessIdentity));
@@ -572,7 +576,7 @@ internal sealed class DispatchProcessRecoveryService
     private bool AnyOwnedWorkerProcessStillRunning(TaskProcessRecord processRecord, DispatchHeartbeat? heartbeat) =>
         GetOwnedWorkerProcessIds(processRecord, heartbeat).Any(processId =>
             _isStillRunning(processId) &&
-            DispatchProcessIdentityEvidence.IsRecordedOwnerOrUnknown(
+            DispatchProcessIdentityEvidence.IsRecordedOwner(
                 processId,
                 heartbeat?.OwnedProcessIdentities,
                 _readProcessIdentity));
@@ -776,7 +780,10 @@ internal sealed class DispatchProcessRecoveryService
             var dispatchState = new DispatchStateSurface(
                 _clock,
                 _isStillRunning,
-                readCommandLines: _readCommandLines).Evaluate(goalId, task);
+                readCommandLines: _readCommandLines,
+                readProcessIdentity: processId => _readProcessIdentity(processId) is { } identity
+                    ? (identity.StartedAt, identity.ImagePath)
+                    : null).Evaluate(goalId, task);
             var record = new DispatchDiagnosticRecord(
                 goalId.Value,
                 taskId.Value,

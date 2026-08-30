@@ -129,7 +129,7 @@ public sealed class WorkerContextPackageBuilder
             $"Semantic package identity (attestation/cache only; not delivery proof): {package.SemanticPackageId}"
         };
 
-        foreach (var artifact in package.Artifacts)
+        foreach (var artifact in package.Artifacts.Where(artifact => artifact.DeliveryMode != ContextDeliveryMode.HistoricalFile))
         {
             lines.Add(string.Empty);
             lines.Add(RenderArtifact(artifact));
@@ -182,6 +182,7 @@ public sealed class WorkerContextPackageBuilder
 
     public static WorkerContextPackageReceipt CreateReceipt(WorkerContextPackage package)
     {
+        var renderedPackage = Render(package);
         var sections = package.Artifacts.Select(artifact =>
         {
             var rendered = RenderArtifact(artifact);
@@ -205,13 +206,23 @@ public sealed class WorkerContextPackageBuilder
             ProviderUsageValue.Unknown("not-yet-reported"),
             ProviderUsageValue.Unknown("not-yet-reported"),
             ProviderUsageValue.Unknown("not-yet-reported"),
-            Encoding.UTF8.GetByteCount(Render(package)),
+            Encoding.UTF8.GetByteCount(renderedPackage),
             projection?.Mode,
             projection?.UniqueRoundCount ?? 0,
             projection?.DuplicateRoundCount ?? 0,
             projection?.UniqueReceiptCount ?? 0,
             projection?.DuplicateReceiptCount ?? 0,
-            projection?.FallbackReason);
+            projection?.FallbackReason,
+            renderedPackage.Length,
+            package.Artifacts.Where(artifact => artifact.DeliveryMode is ContextDeliveryMode.InlineFull or ContextDeliveryMode.MandatoryFile)
+                .Sum(artifact => artifact.AuthoritativeByteCount),
+            package.Artifacts.Where(artifact => artifact.DeliveryMode is ContextDeliveryMode.OnDemandFile or ContextDeliveryMode.HistoricalFile)
+                .Sum(artifact => artifact.AuthoritativeByteCount),
+            ToolTranscriptCharacters: 0,
+            ModelInputTokenEstimate: WorkerPromptInputBudget.CountTokens(renderedPackage),
+            EarlyConvergenceEligible: projection?.EarlyConvergenceEligible ?? false,
+            EarlyConvergenceCandidateSha: projection?.EarlyConvergenceCandidateSha,
+            EarlyConvergenceReceiptHashes: projection?.EarlyConvergenceReceiptHashes ?? []);
     }
 
     internal static string RenderArtifact(WorkerContextArtifact artifact)
@@ -224,6 +235,11 @@ public sealed class WorkerContextPackageBuilder
                 : $"; problem_excerpt={BoundProblemExcerpt(artifact.FallbackReason)}";
             return $"MANDATORY READ: identity={artifact.Identity.Value}; purpose={artifact.Kind}; path={artifact.MandatoryRelativePath}; bytes={artifact.AuthoritativeByteCount}; sha256={artifact.ContentHash}; contract={artifact.ContractVersion.Value}; validation={validation}{problemExcerpt}. " +
                 "The complete artifact remains readable at the path on demand. Normally report only this identity receipt and exact source locations; do not reproduce the artifact body on the happy path.";
+        }
+
+        if (artifact.DeliveryMode == ContextDeliveryMode.OnDemandFile)
+        {
+            return $"ON-DEMAND ATTESTATION: identity={artifact.Identity.Value}; purpose={artifact.Kind}; path={artifact.MandatoryRelativePath}; bytes={artifact.AuthoritativeByteCount}; sha256={artifact.ContentHash}; contract={artifact.ContractVersion.Value}; validation=verified.";
         }
 
         var bytes = artifact.AuthoritativeBytes!;
@@ -239,7 +255,7 @@ public sealed class WorkerContextPackageBuilder
     {
         var identity = new LogicalArtifactIdentity(section.LogicalIdentity);
         var version = new ContextContractVersion(section.ContractVersion);
-        if (section.DeliveryMode == ContextDeliveryMode.MandatoryFile)
+        if (section.DeliveryMode is ContextDeliveryMode.MandatoryFile or ContextDeliveryMode.OnDemandFile or ContextDeliveryMode.HistoricalFile)
         {
             return WorkerContextArtifact.Create(
                 identity,
@@ -348,7 +364,7 @@ public sealed class WorkerContextPackageBuilder
                     artifact.Kind,
                     artifact.AuthoritativeBytes,
                     artifact.RoleVisibility,
-                    ContextDeliveryMode.MandatoryFile,
+                    artifact.DeliveryMode,
                     artifact.ContractVersion,
                     recoveryRelativePath,
                     artifact.ContentHash,

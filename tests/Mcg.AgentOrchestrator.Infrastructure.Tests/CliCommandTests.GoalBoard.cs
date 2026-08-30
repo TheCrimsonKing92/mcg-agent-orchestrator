@@ -256,6 +256,9 @@ public sealed class CliCommandTestsGoalBoard : CliCommandTestBase
             var gateGoal = GoalLifecycleCommands.CreateAndActivateSimpleGoal(kernel, AgentCatalog.Default().Agents, "Live acceptance goal");
             RecordRunningProcess(kernel, deadGoal, deadGoal.Tasks.Single(), root, processId: 999999);
             RecordRunningProcess(kernel, liveGoal, liveGoal.Tasks.Single(), root, processId: Environment.ProcessId);
+            WriteIdentityBoundHeartbeat(
+                kernel.GetGoal(liveGoal.Id)!.Tasks.Single().LastProcess!,
+                Environment.ProcessId);
             DispatchExitArtifacts.Write(
                 Path.Combine(root, $"{deadGoal.Tasks.Single().Id.Value}-exit.txt"),
                 DispatchExitArtifacts.Native(0, "worker exited", DateTimeOffset.UtcNow));

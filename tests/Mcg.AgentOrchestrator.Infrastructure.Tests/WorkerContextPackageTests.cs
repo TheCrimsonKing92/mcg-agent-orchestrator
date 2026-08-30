@@ -644,6 +644,176 @@ public sealed class WorkerContextPackageTests(Xunit.ITestOutputHelper output)
         }
     }
 
+    [Xunit.Fact]
+    public void UnchangedValidatedMandatoryArtifactBecomesOnDemandUntilItsHashChanges()
+    {
+        var root = CreateTempDirectory();
+        try
+        {
+            var contextDirectory = Path.Combine(root, ".orchestrator-context", "goal");
+            Directory.CreateDirectory(contextDirectory);
+            var artifactPath = Path.Combine(contextDirectory, "source-survey.md");
+            var firstBytes = Encoding.UTF8.GetBytes("stable source survey");
+            File.WriteAllBytes(artifactPath, firstBytes);
+            void WriteRegistry(byte[] bytes) => File.WriteAllText(
+                Path.Combine(contextDirectory, "artifact-registry.json"),
+                System.Text.Json.JsonSerializer.Serialize(new
+                {
+                    artifacts = new[]
+                    {
+                        new
+                        {
+                            path = "source-survey.md",
+                            exists = true,
+                            sha256 = WorkerContextArtifact.Hash(bytes),
+                            roleVisibility = new[] { "Developer" },
+                            hashVerified = true
+                        }
+                    }
+                }));
+            WriteRegistry(firstBytes);
+            var task = new TaskSpec(TaskId.New(), "Implement", AgentRole.Developer);
+            var goal = new AgentOrchestratorKernel().CreateGoal("Use idempotent context", [task]);
+            var brief = BriefFor(goal, task, "implement");
+
+            var first = WorkerProfileDispatcher.BuildContextPackage(goal, task, root, contextDirectory, brief);
+            var firstArtifact = Assert.Single(first.Artifacts, artifact => artifact.Identity.Value == "context/source-survey.md");
+            Assert.Equal(ContextDeliveryMode.MandatoryFile, firstArtifact.DeliveryMode);
+
+            var unvalidatedRetry = WorkerProfileDispatcher.BuildContextPackage(
+                goal,
+                task,
+                root,
+                contextDirectory,
+                brief,
+                priorContextPackageReceipt: WorkerContextPackageBuilder.CreateReceipt(first));
+            Assert.Equal(
+                ContextDeliveryMode.MandatoryFile,
+                Assert.Single(unvalidatedRetry.Artifacts, artifact => artifact.Identity.Value == "context/source-survey.md").DeliveryMode);
+
+            var second = WorkerProfileDispatcher.BuildContextPackage(
+                goal,
+                task,
+                root,
+                contextDirectory,
+                brief,
+                priorContextPackageReceipt: WorkerContextPackageBuilder.CreateReceipt(first).WithValidatedContext());
+            var secondArtifact = Assert.Single(second.Artifacts, artifact => artifact.Identity.Value == "context/source-survey.md");
+            Assert.Equal(ContextDeliveryMode.OnDemandFile, secondArtifact.DeliveryMode);
+            var secondRendered = WorkerContextPackageBuilder.Render(second);
+            Assert.Contains(
+                $"ON-DEMAND ATTESTATION: identity=context/source-survey.md; purpose={secondArtifact.Kind}; path={secondArtifact.MandatoryRelativePath}; bytes={secondArtifact.AuthoritativeByteCount}; sha256={secondArtifact.ContentHash}",
+                secondRendered,
+                StringComparison.Ordinal);
+            Assert.DoesNotContain("stable source survey", secondRendered, StringComparison.Ordinal);
+
+            var changedBytes = Encoding.UTF8.GetBytes("changed source survey");
+            File.WriteAllBytes(artifactPath, changedBytes);
+            WriteRegistry(changedBytes);
+            var changed = WorkerProfileDispatcher.BuildContextPackage(
+                goal,
+                task,
+                root,
+                contextDirectory,
+                brief,
+                priorContextPackageReceipt: WorkerContextPackageBuilder.CreateReceipt(first).WithValidatedContext());
+            var changedArtifact = Assert.Single(changed.Artifacts, artifact => artifact.Identity.Value == "context/source-survey.md");
+            Assert.Equal(ContextDeliveryMode.MandatoryFile, changedArtifact.DeliveryMode);
+            Assert.Contains("MANDATORY READ: identity=context/source-survey.md", WorkerContextPackageBuilder.Render(changed), StringComparison.Ordinal);
+        }
+        finally
+        {
+            Directory.Delete(root, recursive: true);
+        }
+    }
+
+    [Xunit.Fact]
+    public void RepositoryPolicyDeliveryUsesCodexAutoLoadOnlyWhenDeclaredCapCoversCompleteFile()
+    {
+        var root = CreateTempDirectory();
+        try
+        {
+            var contextDirectory = Path.Combine(root, ".orchestrator-context", "goal");
+            Directory.CreateDirectory(contextDirectory);
+            var policyPath = Path.Combine(contextDirectory, "AGENTS.md");
+            var sentinel = "POLICY_SENTINEL_AFTER_DEFAULT_CAP";
+            var policyBytes = Encoding.UTF8.GetBytes(new string('p', 40_000) + sentinel);
+            File.WriteAllBytes(policyPath, policyBytes);
+            void WriteRegistry(byte[] bytes) => File.WriteAllText(
+                Path.Combine(contextDirectory, "artifact-registry.json"),
+                System.Text.Json.JsonSerializer.Serialize(new
+                {
+                    artifacts = new[]
+                    {
+                        new
+                        {
+                            path = "AGENTS.md",
+                            exists = true,
+                            sha256 = WorkerContextArtifact.Hash(bytes),
+                            roleVisibility = new[] { "Developer" },
+                            hashVerified = true
+                        }
+                    }
+                }));
+            WriteRegistry(policyBytes);
+            var task = new TaskSpec(TaskId.New(), "Implement", AgentRole.Developer);
+            var goal = new AgentOrchestratorKernel().CreateGoal("Deliver policy safely", [task]);
+            var brief = BriefFor(goal, task, "implement");
+            var codex = Assert.Single(WorkerProfileCatalog.Default().Profiles, profile => profile.Name == "codex-cli");
+
+            var autoLoaded = WorkerProfileDispatcher.BuildContextPackage(
+                goal, task, root, contextDirectory, brief, workerProfile: codex);
+            var attestation = Assert.Single(autoLoaded.Artifacts, artifact => artifact.Identity.Value == "context/AGENTS.md");
+            Assert.Equal(ContextDeliveryMode.OnDemandFile, attestation.DeliveryMode);
+            Assert.Equal(policyBytes.Length, attestation.AuthoritativeByteCount);
+            var autoLoadedRendered = WorkerContextPackageBuilder.Render(autoLoaded);
+            Assert.Contains(
+                $"ON-DEMAND ATTESTATION: identity=context/AGENTS.md; purpose={attestation.Kind}; path={attestation.MandatoryRelativePath}; bytes={attestation.AuthoritativeByteCount}; sha256={attestation.ContentHash}",
+                autoLoadedRendered,
+                StringComparison.Ordinal);
+            Assert.DoesNotContain(sentinel, autoLoadedRendered, StringComparison.Ordinal);
+            Assert.Contains("project_doc_max_bytes=65536", codex.CommandTemplate, StringComparison.Ordinal);
+
+            var explicitFallback = WorkerProfileDispatcher.BuildContextPackage(
+                goal,
+                task,
+                root,
+                contextDirectory,
+                brief,
+                workerProfile: new WorkerProfile("custom-cli", "custom {promptPath}"));
+            var fallbackArtifact = Assert.Single(explicitFallback.Artifacts, artifact => artifact.Identity.Value == "context/AGENTS.md");
+            Assert.Equal(ContextDeliveryMode.InlineFull, fallbackArtifact.DeliveryMode);
+            Assert.Contains(sentinel, WorkerContextPackageBuilder.Render(explicitFallback), StringComparison.Ordinal);
+
+            var inconsistentProfile = new WorkerProfile(
+                "codex-cli",
+                "codex exec --model {subscriptionModelName}",
+                AutoLoadsRepositoryPolicy: true,
+                RepositoryPolicyMaxBytes: 65_536);
+            var inconsistentFallback = WorkerProfileDispatcher.BuildContextPackage(
+                goal, task, root, contextDirectory, brief, workerProfile: inconsistentProfile);
+            var inconsistentArtifact = Assert.Single(
+                inconsistentFallback.Artifacts,
+                artifact => artifact.Identity.Value == "context/AGENTS.md");
+            Assert.Equal(ContextDeliveryMode.InlineFull, inconsistentArtifact.DeliveryMode);
+            Assert.Contains(sentinel, WorkerContextPackageBuilder.Render(inconsistentFallback), StringComparison.Ordinal);
+
+            var oversizedBytes = Encoding.UTF8.GetBytes(new string('q', 70_000) + "OVERSIZED_POLICY_SENTINEL");
+            File.WriteAllBytes(policyPath, oversizedBytes);
+            WriteRegistry(oversizedBytes);
+            var cappedFallback = WorkerProfileDispatcher.BuildContextPackage(
+                goal, task, root, contextDirectory, brief, workerProfile: codex);
+            Assert.Equal(
+                ContextDeliveryMode.InlineFull,
+                Assert.Single(cappedFallback.Artifacts, artifact => artifact.Identity.Value == "context/AGENTS.md").DeliveryMode);
+            Assert.Contains("OVERSIZED_POLICY_SENTINEL", WorkerContextPackageBuilder.Render(cappedFallback), StringComparison.Ordinal);
+        }
+        finally
+        {
+            Directory.Delete(root, recursive: true);
+        }
+    }
+
     [Xunit.Fact(DisplayName = "BuildContextPackage_reviewer_rejects_capped_scope_without_complete_mandatory_bytes")]
     public void BuildContextPackageReviewerRejectsCappedScopeWithoutCompleteMandatoryBytes()
     {
@@ -745,11 +915,7 @@ public sealed class WorkerContextPackageTests(Xunit.ITestOutputHelper output)
 
             Assert.Single(entries);
             Assert.Equal("stable-finding", entries[0].GetProperty("stable_id").GetString());
-            Assert.Equal(4, rounds.Length);
-            Assert.Equal(3, rounds.Count(round =>
-                round.GetProperty("task_id").GetString() == firstTask.Id.Value));
-            Assert.Single(rounds, round =>
-                round.GetProperty("task_id").GetString() == secondTask.Id.Value);
+            Assert.Single(rounds);
             Assert.All(rounds, round =>
             {
                 var identity = round.GetProperty("body").GetProperty("logical_identity").GetString()!;
@@ -758,7 +924,7 @@ public sealed class WorkerContextPackageTests(Xunit.ITestOutputHelper output)
                 Assert.Single(bodyDocument.RootElement.GetProperty("ReceiptBodies").EnumerateArray());
             });
             var receiptReferences = document.RootElement.GetProperty("receipt_bodies").EnumerateArray().ToArray();
-            Assert.Equal(2, receiptReferences.Length);
+            Assert.Single(receiptReferences);
             Assert.All(receiptReferences, reference =>
             {
                 var identity = reference.GetProperty("logical_identity").GetString()!;
@@ -767,13 +933,13 @@ public sealed class WorkerContextPackageTests(Xunit.ITestOutputHelper output)
                 _ = Recover(root, body);
             });
             var receipt = WorkerContextPackageBuilder.CreateReceipt(package);
-            Assert.Equal(2, receipt.UniqueReviewFindingRoundCount);
-            Assert.Equal(2, receipt.DuplicateReviewFindingRoundCount);
+            Assert.Equal(1, receipt.UniqueReviewFindingRoundCount);
+            Assert.Equal(3, receipt.DuplicateReviewFindingRoundCount);
             Assert.Equal(
-                receipt.UniqueReviewFindingRoundCount + receipt.DuplicateReviewFindingRoundCount,
-                rounds.Length);
-            Assert.Equal(2, receipt.UniqueFindingEvidenceReceiptCount);
-            Assert.Equal(2, receipt.DuplicateFindingEvidenceReceiptCount);
+                4,
+                receipt.UniqueReviewFindingRoundCount + receipt.DuplicateReviewFindingRoundCount);
+            Assert.Equal(1, receipt.UniqueFindingEvidenceReceiptCount);
+            Assert.Equal(3, receipt.DuplicateFindingEvidenceReceiptCount);
             Assert.True(receipt.RenderedPromptBytes > 0);
         }
         finally
@@ -940,7 +1106,7 @@ public sealed class WorkerContextPackageTests(Xunit.ITestOutputHelper output)
                 {
                     var identity = reference.GetProperty("logical_identity").GetString()!;
                     var artifact = Assert.Single(package.Artifacts, candidate => candidate.Identity.Value == identity);
-                    Assert.Equal(ContextDeliveryMode.MandatoryFile, artifact.DeliveryMode);
+                    Assert.Equal(ContextDeliveryMode.OnDemandFile, artifact.DeliveryMode);
                     var bytes = Recover(root, artifact);
                     Assert.Equal(reference.GetProperty("sha256").GetString(), WorkerContextArtifact.Hash(bytes));
                     return bytes;
@@ -948,6 +1114,23 @@ public sealed class WorkerContextPackageTests(Xunit.ITestOutputHelper output)
                 .ToArray();
             Assert.Contains(recoveredReceiptBodies,
                 bytes => Encoding.UTF8.GetString(bytes).Contains("evidence-receipt-summary-source", StringComparison.Ordinal));
+            var recoveredRoundBodies = findingHistoryDocument.RootElement.GetProperty("rounds")
+                .EnumerateArray()
+                .Select(reference => reference.GetProperty("body"))
+                .Select(reference =>
+                {
+                    var identity = reference.GetProperty("logical_identity").GetString()!;
+                    var artifact = Assert.Single(package.Artifacts, candidate => candidate.Identity.Value == identity);
+                    Assert.Equal(ContextDeliveryMode.OnDemandFile, artifact.DeliveryMode);
+                    var bytes = Recover(root, artifact);
+                    Assert.Equal(reference.GetProperty("sha256").GetString(), WorkerContextArtifact.Hash(bytes));
+                    return bytes;
+                })
+                .ToArray();
+            Assert.Contains(recoveredRoundBodies,
+                bytes => Encoding.UTF8.GetString(bytes).Contains("evidence-class-source", StringComparison.Ordinal));
+            Assert.Contains(recoveredRoundBodies,
+                bytes => Encoding.UTF8.GetString(bytes).Contains("evidence-outcome-detail-source", StringComparison.Ordinal));
 
             var expectedSources = new List<ExpectedSemanticSource>
             {
@@ -964,8 +1147,6 @@ public sealed class WorkerContextPackageTests(Xunit.ITestOutputHelper output)
                 new("acceptance failure", "goal/latest-acceptance-failure.json", "acceptance-failure-source"),
                 new ExpectedSemanticSource("finding one", "goal/review-finding-history.json", "finding-source-one"),
                 new ExpectedSemanticSource("finding two", "goal/review-finding-history.json", "finding-source-two"),
-                new ExpectedSemanticSource("evidence request", "goal/review-finding-history.json", "evidence-class-source"),
-                new ExpectedSemanticSource("evidence outcome", "goal/review-finding-history.json", "evidence-outcome-detail-source"),
                 new ExpectedSemanticSource("causal event", "goal/timeline.json", causalEvent),
                 new ExpectedSemanticSource("prior-task result", $"prior/{priorTask.Id.Value}/verification-output", priorResult.Trim()),
                 new ExpectedSemanticSource("required instruction", "task/verification-plan.md", "required-instruction-source-✓"),

@@ -77,12 +77,16 @@ internal static class SourceSizeRatchet
             // that process-start boundary. Goal d8a889bd then extracted worktree build-daemon
             // discovery, identity revalidation, and reaping to WorktreeBuildDaemonReaper; 3137 is
             // the measured combined post-rebase size.
-            new SourceSizeCeiling("src/Mcg.AgentOrchestrator.Infrastructure/Processes/BackgroundDispatchRunner.cs", 3137),
+            // Goal 52049d08 adds only context-usage measurement and typed no-change admission at the
+            // existing dispatch-completion boundary; projection and classification remain extracted.
+            new SourceSizeCeiling("src/Mcg.AgentOrchestrator.Infrastructure/Processes/BackgroundDispatchRunner.cs", 3150),
             // Goal 5a75fed0 extracted typed projection parsing and literal restoration into
             // WorkerContextProjectionResidual, leaving the dispatcher to sequence package assembly.
             // Goal fd252fe4 adds retry fingerprints for the resolved provider, model, paid route, and
             // repository identities; 3229 is the measured combined post-rebase size.
-            new SourceSizeCeiling("src/Mcg.AgentOrchestrator.Infrastructure/Workers/WorkerProfileDispatcher.cs", 3229),
+            // Goal 52049d08 adds profile-aware policy selection, immutable receipt reuse, and compact
+            // retry-projection wiring at this package-assembly boundary; each behavior remains extracted.
+            new SourceSizeCeiling("src/Mcg.AgentOrchestrator.Infrastructure/Workers/WorkerProfileDispatcher.cs", 3270),
             // Raised for goal fd252fe4: the single typed retry-cause argument belongs at the durable CLI
             // command-application boundary; classification and admission behavior remain elsewhere.
             new SourceSizeCeiling("src/Mcg.AgentOrchestrator.App/Cli/CliPersistentStateRunner.cs", 4695),
@@ -120,9 +124,9 @@ internal static class SourceSizeRatchet
             new SourceSizeCeiling("tests/Mcg.AgentOrchestrator.Infrastructure.Tests/CliCommandTestsPersistentRunnerCommandsGoalIntakeAndReplacement.cs", 2780),
             new SourceSizeCeiling("tests/Mcg.AgentOrchestrator.Infrastructure.Tests/CliCommandTestsPersistentRunnerCommandsGoalQueriesAndLanding.cs", 574),
             new SourceSizeCeiling("tests/Mcg.AgentOrchestrator.Infrastructure.Tests/CliCommandTestsPersistentRunnerCommandsStartupAndMetadata.cs", 275),
-            // Raised for goal fd252fe4: the existing worker-result fixture now supplies the required typed
-            // provider-interruption cause; keeping the assertion in its owning suite preserves coverage.
-            new SourceSizeCeiling("tests/Mcg.AgentOrchestrator.Infrastructure.Tests/WorkerDispatchTestsWorkerResultClassification.cs", 4838),
+            // Raised for goals fd252fe4 and b8dde431: worker-result fixtures supply the required typed provider-
+            // interruption cause and PID-identity evidence; owning-suite assertions preserve coverage.
+            new SourceSizeCeiling("tests/Mcg.AgentOrchestrator.Infrastructure.Tests/WorkerDispatchTestsWorkerResultClassification.cs", 4843),
             // Goal 46ff9f83 adds unequal logical-width/build-permit controls and the typed maximum diagnostic.
             // Goal 289b469d adds the per-stage registration-fault decision table, bounded-cap proof, durable
             // fault/verdict state distinction, and paid-round negative controls owned by this existing class.

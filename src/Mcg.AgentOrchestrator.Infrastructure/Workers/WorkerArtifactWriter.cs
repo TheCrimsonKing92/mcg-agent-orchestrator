@@ -9,7 +9,6 @@ namespace Mcg.AgentOrchestrator.Infrastructure;
 internal sealed class WorkerArtifactWriter
 {
     private const int PriorVerificationMaxChars = 40000;
-    private const int GuidanceFileMaxChars = 30000;
     private const int CurrentEvidenceMaxChars = 20000;
     private const int DigestTextMaxChars = 700;
     private const int DigestEvidenceMaxChars = 500;
@@ -599,7 +598,7 @@ internal sealed class WorkerArtifactWriter
             $"- digest.md inline target: {DigestTextMaxChars} chars per text section, {DigestEvidenceMaxChars} chars per evidence section.",
             $"- prior-task-evidence.md retrieval budget: {PriorVerificationMaxChars} chars.",
             $"- diff-summary.md retrieval budget: {WorkerGitContext.DiffSummaryRetrievalMaxChars} chars.",
-            $"- guidance file retrieval budget: {GuidanceFileMaxChars} chars per copied guidance artifact.",
+            "- guidance files are copied completely and hash-attested; delivery mode is selected by worker-profile policy capability.",
             "- Large paid prompt risk is evaluated before dispatch; prefer handles below over copying large artifacts into task prose.",
             string.Empty,
             "## Retrieval Handles",
@@ -918,10 +917,7 @@ internal sealed class WorkerArtifactWriter
             }
 
             var targetPath = Path.Combine(contextDirectory, fileName);
-            WriteText(targetPath, WorkerContextHelpers.TrimArtifactBlock(
-                File.ReadAllText(sourcePath),
-                GuidanceFileMaxChars,
-                preserveCompleteArtifacts));
+            WriteText(targetPath, File.ReadAllText(sourcePath));
             copied.Add(fileName);
         }
 

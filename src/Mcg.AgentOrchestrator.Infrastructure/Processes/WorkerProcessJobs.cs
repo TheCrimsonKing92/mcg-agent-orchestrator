@@ -1706,48 +1706,16 @@ public static class WorkerProcessJobs
 
     public static IReadOnlyList<int> ListLiveDescendantProcessIds(int ancestorProcessId)
     {
-        if (ancestorProcessId <= 0 || !OperatingSystem.IsWindows())
-        {
-            return [];
-        }
+        return WindowsNativeProcessInspection.ListIdentityBoundDescendantProcessIds(ancestorProcessId);
+    }
 
-        var parentByProcessId = new Dictionary<int, int>();
-        var snapshot = CreateToolhelp32Snapshot(0x00000002, 0);
-        if (snapshot == IntPtr.Zero || snapshot == new IntPtr(-1))
-        {
-            return [];
-        }
-
-        try
-        {
-            var entry = new PROCESSENTRY32 { dwSize = (uint)Marshal.SizeOf<PROCESSENTRY32>() };
-            if (!Process32First(snapshot, ref entry))
-            {
-                return [];
-            }
-
-            do
-            {
-                var processId = (int)entry.th32ProcessID;
-                var parentProcessId = (int)entry.th32ParentProcessID;
-                if (processId > 0 && parentProcessId > 0)
-                {
-                    parentByProcessId[processId] = parentProcessId;
-                }
-            }
-            while (Process32Next(snapshot, ref entry));
-        }
-        finally
-        {
-            CloseHandle(snapshot);
-        }
-
-        return parentByProcessId.Keys
-            .Where(processId => processId != ancestorProcessId)
-            .Where(processId => IsDescendantOf(processId, ancestorProcessId, parentByProcessId))
-            .Where(IsProcessRunning)
-            .OrderBy(processId => processId)
-            .ToArray();
+    public static IReadOnlyList<int> ListConservativeDescendantProcessIdsForRefusal(
+        int ancestorProcessId,
+        DateTimeOffset recordedAncestorStartedAt)
+    {
+        return WindowsNativeProcessInspection.ListConservativeDescendantProcessIdsForRefusal(
+            ancestorProcessId,
+            recordedAncestorStartedAt);
     }
 
     private static bool RegisterDurable(

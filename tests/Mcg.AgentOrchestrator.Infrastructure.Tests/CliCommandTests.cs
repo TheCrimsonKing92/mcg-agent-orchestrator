@@ -322,6 +322,36 @@ public abstract class CliCommandTestBase
             new TaskProcessRecord(processId, "codex exec prompt.md", workingDirectory, stdout, stderr, exit, DateTimeOffset.UtcNow, null, null));
     }
 
+    private protected static void WriteIdentityBoundHeartbeat(TaskProcessRecord process, int processId)
+    {
+        var identity = DispatchProcessIdentityEvidence.ReadCurrent(processId)
+            ?? throw new InvalidOperationException($"Could not read process identity for PID {processId}.");
+        var observedAt = DateTimeOffset.UtcNow;
+        File.WriteAllText(
+            BackgroundDispatchRunner.GetHeartbeatPath(process),
+            JsonSerializer.Serialize(new
+            {
+                pid = processId,
+                childPid = (int?)null,
+                ownedPids = new[] { processId },
+                ownedProcessIdentities = new[]
+                {
+                    new
+                    {
+                        processId = identity.ProcessId,
+                        startedAt = identity.StartedAt,
+                        imagePath = identity.ImagePath
+                    }
+                },
+                state = "running",
+                lastObservedAt = observedAt,
+                lastProgressAt = observedAt,
+                stdoutBytes = 0,
+                stderrBytes = 0,
+                ownedCpuMs = 0
+            }));
+    }
+
     private protected static AgentOrchestratorKernel WithGoalStatus(
         AgentOrchestratorKernel kernel,
         GoalId goalId,

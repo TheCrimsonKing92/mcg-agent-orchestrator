@@ -70,6 +70,188 @@ internal static class WindowsNativeProcessInspection
         return ReadByNames(names, EnumerateProcesses, ReadOne);
     }
 
+    internal static IReadOnlyList<int> ListIdentityBoundDescendantProcessIds(int ancestorProcessId)
+    {
+        if (ancestorProcessId <= 0 || !OperatingSystem.IsWindows())
+        {
+            return [];
+        }
+
+        return ListIdentityBoundDescendantProcessIds(ancestorProcessId, EnumerateProcesses, ReadOne);
+    }
+
+    internal static IReadOnlyList<int> ListIdentityBoundDescendantProcessIds(
+        int ancestorProcessId,
+        Func<ProcessEnumerationResult> enumerate,
+        Func<ProcessInspectionSeed, ProcessInspectionRecord> readOne)
+    {
+        var enumeration = enumerate();
+        if (ancestorProcessId <= 0 || enumeration.Failure is not null)
+        {
+            return [];
+        }
+
+        var seedsById = enumeration.Processes
+            .Where(seed => seed.ProcessId > 0)
+            .GroupBy(seed => seed.ProcessId)
+            .ToDictionary(group => group.Key, group => group.First());
+        if (!seedsById.TryGetValue(ancestorProcessId, out var rootSeed))
+        {
+            return [];
+        }
+
+        var records = new Dictionary<int, ProcessInspectionRecord>();
+        ProcessInspectionRecord Read(ProcessInspectionSeed seed)
+        {
+            if (!records.TryGetValue(seed.ProcessId, out var record))
+            {
+                record = readOne(seed);
+                records[seed.ProcessId] = record;
+            }
+
+            return record;
+        }
+
+        var root = Read(rootSeed);
+        if (!CanEstablishLiveIdentity(root))
+        {
+            return [];
+        }
+
+        var childrenByParent = enumeration.Processes
+            .Where(seed => seed.ProcessId > 0 && seed.ParentProcessId > 0 && seed.ProcessId != ancestorProcessId)
+            .GroupBy(seed => seed.ParentProcessId)
+            .ToDictionary(group => group.Key, group => group.ToArray());
+        var accepted = new List<int>();
+        var queue = new Queue<ProcessInspectionSeed>();
+        queue.Enqueue(rootSeed);
+        while (queue.TryDequeue(out var parentSeed))
+        {
+            if (!childrenByParent.TryGetValue(parentSeed.ProcessId, out var children))
+            {
+                continue;
+            }
+
+            var parent = Read(parentSeed);
+            foreach (var childSeed in children)
+            {
+                var child = Read(childSeed);
+                if (!CanEstablishLiveIdentity(parent) ||
+                    !CanEstablishLiveIdentity(child) ||
+                    child.StartedAt!.Value < parent.StartedAt!.Value)
+                {
+                    continue;
+                }
+
+                accepted.Add(childSeed.ProcessId);
+                queue.Enqueue(childSeed);
+            }
+        }
+
+        return accepted.Distinct().OrderBy(processId => processId).ToArray();
+    }
+
+    internal static IReadOnlyList<int> ListConservativeDescendantProcessIdsForRefusal(
+        int ancestorProcessId,
+        DateTimeOffset recordedAncestorStartedAt)
+    {
+        if (ancestorProcessId <= 0 || !OperatingSystem.IsWindows())
+        {
+            return [];
+        }
+
+        return ListConservativeDescendantProcessIdsForRefusal(
+            ancestorProcessId,
+            recordedAncestorStartedAt,
+            EnumerateProcesses,
+            ReadOne);
+    }
+
+    internal static IReadOnlyList<int> ListConservativeDescendantProcessIdsForRefusal(
+        int ancestorProcessId,
+        DateTimeOffset recordedAncestorStartedAt,
+        Func<ProcessEnumerationResult> enumerate,
+        Func<ProcessInspectionSeed, ProcessInspectionRecord> readOne)
+    {
+        var enumeration = enumerate();
+        if (ancestorProcessId <= 0 || enumeration.Failure is not null)
+        {
+            return [];
+        }
+
+        var seedsById = enumeration.Processes
+            .Where(seed => seed.ProcessId > 0)
+            .GroupBy(seed => seed.ProcessId)
+            .ToDictionary(group => group.Key, group => group.First());
+        var records = new Dictionary<int, ProcessInspectionRecord>();
+        ProcessInspectionRecord Read(ProcessInspectionSeed seed)
+        {
+            if (!records.TryGetValue(seed.ProcessId, out var record))
+            {
+                record = readOne(seed);
+                records[seed.ProcessId] = record;
+            }
+
+            return record;
+        }
+
+        var rootEarliestPossibleStart = recordedAncestorStartedAt;
+        // TaskProcessRecord.StartedAt is observed after Process.Start; it is not the
+        // OS creation time and cannot prove PID recycle by exact comparison. For this
+        // refusal-only walk, use a readable live root identity as the temporal anchor.
+        // A mismatch remains unknown and conservative, never ownership or kill authority.
+        if (seedsById.TryGetValue(ancestorProcessId, out var currentRootSeed))
+        {
+            var currentRoot = Read(currentRootSeed);
+            if (currentRoot.StartedAt is { } currentRootStartedAt)
+            {
+                rootEarliestPossibleStart = currentRootStartedAt;
+            }
+        }
+
+        var childrenByParent = enumeration.Processes
+            .Where(seed => seed.ProcessId > 0 && seed.ParentProcessId > 0 && seed.ProcessId != ancestorProcessId)
+            .GroupBy(seed => seed.ParentProcessId)
+            .ToDictionary(group => group.Key, group => group.ToArray());
+        var candidates = new List<int>();
+        var queue = new Queue<(int ProcessId, DateTimeOffset EarliestPossibleStart)>();
+        queue.Enqueue((ancestorProcessId, rootEarliestPossibleStart));
+        while (queue.TryDequeue(out var parent))
+        {
+            if (!childrenByParent.TryGetValue(parent.ProcessId, out var children))
+            {
+                continue;
+            }
+
+            foreach (var childSeed in children)
+            {
+                var child = Read(childSeed);
+                if (child.Status == ProcessInspectionStatus.DeadOrRecycled)
+                {
+                    continue;
+                }
+
+                // Known temporal inversion proves that this is a stale parent-PID edge;
+                // prune its entire subtree. An unreadable identity remains an unknown
+                // refusal candidate, but never flows into identity-bound ownership.
+                if (child.StartedAt is { } childStartedAt &&
+                    childStartedAt < parent.EarliestPossibleStart)
+                {
+                    continue;
+                }
+
+                candidates.Add(childSeed.ProcessId);
+                queue.Enqueue((childSeed.ProcessId, child.StartedAt ?? parent.EarliestPossibleStart));
+            }
+        }
+
+        return candidates.Distinct().OrderBy(processId => processId).ToArray();
+    }
+
+    private static bool CanEstablishLiveIdentity(ProcessInspectionRecord record) =>
+        record.StartedAt is not null &&
+        record.Status is not ProcessInspectionStatus.Exited and not ProcessInspectionStatus.DeadOrRecycled;
+
     internal static ProcessInspectionResult ReadByNames(
         IReadOnlySet<string> processNames,
         Func<ProcessEnumerationResult> enumerate,

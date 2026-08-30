@@ -700,13 +700,16 @@ public sealed class AdvanceLoopTests
     kernel.RecordTaskDispatch(goal.Id, task.Id, new TaskDispatchRecord("codex-cli", "old dispatch", root, clock));
     var processRecord = new TaskProcessRecord(28516, "old dispatch", root, stdout, stderr, exit, clock, null, null);
     kernel.RecordTaskProcessStarted(goal.Id, task.Id, processRecord);
+    var childIdentity = new SpawnProcessIdentity(28517, clock.AddSeconds(1), @"C:\workers\child.exe");
     File.WriteAllText(
         BackgroundDispatchRunner.GetHeartbeatPath(processRecord),
-        "{\"pid\":28516,\"childPid\":28517,\"ownedPids\":[],\"state\":\"running\",\"lastObservedAt\":\"2026-07-11T01:52:19Z\",\"lastProgressAt\":\"2026-07-11T01:52:19Z\",\"stdoutBytes\":4,\"stderrBytes\":0,\"ownedCpuMs\":1}");
+        "{\"pid\":28516,\"childPid\":28517,\"ownedPids\":[28517],\"ownedProcessIdentities\":[{\"processId\":28517,\"startedAt\":\"2026-07-11T01:52:20Z\",\"imagePath\":\"C:\\\\workers\\\\child.exe\"}],\"state\":\"running\",\"lastObservedAt\":\"2026-07-11T01:52:19Z\",\"lastProgressAt\":\"2026-07-11T01:52:19Z\",\"stdoutBytes\":4,\"stderrBytes\":0,\"ownedCpuMs\":1}");
     var profiles = new WorkerProfileCatalog([new WorkerProfile("codex-cli", BlockingCodexProfileCommand)]);
 
     var previousLiveness = GoalManagementCommandService.IsTrackedProcessRunningForReadyBatch;
+    var previousIdentityReader = GoalManagementCommandService.ReadTrackedProcessIdentityForReadyBatch;
     GoalManagementCommandService.IsTrackedProcessRunningForReadyBatch = pid => pid == 28517;
+    GoalManagementCommandService.ReadTrackedProcessIdentityForReadyBatch = pid => pid == 28517 ? childIdentity : null;
     try
     {
         var batch = GoalManagementCommandService.SubscriptionDispatchReadyBatch(
@@ -728,6 +731,7 @@ public sealed class AdvanceLoopTests
     finally
     {
         GoalManagementCommandService.IsTrackedProcessRunningForReadyBatch = previousLiveness;
+        GoalManagementCommandService.ReadTrackedProcessIdentityForReadyBatch = previousIdentityReader;
     }
 }
 

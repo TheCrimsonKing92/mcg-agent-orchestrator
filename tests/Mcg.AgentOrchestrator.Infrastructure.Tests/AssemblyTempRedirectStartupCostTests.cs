@@ -38,12 +38,11 @@ public sealed class AssemblyTempRedirectStartupCostTests(ITestOutputHelper outpu
             "labelSetExitCode=not-run labelSetSucceeded=not-run labelSetFailure=not-run " +
             "probeWriteMs=0 probeCleanupMs=0 reap=not-run reapEnumerateMs=not-run " +
             "reapSiblingCount=not-run reapPidSnapshotMs=not-run reapOrphanSelectMs=not-run " +
-            "reapAgeSelectMs=not-run reapBoundSelectMs=not-run reapOverlap=not-run " +
+            "reapBoundSelectMs=not-run " +
             "deleteAttempted=not-run deleteSucceeded=not-run deleteMs=not-run " +
             "deleteDeleted=not-run deleteAlreadyAbsent=not-run deleteFailed=not-run " +
             "deleteFailureKinds=not-run deleteFirstFailure=not-run " +
-            "reapRetentionSelectMs=not-run reapRetentionReserve=not-run " +
-            "reapOverflowCount=not-run deleteReadOnlyCleared=not-run",
+            "deleteReadOnlyCleared=not-run",
             diagnostic);
     }
 
@@ -196,7 +195,7 @@ public sealed class AssemblyTempRedirectStartupCostTests(ITestOutputHelper outpu
     }
 
     [Fact]
-    public void BoundedReapSelectionUnionsOverlappingRulesAndKeepsOldestRoots()
+    public void BoundedReapSelectionDeduplicatesAndKeepsOldestRoots()
     {
         var writes = new Dictionary<string, DateTime>(StringComparer.OrdinalIgnoreCase)
         {
@@ -206,8 +205,7 @@ public sealed class AssemblyTempRedirectStartupCostTests(ITestOutputHelper outpu
         };
 
         var selected = AssemblyTempRedirect.SelectBoundedReapRoots(
-            ["p10", "p20"],
-            ["p20", "p30"],
+            ["p10", "p20", "p20", "p30"],
             name => writes[name],
             limit: 2);
 

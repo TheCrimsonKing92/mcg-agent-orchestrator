@@ -2,6 +2,7 @@ using System.Diagnostics;
 using System.Security.Cryptography;
 using System.Text;
 using System.Text.Json;
+using System.Text.Json.Nodes;
 using Mcg.AgentOrchestrator.Core;
 using Mcg.AgentOrchestrator.Core.Conductor;
 using Mcg.AgentOrchestrator.Infrastructure;
@@ -26,6 +27,8 @@ internal sealed record ProgressiveReviewSteeringOptions(
 
 internal sealed class ProgressiveReviewSteeringCoordinator
 {
+    private static readonly JsonSerializerOptions HeartbeatJsonOptions = new(JsonSerializerDefaults.Web);
+
     private readonly OrchestratorWorkspace _workspace;
     private readonly IReadOnlyList<AgentDefinition> _agents;
     private readonly WorkerProfileCatalog _profiles;
@@ -35,6 +38,7 @@ internal sealed class ProgressiveReviewSteeringCoordinator
     private readonly ProgressiveReviewSteeringOptions _options;
     private readonly Func<DateTimeOffset> _utcNow;
     private readonly Func<int, bool> _isProcessRunning;
+    private readonly Func<int, SpawnProcessIdentity?> _readProcessIdentity;
     private readonly Func<TaskProcessRecord, IReadOnlyList<int>> _getLineageDescendants;
     private readonly Func<AgentOrchestratorKernel, GoalId, TaskId, TaskProcessRecord> _cancelProcess;
     private readonly Func<AgentOrchestratorKernel, GoalId, TaskId, TaskProcessRecord> _startProcess;
@@ -59,7 +63,9 @@ internal sealed class ProgressiveReviewSteeringCoordinator
         Action<AgentOrchestratorKernel, Goal, TaskSpec, string>? prepareFreshDispatch = null,
         Func<string, string?>? headResolver = null,
         Func<string, string?, string?, bool>? capturedHeadIsAncestor = null,
-        Action<AgentOrchestratorKernel, Goal, TaskSpec, string, ConductorAutonomyPolicy?>? prepareFreshDispatchWithPolicy = null)
+        Action<AgentOrchestratorKernel, Goal, TaskSpec, string, ConductorAutonomyPolicy?>? prepareFreshDispatchWithPolicy = null,
+        Func<int, SpawnProcessIdentity?>? readProcessIdentity = null,
+        Func<int, DateTimeOffset, IReadOnlyList<int>>? listConservativeLineageDescendants = null)
     {
         _workspace = workspace;
         _agents = agents;
@@ -70,7 +76,9 @@ internal sealed class ProgressiveReviewSteeringCoordinator
         _options = options ?? new ProgressiveReviewSteeringOptions();
         _utcNow = utcNow ?? (() => DateTimeOffset.UtcNow);
         _isProcessRunning = isProcessRunning ?? IsProcessRunning;
-        _getLineageDescendants = getLineageDescendants ?? GetLiveLineageDescendants;
+        _readProcessIdentity = readProcessIdentity ?? DispatchProcessIdentityEvidence.ReadCurrent;
+        _getLineageDescendants = getLineageDescendants ??
+            (process => GetLiveLineageDescendants(process, listConservativeLineageDescendants));
         _cancelProcess = cancelProcess ?? ((kernel, goalId, taskId) => new BackgroundDispatchRunner().CancelLatestProcess(kernel, goalId, taskId));
         _startProcess = startProcess ?? ((kernel, goalId, taskId) => new BackgroundDispatchRunner().StartLatestDispatch(kernel, goalId, taskId, workspace.LogDirectory));
         _prepareFreshDispatch = prepareFreshDispatch;
@@ -715,32 +723,40 @@ Corrective direction:
 
     private IReadOnlyList<int> CaptureCancelTimeOwnedProcessSet(TaskProcessRecord process)
     {
-        var processIds = new HashSet<int>();
-        AddProcessId(processIds, process.ProcessId);
-        foreach (var processId in process.TrackedProcessIds)
-            AddProcessId(processIds, processId);
-
         var heartbeat = ProcessLogReader.ReadHeartbeat(process);
-        if (heartbeat.IsAvailable)
+        var lineageDescendants = _getLineageDescendants(process);
+        var conservativeRefusalCandidates = process.CompletionTrackedProcessIds
+            .Concat(lineageDescendants)
+            .Where(processId => processId > 0)
+            .Distinct()
+            .ToArray();
+        if (!heartbeat.IsAvailable)
         {
-            AddProcessId(processIds, heartbeat.ProcessId);
-            if (heartbeat.ChildProcessId is { } childProcessId)
-                AddProcessId(processIds, childProcessId);
-
-            foreach (var processId in heartbeat.OwnedProcessIds)
-                AddProcessId(processIds, processId);
+            return conservativeRefusalCandidates
+                .OrderBy(processId => processId)
+                .ToArray();
         }
 
-        foreach (var processId in _getLineageDescendants(process))
-            AddProcessId(processIds, processId);
-
-        return processIds.OrderBy(processId => processId).ToArray();
-    }
-
-    private static void AddProcessId(HashSet<int> processIds, int processId)
-    {
-        if (processId > 0)
-            processIds.Add(processId);
+        var recordedIdentities = heartbeat.OwnedProcessIdentities
+            .Concat(lineageDescendants.Select(_readProcessIdentity).OfType<SpawnProcessIdentity>())
+            .Distinct()
+            .ToArray();
+        var candidates = heartbeat.OwnedProcessIds
+            .Concat(heartbeat.ChildProcessId is > 0 ? [heartbeat.ChildProcessId.Value] : [])
+            .Concat(heartbeat.ProcessId > 0 ? [heartbeat.ProcessId] : [])
+            .Concat(lineageDescendants);
+        return DispatchProcessIdentityEvidence.GetLiveRecordedOwnerProcessIds(
+                candidates,
+                recordedIdentities,
+                _isProcessRunning,
+                _readProcessIdentity)
+            // This set is a cancellation refusal snapshot, not ownership authority.
+            // Unknown launch-time/lineage identities therefore remain conservative
+            // candidates until a positive dead-or-recycled observation excludes them.
+            .Concat(conservativeRefusalCandidates)
+            .Distinct()
+            .OrderBy(processId => processId)
+            .ToArray();
     }
 
     private TreeDeathConfirmation ConfirmTreeDead(TaskProcessRecord cancelled, IReadOnlyList<int> cancelTimeOwnedProcessSet)
@@ -748,25 +764,42 @@ Corrective direction:
         if (!cancelled.WasCancelled || cancelled.CompletedAt is null)
             return new TreeDeathConfirmation(false, "cancelled process record missing terminal cancellation fields");
 
-        var processIds = new HashSet<int>(cancelTimeOwnedProcessSet);
         var heartbeat = ProcessLogReader.ReadHeartbeat(cancelled, _utcNow());
-        if (heartbeat.IsAvailable)
-        {
-            AddProcessId(processIds, heartbeat.ProcessId);
-            if (heartbeat.ChildProcessId is { } childProcessId)
-                AddProcessId(processIds, childProcessId);
-
-            foreach (var processId in heartbeat.OwnedProcessIds)
-                AddProcessId(processIds, processId);
-        }
-
-        foreach (var processId in _getLineageDescendants(cancelled))
-            AddProcessId(processIds, processId);
-
-        var observedPids = processIds.OrderBy(processId => processId).ToArray();
-        var live = observedPids.Where(_isProcessRunning).Distinct().OrderBy(processId => processId).ToArray();
+        var observedPids = heartbeat.IsAvailable
+            ? heartbeat.OwnedProcessIds
+                .Concat(heartbeat.ChildProcessId is > 0 ? [heartbeat.ChildProcessId.Value] : [])
+                .Concat(heartbeat.ProcessId > 0 ? [heartbeat.ProcessId] : [])
+                .Where(processId => processId > 0)
+                .Distinct()
+                .OrderBy(processId => processId)
+                .ToArray()
+            : [];
+        var identityBoundLive = heartbeat.IsAvailable
+            ? DispatchProcessIdentityEvidence.GetLiveRecordedOwnerProcessIds(
+                observedPids,
+                heartbeat.OwnedProcessIdentities,
+                _isProcessRunning,
+                _readProcessIdentity)
+            : [];
+        var conservativeRefusalCandidates = cancelTimeOwnedProcessSet
+            .Concat(_getLineageDescendants(cancelled))
+            .Where(processId => processId > 0)
+            .Distinct();
+        var conservativeLive = conservativeRefusalCandidates
+            .Where(_isProcessRunning)
+            .Where(processId => DispatchProcessIdentityEvidence.ClassifyRecordedOwner(
+                processId,
+                heartbeat.OwnedProcessIdentities,
+                _readProcessIdentity) != SpawnTrackedProcessStatus.DeadOrRecycled);
+        var live = identityBoundLive
+            .Concat(conservativeLive)
+            .Distinct()
+            .OrderBy(processId => processId)
+            .ToArray();
         if (live.Length > 0)
+        {
             return new TreeDeathConfirmation(false, $"owned pid(s) still alive: {string.Join(",", live)}");
+        }
 
         if (!File.Exists(cancelled.ExitCodePath))
             return new TreeDeathConfirmation(false, $"exit artifact missing: {cancelled.ExitCodePath}");
@@ -811,16 +844,35 @@ Corrective direction:
             File.WriteAllText(cancelled.ExitCodePath, "1", Encoding.UTF8);
 
         var heartbeat = ProcessLogReader.ReadHeartbeat(cancelled, now);
-        if (heartbeat.IsAvailable && IsTerminalHeartbeat(heartbeat))
-            return;
-
         var heartbeatPath = BackgroundDispatchRunner.GetHeartbeatPath(cancelled);
         Directory.CreateDirectory(Path.GetDirectoryName(heartbeatPath) ?? _workspace.LogDirectory);
+        var recordedIdentities = (heartbeat.IsAvailable
+                ? heartbeat.OwnedProcessIdentities
+                : [])
+            .Concat(cancelTimeOwnedProcessSet.Select(_readProcessIdentity).OfType<SpawnProcessIdentity>())
+            .Distinct()
+            .ToArray();
+        var ownershipCandidates = cancelTimeOwnedProcessSet
+            .Concat(heartbeat.IsAvailable ? heartbeat.OwnedProcessIds : [])
+            .Concat(heartbeat.IsAvailable && heartbeat.ChildProcessId is > 0 ? [heartbeat.ChildProcessId.Value] : [])
+            .Concat(heartbeat.IsAvailable && heartbeat.ProcessId > 0 ? [heartbeat.ProcessId] : []);
+        var ownedPids = DispatchProcessIdentityEvidence.GetLiveRecordedOwnerProcessIds(
+            ownershipCandidates,
+            recordedIdentities,
+            _isProcessRunning,
+            _readProcessIdentity);
+        if (heartbeat.IsAvailable && IsTerminalHeartbeat(heartbeat))
+        {
+            MergeTerminalHeartbeatIdentities(heartbeatPath, recordedIdentities);
+            return;
+        }
+
         var payload = new
         {
             pid = cancelled.ProcessId,
             childPid = (int?)null,
-            ownedPids = cancelTimeOwnedProcessSet,
+            ownedPids,
+            ownedProcessIdentities = recordedIdentities,
             startedAt = cancelled.StartedAt.ToString("O"),
             lastObservedAt = now.ToString("O"),
             lastProgressAt = now.ToString("O"),
@@ -834,12 +886,30 @@ Corrective direction:
             exitFileExists = true
         };
         var tmp = heartbeatPath + ".tmp";
-        File.WriteAllText(tmp, JsonSerializer.Serialize(payload, new JsonSerializerOptions(JsonSerializerDefaults.Web)), new UTF8Encoding(false));
+        File.WriteAllText(tmp, JsonSerializer.Serialize(payload, HeartbeatJsonOptions), new UTF8Encoding(false));
         File.Move(tmp, heartbeatPath, overwrite: true);
     }
 
-    private static IReadOnlyList<int> GetLiveLineageDescendants(TaskProcessRecord process) =>
-        process.ProcessId > 0 ? WorkerProcessJobs.ListLiveDescendantProcessIds(process.ProcessId) : [];
+    private static void MergeTerminalHeartbeatIdentities(
+        string heartbeatPath,
+        IReadOnlyList<SpawnProcessIdentity> recordedIdentities)
+    {
+        var payload = JsonNode.Parse(File.ReadAllText(heartbeatPath)) as JsonObject ??
+            throw new JsonException($"Terminal heartbeat is not a JSON object: {heartbeatPath}");
+        payload["ownedProcessIdentities"] = JsonSerializer.SerializeToNode(recordedIdentities, HeartbeatJsonOptions);
+        var tmp = heartbeatPath + ".tmp";
+        File.WriteAllText(tmp, payload.ToJsonString(HeartbeatJsonOptions), new UTF8Encoding(false));
+        File.Move(tmp, heartbeatPath, overwrite: true);
+    }
+
+    internal static IReadOnlyList<int> GetLiveLineageDescendants(
+        TaskProcessRecord process,
+        Func<int, DateTimeOffset, IReadOnlyList<int>>? listConservativeLineageDescendants = null) =>
+        process.ProcessId > 0
+            ? (listConservativeLineageDescendants ?? WorkerProcessJobs.ListConservativeDescendantProcessIdsForRefusal)(
+                process.ProcessId,
+                process.StartedAt)
+            : [];
 
     private void RaiseAttention(ProgressiveReviewSteerIntent intent, string reason)
     {

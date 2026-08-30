@@ -56,6 +56,7 @@ internal static class SdlcRolePromptRequirements
             AgentRole.Developer =>
             [
                 "## Developer Requirements",
+                "- Before source exploration, inspect the typed early-convergence decision. When it is eligible for the exact current candidate and cites fresh passed focused receipts, return those bounded receipts with a clean-worktree no-change result; do not replay history or manufacture edits.",
                 "- Implement only the requested behavior and keep edits scoped.",
                 "- Before editing, name the failing test and quote its assertion output.",
                 "- Report changed files and the behavior each change enables.",
@@ -196,6 +197,7 @@ internal static class SdlcRolePromptRequirements
             AgentRole.Developer =>
             [
                 "## Developer Requirements",
+                "- First honor an eligible typed early-convergence decision for the exact candidate by returning its passed focused receipts without replaying history or manufacturing edits.",
                 "- Keep edits scoped and report changed files plus behavior enabled.",
                 "- Before editing, name the failing test and quote its assertion output.",
                 "- Run focused verification when practical and name exact commands.",
