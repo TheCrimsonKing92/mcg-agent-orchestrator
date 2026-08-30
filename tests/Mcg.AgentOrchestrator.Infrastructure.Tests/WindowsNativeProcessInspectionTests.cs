@@ -3,41 +3,52 @@ using Mcg.AgentOrchestrator.Infrastructure;
 public sealed class WindowsNativeProcessInspectionTests
 {
     [Xunit.Fact]
-    public void IdentityBoundDescendantsPruneOlderStaleParentBranchAndRetainLaterBranch()
+    public void ProductionShapedPidReuseFixturePrunesOlderStaleBranchesAboveAndBelowWorkerPid()
     {
-        var parentStartedAt = DateTimeOffset.Parse("2026-08-30T05:48:33Z");
+        const int wrapperPid = 37_252;
+        const int workerPid = 22_628;
+        const int falsePidAboveWorker = 22_664;
+        const int falsePidBelowWorker = 12_000;
+        const int realChildPid = 30_000;
+        var wrapperStartedAt = DateTimeOffset.Parse("2026-08-30T05:48:32Z");
         WindowsNativeProcessInspection.ProcessInspectionSeed[] seeds =
         [
-            new(100, 1, "worker"),
-            new(80, 100, "real-child"),
-            new(200, 80, "stale-parent-child"),
-            new(50, 200, "stale-transitive-child"),
-            new(90, 80, "real-grandchild")
+            new(wrapperPid, 1, "wrapper"),
+            new(workerPid, wrapperPid, "worker"),
+            new(realChildPid, workerPid, "real-child"),
+            new(falsePidAboveWorker, workerPid, "false-above"),
+            new(22_665, falsePidAboveWorker, "false-above-child"),
+            new(falsePidBelowWorker, workerPid, "false-below"),
+            new(11_999, falsePidBelowWorker, "false-below-child")
         ];
         var starts = new Dictionary<int, DateTimeOffset>
         {
-            [100] = parentStartedAt,
-            [80] = parentStartedAt.AddSeconds(1),
-            [200] = parentStartedAt.AddDays(-3),
-            [50] = parentStartedAt.AddDays(-3).AddSeconds(1),
-            [90] = parentStartedAt.AddSeconds(2)
+            [wrapperPid] = wrapperStartedAt,
+            [workerPid] = wrapperStartedAt.AddSeconds(1),
+            [realChildPid] = wrapperStartedAt.AddSeconds(2),
+            [falsePidAboveWorker] = wrapperStartedAt.AddDays(-3),
+            [22_665] = wrapperStartedAt.AddDays(-3).AddSeconds(1),
+            [falsePidBelowWorker] = wrapperStartedAt.AddDays(-3),
+            [11_999] = wrapperStartedAt.AddDays(-3).AddSeconds(1)
         };
 
         var descendants = WindowsNativeProcessInspection.ListIdentityBoundDescendantProcessIds(
-            100,
+            wrapperPid,
             () => WindowsNativeProcessInspection.ProcessEnumerationResult.Success(seeds),
             seed => new ProcessInspectionRecord(
                 seed.ProcessId,
                 seed.ParentProcessId,
                 seed.Name,
-                $@"C:\workers\{seed.Name}.exe",
+                Path.Combine("fixture", seed.Name + ".exe"),
                 starts[seed.ProcessId],
                 seed.Name,
                 ProcessInspectionStatus.Available));
 
-        Assert.Equal<int>([80, 90], descendants);
-        Assert.DoesNotContain(200, descendants);
-        Assert.DoesNotContain(50, descendants);
+        Assert.Equal<int>([workerPid, realChildPid], descendants);
+        Assert.DoesNotContain(falsePidAboveWorker, descendants);
+        Assert.DoesNotContain(falsePidBelowWorker, descendants);
+        Assert.DoesNotContain(22_665, descendants);
+        Assert.DoesNotContain(11_999, descendants);
     }
 
     [Xunit.Fact]

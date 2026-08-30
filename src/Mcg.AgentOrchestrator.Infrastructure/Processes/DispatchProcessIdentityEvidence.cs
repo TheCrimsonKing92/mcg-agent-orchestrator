@@ -50,6 +50,13 @@ internal static class DispatchProcessIdentityEvidence
     internal static bool IsRecordedOwner(
         int processId,
         IReadOnlyList<SpawnProcessIdentity>? recordedIdentities,
+        Func<int, SpawnProcessIdentity?> readCurrentIdentity) =>
+        ClassifyRecordedOwner(processId, recordedIdentities, readCurrentIdentity) ==
+        SpawnTrackedProcessStatus.LiveMatch;
+
+    internal static SpawnTrackedProcessStatus ClassifyRecordedOwner(
+        int processId,
+        IReadOnlyList<SpawnProcessIdentity>? recordedIdentities,
         Func<int, SpawnProcessIdentity?> readCurrentIdentity)
     {
         var recorded = recordedIdentities?
@@ -57,13 +64,21 @@ internal static class DispatchProcessIdentityEvidence
             .ToArray();
         if (recorded is not { Length: > 0 })
         {
-            return false;
+            return SpawnTrackedProcessStatus.Unknown;
         }
 
         var current = readCurrentIdentity(processId);
-        return recorded.Any(identity =>
-            SpawnProcessIdentityReader.EvaluateRecordedIdentity(identity, current, out _) ==
-            SpawnTrackedProcessStatus.LiveMatch);
+        var statuses = recorded
+            .Select(identity => SpawnProcessIdentityReader.EvaluateRecordedIdentity(identity, current, out _))
+            .ToArray();
+        if (statuses.Contains(SpawnTrackedProcessStatus.LiveMatch))
+        {
+            return SpawnTrackedProcessStatus.LiveMatch;
+        }
+
+        return statuses.All(status => status == SpawnTrackedProcessStatus.DeadOrRecycled)
+            ? SpawnTrackedProcessStatus.DeadOrRecycled
+            : SpawnTrackedProcessStatus.Unknown;
     }
 
     internal static IReadOnlyList<int> GetLiveRecordedOwnerProcessIds(

@@ -567,12 +567,7 @@ internal sealed class DispatchProcessRecoveryService
     }
 
     private bool AnyTrackedProcessStillRunning(TaskProcessRecord processRecord, DispatchHeartbeat? heartbeat) =>
-        processRecord.CompletionTrackedProcessIds.Any(processId =>
-            _isStillRunning(processId) &&
-            DispatchProcessIdentityEvidence.IsRecordedOwner(
-                processId,
-                heartbeat?.OwnedProcessIdentities,
-                _readProcessIdentity));
+        processRecord.CompletionTrackedProcessIds.Any(_isStillRunning);
 
     private bool AnyObservedProcessStillRunning(TaskProcessRecord processRecord, DispatchHeartbeat? heartbeat) =>
         GetObservedProcessIds(processRecord, heartbeat).Any(processId =>
@@ -789,7 +784,10 @@ internal sealed class DispatchProcessRecoveryService
             var dispatchState = new DispatchStateSurface(
                 _clock,
                 _isStillRunning,
-                readCommandLines: _readCommandLines).Evaluate(goalId, task);
+                readCommandLines: _readCommandLines,
+                readProcessIdentity: processId => _readProcessIdentity(processId) is { } identity
+                    ? (identity.StartedAt, identity.ImagePath)
+                    : null).Evaluate(goalId, task);
             var record = new DispatchDiagnosticRecord(
                 goalId.Value,
                 taskId.Value,

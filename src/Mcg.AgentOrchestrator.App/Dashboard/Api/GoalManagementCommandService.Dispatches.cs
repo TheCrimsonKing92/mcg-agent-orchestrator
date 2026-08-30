@@ -8,6 +8,8 @@ namespace Mcg.AgentOrchestrator.App.Dashboard.Api;
 internal static partial class GoalManagementCommandService
 {
 internal static Func<int, bool> IsTrackedProcessRunningForReadyBatch { get; set; } = IsProcessRunning;
+internal static Func<int, SpawnProcessIdentity?> ReadTrackedProcessIdentityForReadyBatch { get; set; } =
+    DispatchProcessIdentityEvidence.ReadCurrent;
 
 public static IReadOnlyList<WorkerProfileDispatchResult> ProfileDispatchReadyTasks(
     AgentOrchestratorKernel kernel,
@@ -794,7 +796,8 @@ private static bool HasLiveTrackedProcess(TaskProcessRecord process)
     return DispatchProcessIdentityEvidence.GetLiveRecordedOwnerProcessIds(
         candidates,
         heartbeat.OwnedProcessIdentities,
-        IsTrackedProcessRunningForReadyBatch).Count > 0;
+        IsTrackedProcessRunningForReadyBatch,
+        ReadTrackedProcessIdentityForReadyBatch).Count > 0;
 }
 
 private static bool IsProcessRunning(int processId)

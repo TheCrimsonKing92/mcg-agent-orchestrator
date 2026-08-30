@@ -1713,7 +1713,7 @@ public sealed class DispatchProcessHostTests
     }
 
     [Xunit.Fact]
-    public void DispatchHeartbeatIdentityTracker_DoesNotReplaceRecordedOwnerWhenPidIsRecycled()
+    public void DispatchHeartbeatIdentityTracker_RecordsRecycledCurrentOwnerWithoutErasingHistory()
     {
         const int hostProcessId = 10;
         const int workerProcessId = 20;
@@ -1734,9 +1734,10 @@ public sealed class DispatchProcessHostTests
             processId => processId == hostProcessId ? host : recycled);
 
         Assert.Contains(worker, first.Current);
-        Assert.DoesNotContain(second.Current, identity => identity.ProcessId == workerProcessId);
+        Assert.Contains(recycled, second.Current);
         Assert.Contains(worker, second.Recorded);
-        Assert.DoesNotContain(recycled, second.Recorded);
+        Assert.Contains(recycled, second.Recorded);
+        Assert.All(second.Current, identity => Assert.Contains(identity, second.Recorded));
     }
 
     [Xunit.Fact]

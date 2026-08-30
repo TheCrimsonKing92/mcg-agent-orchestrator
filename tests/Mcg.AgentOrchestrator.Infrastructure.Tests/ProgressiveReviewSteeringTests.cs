@@ -619,6 +619,55 @@ public sealed class ProgressiveReviewSteeringTests
         Assert.Equal("cancelled", ProcessLogReader.ReadHeartbeat(cancelledProcessRecord).State);
     }
 
+    [Fact(DisplayName = "ProgressiveReviewSteering_preserves_existing_terminal_heartbeat_evidence")]
+    public void PreservesExistingTerminalHeartbeatEvidence()
+    {
+        var now = new DateTimeOffset(2026, 7, 20, 12, 0, 0, TimeSpan.Zero);
+        var terminalObservedAt = now.AddSeconds(1);
+        var root = CreateGitRepository("mcg-steer-preserve-terminal-proof");
+        var head = GitCli.Run(root, "rev-parse", "HEAD").Output.Trim();
+        var (kernel, goal, task) = RunningDeveloper(root, now, head, sessionId: "session-12345678");
+        var cancelledProcessRecord = task.LastProcess!;
+        var store = new InMemoryProgressiveReviewSteeringStore();
+        store.EnqueueIntentAsync(Intent(goal, task, now, "preserve terminal evidence")).GetAwaiter().GetResult();
+
+        var coordinator = NewCoordinator(
+            root,
+            store,
+            cancelProcess: (k, goalId, taskId) =>
+            {
+                var current = k.GetTask(goalId, taskId).LastProcess!;
+                var cancelled = current with { CompletedAt = terminalObservedAt, WasCancelled = true };
+                k.RecordTaskProcessCancelled(goalId, taskId, cancelled);
+                File.WriteAllText(cancelled.ExitCodePath, "1");
+                File.WriteAllText(
+                    BackgroundDispatchRunner.GetHeartbeatPath(cancelled),
+                    $$"""
+                    {"pid":6001,"childPid":null,"ownedPids":[6001],"ownedProcessIdentities":[{"processId":6001,"startedAt":"2026-07-20T11:59:00Z","imagePath":"C:\\workers\\worker-6001.exe"}],"state":"exited","lastObservedAt":"{{terminalObservedAt:O}}","lastProgressAt":"{{terminalObservedAt:O}}","stdoutBytes":12,"stderrBytes":3,"ownedCpuMs":4,"providerSessionId":"session-preserved","worktreeHeadSha":"head-preserved","dirtyStateHash":"dirty-preserved"}
+                    """);
+                return cancelled;
+            },
+            startProcess: (k, goalId, taskId) =>
+            {
+                var dispatch = k.GetTask(goalId, taskId).LastDispatch!;
+                var started = new TaskProcessRecord(7011, dispatch.Command, dispatch.WorkingDirectory, "out-preserved.log", "err-preserved.log", "exit-preserved.txt", now.AddSeconds(2), null, null);
+                k.RecordTaskProcessStarted(goalId, taskId, started);
+                return started;
+            },
+            currentHead: head);
+
+        var result = coordinator.ExecutePending(kernel, goal);
+        var preserved = ProcessLogReader.ReadHeartbeat(cancelledProcessRecord, now.AddMinutes(1));
+
+        Assert.True(result.MutatedTaskState);
+        Assert.Equal("warm-resume", Assert.Single(store.Receipts).Decision);
+        Assert.Equal("exited", preserved.State);
+        Assert.Equal(terminalObservedAt, preserved.LastObservedAt);
+        Assert.Equal("session-preserved", preserved.ProviderSessionId);
+        Assert.Equal("head-preserved", preserved.WorktreeHeadSha);
+        Assert.Equal("dirty-preserved", preserved.DirtyStateHash);
+    }
+
     [Fact(DisplayName = "ProgressiveReviewSteering_first_misdirection_steers_second_same_round_misdirection_attention")]
     public void FirstMisdirectionSteersSecondSameRoundMisdirectionRaisesAttention()
     {
@@ -1143,6 +1192,43 @@ public sealed class ProgressiveReviewSteeringTests
         Assert.Single(attentionStore.ListAsync(goal.Id.Value).GetAwaiter().GetResult());
     }
 
+    [Fact(DisplayName = "ProgressiveReviewSteering_blocks_resume_when_live_lineage_identity_is_unreadable")]
+    public void BlocksResumeWhenLiveLineageIdentityIsUnreadable()
+    {
+        var now = new DateTimeOffset(2026, 7, 20, 12, 0, 0, TimeSpan.Zero);
+        var root = CreateGitRepository("mcg-steer-unreadable-lineage-child");
+        var head = GitCli.Run(root, "rev-parse", "HEAD").Output.Trim();
+        var (kernel, goal, task) = RunningDeveloper(root, now, head, sessionId: "session-12345678");
+        var store = new InMemoryProgressiveReviewSteeringStore();
+        store.EnqueueIntentAsync(Intent(goal, task, now, "do not start while an unreadable lineage child is alive")).GetAwaiter().GetResult();
+        var attentionStore = new FakeCollaborationItemStore();
+        var started = false;
+
+        var coordinator = NewCoordinator(
+            root,
+            store,
+            attentionStore,
+            isProcessRunning: pid => pid == 6102,
+            getLineageDescendants: _ => [6102],
+            cancelProcess: CancelWithTerminalProof(now),
+            startProcess: (_, _, _) =>
+            {
+                started = true;
+                throw new InvalidOperationException("start must not run over a live unreadable lineage descendant");
+            },
+            currentHead: head,
+            readProcessIdentity: processId => processId == 6102 ? null : TestProcessIdentity(processId));
+
+        var result = coordinator.ExecutePending(kernel, goal);
+
+        Assert.True(result.MutatedTaskState);
+        Assert.False(started);
+        var receipt = Assert.Single(store.Receipts);
+        Assert.Equal("operator-attention", receipt.Decision);
+        Assert.Contains("owned pid(s) still alive: 6102", receipt.CancelConfirmation, StringComparison.Ordinal);
+        Assert.Single(attentionStore.ListAsync(goal.Id.Value).GetAwaiter().GetResult());
+    }
+
     [Fact(DisplayName = "ProgressiveReviewSteering_blocks_resume_when_terminal_cancel_proof_is_absent")]
     public void BlocksResumeWhenTerminalCancelProofIsAbsent()
     {
@@ -1286,7 +1372,8 @@ public sealed class ProgressiveReviewSteeringTests
         IReadOnlyList<AgentDefinition>? agents = null,
         ProgressiveReviewSteeringOptions? options = null,
         string? currentHead = null,
-        Func<DateTimeOffset>? utcNow = null)
+        Func<DateTimeOffset>? utcNow = null,
+        Func<int, SpawnProcessIdentity?>? readProcessIdentity = null)
     {
         var workspace = OrchestratorWorkspace.ForDirectory(root);
         return new ProgressiveReviewSteeringCoordinator(
@@ -1306,7 +1393,7 @@ public sealed class ProgressiveReviewSteeringTests
             headResolver: currentHead is null ? null : _ => currentHead,
             capturedHeadIsAncestor: currentHead is null ? null : SameHead,
             prepareFreshDispatchWithPolicy: prepareFreshDispatchWithPolicy,
-            readProcessIdentity: processId => TestProcessIdentity(processId));
+            readProcessIdentity: readProcessIdentity ?? (processId => TestProcessIdentity(processId)));
     }
 
     private static bool SameHead(string _, string? capturedHead, string? currentHead) =>

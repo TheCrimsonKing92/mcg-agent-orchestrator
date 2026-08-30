@@ -2,6 +2,7 @@ using System.Diagnostics;
 using System.Security.Cryptography;
 using System.Text;
 using System.Text.Json;
+using System.Text.Json.Nodes;
 using Mcg.AgentOrchestrator.Core;
 using Mcg.AgentOrchestrator.Core.Conductor;
 using Mcg.AgentOrchestrator.Infrastructure;
@@ -719,12 +720,16 @@ Corrective direction:
     private IReadOnlyList<int> CaptureCancelTimeOwnedProcessSet(TaskProcessRecord process)
     {
         var heartbeat = ProcessLogReader.ReadHeartbeat(process);
+        var lineageDescendants = _getLineageDescendants(process);
         if (!heartbeat.IsAvailable)
         {
-            return [];
+            return lineageDescendants
+                .Where(processId => processId > 0)
+                .Distinct()
+                .OrderBy(processId => processId)
+                .ToArray();
         }
 
-        var lineageDescendants = _getLineageDescendants(process);
         var recordedIdentities = heartbeat.OwnedProcessIdentities
             .Concat(lineageDescendants.Select(_readProcessIdentity).OfType<SpawnProcessIdentity>())
             .Distinct()
@@ -734,10 +739,14 @@ Corrective direction:
             .Concat(heartbeat.ProcessId > 0 ? [heartbeat.ProcessId] : [])
             .Concat(lineageDescendants);
         return DispatchProcessIdentityEvidence.GetLiveRecordedOwnerProcessIds(
-            candidates,
-            recordedIdentities,
-            _isProcessRunning,
-            _readProcessIdentity);
+                candidates,
+                recordedIdentities,
+                _isProcessRunning,
+                _readProcessIdentity)
+            .Concat(lineageDescendants.Where(processId => processId > 0))
+            .Distinct()
+            .OrderBy(processId => processId)
+            .ToArray();
     }
 
     private TreeDeathConfirmation ConfirmTreeDead(TaskProcessRecord cancelled, IReadOnlyList<int> cancelTimeOwnedProcessSet)
@@ -755,14 +764,29 @@ Corrective direction:
                 .OrderBy(processId => processId)
                 .ToArray()
             : [];
-        var live = heartbeat.IsAvailable
+        var identityBoundLive = heartbeat.IsAvailable
             ? DispatchProcessIdentityEvidence.GetLiveRecordedOwnerProcessIds(
                 observedPids,
                 heartbeat.OwnedProcessIdentities,
                 _isProcessRunning,
                 _readProcessIdentity)
             : [];
-        if (live.Count > 0)
+        var conservativeRefusalCandidates = cancelTimeOwnedProcessSet
+            .Concat(_getLineageDescendants(cancelled))
+            .Where(processId => processId > 0)
+            .Distinct();
+        var conservativeLive = conservativeRefusalCandidates
+            .Where(_isProcessRunning)
+            .Where(processId => DispatchProcessIdentityEvidence.ClassifyRecordedOwner(
+                processId,
+                heartbeat.OwnedProcessIdentities,
+                _readProcessIdentity) != SpawnTrackedProcessStatus.DeadOrRecycled);
+        var live = identityBoundLive
+            .Concat(conservativeLive)
+            .Distinct()
+            .OrderBy(processId => processId)
+            .ToArray();
+        if (live.Length > 0)
         {
             return new TreeDeathConfirmation(false, $"owned pid(s) still alive: {string.Join(",", live)}");
         }
@@ -818,11 +842,21 @@ Corrective direction:
             .Concat(cancelTimeOwnedProcessSet.Select(_readProcessIdentity).OfType<SpawnProcessIdentity>())
             .Distinct()
             .ToArray();
+        var ownershipCandidates = cancelTimeOwnedProcessSet
+            .Concat(heartbeat.IsAvailable ? heartbeat.OwnedProcessIds : [])
+            .Concat(heartbeat.IsAvailable && heartbeat.ChildProcessId is > 0 ? [heartbeat.ChildProcessId.Value] : [])
+            .Concat(heartbeat.IsAvailable && heartbeat.ProcessId > 0 ? [heartbeat.ProcessId] : []);
         var ownedPids = DispatchProcessIdentityEvidence.GetLiveRecordedOwnerProcessIds(
-            cancelTimeOwnedProcessSet,
+            ownershipCandidates,
             recordedIdentities,
             _isProcessRunning,
             _readProcessIdentity);
+        if (heartbeat.IsAvailable && IsTerminalHeartbeat(heartbeat))
+        {
+            MergeTerminalHeartbeatOwnership(heartbeatPath, ownedPids, recordedIdentities);
+            return;
+        }
+
         var payload = new
         {
             pid = cancelled.ProcessId,
@@ -843,6 +877,20 @@ Corrective direction:
         };
         var tmp = heartbeatPath + ".tmp";
         File.WriteAllText(tmp, JsonSerializer.Serialize(payload, new JsonSerializerOptions(JsonSerializerDefaults.Web)), new UTF8Encoding(false));
+        File.Move(tmp, heartbeatPath, overwrite: true);
+    }
+
+    private static void MergeTerminalHeartbeatOwnership(
+        string heartbeatPath,
+        IReadOnlyList<int> ownedPids,
+        IReadOnlyList<SpawnProcessIdentity> recordedIdentities)
+    {
+        var payload = JsonNode.Parse(File.ReadAllText(heartbeatPath)) as JsonObject ??
+            throw new JsonException($"Terminal heartbeat is not a JSON object: {heartbeatPath}");
+        payload["ownedPids"] = JsonSerializer.SerializeToNode(ownedPids);
+        payload["ownedProcessIdentities"] = JsonSerializer.SerializeToNode(recordedIdentities);
+        var tmp = heartbeatPath + ".tmp";
+        File.WriteAllText(tmp, payload.ToJsonString(new JsonSerializerOptions(JsonSerializerDefaults.Web)), new UTF8Encoding(false));
         File.Move(tmp, heartbeatPath, overwrite: true);
     }
 

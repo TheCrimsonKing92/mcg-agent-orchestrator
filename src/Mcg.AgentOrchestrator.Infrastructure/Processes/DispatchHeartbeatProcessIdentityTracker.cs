@@ -21,15 +21,11 @@ internal sealed class DispatchHeartbeatProcessIdentityTracker
             var current = new List<SpawnProcessIdentity>();
             foreach (var identity in captured)
             {
-                var priorForPid = _identities.Where(candidate => candidate.ProcessId == identity.ProcessId).ToArray();
-                var matchingPrior = priorForPid.FirstOrDefault(prior =>
+                var matchingPrior = _identities
+                    .Where(candidate => candidate.ProcessId == identity.ProcessId)
+                    .FirstOrDefault(prior =>
                     SpawnProcessIdentityReader.EvaluateRecordedIdentity(prior, identity, out _) ==
                     SpawnTrackedProcessStatus.LiveMatch);
-                if (priorForPid.Length > 0 && matchingPrior is null)
-                {
-                    continue;
-                }
-
                 var accepted = matchingPrior ?? identity;
                 _identities.Add(accepted);
                 current.Add(accepted);

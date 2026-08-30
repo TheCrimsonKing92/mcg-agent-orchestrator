@@ -107,6 +107,42 @@ public sealed class DispatchProcessRecoveryServiceTests
     }
 
     [Xunit.Fact]
+    public void LiveTrackedProcessWithoutHeartbeatIdentityStillHoldsNonterminalRecovery()
+    {
+        var process = ProcessRecord(411, Now.AddMinutes(-5));
+        var liveProcessIds = new HashSet<int> { process.ProcessId };
+        var withoutExit = CreateService(new Dictionary<string, string>(StringComparer.Ordinal), liveProcessIds);
+
+        Xunit.Assert.True(withoutExit.AnyTrackedProcessStillRunning(process));
+    }
+
+    [Xunit.Fact]
+    public void ReapingTrackedProcessNeverTargetsHeartbeatOnlyPid()
+    {
+        var process = ProcessRecord(412, Now.AddMinutes(-5));
+        const int unrelatedHeartbeatPid = 999;
+        var heartbeatPath = DispatchProcessRecoveryService.GetHeartbeatPath(process);
+        var artifacts = new Dictionary<string, string>(StringComparer.Ordinal)
+        {
+            [heartbeatPath] = HeartbeatJson(
+                unrelatedHeartbeatPid,
+                childProcessId: unrelatedHeartbeatPid,
+                lastObservedAt: Now,
+                lastProgressAt: Now,
+                ownedCpuMs: 10,
+                stdoutBytes: 100,
+                stderrBytes: 0,
+                includeIdentity: false)
+        };
+        var killedProcessIds = new List<int>();
+        var service = CreateService(artifacts, killedProcessIds: killedProcessIds);
+
+        service.ReapTrackedProcessJobs(process, waitForExit: false);
+
+        Xunit.Assert.DoesNotContain(unrelatedHeartbeatPid, killedProcessIds);
+    }
+
+    [Xunit.Fact]
     public void StalledHeartbeatWithExitedChildReturnsHungWrapperVerdict()
     {
         var process = ProcessRecord(42, Now.AddMinutes(-10));
