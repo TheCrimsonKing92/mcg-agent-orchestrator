@@ -533,10 +533,6 @@ public sealed class BackgroundDispatchRunner
         {
             // The checkpoint failure is the actionable fault; process cleanup is best-effort.
         }
-        finally
-        {
-            process.Dispose();
-        }
     }
 
     private static void ReleaseDispatchHostStartGate(string startGatePath)

@@ -982,6 +982,82 @@ public sealed class PlannerSamplingDispatchTests : WorkerDispatchTestSupport
     }
 
     [Xunit.Fact]
+    public void TryStartLatestDispatch_PrimaryGatePersistenceFailure_TerminatesRegisteredHost()
+    {
+        var root = CreateSeededDispatchRepository();
+        var logRoot = Path.Combine(root, "logs");
+        var kernel = new AgentOrchestratorKernel();
+        var goal = kernel.CreateGoal("Planner primary gate persistence failure", [
+            new TaskSpec(TaskId.New(), "Produce a plan.", AgentRole.Planner)
+        ]);
+        var planner = new AgentDefinition(
+            new AgentId("planner"),
+            "Planner",
+            AgentRole.Planner,
+            new ModelProfile(
+                "OpenAI",
+                AgentCatalog.OpenAiSubscriptionModelAlias,
+                ModelCapability.Text,
+                SubscriptionMode.ApiKey));
+        kernel.ActivateGoal(goal.Id, [planner]);
+        var task = goal.Tasks.Single();
+        kernel.RecordTaskDispatch(goal.Id, task.Id, new TaskDispatchRecord(
+            "local",
+            "Write-Output planner",
+            root,
+            DateTimeOffset.Parse("2026-08-22T18:00:00Z"),
+            PlannerSampleCount: 1));
+
+        Process? primaryProcess = null;
+        int? primaryProcessId = null;
+        string? primaryStartGatePath = null;
+        var killCalls = new List<int>();
+        var runner = new BackgroundDispatchRunner(
+            tryKillOwnedProcess: processId =>
+            {
+                killCalls.Add(processId);
+                return WorkerProcessJobs.TryKillOrFallback(processId);
+            },
+            disableProcessStart: false,
+            startProcess: startInfo =>
+            {
+                primaryStartGatePath = startInfo.Environment[DispatchProcessHost.StartGatePathVariable];
+                primaryProcess = StartSleeper();
+                primaryProcessId = primaryProcess.Id;
+                return primaryProcess;
+            });
+
+        try
+        {
+            Xunit.Assert.Throws<UnauthorizedAccessException>(() =>
+                runner.TryStartLatestDispatch(
+                    kernel,
+                    goal.Id,
+                    task.Id,
+                    logRoot,
+                    (_, _, _, phase) =>
+                    {
+                        if (phase == DispatchRecordCheckpointPhase.ProcessMayHaveStarted)
+                            Directory.CreateDirectory(primaryStartGatePath!);
+                    }));
+
+            Xunit.Assert.NotNull(primaryProcessId);
+            Xunit.Assert.NotNull(primaryStartGatePath);
+            Xunit.Assert.True(Directory.Exists(primaryStartGatePath));
+            Xunit.Assert.Equal([primaryProcessId.Value], killCalls);
+            Xunit.Assert.False(WorkerProcessJobs.HasRegisteredJob(primaryProcessId.Value));
+        }
+        finally
+        {
+            if (primaryProcess is not null && primaryProcessId is not null)
+            {
+                try { WorkerProcessJobs.TryKillOrFallback(primaryProcessId.Value); } catch { }
+                try { primaryProcess.Dispose(); } catch { }
+            }
+        }
+    }
+
+    [Xunit.Fact]
     public void TryStartLatestDispatch_SampleGatePersistenceFailure_RecordsTerminalAndSettles()
     {
         var root = CreateSeededDispatchRepository();

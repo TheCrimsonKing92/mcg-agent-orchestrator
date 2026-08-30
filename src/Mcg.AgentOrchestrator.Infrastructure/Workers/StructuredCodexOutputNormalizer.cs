@@ -56,7 +56,7 @@ internal static class StructuredCodexOutputNormalizer
         {
             return new StructuredCodexNormalizationResult(
                 parsed,
-                parsed.HasMalformedJsonl
+                parsed.MalformedLineCount > 0
                     ? PlannerCandidateNormalizationState.Malformed
                     : PlannerCandidateNormalizationState.Unrecognized);
         }
@@ -65,7 +65,7 @@ internal static class StructuredCodexOutputNormalizer
         {
             return new StructuredCodexNormalizationResult(
                 parsed,
-                parsed.HasMalformedJsonl
+                parsed.MalformedLineCount > 0
                     ? PlannerCandidateNormalizationState.Malformed
                     : PlannerCandidateNormalizationState.Empty);
         }
@@ -88,7 +88,7 @@ internal static class StructuredCodexOutputNormalizer
 
         return new StructuredCodexNormalizationResult(
             parsed,
-            parsed.HasMalformedJsonl
+            parsed.MalformedLineCount > 0
                 ? PlannerCandidateNormalizationState.Malformed
                 : PlannerCandidateNormalizationState.Normalized);
     }
