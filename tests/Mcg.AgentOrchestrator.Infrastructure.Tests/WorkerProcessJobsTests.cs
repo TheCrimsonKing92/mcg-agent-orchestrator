@@ -28,8 +28,8 @@ public sealed class WorkerProcessJobsTests : IDisposable
         Environment.SetEnvironmentVariable("MCG_ORCHESTRATOR_PROTECTED_PID", _originalProtectedPid);
     }
 
-    [Xunit.Fact(DisplayName = "WorkerProcessJobs_supervisor_cleanup_reaps_named_owned_root")]
-    public void WorkerProcessJobsSupervisorCleanupReapsNamedOwnedRoot()
+    [Xunit.Fact(DisplayName = "WorkerProcessJobs_supervisor_cleanup_retains_identityless_owned_root")]
+    public void WorkerProcessJobsSupervisorCleanupRetainsIdentitylessOwnedRoot()
     {
         if (!OperatingSystem.IsWindows())
         {
@@ -46,8 +46,8 @@ public sealed class WorkerProcessJobsTests : IDisposable
                 [processId],
                 [sharedRoot]));
 
-            Assert.Equal(TempRootJanitorDeleteStatus.Deleted, result.Status);
-            Assert.False(Directory.Exists(ownedRoot));
+            Assert.Equal(TempRootJanitorReapDisposition.RetainedUnknownOwner, result.Disposition);
+            Assert.True(Directory.Exists(ownedRoot));
         }
         finally
         {
@@ -68,20 +68,27 @@ public sealed class WorkerProcessJobsTests : IDisposable
         var sharedRoot = Path.Combine(appBase, ".test-tmp");
         var ownedRoot = TempRootJanitor.BuildOwnedRootPath(sharedRoot, processId);
         Directory.CreateDirectory(ownedRoot);
+        var capturedOwner = AvailableProcess(processId) with
+        {
+            ExecutablePath = Path.Combine(appBase, "testhost.exe")
+        };
         try
         {
             var captured = Assert.Single(
                 TempRootJanitor.SnapshotOwnedRoots(
                     [processId],
-                    _ => Path.Combine(appBase, "testhost.exe")),
+                    _ => Inspected(capturedOwner)),
                 root => string.Equals(
                     root.SharedRoot,
                     sharedRoot,
                     StringComparison.OrdinalIgnoreCase));
 
-            var result = Assert.Single(WorkerProcessJobs.ReapOwnedTempRoots([captured]));
+            var result = Assert.Single(TempRootJanitor.ReapOwnedRoots(
+                [captured],
+                _ => Inspected(ExitedProcess(processId)),
+                TempRootJanitor.DeleteTree));
 
-            Assert.Equal(TempRootJanitorDeleteStatus.Deleted, result.Status);
+            Assert.Equal(TempRootJanitorReapDisposition.Deleted, result.Disposition);
             Assert.False(Directory.Exists(ownedRoot));
         }
         finally
@@ -89,6 +96,209 @@ public sealed class WorkerProcessJobsTests : IDisposable
             _ = TempRootJanitor.DeleteTree(appBase);
         }
     }
+
+    [Xunit.Theory(DisplayName = "TempRootJanitor_live_recycled_or_ambiguous_owner_is_retained")]
+    [Xunit.InlineData("live")]
+    [Xunit.InlineData("recycled")]
+    [Xunit.InlineData("inaccessible")]
+    public void TempRootJanitorLiveRecycledOrAmbiguousOwnerIsRetained(string observation)
+    {
+        if (!OperatingSystem.IsWindows())
+        {
+            return;
+        }
+
+        var processId = 4242;
+        var sharedRoot = Path.Combine(Path.GetTempPath(), $"janitor-retain-{Guid.NewGuid():N}");
+        var ownedRootPath = TempRootJanitor.BuildOwnedRootPath(sharedRoot, processId);
+        Directory.CreateDirectory(ownedRootPath);
+        var captured = AvailableProcess(processId);
+        var observed = observation switch
+        {
+            "live" => captured,
+            "recycled" => captured with { StartedAt = captured.StartedAt!.Value.AddSeconds(1) },
+            _ => captured with { Status = ProcessInspectionStatus.AccessDenied }
+        };
+        var deleteCalls = 0;
+        try
+        {
+            var result = Assert.Single(TempRootJanitor.ReapOwnedRoots(
+                [new TempRootJanitorOwnedRoot(processId, sharedRoot, captured, "retention-matrix")],
+                _ => Inspected(observed),
+                path =>
+                {
+                    deleteCalls++;
+                    return TempRootJanitor.DeleteTree(path);
+                }));
+
+            var expected = observation switch
+            {
+                "live" => TempRootJanitorReapDisposition.RetainedLiveOwner,
+                "recycled" => TempRootJanitorReapDisposition.RetainedRecycledPid,
+                _ => TempRootJanitorReapDisposition.RetainedUnknownOwner
+            };
+            Assert.Equal(expected, result.Disposition);
+            Assert.Equal(0, deleteCalls);
+            Assert.True(Directory.Exists(ownedRootPath));
+            Assert.Contains("captured=Available/", TempRootJanitor.FormatDiagnostic(result), StringComparison.Ordinal);
+            Assert.Contains($"observed={observed.Status}/", TempRootJanitor.FormatDiagnostic(result), StringComparison.Ordinal);
+        }
+        finally
+        {
+            _ = TempRootJanitor.DeleteTree(sharedRoot);
+        }
+    }
+
+    [Xunit.Fact(DisplayName = "TempRootJanitor_immediate_revalidation_retains_reused_pid")]
+    public void TempRootJanitorImmediateRevalidationRetainsReusedPid()
+    {
+        if (!OperatingSystem.IsWindows())
+        {
+            return;
+        }
+
+        var processId = 4243;
+        var sharedRoot = Path.Combine(Path.GetTempPath(), $"janitor-reuse-{Guid.NewGuid():N}");
+        var ownedRootPath = TempRootJanitor.BuildOwnedRootPath(sharedRoot, processId);
+        Directory.CreateDirectory(ownedRootPath);
+        var captured = AvailableProcess(processId);
+        var replacement = captured with
+        {
+            StartedAt = captured.StartedAt!.Value.AddMinutes(1),
+            ExecutablePath = @"C:\replacement\testhost.exe"
+        };
+        var reads = 0;
+        try
+        {
+            var result = Assert.Single(TempRootJanitor.ReapOwnedRoots(
+                [new TempRootJanitorOwnedRoot(processId, sharedRoot, captured, "pre-delete-revalidation")],
+                _ =>
+                {
+                    reads++;
+                    return Inspected(replacement);
+                },
+                _ => throw new Xunit.Sdk.XunitException("Delete must not run for a replacement process instance.")));
+
+            Assert.Equal(1, reads);
+            Assert.Equal(TempRootJanitorReapDisposition.RetainedRecycledPid, result.Disposition);
+            Assert.True(Directory.Exists(ownedRootPath));
+        }
+        finally
+        {
+            _ = TempRootJanitor.DeleteTree(sharedRoot);
+        }
+    }
+
+    [Xunit.Fact(DisplayName = "TempRootJanitor_PID_only_control_deletes_template_and_instance_guard_preserves_it")]
+    public void TempRootJanitorPidOnlyControlDeletesTemplateAndInstanceGuardPreservesIt()
+    {
+        if (!OperatingSystem.IsWindows())
+        {
+            return;
+        }
+
+        var processId = 4246;
+        var sharedRoot = Path.Combine(Path.GetTempPath(), $"janitor-template-{Guid.NewGuid():N}");
+        var ownedRootPath = TempRootJanitor.BuildOwnedRootPath(sharedRoot, processId);
+        var templatePath = Path.Combine(ownedRootPath, "mcg-orchestrator-tests", "template");
+        var gitPath = Path.Combine(templatePath, ".git");
+        var captured = AvailableProcess(processId);
+        try
+        {
+            Directory.CreateDirectory(gitPath);
+
+            var legacy = TempRootJanitor.ReapOwnedRoot(sharedRoot, processId);
+
+            Assert.Equal(TempRootJanitorDeleteStatus.Deleted, legacy.Status);
+            Assert.False(Directory.Exists(templatePath));
+            Assert.False(Directory.Exists(gitPath));
+
+            Directory.CreateDirectory(gitPath);
+            var replacement = captured with { StartedAt = captured.StartedAt!.Value.AddSeconds(1) };
+            var guarded = Assert.Single(TempRootJanitor.ReapOwnedRoots(
+                [new TempRootJanitorOwnedRoot(processId, sharedRoot, captured, "seeded-template-control")],
+                _ => Inspected(replacement),
+                TempRootJanitor.DeleteTree));
+
+            Assert.Equal(TempRootJanitorReapDisposition.RetainedRecycledPid, guarded.Disposition);
+            Assert.True(Directory.Exists(templatePath));
+            Assert.True(Directory.Exists(gitPath));
+        }
+        finally
+        {
+            _ = TempRootJanitor.DeleteTree(sharedRoot);
+        }
+    }
+
+    [Xunit.Fact(DisplayName = "TempRootJanitor_dead_matching_owner_deletes_and_continues_after_failure")]
+    public void TempRootJanitorDeadMatchingOwnerDeletesAndContinuesAfterFailure()
+    {
+        if (!OperatingSystem.IsWindows())
+        {
+            return;
+        }
+
+        var sharedRoot = Path.Combine(Path.GetTempPath(), $"janitor-dead-{Guid.NewGuid():N}");
+        var failedId = 4244;
+        var deletedId = 4245;
+        Directory.CreateDirectory(TempRootJanitor.BuildOwnedRootPath(sharedRoot, failedId));
+        Directory.CreateDirectory(TempRootJanitor.BuildOwnedRootPath(sharedRoot, deletedId));
+        var owners = new[]
+        {
+            new TempRootJanitorOwnedRoot(failedId, sharedRoot, AvailableProcess(failedId), "dead-matrix"),
+            new TempRootJanitorOwnedRoot(deletedId, sharedRoot, AvailableProcess(deletedId), "dead-matrix")
+        };
+        try
+        {
+            var results = TempRootJanitor.ReapOwnedRoots(
+                owners,
+                ids => Inspected(ids.Select(ExitedProcess).ToArray()),
+                path => path.EndsWith($"p{failedId:x}", StringComparison.OrdinalIgnoreCase)
+                    ? new TempRootJanitorDeleteResult(
+                        path,
+                        TempRootJanitorDeleteStatus.Failed,
+                        nameof(IOException),
+                        path,
+                        0)
+                    : TempRootJanitor.DeleteTree(path));
+
+            Assert.Collection(
+                results,
+                result => Assert.Equal(TempRootJanitorReapDisposition.DeleteFailed, result.Disposition),
+                result => Assert.Equal(TempRootJanitorReapDisposition.Deleted, result.Disposition));
+            Assert.True(Directory.Exists(TempRootJanitor.BuildOwnedRootPath(sharedRoot, failedId)));
+            Assert.False(Directory.Exists(TempRootJanitor.BuildOwnedRootPath(sharedRoot, deletedId)));
+        }
+        finally
+        {
+            _ = TempRootJanitor.DeleteTree(sharedRoot);
+        }
+    }
+
+    private static ProcessInspectionRecord AvailableProcess(int processId) =>
+        new(
+            processId,
+            ParentProcessId: 100,
+            Name: "testhost",
+            ExecutablePath: @"C:\host\testhost.exe",
+            StartedAt: DateTimeOffset.Parse("2026-08-30T12:00:00Z"),
+            CommandLine: "testhost controlled-probe",
+            ProcessInspectionStatus.Available);
+
+    private static ProcessInspectionRecord ExitedProcess(int processId) =>
+        new(
+            processId,
+            ParentProcessId: 0,
+            Name: string.Empty,
+            ExecutablePath: null,
+            StartedAt: null,
+            CommandLine: null,
+            ProcessInspectionStatus.Exited);
+
+    private static WindowsNativeProcessInspection.ProcessInspectionResult Inspected(
+        params ProcessInspectionRecord[] records) =>
+        WindowsNativeProcessInspection.ProcessInspectionResult.Success(
+            records.ToDictionary(record => record.ProcessId));
 
     [Xunit.Fact(DisplayName = "WorkerProcessJobs_startup_sweep_retains_worker_owned_by_live_process")]
     public void WorkerProcessJobsStartupSweepRetainsWorkerOwnedByLiveProcess()

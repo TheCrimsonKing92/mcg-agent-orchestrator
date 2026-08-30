@@ -1625,14 +1625,14 @@ public static class WorkerProcessJobs
         OwnedProcessGroup group) =>
         TempRootJanitor.SnapshotOwnedRoots(SnapshotOwnedProcessIds(group));
 
-    internal static IReadOnlyList<TempRootJanitorDeleteResult> ReapOwnedTempRoots(
+    internal static IReadOnlyList<TempRootJanitorReapResult> ReapOwnedTempRoots(
         IEnumerable<int> processIds,
         IEnumerable<string>? sharedRoots = null) =>
         sharedRoots is null
             ? TempRootJanitor.ReapOwnedRoots(processIds)
             : TempRootJanitor.ReapOwnedRoots(processIds, sharedRoots);
 
-    internal static IReadOnlyList<TempRootJanitorDeleteResult> ReapOwnedTempRoots(
+    internal static IReadOnlyList<TempRootJanitorReapResult> ReapOwnedTempRoots(
         IEnumerable<TempRootJanitorOwnedRoot> ownedRoots) =>
         TempRootJanitor.ReapOwnedRoots(ownedRoots);
 
