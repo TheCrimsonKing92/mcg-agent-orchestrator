@@ -782,22 +782,19 @@ private static void ReconcileExitedAssignedProcessRecords(AgentOrchestratorKerne
 
 private static bool HasLiveTrackedProcess(TaskProcessRecord process)
 {
-    var processIds = new HashSet<int>(process.TrackedProcessIds);
     var heartbeat = ProcessLogReader.ReadHeartbeat(process);
-    if (heartbeat.IsAvailable)
+    if (!heartbeat.IsAvailable)
     {
-        if (heartbeat.ChildProcessId is { } childPid)
-        {
-            processIds.Add(childPid);
-        }
-
-        foreach (var ownedPid in heartbeat.OwnedProcessIds)
-        {
-            processIds.Add(ownedPid);
-        }
+        return false;
     }
 
-    return processIds.Any(IsTrackedProcessRunningForReadyBatch);
+    var candidates = heartbeat.OwnedProcessIds
+        .Concat(heartbeat.ChildProcessId is > 0 ? [heartbeat.ChildProcessId.Value] : [])
+        .Concat(heartbeat.ProcessId > 0 ? [heartbeat.ProcessId] : []);
+    return DispatchProcessIdentityEvidence.GetLiveRecordedOwnerProcessIds(
+        candidates,
+        heartbeat.OwnedProcessIdentities,
+        IsTrackedProcessRunningForReadyBatch).Count > 0;
 }
 
 private static bool IsProcessRunning(int processId)

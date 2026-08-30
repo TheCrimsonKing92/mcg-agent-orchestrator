@@ -35,6 +35,7 @@ internal sealed class ProgressiveReviewSteeringCoordinator
     private readonly ProgressiveReviewSteeringOptions _options;
     private readonly Func<DateTimeOffset> _utcNow;
     private readonly Func<int, bool> _isProcessRunning;
+    private readonly Func<int, SpawnProcessIdentity?> _readProcessIdentity;
     private readonly Func<TaskProcessRecord, IReadOnlyList<int>> _getLineageDescendants;
     private readonly Func<AgentOrchestratorKernel, GoalId, TaskId, TaskProcessRecord> _cancelProcess;
     private readonly Func<AgentOrchestratorKernel, GoalId, TaskId, TaskProcessRecord> _startProcess;
@@ -59,7 +60,8 @@ internal sealed class ProgressiveReviewSteeringCoordinator
         Action<AgentOrchestratorKernel, Goal, TaskSpec, string>? prepareFreshDispatch = null,
         Func<string, string?>? headResolver = null,
         Func<string, string?, string?, bool>? capturedHeadIsAncestor = null,
-        Action<AgentOrchestratorKernel, Goal, TaskSpec, string, ConductorAutonomyPolicy?>? prepareFreshDispatchWithPolicy = null)
+        Action<AgentOrchestratorKernel, Goal, TaskSpec, string, ConductorAutonomyPolicy?>? prepareFreshDispatchWithPolicy = null,
+        Func<int, SpawnProcessIdentity?>? readProcessIdentity = null)
     {
         _workspace = workspace;
         _agents = agents;
@@ -70,6 +72,7 @@ internal sealed class ProgressiveReviewSteeringCoordinator
         _options = options ?? new ProgressiveReviewSteeringOptions();
         _utcNow = utcNow ?? (() => DateTimeOffset.UtcNow);
         _isProcessRunning = isProcessRunning ?? IsProcessRunning;
+        _readProcessIdentity = readProcessIdentity ?? DispatchProcessIdentityEvidence.ReadCurrent;
         _getLineageDescendants = getLineageDescendants ?? GetLiveLineageDescendants;
         _cancelProcess = cancelProcess ?? ((kernel, goalId, taskId) => new BackgroundDispatchRunner().CancelLatestProcess(kernel, goalId, taskId));
         _startProcess = startProcess ?? ((kernel, goalId, taskId) => new BackgroundDispatchRunner().StartLatestDispatch(kernel, goalId, taskId, workspace.LogDirectory));
@@ -715,32 +718,26 @@ Corrective direction:
 
     private IReadOnlyList<int> CaptureCancelTimeOwnedProcessSet(TaskProcessRecord process)
     {
-        var processIds = new HashSet<int>();
-        AddProcessId(processIds, process.ProcessId);
-        foreach (var processId in process.TrackedProcessIds)
-            AddProcessId(processIds, processId);
-
         var heartbeat = ProcessLogReader.ReadHeartbeat(process);
-        if (heartbeat.IsAvailable)
+        if (!heartbeat.IsAvailable)
         {
-            AddProcessId(processIds, heartbeat.ProcessId);
-            if (heartbeat.ChildProcessId is { } childProcessId)
-                AddProcessId(processIds, childProcessId);
-
-            foreach (var processId in heartbeat.OwnedProcessIds)
-                AddProcessId(processIds, processId);
+            return [];
         }
 
-        foreach (var processId in _getLineageDescendants(process))
-            AddProcessId(processIds, processId);
-
-        return processIds.OrderBy(processId => processId).ToArray();
-    }
-
-    private static void AddProcessId(HashSet<int> processIds, int processId)
-    {
-        if (processId > 0)
-            processIds.Add(processId);
+        var lineageDescendants = _getLineageDescendants(process);
+        var recordedIdentities = heartbeat.OwnedProcessIdentities
+            .Concat(lineageDescendants.Select(_readProcessIdentity).OfType<SpawnProcessIdentity>())
+            .Distinct()
+            .ToArray();
+        var candidates = heartbeat.OwnedProcessIds
+            .Concat(heartbeat.ChildProcessId is > 0 ? [heartbeat.ChildProcessId.Value] : [])
+            .Concat(heartbeat.ProcessId > 0 ? [heartbeat.ProcessId] : [])
+            .Concat(lineageDescendants);
+        return DispatchProcessIdentityEvidence.GetLiveRecordedOwnerProcessIds(
+            candidates,
+            recordedIdentities,
+            _isProcessRunning,
+            _readProcessIdentity);
     }
 
     private TreeDeathConfirmation ConfirmTreeDead(TaskProcessRecord cancelled, IReadOnlyList<int> cancelTimeOwnedProcessSet)
@@ -748,25 +745,27 @@ Corrective direction:
         if (!cancelled.WasCancelled || cancelled.CompletedAt is null)
             return new TreeDeathConfirmation(false, "cancelled process record missing terminal cancellation fields");
 
-        var processIds = new HashSet<int>(cancelTimeOwnedProcessSet);
         var heartbeat = ProcessLogReader.ReadHeartbeat(cancelled, _utcNow());
-        if (heartbeat.IsAvailable)
+        var observedPids = heartbeat.IsAvailable
+            ? heartbeat.OwnedProcessIds
+                .Concat(heartbeat.ChildProcessId is > 0 ? [heartbeat.ChildProcessId.Value] : [])
+                .Concat(heartbeat.ProcessId > 0 ? [heartbeat.ProcessId] : [])
+                .Where(processId => processId > 0)
+                .Distinct()
+                .OrderBy(processId => processId)
+                .ToArray()
+            : [];
+        var live = heartbeat.IsAvailable
+            ? DispatchProcessIdentityEvidence.GetLiveRecordedOwnerProcessIds(
+                observedPids,
+                heartbeat.OwnedProcessIdentities,
+                _isProcessRunning,
+                _readProcessIdentity)
+            : [];
+        if (live.Count > 0)
         {
-            AddProcessId(processIds, heartbeat.ProcessId);
-            if (heartbeat.ChildProcessId is { } childProcessId)
-                AddProcessId(processIds, childProcessId);
-
-            foreach (var processId in heartbeat.OwnedProcessIds)
-                AddProcessId(processIds, processId);
-        }
-
-        foreach (var processId in _getLineageDescendants(cancelled))
-            AddProcessId(processIds, processId);
-
-        var observedPids = processIds.OrderBy(processId => processId).ToArray();
-        var live = observedPids.Where(_isProcessRunning).Distinct().OrderBy(processId => processId).ToArray();
-        if (live.Length > 0)
             return new TreeDeathConfirmation(false, $"owned pid(s) still alive: {string.Join(",", live)}");
+        }
 
         if (!File.Exists(cancelled.ExitCodePath))
             return new TreeDeathConfirmation(false, $"exit artifact missing: {cancelled.ExitCodePath}");
@@ -811,16 +810,25 @@ Corrective direction:
             File.WriteAllText(cancelled.ExitCodePath, "1", Encoding.UTF8);
 
         var heartbeat = ProcessLogReader.ReadHeartbeat(cancelled, now);
-        if (heartbeat.IsAvailable && IsTerminalHeartbeat(heartbeat))
-            return;
-
         var heartbeatPath = BackgroundDispatchRunner.GetHeartbeatPath(cancelled);
         Directory.CreateDirectory(Path.GetDirectoryName(heartbeatPath) ?? _workspace.LogDirectory);
+        var recordedIdentities = (heartbeat.IsAvailable
+                ? heartbeat.OwnedProcessIdentities
+                : [])
+            .Concat(cancelTimeOwnedProcessSet.Select(_readProcessIdentity).OfType<SpawnProcessIdentity>())
+            .Distinct()
+            .ToArray();
+        var ownedPids = DispatchProcessIdentityEvidence.GetLiveRecordedOwnerProcessIds(
+            cancelTimeOwnedProcessSet,
+            recordedIdentities,
+            _isProcessRunning,
+            _readProcessIdentity);
         var payload = new
         {
             pid = cancelled.ProcessId,
             childPid = (int?)null,
-            ownedPids = cancelTimeOwnedProcessSet,
+            ownedPids,
+            ownedProcessIdentities = recordedIdentities,
             startedAt = cancelled.StartedAt.ToString("O"),
             lastObservedAt = now.ToString("O"),
             lastProgressAt = now.ToString("O"),

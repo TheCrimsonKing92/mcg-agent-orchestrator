@@ -72,6 +72,7 @@ public sealed class DispatchStateSurface
 {
     private readonly IClock _clock;
     private readonly Func<int, bool> _isProcessAlive;
+    private readonly Func<int, SpawnProcessIdentity?> _readProcessIdentity;
     private readonly Func<IEnumerable<int>, IReadOnlyDictionary<int, string>> _readCommandLines;
     private readonly TimeSpan _recentHeartbeatGrace;
     private readonly TimeSpan _liveIdleTimeout;
@@ -84,10 +85,13 @@ public sealed class DispatchStateSurface
         Func<IEnumerable<int>, IReadOnlyDictionary<int, string>>? readCommandLines = null,
         TimeSpan? recentHeartbeatGrace = null,
         TimeSpan? liveIdleTimeout = null,
-        bool inspectWorktree = true)
+        bool inspectWorktree = true,
+        Func<int, (DateTimeOffset StartedAt, string ImagePath)?>? readProcessIdentity = null)
     {
         _clock = clock ?? new SystemClock();
         _isProcessAlive = isProcessAlive ?? IsProcessAlive;
+        _readProcessIdentity = DispatchProcessIdentityEvidence.Adapt(readProcessIdentity) ??
+            DispatchProcessIdentityEvidence.ReadCurrent;
         _readCommandLines = readCommandLines ?? ProcessCommandLines.Read;
         _recentHeartbeatGrace = recentHeartbeatGrace ?? DispatchRecoveryPolicy.DefaultRecentHeartbeatGrace;
         _liveIdleTimeout = liveIdleTimeout ?? DispatchRecoveryPolicy.DefaultLiveIdleTimeout;
@@ -180,23 +184,35 @@ public sealed class DispatchStateSurface
             }
         }
 
+        var liveIdentityBoundPids = heartbeat.IsAvailable
+            ? DispatchProcessIdentityEvidence.GetLiveRecordedOwnerProcessIds(
+                    processIds,
+                    heartbeat.OwnedProcessIdentities,
+                    _isProcessAlive,
+                    _readProcessIdentity)
+                .ToHashSet()
+            : [];
+
         var commandLines = commandLineSnapshot?.Read(processIds) ?? _readCommandLines(processIds);
         var nodes = processIds
             .Select(pid => new DispatchProcessTreeNode(
                 pid,
-                _isProcessAlive(pid),
+                liveIdentityBoundPids.Contains(pid),
                 commandLines.TryGetValue(pid, out var commandLine) ? commandLine : null))
             .ToArray();
-        var childCommandLine = heartbeat.ChildProcessId is { } childPid &&
-            commandLines.TryGetValue(childPid, out var childLine)
+        var liveChildProcessId = heartbeat.ChildProcessId is { } childPid && liveIdentityBoundPids.Contains(childPid)
+            ? childPid
+            : (int?)null;
+        var childCommandLine = liveChildProcessId is { } liveChildPid &&
+            commandLines.TryGetValue(liveChildPid, out var childLine)
                 ? childLine
                 : null;
-        var ownedPids = heartbeat.OwnedProcessIds.Count > 0
-            ? heartbeat.OwnedProcessIds
-            : process.TrackedProcessIds;
+        var ownedPids = heartbeat.OwnedProcessIds
+            .Where(liveIdentityBoundPids.Contains)
+            .ToArray();
         return new DispatchProcessTreeSummary(
             process.ProcessId,
-            heartbeat.ChildProcessId,
+            liveChildProcessId,
             ownedPids,
             nodes,
             childCommandLine);

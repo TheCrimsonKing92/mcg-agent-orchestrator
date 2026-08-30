@@ -116,10 +116,10 @@ internal sealed class DispatchProcessRecoveryService
         Func<bool> hasWorktreeProgress,
         Action<DispatchHeartbeat?> heartbeatObserved)
     {
-        var hasLiveTrackedProcess = AnyTrackedProcessStillRunning(processRecord);
         var observedHeartbeat = TryReadHeartbeat(GetHeartbeatPath(processRecord), out var refreshHeartbeat)
             ? refreshHeartbeat
             : null;
+        var hasLiveTrackedProcess = AnyTrackedProcessStillRunning(processRecord, observedHeartbeat);
         heartbeatObserved(observedHeartbeat);
         var hasLiveProcess = AnyObservedProcessStillRunning(processRecord, observedHeartbeat);
         var worktreeInspectionStatus = DispatchWorktreeInspectionStatus.NotRequired;
@@ -558,13 +558,26 @@ internal sealed class DispatchProcessRecoveryService
     internal void TryWriteExitCode(string path, int exitCode, string reason) =>
         _writeExitArtifact(path, exitCode, reason);
 
-    internal bool AnyTrackedProcessStillRunning(TaskProcessRecord processRecord) =>
-        processRecord.CompletionTrackedProcessIds.Any(_isStillRunning);
+    internal bool AnyTrackedProcessStillRunning(TaskProcessRecord processRecord)
+    {
+        var heartbeat = TryReadHeartbeat(GetHeartbeatPath(processRecord), out var observedHeartbeat)
+            ? observedHeartbeat
+            : null;
+        return AnyTrackedProcessStillRunning(processRecord, heartbeat);
+    }
+
+    private bool AnyTrackedProcessStillRunning(TaskProcessRecord processRecord, DispatchHeartbeat? heartbeat) =>
+        processRecord.CompletionTrackedProcessIds.Any(processId =>
+            _isStillRunning(processId) &&
+            DispatchProcessIdentityEvidence.IsRecordedOwner(
+                processId,
+                heartbeat?.OwnedProcessIdentities,
+                _readProcessIdentity));
 
     private bool AnyObservedProcessStillRunning(TaskProcessRecord processRecord, DispatchHeartbeat? heartbeat) =>
         GetObservedProcessIds(processRecord, heartbeat).Any(processId =>
             _isStillRunning(processId) &&
-            DispatchProcessIdentityEvidence.IsRecordedOwnerOrUnknown(
+            DispatchProcessIdentityEvidence.IsRecordedOwner(
                 processId,
                 heartbeat?.OwnedProcessIdentities,
                 _readProcessIdentity));
@@ -572,7 +585,7 @@ internal sealed class DispatchProcessRecoveryService
     private bool AnyOwnedWorkerProcessStillRunning(TaskProcessRecord processRecord, DispatchHeartbeat? heartbeat) =>
         GetOwnedWorkerProcessIds(processRecord, heartbeat).Any(processId =>
             _isStillRunning(processId) &&
-            DispatchProcessIdentityEvidence.IsRecordedOwnerOrUnknown(
+            DispatchProcessIdentityEvidence.IsRecordedOwner(
                 processId,
                 heartbeat?.OwnedProcessIdentities,
                 _readProcessIdentity));

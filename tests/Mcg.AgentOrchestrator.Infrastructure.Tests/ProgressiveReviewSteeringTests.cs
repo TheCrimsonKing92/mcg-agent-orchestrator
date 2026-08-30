@@ -194,9 +194,9 @@ public sealed class ProgressiveReviewSteeringTests
 
         Assert.True(result.MutatedTaskState, string.Join(Environment.NewLine, result.ProgressLines));
         Assert.True(order.IndexOf("cancel") >= 0);
-        Assert.True(order.IndexOf("probe:6001") > order.IndexOf("cancel"));
+        Assert.True(order.LastIndexOf("probe:6001") > order.IndexOf("cancel"));
         Assert.True(
-            order.IndexOf("start") > order.IndexOf("probe:6001"),
+            order.IndexOf("start") > order.LastIndexOf("probe:6001"),
             $"order={string.Join(',', order)}; receipts={string.Join(" | ", store.Receipts.Select(item => item.Outcome))}; checks={string.Join(" | ", store.Receipts.SelectMany(item => item.AdmissionChecks))}");
         var receipt = Assert.Single(store.Receipts);
         Assert.Equal("warm-resume", receipt.Decision);
@@ -1305,7 +1305,8 @@ public sealed class ProgressiveReviewSteeringTests
             prepareFreshDispatch: prepareFreshDispatch,
             headResolver: currentHead is null ? null : _ => currentHead,
             capturedHeadIsAncestor: currentHead is null ? null : SameHead,
-            prepareFreshDispatchWithPolicy: prepareFreshDispatchWithPolicy);
+            prepareFreshDispatchWithPolicy: prepareFreshDispatchWithPolicy,
+            readProcessIdentity: processId => TestProcessIdentity(processId));
     }
 
     private static bool SameHead(string _, string? capturedHead, string? currentHead) =>
@@ -1378,6 +1379,7 @@ public sealed class ProgressiveReviewSteeringTests
             null,
             OwnedProcessIds: [6001]);
         kernel.RecordTaskProcessStarted(goal.Id, task.Id, process);
+        WriteHeartbeat(process, dispatchedAt, childPid: null, ownedPids: [process.ProcessId], state: "running");
         if (clockOffsetAfterDispatch is { } offset)
         {
             clock.Advance(offset);
@@ -1456,12 +1458,22 @@ public sealed class ProgressiveReviewSteeringTests
         var childPidJson = childPid.HasValue
             ? childPid.Value.ToString(System.Globalization.CultureInfo.InvariantCulture)
             : "null";
+        var identityPids = ownedPids
+            .Concat(childPid is > 0 ? [childPid.Value] : [])
+            .Concat(process.ProcessId > 0 ? [process.ProcessId] : [])
+            .Distinct()
+            .ToArray();
+        var identities = string.Join(",", identityPids.Select(processId =>
+            $$"""{"processId":{{processId}},"startedAt":"2026-07-20T11:59:00Z","imagePath":"C:\\workers\\worker-{{processId}}.exe"}"""));
         File.WriteAllText(
             BackgroundDispatchRunner.GetHeartbeatPath(process),
             $$"""
-            {"pid":{{process.ProcessId}},"childPid":{{childPidJson}},"ownedPids":[{{string.Join(",", ownedPids)}}],"state":"{{state}}","lastObservedAt":"{{observedAt:O}}","lastProgressAt":"{{observedAt:O}}","stdoutBytes":0,"stderrBytes":0,"ownedCpuMs":0}
+            {"pid":{{process.ProcessId}},"childPid":{{childPidJson}},"ownedPids":[{{string.Join(",", ownedPids)}}],"ownedProcessIdentities":[{{identities}}],"state":"{{state}}","lastObservedAt":"{{observedAt:O}}","lastProgressAt":"{{observedAt:O}}","stdoutBytes":0,"stderrBytes":0,"ownedCpuMs":0}
             """);
     }
+
+    private static SpawnProcessIdentity TestProcessIdentity(int processId) =>
+        new(processId, DateTimeOffset.Parse("2026-07-20T11:59:00Z"), $@"C:\workers\worker-{processId}.exe");
 
     private static void WriteExitAndHeartbeat(
         TaskProcessRecord process,

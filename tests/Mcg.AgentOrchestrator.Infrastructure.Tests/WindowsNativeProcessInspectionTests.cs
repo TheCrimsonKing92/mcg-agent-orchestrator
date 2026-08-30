@@ -3,6 +3,68 @@ using Mcg.AgentOrchestrator.Infrastructure;
 public sealed class WindowsNativeProcessInspectionTests
 {
     [Xunit.Fact]
+    public void IdentityBoundDescendantsPruneOlderStaleParentBranchAndRetainLaterBranch()
+    {
+        var parentStartedAt = DateTimeOffset.Parse("2026-08-30T05:48:33Z");
+        WindowsNativeProcessInspection.ProcessInspectionSeed[] seeds =
+        [
+            new(100, 1, "worker"),
+            new(80, 100, "real-child"),
+            new(200, 80, "stale-parent-child"),
+            new(50, 200, "stale-transitive-child"),
+            new(90, 80, "real-grandchild")
+        ];
+        var starts = new Dictionary<int, DateTimeOffset>
+        {
+            [100] = parentStartedAt,
+            [80] = parentStartedAt.AddSeconds(1),
+            [200] = parentStartedAt.AddDays(-3),
+            [50] = parentStartedAt.AddDays(-3).AddSeconds(1),
+            [90] = parentStartedAt.AddSeconds(2)
+        };
+
+        var descendants = WindowsNativeProcessInspection.ListIdentityBoundDescendantProcessIds(
+            100,
+            () => WindowsNativeProcessInspection.ProcessEnumerationResult.Success(seeds),
+            seed => new ProcessInspectionRecord(
+                seed.ProcessId,
+                seed.ParentProcessId,
+                seed.Name,
+                $@"C:\workers\{seed.Name}.exe",
+                starts[seed.ProcessId],
+                seed.Name,
+                ProcessInspectionStatus.Available));
+
+        Assert.Equal<int>([80, 90], descendants);
+        Assert.DoesNotContain(200, descendants);
+        Assert.DoesNotContain(50, descendants);
+    }
+
+    [Xunit.Fact]
+    public void IdentityBoundDescendantsRejectUnreadableEdgeWithoutTreatingItAsOwned()
+    {
+        WindowsNativeProcessInspection.ProcessInspectionSeed[] seeds =
+        [
+            new(100, 1, "worker"),
+            new(101, 100, "unreadable-child")
+        ];
+
+        var descendants = WindowsNativeProcessInspection.ListIdentityBoundDescendantProcessIds(
+            100,
+            () => WindowsNativeProcessInspection.ProcessEnumerationResult.Success(seeds),
+            seed => new ProcessInspectionRecord(
+                seed.ProcessId,
+                seed.ParentProcessId,
+                seed.Name,
+                seed.ProcessId == 100 ? @"C:\workers\worker.exe" : null,
+                seed.ProcessId == 100 ? DateTimeOffset.Parse("2026-08-30T05:48:33Z") : null,
+                null,
+                seed.ProcessId == 100 ? ProcessInspectionStatus.Available : ProcessInspectionStatus.AccessDenied));
+
+        Assert.Empty(descendants);
+    }
+
+    [Xunit.Fact]
     public void TerminateIfMatches_RecycledIdentityDoesNotTerminateHandle()
     {
         var expected = AvailableRecord(DateTimeOffset.Parse("2026-08-26T12:00:00Z"));

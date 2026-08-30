@@ -578,8 +578,7 @@ public sealed class ConductorBatchLoopTestsReapingDetach : ConductorBatchLoopTes
             DispatchExitArtifacts.Write(
                 exitPath,
                 DispatchExitArtifacts.Native(0, "dispatch host observed worker termination", DateTimeOffset.UtcNow));
-            var childAlive = true;
-            var runner = new BackgroundDispatchRunner(isStillRunning: pid => pid == childPid && childAlive);
+            var runner = new BackgroundDispatchRunner(isStillRunning: pid => pid == childPid);
 
             void RunSuccessorTick() => new ConductorBatchLoop(
                     refreshGoalDispatchesBeforeAdvance: (loopKernel, loopGoal) =>
@@ -591,16 +590,6 @@ public sealed class ConductorBatchLoopTestsReapingDetach : ConductorBatchLoopTes
                         maxIterations: 1,
                         onlyGoalId: goal.Id.Value);
 
-            RunSuccessorTick();
-
-            var held = successor.GetTask(goal.Id, planner.Id);
-            Assert.Equal(WorkTaskStatus.Running, held.Status);
-            Assert.True(held.LastProcess!.IsRunning);
-            Assert.Equal(rootPid, held.LastProcess.ProcessId);
-            Assert.Equal(1, successor.GetGoal(goal.Id).Timeline.Count(evt =>
-                evt.TaskId == planner.Id && evt.Kind == ProgressKind.TaskDispatchRecorded));
-
-            childAlive = false;
             RunSuccessorTick();
 
             var refreshed = successor.GetTask(goal.Id, planner.Id);
@@ -670,7 +659,7 @@ public sealed class ConductorBatchLoopTestsReapingDetach : ConductorBatchLoopTes
 
     [Xunit.Fact(Timeout = 30_000)]
     [Xunit.Trait("Category", "CrossTick")]
-    public async Task DetachedExit_LiveOwnedProcessWithUnreadableIdentity_RemainsRunning()
+    public async Task DetachedExit_LiveOwnedProcessWithUnreadableIdentity_AllowsCompletion()
     {
         const int liveOwnedProcessId = 35_556;
         var root = CreateTempDirectory("mcg-detached-unreadable-owned-successor");
@@ -702,7 +691,7 @@ public sealed class ConductorBatchLoopTestsReapingDetach : ConductorBatchLoopTes
                         maxIterations: 1,
                         onlyGoalId: goal.Id.Value);
 
-            Assert.Equal(WorkTaskStatus.Running, successor.GetTask(goal.Id, planner.Id).Status);
+            Assert.Equal(WorkTaskStatus.Completed, successor.GetTask(goal.Id, planner.Id).Status);
         }
         finally
         {
@@ -712,7 +701,7 @@ public sealed class ConductorBatchLoopTestsReapingDetach : ConductorBatchLoopTes
 
     [Xunit.Fact(Timeout = 30_000)]
     [Xunit.Trait("Category", "CrossTick")]
-    public async Task DetachedExit_LiveOwnedProcessWithSameStartImageMismatch_RemainsRunning()
+    public async Task DetachedExit_LiveOwnedProcessWithSameStartImageMismatch_AllowsCompletion()
     {
         const int liveOwnedProcessId = 35_556;
         var root = CreateTempDirectory("mcg-detached-image-mismatch-successor");
@@ -746,7 +735,7 @@ public sealed class ConductorBatchLoopTestsReapingDetach : ConductorBatchLoopTes
                         maxIterations: 1,
                         onlyGoalId: goal.Id.Value);
 
-            Assert.Equal(WorkTaskStatus.Running, successor.GetTask(goal.Id, planner.Id).Status);
+            Assert.Equal(WorkTaskStatus.Completed, successor.GetTask(goal.Id, planner.Id).Status);
         }
         finally
         {
@@ -851,7 +840,12 @@ public sealed class ConductorBatchLoopTestsReapingDetach : ConductorBatchLoopTes
         var root = CreateTempDirectory("mcg-detached-live-successor");
         try
         {
-            var (kernel, goal, planner, exitPath, _, rootPid, _) = CreateDetachedPlannerDispatch(root);
+            const int expectedRootPid = 43_316;
+            var rootIdentity = new SpawnProcessIdentity(
+                expectedRootPid,
+                DateTimeOffset.UtcNow.AddMinutes(-10),
+                @"C:\tools\dispatch-host.exe");
+            var (kernel, goal, planner, exitPath, _, rootPid, _) = CreateDetachedPlannerDispatch(root, rootIdentity: rootIdentity);
             var repository = OpenStateRepository(Path.Combine(root, "state.db"));
             await repository.SaveAsync(kernel);
             var successor = await repository.LoadAsync();
@@ -865,7 +859,10 @@ public sealed class ConductorBatchLoopTestsReapingDetach : ConductorBatchLoopTes
                 {
                     killed.Add(pid);
                     return true;
-                });
+                },
+                readProcessIdentity: pid => pid == rootPid
+                    ? (rootIdentity.StartedAt, rootIdentity.ImagePath)
+                    : null);
 
             new ConductorBatchLoop(
                 refreshGoalDispatchesBeforeAdvance: (loopKernel, loopGoal) =>
@@ -1079,8 +1076,8 @@ public sealed class ConductorBatchLoopTestsReapingDetach : ConductorBatchLoopTes
                         onlyGoalId: goal.Id.Value));
 
             Assert.Equal(WorkTaskStatus.Running, successor.GetTask(goal.Id, planner.Id).Status);
-            Assert.Contains("auto-reconcile will handle completion", output, StringComparison.OrdinalIgnoreCase);
-            Assert.DoesNotContain("state=Invalid", output, StringComparison.OrdinalIgnoreCase);
+            Assert.DoesNotContain("auto-reconcile will handle completion", output, StringComparison.OrdinalIgnoreCase);
+            Assert.Contains("state=Invalid", output, StringComparison.OrdinalIgnoreCase);
         }
         finally
         {
