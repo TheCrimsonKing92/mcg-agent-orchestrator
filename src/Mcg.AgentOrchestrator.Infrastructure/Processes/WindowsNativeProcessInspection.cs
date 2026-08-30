@@ -195,15 +195,17 @@ internal static class WindowsNativeProcessInspection
             return record;
         }
 
-        // A live process with the recorded root PID but a different start time owns a
-        // different tree. Prune it rather than following recycled parent-PID edges.
+        var rootEarliestPossibleStart = recordedAncestorStartedAt;
+        // TaskProcessRecord.StartedAt is observed after Process.Start; it is not the
+        // OS creation time and cannot prove PID recycle by exact comparison. For this
+        // refusal-only walk, use a readable live root identity as the temporal anchor.
+        // A mismatch remains unknown and conservative, never ownership or kill authority.
         if (seedsById.TryGetValue(ancestorProcessId, out var currentRootSeed))
         {
             var currentRoot = Read(currentRootSeed);
-            if (currentRoot.StartedAt is { } currentRootStartedAt &&
-                currentRootStartedAt != recordedAncestorStartedAt)
+            if (currentRoot.StartedAt is { } currentRootStartedAt)
             {
-                return [];
+                rootEarliestPossibleStart = currentRootStartedAt;
             }
         }
 
@@ -213,7 +215,7 @@ internal static class WindowsNativeProcessInspection
             .ToDictionary(group => group.Key, group => group.ToArray());
         var candidates = new List<int>();
         var queue = new Queue<(int ProcessId, DateTimeOffset EarliestPossibleStart)>();
-        queue.Enqueue((ancestorProcessId, recordedAncestorStartedAt));
+        queue.Enqueue((ancestorProcessId, rootEarliestPossibleStart));
         while (queue.TryDequeue(out var parent))
         {
             if (!childrenByParent.TryGetValue(parent.ProcessId, out var children))

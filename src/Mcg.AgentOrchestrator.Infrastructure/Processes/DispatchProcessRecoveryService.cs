@@ -121,7 +121,11 @@ internal sealed class DispatchProcessRecoveryService
             : null;
         var hasLiveTrackedProcess = AnyTrackedProcessStillRunning(processRecord, observedHeartbeat);
         heartbeatObserved(observedHeartbeat);
-        var hasLiveProcess = AnyObservedProcessStillRunning(processRecord, observedHeartbeat);
+        // A missing or temporarily unreadable identity cannot authorize ownership,
+        // completion blocking, or termination. It also cannot prove that a launch-time
+        // tracked process is dead while terminal exit evidence is still absent.
+        var hasLiveProcess = hasLiveTrackedProcess ||
+            AnyObservedProcessStillRunning(processRecord, observedHeartbeat);
         var worktreeInspectionStatus = DispatchWorktreeInspectionStatus.NotRequired;
         if (!hasLiveProcess &&
             !_fileExists(processRecord.ExitCodePath) &&

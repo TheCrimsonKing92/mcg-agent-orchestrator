@@ -129,6 +129,35 @@ public sealed class WindowsNativeProcessInspectionTests
     }
 
     [Xunit.Fact]
+    public void ConservativeRefusalTreatsApproximateRecordedRootStartAsUnknownInsteadOfRecycled()
+    {
+        const int wrapperPid = 6_001;
+        const int childPid = 6_102;
+        var actualWrapperStartedAt = DateTimeOffset.Parse("2026-08-30T05:48:32Z");
+        var recordedAfterProcessStart = actualWrapperStartedAt.AddMilliseconds(25);
+        WindowsNativeProcessInspection.ProcessInspectionSeed[] seeds =
+        [
+            new(wrapperPid, 1, "wrapper"),
+            new(childPid, wrapperPid, "child")
+        ];
+
+        var candidates = WindowsNativeProcessInspection.ListConservativeDescendantProcessIdsForRefusal(
+            wrapperPid,
+            recordedAfterProcessStart,
+            () => WindowsNativeProcessInspection.ProcessEnumerationResult.Success(seeds),
+            seed => new ProcessInspectionRecord(
+                seed.ProcessId,
+                seed.ParentProcessId,
+                seed.Name,
+                Path.Combine("fixture", seed.Name + ".exe"),
+                seed.ProcessId == wrapperPid ? actualWrapperStartedAt : actualWrapperStartedAt.AddSeconds(1),
+                seed.Name,
+                ProcessInspectionStatus.Available));
+
+        Assert.Equal<int>([childPid], candidates);
+    }
+
+    [Xunit.Fact]
     public void TerminateIfMatches_RecycledIdentityDoesNotTerminateHandle()
     {
         var expected = AvailableRecord(DateTimeOffset.Parse("2026-08-26T12:00:00Z"));

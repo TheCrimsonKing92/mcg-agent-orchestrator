@@ -663,9 +663,14 @@ public sealed class ProgressiveReviewSteeringTests
         Assert.Equal("warm-resume", Assert.Single(store.Receipts).Decision);
         Assert.Equal("exited", preserved.State);
         Assert.Equal(terminalObservedAt, preserved.LastObservedAt);
+        Assert.Equal(terminalObservedAt, preserved.LastProgressAt);
         Assert.Equal("session-preserved", preserved.ProviderSessionId);
         Assert.Equal("head-preserved", preserved.WorktreeHeadSha);
         Assert.Equal("dirty-preserved", preserved.DirtyStateHash);
+        var preservedIdentity = Assert.Single(preserved.OwnedProcessIdentities);
+        Assert.Equal(6_001, preservedIdentity.ProcessId);
+        Assert.Equal(DateTimeOffset.Parse("2026-07-20T11:59:00Z"), preservedIdentity.StartedAt);
+        Assert.Equal(@"C:\workers\worker-6001.exe", preservedIdentity.ImagePath);
     }
 
     [Fact(DisplayName = "ProgressiveReviewSteering_first_misdirection_steers_second_same_round_misdirection_attention")]

@@ -117,6 +117,35 @@ public sealed class DispatchProcessRecoveryServiceTests
     }
 
     [Xunit.Fact]
+    public void LiveTrackedProcessWithUnreadableHeartbeatIdentityDoesNotReapNonterminalDispatch()
+    {
+        var process = ProcessRecord(413, Now.AddMinutes(-5));
+        var heartbeatPath = DispatchProcessRecoveryService.GetHeartbeatPath(process);
+        var artifacts = new Dictionary<string, string>(StringComparer.Ordinal)
+        {
+            [heartbeatPath] = HeartbeatJson(
+                process.ProcessId,
+                childProcessId: process.ProcessId,
+                lastObservedAt: Now,
+                lastProgressAt: Now,
+                ownedCpuMs: 10,
+                stdoutBytes: 100,
+                stderrBytes: 0,
+                includeIdentity: false)
+        };
+        var killedProcessIds = new List<int>();
+        var service = CreateService(
+            artifacts,
+            liveProcessIds: new HashSet<int> { process.ProcessId },
+            killedProcessIds: killedProcessIds);
+
+        var verdict = Classify(service, process);
+
+        Xunit.Assert.Equal(DispatchProcessVerdictKind.Live, verdict.Kind);
+        Xunit.Assert.Empty(killedProcessIds);
+    }
+
+    [Xunit.Fact]
     public void ReapingTrackedProcessNeverTargetsHeartbeatOnlyPid()
     {
         var process = ProcessRecord(412, Now.AddMinutes(-5));

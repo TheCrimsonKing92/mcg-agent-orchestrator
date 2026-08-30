@@ -27,6 +27,8 @@ internal sealed record ProgressiveReviewSteeringOptions(
 
 internal sealed class ProgressiveReviewSteeringCoordinator
 {
+    private static readonly JsonSerializerOptions HeartbeatJsonOptions = new(JsonSerializerDefaults.Web);
+
     private readonly OrchestratorWorkspace _workspace;
     private readonly IReadOnlyList<AgentDefinition> _agents;
     private readonly WorkerProfileCatalog _profiles;
@@ -723,11 +725,14 @@ Corrective direction:
     {
         var heartbeat = ProcessLogReader.ReadHeartbeat(process);
         var lineageDescendants = _getLineageDescendants(process);
+        var conservativeRefusalCandidates = process.CompletionTrackedProcessIds
+            .Concat(lineageDescendants)
+            .Where(processId => processId > 0)
+            .Distinct()
+            .ToArray();
         if (!heartbeat.IsAvailable)
         {
-            return lineageDescendants
-                .Where(processId => processId > 0)
-                .Distinct()
+            return conservativeRefusalCandidates
                 .OrderBy(processId => processId)
                 .ToArray();
         }
@@ -745,7 +750,10 @@ Corrective direction:
                 recordedIdentities,
                 _isProcessRunning,
                 _readProcessIdentity)
-            .Concat(lineageDescendants.Where(processId => processId > 0))
+            // This set is a cancellation refusal snapshot, not ownership authority.
+            // Unknown launch-time/lineage identities therefore remain conservative
+            // candidates until a positive dead-or-recycled observation excludes them.
+            .Concat(conservativeRefusalCandidates)
             .Distinct()
             .OrderBy(processId => processId)
             .ToArray();
@@ -878,7 +886,7 @@ Corrective direction:
             exitFileExists = true
         };
         var tmp = heartbeatPath + ".tmp";
-        File.WriteAllText(tmp, JsonSerializer.Serialize(payload, new JsonSerializerOptions(JsonSerializerDefaults.Web)), new UTF8Encoding(false));
+        File.WriteAllText(tmp, JsonSerializer.Serialize(payload, HeartbeatJsonOptions), new UTF8Encoding(false));
         File.Move(tmp, heartbeatPath, overwrite: true);
     }
 
@@ -889,10 +897,10 @@ Corrective direction:
     {
         var payload = JsonNode.Parse(File.ReadAllText(heartbeatPath)) as JsonObject ??
             throw new JsonException($"Terminal heartbeat is not a JSON object: {heartbeatPath}");
-        payload["ownedPids"] = JsonSerializer.SerializeToNode(ownedPids);
-        payload["ownedProcessIdentities"] = JsonSerializer.SerializeToNode(recordedIdentities);
+        payload["ownedPids"] = JsonSerializer.SerializeToNode(ownedPids, HeartbeatJsonOptions);
+        payload["ownedProcessIdentities"] = JsonSerializer.SerializeToNode(recordedIdentities, HeartbeatJsonOptions);
         var tmp = heartbeatPath + ".tmp";
-        File.WriteAllText(tmp, payload.ToJsonString(new JsonSerializerOptions(JsonSerializerDefaults.Web)), new UTF8Encoding(false));
+        File.WriteAllText(tmp, payload.ToJsonString(HeartbeatJsonOptions), new UTF8Encoding(false));
         File.Move(tmp, heartbeatPath, overwrite: true);
     }
 
