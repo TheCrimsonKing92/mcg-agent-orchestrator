@@ -343,65 +343,72 @@ public sealed class PlannerSamplingDispatchTests : WorkerDispatchTestSupport
     }
 
     [Xunit.Fact]
-    public void CancelLatestProcess_CancellationReceiptFailure_RecordsAuthoritativeCancellation()
+    public void CancelRunningProcesses_CancellationReceiptFailures_RecordAllAuthoritativeCancellations()
     {
         var root = CreateTempDirectory();
-        var primaryPath = Path.Combine(root, "planner.out.log");
-        File.WriteAllText(primaryPath, ReadPlannerFixture());
-        var sample = Xunit.Assert.Single(PlannerSampleDispatcher.CreateArtifacts(primaryPath, 2));
-        File.WriteAllText(
-            sample.LaunchRecordPath,
-            JsonSerializer.Serialize(new
-            {
-                ProcessId = 222,
-                StartedAt = DateTimeOffset.Parse("2026-08-25T11:59:59Z")
-            }));
-        Directory.CreateDirectory(sample.TerminalRecordPath);
         var now = DateTimeOffset.Parse("2026-08-25T12:00:00Z");
         var kernel = new AgentOrchestratorKernel();
-        var goal = kernel.CreateGoal("Cancel a sampled Planner with a receipt failure", [
-            new TaskSpec(TaskId.New(), "Produce a sampled plan.", AgentRole.Planner)
+        var goal = kernel.CreateGoal("Cancel sampled Planners with receipt failures", [
+            new TaskSpec(TaskId.New(), "Produce sampled plan A.", AgentRole.Planner),
+            new TaskSpec(TaskId.New(), "Produce sampled plan B.", AgentRole.Planner)
         ]);
         kernel.ActivateGoal(goal.Id, AgentCatalog.Default().Agents);
-        var task = goal.Tasks.Single();
-        var dispatch = new TaskDispatchRecord(
-            "planner",
-            "fixture planner command",
-            root,
-            now,
-            PlannerSampleCount: 2);
-        kernel.RecordTaskDispatch(goal.Id, task.Id, dispatch);
-        kernel.RecordTaskProcessStarted(
-            goal.Id,
-            task.Id,
-            new TaskProcessRecord(
-                222,
-                dispatch.Command,
-                dispatch.WorkingDirectory,
-                primaryPath,
-                Path.Combine(root, "planner.err.log"),
-                Path.Combine(root, "planner.exit.txt"),
+        var processId = 221;
+        foreach (var task in goal.Tasks)
+        {
+            processId++;
+            var primaryPath = Path.Combine(root, $"planner-{processId}.out.log");
+            File.WriteAllText(primaryPath, ReadPlannerFixture());
+            var sample = Xunit.Assert.Single(PlannerSampleDispatcher.CreateArtifacts(primaryPath, 2));
+            File.WriteAllText(
+                sample.LaunchRecordPath,
+                JsonSerializer.Serialize(new { ProcessId = processId, StartedAt = now.AddSeconds(-1) }));
+            Directory.CreateDirectory(sample.TerminalRecordPath);
+            var dispatch = new TaskDispatchRecord(
+                "planner",
+                "fixture planner command",
+                root,
                 now,
-                null,
-                null,
-                OwnedProcessIds: [222]));
-        var running = true;
+                PlannerSampleCount: 2);
+            kernel.RecordTaskDispatch(goal.Id, task.Id, dispatch);
+            kernel.RecordTaskProcessStarted(
+                goal.Id,
+                task.Id,
+                new TaskProcessRecord(
+                    processId,
+                    dispatch.Command,
+                    dispatch.WorkingDirectory,
+                    primaryPath,
+                    Path.Combine(root, $"planner-{processId}.err.log"),
+                    Path.Combine(root, $"planner-{processId}.exit.txt"),
+                    now,
+                    null,
+                    null,
+                    OwnedProcessIds: [processId]));
+        }
+
         var runner = new BackgroundDispatchRunner(
             new TestClock(now.AddSeconds(5)),
-            isStillRunning: _ => running,
-            tryKillOwnedProcess: _ =>
-            {
-                running = false;
-                return true;
-            });
+            isStillRunning: _ => true,
+            tryKillOwnedProcess: _ => true);
 
-        Xunit.Assert.Throws<UnauthorizedAccessException>(() =>
-            runner.CancelLatestProcess(kernel, goal.Id, task.Id));
+        var cancelledCount = runner.CancelRunningProcessesForGoal(kernel, goal.Id);
 
-        var cancelled = kernel.GetTask(goal.Id, task.Id).LastProcess;
-        Xunit.Assert.NotNull(cancelled);
-        Xunit.Assert.True(cancelled.WasCancelled);
-        Xunit.Assert.Equal(now.AddSeconds(5), cancelled.CompletedAt);
+        Xunit.Assert.Equal(2, cancelledCount);
+        foreach (var task in goal.Tasks)
+        {
+            var cancelled = kernel.GetTask(goal.Id, task.Id).LastProcess;
+            Xunit.Assert.NotNull(cancelled);
+            Xunit.Assert.True(cancelled.WasCancelled);
+            Xunit.Assert.Equal(now.AddSeconds(5), cancelled.CompletedAt);
+            Xunit.Assert.Contains(
+                goal.Timeline,
+                entry => entry.TaskId == task.Id &&
+                    entry.Kind == ProgressKind.TaskNote &&
+                    entry.Message.Contains(
+                        "Planner sample cancellation evidence could not be persisted",
+                        StringComparison.Ordinal));
+        }
     }
 
     [Xunit.Fact]
@@ -1358,6 +1365,82 @@ public sealed class PlannerSamplingDispatchTests : WorkerDispatchTestSupport
             foreach (var process in processes)
                 try { process.Dispose(); } catch { }
         }
+    }
+
+    [Xunit.Fact]
+    public void SweepExitedProcesses_TimeoutReceiptFailuresDoNotBlockAnyGoal()
+    {
+        var root = CreateSeededDispatchRepository();
+        SeedFixtureCitationTargets(root);
+        var startedAt = DateTimeOffset.Parse("2026-08-22T18:00:00Z");
+        var kernel = new AgentOrchestratorKernel();
+        var planner = new AgentDefinition(
+            new AgentId("planner"),
+            "Planner",
+            AgentRole.Planner,
+            new ModelProfile(
+                "OpenAI",
+                AgentCatalog.OpenAiSubscriptionModelAlias,
+                ModelCapability.Text,
+                SubscriptionMode.ApiKey));
+
+        (Goal Goal, TaskSpec Task, string OutputPath) CreateCompletedPlanner(
+            string objective,
+            int processId,
+            int sampleCount)
+        {
+            var goal = kernel.CreateGoal(objective, [
+                new TaskSpec(TaskId.New(), "Produce a plan.", AgentRole.Planner)
+            ]);
+            kernel.ActivateGoal(goal.Id, [planner]);
+            var task = goal.Tasks.Single();
+            var outputPath = Path.Combine(root, $"planner-{processId}.out.log");
+            var errorPath = Path.Combine(root, $"planner-{processId}.err.log");
+            var exitPath = Path.Combine(root, $"planner-{processId}.exit.txt");
+            File.WriteAllText(outputPath, ReadPlannerFixture());
+            DispatchExitArtifacts.Write(
+                exitPath,
+                DispatchExitArtifacts.Native(0, "fixture completed", startedAt.AddMinutes(10)));
+            var dispatch = new TaskDispatchRecord(
+                "planner",
+                "fixture planner command",
+                root,
+                startedAt,
+                PlannerSampleCount: sampleCount);
+            kernel.RecordTaskDispatch(goal.Id, task.Id, dispatch);
+            kernel.RecordTaskProcessStarted(
+                goal.Id,
+                task.Id,
+                new TaskProcessRecord(
+                    processId,
+                    dispatch.Command,
+                    root,
+                    outputPath,
+                    errorPath,
+                    exitPath,
+                    startedAt,
+                    null,
+                    null,
+                    OwnedProcessIds: [processId]));
+            return (goal, task, outputPath);
+        }
+
+        var blockedReceiptGoal = CreateCompletedPlanner("Planner timeout receipt failure", 401, 2);
+        var unaffectedGoal = CreateCompletedPlanner("Independent completed Planner", 402, 1);
+        var sample = Xunit.Assert.Single(
+            PlannerSampleDispatcher.CreateArtifacts(blockedReceiptGoal.OutputPath, 2));
+        Directory.CreateDirectory(sample.TerminalRecordPath);
+        Directory.CreateDirectory(sample.LaunchDiagnosticPath);
+        var runner = new BackgroundDispatchRunner(
+            new TestClock(startedAt.AddMinutes(21)),
+            isStillRunning: _ => false,
+            tryKillOwnedProcess: _ => true);
+
+        var reconciled = runner.SweepExitedProcesses(kernel);
+
+        Xunit.Assert.Equal(2, reconciled);
+        Xunit.Assert.True(blockedReceiptGoal.Task.LastVerification!.Succeeded);
+        Xunit.Assert.True(unaffectedGoal.Task.LastVerification!.Succeeded);
     }
 
     [Xunit.Fact]

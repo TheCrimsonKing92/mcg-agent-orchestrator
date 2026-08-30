@@ -228,8 +228,9 @@ internal static partial class PlannerCandidateSelector
 
     private static bool IsEligibleForContract(PlannerCandidateInput candidate) =>
         candidate.TerminalState == PlannerCandidateTerminalState.Succeeded &&
-        candidate.NormalizationState is PlannerCandidateNormalizationState.NotRequired or
-            PlannerCandidateNormalizationState.Normalized &&
+        (candidate.Index == 0 ||
+         candidate.NormalizationState is PlannerCandidateNormalizationState.NotRequired or
+             PlannerCandidateNormalizationState.Normalized) &&
         !string.IsNullOrWhiteSpace(candidate.StandardOutput);
 
     private static string BuildIneligibleDiagnostic(PlannerCandidateInput candidate) =>

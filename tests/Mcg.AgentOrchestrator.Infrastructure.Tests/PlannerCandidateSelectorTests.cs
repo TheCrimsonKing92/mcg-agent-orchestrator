@@ -72,6 +72,30 @@ public sealed class PlannerCandidateSelectorTests
     }
 
     [Xunit.Fact]
+    public void MalformedPrimaryWithValidContract_RetainsPrimaryAcceptanceSemantics()
+    {
+        var repositoryRoot = InfrastructureTestSupport.FindRepositoryRoot();
+        var plan = ReadPlannerFixture(repositoryRoot);
+
+        var result = PlannerCandidateSelector.Select(
+            [
+                new PlannerCandidateInput(
+                    0,
+                    plan,
+                    NormalizationState: PlannerCandidateNormalizationState.Malformed),
+                new PlannerCandidateInput(1, string.Empty)
+            ],
+            repositoryRoot);
+
+        Xunit.Assert.True(result.SelectedContract.Succeeded, result.SelectedContract.Diagnostic);
+        Xunit.Assert.Equal(0, result.Receipt.SelectedCandidateIndex);
+        Xunit.Assert.Equal("primary-fallback", result.Receipt.SelectionReason);
+        var primary = Xunit.Assert.Single(result.Receipt.Candidates!, candidate => candidate.CandidateIndex == 0);
+        Xunit.Assert.Equal(PlannerCandidateNormalizationState.Malformed, primary.NormalizationState);
+        Xunit.Assert.Equal(PlannerCandidateContractVerdict.Valid, primary.ContractVerdict);
+    }
+
+    [Xunit.Fact]
     public void InvalidPrimary_ValidSecondary_FailsClosedWithoutSelection()
     {
         var repositoryRoot = InfrastructureTestSupport.FindRepositoryRoot();

@@ -2130,18 +2130,28 @@ public sealed class BackgroundDispatchRunner
         kernel.RecordTaskProcessCancelled(goalId, taskId, cancelled, candidateEvidence);
         try
         {
-            if (task.RequiredRole == AgentRole.Planner &&
-                task.LastDispatch?.PlannerSampleCount is > 1)
-            {
-                PlannerSampleDispatcher.RecordCancelledSamples(
-                    processRecord.StandardOutputPath,
-                    task.LastDispatch.PlannerSampleCount,
-                    cancelledAt);
-            }
-
             if (resourceAccounting is not null)
             {
                 kernel.RecordTaskNote(goalId, taskId, FormatResourceReceipt(goalId, taskId, resourceAccounting));
+            }
+
+            if (task.RequiredRole == AgentRole.Planner &&
+                task.LastDispatch?.PlannerSampleCount is > 1)
+            {
+                try
+                {
+                    PlannerSampleDispatcher.RecordCancelledSamples(
+                        processRecord.StandardOutputPath,
+                        task.LastDispatch.PlannerSampleCount,
+                        cancelledAt);
+                }
+                catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+                {
+                    kernel.RecordTaskNote(
+                        goalId,
+                        taskId,
+                        $"Planner sample cancellation evidence could not be persisted: {ex.Message}");
+                }
             }
         }
         finally

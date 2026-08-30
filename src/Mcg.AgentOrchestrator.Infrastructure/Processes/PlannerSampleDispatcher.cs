@@ -270,10 +270,26 @@ internal static class PlannerSampleDispatcher
 
             var diagnostic = $"Planner sample timed out after the bounded {wait:c} wait ended at {deadline:O}; " +
                              "the sample was terminated and excluded from candidate selection.";
-            WriteTerminalRecord(
-                sample,
-                new PlannerSampleTerminalRecord(PlannerCandidateTerminalState.TimedOut, deadline));
-            WriteLaunchDiagnostic(sample, diagnostic);
+            try
+            {
+                WriteTerminalRecord(
+                    sample,
+                    new PlannerSampleTerminalRecord(PlannerCandidateTerminalState.TimedOut, deadline));
+            }
+            catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+            {
+                // Timeout evidence is optional. The primary completion must still settle even when
+                // an antivirus handle, read-only path, or full disk prevents this sidecar write.
+            }
+
+            try
+            {
+                WriteLaunchDiagnostic(sample, diagnostic);
+            }
+            catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+            {
+                // The terminal record and launch diagnostic are independent best-effort receipts.
+            }
         }
     }
 
