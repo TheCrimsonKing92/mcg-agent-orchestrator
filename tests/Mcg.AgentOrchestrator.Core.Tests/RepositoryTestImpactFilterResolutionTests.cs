@@ -195,8 +195,40 @@ public sealed class RepositoryTestImpactFilterResolutionTests
             ["src/Mcg.AgentOrchestrator.Core/Application/DispatchFailureClassifier.cs"],
             repository.Root);
 
-        Assert.Contains(plan.Checks, check =>
-            check.Command.Contains("FullyQualifiedName~HelperMediatedTests", StringComparer.Ordinal));
+        var infrastructureCheck = Assert.Single(plan.Checks, check =>
+            check.Command.Contains(
+                "tests/Mcg.AgentOrchestrator.Infrastructure.Tests/Mcg.AgentOrchestrator.Infrastructure.Tests.csproj"));
+        Assert.Contains(
+            "FullyQualifiedName~HelperMediatedTests",
+            RequiredTestImpactFilter(infrastructureCheck),
+            StringComparison.Ordinal);
+    }
+
+    [Xunit.Fact]
+    public void DirectConsumerSelectionDoesNotIncludeUnrelatedColocatedTestClasses()
+    {
+        using var repository = ReverseDependencyRepository.Create();
+        repository.Write(
+            "tests/Mcg.AgentOrchestrator.Infrastructure.Tests/DirectConsumers.cs",
+            "public sealed class DirectConsumerTests { " +
+            "private readonly DispatchFailureClassifier _classifier = new(); " +
+            "[Xunit.Fact] public void Runs() { } }" +
+            string.Join(
+                Environment.NewLine,
+                Enumerable.Range(1, 16).Select(index =>
+                    $"public sealed class Unrelated{index}Tests {{ " +
+                    "[Xunit.Fact] public void Runs() { } }")));
+
+        var plan = RepositoryTestImpactPlanner.Plan(
+            ["src/Mcg.AgentOrchestrator.Core/Application/DispatchFailureClassifier.cs"],
+            repository.Root);
+
+        var infrastructureCheck = Assert.Single(plan.Checks, check =>
+            check.Command.Contains(
+                "tests/Mcg.AgentOrchestrator.Infrastructure.Tests/Mcg.AgentOrchestrator.Infrastructure.Tests.csproj"));
+        var filter = RequiredTestImpactFilter(infrastructureCheck);
+        Assert.Contains("FullyQualifiedName~DirectConsumerTests", filter, StringComparison.Ordinal);
+        Assert.DoesNotContain("Unrelated", filter, StringComparison.Ordinal);
     }
 
     [Xunit.Fact]

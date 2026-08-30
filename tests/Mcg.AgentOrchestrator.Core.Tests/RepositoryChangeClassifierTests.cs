@@ -942,11 +942,10 @@ public sealed class RepositoryChangeClassifierTests
         var infrastructureCheck = Assert.Single(plan.Checks, check =>
             check.Command.Contains(
                 "tests/Mcg.AgentOrchestrator.Infrastructure.Tests/Mcg.AgentOrchestrator.Infrastructure.Tests.csproj"));
-        Assert.Contains("--filter", infrastructureCheck.Command);
         Assert.Contains(
             "FullyQualifiedName~RunGoalServiceTests",
-            infrastructureCheck.Command,
-            StringComparer.Ordinal);
+            RequiredTestImpactFilter(infrastructureCheck),
+            StringComparison.Ordinal);
     }
 
     [Xunit.Fact(DisplayName = "RepositoryTestImpactPlanner_selects_core_and_infrastructure_tests_for_mixed_changes")]

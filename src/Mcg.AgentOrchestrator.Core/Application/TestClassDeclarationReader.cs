@@ -231,11 +231,13 @@ internal sealed class UnavailableTestClassDeclarationReader : ITestClassDeclarat
 
 internal static class CSharpTestClassScanner
 {
-    internal sealed record SourceTypeDeclaration(string Name, bool IsPartial);
+    internal sealed record SourceTypeDeclaration(
+        string Name,
+        bool IsPartial,
+        IReadOnlySet<string> ReferencedIdentifiers);
 
     internal sealed record SourceSymbols(
         IReadOnlyList<SourceTypeDeclaration> DeclaredTypes,
-        IReadOnlySet<string> ReferencedIdentifiers,
         IReadOnlyList<string> TestClassNames);
 
     internal static bool TryReadClassNames(string source, out IReadOnlyList<string> classNames)
@@ -252,7 +254,7 @@ internal static class CSharpTestClassScanner
 
     internal static bool TryReadSourceSymbols(string source, out SourceSymbols symbols)
     {
-        symbols = new SourceSymbols([], new HashSet<string>(StringComparer.Ordinal), []);
+        symbols = new SourceSymbols([], []);
         if (!TryTokenize(source, out var tokens) || !TryFindDeclarations(tokens, out var declarations))
         {
             return false;
@@ -273,21 +275,32 @@ internal static class CSharpTestClassScanner
         var declarationNameIndexes = declarations
             .Select(declaration => declaration.NameIndex)
             .ToHashSet();
-        var referencedIdentifiers = tokens
-            .Select((token, index) => (token, index))
-            .Where(pair => pair.token.IsIdentifier && !declarationNameIndexes.Contains(pair.index))
-            .Select(pair => pair.token.Value)
-            .ToHashSet(StringComparer.Ordinal);
+        var sourceTypeDeclarations = topLevelDeclarations
+            .Select(declaration => new SourceTypeDeclaration(
+                declaration.Name,
+                declaration.IsPartial,
+                ReadReferencedIdentifiers(tokens, declaration, declarationNameIndexes)))
+            .OrderBy(declaration => declaration.Name, StringComparer.Ordinal)
+            .ToArray();
         symbols = new SourceSymbols(
-            topLevelDeclarations
-                .Select(declaration => new SourceTypeDeclaration(declaration.Name, declaration.IsPartial))
-                .Distinct()
-                .OrderBy(declaration => declaration.Name, StringComparer.Ordinal)
-                .ToArray(),
-            referencedIdentifiers,
+            sourceTypeDeclarations,
             classNames);
         return true;
     }
+
+    private static IReadOnlySet<string> ReadReferencedIdentifiers(
+        IReadOnlyList<Token> tokens,
+        TypeDeclaration declaration,
+        IReadOnlySet<int> declarationNameIndexes) =>
+        tokens
+            .Select((token, index) => (token, index))
+            .Where(pair =>
+                declaration.KeywordIndex <= pair.index &&
+                pair.index <= declaration.CloseBraceIndex &&
+                pair.token.IsIdentifier &&
+                !declarationNameIndexes.Contains(pair.index))
+            .Select(pair => pair.token.Value)
+            .ToHashSet(StringComparer.Ordinal);
 
     private static bool TryFindDeclarations(
         IReadOnlyList<Token> tokens,

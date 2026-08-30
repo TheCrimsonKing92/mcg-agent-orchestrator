@@ -133,27 +133,33 @@ internal static class ReverseDependencyTestImpactReader
                     .ToHashSet(StringComparer.Ordinal);
                 var consumers = indexedFiles.Values
                     .Where(file => !seenPaths.Contains(file.Path))
-                    .Where(file => file.Symbols!.ReferencedIdentifiers.Overlaps(frontierSet))
+                    .Where(file => file.Symbols!.DeclaredTypes.Any(declaration =>
+                        declaration.ReferencedIdentifiers.Overlaps(frontierSet)))
                     .OrderBy(file => file.Path, StringComparer.Ordinal)
                     .ToArray();
                 foreach (var consumer in consumers.Where(file => file.IsTargetTestProject))
                 {
                     var referencedFrontier = frontier
-                        .Where(symbol => consumer.Symbols!.ReferencedIdentifiers.Contains(symbol.Name))
+                        .Where(symbol => consumer.Symbols!.DeclaredTypes.Any(declaration =>
+                            declaration.ReferencedIdentifiers.Contains(symbol.Name)))
                         .ToArray();
-                    if (referencedFrontier.Any(symbol =>
-                        symbol.TestSelectionMode == TestSelectionMode.AllReferencingClasses))
-                    {
-                        selectedTestClasses.UnionWith(consumer.Symbols!.TestClassNames);
-                    }
-                    else
-                    {
-                        var ownedClassNames = referencedFrontier
-                            .Select(symbol => $"{symbol.Name}Tests")
-                            .ToHashSet(StringComparer.Ordinal);
-                        selectedTestClasses.UnionWith(
-                            consumer.Symbols!.TestClassNames.Where(ownedClassNames.Contains));
-                    }
+                    var allReferencingSymbols = referencedFrontier
+                        .Where(symbol => symbol.TestSelectionMode == TestSelectionMode.AllReferencingClasses)
+                        .Select(symbol => symbol.Name)
+                        .ToHashSet(StringComparer.Ordinal);
+                    var ownedClassNames = referencedFrontier
+                        .Where(symbol => symbol.TestSelectionMode == TestSelectionMode.OwnedClassOnly)
+                        .Select(symbol => $"{symbol.Name}Tests")
+                        .ToHashSet(StringComparer.Ordinal);
+                    selectedTestClasses.UnionWith(
+                        consumer.Symbols!.DeclaredTypes
+                            .Where(declaration => consumer.Symbols.TestClassNames.Contains(
+                                declaration.Name,
+                                StringComparer.Ordinal))
+                            .Where(declaration =>
+                                ownedClassNames.Contains(declaration.Name) ||
+                                declaration.ReferencedIdentifiers.Overlaps(allReferencingSymbols))
+                            .Select(declaration => declaration.Name));
 
                     if (selectedTestClasses.Count > MaximumSelectedTestClasses)
                     {
@@ -169,6 +175,7 @@ internal static class ReverseDependencyTestImpactReader
 
                 frontier = consumers
                     .SelectMany(file => file.Symbols!.DeclaredTypes
+                        .Where(declaration => declaration.ReferencedIdentifiers.Overlaps(frontierSet))
                         .Where(declaration =>
                             !file.IsTargetTestProject ||
                             !file.Symbols.TestClassNames.Contains(declaration.Name, StringComparer.Ordinal))
