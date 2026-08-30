@@ -312,6 +312,9 @@ public sealed class CliCommandTestsSubscriptionDispatchCommands : CliCommandTest
         var profiles = WorkerProfileCatalog.Default();
         kernel.ActivateGoal(goal.Id, agents);
         RecordRunningProcess(kernel, goal, task, root, Environment.ProcessId);
+        WriteIdentityBoundHeartbeat(
+            kernel.GetGoal(goal.Id)!.Tasks.Single().LastProcess!,
+            Environment.ProcessId);
         Goal? currentGoal = kernel.GetGoal(goal.Id);
 
         var output = CaptureConsole(() =>
