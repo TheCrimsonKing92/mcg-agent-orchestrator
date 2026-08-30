@@ -88,8 +88,19 @@ internal static class AssemblyTempRedirect
             && processId > 0;
     }
 
-    private static void ReapOrphanedRoots(string selectedRoot)
+    private static void ReapOrphanedRoots(string selectedRoot) =>
+        ReapOrphanedRoots(
+            selectedRoot,
+            WindowsNativeProcessInspection.Read,
+            TryDeleteTree);
+
+    internal static void ReapOrphanedRoots(
+        string selectedRoot,
+        Func<IEnumerable<int>?, WindowsNativeProcessInspection.ProcessInspectionResult> inspect,
+        Action<string> deleteTree)
     {
+        ArgumentNullException.ThrowIfNull(inspect);
+        ArgumentNullException.ThrowIfNull(deleteTree);
         try
         {
             var sharedRoot = Path.GetDirectoryName(selectedRoot);
@@ -102,7 +113,7 @@ internal static class AssemblyTempRedirect
                 .Select(Path.GetFileName)
                 .OfType<string>()
                 .ToArray();
-            var liveProcessIds = SnapshotLiveProcessIds(siblings, Environment.ProcessId);
+            var liveProcessIds = SnapshotLiveProcessIds(siblings, Environment.ProcessId, inspect);
             var reapableByProcess = SelectReapableRoots(
                 siblings,
                 Environment.ProcessId,
@@ -114,9 +125,9 @@ internal static class AssemblyTempRedirect
                               candidate => Directory.GetLastWriteTimeUtc(Path.Combine(sharedRoot, candidate))))
                           .Take(MaxRootsReapedPerProcess)
                           .ToArray();
-            foreach (var candidate in RevalidateExitedRoots(bounded))
+            foreach (var candidate in RevalidateExitedRoots(bounded, inspect))
             {
-                TryDeleteTree(Path.Combine(sharedRoot, candidate));
+                deleteTree(Path.Combine(sharedRoot, candidate));
             }
         }
         catch (Exception)
@@ -131,7 +142,8 @@ internal static class AssemblyTempRedirect
     // PID-reuse gap; inaccessible or otherwise ambiguous observations retain the root.
     private static HashSet<int> SnapshotLiveProcessIds(
         IEnumerable<string> siblingDirectoryNames,
-        int currentProcessId)
+        int currentProcessId,
+        Func<IEnumerable<int>?, WindowsNativeProcessInspection.ProcessInspectionResult> inspect)
     {
         var relevantProcessIds = new HashSet<int>();
         foreach (var name in siblingDirectoryNames)
@@ -142,7 +154,7 @@ internal static class AssemblyTempRedirect
             }
         }
 
-        var inspection = WindowsNativeProcessInspection.Read(relevantProcessIds);
+        var inspection = inspect(relevantProcessIds);
         if (inspection.Failure is not null)
         {
             return relevantProcessIds;
@@ -155,7 +167,9 @@ internal static class AssemblyTempRedirect
             .ToHashSet();
     }
 
-    private static IReadOnlyList<string> RevalidateExitedRoots(IEnumerable<string> boundedCandidates)
+    private static IReadOnlyList<string> RevalidateExitedRoots(
+        IEnumerable<string> boundedCandidates,
+        Func<IEnumerable<int>?, WindowsNativeProcessInspection.ProcessInspectionResult> inspect)
     {
         var candidates = boundedCandidates
             .Select(name => new { Name = name, Parsed = TryParseProcessTempRootName(name, out var pid), Pid = pid })
@@ -166,7 +180,7 @@ internal static class AssemblyTempRedirect
             return [];
         }
 
-        var inspection = WindowsNativeProcessInspection.Read(
+        var inspection = inspect(
             candidates.Select(candidate => candidate.Pid).Distinct().ToArray());
         if (inspection.Failure is not null)
         {

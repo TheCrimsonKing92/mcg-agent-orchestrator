@@ -189,47 +189,6 @@ public sealed class WorkerProcessJobsTests : IDisposable
         }
     }
 
-    [Xunit.Fact(DisplayName = "TempRootJanitor_PID_only_control_deletes_template_and_instance_guard_preserves_it")]
-    public void TempRootJanitorPidOnlyControlDeletesTemplateAndInstanceGuardPreservesIt()
-    {
-        if (!OperatingSystem.IsWindows())
-        {
-            return;
-        }
-
-        var processId = 4246;
-        var sharedRoot = Path.Combine(Path.GetTempPath(), $"janitor-template-{Guid.NewGuid():N}");
-        var ownedRootPath = TempRootJanitor.BuildOwnedRootPath(sharedRoot, processId);
-        var templatePath = Path.Combine(ownedRootPath, "mcg-orchestrator-tests", "template");
-        var gitPath = Path.Combine(templatePath, ".git");
-        var captured = AvailableProcess(processId);
-        try
-        {
-            Directory.CreateDirectory(gitPath);
-
-            var legacy = TempRootJanitor.ReapOwnedRoot(sharedRoot, processId);
-
-            Assert.Equal(TempRootJanitorDeleteStatus.Deleted, legacy.Status);
-            Assert.False(Directory.Exists(templatePath));
-            Assert.False(Directory.Exists(gitPath));
-
-            Directory.CreateDirectory(gitPath);
-            var replacement = captured with { StartedAt = captured.StartedAt!.Value.AddSeconds(1) };
-            var guarded = Assert.Single(TempRootJanitor.ReapOwnedRoots(
-                [new TempRootJanitorOwnedRoot(processId, sharedRoot, captured, "seeded-template-control")],
-                _ => Inspected(replacement),
-                TempRootJanitor.DeleteTree));
-
-            Assert.Equal(TempRootJanitorReapDisposition.RetainedRecycledPid, guarded.Disposition);
-            Assert.True(Directory.Exists(templatePath));
-            Assert.True(Directory.Exists(gitPath));
-        }
-        finally
-        {
-            _ = TempRootJanitor.DeleteTree(sharedRoot);
-        }
-    }
-
     [Xunit.Fact(DisplayName = "TempRootJanitor_dead_matching_owner_deletes_and_continues_after_failure")]
     public void TempRootJanitorDeadMatchingOwnerDeletesAndContinuesAfterFailure()
     {
@@ -273,6 +232,95 @@ public sealed class WorkerProcessJobsTests : IDisposable
         {
             _ = TempRootJanitor.DeleteTree(sharedRoot);
         }
+    }
+
+    [Xunit.Fact(DisplayName = "TempRootJanitor_dead_owner_reports_absent_and_rejects_escaped_candidate")]
+    public void TempRootJanitorDeadOwnerReportsAbsentAndRejectsEscapedCandidate()
+    {
+        if (!OperatingSystem.IsWindows())
+        {
+            return;
+        }
+
+        var sharedRoot = Path.Combine(Path.GetTempPath(), $"janitor-path-{Guid.NewGuid():N}");
+        var absentId = 4247;
+        var escapedId = 4248;
+        var escapedPath = Path.GetFullPath(Path.Combine(sharedRoot, "..", $"escaped-{Guid.NewGuid():N}"));
+        var deleteCalls = 0;
+        try
+        {
+            var results = TempRootJanitor.ReapOwnedRoots(
+                [
+                    new TempRootJanitorOwnedRoot(
+                        absentId,
+                        sharedRoot,
+                        AvailableProcess(absentId),
+                        "absent-control"),
+                    new TempRootJanitorOwnedRoot(
+                        escapedId,
+                        sharedRoot,
+                        AvailableProcess(escapedId),
+                        "containment-control",
+                        escapedPath)
+                ],
+                ids => Inspected(ids.Select(ExitedProcess).ToArray()),
+                path =>
+                {
+                    deleteCalls++;
+                    return TempRootJanitor.DeleteTree(path);
+                });
+
+            Assert.Collection(
+                results,
+                result => Assert.Equal(TempRootJanitorReapDisposition.AlreadyAbsent, result.Disposition),
+                result =>
+                {
+                    Assert.Equal(TempRootJanitorReapDisposition.RejectedPath, result.Disposition);
+                    Assert.Equal(escapedPath, result.Path);
+                });
+            Assert.Equal(1, deleteCalls);
+            Assert.False(Directory.Exists(escapedPath));
+        }
+        finally
+        {
+            _ = TempRootJanitor.DeleteTree(sharedRoot);
+        }
+    }
+
+    [Xunit.Fact(DisplayName = "WorkerProcessJobs_emits_one_bounded_receipt_per_reap_candidate")]
+    public void WorkerProcessJobsEmitsOneBoundedReceiptPerReapCandidate()
+    {
+        if (!OperatingSystem.IsWindows())
+        {
+            return;
+        }
+
+        var owner = AvailableProcess(4249);
+        var results = TempRootJanitor.ReapOwnedRoots(
+            [
+                new TempRootJanitorOwnedRoot(
+                    owner.ProcessId,
+                    new string('s', 500),
+                    owner,
+                    new string('c', 100)),
+                new TempRootJanitorOwnedRoot(
+                    owner.ProcessId + 1,
+                    "shared",
+                    AvailableProcess(owner.ProcessId + 1),
+                    "second")
+            ],
+            ids => Inspected(ids.Select(id => AvailableProcess(id)).ToArray()),
+            _ => throw new Xunit.Sdk.XunitException("Live owners must not reach deletion."));
+        var receipts = new List<string>();
+
+        WorkerProcessJobs.EmitTempRootReapResults(results, receipts.Add);
+
+        Assert.Equal(2, receipts.Count);
+        Assert.All(receipts, receipt =>
+        {
+            Assert.StartsWith("temp-root-janitor ", receipt, StringComparison.Ordinal);
+            Assert.True(receipt.Length <= 600, $"Receipt was not bounded: {receipt.Length}");
+        });
     }
 
     private static ProcessInspectionRecord AvailableProcess(int processId) =>

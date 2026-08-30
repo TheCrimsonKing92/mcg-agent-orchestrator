@@ -18,7 +18,8 @@ internal sealed record TempRootJanitorOwnedRoot(
     int ProcessId,
     string SharedRoot,
     ProcessInspectionRecord? CapturedOwner,
-    string CaptureSource);
+    string CaptureSource,
+    string? CandidatePath = null);
 
 internal enum TempRootJanitorReapDisposition
 {
@@ -76,7 +77,10 @@ internal static class TempRootJanitor
                 processId,
                 sharedRoot,
                 captured.GetValueOrDefault(processId),
-                "explicit-shared-root"))));
+                "explicit-shared-root",
+                string.IsNullOrWhiteSpace(sharedRoot)
+                    ? null
+                    : BuildOwnedRootPath(sharedRoot, processId)))));
     }
 
     internal static IReadOnlyList<TempRootJanitorOwnedRoot> SnapshotOwnedRoots(
@@ -104,7 +108,8 @@ internal static class TempRootJanitor
                     processId,
                     sharedRoot,
                     capturedOwner,
-                    "standard-shared-root")));
+                    "standard-shared-root",
+                    BuildOwnedRootPath(sharedRoot, processId))));
 
             try
             {
@@ -114,11 +119,13 @@ internal static class TempRootJanitor
                     : Path.GetDirectoryName(imagePath);
                 if (!string.IsNullOrWhiteSpace(baseDirectory))
                 {
+                    var fallbackRoot = Path.Combine(baseDirectory, ".test-tmp");
                     ownedRoots.Add(new TempRootJanitorOwnedRoot(
                         processId,
-                        Path.Combine(baseDirectory, ".test-tmp"),
+                        fallbackRoot,
                         capturedOwner,
-                        "image-fallback-root"));
+                        "image-fallback-root",
+                        BuildOwnedRootPath(fallbackRoot, processId)));
                 }
             }
             catch
@@ -159,15 +166,16 @@ internal static class TempRootJanitor
             var candidates = ownedRoots
                 .Where(ownedRoot => ownedRoot.ProcessId > 0)
                 .DistinctBy(
-                    ownedRoot => $"{ownedRoot.ProcessId}:{ownedRoot.SharedRoot}",
+                    ownedRoot => $"{ownedRoot.ProcessId}:{ownedRoot.SharedRoot}:{ownedRoot.CandidatePath}",
                     StringComparer.OrdinalIgnoreCase)
                 .ToArray();
             var observed = CaptureOwners(candidates.Select(candidate => candidate.ProcessId), inspect);
             foreach (var ownedRoot in candidates)
             {
-                var path = string.IsNullOrWhiteSpace(ownedRoot.SharedRoot)
-                    ? ownedRoot.SharedRoot ?? string.Empty
-                    : BuildOwnedRootPath(ownedRoot.SharedRoot, ownedRoot.ProcessId);
+                var path = ownedRoot.CandidatePath ??
+                    (string.IsNullOrWhiteSpace(ownedRoot.SharedRoot)
+                        ? ownedRoot.SharedRoot ?? string.Empty
+                        : BuildOwnedRootPath(ownedRoot.SharedRoot, ownedRoot.ProcessId));
                 observed.TryGetValue(ownedRoot.ProcessId, out var observedOwner);
                 TempRootJanitorReapResult result;
                 if (string.IsNullOrWhiteSpace(ownedRoot.SharedRoot) ||
@@ -237,7 +245,6 @@ internal static class TempRootJanitor
                 }
 
                 results.Add(result);
-                System.Diagnostics.Debug.WriteLine(FormatDiagnostic(result));
             }
         }
         catch

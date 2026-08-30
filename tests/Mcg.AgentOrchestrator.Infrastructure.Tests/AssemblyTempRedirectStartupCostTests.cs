@@ -4,6 +4,58 @@ using Mcg.AgentOrchestrator.Infrastructure;
 public sealed class AssemblyTempRedirectStartupCostTests(ITestOutputHelper output)
 {
     [Fact]
+    public void StartupSweepUsesOneSelectionBatchAndOneBoundaryBatch()
+    {
+        if (!OperatingSystem.IsWindows())
+        {
+            return;
+        }
+
+        var sharedRoot = Path.Combine(Path.GetTempPath(), $"startup-batch-{Guid.NewGuid():N}");
+        var selectedRoot = AssemblyTempRedirect.BuildProcessTempRoot(sharedRoot, Environment.ProcessId);
+        var firstPid = 0x1010;
+        var secondPid = 0x2020;
+        var firstRoot = AssemblyTempRedirect.BuildProcessTempRoot(sharedRoot, firstPid);
+        var secondRoot = AssemblyTempRedirect.BuildProcessTempRoot(sharedRoot, secondPid);
+        var reads = new List<int[]>();
+        var deleted = new List<string>();
+        Directory.CreateDirectory(selectedRoot);
+        Directory.CreateDirectory(firstRoot);
+        Directory.CreateDirectory(secondRoot);
+        try
+        {
+            AssemblyTempRedirect.ReapOrphanedRoots(
+                selectedRoot,
+                new TempRootStartupTimings(),
+                ids =>
+                {
+                    var requested = ids!.Order().ToArray();
+                    reads.Add(requested);
+                    return WindowsNativeProcessInspection.ProcessInspectionResult.Success(
+                        requested.ToDictionary(
+                            processId => processId,
+                            processId => reads.Count == 1 || processId == firstPid
+                                ? ExitedProcess(processId)
+                                : AvailableProcess(processId)));
+                },
+                path =>
+                {
+                    deleted.Add(path);
+                    return TempRootDeleteOutcome.Deleted(path, readOnlyAttributesCleared: 0);
+                });
+
+            Assert.Equal(2, reads.Count);
+            Assert.Equal([firstPid, secondPid], reads[0]);
+            Assert.Equal([firstPid, secondPid], reads[1]);
+            Assert.Equal([firstRoot], deleted, StringComparer.OrdinalIgnoreCase);
+        }
+        finally
+        {
+            _ = TempRootJanitor.DeleteTree(sharedRoot);
+        }
+    }
+
+    [Fact]
     public void CurrentHostPublishesInitializerTimingReceipt()
     {
         if (!OperatingSystem.IsWindows())
@@ -212,6 +264,26 @@ public sealed class AssemblyTempRedirectStartupCostTests(ITestOutputHelper outpu
         Assert.Equal(["p30", "p20"], selected);
         Assert.Equal(2, selected.Distinct(StringComparer.OrdinalIgnoreCase).Count());
     }
+
+    private static ProcessInspectionRecord ExitedProcess(int processId) =>
+        new(
+            processId,
+            ParentProcessId: 0,
+            Name: string.Empty,
+            ExecutablePath: null,
+            StartedAt: null,
+            CommandLine: null,
+            ProcessInspectionStatus.Exited);
+
+    private static ProcessInspectionRecord AvailableProcess(int processId) =>
+        new(
+            processId,
+            ParentProcessId: 100,
+            Name: "testhost",
+            ExecutablePath: @"C:\host\testhost.exe",
+            StartedAt: DateTimeOffset.Parse("2026-08-30T12:00:00Z"),
+            CommandLine: "testhost startup-batch-control",
+            ProcessInspectionStatus.Available);
 
     [Fact]
     public void TimedOutLabelSetterFallsBackAndReportsTypedDeadlineOutcome()

@@ -121,13 +121,15 @@ internal static class AssemblyTempRedirect
     }
 
     private static void ReapOrphanedRoots(string selectedRoot, TempRootStartupTimings timings) =>
-        ReapOrphanedRoots(selectedRoot, timings, DeleteTree);
+        ReapOrphanedRoots(selectedRoot, timings, WindowsNativeProcessInspection.Read, DeleteTree);
 
-    private static void ReapOrphanedRoots(
+    internal static void ReapOrphanedRoots(
         string selectedRoot,
         TempRootStartupTimings timings,
+        Func<IEnumerable<int>?, WindowsNativeProcessInspection.ProcessInspectionResult> inspect,
         Func<string, TempRootDeleteOutcome> deleteTree)
     {
+        ArgumentNullException.ThrowIfNull(inspect);
         timings.ReapRan = true;
         try
         {
@@ -147,7 +149,7 @@ internal static class AssemblyTempRedirect
             timings.ReapSiblingCount = siblings.Length;
 
             phaseClock.Restart();
-            var liveProcessIds = SnapshotLiveProcessIds(siblings, Environment.ProcessId);
+            var liveProcessIds = SnapshotLiveProcessIds(siblings, Environment.ProcessId, inspect);
             phaseClock.Stop();
             timings.ReapProcessSnapshotElapsedMilliseconds = phaseClock.ElapsedMilliseconds;
 
@@ -168,7 +170,7 @@ internal static class AssemblyTempRedirect
             timings.ReapBoundSelectionElapsedMilliseconds = phaseClock.ElapsedMilliseconds;
 
             phaseClock.Restart();
-            var revalidated = RevalidateExitedRoots(bounded, WindowsNativeProcessInspection.Read);
+            var revalidated = RevalidateExitedRoots(bounded, inspect);
             ReapBoundedRoots(sharedRoot, revalidated, deleteTree, timings);
             phaseClock.Stop();
             timings.ReapDeleteElapsedMilliseconds = phaseClock.ElapsedMilliseconds;
@@ -219,7 +221,8 @@ internal static class AssemblyTempRedirect
     // PID-reuse gap; inaccessible or otherwise ambiguous observations retain the root.
     private static HashSet<int> SnapshotLiveProcessIds(
         IEnumerable<string> siblingDirectoryNames,
-        int currentProcessId)
+        int currentProcessId,
+        Func<IEnumerable<int>?, WindowsNativeProcessInspection.ProcessInspectionResult> inspect)
     {
         var relevantProcessIds = new HashSet<int>();
         foreach (var name in siblingDirectoryNames)
@@ -230,7 +233,7 @@ internal static class AssemblyTempRedirect
             }
         }
 
-        var inspection = WindowsNativeProcessInspection.Read(relevantProcessIds);
+        var inspection = inspect(relevantProcessIds);
         if (inspection.Failure is not null)
         {
             return relevantProcessIds;
@@ -301,7 +304,11 @@ internal static class AssemblyTempRedirect
     {
         try
         {
-            ReapOrphanedRoots(selectedRoot, timings, deleteTree);
+            ReapOrphanedRoots(
+                selectedRoot,
+                timings,
+                WindowsNativeProcessInspection.Read,
+                deleteTree);
             totalClock.Stop();
             timings.TotalElapsedMilliseconds = totalClock.ElapsedMilliseconds;
             return TryFormatTimingDiagnostic(timings);
