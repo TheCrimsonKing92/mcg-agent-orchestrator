@@ -441,12 +441,23 @@ public sealed class BackgroundDispatchRunner
         var sampleArtifacts = task.RequiredRole == AgentRole.Planner
             ? PlannerSampleDispatcher.CreateArtifacts(stdoutPath, dispatch.PlannerSampleCount)
             : [];
-        var sampleLaunches = PlannerSampleDispatcher.StartSamples(
-            sampleArtifacts,
-            runParameters,
-            ResolveDispatchHostAssembly(),
-            $"{goalId.Value}:{taskId.Value}",
-            _startProcess);
+        IReadOnlyList<PlannerSampleLaunch> sampleLaunches;
+        try
+        {
+            sampleLaunches = PlannerSampleDispatcher.StartSamples(
+                sampleArtifacts,
+                runParameters,
+                ResolveDispatchHostAssembly(),
+                $"{goalId.Value}:{taskId.Value}",
+                _startProcess);
+        }
+        catch
+        {
+            // The primary is already registered but cannot be persisted until sample ownership is
+            // known. If optional-sample preflight fails loudly, release that unrecorded ownership.
+            TerminateUnreleasedDispatchHost(process);
+            throw;
+        }
 
         var record = new TaskProcessRecord(
             process.Id,
@@ -483,8 +494,17 @@ public sealed class BackgroundDispatchRunner
 
         try
         {
-            PlannerSampleDispatcher.ReleaseStartGates(sampleLaunches);
-            ReleaseDispatchHostStartGate(startGatePath);
+            try
+            {
+                PlannerSampleDispatcher.ReleaseStartGates(sampleLaunches);
+            }
+            finally
+            {
+                // The primary is already durable. A deferred optional-sample diagnostic failure must
+                // remain loud without stranding the authoritative dispatch behind its start gate.
+                ReleaseDispatchHostStartGate(startGatePath);
+            }
+
             if (confirmWorkerStart is not null && !confirmWorkerStart())
             {
                 throw new InvalidOperationException(
@@ -500,11 +520,11 @@ public sealed class BackgroundDispatchRunner
         return DispatchProcessStartResult.Started(record);
     }
 
-    private static void TerminateUnreleasedDispatchHost(Process process)
+    private void TerminateUnreleasedDispatchHost(Process process)
     {
         try
         {
-            if (!process.HasExited)
+            if (!_tryKillOwnedProcess(process.Id) && !process.HasExited)
             {
                 process.Kill(entireProcessTree: true);
             }
@@ -1313,7 +1333,11 @@ public sealed class BackgroundDispatchRunner
                 var selection = PlannerCandidateSelector.Select(
                     PlannerSampleDispatcher.CollectCandidates(
                         processRecord.StandardOutputPath,
-                        task.LastDispatch.PlannerSampleCount),
+                        task.LastDispatch.PlannerSampleCount,
+                        dispatchAttempt,
+                        processRecord.CompletedAt is { } completedAt
+                            ? Math.Max(0, (long)(completedAt - processRecord.StartedAt).TotalMilliseconds)
+                            : null),
                     processRecord.WorkingDirectory,
                     acceptanceCriteria);
                 plannerContract = selection.SelectedContract;
@@ -2092,9 +2116,10 @@ public sealed class BackgroundDispatchRunner
         {
             resourceAccounting ??= _recoveryService.ReleaseTrackedProcessJobs(processRecord);
         }
+        var cancelledAt = _clock.UtcNow;
         var cancelled = processRecord with
         {
-            CompletedAt = _clock.UtcNow,
+            CompletedAt = cancelledAt,
             WasCancelled = true,
             ResourceAccounting = resourceAccounting,
             WasCancelledByConductor = cancelledByConductor
@@ -2103,12 +2128,37 @@ public sealed class BackgroundDispatchRunner
         var candidateEvidence = CancellationCandidateEvidenceClassifier.Classify(
             task, processRecord, goalId, _worktreeCommitter);
         kernel.RecordTaskProcessCancelled(goalId, taskId, cancelled, candidateEvidence);
-        if (resourceAccounting is not null)
+        try
         {
-            kernel.RecordTaskNote(goalId, taskId, FormatResourceReceipt(goalId, taskId, resourceAccounting));
+            if (resourceAccounting is not null)
+            {
+                kernel.RecordTaskNote(goalId, taskId, FormatResourceReceipt(goalId, taskId, resourceAccounting));
+            }
+
+            if (task.RequiredRole == AgentRole.Planner &&
+                task.LastDispatch?.PlannerSampleCount is > 1)
+            {
+                try
+                {
+                    PlannerSampleDispatcher.RecordCancelledSamples(
+                        processRecord.StandardOutputPath,
+                        task.LastDispatch.PlannerSampleCount,
+                        cancelledAt);
+                }
+                catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+                {
+                    kernel.RecordTaskNote(
+                        goalId,
+                        taskId,
+                        $"Planner sample cancellation evidence could not be persisted: {ex.Message}");
+                }
+            }
+        }
+        finally
+        {
+            EvictProcessLogCache(processRecord);
         }
 
-        EvictProcessLogCache(processRecord);
         return cancelled;
     }
 
@@ -2500,57 +2550,7 @@ public sealed class BackgroundDispatchRunner
         TaskDispatchRecord? dispatch,
         string standardOutputPath,
         Func<string, string>? readAllText = null)
-    {
-        if (dispatch?.WorkerProviderKind is not (ProviderKind.OpenAICodexCli or ProviderKind.OpenAICodexSpark) ||
-            !dispatch.Command.Contains("--json", StringComparison.OrdinalIgnoreCase) ||
-            !File.Exists(standardOutputPath))
-        {
-            return null;
-        }
-
-        var rawAuditPath = standardOutputPath + ".jsonl";
-        var rawSourcePath = File.Exists(rawAuditPath) ? rawAuditPath : standardOutputPath;
-        string raw;
-        try
-        {
-            raw = (readAllText ?? File.ReadAllText)(rawSourcePath);
-        }
-        catch (IOException)
-        {
-            return new CodexJsonlParseResult(string.Empty, null, "unreadable", Recognized: false);
-        }
-        catch (UnauthorizedAccessException)
-        {
-            return new CodexJsonlParseResult(string.Empty, null, "unreadable", Recognized: false);
-        }
-
-        var parsed = CodexJsonlUsageParser.Parse(raw);
-        if (!parsed.Recognized || string.IsNullOrEmpty(parsed.WorkerOutput))
-        {
-            return parsed;
-        }
-
-        try
-        {
-            if (!File.Exists(rawAuditPath))
-            {
-                File.Copy(standardOutputPath, rawAuditPath, overwrite: false);
-            }
-
-            File.WriteAllText(standardOutputPath, parsed.WorkerOutput, new UTF8Encoding(false));
-        }
-        catch (IOException)
-        {
-            // The process log remains authoritative when a lock or a competing replay prevents
-            // normalization. Parsed provider usage is still safe to attribute to this attempt.
-        }
-        catch (UnauthorizedAccessException)
-        {
-            // Preserve the raw process log and continue recording the completion outcome.
-        }
-
-        return parsed;
-    }
+        => StructuredCodexOutputNormalizer.Normalize(dispatch, standardOutputPath, readAllText).Parsed;
 
     private static CompleteLogReadResult ReadCompleteLog(string path)
     {

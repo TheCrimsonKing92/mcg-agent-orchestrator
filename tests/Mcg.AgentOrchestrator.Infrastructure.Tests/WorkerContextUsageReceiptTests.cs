@@ -274,6 +274,38 @@ public sealed class WorkerContextUsageReceiptTests
         }
     }
 
+    [Xunit.Fact]
+    public void NormalizeStructuredCodexOutput_PartiallyMalformedJsonl_RewritesOutputAndTypesMalformed()
+    {
+        var root = Path.Combine(Path.GetTempPath(), $"ctx-usage-{Guid.NewGuid():N}");
+        Directory.CreateDirectory(root);
+        try
+        {
+            var outputPath = Path.Combine(root, "worker.out.log");
+            var originalJsonl = """
+                {"type":"item.completed","item":{"type":"agent_message","text":"WORKER_RESULT:\nfiles: none\nEND_WORKER_RESULT"}}
+                {not-jsonl}
+                """;
+            File.WriteAllText(outputPath, originalJsonl);
+            var dispatch = new TaskDispatchRecord(
+                "developer",
+                "codex exec --json",
+                root,
+                DateTimeOffset.Parse("2026-08-27T00:00:00Z"),
+                WorkerProviderKind: ProviderKind.OpenAICodexCli);
+
+            var result = StructuredCodexOutputNormalizer.Normalize(dispatch, outputPath);
+
+            Assert.Equal(PlannerCandidateNormalizationState.Malformed, result.State);
+            Assert.Equal(result.Parsed!.WorkerOutput, File.ReadAllText(outputPath));
+            Assert.Equal(originalJsonl, File.ReadAllText(outputPath + ".jsonl"));
+        }
+        finally
+        {
+            Directory.Delete(root, recursive: true);
+        }
+    }
+
     [Xunit.Theory]
     [Xunit.InlineData(ProviderKind.OpenAICodexCli)]
     [Xunit.InlineData(ProviderKind.OpenAICodexSpark)]
