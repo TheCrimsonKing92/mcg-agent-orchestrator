@@ -71,7 +71,7 @@ public sealed class WorkerContextPackageBuilder
             var failure = ValidateMandatoryFile(root, artifact);
             effective.Add(failure is null
                 ? artifact
-                : FallbackOrThrow(artifact, failure, allowInlineFallback));
+                : RecoverMandatoryFileOrThrow(root, artifact, failure, allowInlineFallback));
         }
 
         var ordered = effective
@@ -188,13 +188,14 @@ public sealed class WorkerContextPackageBuilder
             return new WorkerContextSectionReceipt(
                 artifact.Identity.Value,
                 rendered.Length,
-                artifact.AuthoritativeBytes?.Length ?? 0,
+                artifact.AuthoritativeByteCount,
                 artifact.ContentHash,
                 artifact.DeliveryMode,
                 artifact.ContractVersion.Value,
                 artifact.RoleVisibility,
                 artifact.FallbackReason,
-                artifact.MandatoryRelativePath);
+                artifact.MandatoryRelativePath,
+                artifact.Kind);
         }).ToArray();
 
         var projection = package.ReviewFindingProjection;
@@ -217,7 +218,12 @@ public sealed class WorkerContextPackageBuilder
     {
         if (artifact.DeliveryMode == ContextDeliveryMode.MandatoryFile)
         {
-            return $"MANDATORY READ: identity={artifact.Identity.Value}; path={artifact.MandatoryRelativePath}; sha256={artifact.ContentHash}; contract={artifact.ContractVersion.Value}. Read and verify the complete file before acting.";
+            var validation = artifact.FallbackReason is null ? "verified" : "recovered";
+            var problemExcerpt = artifact.FallbackReason is null
+                ? string.Empty
+                : $"; problem_excerpt={BoundProblemExcerpt(artifact.FallbackReason)}";
+            return $"MANDATORY READ: identity={artifact.Identity.Value}; purpose={artifact.Kind}; path={artifact.MandatoryRelativePath}; bytes={artifact.AuthoritativeByteCount}; sha256={artifact.ContentHash}; contract={artifact.ContractVersion.Value}; validation={validation}{problemExcerpt}. " +
+                "The complete artifact remains readable at the path on demand. Normally report only this identity receipt and exact source locations; do not reproduce the artifact body on the happy path.";
         }
 
         var bytes = artifact.AuthoritativeBytes!;
@@ -237,14 +243,15 @@ public sealed class WorkerContextPackageBuilder
         {
             return WorkerContextArtifact.Create(
                 identity,
-                ContextArtifactKind.RegisteredContext,
+                section.ArtifactKind ?? ContextArtifactKind.RegisteredContext,
                 authoritativeBytes: null,
                 section.RoleVisibility,
                 section.DeliveryMode,
                 version,
                 section.MandatoryRelativePath,
                 section.ContentHash,
-                section.FallbackReason);
+                section.FallbackReason,
+                section.ByteCount);
         }
 
         var headerPrefix = $"INLINE FULL: identity={section.LogicalIdentity}; sha256={section.ContentHash}; contract={section.ContractVersion}; encoding=";
@@ -302,7 +309,8 @@ public sealed class WorkerContextPackageBuilder
         return byIdentity.Values;
     }
 
-    private static WorkerContextArtifact FallbackOrThrow(
+    private static WorkerContextArtifact RecoverMandatoryFileOrThrow(
+        string root,
         WorkerContextArtifact artifact,
         string reason,
         bool allowInlineFallback)
@@ -310,7 +318,63 @@ public sealed class WorkerContextPackageBuilder
         if (allowInlineFallback && artifact.AuthoritativeBytes is not null)
         {
             ValidateAuthoritativeBytes(artifact);
-            return artifact.WithInlineFallback(reason);
+            var recoveryRelativePath = $".orchestrator-context/recovered/{artifact.ContentHash}.bin";
+            var recoveryDirectory = Path.Combine(root, ".orchestrator-context", "recovered");
+            try
+            {
+                if (Directory.Exists(recoveryDirectory) &&
+                    (File.GetAttributes(recoveryDirectory) & FileAttributes.ReparsePoint) != 0)
+                {
+                    throw new WorkerContextPreparationException(
+                        artifact.Identity,
+                        "recovery-reparse-point",
+                        "The package-owned recovery directory is a reparse point.");
+                }
+
+                Directory.CreateDirectory(recoveryDirectory);
+                var recoveryPath = Path.Combine(recoveryDirectory, $"{artifact.ContentHash}.bin");
+                if (File.Exists(recoveryPath) &&
+                    (File.GetAttributes(recoveryPath) & FileAttributes.ReparsePoint) != 0)
+                {
+                    throw new WorkerContextPreparationException(
+                        artifact.Identity,
+                        "recovery-reparse-point",
+                        "The package-owned recovery file is a reparse point.");
+                }
+
+                File.WriteAllBytes(recoveryPath, artifact.AuthoritativeBytes);
+                var recovered = WorkerContextArtifact.Create(
+                    artifact.Identity,
+                    artifact.Kind,
+                    artifact.AuthoritativeBytes,
+                    artifact.RoleVisibility,
+                    ContextDeliveryMode.MandatoryFile,
+                    artifact.ContractVersion,
+                    recoveryRelativePath,
+                    artifact.ContentHash,
+                    reason);
+                var recoveryFailure = ValidateMandatoryFile(root, recovered);
+                if (recoveryFailure is not null)
+                {
+                    throw new WorkerContextPreparationException(
+                        artifact.Identity,
+                        $"recovery-{recoveryFailure}",
+                        "Recovered mandatory artifact did not pass package validation.");
+                }
+
+                return recovered;
+            }
+            catch (WorkerContextPreparationException)
+            {
+                throw;
+            }
+            catch (Exception exception) when (exception is IOException or UnauthorizedAccessException)
+            {
+                throw new WorkerContextPreparationException(
+                    artifact.Identity,
+                    "recovery-materialization-failed",
+                    $"Package-owned recovery materialization failed: {exception.GetType().Name}.");
+            }
         }
 
         throw new WorkerContextPreparationException(
@@ -318,6 +382,9 @@ public sealed class WorkerContextPackageBuilder
             reason,
             "Mandatory artifact cannot be supplied through a verified delivery channel.");
     }
+
+    private static string BoundProblemExcerpt(string value) =>
+        value.Length <= 240 ? value : value[..240] + $"...[{value.Length - 240} chars omitted]";
 
     private static void ValidateAuthoritativeBytes(WorkerContextArtifact artifact)
     {

@@ -145,7 +145,8 @@ public sealed class WorkerContextArtifact
         ContextContractVersion contractVersion,
         byte[]? authoritativeBytes,
         string? mandatoryRelativePath,
-        string? fallbackReason)
+        string? fallbackReason,
+        int authoritativeByteCount)
     {
         Identity = identity;
         Kind = kind;
@@ -156,6 +157,7 @@ public sealed class WorkerContextArtifact
         _authoritativeBytes = authoritativeBytes?.ToArray();
         MandatoryRelativePath = mandatoryRelativePath;
         FallbackReason = fallbackReason;
+        AuthoritativeByteCount = authoritativeByteCount;
     }
 
     public LogicalArtifactIdentity Identity { get; }
@@ -167,6 +169,7 @@ public sealed class WorkerContextArtifact
     public byte[]? AuthoritativeBytes => _authoritativeBytes?.ToArray();
     public string? MandatoryRelativePath { get; }
     public string? FallbackReason { get; }
+    public int AuthoritativeByteCount { get; }
     public static WorkerContextArtifact Create(
         LogicalArtifactIdentity identity,
         ContextArtifactKind kind,
@@ -176,7 +179,8 @@ public sealed class WorkerContextArtifact
         ContextContractVersion contractVersion,
         string? mandatoryRelativePath = null,
         string? expectedContentHash = null,
-        string? fallbackReason = null)
+        string? fallbackReason = null,
+        int? authoritativeByteCount = null)
     {
         if (contractVersion.Value <= 0)
         {
@@ -210,6 +214,14 @@ public sealed class WorkerContextArtifact
             throw new ArgumentException("Authoritative bytes do not match the expected SHA-256 hash.", nameof(authoritativeBytes));
         }
 
+        var byteCount = authoritativeByteCount ?? authoritativeBytes?.Length ?? 0;
+        if (byteCount < 0 || (authoritativeBytes is not null && byteCount != authoritativeBytes.Length))
+        {
+            throw new ArgumentOutOfRangeException(
+                nameof(authoritativeByteCount),
+                "Authoritative byte count must be non-negative and match supplied authoritative bytes.");
+        }
+
         if (deliveryMode == ContextDeliveryMode.InlineFull && authoritativeBytes is null)
         {
             throw new ArgumentException("InlineFull requires complete authoritative bytes.", nameof(authoritativeBytes));
@@ -229,25 +241,8 @@ public sealed class WorkerContextArtifact
             contractVersion,
             authoritativeBytes,
             mandatoryRelativePath,
-            fallbackReason);
-    }
-
-    public WorkerContextArtifact WithInlineFallback(string reason)
-    {
-        if (AuthoritativeBytes is null)
-        {
-            throw new WorkerContextPreparationException(Identity, reason, "Complete authoritative bytes are unavailable for inline fallback.");
-        }
-
-        return Create(
-            Identity,
-            Kind,
-            AuthoritativeBytes,
-            RoleVisibility,
-            ContextDeliveryMode.InlineFull,
-            ContractVersion,
-            expectedContentHash: ContentHash,
-            fallbackReason: reason);
+            fallbackReason,
+            byteCount);
     }
 
     public static string Hash(ReadOnlySpan<byte> bytes) =>
@@ -323,7 +318,8 @@ public sealed record WorkerContextSectionReceipt(
     int ContractVersion,
     IReadOnlyList<AgentRole> RoleVisibility,
     string? FallbackReason = null,
-    string? MandatoryRelativePath = null);
+    string? MandatoryRelativePath = null,
+    ContextArtifactKind? ArtifactKind = null);
 
 public sealed record MandatoryContextFileDescriptor(
     string LogicalIdentity,

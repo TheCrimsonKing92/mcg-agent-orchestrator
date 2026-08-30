@@ -1,3 +1,4 @@
+using System.Text;
 using Mcg.AgentOrchestrator.Core;
 
 namespace Mcg.AgentOrchestrator.Infrastructure;
@@ -5,11 +6,33 @@ namespace Mcg.AgentOrchestrator.Infrastructure;
 internal static class WorkerVerificationEvidence
 {
     private const string LegacySnapshotUnavailableReason = "legacy-snapshot-authoritative-output-unavailable";
+    private const int MalformedOutputExcerptMaxChars = 4000;
+    private const int StructuredFieldMaxChars = 4000;
 
     internal sealed record ContextOutput(
         string Content,
         bool IsAuthoritative,
         string? UnavailableReason);
+
+    internal enum ContextProjectionValidation
+    {
+        Parsed,
+        NonAuthoritative,
+        Malformed
+    }
+
+    internal sealed record ContextProjection(
+        string Content,
+        ContextProjectionValidation Validation)
+    {
+        public string ValidationReceiptValue => Validation switch
+        {
+            ContextProjectionValidation.Parsed => "parsed",
+            ContextProjectionValidation.NonAuthoritative => "non-authoritative",
+            ContextProjectionValidation.Malformed => "malformed",
+            _ => throw new ArgumentOutOfRangeException(nameof(Validation), Validation, null)
+        };
+    }
 
     public static string RequireAuthoritativeStandardOutput(
         TaskVerificationRecord verification,
@@ -66,6 +89,105 @@ internal static class WorkerVerificationEvidence
             string.Empty,
             verification.StandardOutput);
         return new ContextOutput(content, false, unavailableReason);
+    }
+
+    public static string ProjectStandardOutputForContext(
+        TaskSpec task,
+        TaskVerificationRecord verification,
+        LogicalArtifactIdentity? identity = null)
+        => ProjectStandardOutputForContextWithValidation(task, verification, identity).Content;
+
+    public static ContextProjection ProjectStandardOutputForContextWithValidation(
+        TaskSpec task,
+        TaskVerificationRecord verification,
+        LogicalArtifactIdentity? identity = null)
+    {
+        ArgumentNullException.ThrowIfNull(task);
+        ArgumentNullException.ThrowIfNull(verification);
+        var artifactIdentity = identity ?? new LogicalArtifactIdentity($"prior/{task.Id.Value}/verification-output");
+        var contextOutput = ResolveStandardOutputForContext(verification, artifactIdentity);
+        var output = contextOutput.Content;
+        var bytes = Encoding.UTF8.GetBytes(output);
+        var sourceHandle = string.IsNullOrWhiteSpace(verification.StandardOutputPath)
+            ? "host-captured-authoritative-output"
+            : Path.GetFullPath(Path.IsPathRooted(verification.StandardOutputPath)
+                ? verification.StandardOutputPath
+                : Path.Combine(verification.WorkingDirectory, verification.StandardOutputPath));
+        var receiptPrefix =
+            $"Artifact receipt: purpose=prior-worker-output; stable_id={artifactIdentity.Value}; source_handle={sourceHandle}; chars={output.Length}; bytes={bytes.Length}; sha256={WorkerContextArtifact.Hash(bytes)}";
+        if (!contextOutput.IsAuthoritative)
+        {
+            return new ContextProjection(
+                $"{receiptPrefix}; validation=non-authoritative; problem_excerpt={contextOutput.UnavailableReason ?? "authoritative output unavailable"}" +
+                    Environment.NewLine + BoundHeadAndTail(output, MalformedOutputExcerptMaxChars),
+                ContextProjectionValidation.NonAuthoritative);
+        }
+
+        if (!WorkerResultParser.TryParseResult(output, out var parsed, out var diagnostic))
+        {
+            return new ContextProjection(
+                $"{receiptPrefix}; validation=malformed; problem_excerpt={diagnostic}" +
+                    Environment.NewLine + BoundHeadAndTail(output, MalformedOutputExcerptMaxChars),
+                ContextProjectionValidation.Malformed);
+        }
+
+        var preferredOrder = new[]
+        {
+            "files", "commands", "tests", "commit", "blockers", "findings", "touched_anchors",
+            "criteria_verdicts", "verdict", "citations", "model_fit", "skills", "confidence"
+        };
+        var orderedFields = preferredOrder
+            .Where(parsed.Fields.ContainsKey)
+            .Concat(parsed.Fields.Keys
+                .Where(key => !preferredOrder.Contains(key, StringComparer.OrdinalIgnoreCase))
+                .OrderBy(key => key, StringComparer.OrdinalIgnoreCase))
+            .ToArray();
+        var oversizedFields = orderedFields
+            .Where(key => parsed.Fields[key].Length > StructuredFieldMaxChars)
+            .ToArray();
+        var validationReceipt = oversizedFields.Length == 0
+            ? "validation=parsed"
+            : $"validation=malformed; problem_excerpt=structured fields exceed {StructuredFieldMaxChars} chars; oversized_fields={string.Join(',', oversizedFields)}";
+        var validation = oversizedFields.Length == 0
+            ? ContextProjectionValidation.Parsed
+            : ContextProjectionValidation.Malformed;
+        var lines = new List<string>
+        {
+            $"{receiptPrefix}; {validationReceipt}",
+            "WORKER_RESULT:"
+        };
+        lines.AddRange(orderedFields.Select(key => ProjectStructuredField(key, parsed.Fields[key])));
+        lines.Add("END_WORKER_RESULT");
+        return new ContextProjection(string.Join(Environment.NewLine, lines), validation);
+    }
+
+    private static string ProjectStructuredField(string key, string value)
+    {
+        if (value.Length <= StructuredFieldMaxChars)
+        {
+            return $"{key}: {value}";
+        }
+
+        var bytes = Encoding.UTF8.GetBytes(value);
+        return $"{key}: [oversized structured field omitted; chars={value.Length}; bytes={bytes.Length}; " +
+            $"sha256={WorkerContextArtifact.Hash(bytes)}; complete source remains at source_handle]";
+    }
+
+    private static string BoundHeadAndTail(string value, int maxChars)
+    {
+        var trimmed = value.Trim();
+        if (trimmed.Length <= maxChars)
+        {
+            return trimmed;
+        }
+
+        var headChars = maxChars / 2;
+        var tailChars = maxChars - headChars;
+        return trimmed[..headChars] +
+            Environment.NewLine +
+            $"...[{trimmed.Length - maxChars} chars omitted from malformed output; complete source remains at source_handle]..." +
+            Environment.NewLine +
+            trimmed[^tailChars..];
     }
 
     public static bool TryRecoverLegacySnapshotStandardOutput(

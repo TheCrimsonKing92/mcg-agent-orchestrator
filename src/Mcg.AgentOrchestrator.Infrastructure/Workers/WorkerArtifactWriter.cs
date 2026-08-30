@@ -1,4 +1,5 @@
 using System.Security.Cryptography;
+using System.Text;
 using System.Text.Json;
 using System.Text.Json.Serialization;
 using Mcg.AgentOrchestrator.Core;
@@ -347,8 +348,10 @@ internal sealed class WorkerArtifactWriter
 
             lines.Add(string.Empty);
             lines.Add("### Stdout");
-            lines.Add(task.LastVerification.AuthoritativeStandardOutput ??
-                $"[authoritative stdout unavailable: {task.LastVerification.FullStandardOutputUnavailableReason ?? "unknown"}]");
+            lines.Add(WorkerVerificationEvidence.ProjectStandardOutputForContext(
+                task,
+                task.LastVerification,
+                new LogicalArtifactIdentity("task/last-verification/stdout")));
             if (!string.IsNullOrWhiteSpace(task.LastVerification.AuthoritativeStandardError))
             {
                 lines.Add(string.Empty);
@@ -700,7 +703,7 @@ internal sealed class WorkerArtifactWriter
                     lines.Add(resolution.Plan);
                     lines.Add(string.Empty);
                     lines.Add("### Planner WORKER_RESULT Receipt");
-                    lines.Add(ResolveAuthoritativeStandardOutputOrUnavailable(verification));
+                    lines.Add(WorkerVerificationEvidence.ProjectStandardOutputForContext(priorTask, verification));
                 }
                 else
                 {
@@ -711,7 +714,7 @@ internal sealed class WorkerArtifactWriter
             else
             {
                 lines.Add("### Stdout");
-                lines.Add(ResolveAuthoritativeStandardOutputOrUnavailable(verification));
+                lines.Add(WorkerVerificationEvidence.ProjectStandardOutputForContext(priorTask, verification));
             }
 
             if (!string.IsNullOrWhiteSpace(verification.AuthoritativeStandardError))
@@ -727,12 +730,6 @@ internal sealed class WorkerArtifactWriter
 
         return string.Join(Environment.NewLine, lines);
     }
-
-    private static string ResolveAuthoritativeStandardOutputOrUnavailable(TaskVerificationRecord verification) =>
-        verification.AuthoritativeStandardOutput ??
-        (WorkerVerificationEvidence.TryRecoverLegacySnapshotStandardOutput(verification, out var recoveredOutput)
-            ? recoveredOutput
-            : $"[authoritative stdout unavailable: {verification.FullStandardOutputUnavailableReason ?? "unknown"}]");
 
     private static IReadOnlyDictionary<TaskId, DurablePlannerPlanResolution> ResolveDurablePlannerPlans(
         IReadOnlyList<TaskSpec> goalTasks,

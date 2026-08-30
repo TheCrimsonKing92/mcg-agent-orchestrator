@@ -2642,6 +2642,7 @@ public sealed class DashboardRenderingTests
         AgentDefinitions: agents));
     var flexiblePromptChars = AgentTaskRunner.PreviewRun(goal, goal.Tasks[1], agents).PromptCharacterCount;
     var apiPromptChars = AgentTaskRunner.PreviewRun(goal, goal.Tasks[2], agents).PromptCharacterCount;
+    Assert.True(apiPromptChars <= 4000, $"Expected simple API prompt to stay within threshold; apiPromptChars={apiPromptChars}; threshold=4000.");
     var stages = DashboardResponseMapper.ToGoalStageReadinessReportDto(goal, kernel.BuildStageReadinessReport(goal.Id), agents);
 
     Assert.Contains($"data-action-button=\"/api/goals/{goalPrefix}/tasks/1/run?confirmTaskRun=true\">Prepare subscription handoff</button>", html, StringComparison.Ordinal);
