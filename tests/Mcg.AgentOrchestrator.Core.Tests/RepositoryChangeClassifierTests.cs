@@ -924,6 +924,26 @@ public sealed class RepositoryChangeClassifierTests
         Assert.DoesNotContain("--filter", check.Command);
     }
 
+    [Xunit.Fact(DisplayName = "RepositoryTestImpactPlanner_keeps_unrelated_core_change_narrow")]
+    public void RepositoryTestImpactPlannerKeepsUnrelatedCoreChangeNarrow()
+    {
+        var repositoryRoot = FindRepositoryRootFromSource();
+        var plan = RepositoryTestImpactPlanner.Plan(
+            ["src/Mcg.AgentOrchestrator.Core/Domain/GoalBriefRevision.cs"],
+            repositoryRoot);
+
+        Assert.True(plan.RequiresBuild);
+        Assert.False(plan.RequiresBroadVerification);
+        Assert.Equal(2, plan.Checks.Count);
+        Assert.Contains(plan.Checks, check => check.Name == "core tests");
+        var infrastructureCheck = Assert.Single(plan.Checks, check =>
+            check.Command.Contains(
+                "tests/Mcg.AgentOrchestrator.Infrastructure.Tests/Mcg.AgentOrchestrator.Infrastructure.Tests.csproj"));
+        var filter = RequiredTestImpactFilter(infrastructureCheck);
+        Assert.Contains("FullyQualifiedName~TrialCompareCliCommandTests", filter, StringComparison.Ordinal);
+        Assert.DoesNotContain("RunGoalServiceTests", filter, StringComparison.Ordinal);
+    }
+
     [Xunit.Fact(DisplayName = "RepositoryTestImpactPlanner_selects_real_reverse_dependent_integration_consumer")]
     public void RepositoryTestImpactPlannerSelectsRealReverseDependentIntegrationConsumer()
     {

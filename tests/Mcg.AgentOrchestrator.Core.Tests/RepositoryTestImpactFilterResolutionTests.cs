@@ -185,6 +185,29 @@ public sealed class RepositoryTestImpactFilterResolutionTests
     }
 
     [Xunit.Fact]
+    public void DeletedAndSurvivingCoreSourcesStillSelectIntegrationConsumer()
+    {
+        using var repository = ReverseDependencyRepository.Create();
+        const string deletedPath =
+            "src/Mcg.AgentOrchestrator.Core/Application/DeletedClassifier.cs";
+        const string survivingPath =
+            "src/Mcg.AgentOrchestrator.Core/Application/DispatchFailureClassifier.cs";
+        repository.Write(
+            deletedPath,
+            "namespace Mcg.AgentOrchestrator.Core; public sealed class DeletedClassifier { }");
+        repository.Delete(deletedPath);
+
+        var selection = new FileSystemTestClassDeclarationReader(repository.Root)
+            .ReadReverseDependentTestClasses([deletedPath, survivingPath]);
+        var plan = RepositoryTestImpactPlanner.Plan([deletedPath, survivingPath], repository.Root);
+
+        Assert.Equal(ReverseDependencySelectionOutcome.Resolved, selection.Outcome);
+        Assert.Contains("RunGoalServiceTests", selection.TestClassNames);
+        Assert.Contains(plan.Checks, check =>
+            check.Command.Contains("FullyQualifiedName~RunGoalServiceTests", StringComparer.Ordinal));
+    }
+
+    [Xunit.Fact]
     public void CoreServiceAndCoreUnitTestCochangeStillSelectsIntegrationConsumer()
     {
         using var repository = ReverseDependencyRepository.Create();

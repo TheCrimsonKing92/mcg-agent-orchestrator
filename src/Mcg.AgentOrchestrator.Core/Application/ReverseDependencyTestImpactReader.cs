@@ -88,13 +88,21 @@ internal static class ReverseDependencyTestImpactReader
 
                 if (!indexedFiles.ContainsKey(fullPath))
                 {
-                    return File.Exists(fullPath)
-                        ? ReverseDependencyTestSelection.Unreadable(
-                            $"Changed source is outside the dependent project graph or unreadable: {changedSourcePath}")
-                        : ReverseDependencyTestSelection.Unavailable;
+                    if (File.Exists(fullPath))
+                    {
+                        return ReverseDependencyTestSelection.Unreadable(
+                            $"Changed source is outside the dependent project graph or unreadable: {changedSourcePath}");
+                    }
+
+                    continue;
                 }
 
                 changedPaths.Add(fullPath);
+            }
+
+            if (changedPaths.Count == 0)
+            {
+                return ReverseDependencyTestSelection.Unavailable;
             }
 
             var declarationsByName = indexedFiles.Values
