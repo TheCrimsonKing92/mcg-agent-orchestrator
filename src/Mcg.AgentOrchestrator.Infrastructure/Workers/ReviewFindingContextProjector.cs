@@ -38,25 +38,13 @@ internal static class ReviewFindingContextProjector
         }
     }
 
-    public static void ApplyCompactArtifactAllowList(
-        List<WorkerContextArtifact> artifacts,
-        bool preserveRetryBrief = false) =>
+    public static void ApplyCompactArtifactAllowList(List<WorkerContextArtifact> artifacts) =>
         artifacts.RemoveAll(artifact =>
             artifact.Identity.Value != "goal/review-finding-history.json" &&
             artifact.Identity.Value != "task/review-contract-repair-envelope.json" &&
             artifact.Identity.Value != "context/AGENTS.md" &&
-            (!preserveRetryBrief || !IsRetryBriefArtifact(artifact.Identity.Value)) &&
             !artifact.Identity.Value.StartsWith("goal/review-finding-rounds/", StringComparison.Ordinal) &&
             !artifact.Identity.Value.StartsWith("goal/review-finding-receipts/", StringComparison.Ordinal));
-
-    private static bool IsRetryBriefArtifact(string identity) => identity is
-        "goal/objective.md" or
-        "goal/refined-spec.json" or
-        "task/metadata.json" or
-        "task/description.md" or
-        "task/verification-plan.md" or
-        "brief/header-residual.md" or
-        "brief/current.md";
 
     public static ReviewFindingContextProjection Project(
         Goal goal,

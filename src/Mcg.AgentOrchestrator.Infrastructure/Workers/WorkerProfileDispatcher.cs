@@ -2646,14 +2646,9 @@ public static class WorkerProfileDispatcher
         }
         AddSource(WorkerContextSemanticSource.CurrentBrief, "brief/current.md", ContextArtifactKind.OperatorInstructions, Encoding.UTF8.GetBytes(residualBrief));
 
-        if (reviewFindingProjection?.Metrics.Mode == ReviewFindingHistoryProjectionMode.ContractRepair ||
-            (task.PendingRetryRoundKind is not null &&
-             reviewFindingProjection?.Metrics.FallbackReason is null &&
-             !string.IsNullOrWhiteSpace(currentCandidateSha) &&
-             !string.IsNullOrWhiteSpace(comparisonBaseSha)))
+        if (reviewFindingProjection?.Metrics.Mode == ReviewFindingHistoryProjectionMode.ContractRepair)
         {
-            ReviewFindingContextProjector.ApplyCompactArtifactAllowList(artifacts,
-                preserveRetryBrief: reviewFindingProjection?.Metrics.Mode != ReviewFindingHistoryProjectionMode.ContractRepair);
+            ReviewFindingContextProjector.ApplyCompactArtifactAllowList(artifacts);
         }
         var builder = new WorkerContextPackageBuilder();
         var preparedWithoutManifest = builder.Prepare(targetRole, workingDirectory, artifacts) with

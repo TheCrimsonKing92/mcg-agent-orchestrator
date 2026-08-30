@@ -91,7 +91,7 @@ public sealed class ReviewFindingContextProjectorTests
                 goal.Id,
                 reviewer.Id,
                 "CRITERIA CORRECTION: newest correction is authoritative.",
-                retryRoundKind: RetryRoundKind.Standard);
+                retryRoundKind: RetryRoundKind.Mechanical);
 
             var snapshots = reviewer.VerificationHistory.Select(verification => new
             {
@@ -192,6 +192,8 @@ public sealed class ReviewFindingContextProjectorTests
             Assert.Contains("ACTIVE_B_ACTIONABLE_SUFFIX", rendered, StringComparison.Ordinal);
             var retryBrief = Assert.Single(package.Artifacts, artifact => artifact.Identity.Value == "brief/current.md");
             Assert.Contains("## Instructions", Encoding.UTF8.GetString(Recover(root, retryBrief)), StringComparison.Ordinal);
+            Assert.Contains(package.Artifacts, artifact => artifact.Identity.Value == "task/criterion-retry-feedback.json");
+            Assert.Contains(package.Artifacts, artifact => artifact.Identity.Value == "goal/timeline.json");
             Assert.Contains("NEWEST_CORRECTION_SENTINEL", rendered, StringComparison.Ordinal);
             Assert.Contains("WAIVER_SENTINEL", rendered, StringComparison.Ordinal);
             Assert.Equal(rendered.Length, packageReceipt.RenderedPromptCharacters);
@@ -203,7 +205,7 @@ public sealed class ReviewFindingContextProjectorTests
             Assert.True(packageReceipt.ModelInputTokenEstimate * 4 <= packageReceipt.BaselineModelInputTokenEstimate);
             Assert.Equal(WorkerPromptInputBudget.CountTokens(rendered), packageReceipt.ModelInputTokenEstimate);
             Assert.True(packageReceipt.DeliveredArtifactBytes > 0);
-            Assert.True(packageReceipt.OnDemandArtifactBytes > packageReceipt.DeliveredArtifactBytes);
+            Assert.True(packageReceipt.OnDemandArtifactBytes > packageReceipt.RenderedPromptBytes);
             var historical = package.Artifacts.Where(artifact => artifact.DeliveryMode == ContextDeliveryMode.HistoricalFile).ToArray();
             Assert.NotEmpty(historical);
             Assert.All(historical, artifact => Assert.DoesNotContain(artifact.Identity.Value, rendered, StringComparison.Ordinal));
@@ -233,7 +235,7 @@ public sealed class ReviewFindingContextProjectorTests
                 goal.Id,
                 reviewer.Id,
                 "CRITERIA CORRECTION: newest correction remains authoritative.",
-                retryRoundKind: RetryRoundKind.Standard);
+                retryRoundKind: RetryRoundKind.Mechanical);
             var replayed = WorkerProfileDispatcher.BuildContextPackage(
                 goal,
                 reviewer,
@@ -244,7 +246,6 @@ public sealed class ReviewFindingContextProjectorTests
                 comparisonBaseSha: baseSha,
                 workerProfile: Assert.Single(WorkerProfileCatalog.Default().Profiles, profile => profile.Name == "codex-cli"));
             var replayedRendered = WorkerContextPackageBuilder.Render(replayed);
-            Assert.Equal(rendered.Length, replayedRendered.Length);
             var replayedLedger = Assert.Single(
                 replayed.Artifacts,
                 artifact => artifact.Identity.Value == "goal/review-finding-history.json");
@@ -413,10 +414,14 @@ public sealed class ReviewFindingContextProjectorTests
                 root,
                 contextDirectory,
                 Brief(ordinaryGoal, ordinaryReviewer),
-                currentCandidateSha: candidateSha);
+                currentCandidateSha: candidateSha,
+                comparisonBaseSha: new string('b', 40));
             Assert.Equal(ReviewFindingHistoryProjectionMode.FullInspection, ordinary.ReviewFindingProjection!.Mode);
             Assert.DoesNotContain(ordinary.Artifacts,
                 artifact => artifact.Identity.Value == "task/review-contract-repair-envelope.json");
+            Assert.Contains(ordinary.Artifacts, artifact => artifact.Identity.Value == "goal/objective.md");
+            Assert.Contains(ordinary.Artifacts, artifact => artifact.Identity.Value == "task/criterion-retry-feedback.json");
+            Assert.Contains(ordinary.Artifacts, artifact => artifact.Identity.Value == "goal/timeline.json");
         }
         finally
         {
