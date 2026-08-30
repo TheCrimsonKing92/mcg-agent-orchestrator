@@ -931,9 +931,15 @@ public sealed class RepositoryChangeClassifierTests
         var plan = RepositoryTestImpactPlanner.Plan(
             ["src/Mcg.AgentOrchestrator.Core/Application/DispatchFailureClassifier.cs"],
             repositoryRoot);
+        var repeatedPlan = RepositoryTestImpactPlanner.Plan(
+            ["src/Mcg.AgentOrchestrator.Core/Application/DispatchFailureClassifier.cs"],
+            repositoryRoot);
 
         Assert.True(plan.RequiresBuild);
         Assert.False(plan.RequiresBroadVerification);
+        Assert.Equal(
+            plan.Checks.Select(check => check.CommandLine),
+            repeatedPlan.Checks.Select(check => check.CommandLine));
         Assert.Equal(2, plan.Checks.Count);
         Assert.Contains(plan.Checks, check =>
             check.Name == "core tests" &&

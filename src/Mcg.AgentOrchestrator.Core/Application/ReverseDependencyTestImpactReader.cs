@@ -9,7 +9,7 @@ internal static class ReverseDependencyTestImpactReader
     internal const int MaximumChangedSourceFiles = 5;
     private const int MaximumDependencyHops = 2;
     private const int MaximumFrontierSymbols = 64;
-    private const int MaximumSelectedTestClasses = 16;
+    private const int MaximumSelectedTestClasses = 32;
     private const int MaximumIndexedSourceFiles = 2_000;
 
     internal static ReverseDependencyTestSelection Read(
@@ -80,10 +80,18 @@ internal static class ReverseDependencyTestImpactReader
                 .Order(StringComparer.Ordinal))
             {
                 var fullPath = ResolveWithinRepository(repositoryRoot, changedSourcePath);
-                if (fullPath is null || !indexedFiles.ContainsKey(fullPath))
+                if (fullPath is null)
                 {
                     return ReverseDependencyTestSelection.Unreadable(
                         $"Changed source is outside the dependent project graph or unreadable: {changedSourcePath}");
+                }
+
+                if (!indexedFiles.ContainsKey(fullPath))
+                {
+                    return File.Exists(fullPath)
+                        ? ReverseDependencyTestSelection.Unreadable(
+                            $"Changed source is outside the dependent project graph or unreadable: {changedSourcePath}")
+                        : ReverseDependencyTestSelection.Unavailable;
                 }
 
                 changedPaths.Add(fullPath);

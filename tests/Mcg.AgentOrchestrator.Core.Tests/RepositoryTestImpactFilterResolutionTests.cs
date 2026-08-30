@@ -164,6 +164,27 @@ public sealed class RepositoryTestImpactFilterResolutionTests
     }
 
     [Xunit.Fact]
+    public void DeletedCoreSourceProducesUnavailableReverseDependencyEvidence()
+    {
+        using var repository = ReverseDependencyRepository.Create();
+        const string changedPath =
+            "src/Mcg.AgentOrchestrator.Core/Application/DispatchFailureClassifier.cs";
+        repository.Delete(changedPath);
+        var reader = new FileSystemTestClassDeclarationReader(repository.Root);
+
+        var selection = reader.ReadReverseDependentTestClasses([changedPath]);
+        var plan = RepositoryTestImpactPlanner.Plan([changedPath], repository.Root);
+
+        Assert.Equal(ReverseDependencySelectionOutcome.Unavailable, selection.Outcome);
+        var check = Assert.Single(plan.Checks);
+        Assert.Equal("core tests", check.Name);
+        Assert.DoesNotContain(
+            plan.Checks,
+            candidate => candidate.Command.Contains(
+                "tests/Mcg.AgentOrchestrator.Infrastructure.Tests/Mcg.AgentOrchestrator.Infrastructure.Tests.csproj"));
+    }
+
+    [Xunit.Fact]
     public void CoreServiceAndCoreUnitTestCochangeStillSelectsIntegrationConsumer()
     {
         using var repository = ReverseDependencyRepository.Create();
@@ -259,7 +280,7 @@ public sealed class RepositoryTestImpactFilterResolutionTests
             "tests/Mcg.AgentOrchestrator.Infrastructure.Tests/DirectConsumers.cs",
             string.Join(
                 Environment.NewLine,
-                Enumerable.Range(1, 17).Select(index =>
+                Enumerable.Range(1, 33).Select(index =>
                     $"public sealed class DirectConsumer{index}Tests {{ " +
                     "private readonly DispatchFailureClassifier _classifier = new(); " +
                     "[Xunit.Fact] public void Runs() { } }")));
@@ -273,7 +294,7 @@ public sealed class RepositoryTestImpactFilterResolutionTests
             check.Command.Contains(
                 "tests/Mcg.AgentOrchestrator.Infrastructure.Tests/Mcg.AgentOrchestrator.Infrastructure.Tests.csproj"));
         Assert.DoesNotContain("--filter", infrastructureCheck.Command);
-        Assert.Contains("16-test-class bound", infrastructureCheck.Reason, StringComparison.Ordinal);
+        Assert.Contains("32-test-class bound", infrastructureCheck.Reason, StringComparison.Ordinal);
     }
 
     [Xunit.Fact]
@@ -823,6 +844,12 @@ public sealed class RepositoryTestImpactFilterResolutionTests
             var path = Path.Combine(Root, relativePath.Replace('/', Path.DirectorySeparatorChar));
             Directory.CreateDirectory(Path.GetDirectoryName(path)!);
             File.WriteAllText(path, contents);
+        }
+
+        internal void Delete(string relativePath)
+        {
+            var path = Path.Combine(Root, relativePath.Replace('/', Path.DirectorySeparatorChar));
+            File.Delete(path);
         }
 
         public void Dispose()
