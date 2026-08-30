@@ -84,7 +84,10 @@ public sealed class DispatchOutcomeClassifyTests
         return task;
     }
 
-    private static TaskSpec RetryTaskWithBaseCommit(string baseCommit, AgentRole role = AgentRole.Developer)
+    private static TaskSpec RetryTaskWithBaseCommit(
+        string baseCommit,
+        AgentRole role = AgentRole.Developer,
+        bool includeContextReceipt = true)
     {
         var clock = new FakeClock();
         var kernel = new AgentOrchestratorKernel(clock);
@@ -100,7 +103,7 @@ public sealed class DispatchOutcomeClassifyTests
                 "C:\\repo",
                 clock.UtcNow,
                 WorkerProviderKind: ProviderKind.OpenAICodexCli,
-                ContextPackageReceipt: EarlyConvergenceReceipt(baseCommit)));
+                ContextPackageReceipt: includeContextReceipt ? EarlyConvergenceReceipt(baseCommit) : null));
         kernel.RecordDispatchBaseCommit(goal.Id, task.Id, baseCommit);
         kernel.RecordCriterionRetryFeedback(goal.Id, task.Id, ["gate-failure feedback: rerun receipts against current branch"]);
         return task;
@@ -348,6 +351,23 @@ public sealed class DispatchOutcomeClassifyTests
         Xunit.Assert.Equal(RecoveryRecommendation.None, outcome.RecoveryRecommendation);
         Xunit.Assert.Contains("rule=verified-no-change-round", outcome.ClassifierReceipt, StringComparison.Ordinal);
         Xunit.Assert.Contains("verdict=VerifiedSuccess", outcome.ClassifierReceipt, StringComparison.Ordinal);
+    }
+
+    [Xunit.Fact]
+    public void Classify_RetryDeveloperVerifiedNoChangeWithoutConvergenceReceipt_Fails()
+    {
+        const string baseCommit = "48422231916172e8d172a0cc0428d13d222c071c";
+        var verification = WorkerResultVerification(
+            1,
+            WorkerResultStdout("pass - focused verification completed"),
+            standardError: VerifiedNoChangeDiagnostics(verificationRecognized: true));
+
+        var outcome = DispatchFailureClassifier.Classify(
+            RetryTaskWithBaseCommit(baseCommit, includeContextReceipt: false),
+            verification);
+
+        Xunit.Assert.Equal(DispatchOutcomeKind.UnknownFailure, outcome.Kind);
+        Xunit.Assert.DoesNotContain("rule=verified-no-change-round", outcome.ClassifierReceipt, StringComparison.Ordinal);
     }
 
     [Xunit.Fact]

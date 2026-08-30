@@ -1,4 +1,5 @@
 using System.Text.Json;
+using System.Text.Json.Serialization;
 using Mcg.AgentOrchestrator.Core;
 
 namespace Mcg.AgentOrchestrator.Infrastructure;
@@ -10,6 +11,14 @@ public sealed record WorkerProfile(
     int RepositoryPolicyMaxBytes = 0)
 {
     public const string QwenCodeCliName = "qwen-code-cli";
+
+    [JsonIgnore]
+    public bool HasCompleteRepositoryPolicyAutoLoadContract =>
+        AutoLoadsRepositoryPolicy &&
+        RepositoryPolicyMaxBytes > 0 &&
+        CommandTemplate.Contains(
+            $"project_doc_max_bytes={RepositoryPolicyMaxBytes}",
+            StringComparison.OrdinalIgnoreCase);
 
     // Measured `--bare` startup at this repo: system prompt plus tool schemas,
     // without the workspace-init dump. Default (non-bare) startup is ~25728 tokens.
@@ -534,11 +543,17 @@ public static class WorkerProfileStore
         {
             const string legacyStructuredOutputTemplate =
                 "codex exec --skip-git-repo-check --model {subscriptionModelName} -c model_reasoning_effort={subscriptionReasoningEffort} --sandbox {sandboxMode} --cd {workingDirectory}";
+            const string legacyRepositoryPolicyTemplate =
+                "codex exec --json --skip-git-repo-check --model {subscriptionModelName} -c model_reasoning_effort={subscriptionReasoningEffort} --sandbox {sandboxMode} --cd {workingDirectory}";
             var missingStructuredOutputFromKnownBuiltIn =
                 !profile.CommandTemplate.Contains("--json", StringComparison.OrdinalIgnoreCase) &&
                 profile.CommandTemplate.Equals(legacyStructuredOutputTemplate, StringComparison.OrdinalIgnoreCase);
+            var missingRepositoryPolicyBudgetFromKnownBuiltIn =
+                !profile.HasCompleteRepositoryPolicyAutoLoadContract &&
+                profile.CommandTemplate.Equals(legacyRepositoryPolicyTemplate, StringComparison.OrdinalIgnoreCase);
             return !profile.CommandTemplate.Contains("{sandboxMode}", StringComparison.OrdinalIgnoreCase) ||
                 missingStructuredOutputFromKnownBuiltIn ||
+                missingRepositoryPolicyBudgetFromKnownBuiltIn ||
                 !profile.CommandTemplate.Contains("--cd", StringComparison.OrdinalIgnoreCase) ||
                 !profile.CommandTemplate.Contains("--model {subscriptionModelName}", StringComparison.OrdinalIgnoreCase) ||
                 !profile.CommandTemplate.Contains("model_reasoning_effort={subscriptionReasoningEffort}", StringComparison.OrdinalIgnoreCase) ||

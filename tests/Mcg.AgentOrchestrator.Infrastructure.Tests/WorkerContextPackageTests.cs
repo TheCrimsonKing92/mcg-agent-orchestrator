@@ -785,6 +785,19 @@ public sealed class WorkerContextPackageTests(Xunit.ITestOutputHelper output)
             Assert.Equal(ContextDeliveryMode.InlineFull, fallbackArtifact.DeliveryMode);
             Assert.Contains(sentinel, WorkerContextPackageBuilder.Render(explicitFallback), StringComparison.Ordinal);
 
+            var inconsistentProfile = new WorkerProfile(
+                "codex-cli",
+                "codex exec --model {subscriptionModelName}",
+                AutoLoadsRepositoryPolicy: true,
+                RepositoryPolicyMaxBytes: 65_536);
+            var inconsistentFallback = WorkerProfileDispatcher.BuildContextPackage(
+                goal, task, root, contextDirectory, brief, workerProfile: inconsistentProfile);
+            var inconsistentArtifact = Assert.Single(
+                inconsistentFallback.Artifacts,
+                artifact => artifact.Identity.Value == "context/AGENTS.md");
+            Assert.Equal(ContextDeliveryMode.InlineFull, inconsistentArtifact.DeliveryMode);
+            Assert.Contains(sentinel, WorkerContextPackageBuilder.Render(inconsistentFallback), StringComparison.Ordinal);
+
             var oversizedBytes = Encoding.UTF8.GetBytes(new string('q', 70_000) + "OVERSIZED_POLICY_SENTINEL");
             File.WriteAllBytes(policyPath, oversizedBytes);
             WriteRegistry(oversizedBytes);

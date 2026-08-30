@@ -2321,11 +2321,7 @@ public static class WorkerProfileDispatcher
         var hasReviewFindingHistory = goal.Tasks.Any(candidate => candidate.VerificationHistory.Any(verification =>
             (verification.MergedReviewFindings?.Count ?? 0) > 0 ||
             (verification.FindingEvidenceReceipts?.Count ?? 0) > 0));
-        var codexPolicyAutoLoad = workerProfile is
-        {
-            AutoLoadsRepositoryPolicy: true,
-            RepositoryPolicyMaxBytes: > 0
-        };
+        var codexPolicyAutoLoad = workerProfile?.HasCompleteRepositoryPolicyAutoLoadContract == true;
 
         void AddSource(
             WorkerContextSemanticSource source,
@@ -3211,7 +3207,8 @@ public static class WorkerProfileDispatcher
                 GetDispatchVariable(dispatchVariables, "workingDirectory"),
                 openaiBaseUrl: GetDispatchVariable(dispatchVariables, "openaiBaseUrl"),
                 openaiApiKey: GetDispatchVariable(dispatchVariables, "openaiApiKey"),
-                approvalMode: GetDispatchVariable(dispatchVariables, "approvalMode")));
+                approvalMode: GetDispatchVariable(dispatchVariables, "approvalMode"),
+                repositoryPolicyMaxBytes: profile.RepositoryPolicyMaxBytes));
     }
 
     private static bool HasRequiredBuiltInVariables(

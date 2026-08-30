@@ -14,7 +14,8 @@ public static class ProviderCommandBuilder
         string? sessionId = null,
         string? openaiBaseUrl = null,
         string? openaiApiKey = null,
-        string? approvalMode = null)
+        string? approvalMode = null,
+        int repositoryPolicyMaxBytes = 0)
     {
         return providerKind switch
         {
@@ -22,12 +23,14 @@ public static class ProviderCommandBuilder
                 modelAlias,
                 reasoningEffort,
                 resolvedSandboxMode,
-                workingDirectory),
+                workingDirectory,
+                repositoryPolicyMaxBytes),
             ProviderKind.OpenAICodexSpark => BuildCodex(
                 modelAlias,
                 reasoningEffort,
                 resolvedSandboxMode,
-                workingDirectory),
+                workingDirectory,
+                repositoryPolicyMaxBytes),
             ProviderKind.OpenAICodexOssCli => BuildCodexOss(
                 modelAlias,
                 resolvedSandboxMode,
@@ -55,7 +58,8 @@ public static class ProviderCommandBuilder
         string modelAlias,
         string? reasoningEffort,
         string resolvedSandboxMode,
-        string? workingDirectory)
+        string? workingDirectory,
+        int repositoryPolicyMaxBytes)
     {
         var command = new List<string>
         {
@@ -68,6 +72,11 @@ public static class ProviderCommandBuilder
         };
         command.Add("-c");
         command.Add($"model_reasoning_effort={Expand(reasoningEffort)}");
+        if (repositoryPolicyMaxBytes > 0)
+        {
+            command.Add("-c");
+            command.Add($"project_doc_max_bytes={repositoryPolicyMaxBytes}");
+        }
         command.Add("--sandbox");
         command.Add(Expand(resolvedSandboxMode));
         AddWorkingDirectory(command, workingDirectory);

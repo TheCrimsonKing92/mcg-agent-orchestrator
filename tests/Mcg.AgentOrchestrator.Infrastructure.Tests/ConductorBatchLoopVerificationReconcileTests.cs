@@ -7,6 +7,27 @@ public sealed class ConductorBatchLoopVerificationReconcileTests
 {
     private static IReadOnlyList<AgentDefinition> DefaultAgents() => AgentCatalog.Default().Agents;
 
+    private static WorkerContextPackageReceipt EarlyConvergenceReceipt(string candidateSha)
+    {
+        var evidenceHash = new string('a', 64);
+        return new WorkerContextPackageReceipt(
+            "ctxpkg-verification-reconcile",
+            [new WorkerContextSectionReceipt(
+                $"goal/review-finding-receipts/{evidenceHash}.json",
+                1,
+                1,
+                evidenceHash,
+                ContextDeliveryMode.OnDemandFile,
+                ContextContractVersion.V1.Value,
+                [AgentRole.Developer])],
+            ProviderUsageValue.Unknown("test"),
+            ProviderUsageValue.Unknown("test"),
+            ProviderUsageValue.Unknown("test"),
+            EarlyConvergenceEligible: true,
+            EarlyConvergenceCandidateSha: candidateSha,
+            EarlyConvergenceReceiptHashes: [evidenceHash]);
+    }
+
     private static string TempDb() =>
         Path.Combine(Path.GetTempPath(), $"mcg-verification-reconcile-{Guid.NewGuid():N}.db");
 
@@ -63,8 +84,17 @@ public sealed class ConductorBatchLoopVerificationReconcileTests
         var seed = new AgentOrchestratorKernel();
         var goal = GoalLifecycleCommands.CreateAndActivateSimpleGoal(seed, DefaultAgents(), "Promote classified successful goal");
         var task = goal.Tasks.Single();
-        seed.RecordTaskDispatch(goal.Id, task.Id, new TaskDispatchRecord("codex-cli", "codex exec", "C:\\work", DateTimeOffset.UtcNow));
-        seed.RecordDispatchBaseCommit(goal.Id, task.Id, "48422231916172e8d172a0cc0428d13d222c071c");
+        const string baseCommit = "48422231916172e8d172a0cc0428d13d222c071c";
+        seed.RecordTaskDispatch(
+            goal.Id,
+            task.Id,
+            new TaskDispatchRecord(
+                "codex-cli",
+                "codex exec",
+                "C:\\work",
+                DateTimeOffset.UtcNow,
+                ContextPackageReceipt: EarlyConvergenceReceipt(baseCommit)));
+        seed.RecordDispatchBaseCommit(goal.Id, task.Id, baseCommit);
         seed.RecordCriterionRetryFeedback(goal.Id, task.Id, ["Re-run verification against the current candidate."]);
         seed.RecordDispatchExecutionResult(goal.Id, task.Id, new TaskVerificationRecord(
             "codex exec",
