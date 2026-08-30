@@ -1709,6 +1709,15 @@ public static class WorkerProcessJobs
         return WindowsNativeProcessInspection.ListIdentityBoundDescendantProcessIds(ancestorProcessId);
     }
 
+    public static IReadOnlyList<int> ListConservativeDescendantProcessIdsForRefusal(
+        int ancestorProcessId,
+        DateTimeOffset recordedAncestorStartedAt)
+    {
+        return WindowsNativeProcessInspection.ListConservativeDescendantProcessIdsForRefusal(
+            ancestorProcessId,
+            recordedAncestorStartedAt);
+    }
+
     private static bool RegisterDurable(
         SpawnRegistry registry,
         SpawnProcessIdentity identity,

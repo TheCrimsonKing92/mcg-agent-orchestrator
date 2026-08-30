@@ -1203,13 +1203,18 @@ public sealed class ProgressiveReviewSteeringTests
         store.EnqueueIntentAsync(Intent(goal, task, now, "do not start while an unreadable lineage child is alive")).GetAwaiter().GetResult();
         var attentionStore = new FakeCollaborationItemStore();
         var started = false;
+        const int unreadableChildPid = 6_102;
+        WindowsNativeProcessInspection.ProcessInspectionSeed[] postCancelSnapshot =
+        [
+            // The wrapper is gone, but Toolhelp retains the child's parent PID.
+            new(unreadableChildPid, 6_001, "unreadable-child")
+        ];
 
         var coordinator = NewCoordinator(
             root,
             store,
             attentionStore,
-            isProcessRunning: pid => pid == 6102,
-            getLineageDescendants: _ => [6102],
+            isProcessRunning: pid => pid == unreadableChildPid,
             cancelProcess: CancelWithTerminalProof(now),
             startProcess: (_, _, _) =>
             {
@@ -1217,7 +1222,20 @@ public sealed class ProgressiveReviewSteeringTests
                 throw new InvalidOperationException("start must not run over a live unreadable lineage descendant");
             },
             currentHead: head,
-            readProcessIdentity: processId => processId == 6102 ? null : TestProcessIdentity(processId));
+            readProcessIdentity: processId => processId == unreadableChildPid ? null : TestProcessIdentity(processId),
+            listConservativeLineageDescendants: (ancestorProcessId, ancestorStartedAt) =>
+                WindowsNativeProcessInspection.ListConservativeDescendantProcessIdsForRefusal(
+                    ancestorProcessId,
+                    ancestorStartedAt,
+                    () => WindowsNativeProcessInspection.ProcessEnumerationResult.Success(postCancelSnapshot),
+                    seed => new ProcessInspectionRecord(
+                        seed.ProcessId,
+                        seed.ParentProcessId,
+                        seed.Name,
+                        null,
+                        null,
+                        null,
+                        ProcessInspectionStatus.AccessDenied)));
 
         var result = coordinator.ExecutePending(kernel, goal);
 
@@ -1373,7 +1391,8 @@ public sealed class ProgressiveReviewSteeringTests
         ProgressiveReviewSteeringOptions? options = null,
         string? currentHead = null,
         Func<DateTimeOffset>? utcNow = null,
-        Func<int, SpawnProcessIdentity?>? readProcessIdentity = null)
+        Func<int, SpawnProcessIdentity?>? readProcessIdentity = null,
+        Func<int, DateTimeOffset, IReadOnlyList<int>>? listConservativeLineageDescendants = null)
     {
         var workspace = OrchestratorWorkspace.ForDirectory(root);
         return new ProgressiveReviewSteeringCoordinator(
@@ -1393,7 +1412,8 @@ public sealed class ProgressiveReviewSteeringTests
             headResolver: currentHead is null ? null : _ => currentHead,
             capturedHeadIsAncestor: currentHead is null ? null : SameHead,
             prepareFreshDispatchWithPolicy: prepareFreshDispatchWithPolicy,
-            readProcessIdentity: readProcessIdentity ?? (processId => TestProcessIdentity(processId)));
+            readProcessIdentity: readProcessIdentity ?? (processId => TestProcessIdentity(processId)),
+            listConservativeLineageDescendants: listConservativeLineageDescendants);
     }
 
     private static bool SameHead(string _, string? capturedHead, string? currentHead) =>

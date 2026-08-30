@@ -76,6 +76,59 @@ public sealed class WindowsNativeProcessInspectionTests
     }
 
     [Xunit.Fact]
+    public void ConservativeRefusalDescendantsRetainUnreadableOrphanButPruneOlderStaleBranch()
+    {
+        const int exitedWrapperPid = 6_001;
+        const int unreadableChildPid = 6_102;
+        const int laterGrandchildPid = 6_103;
+        const int olderFalseChildPid = 6_200;
+        var wrapperStartedAt = DateTimeOffset.Parse("2026-08-30T05:48:32Z");
+        WindowsNativeProcessInspection.ProcessInspectionSeed[] seeds =
+        [
+            // The wrapper is intentionally absent: this is the post-cancellation snapshot.
+            new(unreadableChildPid, exitedWrapperPid, "unreadable-child"),
+            new(laterGrandchildPid, unreadableChildPid, "later-grandchild"),
+            new(olderFalseChildPid, exitedWrapperPid, "older-false-child")
+        ];
+
+        var candidates = WindowsNativeProcessInspection.ListConservativeDescendantProcessIdsForRefusal(
+            exitedWrapperPid,
+            wrapperStartedAt,
+            () => WindowsNativeProcessInspection.ProcessEnumerationResult.Success(seeds),
+            seed => seed.ProcessId switch
+            {
+                unreadableChildPid => new ProcessInspectionRecord(
+                    seed.ProcessId,
+                    seed.ParentProcessId,
+                    seed.Name,
+                    null,
+                    null,
+                    null,
+                    ProcessInspectionStatus.AccessDenied),
+                laterGrandchildPid => new ProcessInspectionRecord(
+                    seed.ProcessId,
+                    seed.ParentProcessId,
+                    seed.Name,
+                    Path.Combine("fixture", "later-grandchild.exe"),
+                    wrapperStartedAt.AddSeconds(2),
+                    seed.Name,
+                    ProcessInspectionStatus.Available),
+                olderFalseChildPid => new ProcessInspectionRecord(
+                    seed.ProcessId,
+                    seed.ParentProcessId,
+                    seed.Name,
+                    Path.Combine("fixture", "older-false-child.exe"),
+                    wrapperStartedAt.AddDays(-3),
+                    seed.Name,
+                    ProcessInspectionStatus.Available),
+                _ => throw new InvalidOperationException($"Unexpected fixture pid {seed.ProcessId}.")
+            });
+
+        Assert.Equal<int>([unreadableChildPid, laterGrandchildPid], candidates);
+        Assert.DoesNotContain(olderFalseChildPid, candidates);
+    }
+
+    [Xunit.Fact]
     public void TerminateIfMatches_RecycledIdentityDoesNotTerminateHandle()
     {
         var expected = AvailableRecord(DateTimeOffset.Parse("2026-08-26T12:00:00Z"));

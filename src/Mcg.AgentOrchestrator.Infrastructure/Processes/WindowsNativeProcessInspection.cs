@@ -151,6 +151,101 @@ internal static class WindowsNativeProcessInspection
         return accepted.Distinct().OrderBy(processId => processId).ToArray();
     }
 
+    internal static IReadOnlyList<int> ListConservativeDescendantProcessIdsForRefusal(
+        int ancestorProcessId,
+        DateTimeOffset recordedAncestorStartedAt)
+    {
+        if (ancestorProcessId <= 0 || !OperatingSystem.IsWindows())
+        {
+            return [];
+        }
+
+        return ListConservativeDescendantProcessIdsForRefusal(
+            ancestorProcessId,
+            recordedAncestorStartedAt,
+            EnumerateProcesses,
+            ReadOne);
+    }
+
+    internal static IReadOnlyList<int> ListConservativeDescendantProcessIdsForRefusal(
+        int ancestorProcessId,
+        DateTimeOffset recordedAncestorStartedAt,
+        Func<ProcessEnumerationResult> enumerate,
+        Func<ProcessInspectionSeed, ProcessInspectionRecord> readOne)
+    {
+        var enumeration = enumerate();
+        if (ancestorProcessId <= 0 || enumeration.Failure is not null)
+        {
+            return [];
+        }
+
+        var seedsById = enumeration.Processes
+            .Where(seed => seed.ProcessId > 0)
+            .GroupBy(seed => seed.ProcessId)
+            .ToDictionary(group => group.Key, group => group.First());
+        var records = new Dictionary<int, ProcessInspectionRecord>();
+        ProcessInspectionRecord Read(ProcessInspectionSeed seed)
+        {
+            if (!records.TryGetValue(seed.ProcessId, out var record))
+            {
+                record = readOne(seed);
+                records[seed.ProcessId] = record;
+            }
+
+            return record;
+        }
+
+        // A live process with the recorded root PID but a different start time owns a
+        // different tree. Prune it rather than following recycled parent-PID edges.
+        if (seedsById.TryGetValue(ancestorProcessId, out var currentRootSeed))
+        {
+            var currentRoot = Read(currentRootSeed);
+            if (currentRoot.StartedAt is { } currentRootStartedAt &&
+                currentRootStartedAt != recordedAncestorStartedAt)
+            {
+                return [];
+            }
+        }
+
+        var childrenByParent = enumeration.Processes
+            .Where(seed => seed.ProcessId > 0 && seed.ParentProcessId > 0 && seed.ProcessId != ancestorProcessId)
+            .GroupBy(seed => seed.ParentProcessId)
+            .ToDictionary(group => group.Key, group => group.ToArray());
+        var candidates = new List<int>();
+        var queue = new Queue<(int ProcessId, DateTimeOffset EarliestPossibleStart)>();
+        queue.Enqueue((ancestorProcessId, recordedAncestorStartedAt));
+        while (queue.TryDequeue(out var parent))
+        {
+            if (!childrenByParent.TryGetValue(parent.ProcessId, out var children))
+            {
+                continue;
+            }
+
+            foreach (var childSeed in children)
+            {
+                var child = Read(childSeed);
+                if (child.Status == ProcessInspectionStatus.DeadOrRecycled)
+                {
+                    continue;
+                }
+
+                // Known temporal inversion proves that this is a stale parent-PID edge;
+                // prune its entire subtree. An unreadable identity remains an unknown
+                // refusal candidate, but never flows into identity-bound ownership.
+                if (child.StartedAt is { } childStartedAt &&
+                    childStartedAt < parent.EarliestPossibleStart)
+                {
+                    continue;
+                }
+
+                candidates.Add(childSeed.ProcessId);
+                queue.Enqueue((childSeed.ProcessId, child.StartedAt ?? parent.EarliestPossibleStart));
+            }
+        }
+
+        return candidates.Distinct().OrderBy(processId => processId).ToArray();
+    }
+
     private static bool CanEstablishLiveIdentity(ProcessInspectionRecord record) =>
         record.StartedAt is not null &&
         record.Status is not ProcessInspectionStatus.Exited and not ProcessInspectionStatus.DeadOrRecycled;

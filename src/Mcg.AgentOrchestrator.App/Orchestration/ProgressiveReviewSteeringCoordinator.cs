@@ -62,7 +62,8 @@ internal sealed class ProgressiveReviewSteeringCoordinator
         Func<string, string?>? headResolver = null,
         Func<string, string?, string?, bool>? capturedHeadIsAncestor = null,
         Action<AgentOrchestratorKernel, Goal, TaskSpec, string, ConductorAutonomyPolicy?>? prepareFreshDispatchWithPolicy = null,
-        Func<int, SpawnProcessIdentity?>? readProcessIdentity = null)
+        Func<int, SpawnProcessIdentity?>? readProcessIdentity = null,
+        Func<int, DateTimeOffset, IReadOnlyList<int>>? listConservativeLineageDescendants = null)
     {
         _workspace = workspace;
         _agents = agents;
@@ -74,7 +75,8 @@ internal sealed class ProgressiveReviewSteeringCoordinator
         _utcNow = utcNow ?? (() => DateTimeOffset.UtcNow);
         _isProcessRunning = isProcessRunning ?? IsProcessRunning;
         _readProcessIdentity = readProcessIdentity ?? DispatchProcessIdentityEvidence.ReadCurrent;
-        _getLineageDescendants = getLineageDescendants ?? GetLiveLineageDescendants;
+        _getLineageDescendants = getLineageDescendants ??
+            (process => GetLiveLineageDescendants(process, listConservativeLineageDescendants));
         _cancelProcess = cancelProcess ?? ((kernel, goalId, taskId) => new BackgroundDispatchRunner().CancelLatestProcess(kernel, goalId, taskId));
         _startProcess = startProcess ?? ((kernel, goalId, taskId) => new BackgroundDispatchRunner().StartLatestDispatch(kernel, goalId, taskId, workspace.LogDirectory));
         _prepareFreshDispatch = prepareFreshDispatch;
@@ -894,8 +896,14 @@ Corrective direction:
         File.Move(tmp, heartbeatPath, overwrite: true);
     }
 
-    private static IReadOnlyList<int> GetLiveLineageDescendants(TaskProcessRecord process) =>
-        process.ProcessId > 0 ? WorkerProcessJobs.ListLiveDescendantProcessIds(process.ProcessId) : [];
+    internal static IReadOnlyList<int> GetLiveLineageDescendants(
+        TaskProcessRecord process,
+        Func<int, DateTimeOffset, IReadOnlyList<int>>? listConservativeLineageDescendants = null) =>
+        process.ProcessId > 0
+            ? (listConservativeLineageDescendants ?? WorkerProcessJobs.ListConservativeDescendantProcessIdsForRefusal)(
+                process.ProcessId,
+                process.StartedAt)
+            : [];
 
     private void RaiseAttention(ProgressiveReviewSteerIntent intent, string reason)
     {
