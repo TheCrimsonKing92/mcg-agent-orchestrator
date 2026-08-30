@@ -88,7 +88,9 @@ internal static class AssemblyTempRedirect
 
     // Retain enough recent roots for four hosts per logical processor, with fixed lower and upper
     // safety rails. Unlike an age window, the population bound is unchanged when throughput rises.
-    // Ordering also prevents PID reuse from retaining an old root forever.
+    // A PID-named root is never eligible while that PID is live: when Windows reuses a PID, the old
+    // and current owner share the same path, so a start-time mismatch cannot identify safe contents.
+    // The normal orphan sweep removes the root after the current process exits.
     internal static IReadOnlyList<string> SelectRootsBeyondRetention(
         IEnumerable<string> siblingDirectoryNames,
         int currentProcessId,
@@ -124,11 +126,7 @@ internal static class AssemblyTempRedirect
 
             if (isProcessAlive(processId))
             {
-                var processStarted = processStartTimeUtc(processId);
-                if (processStarted is null || processStarted <= written)
-                {
-                    continue;
-                }
+                continue;
             }
 
             owned.Add((name, written));

@@ -277,8 +277,8 @@ public sealed class AssemblyTempRedirectTests
         Assert.Equal(["pdead1", "pbeef", "p7fffffff"], reapable);
     }
 
-    [Fact(DisplayName = "Retention sweep bounds a doubled recent-root population")]
-    public void RetentionSweepBoundsRecentHighThroughputPopulation()
+    [Fact(DisplayName = "Retention sweep does not trade live-root safety for a population bound")]
+    public void RetentionSweepPreservesLiveRootsBeyondPopulationBound()
     {
         const int reserve = 4;
         var now = new DateTime(2026, 8, 22, 12, 0, 0, DateTimeKind.Utc);
@@ -304,11 +304,9 @@ public sealed class AssemblyTempRedirectTests
             name => writes[name],
             limit: names.Length);
 
-        Assert.Equal(reserve, overflow.Count);
-        Assert.Equal(["p1", "p2", "p3", "p4"], overflow);
+        Assert.Empty(overflow);
         Assert.Empty(reapable);
-        Assert.Equal(overflow, selected);
-        Assert.Equal(reserve, names.Except(selected, StringComparer.OrdinalIgnoreCase).Count());
+        Assert.Empty(selected);
     }
 
     [Fact(DisplayName = "Retention sweep never removes the current process root")]
@@ -333,7 +331,7 @@ public sealed class AssemblyTempRedirectTests
             currentProcessId: 0x30,
             isProcessAlive: processId => processId == 0x31,
             processStartTimeUtc: processId => processId == 0x31
-                ? DateTime.UnixEpoch.AddSeconds(-1)
+                ? DateTime.UnixEpoch.AddSeconds(2)
                 : null,
             lastWriteUtc: name => name == "p31" ? DateTime.UnixEpoch : DateTime.UnixEpoch.AddSeconds(1),
             retainedRoots: 0);
