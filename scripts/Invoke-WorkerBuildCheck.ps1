@@ -121,16 +121,6 @@ function Get-DiagnosticLines {
     return [string[]]@($Lines | Where-Object { Test-ContainsOrdinalIgnoreCase -Value $_ -Pattern $pattern })
 }
 
-function Write-CompleteBuildLog {
-    param(
-        [string]$Path,
-        [string[]]$Lines
-    )
-
-    $utf8WithoutBom = [System.Text.UTF8Encoding]::new($false)
-    [System.IO.File]::WriteAllLines($Path, $Lines, $utf8WithoutBom)
-}
-
 function Get-DisplayPath {
     param(
         [string]$Root,
@@ -446,13 +436,15 @@ try {
     for ($projectIndex = 0; $projectIndex -lt $projectPaths.Count; $projectIndex++) {
         $projectPath = $projectPaths[$projectIndex]
         $relativeProject = Get-DisplayPath -Root $repositoryRoot -Path $projectPath
-        $output = @(& dotnet build $projectPath --nologo --configuration $Configuration --verbosity minimal @isolatedArguments 2>&1)
-        $projectExitCode = $LASTEXITCODE
-        $outputLines = ConvertTo-OutputLines -Output $output
-        $warningCount += @(Get-DiagnosticLines -Lines $outputLines -Kind "warning").Count
-        $capturedCharacterCount += [string]::Join([Environment]::NewLine, $outputLines).Length
         $safeProjectName = ConvertTo-SafePathSegment -Value ([System.IO.Path]::GetFileNameWithoutExtension($projectPath))
         $logPath = Join-Path $runLogRoot ("{0:D2}-{1}.log" -f ($projectIndex + 1), $safeProjectName)
+        $fileLoggerArguments = @(
+            "-fl",
+            "-flp:LogFile=$logPath;Verbosity=normal;Encoding=UTF-8;Append=false"
+        )
+        $output = @(& dotnet build $projectPath --nologo --configuration $Configuration --verbosity minimal @isolatedArguments @fileLoggerArguments 2>&1)
+        $projectExitCode = $LASTEXITCODE
+        $outputLines = ConvertTo-OutputLines -Output $output
         if ($projectExitCode -ne 0) {
             $exitCode = 1
             $failureRecords.Add([pscustomobject]@{
@@ -463,7 +455,13 @@ try {
         }
 
         try {
-            Write-CompleteBuildLog -Path $logPath -Lines $outputLines
+            if (-not (Test-Path -LiteralPath $logPath -PathType Leaf)) {
+                throw "MSBuild did not create the detailed file logger output."
+            }
+
+            $detailedOutputLines = [string[]]@(Get-Content -LiteralPath $logPath)
+            $warningCount += @(Get-DiagnosticLines -Lines $detailedOutputLines -Kind "warning").Count
+            $capturedCharacterCount += [System.IO.File]::ReadAllText($logPath).Length
         }
         catch {
             if ($projectExitCode -eq 0) {
@@ -474,7 +472,7 @@ try {
                 })
             }
             $exitCode = 1
-            $apparatusFailure = "could not write complete build log '$logPath': $($_.Exception.Message)"
+            $apparatusFailure = "could not retain detailed build log '$logPath': $($_.Exception.Message)"
             break
         }
     }

@@ -80,28 +80,68 @@ try {
     Set-Content -LiteralPath $projectOne -Value "<Project />"
     Set-Content -LiteralPath $projectTwo -Value "<Project />"
 
-    $shimScript = @'
+$shimScript = @'
 param([Parameter(ValueFromRemainingArguments = $true)][string[]]$Arguments)
 Add-Content -LiteralPath $env:DOTNET_SHIM_LOG -Value ([string]::Join(" ", $Arguments))
 if ($Arguments.Count -gt 0 -and $Arguments[0] -eq "build-server") { exit 0 }
 $project = if ($Arguments.Count -gt 1) { $Arguments[1] } else { "unknown.csproj" }
 $warningPayload = "w" * 190
+$detailedLines = [System.Collections.Generic.List[string]]::new()
+$exitCode = 0
 switch ($env:MCG_BUILD_FIXTURE_SCENARIO) {
     "CompilerFailure" {
-        1..20 | ForEach-Object { Write-Output "$project($_,1): warning FX1000: deterministic warning $warningPayload" }
-        Write-Output "$project(21,1): error CS0001: first deterministic compiler error"
-        Write-Output "$project(22,1): error CS0002: second deterministic compiler error"
-        exit 1
+        1..20 | ForEach-Object { $detailedLines.Add("$project($_,1): warning FX1000: deterministic warning $warningPayload") }
+        $detailedLines.Add("$project(21,1): error CS0001: first deterministic compiler error")
+        $detailedLines.Add("$project(22,1): error CS0002: second deterministic compiler error")
+        $exitCode = 1
     }
     "NonDiagnosticFailure" {
-        Write-Output "SDK terminated before producing a compiler diagnostic"
-        exit 7
+        $detailedLines.Add("SDK terminated before producing a compiler diagnostic")
+        $exitCode = 7
     }
     default {
-        1..1800 | ForEach-Object { Write-Output "$project($_,1): warning FX1000: deterministic warning $warningPayload" }
-        exit 0
+        1..1800 | ForEach-Object { $detailedLines.Add("$project($_,1): warning FX1000: deterministic warning $warningPayload") }
     }
 }
+
+$fileLoggerArgument = @($Arguments | Where-Object { $_ -match '^-flp:' }) | Select-Object -First 1
+if ([string]::IsNullOrWhiteSpace($fileLoggerArgument)) {
+    for ($argumentIndex = 0; $argumentIndex -lt ($Arguments.Count - 1); $argumentIndex++) {
+        if ($Arguments[$argumentIndex] -eq '-flp') {
+            $fileLoggerArgument = '-flp:' + $Arguments[$argumentIndex + 1]
+            break
+        }
+    }
+}
+$isHelperInvocation = @($Arguments | Where-Object { $_ -eq '--nologo' }).Count -gt 0
+if ($isHelperInvocation -and [string]::IsNullOrWhiteSpace($fileLoggerArgument)) {
+    throw "helper invocation omitted file logger argument after cmd transport: $([string]::Join(' || ', $Arguments))"
+}
+if (-not [string]::IsNullOrWhiteSpace($fileLoggerArgument)) {
+    $logPathMatch = [regex]::Match($fileLoggerArgument, '(?i)(?:^|[:;])LogFile=(?<path>[^;]+)')
+    if (-not $logPathMatch.Success) { throw "file logger argument omitted LogFile=: $fileLoggerArgument" }
+    $detailedLogPath = $logPathMatch.Groups["path"].Value
+    $utf8WithoutBom = [System.Text.UTF8Encoding]::new($false)
+    [System.IO.File]::WriteAllLines($detailedLogPath, $detailedLines, $utf8WithoutBom)
+}
+
+$errorsOnly = @($Arguments | Where-Object { $_ -eq '-clp:ErrorsOnly' }).Count -gt 0
+if (-not $errorsOnly) {
+    for ($argumentIndex = 0; $argumentIndex -lt ($Arguments.Count - 1); $argumentIndex++) {
+        if ($Arguments[$argumentIndex] -eq '-clp' -and $Arguments[$argumentIndex + 1] -eq 'ErrorsOnly') {
+            $errorsOnly = $true
+            break
+        }
+    }
+}
+$consoleLines = if ($errorsOnly -and $env:MCG_BUILD_FIXTURE_SCENARIO -ne "NonDiagnosticFailure") {
+    @($detailedLines | Where-Object { $_.IndexOf(': error ', [System.StringComparison]::OrdinalIgnoreCase) -ge 0 })
+}
+else {
+    @($detailedLines)
+}
+$consoleLines | ForEach-Object { Write-Output $_ }
+exit $exitCode
 '@
     Set-Content -LiteralPath (Join-Path $shimDirectory "dotnet-shim.ps1") -Value $shimScript
     $shimCommand = @'
@@ -150,16 +190,19 @@ exit $LASTEXITCODE
             $rawErrors = Count-DiagnosticLines -Text $rawText -Kind "error"
             $helperErrors = Count-DiagnosticLines -Text $helperText -Kind "error"
             $vectors = Get-Content -LiteralPath $shimLog
-            Assert-Contract ($raw.ExitCode -eq $helper.ExitCode) "raw/helper exit codes differ"
+            Assert-Contract ($raw.ExitCode -eq $helper.ExitCode) "raw/helper exit codes differ: raw=$($raw.ExitCode) helper=$($helper.ExitCode) helper_output=$helperText"
             Assert-Contract ($raw.ExitCode -eq 0) "warning fixture did not succeed"
             Assert-Contract ($rawCharacters -ge 256000) "raw output was $rawCharacters characters; expected at least 256000"
             Assert-Contract ($helperCharacters -lt 2048) "helper output was $helperCharacters characters; expected below 2048"
             Assert-Contract ($rawErrors -eq $helperErrors -and $rawErrors -eq 0) "raw/helper error counts differ"
             Assert-Contract (@($vectors | Where-Object { $_ -match '^build ' -and $_ -notmatch '--nologo' }).Count -eq 1) "raw argument vector was not recorded"
-            Assert-Contract (@($vectors | Where-Object { $_ -match '^build ' -and $_ -match '--nologo' -and $_ -match '-tl[: ]+off' }).Count -eq 1) "helper argument vector was not distinct: $([string]::Join(' || ', $vectors))"
+            Assert-Contract (@($vectors | Where-Object { $_ -match '^build ' -and $_ -match '--nologo' -and $_ -match '-tl(?::|\s+)off' -and $_ -match '-fl(?:\s|$)' -and $_ -match '-flp(?::|\s+)LogFile=' }).Count -eq 1) "helper argument vector omitted the detailed file logger: $([string]::Join(' || ', $vectors))"
             $logs = @(Get-ChildItem -LiteralPath $isolatedRoot -Filter "*.log" -File -Recurse)
             Assert-Contract ($logs.Count -eq 1) "expected one durable project log; found $($logs.Count)"
-            Assert-Contract ((Get-Content -LiteralPath $logs[0].FullName -Raw).Length -ge 256000) "durable helper log did not retain complete warning output"
+            $detailedLogText = Get-Content -LiteralPath $logs[0].FullName -Raw
+            Assert-Contract (-not $helperText.Contains("deterministic warning")) "warning leaked into model-visible helper output"
+            Assert-Contract ($detailedLogText.Contains("deterministic warning")) "durable helper log omitted the warning"
+            Assert-Contract ($detailedLogText.Length -ge 256000) "durable helper log did not retain complete warning output"
             $estimatedTokens = [int][Math]::Ceiling($helperCharacters / 4.0)
             Write-Output "PASS fixture: scenario=Warnings raw_chars=$rawCharacters helper_chars=$helperCharacters raw_exit=$($raw.ExitCode) helper_exit=$($helper.ExitCode) raw_errors=$rawErrors helper_errors=$helperErrors approximate_helper_tokens=$estimatedTokens"
         }
@@ -169,7 +212,7 @@ exit $LASTEXITCODE
             Assert-Contract ($helperText.Contains("complete-log:")) "failure omitted complete-log path"
             Assert-Contract ($helperText.Length -lt 4096) "failure context was not bounded"
             $logText = Get-Content -LiteralPath (Get-ChildItem -LiteralPath $isolatedRoot -Filter "*.log" -File -Recurse).FullName -Raw
-            Assert-Contract ($logText.Contains("deterministic warning") -and $logText.Contains(": error CS0002:")) "complete failure log discarded diagnostics"
+            Assert-Contract ($logText.Contains("deterministic warning") -and $logText.Contains(": error CS0002:")) "detailed failure log discarded surrounding diagnostics"
             Write-Output "PASS fixture: scenario=CompilerFailure helper_chars=$($helperText.Length) errors=$(Count-DiagnosticLines -Text $helperText -Kind 'error')"
         }
         "NonDiagnosticFailure" {

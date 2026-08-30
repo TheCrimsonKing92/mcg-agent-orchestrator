@@ -46,7 +46,8 @@ public sealed class WorkerBuildCheckOutputBoundsTests
 
         Assert.Contains("-clp:ErrorsOnly", helper, StringComparison.Ordinal);
         Assert.Contains("-tl:off", helper, StringComparison.Ordinal);
-        Assert.Contains("Write-CompleteBuildLog", helper, StringComparison.Ordinal);
+        Assert.Contains("\"-fl\"", helper, StringComparison.Ordinal);
+        Assert.Contains("-flp:LogFile=$logPath;Verbosity=normal;Encoding=UTF-8;Append=false", helper, StringComparison.Ordinal);
         Assert.Contains("complete-log:", helper, StringComparison.Ordinal);
         Assert.Contains("$startInfo.ArgumentList.Add($argument)", diagnostic, StringComparison.Ordinal);
         Assert.Contains("$startInfo.RedirectStandardInput = $true", diagnostic, StringComparison.Ordinal);
