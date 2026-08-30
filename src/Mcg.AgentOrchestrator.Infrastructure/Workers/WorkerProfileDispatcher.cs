@@ -2342,12 +2342,14 @@ public static class WorkerProfileDispatcher
                 section.LogicalIdentity.Equals(identityValue, StringComparison.Ordinal) &&
                 section.ContentHash.Equals(WorkerContextArtifact.Hash(bytes), StringComparison.Ordinal) &&
                 section.ContractVersion == ContextContractVersion.V1.Value);
-            if (mode == ContextDeliveryMode.MandatoryFile && priorSection is not null)
+            if (mode == ContextDeliveryMode.MandatoryFile &&
+                priorContextPackageReceipt?.ValidatedForIdempotentReuse == true &&
+                priorSection is not null)
             {
                 mode = ContextDeliveryMode.OnDemandFile;
             }
             string? relativePath = null;
-            if (mode is ContextDeliveryMode.MandatoryFile or ContextDeliveryMode.OnDemandFile)
+            if (mode is ContextDeliveryMode.MandatoryFile or ContextDeliveryMode.OnDemandFile or ContextDeliveryMode.HistoricalFile)
             {
                 relativePath = $".orchestrator-context/{goal.Id.Value}/authoritative/{task.Id.Value}/typed/{identity.Value}";
                 var materializationPath = Path.Combine(
@@ -2491,7 +2493,9 @@ public static class WorkerProfileDispatcher
                 task,
                 currentCandidateSha,
                 comparisonBaseSha,
-                goal.EffectiveAcceptanceCriteriaCorrections.OrderByDescending(correction => correction.RecordedAt).FirstOrDefault());
+                goal.EffectiveAcceptanceCriteriaCorrections
+                    .OrderByDescending(correction => correction.RecordedAt)
+                    .ToArray());
             ReviewFindingContextProjector.AddArtifacts(reviewFindingProjection, AddSource);
         }
         if (task.LastExecution is not null)
@@ -2642,7 +2646,11 @@ public static class WorkerProfileDispatcher
         }
         AddSource(WorkerContextSemanticSource.CurrentBrief, "brief/current.md", ContextArtifactKind.OperatorInstructions, Encoding.UTF8.GetBytes(residualBrief));
 
-        if (reviewFindingProjection?.Metrics.Mode == ReviewFindingHistoryProjectionMode.ContractRepair)
+        if (reviewFindingProjection?.Metrics.Mode == ReviewFindingHistoryProjectionMode.ContractRepair ||
+            (task.PendingRetryRoundKind is not null &&
+             reviewFindingProjection?.Metrics.FallbackReason is null &&
+             !string.IsNullOrWhiteSpace(currentCandidateSha) &&
+             !string.IsNullOrWhiteSpace(comparisonBaseSha)))
         {
             ReviewFindingContextProjector.ApplyCompactArtifactAllowList(artifacts);
         }
@@ -2705,7 +2713,7 @@ public static class WorkerProfileDispatcher
         ICollection<SemanticSourceObservation>? observedSources = null)
     {
         var inventory = preparedWithoutManifest.Artifacts
-            .Where(artifact => artifact.DeliveryMode != ContextDeliveryMode.OnDemandFile)
+            .Where(artifact => artifact.DeliveryMode is not (ContextDeliveryMode.OnDemandFile or ContextDeliveryMode.HistoricalFile))
             .Select(artifact => new ContextArtifactInventoryEntry(
             artifact.Identity.Value,
             artifact.ContentHash,

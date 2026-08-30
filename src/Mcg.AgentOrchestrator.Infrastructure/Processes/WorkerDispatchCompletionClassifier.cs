@@ -359,7 +359,8 @@ internal sealed class WorkerDispatchCompletionClassifier
         }
 
         var receipt = task.LastDispatch?.ContextPackageReceipt;
-        if (receipt is not { EarlyConvergenceEligible: true } ||
+        if (!HasExplicitNoChangeRationale(standardOutput, standardError) ||
+            receipt is not { EarlyConvergenceEligible: true } ||
             string.IsNullOrWhiteSpace(receipt.EarlyConvergenceCandidateSha) ||
             !string.Equals(receipt.EarlyConvergenceCandidateSha, task.LastDispatch?.BaseCommit, StringComparison.OrdinalIgnoreCase) ||
             receipt.EarlyConvergenceReceiptHashes is not { Count: > 0 })

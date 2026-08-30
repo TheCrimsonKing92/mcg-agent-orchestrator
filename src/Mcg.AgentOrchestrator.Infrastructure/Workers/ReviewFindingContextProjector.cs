@@ -11,7 +11,8 @@ internal sealed record ReviewFindingContextProjection(
     IReadOnlyList<ReviewFindingProjectedBody> RoundBodies,
     IReadOnlyList<ReviewFindingProjectedBody> ReceiptBodies,
     byte[]? ContractRepairEnvelopeBytes,
-    ReviewFindingHistoryProjectionMetrics Metrics);
+    ReviewFindingHistoryProjectionMetrics Metrics,
+    IReadOnlySet<string> ActiveBodyHashes);
 
 internal static class ReviewFindingContextProjector
 {
@@ -26,7 +27,10 @@ internal static class ReviewFindingContextProjector
         addSource(WorkerProfileDispatcher.WorkerContextSemanticSource.ReviewFindingHistory, "goal/review-finding-history.json", ContextArtifactKind.AcceptanceCriteria, projection.LedgerBytes, null, ContextDeliveryMode.InlineFull);
         foreach (var body in projection.RoundBodies.Concat(projection.ReceiptBodies))
         {
-            addSource(WorkerProfileDispatcher.WorkerContextSemanticSource.ReviewFindingHistory, body.LogicalIdentity, ContextArtifactKind.RegisteredContext, body.Bytes, null, ContextDeliveryMode.OnDemandFile);
+            var mode = projection.ActiveBodyHashes.Contains(body.Sha256)
+                ? ContextDeliveryMode.OnDemandFile
+                : ContextDeliveryMode.HistoricalFile;
+            addSource(WorkerProfileDispatcher.WorkerContextSemanticSource.ReviewFindingHistory, body.LogicalIdentity, ContextArtifactKind.RegisteredContext, body.Bytes, null, mode);
         }
         if (projection.ContractRepairEnvelopeBytes is not null)
         {
@@ -38,6 +42,7 @@ internal static class ReviewFindingContextProjector
         artifacts.RemoveAll(artifact =>
             artifact.Identity.Value != "goal/review-finding-history.json" &&
             artifact.Identity.Value != "task/review-contract-repair-envelope.json" &&
+            artifact.Identity.Value != "context/AGENTS.md" &&
             !artifact.Identity.Value.StartsWith("goal/review-finding-rounds/", StringComparison.Ordinal) &&
             !artifact.Identity.Value.StartsWith("goal/review-finding-receipts/", StringComparison.Ordinal));
 
@@ -46,7 +51,7 @@ internal static class ReviewFindingContextProjector
         TaskSpec targetTask,
         string? currentCandidateSha,
         string? comparisonBaseSha = null,
-        EffectiveAcceptanceCriteriaCorrection? newestOperatorCorrection = null)
+        IReadOnlyList<EffectiveAcceptanceCriteriaCorrection>? effectiveOperatorCorrections = null)
     {
         ArgumentNullException.ThrowIfNull(goal);
         ArgumentNullException.ThrowIfNull(targetTask);
@@ -203,7 +208,7 @@ internal static class ReviewFindingContextProjector
             activeReceiptReferences,
             currentCandidateSha?.Trim(),
             comparisonBaseSha?.Trim(),
-            newestOperatorCorrection,
+            effectiveOperatorCorrections ?? [],
             earlyConvergenceEligible);
         var ledgerBytes = JsonSerializer.SerializeToUtf8Bytes(ledger);
 
@@ -230,7 +235,8 @@ internal static class ReviewFindingContextProjector
             roundBodies.Values.OrderBy(body => body.Sha256, StringComparer.Ordinal).ToArray(),
             receiptBodies.Values.OrderBy(body => body.Sha256, StringComparer.Ordinal).ToArray(),
             envelopeBytes,
-            metrics);
+            metrics,
+            activeRoundHashes.Concat(activeReceiptHashes).ToHashSet(StringComparer.Ordinal));
     }
 
     private static CanonicalEntryProjection BuildCanonicalEntry(IGrouping<string, FindingSource> group)
@@ -445,7 +451,7 @@ internal static class ReviewFindingContextProjector
 
     private static string? BoundFindingDescription(string? description)
     {
-        const int inlineLimit = 360;
+        const int inlineLimit = 120;
         if (string.IsNullOrEmpty(description) || description.Length <= inlineLimit)
         {
             return description;

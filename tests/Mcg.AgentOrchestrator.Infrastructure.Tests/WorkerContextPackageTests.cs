@@ -680,16 +680,32 @@ public sealed class WorkerContextPackageTests(Xunit.ITestOutputHelper output)
             var firstArtifact = Assert.Single(first.Artifacts, artifact => artifact.Identity.Value == "context/source-survey.md");
             Assert.Equal(ContextDeliveryMode.MandatoryFile, firstArtifact.DeliveryMode);
 
-            var second = WorkerProfileDispatcher.BuildContextPackage(
+            var unvalidatedRetry = WorkerProfileDispatcher.BuildContextPackage(
                 goal,
                 task,
                 root,
                 contextDirectory,
                 brief,
                 priorContextPackageReceipt: WorkerContextPackageBuilder.CreateReceipt(first));
+            Assert.Equal(
+                ContextDeliveryMode.MandatoryFile,
+                Assert.Single(unvalidatedRetry.Artifacts, artifact => artifact.Identity.Value == "context/source-survey.md").DeliveryMode);
+
+            var second = WorkerProfileDispatcher.BuildContextPackage(
+                goal,
+                task,
+                root,
+                contextDirectory,
+                brief,
+                priorContextPackageReceipt: WorkerContextPackageBuilder.CreateReceipt(first).WithValidatedContext());
             var secondArtifact = Assert.Single(second.Artifacts, artifact => artifact.Identity.Value == "context/source-survey.md");
             Assert.Equal(ContextDeliveryMode.OnDemandFile, secondArtifact.DeliveryMode);
-            Assert.DoesNotContain("context/source-survey.md", WorkerContextPackageBuilder.Render(second), StringComparison.Ordinal);
+            var secondRendered = WorkerContextPackageBuilder.Render(second);
+            Assert.Contains(
+                $"ON-DEMAND ATTESTATION: identity=context/source-survey.md; purpose={secondArtifact.Kind}; path={secondArtifact.MandatoryRelativePath}; bytes={secondArtifact.AuthoritativeByteCount}; sha256={secondArtifact.ContentHash}",
+                secondRendered,
+                StringComparison.Ordinal);
+            Assert.DoesNotContain("stable source survey", secondRendered, StringComparison.Ordinal);
 
             var changedBytes = Encoding.UTF8.GetBytes("changed source survey");
             File.WriteAllBytes(artifactPath, changedBytes);
@@ -700,7 +716,7 @@ public sealed class WorkerContextPackageTests(Xunit.ITestOutputHelper output)
                 root,
                 contextDirectory,
                 brief,
-                priorContextPackageReceipt: WorkerContextPackageBuilder.CreateReceipt(first));
+                priorContextPackageReceipt: WorkerContextPackageBuilder.CreateReceipt(first).WithValidatedContext());
             var changedArtifact = Assert.Single(changed.Artifacts, artifact => artifact.Identity.Value == "context/source-survey.md");
             Assert.Equal(ContextDeliveryMode.MandatoryFile, changedArtifact.DeliveryMode);
             Assert.Contains("MANDATORY READ: identity=context/source-survey.md", WorkerContextPackageBuilder.Render(changed), StringComparison.Ordinal);
@@ -750,7 +766,12 @@ public sealed class WorkerContextPackageTests(Xunit.ITestOutputHelper output)
             var attestation = Assert.Single(autoLoaded.Artifacts, artifact => artifact.Identity.Value == "context/AGENTS.md");
             Assert.Equal(ContextDeliveryMode.OnDemandFile, attestation.DeliveryMode);
             Assert.Equal(policyBytes.Length, attestation.AuthoritativeByteCount);
-            Assert.DoesNotContain(sentinel, WorkerContextPackageBuilder.Render(autoLoaded), StringComparison.Ordinal);
+            var autoLoadedRendered = WorkerContextPackageBuilder.Render(autoLoaded);
+            Assert.Contains(
+                $"ON-DEMAND ATTESTATION: identity=context/AGENTS.md; purpose={attestation.Kind}; path={attestation.MandatoryRelativePath}; bytes={attestation.AuthoritativeByteCount}; sha256={attestation.ContentHash}",
+                autoLoadedRendered,
+                StringComparison.Ordinal);
+            Assert.DoesNotContain(sentinel, autoLoadedRendered, StringComparison.Ordinal);
             Assert.Contains("project_doc_max_bytes=65536", codex.CommandTemplate, StringComparison.Ordinal);
 
             var explicitFallback = WorkerProfileDispatcher.BuildContextPackage(

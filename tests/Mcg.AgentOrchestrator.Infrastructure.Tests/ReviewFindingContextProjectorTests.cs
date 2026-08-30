@@ -67,6 +67,7 @@ public sealed class ReviewFindingContextProjectorTests
                     FullStandardOutput: "pass",
                     FullStandardError: string.Empty));
             }
+            kernel.RetryTask(goal.Id, reviewer.Id, "Project only current unresolved evidence for the next round.");
 
             var snapshots = reviewer.VerificationHistory.Select(verification => new
             {
@@ -124,22 +125,31 @@ public sealed class ReviewFindingContextProjectorTests
                 Assert.Equal(reference.GetProperty("sha256").GetString(), WorkerContextArtifact.Hash(recovered));
             });
             var packageReceipt = WorkerContextPackageBuilder.CreateReceipt(package)
-                .WithToolTranscriptCharacters(625_105);
+                .WithToolTranscriptCharacters(0)
+                .WithBaselineMeasurements(84_089, 157_623, 625_105);
             Assert.Equal(1, packageReceipt.UniqueReviewFindingRoundCount);
             Assert.Equal(19, packageReceipt.DuplicateReviewFindingRoundCount);
             Assert.Equal(9, packageReceipt.UniqueFindingEvidenceReceiptCount);
             Assert.Equal(171, packageReceipt.DuplicateFindingEvidenceReceiptCount);
             var rendered = WorkerContextPackageBuilder.Render(package);
-            Assert.True(rendered.Length * 4 <= legacyPrompt.Length,
-                $"Compact prompt {rendered.Length} chars did not reduce the {legacyPrompt.Length}-character fixture by 4x.");
+            Assert.True(rendered.Length <= 21_022,
+                $"Compact prompt {rendered.Length} chars exceeded the 21,022-character production ceiling.");
+            Assert.True(rendered.Length * 4 <= packageReceipt.BaselinePromptCharacters,
+                $"Compact prompt {rendered.Length} chars did not reduce the 84,089-character production baseline by 4x.");
             Assert.DoesNotContain("decision-input-14-round", rendered, StringComparison.Ordinal);
             Assert.Contains("decision-input-00-round-18", rendered, StringComparison.Ordinal);
             Assert.Equal(rendered.Length, packageReceipt.RenderedPromptCharacters);
             Assert.Equal(Encoding.UTF8.GetByteCount(rendered), packageReceipt.RenderedPromptBytes);
-            Assert.Equal(625_105, packageReceipt.ToolTranscriptCharacters);
+            Assert.Equal(625_105, packageReceipt.BaselineToolTranscriptCharacters);
+            Assert.Equal(84_089, packageReceipt.BaselinePromptCharacters);
+            Assert.Equal(157_623, packageReceipt.BaselineDeliveredArtifactBytes);
+            Assert.True(packageReceipt.ModelInputTokenEstimate * 4 <= packageReceipt.BaselineModelInputTokenEstimate);
             Assert.Equal(WorkerPromptInputBudget.CountTokens(rendered), packageReceipt.ModelInputTokenEstimate);
             Assert.True(packageReceipt.DeliveredArtifactBytes > 0);
             Assert.True(packageReceipt.OnDemandArtifactBytes > packageReceipt.DeliveredArtifactBytes);
+            var historical = package.Artifacts.Where(artifact => artifact.DeliveryMode == ContextDeliveryMode.HistoricalFile).ToArray();
+            Assert.NotEmpty(historical);
+            Assert.All(historical, artifact => Assert.DoesNotContain(artifact.Identity.Value, rendered, StringComparison.Ordinal));
         }
         finally
         {
@@ -757,6 +767,7 @@ public sealed class ReviewFindingContextProjectorTests
         ContextDeliveryMode.InlineFull => artifact.AuthoritativeBytes!,
         ContextDeliveryMode.MandatoryFile => File.ReadAllBytes(Path.Combine(root, artifact.MandatoryRelativePath!.Replace('/', Path.DirectorySeparatorChar))),
         ContextDeliveryMode.OnDemandFile => File.ReadAllBytes(Path.Combine(root, artifact.MandatoryRelativePath!.Replace('/', Path.DirectorySeparatorChar))),
+        ContextDeliveryMode.HistoricalFile => File.ReadAllBytes(Path.Combine(root, artifact.MandatoryRelativePath!.Replace('/', Path.DirectorySeparatorChar))),
         _ => throw new InvalidOperationException()
     };
 }

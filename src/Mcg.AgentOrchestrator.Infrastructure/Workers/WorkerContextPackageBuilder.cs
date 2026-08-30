@@ -129,7 +129,7 @@ public sealed class WorkerContextPackageBuilder
             $"Semantic package identity (attestation/cache only; not delivery proof): {package.SemanticPackageId}"
         };
 
-        foreach (var artifact in package.Artifacts.Where(artifact => artifact.DeliveryMode != ContextDeliveryMode.OnDemandFile))
+        foreach (var artifact in package.Artifacts.Where(artifact => artifact.DeliveryMode != ContextDeliveryMode.HistoricalFile))
         {
             lines.Add(string.Empty);
             lines.Add(RenderArtifact(artifact));
@@ -214,9 +214,9 @@ public sealed class WorkerContextPackageBuilder
             projection?.DuplicateReceiptCount ?? 0,
             projection?.FallbackReason,
             renderedPackage.Length,
-            package.Artifacts.Where(artifact => artifact.DeliveryMode != ContextDeliveryMode.OnDemandFile)
+            package.Artifacts.Where(artifact => artifact.DeliveryMode is ContextDeliveryMode.InlineFull or ContextDeliveryMode.MandatoryFile)
                 .Sum(artifact => artifact.AuthoritativeByteCount),
-            package.Artifacts.Where(artifact => artifact.DeliveryMode == ContextDeliveryMode.OnDemandFile)
+            package.Artifacts.Where(artifact => artifact.DeliveryMode is ContextDeliveryMode.OnDemandFile or ContextDeliveryMode.HistoricalFile)
                 .Sum(artifact => artifact.AuthoritativeByteCount),
             ToolTranscriptCharacters: 0,
             ModelInputTokenEstimate: WorkerPromptInputBudget.CountTokens(renderedPackage),
@@ -239,8 +239,7 @@ public sealed class WorkerContextPackageBuilder
 
         if (artifact.DeliveryMode == ContextDeliveryMode.OnDemandFile)
         {
-            return $"ON-DEMAND ATTESTATION: identity={artifact.Identity.Value}; purpose={artifact.Kind}; path={artifact.MandatoryRelativePath}; bytes={artifact.AuthoritativeByteCount}; sha256={artifact.ContentHash}; contract={artifact.ContractVersion.Value}; validation=verified. " +
-                "Read only when the compact projection cites this hash and the current task requires the complete body; do not reread an unchanged validated hash.";
+            return $"ON-DEMAND ATTESTATION: identity={artifact.Identity.Value}; purpose={artifact.Kind}; path={artifact.MandatoryRelativePath}; bytes={artifact.AuthoritativeByteCount}; sha256={artifact.ContentHash}; contract={artifact.ContractVersion.Value}; validation=verified.";
         }
 
         var bytes = artifact.AuthoritativeBytes!;
@@ -256,7 +255,7 @@ public sealed class WorkerContextPackageBuilder
     {
         var identity = new LogicalArtifactIdentity(section.LogicalIdentity);
         var version = new ContextContractVersion(section.ContractVersion);
-        if (section.DeliveryMode is ContextDeliveryMode.MandatoryFile or ContextDeliveryMode.OnDemandFile)
+        if (section.DeliveryMode is ContextDeliveryMode.MandatoryFile or ContextDeliveryMode.OnDemandFile or ContextDeliveryMode.HistoricalFile)
         {
             return WorkerContextArtifact.Create(
                 identity,

@@ -20,7 +20,8 @@ public enum ContextDeliveryMode
 {
     InlineFull,
     MandatoryFile,
-    OnDemandFile
+    OnDemandFile,
+    HistoricalFile
 }
 
 public readonly record struct ContextContractVersion(int Value)
@@ -228,7 +229,7 @@ public sealed class WorkerContextArtifact
             throw new ArgumentException("InlineFull requires complete authoritative bytes.", nameof(authoritativeBytes));
         }
 
-        if (deliveryMode is ContextDeliveryMode.MandatoryFile or ContextDeliveryMode.OnDemandFile &&
+        if (deliveryMode is ContextDeliveryMode.MandatoryFile or ContextDeliveryMode.OnDemandFile or ContextDeliveryMode.HistoricalFile &&
             string.IsNullOrWhiteSpace(mandatoryRelativePath))
         {
             throw new ArgumentException("File-backed delivery requires a relative materialization path.", nameof(mandatoryRelativePath));
@@ -351,7 +352,12 @@ public sealed record WorkerContextPackageReceipt(
     int ModelInputTokenEstimate = 0,
     bool EarlyConvergenceEligible = false,
     string? EarlyConvergenceCandidateSha = null,
-    IReadOnlyList<string>? EarlyConvergenceReceiptHashes = null)
+    IReadOnlyList<string>? EarlyConvergenceReceiptHashes = null,
+    bool ValidatedForIdempotentReuse = false,
+    int BaselinePromptCharacters = 0,
+    int BaselineDeliveredArtifactBytes = 0,
+    int BaselineToolTranscriptCharacters = 0,
+    int BaselineModelInputTokenEstimate = 0)
 {
     public WorkerContextPackageReceipt WithProviderUsage(ProviderReportedUsage? usage, string unavailableReason = "absent") => this with
     {
@@ -373,6 +379,29 @@ public sealed record WorkerContextPackageReceipt(
             ? throw new ArgumentOutOfRangeException(nameof(characterCount))
             : characterCount
     };
+
+    public WorkerContextPackageReceipt WithValidatedContext() => this with
+    {
+        ValidatedForIdempotentReuse = true
+    };
+
+    public WorkerContextPackageReceipt WithBaselineMeasurements(
+        int promptCharacters,
+        int deliveredArtifactBytes,
+        int toolTranscriptCharacters) => this with
+    {
+        BaselinePromptCharacters = RequireNonNegative(promptCharacters, nameof(promptCharacters)),
+        BaselineDeliveredArtifactBytes = RequireNonNegative(deliveredArtifactBytes, nameof(deliveredArtifactBytes)),
+        BaselineToolTranscriptCharacters = RequireNonNegative(toolTranscriptCharacters, nameof(toolTranscriptCharacters)),
+        BaselineModelInputTokenEstimate = EstimateInputTokens(RequireNonNegative(promptCharacters, nameof(promptCharacters)))
+    };
+
+    private static int RequireNonNegative(int value, string parameterName) => value < 0
+        ? throw new ArgumentOutOfRangeException(parameterName)
+        : value;
+
+    private static int EstimateInputTokens(int characterCount) =>
+        characterCount / 4 + (characterCount % 4 == 0 ? 0 : 1);
 
     private static ProviderUsageValue MergeUsageValue(
         ProviderUsageValue current,

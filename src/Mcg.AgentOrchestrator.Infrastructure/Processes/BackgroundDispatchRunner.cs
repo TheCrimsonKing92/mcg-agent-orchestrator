@@ -924,6 +924,10 @@ public sealed class BackgroundDispatchRunner
                 .WithToolTranscriptCharacters(
                     outcome.Verification.AuthoritativeStandardOutput?.Length ??
                     outcome.Verification.StandardOutput.Length);
+            if (outcome.ProviderUsage is not null)
+            {
+                measuredReceipt = measuredReceipt.WithValidatedContext();
+            }
             kernel.RecordDispatchContextPackageReceipt(
                 goalId,
                 taskId,

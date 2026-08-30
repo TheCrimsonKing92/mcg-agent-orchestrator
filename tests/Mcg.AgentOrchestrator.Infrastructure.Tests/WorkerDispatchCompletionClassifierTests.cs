@@ -84,11 +84,20 @@ public sealed class WorkerDispatchCompletionClassifierTests
                 EarlyConvergenceEligible: true,
                 EarlyConvergenceCandidateSha: candidate,
                 EarlyConvergenceReceiptHashes: [new string('a', 64)])));
-        var passing = WorkerResultBlock("none", "Invoke-TestSummary", "pass - focused verification completed");
+        var passing = "NO_CHANGE: current candidate already satisfies the blocking finding.\n" +
+            WorkerResultBlock("none", "Invoke-TestSummary", "pass - focused verification completed");
         var deferred = WorkerResultBlock("none", "none", "deferred - acceptance gate");
 
         Xunit.Assert.True(classifier.AllowsNoChangeCompletion(developer, passing, string.Empty));
         Xunit.Assert.False(classifier.AllowsNoChangeCompletion(developer, deferred, string.Empty));
+
+        var staleCandidate = passing.Replace(candidate, new string('d', 40), StringComparison.Ordinal);
+        kernel.RecordDispatchContextPackageReceipt(
+            goal.Id,
+            developer.Id,
+            developer.LastDispatch!.DispatchedAt,
+            developer.LastDispatch.ContextPackageReceipt! with { EarlyConvergenceCandidateSha = new string('d', 40) });
+        Xunit.Assert.False(classifier.AllowsNoChangeCompletion(developer, staleCandidate, string.Empty));
     }
 
     [Xunit.Fact]
