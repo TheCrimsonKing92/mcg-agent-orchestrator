@@ -74,6 +74,7 @@ public sealed class ReviewFindingContextProjectorTests
                 EvidenceReceipts = verification.FindingEvidenceReceipts
             }).ToArray();
             var legacyBytes = JsonSerializer.SerializeToUtf8Bytes(snapshots);
+            var legacyPrompt = Encoding.UTF8.GetString(legacyBytes);
             Assert.True(legacyBytes.Length >= 640_080, $"Production-shaped legacy fixture was only {legacyBytes.Length} bytes.");
             var exactRecordBytes = JsonSerializer.SerializeToUtf8Bytes(
                 WorkerContextPackageBuilder.DistinctBySerializedValue(snapshots));
@@ -86,16 +87,18 @@ public sealed class ReviewFindingContextProjectorTests
                 root,
                 contextDirectory,
                 Brief(goal, reviewer),
-                currentCandidateSha: candidateSha);
+                currentCandidateSha: candidateSha,
+                comparisonBaseSha: new string('b', 40));
             var history = Assert.Single(package.Artifacts, artifact => artifact.Identity.Value == "goal/review-finding-history.json");
             Assert.Equal(ContextDeliveryMode.InlineFull, history.DeliveryMode);
             var ledgerBytes = Recover(root, history);
             Assert.True(ledgerBytes.Length <= 60_000, $"Canonical inline ledger was {ledgerBytes.Length} bytes.");
             using var ledger = JsonDocument.Parse(ledgerBytes);
+            Assert.Equal(candidateSha, ledger.RootElement.GetProperty("current_candidate_sha").GetString());
+            Assert.Equal(new string('b', 40), ledger.RootElement.GetProperty("comparison_base_sha").GetString());
             var projected = ledger.RootElement.GetProperty("findings").EnumerateArray().ToArray();
-            Assert.Equal(22, projected.Length);
-            Assert.Equal(14, projected.Count(finding => finding.GetProperty("state").GetString() == "Open"));
-            Assert.Equal(8, projected.Count(finding => finding.GetProperty("state").GetString() == "Resolved"));
+            Assert.Equal(14, projected.Length);
+            Assert.All(projected, finding => Assert.Equal("Open", finding.GetProperty("state").GetString()));
             Assert.All(projected, finding =>
             {
                 Assert.Equal(candidateSha, finding.GetProperty("candidate_sha").GetString());
@@ -106,21 +109,37 @@ public sealed class ReviewFindingContextProjectorTests
                 .Select(round => round.GetProperty("body"))
                 .ToArray();
             var receiptReferences = ledger.RootElement.GetProperty("receipt_bodies").EnumerateArray().ToArray();
-            Assert.Equal(20, roundReferences.Length);
+            Assert.Single(roundReferences);
             Assert.Equal(9, receiptReferences.Length);
+            Assert.DoesNotContain(package.Artifacts, artifact =>
+                artifact.DeliveryMode == ContextDeliveryMode.MandatoryFile &&
+                (artifact.Identity.Value.StartsWith("goal/review-finding-rounds/", StringComparison.Ordinal) ||
+                 artifact.Identity.Value.StartsWith("goal/review-finding-receipts/", StringComparison.Ordinal)));
             Assert.All(roundReferences.Concat(receiptReferences), reference =>
             {
                 var identity = reference.GetProperty("logical_identity").GetString()!;
                 var body = Assert.Single(package.Artifacts, artifact => artifact.Identity.Value == identity);
-                Assert.Equal(ContextDeliveryMode.MandatoryFile, body.DeliveryMode);
+                Assert.Equal(ContextDeliveryMode.OnDemandFile, body.DeliveryMode);
                 var recovered = Recover(root, body);
                 Assert.Equal(reference.GetProperty("sha256").GetString(), WorkerContextArtifact.Hash(recovered));
             });
-            var packageReceipt = WorkerContextPackageBuilder.CreateReceipt(package);
-            Assert.Equal(19, packageReceipt.UniqueReviewFindingRoundCount);
-            Assert.Equal(1, packageReceipt.DuplicateReviewFindingRoundCount);
+            var packageReceipt = WorkerContextPackageBuilder.CreateReceipt(package)
+                .WithToolTranscriptCharacters(625_105);
+            Assert.Equal(1, packageReceipt.UniqueReviewFindingRoundCount);
+            Assert.Equal(19, packageReceipt.DuplicateReviewFindingRoundCount);
             Assert.Equal(9, packageReceipt.UniqueFindingEvidenceReceiptCount);
             Assert.Equal(171, packageReceipt.DuplicateFindingEvidenceReceiptCount);
+            var rendered = WorkerContextPackageBuilder.Render(package);
+            Assert.True(rendered.Length * 4 <= legacyPrompt.Length,
+                $"Compact prompt {rendered.Length} chars did not reduce the {legacyPrompt.Length}-character fixture by 4x.");
+            Assert.DoesNotContain("decision-input-14-round", rendered, StringComparison.Ordinal);
+            Assert.Contains("decision-input-00-round-18", rendered, StringComparison.Ordinal);
+            Assert.Equal(rendered.Length, packageReceipt.RenderedPromptCharacters);
+            Assert.Equal(Encoding.UTF8.GetByteCount(rendered), packageReceipt.RenderedPromptBytes);
+            Assert.Equal(625_105, packageReceipt.ToolTranscriptCharacters);
+            Assert.Equal(WorkerPromptInputBudget.CountTokens(rendered), packageReceipt.ModelInputTokenEstimate);
+            Assert.True(packageReceipt.DeliveredArtifactBytes > 0);
+            Assert.True(packageReceipt.OnDemandArtifactBytes > packageReceipt.DeliveredArtifactBytes);
         }
         finally
         {
@@ -316,19 +335,15 @@ public sealed class ReviewFindingContextProjectorTests
 
         var projection = ReviewFindingContextProjector.Project(goal, reviewer, candidateSha);
         using var ledger = JsonDocument.Parse(projection.LedgerBytes);
-        var finding = Assert.Single(ledger.RootElement.GetProperty("findings").EnumerateArray());
-        Assert.Equal(JsonValueKind.Null, finding.GetProperty("description").ValueKind);
-        var proof = Assert.Single(finding.GetProperty("resolved_anchor_proof").EnumerateArray());
-        Assert.Equal("proof-hunk", proof.GetProperty("hunk").GetString());
-        var resolvingRound = finding.GetProperty("round").GetProperty("sha256").GetString();
-        var indexedRounds = ledger.RootElement.GetProperty("rounds").EnumerateArray().ToArray();
-        Assert.Equal(
-            indexedRounds[1].GetProperty("body").GetProperty("sha256").GetString(),
-            resolvingRound);
-        Assert.NotEqual(
-            indexedRounds[2].GetProperty("body").GetProperty("sha256").GetString(),
-            resolvingRound);
-        Assert.Equal("touched-anchor", finding.GetProperty("resolution_proof").GetProperty("kind").GetString());
+        Assert.Empty(ledger.RootElement.GetProperty("findings").EnumerateArray());
+        Assert.Empty(ledger.RootElement.GetProperty("rounds").EnumerateArray());
+        Assert.Equal(3, projection.RoundBodies.Count);
+        Assert.Contains(projection.RoundBodies, body =>
+        {
+            using var round = JsonDocument.Parse(body.Bytes);
+            return round.RootElement.GetProperty("TouchedAnchors").EnumerateArray()
+                .Any(anchor => anchor.GetProperty("hunk").GetString() == "proof-hunk");
+        });
     }
 
     [Xunit.Fact]
@@ -396,18 +411,14 @@ public sealed class ReviewFindingContextProjectorTests
             var ledgerArtifact = Assert.Single(package.Artifacts,
                 artifact => artifact.Identity.Value == "goal/review-finding-history.json");
             using var ledger = JsonDocument.Parse(Recover(root, ledgerArtifact));
-            var findings = ledger.RootElement.GetProperty("findings").EnumerateArray()
-                .ToDictionary(finding => finding.GetProperty("stable_id").GetString()!, StringComparer.Ordinal);
-            var receiptProof = findings["receipt-resolved"].GetProperty("resolution_proof");
-            Assert.Equal("candidate-bound-evidence-receipt", receiptProof.GetProperty("kind").GetString());
-            Assert.Equal(candidateSha, receiptProof.GetProperty("candidate_sha").GetString());
-            Assert.False(string.IsNullOrWhiteSpace(
-                receiptProof.GetProperty("receipt_body").GetProperty("sha256").GetString()));
-            var advisoryProof = findings["advisory-resolved"].GetProperty("resolution_proof");
-            Assert.Equal("advisory-disposition", advisoryProof.GetProperty("kind").GetString());
-            Assert.Equal(candidateSha, advisoryProof.GetProperty("candidate_sha").GetString());
-            Assert.All(findings.Values, finding =>
-                Assert.Empty(finding.GetProperty("resolved_anchor_proof").EnumerateArray()));
+            Assert.Empty(ledger.RootElement.GetProperty("findings").EnumerateArray());
+            Assert.True(ledger.RootElement.GetProperty("early_convergence_eligible").GetBoolean());
+            Assert.True(package.ReviewFindingProjection!.EarlyConvergenceEligible);
+            var receiptHash = WorkerContextArtifact.Hash(JsonSerializer.SerializeToUtf8Bytes(receipt));
+            Assert.Contains(receiptHash, package.ReviewFindingProjection.EarlyConvergenceReceiptHashes!);
+            Assert.Contains(package.Artifacts, artifact =>
+                artifact.Identity.Value == $"goal/review-finding-receipts/{receiptHash}.json" &&
+                artifact.DeliveryMode == ContextDeliveryMode.OnDemandFile);
         }
         finally
         {
@@ -641,7 +652,7 @@ public sealed class ReviewFindingContextProjectorTests
                 item.GetProperty("stable_id").GetString() == "resolved-id"));
             Assert.Equal("resolved finding", finding.GetProperty("description").GetString());
             Assert.Equal(JsonValueKind.Null, finding.GetProperty("resolution_proof").ValueKind);
-            Assert.Equal(2, package.ReviewFindingProjection.UniqueRoundCount);
+            Assert.Equal(1, package.ReviewFindingProjection.UniqueRoundCount);
         }
         finally
         {
@@ -745,6 +756,7 @@ public sealed class ReviewFindingContextProjectorTests
     {
         ContextDeliveryMode.InlineFull => artifact.AuthoritativeBytes!,
         ContextDeliveryMode.MandatoryFile => File.ReadAllBytes(Path.Combine(root, artifact.MandatoryRelativePath!.Replace('/', Path.DirectorySeparatorChar))),
+        ContextDeliveryMode.OnDemandFile => File.ReadAllBytes(Path.Combine(root, artifact.MandatoryRelativePath!.Replace('/', Path.DirectorySeparatorChar))),
         _ => throw new InvalidOperationException()
     };
 }

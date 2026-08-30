@@ -19,7 +19,8 @@ public enum ContextArtifactKind
 public enum ContextDeliveryMode
 {
     InlineFull,
-    MandatoryFile
+    MandatoryFile,
+    OnDemandFile
 }
 
 public readonly record struct ContextContractVersion(int Value)
@@ -227,9 +228,10 @@ public sealed class WorkerContextArtifact
             throw new ArgumentException("InlineFull requires complete authoritative bytes.", nameof(authoritativeBytes));
         }
 
-        if (deliveryMode == ContextDeliveryMode.MandatoryFile && string.IsNullOrWhiteSpace(mandatoryRelativePath))
+        if (deliveryMode is ContextDeliveryMode.MandatoryFile or ContextDeliveryMode.OnDemandFile &&
+            string.IsNullOrWhiteSpace(mandatoryRelativePath))
         {
-            throw new ArgumentException("MandatoryFile requires a relative materialization path.", nameof(mandatoryRelativePath));
+            throw new ArgumentException("File-backed delivery requires a relative materialization path.", nameof(mandatoryRelativePath));
         }
 
         return new WorkerContextArtifact(
@@ -341,7 +343,15 @@ public sealed record WorkerContextPackageReceipt(
     int DuplicateReviewFindingRoundCount = 0,
     int UniqueFindingEvidenceReceiptCount = 0,
     int DuplicateFindingEvidenceReceiptCount = 0,
-    string? ReviewFindingFallbackReason = null)
+    string? ReviewFindingFallbackReason = null,
+    int RenderedPromptCharacters = 0,
+    int DeliveredArtifactBytes = 0,
+    int OnDemandArtifactBytes = 0,
+    int ToolTranscriptCharacters = 0,
+    int ModelInputTokenEstimate = 0,
+    bool EarlyConvergenceEligible = false,
+    string? EarlyConvergenceCandidateSha = null,
+    IReadOnlyList<string>? EarlyConvergenceReceiptHashes = null)
 {
     public WorkerContextPackageReceipt WithProviderUsage(ProviderReportedUsage? usage, string unavailableReason = "absent") => this with
     {
@@ -355,6 +365,13 @@ public sealed record WorkerContextPackageReceipt(
         InputTokens = MergeUsageValue(InputTokens, usage?.InputTokens, unavailableReason),
         CachedInputTokens = MergeUsageValue(CachedInputTokens, usage?.CachedInputTokens, unavailableReason),
         OutputTokens = MergeUsageValue(OutputTokens, usage?.OutputTokens, unavailableReason)
+    };
+
+    public WorkerContextPackageReceipt WithToolTranscriptCharacters(int characterCount) => this with
+    {
+        ToolTranscriptCharacters = characterCount < 0
+            ? throw new ArgumentOutOfRangeException(nameof(characterCount))
+            : characterCount
     };
 
     private static ProviderUsageValue MergeUsageValue(

@@ -353,8 +353,24 @@ internal sealed class WorkerDispatchCompletionClassifier
 
     internal bool AllowsNoChangeCompletion(TaskSpec task, string standardOutput, string standardError)
     {
-        return task.RequiredRole != AgentRole.Developer &&
-            HasExplicitNoChangeRationale(standardOutput, standardError);
+        if (task.RequiredRole != AgentRole.Developer)
+        {
+            return HasExplicitNoChangeRationale(standardOutput, standardError);
+        }
+
+        var receipt = task.LastDispatch?.ContextPackageReceipt;
+        if (receipt is not { EarlyConvergenceEligible: true } ||
+            string.IsNullOrWhiteSpace(receipt.EarlyConvergenceCandidateSha) ||
+            !string.Equals(receipt.EarlyConvergenceCandidateSha, task.LastDispatch?.BaseCommit, StringComparison.OrdinalIgnoreCase) ||
+            receipt.EarlyConvergenceReceiptHashes is not { Count: > 0 })
+        {
+            return false;
+        }
+
+        return (WorkerResultParser.TryParseResult(standardOutput, out var result, out _) ||
+                WorkerResultParser.TryParseResult(standardError, out result, out _)) &&
+            result.BlockersStatus == WorkerResultParser.BlockersStatus.None &&
+            result.TestsStatus == WorkerResultParser.TestsStatus.Pass;
     }
 
     internal string? ClassifyReconciliationOriginRule(

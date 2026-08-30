@@ -2,6 +2,16 @@ using Mcg.AgentOrchestrator.Core;
 
 public sealed class DispatchOutcomeClassifyTests
 {
+    private static WorkerContextPackageReceipt EarlyConvergenceReceipt(string candidateSha) => new(
+        "ctxpkg-test",
+        [],
+        ProviderUsageValue.Unknown("test"),
+        ProviderUsageValue.Unknown("test"),
+        ProviderUsageValue.Unknown("test"),
+        EarlyConvergenceEligible: true,
+        EarlyConvergenceCandidateSha: candidateSha,
+        EarlyConvergenceReceiptHashes: [new string('a', 64)]);
+
     private static TaskSpec SimpleTask(AgentRole role = AgentRole.Developer)
     {
         var clock = new FakeClock();
@@ -78,7 +88,8 @@ public sealed class DispatchOutcomeClassifyTests
                 "codex exec prompt",
                 "C:\\repo",
                 clock.UtcNow,
-                WorkerProviderKind: ProviderKind.OpenAICodexCli));
+                WorkerProviderKind: ProviderKind.OpenAICodexCli,
+                ContextPackageReceipt: EarlyConvergenceReceipt(baseCommit)));
         kernel.RecordDispatchBaseCommit(goal.Id, task.Id, baseCommit);
         kernel.RecordCriterionRetryFeedback(goal.Id, task.Id, ["gate-failure feedback: rerun receipts against current branch"]);
         return task;
@@ -100,7 +111,8 @@ public sealed class DispatchOutcomeClassifyTests
                 "codex exec prompt",
                 "C:\\repo",
                 clock.UtcNow,
-                WorkerProviderKind: ProviderKind.OpenAICodexCli));
+                WorkerProviderKind: ProviderKind.OpenAICodexCli,
+                ContextPackageReceipt: EarlyConvergenceReceipt(baseCommit)));
         kernel.RecordDispatchBaseCommit(goal.Id, task.Id, baseCommit);
         return task;
     }
@@ -120,7 +132,8 @@ public sealed class DispatchOutcomeClassifyTests
                 "codex exec prompt",
                 "C:\\repo",
                 clock.UtcNow,
-                WorkerProviderKind: ProviderKind.OpenAICodexCli));
+                WorkerProviderKind: ProviderKind.OpenAICodexCli,
+                ContextPackageReceipt: EarlyConvergenceReceipt(baseCommit)));
         kernel.RecordDispatchBaseCommit(goal.Id, task.Id, baseCommit);
         return task;
     }
@@ -307,15 +320,13 @@ public sealed class DispatchOutcomeClassifyTests
         Xunit.Assert.DoesNotContain("rule=retry-round-produced-no-commit-and-no-deferral", outcome.ClassifierReceipt, StringComparison.Ordinal);
     }
 
-    [Xunit.Theory]
-    [Xunit.InlineData("pass - focused verification completed")]
-    [Xunit.InlineData("deferred - acceptance gate owns the out-of-scope check")]
-    public void Classify_RetryDeveloperVerifiedNoChange_Completes(string tests)
+    [Xunit.Fact]
+    public void Classify_RetryDeveloperVerifiedNoChange_Completes()
     {
         const string baseCommit = "48422231916172e8d172a0cc0428d13d222c071c";
         var verification = WorkerResultVerification(
             1,
-            WorkerResultStdout(tests),
+            WorkerResultStdout("pass - focused verification completed"),
             standardError: VerifiedNoChangeDiagnostics(verificationRecognized: true));
 
         var outcome = DispatchFailureClassifier.Classify(
@@ -328,16 +339,29 @@ public sealed class DispatchOutcomeClassifyTests
         Xunit.Assert.Contains("verdict=VerifiedSuccess", outcome.ClassifierReceipt, StringComparison.Ordinal);
     }
 
-    [Xunit.Theory]
-    [Xunit.InlineData("pass - focused verification completed")]
-    [Xunit.InlineData("deferred - acceptance gate owns the out-of-scope check")]
-    public void Classify_OperatorRecoverDeveloperVerifiedNoChange_Completes(string tests)
+    [Xunit.Fact]
+    public void Classify_RetryDeveloperDeferredNoChange_Fails()
+    {
+        const string baseCommit = "48422231916172e8d172a0cc0428d13d222c071c";
+        var verification = WorkerResultVerification(
+            1,
+            WorkerResultStdout("deferred - acceptance gate owns the out-of-scope check"),
+            standardError: VerifiedNoChangeDiagnostics(verificationRecognized: true));
+
+        var outcome = DispatchFailureClassifier.Classify(RetryTaskWithBaseCommit(baseCommit), verification);
+
+        Xunit.Assert.Equal(DispatchOutcomeKind.UnknownFailure, outcome.Kind);
+        Xunit.Assert.DoesNotContain("rule=verified-no-change-round", outcome.ClassifierReceipt, StringComparison.Ordinal);
+    }
+
+    [Xunit.Fact]
+    public void Classify_OperatorRecoverDeveloperVerifiedNoChange_Completes()
     {
         const string baseCommit = "48422231916172e8d172a0cc0428d13d222c071c";
         var task = RecoveredTaskWithBaseCommit(baseCommit);
         var verification = WorkerResultVerification(
             1,
-            WorkerResultStdout(tests),
+            WorkerResultStdout("pass - focused verification completed"),
             standardError: VerifiedNoChangeDiagnostics(verificationRecognized: true));
 
         Xunit.Assert.Equal(0, task.CriterionRetryCount);

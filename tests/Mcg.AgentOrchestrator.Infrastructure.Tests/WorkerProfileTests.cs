@@ -7,6 +7,20 @@ using System.Net.Sockets;
 [Xunit.Collection("EnvMutation")]
 public sealed class WorkerProfileTests
 {
+    [Xunit.Fact]
+    public void BuiltInCodexProfilesDeclareCompleteRepositoryPolicyAutoLoad()
+    {
+        var profiles = WorkerProfileCatalog.Default().Profiles;
+        var codex = Assert.Single(profiles, profile => profile.Name == "codex-cli");
+        var fallback = Assert.Single(profiles, profile => profile.Name == "claude-cli");
+
+        Assert.True(codex.AutoLoadsRepositoryPolicy);
+        Assert.True(codex.RepositoryPolicyMaxBytes >= 65_536);
+        Assert.Contains("project_doc_max_bytes=65536", codex.CommandTemplate, StringComparison.Ordinal);
+        Assert.False(fallback.AutoLoadsRepositoryPolicy);
+        Assert.Equal(0, fallback.RepositoryPolicyMaxBytes);
+    }
+
     [Xunit.Fact(DisplayName = "WorkerProfileCatalog_default_contains_local_subscription_bridges")]
     public void WorkerProfileCatalogDefaultContainsLocalSubscriptionBridges()
 {

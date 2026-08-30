@@ -309,7 +309,10 @@ public static class WorkerProfileDispatcher
                 reviewerMergeTreeClean: reviewerMergeTreeClean,
                 reviewerMergeTreeConflictPaths: reviewerMergeTreeConflictPaths,
                 reviewerMergeTreeTotalConflictPathCount: reviewerMergeTreeTotalConflictPathCount,
-                currentCandidateSha: targetContext?.HeadCommit);
+                currentCandidateSha: targetContext?.HeadCommit,
+                comparisonBaseSha: currentMainIdentity,
+                workerProfile: profile,
+                priorContextPackageReceipt: priorDispatch?.ContextPackageReceipt);
             packagedBrief = brief with { Content = WorkerContextPackageBuilder.Render(contextPackage) };
             contextPackageReceipt = WorkerContextPackageBuilder.CreateReceipt(contextPackage);
         }
@@ -2301,7 +2304,10 @@ public static class WorkerProfileDispatcher
         bool? reviewerMergeTreeClean = null,
         IReadOnlyList<string>? reviewerMergeTreeConflictPaths = null,
         int? reviewerMergeTreeTotalConflictPathCount = null,
-        string? currentCandidateSha = null)
+        string? currentCandidateSha = null,
+        string? comparisonBaseSha = null,
+        WorkerProfile? workerProfile = null,
+        WorkerContextPackageReceipt? priorContextPackageReceipt = null)
     {
         var targetRole = task.RequiredRole;
         var registryPath = Path.Combine(contextDirectory, "artifact-registry.json");
@@ -2312,6 +2318,14 @@ public static class WorkerProfileDispatcher
         var artifacts = new List<WorkerContextArtifact>();
         var goalHumanInputRequests = humanInputRequests ?? [];
         var clarificationAnswerHistory = goal.RefinedSpec?.ClarificationAnswerHistory ?? [];
+        var hasReviewFindingHistory = goal.Tasks.Any(candidate => candidate.VerificationHistory.Any(verification =>
+            (verification.MergedReviewFindings?.Count ?? 0) > 0 ||
+            (verification.FindingEvidenceReceipts?.Count ?? 0) > 0));
+        var codexPolicyAutoLoad = workerProfile is
+        {
+            AutoLoadsRepositoryPolicy: true,
+            RepositoryPolicyMaxBytes: > 0
+        };
 
         void AddSource(
             WorkerContextSemanticSource source,
@@ -2324,8 +2338,16 @@ public static class WorkerProfileDispatcher
             var identity = new LogicalArtifactIdentity(identityValue);
             bytes = ApplyHumanInputRetractions(bytes, goalHumanInputRequests, clarificationAnswerHistory);
             var mode = deliveryMode ?? WorkerContextPackageBuilder.SelectDeliveryMode(kind);
+            var priorSection = priorContextPackageReceipt?.Sections.FirstOrDefault(section =>
+                section.LogicalIdentity.Equals(identityValue, StringComparison.Ordinal) &&
+                section.ContentHash.Equals(WorkerContextArtifact.Hash(bytes), StringComparison.Ordinal) &&
+                section.ContractVersion == ContextContractVersion.V1.Value);
+            if (mode == ContextDeliveryMode.MandatoryFile && priorSection is not null)
+            {
+                mode = ContextDeliveryMode.OnDemandFile;
+            }
             string? relativePath = null;
-            if (mode == ContextDeliveryMode.MandatoryFile)
+            if (mode is ContextDeliveryMode.MandatoryFile or ContextDeliveryMode.OnDemandFile)
             {
                 relativePath = $".orchestrator-context/{goal.Id.Value}/authoritative/{task.Id.Value}/typed/{identity.Value}";
                 var materializationPath = Path.Combine(
@@ -2412,7 +2434,8 @@ public static class WorkerProfileDispatcher
                         SourceKind = correction.SourceKind.ToString(),
                         correction.IsWaiver,
                         correction.CapturedAcceptanceCriteriaHash
-                    }).ToArray()));
+                    }).ToArray()),
+                deliveryMode: hasReviewFindingHistory ? ContextDeliveryMode.OnDemandFile : null);
         }
         if (goal.RetainedAcceptanceFailure is { } acceptanceFailure)
         {
@@ -2456,14 +2479,19 @@ public static class WorkerProfileDispatcher
             WorkerContextSemanticSource.Timeline,
             "goal/timeline.json",
             ContextArtifactKind.RegisteredContext,
-            SerializeSemanticTimeline(timeline, workingDirectory, contextDirectory));
+            SerializeSemanticTimeline(timeline, workingDirectory, contextDirectory),
+            deliveryMode: hasReviewFindingHistory ? ContextDeliveryMode.OnDemandFile : null);
         ReviewFindingContextProjection? reviewFindingProjection = null;
         var contractRepairProjectionRequested = task.PendingRetryRoundKind == RetryRoundKind.Mechanical &&
                                                 task.VerificationHistory.LastOrDefault()?.ReviewFindingContractViolation is not null;
-        if (contractRepairProjectionRequested || goal.Tasks.Any(candidate => candidate.VerificationHistory.Any(verification =>
-                (verification.MergedReviewFindings?.Count ?? 0) > 0 || (verification.FindingEvidenceReceipts?.Count ?? 0) > 0)))
+        if (contractRepairProjectionRequested || hasReviewFindingHistory)
         {
-            reviewFindingProjection = ReviewFindingContextProjector.Project(goal, task, currentCandidateSha);
+            reviewFindingProjection = ReviewFindingContextProjector.Project(
+                goal,
+                task,
+                currentCandidateSha,
+                comparisonBaseSha,
+                goal.EffectiveAcceptanceCriteriaCorrections.OrderByDescending(correction => correction.RecordedAt).FirstOrDefault());
             ReviewFindingContextProjector.AddArtifacts(reviewFindingProjection, AddSource);
         }
         if (task.LastExecution is not null)
@@ -2550,7 +2578,11 @@ public static class WorkerProfileDispatcher
                 source.Kind,
                 bytes,
                 visibility,
-                source.DeliveryModeOverride);
+                entry.Path.Equals("AGENTS.md", StringComparison.OrdinalIgnoreCase) &&
+                codexPolicyAutoLoad &&
+                bytes.Length <= workerProfile!.RepositoryPolicyMaxBytes
+                    ? ContextDeliveryMode.OnDemandFile
+                    : source.DeliveryModeOverride);
         }
 
         var handoffPath = Path.Combine(workingDirectory, ".orchestrator-handoff.md");
@@ -2672,7 +2704,9 @@ public static class WorkerProfileDispatcher
         WorkerContextPackage preparedWithoutManifest,
         ICollection<SemanticSourceObservation>? observedSources = null)
     {
-        var inventory = preparedWithoutManifest.Artifacts.Select(artifact => new ContextArtifactInventoryEntry(
+        var inventory = preparedWithoutManifest.Artifacts
+            .Where(artifact => artifact.DeliveryMode != ContextDeliveryMode.OnDemandFile)
+            .Select(artifact => new ContextArtifactInventoryEntry(
             artifact.Identity.Value,
             artifact.ContentHash,
             artifact.RoleVisibility.Select(role => role.ToString()).ToArray(),

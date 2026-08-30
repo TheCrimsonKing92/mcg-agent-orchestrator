@@ -1666,6 +1666,10 @@ public static class DispatchFailureClassifier
             !workerResultPresent ||
             !WasRedispatchedByAnyRoute(task) ||
             string.IsNullOrWhiteSpace(task.LastDispatch?.BaseCommit) ||
+            task.LastDispatch.ContextPackageReceipt is not { EarlyConvergenceEligible: true } contextReceipt ||
+            string.IsNullOrWhiteSpace(contextReceipt.EarlyConvergenceCandidateSha) ||
+            !string.Equals(contextReceipt.EarlyConvergenceCandidateSha, task.LastDispatch.BaseCommit, StringComparison.OrdinalIgnoreCase) ||
+            contextReceipt.EarlyConvergenceReceiptHashes is not { Count: > 0 } ||
             !HasPopulatedStandardOutput(verification) ||
             !DispatchRejectionDiagnosticMarker.TryParse(
                 verification.StandardError,
@@ -1687,7 +1691,7 @@ public static class DispatchFailureClassifier
             blockersStatus != WorkerResultBlockers.BlockersStatus.None ||
             WorkerResultBlockers.TryFindBlocker(verification, out _) ||
             !WorkerResultBlockers.TryGetTestsStatus(verification, out var testsStatus) ||
-            testsStatus is not (WorkerResultBlockers.TestsStatus.Pass or WorkerResultBlockers.TestsStatus.Deferred) ||
+            testsStatus != WorkerResultBlockers.TestsStatus.Pass ||
             HasStructuredFailingTests(verification))
         {
             return false;

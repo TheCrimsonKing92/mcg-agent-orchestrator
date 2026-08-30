@@ -3,7 +3,11 @@ using Mcg.AgentOrchestrator.Core;
 
 namespace Mcg.AgentOrchestrator.Infrastructure;
 
-public sealed record WorkerProfile(string Name, string CommandTemplate)
+public sealed record WorkerProfile(
+    string Name,
+    string CommandTemplate,
+    bool AutoLoadsRepositoryPolicy = false,
+    int RepositoryPolicyMaxBytes = 0)
 {
     public const string QwenCodeCliName = "qwen-code-cli";
 
@@ -375,7 +379,7 @@ public sealed record WorkerProfileCatalog(IReadOnlyList<WorkerProfile> Profiles)
 
         var profiles = Profiles
             .Where(existing => !existing.Name.Equals(profile.Name, StringComparison.OrdinalIgnoreCase))
-            .Append(new WorkerProfile(profile.Name.Trim(), profile.CommandTemplate.Trim()))
+            .Append(profile with { Name = profile.Name.Trim(), CommandTemplate = profile.CommandTemplate.Trim() })
             .OrderBy(existing => existing.Name, StringComparer.OrdinalIgnoreCase)
             .ToList();
 
@@ -398,8 +402,8 @@ public sealed record WorkerProfileCatalog(IReadOnlyList<WorkerProfile> Profiles)
         return new WorkerProfileCatalog(
         [
             new WorkerProfile("local-echo", "Write-Output {promptPath}"),
-            new WorkerProfile("codex-cli", "codex exec --json --skip-git-repo-check --model {subscriptionModelName} -c model_reasoning_effort={subscriptionReasoningEffort} --sandbox {sandboxMode} --cd {workingDirectory}"),
-            new WorkerProfile("codex-spark", "codex exec --json --skip-git-repo-check --model {subscriptionModelName} -c model_reasoning_effort={subscriptionReasoningEffort} --sandbox {sandboxMode} --cd {workingDirectory}"),
+            new WorkerProfile("codex-cli", "codex exec --json --skip-git-repo-check --model {subscriptionModelName} -c model_reasoning_effort={subscriptionReasoningEffort} -c project_doc_max_bytes=65536 --sandbox {sandboxMode} --cd {workingDirectory}", AutoLoadsRepositoryPolicy: true, RepositoryPolicyMaxBytes: 65_536),
+            new WorkerProfile("codex-spark", "codex exec --json --skip-git-repo-check --model {subscriptionModelName} -c model_reasoning_effort={subscriptionReasoningEffort} -c project_doc_max_bytes=65536 --sandbox {sandboxMode} --cd {workingDirectory}", AutoLoadsRepositoryPolicy: true, RepositoryPolicyMaxBytes: 65_536),
             new WorkerProfile("codex-oss-cli", "codex exec --skip-git-repo-check --oss --local-provider ollama --model {subscriptionModelName} --sandbox {sandboxMode} --cd {workingDirectory}"),
             new WorkerProfile(WorkerProfile.QwenCodeCliName, "$env:OPENAI_BASE_URL={openaiBaseUrl}; $env:OPENAI_API_KEY={openaiApiKey}; $env:OPENAI_MODEL={subscriptionModelName}; Set-Location {workingDirectory}; qwen --bare --approval-mode {approvalMode} --input-format text"),
             // -p = headless print mode; without it Claude opens the interactive REPL and emits nothing (exits 0 empty, so the task is wrongly classified Failed). The prompt is piped via stdin and --session-id is appended by the spawn layer.

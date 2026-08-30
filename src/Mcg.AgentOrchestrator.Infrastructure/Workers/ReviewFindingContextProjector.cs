@@ -26,7 +26,7 @@ internal static class ReviewFindingContextProjector
         addSource(WorkerProfileDispatcher.WorkerContextSemanticSource.ReviewFindingHistory, "goal/review-finding-history.json", ContextArtifactKind.AcceptanceCriteria, projection.LedgerBytes, null, ContextDeliveryMode.InlineFull);
         foreach (var body in projection.RoundBodies.Concat(projection.ReceiptBodies))
         {
-            addSource(WorkerProfileDispatcher.WorkerContextSemanticSource.ReviewFindingHistory, body.LogicalIdentity, ContextArtifactKind.RegisteredContext, body.Bytes, null, ContextDeliveryMode.MandatoryFile);
+            addSource(WorkerProfileDispatcher.WorkerContextSemanticSource.ReviewFindingHistory, body.LogicalIdentity, ContextArtifactKind.RegisteredContext, body.Bytes, null, ContextDeliveryMode.OnDemandFile);
         }
         if (projection.ContractRepairEnvelopeBytes is not null)
         {
@@ -41,7 +41,12 @@ internal static class ReviewFindingContextProjector
             !artifact.Identity.Value.StartsWith("goal/review-finding-rounds/", StringComparison.Ordinal) &&
             !artifact.Identity.Value.StartsWith("goal/review-finding-receipts/", StringComparison.Ordinal));
 
-    public static ReviewFindingContextProjection Project(Goal goal, TaskSpec targetTask, string? currentCandidateSha)
+    public static ReviewFindingContextProjection Project(
+        Goal goal,
+        TaskSpec targetTask,
+        string? currentCandidateSha,
+        string? comparisonBaseSha = null,
+        EffectiveAcceptanceCriteriaCorrection? newestOperatorCorrection = null)
     {
         ArgumentNullException.ThrowIfNull(goal);
         ArgumentNullException.ThrowIfNull(targetTask);
@@ -120,9 +125,48 @@ internal static class ReviewFindingContextProjector
             .GroupBy(source => source.Finding.StableId, StringComparer.Ordinal)
             .Select(BuildCanonicalEntry)
             .ToArray();
-        var entries = entryProjections
+        var canonicalEntries = entryProjections
             .Select(projection => projection.Entry)
             .OrderBy(entry => entry.StableId, StringComparer.Ordinal)
+            .ToArray();
+        var entries = canonicalEntries
+            .Where(entry => entry.State == ReviewFindingState.Open || entry.ResolutionProof is null)
+            .ToArray();
+        var convergenceEntries = canonicalEntries
+            .Where(entry =>
+                entry.State == ReviewFindingState.Resolved &&
+                entry.Severity == FindingSeverity.Blocking &&
+                entry.ResolutionProof is { Kind: "candidate-bound-evidence-receipt", ReceiptBody: not null } &&
+                !string.IsNullOrWhiteSpace(currentCandidateSha) &&
+                string.Equals(entry.CandidateSha, currentCandidateSha, StringComparison.OrdinalIgnoreCase))
+            .ToArray();
+        var earlyConvergenceEligible = convergenceEntries.Length > 0 &&
+            !entries.Any(entry => entry.Severity == FindingSeverity.Blocking);
+        var convergenceReceiptHashes = earlyConvergenceEligible
+            ? convergenceEntries.Select(entry => entry.ResolutionProof!.ReceiptBody!.Sha256)
+                .Distinct(StringComparer.Ordinal)
+                .OrderBy(hash => hash, StringComparer.Ordinal)
+                .ToArray()
+            : [];
+        var activeRoundHashes = entries.Select(entry => entry.Round.Sha256)
+            .Distinct(StringComparer.Ordinal)
+            .ToHashSet(StringComparer.Ordinal);
+        var activeReceiptHashes = entries.SelectMany(entry => entry.ReceiptBodies)
+            .Select(reference => reference.Sha256)
+            .Concat(convergenceReceiptHashes)
+            .Distinct(StringComparer.Ordinal)
+            .ToHashSet(StringComparer.Ordinal);
+        var activeRoundIndex = roundIndex
+            .Where(entry => activeRoundHashes.Contains(entry.Body.Sha256))
+            .GroupBy(entry => entry.Body.Sha256, StringComparer.Ordinal)
+            .Select(group => group.Last())
+            .OrderBy(entry => entry.CompletedAt)
+            .ThenBy(entry => entry.TaskId, StringComparer.Ordinal)
+            .ToArray();
+        var activeReceiptReferences = receiptBodies.Values
+            .Where(body => activeReceiptHashes.Contains(body.Sha256))
+            .OrderBy(body => body.Sha256, StringComparer.Ordinal)
+            .Select(body => new ReviewFindingContentReference(body.Sha256, body.LogicalIdentity))
             .ToArray();
 
         var latestVerification = targetTask.VerificationHistory.LastOrDefault();
@@ -142,21 +186,25 @@ internal static class ReviewFindingContextProjector
             : ReviewFindingHistoryProjectionMode.FullInspection;
         var metrics = new ReviewFindingHistoryProjectionMetrics(
             mode,
-            roundBodies.Count,
-            rounds.Length - roundBodies.Count,
-            receiptBodies.Count,
-            totalReceiptCount - receiptBodies.Count,
-            fallbackReason);
+            activeRoundIndex.Length,
+            rounds.Length - activeRoundIndex.Length,
+            activeReceiptReferences.Length,
+            totalReceiptCount - activeReceiptReferences.Length,
+            fallbackReason,
+            earlyConvergenceEligible,
+            earlyConvergenceEligible ? currentCandidateSha?.Trim() : null,
+            convergenceReceiptHashes);
         var ledger = new ReviewFindingHistoryLedger(
             ContextContractVersion.V1.Value,
             mode,
             fallbackReason,
             entries,
-            roundIndex,
-            receiptBodies.Values
-                .OrderBy(body => body.Sha256, StringComparer.Ordinal)
-                .Select(body => new ReviewFindingContentReference(body.Sha256, body.LogicalIdentity))
-                .ToArray());
+            activeRoundIndex,
+            activeReceiptReferences,
+            currentCandidateSha?.Trim(),
+            comparisonBaseSha?.Trim(),
+            newestOperatorCorrection,
+            earlyConvergenceEligible);
         var ledgerBytes = JsonSerializer.SerializeToUtf8Bytes(ledger);
 
         byte[]? envelopeBytes = null;
@@ -280,7 +328,9 @@ internal static class ReviewFindingContextProjector
                 finding.Severity,
                 finding.Category,
                 finding.Location,
-                finding.State == ReviewFindingState.Resolved && resolutionProof is not null ? null : finding.Description,
+                finding.State == ReviewFindingState.Resolved && resolutionProof is not null
+                    ? null
+                    : BoundFindingDescription(finding.Description),
                 selected.Verification.ReviewedCommit,
                 BuildVerdictIdentity(selected.Verification),
                 evidenceIdentity,
@@ -392,6 +442,18 @@ internal static class ReviewFindingContextProjector
             verification.ExitCode.ToString(System.Globalization.CultureInfo.InvariantCulture),
             verification.CompletionVerdictRule ?? string.Empty,
             verification.ReviewFindingContractViolation?.Code ?? string.Empty)));
+
+    private static string? BoundFindingDescription(string? description)
+    {
+        const int inlineLimit = 360;
+        if (string.IsNullOrEmpty(description) || description.Length <= inlineLimit)
+        {
+            return description;
+        }
+
+        var hash = WorkerContextArtifact.Hash(Encoding.UTF8.GetBytes(description));
+        return $"{description[..inlineLimit]}...[full finding body sha256:{hash}]";
+    }
 
     private static WorkerContextPreparationException PreparationFailure(string reason, string detail) =>
         new(new LogicalArtifactIdentity("goal/review-finding-history.json"), reason, detail);
