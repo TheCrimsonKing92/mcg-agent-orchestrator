@@ -105,6 +105,32 @@ function Test-ContainsOrdinalIgnoreCase {
     return $Value.IndexOf($Pattern, [System.StringComparison]::OrdinalIgnoreCase) -ge 0
 }
 
+function ConvertTo-OutputLines {
+    param([object[]]$Output)
+
+    return [string[]]@($Output | ForEach-Object { [string]$_ })
+}
+
+function Get-DiagnosticLines {
+    param(
+        [string[]]$Lines,
+        [string]$Kind
+    )
+
+    $pattern = ": $Kind "
+    return [string[]]@($Lines | Where-Object { Test-ContainsOrdinalIgnoreCase -Value $_ -Pattern $pattern })
+}
+
+function Write-CompleteBuildLog {
+    param(
+        [string]$Path,
+        [string[]]$Lines
+    )
+
+    $utf8WithoutBom = [System.Text.UTF8Encoding]::new($false)
+    [System.IO.File]::WriteAllLines($Path, $Lines, $utf8WithoutBom)
+}
+
 function Get-DisplayPath {
     param(
         [string]$Root,
@@ -375,8 +401,13 @@ Remove-Item Env:MCG_WORKER_CREDENTIAL_TARGET -ErrorAction SilentlyContinue
 
 $lockStream = $null
 $lockHeld = $false
-$failedOutput = [System.Collections.Generic.List[string]]::new()
+$failureRecords = [System.Collections.Generic.List[object]]::new()
 $exitCode = 0
+$apparatusFailure = $null
+$warningCount = 0
+$capturedCharacterCount = 0
+$runStopwatch = [System.Diagnostics.Stopwatch]::StartNew()
+$runLogRoot = $null
 try {
     $lockDirectory = Split-Path -Parent $executionLockPath
     New-Item -ItemType Directory -Force -Path $lockDirectory | Out-Null
@@ -404,24 +435,53 @@ try {
         $artifactsPath,
         "-maxcpucount:$(Get-BuildMaxCpuCount)",
         "-p:BuildInParallel=false",
-        "-clp:ErrorsOnly"
+        "-clp:ErrorsOnly",
+        "-tl:off"
     )
 
-    foreach ($projectPath in $projectPaths) {
+    $runId = "{0}-{1}-{2}" -f (Get-Date).ToUniversalTime().ToString("yyyyMMddTHHmmssfffZ"), $PID, ([Guid]::NewGuid().ToString("N").Substring(0, 8))
+    $runLogRoot = Join-Path $artifactsPath "worker-build-logs\$runId"
+    New-Item -ItemType Directory -Force -Path $runLogRoot | Out-Null
+
+    for ($projectIndex = 0; $projectIndex -lt $projectPaths.Count; $projectIndex++) {
+        $projectPath = $projectPaths[$projectIndex]
         $relativeProject = Get-DisplayPath -Root $repositoryRoot -Path $projectPath
-        $output = & dotnet build $projectPath --nologo --configuration $Configuration --verbosity minimal @isolatedArguments 2>&1
+        $output = @(& dotnet build $projectPath --nologo --configuration $Configuration --verbosity minimal @isolatedArguments 2>&1)
         $projectExitCode = $LASTEXITCODE
+        $outputLines = ConvertTo-OutputLines -Output $output
+        $warningCount += @(Get-DiagnosticLines -Lines $outputLines -Kind "warning").Count
+        $capturedCharacterCount += [string]::Join([Environment]::NewLine, $outputLines).Length
+        $safeProjectName = ConvertTo-SafePathSegment -Value ([System.IO.Path]::GetFileNameWithoutExtension($projectPath))
+        $logPath = Join-Path $runLogRoot ("{0:D2}-{1}.log" -f ($projectIndex + 1), $safeProjectName)
         if ($projectExitCode -ne 0) {
             $exitCode = 1
-            $failedOutput.Add("project: $relativeProject")
-            foreach ($line in $output) {
-                $text = [string]$line
-                if (-not [string]::IsNullOrWhiteSpace($text)) {
-                    $failedOutput.Add($text)
-                }
+            $failureRecords.Add([pscustomobject]@{
+                Project = $relativeProject
+                LogPath = $logPath
+                Lines = $outputLines
+            })
+        }
+
+        try {
+            Write-CompleteBuildLog -Path $logPath -Lines $outputLines
+        }
+        catch {
+            if ($projectExitCode -eq 0) {
+                $failureRecords.Add([pscustomobject]@{
+                    Project = $relativeProject
+                    LogPath = $logPath
+                    Lines = $outputLines
+                })
             }
+            $exitCode = 1
+            $apparatusFailure = "could not write complete build log '$logPath': $($_.Exception.Message)"
+            break
         }
     }
+}
+catch {
+    $exitCode = 1
+    $apparatusFailure = $_.Exception.Message
 }
 finally {
     if ($lockHeld -and $null -ne $lockStream) {
@@ -433,19 +493,41 @@ finally {
     Remove-Item -LiteralPath $processTempPath -Force -Recurse -ErrorAction SilentlyContinue
 }
 
+$runStopwatch.Stop()
+$logSummary = if ([string]::IsNullOrWhiteSpace($runLogRoot)) { "unavailable" } else { $runLogRoot }
 if ($exitCode -eq 0) {
-    Write-Output "PASS build: 0 errors (Invoke-WorkerBuildCheck) projects=$($projectPaths.Count)"
+    Write-Output "PASS build: 0 errors (Invoke-WorkerBuildCheck) projects=$($projectPaths.Count) warnings=$warningCount captured_chars=$capturedCharacterCount elapsed_ms=$($runStopwatch.ElapsedMilliseconds) logs=$logSummary"
 }
 else {
-    $errorLines = $failedOutput | Where-Object { Test-ContainsOrdinalIgnoreCase -Value $_ -Pattern ": error " }
+    $errorLines = [string[]]@($failureRecords | ForEach-Object { Get-DiagnosticLines -Lines $_.Lines -Kind "error" })
     $errorCount = @($errorLines).Count
     if ($errorCount -eq 0) {
         $errorCount = 1
     }
 
-    Write-Output "FAIL build: $errorCount error(s) (Invoke-WorkerBuildCheck)"
-    foreach ($line in $failedOutput) {
-        Write-Output $line
+    Write-Output "FAIL build: $errorCount error(s) (Invoke-WorkerBuildCheck) projects=$($projectPaths.Count) warnings=$warningCount captured_chars=$capturedCharacterCount elapsed_ms=$($runStopwatch.ElapsedMilliseconds) logs=$logSummary"
+    if (-not [string]::IsNullOrWhiteSpace($apparatusFailure)) {
+        Write-Output "error: build-check apparatus failure: $apparatusFailure"
+    }
+
+    $remainingContextLines = 4
+    foreach ($record in $failureRecords) {
+        Write-Output "project: $($record.Project)"
+        Write-Output "complete-log: $($record.LogPath)"
+        foreach ($line in (Get-DiagnosticLines -Lines $record.Lines -Kind "error")) {
+            Write-Output $line
+        }
+
+        if ($remainingContextLines -gt 0) {
+            $contextLines = [string[]]@($record.Lines | Where-Object {
+                -not [string]::IsNullOrWhiteSpace($_) -and
+                -not (Test-ContainsOrdinalIgnoreCase -Value $_ -Pattern ": error ")
+            } | Select-Object -Last $remainingContextLines)
+            foreach ($line in $contextLines) {
+                Write-Output "context: $line"
+            }
+            $remainingContextLines -= $contextLines.Count
+        }
     }
 }
 
