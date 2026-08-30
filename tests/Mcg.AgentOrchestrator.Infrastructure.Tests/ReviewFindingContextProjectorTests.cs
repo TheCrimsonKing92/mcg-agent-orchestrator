@@ -11,48 +11,59 @@ public sealed class ReviewFindingContextProjectorTests
         var root = CreateRoot();
         try
         {
-            var contextDirectory = WriteRegistry(root);
+            var production = WriteProductionRegistry(root);
+            var contextDirectory = production.ContextDirectory;
             var reviewer = new TaskSpec(TaskId.New(), "Review", AgentRole.Reviewer);
             var kernel = new AgentOrchestratorKernel();
             var goal = kernel.CreateGoal("Project canonical history", [reviewer]);
+            kernel.SetGoalRefinedSpec(goal.Id, new RefinedSpec(
+                "Project only active retry evidence.",
+                ["criterion-a", "criterion-b"],
+                VerificationClass.TestVerifiable,
+                [],
+                []));
+            kernel.ActivateGoal(goal.Id, AgentCatalog.Default().Agents);
             var candidateSha = new string('a', 40);
-            var findingTemplates = Enumerable.Range(0, 22).Select(index =>
+            var baseSha = new string('b', 40);
+            var resolvedLocation = new ReviewFindingLocation("src/Resolved.cs", "Resolved.Run");
+            var activeALocation = new ReviewFindingLocation("src/ActiveA.cs", "ActiveA.Run");
+            var activeBLocation = new ReviewFindingLocation("src/ActiveB.cs", "ActiveB.Run");
+            var requestA = new FindingEvidenceRequest([new FindingEvidenceSelection("tests/Tests.csproj", "Tests.ActiveA")]);
+            var requestB = new FindingEvidenceRequest([new FindingEvidenceSelection("tests/Tests.csproj", "Tests.ActiveB")]);
+            var receiptA = new FindingEvidenceReceipt("receipt-a", candidateSha, requestA, true, true, "receipt-a-body");
+            var receiptB = new FindingEvidenceReceipt("receipt-b", candidateSha, requestB, true, true, "receipt-b-body");
+            var roundFindings = new[]
             {
-                var location = new ReviewFindingLocation($"src/File{index:D2}.cs", $"Type{index:D2}.Run");
-                var receiptId = $"receipt-{index % 9:D2}";
-                return new ReviewFinding(
-                    $"stable-{index:D2}",
-                    ReviewFindingState.Open,
-                    location,
-                    string.Empty,
-                    index % 2 == 0 ? FindingSeverity.Blocking : FindingSeverity.Advisory,
-                    index % 2 == 0 ? FindingCategory.Correctness : FindingCategory.TestEvidence,
-                    new FindingEvidenceRequest([new FindingEvidenceSelection("tests/Tests.csproj", $"Tests.Case{index:D2}")]),
-                    new FindingEvidenceOutcome(true, receiptId));
-            }).ToArray();
-            var receipts = Enumerable.Range(0, 9).Select(index => new FindingEvidenceReceipt(
-                $"receipt-{index:D2}",
-                candidateSha,
-                new FindingEvidenceRequest([new FindingEvidenceSelection("tests/Tests.csproj", $"Tests.Receipt{index:D2}")]),
-                true,
-                true,
-                $"receipt-body-{index:D2}"))
-                .ToArray();
-
-            for (var round = 0; round < 20; round++)
-            {
-                var contentRound = Math.Min(round, 18);
-                var findings = findingTemplates.Select((finding, index) => finding with
+                new[]
                 {
-                    State = index < 14 || round < 10 ? ReviewFindingState.Open : ReviewFindingState.Resolved,
-                    Description = $"decision-input-{index:D2}-round-{contentRound:D2}-" +
-                                  new string((char)('a' + index % 20), 1_450),
-                    Location = finding.Location with { Hunk = $"round-{contentRound:D2}" }
-                }).ToArray();
-                var touched = round == 10
-                    ? findings.Where(finding => finding.State == ReviewFindingState.Resolved)
-                        .Select(finding => finding.Location with { Hunk = "resolution-proof" }).ToArray()
-                    : [];
+                    Finding("eventually-resolved", resolvedLocation, "ROUND0_RESOLVED_SENTINEL_" + new string('r', 1_450)),
+                    Finding("active-a", activeALocation, "ROUND0_SUPERSEDED_SENTINEL_" + new string('s', 1_450), requestA, "receipt-a")
+                },
+                new[]
+                {
+                    Finding("active-b", activeBLocation, "ROUND1_ACTIVE_SENTINEL_" + new string('t', 1_450), requestB, "receipt-b")
+                },
+                new[]
+                {
+                    Finding("active-a", activeALocation, "ROUND2_ACTIVE_SENTINEL_" + new string('u', 1_450), requestA, "receipt-a")
+                },
+                new[]
+                {
+                    Finding("eventually-resolved", resolvedLocation, "ROUND3_RESOLUTION_SENTINEL_" + new string('v', 1_450)) with
+                    {
+                        State = ReviewFindingState.Resolved
+                    }
+                }
+            };
+            var roundReceipts = new IReadOnlyList<FindingEvidenceReceipt>[]
+            {
+                [receiptA],
+                [receiptB],
+                [receiptA],
+                []
+            };
+            for (var round = 0; round < roundFindings.Length; round++)
+            {
                 kernel.RecordTaskVerification(goal.Id, reviewer.Id, new TaskVerificationRecord(
                     "review",
                     root,
@@ -60,27 +71,54 @@ public sealed class ReviewFindingContextProjectorTests
                     "pass",
                     string.Empty,
                     DateTimeOffset.Parse("2026-08-01T00:00:00Z").AddMinutes(round),
-                    ReviewFindingTouchedAnchors: touched,
+                    ReviewFindingTouchedAnchors: round == 3 ? [resolvedLocation] : [],
                     ReviewedCommit: candidateSha,
-                    MergedReviewFindings: findings,
-                    FindingEvidenceReceipts: receipts,
+                    MergedReviewFindings: roundFindings[round],
+                    FindingEvidenceReceipts: roundReceipts[round],
                     FullStandardOutput: "pass",
                     FullStandardError: string.Empty));
             }
-            kernel.RetryTask(goal.Id, reviewer.Id, "Project only current unresolved evidence for the next round.");
+            kernel.RecordOperatorTaskNote(
+                goal.Id,
+                reviewer.Id,
+                "CRITERIA CORRECTION: supersedes=\"criterion-a\"; correction=\"OBSOLETE_CORRECTION_SENTINEL\"");
+            kernel.RecordOperatorTaskNote(
+                goal.Id,
+                reviewer.Id,
+                "CRITERIA CORRECTION: supersedes=\"criterion-a\"; correction=\"NEWEST_CORRECTION_SENTINEL\"");
+            kernel.WaiveAcceptanceCriterion(goal.Id, "criterion-b", "WAIVER_SENTINEL");
+            kernel.RetryTask(
+                goal.Id,
+                reviewer.Id,
+                "CRITERIA CORRECTION: newest correction is authoritative.",
+                retryRoundKind: RetryRoundKind.Standard);
 
             var snapshots = reviewer.VerificationHistory.Select(verification => new
             {
                 Findings = verification.MergedReviewFindings,
                 EvidenceReceipts = verification.FindingEvidenceReceipts
             }).ToArray();
-            var legacyBytes = JsonSerializer.SerializeToUtf8Bytes(snapshots);
-            var legacyPrompt = Encoding.UTF8.GetString(legacyBytes);
-            Assert.True(legacyBytes.Length >= 640_080, $"Production-shaped legacy fixture was only {legacyBytes.Length} bytes.");
-            var exactRecordBytes = JsonSerializer.SerializeToUtf8Bytes(
-                WorkerContextPackageBuilder.DistinctBySerializedValue(snapshots));
-            Assert.True(exactRecordBytes.Length > 60_000,
-                $"Exact-record dedupe unexpectedly reached the canonical ceiling at {exactRecordBytes.Length} bytes.");
+            var legacyHistory = JsonSerializer.Serialize(snapshots);
+            var legacyTimeline = JsonSerializer.Serialize(goal.Timeline);
+            var legacyCorrections = JsonSerializer.Serialize(goal.EffectiveAcceptanceCriteriaCorrections);
+            var legacyPrompt = string.Join(
+                Environment.NewLine,
+                production.Policy,
+                production.SourceSurvey,
+                production.PriorTaskEvidence,
+                legacyHistory,
+                legacyTimeline,
+                legacyCorrections);
+            var legacyDeliveredArtifactBytes = Encoding.UTF8.GetByteCount(
+                production.Policy + production.SourceSurvey + production.PriorTaskEvidence + legacyHistory + legacyTimeline + legacyCorrections);
+            var legacyTranscript = string.Concat(
+                legacyPrompt,
+                production.SourceSurvey,
+                production.SourceSurvey,
+                production.PriorTaskEvidence,
+                legacyHistory,
+                legacyTimeline);
+            Assert.True(legacyPrompt.Length >= 84_089, $"Production-shaped legacy prompt was only {legacyPrompt.Length} characters.");
 
             var package = WorkerProfileDispatcher.BuildContextPackage(
                 goal,
@@ -89,16 +127,17 @@ public sealed class ReviewFindingContextProjectorTests
                 contextDirectory,
                 Brief(goal, reviewer),
                 currentCandidateSha: candidateSha,
-                comparisonBaseSha: new string('b', 40));
+                comparisonBaseSha: baseSha,
+                workerProfile: Assert.Single(WorkerProfileCatalog.Default().Profiles, profile => profile.Name == "codex-cli"));
             var history = Assert.Single(package.Artifacts, artifact => artifact.Identity.Value == "goal/review-finding-history.json");
             Assert.Equal(ContextDeliveryMode.InlineFull, history.DeliveryMode);
             var ledgerBytes = Recover(root, history);
             Assert.True(ledgerBytes.Length <= 60_000, $"Canonical inline ledger was {ledgerBytes.Length} bytes.");
             using var ledger = JsonDocument.Parse(ledgerBytes);
             Assert.Equal(candidateSha, ledger.RootElement.GetProperty("current_candidate_sha").GetString());
-            Assert.Equal(new string('b', 40), ledger.RootElement.GetProperty("comparison_base_sha").GetString());
+            Assert.Equal(baseSha, ledger.RootElement.GetProperty("comparison_base_sha").GetString());
             var projected = ledger.RootElement.GetProperty("findings").EnumerateArray().ToArray();
-            Assert.Equal(14, projected.Length);
+            Assert.Equal(2, projected.Length);
             Assert.All(projected, finding => Assert.Equal("Open", finding.GetProperty("state").GetString()));
             Assert.All(projected, finding =>
             {
@@ -110,8 +149,13 @@ public sealed class ReviewFindingContextProjectorTests
                 .Select(round => round.GetProperty("body"))
                 .ToArray();
             var receiptReferences = ledger.RootElement.GetProperty("receipt_bodies").EnumerateArray().ToArray();
-            Assert.Single(roundReferences);
-            Assert.Equal(9, receiptReferences.Length);
+            Assert.Equal(2, roundReferences.Length);
+            Assert.Equal(2, receiptReferences.Length);
+            var corrections = ledger.RootElement.GetProperty("effective_operator_corrections").EnumerateArray().ToArray();
+            Assert.Equal(2, corrections.Length);
+            Assert.Contains(corrections, correction => correction.GetProperty("Correction").GetString() == "NEWEST_CORRECTION_SENTINEL");
+            Assert.Contains(corrections, correction => correction.GetProperty("Correction").GetString()!.Contains("WAIVER_SENTINEL", StringComparison.Ordinal));
+            Assert.DoesNotContain(corrections, correction => correction.GetProperty("Correction").GetString() == "OBSOLETE_CORRECTION_SENTINEL");
             Assert.DoesNotContain(package.Artifacts, artifact =>
                 artifact.DeliveryMode == ContextDeliveryMode.MandatoryFile &&
                 (artifact.Identity.Value.StartsWith("goal/review-finding-rounds/", StringComparison.Ordinal) ||
@@ -124,25 +168,34 @@ public sealed class ReviewFindingContextProjectorTests
                 var recovered = Recover(root, body);
                 Assert.Equal(reference.GetProperty("sha256").GetString(), WorkerContextArtifact.Hash(recovered));
             });
-            var packageReceipt = WorkerContextPackageBuilder.CreateReceipt(package)
-                .WithToolTranscriptCharacters(0)
-                .WithBaselineMeasurements(84_089, 157_623, 625_105);
-            Assert.Equal(1, packageReceipt.UniqueReviewFindingRoundCount);
-            Assert.Equal(19, packageReceipt.DuplicateReviewFindingRoundCount);
-            Assert.Equal(9, packageReceipt.UniqueFindingEvidenceReceiptCount);
-            Assert.Equal(171, packageReceipt.DuplicateFindingEvidenceReceiptCount);
             var rendered = WorkerContextPackageBuilder.Render(package);
+            var compactTranscript = rendered;
+            var packageReceipt = WorkerContextPackageBuilder.CreateReceipt(package)
+                .WithToolTranscriptCharacters(compactTranscript.Length)
+                .WithBaselineMeasurements(legacyPrompt.Length, legacyDeliveredArtifactBytes, legacyTranscript.Length);
+            Assert.Equal(2, packageReceipt.UniqueReviewFindingRoundCount);
+            Assert.Equal(2, packageReceipt.DuplicateReviewFindingRoundCount);
+            Assert.Equal(2, packageReceipt.UniqueFindingEvidenceReceiptCount);
+            Assert.Equal(1, packageReceipt.DuplicateFindingEvidenceReceiptCount);
             Assert.True(rendered.Length <= 21_022,
                 $"Compact prompt {rendered.Length} chars exceeded the 21,022-character production ceiling.");
             Assert.True(rendered.Length * 4 <= packageReceipt.BaselinePromptCharacters,
-                $"Compact prompt {rendered.Length} chars did not reduce the 84,089-character production baseline by 4x.");
-            Assert.DoesNotContain("decision-input-14-round", rendered, StringComparison.Ordinal);
-            Assert.Contains("decision-input-00-round-18", rendered, StringComparison.Ordinal);
+                $"Compact prompt {rendered.Length} chars did not reduce the measured {legacyPrompt.Length}-character fixture baseline by 4x.");
+            Assert.True((rendered.Length + compactTranscript.Length) * 4 <= legacyPrompt.Length + legacyTranscript.Length);
+            Assert.DoesNotContain("ROUND0_RESOLVED_SENTINEL", rendered, StringComparison.Ordinal);
+            Assert.DoesNotContain("ROUND0_SUPERSEDED_SENTINEL", rendered, StringComparison.Ordinal);
+            Assert.DoesNotContain("ROUND3_RESOLUTION_SENTINEL", rendered, StringComparison.Ordinal);
+            Assert.DoesNotContain("OBSOLETE_CORRECTION_SENTINEL", rendered, StringComparison.Ordinal);
+            Assert.Contains("ROUND1_ACTIVE_SENTINEL", rendered, StringComparison.Ordinal);
+            Assert.Contains("ROUND2_ACTIVE_SENTINEL", rendered, StringComparison.Ordinal);
+            Assert.Contains("NEWEST_CORRECTION_SENTINEL", rendered, StringComparison.Ordinal);
+            Assert.Contains("WAIVER_SENTINEL", rendered, StringComparison.Ordinal);
             Assert.Equal(rendered.Length, packageReceipt.RenderedPromptCharacters);
             Assert.Equal(Encoding.UTF8.GetByteCount(rendered), packageReceipt.RenderedPromptBytes);
-            Assert.Equal(625_105, packageReceipt.BaselineToolTranscriptCharacters);
-            Assert.Equal(84_089, packageReceipt.BaselinePromptCharacters);
-            Assert.Equal(157_623, packageReceipt.BaselineDeliveredArtifactBytes);
+            Assert.Equal(compactTranscript.Length, packageReceipt.ToolTranscriptCharacters);
+            Assert.Equal(legacyTranscript.Length, packageReceipt.BaselineToolTranscriptCharacters);
+            Assert.Equal(legacyPrompt.Length, packageReceipt.BaselinePromptCharacters);
+            Assert.Equal(legacyDeliveredArtifactBytes, packageReceipt.BaselineDeliveredArtifactBytes);
             Assert.True(packageReceipt.ModelInputTokenEstimate * 4 <= packageReceipt.BaselineModelInputTokenEstimate);
             Assert.Equal(WorkerPromptInputBudget.CountTokens(rendered), packageReceipt.ModelInputTokenEstimate);
             Assert.True(packageReceipt.DeliveredArtifactBytes > 0);
@@ -150,6 +203,49 @@ public sealed class ReviewFindingContextProjectorTests
             var historical = package.Artifacts.Where(artifact => artifact.DeliveryMode == ContextDeliveryMode.HistoricalFile).ToArray();
             Assert.NotEmpty(historical);
             Assert.All(historical, artifact => Assert.DoesNotContain(artifact.Identity.Value, rendered, StringComparison.Ordinal));
+
+            kernel.RecordTaskVerification(goal.Id, reviewer.Id, new TaskVerificationRecord(
+                "review",
+                root,
+                0,
+                "pass",
+                string.Empty,
+                DateTimeOffset.Parse("2026-08-01T00:10:00Z"),
+                ReviewFindingTouchedAnchors: [new ReviewFindingLocation("src/Historical.cs", "Historical.Run")],
+                ReviewedCommit: candidateSha,
+                MergedReviewFindings:
+                [
+                    Finding(
+                        "historical-only",
+                        new ReviewFindingLocation("src/Historical.cs", "Historical.Run"),
+                        "EXTRA_RESOLVED_HISTORY_SENTINEL_" + new string('z', 1_450)) with
+                    {
+                        State = ReviewFindingState.Resolved
+                    }
+                ],
+                FullStandardOutput: "pass",
+                FullStandardError: string.Empty));
+            kernel.RetryTask(
+                goal.Id,
+                reviewer.Id,
+                "CRITERIA CORRECTION: newest correction remains authoritative.",
+                retryRoundKind: RetryRoundKind.Standard);
+            var replayed = WorkerProfileDispatcher.BuildContextPackage(
+                goal,
+                reviewer,
+                root,
+                contextDirectory,
+                Brief(goal, reviewer),
+                currentCandidateSha: candidateSha,
+                comparisonBaseSha: baseSha,
+                workerProfile: Assert.Single(WorkerProfileCatalog.Default().Profiles, profile => profile.Name == "codex-cli"));
+            var replayedRendered = WorkerContextPackageBuilder.Render(replayed);
+            Assert.Equal(rendered.Length, replayedRendered.Length);
+            var replayedLedger = Assert.Single(
+                replayed.Artifacts,
+                artifact => artifact.Identity.Value == "goal/review-finding-history.json");
+            Assert.Equal(ledgerBytes, Recover(root, replayedLedger));
+            Assert.DoesNotContain("EXTRA_RESOLVED_HISTORY_SENTINEL", replayedRendered, StringComparison.Ordinal);
         }
         finally
         {
@@ -558,9 +654,11 @@ public sealed class ReviewFindingContextProjectorTests
         using var ledger = JsonDocument.Parse(projection.LedgerBytes);
         Assert.Single(ledger.RootElement.GetProperty("rounds").EnumerateArray());
         var projectedFinding = Assert.Single(ledger.RootElement.GetProperty("findings").EnumerateArray());
+        Assert.False(string.IsNullOrWhiteSpace(projectedFinding.GetProperty("evidence_identity").GetString()));
+        var receiptReference = Assert.Single(projectedFinding.GetProperty("receipt_bodies").EnumerateArray());
         Assert.Equal(
-            receipt.ReceiptId,
-            projectedFinding.GetProperty("evidence_outcome").GetProperty("receipt_id").GetString());
+            WorkerContextArtifact.Hash(JsonSerializer.SerializeToUtf8Bytes(receipt)),
+            receiptReference.GetProperty("sha256").GetString());
     }
 
     [Xunit.Fact]
@@ -729,6 +827,55 @@ public sealed class ReviewFindingContextProjectorTests
         File.WriteAllText(Path.Combine(contextDirectory, "artifact-registry.json"), JsonSerializer.Serialize(new { artifacts = Array.Empty<object>() }));
         return contextDirectory;
     }
+
+    private static (string ContextDirectory, string Policy, string SourceSurvey, string PriorTaskEvidence)
+        WriteProductionRegistry(string root)
+    {
+        var contextDirectory = Path.Combine(root, ".orchestrator-context", "goal");
+        Directory.CreateDirectory(contextDirectory);
+        var policy = "POLICY_START\n" + new string('p', 40_000) + "\nPOLICY_SENTINEL_AFTER_DEFAULT_CAP";
+        var sourceSurvey = "SOURCE_SURVEY_START\n" + new string('s', 36_000) + "\nSOURCE_SURVEY_END";
+        var priorTaskEvidence = "PRIOR_TASK_EVIDENCE_START\n" + new string('e', 31_000) + "\nPRIOR_TASK_EVIDENCE_END";
+        var artifacts = new[]
+        {
+            WriteRegisteredArtifact(contextDirectory, "AGENTS.md", policy),
+            WriteRegisteredArtifact(contextDirectory, "source-survey.md", sourceSurvey),
+            WriteRegisteredArtifact(contextDirectory, "prior-task-evidence.md", priorTaskEvidence)
+        };
+        File.WriteAllText(
+            Path.Combine(contextDirectory, "artifact-registry.json"),
+            JsonSerializer.Serialize(new { artifacts }));
+        return (contextDirectory, policy, sourceSurvey, priorTaskEvidence);
+    }
+
+    private static object WriteRegisteredArtifact(string contextDirectory, string path, string content)
+    {
+        var bytes = Encoding.UTF8.GetBytes(content);
+        File.WriteAllBytes(Path.Combine(contextDirectory, path), bytes);
+        return new
+        {
+            path,
+            exists = true,
+            sha256 = WorkerContextArtifact.Hash(bytes),
+            roleVisibility = new[] { "Reviewer" },
+            hashVerified = true
+        };
+    }
+
+    private static ReviewFinding Finding(
+        string stableId,
+        ReviewFindingLocation location,
+        string description,
+        FindingEvidenceRequest? request = null,
+        string? receiptId = null) => new(
+            stableId,
+            ReviewFindingState.Open,
+            location,
+            description,
+            FindingSeverity.Blocking,
+            FindingCategory.Correctness,
+            request,
+            receiptId is null ? null : new FindingEvidenceOutcome(true, receiptId));
 
     private static TaskVerificationRecord Verification(
         DateTimeOffset completedAt,

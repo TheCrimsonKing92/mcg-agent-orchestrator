@@ -359,6 +359,31 @@ public sealed record WorkerContextPackageReceipt(
     int BaselineToolTranscriptCharacters = 0,
     int BaselineModelInputTokenEstimate = 0)
 {
+    public bool HasEarlyConvergenceEvidenceFor(string? candidateSha)
+    {
+        if (!EarlyConvergenceEligible ||
+            string.IsNullOrWhiteSpace(candidateSha) ||
+            string.IsNullOrWhiteSpace(EarlyConvergenceCandidateSha) ||
+            !string.Equals(EarlyConvergenceCandidateSha, candidateSha, StringComparison.OrdinalIgnoreCase) ||
+            EarlyConvergenceReceiptHashes is not { Count: > 0 } hashes ||
+            hashes.Distinct(StringComparer.Ordinal).Count() != hashes.Count)
+        {
+            return false;
+        }
+
+        return hashes.All(hash =>
+            hash.Length == 64 &&
+            hash.All(Uri.IsHexDigit) &&
+            Sections.Any(section =>
+                section.ContractVersion == ContextContractVersion.V1.Value &&
+                section.DeliveryMode == ContextDeliveryMode.OnDemandFile &&
+                string.Equals(section.ContentHash, hash, StringComparison.Ordinal) &&
+                string.Equals(
+                    section.LogicalIdentity,
+                    $"goal/review-finding-receipts/{hash}.json",
+                    StringComparison.Ordinal)));
+    }
+
     public WorkerContextPackageReceipt WithProviderUsage(ProviderReportedUsage? usage, string unavailableReason = "absent") => this with
     {
         InputTokens = MergeUsageValue(InputTokens, usage?.InputTokens, unavailableReason),

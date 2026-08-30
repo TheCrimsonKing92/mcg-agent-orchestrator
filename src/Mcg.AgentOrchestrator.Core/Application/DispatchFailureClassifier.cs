@@ -1666,10 +1666,8 @@ public static class DispatchFailureClassifier
             !workerResultPresent ||
             !WasRedispatchedByAnyRoute(task) ||
             string.IsNullOrWhiteSpace(task.LastDispatch?.BaseCommit) ||
-            task.LastDispatch.ContextPackageReceipt is not { EarlyConvergenceEligible: true } contextReceipt ||
-            string.IsNullOrWhiteSpace(contextReceipt.EarlyConvergenceCandidateSha) ||
-            !string.Equals(contextReceipt.EarlyConvergenceCandidateSha, task.LastDispatch.BaseCommit, StringComparison.OrdinalIgnoreCase) ||
-            contextReceipt.EarlyConvergenceReceiptHashes is not { Count: > 0 } ||
+            task.LastDispatch.ContextPackageReceipt is not { } contextReceipt ||
+            !contextReceipt.HasEarlyConvergenceEvidenceFor(task.LastDispatch.BaseCommit) ||
             !HasPopulatedStandardOutput(verification) ||
             !DispatchRejectionDiagnosticMarker.TryParse(
                 verification.StandardError,

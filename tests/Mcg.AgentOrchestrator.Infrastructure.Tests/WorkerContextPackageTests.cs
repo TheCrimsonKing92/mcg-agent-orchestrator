@@ -1101,6 +1101,23 @@ public sealed class WorkerContextPackageTests(Xunit.ITestOutputHelper output)
                 .ToArray();
             Assert.Contains(recoveredReceiptBodies,
                 bytes => Encoding.UTF8.GetString(bytes).Contains("evidence-receipt-summary-source", StringComparison.Ordinal));
+            var recoveredRoundBodies = findingHistoryDocument.RootElement.GetProperty("rounds")
+                .EnumerateArray()
+                .Select(reference => reference.GetProperty("body"))
+                .Select(reference =>
+                {
+                    var identity = reference.GetProperty("logical_identity").GetString()!;
+                    var artifact = Assert.Single(package.Artifacts, candidate => candidate.Identity.Value == identity);
+                    Assert.Equal(ContextDeliveryMode.OnDemandFile, artifact.DeliveryMode);
+                    var bytes = Recover(root, artifact);
+                    Assert.Equal(reference.GetProperty("sha256").GetString(), WorkerContextArtifact.Hash(bytes));
+                    return bytes;
+                })
+                .ToArray();
+            Assert.Contains(recoveredRoundBodies,
+                bytes => Encoding.UTF8.GetString(bytes).Contains("evidence-class-source", StringComparison.Ordinal));
+            Assert.Contains(recoveredRoundBodies,
+                bytes => Encoding.UTF8.GetString(bytes).Contains("evidence-outcome-detail-source", StringComparison.Ordinal));
 
             var expectedSources = new List<ExpectedSemanticSource>
             {
@@ -1117,8 +1134,6 @@ public sealed class WorkerContextPackageTests(Xunit.ITestOutputHelper output)
                 new("acceptance failure", "goal/latest-acceptance-failure.json", "acceptance-failure-source"),
                 new ExpectedSemanticSource("finding one", "goal/review-finding-history.json", "finding-source-one"),
                 new ExpectedSemanticSource("finding two", "goal/review-finding-history.json", "finding-source-two"),
-                new ExpectedSemanticSource("evidence request", "goal/review-finding-history.json", "evidence-class-source"),
-                new ExpectedSemanticSource("evidence outcome", "goal/review-finding-history.json", "evidence-outcome-detail-source"),
                 new ExpectedSemanticSource("causal event", "goal/timeline.json", causalEvent),
                 new ExpectedSemanticSource("prior-task result", $"prior/{priorTask.Id.Value}/verification-output", priorResult.Trim()),
                 new ExpectedSemanticSource("required instruction", "task/verification-plan.md", "required-instruction-source-✓"),

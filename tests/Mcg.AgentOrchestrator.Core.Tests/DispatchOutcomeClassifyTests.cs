@@ -2,15 +2,26 @@ using Mcg.AgentOrchestrator.Core;
 
 public sealed class DispatchOutcomeClassifyTests
 {
-    private static WorkerContextPackageReceipt EarlyConvergenceReceipt(string candidateSha) => new(
-        "ctxpkg-test",
-        [],
-        ProviderUsageValue.Unknown("test"),
-        ProviderUsageValue.Unknown("test"),
-        ProviderUsageValue.Unknown("test"),
-        EarlyConvergenceEligible: true,
-        EarlyConvergenceCandidateSha: candidateSha,
-        EarlyConvergenceReceiptHashes: [new string('a', 64)]);
+    private static WorkerContextPackageReceipt EarlyConvergenceReceipt(string candidateSha)
+    {
+        var evidenceHash = new string('a', 64);
+        return new WorkerContextPackageReceipt(
+            "ctxpkg-test",
+            [new WorkerContextSectionReceipt(
+                $"goal/review-finding-receipts/{evidenceHash}.json",
+                1,
+                1,
+                evidenceHash,
+                ContextDeliveryMode.OnDemandFile,
+                ContextContractVersion.V1.Value,
+                [AgentRole.Developer])],
+            ProviderUsageValue.Unknown("test"),
+            ProviderUsageValue.Unknown("test"),
+            ProviderUsageValue.Unknown("test"),
+            EarlyConvergenceEligible: true,
+            EarlyConvergenceCandidateSha: candidateSha,
+            EarlyConvergenceReceiptHashes: [evidenceHash]);
+    }
 
     private static TaskSpec SimpleTask(AgentRole role = AgentRole.Developer)
     {

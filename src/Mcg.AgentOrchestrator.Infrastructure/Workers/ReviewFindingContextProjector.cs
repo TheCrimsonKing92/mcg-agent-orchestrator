@@ -199,6 +199,11 @@ internal static class ReviewFindingContextProjector
             earlyConvergenceEligible,
             earlyConvergenceEligible ? currentCandidateSha?.Trim() : null,
             convergenceReceiptHashes);
+        var currentOperatorCorrections = (effectiveOperatorCorrections ?? [])
+            .GroupBy(correction => correction.SupersededCriterion, StringComparer.Ordinal)
+            .Select(group => group.OrderByDescending(correction => correction.RecordedAt).First())
+            .OrderByDescending(correction => correction.RecordedAt)
+            .ToArray();
         var ledger = new ReviewFindingHistoryLedger(
             ContextContractVersion.V1.Value,
             mode,
@@ -208,7 +213,7 @@ internal static class ReviewFindingContextProjector
             activeReceiptReferences,
             currentCandidateSha?.Trim(),
             comparisonBaseSha?.Trim(),
-            effectiveOperatorCorrections ?? [],
+            currentOperatorCorrections,
             earlyConvergenceEligible);
         var ledgerBytes = JsonSerializer.SerializeToUtf8Bytes(ledger);
 

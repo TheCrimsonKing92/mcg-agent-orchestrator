@@ -360,10 +360,9 @@ internal sealed class WorkerDispatchCompletionClassifier
 
         var receipt = task.LastDispatch?.ContextPackageReceipt;
         if (!HasExplicitNoChangeRationale(standardOutput, standardError) ||
-            receipt is not { EarlyConvergenceEligible: true } ||
-            string.IsNullOrWhiteSpace(receipt.EarlyConvergenceCandidateSha) ||
-            !string.Equals(receipt.EarlyConvergenceCandidateSha, task.LastDispatch?.BaseCommit, StringComparison.OrdinalIgnoreCase) ||
-            receipt.EarlyConvergenceReceiptHashes is not { Count: > 0 })
+            (task.LatestRetryAt is null && task.CriterionRetryCount == 0 && task.CriterionRetryFeedback.Count == 0) ||
+            receipt is null ||
+            !receipt.HasEarlyConvergenceEvidenceFor(task.LastDispatch?.BaseCommit))
         {
             return false;
         }
