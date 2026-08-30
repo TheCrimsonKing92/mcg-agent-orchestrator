@@ -451,8 +451,15 @@ private static GoalTestImpactDto BuildGoalTestImpactDto(
     string? executionDirectory,
     IReadOnlyList<string>? changedFiles)
 {
-    changedFiles ??= TryGetGoalChangedFiles(goal, executionDirectory);
-    var plan = RepositoryTestImpactPlanner.Plan(changedFiles);
+    var worktree = string.IsNullOrWhiteSpace(executionDirectory)
+        ? null
+        : GoalWorktrees.TryResolve(executionDirectory, goal.Id);
+    changedFiles ??= worktree is null
+        ? []
+        : GoalAcceptanceEvidenceBundleBuilder.GetChangedFiles(worktree);
+    var plan = worktree is null
+        ? RepositoryTestImpactPlanner.Plan(changedFiles)
+        : RepositoryTestImpactPlanner.Plan(changedFiles, worktree);
     return new GoalTestImpactDto(
         plan.RequiresBuild,
         plan.RequiresBroadVerification,

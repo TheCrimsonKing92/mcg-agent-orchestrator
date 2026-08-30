@@ -147,6 +147,79 @@ public sealed class RepositoryTestImpactFilterResolutionTests
     }
 
     [Xunit.Fact]
+    public void UnavailableReverseDependencyEvidenceDoesNotClassifyAsDependencyFailure()
+    {
+        const string changedPath =
+            "src/Mcg.AgentOrchestrator.Core/Application/DispatchFailureClassifier.cs";
+        var plan = RepositoryTestImpactPlanner.Plan(
+            RepositoryChangeClassifier.Classify([changedPath]),
+            new StubDeclarationReader(TestClassDeclarations.Unavailable));
+
+        var check = Assert.Single(plan.Checks);
+        Assert.Equal("core tests", check.Name);
+        Assert.DoesNotContain(
+            plan.Checks,
+            candidate => candidate.Command.Contains(
+                "tests/Mcg.AgentOrchestrator.Infrastructure.Tests/Mcg.AgentOrchestrator.Infrastructure.Tests.csproj"));
+    }
+
+    [Xunit.Fact]
+    public void CoreServiceAndCoreUnitTestCochangeStillSelectsIntegrationConsumer()
+    {
+        using var repository = ReverseDependencyRepository.Create();
+        var plan = RepositoryTestImpactPlanner.Plan(
+            [
+                "src/Mcg.AgentOrchestrator.Core/Application/DispatchFailureClassifier.cs",
+                "tests/Mcg.AgentOrchestrator.Core.Tests/DispatchFailureClassifierTests.cs"
+            ],
+            repository.Root);
+
+        Assert.Contains(plan.Checks, check =>
+            check.Command.Contains("FullyQualifiedName~RunGoalServiceTests", StringComparer.Ordinal));
+    }
+
+    [Xunit.Fact]
+    public void TargetTestHelperDeclarationsRemainInSecondHopFrontier()
+    {
+        using var repository = ReverseDependencyRepository.Create();
+        repository.Write(
+            "tests/Mcg.AgentOrchestrator.Infrastructure.Tests/DispatchClassifierTestSupport.cs",
+            "public abstract class DispatchClassifierTestSupport { " +
+            "protected readonly DispatchFailureClassifier Classifier = new(); }");
+        repository.Write(
+            "tests/Mcg.AgentOrchestrator.Infrastructure.Tests/HelperMediatedTests.cs",
+            "public sealed class HelperMediatedTests : DispatchClassifierTestSupport { " +
+            "[Xunit.Fact] public void Runs() { } }");
+
+        var plan = RepositoryTestImpactPlanner.Plan(
+            ["src/Mcg.AgentOrchestrator.Core/Application/DispatchFailureClassifier.cs"],
+            repository.Root);
+
+        Assert.Contains(plan.Checks, check =>
+            check.Command.Contains("FullyQualifiedName~HelperMediatedTests", StringComparer.Ordinal));
+    }
+
+    [Xunit.Fact]
+    public void EnumDeclarationParticipatesInReverseDependencyTraversal()
+    {
+        using var repository = ReverseDependencyRepository.Create();
+        repository.Write(
+            "src/Mcg.AgentOrchestrator.Core/Application/DispatchFailureClassifier.cs",
+            "namespace Mcg.AgentOrchestrator.Core; public enum DispatchOutcomeKind { Success, Failure }");
+        repository.Write(
+            "src/Mcg.AgentOrchestrator.App/Cli/RunGoalService.cs",
+            "namespace Mcg.AgentOrchestrator.App; public sealed class RunGoalService { " +
+            "private readonly DispatchOutcomeKind _outcome = DispatchOutcomeKind.Success; }");
+
+        var plan = RepositoryTestImpactPlanner.Plan(
+            ["src/Mcg.AgentOrchestrator.Core/Application/DispatchFailureClassifier.cs"],
+            repository.Root);
+
+        Assert.Contains(plan.Checks, check =>
+            check.Command.Contains("FullyQualifiedName~RunGoalServiceTests", StringComparer.Ordinal));
+    }
+
+    [Xunit.Fact]
     public void ReverseDependencyFanOutAboveBoundWidensAtomically()
     {
         using var repository = ReverseDependencyRepository.Create();

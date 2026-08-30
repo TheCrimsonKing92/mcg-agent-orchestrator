@@ -78,8 +78,20 @@ internal sealed class WorkerArtifactWriter
         WriteOptionalArtifact(
             Path.Combine(contextDirectory, "prior-goal-evidence.md"),
             citedPriorEvidence);
-        WriteText(Path.Combine(contextDirectory, "deterministic-verification.md"), BuildDeterministicVerification(goal, task, workingDirectory));
-        WriteText(Path.Combine(contextDirectory, "workflow-brokers.md"), BuildWorkflowBrokers(goal, task, workingDirectory, plannerUsesDurableResearch));
+        var changedFiles = _gitContext.ReadChangedFilesForTestImpact(workingDirectory);
+        var testImpactPlan = RepositoryTestImpactPlanner.Plan(changedFiles, workingDirectory);
+        WriteText(
+            Path.Combine(contextDirectory, "deterministic-verification.md"),
+            BuildDeterministicVerification(goal, task, workingDirectory, changedFiles, testImpactPlan));
+        WriteText(
+            Path.Combine(contextDirectory, "workflow-brokers.md"),
+            BuildWorkflowBrokers(
+                goal,
+                task,
+                workingDirectory,
+                plannerUsesDurableResearch,
+                changedFiles,
+                testImpactPlan));
         WriteText(Path.Combine(contextDirectory, "context-budget.md"), BuildContextBudget(goal, task, workingDirectory, plannerUsesDurableResearch));
         WriteText(Path.Combine(contextDirectory, "selected-skills.md"), _skillSelector.BuildSelectedSkills(goal, task, workingDirectory));
         var sourceSurveyPath = Path.Combine(contextDirectory, "source-survey.md");
@@ -370,7 +382,12 @@ internal sealed class WorkerArtifactWriter
         return string.Join(Environment.NewLine, lines);
     }
 
-    private string BuildDeterministicVerification(Goal goal, TaskSpec task, string workingDirectory)
+    private string BuildDeterministicVerification(
+        Goal goal,
+        TaskSpec task,
+        string workingDirectory,
+        IReadOnlyList<string> changedFiles,
+        RepositoryTestImpactPlan testImpactPlan)
     {
         var priorTasks = goal.Tasks.TakeWhile(t => t.Id != task.Id).ToList();
         var completedPriorTasks = priorTasks.Where(t => t.Status == WorkTaskStatus.Completed).ToList();
@@ -427,8 +444,6 @@ internal sealed class WorkerArtifactWriter
             }
         }
 
-        var changedFiles = _gitContext.ReadChangedFilesForTestImpact(workingDirectory);
-        var testImpactPlan = RepositoryTestImpactPlanner.Plan(changedFiles, workingDirectory);
         var verificationPolicy = VerificationPolicyCompiler.Compile(
             task.RequiredRole,
             goal.Objective,
@@ -510,10 +525,10 @@ internal sealed class WorkerArtifactWriter
         Goal goal,
         TaskSpec task,
         string workingDirectory,
-        bool plannerUsesDurableResearch)
+        bool plannerUsesDurableResearch,
+        IReadOnlyList<string> changedFiles,
+        RepositoryTestImpactPlan testImpactPlan)
     {
-        var changedFiles = _gitContext.ReadChangedFilesForTestImpact(workingDirectory);
-        var testImpactPlan = RepositoryTestImpactPlanner.Plan(changedFiles, workingDirectory);
         var verificationPolicy = VerificationPolicyCompiler.Compile(
             task.RequiredRole,
             goal.Objective,

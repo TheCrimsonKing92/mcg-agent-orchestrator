@@ -6,7 +6,7 @@ internal static class ReverseDependencyTestImpactReader
 {
     private const string InfrastructureTestProject =
         "tests/Mcg.AgentOrchestrator.Infrastructure.Tests/Mcg.AgentOrchestrator.Infrastructure.Tests.csproj";
-    private const int MaximumChangedSourceFiles = 5;
+    internal const int MaximumChangedSourceFiles = 5;
     private const int MaximumDependencyHops = 2;
     private const int MaximumFrontierSymbols = 64;
     private const int MaximumSelectedTestClasses = 16;
@@ -95,9 +95,11 @@ internal static class ReverseDependencyTestImpactReader
                 .ToDictionary(group => group.Key, group => group.ToArray(), StringComparer.Ordinal);
             var frontier = changedPaths
                 .SelectMany(path => indexedFiles[path].Symbols!.DeclaredTypes)
-                .Select(declaration => declaration.Name)
-                .Distinct(StringComparer.Ordinal)
-                .Order(StringComparer.Ordinal)
+                .Select(declaration => new FrontierSymbol(
+                    declaration.Name,
+                    TestSelectionMode.AllReferencingClasses))
+                .Distinct()
+                .OrderBy(symbol => symbol.Name, StringComparer.Ordinal)
                 .ToArray();
             if (frontier.Length == 0)
             {
@@ -115,7 +117,7 @@ internal static class ReverseDependencyTestImpactReader
                         $"Reverse-dependency hop {hop} exceeded the {MaximumFrontierSymbols}-symbol frontier bound.");
                 }
 
-                foreach (var symbol in frontier)
+                foreach (var symbol in frontier.Select(item => item.Name).Distinct(StringComparer.Ordinal))
                 {
                     if (declarationsByName.TryGetValue(symbol, out var declarations) &&
                         declarations.Length > 1 &&
@@ -126,7 +128,9 @@ internal static class ReverseDependencyTestImpactReader
                     }
                 }
 
-                var frontierSet = frontier.ToHashSet(StringComparer.Ordinal);
+                var frontierSet = frontier
+                    .Select(symbol => symbol.Name)
+                    .ToHashSet(StringComparer.Ordinal);
                 var consumers = indexedFiles.Values
                     .Where(file => !seenPaths.Contains(file.Path))
                     .Where(file => file.Symbols!.ReferencedIdentifiers.Overlaps(frontierSet))
@@ -134,7 +138,23 @@ internal static class ReverseDependencyTestImpactReader
                     .ToArray();
                 foreach (var consumer in consumers.Where(file => file.IsTargetTestProject))
                 {
-                    selectedTestClasses.UnionWith(consumer.Symbols!.TestClassNames);
+                    var referencedFrontier = frontier
+                        .Where(symbol => consumer.Symbols!.ReferencedIdentifiers.Contains(symbol.Name))
+                        .ToArray();
+                    if (referencedFrontier.Any(symbol =>
+                        symbol.TestSelectionMode == TestSelectionMode.AllReferencingClasses))
+                    {
+                        selectedTestClasses.UnionWith(consumer.Symbols!.TestClassNames);
+                    }
+                    else
+                    {
+                        var ownedClassNames = referencedFrontier
+                            .Select(symbol => $"{symbol.Name}Tests")
+                            .ToHashSet(StringComparer.Ordinal);
+                        selectedTestClasses.UnionWith(
+                            consumer.Symbols!.TestClassNames.Where(ownedClassNames.Contains));
+                    }
+
                     if (selectedTestClasses.Count > MaximumSelectedTestClasses)
                     {
                         return ReverseDependencyTestSelection.Abandoned(
@@ -148,11 +168,23 @@ internal static class ReverseDependencyTestImpactReader
                 }
 
                 frontier = consumers
-                    .Where(file => !file.IsTargetTestProject)
-                    .SelectMany(file => file.Symbols!.DeclaredTypes)
-                    .Select(declaration => declaration.Name)
-                    .Distinct(StringComparer.Ordinal)
-                    .Order(StringComparer.Ordinal)
+                    .SelectMany(file => file.Symbols!.DeclaredTypes
+                        .Where(declaration =>
+                            !file.IsTargetTestProject ||
+                            !file.Symbols.TestClassNames.Contains(declaration.Name, StringComparer.Ordinal))
+                        .Select(declaration => new FrontierSymbol(
+                            declaration.Name,
+                            file.IsTargetTestProject
+                                ? TestSelectionMode.AllReferencingClasses
+                                : TestSelectionMode.OwnedClassOnly)))
+                    .GroupBy(symbol => symbol.Name, StringComparer.Ordinal)
+                    .Select(group => new FrontierSymbol(
+                        group.Key,
+                        group.Any(symbol =>
+                            symbol.TestSelectionMode == TestSelectionMode.AllReferencingClasses)
+                            ? TestSelectionMode.AllReferencingClasses
+                            : TestSelectionMode.OwnedClassOnly))
+                    .OrderBy(symbol => symbol.Name, StringComparer.Ordinal)
                     .ToArray();
                 if (frontier.Length == 0)
                 {
@@ -186,6 +218,11 @@ internal static class ReverseDependencyTestImpactReader
         {
             return ReverseDependencyTestSelection.Unreadable(
                 $"Reverse-dependency path evidence is unsupported: {exception.Message}");
+        }
+        catch (Exception exception)
+        {
+            return ReverseDependencyTestSelection.Unreadable(
+                $"Reverse-dependency evidence failed: {exception.Message}");
         }
     }
 
@@ -263,4 +300,12 @@ internal static class ReverseDependencyTestImpactReader
         string Path,
         bool IsTargetTestProject,
         CSharpTestClassScanner.SourceSymbols? Symbols);
+
+    private sealed record FrontierSymbol(string Name, TestSelectionMode TestSelectionMode);
+
+    private enum TestSelectionMode
+    {
+        AllReferencingClasses,
+        OwnedClassOnly
+    }
 }

@@ -297,7 +297,7 @@ internal static class CSharpTestClassScanner
         for (var index = 0; index < tokens.Count; index++)
         {
             var keyword = tokens[index].Value;
-            if (keyword is not ("class" or "record" or "struct" or "interface"))
+            if (keyword is not ("class" or "record" or "struct" or "interface" or "enum"))
             {
                 continue;
             }

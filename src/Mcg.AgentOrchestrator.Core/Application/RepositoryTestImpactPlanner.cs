@@ -238,7 +238,8 @@ public static class RepositoryTestImpactPlanner
                 ],
                 "Core production behavior changed; run integration tests that reference its bounded two-hop consumers."));
         }
-        else if (reverseDependencySelection is { Outcome: not ReverseDependencySelectionOutcome.Resolved } degraded)
+        else if (reverseDependencySelection is
+            { Outcome: ReverseDependencySelectionOutcome.Unreadable or ReverseDependencySelectionOutcome.Abandoned } degraded)
         {
             checks.Add(new RepositoryTestImpactCheck(
                 "infrastructure tests",
@@ -602,13 +603,14 @@ public static class RepositoryTestImpactPlanner
             .Order(StringComparer.Ordinal)
             .ToArray();
         if (changedCoreSources.Length == 0 ||
-            changedCoreSources.Length > 5 ||
+            changedCoreSources.Length > ReverseDependencyTestImpactReader.MaximumChangedSourceFiles ||
             touchesInfrastructure ||
             touchesApp ||
             touchesScriptsOrConfig ||
             summary.Files.Any(file =>
                 file.Categories.Contains(RepositoryChangeCategory.Source) &&
-                !StartsWith(file.Path, "src/Mcg.AgentOrchestrator.Core/")))
+                !StartsWith(file.Path, "src/Mcg.AgentOrchestrator.Core/") &&
+                !StartsWith(file.Path, "tests/Mcg.AgentOrchestrator.Core.Tests/")))
         {
             return null;
         }

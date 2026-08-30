@@ -149,12 +149,16 @@ internal static class GoalAcceptanceEvidenceBundleBuilder
             .Select((task, index) => BuildTaskEvidence(task, index + 1))
             .ToArray();
 
+        var testImpactPlan = worktreePath is null
+            ? RepositoryTestImpactPlanner.Plan(changeSummary)
+            : RepositoryTestImpactPlanner.Plan(changeSummary, worktreePath);
         var verificationPolicy = VerificationPolicyCompiler.Compile(
             AgentRole.Reviewer,
             goal.Objective,
             string.Join(Environment.NewLine, goal.Tasks.Select(task => task.Description)),
             string.Join(Environment.NewLine, goal.Tasks.Select(task => task.VerificationPlan)),
-            changedFiles);
+            changedFiles,
+            testImpactPlan);
         var policyChecks = BuildPolicyCheckEvidence(verificationPolicy, verification);
 
         if (!verificationSkipped)
@@ -215,7 +219,7 @@ internal static class GoalAcceptanceEvidenceBundleBuilder
             changedFiles,
             diffStat.Trim(),
             changeSummary,
-            RepositoryTestImpactPlanner.Plan(changeSummary),
+            testImpactPlan,
             verificationPolicy,
             policyChecks,
             BuildEnvironmentEvidence(goal.Id),

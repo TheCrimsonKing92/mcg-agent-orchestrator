@@ -997,9 +997,13 @@ internal sealed partial class ConductorDriver
         _isVerificationGateSatisfied = goal => kernel.BuildVerificationGate(goal.Id).IsSatisfied;
         _gateReadyCandidateProjector = GateReadyCandidateProjector.CreateForRepository(dir);
         _getPreReviewEvidenceContext = goal =>
-            BuildPreReviewEvidenceContext(
+        {
+            var worktreePath = GoalWorktrees.TryResolve(dir, goal.Id);
+            return BuildPreReviewEvidenceContext(
                 TryResolveAcceptanceBranchHead(goal),
-                _getLandingFileScopes(goal));
+                _getLandingFileScopes(goal),
+                worktreePath);
+        };
         _getFindingEvidenceEngineSettings = goal => AcceptanceGateEngineSettings.Load(
             GoalWorktrees.TryResolve(dir, goal.Id) ?? dir);
         _resolveFindingEvidenceSiblingClasses = (goal, project, requestedClass) =>
@@ -5069,9 +5073,12 @@ internal sealed partial class ConductorDriver
 
     internal static PreReviewEvidenceContext BuildPreReviewEvidenceContext(
         string? candidateSha,
-        IReadOnlyList<string> changedFiles)
+        IReadOnlyList<string> changedFiles,
+        string? repositoryRoot = null)
     {
-        var plan = RepositoryTestImpactPlanner.Plan(changedFiles);
+        var plan = string.IsNullOrWhiteSpace(repositoryRoot)
+            ? RepositoryTestImpactPlanner.Plan(changedFiles)
+            : RepositoryTestImpactPlanner.Plan(changedFiles, repositoryRoot);
         if (!plan.RequiresBuild &&
             plan.Checks.Count > 0 &&
             plan.Checks.All(check => check.Command.Count == 0))

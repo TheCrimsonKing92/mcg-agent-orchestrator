@@ -924,12 +924,13 @@ public sealed class RepositoryChangeClassifierTests
         Assert.DoesNotContain("--filter", check.Command);
     }
 
-    [Xunit.Fact(DisplayName = "RepositoryTestImpactPlanner_preserves_core_and_widens_on_dependent_fanout")]
-    public void RepositoryTestImpactPlannerPreservesCoreAndWidensOnDependentFanout()
+    [Xunit.Fact(DisplayName = "RepositoryTestImpactPlanner_selects_real_reverse_dependent_integration_consumer")]
+    public void RepositoryTestImpactPlannerSelectsRealReverseDependentIntegrationConsumer()
     {
-        var plan = RepositoryTestImpactPlanner.Plan([
-            "src/Mcg.AgentOrchestrator.Core/Application/DispatchFailureClassifier.cs"
-        ]);
+        var repositoryRoot = FindRepositoryRootFromSource();
+        var plan = RepositoryTestImpactPlanner.Plan(
+            ["src/Mcg.AgentOrchestrator.Core/Application/DispatchFailureClassifier.cs"],
+            repositoryRoot);
 
         Assert.True(plan.RequiresBuild);
         Assert.False(plan.RequiresBroadVerification);
@@ -941,8 +942,11 @@ public sealed class RepositoryChangeClassifierTests
         var infrastructureCheck = Assert.Single(plan.Checks, check =>
             check.Command.Contains(
                 "tests/Mcg.AgentOrchestrator.Infrastructure.Tests/Mcg.AgentOrchestrator.Infrastructure.Tests.csproj"));
-        Assert.DoesNotContain("--filter", infrastructureCheck.Command);
-        Assert.Contains("16-test-class bound", infrastructureCheck.Reason, StringComparison.Ordinal);
+        Assert.Contains("--filter", infrastructureCheck.Command);
+        Assert.Contains(
+            "FullyQualifiedName~RunGoalServiceTests",
+            infrastructureCheck.Command,
+            StringComparer.Ordinal);
     }
 
     [Xunit.Fact(DisplayName = "RepositoryTestImpactPlanner_selects_core_and_infrastructure_tests_for_mixed_changes")]
