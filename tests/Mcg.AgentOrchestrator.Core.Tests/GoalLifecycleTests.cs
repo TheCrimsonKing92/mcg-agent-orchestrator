@@ -873,7 +873,12 @@ public sealed class GoalLifecycleTests
         kernel.RecordTaskDispatch(
             goal.Id,
             developer.Id,
-            new TaskDispatchRecord("Developer", "worker", "C:\\repo", DateTimeOffset.UtcNow));
+            new TaskDispatchRecord(
+                "Developer",
+                "worker",
+                "C:\\repo",
+                DateTimeOffset.UtcNow,
+                ContextPackageReceipt: EarlyConvergenceReceipt("aaa111")));
         kernel.RecordDispatchBaseCommit(goal.Id, developer.Id, "aaa111");
         var output = string.Join(
             Environment.NewLine,
@@ -1567,6 +1572,27 @@ static void CompleteCandidateDispatch(
             "",
             DateTimeOffset.UtcNow,
             ReviewedCommit: reviewedCommit));
+}
+
+static WorkerContextPackageReceipt EarlyConvergenceReceipt(string candidateSha)
+{
+    var evidenceHash = new string('a', 64);
+    return new WorkerContextPackageReceipt(
+        "ctxpkg-goal-lifecycle",
+        [new WorkerContextSectionReceipt(
+            $"goal/review-finding-receipts/{evidenceHash}.json",
+            1,
+            1,
+            evidenceHash,
+            ContextDeliveryMode.OnDemandFile,
+            ContextContractVersion.V1.Value,
+            [AgentRole.Developer])],
+        ProviderUsageValue.Unknown("test"),
+        ProviderUsageValue.Unknown("test"),
+        ProviderUsageValue.Unknown("test"),
+        EarlyConvergenceEligible: true,
+        EarlyConvergenceCandidateSha: candidateSha,
+        EarlyConvergenceReceiptHashes: [evidenceHash]);
 }
 
 static AgentDefinition TestAgent(string id, string name, AgentRole role) =>
