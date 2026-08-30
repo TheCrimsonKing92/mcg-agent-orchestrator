@@ -2652,9 +2652,9 @@ public static class WorkerProfileDispatcher
              !string.IsNullOrWhiteSpace(currentCandidateSha) &&
              !string.IsNullOrWhiteSpace(comparisonBaseSha)))
         {
-            ReviewFindingContextProjector.ApplyCompactArtifactAllowList(artifacts);
+            ReviewFindingContextProjector.ApplyCompactArtifactAllowList(artifacts,
+                preserveRetryBrief: reviewFindingProjection?.Metrics.Mode != ReviewFindingHistoryProjectionMode.ContractRepair);
         }
-
         var builder = new WorkerContextPackageBuilder();
         var preparedWithoutManifest = builder.Prepare(targetRole, workingDirectory, artifacts) with
         {

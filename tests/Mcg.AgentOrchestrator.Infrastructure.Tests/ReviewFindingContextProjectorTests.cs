@@ -41,11 +41,11 @@ public sealed class ReviewFindingContextProjectorTests
                 },
                 new[]
                 {
-                    Finding("active-b", activeBLocation, "ROUND1_ACTIVE_SENTINEL_" + new string('t', 1_450), requestB, "receipt-b")
+                    Finding("active-b", activeBLocation, "ROUND1_ACTIVE_SENTINEL_" + new string('t', 1_450) + "_ACTIVE_B_ACTIONABLE_SUFFIX", requestB, "receipt-b")
                 },
                 new[]
                 {
-                    Finding("active-a", activeALocation, "ROUND2_ACTIVE_SENTINEL_" + new string('u', 1_450), requestA, "receipt-a")
+                    Finding("active-a", activeALocation, "ROUND2_ACTIVE_SENTINEL_" + new string('u', 1_450) + "_ACTIVE_A_ACTIONABLE_SUFFIX", requestA, "receipt-a")
                 },
                 new[]
                 {
@@ -188,6 +188,10 @@ public sealed class ReviewFindingContextProjectorTests
             Assert.DoesNotContain("OBSOLETE_CORRECTION_SENTINEL", rendered, StringComparison.Ordinal);
             Assert.Contains("ROUND1_ACTIVE_SENTINEL", rendered, StringComparison.Ordinal);
             Assert.Contains("ROUND2_ACTIVE_SENTINEL", rendered, StringComparison.Ordinal);
+            Assert.Contains("ACTIVE_A_ACTIONABLE_SUFFIX", rendered, StringComparison.Ordinal);
+            Assert.Contains("ACTIVE_B_ACTIONABLE_SUFFIX", rendered, StringComparison.Ordinal);
+            var retryBrief = Assert.Single(package.Artifacts, artifact => artifact.Identity.Value == "brief/current.md");
+            Assert.Contains("## Instructions", Encoding.UTF8.GetString(Recover(root, retryBrief)), StringComparison.Ordinal);
             Assert.Contains("NEWEST_CORRECTION_SENTINEL", rendered, StringComparison.Ordinal);
             Assert.Contains("WAIVER_SENTINEL", rendered, StringComparison.Ordinal);
             Assert.Equal(rendered.Length, packageReceipt.RenderedPromptCharacters);

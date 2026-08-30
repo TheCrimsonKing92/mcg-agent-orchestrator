@@ -38,13 +38,25 @@ internal static class ReviewFindingContextProjector
         }
     }
 
-    public static void ApplyCompactArtifactAllowList(List<WorkerContextArtifact> artifacts) =>
+    public static void ApplyCompactArtifactAllowList(
+        List<WorkerContextArtifact> artifacts,
+        bool preserveRetryBrief = false) =>
         artifacts.RemoveAll(artifact =>
             artifact.Identity.Value != "goal/review-finding-history.json" &&
             artifact.Identity.Value != "task/review-contract-repair-envelope.json" &&
             artifact.Identity.Value != "context/AGENTS.md" &&
+            (!preserveRetryBrief || !IsRetryBriefArtifact(artifact.Identity.Value)) &&
             !artifact.Identity.Value.StartsWith("goal/review-finding-rounds/", StringComparison.Ordinal) &&
             !artifact.Identity.Value.StartsWith("goal/review-finding-receipts/", StringComparison.Ordinal));
+
+    private static bool IsRetryBriefArtifact(string identity) => identity is
+        "goal/objective.md" or
+        "goal/refined-spec.json" or
+        "task/metadata.json" or
+        "task/description.md" or
+        "task/verification-plan.md" or
+        "brief/header-residual.md" or
+        "brief/current.md";
 
     public static ReviewFindingContextProjection Project(
         Goal goal,
@@ -341,7 +353,7 @@ internal static class ReviewFindingContextProjector
                 finding.Location,
                 finding.State == ReviewFindingState.Resolved && resolutionProof is not null
                     ? null
-                    : BoundFindingDescription(finding.Description),
+                    : finding.Description,
                 selected.Verification.ReviewedCommit,
                 BuildVerdictIdentity(selected.Verification),
                 evidenceIdentity,
@@ -453,18 +465,6 @@ internal static class ReviewFindingContextProjector
             verification.ExitCode.ToString(System.Globalization.CultureInfo.InvariantCulture),
             verification.CompletionVerdictRule ?? string.Empty,
             verification.ReviewFindingContractViolation?.Code ?? string.Empty)));
-
-    private static string? BoundFindingDescription(string? description)
-    {
-        const int inlineLimit = 120;
-        if (string.IsNullOrEmpty(description) || description.Length <= inlineLimit)
-        {
-            return description;
-        }
-
-        var hash = WorkerContextArtifact.Hash(Encoding.UTF8.GetBytes(description));
-        return $"{description[..inlineLimit]}...[full finding body sha256:{hash}]";
-    }
 
     private static WorkerContextPreparationException PreparationFailure(string reason, string detail) =>
         new(new LogicalArtifactIdentity("goal/review-finding-history.json"), reason, detail);
