@@ -84,6 +84,40 @@ public sealed class ProjectTopologyDocumentationContractTests
             exception.Message);
     }
 
+    [Xunit.Fact]
+    public void DuplicateInventoryRowIsRejected()
+    {
+        var root = FindRepositoryRoot();
+        var documents = ReadDocuments(root);
+        var project = DiscoverProjects(root)[0];
+        var mutated = DuplicateProjectRow(documents.Readme, project);
+        Xunit.Assert.NotEqual(documents.Readme, mutated);
+
+        var exception = Xunit.Assert.Throws<InvalidOperationException>(
+            () => Validate(root, documents with { Readme = mutated }));
+
+        Xunit.Assert.Equal(
+            $"{ReadmePath} current project inventory repeats project '{project}'.",
+            exception.Message);
+    }
+
+    [Xunit.Fact]
+    public void ProductionReferenceDriftIsRejected()
+    {
+        var root = FindRepositoryRoot();
+        var documents = ReadDocuments(root);
+        var mutation = RemoveProductionReference(root, documents.Architecture);
+        Xunit.Assert.NotEqual(documents.Architecture, mutation.Architecture);
+
+        var exception = Xunit.Assert.Throws<InvalidOperationException>(
+            () => Validate(root, documents with { Architecture = mutation.Architecture }));
+
+        Xunit.Assert.Equal(
+            $"{ArchitecturePath} direct references for '{mutation.Project}' differ from its csproj; " +
+            $"missing [{mutation.Reference}], invented [].",
+            exception.Message);
+    }
+
     private static void Validate(string root, Documentation documents)
     {
         var projects = DiscoverProjects(root);
@@ -258,6 +292,64 @@ public sealed class ProjectTopologyDocumentationContractTests
         return document.Replace(InventoryEnd, row + InventoryEnd, StringComparison.Ordinal);
     }
 
+    private static string DuplicateProjectRow(string document, string project)
+    {
+        var pattern = $@"^\|\s*`{Regex.Escape(project)}`\s*\|.*(?:\r?\n|$)";
+        var match = Regex.Match(
+            document,
+            pattern,
+            RegexOptions.Multiline,
+            TimeSpan.FromSeconds(1));
+        return match.Success
+            ? document.Insert(match.Index + match.Length, match.Value)
+            : document;
+    }
+
+    private static GraphMutation RemoveProductionReference(string root, string architecture)
+    {
+        var production = DiscoverProjects(root)
+            .Where(project => project.StartsWith("src/", StringComparison.OrdinalIgnoreCase))
+            .ToHashSet(StringComparer.OrdinalIgnoreCase);
+
+        foreach (var project in production.Order(StringComparer.OrdinalIgnoreCase))
+        {
+            var projectFile = Path.Combine(root, project.Replace('/', Path.DirectorySeparatorChar));
+            var projectDirectory = Path.GetDirectoryName(projectFile)!;
+            var reference = XDocument.Load(projectFile, LoadOptions.None)
+                .Descendants()
+                .Where(element => element.Name.LocalName == "ProjectReference")
+                .Select(element => element.Attribute("Include")?.Value)
+                .Where(include => !string.IsNullOrWhiteSpace(include))
+                .Select(include => Normalize(Path.GetRelativePath(
+                    root,
+                    Path.GetFullPath(Path.Combine(projectDirectory, include!)))))
+                .Where(production.Contains)
+                .Order(StringComparer.OrdinalIgnoreCase)
+                .FirstOrDefault();
+            if (reference is null)
+                continue;
+
+            var pattern = $@"^\|\s*`{Regex.Escape(project)}`\s*\|.*$";
+            var match = Regex.Match(
+                architecture,
+                pattern,
+                RegexOptions.Multiline,
+                TimeSpan.FromSeconds(1));
+            if (!match.Success)
+                continue;
+
+            var mutatedRow = match.Value.Replace($"`{reference}`", "none", StringComparison.Ordinal);
+            if (mutatedRow == match.Value)
+                continue;
+
+            var mutated = architecture.Remove(match.Index, match.Length)
+                .Insert(match.Index, mutatedRow);
+            return new GraphMutation(mutated, project, reference);
+        }
+
+        throw new InvalidOperationException("Could not find a documented production reference to mutate.");
+    }
+
     private static Documentation ReadDocuments(string root) => new(
         File.ReadAllText(Path.Combine(root, ReadmePath)),
         File.ReadAllText(Path.Combine(root, ArchitecturePath)));
@@ -294,5 +386,6 @@ public sealed class ProjectTopologyDocumentationContractTests
     private static string Normalize(string path) => path.Replace('\\', '/');
 
     private sealed record Documentation(string Readme, string Architecture);
+    private sealed record GraphMutation(string Architecture, string Project, string Reference);
     private sealed record InventoryRow(string Project, IReadOnlyList<string> DetailColumns);
 }
