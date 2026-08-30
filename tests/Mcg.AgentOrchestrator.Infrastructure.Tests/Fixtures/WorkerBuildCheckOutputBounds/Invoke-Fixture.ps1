@@ -31,7 +31,9 @@ function Invoke-CapturedProcess {
     param(
         [string]$FileName,
         [string[]]$ArgumentList,
-        [string]$WorkingDirectory
+        [string]$WorkingDirectory,
+        [ValidateRange(1, 300)]
+        [int]$TimeoutSeconds = 30
     )
 
     $startInfo = [System.Diagnostics.ProcessStartInfo]::new()
@@ -46,18 +48,28 @@ function Invoke-CapturedProcess {
 
     $process = [System.Diagnostics.Process]::new()
     $process.StartInfo = $startInfo
-    if (-not $process.Start()) { throw "Process did not start: $FileName" }
-    $process.StandardInput.Close()
-    $stdoutTask = $process.StandardOutput.ReadToEndAsync()
-    $stderrTask = $process.StandardError.ReadToEndAsync()
-    $process.WaitForExit()
-    $result = [pscustomobject]@{
-        ExitCode = $process.ExitCode
-        Stdout = $stdoutTask.GetAwaiter().GetResult()
-        Stderr = $stderrTask.GetAwaiter().GetResult()
+    try {
+        if (-not $process.Start()) { throw "Process did not start: $FileName" }
+        $process.StandardInput.Close()
+        $stdoutTask = $process.StandardOutput.ReadToEndAsync()
+        $stderrTask = $process.StandardError.ReadToEndAsync()
+        if (-not $process.WaitForExit($TimeoutSeconds * 1000)) {
+            $process.Kill($true)
+            $process.WaitForExit()
+            $null = $stdoutTask.GetAwaiter().GetResult()
+            $null = $stderrTask.GetAwaiter().GetResult()
+            throw "Process timed out after $TimeoutSeconds seconds: $FileName"
+        }
+
+        return [pscustomobject]@{
+            ExitCode = $process.ExitCode
+            Stdout = $stdoutTask.GetAwaiter().GetResult()
+            Stderr = $stderrTask.GetAwaiter().GetResult()
+        }
     }
-    $process.Dispose()
-    return $result
+    finally {
+        $process.Dispose()
+    }
 }
 
 $repositoryRoot = [System.IO.Path]::GetFullPath((Join-Path $PSScriptRoot "..\..\..\.."))
