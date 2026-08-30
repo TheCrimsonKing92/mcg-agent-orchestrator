@@ -863,7 +863,7 @@ Corrective direction:
             _readProcessIdentity);
         if (heartbeat.IsAvailable && IsTerminalHeartbeat(heartbeat))
         {
-            MergeTerminalHeartbeatOwnership(heartbeatPath, ownedPids, recordedIdentities);
+            MergeTerminalHeartbeatIdentities(heartbeatPath, recordedIdentities);
             return;
         }
 
@@ -890,14 +890,12 @@ Corrective direction:
         File.Move(tmp, heartbeatPath, overwrite: true);
     }
 
-    private static void MergeTerminalHeartbeatOwnership(
+    private static void MergeTerminalHeartbeatIdentities(
         string heartbeatPath,
-        IReadOnlyList<int> ownedPids,
         IReadOnlyList<SpawnProcessIdentity> recordedIdentities)
     {
         var payload = JsonNode.Parse(File.ReadAllText(heartbeatPath)) as JsonObject ??
             throw new JsonException($"Terminal heartbeat is not a JSON object: {heartbeatPath}");
-        payload["ownedPids"] = JsonSerializer.SerializeToNode(ownedPids, HeartbeatJsonOptions);
         payload["ownedProcessIdentities"] = JsonSerializer.SerializeToNode(recordedIdentities, HeartbeatJsonOptions);
         var tmp = heartbeatPath + ".tmp";
         File.WriteAllText(tmp, payload.ToJsonString(HeartbeatJsonOptions), new UTF8Encoding(false));

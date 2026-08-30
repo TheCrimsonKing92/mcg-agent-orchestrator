@@ -667,6 +667,7 @@ public sealed class ProgressiveReviewSteeringTests
         Assert.Equal("session-preserved", preserved.ProviderSessionId);
         Assert.Equal("head-preserved", preserved.WorktreeHeadSha);
         Assert.Equal("dirty-preserved", preserved.DirtyStateHash);
+        Assert.Equal([6_001], preserved.OwnedProcessIds);
         var preservedIdentity = Assert.Single(preserved.OwnedProcessIdentities);
         Assert.Equal(6_001, preservedIdentity.ProcessId);
         Assert.Equal(DateTimeOffset.Parse("2026-07-20T11:59:00Z"), preservedIdentity.StartedAt);
