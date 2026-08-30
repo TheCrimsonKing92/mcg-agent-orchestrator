@@ -193,6 +193,12 @@ public static class RepositoryTestImpactPlanner
         var touchesScriptsOrConfig = summary.Files.Any(file =>
             file.Categories.Contains(RepositoryChangeCategory.Script) ||
             file.Categories.Contains(RepositoryChangeCategory.Configuration));
+        var reverseDependencySelection = TrySelectReverseDependentInfrastructureTests(
+            summary,
+            touchesInfrastructure,
+            touchesApp,
+            touchesScriptsOrConfig,
+            declarationReader);
         var focusedInfrastructureFilter = TryBuildFocusedInfrastructureFilter(
             summary,
             appSubsystems,
@@ -218,6 +224,26 @@ public static class RepositoryTestImpactPlanner
                     coreTestFilter.AbandonReason ?? "Core contracts changed or core tests changed.",
                     RepositoryTestProject.Core));
             }
+        }
+
+        if (reverseDependencySelection is { Outcome: ReverseDependencySelectionOutcome.Resolved } resolved &&
+            resolved.TestClassNames.Count > 0)
+        {
+            checks.Add(new RepositoryTestImpactCheck(
+                "focused reverse-dependent infrastructure tests",
+                [
+                    .. InfrastructureTests,
+                    "--filter",
+                    JoinFilterUnion(resolved.TestClassNames.Select(name => $"FullyQualifiedName~{name}"))
+                ],
+                "Core production behavior changed; run integration tests that reference its bounded two-hop consumers."));
+        }
+        else if (reverseDependencySelection is { Outcome: not ReverseDependencySelectionOutcome.Resolved } degraded)
+        {
+            checks.Add(new RepositoryTestImpactCheck(
+                "infrastructure tests",
+                InfrastructureTests,
+                degraded.Reason ?? "Reverse-dependency evidence was unavailable; run the full Infrastructure test suite."));
         }
 
         if (touchesDashboard)
@@ -560,6 +586,35 @@ public static class RepositoryTestImpactPlanner
 
     private static string BuildClassFilter(IEnumerable<string> testClasses) =>
         string.Join("|", testClasses.Select(testClass => $"FullyQualifiedName~{testClass}"));
+
+    private static ReverseDependencyTestSelection? TrySelectReverseDependentInfrastructureTests(
+        RepositoryChangeSummary summary,
+        bool touchesInfrastructure,
+        bool touchesApp,
+        bool touchesScriptsOrConfig,
+        ITestClassDeclarationReader declarationReader)
+    {
+        var changedCoreSources = summary.Files
+            .Where(file => StartsWith(file.Path, "src/Mcg.AgentOrchestrator.Core/"))
+            .Where(file => file.Categories.Contains(RepositoryChangeCategory.Source))
+            .Select(file => file.Path)
+            .Distinct(StringComparer.OrdinalIgnoreCase)
+            .Order(StringComparer.Ordinal)
+            .ToArray();
+        if (changedCoreSources.Length == 0 ||
+            changedCoreSources.Length > 5 ||
+            touchesInfrastructure ||
+            touchesApp ||
+            touchesScriptsOrConfig ||
+            summary.Files.Any(file =>
+                file.Categories.Contains(RepositoryChangeCategory.Source) &&
+                !StartsWith(file.Path, "src/Mcg.AgentOrchestrator.Core/")))
+        {
+            return null;
+        }
+
+        return declarationReader.ReadReverseDependentTestClasses(changedCoreSources);
+    }
 
     private static bool CanUseFocusedAppFilters(RepositoryChangeSummary summary) =>
         !summary.Files.Any(file =>

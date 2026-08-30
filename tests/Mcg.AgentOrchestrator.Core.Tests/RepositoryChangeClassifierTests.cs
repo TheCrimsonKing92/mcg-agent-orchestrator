@@ -924,19 +924,25 @@ public sealed class RepositoryChangeClassifierTests
         Assert.DoesNotContain("--filter", check.Command);
     }
 
-    [Xunit.Fact(DisplayName = "RepositoryTestImpactPlanner_selects_core_tests_for_core_changes")]
-    public void RepositoryTestImpactPlannerSelectsCoreTestsForCoreChanges()
+    [Xunit.Fact(DisplayName = "RepositoryTestImpactPlanner_preserves_core_and_widens_on_dependent_fanout")]
+    public void RepositoryTestImpactPlannerPreservesCoreAndWidensOnDependentFanout()
     {
         var plan = RepositoryTestImpactPlanner.Plan([
-            "src/Mcg.AgentOrchestrator.Core/Application/AgentOrchestratorKernel.cs"
+            "src/Mcg.AgentOrchestrator.Core/Application/DispatchFailureClassifier.cs"
         ]);
 
         Assert.True(plan.RequiresBuild);
         Assert.False(plan.RequiresBroadVerification);
-        var check = Assert.Single(plan.Checks);
-        Assert.Equal("core tests", check.Name);
-        Assert.True(check.Command.Any(argument => argument.Equals("tests/Mcg.AgentOrchestrator.Core.Tests/Mcg.AgentOrchestrator.Core.Tests.csproj", StringComparison.Ordinal)));
-        Assert.False(check.Command.Any(argument => argument.Equals("tests/Mcg.AgentOrchestrator.Infrastructure.Tests/Mcg.AgentOrchestrator.Infrastructure.Tests.csproj", StringComparison.Ordinal)));
+        Assert.Equal(2, plan.Checks.Count);
+        Assert.Contains(plan.Checks, check =>
+            check.Name == "core tests" &&
+            check.Command.Contains(
+                "tests/Mcg.AgentOrchestrator.Core.Tests/Mcg.AgentOrchestrator.Core.Tests.csproj"));
+        var infrastructureCheck = Assert.Single(plan.Checks, check =>
+            check.Command.Contains(
+                "tests/Mcg.AgentOrchestrator.Infrastructure.Tests/Mcg.AgentOrchestrator.Infrastructure.Tests.csproj"));
+        Assert.DoesNotContain("--filter", infrastructureCheck.Command);
+        Assert.Contains("16-test-class bound", infrastructureCheck.Reason, StringComparison.Ordinal);
     }
 
     [Xunit.Fact(DisplayName = "RepositoryTestImpactPlanner_selects_core_and_infrastructure_tests_for_mixed_changes")]

@@ -3174,6 +3174,80 @@ public sealed class WorkerDispatchTestsDispatchPreparation : WorkerDispatchTestS
     Assert.True(artifacts.Any(artifact => artifact.GetProperty("path").GetString() == "diff-summary.md"));
 }
 
+    [Xunit.Fact]
+    public void ContextArtifacts_CoreServiceChange_EmitsDependentIntegrationCommand()
+    {
+        var workingDirectory = CreateSeededDispatchRepository();
+        static void Write(string root, string relativePath, string contents)
+        {
+            var path = Path.Combine(root, relativePath.Replace('/', Path.DirectorySeparatorChar));
+            Directory.CreateDirectory(Path.GetDirectoryName(path)!);
+            File.WriteAllText(path, contents);
+        }
+
+        Write(
+            workingDirectory,
+            "src/Mcg.AgentOrchestrator.Core/Mcg.AgentOrchestrator.Core.csproj",
+            "<Project Sdk=\"Microsoft.NET.Sdk\" />");
+        Write(
+            workingDirectory,
+            "src/Mcg.AgentOrchestrator.App/Mcg.AgentOrchestrator.App.csproj",
+            "<Project Sdk=\"Microsoft.NET.Sdk\"><ItemGroup>" +
+            "<ProjectReference Include=\"../Mcg.AgentOrchestrator.Core/Mcg.AgentOrchestrator.Core.csproj\" />" +
+            "</ItemGroup></Project>");
+        Write(
+            workingDirectory,
+            "tests/Mcg.AgentOrchestrator.Infrastructure.Tests/Mcg.AgentOrchestrator.Infrastructure.Tests.csproj",
+            "<Project Sdk=\"Microsoft.NET.Sdk\"><ItemGroup>" +
+            "<ProjectReference Include=\"../../src/Mcg.AgentOrchestrator.Core/Mcg.AgentOrchestrator.Core.csproj\" />" +
+            "<ProjectReference Include=\"../../src/Mcg.AgentOrchestrator.App/Mcg.AgentOrchestrator.App.csproj\" />" +
+            "</ItemGroup></Project>");
+        const string changedPath =
+            "src/Mcg.AgentOrchestrator.Core/Application/DispatchFailureClassifier.cs";
+        Write(
+            workingDirectory,
+            changedPath,
+            "namespace Mcg.AgentOrchestrator.Core; public sealed class DispatchFailureClassifier { }");
+        Write(
+            workingDirectory,
+            "src/Mcg.AgentOrchestrator.App/Cli/RunGoalService.cs",
+            "namespace Mcg.AgentOrchestrator.App; public sealed class RunGoalService { " +
+            "private readonly DispatchFailureClassifier _classifier = new(); }");
+        Write(
+            workingDirectory,
+            "tests/Mcg.AgentOrchestrator.Infrastructure.Tests/RunGoalServiceTests.cs",
+            "public sealed class RunGoalServiceTests { private readonly RunGoalService _service = new(); " +
+            "[Xunit.Fact] public void Runs() { } }");
+        RunGit(workingDirectory, ["add", "-A"], DateTimeOffset.Parse("2026-08-30T11:00:00Z"));
+        RunGit(
+            workingDirectory,
+            ["commit", "-m", "Add reverse dependency fixture"],
+            DateTimeOffset.Parse("2026-08-30T11:00:00Z"));
+        Write(
+            workingDirectory,
+            changedPath,
+            "namespace Mcg.AgentOrchestrator.Core; public sealed class DispatchFailureClassifier { " +
+            "public int Version => 2; }");
+        var kernel = new AgentOrchestratorKernel();
+        var task = new TaskSpec(
+            TaskId.New(),
+            "Update DispatchFailureClassifier behavior.",
+            AgentRole.Developer,
+            "Run focused dependent tests.");
+        var goal = kernel.CreateGoal("Select dependent integration tests", [task]);
+
+        var contextDirectory = WorkerContextArtifacts.Write(goal, task, workingDirectory);
+
+        const string expectedCommand =
+            "dotnet test --project tests/Mcg.AgentOrchestrator.Infrastructure.Tests/" +
+            "Mcg.AgentOrchestrator.Infrastructure.Tests.csproj --verbosity minimal --filter " +
+            "FullyQualifiedName~RunGoalServiceTests";
+        var deterministic = File.ReadAllText(Path.Combine(contextDirectory, "deterministic-verification.md"));
+        var workflowBrokers = File.ReadAllText(Path.Combine(contextDirectory, "workflow-brokers.md"));
+        Assert.Contains(expectedCommand, deterministic, StringComparison.Ordinal);
+        Assert.Contains(expectedCommand, workflowBrokers, StringComparison.Ordinal);
+    }
+
     [Xunit.Fact(DisplayName = "Reviewer_dispatch_prompt_uses_merge_base_changed_file_scope")]
     public void ReviewerDispatchPromptUsesMergeBaseChangedFileScope()
 {

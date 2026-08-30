@@ -48,6 +48,25 @@ public static class VerificationPolicyCompiler
     {
         var files = changedFiles.Where(path => !string.IsNullOrWhiteSpace(path)).ToArray();
         var impact = RepositoryTestImpactPlanner.Plan(files);
+        return Compile(
+            role,
+            goalObjective,
+            taskDescription,
+            verificationPlan,
+            files,
+            impact);
+    }
+
+    public static VerificationPolicy Compile(
+        AgentRole role,
+        string goalObjective,
+        string taskDescription,
+        string? verificationPlan,
+        IEnumerable<string> changedFiles,
+        RepositoryTestImpactPlan impact)
+    {
+        ArgumentNullException.ThrowIfNull(impact);
+        var files = changedFiles.Where(path => !string.IsNullOrWhiteSpace(path)).ToArray();
         var text = $"{goalObjective}\n{taskDescription}\n{verificationPlan}".ToLowerInvariant();
         var checks = new List<VerificationPolicyCheck>();
 
