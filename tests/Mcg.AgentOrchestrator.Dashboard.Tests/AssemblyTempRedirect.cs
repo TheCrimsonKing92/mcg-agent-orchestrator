@@ -8,7 +8,6 @@ internal static class AssemblyTempRedirect
 {
     internal const string LowInheritableLevel = "(OI)(CI)L";
     internal const int MaxRootsReapedPerProcess = 32;
-    internal static int RetainedOrphanRoots => Math.Clamp(Environment.ProcessorCount * 4, 32, 128);
 
     [ModuleInitializer]
     internal static void Install()
@@ -73,61 +72,6 @@ internal static class AssemblyTempRedirect
         return reapable;
     }
 
-    internal static IReadOnlyList<string> SelectRootsBeyondRetention(
-        IEnumerable<string> siblingDirectoryNames,
-        int currentProcessId,
-        Func<int, bool> isProcessAlive,
-        Func<int, DateTime?> processStartTimeUtc,
-        Func<string, DateTime> lastWriteUtc,
-        int retainedRoots)
-    {
-        ArgumentNullException.ThrowIfNull(siblingDirectoryNames);
-        ArgumentNullException.ThrowIfNull(isProcessAlive);
-        ArgumentNullException.ThrowIfNull(processStartTimeUtc);
-        ArgumentNullException.ThrowIfNull(lastWriteUtc);
-        ArgumentOutOfRangeException.ThrowIfNegative(retainedRoots);
-
-        var owned = new List<(string Name, DateTime LastWriteUtc)>();
-        foreach (var name in siblingDirectoryNames)
-        {
-            if (!TryParseProcessTempRootName(name, out var processId) ||
-                processId == currentProcessId)
-            {
-                continue;
-            }
-
-            DateTime written;
-            try
-            {
-                written = lastWriteUtc(name);
-            }
-            catch (Exception ex) when (IsFileSystemFailure(ex))
-            {
-                continue;
-            }
-
-            if (isProcessAlive(processId))
-            {
-                var processStarted = processStartTimeUtc(processId);
-                if (processStarted is null || processStarted <= written)
-                {
-                    continue;
-                }
-            }
-
-            owned.Add((name, written));
-        }
-
-        return owned
-            .OrderByDescending(candidate => candidate.LastWriteUtc)
-            .ThenBy(candidate => candidate.Name, StringComparer.OrdinalIgnoreCase)
-            .Skip(retainedRoots)
-            .OrderBy(candidate => candidate.LastWriteUtc)
-            .ThenBy(candidate => candidate.Name, StringComparer.OrdinalIgnoreCase)
-            .Select(candidate => candidate.Name)
-            .ToArray();
-    }
-
     internal static bool TryParseProcessTempRootName(string? directoryName, out int processId)
     {
         processId = 0;
@@ -158,20 +102,12 @@ internal static class AssemblyTempRedirect
                 .Select(Path.GetFileName)
                 .OfType<string>()
                 .ToArray();
-            var liveProcesses = SnapshotLiveProcesses(siblings, Environment.ProcessId);
+            var liveProcessIds = SnapshotLiveProcessIds(siblings, Environment.ProcessId);
             var reapableByProcess = SelectReapableRoots(
                 siblings,
                 Environment.ProcessId,
-                liveProcesses.ContainsKey);
-            var beyondRetention = SelectRootsBeyondRetention(
-                siblings,
-                Environment.ProcessId,
-                liveProcesses.ContainsKey,
-                processId => liveProcesses.GetValueOrDefault(processId),
-                name => Directory.GetLastWriteTimeUtc(Path.Combine(sharedRoot, name)),
-                RetainedOrphanRoots);
+                liveProcessIds.Contains);
             foreach (var candidate in reapableByProcess
-                         .Concat(beyondRetention)
                          .Distinct(StringComparer.OrdinalIgnoreCase)
                          .OrderBy(name => TryGetLastWriteUtc(
                              name,
@@ -196,7 +132,7 @@ internal static class AssemblyTempRedirect
     // were cleared. Membership in the snapshot also preserves the previous semantics for a PID
     // that cannot be opened — it still enumerates, so it still counts as alive and its root is
     // left alone.
-    private static Dictionary<int, DateTime?> SnapshotLiveProcesses(
+    private static HashSet<int> SnapshotLiveProcessIds(
         IEnumerable<string> siblingDirectoryNames,
         int currentProcessId)
     {
@@ -209,7 +145,7 @@ internal static class AssemblyTempRedirect
             }
         }
 
-        var live = new Dictionary<int, DateTime?>();
+        var live = new HashSet<int>();
         foreach (var process in System.Diagnostics.Process.GetProcesses())
         {
             try
@@ -219,17 +155,7 @@ internal static class AssemblyTempRedirect
                     continue;
                 }
 
-                DateTime? startedUtc = null;
-                try
-                {
-                    startedUtc = process.StartTime.ToUniversalTime();
-                }
-                catch (Exception ex) when (IsProcessSnapshotFailure(ex))
-                {
-                    // An inaccessible start time still proves the PID is live. Preserve the root.
-                }
-
-                live[process.Id] = startedUtc;
+                live.Add(process.Id);
             }
             finally
             {
@@ -239,9 +165,6 @@ internal static class AssemblyTempRedirect
 
         return live;
     }
-
-    private static bool IsProcessSnapshotFailure(Exception ex) =>
-        ex is InvalidOperationException or System.ComponentModel.Win32Exception or NotSupportedException;
 
     private static void TryDeleteTree(string path)
     {

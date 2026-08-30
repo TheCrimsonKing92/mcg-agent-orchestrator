@@ -119,7 +119,7 @@ internal sealed class DispatchProcessRecoveryService
         var observedHeartbeat = TryReadHeartbeat(GetHeartbeatPath(processRecord), out var refreshHeartbeat)
             ? refreshHeartbeat
             : null;
-        var hasLiveTrackedProcess = AnyTrackedProcessStillRunning(processRecord, observedHeartbeat);
+        var hasLiveTrackedProcess = AnyTrackedProcessStillRunning(processRecord);
         heartbeatObserved(observedHeartbeat);
         // A missing or temporarily unreadable identity cannot authorize ownership,
         // completion blocking, or termination. It also cannot prove that a launch-time
@@ -562,15 +562,7 @@ internal sealed class DispatchProcessRecoveryService
     internal void TryWriteExitCode(string path, int exitCode, string reason) =>
         _writeExitArtifact(path, exitCode, reason);
 
-    internal bool AnyTrackedProcessStillRunning(TaskProcessRecord processRecord)
-    {
-        var heartbeat = TryReadHeartbeat(GetHeartbeatPath(processRecord), out var observedHeartbeat)
-            ? observedHeartbeat
-            : null;
-        return AnyTrackedProcessStillRunning(processRecord, heartbeat);
-    }
-
-    private bool AnyTrackedProcessStillRunning(TaskProcessRecord processRecord, DispatchHeartbeat? heartbeat) =>
+    internal bool AnyTrackedProcessStillRunning(TaskProcessRecord processRecord) =>
         processRecord.CompletionTrackedProcessIds.Any(_isStillRunning);
 
     private bool AnyObservedProcessStillRunning(TaskProcessRecord processRecord, DispatchHeartbeat? heartbeat) =>

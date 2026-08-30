@@ -147,7 +147,7 @@ internal static class AssemblyTempRedirect
             timings.ReapSiblingCount = siblings.Length;
 
             phaseClock.Restart();
-            var liveProcesses = SnapshotLiveProcesses(siblings, Environment.ProcessId);
+            var liveProcessIds = SnapshotLiveProcessIds(siblings, Environment.ProcessId);
             phaseClock.Stop();
             timings.ReapProcessSnapshotElapsedMilliseconds = phaseClock.ElapsedMilliseconds;
 
@@ -155,7 +155,7 @@ internal static class AssemblyTempRedirect
             var reapableByProcess = SelectReapableRoots(
                 siblings,
                 Environment.ProcessId,
-                liveProcesses.ContainsKey);
+                liveProcessIds.Contains);
             phaseClock.Stop();
             timings.ReapProcessSelectionElapsedMilliseconds = phaseClock.ElapsedMilliseconds;
 
@@ -221,7 +221,7 @@ internal static class AssemblyTempRedirect
     // were cleared. Membership in the snapshot also preserves the previous semantics for a PID
     // that cannot be opened — it still enumerates, so it still counts as alive and its root is
     // left alone.
-    private static Dictionary<int, DateTime?> SnapshotLiveProcesses(
+    private static HashSet<int> SnapshotLiveProcessIds(
         IEnumerable<string> siblingDirectoryNames,
         int currentProcessId)
     {
@@ -234,7 +234,7 @@ internal static class AssemblyTempRedirect
             }
         }
 
-        var live = new Dictionary<int, DateTime?>();
+        var live = new HashSet<int>();
         foreach (var process in System.Diagnostics.Process.GetProcesses())
         {
             try
@@ -244,17 +244,7 @@ internal static class AssemblyTempRedirect
                     continue;
                 }
 
-                DateTime? startedUtc = null;
-                try
-                {
-                    startedUtc = process.StartTime.ToUniversalTime();
-                }
-                catch (Exception ex) when (IsProcessSnapshotFailure(ex))
-                {
-                    // An inaccessible start time still proves the PID is live. Preserve the root.
-                }
-
-                live[process.Id] = startedUtc;
+                live.Add(process.Id);
             }
             finally
             {
@@ -264,9 +254,6 @@ internal static class AssemblyTempRedirect
 
         return live;
     }
-
-    private static bool IsProcessSnapshotFailure(Exception ex) =>
-        ex is InvalidOperationException or System.ComponentModel.Win32Exception or NotSupportedException;
 
     internal static TempRootDeleteOutcome DeleteTree(string path)
     {
