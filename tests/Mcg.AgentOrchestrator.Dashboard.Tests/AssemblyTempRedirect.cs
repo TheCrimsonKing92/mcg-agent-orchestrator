@@ -88,8 +88,19 @@ internal static class AssemblyTempRedirect
             && processId > 0;
     }
 
-    private static void ReapOrphanedRoots(string selectedRoot)
+    private static void ReapOrphanedRoots(string selectedRoot) =>
+        ReapOrphanedRoots(
+            selectedRoot,
+            WindowsNativeProcessInspection.Read,
+            TryDeleteTree);
+
+    internal static void ReapOrphanedRoots(
+        string selectedRoot,
+        Func<IEnumerable<int>?, WindowsNativeProcessInspection.ProcessInspectionResult> inspect,
+        Action<string> deleteTree)
     {
+        ArgumentNullException.ThrowIfNull(inspect);
+        ArgumentNullException.ThrowIfNull(deleteTree);
         try
         {
             var sharedRoot = Path.GetDirectoryName(selectedRoot);
@@ -102,19 +113,21 @@ internal static class AssemblyTempRedirect
                 .Select(Path.GetFileName)
                 .OfType<string>()
                 .ToArray();
-            var liveProcessIds = SnapshotLiveProcessIds(siblings, Environment.ProcessId);
+            var liveProcessIds = SnapshotLiveProcessIds(siblings, Environment.ProcessId, inspect);
             var reapableByProcess = SelectReapableRoots(
                 siblings,
                 Environment.ProcessId,
                 liveProcessIds.Contains);
-            foreach (var candidate in reapableByProcess
-                         .Distinct(StringComparer.OrdinalIgnoreCase)
-                         .OrderBy(name => TryGetLastWriteUtc(
-                             name,
-                             candidate => Directory.GetLastWriteTimeUtc(Path.Combine(sharedRoot, candidate))))
-                         .Take(MaxRootsReapedPerProcess))
+            var bounded = reapableByProcess
+                          .Distinct(StringComparer.OrdinalIgnoreCase)
+                          .OrderBy(name => TryGetLastWriteUtc(
+                              name,
+                              candidate => Directory.GetLastWriteTimeUtc(Path.Combine(sharedRoot, candidate))))
+                          .Take(MaxRootsReapedPerProcess)
+                          .ToArray();
+            foreach (var candidate in RevalidateExitedRoots(bounded, inspect))
             {
-                TryDeleteTree(Path.Combine(sharedRoot, candidate));
+                deleteTree(Path.Combine(sharedRoot, candidate));
             }
         }
         catch (Exception)
@@ -125,16 +138,12 @@ internal static class AssemblyTempRedirect
         }
     }
 
-    // One process-table snapshot for the whole sweep. Probing each root with
-    // Process.GetProcessById costs a full snapshot *per call* on Windows, so the old form was
-    // O(orphan roots) snapshots on every test host start: measured at 53.5s with 1106 roots
-    // against a 201.2s budget for the entire "Dotnet build slots" lane, and 3.1s once the roots
-    // were cleared. Membership in the snapshot also preserves the previous semantics for a PID
-    // that cannot be opened — it still enumerates, so it still counts as alive and its root is
-    // left alone.
+    // Use one exact-candidate native snapshot per phase. The second read closes the selection-to-delete
+    // PID-reuse gap; inaccessible or otherwise ambiguous observations retain the root.
     private static HashSet<int> SnapshotLiveProcessIds(
         IEnumerable<string> siblingDirectoryNames,
-        int currentProcessId)
+        int currentProcessId,
+        Func<IEnumerable<int>?, WindowsNativeProcessInspection.ProcessInspectionResult> inspect)
     {
         var relevantProcessIds = new HashSet<int>();
         foreach (var name in siblingDirectoryNames)
@@ -145,25 +154,46 @@ internal static class AssemblyTempRedirect
             }
         }
 
-        var live = new HashSet<int>();
-        foreach (var process in System.Diagnostics.Process.GetProcesses())
+        var inspection = inspect(relevantProcessIds);
+        if (inspection.Failure is not null)
         {
-            try
-            {
-                if (!relevantProcessIds.Contains(process.Id))
-                {
-                    continue;
-                }
-
-                live.Add(process.Id);
-            }
-            finally
-            {
-                process.Dispose();
-            }
+            return relevantProcessIds;
         }
 
-        return live;
+        return relevantProcessIds
+            .Where(processId =>
+                !inspection.Records.TryGetValue(processId, out var record) ||
+                record.Status != ProcessInspectionStatus.Exited)
+            .ToHashSet();
+    }
+
+    private static IReadOnlyList<string> RevalidateExitedRoots(
+        IEnumerable<string> boundedCandidates,
+        Func<IEnumerable<int>?, WindowsNativeProcessInspection.ProcessInspectionResult> inspect)
+    {
+        var candidates = boundedCandidates
+            .Select(name => new { Name = name, Parsed = TryParseProcessTempRootName(name, out var pid), Pid = pid })
+            .Where(candidate => candidate.Parsed && candidate.Pid != Environment.ProcessId)
+            .ToArray();
+        if (candidates.Length == 0)
+        {
+            return [];
+        }
+
+        var inspection = inspect(
+            candidates.Select(candidate => candidate.Pid).Distinct().ToArray());
+        if (inspection.Failure is not null)
+        {
+            return [];
+        }
+
+        return candidates
+            .Where(candidate =>
+                inspection.Records.TryGetValue(candidate.Pid, out var record) &&
+                record.Status == ProcessInspectionStatus.Exited)
+            .Select(candidate => candidate.Name)
+            .Distinct(StringComparer.OrdinalIgnoreCase)
+            .ToArray();
     }
 
     private static void TryDeleteTree(string path)

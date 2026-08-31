@@ -121,13 +121,15 @@ internal static class AssemblyTempRedirect
     }
 
     private static void ReapOrphanedRoots(string selectedRoot, TempRootStartupTimings timings) =>
-        ReapOrphanedRoots(selectedRoot, timings, DeleteTree);
+        ReapOrphanedRoots(selectedRoot, timings, WindowsNativeProcessInspection.Read, DeleteTree);
 
-    private static void ReapOrphanedRoots(
+    internal static void ReapOrphanedRoots(
         string selectedRoot,
         TempRootStartupTimings timings,
+        Func<IEnumerable<int>?, WindowsNativeProcessInspection.ProcessInspectionResult> inspect,
         Func<string, TempRootDeleteOutcome> deleteTree)
     {
+        ArgumentNullException.ThrowIfNull(inspect);
         timings.ReapRan = true;
         try
         {
@@ -147,7 +149,7 @@ internal static class AssemblyTempRedirect
             timings.ReapSiblingCount = siblings.Length;
 
             phaseClock.Restart();
-            var liveProcessIds = SnapshotLiveProcessIds(siblings, Environment.ProcessId);
+            var liveProcessIds = SnapshotLiveProcessIds(siblings, Environment.ProcessId, inspect);
             phaseClock.Stop();
             timings.ReapProcessSnapshotElapsedMilliseconds = phaseClock.ElapsedMilliseconds;
 
@@ -168,7 +170,8 @@ internal static class AssemblyTempRedirect
             timings.ReapBoundSelectionElapsedMilliseconds = phaseClock.ElapsedMilliseconds;
 
             phaseClock.Restart();
-            ReapBoundedRoots(sharedRoot, bounded, deleteTree, timings);
+            var revalidated = RevalidateExitedRoots(bounded, inspect);
+            ReapBoundedRoots(sharedRoot, revalidated, deleteTree, timings);
             phaseClock.Stop();
             timings.ReapDeleteElapsedMilliseconds = phaseClock.ElapsedMilliseconds;
         }
@@ -214,16 +217,12 @@ internal static class AssemblyTempRedirect
         return outcomes;
     }
 
-    // One process-table snapshot for the whole sweep. Probing each root with
-    // Process.GetProcessById costs a full snapshot *per call* on Windows, so the old form was
-    // O(orphan roots) snapshots on every test host start: measured at 53.5s with 1106 roots
-    // against a 201.2s budget for the entire "Dotnet build slots" lane, and 3.1s once the roots
-    // were cleared. Membership in the snapshot also preserves the previous semantics for a PID
-    // that cannot be opened — it still enumerates, so it still counts as alive and its root is
-    // left alone.
+    // Use one exact-candidate native snapshot per phase. The second read closes the selection-to-delete
+    // PID-reuse gap; inaccessible or otherwise ambiguous observations retain the root.
     private static HashSet<int> SnapshotLiveProcessIds(
         IEnumerable<string> siblingDirectoryNames,
-        int currentProcessId)
+        int currentProcessId,
+        Func<IEnumerable<int>?, WindowsNativeProcessInspection.ProcessInspectionResult> inspect)
     {
         var relevantProcessIds = new HashSet<int>();
         foreach (var name in siblingDirectoryNames)
@@ -234,25 +233,48 @@ internal static class AssemblyTempRedirect
             }
         }
 
-        var live = new HashSet<int>();
-        foreach (var process in System.Diagnostics.Process.GetProcesses())
+        var inspection = inspect(relevantProcessIds);
+        if (inspection.Failure is not null)
         {
-            try
-            {
-                if (!relevantProcessIds.Contains(process.Id))
-                {
-                    continue;
-                }
-
-                live.Add(process.Id);
-            }
-            finally
-            {
-                process.Dispose();
-            }
+            return relevantProcessIds;
         }
 
-        return live;
+        return relevantProcessIds
+            .Where(processId =>
+                !inspection.Records.TryGetValue(processId, out var record) ||
+                record.Status != ProcessInspectionStatus.Exited)
+            .ToHashSet();
+    }
+
+    internal static IReadOnlyList<string> RevalidateExitedRoots(
+        IEnumerable<string> boundedCandidates,
+        Func<IEnumerable<int>?, WindowsNativeProcessInspection.ProcessInspectionResult> inspect)
+    {
+        ArgumentNullException.ThrowIfNull(boundedCandidates);
+        ArgumentNullException.ThrowIfNull(inspect);
+
+        var candidates = boundedCandidates
+            .Select(name => new { Name = name, Parsed = TryParseProcessTempRootName(name, out var pid), Pid = pid })
+            .Where(candidate => candidate.Parsed && candidate.Pid != Environment.ProcessId)
+            .ToArray();
+        if (candidates.Length == 0)
+        {
+            return [];
+        }
+
+        var inspection = inspect(candidates.Select(candidate => candidate.Pid).Distinct().ToArray());
+        if (inspection.Failure is not null)
+        {
+            return [];
+        }
+
+        return candidates
+            .Where(candidate =>
+                inspection.Records.TryGetValue(candidate.Pid, out var record) &&
+                record.Status == ProcessInspectionStatus.Exited)
+            .Select(candidate => candidate.Name)
+            .Distinct(StringComparer.OrdinalIgnoreCase)
+            .ToArray();
     }
 
     internal static TempRootDeleteOutcome DeleteTree(string path)
@@ -282,7 +304,11 @@ internal static class AssemblyTempRedirect
     {
         try
         {
-            ReapOrphanedRoots(selectedRoot, timings, deleteTree);
+            ReapOrphanedRoots(
+                selectedRoot,
+                timings,
+                WindowsNativeProcessInspection.Read,
+                deleteTree);
             totalClock.Stop();
             timings.TotalElapsedMilliseconds = totalClock.ElapsedMilliseconds;
             return TryFormatTimingDiagnostic(timings);

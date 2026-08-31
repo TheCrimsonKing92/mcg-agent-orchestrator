@@ -1,5 +1,7 @@
 // Parallel-safe: each test injects an explicit unique root, and every Git child receives a
 // hermetic environment. No verdict observes a shared temp root, process list, clock, or schedule.
+using Mcg.AgentOrchestrator.Infrastructure;
+
 public sealed class WorkerDispatchTestsSeededRepositoryFactoryTests
 {
     public static bool IsWindows => OperatingSystem.IsWindows();
@@ -39,6 +41,153 @@ public sealed class WorkerDispatchTestsSeededRepositoryFactoryTests
         Xunit.Assert.True(Directory.Exists(second.PublishedIdentity.GitDirectoryPath));
         Xunit.Assert.Equal(32, Path.GetFileName(first.PublishedIdentity.RepositoryPath).Length);
         Xunit.Assert.Equal(32, Path.GetFileName(second.PublishedIdentity.RepositoryPath).Length);
+    }
+
+    [Xunit.Fact]
+    public void TempRootJanitor_LegacyAndGuardedPolicies_DiscriminateTemplateLoss()
+    {
+        if (!OperatingSystem.IsWindows())
+        {
+            return;
+        }
+
+        var sharedRoot = Path.Combine(Path.GetTempPath(), $"factory-janitor-{Guid.NewGuid():N}");
+        var processId = 4246;
+        var ownedRoot = TempRootJanitor.BuildOwnedRootPath(sharedRoot, processId);
+        var capturedOwner = AvailableProcess(processId);
+        TempRootJanitorDeleteResult? legacyReceipt = null;
+        string? redTemplate = null;
+        try
+        {
+            using (var red = new FactoryScope(
+                hooks: new WorkerDispatchTestsSeededRepositoryFactory.CreationHooks(
+                    BeforeTemplateValidation: template =>
+                    {
+                        redTemplate = template;
+                        legacyReceipt = TempRootJanitor.ReapOwnedRoot(sharedRoot, processId);
+                    }),
+                root: ownedRoot))
+            {
+                var failure = Xunit.Assert.Throws<
+                    WorkerDispatchTestsSeededRepositoryFactory.SeededRepositoryFailureException>(
+                        () => red.Factory.Create());
+
+                Xunit.Assert.Equal(
+                    WorkerDispatchTestsSeededRepositoryFactory.ValidationCheck.TemplatePath,
+                    failure.Diagnostic.Check);
+                Xunit.Assert.Equal(redTemplate, failure.Diagnostic.SourceTemplatePath);
+                Xunit.Assert.False(failure.Diagnostic.FileSystem.RepositoryDirectoryExists);
+                Xunit.Assert.False(failure.Diagnostic.FileSystem.GitMetadataDirectoryExists);
+                Xunit.Assert.Equal("Repository directory is missing.", failure.Diagnostic.Git.StandardError);
+                Xunit.Assert.Equal(TempRootJanitorDeleteStatus.Deleted, legacyReceipt?.Status);
+            }
+
+            var guardedReceipts = new List<TempRootJanitorReapResult>();
+            var deleteCalls = 0;
+            using (var green = new FactoryScope(
+                hooks: new WorkerDispatchTestsSeededRepositoryFactory.CreationHooks(
+                    BeforeTemplateValidation: _ =>
+                    {
+                        guardedReceipts.Add(Xunit.Assert.Single(TempRootJanitor.ReapOwnedRoots(
+                            [new TempRootJanitorOwnedRoot(
+                                processId,
+                                sharedRoot,
+                                capturedOwner,
+                                "seeded-factory-green")],
+                            _ => Inspected(capturedOwner),
+                            path =>
+                            {
+                                deleteCalls++;
+                                return TempRootJanitor.DeleteTree(path);
+                            })));
+                    }),
+                root: ownedRoot))
+            {
+                var first = green.Factory.Create();
+                var second = green.Factory.Create();
+
+                Xunit.Assert.Equal(2, guardedReceipts.Count);
+                Xunit.Assert.All(
+                    guardedReceipts,
+                    receipt => Xunit.Assert.Equal(
+                        TempRootJanitorReapDisposition.RetainedLiveOwner,
+                        receipt.Disposition));
+                Xunit.Assert.Equal(0, deleteCalls);
+                Xunit.Assert.True(Directory.Exists(first.TemplateIdentity.GitDirectoryPath));
+                Xunit.Assert.True(Directory.Exists(second.TemplateIdentity.GitDirectoryPath));
+                Xunit.Assert.Equal(first.TemplateIdentity.HeadCommit, second.TemplateIdentity.HeadCommit);
+            }
+        }
+        finally
+        {
+            _ = TempRootJanitor.DeleteTree(sharedRoot);
+        }
+    }
+
+    [Xunit.Fact(Timeout = 60_000)]
+    public async Task TempRootJanitor_GuardedPolicy_PreservesTemplateForConcurrentCreates()
+    {
+        if (!OperatingSystem.IsWindows())
+        {
+            return;
+        }
+
+        var sharedRoot = Path.Combine(Path.GetTempPath(), $"factory-janitor-concurrent-{Guid.NewGuid():N}");
+        var processId = 4247;
+        var ownedRoot = TempRootJanitor.BuildOwnedRootPath(sharedRoot, processId);
+        var capturedOwner = AvailableProcess(processId);
+        using var rendezvous = new Barrier(participantCount: 2);
+        var receipts = new List<TempRootJanitorReapResult>();
+        var receiptLock = new object();
+        var deleteCalls = 0;
+        try
+        {
+            using var scope = new FactoryScope(
+                hooks: new WorkerDispatchTestsSeededRepositoryFactory.CreationHooks(
+                    BeforeTemplateValidation: _ =>
+                    {
+                        Xunit.Assert.True(
+                            rendezvous.SignalAndWait(TimeSpan.FromSeconds(30)),
+                            "Concurrent factory hooks did not rendezvous.");
+                        var receipt = Xunit.Assert.Single(TempRootJanitor.ReapOwnedRoots(
+                            [new TempRootJanitorOwnedRoot(
+                                processId,
+                                sharedRoot,
+                                capturedOwner,
+                                "seeded-factory-concurrent")],
+                            _ => Inspected(capturedOwner),
+                            path =>
+                            {
+                                Interlocked.Increment(ref deleteCalls);
+                                return TempRootJanitor.DeleteTree(path);
+                            }));
+                        lock (receiptLock)
+                        {
+                            receipts.Add(receipt);
+                        }
+                    }),
+                root: ownedRoot);
+
+            var created = await Task.WhenAll(
+                Task.Run(scope.Factory.Create),
+                Task.Run(scope.Factory.Create));
+
+            Xunit.Assert.Equal(2, receipts.Count);
+            Xunit.Assert.All(
+                receipts,
+                receipt => Xunit.Assert.Equal(
+                    TempRootJanitorReapDisposition.RetainedLiveOwner,
+                    receipt.Disposition));
+            Xunit.Assert.Equal(0, deleteCalls);
+            Xunit.Assert.All(
+                created,
+                result => Xunit.Assert.True(Directory.Exists(result.TemplateIdentity.GitDirectoryPath)));
+            Xunit.Assert.Equal(created[0].TemplateIdentity.HeadCommit, created[1].TemplateIdentity.HeadCommit);
+        }
+        finally
+        {
+            _ = TempRootJanitor.DeleteTree(sharedRoot);
+        }
     }
 
     [Xunit.Fact]
@@ -988,9 +1137,11 @@ public sealed class WorkerDispatchTestsSeededRepositoryFactoryTests
             WorkerDispatchTestsSeededRepositoryFactory.CreationHooks? hooks = null,
             Func<string, int, string>? directoryAllocator = null,
             WorkerDispatchTestsSeededRepositoryFactory.IFileSystem? fileSystem = null,
-            WorkerDispatchTestsSeededRepositoryFactory.IGitRunner? gitRunner = null)
+            WorkerDispatchTestsSeededRepositoryFactory.IGitRunner? gitRunner = null,
+            string? root = null)
         {
-            Root = CreateIsolatedFactoryRoot();
+            Root = root ?? CreateIsolatedFactoryRoot();
+            Directory.CreateDirectory(Root);
             _directoryAllocator = directoryAllocator;
             Factory = new WorkerDispatchTestsSeededRepositoryFactory(
                 AllocateDirectory,
@@ -1042,4 +1193,19 @@ public sealed class WorkerDispatchTestsSeededRepositoryFactoryTests
         Directory.CreateDirectory(path);
         return path;
     }
+
+    private static ProcessInspectionRecord AvailableProcess(int processId) =>
+        new(
+            processId,
+            ParentProcessId: 100,
+            Name: "testhost",
+            ExecutablePath: @"C:\host\testhost.exe",
+            StartedAt: DateTimeOffset.Parse("2026-08-30T12:00:00Z"),
+            CommandLine: "testhost seeded-factory-control",
+            ProcessInspectionStatus.Available);
+
+    private static WindowsNativeProcessInspection.ProcessInspectionResult Inspected(
+        params ProcessInspectionRecord[] records) =>
+        WindowsNativeProcessInspection.ProcessInspectionResult.Success(
+            records.ToDictionary(record => record.ProcessId));
 }

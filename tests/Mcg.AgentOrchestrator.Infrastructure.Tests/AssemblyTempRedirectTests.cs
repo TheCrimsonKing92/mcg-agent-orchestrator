@@ -8,6 +8,39 @@ using Mcg.AgentOrchestrator.Infrastructure;
 public sealed class AssemblyTempRedirectTests
 {
     [Fact]
+    public void RevalidateExitedRootsRetainsReplacementAndAmbiguousProcessInstances()
+    {
+        var exitedPid = 0x2a;
+        var replacementPid = 0x2b;
+        var inaccessiblePid = 0x2c;
+        var calls = 0;
+
+        var revalidated = AssemblyTempRedirect.RevalidateExitedRoots(
+            [$"p{exitedPid:x}", $"p{replacementPid:x}", $"p{inaccessiblePid:x}"],
+            requested =>
+            {
+                calls++;
+                Assert.Equal(
+                    [exitedPid, replacementPid, inaccessiblePid],
+                    requested!.OrderBy(pid => pid).ToArray());
+                return WindowsNativeProcessInspection.ProcessInspectionResult.Success(
+                    new Dictionary<int, ProcessInspectionRecord>
+                    {
+                        [exitedPid] = new(
+                            exitedPid, 0, string.Empty, null, null, null, ProcessInspectionStatus.Exited),
+                        [replacementPid] = new(
+                            replacementPid, 1, "testhost", @"C:\host\testhost.exe",
+                            DateTimeOffset.Parse("2026-08-30T12:00:00Z"), "testhost", ProcessInspectionStatus.Available),
+                        [inaccessiblePid] = new(
+                            inaccessiblePid, 0, string.Empty, null, null, null, ProcessInspectionStatus.AccessDenied)
+                    });
+            });
+
+        Assert.Equal(1, calls);
+        Assert.Equal([$"p{exitedPid:x}"], revalidated);
+    }
+
+    [Fact]
     public void ProcessRootDerivation_DistinctPidsProduceDistinctPaths()
     {
         var sharedRoot = Path.Combine("shared", "mcg-tests");
@@ -139,6 +172,13 @@ public sealed class AssemblyTempRedirectTests
                 ready,
                 TestContext.Current.CancellationToken);
             Assert.True(Directory.Exists(receipt.TempRoot));
+            var capturedInspection = WindowsNativeProcessInspection.Read([receipt.ProcessId]);
+            Assert.Null(capturedInspection.Failure);
+            var capturedRoot = new TempRootJanitorOwnedRoot(
+                receipt.ProcessId,
+                Path.GetDirectoryName(receipt.TempRoot)!,
+                Assert.Contains(receipt.ProcessId, capturedInspection.Records),
+                "assembly-temp-probe");
 
             process.Process.Kill(entireProcessTree: true);
             _ = await process.WaitForExitAsync(TestContext.Current.CancellationToken);
@@ -147,10 +187,9 @@ public sealed class AssemblyTempRedirectTests
                 "The kill unexpectedly ran ProcessExit, so the supervisor-cleanup seam was not exercised.");
 
             var outcome = Assert.Single(WorkerProcessJobs.ReapOwnedTempRoots(
-                [receipt.ProcessId],
-                [Path.GetDirectoryName(receipt.TempRoot)!]));
+                [capturedRoot]));
 
-            Assert.Equal(TempRootJanitorDeleteStatus.Deleted, outcome.Status);
+            Assert.Equal(TempRootJanitorReapDisposition.Deleted, outcome.Disposition);
             Assert.False(Directory.Exists(receipt.TempRoot));
         }
         finally
