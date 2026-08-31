@@ -6131,10 +6131,24 @@ internal sealed partial class ConductorDriver
                 .Where(identity => !string.IsNullOrWhiteSpace(identity))
                 .Distinct(StringComparer.Ordinal)
                 .ToArray();
-            var isTestFailure = criterion.TestProjectPath is { Length: > 0 } || failingIdentities is { Length: > 0 };
-            if (!isTestFailure)
+            var checkAttribution = checkAttributions?.FirstOrDefault(attribution =>
+                attribution.CheckName.Equals(criterion.Name, StringComparison.Ordinal));
+            if (failingIdentities is not { Length: > 0 })
             {
-                actionable.Add(criterion);
+                if (checkAttribution is { Origin: not AcceptanceFailureOrigin.Introduced })
+                {
+                    var kind = checkAttribution.Origin == AcceptanceFailureOrigin.Inherited
+                        ? AcceptanceRetryExclusionKind.Inherited
+                        : AcceptanceRetryExclusionKind.Unattributed;
+                    excluded.Add(new ExcludedAcceptanceFailure(criterion.Name, kind));
+                }
+                else
+                {
+                    // Without an identity there is no sound changed-scope comparison. An introduced
+                    // or otherwise unclassified failure must stay actionable rather than disappear.
+                    actionable.Add(criterion);
+                }
+
                 continue;
             }
 
@@ -6171,8 +6185,6 @@ internal sealed partial class ConductorDriver
             }
             else
             {
-                var checkAttribution = checkAttributions?.FirstOrDefault(attribution =>
-                    attribution.CheckName.Equals(criterion.Name, StringComparison.Ordinal));
                 if (checkAttribution is null || checkAttribution.Origin != AcceptanceFailureOrigin.Introduced)
                 {
                     var kind = checkAttribution?.Origin == AcceptanceFailureOrigin.Inherited
@@ -6196,9 +6208,7 @@ internal sealed partial class ConductorDriver
 
             if (!TryResolveTestProject(criterion.TestProjectPath, out var testProject))
             {
-                excluded.AddRange(introducedIdentities.Select(identity => new ExcludedAcceptanceFailure(
-                    identity,
-                    AcceptanceRetryExclusionKind.Unattributed)));
+                actionable.Add(criterion with { FailingTestIdentities = introducedIdentities });
                 continue;
             }
 
@@ -6233,10 +6243,11 @@ internal sealed partial class ConductorDriver
         var relevantChecks = impactPlan.Checks
             .Where(check => check.TestProject == testProject)
             .ToArray();
-        return relevantChecks.Any(check => check.TestClassSelections is null) ||
+        return relevantChecks.Length == 0 ||
+            relevantChecks.Any(check => check.TestClassSelections is null) ||
             relevantChecks
                 .SelectMany(check => check.TestClassSelections ?? [])
-                .Any(selection => IsTestIdentitySelectionMatch(identity, selection));
+                .Any(selection => identity.Contains(selection, StringComparison.Ordinal));
     }
 
     private static bool TryResolveTestProject(

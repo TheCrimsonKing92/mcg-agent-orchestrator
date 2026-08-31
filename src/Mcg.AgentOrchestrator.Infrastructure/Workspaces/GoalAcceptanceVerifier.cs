@@ -1021,7 +1021,7 @@ public sealed class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
         DotnetBuildEnvironmentLease? stableSlotLease,
         CancellationToken cancellationToken)
     {
-        if (check.Passed || check.FailingTestIdentities is not { Count: > 0 } failingTestIdentities)
+        if (check.Passed || check.Advisory || check.FailingTestIdentities is not { Count: > 0 } failingTestIdentities)
         {
             return check;
         }
@@ -7624,6 +7624,15 @@ public sealed class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
     private static string ResolveTrxTestName(XElement result, XElement? definition)
     {
         var testName = result.Attribute("testName")?.Value?.Trim();
+        var testMethod = definition?.Descendants()
+            .FirstOrDefault(element => element.Name.LocalName.Equals("TestMethod", StringComparison.Ordinal));
+        var className = testMethod?.Attribute("className")?.Value?.Trim();
+        var methodName = testMethod?.Attribute("name")?.Value?.Trim();
+        if (!string.IsNullOrWhiteSpace(className) && !string.IsNullOrWhiteSpace(methodName))
+        {
+            return $"{className}.{methodName}";
+        }
+
         var displayName = result.Descendants()
             .Concat(definition?.Descendants() ?? [])
             .Where(element =>
@@ -7643,15 +7652,6 @@ public sealed class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
         if (!string.IsNullOrWhiteSpace(testName))
         {
             return testName;
-        }
-
-        var testMethod = definition?.Descendants()
-            .FirstOrDefault(element => element.Name.LocalName.Equals("TestMethod", StringComparison.Ordinal));
-        var className = testMethod?.Attribute("className")?.Value?.Trim();
-        var methodName = testMethod?.Attribute("name")?.Value?.Trim();
-        if (!string.IsNullOrWhiteSpace(className) && !string.IsNullOrWhiteSpace(methodName))
-        {
-            return $"{className}.{methodName}";
         }
 
         return result.Attribute("testId")?.Value?.Trim() ?? "unknown test";
