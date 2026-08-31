@@ -148,6 +148,23 @@ public sealed class RepositoryTestImpactFilterResolutionTests
     }
 
     [Xunit.Fact]
+    public void CliSourceExposesTypedInfrastructureImpactScope()
+    {
+        var plan = RepositoryTestImpactPlanner.Plan(
+        [
+            "src/Mcg.AgentOrchestrator.App/Cli/CliCommandHandlers.Backlog.cs"
+        ]);
+
+        var check = Assert.Single(plan.Checks);
+        Assert.Equal(RepositoryTestProject.Infrastructure, check.TestProject);
+        Assert.Equal(["CliCommandTests", "CliHelpTests"], check.TestClassSelections);
+        Assert.DoesNotContain(
+            "DotnetBuildEnvironmentManagerTests",
+            check.TestClassSelections!,
+            StringComparer.Ordinal);
+    }
+
+    [Xunit.Fact]
     public void DotFreeStemPreservesProjectWideLegacySelection()
     {
         const string path =

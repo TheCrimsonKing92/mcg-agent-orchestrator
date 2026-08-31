@@ -463,6 +463,7 @@ public sealed class ConductorDriverTests
         Func<Goal, string, IDisposable?>? tryAcquireEvidenceMutationLease = null,
         Action<Goal, IReadOnlyList<string>, string?, string?, IReadOnlyList<AcceptanceCheckAttribution>?, string?>? recordAcceptanceFailure = null,
         Func<Goal, (string? BranchHeadSha, string? MainHeadSha)>? resolveAcceptanceHeads = null,
+        Func<Goal, IReadOnlyList<string>>? getLandingFileScopes = null,
         string? executionDirectory = null)
     {
         return new ConductorDriver(
@@ -518,6 +519,7 @@ public sealed class ConductorDriverTests
             tryAcquireEvidenceMutationLease: tryAcquireEvidenceMutationLease,
             recordAcceptanceFailureWithAttribution: recordAcceptanceFailure,
             resolveAcceptanceHeads: resolveAcceptanceHeads,
+            getLandingFileScopes: getLandingFileScopes,
             executionDirectory: executionDirectory);
     }
 

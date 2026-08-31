@@ -39,7 +39,21 @@ public sealed record AcceptanceCheckResult(
     string? ProcessStderrPath = null,
     string? ProcessStderr = null,
     string? GateHeartbeatPath = null,
-    AcceptanceFailureCauseEvidence? FailureCauseEvidence = null);
+    AcceptanceFailureCauseEvidence? FailureCauseEvidence = null,
+    string? TestProjectPath = null,
+    IReadOnlyList<AcceptanceTestFailureAttribution>? FailingTestAttributions = null);
+
+public enum AcceptanceTestFailureOrigin
+{
+    Introduced,
+    Inherited,
+    Unattributed
+}
+
+public sealed record AcceptanceTestFailureAttribution(
+    string TestIdentity,
+    AcceptanceTestFailureOrigin Origin,
+    string Evidence);
 
 public sealed record AcceptanceShardCompletionDecision(
     bool Passed,
@@ -952,7 +966,21 @@ public sealed class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
         phaseAccountant.TransitionTo(AcceptanceGatePhaseNames.Finalize);
         for (var index = 0; index < checks.Count; index++)
         {
-            checks[index] = AttachFailureCauseEvidence(checks[index]);
+            var check = AttachFailureCauseEvidence(checks[index]);
+            var manifestCheck = effectiveChecks.FirstOrDefault(candidate =>
+                candidate.Name.Equals(check.Name, StringComparison.Ordinal));
+            check = manifestCheck?.Project is { Length: > 0 } project
+                ? check with { TestProjectPath = project }
+                : check;
+            checks[index] = await AttachTestFailureAttributionsAsync(
+                check,
+                manifestCheck,
+                engineSettings,
+                worktreePath,
+                goalId,
+                stableSlotIndex,
+                stableSlotLease,
+                cancellationToken).ConfigureAwait(false);
         }
 
         var failedCheck = checks.FirstOrDefault(check => !check.Advisory && !check.Passed);
@@ -981,6 +1009,129 @@ public sealed class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
         {
             throw AcceptanceGateEngineException.Capture(exception, phaseAccountant.Snapshot);
         }
+    }
+
+    private async Task<AcceptanceCheckResult> AttachTestFailureAttributionsAsync(
+        AcceptanceCheckResult check,
+        AcceptanceManifestCheck? manifestCheck,
+        AcceptanceGateEngineSettings engineSettings,
+        string worktreePath,
+        GoalId? goalId,
+        int? stableSlotIndex,
+        DotnetBuildEnvironmentLease? stableSlotLease,
+        CancellationToken cancellationToken)
+    {
+        if (check.Passed || check.FailingTestIdentities is not { Count: > 0 } failingTestIdentities)
+        {
+            return check;
+        }
+
+        var identities = failingTestIdentities
+            .Where(identity => !string.IsNullOrWhiteSpace(identity))
+            .Distinct(StringComparer.Ordinal)
+            .ToArray();
+        if (identities.Length == 0)
+        {
+            return check;
+        }
+
+        AcceptanceCheckResult Unattributed(string evidence) => check with
+        {
+            FailingTestAttributions = identities
+                .Select(identity => new AcceptanceTestFailureAttribution(
+                    identity,
+                    AcceptanceTestFailureOrigin.Unattributed,
+                    evidence))
+                .ToArray()
+        };
+
+        if (manifestCheck is null ||
+            !manifestCheck.Type.Equals("dotnet-test", StringComparison.OrdinalIgnoreCase) ||
+            string.IsNullOrWhiteSpace(manifestCheck.Project))
+        {
+            return Unattributed("acceptance check has no exact dotnet-test project mapping");
+        }
+
+        var selectors = identities
+            .Select(NormalizeTestIdentitySelection)
+            .ToArray();
+        if (selectors.Any(selector => selector.Length == 0 ||
+                !Regex.IsMatch(selector, @"^[A-Za-z_][A-Za-z0-9_.]*$")))
+        {
+            return Unattributed("failing test identity cannot be represented by an exact focused selector");
+        }
+
+        var request =
+            $"{ProjectLabel(manifestCheck.Project)}: " +
+            string.Join("|", selectors.Select(selector => $"FullyQualifiedName~{selector}"));
+        if (!TryBuildFocusedEvidenceChecks(
+                request,
+                engineSettings,
+                worktreePath,
+                out var focusedChecks,
+                out var coverage,
+                out var rejection))
+        {
+            return Unattributed($"focused baseline selection unavailable: {rejection.Detail}");
+        }
+
+        var baselineSha = ResolveGitScalar(worktreePath, "merge-base", "HEAD", "main");
+        FocusedEvidenceArmRunResult baseline;
+        try
+        {
+            baseline = await RunBaselineFocusedEvidenceArmAsync(
+                worktreePath,
+                baselineSha,
+                goalId,
+                focusedChecks,
+                coverage,
+                stableSlotIndex,
+                stableSlotLease,
+                cancellationToken).ConfigureAwait(false);
+        }
+        catch (OperationCanceledException)
+        {
+            throw;
+        }
+        catch (Exception ex)
+        {
+            return Unattributed($"focused baseline execution failed: {ex.GetType().Name}");
+        }
+
+        if (baseline.Disposition is FindingEvidenceArmDisposition.ApparatusFailure or
+            FindingEvidenceArmDisposition.Inconclusive)
+        {
+            return Unattributed(
+                $"focused baseline was {ArmDispositionWireValue(baseline.Disposition)} at {baseline.Sha}");
+        }
+
+        var baselineFailures = baseline.Checks
+            .SelectMany(result => result.FailingTestIdentities ?? [])
+            .Select(NormalizeTestIdentitySelection)
+            .ToHashSet(StringComparer.Ordinal);
+        var attributions = identities
+            .Select((identity, index) =>
+            {
+                var inherited = baseline.Disposition == FindingEvidenceArmDisposition.Red &&
+                    baselineFailures.Contains(selectors[index]);
+                return new AcceptanceTestFailureAttribution(
+                    identity,
+                    inherited
+                        ? AcceptanceTestFailureOrigin.Inherited
+                        : AcceptanceTestFailureOrigin.Introduced,
+                    inherited
+                        ? $"same focused identity failed at merge-base {baseline.Sha}"
+                        : $"focused identity was green at merge-base {baseline.Sha}");
+            })
+            .ToArray();
+        return check with { FailingTestAttributions = attributions };
+    }
+
+    private static string NormalizeTestIdentitySelection(string identity)
+    {
+        var normalized = identity.Trim();
+        var parameterStart = normalized.IndexOfAny(['(', '[']);
+        return parameterStart < 0 ? normalized : normalized[..parameterStart];
     }
 
     internal static AcceptanceCheckResult AttachFailureCauseEvidence(AcceptanceCheckResult check)
