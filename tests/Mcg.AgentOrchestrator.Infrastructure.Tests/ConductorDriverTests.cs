@@ -121,7 +121,7 @@ public sealed class ConductorDriverTests
         string? evidenceRequest = null,
         string? stdoutPath = "C:\\tmp\\reviewer.out.log",
         IReadOnlyList<ReviewFinding>? findings = null,
-        string? reviewedCommit = null)
+        string? reviewedCommit = null, FindingCategory implicitFindingCategory = FindingCategory.Unspecified)
     {
         DispatchTask(kernel, goal, reviewer, "review", baseCommit: reviewedCommit);
         var effectiveFindings = (findings ?? blocker
@@ -130,7 +130,7 @@ public sealed class ConductorDriverTests
                     $"finding-{index + 1}",
                     ReviewFindingState.Open,
                     new ReviewFindingLocation("src/Test.cs", $"Test.Run{index + 1}"),
-                    finding))
+                    finding, Category: implicitFindingCategory))
                 .ToArray())
             .ToArray();
         if (!string.IsNullOrWhiteSpace(evidenceRequest))
