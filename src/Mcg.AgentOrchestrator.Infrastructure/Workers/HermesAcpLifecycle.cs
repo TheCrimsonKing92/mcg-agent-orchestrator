@@ -692,8 +692,10 @@ internal sealed class HermesAcpJsonRpcClient
         var kind = kindElement.GetString();
         if (string.Equals(kind, "execute", StringComparison.Ordinal))
         {
-            return toolCall.TryGetProperty("locations", out var terminalLocations) &&
-                LocationsAreWorkspaceContained(terminalLocations, requireAtLeastOne: true);
+            // The pinned Hermes ACP permission request exposes rawInput.command as an
+            // untyped string and does not carry a typed argv plus cwd constraint. A
+            // displayed location therefore cannot authorize the operation it describes.
+            return false;
         }
 
         if (kind is not ("edit" or "delete" or "move"))
@@ -732,11 +734,21 @@ internal sealed class HermesAcpJsonRpcClient
                 return false;
             }
 
-            var fullPath = Path.GetFullPath(path, _workspaceRoot);
-            var relative = Path.GetRelativePath(_workspaceRoot, fullPath);
+            string relative;
+            try
+            {
+                var fullPath = Path.GetFullPath(path, _workspaceRoot);
+                relative = Path.GetRelativePath(_workspaceRoot, fullPath);
+            }
+            catch (Exception ex) when (ex is ArgumentException or NotSupportedException or PathTooLongException)
+            {
+                return false;
+            }
+
             if (relative == ".." ||
                 relative.StartsWith($"..{Path.DirectorySeparatorChar}", StringComparison.Ordinal) ||
-                Path.IsPathRooted(relative))
+                Path.IsPathRooted(relative) ||
+                ContainsGitMetadataSegment(relative))
             {
                 return false;
             }
@@ -744,6 +756,11 @@ internal sealed class HermesAcpJsonRpcClient
 
         return observed || !requireAtLeastOne;
     }
+
+    private static bool ContainsGitMetadataSegment(string relativePath) =>
+        relativePath
+            .Split([Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar], StringSplitOptions.RemoveEmptyEntries)
+            .Any(segment => segment.Equals(".git", StringComparison.OrdinalIgnoreCase));
 
     private static string? FindPermissionOption(JsonElement message, string primaryKind, string? fallbackKind)
     {

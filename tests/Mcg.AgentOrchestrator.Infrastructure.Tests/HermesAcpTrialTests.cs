@@ -308,6 +308,87 @@ public sealed class HermesAcpTrialTests
         Assert.False(plannerRpc.PermissionPolicyViolated);
     }
 
+    [Xunit.Theory]
+    [Xunit.InlineData(null)]
+    [Xunit.InlineData("")]
+    [Xunit.InlineData("inside")]
+    [Xunit.InlineData("outside")]
+    [Xunit.InlineData("git")]
+    public async Task JsonRpcExecutePermissionAlwaysFailsClosed(string? locationKind)
+    {
+        using var fixture = new Fixture();
+        var location = locationKind switch
+        {
+            "inside" => Path.Combine(fixture.Workspace, "src"),
+            "outside" => Path.Combine(fixture.Root, "outside"),
+            "git" => Path.Combine(fixture.Workspace, ".git", "config"),
+            _ => locationKind
+        };
+        var input = new StringWriter();
+        var rpc = new HermesAcpJsonRpcClient(
+            input,
+            PermissionRequestOutput(
+                "execute",
+                location is null ? null : [location],
+                new { command = "dotnet --info", cwd = fixture.Workspace }),
+            TextWriter.Null,
+            AgentRole.Developer,
+            fixture.Workspace);
+
+        _ = await rpc.CallAsync("session/prompt", new { }, TestContext.Current.CancellationToken);
+
+        Assert.Contains("\"optionId\":\"deny\"", input.ToString(), StringComparison.Ordinal);
+        Assert.True(rpc.PermissionPolicyViolated);
+    }
+
+    [Xunit.Theory]
+    [Xunit.InlineData("edit", ".git")]
+    [Xunit.InlineData("delete", ".GIT/config")]
+    [Xunit.InlineData("move", "src/.git/objects")]
+    [Xunit.InlineData("edit", "src/.GiT/config")]
+    public async Task JsonRpcPathPermissionsRejectGitMetadata(string kind, string relativePath)
+    {
+        using var fixture = new Fixture();
+        var input = new StringWriter();
+        var rpc = new HermesAcpJsonRpcClient(
+            input,
+            PermissionRequestOutput(kind, [Path.Combine(fixture.Workspace, relativePath)]),
+            TextWriter.Null,
+            AgentRole.Developer,
+            fixture.Workspace);
+
+        _ = await rpc.CallAsync("session/prompt", new { }, TestContext.Current.CancellationToken);
+
+        Assert.Contains("\"optionId\":\"deny\"", input.ToString(), StringComparison.Ordinal);
+        Assert.True(rpc.PermissionPolicyViolated);
+    }
+
+    [Xunit.Theory]
+    [Xunit.InlineData(null)]
+    [Xunit.InlineData("")]
+    [Xunit.InlineData("\0")]
+    public async Task JsonRpcPathPermissionsRejectMissingEmptyOrMalformedLocation(string? relativePath)
+    {
+        using var fixture = new Fixture();
+        var input = new StringWriter();
+        string[]? locations = relativePath is null
+            ? null
+            : relativePath.Length == 0
+                ? [string.Empty]
+                : [Path.Combine(fixture.Workspace, relativePath)];
+        var rpc = new HermesAcpJsonRpcClient(
+            input,
+            PermissionRequestOutput("edit", locations),
+            TextWriter.Null,
+            AgentRole.Developer,
+            fixture.Workspace);
+
+        _ = await rpc.CallAsync("session/prompt", new { }, TestContext.Current.CancellationToken);
+
+        Assert.Contains("\"optionId\":\"deny\"", input.ToString(), StringComparison.Ordinal);
+        Assert.True(rpc.PermissionPolicyViolated);
+    }
+
     [Xunit.Fact]
     public async Task ProcessLauncherConfirmsOwnedJobExitForRealChild()
     {
@@ -584,6 +665,66 @@ public sealed class HermesAcpTrialTests
         Assert.True(decision.MedianVelocityImprovement >= 0.15);
     }
 
+    [Xunit.Fact]
+    public void TrialPolicyLoadFailsLoudlyWhenMissingOrMalformed()
+    {
+        using var fixture = new Fixture();
+        var isolatedRoot = Path.Combine(fixture.Root, "isolated-policy-root");
+        Directory.CreateDirectory(isolatedRoot);
+
+        var missing = Assert.Throws<FileNotFoundException>(() => HermesTrialThresholds.Load(isolatedRoot));
+        Assert.Contains("hermes-acp-v2026.8.27.json", missing.Message, StringComparison.Ordinal);
+
+        var policyDirectory = Path.Combine(isolatedRoot, "config", "trials");
+        Directory.CreateDirectory(policyDirectory);
+        File.WriteAllText(Path.Combine(policyDirectory, "hermes-acp-v2026.8.27.json"), "{");
+
+        Assert.ThrowsAny<JsonException>(() => HermesTrialThresholds.Load(isolatedRoot));
+    }
+
+    [Xunit.Fact]
+    public void ComparisonDecisionKeepsCompleteTrialEvidenceTrialOnlyWithoutTerminalReceipt()
+    {
+        var workload = new TrialWorkloadIdentity(
+            "workload-id",
+            "fixture-brief",
+            Sha256("fixture brief"),
+            "abc123",
+            "OpenAI/gpt-test",
+            "explicit:test");
+        var hermes = new TrialHarnessResult(
+            "hermes-acp",
+            "abc123",
+            null,
+            null,
+            new(TrialWorkerResultStatus.Valid, 8),
+            "hermes.json",
+            null,
+            0,
+            TrialHarnessOutcome.Completed,
+            [],
+            workload,
+            new("hermes-arm", workload.Value, "hermes-acp"),
+            null);
+        var comparison = new TrialComparisonResult(
+            "abc123",
+            "abc123",
+            "receipts",
+            "comparison.json",
+            [hermes],
+            [],
+            Succeeded: true,
+            workload,
+            null);
+
+        var evaluation = HermesTrialDecisionEngine.EvaluateForComparison(comparison, CompleteEvidence());
+
+        Assert.Equal(HermesTrialDisposition.TrialOnly, evaluation.Decision.Disposition);
+        var terminalGate = Assert.Single(evaluation.Gates, gate => gate.Gate == "terminal-receipt");
+        Assert.Equal(HermesTrialGateStatus.Incomplete, terminalGate.Status);
+        Assert.Contains("hermes-terminal-receipt-missing", terminalGate.Reasons);
+    }
+
     private static HermesTrialEvidence CompleteEvidence() => new()
     {
         PromptProbeCount = 20,
@@ -609,7 +750,10 @@ public sealed class HermesAcpTrialTests
     private static string Sha256(string content) =>
         Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(content))).ToLowerInvariant();
 
-    private static StringReader PermissionRequestOutput(string kind) => new(string.Join(Environment.NewLine,
+    private static StringReader PermissionRequestOutput(
+        string kind,
+        IReadOnlyList<string>? locations = null,
+        object? rawInput = null) => new(string.Join(Environment.NewLine,
     [
         JsonSerializer.Serialize(new
         {
@@ -619,7 +763,7 @@ public sealed class HermesAcpTrialTests
             @params = new
             {
                 sessionId = "session-1",
-                toolCall = new { kind },
+                toolCall = new { kind, locations, rawInput },
                 options = new[]
                 {
                     new { optionId = "allow", kind = "allow_once" },

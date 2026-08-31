@@ -45,6 +45,23 @@ internal sealed record HermesTrialDecision(
     decimal? CostIncrease,
     decimal? TokenIncrease);
 
+internal enum HermesTrialGateStatus
+{
+    Passed,
+    Incomplete,
+    Failed
+}
+
+internal sealed record HermesTrialGateDecision(
+    string Gate,
+    HermesTrialGateStatus Status,
+    IReadOnlyList<string> Reasons);
+
+internal sealed record HermesTrialEvaluation(
+    HermesTrialEvidence Evidence,
+    IReadOnlyList<HermesTrialGateDecision> Gates,
+    HermesTrialDecision Decision);
+
 internal sealed record HermesTrialThresholds(
     int PromptProbeCount,
     int MinimumParseableWorkerResults,
@@ -84,8 +101,8 @@ internal sealed record HermesTrialThresholds(
 
     private static string FindPolicyPath(string? startDirectory)
     {
-        var searchRoots = startDirectory is null
-            ? new[] { Environment.CurrentDirectory, AppContext.BaseDirectory }
+        string[] searchRoots = startDirectory is null
+            ? [AppContext.BaseDirectory]
             : [startDirectory];
         foreach (var searchRoot in searchRoots.Distinct(StringComparer.OrdinalIgnoreCase))
         {
@@ -122,6 +139,47 @@ internal sealed record HermesTrialThresholds(
 
 internal static class HermesTrialDecisionEngine
 {
+    public static HermesTrialEvaluation EvaluateForComparison(
+        TrialComparisonResult comparison,
+        HermesTrialEvidence evidence,
+        HermesTrialThresholds? thresholds = null)
+    {
+        ArgumentNullException.ThrowIfNull(comparison);
+        ArgumentNullException.ThrowIfNull(evidence);
+        thresholds ??= HermesTrialThresholds.Load();
+
+        var aggregate = Evaluate(evidence, thresholds);
+        var terminalGate = EvaluateTerminalReceipt(comparison);
+        var reasons = aggregate.Reasons.Concat(terminalGate.Reasons).Distinct(StringComparer.Ordinal).ToArray();
+        var disposition = terminalGate.Status switch
+        {
+            HermesTrialGateStatus.Failed => HermesTrialDisposition.Rejected,
+            HermesTrialGateStatus.Incomplete when aggregate.Disposition == HermesTrialDisposition.EligibleForOperatorAdoption =>
+                HermesTrialDisposition.TrialOnly,
+            _ => aggregate.Disposition
+        };
+        var decision = aggregate with { Disposition = disposition, Reasons = reasons };
+        var gates = new[]
+        {
+            BuildGate("prompt-output", reasons,
+                "prompt-digest", "false-completes", "prompt-probes", "matching-prompt", "parseable-worker"),
+            BuildGate("containment", reasons,
+                "containment-escape", "shared-git-modified", "outside-write"),
+            BuildGate("lifecycle", reasons,
+                "missing-usage", "orphan-or-unresolved-child", "lifecycle-cycles"),
+            BuildGate("windows-path", reasons,
+                "unicode-and-spaces", "gui-or-firewall"),
+            BuildGate("paired-quality", reasons,
+                "acceptance-losses", "paired-tasks"),
+            BuildGate("adoption-benefit", reasons,
+                "adoption-benefit", "paired-timing", "cost-", "token-"),
+            BuildGate("identity-and-activity", reasons,
+                "uncontrolled-subagent", "hidden-model"),
+            terminalGate
+        };
+        return new(evidence, gates, decision);
+    }
+
     public static HermesTrialDecision Evaluate(
         HermesTrialEvidence evidence,
         HermesTrialThresholds? thresholds = null)
@@ -227,4 +285,101 @@ internal static class HermesTrialDecisionEngine
     private static double Improvement(double baseline, double candidate) => baseline <= 0 ? 0 : (baseline - candidate) / baseline;
     private static decimal Increase(decimal baseline, decimal candidate) => baseline <= 0 ? 0 : (candidate - baseline) / baseline;
     private static decimal Increase(long baseline, long candidate) => baseline <= 0 ? 0 : (decimal)(candidate - baseline) / baseline;
+
+    private static HermesTrialGateDecision EvaluateTerminalReceipt(TrialComparisonResult comparison)
+    {
+        var hermesArms = comparison.Harnesses
+            .Where(arm => arm.HermesTerminalReceipt is not null ||
+                arm.Name.Equals("hermes-acp", StringComparison.OrdinalIgnoreCase))
+            .ToArray();
+        if (hermesArms.Length == 0)
+        {
+            return new("terminal-receipt", HermesTrialGateStatus.Incomplete, ["hermes-terminal-receipt-missing"]);
+        }
+
+        if (hermesArms.Length != 1)
+        {
+            return new("terminal-receipt", HermesTrialGateStatus.Failed, ["hermes-terminal-arm-ambiguous"]);
+        }
+
+        var arm = hermesArms[0];
+        var receipt = arm.HermesTerminalReceipt;
+        if (receipt is null)
+        {
+            return new("terminal-receipt", HermesTrialGateStatus.Incomplete, ["hermes-terminal-receipt-missing"]);
+        }
+
+        var failures = new List<string>();
+        if (!receipt.Completed || receipt.ExitCode != 0 ||
+            arm.Outcome != TrialHarnessOutcome.Completed || arm.ExitCode != 0)
+        {
+            failures.Add("hermes-terminal-not-completed");
+        }
+        if (receipt.InputTokens <= 0 || receipt.OutputTokens <= 0) failures.Add("hermes-terminal-usage-missing");
+        if (!receipt.CancellationOrShutdownAcknowledged ||
+            !receipt.JobExitConfirmed ||
+            !receipt.SurvivorInventoryEmpty)
+        {
+            failures.Add("hermes-terminal-process-unresolved");
+        }
+        if (receipt.StandardErrorSha256.Length != 64 || !receipt.StandardErrorSha256.All(Uri.IsHexDigit))
+        {
+            failures.Add("hermes-terminal-stderr-digest-invalid");
+        }
+        if (receipt.PermissionPolicyViolated || receipt.UnexpectedChild) failures.Add("hermes-terminal-policy-violated");
+        if (!WorkerResultParser.TryParseFields(receipt.FinalOutput, out _, out _))
+        {
+            failures.Add("hermes-terminal-worker-result-invalid");
+        }
+        if (!string.Equals(receipt.PinnedRelease, HermesAcpAdapter.PinnedRelease, StringComparison.Ordinal) ||
+            !string.Equals(receipt.PinnedCommit, HermesAcpAdapter.PinnedCommit, StringComparison.Ordinal))
+        {
+            failures.Add("hermes-terminal-pinned-version-mismatch");
+        }
+        if (!string.Equals(receipt.PromptSha256, comparison.WorkloadIdentity?.BriefDigest, StringComparison.OrdinalIgnoreCase))
+        {
+            failures.Add("hermes-terminal-prompt-digest-mismatch");
+        }
+
+        var expectedIdentity = comparison.WorkloadIdentity?.ModelIdentity;
+        if (string.IsNullOrWhiteSpace(expectedIdentity) ||
+            (!expectedIdentity.Equals($"{receipt.Provider}/{receipt.Model}", StringComparison.OrdinalIgnoreCase) &&
+             !expectedIdentity.Equals($"{receipt.Provider}:{receipt.Model}", StringComparison.OrdinalIgnoreCase)))
+        {
+            failures.Add("hermes-terminal-model-provider-mismatch");
+        }
+
+        return failures.Count == 0
+            ? new("terminal-receipt", HermesTrialGateStatus.Passed, [])
+            : new("terminal-receipt", HermesTrialGateStatus.Failed, failures);
+    }
+
+    private static HermesTrialGateDecision BuildGate(
+        string gate,
+        IReadOnlyList<string> allReasons,
+        params string[] prefixes)
+    {
+        var reasons = allReasons
+            .Where(reason => prefixes.Any(prefix => reason.StartsWith(prefix, StringComparison.Ordinal)))
+            .ToArray();
+        var status = reasons.Length == 0
+            ? HermesTrialGateStatus.Passed
+            : reasons.All(IsIncompleteReason)
+                ? HermesTrialGateStatus.Incomplete
+                : HermesTrialGateStatus.Failed;
+        return new(gate, status, reasons);
+    }
+
+    private static bool IsIncompleteReason(string reason) =>
+        reason.StartsWith("prompt-probes", StringComparison.Ordinal) ||
+        reason.StartsWith("matching-prompt-digests", StringComparison.Ordinal) ||
+        reason.StartsWith("parseable-worker-results", StringComparison.Ordinal) ||
+        reason.StartsWith("outside-write-negative-control-missing", StringComparison.Ordinal) ||
+        reason.StartsWith("lifecycle-cycles", StringComparison.Ordinal) ||
+        reason.StartsWith("unicode-and-spaces-path-evidence-missing", StringComparison.Ordinal) ||
+        reason.StartsWith("paired-tasks", StringComparison.Ordinal) ||
+        reason.StartsWith("paired-timing-evidence-incomplete", StringComparison.Ordinal) ||
+        reason.StartsWith("cost-evidence-incomplete", StringComparison.Ordinal) ||
+        reason.StartsWith("token-evidence-incomplete", StringComparison.Ordinal) ||
+        reason.StartsWith("hermes-terminal-receipt-missing", StringComparison.Ordinal);
 }
