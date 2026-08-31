@@ -132,7 +132,8 @@ function Read-OperationProcessInventory {
     # still making the CLI surface typed failures for records whose command line is unreadable.
     # PowerShell drops an empty-string script argument before it reaches the CLI.
     $lines = @(& $helper -CommandContains " " -Newest ([int]::MaxValue))
-    $helperExitCode = $LASTEXITCODE
+    $lastExitCodeVariable = Get-Variable -Name LASTEXITCODE -ErrorAction SilentlyContinue
+    $helperExitCode = if ($null -eq $lastExitCodeVariable) { 0 } else { $lastExitCodeVariable.Value }
     $processes = [System.Collections.Generic.List[object]]::new()
     $unavailable = [System.Collections.Generic.List[object]]::new()
     $diagnostics = [System.Collections.Generic.List[string]]::new()
@@ -464,8 +465,13 @@ try {
             Write-Output "LOCK id=$($process.ProcessId) kind=$kind parent=$($process.ParentProcessId) name=$($process.Name) created=$created path=$($process.ExecutablePath) command=$(Short-Command $process.CommandLine)"
         }
 
-        if ($lockHolders.Count -eq 0 -and $relevantUnavailable.Count -eq 0) {
-            Write-Output "No orchestrator lock-holders running; in-tree build lock is FREE."
+        if ($lockHolders.Count -eq 0) {
+            if ($relevantUnavailable.Count -gt 0) {
+                Write-Output "lock query incomplete: relevant process inspection was unavailable"
+            }
+            else {
+                Write-Output "No orchestrator lock-holders running; in-tree build lock is FREE."
+            }
         }
     }
 }
