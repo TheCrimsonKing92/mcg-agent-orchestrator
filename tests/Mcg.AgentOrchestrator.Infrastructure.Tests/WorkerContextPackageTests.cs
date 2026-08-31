@@ -51,19 +51,18 @@ public sealed class WorkerContextPackageTests(Xunit.ITestOutputHelper output)
         Assert.Equal(WorkerContextArtifact.Hash(File.ReadAllBytes(promptPath)), delivery.GeneratedPromptSha256);
     }
 
-    [Xunit.Fact(DisplayName = "Retry_feedback_prompt_guard_fails_closed_when_accepted_note_is_absent_from_typed_feedback")]
-    public void RetryFeedbackPromptGuardFailsClosedWhenAcceptedNoteIsAbsentFromTypedFeedback()
+    [Xunit.Fact(DisplayName = "Retry_feedback_prompt_guard_fails_closed_for_unrelated_feedback_while_accepted_note_is_current")]
+    public void RetryFeedbackPromptGuardFailsClosedForUnrelatedFeedbackWhileAcceptedNoteIsCurrent()
     {
         var root = CreateTempDirectory();
         var kernel = new AgentOrchestratorKernel();
         var task = new TaskSpec(TaskId.New(), "Implement", AgentRole.Developer);
         var goal = kernel.CreateGoal("Reject missing retry feedback", [task]);
         kernel.RetryTaskWithAuthoritativeFeedback(goal.Id, task.Id, "Current accepted correction.", RetryCause.NewSourceFinding);
-        kernel.ClearCriterionRetryFeedback(goal.Id, task.Id);
         var artifact = WorkerContextArtifact.Create(
             new LogicalArtifactIdentity("task/criterion-retry-feedback.json"),
             ContextArtifactKind.AcceptanceCriteria,
-            System.Text.Json.JsonSerializer.SerializeToUtf8Bytes(task.CriterionRetryFeedback),
+            System.Text.Json.JsonSerializer.SerializeToUtf8Bytes(new[] { "Unrelated stale feedback." }),
             [AgentRole.Developer],
             ContextDeliveryMode.InlineFull,
             ContextContractVersion.V1);

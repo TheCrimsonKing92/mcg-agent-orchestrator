@@ -762,6 +762,7 @@ public sealed class TaskSpec
             .Where(item => item.Length > 0)
             .Distinct(StringComparer.Ordinal)
             .ToArray();
+        AcceptedRetryFeedback = null;
     }
 
     internal void RecordAcceptedRetryFeedback(string message, DateTimeOffset acceptedAt) =>
@@ -769,7 +770,11 @@ public sealed class TaskSpec
 
     internal void IncrementCriterionRetryCount() => CriterionRetryCount++;
 
-    internal void ClearCriterionRetryFeedback() => CriterionRetryFeedback = [];
+    internal void ClearCriterionRetryFeedback()
+    {
+        CriterionRetryFeedback = [];
+        AcceptedRetryFeedback = null;
+    }
 
     private void RestoreCriterionRetryState(int retryCount, IReadOnlyList<string>? feedback)
     {

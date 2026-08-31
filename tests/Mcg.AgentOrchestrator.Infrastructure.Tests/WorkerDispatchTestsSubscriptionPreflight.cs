@@ -1831,4 +1831,119 @@ private static TaskVerificationRecord ProviderConnectivityVerification(
     Assert.Null(task.LastProcess);
 }
 
+    [Xunit.Theory(DisplayName = "WorkerProfileDispatcher_preflight_allows_authorized_retry_feedback_supersession_or_clear")]
+    [Xunit.InlineData(false)]
+    [Xunit.InlineData(true)]
+    public void WorkerProfileDispatcherPreflightAllowsAuthorizedRetryFeedbackSupersessionOrClear(bool clearFeedback)
+    {
+        var root = CreateSeededDispatchRepository();
+        var promptRoot = Path.Combine(root, "prompts");
+        var kernel = new AgentOrchestratorKernel(new TestClock(DateTimeOffset.Parse("2026-08-31T10:00:00Z")));
+        var task = new TaskSpec(TaskId.New(), "Implement the retry correction.", AgentRole.Developer);
+        var goal = kernel.CreateGoal("Prepare an authorized retry feedback transition", [task]);
+        var agent = SubscriptionSolDeveloperAgent();
+        kernel.ActivateGoal(goal.Id, [agent]);
+        var worktree = GoalWorktrees.Ensure(root, goal.Id);
+        kernel.RetryTaskWithAuthoritativeFeedback(
+            goal.Id,
+            task.Id,
+            "Accepted operator correction.",
+            RetryCause.NewTestFinding);
+
+        if (clearFeedback)
+        {
+            kernel.ClearCriterionRetryFeedback(goal.Id, task.Id);
+        }
+        else
+        {
+            kernel.RecordCriterionRetryFeedback(goal.Id, task.Id, ["New automatic retry evidence."]);
+        }
+
+        var prepared = WorkerProfileDispatcher.PrepareSubscriptionTask(
+            kernel,
+            goal,
+            task,
+            [agent],
+            DispatchTestProfiles(),
+            promptRoot,
+            worktree,
+            DateTimeOffset.Parse("2026-08-31T10:01:00Z"),
+            sandboxOptions: DisabledSandbox);
+
+        Assert.Null(task.AcceptedRetryFeedback);
+        Assert.NotNull(task.LastDispatch);
+        Assert.Null(task.LastProcess);
+        Assert.Equal(task.Id, prepared.Task.Id);
+    }
+
+    [Xunit.Fact(DisplayName = "WorkerProfileDispatcher_preflight_blocks_unrelated_feedback_while_accepted_note_is_current")]
+    public void WorkerProfileDispatcherPreflightBlocksUnrelatedFeedbackWhileAcceptedNoteIsCurrent()
+    {
+        var root = CreateSeededDispatchRepository();
+        var promptRoot = Path.Combine(root, "prompts");
+        var kernel = new AgentOrchestratorKernel(new TestClock(DateTimeOffset.Parse("2026-08-31T10:00:00Z")));
+        var task = new TaskSpec(TaskId.New(), "Implement the retry correction.", AgentRole.Developer);
+        var goal = kernel.CreateGoal("Block stale retry feedback before paid dispatch", [task]);
+        var agent = SubscriptionSolDeveloperAgent();
+        kernel.ActivateGoal(goal.Id, [agent]);
+        var worktree = GoalWorktrees.Ensure(root, goal.Id);
+        kernel.RetryTaskWithAuthoritativeFeedback(
+            goal.Id,
+            task.Id,
+            "Accepted operator correction.",
+            RetryCause.NewTestFinding);
+        var taskId = task.Id;
+        var snapshot = kernel.ExportSnapshot();
+        kernel = AgentOrchestratorKernel.FromSnapshot(snapshot with
+        {
+            Goals = snapshot.Goals
+                .Select(goalSnapshot => goalSnapshot.Id == goal.Id.Value
+                    ? goalSnapshot with
+                    {
+                        Tasks = goalSnapshot.Tasks
+                            .Select(taskSnapshot => taskSnapshot.Id == taskId.Value
+                                ? taskSnapshot with { CriterionRetryFeedback = ["Unrelated stale feedback."] }
+                                : taskSnapshot)
+                            .ToArray()
+                    }
+                    : goalSnapshot)
+                .ToArray()
+        });
+        goal = kernel.GetGoal(goal.Id);
+        task = goal.Tasks.Single(candidate => candidate.Id == taskId);
+
+        var error = Assert.Throws<WorkerSubscriptionPreflightException>(() =>
+            WorkerProfileDispatcher.PrepareSubscriptionTask(
+                kernel,
+                goal,
+                task,
+                [agent],
+                DispatchTestProfiles(),
+                promptRoot,
+                worktree,
+                DateTimeOffset.Parse("2026-08-31T10:01:00Z"),
+                sandboxOptions: DisabledSandbox));
+
+        Assert.Equal(WorkerRetryFeedbackPromptGuard.ErrorCode, error.ErrorCode);
+        Assert.Contains("authoritative current-round feedback does not match", error.Message, StringComparison.Ordinal);
+        Assert.Null(task.LastDispatch);
+        Assert.Null(task.LastProcess);
+    }
+
+    private static AgentDefinition SubscriptionSolDeveloperAgent() => new(
+        new AgentId("sol-developer"),
+        "Sol Developer",
+        AgentRole.Developer,
+        new ModelProfile(
+            "OpenAI",
+            AgentCatalog.OpenAiSolSubscriptionModelAlias,
+            ModelCapability.Text,
+            SubscriptionMode.ApiKey,
+            "medium"),
+        ExecutionPolicy: AgentExecutionPolicy.SubscriptionOnly,
+        Subscription: new SubscriptionLaunchProfile(
+            "codex-cli",
+            AgentCatalog.OpenAiSolSubscriptionModelAlias,
+            "low"));
+
 }
