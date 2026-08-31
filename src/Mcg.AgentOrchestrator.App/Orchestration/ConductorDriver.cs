@@ -2199,13 +2199,13 @@ internal sealed partial class ConductorDriver
             var openBlockingFindings = ReviewFindings.GetOpenBlockingFindings(
                 mergedFindings.Count > 0 ? mergedFindings : round.Findings,
                 goal.EffectiveAcceptanceCriteriaCorrections);
-            var writableBlockerIds = ReviewFindingRouting
-                .Project(openBlockingFindings)
-                .Where(projection => projection.TargetRole == AgentRole.Developer)
-                .Select(projection => projection.Finding.StableId)
-                .Distinct(StringComparer.Ordinal)
-                .OrderBy(id => id, StringComparer.Ordinal)
-                .ToArray();
+            var suppressionRoute = ReviewerFindingEvidenceSuppressionRouting.Resolve(
+                requestingTask.LastVerification, goal.EffectiveAcceptanceCriteriaCorrections, openBlockingFindings);
+            if (suppressionRoute.DeferToReviewRetryRoute)
+            {
+                return false;
+            }
+            var writableBlockerIds = suppressionRoute.WritableBlockerIds;
             var reviewedCandidateSha = requestingTask.LastVerification?.ReviewedCommit?.Trim();
             var requestTargetsCurrentCandidate =
                 !candidateShaAvailable ||
@@ -2227,7 +2227,7 @@ internal sealed partial class ConductorDriver
                         telemetryCandidateSha,
                         writableBlockerIds,
                         requestId,
-                        AgentRole.Developer,
+                        suppressionRoute.ChosenOwner ?? throw new InvalidOperationException("Writable finding suppression requires a feasible upstream owner."),
                         reason,
                         CreateFindingEvidenceSuppressionIdentity(
                             telemetryCandidateSha,
