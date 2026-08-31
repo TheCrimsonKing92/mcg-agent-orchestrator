@@ -76,9 +76,9 @@ internal sealed record HermesTrialThresholds(
 {
     private const string PolicyRelativePath = "config/trials/hermes-acp-v2026.8.27.json";
 
-    public static HermesTrialThresholds Load(string? startDirectory = null)
+    public static HermesTrialThresholds Load(string? deploymentRoot = null)
     {
-        var policyPath = FindPolicyPath(startDirectory);
+        var policyPath = ResolvePolicyPath(deploymentRoot);
         using var document = JsonDocument.Parse(File.ReadAllText(policyPath));
         if (!document.RootElement.TryGetProperty("thresholds", out var thresholds) ||
             thresholds.ValueKind != JsonValueKind.Object)
@@ -99,26 +99,18 @@ internal sealed record HermesTrialThresholds(
             RequireDecimal(thresholds, "maximumTokenRegression", policyPath));
     }
 
-    private static string FindPolicyPath(string? startDirectory)
+    private static string ResolvePolicyPath(string? deploymentRoot)
     {
-        string[] searchRoots = startDirectory is null
-            ? [AppContext.BaseDirectory]
-            : [startDirectory];
-        foreach (var searchRoot in searchRoots.Distinct(StringComparer.OrdinalIgnoreCase))
+        var root = Path.GetFullPath(deploymentRoot ?? AppContext.BaseDirectory);
+        var policyPath = Path.Combine(root, PolicyRelativePath);
+        if (File.Exists(policyPath))
         {
-            for (var directory = new DirectoryInfo(Path.GetFullPath(searchRoot)); directory is not null; directory = directory.Parent)
-            {
-                var candidate = Path.Combine(directory.FullName, PolicyRelativePath);
-                if (File.Exists(candidate))
-                {
-                    return candidate;
-                }
-            }
+            return policyPath;
         }
 
         throw new FileNotFoundException(
-            $"Checked Hermes trial policy '{PolicyRelativePath}' was not found from " +
-            $"'{string.Join("' or '", searchRoots)}'.");
+            $"Checked Hermes trial policy '{PolicyRelativePath}' was not found beneath deployment root '{root}'.",
+            policyPath);
     }
 
     private static int RequireInt32(JsonElement source, string name, string path) =>

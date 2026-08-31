@@ -710,11 +710,18 @@ public sealed class HermesAcpTrialTests
     public void TrialPolicyLoadFailsLoudlyWhenMissingOrMalformed()
     {
         using var fixture = new Fixture();
-        var isolatedRoot = Path.Combine(fixture.Root, "isolated-policy-root");
+        var ambientRoot = Path.Combine(fixture.Root, "ambient-policy-root");
+        var ambientPolicyDirectory = Path.Combine(ambientRoot, "config", "trials");
+        Directory.CreateDirectory(ambientPolicyDirectory);
+        File.Copy(
+            Path.Combine(AppContext.BaseDirectory, "config", "trials", "hermes-acp-v2026.8.27.json"),
+            Path.Combine(ambientPolicyDirectory, "hermes-acp-v2026.8.27.json"));
+        var isolatedRoot = Path.Combine(ambientRoot, "isolated-policy-root");
         Directory.CreateDirectory(isolatedRoot);
 
         var missing = Assert.Throws<FileNotFoundException>(() => HermesTrialThresholds.Load(isolatedRoot));
         Assert.Contains("hermes-acp-v2026.8.27.json", missing.Message, StringComparison.Ordinal);
+        Assert.Contains(isolatedRoot, missing.Message, StringComparison.OrdinalIgnoreCase);
 
         var policyDirectory = Path.Combine(isolatedRoot, "config", "trials");
         Directory.CreateDirectory(policyDirectory);
