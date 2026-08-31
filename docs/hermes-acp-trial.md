@@ -23,9 +23,9 @@ The pinned upstream surface does not document enforceable delegation or code-exe
 
 ## Checked operator command
 
-`hermes-acp-trial` is the checked one-shot ACP client owned by the App. It requires `--confirm-live-hermes-start`, reads the prompt from `--prompt` or `MCG_TRIAL_BRIEF_PATH`, verifies `--prompt-sha256` or `MCG_TRIAL_BRIEF_SHA256`, starts `hermes --safe-mode acp`, denies ACP permission requests, and writes `hermes-acp-terminal-receipt.json` inside the supplied sandbox. Only the final authoritative worker output is written to stdout; JSON-RPC progress and the receipt location go to stderr.
+`hermes-acp-trial` is the checked one-shot ACP client owned by the App. It requires `--confirm-live-hermes-start` and an explicit `--role`, reads the prompt from `--prompt` or `MCG_TRIAL_BRIEF_PATH`, verifies `--prompt-sha256` or `MCG_TRIAL_BRIEF_SHA256`, starts `hermes --safe-mode acp`, and writes `hermes-acp-terminal-receipt.json` inside the supplied sandbox. Planner, Researcher, and Reviewer permission requests are denied. Developer and Tester may select only an `allow_once` option, and only when every reported file location is inside the assigned worktree; a reported outside location fails the terminal receipt. The whole-process sandbox remains the security boundary. Only the final authoritative worker output is written to stdout; JSON-RPC progress and the receipt location go to stderr.
 
-Invoke it only as a harness inside the existing `trial-compare` contained root; the command rejects a direct invocation or paths outside that root. A trial harness entry uses the checked launcher as `fileName`, with arguments `hermes-acp-trial --confirm-live-hermes-start --provider <provider> --model <model>`; `trial-compare` supplies the prompt path/hash and starts the whole tree at Low integrity in a no-breakaway job. The comparator copies the typed terminal receipt into the durable per-arm receipt directory before destroying the trial root.
+Invoke it only as a harness inside the existing `trial-compare` contained root; the command rejects a direct invocation or paths outside that root. A trial harness entry uses the checked launcher as `fileName`, with arguments `hermes-acp-trial --confirm-live-hermes-start --provider <provider> --model <model> --role <role>`; `trial-compare` supplies the prompt path/hash and starts the whole tree at Low integrity in a no-breakaway job. The comparator copies the typed terminal receipt into the durable per-arm receipt directory before destroying the trial root.
 
 ## Authorized evaluation sequence
 
@@ -38,7 +38,7 @@ Only after separate install/auth/live-run authorization:
 5. Feed normalized evidence to `HermesTrialDecisionEngine`. Incomplete evidence yields `TrialOnly`; an immediate rejection yields `Rejected`; passing evidence yields only `EligibleForOperatorAdoption`. It never enables a profile or adopts a default.
 6. Route the changed candidate and receipts through normal Tester, Acceptance, and cross-family Reviewer gates. A separate authorized goal is required for any default profile, role assignment, installation, authentication, or adoption.
 
-Automated tests prove command-to-lifecycle wiring, JSON-RPC framing, fail-closed permission handling, usage/model/provider validation, and typed receipt persistence with a scripted ACP process. They do not prove that the pinned executable is installed, authenticated, compatible with the configured provider, or clean across real Windows process teardown. The operator must run the authorized evaluation sequence above and retain those live receipts separately.
+Automated tests prove command-to-lifecycle wiring, JSON-RPC framing, role- and worktree-scoped permission handling, continuous stdout draining, usage/model/provider validation, owned-job terminal accounting, and typed receipt persistence with a scripted ACP process. They do not prove that the pinned executable is installed, authenticated, compatible with the configured provider, or clean across real Windows process teardown. The operator must run the authorized evaluation sequence above and retain those live receipts separately.
 
 ## Stop conditions
 

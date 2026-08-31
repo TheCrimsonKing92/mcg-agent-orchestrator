@@ -2,6 +2,7 @@ using System.Diagnostics;
 using System.Security.Cryptography;
 using System.Text;
 using System.Text.Json;
+using Mcg.AgentOrchestrator.Core;
 
 namespace Mcg.AgentOrchestrator.Infrastructure;
 
@@ -11,6 +12,7 @@ internal interface IHermesAcpProcess : IDisposable
     TextReader StandardOutput { get; }
     TextReader StandardError { get; }
     int ExitCode { get; }
+    bool JobExitConfirmed { get; }
     void CompleteInput();
     void Kill();
     Task WaitForExitAsync(CancellationToken cancellationToken);
@@ -23,35 +25,66 @@ internal interface IHermesAcpProcessLauncher
 
 internal sealed class HermesAcpProcessLauncher : IHermesAcpProcessLauncher
 {
-    public IHermesAcpProcess Start(ProcessStartInfo startInfo) =>
-        new HermesAcpProcess(ProcessTreeGuiSuppression.Start(startInfo));
-
-    private sealed class HermesAcpProcess(Process process) : IHermesAcpProcess
+    public IHermesAcpProcess Start(ProcessStartInfo startInfo)
     {
+        var process = ProcessTreeGuiSuppression.Start(startInfo);
+        try
+        {
+            return new HermesAcpProcess(process, OwnedProcessGroup.Attach(process));
+        }
+        catch
+        {
+            try { process.Kill(entireProcessTree: true); } catch { }
+            process.Dispose();
+            throw;
+        }
+    }
+
+    private sealed class HermesAcpProcess(Process process, OwnedProcessGroup processGroup) : IHermesAcpProcess
+    {
+        private bool? _terminatedJobExitConfirmed;
+
         public TextWriter StandardInput => process.StandardInput;
         public TextReader StandardOutput => process.StandardOutput;
         public TextReader StandardError => process.StandardError;
         public int ExitCode => process.ExitCode;
+        public bool JobExitConfirmed => _terminatedJobExitConfirmed ??
+            (processGroup.TryGetActiveProcessIds(out var processIds) && processIds.Count == 0);
         public void CompleteInput() => process.StandardInput.Close();
         public void Kill()
         {
+            if (OperatingSystem.IsWindows() &&
+                processGroup.TryDuplicateAccountingHandle(out var accountingHandle))
+            {
+                using (accountingHandle)
+                {
+                    processGroup.Kill();
+                    _terminatedJobExitConfirmed = OwnedProcessGroup.WaitForJobExit(
+                        accountingHandle,
+                        TimeSpan.FromSeconds(10));
+                }
+
+                return;
+            }
+
+            try { processGroup.Kill(); } catch { }
             try
             {
-                if (!process.HasExited)
-                {
-                    process.Kill(entireProcessTree: true);
-                }
+                if (!process.HasExited) process.Kill(entireProcessTree: true);
             }
-            catch
-            {
-                // The dispatch/trial job remains the authoritative final reaper.
-            }
+            catch { }
+            _terminatedJobExitConfirmed = processGroup.TryGetActiveProcessIds(out var processIds) &&
+                processIds.Count == 0;
         }
 
         public Task WaitForExitAsync(CancellationToken cancellationToken) =>
             process.WaitForExitAsync(cancellationToken);
 
-        public void Dispose() => process.Dispose();
+        public void Dispose()
+        {
+            processGroup.Dispose();
+            process.Dispose();
+        }
     }
 }
 
@@ -89,17 +122,25 @@ internal sealed class HermesAcpLifecycle
         long outputTokens = 0;
         var exitCode = -1;
         var shutdownConfirmed = false;
+        var jobExitConfirmed = false;
         var permissionPolicyViolated = false;
         var unexpectedChild = false;
         IHermesAcpProcess? process = null;
         Task<string>? stderrDrain = null;
+        Task? stdoutDrain = null;
+        HermesAcpJsonRpcClient? rpc = null;
 
         try
         {
             await ValidatePinnedVersionAsync(plan, cancellationToken).ConfigureAwait(false);
             process = _launcher.Start(plan.StartInfo);
             stderrDrain = process.StandardError.ReadToEndAsync(cancellationToken);
-            var rpc = new HermesAcpJsonRpcClient(process.StandardInput, process.StandardOutput, progress);
+            rpc = new HermesAcpJsonRpcClient(
+                process.StandardInput,
+                process.StandardOutput,
+                progress,
+                request.Role,
+                request.WorkspaceRoot);
 
             _ = await rpc.CallAsync(
                 "initialize",
@@ -139,21 +180,30 @@ internal sealed class HermesAcpLifecycle
                 },
                 cancellationToken).ConfigureAwait(false);
             stopReason = RequireString(promptResponse, "stopReason", "Hermes ACP session/prompt response");
-            finalOutput = rpc.FinalOutput;
-            permissionPolicyViolated = rpc.PermissionPolicyViolated;
-            unexpectedChild = rpc.UnexpectedChild;
             if (promptResponse.TryGetProperty("usage", out var usage) && usage.ValueKind == JsonValueKind.Object)
             {
                 inputTokens = ReadInt64(usage, "inputTokens");
                 outputTokens = ReadInt64(usage, "outputTokens");
             }
 
+            stdoutDrain = rpc.DrainToEndAsync(cancellationToken);
             process.CompleteInput();
             shutdownConfirmed = await WaitForExitAsync(process, ShutdownTimeout, cancellationToken).ConfigureAwait(false);
             if (!shutdownConfirmed)
             {
                 process.Kill();
                 throw new TimeoutException("Hermes ACP server did not exit after stdin shutdown.");
+            }
+
+            await stdoutDrain.WaitAsync(ShutdownTimeout, cancellationToken).ConfigureAwait(false);
+            finalOutput = rpc.FinalOutput;
+            permissionPolicyViolated = rpc.PermissionPolicyViolated;
+            unexpectedChild = rpc.UnexpectedChild;
+            jobExitConfirmed = process.JobExitConfirmed;
+            if (!jobExitConfirmed)
+            {
+                process.Kill();
+                throw new InvalidOperationException("Hermes ACP owned process job still had live members after root exit.");
             }
 
             exitCode = process.ExitCode;
@@ -174,6 +224,7 @@ internal sealed class HermesAcpLifecycle
                 stopReason.Equals("end_turn", StringComparison.OrdinalIgnoreCase) && exitCode == 0,
                 exitCode,
                 shutdownConfirmed,
+                jobExitConfirmed,
                 stderr,
                 permissionPolicyViolated,
                 unexpectedChild,
@@ -200,6 +251,11 @@ internal sealed class HermesAcpLifecycle
                         exitCode = process.ExitCode;
                     }
 
+                    if (stdoutDrain is not null)
+                    {
+                        try { await stdoutDrain.WaitAsync(ShutdownTimeout).ConfigureAwait(false); } catch { }
+                    }
+
                     if (stderrDrain is not null)
                     {
                         stderr = await stderrDrain.WaitAsync(ShutdownTimeout).ConfigureAwait(false);
@@ -208,6 +264,14 @@ internal sealed class HermesAcpLifecycle
                 catch
                 {
                     shutdownConfirmed = false;
+                }
+
+                jobExitConfirmed = process.JobExitConfirmed;
+                if (rpc is not null)
+                {
+                    finalOutput = rpc.FinalOutput;
+                    permissionPolicyViolated = rpc.PermissionPolicyViolated;
+                    unexpectedChild = rpc.UnexpectedChild;
                 }
             }
 
@@ -221,6 +285,7 @@ internal sealed class HermesAcpLifecycle
                 completed: false,
                 exitCode,
                 shutdownConfirmed,
+                jobExitConfirmed,
                 stderr,
                 permissionPolicyViolated,
                 unexpectedChild,
@@ -271,6 +336,12 @@ internal sealed class HermesAcpLifecycle
             throw new InvalidOperationException($"Hermes version preflight exited {process.ExitCode}: {versionOutput.Trim()}");
         }
 
+        if (!process.JobExitConfirmed)
+        {
+            process.Kill();
+            throw new InvalidOperationException("Hermes version preflight left live members in its owned process job.");
+        }
+
         HermesAcpAdapter.ValidateVersionOutput(versionOutput);
     }
 
@@ -302,6 +373,7 @@ internal sealed class HermesAcpLifecycle
         bool completed,
         int exitCode,
         bool shutdownConfirmed,
+        bool jobExitConfirmed,
         string stderr,
         bool permissionPolicyViolated,
         bool unexpectedChild,
@@ -317,7 +389,7 @@ internal sealed class HermesAcpLifecycle
             completed,
             exitCode,
             shutdownConfirmed,
-            shutdownConfirmed,
+            jobExitConfirmed,
             Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(stderr))).ToLowerInvariant(),
             permissionPolicyViolated,
             unexpectedChild,
@@ -370,13 +442,29 @@ internal sealed class HermesAcpLifecycle
     }
 }
 
-internal sealed class HermesAcpJsonRpcClient(
-    TextWriter input,
-    TextReader output,
-    TextWriter progress)
+internal sealed class HermesAcpJsonRpcClient
 {
+    private readonly TextWriter _input;
+    private readonly TextReader _output;
+    private readonly TextWriter _progress;
+    private readonly AgentRole _role;
+    private readonly string _workspaceRoot;
     private readonly StringBuilder _finalOutput = new();
     private int _nextId;
+
+    public HermesAcpJsonRpcClient(
+        TextWriter input,
+        TextReader output,
+        TextWriter progress,
+        AgentRole role,
+        string workspaceRoot)
+    {
+        _input = input;
+        _output = output;
+        _progress = progress;
+        _role = role;
+        _workspaceRoot = Path.GetFullPath(workspaceRoot);
+    }
 
     public string FinalOutput => _finalOutput.ToString();
     public bool PermissionPolicyViolated { get; private set; }
@@ -393,7 +481,7 @@ internal sealed class HermesAcpJsonRpcClient(
 
         while (true)
         {
-            var line = await output.ReadLineAsync(cancellationToken).ConfigureAwait(false);
+            var line = await _output.ReadLineAsync(cancellationToken).ConfigureAwait(false);
             if (line is null)
             {
                 throw new EndOfStreamException($"Hermes ACP stdout closed while waiting for '{method}' response {id}.");
@@ -435,6 +523,34 @@ internal sealed class HermesAcpJsonRpcClient(
         }
     }
 
+    public async Task DrainToEndAsync(CancellationToken cancellationToken)
+    {
+        while (true)
+        {
+            var line = await _output.ReadLineAsync(cancellationToken).ConfigureAwait(false);
+            if (line is null)
+            {
+                return;
+            }
+
+            if (string.IsNullOrWhiteSpace(line))
+            {
+                continue;
+            }
+
+            using var document = JsonDocument.Parse(line);
+            var message = document.RootElement;
+            if (!message.TryGetProperty("method", out var incomingMethod) ||
+                incomingMethod.ValueKind != JsonValueKind.String)
+            {
+                throw new InvalidOperationException("Hermes ACP emitted an unexpected response after session/prompt completed.");
+            }
+
+            await HandleIncomingMethodAsync(message, incomingMethod.GetString()!, cancellationToken)
+                .ConfigureAwait(false);
+        }
+    }
+
     private async Task HandleIncomingMethodAsync(
         JsonElement message,
         string method,
@@ -453,13 +569,23 @@ internal sealed class HermesAcpJsonRpcClient(
 
         if (method.Equals("session/request_permission", StringComparison.Ordinal))
         {
-            var optionId = FindRejectOption(message);
+            var writeCapable = _role is AgentRole.Developer or AgentRole.Tester;
+            var workspaceContained = PermissionRequestIsWorkspaceContained(message);
+            var allow = writeCapable && workspaceContained;
+            var optionId = FindPermissionOption(message, allow ? "allow_once" : "reject_once", allow ? null : "reject_always");
+            if (writeCapable && !workspaceContained)
+            {
+                PermissionPolicyViolated = true;
+            }
+
             object result = optionId is null
                 ? new { outcome = new { outcome = "cancelled" } }
                 : new { outcome = new { outcome = "selected", optionId } };
             await WriteAsync(new { jsonrpc = "2.0", id = requestId.Clone(), result }, cancellationToken)
                 .ConfigureAwait(false);
-            await progress.WriteLineAsync("[hermes-acp] denied permission request.").ConfigureAwait(false);
+            await _progress.WriteLineAsync(allow
+                ? "[hermes-acp] allowed one workspace-contained permission request."
+                : "[hermes-acp] denied permission request.").ConfigureAwait(false);
             return;
         }
 
@@ -500,7 +626,53 @@ internal sealed class HermesAcpJsonRpcClient(
         }
     }
 
-    private static string? FindRejectOption(JsonElement message)
+    private bool PermissionRequestIsWorkspaceContained(JsonElement message)
+    {
+        if (!message.TryGetProperty("params", out var parameters) ||
+            !parameters.TryGetProperty("toolCall", out var toolCall) ||
+            toolCall.ValueKind != JsonValueKind.Object)
+        {
+            return false;
+        }
+
+        if (!toolCall.TryGetProperty("locations", out var locations))
+        {
+            return true;
+        }
+
+        if (locations.ValueKind != JsonValueKind.Array)
+        {
+            return false;
+        }
+
+        foreach (var location in locations.EnumerateArray())
+        {
+            var path = location.ValueKind == JsonValueKind.String
+                ? location.GetString()
+                : location.ValueKind == JsonValueKind.Object &&
+                  location.TryGetProperty("path", out var pathElement) &&
+                  pathElement.ValueKind == JsonValueKind.String
+                    ? pathElement.GetString()
+                    : null;
+            if (string.IsNullOrWhiteSpace(path))
+            {
+                return false;
+            }
+
+            var fullPath = Path.GetFullPath(path, _workspaceRoot);
+            var relative = Path.GetRelativePath(_workspaceRoot, fullPath);
+            if (relative == ".." ||
+                relative.StartsWith($"..{Path.DirectorySeparatorChar}", StringComparison.Ordinal) ||
+                Path.IsPathRooted(relative))
+            {
+                return false;
+            }
+        }
+
+        return true;
+    }
+
+    private static string? FindPermissionOption(JsonElement message, string primaryKind, string? fallbackKind)
     {
         if (!message.TryGetProperty("params", out var parameters) ||
             !parameters.TryGetProperty("options", out var options) ||
@@ -512,7 +684,8 @@ internal sealed class HermesAcpJsonRpcClient(
         foreach (var option in options.EnumerateArray())
         {
             var kind = option.TryGetProperty("kind", out var kindElement) ? kindElement.GetString() : null;
-            if (kind is not ("reject_once" or "reject_always"))
+            if (!string.Equals(kind, primaryKind, StringComparison.Ordinal) &&
+                (fallbackKind is null || !string.Equals(kind, fallbackKind, StringComparison.Ordinal)))
             {
                 continue;
             }
@@ -525,7 +698,7 @@ internal sealed class HermesAcpJsonRpcClient(
 
     private async Task WriteAsync(object message, CancellationToken cancellationToken)
     {
-        await input.WriteLineAsync(JsonSerializer.Serialize(message)).ConfigureAwait(false);
-        await input.FlushAsync(cancellationToken).ConfigureAwait(false);
+        await _input.WriteLineAsync(JsonSerializer.Serialize(message)).ConfigureAwait(false);
+        await _input.FlushAsync(cancellationToken).ConfigureAwait(false);
     }
 }

@@ -37,6 +37,7 @@ public sealed class HermesAcpTrialTests
                 "--sandbox", fixture.Sandbox,
                 "--provider", "OpenAI",
                 "--model", "gpt-test",
+                "--role", "Developer",
                 "--receipt", receiptPath
             ],
             output,
@@ -52,6 +53,7 @@ public sealed class HermesAcpTrialTests
         Assert.NotNull(observedRequest);
         Assert.Equal(promptPath, observedRequest.PromptPath);
         Assert.Equal(digest, observedRequest.ExpectedPromptSha256);
+        Assert.Equal(AgentRole.Developer, observedRequest.Role);
         Assert.Equal(receiptPath, observedReceiptPath);
         Assert.Equal(SuccessfulWorkerResult.Trim(), output.ToString().Trim());
         Assert.DoesNotContain("terminal receipt", output.ToString(), StringComparison.OrdinalIgnoreCase);
@@ -77,6 +79,7 @@ public sealed class HermesAcpTrialTests
                 "--sandbox", fixture.Sandbox,
                 "--provider", "OpenAI",
                 "--model", "gpt-test",
+                "--role", "Developer",
                 "--receipt", receiptPath
             ],
             TextWriter.Null,
@@ -98,7 +101,8 @@ public sealed class HermesAcpTrialTests
             fixture.Workspace,
             fixture.Sandbox,
             "gpt-test",
-            "OpenAI");
+            "OpenAI",
+            AgentRole.Developer);
         var version = new FakeHermesProcess(
             $"Hermes {HermesAcpAdapter.PinnedRelease} {HermesAcpAdapter.PinnedCommit}");
         var protocol = string.Join(Environment.NewLine,
@@ -124,6 +128,11 @@ public sealed class HermesAcpTrialTests
                 @params = new
                 {
                     sessionId = "session-1",
+                    toolCall = new
+                    {
+                        kind = "edit",
+                        locations = new[] { new { path = Path.Combine(fixture.Workspace, "changed.txt") } }
+                    },
                     options = new[]
                     {
                         new { optionId = "allow", kind = "allow_once" },
@@ -154,6 +163,12 @@ public sealed class HermesAcpTrialTests
                     stopReason = "end_turn",
                     usage = new { inputTokens = 12, outputTokens = 8, totalTokens = 20 }
                 }
+            }),
+            JsonSerializer.Serialize(new
+            {
+                jsonrpc = "2.0",
+                method = "session/update",
+                @params = new { sessionId = "session-1", update = new { sessionUpdate = "available_commands_update" } }
             })
         ]);
         var acp = new FakeHermesProcess(protocol);
@@ -184,9 +199,93 @@ public sealed class HermesAcpTrialTests
         Assert.Contains("\"method\":\"session/new\"", acp.Input, StringComparison.Ordinal);
         Assert.Contains("\"method\":\"session/prompt\"", acp.Input, StringComparison.Ordinal);
         Assert.Contains("protocol prompt", acp.Input, StringComparison.Ordinal);
-        Assert.Contains("\"optionId\":\"deny\"", acp.Input, StringComparison.Ordinal);
+        Assert.Contains("\"optionId\":\"allow\"", acp.Input, StringComparison.Ordinal);
         Assert.True(acp.InputCompleted);
+        Assert.True(acp.OutputReachedEnd);
         Assert.False(acp.Killed);
+    }
+
+    [Xunit.Theory]
+    [Xunit.InlineData(AgentRole.Developer, true, "allow", false)]
+    [Xunit.InlineData(AgentRole.Planner, true, "deny", false)]
+    [Xunit.InlineData(AgentRole.Developer, false, "deny", true)]
+    public async Task JsonRpcScopesPermissionToWriteCapableRoleAndWorkspace(
+        AgentRole role,
+        bool insideWorkspace,
+        string expectedOption,
+        bool expectedPolicyViolation)
+    {
+        using var fixture = new Fixture();
+        var requestedPath = insideWorkspace
+            ? Path.Combine(fixture.Workspace, "changed.txt")
+            : Path.Combine(fixture.Root, "outside.txt");
+        var input = new StringWriter();
+        var output = new StringReader(string.Join(Environment.NewLine,
+        [
+            JsonSerializer.Serialize(new
+            {
+                jsonrpc = "2.0",
+                id = 99,
+                method = "session/request_permission",
+                @params = new
+                {
+                    sessionId = "session-1",
+                    toolCall = new
+                    {
+                        kind = "edit",
+                        locations = new[] { new { path = requestedPath } }
+                    },
+                    options = new[]
+                    {
+                        new { optionId = "allow", kind = "allow_once" },
+                        new { optionId = "deny", kind = "reject_once" }
+                    }
+                }
+            }),
+            JsonSerializer.Serialize(new { jsonrpc = "2.0", id = 1, result = new { stopReason = "end_turn" } })
+        ]));
+        var rpc = new HermesAcpJsonRpcClient(
+            input,
+            output,
+            TextWriter.Null,
+            role,
+            fixture.Workspace);
+
+        _ = await rpc.CallAsync("session/prompt", new { }, TestContext.Current.CancellationToken);
+
+        Assert.Contains($"\"optionId\":\"{expectedOption}\"", input.ToString(), StringComparison.Ordinal);
+        Assert.Equal(expectedPolicyViolation, rpc.PermissionPolicyViolated);
+    }
+
+    [Xunit.Fact]
+    public async Task ProcessLauncherConfirmsOwnedJobExitForRealChild()
+    {
+        if (!OperatingSystem.IsWindows()) return;
+
+        var startInfo = new ProcessStartInfo
+        {
+            FileName = "cmd.exe",
+            UseShellExecute = false,
+            RedirectStandardInput = true,
+            RedirectStandardOutput = true,
+            RedirectStandardError = true,
+            CreateNoWindow = true
+        };
+        startInfo.ArgumentList.Add("/d");
+        startInfo.ArgumentList.Add("/c");
+        startInfo.ArgumentList.Add("exit");
+        startInfo.ArgumentList.Add("0");
+
+        using var process = new HermesAcpProcessLauncher().Start(startInfo);
+        process.CompleteInput();
+        var stdout = process.StandardOutput.ReadToEndAsync(TestContext.Current.CancellationToken);
+        var stderr = process.StandardError.ReadToEndAsync(TestContext.Current.CancellationToken);
+        await process.WaitForExitAsync(TestContext.Current.CancellationToken);
+        _ = await stdout;
+        _ = await stderr;
+
+        Assert.Equal(0, process.ExitCode);
+        Assert.True(process.JobExitConfirmed);
     }
 
     [Xunit.Fact]
@@ -201,7 +300,8 @@ public sealed class HermesAcpTrialTests
             fixture.Workspace,
             fixture.Sandbox,
             "gpt-test",
-            "OpenAI");
+            "OpenAI",
+            AgentRole.Developer);
         var version = new FakeHermesProcess(
             $"Hermes {HermesAcpAdapter.PinnedRelease} {HermesAcpAdapter.PinnedCommit}");
         var protocol = string.Join(Environment.NewLine,
@@ -214,7 +314,7 @@ public sealed class HermesAcpTrialTests
                 result = new { sessionId = "session-1", models = new { currentModelId = "Other:hidden-model" } }
             })
         ]);
-        var acp = new FakeHermesProcess(protocol, exitCode: 17);
+        var acp = new FakeHermesProcess(protocol, exitCode: 17, jobExitConfirmed: false);
         var receiptPath = Path.Combine(fixture.Sandbox, "terminal-failure.json");
 
         var error = await Assert.ThrowsAsync<InvalidOperationException>(() =>
@@ -230,7 +330,7 @@ public sealed class HermesAcpTrialTests
         Assert.NotNull(receipt);
         Assert.False(receipt.Completed);
         Assert.Contains("hidden model/provider fallback", receipt.Failure, StringComparison.OrdinalIgnoreCase);
-        Assert.True(receipt.JobExitConfirmed);
+        Assert.False(receipt.JobExitConfirmed);
         Assert.Equal(17, receipt.ExitCode);
         Assert.True(acp.Killed);
     }
@@ -281,7 +381,14 @@ public sealed class HermesAcpTrialTests
         var content = "literal `$(not-executed)` prompt";
         File.WriteAllText(prompt, content, new UTF8Encoding(false));
         var digest = Sha256(content);
-        var request = new HermesAcpRequest(prompt, digest, fixture.Workspace, fixture.Sandbox, "gpt-test", "OpenAI");
+        var request = new HermesAcpRequest(
+            prompt,
+            digest,
+            fixture.Workspace,
+            fixture.Sandbox,
+            "gpt-test",
+            "OpenAI",
+            AgentRole.Developer);
 
         var plan = new HermesAcpAdapter().Prepare(request);
 
@@ -306,7 +413,14 @@ public sealed class HermesAcpTrialTests
         using var fixture = new Fixture();
         var outside = Path.Combine(fixture.Root, "outside.md");
         File.WriteAllText(outside, "outside");
-        var request = new HermesAcpRequest(outside, Sha256("outside"), fixture.Workspace, fixture.Sandbox, "gpt-test", "OpenAI");
+        var request = new HermesAcpRequest(
+            outside,
+            Sha256("outside"),
+            fixture.Workspace,
+            fixture.Sandbox,
+            "gpt-test",
+            "OpenAI",
+            AgentRole.Developer);
 
         var outsideFailure = Assert.Throws<InvalidOperationException>(() => new HermesAcpAdapter().Prepare(request));
         Assert.Contains("inside the assigned worktree", outsideFailure.Message, StringComparison.Ordinal);
@@ -445,7 +559,11 @@ public sealed class HermesAcpTrialTests
         }
     }
 
-    private sealed class FakeHermesProcess(string output, string error = "", int exitCode = 0) : IHermesAcpProcess
+    private sealed class FakeHermesProcess(
+        string output,
+        string error = "",
+        int exitCode = 0,
+        bool jobExitConfirmed = true) : IHermesAcpProcess
     {
         private readonly StringWriter _input = new();
         private readonly StringReader _output = new(output);
@@ -455,7 +573,9 @@ public sealed class HermesAcpTrialTests
         public TextReader StandardOutput => _output;
         public TextReader StandardError => _error;
         public int ExitCode { get; } = exitCode;
+        public bool JobExitConfirmed { get; } = jobExitConfirmed;
         public string Input => _input.ToString();
+        public bool OutputReachedEnd { get; private set; }
         public bool InputCompleted { get; private set; }
         public bool Killed { get; private set; }
         public void CompleteInput() => InputCompleted = true;
@@ -463,6 +583,7 @@ public sealed class HermesAcpTrialTests
         public Task WaitForExitAsync(CancellationToken cancellationToken) => Task.CompletedTask;
         public void Dispose()
         {
+            OutputReachedEnd = _output.Peek() == -1;
             _input.Dispose();
             _output.Dispose();
             _error.Dispose();

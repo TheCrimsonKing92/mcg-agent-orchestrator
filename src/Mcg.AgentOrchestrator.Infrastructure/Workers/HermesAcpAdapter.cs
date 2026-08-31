@@ -1,6 +1,7 @@
 using System.Diagnostics;
 using System.Security.Cryptography;
 using System.Text.Json;
+using Mcg.AgentOrchestrator.Core;
 
 namespace Mcg.AgentOrchestrator.Infrastructure;
 
@@ -10,7 +11,8 @@ internal sealed record HermesAcpRequest(
     string WorkspaceRoot,
     string SandboxRoot,
     string ExpectedModel,
-    string ExpectedProvider);
+    string ExpectedProvider,
+    AgentRole Role);
 
 internal sealed record HermesAcpLaunchPlan(
     ProcessStartInfo StartInfo,

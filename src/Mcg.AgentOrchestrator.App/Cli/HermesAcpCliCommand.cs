@@ -1,4 +1,5 @@
 using Mcg.AgentOrchestrator.Infrastructure;
+using Mcg.AgentOrchestrator.Core;
 
 namespace Mcg.AgentOrchestrator.App.Cli;
 
@@ -6,7 +7,7 @@ internal static class HermesAcpCliCommand
 {
     public const string Usage =
         "Usage: hermes-acp-trial --confirm-live-hermes-start [--prompt <path>] [--prompt-sha256 <sha256>] " +
-        "[--workspace <path>] [--sandbox <path>] --provider <provider> --model <model> [--receipt <path>]. " +
+        "[--workspace <path>] [--sandbox <path>] --provider <provider> --model <model> --role <role> [--receipt <path>]. " +
         "Trial-compare may supply prompt path/hash through MCG_TRIAL_BRIEF_PATH/MCG_TRIAL_BRIEF_SHA256.";
 
     internal static async Task<HermesAcpTerminalReceipt> ExecuteAsync(
@@ -33,10 +34,13 @@ internal static class HermesAcpCliCommand
             (string.IsNullOrWhiteSpace(promptPath) ? null : Path.GetDirectoryName(Path.GetFullPath(promptPath)));
         var provider = ValueAfter(parts, "--provider");
         var model = ValueAfter(parts, "--model");
+        var roleValue = ValueAfter(parts, "--role");
 
         if (string.IsNullOrWhiteSpace(promptPath) || string.IsNullOrWhiteSpace(promptSha256) ||
             string.IsNullOrWhiteSpace(provider) || string.IsNullOrWhiteSpace(model) ||
-            string.IsNullOrWhiteSpace(sandboxValue))
+            string.IsNullOrWhiteSpace(sandboxValue) ||
+            !Enum.TryParse<AgentRole>(roleValue, ignoreCase: true, out var role) ||
+            !Enum.IsDefined(role))
         {
             throw new ArgumentException(Usage);
         }
@@ -53,7 +57,8 @@ internal static class HermesAcpCliCommand
             workspace,
             sandbox,
             model,
-            provider);
+            provider,
+            role);
         run ??= (candidate, path, progress, token) =>
             new HermesAcpLifecycle().RunAsync(candidate, path, progress, token);
 
