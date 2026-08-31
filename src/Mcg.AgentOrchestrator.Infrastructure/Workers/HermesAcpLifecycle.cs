@@ -625,10 +625,6 @@ internal sealed class HermesAcpJsonRpcClient
             var permittedTool = PermissionRequestIsPermittedTool(message);
             var allow = writeCapable && permittedTool;
             var optionId = FindPermissionOption(message, allow ? "allow_once" : "reject_once", allow ? null : "reject_always");
-            if (writeCapable && !permittedTool)
-            {
-                PermissionPolicyViolated = true;
-            }
 
             object result = optionId is null
                 ? new { outcome = new { outcome = "cancelled" } }

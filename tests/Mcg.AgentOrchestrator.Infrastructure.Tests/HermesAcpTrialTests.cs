@@ -212,7 +212,7 @@ public sealed class HermesAcpTrialTests
     [Xunit.Theory]
     [Xunit.InlineData(AgentRole.Developer, true, "allow", false)]
     [Xunit.InlineData(AgentRole.Planner, true, "deny", false)]
-    [Xunit.InlineData(AgentRole.Developer, false, "deny", true)]
+    [Xunit.InlineData(AgentRole.Developer, false, "deny", false)]
     public async Task JsonRpcScopesPermissionToWriteCapableRoleAndWorkspace(
         AgentRole role,
         bool insideWorkspace,
@@ -277,7 +277,7 @@ public sealed class HermesAcpTrialTests
         _ = await rpc.CallAsync("session/prompt", new { }, TestContext.Current.CancellationToken);
 
         Assert.Contains("\"optionId\":\"deny\"", input.ToString(), StringComparison.Ordinal);
-        Assert.True(rpc.PermissionPolicyViolated);
+        Assert.False(rpc.PermissionPolicyViolated);
     }
 
     [Xunit.Fact]
@@ -303,7 +303,7 @@ public sealed class HermesAcpTrialTests
         _ = await plannerRpc.CallAsync("session/prompt", new { }, TestContext.Current.CancellationToken);
 
         Assert.Contains("\"optionId\":\"deny\"", developerInput.ToString(), StringComparison.Ordinal);
-        Assert.True(developerRpc.PermissionPolicyViolated);
+        Assert.False(developerRpc.PermissionPolicyViolated);
         Assert.Contains("\"optionId\":\"deny\"", plannerInput.ToString(), StringComparison.Ordinal);
         Assert.False(plannerRpc.PermissionPolicyViolated);
     }
@@ -314,7 +314,7 @@ public sealed class HermesAcpTrialTests
     [Xunit.InlineData("inside")]
     [Xunit.InlineData("outside")]
     [Xunit.InlineData("git")]
-    public async Task JsonRpcExecutePermissionAlwaysFailsClosed(string? locationKind)
+    public async Task JsonRpcExecutePermissionIsDeniedWithoutRecordingAContainmentViolation(string? locationKind)
     {
         using var fixture = new Fixture();
         var location = locationKind switch
@@ -338,7 +338,19 @@ public sealed class HermesAcpTrialTests
         _ = await rpc.CallAsync("session/prompt", new { }, TestContext.Current.CancellationToken);
 
         Assert.Contains("\"optionId\":\"deny\"", input.ToString(), StringComparison.Ordinal);
-        Assert.True(rpc.PermissionPolicyViolated);
+        Assert.False(rpc.PermissionPolicyViolated);
+
+        var request = new HermesAcpRequest(
+            Path.Combine(fixture.Workspace, "brief.md"),
+            new string('a', 64),
+            fixture.Workspace,
+            fixture.Sandbox,
+            "gpt-test",
+            "OpenAI",
+            AgentRole.Developer);
+        HermesAcpAdapter.ValidateTerminalReceipt(
+            request,
+            ValidReceipt(request) with { PermissionPolicyViolated = rpc.PermissionPolicyViolated });
     }
 
     [Xunit.Theory]
@@ -360,7 +372,7 @@ public sealed class HermesAcpTrialTests
         _ = await rpc.CallAsync("session/prompt", new { }, TestContext.Current.CancellationToken);
 
         Assert.Contains("\"optionId\":\"deny\"", input.ToString(), StringComparison.Ordinal);
-        Assert.True(rpc.PermissionPolicyViolated);
+        Assert.False(rpc.PermissionPolicyViolated);
     }
 
     [Xunit.Theory]
@@ -386,6 +398,35 @@ public sealed class HermesAcpTrialTests
         _ = await rpc.CallAsync("session/prompt", new { }, TestContext.Current.CancellationToken);
 
         Assert.Contains("\"optionId\":\"deny\"", input.ToString(), StringComparison.Ordinal);
+        Assert.False(rpc.PermissionPolicyViolated);
+    }
+
+    [Xunit.Fact]
+    public async Task JsonRpcUnsupportedClientMethodRecordsContainmentViolation()
+    {
+        using var fixture = new Fixture();
+        var input = new StringWriter();
+        var output = new StringReader(string.Join(Environment.NewLine,
+        [
+            JsonSerializer.Serialize(new
+            {
+                jsonrpc = "2.0",
+                id = 99,
+                method = "filesystem/read",
+                @params = new { path = Path.Combine(fixture.Workspace, "secret.txt") }
+            }),
+            JsonSerializer.Serialize(new { jsonrpc = "2.0", id = 1, result = new { stopReason = "end_turn" } })
+        ]));
+        var rpc = new HermesAcpJsonRpcClient(
+            input,
+            output,
+            TextWriter.Null,
+            AgentRole.Developer,
+            fixture.Workspace);
+
+        _ = await rpc.CallAsync("session/prompt", new { }, TestContext.Current.CancellationToken);
+
+        Assert.Contains("\"code\":-32601", input.ToString(), StringComparison.Ordinal);
         Assert.True(rpc.PermissionPolicyViolated);
     }
 
