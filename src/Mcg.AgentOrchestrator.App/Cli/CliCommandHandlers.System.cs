@@ -607,6 +607,12 @@ internal static partial class CliCommandHandlers
                     selector => ResolveHistoricalTrial(context, selector));
                 return false;
 
+            case "hermes-acp-trial":
+                HermesAcpCliCommand.ExecuteAsync(parts, Console.Out, Console.Error)
+                    .GetAwaiter()
+                    .GetResult();
+                return false;
+
             case "architecture":
                 ConsoleViews.PrintArchitecture(BuildCliArchitectureReport(context));
                 return false;

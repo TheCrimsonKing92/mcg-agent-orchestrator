@@ -1,5 +1,6 @@
 using System.Diagnostics;
 using System.Security.Cryptography;
+using System.Text.Json;
 
 namespace Mcg.AgentOrchestrator.Infrastructure;
 
@@ -32,12 +33,19 @@ internal sealed record HermesAcpTerminalReceipt(
     string StandardErrorSha256,
     bool PermissionPolicyViolated,
     bool UnexpectedChild,
-    string FinalOutput);
+    string FinalOutput,
+    string? SessionId = null,
+    string? StopReason = null,
+    string? PinnedRelease = null,
+    string? PinnedCommit = null,
+    string? Failure = null);
 
 internal sealed class HermesAcpAdapter
 {
+    public const string TerminalReceiptFileName = "hermes-acp-terminal-receipt.json";
     public const string PinnedRelease = "v2026.8.27";
-    public const string PinnedCommit = "fcebd62163497e77e5de00d26d2ed86cb4ef8761";
+    public const string PinnedTagObject = "fcebd62163497e77e5de00d26d2ed86cb4ef8761";
+    public const string PinnedCommit = "5fc308a70719a83cccdbba4c0e39c23f5a8239d5";
 
     public HermesAcpLaunchPlan Prepare(HermesAcpRequest request)
     {
@@ -102,6 +110,31 @@ internal sealed class HermesAcpAdapter
             throw new InvalidOperationException("Hermes ACP launched an unexpected child process.");
         if (!WorkerResultParser.TryParseFields(receipt.FinalOutput, out _, out var error))
             throw new InvalidOperationException($"Hermes ACP final output did not contain an authoritative WORKER_RESULT: {error}");
+    }
+
+    public static void PersistTerminalReceipt(
+        HermesAcpRequest request,
+        string receiptPath,
+        HermesAcpTerminalReceipt receipt)
+    {
+        ArgumentNullException.ThrowIfNull(request);
+        ArgumentNullException.ThrowIfNull(receipt);
+        var fullPath = Path.GetFullPath(receiptPath);
+        var workspaceRoot = RequireDirectory(request.WorkspaceRoot, "workspace");
+        var sandboxRoot = RequireDirectory(request.SandboxRoot, "sandbox");
+        if (!IsWithin(fullPath, workspaceRoot) && !IsWithin(fullPath, sandboxRoot))
+        {
+            throw new InvalidOperationException(
+                "Hermes ACP terminal receipt must be inside the assigned worktree or per-run sandbox state.");
+        }
+
+        Directory.CreateDirectory(Path.GetDirectoryName(fullPath)!);
+        var temporaryPath = fullPath + $".{Guid.NewGuid():N}.tmp";
+        var json = JsonSerializer.Serialize(
+            receipt,
+            new JsonSerializerOptions(JsonSerializerDefaults.Web) { WriteIndented = true });
+        File.WriteAllText(temporaryPath, json + Environment.NewLine);
+        File.Move(temporaryPath, fullPath, overwrite: true);
     }
 
     public static void ValidateVersionOutput(string versionOutput)

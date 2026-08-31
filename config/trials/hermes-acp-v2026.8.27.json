@@ -6,10 +6,11 @@
   "landingAuthority": false,
   "pin": {
     "release": "v2026.8.27",
-    "commit": "fcebd62163497e77e5de00d26d2ed86cb4ef8761",
+    "tagObject": "fcebd62163497e77e5de00d26d2ed86cb4ef8761",
+    "commit": "5fc308a70719a83cccdbba4c0e39c23f5a8239d5",
     "requiredVersionEvidence": [
       "v2026.8.27",
-      "fcebd62163497e77e5de00d26d2ed86cb4ef8761"
+      "5fc308a70719a83cccdbba4c0e39c23f5a8239d5"
     ]
   },
   "requiredControls": {

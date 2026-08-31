@@ -259,6 +259,7 @@ internal sealed class TrialHarnessComparison(ITrialRootHost host)
                 state.StandardOutput = CaptureMetadata(launch.StdoutPath);
                 state.StandardError = CaptureMetadata(launch.StderrPath);
                 state.WorkerResult = InspectWorkerResult(launch.StdoutPath);
+                CaptureHermesTerminalReceipt(state, session);
             }
             catch (Exception ex)
             {
@@ -361,6 +362,24 @@ internal sealed class TrialHarnessComparison(ITrialRootHost host)
             0);
     }
 
+    private static void CaptureHermesTerminalReceipt(HarnessState state, ITrialRootSession session)
+    {
+        var source = Path.Combine(session.HarnessStatePath, HermesAcpAdapter.TerminalReceiptFileName);
+        if (!File.Exists(source))
+        {
+            return;
+        }
+
+        var receipt = JsonSerializer.Deserialize<HermesAcpTerminalReceipt>(File.ReadAllText(source), ReceiptJson)
+            ?? throw new InvalidDataException("Hermes ACP terminal receipt was empty.");
+        var destination = Path.Combine(
+            Path.GetDirectoryName(state.ReceiptPath)!,
+            HermesAcpAdapter.TerminalReceiptFileName);
+        File.Copy(source, destination, overwrite: true);
+        state.HermesTerminalReceiptPath = destination;
+        state.HermesTerminalReceipt = receipt;
+    }
+
     private static HarnessReceiptPaths CreateHarnessReceiptPaths(string runDirectory, string harnessName)
     {
         var directory = Path.Combine(runDirectory, harnessName);
@@ -389,7 +408,9 @@ internal sealed class TrialHarnessComparison(ITrialRootHost host)
         state.Diagnostics.ToArray(),
         state.WorkloadIdentity,
         state.ArmIdentity,
-        state.HistoricalTiming);
+        state.HistoricalTiming,
+        state.HermesTerminalReceiptPath,
+        state.HermesTerminalReceipt);
 
     private static void Validate(TrialComparisonRequest request)
     {
@@ -490,6 +511,8 @@ internal sealed class TrialHarnessComparison(ITrialRootHost host)
         public TrialOutputMetadata? StandardOutput { get; set; }
         public TrialOutputMetadata? StandardError { get; set; }
         public TrialWorkerResultEvidence WorkerResult { get; set; } = new(TrialWorkerResultStatus.NotInspected, 0);
+        public string? HermesTerminalReceiptPath { get; set; }
+        public HermesAcpTerminalReceipt? HermesTerminalReceipt { get; set; }
     }
 
     private sealed record HarnessReceiptPaths(string ReceiptPath);

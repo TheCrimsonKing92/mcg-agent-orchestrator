@@ -469,6 +469,9 @@ internal static class CliCommandHelp
             ["project"] = Flags("--root"),
             ["status"] = Flags("--tasks-only"),
             ["trial-compare"] = Flags("--spec", "--receipts", "--timeout-seconds", "--format"),
+            ["hermes-acp-trial"] = Flags(
+                "--confirm-live-hermes-start", "--prompt", "--prompt-sha256", "--workspace",
+                "--sandbox", "--provider", "--model", "--receipt"),
             ["provider-smoke"] = Flags("--confirm-all", "--confirm-paid-smoke"),
             ["prototype-ui"] = DashboardFlags(),
             ["serve-dashboard"] = DashboardFlags(),

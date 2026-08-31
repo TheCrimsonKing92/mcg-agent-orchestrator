@@ -5,10 +5,11 @@ Hermes ACP is registered as a typed, non-self-committing capability for an opt-i
 ## Immutable candidate
 
 - Release: `v2026.8.27`
-- Commit: `fcebd62163497e77e5de00d26d2ed86cb4ef8761`
+- Annotated tag object: `fcebd62163497e77e5de00d26d2ed86cb4ef8761`
+- Peeled commit: `5fc308a70719a83cccdbba4c0e39c23f5a8239d5`
 - Policy: `config/trials/hermes-acp-v2026.8.27.json`
 
-Both release and commit must appear in locally captured version output before a model call. A tag-only, branch, mutable package range, mismatched executable, or hidden model/provider fallback fails preflight.
+Both release and peeled commit must appear in locally captured version output before a model call. A tag-object-only, branch, mutable package range, mismatched executable, or hidden model/provider fallback fails preflight.
 
 ## Authority and confinement
 
@@ -20,6 +21,12 @@ The checked adapter reads the existing prompt file as bytes, verifies its SHA-25
 
 The pinned upstream surface does not document enforceable delegation or code-execution disable switches, nor ACP terminal usage equivalent to one-shot `--usage-file`. Those are unresolved live preconditions. Until a separately reviewed wrapper proves both from ACP protocol receipts, the disposition remains `TrialOnly` / not adopted.
 
+## Checked operator command
+
+`hermes-acp-trial` is the checked one-shot ACP client owned by the App. It requires `--confirm-live-hermes-start`, reads the prompt from `--prompt` or `MCG_TRIAL_BRIEF_PATH`, verifies `--prompt-sha256` or `MCG_TRIAL_BRIEF_SHA256`, starts `hermes --safe-mode acp`, denies ACP permission requests, and writes `hermes-acp-terminal-receipt.json` inside the supplied sandbox. Only the final authoritative worker output is written to stdout; JSON-RPC progress and the receipt location go to stderr.
+
+Invoke it only as a harness inside the existing `trial-compare` contained root; the command rejects a direct invocation or paths outside that root. A trial harness entry uses the checked launcher as `fileName`, with arguments `hermes-acp-trial --confirm-live-hermes-start --provider <provider> --model <model>`; `trial-compare` supplies the prompt path/hash and starts the whole tree at Low integrity in a no-breakaway job. The comparator copies the typed terminal receipt into the durable per-arm receipt directory before destroying the trial root.
+
 ## Authorized evaluation sequence
 
 Only after separate install/auth/live-run authorization:
@@ -30,6 +37,8 @@ Only after separate install/auth/live-run authorization:
 4. Retain raw per-arm `result.json`, `comparison.json`, usage, identity, cancellation, and teardown receipts in the operator-selected artifact directory. Record hashes in the SQLite dogfood log; do not use `.scratch` as durable storage.
 5. Feed normalized evidence to `HermesTrialDecisionEngine`. Incomplete evidence yields `TrialOnly`; an immediate rejection yields `Rejected`; passing evidence yields only `EligibleForOperatorAdoption`. It never enables a profile or adopts a default.
 6. Route the changed candidate and receipts through normal Tester, Acceptance, and cross-family Reviewer gates. A separate authorized goal is required for any default profile, role assignment, installation, authentication, or adoption.
+
+Automated tests prove command-to-lifecycle wiring, JSON-RPC framing, fail-closed permission handling, usage/model/provider validation, and typed receipt persistence with a scripted ACP process. They do not prove that the pinned executable is installed, authenticated, compatible with the configured provider, or clean across real Windows process teardown. The operator must run the authorized evaluation sequence above and retain those live receipts separately.
 
 ## Stop conditions
 

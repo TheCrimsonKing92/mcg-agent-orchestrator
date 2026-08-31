@@ -125,8 +125,8 @@ public static class WorkerProfileDiagnostics
             ProviderKind.AnthropicClaudeCli => EvaluateClaudePatchCapability(normalized),
             ProviderKind.OpenAICodexCli or ProviderKind.OpenAICodexSpark or ProviderKind.OpenAICodexOssCli => EvaluateCodexPatchCapability(normalized),
             ProviderKind.HermesAcp => new WorkerProfilePatchCapability(
-                false,
-                "Hermes ACP is trial-only; its approvals are not a patch-capability boundary and it cannot self-commit."),
+                true,
+                "Hermes ACP may patch only inside the orchestrator sandbox; CanSelfCommit=false keeps commit and landing authority with the orchestrator."),
             _ => new WorkerProfilePatchCapability(
                 true,
                 "Provider is not a typed Codex or Claude launcher; patch capability cannot be inferred beyond executing the prompt.")
