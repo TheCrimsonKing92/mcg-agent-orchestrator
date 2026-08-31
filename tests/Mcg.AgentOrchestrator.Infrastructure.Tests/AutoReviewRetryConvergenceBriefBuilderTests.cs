@@ -164,6 +164,40 @@ public sealed class AutoReviewRetryConvergenceBriefBuilderTests : WorkerDispatch
         Assert.DoesNotContain("Operator-owned description", obligations, StringComparison.Ordinal);
     }
 
+    [Xunit.Fact]
+    public void BuildConvergenceBriefFailsWithOwnershipSpecificOutcomeWhenTargetOwnsNoOpenFinding()
+    {
+        var kernel = new AgentOrchestratorKernel();
+        var goal = GoalLifecycleCommands.CreateAndActivateGoal(
+            kernel,
+            AgentCatalog.Default().Agents,
+            "Reject impossible retry ownership");
+        var developer = goal.Tasks.Single(task => task.RequiredRole == AgentRole.Developer);
+        var reviewer = goal.Tasks.Single(task => task.RequiredRole == AgentRole.Reviewer);
+        RecordReviewerRound(
+            kernel,
+            goal,
+            reviewer,
+            "needs-work",
+            [
+                new ReviewFinding(
+                    "ACCEPTANCE",
+                    ReviewFindingState.Open,
+                    new ReviewFindingLocation("tests/A.cs", "A.Tests"),
+                    "Acceptance must execute this receipt.",
+                    Category: FindingCategory.AcceptanceOwned)
+            ],
+            []);
+
+        var exception = Assert.Throws<ReviewFindingConvergenceException>(() =>
+            AutoReviewRetryConvergenceBriefBuilder.BuildConvergenceBrief(
+                goal, developer, reviewer, "findings", "verdict=needs-work",
+                AgentRole.Developer, 1, "review.out", ["tests/A.cs"]));
+
+        Assert.Equal(ReviewFindingConvergence.NoOpenFindingsForTargetViolationCode, exception.Code);
+        Assert.Contains("none are owned by retry target Developer", exception.Message, StringComparison.Ordinal);
+    }
+
     [Xunit.Fact(DisplayName = "AutoReviewRetryConvergenceBriefBuilder_orders_spec_findings_and_preserves_legacy_shape")]
     public void OrdersSpecFindingsAndPreservesLegacyCategorylessShape()
     {

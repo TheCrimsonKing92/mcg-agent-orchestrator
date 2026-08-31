@@ -2194,6 +2194,51 @@ internal sealed partial class ConductorDriver
 
         var findingRoundFingerprint = BuildFindingRoundFingerprint(requestingTask, round);
 
+        if (requestingTask.RequiredRole == AgentRole.Reviewer)
+        {
+            var openBlockingFindings = ReviewFindings.GetOpenBlockingFindings(
+                mergedFindings.Count > 0 ? mergedFindings : round.Findings,
+                goal.EffectiveAcceptanceCriteriaCorrections);
+            var writableBlockerIds = ReviewFindingRouting
+                .Project(openBlockingFindings)
+                .Where(projection => projection.TargetRole == AgentRole.Developer)
+                .Select(projection => projection.Finding.StableId)
+                .Distinct(StringComparer.Ordinal)
+                .OrderBy(id => id, StringComparer.Ordinal)
+                .ToArray();
+            var reviewedCandidateSha = requestingTask.LastVerification?.ReviewedCommit?.Trim();
+            var requestTargetsCurrentCandidate =
+                !candidateShaAvailable ||
+                !ConductorGitRevisionReader.IsValid(reviewedCandidateSha) ||
+                string.Equals(candidateSha, reviewedCandidateSha, StringComparison.OrdinalIgnoreCase);
+            if (writableBlockerIds.Length > 0 && requestTargetsCurrentCandidate)
+            {
+                var reason = candidateShaAvailable
+                    ? "unresolved-writable-blockers-on-unchanged-candidate"
+                    : "candidate-sha-unavailable-with-unresolved-writable-blockers";
+                foreach (var requestIdentity in requestingFindings
+                             .Select(finding => BuildFindingEvidenceIdentity(finding.EvidenceRequest!))
+                             .Distinct(StringComparer.Ordinal))
+                {
+                    var requestId = CreateFindingEvidenceRequestId(requestIdentity);
+                    _recordFindingEvidenceSuppressed(
+                        goal.Id,
+                        requestingTask.Id,
+                        telemetryCandidateSha,
+                        writableBlockerIds,
+                        requestId,
+                        AgentRole.Developer,
+                        reason,
+                        CreateFindingEvidenceSuppressionIdentity(
+                            telemetryCandidateSha,
+                            requestIdentity,
+                            writableBlockerIds));
+                }
+
+                return false;
+            }
+        }
+
         var groups = new List<FindingEvidenceRequestGroup>();
         var normalizationRefused = false;
         foreach (var finding in requestingFindings)
@@ -2250,50 +2295,6 @@ internal sealed partial class ConductorDriver
         if (runnable is null)
         {
             return false;
-        }
-
-        if (requestingTask.RequiredRole == AgentRole.Reviewer)
-        {
-            var openBlockingFindings = ReviewFindings.GetOpenBlockingFindings(
-                mergedFindings.Count > 0 ? mergedFindings : round.Findings,
-                goal.EffectiveAcceptanceCriteriaCorrections);
-            var writableBlockerIds = ReviewFindingRouting
-                .Project(openBlockingFindings)
-                .Where(projection => projection.TargetRole == AgentRole.Developer)
-                .Select(projection => projection.Finding.StableId)
-                .Distinct(StringComparer.Ordinal)
-                .OrderBy(id => id, StringComparer.Ordinal)
-                .ToArray();
-            var reviewedCandidateSha = requestingTask.LastVerification?.ReviewedCommit?.Trim();
-            var requestTargetsCurrentCandidate =
-                !candidateShaAvailable ||
-                !ConductorGitRevisionReader.IsValid(reviewedCandidateSha) ||
-                string.Equals(candidateSha, reviewedCandidateSha, StringComparison.OrdinalIgnoreCase);
-            if (writableBlockerIds.Length > 0 && requestTargetsCurrentCandidate)
-            {
-                var reason = candidateShaAvailable
-                    ? "unresolved-writable-blockers-on-unchanged-candidate"
-                    : "candidate-sha-unavailable-with-unresolved-writable-blockers";
-                foreach (var group in groups)
-                {
-                    var requestId = CreateFindingEvidenceRequestId(group.Identity);
-                    var suppressionIdentity = CreateFindingEvidenceSuppressionIdentity(
-                        telemetryCandidateSha,
-                        group.Identity,
-                        writableBlockerIds);
-                    _recordFindingEvidenceSuppressed(
-                        goal.Id,
-                        requestingTask.Id,
-                        telemetryCandidateSha,
-                        writableBlockerIds,
-                        requestId,
-                        AgentRole.Developer,
-                        reason,
-                        suppressionIdentity);
-                }
-
-                return false;
-            }
         }
 
         if (!candidateShaAvailable)
@@ -2744,7 +2745,7 @@ internal sealed partial class ConductorDriver
         selection.TestProject + ":" + selection.TestClass;
 
     private static string BuildFindingEvidenceIdentity(FindingEvidenceRequest request) =>
-        string.Join("|", request.Selections.Select(selection => $"{selection.TestProject}:{selection.TestClass}"));
+        string.Join("|", (request.Selections ?? []).Select(selection => $"{selection.TestProject}:{selection.TestClass}"));
 
     private static string BuildFindingRoundFingerprint(TaskSpec requestingTask, ReviewFindingRound round)
     {
@@ -2972,7 +2973,10 @@ internal sealed partial class ConductorDriver
             }
 
             var developerFindings = member.Findings.Where(finding =>
-                finding.Category is not (FindingCategory.OperatorOwned or FindingCategory.SpecDefect) &&
+                finding.Category is not (
+                    FindingCategory.OperatorOwned or
+                    FindingCategory.SpecDefect or
+                    FindingCategory.AcceptanceOwned) &&
                 IsDeveloperOwnedFindingAnchor(finding.Location.File));
             foreach (var finding in developerFindings)
             {

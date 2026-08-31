@@ -111,7 +111,16 @@ internal static class AutoReviewRetryConvergenceBriefBuilder
         var accepted = findings
             .Where(item => item.Finding.State == ReviewFindingState.Resolved)
             .ToArray();
-        if (open.Length == 0)
+        if (open.Length == 0 && allOpen.Length > 0)
+        {
+            throw new ReviewFindingConvergenceException(
+                ReviewFindingConvergence.NoOpenFindingsForTargetViolationCode,
+                allOpen.Length,
+                0,
+                $"Reviewer verdict=needs-work has {allOpen.Length} open blocking finding(s), but none are owned by retry target {targetRole}; route to the feasible finding owner instead.");
+        }
+
+        if (allOpen.Length == 0)
         {
             // This fires when the merged finding state carries no open BLOCKING finding, but a reviewer that
             // submitted several can still land here if its findings were lost between parse and this read -
