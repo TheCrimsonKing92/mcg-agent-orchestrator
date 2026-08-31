@@ -3,6 +3,38 @@ using Mcg.AgentOrchestrator.Core;
 
 public sealed class GoalLifecycleTests
 {
+    [Xunit.Fact(DisplayName = "RetryTask_operator_feedback_replaces_prior_automatic_feedback_without_consuming_automatic_retry_budget")]
+    public void RetryTaskOperatorFeedbackReplacesPriorAutomaticFeedback()
+    {
+        var kernel = new AgentOrchestratorKernel(new FakeClock());
+        var goal = kernel.CreateGoal(
+            "Deliver the current operator correction",
+            [new TaskSpec(TaskId.New(), "Implement", AgentRole.Developer)]);
+        kernel.ActivateGoal(goal.Id, DefaultAgents());
+        var task = goal.Tasks.Single();
+        task.RecordCriterionRetryFeedback(["stale source-size-ratchet diagnosis"]);
+
+        kernel.RetryTaskWithAuthoritativeFeedback(
+            goal.Id,
+            task.Id,
+            "The source-size diagnosis is obsolete; apply the current four findings.",
+            RetryCause.NewSourceFinding);
+
+        Assert.Equal(
+            ["The source-size diagnosis is obsolete; apply the current four findings."],
+            task.CriterionRetryFeedback);
+        Assert.Equal(
+            "The source-size diagnosis is obsolete; apply the current four findings.",
+            task.AcceptedRetryFeedback?.Message);
+        Assert.Equal(0, task.CriterionRetryCount);
+        Assert.Equal(0, goal.AutomaticAcceptanceRetryCount);
+
+        var restored = AgentOrchestratorKernel.FromSnapshot(kernel.ExportSnapshot(), new FakeClock());
+        Assert.Equal(
+            "The source-size diagnosis is obsolete; apply the current four findings.",
+            restored.GetTask(goal.Id, task.Id).AcceptedRetryFeedback?.Message);
+    }
+
     [Xunit.Fact(DisplayName = "RetryTask_requires_an_explicit_typed_cause")]
     public void RetryTaskRequiresExplicitTypedCause()
     {

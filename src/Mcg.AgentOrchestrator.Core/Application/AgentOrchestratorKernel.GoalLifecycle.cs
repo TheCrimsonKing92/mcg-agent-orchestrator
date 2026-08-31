@@ -424,7 +424,26 @@ public sealed partial class AgentOrchestratorKernel
         string message,
         RetryCause retryCause,
         bool invalidateDownstream = true,
-        RetryRoundKind? retryRoundKind = null)
+        RetryRoundKind? retryRoundKind = null) =>
+        RetryTaskCore(goalId, taskId, message, retryCause, invalidateDownstream, retryRoundKind, authoritativeRetryFeedback: false);
+
+    public TaskSpec RetryTaskWithAuthoritativeFeedback(
+        GoalId goalId,
+        TaskId taskId,
+        string message,
+        RetryCause retryCause,
+        bool invalidateDownstream = true,
+        RetryRoundKind? retryRoundKind = null) =>
+        RetryTaskCore(goalId, taskId, message, retryCause, invalidateDownstream, retryRoundKind, authoritativeRetryFeedback: true);
+
+    private TaskSpec RetryTaskCore(
+        GoalId goalId,
+        TaskId taskId,
+        string message,
+        RetryCause retryCause,
+        bool invalidateDownstream,
+        RetryRoundKind? retryRoundKind,
+        bool authoritativeRetryFeedback)
     {
         var goal = GetGoal(goalId);
         var task = goal.FindTask(taskId);
@@ -453,6 +472,11 @@ public sealed partial class AgentOrchestratorKernel
         var retryAt = _clock.UtcNow;
         var priorCandidate = task.LastDispatch?.ResultCommit;
         ResetTaskForRetry(task, retryAt, retryCause, retryRoundKind);
+        if (authoritativeRetryFeedback)
+        {
+            task.RecordCriterionRetryFeedback([retryMessage]);
+            task.RecordAcceptedRetryFeedback(retryMessage, retryAt);
+        }
         RecordEffectiveAcceptanceCriteriaCorrections(goal, taskId, ProgressKind.TaskRetried, retryMessage);
         Append(goal, taskId, ProgressKind.TaskRetried, retryMessage);
         if (invalidateDownstream)

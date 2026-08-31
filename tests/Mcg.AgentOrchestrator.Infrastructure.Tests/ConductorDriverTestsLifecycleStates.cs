@@ -547,7 +547,7 @@ public sealed partial class ConductorDriverTestsLifecycleStates
             {
                 retryCalled = true;
                 retryMessage = message;
-                return kernel.RetryTask(goalId, taskId, message);
+                return kernel.RetryTask(goalId, taskId, message, RetryCause.Unknown);
             },
             recordCriterionRetryFeedback: kernel.RecordCriterionRetryFeedback,
             land: g =>
@@ -603,7 +603,7 @@ public sealed partial class ConductorDriverTestsLifecycleStates
             retryTask: (goalId, taskId, message) =>
             {
                 retryMessage = message;
-                return kernel.RetryTask(goalId, taskId, message);
+                return kernel.RetryTask(goalId, taskId, message, RetryCause.Unknown);
             },
             recordCriterionRetryFeedback: kernel.RecordCriterionRetryFeedback,
             land: g =>
@@ -672,7 +672,7 @@ public sealed partial class ConductorDriverTestsLifecycleStates
                 retryTask: (goalId, taskId, message) =>
                 {
                     retryMessage = message;
-                    return kernel.RetryTask(goalId, taskId, message);
+                    return kernel.RetryTask(goalId, taskId, message, RetryCause.Unknown);
                 },
                 recordCriterionRetryFeedback: kernel.RecordCriterionRetryFeedback);
 
@@ -711,7 +711,7 @@ public sealed partial class ConductorDriverTestsLifecycleStates
             retryTask: (goalId, taskId, message) =>
             {
                 retryMessage = message;
-                return kernel.RetryTask(goalId, taskId, message);
+                return kernel.RetryTask(goalId, taskId, message, RetryCause.Unknown);
             },
             recordCriterionRetryFeedback: kernel.RecordCriterionRetryFeedback);
 
@@ -743,7 +743,7 @@ public sealed partial class ConductorDriverTestsLifecycleStates
             retryTask: (goalId, taskId, message) =>
             {
                 retryCalled = true;
-                return kernel.RetryTask(goalId, taskId, message);
+                return kernel.RetryTask(goalId, taskId, message, RetryCause.Unknown);
             },
             land: g =>
             {
@@ -800,7 +800,7 @@ public sealed partial class ConductorDriverTestsLifecycleStates
             retryTask: (goalId, taskId, message) =>
             {
                 retryCalled = true;
-                return kernel.RetryTask(goalId, taskId, message);
+                return kernel.RetryTask(goalId, taskId, message, RetryCause.Unknown);
             },
             land: g =>
             {
@@ -860,7 +860,7 @@ public sealed partial class ConductorDriverTestsLifecycleStates
             retryTask: (goalId, taskId, message) =>
             {
                 retryCalled = true;
-                return kernel.RetryTask(goalId, taskId, message);
+                return kernel.RetryTask(goalId, taskId, message, RetryCause.Unknown);
             },
             recordCriterionRetryFeedback: kernel.RecordCriterionRetryFeedback,
             recordAcceptanceFailure: (heldGoal, checks, branch, main, attributions, attestation) =>
@@ -927,7 +927,7 @@ public sealed partial class ConductorDriverTestsLifecycleStates
             retryTask: (goalId, taskId, message) =>
             {
                 retryCalled = true;
-                return kernel.RetryTask(goalId, taskId, message);
+                return kernel.RetryTask(goalId, taskId, message, RetryCause.Unknown);
             },
             recordCriterionRetryFeedback: kernel.RecordCriterionRetryFeedback);
 
@@ -961,7 +961,7 @@ public sealed partial class ConductorDriverTestsLifecycleStates
             retryTask: (goalId, taskId, message) =>
             {
                 retryMessage = message;
-                return kernel.RetryTask(goalId, taskId, message);
+                return kernel.RetryTask(goalId, taskId, message, RetryCause.Unknown);
             },
             recordCriterionRetryFeedback: kernel.RecordCriterionRetryFeedback);
 
@@ -993,7 +993,7 @@ public sealed partial class ConductorDriverTestsLifecycleStates
             retryTask: (goalId, taskId, message) =>
             {
                 retryMessage = message;
-                return kernel.RetryTask(goalId, taskId, message);
+                return kernel.RetryTask(goalId, taskId, message, RetryCause.Unknown);
             },
             recordCriterionRetryFeedback: kernel.RecordCriterionRetryFeedback);
 
@@ -1320,7 +1320,7 @@ public sealed partial class ConductorDriverTestsLifecycleStates
             retryTask: (goalId, taskId, message) =>
             {
                 retryCalled = true;
-                return kernel.RetryTask(goalId, taskId, message);
+                return kernel.RetryTask(goalId, taskId, message, RetryCause.Unknown);
             },
             writeEscalation: (_, _, reason) => { escalationReason = reason; });
 

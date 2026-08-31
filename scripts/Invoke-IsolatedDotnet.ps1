@@ -1702,7 +1702,9 @@ function Invoke-FocusedTestMode {
                 trackedDirtyFiles = @($after.DirtyFiles)
                 unchanged = $null -ne $receipt.trackedDirtyStateDigest -and $receipt.trackedDirtyStateDigest -eq $after.DirtyDigest -and $receipt.commit -eq $after.Commit
             }
-            if ($null -ne $receipt.trackedDirtyStateDigest -and -not $receipt.worktreeStateAfter.unchanged) {
+            if ($null -ne $receipt.trackedDirtyStateDigest -and
+                -not $receipt.worktreeStateAfter.unchanged -and
+                -not ($receipt.outcome -eq "FAIL" -and $receipt.reason -eq "test-failures")) {
                 $receipt.outcome = "BLOCKED"
                 $receipt.exitCode = 5
                 $receipt.reason = "worktree-state-changed"

@@ -119,7 +119,8 @@ public sealed record TaskSnapshot(
     RetryCause PendingRetryCause = RetryCause.Unknown,
     IReadOnlyList<RetryAdmissionReceipt>? RetryAdmissionHistory = null,
     RetryAdmissionRoute? RetryAdmissionHoldRoute = null,
-    ReviewFindingRepairCheckpoint? PendingReviewFindingRepairCheckpoint = null);
+    ReviewFindingRepairCheckpoint? PendingReviewFindingRepairCheckpoint = null,
+    AcceptedRetryFeedback? AcceptedRetryFeedback = null);
 
 public sealed record TaskExecutionSnapshot(
     string AgentId,

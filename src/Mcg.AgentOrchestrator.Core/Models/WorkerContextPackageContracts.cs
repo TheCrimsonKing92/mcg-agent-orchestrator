@@ -332,6 +332,16 @@ public sealed record MandatoryContextFileDescriptor(
     AgentRole TargetRole,
     IReadOnlyList<AgentRole> RoleVisibility);
 
+public sealed record WorkerRetryFeedbackPromptReceipt(
+    string LogicalIdentity,
+    string AcceptedRetryTaskId,
+    DateTimeOffset AcceptedRetryOccurredAt,
+    string AcceptedFeedbackSha256,
+    string TypedArtifactSha256,
+    string RenderedProjectionSha256,
+    string GeneratedPromptSha256,
+    ContextDeliveryMode DeliveryMode);
+
 public sealed record WorkerContextPackageReceipt(
     string SemanticPackageId,
     IReadOnlyList<WorkerContextSectionReceipt> Sections,
@@ -357,7 +367,8 @@ public sealed record WorkerContextPackageReceipt(
     int BaselinePromptCharacters = 0,
     int BaselineDeliveredArtifactBytes = 0,
     int BaselineToolTranscriptCharacters = 0,
-    int BaselineModelInputTokenEstimate = 0)
+    int BaselineModelInputTokenEstimate = 0,
+    WorkerRetryFeedbackPromptReceipt? RetryFeedbackPromptReceipt = null)
 {
     public bool HasEarlyConvergenceEvidenceFor(string? candidateSha)
     {

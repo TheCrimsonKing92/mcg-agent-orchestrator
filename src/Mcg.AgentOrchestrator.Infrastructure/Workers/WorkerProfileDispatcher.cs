@@ -291,10 +291,11 @@ public static class WorkerProfileDispatcher
             effectiveReviewRetryCap,
             emitTypedSourceBoundaries: usesTypedContextPackage);
         WorkerContextPackageReceipt? contextPackageReceipt = null;
+        WorkerContextPackage? contextPackage = null;
         var packagedBrief = brief;
         if (usesTypedContextPackage)
         {
-            var contextPackage = BuildContextPackage(
+            contextPackage = BuildContextPackage(
                 goal,
                 task,
                 workingDirectory,
@@ -347,6 +348,7 @@ public static class WorkerProfileDispatcher
             promptRoot,
             dispatchVariables,
             dispatchedAt);
+        contextPackageReceipt = WorkerRetryFeedbackPromptGuard.Validate(goal, task, contextPackage, contextPackageReceipt, preparation.PromptPath);
         var retryContextFingerprint = RetryContextFingerprintFactory.Build(
             goal,
             task,
