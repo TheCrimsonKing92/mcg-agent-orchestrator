@@ -3195,14 +3195,12 @@ public sealed class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
         if (changedFiles is null || changedFiles.Count == 0)
             return [];
 
-        var impact = RepositoryTestImpactPlanner.Plan(changedFiles, worktreePath);
         var policy = VerificationPolicyCompiler.Compile(
             AgentRole.Reviewer,
             goalObjective: string.Empty,
             taskDescription: string.Empty,
             verificationPlan: null,
-            changedFiles,
-            impact);
+            changedFiles, RepositoryTestImpactPlanner.Plan(changedFiles, worktreePath));
         return policy.Checks
             .Where(c =>
                 c.Required &&
