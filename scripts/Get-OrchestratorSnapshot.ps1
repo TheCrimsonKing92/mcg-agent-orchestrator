@@ -84,7 +84,11 @@ function Is-OrchestratorProcess {
         return $false
     }
 
-    return $command.IndexOf("conduct --loop", [System.StringComparison]::OrdinalIgnoreCase) -ge 0 -or
+    $name = [string]$Process.Name
+    return (($name -eq "dotnet" -or $name -eq "dotnet.exe" -or
+            $name -eq "Mcg.AgentOrchestrator.App" -or $name -eq "Mcg.AgentOrchestrator.App.exe") -and
+            $command.IndexOf("App.dll", [System.StringComparison]::OrdinalIgnoreCase) -ge 0) -or
+        $command.IndexOf("conduct --loop", [System.StringComparison]::OrdinalIgnoreCase) -ge 0 -or
         $command.IndexOf("__dispatch-run", [System.StringComparison]::OrdinalIgnoreCase) -ge 0 -or
         $command.IndexOf(".dispatch.json", [System.StringComparison]::OrdinalIgnoreCase) -ge 0 -or
         $command.IndexOf(".orchestrator\prompts", [System.StringComparison]::OrdinalIgnoreCase) -ge 0 -or
@@ -95,10 +99,187 @@ function Is-OrchestratorLockHolder {
     param($Process)
 
     $command = [string]$Process.CommandLine
-    return $Process.Name -eq "dotnet.exe" -and (
+    return ($Process.Name -eq "dotnet" -or $Process.Name -eq "dotnet.exe") -and (
         $command.IndexOf("App.dll", [System.StringComparison]::OrdinalIgnoreCase) -ge 0 -or
         $command.IndexOf("__dispatch-run", [System.StringComparison]::OrdinalIgnoreCase) -ge 0 -or
         $command.IndexOf("DispatchProcessHost", [System.StringComparison]::OrdinalIgnoreCase) -ge 0)
+}
+
+function Is-PotentialOrchestratorProcess {
+    param($Process)
+
+    $name = [string]$Process.Name
+    return $name -eq "dotnet" -or $name -eq "dotnet.exe" -or
+        $name -eq "DispatchProcessHost" -or $name -eq "DispatchProcessHost.exe" -or
+        $name.StartsWith("Mcg.AgentOrchestrator", [System.StringComparison]::OrdinalIgnoreCase)
+}
+
+function Get-LockKind {
+    param($Process)
+
+    $command = [string]$Process.CommandLine
+    if ($command.IndexOf("__dispatch-run", [System.StringComparison]::OrdinalIgnoreCase) -ge 0 -or
+        $command.IndexOf("DispatchProcessHost", [System.StringComparison]::OrdinalIgnoreCase) -ge 0) {
+        return "dispatch-host"
+    }
+
+    if ($command.IndexOf("conduct", [System.StringComparison]::OrdinalIgnoreCase) -ge 0) {
+        return "conduct-loop"
+    }
+
+    if ($command.IndexOf("serve-dashboard", [System.StringComparison]::OrdinalIgnoreCase) -ge 0 -or
+        $command.IndexOf("-dashboard", [System.StringComparison]::OrdinalIgnoreCase) -ge 0) {
+        return "dashboard"
+    }
+
+    return "app-host"
+}
+
+function Read-OperationProcessInventory {
+    $helper = Join-Path $repoRoot "scripts\Get-RepoProcessInfo.ps1"
+    # A single-space predicate selects every command line relevant to this snapshot while
+    # still making the CLI surface typed failures for records whose command line is unreadable.
+    # PowerShell drops an empty-string script argument before it reaches the CLI.
+    $lines = @(& $helper -CommandContains " " -Newest ([int]::MaxValue))
+    $helperExitCode = $LASTEXITCODE
+    $processes = [System.Collections.Generic.List[object]]::new()
+    $unavailable = [System.Collections.Generic.List[object]]::new()
+    $diagnostics = [System.Collections.Generic.List[string]]::new()
+    $complete = $true
+
+    if ($helperExitCode -is [int] -and $helperExitCode -ne 0) {
+        $complete = $false
+        $diagnostics.Add("PROCESS_QUERY_UNAVAILABLE operation=inventory-acquire exit=$helperExitCode")
+    }
+
+    foreach ($entry in $lines) {
+        $line = [string]$entry
+        if ($line -match '^PROCESS id=(?<id>\d+) parent=(?<parent>\d+) name=(?<name>.*?) created=(?<created>.*?) path=(?<path>.*?) command=(?<command>.*)$') {
+            $startedAt = [System.DateTimeOffset]::MinValue
+            if (-not [string]::IsNullOrWhiteSpace($Matches.created)) {
+                [void][System.DateTimeOffset]::TryParse(
+                    $Matches.created,
+                    [System.Globalization.CultureInfo]::InvariantCulture,
+                    [System.Globalization.DateTimeStyles]::RoundtripKind,
+                    [ref]$startedAt)
+            }
+
+            $processes.Add([pscustomobject]@{
+                ProcessId = [int]$Matches.id
+                ParentProcessId = [int]$Matches.parent
+                Name = $Matches.name
+                StartedAt = $startedAt
+                ExecutablePath = $Matches.path
+                CommandLine = $Matches.command
+                RawLine = $line
+            })
+            continue
+        }
+
+        if ($line -match '^PROCESS_QUERY_UNAVAILABLE operation=filter id=(?<id>\d+) name=(?<name>.*?) status=(?<status>\S+)$') {
+            $unavailable.Add([pscustomobject]@{
+                ProcessId = [int]$Matches.id
+                Name = $Matches.name
+                Status = $Matches.status
+                RawLine = $line
+            })
+            continue
+        }
+
+        if ($line -match '^PROCESS_QUERY_UNAVAILABLE\s') {
+            $complete = $false
+            $diagnostics.Add($line)
+            continue
+        }
+
+        if ($line -match '^BACKLOG_CANDIDATE\s') {
+            $diagnostics.Add($line)
+        }
+    }
+
+    return [pscustomobject]@{
+        Processes = @($processes)
+        Unavailable = @($unavailable)
+        Diagnostics = @($diagnostics)
+        Complete = $complete
+    }
+}
+
+function Get-CurrentInvocationProcessIds {
+    param([object[]]$Processes)
+
+    $byId = @{}
+    foreach ($process in $Processes) {
+        $byId[$process.ProcessId] = $process
+    }
+
+    $excluded = [System.Collections.Generic.HashSet[int]]::new()
+    [void]$excluded.Add($PID)
+
+    $currentId = $PID
+    while ($byId.ContainsKey($currentId)) {
+        $parentId = [int]$byId[$currentId].ParentProcessId
+        if ($parentId -le 0 -or -not $byId.ContainsKey($parentId)) {
+            break
+        }
+
+        $parent = $byId[$parentId]
+        $parentName = [string]$parent.Name
+        $parentCommand = [string]$parent.CommandLine
+        $isWrapper = $parentName -eq "powershell" -or $parentName -eq "powershell.exe" -or
+            $parentName -eq "pwsh" -or $parentName -eq "pwsh.exe" -or
+            $parentName -eq "cmd" -or $parentName -eq "cmd.exe" -or
+            $parentCommand.IndexOf("Invoke-RepoScript.ps1", [System.StringComparison]::OrdinalIgnoreCase) -ge 0 -or
+            $parentCommand.IndexOf("Get-OrchestratorSnapshot.ps1", [System.StringComparison]::OrdinalIgnoreCase) -ge 0
+        if (-not $isWrapper) {
+            break
+        }
+
+        [void]$excluded.Add($parentId)
+        $currentId = $parentId
+    }
+
+    $changed = $true
+    while ($changed) {
+        $changed = $false
+        foreach ($process in $Processes) {
+            if (-not $excluded.Contains($process.ProcessId) -and $excluded.Contains($process.ParentProcessId)) {
+                [void]$excluded.Add($process.ProcessId)
+                $changed = $true
+            }
+        }
+    }
+
+    Write-Output -NoEnumerate $excluded
+}
+
+function Write-InventoryDiagnostics {
+    param(
+        $Inventory,
+        [object[]]$RelevantUnavailable
+    )
+
+    foreach ($diagnostic in $Inventory.Diagnostics) {
+        Write-Output $diagnostic
+    }
+
+    foreach ($unavailable in $RelevantUnavailable) {
+        Write-Output $unavailable.RawLine
+    }
+
+    $relevantIds = [System.Collections.Generic.HashSet[int]]::new()
+    foreach ($unavailable in $RelevantUnavailable) {
+        [void]$relevantIds.Add($unavailable.ProcessId)
+    }
+
+    $incidental = @($Inventory.Unavailable | Where-Object { -not $relevantIds.Contains($_.ProcessId) })
+    if ($incidental.Count -gt 0) {
+        $statusSummary = @($incidental |
+            Group-Object Status |
+            Sort-Object Name |
+            ForEach-Object { "$($_.Name):$($_.Count)" }) -join ','
+        Write-Output "PROCESS_QUERY_UNAVAILABLE operation=inventory-summary count=$($incidental.Count) statuses=$statusSummary"
+    }
 }
 
 function Quote-ProcessArgument {
@@ -258,9 +439,21 @@ catch {
 
 Write-Section "Orchestrator Processes"
 try {
-    & (Join-Path $repoRoot "scripts\Get-RepoProcessInfo.ps1") -Name @("dotnet", "Mcg.AgentOrchestrator.App") -CommandContains App.dll -Newest $NewestProcesses
-    & (Join-Path $repoRoot "scripts\Get-RepoProcessInfo.ps1") -DispatchHost -Newest $NewestProcesses
-    & (Join-Path $repoRoot "scripts\Get-RepoProcessInfo.ps1") -ConductLoop -Newest $NewestProcesses
+    $processInventory = Read-OperationProcessInventory
+    $invocationProcessIds = Get-CurrentInvocationProcessIds -Processes $processInventory.Processes
+    $relevantUnavailable = @($processInventory.Unavailable | Where-Object { Is-PotentialOrchestratorProcess $_ })
+    $orchestratorProcesses = @($processInventory.Processes |
+        Where-Object { -not $invocationProcessIds.Contains($_.ProcessId) -and (Is-OrchestratorProcess $_) } |
+        Sort-Object @{ Expression = 'StartedAt'; Descending = $true }, @{ Expression = 'ProcessId'; Descending = $true } |
+        Select-Object -First $NewestProcesses)
+    foreach ($process in $orchestratorProcesses) {
+        Write-Output $process.RawLine
+    }
+
+    Write-InventoryDiagnostics -Inventory $processInventory -RelevantUnavailable $relevantUnavailable
+    if ($orchestratorProcesses.Count -eq 0 -and $relevantUnavailable.Count -eq 0 -and $processInventory.Complete) {
+        Write-Output "No matching repo processes found."
+    }
 }
 catch {
     Write-Output "process query unavailable: $($_.Exception.Message)"
@@ -269,7 +462,28 @@ catch {
 
 Write-Section "Build Locks"
 try {
-    & (Join-Path $repoRoot "scripts\Get-RepoProcessInfo.ps1") -Locks -Newest $NewestProcesses
+    if ($null -eq $processInventory -or -not $processInventory.Complete) {
+        Write-Output "lock query unavailable: operation-scoped process inventory was incomplete"
+        Write-Output 'BACKLOG_CANDIDATE title="Snapshot lock query degraded" body="Get-OrchestratorSnapshot.ps1 could not acquire a complete process inventory; preserve this disposition instead of requesting operator approval."'
+    }
+    else {
+        $lockHolders = @($processInventory.Processes |
+            Where-Object { -not $invocationProcessIds.Contains($_.ProcessId) -and (Is-OrchestratorLockHolder $_) } |
+            Sort-Object @{ Expression = 'StartedAt'; Descending = $true }, @{ Expression = 'ProcessId'; Descending = $true } |
+            Select-Object -First $NewestProcesses)
+        foreach ($process in $lockHolders) {
+            $kind = Get-LockKind $process
+            Write-Output "LOCK id=$($process.ProcessId) kind=$kind parent=$($process.ParentProcessId) name=$($process.Name) created=$($process.StartedAt.ToString('o')) path=$($process.ExecutablePath) command=$(Short-Command $process.CommandLine)"
+        }
+
+        foreach ($unavailable in $relevantUnavailable) {
+            Write-Output $unavailable.RawLine
+        }
+
+        if ($lockHolders.Count -eq 0 -and $relevantUnavailable.Count -eq 0) {
+            Write-Output "No orchestrator lock-holders running; in-tree build lock is FREE."
+        }
+    }
 }
 catch {
     Write-Output "lock query unavailable: $($_.Exception.Message)"

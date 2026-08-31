@@ -1267,6 +1267,87 @@ public sealed class LauncherScriptTests
         }
     }
 
+    [Xunit.Fact(DisplayName = "GetOrchestratorSnapshot_reuses_one_process_inventory_and_bounds_incidental_failures")]
+    public void GetOrchestratorSnapshotReusesOneProcessInventoryAndBoundsIncidentalFailures()
+    {
+        if (!OperatingSystem.IsWindows())
+        {
+            return;
+        }
+
+        var repositoryRoot = Path.Combine(Path.GetTempPath(), $"snapshot-inventory-{Guid.NewGuid():N}");
+        var scriptsPath = Path.Combine(repositoryRoot, "scripts");
+        var invocationPath = Path.Combine(repositoryRoot, "process-inventory-invocations.txt");
+        Directory.CreateDirectory(scriptsPath);
+        try
+        {
+            File.Copy(
+                Path.Combine(FindLauncherSourceRoot(), "scripts", "Get-OrchestratorSnapshot.ps1"),
+                Path.Combine(scriptsPath, "Get-OrchestratorSnapshot.ps1"));
+            File.WriteAllText(
+                Path.Combine(scriptsPath, "Invoke-OrchestratorSqliteTool.ps1"),
+                "Write-Output 'No active goals in snapshot sandbox.'\r\nexit 0\r\n");
+            File.WriteAllText(
+                Path.Combine(scriptsPath, "Get-RepoProcessInfo.ps1"),
+                $$"""
+                [CmdletBinding()]
+                param(
+                    [int[]]$Id = @(),
+                    [int[]]$ParentId = @(),
+                    [string[]]$Name = @(),
+                    [string[]]$CommandContains = @(),
+                    [int]$Newest = 25,
+                    [switch]$ConductLoop,
+                    [switch]$DispatchHost,
+                    [switch]$IncludeChildren,
+                    [switch]$Locks
+                )
+                Add-Content -LiteralPath '{{EscapePowerShellSingleQuoted(invocationPath)}}' -Value 'enumerated'
+                Write-Output 'PROCESS id=100 parent=1 name=dotnet created=2026-08-31T12:00:00.0000000+00:00 path=C:\dotnet.exe command=dotnet App.dll conduct --loop'
+                Write-Output 'PROCESS id=101 parent=100 name=dotnet created=2026-08-31T12:01:00.0000000+00:00 path=C:\dotnet.exe command=dotnet App.dll __dispatch-run task.dispatch.json'
+                Write-Output 'PROCESS id=102 parent=1 name=dotnet created=2026-08-31T12:02:00.0000000+00:00 path=C:\dotnet.exe command=dotnet App.dll serve-dashboard'
+                Write-Output 'PROCESS_QUERY_UNAVAILABLE operation=filter id=200 name=dotnet status=AccessDenied'
+                Write-Output 'PROCESS id=200 parent=1 name=dotnet created= path= command='
+                Write-Output 'PROCESS_QUERY_UNAVAILABLE operation=filter id=300 name=System status=AccessDenied'
+                Write-Output 'PROCESS id=300 parent=0 name=System created= path= command='
+                Write-Output 'PROCESS_QUERY_UNAVAILABLE operation=filter id=301 name=Registry status=AccessDenied'
+                Write-Output 'PROCESS id=301 parent=0 name=Registry created= path= command='
+                """.Replace("\n", "\r\n", StringComparison.Ordinal));
+
+            var startInfo = new ProcessStartInfo
+            {
+                FileName = "powershell.exe",
+                WorkingDirectory = repositoryRoot,
+                UseShellExecute = false,
+                RedirectStandardOutput = true,
+                RedirectStandardError = true,
+                CreateNoWindow = true
+            };
+            startInfo.ArgumentList.Add("-NoProfile");
+            startInfo.ArgumentList.Add("-ExecutionPolicy");
+            startInfo.ArgumentList.Add("Bypass");
+            startInfo.ArgumentList.Add("-File");
+            startInfo.ArgumentList.Add(Path.Combine(scriptsPath, "Get-OrchestratorSnapshot.ps1"));
+
+            var result = RunProcess(startInfo, "Get-OrchestratorSnapshot.ps1 inventory reuse");
+
+            Assert.Equal(0, result.ExitCode);
+            Assert.True(string.IsNullOrWhiteSpace(result.Stderr), result.Stderr);
+            Assert.Equal(1, File.ReadAllLines(invocationPath).Length);
+            Assert.Contains("PROCESS id=100", result.Stdout);
+            Assert.Contains("PROCESS id=101", result.Stdout);
+            Assert.Contains("LOCK id=102 kind=dashboard", result.Stdout);
+            Assert.Contains("PROCESS_QUERY_UNAVAILABLE operation=filter id=200 name=dotnet status=AccessDenied", result.Stdout);
+            Assert.Contains("PROCESS_QUERY_UNAVAILABLE operation=inventory-summary count=2", result.Stdout);
+            Assert.DoesNotContain("operation=filter id=300", result.Stdout);
+            Assert.DoesNotContain("operation=filter id=301", result.Stdout);
+        }
+        finally
+        {
+            TryDeleteDirectory(repositoryRoot);
+        }
+    }
+
     [Xunit.Fact(DisplayName = "WaitForFile_missing_file_still_fails_after_hang_guard")]
     public void WaitForFileMissingFileStillFailsAfterHangGuard()
     {
