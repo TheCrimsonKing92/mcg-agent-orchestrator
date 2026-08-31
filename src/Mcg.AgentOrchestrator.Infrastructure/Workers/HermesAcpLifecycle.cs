@@ -13,6 +13,7 @@ internal interface IHermesAcpProcess : IDisposable
     TextReader StandardError { get; }
     int ExitCode { get; }
     bool JobExitConfirmed { get; }
+    bool SurvivorInventoryEmpty { get; }
     void CompleteInput();
     void Kill();
     Task WaitForExitAsync(CancellationToken cancellationToken);
@@ -27,38 +28,59 @@ internal sealed class HermesAcpProcessLauncher : IHermesAcpProcessLauncher
 {
     public IHermesAcpProcess Start(ProcessStartInfo startInfo)
     {
-        var process = ProcessTreeGuiSuppression.Start(startInfo);
+        using var suspended = OwnedProcessGroup.StartSuspendedContainedRedirected(startInfo);
+        var launched = suspended.TransferOwnership();
+        var process = new HermesAcpProcess(launched);
         try
         {
-            return new HermesAcpProcess(process, OwnedProcessGroup.Attach(process));
+            suspended.Resume();
+            return process;
         }
         catch
         {
-            try { process.Kill(entireProcessTree: true); } catch { }
             process.Dispose();
             throw;
         }
     }
 
-    private sealed class HermesAcpProcess(Process process, OwnedProcessGroup processGroup) : IHermesAcpProcess
+    private sealed class HermesAcpProcess : IHermesAcpProcess
     {
+        private readonly Process _process;
+        private readonly OwnedProcessGroup _processGroup;
+        private readonly HashSet<SpawnProcessIdentity> _observedIdentities = [];
         private bool? _terminatedJobExitConfirmed;
 
-        public TextWriter StandardInput => process.StandardInput;
-        public TextReader StandardOutput => process.StandardOutput;
-        public TextReader StandardError => process.StandardError;
-        public int ExitCode => process.ExitCode;
+        public HermesAcpProcess(OwnedProcessGroup.RedirectedOwnedProcessStart launched)
+        {
+            _process = launched.Process;
+            _processGroup = launched.Group;
+            StandardInput = launched.StandardInput;
+            StandardOutput = launched.StandardOutput;
+            StandardError = launched.StandardError;
+            ObserveOwnedProcesses();
+        }
+
+        public TextWriter StandardInput { get; }
+        public TextReader StandardOutput { get; }
+        public TextReader StandardError { get; }
+        public int ExitCode => _process.ExitCode;
         public bool JobExitConfirmed => _terminatedJobExitConfirmed ??
-            (processGroup.TryGetActiveProcessIds(out var processIds) && processIds.Count == 0);
-        public void CompleteInput() => process.StandardInput.Close();
+            (_processGroup.TryGetActiveProcessIds(out var processIds) && processIds.Count == 0);
+        public bool SurvivorInventoryEmpty => _observedIdentities.All(identity =>
+            DispatchProcessIdentityEvidence.ClassifyRecordedOwner(
+                identity.ProcessId,
+                [identity],
+                DispatchProcessIdentityEvidence.ReadCurrent) != SpawnTrackedProcessStatus.LiveMatch);
+        public void CompleteInput() => StandardInput.Close();
         public void Kill()
         {
             if (OperatingSystem.IsWindows() &&
-                processGroup.TryDuplicateAccountingHandle(out var accountingHandle))
+                _processGroup.TryDuplicateAccountingHandle(out var accountingHandle))
             {
                 using (accountingHandle)
                 {
-                    processGroup.Kill();
+                    ObserveOwnedProcesses();
+                    _processGroup.Kill();
                     _terminatedJobExitConfirmed = OwnedProcessGroup.WaitForJobExit(
                         accountingHandle,
                         TimeSpan.FromSeconds(10));
@@ -67,23 +89,46 @@ internal sealed class HermesAcpProcessLauncher : IHermesAcpProcessLauncher
                 return;
             }
 
-            try { processGroup.Kill(); } catch { }
+            ObserveOwnedProcesses();
+            try { _processGroup.Kill(); } catch { }
             try
             {
-                if (!process.HasExited) process.Kill(entireProcessTree: true);
+                if (!_process.HasExited) _process.Kill(entireProcessTree: true);
             }
             catch { }
-            _terminatedJobExitConfirmed = processGroup.TryGetActiveProcessIds(out var processIds) &&
+            _terminatedJobExitConfirmed = _processGroup.TryGetActiveProcessIds(out var processIds) &&
                 processIds.Count == 0;
         }
 
-        public Task WaitForExitAsync(CancellationToken cancellationToken) =>
-            process.WaitForExitAsync(cancellationToken);
+        public async Task WaitForExitAsync(CancellationToken cancellationToken)
+        {
+            ObserveOwnedProcesses();
+            await _process.WaitForExitAsync(cancellationToken).ConfigureAwait(false);
+            ObserveOwnedProcesses();
+        }
 
         public void Dispose()
         {
-            processGroup.Dispose();
-            process.Dispose();
+            StandardInput.Dispose();
+            StandardOutput.Dispose();
+            StandardError.Dispose();
+            _processGroup.Dispose();
+            _process.Dispose();
+        }
+
+        private void ObserveOwnedProcesses()
+        {
+            if (!_processGroup.TryGetActiveProcessIds(out var processIds))
+            {
+                return;
+            }
+
+            foreach (var identity in DispatchProcessIdentityEvidence.Capture(
+                processIds,
+                () => _processGroup.TryGetActiveProcessIds(out var current) ? current : null))
+            {
+                _observedIdentities.Add(identity);
+            }
         }
     }
 }
@@ -123,6 +168,7 @@ internal sealed class HermesAcpLifecycle
         var exitCode = -1;
         var shutdownConfirmed = false;
         var jobExitConfirmed = false;
+        var survivorInventoryEmpty = false;
         var permissionPolicyViolated = false;
         var unexpectedChild = false;
         IHermesAcpProcess? process = null;
@@ -200,6 +246,7 @@ internal sealed class HermesAcpLifecycle
             permissionPolicyViolated = rpc.PermissionPolicyViolated;
             unexpectedChild = rpc.UnexpectedChild;
             jobExitConfirmed = process.JobExitConfirmed;
+            survivorInventoryEmpty = process.SurvivorInventoryEmpty;
             if (!jobExitConfirmed)
             {
                 process.Kill();
@@ -225,6 +272,7 @@ internal sealed class HermesAcpLifecycle
                 exitCode,
                 shutdownConfirmed,
                 jobExitConfirmed,
+                survivorInventoryEmpty,
                 stderr,
                 permissionPolicyViolated,
                 unexpectedChild,
@@ -267,6 +315,7 @@ internal sealed class HermesAcpLifecycle
                 }
 
                 jobExitConfirmed = process.JobExitConfirmed;
+                survivorInventoryEmpty = process.SurvivorInventoryEmpty;
                 if (rpc is not null)
                 {
                     finalOutput = rpc.FinalOutput;
@@ -286,6 +335,7 @@ internal sealed class HermesAcpLifecycle
                 exitCode,
                 shutdownConfirmed,
                 jobExitConfirmed,
+                survivorInventoryEmpty,
                 stderr,
                 permissionPolicyViolated,
                 unexpectedChild,
@@ -374,6 +424,7 @@ internal sealed class HermesAcpLifecycle
         int exitCode,
         bool shutdownConfirmed,
         bool jobExitConfirmed,
+        bool survivorInventoryEmpty,
         string stderr,
         bool permissionPolicyViolated,
         bool unexpectedChild,
@@ -398,7 +449,8 @@ internal sealed class HermesAcpLifecycle
             stopReason,
             HermesAcpAdapter.PinnedRelease,
             HermesAcpAdapter.PinnedCommit,
-            failure);
+            failure,
+            survivorInventoryEmpty);
 
     private static string RequireString(JsonElement element, string property, string source)
     {
@@ -570,10 +622,10 @@ internal sealed class HermesAcpJsonRpcClient
         if (method.Equals("session/request_permission", StringComparison.Ordinal))
         {
             var writeCapable = _role is AgentRole.Developer or AgentRole.Tester;
-            var workspaceContained = PermissionRequestIsWorkspaceContained(message);
-            var allow = writeCapable && workspaceContained;
+            var permittedTool = PermissionRequestIsPermittedTool(message);
+            var allow = writeCapable && permittedTool;
             var optionId = FindPermissionOption(message, allow ? "allow_once" : "reject_once", allow ? null : "reject_always");
-            if (writeCapable && !workspaceContained)
+            if (writeCapable && !permittedTool)
             {
                 PermissionPolicyViolated = true;
             }
@@ -626,27 +678,48 @@ internal sealed class HermesAcpJsonRpcClient
         }
     }
 
-    private bool PermissionRequestIsWorkspaceContained(JsonElement message)
+    private bool PermissionRequestIsPermittedTool(JsonElement message)
     {
         if (!message.TryGetProperty("params", out var parameters) ||
             !parameters.TryGetProperty("toolCall", out var toolCall) ||
-            toolCall.ValueKind != JsonValueKind.Object)
+            toolCall.ValueKind != JsonValueKind.Object ||
+            !toolCall.TryGetProperty("kind", out var kindElement) ||
+            kindElement.ValueKind != JsonValueKind.String)
+        {
+            return false;
+        }
+
+        var kind = kindElement.GetString();
+        if (string.Equals(kind, "execute", StringComparison.Ordinal))
+        {
+            return !toolCall.TryGetProperty("locations", out var terminalLocations) ||
+                LocationsAreWorkspaceContained(terminalLocations, requireAtLeastOne: false);
+        }
+
+        if (kind is not ("edit" or "delete" or "move"))
         {
             return false;
         }
 
         if (!toolCall.TryGetProperty("locations", out var locations))
         {
-            return true;
+            return false;
         }
 
+        return LocationsAreWorkspaceContained(locations, requireAtLeastOne: true);
+    }
+
+    private bool LocationsAreWorkspaceContained(JsonElement locations, bool requireAtLeastOne)
+    {
         if (locations.ValueKind != JsonValueKind.Array)
         {
             return false;
         }
 
+        var observed = false;
         foreach (var location in locations.EnumerateArray())
         {
+            observed = true;
             var path = location.ValueKind == JsonValueKind.String
                 ? location.GetString()
                 : location.ValueKind == JsonValueKind.Object &&
@@ -669,7 +742,7 @@ internal sealed class HermesAcpJsonRpcClient
             }
         }
 
-        return true;
+        return observed || !requireAtLeastOne;
     }
 
     private static string? FindPermissionOption(JsonElement message, string primaryKind, string? fallbackKind)

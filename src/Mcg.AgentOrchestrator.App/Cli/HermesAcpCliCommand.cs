@@ -16,6 +16,7 @@ internal static class HermesAcpCliCommand
         TextWriter error,
         Func<HermesAcpRequest, string, TextWriter, CancellationToken, Task<HermesAcpTerminalReceipt>>? run = null,
         Func<string?>? containedTrialState = null,
+        Func<string?>? inheritedHermesHome = null,
         CancellationToken cancellationToken = default)
     {
         ArgumentNullException.ThrowIfNull(parts);
@@ -51,6 +52,7 @@ internal static class HermesAcpCliCommand
         Directory.CreateDirectory(sandbox);
         var receiptPath = Path.GetFullPath(
             ValueAfter(parts, "--receipt") ?? Path.Combine(sandbox, HermesAcpAdapter.TerminalReceiptFileName));
+        inheritedHermesHome ??= () => Environment.GetEnvironmentVariable("HERMES_HOME");
         var request = new HermesAcpRequest(
             promptPath,
             promptSha256,
@@ -58,7 +60,8 @@ internal static class HermesAcpCliCommand
             sandbox,
             model,
             provider,
-            role);
+            role,
+            inheritedHermesHome());
         run ??= (candidate, path, progress, token) =>
             new HermesAcpLifecycle().RunAsync(candidate, path, progress, token);
 

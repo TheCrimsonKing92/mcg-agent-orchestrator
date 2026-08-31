@@ -12,7 +12,8 @@ internal sealed record HermesAcpRequest(
     string SandboxRoot,
     string ExpectedModel,
     string ExpectedProvider,
-    AgentRole Role);
+    AgentRole Role,
+    string? HermesHome = null);
 
 internal sealed record HermesAcpLaunchPlan(
     ProcessStartInfo StartInfo,
@@ -40,7 +41,8 @@ internal sealed record HermesAcpTerminalReceipt(
     string? StopReason = null,
     string? PinnedRelease = null,
     string? PinnedCommit = null,
-    string? Failure = null);
+    string? Failure = null,
+    bool SurvivorInventoryEmpty = false);
 
 internal sealed class HermesAcpAdapter
 {
@@ -72,8 +74,7 @@ internal sealed class HermesAcpAdapter
             throw new InvalidOperationException($"Hermes ACP prompt digest mismatch: expected {request.ExpectedPromptSha256}, observed {promptSha256}.");
         }
 
-        var hermesHome = Path.Combine(sandboxRoot, $"hermes-home-{Guid.NewGuid():N}");
-        Directory.CreateDirectory(hermesHome);
+        var hermesHome = ResolveHermesHome(request.HermesHome, sandboxRoot);
         var startInfo = new ProcessStartInfo
         {
             FileName = "hermes",
@@ -102,7 +103,8 @@ internal sealed class HermesAcpAdapter
             throw new InvalidOperationException("Hermes ACP terminal receipt reported a hidden model/provider fallback.");
         if (!receipt.Completed || receipt.InputTokens <= 0 || receipt.OutputTokens <= 0)
             throw new InvalidOperationException("Hermes ACP terminal receipt is missing completed non-zero usage evidence.");
-        if (receipt.ExitCode != 0 || !receipt.CancellationOrShutdownAcknowledged || !receipt.JobExitConfirmed)
+        if (receipt.ExitCode != 0 || !receipt.CancellationOrShutdownAcknowledged ||
+            !receipt.JobExitConfirmed || !receipt.SurvivorInventoryEmpty)
             throw new InvalidOperationException("Hermes ACP terminal receipt does not prove clean process completion and teardown.");
         if (receipt.StandardErrorSha256.Length != 64 || !receipt.StandardErrorSha256.All(Uri.IsHexDigit))
             throw new InvalidOperationException("Hermes ACP terminal receipt does not contain a valid stderr digest.");
@@ -153,6 +155,25 @@ internal sealed class HermesAcpAdapter
         if (string.IsNullOrWhiteSpace(path) || !Directory.Exists(Path.GetFullPath(path)))
             throw new DirectoryNotFoundException($"Hermes ACP {name} directory does not exist: '{path}'.");
         return Path.GetFullPath(path);
+    }
+
+    private static string ResolveHermesHome(string? requestedHome, string sandboxRoot)
+    {
+        if (string.IsNullOrWhiteSpace(requestedHome))
+        {
+            var created = Path.Combine(sandboxRoot, $"hermes-home-{Guid.NewGuid():N}");
+            Directory.CreateDirectory(created);
+            return created;
+        }
+
+        var fullPath = Path.GetFullPath(requestedHome);
+        if (!IsWithin(fullPath, sandboxRoot))
+        {
+            throw new InvalidOperationException("Hermes ACP HERMES_HOME must remain inside the per-run sandbox state.");
+        }
+
+        Directory.CreateDirectory(fullPath);
+        return fullPath;
     }
 
     private static bool IsWithin(string path, string root)
