@@ -61,7 +61,7 @@ internal sealed record HermesTrialThresholds(
 
     public static HermesTrialThresholds Load(string? startDirectory = null)
     {
-        var policyPath = FindPolicyPath(startDirectory ?? Environment.CurrentDirectory);
+        var policyPath = FindPolicyPath(startDirectory);
         using var document = JsonDocument.Parse(File.ReadAllText(policyPath));
         if (!document.RootElement.TryGetProperty("thresholds", out var thresholds) ||
             thresholds.ValueKind != JsonValueKind.Object)
@@ -82,19 +82,26 @@ internal sealed record HermesTrialThresholds(
             RequireDecimal(thresholds, "maximumTokenRegression", policyPath));
     }
 
-    private static string FindPolicyPath(string startDirectory)
+    private static string FindPolicyPath(string? startDirectory)
     {
-        for (var directory = new DirectoryInfo(Path.GetFullPath(startDirectory)); directory is not null; directory = directory.Parent)
+        var searchRoots = startDirectory is null
+            ? new[] { Environment.CurrentDirectory, AppContext.BaseDirectory }
+            : [startDirectory];
+        foreach (var searchRoot in searchRoots.Distinct(StringComparer.OrdinalIgnoreCase))
         {
-            var candidate = Path.Combine(directory.FullName, PolicyRelativePath);
-            if (File.Exists(candidate))
+            for (var directory = new DirectoryInfo(Path.GetFullPath(searchRoot)); directory is not null; directory = directory.Parent)
             {
-                return candidate;
+                var candidate = Path.Combine(directory.FullName, PolicyRelativePath);
+                if (File.Exists(candidate))
+                {
+                    return candidate;
+                }
             }
         }
 
         throw new FileNotFoundException(
-            $"Checked Hermes trial policy '{PolicyRelativePath}' was not found from '{startDirectory}'.");
+            $"Checked Hermes trial policy '{PolicyRelativePath}' was not found from " +
+            $"'{string.Join("' or '", searchRoots)}'.");
     }
 
     private static int RequireInt32(JsonElement source, string name, string path) =>
