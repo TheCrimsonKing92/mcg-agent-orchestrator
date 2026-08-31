@@ -1302,16 +1302,31 @@ public sealed class LauncherScriptTests
                     [switch]$IncludeChildren,
                     [switch]$Locks
                 )
+                if ($CommandContains.Count -ne 1 -or $CommandContains[0] -ne ' ') {
+                    throw "Expected one single-space CommandContains inventory predicate."
+                }
+                if ($Newest -ne [int]::MaxValue) {
+                    throw "Expected unbounded helper projection for operation-scoped inventory."
+                }
                 Add-Content -LiteralPath '{{EscapePowerShellSingleQuoted(invocationPath)}}' -Value 'enumerated'
                 Write-Output 'PROCESS id=100 parent=1 name=dotnet created=2026-08-31T12:00:00.0000000+00:00 path=C:\dotnet.exe command=dotnet App.dll conduct --loop'
                 Write-Output 'PROCESS id=101 parent=100 name=dotnet created=2026-08-31T12:01:00.0000000+00:00 path=C:\dotnet.exe command=dotnet App.dll __dispatch-run task.dispatch.json'
                 Write-Output 'PROCESS id=102 parent=1 name=dotnet created=2026-08-31T12:02:00.0000000+00:00 path=C:\dotnet.exe command=dotnet App.dll serve-dashboard'
+                Write-Output 'PROCESS id=103 parent=1 name=dotnet created=2026-08-31T12:03:00.0000000+00:00 path=C:\dotnet.exe command=dotnet App.dll status newest'
+                Write-Output 'PROCESS id=104 parent=1 name=dotnet created=2026-08-31T12:04:00.0000000+00:00 path=C:\dotnet.exe command=dotnet App.dll status newest-two'
                 Write-Output 'PROCESS_QUERY_UNAVAILABLE operation=filter id=200 name=dotnet status=AccessDenied'
-                Write-Output 'PROCESS id=200 parent=1 name=dotnet created= path= command='
                 Write-Output 'PROCESS_QUERY_UNAVAILABLE operation=filter id=300 name=System status=AccessDenied'
-                Write-Output 'PROCESS id=300 parent=0 name=System created= path= command='
                 Write-Output 'PROCESS_QUERY_UNAVAILABLE operation=filter id=301 name=Registry status=AccessDenied'
-                Write-Output 'PROCESS id=301 parent=0 name=Registry created= path= command='
+                $negativeControls = @(
+                    [pscustomobject]@{ Id = 400; Status = 'Exited' },
+                    [pscustomobject]@{ Id = 401; Status = 'DeadOrRecycled' }
+                )
+                foreach ($control in $negativeControls) {
+                    if ($control.Status -notin @('Exited', 'DeadOrRecycled')) {
+                        throw "Unexpected negative-control status $($control.Status)."
+                    }
+                    # The native CLI omits exited and PID-reused records from an inventory query.
+                }
                 """.Replace("\n", "\r\n", StringComparison.Ordinal));
 
             var startInfo = new ProcessStartInfo
@@ -1328,6 +1343,8 @@ public sealed class LauncherScriptTests
             startInfo.ArgumentList.Add("Bypass");
             startInfo.ArgumentList.Add("-File");
             startInfo.ArgumentList.Add(Path.Combine(scriptsPath, "Get-OrchestratorSnapshot.ps1"));
+            startInfo.ArgumentList.Add("-NewestProcesses");
+            startInfo.ArgumentList.Add("2");
 
             var result = RunProcess(startInfo, "Get-OrchestratorSnapshot.ps1 inventory reuse");
 
@@ -1336,11 +1353,18 @@ public sealed class LauncherScriptTests
             Assert.Equal(1, File.ReadAllLines(invocationPath).Length);
             Assert.Contains("PROCESS id=100", result.Stdout);
             Assert.Contains("PROCESS id=101", result.Stdout);
-            Assert.Contains("LOCK id=102 kind=dashboard", result.Stdout);
-            Assert.Contains("PROCESS_QUERY_UNAVAILABLE operation=filter id=200 name=dotnet status=AccessDenied", result.Stdout);
+            Assert.Contains("PROCESS id=103", result.Stdout);
+            Assert.Contains("PROCESS id=104", result.Stdout);
+            Assert.DoesNotContain("PROCESS id=102", result.Stdout);
+            Assert.Contains("LOCK id=104 kind=app-host", result.Stdout);
+            Assert.Contains("LOCK id=103 kind=app-host", result.Stdout);
+            const string relevantUnavailable = "PROCESS_QUERY_UNAVAILABLE operation=filter id=200 name=dotnet status=AccessDenied";
+            Assert.Equal(1, result.Stdout.Split(relevantUnavailable, StringSplitOptions.None).Length - 1);
             Assert.Contains("PROCESS_QUERY_UNAVAILABLE operation=inventory-summary count=2", result.Stdout);
             Assert.DoesNotContain("operation=filter id=300", result.Stdout);
             Assert.DoesNotContain("operation=filter id=301", result.Stdout);
+            Assert.DoesNotContain("id=400", result.Stdout);
+            Assert.DoesNotContain("id=401", result.Stdout);
         }
         finally
         {

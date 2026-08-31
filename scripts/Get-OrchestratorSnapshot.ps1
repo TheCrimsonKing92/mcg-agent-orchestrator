@@ -57,26 +57,7 @@ function Short-Command {
     return $command
 }
 
-function Format-CimDate {
-    param($Value)
-
-    if ($null -eq $Value) {
-        return ""
-    }
-
-    if ($Value -is [datetime]) {
-        return $Value.ToString("s")
-    }
-
-    try {
-        return ([System.Management.ManagementDateTimeConverter]::ToDateTime([string]$Value)).ToString("s")
-    }
-    catch {
-        return [string]$Value
-    }
-}
-
-function Is-OrchestratorProcess {
+function Is-PrimaryOrchestratorProcess {
     param($Process)
 
     $command = [string]$Process.CommandLine
@@ -85,24 +66,34 @@ function Is-OrchestratorProcess {
     }
 
     $name = [string]$Process.Name
-    return (($name -eq "dotnet" -or $name -eq "dotnet.exe" -or
+    return ($name -eq "dotnet" -or $name -eq "dotnet.exe" -or
             $name -eq "Mcg.AgentOrchestrator.App" -or $name -eq "Mcg.AgentOrchestrator.App.exe") -and
-            $command.IndexOf("App.dll", [System.StringComparison]::OrdinalIgnoreCase) -ge 0) -or
-        $command.IndexOf("conduct --loop", [System.StringComparison]::OrdinalIgnoreCase) -ge 0 -or
-        $command.IndexOf("__dispatch-run", [System.StringComparison]::OrdinalIgnoreCase) -ge 0 -or
-        $command.IndexOf(".dispatch.json", [System.StringComparison]::OrdinalIgnoreCase) -ge 0 -or
-        $command.IndexOf(".orchestrator\prompts", [System.StringComparison]::OrdinalIgnoreCase) -ge 0 -or
-        $command.IndexOf(".orchestrator-worktrees", [System.StringComparison]::OrdinalIgnoreCase) -ge 0
+        $command.IndexOf("App.dll", [System.StringComparison]::OrdinalIgnoreCase) -ge 0
+}
+
+function Is-DispatchHostProcess {
+    param($Process)
+
+    return ([string]$Process.CommandLine).IndexOf(
+        "__dispatch-run",
+        [System.StringComparison]::OrdinalIgnoreCase) -ge 0
+}
+
+function Is-ConductLoopProcess {
+    param($Process)
+
+    $command = [string]$Process.CommandLine
+    return $command.IndexOf("conduct", [System.StringComparison]::OrdinalIgnoreCase) -ge 0 -and
+        $command.IndexOf("--loop", [System.StringComparison]::OrdinalIgnoreCase) -ge 0
 }
 
 function Is-OrchestratorLockHolder {
     param($Process)
 
     $command = [string]$Process.CommandLine
-    return ($Process.Name -eq "dotnet" -or $Process.Name -eq "dotnet.exe") -and (
-        $command.IndexOf("App.dll", [System.StringComparison]::OrdinalIgnoreCase) -ge 0 -or
+    return $command.IndexOf("App.dll", [System.StringComparison]::OrdinalIgnoreCase) -ge 0 -or
         $command.IndexOf("__dispatch-run", [System.StringComparison]::OrdinalIgnoreCase) -ge 0 -or
-        $command.IndexOf("DispatchProcessHost", [System.StringComparison]::OrdinalIgnoreCase) -ge 0)
+        $command.IndexOf("DispatchProcessHost", [System.StringComparison]::OrdinalIgnoreCase) -ge 0
 }
 
 function Is-PotentialOrchestratorProcess {
@@ -155,13 +146,16 @@ function Read-OperationProcessInventory {
     foreach ($entry in $lines) {
         $line = [string]$entry
         if ($line -match '^PROCESS id=(?<id>\d+) parent=(?<parent>\d+) name=(?<name>.*?) created=(?<created>.*?) path=(?<path>.*?) command=(?<command>.*)$') {
-            $startedAt = [System.DateTimeOffset]::MinValue
+            $startedAt = $null
             if (-not [string]::IsNullOrWhiteSpace($Matches.created)) {
-                [void][System.DateTimeOffset]::TryParse(
+                $parsedStartedAt = [System.DateTimeOffset]::MinValue
+                if ([System.DateTimeOffset]::TryParse(
                     $Matches.created,
                     [System.Globalization.CultureInfo]::InvariantCulture,
                     [System.Globalization.DateTimeStyles]::RoundtripKind,
-                    [ref]$startedAt)
+                    [ref]$parsedStartedAt)) {
+                    $startedAt = $parsedStartedAt
+                }
             }
 
             $processes.Add([pscustomobject]@{
@@ -206,51 +200,38 @@ function Read-OperationProcessInventory {
 }
 
 function Get-CurrentInvocationProcessIds {
-    param([object[]]$Processes)
-
-    $byId = @{}
-    foreach ($process in $Processes) {
-        $byId[$process.ProcessId] = $process
-    }
-
     $excluded = [System.Collections.Generic.HashSet[int]]::new()
     [void]$excluded.Add($PID)
+    Write-Output -NoEnumerate $excluded
+}
 
-    $currentId = $PID
-    while ($byId.ContainsKey($currentId)) {
-        $parentId = [int]$byId[$currentId].ParentProcessId
-        if ($parentId -le 0 -or -not $byId.ContainsKey($parentId)) {
-            break
-        }
+function Select-NewestProcesses {
+    param(
+        [object[]]$Processes,
+        [scriptblock]$Predicate
+    )
 
-        $parent = $byId[$parentId]
-        $parentName = [string]$parent.Name
-        $parentCommand = [string]$parent.CommandLine
-        $isWrapper = $parentName -eq "powershell" -or $parentName -eq "powershell.exe" -or
-            $parentName -eq "pwsh" -or $parentName -eq "pwsh.exe" -or
-            $parentName -eq "cmd" -or $parentName -eq "cmd.exe" -or
-            $parentCommand.IndexOf("Invoke-RepoScript.ps1", [System.StringComparison]::OrdinalIgnoreCase) -ge 0 -or
-            $parentCommand.IndexOf("Get-OrchestratorSnapshot.ps1", [System.StringComparison]::OrdinalIgnoreCase) -ge 0
-        if (-not $isWrapper) {
-            break
-        }
+    return @($Processes |
+        Where-Object $Predicate |
+        Sort-Object @{ Expression = { if ($null -eq $_.StartedAt) { [System.DateTimeOffset]::MinValue } else { $_.StartedAt } }; Descending = $true },
+            @{ Expression = 'ProcessId'; Descending = $true } |
+        Select-Object -First $NewestProcesses)
+}
 
-        [void]$excluded.Add($parentId)
-        $currentId = $parentId
-    }
+function Merge-UniqueProcesses {
+    param([object[][]]$Groups)
 
-    $changed = $true
-    while ($changed) {
-        $changed = $false
-        foreach ($process in $Processes) {
-            if (-not $excluded.Contains($process.ProcessId) -and $excluded.Contains($process.ParentProcessId)) {
-                [void]$excluded.Add($process.ProcessId)
-                $changed = $true
+    $seen = [System.Collections.Generic.HashSet[int]]::new()
+    $merged = [System.Collections.Generic.List[object]]::new()
+    foreach ($group in $Groups) {
+        foreach ($process in $group) {
+            if ($seen.Add($process.ProcessId)) {
+                $merged.Add($process)
             }
         }
     }
 
-    Write-Output -NoEnumerate $excluded
+    Write-Output -NoEnumerate ([object[]]$merged.ToArray())
 }
 
 function Write-InventoryDiagnostics {
@@ -438,14 +419,19 @@ catch {
 }
 
 Write-Section "Orchestrator Processes"
+$processInventory = $null
+$invocationProcessIds = [System.Collections.Generic.HashSet[int]]::new()
+$relevantUnavailable = @()
 try {
     $processInventory = Read-OperationProcessInventory
-    $invocationProcessIds = Get-CurrentInvocationProcessIds -Processes $processInventory.Processes
+    $invocationProcessIds = Get-CurrentInvocationProcessIds
     $relevantUnavailable = @($processInventory.Unavailable | Where-Object { Is-PotentialOrchestratorProcess $_ })
-    $orchestratorProcesses = @($processInventory.Processes |
-        Where-Object { -not $invocationProcessIds.Contains($_.ProcessId) -and (Is-OrchestratorProcess $_) } |
-        Sort-Object @{ Expression = 'StartedAt'; Descending = $true }, @{ Expression = 'ProcessId'; Descending = $true } |
-        Select-Object -First $NewestProcesses)
+    $eligibleProcesses = @($processInventory.Processes |
+        Where-Object { -not $invocationProcessIds.Contains($_.ProcessId) })
+    $orchestratorProcesses = Merge-UniqueProcesses -Groups @(
+        @(Select-NewestProcesses -Processes $eligibleProcesses -Predicate { Is-PrimaryOrchestratorProcess $_ }),
+        @(Select-NewestProcesses -Processes $eligibleProcesses -Predicate { Is-DispatchHostProcess $_ }),
+        @(Select-NewestProcesses -Processes $eligibleProcesses -Predicate { Is-ConductLoopProcess $_ }))
     foreach ($process in $orchestratorProcesses) {
         Write-Output $process.RawLine
     }
@@ -456,7 +442,7 @@ try {
     }
 }
 catch {
-    Write-Output "process query unavailable: $($_.Exception.Message)"
+    Write-Output "process query unavailable: line=$($_.InvocationInfo.ScriptLineNumber) $($_.Exception.Message)"
     Write-Output 'BACKLOG_CANDIDATE title="Snapshot process query degraded" body="Get-OrchestratorSnapshot.ps1 could not run the orchestrator-authored process query; preserve this disposition instead of requesting operator approval."'
 }
 
@@ -469,15 +455,13 @@ try {
     else {
         $lockHolders = @($processInventory.Processes |
             Where-Object { -not $invocationProcessIds.Contains($_.ProcessId) -and (Is-OrchestratorLockHolder $_) } |
-            Sort-Object @{ Expression = 'StartedAt'; Descending = $true }, @{ Expression = 'ProcessId'; Descending = $true } |
+            Sort-Object @{ Expression = { if ($null -eq $_.StartedAt) { [System.DateTimeOffset]::MinValue } else { $_.StartedAt } }; Descending = $true },
+                @{ Expression = 'ProcessId'; Descending = $true } |
             Select-Object -First $NewestProcesses)
         foreach ($process in $lockHolders) {
             $kind = Get-LockKind $process
-            Write-Output "LOCK id=$($process.ProcessId) kind=$kind parent=$($process.ParentProcessId) name=$($process.Name) created=$($process.StartedAt.ToString('o')) path=$($process.ExecutablePath) command=$(Short-Command $process.CommandLine)"
-        }
-
-        foreach ($unavailable in $relevantUnavailable) {
-            Write-Output $unavailable.RawLine
+            $created = if ($null -eq $process.StartedAt) { "" } else { $process.StartedAt.ToString('o') }
+            Write-Output "LOCK id=$($process.ProcessId) kind=$kind parent=$($process.ParentProcessId) name=$($process.Name) created=$created path=$($process.ExecutablePath) command=$(Short-Command $process.CommandLine)"
         }
 
         if ($lockHolders.Count -eq 0 -and $relevantUnavailable.Count -eq 0) {
@@ -486,7 +470,7 @@ try {
     }
 }
 catch {
-    Write-Output "lock query unavailable: $($_.Exception.Message)"
+    Write-Output "lock query unavailable: line=$($_.InvocationInfo.ScriptLineNumber) $($_.Exception.Message)"
     Write-Output 'BACKLOG_CANDIDATE title="Snapshot lock query degraded" body="Get-OrchestratorSnapshot.ps1 could not run the orchestrator-authored lock query; preserve this disposition instead of requesting operator approval."'
 }
 
