@@ -281,7 +281,7 @@ public sealed class HermesAcpTrialTests
     }
 
     [Xunit.Fact]
-    public async Task JsonRpcTerminalPermissionWithoutLocationIsRoleScoped()
+    public async Task JsonRpcTerminalPermissionWithoutLocationFailsClosed()
     {
         using var fixture = new Fixture();
         var developerInput = new StringWriter();
@@ -302,8 +302,8 @@ public sealed class HermesAcpTrialTests
         _ = await developerRpc.CallAsync("session/prompt", new { }, TestContext.Current.CancellationToken);
         _ = await plannerRpc.CallAsync("session/prompt", new { }, TestContext.Current.CancellationToken);
 
-        Assert.Contains("\"optionId\":\"allow\"", developerInput.ToString(), StringComparison.Ordinal);
-        Assert.False(developerRpc.PermissionPolicyViolated);
+        Assert.Contains("\"optionId\":\"deny\"", developerInput.ToString(), StringComparison.Ordinal);
+        Assert.True(developerRpc.PermissionPolicyViolated);
         Assert.Contains("\"optionId\":\"deny\"", plannerInput.ToString(), StringComparison.Ordinal);
         Assert.False(plannerRpc.PermissionPolicyViolated);
     }

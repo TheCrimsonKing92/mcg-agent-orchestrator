@@ -692,8 +692,8 @@ internal sealed class HermesAcpJsonRpcClient
         var kind = kindElement.GetString();
         if (string.Equals(kind, "execute", StringComparison.Ordinal))
         {
-            return !toolCall.TryGetProperty("locations", out var terminalLocations) ||
-                LocationsAreWorkspaceContained(terminalLocations, requireAtLeastOne: false);
+            return toolCall.TryGetProperty("locations", out var terminalLocations) &&
+                LocationsAreWorkspaceContained(terminalLocations, requireAtLeastOne: true);
         }
 
         if (kind is not ("edit" or "delete" or "move"))
