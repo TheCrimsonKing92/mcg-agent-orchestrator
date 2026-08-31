@@ -1876,6 +1876,64 @@ private static TaskVerificationRecord ProviderConnectivityVerification(
         Assert.Equal(task.Id, prepared.Task.Id);
     }
 
+    [Xunit.Fact(DisplayName = "WorkerProfileDispatcher_preflight_records_authoritative_retry_feedback_prompt_receipt")]
+    public void WorkerProfileDispatcherPreflightRecordsAuthoritativeRetryFeedbackPromptReceipt()
+    {
+        var root = CreateSeededDispatchRepository();
+        var promptRoot = Path.Combine(root, "prompts");
+        var kernel = new AgentOrchestratorKernel(new TestClock(DateTimeOffset.Parse("2026-08-31T10:00:00Z")));
+        var task = new TaskSpec(TaskId.New(), "Implement the retry correction.", AgentRole.Developer);
+        var goal = kernel.CreateGoal("Record authoritative retry feedback delivery", [task]);
+        var agent = SubscriptionSolDeveloperAgent();
+        kernel.ActivateGoal(goal.Id, [agent]);
+        var worktree = GoalWorktrees.Ensure(root, goal.Id);
+        kernel.RetryTaskWithAuthoritativeFeedback(
+            goal.Id,
+            task.Id,
+            "Accepted operator correction.",
+            RetryCause.NewTestFinding);
+
+        var prepared = WorkerProfileDispatcher.PrepareSubscriptionTask(
+            kernel,
+            goal,
+            task,
+            [agent],
+            DispatchTestProfiles(),
+            promptRoot,
+            worktree,
+            DateTimeOffset.Parse("2026-08-31T10:01:00Z"),
+            sandboxOptions: DisabledSandbox);
+
+        var receipt = Assert.IsType<WorkerContextPackageReceipt>(prepared.Task.LastDispatch!.ContextPackageReceipt);
+        var retryReceipt = Assert.IsType<WorkerRetryFeedbackPromptReceipt>(receipt.RetryFeedbackPromptReceipt);
+        var retryArtifact = WorkerContextArtifact.Create(
+            new LogicalArtifactIdentity("task/criterion-retry-feedback.json"),
+            ContextArtifactKind.AcceptanceCriteria,
+            JsonSerializer.SerializeToUtf8Bytes(task.CriterionRetryFeedback),
+            [AgentRole.Developer],
+            ContextDeliveryMode.InlineFull,
+            ContextContractVersion.V1);
+        var retrySection = Assert.Single(
+            receipt.Sections,
+            section => section.LogicalIdentity == "task/criterion-retry-feedback.json");
+        var renderedProjection = WorkerContextPackageBuilder.RenderArtifact(retryArtifact);
+        Assert.Equal(task.Id.Value, retryReceipt.AcceptedRetryTaskId);
+        Assert.Equal("task/criterion-retry-feedback.json", retryReceipt.LogicalIdentity);
+        Assert.Equal(
+            WorkerContextArtifact.Hash(System.Text.Encoding.UTF8.GetBytes("Accepted operator correction.")),
+            retryReceipt.AcceptedFeedbackSha256);
+        Assert.Equal(retryArtifact.ContentHash, retrySection.ContentHash);
+        Assert.Equal(retrySection.ContentHash, retryReceipt.TypedArtifactSha256);
+        Assert.Equal(
+            WorkerContextArtifact.Hash(System.Text.Encoding.UTF8.GetBytes(renderedProjection)),
+            retryReceipt.RenderedProjectionSha256);
+        Assert.Equal(
+            WorkerContextArtifact.Hash(File.ReadAllBytes(prepared.PromptPath!)),
+            retryReceipt.GeneratedPromptSha256);
+        Assert.Contains("Accepted operator correction.", File.ReadAllText(prepared.PromptPath!), StringComparison.Ordinal);
+        Assert.Null(task.LastProcess);
+    }
+
     [Xunit.Fact(DisplayName = "WorkerProfileDispatcher_preflight_blocks_unrelated_feedback_while_accepted_note_is_current")]
     public void WorkerProfileDispatcherPreflightBlocksUnrelatedFeedbackWhileAcceptedNoteIsCurrent()
     {
