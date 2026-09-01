@@ -234,14 +234,15 @@ public sealed class LauncherScriptTests
             File.SetLastWriteTimeUtc(Path.Combine(repositoryRoot, "global.json"), baseline);
             File.SetLastWriteTimeUtc(artifactPath, baseline.AddMinutes(1));
 
-            var dotnetShimPath = Path.Combine(shimPath, "dotnet.cmd");
+            var dotnetShimPath = Path.Combine(shimPath, "dotnet.ps1");
             File.WriteAllText(dotnetShimPath, """
-                @echo off
-                powershell.exe -NoProfile -Command "$entered=[Threading.Semaphore]::OpenExisting($env:SQLITE_TEST_ENTERED);[void]$entered.Release();$release=[Threading.EventWaitHandle]::OpenExisting($env:SQLITE_TEST_RELEASE);[void]$release.WaitOne()"
-                echo %*>"%SQLITE_TEST_INVOCATION%"
-                echo SQLite wrapper concurrent
-                exit /b 0
-                """.Replace("\n", "\r\n", StringComparison.Ordinal));
+                $entered = [Threading.Semaphore]::OpenExisting($env:SQLITE_TEST_ENTERED)
+                [void]$entered.Release()
+                $release = [Threading.EventWaitHandle]::OpenExisting($env:SQLITE_TEST_RELEASE)
+                [void]$release.WaitOne()
+                [IO.File]::WriteAllText($env:SQLITE_TEST_INVOCATION, ($args -join " "))
+                Write-Output "SQLite wrapper concurrent"
+                """);
 
             var enteredName = $"Local\\sqlite-helper-entered-{Guid.NewGuid():N}";
             var releaseName = $"Local\\sqlite-helper-release-{Guid.NewGuid():N}";
@@ -440,7 +441,38 @@ public sealed class LauncherScriptTests
         Assert.Equal(0, result.ExitCode);
         Assert.True(string.IsNullOrWhiteSpace(result.Stderr), result.Stderr);
         Assert.Equal(sandbox.ExpectedHead, File.ReadAllText(sandbox.MarkerPath).Trim());
-        Assert.Contains("build ", File.ReadAllText(sandbox.DotnetLogPath));
+        var dotnetLog = File.ReadAllText(sandbox.DotnetLogPath);
+        Assert.Contains("build ", dotnetLog);
+        Assert.Contains("--no-restore", dotnetLog, StringComparison.Ordinal);
+    }
+
+    [Xunit.Fact(DisplayName = "InvokeOrchestratorCommand_stale_app_without_assets_fails_without_restore")]
+    public void InvokeOrchestratorCommandStaleAppWithoutAssetsFailsWithoutRestore()
+    {
+        if (!OperatingSystem.IsWindows())
+        {
+            return;
+        }
+
+        using var sandbox = CreateStaleMarkerLauncherSandbox(includeNoRestoreAssets: false);
+        var result = RunInvokeRepoScript(
+            sandbox.RepositoryRoot,
+            "scripts\\Invoke-OrchestratorCommand.ps1",
+            new Dictionary<string, string?> { ["MCG_ORCHESTRATOR_DOTNET_PATH"] = sandbox.DotnetShimPath },
+            "help",
+            "operator-commands");
+
+        Assert.Equal(1, result.ExitCode);
+        Assert.True(string.IsNullOrWhiteSpace(result.Stdout), result.Stdout);
+        var errorLines = result.Stderr.Split(
+            JsonLineSeparators,
+            StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries);
+        Assert.Single(errorLines);
+        Assert.Contains("no-restored build assets are unavailable", errorLines[0], StringComparison.OrdinalIgnoreCase);
+        Assert.Contains("Invoke-PackageAudit.ps1", errorLines[0], StringComparison.Ordinal);
+        Assert.DoesNotContain("NU1900", errorLines[0], StringComparison.OrdinalIgnoreCase);
+        Assert.DoesNotContain("NU1301", errorLines[0], StringComparison.OrdinalIgnoreCase);
+        Assert.False(File.Exists(sandbox.DotnetLogPath), "Missing assets must fail before invoking dotnet.");
     }
 
     [Xunit.Fact(DisplayName = "StartOrchestratorCommand_default_path_starts_fresh_launcher")]
@@ -2084,7 +2116,7 @@ public sealed class LauncherScriptTests
         return new DefaultLauncherSandbox(repositoryRoot, invocationPath);
     }
 
-    private static StaleMarkerLauncherSandbox CreateStaleMarkerLauncherSandbox()
+    private static StaleMarkerLauncherSandbox CreateStaleMarkerLauncherSandbox(bool includeNoRestoreAssets = true)
     {
         var repositoryRoot = Path.Combine(Path.GetTempPath(), $"stale-marker-launcher-{Guid.NewGuid():N}");
         var scriptsPath = Path.Combine(repositoryRoot, "scripts");
@@ -2118,6 +2150,22 @@ public sealed class LauncherScriptTests
 
         File.WriteAllText(Path.Combine(appSourcePath, "Mcg.AgentOrchestrator.App.csproj"), "<Project Sdk=\"Microsoft.NET.Sdk\" />");
         File.WriteAllText(Path.Combine(appSourcePath, "Program.cs"), "Console.WriteLine(\"test\");");
+        if (includeNoRestoreAssets)
+        {
+            foreach (var projectName in new[]
+                     {
+                         "Mcg.AgentOrchestrator.App",
+                         "Mcg.AgentOrchestrator.Core",
+                         "Mcg.AgentOrchestrator.Infrastructure",
+                         "Mcg.AgentOrchestrator.Infrastructure.Providers",
+                         "Mcg.AgentOrchestrator.Infrastructure.OperatorComms",
+                     })
+            {
+                var intermediatePath = Path.Combine(repositoryRoot, "src", projectName, "obj");
+                Directory.CreateDirectory(intermediatePath);
+                File.WriteAllText(Path.Combine(intermediatePath, "project.assets.json"), "{}");
+            }
+        }
 
         var appDllPath = Path.Combine(appOutputPath, "Mcg.AgentOrchestrator.App.dll");
         var markerPath = appDllPath + ".git-head";

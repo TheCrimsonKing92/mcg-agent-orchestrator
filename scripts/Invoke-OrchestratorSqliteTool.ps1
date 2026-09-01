@@ -58,7 +58,7 @@ function Test-ArtifactCurrent {
         -RepositoryRoot $repoRoot `
         -ArtifactPath $artifactPath `
         -MarkerPath $markerPath `
-        -SourcePath $toolSourcePath $coreSourcePath `
+        $toolSourcePath $coreSourcePath `
             (Join-Path $repoRoot "Directory.Build.props") `
             (Join-Path $repoRoot "Directory.Build.rsp") `
             (Join-Path $repoRoot "global.json") *> $null

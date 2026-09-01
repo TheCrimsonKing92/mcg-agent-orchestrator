@@ -7,6 +7,11 @@ set "LOCK_STALE_SECONDS=60"
 set "APP_PROJECT=%ROOT%src\Mcg.AgentOrchestrator.App\Mcg.AgentOrchestrator.App.csproj"
 set "APP_DLL=%ROOT%src\Mcg.AgentOrchestrator.App\bin\Debug\net10.0\Mcg.AgentOrchestrator.App.dll"
 set "APP_HEAD=%ROOT%src\Mcg.AgentOrchestrator.App\bin\Debug\net10.0\Mcg.AgentOrchestrator.App.dll.git-head"
+set "APP_ASSETS=%ROOT%src\Mcg.AgentOrchestrator.App\obj\project.assets.json"
+set "CORE_ASSETS=%ROOT%src\Mcg.AgentOrchestrator.Core\obj\project.assets.json"
+set "INFRASTRUCTURE_ASSETS=%ROOT%src\Mcg.AgentOrchestrator.Infrastructure\obj\project.assets.json"
+set "PROVIDERS_ASSETS=%ROOT%src\Mcg.AgentOrchestrator.Infrastructure.Providers\obj\project.assets.json"
+set "OPERATOR_COMMS_ASSETS=%ROOT%src\Mcg.AgentOrchestrator.Infrastructure.OperatorComms\obj\project.assets.json"
 set "DOTNET_HOST=dotnet"
 if defined MCG_ORCHESTRATOR_DOTNET_PATH set "DOTNET_HOST=%MCG_ORCHESTRATOR_DOTNET_PATH%"
 
@@ -24,7 +29,7 @@ if exist "%LOCK_DIR%" powershell -NoProfile -Command "$ld='%LOCK_DIR%';$threshol
 :: Up-to-date check -- generated bin/obj files are excluded so restore output cannot make a
 :: current App.dll look stale. The shared checker still fails closed for a missing/mismatched
 :: git marker and for newer checked-in source files.
-powershell -NoProfile -ExecutionPolicy Bypass -File "%ROOT%scripts\Test-OrchestratorArtifactFreshness.ps1" -RepositoryRoot "%ROOT%." -ArtifactPath "%APP_DLL%" -MarkerPath "%APP_HEAD%" -SourcePath "%ROOT%src" "%ROOT%Directory.Build.props" "%ROOT%Directory.Build.rsp" "%ROOT%global.json"
+powershell -NoProfile -ExecutionPolicy Bypass -File "%ROOT%scripts\Test-OrchestratorArtifactFreshness.ps1" -RepositoryRoot "%ROOT%." -ArtifactPath "%APP_DLL%" -MarkerPath "%APP_HEAD%" "%ROOT%src" "%ROOT%Directory.Build.props" "%ROOT%Directory.Build.rsp" "%ROOT%global.json"
 if not errorlevel 1 goto run_app
 
 :: Acquire build lock -- mkdir is atomic on NTFS; spin/retry up to 30 s
@@ -45,8 +50,14 @@ goto try_lock
 for /f "delims=" %%a in ('powershell -NoProfile -Command "(Get-Process -Id $PID).Parent.Id"') do set "MYPID=%%a"
 if defined MYPID echo %MYPID%>"%LOCK_DIR%\owner.pid"
 
+if not exist "%APP_ASSETS%" goto missing_build_assets
+if not exist "%CORE_ASSETS%" goto missing_build_assets
+if not exist "%INFRASTRUCTURE_ASSETS%" goto missing_build_assets
+if not exist "%PROVIDERS_ASSETS%" goto missing_build_assets
+if not exist "%OPERATOR_COMMS_ASSETS%" goto missing_build_assets
+
 set "BUILD_LOG=%TEMP%\mcg-build-%RANDOM%.log"
-call "%DOTNET_HOST%" build "%APP_PROJECT%" --nologo -v quiet -clp:ErrorsOnly -p:UseSharedCompilation=false >"%BUILD_LOG%" 2>&1
+call "%DOTNET_HOST%" build "%APP_PROJECT%" --no-restore --nologo -v quiet -clp:ErrorsOnly -p:UseSharedCompilation=false -p:McgIsolatedArtifactsPath= >"%BUILD_LOG%" 2>&1
 set BUILD_EXIT=%ERRORLEVEL%
 rmdir /s /q "%LOCK_DIR%" 2>nul
 
@@ -84,3 +95,8 @@ echo. >&2
 echo ERROR: dotnet build failed >&2
 del "%BUILD_LOG%" 2>nul
 exit /b %BUILD_EXIT%
+
+:missing_build_assets
+rmdir /s /q "%LOCK_DIR%" 2>nul
+echo ERROR: App artifact is missing or stale and no-restored build assets are unavailable; run .\scripts\Invoke-PackageAudit.ps1 online, then retry. >&2
+exit /b 1
