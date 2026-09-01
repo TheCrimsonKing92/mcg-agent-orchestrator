@@ -29,11 +29,43 @@ internal sealed record TestClassDeclarations(
         new(TestClassDeclarationOutcome.Unavailable, []);
 }
 
+internal enum ReverseDependencySelectionOutcome
+{
+    Resolved,
+    Unreadable,
+    Unavailable,
+    Abandoned
+}
+
+internal sealed record ReverseDependencyTestSelection(
+    ReverseDependencySelectionOutcome Outcome,
+    IReadOnlyList<string> TestClassNames,
+    string? Reason)
+{
+    internal static ReverseDependencyTestSelection Resolved(IEnumerable<string> testClassNames) =>
+        new(
+            ReverseDependencySelectionOutcome.Resolved,
+            testClassNames.Distinct(StringComparer.Ordinal).Order(StringComparer.Ordinal).ToArray(),
+            null);
+
+    internal static ReverseDependencyTestSelection Unreadable(string reason) =>
+        new(ReverseDependencySelectionOutcome.Unreadable, [], reason);
+
+    internal static ReverseDependencyTestSelection Abandoned(string reason) =>
+        new(ReverseDependencySelectionOutcome.Abandoned, [], reason);
+
+    internal static ReverseDependencyTestSelection Unavailable { get; } =
+        new(ReverseDependencySelectionOutcome.Unavailable, [], "Reverse-dependency evidence is unavailable.");
+}
+
 internal interface ITestClassDeclarationReader
 {
     TestClassDeclarations ReadFile(string repositoryRelativePath);
 
     TestClassDeclarations ReadProject(string repositoryRelativeDirectory);
+
+    ReverseDependencyTestSelection ReadReverseDependentTestClasses(
+        IReadOnlyList<string> changedSourcePaths) => ReverseDependencyTestSelection.Unavailable;
 }
 
 internal sealed class FileSystemTestClassDeclarationReader : ITestClassDeclarationReader
@@ -104,6 +136,10 @@ internal sealed class FileSystemTestClassDeclarationReader : ITestClassDeclarati
         }
     }
 
+    public ReverseDependencyTestSelection ReadReverseDependentTestClasses(
+        IReadOnlyList<string> changedSourcePaths) =>
+        ReverseDependencyTestImpactReader.Read(_repositoryRoot, changedSourcePaths);
+
     private TestClassDeclarations ReadProjectDeclarations(string[] sourceFiles)
     {
         var classNames = new List<string>();
@@ -133,7 +169,7 @@ internal sealed class FileSystemTestClassDeclarationReader : ITestClassDeclarati
             : TestClassDeclarations.Unreadable;
     }
 
-    private string[] EnumerateProjectSourceFiles(string projectDirectory)
+    internal static string[] EnumerateProjectSourceFiles(string projectDirectory)
     {
         projectDirectory = Path.GetFullPath(projectDirectory)
             .TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar);
@@ -195,26 +231,76 @@ internal sealed class UnavailableTestClassDeclarationReader : ITestClassDeclarat
 
 internal static class CSharpTestClassScanner
 {
+    internal sealed record SourceTypeDeclaration(
+        string Name,
+        bool IsPartial,
+        IReadOnlySet<string> ReferencedIdentifiers);
+
+    internal sealed record SourceSymbols(
+        IReadOnlyList<SourceTypeDeclaration> DeclaredTypes,
+        IReadOnlyList<string> TestClassNames);
+
     internal static bool TryReadClassNames(string source, out IReadOnlyList<string> classNames)
     {
         classNames = [];
+        if (!TryReadSourceSymbols(source, out var symbols))
+        {
+            return false;
+        }
+
+        classNames = symbols.TestClassNames;
+        return true;
+    }
+
+    internal static bool TryReadSourceSymbols(string source, out SourceSymbols symbols)
+    {
+        symbols = new SourceSymbols([], []);
         if (!TryTokenize(source, out var tokens) || !TryFindDeclarations(tokens, out var declarations))
         {
             return false;
         }
 
-        classNames = declarations
-            .Where(declaration => declaration.IsQualifyingClass)
+        var topLevelDeclarations = declarations
             .Where(declaration => !declarations.Any(parent =>
                 parent.OpenBraceIndex < declaration.KeywordIndex &&
                 declaration.KeywordIndex < parent.CloseBraceIndex))
+            .ToArray();
+        var classNames = topLevelDeclarations
+            .Where(declaration => declaration.IsQualifyingClass)
             .Where(declaration => ContainsTestMethodAttribute(tokens, declaration, declarations))
             .Select(declaration => declaration.Name)
             .Distinct(StringComparer.Ordinal)
             .Order(StringComparer.Ordinal)
             .ToArray();
+        var declarationNameIndexes = declarations
+            .Select(declaration => declaration.NameIndex)
+            .ToHashSet();
+        var sourceTypeDeclarations = topLevelDeclarations
+            .Select(declaration => new SourceTypeDeclaration(
+                declaration.Name,
+                declaration.IsPartial,
+                ReadReferencedIdentifiers(tokens, declaration, declarationNameIndexes)))
+            .OrderBy(declaration => declaration.Name, StringComparer.Ordinal)
+            .ToArray();
+        symbols = new SourceSymbols(
+            sourceTypeDeclarations,
+            classNames);
         return true;
     }
+
+    private static IReadOnlySet<string> ReadReferencedIdentifiers(
+        IReadOnlyList<Token> tokens,
+        TypeDeclaration declaration,
+        IReadOnlySet<int> declarationNameIndexes) =>
+        tokens
+            .Select((token, index) => (token, index))
+            .Where(pair =>
+                declaration.KeywordIndex <= pair.index &&
+                pair.index <= declaration.CloseBraceIndex &&
+                pair.token.IsIdentifier &&
+                !declarationNameIndexes.Contains(pair.index))
+            .Select(pair => pair.token.Value)
+            .ToHashSet(StringComparer.Ordinal);
 
     private static bool TryFindDeclarations(
         IReadOnlyList<Token> tokens,
@@ -224,7 +310,7 @@ internal static class CSharpTestClassScanner
         for (var index = 0; index < tokens.Count; index++)
         {
             var keyword = tokens[index].Value;
-            if (keyword is not ("class" or "record" or "struct" or "interface"))
+            if (keyword is not ("class" or "record" or "struct" or "interface" or "enum"))
             {
                 continue;
             }
@@ -262,9 +348,11 @@ internal static class CSharpTestClassScanner
             var modifiers = ReadModifiers(tokens, index);
             found.Add(new TypeDeclaration(
                 index,
+                nameIndex,
                 openBraceIndex,
                 closeBraceIndex,
                 tokens[nameIndex].Value,
+                modifiers.Contains("partial"),
                 IsQualifyingClass: keyword is "class" or "record" &&
                     !isRecordStruct &&
                     modifiers.Contains("public") &&
@@ -625,8 +713,10 @@ internal static class CSharpTestClassScanner
 
     private sealed record TypeDeclaration(
         int KeywordIndex,
+        int NameIndex,
         int OpenBraceIndex,
         int CloseBraceIndex,
         string Name,
+        bool IsPartial,
         bool IsQualifyingClass);
 }

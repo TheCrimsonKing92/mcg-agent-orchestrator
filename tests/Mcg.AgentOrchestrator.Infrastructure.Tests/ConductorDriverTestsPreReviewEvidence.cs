@@ -198,7 +198,7 @@ public sealed class ConductorDriverTestsPreReviewEvidence
                 goal,
                 reviewer,
                 blocker,
-                evidenceRequest: request);
+                evidenceRequest: request, implicitFindingCategory: FindingCategory.AcceptanceOwned);
 
             var completionGate = new ConductorParallelAcceptanceAttemptCompletionGateForTests();
             var attemptRoot = Path.Combine(root, "pre-review-evidence-attempts");

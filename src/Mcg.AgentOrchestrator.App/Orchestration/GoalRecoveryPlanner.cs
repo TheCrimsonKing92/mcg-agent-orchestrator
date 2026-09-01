@@ -54,7 +54,9 @@ internal static class GoalRecoveryPlanner
             : null;
         var hasDiff = GoalWorktrees.TryGetBranchDiff(executionDirectory, goal.Id) is not null;
         var changeSummary = RepositoryChangeClassifier.Classify(worktree is null ? Array.Empty<string>() : TryGetChangedFiles(worktree));
-        var testImpactPlan = RepositoryTestImpactPlanner.Plan(changeSummary);
+        var testImpactPlan = worktree is null
+            ? RepositoryTestImpactPlanner.Plan(changeSummary)
+            : RepositoryTestImpactPlanner.Plan(changeSummary, worktree);
         var operationJournal = GoalOperationJournal.Read(executionDirectory, goal.Id);
         var buildLease = DotnetBuildEnvironmentManager.InspectGoalLease(goal.Id);
         var cleanupBackoff = includeCleanupBackoff

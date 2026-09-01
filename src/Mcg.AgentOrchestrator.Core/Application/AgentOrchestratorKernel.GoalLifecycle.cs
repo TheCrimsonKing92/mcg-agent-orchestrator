@@ -357,6 +357,53 @@ public sealed partial class AgentOrchestratorKernel
         return task;
     }
 
+    public TaskSpec RecordFindingEvidenceSuppressed(
+        GoalId goalId,
+        TaskId taskId,
+        string candidateSha,
+        IReadOnlyList<string> blockerIds,
+        string evidenceRequestId,
+        AgentRole chosenOwner,
+        string reason,
+        string suppressionIdentity)
+    {
+        var goal = GetGoal(goalId);
+        var task = goal.FindTask(taskId);
+        ArgumentNullException.ThrowIfNull(blockerIds);
+        var normalizedBlockerIds = blockerIds
+            .Where(id => !string.IsNullOrWhiteSpace(id))
+            .Select(id => id.Trim())
+            .Distinct(StringComparer.Ordinal)
+            .OrderBy(id => id, StringComparer.Ordinal)
+            .ToArray();
+        if (normalizedBlockerIds.Length == 0)
+        {
+            throw new ArgumentException("At least one writable blocker id is required.", nameof(blockerIds));
+        }
+
+        ArgumentException.ThrowIfNullOrWhiteSpace(candidateSha);
+        ArgumentException.ThrowIfNullOrWhiteSpace(evidenceRequestId);
+        ArgumentException.ThrowIfNullOrWhiteSpace(reason);
+        ArgumentException.ThrowIfNullOrWhiteSpace(suppressionIdentity);
+        if (goal.Timeline.Any(evt =>
+                evt.Kind == ProgressKind.FindingEvidenceSuppressed &&
+                evt.Message.Contains(
+                    $"suppression_identity={suppressionIdentity.Trim()}",
+                    StringComparison.Ordinal)))
+        {
+            return task;
+        }
+
+        Append(
+            goal,
+            taskId,
+            ProgressKind.FindingEvidenceSuppressed,
+            $"finding-evidence-suppressed goal_id={goalId}; task_id={taskId}; candidate_sha={candidateSha.Trim()}; " +
+            $"blocker_ids={string.Join(',', normalizedBlockerIds)}; evidence_request_id={evidenceRequestId.Trim()}; " +
+            $"chosen_owner={chosenOwner}; reason={reason.Trim()}; suppression_identity={suppressionIdentity.Trim()}");
+        return task;
+    }
+
     public TaskSpec RecordFindingEvidenceOutcome(
         GoalId goalId,
         TaskId taskId,
@@ -424,7 +471,26 @@ public sealed partial class AgentOrchestratorKernel
         string message,
         RetryCause retryCause,
         bool invalidateDownstream = true,
-        RetryRoundKind? retryRoundKind = null)
+        RetryRoundKind? retryRoundKind = null) =>
+        RetryTaskCore(goalId, taskId, message, retryCause, invalidateDownstream, retryRoundKind, authoritativeRetryFeedback: false);
+
+    public TaskSpec RetryTaskWithAuthoritativeFeedback(
+        GoalId goalId,
+        TaskId taskId,
+        string message,
+        RetryCause retryCause,
+        bool invalidateDownstream = true,
+        RetryRoundKind? retryRoundKind = null) =>
+        RetryTaskCore(goalId, taskId, message, retryCause, invalidateDownstream, retryRoundKind, authoritativeRetryFeedback: true);
+
+    private TaskSpec RetryTaskCore(
+        GoalId goalId,
+        TaskId taskId,
+        string message,
+        RetryCause retryCause,
+        bool invalidateDownstream,
+        RetryRoundKind? retryRoundKind,
+        bool authoritativeRetryFeedback)
     {
         var goal = GetGoal(goalId);
         var task = goal.FindTask(taskId);
@@ -453,6 +519,11 @@ public sealed partial class AgentOrchestratorKernel
         var retryAt = _clock.UtcNow;
         var priorCandidate = task.LastDispatch?.ResultCommit;
         ResetTaskForRetry(task, retryAt, retryCause, retryRoundKind);
+        if (authoritativeRetryFeedback)
+        {
+            task.RecordCriterionRetryFeedback([retryMessage]);
+            task.RecordAcceptedRetryFeedback(retryMessage, retryAt);
+        }
         RecordEffectiveAcceptanceCriteriaCorrections(goal, taskId, ProgressKind.TaskRetried, retryMessage);
         Append(goal, taskId, ProgressKind.TaskRetried, retryMessage);
         if (invalidateDownstream)

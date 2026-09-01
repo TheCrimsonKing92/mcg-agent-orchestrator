@@ -39,7 +39,9 @@ internal static class SourceSizeRatchet
             // Reconciled after landing goal 1441c61c: its failure-cause evidence custody shares this same
             // execution boundary. This is the measured combined size after rebasing both reviewed changes.
             // Three-line increase adds explicit current-process exclusion at the final remediation boundary.
-            new SourceSizeCeiling("src/Mcg.AgentOrchestrator.Infrastructure/Workspaces/GoalAcceptanceVerifier.cs", 9399),
+            // Raised for goal d5fcf981: canonical TRX identity production and merge-base failure
+            // attribution meet where the verifier converts a test receipt into final gate evidence.
+            new SourceSizeCeiling("src/Mcg.AgentOrchestrator.Infrastructure/Workspaces/GoalAcceptanceVerifier.cs", 9527),
             // Goal 682f25a1 re-derived this row after integrating goal c2eae988, whose acceptance
             // cancellation seam had already added 74 net lines before the multi-file ratchet landed.
             // Raised for goal a22c7293: slice admission must run where all dispatch paths converge.
@@ -54,7 +56,11 @@ internal static class SourceSizeRatchet
             // full-journal retention; this is the measured combined size, not new goal behavior.
             // Raised for goal fd252fe4: typed retry causes must be selected and passed at the existing
             // retry-decision call sites; classification and admission persistence remain extracted.
-            new SourceSizeCeiling("src/Mcg.AgentOrchestrator.App/Orchestration/ConductorDriver.cs", 6266),
+            // Raised for goal d5fcf981: changed-scope attribution and no-worker holds must meet at the
+            // existing acceptance retry decision that owns task reopening and lifecycle disposition.
+            // Raised for goal 52590d3e: writable-blocker priority and typed suppression emission must run
+            // before request normalization at the finding-evidence orchestration boundary they govern.
+            new SourceSizeCeiling("src/Mcg.AgentOrchestrator.App/Orchestration/ConductorDriver.cs", 6502),
             // Raised for goal dadadfac: set-aside re-admission must be decided where the loop already holds
             // the goal, its recorded set-aside entry, and the current sweep blockers together.
             // Raised for goal 289b469d: registration-fault hold/escalation must be decided at the existing
@@ -79,7 +85,9 @@ internal static class SourceSizeRatchet
             // the measured combined post-rebase size.
             // Goal 52049d08 adds only context-usage measurement and typed no-change admission at the
             // existing dispatch-completion boundary; projection and classification remain extracted.
-            new SourceSizeCeiling("src/Mcg.AgentOrchestrator.Infrastructure/Processes/BackgroundDispatchRunner.cs", 3150),
+            // Goal 17d96426 adds Hermes to the existing provider-to-sandbox mapping and writability
+            // decision; both checks belong at this dispatch boundary and add five measured lines.
+            new SourceSizeCeiling("src/Mcg.AgentOrchestrator.Infrastructure/Processes/BackgroundDispatchRunner.cs", 3155),
             // Goal 5a75fed0 extracted typed projection parsing and literal restoration into
             // WorkerContextProjectionResidual, leaving the dispatcher to sequence package assembly.
             // Goal fd252fe4 adds retry fingerprints for the resolved provider, model, paid route, and
@@ -89,7 +97,8 @@ internal static class SourceSizeRatchet
             new SourceSizeCeiling("src/Mcg.AgentOrchestrator.Infrastructure/Workers/WorkerProfileDispatcher.cs", 3270),
             // Raised for goal fd252fe4: the single typed retry-cause argument belongs at the durable CLI
             // command-application boundary; classification and admission behavior remain elsewhere.
-            new SourceSizeCeiling("src/Mcg.AgentOrchestrator.App/Cli/CliPersistentStateRunner.cs", 4695),
+            // Goal 17d96426 classifies the stateless Hermes trial beside the existing stateless commands.
+            new SourceSizeCeiling("src/Mcg.AgentOrchestrator.App/Cli/CliPersistentStateRunner.cs", 4696),
             new SourceSizeCeiling("tests/Mcg.AgentOrchestrator.Infrastructure.Tests/GoalAcceptanceVerifierTests.cs", 1566),
             // Goal 682f25a1 re-derived this row after integrating goal c2eae988, whose fault-isolation
             // eligibility coverage had already added 173 net lines before the multi-file ratchet landed.
@@ -97,7 +106,10 @@ internal static class SourceSizeRatchet
             // inline-landing lease lifecycle without changing unrelated driver tests.
             // Raised for goal 13630c9f: the shared driver fixture forwards the apparatus-hold release
             // collaborators used by the focused lifecycle controls.
-            new SourceSizeCeiling("tests/Mcg.AgentOrchestrator.Infrastructure.Tests/ConductorDriverTests.cs", 1403),
+            // Raised for goal d5fcf981: the shared fixture forwards only the landing-file-scope seam.
+            // Raised for goal 52590d3e: the shared driver fixture forwards the typed suppression recorder
+            // so tests can prove no focused or paid downstream execution starts.
+            new SourceSizeCeiling("tests/Mcg.AgentOrchestrator.Infrastructure.Tests/ConductorDriverTests.cs", 1408),
             // Goal ce3c3917 keeps acquired, unavailable, and exceptional lease-lifecycle coverage together
             // in the acceptance-coordination owner rather than splitting one behavioral contract.
             // Raised for goal 13630c9f: acceptance coordination owns the structured apparatus cause
@@ -107,11 +119,15 @@ internal static class SourceSizeRatchet
             new SourceSizeCeiling("tests/Mcg.AgentOrchestrator.Infrastructure.Tests/ConductorDriverTestsAcceptanceCoordination.cs", 1150),
             // Raised for goal 13630c9f: lifecycle coverage keeps unchanged-candidate holds, bounded
             // operator release, and main/candidate HEAD regating in one state-transition decision table.
-            new SourceSizeCeiling("tests/Mcg.AgentOrchestrator.Infrastructure.Tests/ConductorDriverTestsLifecycleStates.cs", 1701),
+            // Raised for goal d5fcf981: acceptance attribution controls prove worker retry versus held
+            // lifecycle transitions, including canonical identities produced from a TRX receipt.
+            new SourceSizeCeiling("tests/Mcg.AgentOrchestrator.Infrastructure.Tests/ConductorDriverTestsLifecycleStates.cs", 1996),
             new SourceSizeCeiling("tests/Mcg.AgentOrchestrator.Infrastructure.Tests/ConductorDriverTestsReviewRetryConvergence.cs", 778),
             // Raised for goal 4e3cdbb8: behavioral coverage now pins every permanent and transient
             // finding-evidence refusal disposition plus receipt-id priority on the next-round request loop.
-            new SourceSizeCeiling("tests/Mcg.AgentOrchestrator.Infrastructure.Tests/ConductorDriverTestsFindingEvidence.cs", 2092),
+            // Raised for goal 52590d3e: the finding-evidence owner now carries both recorded incident shapes,
+            // invalid-normalization suppression, ownership separation, and new-SHA/resolution controls.
+            new SourceSizeCeiling("tests/Mcg.AgentOrchestrator.Infrastructure.Tests/ConductorDriverTestsFindingEvidence.cs", 2713),
             new SourceSizeCeiling("tests/Mcg.AgentOrchestrator.Infrastructure.Tests/ConductorDriverTestsPreReviewEvidence.cs", 1187),
             new SourceSizeCeiling("tests/Mcg.AgentOrchestrator.Infrastructure.Tests/ConductorDriverTestsContractRepairBounds.cs", 1097),
             new SourceSizeCeiling("tests/Mcg.AgentOrchestrator.Infrastructure.Tests/ConductorDriverTestsDispatchRecovery.cs", 537),

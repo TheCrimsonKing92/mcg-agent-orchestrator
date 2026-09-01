@@ -111,6 +111,7 @@ internal sealed partial class ConductorDriver
     private readonly Action<GoalId, TaskId, string> _recordTaskNote;
     private readonly Action<GoalId, TaskId, string> _recordFindingEvidenceRequest;
     private readonly Action<GoalId, TaskId, string> _recordFindingEvidenceRun;
+    private readonly Action<GoalId, TaskId, string, IReadOnlyList<string>, string, AgentRole, string, string> _recordFindingEvidenceSuppressed;
     private readonly Action<GoalId, TaskId, string, FindingEvidenceOutcome, FindingEvidenceReceipt?> _recordFindingEvidenceOutcome;
     private readonly Func<GoalId, TaskId, IReadOnlyList<string>, int> _recordCriterionRetryFeedback;
     private readonly Action<GoalId, TaskId> _clearCriterionRetryFeedback;
@@ -764,6 +765,9 @@ internal sealed partial class ConductorDriver
             kernel.RecordFindingEvidenceRequest(goalId, taskId, message);
         _recordFindingEvidenceRun = (goalId, taskId, message) =>
             kernel.RecordFindingEvidenceRun(goalId, taskId, message);
+        _recordFindingEvidenceSuppressed = (goalId, taskId, candidateSha, blockerIds, requestId, owner, reason, identity) =>
+            kernel.RecordFindingEvidenceSuppressed(
+                goalId, taskId, candidateSha, blockerIds, requestId, owner, reason, identity);
         _recordFindingEvidenceOutcome = (goalId, taskId, stableId, outcome, receipt) =>
         {
             kernel.RecordFindingEvidenceOutcome(goalId, taskId, stableId, outcome, receipt);
@@ -992,10 +996,9 @@ internal sealed partial class ConductorDriver
         SliceBatchParentExecutionGuard = new SliceBatchParentExecutionGuard(() => kernel.Goals);
         _isVerificationGateSatisfied = goal => kernel.BuildVerificationGate(goal.Id).IsSatisfied;
         _gateReadyCandidateProjector = GateReadyCandidateProjector.CreateForRepository(dir);
-        _getPreReviewEvidenceContext = goal =>
-            BuildPreReviewEvidenceContext(
-                TryResolveAcceptanceBranchHead(goal),
-                _getLandingFileScopes(goal));
+        _getPreReviewEvidenceContext = goal => BuildPreReviewEvidenceContext(
+            TryResolveAcceptanceBranchHead(goal),
+            _getLandingFileScopes(goal), GoalWorktrees.TryResolve(dir, goal.Id));
         _getFindingEvidenceEngineSettings = goal => AcceptanceGateEngineSettings.Load(
             GoalWorktrees.TryResolve(dir, goal.Id) ?? dir);
         _resolveFindingEvidenceSiblingClasses = (goal, project, requestedClass) =>
@@ -1221,6 +1224,7 @@ internal sealed partial class ConductorDriver
         Action<GoalId, TaskId, string>? recordReviewerEvidenceRequestReceived = null,
         Action<GoalId, TaskId, string>? recordReviewerEvidenceRunRecorded = null,
         Func<GoalId, TaskId, string, RetryRoundKind?, TaskSpec>? retryTaskWithRoundKind = null,
+        Func<GoalId, TaskId, string, RetryRoundKind?, RetryCause, TaskSpec>? retryTaskWithCause = null,
         Func<Goal, string?>? tryBuildAwaitingClarificationEscalationReason = null,
         Func<Goal, int>? getAcceptanceSlotCount = null,
         Func<int>? getWorkerAdmissionCapacity = null,
@@ -1234,6 +1238,7 @@ internal sealed partial class ConductorDriver
         Action<GoalId, TaskId, string, FindingEvidenceOutcome, FindingEvidenceReceipt?>? recordFindingEvidenceOutcome = null,
         Action<GoalId, TaskId, string>? recordFindingEvidenceRequest = null,
         Action<GoalId, TaskId, string>? recordFindingEvidenceRun = null,
+        Action<GoalId, TaskId, string, IReadOnlyList<string>, string, AgentRole, string, string>? recordFindingEvidenceSuppressed = null,
         Func<Goal, AcceptanceGateEngineSettings>? getFindingEvidenceEngineSettings = null,
         Func<Goal, string, string, IReadOnlyList<string>>? resolveFindingEvidenceSiblingClasses = null,
         Func<Goal, bool>? isVerificationGateSatisfied = null,
@@ -1301,15 +1306,17 @@ internal sealed partial class ConductorDriver
             ((_, _, _) => []);
         _recordPreReviewEvidence = recordPreReviewEvidence ?? ((_, _, _) => { });
         _recordPreReviewMappingEscalationSuppressed = recordPreReviewMappingEscalationSuppressed ?? ((_, _, _, _) => { });
-        _retryTask = retryTaskWithRoundKind
+        _retryTask = retryTaskWithCause
+            ?? (retryTaskWithRoundKind
             is not null
                 ? ((goalId, taskId, message, roundKind, _) => retryTaskWithRoundKind(goalId, taskId, message, roundKind))
                 : retryTask is not null
                     ? ((goalId, taskId, message, _, _) => retryTask(goalId, taskId, message))
-                    : ((_, _, _, _, _) => throw new InvalidOperationException("Retry delegate was not configured."));
+                    : ((_, _, _, _, _) => throw new InvalidOperationException("Retry delegate was not configured.")));
         _recordTaskNote = recordTaskNote ?? ((_, _, _) => { });
         _recordFindingEvidenceRequest = recordFindingEvidenceRequest ?? recordReviewerEvidenceRequestReceived ?? ((_, _, _) => { });
         _recordFindingEvidenceRun = recordFindingEvidenceRun ?? recordReviewerEvidenceRunRecorded ?? ((_, _, _) => { });
+        _recordFindingEvidenceSuppressed = recordFindingEvidenceSuppressed ?? ((_, _, _, _, _, _, _, _) => { });
         _recordFindingEvidenceOutcome = recordFindingEvidenceOutcome ?? ((_, _, _, _, _) => { });
         _recordCriterionRetryFeedback = recordCriterionRetryFeedback ?? ((_, _, _) => throw new InvalidOperationException("Criterion retry feedback delegate was not configured."));
         _clearCriterionRetryFeedback = clearCriterionRetryFeedback ?? ((_, _) => { });
@@ -2186,6 +2193,51 @@ internal sealed partial class ConductorDriver
 
         var findingRoundFingerprint = BuildFindingRoundFingerprint(requestingTask, round);
 
+        if (requestingTask.RequiredRole == AgentRole.Reviewer)
+        {
+            var openBlockingFindings = ReviewFindings.GetOpenBlockingFindings(
+                mergedFindings.Count > 0 ? mergedFindings : round.Findings,
+                goal.EffectiveAcceptanceCriteriaCorrections);
+            var suppressionRoute = ReviewerFindingEvidenceSuppressionRouting.Resolve(
+                requestingTask.LastVerification, goal.EffectiveAcceptanceCriteriaCorrections, openBlockingFindings);
+            if (suppressionRoute.DeferToReviewRetryRoute)
+            {
+                return false;
+            }
+            var writableBlockerIds = suppressionRoute.WritableBlockerIds;
+            var reviewedCandidateSha = requestingTask.LastVerification?.ReviewedCommit?.Trim();
+            var requestTargetsCurrentCandidate =
+                !candidateShaAvailable ||
+                !ConductorGitRevisionReader.IsValid(reviewedCandidateSha) ||
+                string.Equals(candidateSha, reviewedCandidateSha, StringComparison.OrdinalIgnoreCase);
+            if (writableBlockerIds.Length > 0 && requestTargetsCurrentCandidate)
+            {
+                var reason = candidateShaAvailable
+                    ? "unresolved-writable-blockers-on-unchanged-candidate"
+                    : "candidate-sha-unavailable-with-unresolved-writable-blockers";
+                foreach (var requestIdentity in requestingFindings
+                             .Select(finding => BuildFindingEvidenceIdentity(finding.EvidenceRequest!))
+                             .Distinct(StringComparer.Ordinal))
+                {
+                    var requestId = CreateFindingEvidenceRequestId(requestIdentity);
+                    _recordFindingEvidenceSuppressed(
+                        goal.Id,
+                        requestingTask.Id,
+                        telemetryCandidateSha,
+                        writableBlockerIds,
+                        requestId,
+                        suppressionRoute.ChosenOwner ?? throw new InvalidOperationException("Writable finding suppression requires a feasible upstream owner."),
+                        reason,
+                        CreateFindingEvidenceSuppressionIdentity(
+                            telemetryCandidateSha,
+                            requestIdentity,
+                            writableBlockerIds));
+                }
+
+                return false;
+            }
+        }
+
         var groups = new List<FindingEvidenceRequestGroup>();
         var normalizationRefused = false;
         foreach (var finding in requestingFindings)
@@ -2692,7 +2744,7 @@ internal sealed partial class ConductorDriver
         selection.TestProject + ":" + selection.TestClass;
 
     private static string BuildFindingEvidenceIdentity(FindingEvidenceRequest request) =>
-        string.Join("|", request.Selections.Select(selection => $"{selection.TestProject}:{selection.TestClass}"));
+        string.Join("|", (request.Selections ?? []).Select(selection => $"{selection.TestProject}:{selection.TestClass}"));
 
     private static string BuildFindingRoundFingerprint(TaskSpec requestingTask, ReviewFindingRound round)
     {
@@ -2920,7 +2972,10 @@ internal sealed partial class ConductorDriver
             }
 
             var developerFindings = member.Findings.Where(finding =>
-                finding.Category is not (FindingCategory.OperatorOwned or FindingCategory.SpecDefect) &&
+                finding.Category is not (
+                    FindingCategory.OperatorOwned or
+                    FindingCategory.SpecDefect or
+                    FindingCategory.AcceptanceOwned) &&
                 IsDeveloperOwnedFindingAnchor(finding.Location.File));
             foreach (var finding in developerFindings)
             {
@@ -2970,6 +3025,26 @@ internal sealed partial class ConductorDriver
         "finding-evidence-" + Convert.ToHexString(
             SHA256.HashData(Encoding.UTF8.GetBytes($"{candidateSha}:{findingRoundFingerprint}:{identity}")))
             .ToLowerInvariant()[..24];
+
+    private static string CreateFindingEvidenceRequestId(string identity) =>
+        "evidence-request-" + Convert.ToHexString(
+            SHA256.HashData(Encoding.UTF8.GetBytes(identity)))
+            .ToLowerInvariant()[..20];
+
+    private static string CreateFindingEvidenceSuppressionIdentity(
+        string candidateSha,
+        string requestIdentity,
+        IReadOnlyList<string> writableBlockerIds)
+    {
+        var blockerIdentity = string.Join(
+            "\u001f",
+            writableBlockerIds
+                .OrderBy(id => id, StringComparer.Ordinal));
+        return "evidence-suppression-" + Convert.ToHexString(
+            SHA256.HashData(Encoding.UTF8.GetBytes(
+                $"{candidateSha.Trim().ToLowerInvariant()}\u001e{requestIdentity}\u001e{blockerIdentity}")))
+            .ToLowerInvariant()[..24];
+    }
 
     private static string CreateFindingEvidenceBatchId(
         string candidateSha,
@@ -4992,10 +5067,9 @@ internal sealed partial class ConductorDriver
     }
 
     internal static PreReviewEvidenceContext BuildPreReviewEvidenceContext(
-        string? candidateSha,
-        IReadOnlyList<string> changedFiles)
+        string? candidateSha, IReadOnlyList<string> changedFiles, string? repositoryRoot = null)
     {
-        var plan = RepositoryTestImpactPlanner.Plan(changedFiles);
+        var plan = string.IsNullOrWhiteSpace(repositoryRoot) ? RepositoryTestImpactPlanner.Plan(changedFiles) : RepositoryTestImpactPlanner.Plan(changedFiles, repositoryRoot);
         if (!plan.RequiresBuild &&
             plan.Checks.Count > 0 &&
             plan.Checks.All(check => check.Command.Count == 0))
@@ -5831,9 +5905,60 @@ internal sealed partial class ConductorDriver
             _clearAcceptanceFailure(goal);
         }
 
+        var landingFileScopes = _getLandingFileScopes(goal);
         if (acceptance.RequiredUnmetCriteria.Count > 0)
         {
-            var criteria = FormatUnmetCriteria(acceptance.RequiredUnmetCriteria);
+            var retryDisposition = ClassifyAcceptanceRetry(acceptance.RequiredUnmetCriteria);
+            if (retryDisposition.ActionableCriteria.Count == 0)
+            {
+                var observedHeads = _resolveAcceptanceHeads(goal);
+                var branchHeadSha = acceptance.BranchHeadSha ?? observedHeads.BranchHeadSha;
+                var mainHeadSha = acceptance.MainHeadSha ?? observedHeads.MainHeadSha;
+                var failedChecks = acceptance.FailedChecks is { Count: > 0 }
+                    ? acceptance.FailedChecks
+                    : acceptance.RequiredUnmetCriteria.Select(check => check.Name).ToArray();
+                _recordAcceptanceFailure(
+                    goal,
+                    failedChecks,
+                    branchHeadSha,
+                    mainHeadSha,
+                    acceptance.CheckAttributions,
+                    acceptance.BaselineAttestation);
+                var excludedSummary = string.Join(
+                    ", ",
+                    retryDisposition.ExcludedFailures.Select(FormatExcludedAcceptanceFailure));
+                var reason =
+                    $"Acceptance gate failures are all outside this goal's attributable scope: {excludedSummary}. " +
+                    "The candidate remains held at Verified for operator/main-red routing; no worker was reopened.";
+                RecordEscalation(goal, GoalLifecycleState.Verified, reason);
+                return MakeResult(
+                    goal.Id.Value,
+                    goalPrefix,
+                    policy,
+                    new ConductorAdvanceOutcome.Held(
+                        GoalLifecycleState.Verified,
+                        reason,
+                        StableIdentity: BuildUnattributableAcceptanceIdentity(
+                            branchHeadSha,
+                            mainHeadSha,
+                            retryDisposition.ExcludedFailures)));
+            }
+
+            if (retryDisposition.ExcludedFailures.Count > 0)
+            {
+                var observedHeads = _resolveAcceptanceHeads(goal);
+                _recordAcceptanceFailure(
+                    goal,
+                    acceptance.FailedChecks is { Count: > 0 }
+                        ? acceptance.FailedChecks
+                        : acceptance.RequiredUnmetCriteria.Select(check => check.Name).ToArray(),
+                    acceptance.BranchHeadSha ?? observedHeads.BranchHeadSha,
+                    acceptance.MainHeadSha ?? observedHeads.MainHeadSha,
+                    acceptance.CheckAttributions,
+                    acceptance.BaselineAttestation);
+            }
+
+            var criteria = FormatUnmetCriteria(retryDisposition.ActionableCriteria);
             var task = SelectTaskForCriterionRetry(goal);
             if (task is null)
             {
@@ -5843,7 +5968,7 @@ internal sealed partial class ConductorDriver
 
             if (goal.AutomaticAcceptanceRetryCount < policy.MaxCriterionRetries)
             {
-                var retryFeedback = FormatCriterionRetryFeedback(acceptance.RequiredUnmetCriteria);
+                var retryFeedback = FormatCriterionRetryFeedback(retryDisposition.ActionableCriteria);
                 var retryCount = _recordCriterionRetryFeedback(
                     goal.Id,
                     task.Id,
@@ -5865,7 +5990,6 @@ internal sealed partial class ConductorDriver
         }
 
         // Gate 3: land via integration branch (the branch is already rebased onto main by Gate 1).
-        var landingFileScopes = _getLandingFileScopes(goal);
         var mutationBlockReason = LandingMutationBlocker?.Invoke();
         if (!string.IsNullOrWhiteSpace(mutationBlockReason))
         {
@@ -6064,6 +6188,95 @@ internal sealed partial class ConductorDriver
             ? $"pid={holder.ProcessId} name={holder.ProcessName}"
             : $"pid={holder.ProcessId} name={holder.ProcessName} command=\"{holder.CommandLine}\"";
 
+    private static AcceptanceRetryDisposition ClassifyAcceptanceRetry(
+        IReadOnlyList<AcceptanceCheckResult> criteria)
+    {
+        var actionable = new List<AcceptanceCheckResult>();
+        var excluded = new List<ExcludedAcceptanceFailure>();
+        foreach (var criterion in criteria)
+        {
+            var failingIdentities = criterion.FailingTestIdentities?
+                .Where(identity => !string.IsNullOrWhiteSpace(identity))
+                .Distinct(StringComparer.Ordinal)
+                .ToArray();
+            if (failingIdentities is not { Length: > 0 })
+            {
+                // Check-level same-name co-failure is not proof that this exact failure existed at the
+                // merge base. Identity-less failures therefore remain actionable.
+                actionable.Add(criterion);
+                continue;
+            }
+
+            var actionableIdentities = new List<string>();
+            if (criterion.FailingTestAttributions is { Count: > 0 } testAttributions &&
+                failingIdentities is { Length: > 0 })
+            {
+                var byIdentity = testAttributions
+                    .GroupBy(attribution => attribution.TestIdentity, StringComparer.Ordinal)
+                    .ToDictionary(group => group.Key, group => group.First(), StringComparer.Ordinal);
+                foreach (var identity in failingIdentities)
+                {
+                    if (byIdentity.TryGetValue(identity, out var attribution) &&
+                        attribution.Origin == AcceptanceTestFailureOrigin.Inherited)
+                    {
+                        excluded.Add(new ExcludedAcceptanceFailure(
+                            identity,
+                            AcceptanceRetryExclusionKind.Inherited));
+                    }
+                    else
+                    {
+                        actionableIdentities.Add(identity);
+                    }
+                }
+            }
+            else
+            {
+                // Only per-identity merge-base attribution can suppress a retry. Check-level baseline
+                // co-failure does not establish that these identities are inherited.
+                actionableIdentities.AddRange(failingIdentities);
+            }
+
+            if (actionableIdentities.Count > 0)
+            {
+                actionable.Add(criterion with { FailingTestIdentities = actionableIdentities });
+            }
+        }
+
+        return new AcceptanceRetryDisposition(actionable, excluded);
+    }
+
+    private static string FormatExcludedAcceptanceFailure(ExcludedAcceptanceFailure failure) =>
+        $"{failure.Identity} (pre-existing/main-red)";
+
+    private static string BuildUnattributableAcceptanceIdentity(
+        string? branchHeadSha,
+        string? mainHeadSha,
+        IReadOnlyList<ExcludedAcceptanceFailure> excludedFailures)
+    {
+        var fingerprintSource = string.Join(
+            "|",
+            excludedFailures
+                .OrderBy(failure => failure.Identity, StringComparer.Ordinal)
+                .ThenBy(failure => failure.Kind)
+                .Select(failure => $"{failure.Kind}:{failure.Identity}"));
+        var fingerprint = Convert.ToHexString(
+            SHA256.HashData(Encoding.UTF8.GetBytes(fingerprintSource))).ToLowerInvariant()[..16];
+        return $"acceptance-unattributable:{branchHeadSha ?? "unknown"}:{mainHeadSha ?? "unknown"}:{fingerprint}";
+    }
+
+    private sealed record AcceptanceRetryDisposition(
+        IReadOnlyList<AcceptanceCheckResult> ActionableCriteria,
+        IReadOnlyList<ExcludedAcceptanceFailure> ExcludedFailures);
+
+    private sealed record ExcludedAcceptanceFailure(
+        string Identity,
+        AcceptanceRetryExclusionKind Kind);
+
+    private enum AcceptanceRetryExclusionKind
+    {
+        Inherited
+    }
+
     private static string[] FormatCriterionRetryFeedback(IReadOnlyList<AcceptanceCheckResult> criteria)
     {
         var concreteEvidence = ExtractConcreteRetryEvidence(criteria);
@@ -6089,6 +6302,9 @@ internal sealed partial class ConductorDriver
         foreach (var criterion in criteria.Where(criterion => !criterion.Passed))
         {
             var outputEvidence = ExtractConcreteOutputEvidence(criterion).ToArray();
+            var allowedFailingIdentities = criterion.FailingTestIdentities?.
+                Where(identity => !string.IsNullOrWhiteSpace(identity))
+                .ToHashSet(StringComparer.Ordinal);
             var testResultPaths = criterion.TestResultPaths?
                 .Where(path => !string.IsNullOrWhiteSpace(path))
                 .Distinct(StringComparer.OrdinalIgnoreCase)
@@ -6140,8 +6356,26 @@ internal sealed partial class ConductorDriver
                     continue;
                 }
 
+                var attributableFailures = allowedFailingIdentities is null or { Count: 0 }
+                    ? receipt.Failures
+                    : receipt.Failures
+                        .Where(failure => allowedFailingIdentities.Contains(failure.TestName))
+                        .ToArray();
+                if (attributableFailures.Count == 0)
+                {
+                    if (!fallbackAdded)
+                    {
+                        AddBoundedOutputEvidence(evidence, outputEvidence, ref remainingEvidenceEntries);
+                        fallbackAdded = true;
+                    }
+
+                    evidence.Add(
+                        $"detail unavailable: readable TRX for partition \"{criterion.Name}\" contained no attributable non-passing results at {receipt.Path}");
+                    continue;
+                }
+
                 var omittedFailures = 0;
-                foreach (var failure in receipt.Failures)
+                foreach (var failure in attributableFailures)
                 {
                     if (string.IsNullOrWhiteSpace(failure.TestName))
                     {

@@ -608,6 +608,11 @@ public sealed class BackgroundDispatchRunner
             return WorkerSandboxProvider.Ollama;
         }
 
+        if (provider.Identity.Kind == ProviderKind.HermesAcp)
+        {
+            return WorkerSandboxProvider.Hermes;
+        }
+
         return WorkerSandboxProvider.Unknown;
     }
 
@@ -624,7 +629,7 @@ public sealed class BackgroundDispatchRunner
         WorkerSandboxProvider provider) =>
         sandboxEnabled &&
         !isLocalDispatch &&
-        (IsSandboxWorktreeWritable(role) || provider == WorkerSandboxProvider.Codex);
+        (IsSandboxWorktreeWritable(role) || provider is WorkerSandboxProvider.Codex or WorkerSandboxProvider.Hermes);
 
     /// <summary>
     /// Scans tasks for an exit file and auto-reconciles any whose dispatched process

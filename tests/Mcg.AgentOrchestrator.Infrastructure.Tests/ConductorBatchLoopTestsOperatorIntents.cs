@@ -27,6 +27,7 @@ public sealed class ConductorBatchLoopTestsOperatorIntents : ConductorBatchLoopT
             var (kernel, goal) = SimpleGoal("Apply operator retry");
             var task = goal.Tasks.Single();
             kernel.ReportTaskProgress(goal.Id, task.Id, WorkTaskStatus.Failed, "Needs operator repair.");
+            kernel.RecordCriterionRetryFeedback(goal.Id, task.Id, ["stale source-size-ratchet diagnosis"]);
             var store = new SqliteOperatorIntentStore(
                 Path.Combine(root, "operator-intents.db"),
                 Path.Combine(root, "logs"));
@@ -66,6 +67,31 @@ public sealed class ConductorBatchLoopTestsOperatorIntents : ConductorBatchLoopT
             Assert.NotNull(outcome);
             Assert.Equal(OperatorIntentStatus.Applied, outcome!.Status);
             Assert.Contains("Applied retry", outcome.Outcome, StringComparison.Ordinal);
+            Assert.Equal(["Operator repaired through inbox."], task.CriterionRetryFeedback);
+            Assert.Equal("Operator repaired through inbox.", task.AcceptedRetryFeedback?.Message);
+            Assert.Equal(1, task.CriterionRetryCount);
+            Assert.Equal(1, goal.AutomaticAcceptanceRetryCount);
+
+            var contextDirectory = WorkerContextArtifacts.Write(goal, task, root);
+            var brief = kernel.BuildTaskBrief(
+                goal.Id,
+                task.Id,
+                workingDirectory: root,
+                contextDirectory: contextDirectory,
+                emitTypedSourceBoundaries: true);
+            var package = WorkerProfileDispatcher.BuildContextPackage(goal, task, root, contextDirectory, brief);
+            var promptPath = Path.Combine(root, "prepared-prompt.md");
+            File.WriteAllText(promptPath, WorkerContextPackageBuilder.Render(package));
+            var receipt = WorkerRetryFeedbackPromptGuard.Validate(
+                goal,
+                task,
+                package,
+                WorkerContextPackageBuilder.CreateReceipt(package),
+                promptPath);
+            var prompt = File.ReadAllText(promptPath);
+            Assert.Contains("Operator repaired through inbox.", prompt, StringComparison.Ordinal);
+            Assert.DoesNotContain("stale source-size-ratchet diagnosis", prompt, StringComparison.Ordinal);
+            Assert.NotNull(receipt!.RetryFeedbackPromptReceipt);
         }
         finally
         {

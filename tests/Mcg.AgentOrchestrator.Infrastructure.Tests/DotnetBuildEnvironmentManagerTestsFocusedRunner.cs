@@ -11,6 +11,22 @@ using static DotnetBuildEnvironmentManagerTests;
 public sealed class DotnetBuildEnvironmentManagerTestsFocusedRunner
 {
     [Xunit.Fact]
+    public void FocusedRunner_TestFailureSurvivesWorktreeDrift()
+    {
+        var source = ReadIsolatedDotnetScript();
+        var driftGuard = source.IndexOf("-not $receipt.worktreeStateAfter.unchanged", StringComparison.Ordinal);
+        var preserveFailure = source.IndexOf(
+            "-not ($receipt.outcome -eq \"FAIL\" -and $receipt.reason -eq \"test-failures\")",
+            driftGuard,
+            StringComparison.Ordinal);
+        var blockedAssignment = source.IndexOf("$receipt.outcome = \"BLOCKED\"", driftGuard, StringComparison.Ordinal);
+
+        Assert.True(driftGuard >= 0, "Focused runner must detect post-run worktree drift.");
+        Assert.True(preserveFailure > driftGuard, "A TRX-established test failure must be excluded from drift demotion.");
+        Assert.True(preserveFailure < blockedAssignment, "The test-failure exclusion must guard the BLOCKED assignment.");
+    }
+
+    [Xunit.Fact]
     public void FocusedRunner_InvalidMethodToken_RemainsPreLease()
     {
         var source = ReadIsolatedDotnetScript();

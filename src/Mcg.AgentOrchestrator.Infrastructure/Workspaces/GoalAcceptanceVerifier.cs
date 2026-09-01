@@ -39,7 +39,21 @@ public sealed record AcceptanceCheckResult(
     string? ProcessStderrPath = null,
     string? ProcessStderr = null,
     string? GateHeartbeatPath = null,
-    AcceptanceFailureCauseEvidence? FailureCauseEvidence = null);
+    AcceptanceFailureCauseEvidence? FailureCauseEvidence = null,
+    string? TestProjectPath = null,
+    IReadOnlyList<AcceptanceTestFailureAttribution>? FailingTestAttributions = null);
+
+public enum AcceptanceTestFailureOrigin
+{
+    Introduced,
+    Inherited,
+    Unattributed
+}
+
+public sealed record AcceptanceTestFailureAttribution(
+    string TestIdentity,
+    AcceptanceTestFailureOrigin Origin,
+    string Evidence);
 
 public sealed record AcceptanceShardCompletionDecision(
     bool Passed,
@@ -173,6 +187,7 @@ public static class AcceptanceFailureClassifications
     public const string InheritedBaselineApparatus = "inherited-baseline-apparatus";
     public const string StructuralCoverageFailed = "structural-coverage-failed";
     public const string FocusedSelectionApparatusFailure = "focused-selection-apparatus-failure";
+    public const string FocusedSelectionAbsentAtBaseline = "focused-selection-absent-at-baseline";
     public const string RetryEvidenceRetentionFailed = "retry-evidence-retention-failed";
     public const string FocusedSelectionReceiptUnreadable = "focused-selection-receipt-unreadable";
     public const string SeededRepositoryProcessOutputApparatus = "seeded-repository-process-output-apparatus";
@@ -372,6 +387,7 @@ public sealed class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
         "extracted Infrastructure test projects registered in engine.mtpInvocations also accept their " +
         "project label, file name, or full .csproj path";
     private const int FocusedEvidenceShortTimeoutTargetLimit = 4;
+    internal const int MaxFailureAttributionFocusedEvidenceIdentities = FocusedEvidenceShortTimeoutTargetLimit;
     public const string AcceptanceAttemptTrxPrefixVariable = "MCG_ACCEPTANCE_GATE_ATTEMPT_TRX_PREFIX";
 
     public static StartupContract ValidateStartupContract(string repositoryRoot)
@@ -950,9 +966,26 @@ public sealed class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
         }
 
         phaseAccountant.TransitionTo(AcceptanceGatePhaseNames.Finalize);
+        var failureAttributionBudget = new AcceptanceFailureAttributionPlanner.FocusedInvocationBudget(
+            MaxFailureAttributionFocusedEvidenceIdentities);
         for (var index = 0; index < checks.Count; index++)
         {
-            checks[index] = AttachFailureCauseEvidence(checks[index]);
+            var check = AttachFailureCauseEvidence(checks[index]);
+            var manifestCheck = effectiveChecks.FirstOrDefault(candidate =>
+                candidate.Name.Equals(check.Name, StringComparison.Ordinal));
+            check = manifestCheck?.Project is { Length: > 0 } project
+                ? check with { TestProjectPath = project }
+                : check;
+            checks[index] = await AttachTestFailureAttributionsAsync(
+                check,
+                manifestCheck,
+                engineSettings,
+                worktreePath,
+                goalId,
+                stableSlotIndex,
+                stableSlotLease,
+                cancellationToken,
+                failureAttributionBudget).ConfigureAwait(false);
         }
 
         var failedCheck = checks.FirstOrDefault(check => !check.Advisory && !check.Passed);
@@ -981,6 +1014,110 @@ public sealed class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
         {
             throw AcceptanceGateEngineException.Capture(exception, phaseAccountant.Snapshot);
         }
+    }
+
+    internal async Task<AcceptanceCheckResult> AttachTestFailureAttributionsAsync(
+        AcceptanceCheckResult check,
+        AcceptanceManifestCheck? manifestCheck,
+        AcceptanceGateEngineSettings engineSettings,
+        string worktreePath,
+        GoalId? goalId,
+        int? stableSlotIndex,
+        DotnetBuildEnvironmentLease? stableSlotLease,
+        CancellationToken cancellationToken,
+        AcceptanceFailureAttributionPlanner.FocusedInvocationBudget? invocationBudget = null)
+    {
+        using var engineScope = PushEngineSettings(engineSettings);
+        if (check.Passed || check.Advisory || check.FailingTestIdentities is not { Count: > 0 } failingTestIdentities)
+        {
+            return check;
+        }
+
+        invocationBudget ??= new AcceptanceFailureAttributionPlanner.FocusedInvocationBudget(
+            MaxFailureAttributionFocusedEvidenceIdentities);
+        var identitySelection = invocationBudget.Select(failingTestIdentities);
+        var identities = identitySelection.All;
+        if (identities.Count == 0)
+        {
+            return check;
+        }
+
+        if (identitySelection.Selected.Count == 0)
+        {
+            return check with
+            {
+                FailingTestAttributions = AcceptanceFailureAttributionPlanner.IncludeOmittedAsUnattributed(
+                    [],
+                    identitySelection.Omitted,
+                    MaxFailureAttributionFocusedEvidenceIdentities)
+            };
+        }
+
+        AcceptanceCheckResult Unattributed(string evidence) => check with
+        {
+            FailingTestAttributions = identities
+                .Select(identity => new AcceptanceTestFailureAttribution(
+                    identity,
+                    AcceptanceTestFailureOrigin.Unattributed,
+                    evidence))
+                .ToArray()
+        };
+
+        if (manifestCheck is null ||
+            !manifestCheck.Type.Equals("dotnet-test", StringComparison.OrdinalIgnoreCase) ||
+            string.IsNullOrWhiteSpace(manifestCheck.Project))
+        {
+            return Unattributed("acceptance check has no exact dotnet-test project mapping");
+        }
+
+        var selectors = identitySelection.Selected
+            .Select(AcceptanceFailureAttributionPlanner.NormalizeIdentity)
+            .ToArray();
+        if (selectors.Any(selector => selector.Length == 0 ||
+                !Regex.IsMatch(selector, @"^[A-Za-z_][A-Za-z0-9_.]*$")))
+        {
+            return Unattributed("failing test identity cannot be represented by an exact focused selector");
+        }
+
+        var selectionPlan = AcceptanceFailureAttributionPlanner.BuildCandidateSelections(
+            ProjectLabel(manifestCheck.Project), selectors, engineSettings, worktreePath);
+        if (!selectionPlan.Succeeded)
+        {
+            return Unattributed(selectionPlan.FailureEvidence!);
+        }
+
+        invocationBudget.Consume(identitySelection);
+
+        var baselineSha = ResolveGitScalar(worktreePath, "merge-base", "HEAD", "main");
+        FocusedEvidenceArmRunResult baseline;
+        try
+        {
+            baseline = await RunBaselineFocusedEvidenceArmAsync(
+                worktreePath,
+                baselineSha,
+                goalId,
+                selectionPlan.Checks,
+                selectionPlan.Coverage,
+                stableSlotIndex,
+                stableSlotLease,
+                cancellationToken,
+                classifyMissingSelectionsAsAbsent: true).ConfigureAwait(false);
+        }
+        catch (OperationCanceledException)
+        {
+            throw;
+        }
+        catch (Exception ex)
+        {
+            return Unattributed($"focused baseline execution failed: {ex.GetType().Name}");
+        }
+
+        var attributions = AcceptanceFailureAttributionPlanner.IncludeOmittedAsUnattributed(
+            AcceptanceFailureAttributionPlanner.ClassifyBaselineFailures(
+                identitySelection.Selected, selectors, selectionPlan.CheckNamesBySelector, baseline),
+            identitySelection.Omitted,
+            MaxFailureAttributionFocusedEvidenceIdentities);
+        return check with { FailingTestAttributions = attributions };
     }
 
     internal static AcceptanceCheckResult AttachFailureCauseEvidence(AcceptanceCheckResult check)
@@ -1342,7 +1479,8 @@ public sealed class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
         FocusedEvidenceCoverage coverage,
         int? stableSlotIndex,
         DotnetBuildEnvironmentLease? stableSlotLease,
-        CancellationToken cancellationToken)
+        CancellationToken cancellationToken,
+        bool classifyMissingSelectionsAsAbsent = false)
     {
         if (string.IsNullOrWhiteSpace(baselineSha))
         {
@@ -1369,26 +1507,60 @@ public sealed class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
         GoalId? baselineEnvironmentId = null;
         try
         {
+            var sourcePlan = new AcceptanceFailureAttributionPlanner.BaselineSourceSelectionPlan(
+                focusedChecks,
+                []);
+            if (classifyMissingSelectionsAsAbsent)
+            {
+                sourcePlan = AcceptanceFailureAttributionPlanner.BuildBaselineSourceSelections(
+                    baselineSha,
+                    focusedChecks,
+                    ProjectLabel,
+                    EngineSettings,
+                    baselinePath);
+            }
+
             // The baseline owns a fresh artifact environment. Sharing candidate artifacts could make
             // a structurally broken baseline look like a meaningful RED arm.
-            baselineEnvironmentId = GoalId.New();
-            baselineEnvironment = DotnetBuildEnvironmentManager.CreateAttempt(
-                baselineEnvironmentId,
-                $"focused-evidence-baseline-{baselineSha[..Math.Min(8, baselineSha.Length)]}");
-            return await RunFocusedEvidenceArmAsync(
-                FindingEvidenceArm.Baseline,
-                baselineSha,
-                baselinePath,
-                // Ownerless execution gets an invocation-local build environment. Passing the goal
-                // id here would reuse candidate artifacts and invalidate the negative control.
-                null,
+            FocusedEvidenceArmRunResult executedArm;
+            if (sourcePlan.ExecutableChecks.Count == 0)
+            {
+                executedArm = new FocusedEvidenceArmRunResult(
+                    FindingEvidenceArm.Baseline,
+                    baselineSha,
+                    FindingEvidenceArmDisposition.Inconclusive,
+                    Accepted: true,
+                    Passed: false,
+                    "no focused baseline checks required execution",
+                    []);
+            }
+            else
+            {
+                baselineEnvironmentId = GoalId.New();
+                baselineEnvironment = DotnetBuildEnvironmentManager.CreateAttempt(
+                    baselineEnvironmentId,
+                    $"focused-evidence-baseline-{baselineSha[..Math.Min(8, baselineSha.Length)]}");
+                executedArm = await RunFocusedEvidenceArmAsync(
+                    FindingEvidenceArm.Baseline,
+                    baselineSha,
+                    baselinePath,
+                    // Ownerless execution gets an invocation-local build environment. Passing the goal
+                    // id here would reuse candidate artifacts and invalidate the negative control.
+                    null,
+                    sourcePlan.ExecutableChecks,
+                    coverage,
+                    stableSlotIndex,
+                    stableSlotLease,
+                    baselineEnvironment,
+                    shutdownBuildServers: true,
+                    cancellationToken: cancellationToken).ConfigureAwait(false);
+            }
+
+            return AcceptanceFailureAttributionPlanner.CombineBaselineArm(
                 focusedChecks,
-                coverage,
-                stableSlotIndex,
-                stableSlotLease,
-                baselineEnvironment,
-                shutdownBuildServers: true,
-                cancellationToken: cancellationToken).ConfigureAwait(false);
+                executedArm,
+                sourcePlan.SourceClassificationChecks,
+                ClassifyFocusedEvidenceArm);
         }
         finally
         {
@@ -2061,7 +2233,7 @@ public sealed class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
             .Distinct(StringComparer.OrdinalIgnoreCase)
             .ToArray();
 
-    private static bool TryBuildFocusedEvidenceChecks(
+    internal static bool TryBuildFocusedEvidenceChecks(
         string request,
         AcceptanceGateEngineSettings engineSettings,
         string worktreePath,
@@ -3028,7 +3200,7 @@ public sealed class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
             goalObjective: string.Empty,
             taskDescription: string.Empty,
             verificationPlan: null,
-            changedFiles);
+            changedFiles, RepositoryTestImpactPlanner.Plan(changedFiles, worktreePath));
         return policy.Checks
             .Where(c =>
                 c.Required &&
@@ -3393,8 +3565,7 @@ public sealed class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
         }
     }
 
-    private static string ComputeEffectiveAcceptanceManifestIdentity(
-        IReadOnlyList<AcceptanceManifestCheck> effectiveChecks)
+    private static string ComputeEffectiveAcceptanceManifestIdentity(IReadOnlyList<AcceptanceManifestCheck> effectiveChecks)
     {
         var canonicalChecks = effectiveChecks.Select(check => new
         {
@@ -3415,6 +3586,7 @@ public sealed class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
         var canonicalPlan = new
         {
             Checks = canonicalChecks,
+            ChangeScopedAcceptanceEnabled = AcceptancePolicyShardPlanner.ChangeScopedAcceptanceEnabled(),
             Engine = new
             {
                 settings.MaxConcurrentShards,
@@ -7140,7 +7312,9 @@ public sealed class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
                 definitionsByTestId.TryGetValue(
                     result.Attribute("testId")?.Value ?? string.Empty,
                     out var definition);
-                var testName = ResolveTrxTestName(result, definition);
+                var testName = AcceptanceTrxTestIdentityResolver.Resolve(result, definition)
+                    ?? result.Attribute("testId")?.Value?.Trim()
+                    ?? "unknown test";
                 var message = result
                     .Descendants()
                     .FirstOrDefault(element =>
@@ -7167,16 +7341,15 @@ public sealed class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
             .Descendants()
             .Where(element =>
                 element.Name.LocalName.Equals("UnitTestResult", StringComparison.Ordinal) &&
-                string.Equals(
-                    element.Attribute("outcome")?.Value,
-                    "Failed",
-                    StringComparison.OrdinalIgnoreCase))
+                AcceptanceTrxOutcomeTaxonomy.IsFatal(element.Attribute("outcome")?.Value))
             .Select(result =>
             {
                 definitionsByTestId.TryGetValue(
                     result.Attribute("testId")?.Value ?? string.Empty,
                     out var definition);
-                return ResolveTrxTestName(result, definition);
+                return AcceptanceTrxTestIdentityResolver.Resolve(result, definition) ??
+                    result.Attribute("testId")?.Value?.Trim() ??
+                    "unknown test";
             })
             .Where(identity => !string.IsNullOrWhiteSpace(identity))
             .Distinct(StringComparer.Ordinal)
@@ -7281,8 +7454,7 @@ public sealed class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
             return false;
         }
 
-        string[] fatalCounters = ["failed", "error", "timeout", "aborted", "notRunnable"];
-        if (fatalCounters.Any(name => (TryReadTrxCounter(counters, name) ?? 0) != 0))
+        if (AcceptanceTrxOutcomeTaxonomy.HasFatalCounter(name => TryReadTrxCounter(counters, name)))
         {
             return false;
         }
@@ -7444,13 +7616,9 @@ public sealed class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
                         definitionsByTestId.TryGetValue(
                             result.Attribute("testId")?.Value ?? string.Empty,
                             out var definition);
-                        var testMethod = definition?.Descendants()
-                            .FirstOrDefault(element => element.Name.LocalName.Equals("TestMethod", StringComparison.Ordinal));
-                        var className = testMethod?.Attribute("className")?.Value?.Trim();
-                        var methodName = testMethod?.Attribute("name")?.Value?.Trim();
-                        return !string.IsNullOrWhiteSpace(className) && !string.IsNullOrWhiteSpace(methodName)
-                            ? $"{className}.{methodName}"
-                            : ResolveTrxTestName(result, definition);
+                        return AcceptanceTrxTestIdentityResolver.Resolve(result, definition) ??
+                            result.Attribute("testId")?.Value?.Trim() ??
+                            "unknown test";
                     }));
             }
             catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or System.Xml.XmlException)
@@ -7469,46 +7637,6 @@ public sealed class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
 
     private static bool IsFocusedEvidenceIdentityMatch(string identity, string selection) =>
         identity.Contains(selection, StringComparison.OrdinalIgnoreCase);
-
-    private static string ResolveTrxTestName(XElement result, XElement? definition)
-    {
-        var testName = result.Attribute("testName")?.Value?.Trim();
-        var displayName = result.Descendants()
-            .Concat(definition?.Descendants() ?? [])
-            .Where(element =>
-                element.Name.LocalName.Equals("DisplayName", StringComparison.Ordinal) ||
-                element.Name.LocalName.Equals("Description", StringComparison.Ordinal))
-            .Select(element => element.Value.Trim())
-            .FirstOrDefault(value => !string.IsNullOrWhiteSpace(value));
-        displayName ??= definition?.Attribute("name")?.Value?.Trim();
-
-        if (!string.IsNullOrWhiteSpace(displayName) &&
-            (string.IsNullOrWhiteSpace(testName) ||
-                (LooksLikeQualifiedTestName(testName) && displayName.Length < testName.Length)))
-        {
-            return displayName;
-        }
-
-        if (!string.IsNullOrWhiteSpace(testName))
-        {
-            return testName;
-        }
-
-        var testMethod = definition?.Descendants()
-            .FirstOrDefault(element => element.Name.LocalName.Equals("TestMethod", StringComparison.Ordinal));
-        var className = testMethod?.Attribute("className")?.Value?.Trim();
-        var methodName = testMethod?.Attribute("name")?.Value?.Trim();
-        if (!string.IsNullOrWhiteSpace(className) && !string.IsNullOrWhiteSpace(methodName))
-        {
-            return $"{className}.{methodName}";
-        }
-
-        return result.Attribute("testId")?.Value?.Trim() ?? "unknown test";
-    }
-
-    private static bool LooksLikeQualifiedTestName(string value) =>
-        value.Contains('+', StringComparison.Ordinal) ||
-        value.Count(ch => ch == '.') >= 2;
 
     private static string? FirstNonEmptyLine(string? value) =>
         value?

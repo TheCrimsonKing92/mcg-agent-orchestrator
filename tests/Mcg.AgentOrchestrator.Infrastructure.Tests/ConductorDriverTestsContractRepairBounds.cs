@@ -523,7 +523,7 @@ public sealed class ConductorDriverTestsContractRepairBounds
             goal,
             reviewer,
             "still missing focused evidence",
-            "Infrastructure.Tests: FullyQualifiedName~ConductorDriverTests");
+            "Infrastructure.Tests: FullyQualifiedName~ConductorDriverTests", implicitFindingCategory: FindingCategory.AcceptanceOwned);
         var focusedRuns = 0;
         var retried = false;
         string? escalation = null;
@@ -571,7 +571,7 @@ public sealed class ConductorDriverTestsContractRepairBounds
             goal,
             reviewer,
             "still missing focused conductor evidence",
-            "Infrastructure.Tests: FullyQualifiedName~ConductorDriverTests");
+            "Infrastructure.Tests: FullyQualifiedName~ConductorDriverTests", implicitFindingCategory: FindingCategory.AcceptanceOwned);
         var focusedRuns = 0;
         var retried = false;
         string? escalation = null;
@@ -618,7 +618,7 @@ public sealed class ConductorDriverTestsContractRepairBounds
             goal,
             reviewer,
             "still missing focused conductor evidence",
-            "Infrastructure.Tests: FullyQualifiedName~ConductorDriverTests");
+            "Infrastructure.Tests: FullyQualifiedName~ConductorDriverTests", implicitFindingCategory: FindingCategory.AcceptanceOwned);
         var focusedRuns = 0;
         var retried = false;
         string? escalation = null;
@@ -659,13 +659,13 @@ public sealed class ConductorDriverTestsContractRepairBounds
         kernel.RecordReviewerEvidenceRequestReceived(goal.Id, reviewer.Id, "stale request 1");
         kernel.RecordReviewerEvidenceRequestReceived(goal.Id, reviewer.Id, "stale request 2");
         kernel.RecordReviewerEvidenceRequestReceived(goal.Id, reviewer.Id, "stale request 3");
-        FailReviewerNeedsWork(kernel, goal, reviewer, "prior round needs evidence", "Infrastructure.Tests: prior");
+        FailReviewerNeedsWork(kernel, goal, reviewer, "prior round needs evidence", "Infrastructure.Tests: prior", implicitFindingCategory: FindingCategory.AcceptanceOwned);
 
         // Operator recover retries the reviewer task with a NON-mechanical message, starting a fresh
         // evidence round; the three stale requests above must no longer count toward the bound.
         kernel.RetryTask(goal.Id, reviewer.Id, "operator recover reset the review round", invalidateDownstream: false);
 
-        FailReviewerNeedsWork(kernel, goal, reviewer, "fresh round needs evidence", "Infrastructure.Tests: fresh");
+        FailReviewerNeedsWork(kernel, goal, reviewer, "fresh round needs evidence", "Infrastructure.Tests: fresh", implicitFindingCategory: FindingCategory.AcceptanceOwned);
         goal = kernel.GetGoal(goal.Id);
         var focusedRuns = 0;
         var retried = false;
@@ -703,7 +703,7 @@ public sealed class ConductorDriverTestsContractRepairBounds
             PassVerification(kernel, goal, task);
         }
 
-        FailReviewerNeedsWork(kernel, goal, reviewer, "missing full test evidence", "Infrastructure.Tests: all");
+        FailReviewerNeedsWork(kernel, goal, reviewer, "missing full test evidence", "Infrastructure.Tests: all", implicitFindingCategory: FindingCategory.AcceptanceOwned);
         var retried = false;
         var focusedRuns = 0;
         string? escalation = null;
@@ -766,7 +766,7 @@ public sealed class ConductorDriverTestsContractRepairBounds
             goal,
             reviewer,
             "missing focused conductor evidence",
-            "Infrastructure.Tests: FullyQualifiedName~ConductorDriverTests");
+            "Infrastructure.Tests: FullyQualifiedName~ConductorDriverTests", implicitFindingCategory: FindingCategory.AcceptanceOwned);
         var retried = false;
         string? escalation = null;
         var driver = MakeDriver(

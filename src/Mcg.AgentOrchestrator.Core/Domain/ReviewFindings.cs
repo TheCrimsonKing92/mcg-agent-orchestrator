@@ -71,7 +71,8 @@ public enum FindingCategory
     TestEvidence,
     TestCoverage,
     CodeQuality,
-    OperatorOwned
+    OperatorOwned,
+    AcceptanceOwned
 }
 
 public sealed class FindingCategoryJsonConverter : JsonConverter<FindingCategory>
@@ -86,6 +87,7 @@ public sealed class FindingCategoryJsonConverter : JsonConverter<FindingCategory
             ["test-coverage"] = FindingCategory.TestCoverage,
             ["code-quality"] = FindingCategory.CodeQuality,
             ["operator-owned"] = FindingCategory.OperatorOwned,
+            ["acceptance-owned"] = FindingCategory.AcceptanceOwned,
             ["unspecified"] = FindingCategory.Unspecified
         };
 
@@ -125,6 +127,7 @@ public sealed class FindingCategoryJsonConverter : JsonConverter<FindingCategory
         FindingCategory.TestCoverage => "test-coverage",
         FindingCategory.CodeQuality => "code-quality",
         FindingCategory.OperatorOwned => "operator-owned",
+        FindingCategory.AcceptanceOwned => "acceptance-owned",
         _ => "unspecified"
     };
 }
@@ -563,6 +566,7 @@ public static class ReviewFindingConvergence
     public const string UntouchedReopenViolationCode = "ERR_REVIEW_FINDING_UNTOUCHED_REOPEN";
     public const string RecycledAnchorIdentityViolationCode = "ERR_REVIEW_FINDING_ANCHOR_IDENTITY_RECYCLED";
     public const string NeedsWorkWithoutOpenFindingsViolationCode = "ERR_REVIEW_NEEDS_WORK_WITHOUT_OPEN_FINDINGS";
+    public const string NoOpenFindingsForTargetViolationCode = "ERR_REVIEW_NO_OPEN_FINDINGS_FOR_TARGET";
     public const string UnprovenResolutionAtCapViolationCode = "ERR_REVIEW_FINDING_UNPROVEN_RESOLUTION_AT_CAP";
 
     public const string MissingReviewRetryCapReceiptViolationCode = "ERR_REVIEW_FINDING_MISSING_CAP_RECEIPT";

@@ -73,13 +73,15 @@ public sealed class ConductorDriverTests
         string command = "test.exe",
         string? reviewFindingTouchProofDiagnostic = null,
         IReadOnlyList<ReviewFindingLocation>? reviewFindingTouchedAnchors = null,
-        string workingDirectory = "C:\\tmp")
+        string workingDirectory = "C:\\tmp",
+        string? baseCommit = null)
     {
         var dispatch = new TaskDispatchRecord(
             "test-worker",
             command,
             workingDirectory,
             DateTimeOffset.UtcNow,
+            BaseCommit: baseCommit,
             ReviewFindingTouchedAnchors: reviewFindingTouchedAnchors,
             ReviewFindingTouchProofDiagnostic: reviewFindingTouchProofDiagnostic);
         kernel.RecordTaskDispatch(goal.Id, task.Id, dispatch);
@@ -118,16 +120,17 @@ public sealed class ConductorDriverTests
         string blocker,
         string? evidenceRequest = null,
         string? stdoutPath = "C:\\tmp\\reviewer.out.log",
-        IReadOnlyList<ReviewFinding>? findings = null)
+        IReadOnlyList<ReviewFinding>? findings = null,
+        string? reviewedCommit = null, FindingCategory implicitFindingCategory = FindingCategory.Unspecified)
     {
-        DispatchTask(kernel, goal, reviewer, "review");
+        DispatchTask(kernel, goal, reviewer, "review", baseCommit: reviewedCommit);
         var effectiveFindings = (findings ?? blocker
                 .Split(';', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries)
                 .Select((finding, index) => new ReviewFinding(
                     $"finding-{index + 1}",
                     ReviewFindingState.Open,
                     new ReviewFindingLocation("src/Test.cs", $"Test.Run{index + 1}"),
-                    finding))
+                    finding, Category: implicitFindingCategory))
                 .ToArray())
             .ToArray();
         if (!string.IsNullOrWhiteSpace(evidenceRequest))
@@ -166,7 +169,8 @@ public sealed class ConductorDriverTests
             "",
             DateTimeOffset.UtcNow,
             StandardOutputPath: stdoutPath,
-            WorkerResultPresent: true);
+            WorkerResultPresent: true,
+            ReviewedCommit: reviewedCommit);
         kernel.RecordDispatchExecutionResult(goal.Id, reviewer.Id, verification);
     }
 
@@ -427,6 +431,7 @@ public sealed class ConductorDriverTests
         Func<Goal, string, FocusedEvidenceRunResult>? runFocusedEvidence = null,
         Func<GoalId, TaskId, string, TaskSpec>? retryTask = null,
         Func<GoalId, TaskId, string, RetryRoundKind?, TaskSpec>? retryTaskWithRoundKind = null,
+        Func<GoalId, TaskId, string, RetryRoundKind?, RetryCause, TaskSpec>? retryTaskWithCause = null,
         Action<GoalId, TaskId, string>? recordTaskNote = null,
         Action<GoalId, TaskId, string>? recordReviewerEvidenceRequestReceived = null,
         Action<GoalId, TaskId, string>? recordReviewerEvidenceRunRecorded = null,
@@ -456,6 +461,7 @@ public sealed class ConductorDriverTests
         Action<GoalId, TaskId, string, FindingEvidenceOutcome, FindingEvidenceReceipt?>? recordFindingEvidenceOutcome = null,
         Action<GoalId, TaskId, string>? recordFindingEvidenceRequest = null,
         Action<GoalId, TaskId, string>? recordFindingEvidenceRun = null,
+        Action<GoalId, TaskId, string, IReadOnlyList<string>, string, AgentRole, string, string>? recordFindingEvidenceSuppressed = null,
         Func<Goal, AcceptanceGateEngineSettings>? getFindingEvidenceEngineSettings = null,
         Func<Goal, string, string, IReadOnlyList<string>>? resolveFindingEvidenceSiblingClasses = null,
         Func<Goal, bool>? isVerificationGateSatisfied = null,
@@ -463,6 +469,7 @@ public sealed class ConductorDriverTests
         Func<Goal, string, IDisposable?>? tryAcquireEvidenceMutationLease = null,
         Action<Goal, IReadOnlyList<string>, string?, string?, IReadOnlyList<AcceptanceCheckAttribution>?, string?>? recordAcceptanceFailure = null,
         Func<Goal, (string? BranchHeadSha, string? MainHeadSha)>? resolveAcceptanceHeads = null,
+        Func<Goal, IReadOnlyList<string>>? getLandingFileScopes = null,
         string? executionDirectory = null)
     {
         return new ConductorDriver(
@@ -501,6 +508,7 @@ public sealed class ConductorDriverTests
             recordReviewerEvidenceRequestReceived: recordReviewerEvidenceRequestReceived,
             recordReviewerEvidenceRunRecorded: recordReviewerEvidenceRunRecorded,
             retryTaskWithRoundKind: retryTaskWithRoundKind,
+            retryTaskWithCause: retryTaskWithCause,
             buildServerShutdownTimeout: buildServerShutdownTimeout,
             writeEscalationWithResult: writeEscalationWithResult,
             getPreReviewEvidenceContext: getPreReviewEvidenceContext,
@@ -510,6 +518,7 @@ public sealed class ConductorDriverTests
             recordFindingEvidenceOutcome: recordFindingEvidenceOutcome,
             recordFindingEvidenceRequest: recordFindingEvidenceRequest,
             recordFindingEvidenceRun: recordFindingEvidenceRun,
+            recordFindingEvidenceSuppressed: recordFindingEvidenceSuppressed,
             getFindingEvidenceEngineSettings: getFindingEvidenceEngineSettings,
             resolveFindingEvidenceSiblingClasses: resolveFindingEvidenceSiblingClasses,
             isVerificationGateSatisfied: isVerificationGateSatisfied,
@@ -518,12 +527,8 @@ public sealed class ConductorDriverTests
             tryAcquireEvidenceMutationLease: tryAcquireEvidenceMutationLease,
             recordAcceptanceFailureWithAttribution: recordAcceptanceFailure,
             resolveAcceptanceHeads: resolveAcceptanceHeads,
+            getLandingFileScopes: getLandingFileScopes,
             executionDirectory: executionDirectory);
-    }
-
-    internal sealed class ThrowingDisposable : IDisposable
-    {
-        public void Dispose() => throw new InvalidOperationException("injected cleanup failure");
     }
 
     internal static PreReviewEvidenceContext FocusedPreReviewContext(string sha) =>

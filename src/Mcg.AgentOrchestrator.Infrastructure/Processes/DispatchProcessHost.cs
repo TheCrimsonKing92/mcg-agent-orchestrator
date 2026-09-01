@@ -464,6 +464,7 @@ public static class DispatchProcessHost
         startInfo.Environment.Remove("CODEX_HOME");
         startInfo.Environment.Remove("CLAUDE_CONFIG_DIR");
         startInfo.Environment.Remove("GROK_HOME");
+        startInfo.Environment.Remove("HERMES_HOME");
 
         if (provider == WorkerSandboxProvider.Codex)
         {
@@ -488,6 +489,12 @@ public static class DispatchProcessHost
         if (provider == WorkerSandboxProvider.Grok)
         {
             SeedGrokEnvironment(startInfo, sandboxRoot, stderrPath);
+            return;
+        }
+
+        if (provider == WorkerSandboxProvider.Hermes)
+        {
+            SeedHermesEnvironment(startInfo, sandboxRoot);
         }
     }
 
@@ -1126,6 +1133,14 @@ public static void DropToLow() {
 
         startInfo.Environment["GROK_HOME"] = grokHome;
         startInfo.Environment["GROK_DISABLE_AUTOUPDATER"] = "1";
+    }
+
+    internal static void SeedHermesEnvironment(ProcessStartInfo startInfo, string sandboxRoot)
+    {
+        var hermesHome = Path.Combine(sandboxRoot, $"hermes-home-{Guid.NewGuid():N}");
+        Directory.CreateDirectory(hermesHome);
+        startInfo.Environment["HERMES_HOME"] = hermesHome;
+        startInfo.Environment["HERMES_ACP_SKIP_CONFIGURED_MCP"] = "1";
     }
 
     private static string ResolveGrokHomeDirectory() =>

@@ -2342,6 +2342,64 @@ public sealed class SqliteOrchestratorStateRepositoryTests
         Assert.Equal("operator-authored retry feedback", feedback);
     }
 
+    [Xunit.Theory(DisplayName = "SqliteOrchestratorStateRepository_tick_merge_preserves_accepted_retry_feedback_lifecycle")]
+    [Xunit.InlineData(false)]
+    [Xunit.InlineData(true)]
+    public async Task TickMergePreservesAcceptedRetryFeedbackLifecycle(bool clearFeedback)
+    {
+        var repo = new SqliteOrchestratorStateRepository(TempDb());
+        var kernel = new AgentOrchestratorKernel();
+        var goal = kernel.CreateGoal("Preserve accepted retry feedback through tick merge");
+        kernel.ActivateGoal(goal.Id, AgentCatalog.Default().Agents);
+        var task = goal.Tasks.First(candidate => candidate.RequiredRole == AgentRole.Developer);
+
+        if (clearFeedback)
+        {
+            kernel.RetryTaskWithAuthoritativeFeedback(
+                goal.Id,
+                task.Id,
+                "Accepted operator correction.",
+                RetryCause.NewTestFinding);
+        }
+
+        await repo.SaveAsync(kernel);
+        var baseline = kernel.ExportGoalSnapshot(goal.Id);
+
+        if (clearFeedback)
+        {
+            kernel.ClearCriterionRetryFeedback(goal.Id, task.Id);
+        }
+        else
+        {
+            kernel.RetryTaskWithAuthoritativeFeedback(
+                goal.Id,
+                task.Id,
+                "Accepted operator correction.",
+                RetryCause.NewTestFinding);
+        }
+
+        var current = kernel.ExportGoalSnapshot(goal.Id);
+        await repo.TransactGoalAsync<bool>(
+            goal.Id,
+            (stored, _) => Task.FromResult((
+                true,
+                stored! with { Objective = "Concurrent operator update" },
+                true)));
+
+        var results = await repo.SaveGoalSnapshotsWithMergeAsync([new GoalSnapshotSaveRequest(baseline, current)]);
+
+        Assert.Equal(GoalSnapshotSaveDisposition.Merged, Assert.Single(results).Disposition);
+        var restoredTask = (await repo.LoadAsync()).GetTask(goal.Id, task.Id);
+        if (clearFeedback)
+        {
+            Assert.Null(restoredTask.AcceptedRetryFeedback);
+        }
+        else
+        {
+            Assert.Equal("Accepted operator correction.", restoredTask.AcceptedRetryFeedback?.Message);
+        }
+    }
+
     [Xunit.Fact(DisplayName = "TickMergeSliceBatchParentUsesStoreOwnedPrecedence")]
     public async Task TickMergeSliceBatchParentUsesStoreOwnedPrecedence()
     {

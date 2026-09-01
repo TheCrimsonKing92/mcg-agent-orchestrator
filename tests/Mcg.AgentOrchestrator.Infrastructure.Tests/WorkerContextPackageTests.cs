@@ -17,6 +17,72 @@ public sealed class WorkerContextPackageTests(Xunit.ITestOutputHelper output)
         AgentRole.Reviewer
     ];
 
+    [Xunit.Fact(DisplayName = "Retry_feedback_prompt_guard_records_exact_current_note_delivery_provenance")]
+    public void RetryFeedbackPromptGuardRecordsExactCurrentNoteDeliveryProvenance()
+    {
+        var root = CreateTempDirectory();
+        var kernel = new AgentOrchestratorKernel();
+        var task = new TaskSpec(TaskId.New(), "Implement", AgentRole.Developer);
+        var goal = kernel.CreateGoal("Deliver current retry feedback", [task]);
+        const string current = "The stale ratchet is obsolete; apply the current findings.\r\nPreserve the verified behavior.";
+        kernel.RetryTaskWithAuthoritativeFeedback(goal.Id, task.Id, current, RetryCause.NewSourceFinding);
+        var artifact = WorkerContextArtifact.Create(
+            new LogicalArtifactIdentity("task/criterion-retry-feedback.json"),
+            ContextArtifactKind.AcceptanceCriteria,
+            System.Text.Json.JsonSerializer.SerializeToUtf8Bytes(task.CriterionRetryFeedback),
+            [AgentRole.Developer],
+            ContextDeliveryMode.InlineFull,
+            ContextContractVersion.V1);
+        var package = new WorkerContextPackage("ctxpkg-test", ContextContractVersion.V1, AgentRole.Developer, [artifact]);
+        var promptPath = Path.Combine(root, "prompt.md");
+        File.WriteAllText(promptPath, WorkerContextPackageBuilder.Render(package));
+
+        var receipt = WorkerRetryFeedbackPromptGuard.Validate(
+            goal,
+            task,
+            package,
+            WorkerContextPackageBuilder.CreateReceipt(package),
+            promptPath);
+
+        var delivery = Assert.IsType<WorkerRetryFeedbackPromptReceipt>(receipt!.RetryFeedbackPromptReceipt);
+        Assert.Equal(artifact.ContentHash, delivery.TypedArtifactSha256);
+        Assert.Equal(ContextDeliveryMode.InlineFull, delivery.DeliveryMode);
+        Assert.Equal(task.Id.Value, delivery.AcceptedRetryTaskId);
+        Assert.Equal(WorkerContextArtifact.Hash(File.ReadAllBytes(promptPath)), delivery.GeneratedPromptSha256);
+    }
+
+    [Xunit.Fact(DisplayName = "Retry_feedback_prompt_guard_fails_closed_for_unrelated_feedback_while_accepted_note_is_current")]
+    public void RetryFeedbackPromptGuardFailsClosedForUnrelatedFeedbackWhileAcceptedNoteIsCurrent()
+    {
+        var root = CreateTempDirectory();
+        var kernel = new AgentOrchestratorKernel();
+        var task = new TaskSpec(TaskId.New(), "Implement", AgentRole.Developer);
+        var goal = kernel.CreateGoal("Reject missing retry feedback", [task]);
+        kernel.RetryTaskWithAuthoritativeFeedback(goal.Id, task.Id, "Current accepted correction.", RetryCause.NewSourceFinding);
+        var artifact = WorkerContextArtifact.Create(
+            new LogicalArtifactIdentity("task/criterion-retry-feedback.json"),
+            ContextArtifactKind.AcceptanceCriteria,
+            System.Text.Json.JsonSerializer.SerializeToUtf8Bytes(new[] { "Unrelated stale feedback." }),
+            [AgentRole.Developer],
+            ContextDeliveryMode.InlineFull,
+            ContextContractVersion.V1);
+        var package = new WorkerContextPackage("ctxpkg-test", ContextContractVersion.V1, AgentRole.Developer, [artifact]);
+        var promptPath = Path.Combine(root, "prompt.md");
+        File.WriteAllText(promptPath, WorkerContextPackageBuilder.Render(package));
+
+        var error = Assert.Throws<WorkerSubscriptionPreflightException>(() =>
+            WorkerRetryFeedbackPromptGuard.Validate(
+                goal,
+                task,
+                package,
+                WorkerContextPackageBuilder.CreateReceipt(package),
+                promptPath));
+
+        Assert.Equal(WorkerRetryFeedbackPromptGuard.ErrorCode, error.ErrorCode);
+        Assert.Null(task.LastDispatch);
+        Assert.Null(task.LastProcess);
+    }
+
     [Xunit.Theory]
     [Xunit.InlineData("preparation")]
     [Xunit.InlineData("rendering")]

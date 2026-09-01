@@ -78,8 +78,20 @@ internal sealed class WorkerArtifactWriter
         WriteOptionalArtifact(
             Path.Combine(contextDirectory, "prior-goal-evidence.md"),
             citedPriorEvidence);
-        WriteText(Path.Combine(contextDirectory, "deterministic-verification.md"), BuildDeterministicVerification(goal, task, workingDirectory));
-        WriteText(Path.Combine(contextDirectory, "workflow-brokers.md"), BuildWorkflowBrokers(goal, task, workingDirectory, plannerUsesDurableResearch));
+        var changedFiles = _gitContext.ReadChangedFilesForTestImpact(workingDirectory);
+        var testImpactPlan = RepositoryTestImpactPlanner.Plan(changedFiles, workingDirectory);
+        WriteText(
+            Path.Combine(contextDirectory, "deterministic-verification.md"),
+            BuildDeterministicVerification(goal, task, workingDirectory, changedFiles, testImpactPlan));
+        WriteText(
+            Path.Combine(contextDirectory, "workflow-brokers.md"),
+            BuildWorkflowBrokers(
+                goal,
+                task,
+                workingDirectory,
+                plannerUsesDurableResearch,
+                changedFiles,
+                testImpactPlan));
         WriteText(Path.Combine(contextDirectory, "context-budget.md"), BuildContextBudget(goal, task, workingDirectory, plannerUsesDurableResearch));
         WriteText(Path.Combine(contextDirectory, "selected-skills.md"), _skillSelector.BuildSelectedSkills(goal, task, workingDirectory));
         var sourceSurveyPath = Path.Combine(contextDirectory, "source-survey.md");
@@ -370,7 +382,12 @@ internal sealed class WorkerArtifactWriter
         return string.Join(Environment.NewLine, lines);
     }
 
-    private string BuildDeterministicVerification(Goal goal, TaskSpec task, string workingDirectory)
+    private string BuildDeterministicVerification(
+        Goal goal,
+        TaskSpec task,
+        string workingDirectory,
+        IReadOnlyList<string> changedFiles,
+        RepositoryTestImpactPlan testImpactPlan)
     {
         var priorTasks = goal.Tasks.TakeWhile(t => t.Id != task.Id).ToList();
         var completedPriorTasks = priorTasks.Where(t => t.Status == WorkTaskStatus.Completed).ToList();
@@ -427,14 +444,13 @@ internal sealed class WorkerArtifactWriter
             }
         }
 
-        var changedFiles = _gitContext.ReadChangedFilesForTestImpact(workingDirectory);
-        var testImpactPlan = RepositoryTestImpactPlanner.Plan(changedFiles);
         var verificationPolicy = VerificationPolicyCompiler.Compile(
             task.RequiredRole,
             goal.Objective,
             task.Description,
             task.VerificationPlan,
-            changedFiles);
+            changedFiles,
+            testImpactPlan);
         lines.Add(string.Empty);
         lines.Add("## Test Impact Plan");
         lines.Add(testImpactPlan.Summary);
@@ -509,16 +525,22 @@ internal sealed class WorkerArtifactWriter
         Goal goal,
         TaskSpec task,
         string workingDirectory,
-        bool plannerUsesDurableResearch)
+        bool plannerUsesDurableResearch,
+        IReadOnlyList<string> changedFiles,
+        RepositoryTestImpactPlan testImpactPlan)
     {
-        var changedFiles = _gitContext.ReadChangedFilesForTestImpact(workingDirectory);
-        var testImpactPlan = RepositoryTestImpactPlanner.Plan(changedFiles);
         var verificationPolicy = VerificationPolicyCompiler.Compile(
             task.RequiredRole,
             goal.Objective,
             task.Description,
             task.VerificationPlan,
-            changedFiles);
+            changedFiles,
+            testImpactPlan);
+        var testImpactCommands = testImpactPlan.Checks
+            .Where(check => check.Command.Count > 0)
+            .Select(check => check.CommandLine)
+            .Distinct(StringComparer.Ordinal)
+            .ToArray();
         var goalPrefix = goal.Id.Value.Length <= 8 ? goal.Id.Value : goal.Id.Value[..8];
         var attemptName = $"{task.RequiredRole.ToString().ToLowerInvariant()}-{task.Id.Value[..8]}";
         var toolchain = TargetToolchainDetector.Detect(workingDirectory);
@@ -536,6 +558,7 @@ internal sealed class WorkerArtifactWriter
             $"  Use for: choosing focused tests, identifying required checks, and {brokerNote}.",
             $"  Suggested command shape: `{brokerCommandHint}`",
             $"  Current recommendation: {testImpactPlan.Summary}",
+            $"  Current commands: {(testImpactCommands.Length == 0 ? "(none)" : string.Join(" ; ", testImpactCommands))}",
             "  Failure handling: failing required checks are actionable verification failures; include the command and exit evidence.",
             "- static-policy-checks",
             "  Artifact: deterministic-verification.md",

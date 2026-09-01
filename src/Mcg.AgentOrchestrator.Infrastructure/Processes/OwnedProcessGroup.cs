@@ -1,5 +1,6 @@
 using System.ComponentModel;
 using System.Diagnostics;
+using System.IO.Pipes;
 using System.Runtime.InteropServices;
 using System.Text;
 using Microsoft.Win32.SafeHandles;
@@ -51,6 +52,63 @@ internal sealed class OwnedProcessGroup : IDisposable
 
     internal static SuspendedProcessStart StartSuspendedContained(ProcessStartInfo startInfo)
         => StartSuspendedCore(startInfo, null, null, contained: true);
+
+    internal static SuspendedRedirectedProcessStart StartSuspendedContainedRedirected(ProcessStartInfo startInfo)
+    {
+        ArgumentNullException.ThrowIfNull(startInfo);
+        if (!OperatingSystem.IsWindows())
+        {
+            throw new PlatformNotSupportedException("Suspended redirected owned-process launch is Windows-only.");
+        }
+
+        if (startInfo.UseShellExecute ||
+            !startInfo.RedirectStandardInput ||
+            !startInfo.RedirectStandardOutput ||
+            !startInfo.RedirectStandardError)
+        {
+            throw new InvalidOperationException(
+                "Suspended redirected owned-process launch requires UseShellExecute=false and all standard streams redirected.");
+        }
+
+        var stdin = new AnonymousPipeServerStream(PipeDirection.Out, HandleInheritability.Inheritable);
+        var stdout = new AnonymousPipeServerStream(PipeDirection.In, HandleInheritability.Inheritable);
+        var stderr = new AnonymousPipeServerStream(PipeDirection.In, HandleInheritability.Inheritable);
+        var group = CreateContained();
+        try
+        {
+            var processStart = WindowsJob.StartSuspendedInJobWithStandardHandles(
+                group._jobHandle!,
+                startInfo,
+                stdin.ClientSafePipeHandle.DangerousGetHandle(),
+                stdout.ClientSafePipeHandle.DangerousGetHandle(),
+                stderr.ClientSafePipeHandle.DangerousGetHandle());
+            stdin.DisposeLocalCopyOfClientHandle();
+            stdout.DisposeLocalCopyOfClientHandle();
+            stderr.DisposeLocalCopyOfClientHandle();
+            group._processIds.Add(processStart.Process.Id);
+            var suspended = new SuspendedProcessStart(
+                group,
+                processStart.Process,
+                processStart.ProcessHandle,
+                processStart.InitialThread);
+            return new SuspendedRedirectedProcessStart(
+                suspended,
+                stdin,
+                stdout,
+                stderr,
+                startInfo.StandardInputEncoding ?? new UTF8Encoding(false),
+                startInfo.StandardOutputEncoding ?? Encoding.UTF8,
+                startInfo.StandardErrorEncoding ?? Encoding.UTF8);
+        }
+        catch
+        {
+            stdin.Dispose();
+            stdout.Dispose();
+            stderr.Dispose();
+            group.Kill();
+            throw;
+        }
+    }
 
     internal static SuspendedProcessStart StartSuspendedWithFileCapture(
         ProcessStartInfo startInfo,
@@ -310,6 +368,9 @@ internal sealed class OwnedProcessGroup : IDisposable
         return OperatingSystem.IsWindows() && WindowsJob.TryReadAccounting(jobHandle, out accounting);
     }
 
+    internal static int ReadProcessExitCode(SafeFileHandle processHandle) =>
+        WindowsJob.ReadProcessExitCode(processHandle);
+
     // Bounded wait for the WHOLE job tree (children and grandchildren) to exit after a kill,
     // polled via a duplicated job handle because Kill() closes the group's own handle. Slot
     // release/handoff must never proceed over a live gate-owned process.
@@ -428,6 +489,70 @@ internal sealed class OwnedProcessGroup : IDisposable
         }
     }
 
+    internal sealed class SuspendedRedirectedProcessStart : IDisposable
+    {
+        private readonly SuspendedProcessStart _suspended;
+        private bool _transferred;
+
+        internal SuspendedRedirectedProcessStart(
+            SuspendedProcessStart suspended,
+            AnonymousPipeServerStream stdin,
+            AnonymousPipeServerStream stdout,
+            AnonymousPipeServerStream stderr,
+            Encoding inputEncoding,
+            Encoding outputEncoding,
+            Encoding errorEncoding)
+        {
+            _suspended = suspended;
+            StandardInput = new StreamWriter(stdin, inputEncoding, bufferSize: 1024, leaveOpen: false)
+            {
+                AutoFlush = true
+            };
+            StandardOutput = new StreamReader(stdout, outputEncoding, detectEncodingFromByteOrderMarks: true, bufferSize: 1024, leaveOpen: false);
+            StandardError = new StreamReader(stderr, errorEncoding, detectEncodingFromByteOrderMarks: true, bufferSize: 1024, leaveOpen: false);
+        }
+
+        internal TextWriter StandardInput { get; }
+        internal TextReader StandardOutput { get; }
+        internal TextReader StandardError { get; }
+
+        internal void Resume() => _suspended.Resume();
+
+        internal RedirectedOwnedProcessStart TransferOwnership()
+        {
+            var transfer = _suspended.TransferOwnedProcess();
+            _transferred = true;
+            return new(
+                transfer.Process,
+                transfer.ProcessHandle,
+                _suspended.Group,
+                StandardInput,
+                StandardOutput,
+                StandardError);
+        }
+
+        public void Dispose()
+        {
+            _suspended.Dispose();
+            if (_transferred)
+            {
+                return;
+            }
+
+            StandardInput.Dispose();
+            StandardOutput.Dispose();
+            StandardError.Dispose();
+        }
+    }
+
+    internal sealed record RedirectedOwnedProcessStart(
+        Process Process,
+        SafeFileHandle ProcessHandle,
+        OwnedProcessGroup Group,
+        TextWriter StandardInput,
+        TextReader StandardOutput,
+        TextReader StandardError);
+
     internal sealed record OwnedProcessStartTransfer(
         Process Process,
         SafeFileHandle ProcessHandle);
@@ -463,19 +588,55 @@ internal sealed class OwnedProcessGroup : IDisposable
             var captureToFiles = stdoutPath is not null && stderrPath is not null;
             using var stdoutHandle = captureToFiles ? CreateInheritedOutputFile(stdoutPath!) : null;
             using var stderrHandle = captureToFiles ? CreateInheritedOutputFile(stderrPath!) : null;
+            var stdout = stdoutHandle?.DangerousGetHandle() ?? IntPtr.Zero;
+            var stderr = stderrHandle?.DangerousGetHandle() ?? IntPtr.Zero;
+            return StartSuspendedInJobCore(
+                job,
+                startInfo,
+                IntPtr.Zero,
+                stdout,
+                stderr,
+                captureToFiles ? [stdout, stderr] : []);
+        }
+
+        public static WindowsSuspendedProcess StartSuspendedInJobWithStandardHandles(
+            SafeFileHandle job,
+            ProcessStartInfo startInfo,
+            IntPtr stdin,
+            IntPtr stdout,
+            IntPtr stderr) =>
+            StartSuspendedInJobCore(job, startInfo, stdin, stdout, stderr, [stdin, stdout, stderr]);
+
+        public static int ReadProcessExitCode(SafeFileHandle processHandle)
+        {
+            if (!GetExitCodeProcess(processHandle, out var exitCode))
+            {
+                throw new Win32Exception(Marshal.GetLastWin32Error(), "Failed to read owned process exit code.");
+            }
+
+            return unchecked((int)exitCode);
+        }
+
+        private static WindowsSuspendedProcess StartSuspendedInJobCore(
+            SafeFileHandle job,
+            ProcessStartInfo startInfo,
+            IntPtr stdin,
+            IntPtr stdout,
+            IntPtr stderr,
+            IReadOnlyList<IntPtr> inheritedHandles)
+        {
+            var useStandardHandles = inheritedHandles.Count > 0;
             var startupInfo = new STARTUPINFOEX
             {
                 StartupInfo = new STARTUPINFO
                 {
                     cb = Marshal.SizeOf<STARTUPINFOEX>(),
-                    dwFlags = captureToFiles ? StartfUseStdHandles : 0,
-                    hStdOutput = stdoutHandle?.DangerousGetHandle() ?? IntPtr.Zero,
-                    hStdError = stderrHandle?.DangerousGetHandle() ?? IntPtr.Zero
+                    dwFlags = useStandardHandles ? StartfUseStdHandles : 0,
+                    hStdInput = stdin,
+                    hStdOutput = stdout,
+                    hStdError = stderr
                 }
             };
-            var inheritedHandles = captureToFiles
-                ? new[] { stdoutHandle!.DangerousGetHandle(), stderrHandle!.DangerousGetHandle() }
-                : [];
             using var attributes = WindowsJobAttributeList.Create(job, inheritedHandles);
             startupInfo.lpAttributeList = attributes.AttributeList;
             var commandLine = new StringBuilder(BuildCommandLine(startInfo));
@@ -490,7 +651,7 @@ internal sealed class OwnedProcessGroup : IDisposable
                     commandLine,
                     IntPtr.Zero,
                     IntPtr.Zero,
-                    captureToFiles,
+                    useStandardHandles,
                     CreateSuspended | CreateUnicodeEnvironment | ExtendedStartupInfoPresent,
                     environment,
                     workingDirectory,
@@ -892,6 +1053,9 @@ internal sealed class OwnedProcessGroup : IDisposable
 
         [DllImport("kernel32.dll", SetLastError = true)]
         private static extern bool TerminateJobObject(SafeFileHandle hJob, uint uExitCode);
+
+        [DllImport("kernel32.dll", SetLastError = true)]
+        private static extern bool GetExitCodeProcess(SafeFileHandle processHandle, out uint exitCode);
 
         public static bool TryDuplicateCurrentProcessHandle(SafeFileHandle job, out SafeFileHandle duplicate)
         {

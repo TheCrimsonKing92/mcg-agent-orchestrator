@@ -36,6 +36,8 @@ public sealed class TaskSpec
 
     public IReadOnlyList<string> CriterionRetryFeedback { get; private set; } = [];
 
+    public AcceptedRetryFeedback? AcceptedRetryFeedback { get; private set; }
+
     public int EmptyOutputRetryCount { get; private set; }
 
     public DateTimeOffset? LatestRetryAt { get; private set; }
@@ -255,7 +257,8 @@ public sealed class TaskSpec
             PendingRetryCause,
             _retryAdmissionHistory.ToArray(),
             RetryAdmissionHoldRoute,
-            PendingReviewFindingRepairCheckpoint);
+            PendingReviewFindingRepairCheckpoint,
+            AcceptedRetryFeedback);
     }
 
     internal static TaskSpec FromSnapshot(TaskSnapshot snapshot)
@@ -448,6 +451,7 @@ public sealed class TaskSpec
             snapshot.SubscriptionLimitReviewedAt,
             snapshot.SubscriptionLimitReviewedFailureCount);
         task.RestoreCriterionRetryState(snapshot.CriterionRetryCount, snapshot.CriterionRetryFeedback);
+        task.AcceptedRetryFeedback = snapshot.AcceptedRetryFeedback;
         task.EmptyOutputRetryCount = Math.Max(0, snapshot.EmptyOutputRetryCount);
         task.LatestRetryAt = snapshot.LatestRetryAt;
         task.PendingRetryRoundKind = snapshot.PendingRetryRoundKind;
@@ -758,11 +762,19 @@ public sealed class TaskSpec
             .Where(item => item.Length > 0)
             .Distinct(StringComparer.Ordinal)
             .ToArray();
+        AcceptedRetryFeedback = null;
     }
+
+    internal void RecordAcceptedRetryFeedback(string message, DateTimeOffset acceptedAt) =>
+        AcceptedRetryFeedback = new AcceptedRetryFeedback(RequireText(message, nameof(message)), acceptedAt);
 
     internal void IncrementCriterionRetryCount() => CriterionRetryCount++;
 
-    internal void ClearCriterionRetryFeedback() => CriterionRetryFeedback = [];
+    internal void ClearCriterionRetryFeedback()
+    {
+        CriterionRetryFeedback = [];
+        AcceptedRetryFeedback = null;
+    }
 
     private void RestoreCriterionRetryState(int retryCount, IReadOnlyList<string>? feedback)
     {

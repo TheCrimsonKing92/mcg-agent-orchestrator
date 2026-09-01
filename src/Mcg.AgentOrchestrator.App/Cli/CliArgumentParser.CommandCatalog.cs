@@ -10,6 +10,7 @@ internal static IReadOnlyList<string> RecognizedCommands { get; } =
     "doctor",
     "project",
     "trial-compare",
+    "hermes-acp-trial",
     "provider-smoke",
     "prototype",
     "prototype-ui",

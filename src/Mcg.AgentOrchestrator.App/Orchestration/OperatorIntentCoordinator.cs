@@ -205,7 +205,7 @@ internal sealed class OperatorIntentCoordinator
                         blockerFingerprint: $"operator-retry-cause:{intent.Id}");
                     break;
                 }
-                kernel.RetryTask(
+                kernel.RetryTaskWithAuthoritativeFeedback(
                     goal.Id,
                     taskId,
                     retry.Message,
