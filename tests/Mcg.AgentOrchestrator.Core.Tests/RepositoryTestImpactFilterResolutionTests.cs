@@ -148,6 +148,48 @@ public sealed class RepositoryTestImpactFilterResolutionTests
     }
 
     [Xunit.Fact]
+    public void CliSourceExposesTypedInfrastructureImpactScope()
+    {
+        var plan = RepositoryTestImpactPlanner.Plan(
+        [
+            "src/Mcg.AgentOrchestrator.App/Cli/CliCommandHandlers.Backlog.cs"
+        ]);
+
+        var check = Assert.Single(plan.Checks);
+        Assert.Equal(RepositoryTestProject.Infrastructure, check.TestProject);
+        Assert.Equal(["CliCommandTests", "CliHelpTests"], check.TestClassSelections);
+        Assert.DoesNotContain(
+            "DotnetBuildEnvironmentManagerTests",
+            check.TestClassSelections!,
+            StringComparer.Ordinal);
+    }
+
+    [Xunit.Fact]
+    public void DashboardSourceDerivesFilterFromTypedImpactScope()
+    {
+        var plan = RepositoryTestImpactPlanner.Plan(
+        [
+            "src/Mcg.AgentOrchestrator.App/Dashboard/Api/DashboardEndpoints.Goals.cs"
+        ]);
+
+        var check = Assert.Single(plan.Checks);
+        Assert.Equal(RepositoryTestProject.Dashboard, check.TestProject);
+        Assert.Equal(
+            [
+                "DashboardRenderingTests",
+                "DashboardHostTests",
+                "DashboardDispatchStartFailureEndpointTests",
+                "DashboardValidationHarnessTests"
+            ],
+            check.TestClassSelections);
+        Assert.Equal(
+            "(FullyQualifiedName~DashboardRenderingTests|FullyQualifiedName~DashboardHostTests|" +
+            "FullyQualifiedName~DashboardDispatchStartFailureEndpointTests|" +
+            "FullyQualifiedName~DashboardValidationHarnessTests)&Category!=HostIntegration",
+            check.Command[^1]);
+    }
+
+    [Xunit.Fact]
     public void DotFreeStemPreservesProjectWideLegacySelection()
     {
         const string path =

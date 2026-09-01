@@ -899,44 +899,339 @@ public sealed partial class ConductorDriverTestsLifecycleStates
         Xunit.Assert.Equal(3, acceptanceRuns);
     }
 
-    [Xunit.Fact(DisplayName = "ConductorDriver_inherited_failure_without_apparatus_cause_retries_worker")]
-    public void ConductorDriverInheritedFailureWithoutApparatusCauseRetriesWorker()
+    [Xunit.Fact]
+    public void IntroducedFailureOutsideChangedScopeRetries()
     {
         var (kernel, goal) = SimpleGoal();
         var task = goal.Tasks.Single();
         PassVerification(kernel, goal, task);
         var retryCalled = false;
-        var rawAcceptance = new AcceptanceVerificationSummary(
+        var identity = ExtractCanonicalTrxFailureIdentity(
+            "Mcg.AgentOrchestrator.Infrastructure.Tests.DotnetBuildEnvironmentManagerTestsLockAttributionLandingFixtures",
+            "DotnetBuildEnvironmentManagerNoHolderArtifactPrepLockRetriesAndAcquires",
+            "DotnetBuildEnvironmentManager_no_holder_artifact_prep_lock_retries_and_acquires");
+        var unmet = new AcceptanceCheckResult(
+            "infrastructure tests: Remainder",
             false,
-            [new AcceptanceCheckResult("infrastructure tests: Remainder", false, 1, "inherited red")],
-            FailedChecks: ["infrastructure tests: Remainder"],
+            1,
+            "unrelated infrastructure failure",
+            FailingTestIdentities: [identity],
+            TestProjectPath: "tests/Mcg.AgentOrchestrator.Infrastructure.Tests/Mcg.AgentOrchestrator.Infrastructure.Tests.csproj",
+            FailingTestAttributions:
+            [
+                new AcceptanceTestFailureAttribution(
+                    identity,
+                    AcceptanceTestFailureOrigin.Introduced,
+                    "focused identity was green at merge-base main-a")
+            ]);
+        var acceptance = new AcceptanceVerificationSummary(
+            false,
+            [unmet],
+            FailedChecks: [unmet.Name],
             BranchHeadSha: "candidate-a",
             MainHeadSha: "main-a",
             CheckAttributions:
             [
                 new AcceptanceCheckAttribution(
-                    "infrastructure tests: Remainder",
-                    AcceptanceFailureOrigin.Inherited,
-                    "baseline red without an apparatus receipt")
+                    unmet.Name,
+                    AcceptanceFailureOrigin.Introduced,
+                    "main is attested green")
             ],
-            BaselineAttestation: "attested-red");
-        var acceptance = ConductorDriver.ClassifyInheritedBaselineApparatus(rawAcceptance);
+            BaselineAttestation: "attested-green");
         var driver = MakeDriver(
             getFacts: _ => GoalLifecycleFacts.None,
             runAcceptanceSummary: _ => acceptance,
-            retryTask: (goalId, taskId, message) =>
+            retryTaskWithCause: (goalId, taskId, message, roundKind, cause) =>
             {
                 retryCalled = true;
-                return kernel.RetryTask(goalId, taskId, message, RetryCause.Unknown);
+                Assert.Equal(RetryCause.CriterionEvidenceOwnerMismatch, cause);
+                return kernel.RetryTask(
+                    goalId,
+                    taskId,
+                    message,
+                    retryRoundKind: roundKind,
+                    retryCause: cause);
             },
-            recordCriterionRetryFeedback: kernel.RecordCriterionRetryFeedback);
+            recordCriterionRetryFeedback: kernel.RecordCriterionRetryFeedback,
+            getLandingFileScopes: _ =>
+            [
+                "src/Mcg.AgentOrchestrator.App/Cli/CliCommandHandlers.Backlog.cs"
+            ]);
 
         var result = driver.AdvanceOnce(goal, ConductorAutonomyPolicy.Conservative);
 
-        Xunit.Assert.IsType<ConductorAdvanceOutcome.Executed>(result.Outcome);
-        Xunit.Assert.True(retryCalled);
-        Xunit.Assert.Equal(WorkTaskStatus.Assigned, task.Status);
-        Xunit.Assert.Equal(1, task.CriterionRetryCount);
+        Assert.IsType<ConductorAdvanceOutcome.Executed>(result.Outcome);
+        Assert.True(retryCalled);
+        Assert.Equal(WorkTaskStatus.Assigned, task.Status);
+        Assert.Equal(1, task.CriterionRetryCount);
+    }
+
+    [Xunit.Fact(DisplayName = "ConductorDriver_inherited_impacted_identity_holds_without_retry")]
+    public void InheritedIdentityWithinImpactHoldsWithoutRetry()
+    {
+        var (kernel, goal) = SimpleGoal();
+        var task = goal.Tasks.Single();
+        PassVerification(kernel, goal, task);
+        var retryCalled = false;
+        const string identity =
+            "Mcg.AgentOrchestrator.Infrastructure.Tests.CliCommandTestsBacklogIntakeCommands.CliBacklogListSplitsLimitStatusAndTextFlags";
+        var unmet = new AcceptanceCheckResult(
+            "infrastructure tests: Remainder",
+            false,
+            1,
+            "inherited CLI failure",
+            FailingTestIdentities: [identity],
+            TestProjectPath: "tests/Mcg.AgentOrchestrator.Infrastructure.Tests/Mcg.AgentOrchestrator.Infrastructure.Tests.csproj",
+            FailingTestAttributions:
+            [
+                new AcceptanceTestFailureAttribution(
+                    identity,
+                    AcceptanceTestFailureOrigin.Inherited,
+                    "same focused identity failed at merge-base main-a")
+            ]);
+        var driver = MakeDriver(
+            getFacts: _ => GoalLifecycleFacts.None,
+            runAcceptanceSummary: _ => new AcceptanceVerificationSummary(
+                false,
+                [unmet],
+                FailedChecks: [unmet.Name],
+                BranchHeadSha: "candidate-a",
+                MainHeadSha: "main-a"),
+            retryTaskWithCause: (goalId, taskId, message, roundKind, cause) =>
+            {
+                retryCalled = true;
+                return kernel.RetryTask(
+                    goalId,
+                    taskId,
+                    message,
+                    retryRoundKind: roundKind,
+                    retryCause: cause);
+            },
+            recordCriterionRetryFeedback: kernel.RecordCriterionRetryFeedback,
+            getLandingFileScopes: _ =>
+            [
+                "src/Mcg.AgentOrchestrator.App/Cli/CliCommandHandlers.Backlog.cs"
+            ]);
+
+        var result = driver.AdvanceOnce(goal, ConductorAutonomyPolicy.Conservative);
+
+        var held = Assert.IsType<ConductorAdvanceOutcome.Held>(result.Outcome);
+        Assert.Contains("pre-existing/main-red", held.Reason, StringComparison.Ordinal);
+        Assert.False(retryCalled);
+        Assert.Equal(WorkTaskStatus.Completed, task.Status);
+        Assert.Equal(0, task.CriterionRetryCount);
+    }
+
+    [Xunit.Fact]
+    public void MixedFailuresRetryOnlyIntroducedIdentity()
+    {
+        var tempDirectory = CreateTempDirectory();
+        var trxPath = Path.Combine(tempDirectory, "mixed-attribution.trx");
+        try
+        {
+            const string impacted =
+                "Mcg.AgentOrchestrator.Infrastructure.Tests.CliCommandTestsBacklogIntakeCommands.CliBacklogListSplitsLimitStatusAndTextFlags";
+            const string unrelated =
+                "Mcg.AgentOrchestrator.Infrastructure.Tests.DotnetBuildEnvironmentManagerTestsLockAttributionLandingFixtures.DotnetBuildEnvironmentManagerNoHolderArtifactPrepLockRetriesAndAcquires";
+            AcceptanceFailureAttributionTestFixtures.WriteFailedTrx(
+                trxPath,
+                (impacted, "Cli_backlog_list_splits_limit_status_and_text_flags"),
+                (unrelated, "DotnetBuildEnvironmentManager_no_holder_artifact_prep_lock_retries_and_acquires"));
+            var (kernel, goal) = SimpleGoal();
+            var task = goal.Tasks.Single();
+            PassVerification(kernel, goal, task);
+            string? retryMessage = null;
+            var unmet = new AcceptanceCheckResult(
+                "infrastructure tests: Remainder",
+                false,
+                1,
+                "mixed infrastructure failures",
+                TestResultPaths: [trxPath],
+                FailingTestIdentities: [impacted, unrelated],
+                TestProjectPath: "tests/Mcg.AgentOrchestrator.Infrastructure.Tests/Mcg.AgentOrchestrator.Infrastructure.Tests.csproj",
+                FailingTestAttributions:
+                [
+                    new AcceptanceTestFailureAttribution(
+                        impacted,
+                        AcceptanceTestFailureOrigin.Introduced,
+                        "focused identity was green at merge-base main-a"),
+                    new AcceptanceTestFailureAttribution(
+                        unrelated,
+                        AcceptanceTestFailureOrigin.Inherited,
+                        "same focused identity failed at merge-base main-a")
+                ]);
+            var acceptance = new AcceptanceVerificationSummary(
+                false,
+                [unmet],
+                FailedChecks: [unmet.Name],
+                BranchHeadSha: "candidate-a",
+                MainHeadSha: "main-a",
+                CheckAttributions:
+                [
+                    new AcceptanceCheckAttribution(
+                        unmet.Name,
+                        AcceptanceFailureOrigin.Introduced,
+                        "main is attested green")
+                ]);
+            var driver = MakeDriver(
+                getFacts: _ => GoalLifecycleFacts.None,
+                runAcceptanceSummary: _ => acceptance,
+                retryTaskWithCause: (goalId, taskId, message, roundKind, cause) =>
+                {
+                    retryMessage = message;
+                    Assert.Equal(RetryCause.CriterionEvidenceOwnerMismatch, cause);
+                    return kernel.RetryTask(
+                        goalId,
+                        taskId,
+                        message,
+                        retryRoundKind: roundKind,
+                        retryCause: cause);
+                },
+                recordCriterionRetryFeedback: kernel.RecordCriterionRetryFeedback,
+                getLandingFileScopes: _ =>
+                [
+                    "src/Mcg.AgentOrchestrator.App/Cli/CliCommandHandlers.Backlog.cs"
+                ]);
+
+            var result = driver.AdvanceOnce(goal, ConductorAutonomyPolicy.Conservative);
+
+            Assert.IsType<ConductorAdvanceOutcome.Executed>(result.Outcome);
+            Assert.Contains(impacted, retryMessage!, StringComparison.Ordinal);
+            Assert.DoesNotContain(unrelated, retryMessage!, StringComparison.Ordinal);
+            Assert.Equal(WorkTaskStatus.Assigned, task.Status);
+            Assert.Equal(1, task.CriterionRetryCount);
+        }
+        finally
+        {
+            Directory.Delete(tempDirectory, recursive: true);
+        }
+    }
+
+    [Xunit.Fact(DisplayName = "ConductorDriver_introduced_test_failure_without_identity_retries")]
+    public void IntroducedTestFailureWithoutIdentityRetries()
+    {
+        AssertIntroducedFailureRetries(
+            identity: null,
+            changedFile: "src/Mcg.AgentOrchestrator.App/Cli/CliCommandHandlers.Backlog.cs");
+    }
+
+    [Xunit.Fact(DisplayName = "ConductorDriver_substring_impact_selection_retries_introduced_failure")]
+    public void SubstringImpactSelectionRetriesIntroducedFailure()
+    {
+        AssertIntroducedFailureRetries(
+            "Mcg.AgentOrchestrator.Infrastructure.Tests.CliCommandTestsGenerated.BacklogListShowsOpenItems",
+            "src/Mcg.AgentOrchestrator.App/Cli/CliCommandHandlers.Backlog.cs");
+    }
+
+    [Xunit.Fact(DisplayName = "ConductorDriver_unmapped_impact_project_retries_introduced_failure")]
+    public void UnmappedImpactProjectRetriesIntroducedFailure()
+    {
+        AssertIntroducedFailureRetries(
+            "Mcg.AgentOrchestrator.Infrastructure.Tests.UnmappedTests.CandidateRegression",
+            "src/Mcg.AgentOrchestrator.Core/Domain/Goal.cs");
+    }
+
+    private static void AssertIntroducedFailureRetries(string? identity, string changedFile)
+    {
+        var (kernel, goal) = SimpleGoal();
+        var task = goal.Tasks.Single();
+        PassVerification(kernel, goal, task);
+        var retryCalled = false;
+        var identities = identity is null ? null : new[] { identity };
+        var attributions = identity is null
+            ? null
+            : new[]
+            {
+                new AcceptanceTestFailureAttribution(
+                    identity,
+                    AcceptanceTestFailureOrigin.Introduced,
+                    "focused identity was green at merge-base main-a")
+            };
+        var unmet = new AcceptanceCheckResult(
+            "infrastructure tests: Remainder",
+            false,
+            1,
+            "introduced regression",
+            FailingTestIdentities: identities,
+            TestProjectPath: "tests/Mcg.AgentOrchestrator.Infrastructure.Tests/Mcg.AgentOrchestrator.Infrastructure.Tests.csproj",
+            FailingTestAttributions: attributions);
+        var driver = MakeDriver(
+            getFacts: _ => GoalLifecycleFacts.None,
+            runAcceptanceSummary: _ => new AcceptanceVerificationSummary(
+                false,
+                [unmet],
+                FailedChecks: [unmet.Name],
+                BranchHeadSha: "candidate-a",
+                MainHeadSha: "main-a",
+                CheckAttributions:
+                [
+                    new AcceptanceCheckAttribution(
+                        unmet.Name,
+                        AcceptanceFailureOrigin.Introduced,
+                        "main is attested green")
+                ]),
+            retryTaskWithCause: (goalId, taskId, message, roundKind, cause) =>
+            {
+                retryCalled = true;
+                Assert.Equal(RetryCause.CriterionEvidenceOwnerMismatch, cause);
+                return kernel.RetryTask(
+                    goalId,
+                    taskId,
+                    message,
+                    retryRoundKind: roundKind,
+                    retryCause: cause);
+            },
+            recordCriterionRetryFeedback: kernel.RecordCriterionRetryFeedback,
+            getLandingFileScopes: _ => [changedFile]);
+
+        var result = driver.AdvanceOnce(goal, ConductorAutonomyPolicy.Conservative);
+
+        Assert.IsType<ConductorAdvanceOutcome.Executed>(result.Outcome);
+        Assert.True(retryCalled);
+        Assert.Equal(WorkTaskStatus.Assigned, task.Status);
+        Assert.Equal(1, task.CriterionRetryCount);
+    }
+
+    private static string ExtractCanonicalTrxFailureIdentity(
+        string className,
+        string methodName,
+        string displayName)
+    {
+        var tempDirectory = CreateTempDirectory();
+        try
+        {
+            var trxPath = Path.Combine(tempDirectory, "canonical-identity.trx");
+            new XDocument(
+                new XElement(
+                    "TestRun",
+                    new XElement(
+                        "TestDefinitions",
+                        new XElement(
+                            "UnitTest",
+                            new XAttribute("id", "test-1"),
+                            new XAttribute("name", displayName),
+                            new XElement("DisplayName", displayName),
+                            new XElement(
+                                "TestMethod",
+                                new XAttribute("className", className),
+                                new XAttribute("name", methodName)))),
+                    new XElement(
+                        "Results",
+                        new XElement(
+                            "UnitTestResult",
+                            new XAttribute("testId", "test-1"),
+                            new XAttribute("testName", displayName),
+                            new XAttribute("outcome", "Failed")))))
+                .Save(trxPath);
+
+            var identity = Assert.Single(GoalAcceptanceVerifier.ExtractTrxFailureIdentities(trxPath));
+            Assert.Equal($"{className}.{methodName}", identity);
+            return identity;
+        }
+        finally
+        {
+            Directory.Delete(tempDirectory, recursive: true);
+        }
     }
 
     [Xunit.Fact(DisplayName = "ConductorDriver_Verified_unmet_acceptance_retry_feedback_caps_concrete_evidence")]

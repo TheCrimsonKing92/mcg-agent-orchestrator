@@ -256,12 +256,70 @@ public sealed class GoalAcceptanceVerifierDotnetBuildSlotTestsRunnerInvocationAn
 
         Assert.Equal(
             [
-                "[FAIL] Retry evidence includes failed test names: Assert.Contains() Failure: Sub-string not found",
-                "[FAIL] MTP shard preserves theory display name(value: 42): Expected shard count to be 2, but found 1"
+                "[FAIL] Mcg.AgentOrchestrator.Infrastructure.Tests.RetryEvidenceTests.IncludesFailures: Assert.Contains() Failure: Sub-string not found",
+                "[FAIL] Mcg.AgentOrchestrator.Infrastructure.Tests.MtpShardTests.PreservesTheoryDisplayName(value: 42): Expected shard count to be 2, but found 1"
             ],
             evidence);
         Assert.DoesNotContain(evidence, line =>
             line.Contains("Passing MTP test is not surfaced", StringComparison.Ordinal));
+    }
+
+    [Xunit.Fact]
+    public void FailureIdentitiesRetainOnlyFatalNonpassingOutcomes()
+    {
+        var root = CreateManifestWorkspace("""
+            {
+              "version": 1,
+              "checks": [],
+              "forbiddenChangedPathGlobs": []
+            }
+            """);
+        var trxPath = Path.Combine(root, "mixed-nonpassing.trx");
+        try
+        {
+            var rows = new[]
+            {
+                (Id: "failed-1", ClassName: "MixedOutcomeTests", MethodName: "Fails", Outcome: "Failed"),
+                (Id: "timeout-1", ClassName: "MixedOutcomeTests", MethodName: "TimesOut", Outcome: "Timeout"),
+                (Id: "skipped-1", ClassName: "MixedOutcomeTests", MethodName: "Skips", Outcome: "Skipped"),
+                (Id: "not-executed-1", ClassName: "MixedOutcomeTests", MethodName: "DoesNotExecute", Outcome: "NotExecuted")
+            };
+            new XDocument(
+                new XElement(
+                    "TestRun",
+                    new XElement(
+                        "TestDefinitions",
+                        rows.Select(row =>
+                            new XElement(
+                                "UnitTest",
+                                new XAttribute("id", row.Id),
+                                new XElement(
+                                    "TestMethod",
+                                    new XAttribute("className", row.ClassName),
+                                    new XAttribute("name", row.MethodName))))),
+                    new XElement(
+                        "Results",
+                        rows.Select(row =>
+                            new XElement(
+                                "UnitTestResult",
+                                new XAttribute("testId", row.Id),
+                                new XAttribute("testName", $"{row.ClassName}.{row.MethodName}"),
+                                new XAttribute("outcome", row.Outcome))))))
+                .Save(trxPath);
+
+            var identities = GoalAcceptanceVerifier.ExtractTrxFailureIdentities(trxPath);
+
+            Assert.Equal(
+                [
+                    "MixedOutcomeTests.Fails",
+                    "MixedOutcomeTests.TimesOut"
+                ],
+                identities);
+        }
+        finally
+        {
+            DeleteDirectoryWithRetry(root);
+        }
     }
 
     [Xunit.Fact(DisplayName = "AcceptanceTrxFailureReader_preserves_full_nonpassing_evidence")]
@@ -333,11 +391,11 @@ public sealed class GoalAcceptanceVerifierDotnetBuildSlotTestsRunnerInvocationAn
             Assert.False(result.Passed);
             var output = Assert.Single(result.Checks!).OutputTail;
             Assert.Contains(
-                "[FAIL] Retry evidence includes failed test names: Assert.Contains() Failure: Sub-string not found",
+                "[FAIL] Mcg.AgentOrchestrator.Infrastructure.Tests.RetryEvidenceTests.IncludesFailures: Assert.Contains() Failure: Sub-string not found",
                 output,
                 StringComparison.Ordinal);
             Assert.Contains(
-                "[FAIL] MTP shard preserves theory display name(value: 42): Expected shard count to be 2, but found 1",
+                "[FAIL] Mcg.AgentOrchestrator.Infrastructure.Tests.MtpShardTests.PreservesTheoryDisplayName(value: 42): Expected shard count to be 2, but found 1",
                 output,
                 StringComparison.Ordinal);
             Assert.DoesNotContain("Passing MTP test is not surfaced", output, StringComparison.Ordinal);
