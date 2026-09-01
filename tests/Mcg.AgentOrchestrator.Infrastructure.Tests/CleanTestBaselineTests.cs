@@ -290,6 +290,81 @@ public sealed class CleanTestBaselineTests
         }
     }
 
+    [Xunit.Theory]
+    [Xunit.InlineData("Timeout")]
+    [Xunit.InlineData("Aborted")]
+    [Xunit.InlineData("Error")]
+    public void VerifierMixedApparatusAndUnreceiptedFatalOutcomeFailsClosed(string fatalOutcome)
+    {
+        const string checkName = "infrastructure tests: Remainder";
+        var receipt = new AcceptanceFailureCauseReceiptV1(
+            1, "seeded-dispatch-repository-git-probe", "ProcessOutputApparatus",
+            "EmptyRequiredOutput", true, 0, 0, 0, false, false, false,
+            "ValidLooseReference", "PublishedTopLevel", "create-mixed-outcome", 1);
+        var trxPath = Path.Combine(Path.GetTempPath(), $"mixed-outcome-{Guid.NewGuid():N}.trx");
+        try
+        {
+            File.WriteAllText(
+                trxPath,
+                $"""
+                <TestRun><Results>
+                  <UnitTestResult testId="1" outcome="Failed"><Output><ErrorInfo><Message>{AcceptanceFailureCauseReceiptCodec.Format(receipt)}</Message></ErrorInfo></Output></UnitTestResult>
+                  <UnitTestResult testId="2" outcome="{fatalOutcome}"><Output><ErrorInfo><Message>ordinary {fatalOutcome} failure</Message></ErrorInfo></Output></UnitTestResult>
+                </Results></TestRun>
+                """);
+
+            var result = GoalAcceptanceVerifier.AttachFailureCauseEvidence(
+                new AcceptanceCheckResult(checkName, false, 1, "mixed failure outcomes", TestResultPaths: [trxPath]));
+
+            Assert.Null(result.FailureClassification);
+            Assert.Null(result.FailureCauseEvidence);
+        }
+        finally
+        {
+            File.Delete(trxPath);
+        }
+    }
+
+    [Xunit.Theory]
+    [Xunit.InlineData("Timeout")]
+    [Xunit.InlineData("Aborted")]
+    [Xunit.InlineData("Error")]
+    public void VerifierAllFatalOutcomesWithApparatusReceiptsRemainClassified(string fatalOutcome)
+    {
+        const string checkName = "infrastructure tests: Remainder";
+        var receipt = new AcceptanceFailureCauseReceiptV1(
+            1, "seeded-dispatch-repository-git-probe", "ProcessOutputApparatus",
+            "EmptyRequiredOutput", true, 0, 0, 0, false, false, false,
+            "ValidLooseReference", "PublishedTopLevel", "create-all-apparatus", 1);
+        var marker = AcceptanceFailureCauseReceiptCodec.Format(receipt);
+        var trxPath = Path.Combine(Path.GetTempPath(), $"all-apparatus-{Guid.NewGuid():N}.trx");
+        try
+        {
+            File.WriteAllText(
+                trxPath,
+                $"""
+                <TestRun><Results>
+                  <UnitTestResult testId="1" outcome="Failed"><Output><ErrorInfo><Message>{marker}</Message></ErrorInfo></Output></UnitTestResult>
+                  <UnitTestResult testId="2" outcome="{fatalOutcome}"><Output><ErrorInfo><Message>{marker}</Message></ErrorInfo></Output></UnitTestResult>
+                  <UnitTestResult testId="3" outcome="Passed" />
+                  <UnitTestResult testId="4" outcome="NotExecuted" />
+                </Results></TestRun>
+                """);
+
+            var result = GoalAcceptanceVerifier.AttachFailureCauseEvidence(
+                new AcceptanceCheckResult(checkName, false, 1, "typed apparatus outcomes", TestResultPaths: [trxPath]));
+
+            Assert.Equal(
+                AcceptanceFailureClassifications.SeededRepositoryProcessOutputApparatus,
+                result.FailureClassification);
+            Assert.Equal(AcceptanceFailureCause.EnvironmentalApparatus, result.FailureCauseEvidence?.Cause);
+        }
+        finally
+        {
+            File.Delete(trxPath);
+        }
+    }
+
     [Xunit.Fact]
     public void VerifierMixedSeededRepositoryOwnersUseGeneralApparatusClassification()
     {

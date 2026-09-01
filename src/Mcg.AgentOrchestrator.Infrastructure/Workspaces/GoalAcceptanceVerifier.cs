@@ -1365,11 +1365,16 @@ public sealed class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
                 var failedResults = XDocument.Load(trxPath, LoadOptions.None)
                     .Descendants()
                     .Where(element =>
-                        element.Name.LocalName.Equals("UnitTestResult", StringComparison.Ordinal) &&
-                        string.Equals(
-                            element.Attribute("outcome")?.Value,
-                            "Failed",
-                            StringComparison.OrdinalIgnoreCase))
+                    {
+                        if (!element.Name.LocalName.Equals("UnitTestResult", StringComparison.Ordinal))
+                        {
+                            return false;
+                        }
+
+                        var outcome = element.Attribute("outcome")?.Value;
+                        return !string.Equals(outcome, "Passed", StringComparison.OrdinalIgnoreCase) &&
+                            !string.Equals(outcome, "NotExecuted", StringComparison.OrdinalIgnoreCase);
+                    })
                     .ToArray();
                 foreach (var result in failedResults)
                 {
