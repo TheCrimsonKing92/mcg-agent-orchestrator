@@ -465,13 +465,11 @@ try {
             Write-Output "LOCK id=$($process.ProcessId) kind=$kind parent=$($process.ParentProcessId) name=$($process.Name) created=$created path=$($process.ExecutablePath) command=$(Short-Command $process.CommandLine)"
         }
 
-        if ($lockHolders.Count -eq 0) {
-            if ($relevantUnavailable.Count -gt 0) {
-                Write-Output "lock query incomplete: relevant process inspection was unavailable"
-            }
-            else {
-                Write-Output "No orchestrator lock-holders running; in-tree build lock is FREE."
-            }
+        if ($relevantUnavailable.Count -gt 0) {
+            Write-Output "lock query incomplete: relevant process inspection was unavailable"
+        }
+        elseif ($lockHolders.Count -eq 0) {
+            Write-Output "No orchestrator lock-holders running; in-tree build lock is FREE."
         }
     }
 }
