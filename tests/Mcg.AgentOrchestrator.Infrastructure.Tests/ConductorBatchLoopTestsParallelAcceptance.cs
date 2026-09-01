@@ -2588,12 +2588,19 @@ public sealed partial class ConductorBatchLoopTestsParallelAcceptance : Conducto
         }
     }
 
-    [Xunit.Fact(DisplayName = "BatchLoop_introduced_typed_apparatus_restores_Verified_for_regate")]
+    [Xunit.Fact(Timeout = 30_000)]
+    [Xunit.Trait("Category", "CrossTick")]
     public void BatchLoopIntroducedTypedApparatusRestoresVerifiedForRegate()
     {
         var kernel = new AgentOrchestratorKernel();
-        var goal = CreateVerifiedSimpleGoal(kernel, "Update src/Mcg.AgentOrchestrator.App/Orchestration/IntroducedRegate.cs");
-        var task = goal.Tasks.Single();
+        var goal = GoalLifecycleCommands.CreateAndActivateGoal(
+            kernel,
+            DefaultAgents(),
+            "Update src/Mcg.AgentOrchestrator.App/Orchestration/IntroducedRegate.cs");
+        foreach (var task in goal.Tasks)
+        {
+            PassVerification(kernel, goal, task);
+        }
         var attemptRoot = CreateTempDirectory("mcg-conductor-acceptance-attempts");
         var acceptanceRuns = 0;
         var apparatus = new AcceptanceCheckResult(
@@ -2647,8 +2654,9 @@ public sealed partial class ConductorBatchLoopTestsParallelAcceptance : Conducto
             Assert.Equal(1, summary.Held);
             Assert.Equal(1, acceptanceRuns);
             Assert.Equal(GoalStatus.Verified, goal.Status);
-            Assert.Equal(WorkTaskStatus.Completed, task.Status);
-            Assert.Equal(0, task.CriterionRetryCount);
+            Assert.Equal(5, goal.Tasks.Count);
+            Assert.All(goal.Tasks, task => Assert.Equal(WorkTaskStatus.Completed, task.Status));
+            Assert.All(goal.Tasks, task => Assert.Equal(0, task.CriterionRetryCount));
             Assert.True(goal.LatestAcceptanceFailure?.IsEnvironmentalApparatus);
             Assert.Equal("Verified", goal.CurrentHold?.State);
         }

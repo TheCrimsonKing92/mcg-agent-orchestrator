@@ -819,8 +819,11 @@ public sealed partial class ConductorDriverTestsLifecycleStates
         Xunit.Assert.Equal(0, task.CriterionRetryCount);
     }
 
-    [Xunit.Fact(DisplayName = "ConductorDriver_introduced_environmental_apparatus_regates_without_retry")]
-    public void ConductorDriverIntroducedEnvironmentalApparatusRegatesWithoutRetry()
+    [Xunit.Theory]
+    [Xunit.InlineData(AcceptanceFailureClassifications.SeededRepositoryProcessOutputApparatus)]
+    [Xunit.InlineData(AcceptanceFailureClassifications.SeededRepositoryApparatus)]
+    public void ConductorDriverIntroducedEnvironmentalApparatusRegatesWithoutRetry(
+        string failureClassification)
     {
         var (kernel, goal) = SoftwareGoal("Five-role typed apparatus re-gate");
         foreach (var task in goal.Tasks)
@@ -836,7 +839,7 @@ public sealed partial class ConductorDriverTestsLifecycleStates
             false,
             1,
             "typed seeded repository fixture/process apparatus receipt",
-            FailureClassification: AcceptanceFailureClassifications.SeededRepositoryApparatus,
+            FailureClassification: failureClassification,
             ExecutedTestCount: 42);
         var acceptance = new AcceptanceVerificationSummary(
             false,

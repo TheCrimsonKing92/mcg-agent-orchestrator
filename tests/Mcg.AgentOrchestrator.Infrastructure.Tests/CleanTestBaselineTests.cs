@@ -45,10 +45,14 @@ public sealed class CleanTestBaselineTests
     }
 
     [Xunit.Theory]
-    [Xunit.InlineData(null, true)]
-    [Xunit.InlineData(0, true)]
-    [Xunit.InlineData(128, false)]
-    public void ProcessObservationReceiptRequiresNoObservedChildFailure(int? exitCode, bool expected)
+    [Xunit.InlineData(null, 31, true)]
+    [Xunit.InlineData(0, 31, true)]
+    [Xunit.InlineData(128, 31, true)]
+    [Xunit.InlineData(128, 0, false)]
+    public void ProcessObservationReceiptRetainsParentFaultWithAnyChildExit(
+        int? exitCode,
+        long stderrBytes,
+        bool expected)
     {
         var receipt = new AcceptanceFailureCauseReceiptV1(
             ContractVersion: 1,
@@ -58,7 +62,7 @@ public sealed class CleanTestBaselineTests
             ProcessStarted: true,
             ExitCode: exitCode,
             StandardOutputByteCount: 0,
-            StandardErrorByteCount: 31,
+            StandardErrorByteCount: stderrBytes,
             DrainTimedOut: false,
             TimedOut: false,
             DrainFailed: false,
@@ -72,6 +76,59 @@ public sealed class CleanTestBaselineTests
             out _);
 
         Assert.Equal(expected, parsed);
+    }
+
+    [Xunit.Theory]
+    [Xunit.InlineData("ProcessOutputApparatus", "ValidLooseReference", "LaunchFailure", false, null, false, false, false, true)]
+    [Xunit.InlineData("ProcessOutputApparatus", "ValidLooseReference", "ProcessTimeout", true, null, true, false, false, true)]
+    [Xunit.InlineData("ProcessOutputApparatus", "ValidLooseReference", "DrainTimeout", true, 0, false, true, false, true)]
+    [Xunit.InlineData("ProcessOutputApparatus", "ValidLooseReference", "DrainFailure", true, 0, false, false, true, true)]
+    [Xunit.InlineData("ProcessOutputApparatus", "ValidLooseReference", "ProcessObservationFailure", true, 128, false, false, false, true)]
+    [Xunit.InlineData("FixturePublication", "HeadMissing", "LaunchFailure", false, null, false, false, false, true)]
+    [Xunit.InlineData("FixturePublication", "HeadMissing", "ProcessTimeout", true, null, true, false, false, true)]
+    [Xunit.InlineData("FixturePublication", "HeadMissing", "DrainTimeout", true, 0, false, true, false, true)]
+    [Xunit.InlineData("FixturePublication", "HeadMissing", "DrainFailure", true, 0, false, false, true, true)]
+    [Xunit.InlineData("FixturePublication", "HeadMissing", "ProcessObservationFailure", true, 128, false, false, false, true)]
+    [Xunit.InlineData("ProcessOutputApparatus", "HeadMissing", "LaunchFailure", false, null, false, false, false, false)]
+    [Xunit.InlineData("FixturePublication", "ValidLooseReference", "LaunchFailure", false, null, false, false, false, false)]
+    [Xunit.InlineData("ProcessOutputApparatus", "ValidLooseReference", "LaunchFailure", true, null, false, false, false, false)]
+    [Xunit.InlineData("FixturePublication", "HeadMissing", "ProcessTimeout", true, null, false, false, false, false)]
+    [Xunit.InlineData("ProcessOutputApparatus", "ValidLooseReference", "DrainTimeout", true, 0, true, true, false, false)]
+    [Xunit.InlineData("FixturePublication", "HeadMissing", "DrainFailure", true, 0, false, true, true, false)]
+    [Xunit.InlineData("ProcessOutputApparatus", "ValidLooseReference", "ProcessObservationFailure", true, 128, false, false, true, false)]
+    public void SeededRepositoryFaultReceiptDecisionTableRequiresCoherentEvidence(
+        string owner,
+        string headState,
+        string classification,
+        bool processStarted,
+        int? exitCode,
+        bool timedOut,
+        bool drainTimedOut,
+        bool drainFailed,
+        bool expected)
+    {
+        var receipt = new AcceptanceFailureCauseReceiptV1(
+            ContractVersion: 1,
+            Kind: "seeded-dispatch-repository-git-probe",
+            Owner: owner,
+            ProbeClassification: classification,
+            ProcessStarted: processStarted,
+            ExitCode: exitCode,
+            StandardOutputByteCount: 0,
+            StandardErrorByteCount: 31,
+            DrainTimedOut: drainTimedOut,
+            TimedOut: timedOut,
+            DrainFailed: drainFailed,
+            RepositoryHeadState: headState,
+            Check: "TemplateHeadCommit",
+            FixtureAttemptId: "create-fault-decision-table",
+            ProbeOrdinal: 1);
+
+        Assert.Equal(
+            expected,
+            AcceptanceFailureCauseReceiptCodec.TryParse(
+                AcceptanceFailureCauseReceiptCodec.Format(receipt),
+                out _));
     }
 
     [Xunit.Fact]

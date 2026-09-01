@@ -165,21 +165,7 @@ internal static class AcceptanceFailureCauseReceiptCodec
             return false;
         }
 
-        return receipt.ProbeClassification switch
-        {
-            "EmptyRequiredOutput" =>
-                receipt.ProcessStarted && receipt.ExitCode == 0 &&
-                receipt.StandardOutputByteCount == 0 &&
-                !receipt.DrainTimedOut && !receipt.TimedOut && !receipt.DrainFailed &&
-                receipt.RepositoryHeadState is "ValidLooseReference" or
-                    "ValidPackedReference" or "ValidDetachedHead",
-            "LaunchFailure" => !receipt.ProcessStarted,
-            "ProcessTimeout" => receipt.ProcessStarted && receipt.TimedOut,
-            "DrainTimeout" => receipt.ProcessStarted && receipt.DrainTimedOut,
-            "DrainFailure" => receipt.ProcessStarted && receipt.DrainFailed,
-            "ProcessObservationFailure" => receipt.ProcessStarted && receipt.ExitCode is null or 0,
-            _ => false
-        };
+        return IsProcessFaultClassification(receipt);
     }
 
     private static bool IsFixturePublicationApparatus(AcceptanceFailureCauseReceiptV1 receipt)
@@ -196,15 +182,35 @@ internal static class AcceptanceFailureCauseReceiptCodec
             "NotRun" => !receipt.ProcessStarted && receipt.ExitCode is null &&
                 receipt.StandardOutputByteCount == 0 &&
                 !receipt.DrainTimedOut && !receipt.TimedOut && !receipt.DrainFailed,
+            "NonZeroExit" => receipt.ProcessStarted && receipt.ExitCode is not null and not 0 &&
+                !receipt.DrainTimedOut && !receipt.TimedOut && !receipt.DrainFailed,
+            "InvalidRequiredOutput" => receipt.ProcessStarted && receipt.ExitCode == 0 &&
+                receipt.StandardOutputByteCount > 0 &&
+                !receipt.DrainTimedOut && !receipt.TimedOut && !receipt.DrainFailed,
+            _ => IsProcessFaultClassification(receipt)
+        };
+    }
+
+    private static bool IsProcessFaultClassification(AcceptanceFailureCauseReceiptV1 receipt) =>
+        receipt.ProbeClassification switch
+        {
             "EmptyRequiredOutput" => receipt.ProcessStarted && receipt.ExitCode == 0 &&
                 receipt.StandardOutputByteCount == 0 &&
                 !receipt.DrainTimedOut && !receipt.TimedOut && !receipt.DrainFailed,
-            "NonZeroExit" => receipt.ProcessStarted && receipt.ExitCode is not null and not 0,
-            "InvalidRequiredOutput" => receipt.ProcessStarted && receipt.ExitCode == 0 &&
+            "LaunchFailure" => !receipt.ProcessStarted && receipt.ExitCode is null &&
+                receipt.StandardOutputByteCount == 0 &&
+                receipt.StandardErrorByteCount > 0 &&
+                !receipt.DrainTimedOut && !receipt.TimedOut && !receipt.DrainFailed,
+            "ProcessTimeout" => receipt.ProcessStarted && receipt.TimedOut,
+            "DrainTimeout" => receipt.ProcessStarted && !receipt.TimedOut && receipt.DrainTimedOut,
+            "DrainFailure" => receipt.ProcessStarted && !receipt.TimedOut &&
+                !receipt.DrainTimedOut && receipt.DrainFailed,
+            "ProcessObservationFailure" => receipt.ProcessStarted &&
+                receipt.StandardOutputByteCount == 0 &&
+                receipt.StandardErrorByteCount > 0 &&
                 !receipt.DrainTimedOut && !receipt.TimedOut && !receipt.DrainFailed,
             _ => false
         };
-    }
 }
 
 public static class AcceptanceShardCompletionSignals
