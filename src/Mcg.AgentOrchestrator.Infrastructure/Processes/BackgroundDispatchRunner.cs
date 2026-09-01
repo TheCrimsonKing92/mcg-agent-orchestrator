@@ -3119,10 +3119,8 @@ public sealed class BackgroundDispatchRunner
             : standardError.TrimEnd() + Environment.NewLine + diagnostic;
     }
 
-    private static bool TryKillProcess(int processId)
-    {
-        return WorkerProcessJobs.TryKillOrFallback(processId);
-    }
+    private static bool TryKillProcess(int processId) =>
+        WorkerProcessJobs.TryKillOrFallback(processId);
 
     internal static string FormatResourceReceipt(
         GoalId goalId,
