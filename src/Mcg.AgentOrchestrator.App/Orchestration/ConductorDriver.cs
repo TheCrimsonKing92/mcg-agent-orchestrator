@@ -6135,12 +6135,11 @@ internal sealed partial class ConductorDriver
                 attribution.CheckName.Equals(criterion.Name, StringComparison.Ordinal));
             if (failingIdentities is not { Length: > 0 })
             {
-                if (checkAttribution is { Origin: not AcceptanceFailureOrigin.Introduced })
+                if (checkAttribution is { Origin: AcceptanceFailureOrigin.Inherited })
                 {
-                    var kind = checkAttribution.Origin == AcceptanceFailureOrigin.Inherited
-                        ? AcceptanceRetryExclusionKind.Inherited
-                        : AcceptanceRetryExclusionKind.Unattributed;
-                    excluded.Add(new ExcludedAcceptanceFailure(criterion.Name, kind));
+                    excluded.Add(new ExcludedAcceptanceFailure(
+                        criterion.Name,
+                        AcceptanceRetryExclusionKind.Inherited));
                 }
                 else
                 {
@@ -6408,7 +6407,7 @@ internal sealed partial class ConductorDriver
                     continue;
                 }
 
-                var attributableFailures = allowedFailingIdentities is null
+                var attributableFailures = allowedFailingIdentities is null or { Count: 0 }
                     ? receipt.Failures
                     : receipt.Failures
                         .Where(failure => allowedFailingIdentities.Contains(failure.TestName))
