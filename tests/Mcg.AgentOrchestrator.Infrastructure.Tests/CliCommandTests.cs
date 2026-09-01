@@ -82,6 +82,29 @@ public abstract class CliCommandTestBase : HostCapacityBoundTestBase
             isStandardInputRedirected: isStandardInputRedirected));
     }
 
+    private protected static (string Output, bool Changed, Goal? CurrentGoal) ExecuteCliAndCaptureResult(
+        IReadOnlyList<string> parts,
+        AgentOrchestratorKernel kernel,
+        OrchestratorWorkspace workspace)
+    {
+        IReadOnlyList<AgentDefinition> agents = AgentCatalog.Default().Agents;
+        var providers = new InMemoryModelProviderRegistry([]);
+        var profiles = WorkerProfileCatalog.Default();
+        Goal? currentGoal = null;
+        var changed = false;
+
+        var output = CaptureConsole(() => changed = CliCommandDispatcher.ExecuteCommand(
+            parts,
+            kernel,
+            workspace,
+            ref agents,
+            providers,
+            ref profiles,
+            ref currentGoal));
+
+        return (output, changed, currentGoal);
+    }
+
     private protected static void AssertHelpCommandDoesNotResolveGoal(IReadOnlyList<string> parts, string expectedUsage)
     {
         var root = CreateTempDirectory();

@@ -123,7 +123,9 @@ public static IReadOnlyList<string> SplitCommand(string line)
             rest[0].Equals("answer", StringComparison.OrdinalIgnoreCase) &&
             LooksLikeAttentionClarificationId(rest[2])
             ? [command, rest[0], rest[1], rest[2], rest[3]]
-            : [command, .. remainder.Split(' ', StringSplitOptions.RemoveEmptyEntries)];
+            : rest.Length >= 3 && rest[0].Equals("answer", StringComparison.OrdinalIgnoreCase)
+                ? [command, rest[0], rest[1], string.Join(' ', rest.Skip(2))]
+                : [command, .. remainder.Split(' ', StringSplitOptions.RemoveEmptyEntries)];
     }
 
     if (command.Equals("verify", StringComparison.OrdinalIgnoreCase))

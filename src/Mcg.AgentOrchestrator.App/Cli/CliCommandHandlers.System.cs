@@ -150,6 +150,20 @@ internal static partial class CliCommandHandlers
         string notFoundMessage,
         string ambiguousMessage)
     {
+        return TryResolveClarificationByShortId(
+                clarifications,
+                identityUniverse,
+                id,
+                ambiguousMessage)
+            ?? throw new ArgumentException(notFoundMessage);
+    }
+
+    private static CollaborationItem? TryResolveClarificationByShortId(
+        IReadOnlyList<CollaborationItem> clarifications,
+        IReadOnlyList<CollaborationItem> identityUniverse,
+        string id,
+        string ambiguousMessage)
+    {
         var exactCorrelationMatch = clarifications
             .FirstOrDefault(c => string.Equals(c.CorrelationKey, id, StringComparison.OrdinalIgnoreCase));
         if (exactCorrelationMatch is not null)
@@ -162,12 +176,10 @@ internal static partial class CliCommandHandlers
                 ClarificationTopicId(c.CorrelationKey!).StartsWith(id, StringComparison.OrdinalIgnoreCase))
             .ToList();
 
-        if (matches.Count == 0)
-            throw new ArgumentException(notFoundMessage);
         if (matches.Count > 1)
             throw new ArgumentException(string.Format(ambiguousMessage, matches.Count));
 
-        return matches[0];
+        return matches.Count == 1 ? matches[0] : null;
     }
 
     private static CollaborationItem? ResolveClarificationByExactShortId(
@@ -480,11 +492,8 @@ internal static partial class CliCommandHandlers
                     return changed;
                 }
 
-                // `attention answer <goal-id-prefix> <id> <answer...>`: resolve one open clarification with a
-                // real answer (vs. `dismiss`). The <id> is the stable short id from `attention show` (matched
-                // by prefix), so resolving one clarification never shifts the identity of the others. The
-                // answer is written into the RefinedSpec question and recorded as a precedent on the next
-                // refinement pass (SyncAnsweredClarifications).
+                // `attention answer [<goal-id-prefix>] <id> <answer...>` resolves either identity printed by
+                // `attention show`: collaboration clarifications retain precedence, then typed human waits.
                 if (parts.Count > 1 && parts[1].Equals("answer", StringComparison.OrdinalIgnoreCase))
                 {
                     if (parts.Count < 4)
@@ -499,7 +508,9 @@ internal static partial class CliCommandHandlers
                         clarificationIdentityUniverse,
                         parts[2],
                         $"Id '{parts[2]}' is ambiguous ({{0}} matches); use a goal-scoped id from `attention show <goal-id>` or a full correlation key.");
-                    var scoped = globalClarification is null;
+                    var globalHumanRequest = globalClarification is null && context.Kernel.HumanInputRequests.Any(request =>
+                        request.Id.Value.StartsWith(parts[2], StringComparison.OrdinalIgnoreCase));
+                    var scoped = globalClarification is null && !globalHumanRequest;
                     var goal = scoped ? ResolveAttentionGoal(context.Kernel, parts[2]) : null;
 
                     if (scoped && parts.Count < 5)
@@ -511,16 +522,49 @@ internal static partial class CliCommandHandlers
                         scoped ? 4 : 3,
                         "attention answer [<goal-id-prefix>] <id> <answer> | attention answer [<goal-id-prefix>] <id> --text-file <path>",
                         "--text-file");
-                    var clarification = scoped
-                        ? ResolveClarificationByShortId(
-                            AllClarificationsForGoal(store, goal!),
-                            clarificationIdentityUniverse
-                                .Where(item => string.Equals(item.GoalId, goal!.Id.Value, StringComparison.OrdinalIgnoreCase))
-                                .ToList(),
+
+                    if (globalHumanRequest)
+                    {
+                        var request = OrchestratorEntityResolver.ResolveHumanInputRequest(context.Kernel, id);
+                        context.Kernel.SubmitHumanInput(request.Id, answer);
+                        context.CurrentGoal = context.Kernel.GetGoal(request.GoalId);
+                        ConsoleViews.PrintGoal(context.CurrentGoal);
+                        return true;
+                    }
+
+                    CollaborationItem? clarification = globalClarification;
+                    if (scoped)
+                    {
+                        var scopedClarifications = AllClarificationsForGoal(store, goal!);
+                        var scopedIdentityUniverse = clarificationIdentityUniverse
+                            .Where(item => string.Equals(item.GoalId, goal!.Id.Value, StringComparison.OrdinalIgnoreCase))
+                            .ToList();
+                        clarification = TryResolveClarificationByShortId(
+                            scopedClarifications,
+                            scopedIdentityUniverse,
                             id,
-                            $"Clarification id '{id}' was not found for goal '{goal!.Id.Value}'. Run `attention show {goal.Id.Value[..8]}` to list valid identifiers.",
-                            $"Id '{id}' is ambiguous ({{0}} matches); copy a full id from `attention show {goal!.Id.Value[..8]}` or use a full correlation key.")
-                        : globalClarification!;
+                            $"Id '{id}' is ambiguous ({{0}} matches); copy a full id from `attention show {goal!.Id.Value[..8]}` or use a full correlation key.");
+                        if (clarification is null)
+                        {
+                            var matchesHumanRequest = context.Kernel.HumanInputRequests.Any(request =>
+                                request.GoalId == goal!.Id &&
+                                request.Id.Value.StartsWith(id, StringComparison.OrdinalIgnoreCase));
+                            if (matchesHumanRequest)
+                            {
+                                var request = OrchestratorEntityResolver.ResolveHumanInputRequest(
+                                    context.Kernel,
+                                    goal!.Id,
+                                    id);
+                                context.Kernel.SubmitHumanInput(request.Id, answer);
+                                context.CurrentGoal = goal;
+                                ConsoleViews.PrintGoal(context.CurrentGoal);
+                                return true;
+                            }
+
+                            throw new ArgumentException(
+                                $"Clarification id '{id}' was not found for goal '{goal!.Id.Value}'. Run `attention show {goal.Id.Value[..8]}` to list valid identifiers, including human-wait request ids.");
+                        }
+                    }
 
                     if (CollaborationItemLifecycle.IsTerminal(clarification.Status))
                     {

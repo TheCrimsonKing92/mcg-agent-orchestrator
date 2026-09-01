@@ -37,6 +37,10 @@ public sealed class CliCommandTestsAttentionCommands : CliCommandTestBase
         var dismiss = CliArgumentParser.NormalizeArgs(["attention", "dismiss", "abc123ef"]);
         var answer = CliArgumentParser.NormalizeArgs(
             ["attention", "answer", "abc123ef", "391ce87f", "Use", "a", "static", "helper."]);
+        var globalAnswer = CliArgumentParser.NormalizeArgs(
+            ["attention", "answer", "391ce87f", "Use", "the", "global", "request", "id."]);
+        var fullRequestAnswer = CliArgumentParser.NormalizeArgs(
+            ["attention", "answer", "abc123ef", "391ce87f391ce87f391ce87f391ce87f", "Use", "the", "full", "request", "id."]);
         var topicAnswer = CliArgumentParser.NormalizeArgs(
             ["attention", "answer", "abc123ef", "stranded-edits-disposition", "Use", "the", "topic", "id."]);
         var correlationAnswer = CliArgumentParser.NormalizeArgs(
@@ -45,6 +49,8 @@ public sealed class CliCommandTestsAttentionCommands : CliCommandTestBase
         Xunit.Assert.Equal(["attention", "show", "abc123ef"], show);
         Xunit.Assert.Equal(["attention", "dismiss", "abc123ef"], dismiss);
         Xunit.Assert.Equal(["attention", "answer", "abc123ef", "391ce87f", "Use a static helper."], answer);
+        Xunit.Assert.Equal(["attention", "answer", "391ce87f", "Use the global request id."], globalAnswer);
+        Xunit.Assert.Equal(["attention", "answer", "abc123ef", "391ce87f391ce87f391ce87f391ce87f", "Use the full request id."], fullRequestAnswer);
         Xunit.Assert.Equal(["attention", "answer", "abc123ef", "stranded-edits-disposition", "Use the topic id."], topicAnswer);
         Xunit.Assert.Equal(["attention", "answer", "abc123ef", "spec-clarification:abc123ef:scope:duplicate-topic", "Use the full id."], correlationAnswer);
     }
@@ -56,6 +62,9 @@ public sealed class CliCommandTestsAttentionCommands : CliCommandTestBase
         var show = CliArgumentParser.SplitCommand("attention show abc123ef");
         var dismiss = CliArgumentParser.SplitCommand("attention dismiss abc123ef");
         var answer = CliArgumentParser.SplitCommand("attention answer abc123ef 391ce87f Use a static helper.");
+        var globalAnswer = CliArgumentParser.SplitCommand("attention answer 391ce87f Use the global request id.");
+        var fullRequestAnswer = CliArgumentParser.SplitCommand(
+            "attention answer abc123ef 391ce87f391ce87f391ce87f391ce87f Use the full request id.");
         var topicAnswer = CliArgumentParser.SplitCommand(
             "attention answer abc123ef stranded-edits-disposition Use the topic id.");
         var correlationAnswer = CliArgumentParser.SplitCommand(
@@ -64,6 +73,8 @@ public sealed class CliCommandTestsAttentionCommands : CliCommandTestBase
         Xunit.Assert.Equal(["attention", "show", "abc123ef"], show);
         Xunit.Assert.Equal(["attention", "dismiss", "abc123ef"], dismiss);
         Xunit.Assert.Equal(["attention", "answer", "abc123ef", "391ce87f", "Use a static helper."], answer);
+        Xunit.Assert.Equal(["attention", "answer", "391ce87f", "Use the global request id."], globalAnswer);
+        Xunit.Assert.Equal(["attention", "answer", "abc123ef", "391ce87f391ce87f391ce87f391ce87f", "Use the full request id."], fullRequestAnswer);
         Xunit.Assert.Equal(["attention", "answer", "abc123ef", "stranded-edits-disposition", "Use the topic id."], topicAnswer);
         Xunit.Assert.Equal(["attention", "answer", "abc123ef", "spec-clarification:abc123ef:scope:duplicate-topic", "Use the full id."], correlationAnswer);
     }
@@ -812,6 +823,102 @@ public sealed class CliCommandTestsAttentionCommands : CliCommandTestBase
         Xunit.Assert.Contains("goal=abc10000", scopedOutput);
         Xunit.Assert.DoesNotContain("RiskReview", scopedOutput);
         Xunit.Assert.DoesNotContain("risk resume", scopedOutput);
+    }
+
+
+    [Xunit.Fact]
+    public void SpecClarification_AdvertisedCommand_ClosesWaitAndResumesGoal()
+    {
+        var root = CreateTempDirectory();
+        var workspace = CreateRefinedWorkspace(root);
+        var kernel = new AgentOrchestratorKernel();
+        var task = new TaskSpec(TaskId.New(), "Implement after clarification.", AgentRole.Developer);
+        var goal = kernel.CreateGoal("Answer the advertised clarification.", [task]);
+        kernel.ActivateGoal(goal.Id, AgentCatalog.Default().Agents);
+        var request = kernel.RequestHumanInput(
+            goal.Id,
+            task.Id,
+            "Which implementation should be used?",
+            HumanWaitKind.SpecClarification);
+
+        Xunit.Assert.Equal(GoalStatus.WaitingForHuman, goal.Status);
+        var shown = ExecuteCliAndCapture(["attention", "show", goal.Id.Value[..8]], kernel, workspace);
+        var advertised = shown.Split('\n', StringSplitOptions.RemoveEmptyEntries)
+            .Select(line => line.Trim())
+            .Single(line => line.StartsWith("resume: ", StringComparison.Ordinal))["resume: ".Length..];
+        Xunit.Assert.StartsWith($"attention answer {goal.Id.Value[..8]} ", advertised, StringComparison.Ordinal);
+        var command = CliArgumentParser.SplitCommand(advertised.Replace("<answer>", "approved", StringComparison.Ordinal));
+
+        var result = ExecuteCliAndCaptureResult(command, kernel, workspace);
+
+        Xunit.Assert.True(result.Changed);
+        Xunit.Assert.Same(goal, result.CurrentGoal);
+        Xunit.Assert.True(request.IsCompleted);
+        Xunit.Assert.Equal("approved", request.Answer);
+        Xunit.Assert.Empty(kernel.GetPendingHumanInput(goal.Id));
+        Xunit.Assert.Equal(GoalStatus.Active, goal.Status);
+    }
+
+
+    [Xunit.Fact]
+    public void SpecClarification_UniqueDisplayedRequestId_WorksWithoutGoalPrefix()
+    {
+        var root = CreateTempDirectory();
+        var workspace = CreateRefinedWorkspace(root);
+        var kernel = new AgentOrchestratorKernel();
+        var task = new TaskSpec(TaskId.New(), "Implement after clarification.", AgentRole.Developer);
+        var goal = kernel.CreateGoal("Answer by globally unique request id.", [task]);
+        kernel.ActivateGoal(goal.Id, AgentCatalog.Default().Agents);
+        var request = kernel.RequestHumanInput(
+            goal.Id,
+            task.Id,
+            "Which implementation should be used?",
+            HumanWaitKind.SpecClarification);
+        var shown = ExecuteCliAndCapture(["attention", "show", goal.Id.Value[..8]], kernel, workspace);
+        var advertised = shown.Split('\n', StringSplitOptions.RemoveEmptyEntries)
+            .Select(line => line.Trim())
+            .Single(line => line.StartsWith("resume: ", StringComparison.Ordinal))["resume: ".Length..];
+        var scopedCommand = CliArgumentParser.SplitCommand(
+            advertised.Replace("<answer>", "globally-approved", StringComparison.Ordinal));
+        var globalCommand = CliArgumentParser.SplitCommand(
+            $"attention answer {scopedCommand[3]} globally-approved");
+
+        var result = ExecuteCliAndCaptureResult(globalCommand, kernel, workspace);
+
+        Xunit.Assert.True(result.Changed);
+        Xunit.Assert.Same(goal, result.CurrentGoal);
+        Xunit.Assert.True(request.IsCompleted);
+        Xunit.Assert.Equal("globally-approved", request.Answer);
+        Xunit.Assert.Empty(kernel.GetPendingHumanInput(goal.Id));
+        Xunit.Assert.Equal(GoalStatus.Active, goal.Status);
+    }
+
+
+    [Xunit.Fact]
+    public void SpecClarification_FullRequestId_ResolvesWithinGoalScope()
+    {
+        var root = CreateTempDirectory();
+        var workspace = CreateRefinedWorkspace(root);
+        var kernel = new AgentOrchestratorKernel();
+        var task = new TaskSpec(TaskId.New(), "Implement after clarification.", AgentRole.Developer);
+        var goal = kernel.CreateGoal("Answer by full request id.", [task]);
+        kernel.ActivateGoal(goal.Id, AgentCatalog.Default().Agents);
+        var request = kernel.RequestHumanInput(
+            goal.Id,
+            task.Id,
+            "Which implementation should be used?",
+            HumanWaitKind.SpecClarification);
+        var command = CliArgumentParser.NormalizeArgs(
+            ["attention", "answer", goal.Id.Value[..8], request.Id.Value, "full-id-approved"]);
+
+        var result = ExecuteCliAndCaptureResult(command, kernel, workspace);
+
+        Xunit.Assert.True(result.Changed);
+        Xunit.Assert.Same(goal, result.CurrentGoal);
+        Xunit.Assert.True(request.IsCompleted);
+        Xunit.Assert.Equal("full-id-approved", request.Answer);
+        Xunit.Assert.Empty(kernel.GetPendingHumanInput(goal.Id));
+        Xunit.Assert.Equal(GoalStatus.Active, goal.Status);
     }
 
 
