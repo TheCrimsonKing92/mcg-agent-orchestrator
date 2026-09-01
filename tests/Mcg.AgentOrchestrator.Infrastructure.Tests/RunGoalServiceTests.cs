@@ -422,7 +422,12 @@ public sealed class RunGoalServiceTests
             new ModelProfile("LlamaCpp", LlamaCppDefaults.DefaultModelAlias, ModelCapability.Text | ModelCapability.Code | ModelCapability.ToolUse, SubscriptionMode.ApiKey),
             ExecutionPolicy: AgentExecutionPolicy.PreferSubscription,
             Subscription: new SubscriptionLaunchProfile("qwen-code-cli"));
-        var agents = AgentCatalog.Default().AddOrReplaceById(alternate).Agents;
+        var agents = AgentCatalog.Default()
+            .AddOrReplaceById(alternate)
+            .Agents
+            .Where(agent => agent.Id.Value is "openai-planner" or "ollama-planner-qwen-fallback")
+            .ToArray();
+        Assert.Equal(2, agents.Length);
         var task = new TaskSpec(TaskId.New(), "Task with catalog failover alternate", AgentRole.Planner);
         var goal = CreateRefinedGoal(kernel, "Goal should fail over to a catalog alternate", [task]);
         kernel.ActivateGoal(goal.Id, agents);
