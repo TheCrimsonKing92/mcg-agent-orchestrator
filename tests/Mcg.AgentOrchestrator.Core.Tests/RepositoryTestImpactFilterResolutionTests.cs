@@ -164,6 +164,45 @@ public sealed class RepositoryTestImpactFilterResolutionTests
     }
 
     [Xunit.Fact]
+    public void MissingDependentProjectInPartialRootProducesUnavailableEvidence()
+    {
+        using var repository = ReverseDependencyRepository.Create();
+        const string changedPath =
+            "src/Mcg.AgentOrchestrator.Core/Application/DispatchFailureClassifier.cs";
+        repository.Delete(
+            "tests/Mcg.AgentOrchestrator.Infrastructure.Tests/Mcg.AgentOrchestrator.Infrastructure.Tests.csproj");
+        var reader = new FileSystemTestClassDeclarationReader(repository.Root);
+
+        var selection = reader.ReadReverseDependentTestClasses([changedPath]);
+        var plan = RepositoryTestImpactPlanner.Plan([changedPath], repository.Root);
+
+        Assert.Equal(ReverseDependencySelectionOutcome.Unavailable, selection.Outcome);
+        var check = Assert.Single(plan.Checks);
+        Assert.Equal("core tests", check.Name);
+    }
+
+    [Xunit.Fact]
+    public void MissingDependentProjectInRepositoryRootFailsSafe()
+    {
+        using var repository = ReverseDependencyRepository.Create();
+        const string changedPath =
+            "src/Mcg.AgentOrchestrator.Core/Application/DispatchFailureClassifier.cs";
+        repository.Delete(
+            "tests/Mcg.AgentOrchestrator.Infrastructure.Tests/Mcg.AgentOrchestrator.Infrastructure.Tests.csproj");
+        repository.Write("Mcg.AgentOrchestrator.sln", string.Empty);
+        var reader = new FileSystemTestClassDeclarationReader(repository.Root);
+
+        var selection = reader.ReadReverseDependentTestClasses([changedPath]);
+        var plan = RepositoryTestImpactPlanner.Plan([changedPath], repository.Root);
+
+        Assert.Equal(ReverseDependencySelectionOutcome.Unreadable, selection.Outcome);
+        var infrastructureCheck = Assert.Single(plan.Checks, check =>
+            check.Command.Contains(
+                "tests/Mcg.AgentOrchestrator.Infrastructure.Tests/Mcg.AgentOrchestrator.Infrastructure.Tests.csproj"));
+        Assert.DoesNotContain("--filter", infrastructureCheck.Command);
+    }
+
+    [Xunit.Fact]
     public void DeletedCoreSourceProducesUnavailableReverseDependencyEvidence()
     {
         using var repository = ReverseDependencyRepository.Create();

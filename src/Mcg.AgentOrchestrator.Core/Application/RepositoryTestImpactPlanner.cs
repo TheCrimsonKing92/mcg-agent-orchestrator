@@ -127,7 +127,11 @@ public static class RepositoryTestImpactPlanner
                 nameof(repositoryRoot));
         }
 
-        return Plan(summary, new FileSystemTestClassDeclarationReader(repositoryRoot));
+        ITestClassDeclarationReader declarationReader = ReverseDependencyTestImpactReader
+            .IsDeliberatelyPartialRepositoryRoot(repositoryRoot)
+                ? UnavailableTestClassDeclarationReader.Instance
+                : new FileSystemTestClassDeclarationReader(repositoryRoot);
+        return Plan(summary, declarationReader);
     }
 
     internal static RepositoryTestImpactPlan Plan(

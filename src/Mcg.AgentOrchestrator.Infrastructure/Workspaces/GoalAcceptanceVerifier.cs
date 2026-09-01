@@ -3565,8 +3565,7 @@ public sealed class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
         }
     }
 
-    private static string ComputeEffectiveAcceptanceManifestIdentity(
-        IReadOnlyList<AcceptanceManifestCheck> effectiveChecks)
+    private static string ComputeEffectiveAcceptanceManifestIdentity(IReadOnlyList<AcceptanceManifestCheck> effectiveChecks)
     {
         var canonicalChecks = effectiveChecks.Select(check => new
         {
@@ -3587,6 +3586,7 @@ public sealed class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
         var canonicalPlan = new
         {
             Checks = canonicalChecks,
+            ChangeScopedAcceptanceEnabled = AcceptancePolicyShardPlanner.ChangeScopedAcceptanceEnabled(),
             Engine = new
             {
                 settings.MaxConcurrentShards,

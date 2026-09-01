@@ -26,10 +26,18 @@ internal static class ReverseDependencyTestImpactReader
         {
             repositoryRoot = Path.GetFullPath(repositoryRoot);
             var testProjectPath = ResolveWithinRepository(repositoryRoot, InfrastructureTestProject);
-            if (testProjectPath is null || !File.Exists(testProjectPath))
+            if (testProjectPath is null)
             {
                 return ReverseDependencyTestSelection.Unreadable(
                     $"The dependent test project could not be read: {InfrastructureTestProject}");
+            }
+
+            if (!File.Exists(testProjectPath))
+            {
+                return IsDeliberatelyPartialRepositoryRoot(repositoryRoot)
+                    ? ReverseDependencyTestSelection.Unavailable
+                    : ReverseDependencyTestSelection.Unreadable(
+                        $"The dependent test project could not be read: {InfrastructureTestProject}");
             }
 
             var projectPaths = ReadProjectClosure(repositoryRoot, testProjectPath, out var projectFailure);
@@ -248,6 +256,12 @@ internal static class ReverseDependencyTestImpactReader
                 $"Reverse-dependency evidence failed: {exception.Message}");
         }
     }
+
+    internal static bool IsDeliberatelyPartialRepositoryRoot(string repositoryRoot) =>
+        !File.Exists(Path.Combine(repositoryRoot, "Mcg.AgentOrchestrator.sln")) &&
+        !File.Exists(Path.Combine(
+            repositoryRoot,
+            InfrastructureTestProject.Replace('/', Path.DirectorySeparatorChar)));
 
     private static string[]? ReadProjectClosure(
         string repositoryRoot,
