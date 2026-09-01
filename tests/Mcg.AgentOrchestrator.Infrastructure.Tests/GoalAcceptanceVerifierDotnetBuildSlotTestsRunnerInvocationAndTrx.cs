@@ -256,8 +256,8 @@ public sealed class GoalAcceptanceVerifierDotnetBuildSlotTestsRunnerInvocationAn
 
         Assert.Equal(
             [
-                "[FAIL] Retry evidence includes failed test names: Assert.Contains() Failure: Sub-string not found",
-                "[FAIL] MTP shard preserves theory display name(value: 42): Expected shard count to be 2, but found 1"
+                "[FAIL] Mcg.AgentOrchestrator.Infrastructure.Tests.RetryEvidenceTests.IncludesFailures: Assert.Contains() Failure: Sub-string not found",
+                "[FAIL] Mcg.AgentOrchestrator.Infrastructure.Tests.MtpShardTests.PreservesTheoryDisplayName: Expected shard count to be 2, but found 1"
             ],
             evidence);
         Assert.DoesNotContain(evidence, line =>
@@ -333,11 +333,11 @@ public sealed class GoalAcceptanceVerifierDotnetBuildSlotTestsRunnerInvocationAn
             Assert.False(result.Passed);
             var output = Assert.Single(result.Checks!).OutputTail;
             Assert.Contains(
-                "[FAIL] Retry evidence includes failed test names: Assert.Contains() Failure: Sub-string not found",
+                "[FAIL] Mcg.AgentOrchestrator.Infrastructure.Tests.RetryEvidenceTests.IncludesFailures: Assert.Contains() Failure: Sub-string not found",
                 output,
                 StringComparison.Ordinal);
             Assert.Contains(
-                "[FAIL] MTP shard preserves theory display name(value: 42): Expected shard count to be 2, but found 1",
+                "[FAIL] Mcg.AgentOrchestrator.Infrastructure.Tests.MtpShardTests.PreservesTheoryDisplayName: Expected shard count to be 2, but found 1",
                 output,
                 StringComparison.Ordinal);
             Assert.DoesNotContain("Passing MTP test is not surfaced", output, StringComparison.Ordinal);

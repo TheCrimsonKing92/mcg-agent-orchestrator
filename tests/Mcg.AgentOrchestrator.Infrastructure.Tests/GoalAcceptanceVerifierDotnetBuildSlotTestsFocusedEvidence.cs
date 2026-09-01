@@ -400,6 +400,74 @@ public sealed class GoalAcceptanceVerifierDotnetBuildSlotTestsFocusedEvidence : 
         Assert.Contains("apparatus was unavailable", attributions[2].Evidence, StringComparison.Ordinal);
     }
 
+    [Xunit.Fact(DisplayName = "GoalAcceptanceVerifier_candidate_only_method_is_classified_absent_before_baseline_execution")]
+    public void CandidateOnlyMethodIsClassifiedAbsentBeforeBaselineExecution()
+    {
+        const string project =
+            "tests/Mcg.AgentOrchestrator.Infrastructure.Tests/Mcg.AgentOrchestrator.Infrastructure.Tests.csproj";
+        const string identity = "Sample.Tests.ExistingTests.CandidateOnlyFailure";
+        var candidateRoot = CreateManifestWorkspace("""
+            {
+              "version": 1,
+              "checks": [],
+              "forbiddenChangedPathGlobs": []
+            }
+            """);
+        var baselineRoot = CreateManifestWorkspace("""
+            {
+              "version": 1,
+              "checks": [],
+              "forbiddenChangedPathGlobs": []
+            }
+            """);
+        try
+        {
+            WriteSelectionProject(candidateRoot, includeCandidateOnlyMethod: true);
+            WriteSelectionProject(baselineRoot, includeCandidateOnlyMethod: false);
+            var settings = AcceptanceGateEngineSettings.Load(candidateRoot);
+            var candidate = AcceptanceFailureAttributionPlanner.BuildCandidateSelections(
+                "Infrastructure.Tests",
+                [identity],
+                settings,
+                candidateRoot);
+
+            Assert.True(candidate.Succeeded, candidate.FailureEvidence);
+            var baseline = AcceptanceFailureAttributionPlanner.BuildBaselineSourceSelections(
+                "merge-base-sha",
+                candidate.Checks,
+                GoalAcceptanceVerifier.ProjectLabel,
+                settings,
+                baselineRoot);
+
+            Assert.Empty(baseline.ExecutableChecks);
+            var absent = Assert.Single(baseline.SourceClassificationChecks);
+            Assert.Equal(Assert.Single(candidate.Checks).Name, absent.Name);
+            Assert.Equal(project, absent.TestProjectPath);
+            Assert.Equal(
+                AcceptanceFailureClassifications.FocusedSelectionAbsentAtBaseline,
+                absent.FailureClassification);
+            Assert.Equal(0, absent.ExecutedTestCount);
+            Assert.Contains("does not exist in baseline source", absent.OutputTail, StringComparison.Ordinal);
+        }
+        finally
+        {
+            DeleteDirectoryWithRetry(candidateRoot);
+            DeleteDirectoryWithRetry(baselineRoot);
+        }
+
+        static void WriteSelectionProject(string root, bool includeCandidateOnlyMethod)
+        {
+            var directory = Path.Combine(root, "tests", "Mcg.AgentOrchestrator.Infrastructure.Tests");
+            Directory.CreateDirectory(directory);
+            File.WriteAllText(Path.Combine(directory, "Mcg.AgentOrchestrator.Infrastructure.Tests.csproj"), "<Project />");
+            File.WriteAllText(
+                Path.Combine(directory, "ExistingTests.cs"),
+                includeCandidateOnlyMethod
+                    ? "namespace Sample.Tests; sealed class ExistingTests { [Xunit.Fact] public void CandidateOnlyFailure() { } }"
+                    : "namespace Sample.Tests; sealed class ExistingTests { [Xunit.Fact] public void ExistingPassingTest() { } }");
+        }
+    }
+
     [Xunit.Fact]
     public async Task FocusedEvidence_TwoReceiptTargetsAcrossProjects_PreserveFocusedChecks()
     {
