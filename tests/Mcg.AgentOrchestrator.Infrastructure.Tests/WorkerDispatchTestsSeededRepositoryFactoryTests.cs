@@ -445,6 +445,11 @@ public sealed class WorkerDispatchTestsSeededRepositoryFactoryTests
         Xunit.Assert.Equal(
             WorkerDispatchTestsSeededRepositoryFactory.GitProbeClassification.EmptyRequiredOutput,
             failure.Diagnostic.Git.Classification);
+        Xunit.Assert.True(
+            Mcg.AgentOrchestrator.Infrastructure.AcceptanceFailureCauseReceiptCodec.TryParse(
+                failure.Message,
+                out var receipt));
+        Xunit.Assert.Equal("ProcessOutputApparatus", receipt.Owner);
         Xunit.Assert.Equal(
             WorkerDispatchTestsSeededRepositoryFactory.ValidationFailureOwner.ProcessOutputApparatus,
             failure.Diagnostic.Owner);
@@ -495,6 +500,11 @@ public sealed class WorkerDispatchTestsSeededRepositoryFactoryTests
         Xunit.Assert.Equal(
             WorkerDispatchTestsSeededRepositoryFactory.GitProbeClassification.EmptyRequiredOutput,
             failure.Diagnostic.Git.Classification);
+        Xunit.Assert.True(
+            Mcg.AgentOrchestrator.Infrastructure.AcceptanceFailureCauseReceiptCodec.TryParse(
+                failure.Message,
+                out var receipt));
+        Xunit.Assert.Equal("FixturePublication", receipt.Owner);
     }
 
     [Xunit.Fact]
@@ -546,6 +556,11 @@ public sealed class WorkerDispatchTestsSeededRepositoryFactoryTests
         Xunit.Assert.Equal(
             WorkerDispatchTestsSeededRepositoryFactory.GitProbeClassification.NonZeroExit,
             failure.Diagnostic.Git.Classification);
+        Xunit.Assert.True(
+            Mcg.AgentOrchestrator.Infrastructure.AcceptanceFailureCauseReceiptCodec.TryParse(
+                failure.Message,
+                out var receipt));
+        Xunit.Assert.Equal("FixturePublication", receipt.Owner);
     }
 
     [Xunit.Fact]
@@ -641,6 +656,28 @@ public sealed class WorkerDispatchTestsSeededRepositoryFactoryTests
             ["rev-parse", "--verify", "HEAD^{commit}"]);
         Xunit.Assert.True(head.Succeeded, head.ToString());
         Xunit.Assert.Equal(40, head.StandardOutput.Trim().Length);
+    }
+
+    [Xunit.Fact]
+    public void Create_AllocatorEscapeFailsLoudlyWithoutDeletingEscapedDirectory()
+    {
+        var escaped = InfrastructureTestSupport.CreateTempDirectory();
+        try
+        {
+            using var scope = new FactoryScope(directoryAllocator: (_, _) => escaped);
+
+            var failure = Xunit.Assert.Throws<
+                WorkerDispatchTestsSeededRepositoryFactory.SeededRepositoryFailureException>(
+                    () => scope.Factory.Create());
+
+            Xunit.Assert.Contains("escaped its owning root", failure.Message, StringComparison.Ordinal);
+            Xunit.Assert.True(Directory.Exists(escaped));
+            Xunit.Assert.Empty(failure.Diagnostic.Cleanup);
+        }
+        finally
+        {
+            WorkerDispatchTestsSeededRepositoryFactory.DeleteOwnedDirectory(escaped);
+        }
     }
 
     [Xunit.Fact]
@@ -880,22 +917,26 @@ public sealed class WorkerDispatchTestsSeededRepositoryFactoryTests
     }
 
     [Xunit.Fact(Skip = "Requires Windows owned-file capture semantics.", SkipUnless = nameof(IsWindows))]
-    public void RunGitProbe_OwnedCaptureReadFailure_RetainsCleanChildExit()
+    public void RunGitProbe_OwnedCapturePathDeleted_RetainedHandlePreservesOutput()
     {
         using var scope = new FactoryScope();
         var created = scope.Factory.Create();
 
         var result = InfrastructureTestSupport.RunGitProbe(
             created.PublishedIdentity.RepositoryPath,
-            ["status", "--short"],
+            ["rev-parse", "--show-toplevel"],
             beforeOwnedCaptureRead: (standardOutputPath, _) => File.Delete(standardOutputPath));
 
         Xunit.Assert.True(result.ProcessStarted);
         Xunit.Assert.Equal(0, result.ExitCode);
         Xunit.Assert.Equal(
-            WorkerDispatchTestsSeededRepositoryFactory.GitProbeClassification.ProcessObservationFailure,
+            WorkerDispatchTestsSeededRepositoryFactory.GitProbeClassification.Success,
             result.Classification);
-        Xunit.Assert.NotEmpty(result.StandardError);
+        Xunit.Assert.True(result.StandardOutputByteCount > 0);
+        Xunit.Assert.Equal(
+            Path.GetFullPath(created.PublishedIdentity.RepositoryPath),
+            Path.GetFullPath(result.StandardOutput.Trim()));
+        Xunit.Assert.Equal(string.Empty, result.StandardError);
     }
 
     [Xunit.Fact]
@@ -1146,6 +1187,7 @@ public sealed class WorkerDispatchTestsSeededRepositoryFactoryTests
             Factory = new WorkerDispatchTestsSeededRepositoryFactory(
                 AllocateDirectory,
                 path => File.WriteAllText(Path.Combine(path, "seed.txt"), "seed"),
+                Root,
                 fileSystem,
                 gitRunner,
                 hooks: hooks);

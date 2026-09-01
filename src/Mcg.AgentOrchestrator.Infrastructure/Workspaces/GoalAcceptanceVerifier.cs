@@ -141,11 +141,26 @@ internal static class AcceptanceFailureCauseReceiptCodec
         if (receipt is null ||
             receipt.ContractVersion != 1 ||
             !receipt.Kind.Equals("seeded-dispatch-repository-git-probe", StringComparison.Ordinal) ||
-            !receipt.Owner.Equals("ProcessOutputApparatus", StringComparison.Ordinal) ||
             string.IsNullOrWhiteSpace(receipt.Check) ||
             string.IsNullOrWhiteSpace(receipt.FixtureAttemptId) ||
             receipt.FixtureAttemptId.Equals("not-assigned", StringComparison.Ordinal) ||
             receipt.ProbeOrdinal <= 0)
+        {
+            return false;
+        }
+
+        return receipt.Owner switch
+        {
+            "ProcessOutputApparatus" => IsProcessOutputApparatus(receipt),
+            "FixturePublication" => IsFixturePublicationApparatus(receipt),
+            _ => false
+        };
+    }
+
+    private static bool IsProcessOutputApparatus(AcceptanceFailureCauseReceiptV1 receipt)
+    {
+        if (receipt.RepositoryHeadState is not (
+            "ValidLooseReference" or "ValidPackedReference" or "ValidDetachedHead"))
         {
             return false;
         }
@@ -163,6 +178,30 @@ internal static class AcceptanceFailureCauseReceiptCodec
             "DrainTimeout" => receipt.ProcessStarted && receipt.DrainTimedOut,
             "DrainFailure" => receipt.ProcessStarted && receipt.DrainFailed,
             "ProcessObservationFailure" => receipt.ProcessStarted && receipt.ExitCode is null or 0,
+            _ => false
+        };
+    }
+
+    private static bool IsFixturePublicationApparatus(AcceptanceFailureCauseReceiptV1 receipt)
+    {
+        if (receipt.RepositoryHeadState is not (
+            "RepositoryMissing" or "GitMetadataMissing" or "HeadMissing" or "HeadInvalid" or
+            "ReferenceMissing" or "ReferenceInvalid"))
+        {
+            return false;
+        }
+
+        return receipt.ProbeClassification switch
+        {
+            "NotRun" => !receipt.ProcessStarted && receipt.ExitCode is null &&
+                receipt.StandardOutputByteCount == 0 &&
+                !receipt.DrainTimedOut && !receipt.TimedOut && !receipt.DrainFailed,
+            "EmptyRequiredOutput" => receipt.ProcessStarted && receipt.ExitCode == 0 &&
+                receipt.StandardOutputByteCount == 0 &&
+                !receipt.DrainTimedOut && !receipt.TimedOut && !receipt.DrainFailed,
+            "NonZeroExit" => receipt.ProcessStarted && receipt.ExitCode is not null and not 0,
+            "InvalidRequiredOutput" => receipt.ProcessStarted && receipt.ExitCode == 0 &&
+                !receipt.DrainTimedOut && !receipt.TimedOut && !receipt.DrainFailed,
             _ => false
         };
     }
@@ -191,13 +230,15 @@ public static class AcceptanceFailureClassifications
     public const string RetryEvidenceRetentionFailed = "retry-evidence-retention-failed";
     public const string FocusedSelectionReceiptUnreadable = "focused-selection-receipt-unreadable";
     public const string SeededRepositoryProcessOutputApparatus = "seeded-repository-process-output-apparatus";
+    public const string SeededRepositoryApparatus = "seeded-repository-apparatus";
 
     public static bool IsEnvironmentalApparatus(string? classification) =>
         classification is GateEnvironmentInterference or
             InheritedBaselineApparatus or
             FocusedSelectionApparatusFailure or
             FocusedSelectionReceiptUnreadable or
-            SeededRepositoryProcessOutputApparatus;
+            SeededRepositoryProcessOutputApparatus or
+            SeededRepositoryApparatus;
 }
 
 public enum FocusedEvidenceRejectionCode
@@ -1258,7 +1299,8 @@ public sealed class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
             AcceptanceFailureClassifications.GateEnvironmentInterference or
             AcceptanceFailureClassifications.FocusedSelectionApparatusFailure or
             AcceptanceFailureClassifications.FocusedSelectionReceiptUnreadable or
-            AcceptanceFailureClassifications.SeededRepositoryProcessOutputApparatus =>
+            AcceptanceFailureClassifications.SeededRepositoryProcessOutputApparatus or
+            AcceptanceFailureClassifications.SeededRepositoryApparatus =>
                 AcceptanceFailureCause.EnvironmentalApparatus,
             _ => (AcceptanceFailureCause?)null
         };
@@ -1308,7 +1350,7 @@ public sealed class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
             return null;
         }
 
-        var markers = new List<string>();
+        var receipts = new List<AcceptanceFailureCauseReceiptV1>();
         var failedResultCount = 0;
         foreach (var trxPath in trxPaths.Where(File.Exists))
         {
@@ -1338,7 +1380,7 @@ public sealed class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
                         return null;
                     }
 
-                    markers.Add(AcceptanceFailureCauseReceiptCodec.Format(receipt));
+                    receipts.Add(receipt);
                 }
             }
             catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or System.Xml.XmlException)
@@ -1347,22 +1389,28 @@ public sealed class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
             }
         }
 
-        if (failedResultCount == 0 || markers.Count != failedResultCount)
+        if (failedResultCount == 0 || receipts.Count != failedResultCount)
         {
             return null;
         }
 
-        var evidence = string.Join(" | ", markers.Distinct(StringComparer.Ordinal));
+        var evidence = string.Join(
+            " | ",
+            receipts.Select(AcceptanceFailureCauseReceiptCodec.Format).Distinct(StringComparer.Ordinal));
         if (evidence.Length > 4096)
         {
             evidence = evidence[..4096];
         }
 
+        var sourceClassification = receipts.All(receipt =>
+            receipt.Owner.Equals("ProcessOutputApparatus", StringComparison.Ordinal))
+                ? AcceptanceFailureClassifications.SeededRepositoryProcessOutputApparatus
+                : AcceptanceFailureClassifications.SeededRepositoryApparatus;
         return new AcceptanceFailureCauseEvidence(
             AcceptanceFailureCause.EnvironmentalApparatus,
             evidence,
             checkName,
-            AcceptanceFailureClassifications.SeededRepositoryProcessOutputApparatus);
+            sourceClassification);
     }
 
     private static bool ShouldCaptureGateEngineFault(Exception exception) =>

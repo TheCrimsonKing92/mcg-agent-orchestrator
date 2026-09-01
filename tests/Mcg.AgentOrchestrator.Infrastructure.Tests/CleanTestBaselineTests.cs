@@ -5,6 +5,46 @@ using Mcg.AgentOrchestrator.Infrastructure;
 public sealed class CleanTestBaselineTests
 {
     [Xunit.Theory]
+    [Xunit.InlineData("FixturePublication", "NotRun", "RepositoryMissing", false, null, 0, true)]
+    [Xunit.InlineData("FixturePublication", "EmptyRequiredOutput", "HeadMissing", true, 0, 0, true)]
+    [Xunit.InlineData("FixturePublication", "NonZeroExit", "ReferenceInvalid", true, 128, 0, true)]
+    [Xunit.InlineData("FixturePublication", "NonZeroExit", "ValidLooseReference", true, 128, 0, false)]
+    [Xunit.InlineData("ProcessOutputApparatus", "ProcessObservationFailure", "ValidLooseReference", true, 0, 0, true)]
+    [Xunit.InlineData("ProcessOutputApparatus", "ProcessObservationFailure", "HeadMissing", true, 0, 0, false)]
+    public void SeededRepositoryCauseReceiptDecisionTableRequiresPositiveOwnerEvidence(
+        string owner,
+        string classification,
+        string headState,
+        bool processStarted,
+        int? exitCode,
+        long stdoutBytes,
+        bool expected)
+    {
+        var receipt = new AcceptanceFailureCauseReceiptV1(
+            1,
+            "seeded-dispatch-repository-git-probe",
+            owner,
+            classification,
+            processStarted,
+            exitCode,
+            stdoutBytes,
+            0,
+            false,
+            false,
+            false,
+            headState,
+            "TemplateHeadCommit",
+            "create-decision-table",
+            1);
+
+        Assert.Equal(
+            expected,
+            AcceptanceFailureCauseReceiptCodec.TryParse(
+                AcceptanceFailureCauseReceiptCodec.Format(receipt),
+                out _));
+    }
+
+    [Xunit.Theory]
     [Xunit.InlineData(null, true)]
     [Xunit.InlineData(0, true)]
     [Xunit.InlineData(128, false)]
@@ -184,6 +224,44 @@ public sealed class CleanTestBaselineTests
                 AcceptanceFailureCause.EnvironmentalApparatus,
                 receipt.FailureCauseEvidence?.Cause);
             Assert.Equal(checkName, receipt.FailureCauseEvidence?.CheckName);
+        }
+        finally
+        {
+            File.Delete(trxPath);
+        }
+    }
+
+    [Xunit.Fact]
+    public void VerifierMixedSeededRepositoryOwnersUseGeneralApparatusClassification()
+    {
+        const string checkName = "infrastructure tests: Worker dispatch fixtures";
+        var processReceipt = new AcceptanceFailureCauseReceiptV1(
+            1, "seeded-dispatch-repository-git-probe", "ProcessOutputApparatus",
+            "EmptyRequiredOutput", true, 0, 0, 0, false, false, false,
+            "ValidLooseReference", "PublishedTopLevel", "create-process", 2);
+        var fixtureReceipt = new AcceptanceFailureCauseReceiptV1(
+            1, "seeded-dispatch-repository-git-probe", "FixturePublication",
+            "NotRun", false, null, 0, 0, false, false, false,
+            "GitMetadataMissing", "TemplateMetadata", "create-fixture", 1);
+        var trxPath = Path.Combine(Path.GetTempPath(), $"mixed-cause-{Guid.NewGuid():N}.trx");
+        try
+        {
+            var processMarker = AcceptanceFailureCauseReceiptCodec.Format(processReceipt);
+            var fixtureMarker = AcceptanceFailureCauseReceiptCodec.Format(fixtureReceipt);
+            File.WriteAllText(
+                trxPath,
+                $"""
+                <TestRun><Results>
+                  <UnitTestResult testId="1" outcome="Failed"><Output><ErrorInfo><Message>{processMarker}</Message></ErrorInfo></Output></UnitTestResult>
+                  <UnitTestResult testId="2" outcome="Failed"><Output><ErrorInfo><Message>{fixtureMarker}</Message></ErrorInfo></Output></UnitTestResult>
+                </Results></TestRun>
+                """);
+
+            var result = GoalAcceptanceVerifier.AttachFailureCauseEvidence(
+                new AcceptanceCheckResult(checkName, false, 1, "typed failures", TestResultPaths: [trxPath]));
+
+            Assert.Equal(AcceptanceFailureClassifications.SeededRepositoryApparatus, result.FailureClassification);
+            Assert.Equal(AcceptanceFailureCause.EnvironmentalApparatus, result.FailureCauseEvidence?.Cause);
         }
         finally
         {
