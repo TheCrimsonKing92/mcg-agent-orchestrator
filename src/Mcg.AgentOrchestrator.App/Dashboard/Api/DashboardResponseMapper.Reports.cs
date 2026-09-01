@@ -291,6 +291,7 @@ public static GoalWorkSummaryDto ToGoalWorkSummaryDto(
     AgentOrchestratorKernel kernel,
     Goal goal,
     WorkerProfileCatalog workerProfiles,
+    ProcessCommandLineSnapshot processSnapshot,
     IReadOnlyList<AgentDefinition>? agents = null,
     DashboardHostInfoDto? host = null,
     string? executionDirectory = null,
@@ -302,7 +303,6 @@ public static GoalWorkSummaryDto ToGoalWorkSummaryDto(
     var gate = kernel.BuildVerificationGate(goal.Id);
     var nextAction = kernel.BuildNextActions(goal.Id).Items.FirstOrDefault();
     var testImpact = BuildGoalTestImpactDto(goal, executionDirectory, changedFiles);
-    var processSnapshot = ProcessCommandLines.SnapshotOperation();
     var disposition = conductorDisposition ?? new GoalOperatorDispositionSurface().Evaluate(
         goal,
         monitor.PendingHumanInputCount,

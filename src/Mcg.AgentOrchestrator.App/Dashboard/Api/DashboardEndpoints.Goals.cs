@@ -137,6 +137,7 @@ internal static partial class DashboardEndpoints
             current,
             goal,
             workerProfiles,
+            ProcessCommandLines.SnapshotOperation(),
             agents,
             BuildHostInfo(services),
             services.Workspace.ExecutionDirectory,

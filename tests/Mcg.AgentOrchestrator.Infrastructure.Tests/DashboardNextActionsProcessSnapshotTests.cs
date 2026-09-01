@@ -37,6 +37,42 @@ public sealed class DashboardNextActionsProcessSnapshotTests
         Xunit.Assert.Equal(1, calls);
     }
 
+    [Xunit.Fact]
+    public void GoalDetailRender_MultipleTasksAndItems_ReusesProcessSnapshot()
+    {
+        var kernel = new AgentOrchestratorKernel();
+        var tasks = new[]
+        {
+            new TaskSpec(TaskId.New(), "First running task", AgentRole.Developer),
+            new TaskSpec(TaskId.New(), "Second running task", AgentRole.Tester)
+        };
+        var goal = kernel.CreateGoal("Render multiple running actions", tasks);
+        var agents = AgentCatalog.Default().Agents;
+        kernel.ActivateGoal(goal.Id, agents);
+        RecordRunningProcess(kernel, goal, tasks[0], 4201);
+        RecordRunningProcess(kernel, goal, tasks[1], 4202);
+        var actions = kernel.BuildNextActions(goal.Id);
+        var calls = 0;
+
+        var html = Mcg.AgentOrchestrator.App.Dashboard.Rendering.DashboardRenderer.Render(
+            kernel,
+            new Mcg.AgentOrchestrator.App.Dashboard.Rendering.DashboardRenderOptions(
+                EnableOperatorControls: true,
+                FocusGoalPrefix: goal.Id.Value[..8],
+                View: Mcg.AgentOrchestrator.App.Dashboard.Rendering.DashboardView.Goal,
+                AgentDefinitions: agents,
+                WorkerProfiles: WorkerProfileCatalog.Default()),
+            () =>
+            {
+                calls++;
+                return ProcessCommandLineSnapshot.Empty;
+            });
+
+        Xunit.Assert.Equal(2, actions.Items.Count(item => item.Kind == NextActionKind.RefreshRunningProcess));
+        Xunit.Assert.Contains("Render multiple running actions", html);
+        Xunit.Assert.Equal(1, calls);
+    }
+
     private static void RecordRunningProcess(
         AgentOrchestratorKernel kernel,
         Goal goal,

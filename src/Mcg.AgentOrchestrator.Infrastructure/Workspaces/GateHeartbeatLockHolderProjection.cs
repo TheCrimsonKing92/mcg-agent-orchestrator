@@ -32,6 +32,11 @@ internal static class GateHeartbeatLockHolderProjection
                 continue;
             }
 
+            if (record.Status == ProcessInspectionStatus.Exited)
+            {
+                continue;
+            }
+
             var available = record.Status == ProcessInspectionStatus.Available;
             yield return new BuildLockHolder(
                 pid,

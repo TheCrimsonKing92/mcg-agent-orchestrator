@@ -3,6 +3,53 @@ using Mcg.AgentOrchestrator.Infrastructure;
 public sealed class GoalAcceptanceVerifierProcessSnapshotTests
 {
     [Xunit.Fact]
+    public void ExitedHeartbeatPidPreservesTransientNoHolderRetryEligibility()
+    {
+        var artifactsPath = Path.Combine(Path.GetTempPath(), "mcg-gate-artifacts");
+        var observedAt = DateTimeOffset.Parse("2026-09-01T12:00:00Z");
+        var heartbeat = new GateHeartbeatSnapshot(
+            null,
+            "test",
+            "gate",
+            null,
+            101,
+            null,
+            "running",
+            observedAt,
+            observedAt,
+            observedAt,
+            0,
+            0,
+            0,
+            $"dotnet test --artifacts-path {artifactsPath}");
+        var environment = new DotnetBuildEnvironment(
+            "lease",
+            Path.GetTempPath(),
+            artifactsPath,
+            Path.Combine(Path.GetTempPath(), "gate.lock"),
+            [],
+            "owner");
+
+        var holders = GateHeartbeatLockHolderProjection.Build(
+            heartbeat,
+            environment,
+            _ => new ProcessCommandLineSnapshot(
+                new Dictionary<int, ProcessInspectionRecord>
+                {
+                    [101] = new(
+                        101,
+                        1,
+                        "dotnet",
+                        null,
+                        null,
+                        null,
+                        ProcessInspectionStatus.Exited)
+                })).ToArray();
+
+        Assert.Empty(holders);
+    }
+
+    [Xunit.Fact]
     public void HeartbeatHoldersReuseSnapshotIdentityAndFailClosed()
     {
         var artifactsPath = Path.Combine(Path.GetTempPath(), "mcg-gate-artifacts");

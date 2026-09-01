@@ -503,7 +503,7 @@ public static partial class DashboardRenderer
         // Operator controls
         if (options.EnableOperatorControls)
         {
-            RenderGoalOperatorControls(html, kernel, goal, options);
+            RenderGoalOperatorControls(html, kernel, goal, options, processInspection);
         }
 
         RenderSubscriptionRetryQueue(html, goal);
