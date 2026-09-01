@@ -367,6 +367,9 @@ public sealed class RepositoryTestImpactFilterResolutionTests
         var stopwatch = Stopwatch.StartNew();
         var cold = RepositoryTestImpactPlanner.Plan([changedPath], root);
         stopwatch.Stop();
+        var coldInfrastructure = Assert.Single(cold.Checks, check =>
+            check.TestProject == RepositoryTestProject.Infrastructure);
+        Assert.Contains("reverse-dependency-cache=miss", coldInfrastructure.Reason, StringComparison.Ordinal);
         var coldMilliseconds = stopwatch.Elapsed.TotalMilliseconds;
         var warmMilliseconds = new List<double>();
         RepositoryTestImpactPlan? warm = null;
