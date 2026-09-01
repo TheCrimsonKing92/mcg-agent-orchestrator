@@ -38,11 +38,296 @@ public sealed class LauncherScriptTests
     {
         var repoRoot = FindLauncherSourceRoot();
         var launcher = File.ReadAllText(Path.Combine(repoRoot, "mcg-orchestrator.cmd"));
+        var freshness = File.ReadAllText(Path.Combine(repoRoot, "scripts", "Test-OrchestratorArtifactFreshness.ps1"));
 
         Assert.True(launcher.Contains("App.dll.git-head", StringComparison.Ordinal));
-        Assert.True(launcher.Contains("rev-parse HEAD", StringComparison.Ordinal));
+        Assert.True(launcher.Contains("Test-OrchestratorArtifactFreshness.ps1", StringComparison.Ordinal));
+        Assert.True(freshness.Contains("rev-parse HEAD", StringComparison.Ordinal));
+        Assert.True(freshness.Contains("\"bin\", \"obj\"", StringComparison.Ordinal));
         Assert.True(launcher.Contains("scripts\\Update-AppDllGitHeadMarker.ps1", StringComparison.Ordinal));
         Assert.True(launcher.Contains("MCG_ORCHESTRATOR_DOTNET_PATH", StringComparison.Ordinal));
+    }
+
+    [Xunit.Fact]
+    public void LauncherFreshnessIgnoresGeneratedPropsButDetectsCheckedInProps()
+    {
+        var repositoryRoot = Path.Combine(Path.GetTempPath(), $"launcher-freshness-{Guid.NewGuid():N}");
+        var scriptsPath = Path.Combine(repositoryRoot, "scripts");
+        var sourcePath = Path.Combine(repositoryRoot, "src", "Example");
+        var generatedPath = Path.Combine(sourcePath, "obj");
+        var outputPath = Path.Combine(sourcePath, "bin", "Debug", "net10.0");
+        Directory.CreateDirectory(scriptsPath);
+        Directory.CreateDirectory(generatedPath);
+        Directory.CreateDirectory(outputPath);
+        try
+        {
+            File.Copy(
+                Path.Combine(FindLauncherSourceRoot(), "scripts", "Test-OrchestratorArtifactFreshness.ps1"),
+                Path.Combine(scriptsPath, "Test-OrchestratorArtifactFreshness.ps1"));
+            var checkedInProps = Path.Combine(sourcePath, "Example.props");
+            var generatedProps = Path.Combine(generatedPath, "Example.csproj.nuget.g.props");
+            var artifactPath = Path.Combine(outputPath, "Example.dll");
+            var markerPath = artifactPath + ".git-head";
+            File.WriteAllText(checkedInProps, "<Project />");
+            File.WriteAllText(generatedProps, "<Project />");
+            File.WriteAllText(artifactPath, "artifact");
+
+            RunGit(repositoryRoot, "init", "--initial-branch=main");
+            RunGit(repositoryRoot, "config", "user.email", "test@example.invalid");
+            RunGit(repositoryRoot, "config", "user.name", "Launcher Freshness Test");
+            RunGit(repositoryRoot, "add", ".");
+            RunGit(repositoryRoot, "commit", "-m", "base");
+            File.WriteAllText(markerPath, RunGitForOutput(repositoryRoot, "rev-parse", "HEAD").Trim());
+
+            var baseline = new DateTime(2026, 9, 1, 12, 0, 0, DateTimeKind.Utc);
+            File.SetLastWriteTimeUtc(checkedInProps, baseline);
+            File.SetLastWriteTimeUtc(artifactPath, baseline.AddMinutes(1));
+            File.SetLastWriteTimeUtc(generatedProps, baseline.AddMinutes(2));
+
+            var freshnessScript = Path.Combine(scriptsPath, "Test-OrchestratorArtifactFreshness.ps1");
+            var generatedOnlyResult = RunPowerShellCommand(repositoryRoot, $"""
+                & '{EscapePowerShellSingleQuoted(freshnessScript)}' -RepositoryRoot '{EscapePowerShellSingleQuoted(repositoryRoot)}' -ArtifactPath '{EscapePowerShellSingleQuoted(artifactPath)}' -MarkerPath '{EscapePowerShellSingleQuoted(markerPath)}' -SourcePath '{EscapePowerShellSingleQuoted(Path.Combine(repositoryRoot, "src"))}'
+                """);
+            Assert.Equal(0, generatedOnlyResult.ExitCode);
+            Assert.True(string.IsNullOrWhiteSpace(generatedOnlyResult.Stdout), generatedOnlyResult.Stdout);
+            Assert.True(string.IsNullOrWhiteSpace(generatedOnlyResult.Stderr), generatedOnlyResult.Stderr);
+
+            File.SetLastWriteTimeUtc(checkedInProps, baseline.AddMinutes(3));
+            var checkedInSourceResult = RunPowerShellCommand(repositoryRoot, $"""
+                & '{EscapePowerShellSingleQuoted(freshnessScript)}' -RepositoryRoot '{EscapePowerShellSingleQuoted(repositoryRoot)}' -ArtifactPath '{EscapePowerShellSingleQuoted(artifactPath)}' -MarkerPath '{EscapePowerShellSingleQuoted(markerPath)}' -SourcePath '{EscapePowerShellSingleQuoted(Path.Combine(repositoryRoot, "src"))}'
+                """);
+            Assert.Equal(1, checkedInSourceResult.ExitCode);
+            Assert.True(string.IsNullOrWhiteSpace(checkedInSourceResult.Stdout), checkedInSourceResult.Stdout);
+            Assert.True(string.IsNullOrWhiteSpace(checkedInSourceResult.Stderr), checkedInSourceResult.Stderr);
+        }
+        finally
+        {
+            TryDeleteDirectory(repositoryRoot);
+        }
+    }
+
+    [Xunit.Fact]
+    public void ReadOnlySqliteHelperUsesCurrentArtifactWithoutRestoreAndRetainsExplicitAudit()
+    {
+        var repoRoot = FindLauncherSourceRoot();
+        var helper = File.ReadAllText(Path.Combine(repoRoot, "scripts", "Invoke-OrchestratorSqliteTool.ps1"));
+        var auditScript = File.ReadAllText(Path.Combine(repoRoot, "scripts", "Invoke-PackageAudit.ps1"));
+        var buildProps = File.ReadAllText(Path.Combine(repoRoot, "Directory.Build.props"));
+        var project = File.ReadAllText(Path.Combine(
+            repoRoot,
+            "scripts",
+            "OrchestratorSqliteTools",
+            "OrchestratorSqliteTools.csproj"));
+
+        Assert.DoesNotContain("dotnetArguments = @(\"run\"", helper, StringComparison.Ordinal);
+        Assert.Contains("Test-OrchestratorArtifactFreshness.ps1", helper, StringComparison.Ordinal);
+        Assert.Contains("MCG_ORCHESTRATOR_DOTNET_PATH", helper, StringComparison.Ordinal);
+        Assert.Contains("--no-restore", helper, StringComparison.Ordinal);
+        Assert.Contains("System.Threading.Mutex", helper, StringComparison.Ordinal);
+        Assert.Contains("-p:AuditPipeline=true", auditScript, StringComparison.Ordinal);
+        Assert.Contains("<NuGetAudit>true</NuGetAudit>", buildProps, StringComparison.Ordinal);
+        Assert.DoesNotContain("<NuGetAudit>false</NuGetAudit>", buildProps, StringComparison.Ordinal);
+        Assert.DoesNotContain("NU1903", project, StringComparison.Ordinal);
+    }
+
+    [Xunit.Fact]
+    public void ReadOnlySqliteHelperMissingAssetsFailsWithOneActionableDisposition()
+    {
+        var repositoryRoot = Path.Combine(Path.GetTempPath(), $"sqlite-helper-missing-{Guid.NewGuid():N}");
+        var scriptsPath = Path.Combine(repositoryRoot, "scripts");
+        Directory.CreateDirectory(Path.Combine(scriptsPath, "OrchestratorSqliteTools"));
+        Directory.CreateDirectory(Path.Combine(repositoryRoot, "src", "Mcg.AgentOrchestrator.Core"));
+        try
+        {
+            var sourceRoot = FindLauncherSourceRoot();
+            var helperPath = Path.Combine(scriptsPath, "Invoke-OrchestratorSqliteTool.ps1");
+            File.Copy(
+                Path.Combine(sourceRoot, "scripts", "Invoke-OrchestratorSqliteTool.ps1"),
+                helperPath);
+            File.Copy(
+                Path.Combine(sourceRoot, "scripts", "Test-OrchestratorArtifactFreshness.ps1"),
+                Path.Combine(scriptsPath, "Test-OrchestratorArtifactFreshness.ps1"));
+
+            var missingHost = Path.Combine(repositoryRoot, "must-not-run-dotnet.cmd");
+            var result = RunPowerShellCommand(repositoryRoot, $"""
+                $env:MCG_ORCHESTRATOR_DOTNET_PATH = '{EscapePowerShellSingleQuoted(missingHost)}'
+                & '{EscapePowerShellSingleQuoted(helperPath)}' list-goals
+                """);
+
+            Assert.Equal(1, result.ExitCode);
+            Assert.True(string.IsNullOrWhiteSpace(result.Stdout), result.Stdout);
+            var errorLines = result.Stderr.Split(
+                JsonLineSeparators,
+                StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries);
+            Assert.Single(errorLines);
+            Assert.Contains("no-restored build assets are unavailable", errorLines[0], StringComparison.OrdinalIgnoreCase);
+            Assert.Contains("Invoke-PackageAudit.ps1", errorLines[0], StringComparison.Ordinal);
+            Assert.DoesNotContain("NU1900", errorLines[0], StringComparison.OrdinalIgnoreCase);
+            Assert.DoesNotContain("NU1301", errorLines[0], StringComparison.OrdinalIgnoreCase);
+        }
+        finally
+        {
+            TryDeleteDirectory(repositoryRoot);
+        }
+    }
+
+    [Xunit.Fact]
+    public void ReadOnlySqliteHelperRunsCurrentArtifactConcurrentlyWithoutBuild()
+    {
+        if (!OperatingSystem.IsWindows())
+        {
+            return;
+        }
+
+        var repositoryRoot = Path.Combine(Path.GetTempPath(), $"sqlite-helper-concurrent-{Guid.NewGuid():N}");
+        var scriptsPath = Path.Combine(repositoryRoot, "scripts");
+        var toolSourcePath = Path.Combine(scriptsPath, "OrchestratorSqliteTools");
+        var coreSourcePath = Path.Combine(repositoryRoot, "src", "Mcg.AgentOrchestrator.Core");
+        var outputPath = Path.Combine(toolSourcePath, "bin", "Debug", "net10.0");
+        var shimPath = Path.Combine(repositoryRoot, "shim");
+        Directory.CreateDirectory(toolSourcePath);
+        Directory.CreateDirectory(coreSourcePath);
+        Directory.CreateDirectory(outputPath);
+        Directory.CreateDirectory(shimPath);
+        try
+        {
+            var sourceRoot = FindLauncherSourceRoot();
+            File.Copy(
+                Path.Combine(sourceRoot, "scripts", "Invoke-OrchestratorSqliteTool.ps1"),
+                Path.Combine(scriptsPath, "Invoke-OrchestratorSqliteTool.ps1"));
+            File.Copy(
+                Path.Combine(sourceRoot, "scripts", "Test-OrchestratorArtifactFreshness.ps1"),
+                Path.Combine(scriptsPath, "Test-OrchestratorArtifactFreshness.ps1"));
+            File.Copy(
+                Path.Combine(sourceRoot, "scripts", "Update-AppDllGitHeadMarker.ps1"),
+                Path.Combine(scriptsPath, "Update-AppDllGitHeadMarker.ps1"));
+            File.WriteAllText(Path.Combine(toolSourcePath, "Program.cs"), "Console.WriteLine(\"test\");");
+            File.WriteAllText(
+                Path.Combine(toolSourcePath, "OrchestratorSqliteTools.csproj"),
+                "<Project Sdk=\"Microsoft.NET.Sdk\" />");
+            File.WriteAllText(Path.Combine(coreSourcePath, "Core.cs"), "internal sealed class Core;");
+            File.WriteAllText(Path.Combine(repositoryRoot, "Directory.Build.props"), "<Project />");
+            File.WriteAllText(Path.Combine(repositoryRoot, "Directory.Build.rsp"), "-nodeReuse:false");
+            File.WriteAllText(Path.Combine(repositoryRoot, "global.json"), "{}");
+
+            RunGit(repositoryRoot, "init", "--initial-branch=main");
+            RunGit(repositoryRoot, "config", "user.email", "test@example.invalid");
+            RunGit(repositoryRoot, "config", "user.name", "SQLite Helper Test");
+            RunGit(repositoryRoot, "add", ".");
+            RunGit(repositoryRoot, "commit", "-m", "base");
+
+            var artifactPath = Path.Combine(outputPath, "OrchestratorSqliteTools.dll");
+            var markerPath = artifactPath + ".git-head";
+            File.WriteAllText(artifactPath, "current artifact");
+            File.WriteAllText(Path.Combine(outputPath, "OrchestratorSqliteTools.deps.json"), "{}");
+            File.WriteAllText(Path.Combine(outputPath, "OrchestratorSqliteTools.runtimeconfig.json"), "{}");
+            var nativePath = Path.Combine(outputPath, "runtimes", "win-x64", "native");
+            Directory.CreateDirectory(nativePath);
+            File.WriteAllText(Path.Combine(nativePath, "e_sqlite3.dll"), "native");
+            File.WriteAllText(markerPath, RunGitForOutput(repositoryRoot, "rev-parse", "HEAD").Trim());
+            var baseline = new DateTime(2026, 9, 1, 12, 0, 0, DateTimeKind.Utc);
+            File.SetLastWriteTimeUtc(Path.Combine(toolSourcePath, "Program.cs"), baseline);
+            File.SetLastWriteTimeUtc(Path.Combine(toolSourcePath, "OrchestratorSqliteTools.csproj"), baseline);
+            File.SetLastWriteTimeUtc(Path.Combine(coreSourcePath, "Core.cs"), baseline);
+            File.SetLastWriteTimeUtc(Path.Combine(repositoryRoot, "Directory.Build.props"), baseline);
+            File.SetLastWriteTimeUtc(Path.Combine(repositoryRoot, "Directory.Build.rsp"), baseline);
+            File.SetLastWriteTimeUtc(Path.Combine(repositoryRoot, "global.json"), baseline);
+            File.SetLastWriteTimeUtc(artifactPath, baseline.AddMinutes(1));
+
+            var dotnetShimPath = Path.Combine(shimPath, "dotnet.cmd");
+            File.WriteAllText(dotnetShimPath, """
+                @echo off
+                powershell.exe -NoProfile -Command "$entered=[Threading.Semaphore]::OpenExisting($env:SQLITE_TEST_ENTERED);[void]$entered.Release();$release=[Threading.EventWaitHandle]::OpenExisting($env:SQLITE_TEST_RELEASE);[void]$release.WaitOne()"
+                echo %*>"%SQLITE_TEST_INVOCATION%"
+                echo SQLite wrapper concurrent
+                exit /b 0
+                """.Replace("\n", "\r\n", StringComparison.Ordinal));
+
+            var enteredName = $"Local\\sqlite-helper-entered-{Guid.NewGuid():N}";
+            var releaseName = $"Local\\sqlite-helper-release-{Guid.NewGuid():N}";
+            using var entered = new Semaphore(0, 2, enteredName);
+            using var release = new EventWaitHandle(false, EventResetMode.ManualReset, releaseName);
+
+            ProcessStartInfo CreateStartInfo(string invocationPath)
+            {
+                var startInfo = new ProcessStartInfo
+                {
+                    FileName = "powershell.exe",
+                    WorkingDirectory = repositoryRoot,
+                    UseShellExecute = false,
+                    RedirectStandardOutput = true,
+                    RedirectStandardError = true,
+                    CreateNoWindow = true
+                };
+                var inheritedEnvironment = startInfo.Environment.ToDictionary(
+                    pair => pair.Key,
+                    pair => pair.Value,
+                    StringComparer.OrdinalIgnoreCase);
+                startInfo.Environment.Clear();
+                foreach (var name in new[] { "ComSpec", "PATH", "PATHEXT", "SystemRoot", "TEMP", "TMP", "WINDIR" })
+                {
+                    if (inheritedEnvironment.TryGetValue(name, out var value) && !string.IsNullOrWhiteSpace(value))
+                    {
+                        startInfo.Environment[name] = value;
+                    }
+                }
+                startInfo.Environment["MCG_ORCHESTRATOR_DOTNET_PATH"] = dotnetShimPath;
+                startInfo.Environment["SQLITE_TEST_ENTERED"] = enteredName;
+                startInfo.Environment["SQLITE_TEST_RELEASE"] = releaseName;
+                startInfo.Environment["SQLITE_TEST_INVOCATION"] = invocationPath;
+                startInfo.ArgumentList.Add("-NoProfile");
+                startInfo.ArgumentList.Add("-ExecutionPolicy");
+                startInfo.ArgumentList.Add("Bypass");
+                startInfo.ArgumentList.Add("-File");
+                startInfo.ArgumentList.Add(Path.Combine(scriptsPath, "Invoke-OrchestratorSqliteTool.ps1"));
+                startInfo.ArgumentList.Add("list-goals");
+                startInfo.ArgumentList.Add("--limit");
+                startInfo.ArgumentList.Add("5");
+                return startInfo;
+            }
+
+            var firstInvocationPath = Path.Combine(repositoryRoot, "dotnet-first.log");
+            var secondInvocationPath = Path.Combine(repositoryRoot, "dotnet-second.log");
+            var firstTask = Task.Run(() => RunProcess(
+                CreateStartInfo(firstInvocationPath),
+                "first concurrent SQLite helper"));
+            var secondTask = Task.Run(() => RunProcess(
+                CreateStartInfo(secondInvocationPath),
+                "second concurrent SQLite helper"));
+            try
+            {
+                Assert.True(entered.WaitOne(TimeSpan.FromSeconds(20)), "One helper did not reach the artifact host.");
+                Assert.True(entered.WaitOne(TimeSpan.FromSeconds(20)), "Both helpers did not reach the artifact host.");
+            }
+            finally
+            {
+                release.Set();
+            }
+
+            var results = Task.WhenAll(firstTask, secondTask).GetAwaiter().GetResult();
+            Assert.All(results, result =>
+            {
+                Assert.Equal(0, result.ExitCode);
+                Assert.True(string.IsNullOrWhiteSpace(result.Stderr), result.Stderr);
+                Assert.Contains("SQLite wrapper concurrent", result.Stdout);
+            });
+
+            var invocations = new[]
+            {
+                File.ReadAllText(firstInvocationPath).Trim(),
+                File.ReadAllText(secondInvocationPath).Trim()
+            };
+            Assert.All(invocations, invocation =>
+            {
+                Assert.Contains(artifactPath, invocation, StringComparison.OrdinalIgnoreCase);
+                Assert.DoesNotContain("build", invocation, StringComparison.OrdinalIgnoreCase);
+                Assert.DoesNotContain("run --project", invocation, StringComparison.OrdinalIgnoreCase);
+            });
+        }
+        finally
+        {
+            TryDeleteDirectory(repositoryRoot);
+        }
     }
 
     [Xunit.Fact(DisplayName = "OperatorCommands_points_landing_recovery_at_acceptance")]
@@ -1196,6 +1481,8 @@ public sealed class LauncherScriptTests
 
             Assert.True(result.ExitCode == 0, $"exit={result.ExitCode}; stdout={result.Stdout}; stderr={result.Stderr}");
             Assert.True(string.IsNullOrWhiteSpace(result.Stderr), result.Stderr);
+            Assert.DoesNotContain("NU1900", result.Stdout, StringComparison.OrdinalIgnoreCase);
+            Assert.DoesNotContain("NU1301", result.Stdout, StringComparison.OrdinalIgnoreCase);
             Assert.Contains("SQLite wrapper smoke", result.Stdout);
         }
         finally
@@ -1822,6 +2109,9 @@ public sealed class LauncherScriptTests
         File.Copy(
             Path.Combine(sourceRoot, "scripts", "Update-AppDllGitHeadMarker.ps1"),
             Path.Combine(scriptsPath, "Update-AppDllGitHeadMarker.ps1"));
+        File.Copy(
+            Path.Combine(sourceRoot, "scripts", "Test-OrchestratorArtifactFreshness.ps1"),
+            Path.Combine(scriptsPath, "Test-OrchestratorArtifactFreshness.ps1"));
         File.Copy(
             Path.Combine(sourceRoot, "mcg-orchestrator.cmd"),
             Path.Combine(repositoryRoot, "mcg-orchestrator.cmd"));

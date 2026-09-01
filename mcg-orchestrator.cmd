@@ -21,13 +21,11 @@ set "DOTNET_GCConserveMemory=7"
 :: A younger lock is also reclaimed when owner.pid is missing after a short recheck or its owner is gone.
 if exist "%LOCK_DIR%" powershell -NoProfile -Command "$ld='%LOCK_DIR%';$threshold=%LOCK_STALE_SECONDS%;$re=$false;if(Test-Path -LiteralPath $ld){try{$age=((Get-Date)-(Get-Item -LiteralPath $ld -ErrorAction Stop).LastWriteTime).TotalSeconds;if($age -gt $threshold){$re=$true}}catch{$re=$true};if(-not $re){$pf=Join-Path $ld 'owner.pid';if(-not (Test-Path -LiteralPath $pf)){Start-Sleep -Milliseconds 500};if(Test-Path -LiteralPath $pf){try{$op=[int]((Get-Content -LiteralPath $pf -Raw -ErrorAction Stop).Trim());if(-not (Get-Process -Id $op -ErrorAction SilentlyContinue)){$re=$true}}catch{$re=$true}}else{$re=$true}}};if($re){Remove-Item -LiteralPath $ld -Recurse -Force -ErrorAction SilentlyContinue}"
 
-:: Up-to-date check -- if App.dll exists, matches the current git HEAD, and is newer than all
-:: source files, skip build entirely. The HEAD marker catches merges where source timestamps do
-:: not reliably make the existing binary look stale.
-if exist "%APP_DLL%" (
-    powershell -NoProfile -Command "$dll=Get-Item '%APP_DLL%';$gitHead='';try{$gitHead=(& git -C '%ROOT%.' rev-parse HEAD).Trim()}catch{};$marker='%APP_HEAD%';$headOk=($gitHead -eq '' -or ((Test-Path -LiteralPath $marker) -and ((Get-Content -Raw -LiteralPath $marker).Trim() -eq $gitHead)));$stale=Get-ChildItem '%ROOT%src' -Recurse -Include *.cs,*.csproj,*.props -ErrorAction SilentlyContinue | Where-Object {$_.LastWriteTime -gt $dll.LastWriteTime} | Select-Object -First 1;if($headOk -and -not $stale){exit 0}else{exit 1}"
-    if not errorlevel 1 goto run_app
-)
+:: Up-to-date check -- generated bin/obj files are excluded so restore output cannot make a
+:: current App.dll look stale. The shared checker still fails closed for a missing/mismatched
+:: git marker and for newer checked-in source files.
+powershell -NoProfile -ExecutionPolicy Bypass -File "%ROOT%scripts\Test-OrchestratorArtifactFreshness.ps1" -RepositoryRoot "%ROOT%." -ArtifactPath "%APP_DLL%" -MarkerPath "%APP_HEAD%" -SourcePath "%ROOT%src" "%ROOT%Directory.Build.props" "%ROOT%Directory.Build.rsp" "%ROOT%global.json"
+if not errorlevel 1 goto run_app
 
 :: Acquire build lock -- mkdir is atomic on NTFS; spin/retry up to 30 s
 set "LOCK_TRIES=0"
