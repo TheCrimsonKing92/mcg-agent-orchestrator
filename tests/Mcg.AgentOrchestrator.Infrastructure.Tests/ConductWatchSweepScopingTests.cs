@@ -48,9 +48,36 @@ public sealed class ConductWatchSweepScopingTests
         Assert.False(kernel.GetTask(second.Goal.Id, second.Task.Id).LastProcess!.IsRunning);
     }
 
+    [Xunit.Fact]
+    public void SweepExitedProcessesMultipleDiagnosticsReuseOneProcessSnapshot()
+    {
+        var kernel = new AgentOrchestratorKernel();
+        var first = CreateGoalWithExitedProcess(kernel, "first", 900001);
+        var second = CreateGoalWithExitedProcess(kernel, "second", 900002);
+        var snapshotCreations = 0;
+        var runner = new BackgroundDispatchRunner(
+            isStillRunning: _ => false,
+            processCommandLineSnapshotFactory: () =>
+            {
+                snapshotCreations++;
+                return new ProcessCommandLineSnapshot(
+                    new Dictionary<int, string>
+                    {
+                        [900001] = first.Task.LastProcess!.Command,
+                        [900002] = second.Task.LastProcess!.Command
+                    });
+            });
+
+        var swept = runner.SweepExitedProcesses(kernel);
+
+        Assert.Equal(2, swept);
+        Assert.Equal(1, snapshotCreations);
+    }
+
     private static (Goal Goal, TaskSpec Task) CreateGoalWithExitedProcess(
         AgentOrchestratorKernel kernel,
-        string objective)
+        string objective,
+        int processId = 999999)
     {
         var root = CreateTempDirectory();
         var task = new TaskSpec(TaskId.New(), $"{objective} task", AgentRole.Developer);
@@ -67,7 +94,7 @@ public sealed class ConductWatchSweepScopingTests
         var now = DateTimeOffset.UtcNow;
         kernel.RecordTaskDispatch(goal.Id, workTask.Id, new TaskDispatchRecord("local", "local-cmd", root, now));
         kernel.RecordTaskProcessStarted(goal.Id, workTask.Id,
-            new TaskProcessRecord(999999, "local-cmd", root, stdoutPath, stderrPath, exitPath, now, null, null));
+            new TaskProcessRecord(processId, "local-cmd", root, stdoutPath, stderrPath, exitPath, now, null, null));
         return (goal, workTask);
     }
 

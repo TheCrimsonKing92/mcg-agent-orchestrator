@@ -5184,7 +5184,7 @@ public sealed class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
 
         var heartbeat = ReadGateHeartbeat(environment, check);
         consumedGateContext |= heartbeat?.Snapshot is not null;
-        foreach (var holder in BuildLiveHeartbeatHolders(heartbeat?.Snapshot, environment))
+        foreach (var holder in GateHeartbeatLockHolderProjection.Build(heartbeat?.Snapshot, environment))
         {
             if (!holders.Any(existing => existing.ProcessId == holder.ProcessId))
             {
@@ -5206,36 +5206,6 @@ public sealed class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
         };
         LockAttribution.EmitReceipt(enriched);
         return enriched;
-    }
-
-    private static IEnumerable<BuildLockHolder> BuildLiveHeartbeatHolders(
-        GateHeartbeatSnapshot? snapshot,
-        DotnetBuildEnvironment environment)
-    {
-        if (snapshot is null ||
-            snapshot.CommandLine is not null &&
-            !snapshot.CommandLine.Contains(environment.ArtifactsPath, StringComparison.OrdinalIgnoreCase))
-        {
-            yield break;
-        }
-
-        var pids = new[] { snapshot.ProcessId, snapshot.ChildPid }
-            .Where(pid => pid.HasValue)
-            .Select(pid => pid!.Value)
-            .Distinct()
-            .Where(IsProcessRunning)
-            .ToArray();
-        var commandLines = ProcessCommandLines.Read(pids);
-        foreach (var pid in pids)
-        {
-            commandLines.TryGetValue(pid, out var commandLine);
-            yield return new BuildLockHolder(
-                pid,
-                TryProcessName(pid),
-                string.IsNullOrWhiteSpace(commandLine) ? snapshot.CommandLine : commandLine,
-                true,
-                TryProcessStartTime(pid));
-        }
     }
 
     private static void EmitBuildLockClassificationContext(
