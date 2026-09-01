@@ -65,13 +65,18 @@ internal sealed record ProgressiveReviewGlanceOptions(
     int TaskBriefCharacterLimit = 4000,
     int OperatorContextCharacterLimit = 4000,
     TimeSpan? DispatchTimeout = null,
-    TimeSpan? CircuitProbeLease = null)
+    TimeSpan? CircuitProbeLease = null,
+    int PerDispatchInputTokenBudget = 40000,
+    int PerDispatchGlanceBudget = 8,
+    TimeSpan? MaterialUnchangedEscapeInterval = null,
+    int TranscriptGrowthBucketBytes = 4096)
 {
     public TimeSpan EffectiveFirstElapsedThreshold => FirstElapsedThreshold ?? TimeSpan.FromMinutes(15);
     public TimeSpan EffectiveElapsedInterval => ElapsedInterval ?? TimeSpan.FromMinutes(15);
     public TimeSpan EffectiveSmallRoundSuppressionThreshold => SmallRoundSuppressionThreshold ?? TimeSpan.FromMinutes(10);
     public TimeSpan EffectiveDispatchTimeout => DispatchTimeout ?? SubscriptionCliCompleter.DefaultTimeout;
     public TimeSpan EffectiveCircuitProbeLease => CircuitProbeLease ?? EffectiveDispatchTimeout + TimeSpan.FromMinutes(1);
+    public TimeSpan EffectiveMaterialUnchangedEscapeInterval => MaterialUnchangedEscapeInterval ?? TimeSpan.FromMinutes(45);
 }
 
 internal sealed record ProgressiveReviewGlanceInputs(
@@ -157,6 +162,7 @@ internal sealed class ProgressiveReviewGlanceCoordinator
     private readonly Func<string, string?, string> _diffReader;
     private readonly Func<TaskProcessRecord?, string> _transcriptReader;
     private readonly Dictionary<string, RoundState> _rounds = new(StringComparer.Ordinal);
+    private readonly Dictionary<string, DispatchState> _dispatches = new(StringComparer.Ordinal);
     private readonly List<RunningGlance> _running = [];
     private readonly Dictionary<string, GoalSummary> _summaries = new(StringComparer.Ordinal);
     private readonly InMemoryProgressiveReviewGlanceCircuitStore _fallbackSuppressionStore = new();
@@ -182,6 +188,12 @@ internal sealed class ProgressiveReviewGlanceCoordinator
         _eventWriter = eventWriter;
         _collaborationStore = collaborationStore;
         _options = options ?? new ProgressiveReviewGlanceOptions();
+        if (_options.PerDispatchInputTokenBudget <= 0)
+            throw new ArgumentOutOfRangeException(nameof(options), "Per-dispatch input token budget must be positive.");
+        if (_options.PerDispatchGlanceBudget <= 0)
+            throw new ArgumentOutOfRangeException(nameof(options), "Per-dispatch glance budget must be positive.");
+        if (_options.TranscriptGrowthBucketBytes <= 0)
+            throw new ArgumentOutOfRangeException(nameof(options), "Transcript growth bucket must be positive.");
         _utcNow = utcNow ?? (() => DateTimeOffset.UtcNow);
         _liveChanges = liveChanges ?? ((worktree, baseCommit) => GoalChangesReader.BuildLiveDispatchSnapshot(worktree, baseCommit, displayLimit: _options.ChangedFilePromptLimit));
         _diffReader = diffReader ?? ReadDiff;
@@ -409,8 +421,22 @@ Transcript tail:
     {
         var roundKey = RoundKey(goal, task);
         var state = GetRoundState(roundKey);
-        if (state.FiredCount >= _options.PerRoundBudget || IsSmallRound(goal, task, durationStats))
+        if (IsSmallRound(goal, task, durationStats))
         {
+            if (!state.SmallRoundSuppressionRecorded)
+            {
+                state.SmallRoundSuppressionRecorded = true;
+                AccumulateBudgetSuppression(
+                    roundKey,
+                    goal.Id,
+                    task.Id,
+                    ProgressiveReviewGlanceTriggerKind.Elapsed,
+                    "SmallRoundEstimate",
+                    0,
+                    lines);
+                lines.Add($"GLANCE goal={Short(goal.Id.Value)} task={Short(task.Id.Value)} result=suppressed cause=SmallRoundEstimate");
+            }
+
             return;
         }
 
@@ -434,6 +460,11 @@ Transcript tail:
             trigger = ProgressiveReviewGlanceTriggerKind.ChangedFiles;
             triggerDetail = $"changed_files={snapshot.Files.Count} threshold={_options.ChangedFileThreshold}";
             state.FileCountTriggered = true;
+            var nextElapsedThreshold = elapsed + _options.EffectiveElapsedInterval;
+            if (nextElapsedThreshold > state.NextElapsedThreshold)
+            {
+                state.NextElapsedThreshold = nextElapsedThreshold;
+            }
         }
         else
         {
@@ -450,8 +481,60 @@ Transcript tail:
             return;
         }
 
+        var dispatchState = GetDispatchState(goal.Id, task.Id);
+        if (!string.Equals(dispatchState.CurrentRoundKey, roundKey, StringComparison.Ordinal))
+        {
+            dispatchState.CurrentRoundKey = roundKey;
+            dispatchState.LastReviewedMaterialHash = null;
+            dispatchState.LastReviewedAt = null;
+        }
+
+        if (state.FiredCount >= _options.PerRoundBudget)
+        {
+            AccumulateBudgetSuppression(
+                roundKey,
+                goal.Id,
+                task.Id,
+                trigger.Value,
+                "PerRoundBudgetExhausted",
+                dispatchState.LastEstimatedInputTokens,
+                lines);
+            lines.Add($"GLANCE goal={Short(goal.Id.Value)} task={Short(task.Id.Value)} result=suppressed cause=PerRoundBudgetExhausted avoided_input_tokens={dispatchState.LastEstimatedInputTokens}");
+            return;
+        }
+
+        if (dispatchState.AdmittedCallCount >= _options.PerDispatchGlanceBudget)
+        {
+            AccumulateBudgetSuppression(
+                roundKey,
+                goal.Id,
+                task.Id,
+                trigger.Value,
+                "PerDispatchCallBudgetExhausted",
+                dispatchState.LastEstimatedInputTokens,
+                lines);
+            lines.Add($"GLANCE goal={Short(goal.Id.Value)} task={Short(task.Id.Value)} result=suppressed cause=PerDispatchCallBudgetExhausted avoided_input_tokens={dispatchState.LastEstimatedInputTokens}");
+            return;
+        }
+
+        if (dispatchState.AdmittedCallCount > 0 &&
+            dispatchState.AdmittedInputTokens + dispatchState.LastEstimatedInputTokens > _options.PerDispatchInputTokenBudget)
+        {
+            AccumulateBudgetSuppression(
+                roundKey,
+                goal.Id,
+                task.Id,
+                trigger.Value,
+                "PerDispatchTokenBudgetExhausted",
+                dispatchState.LastEstimatedInputTokens,
+                lines);
+            lines.Add($"GLANCE goal={Short(goal.Id.Value)} task={Short(task.Id.Value)} result=suppressed cause=PerDispatchTokenBudgetExhausted avoided_input_tokens={dispatchState.LastEstimatedInputTokens}");
+            return;
+        }
+
         var scope = GoalFileScopeInference.ForScheduling(goal, task);
         var operatorContext = BuildOperatorRecords(kernel, goal, _options.OperatorContextCharacterLimit);
+        var transcriptTail = _transcriptReader(task.LastProcess);
         var inputs = new ProgressiveReviewGlanceInputs(
             goal.Id.Value,
             task.Id.Value,
@@ -467,13 +550,32 @@ Transcript tail:
                 CriteriaCorrectionLabel),
             BoundChangedFiles(snapshot),
             _diffReader(task.LastDispatch.WorkingDirectory, task.LastDispatch.BaseCommit),
-            BoundTail(_transcriptReader(task.LastProcess), _options.TranscriptCharacterLimit),
+            BoundTail(transcriptTail, _options.TranscriptCharacterLimit),
             scope.Includes,
             scope.Confidence,
             operatorContext.Records,
             operatorContext.Truncated);
         var prompt = BuildPrompt(inputs);
         var estimatedInputTokens = EstimateTokens(prompt);
+        var materialHash = HashMaterialEvidence(
+            inputs,
+            Encoding.UTF8.GetByteCount(transcriptTail) / _options.TranscriptGrowthBucketBytes);
+        if (dispatchState.LastReviewedMaterialHash == materialHash &&
+            dispatchState.LastReviewedAt is { } lastReviewedAt &&
+            now - lastReviewedAt < _options.EffectiveMaterialUnchangedEscapeInterval)
+        {
+            AccumulateBudgetSuppression(
+                roundKey,
+                goal.Id,
+                task.Id,
+                trigger.Value,
+                "UnchangedMaterialEvidence",
+                estimatedInputTokens,
+                lines);
+            lines.Add($"GLANCE goal={Short(goal.Id.Value)} task={Short(task.Id.Value)} result=suppressed cause=UnchangedMaterialEvidence materialHash={materialHash} avoided_input_tokens={estimatedInputTokens}");
+            return;
+        }
+
         var admissionStopwatch = Stopwatch.StartNew();
         ProgressiveReviewGlanceContractIdentity? contract = null;
         ProgressiveReviewGlanceCircuitAdmission? admission = null;
@@ -546,11 +648,15 @@ Transcript tail:
             task.LastDispatch.WorkingDirectory,
             task.LastDispatch.ProviderSessionId,
             inputHash,
+            materialHash,
             inputs,
             run,
             stopwatch,
             contract,
             admission.ProbeLeaseId!));
+        dispatchState.AdmittedCallCount++;
+        dispatchState.AdmittedInputTokens += estimatedInputTokens;
+        dispatchState.LastEstimatedInputTokens = estimatedInputTokens;
         state.FiredCount++;
         lines.Add($"GLANCE goal={Short(goal.Id.Value)} task={Short(task.Id.Value)} result=started trigger={trigger.Value} inputHash={inputHash}");
     }
@@ -633,6 +739,18 @@ Transcript tail:
 
             TryAppendReceipt(running, result, inputTokens, outputTokens, totalTokens, lines);
             TryAppendGuardReceipt(running, evaluation.Receipt, lines);
+
+            if (result.Verdict is ProgressiveReviewGlanceVerdict.OnTrack or
+                ProgressiveReviewGlanceVerdict.Concern or
+                ProgressiveReviewGlanceVerdict.FundamentalMisdirection)
+            {
+                var dispatchState = GetDispatchState(running.GoalId, running.TaskId);
+                if (string.Equals(dispatchState.CurrentRoundKey, running.RoundKey, StringComparison.Ordinal))
+                {
+                    dispatchState.LastReviewedMaterialHash = running.MaterialHash;
+                    dispatchState.LastReviewedAt = _utcNow();
+                }
+            }
 
             UpdateSummary(running, result, totalTokens);
             var summary = _summaries[running.GoalId.Value];
@@ -1131,6 +1249,19 @@ Corrective direction:
         return state;
     }
 
+    private DispatchState GetDispatchState(GoalId goalId, TaskId taskId)
+    {
+        var key = $"{goalId.Value}|{taskId.Value}";
+        if (_dispatches.TryGetValue(key, out var state))
+        {
+            return state;
+        }
+
+        state = new DispatchState();
+        _dispatches[key] = state;
+        return state;
+    }
+
     private void UpdateSummary(
         RunningGlance running,
         ProgressiveReviewGlanceDispatchResult result,
@@ -1250,6 +1381,24 @@ Corrective direction:
     private static string HashInputs(ProgressiveReviewGlanceInputs inputs)
     {
         var text = JsonSerializer.Serialize(inputs, new JsonSerializerOptions(JsonSerializerDefaults.Web));
+        return Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(text))).ToLowerInvariant()[..16];
+    }
+
+    private static string HashMaterialEvidence(
+        ProgressiveReviewGlanceInputs inputs,
+        int transcriptGrowthBucket)
+    {
+        var materialInputs = new ProgressiveReviewMaterialHashInputs(
+            inputs.AcceptanceSection,
+            inputs.CriteriaCorrectionOverlay,
+            inputs.ChangedFiles,
+            inputs.DiffExcerpt,
+            inputs.TrustedScopePaths,
+            inputs.ScopeConfidence,
+            inputs.EffectiveOperatorRecords,
+            inputs.OperatorContextTruncated,
+            transcriptGrowthBucket);
+        var text = JsonSerializer.Serialize(materialInputs, new JsonSerializerOptions(JsonSerializerDefaults.Web));
         return Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(text))).ToLowerInvariant()[..16];
     }
 
@@ -1746,6 +1895,40 @@ Corrective direction:
         }
     }
 
+    private void AccumulateBudgetSuppression(
+        string roundKey,
+        GoalId goalId,
+        TaskId taskId,
+        ProgressiveReviewGlanceTriggerKind trigger,
+        string admissionOutcome,
+        int avoidedInputTokens,
+        List<string> lines)
+    {
+        string circuitIdentity;
+        try
+        {
+            circuitIdentity = _runner.GetContractIdentity().CircuitIdentity;
+        }
+        catch
+        {
+            circuitIdentity = "unavailable";
+        }
+
+        AccumulateCircuitSuppression(
+            roundKey,
+            goalId,
+            taskId,
+            trigger,
+            circuitIdentity,
+            admissionOutcome,
+            admissionOutcome,
+            admissionOutcome,
+            Math.Max(0, avoidedInputTokens),
+            0,
+            "glance-budget",
+            lines);
+    }
+
     private void FlushInactiveCircuitSuppressions(IReadOnlySet<string> activeRoundKeys, List<string> lines)
     {
         try
@@ -1817,6 +2000,7 @@ Corrective direction:
         string WorkingDirectory,
         string? ProviderSessionId,
         string InputHash,
+        string MaterialHash,
         ProgressiveReviewGlanceInputs Inputs,
         Task<ProgressiveReviewGlanceDispatchResult> Task,
         Stopwatch Stopwatch,
@@ -1843,16 +2027,38 @@ Corrective direction:
         string AcceptanceCriteriaVersionHash,
         string CriteriaCorrectionOverlayVersionHash);
 
+    private sealed record ProgressiveReviewMaterialHashInputs(
+        string AcceptanceSection,
+        IReadOnlyList<string> CriteriaCorrectionOverlay,
+        IReadOnlyList<string> ChangedFiles,
+        string DiffExcerpt,
+        IReadOnlyList<string> TrustedScopePaths,
+        RepositoryScopeConfidence ScopeConfidence,
+        IReadOnlyList<ProgressiveReviewOperatorRecord> OperatorRecords,
+        bool OperatorContextTruncated,
+        int TranscriptGrowthBucket);
+
     private sealed class RoundState
     {
         public RoundState(TimeSpan firstElapsedThreshold) => NextElapsedThreshold = firstElapsedThreshold;
 
         public int FiredCount { get; set; }
         public bool FileCountTriggered { get; set; }
+        public bool SmallRoundSuppressionRecorded { get; set; }
         public TimeSpan NextElapsedThreshold { get; set; }
         public DateTimeOffset? LastChangeProbeAt { get; set; }
         public bool ConcernsSurfaced { get; set; }
         public List<string> QueuedConcerns { get; } = [];
+    }
+
+    private sealed class DispatchState
+    {
+        public string? CurrentRoundKey { get; set; }
+        public int AdmittedCallCount { get; set; }
+        public int AdmittedInputTokens { get; set; }
+        public int LastEstimatedInputTokens { get; set; }
+        public string? LastReviewedMaterialHash { get; set; }
+        public DateTimeOffset? LastReviewedAt { get; set; }
     }
 
     private sealed class GoalSummary

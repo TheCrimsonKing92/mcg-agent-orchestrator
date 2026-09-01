@@ -1325,6 +1325,7 @@ public sealed class ProgressiveReviewGlanceTests
         var (kernel, goal, task) = RunningDeveloperRound(now);
         var runner = new ControlledGlanceRunner();
         var events = new RecordingGlanceEvents();
+        var diff = "first material diff";
         var coordinator = NewCoordinator(
             runner,
             events,
@@ -1332,7 +1333,8 @@ public sealed class ProgressiveReviewGlanceTests
             options: new ProgressiveReviewGlanceOptions(
                 FirstElapsedThreshold: TimeSpan.FromMinutes(15),
                 ElapsedInterval: TimeSpan.FromMinutes(15)),
-            liveChanges: (_, _) => new DispatchLiveChangeSnapshot(["a.cs", "b.cs", "c.cs"], ["a.cs", "b.cs", "c.cs"], 0));
+            liveChanges: (_, _) => new DispatchLiveChangeSnapshot(["a.cs", "b.cs", "c.cs"], ["a.cs", "b.cs", "c.cs"], 0),
+            diffReader: (_, _) => diff);
 
         var first = runner.EnqueuePending();
         var result = coordinator.Observe(kernel, [goal]);
@@ -1357,6 +1359,7 @@ public sealed class ProgressiveReviewGlanceTests
         Xunit.Assert.Equal(15, events.Receipts[0].TotalTokens);
 
         now += TimeSpan.FromMinutes(16);
+        diff = "second materially changed diff";
         var second = runner.EnqueuePending();
         _ = coordinator.Observe(kernel, [goal]);
         Xunit.Assert.Equal(2, runner.Calls.Count);
@@ -1374,6 +1377,113 @@ public sealed class ProgressiveReviewGlanceTests
         Xunit.Assert.Equal(2, runner.Calls.Count);
         Xunit.Assert.Equal(2, events.Summaries.Last().TotalGlances);
         Xunit.Assert.Equal(25, events.Summaries.Last().TotalTokens);
+    }
+
+    [Xunit.Fact(DisplayName = "ProgressiveReviewGlance_changed_files_fire_advances_elapsed_clock")]
+    public void ChangedFilesFireAdvancesElapsedClock()
+    {
+        var dispatchedAt = new DateTimeOffset(2026, 8, 31, 20, 0, 0, TimeSpan.Zero);
+        var now = dispatchedAt.AddMinutes(16);
+        var (kernel, goal, _) = RunningDeveloperRound(dispatchedAt);
+        var runner = new ControlledGlanceRunner();
+        runner.EnqueueCompleted(new ProgressiveReviewGlanceDispatchResult(
+            ProgressiveReviewGlanceVerdict.OnTrack,
+            "aligned",
+            "material evidence reviewed"));
+        var coordinator = NewCoordinator(
+            runner,
+            new RecordingGlanceEvents(),
+            new ProgressiveReviewGlanceOptions(
+                FirstElapsedThreshold: TimeSpan.FromMinutes(15),
+                ElapsedInterval: TimeSpan.FromMinutes(15)),
+            () => now,
+            liveChanges: (_, _) => new DispatchLiveChangeSnapshot(["a.cs", "b.cs", "c.cs"], ["a.cs", "b.cs", "c.cs"], 0));
+
+        _ = coordinator.Observe(kernel, [goal]);
+        var harvest = coordinator.Observe(kernel, [goal]);
+
+        Xunit.Assert.Single(runner.Calls);
+        Xunit.Assert.DoesNotContain(
+            harvest.ProgressLines,
+            line => line.Contains("cause=UnchangedMaterialEvidence", StringComparison.Ordinal));
+    }
+
+    [Xunit.Fact(DisplayName = "ProgressiveReviewGlance_unchanged_material_evidence_is_typed_and_suppressed")]
+    public void UnchangedMaterialEvidenceIsTypedAndSuppressed()
+    {
+        var now = new DateTimeOffset(2026, 8, 31, 20, 0, 0, TimeSpan.Zero);
+        var (kernel, goal, task) = RunningDeveloperRound(now);
+        var runner = new ControlledGlanceRunner();
+        runner.EnqueueCompleted(new ProgressiveReviewGlanceDispatchResult(
+            ProgressiveReviewGlanceVerdict.OnTrack,
+            "aligned",
+            "material evidence reviewed"));
+        var events = new RecordingGlanceEvents();
+        var coordinator = NewCoordinator(
+            runner,
+            events,
+            new ProgressiveReviewGlanceOptions(
+                FirstElapsedThreshold: TimeSpan.FromMinutes(15),
+                ElapsedInterval: TimeSpan.FromMinutes(15)),
+            () => now,
+            liveChanges: (_, _) => new DispatchLiveChangeSnapshot(["a.cs", "b.cs", "c.cs"], ["a.cs", "b.cs", "c.cs"], 0));
+
+        _ = coordinator.Observe(kernel, [goal]);
+        _ = coordinator.Observe(kernel, [goal]);
+        now += TimeSpan.FromMinutes(16);
+        var suppressed = coordinator.Observe(kernel, [goal]);
+
+        Xunit.Assert.Single(runner.Calls);
+        Xunit.Assert.Contains(
+            suppressed.ProgressLines,
+            line => line.Contains("cause=UnchangedMaterialEvidence", StringComparison.Ordinal));
+
+        kernel.ReportTaskProgress(goal.Id, task.Id, WorkTaskStatus.Completed, "Developer completed.");
+        _ = coordinator.Observe(kernel, [goal]);
+
+        var receipt = Xunit.Assert.Single(events.CircuitReceipts);
+        Xunit.Assert.Equal("UnchangedMaterialEvidence", receipt.AdmissionOutcome);
+        Xunit.Assert.Equal("glance-budget", receipt.ProbeOutcome);
+        Xunit.Assert.Equal(1, receipt.AvoidedCallCount);
+        Xunit.Assert.True(receipt.AvoidedInputTokens > 0);
+    }
+
+    [Xunit.Fact(DisplayName = "ProgressiveReviewGlance_transcript_growth_bucket_is_material_evidence")]
+    public void TranscriptGrowthBucketIsMaterialEvidence()
+    {
+        var now = new DateTimeOffset(2026, 8, 31, 20, 0, 0, TimeSpan.Zero);
+        var (kernel, goal, _) = RunningDeveloperRound(now);
+        var runner = new ControlledGlanceRunner();
+        runner.EnqueueCompleted(new ProgressiveReviewGlanceDispatchResult(
+            ProgressiveReviewGlanceVerdict.OnTrack,
+            "aligned",
+            "initial evidence reviewed"));
+        runner.EnqueueCompleted(new ProgressiveReviewGlanceDispatchResult(
+            ProgressiveReviewGlanceVerdict.Concern,
+            "new transcript evidence",
+            "worker reported a conflicting assumption"));
+        var transcript = "initial transcript";
+        var coordinator = NewCoordinator(
+            runner,
+            new RecordingGlanceEvents(),
+            new ProgressiveReviewGlanceOptions(
+                FirstElapsedThreshold: TimeSpan.FromMinutes(15),
+                ElapsedInterval: TimeSpan.FromMinutes(15)),
+            () => now,
+            liveChanges: (_, _) => new DispatchLiveChangeSnapshot(["a.cs", "b.cs", "c.cs"], ["a.cs", "b.cs", "c.cs"], 0),
+            transcriptReader: _ => transcript);
+
+        _ = coordinator.Observe(kernel, [goal]);
+        _ = coordinator.Observe(kernel, [goal]);
+        transcript = new string('x', 4096) + "new evidence";
+        now += TimeSpan.FromMinutes(16);
+        var changed = coordinator.Observe(kernel, [goal]);
+
+        Xunit.Assert.Equal(2, runner.Calls.Count);
+        Xunit.Assert.Contains(changed.ProgressLines, line => line.Contains("result=started", StringComparison.Ordinal));
+        Xunit.Assert.DoesNotContain(
+            changed.ProgressLines,
+            line => line.Contains("cause=UnchangedMaterialEvidence", StringComparison.Ordinal));
     }
 
     [Xunit.Fact(DisplayName = "ProgressiveReviewGlance_suppresses_rounds_with_small_historical_estimate")]
