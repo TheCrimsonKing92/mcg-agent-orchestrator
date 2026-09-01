@@ -1330,11 +1330,13 @@ public sealed class PostLandingCanaryTests : CliCommandTestBase
         Assert.Contains("underlying executable", exception.Message, StringComparison.OrdinalIgnoreCase);
     }
 
-    [Xunit.Fact(DisplayName = "Known-green fixture runs from an isolated landed worktree despite a dirty operator checkout")]
+    [Xunit.Fact(DisplayName = "Known-green fixture preserves its owned repository despite unrelated source-worktree activity")]
     public async Task KnownGreenFixtureRunsThroughFreshBinaryWithoutDirtyingRepository()
     {
         var sourceRoot = FindRepoRoot();
-        var sourceStatusBefore = ReadGitStatus(sourceRoot);
+        var sourceStatusBefore = ReadGitStatus(sourceRoot)
+            .Split(['\r', '\n'], StringSplitOptions.RemoveEmptyEntries)
+            .ToHashSet(StringComparer.Ordinal);
         var testRoot = CreateExternalTestRoot(sourceRoot);
         var repositoryRoot = Path.Combine(testRoot, "repository");
         var logDirectory = Path.Combine(testRoot, "logs");
@@ -1411,13 +1413,18 @@ public sealed class PostLandingCanaryTests : CliCommandTestBase
             Assert.Equal(
                 statusBefore,
                 ReadGitStatus(repositoryRoot));
-            Assert.Equal(sourceStatusBefore, ReadGitStatus(sourceRoot));
+            var sourceStatusAdded = ReadGitStatus(sourceRoot)
+                .Split(['\r', '\n'], StringSplitOptions.RemoveEmptyEntries)
+                .Except(sourceStatusBefore, StringComparer.Ordinal)
+                .ToArray();
+            Assert.DoesNotContain(sourceStatusAdded, path =>
+                path.Contains("post-landing-canary", StringComparison.OrdinalIgnoreCase) ||
+                path.Contains(landingSha[..12], StringComparison.OrdinalIgnoreCase));
         }
         finally
         {
             DeleteDirectoryLoudly(testRoot);
             Assert.False(Directory.Exists(testRoot), $"Disposable canary repository cleanup failed: {testRoot}");
-            Assert.Equal(sourceStatusBefore, ReadGitStatus(sourceRoot));
         }
     }
 

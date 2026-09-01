@@ -563,24 +563,22 @@ internal sealed partial class ConductorDriver
             }
 
             AcceptanceVerificationResult verification;
-            AcceptanceAttemptCancellationDecision? cancellationDecision = null;
+            var cancellationProbeState = new AcceptanceAttemptCancellationProbe(() =>
+                GetAcceptanceAttemptCancellationDecision(
+                    workspace,
+                    goal.Id,
+                    attemptInvalidationRecorded: () =>
+                        _parallelAcceptanceAttemptCoordinator.TryGetLiveInvalidatedAttempt(
+                            goal.Id.Value,
+                            out _)));
             try
             {
                 var gateProgressEventWriter = new ConductEventLogWriter(
                     Path.Combine(dir, ".orchestrator", "logs", ConductEventLogWriter.CurrentFileName));
                 using var progressSink = GoalAcceptanceVerifier.PushGateProgressSink(progress =>
                     AppendGateProgressEvent(gateProgressEventWriter, goal.Id, progress));
-                using var cancellationProbe = GoalAcceptanceVerifier.PushGateCancellationProbe(() =>
-                {
-                    cancellationDecision = GetAcceptanceAttemptCancellationDecision(
-                        workspace,
-                        goal.Id,
-                        attemptInvalidationRecorded: () =>
-                            _parallelAcceptanceAttemptCoordinator.TryGetLiveInvalidatedAttempt(
-                                goal.Id.Value,
-                                out _));
-                    return cancellationDecision.ShouldCancel;
-                });
+                using var cancellationProbe = GoalAcceptanceVerifier.PushGateCancellationProbe(
+                    cancellationProbeState.ShouldCancel);
                 verification = acceptanceVerifier.RunAsync(
                     worktreePath,
                     goal.Id,
@@ -628,9 +626,10 @@ internal sealed partial class ConductorDriver
                     acceptanceAttemptStartedAt);
                 throw;
             }
-            catch (OperationCanceledException ex) when (cancellationDecision?.ShouldCancel == true)
+            catch (OperationCanceledException ex) when (
+                cancellationProbeState.CancellationDecision?.ShouldCancel == true)
             {
-                var decision = cancellationDecision!;
+                var decision = cancellationProbeState.CancellationDecision!;
                 GoalOperationJournal.AcceptanceBlocked(
                     dir,
                     goal,
