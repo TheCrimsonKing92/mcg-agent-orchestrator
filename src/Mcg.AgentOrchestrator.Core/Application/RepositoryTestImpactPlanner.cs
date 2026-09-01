@@ -98,7 +98,7 @@ public static class RepositoryTestImpactPlanner
     ];
 
     private static readonly string DashboardFilter =
-        $"{BuildClassFilter(DashboardClasses)}&Category!=HostIntegration";
+        $"({BuildClassFilter(DashboardClasses)})&Category!=HostIntegration";
 
     // The full suite is expressed as per-project runs rather than one solution-level
     // "dotnet test": the test projects are Microsoft.Testing.Platform, and a project-less

@@ -183,9 +183,9 @@ public sealed class RepositoryTestImpactFilterResolutionTests
             ],
             check.TestClassSelections);
         Assert.Equal(
-            "FullyQualifiedName~DashboardRenderingTests|FullyQualifiedName~DashboardHostTests|" +
+            "(FullyQualifiedName~DashboardRenderingTests|FullyQualifiedName~DashboardHostTests|" +
             "FullyQualifiedName~DashboardDispatchStartFailureEndpointTests|" +
-            "FullyQualifiedName~DashboardValidationHarnessTests&Category!=HostIntegration",
+            "FullyQualifiedName~DashboardValidationHarnessTests)&Category!=HostIntegration",
             check.Command[^1]);
     }
 
