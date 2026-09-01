@@ -1,4 +1,4 @@
-[CmdletBinding()]
+[CmdletBinding(PositionalBinding = $false)]
 param(
     [Parameter(Mandatory = $true)]
     [string]$RepositoryRoot,
@@ -9,6 +9,8 @@ param(
     [Parameter(Mandatory = $true)]
     [string]$MarkerPath,
 
+    [string]$ScanReceiptPath,
+
     [Parameter(Mandatory = $true, ValueFromRemainingArguments = $true)]
     [string[]]$SourcePath
 )
@@ -18,22 +20,53 @@ $ErrorActionPreference = "Stop"
 
 $sourceExtensions = [System.Collections.Generic.HashSet[string]]::new(
     [System.StringComparer]::OrdinalIgnoreCase)
-foreach ($extension in ".cs", ".csproj", ".props", ".targets", ".json", ".rsp") {
+foreach ($extension in ".cs", ".csproj", ".props") {
     [void]$sourceExtensions.Add($extension)
 }
 
-function Test-IsGeneratedPath {
+$excludedDirectoryNames = [System.Collections.Generic.HashSet[string]]::new(
+    [System.StringComparer]::OrdinalIgnoreCase)
+foreach ($directoryName in "bin", "obj", ".scratch", ".orchestrator-prototype") {
+    [void]$excludedDirectoryNames.Add($directoryName)
+}
+
+function Get-RelevantSourceFile {
     param(
         [Parameter(Mandatory = $true)]
-        [string]$RelativePath
+        [System.IO.DirectoryInfo]$Root
     )
 
-    $segments = $RelativePath.Split(
-        [char[]]@([System.IO.Path]::DirectorySeparatorChar, [System.IO.Path]::AltDirectorySeparatorChar),
-        [System.StringSplitOptions]::RemoveEmptyEntries)
-    return $segments | Where-Object {
-        $_ -in @("bin", "obj", ".scratch", ".orchestrator-prototype")
-    } | Select-Object -First 1
+    $pending = [System.Collections.Generic.Stack[System.IO.DirectoryInfo]]::new()
+    $pending.Push($Root)
+    while ($pending.Count -gt 0) {
+        $directory = $pending.Pop()
+        foreach ($childDirectory in $directory.EnumerateDirectories()) {
+            if (-not $excludedDirectoryNames.Contains($childDirectory.Name)) {
+                $pending.Push($childDirectory)
+            }
+        }
+
+        foreach ($pattern in "*.cs", "*.csproj", "*.props") {
+            foreach ($file in $directory.EnumerateFiles(
+                    $pattern,
+                    [System.IO.SearchOption]::TopDirectoryOnly)) {
+                Write-Output $file
+            }
+        }
+    }
+}
+
+function Write-ScanReceipt {
+    param(
+        [Parameter(Mandatory = $true)]
+        [int]$Count
+    )
+
+    if (-not [string]::IsNullOrWhiteSpace($ScanReceiptPath)) {
+        [System.IO.File]::WriteAllText(
+            $ScanReceiptPath,
+            $Count.ToString([System.Globalization.CultureInfo]::InvariantCulture))
+    }
 }
 
 try {
@@ -54,12 +87,16 @@ try {
     }
 
     $artifactTimestamp = (Get-Item -LiteralPath $ArtifactPath).LastWriteTimeUtc
+    $scannedSourceCount = 0
     foreach ($candidatePath in $SourcePath) {
         if (Test-Path -LiteralPath $candidatePath -PathType Leaf) {
             $candidate = Get-Item -LiteralPath $candidatePath
-            if ($sourceExtensions.Contains($candidate.Extension) -and
-                $candidate.LastWriteTimeUtc -gt $artifactTimestamp) {
-                exit 1
+            if ($sourceExtensions.Contains($candidate.Extension)) {
+                $scannedSourceCount++
+                if ($candidate.LastWriteTimeUtc -gt $artifactTimestamp) {
+                    Write-ScanReceipt -Count $scannedSourceCount
+                    exit 1
+                }
             }
 
             continue
@@ -70,19 +107,16 @@ try {
         }
 
         $sourceRoot = Get-Item -LiteralPath $candidatePath
-        foreach ($candidate in Get-ChildItem -LiteralPath $sourceRoot.FullName -Recurse -File -ErrorAction Stop) {
-            $relativePath = $candidate.FullName.Substring($sourceRoot.FullName.Length)
-            if ((Test-IsGeneratedPath -RelativePath $relativePath) -or
-                -not $sourceExtensions.Contains($candidate.Extension)) {
-                continue
-            }
-
+        foreach ($candidate in Get-RelevantSourceFile -Root $sourceRoot) {
+            $scannedSourceCount++
             if ($candidate.LastWriteTimeUtc -gt $artifactTimestamp) {
+                Write-ScanReceipt -Count $scannedSourceCount
                 exit 1
             }
         }
     }
 
+    Write-ScanReceipt -Count $scannedSourceCount
     exit 0
 }
 catch {

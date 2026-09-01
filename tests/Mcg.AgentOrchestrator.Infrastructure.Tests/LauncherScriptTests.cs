@@ -53,23 +53,30 @@ public sealed class LauncherScriptTests
     {
         var repositoryRoot = Path.Combine(Path.GetTempPath(), $"launcher-freshness-{Guid.NewGuid():N}");
         var scriptsPath = Path.Combine(repositoryRoot, "scripts");
-        var sourcePath = Path.Combine(repositoryRoot, "src", "Example");
-        var generatedPath = Path.Combine(sourcePath, "obj");
-        var outputPath = Path.Combine(sourcePath, "bin", "Debug", "net10.0");
+        var firstSourcePath = Path.Combine(repositoryRoot, "src", "First");
+        var secondSourcePath = Path.Combine(repositoryRoot, "src", "Second");
+        var generatedPath = Path.Combine(firstSourcePath, "obj");
+        var outputPath = Path.Combine(firstSourcePath, "bin", "Debug", "net10.0");
         Directory.CreateDirectory(scriptsPath);
         Directory.CreateDirectory(generatedPath);
+        Directory.CreateDirectory(secondSourcePath);
         Directory.CreateDirectory(outputPath);
         try
         {
             File.Copy(
                 Path.Combine(FindLauncherSourceRoot(), "scripts", "Test-OrchestratorArtifactFreshness.ps1"),
                 Path.Combine(scriptsPath, "Test-OrchestratorArtifactFreshness.ps1"));
-            var checkedInProps = Path.Combine(sourcePath, "Example.props");
+            var checkedInSource = Path.Combine(firstSourcePath, "Example.cs");
+            var checkedInProps = Path.Combine(secondSourcePath, "Example.props");
             var generatedProps = Path.Combine(generatedPath, "Example.csproj.nuget.g.props");
+            var ignoredJson = Path.Combine(secondSourcePath, "ignored.json");
             var artifactPath = Path.Combine(outputPath, "Example.dll");
             var markerPath = artifactPath + ".git-head";
+            var scanReceiptPath = Path.Combine(repositoryRoot, "scan-count.txt");
+            File.WriteAllText(checkedInSource, "internal sealed class Example;");
             File.WriteAllText(checkedInProps, "<Project />");
             File.WriteAllText(generatedProps, "<Project />");
+            File.WriteAllText(ignoredJson, "{}");
             File.WriteAllText(artifactPath, "artifact");
 
             RunGit(repositoryRoot, "init", "--initial-branch=main");
@@ -80,21 +87,24 @@ public sealed class LauncherScriptTests
             File.WriteAllText(markerPath, RunGitForOutput(repositoryRoot, "rev-parse", "HEAD").Trim());
 
             var baseline = new DateTime(2026, 9, 1, 12, 0, 0, DateTimeKind.Utc);
+            File.SetLastWriteTimeUtc(checkedInSource, baseline);
             File.SetLastWriteTimeUtc(checkedInProps, baseline);
             File.SetLastWriteTimeUtc(artifactPath, baseline.AddMinutes(1));
             File.SetLastWriteTimeUtc(generatedProps, baseline.AddMinutes(2));
+            File.SetLastWriteTimeUtc(ignoredJson, baseline.AddMinutes(2));
 
             var freshnessScript = Path.Combine(scriptsPath, "Test-OrchestratorArtifactFreshness.ps1");
             var generatedOnlyResult = RunPowerShellCommand(repositoryRoot, $"""
-                & '{EscapePowerShellSingleQuoted(freshnessScript)}' -RepositoryRoot '{EscapePowerShellSingleQuoted(repositoryRoot)}' -ArtifactPath '{EscapePowerShellSingleQuoted(artifactPath)}' -MarkerPath '{EscapePowerShellSingleQuoted(markerPath)}' -SourcePath '{EscapePowerShellSingleQuoted(Path.Combine(repositoryRoot, "src"))}'
+                & '{EscapePowerShellSingleQuoted(freshnessScript)}' -RepositoryRoot '{EscapePowerShellSingleQuoted(repositoryRoot)}' -ArtifactPath '{EscapePowerShellSingleQuoted(artifactPath)}' -MarkerPath '{EscapePowerShellSingleQuoted(markerPath)}' -ScanReceiptPath '{EscapePowerShellSingleQuoted(scanReceiptPath)}' '{EscapePowerShellSingleQuoted(firstSourcePath)}' '{EscapePowerShellSingleQuoted(secondSourcePath)}'
                 """);
             Assert.Equal(0, generatedOnlyResult.ExitCode);
             Assert.True(string.IsNullOrWhiteSpace(generatedOnlyResult.Stdout), generatedOnlyResult.Stdout);
             Assert.True(string.IsNullOrWhiteSpace(generatedOnlyResult.Stderr), generatedOnlyResult.Stderr);
+            Assert.Equal("2", File.ReadAllText(scanReceiptPath));
 
             File.SetLastWriteTimeUtc(checkedInProps, baseline.AddMinutes(3));
             var checkedInSourceResult = RunPowerShellCommand(repositoryRoot, $"""
-                & '{EscapePowerShellSingleQuoted(freshnessScript)}' -RepositoryRoot '{EscapePowerShellSingleQuoted(repositoryRoot)}' -ArtifactPath '{EscapePowerShellSingleQuoted(artifactPath)}' -MarkerPath '{EscapePowerShellSingleQuoted(markerPath)}' -SourcePath '{EscapePowerShellSingleQuoted(Path.Combine(repositoryRoot, "src"))}'
+                & '{EscapePowerShellSingleQuoted(freshnessScript)}' -RepositoryRoot '{EscapePowerShellSingleQuoted(repositoryRoot)}' -ArtifactPath '{EscapePowerShellSingleQuoted(artifactPath)}' -MarkerPath '{EscapePowerShellSingleQuoted(markerPath)}' -ScanReceiptPath '{EscapePowerShellSingleQuoted(scanReceiptPath)}' '{EscapePowerShellSingleQuoted(firstSourcePath)}' '{EscapePowerShellSingleQuoted(secondSourcePath)}'
                 """);
             Assert.Equal(1, checkedInSourceResult.ExitCode);
             Assert.True(string.IsNullOrWhiteSpace(checkedInSourceResult.Stdout), checkedInSourceResult.Stdout);
@@ -112,6 +122,8 @@ public sealed class LauncherScriptTests
         var repoRoot = FindLauncherSourceRoot();
         var helper = File.ReadAllText(Path.Combine(repoRoot, "scripts", "Invoke-OrchestratorSqliteTool.ps1"));
         var auditScript = File.ReadAllText(Path.Combine(repoRoot, "scripts", "Invoke-PackageAudit.ps1"));
+        var runbook = File.ReadAllText(Path.Combine(repoRoot, "docs", "operator-runbook.md"));
+        var claudeSettings = File.ReadAllText(Path.Combine(repoRoot, ".claude", "settings.json"));
         var buildProps = File.ReadAllText(Path.Combine(repoRoot, "Directory.Build.props"));
         var project = File.ReadAllText(Path.Combine(
             repoRoot,
@@ -125,13 +137,15 @@ public sealed class LauncherScriptTests
         Assert.Contains("--no-restore", helper, StringComparison.Ordinal);
         Assert.Contains("System.Threading.Mutex", helper, StringComparison.Ordinal);
         Assert.Contains("-p:AuditPipeline=true", auditScript, StringComparison.Ordinal);
+        Assert.Contains(".\\scripts\\Invoke-RepoScript.ps1 scripts\\Invoke-PackageAudit.ps1", runbook, StringComparison.Ordinal);
+        Assert.Contains("Invoke-PackageAudit.ps1 *", claudeSettings, StringComparison.Ordinal);
         Assert.Contains("<NuGetAudit>true</NuGetAudit>", buildProps, StringComparison.Ordinal);
         Assert.DoesNotContain("<NuGetAudit>false</NuGetAudit>", buildProps, StringComparison.Ordinal);
         Assert.DoesNotContain("NU1903", project, StringComparison.Ordinal);
     }
 
     [Xunit.Fact]
-    public void ReadOnlySqliteHelperMissingAssetsFailsWithOneActionableDisposition()
+    public void ReadOnlySqliteHelperCleanCheckoutFailsWithOneActionableDisposition()
     {
         var repositoryRoot = Path.Combine(Path.GetTempPath(), $"sqlite-helper-missing-{Guid.NewGuid():N}");
         var scriptsPath = Path.Combine(repositoryRoot, "scripts");
@@ -148,6 +162,10 @@ public sealed class LauncherScriptTests
                 Path.Combine(sourceRoot, "scripts", "Test-OrchestratorArtifactFreshness.ps1"),
                 Path.Combine(scriptsPath, "Test-OrchestratorArtifactFreshness.ps1"));
 
+            Assert.False(Directory.Exists(Path.Combine(scriptsPath, "OrchestratorSqliteTools", "bin")));
+            Assert.False(Directory.Exists(Path.Combine(scriptsPath, "OrchestratorSqliteTools", "obj")));
+            Assert.False(Directory.Exists(Path.Combine(repositoryRoot, "src", "Mcg.AgentOrchestrator.Core", "obj")));
+
             var missingHost = Path.Combine(repositoryRoot, "must-not-run-dotnet.cmd");
             var result = RunPowerShellCommand(repositoryRoot, $"""
                 $env:MCG_ORCHESTRATOR_DOTNET_PATH = '{EscapePowerShellSingleQuoted(missingHost)}'
@@ -161,7 +179,7 @@ public sealed class LauncherScriptTests
                 StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries);
             Assert.Single(errorLines);
             Assert.Contains("no-restored build assets are unavailable", errorLines[0], StringComparison.OrdinalIgnoreCase);
-            Assert.Contains("Invoke-PackageAudit.ps1", errorLines[0], StringComparison.Ordinal);
+            Assert.Contains("Invoke-RepoScript.ps1 scripts\\Invoke-PackageAudit.ps1", errorLines[0], StringComparison.Ordinal);
             Assert.DoesNotContain("NU1900", errorLines[0], StringComparison.OrdinalIgnoreCase);
             Assert.DoesNotContain("NU1301", errorLines[0], StringComparison.OrdinalIgnoreCase);
         }

@@ -106,7 +106,7 @@ if (-not (Test-ArtifactCurrent)) {
             )
             $missingAssets = @($requiredAssets | Where-Object { -not (Test-Path -LiteralPath $_ -PathType Leaf) })
             if ($missingAssets.Count -gt 0) {
-                Write-ActionableFailure "SQLite helper artifact is missing or stale and no-restored build assets are unavailable; run .\scripts\Invoke-PackageAudit.ps1 online, then retry."
+                Write-ActionableFailure "SQLite helper artifact is missing or stale and no-restored build assets are unavailable; run .\scripts\Invoke-RepoScript.ps1 scripts\Invoke-PackageAudit.ps1 online, then retry."
             }
 
             $buildLog = [System.IO.Path]::GetTempFileName()
@@ -123,7 +123,7 @@ if (-not (Test-ArtifactCurrent)) {
             }
 
             if ($buildExit -ne 0 -or -not (Test-Path -LiteralPath $artifactPath -PathType Leaf)) {
-                Write-ActionableFailure "SQLite helper no-restore rebuild failed; run .\scripts\Invoke-PackageAudit.ps1 online, then retry."
+                Write-ActionableFailure "SQLite helper no-restore rebuild failed; run .\scripts\Invoke-RepoScript.ps1 scripts\Invoke-PackageAudit.ps1 online, then retry."
             }
 
             & $markerScript -RepositoryRoot $repoRoot -MarkerPath $markerPath
