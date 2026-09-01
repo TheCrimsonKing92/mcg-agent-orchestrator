@@ -240,7 +240,9 @@ public static class RepositoryTestImpactPlanner
                     "--filter",
                     JoinFilterUnion(resolved.TestClassNames.Select(name => $"FullyQualifiedName~{name}"))
                 ],
-                "Core production behavior changed; run integration tests that reference its bounded two-hop consumers.",
+                AppendReverseDependencyCacheReceipt(
+                    "Core production behavior changed; run integration tests that reference its bounded two-hop consumers.",
+                    resolved.CacheReceipt),
                 RepositoryTestProject.Infrastructure,
                 resolved.TestClassNames));
         }
@@ -250,7 +252,9 @@ public static class RepositoryTestImpactPlanner
             checks.Add(new RepositoryTestImpactCheck(
                 "infrastructure tests",
                 InfrastructureTests,
-                degraded.Reason ?? "Reverse-dependency evidence was unavailable; run the full Infrastructure test suite.",
+                AppendReverseDependencyCacheReceipt(
+                    degraded.Reason ?? "Reverse-dependency evidence was unavailable; run the full Infrastructure test suite.",
+                    degraded.CacheReceipt),
                 RepositoryTestProject.Infrastructure));
         }
 
@@ -341,6 +345,11 @@ public static class RepositoryTestImpactPlanner
                 : $"Selected {distinctChecks.Length} test commands from changed file scope.",
             Checks: distinctChecks);
     }
+
+    private static string AppendReverseDependencyCacheReceipt(
+        string reason,
+        ReverseDependencyCacheReceipt? receipt) =>
+        receipt is null ? reason : $"{reason} {receipt.Render()}";
 
     private static RepositoryTestImpactPlan NoBuild(string summary) =>
         new(

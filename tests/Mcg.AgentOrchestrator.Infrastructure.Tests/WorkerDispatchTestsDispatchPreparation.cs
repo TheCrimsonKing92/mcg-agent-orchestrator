@@ -4218,6 +4218,60 @@ public sealed class WorkerDispatchTestsDispatchPreparation : WorkerDispatchTestS
     Assert.Contains("check deterministic failures", manifest, StringComparison.Ordinal);
 }
 
+    [Xunit.Fact(DisplayName = "WorkerContextArtifacts_writes_reverse_dependency_cache_receipt_without_starting_worker")]
+    public void WorkerContextArtifactsWritesReverseDependencyCacheReceiptWithoutStartingWorker()
+{
+    var workingDirectory = CreateSeededDispatchRepository();
+    void Write(string relativePath, string contents)
+    {
+        var path = Path.Combine(workingDirectory, relativePath.Replace('/', Path.DirectorySeparatorChar));
+        Directory.CreateDirectory(Path.GetDirectoryName(path)!);
+        File.WriteAllText(path, contents);
+    }
+
+    Write("src/Mcg.AgentOrchestrator.Core/Mcg.AgentOrchestrator.Core.csproj", "<Project Sdk=\"Microsoft.NET.Sdk\" />");
+    Write(
+        "src/Mcg.AgentOrchestrator.App/Mcg.AgentOrchestrator.App.csproj",
+        "<Project Sdk=\"Microsoft.NET.Sdk\"><ItemGroup>" +
+        "<ProjectReference Include=\"../Mcg.AgentOrchestrator.Core/Mcg.AgentOrchestrator.Core.csproj\" />" +
+        "</ItemGroup></Project>");
+    Write(
+        "tests/Mcg.AgentOrchestrator.Infrastructure.Tests/Mcg.AgentOrchestrator.Infrastructure.Tests.csproj",
+        "<Project Sdk=\"Microsoft.NET.Sdk\"><ItemGroup>" +
+        "<ProjectReference Include=\"../../src/Mcg.AgentOrchestrator.Core/Mcg.AgentOrchestrator.Core.csproj\" />" +
+        "<ProjectReference Include=\"../../src/Mcg.AgentOrchestrator.App/Mcg.AgentOrchestrator.App.csproj\" />" +
+        "</ItemGroup></Project>");
+    const string changedPath = "src/Mcg.AgentOrchestrator.Core/Application/DispatchFailureClassifier.cs";
+    Write(
+        changedPath,
+        "namespace Mcg.AgentOrchestrator.Core; public sealed class DispatchFailureClassifier { }");
+    Write(
+        "src/Mcg.AgentOrchestrator.App/RunGoalService.cs",
+        "public sealed class RunGoalService { private readonly DispatchFailureClassifier _classifier = new(); }");
+    Write(
+        "tests/Mcg.AgentOrchestrator.Infrastructure.Tests/RunGoalServiceTests.cs",
+        "public sealed class RunGoalServiceTests { private readonly RunGoalService _service = new(); " +
+        "[Xunit.Fact] public void Runs() { } }");
+    RunGit(workingDirectory, ["add", "-A"], DateTimeOffset.Parse("2026-09-01T09:00:00Z"));
+    RunGit(
+        workingDirectory,
+        ["commit", "-m", "Add reverse-dependency fixture"],
+        DateTimeOffset.Parse("2026-09-01T09:00:00Z"));
+    File.AppendAllText(
+        Path.Combine(workingDirectory, changedPath.Replace('/', Path.DirectorySeparatorChar)),
+        Environment.NewLine + "// changed");
+    var kernel = new AgentOrchestratorKernel();
+    var task = new TaskSpec(TaskId.New(), "Review cache evidence.", AgentRole.Reviewer);
+    var goal = kernel.CreateGoal("Write reverse-dependency cache evidence", [task]);
+
+    _ = WorkerContextArtifacts.Write(goal, task, workingDirectory);
+    var contextDirectory = WorkerContextArtifacts.Write(goal, task, workingDirectory);
+    var checklist = File.ReadAllText(Path.Combine(contextDirectory, "deterministic-verification.md"));
+
+    Assert.Contains("reverse-dependency-cache=hit", checklist, StringComparison.Ordinal);
+    Assert.Null(task.LastDispatch);
+}
+
     [Xunit.Fact(DisplayName = "WorkerContextArtifacts_writes_unmet_acceptance_criterion_retry_feedback")]
     public void WorkerContextArtifactsWritesUnmetAcceptanceCriterionRetryFeedback()
 {
