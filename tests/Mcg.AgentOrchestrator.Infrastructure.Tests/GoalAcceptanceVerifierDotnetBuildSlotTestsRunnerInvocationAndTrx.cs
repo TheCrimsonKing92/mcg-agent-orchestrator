@@ -264,6 +264,64 @@ public sealed class GoalAcceptanceVerifierDotnetBuildSlotTestsRunnerInvocationAn
             line.Contains("Passing MTP test is not surfaced", StringComparison.Ordinal));
     }
 
+    [Xunit.Fact]
+    public void FailureIdentitiesRetainMixedNonpassingOutcomes()
+    {
+        var root = CreateManifestWorkspace("""
+            {
+              "version": 1,
+              "checks": [],
+              "forbiddenChangedPathGlobs": []
+            }
+            """);
+        var trxPath = Path.Combine(root, "mixed-nonpassing.trx");
+        try
+        {
+            var rows = new[]
+            {
+                (Id: "failed-1", ClassName: "MixedOutcomeTests", MethodName: "Fails", Outcome: "Failed"),
+                (Id: "timeout-1", ClassName: "MixedOutcomeTests", MethodName: "TimesOut", Outcome: "Timeout"),
+                (Id: "not-executed-1", ClassName: "MixedOutcomeTests", MethodName: "DoesNotExecute", Outcome: "NotExecuted")
+            };
+            new XDocument(
+                new XElement(
+                    "TestRun",
+                    new XElement(
+                        "TestDefinitions",
+                        rows.Select(row =>
+                            new XElement(
+                                "UnitTest",
+                                new XAttribute("id", row.Id),
+                                new XElement(
+                                    "TestMethod",
+                                    new XAttribute("className", row.ClassName),
+                                    new XAttribute("name", row.MethodName))))),
+                    new XElement(
+                        "Results",
+                        rows.Select(row =>
+                            new XElement(
+                                "UnitTestResult",
+                                new XAttribute("testId", row.Id),
+                                new XAttribute("testName", $"{row.ClassName}.{row.MethodName}"),
+                                new XAttribute("outcome", row.Outcome))))))
+                .Save(trxPath);
+
+            var identities = GoalAcceptanceVerifier.ExtractTrxFailureIdentities(trxPath);
+
+            Assert.Equal(
+                [
+                    "MixedOutcomeTests.Fails",
+                    "MixedOutcomeTests.TimesOut",
+                    "MixedOutcomeTests.DoesNotExecute"
+                ],
+                identities);
+        }
+        finally
+        {
+            DeleteDirectoryWithRetry(root);
+        }
+    }
+
     [Xunit.Fact(DisplayName = "AcceptanceTrxFailureReader_preserves_full_nonpassing_evidence")]
     public void AcceptanceTrxFailureReaderPreservesFullNonpassingEvidence()
     {

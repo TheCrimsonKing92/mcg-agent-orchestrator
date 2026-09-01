@@ -940,8 +940,8 @@ public sealed partial class ConductorDriverTestsLifecycleStates
         Xunit.Assert.Equal(0, task.CriterionRetryCount);
     }
 
-    [Xunit.Fact(DisplayName = "ConductorDriver_out_of_scope_acceptance_failure_holds_without_retry")]
-    public void OutOfScopeFailureHoldsWithoutRetry()
+    [Xunit.Fact]
+    public void IntroducedFailureOutsideChangedScopeRetries()
     {
         var (kernel, goal) = SimpleGoal();
         var task = goal.Tasks.Single();
@@ -995,11 +995,10 @@ public sealed partial class ConductorDriverTestsLifecycleStates
 
         var result = driver.AdvanceOnce(goal, ConductorAutonomyPolicy.Conservative);
 
-        var held = Assert.IsType<ConductorAdvanceOutcome.Held>(result.Outcome);
-        Assert.Contains("DotnetBuildEnvironmentManagerTests", held.Reason, StringComparison.Ordinal);
-        Assert.False(retryCalled);
-        Assert.Equal(WorkTaskStatus.Completed, task.Status);
-        Assert.Equal(0, task.CriterionRetryCount);
+        Assert.IsType<ConductorAdvanceOutcome.Executed>(result.Outcome);
+        Assert.True(retryCalled);
+        Assert.Equal(WorkTaskStatus.Assigned, task.Status);
+        Assert.Equal(1, task.CriterionRetryCount);
     }
 
     [Xunit.Fact(DisplayName = "ConductorDriver_inherited_impacted_identity_holds_without_retry")]
@@ -1053,8 +1052,8 @@ public sealed partial class ConductorDriverTestsLifecycleStates
         Assert.Equal(0, task.CriterionRetryCount);
     }
 
-    [Xunit.Fact(DisplayName = "ConductorDriver_mixed_failures_retry_only_impacted_identity")]
-    public void MixedFailuresRetryOnlyImpactedIdentity()
+    [Xunit.Fact]
+    public void MixedFailuresRetryOnlyIntroducedIdentity()
     {
         var tempDirectory = CreateTempDirectory();
         var trxPath = Path.Combine(tempDirectory, "mixed-attribution.trx");

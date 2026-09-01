@@ -5836,8 +5836,7 @@ internal sealed partial class ConductorDriver
         {
             var retryDisposition = ClassifyAcceptanceRetry(
                 acceptance.RequiredUnmetCriteria,
-                acceptance.CheckAttributions,
-                landingFileScopes);
+                acceptance.CheckAttributions);
             if (retryDisposition.ActionableCriteria.Count == 0)
             {
                 var observedHeads = _resolveAcceptanceHeads(goal);
@@ -6119,10 +6118,8 @@ internal sealed partial class ConductorDriver
 
     private static AcceptanceRetryDisposition ClassifyAcceptanceRetry(
         IReadOnlyList<AcceptanceCheckResult> criteria,
-        IReadOnlyList<AcceptanceCheckAttribution>? checkAttributions,
-        IReadOnlyList<string> changedFiles)
+        IReadOnlyList<AcceptanceCheckAttribution>? checkAttributions)
     {
-        var impactPlan = RepositoryTestImpactPlanner.Plan(changedFiles);
         var actionable = new List<AcceptanceCheckResult>();
         var excluded = new List<ExcludedAcceptanceFailure>();
         foreach (var criterion in criteria)
@@ -6151,24 +6148,17 @@ internal sealed partial class ConductorDriver
                 continue;
             }
 
-            string[] introducedIdentities;
+            var actionableIdentities = new List<string>();
             if (criterion.FailingTestAttributions is { Count: > 0 } testAttributions &&
                 failingIdentities is { Length: > 0 })
             {
                 var byIdentity = testAttributions
                     .GroupBy(attribution => attribution.TestIdentity, StringComparer.Ordinal)
                     .ToDictionary(group => group.Key, group => group.First(), StringComparer.Ordinal);
-                var introduced = new List<string>();
                 foreach (var identity in failingIdentities)
                 {
-                    if (!byIdentity.TryGetValue(identity, out var attribution) ||
-                        attribution.Origin == AcceptanceTestFailureOrigin.Unattributed)
-                    {
-                        excluded.Add(new ExcludedAcceptanceFailure(
-                            identity,
-                            AcceptanceRetryExclusionKind.Unattributed));
-                    }
-                    else if (attribution.Origin == AcceptanceTestFailureOrigin.Inherited)
+                    if (byIdentity.TryGetValue(identity, out var attribution) &&
+                        attribution.Origin == AcceptanceTestFailureOrigin.Inherited)
                     {
                         excluded.Add(new ExcludedAcceptanceFailure(
                             identity,
@@ -6176,126 +6166,38 @@ internal sealed partial class ConductorDriver
                     }
                     else
                     {
-                        introduced.Add(identity);
+                        actionableIdentities.Add(identity);
                     }
                 }
-
-                introducedIdentities = introduced.ToArray();
             }
             else
             {
-                if (checkAttribution is null || checkAttribution.Origin != AcceptanceFailureOrigin.Introduced)
+                if (checkAttribution is { Origin: AcceptanceFailureOrigin.Inherited })
                 {
-                    var kind = checkAttribution?.Origin == AcceptanceFailureOrigin.Inherited
-                        ? AcceptanceRetryExclusionKind.Inherited
-                        : AcceptanceRetryExclusionKind.Unattributed;
-                    foreach (var identity in FailureIdentityOrCheckName(criterion, failingIdentities))
+                    foreach (var identity in failingIdentities)
                     {
-                        excluded.Add(new ExcludedAcceptanceFailure(identity, kind));
+                        excluded.Add(new ExcludedAcceptanceFailure(
+                            identity,
+                            AcceptanceRetryExclusionKind.Inherited));
                     }
 
                     continue;
                 }
 
-                introducedIdentities = failingIdentities ?? [];
+                actionableIdentities.AddRange(failingIdentities);
             }
 
-            if (introducedIdentities.Length == 0)
+            if (actionableIdentities.Count > 0)
             {
-                continue;
-            }
-
-            if (!TryResolveTestProject(criterion.TestProjectPath, out var testProject))
-            {
-                actionable.Add(criterion with { FailingTestIdentities = introducedIdentities });
-                continue;
-            }
-
-            var impacted = introducedIdentities
-                .Where(identity => IsTestIdentityWithinImpact(identity, testProject, impactPlan))
-                .ToArray();
-            var impactedSet = impacted.ToHashSet(StringComparer.Ordinal);
-            excluded.AddRange(introducedIdentities
-                .Where(identity => !impactedSet.Contains(identity))
-                .Select(identity => new ExcludedAcceptanceFailure(
-                    identity,
-                    AcceptanceRetryExclusionKind.OutsideChangedScope)));
-            if (impacted.Length > 0)
-            {
-                actionable.Add(criterion with { FailingTestIdentities = impacted });
+                actionable.Add(criterion with { FailingTestIdentities = actionableIdentities });
             }
         }
 
         return new AcceptanceRetryDisposition(actionable, excluded);
     }
 
-    private static IReadOnlyList<string> FailureIdentityOrCheckName(
-        AcceptanceCheckResult criterion,
-        IReadOnlyList<string>? failingIdentities) =>
-        failingIdentities is { Count: > 0 } ? failingIdentities : [criterion.Name];
-
-    private static bool IsTestIdentityWithinImpact(
-        string identity,
-        RepositoryTestProject testProject,
-        RepositoryTestImpactPlan impactPlan)
-    {
-        var relevantChecks = impactPlan.Checks
-            .Where(check => check.TestProject == testProject)
-            .ToArray();
-        return relevantChecks.Length == 0 ||
-            relevantChecks.Any(check => check.TestClassSelections is null) ||
-            relevantChecks
-                .SelectMany(check => check.TestClassSelections ?? [])
-                .Any(selection => identity.Contains(selection, StringComparison.Ordinal));
-    }
-
-    private static bool TryResolveTestProject(
-        string? projectPath,
-        out RepositoryTestProject testProject)
-    {
-        var normalized = projectPath?.Replace('\\', '/');
-        if (normalized?.Contains("Mcg.AgentOrchestrator.Core.Tests", StringComparison.OrdinalIgnoreCase) == true)
-        {
-            testProject = RepositoryTestProject.Core;
-            return true;
-        }
-
-        if (normalized?.Contains("Infrastructure.ProviderEnvironment.Tests", StringComparison.OrdinalIgnoreCase) == true)
-        {
-            testProject = RepositoryTestProject.ProviderEnvironment;
-            return true;
-        }
-
-        if (normalized?.Contains("Infrastructure.Cli.Tests", StringComparison.OrdinalIgnoreCase) == true)
-        {
-            testProject = RepositoryTestProject.Cli;
-            return true;
-        }
-
-        if (normalized?.Contains("Mcg.AgentOrchestrator.Infrastructure.Tests", StringComparison.OrdinalIgnoreCase) == true)
-        {
-            testProject = RepositoryTestProject.Infrastructure;
-            return true;
-        }
-
-        if (normalized?.Contains("Mcg.AgentOrchestrator.Dashboard.Tests", StringComparison.OrdinalIgnoreCase) == true)
-        {
-            testProject = RepositoryTestProject.Dashboard;
-            return true;
-        }
-
-        testProject = default;
-        return false;
-    }
-
     private static string FormatExcludedAcceptanceFailure(ExcludedAcceptanceFailure failure) =>
-        failure.Kind switch
-        {
-            AcceptanceRetryExclusionKind.Inherited => $"{failure.Identity} (pre-existing/main-red)",
-            AcceptanceRetryExclusionKind.OutsideChangedScope =>
-                $"{failure.Identity} (not in changed test-impact scope)",
-            _ => $"{failure.Identity} (origin unavailable/environmental)"
-        };
+        $"{failure.Identity} (pre-existing/main-red)";
 
     private static string BuildUnattributableAcceptanceIdentity(
         string? branchHeadSha,
@@ -6323,9 +6225,7 @@ internal sealed partial class ConductorDriver
 
     private enum AcceptanceRetryExclusionKind
     {
-        Inherited,
-        Unattributed,
-        OutsideChangedScope
+        Inherited
     }
 
     private static string[] FormatCriterionRetryFeedback(IReadOnlyList<AcceptanceCheckResult> criteria)
@@ -6414,6 +6314,12 @@ internal sealed partial class ConductorDriver
                         .ToArray();
                 if (attributableFailures.Count == 0)
                 {
+                    if (!fallbackAdded)
+                    {
+                        AddBoundedOutputEvidence(evidence, outputEvidence, ref remainingEvidenceEntries);
+                        fallbackAdded = true;
+                    }
+
                     evidence.Add(
                         $"detail unavailable: readable TRX for partition \"{criterion.Name}\" contained no attributable non-passing results at {receipt.Path}");
                     continue;

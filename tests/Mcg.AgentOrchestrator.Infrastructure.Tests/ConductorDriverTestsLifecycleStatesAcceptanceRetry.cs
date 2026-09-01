@@ -8,6 +8,74 @@ using static ConductorDriverTests;
 
 public sealed partial class ConductorDriverTestsLifecycleStates
 {
+    [Xunit.Theory]
+    [Xunit.InlineData(true)]
+    [Xunit.InlineData(false)]
+    public void IdentityWithoutInheritedProofRetries(bool explicitUnattributed)
+    {
+        const string identity =
+            "Mcg.AgentOrchestrator.Infrastructure.Tests.CliCommandTestsBacklogIntakeCommands.CliBacklogListSplitsLimitStatusAndTextFlags";
+        IReadOnlyList<AcceptanceTestFailureAttribution> testAttributions = explicitUnattributed
+            ?
+            [
+                new AcceptanceTestFailureAttribution(
+                    identity,
+                    AcceptanceTestFailureOrigin.Unattributed,
+                    "baseline identity evidence unavailable")
+            ]
+            :
+            [
+                new AcceptanceTestFailureAttribution(
+                    "Mcg.AgentOrchestrator.Infrastructure.Tests.OtherTests.InheritedFailure",
+                    AcceptanceTestFailureOrigin.Inherited,
+                    "different identity failed at merge-base main-a")
+            ];
+        var (kernel, goal) = SimpleGoal();
+        var task = goal.Tasks.Single();
+        PassVerification(kernel, goal, task);
+        var retryCalled = false;
+        var unmet = new AcceptanceCheckResult(
+            "infrastructure tests: Cli",
+            false,
+            1,
+            "candidate failure without inherited proof",
+            FailingTestIdentities: [identity],
+            TestProjectPath: "tests/Mcg.AgentOrchestrator.Infrastructure.Tests/Mcg.AgentOrchestrator.Infrastructure.Tests.csproj",
+            FailingTestAttributions: testAttributions);
+        var driver = MakeDriver(
+            getFacts: _ => GoalLifecycleFacts.None,
+            runAcceptanceSummary: _ => new AcceptanceVerificationSummary(
+                false,
+                [unmet],
+                FailedChecks: [unmet.Name],
+                BranchHeadSha: "candidate-a",
+                MainHeadSha: "main-a",
+                CheckAttributions:
+                [
+                    new AcceptanceCheckAttribution(
+                        unmet.Name,
+                        AcceptanceFailureOrigin.Introduced,
+                        "main is attested green")
+                ]),
+            retryTask: (goalId, taskId, message) =>
+            {
+                retryCalled = true;
+                return kernel.RetryTask(goalId, taskId, message);
+            },
+            recordCriterionRetryFeedback: kernel.RecordCriterionRetryFeedback,
+            getLandingFileScopes: _ =>
+            [
+                "src/Mcg.AgentOrchestrator.App/Cli/CliCommandHandlers.Backlog.cs"
+            ]);
+
+        var result = driver.AdvanceOnce(goal, ConductorAutonomyPolicy.Conservative);
+
+        Assert.IsType<ConductorAdvanceOutcome.Executed>(result.Outcome);
+        Assert.True(retryCalled);
+        Assert.Equal(WorkTaskStatus.Assigned, task.Status);
+        Assert.Equal(1, task.CriterionRetryCount);
+    }
+
     [Xunit.Fact(DisplayName = "ConductorDriver_unattributed_required_check_without_identity_retries")]
     public void UnattributedRequiredCheckWithoutIdentityRetries()
     {
@@ -120,6 +188,81 @@ public sealed partial class ConductorDriverTestsLifecycleStates
             Assert.Contains("TimeoutOnlyTests.Expires (Timeout)", retryMessage!, StringComparison.Ordinal);
             Assert.Contains("30 second partition timeout", retryMessage!, StringComparison.Ordinal);
             Assert.DoesNotContain("contained no attributable non-passing results", retryMessage!, StringComparison.Ordinal);
+        }
+        finally
+        {
+            Directory.Delete(tempDirectory, recursive: true);
+        }
+    }
+
+    [Xunit.Fact]
+    public void RetryFeedbackFallsBackWhenTrxMetadataCannotMatchIdentity()
+    {
+        var tempDirectory = CreateTempDirectory();
+        var trxPath = Path.Combine(tempDirectory, "missing-test-method.trx");
+        try
+        {
+            const string canonicalIdentity = "Example.Tests.MetadataTests.CandidateRegression";
+            const string fallbackEvidence =
+                "[xUnit.net 00:00:00.01]     Example.Tests.MetadataTests.CandidateRegression [FAIL]";
+            new XDocument(
+                new XElement(
+                    "TestRun",
+                    new XElement(
+                        "TestDefinitions",
+                        new XElement(
+                            "UnitTest",
+                            new XAttribute("id", "missing-metadata-1"),
+                            new XAttribute("name", "candidate regression display name"))),
+                    new XElement(
+                        "Results",
+                        new XElement(
+                            "UnitTestResult",
+                            new XAttribute("testId", "missing-metadata-1"),
+                            new XAttribute("testName", "candidate regression display name"),
+                            new XAttribute("outcome", "Failed"),
+                            new XElement(
+                                "Output",
+                                new XElement(
+                                    "ErrorInfo",
+                                    new XElement("Message", "metadata-free failure")))))))
+                .Save(trxPath);
+            var (kernel, goal) = SimpleGoal();
+            var task = goal.Tasks.Single();
+            PassVerification(kernel, goal, task);
+            string? retryMessage = null;
+            var unmet = new AcceptanceCheckResult(
+                "infrastructure tests: missing metadata",
+                false,
+                1,
+                fallbackEvidence,
+                ResultSummary: "infrastructure test partition failed",
+                TestResultPaths: [trxPath],
+                FailingTestIdentities: [canonicalIdentity]);
+            var driver = MakeDriver(
+                getFacts: _ => GoalLifecycleFacts.None,
+                runAcceptanceSummary: _ => new AcceptanceVerificationSummary(
+                    false,
+                    [unmet],
+                    FailedChecks: [unmet.Name],
+                    CheckAttributions:
+                    [
+                        new AcceptanceCheckAttribution(
+                            unmet.Name,
+                            AcceptanceFailureOrigin.Introduced,
+                            "main is attested green")
+                    ]),
+                retryTask: (goalId, taskId, message) =>
+                {
+                    retryMessage = message;
+                    return kernel.RetryTask(goalId, taskId, message);
+                },
+                recordCriterionRetryFeedback: kernel.RecordCriterionRetryFeedback);
+
+            driver.AdvanceOnce(goal, ConductorAutonomyPolicy.Conservative);
+
+            Assert.Contains(fallbackEvidence, retryMessage!, StringComparison.Ordinal);
+            Assert.Contains("contained no attributable non-passing results", retryMessage!, StringComparison.Ordinal);
         }
         finally
         {

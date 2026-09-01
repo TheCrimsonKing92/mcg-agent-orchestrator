@@ -7317,9 +7317,9 @@ public sealed class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
             .Descendants()
             .Where(element =>
                 element.Name.LocalName.Equals("UnitTestResult", StringComparison.Ordinal) &&
-                string.Equals(
-                    element.Attribute("outcome")?.Value,
-                    "Failed",
+                !string.Equals(
+                    element.Attribute("outcome")?.Value?.Trim(),
+                    "Passed",
                     StringComparison.OrdinalIgnoreCase))
             .Select(result =>
             {
