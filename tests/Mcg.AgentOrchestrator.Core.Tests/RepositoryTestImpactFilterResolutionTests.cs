@@ -124,6 +124,8 @@ public sealed class RepositoryTestImpactFilterResolutionTests
             "tests/Mcg.AgentOrchestrator.Infrastructure.Tests/Mcg.AgentOrchestrator.Infrastructure.Tests.csproj",
             dependentCheck.Command);
         Assert.Equal("FullyQualifiedName~RunGoalServiceTests", dependentCheck.Command[^1]);
+        Assert.Equal(RepositoryTestProject.Infrastructure, dependentCheck.TestProject);
+        Assert.Equal(["RunGoalServiceTests"], dependentCheck.TestClassSelections);
     }
 
     [Xunit.Fact]
@@ -144,6 +146,28 @@ public sealed class RepositoryTestImpactFilterResolutionTests
             plan.Checks,
             candidate => candidate.Command.Contains(
                 "tests/Mcg.AgentOrchestrator.Infrastructure.Tests/Mcg.AgentOrchestrator.Infrastructure.Tests.csproj"));
+    }
+
+    [Xunit.Fact]
+    public void ChangedCoreSourceCountAboveFocusedBoundWidensToFullInfrastructureSuite()
+    {
+        using var repository = ReverseDependencyRepository.Create();
+        var changedPaths = Enumerable.Range(1, 6)
+            .Select(index => $"src/Mcg.AgentOrchestrator.Core/Application/Changed{index}.cs")
+            .ToArray();
+        foreach (var changedPath in changedPaths)
+        {
+            repository.Write(
+                changedPath,
+                $"namespace Mcg.AgentOrchestrator.Core; public sealed class Changed{Path.GetFileNameWithoutExtension(changedPath)[7..]} {{ }}");
+        }
+
+        var plan = RepositoryTestImpactPlanner.Plan(changedPaths, repository.Root);
+
+        var infrastructureCheck = Assert.Single(plan.Checks, check =>
+            check.TestProject == RepositoryTestProject.Infrastructure);
+        Assert.DoesNotContain("--filter", infrastructureCheck.Command);
+        Assert.Contains("supports 1-5 changed source files", infrastructureCheck.Reason, StringComparison.Ordinal);
     }
 
     [Xunit.Fact]

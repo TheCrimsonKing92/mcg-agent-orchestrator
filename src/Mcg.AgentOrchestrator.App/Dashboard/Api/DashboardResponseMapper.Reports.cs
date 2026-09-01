@@ -467,15 +467,6 @@ private static GoalTestImpactDto BuildGoalTestImpactDto(
         plan.Checks.Select(check => new GoalTestImpactCheckDto(check.Name, check.CommandLine, check.Reason)).ToList());
 }
 
-private static IReadOnlyList<string> TryGetGoalChangedFiles(Goal goal, string? executionDirectory)
-{
-    if (string.IsNullOrWhiteSpace(executionDirectory))
-        return [];
-
-    var worktree = GoalWorktrees.TryResolve(executionDirectory, goal.Id);
-    return worktree is null ? [] : GoalAcceptanceEvidenceBundleBuilder.GetChangedFiles(worktree);
-}
-
 private static GoalBuildEnvironmentDto ToGoalBuildEnvironmentDto(Goal goal)
 {
     var rootPath = DotnetBuildEnvironmentManager.GoalRoot(goal.Id);

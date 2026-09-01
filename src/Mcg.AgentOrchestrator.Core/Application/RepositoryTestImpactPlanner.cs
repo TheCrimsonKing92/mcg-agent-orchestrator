@@ -240,7 +240,9 @@ public static class RepositoryTestImpactPlanner
                     "--filter",
                     JoinFilterUnion(resolved.TestClassNames.Select(name => $"FullyQualifiedName~{name}"))
                 ],
-                "Core production behavior changed; run integration tests that reference its bounded two-hop consumers."));
+                "Core production behavior changed; run integration tests that reference its bounded two-hop consumers.",
+                RepositoryTestProject.Infrastructure,
+                resolved.TestClassNames));
         }
         else if (reverseDependencySelection is
             { Outcome: ReverseDependencySelectionOutcome.Unreadable or ReverseDependencySelectionOutcome.Abandoned } degraded)
@@ -248,7 +250,8 @@ public static class RepositoryTestImpactPlanner
             checks.Add(new RepositoryTestImpactCheck(
                 "infrastructure tests",
                 InfrastructureTests,
-                degraded.Reason ?? "Reverse-dependency evidence was unavailable; run the full Infrastructure test suite."));
+                degraded.Reason ?? "Reverse-dependency evidence was unavailable; run the full Infrastructure test suite.",
+                RepositoryTestProject.Infrastructure));
         }
 
         if (touchesDashboard)
@@ -607,7 +610,6 @@ public static class RepositoryTestImpactPlanner
             .Order(StringComparer.Ordinal)
             .ToArray();
         if (changedCoreSources.Length == 0 ||
-            changedCoreSources.Length > ReverseDependencyTestImpactReader.MaximumChangedSourceFiles ||
             touchesInfrastructure ||
             touchesApp ||
             touchesScriptsOrConfig ||
