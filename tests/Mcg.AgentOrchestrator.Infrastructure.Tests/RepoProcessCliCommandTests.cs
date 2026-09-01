@@ -101,11 +101,14 @@ public sealed class RepoProcessCliCommandTests
         Assert.DoesNotContain("No matching repo processes found", output.ToString());
     }
 
-    [Xunit.Fact]
-    public void CommandQuery_ManyIncidentalFailures_EmitsBoundedSummary()
+    [Xunit.Theory]
+    [Xunit.InlineData(10)]
+    [Xunit.InlineData(100)]
+    [Xunit.InlineData(1_000)]
+    public void CommandQuery_ManyIncidentalFailures_EmitsBoundedSummary(int incidentalCount)
     {
         var output = new StringWriter();
-        var snapshots = Enumerable.Range(1000, 100)
+        var snapshots = Enumerable.Range(1000, incidentalCount)
             .Select(processId => new RepoProcessCliCommand.ProcessSnapshot(
                 processId,
                 1,
@@ -131,10 +134,46 @@ public sealed class RepoProcessCliCommandTests
 
         var text = output.ToString();
         Assert.Contains("PROCESS_QUERY_UNAVAILABLE operation=filter id=42 name=pwsh status=AccessDenied", text);
-        Assert.Contains("PROCESS_QUERY_SUMMARY operation=filter-incidental count=100", text);
+        Assert.Contains($"PROCESS_QUERY_SUMMARY operation=filter-incidental count={incidentalCount}", text);
         Assert.DoesNotContain("operation=filter id=1000", text);
         Assert.True(text.Split(Environment.NewLine, StringSplitOptions.RemoveEmptyEntries).Length <= 3, text);
         Assert.DoesNotContain("No matching repo processes found", text);
+    }
+
+    [Xunit.Fact]
+    public void NameQuery_DottedName_PreservesSeed()
+    {
+        RepoProcessCliCommand.ProcessSnapshotQuery? captured = null;
+
+        RepoProcessCliCommand.PrintInfo(
+            ["repo-process-info", "--name", "Mcg.AgentOrchestrator.App"],
+            TextWriter.Null,
+            query =>
+            {
+                captured = query;
+                return [];
+            });
+
+        Assert.NotNull(captured);
+        Assert.Contains("Mcg.AgentOrchestrator.App", captured.ProcessNames);
+    }
+
+    [Xunit.Fact]
+    public void LocksQuery_OrchestratorFamily_UsesPrefixSeed()
+    {
+        RepoProcessCliCommand.ProcessSnapshotQuery? captured = null;
+
+        RepoProcessCliCommand.PrintInfo(
+            ["repo-process-info", "--locks"],
+            TextWriter.Null,
+            query =>
+            {
+                captured = query;
+                return [];
+            });
+
+        Assert.NotNull(captured);
+        Assert.Contains("Mcg.AgentOrchestrator*", captured.ProcessNames);
     }
 
     private static RepoProcessCliCommand.ProcessSnapshot Snapshot(DateTimeOffset startedAt) =>

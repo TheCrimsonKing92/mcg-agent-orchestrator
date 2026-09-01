@@ -132,7 +132,7 @@ function Read-OperationProcessInventory {
     # processes for identity and command-line reads. The single-space predicate retains the
     # existing available-command contract; PowerShell drops an empty-string script argument.
     $lines = @(& $helper `
-        -Name @("dotnet", "DispatchProcessHost", "Mcg.AgentOrchestrator.App") `
+        -Name @("dotnet", "DispatchProcessHost", "Mcg.AgentOrchestrator*") `
         -CommandContains " " `
         -Newest ([int]::MaxValue))
     $lastExitCodeVariable = Get-Variable -Name LASTEXITCODE -ErrorAction SilentlyContinue

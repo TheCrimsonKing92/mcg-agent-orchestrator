@@ -192,6 +192,8 @@ public sealed class ProcessCommandLineSnapshot
     private readonly Dictionary<int, ProcessInspectionRecord> _records;
     private readonly Action<int>? _onRead;
     private readonly Func<IReadOnlyCollection<int>, WindowsNativeProcessInspection.ProcessInspectionResult>? _readRecords;
+    private ProcessInspectionFailure? _failure;
+    private bool _hasLazyRead;
 
     internal ProcessCommandLineSnapshot(IReadOnlyDictionary<int, string> commandLines, Action<int>? onRead = null)
         : this(commandLines.ToDictionary(
@@ -220,7 +222,7 @@ public sealed class ProcessCommandLineSnapshot
         Action<int>? onRead = null)
     {
         _records = records.ToDictionary(pair => pair.Key, pair => pair.Value);
-        Failure = failure;
+        _failure = failure;
         _onRead = onRead;
     }
 
@@ -233,9 +235,15 @@ public sealed class ProcessCommandLineSnapshot
 
     public static ProcessCommandLineSnapshot Empty { get; } = new(new Dictionary<int, string>());
 
-    public IReadOnlyDictionary<int, ProcessInspectionRecord> Records => _records;
+    public IReadOnlyDictionary<int, ProcessInspectionRecord> Records => _readRecords is null
+        ? _records
+        : throw new InvalidOperationException(
+            "A partial operation-backed process snapshot cannot be enumerated as a complete snapshot; request explicit process ids instead.");
 
-    public ProcessInspectionFailure? Failure { get; private set; }
+    public ProcessInspectionFailure? Failure => _readRecords is not null && !_hasLazyRead
+        ? throw new InvalidOperationException(
+            "A partial operation-backed process snapshot has not inspected any requested process ids.")
+        : _failure;
 
     public bool TryGetRecord(int processId, out ProcessInspectionRecord record)
     {
@@ -276,7 +284,8 @@ public sealed class ProcessCommandLineSnapshot
         }
 
         var inspected = _readRecords(missing);
-        Failure ??= inspected.Failure;
+        _hasLazyRead = true;
+        _failure ??= inspected.Failure;
         foreach (var pair in inspected.Records)
         {
             _records[pair.Key] = pair.Value;

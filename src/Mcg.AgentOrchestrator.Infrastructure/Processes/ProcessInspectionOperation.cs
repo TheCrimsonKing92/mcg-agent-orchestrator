@@ -58,7 +58,7 @@ internal sealed class ProcessInspectionOperation
             .Where(seed => query.ParentProcessIds.Contains(seed.ParentProcessId))
             .Select(seed => seed.ProcessId));
         selected.UnionWith(_seeds
-            .Where(seed => query.ProcessNames.Contains(seed.Name))
+            .Where(seed => query.ProcessNames.Any(pattern => MatchesName(pattern, seed.Name)))
             .Select(seed => seed.ProcessId));
 
         if (query.IncludeChildren)
@@ -75,6 +75,11 @@ internal sealed class ProcessInspectionOperation
             selected.OrderBy(id => id).Select(id => _seedsById[id]),
             query.ProcessIds);
     }
+
+    private static bool MatchesName(string pattern, string processName) =>
+        pattern.EndsWith('*')
+            ? processName.StartsWith(pattern[..^1], StringComparison.OrdinalIgnoreCase)
+            : processName.Equals(pattern, StringComparison.OrdinalIgnoreCase);
 
     private WindowsNativeProcessInspection.ProcessInspectionResult ReadSeeds(
         IEnumerable<WindowsNativeProcessInspection.ProcessInspectionSeed> seeds,

@@ -624,6 +624,7 @@ internal static partial class DashboardEndpoints
         }
 
         var runner = new BackgroundDispatchRunner();
+        var processInspection = new ProcessInspectionSnapshotScope(ProcessCommandLines.SnapshotOperation);
         var outcome = runner.ReconcileLatestProcess(snapshot, snapshotGoal.Id, snapshotTask.Id);
         return await MutateAsync(
             services,
@@ -631,7 +632,12 @@ internal static partial class DashboardEndpoints
             {
                 var goal = ResolveGoal(current, goalId);
                 var task = OrchestratorEntityResolver.GetTaskByDisplayNumber(goal, taskId);
-                runner.ApplyRefreshOutcomeAndWriteDiagnostics(current, goal.Id, task.Id, outcome);
+                runner.ApplyRefreshOutcomeAndWriteDiagnostics(
+                    current,
+                    goal.Id,
+                    task.Id,
+                    outcome,
+                    processInspection.Get);
                 AutonomyPolicyEvidence.Record(current, goal, policy, AutonomyAction.Refresh, "refresh", allowed: true);
                 var updatedGoal = ResolveGoal(current, goalId);
                 var updatedTask = OrchestratorEntityResolver.GetTaskByDisplayNumber(updatedGoal, taskId);
@@ -669,9 +675,9 @@ internal static partial class DashboardEndpoints
             {
                 var goal = ResolveGoal(current, goalId);
                 var refreshed = new List<TaskSpec>();
-                foreach (var (refreshTaskId, outcome) in outcomes)
+                runner.ApplyRefreshOutcomesAndWriteDiagnostics(current, goal.Id, outcomes);
+                foreach (var (refreshTaskId, _) in outcomes)
                 {
-                    runner.ApplyRefreshOutcomeAndWriteDiagnostics(current, goal.Id, refreshTaskId, outcome);
                     refreshed.Add(current.GetTask(goal.Id, refreshTaskId));
                 }
 

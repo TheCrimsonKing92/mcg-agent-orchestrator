@@ -5433,32 +5433,6 @@ public sealed class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
         }
     }
 
-    private static string? TryProcessName(int processId)
-    {
-        try
-        {
-            using var process = Process.GetProcessById(processId);
-            return process.ProcessName;
-        }
-        catch
-        {
-            return null;
-        }
-    }
-
-    private static DateTimeOffset? TryProcessStartTime(int processId)
-    {
-        try
-        {
-            using var process = Process.GetProcessById(processId);
-            return new DateTimeOffset(process.StartTime.ToUniversalTime(), TimeSpan.Zero);
-        }
-        catch
-        {
-            return null;
-        }
-    }
-
     private static int? TryGetStableSlotIndex(DotnetBuildEnvironment environment)
     {
         const string prefix = "run-build-";

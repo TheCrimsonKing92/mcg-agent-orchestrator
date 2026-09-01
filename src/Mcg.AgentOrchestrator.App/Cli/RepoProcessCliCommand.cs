@@ -272,9 +272,20 @@ internal static class RepoProcessCliCommand
 
     private static bool MatchesNames(ProcessSnapshot snapshot, IReadOnlyList<string> names) =>
         names.Count == 0 ||
-        names.Any(name =>
-            snapshot.Name.Equals(name, StringComparison.OrdinalIgnoreCase) ||
-            snapshot.Name.Equals(Path.GetFileNameWithoutExtension(name), StringComparison.OrdinalIgnoreCase));
+        names.Any(name => MatchesProcessName(NormalizeProcessName(name), snapshot.Name));
+
+    private static bool MatchesProcessName(string pattern, string processName) =>
+        pattern.EndsWith('*')
+            ? processName.StartsWith(pattern[..^1], StringComparison.OrdinalIgnoreCase)
+            : processName.Equals(pattern, StringComparison.OrdinalIgnoreCase);
+
+    private static string NormalizeProcessName(string name)
+    {
+        var fileName = Path.GetFileName(name);
+        return fileName.EndsWith(".exe", StringComparison.OrdinalIgnoreCase)
+            ? fileName[..^4]
+            : fileName;
+    }
 
     private static bool MatchesCommand(ProcessSnapshot snapshot, IReadOnlyList<string> needles) =>
         needles.Count == 0 ||
@@ -452,12 +463,12 @@ internal static class RepoProcessCliCommand
         internal static ProcessSnapshotQuery From(RepoProcessOptions options)
         {
             var names = options.Names
-                .Select(name => Path.GetFileNameWithoutExtension(name))
+                .Select(NormalizeProcessName)
                 .Where(name => !string.IsNullOrWhiteSpace(name))
                 .ToHashSet(StringComparer.OrdinalIgnoreCase);
             if (options.LocksOnly)
             {
-                names.UnionWith(["dotnet", "DispatchProcessHost", "Mcg.AgentOrchestrator.App"]);
+                names.UnionWith(["dotnet", "DispatchProcessHost", "Mcg.AgentOrchestrator*"]);
             }
 
             var includeAll = options.CommandContains.Count > 0 && names.Count == 0;

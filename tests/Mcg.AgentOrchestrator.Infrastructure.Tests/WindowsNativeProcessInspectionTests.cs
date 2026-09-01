@@ -338,6 +338,56 @@ public sealed class WindowsNativeProcessInspectionTests
     }
 
     [Xunit.Fact]
+    public void Operation_PrefixQuery_ReadsFamilyCandidates()
+    {
+        var readIds = new List<int>();
+        var operation = new ProcessInspectionOperation(
+            WindowsNativeProcessInspection.ProcessEnumerationResult.Success(
+            [
+                new WindowsNativeProcessInspection.ProcessInspectionSeed(41, 1, "Mcg.AgentOrchestrator.Tests"),
+                new WindowsNativeProcessInspection.ProcessInspectionSeed(99, 1, "unrelated")
+            ]),
+            seed =>
+            {
+                readIds.Add(seed.ProcessId);
+                return new ProcessInspectionRecord(
+                    seed.ProcessId,
+                    seed.ParentProcessId,
+                    seed.Name,
+                    null,
+                    null,
+                    null,
+                    ProcessInspectionStatus.AccessDenied);
+            });
+
+        var result = operation.ReadCandidates(new ProcessInspectionQuery(
+            new HashSet<int>(),
+            new HashSet<int>(),
+            new HashSet<string>(["Mcg.AgentOrchestrator*"], StringComparer.OrdinalIgnoreCase),
+            IncludeChildren: false,
+            IncludeAll: false,
+            AncestorProcessIds: new HashSet<int>()));
+
+        Assert.Equal<int>([41], readIds);
+        Assert.Contains(41, result.Records.Keys);
+        Assert.DoesNotContain(99, result.Records.Keys);
+    }
+
+    [Xunit.Fact]
+    public void Snapshot_LazyRecordsAccess_FailsLoudly()
+    {
+        var snapshot = new ProcessCommandLineSnapshot(_ =>
+            WindowsNativeProcessInspection.ProcessInspectionResult.Success(
+                new Dictionary<int, ProcessInspectionRecord>()));
+
+        var failureError = Assert.Throws<InvalidOperationException>(() => snapshot.Failure);
+        var error = Assert.Throws<InvalidOperationException>(() => snapshot.Records);
+
+        Assert.Contains("partial", failureError.Message, StringComparison.OrdinalIgnoreCase);
+        Assert.Contains("partial", error.Message, StringComparison.OrdinalIgnoreCase);
+    }
+
+    [Xunit.Fact]
     public void ReadRequested_AccessDeniedProcess_RetainsEnumeratedParent()
     {
         var records = WindowsNativeProcessInspection.ReadRequested(

@@ -733,6 +733,23 @@ public sealed class BackgroundDispatchRunner
             (getProcessSnapshot ?? _processCommandLineSnapshotFactory)());
     }
 
+    public void ApplyRefreshOutcomesAndWriteDiagnostics(
+        AgentOrchestratorKernel kernel,
+        GoalId goalId,
+        IReadOnlyList<(TaskId TaskId, DispatchRefreshOutcome Outcome)> outcomes)
+    {
+        var processInspection = new ProcessInspectionSnapshotScope(_processCommandLineSnapshotFactory);
+        foreach (var (taskId, outcome) in outcomes)
+        {
+            ApplyRefreshOutcomeAndWriteDiagnostics(
+                kernel,
+                goalId,
+                taskId,
+                outcome,
+                processInspection.Get);
+        }
+    }
+
     public DispatchRefreshOutcome ReconcileLatestProcess(AgentOrchestratorKernel kernel, GoalId goalId, TaskId taskId)
     {
         var task = kernel.GetTask(goalId, taskId);

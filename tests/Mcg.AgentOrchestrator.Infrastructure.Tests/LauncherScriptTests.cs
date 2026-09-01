@@ -1313,13 +1313,21 @@ public sealed class LauncherScriptTests
             nativeInventory.AddRange(
             [
                 new RepoProcessCliCommand.ProcessSnapshot(200, 1, "dotnet", null, null, null, ProcessInspectionStatus.AccessDenied),
+                new RepoProcessCliCommand.ProcessSnapshot(201, 1, "Mcg.AgentOrchestrator.Tests", null, null, null, ProcessInspectionStatus.AccessDenied),
                 new RepoProcessCliCommand.ProcessSnapshot(300, 1, "System", null, null, null, ProcessInspectionStatus.AccessDenied),
                 new RepoProcessCliCommand.ProcessSnapshot(301, 1, "Registry", null, null, null, ProcessInspectionStatus.AccessDenied),
                 new RepoProcessCliCommand.ProcessSnapshot(400, 1, "dotnet", null, null, null, ProcessInspectionStatus.Exited),
                 new RepoProcessCliCommand.ProcessSnapshot(401, 1, "dotnet", null, null, null, ProcessInspectionStatus.DeadOrRecycled)
             ]);
             RepoProcessCliCommand.PrintInfo(
-                ["repo-process-info", "--command-contains", " ", "--newest", "2147483647"],
+                [
+                    "repo-process-info",
+                    "--name", "dotnet",
+                    "--name", "DispatchProcessHost",
+                    "--name", "Mcg.AgentOrchestrator*",
+                    "--command-contains", " ",
+                    "--newest", "2147483647"
+                ],
                 inventoryOutput,
                 _ => nativeInventory);
             File.WriteAllText(inventoryPath, inventoryOutput.ToString());
@@ -1344,6 +1352,15 @@ public sealed class LauncherScriptTests
                 }
                 if ($Newest -ne [int]::MaxValue) {
                     throw "Expected unbounded helper projection for operation-scoped inventory."
+                }
+                $expectedNames = @('dotnet', 'DispatchProcessHost', 'Mcg.AgentOrchestrator*')
+                if ($Name.Count -ne $expectedNames.Count) {
+                    throw "Expected three native name seeds, got $($Name.Count)."
+                }
+                foreach ($expectedName in $expectedNames) {
+                    if ($Name -notcontains $expectedName) {
+                        throw "Missing native name seed '$expectedName'."
+                    }
                 }
                 Add-Content -LiteralPath '{{EscapePowerShellSingleQuoted(invocationPath)}}' -Value 'enumerated'
                 Get-Content -LiteralPath '{{EscapePowerShellSingleQuoted(inventoryPath)}}'
@@ -1380,8 +1397,10 @@ public sealed class LauncherScriptTests
             Assert.DoesNotContain("LOCK id=103", result.Stdout);
             const string relevantUnavailable = "PROCESS_QUERY_UNAVAILABLE operation=filter id=200 name=dotnet status=AccessDenied";
             Assert.Equal(1, result.Stdout.Split(relevantUnavailable, StringSplitOptions.None).Length - 1);
+            Assert.Contains(
+                "PROCESS_QUERY_UNAVAILABLE operation=filter id=201 name=Mcg.AgentOrchestrator.Tests status=AccessDenied",
+                result.Stdout);
             Assert.Contains("lock query incomplete: relevant process inspection was unavailable", result.Stdout);
-            Assert.Contains("PROCESS_QUERY_SUMMARY operation=filter-incidental count=2", result.Stdout);
             Assert.DoesNotContain("operation=filter id=300", result.Stdout);
             Assert.DoesNotContain("operation=filter id=301", result.Stdout);
             Assert.DoesNotContain("id=400", result.Stdout);
