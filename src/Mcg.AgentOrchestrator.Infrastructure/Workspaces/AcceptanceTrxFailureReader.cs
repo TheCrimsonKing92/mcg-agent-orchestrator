@@ -87,19 +87,17 @@ internal static class AcceptanceTrxFailureReader
 
     private static string? ResolveTestName(XElement result, XElement? definition)
     {
-        var testName = result.Attribute("testName")?.Value?.Trim();
-        if (!string.IsNullOrWhiteSpace(testName))
-        {
-            return testName;
-        }
-
         var testMethod = definition?.Descendants().FirstOrDefault(element =>
             element.Name.LocalName.Equals("TestMethod", StringComparison.Ordinal));
         var className = testMethod?.Attribute("className")?.Value?.Trim();
         var methodName = testMethod?.Attribute("name")?.Value?.Trim();
-        return !string.IsNullOrWhiteSpace(className) && !string.IsNullOrWhiteSpace(methodName)
-            ? $"{className}.{methodName}"
-            : null;
+        if (!string.IsNullOrWhiteSpace(className) && !string.IsNullOrWhiteSpace(methodName))
+        {
+            return $"{className}.{methodName}";
+        }
+
+        var testName = result.Attribute("testName")?.Value?.Trim();
+        return string.IsNullOrWhiteSpace(testName) ? null : testName;
     }
 
     private static string? ElementValue(XElement? parent, string localName) =>

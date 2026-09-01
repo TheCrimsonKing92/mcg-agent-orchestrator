@@ -187,6 +187,7 @@ public static class AcceptanceFailureClassifications
     public const string InheritedBaselineApparatus = "inherited-baseline-apparatus";
     public const string StructuralCoverageFailed = "structural-coverage-failed";
     public const string FocusedSelectionApparatusFailure = "focused-selection-apparatus-failure";
+    public const string FocusedSelectionAbsentAtBaseline = "focused-selection-absent-at-baseline";
     public const string RetryEvidenceRetentionFailed = "retry-evidence-retention-failed";
     public const string FocusedSelectionReceiptUnreadable = "focused-selection-receipt-unreadable";
     public const string SeededRepositoryProcessOutputApparatus = "seeded-repository-process-output-apparatus";
@@ -1053,7 +1054,7 @@ public sealed class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
         }
 
         var selectors = identities
-            .Select(NormalizeTestIdentitySelection)
+            .Select(AcceptanceFailureAttributionPlanner.NormalizeIdentity)
             .ToArray();
         if (selectors.Any(selector => selector.Length == 0 ||
                 !Regex.IsMatch(selector, @"^[A-Za-z_][A-Za-z0-9_.]*$")))
@@ -1061,18 +1062,11 @@ public sealed class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
             return Unattributed("failing test identity cannot be represented by an exact focused selector");
         }
 
-        var request =
-            $"{ProjectLabel(manifestCheck.Project)}: " +
-            string.Join("|", selectors.Select(selector => $"FullyQualifiedName~{selector}"));
-        if (!TryBuildFocusedEvidenceChecks(
-                request,
-                engineSettings,
-                worktreePath,
-                out var focusedChecks,
-                out var coverage,
-                out var rejection))
+        var selectionPlan = AcceptanceFailureAttributionPlanner.BuildCandidateSelections(
+            ProjectLabel(manifestCheck.Project), selectors, engineSettings, worktreePath);
+        if (!selectionPlan.Succeeded)
         {
-            return Unattributed($"focused baseline selection unavailable: {rejection.Detail}");
+            return Unattributed(selectionPlan.FailureEvidence!);
         }
 
         var baselineSha = ResolveGitScalar(worktreePath, "merge-base", "HEAD", "main");
@@ -1083,11 +1077,12 @@ public sealed class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
                 worktreePath,
                 baselineSha,
                 goalId,
-                focusedChecks,
-                coverage,
+                selectionPlan.Checks,
+                selectionPlan.Coverage,
                 stableSlotIndex,
                 stableSlotLease,
-                cancellationToken).ConfigureAwait(false);
+                cancellationToken,
+                classifyMissingSelectionsAsAbsent: true).ConfigureAwait(false);
         }
         catch (OperationCanceledException)
         {
@@ -1098,40 +1093,9 @@ public sealed class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
             return Unattributed($"focused baseline execution failed: {ex.GetType().Name}");
         }
 
-        if (baseline.Disposition is FindingEvidenceArmDisposition.ApparatusFailure or
-            FindingEvidenceArmDisposition.Inconclusive)
-        {
-            return Unattributed(
-                $"focused baseline was {ArmDispositionWireValue(baseline.Disposition)} at {baseline.Sha}");
-        }
-
-        var baselineFailures = baseline.Checks
-            .SelectMany(result => result.FailingTestIdentities ?? [])
-            .Select(NormalizeTestIdentitySelection)
-            .ToHashSet(StringComparer.Ordinal);
-        var attributions = identities
-            .Select((identity, index) =>
-            {
-                var inherited = baseline.Disposition == FindingEvidenceArmDisposition.Red &&
-                    baselineFailures.Contains(selectors[index]);
-                return new AcceptanceTestFailureAttribution(
-                    identity,
-                    inherited
-                        ? AcceptanceTestFailureOrigin.Inherited
-                        : AcceptanceTestFailureOrigin.Introduced,
-                    inherited
-                        ? $"same focused identity failed at merge-base {baseline.Sha}"
-                        : $"focused identity was green at merge-base {baseline.Sha}");
-            })
-            .ToArray();
+        var attributions = AcceptanceFailureAttributionPlanner.ClassifyBaselineFailures(
+            identities, selectors, selectionPlan.CheckNamesBySelector, baseline);
         return check with { FailingTestAttributions = attributions };
-    }
-
-    private static string NormalizeTestIdentitySelection(string identity)
-    {
-        var normalized = identity.Trim();
-        var parameterStart = normalized.IndexOfAny(['(', '[']);
-        return parameterStart < 0 ? normalized : normalized[..parameterStart];
     }
 
     internal static AcceptanceCheckResult AttachFailureCauseEvidence(AcceptanceCheckResult check)
@@ -1493,7 +1457,8 @@ public sealed class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
         FocusedEvidenceCoverage coverage,
         int? stableSlotIndex,
         DotnetBuildEnvironmentLease? stableSlotLease,
-        CancellationToken cancellationToken)
+        CancellationToken cancellationToken,
+        bool classifyMissingSelectionsAsAbsent = false)
     {
         if (string.IsNullOrWhiteSpace(baselineSha))
         {
@@ -1520,26 +1485,60 @@ public sealed class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
         GoalId? baselineEnvironmentId = null;
         try
         {
+            var sourcePlan = new AcceptanceFailureAttributionPlanner.BaselineSourceSelectionPlan(
+                focusedChecks,
+                []);
+            if (classifyMissingSelectionsAsAbsent)
+            {
+                sourcePlan = AcceptanceFailureAttributionPlanner.BuildBaselineSourceSelections(
+                    baselineSha,
+                    focusedChecks,
+                    ProjectLabel,
+                    EngineSettings,
+                    baselinePath);
+            }
+
             // The baseline owns a fresh artifact environment. Sharing candidate artifacts could make
             // a structurally broken baseline look like a meaningful RED arm.
-            baselineEnvironmentId = GoalId.New();
-            baselineEnvironment = DotnetBuildEnvironmentManager.CreateAttempt(
-                baselineEnvironmentId,
-                $"focused-evidence-baseline-{baselineSha[..Math.Min(8, baselineSha.Length)]}");
-            return await RunFocusedEvidenceArmAsync(
-                FindingEvidenceArm.Baseline,
-                baselineSha,
-                baselinePath,
-                // Ownerless execution gets an invocation-local build environment. Passing the goal
-                // id here would reuse candidate artifacts and invalidate the negative control.
-                null,
+            FocusedEvidenceArmRunResult executedArm;
+            if (sourcePlan.ExecutableChecks.Count == 0)
+            {
+                executedArm = new FocusedEvidenceArmRunResult(
+                    FindingEvidenceArm.Baseline,
+                    baselineSha,
+                    FindingEvidenceArmDisposition.Inconclusive,
+                    Accepted: true,
+                    Passed: false,
+                    "no focused baseline checks required execution",
+                    []);
+            }
+            else
+            {
+                baselineEnvironmentId = GoalId.New();
+                baselineEnvironment = DotnetBuildEnvironmentManager.CreateAttempt(
+                    baselineEnvironmentId,
+                    $"focused-evidence-baseline-{baselineSha[..Math.Min(8, baselineSha.Length)]}");
+                executedArm = await RunFocusedEvidenceArmAsync(
+                    FindingEvidenceArm.Baseline,
+                    baselineSha,
+                    baselinePath,
+                    // Ownerless execution gets an invocation-local build environment. Passing the goal
+                    // id here would reuse candidate artifacts and invalidate the negative control.
+                    null,
+                    sourcePlan.ExecutableChecks,
+                    coverage,
+                    stableSlotIndex,
+                    stableSlotLease,
+                    baselineEnvironment,
+                    shutdownBuildServers: true,
+                    cancellationToken: cancellationToken).ConfigureAwait(false);
+            }
+
+            return AcceptanceFailureAttributionPlanner.CombineBaselineArm(
                 focusedChecks,
-                coverage,
-                stableSlotIndex,
-                stableSlotLease,
-                baselineEnvironment,
-                shutdownBuildServers: true,
-                cancellationToken: cancellationToken).ConfigureAwait(false);
+                executedArm,
+                sourcePlan.SourceClassificationChecks,
+                ClassifyFocusedEvidenceArm);
         }
         finally
         {
@@ -2212,7 +2211,7 @@ public sealed class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
             .Distinct(StringComparer.OrdinalIgnoreCase)
             .ToArray();
 
-    private static bool TryBuildFocusedEvidenceChecks(
+    internal static bool TryBuildFocusedEvidenceChecks(
         string request,
         AcceptanceGateEngineSettings engineSettings,
         string worktreePath,

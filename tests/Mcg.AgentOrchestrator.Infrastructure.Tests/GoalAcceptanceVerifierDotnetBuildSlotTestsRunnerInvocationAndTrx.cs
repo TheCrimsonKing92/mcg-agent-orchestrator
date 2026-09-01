@@ -289,7 +289,7 @@ public sealed class GoalAcceptanceVerifierDotnetBuildSlotTestsRunnerInvocationAn
             "at Mcg.AgentOrchestrator.Infrastructure.Tests.RetryEvidenceTests.IncludesFailures() in D:\\a\\mcg-agent-orchestrator\\RetryEvidenceTests.cs:line 42",
             assertion.StackTrace);
         Assert.Equal(
-            "Mcg.AgentOrchestrator.Infrastructure.Tests.MtpShardTests.PreservesTheoryDisplayName(value: 42)",
+            "Mcg.AgentOrchestrator.Infrastructure.Tests.MtpShardTests.PreservesTheoryDisplayName",
             receipt.Failures[1].TestName);
         Assert.Equal("Timeout", receipt.Failures[2].Outcome);
         Assert.Contains("30 second partition timeout", receipt.Failures[2].Message, StringComparison.Ordinal);

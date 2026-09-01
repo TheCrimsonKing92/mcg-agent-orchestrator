@@ -341,6 +341,65 @@ public sealed class GoalAcceptanceVerifierDotnetBuildSlotTestsFocusedEvidence : 
         Assert.Equal(FindingEvidenceOutcomeReason.ApparatusFailure, outcome);
     }
 
+    [Xunit.Fact(DisplayName = "GoalAcceptanceVerifier_new_test_absent_at_baseline_does_not_poison_attribution")]
+    public void NewTestAbsentAtBaselineDoesNotPoisonAttribution()
+    {
+        const string introduced = "Sample.Tests.NewFailure";
+        const string inherited = "Sample.Tests.ExistingFailure";
+        const string ambiguous = "Sample.Tests.AmbiguousZeroMatch";
+        const string introducedCheck = "focused new failure";
+        const string inheritedCheck = "focused existing failure";
+        const string ambiguousCheck = "focused ambiguous failure";
+        var baseline = new FocusedEvidenceArmRunResult(
+            FindingEvidenceArm.Baseline,
+            "main-a",
+            FindingEvidenceArmDisposition.ApparatusFailure,
+            Accepted: true,
+            Passed: false,
+            "one selector is absent and one is red",
+            [
+                new AcceptanceCheckResult(
+                    introducedCheck,
+                    false,
+                    null,
+                    "absent from baseline source",
+                    FailureClassification: AcceptanceFailureClassifications.FocusedSelectionAbsentAtBaseline,
+                    ExecutedTestCount: 0),
+                new AcceptanceCheckResult(
+                    inheritedCheck,
+                    false,
+                    1,
+                    "existing failure",
+                    FailingTestIdentities: [inherited],
+                    ExecutedTestCount: 1),
+                new AcceptanceCheckResult(
+                    ambiguousCheck,
+                    false,
+                    8,
+                    "executed 0 tests",
+                    FailureClassification: AcceptanceFailureClassifications.FocusedSelectionApparatusFailure,
+                    ExecutedTestCount: 0)
+            ]);
+
+        var attributions = AcceptanceFailureAttributionPlanner.ClassifyBaselineFailures(
+            [introduced, inherited, ambiguous],
+            [introduced, inherited, ambiguous],
+            new Dictionary<string, string>(StringComparer.Ordinal)
+            {
+                [introduced] = introducedCheck,
+                [inherited] = inheritedCheck,
+                [ambiguous] = ambiguousCheck
+            },
+            baseline);
+
+        Assert.Equal(AcceptanceTestFailureOrigin.Introduced, attributions[0].Origin);
+        Assert.Contains("absent at merge-base", attributions[0].Evidence, StringComparison.Ordinal);
+        Assert.Equal(AcceptanceTestFailureOrigin.Inherited, attributions[1].Origin);
+        Assert.Contains("same focused identity failed", attributions[1].Evidence, StringComparison.Ordinal);
+        Assert.Equal(AcceptanceTestFailureOrigin.Unattributed, attributions[2].Origin);
+        Assert.Contains("apparatus was unavailable", attributions[2].Evidence, StringComparison.Ordinal);
+    }
+
     [Xunit.Fact]
     public async Task FocusedEvidence_TwoReceiptTargetsAcrossProjects_PreserveFocusedChecks()
     {

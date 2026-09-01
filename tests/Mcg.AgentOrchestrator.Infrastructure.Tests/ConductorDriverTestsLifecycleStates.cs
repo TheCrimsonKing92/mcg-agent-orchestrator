@@ -948,8 +948,8 @@ public sealed partial class ConductorDriverTestsLifecycleStates
         PassVerification(kernel, goal, task);
         var retryCalled = false;
         var identity = ExtractCanonicalTrxFailureIdentity(
-            "Mcg.AgentOrchestrator.Infrastructure.Tests.DotnetBuildEnvironmentManagerTests",
-            "NoHolderArtifactPrepLockRetriesAndAcquires",
+            "Mcg.AgentOrchestrator.Infrastructure.Tests.DotnetBuildEnvironmentManagerTestsLockAttributionLandingFixtures",
+            "DotnetBuildEnvironmentManagerNoHolderArtifactPrepLockRetriesAndAcquires",
             "DotnetBuildEnvironmentManager_no_holder_artifact_prep_lock_retries_and_acquires");
         var unmet = new AcceptanceCheckResult(
             "infrastructure tests: Remainder",
@@ -1010,7 +1010,7 @@ public sealed partial class ConductorDriverTestsLifecycleStates
         PassVerification(kernel, goal, task);
         var retryCalled = false;
         const string identity =
-            "Mcg.AgentOrchestrator.Infrastructure.Tests.CliCommandTests.BacklogListShowsOpenItems";
+            "Mcg.AgentOrchestrator.Infrastructure.Tests.CliCommandTestsBacklogIntakeCommands.CliBacklogListSplitsLimitStatusAndTextFlags";
         var unmet = new AcceptanceCheckResult(
             "infrastructure tests: Remainder",
             false,
@@ -1061,23 +1061,13 @@ public sealed partial class ConductorDriverTestsLifecycleStates
         try
         {
             const string impacted =
-                "Mcg.AgentOrchestrator.Infrastructure.Tests.CliCommandTests.BacklogListShowsOpenItems";
+                "Mcg.AgentOrchestrator.Infrastructure.Tests.CliCommandTestsBacklogIntakeCommands.CliBacklogListSplitsLimitStatusAndTextFlags";
             const string unrelated =
-                "Mcg.AgentOrchestrator.Infrastructure.Tests.DotnetBuildEnvironmentManagerTests.NoHolderArtifactPrepLockRetriesAndAcquires";
-            new XDocument(
-                new XElement(
-                    "TestRun",
-                    new XElement(
-                        "Results",
-                        new XElement(
-                            "UnitTestResult",
-                            new XAttribute("testName", impacted),
-                            new XAttribute("outcome", "Failed")),
-                        new XElement(
-                            "UnitTestResult",
-                            new XAttribute("testName", unrelated),
-                            new XAttribute("outcome", "Failed")))))
-                .Save(trxPath);
+                "Mcg.AgentOrchestrator.Infrastructure.Tests.DotnetBuildEnvironmentManagerTestsLockAttributionLandingFixtures.DotnetBuildEnvironmentManagerNoHolderArtifactPrepLockRetriesAndAcquires";
+            AcceptanceFailureAttributionTestFixtures.WriteFailedTrx(
+                trxPath,
+                (impacted, "Cli_backlog_list_splits_limit_status_and_text_flags"),
+                (unrelated, "DotnetBuildEnvironmentManager_no_holder_artifact_prep_lock_retries_and_acquires"));
             var (kernel, goal) = SimpleGoal();
             var task = goal.Tasks.Single();
             PassVerification(kernel, goal, task);
