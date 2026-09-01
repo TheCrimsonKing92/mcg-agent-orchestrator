@@ -24,12 +24,7 @@ public sealed partial class ConductorDriverTestsLifecycleStates
                     "baseline identity evidence unavailable")
             ]
             :
-            [
-                new AcceptanceTestFailureAttribution(
-                    "Mcg.AgentOrchestrator.Infrastructure.Tests.OtherTests.InheritedFailure",
-                    AcceptanceTestFailureOrigin.Inherited,
-                    "different identity failed at merge-base main-a")
-            ];
+            [];
         var (kernel, goal) = SimpleGoal();
         var task = goal.Tasks.Single();
         PassVerification(kernel, goal, task);
@@ -54,13 +49,19 @@ public sealed partial class ConductorDriverTestsLifecycleStates
                 [
                     new AcceptanceCheckAttribution(
                         unmet.Name,
-                        AcceptanceFailureOrigin.Introduced,
-                        "main is attested green")
+                        AcceptanceFailureOrigin.Inherited,
+                        "same check name also failed on main; identity attribution is unproven")
                 ]),
-            retryTask: (goalId, taskId, message) =>
+            retryTaskWithCause: (goalId, taskId, message, roundKind, cause) =>
             {
                 retryCalled = true;
-                return kernel.RetryTask(goalId, taskId, message);
+                Assert.Equal(RetryCause.CriterionEvidenceOwnerMismatch, cause);
+                return kernel.RetryTask(
+                    goalId,
+                    taskId,
+                    message,
+                    retryRoundKind: roundKind,
+                    retryCause: cause);
             },
             recordCriterionRetryFeedback: kernel.RecordCriterionRetryFeedback,
             getLandingFileScopes: _ =>
@@ -113,10 +114,16 @@ public sealed partial class ConductorDriverTestsLifecycleStates
                 MainHeadSha: "main-a",
                 CheckAttributions: [attribution],
                 BaselineAttestation: CleanTestBaseline.FormatFailureAttestation(baseline)),
-            retryTask: (goalId, taskId, message) =>
+            retryTaskWithCause: (goalId, taskId, message, roundKind, cause) =>
             {
                 retryCalled = true;
-                return kernel.RetryTask(goalId, taskId, message);
+                Assert.Equal(RetryCause.CriterionEvidenceOwnerMismatch, cause);
+                return kernel.RetryTask(
+                    goalId,
+                    taskId,
+                    message,
+                    retryRoundKind: roundKind,
+                    retryCause: cause);
             },
             recordCriterionRetryFeedback: kernel.RecordCriterionRetryFeedback);
 
@@ -176,10 +183,16 @@ public sealed partial class ConductorDriverTestsLifecycleStates
             var driver = MakeDriver(
                 getFacts: _ => GoalLifecycleFacts.None,
                 runAcceptanceSummary: _ => new AcceptanceVerificationSummary(true, [unmet]),
-                retryTask: (goalId, taskId, message) =>
+                retryTaskWithCause: (goalId, taskId, message, roundKind, cause) =>
                 {
                     retryMessage = message;
-                    return kernel.RetryTask(goalId, taskId, message);
+                    Assert.Equal(RetryCause.CriterionEvidenceOwnerMismatch, cause);
+                    return kernel.RetryTask(
+                        goalId,
+                        taskId,
+                        message,
+                        retryRoundKind: roundKind,
+                        retryCause: cause);
                 },
                 recordCriterionRetryFeedback: kernel.RecordCriterionRetryFeedback);
 
@@ -188,6 +201,82 @@ public sealed partial class ConductorDriverTestsLifecycleStates
             Assert.Contains("TimeoutOnlyTests.Expires (Timeout)", retryMessage!, StringComparison.Ordinal);
             Assert.Contains("30 second partition timeout", retryMessage!, StringComparison.Ordinal);
             Assert.DoesNotContain("contained no attributable non-passing results", retryMessage!, StringComparison.Ordinal);
+        }
+        finally
+        {
+            Directory.Delete(tempDirectory, recursive: true);
+        }
+    }
+
+    [Xunit.Fact]
+    public void OmittedAttributionIdentityReachesDeveloperFeedback()
+    {
+        var tempDirectory = CreateTempDirectory();
+        var trxPath = Path.Combine(tempDirectory, "attribution-cap.trx");
+        try
+        {
+            var identities = Enumerable
+                .Range(0, GoalAcceptanceVerifier.MaxFailureAttributionFocusedEvidenceIdentities + 1)
+                .Select(index => $"Example.Tests.AttributionCapTests.Failure{index:D2}")
+                .ToArray();
+            AcceptanceFailureAttributionTestFixtures.WriteFailedTrx(
+                trxPath,
+                identities.Select(identity => (identity, identity)).ToArray());
+            var attributions = identities
+                .Take(GoalAcceptanceVerifier.MaxFailureAttributionFocusedEvidenceIdentities)
+                .Select(identity => new AcceptanceTestFailureAttribution(
+                    identity,
+                    AcceptanceTestFailureOrigin.Inherited,
+                    "same focused identity failed at merge-base main-a"))
+                .Append(new AcceptanceTestFailureAttribution(
+                    identities[^1],
+                    AcceptanceTestFailureOrigin.Unattributed,
+                    "merge-base focused attribution omitted by deterministic cap"))
+                .ToArray();
+            var (kernel, goal) = SimpleGoal();
+            var task = goal.Tasks.Single();
+            PassVerification(kernel, goal, task);
+            string? retryMessage = null;
+            var unmet = new AcceptanceCheckResult(
+                "infrastructure tests: attribution cap",
+                false,
+                1,
+                "candidate failures exceeded attribution evidence cap",
+                TestResultPaths: [trxPath],
+                FailingTestIdentities: identities,
+                FailingTestAttributions: attributions);
+            var driver = MakeDriver(
+                getFacts: _ => GoalLifecycleFacts.None,
+                runAcceptanceSummary: _ => new AcceptanceVerificationSummary(
+                    false,
+                    [unmet],
+                    FailedChecks: [unmet.Name],
+                    CheckAttributions:
+                    [
+                        new AcceptanceCheckAttribution(
+                            unmet.Name,
+                            AcceptanceFailureOrigin.Inherited,
+                            "same check name also failed on main")
+                    ]),
+                retryTaskWithCause: (goalId, taskId, message, roundKind, cause) =>
+                {
+                    retryMessage = message;
+                    Assert.Equal(RetryCause.CriterionEvidenceOwnerMismatch, cause);
+                    return kernel.RetryTask(
+                        goalId,
+                        taskId,
+                        message,
+                        retryRoundKind: roundKind,
+                        retryCause: cause);
+                },
+                recordCriterionRetryFeedback: kernel.RecordCriterionRetryFeedback);
+
+            var result = driver.AdvanceOnce(goal, ConductorAutonomyPolicy.Conservative);
+
+            Assert.IsType<ConductorAdvanceOutcome.Executed>(result.Outcome);
+            Assert.Contains(identities[^1], retryMessage!, StringComparison.Ordinal);
+            Assert.DoesNotContain(identities[0], retryMessage!, StringComparison.Ordinal);
+            Assert.Equal(WorkTaskStatus.Assigned, task.Status);
         }
         finally
         {
@@ -252,10 +341,16 @@ public sealed partial class ConductorDriverTestsLifecycleStates
                             AcceptanceFailureOrigin.Introduced,
                             "main is attested green")
                     ]),
-                retryTask: (goalId, taskId, message) =>
+                retryTaskWithCause: (goalId, taskId, message, roundKind, cause) =>
                 {
                     retryMessage = message;
-                    return kernel.RetryTask(goalId, taskId, message);
+                    Assert.Equal(RetryCause.CriterionEvidenceOwnerMismatch, cause);
+                    return kernel.RetryTask(
+                        goalId,
+                        taskId,
+                        message,
+                        retryRoundKind: roundKind,
+                        retryCause: cause);
                 },
                 recordCriterionRetryFeedback: kernel.RecordCriterionRetryFeedback);
 
@@ -268,5 +363,51 @@ public sealed partial class ConductorDriverTestsLifecycleStates
         {
             Directory.Delete(tempDirectory, recursive: true);
         }
+    }
+
+    [Xunit.Fact(DisplayName = "ConductorDriver_inherited_failure_without_identity_proof_retries_worker")]
+    public void InheritedFailureWithoutIdentityProofRetriesWorker()
+    {
+        var (kernel, goal) = SimpleGoal();
+        var task = goal.Tasks.Single();
+        PassVerification(kernel, goal, task);
+        var retryCalled = false;
+        var rawAcceptance = new AcceptanceVerificationSummary(
+            false,
+            [new AcceptanceCheckResult("infrastructure tests: Remainder", false, 1, "inherited red")],
+            FailedChecks: ["infrastructure tests: Remainder"],
+            BranchHeadSha: "candidate-a",
+            MainHeadSha: "main-a",
+            CheckAttributions:
+            [
+                new AcceptanceCheckAttribution(
+                    "infrastructure tests: Remainder",
+                    AcceptanceFailureOrigin.Inherited,
+                    "baseline red without an apparatus receipt")
+            ],
+            BaselineAttestation: "attested-red");
+        var acceptance = ConductorDriver.ClassifyInheritedBaselineApparatus(rawAcceptance);
+        var driver = MakeDriver(
+            getFacts: _ => GoalLifecycleFacts.None,
+            runAcceptanceSummary: _ => acceptance,
+            retryTaskWithCause: (goalId, taskId, message, roundKind, cause) =>
+            {
+                retryCalled = true;
+                Assert.Equal(RetryCause.CriterionEvidenceOwnerMismatch, cause);
+                return kernel.RetryTask(
+                    goalId,
+                    taskId,
+                    message,
+                    retryRoundKind: roundKind,
+                    retryCause: cause);
+            },
+            recordCriterionRetryFeedback: kernel.RecordCriterionRetryFeedback);
+
+        var result = driver.AdvanceOnce(goal, ConductorAutonomyPolicy.Conservative);
+
+        Assert.IsType<ConductorAdvanceOutcome.Executed>(result.Outcome);
+        Assert.True(retryCalled);
+        Assert.Equal(WorkTaskStatus.Assigned, task.Status);
+        Assert.Equal(1, task.CriterionRetryCount);
     }
 }

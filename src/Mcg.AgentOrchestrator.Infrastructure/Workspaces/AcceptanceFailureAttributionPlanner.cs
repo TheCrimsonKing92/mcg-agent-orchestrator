@@ -15,6 +15,33 @@ internal static class AcceptanceFailureAttributionPlanner
         IReadOnlyList<GoalAcceptanceVerifier.AcceptanceManifestCheck> ExecutableChecks,
         IReadOnlyList<AcceptanceCheckResult> SourceClassificationChecks);
 
+    internal sealed record BoundedIdentitySelection(
+        IReadOnlyList<string> All,
+        IReadOnlyList<string> Selected,
+        IReadOnlyList<string> Omitted);
+
+    internal static BoundedIdentitySelection SelectBoundedIdentities(
+        IEnumerable<string> identities,
+        int cap)
+    {
+        var ordered = identities
+            .Where(identity => !string.IsNullOrWhiteSpace(identity))
+            .Distinct(StringComparer.Ordinal)
+            .Order(StringComparer.Ordinal)
+            .ToArray();
+        return new BoundedIdentitySelection(ordered, ordered.Take(cap).ToArray(), ordered.Skip(cap).ToArray());
+    }
+
+    internal static IReadOnlyList<AcceptanceTestFailureAttribution> IncludeOmittedAsUnattributed(
+        IEnumerable<AcceptanceTestFailureAttribution> selected,
+        IEnumerable<string> omitted,
+        int cap) =>
+        selected.Concat(omitted.Select(identity => new AcceptanceTestFailureAttribution(
+            identity,
+            AcceptanceTestFailureOrigin.Unattributed,
+            $"merge-base focused attribution omitted by deterministic cap {cap}; identity remains actionable")))
+        .ToArray();
+
     internal static CandidateSelectionPlan BuildCandidateSelections(
         string projectLabel,
         IReadOnlyList<string> selectors,

@@ -899,47 +899,6 @@ public sealed partial class ConductorDriverTestsLifecycleStates
         Xunit.Assert.Equal(3, acceptanceRuns);
     }
 
-    [Xunit.Fact(DisplayName = "ConductorDriver_inherited_acceptance_failure_holds_without_retry")]
-    public void InheritedFailureHoldsWithoutRetry()
-    {
-        var (kernel, goal) = SimpleGoal();
-        var task = goal.Tasks.Single();
-        PassVerification(kernel, goal, task);
-        var retryCalled = false;
-        var rawAcceptance = new AcceptanceVerificationSummary(
-            false,
-            [new AcceptanceCheckResult("infrastructure tests: Remainder", false, 1, "inherited red")],
-            FailedChecks: ["infrastructure tests: Remainder"],
-            BranchHeadSha: "candidate-a",
-            MainHeadSha: "main-a",
-            CheckAttributions:
-            [
-                new AcceptanceCheckAttribution(
-                    "infrastructure tests: Remainder",
-                    AcceptanceFailureOrigin.Inherited,
-                    "baseline red without an apparatus receipt")
-            ],
-            BaselineAttestation: "attested-red");
-        var acceptance = ConductorDriver.ClassifyInheritedBaselineApparatus(rawAcceptance);
-        var driver = MakeDriver(
-            getFacts: _ => GoalLifecycleFacts.None,
-            runAcceptanceSummary: _ => acceptance,
-            retryTask: (goalId, taskId, message) =>
-            {
-                retryCalled = true;
-                return kernel.RetryTask(goalId, taskId, message, RetryCause.Unknown);
-            },
-            recordCriterionRetryFeedback: kernel.RecordCriterionRetryFeedback);
-
-        var result = driver.AdvanceOnce(goal, ConductorAutonomyPolicy.Conservative);
-
-        var held = Xunit.Assert.IsType<ConductorAdvanceOutcome.Held>(result.Outcome);
-        Xunit.Assert.Contains("outside this goal's attributable scope", held.Reason, StringComparison.Ordinal);
-        Xunit.Assert.False(retryCalled);
-        Xunit.Assert.Equal(WorkTaskStatus.Completed, task.Status);
-        Xunit.Assert.Equal(0, task.CriterionRetryCount);
-    }
-
     [Xunit.Fact]
     public void IntroducedFailureOutsideChangedScopeRetries()
     {
@@ -982,10 +941,16 @@ public sealed partial class ConductorDriverTestsLifecycleStates
         var driver = MakeDriver(
             getFacts: _ => GoalLifecycleFacts.None,
             runAcceptanceSummary: _ => acceptance,
-            retryTask: (goalId, taskId, message) =>
+            retryTaskWithCause: (goalId, taskId, message, roundKind, cause) =>
             {
                 retryCalled = true;
-                return kernel.RetryTask(goalId, taskId, message);
+                Assert.Equal(RetryCause.CriterionEvidenceOwnerMismatch, cause);
+                return kernel.RetryTask(
+                    goalId,
+                    taskId,
+                    message,
+                    retryRoundKind: roundKind,
+                    retryCause: cause);
             },
             recordCriterionRetryFeedback: kernel.RecordCriterionRetryFeedback,
             getLandingFileScopes: _ =>
@@ -1032,10 +997,15 @@ public sealed partial class ConductorDriverTestsLifecycleStates
                 FailedChecks: [unmet.Name],
                 BranchHeadSha: "candidate-a",
                 MainHeadSha: "main-a"),
-            retryTask: (goalId, taskId, message) =>
+            retryTaskWithCause: (goalId, taskId, message, roundKind, cause) =>
             {
                 retryCalled = true;
-                return kernel.RetryTask(goalId, taskId, message);
+                return kernel.RetryTask(
+                    goalId,
+                    taskId,
+                    message,
+                    retryRoundKind: roundKind,
+                    retryCause: cause);
             },
             recordCriterionRetryFeedback: kernel.RecordCriterionRetryFeedback,
             getLandingFileScopes: _ =>
@@ -1106,10 +1076,16 @@ public sealed partial class ConductorDriverTestsLifecycleStates
             var driver = MakeDriver(
                 getFacts: _ => GoalLifecycleFacts.None,
                 runAcceptanceSummary: _ => acceptance,
-                retryTask: (goalId, taskId, message) =>
+                retryTaskWithCause: (goalId, taskId, message, roundKind, cause) =>
                 {
                     retryMessage = message;
-                    return kernel.RetryTask(goalId, taskId, message);
+                    Assert.Equal(RetryCause.CriterionEvidenceOwnerMismatch, cause);
+                    return kernel.RetryTask(
+                        goalId,
+                        taskId,
+                        message,
+                        retryRoundKind: roundKind,
+                        retryCause: cause);
                 },
                 recordCriterionRetryFeedback: kernel.RecordCriterionRetryFeedback,
                 getLandingFileScopes: _ =>
@@ -1194,10 +1170,16 @@ public sealed partial class ConductorDriverTestsLifecycleStates
                         AcceptanceFailureOrigin.Introduced,
                         "main is attested green")
                 ]),
-            retryTask: (goalId, taskId, message) =>
+            retryTaskWithCause: (goalId, taskId, message, roundKind, cause) =>
             {
                 retryCalled = true;
-                return kernel.RetryTask(goalId, taskId, message);
+                Assert.Equal(RetryCause.CriterionEvidenceOwnerMismatch, cause);
+                return kernel.RetryTask(
+                    goalId,
+                    taskId,
+                    message,
+                    retryRoundKind: roundKind,
+                    retryCause: cause);
             },
             recordCriterionRetryFeedback: kernel.RecordCriterionRetryFeedback,
             getLandingFileScopes: _ => [changedFile]);

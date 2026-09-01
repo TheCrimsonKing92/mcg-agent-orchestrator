@@ -265,7 +265,7 @@ public sealed class GoalAcceptanceVerifierDotnetBuildSlotTestsRunnerInvocationAn
     }
 
     [Xunit.Fact]
-    public void FailureIdentitiesRetainMixedNonpassingOutcomes()
+    public void FailureIdentitiesRetainOnlyFatalNonpassingOutcomes()
     {
         var root = CreateManifestWorkspace("""
             {
@@ -281,6 +281,7 @@ public sealed class GoalAcceptanceVerifierDotnetBuildSlotTestsRunnerInvocationAn
             {
                 (Id: "failed-1", ClassName: "MixedOutcomeTests", MethodName: "Fails", Outcome: "Failed"),
                 (Id: "timeout-1", ClassName: "MixedOutcomeTests", MethodName: "TimesOut", Outcome: "Timeout"),
+                (Id: "skipped-1", ClassName: "MixedOutcomeTests", MethodName: "Skips", Outcome: "Skipped"),
                 (Id: "not-executed-1", ClassName: "MixedOutcomeTests", MethodName: "DoesNotExecute", Outcome: "NotExecuted")
             };
             new XDocument(
@@ -311,8 +312,7 @@ public sealed class GoalAcceptanceVerifierDotnetBuildSlotTestsRunnerInvocationAn
             Assert.Equal(
                 [
                     "MixedOutcomeTests.Fails",
-                    "MixedOutcomeTests.TimesOut",
-                    "MixedOutcomeTests.DoesNotExecute"
+                    "MixedOutcomeTests.TimesOut"
                 ],
                 identities);
         }

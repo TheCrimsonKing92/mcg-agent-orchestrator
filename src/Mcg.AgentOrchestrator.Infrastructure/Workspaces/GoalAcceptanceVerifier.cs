@@ -387,6 +387,7 @@ public sealed class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
         "extracted Infrastructure test projects registered in engine.mtpInvocations also accept their " +
         "project label, file name, or full .csproj path";
     private const int FocusedEvidenceShortTimeoutTargetLimit = 4;
+    internal const int MaxFailureAttributionFocusedEvidenceIdentities = FocusedEvidenceShortTimeoutTargetLimit;
     public const string AcceptanceAttemptTrxPrefixVariable = "MCG_ACCEPTANCE_GATE_ATTEMPT_TRX_PREFIX";
 
     public static StartupContract ValidateStartupContract(string repositoryRoot)
@@ -1012,7 +1013,7 @@ public sealed class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
         }
     }
 
-    private async Task<AcceptanceCheckResult> AttachTestFailureAttributionsAsync(
+    internal async Task<AcceptanceCheckResult> AttachTestFailureAttributionsAsync(
         AcceptanceCheckResult check,
         AcceptanceManifestCheck? manifestCheck,
         AcceptanceGateEngineSettings engineSettings,
@@ -1022,16 +1023,17 @@ public sealed class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
         DotnetBuildEnvironmentLease? stableSlotLease,
         CancellationToken cancellationToken)
     {
+        using var engineScope = PushEngineSettings(engineSettings);
         if (check.Passed || check.Advisory || check.FailingTestIdentities is not { Count: > 0 } failingTestIdentities)
         {
             return check;
         }
 
-        var identities = failingTestIdentities
-            .Where(identity => !string.IsNullOrWhiteSpace(identity))
-            .Distinct(StringComparer.Ordinal)
-            .ToArray();
-        if (identities.Length == 0)
+        var identitySelection = AcceptanceFailureAttributionPlanner.SelectBoundedIdentities(
+            failingTestIdentities,
+            MaxFailureAttributionFocusedEvidenceIdentities);
+        var identities = identitySelection.All;
+        if (identities.Count == 0)
         {
             return check;
         }
@@ -1053,7 +1055,7 @@ public sealed class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
             return Unattributed("acceptance check has no exact dotnet-test project mapping");
         }
 
-        var selectors = identities
+        var selectors = identitySelection.Selected
             .Select(AcceptanceFailureAttributionPlanner.NormalizeIdentity)
             .ToArray();
         if (selectors.Any(selector => selector.Length == 0 ||
@@ -1093,8 +1095,11 @@ public sealed class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
             return Unattributed($"focused baseline execution failed: {ex.GetType().Name}");
         }
 
-        var attributions = AcceptanceFailureAttributionPlanner.ClassifyBaselineFailures(
-            identities, selectors, selectionPlan.CheckNamesBySelector, baseline);
+        var attributions = AcceptanceFailureAttributionPlanner.IncludeOmittedAsUnattributed(
+            AcceptanceFailureAttributionPlanner.ClassifyBaselineFailures(
+                identitySelection.Selected, selectors, selectionPlan.CheckNamesBySelector, baseline),
+            identitySelection.Omitted,
+            MaxFailureAttributionFocusedEvidenceIdentities);
         return check with { FailingTestAttributions = attributions };
     }
 
@@ -7317,10 +7322,7 @@ public sealed class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
             .Descendants()
             .Where(element =>
                 element.Name.LocalName.Equals("UnitTestResult", StringComparison.Ordinal) &&
-                !string.Equals(
-                    element.Attribute("outcome")?.Value?.Trim(),
-                    "Passed",
-                    StringComparison.OrdinalIgnoreCase))
+                AcceptanceTrxOutcomeTaxonomy.IsFatal(element.Attribute("outcome")?.Value))
             .Select(result =>
             {
                 definitionsByTestId.TryGetValue(
@@ -7431,8 +7433,7 @@ public sealed class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
             return false;
         }
 
-        string[] fatalCounters = ["failed", "error", "timeout", "aborted", "notRunnable"];
-        if (fatalCounters.Any(name => (TryReadTrxCounter(counters, name) ?? 0) != 0))
+        if (AcceptanceTrxOutcomeTaxonomy.HasFatalCounter(name => TryReadTrxCounter(counters, name)))
         {
             return false;
         }

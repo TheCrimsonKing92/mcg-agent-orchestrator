@@ -1221,6 +1221,7 @@ internal sealed partial class ConductorDriver
         Action<GoalId, TaskId, string>? recordReviewerEvidenceRequestReceived = null,
         Action<GoalId, TaskId, string>? recordReviewerEvidenceRunRecorded = null,
         Func<GoalId, TaskId, string, RetryRoundKind?, TaskSpec>? retryTaskWithRoundKind = null,
+        Func<GoalId, TaskId, string, RetryRoundKind?, RetryCause, TaskSpec>? retryTaskWithCause = null,
         Func<Goal, string?>? tryBuildAwaitingClarificationEscalationReason = null,
         Func<Goal, int>? getAcceptanceSlotCount = null,
         Func<int>? getWorkerAdmissionCapacity = null,
@@ -1301,12 +1302,13 @@ internal sealed partial class ConductorDriver
             ((_, _, _) => []);
         _recordPreReviewEvidence = recordPreReviewEvidence ?? ((_, _, _) => { });
         _recordPreReviewMappingEscalationSuppressed = recordPreReviewMappingEscalationSuppressed ?? ((_, _, _, _) => { });
-        _retryTask = retryTaskWithRoundKind
+        _retryTask = retryTaskWithCause
+            ?? (retryTaskWithRoundKind
             is not null
                 ? ((goalId, taskId, message, roundKind, _) => retryTaskWithRoundKind(goalId, taskId, message, roundKind))
                 : retryTask is not null
                     ? ((goalId, taskId, message, _, _) => retryTask(goalId, taskId, message))
-                    : ((_, _, _, _, _) => throw new InvalidOperationException("Retry delegate was not configured."));
+                    : ((_, _, _, _, _) => throw new InvalidOperationException("Retry delegate was not configured.")));
         _recordTaskNote = recordTaskNote ?? ((_, _, _) => { });
         _recordFindingEvidenceRequest = recordFindingEvidenceRequest ?? recordReviewerEvidenceRequestReceived ?? ((_, _, _) => { });
         _recordFindingEvidenceRun = recordFindingEvidenceRun ?? recordReviewerEvidenceRunRecorded ?? ((_, _, _) => { });
@@ -5834,9 +5836,7 @@ internal sealed partial class ConductorDriver
         var landingFileScopes = _getLandingFileScopes(goal);
         if (acceptance.RequiredUnmetCriteria.Count > 0)
         {
-            var retryDisposition = ClassifyAcceptanceRetry(
-                acceptance.RequiredUnmetCriteria,
-                acceptance.CheckAttributions);
+            var retryDisposition = ClassifyAcceptanceRetry(acceptance.RequiredUnmetCriteria);
             if (retryDisposition.ActionableCriteria.Count == 0)
             {
                 var observedHeads = _resolveAcceptanceHeads(goal);
@@ -6117,8 +6117,7 @@ internal sealed partial class ConductorDriver
             : $"pid={holder.ProcessId} name={holder.ProcessName} command=\"{holder.CommandLine}\"";
 
     private static AcceptanceRetryDisposition ClassifyAcceptanceRetry(
-        IReadOnlyList<AcceptanceCheckResult> criteria,
-        IReadOnlyList<AcceptanceCheckAttribution>? checkAttributions)
+        IReadOnlyList<AcceptanceCheckResult> criteria)
     {
         var actionable = new List<AcceptanceCheckResult>();
         var excluded = new List<ExcludedAcceptanceFailure>();
@@ -6128,23 +6127,11 @@ internal sealed partial class ConductorDriver
                 .Where(identity => !string.IsNullOrWhiteSpace(identity))
                 .Distinct(StringComparer.Ordinal)
                 .ToArray();
-            var checkAttribution = checkAttributions?.FirstOrDefault(attribution =>
-                attribution.CheckName.Equals(criterion.Name, StringComparison.Ordinal));
             if (failingIdentities is not { Length: > 0 })
             {
-                if (checkAttribution is { Origin: AcceptanceFailureOrigin.Inherited })
-                {
-                    excluded.Add(new ExcludedAcceptanceFailure(
-                        criterion.Name,
-                        AcceptanceRetryExclusionKind.Inherited));
-                }
-                else
-                {
-                    // Without an identity there is no sound changed-scope comparison. An introduced
-                    // or otherwise unclassified failure must stay actionable rather than disappear.
-                    actionable.Add(criterion);
-                }
-
+                // Check-level same-name co-failure is not proof that this exact failure existed at the
+                // merge base. Identity-less failures therefore remain actionable.
+                actionable.Add(criterion);
                 continue;
             }
 
@@ -6172,18 +6159,8 @@ internal sealed partial class ConductorDriver
             }
             else
             {
-                if (checkAttribution is { Origin: AcceptanceFailureOrigin.Inherited })
-                {
-                    foreach (var identity in failingIdentities)
-                    {
-                        excluded.Add(new ExcludedAcceptanceFailure(
-                            identity,
-                            AcceptanceRetryExclusionKind.Inherited));
-                    }
-
-                    continue;
-                }
-
+                // Only per-identity merge-base attribution can suppress a retry. Check-level baseline
+                // co-failure does not establish that these identities are inherited.
                 actionableIdentities.AddRange(failingIdentities);
             }
 

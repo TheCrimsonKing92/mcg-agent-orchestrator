@@ -427,6 +427,7 @@ public sealed class ConductorDriverTests
         Func<Goal, string, FocusedEvidenceRunResult>? runFocusedEvidence = null,
         Func<GoalId, TaskId, string, TaskSpec>? retryTask = null,
         Func<GoalId, TaskId, string, RetryRoundKind?, TaskSpec>? retryTaskWithRoundKind = null,
+        Func<GoalId, TaskId, string, RetryRoundKind?, RetryCause, TaskSpec>? retryTaskWithCause = null,
         Action<GoalId, TaskId, string>? recordTaskNote = null,
         Action<GoalId, TaskId, string>? recordReviewerEvidenceRequestReceived = null,
         Action<GoalId, TaskId, string>? recordReviewerEvidenceRunRecorded = null,
@@ -502,6 +503,7 @@ public sealed class ConductorDriverTests
             recordReviewerEvidenceRequestReceived: recordReviewerEvidenceRequestReceived,
             recordReviewerEvidenceRunRecorded: recordReviewerEvidenceRunRecorded,
             retryTaskWithRoundKind: retryTaskWithRoundKind,
+            retryTaskWithCause: retryTaskWithCause,
             buildServerShutdownTimeout: buildServerShutdownTimeout,
             writeEscalationWithResult: writeEscalationWithResult,
             getPreReviewEvidenceContext: getPreReviewEvidenceContext,
@@ -521,11 +523,6 @@ public sealed class ConductorDriverTests
             resolveAcceptanceHeads: resolveAcceptanceHeads,
             getLandingFileScopes: getLandingFileScopes,
             executionDirectory: executionDirectory);
-    }
-
-    internal sealed class ThrowingDisposable : IDisposable
-    {
-        public void Dispose() => throw new InvalidOperationException("injected cleanup failure");
     }
 
     internal static PreReviewEvidenceContext FocusedPreReviewContext(string sha) =>

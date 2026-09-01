@@ -400,6 +400,100 @@ public sealed class GoalAcceptanceVerifierDotnetBuildSlotTestsFocusedEvidence : 
         Assert.Contains("apparatus was unavailable", attributions[2].Evidence, StringComparison.Ordinal);
     }
 
+    [Xunit.Fact]
+    public async Task FailureAttributionCapsRunsAndKeepsOmittedUnattributed()
+    {
+        const string project =
+            "tests/Mcg.AgentOrchestrator.Infrastructure.Tests/Mcg.AgentOrchestrator.Infrastructure.Tests.csproj";
+        var root = CreateManifestWorkspace("""
+            {
+              "version": 1,
+              "checks": [],
+              "forbiddenChangedPathGlobs": []
+            }
+            """);
+        var projectDirectory = Path.Combine(root, "tests", "Mcg.AgentOrchestrator.Infrastructure.Tests");
+        Directory.CreateDirectory(projectDirectory);
+        File.WriteAllText(
+            Path.Combine(projectDirectory, "Mcg.AgentOrchestrator.Infrastructure.Tests.csproj"),
+            "<Project />");
+        var identities = Enumerable
+            .Range(0, GoalAcceptanceVerifier.MaxFailureAttributionFocusedEvidenceIdentities + 2)
+            .Select(index => $"Sample.Tests.AttributionCapTests.Failure{index:D2}")
+            .ToArray();
+        File.WriteAllText(
+            Path.Combine(projectDirectory, "AttributionCapTests.cs"),
+            "namespace Sample.Tests;\n\npublic sealed class AttributionCapTests\n{\n" +
+            string.Join("\n", identities.Select(identity =>
+                $"    [Xunit.Fact]\n    public void {identity[(identity.LastIndexOf('.') + 1)..]}() {{ }}")) +
+            "\n}\n");
+        var testCalls = new System.Collections.Concurrent.ConcurrentBag<string[]>();
+        try
+        {
+            AssertGitSucceeded(root, "init", "-b", "main");
+            AssertGitSucceeded(root, "config", "user.email", "attribution-cap@example.invalid");
+            AssertGitSucceeded(root, "config", "user.name", "Attribution Cap Fixture");
+            AssertGitSucceeded(root, "add", ".");
+            AssertGitSucceeded(root, "commit", "-m", "baseline");
+            var verifier = new GoalAcceptanceVerifier((args, _, _, _) =>
+            {
+                if (IsMtpExecutableCall(args, "Mcg.AgentOrchestrator.Infrastructure.Tests"))
+                {
+                    testCalls.Add(args);
+                    var methodIndex = Array.IndexOf(args, "--filter-method");
+                    Assert.True(methodIndex >= 0 && methodIndex + 1 < args.Length);
+                    var selectedIdentity = args[methodIndex + 1].Trim('*');
+                    WriteMtpTrx(args, executedTestCount: 1, [selectedIdentity]);
+                    return Task.FromResult(new GoalAcceptanceVerifier.CommandResult(
+                        0,
+                        "Passed! - Failed: 0, Passed: 1, Skipped: 0, Total: 1."));
+                }
+
+                return Task.FromResult(new GoalAcceptanceVerifier.CommandResult(0, "Build succeeded."));
+            });
+            var check = new AcceptanceCheckResult(
+                "core tests",
+                Passed: false,
+                ExitCode: 1,
+                OutputTail: "candidate failures",
+                FailingTestIdentities: identities,
+                TestProjectPath: project);
+            var attributed = await verifier.AttachTestFailureAttributionsAsync(
+                check,
+                new GoalAcceptanceVerifier.AcceptanceManifestCheck
+                {
+                    Name = check.Name,
+                    Type = "dotnet-test",
+                    Runner = "mtp",
+                    Project = project
+                },
+                AcceptanceGateEngineSettings.Load(root),
+                root,
+                GoalId.New(),
+                stableSlotIndex: null,
+                stableSlotLease: null,
+                TestContext.Current.CancellationToken);
+
+            Assert.Equal(
+                GoalAcceptanceVerifier.MaxFailureAttributionFocusedEvidenceIdentities,
+                testCalls.Count);
+            Assert.Equal(identities.Length, attributed.FailingTestAttributions!.Count);
+            var omitted = attributed.FailingTestAttributions
+                .Where(attribution => attribution.Evidence.Contains("omitted", StringComparison.Ordinal))
+                .ToArray();
+            Assert.Equal(2, omitted.Length);
+            Assert.All(omitted, attribution =>
+                Assert.Equal(AcceptanceTestFailureOrigin.Unattributed, attribution.Origin));
+            Assert.Equal(
+                identities.Skip(GoalAcceptanceVerifier.MaxFailureAttributionFocusedEvidenceIdentities),
+                omitted.Select(attribution => attribution.TestIdentity));
+        }
+        finally
+        {
+            DeleteDirectoryWithRetry(root);
+        }
+    }
+
     [Xunit.Fact(DisplayName = "GoalAcceptanceVerifier_candidate_only_method_is_classified_absent_before_baseline_execution")]
     public void CandidateOnlyMethodIsClassifiedAbsentBeforeBaselineExecution()
     {
