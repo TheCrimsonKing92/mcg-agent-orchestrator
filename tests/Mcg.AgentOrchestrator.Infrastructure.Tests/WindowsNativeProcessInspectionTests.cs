@@ -263,6 +263,81 @@ public sealed class WindowsNativeProcessInspectionTests
     }
 
     [Xunit.Fact]
+    public void Operation_MultipleQueries_ReadsEachCandidateOnce()
+    {
+        var enumerationCount = 0;
+        var reads = new Dictionary<int, int>();
+        var operation = WindowsNativeProcessInspection.BeginOperation(
+            () =>
+            {
+                enumerationCount++;
+                return WindowsNativeProcessInspection.ProcessEnumerationResult.Success(
+                [
+                    new WindowsNativeProcessInspection.ProcessInspectionSeed(41, 1, "dotnet"),
+                    new WindowsNativeProcessInspection.ProcessInspectionSeed(42, 41, "worker")
+                ]);
+            },
+            seed =>
+            {
+                reads[seed.ProcessId] = reads.GetValueOrDefault(seed.ProcessId) + 1;
+                return new ProcessInspectionRecord(
+                    seed.ProcessId,
+                    seed.ParentProcessId,
+                    seed.Name,
+                    $@"C:\fixture\{seed.Name}.exe",
+                    DateTimeOffset.Parse("2026-09-01T12:00:00Z"),
+                    $"{seed.Name}.exe --run",
+                    ProcessInspectionStatus.Available);
+            });
+
+        var named = operation.ReadByNames(new HashSet<string>(["dotnet"], StringComparer.OrdinalIgnoreCase));
+        var requested = operation.ReadRequested([41, 42]);
+
+        Assert.Equal(1, enumerationCount);
+        Assert.Single(named.Records);
+        Assert.Equal(2, requested.Records.Count);
+        Assert.Equal(1, reads[41]);
+        Assert.Equal(1, reads[42]);
+    }
+
+    [Xunit.Fact]
+    public void Operation_SeedQuery_SkipsUnrelatedIdentityReads()
+    {
+        var readIds = new List<int>();
+        var operation = new ProcessInspectionOperation(
+            WindowsNativeProcessInspection.ProcessEnumerationResult.Success(
+            [
+                new WindowsNativeProcessInspection.ProcessInspectionSeed(41, 1, "dotnet"),
+                new WindowsNativeProcessInspection.ProcessInspectionSeed(42, 41, "worker"),
+                new WindowsNativeProcessInspection.ProcessInspectionSeed(99, 1, "unrelated")
+            ]),
+            seed =>
+            {
+                readIds.Add(seed.ProcessId);
+                return new ProcessInspectionRecord(
+                    seed.ProcessId,
+                    seed.ParentProcessId,
+                    seed.Name,
+                    null,
+                    null,
+                    null,
+                    ProcessInspectionStatus.AccessDenied);
+            });
+
+        var result = operation.ReadCandidates(new ProcessInspectionQuery(
+            new HashSet<int>(),
+            new HashSet<int>(),
+            new HashSet<string>(["dotnet"], StringComparer.OrdinalIgnoreCase),
+            IncludeChildren: true,
+            IncludeAll: false,
+            AncestorProcessIds: new HashSet<int>()));
+
+        Assert.Equal<int>([41, 42], readIds);
+        Assert.Equal<int>([41, 42], result.Records.Keys.Order());
+        Assert.DoesNotContain(99, result.Records.Keys);
+    }
+
+    [Xunit.Fact]
     public void ReadRequested_AccessDeniedProcess_RetainsEnumeratedParent()
     {
         var records = WindowsNativeProcessInspection.ReadRequested(
@@ -338,6 +413,33 @@ public sealed class WindowsNativeProcessInspectionTests
         Assert.Empty(snapshot.Read([73]));
         Assert.True(snapshot.TryGetRecord(73, out var record));
         Assert.Equal(ProcessInspectionStatus.PartialRead, record.Status);
+    }
+
+    [Xunit.Fact]
+    public void Snapshot_LazyReader_ReadsOnlyMissingPids()
+    {
+        var requests = new List<int[]>();
+        var snapshot = new ProcessCommandLineSnapshot(processIds =>
+        {
+            requests.Add(processIds.Order().ToArray());
+            return WindowsNativeProcessInspection.ProcessInspectionResult.Success(processIds.ToDictionary(
+                processId => processId,
+                processId => new ProcessInspectionRecord(
+                    processId,
+                    1,
+                    "worker",
+                    $@"C:\fixture\worker-{processId}.exe",
+                    DateTimeOffset.Parse("2026-09-01T12:00:00Z"),
+                    $"worker-{processId}.exe --run",
+                    ProcessInspectionStatus.Available)));
+        });
+
+        snapshot.Read([41]);
+        snapshot.Read([41, 42]);
+
+        Assert.Equal(2, requests.Count);
+        Assert.Equal<int>([41], requests[0]);
+        Assert.Equal<int>([42], requests[1]);
     }
 
     [Xunit.Fact]

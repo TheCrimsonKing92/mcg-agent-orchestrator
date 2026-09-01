@@ -1381,7 +1381,7 @@ public sealed class LauncherScriptTests
             const string relevantUnavailable = "PROCESS_QUERY_UNAVAILABLE operation=filter id=200 name=dotnet status=AccessDenied";
             Assert.Equal(1, result.Stdout.Split(relevantUnavailable, StringSplitOptions.None).Length - 1);
             Assert.Contains("lock query incomplete: relevant process inspection was unavailable", result.Stdout);
-            Assert.Contains("PROCESS_QUERY_UNAVAILABLE operation=inventory-summary count=2", result.Stdout);
+            Assert.Contains("PROCESS_QUERY_SUMMARY operation=filter-incidental count=2", result.Stdout);
             Assert.DoesNotContain("operation=filter id=300", result.Stdout);
             Assert.DoesNotContain("operation=filter id=301", result.Stdout);
             Assert.DoesNotContain("id=400", result.Stdout);

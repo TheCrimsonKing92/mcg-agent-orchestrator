@@ -7,6 +7,7 @@ namespace Mcg.AgentOrchestrator.App.Cli;
 internal static class RepoProcessCliCommand
 {
     private const int MaxCommandLength = 420;
+    private const int MaxUnavailableExemplars = 4;
 
     public static void PrintInfo(IReadOnlyList<string> parts, TextWriter output) =>
         PrintInfo(parts, output, BuildSnapshots);
@@ -14,7 +15,7 @@ internal static class RepoProcessCliCommand
     internal static void PrintInfo(
         IReadOnlyList<string> parts,
         TextWriter output,
-        Func<IEnumerable<int>?, IReadOnlyList<ProcessSnapshot>> buildSnapshots)
+        Func<ProcessSnapshotQuery, IReadOnlyList<ProcessSnapshot>> buildSnapshots)
     {
         var options = RepoProcessOptions.Parse(parts);
         if (!options.HasQuery)
@@ -25,7 +26,7 @@ internal static class RepoProcessCliCommand
         IReadOnlyList<ProcessSnapshot> snapshots;
         try
         {
-            snapshots = buildSnapshots(null);
+            snapshots = buildSnapshots(ProcessSnapshotQuery.From(options));
         }
         catch (Exception ex)
         {
@@ -45,7 +46,16 @@ internal static class RepoProcessCliCommand
         {
             if (byId.TryGetValue(processId, out var snapshot))
             {
-                AddSelected(snapshot, options.IncludeChildren, childrenByParent, seen, selected);
+                if (snapshot.InspectionStatus == ProcessInspectionStatus.Exited &&
+                    string.IsNullOrWhiteSpace(snapshot.Name))
+                {
+                    seen.Add(processId);
+                    output.WriteLine($"PROCESS id={processId} status=missing");
+                }
+                else
+                {
+                    AddSelected(snapshot, options.IncludeChildren, childrenByParent, seen, selected);
+                }
             }
             else if (seen.Add(processId))
             {
@@ -75,15 +85,35 @@ internal static class RepoProcessCliCommand
                     not ProcessInspectionStatus.Exited and
                     not ProcessInspectionStatus.DeadOrRecycled &&
                 !currentInvocationLineage.Contains(snapshot.ProcessId) &&
-                MatchesNames(snapshot, options.Names) &&
-                (options.CommandContains.Count > 0 ||
-                    (options.LocksOnly && IsPotentialLockHolder(snapshot))))
+                IsUnavailableRelevant(snapshot, options))
             .OrderBy(snapshot => snapshot.ProcessId)
             .ToList();
         foreach (var unavailable in unavailableCandidates)
         {
             output.WriteLine(
                 $"PROCESS_QUERY_UNAVAILABLE operation=filter id={unavailable.ProcessId} name={unavailable.Name} status={unavailable.InspectionStatus}");
+        }
+
+        var incidentalUnavailable = snapshots
+            .Where(snapshot =>
+                snapshot.InspectionStatus is not ProcessInspectionStatus.Available and
+                    not ProcessInspectionStatus.Exited and
+                    not ProcessInspectionStatus.DeadOrRecycled &&
+                !currentInvocationLineage.Contains(snapshot.ProcessId) &&
+                !IsUnavailableRelevant(snapshot, options))
+            .OrderBy(snapshot => snapshot.ProcessId)
+            .ToList();
+        if (incidentalUnavailable.Count > 0)
+        {
+            var statuses = string.Join(',', incidentalUnavailable
+                .GroupBy(snapshot => snapshot.InspectionStatus)
+                .OrderBy(group => group.Key)
+                .Select(group => $"{group.Key}:{group.Count()}"));
+            var exemplars = string.Join(',', incidentalUnavailable
+                .Take(MaxUnavailableExemplars)
+                .Select(snapshot => $"{snapshot.ProcessId}:{snapshot.Name}:{snapshot.InspectionStatus}"));
+            output.WriteLine(
+                $"PROCESS_QUERY_SUMMARY operation=filter-incidental count={incidentalUnavailable.Count} statuses={statuses} exemplars={exemplars} truncated={Math.Max(0, incidentalUnavailable.Count - MaxUnavailableExemplars)}");
         }
 
         if (options.Names.Count > 0 || options.CommandContains.Count > 0 || options.LocksOnly)
@@ -104,7 +134,7 @@ internal static class RepoProcessCliCommand
 
         if (selected.Count == 0 && options.ShouldPrintEmptyMessage)
         {
-            if (unavailableCandidates.Count > 0)
+            if (unavailableCandidates.Count > 0 || incidentalUnavailable.Count > 0)
             {
                 return;
             }
@@ -183,6 +213,27 @@ internal static class RepoProcessCliCommand
         var snapshot = processIds is null
             ? ProcessCommandLines.Snapshot()
             : ProcessCommandLines.Snapshot(processIds);
+        return snapshot.Records.Values
+            .Select(process => new ProcessSnapshot(
+                process.ProcessId,
+                process.ParentProcessId,
+                process.Name,
+                process.ExecutablePath,
+                process.StartedAt,
+                process.CommandLine,
+                process.Status))
+            .ToList();
+    }
+
+    private static IReadOnlyList<ProcessSnapshot> BuildSnapshots(ProcessSnapshotQuery query)
+    {
+        var snapshot = ProcessCommandLines.Snapshot(new ProcessInspectionQuery(
+            query.ProcessIds.ToHashSet(),
+            query.ParentProcessIds.ToHashSet(),
+            query.ProcessNames.ToHashSet(StringComparer.OrdinalIgnoreCase),
+            query.IncludeChildren,
+            query.IncludeAll,
+            query.AncestorProcessIds.ToHashSet()));
         return snapshot.Records.Values
             .Select(process => new ProcessSnapshot(
                 process.ProcessId,
@@ -340,6 +391,14 @@ internal static class RepoProcessCliCommand
         snapshot.Name.Equals("DispatchProcessHost", StringComparison.OrdinalIgnoreCase) ||
         snapshot.Name.StartsWith("Mcg.AgentOrchestrator", StringComparison.OrdinalIgnoreCase);
 
+    private static bool IsUnavailableRelevant(ProcessSnapshot snapshot, RepoProcessOptions options) =>
+        options.Ids.Contains(snapshot.ProcessId) ||
+        options.ParentIds.Contains(snapshot.ParentProcessId) ||
+        (options.Names.Count > 0 && MatchesNames(snapshot, options.Names)) ||
+        (options.LocksOnly && IsPotentialLockHolder(snapshot)) ||
+        (options.CommandContains.Count > 0 &&
+            (IsPotentialLockHolder(snapshot) || IsRepoProcessWrapper(snapshot)));
+
     internal static string? EvaluateStopRevalidation(
         ProcessSnapshot recorded,
         ProcessSnapshot? current,
@@ -382,7 +441,40 @@ internal static class RepoProcessCliCommand
         string? CommandLine,
         ProcessInspectionStatus InspectionStatus);
 
-    private sealed record RepoProcessOptions(
+    internal sealed record ProcessSnapshotQuery(
+        IReadOnlyList<int> ProcessIds,
+        IReadOnlyList<int> ParentProcessIds,
+        IReadOnlyList<string> ProcessNames,
+        bool IncludeChildren,
+        bool IncludeAll,
+        IReadOnlyList<int> AncestorProcessIds)
+    {
+        internal static ProcessSnapshotQuery From(RepoProcessOptions options)
+        {
+            var names = options.Names
+                .Select(name => Path.GetFileNameWithoutExtension(name))
+                .Where(name => !string.IsNullOrWhiteSpace(name))
+                .ToHashSet(StringComparer.OrdinalIgnoreCase);
+            if (options.LocksOnly)
+            {
+                names.UnionWith(["dotnet", "DispatchProcessHost", "Mcg.AgentOrchestrator.App"]);
+            }
+
+            var includeAll = options.CommandContains.Count > 0 && names.Count == 0;
+            var ancestors = options.LocksOnly || options.CommandContains.Count > 0
+                ? new[] { Environment.ProcessId }
+                : [];
+            return new ProcessSnapshotQuery(
+                options.Ids,
+                options.ParentIds,
+                names.ToArray(),
+                options.IncludeChildren,
+                includeAll,
+                ancestors);
+        }
+    }
+
+    internal sealed record RepoProcessOptions(
         IReadOnlyList<int> Ids,
         IReadOnlyList<int> ParentIds,
         IReadOnlyList<string> Names,

@@ -302,7 +302,7 @@ public static GoalWorkSummaryDto ToGoalWorkSummaryDto(
     var gate = kernel.BuildVerificationGate(goal.Id);
     var nextAction = kernel.BuildNextActions(goal.Id).Items.FirstOrDefault();
     var testImpact = BuildGoalTestImpactDto(goal, executionDirectory, changedFiles);
-    var processSnapshot = ProcessCommandLines.Snapshot();
+    var processSnapshot = ProcessCommandLines.SnapshotOperation();
     var disposition = conductorDisposition ?? new GoalOperatorDispositionSurface().Evaluate(
         goal,
         monitor.PendingHumanInputCount,

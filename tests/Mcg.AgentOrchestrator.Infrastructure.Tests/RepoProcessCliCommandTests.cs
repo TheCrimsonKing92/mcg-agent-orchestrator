@@ -101,6 +101,42 @@ public sealed class RepoProcessCliCommandTests
         Assert.DoesNotContain("No matching repo processes found", output.ToString());
     }
 
+    [Xunit.Fact]
+    public void CommandQuery_ManyIncidentalFailures_EmitsBoundedSummary()
+    {
+        var output = new StringWriter();
+        var snapshots = Enumerable.Range(1000, 100)
+            .Select(processId => new RepoProcessCliCommand.ProcessSnapshot(
+                processId,
+                1,
+                $"system-{processId}",
+                null,
+                null,
+                null,
+                ProcessInspectionStatus.AccessDenied))
+            .Append(new RepoProcessCliCommand.ProcessSnapshot(
+                42,
+                1,
+                "pwsh",
+                null,
+                null,
+                null,
+                ProcessInspectionStatus.AccessDenied))
+            .ToArray();
+
+        RepoProcessCliCommand.PrintInfo(
+            ["repo-process-info", "--command-contains", "schedule.ps1"],
+            output,
+            _ => snapshots);
+
+        var text = output.ToString();
+        Assert.Contains("PROCESS_QUERY_UNAVAILABLE operation=filter id=42 name=pwsh status=AccessDenied", text);
+        Assert.Contains("PROCESS_QUERY_SUMMARY operation=filter-incidental count=100", text);
+        Assert.DoesNotContain("operation=filter id=1000", text);
+        Assert.True(text.Split(Environment.NewLine, StringSplitOptions.RemoveEmptyEntries).Length <= 3, text);
+        Assert.DoesNotContain("No matching repo processes found", text);
+    }
+
     private static RepoProcessCliCommand.ProcessSnapshot Snapshot(DateTimeOffset startedAt) =>
         new(
             42,
