@@ -547,6 +547,10 @@ public sealed class GoalWorktreeTestsAcceptanceLanding : GoalWorktreeTestBase
             Assert.Equal(WorkTaskStatus.Completed, refreshedTask.Status);
             Assert.Equal(0, refreshedTask.LastVerification!.ExitCode);
             Assert.True(output.Contains("[conduct] Reconciled 1 exited dispatch", StringComparison.Ordinal));
+            Assert.True(context.RunInjectedAcceptanceVerifierInCurrentProcess);
+            Assert.Equal(
+                0,
+                Assert.IsType<FakeAcceptanceVerifier>(context.AcceptanceVerifier).RunCount);
         }
         finally
         {

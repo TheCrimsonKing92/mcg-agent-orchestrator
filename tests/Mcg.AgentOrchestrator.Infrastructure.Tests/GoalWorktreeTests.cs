@@ -316,7 +316,8 @@ public abstract class GoalWorktreeTestBase
             WorkerProfileCatalog.Default(),
             currentGoal)
         {
-            AcceptanceVerifier = fakeVerifier
+            AcceptanceVerifier = fakeVerifier,
+            RunInjectedAcceptanceVerifierInCurrentProcess = true
         };
     }
 

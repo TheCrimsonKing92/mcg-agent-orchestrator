@@ -2165,16 +2165,16 @@ public sealed class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
         ThrowIfGateCancellationRequested(cancellationToken);
         var invocation = invocationOverride ?? AllocateTestTelemetryInvocation(check);
         using var invocationScope = PushTestTelemetryInvocation(invocation);
-        var result = await RunCheckAsync(
-                check,
-                worktreePath,
-                goalId,
-                stableSlotIndex,
-                stableSlotLease,
-                dotnetTestBuildPhase,
-                cancellationToken,
-                testResultsDirectoryOverride)
-            .ConfigureAwait(false);
+        var result = await AcceptanceGateCancellationMonitor.RunAsync(
+                activeToken => RunCheckAsync(check,
+                    worktreePath,
+                    goalId,
+                    stableSlotIndex,
+                    stableSlotLease,
+                    dotnetTestBuildPhase,
+                    activeToken,
+                    testResultsDirectoryOverride),
+                CurrentGateCancellationProbe.Value, cancellationToken).ConfigureAwait(false);
         ThrowIfGateCancellationRequested(cancellationToken);
         return result;
     }
