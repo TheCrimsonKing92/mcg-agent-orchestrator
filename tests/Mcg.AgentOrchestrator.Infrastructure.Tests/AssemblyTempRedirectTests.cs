@@ -37,7 +37,10 @@ public sealed class AssemblyTempRedirectTests
             });
 
         Assert.Equal(1, calls);
-        Assert.Equal([$"p{exitedPid:x}"], revalidated);
+        var exited = Assert.Single(revalidated);
+        Assert.Equal($"p{exitedPid:x}", exited.Name);
+        Assert.Equal(exitedPid, exited.ProcessId);
+        Assert.Equal(ProcessInspectionStatus.Exited, exited.Observation.Status);
     }
 
     [Fact]

@@ -41,7 +41,7 @@ internal static class AssemblyTempRedirect
         // process is gone. Both are required — exit handlers do not run for killed processes,
         // and this repository cancels dispatches and times out gates routinely.
         ReapOrphanedRoots(selection.SelectedRoot);
-        AppDomain.CurrentDomain.ProcessExit += (_, _) => TryDeleteTree(selection.SelectedRoot);
+        AppDomain.CurrentDomain.ProcessExit += (_, _) => _ = TryDeleteTree(selection.SelectedRoot);
     }
 
     internal static IReadOnlyList<string> SelectReapableRoots(
@@ -92,12 +92,14 @@ internal static class AssemblyTempRedirect
         ReapOrphanedRoots(
             selectedRoot,
             WindowsNativeProcessInspection.Read,
-            TryDeleteTree);
+            TryDeleteTree,
+            Console.Error.WriteLine);
 
     internal static void ReapOrphanedRoots(
         string selectedRoot,
         Func<IEnumerable<int>?, WindowsNativeProcessInspection.ProcessInspectionResult> inspect,
-        Action<string> deleteTree)
+        Func<string, TempRootJanitorDeleteResult> deleteTree,
+        Action<string>? writeReceipt)
     {
         ArgumentNullException.ThrowIfNull(inspect);
         ArgumentNullException.ThrowIfNull(deleteTree);
@@ -127,7 +129,16 @@ internal static class AssemblyTempRedirect
                           .ToArray();
             foreach (var candidate in RevalidateExitedRoots(bounded, inspect))
             {
-                deleteTree(Path.Combine(sharedRoot, candidate));
+                var path = Path.Combine(sharedRoot, candidate.Name);
+                var outcome = deleteTree(path);
+                TryWriteReceipt(
+                    writeReceipt,
+                    () => FormatReapReceipt(
+                        Environment.ProcessId,
+                        candidate.ProcessId,
+                        path,
+                        candidate.Observation,
+                        outcome));
             }
         }
         catch (Exception)
@@ -167,7 +178,7 @@ internal static class AssemblyTempRedirect
             .ToHashSet();
     }
 
-    private static IReadOnlyList<string> RevalidateExitedRoots(
+    private static IReadOnlyList<RevalidatedTempRoot> RevalidateExitedRoots(
         IEnumerable<string> boundedCandidates,
         Func<IEnumerable<int>?, WindowsNativeProcessInspection.ProcessInspectionResult> inspect)
     {
@@ -187,26 +198,89 @@ internal static class AssemblyTempRedirect
             return [];
         }
 
-        return candidates
-            .Where(candidate =>
+        var revalidated = new List<RevalidatedTempRoot>();
+        var seen = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        foreach (var candidate in candidates)
+        {
+            if (seen.Add(candidate.Name) &&
                 inspection.Records.TryGetValue(candidate.Pid, out var record) &&
                 record.Status == ProcessInspectionStatus.Exited)
-            .Select(candidate => candidate.Name)
-            .Distinct(StringComparer.OrdinalIgnoreCase)
-            .ToArray();
+            {
+                revalidated.Add(new RevalidatedTempRoot(candidate.Name, candidate.Pid, record));
+            }
+        }
+
+        return revalidated;
     }
 
-    private static void TryDeleteTree(string path)
+    private static TempRootJanitorDeleteResult TryDeleteTree(string path)
     {
         try
         {
-            _ = TempRootJanitor.DeleteTree(path);
+            return TempRootJanitor.DeleteTree(path);
+        }
+        catch (Exception ex)
+        {
+            // This path is called by the module initializer and process-exit handler.
+            return new TempRootJanitorDeleteResult(
+                path,
+                TempRootJanitorDeleteStatus.Failed,
+                ex.GetType().Name,
+                path,
+                ReadOnlyAttributesCleared: 0);
+        }
+    }
+
+    internal static string FormatReapReceipt(
+        int actorProcessId,
+        int candidateProcessId,
+        string path,
+        ProcessInspectionRecord observation,
+        TempRootJanitorDeleteResult outcome)
+    {
+        ArgumentOutOfRangeException.ThrowIfNegativeOrZero(actorProcessId);
+        ArgumentOutOfRangeException.ThrowIfNegativeOrZero(candidateProcessId);
+        ArgumentException.ThrowIfNullOrWhiteSpace(path);
+        ArgumentNullException.ThrowIfNull(observation);
+        ArgumentNullException.ThrowIfNull(outcome);
+
+        return "assembly-temp-reaper " +
+            $"actorPid={actorProcessId} " +
+            $"candidatePid={candidateProcessId} " +
+            $"path={QuoteDiagnostic(path)} " +
+            $"observedPid={observation.ProcessId} " +
+            $"observedStatus={observation.Status} " +
+            $"observedName={QuoteDiagnostic(string.IsNullOrWhiteSpace(observation.Name) ? "none" : observation.Name)} " +
+            $"observedStartedAt={QuoteDiagnostic(observation.StartedAt?.ToString("O") ?? "none")} " +
+            $"observedExecutablePath={QuoteDiagnostic(observation.ExecutablePath ?? "none")} " +
+            $"deleteStatus={outcome.Status} " +
+            $"exceptionType={SanitizeDiagnosticToken(outcome.ExceptionType ?? "none")} " +
+            $"failurePath={QuoteDiagnostic(outcome.FailurePath ?? "none")} " +
+            $"readOnlyCleared={outcome.ReadOnlyAttributesCleared}";
+    }
+
+    private static void TryWriteReceipt(Action<string>? writeReceipt, Func<string> buildReceipt)
+    {
+        if (writeReceipt is null)
+        {
+            return;
+        }
+
+        try
+        {
+            writeReceipt(buildReceipt());
         }
         catch
         {
-            // This path is called by the module initializer and process-exit handler.
+            // Diagnostics must not turn best-effort startup housekeeping into an apphost failure.
         }
     }
+
+    private static string QuoteDiagnostic(string value) =>
+        $"\"{value.Replace("\"", "\\\"", StringComparison.Ordinal)}\"";
+
+    private static string SanitizeDiagnosticToken(string value) =>
+        new(value.Select(character => char.IsWhiteSpace(character) ? '_' : character).ToArray());
 
     internal static TempRootSelectionResult SelectWritableRoot(
         IEnumerable<TempRootCandidate> candidates,
@@ -386,6 +460,11 @@ internal static class AssemblyTempRedirect
 }
 
 internal sealed record TempRootCandidate(string Path, bool RequiresLowLabel);
+
+internal sealed record RevalidatedTempRoot(
+    string Name,
+    int ProcessId,
+    ProcessInspectionRecord Observation);
 
 internal enum TempRootRejectionReason
 {

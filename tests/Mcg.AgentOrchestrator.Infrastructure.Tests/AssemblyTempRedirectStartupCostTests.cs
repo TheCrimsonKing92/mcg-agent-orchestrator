@@ -42,7 +42,8 @@ public sealed class AssemblyTempRedirectStartupCostTests(ITestOutputHelper outpu
                 {
                     deleted.Add(path);
                     return TempRootDeleteOutcome.Deleted(path, readOnlyAttributesCleared: 0);
-                });
+                },
+                writeReceipt: null);
 
             Assert.Equal(2, reads.Count);
             Assert.Equal([firstPid, secondPid], reads[0]);
@@ -109,10 +110,11 @@ public sealed class AssemblyTempRedirectStartupCostTests(ITestOutputHelper outpu
         };
         var nextStatus = 0;
         var timings = new TempRootStartupTimings { ReapRan = true };
+        var receipts = new List<string>();
 
         var outcomes = AssemblyTempRedirect.ReapBoundedRoots(
             "shared",
-            ["p1", "p2", "p3"],
+            [Revalidated("p1"), Revalidated("p2"), Revalidated("p3")],
             path =>
             {
                 var status = statuses[nextStatus++];
@@ -121,7 +123,8 @@ public sealed class AssemblyTempRedirectStartupCostTests(ITestOutputHelper outpu
                     status,
                     status == TempRootDeleteStatus.Failed ? "InjectedFailure" : null);
             },
-            timings);
+            timings,
+            receipts.Add);
 
         Assert.Equal(statuses, outcomes.Select(outcome => outcome.Status));
         Assert.Equal(3, timings.ReapDeleteAttempted);
@@ -131,6 +134,14 @@ public sealed class AssemblyTempRedirectStartupCostTests(ITestOutputHelper outpu
         Assert.Equal(
             timings.ReapDeleteAttempted,
             timings.ReapDeleteDeleted + timings.ReapDeleteAlreadyAbsent + timings.ReapDeleteFailed);
+        Assert.Equal(3, receipts.Count);
+        Assert.Contains($"actorPid={Environment.ProcessId}", receipts[0], StringComparison.Ordinal);
+        Assert.Contains("candidatePid=1", receipts[0], StringComparison.Ordinal);
+        Assert.Contains("observedStatus=Exited", receipts[0], StringComparison.Ordinal);
+        Assert.Contains("deleteStatus=Deleted", receipts[0], StringComparison.Ordinal);
+        Assert.Contains("deleteStatus=AlreadyAbsent", receipts[1], StringComparison.Ordinal);
+        Assert.Contains("deleteStatus=Failed", receipts[2], StringComparison.Ordinal);
+        Assert.Contains("exceptionType=InjectedFailure", receipts[2], StringComparison.Ordinal);
     }
 
     [Fact]
@@ -141,9 +152,10 @@ public sealed class AssemblyTempRedirectStartupCostTests(ITestOutputHelper outpu
 
         var outcome = Assert.Single(AssemblyTempRedirect.ReapBoundedRoots(
             sharedRoot,
-            ["p1"],
+            [Revalidated("p1")],
             AssemblyTempRedirect.DeleteTree,
-            timings));
+            timings,
+            writeReceipt: null));
         var diagnostic = AssemblyTempRedirect.FormatTimingDiagnostic(timings);
 
         Assert.Equal(TempRootDeleteStatus.AlreadyAbsent, outcome.Status);
@@ -168,6 +180,7 @@ public sealed class AssemblyTempRedirectStartupCostTests(ITestOutputHelper outpu
         File.WriteAllText(readOnlyFile, "fixture");
         File.SetAttributes(readOnlyFile, File.GetAttributes(readOnlyFile) | FileAttributes.ReadOnly);
         var timings = new TempRootStartupTimings { ReapRan = true };
+        var receipts = new List<string>();
 
         try
         {
@@ -175,15 +188,21 @@ public sealed class AssemblyTempRedirectStartupCostTests(ITestOutputHelper outpu
 
             var outcome = Assert.Single(AssemblyTempRedirect.ReapBoundedRoots(
                 sharedRoot,
-                [Path.GetFileName(root)],
+                [Revalidated(Path.GetFileName(root))],
                 AssemblyTempRedirect.DeleteTree,
-                timings));
+                timings,
+                receipts.Add));
 
             Assert.Equal(TempRootDeleteStatus.Deleted, outcome.Status);
             Assert.False(Directory.Exists(root));
             Assert.Equal(1, timings.ReapDeleteDeleted);
             Assert.Equal(0, timings.ReapDeleteFailed);
             Assert.True(timings.DeleteReadOnlyAttributesCleared > 0);
+            var receipt = Assert.Single(receipts);
+            Assert.Contains(
+                $"readOnlyCleared={outcome.ReadOnlyAttributesCleared}",
+                receipt,
+                StringComparison.Ordinal);
         }
         finally
         {
@@ -198,9 +217,10 @@ public sealed class AssemblyTempRedirectStartupCostTests(ITestOutputHelper outpu
 
         var outcome = Assert.Single(AssemblyTempRedirect.ReapBoundedRoots(
             "shared",
-            ["p2"],
+            [Revalidated("p2")],
             _ => throw new UnauthorizedAccessException("denied"),
-            timings));
+            timings,
+            writeReceipt: null));
         var diagnostic = AssemblyTempRedirect.FormatTimingDiagnostic(timings);
 
         Assert.Equal(TempRootDeleteStatus.Failed, outcome.Status);
@@ -224,15 +244,17 @@ public sealed class AssemblyTempRedirectStartupCostTests(ITestOutputHelper outpu
         Directory.CreateDirectory(abandonedRoot);
         var timings = new TempRootStartupTimings();
         var completed = false;
-        string? receipt = null;
+        string? timingReceipt = null;
+        var reapReceipts = new List<string>();
 
         try
         {
-            receipt = AssemblyTempRedirect.RunStartupHousekeeping(
+            timingReceipt = AssemblyTempRedirect.RunStartupHousekeeping(
                 selectedRoot,
                 timings,
                 System.Diagnostics.Stopwatch.StartNew(),
-                _ => throw new UnauthorizedAccessException("denied"));
+                _ => throw new UnauthorizedAccessException("denied"),
+                reapReceipts.Add);
             completed = true;
         }
         finally
@@ -241,9 +263,47 @@ public sealed class AssemblyTempRedirectStartupCostTests(ITestOutputHelper outpu
         }
 
         Assert.True(completed, "Startup housekeeping did not return after the delete seam threw.");
-        Assert.NotNull(receipt);
-        Assert.StartsWith("assembly-temp-redirect-timing ", receipt, StringComparison.Ordinal);
-        Assert.Contains("deleteFailed=1", receipt, StringComparison.Ordinal);
+        Assert.NotNull(timingReceipt);
+        Assert.StartsWith("assembly-temp-redirect-timing ", timingReceipt, StringComparison.Ordinal);
+        Assert.Contains("deleteFailed=1", timingReceipt, StringComparison.Ordinal);
+        var reapReceipt = Assert.Single(reapReceipts);
+        Assert.Contains("candidatePid=2147483647", reapReceipt, StringComparison.Ordinal);
+        Assert.Contains("observedStatus=Exited", reapReceipt, StringComparison.Ordinal);
+        Assert.Contains("deleteStatus=Failed", reapReceipt, StringComparison.Ordinal);
+        Assert.Contains("exceptionType=UnauthorizedAccessException", reapReceipt, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void ReapReceiptPinsEveryDiagnosticFieldAndEscaping()
+    {
+        var observation = new ProcessInspectionRecord(
+            ProcessId: 42,
+            ParentProcessId: 7,
+            Name: "former host",
+            ExecutablePath: "C:\\Program Files\\test\"host.exe",
+            StartedAt: DateTimeOffset.Parse("2026-08-30T12:00:00Z"),
+            CommandLine: null,
+            ProcessInspectionStatus.Exited);
+
+        var receipt = AssemblyTempRedirect.FormatReapReceipt(
+            actorProcessId: 11,
+            candidateProcessId: 42,
+            path: "C:\\temp root\\p2a\"",
+            observation: observation,
+            deleteStatus: "Failed",
+            exceptionType: "Injected Failure",
+            failurePath: "C:\\temp root\\leaf \"x\"",
+            readOnlyAttributesCleared: 3);
+
+        Assert.Equal(
+            "assembly-temp-reaper actorPid=11 candidatePid=42 " +
+            "path=\"C:\\temp root\\p2a\\\"\" " +
+            "observedPid=42 observedStatus=Exited observedName=\"former host\" " +
+            "observedStartedAt=\"2026-08-30T12:00:00.0000000+00:00\" " +
+            "observedExecutablePath=\"C:\\Program Files\\test\\\"host.exe\" " +
+            "deleteStatus=Failed exceptionType=Injected_Failure " +
+            "failurePath=\"C:\\temp root\\leaf \\\"x\\\"\" readOnlyCleared=3",
+            receipt);
     }
 
     [Fact]
@@ -284,6 +344,12 @@ public sealed class AssemblyTempRedirectStartupCostTests(ITestOutputHelper outpu
             StartedAt: DateTimeOffset.Parse("2026-08-30T12:00:00Z"),
             CommandLine: "testhost startup-batch-control",
             ProcessInspectionStatus.Available);
+
+    private static RevalidatedTempRoot Revalidated(string name)
+    {
+        var processId = Convert.ToInt32(name[1..], 16);
+        return new RevalidatedTempRoot(name, processId, ExitedProcess(processId));
+    }
 
     [Fact]
     public void TimedOutLabelSetterFallsBackAndReportsTypedDeadlineOutcome()
