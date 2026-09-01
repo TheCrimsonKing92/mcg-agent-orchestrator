@@ -1262,6 +1262,73 @@ public sealed class AcceptanceGateEngineSettingsTests
     }
 
     [Xunit.Fact]
+    public void EffectivePlanIdentityBindsChangeScopedModeWhenChecksMatch()
+    {
+        var root = CreateWorkspace("""
+            {
+              "version": 1,
+              "checks": [{
+                "name": "git diff whitespace",
+                "type": "command",
+                "command": "git",
+                "arguments": ["diff", "--check"]
+              }]
+            }
+            """);
+        var changedFiles = new[] { "Directory.Build.props" };
+        var previous = Environment.GetEnvironmentVariable("MCG_ACCEPTANCE_CHANGE_SCOPED");
+        try
+        {
+            Environment.SetEnvironmentVariable("MCG_ACCEPTANCE_CHANGE_SCOPED", "1");
+            Xunit.Assert.True(AcceptancePolicyShardPlanner.ChangeScopedAcceptanceEnabled());
+            var scopedChecks = GoalAcceptanceVerifier.BuildEffectiveAcceptanceChecksForTests(
+                root,
+                changedFiles);
+            var scopedIdentity = GoalAcceptanceVerifier.ComputeEffectiveAcceptancePlanIdentity(
+                root,
+                changedFiles);
+
+            Environment.SetEnvironmentVariable("MCG_ACCEPTANCE_CHANGE_SCOPED", "0");
+            Xunit.Assert.False(AcceptancePolicyShardPlanner.ChangeScopedAcceptanceEnabled());
+            var fullChecks = GoalAcceptanceVerifier.BuildEffectiveAcceptanceChecksForTests(
+                root,
+                changedFiles);
+            var fullIdentity = GoalAcceptanceVerifier.ComputeEffectiveAcceptancePlanIdentity(
+                root,
+                changedFiles);
+
+            Xunit.Assert.NotEmpty(scopedChecks);
+            Xunit.Assert.Equal(scopedChecks.Count, fullChecks.Count);
+            for (var index = 0; index < scopedChecks.Count; index++)
+            {
+                var scopedCheck = scopedChecks[index];
+                var fullCheck = fullChecks[index];
+                Xunit.Assert.Equal(scopedCheck.Name, fullCheck.Name);
+                Xunit.Assert.Equal(scopedCheck.Type, fullCheck.Type);
+                Xunit.Assert.Equal(scopedCheck.Command, fullCheck.Command);
+                Xunit.Assert.Equal(scopedCheck.Project, fullCheck.Project);
+                Xunit.Assert.Equal(scopedCheck.Arguments.ToArray(), fullCheck.Arguments.ToArray());
+                Xunit.Assert.Equal(scopedCheck.Pattern, fullCheck.Pattern);
+                Xunit.Assert.Equal(scopedCheck.FilePath, fullCheck.FilePath);
+                Xunit.Assert.Equal(scopedCheck.TimeoutMinutes, fullCheck.TimeoutMinutes);
+                Xunit.Assert.Equal(scopedCheck.Advisory, fullCheck.Advisory);
+                Xunit.Assert.Equal(scopedCheck.Runner, fullCheck.Runner);
+                Xunit.Assert.Equal(scopedCheck.EstimatedSerialSeconds, fullCheck.EstimatedSerialSeconds);
+                Xunit.Assert.Equal(
+                    scopedCheck.ExclusiveResourceKeys.ToArray(),
+                    fullCheck.ExclusiveResourceKeys.ToArray());
+            }
+
+            Xunit.Assert.NotEqual(scopedIdentity, fullIdentity);
+        }
+        finally
+        {
+            Environment.SetEnvironmentVariable("MCG_ACCEPTANCE_CHANGE_SCOPED", previous);
+            Directory.Delete(root, recursive: true);
+        }
+    }
+
+    [Xunit.Fact]
     public async Task GoalAcceptanceVerifierManifestChangeInvalidatesAllPartitionVerdicts()
     {
         var root = CreateWorkspace("""

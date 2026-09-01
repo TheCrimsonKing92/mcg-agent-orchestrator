@@ -258,6 +258,8 @@ internal static class ReverseDependencyTestImpactReader
     }
 
     internal static bool IsDeliberatelyPartialRepositoryRoot(string repositoryRoot) =>
+        !Directory.Exists(Path.Combine(repositoryRoot, ".git")) &&
+        !File.Exists(Path.Combine(repositoryRoot, ".git")) &&
         !File.Exists(Path.Combine(repositoryRoot, "Mcg.AgentOrchestrator.sln")) &&
         !File.Exists(Path.Combine(
             repositoryRoot,

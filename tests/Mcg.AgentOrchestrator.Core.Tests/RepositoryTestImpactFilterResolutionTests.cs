@@ -202,6 +202,43 @@ public sealed class RepositoryTestImpactFilterResolutionTests
         Assert.DoesNotContain("--filter", infrastructureCheck.Command);
     }
 
+    [Xunit.Theory]
+    [Xunit.InlineData(false)]
+    [Xunit.InlineData(true)]
+    public void MissingDependentProjectInMarkedRepositoryFailsSafe(bool useWorktreeFile)
+    {
+        using var repository = ReverseDependencyRepository.Create();
+        const string changedPath =
+            "src/Mcg.AgentOrchestrator.Core/Application/DispatchFailureClassifier.cs";
+        const string dependentProject =
+            "tests/Mcg.AgentOrchestrator.Infrastructure.Tests/Mcg.AgentOrchestrator.Infrastructure.Tests.csproj";
+        repository.Delete(dependentProject);
+        var gitMarker = Path.Combine(repository.Root, ".git");
+        if (useWorktreeFile)
+        {
+            repository.Write(".git", "gitdir: C:/worktrees/damaged-real-repository");
+        }
+        else
+        {
+            Directory.CreateDirectory(gitMarker);
+        }
+
+        Assert.True(Directory.Exists(gitMarker) || File.Exists(gitMarker));
+        Assert.False(File.Exists(Path.Combine(repository.Root, "Mcg.AgentOrchestrator.sln")));
+        Assert.False(File.Exists(Path.Combine(
+            repository.Root,
+            dependentProject.Replace('/', Path.DirectorySeparatorChar))));
+        var reader = new FileSystemTestClassDeclarationReader(repository.Root);
+
+        var selection = reader.ReadReverseDependentTestClasses([changedPath]);
+        var plan = RepositoryTestImpactPlanner.Plan([changedPath], repository.Root);
+
+        Assert.Equal(ReverseDependencySelectionOutcome.Unreadable, selection.Outcome);
+        var infrastructureCheck = Assert.Single(plan.Checks, check =>
+            check.Command.Contains(dependentProject));
+        Assert.DoesNotContain("--filter", infrastructureCheck.Command);
+    }
+
     [Xunit.Fact]
     public void DeletedCoreSourceProducesUnavailableReverseDependencyEvidence()
     {
