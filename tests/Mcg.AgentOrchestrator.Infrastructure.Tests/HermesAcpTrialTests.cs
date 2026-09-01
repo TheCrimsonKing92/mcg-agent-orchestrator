@@ -570,8 +570,8 @@ public sealed class HermesAcpTrialTests
             role => Assert.True(BackgroundDispatchRunner.ShouldUseOsSandbox(true, false, role, WorkerSandboxProvider.Hermes)));
 
         using var fixture = new Fixture();
-        var first = new ProcessStartInfo();
-        var second = new ProcessStartInfo();
+        var first = new ProcessStartInfo { CreateNoWindow = true };
+        var second = new ProcessStartInfo { CreateNoWindow = true };
         DispatchProcessHost.SeedHermesEnvironment(first, fixture.Sandbox);
         DispatchProcessHost.SeedHermesEnvironment(second, fixture.Sandbox);
 
