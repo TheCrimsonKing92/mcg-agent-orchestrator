@@ -319,7 +319,7 @@ public static GoalWorkSummaryDto ToGoalWorkSummaryDto(
         monitor.PendingHumanInputCount,
         gate.IsSatisfied,
         ToGoalOperatorDispositionDto(goal, disposition),
-        nextAction is null ? null : ToNextActionDto(goal, nextAction, 1, workerProfiles, agents),
+        nextAction is null ? null : ToNextActionDto(goal, nextAction, 1, workerProfiles, agents, processSnapshot),
         host,
         ToGoalBuildEnvironmentDto(goal),
         goal.Tasks.Select(task => ToTaskWorkSummaryDto(goal, task, processSnapshot)).ToList(),
@@ -491,6 +491,7 @@ public static TaskWorkContextDto ToTaskWorkContextDto(
     var monitor = kernel.BuildMonitor(goal.Id);
     var gate = kernel.BuildVerificationGate(goal.Id);
     var nextAction = kernel.BuildNextActions(goal.Id).Items.FirstOrDefault();
+    var processSnapshot = ProcessCommandLines.SnapshotOperation();
 
     return new TaskWorkContextDto(
         goal.Id.Value,
@@ -499,8 +500,8 @@ public static TaskWorkContextDto ToTaskWorkContextDto(
         goal.Tasks.Count,
         monitor.PendingHumanInputCount,
         gate.IsSatisfied,
-        nextAction is null ? null : ToNextActionDto(goal, nextAction, 1, workerProfiles, agents),
-        ToTaskWorkSummaryDto(goal, task),
+        nextAction is null ? null : ToNextActionDto(goal, nextAction, 1, workerProfiles, agents, processSnapshot),
+        ToTaskWorkSummaryDto(goal, task, processSnapshot),
         host);
 }
 
@@ -688,16 +689,29 @@ public static NextActionsDto ToNextActionsDto(
     GoalNextActions actions,
     WorkerProfileCatalog workerProfiles,
     IReadOnlyList<AgentDefinition>? agents = null,
-    GoalOperatorDisposition? conductorDisposition = null)
+    GoalOperatorDisposition? conductorDisposition = null,
+    Func<ProcessCommandLineSnapshot>? processSnapshotFactory = null)
 {
+    var processInspection = new ProcessInspectionSnapshotScope(
+        processSnapshotFactory ?? ProcessCommandLines.SnapshotOperation);
     var verificationSatisfied = goal.Tasks.Count > 0 && goal.Tasks.All(task => task.LastVerification?.Succeeded == true);
-    var disposition = conductorDisposition ?? new GoalOperatorDispositionSurface().Evaluate(goal, pendingHumanInputCount: 0, verificationSatisfied);
+    var disposition = conductorDisposition ?? new GoalOperatorDispositionSurface().Evaluate(
+        goal,
+        pendingHumanInputCount: 0,
+        verificationSatisfied,
+        commandLineSnapshot: processInspection.Get());
     return new NextActionsDto(
         actions.GoalId.Value,
         SummaryText(actions.Objective),
         actions.Status,
         ToGoalOperatorDispositionDto(goal, disposition),
-        actions.Items.Select((item, index) => ToNextActionDto(goal, item, index + 1, workerProfiles, agents)).ToList());
+        actions.Items.Select((item, index) => ToNextActionDto(
+            goal,
+            item,
+            index + 1,
+            workerProfiles,
+            agents,
+            processInspection.Get())).ToList());
 }
 
 public static NextActionDto ToNextActionDto(
@@ -705,10 +719,11 @@ public static NextActionDto ToNextActionDto(
     NextActionItem item,
     int priority,
     WorkerProfileCatalog workerProfiles,
-    IReadOnlyList<AgentDefinition>? agents = null)
+    IReadOnlyList<AgentDefinition>? agents = null,
+    ProcessCommandLineSnapshot? processSnapshot = null)
 {
     int? taskNumber = item.TaskId is null ? null : ConsoleViews.GetTaskDisplayNumber(goal, item.TaskId);
-    var dispatchState = ToDispatchAuthoritativeStateDto(DispatchRecoveryView.EvaluateState(goal, item));
+    var dispatchState = ToDispatchAuthoritativeStateDto(DispatchRecoveryView.EvaluateState(goal, item, processSnapshot));
     return new NextActionDto(
         priority,
         item.Kind,

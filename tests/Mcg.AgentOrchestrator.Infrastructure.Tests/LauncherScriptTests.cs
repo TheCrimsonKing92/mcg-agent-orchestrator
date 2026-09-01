@@ -1405,6 +1405,7 @@ public sealed class LauncherScriptTests
             Assert.DoesNotContain("operation=filter id=301", result.Stdout);
             Assert.DoesNotContain("id=400", result.Stdout);
             Assert.DoesNotContain("id=401", result.Stdout);
+            Assert.Contains("PROCESS_QUERY_SUMMARY operation=filter-incidental count=2", result.Stdout);
         }
         finally
         {
