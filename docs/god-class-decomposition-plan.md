@@ -257,6 +257,10 @@ Wave 2 item 2 places the process-recovery boundary at `DispatchProcessRefreshVer
 
 Wave 2 item 3 places the commit-on-behalf boundary at `DispatchWorktreeCommitter`: the component inspects and caches worktree Git evidence, derives byte-stable commit subjects, stages commit-worthy dirty paths, creates the recovery commit, and formats Git failure diagnostics. The boundary is derived by a call-graph test: operations whose inputs are only the working directory, goal identity, dispatch time, subject, and dirty paths, and whose outputs are worktree evidence or a commit result, move together so the inspection/commit protocol and its cache have one owner. `BackgroundDispatchRunner` deliberately retains commit eligibility, sandbox and low-integrity classification, recovery and completion decisions, task-state transitions, verification construction, and result-commit provenance for later Wave 2 items.
 
+### 2026-08-31 finding-evidence routing receipt
+
+Goal `52590d3e` keeps unchanged-candidate writable-blocker priority at the existing finding-evidence orchestration boundary and expands the owning deterministic test surface with both recorded incident shapes, invalid-normalization suppression, owner separation, and new-candidate/resolution controls. The authoritative ratchet comments record the measured ceiling changes; the broader Conductor and finding-evidence test decomposition backlog remains the reduction path.
+
 ## Guarded source size ratchet
 
 `GoalAcceptanceVerifierSizeRatchetTests` runs as an ordinary acceptance-gate test and applies the literal ceilings in [`SourceSizeRatchet.SeededCeilings`](../src/Mcg.AgentOrchestrator.Infrastructure/Workspaces/SourceSizeRatchet.cs). That symbol is the only authority for both the guarded set and its current ceilings; read it to inspect or change either. The authority was seeded at commit `6e7a90d7b3fe192ae4f1e430cb7452710f88b73c` on 2026-08-22 from each file's complete `File.ReadLines(path).Count()` result.

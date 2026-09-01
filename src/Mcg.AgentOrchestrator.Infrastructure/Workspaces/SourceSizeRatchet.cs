@@ -58,7 +58,9 @@ internal static class SourceSizeRatchet
             // retry-decision call sites; classification and admission persistence remain extracted.
             // Raised for goal d5fcf981: changed-scope attribution and no-worker holds must meet at the
             // existing acceptance retry decision that owns task reopening and lifecycle disposition.
-            new SourceSizeCeiling("src/Mcg.AgentOrchestrator.App/Orchestration/ConductorDriver.cs", 6428),
+            // Raised for goal 52590d3e: writable-blocker priority and typed suppression emission must run
+            // before request normalization at the finding-evidence orchestration boundary they govern.
+            new SourceSizeCeiling("src/Mcg.AgentOrchestrator.App/Orchestration/ConductorDriver.cs", 6502),
             // Raised for goal dadadfac: set-aside re-admission must be decided where the loop already holds
             // the goal, its recorded set-aside entry, and the current sweep blockers together.
             // Raised for goal 289b469d: registration-fault hold/escalation must be decided at the existing
@@ -102,7 +104,9 @@ internal static class SourceSizeRatchet
             // Raised for goal 13630c9f: the shared driver fixture forwards the apparatus-hold release
             // collaborators used by the focused lifecycle controls.
             // Raised for goal d5fcf981: the shared fixture forwards only the landing-file-scope seam.
-            new SourceSizeCeiling("tests/Mcg.AgentOrchestrator.Infrastructure.Tests/ConductorDriverTests.cs", 1402),
+            // Raised for goal 52590d3e: the shared driver fixture forwards the typed suppression recorder
+            // so tests can prove no focused or paid downstream execution starts.
+            new SourceSizeCeiling("tests/Mcg.AgentOrchestrator.Infrastructure.Tests/ConductorDriverTests.cs", 1408),
             // Goal ce3c3917 keeps acquired, unavailable, and exceptional lease-lifecycle coverage together
             // in the acceptance-coordination owner rather than splitting one behavioral contract.
             // Raised for goal 13630c9f: acceptance coordination owns the structured apparatus cause
@@ -118,7 +122,9 @@ internal static class SourceSizeRatchet
             new SourceSizeCeiling("tests/Mcg.AgentOrchestrator.Infrastructure.Tests/ConductorDriverTestsReviewRetryConvergence.cs", 778),
             // Raised for goal 4e3cdbb8: behavioral coverage now pins every permanent and transient
             // finding-evidence refusal disposition plus receipt-id priority on the next-round request loop.
-            new SourceSizeCeiling("tests/Mcg.AgentOrchestrator.Infrastructure.Tests/ConductorDriverTestsFindingEvidence.cs", 2092),
+            // Raised for goal 52590d3e: the finding-evidence owner now carries both recorded incident shapes,
+            // invalid-normalization suppression, ownership separation, and new-SHA/resolution controls.
+            new SourceSizeCeiling("tests/Mcg.AgentOrchestrator.Infrastructure.Tests/ConductorDriverTestsFindingEvidence.cs", 2713),
             new SourceSizeCeiling("tests/Mcg.AgentOrchestrator.Infrastructure.Tests/ConductorDriverTestsPreReviewEvidence.cs", 1187),
             new SourceSizeCeiling("tests/Mcg.AgentOrchestrator.Infrastructure.Tests/ConductorDriverTestsContractRepairBounds.cs", 1097),
             new SourceSizeCeiling("tests/Mcg.AgentOrchestrator.Infrastructure.Tests/ConductorDriverTestsDispatchRecovery.cs", 537),

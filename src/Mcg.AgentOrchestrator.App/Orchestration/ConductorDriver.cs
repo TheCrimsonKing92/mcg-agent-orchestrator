@@ -111,6 +111,7 @@ internal sealed partial class ConductorDriver
     private readonly Action<GoalId, TaskId, string> _recordTaskNote;
     private readonly Action<GoalId, TaskId, string> _recordFindingEvidenceRequest;
     private readonly Action<GoalId, TaskId, string> _recordFindingEvidenceRun;
+    private readonly Action<GoalId, TaskId, string, IReadOnlyList<string>, string, AgentRole, string, string> _recordFindingEvidenceSuppressed;
     private readonly Action<GoalId, TaskId, string, FindingEvidenceOutcome, FindingEvidenceReceipt?> _recordFindingEvidenceOutcome;
     private readonly Func<GoalId, TaskId, IReadOnlyList<string>, int> _recordCriterionRetryFeedback;
     private readonly Action<GoalId, TaskId> _clearCriterionRetryFeedback;
@@ -764,6 +765,9 @@ internal sealed partial class ConductorDriver
             kernel.RecordFindingEvidenceRequest(goalId, taskId, message);
         _recordFindingEvidenceRun = (goalId, taskId, message) =>
             kernel.RecordFindingEvidenceRun(goalId, taskId, message);
+        _recordFindingEvidenceSuppressed = (goalId, taskId, candidateSha, blockerIds, requestId, owner, reason, identity) =>
+            kernel.RecordFindingEvidenceSuppressed(
+                goalId, taskId, candidateSha, blockerIds, requestId, owner, reason, identity);
         _recordFindingEvidenceOutcome = (goalId, taskId, stableId, outcome, receipt) =>
         {
             kernel.RecordFindingEvidenceOutcome(goalId, taskId, stableId, outcome, receipt);
@@ -1235,6 +1239,7 @@ internal sealed partial class ConductorDriver
         Action<GoalId, TaskId, string, FindingEvidenceOutcome, FindingEvidenceReceipt?>? recordFindingEvidenceOutcome = null,
         Action<GoalId, TaskId, string>? recordFindingEvidenceRequest = null,
         Action<GoalId, TaskId, string>? recordFindingEvidenceRun = null,
+        Action<GoalId, TaskId, string, IReadOnlyList<string>, string, AgentRole, string, string>? recordFindingEvidenceSuppressed = null,
         Func<Goal, AcceptanceGateEngineSettings>? getFindingEvidenceEngineSettings = null,
         Func<Goal, string, string, IReadOnlyList<string>>? resolveFindingEvidenceSiblingClasses = null,
         Func<Goal, bool>? isVerificationGateSatisfied = null,
@@ -1312,6 +1317,7 @@ internal sealed partial class ConductorDriver
         _recordTaskNote = recordTaskNote ?? ((_, _, _) => { });
         _recordFindingEvidenceRequest = recordFindingEvidenceRequest ?? recordReviewerEvidenceRequestReceived ?? ((_, _, _) => { });
         _recordFindingEvidenceRun = recordFindingEvidenceRun ?? recordReviewerEvidenceRunRecorded ?? ((_, _, _) => { });
+        _recordFindingEvidenceSuppressed = recordFindingEvidenceSuppressed ?? ((_, _, _, _, _, _, _, _) => { });
         _recordFindingEvidenceOutcome = recordFindingEvidenceOutcome ?? ((_, _, _, _, _) => { });
         _recordCriterionRetryFeedback = recordCriterionRetryFeedback ?? ((_, _, _) => throw new InvalidOperationException("Criterion retry feedback delegate was not configured."));
         _clearCriterionRetryFeedback = clearCriterionRetryFeedback ?? ((_, _) => { });
@@ -2188,6 +2194,51 @@ internal sealed partial class ConductorDriver
 
         var findingRoundFingerprint = BuildFindingRoundFingerprint(requestingTask, round);
 
+        if (requestingTask.RequiredRole == AgentRole.Reviewer)
+        {
+            var openBlockingFindings = ReviewFindings.GetOpenBlockingFindings(
+                mergedFindings.Count > 0 ? mergedFindings : round.Findings,
+                goal.EffectiveAcceptanceCriteriaCorrections);
+            var suppressionRoute = ReviewerFindingEvidenceSuppressionRouting.Resolve(
+                requestingTask.LastVerification, goal.EffectiveAcceptanceCriteriaCorrections, openBlockingFindings);
+            if (suppressionRoute.DeferToReviewRetryRoute)
+            {
+                return false;
+            }
+            var writableBlockerIds = suppressionRoute.WritableBlockerIds;
+            var reviewedCandidateSha = requestingTask.LastVerification?.ReviewedCommit?.Trim();
+            var requestTargetsCurrentCandidate =
+                !candidateShaAvailable ||
+                !ConductorGitRevisionReader.IsValid(reviewedCandidateSha) ||
+                string.Equals(candidateSha, reviewedCandidateSha, StringComparison.OrdinalIgnoreCase);
+            if (writableBlockerIds.Length > 0 && requestTargetsCurrentCandidate)
+            {
+                var reason = candidateShaAvailable
+                    ? "unresolved-writable-blockers-on-unchanged-candidate"
+                    : "candidate-sha-unavailable-with-unresolved-writable-blockers";
+                foreach (var requestIdentity in requestingFindings
+                             .Select(finding => BuildFindingEvidenceIdentity(finding.EvidenceRequest!))
+                             .Distinct(StringComparer.Ordinal))
+                {
+                    var requestId = CreateFindingEvidenceRequestId(requestIdentity);
+                    _recordFindingEvidenceSuppressed(
+                        goal.Id,
+                        requestingTask.Id,
+                        telemetryCandidateSha,
+                        writableBlockerIds,
+                        requestId,
+                        suppressionRoute.ChosenOwner ?? throw new InvalidOperationException("Writable finding suppression requires a feasible upstream owner."),
+                        reason,
+                        CreateFindingEvidenceSuppressionIdentity(
+                            telemetryCandidateSha,
+                            requestIdentity,
+                            writableBlockerIds));
+                }
+
+                return false;
+            }
+        }
+
         var groups = new List<FindingEvidenceRequestGroup>();
         var normalizationRefused = false;
         foreach (var finding in requestingFindings)
@@ -2694,7 +2745,7 @@ internal sealed partial class ConductorDriver
         selection.TestProject + ":" + selection.TestClass;
 
     private static string BuildFindingEvidenceIdentity(FindingEvidenceRequest request) =>
-        string.Join("|", request.Selections.Select(selection => $"{selection.TestProject}:{selection.TestClass}"));
+        string.Join("|", (request.Selections ?? []).Select(selection => $"{selection.TestProject}:{selection.TestClass}"));
 
     private static string BuildFindingRoundFingerprint(TaskSpec requestingTask, ReviewFindingRound round)
     {
@@ -2922,7 +2973,10 @@ internal sealed partial class ConductorDriver
             }
 
             var developerFindings = member.Findings.Where(finding =>
-                finding.Category is not (FindingCategory.OperatorOwned or FindingCategory.SpecDefect) &&
+                finding.Category is not (
+                    FindingCategory.OperatorOwned or
+                    FindingCategory.SpecDefect or
+                    FindingCategory.AcceptanceOwned) &&
                 IsDeveloperOwnedFindingAnchor(finding.Location.File));
             foreach (var finding in developerFindings)
             {
@@ -2972,6 +3026,26 @@ internal sealed partial class ConductorDriver
         "finding-evidence-" + Convert.ToHexString(
             SHA256.HashData(Encoding.UTF8.GetBytes($"{candidateSha}:{findingRoundFingerprint}:{identity}")))
             .ToLowerInvariant()[..24];
+
+    private static string CreateFindingEvidenceRequestId(string identity) =>
+        "evidence-request-" + Convert.ToHexString(
+            SHA256.HashData(Encoding.UTF8.GetBytes(identity)))
+            .ToLowerInvariant()[..20];
+
+    private static string CreateFindingEvidenceSuppressionIdentity(
+        string candidateSha,
+        string requestIdentity,
+        IReadOnlyList<string> writableBlockerIds)
+    {
+        var blockerIdentity = string.Join(
+            "\u001f",
+            writableBlockerIds
+                .OrderBy(id => id, StringComparer.Ordinal));
+        return "evidence-suppression-" + Convert.ToHexString(
+            SHA256.HashData(Encoding.UTF8.GetBytes(
+                $"{candidateSha.Trim().ToLowerInvariant()}\u001e{requestIdentity}\u001e{blockerIdentity}")))
+            .ToLowerInvariant()[..24];
+    }
 
     private static string CreateFindingEvidenceBatchId(
         string candidateSha,

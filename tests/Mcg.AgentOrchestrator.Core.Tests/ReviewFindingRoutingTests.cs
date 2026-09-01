@@ -14,14 +14,17 @@ public sealed class ReviewFindingRoutingTests
     }
 
     [Xunit.Fact]
-    public void ResolveRoutesOnlyTestCategoriesToTester()
+    public void ResolveRoutesTestCoverageToDeveloperAndEvidenceToTester()
     {
-        var route = ReviewFindingRouting.Resolve(
-            [Finding(FindingCategory.TestEvidence), Finding(FindingCategory.TestCoverage)],
-            "source change");
+        var coverageRoute = ReviewFindingRouting.Resolve(
+            [Finding(FindingCategory.TestCoverage)],
+            "test source change");
+        var evidenceRoute = ReviewFindingRouting.Resolve(
+            [Finding(FindingCategory.TestEvidence)],
+            "focused receipt");
 
-        Assert.False(route.EscalateToOperator);
-        Assert.Equal(AgentRole.Tester, route.TargetRole);
+        Assert.Equal(AgentRole.Developer, coverageRoute.TargetRole);
+        Assert.Equal(AgentRole.Tester, evidenceRoute.TargetRole);
     }
 
     [Xunit.Fact]
@@ -42,6 +45,45 @@ public sealed class ReviewFindingRoutingTests
             "tester");
 
         Assert.Equal(AgentRole.Developer, route.TargetRole);
+    }
+
+    [Xunit.Fact]
+    public void ResolveRoutesWritableFindingBeforeNonWorkerObligations()
+    {
+        var route = ReviewFindingRouting.Resolve(
+            [
+                Finding(FindingCategory.OperatorOwned),
+                Finding(FindingCategory.AcceptanceOwned),
+                Finding(FindingCategory.Correctness)
+            ],
+            "mixed obligations");
+
+        Assert.False(route.EscalateToOperator);
+        Assert.Equal(AgentRole.Developer, route.TargetRole);
+    }
+
+    [Xunit.Fact]
+    public void ProjectPreservesPerFindingOwnersAndStableAnchors()
+    {
+        var developer = Finding(FindingCategory.Correctness) with
+        {
+            StableId = "source-defect",
+            Location = new ReviewFindingLocation("src/Current.cs", "Current.Run")
+        };
+        var acceptance = Finding(FindingCategory.AcceptanceOwned) with
+        {
+            StableId = "focused-green",
+            Location = new ReviewFindingLocation("tests/CurrentTests.cs", "CurrentTests.Run")
+        };
+
+        var projections = ReviewFindingRouting.Project([developer, acceptance]);
+
+        var writable = Assert.Single(projections, item => item.TargetRole == AgentRole.Developer);
+        Assert.Equal("source-defect", writable.Finding.StableId);
+        Assert.Equal("src/Current.cs", writable.Finding.Location.File);
+        var acceptanceOwned = Assert.Single(projections, item => item.AcceptanceOwned);
+        Assert.Equal("focused-green", acceptanceOwned.Finding.StableId);
+        Assert.Null(acceptanceOwned.TargetRole);
     }
 
     [Xunit.Theory]
