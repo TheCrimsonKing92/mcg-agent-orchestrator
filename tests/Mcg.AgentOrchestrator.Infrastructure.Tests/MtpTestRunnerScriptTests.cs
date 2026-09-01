@@ -478,6 +478,56 @@ public sealed class MtpTestRunnerScriptTests
         Xunit.Assert.DoesNotContain("BUILD FAILURE", result.Stdout, StringComparison.Ordinal);
     }
 
+    [Xunit.Fact]
+    public void MtpBuildLaunchUsesNoWindowProcessStartThroughCmdShim()
+    {
+        using var sandbox = ScriptSandbox.Create("success");
+        var buildMarker = Path.Combine(sandbox.Root, "build-started.txt");
+        var launchLog = Path.Combine(sandbox.Root, "build-launch.txt");
+        var fakeDotnet = sandbox.CreateBuildStub(
+            exitCode: 0,
+            buildMarker,
+            diagnosticToStderr: true,
+            launchLogPath: launchLog);
+
+        var result = sandbox.RunPartition("GoalWorktree", noBuild: false, dotnetPath: fakeDotnet);
+
+        Xunit.Assert.True(result.ExitCode == 0, result.Stdout + result.Stderr);
+        Xunit.Assert.True(File.Exists(buildMarker), result.Stdout + result.Stderr);
+        Xunit.Assert.True(File.Exists(launchLog), result.Stdout + result.Stderr);
+        var launchLines = File.ReadAllLines(launchLog);
+        Xunit.Assert.Contains(launchLines, line =>
+            line.StartsWith("CMDCMDLINE=", StringComparison.OrdinalIgnoreCase) &&
+            line.Contains("/d /s /c", StringComparison.OrdinalIgnoreCase));
+        var arguments = Xunit.Assert.Single(launchLines, line =>
+            line.StartsWith("ARGS=", StringComparison.OrdinalIgnoreCase));
+        Xunit.Assert.Contains("build", arguments, StringComparison.OrdinalIgnoreCase);
+        Xunit.Assert.Contains(
+            Path.Combine(sandbox.Root, "tests", "Mcg.AgentOrchestrator.Infrastructure.Tests", "Mcg.AgentOrchestrator.Infrastructure.Tests.csproj"),
+            arguments,
+            StringComparison.OrdinalIgnoreCase);
+        Xunit.Assert.Contains("--configuration Debug", arguments, StringComparison.OrdinalIgnoreCase);
+        Xunit.Assert.Contains("--output", arguments, StringComparison.OrdinalIgnoreCase);
+        Xunit.Assert.Contains("--nologo --verbosity minimal", arguments, StringComparison.OrdinalIgnoreCase);
+        Xunit.Assert.Contains("compiler diagnostic from stub", result.Stdout, StringComparison.Ordinal);
+        Xunit.Assert.Contains("Build succeeded.", result.Stdout, StringComparison.Ordinal);
+    }
+
+    [Xunit.Fact]
+    public void MtpBuildLaunchPreservesPercentAndMetacharactersInPaths()
+    {
+        using var sandbox = ScriptSandbox.Create("success", rootNamePrefix: "build-meta%SystemRoot%&chars");
+        var buildMarker = Path.Combine(sandbox.Root, "build-started.txt");
+        var fakeDotnet = sandbox.CreateBuildStub(exitCode: 0, buildMarker);
+
+        var result = sandbox.RunPartition("GoalWorktree", noBuild: false, dotnetPath: fakeDotnet);
+
+        Xunit.Assert.True(result.ExitCode == 0, result.Stdout + result.Stderr);
+        Xunit.Assert.True(File.Exists(buildMarker), result.Stdout + result.Stderr);
+        Xunit.Assert.Contains("Build succeeded.", result.Stdout, StringComparison.Ordinal);
+        Xunit.Assert.Contains("build-meta%SystemRoot%&chars", result.Stdout, StringComparison.Ordinal);
+    }
+
     [Xunit.Fact(DisplayName = "MTP_no_build_missing_managed_assembly_reports_path_and_build_command")]
     public void MtpNoBuildMissingManagedAssemblyReportsPathAndBuildCommand()
     {
@@ -599,6 +649,12 @@ public sealed class MtpTestRunnerScriptTests
         Xunit.Assert.Contains("MtpTestRunner.psm1", sources[0], StringComparison.Ordinal);
         Xunit.Assert.Contains("MtpTestRunner.psm1", sources[1], StringComparison.Ordinal);
         Xunit.Assert.Contains("[System.Diagnostics.Process]::new()", sources[2], StringComparison.Ordinal);
+        Xunit.Assert.DoesNotContain("& $DotnetPath build", sources[2], StringComparison.Ordinal);
+        Xunit.Assert.Contains(
+            "$startInfo = New-MtpProcessStartInfo -Executable $Executable -Arguments $Arguments",
+            sources[2],
+            StringComparison.Ordinal);
+        Xunit.Assert.Contains("$startInfo.CreateNoWindow = $true", sources[2], StringComparison.Ordinal);
         Xunit.Assert.Contains("Resolve-MtpManagedAssemblyPath", sources[2], StringComparison.Ordinal);
         Xunit.Assert.Contains("$executable = if ($usesManagedAssembly) { $DotnetPath }", sources[2], StringComparison.Ordinal);
         Xunit.Assert.DoesNotContain(
@@ -1037,13 +1093,32 @@ public sealed class MtpTestRunnerScriptTests
                 releasePath);
         }
 
-        public string CreateBuildStub(int exitCode, string markerPath, bool diagnosticToStderr = false)
+        public string CreateBuildStub(
+            int exitCode,
+            string markerPath,
+            bool diagnosticToStderr = false,
+            string? launchLogPath = null)
         {
             var path = Path.Combine(Root, "fake-dotnet.cmd");
             var diagnosticRedirection = diagnosticToStderr ? " 1>&2" : string.Empty;
-            File.WriteAllText(path, $"@echo off{Environment.NewLine}echo started>\"{markerPath}\"{Environment.NewLine}echo compiler diagnostic from stub{diagnosticRedirection}{Environment.NewLine}exit /b {exitCode}{Environment.NewLine}");
+            var lines = new List<string>
+            {
+                "@echo off",
+                $"echo started>\"{EscapeBatchPercent(markerPath)}\""
+            };
+            if (launchLogPath is not null)
+            {
+                var escapedLaunchLog = EscapeBatchPercent(launchLogPath);
+                lines.Add($"echo CMDCMDLINE=%CMDCMDLINE%>\"{escapedLaunchLog}\"");
+                lines.Add($"echo ARGS=%*>>\"{escapedLaunchLog}\"");
+            }
+            lines.Add($"echo compiler diagnostic from stub{diagnosticRedirection}");
+            lines.Add($"exit /b {exitCode}");
+            File.WriteAllText(path, string.Join(Environment.NewLine, lines) + Environment.NewLine);
             return path;
         }
+
+        private static string EscapeBatchPercent(string value) => value.Replace("%", "%%", StringComparison.Ordinal);
 
         public string CreateManagedAssemblyPlaceholder()
         {

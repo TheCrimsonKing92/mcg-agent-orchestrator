@@ -613,38 +613,124 @@ function Get-MtpTargetProjects {
     return $selected
 }
 
+function Invoke-MtpBuildProcess {
+    param(
+        [Parameter(Mandatory = $true)][string]$Executable,
+        [Parameter(Mandatory = $true)][string[]]$Arguments,
+        [Parameter(Mandatory = $true)][string]$OutputLog,
+        [Parameter(Mandatory = $true)][string]$WorkingDirectory
+    )
+
+    $process = [System.Diagnostics.Process]::new()
+    $capture = $null
+    $started = $false
+    $exitCode = $null
+    $startFailureMessage = $null
+    $drainConfirmed = $false
+    try {
+        $startInfo = New-MtpProcessStartInfo -Executable $Executable -Arguments $Arguments
+        $startInfo.WorkingDirectory = $WorkingDirectory
+        $process.StartInfo = $startInfo
+        $capture = [McgMtpProcessOutputCapture]::new($OutputLog)
+        $capture.Attach($process)
+
+        try {
+            $started = $process.Start()
+            if (-not $started) {
+                $startFailureMessage = 'Process.Start returned false.'
+            }
+            else {
+                $process.BeginOutputReadLine()
+                $process.BeginErrorReadLine()
+                $process.WaitForExit()
+                $exitCode = $process.ExitCode
+                $drainConfirmed = $capture.WaitForCompletion($script:MtpOutputDrainSeconds * 1000)
+            }
+        }
+        catch {
+            $startFailureMessage = $_.Exception.Message
+            if ($started) {
+                try {
+                    if (-not $process.HasExited) {
+                        $process.WaitForExit()
+                    }
+                    $exitCode = $process.ExitCode
+                    $drainConfirmed = $capture.WaitForCompletion($script:MtpOutputDrainSeconds * 1000)
+                }
+                catch {
+                    # Preserve the first launch/monitoring failure as the actionable diagnostic.
+                }
+            }
+        }
+    }
+    catch {
+        $startFailureMessage = $_.Exception.Message
+    }
+    finally {
+        try {
+            if ($null -ne $capture) {
+                try {
+                    $capture.Detach($process)
+                }
+                finally {
+                    $capture.Dispose()
+                }
+            }
+        }
+        finally {
+            $process.Dispose()
+        }
+    }
+
+    return [pscustomobject]@{
+        ExitCode = $exitCode
+        Started = $started
+        StartFailureMessage = $startFailureMessage
+        DrainConfirmed = $drainConfirmed
+    }
+}
+
 function Invoke-MtpBuild {
     param(
         [Parameter(Mandatory = $true)][string]$RepositoryRoot,
         [Parameter(Mandatory = $true)][object[]]$Projects,
         [Parameter(Mandatory = $true)][string]$Configuration,
-        [Parameter(Mandatory = $true)][string]$DotnetPath
+        [Parameter(Mandatory = $true)][string]$DotnetPath,
+        [Parameter(Mandatory = $true)][string]$BuildLogDirectory
     )
 
     foreach ($project in $Projects) {
         $buildTarget = [System.IO.Path]::GetFullPath((Join-Path $RepositoryRoot ([string]$project.project)))
         $appHost = Resolve-MtpAppHostPath -RepositoryRoot $RepositoryRoot -Invocation $project -Configuration $Configuration
         $outputDirectory = Split-Path -Parent $appHost
+        $projectName = [System.IO.Path]::GetFileNameWithoutExtension([string]$project.project)
+        $buildLogBudget = [Math]::Max(32, [Math]::Min(200, 240 - $BuildLogDirectory.Length - 1))
+        $buildLogName = Get-MtpBoundedFileName -Stem "build-$projectName" -Suffix '.build.log' -MaximumLength $buildLogBudget
+        $buildLog = Join-Path $BuildLogDirectory $buildLogName
         Write-Host "Building test target: $buildTarget ($Configuration) -> $outputDirectory"
-        $previousErrorActionPreference = $ErrorActionPreference
-        try {
-            # Windows PowerShell promotes native stderr redirected through 2>&1 to an
-            # ErrorRecord. Build warnings still need to stream, but they must not turn a
-            # successful dotnet exit code into a synthetic BUILD FAILURE.
-            $ErrorActionPreference = 'Continue'
-            & $DotnetPath build $buildTarget --configuration $Configuration --output $outputDirectory --nologo --verbosity minimal 2>&1 |
-                ForEach-Object { Write-Host $_ }
-            $buildExit = $LASTEXITCODE
-        }
-        catch {
-            Write-Host "BUILD FAILURE - could not start '$DotnetPath build': $($_.Exception.Message)"
+        Write-Host "Build output log: $buildLog"
+        $arguments = [string[]]@(
+            $DotnetPath,
+            'build',
+            $buildTarget,
+            '--configuration',
+            $Configuration,
+            '--output',
+            $outputDirectory,
+            '--nologo',
+            '--verbosity',
+            'minimal'
+        )
+        $build = Invoke-MtpBuildProcess -Executable $DotnetPath -Arguments $arguments -OutputLog $buildLog -WorkingDirectory $RepositoryRoot
+        if (-not $build.Started -or -not [string]::IsNullOrWhiteSpace([string]$build.StartFailureMessage)) {
+            Write-Host "BUILD FAILURE - could not start '$DotnetPath build': $($build.StartFailureMessage)"
             return $false
         }
-        finally {
-            $ErrorActionPreference = $previousErrorActionPreference
+        if (-not $build.DrainConfirmed) {
+            Write-Host "BUILD OUTPUT DRAIN INCOMPLETE - continuing with exit code $($build.ExitCode). Captured stderr/stdout: $buildLog"
         }
-        if ($buildExit -ne 0) {
-            Write-Host "BUILD FAILURE - '$DotnetPath build' exited $buildExit. The managed MTP runner was not launched."
+        if ($build.ExitCode -ne 0) {
+            Write-Host "BUILD FAILURE - '$DotnetPath build' exited $($build.ExitCode). The managed MTP runner was not launched."
             return $false
         }
     }
@@ -1165,7 +1251,7 @@ function Invoke-MtpTestRun {
         Set-MtpHermeticEnvironment -RepositoryRoot $RepositoryRoot -WritableRoot $runDirectory
         Write-Host "Results directory: $runDirectory"
         if (-not $NoBuild) {
-            if (-not (Invoke-MtpBuild -RepositoryRoot $RepositoryRoot -Projects $projects -Configuration $Configuration -DotnetPath $DotnetPath)) {
+            if (-not (Invoke-MtpBuild -RepositoryRoot $RepositoryRoot -Projects $projects -Configuration $Configuration -DotnetPath $DotnetPath -BuildLogDirectory $runDirectory)) {
                 Write-Host "Retained diagnostic directory: $runDirectory"
                 return New-MtpTerminalResult -Outcome failed -ExitCode $script:ExitCodes.Build -ResultsDirectory $runDirectory -ArtifactsRetained $true
             }
