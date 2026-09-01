@@ -20,6 +20,44 @@ internal static class AcceptanceFailureAttributionPlanner
         IReadOnlyList<string> Selected,
         IReadOnlyList<string> Omitted);
 
+    internal sealed class FocusedInvocationBudget(int cap)
+    {
+        private int _remaining = cap;
+
+        internal BoundedIdentitySelection Select(IEnumerable<string> identities)
+        {
+            var ordered = identities
+                .Where(identity => !string.IsNullOrWhiteSpace(identity))
+                .Distinct(StringComparer.Ordinal)
+                .Order(StringComparer.Ordinal)
+                .ToArray();
+            var selectedSelectors = ordered
+                .Select(NormalizeIdentity)
+                .Distinct(StringComparer.Ordinal)
+                .Order(StringComparer.Ordinal)
+                .Take(_remaining)
+                .ToHashSet(StringComparer.Ordinal);
+            return new BoundedIdentitySelection(
+                ordered,
+                ordered.Where(identity => selectedSelectors.Contains(NormalizeIdentity(identity))).ToArray(),
+                ordered.Where(identity => !selectedSelectors.Contains(NormalizeIdentity(identity))).ToArray());
+        }
+
+        internal void Consume(BoundedIdentitySelection selection)
+        {
+            var consumed = selection.Selected
+                .Select(NormalizeIdentity)
+                .Distinct(StringComparer.Ordinal)
+                .Count();
+            if (consumed > _remaining)
+            {
+                throw new InvalidOperationException("Focused attribution selection exceeded its gate-wide budget.");
+            }
+
+            _remaining -= consumed;
+        }
+    }
+
     internal static BoundedIdentitySelection SelectBoundedIdentities(
         IEnumerable<string> identities,
         int cap)
@@ -198,12 +236,30 @@ internal static class AcceptanceFailureAttributionPlanner
             }
 
             var baselineFailures = (check.FailingTestIdentities ?? [])
-                .Select(NormalizeIdentity)
+                .Select(identity => identity.Trim())
                 .ToHashSet(StringComparer.Ordinal);
-            if (!check.Passed && baselineFailures.Contains(selector))
+            if (!check.Passed && baselineFailures.Contains(identity.Trim()))
             {
                 return Attribution(identity, AcceptanceTestFailureOrigin.Inherited,
                     $"same focused identity failed at merge-base {baseline.Sha}");
+            }
+
+            var sameSelectorFailures = baselineFailures
+                .Where(failure => NormalizeIdentity(failure).Equals(selector, StringComparison.Ordinal))
+                .ToArray();
+            if (!check.Passed &&
+                HasDataCaseIdentity(identity) &&
+                sameSelectorFailures is { Length: > 0 } &&
+                sameSelectorFailures.All(HasDataCaseIdentity))
+            {
+                return Attribution(identity, AcceptanceTestFailureOrigin.Introduced,
+                    $"same focused method failed at merge-base {baseline.Sha}, but this data-case identity did not");
+            }
+
+            if (!check.Passed && sameSelectorFailures.Length > 0)
+            {
+                return Attribution(identity, AcceptanceTestFailureOrigin.Unattributed,
+                    $"same focused method failed at merge-base {baseline.Sha}, but exact data-case identity was unavailable");
             }
 
             return check.Passed
@@ -219,10 +275,9 @@ internal static class AcceptanceFailureAttributionPlanner
         AcceptanceTestFailureOrigin origin,
         string evidence) => new(identity, origin, evidence);
 
-    internal static string NormalizeIdentity(string identity)
-    {
-        var normalized = identity.Trim();
-        var parameterStart = normalized.IndexOfAny(['(', '[']);
-        return parameterStart < 0 ? normalized : normalized[..parameterStart];
-    }
+    internal static string NormalizeIdentity(string identity) =>
+        AcceptanceTrxTestIdentityResolver.NormalizeSelector(identity);
+
+    private static bool HasDataCaseIdentity(string identity) =>
+        !NormalizeIdentity(identity).Equals(identity.Trim(), StringComparison.Ordinal);
 }

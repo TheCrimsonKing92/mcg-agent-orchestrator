@@ -966,6 +966,8 @@ public sealed class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
         }
 
         phaseAccountant.TransitionTo(AcceptanceGatePhaseNames.Finalize);
+        var failureAttributionBudget = new AcceptanceFailureAttributionPlanner.FocusedInvocationBudget(
+            MaxFailureAttributionFocusedEvidenceIdentities);
         for (var index = 0; index < checks.Count; index++)
         {
             var check = AttachFailureCauseEvidence(checks[index]);
@@ -982,7 +984,8 @@ public sealed class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
                 goalId,
                 stableSlotIndex,
                 stableSlotLease,
-                cancellationToken).ConfigureAwait(false);
+                cancellationToken,
+                failureAttributionBudget).ConfigureAwait(false);
         }
 
         var failedCheck = checks.FirstOrDefault(check => !check.Advisory && !check.Passed);
@@ -1021,7 +1024,8 @@ public sealed class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
         GoalId? goalId,
         int? stableSlotIndex,
         DotnetBuildEnvironmentLease? stableSlotLease,
-        CancellationToken cancellationToken)
+        CancellationToken cancellationToken,
+        AcceptanceFailureAttributionPlanner.FocusedInvocationBudget? invocationBudget = null)
     {
         using var engineScope = PushEngineSettings(engineSettings);
         if (check.Passed || check.Advisory || check.FailingTestIdentities is not { Count: > 0 } failingTestIdentities)
@@ -1029,13 +1033,24 @@ public sealed class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
             return check;
         }
 
-        var identitySelection = AcceptanceFailureAttributionPlanner.SelectBoundedIdentities(
-            failingTestIdentities,
+        invocationBudget ??= new AcceptanceFailureAttributionPlanner.FocusedInvocationBudget(
             MaxFailureAttributionFocusedEvidenceIdentities);
+        var identitySelection = invocationBudget.Select(failingTestIdentities);
         var identities = identitySelection.All;
         if (identities.Count == 0)
         {
             return check;
+        }
+
+        if (identitySelection.Selected.Count == 0)
+        {
+            return check with
+            {
+                FailingTestAttributions = AcceptanceFailureAttributionPlanner.IncludeOmittedAsUnattributed(
+                    [],
+                    identitySelection.Omitted,
+                    MaxFailureAttributionFocusedEvidenceIdentities)
+            };
         }
 
         AcceptanceCheckResult Unattributed(string evidence) => check with
@@ -1070,6 +1085,8 @@ public sealed class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
         {
             return Unattributed(selectionPlan.FailureEvidence!);
         }
+
+        invocationBudget.Consume(identitySelection);
 
         var baselineSha = ResolveGitScalar(worktreePath, "merge-base", "HEAD", "main");
         FocusedEvidenceArmRunResult baseline;
@@ -7295,7 +7312,9 @@ public sealed class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
                 definitionsByTestId.TryGetValue(
                     result.Attribute("testId")?.Value ?? string.Empty,
                     out var definition);
-                var testName = ResolveTrxTestName(result, definition);
+                var testName = AcceptanceTrxTestIdentityResolver.Resolve(result, definition)
+                    ?? result.Attribute("testId")?.Value?.Trim()
+                    ?? "unknown test";
                 var message = result
                     .Descendants()
                     .FirstOrDefault(element =>
@@ -7328,7 +7347,9 @@ public sealed class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
                 definitionsByTestId.TryGetValue(
                     result.Attribute("testId")?.Value ?? string.Empty,
                     out var definition);
-                return ResolveTrxTestName(result, definition);
+                return AcceptanceTrxTestIdentityResolver.Resolve(result, definition) ??
+                    result.Attribute("testId")?.Value?.Trim() ??
+                    "unknown test";
             })
             .Where(identity => !string.IsNullOrWhiteSpace(identity))
             .Distinct(StringComparer.Ordinal)
@@ -7595,13 +7616,9 @@ public sealed class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
                         definitionsByTestId.TryGetValue(
                             result.Attribute("testId")?.Value ?? string.Empty,
                             out var definition);
-                        var testMethod = definition?.Descendants()
-                            .FirstOrDefault(element => element.Name.LocalName.Equals("TestMethod", StringComparison.Ordinal));
-                        var className = testMethod?.Attribute("className")?.Value?.Trim();
-                        var methodName = testMethod?.Attribute("name")?.Value?.Trim();
-                        return !string.IsNullOrWhiteSpace(className) && !string.IsNullOrWhiteSpace(methodName)
-                            ? $"{className}.{methodName}"
-                            : ResolveTrxTestName(result, definition);
+                        return AcceptanceTrxTestIdentityResolver.Resolve(result, definition) ??
+                            result.Attribute("testId")?.Value?.Trim() ??
+                            "unknown test";
                     }));
             }
             catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or System.Xml.XmlException)
@@ -7620,46 +7637,6 @@ public sealed class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
 
     private static bool IsFocusedEvidenceIdentityMatch(string identity, string selection) =>
         identity.Contains(selection, StringComparison.OrdinalIgnoreCase);
-
-    private static string ResolveTrxTestName(XElement result, XElement? definition)
-    {
-        var testName = result.Attribute("testName")?.Value?.Trim();
-        var testMethod = definition?.Descendants()
-            .FirstOrDefault(element => element.Name.LocalName.Equals("TestMethod", StringComparison.Ordinal));
-        var className = testMethod?.Attribute("className")?.Value?.Trim();
-        var methodName = testMethod?.Attribute("name")?.Value?.Trim();
-        if (!string.IsNullOrWhiteSpace(className) && !string.IsNullOrWhiteSpace(methodName))
-        {
-            return $"{className}.{methodName}";
-        }
-
-        var displayName = result.Descendants()
-            .Concat(definition?.Descendants() ?? [])
-            .Where(element =>
-                element.Name.LocalName.Equals("DisplayName", StringComparison.Ordinal) ||
-                element.Name.LocalName.Equals("Description", StringComparison.Ordinal))
-            .Select(element => element.Value.Trim())
-            .FirstOrDefault(value => !string.IsNullOrWhiteSpace(value));
-        displayName ??= definition?.Attribute("name")?.Value?.Trim();
-
-        if (!string.IsNullOrWhiteSpace(displayName) &&
-            (string.IsNullOrWhiteSpace(testName) ||
-                (LooksLikeQualifiedTestName(testName) && displayName.Length < testName.Length)))
-        {
-            return displayName;
-        }
-
-        if (!string.IsNullOrWhiteSpace(testName))
-        {
-            return testName;
-        }
-
-        return result.Attribute("testId")?.Value?.Trim() ?? "unknown test";
-    }
-
-    private static bool LooksLikeQualifiedTestName(string value) =>
-        value.Contains('+', StringComparison.Ordinal) ||
-        value.Count(ch => ch == '.') >= 2;
 
     private static string? FirstNonEmptyLine(string? value) =>
         value?

@@ -257,7 +257,7 @@ public sealed class GoalAcceptanceVerifierDotnetBuildSlotTestsRunnerInvocationAn
         Assert.Equal(
             [
                 "[FAIL] Mcg.AgentOrchestrator.Infrastructure.Tests.RetryEvidenceTests.IncludesFailures: Assert.Contains() Failure: Sub-string not found",
-                "[FAIL] Mcg.AgentOrchestrator.Infrastructure.Tests.MtpShardTests.PreservesTheoryDisplayName: Expected shard count to be 2, but found 1"
+                "[FAIL] Mcg.AgentOrchestrator.Infrastructure.Tests.MtpShardTests.PreservesTheoryDisplayName(value: 42): Expected shard count to be 2, but found 1"
             ],
             evidence);
         Assert.DoesNotContain(evidence, line =>
@@ -347,7 +347,7 @@ public sealed class GoalAcceptanceVerifierDotnetBuildSlotTestsRunnerInvocationAn
             "at Mcg.AgentOrchestrator.Infrastructure.Tests.RetryEvidenceTests.IncludesFailures() in D:\\a\\mcg-agent-orchestrator\\RetryEvidenceTests.cs:line 42",
             assertion.StackTrace);
         Assert.Equal(
-            "Mcg.AgentOrchestrator.Infrastructure.Tests.MtpShardTests.PreservesTheoryDisplayName",
+            "Mcg.AgentOrchestrator.Infrastructure.Tests.MtpShardTests.PreservesTheoryDisplayName(value: 42)",
             receipt.Failures[1].TestName);
         Assert.Equal("Timeout", receipt.Failures[2].Outcome);
         Assert.Contains("30 second partition timeout", receipt.Failures[2].Message, StringComparison.Ordinal);
@@ -395,7 +395,7 @@ public sealed class GoalAcceptanceVerifierDotnetBuildSlotTestsRunnerInvocationAn
                 output,
                 StringComparison.Ordinal);
             Assert.Contains(
-                "[FAIL] Mcg.AgentOrchestrator.Infrastructure.Tests.MtpShardTests.PreservesTheoryDisplayName: Expected shard count to be 2, but found 1",
+                "[FAIL] Mcg.AgentOrchestrator.Infrastructure.Tests.MtpShardTests.PreservesTheoryDisplayName(value: 42): Expected shard count to be 2, but found 1",
                 output,
                 StringComparison.Ordinal);
             Assert.DoesNotContain("Passing MTP test is not surfaced", output, StringComparison.Ordinal);
