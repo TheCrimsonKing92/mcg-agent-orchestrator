@@ -5,12 +5,13 @@ using Mcg.AgentOrchestrator.Infrastructure;
 public sealed class CleanTestBaselineTests
 {
     [Xunit.Theory]
-    [Xunit.InlineData("FixturePublication", "NotRun", "RepositoryMissing", false, null, 0, true)]
-    [Xunit.InlineData("FixturePublication", "EmptyRequiredOutput", "HeadMissing", true, 0, 0, true)]
-    [Xunit.InlineData("FixturePublication", "NonZeroExit", "ReferenceInvalid", true, 128, 0, true)]
-    [Xunit.InlineData("FixturePublication", "NonZeroExit", "ValidLooseReference", true, 128, 0, false)]
-    [Xunit.InlineData("ProcessOutputApparatus", "ProcessObservationFailure", "ValidLooseReference", true, 0, 0, true)]
-    [Xunit.InlineData("ProcessOutputApparatus", "ProcessObservationFailure", "HeadMissing", true, 0, 0, false)]
+    [Xunit.InlineData("FixturePublication", "NotRun", "RepositoryMissing", false, null, 0, 0, true)]
+    [Xunit.InlineData("FixturePublication", "EmptyRequiredOutput", "HeadMissing", true, 0, 0, 0, true)]
+    [Xunit.InlineData("FixturePublication", "NonZeroExit", "ReferenceInvalid", true, 128, 0, 0, true)]
+    [Xunit.InlineData("FixturePublication", "NonZeroExit", "ValidLooseReference", true, 128, 0, 0, false)]
+    [Xunit.InlineData("ProcessOutputApparatus", "ProcessObservationFailure", "ValidLooseReference", true, 0, 0, 31, true)]
+    [Xunit.InlineData("ProcessOutputApparatus", "ProcessObservationFailure", "ValidLooseReference", true, 0, 0, 0, false)]
+    [Xunit.InlineData("ProcessOutputApparatus", "ProcessObservationFailure", "HeadMissing", true, 0, 0, 31, false)]
     public void SeededRepositoryCauseReceiptDecisionTableRequiresPositiveOwnerEvidence(
         string owner,
         string classification,
@@ -18,6 +19,7 @@ public sealed class CleanTestBaselineTests
         bool processStarted,
         int? exitCode,
         long stdoutBytes,
+        long stderrBytes,
         bool expected)
     {
         var receipt = new AcceptanceFailureCauseReceiptV1(
@@ -28,7 +30,7 @@ public sealed class CleanTestBaselineTests
             processStarted,
             exitCode,
             stdoutBytes,
-            0,
+            stderrBytes,
             false,
             false,
             false,

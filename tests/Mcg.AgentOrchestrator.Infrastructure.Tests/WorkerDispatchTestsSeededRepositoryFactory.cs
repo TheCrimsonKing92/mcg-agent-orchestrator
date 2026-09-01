@@ -631,12 +631,13 @@ internal sealed class WorkerDispatchTestsSeededRepositoryFactory
 
         if (!result.Succeeded)
         {
+            var failureObservation = _fileSystem.ObserveRepository(path);
             throw Failure(
                 check,
                 sourceTemplatePath,
                 stagingPath,
                 finalPath,
-                observation,
+                failureObservation,
                 result,
                 templateIdentity,
                 stagingIdentity,

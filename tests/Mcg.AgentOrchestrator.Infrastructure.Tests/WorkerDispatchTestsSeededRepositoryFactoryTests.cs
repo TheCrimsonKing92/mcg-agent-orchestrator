@@ -392,15 +392,21 @@ public sealed class WorkerDispatchTestsSeededRepositoryFactoryTests
         var expectedHeadState = removeHead
             ? WorkerDispatchTestsSeededRepositoryFactory.RepositoryHeadState.HeadMissing
             : WorkerDispatchTestsSeededRepositoryFactory.RepositoryHeadState.ValidLooseReference;
+        var interceptEnabled = false;
         var runner = new InterceptingGitRunner(
-            arguments => arguments.SequenceEqual(["rev-parse", "--verify", "HEAD^{commit}"]),
+            arguments => interceptEnabled &&
+                arguments.SequenceEqual(["rev-parse", "--verify", "HEAD^{commit}"]),
             (_, _, result) => InjectProcessFault(result, scenario),
-            requireSuccessfulResult: false,
-            interceptMatchOrdinal: 2);
-        var hooks = removeHead
-            ? new WorkerDispatchTestsSeededRepositoryFactory.CreationHooks(
-                BeforeTemplateValidation: template => File.Delete(Path.Combine(template, ".git", "HEAD")))
-            : null;
+            requireSuccessfulResult: false);
+        var hooks = new WorkerDispatchTestsSeededRepositoryFactory.CreationHooks(
+            BeforeTemplateValidation: template =>
+            {
+                interceptEnabled = true;
+                if (removeHead)
+                {
+                    File.Delete(Path.Combine(template, ".git", "HEAD"));
+                }
+            });
         using var scope = new FactoryScope(hooks: hooks, gitRunner: runner);
 
         var failure = Xunit.Assert.Throws<
