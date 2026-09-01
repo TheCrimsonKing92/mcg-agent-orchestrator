@@ -3,6 +3,7 @@ using System.Security.Cryptography;
 using System.Text;
 using System.Text.Json;
 using Mcg.AgentOrchestrator.Core;
+using Microsoft.Win32.SafeHandles;
 
 namespace Mcg.AgentOrchestrator.Infrastructure;
 
@@ -46,6 +47,7 @@ internal sealed class HermesAcpProcessLauncher : IHermesAcpProcessLauncher
     private sealed class HermesAcpProcess : IHermesAcpProcess
     {
         private readonly Process _process;
+        private readonly SafeFileHandle _processHandle;
         private readonly OwnedProcessGroup _processGroup;
         private readonly HashSet<SpawnProcessIdentity> _observedIdentities = [];
         private bool? _terminatedJobExitConfirmed;
@@ -53,6 +55,7 @@ internal sealed class HermesAcpProcessLauncher : IHermesAcpProcessLauncher
         public HermesAcpProcess(OwnedProcessGroup.RedirectedOwnedProcessStart launched)
         {
             _process = launched.Process;
+            _processHandle = launched.ProcessHandle;
             _processGroup = launched.Group;
             StandardInput = launched.StandardInput;
             StandardOutput = launched.StandardOutput;
@@ -63,7 +66,7 @@ internal sealed class HermesAcpProcessLauncher : IHermesAcpProcessLauncher
         public TextWriter StandardInput { get; }
         public TextReader StandardOutput { get; }
         public TextReader StandardError { get; }
-        public int ExitCode => _process.ExitCode;
+        public int ExitCode => OwnedProcessGroup.ReadProcessExitCode(_processHandle);
         public bool JobExitConfirmed => _terminatedJobExitConfirmed ??
             (_processGroup.TryGetActiveProcessIds(out var processIds) && processIds.Count == 0);
         public bool SurvivorInventoryEmpty => _observedIdentities.All(identity =>
@@ -113,6 +116,7 @@ internal sealed class HermesAcpProcessLauncher : IHermesAcpProcessLauncher
             StandardOutput.Dispose();
             StandardError.Dispose();
             _processGroup.Dispose();
+            _processHandle.Dispose();
             _process.Dispose();
         }
 

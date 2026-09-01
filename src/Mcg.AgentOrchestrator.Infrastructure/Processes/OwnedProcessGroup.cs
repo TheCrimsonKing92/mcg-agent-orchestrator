@@ -368,6 +368,9 @@ internal sealed class OwnedProcessGroup : IDisposable
         return OperatingSystem.IsWindows() && WindowsJob.TryReadAccounting(jobHandle, out accounting);
     }
 
+    internal static int ReadProcessExitCode(SafeFileHandle processHandle) =>
+        WindowsJob.ReadProcessExitCode(processHandle);
+
     // Bounded wait for the WHOLE job tree (children and grandchildren) to exit after a kill,
     // polled via a duplicated job handle because Kill() closes the group's own handle. Slot
     // release/handoff must never proceed over a live gate-owned process.
@@ -517,10 +520,11 @@ internal sealed class OwnedProcessGroup : IDisposable
 
         internal RedirectedOwnedProcessStart TransferOwnership()
         {
-            var process = _suspended.TransferOwnership();
+            var transfer = _suspended.TransferOwnedProcess();
             _transferred = true;
             return new(
-                process,
+                transfer.Process,
+                transfer.ProcessHandle,
                 _suspended.Group,
                 StandardInput,
                 StandardOutput,
@@ -543,6 +547,7 @@ internal sealed class OwnedProcessGroup : IDisposable
 
     internal sealed record RedirectedOwnedProcessStart(
         Process Process,
+        SafeFileHandle ProcessHandle,
         OwnedProcessGroup Group,
         TextWriter StandardInput,
         TextReader StandardOutput,
@@ -601,6 +606,16 @@ internal sealed class OwnedProcessGroup : IDisposable
             IntPtr stdout,
             IntPtr stderr) =>
             StartSuspendedInJobCore(job, startInfo, stdin, stdout, stderr, [stdin, stdout, stderr]);
+
+        public static int ReadProcessExitCode(SafeFileHandle processHandle)
+        {
+            if (!GetExitCodeProcess(processHandle, out var exitCode))
+            {
+                throw new Win32Exception(Marshal.GetLastWin32Error(), "Failed to read owned process exit code.");
+            }
+
+            return unchecked((int)exitCode);
+        }
 
         private static WindowsSuspendedProcess StartSuspendedInJobCore(
             SafeFileHandle job,
@@ -1038,6 +1053,9 @@ internal sealed class OwnedProcessGroup : IDisposable
 
         [DllImport("kernel32.dll", SetLastError = true)]
         private static extern bool TerminateJobObject(SafeFileHandle hJob, uint uExitCode);
+
+        [DllImport("kernel32.dll", SetLastError = true)]
+        private static extern bool GetExitCodeProcess(SafeFileHandle processHandle, out uint exitCode);
 
         public static bool TryDuplicateCurrentProcessHandle(SafeFileHandle job, out SafeFileHandle duplicate)
         {
