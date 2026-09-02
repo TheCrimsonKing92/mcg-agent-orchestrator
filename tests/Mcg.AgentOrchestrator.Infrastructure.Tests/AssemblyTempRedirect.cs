@@ -47,7 +47,9 @@ internal static class AssemblyTempRedirect
         var rootLease = TryAcquireOwnedRootLease(selection.SelectedRoot);
         if (rootLease is null)
         {
-            Console.Error.WriteLine($"assembly-temp-redirect lease=unavailable path=\"{RootLeasePath(selection.SelectedRoot)}\"");
+            TryWriteReceipt(
+                Console.Error.WriteLine,
+                () => $"assembly-temp-redirect lease=unavailable path=\"{RootLeasePath(selection.SelectedRoot)}\"");
             totalClock.Stop();
             timings.TotalElapsedMilliseconds = totalClock.ElapsedMilliseconds;
             TryPublishTimingDiagnostic(TryFormatTimingDiagnostic(timings));
@@ -191,6 +193,7 @@ internal static class AssemblyTempRedirect
                 TryAcquireDeletionLease,
                 timings,
                 writeReceipt);
+            SweepOrphanedRootLeases(sharedRoot, writeReceipt);
             phaseClock.Stop();
             timings.ReapDeleteElapsedMilliseconds = phaseClock.ElapsedMilliseconds;
         }
@@ -418,9 +421,11 @@ internal static class AssemblyTempRedirect
         try
         {
             var leasePath = RootLeasePath(rootPath);
-            return File.Exists(leasePath)
-                ? new FileStream(leasePath, FileMode.Open, FileAccess.ReadWrite, FileShare.None)
-                : null;
+            return new FileStream(
+                leasePath,
+                FileMode.OpenOrCreate,
+                FileAccess.ReadWrite,
+                FileShare.None);
         }
         catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
         {
@@ -428,12 +433,13 @@ internal static class AssemblyTempRedirect
         }
     }
 
-    private static FileStream? TryAcquireOwnedRootLease(string rootPath)
+    internal static FileStream? TryAcquireOwnedRootLease(string rootPath)
     {
+        FileStream? lease = null;
         try
         {
             var leasePath = RootLeasePath(rootPath);
-            var lease = new FileStream(
+            lease = new FileStream(
                 leasePath,
                 FileMode.OpenOrCreate,
                 FileAccess.ReadWrite,
@@ -452,10 +458,50 @@ internal static class AssemblyTempRedirect
             lease.Position = 0;
             return lease;
         }
-        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+        catch
         {
+            lease?.Dispose();
             return null;
         }
+    }
+
+    internal static int SweepOrphanedRootLeases(string sharedRoot, Action<string>? writeReceipt)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(sharedRoot);
+        var deleted = 0;
+        foreach (var leasePath in Directory.EnumerateFiles(sharedRoot, $".*{RootLeaseSuffix}"))
+        {
+            var fileName = Path.GetFileName(leasePath);
+            if (fileName.Length <= RootLeaseSuffix.Length + 1 || fileName[0] != '.')
+            {
+                continue;
+            }
+
+            var rootName = fileName[1..^RootLeaseSuffix.Length];
+            if (!TryParseProcessTempRootName(rootName, out _) ||
+                Directory.Exists(Path.Combine(sharedRoot, rootName)))
+            {
+                continue;
+            }
+
+            try
+            {
+                File.Delete(leasePath);
+                deleted++;
+                TryWriteReceipt(
+                    writeReceipt,
+                    () => $"assembly-temp-reaper orphanLease={QuoteDiagnostic(leasePath)} deleteStatus=Deleted");
+            }
+            catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+            {
+                TryWriteReceipt(
+                    writeReceipt,
+                    () => $"assembly-temp-reaper orphanLease={QuoteDiagnostic(leasePath)} " +
+                          $"deleteStatus=Failed exceptionType={ex.GetType().Name}");
+            }
+        }
+
+        return deleted;
     }
 
     private static void ReleaseOwnedRoot(string rootPath)

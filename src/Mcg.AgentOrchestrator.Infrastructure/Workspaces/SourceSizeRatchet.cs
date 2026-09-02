@@ -43,7 +43,9 @@ internal static class SourceSizeRatchet
             // attribution meet where the verifier converts a test receipt into final gate evidence.
             // Raised for goal fc109f3f: typed seeded-repository receipt validation and mixed-owner
             // classification belong at the verifier boundary that converts TRX output into gate attribution.
-            new SourceSizeCeiling("src/Mcg.AgentOrchestrator.Infrastructure/Workspaces/GoalAcceptanceVerifier.cs", 9586),
+            // Reconciled after main 4ba0dba0 and dda4a341 added reviewed cancellation-boundary and
+            // gate-wide attribution batching behavior; 9688 is the measured combined post-rebase size.
+            new SourceSizeCeiling("src/Mcg.AgentOrchestrator.Infrastructure/Workspaces/GoalAcceptanceVerifier.cs", 9688),
             // Goal 682f25a1 re-derived this row after integrating goal c2eae988, whose acceptance
             // cancellation seam had already added 74 net lines before the multi-file ratchet landed.
             // Raised for goal a22c7293: slice admission must run where all dispatch paths converge.
@@ -158,7 +160,9 @@ internal static class SourceSizeRatchet
             // do not reopen completed worker evidence while mixed candidate failures retain normal routing.
             // Goal fc109f3f extends the cross-tick acceptance control to the production five-role pipeline,
             // proving a typed apparatus re-gate preserves every completed task rather than only Developer.
-            new SourceSizeCeiling("tests/Mcg.AgentOrchestrator.Infrastructure.Tests/ConductorBatchLoopTestsParallelAcceptance.cs", 5176),
+            // Reconciled after main 4ba0dba0 added the reviewed target-boundary cancellation regression;
+            // 5188 is the measured combined post-rebase size.
+            new SourceSizeCeiling("tests/Mcg.AgentOrchestrator.Infrastructure.Tests/ConductorBatchLoopTestsParallelAcceptance.cs", 5188),
             new SourceSizeCeiling("tests/Mcg.AgentOrchestrator.Infrastructure.Tests/DotnetBuildEnvironmentManagerTests.cs", 1480),
         });
 
