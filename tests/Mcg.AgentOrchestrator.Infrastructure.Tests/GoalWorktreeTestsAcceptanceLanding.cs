@@ -370,6 +370,7 @@ public sealed class GoalWorktreeTestsAcceptanceLanding : GoalWorktreeTestBase
             _ = coordinator.Observe(kernel, [goal]);
             _ = coordinator.Observe(kernel, [goal]);
 
+            Assert.Equal(1, runner.CallCount);
             Assert.Empty(steeringStore.Intents);
             Assert.Equal(WorkTaskStatus.Running, task.Status);
             Assert.Equal(worktreePath, GoalWorktrees.TryResolve(repo, goal.Id));
@@ -1333,9 +1334,14 @@ public sealed class GoalWorktreeTestsAcceptanceLanding : GoalWorktreeTestBase
     private sealed class GatedWorkflowGlanceRunner(ProgressiveReviewGlanceDispatchResult result)
         : IProgressiveReviewGlanceRunner
     {
+        public int CallCount { get; private set; }
+
         public Task<ProgressiveReviewGlanceDispatchResult> RunAsync(
             ProgressiveReviewGlanceInputs inputs,
-            CancellationToken cancellationToken = default) =>
-            Task.FromResult(result);
+            CancellationToken cancellationToken = default)
+        {
+            CallCount++;
+            return Task.FromResult(result);
+        }
     }
 }
