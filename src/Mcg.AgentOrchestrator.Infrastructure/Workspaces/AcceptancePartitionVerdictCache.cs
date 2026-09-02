@@ -276,11 +276,29 @@ internal sealed class AcceptancePartitionVerdictCache
     {
         lock (_gate)
         {
-            return _sharedApparatusInvalidation is null
-                ? results
-                : results.Select(result => DecorateSharedApparatusFailure(
-                    result,
-                    _sharedApparatusInvalidation)).ToArray();
+            if (_sharedApparatusInvalidation is null)
+            {
+                return results;
+            }
+
+            var collapsed = new List<AcceptanceCheckResult>(results.Count);
+            var incidentEmitted = false;
+            foreach (var result in results)
+            {
+                if (!IsAffectedBySharedApparatusLoss(result, _sharedApparatusInvalidation))
+                {
+                    collapsed.Add(result);
+                    continue;
+                }
+
+                if (!incidentEmitted)
+                {
+                    collapsed.Add(DecorateSharedApparatusFailure(result, _sharedApparatusInvalidation));
+                    incidentEmitted = true;
+                }
+            }
+
+            return collapsed;
         }
     }
 
@@ -297,12 +315,7 @@ internal sealed class AcceptancePartitionVerdictCache
         AcceptanceCheckResult result,
         AcceptanceSharedApparatusInvalidation? invalidation)
     {
-        if (invalidation is null ||
-            result.ChildProcessId is not { } processId ||
-            result.ChildProcessStartedAt is not { } processStartedAt ||
-            !invalidation.AffectedOwners.Any(owner =>
-                owner.OwnerProcessId == processId &&
-                owner.OwnerStartedAt == processStartedAt))
+        if (!IsAffectedBySharedApparatusLoss(result, invalidation))
         {
             return result;
         }
@@ -320,6 +333,16 @@ internal sealed class AcceptancePartitionVerdictCache
                 AcceptanceFailureClassifications.SharedGateApparatusInvalidated)
         };
     }
+
+    private static bool IsAffectedBySharedApparatusLoss(
+        AcceptanceCheckResult result,
+        AcceptanceSharedApparatusInvalidation? invalidation) =>
+        invalidation is not null &&
+        result.ChildProcessId is { } processId &&
+        result.ChildProcessStartedAt is { } processStartedAt &&
+        invalidation.AffectedOwners.Any(owner =>
+            owner.OwnerProcessId == processId &&
+            owner.OwnerStartedAt == processStartedAt);
 
     internal bool ShouldRerunWithinAttempt(AcceptanceManifestCheck check, bool passed) =>
         ShouldRerunWithinAttempt(

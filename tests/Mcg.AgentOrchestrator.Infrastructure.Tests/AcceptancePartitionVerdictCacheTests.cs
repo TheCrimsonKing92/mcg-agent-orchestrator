@@ -277,14 +277,19 @@ public sealed class AcceptancePartitionVerdictCacheTests : IDisposable
         var decorated = cache.ApplySharedApparatusInvalidation(
             [
                 FailedOwnerResult(_partition.Name, 101, startedAt),
-                FailedOwnerResult(secondPartition.Name, 202, startedAt.AddSeconds(1))
+                FailedOwnerResult(secondPartition.Name, 202, startedAt.AddSeconds(1)),
+                new AcceptanceCheckResult("unrelated candidate failure", false, 1, "ordinary failure")
             ]);
 
         var invalidation = Assert.IsType<AcceptanceSharedApparatusInvalidation>(cache.SharedApparatusInvalidation);
         Assert.Equal("first", invalidation.FirstReceipt.ReceiptId);
         Assert.Equal([101, 202], invalidation.AffectedOwners.Select(owner => owner.OwnerProcessId));
-        Assert.All(decorated, result =>
-            Assert.Equal(AcceptanceFailureClassifications.SharedGateApparatusInvalidated, result.FailureClassification));
+        Assert.Equal(2, decorated.Count);
+        Assert.Single(
+            decorated,
+            result => result.FailureClassification == AcceptanceFailureClassifications.SharedGateApparatusInvalidated);
+        var unrelated = Assert.Single(decorated, result => result.Name == "unrelated candidate failure");
+        Assert.Null(unrelated.FailureClassification);
     }
 
     [Theory]

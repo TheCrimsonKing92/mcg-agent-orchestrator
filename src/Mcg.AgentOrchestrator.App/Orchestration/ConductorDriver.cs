@@ -4390,7 +4390,8 @@ internal sealed partial class ConductorDriver
         return requiredUnmetCriteria.All(check =>
             check.FailureClassification is
                 AcceptanceFailureClassifications.GateEnvironmentInterference or
-                AcceptanceFailureClassifications.InheritedBaselineApparatus ||
+                AcceptanceFailureClassifications.InheritedBaselineApparatus or
+                AcceptanceFailureClassifications.SharedGateApparatusInvalidated ||
             acceptance.CheckAttributions is { Count: > 0 } attributions &&
             attributions.Any(attribution =>
                 attribution.CheckName.Equals(check.Name, StringComparison.Ordinal) &&
