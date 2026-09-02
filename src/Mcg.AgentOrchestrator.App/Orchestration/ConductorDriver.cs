@@ -1901,17 +1901,24 @@ internal sealed partial class ConductorDriver
         out VerifyingFindingAutoRetryDecision decision)
     {
         decision = VerifyingFindingAutoRetryDecision.None;
-        foreach (var requestingTask in goal.Tasks.Where(task => task.LastVerification is not null))
+        var trigger = goal.Tasks
+            .Select(task => BuildTesterDeveloperOwnedFindingTrigger(goal, task))
+            .FirstOrDefault(candidate => candidate is not null);
+        if (trigger is null)
         {
-            if (TryBuildFindingEvidenceRequest(goal, requestingTask, policy, out decision))
+            foreach (var requestingTask in goal.Tasks.Where(task => task.LastVerification is not null))
             {
-                return true;
+                if (TryBuildFindingEvidenceRequest(goal, requestingTask, policy, out decision))
+                {
+                    return true;
+                }
             }
+
+            trigger = goal.Tasks
+                .Select(task => BuildVerifyingFindingTrigger(goal, task))
+                .FirstOrDefault(candidate => candidate is not null);
         }
 
-        var trigger = goal.Tasks
-            .Select(task => BuildVerifyingFindingTrigger(goal, task))
-            .FirstOrDefault(candidate => candidate is not null);
         if (trigger is null)
         {
             return false;
@@ -1952,9 +1959,12 @@ internal sealed partial class ConductorDriver
         var targetRole = triggeringTask.RequiredRole == AgentRole.Tester
             ? AgentRole.Developer
             : reviewerRoute?.TargetRole ?? AgentRole.Developer;
-        var targetTask = trigger.TargetTask ?? goal.Tasks
-            .TakeWhile(t => t.Id != triggeringTask.Id)
-            .LastOrDefault(t => t.RequiredRole == targetRole);
+        var targetTask = trigger.TargetTask ??
+            (trigger.RequiresCommittedTarget
+                ? null
+                : goal.Tasks
+                    .TakeWhile(t => t.Id != triggeringTask.Id)
+                    .LastOrDefault(t => t.RequiredRole == targetRole));
         if (targetTask is null && triggeringTask.RequiredRole == AgentRole.Reviewer && targetRole != AgentRole.Developer)
         {
             targetRole = AgentRole.Developer;
@@ -2026,7 +2036,6 @@ internal sealed partial class ConductorDriver
             ResolveAutomaticRetryCause(triggeringTask) ?? RetryCause.CriterionEvidenceOwnerMismatch);
         return true;
     }
-
     private VerifyingFindingTrigger? BuildVerifyingFindingTrigger(Goal goal, TaskSpec task)
     {
         if (task.Status != WorkTaskStatus.Failed)
@@ -2239,6 +2248,7 @@ internal sealed partial class ConductorDriver
 
         var groups = new List<FindingEvidenceRequestGroup>();
         var normalizationRefused = false;
+        var reusedGreenReceipt = false;
         foreach (var finding in requestingFindings)
         {
             if (!TryNormalizeFindingEvidenceRequest(
@@ -2257,16 +2267,35 @@ internal sealed partial class ConductorDriver
             var identity = BuildFindingEvidenceIdentity(typedRequest);
             var mergedFinding = ReviewFindingConvergence.ResolveMergedFinding(
                 mergedFindings, round, finding.StableId);
-            if (mergedFinding?.EvidenceOutcome is { } priorOutcome &&
-                (IsPermanentFindingEvidenceRefusal(priorOutcome) ||
-                    HasCurrentFindingEvidenceReceipt(
+            if (mergedFinding?.EvidenceOutcome is { } priorOutcome)
+            {
+                if (IsPermanentFindingEvidenceRefusal(priorOutcome))
+                {
+                    continue;
+                }
+
+                if (HasCurrentFindingEvidenceReceipt(
                         requestingTask,
                         mergedFinding,
                         typedRequest,
                         telemetryCandidateSha,
-                        findingRoundFingerprint)))
-            {
-                continue;
+                        findingRoundFingerprint))
+                {
+                    continue;
+                }
+
+                if (TryGetReusableGreenFindingEvidenceReceipt(
+                        requestingTask,
+                        mergedFinding,
+                        typedRequest,
+                        telemetryCandidateSha,
+                        out var reusableReceipt))
+                {
+                    reusedGreenReceipt = true;
+                    ReattachReusableGreenFindingEvidence(
+                        goal, requestingTask, mergedFinding, priorOutcome, reusableReceipt);
+                    continue;
+                }
             }
 
             var groupIndex = groups.FindIndex(group => string.Equals(group.Identity, identity, StringComparison.Ordinal));
@@ -2285,6 +2314,14 @@ internal sealed partial class ConductorDriver
             decision = BuildFindingEvidenceDeliveryRetry(
                 requestingTask,
                 "Every current evidence request was refused during normalization; typed refusal details were attached.");
+            return true;
+        }
+
+        if (groups.Count == 0 && reusedGreenReceipt)
+        {
+            decision = BuildFindingEvidenceDeliveryRetry(
+                requestingTask,
+                "Previously executed green evidence still matches the candidate and normalized request; its receipt was reattached without rerunning tests.");
             return true;
         }
 
@@ -2877,58 +2914,6 @@ internal sealed partial class ConductorDriver
                 : "incompatible-filter-semantics";
     }
 
-    private static bool IsPermanentFindingEvidenceRefusal(FindingEvidenceOutcome outcome)
-    {
-        if (!string.IsNullOrWhiteSpace(outcome.ReceiptId))
-        {
-            return false;
-        }
-
-        return outcome.Reason switch
-        {
-            FindingEvidenceNotHonouredReason.Unknown => true, // Permanent default: no typed retry signal exists.
-            FindingEvidenceNotHonouredReason.UnsupportedProject => true, // Permanent until the request changes.
-            FindingEvidenceNotHonouredReason.UnparseableSelection => true, // Permanent until the selection changes.
-            FindingEvidenceNotHonouredReason.CandidateShaMissing => false, // Transient: a later candidate may have a sha.
-            FindingEvidenceNotHonouredReason.ExecutorUnavailable => false, // Transient: the executor may recover.
-            FindingEvidenceNotHonouredReason.SelectionApparatusFailure => false, // Transient: source discovery may recover.
-            FindingEvidenceNotHonouredReason.RunFailed => false, // Transient: the focused run may succeed later.
-            FindingEvidenceNotHonouredReason.SupersededByActionableRed => true, // Permanent for this unchanged request.
-            FindingEvidenceNotHonouredReason.PerRoundCap => true, // Retired persisted disposition; preserve suppression.
-            null => true, // Persisted outcomes without a reason are unclassified and fail safe.
-            _ => true // Future or unrecognized reasons fail safe against verbatim replay.
-        };
-    }
-
-    private static bool HasCurrentFindingEvidenceReceipt(
-        TaskSpec requestingTask,
-        ReviewFinding finding,
-        FindingEvidenceRequest request,
-        string candidateSha,
-        string findingRoundFingerprint)
-    {
-        var receiptId = finding.EvidenceOutcome?.ReceiptId;
-        if (string.IsNullOrWhiteSpace(receiptId) || candidateSha == "unavailable")
-        {
-            return false;
-        }
-
-        var identity = BuildFindingEvidenceIdentity(request);
-        return requestingTask.VerificationHistory
-            .SelectMany(verification => verification.FindingEvidenceReceipts ?? [])
-            .Any(receipt =>
-                string.Equals(receipt.ReceiptId, receiptId, StringComparison.Ordinal) &&
-                string.Equals(receipt.CandidateSha, candidateSha, StringComparison.OrdinalIgnoreCase) &&
-                string.Equals(
-                    receipt.FindingRoundFingerprint,
-                    findingRoundFingerprint,
-                    StringComparison.Ordinal) &&
-                (string.Equals(BuildFindingEvidenceIdentity(receipt.Request), identity, StringComparison.Ordinal) ||
-                    (receipt.RequestDispositions ?? []).Any(disposition =>
-                        string.Equals(disposition.FindingStableId, finding.StableId, StringComparison.Ordinal) &&
-                        string.Equals(disposition.RequestIdentity, identity, StringComparison.Ordinal))));
-    }
-
     private static ActionableCandidateRedAttribution? TryAttributeActionableCandidateRed(
         string candidateSha,
         FocusedEvidenceRunResult evidence,
@@ -3218,7 +3203,8 @@ internal sealed partial class ConductorDriver
         TaskSpec TriggeringTask,
         string Finding,
         IReadOnlyList<string> SuppressedFindings,
-        TaskSpec? TargetTask);
+        TaskSpec? TargetTask,
+        bool RequiresCommittedTarget = false);
 
     private sealed record FindingEvidenceRequestGroup(
         string Identity,

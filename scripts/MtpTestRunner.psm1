@@ -618,21 +618,28 @@ function Invoke-MtpBuild {
         [Parameter(Mandatory = $true)][string]$RepositoryRoot,
         [Parameter(Mandatory = $true)][object[]]$Projects,
         [Parameter(Mandatory = $true)][string]$Configuration,
-        [Parameter(Mandatory = $true)][string]$DotnetPath
+        [Parameter(Mandatory = $true)][string]$DotnetPath,
+        [Parameter(Mandatory = $true)][string]$RunDirectory
     )
 
     foreach ($project in $Projects) {
         $buildTarget = [System.IO.Path]::GetFullPath((Join-Path $RepositoryRoot ([string]$project.project)))
         $appHost = Resolve-MtpAppHostPath -RepositoryRoot $RepositoryRoot -Invocation $project -Configuration $Configuration
         $outputDirectory = Split-Path -Parent $appHost
+        $projectName = [System.IO.Path]::GetFileNameWithoutExtension($buildTarget)
+        $buildLogNameBudget = [Math]::Min(200, 240 - $RunDirectory.Length - 1)
+        $buildLogName = Get-MtpBoundedFileName -Stem "build-$projectName" -Suffix '.log' -MaximumLength $buildLogNameBudget
+        $buildLogPath = Join-Path $RunDirectory $buildLogName
         Write-Host "Building test target: $buildTarget ($Configuration) -> $outputDirectory"
+        Write-Host "Build output log: $buildLogPath"
         $previousErrorActionPreference = $ErrorActionPreference
         try {
             # Windows PowerShell promotes native stderr redirected through 2>&1 to an
-            # ErrorRecord. Build warnings still need to stream, but they must not turn a
-            # successful dotnet exit code into a synthetic BUILD FAILURE.
+            # ErrorRecord. Keep console output decision-sized while retaining the complete
+            # diagnostic log until the enclosing test run succeeds and cleans its receipts.
             $ErrorActionPreference = 'Continue'
-            & $DotnetPath build $buildTarget --configuration $Configuration --output $outputDirectory --nologo --verbosity minimal 2>&1 |
+            & $DotnetPath build $buildTarget --configuration $Configuration --output $outputDirectory --nologo --verbosity minimal `
+                '-clp:ErrorsOnly;Summary' -fl "-flp:LogFile=$buildLogPath;Verbosity=Normal" 2>&1 |
                 ForEach-Object { Write-Host $_ }
             $buildExit = $LASTEXITCODE
         }
@@ -1165,7 +1172,7 @@ function Invoke-MtpTestRun {
         Set-MtpHermeticEnvironment -RepositoryRoot $RepositoryRoot -WritableRoot $runDirectory
         Write-Host "Results directory: $runDirectory"
         if (-not $NoBuild) {
-            if (-not (Invoke-MtpBuild -RepositoryRoot $RepositoryRoot -Projects $projects -Configuration $Configuration -DotnetPath $DotnetPath)) {
+            if (-not (Invoke-MtpBuild -RepositoryRoot $RepositoryRoot -Projects $projects -Configuration $Configuration -DotnetPath $DotnetPath -RunDirectory $runDirectory)) {
                 Write-Host "Retained diagnostic directory: $runDirectory"
                 return New-MtpTerminalResult -Outcome failed -ExitCode $script:ExitCodes.Build -ResultsDirectory $runDirectory -ArtifactsRetained $true
             }

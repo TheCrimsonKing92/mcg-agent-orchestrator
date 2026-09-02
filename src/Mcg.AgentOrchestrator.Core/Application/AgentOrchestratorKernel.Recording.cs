@@ -586,7 +586,7 @@ public sealed partial class AgentOrchestratorKernel
             out _,
             out var suppressedFindings);
         if (verification.WorkerResultPresent &&
-            task.RequiredRole == AgentRole.Reviewer)
+            task.RequiredRole is AgentRole.Reviewer or AgentRole.Tester)
         {
             foreach (var item in suppressedFindings)
             {
@@ -597,7 +597,7 @@ public sealed partial class AgentOrchestratorKernel
                     goal,
                     task.Id,
                     ProgressKind.TaskNote,
-                    $"Suppressed Reviewer structured finding matching operator criteria correction: stable_id={item.Finding.StableId}; finding: {item.Finding.Description}; superseded criterion: {item.Correction.SupersededCriterion}; correction recorded {item.Correction.RecordedAt:u} by {item.Correction.Actor}.{capAudit}");
+                    $"Suppressed {task.RequiredRole} structured finding matching operator criteria correction: stable_id={item.Finding.StableId}; finding: {item.Finding.Description}; superseded criterion: {item.Correction.SupersededCriterion}; correction recorded {item.Correction.RecordedAt:u} by {item.Correction.Actor}.{capAudit}");
             }
         }
 
@@ -648,6 +648,21 @@ public sealed partial class AgentOrchestratorKernel
                 task.Id,
                 WorkTaskStatus.Failed,
                 $"Tester WORKER_RESULT reported blocker: {testerBlocker}; same Tester retry or operator action required.");
+            return true;
+        }
+
+        if (verification.WorkerResultPresent &&
+            task.RequiredRole == AgentRole.Tester &&
+            openBlockingFindings.Count > 0)
+        {
+            var openIds = string.Join(
+                ", ",
+                openBlockingFindings.Select(finding => finding.StableId));
+            ReportTaskProgress(
+                goalId,
+                task.Id,
+                WorkTaskStatus.Failed,
+                $"Tester WORKER_RESULT rejected: merged structured finding state still has open blocking stable_id(s): {openIds}; automatic ownership routing required.");
             return true;
         }
 

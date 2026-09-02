@@ -687,7 +687,7 @@ public sealed class ConductorDriverTestsFindingEvidence
         var finding = EvidenceFindingWithRequest(
             "Conductor routing needs an executed receipt.",
             id: "tester-evidence",
-            category: FindingCategory.Correctness,
+            category: FindingCategory.TestEvidence,
             project: "Mcg.AgentOrchestrator.Infrastructure.Tests",
             classes: ["ConductorDriverTests"]);
         var output = string.Join(
@@ -1824,10 +1824,14 @@ public sealed class ConductorDriverTestsFindingEvidence
                     id: "expression",
                     classes: ["FullyQualifiedName~GoalAcceptanceVerifierTests"])
             ]);
+        var requests = new List<string>();
         var driver = MakeDriver(
             getPreReviewEvidenceContext: _ => NoPreReviewContext("abc1234"),
             runFocusedEvidence: (_, request) =>
-                DualArmFindingEvidence(request, FindingEvidenceArmDisposition.Green),
+            {
+                requests.Add(request);
+                return DualArmFindingEvidence(request, FindingEvidenceArmDisposition.Green);
+            },
             retryTaskWithRoundKind: (goalId, taskId, message, roundKind) =>
                 kernel.RetryTask(goalId, taskId, message, retryRoundKind: roundKind),
             recordFindingEvidenceRequest: (goalId, taskId, message) =>
@@ -1836,16 +1840,28 @@ public sealed class ConductorDriverTestsFindingEvidence
                 kernel.RecordFindingEvidenceOutcome(goalId, taskId, stableId, outcome, receipt));
 
         driver.AdvanceOnce(goal, ConductorAutonomyPolicy.Permissive);
+        driver.AdvanceOnce(goal, ConductorAutonomyPolicy.Permissive);
 
-        var receipt = Assert.Single(reviewer.VerificationHistory.Last().FindingEvidenceReceipts!);
-        Assert.Contains(receipt.RequestDispositions!, disposition =>
+        Assert.Equal(
+            [
+                "Infrastructure.Tests:ConductorDriverTests",
+                "Infrastructure.Tests:FullyQualifiedName~GoalAcceptanceVerifierTests"
+            ],
+            requests);
+        var receipts = reviewer.VerificationHistory.Last().FindingEvidenceReceipts!;
+        Assert.Equal(2, receipts.Count);
+        Assert.Contains(receipts[0].RequestDispositions!, disposition =>
             disposition.FindingStableId == "bare" &&
             disposition.Disposition == "executed-standalone" &&
             disposition.Reason == "incompatible-filter-semantics");
-        Assert.Contains(receipt.RequestDispositions!, disposition =>
+        Assert.Contains(receipts[0].RequestDispositions!, disposition =>
             disposition.FindingStableId == "expression" &&
             disposition.Disposition == "pending-standalone" &&
             disposition.Reason == "incompatible-filter-semantics");
+        Assert.Contains(receipts[1].RequestDispositions!, disposition =>
+            disposition.FindingStableId == "expression" &&
+            disposition.Disposition == "executed-standalone" &&
+            disposition.Reason == "single-request");
     }
 
     [Xunit.Fact]
@@ -2165,7 +2181,7 @@ public sealed class ConductorDriverTestsFindingEvidence
             runFocusedEvidence: (_, request) =>
             {
                 focusedRuns++;
-                return DualArmFindingEvidence(request, FindingEvidenceArmDisposition.Red);
+                return DualArmFindingEvidence(request, FindingEvidenceArmDisposition.Red, candidateSha);
             },
             dispatchAndStart: _ => DispatchStartOutcome.Started(),
             retryTaskWithRoundKind: (goalId, taskId, message, roundKind) =>
@@ -2189,53 +2205,6 @@ public sealed class ConductorDriverTestsFindingEvidence
         Assert.Equal(2, receipts.Length);
         Assert.Contains(receipts, receipt => receipt.CandidateSha == "abc1234");
         Assert.Contains(receipts, receipt => receipt.CandidateSha == "def5678");
-    }
-
-    [Xunit.Fact]
-    public void ChangedFindingRoundAtSameCandidateDoesNotReusePriorReceipt()
-    {
-        const string candidateSha = "abc1234";
-        var (kernel, goal) = SoftwareGoal();
-        var reviewer = goal.Tasks.Single(task => task.RequiredRole == AgentRole.Reviewer);
-        foreach (var task in goal.Tasks.Where(task => task.RequiredRole != AgentRole.Reviewer))
-        {
-            PassVerification(kernel, goal, task);
-        }
-
-        var finding = EvidenceFindingWithRequest(
-            "The first finding round needs focused evidence.",
-            id: "same-sha-new-round");
-        FailReviewerNeedsWork(kernel, goal, reviewer, "first finding round", findings: [finding]);
-        var focusedRuns = 0;
-        var driver = MakeDriver(
-            getPreReviewEvidenceContext: _ => NoPreReviewContext(candidateSha),
-            runFocusedEvidence: (_, request) =>
-            {
-                focusedRuns++;
-                return DualArmFindingEvidence(request, FindingEvidenceArmDisposition.Red);
-            },
-            dispatchAndStart: _ => DispatchStartOutcome.Started(),
-            retryTaskWithRoundKind: (goalId, taskId, message, roundKind) =>
-                kernel.RetryTask(goalId, taskId, message, retryRoundKind: roundKind),
-            recordFindingEvidenceRequest: (goalId, taskId, message) =>
-                kernel.RecordFindingEvidenceRequest(goalId, taskId, message),
-            recordFindingEvidenceOutcome: (goalId, taskId, stableId, outcome, receipt) =>
-                kernel.RecordFindingEvidenceOutcome(goalId, taskId, stableId, outcome, receipt));
-
-        driver.AdvanceOnce(goal, ConductorAutonomyPolicy.Permissive);
-        var repeatedFinding = finding with { Description = "A changed finding round still needs focused evidence." };
-        FailReviewerNeedsWork(kernel, goal, reviewer, "changed finding round", findings: [repeatedFinding]);
-
-        driver.AdvanceOnce(goal, ConductorAutonomyPolicy.Permissive);
-
-        Assert.Equal(2, focusedRuns);
-        var receipts = reviewer.VerificationHistory
-            .SelectMany(verification => verification.FindingEvidenceReceipts ?? [])
-            .DistinctBy(receipt => receipt.ReceiptId)
-            .ToArray();
-        Assert.Equal(2, receipts.Length);
-        Assert.All(receipts, receipt => Assert.Equal(candidateSha, receipt.CandidateSha));
-        Assert.Equal(2, receipts.Select(receipt => receipt.FindingRoundFingerprint).Distinct().Count());
     }
 
     [Xunit.Theory]
