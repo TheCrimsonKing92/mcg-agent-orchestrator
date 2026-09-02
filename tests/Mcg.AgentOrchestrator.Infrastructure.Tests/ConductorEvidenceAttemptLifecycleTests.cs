@@ -135,6 +135,26 @@ public sealed class ConductorEvidenceAttemptLifecycleTests
             Assert.NotNull(observed);
             Assert.Equal(ConductorParallelAcceptanceAttemptDecisionKind.Running, observed.Kind);
             Assert.False(leaseBoundaryEntered);
+
+            var falseNegativeLeaseBoundaryEntered = false;
+            var falseNegativeObserver = new ConductorParallelAcceptanceAttemptCoordinator(
+                attemptRoot,
+                isProcessAlive: _ => false,
+                launchOwnedProcess: _ => throw new InvalidOperationException("lease-busy observation must not launch"),
+                acquireStableSlotLease: (_, _) => null,
+                attemptWriterLeaseAcquiringForTests: () => falseNegativeLeaseBoundaryEntered = true);
+            var falseNegativeElapsed = Stopwatch.StartNew();
+
+            var leaseBusy = Assert.Throws<AcceptanceArtifactWriterLeaseBusyException>(() =>
+                falseNegativeObserver.EvaluateFocusedEvidence(
+                    candidate,
+                    ConductorAutonomyPolicy.Permissive,
+                    "run focused tests",
+                    PassingEvidence));
+
+            Assert.Equal(started.Attempt.AttemptId, leaseBusy.ObservedAttemptId);
+            Assert.True(falseNegativeLeaseBoundaryEntered);
+            Assert.True(falseNegativeElapsed.Elapsed < TimeSpan.FromSeconds(2));
         }
         finally
         {
@@ -149,6 +169,70 @@ public sealed class ConductorEvidenceAttemptLifecycleTests
             }
             Directory.Delete(root, recursive: true);
         }
+        Assert.Null(holderException);
+    }
+
+    [Fact]
+    public void WriterLeaseBusyBeforeFirstMetadataWriteSignalsDeferredObservation()
+    {
+        var root = CreateTempDirectory();
+        using var holderAcquired = new ManualResetEventSlim();
+        using var holderRelease = new ManualResetEventSlim();
+        Exception? holderException = null;
+        Thread? holder = null;
+        try
+        {
+            var attemptRoot = Path.Combine(root, "attempts");
+            var kernel = new AgentOrchestratorKernel();
+            var goal = kernel.CreateGoal("Defer while first acceptance metadata is not visible");
+            var candidate = ConductorParallelAcceptanceCandidate.Create(goal, 0, [], "branch-new", "main-new");
+            var goalDirectory = Path.Combine(attemptRoot, goal.Id.Value);
+            Directory.CreateDirectory(goalDirectory);
+            holder = new Thread(() =>
+            {
+                try
+                {
+                    using var lease = StorageRetentionMaintenance.AcquireAttemptWriterLease(goalDirectory);
+                    holderAcquired.Set();
+                    if (!holderRelease.Wait(TimeSpan.FromSeconds(10)))
+                    {
+                        throw new TimeoutException("Writer-lease holder release signal was not observed.");
+                    }
+                }
+                catch (Exception ex)
+                {
+                    holderException = ex;
+                }
+            });
+            holder.IsBackground = true;
+            holder.Start();
+            Assert.True(holderAcquired.Wait(TimeSpan.FromSeconds(10)));
+
+            var observer = new ConductorParallelAcceptanceAttemptCoordinator(
+                attemptRoot,
+                isProcessAlive: _ => false,
+                launchOwnedProcess: _ => throw new InvalidOperationException("lease-busy observation must not launch"),
+                acquireStableSlotLease: (_, _) => null);
+            var elapsed = Stopwatch.StartNew();
+
+            var leaseBusy = Assert.Throws<AcceptanceArtifactWriterLeaseBusyException>(() =>
+                observer.EvaluateFocusedEvidence(
+                    candidate,
+                    ConductorAutonomyPolicy.Permissive,
+                    "run focused tests",
+                    PassingEvidence));
+
+            Assert.Null(leaseBusy.ObservedAttemptId);
+            Assert.Equal(Path.GetFullPath(goalDirectory), Path.GetFullPath(leaseBusy.GoalDirectory));
+            Assert.True(elapsed.Elapsed < TimeSpan.FromSeconds(2));
+        }
+        finally
+        {
+            holderRelease.Set();
+            holder?.Join(TimeSpan.FromSeconds(10));
+            Directory.Delete(root, recursive: true);
+        }
+
         Assert.Null(holderException);
     }
 
@@ -208,7 +292,7 @@ public sealed class ConductorEvidenceAttemptLifecycleTests
     }
 
     [Fact]
-    public void AttemptArtifactPruningBoundsRetainedAttemptSets()
+    public void NonTerminalAttemptCreationRetainsEveryAttemptArtifact()
     {
         var root = CreateTempDirectory();
         try
@@ -228,9 +312,7 @@ public sealed class ConductorEvidenceAttemptLifecycleTests
             }
 
             var goalDirectory = Path.Combine(root, goal.Id.Value);
-            Assert.Equal(
-                ConductorParallelAcceptanceAttemptCoordinator.RetainedAttemptCountPerGoal,
-                Directory.GetFiles(goalDirectory, "*.attempt.json").Length);
+            Assert.Equal(22, Directory.GetFiles(goalDirectory, "*.attempt.json").Length);
         }
         finally
         {
@@ -556,7 +638,7 @@ public sealed class ConductorEvidenceAttemptLifecycleTests
     }
 
     [Fact]
-    public async Task SupersedingAttempt_WaitsForWriterLeaseBeforeMutatingArtifacts()
+    public async Task SupersedingAttempt_DefersMutationWhileWriterLeaseIsHeld()
     {
         var root = CreateTempDirectory();
         try
@@ -613,12 +695,15 @@ public sealed class ConductorEvidenceAttemptLifecycleTests
                 PassingEvidence));
 
             string sequenceWhileLeaseHeld;
+            AcceptanceArtifactWriterLeaseBusyException leaseBusy;
             try
             {
                 Assert.True(
                     replacementAtLeaseBoundary.Wait(TimeSpan.FromSeconds(30)),
                     "Replacement did not reach the acceptance writer lease boundary.");
                 sequenceWhileLeaseHeld = File.ReadAllText(sequencePath);
+                leaseBusy = await Assert.ThrowsAsync<AcceptanceArtifactWriterLeaseBusyException>(async () =>
+                    await replacementTask.WaitAsync(TimeSpan.FromSeconds(2)));
             }
             finally
             {
@@ -626,8 +711,14 @@ public sealed class ConductorEvidenceAttemptLifecycleTests
                 await holder;
             }
 
-            var replacement = await replacementTask;
             Assert.Equal(sequenceBefore, sequenceWhileLeaseHeld);
+            Assert.Equal(first.Attempt.AttemptId, leaseBusy.ObservedAttemptId);
+
+            var replacement = replacementCoordinator.EvaluateFocusedEvidence(
+                replacementCandidate,
+                ConductorAutonomyPolicy.Permissive,
+                "run focused tests",
+                PassingEvidence);
             Assert.NotEqual(first.Attempt.AttemptId, replacement.Attempt.AttemptId);
         }
         finally

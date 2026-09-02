@@ -251,14 +251,18 @@ internal static class RunEventMaintenanceCadence
         var mtpUnreclaimableDirectoriesUnmeasured = result.Decisions.Count(decision =>
             decision.Family == EvidenceArtifactFamily.MtpTestRuns &&
             decision.Action == EvidenceRetentionAction.RetainedUndecidable);
+        var retainedUndecidable = result.Decisions.Count(decision =>
+            decision.Action == EvidenceRetentionAction.RetainedUndecidable);
+        var nonTerminalUnbounded = result.Decisions.Count(decision =>
+            decision.Reason == "non-terminal-evidence-unbounded-by-policy");
         var deferred = result.Decisions.Count(decision => decision.Action is
             EvidenceRetentionAction.DeferredLease or
             EvidenceRetentionAction.DeferredLive or
             EvidenceRetentionAction.DeferredLocked);
-        var status = ArtifactRetentionStatus(result, reclaimedBytes, deferred);
+        var status = ArtifactRetentionStatus(result, reclaimedBytes, deferred, retainedUndecidable);
         var actions = FormatDecisionCounts(result.Decisions, decision => decision.Action.ToString());
         var reasons = FormatDecisionCounts(result.Decisions, decision => decision.Reason);
-        return $"STORAGE_RETENTION policyVersion={EvidenceRetentionPolicy.Version} sweepId={result.SweepId} status={status} durationMs={result.Duration.TotalMilliseconds:F0} decisions={result.Decisions.Count} reclaimedBytes={reclaimedBytes} mtpUnreclaimableDirectoriesUnmeasured={mtpUnreclaimableDirectoriesUnmeasured} deferred={deferred} actions={actions} reasons={reasons}";
+        return $"STORAGE_RETENTION policyVersion={EvidenceRetentionPolicy.Version} sweepId={result.SweepId} status={status} durationMs={result.Duration.TotalMilliseconds:F0} decisions={result.Decisions.Count} reclaimedBytes={reclaimedBytes} retainedUndecidable={retainedUndecidable} nonTerminalUnbounded={nonTerminalUnbounded} mtpUnreclaimableDirectoriesUnmeasured={mtpUnreclaimableDirectoriesUnmeasured} deferred={deferred} actions={actions} reasons={reasons}";
     }
 
     internal static void AppendArtifactRetentionReceipt(
@@ -289,7 +293,11 @@ internal static class RunEventMaintenanceCadence
         var mtpUnreclaimableDirectoriesUnmeasured = result.Decisions.Count(decision =>
             decision.Family == EvidenceArtifactFamily.MtpTestRuns &&
             decision.Action == EvidenceRetentionAction.RetainedUndecidable);
-        var status = ArtifactRetentionStatus(result, reclaimedBytes, deferred ? 1 : 0);
+        var retainedUndecidable = result.Decisions.Count(decision =>
+            decision.Action == EvidenceRetentionAction.RetainedUndecidable);
+        var nonTerminalUnbounded = result.Decisions.Count(decision =>
+            decision.Reason == "non-terminal-evidence-unbounded-by-policy");
+        var status = ArtifactRetentionStatus(result, reclaimedBytes, deferred ? 1 : 0, retainedUndecidable);
         store.AppendAsync(new RunEventAppend(
             RunEventTypes.EvidenceRetention,
             GoalId: null,
@@ -313,6 +321,8 @@ internal static class RunEventMaintenanceCadence
                 result.PromptArtifactsDeleted,
                 result.GoalJournalsArchived,
                 reclaimedBytes,
+                retainedUndecidable,
+                nonTerminalUnbounded,
                 mtpUnreclaimableDirectoriesUnmeasured,
                 durationMs = result.Duration.TotalMilliseconds,
                 decisionsTruncated = truncated,
@@ -345,11 +355,17 @@ internal static class RunEventMaintenanceCadence
     private static string ArtifactRetentionStatus(
         StorageRetentionResult result,
         long reclaimedBytes,
-        int deferred)
+        int deferred,
+        int retainedUndecidable)
     {
         if (result.Failed)
         {
             return reclaimedBytes > 0 ? "partial-failed" : "failed";
+        }
+
+        if (retainedUndecidable > 0)
+        {
+            return "partial";
         }
 
         if (result.Decisions.Any(decision => decision.Action == EvidenceRetentionAction.DeferredLease))

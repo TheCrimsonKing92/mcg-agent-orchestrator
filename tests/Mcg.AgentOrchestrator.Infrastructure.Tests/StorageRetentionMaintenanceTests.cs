@@ -183,8 +183,9 @@ public sealed class StorageRetentionMaintenanceTests
         Assert.True(File.Exists(path));
         Assert.Contains(result.Decisions, decision =>
             decision.Path == path &&
-            decision.Action == EvidenceRetentionAction.RetainedUndecidable &&
-            decision.OwnerResolution == EvidenceOwnerResolution.Unrecorded);
+            decision.Action == EvidenceRetentionAction.Preserved &&
+            decision.OwnerResolution == EvidenceOwnerResolution.Unrecorded &&
+            decision.Reason == "global-diagnostics-preserved-by-policy");
     }
 
     [Xunit.Fact(DisplayName = "WorkerRetention_sweep_locked_appending_file_is_preserved_without_throwing")]
@@ -253,6 +254,62 @@ public sealed class StorageRetentionMaintenanceTests
         var receiptPath = successfulTrx + ".test-identities.json";
         Assert.True(File.Exists(receiptPath));
         Assert.Contains("Suite.Test", File.ReadAllText(receiptPath), StringComparison.Ordinal);
+    }
+
+    [Xunit.Fact]
+    public void AcceptanceRetention_OlderFailingTrxIsReducedToReceiptWhileLastFailureRemainsWhole()
+    {
+        using var fixture = new RetentionFixture();
+        var goalDirectory = Path.Combine(fixture.OrchestratorDirectory, "acceptance-gate-attempts", GoalId);
+        Directory.CreateDirectory(goalDirectory);
+        fixture.WriteAttempt(goalDirectory, "old-failure", ordinal: 1, failed: true, reconciled: true);
+        fixture.WriteAttempt(goalDirectory, "last-failure", ordinal: 2, failed: true, reconciled: true);
+        fixture.WriteAttempt(goalDirectory, "final", ordinal: 3, failed: false, reconciled: true);
+        var oldFailureTrx = Path.Combine(goalDirectory, "old-failure.trx");
+        var lastFailureTrx = Path.Combine(goalDirectory, "last-failure.trx");
+        File.WriteAllText(oldFailureTrx, FailedTrx("Suite.OldFailure"));
+        File.WriteAllText(lastFailureTrx, FailedTrx("Suite.LastFailure"));
+
+        fixture.Run(TerminalGoal(WorkTaskStatus.Completed));
+
+        Assert.False(File.Exists(oldFailureTrx));
+        Assert.Contains(
+            "Suite.OldFailure",
+            File.ReadAllText(oldFailureTrx + ".test-identities.json"),
+            StringComparison.Ordinal);
+        Assert.Contains(
+            "Synthetic failure: Suite.OldFailure",
+            File.ReadAllText(oldFailureTrx + ".test-identities.json"),
+            StringComparison.Ordinal);
+        Assert.Contains(
+            "at Suite.OldFailure()",
+            File.ReadAllText(oldFailureTrx + ".test-identities.json"),
+            StringComparison.Ordinal);
+        Assert.True(File.Exists(lastFailureTrx));
+    }
+
+    [Xunit.Fact]
+    public void AcceptanceRetention_LegacyFailingTrxReceiptWithoutFailureSignaturePreservesSource()
+    {
+        using var fixture = new RetentionFixture();
+        var goalDirectory = Path.Combine(fixture.OrchestratorDirectory, "acceptance-gate-attempts", GoalId);
+        Directory.CreateDirectory(goalDirectory);
+        fixture.WriteAttempt(goalDirectory, "old-failure", ordinal: 1, failed: true, reconciled: true);
+        fixture.WriteAttempt(goalDirectory, "last-failure", ordinal: 2, failed: true, reconciled: true);
+        fixture.WriteAttempt(goalDirectory, "final", ordinal: 3, failed: false, reconciled: true);
+        var oldFailureTrx = Path.Combine(goalDirectory, "old-failure.trx");
+        File.WriteAllText(oldFailureTrx, FailedTrx("Suite.OldFailure"));
+        File.WriteAllText(
+            oldFailureTrx + ".test-identities.json",
+            """{"source":"old-failure.trx","testIdentities":[{"name":"Suite.OldFailure","outcome":"Failed"}]}""");
+
+        var result = fixture.Run(TerminalGoal(WorkTaskStatus.Completed));
+
+        Assert.True(File.Exists(oldFailureTrx));
+        Assert.Contains(result.Decisions, decision =>
+            decision.Path == oldFailureTrx &&
+            decision.Action == EvidenceRetentionAction.Preserved &&
+            decision.Reason == "trx-is-unreadable-or-has-no-test-identities");
     }
 
     [Xunit.Fact]
@@ -354,7 +411,7 @@ public sealed class StorageRetentionMaintenanceTests
     }
 
     [Xunit.Fact]
-    public void AcceptanceRetention_CountPruningPreservesSuccessfulTrxIdentityReceipt()
+    public void AcceptanceRetention_LockedTrxRetainsOwnerMetadataUntilRetrySucceeds()
     {
         using var fixture = new RetentionFixture();
         var goalDirectory = Path.Combine(fixture.OrchestratorDirectory, "acceptance-gate-attempts", GoalId);
@@ -362,19 +419,92 @@ public sealed class StorageRetentionMaintenanceTests
         var oldMetadata = fixture.WriteAttempt(goalDirectory, "old", ordinal: 1, failed: false, reconciled: true);
         fixture.WriteAttempt(goalDirectory, "final", ordinal: 2, failed: false, reconciled: true);
         var trx = Path.Combine(goalDirectory, "old.trx");
+        File.WriteAllText(trx, SuccessfulTrx("Suite.RetryableIdentity"));
+        SetAge(oldMetadata, 30);
+
+        StorageRetentionResult first;
+        using (new FileStream(trx, FileMode.Open, FileAccess.Read, FileShare.Read))
+        {
+            first = fixture.Run(TerminalGoal(WorkTaskStatus.Completed));
+        }
+
+        Assert.True(File.Exists(trx));
+        Assert.True(File.Exists(oldMetadata));
+        Assert.Contains(first.Decisions, decision =>
+            decision.Path == oldMetadata &&
+            decision.Action == EvidenceRetentionAction.Preserved &&
+            decision.Reason == "retained-test-artifact-owner-metadata");
+
+        fixture.Run(TerminalGoal(WorkTaskStatus.Completed));
+
+        Assert.False(File.Exists(trx));
+        Assert.False(File.Exists(oldMetadata));
+        Assert.True(File.Exists(trx + ".test-identities.json"));
+    }
+
+    [Xunit.Fact]
+    public void AcceptanceRetention_CountBoundPrunesOldAttemptAndPreservesTrxIdentityReceipt()
+    {
+        using var fixture = new RetentionFixture();
+        var goalDirectory = Path.Combine(fixture.OrchestratorDirectory, "acceptance-gate-attempts", GoalId);
+        Directory.CreateDirectory(goalDirectory);
+        var oldMetadata = fixture.WriteAttempt(goalDirectory, "old", ordinal: 1, failed: false, reconciled: true);
+        for (var ordinal = 2;
+             ordinal <= ConductorParallelAcceptanceAttemptCoordinator.RetainedAttemptCountPerGoal + 2;
+             ordinal++)
+        {
+            fixture.WriteAttempt(goalDirectory, $"attempt-{ordinal:D2}", ordinal, failed: false, reconciled: true);
+        }
+        var trx = Path.Combine(goalDirectory, "old.trx");
         File.WriteAllText(trx, SuccessfulTrx("Suite.PreservedIdentity"));
-        SetAge(trx, 30);
 
         fixture.Run(TerminalGoal(WorkTaskStatus.Completed));
         var receipt = trx + ".test-identities.json";
         Assert.False(File.Exists(trx));
         Assert.True(File.Exists(receipt));
 
-        ConductorParallelAcceptanceAttemptCoordinator.PruneOldAttemptsForTests(goalDirectory, retainCount: 0);
-
         Assert.False(File.Exists(oldMetadata));
+        Assert.Equal(
+            ConductorParallelAcceptanceAttemptCoordinator.RetainedAttemptCountPerGoal,
+            Directory.GetFiles(goalDirectory, "*.attempt.json", SearchOption.TopDirectoryOnly).Length);
         Assert.True(File.Exists(receipt));
         Assert.Contains("Suite.PreservedIdentity", File.ReadAllText(receipt), StringComparison.Ordinal);
+    }
+
+    [Xunit.Fact]
+    public void AcceptanceRetention_NonTerminalGoalRetainsEvidenceAndReportsUnboundedPolicy()
+    {
+        using var fixture = new RetentionFixture();
+        var goalDirectory = Path.Combine(fixture.OrchestratorDirectory, "acceptance-gate-attempts", GoalId);
+        Directory.CreateDirectory(goalDirectory);
+        for (var ordinal = 1;
+             ordinal <= ConductorParallelAcceptanceAttemptCoordinator.RetainedAttemptCountPerGoal + 2;
+             ordinal++)
+        {
+            fixture.WriteAttempt(goalDirectory, $"active-{ordinal:D2}", ordinal, failed: false, reconciled: true);
+        }
+        var oldLog = Path.Combine(goalDirectory, "active-01.out.log");
+        File.WriteAllText(oldLog, "active evidence");
+        SetAge(oldLog, 30);
+        var activeGoal = new StorageRetentionGoal(
+            GoalId,
+            GoalStatus.Active,
+            new Dictionary<string, WorkTaskStatus> { [TaskId] = WorkTaskStatus.Running });
+
+        var result = fixture.Run(activeGoal);
+
+        Assert.True(File.Exists(oldLog));
+        Assert.Equal(
+            ConductorParallelAcceptanceAttemptCoordinator.RetainedAttemptCountPerGoal + 2,
+            Directory.GetFiles(goalDirectory, "*.attempt.json", SearchOption.TopDirectoryOnly).Length);
+        Assert.Contains(result.Decisions, decision =>
+            decision.Path == goalDirectory &&
+            decision.Action == EvidenceRetentionAction.Preserved &&
+            decision.Reason == "non-terminal-evidence-unbounded-by-policy");
+        Assert.Contains(
+            "nonTerminalUnbounded=1",
+            RunEventMaintenanceCadence.FormatArtifactRetentionReceipt(result),
+            StringComparison.Ordinal);
     }
 
     [Xunit.Fact]
@@ -404,6 +534,32 @@ public sealed class StorageRetentionMaintenanceTests
         Assert.True(File.Exists(failingLog));
         Assert.True(File.Exists(finalLog));
         Assert.False(File.Exists(oldLog));
+    }
+
+    [Xunit.Fact]
+    public void AcceptanceRetention_CorruptAttemptMetadataRetainsTheEntireGoalDirectory()
+    {
+        using var fixture = new RetentionFixture();
+        var goalDirectory = Path.Combine(fixture.OrchestratorDirectory, "acceptance-gate-attempts", GoalId);
+        Directory.CreateDirectory(goalDirectory);
+        var corruptMetadata = Path.Combine(goalDirectory, "corrupt.attempt.json");
+        var oldLog = Path.Combine(goalDirectory, "corrupt.out.log");
+        File.WriteAllText(corruptMetadata, "{not-json");
+        File.WriteAllText(oldLog, "ambiguous evidence");
+        SetAge(corruptMetadata, 30);
+        SetAge(oldLog, 30);
+
+        var result = fixture.Run(TerminalGoal(WorkTaskStatus.Completed));
+
+        Assert.True(File.Exists(corruptMetadata));
+        Assert.True(File.Exists(oldLog));
+        Assert.Contains(result.Decisions, decision =>
+            decision.Path == goalDirectory &&
+            decision.Action == EvidenceRetentionAction.RetainedUndecidable &&
+            decision.Reason.StartsWith("attempt-metadata-unreadable:", StringComparison.Ordinal));
+        var receipt = RunEventMaintenanceCadence.FormatArtifactRetentionReceipt(result);
+        Assert.Contains("status=partial", receipt, StringComparison.Ordinal);
+        Assert.Contains("retainedUndecidable=1", receipt, StringComparison.Ordinal);
     }
 
     [Xunit.Fact]
@@ -652,6 +808,129 @@ public sealed class StorageRetentionMaintenanceTests
     }
 
     [Xunit.Fact]
+    public void MtpRetention_FutureDatedRunRetainsItsCountBoundOwnerMetadata()
+    {
+        using var fixture = new RetentionFixture();
+        var goalDirectory = Path.Combine(fixture.OrchestratorDirectory, "acceptance-gate-attempts", GoalId);
+        Directory.CreateDirectory(goalDirectory);
+        var ownerMetadata = fixture.WriteAttempt(
+            goalDirectory,
+            "mtp-future",
+            ordinal: 1,
+            failed: false,
+            reconciled: true);
+        for (var ordinal = 2;
+             ordinal <= ConductorParallelAcceptanceAttemptCoordinator.RetainedAttemptCountPerGoal + 2;
+             ordinal++)
+        {
+            fixture.WriteAttempt(goalDirectory, $"attempt-{ordinal:D2}", ordinal, failed: false, reconciled: true);
+        }
+        var runDirectory = fixture.WriteMtpRun("mtp-future", Now.AddMinutes(6));
+
+        var result = StorageRetentionMaintenance.Run(
+            fixture.LogDirectory,
+            fixture.OrchestratorDirectory,
+            fixture.ExecutionDirectory,
+            [TerminalGoal(WorkTaskStatus.Completed)],
+            Now,
+            mtpResultsRoot: fixture.MtpResultsRoot);
+
+        Assert.True(Directory.Exists(runDirectory));
+        Assert.True(File.Exists(ownerMetadata));
+        Assert.Contains(result.Decisions, decision =>
+            decision.Path == ownerMetadata &&
+            decision.Action == EvidenceRetentionAction.Preserved &&
+            decision.Reason == "retained-test-artifact-owner-metadata");
+    }
+
+    [Xunit.Fact]
+    public void MtpRetention_AmbiguousRunRetainsEveryCandidateOwnerMetadata()
+    {
+        const string secondGoalId = "33333333333333333333333333333333";
+        using var fixture = new RetentionFixture();
+        var firstDirectory = Path.Combine(fixture.OrchestratorDirectory, "acceptance-gate-attempts", GoalId);
+        var secondDirectory = Path.Combine(fixture.OrchestratorDirectory, "acceptance-gate-attempts", secondGoalId);
+        Directory.CreateDirectory(firstDirectory);
+        Directory.CreateDirectory(secondDirectory);
+        var firstMetadata = fixture.WriteAttempt(
+            firstDirectory,
+            "mtp-ambiguous",
+            ordinal: 1,
+            failed: false,
+            reconciled: true);
+        var secondMetadata = fixture.WriteAttempt(
+            secondDirectory,
+            "mtp-ambiguous",
+            ordinal: 1,
+            failed: false,
+            reconciled: true,
+            goalId: secondGoalId);
+        fixture.WriteAttempt(firstDirectory, "first-final", ordinal: 2, failed: false, reconciled: true);
+        fixture.WriteAttempt(
+            secondDirectory,
+            "second-final",
+            ordinal: 2,
+            failed: false,
+            reconciled: true,
+            goalId: secondGoalId);
+        SetAge(firstMetadata, 30);
+        SetAge(secondMetadata, 30);
+        var runDirectory = fixture.WriteMtpRun("mtp-ambiguous", Now.AddDays(-30));
+        var secondGoal = new StorageRetentionGoal(
+            secondGoalId,
+            GoalStatus.Completed,
+            new Dictionary<string, WorkTaskStatus> { [TaskId] = WorkTaskStatus.Completed });
+
+        var result = StorageRetentionMaintenance.Run(
+            fixture.LogDirectory,
+            fixture.OrchestratorDirectory,
+            fixture.ExecutionDirectory,
+            [TerminalGoal(WorkTaskStatus.Completed), secondGoal],
+            Now,
+            mtpResultsRoot: fixture.MtpResultsRoot);
+
+        Assert.True(Directory.Exists(runDirectory));
+        Assert.True(File.Exists(firstMetadata));
+        Assert.True(File.Exists(secondMetadata));
+        Assert.Equal(2, result.Decisions.Count(decision =>
+            (decision.Path == firstMetadata || decision.Path == secondMetadata) &&
+            decision.Action == EvidenceRetentionAction.Preserved &&
+            decision.Reason == "retained-test-artifact-owner-metadata"));
+    }
+
+    [Xunit.Fact]
+    public void MtpRetention_RevalidatesProtectedAttemptAfterCandidateSnapshotBeforeDeletion()
+    {
+        using var fixture = new RetentionFixture();
+        var workspace = OrchestratorWorkspace.ForDirectory(fixture.ExecutionDirectory);
+        var goalDirectory = Path.Combine(workspace.OrchestratorDirectory, "acceptance-gate-attempts", GoalId);
+        Directory.CreateDirectory(goalDirectory);
+        fixture.WriteAttempt(goalDirectory, "mtp-old", ordinal: 1, failed: false, reconciled: true);
+        fixture.WriteAttempt(goalDirectory, "mtp-final", ordinal: 2, failed: false, reconciled: true);
+        var runDirectory = fixture.WriteMtpRun("mtp-old", Now.AddDays(-30));
+
+        var result = StorageRetentionMaintenance.Run(
+            fixture.LogDirectory,
+            fixture.OrchestratorDirectory,
+            fixture.ExecutionDirectory,
+            [TerminalGoal(WorkTaskStatus.Completed)],
+            Now,
+            mtpResultsRoot: fixture.MtpResultsRoot,
+            beforeMtpCandidateDeletionForTests: _ =>
+            {
+                using var writerLease = StorageRetentionMaintenance.AcquireAttemptWriterLease(goalDirectory);
+                fixture.WriteAttempt(goalDirectory, "mtp-old", ordinal: 3, failed: false, reconciled: true);
+            });
+
+        Assert.True(Directory.Exists(runDirectory));
+        Assert.Contains(result.Decisions, decision =>
+            decision.Path == runDirectory &&
+            decision.Action == EvidenceRetentionAction.Preserved &&
+            decision.Reason == "final-attempt" &&
+            decision.AttemptOrdinal == 3);
+    }
+
+    [Xunit.Fact]
     public async Task MtpRetention_NonTerminalOwner_IsPreservedWithDecision()
     {
         using var fixture = new RetentionFixture();
@@ -721,10 +1000,15 @@ public sealed class StorageRetentionMaintenanceTests
         var workspace = OrchestratorWorkspace.ForDirectory(fixture.ExecutionDirectory);
         var goalDirectory = Path.Combine(workspace.OrchestratorDirectory, "acceptance-gate-attempts", GoalId);
         Directory.CreateDirectory(goalDirectory);
+        string? retainedMtpOwnerMetadata = null;
         for (var ordinal = 1; ordinal <= StorageRetentionMaintenance.MtpResultMaxRetainedDirectories + 2; ordinal++)
         {
             var attemptId = $"mtp-{ordinal:D3}";
-            fixture.WriteAttempt(goalDirectory, attemptId, ordinal, failed: false, reconciled: true);
+            var metadata = fixture.WriteAttempt(goalDirectory, attemptId, ordinal, failed: false, reconciled: true);
+            if (ordinal == 1)
+            {
+                retainedMtpOwnerMetadata = metadata;
+            }
             if (ordinal <= StorageRetentionMaintenance.MtpResultMaxRetainedDirectories + 1)
             {
                 fixture.WriteMtpRun(attemptId, Now.AddMinutes(-ordinal));
@@ -747,6 +1031,12 @@ public sealed class StorageRetentionMaintenanceTests
         Assert.Equal(
             StorageRetentionMaintenance.MtpResultMaxRetainedDirectories,
             Directory.GetDirectories(root, "retained-*", SearchOption.TopDirectoryOnly).Length);
+        Assert.NotNull(retainedMtpOwnerMetadata);
+        Assert.True(File.Exists(retainedMtpOwnerMetadata));
+        Assert.Contains(result.Decisions, decision =>
+            decision.Path == retainedMtpOwnerMetadata &&
+            decision.Action == EvidenceRetentionAction.Preserved &&
+            decision.Reason == "retained-test-artifact-owner-metadata");
     }
 
     [Xunit.Fact]
@@ -895,6 +1185,12 @@ public sealed class StorageRetentionMaintenanceTests
         $"<TestRun><Results><UnitTestResult testName=\"{testName}\" outcome=\"Passed\" /></Results>" +
         "<ResultSummary><Counters total=\"1\" executed=\"1\" passed=\"1\" failed=\"0\" /></ResultSummary></TestRun>";
 
+    private static string FailedTrx(string testName) =>
+        $"<TestRun><Results><UnitTestResult testName=\"{testName}\" outcome=\"Failed\"><Output><ErrorInfo>" +
+        $"<Message>Synthetic failure: {testName}</Message><StackTrace>at {testName}()&#10;at Runner.Invoke()</StackTrace>" +
+        "</ErrorInfo></Output></UnitTestResult></Results>" +
+        "<ResultSummary><Counters total=\"1\" executed=\"1\" passed=\"0\" failed=\"1\" /></ResultSummary></TestRun>";
+
     private static void SetAge(string path, int days) => File.SetLastWriteTimeUtc(path, Now.AddDays(-days).UtcDateTime);
 
     private sealed class RetentionFixture : IDisposable
@@ -945,13 +1241,14 @@ public sealed class StorageRetentionMaintenanceTests
             string attemptId,
             int ordinal,
             bool failed,
-            bool reconciled)
+            bool reconciled,
+            string? goalId = null)
         {
             var path = Path.Combine(goalDirectory, attemptId + ".attempt.json");
             File.WriteAllText(path, System.Text.Json.JsonSerializer.Serialize(new
             {
                 attemptId,
-                goalId = GoalId,
+                goalId = goalId ?? GoalId,
                 ordinal,
                 startedAt = Now.AddMinutes(ordinal),
                 outcome = failed ? 2 : 1,

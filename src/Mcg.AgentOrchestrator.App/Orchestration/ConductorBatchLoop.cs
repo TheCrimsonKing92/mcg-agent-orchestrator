@@ -2874,6 +2874,18 @@ internal sealed partial class ConductorBatchLoop
                 AcceptanceLifecycleEventFormatter.Format(goal.Id.Value[..8], retainedTerminal.Attempt.SlotIndex, AcceptanceAttemptOutcomeToken(retainedTerminal.Attempt.Outcome), retainedTerminal.Attempt.AttemptId, tick),
                 changedGoalLines);
             }
+            catch (AcceptanceArtifactWriterLeaseBusyException ex)
+            {
+                results[goal.Id.Value] = new ParallelLandingOutcome(
+                    ParallelAcceptanceHeld(
+                        goal,
+                        policy,
+                        $"acceptance artifact writer busy; retry on next conduct tick. {ex.Message}"),
+                    null);
+                RecordParallelAcceptanceProgress(
+                    $"ADMISSION tick={tick} result=deferred reason=acceptance-artifact-writer-busy goal={goal.Id.Value[..8]} detail={SanitizeReason(ex.Message)}",
+                    changedGoalLines);
+            }
             catch (Exception ex)
             {
                 var reason = BoundSingleLine(
@@ -3333,6 +3345,18 @@ internal sealed partial class ConductorBatchLoop
                         changedGoalLines);
                     break;
             }
+            }
+            catch (AcceptanceArtifactWriterLeaseBusyException ex)
+            {
+                results[goal.Id.Value] = new ParallelLandingOutcome(
+                    ParallelAcceptanceHeld(
+                        goal,
+                        policy,
+                        $"acceptance artifact writer busy; retry on next conduct tick. {ex.Message}"),
+                    null);
+                RecordParallelAcceptanceProgress(
+                    $"ADMISSION tick={tick} result=deferred reason=acceptance-artifact-writer-busy goal={goal.Id.Value[..8]} detail={SanitizeReason(ex.Message)}",
+                    changedGoalLines);
             }
             catch (Exception ex)
             {
@@ -3826,17 +3850,27 @@ internal sealed partial class ConductorBatchLoop
                     : $"acceptance candidate unavailable: {buildException.GetType().Name}: {buildException.Message}");
         }
 
-        var decision = driver.ParallelAcceptanceAttemptCoordinator.Evaluate(
-            candidate,
-            policy,
-            driver.RunParallelLandingAcceptance);
-        if (decision.Kind == ConductorParallelAcceptanceAttemptDecisionKind.Started &&
-            decision.Attempt.Outcome != ConductorParallelAcceptanceAttemptOutcome.Running)
+        ConductorParallelAcceptanceAttemptDecision decision;
+        try
         {
             decision = driver.ParallelAcceptanceAttemptCoordinator.Evaluate(
                 candidate,
                 policy,
                 driver.RunParallelLandingAcceptance);
+            if (decision.Kind == ConductorParallelAcceptanceAttemptDecisionKind.Started &&
+                decision.Attempt.Outcome != ConductorParallelAcceptanceAttemptOutcome.Running)
+            {
+                decision = driver.ParallelAcceptanceAttemptCoordinator.Evaluate(
+                    candidate,
+                    policy,
+                    driver.RunParallelLandingAcceptance);
+            }
+        }
+        catch (AcceptanceArtifactWriterLeaseBusyException ex)
+        {
+            return TerminalGoalRemedyExecutionResult.Retryable(
+                75,
+                $"acceptance artifact writer busy; retry on next conduct tick: {ex.Message}");
         }
 
         if (decision.Kind is ConductorParallelAcceptanceAttemptDecisionKind.Started or

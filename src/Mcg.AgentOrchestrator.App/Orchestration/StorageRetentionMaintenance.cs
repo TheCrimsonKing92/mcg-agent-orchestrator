@@ -113,7 +113,8 @@ internal static partial class StorageRetentionMaintenance
         Action? beforeGoalJournalArchiveForTests = null,
         string? mtpResultsRoot = null,
         long? acceptanceArtifactMaxBytesForTests = null,
-        Action<string>? beforeAttemptCandidateDeletionForTests = null)
+        Action<string>? beforeAttemptCandidateDeletionForTests = null,
+        Action<string>? beforeMtpCandidateDeletionForTests = null)
     {
         var decisions = new List<EvidenceRetentionDecision>();
         var sweepId = Guid.NewGuid().ToString("N");
@@ -155,13 +156,20 @@ internal static partial class StorageRetentionMaintenance
             try
             {
                 SweepWorkerArtifacts(logDirectory, goals, now, decisions);
-                SweepMtpResults(mtpResultsRoot, orchestratorDirectory, goals, now, decisions);
+                var retainedMtpAttemptOwnerKeys = SweepMtpResults(
+                    mtpResultsRoot,
+                    orchestratorDirectory,
+                    goals,
+                    now,
+                    beforeMtpCandidateDeletionForTests,
+                    decisions);
                 SweepAcceptanceArtifacts(
                     orchestratorDirectory,
                     goals,
                     now,
                     sweepId,
                     acceptanceArtifactMaxBytesForTests ?? AcceptanceArtifactMaxBytesPerGoal,
+                    retainedMtpAttemptOwnerKeys,
                     beforeAttemptCandidateDeletionForTests,
                     decisions);
                 SweepPrompts(orchestratorDirectory, goals, now, decisions);
@@ -226,7 +234,7 @@ internal static partial class StorageRetentionMaintenance
         Action<string>? receipt = null)
     {
         var effectiveTimeout = timeout ?? TimeSpan.FromSeconds(30);
-        var lease = MutexLease.TryAcquire(AttemptLeaseNameFor(goalDirectory), effectiveTimeout);
+        var lease = TryAcquireAttemptWriterLease(goalDirectory, effectiveTimeout);
         if (lease is not null)
         {
             return lease;
@@ -238,6 +246,11 @@ internal static partial class StorageRetentionMaintenance
         Console.Error.WriteLine(detail);
         throw new TimeoutException(detail);
     }
+
+    internal static IDisposable? TryAcquireAttemptWriterLease(
+        string goalDirectory,
+        TimeSpan? timeout = null) =>
+        MutexLease.TryAcquire(AttemptLeaseNameFor(goalDirectory), timeout ?? TimeSpan.Zero);
 
     private static StorageRetentionResult BuildResult(
         string sweepId,
@@ -315,11 +328,11 @@ internal static partial class StorageRetentionMaintenance
         {
             decisions.Add(new EvidenceRetentionDecision(
                 EvidenceArtifactFamily.DispatchLogs,
-                EvidenceRetentionAction.RetainedUndecidable,
+                EvidenceRetentionAction.Preserved,
                 legacyDiagnostics,
                 null,
                 EvidenceOwnerResolution.Unrecorded,
-                "global-diagnostics-have-no-unique-goal-owner"));
+                "global-diagnostics-preserved-by-policy"));
         }
 
         var deleted = 0;
@@ -352,7 +365,7 @@ internal static partial class StorageRetentionMaintenance
                     path,
                     goal.GoalId,
                     EvidenceOwnerResolution.NonTerminal,
-                    "goal-is-non-terminal"));
+                    "non-terminal-evidence-unbounded-by-policy"));
                 continue;
             }
 
@@ -504,6 +517,7 @@ internal static partial class StorageRetentionMaintenance
         DateTimeOffset now,
         string sweepId,
         long acceptanceArtifactMaxBytes,
+        IReadOnlySet<string> retainedMtpAttemptOwnerKeys,
         Action<string>? beforeAttemptCandidateDeletionForTests,
         List<EvidenceRetentionDecision> decisions)
     {
@@ -521,6 +535,7 @@ internal static partial class StorageRetentionMaintenance
                 now,
                 sweepId,
                 acceptanceArtifactMaxBytes,
+                retainedMtpAttemptOwnerKeys,
                 beforeAttemptCandidateDeletionForTests,
                 decisions);
             totals.Receipts += result.Receipts;
@@ -537,6 +552,7 @@ internal static partial class StorageRetentionMaintenance
         DateTimeOffset now,
         string sweepId,
         long acceptanceArtifactMaxBytes,
+        IReadOnlySet<string> retainedMtpAttemptOwnerKeys,
         Action<string>? beforeAttemptCandidateDeletionForTests,
         List<EvidenceRetentionDecision> decisions)
     {
@@ -586,7 +602,7 @@ internal static partial class StorageRetentionMaintenance
                     goalDirectory,
                     goal.GoalId,
                     EvidenceOwnerResolution.NonTerminal,
-                    "goal-is-non-terminal"));
+                    "non-terminal-evidence-unbounded-by-policy"));
                 continue;
             }
 
@@ -622,6 +638,7 @@ internal static partial class StorageRetentionMaintenance
                 attempts,
                 ConductorParallelAcceptanceAttemptCoordinator.RetainedAttemptCountPerGoal,
                 protectedAttemptIds);
+            var retainedTrxAttemptIds = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
             foreach (var trxPath in Directory.EnumerateFiles(goalDirectory, "*.trx", SearchOption.AllDirectories))
             {
                 var protectedAttempt = protectedAttemptIds.FirstOrDefault(id => BelongsToAttempt(trxPath, id));
@@ -653,20 +670,21 @@ internal static partial class StorageRetentionMaintenance
                     continue;
                 }
 
-                if (!TryWriteSuccessfulTrxReceipt(
+                if (!TryWriteTrxReceipt(
                     trxPath,
                     sweepId,
                     goal.GoalId,
                     attempt.AttemptId,
                     now))
                 {
+                    retainedTrxAttemptIds.Add(attempt.AttemptId);
                     decisions.Add(new EvidenceRetentionDecision(
                         family,
                         EvidenceRetentionAction.Preserved,
                         trxPath,
                         goal.GoalId,
                         EvidenceOwnerResolution.UniqueTerminal,
-                        "trx-is-failing-or-unreadable"));
+                        "trx-is-unreadable-or-has-no-test-identities"));
                     continue;
                 }
 
@@ -677,7 +695,7 @@ internal static partial class StorageRetentionMaintenance
                     trxPath + ".test-identities.json",
                     goal.GoalId,
                     EvidenceOwnerResolution.UniqueTerminal,
-                    "successful-trx-identities-preserved"));
+                    "trx-identities-preserved"));
                 var length = SafeLength(trxPath);
                 var deletion = TryDeleteExclusive(trxPath);
                 decisions.Add(new EvidenceRetentionDecision(
@@ -686,13 +704,17 @@ internal static partial class StorageRetentionMaintenance
                     trxPath,
                     goal.GoalId,
                     EvidenceOwnerResolution.UniqueTerminal,
-                    deletion.Success ? "successful-trx-reduced-to-receipt" : "exclusive-delete-failed",
+                    deletion.Success ? "trx-reduced-to-receipt" : "exclusive-delete-failed",
                     BytesAttempted: length,
                     BytesReclaimed: deletion.Success ? length : 0,
                     FailureExceptionType: deletion.ExceptionType));
                 if (deletion.Success)
                 {
                     deleted++;
+                }
+                else
+                {
+                    retainedTrxAttemptIds.Add(attempt.AttemptId);
                 }
             }
 
@@ -714,7 +736,7 @@ internal static partial class StorageRetentionMaintenance
                     continue;
                 }
 
-                if (IsAcceptanceIndex(path))
+                if (IsAcceptanceSequenceIndex(path))
                 {
                     decisions.Add(new EvidenceRetentionDecision(
                         family,
@@ -724,6 +746,26 @@ internal static partial class StorageRetentionMaintenance
                         EvidenceOwnerResolution.UniqueTerminal,
                         "authoritative-ownership-index"));
                     continue;
+                }
+
+                if (path.EndsWith(".attempt.json", StringComparison.OrdinalIgnoreCase))
+                {
+                    var identity = attempts.FirstOrDefault(attempt => BelongsToAttempt(path, attempt.AttemptId));
+                    if (identity is not null &&
+                        (retainedTrxAttemptIds.Contains(identity.AttemptId) ||
+                         retainedMtpAttemptOwnerKeys.Contains(AttemptOwnerKey(goal.GoalId, identity.AttemptId))))
+                    {
+                        decisions.Add(new EvidenceRetentionDecision(
+                            family,
+                            EvidenceRetentionAction.Preserved,
+                            path,
+                            goal.GoalId,
+                            EvidenceOwnerResolution.UniqueTerminal,
+                            "retained-test-artifact-owner-metadata",
+                            identity.AttemptId,
+                            identity.Ordinal));
+                        continue;
+                    }
                 }
 
                 if (!path.EndsWith(".trx", StringComparison.OrdinalIgnoreCase) &&
@@ -788,16 +830,18 @@ internal static partial class StorageRetentionMaintenance
         return (receipts, deleted);
     }
 
-    private static void SweepMtpResults(
+    private static IReadOnlySet<string> SweepMtpResults(
         string? resultsRoot,
         string orchestratorDirectory,
         IReadOnlyCollection<StorageRetentionGoal> goals,
         DateTimeOffset now,
+        Action<string>? beforeCandidateDeletionForTests,
         List<EvidenceRetentionDecision> decisions)
     {
+        var retainedAttemptOwnerKeys = new HashSet<string>(StringComparer.Ordinal);
         if (string.IsNullOrWhiteSpace(resultsRoot) || !Directory.Exists(resultsRoot))
         {
-            return;
+            return retainedAttemptOwnerKeys;
         }
 
         var attemptOwners = BuildMtpAttemptOwnerIndex(orchestratorDirectory, goals);
@@ -816,21 +860,17 @@ internal static partial class StorageRetentionMaintenance
                 continue;
             }
 
-            if (ownership.CreatedAt > now.AddMinutes(5))
-            {
-                decisions.Add(new EvidenceRetentionDecision(
-                    EvidenceArtifactFamily.MtpTestRuns,
-                    EvidenceRetentionAction.RetainedUndecidable,
-                    directory,
-                    null,
-                    EvidenceOwnerResolution.Unrecorded,
-                    "mtp-created-at-is-in-the-future",
-                    ownership.AttemptId));
-                continue;
-            }
-
             if (!attemptOwners.TryGetValue(ownership.AttemptId, out var owners) || owners.Count != 1)
             {
+                if (owners is not null)
+                {
+                    foreach (var ambiguousOwner in owners)
+                    {
+                        retainedAttemptOwnerKeys.Add(AttemptOwnerKey(
+                            ambiguousOwner.Goal.GoalId,
+                            ambiguousOwner.Attempt.AttemptId));
+                    }
+                }
                 decisions.Add(new EvidenceRetentionDecision(
                     EvidenceArtifactFamily.MtpTestRuns,
                     EvidenceRetentionAction.RetainedUndecidable,
@@ -843,15 +883,31 @@ internal static partial class StorageRetentionMaintenance
             }
 
             var owner = owners[0];
+            if (ownership.CreatedAt > now.AddMinutes(5))
+            {
+                retainedAttemptOwnerKeys.Add(AttemptOwnerKey(owner.Goal.GoalId, owner.Attempt.AttemptId));
+                decisions.Add(new EvidenceRetentionDecision(
+                    EvidenceArtifactFamily.MtpTestRuns,
+                    EvidenceRetentionAction.RetainedUndecidable,
+                    directory,
+                    owner.Goal.GoalId,
+                    owner.Goal.IsTerminal ? EvidenceOwnerResolution.UniqueTerminal : EvidenceOwnerResolution.NonTerminal,
+                    "mtp-created-at-is-in-the-future",
+                    ownership.AttemptId,
+                    owner.Attempt.Ordinal));
+                continue;
+            }
+
             if (!owner.Goal.IsTerminal)
             {
+                retainedAttemptOwnerKeys.Add(AttemptOwnerKey(owner.Goal.GoalId, owner.Attempt.AttemptId));
                 decisions.Add(new EvidenceRetentionDecision(
                     EvidenceArtifactFamily.MtpTestRuns,
                     EvidenceRetentionAction.Preserved,
                     directory,
                     owner.Goal.GoalId,
                     EvidenceOwnerResolution.NonTerminal,
-                    "goal-is-non-terminal",
+                    "non-terminal-evidence-unbounded-by-policy",
                     ownership.AttemptId,
                     owner.Attempt.Ordinal));
                 continue;
@@ -859,6 +915,7 @@ internal static partial class StorageRetentionMaintenance
 
             if (!owner.Attempt.Reconciled)
             {
+                retainedAttemptOwnerKeys.Add(AttemptOwnerKey(owner.Goal.GoalId, owner.Attempt.AttemptId));
                 decisions.Add(new EvidenceRetentionDecision(
                     EvidenceArtifactFamily.MtpTestRuns,
                     EvidenceRetentionAction.DeferredLive,
@@ -873,6 +930,7 @@ internal static partial class StorageRetentionMaintenance
 
             if (owner.ProtectedAttemptIds.Contains(ownership.AttemptId))
             {
+                retainedAttemptOwnerKeys.Add(AttemptOwnerKey(owner.Goal.GoalId, owner.Attempt.AttemptId));
                 decisions.Add(new EvidenceRetentionDecision(
                     EvidenceArtifactFamily.MtpTestRuns,
                     EvidenceRetentionAction.Preserved,
@@ -899,6 +957,9 @@ internal static partial class StorageRetentionMaintenance
             var countBound = index >= MtpResultMaxRetainedDirectories;
             if (!aged && !countBound)
             {
+                retainedAttemptOwnerKeys.Add(AttemptOwnerKey(
+                    candidate.Owner.Goal.GoalId,
+                    candidate.Owner.Attempt.AttemptId));
                 decisions.Add(new EvidenceRetentionDecision(
                     EvidenceArtifactFamily.MtpTestRuns,
                     EvidenceRetentionAction.Preserved,
@@ -911,9 +972,13 @@ internal static partial class StorageRetentionMaintenance
                 continue;
             }
 
+            beforeCandidateDeletionForTests?.Invoke(candidate.Path);
             using var attemptLease = MutexLease.TryAcquire(AttemptLeaseNameFor(candidate.Owner.GoalDirectory));
             if (attemptLease is null)
             {
+                retainedAttemptOwnerKeys.Add(AttemptOwnerKey(
+                    candidate.Owner.Goal.GoalId,
+                    candidate.Owner.Attempt.AttemptId));
                 decisions.Add(new EvidenceRetentionDecision(
                     EvidenceArtifactFamily.MtpTestRuns,
                     EvidenceRetentionAction.DeferredLease,
@@ -926,23 +991,121 @@ internal static partial class StorageRetentionMaintenance
                 continue;
             }
 
+            if (!TryRefreshMtpAttemptOwner(candidate.Owner, out var refreshedOwner, out var refreshReason))
+            {
+                retainedAttemptOwnerKeys.Add(AttemptOwnerKey(
+                    candidate.Owner.Goal.GoalId,
+                    candidate.Owner.Attempt.AttemptId));
+                decisions.Add(new EvidenceRetentionDecision(
+                    EvidenceArtifactFamily.MtpTestRuns,
+                    EvidenceRetentionAction.RetainedUndecidable,
+                    candidate.Path,
+                    candidate.Owner.Goal.GoalId,
+                    EvidenceOwnerResolution.UniqueTerminal,
+                    refreshReason,
+                    candidate.Owner.Attempt.AttemptId,
+                    candidate.Owner.Attempt.Ordinal));
+                continue;
+            }
+
+            if (!refreshedOwner.Attempt.Reconciled)
+            {
+                retainedAttemptOwnerKeys.Add(AttemptOwnerKey(
+                    refreshedOwner.Goal.GoalId,
+                    refreshedOwner.Attempt.AttemptId));
+                decisions.Add(new EvidenceRetentionDecision(
+                    EvidenceArtifactFamily.MtpTestRuns,
+                    EvidenceRetentionAction.DeferredLive,
+                    candidate.Path,
+                    refreshedOwner.Goal.GoalId,
+                    EvidenceOwnerResolution.UniqueTerminal,
+                    "attempt-became-unreconciled",
+                    refreshedOwner.Attempt.AttemptId,
+                    refreshedOwner.Attempt.Ordinal));
+                continue;
+            }
+
+            if (refreshedOwner.ProtectedAttemptIds.Contains(refreshedOwner.Attempt.AttemptId))
+            {
+                retainedAttemptOwnerKeys.Add(AttemptOwnerKey(
+                    refreshedOwner.Goal.GoalId,
+                    refreshedOwner.Attempt.AttemptId));
+                decisions.Add(new EvidenceRetentionDecision(
+                    EvidenceArtifactFamily.MtpTestRuns,
+                    EvidenceRetentionAction.Preserved,
+                    candidate.Path,
+                    refreshedOwner.Goal.GoalId,
+                    EvidenceOwnerResolution.UniqueTerminal,
+                    refreshedOwner.Attempt.Failed ? "last-failing-attempt" : "final-attempt",
+                    refreshedOwner.Attempt.AttemptId,
+                    refreshedOwner.Attempt.Ordinal));
+                continue;
+            }
+
             var deletion = TryDeleteDirectory(candidate.Path);
+            if (!deletion.Success)
+            {
+                retainedAttemptOwnerKeys.Add(AttemptOwnerKey(
+                    refreshedOwner.Goal.GoalId,
+                    refreshedOwner.Attempt.AttemptId));
+            }
             decisions.Add(new EvidenceRetentionDecision(
                 EvidenceArtifactFamily.MtpTestRuns,
                 deletion.Success ? EvidenceRetentionAction.Deleted : EvidenceRetentionAction.DeferredLocked,
                 candidate.Path,
-                candidate.Owner.Goal.GoalId,
+                refreshedOwner.Goal.GoalId,
                 EvidenceOwnerResolution.UniqueTerminal,
                 deletion.Success
                     ? countBound ? "past-count-bound" : "past-age-bound"
                     : "exclusive-delete-failed",
-                candidate.Owner.Attempt.AttemptId,
-                candidate.Owner.Attempt.Ordinal,
+                refreshedOwner.Attempt.AttemptId,
+                refreshedOwner.Attempt.Ordinal,
                 deletion.BytesAttempted,
                 deletion.Success ? deletion.BytesAttempted : 0,
                 deletion.ExceptionType));
         }
+
+        return retainedAttemptOwnerKeys;
     }
+
+    private static bool TryRefreshMtpAttemptOwner(
+        MtpAttemptOwner owner,
+        out MtpAttemptOwner refreshed,
+        out string reason)
+    {
+        if (!TryReadAttemptIdentities(
+                owner.GoalDirectory,
+                owner.Goal.GoalId,
+                out var attempts,
+                out reason))
+        {
+            refreshed = default!;
+            return false;
+        }
+
+        var matches = attempts
+            .Where(attempt => attempt.AttemptId.Equals(owner.Attempt.AttemptId, StringComparison.OrdinalIgnoreCase))
+            .ToArray();
+        if (matches.Length != 1)
+        {
+            refreshed = default!;
+            reason = matches.Length == 0
+                ? "mtp-attempt-owner-disappeared-before-deletion"
+                : "mtp-attempt-owner-became-ambiguous-before-deletion";
+            return false;
+        }
+
+        refreshed = new MtpAttemptOwner(
+            owner.Goal,
+            matches[0],
+            owner.GoalDirectory,
+            EvidenceRetentionPolicy.ProtectedAttemptIds(attempts));
+        reason = string.Empty;
+        return true;
+    }
+
+    private static string AttemptOwnerKey(string goalId, string attemptId) =>
+        $"{goalId.ToUpperInvariant()}\n{attemptId.ToUpperInvariant()}";
 
     private static Dictionary<string, List<MtpAttemptOwner>> BuildMtpAttemptOwnerIndex(
         string orchestratorDirectory,
@@ -1116,7 +1279,7 @@ internal static partial class StorageRetentionMaintenance
         }
     }
 
-    private static bool TryWriteSuccessfulTrxReceipt(
+    private static bool TryWriteTrxReceipt(
         string trxPath,
         string sweepId,
         string goalId,
@@ -1132,7 +1295,8 @@ internal static partial class StorageRetentionMaintenance
                 return existing.RootElement.TryGetProperty("source", out var source) &&
                     string.Equals(source.GetString(), Path.GetFileName(trxPath), StringComparison.OrdinalIgnoreCase) &&
                     existing.RootElement.TryGetProperty("testIdentities", out var identities) &&
-                    identities.ValueKind == JsonValueKind.Array && identities.GetArrayLength() > 0;
+                    identities.ValueKind == JsonValueKind.Array && identities.GetArrayLength() > 0 &&
+                    identities.EnumerateArray().All(HasRequiredFailureSignature);
             }
             catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or JsonException)
             {
@@ -1147,25 +1311,39 @@ internal static partial class StorageRetentionMaintenance
             var trxBytes = input.Length;
             var document = XDocument.Load(input, LoadOptions.None);
             var counters = document.Descendants().FirstOrDefault(element => element.Name.LocalName == "Counters");
-            if (counters is null ||
-                !long.TryParse(counters.Attribute("failed")?.Value, out var failed) ||
-                failed != 0)
+            if (counters is null)
             {
                 return false;
             }
 
             var identities = document.Descendants()
                 .Where(element => element.Name.LocalName == "UnitTestResult")
-                .Select(element => new
+                .Select(element =>
                 {
-                    name = element.Attribute("testName")?.Value,
-                    outcome = element.Attribute("outcome")?.Value
+                    var outcome = element.Attribute("outcome")?.Value;
+                    var isFailure = string.Equals(outcome, "Failed", StringComparison.OrdinalIgnoreCase);
+                    var errorInfo = element.Descendants()
+                        .FirstOrDefault(descendant => descendant.Name.LocalName == "ErrorInfo");
+                    var failureMessage = errorInfo?.Descendants()
+                        .FirstOrDefault(descendant => descendant.Name.LocalName == "Message")?.Value;
+                    var stackTrace = errorInfo?.Descendants()
+                        .FirstOrDefault(descendant => descendant.Name.LocalName == "StackTrace")?.Value;
+                    return new
+                    {
+                        name = element.Attribute("testName")?.Value,
+                        outcome,
+                        failureMessage = isFailure ? BoundTrxReceiptText(failureMessage) : null,
+                        topStackFrame = isFailure ? FirstNonEmptyLine(stackTrace) : null
+                    };
                 })
                 .Where(identity => !string.IsNullOrWhiteSpace(identity.name))
                 .Distinct()
                 .OrderBy(identity => identity.name, StringComparer.Ordinal)
                 .ToArray();
-            if (identities.Length == 0)
+            if (identities.Length == 0 ||
+                identities.Any(identity =>
+                    string.Equals(identity.outcome, "Failed", StringComparison.OrdinalIgnoreCase) &&
+                    (string.IsNullOrWhiteSpace(identity.failureMessage) || string.IsNullOrWhiteSpace(identity.topStackFrame))))
             {
                 return false;
             }
@@ -1195,11 +1373,10 @@ internal static partial class StorageRetentionMaintenance
         }
     }
 
-    private static bool IsAcceptanceIndex(string path)
+    private static bool IsAcceptanceSequenceIndex(string path)
     {
         var fileName = Path.GetFileName(path);
-        return fileName.Equals("attempt-sequence.txt", StringComparison.OrdinalIgnoreCase) ||
-            fileName.EndsWith(".attempt.json", StringComparison.OrdinalIgnoreCase);
+        return fileName.Equals("attempt-sequence.txt", StringComparison.OrdinalIgnoreCase);
     }
 
     private static bool BelongsToAttempt(string path, string? attemptId)
@@ -1255,7 +1432,7 @@ internal static partial class StorageRetentionMaintenance
                     path,
                     goal.GoalId,
                     EvidenceOwnerResolution.NonTerminal,
-                    "goal-is-non-terminal"));
+                    "non-terminal-evidence-unbounded-by-policy"));
                 continue;
             }
 
@@ -1318,6 +1495,36 @@ internal static partial class StorageRetentionMaintenance
                 owners.Length == 1 ? "replay-contract-requires-raw-jsonl" : "goal-event-owner-unmatched"));
         }
     }
+
+    private static bool HasRequiredFailureSignature(JsonElement identity)
+    {
+        if (!identity.TryGetProperty("outcome", out var outcome) ||
+            !string.Equals(outcome.GetString(), "Failed", StringComparison.OrdinalIgnoreCase))
+        {
+            return true;
+        }
+
+        return identity.TryGetProperty("failureMessage", out var message) &&
+            !string.IsNullOrWhiteSpace(message.GetString()) &&
+            identity.TryGetProperty("topStackFrame", out var topStackFrame) &&
+            !string.IsNullOrWhiteSpace(topStackFrame.GetString());
+    }
+
+    private static string? BoundTrxReceiptText(string? value)
+    {
+        const int maxLength = 4096;
+        var trimmed = value?.Trim();
+        return string.IsNullOrWhiteSpace(trimmed)
+            ? null
+            : trimmed.Length <= maxLength
+                ? trimmed
+                : trimmed[..maxLength];
+    }
+
+    private static string? FirstNonEmptyLine(string? value) =>
+        BoundTrxReceiptText(value?
+            .Split(['\r', '\n'], StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries)
+            .FirstOrDefault());
 
     private static int ArchiveGoalJournals(
         string executionDirectory,
