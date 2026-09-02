@@ -121,7 +121,9 @@ try {
             Write-ActionableFailure "SQLite helper artifact is missing or stale and no-restored build assets are unavailable; run .\scripts\Invoke-RepoScript.ps1 scripts\Invoke-PackageAudit.ps1 online, then retry."
         }
 
-        $buildLog = [System.IO.Path]::GetTempFileName()
+        $buildLogDirectory = Join-Path $repoRoot ".orchestrator\logs"
+        [System.IO.Directory]::CreateDirectory($buildLogDirectory) | Out-Null
+        $buildLog = Join-Path $buildLogDirectory "sqlite-helper-build.log"
         try {
             & $dotnetHost build $projectPath --no-restore --nologo --verbosity quiet `
                 -clp:ErrorsOnly -p:UseSharedCompilation=false -p:McgIsolatedArtifactsPath= *> $buildLog
@@ -130,13 +132,12 @@ try {
         catch {
             $buildExit = 1
         }
-        finally {
-            Remove-Item -LiteralPath $buildLog -Force -ErrorAction SilentlyContinue
-        }
 
         if ($buildExit -ne 0 -or -not (Test-Path -LiteralPath $artifactPath -PathType Leaf)) {
-            Write-ActionableFailure "SQLite helper no-restore rebuild failed; run .\scripts\Invoke-RepoScript.ps1 scripts\Invoke-PackageAudit.ps1 online, then retry."
+            Write-ActionableFailure "SQLite helper no-restore rebuild failed; build diagnostics were preserved at $buildLog. Resolve the reported build error, or run .\scripts\Invoke-RepoScript.ps1 scripts\Invoke-PackageAudit.ps1 online when restore assets need repair, then retry."
         }
+
+        Remove-Item -LiteralPath $buildLog -Force -ErrorAction SilentlyContinue
 
         & $markerScript -RepositoryRoot $repoRoot -MarkerPath $markerPath
         $freshnessExitCode = Get-ArtifactFreshnessExitCode

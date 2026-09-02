@@ -42,6 +42,9 @@ public sealed class LauncherScriptTests
 
         Assert.True(launcher.Contains("App.dll.git-head", StringComparison.Ordinal));
         Assert.True(launcher.Contains("Test-OrchestratorArtifactFreshness.ps1", StringComparison.Ordinal));
+        Assert.True(launcher.Contains("set \"FRESH_EXIT=%ERRORLEVEL%\"", StringComparison.Ordinal));
+        Assert.True(launcher.Contains("if \"%FRESH_EXIT%\"==\"0\" goto run_app", StringComparison.Ordinal));
+        Assert.False(launcher.Contains("if not errorlevel 1 goto run_app", StringComparison.Ordinal));
         Assert.True(freshness.Contains("rev-parse HEAD", StringComparison.Ordinal));
         Assert.True(freshness.Contains("\"bin\", \"obj\"", StringComparison.Ordinal));
         Assert.True(launcher.Contains("scripts\\Update-AppDllGitHeadMarker.ps1", StringComparison.Ordinal));
@@ -229,6 +232,9 @@ public sealed class LauncherScriptTests
         Assert.Contains("MCG_ORCHESTRATOR_DOTNET_PATH", helper, StringComparison.Ordinal);
         Assert.Contains("--no-restore", helper, StringComparison.Ordinal);
         Assert.Contains("System.Threading.Mutex", helper, StringComparison.Ordinal);
+        Assert.Contains(".orchestrator\\logs", helper, StringComparison.Ordinal);
+        Assert.Contains("build diagnostics were preserved at $buildLog", helper, StringComparison.Ordinal);
+        Assert.Contains("Remove-Item -LiteralPath $buildLog", helper, StringComparison.Ordinal);
         Assert.Contains("-p:AuditPipeline=true", auditScript, StringComparison.Ordinal);
         Assert.Contains(".\\scripts\\Invoke-RepoScript.ps1 scripts\\Invoke-PackageAudit.ps1", runbook, StringComparison.Ordinal);
         Assert.Contains("Invoke-PackageAudit.ps1 *", claudeSettings, StringComparison.Ordinal);
@@ -275,6 +281,60 @@ public sealed class LauncherScriptTests
             Assert.Contains("Invoke-RepoScript.ps1 scripts\\Invoke-PackageAudit.ps1", errorLines[0], StringComparison.Ordinal);
             Assert.DoesNotContain("NU1900", errorLines[0], StringComparison.OrdinalIgnoreCase);
             Assert.DoesNotContain("NU1301", errorLines[0], StringComparison.OrdinalIgnoreCase);
+        }
+        finally
+        {
+            TryDeleteDirectory(repositoryRoot);
+        }
+    }
+
+    [Xunit.Fact]
+    public void ReadOnlySqliteHelperFailedBuildPreservesDiagnostics()
+    {
+        if (!OperatingSystem.IsWindows())
+        {
+            return;
+        }
+
+        var repositoryRoot = Path.Combine(Path.GetTempPath(), $"sqlite-helper-build-failure-{Guid.NewGuid():N}");
+        var scriptsPath = Path.Combine(repositoryRoot, "scripts");
+        var toolSourcePath = Path.Combine(scriptsPath, "OrchestratorSqliteTools");
+        var coreSourcePath = Path.Combine(repositoryRoot, "src", "Mcg.AgentOrchestrator.Core");
+        Directory.CreateDirectory(toolSourcePath);
+        Directory.CreateDirectory(coreSourcePath);
+        try
+        {
+            var sourceRoot = FindLauncherSourceRoot();
+            var helperPath = Path.Combine(scriptsPath, "Invoke-OrchestratorSqliteTool.ps1");
+            File.Copy(Path.Combine(sourceRoot, "scripts", "Invoke-OrchestratorSqliteTool.ps1"), helperPath);
+            File.Copy(
+                Path.Combine(sourceRoot, "scripts", "Test-OrchestratorArtifactFreshness.ps1"),
+                Path.Combine(scriptsPath, "Test-OrchestratorArtifactFreshness.ps1"));
+            File.WriteAllText(Path.Combine(toolSourcePath, "OrchestratorSqliteTools.csproj"), "<Project Sdk=\"Microsoft.NET.Sdk\" />");
+            File.WriteAllText(Path.Combine(toolSourcePath, "Program.cs"), "invalid source");
+            File.WriteAllText(Path.Combine(coreSourcePath, "Core.cs"), "internal sealed class Core;");
+            Directory.CreateDirectory(Path.Combine(toolSourcePath, "obj"));
+            Directory.CreateDirectory(Path.Combine(coreSourcePath, "obj"));
+            File.WriteAllText(Path.Combine(toolSourcePath, "obj", "project.assets.json"), "{}");
+            File.WriteAllText(Path.Combine(coreSourcePath, "obj", "project.assets.json"), "{}");
+
+            var buildShim = Path.Combine(repositoryRoot, "failing-dotnet.ps1");
+            File.WriteAllText(buildShim, "Write-Output 'Program.cs(1,1): error CS0246: missing type'\r\nexit 1\r\n");
+            var result = RunPowerShellCommand(repositoryRoot, $"""
+                $env:MCG_ORCHESTRATOR_DOTNET_PATH = '{EscapePowerShellSingleQuoted(buildShim)}'
+                & '{EscapePowerShellSingleQuoted(helperPath)}' list-goals
+                """);
+
+            Assert.Equal(1, result.ExitCode);
+            Assert.True(string.IsNullOrWhiteSpace(result.Stdout), result.Stdout);
+            var errorLines = result.Stderr.Split(
+                JsonLineSeparators,
+                StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries);
+            Assert.Single(errorLines);
+            var buildLog = Path.Combine(repositoryRoot, ".orchestrator", "logs", "sqlite-helper-build.log");
+            Assert.Contains(buildLog, errorLines[0], StringComparison.OrdinalIgnoreCase);
+            Assert.True(File.Exists(buildLog), errorLines[0]);
+            Assert.Contains("CS0246", File.ReadAllText(buildLog), StringComparison.Ordinal);
         }
         finally
         {
@@ -570,6 +630,29 @@ public sealed class LauncherScriptTests
         Assert.Equal(0, result.ExitCode);
         Assert.True(string.IsNullOrWhiteSpace(result.Stderr), result.Stderr);
         Assert.Equal(sandbox.ExpectedHead, File.ReadAllText(sandbox.MarkerPath).Trim());
+        var dotnetLog = File.ReadAllText(sandbox.DotnetLogPath);
+        Assert.Contains("build ", dotnetLog);
+        Assert.Contains("--no-restore", dotnetLog, StringComparison.Ordinal);
+    }
+
+    [Xunit.Fact(DisplayName = "InvokeOrchestratorCommand_missing_freshness_checker_rebuilds_instead_of_running_stale_app")]
+    public void InvokeOrchestratorCommandMissingFreshnessCheckerRebuildsInsteadOfRunningStaleApp()
+    {
+        if (!OperatingSystem.IsWindows())
+        {
+            return;
+        }
+
+        using var sandbox = CreateStaleMarkerLauncherSandbox();
+        File.Delete(Path.Combine(sandbox.RepositoryRoot, "scripts", "Test-OrchestratorArtifactFreshness.ps1"));
+        var result = RunInvokeRepoScript(
+            sandbox.RepositoryRoot,
+            "scripts\\Invoke-OrchestratorCommand.ps1",
+            new Dictionary<string, string?> { ["MCG_ORCHESTRATOR_DOTNET_PATH"] = sandbox.DotnetShimPath },
+            "help",
+            "operator-commands");
+
+        Assert.Equal(0, result.ExitCode);
         var dotnetLog = File.ReadAllText(sandbox.DotnetLogPath);
         Assert.Contains("build ", dotnetLog);
         Assert.Contains("--no-restore", dotnetLog, StringComparison.Ordinal);

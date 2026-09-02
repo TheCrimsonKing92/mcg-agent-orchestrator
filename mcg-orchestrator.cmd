@@ -30,7 +30,8 @@ if exist "%LOCK_DIR%" powershell -NoProfile -Command "$ld='%LOCK_DIR%';$threshol
 :: current App.dll look stale. The shared checker still fails closed for a missing/mismatched
 :: git marker and for newer checked-in source files.
 powershell -NoProfile -ExecutionPolicy Bypass -File "%ROOT%scripts\Test-OrchestratorArtifactFreshness.ps1" -RepositoryRoot "%ROOT%." -ArtifactPath "%APP_DLL%" -MarkerPath "%APP_HEAD%" "%ROOT%src" "%ROOT%Directory.Build.props" "%ROOT%Directory.Build.rsp" "%ROOT%global.json"
-if not errorlevel 1 goto run_app
+set "FRESH_EXIT=%ERRORLEVEL%"
+if "%FRESH_EXIT%"=="0" goto run_app
 
 :: Acquire build lock -- mkdir is atomic on NTFS; spin/retry up to 30 s
 set "LOCK_TRIES=0"
