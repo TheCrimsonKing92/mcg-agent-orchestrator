@@ -70,6 +70,8 @@ public sealed class LauncherScriptTests
             var checkedInProps = Path.Combine(secondSourcePath, "Example.props");
             var generatedProps = Path.Combine(generatedPath, "Example.csproj.nuget.g.props");
             var ignoredJson = Path.Combine(secondSourcePath, "ignored.json");
+            var buildResponse = Path.Combine(repositoryRoot, "Directory.Build.rsp");
+            var globalJson = Path.Combine(repositoryRoot, "global.json");
             var artifactPath = Path.Combine(outputPath, "Example.dll");
             var markerPath = artifactPath + ".git-head";
             var scanReceiptPath = Path.Combine(repositoryRoot, "scan-count.txt");
@@ -77,6 +79,8 @@ public sealed class LauncherScriptTests
             File.WriteAllText(checkedInProps, "<Project />");
             File.WriteAllText(generatedProps, "<Project />");
             File.WriteAllText(ignoredJson, "{}");
+            File.WriteAllText(buildResponse, "-nodeReuse:false");
+            File.WriteAllText(globalJson, "{}");
             File.WriteAllText(artifactPath, "artifact");
 
             RunGit(repositoryRoot, "init", "--initial-branch=main");
@@ -89,26 +93,115 @@ public sealed class LauncherScriptTests
             var baseline = new DateTime(2026, 9, 1, 12, 0, 0, DateTimeKind.Utc);
             File.SetLastWriteTimeUtc(checkedInSource, baseline);
             File.SetLastWriteTimeUtc(checkedInProps, baseline);
+            File.SetLastWriteTimeUtc(buildResponse, baseline);
+            File.SetLastWriteTimeUtc(globalJson, baseline);
             File.SetLastWriteTimeUtc(artifactPath, baseline.AddMinutes(1));
             File.SetLastWriteTimeUtc(generatedProps, baseline.AddMinutes(2));
             File.SetLastWriteTimeUtc(ignoredJson, baseline.AddMinutes(2));
 
             var freshnessScript = Path.Combine(scriptsPath, "Test-OrchestratorArtifactFreshness.ps1");
             var generatedOnlyResult = RunPowerShellCommand(repositoryRoot, $"""
-                & '{EscapePowerShellSingleQuoted(freshnessScript)}' -RepositoryRoot '{EscapePowerShellSingleQuoted(repositoryRoot)}' -ArtifactPath '{EscapePowerShellSingleQuoted(artifactPath)}' -MarkerPath '{EscapePowerShellSingleQuoted(markerPath)}' -ScanReceiptPath '{EscapePowerShellSingleQuoted(scanReceiptPath)}' '{EscapePowerShellSingleQuoted(firstSourcePath)}' '{EscapePowerShellSingleQuoted(secondSourcePath)}'
+                & '{EscapePowerShellSingleQuoted(freshnessScript)}' -RepositoryRoot '{EscapePowerShellSingleQuoted(repositoryRoot)}' -ArtifactPath '{EscapePowerShellSingleQuoted(artifactPath)}' -MarkerPath '{EscapePowerShellSingleQuoted(markerPath)}' -ScanReceiptPath '{EscapePowerShellSingleQuoted(scanReceiptPath)}' '{EscapePowerShellSingleQuoted(firstSourcePath)}' '{EscapePowerShellSingleQuoted(secondSourcePath)}' '{EscapePowerShellSingleQuoted(buildResponse)}' '{EscapePowerShellSingleQuoted(globalJson)}'
                 """);
             Assert.Equal(0, generatedOnlyResult.ExitCode);
             Assert.True(string.IsNullOrWhiteSpace(generatedOnlyResult.Stdout), generatedOnlyResult.Stdout);
             Assert.True(string.IsNullOrWhiteSpace(generatedOnlyResult.Stderr), generatedOnlyResult.Stderr);
-            Assert.Equal("2", File.ReadAllText(scanReceiptPath));
+            Assert.Equal("4", File.ReadAllText(scanReceiptPath));
+
+            File.SetLastWriteTimeUtc(buildResponse, baseline.AddMinutes(3));
+            var newerBuildResponseResult = RunPowerShellCommand(repositoryRoot, $"""
+                & '{EscapePowerShellSingleQuoted(freshnessScript)}' -RepositoryRoot '{EscapePowerShellSingleQuoted(repositoryRoot)}' -ArtifactPath '{EscapePowerShellSingleQuoted(artifactPath)}' -MarkerPath '{EscapePowerShellSingleQuoted(markerPath)}' -ScanReceiptPath '{EscapePowerShellSingleQuoted(scanReceiptPath)}' '{EscapePowerShellSingleQuoted(firstSourcePath)}' '{EscapePowerShellSingleQuoted(secondSourcePath)}' '{EscapePowerShellSingleQuoted(buildResponse)}' '{EscapePowerShellSingleQuoted(globalJson)}'
+                """);
+            Assert.Equal(1, newerBuildResponseResult.ExitCode);
+            Assert.True(string.IsNullOrWhiteSpace(newerBuildResponseResult.Stdout), newerBuildResponseResult.Stdout);
+            Assert.True(string.IsNullOrWhiteSpace(newerBuildResponseResult.Stderr), newerBuildResponseResult.Stderr);
+            File.SetLastWriteTimeUtc(buildResponse, baseline);
+
+            File.SetLastWriteTimeUtc(globalJson, baseline.AddMinutes(3));
+            var newerGlobalJsonResult = RunPowerShellCommand(repositoryRoot, $"""
+                & '{EscapePowerShellSingleQuoted(freshnessScript)}' -RepositoryRoot '{EscapePowerShellSingleQuoted(repositoryRoot)}' -ArtifactPath '{EscapePowerShellSingleQuoted(artifactPath)}' -MarkerPath '{EscapePowerShellSingleQuoted(markerPath)}' -ScanReceiptPath '{EscapePowerShellSingleQuoted(scanReceiptPath)}' '{EscapePowerShellSingleQuoted(firstSourcePath)}' '{EscapePowerShellSingleQuoted(secondSourcePath)}' '{EscapePowerShellSingleQuoted(buildResponse)}' '{EscapePowerShellSingleQuoted(globalJson)}'
+                """);
+            Assert.Equal(1, newerGlobalJsonResult.ExitCode);
+            Assert.True(string.IsNullOrWhiteSpace(newerGlobalJsonResult.Stdout), newerGlobalJsonResult.Stdout);
+            Assert.True(string.IsNullOrWhiteSpace(newerGlobalJsonResult.Stderr), newerGlobalJsonResult.Stderr);
+            File.SetLastWriteTimeUtc(globalJson, baseline);
 
             File.SetLastWriteTimeUtc(checkedInProps, baseline.AddMinutes(3));
             var checkedInSourceResult = RunPowerShellCommand(repositoryRoot, $"""
-                & '{EscapePowerShellSingleQuoted(freshnessScript)}' -RepositoryRoot '{EscapePowerShellSingleQuoted(repositoryRoot)}' -ArtifactPath '{EscapePowerShellSingleQuoted(artifactPath)}' -MarkerPath '{EscapePowerShellSingleQuoted(markerPath)}' -ScanReceiptPath '{EscapePowerShellSingleQuoted(scanReceiptPath)}' '{EscapePowerShellSingleQuoted(firstSourcePath)}' '{EscapePowerShellSingleQuoted(secondSourcePath)}'
+                & '{EscapePowerShellSingleQuoted(freshnessScript)}' -RepositoryRoot '{EscapePowerShellSingleQuoted(repositoryRoot)}' -ArtifactPath '{EscapePowerShellSingleQuoted(artifactPath)}' -MarkerPath '{EscapePowerShellSingleQuoted(markerPath)}' -ScanReceiptPath '{EscapePowerShellSingleQuoted(scanReceiptPath)}' '{EscapePowerShellSingleQuoted(firstSourcePath)}' '{EscapePowerShellSingleQuoted(secondSourcePath)}' '{EscapePowerShellSingleQuoted(buildResponse)}' '{EscapePowerShellSingleQuoted(globalJson)}'
                 """);
             Assert.Equal(1, checkedInSourceResult.ExitCode);
             Assert.True(string.IsNullOrWhiteSpace(checkedInSourceResult.Stdout), checkedInSourceResult.Stdout);
             Assert.True(string.IsNullOrWhiteSpace(checkedInSourceResult.Stderr), checkedInSourceResult.Stderr);
+        }
+        finally
+        {
+            TryDeleteDirectory(repositoryRoot);
+        }
+    }
+
+    [Xunit.Fact]
+    public void ReadOnlySqliteHelperGitUnavailableFailsWithOneActionableDisposition()
+    {
+        var repositoryRoot = Path.Combine(Path.GetTempPath(), $"sqlite-helper-no-git-{Guid.NewGuid():N}");
+        var scriptsPath = Path.Combine(repositoryRoot, "scripts");
+        var toolSourcePath = Path.Combine(scriptsPath, "OrchestratorSqliteTools");
+        var coreSourcePath = Path.Combine(repositoryRoot, "src", "Mcg.AgentOrchestrator.Core");
+        var outputPath = Path.Combine(toolSourcePath, "bin", "Debug", "net10.0");
+        var shimPath = Path.Combine(repositoryRoot, "shim");
+        Directory.CreateDirectory(toolSourcePath);
+        Directory.CreateDirectory(coreSourcePath);
+        Directory.CreateDirectory(outputPath);
+        Directory.CreateDirectory(shimPath);
+        try
+        {
+            var sourceRoot = FindLauncherSourceRoot();
+            var helperPath = Path.Combine(scriptsPath, "Invoke-OrchestratorSqliteTool.ps1");
+            File.Copy(
+                Path.Combine(sourceRoot, "scripts", "Invoke-OrchestratorSqliteTool.ps1"),
+                helperPath);
+            File.Copy(
+                Path.Combine(sourceRoot, "scripts", "Test-OrchestratorArtifactFreshness.ps1"),
+                Path.Combine(scriptsPath, "Test-OrchestratorArtifactFreshness.ps1"));
+            File.WriteAllText(Path.Combine(toolSourcePath, "Program.cs"), "Console.WriteLine(\"test\");");
+            File.WriteAllText(
+                Path.Combine(toolSourcePath, "OrchestratorSqliteTools.csproj"),
+                "<Project Sdk=\"Microsoft.NET.Sdk\" />");
+            File.WriteAllText(Path.Combine(coreSourcePath, "Core.cs"), "internal sealed class Core;");
+            File.WriteAllText(Path.Combine(repositoryRoot, "Directory.Build.props"), "<Project />");
+            File.WriteAllText(Path.Combine(repositoryRoot, "Directory.Build.rsp"), "-nodeReuse:false");
+            File.WriteAllText(Path.Combine(repositoryRoot, "global.json"), "{}");
+
+            var artifactPath = Path.Combine(outputPath, "OrchestratorSqliteTools.dll");
+            File.WriteAllText(artifactPath, "artifact");
+            File.WriteAllText(artifactPath + ".git-head", "unreachable-head");
+            File.WriteAllText(Path.Combine(outputPath, "OrchestratorSqliteTools.deps.json"), "{}");
+            File.WriteAllText(Path.Combine(outputPath, "OrchestratorSqliteTools.runtimeconfig.json"), "{}");
+            var nativePath = Path.Combine(outputPath, "runtimes", "win-x64", "native");
+            Directory.CreateDirectory(nativePath);
+            File.WriteAllText(Path.Combine(nativePath, "e_sqlite3.dll"), "native");
+
+            File.WriteAllText(Path.Combine(shimPath, "git.cmd"), "@echo off\r\nexit /b 1\r\n");
+            var systemPath = Environment.GetFolderPath(Environment.SpecialFolder.System);
+            var windowsPowerShellPath = Path.Combine(systemPath, "WindowsPowerShell", "v1.0");
+            var controlledPath = string.Join(';', shimPath, systemPath, windowsPowerShellPath);
+            var missingHost = Path.Combine(repositoryRoot, "must-not-run-dotnet.cmd");
+            var result = RunPowerShellCommand(repositoryRoot, $"""
+                $env:PATH = '{EscapePowerShellSingleQuoted(controlledPath)}'
+                $env:MCG_ORCHESTRATOR_DOTNET_PATH = '{EscapePowerShellSingleQuoted(missingHost)}'
+                & '{EscapePowerShellSingleQuoted(helperPath)}' list-goals
+                """);
+
+            Assert.Equal(1, result.ExitCode);
+            Assert.True(string.IsNullOrWhiteSpace(result.Stdout), result.Stdout);
+            var errorLines = result.Stderr.Split(
+                JsonLineSeparators,
+                StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries);
+            Assert.Single(errorLines);
+            Assert.Contains("git rev-parse failed", errorLines[0], StringComparison.OrdinalIgnoreCase);
+            Assert.Contains("ensure Git is available", errorLines[0], StringComparison.OrdinalIgnoreCase);
+            Assert.DoesNotContain("NU1900", errorLines[0], StringComparison.OrdinalIgnoreCase);
+            Assert.DoesNotContain("NU1301", errorLines[0], StringComparison.OrdinalIgnoreCase);
         }
         finally
         {

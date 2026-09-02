@@ -40,18 +40,18 @@ if ($Arguments.Count -gt 1) {
     $toolArguments = $Arguments[1..($Arguments.Count - 1)]
 }
 
-function Test-ArtifactCurrent {
+function Get-ArtifactFreshnessExitCode {
     $requiredArtifacts = @(
         $artifactPath,
         (Join-Path $artifactDirectory "OrchestratorSqliteTools.deps.json"),
         (Join-Path $artifactDirectory "OrchestratorSqliteTools.runtimeconfig.json")
     )
     if ($requiredArtifacts | Where-Object { -not (Test-Path -LiteralPath $_ -PathType Leaf) }) {
-        return $false
+        return 1
     }
 
     if (-not (Get-ChildItem -LiteralPath $artifactDirectory -Recurse -Filter "e_sqlite3.dll" -File -ErrorAction SilentlyContinue | Select-Object -First 1)) {
-        return $false
+        return 1
     }
 
     & powershell.exe -NoProfile -ExecutionPolicy Bypass -File $freshnessScript `
@@ -62,7 +62,7 @@ function Test-ArtifactCurrent {
             (Join-Path $repoRoot "Directory.Build.props") `
             (Join-Path $repoRoot "Directory.Build.rsp") `
             (Join-Path $repoRoot "global.json") *> $null
-    return $LASTEXITCODE -eq 0
+    return $LASTEXITCODE
 }
 
 function Write-ActionableFailure {
@@ -75,7 +75,20 @@ function Write-ActionableFailure {
     exit 1
 }
 
-if (-not (Test-ArtifactCurrent)) {
+function Assert-FreshnessCheckAvailable {
+    param(
+        [Parameter(Mandatory = $true)]
+        [int]$ExitCode
+    )
+
+    if ($ExitCode -eq 2) {
+        Write-ActionableFailure "SQLite helper artifact freshness could not be validated because git rev-parse failed; ensure Git is available for this repository, then retry."
+    }
+}
+
+$freshnessExitCode = Get-ArtifactFreshnessExitCode
+Assert-FreshnessCheckAvailable -ExitCode $freshnessExitCode
+if ($freshnessExitCode -ne 0) {
     $hashAlgorithm = [System.Security.Cryptography.SHA256]::Create()
     try {
         $repoHashBytes = $hashAlgorithm.ComputeHash([System.Text.Encoding]::UTF8.GetBytes($repoRoot.ToUpperInvariant()))
@@ -99,7 +112,9 @@ if (-not (Test-ArtifactCurrent)) {
             Write-ActionableFailure "SQLite helper artifact rebuild is already in progress; retry after the current operator command finishes."
         }
 
-        if (-not (Test-ArtifactCurrent)) {
+        $freshnessExitCode = Get-ArtifactFreshnessExitCode
+        Assert-FreshnessCheckAvailable -ExitCode $freshnessExitCode
+        if ($freshnessExitCode -ne 0) {
             $requiredAssets = @(
                 (Join-Path $repoRoot "scripts\OrchestratorSqliteTools\obj\project.assets.json"),
                 (Join-Path $repoRoot "src\Mcg.AgentOrchestrator.Core\obj\project.assets.json")
@@ -127,7 +142,9 @@ if (-not (Test-ArtifactCurrent)) {
             }
 
             & $markerScript -RepositoryRoot $repoRoot -MarkerPath $markerPath
-            if (-not (Test-ArtifactCurrent)) {
+            $freshnessExitCode = Get-ArtifactFreshnessExitCode
+            Assert-FreshnessCheckAvailable -ExitCode $freshnessExitCode
+            if ($freshnessExitCode -ne 0) {
                 Write-ActionableFailure "SQLite helper rebuild did not produce an artifact matching current source and git HEAD; inspect the repository state, then retry."
             }
         }

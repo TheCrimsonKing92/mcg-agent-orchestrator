@@ -18,12 +18,6 @@ param(
 Set-StrictMode -Version Latest
 $ErrorActionPreference = "Stop"
 
-$sourceExtensions = [System.Collections.Generic.HashSet[string]]::new(
-    [System.StringComparer]::OrdinalIgnoreCase)
-foreach ($extension in ".cs", ".csproj", ".props") {
-    [void]$sourceExtensions.Add($extension)
-}
-
 $excludedDirectoryNames = [System.Collections.Generic.HashSet[string]]::new(
     [System.StringComparer]::OrdinalIgnoreCase)
 foreach ($directoryName in "bin", "obj", ".scratch", ".orchestrator-prototype") {
@@ -75,9 +69,14 @@ try {
         exit 1
     }
 
-    $gitOutput = @(& git -C $RepositoryRoot rev-parse HEAD 2>$null)
-    if ($LASTEXITCODE -ne 0) {
-        exit 1
+    try {
+        $gitOutput = @(& git -C $RepositoryRoot rev-parse HEAD 2>$null)
+        if ($LASTEXITCODE -ne 0) {
+            exit 2
+        }
+    }
+    catch {
+        exit 2
     }
 
     $gitHead = ($gitOutput -join "").Trim()
@@ -91,12 +90,10 @@ try {
     foreach ($candidatePath in $SourcePath) {
         if (Test-Path -LiteralPath $candidatePath -PathType Leaf) {
             $candidate = Get-Item -LiteralPath $candidatePath
-            if ($sourceExtensions.Contains($candidate.Extension)) {
-                $scannedSourceCount++
-                if ($candidate.LastWriteTimeUtc -gt $artifactTimestamp) {
-                    Write-ScanReceipt -Count $scannedSourceCount
-                    exit 1
-                }
+            $scannedSourceCount++
+            if ($candidate.LastWriteTimeUtc -gt $artifactTimestamp) {
+                Write-ScanReceipt -Count $scannedSourceCount
+                exit 1
             }
 
             continue
