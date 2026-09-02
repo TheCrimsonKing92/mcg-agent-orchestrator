@@ -438,7 +438,7 @@ public sealed class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
     private static readonly AsyncLocal<TestTelemetryInvocationAllocator?> CurrentTestTelemetryInvocationAllocator = new();
     private static readonly AsyncLocal<TestTelemetryInvocation?> CurrentTestTelemetryInvocation = new();
     private static readonly AsyncLocal<Action<AcceptanceGateProgress>?> CurrentGateProgressSink = new();
-    private static readonly AsyncLocal<Func<bool>?> CurrentGateCancellationProbe = new();
+    private static readonly AsyncLocal<GateCancellationProbes?> CurrentGateCancellationProbes = new();
     private static readonly AsyncLocal<AcceptanceGateEngineSettings?> CurrentGateEngineSettings = new();
     private static readonly AsyncLocal<string?> CurrentAcceptanceAttemptPrefix = new();
     private static readonly AsyncLocal<ManagedRunEnvironmentScope?> CurrentManagedRunEnvironmentScope = new();
@@ -466,6 +466,8 @@ public sealed class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
     internal static DotnetBaseBuildCache? BaseBuildCacheForTests { get; set; }
 
     private sealed record TestTelemetryInvocation(string Stem, int Ordinal);
+
+    private sealed record GateCancellationProbes(Func<bool> Poll, Func<bool> Boundary);
 
     private sealed class TestTelemetryInvocationAllocator
     {
@@ -555,11 +557,16 @@ public sealed class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
         return new RestoreAction(() => CurrentGateProgressSink.Value = previous);
     }
 
-    public static IDisposable PushGateCancellationProbe(Func<bool> shouldCancel)
+    public static IDisposable PushGateCancellationProbe(
+        Func<bool> shouldCancel,
+        Func<bool>? shouldCancelAtBoundary = null)
     {
-        var previous = CurrentGateCancellationProbe.Value;
-        CurrentGateCancellationProbe.Value = shouldCancel;
-        return new RestoreAction(() => CurrentGateCancellationProbe.Value = previous);
+        ArgumentNullException.ThrowIfNull(shouldCancel);
+        var previous = CurrentGateCancellationProbes.Value;
+        CurrentGateCancellationProbes.Value = new GateCancellationProbes(
+            shouldCancel,
+            shouldCancelAtBoundary ?? shouldCancel);
+        return new RestoreAction(() => CurrentGateCancellationProbes.Value = previous);
     }
 
     public static IDisposable PushAcceptanceAttemptResultsPrefix(string prefix)
@@ -1808,7 +1815,7 @@ public sealed class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
                 activeToken => EnsureDotnetTestBuildPhaseAsync(
                     primaryBuildPhase, shardChecks[0], worktreePath, goalId, primarySlotIndex, primaryLease,
                     "acceptance-infrastructure-shards-prebuild", activeToken),
-                CurrentGateCancellationProbe.Value,
+                CurrentGateCancellationProbes.Value?.Poll,
                 cancellationToken).ConfigureAwait(false);
             if (prebuild.Run.Result.Passed)
             {
@@ -2171,7 +2178,7 @@ public sealed class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
                     dotnetTestBuildPhase,
                     activeToken,
                     testResultsDirectoryOverride),
-                CurrentGateCancellationProbe.Value, cancellationToken).ConfigureAwait(false);
+                CurrentGateCancellationProbes.Value?.Poll, cancellationToken).ConfigureAwait(false);
         ThrowIfGateCancellationRequested(cancellationToken);
         return result;
     }
@@ -2217,7 +2224,7 @@ public sealed class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
     private static void ThrowIfGateCancellationRequested(CancellationToken cancellationToken)
     {
         cancellationToken.ThrowIfCancellationRequested();
-        if (CurrentGateCancellationProbe.Value?.Invoke() == true)
+        if (CurrentGateCancellationProbes.Value?.Boundary.Invoke() == true)
         {
             throw new OperationCanceledException("acceptance gate attempt cancelled by goal disposition");
         }

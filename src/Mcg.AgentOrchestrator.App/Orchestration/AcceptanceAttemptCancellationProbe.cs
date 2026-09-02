@@ -39,7 +39,9 @@ internal sealed class AcceptanceAttemptCancellationProbe
 
     internal bool ShouldCancel() => Observe().ShouldCancel;
 
-    internal AcceptanceAttemptCancellationDecision Observe()
+    internal bool ShouldCancelNow() => Observe(forceRefresh: true).ShouldCancel;
+
+    internal AcceptanceAttemptCancellationDecision Observe(bool forceRefresh = false)
     {
         lock (_sync)
         {
@@ -49,7 +51,7 @@ internal sealed class AcceptanceAttemptCancellationProbe
             }
 
             var now = _timeProvider.GetUtcNow();
-            if (_cachedDecision is not null && now < _nextRefreshAt)
+            if (!forceRefresh && _cachedDecision is not null && now < _nextRefreshAt)
             {
                 return _cachedDecision;
             }
