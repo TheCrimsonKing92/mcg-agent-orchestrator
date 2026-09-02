@@ -704,7 +704,10 @@ public sealed class LauncherScriptTests
             StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries);
         Assert.Single(errorLines);
         Assert.Contains("no-restored build assets are unavailable", errorLines[0], StringComparison.OrdinalIgnoreCase);
-        Assert.Contains("Invoke-PackageBootstrap.ps1", errorLines[0], StringComparison.Ordinal);
+        Assert.Contains(
+            "Invoke-RepoScript.ps1 scripts\\Invoke-PackageBootstrap.ps1",
+            errorLines[0],
+            StringComparison.Ordinal);
         Assert.DoesNotContain("NU1900", errorLines[0], StringComparison.OrdinalIgnoreCase);
         Assert.DoesNotContain("NU1301", errorLines[0], StringComparison.OrdinalIgnoreCase);
         Assert.False(File.Exists(sandbox.DotnetLogPath), "Missing assets must fail before invoking dotnet.");

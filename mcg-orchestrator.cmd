@@ -99,5 +99,5 @@ exit /b %BUILD_EXIT%
 
 :missing_build_assets
 rmdir /s /q "%LOCK_DIR%" 2>nul
-echo ERROR: App artifact is missing or stale and no-restored build assets are unavailable; run .\scripts\Invoke-PackageBootstrap.ps1 online, then retry. >&2
+echo ERROR: App artifact is missing or stale and no-restored build assets are unavailable; run .\scripts\Invoke-RepoScript.ps1 scripts\Invoke-PackageBootstrap.ps1 online, then retry. >&2
 exit /b 1
