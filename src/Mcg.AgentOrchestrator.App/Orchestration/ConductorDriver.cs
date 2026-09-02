@@ -578,7 +578,8 @@ internal sealed partial class ConductorDriver
                 using var progressSink = GoalAcceptanceVerifier.PushGateProgressSink(progress =>
                     AppendGateProgressEvent(gateProgressEventWriter, goal.Id, progress));
                 using var cancellationProbe = GoalAcceptanceVerifier.PushGateCancellationProbe(
-                    cancellationProbeState.ShouldCancel);
+                    cancellationProbeState.ShouldCancel,
+                    cancellationProbeState.ShouldCancelNow);
                 verification = acceptanceVerifier.RunAsync(
                     worktreePath,
                     goal.Id,

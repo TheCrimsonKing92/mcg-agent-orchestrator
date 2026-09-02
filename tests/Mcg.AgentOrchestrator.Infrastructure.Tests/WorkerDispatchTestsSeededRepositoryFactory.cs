@@ -9,6 +9,7 @@ internal sealed class WorkerDispatchTestsSeededRepositoryFactory
         : StringComparison.Ordinal;
 
     private readonly Func<string> _directoryAllocator;
+    private readonly string _owningRoot;
     private readonly Action<string> _seedTemplate;
     private readonly IFileSystem _fileSystem;
     private readonly IGitRunner _gitRunner;
@@ -18,11 +19,13 @@ internal sealed class WorkerDispatchTestsSeededRepositoryFactory
     internal WorkerDispatchTestsSeededRepositoryFactory(
         Func<string> directoryAllocator,
         Action<string> seedTemplate,
+        string owningRoot,
         IFileSystem? fileSystem = null,
         IGitRunner? gitRunner = null,
         CreationHooks? hooks = null)
     {
         _directoryAllocator = directoryAllocator;
+        _owningRoot = CanonicalPath(owningRoot);
         _seedTemplate = seedTemplate;
         _fileSystem = fileSystem ?? new PhysicalFileSystem();
         _gitRunner = gitRunner ?? new HermeticGitRunner();
@@ -64,8 +67,10 @@ internal sealed class WorkerDispatchTestsSeededRepositoryFactory
 
         try
         {
-            allocatedStagingPath = _directoryAllocator();
-            stagingPath = CanonicalPath(allocatedStagingPath);
+            var allocatedCandidate = CanonicalPath(_directoryAllocator());
+            EnsureOwnedPath(allocatedCandidate);
+            allocatedStagingPath = allocatedCandidate;
+            stagingPath = allocatedCandidate;
             var parent = Path.GetDirectoryName(stagingPath)
                 ?? throw new InvalidOperationException($"Staging path has no parent: {stagingPath}");
             finalPath = CanonicalPath(Path.Combine(parent, Guid.NewGuid().ToString("N")));
@@ -287,8 +292,10 @@ internal sealed class WorkerDispatchTestsSeededRepositoryFactory
         var untypedFailureCheck = ValidationCheck.TemplatePathAllocated;
         try
         {
-            allocatedPath = _directoryAllocator();
-            path = CanonicalPath(allocatedPath);
+            var allocatedCandidate = CanonicalPath(_directoryAllocator());
+            EnsureOwnedPath(allocatedCandidate);
+            allocatedPath = allocatedCandidate;
+            path = allocatedCandidate;
             if (!_fileSystem.DirectoryExists(path))
             {
                 throw Failure(
@@ -390,13 +397,18 @@ internal sealed class WorkerDispatchTestsSeededRepositoryFactory
         var observation = _fileSystem.ObserveRepository(path);
         if (!observation.RepositoryDirectoryExists)
         {
+            var check = Check(stage, "Path");
+            var result = attempt.Record(
+                GitProbeResult.NotRun("filesystem repository path", "Repository directory is missing."),
+                path,
+                check);
             throw Failure(
-                Check(stage, "Path"),
+                check,
                 sourceTemplatePath,
                 stagingPath,
                 finalPath,
                 observation,
-                GitProbeResult.NotRun("filesystem repository path", "Repository directory is missing."),
+                result,
                 templateIdentity,
                 stagingIdentity,
                 probeReceipts: attempt.Receipts);
@@ -404,13 +416,18 @@ internal sealed class WorkerDispatchTestsSeededRepositoryFactory
 
         if (!observation.GitMetadataDirectoryExists)
         {
+            var check = Check(stage, "Metadata");
+            var result = attempt.Record(
+                GitProbeResult.NotRun("git rev-parse --git-dir", "Expected .git directory is missing."),
+                path,
+                check);
             throw Failure(
-                Check(stage, "Metadata"),
+                check,
                 sourceTemplatePath,
                 stagingPath,
                 finalPath,
                 observation,
-                GitProbeResult.NotRun("git rev-parse --git-dir", "Expected .git directory is missing."),
+                result,
                 templateIdentity,
                 stagingIdentity,
                 probeReceipts: attempt.Receipts);
@@ -588,27 +605,31 @@ internal sealed class WorkerDispatchTestsSeededRepositoryFactory
         bool requiresOutput = true)
     {
         var result = _gitRunner.Run(path, arguments);
-        if (result.Succeeded && requiresOutput && result.StandardOutputByteCount == 0)
+        if (result.Classification == GitProbeClassification.Success &&
+            result.Succeeded &&
+            requiresOutput &&
+            result.StandardOutputByteCount == 0)
         {
             result = result with { Classification = GitProbeClassification.EmptyRequiredOutput };
         }
 
         result = attempt.Record(result, path, check);
-        if (!result.Succeeded)
+        if (result.Classification == GitProbeClassification.EmptyRequiredOutput)
         {
+            var failureObservation = _fileSystem.ObserveRepository(path);
             throw Failure(
                 check,
                 sourceTemplatePath,
                 stagingPath,
                 finalPath,
-                observation,
+                failureObservation,
                 result,
                 templateIdentity,
                 stagingIdentity,
                 probeReceipts: attempt.Receipts);
         }
 
-        if (result.Classification == GitProbeClassification.EmptyRequiredOutput)
+        if (!result.Succeeded)
         {
             var failureObservation = _fileSystem.ObserveRepository(path);
             throw Failure(
@@ -801,6 +822,16 @@ internal sealed class WorkerDispatchTestsSeededRepositoryFactory
     private static string CanonicalPath(string path) =>
         Path.GetFullPath(path).TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar);
 
+    private void EnsureOwnedPath(string path)
+    {
+        var owningPrefix = _owningRoot + Path.DirectorySeparatorChar;
+        if (!path.StartsWith(owningPrefix, PathComparison))
+        {
+            throw new InvalidOperationException(
+                $"The seeded-repository allocator escaped its owning root. root={_owningRoot}; path={path}");
+        }
+    }
+
     private static SeededRepositoryFailureException Failure(
         ValidationCheck check,
         string? sourceTemplatePath,
@@ -844,7 +875,13 @@ internal sealed class WorkerDispatchTestsSeededRepositoryFactory
             GitProbeClassification.DrainFailure or
             GitProbeClassification.ProcessObservationFailure)
         {
-            return ValidationFailureOwner.ProcessOutputApparatus;
+            return observation.HasValidHeadBytes
+                ? ValidationFailureOwner.ProcessOutputApparatus
+                : observation.HeadState == RepositoryHeadState.HeadUnreadable
+                    ? ValidationFailureOwner.Unknown
+                    : IsFixturePublicationState(observation.HeadState)
+                        ? ValidationFailureOwner.FixturePublication
+                        : ValidationFailureOwner.Unknown;
         }
 
         if (result.Classification == GitProbeClassification.EmptyRequiredOutput)
@@ -853,19 +890,24 @@ internal sealed class WorkerDispatchTestsSeededRepositoryFactory
                 ? ValidationFailureOwner.ProcessOutputApparatus
                 : observation.HeadState == RepositoryHeadState.HeadUnreadable
                     ? ValidationFailureOwner.Unknown
-                    : ValidationFailureOwner.FixturePublication;
+                    : IsFixturePublicationState(observation.HeadState)
+                        ? ValidationFailureOwner.FixturePublication
+                        : ValidationFailureOwner.Unknown;
         }
 
-        return observation.HeadState is
+        return IsFixturePublicationState(observation.HeadState)
+            ? ValidationFailureOwner.FixturePublication
+            : ValidationFailureOwner.Unknown;
+    }
+
+    private static bool IsFixturePublicationState(RepositoryHeadState state) =>
+        state is
             RepositoryHeadState.RepositoryMissing or
             RepositoryHeadState.GitMetadataMissing or
             RepositoryHeadState.HeadMissing or
             RepositoryHeadState.HeadInvalid or
             RepositoryHeadState.ReferenceMissing or
-            RepositoryHeadState.ReferenceInvalid
-                ? ValidationFailureOwner.FixturePublication
-                : ValidationFailureOwner.Unknown;
-    }
+            RepositoryHeadState.ReferenceInvalid;
 
     private sealed record TemplateState(
         string Path,
@@ -952,6 +994,7 @@ internal sealed class WorkerDispatchTestsSeededRepositoryFactory
         GitProbeClassification Classification = GitProbeClassification.NotRun)
     {
         internal bool Succeeded =>
+            Classification == GitProbeClassification.Success &&
             ProcessStarted && ExitCode == 0 && !DrainTimedOut && !TimedOut && !DrainFailed;
 
         internal static GitProbeResult NotRun(string command, string reason) =>
@@ -1048,7 +1091,12 @@ internal sealed class WorkerDispatchTestsSeededRepositoryFactory
     {
         public override string ToString()
         {
-            var causeReceipt = Owner == ValidationFailureOwner.ProcessOutputApparatus
+            var hasTypedAttempt =
+                !Git.FixtureAttemptId.Equals("not-assigned", StringComparison.Ordinal) &&
+                Git.ProbeOrdinal > 0;
+            var causeReceipt = hasTypedAttempt && Owner is
+                    ValidationFailureOwner.ProcessOutputApparatus or
+                    ValidationFailureOwner.FixturePublication
                 ? AcceptanceFailureCauseReceiptCodec.Format(new AcceptanceFailureCauseReceiptV1(
                     ContractVersion: 1,
                     Kind: "seeded-dispatch-repository-git-probe",

@@ -9,6 +9,8 @@ internal static class AssemblyTempRedirect
 {
     internal const string LowInheritableLevel = "(OI)(CI)L";
     internal const int MaxRootsReapedPerProcess = 32;
+    private const string RootLeaseSuffix = ".owner.lock";
+    private static FileStream? processRootLease;
     internal static string? StartupTimingDiagnostic { get; private set; }
 
     [ModuleInitializer]
@@ -42,6 +44,20 @@ internal static class AssemblyTempRedirect
             return;
         }
 
+        var rootLease = TryAcquireOwnedRootLease(selection.SelectedRoot);
+        if (rootLease is null)
+        {
+            TryWriteReceipt(
+                Console.Error.WriteLine,
+                () => $"assembly-temp-redirect lease=unavailable path=\"{RootLeasePath(selection.SelectedRoot)}\"");
+            totalClock.Stop();
+            timings.TotalElapsedMilliseconds = totalClock.ElapsedMilliseconds;
+            TryPublishTimingDiagnostic(TryFormatTimingDiagnostic(timings));
+            return;
+        }
+
+        processRootLease = rootLease;
+
         Environment.SetEnvironmentVariable("TMP", selection.SelectedRoot, EnvironmentVariableTarget.Process);
         Environment.SetEnvironmentVariable("TEMP", selection.SelectedRoot, EnvironmentVariableTarget.Process);
 
@@ -54,7 +70,7 @@ internal static class AssemblyTempRedirect
             totalClock,
             DeleteTree,
             Console.Error.WriteLine);
-        AppDomain.CurrentDomain.ProcessExit += (_, _) => DeleteTree(selection.SelectedRoot);
+        AppDomain.CurrentDomain.ProcessExit += (_, _) => ReleaseOwnedRoot(selection.SelectedRoot);
         TryPublishTimingDiagnostic(timingDiagnostic);
     }
 
@@ -170,7 +186,14 @@ internal static class AssemblyTempRedirect
 
             phaseClock.Restart();
             var revalidated = RevalidateExitedRoots(bounded, inspect);
-            ReapBoundedRoots(sharedRoot, revalidated, deleteTree, timings, writeReceipt);
+            ReapBoundedRoots(
+                sharedRoot,
+                revalidated,
+                deleteTree,
+                TryAcquireDeletionLease,
+                timings,
+                writeReceipt);
+            SweepOrphanedRootLeases(sharedRoot, writeReceipt);
             phaseClock.Stop();
             timings.ReapDeleteElapsedMilliseconds = phaseClock.ElapsedMilliseconds;
         }
@@ -186,12 +209,14 @@ internal static class AssemblyTempRedirect
         string sharedRoot,
         IEnumerable<RevalidatedTempRoot> boundedCandidates,
         Func<string, TempRootDeleteOutcome> deleteTree,
+        Func<string, IDisposable?> acquireDeletionLease,
         TempRootStartupTimings timings,
         Action<string>? writeReceipt)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(sharedRoot);
         ArgumentNullException.ThrowIfNull(boundedCandidates);
         ArgumentNullException.ThrowIfNull(deleteTree);
+        ArgumentNullException.ThrowIfNull(acquireDeletionLease);
         ArgumentNullException.ThrowIfNull(timings);
 
         var outcomes = new List<TempRootDeleteOutcome>();
@@ -199,15 +224,28 @@ internal static class AssemblyTempRedirect
         {
             var path = Path.Combine(sharedRoot, candidate.Name);
             TempRootDeleteOutcome outcome;
+            IDisposable? deletionLease = null;
             try
             {
-                outcome = deleteTree(path) ?? TempRootDeleteOutcome.Failure(
-                    path,
-                    new InvalidOperationException("The delete seam returned no outcome."));
+                deletionLease = acquireDeletionLease(path);
+                outcome = deletionLease is null
+                    ? TempRootDeleteOutcome.RetainedLiveOwner(path)
+                    : deleteTree(path) ?? TempRootDeleteOutcome.Failure(
+                        path,
+                        new InvalidOperationException("The delete seam returned no outcome."));
             }
             catch (Exception ex)
             {
                 outcome = TempRootDeleteOutcome.Failure(path, ex);
+            }
+            finally
+            {
+                deletionLease?.Dispose();
+            }
+
+            if (outcome.Status is TempRootDeleteStatus.Deleted or TempRootDeleteStatus.AlreadyAbsent)
+            {
+                TryDeleteRootLease(path);
             }
 
             timings.RecordDelete(outcome);
@@ -366,6 +404,123 @@ internal static class AssemblyTempRedirect
                 result.FailurePath,
                 result.ReadOnlyAttributesCleared)
         };
+    }
+
+    internal static string RootLeasePath(string rootPath)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(rootPath);
+        var fullPath = Path.GetFullPath(rootPath)
+            .TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar);
+        var parent = Path.GetDirectoryName(fullPath)
+            ?? throw new InvalidOperationException($"Temp root '{rootPath}' has no parent directory.");
+        return Path.Combine(parent, $".{Path.GetFileName(fullPath)}{RootLeaseSuffix}");
+    }
+
+    internal static FileStream? TryAcquireDeletionLease(string rootPath)
+    {
+        try
+        {
+            var leasePath = RootLeasePath(rootPath);
+            return new FileStream(
+                leasePath,
+                FileMode.OpenOrCreate,
+                FileAccess.ReadWrite,
+                FileShare.None);
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+        {
+            return null;
+        }
+    }
+
+    internal static FileStream? TryAcquireOwnedRootLease(string rootPath)
+    {
+        FileStream? lease = null;
+        try
+        {
+            var leasePath = RootLeasePath(rootPath);
+            lease = new FileStream(
+                leasePath,
+                FileMode.OpenOrCreate,
+                FileAccess.ReadWrite,
+                FileShare.Read,
+                bufferSize: 256,
+                FileOptions.WriteThrough);
+            lease.SetLength(0);
+            using (var writer = new StreamWriter(lease, System.Text.Encoding.UTF8, leaveOpen: true))
+            {
+                using var process = Process.GetCurrentProcess();
+                writer.Write($"pid={Environment.ProcessId};startedAt={process.StartTime.ToUniversalTime():O};path={Environment.ProcessPath}");
+                writer.Flush();
+            }
+
+            lease.Flush(flushToDisk: true);
+            lease.Position = 0;
+            return lease;
+        }
+        catch
+        {
+            lease?.Dispose();
+            return null;
+        }
+    }
+
+    internal static int SweepOrphanedRootLeases(string sharedRoot, Action<string>? writeReceipt)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(sharedRoot);
+        var deleted = 0;
+        foreach (var leasePath in Directory.EnumerateFiles(sharedRoot, $".*{RootLeaseSuffix}"))
+        {
+            var fileName = Path.GetFileName(leasePath);
+            if (fileName.Length <= RootLeaseSuffix.Length + 1 || fileName[0] != '.')
+            {
+                continue;
+            }
+
+            var rootName = fileName[1..^RootLeaseSuffix.Length];
+            if (!TryParseProcessTempRootName(rootName, out _) ||
+                Directory.Exists(Path.Combine(sharedRoot, rootName)))
+            {
+                continue;
+            }
+
+            try
+            {
+                File.Delete(leasePath);
+                deleted++;
+                TryWriteReceipt(
+                    writeReceipt,
+                    () => $"assembly-temp-reaper orphanLease={QuoteDiagnostic(leasePath)} deleteStatus=Deleted");
+            }
+            catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+            {
+                TryWriteReceipt(
+                    writeReceipt,
+                    () => $"assembly-temp-reaper orphanLease={QuoteDiagnostic(leasePath)} " +
+                          $"deleteStatus=Failed exceptionType={ex.GetType().Name}");
+            }
+        }
+
+        return deleted;
+    }
+
+    private static void ReleaseOwnedRoot(string rootPath)
+    {
+        Interlocked.Exchange(ref processRootLease, null)?.Dispose();
+        _ = DeleteTree(rootPath);
+        TryDeleteRootLease(rootPath);
+    }
+
+    private static void TryDeleteRootLease(string rootPath)
+    {
+        try
+        {
+            File.Delete(RootLeasePath(rootPath));
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+        {
+            // Retaining stale lease metadata is safer than broadening cleanup after ownership changed.
+        }
     }
 
     internal static string? RunStartupHousekeeping(
@@ -538,6 +693,7 @@ internal static class AssemblyTempRedirect
             $"deleteMs={FormatReap(timings, timings.ReapDeleteElapsedMilliseconds)} " +
             $"deleteDeleted={FormatReap(timings, timings.ReapDeleteDeleted)} " +
             $"deleteAlreadyAbsent={FormatReap(timings, timings.ReapDeleteAlreadyAbsent)} " +
+            $"deleteRetainedLiveOwner={FormatReap(timings, timings.ReapDeleteRetainedLiveOwner)} " +
             $"deleteFailed={FormatReap(timings, timings.ReapDeleteFailed)} " +
             $"deleteFailureKinds={FormatReap(timings, timings.DeleteFailureKinds)} " +
             $"deleteFirstFailure={FormatReap(timings, timings.FirstDeleteFailure)} " +
@@ -748,6 +904,7 @@ internal enum TempRootDeleteStatus
 {
     Deleted,
     AlreadyAbsent,
+    RetainedLiveOwner,
     Failed
 }
 
@@ -773,6 +930,14 @@ internal sealed record TempRootDeleteOutcome(
             ExceptionType: null,
             FailurePath: null,
             ReadOnlyAttributesCleared: readOnlyAttributesCleared);
+
+    internal static TempRootDeleteOutcome RetainedLiveOwner(string path) =>
+        new(
+            path,
+            TempRootDeleteStatus.RetainedLiveOwner,
+            ExceptionType: null,
+            FailurePath: null,
+            ReadOnlyAttributesCleared: 0);
 
     internal static TempRootDeleteOutcome Failure(string path, Exception exception) =>
         Failure(path, exception.GetType().Name, failurePath: null, readOnlyAttributesCleared: 0);
@@ -820,6 +985,7 @@ internal sealed class TempRootStartupTimings
     internal int ReapDeleteSucceeded { get; private set; }
     internal int ReapDeleteDeleted { get; private set; }
     internal int ReapDeleteAlreadyAbsent { get; private set; }
+    internal int ReapDeleteRetainedLiveOwner { get; private set; }
     internal int ReapDeleteFailed { get; private set; }
     internal int DeleteReadOnlyAttributesCleared { get; private set; }
     internal long ReapDeleteElapsedMilliseconds { get; set; }
@@ -857,18 +1023,23 @@ internal sealed class TempRootStartupTimings
     {
         ArgumentNullException.ThrowIfNull(outcome);
 
-        ReapDeleteAttempted++;
         DeleteReadOnlyAttributesCleared += outcome.ReadOnlyAttributesCleared;
         switch (outcome.Status)
         {
             case TempRootDeleteStatus.Deleted:
+                ReapDeleteAttempted++;
                 ReapDeleteSucceeded++;
                 ReapDeleteDeleted++;
                 break;
             case TempRootDeleteStatus.AlreadyAbsent:
+                ReapDeleteAttempted++;
                 ReapDeleteAlreadyAbsent++;
                 break;
+            case TempRootDeleteStatus.RetainedLiveOwner:
+                ReapDeleteRetainedLiveOwner++;
+                break;
             case TempRootDeleteStatus.Failed:
+                ReapDeleteAttempted++;
                 ReapDeleteFailed++;
                 var exceptionType = SanitizeDiagnosticValue(outcome.ExceptionType ?? "unknown");
                 deleteFailureKindCounts[exceptionType] =
