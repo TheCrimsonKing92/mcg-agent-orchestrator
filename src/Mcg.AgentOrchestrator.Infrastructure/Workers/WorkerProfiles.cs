@@ -1,11 +1,24 @@
 using System.Text.Json;
+using System.Text.Json.Serialization;
 using Mcg.AgentOrchestrator.Core;
 
 namespace Mcg.AgentOrchestrator.Infrastructure;
 
-public sealed record WorkerProfile(string Name, string CommandTemplate)
+public sealed record WorkerProfile(
+    string Name,
+    string CommandTemplate,
+    bool AutoLoadsRepositoryPolicy = false,
+    int RepositoryPolicyMaxBytes = 0)
 {
     public const string QwenCodeCliName = "qwen-code-cli";
+
+    [JsonIgnore]
+    public bool HasCompleteRepositoryPolicyAutoLoadContract =>
+        AutoLoadsRepositoryPolicy &&
+        RepositoryPolicyMaxBytes > 0 &&
+        CommandTemplate.Contains(
+            $"project_doc_max_bytes={RepositoryPolicyMaxBytes}",
+            StringComparison.OrdinalIgnoreCase);
 
     // Measured `--bare` startup at this repo: system prompt plus tool schemas,
     // without the workspace-init dump. Default (non-bare) startup is ~25728 tokens.
@@ -111,6 +124,9 @@ public static class WorkerProfileDiagnostics
         {
             ProviderKind.AnthropicClaudeCli => EvaluateClaudePatchCapability(normalized),
             ProviderKind.OpenAICodexCli or ProviderKind.OpenAICodexSpark or ProviderKind.OpenAICodexOssCli => EvaluateCodexPatchCapability(normalized),
+            ProviderKind.HermesAcp => new WorkerProfilePatchCapability(
+                true,
+                "Hermes ACP may patch only inside the orchestrator sandbox; CanSelfCommit=false keeps commit and landing authority with the orchestrator."),
             _ => new WorkerProfilePatchCapability(
                 true,
                 "Provider is not a typed Codex or Claude launcher; patch capability cannot be inferred beyond executing the prompt.")
@@ -346,6 +362,7 @@ public static class WorkerProfileDiagnostics
             ProviderKind.AnthropicClaudeCli => ["claude"],
             ProviderKind.OpenAICodexCli or ProviderKind.OpenAICodexSpark or ProviderKind.OpenAICodexOssCli => ["codex"],
             ProviderKind.OllamaQwenCodeCli => ["qwen"],
+            ProviderKind.HermesAcp => ["mcg-orchestrator", "mcg-orchestrator.cmd"],
             _ => []
         };
 }
@@ -375,7 +392,7 @@ public sealed record WorkerProfileCatalog(IReadOnlyList<WorkerProfile> Profiles)
 
         var profiles = Profiles
             .Where(existing => !existing.Name.Equals(profile.Name, StringComparison.OrdinalIgnoreCase))
-            .Append(new WorkerProfile(profile.Name.Trim(), profile.CommandTemplate.Trim()))
+            .Append(profile with { Name = profile.Name.Trim(), CommandTemplate = profile.CommandTemplate.Trim() })
             .OrderBy(existing => existing.Name, StringComparer.OrdinalIgnoreCase)
             .ToList();
 
@@ -398,8 +415,8 @@ public sealed record WorkerProfileCatalog(IReadOnlyList<WorkerProfile> Profiles)
         return new WorkerProfileCatalog(
         [
             new WorkerProfile("local-echo", "Write-Output {promptPath}"),
-            new WorkerProfile("codex-cli", "codex exec --json --skip-git-repo-check --model {subscriptionModelName} -c model_reasoning_effort={subscriptionReasoningEffort} --sandbox {sandboxMode} --cd {workingDirectory}"),
-            new WorkerProfile("codex-spark", "codex exec --json --skip-git-repo-check --model {subscriptionModelName} -c model_reasoning_effort={subscriptionReasoningEffort} --sandbox {sandboxMode} --cd {workingDirectory}"),
+            new WorkerProfile("codex-cli", "codex exec --json --skip-git-repo-check --model {subscriptionModelName} -c model_reasoning_effort={subscriptionReasoningEffort} -c project_doc_max_bytes=65536 --sandbox {sandboxMode} --cd {workingDirectory}", AutoLoadsRepositoryPolicy: true, RepositoryPolicyMaxBytes: 65_536),
+            new WorkerProfile("codex-spark", "codex exec --json --skip-git-repo-check --model {subscriptionModelName} -c model_reasoning_effort={subscriptionReasoningEffort} -c project_doc_max_bytes=65536 --sandbox {sandboxMode} --cd {workingDirectory}", AutoLoadsRepositoryPolicy: true, RepositoryPolicyMaxBytes: 65_536),
             new WorkerProfile("codex-oss-cli", "codex exec --skip-git-repo-check --oss --local-provider ollama --model {subscriptionModelName} --sandbox {sandboxMode} --cd {workingDirectory}"),
             new WorkerProfile(WorkerProfile.QwenCodeCliName, "$env:OPENAI_BASE_URL={openaiBaseUrl}; $env:OPENAI_API_KEY={openaiApiKey}; $env:OPENAI_MODEL={subscriptionModelName}; Set-Location {workingDirectory}; qwen --bare --approval-mode {approvalMode} --input-format text"),
             // -p = headless print mode; without it Claude opens the interactive REPL and emits nothing (exits 0 empty, so the task is wrongly classified Failed). The prompt is piped via stdin and --session-id is appended by the spawn layer.
@@ -530,11 +547,17 @@ public static class WorkerProfileStore
         {
             const string legacyStructuredOutputTemplate =
                 "codex exec --skip-git-repo-check --model {subscriptionModelName} -c model_reasoning_effort={subscriptionReasoningEffort} --sandbox {sandboxMode} --cd {workingDirectory}";
+            const string legacyRepositoryPolicyTemplate =
+                "codex exec --json --skip-git-repo-check --model {subscriptionModelName} -c model_reasoning_effort={subscriptionReasoningEffort} --sandbox {sandboxMode} --cd {workingDirectory}";
             var missingStructuredOutputFromKnownBuiltIn =
                 !profile.CommandTemplate.Contains("--json", StringComparison.OrdinalIgnoreCase) &&
                 profile.CommandTemplate.Equals(legacyStructuredOutputTemplate, StringComparison.OrdinalIgnoreCase);
+            var missingRepositoryPolicyBudgetFromKnownBuiltIn =
+                !profile.HasCompleteRepositoryPolicyAutoLoadContract &&
+                profile.CommandTemplate.Equals(legacyRepositoryPolicyTemplate, StringComparison.OrdinalIgnoreCase);
             return !profile.CommandTemplate.Contains("{sandboxMode}", StringComparison.OrdinalIgnoreCase) ||
                 missingStructuredOutputFromKnownBuiltIn ||
+                missingRepositoryPolicyBudgetFromKnownBuiltIn ||
                 !profile.CommandTemplate.Contains("--cd", StringComparison.OrdinalIgnoreCase) ||
                 !profile.CommandTemplate.Contains("--model {subscriptionModelName}", StringComparison.OrdinalIgnoreCase) ||
                 !profile.CommandTemplate.Contains("model_reasoning_effort={subscriptionReasoningEffort}", StringComparison.OrdinalIgnoreCase) ||

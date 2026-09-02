@@ -422,13 +422,13 @@ public sealed class MtpTestRunnerScriptTests
 
         var metacharacterResultsRoot = Path.Combine(
             sandbox.ResultsRoot,
-            "meta%SystemRoot%&chars-output");
+            "%CD%&");
         var result = sandbox.RunPartition("GoalWorktree", resultsRoot: metacharacterResultsRoot);
 
         Assert.True(result.ExitCode == 0, result.Stdout + result.Stderr);
         Assert.True(File.Exists(sandbox.ArgumentLog), result.Stdout + result.Stderr);
         Assert.Contains(File.ReadAllLines(sandbox.ArgumentLog), argument =>
-            argument.Contains("meta%SystemRoot%&chars", StringComparison.Ordinal));
+            argument.Contains("%CD%&", StringComparison.Ordinal));
         Assert.Equal("completed", TerminalSummary(result).GetProperty("outcome").GetString());
     }
 
@@ -444,8 +444,8 @@ public sealed class MtpTestRunnerScriptTests
         Assert.True(TerminalSummary(result).GetProperty("exitConfirmed").GetBoolean());
     }
 
-    [Xunit.Fact(DisplayName = "MTP_partition_build_failure_is_loud_and_never_launches_stale_apphost")]
-    public void MtpPartitionBuildFailureIsLoudAndNeverLaunchesStaleApphost()
+    [Xunit.Fact(DisplayName = "MTP_partition_build_failure_is_loud_and_never_launches_stale_runner")]
+    public void MtpPartitionBuildFailureIsLoudAndNeverLaunchesStaleRunner()
     {
         using var sandbox = ScriptSandbox.Create("success");
         var buildMarker = Path.Combine(sandbox.Root, "build-started.txt");
@@ -456,7 +456,7 @@ public sealed class MtpTestRunnerScriptTests
         Xunit.Assert.Equal(23, result.ExitCode);
         Xunit.Assert.Contains("compiler diagnostic from stub", result.Stdout, StringComparison.Ordinal);
         Xunit.Assert.Contains("BUILD FAILURE", result.Stdout, StringComparison.Ordinal);
-        Xunit.Assert.Contains("MTP apphost was not launched", result.Stdout, StringComparison.Ordinal);
+        Xunit.Assert.Contains("managed MTP runner was not launched", result.Stdout, StringComparison.Ordinal);
         Xunit.Assert.True(File.Exists(buildMarker));
         Xunit.Assert.False(File.Exists(sandbox.ArgumentLog));
         Xunit.Assert.DoesNotContain("NO TRX", result.Stdout, StringComparison.OrdinalIgnoreCase);
@@ -478,21 +478,42 @@ public sealed class MtpTestRunnerScriptTests
         Xunit.Assert.DoesNotContain("BUILD FAILURE", result.Stdout, StringComparison.Ordinal);
     }
 
-    [Xunit.Fact(DisplayName = "MTP_no_build_missing_apphost_reports_path_and_build_command")]
-    public void MtpNoBuildMissingApphostReportsPathAndBuildCommand()
+    [Xunit.Fact(DisplayName = "MTP_no_build_missing_managed_assembly_reports_path_and_build_command")]
+    public void MtpNoBuildMissingManagedAssemblyReportsPathAndBuildCommand()
     {
         using var sandbox = ScriptSandbox.Create("success");
 
-        var result = sandbox.RunPartition("GoalWorktree", runnerOverride: false);
+        var result = sandbox.RunPartition(
+            "GoalWorktree",
+            dotnetPath: sandbox.RunnerPath,
+            runnerOverride: false);
 
         Xunit.Assert.Equal(24, result.ExitCode);
-        Xunit.Assert.Contains("MISSING APPHOST", result.Stdout, StringComparison.Ordinal);
+        Xunit.Assert.Contains("MISSING MANAGED ASSEMBLY", result.Stdout, StringComparison.Ordinal);
         Xunit.Assert.Contains(
-            Path.Combine("bin", "Mcg.AgentOrchestrator.Infrastructure.Tests", "Debug", "Mcg.AgentOrchestrator.Infrastructure.Tests.exe"),
+            Path.Combine("bin", "Mcg.AgentOrchestrator.Infrastructure.Tests", "Debug", "Mcg.AgentOrchestrator.Infrastructure.Tests.dll"),
             result.Stdout,
             StringComparison.Ordinal);
-        Xunit.Assert.Contains("dotnet build", result.Stdout, StringComparison.Ordinal);
+        Xunit.Assert.Contains($"{sandbox.RunnerPath} build", result.Stdout, StringComparison.OrdinalIgnoreCase);
         Xunit.Assert.DoesNotContain("NO TRX", result.Stdout, StringComparison.OrdinalIgnoreCase);
+    }
+
+    [Xunit.Fact(DisplayName = "MTP_managed_runner_does_not_require_native_apphost")]
+    public void MtpManagedRunnerDoesNotRequireNativeApphost()
+    {
+        using var sandbox = ScriptSandbox.Create("success");
+        var managedAssembly = sandbox.CreateManagedAssemblyPlaceholder();
+
+        var result = sandbox.RunPartition(
+            "GoalWorktree",
+            dotnetPath: sandbox.RunnerPath,
+            runnerOverride: false);
+
+        Xunit.Assert.True(result.ExitCode == 0, result.Stdout + result.Stderr);
+        Xunit.Assert.True(File.Exists(managedAssembly));
+        Xunit.Assert.False(File.Exists(Path.ChangeExtension(managedAssembly, ".exe")));
+        Xunit.Assert.Equal(managedAssembly, File.ReadAllLines(sandbox.ArgumentLog)[0], ignoreCase: true);
+        Xunit.Assert.DoesNotContain("MISSING APPHOST", result.Stdout, StringComparison.Ordinal);
     }
 
     [Xunit.Fact(DisplayName = "MTP_medium_integrity_results_override_fails_before_runner_launch")]
@@ -548,6 +569,20 @@ public sealed class MtpTestRunnerScriptTests
     public void MtpPublicScriptsHaveNoVstestOrDiscardedRunnerPath()
     {
         var root = RepositoryRoot();
+        var scriptsDirectory = Path.Combine(root, "scripts");
+        var checkedInScripts = Directory.EnumerateFiles(scriptsDirectory, "*.ps1", SearchOption.TopDirectoryOnly)
+            .Concat(Directory.EnumerateFiles(scriptsDirectory, "*.psm1", SearchOption.TopDirectoryOnly))
+            .OrderBy(path => path, StringComparer.OrdinalIgnoreCase)
+            .ToArray();
+        Xunit.Assert.NotEmpty(checkedInScripts);
+        foreach (var scriptPath in checkedInScripts)
+        {
+            Xunit.Assert.DoesNotContain(
+                "dotnet test",
+                File.ReadAllText(scriptPath),
+                StringComparison.OrdinalIgnoreCase);
+        }
+
         var sources = new[]
         {
             File.ReadAllText(Path.Combine(root, "scripts", "Invoke-InfrastructureTestPartition.ps1")),
@@ -566,6 +601,10 @@ public sealed class MtpTestRunnerScriptTests
         Xunit.Assert.Contains("[System.Diagnostics.Process]::new()", sources[2], StringComparison.Ordinal);
         Xunit.Assert.Contains("Resolve-MtpManagedAssemblyPath", sources[2], StringComparison.Ordinal);
         Xunit.Assert.Contains("$executable = if ($usesManagedAssembly) { $DotnetPath }", sources[2], StringComparison.Ordinal);
+        Xunit.Assert.Contains("'-clp:ErrorsOnly;Summary'", sources[2], StringComparison.Ordinal);
+        Xunit.Assert.Contains("Get-MtpBoundedFileName -Stem \"build-$projectName\"", sources[2], StringComparison.Ordinal);
+        Xunit.Assert.Contains("-flp:LogFile=$buildLogPath;Verbosity=Normal", sources[2], StringComparison.Ordinal);
+        Xunit.Assert.Contains("Build output log: $buildLogPath", sources[2], StringComparison.Ordinal);
         Xunit.Assert.DoesNotContain(
             "$executable = if ([string]::IsNullOrWhiteSpace($RunnerPath)) { $expectedAppHost }",
             sources[2],
@@ -578,6 +617,31 @@ public sealed class MtpTestRunnerScriptTests
         Xunit.Assert.DoesNotContain("/IM ", sources[2], StringComparison.OrdinalIgnoreCase);
         Xunit.Assert.Contains("CLEANUP FAILURE", sources[2], StringComparison.Ordinal);
         Xunit.Assert.DoesNotContain("$runDirectory -Recurse -Force -ErrorAction SilentlyContinue", sources[2], StringComparison.Ordinal);
+
+        var isolatedRunner = File.ReadAllText(Path.Combine(root, "scripts", "Invoke-IsolatedDotnet.ps1"));
+        Xunit.Assert.DoesNotContain("Get-OneStepMtpDotnetTestArguments", isolatedRunner, StringComparison.Ordinal);
+        Xunit.Assert.DoesNotContain("& dotnet @oneStepArguments", isolatedRunner, StringComparison.Ordinal);
+        Xunit.Assert.Contains("& dotnet $builtArtifacts.AssemblyPath @mtpArguments", isolatedRunner, StringComparison.Ordinal);
+
+        var dashboardCycle = File.ReadAllText(Path.Combine(root, "scripts", "Invoke-DashboardBuildTestCycle.ps1"));
+        Xunit.Assert.DoesNotContain("dotnet test", dashboardCycle, StringComparison.OrdinalIgnoreCase);
+        Xunit.Assert.Contains("Invoke-TestSummary.ps1", dashboardCycle, StringComparison.Ordinal);
+
+        var systemEndpoints = File.ReadAllText(Path.Combine(
+            root,
+            "src",
+            "Mcg.AgentOrchestrator.App",
+            "Dashboard",
+            "Api",
+            "DashboardEndpoints.System.cs"));
+        Xunit.Assert.DoesNotContain(
+            "Invoke-IsolatedDotnet.ps1 test Mcg.AgentOrchestrator.sln",
+            systemEndpoints,
+            StringComparison.Ordinal);
+        Xunit.Assert.Contains(
+            "Invoke-TestSummary.ps1 -Target .\\\\Mcg.AgentOrchestrator.sln",
+            systemEndpoints,
+            StringComparison.Ordinal);
     }
 
     private static ProcessResult RunPowerShellCommand(string workingDirectory, string command)
@@ -982,6 +1046,19 @@ public sealed class MtpTestRunnerScriptTests
             var path = Path.Combine(Root, "fake-dotnet.cmd");
             var diagnosticRedirection = diagnosticToStderr ? " 1>&2" : string.Empty;
             File.WriteAllText(path, $"@echo off{Environment.NewLine}echo started>\"{markerPath}\"{Environment.NewLine}echo compiler diagnostic from stub{diagnosticRedirection}{Environment.NewLine}exit /b {exitCode}{Environment.NewLine}");
+            return path;
+        }
+
+        public string CreateManagedAssemblyPlaceholder()
+        {
+            var path = Path.Combine(
+                Root,
+                "bin",
+                "Mcg.AgentOrchestrator.Infrastructure.Tests",
+                "Debug",
+                "Mcg.AgentOrchestrator.Infrastructure.Tests.dll");
+            Directory.CreateDirectory(Path.GetDirectoryName(path)!);
+            File.WriteAllText(path, "managed test assembly placeholder");
             return path;
         }
 

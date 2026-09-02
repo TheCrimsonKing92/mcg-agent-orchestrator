@@ -8,7 +8,6 @@ internal static class AssemblyTempRedirect
 {
     internal const string LowInheritableLevel = "(OI)(CI)L";
     internal const int MaxRootsReapedPerProcess = 32;
-    internal static int RetainedOrphanRoots => Math.Clamp(Environment.ProcessorCount * 4, 32, 128);
 
     [ModuleInitializer]
     internal static void Install()
@@ -42,7 +41,7 @@ internal static class AssemblyTempRedirect
         // process is gone. Both are required — exit handlers do not run for killed processes,
         // and this repository cancels dispatches and times out gates routinely.
         ReapOrphanedRoots(selection.SelectedRoot);
-        AppDomain.CurrentDomain.ProcessExit += (_, _) => TryDeleteTree(selection.SelectedRoot);
+        AppDomain.CurrentDomain.ProcessExit += (_, _) => _ = TryDeleteTree(selection.SelectedRoot);
     }
 
     internal static IReadOnlyList<string> SelectReapableRoots(
@@ -73,61 +72,6 @@ internal static class AssemblyTempRedirect
         return reapable;
     }
 
-    internal static IReadOnlyList<string> SelectRootsBeyondRetention(
-        IEnumerable<string> siblingDirectoryNames,
-        int currentProcessId,
-        Func<int, bool> isProcessAlive,
-        Func<int, DateTime?> processStartTimeUtc,
-        Func<string, DateTime> lastWriteUtc,
-        int retainedRoots)
-    {
-        ArgumentNullException.ThrowIfNull(siblingDirectoryNames);
-        ArgumentNullException.ThrowIfNull(isProcessAlive);
-        ArgumentNullException.ThrowIfNull(processStartTimeUtc);
-        ArgumentNullException.ThrowIfNull(lastWriteUtc);
-        ArgumentOutOfRangeException.ThrowIfNegative(retainedRoots);
-
-        var owned = new List<(string Name, DateTime LastWriteUtc)>();
-        foreach (var name in siblingDirectoryNames)
-        {
-            if (!TryParseProcessTempRootName(name, out var processId) ||
-                processId == currentProcessId)
-            {
-                continue;
-            }
-
-            DateTime written;
-            try
-            {
-                written = lastWriteUtc(name);
-            }
-            catch (Exception ex) when (IsFileSystemFailure(ex))
-            {
-                continue;
-            }
-
-            if (isProcessAlive(processId))
-            {
-                var processStarted = processStartTimeUtc(processId);
-                if (processStarted is null || processStarted <= written)
-                {
-                    continue;
-                }
-            }
-
-            owned.Add((name, written));
-        }
-
-        return owned
-            .OrderByDescending(candidate => candidate.LastWriteUtc)
-            .ThenBy(candidate => candidate.Name, StringComparer.OrdinalIgnoreCase)
-            .Skip(retainedRoots)
-            .OrderBy(candidate => candidate.LastWriteUtc)
-            .ThenBy(candidate => candidate.Name, StringComparer.OrdinalIgnoreCase)
-            .Select(candidate => candidate.Name)
-            .ToArray();
-    }
-
     internal static bool TryParseProcessTempRootName(string? directoryName, out int processId)
     {
         processId = 0;
@@ -144,8 +88,21 @@ internal static class AssemblyTempRedirect
             && processId > 0;
     }
 
-    private static void ReapOrphanedRoots(string selectedRoot)
+    private static void ReapOrphanedRoots(string selectedRoot) =>
+        ReapOrphanedRoots(
+            selectedRoot,
+            WindowsNativeProcessInspection.Read,
+            TryDeleteTree,
+            Console.Error.WriteLine);
+
+    internal static void ReapOrphanedRoots(
+        string selectedRoot,
+        Func<IEnumerable<int>?, WindowsNativeProcessInspection.ProcessInspectionResult> inspect,
+        Func<string, TempRootJanitorDeleteResult> deleteTree,
+        Action<string>? writeReceipt)
     {
+        ArgumentNullException.ThrowIfNull(inspect);
+        ArgumentNullException.ThrowIfNull(deleteTree);
         try
         {
             var sharedRoot = Path.GetDirectoryName(selectedRoot);
@@ -158,27 +115,30 @@ internal static class AssemblyTempRedirect
                 .Select(Path.GetFileName)
                 .OfType<string>()
                 .ToArray();
-            var liveProcesses = SnapshotLiveProcesses(siblings, Environment.ProcessId);
+            var liveProcessIds = SnapshotLiveProcessIds(siblings, Environment.ProcessId, inspect);
             var reapableByProcess = SelectReapableRoots(
                 siblings,
                 Environment.ProcessId,
-                liveProcesses.ContainsKey);
-            var beyondRetention = SelectRootsBeyondRetention(
-                siblings,
-                Environment.ProcessId,
-                liveProcesses.ContainsKey,
-                processId => liveProcesses.GetValueOrDefault(processId),
-                name => Directory.GetLastWriteTimeUtc(Path.Combine(sharedRoot, name)),
-                RetainedOrphanRoots);
-            foreach (var candidate in reapableByProcess
-                         .Concat(beyondRetention)
-                         .Distinct(StringComparer.OrdinalIgnoreCase)
-                         .OrderBy(name => TryGetLastWriteUtc(
-                             name,
-                             candidate => Directory.GetLastWriteTimeUtc(Path.Combine(sharedRoot, candidate))))
-                         .Take(MaxRootsReapedPerProcess))
+                liveProcessIds.Contains);
+            var bounded = reapableByProcess
+                          .Distinct(StringComparer.OrdinalIgnoreCase)
+                          .OrderBy(name => TryGetLastWriteUtc(
+                              name,
+                              candidate => Directory.GetLastWriteTimeUtc(Path.Combine(sharedRoot, candidate))))
+                          .Take(MaxRootsReapedPerProcess)
+                          .ToArray();
+            foreach (var candidate in RevalidateExitedRoots(bounded, inspect))
             {
-                TryDeleteTree(Path.Combine(sharedRoot, candidate));
+                var path = Path.Combine(sharedRoot, candidate.Name);
+                var outcome = deleteTree(path);
+                TryWriteReceipt(
+                    writeReceipt,
+                    () => FormatReapReceipt(
+                        Environment.ProcessId,
+                        candidate.ProcessId,
+                        path,
+                        candidate.Observation,
+                        outcome));
             }
         }
         catch (Exception)
@@ -189,16 +149,12 @@ internal static class AssemblyTempRedirect
         }
     }
 
-    // One process-table snapshot for the whole sweep. Probing each root with
-    // Process.GetProcessById costs a full snapshot *per call* on Windows, so the old form was
-    // O(orphan roots) snapshots on every test host start: measured at 53.5s with 1106 roots
-    // against a 201.2s budget for the entire "Dotnet build slots" lane, and 3.1s once the roots
-    // were cleared. Membership in the snapshot also preserves the previous semantics for a PID
-    // that cannot be opened — it still enumerates, so it still counts as alive and its root is
-    // left alone.
-    private static Dictionary<int, DateTime?> SnapshotLiveProcesses(
+    // Use one exact-candidate native snapshot per phase. The second read closes the selection-to-delete
+    // PID-reuse gap; inaccessible or otherwise ambiguous observations retain the root.
+    private static HashSet<int> SnapshotLiveProcessIds(
         IEnumerable<string> siblingDirectoryNames,
-        int currentProcessId)
+        int currentProcessId,
+        Func<IEnumerable<int>?, WindowsNativeProcessInspection.ProcessInspectionResult> inspect)
     {
         var relevantProcessIds = new HashSet<int>();
         foreach (var name in siblingDirectoryNames)
@@ -209,51 +165,122 @@ internal static class AssemblyTempRedirect
             }
         }
 
-        var live = new Dictionary<int, DateTime?>();
-        foreach (var process in System.Diagnostics.Process.GetProcesses())
+        var inspection = inspect(relevantProcessIds);
+        if (inspection.Failure is not null)
         {
-            try
-            {
-                if (!relevantProcessIds.Contains(process.Id))
-                {
-                    continue;
-                }
+            return relevantProcessIds;
+        }
 
-                DateTime? startedUtc = null;
-                try
-                {
-                    startedUtc = process.StartTime.ToUniversalTime();
-                }
-                catch (Exception ex) when (IsProcessSnapshotFailure(ex))
-                {
-                    // An inaccessible start time still proves the PID is live. Preserve the root.
-                }
+        return relevantProcessIds
+            .Where(processId =>
+                !inspection.Records.TryGetValue(processId, out var record) ||
+                record.Status != ProcessInspectionStatus.Exited)
+            .ToHashSet();
+    }
 
-                live[process.Id] = startedUtc;
-            }
-            finally
+    private static IReadOnlyList<RevalidatedTempRoot> RevalidateExitedRoots(
+        IEnumerable<string> boundedCandidates,
+        Func<IEnumerable<int>?, WindowsNativeProcessInspection.ProcessInspectionResult> inspect)
+    {
+        var candidates = boundedCandidates
+            .Select(name => new { Name = name, Parsed = TryParseProcessTempRootName(name, out var pid), Pid = pid })
+            .Where(candidate => candidate.Parsed && candidate.Pid != Environment.ProcessId)
+            .ToArray();
+        if (candidates.Length == 0)
+        {
+            return [];
+        }
+
+        var inspection = inspect(
+            candidates.Select(candidate => candidate.Pid).Distinct().ToArray());
+        if (inspection.Failure is not null)
+        {
+            return [];
+        }
+
+        var revalidated = new List<RevalidatedTempRoot>();
+        var seen = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        foreach (var candidate in candidates)
+        {
+            if (seen.Add(candidate.Name) &&
+                inspection.Records.TryGetValue(candidate.Pid, out var record) &&
+                record.Status == ProcessInspectionStatus.Exited)
             {
-                process.Dispose();
+                revalidated.Add(new RevalidatedTempRoot(candidate.Name, candidate.Pid, record));
             }
         }
 
-        return live;
+        return revalidated;
     }
 
-    private static bool IsProcessSnapshotFailure(Exception ex) =>
-        ex is InvalidOperationException or System.ComponentModel.Win32Exception or NotSupportedException;
-
-    private static void TryDeleteTree(string path)
+    private static TempRootJanitorDeleteResult TryDeleteTree(string path)
     {
         try
         {
-            _ = TempRootJanitor.DeleteTree(path);
+            return TempRootJanitor.DeleteTree(path);
+        }
+        catch (Exception ex)
+        {
+            // This path is called by the module initializer and process-exit handler.
+            return new TempRootJanitorDeleteResult(
+                path,
+                TempRootJanitorDeleteStatus.Failed,
+                ex.GetType().Name,
+                path,
+                ReadOnlyAttributesCleared: 0);
+        }
+    }
+
+    internal static string FormatReapReceipt(
+        int actorProcessId,
+        int candidateProcessId,
+        string path,
+        ProcessInspectionRecord observation,
+        TempRootJanitorDeleteResult outcome)
+    {
+        ArgumentOutOfRangeException.ThrowIfNegativeOrZero(actorProcessId);
+        ArgumentOutOfRangeException.ThrowIfNegativeOrZero(candidateProcessId);
+        ArgumentException.ThrowIfNullOrWhiteSpace(path);
+        ArgumentNullException.ThrowIfNull(observation);
+        ArgumentNullException.ThrowIfNull(outcome);
+
+        return "assembly-temp-reaper " +
+            $"actorPid={actorProcessId} " +
+            $"candidatePid={candidateProcessId} " +
+            $"path={QuoteDiagnostic(path)} " +
+            $"observedPid={observation.ProcessId} " +
+            $"observedStatus={observation.Status} " +
+            $"observedName={QuoteDiagnostic(string.IsNullOrWhiteSpace(observation.Name) ? "none" : observation.Name)} " +
+            $"observedStartedAt={QuoteDiagnostic(observation.StartedAt?.ToString("O") ?? "none")} " +
+            $"observedExecutablePath={QuoteDiagnostic(observation.ExecutablePath ?? "none")} " +
+            $"deleteStatus={outcome.Status} " +
+            $"exceptionType={SanitizeDiagnosticToken(outcome.ExceptionType ?? "none")} " +
+            $"failurePath={QuoteDiagnostic(outcome.FailurePath ?? "none")} " +
+            $"readOnlyCleared={outcome.ReadOnlyAttributesCleared}";
+    }
+
+    private static void TryWriteReceipt(Action<string>? writeReceipt, Func<string> buildReceipt)
+    {
+        if (writeReceipt is null)
+        {
+            return;
+        }
+
+        try
+        {
+            writeReceipt(buildReceipt());
         }
         catch
         {
-            // This path is called by the module initializer and process-exit handler.
+            // Diagnostics must not turn best-effort startup housekeeping into an apphost failure.
         }
     }
+
+    private static string QuoteDiagnostic(string value) =>
+        $"\"{value.Replace("\"", "\\\"", StringComparison.Ordinal)}\"";
+
+    private static string SanitizeDiagnosticToken(string value) =>
+        new(value.Select(character => char.IsWhiteSpace(character) ? '_' : character).ToArray());
 
     internal static TempRootSelectionResult SelectWritableRoot(
         IEnumerable<TempRootCandidate> candidates,
@@ -433,6 +460,11 @@ internal static class AssemblyTempRedirect
 }
 
 internal sealed record TempRootCandidate(string Path, bool RequiresLowLabel);
+
+internal sealed record RevalidatedTempRoot(
+    string Name,
+    int ProcessId,
+    ProcessInspectionRecord Observation);
 
 internal enum TempRootRejectionReason
 {

@@ -20,6 +20,8 @@ public sealed class WorkerContextUsageReceiptTests
         Assert.Equal(21476, result.Usage!.InputTokens);
         Assert.Equal(11008, result.Usage.CachedInputTokens);
         Assert.Equal(8, result.Usage.OutputTokens);
+        Assert.Equal(["WORKER_RESULT_OK"], result.AgentMessages);
+        Assert.Equal(0, result.MalformedLineCount);
     }
 
     [Xunit.Fact]
@@ -83,6 +85,20 @@ public sealed class WorkerContextUsageReceiptTests
         Assert.Contains("WORKER_RESULT:", result.WorkerOutput, StringComparison.Ordinal);
         Assert.Null(result.Usage);
         Assert.Equal("malformed", result.UsageUnavailableReason);
+    }
+
+    [Xunit.Fact]
+    public void Parse_MalformedLine_IsCountedWithoutChangingWorkerOutputContract()
+    {
+        var result = CodexJsonlUsageParser.Parse("""
+            not-json
+            {"type":"item.completed","item":{"type":"agent_message","text":"first"}}
+            {"type":"item.completed","item":{"type":"agent_message","text":"second"}}
+            """);
+
+        Assert.Equal(1, result.MalformedLineCount);
+        Assert.Equal(["first", "second"], result.AgentMessages);
+        Assert.Equal($"first{Environment.NewLine}second", result.WorkerOutput);
     }
 
     [Xunit.Fact]
@@ -251,6 +267,38 @@ public sealed class WorkerContextUsageReceiptTests
             Assert.Equal(4_000_000_000L, replay!.Usage!.InputTokens);
             Assert.Equal(3_000_000_000L, replay.Usage.CachedInputTokens);
             Assert.Equal(2_000_000_000L, replay.Usage.OutputTokens);
+        }
+        finally
+        {
+            Directory.Delete(root, recursive: true);
+        }
+    }
+
+    [Xunit.Fact]
+    public void NormalizeStructuredCodexOutput_PartiallyMalformedJsonl_RewritesOutputAndTypesMalformed()
+    {
+        var root = Path.Combine(Path.GetTempPath(), $"ctx-usage-{Guid.NewGuid():N}");
+        Directory.CreateDirectory(root);
+        try
+        {
+            var outputPath = Path.Combine(root, "worker.out.log");
+            var originalJsonl = """
+                {"type":"item.completed","item":{"type":"agent_message","text":"WORKER_RESULT:\nfiles: none\nEND_WORKER_RESULT"}}
+                {not-jsonl}
+                """;
+            File.WriteAllText(outputPath, originalJsonl);
+            var dispatch = new TaskDispatchRecord(
+                "developer",
+                "codex exec --json",
+                root,
+                DateTimeOffset.Parse("2026-08-27T00:00:00Z"),
+                WorkerProviderKind: ProviderKind.OpenAICodexCli);
+
+            var result = StructuredCodexOutputNormalizer.Normalize(dispatch, outputPath);
+
+            Assert.Equal(PlannerCandidateNormalizationState.Malformed, result.State);
+            Assert.Equal(result.Parsed!.WorkerOutput, File.ReadAllText(outputPath));
+            Assert.Equal(originalJsonl, File.ReadAllText(outputPath + ".jsonl"));
         }
         finally
         {

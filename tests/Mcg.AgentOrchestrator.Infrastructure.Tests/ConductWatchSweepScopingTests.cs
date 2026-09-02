@@ -48,9 +48,100 @@ public sealed class ConductWatchSweepScopingTests
         Assert.False(kernel.GetTask(second.Goal.Id, second.Task.Id).LastProcess!.IsRunning);
     }
 
+    [Xunit.Fact]
+    public void SweepExitedProcessesMultipleDiagnosticsReuseOneProcessSnapshot()
+    {
+        var kernel = new AgentOrchestratorKernel();
+        var first = CreateGoalWithExitedProcess(kernel, "first", 900001);
+        var second = CreateGoalWithExitedProcess(kernel, "second", 900002);
+        var snapshotCreations = 0;
+        var runner = new BackgroundDispatchRunner(
+            isStillRunning: _ => false,
+            processCommandLineSnapshotFactory: () =>
+            {
+                snapshotCreations++;
+                return new ProcessCommandLineSnapshot(
+                    new Dictionary<int, string>
+                    {
+                        [900001] = first.Task.LastProcess!.Command,
+                        [900002] = second.Task.LastProcess!.Command
+                    });
+            });
+
+        var swept = runner.SweepExitedProcesses(kernel);
+
+        Assert.Equal(2, swept);
+        Assert.Equal(1, snapshotCreations);
+    }
+
+    [Xunit.Fact]
+    public void RefreshBatch_MultipleDiagnostics_ReusesProcessSnapshot()
+    {
+        var kernel = new AgentOrchestratorKernel();
+        var root = CreateTempDirectory();
+        var goal = kernel.CreateGoal(
+            "dashboard refresh batch",
+            [
+                new TaskSpec(TaskId.New(), "first", AgentRole.Developer),
+                new TaskSpec(TaskId.New(), "second", AgentRole.Tester)
+            ]);
+        kernel.ActivateGoal(goal.Id, AgentCatalog.Default().Agents);
+        var processIds = new[] { 900_011, 900_012 };
+        for (var index = 0; index < goal.Tasks.Count; index++)
+        {
+            var task = goal.Tasks[index];
+            var stdoutPath = Path.Combine(root, $"worker-{index}.out.log");
+            var stderrPath = Path.Combine(root, $"worker-{index}.err.log");
+            var exitPath = Path.Combine(root, $"worker-{index}.exit.txt");
+            File.WriteAllText(stdoutPath, "Worker completed successfully.");
+            File.WriteAllText(stderrPath, string.Empty);
+            File.WriteAllText(exitPath, "0");
+            var now = DateTimeOffset.UtcNow;
+            kernel.RecordTaskDispatch(
+                goal.Id,
+                task.Id,
+                new TaskDispatchRecord("local", "local-cmd", root, now));
+            kernel.RecordTaskProcessStarted(
+                goal.Id,
+                task.Id,
+                new TaskProcessRecord(
+                    processIds[index],
+                    "local-cmd",
+                    root,
+                    stdoutPath,
+                    stderrPath,
+                    exitPath,
+                    now,
+                    null,
+                    null));
+        }
+
+        var snapshotCreations = 0;
+        var runner = new BackgroundDispatchRunner(
+            isStillRunning: _ => false,
+            processCommandLineSnapshotFactory: () =>
+            {
+                snapshotCreations++;
+                return new ProcessCommandLineSnapshot(processIds.ToDictionary(
+                    processId => processId,
+                    _ => "local-cmd"));
+            });
+        var outcomes = goal.Tasks
+            .Select(task => (
+                task.Id,
+                runner.ReconcileLatestProcess(kernel, goal.Id, task.Id)))
+            .ToArray();
+
+        runner.ApplyRefreshOutcomesAndWriteDiagnostics(kernel, goal.Id, outcomes);
+
+        Assert.Equal(1, snapshotCreations);
+        Assert.All(goal.Tasks, task => Assert.NotNull(kernel.GetTask(goal.Id, task.Id).LastVerification));
+    }
+
     private static (Goal Goal, TaskSpec Task) CreateGoalWithExitedProcess(
         AgentOrchestratorKernel kernel,
-        string objective)
+        string objective,
+        int processId = 999999)
     {
         var root = CreateTempDirectory();
         var task = new TaskSpec(TaskId.New(), $"{objective} task", AgentRole.Developer);
@@ -67,7 +158,7 @@ public sealed class ConductWatchSweepScopingTests
         var now = DateTimeOffset.UtcNow;
         kernel.RecordTaskDispatch(goal.Id, workTask.Id, new TaskDispatchRecord("local", "local-cmd", root, now));
         kernel.RecordTaskProcessStarted(goal.Id, workTask.Id,
-            new TaskProcessRecord(999999, "local-cmd", root, stdoutPath, stderrPath, exitPath, now, null, null));
+            new TaskProcessRecord(processId, "local-cmd", root, stdoutPath, stderrPath, exitPath, now, null, null));
         return (goal, workTask);
     }
 

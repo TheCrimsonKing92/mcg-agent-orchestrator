@@ -576,7 +576,10 @@ internal static partial class CliCommandHandlers
                 return false;
 
             case "repo-process-stop":
-                RepoProcessCliCommand.Stop(parts, Console.Out);
+                if (!RepoProcessCliCommand.Stop(parts, Console.Out))
+                {
+                    throw new CliExitException(1);
+                }
                 return false;
 
             case "stable-slot-dotnet":
@@ -602,6 +605,12 @@ internal static partial class CliCommandHandlers
                     context.Workspace.TrialComparisonReceiptDirectory,
                     Console.Out,
                     selector => ResolveHistoricalTrial(context, selector));
+                return false;
+
+            case "hermes-acp-trial":
+                HermesAcpCliCommand.ExecuteAsync(parts, Console.Out, Console.Error)
+                    .GetAwaiter()
+                    .GetResult();
                 return false;
 
             case "architecture":

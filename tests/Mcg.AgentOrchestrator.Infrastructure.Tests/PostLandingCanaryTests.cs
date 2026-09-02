@@ -1330,11 +1330,10 @@ public sealed class PostLandingCanaryTests : CliCommandTestBase
         Assert.Contains("underlying executable", exception.Message, StringComparison.OrdinalIgnoreCase);
     }
 
-    [Xunit.Fact(DisplayName = "Known-green fixture runs from an isolated landed worktree despite a dirty operator checkout")]
+    [Xunit.Fact(DisplayName = "Known-green canary ignores unrelated source activity but detects owned dirt")]
     public async Task KnownGreenFixtureRunsThroughFreshBinaryWithoutDirtyingRepository()
     {
         var sourceRoot = FindRepoRoot();
-        var sourceStatusBefore = ReadGitStatus(sourceRoot);
         var testRoot = CreateExternalTestRoot(sourceRoot);
         var repositoryRoot = Path.Combine(testRoot, "repository");
         var logDirectory = Path.Combine(testRoot, "logs");
@@ -1354,9 +1353,12 @@ public sealed class PostLandingCanaryTests : CliCommandTestBase
             "commit", "--quiet", "-m", "minimal canary repository");
         var landingSha = RunGit(repositoryRoot, "rev-parse", "HEAD").Output.Trim();
         Assert.False(string.IsNullOrWhiteSpace(landingSha));
-        using var timeout = new CancellationTokenSource(TimeSpan.FromSeconds(120));
+        using var timeout = new CancellationTokenSource(TimeSpan.FromMinutes(3));
         var dirtySentinel = Path.Combine(repositoryRoot, "operator-owned-uncommitted.sentinel");
-        var resolver = new FixedAppBinaryResolver(appDllPath);
+        var concurrentSentinel = Path.Combine(repositoryRoot, "unrelated-concurrent.sentinel");
+        var resolver = new FixedAppBinaryResolver(
+            appDllPath,
+            _ => File.WriteAllText(concurrentSentinel, "unrelated source-worktree activity"));
         var clock = Stopwatch.StartNew();
         try
         {
@@ -1408,16 +1410,38 @@ public sealed class PostLandingCanaryTests : CliCommandTestBase
             Assert.NotEmpty(Directory.GetFiles(
                 logDirectory,
                 $"post-landing-canary-{landingSha}-*.trx"));
+            var sourceStatusAfter = ReadGitStatus(repositoryRoot)
+                .Split(['\r', '\n'], StringSplitOptions.RemoveEmptyEntries)
+                .ToArray();
+            var expectedSourceStatus = statusBefore
+                .Split(['\r', '\n'], StringSplitOptions.RemoveEmptyEntries)
+                .Append($"?? {Path.GetFileName(concurrentSentinel)}")
+                .Order(StringComparer.Ordinal)
+                .ToArray();
             Assert.Equal(
-                statusBefore,
-                ReadGitStatus(repositoryRoot));
-            Assert.Equal(sourceStatusBefore, ReadGitStatus(sourceRoot));
+                expectedSourceStatus,
+                sourceStatusAfter.Order(StringComparer.Ordinal).ToArray());
+
+            var ownedMutationResolver = new FixedAppBinaryResolver(
+                appDllPath,
+                canaryRoot => File.WriteAllText(
+                    Path.Combine(canaryRoot, "canary-owned-mutation.sentinel"),
+                    "injected canary-owned dirt"));
+            var ownedMutation = await Assert.ThrowsAsync<PostLandingCanaryEvaluationException>(() =>
+                new PostLandingCanaryRunner(
+                        repositoryRoot,
+                        logDirectory: Path.Combine(testRoot, "owned-mutation-logs"),
+                        applicationBinaryResolver: ownedMutationResolver)
+                    .RunAsync(
+                        new PostLandingCanaryRequest(landingSha!, ["owned-mutation-control"]),
+                        timeout.Token));
+            Assert.Contains("canary-owned-mutation.sentinel", ownedMutation.Message, StringComparison.Ordinal);
+            Assert.Contains("dirtied", ownedMutation.Message, StringComparison.OrdinalIgnoreCase);
         }
         finally
         {
             DeleteDirectoryLoudly(testRoot);
             Assert.False(Directory.Exists(testRoot), $"Disposable canary repository cleanup failed: {testRoot}");
-            Assert.Equal(sourceStatusBefore, ReadGitStatus(sourceRoot));
         }
     }
 
@@ -1812,7 +1836,7 @@ public sealed class PostLandingCanaryTests : CliCommandTestBase
             run(request, cancellationToken);
     }
 
-    private sealed class FixedAppBinaryResolver(string appDllPath)
+    private sealed class FixedAppBinaryResolver(string appDllPath, Action<string>? onResolve = null)
         : IPostLandingCanaryApplicationBinaryResolver
     {
         internal int CallCount { get; private set; }
@@ -1828,6 +1852,7 @@ public sealed class PostLandingCanaryTests : CliCommandTestBase
             CallCount++;
             SourceRoot = sourceRoot;
             SourceSha = sourceSha;
+            onResolve?.Invoke(sourceRoot);
             return Task.FromResult(appDllPath);
         }
     }

@@ -62,7 +62,7 @@ public sealed class VerificationAndProcessLogTests
     var process = CreateProcessRecord(root, exit);
     var heartbeatPath = BackgroundDispatchRunner.GetHeartbeatPath(process);
     File.WriteAllText(heartbeatPath, """
-{"pid":123,"childPid":456,"ownedPids":[123,789],"state":"running","lastObservedAt":"2026-06-12T20:00:10Z","lastProgressAt":"2026-06-12T20:00:00Z","stdoutBytes":42,"stderrBytes":7,"providerSessionId":"codex-session-123","worktreeHeadSha":"abc123","dirtyStateHash":"dirty-hash"}
+{"pid":123,"childPid":456,"ownedPids":[123,789],"ownedProcessIdentities":[{"processId":789,"startedAt":"2026-06-12T19:59:59Z","imagePath":"C:\\workers\\worker.exe"}],"state":"running","lastObservedAt":"2026-06-12T20:00:10Z","lastProgressAt":"2026-06-12T20:00:00Z","stdoutBytes":42,"stderrBytes":7,"providerSessionId":"codex-session-123","worktreeHeadSha":"abc123","dirtyStateHash":"dirty-hash"}
 """);
 
     var heartbeat = ProcessLogReader.ReadHeartbeat(process, DateTimeOffset.Parse("2026-06-12T20:00:30Z"));
@@ -73,6 +73,7 @@ public sealed class VerificationAndProcessLogTests
     Assert.Equal(123, heartbeat.ProcessId);
     Assert.Equal(456, heartbeat.ChildProcessId);
     Assert.Equal<int>([123, 789], heartbeat.OwnedProcessIds);
+    Assert.Equal(789, Assert.Single(heartbeat.OwnedProcessIdentities).ProcessId);
     Assert.Equal("running", heartbeat.State);
     Assert.Equal(TimeSpan.FromSeconds(20), heartbeat.HeartbeatAge);
     Assert.Equal(TimeSpan.FromSeconds(30), heartbeat.IdleDuration);
@@ -118,10 +119,11 @@ public sealed class VerificationAndProcessLogTests
     kernel.RecordTaskDispatch(goal.Id, task.Id, new TaskDispatchRecord("local", "fake-cmd", root, DateTimeOffset.UtcNow));
     var processRecord = new TaskProcessRecord(999999, "fake-cmd", root, stdoutPath, stderrPath, exitPath, DateTimeOffset.UtcNow, null, null);
     kernel.RecordTaskProcessStarted(goal.Id, task.Id, processRecord);
+    WriteHeartbeat(processRecord, pid: 999999, childPid: null, ownedPids: [999999], state: "running");
 
     using var lockedStdout = new FileStream(stdoutPath, FileMode.Create, FileAccess.Write, FileShare.None);
 
-    var runner = new BackgroundDispatchRunner(isStillRunning: _ => true);
+    var runner = new BackgroundDispatchRunner(isStillRunning: _ => true, readProcessIdentity: ReadTestIdentity);
     var result = runner.RefreshLatestProcess(kernel, goal.Id, task.Id);
 
     Assert.True(result.IsRunning);
@@ -143,6 +145,7 @@ public sealed class VerificationAndProcessLogTests
     kernel.RecordTaskDispatch(goal.Id, task.Id, new TaskDispatchRecord("local", "fake-cmd", root, DateTimeOffset.UtcNow));
     var processRecord = new TaskProcessRecord(999999, "fake-cmd", root, stdoutPath, stderrPath, exitPath, DateTimeOffset.UtcNow, null, null);
     kernel.RecordTaskProcessStarted(goal.Id, task.Id, processRecord);
+    WriteHeartbeat(processRecord, pid: 999999, childPid: null, ownedPids: [999999], state: "running");
 
     using var lockedStdout = new FileStream(stdoutPath, FileMode.Create, FileAccess.Write, FileShare.None);
 
@@ -169,10 +172,11 @@ public sealed class VerificationAndProcessLogTests
     kernel.RecordTaskDispatch(goal.Id, task.Id, new TaskDispatchRecord("local", "fake-cmd", root, DateTimeOffset.UtcNow));
     var processRecord = new TaskProcessRecord(999999, "fake-cmd", root, stdoutPath, stderrPath, exitPath, DateTimeOffset.UtcNow, null, null);
     kernel.RecordTaskProcessStarted(goal.Id, task.Id, processRecord);
+    WriteHeartbeat(processRecord, pid: 999999, childPid: null, ownedPids: [999999], state: "running");
 
     using var lockedStderr = new FileStream(stderrPath, FileMode.Create, FileAccess.Write, FileShare.None);
 
-    var runner = new BackgroundDispatchRunner(isStillRunning: _ => true);
+    var runner = new BackgroundDispatchRunner(isStillRunning: _ => true, readProcessIdentity: ReadTestIdentity);
     var result = runner.RefreshLatestProcess(kernel, goal.Id, task.Id);
 
     Assert.True(result.IsRunning);
@@ -196,6 +200,7 @@ public sealed class VerificationAndProcessLogTests
     kernel.RecordTaskDispatch(goal.Id, task.Id, new TaskDispatchRecord("local", "fake-cmd", root, DateTimeOffset.UtcNow));
     var processRecord = new TaskProcessRecord(999999, "fake-cmd", root, stdoutPath, stderrPath, exitPath, DateTimeOffset.UtcNow, null, null);
     kernel.RecordTaskProcessStarted(goal.Id, task.Id, processRecord);
+    WriteHeartbeat(processRecord, pid: 111, childPid: 222, ownedPids: [111, 222], state: "exiting");
 
     var runner = new BackgroundDispatchRunner(isStillRunning: _ => false);
     runner.RefreshLatestProcess(kernel, goal.Id, task.Id);
@@ -601,12 +606,20 @@ public sealed class VerificationAndProcessLogTests
             cleanupScope = directory;
             Assert.True(File.Exists(exitPath), "The native exit artifact must exist before scoped cleanup starts.");
             return fixtures
-                .Where(fixture => BackgroundDispatchRunner.ShouldReapBuildDaemon(directory, fixture.CommandLine))
-                .Select(fixture => (fixture.ProcessId, fixture.Name, (string?)fixture.CommandLine))
+                .Where(fixture => WorktreeBuildDaemonReaper.ShouldReap(directory, fixture.CommandLine))
+                .Select(fixture => new ProcessInspectionRecord(
+                    fixture.ProcessId,
+                    1,
+                    fixture.Name,
+                    $"C:\\tools\\{fixture.Name}.exe",
+                    DateTimeOffset.UnixEpoch,
+                    fixture.CommandLine,
+                    ProcessInspectionStatus.Available))
                 .ToArray();
         },
-        tryKillBuildDaemon: pid =>
+        tryKillBuildDaemon: process =>
         {
+            var pid = process.ProcessId;
             if (pid == 42716) ownedKilled.Set();
             if (pid == 42717) siblingKilled.Set();
             return true;
@@ -649,12 +662,14 @@ public sealed class VerificationAndProcessLogTests
         null,
         OwnedProcessIds: [111, 222]);
     kernel.RecordTaskProcessStarted(goal.Id, task.Id, processRecord);
+    WriteHeartbeat(processRecord, pid: 111, childPid: 222, ownedPids: [111, 222], state: "exiting");
     var killed = new List<int>();
     var running = new HashSet<int> { 111, 222 };
 
     var runner = new BackgroundDispatchRunner(
         isStillRunning: pid => running.Contains(pid),
-        tryKillOwnedProcess: pid => { killed.Add(pid); running.Remove(pid); return true; });
+        tryKillOwnedProcess: pid => { killed.Add(pid); running.Remove(pid); return true; },
+        readProcessIdentity: ReadTestIdentity);
 
     var refreshed = runner.RefreshLatestProcess(kernel, goal.Id, task.Id);
 
@@ -670,10 +685,10 @@ public sealed class VerificationAndProcessLogTests
     var worktree = Path.Combine(root, "worktree");
     Directory.CreateDirectory(worktree);
 
-    Assert.False(BackgroundDispatchRunner.ShouldReapBuildDaemon(worktree, null));
-    Assert.False(BackgroundDispatchRunner.ShouldReapBuildDaemon(worktree, ""));
-    Assert.False(BackgroundDispatchRunner.ShouldReapBuildDaemon(worktree, "VBCSCompiler.exe -shared"));
-    Assert.True(BackgroundDispatchRunner.ShouldReapBuildDaemon(
+    Assert.False(WorktreeBuildDaemonReaper.ShouldReap(worktree, null));
+    Assert.False(WorktreeBuildDaemonReaper.ShouldReap(worktree, ""));
+    Assert.False(WorktreeBuildDaemonReaper.ShouldReap(worktree, "VBCSCompiler.exe -shared"));
+    Assert.True(WorktreeBuildDaemonReaper.ShouldReap(
         worktree,
         $"VBCSCompiler.exe -keepalive \"{Path.Combine(worktree, "obj", "Debug", "Core.dll")}\""));
 }
@@ -699,7 +714,7 @@ public sealed class VerificationAndProcessLogTests
     var runner = new BackgroundDispatchRunner(
         isStillRunning: _ => false,
         findBuildDaemons: _ => [],
-        tryKillBuildDaemon: pid => { killedPids.Add(pid); return true; });
+        tryKillBuildDaemon: process => { killedPids.Add(process.ProcessId); return true; });
 
     runner.RefreshLatestProcess(kernel, goal.Id, task.Id);
 
@@ -729,7 +744,17 @@ public sealed class VerificationAndProcessLogTests
     kernel.RecordTaskProcessStarted(goal.Id, task.Id, processRecord);
     var runner = new BackgroundDispatchRunner(
         isStillRunning: _ => false,
-        findBuildDaemons: _ => [(56656, "MSBuild", null)],
+        findBuildDaemons: _ =>
+        [
+            new ProcessInspectionRecord(
+                56656,
+                1,
+                "MSBuild",
+                "C:\\tools\\MSBuild.exe",
+                DateTimeOffset.UnixEpoch,
+                null,
+                ProcessInspectionStatus.Available)
+        ],
         tryKillBuildDaemon: _ => false);
 
     runner.RefreshLatestProcess(kernel, goal.Id, task.Id);
@@ -923,7 +948,8 @@ public sealed class VerificationAndProcessLogTests
     var killed = new List<int>();
     var runner = new BackgroundDispatchRunner(
         isStillRunning: pid => pid == 32641,
-        tryKillOwnedProcess: pid => { killed.Add(pid); return true; });
+        tryKillOwnedProcess: pid => { killed.Add(pid); return true; },
+        readProcessIdentity: ReadTestIdentity);
     var swept = runner.SweepExitedProcesses(kernel);
 
     Assert.Equal(0, swept);
@@ -955,7 +981,8 @@ public sealed class VerificationAndProcessLogTests
     var killed = new List<int>();
     var runner = new BackgroundDispatchRunner(
         isStillRunning: pid => pid == 32641,
-        tryKillOwnedProcess: pid => { killed.Add(pid); return true; });
+        tryKillOwnedProcess: pid => { killed.Add(pid); return true; },
+        readProcessIdentity: ReadTestIdentity);
     runner.RefreshLatestProcess(kernel, goal.Id, workTask.Id);
 
     Assert.Empty(killed);
@@ -986,10 +1013,21 @@ private static void WriteHeartbeat(
     IReadOnlyList<int> ownedPids,
     string state)
 {
+    var observedAt = DateTimeOffset.UtcNow;
+    var identityPids = ownedPids
+        .Concat(childPid is > 0 ? [childPid.Value] : [])
+        .Concat(pid > 0 ? [pid] : [])
+        .Distinct()
+        .ToArray();
+    var identities = string.Join(",", identityPids.Select(identityPid =>
+        $$"""{"processId":{{identityPid}},"startedAt":"2026-07-19T11:58:00Z","imagePath":"C:\\workers\\worker-{{identityPid}}.exe"}"""));
     var heartbeat = $$"""
-{"pid":{{pid}},"childPid":{{(childPid is null ? "null" : childPid.Value.ToString())}},"ownedPids":[{{string.Join(",", ownedPids)}}],"state":"{{state}}","lastObservedAt":"2026-07-19T12:00:00Z","lastProgressAt":"2026-07-19T11:59:00Z","stdoutBytes":42,"stderrBytes":0}
+{"pid":{{pid}},"childPid":{{(childPid is null ? "null" : childPid.Value.ToString())}},"ownedPids":[{{string.Join(",", ownedPids)}}],"ownedProcessIdentities":[{{identities}}],"state":"{{state}}","lastObservedAt":"{{observedAt:O}}","lastProgressAt":"{{observedAt:O}}","stdoutBytes":42,"stderrBytes":0}
 """;
     File.WriteAllText(BackgroundDispatchRunner.GetHeartbeatPath(process), heartbeat);
 }
+
+private static (DateTimeOffset StartedAt, string ImagePath)? ReadTestIdentity(int processId) =>
+    (DateTimeOffset.Parse("2026-07-19T11:58:00Z"), $@"C:\workers\worker-{processId}.exe");
 }
 

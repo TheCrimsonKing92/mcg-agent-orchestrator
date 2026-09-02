@@ -1232,11 +1232,13 @@ public static class WorkerProcessJobs
             }
         }
 
-        var fallbackOwnedTempRoots = TempRootJanitor.SnapshotOwnedRoots([processId]);
+        var fallbackOwnedTempRoots = TempRootJanitor.SnapshotOwnedRoots([processId])
+            .Select(root => root with { CaptureSource = "worker-process-jobs/fallback-kill" })
+            .ToArray();
         var fallbackKilled = TryKillPidTree(processId);
         if (fallbackKilled)
         {
-            _ = ReapOwnedTempRoots(fallbackOwnedTempRoots);
+            EmitTempRootReapResults(ReapOwnedTempRoots(fallbackOwnedTempRoots));
         }
         if (fallbackKilled && markRegistryReleased)
         {
@@ -1495,7 +1497,7 @@ public static class WorkerProcessJobs
 
         try
         {
-            var ownedTempRoots = SnapshotOwnedTempRoots(job.Group);
+            var ownedTempRoots = SnapshotOwnedTempRoots(job.Group, "worker-process-jobs/reap");
             try
             {
                 job.Group.Kill();
@@ -1510,7 +1512,7 @@ public static class WorkerProcessJobs
             {
                 OwnedProcessGroup.WaitForJobExit(job.DuplicateAccountingHandle, TimeSpan.FromSeconds(5));
             }
-            _ = ReapOwnedTempRoots(ownedTempRoots);
+            EmitTempRootReapResults(ReapOwnedTempRoots(ownedTempRoots));
 
             if (job.DuplicateAccountingHandle is not null &&
                 OwnedProcessGroup.TryReadAccounting(job.DuplicateAccountingHandle, out var duplicateAccounting))
@@ -1543,7 +1545,9 @@ public static class WorkerProcessJobs
             return !kill;
         }
 
-        var ownedTempRoots = kill ? SnapshotOwnedTempRoots(job.Group) : [];
+        var ownedTempRoots = kill
+            ? SnapshotOwnedTempRoots(job.Group, "worker-process-jobs/accounting-dispose")
+            : [];
 
         try
         {
@@ -1588,7 +1592,7 @@ public static class WorkerProcessJobs
                     OwnedProcessGroup.WaitForJobExit(job.DuplicateAccountingHandle, TimeSpan.FromSeconds(5));
                 }
 
-                _ = ReapOwnedTempRoots(ownedTempRoots);
+                EmitTempRootReapResults(ReapOwnedTempRoots(ownedTempRoots));
             }
 
             killed = true;
@@ -1622,19 +1626,49 @@ public static class WorkerProcessJobs
     }
 
     private static IReadOnlyList<TempRootJanitorOwnedRoot> SnapshotOwnedTempRoots(
-        OwnedProcessGroup group) =>
-        TempRootJanitor.SnapshotOwnedRoots(SnapshotOwnedProcessIds(group));
+        OwnedProcessGroup group,
+        string captureSource) =>
+        TempRootJanitor.SnapshotOwnedRoots(SnapshotOwnedProcessIds(group))
+            .Select(root => root with { CaptureSource = captureSource })
+            .ToArray();
 
-    internal static IReadOnlyList<TempRootJanitorDeleteResult> ReapOwnedTempRoots(
+    internal static IReadOnlyList<TempRootJanitorReapResult> ReapOwnedTempRoots(
         IEnumerable<int> processIds,
         IEnumerable<string>? sharedRoots = null) =>
         sharedRoots is null
             ? TempRootJanitor.ReapOwnedRoots(processIds)
             : TempRootJanitor.ReapOwnedRoots(processIds, sharedRoots);
 
-    internal static IReadOnlyList<TempRootJanitorDeleteResult> ReapOwnedTempRoots(
+    internal static IReadOnlyList<TempRootJanitorReapResult> ReapOwnedTempRoots(
         IEnumerable<TempRootJanitorOwnedRoot> ownedRoots) =>
         TempRootJanitor.ReapOwnedRoots(ownedRoots);
+
+    internal static void EmitTempRootReapResults(
+        IEnumerable<TempRootJanitorReapResult> results,
+        Action<string>? emit = null)
+    {
+        ArgumentNullException.ThrowIfNull(results);
+        foreach (var result in results)
+        {
+            var diagnostic = TempRootJanitor.FormatDiagnostic(result);
+            try
+            {
+                if (emit is null)
+                {
+                    Console.Error.WriteLine(diagnostic);
+                }
+                else
+                {
+                    emit(diagnostic);
+                }
+            }
+            catch (Exception ex)
+            {
+                Debug.WriteLine(
+                    $"[WorkerProcessJobs] Failed to emit temp-root reap receipt: {ex.GetType().Name}");
+            }
+        }
+    }
 
     private static bool TryDetachAndDispose(RegisteredJob job)
     {
@@ -1706,48 +1740,16 @@ public static class WorkerProcessJobs
 
     public static IReadOnlyList<int> ListLiveDescendantProcessIds(int ancestorProcessId)
     {
-        if (ancestorProcessId <= 0 || !OperatingSystem.IsWindows())
-        {
-            return [];
-        }
+        return WindowsNativeProcessInspection.ListIdentityBoundDescendantProcessIds(ancestorProcessId);
+    }
 
-        var parentByProcessId = new Dictionary<int, int>();
-        var snapshot = CreateToolhelp32Snapshot(0x00000002, 0);
-        if (snapshot == IntPtr.Zero || snapshot == new IntPtr(-1))
-        {
-            return [];
-        }
-
-        try
-        {
-            var entry = new PROCESSENTRY32 { dwSize = (uint)Marshal.SizeOf<PROCESSENTRY32>() };
-            if (!Process32First(snapshot, ref entry))
-            {
-                return [];
-            }
-
-            do
-            {
-                var processId = (int)entry.th32ProcessID;
-                var parentProcessId = (int)entry.th32ParentProcessID;
-                if (processId > 0 && parentProcessId > 0)
-                {
-                    parentByProcessId[processId] = parentProcessId;
-                }
-            }
-            while (Process32Next(snapshot, ref entry));
-        }
-        finally
-        {
-            CloseHandle(snapshot);
-        }
-
-        return parentByProcessId.Keys
-            .Where(processId => processId != ancestorProcessId)
-            .Where(processId => IsDescendantOf(processId, ancestorProcessId, parentByProcessId))
-            .Where(IsProcessRunning)
-            .OrderBy(processId => processId)
-            .ToArray();
+    public static IReadOnlyList<int> ListConservativeDescendantProcessIdsForRefusal(
+        int ancestorProcessId,
+        DateTimeOffset recordedAncestorStartedAt)
+    {
+        return WindowsNativeProcessInspection.ListConservativeDescendantProcessIdsForRefusal(
+            ancestorProcessId,
+            recordedAncestorStartedAt);
     }
 
     private static bool RegisterDurable(
@@ -1872,6 +1874,12 @@ public static class WorkerProcessJobs
 
     private static bool CanKillProcess(int processId, bool allowProtectedDescendant)
     {
+        if (processId == Environment.ProcessId ||
+            IsDescendantOf(Environment.ProcessId, processId))
+        {
+            return false;
+        }
+
         if (IsProtectedProcess(processId) || ProtectedPidIsDescendantOf(processId))
         {
             return false;

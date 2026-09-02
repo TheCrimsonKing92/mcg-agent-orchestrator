@@ -429,7 +429,11 @@ public sealed class WorkerDispatchTestsWorkerResultClassification : WorkerDispat
         });
 
     var cancelled = runner.CancelLatestProcess(kernel, goal.Id, task.Id);
-    kernel.RequeueInterruptedDispatch(goal.Id, task.Id, "Redispatch after stopped worker tree.");
+    kernel.RequeueInterruptedDispatch(
+        goal.Id,
+        task.Id,
+        "Redispatch after stopped worker tree.",
+        RetryCause.ProviderInterruption);
     kernel.RecordTaskDispatch(goal.Id, task.Id, new TaskDispatchRecord("codex-cli", "codex exec prompt 2", root, now.AddMinutes(2)));
 
     Assert.True(killed.SequenceEqual([111, 222]));
@@ -865,7 +869,12 @@ public sealed class WorkerDispatchTestsWorkerResultClassification : WorkerDispat
         ownedPids: [444, 555],
         exitFileExists: true);
 
-    var outcome = new BackgroundDispatchRunner(clock, isStillRunning: pid => pid == 444)
+    var outcome = new BackgroundDispatchRunner(
+        clock,
+        isStillRunning: pid => pid == 444,
+        readProcessIdentity: pid => pid == 444
+            ? (process.StartedAt, @"C:\workers\worker-444.exe")
+            : null)
         .ReconcileLatestProcess(kernel, goal.Id, task.Id);
 
     Assert.Null(outcome.Verification);

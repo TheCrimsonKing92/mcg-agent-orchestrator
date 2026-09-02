@@ -52,6 +52,16 @@ public enum DispatchRoleOutputCapability
     VerificationOnly
 }
 
+public enum DispatchRoleEvidenceRequirement
+{
+    ScopedRepositoryChange,
+    WorkerBuildResult,
+    ManualReproduction,
+    SourceTrace,
+    FocusedEvidenceRequest,
+    VerificationMatrix
+}
+
 public static class DispatchRoleOutputCapabilities
 {
     public static bool TryGet(AgentRole role, out DispatchRoleOutputCapability capability)
@@ -65,6 +75,27 @@ public static class DispatchRoleOutputCapabilities
         };
 
         return Enum.IsDefined(role);
+    }
+
+    public static bool CanProduceEvidence(
+        AgentRole role,
+        DispatchRoleEvidenceRequirement requirement)
+    {
+        if (!TryGet(role, out _))
+            return false;
+
+        return requirement switch
+        {
+            DispatchRoleEvidenceRequirement.ScopedRepositoryChange => role == AgentRole.Developer,
+            DispatchRoleEvidenceRequirement.WorkerBuildResult => role is AgentRole.Developer or AgentRole.Tester,
+            DispatchRoleEvidenceRequirement.ManualReproduction => role is AgentRole.Developer or AgentRole.Tester,
+            DispatchRoleEvidenceRequirement.SourceTrace =>
+                role is AgentRole.Researcher or AgentRole.Developer or AgentRole.Tester,
+            DispatchRoleEvidenceRequirement.FocusedEvidenceRequest =>
+                role is AgentRole.Developer or AgentRole.Tester or AgentRole.Reviewer,
+            DispatchRoleEvidenceRequirement.VerificationMatrix => role == AgentRole.Tester,
+            _ => false
+        };
     }
 }
 
@@ -1635,6 +1666,8 @@ public static class DispatchFailureClassifier
             !workerResultPresent ||
             !WasRedispatchedByAnyRoute(task) ||
             string.IsNullOrWhiteSpace(task.LastDispatch?.BaseCommit) ||
+            task.LastDispatch.ContextPackageReceipt is not { } contextReceipt ||
+            !contextReceipt.HasEarlyConvergenceEvidenceFor(task.LastDispatch.BaseCommit) ||
             !HasPopulatedStandardOutput(verification) ||
             !DispatchRejectionDiagnosticMarker.TryParse(
                 verification.StandardError,
@@ -1656,7 +1689,7 @@ public static class DispatchFailureClassifier
             blockersStatus != WorkerResultBlockers.BlockersStatus.None ||
             WorkerResultBlockers.TryFindBlocker(verification, out _) ||
             !WorkerResultBlockers.TryGetTestsStatus(verification, out var testsStatus) ||
-            testsStatus is not (WorkerResultBlockers.TestsStatus.Pass or WorkerResultBlockers.TestsStatus.Deferred) ||
+            testsStatus != WorkerResultBlockers.TestsStatus.Pass ||
             HasStructuredFailingTests(verification))
         {
             return false;
@@ -2044,7 +2077,9 @@ public static class DispatchFailureClassifier
 
         // RetryTask is the operator's explicit reset boundary. Keep the historical receipt, but do not
         // let a verification from before that boundary regenerate a deferral after the stored value was cleared.
-        if (task.LatestRetryAt is { } latestRetryAt && latest.CompletedAt <= latestRetryAt)
+        if (task.LatestRetryAt is { } latestRetryAt &&
+            latest.CompletedAt <= latestRetryAt &&
+            task.PendingRetryCause != RetryCause.ProviderInterruption)
         {
             return false;
         }

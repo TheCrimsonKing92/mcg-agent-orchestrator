@@ -3,6 +3,14 @@ using Mcg.AgentOrchestrator.Infrastructure;
 
 namespace Mcg.AgentOrchestrator.App.Orchestration;
 
+internal sealed record SubscriptionCliCompletionResult(
+    string StandardOutput,
+    int ExitCode,
+    string? FailureReason = null)
+{
+    public bool Succeeded => ExitCode == 0;
+}
+
 // Runs a single subscription-CLI text completion using a worker profile without dispatching a
 // tracked task. Used only for orchestrator-internal advisory functions.
 internal sealed class SubscriptionCliCompleter
@@ -13,7 +21,7 @@ internal sealed class SubscriptionCliCompleter
     private readonly string _profileName;
     private readonly string _modelAlias;
     private readonly string? _reasoningEffort;
-    private readonly Func<string, string, string?, CancellationToken, Task<string>> _runner;
+    private readonly Func<string, string, string?, CancellationToken, Task<SubscriptionCliCompletionResult>> _runner;
 
     public SubscriptionCliCompleter(
         WorkerProfileCatalog profiles,
@@ -26,7 +34,7 @@ internal sealed class SubscriptionCliCompleter
             modelAlias,
             reasoningEffort,
             (command, workingDirectory, standardInput, cancellationToken) =>
-                RunCommandAsync(command, workingDirectory, standardInput, cancellationToken))
+                RunCommandWithResultAsync(command, workingDirectory, standardInput, cancellationToken))
     {
     }
 
@@ -46,6 +54,24 @@ internal sealed class SubscriptionCliCompleter
         string modelAlias,
         string? reasoningEffort,
         Func<string, string, string?, CancellationToken, Task<string>> runner)
+        : this(
+            commandTemplate,
+            profileName,
+            modelAlias,
+            reasoningEffort,
+            async (command, workingDirectory, standardInput, cancellationToken) =>
+                new SubscriptionCliCompletionResult(
+                    await runner(command, workingDirectory, standardInput, cancellationToken).ConfigureAwait(false),
+                    0))
+    {
+    }
+
+    internal SubscriptionCliCompleter(
+        string commandTemplate,
+        string profileName,
+        string modelAlias,
+        string? reasoningEffort,
+        Func<string, string, string?, CancellationToken, Task<SubscriptionCliCompletionResult>> runner)
     {
         _commandTemplate = commandTemplate;
         _profileName = profileName;
@@ -57,6 +83,12 @@ internal sealed class SubscriptionCliCompleter
     public string Name => $"sub:{_profileName}:{_modelAlias}";
 
     public async Task<string> CompleteAsync(
+        string prompt,
+        string promptFileName,
+        CancellationToken cancellationToken) =>
+        (await CompleteWithResultAsync(prompt, promptFileName, cancellationToken).ConfigureAwait(false)).StandardOutput;
+
+    internal async Task<SubscriptionCliCompletionResult> CompleteWithResultAsync(
         string prompt,
         string promptFileName,
         CancellationToken cancellationToken)
@@ -118,9 +150,26 @@ internal sealed class SubscriptionCliCompleter
         string? standardInput,
         CancellationToken cancellationToken)
     {
+        var result = await RunCommandWithResultAsync(
+            command,
+            workingDirectory,
+            standardInput,
+            cancellationToken).ConfigureAwait(false);
+        return result.StandardOutput;
+    }
+
+    internal static async Task<SubscriptionCliCompletionResult> RunCommandWithResultAsync(
+        string command,
+        string workingDirectory,
+        string? standardInput,
+        CancellationToken cancellationToken)
+    {
         var result = await WorkerProcessRunner.RunBufferedAsync(
             new WorkerProcessRunRequest(command, workingDirectory, StandardInput: standardInput),
             cancellationToken).ConfigureAwait(false);
-        return result.StandardOutput.Trim();
+        return new SubscriptionCliCompletionResult(
+            result.StandardOutput.Trim(),
+            result.ExitCode,
+            result.ExitCode == 0 ? null : $"subscription-cli-exit:{result.ExitCode}");
     }
 }

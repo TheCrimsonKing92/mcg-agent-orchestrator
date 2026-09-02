@@ -15,8 +15,30 @@ using System.Text.Json;
 
 public abstract class WorkerDispatchTestSupport
 {
+    private static readonly string SeededRepositoryFactoryRoot = CreateSeededRepositoryFactoryRoot();
+    private static int _seededRepositoryDirectoryOrdinal;
     private static readonly WorkerDispatchTestsSeededRepositoryFactory SeededDispatchRepositories =
-        new(InfrastructureTestSupport.CreateTempDirectory, SeedDispatchRepositoryTemplate);
+        new(
+            AllocateSeededRepositoryDirectory,
+            SeedDispatchRepositoryTemplate,
+            SeededRepositoryFactoryRoot);
+
+    private static string CreateSeededRepositoryFactoryRoot()
+    {
+        var path = Path.Combine(
+            Path.GetTempPath(),
+            $"seeded-repository-factory-{Environment.ProcessId:x}-{Guid.NewGuid():N}");
+        Directory.CreateDirectory(path);
+        return path;
+    }
+
+    private static string AllocateSeededRepositoryDirectory()
+    {
+        var ordinal = Interlocked.Increment(ref _seededRepositoryDirectoryOrdinal);
+        var path = Path.Combine(SeededRepositoryFactoryRoot, $"owned-{ordinal}-{Guid.NewGuid():N}");
+        Directory.CreateDirectory(path);
+        return path;
+    }
 
     protected static string CreateTempDirectory()
     {
@@ -35,12 +57,15 @@ protected static AgentDefinition TestSubscriptionAgent(string id, string name, A
         ExecutionPolicy: AgentExecutionPolicy.SubscriptionOnly,
         Subscription: new SubscriptionLaunchProfile("test-subscription", "test-model", "low"));
 
-protected static void CompleteResearcherArtifact(AgentOrchestratorKernel kernel, Goal goal)
+protected static void CompleteResearcherArtifact(
+    AgentOrchestratorKernel kernel,
+    Goal goal,
+    string? research = null)
 {
     var researcher = goal.Tasks.Single(task => task.RequiredRole == AgentRole.Researcher);
     var artifactRoot = CreateTempDirectory();
     var outputPath = Path.Combine(artifactRoot, "researcher.out.log");
-    File.WriteAllText(outputPath, ResearcherContractFixture());
+    File.WriteAllText(outputPath, research ?? ResearcherContractFixture());
     var result = ResearcherOutputContract.Resolve(File.ReadAllText(outputPath));
     var diagnostic = string.Empty;
     if (!result.Succeeded ||
@@ -67,13 +92,16 @@ protected static void CompleteResearcherArtifact(AgentOrchestratorKernel kernel,
             StandardOutputPath: outputPath));
 }
 
-protected static void CompletePlannerArtifact(AgentOrchestratorKernel kernel, Goal goal)
+protected static void CompletePlannerArtifact(
+    AgentOrchestratorKernel kernel,
+    Goal goal,
+    string? plan = null)
 {
     var planner = goal.Tasks.Single(task => task.RequiredRole == AgentRole.Planner);
     var artifactRoot = CreateTempDirectory();
     File.WriteAllText(Path.Combine(artifactRoot, "seed.txt"), "seed");
     var outputPath = Path.Combine(artifactRoot, "planner.out.log");
-    var plan = PlannerContractPlanFixture();
+    plan ??= PlannerContractPlanFixture();
     File.WriteAllText(outputPath, "Planner fixture completed.");
     if (!PlannerOutputContract.TryPersistDurableReceipt(
             outputPath,
@@ -97,10 +125,14 @@ protected static void CompletePlannerArtifact(AgentOrchestratorKernel kernel, Go
             StandardOutputPath: outputPath));
 }
 
-protected static void CompleteResearcherAndPlannerArtifacts(AgentOrchestratorKernel kernel, Goal goal)
+protected static void CompleteResearcherAndPlannerArtifacts(
+    AgentOrchestratorKernel kernel,
+    Goal goal,
+    string? research = null,
+    string? plan = null)
 {
-    CompleteResearcherArtifact(kernel, goal);
-    CompletePlannerArtifact(kernel, goal);
+    CompleteResearcherArtifact(kernel, goal, research);
+    CompletePlannerArtifact(kernel, goal, plan);
 }
 
 
@@ -316,7 +348,10 @@ protected static void CompleteResearcherAndPlannerArtifacts(AgentOrchestratorKer
             readCommandLines: pids => pids
                 .Distinct()
                 .Where(commandLines.ContainsKey)
-                .ToDictionary(pid => pid, pid => commandLines[pid]));
+                .ToDictionary(pid => pid, pid => commandLines[pid]),
+            readProcessIdentity: pid => pid > 0
+                ? (clock.UtcNow, $@"C:\workers\worker-{pid}.exe")
+                : null);
 
     protected static (AgentOrchestratorKernel Kernel, Goal Goal, TaskSpec Task, TaskProcessRecord Process) CreateCompletedGoalWorktreeDispatch(
         string root,
@@ -417,13 +452,21 @@ protected static void CompleteResearcherAndPlannerArtifacts(AgentOrchestratorKer
     var ownedPidsJson = ownedPids is { Count: > 0 }
         ? string.Join(",", ownedPids)
         : string.Empty;
+    var identityPids = (ownedPids ?? [])
+        .Concat(childPid is > 0 ? [childPid.Value] : [])
+        .Concat(process.ProcessId > 0 ? [process.ProcessId] : [])
+        .Distinct()
+        .ToArray();
+    var ownedProcessIdentitiesJson = string.Join(",", identityPids.Select(pid =>
+        $"{{\"processId\":{pid},\"startedAt\":\"{process.StartedAt:O}\",\"imagePath\":\"C:\\\\workers\\\\worker-{pid}.exe\"}}"));
     var exitFileExistsJson = exitFileExists ? "true" : "false";
     File.WriteAllText(
         BackgroundDispatchRunner.GetHeartbeatPath(process),
         "{" +
-        "\"pid\":999999," +
+        $"\"pid\":{process.ProcessId}," +
         $"\"childPid\":{childPidJson}," +
         $"\"ownedPids\":[{ownedPidsJson}]," +
+        $"\"ownedProcessIdentities\":[{ownedProcessIdentitiesJson}]," +
         $"\"startedAt\":\"{process.StartedAt:O}\"," +
         $"\"lastObservedAt\":\"{lastObservedAt:O}\"," +
         $"\"lastProgressAt\":\"{lastProgressAt:O}\"," +

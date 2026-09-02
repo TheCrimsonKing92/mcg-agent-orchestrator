@@ -457,6 +457,8 @@ internal sealed partial class ConductorBatchLoop
             {
                 EmitProgress(sweepEvent);
             }
+            var sweepTerminalizedGoalIds = PersistSweepTerminalizations(
+                sweepResult, kernel, checkpointGoalTick, persistGoalTick, checkpointHeldGoals, nextTick, preTickTimingLines, busyWriteDelay);
             RunJanitorialPhase("recover-interrupted-dispatches", nextTick, () =>
             {
                 _recoverInterruptedDispatches(kernel);
@@ -615,6 +617,7 @@ internal sealed partial class ConductorBatchLoop
 
             var scopedGoals = kernel.Goals
                 .Where(g => (onlyGoalId is null || g.Id.Value == onlyGoalId)
+                    && !sweepTerminalizedGoalIds.Contains(g.Id)
                     && !checkpointHeldGoals.ContainsKey(g.Id.Value)
                     && (!excludedGoals.Contains(g.Id.Value) || actionableIntentGoalIds.Contains(g.Id.Value))
                     && (!setAsideGoals.ContainsKey(g.Id.Value) || actionableIntentGoalIds.Contains(g.Id.Value)))

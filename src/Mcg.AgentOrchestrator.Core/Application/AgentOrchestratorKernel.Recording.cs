@@ -237,6 +237,7 @@ public sealed partial class AgentOrchestratorKernel
             }
 
             var recoverableLimitFailures = DispatchFailureClassifier.CountRecoverableSubscriptionLimitFailures(task);
+            task.RecordRetry(_clock.UtcNow, retryCause: RetryCause.ProviderInterruption);
             task.ClearLatestVerification();
             task.SetStatus(task.AssignedAgentId is null ? WorkTaskStatus.Pending : WorkTaskStatus.Assigned);
             var message = recoverableLimitFailures >= DispatchFailureClassifier.RecoverableSubscriptionLimitReviewThreshold
@@ -254,7 +255,7 @@ public sealed partial class AgentOrchestratorKernel
             if (connectivityFailures <= ProviderConnectivityRetryLimit)
             {
                 task.SetSubscriptionRetryAfter(_clock.UtcNow + BuildProviderConnectivityBackoff(connectivityFailures));
-                task.RecordRetry(_clock.UtcNow);
+                task.RecordRetry(_clock.UtcNow, retryCause: RetryCause.ProviderInterruption);
                 task.ClearLatestVerification();
                 task.SetStatus(task.AssignedAgentId is null ? WorkTaskStatus.Pending : WorkTaskStatus.Assigned);
                 Append(
@@ -585,7 +586,7 @@ public sealed partial class AgentOrchestratorKernel
             out _,
             out var suppressedFindings);
         if (verification.WorkerResultPresent &&
-            task.RequiredRole == AgentRole.Reviewer)
+            task.RequiredRole is AgentRole.Reviewer or AgentRole.Tester)
         {
             foreach (var item in suppressedFindings)
             {
@@ -596,7 +597,7 @@ public sealed partial class AgentOrchestratorKernel
                     goal,
                     task.Id,
                     ProgressKind.TaskNote,
-                    $"Suppressed Reviewer structured finding matching operator criteria correction: stable_id={item.Finding.StableId}; finding: {item.Finding.Description}; superseded criterion: {item.Correction.SupersededCriterion}; correction recorded {item.Correction.RecordedAt:u} by {item.Correction.Actor}.{capAudit}");
+                    $"Suppressed {task.RequiredRole} structured finding matching operator criteria correction: stable_id={item.Finding.StableId}; finding: {item.Finding.Description}; superseded criterion: {item.Correction.SupersededCriterion}; correction recorded {item.Correction.RecordedAt:u} by {item.Correction.Actor}.{capAudit}");
             }
         }
 
@@ -647,6 +648,21 @@ public sealed partial class AgentOrchestratorKernel
                 task.Id,
                 WorkTaskStatus.Failed,
                 $"Tester WORKER_RESULT reported blocker: {testerBlocker}; same Tester retry or operator action required.");
+            return true;
+        }
+
+        if (verification.WorkerResultPresent &&
+            task.RequiredRole == AgentRole.Tester &&
+            openBlockingFindings.Count > 0)
+        {
+            var openIds = string.Join(
+                ", ",
+                openBlockingFindings.Select(finding => finding.StableId));
+            ReportTaskProgress(
+                goalId,
+                task.Id,
+                WorkTaskStatus.Failed,
+                $"Tester WORKER_RESULT rejected: merged structured finding state still has open blocking stable_id(s): {openIds}; automatic ownership routing required.");
             return true;
         }
 
@@ -1166,6 +1182,198 @@ public sealed partial class AgentOrchestratorKernel
         Append(goal, taskId, ProgressKind.TaskDispatchRecorded, $"Dispatched to {dispatch.WorkerName}{FormatDispatchTimelineModelSelection(dispatch)}: {dispatch.Command}");
     }
 
+    public RetryAdmissionResult RecordPreparedRetryAdmission(
+        GoalId goalId,
+        TaskId taskId,
+        RetryContextFingerprint fingerprint,
+        PaidRouteClassification paidRoute,
+        DateTimeOffset recordedAt,
+        IReadOnlyList<ReviewFinding>? openBlockingFindings = null,
+        string? reservationOwnerId = null,
+        DateTimeOffset? reservationLeaseExpiresAt = null,
+        bool reservationRecoveryConfirmed = false)
+    {
+        var goal = GetGoal(goalId);
+        var task = goal.FindTask(taskId);
+        if (task.LastDispatch is null)
+            throw new InvalidOperationException("Retry admission requires the exact current prepared dispatch.");
+
+        var result = RetryAdmissionPolicy.Evaluate(
+            task,
+            fingerprint,
+            paidRoute,
+            task.PendingRetryCause,
+            task.LastDispatch.DispatchedAt,
+            recordedAt,
+            openBlockingFindings,
+            reservationOwnerId,
+            reservationLeaseExpiresAt,
+            reservationRecoveryConfirmed);
+        ApplyPreparedRetryAdmission(goalId, taskId, result);
+        return result;
+    }
+
+    public void ApplyPreparedRetryAdmission(
+        GoalId goalId,
+        TaskId taskId,
+        RetryAdmissionResult result)
+    {
+        ArgumentNullException.ThrowIfNull(result);
+        var goal = GetGoal(goalId);
+        var task = goal.FindTask(taskId);
+        if (!task.RecordRetryAdmission(result.Receipt))
+            return;
+
+        ApplyPersistedRetryAdmissionOutcome(goalId, taskId, result);
+    }
+
+    public void ApplyPersistedRetryAdmissionOutcome(
+        GoalId goalId,
+        TaskId taskId,
+        RetryAdmissionResult result)
+    {
+        ArgumentNullException.ThrowIfNull(result);
+        var goal = GetGoal(goalId);
+        var task = goal.FindTask(taskId);
+
+        if (!result.AllowsProcessStart)
+        {
+            task.SetRetryAdmissionHold(result.Receipt.Route);
+            if (result.Receipt.Route == RetryAdmissionRoute.ReservationLease)
+            {
+                if (result.Receipt.Cause == RetryCause.UnchangedContextRepeat)
+                {
+                    Append(
+                        goal,
+                        taskId,
+                        ProgressKind.NoProgressRedispatchPrevented,
+                        $"NO_PROGRESS_REDISPATCH_PREVENTED fingerprint={result.Receipt.Fingerprint.Value} cause={result.Receipt.Cause} route={result.Receipt.Route} attempt={result.Receipt.LinkedDispatchAt:O}");
+                    return;
+                }
+
+                Append(
+                    goal,
+                    null,
+                    ProgressKind.GoalPolicyDecision,
+                    $"retry-admission-route={result.Receipt.Route} receipt={result.Receipt.ReceiptId}; another owner holds the exact prepared dispatch until {result.Receipt.ReservationLeaseExpiresAt:O}.");
+                return;
+            }
+
+            Append(
+                goal,
+                taskId,
+                ProgressKind.NoProgressRedispatchPrevented,
+                $"NO_PROGRESS_REDISPATCH_PREVENTED fingerprint={result.Receipt.Fingerprint.Value} cause={result.Receipt.Cause} route={result.Receipt.Route} attempt={result.Receipt.LinkedDispatchAt:O}");
+            ApplyRetryAdmissionRoute(goal, task, result.Receipt);
+        }
+    }
+
+    private void ApplyRetryAdmissionRoute(Goal goal, TaskSpec heldTask, RetryAdmissionReceipt receipt)
+    {
+        var marker = $"retry-admission-route={receipt.Route} receipt={receipt.ReceiptId}";
+        switch (receipt.Route)
+        {
+            case RetryAdmissionRoute.HumanClarification:
+                RequestHumanInputDeduplicated(
+                    goal.Id,
+                    heldTask.Id,
+                    $"Retry admission needs authoritative clarification before another paid attempt. {marker}",
+                    HumanWaitKind.SpecClarification,
+                    isAutoDefaultable: false,
+                    isDismissible: false,
+                    questionFingerprint: $"retry-admission:{receipt.Fingerprint.Value}:clarification",
+                    blockerFingerprint: receipt.Fingerprint.Value,
+                    recordDuplicateSuppression: false);
+                break;
+            case RetryAdmissionRoute.EnvironmentalHold:
+                RequestHumanInputDeduplicated(
+                    goal.Id,
+                    heldTask.Id,
+                    $"Retry admission is held for typed environment/provider recovery evidence. {marker}",
+                    HumanWaitKind.RecoveryChoice,
+                    isAutoDefaultable: false,
+                    isDismissible: false,
+                    isExternallyBlocked: true,
+                    questionFingerprint: $"retry-admission:{receipt.Fingerprint.Value}:environment",
+                    blockerFingerprint: receipt.Fingerprint.Value,
+                    recordDuplicateSuppression: false);
+                break;
+            case RetryAdmissionRoute.EvidenceLane:
+                RoutePreventedRetryToRole(goal, heldTask, AgentRole.Tester, receipt, marker);
+                break;
+            case RetryAdmissionRoute.UpstreamImplementation:
+                RoutePreventedRetryToRole(goal, heldTask, AgentRole.Developer, receipt, marker);
+                break;
+            case RetryAdmissionRoute.AcceptanceRegate:
+                RoutePreventedRetryToAcceptanceRegate(goal, heldTask, receipt, marker);
+                break;
+            case RetryAdmissionRoute.ReservationLease:
+                throw new InvalidOperationException("A reservation-lease observation must be handled before no-progress routing.");
+            case RetryAdmissionRoute.SameRole:
+                throw new InvalidOperationException("A prevented retry cannot route back to the same unchanged role context.");
+            default:
+                throw new InvalidOperationException($"Unsupported retry-admission route '{receipt.Route}'.");
+        }
+    }
+
+    private void RoutePreventedRetryToAcceptanceRegate(
+        Goal goal,
+        TaskSpec heldTask,
+        RetryAdmissionReceipt receipt,
+        string marker)
+    {
+        heldTask.SetRetryAdmissionHold(RetryAdmissionRoute.HumanClarification);
+        RequestHumanInputDeduplicated(
+            goal.Id,
+            heldTask.Id,
+            $"Retry admission selected acceptance re-gating, but a no-progress prevention cannot restore verification or mark work completed; operator review is required. {marker}",
+            HumanWaitKind.RecoveryChoice,
+            isAutoDefaultable: false,
+            isDismissible: false,
+            questionFingerprint: $"retry-admission:{receipt.Fingerprint.Value}:acceptance-regate",
+            blockerFingerprint: receipt.Fingerprint.Value,
+            recordDuplicateSuppression: false);
+    }
+
+    private void RoutePreventedRetryToRole(
+        Goal goal,
+        TaskSpec heldTask,
+        AgentRole targetRole,
+        RetryAdmissionReceipt receipt,
+        string marker)
+    {
+        var target = goal.Tasks
+            .Where(candidate => candidate.Id != heldTask.Id && candidate.RequiredRole == targetRole)
+            .OrderBy(candidate => candidate.Status is WorkTaskStatus.Failed or WorkTaskStatus.Completed ? 0 : 1)
+            .FirstOrDefault();
+        if (target is not null && target.Status is WorkTaskStatus.Failed or WorkTaskStatus.Completed)
+        {
+            ResetTaskForRetry(target, _clock.UtcNow, retryCause: receipt.Cause);
+            Append(goal, target.Id, ProgressKind.TaskRetried, $"{marker}; routed from held task {heldTask.Id.Value}.");
+        }
+
+        else if (target is null || target.Status == WorkTaskStatus.Cancelled)
+        {
+            heldTask.SetRetryAdmissionHold(RetryAdmissionRoute.HumanClarification);
+            RequestHumanInputDeduplicated(
+                goal.Id,
+                heldTask.Id,
+                $"Retry admission requires {targetRole} work, but no actionable role-feasible target task exists. {marker}",
+                HumanWaitKind.RecoveryChoice,
+                isAutoDefaultable: false,
+                isDismissible: false,
+                questionFingerprint: $"retry-admission:{receipt.Fingerprint.Value}:missing-{targetRole}",
+                blockerFingerprint: receipt.Fingerprint.Value,
+                recordDuplicateSuppression: false);
+        }
+
+        Append(
+            goal,
+            null,
+            ProgressKind.GoalPolicyDecision,
+            $"{marker}; targetRole={targetRole}; targetTask={target?.Id.Value ?? "unavailable"}; heldTask={heldTask.Id.Value}.");
+    }
+
     public void ReplacePreparedTaskDispatch(GoalId goalId, TaskId taskId, TaskDispatchRecord dispatch)
     {
         var goal = GetGoal(goalId);
@@ -1212,6 +1420,12 @@ public sealed partial class AgentOrchestratorKernel
         }
 
         task.RecordProcess(process);
+        var ownerlessAdmission = task.RetryAdmissionHistory.LastOrDefault(receipt =>
+            receipt.LinkedDispatchAt == task.LastDispatch.DispatchedAt &&
+            receipt.Decision is RetryAdmissionDecision.Allowed or RetryAdmissionDecision.ResumedReservation &&
+            string.IsNullOrWhiteSpace(receipt.ReservationOwnerId));
+        if (ownerlessAdmission is not null)
+            task.MarkRetryAdmissionStarted(task.LastDispatch.DispatchedAt, process.StartedAt);
         task.SetStatus(WorkTaskStatus.Running);
         goal.SetStatus(GoalStatus.Active);
         Append(goal, taskId, ProgressKind.TaskProcessStarted, $"Started process {process.ProcessId}: {process.Command}");
@@ -1278,7 +1492,11 @@ public sealed partial class AgentOrchestratorKernel
             $"Gracefully detached process {process.ProcessId}; a successor conductor may reconcile it.");
     }
 
-    public void RecordTaskProcessCancelled(GoalId goalId, TaskId taskId, TaskProcessRecord process)
+    public void RecordTaskProcessCancelled(
+        GoalId goalId,
+        TaskId taskId,
+        TaskProcessRecord process,
+        CancellationCandidateEvidence? candidateEvidence = null)
     {
         var goal = GetGoal(goalId);
         var task = goal.FindTask(taskId);
@@ -1293,6 +1511,19 @@ public sealed partial class AgentOrchestratorKernel
             throw new InvalidOperationException("Cancelled process record must have WasCancelled set.");
         }
 
+        candidateEvidence ??= CancellationCandidateEvidence.Indeterminate();
+        var provenCancelledCandidate = ValidateCancelledCandidateEvidence(task, candidateEvidence);
+        if (candidateEvidence.Kind == CancellationCandidateEvidenceKind.ConfirmedUnchanged &&
+            provenCancelledCandidate is null)
+        {
+            candidateEvidence = CancellationCandidateEvidence.Indeterminate(
+                "confirmed-unchanged evidence failed Core dispatch identity validation");
+        }
+        if (provenCancelledCandidate is not null)
+        {
+            task.SetDispatchResultCommit(provenCancelledCandidate);
+        }
+
         task.RecordProcess(process);
         if (process.WasCancelledByConductor)
         {
@@ -1302,8 +1533,39 @@ public sealed partial class AgentOrchestratorKernel
         {
             task.SetStatus(WorkTaskStatus.Cancelled);
         }
+        goal.RestoreAcceptanceFailureAfterRetryCancellation();
         Append(goal, taskId, ProgressKind.TaskCancelled, $"Cancelled process {process.ProcessId}: {process.Command}");
-        ReconcileRetainedDownstreamTasks(goal, task, _clock.UtcNow);
+        Append(
+            goal,
+            taskId,
+            ProgressKind.TaskNote,
+            $"CANCELLATION_CANDIDATE_EVIDENCE kind={candidateEvidence.Kind}; candidate={candidateEvidence.CandidateSha ?? "unknown"}; " +
+            $"reason={candidateEvidence.Reason}; git_receipt={candidateEvidence.GitReceipt}");
+        ReconcileRetainedDownstreamTasks(goal, task, _clock.UtcNow, provenCancelledCandidate);
+    }
+
+    private static string? ValidateCancelledCandidateEvidence(
+        TaskSpec task,
+        CancellationCandidateEvidence evidence)
+    {
+        if (evidence.Kind != CancellationCandidateEvidenceKind.ConfirmedUnchanged)
+        {
+            return null;
+        }
+
+        var dispatch = task.LastDispatch;
+        var candidate = evidence.CandidateSha?.Trim();
+        return task.RequiredRole == AgentRole.Developer &&
+               task.LatestRetryAt is not null &&
+               dispatch is not null &&
+               !string.IsNullOrWhiteSpace(candidate) &&
+               !string.IsNullOrWhiteSpace(dispatch.BaseCommit) &&
+               !string.IsNullOrWhiteSpace(dispatch.WorktreeHeadSha) &&
+               !string.IsNullOrWhiteSpace(dispatch.DirtyStateHash) &&
+               SameNonEmptyReviewedCommit(candidate, dispatch.BaseCommit) &&
+               SameNonEmptyReviewedCommit(candidate, dispatch.WorktreeHeadSha)
+            ? candidate
+            : null;
     }
 
     private bool TryCompleteTaskWithPassingVerification(Goal goal, TaskSpec task, string message)

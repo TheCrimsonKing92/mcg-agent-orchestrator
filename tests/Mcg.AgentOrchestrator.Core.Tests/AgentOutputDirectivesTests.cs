@@ -31,7 +31,8 @@ public sealed class AgentOutputDirectivesTests
             AgentOutputDirectives.WorkerResultTemplateLinesForRole(AgentRole.Reviewer),
             line =>
                 line.StartsWith("findings:", StringComparison.Ordinal) &&
-                line.Contains("category:spec-compliance|spec-defect|correctness", StringComparison.Ordinal));
+                line.Contains("category:spec-compliance|spec-defect|correctness", StringComparison.Ordinal) &&
+                line.Contains("|acceptance-owned", StringComparison.Ordinal));
         Assert.Contains(
             "criteria_verdicts",
             AgentOutputDirectives.RequiredWorkerResultFieldNamesForRole(AgentRole.Reviewer));

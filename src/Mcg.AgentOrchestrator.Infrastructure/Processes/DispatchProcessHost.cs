@@ -464,6 +464,7 @@ public static class DispatchProcessHost
         startInfo.Environment.Remove("CODEX_HOME");
         startInfo.Environment.Remove("CLAUDE_CONFIG_DIR");
         startInfo.Environment.Remove("GROK_HOME");
+        startInfo.Environment.Remove("HERMES_HOME");
 
         if (provider == WorkerSandboxProvider.Codex)
         {
@@ -488,6 +489,12 @@ public static class DispatchProcessHost
         if (provider == WorkerSandboxProvider.Grok)
         {
             SeedGrokEnvironment(startInfo, sandboxRoot, stderrPath);
+            return;
+        }
+
+        if (provider == WorkerSandboxProvider.Hermes)
+        {
+            SeedHermesEnvironment(startInfo, sandboxRoot);
         }
     }
 
@@ -1128,6 +1135,14 @@ public static void DropToLow() {
         startInfo.Environment["GROK_DISABLE_AUTOUPDATER"] = "1";
     }
 
+    internal static void SeedHermesEnvironment(ProcessStartInfo startInfo, string sandboxRoot)
+    {
+        var hermesHome = Path.Combine(sandboxRoot, $"hermes-home-{Guid.NewGuid():N}");
+        Directory.CreateDirectory(hermesHome);
+        startInfo.Environment["HERMES_HOME"] = hermesHome;
+        startInfo.Environment["HERMES_ACP_SKIP_CONFIGURED_MCP"] = "1";
+    }
+
     private static string ResolveGrokHomeDirectory() =>
         Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.UserProfile), ".grok");
 
@@ -1301,13 +1316,7 @@ public static void DropToLow() {
 
             var stdoutBytes = FileLength(parameters.StdoutPath);
             var stderrBytes = FileLength(parameters.StderrPath);
-            var ownedPids = GetHeartbeatOwnedProcessIds(workerGroup, worker);
-            var ownedProcessIdentities = heartbeatProcessIdentities.Capture(
-                Environment.ProcessId,
-                ownedPids,
-                () => workerGroup?.TryGetActiveProcessIds(out var currentOwnedPids) == true
-                    ? currentOwnedPids
-                    : null);
+            var (ownedPids, ownedProcessIdentities) = CaptureHeartbeatOwnership();
             var ownedCpuMs = ReadHeartbeatOwnedCpuMs(workerGroup, ownedPids);
             var childPid = SelectHeartbeatChildPid(worker, ownedPids);
             ObserveSelectedChild(childPid);
@@ -1365,6 +1374,25 @@ public static void DropToLow() {
             {
                 // Heartbeat is best-effort; never let it fail the dispatch.
             }
+        }
+
+        (IReadOnlyList<int> OwnedPids, IReadOnlyList<SpawnProcessIdentity> RecordedIdentities) CaptureHeartbeatOwnership()
+        {
+            var candidateOwnedPids = GetHeartbeatOwnedProcessIds(workerGroup, worker);
+            var candidateSet = candidateOwnedPids.ToHashSet();
+            var identitySnapshot = heartbeatProcessIdentities.Capture(
+                Environment.ProcessId,
+                candidateOwnedPids,
+                () => workerGroup?.TryGetActiveProcessIds(out var currentOwnedPids) == true
+                    ? currentOwnedPids
+                    : candidateOwnedPids);
+            var identityBoundOwnedPids = identitySnapshot.Current
+                .Where(identity => identity.ProcessId != Environment.ProcessId && candidateSet.Contains(identity.ProcessId))
+                .Select(identity => identity.ProcessId)
+                .Distinct()
+                .OrderBy(processId => processId)
+                .ToArray();
+            return (identityBoundOwnedPids, identitySnapshot.Recorded);
         }
 
         void WritePrepHeartbeat(string state)
@@ -1503,7 +1531,7 @@ public static void DropToLow() {
             var maxIdle = ResolveWatchdogTimeout("MCG_DISPATCH_MAX_IDLE_MIN", DefaultMaxIdle);
             while (!worker.WaitForExit((int)WatchdogProbeInterval.TotalMilliseconds))
             {
-                var ownedPids = GetHeartbeatOwnedProcessIds(workerGroup, worker);
+                var (ownedPids, _) = CaptureHeartbeatOwnership();
                 ObserveSelectedChild(SelectHeartbeatChildPid(worker, ownedPids));
                 var now = DateTimeOffset.UtcNow;
                 var runFor = now - startedAt;

@@ -3,7 +3,7 @@ namespace Mcg.AgentOrchestrator.Core;
 internal static class SdlcRolePromptRequirements
 {
     private const string IntakeRiskLabelsMarker = "risk labels:";
-    internal const int ReviewerComplexRequirementsMaxChars = 4356;
+    internal const int ReviewerComplexRequirementsMaxChars = 4371;
     internal const int ReviewerCompactRequirementsMaxChars = 3346;
 
     private const string ReviewerExhaustiveFindingsContract =
@@ -56,6 +56,7 @@ internal static class SdlcRolePromptRequirements
             AgentRole.Developer =>
             [
                 "## Developer Requirements",
+                "- Before source exploration, inspect the typed early-convergence decision. When it is eligible for the exact current candidate and cites fresh passed focused receipts, return those bounded receipts with a clean-worktree no-change result; do not replay history or manufacture edits.",
                 "- Implement only the requested behavior and keep edits scoped.",
                 "- Before editing, name the failing test and quote its assertion output.",
                 "- Report changed files and the behavior each change enables.",
@@ -94,7 +95,7 @@ internal static class SdlcRolePromptRequirements
                 "- Ignore generated bin/obj output unless the reviewed change explicitly targets generated artifacts.",
                 "- Challenge generic summaries by checking implementation evidence against verification evidence before accepting.",
                 "- A finding that needs executed focused test evidence may include `evidence_request:{selections:[{test_project,test_class}]}` regardless of category. Use only `Core.Tests`, `Infrastructure.Tests`, or `Dashboard.Tests`; never infer or encode a request in description prose.",
-                "- Classify findings with `spec-compliance`, `spec-defect`, `correctness`, `test-evidence`, `test-coverage`, `code-quality`, or `operator-owned`; mixed source/test findings are correctness work for Developer.",
+                "- Classify findings with `spec-compliance`, `spec-defect`, `correctness`, `test-evidence`, `test-coverage`, `code-quality`, `operator-owned`, or `acceptance-owned`; mixed source/test findings are correctness work for Developer.",
                 "- Treat the structured Review Convergence Scope as authoritative: re-check OPEN findings and net-new diff code; carry RESOLVED findings without re-review unless this round's diff touched the exact structural anchor.",
                 "- Emit one-line `findings` JSON with stable_id, state, severity, category, structural location, and description; missing severity is blocking and missing category unspecified. Reuse a carried stable_id at its current location if the round diff touched its prior anchor; otherwise retain its prior location. Emit exact `touched_anchors`; new-code defects get new stable IDs.",
                 ReviewerExhaustiveFindingsContract,
@@ -196,6 +197,7 @@ internal static class SdlcRolePromptRequirements
             AgentRole.Developer =>
             [
                 "## Developer Requirements",
+                "- First honor an eligible typed early-convergence decision for the exact candidate by returning its passed focused receipts without replaying history or manufacturing edits.",
                 "- Keep edits scoped and report changed files plus behavior enabled.",
                 "- Before editing, name the failing test and quote its assertion output.",
                 "- Run focused verification when practical and name exact commands.",
@@ -224,7 +226,7 @@ internal static class SdlcRolePromptRequirements
                 "- Review findings first by severity with evidence. Cover every in-scope file before the first verdict; state gaps. Later SHALLOW findings on unchanged code are coverage defects; deeper concurrency/durability/fault analysis is desired. Never withhold an identified finding.",
                 "- Use git diff main...HEAD for scope. Branch-behind-main alone is NOT a blocker; block only on concrete conflict, semantic overlap, or a non-applying diff.",
                 "- A finding that needs executed focused test evidence may include `evidence_request:{selections:[{test_project,test_class}]}` regardless of category. Use only `Core.Tests`, `Infrastructure.Tests`, or `Dashboard.Tests`; never infer or encode a request in description prose.",
-                "- Classify findings as `spec-compliance`, `spec-defect`, `correctness`, `test-evidence`, `test-coverage`, `code-quality`, or `operator-owned`.",
+                "- Categories: `spec-compliance`, `spec-defect`, `correctness`, `test-evidence`, `test-coverage`, `code-quality`, `operator-owned`, or `acceptance-owned`.",
                 "- Treat Review Convergence Scope as authoritative: re-check OPEN findings and new diff code; carry RESOLVED findings unless their exact anchor was touched. Keep carried IDs at their current touched location, else their prior location. Findings require severity/category. Emit `touched_anchors`; new-code defects get new IDs.",
                 ReviewerExhaustiveFindingsContract,
                 ReviewerDefectContract,

@@ -6,6 +6,7 @@ public sealed class TaskSpec
 
     private readonly CappedVerificationHistory _verificationHistory = [];
     private readonly List<TaskDispatchRecord> _dispatchHistory = [];
+    private readonly List<RetryAdmissionReceipt> _retryAdmissionHistory = [];
 
     public TaskSpec(TaskId id, string description, AgentRole requiredRole, string? verificationPlan = null)
     {
@@ -35,11 +36,17 @@ public sealed class TaskSpec
 
     public IReadOnlyList<string> CriterionRetryFeedback { get; private set; } = [];
 
+    public AcceptedRetryFeedback? AcceptedRetryFeedback { get; private set; }
+
     public int EmptyOutputRetryCount { get; private set; }
 
     public DateTimeOffset? LatestRetryAt { get; private set; }
 
     public RetryRoundKind? PendingRetryRoundKind { get; private set; }
+
+    public ReviewFindingRepairCheckpoint? PendingReviewFindingRepairCheckpoint { get; private set; }
+
+    public RetryCause PendingRetryCause { get; private set; } = RetryCause.Unknown;
 
     public WorkTaskStatus Status { get; private set; } = WorkTaskStatus.Pending;
 
@@ -54,6 +61,10 @@ public sealed class TaskSpec
     public TaskDispatchRecord? LastDispatch { get; private set; }
 
     public IReadOnlyList<TaskDispatchRecord> DispatchHistory => _dispatchHistory;
+
+    public IReadOnlyList<RetryAdmissionReceipt> RetryAdmissionHistory => _retryAdmissionHistory;
+
+    public RetryAdmissionRoute? RetryAdmissionHoldRoute { get; private set; }
 
     public TaskProcessRecord? LastProcess { get; private set; }
 
@@ -242,7 +253,12 @@ public sealed class TaskSpec
             PreReviewEvidenceReceipt,
             InterruptedDispatchRecoveryId,
             WasCancelledByConductor,
-            _dispatchHistory.Select(ToDispatchSnapshot).ToArray());
+            _dispatchHistory.Select(ToDispatchSnapshot).ToArray(),
+            PendingRetryCause,
+            _retryAdmissionHistory.ToArray(),
+            RetryAdmissionHoldRoute,
+            PendingReviewFindingRepairCheckpoint,
+            AcceptedRetryFeedback);
     }
 
     internal static TaskSpec FromSnapshot(TaskSnapshot snapshot)
@@ -351,12 +367,22 @@ public sealed class TaskSpec
                 PlannerCandidateDivergence: snapshot.LastVerification.PlannerCandidateDivergence,
                 CompletionVerdictVerifiedSuccess: snapshot.LastVerification.CompletionVerdictVerifiedSuccess,
                 CompletionVerdictRule: snapshot.LastVerification.CompletionVerdictRule);
-            if (!task._verificationHistory.Contains(latestVerification))
+            var historyIndex = task._verificationHistory.FindLastIndex(
+                verification => verification.HasSameRoundIdentity(latestVerification));
+            if (historyIndex < 0)
             {
                 task.RestoreVerificationHistory(latestVerification);
+                historyIndex = task._verificationHistory.FindLastIndex(
+                    verification => verification.HasSameRoundIdentity(latestVerification));
+            }
+            else
+            {
+                var mergedVerification = latestVerification.MergeSameRoundEnrichment(
+                    task._verificationHistory[historyIndex]);
+                task._verificationHistory[historyIndex] = mergedVerification;
             }
 
-            task.LastVerification = latestVerification;
+            task.LastVerification = task._verificationHistory[historyIndex];
         }
 
         if (snapshot.DispatchHistory is { Count: > 0 })
@@ -366,6 +392,9 @@ public sealed class TaskSpec
                 task._dispatchHistory.Add(FromDispatchSnapshot(dispatch));
             }
         }
+
+        foreach (var receipt in snapshot.RetryAdmissionHistory ?? [])
+            task.RecordRetryAdmission(receipt);
 
         if (snapshot.LastDispatch is not null)
         {
@@ -422,9 +451,13 @@ public sealed class TaskSpec
             snapshot.SubscriptionLimitReviewedAt,
             snapshot.SubscriptionLimitReviewedFailureCount);
         task.RestoreCriterionRetryState(snapshot.CriterionRetryCount, snapshot.CriterionRetryFeedback);
+        task.AcceptedRetryFeedback = snapshot.AcceptedRetryFeedback;
         task.EmptyOutputRetryCount = Math.Max(0, snapshot.EmptyOutputRetryCount);
         task.LatestRetryAt = snapshot.LatestRetryAt;
         task.PendingRetryRoundKind = snapshot.PendingRetryRoundKind;
+        task.PendingReviewFindingRepairCheckpoint = snapshot.PendingReviewFindingRepairCheckpoint;
+        task.PendingRetryCause = snapshot.PendingRetryCause;
+        task.RetryAdmissionHoldRoute = snapshot.RetryAdmissionHoldRoute;
         task.PreReviewEvidenceReceipt = snapshot.PreReviewEvidenceReceipt;
         task.InterruptedDispatchRecoveryId = snapshot.InterruptedDispatchRecoveryId;
         task.WasCancelledByConductor = snapshot.WasCancelledByConductor;
@@ -448,6 +481,7 @@ public sealed class TaskSpec
     {
         SubscriptionRetryAfter = null;
         PendingRetryRoundKind = null;
+        PendingReviewFindingRepairCheckpoint = null;
         // EmptyOutputRetryCount is the shared bounded transient-dispatch retry budget. It covers
         // missing worker output, sandbox preflight failures, and structured Tester inconclusive
         // results without consuming Developer or Reviewer convergence allowances.
@@ -472,8 +506,25 @@ public sealed class TaskSpec
         LastVerification = verification;
     }
 
-    internal void RestoreVerificationHistory(TaskVerificationRecord verification) =>
+    internal void RestoreVerificationHistory(TaskVerificationRecord verification)
+    {
+        var historyIndex = _verificationHistory.FindLastIndex(
+            item => item.HasSameRoundIdentity(verification));
+        if (historyIndex >= 0)
+        {
+            // Verification enrichments (finding evidence, completion verdicts, and model-fit notes)
+            // mutate the latest round without changing its durable round identity. Old snapshots could
+            // contain that same round once per load because LastVerification was deserialized separately.
+            // Merge monotonically so a stale plain copy cannot erase a receipt or verdict from
+            // an earlier copy. When both copies carry a later non-null enrichment, the incoming
+            // history occurrence is the causal authority.
+            _verificationHistory[historyIndex] =
+                _verificationHistory[historyIndex].MergeSameRoundEnrichment(verification);
+            return;
+        }
+
         _verificationHistory.Add(verification, RequiredRole);
+    }
 
     internal void ClearLatestVerification() => LastVerification = null;
 
@@ -490,7 +541,8 @@ public sealed class TaskSpec
             CompletionVerdictVerifiedSuccess = verifiedSuccess,
             CompletionVerdictRule = string.IsNullOrWhiteSpace(rule) ? null : rule.Trim()
         };
-        var historyIndex = _verificationHistory.FindLastIndex(item => ReferenceEquals(item, prior));
+        var historyIndex = _verificationHistory.FindLastIndex(item =>
+            ReferenceEquals(item, prior) || item.HasSameRoundIdentity(prior));
         if (historyIndex >= 0)
         {
             _verificationHistory[historyIndex] = updated;
@@ -562,7 +614,8 @@ public sealed class TaskSpec
             MergedReviewFindings = findings,
             FindingEvidenceReceipts = receipts
         };
-        var historyIndex = _verificationHistory.FindLastIndex(item => ReferenceEquals(item, prior));
+        var historyIndex = _verificationHistory.FindLastIndex(item =>
+            ReferenceEquals(item, prior) || item.HasSameRoundIdentity(prior));
         if (historyIndex >= 0)
         {
             _verificationHistory[historyIndex] = updated;
@@ -586,10 +639,113 @@ public sealed class TaskSpec
         return true;
     }
 
-    internal void RecordRetry(DateTimeOffset retriedAt, RetryRoundKind? retryRoundKind = null)
+    internal void RecordRetry(
+        DateTimeOffset retriedAt,
+        RetryCause retryCause,
+        RetryRoundKind? retryRoundKind = null)
     {
         LatestRetryAt = retriedAt;
         PendingRetryRoundKind = retryRoundKind;
+        var priorVerification = _verificationHistory.LastOrDefault();
+        PendingReviewFindingRepairCheckpoint = retryRoundKind == RetryRoundKind.Mechanical &&
+                                               priorVerification?.ReviewFindingContractViolation is not null
+            ? ReviewFindingRepairCheckpoint.Create(priorVerification)
+            : null;
+        PendingRetryCause = retryCause;
+        RetryAdmissionHoldRoute = null;
+    }
+
+    internal bool RecordRetryAdmission(RetryAdmissionReceipt receipt)
+    {
+        ArgumentNullException.ThrowIfNull(receipt);
+        if (_retryAdmissionHistory.Any(existing =>
+                string.Equals(existing.ReceiptId, receipt.ReceiptId, StringComparison.Ordinal)))
+        {
+            return false;
+        }
+
+        _retryAdmissionHistory.Add(receipt);
+        return true;
+    }
+
+    internal void SetRetryAdmissionHold(RetryAdmissionRoute? route) => RetryAdmissionHoldRoute = route;
+
+    internal void BindPreparedDispatch(TaskDispatchRecord dispatch)
+    {
+        ArgumentNullException.ThrowIfNull(dispatch);
+        if (LastDispatch is not null && LastDispatch.DispatchedAt == dispatch.DispatchedAt)
+        {
+            if (LastDispatch != dispatch)
+                ReplaceLastDispatch(dispatch);
+            SetStatus(WorkTaskStatus.Running);
+            return;
+        }
+
+        if (_dispatchHistory.Any(existing => existing.DispatchedAt >= dispatch.DispatchedAt))
+            throw new InvalidOperationException("Prepared retry dispatch identity is stale or conflicts with durable dispatch history.");
+
+        RecordDispatch(dispatch);
+        if (LastDispatch?.DispatchedAt != dispatch.DispatchedAt)
+            throw new InvalidOperationException("Prepared retry dispatch identity changed while binding the admission reservation.");
+        SetStatus(WorkTaskStatus.Running);
+    }
+
+    internal void MarkRetryAdmissionStarted(DateTimeOffset linkedDispatchAt, DateTimeOffset workerStartedAt)
+    {
+        var index = _retryAdmissionHistory.FindLastIndex(receipt =>
+            receipt.LinkedDispatchAt == linkedDispatchAt &&
+            receipt.Decision is RetryAdmissionDecision.Allowed or RetryAdmissionDecision.ResumedReservation);
+        if (index >= 0)
+            _retryAdmissionHistory[index] = _retryAdmissionHistory[index] with { WorkerStartedAt = workerStartedAt };
+        RetryAdmissionHoldRoute = null;
+    }
+
+    internal bool TryClaimRetryAdmissionStart(
+        DateTimeOffset linkedDispatchAt,
+        string reservationOwnerId,
+        DateTimeOffset workerStartedAt)
+    {
+        var index = _retryAdmissionHistory.FindLastIndex(receipt =>
+            receipt.LinkedDispatchAt == linkedDispatchAt &&
+            receipt.Decision is RetryAdmissionDecision.Allowed or RetryAdmissionDecision.ResumedReservation);
+        if (index < 0)
+            return false;
+
+        var receipt = _retryAdmissionHistory[index];
+        if (receipt.WorkerStartedAt is not null ||
+            receipt.WorkerStartClaimedAt is not null ||
+            !string.Equals(receipt.ReservationOwnerId, reservationOwnerId, StringComparison.Ordinal))
+        {
+            return false;
+        }
+
+        _retryAdmissionHistory[index] = receipt with { WorkerStartClaimedAt = workerStartedAt };
+        RetryAdmissionHoldRoute = null;
+        return true;
+    }
+
+    internal bool TryConfirmRetryAdmissionStart(
+        DateTimeOffset linkedDispatchAt,
+        string reservationOwnerId,
+        DateTimeOffset workerStartedAt)
+    {
+        var index = _retryAdmissionHistory.FindLastIndex(receipt =>
+            receipt.LinkedDispatchAt == linkedDispatchAt &&
+            receipt.Decision is RetryAdmissionDecision.Allowed or RetryAdmissionDecision.ResumedReservation);
+        if (index < 0)
+            return false;
+
+        var receipt = _retryAdmissionHistory[index];
+        if (receipt.WorkerStartedAt is not null ||
+            receipt.WorkerStartClaimedAt is null ||
+            !string.Equals(receipt.ReservationOwnerId, reservationOwnerId, StringComparison.Ordinal))
+        {
+            return false;
+        }
+
+        _retryAdmissionHistory[index] = receipt with { WorkerStartedAt = workerStartedAt };
+        RetryAdmissionHoldRoute = null;
+        return true;
     }
 
     internal void RecordSubscriptionLimitReview(string? note, DateTimeOffset? reviewedAt, int failureCount)
@@ -606,11 +762,19 @@ public sealed class TaskSpec
             .Where(item => item.Length > 0)
             .Distinct(StringComparer.Ordinal)
             .ToArray();
+        AcceptedRetryFeedback = null;
     }
+
+    internal void RecordAcceptedRetryFeedback(string message, DateTimeOffset acceptedAt) =>
+        AcceptedRetryFeedback = new AcceptedRetryFeedback(RequireText(message, nameof(message)), acceptedAt);
 
     internal void IncrementCriterionRetryCount() => CriterionRetryCount++;
 
-    internal void ClearCriterionRetryFeedback() => CriterionRetryFeedback = [];
+    internal void ClearCriterionRetryFeedback()
+    {
+        CriterionRetryFeedback = [];
+        AcceptedRetryFeedback = null;
+    }
 
     private void RestoreCriterionRetryState(int retryCount, IReadOnlyList<string>? feedback)
     {
@@ -747,7 +911,10 @@ public sealed class TaskSpec
         }
     }
 
-    internal void RecordProcess(TaskProcessRecord process) => LastProcess = process;
+    internal void RecordProcess(TaskProcessRecord process)
+    {
+        LastProcess = process;
+    }
 
     private static TaskDispatchSnapshot ToDispatchSnapshot(TaskDispatchRecord dispatch) => new(
         dispatch.WorkerName,
@@ -778,7 +945,9 @@ public sealed class TaskSpec
         dispatch.ReviewFindingTouchProofDiagnostic,
         dispatch.ReviewRetryCap,
         dispatch.ContextPackageReceipt,
-        dispatch.PlannerSampleCount);
+        dispatch.PlannerSampleCount,
+        dispatch.RetryContextFingerprint,
+        dispatch.PaidRoute);
 
     private static TaskDispatchRecord FromDispatchSnapshot(TaskDispatchSnapshot dispatch) => new(
         dispatch.WorkerName,
@@ -809,7 +978,9 @@ public sealed class TaskSpec
         dispatch.ReviewFindingTouchProofDiagnostic,
         dispatch.ReviewRetryCap,
         dispatch.ContextPackageReceipt,
-        dispatch.PlannerSampleCount);
+        dispatch.PlannerSampleCount,
+        dispatch.RetryContextFingerprint,
+        dispatch.PaidRoute);
 
     private static string? NormalizeOptional(string? value) =>
         string.IsNullOrWhiteSpace(value) ? null : value.Trim();

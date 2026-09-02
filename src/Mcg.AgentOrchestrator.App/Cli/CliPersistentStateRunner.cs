@@ -554,6 +554,7 @@ internal static class CliPersistentStateRunner
             "gate-status" or "acceptance-engine" or "run-event" or
             "project" => true,
             "trial-compare" => !TrialCompareCliCommand.RequiresHistoricalState(args),
+            "hermes-acp-trial" => true,
             _ => false,
         };
     }
@@ -937,7 +938,7 @@ internal static class CliPersistentStateRunner
         {
             var watchGoalId = ResolveConductWatchGoalId(args, kernel, currentGoal, stateRepository);
             var sweepKernel = LoadConductLoopSweepKernel(stateRepository, kernel, workspace.ExecutionDirectory, watchGoalId);
-            sweep = TerminalGoalSweep.Run(sweepKernel, workspace.ExecutionDirectory, watchGoalId);
+            sweep = TerminalGoalSweep.Run(sweepKernel, workspace.ExecutionDirectory, watchGoalId, orchestratorDirectory: workspace.OrchestratorDirectory);
             var metadataOnlyExcludedGoalCount = CountMetadataOnlyTerminalSweepExclusions(
                 stateRepository,
                 workspace.ExecutionDirectory,
@@ -1738,7 +1739,8 @@ internal static class CliPersistentStateRunner
         return new RetryOperatorIntentPayload(
             command.Text ?? throw new InvalidOperationException("Prepared retry command is missing text."),
             command.RetryRoundKind,
-            command.RetryPolicy.Name);
+            command.RetryPolicy.Name,
+            command.RetryCause);
     }
 
     private static void PrintOperatorIntentStatus(
@@ -3800,7 +3802,7 @@ internal static class CliPersistentStateRunner
         var initialGoalJson = JsonSerializer.Serialize(initialGoalSnapshot);
 
         var reconcileStarted = System.Diagnostics.Stopwatch.StartNew();
-        var targetSweep = TerminalGoalSweep.Run(kernel, workspace.ExecutionDirectory, goalId);
+        var targetSweep = TerminalGoalSweep.Run(kernel, workspace.ExecutionDirectory, goalId, orchestratorDirectory: workspace.OrchestratorDirectory);
         reconcileStarted.Stop();
         ConsoleViews.PrintTerminalGoalSweep(targetSweep);
         TerminalGoalSweepAttention.Surface(kernel, targetSweep, workspace.OrchestratorDirectory, goalId);

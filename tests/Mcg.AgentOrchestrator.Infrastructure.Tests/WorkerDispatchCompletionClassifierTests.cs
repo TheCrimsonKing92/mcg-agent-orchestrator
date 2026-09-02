@@ -61,6 +61,66 @@ public sealed class WorkerDispatchCompletionClassifierTests
     }
 
     [Xunit.Fact]
+    public void DeveloperNoChangeRequiresCandidateBoundTypedReceiptAndPassingWorkerResult()
+    {
+        var classifier = CreateClassifier();
+        var candidate = new string('c', 40);
+        var kernel = new AgentOrchestratorKernel();
+        var developer = new TaskSpec(TaskId.New(), "Implement the work.", AgentRole.Developer);
+        var goal = kernel.CreateGoal("Converge without edits", [developer]);
+        kernel.ActivateGoal(goal.Id, AgentCatalog.Default().Agents);
+        kernel.RetryTask(goal.Id, developer.Id, "Retry current reviewed candidate after focused evidence.");
+        var evidenceHash = new string('a', 64);
+        kernel.RecordTaskDispatch(goal.Id, developer.Id, new TaskDispatchRecord(
+            "codex-cli",
+            "codex exec",
+            "C:\\repo",
+            DateTimeOffset.Parse("2026-08-30T00:00:00Z"),
+            BaseCommit: candidate,
+            ContextPackageReceipt: new WorkerContextPackageReceipt(
+                "ctxpkg-test",
+                [new WorkerContextSectionReceipt(
+                    $"goal/review-finding-receipts/{evidenceHash}.json",
+                    1,
+                    1,
+                    evidenceHash,
+                    ContextDeliveryMode.OnDemandFile,
+                    ContextContractVersion.V1.Value,
+                    [AgentRole.Developer])],
+                ProviderUsageValue.Unknown("test"),
+                ProviderUsageValue.Unknown("test"),
+                ProviderUsageValue.Unknown("test"),
+                EarlyConvergenceEligible: true,
+                EarlyConvergenceCandidateSha: candidate,
+                EarlyConvergenceReceiptHashes: [evidenceHash])));
+        var passing = "NO_CHANGE: current candidate already satisfies the blocking finding.\n" +
+            WorkerResultBlock("none", "Invoke-TestSummary", "pass - focused verification completed");
+        var deferred = WorkerResultBlock("none", "none", "deferred - acceptance gate");
+
+        Xunit.Assert.True(classifier.AllowsNoChangeCompletion(developer, passing, string.Empty));
+        Xunit.Assert.False(classifier.AllowsNoChangeCompletion(developer, deferred, string.Empty));
+
+        var staleCandidate = passing.Replace(candidate, new string('d', 40), StringComparison.Ordinal);
+        kernel.RecordDispatchContextPackageReceipt(
+            goal.Id,
+            developer.Id,
+            developer.LastDispatch!.DispatchedAt,
+            developer.LastDispatch.ContextPackageReceipt! with { EarlyConvergenceCandidateSha = new string('d', 40) });
+        Xunit.Assert.False(classifier.AllowsNoChangeCompletion(developer, staleCandidate, string.Empty));
+
+        kernel.RecordDispatchContextPackageReceipt(
+            goal.Id,
+            developer.Id,
+            developer.LastDispatch!.DispatchedAt,
+            developer.LastDispatch.ContextPackageReceipt! with
+            {
+                EarlyConvergenceCandidateSha = candidate,
+                EarlyConvergenceReceiptHashes = [new string('b', 64)]
+            });
+        Xunit.Assert.False(classifier.AllowsNoChangeCompletion(developer, passing, string.Empty));
+    }
+
+    [Xunit.Fact]
     public void VerificationClassificationDistinguishesPassingAndFailingWorkerResults()
     {
         var classifier = CreateClassifier();

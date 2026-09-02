@@ -1697,6 +1697,50 @@ public sealed class DispatchProcessHostTests
     }
 
     [Xunit.Fact]
+    public void DispatchProcessIdentityEvidence_MissingOrRecycledIdentityNeverEstablishesOwnership()
+    {
+        const int processId = 43_316;
+        var recorded = new SpawnProcessIdentity(
+            processId,
+            DateTimeOffset.Parse("2026-08-24T14:20:35Z"),
+            @"C:\workers\claude.exe");
+        var recycled = recorded with { StartedAt = recorded.StartedAt.AddDays(3) };
+
+        Assert.False(DispatchProcessIdentityEvidence.IsRecordedOwner(processId, [], _ => recycled));
+        Assert.False(DispatchProcessIdentityEvidence.IsRecordedOwner(processId, [recorded], _ => recycled));
+        Assert.False(DispatchProcessIdentityEvidence.IsRecordedOwner(processId, [recorded], _ => null));
+        Assert.True(DispatchProcessIdentityEvidence.IsRecordedOwner(processId, [recorded], _ => recorded));
+    }
+
+    [Xunit.Fact]
+    public void DispatchHeartbeatIdentityTracker_RecordsRecycledCurrentOwnerWithoutErasingHistory()
+    {
+        const int hostProcessId = 10;
+        const int workerProcessId = 20;
+        var host = new SpawnProcessIdentity(hostProcessId, DateTimeOffset.Parse("2026-08-30T05:48:32Z"), @"C:\host.exe");
+        var worker = new SpawnProcessIdentity(workerProcessId, DateTimeOffset.Parse("2026-08-30T05:48:33Z"), @"C:\worker.exe");
+        var recycled = worker with { StartedAt = worker.StartedAt.AddMinutes(30) };
+        var tracker = new DispatchHeartbeatProcessIdentityTracker();
+
+        var first = tracker.Capture(
+            hostProcessId,
+            [workerProcessId],
+            () => [workerProcessId],
+            processId => processId == hostProcessId ? host : worker);
+        var second = tracker.Capture(
+            hostProcessId,
+            [workerProcessId],
+            () => [workerProcessId],
+            processId => processId == hostProcessId ? host : recycled);
+
+        Assert.Contains(worker, first.Current);
+        Assert.Contains(recycled, second.Current);
+        Assert.Contains(worker, second.Recorded);
+        Assert.Contains(recycled, second.Recorded);
+        Assert.All(second.Current, identity => Assert.Contains(identity, second.Recorded));
+    }
+
+    [Xunit.Fact]
     public void DispatchProcessHost_CaptureHeartbeatProcessIdentitiesIncludesHostIdentity()
     {
         var hostIdentity = new SpawnProcessIdentity(

@@ -1,6 +1,5 @@
 using System.Diagnostics;
 using Mcg.AgentOrchestrator.App.Cli;
-using Mcg.AgentOrchestrator.App.Processes;
 using Mcg.AgentOrchestrator.Core;
 using Mcg.AgentOrchestrator.Core.Conductor;
 using Mcg.AgentOrchestrator.Infrastructure;
@@ -15,9 +14,10 @@ internal sealed class ConductorWatchProgressReporter
     private readonly Func<TaskProcessRecord, DateTimeOffset, DispatchHeartbeatStatus> _readHeartbeat;
     private readonly Func<string?, string?, DispatchLiveChangeSnapshot> _readChanges;
     private readonly Func<int, bool> _isProcessAlive;
+    private readonly Func<int, SpawnProcessIdentity?> _readProcessIdentity;
     private readonly Func<DateTimeOffset> _now;
     private readonly int _loopProcessId;
-    private readonly int _launcherProcessId;
+    private readonly int? _launcherProcessId;
     private readonly Dictionary<string, EmittedSnapshot> _lastEmitted = new(StringComparer.Ordinal);
 
     public ConductorWatchProgressReporter(
@@ -26,14 +26,18 @@ internal sealed class ConductorWatchProgressReporter
         Func<int, bool>? isProcessAlive = null,
         Func<DateTimeOffset>? now = null,
         int? loopProcessId = null,
-        int? launcherProcessId = null)
+        int? launcherProcessId = null,
+        Func<int, int?>? readParentProcessId = null,
+        Func<int, SpawnProcessIdentity?>? readProcessIdentity = null)
     {
         _readHeartbeat = readHeartbeat ?? ((process, observedAt) => ProcessLogReader.ReadHeartbeat(process, observedAt));
         _readChanges = readChanges ?? ((worktreePath, baseCommit) => GoalChangesReader.BuildLiveDispatchSnapshot(worktreePath, baseCommit));
         _isProcessAlive = isProcessAlive ?? IsProcessAlive;
+        _readProcessIdentity = readProcessIdentity ?? DispatchProcessIdentityEvidence.ReadCurrent;
         _now = now ?? (() => DateTimeOffset.UtcNow);
         _loopProcessId = loopProcessId ?? Environment.ProcessId;
-        _launcherProcessId = launcherProcessId ?? ProcessParentIdResolver.TryGetParentProcessId(_loopProcessId);
+        _launcherProcessId = launcherProcessId ??
+            (readParentProcessId ?? ProcessParentIdResolver.TryGetParentProcessId)(_loopProcessId);
     }
 
     public IReadOnlyList<string> BuildLines(
@@ -138,7 +142,7 @@ internal sealed class ConductorWatchProgressReporter
             ? null
             : _readHeartbeat(process, now);
         var liveness = ResolveLiveness(process, heartbeat);
-        var workerPid = ResolveWorkerPid(process);
+        var workerPid = ResolveWorkerPid(process, heartbeat);
         var outputBytes = (heartbeat?.StandardOutputBytes ?? 0) + (heartbeat?.StandardErrorBytes ?? 0);
         var stdoutBytes = heartbeat?.StandardOutputBytes ?? 0;
         var lastProgressAge = heartbeat?.IdleDuration ?? (now - dispatch.DispatchedAt);
@@ -169,18 +173,7 @@ internal sealed class ConductorWatchProgressReporter
             return "NO LIVE WORKER";
         }
 
-        var pids = heartbeat?.OwnedProcessIds is { Count: > 0 }
-            ? heartbeat.OwnedProcessIds
-            : heartbeat?.ChildProcessId is { } childPid
-                ? [childPid]
-                : process.TrackedProcessIds;
-
-        if (pids.Count == 0)
-        {
-            pids = [process.ProcessId];
-        }
-
-        if (pids.Any(_isProcessAlive))
+        if (ResolveLiveIdentityBoundProcessIds(heartbeat).Count > 0)
         {
             return "alive";
         }
@@ -188,14 +181,34 @@ internal sealed class ConductorWatchProgressReporter
         return process.IsRunning ? "NO LIVE WORKER" : "exiting";
     }
 
-    private int? ResolveWorkerPid(TaskProcessRecord? process)
+    private int? ResolveWorkerPid(TaskProcessRecord? process, DispatchHeartbeatStatus? heartbeat)
     {
-        var processId = process?.ProcessId;
-        return processId is > 0 &&
-               processId != _loopProcessId &&
-               processId != _launcherProcessId
-            ? processId
-            : null;
+        if (process is null)
+        {
+            return null;
+        }
+
+        return ResolveLiveIdentityBoundProcessIds(heartbeat)
+            .FirstOrDefault(processId => processId != _loopProcessId && processId != _launcherProcessId) is > 0 and var liveProcessId
+                ? liveProcessId
+                : null;
+    }
+
+    private IReadOnlyList<int> ResolveLiveIdentityBoundProcessIds(DispatchHeartbeatStatus? heartbeat)
+    {
+        if (heartbeat is not { IsAvailable: true })
+        {
+            return [];
+        }
+
+        var candidates = heartbeat.OwnedProcessIds
+            .Concat(heartbeat.ChildProcessId is > 0 ? [heartbeat.ChildProcessId.Value] : [])
+            .Concat(heartbeat.ProcessId > 0 ? [heartbeat.ProcessId] : []);
+        return DispatchProcessIdentityEvidence.GetLiveRecordedOwnerProcessIds(
+            candidates,
+            heartbeat.OwnedProcessIdentities,
+            _isProcessAlive,
+            _readProcessIdentity);
     }
 
     private static string ResolveProgressState(

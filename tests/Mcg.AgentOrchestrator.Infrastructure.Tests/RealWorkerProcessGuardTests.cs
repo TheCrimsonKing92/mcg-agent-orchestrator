@@ -39,6 +39,165 @@ public sealed class RealWorkerProcessGuardTests
         Assert.Contains("WORKER_RESULT:", rewritten, StringComparison.Ordinal);
     }
 
+    [Xunit.Fact(DisplayName = "Guard ignores scoped real worker outside test host process tree")]
+    public void GuardIgnoresScopedRealWorkerOutsideTestHostProcessTree()
+    {
+        const int ownerProcessId = 100;
+        const int ownedHarmlessProcessId = 101;
+        const int unrelatedWorkerProcessId = 300;
+        var ownerStartedAt = DateTimeOffset.Parse("2026-09-01T12:00:00Z");
+        var snapshot = new ProcessCommandLineSnapshot(new Dictionary<int, ProcessInspectionRecord>
+        {
+            [ownerProcessId] = AvailableProcess(
+                ownerProcessId,
+                parentProcessId: 50,
+                ownerStartedAt,
+                "dotnet Mcg.AgentOrchestrator.Infrastructure.Tests.dll"),
+            [ownedHarmlessProcessId] = AvailableProcess(
+                ownedHarmlessProcessId,
+                ownerProcessId,
+                ownerStartedAt.AddSeconds(1),
+                "pwsh -Command Write-Output C:\\temp\\mcg-orchestrator-tests\\fixture"),
+            [unrelatedWorkerProcessId] = AvailableProcess(
+                unrelatedWorkerProcessId,
+                parentProcessId: 200,
+                ownerStartedAt.AddSeconds(2),
+                "pwsh -Command codex exec --cd C:\\temp\\mcg-tests\\p640\\.orchestrator-worktrees\\unrelated")
+        });
+
+        var matches = RealWorkerProcessGuard.FindCurrentMatches(
+            ownerProcessId,
+            snapshot,
+            ["C:\\temp\\mcg-tests\\p64"],
+            out var commandLineEnumerationAvailable);
+
+        Assert.True(commandLineEnumerationAvailable);
+        Assert.Empty(matches);
+    }
+
+    [Xunit.Fact(DisplayName = "Guard discovers current test host process temp ownership token")]
+    public void GuardDiscoversCurrentTestHostProcessTempOwnershipToken()
+    {
+        if (!OperatingSystem.IsWindows())
+        {
+            return;
+        }
+
+        var currentTempRoot = Path.TrimEndingDirectorySeparator(Path.GetTempPath());
+        var ownedRoots = RealWorkerProcessGuard.FindOwnedProcessTempRoots(Environment.ProcessId);
+
+        Assert.Contains(
+            ownedRoots,
+            root => string.Equals(root, currentTempRoot, StringComparison.OrdinalIgnoreCase));
+    }
+
+    [Xunit.Fact(DisplayName = "Guard retains scoped real worker detection for test host descendant")]
+    public void GuardRetainsScopedRealWorkerDetectionForTestHostDescendant()
+    {
+        const int ownerProcessId = 100;
+        const int ownedWorkerProcessId = 101;
+        var ownerStartedAt = DateTimeOffset.Parse("2026-09-01T12:00:00Z");
+        const string workerCommand =
+            "pwsh -Command codex exec --cd C:\\temp\\mcg-orchestrator-tests\\fixture\\.orchestrator-worktrees\\goal";
+        var snapshot = new ProcessCommandLineSnapshot(new Dictionary<int, ProcessInspectionRecord>
+        {
+            [ownerProcessId] = AvailableProcess(
+                ownerProcessId,
+                parentProcessId: 50,
+                ownerStartedAt,
+                "dotnet Mcg.AgentOrchestrator.Infrastructure.Tests.dll"),
+            [ownedWorkerProcessId] = AvailableProcess(
+                ownedWorkerProcessId,
+                ownerProcessId,
+                ownerStartedAt.AddSeconds(1),
+                workerCommand)
+        });
+
+        var match = Assert.Single(RealWorkerProcessGuard.FindCurrentMatches(
+            ownerProcessId,
+            snapshot,
+            ownedProcessTempRoots: [],
+            out var commandLineEnumerationAvailable));
+
+        Assert.True(commandLineEnumerationAvailable);
+        Assert.Equal(ownedWorkerProcessId, match.ProcessId);
+        Assert.Equal(workerCommand, match.CommandLine);
+    }
+
+    [Xunit.Fact(DisplayName = "Guard retains orphaned worker through exact process temp root")]
+    public void GuardRetainsOrphanedWorkerThroughExactProcessTempRoot()
+    {
+        const int ownerProcessId = 100;
+        const int orphanedWorkerProcessId = 101;
+        const string ownedRoot = "C:\\temp\\mcg-tests\\p64";
+        var ownerStartedAt = DateTimeOffset.Parse("2026-09-01T12:00:00Z");
+        const string workerCommand =
+            "pwsh -Command claude -p --cd C:\\temp\\mcg-tests\\p64\\fixture\\.orchestrator-worktrees\\goal";
+        var snapshot = new ProcessCommandLineSnapshot(new Dictionary<int, ProcessInspectionRecord>
+        {
+            [ownerProcessId] = AvailableProcess(
+                ownerProcessId,
+                parentProcessId: 50,
+                ownerStartedAt,
+                "dotnet Mcg.AgentOrchestrator.Infrastructure.Tests.dll"),
+            [orphanedWorkerProcessId] = AvailableProcess(
+                orphanedWorkerProcessId,
+                parentProcessId: 1,
+                ownerStartedAt.AddSeconds(1),
+                workerCommand)
+        });
+
+        var match = Assert.Single(RealWorkerProcessGuard.FindCurrentMatches(
+            ownerProcessId,
+            snapshot,
+            [ownedRoot],
+            out var commandLineEnumerationAvailable));
+
+        Assert.True(commandLineEnumerationAvailable);
+        Assert.Equal(orphanedWorkerProcessId, match.ProcessId);
+    }
+
+    [Xunit.Fact(DisplayName = "Guard retains descendant below unreadable intermediate process")]
+    public void GuardRetainsDescendantBelowUnreadableIntermediateProcess()
+    {
+        const int ownerProcessId = 100;
+        const int unreadableProcessId = 101;
+        const int ownedWorkerProcessId = 102;
+        var ownerStartedAt = DateTimeOffset.Parse("2026-09-01T12:00:00Z");
+        const string workerCommand =
+            "pwsh -Command codex exec --cd C:\\temp\\mcg-orchestrator-tests\\fixture\\.orchestrator-worktrees\\goal";
+        var snapshot = new ProcessCommandLineSnapshot(new Dictionary<int, ProcessInspectionRecord>
+        {
+            [ownerProcessId] = AvailableProcess(
+                ownerProcessId,
+                parentProcessId: 50,
+                ownerStartedAt,
+                "dotnet Mcg.AgentOrchestrator.Infrastructure.Tests.dll"),
+            [unreadableProcessId] = new ProcessInspectionRecord(
+                unreadableProcessId,
+                ownerProcessId,
+                "pwsh",
+                ExecutablePath: null,
+                StartedAt: null,
+                CommandLine: null,
+                ProcessInspectionStatus.AccessDenied),
+            [ownedWorkerProcessId] = AvailableProcess(
+                ownedWorkerProcessId,
+                unreadableProcessId,
+                ownerStartedAt.AddSeconds(2),
+                workerCommand)
+        });
+
+        var match = Assert.Single(RealWorkerProcessGuard.FindCurrentMatches(
+            ownerProcessId,
+            snapshot,
+            ownedProcessTempRoots: [],
+            out var commandLineEnumerationAvailable));
+
+        Assert.True(commandLineEnumerationAvailable);
+        Assert.Equal(ownedWorkerProcessId, match.ProcessId);
+    }
+
     [Xunit.Fact(DisplayName = "Advance subscription start does not spawn scoped real worker process")]
     public void AdvanceSubscriptionStartDoesNotSpawnScopedRealWorkerProcess()
     {
@@ -146,6 +305,20 @@ public sealed class RealWorkerProcessGuardTests
             []));
         return goal;
     }
+
+    private static ProcessInspectionRecord AvailableProcess(
+        int processId,
+        int parentProcessId,
+        DateTimeOffset startedAt,
+        string commandLine) =>
+        new(
+            processId,
+            parentProcessId,
+            "pwsh",
+            ExecutablePath: null,
+            startedAt,
+            commandLine,
+            ProcessInspectionStatus.Available);
 
     private static string EnsureGoalWorktree(string root, GoalId goalId)
     {

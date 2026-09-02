@@ -16,7 +16,8 @@ internal static class TrialCompareCliCommand
         ITrialRootHost host,
         string defaultReceiptsDirectory,
         TextWriter output,
-        Func<HistoricalTrialSelector, HistoricalTrialReplayResolution>? historicalResolver = null)
+        Func<HistoricalTrialSelector, HistoricalTrialReplayResolution>? historicalResolver = null,
+        Func<TrialComparisonRequest, TrialComparisonResult>? comparisonRunner = null)
     {
         var specPath = ValueAfter(parts, "--spec") ??
             throw new ArgumentException(CliCommandHelp.TrialCompareUsage);
@@ -34,9 +35,12 @@ internal static class TrialCompareCliCommand
         }
 
         TrialComparisonRequest request;
+        HermesTrialEvidence? hermesEvidence;
         try
         {
-            request = ParseSpec(File.ReadAllText(fullSpecPath), parts, defaultReceiptsDirectory, historicalResolver);
+            var specJson = File.ReadAllText(fullSpecPath);
+            request = ParseSpec(specJson, parts, defaultReceiptsDirectory, historicalResolver);
+            hermesEvidence = ParseHermesTrialEvidence(specJson);
         }
         catch (TrialComparisonUnavailableException ex)
         {
@@ -53,10 +57,27 @@ internal static class TrialCompareCliCommand
             throw new CliExitException(1);
         }
 
-        var result = new TrialHarnessComparison(host).Run(request);
+        comparisonRunner ??= candidateRequest => new TrialHarnessComparison(host).Run(candidateRequest);
+        var result = comparisonRunner(request);
+        HermesTrialEvaluation? hermesEvaluation = null;
+        string? hermesEvaluationReceiptPath = null;
+        if (hermesEvidence is not null)
+        {
+            hermesEvaluation = HermesTrialDecisionEngine.EvaluateForComparison(
+                result,
+                hermesEvidence,
+                HermesTrialThresholds.Load(AppContext.BaseDirectory));
+            hermesEvaluationReceiptPath = Path.Combine(result.ReceiptDirectory, "hermes-trial-decision.json");
+            Directory.CreateDirectory(result.ReceiptDirectory);
+            File.WriteAllText(hermesEvaluationReceiptPath, JsonSerializer.Serialize(hermesEvaluation, Json));
+        }
+
         if (format.Equals("json", StringComparison.OrdinalIgnoreCase))
         {
-            output.WriteLine(JsonSerializer.Serialize(result, Json));
+            var payload = hermesEvaluation is null
+                ? (object)result
+                : new TrialCompareEvaluationOutput(result, hermesEvaluation, hermesEvaluationReceiptPath!);
+            output.WriteLine(JsonSerializer.Serialize(payload, Json));
         }
         else if (format.Equals("text", StringComparison.OrdinalIgnoreCase))
         {
@@ -68,6 +89,19 @@ internal static class TrialCompareCliCommand
                     $"workerResult={harness.WorkerResult.Status} stdoutBytes={harness.StandardOutput?.ByteCount.ToString() ?? "unavailable"} " +
                     $"stdoutSha256={harness.StandardOutput?.Sha256 ?? "unavailable"} stderrBytes={harness.StandardError?.ByteCount.ToString() ?? "unavailable"} " +
                     $"stderrSha256={harness.StandardError?.Sha256 ?? "unavailable"}");
+            }
+
+            if (hermesEvaluation is not null)
+            {
+                output.WriteLine(
+                    $"hermes-trial disposition={hermesEvaluation.Decision.Disposition} " +
+                    $"receipt={hermesEvaluationReceiptPath}");
+                foreach (var gate in hermesEvaluation.Gates)
+                {
+                    output.WriteLine(
+                        $"  gate={gate.Gate} status={gate.Status} " +
+                        $"reasons={(gate.Reasons.Count == 0 ? "none" : string.Join(",", gate.Reasons))}");
+                }
             }
         }
         if (!result.Succeeded)
@@ -148,6 +182,13 @@ internal static class TrialCompareCliCommand
             spec.TrialBaseDirectory,
             spec.ProtectedPaths,
             TimeSpan.FromSeconds(timeoutSeconds));
+    }
+
+    internal static HermesTrialEvidence? ParseHermesTrialEvidence(string json)
+    {
+        var spec = JsonSerializer.Deserialize<TrialCompareSpec>(json, Json) ??
+            throw new ArgumentException("Trial comparison spec was empty.");
+        return spec.HermesTrialEvidence;
     }
 
     internal static bool RequiresHistoricalState(IReadOnlyList<string> parts)
@@ -273,7 +314,8 @@ internal static class TrialCompareCliCommand
         HistoricalTrialSelector? Historical,
         IReadOnlyList<TrialCompareHarnessSpec>? Harnesses,
         IReadOnlyList<string>? ProtectedPaths,
-        string? TrialBaseDirectory);
+        string? TrialBaseDirectory,
+        HermesTrialEvidence? HermesTrialEvidence);
 
     private sealed record TrialCompareWorkloadSpec(
         string? BriefIdentity,
@@ -294,4 +336,9 @@ internal static class TrialCompareCliCommand
         string Message,
         string ReceiptPath,
         DateTimeOffset RecordedAt);
+
+    private sealed record TrialCompareEvaluationOutput(
+        TrialComparisonResult Comparison,
+        HermesTrialEvaluation HermesTrial,
+        string HermesTrialReceiptPath);
 }

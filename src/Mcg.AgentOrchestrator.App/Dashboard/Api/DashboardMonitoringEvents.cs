@@ -126,7 +126,13 @@ internal static class DashboardMonitoringEvents
     {
         var monitor = kernel.BuildMonitor(goal.Id);
         var verification = kernel.BuildVerificationGate(goal.Id);
-        var disposition = conductorDisposition ?? new GoalOperatorDispositionSurface().Evaluate(goal, monitor.PendingHumanInputCount, verification.IsSatisfied);
+        var processSnapshot = ProcessCommandLines.SnapshotOperation();
+        var dispatchStateSurface = new DispatchStateSurface();
+        var disposition = conductorDisposition ?? new GoalOperatorDispositionSurface(dispatchSurface: dispatchStateSurface).Evaluate(
+            goal,
+            monitor.PendingHumanInputCount,
+            verification.IsSatisfied,
+            commandLineSnapshot: processSnapshot);
         return new GoalMonitoringSnapshotDto(
             goal.Id.Value,
             DateTimeOffset.UtcNow,
@@ -142,7 +148,7 @@ internal static class DashboardMonitoringEvents
                 DashboardResponseMapper.ToDispatchAuthoritativeStateDto(
                     task.LastDispatch is null && task.LastProcess is null
                         ? null
-                        : new DispatchStateSurface().Evaluate(goal.Id, task)))).ToList(),
+                        : dispatchStateSurface.Evaluate(goal.Id, task, processSnapshot)))).ToList(),
             DashboardResponseMapper.ToGoalOperatorDispositionDto(goal, disposition),
             operatorInbox,
             providerCapacity);

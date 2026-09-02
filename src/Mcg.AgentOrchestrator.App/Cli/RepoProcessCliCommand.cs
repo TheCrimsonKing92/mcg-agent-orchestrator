@@ -1,8 +1,5 @@
 using System.Diagnostics;
 using System.Globalization;
-using System.Runtime.InteropServices;
-using System.Text;
-using Mcg.AgentOrchestrator.App.Processes;
 using Mcg.AgentOrchestrator.Infrastructure;
 
 namespace Mcg.AgentOrchestrator.App.Cli;
@@ -10,8 +7,15 @@ namespace Mcg.AgentOrchestrator.App.Cli;
 internal static class RepoProcessCliCommand
 {
     private const int MaxCommandLength = 420;
+    private const int MaxUnavailableExemplars = 4;
 
-    public static void PrintInfo(IReadOnlyList<string> parts, TextWriter output)
+    public static void PrintInfo(IReadOnlyList<string> parts, TextWriter output) =>
+        PrintInfo(parts, output, BuildSnapshots);
+
+    internal static void PrintInfo(
+        IReadOnlyList<string> parts,
+        TextWriter output,
+        Func<ProcessSnapshotQuery, IReadOnlyList<ProcessSnapshot>> buildSnapshots)
     {
         var options = RepoProcessOptions.Parse(parts);
         if (!options.HasQuery)
@@ -22,7 +26,7 @@ internal static class RepoProcessCliCommand
         IReadOnlyList<ProcessSnapshot> snapshots;
         try
         {
-            snapshots = BuildSnapshots();
+            snapshots = buildSnapshots(ProcessSnapshotQuery.From(options));
         }
         catch (Exception ex)
         {
@@ -42,7 +46,16 @@ internal static class RepoProcessCliCommand
         {
             if (byId.TryGetValue(processId, out var snapshot))
             {
-                AddSelected(snapshot, options.IncludeChildren, childrenByParent, seen, selected);
+                if (snapshot.InspectionStatus == ProcessInspectionStatus.Exited &&
+                    string.IsNullOrWhiteSpace(snapshot.Name))
+                {
+                    seen.Add(processId);
+                    output.WriteLine($"PROCESS id={processId} status=missing");
+                }
+                else
+                {
+                    AddSelected(snapshot, options.IncludeChildren, childrenByParent, seen, selected);
+                }
             }
             else if (seen.Add(processId))
             {
@@ -61,15 +74,54 @@ internal static class RepoProcessCliCommand
             }
         }
 
-        IReadOnlySet<int> currentInvocationLineage = options.LocksOnly
+        var excludesInvocationLineage = options.LocksOnly || options.CommandContains.Count > 0;
+        IReadOnlySet<int> currentInvocationLineage = excludesInvocationLineage
             ? BuildCurrentInvocationLineage(byId)
             : new HashSet<int>();
+
+        var unavailableCandidates = snapshots
+            .Where(snapshot =>
+                snapshot.InspectionStatus is not ProcessInspectionStatus.Available and
+                    not ProcessInspectionStatus.Exited and
+                    not ProcessInspectionStatus.DeadOrRecycled &&
+                !currentInvocationLineage.Contains(snapshot.ProcessId) &&
+                IsUnavailableRelevant(snapshot, options))
+            .OrderBy(snapshot => snapshot.ProcessId)
+            .ToList();
+        foreach (var unavailable in unavailableCandidates)
+        {
+            output.WriteLine(
+                $"PROCESS_QUERY_UNAVAILABLE operation=filter id={unavailable.ProcessId} name={unavailable.Name} status={unavailable.InspectionStatus}");
+        }
+
+        var incidentalUnavailable = snapshots
+            .Where(snapshot =>
+                snapshot.InspectionStatus is not ProcessInspectionStatus.Available and
+                    not ProcessInspectionStatus.Exited and
+                    not ProcessInspectionStatus.DeadOrRecycled &&
+                !currentInvocationLineage.Contains(snapshot.ProcessId) &&
+                !IsUnavailableRelevant(snapshot, options))
+            .OrderBy(snapshot => snapshot.ProcessId)
+            .ToList();
+        if (incidentalUnavailable.Count > 0)
+        {
+            var statuses = string.Join(',', incidentalUnavailable
+                .GroupBy(snapshot => snapshot.InspectionStatus)
+                .OrderBy(group => group.Key)
+                .Select(group => $"{group.Key}:{group.Count()}"));
+            var exemplars = string.Join(',', incidentalUnavailable
+                .Take(MaxUnavailableExemplars)
+                .Select(snapshot => $"{snapshot.ProcessId}:{snapshot.Name}:{snapshot.InspectionStatus}"));
+            output.WriteLine(
+                $"PROCESS_QUERY_SUMMARY operation=filter-incidental count={incidentalUnavailable.Count} statuses={statuses} exemplars={exemplars} truncated={Math.Max(0, incidentalUnavailable.Count - MaxUnavailableExemplars)}");
+        }
 
         if (options.Names.Count > 0 || options.CommandContains.Count > 0 || options.LocksOnly)
         {
             var query = snapshots.Where(snapshot =>
                 MatchesNames(snapshot, options.Names) &&
                 MatchesCommand(snapshot, options.CommandContains) &&
+                (!excludesInvocationLineage || !currentInvocationLineage.Contains(snapshot.ProcessId)) &&
                 (!options.LocksOnly || IsReportableLockHolder(snapshot, currentInvocationLineage)))
                 .OrderByDescending(snapshot => snapshot.StartedAt ?? DateTimeOffset.MinValue)
                 .ThenByDescending(snapshot => snapshot.ProcessId)
@@ -82,6 +134,11 @@ internal static class RepoProcessCliCommand
 
         if (selected.Count == 0 && options.ShouldPrintEmptyMessage)
         {
+            if (unavailableCandidates.Count > 0 || incidentalUnavailable.Count > 0)
+            {
+                return;
+            }
+
             output.WriteLine(options.LocksOnly
                 ? "No orchestrator lock-holders running; in-tree build lock is FREE."
                 : "No matching repo processes found.");
@@ -97,10 +154,11 @@ internal static class RepoProcessCliCommand
         }
     }
 
-    public static void Stop(IReadOnlyList<string> parts, TextWriter output)
+    public static bool Stop(IReadOnlyList<string> parts, TextWriter output)
     {
         var options = RepoProcessStopOptions.Parse(parts);
-        var snapshots = BuildSnapshots().ToDictionary(snapshot => snapshot.ProcessId);
+        var snapshots = BuildSnapshots(options.Ids).ToDictionary(snapshot => snapshot.ProcessId);
+        var succeeded = true;
         foreach (var processId in options.Ids)
         {
             if (!snapshots.TryGetValue(processId, out var snapshot))
@@ -110,10 +168,17 @@ internal static class RepoProcessCliCommand
             }
 
             var refused = false;
+            if (snapshot.InspectionStatus != ProcessInspectionStatus.Available ||
+                string.IsNullOrWhiteSpace(snapshot.CommandLine))
+            {
+                output.WriteLine($"PROCESS id={processId} status=refused reason=inspection-unavailable");
+                refused = true;
+            }
+
             foreach (var needle in options.CommandContains)
             {
-                if (string.IsNullOrWhiteSpace(snapshot.CommandLine) ||
-                    snapshot.CommandLine.IndexOf(needle, StringComparison.OrdinalIgnoreCase) < 0)
+                if (!refused &&
+                    snapshot.CommandLine!.IndexOf(needle, StringComparison.OrdinalIgnoreCase) < 0)
                 {
                     output.WriteLine($"PROCESS id={processId} status=refused reason=command-mismatch expected={needle}");
                     refused = true;
@@ -123,182 +188,63 @@ internal static class RepoProcessCliCommand
 
             if (refused)
             {
+                succeeded = false;
+                continue;
+            }
+
+            var currentSnapshot = BuildSnapshots([processId]).SingleOrDefault();
+            if (EvaluateStopRevalidation(snapshot, currentSnapshot, options.CommandContains) is { } reason)
+            {
+                output.WriteLine($"PROCESS id={processId} status=refused reason={reason}");
+                succeeded = false;
                 continue;
             }
 
             var stopped = WorkerProcessJobs.TryKillOrFallback(processId);
             output.WriteLine($"PROCESS id={processId} status={(stopped ? "stopped" : "not-stopped")}");
+            succeeded &= stopped;
         }
+
+        return succeeded;
     }
 
-    private static IReadOnlyList<ProcessSnapshot> BuildSnapshots()
+    private static IReadOnlyList<ProcessSnapshot> BuildSnapshots(IEnumerable<int>? processIds = null)
     {
-        var raw = new List<(int Id, int ParentId, string Name, string? Path, DateTimeOffset? StartedAt)>();
-        foreach (var process in Process.GetProcesses())
-        {
-            using (process)
-            {
-                raw.Add((process.Id, ProcessParentIdResolver.TryGetParentProcessId(process.Id), process.ProcessName, TryGetExecutablePath(process), TryGetStartTime(process)));
-            }
-        }
-
-        var commandLines = ReadCommandLines(raw.Select(process => process.Id));
-        return raw
+        var snapshot = processIds is null
+            ? ProcessCommandLines.Snapshot()
+            : ProcessCommandLines.Snapshot(processIds);
+        return snapshot.Records.Values
             .Select(process => new ProcessSnapshot(
-                process.Id,
-                process.ParentId,
+                process.ProcessId,
+                process.ParentProcessId,
                 process.Name,
-                process.Path,
+                process.ExecutablePath,
                 process.StartedAt,
-                commandLines.GetValueOrDefault(process.Id)))
+                process.CommandLine,
+                process.Status))
             .ToList();
     }
 
-    private static Dictionary<int, string> ReadCommandLines(IEnumerable<int> processIds)
+    private static IReadOnlyList<ProcessSnapshot> BuildSnapshots(ProcessSnapshotQuery query)
     {
-        var ids = processIds.Distinct().ToList();
-        if (ids.Count == 0)
-        {
-            return [];
-        }
-
-        if (OperatingSystem.IsWindows())
-        {
-            return ReadWindowsCommandLines(ids);
-        }
-
-        if (OperatingSystem.IsLinux())
-        {
-            return ReadLinuxCommandLines(ids);
-        }
-
-        return [];
+        var snapshot = ProcessCommandLines.Snapshot(new ProcessInspectionQuery(
+            query.ProcessIds.ToHashSet(),
+            query.ParentProcessIds.ToHashSet(),
+            query.ProcessNames.ToHashSet(StringComparer.OrdinalIgnoreCase),
+            query.IncludeChildren,
+            query.IncludeAll,
+            query.AncestorProcessIds.ToHashSet()));
+        return snapshot.Records.Values
+            .Select(process => new ProcessSnapshot(
+                process.ProcessId,
+                process.ParentProcessId,
+                process.Name,
+                process.ExecutablePath,
+                process.StartedAt,
+                process.CommandLine,
+                process.Status))
+            .ToList();
     }
-
-    private static Dictionary<int, string> ReadWindowsCommandLines(IReadOnlyList<int> processIds)
-    {
-        var result = new Dictionary<int, string>();
-        foreach (var processId in processIds)
-        {
-            var commandLine = TryReadWindowsCommandLine(processId);
-            if (!string.IsNullOrWhiteSpace(commandLine))
-            {
-                result[processId] = commandLine;
-            }
-        }
-
-        return result;
-    }
-
-    private static Dictionary<int, string> ReadLinuxCommandLines(IReadOnlyList<int> processIds)
-    {
-        var result = new Dictionary<int, string>();
-        foreach (var processId in processIds)
-        {
-            try
-            {
-                var path = $"/proc/{processId}/cmdline";
-                if (!File.Exists(path))
-                {
-                    continue;
-                }
-
-                var commandLine = File.ReadAllText(path).Replace('\0', ' ').Trim();
-                if (!string.IsNullOrWhiteSpace(commandLine))
-                {
-                    result[processId] = commandLine;
-                }
-            }
-            catch
-            {
-                // Best-effort; an unreadable process command line is treated as unknown by callers.
-            }
-        }
-
-        return result;
-    }
-
-    private static string? TryReadWindowsCommandLine(int processId)
-    {
-        var handle = OpenProcess(ProcessQueryLimitedInformation | ProcessVmRead, false, processId);
-        if (handle == IntPtr.Zero)
-        {
-            return null;
-        }
-
-        try
-        {
-            var status = NtQueryInformationProcess(
-                handle,
-                0,
-                out var basicInformation,
-                Marshal.SizeOf<PROCESS_BASIC_INFORMATION>(),
-                out _);
-            if (status != 0 || basicInformation.PebBaseAddress == IntPtr.Zero)
-            {
-                return null;
-            }
-
-            var processParametersAddress = ReadIntPtr(handle, basicInformation.PebBaseAddress + PebProcessParametersOffset);
-            if (processParametersAddress == IntPtr.Zero)
-            {
-                return null;
-            }
-
-            var commandLine = ReadUnicodeString(handle, processParametersAddress + ProcessParametersCommandLineOffset);
-            return string.IsNullOrWhiteSpace(commandLine) ? null : commandLine;
-        }
-        catch
-        {
-            return null;
-        }
-        finally
-        {
-            CloseHandle(handle);
-        }
-    }
-
-    private static IntPtr ReadIntPtr(IntPtr processHandle, IntPtr address)
-    {
-        var buffer = new byte[IntPtr.Size];
-        return ReadBytes(processHandle, address, buffer)
-            ? IntPtr.Size == 8
-                ? new IntPtr(BitConverter.ToInt64(buffer, 0))
-                : new IntPtr(BitConverter.ToInt32(buffer, 0))
-            : IntPtr.Zero;
-    }
-
-    private static string? ReadUnicodeString(IntPtr processHandle, IntPtr address)
-    {
-        var header = new byte[IntPtr.Size == 8 ? 16 : 8];
-        if (!ReadBytes(processHandle, address, header))
-        {
-            return null;
-        }
-
-        var length = BitConverter.ToUInt16(header, 0);
-        if (length == 0 || length > MaxWindowsCommandLineBytes)
-        {
-            return null;
-        }
-
-        var bufferAddress = IntPtr.Size == 8
-            ? new IntPtr(BitConverter.ToInt64(header, 8))
-            : new IntPtr(BitConverter.ToInt32(header, 4));
-        if (bufferAddress == IntPtr.Zero)
-        {
-            return null;
-        }
-
-        var commandBuffer = new byte[length];
-        return ReadBytes(processHandle, bufferAddress, commandBuffer)
-            ? Encoding.Unicode.GetString(commandBuffer).TrimEnd('\0')
-            : null;
-    }
-
-    private static bool ReadBytes(IntPtr processHandle, IntPtr address, byte[] buffer) =>
-        ReadProcessMemory(processHandle, address, buffer, buffer.Length, out var bytesRead) &&
-        bytesRead.ToInt64() == buffer.Length;
 
     private static void AddSelected(
         ProcessSnapshot snapshot,
@@ -326,9 +272,20 @@ internal static class RepoProcessCliCommand
 
     private static bool MatchesNames(ProcessSnapshot snapshot, IReadOnlyList<string> names) =>
         names.Count == 0 ||
-        names.Any(name =>
-            snapshot.Name.Equals(name, StringComparison.OrdinalIgnoreCase) ||
-            snapshot.Name.Equals(Path.GetFileNameWithoutExtension(name), StringComparison.OrdinalIgnoreCase));
+        names.Any(name => MatchesProcessName(NormalizeProcessName(name), snapshot.Name));
+
+    private static bool MatchesProcessName(string pattern, string processName) =>
+        pattern.EndsWith('*')
+            ? processName.StartsWith(pattern[..^1], StringComparison.OrdinalIgnoreCase)
+            : processName.Equals(pattern, StringComparison.OrdinalIgnoreCase);
+
+    private static string NormalizeProcessName(string name)
+    {
+        var fileName = Path.GetFileName(name);
+        return fileName.EndsWith(".exe", StringComparison.OrdinalIgnoreCase)
+            ? fileName[..^4]
+            : fileName;
+    }
 
     private static bool MatchesCommand(ProcessSnapshot snapshot, IReadOnlyList<string> needles) =>
         needles.Count == 0 ||
@@ -429,27 +386,106 @@ internal static class RepoProcessCliCommand
 
     private static string FormatTime(DateTimeOffset? value) => value?.ToString("o", CultureInfo.InvariantCulture) ?? "";
 
-    private static DateTimeOffset? TryGetStartTime(Process process)
+    private static string? NormalizeIdentityPath(string? value)
     {
-        try { return process.StartTime; }
+        if (string.IsNullOrWhiteSpace(value))
+        {
+            return null;
+        }
+
+        try { return Path.GetFullPath(value).TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar); }
         catch { return null; }
     }
 
-    private static string? TryGetExecutablePath(Process process)
+    private static bool IsPotentialLockHolder(ProcessSnapshot snapshot) =>
+        snapshot.Name.Equals("dotnet", StringComparison.OrdinalIgnoreCase) ||
+        snapshot.Name.Equals("DispatchProcessHost", StringComparison.OrdinalIgnoreCase) ||
+        snapshot.Name.StartsWith("Mcg.AgentOrchestrator", StringComparison.OrdinalIgnoreCase);
+
+    private static bool IsUnavailableRelevant(ProcessSnapshot snapshot, RepoProcessOptions options) =>
+        options.Ids.Contains(snapshot.ProcessId) ||
+        options.ParentIds.Contains(snapshot.ParentProcessId) ||
+        (options.Names.Count > 0 && MatchesNames(snapshot, options.Names)) ||
+        (options.LocksOnly && IsPotentialLockHolder(snapshot)) ||
+        (options.CommandContains.Count > 0 &&
+            (IsPotentialLockHolder(snapshot) || IsRepoProcessWrapper(snapshot)));
+
+    internal static string? EvaluateStopRevalidation(
+        ProcessSnapshot recorded,
+        ProcessSnapshot? current,
+        IReadOnlyList<string> commandMarkers)
     {
-        try { return process.MainModule?.FileName; }
-        catch { return null; }
+        if (recorded.StartedAt is null || string.IsNullOrWhiteSpace(recorded.ExecutablePath))
+        {
+            return "identity-unavailable";
+        }
+
+        if (current is null ||
+            current.InspectionStatus != ProcessInspectionStatus.Available ||
+            string.IsNullOrWhiteSpace(current.CommandLine))
+        {
+            return "inspection-unavailable";
+        }
+
+        var recordedPath = NormalizeIdentityPath(recorded.ExecutablePath);
+        var currentPath = NormalizeIdentityPath(current.ExecutablePath);
+        if (current.StartedAt != recorded.StartedAt ||
+            recordedPath is null ||
+            currentPath is null ||
+            !string.Equals(currentPath, recordedPath, StringComparison.OrdinalIgnoreCase))
+        {
+            return "identity-mismatch";
+        }
+
+        return commandMarkers.Any(marker =>
+            current.CommandLine.IndexOf(marker, StringComparison.OrdinalIgnoreCase) < 0)
+                ? "command-changed"
+                : null;
     }
 
-    private sealed record ProcessSnapshot(
+    internal sealed record ProcessSnapshot(
         int ProcessId,
         int ParentProcessId,
         string Name,
         string? ExecutablePath,
         DateTimeOffset? StartedAt,
-        string? CommandLine);
+        string? CommandLine,
+        ProcessInspectionStatus InspectionStatus);
 
-    private sealed record RepoProcessOptions(
+    internal sealed record ProcessSnapshotQuery(
+        IReadOnlyList<int> ProcessIds,
+        IReadOnlyList<int> ParentProcessIds,
+        IReadOnlyList<string> ProcessNames,
+        bool IncludeChildren,
+        bool IncludeAll,
+        IReadOnlyList<int> AncestorProcessIds)
+    {
+        internal static ProcessSnapshotQuery From(RepoProcessOptions options)
+        {
+            var names = options.Names
+                .Select(NormalizeProcessName)
+                .Where(name => !string.IsNullOrWhiteSpace(name))
+                .ToHashSet(StringComparer.OrdinalIgnoreCase);
+            if (options.LocksOnly)
+            {
+                names.UnionWith(["dotnet", "DispatchProcessHost", "Mcg.AgentOrchestrator*"]);
+            }
+
+            var includeAll = options.CommandContains.Count > 0 && names.Count == 0;
+            var ancestors = options.LocksOnly || options.CommandContains.Count > 0
+                ? new[] { Environment.ProcessId }
+                : [];
+            return new ProcessSnapshotQuery(
+                options.Ids,
+                options.ParentIds,
+                names.ToArray(),
+                options.IncludeChildren,
+                includeAll,
+                ancestors);
+        }
+    }
+
+    internal sealed record RepoProcessOptions(
         IReadOnlyList<int> Ids,
         IReadOnlyList<int> ParentIds,
         IReadOnlyList<string> Names,
@@ -568,45 +604,6 @@ internal static class RepoProcessCliCommand
 
         index++;
         return parts[index];
-    }
-
-    private const int ProcessQueryLimitedInformation = 0x1000;
-    private const int ProcessVmRead = 0x0010;
-    private const int MaxWindowsCommandLineBytes = 32766;
-    private static readonly int PebProcessParametersOffset = IntPtr.Size == 8 ? 0x20 : 0x10;
-    private static readonly int ProcessParametersCommandLineOffset = IntPtr.Size == 8 ? 0x70 : 0x40;
-
-    [DllImport("kernel32.dll", SetLastError = true)]
-    private static extern IntPtr OpenProcess(int dwDesiredAccess, bool bInheritHandle, int dwProcessId);
-
-    [DllImport("ntdll.dll")]
-    private static extern int NtQueryInformationProcess(
-        IntPtr processHandle,
-        int processInformationClass,
-        out PROCESS_BASIC_INFORMATION processInformation,
-        int processInformationLength,
-        out int returnLength);
-
-    [DllImport("kernel32.dll", SetLastError = true)]
-    private static extern bool ReadProcessMemory(
-        IntPtr hProcess,
-        IntPtr lpBaseAddress,
-        byte[] lpBuffer,
-        int dwSize,
-        out IntPtr lpNumberOfBytesRead);
-
-    [DllImport("kernel32.dll", SetLastError = true)]
-    private static extern bool CloseHandle(IntPtr hObject);
-
-    [StructLayout(LayoutKind.Sequential)]
-    private struct PROCESS_BASIC_INFORMATION
-    {
-        public IntPtr Reserved1;
-        public IntPtr PebBaseAddress;
-        public IntPtr Reserved2_0;
-        public IntPtr Reserved2_1;
-        public IntPtr UniqueProcessId;
-        public IntPtr InheritedFromUniqueProcessId;
     }
 
 }

@@ -7,6 +7,23 @@ using System.Net.Sockets;
 [Xunit.Collection("EnvMutation")]
 public sealed class WorkerProfileTests
 {
+    [Xunit.Fact]
+    public void BuiltInCodexProfilesDeclareCompleteRepositoryPolicyAutoLoad()
+    {
+        var profiles = WorkerProfileCatalog.Default().Profiles;
+        var fallback = Assert.Single(profiles, profile => profile.Name == "claude-cli");
+
+        foreach (var profileName in new[] { "codex-cli", "codex-spark" })
+        {
+            var codex = Assert.Single(profiles, profile => profile.Name == profileName);
+            Assert.True(codex.HasCompleteRepositoryPolicyAutoLoadContract);
+            Assert.True(codex.RepositoryPolicyMaxBytes >= 65_536);
+            Assert.Contains("project_doc_max_bytes=65536", codex.CommandTemplate, StringComparison.Ordinal);
+        }
+        Assert.False(fallback.AutoLoadsRepositoryPolicy);
+        Assert.Equal(0, fallback.RepositoryPolicyMaxBytes);
+    }
+
     [Xunit.Fact(DisplayName = "WorkerProfileCatalog_default_contains_local_subscription_bridges")]
     public void WorkerProfileCatalogDefaultContainsLocalSubscriptionBridges()
 {
@@ -218,6 +235,52 @@ public sealed class WorkerProfileTests
     Assert.Contains("--model {subscriptionModelName}", restored.GetRequired("claude-cli").CommandTemplate, StringComparison.Ordinal);
     Assert.DoesNotContain("{promptPath}", restored.GetRequired("claude-cli").CommandTemplate, StringComparison.Ordinal);
 }
+
+    [Xunit.Fact(DisplayName = "WorkerProfileStore_load_repairs_codex_profile_without_repository_policy_budget")]
+    public void WorkerProfileStoreLoadRepairsCodexProfileWithoutRepositoryPolicyBudget()
+    {
+        var root = CreateTempDirectory();
+        var path = Path.Combine(root, "workers.json");
+        const string staleTemplate =
+            "codex exec --json --skip-git-repo-check --model {subscriptionModelName} -c model_reasoning_effort={subscriptionReasoningEffort} --sandbox {sandboxMode} --cd {workingDirectory}";
+        var saved = WorkerProfileCatalog.Default();
+        foreach (var profileName in new[] { "codex-cli", "codex-spark" })
+        {
+            saved = saved.Upsert(new WorkerProfile(profileName, staleTemplate));
+        }
+
+        WorkerProfileStore.Save(path, saved);
+        Assert.DoesNotContain(
+            "hasCompleteRepositoryPolicyAutoLoadContract",
+            File.ReadAllText(path),
+            StringComparison.OrdinalIgnoreCase);
+        var restored = WorkerProfileStore.Load(path);
+
+        foreach (var profileName in new[] { "codex-cli", "codex-spark" })
+        {
+            var profile = restored.GetRequired(profileName);
+            Assert.True(profile.HasCompleteRepositoryPolicyAutoLoadContract);
+            Assert.Equal(65_536, profile.RepositoryPolicyMaxBytes);
+            Assert.Contains("project_doc_max_bytes=65536", profile.CommandTemplate, StringComparison.Ordinal);
+        }
+    }
+
+    [Xunit.Fact(DisplayName = "WorkerProfileStore_load_preserves_custom_codex_profile_without_repository_policy_budget")]
+    public void WorkerProfileStoreLoadPreservesCustomCodexProfileWithoutRepositoryPolicyBudget()
+    {
+        var root = CreateTempDirectory();
+        var path = Path.Combine(root, "workers.json");
+        const string customTemplate =
+            "codex exec --json --skip-git-repo-check --model {subscriptionModelName} -c model_reasoning_effort={subscriptionReasoningEffort} --sandbox {sandboxMode} --cd {workingDirectory} --custom-operator-flag";
+        var saved = WorkerProfileCatalog.Default()
+            .Upsert(new WorkerProfile("codex-cli", customTemplate));
+
+        WorkerProfileStore.Save(path, saved);
+        var restored = WorkerProfileStore.Load(path).GetRequired("codex-cli");
+
+        Assert.Equal(customTemplate, restored.CommandTemplate);
+        Assert.False(restored.HasCompleteRepositoryPolicyAutoLoadContract);
+    }
 
     [Xunit.Fact(DisplayName = "WorkerProfileStore_load_repairs_qwen_code_profile_baked_backend_url")]
     public void WorkerProfileStoreLoadRepairsQwenCodeProfileBakedBackendUrl()

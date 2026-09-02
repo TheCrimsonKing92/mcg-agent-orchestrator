@@ -131,7 +131,8 @@ public static async Task<object?> ApplyTaskActionAsync(
                 OperatorIntentVerbs.Retry,
                 new RetryOperatorIntentPayload(
                     retry.Message,
-                    retry.Mechanical ? RetryRoundKind.Mechanical : null),
+                    retry.Mechanical ? RetryRoundKind.Mechanical : null,
+                    RetryCause: Enum.Parse<RetryCause>(retry.Cause, ignoreCase: true)),
                 retry.IdempotencyKey);
 
         case "verification-plan":

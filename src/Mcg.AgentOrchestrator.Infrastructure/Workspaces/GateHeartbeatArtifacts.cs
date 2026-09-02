@@ -40,7 +40,9 @@ public sealed record GateHeartbeatSnapshot(
     string? CommandLine = null,
     int? ExitCode = null,
     string? StdoutPath = null,
-    string? StderrPath = null);
+    string? StderrPath = null,
+    string? RetainedStderrPath = null,
+    string? RetainedStderrSha256 = null);
 
 public sealed record GateHeartbeatStatus(
     int SlotIndex,
@@ -118,6 +120,42 @@ public static class GateHeartbeatArtifacts
         catch
         {
             // Heartbeats are observability artifacts; they must never decide acceptance.
+        }
+    }
+
+    internal static void AttachRetainedStderr(string heartbeatPath, AcceptanceRetainedDiagnostic diagnostic)
+    {
+        try
+        {
+            if (!File.Exists(heartbeatPath))
+            {
+                throw new IOException($"Retry-driving heartbeat is missing: {heartbeatPath}");
+            }
+
+            var snapshot = JsonSerializer.Deserialize<GateHeartbeatSnapshot>(
+                File.ReadAllText(heartbeatPath),
+                JsonOptions) ?? throw new IOException($"Retry-driving heartbeat is unreadable: {heartbeatPath}");
+            TryWrite(
+                heartbeatPath,
+                snapshot with
+                {
+                    RetainedStderrPath = diagnostic.Path,
+                    RetainedStderrSha256 = diagnostic.Sha256
+                });
+            var retained = JsonSerializer.Deserialize<GateHeartbeatSnapshot>(
+                File.ReadAllText(heartbeatPath),
+                JsonOptions);
+            if (retained?.RetainedStderrPath != diagnostic.Path ||
+                retained.RetainedStderrSha256 != diagnostic.Sha256)
+            {
+                throw new IOException($"Retry-driving heartbeat did not retain diagnostic metadata: {heartbeatPath}");
+            }
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or JsonException)
+        {
+            throw new IOException(
+                $"Failed to attach retained retry diagnostic to heartbeat '{heartbeatPath}'. The retry was not launched.",
+                ex);
         }
     }
 

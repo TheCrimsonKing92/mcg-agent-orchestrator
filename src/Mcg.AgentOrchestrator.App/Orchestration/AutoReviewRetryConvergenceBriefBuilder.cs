@@ -83,13 +83,23 @@ internal static class AutoReviewRetryConvergenceBriefBuilder
         IReadOnlyList<StructuredFindingSource> findings,
         IEnumerable<string> changedFileScopes)
     {
-        var open = findings
+        var allOpen = findings
             .Where(item =>
                 item.Finding.State == ReviewFindingState.Open &&
                 item.Finding.Severity == FindingSeverity.Blocking)
             .OrderBy(item => item.Finding.Category == FindingCategory.SpecCompliance ? 0 : 1)
             .ThenBy(item => item.Role)
             .ThenBy(item => item.Finding.StableId, StringComparer.Ordinal)
+            .ToArray();
+        var open = allOpen
+            .Where(item =>
+                item.Finding.Category == FindingCategory.Unspecified ||
+                ReviewFindingRouting.Project([item.Finding])[0].TargetRole == targetRole)
+            .ToArray();
+        var nonTargetObligations = allOpen
+            .Where(item =>
+                item.Finding.Category != FindingCategory.Unspecified &&
+                ReviewFindingRouting.Project([item.Finding])[0].TargetRole != targetRole)
             .ToArray();
         var deferredAdvisories = findings
             .Where(item =>
@@ -101,7 +111,16 @@ internal static class AutoReviewRetryConvergenceBriefBuilder
         var accepted = findings
             .Where(item => item.Finding.State == ReviewFindingState.Resolved)
             .ToArray();
-        if (open.Length == 0)
+        if (open.Length == 0 && allOpen.Length > 0)
+        {
+            throw new ReviewFindingConvergenceException(
+                ReviewFindingConvergence.NoOpenFindingsForTargetViolationCode,
+                allOpen.Length,
+                0,
+                $"Reviewer verdict=needs-work has {allOpen.Length} open blocking finding(s), but none are owned by retry target {targetRole}; route to the feasible finding owner instead.");
+        }
+
+        if (allOpen.Length == 0)
         {
             // This fires when the merged finding state carries no open BLOCKING finding, but a reviewer that
             // submitted several can still land here if its findings were lost between parse and this read -
@@ -146,6 +165,18 @@ internal static class AutoReviewRetryConvergenceBriefBuilder
             }
             lines.Add($"  location: {finding.Location}");
             lines.Add($"  description: {finding.Description}");
+        }
+
+        lines.Add("## OUTSTANDING_NON_TARGET_OBLIGATIONS");
+        lines.Add("These obligations remain blocking and visible, but are not completion requirements for this retry target.");
+        lines.Add($"obligation_count: {nonTargetObligations.Length}");
+        foreach (var item in nonTargetObligations)
+        {
+            var finding = item.Finding;
+            lines.Add($"- stable_id: {finding.StableId}");
+            lines.Add($"  source_role: {item.Role}");
+            lines.Add($"  category: {FindingCategoryJsonConverter.ToWireValue(finding.Category)}");
+            lines.Add($"  location: {finding.Location}");
         }
 
         lines.Add("## PRESERVE_ACCEPTED");

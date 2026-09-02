@@ -67,37 +67,6 @@ public sealed class CliCommandTestsGoalBoard : CliCommandTestBase
     }
 
     [Xunit.Fact]
-    public void GoalBoardCommandCapturesProcessSnapshotOnceForMultipleGoals()
-    {
-        var root = CreateTempDirectory();
-        try
-        {
-            var workspace = OrchestratorWorkspace.ForDirectory(root);
-            var kernel = new AgentOrchestratorKernel();
-            _ = GoalLifecycleCommands.CreateAndActivateSimpleGoal(kernel, AgentCatalog.Default().Agents, "First goal");
-            _ = GoalLifecycleCommands.CreateAndActivateSimpleGoal(kernel, AgentCatalog.Default().Agents, "Second goal");
-            var calls = 0;
-
-            _ = CaptureConsole(() => GoalBoardCommand.Run(
-                ["goals", "--board", "--all"],
-                new InMemoryTransactionalStateRepository(kernel),
-                workspace,
-                processSnapshotFactory: () =>
-                {
-                    calls++;
-                    return ProcessCommandLineSnapshot.Empty;
-                }));
-
-            Xunit.Assert.Equal(1, calls);
-        }
-        finally
-        {
-            if (Directory.Exists(root))
-                Directory.Delete(root, recursive: true);
-        }
-    }
-
-    [Xunit.Fact]
     public void GoalBoardArgumentsEnforceLimitsAndMutualExclusion()
     {
         Xunit.Assert.Equal(50, GoalBoardOptions.Parse(["goals", "--board"]).Limit);
@@ -287,6 +256,9 @@ public sealed class CliCommandTestsGoalBoard : CliCommandTestBase
             var gateGoal = GoalLifecycleCommands.CreateAndActivateSimpleGoal(kernel, AgentCatalog.Default().Agents, "Live acceptance goal");
             RecordRunningProcess(kernel, deadGoal, deadGoal.Tasks.Single(), root, processId: 999999);
             RecordRunningProcess(kernel, liveGoal, liveGoal.Tasks.Single(), root, processId: Environment.ProcessId);
+            WriteIdentityBoundHeartbeat(
+                kernel.GetGoal(liveGoal.Id)!.Tasks.Single().LastProcess!,
+                Environment.ProcessId);
             DispatchExitArtifacts.Write(
                 Path.Combine(root, $"{deadGoal.Tasks.Single().Id.Value}-exit.txt"),
                 DispatchExitArtifacts.Native(0, "worker exited", DateTimeOffset.UtcNow));

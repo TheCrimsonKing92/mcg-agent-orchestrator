@@ -2,6 +2,7 @@
 param(
     [string]$Name = "command",
     [string]$AppDll,
+    [string]$Pipeline,
 
     [Parameter(ValueFromRemainingArguments = $true)]
     [string[]]$Arguments
@@ -9,6 +10,13 @@ param(
 
 Set-StrictMode -Version Latest
 $ErrorActionPreference = "Stop"
+
+$Arguments = @($Arguments)
+if ($PSBoundParameters.ContainsKey('Pipeline')) {
+    # Keep the orchestrator's --pipeline flag from binding to PowerShell's
+    # common -PipelineVariable parameter instead of reaching the child CLI.
+    $Arguments += @('--pipeline', $Pipeline)
+}
 
 $driveJournalSchemaVersion = 1
 

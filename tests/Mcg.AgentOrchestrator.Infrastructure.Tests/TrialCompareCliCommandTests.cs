@@ -389,6 +389,72 @@ public sealed class TrialCompareCliCommandTests
         }
     }
 
+    [Xunit.Theory]
+    [Xunit.InlineData("text", "hermes-trial disposition=TrialOnly", "gate=terminal-receipt status=Passed")]
+    [Xunit.InlineData("json", "\"hermesTrial\"", "\"disposition\": 0")]
+    public void ExecuteEmitsHermesGateMatrixAndTrialOnlyDecision(
+        string format,
+        string expectedDecision,
+        string expectedGate)
+    {
+        var root = Path.Combine(Path.GetTempPath(), "trial-compare-cli-tests", Guid.NewGuid().ToString("N"));
+        try
+        {
+            Directory.CreateDirectory(root);
+            var specPath = WriteSpec(root);
+            var json = File.ReadAllText(specPath).Replace(
+                "\"harnesses\":",
+                "\"hermesTrialEvidence\": {},\n  \"harnesses\":",
+                StringComparison.Ordinal);
+            File.WriteAllText(specPath, json);
+            using var output = new StringWriter();
+
+            TrialCompareCliCommand.Execute(
+                ["trial-compare", "--spec", specPath, "--format", format],
+                new FailingTrialRootHost(),
+                Path.Combine(root, "receipts"),
+                output,
+                comparisonRunner: _ => HermesComparison(root));
+
+            Assert.Contains(expectedDecision, output.ToString(), StringComparison.Ordinal);
+            Assert.Contains(expectedGate, output.ToString(), StringComparison.Ordinal);
+            Assert.True(File.Exists(Path.Combine(root, "run", "hermes-trial-decision.json")));
+        }
+        finally
+        {
+            if (Directory.Exists(root))
+            {
+                Directory.Delete(root, recursive: true);
+            }
+        }
+    }
+
+    [Xunit.Fact]
+    public void ComparisonDecisionRejectsInvalidHermesTerminalReceipt()
+    {
+        var root = Path.Combine(Path.GetTempPath(), "trial-compare-cli-tests", Guid.NewGuid().ToString("N"));
+        try
+        {
+            var comparison = HermesComparison(root, terminalCompleted: false);
+
+            var evaluation = HermesTrialDecisionEngine.EvaluateForComparison(
+                comparison,
+                new HermesTrialEvidence());
+
+            Assert.Equal(HermesTrialDisposition.Rejected, evaluation.Decision.Disposition);
+            var terminalGate = Assert.Single(evaluation.Gates, gate => gate.Gate == "terminal-receipt");
+            Assert.Equal(HermesTrialGateStatus.Failed, terminalGate.Status);
+            Assert.Contains("hermes-terminal-not-completed", terminalGate.Reasons);
+        }
+        finally
+        {
+            if (Directory.Exists(root))
+            {
+                Directory.Delete(root, recursive: true);
+            }
+        }
+    }
+
     private static string WriteSpec(string root)
     {
         var specPath = Path.Combine(root, "spec.json");
@@ -460,6 +526,70 @@ public sealed class TrialCompareCliCommandTests
         }
 
         return (process.ExitCode, standardOutput.GetAwaiter().GetResult(), standardError.GetAwaiter().GetResult());
+    }
+
+    private static TrialComparisonResult HermesComparison(string root, bool terminalCompleted = true)
+    {
+        var receiptDirectory = Path.Combine(root, "run");
+        Directory.CreateDirectory(receiptDirectory);
+        var workload = new TrialWorkloadIdentity(
+            "workload-id",
+            "fixture-brief",
+            TrialIdentity.ComputeBriefDigest("fixture brief"),
+            "abc123",
+            "OpenAI/gpt-test",
+            "explicit:test");
+        var terminal = new HermesAcpTerminalReceipt(
+            workload.BriefDigest,
+            "gpt-test",
+            "OpenAI",
+            10,
+            5,
+            Completed: terminalCompleted,
+            ExitCode: terminalCompleted ? 0 : 1,
+            CancellationOrShutdownAcknowledged: true,
+            JobExitConfirmed: true,
+            StandardErrorSha256: new string('0', 64),
+            PermissionPolicyViolated: false,
+            UnexpectedChild: false,
+            FinalOutput: "WORKER_RESULT:\nfiles: none\ncommands: none\ntests: pass - fixture\ncommit: none\nblockers: none\nmodel_fit: fixture\nskills: none\nconfidence: high\nEND_WORKER_RESULT",
+            PinnedRelease: HermesAcpAdapter.PinnedRelease,
+            PinnedCommit: HermesAcpAdapter.PinnedCommit,
+            SurvivorInventoryEmpty: true);
+        var hermes = new TrialHarnessResult(
+            "hermes-acp",
+            "abc123",
+            null,
+            null,
+            new(TrialWorkerResultStatus.Valid, 8),
+            Path.Combine(receiptDirectory, "hermes.json"),
+            null,
+            terminalCompleted ? 0 : 1,
+            terminalCompleted ? TrialHarnessOutcome.Completed : TrialHarnessOutcome.ReceiptCaptureFailed,
+            [],
+            workload,
+            new("hermes-arm", workload.Value, "hermes-acp"),
+            null,
+            Path.Combine(receiptDirectory, HermesAcpAdapter.TerminalReceiptFileName),
+            terminal);
+        var baseline = hermes with
+        {
+            Name = "baseline",
+            ReceiptPath = Path.Combine(receiptDirectory, "baseline.json"),
+            ArmIdentity = new("baseline-arm", workload.Value, "baseline"),
+            HermesTerminalReceiptPath = null,
+            HermesTerminalReceipt = null
+        };
+        return new(
+            "abc123",
+            "abc123",
+            receiptDirectory,
+            Path.Combine(receiptDirectory, "comparison.json"),
+            [baseline, hermes],
+            [],
+            Succeeded: true,
+            workload,
+            null);
     }
 
     private static GoalSnapshot HistoricalGoal(params TaskDispatchSnapshot[] dispatches) => new(

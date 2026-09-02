@@ -1,3 +1,5 @@
+using System.Text.Json;
+
 namespace Mcg.AgentOrchestrator.Core;
 
 public sealed record ModelMessage(string Role, string Content);
@@ -98,6 +100,156 @@ public sealed record TaskVerificationRecord(
 
     public bool Succeeded => ExitCode == 0 && string.IsNullOrWhiteSpace(OrchestratorFailureReason);
 
+    public bool HasSameRoundIdentity(TaskVerificationRecord other)
+    {
+        ArgumentNullException.ThrowIfNull(other);
+        return CompletedAt == other.CompletedAt &&
+               DispatchStartedAt == other.DispatchStartedAt &&
+               ChildProcessId == other.ChildProcessId &&
+               ChildExitCode == other.ChildExitCode &&
+               ExitCode == other.ExitCode &&
+               ProviderFailureKind == other.ProviderFailureKind &&
+               WorkerResultPresent == other.WorkerResultPresent &&
+               string.Equals(Command, other.Command, StringComparison.Ordinal) &&
+               string.Equals(WorkingDirectory, other.WorkingDirectory, StringComparison.Ordinal) &&
+               string.Equals(StandardOutput, other.StandardOutput, StringComparison.Ordinal) &&
+               string.Equals(StandardError, other.StandardError, StringComparison.Ordinal) &&
+               string.Equals(StandardOutputPath, other.StandardOutputPath, StringComparison.Ordinal) &&
+               string.Equals(StandardErrorPath, other.StandardErrorPath, StringComparison.Ordinal) &&
+               string.Equals(ReviewedCommit, other.ReviewedCommit, StringComparison.OrdinalIgnoreCase);
+    }
+
+    public TaskVerificationRecord MergeSameRoundEnrichment(TaskVerificationRecord preferred)
+    {
+        ArgumentNullException.ThrowIfNull(preferred);
+        if (!HasSameRoundIdentity(preferred))
+        {
+            throw new ArgumentException("Verification enrichment can only be merged within one durable round.", nameof(preferred));
+        }
+
+        var authoritativeOutput = preferred.AuthoritativeStandardOutput ?? AuthoritativeStandardOutput;
+        var authoritativeError = preferred.AuthoritativeStandardError ?? AuthoritativeStandardError;
+        var preferredHasCompletionVerdict = preferred.CompletionVerdictVerifiedSuccess ||
+                                            !string.IsNullOrWhiteSpace(preferred.CompletionVerdictRule);
+        return this with
+        {
+            ModelFitNote = preferred.ModelFitNote ?? ModelFitNote,
+            HasCommittedChanges = HasCommittedChanges || preferred.HasCommittedChanges,
+            HeartbeatStandardOutputBytes = preferred.HeartbeatStandardOutputBytes ?? HeartbeatStandardOutputBytes,
+            HumanInputQuestion = preferred.HumanInputQuestion ?? HumanInputQuestion,
+            ReviewFindingTouchedAnchors = PreferPopulated(preferred.ReviewFindingTouchedAnchors, ReviewFindingTouchedAnchors),
+            MergedReviewFindings = MergeFindings(MergedReviewFindings, preferred.MergedReviewFindings),
+            ReviewFindingContractViolation = preferred.ReviewFindingContractViolation ?? ReviewFindingContractViolation,
+            FindingEvidenceReceipts = MergeReceipts(FindingEvidenceReceipts, preferred.FindingEvidenceReceipts),
+            OrchestratorFailureReason = preferred.OrchestratorFailureReason ?? OrchestratorFailureReason,
+            ReviewFindingTouchProofDiagnostic = preferred.ReviewFindingTouchProofDiagnostic ?? ReviewFindingTouchProofDiagnostic,
+            HumanInputQuestionFingerprint = preferred.HumanInputQuestionFingerprint ?? HumanInputQuestionFingerprint,
+            HumanInputBlockerFingerprint = preferred.HumanInputBlockerFingerprint ?? HumanInputBlockerFingerprint,
+            ObservedRootExitCode = preferred.ObservedRootExitCode ?? ObservedRootExitCode,
+            ReconciledToSuccess = ReconciledToSuccess || preferred.ReconciledToSuccess,
+            ReconciliationOriginRule = preferred.ReconciliationOriginRule ?? ReconciliationOriginRule,
+            FullStandardOutput = authoritativeOutput,
+            FullStandardError = authoritativeError,
+            AuthoritativeStandardOutput = authoritativeOutput,
+            AuthoritativeStandardError = authoritativeError,
+            FullStandardOutputUnavailableReason = authoritativeOutput is null
+                ? preferred.FullStandardOutputUnavailableReason ?? FullStandardOutputUnavailableReason
+                : null,
+            FullStandardErrorUnavailableReason = authoritativeError is null
+                ? preferred.FullStandardErrorUnavailableReason ?? FullStandardErrorUnavailableReason
+                : null,
+            StandardOutputIsAuthoritative = authoritativeOutput is not null,
+            StandardErrorIsAuthoritative = authoritativeError is not null,
+            PlannerCandidateDivergence = preferred.PlannerCandidateDivergence ?? PlannerCandidateDivergence,
+            CompletionVerdictVerifiedSuccess = preferredHasCompletionVerdict
+                ? preferred.CompletionVerdictVerifiedSuccess
+                : CompletionVerdictVerifiedSuccess,
+            CompletionVerdictRule = preferredHasCompletionVerdict
+                ? preferred.CompletionVerdictRule
+                : CompletionVerdictRule
+        };
+    }
+
+    private static IReadOnlyList<T>? PreferPopulated<T>(IReadOnlyList<T>? preferred, IReadOnlyList<T>? fallback) =>
+        preferred is { Count: > 0 } || fallback is null ? preferred : fallback;
+
+    private static IReadOnlyList<ReviewFinding>? MergeFindings(
+        IReadOnlyList<ReviewFinding>? existing,
+        IReadOnlyList<ReviewFinding>? preferred)
+    {
+        if (existing is null)
+        {
+            return preferred;
+        }
+        if (preferred is null)
+        {
+            return existing;
+        }
+
+        var merged = existing.ToList();
+        foreach (var finding in preferred)
+        {
+            var matchingIndex = merged.FindIndex(candidate =>
+                string.Equals(candidate.StableId, finding.StableId, StringComparison.Ordinal) &&
+                JsonContentEquals(
+                    candidate with { EvidenceOutcome = null },
+                    finding with { EvidenceOutcome = null }));
+            if (matchingIndex < 0)
+            {
+                // Preserve genuinely contradictory same-round bodies. The projector's typed
+                // ambiguity guard will reject them instead of silently choosing one.
+                merged.Add(finding);
+                continue;
+            }
+
+            var prior = merged[matchingIndex];
+            merged[matchingIndex] = finding with
+            {
+                EvidenceOutcome = finding.EvidenceOutcome ?? prior.EvidenceOutcome
+            };
+        }
+
+        return merged;
+    }
+
+    private static IReadOnlyList<FindingEvidenceReceipt>? MergeReceipts(
+        IReadOnlyList<FindingEvidenceReceipt>? existing,
+        IReadOnlyList<FindingEvidenceReceipt>? preferred)
+    {
+        if (existing is null)
+        {
+            return preferred;
+        }
+        if (preferred is null)
+        {
+            return existing;
+        }
+
+        var merged = existing.ToList();
+        foreach (var receipt in preferred)
+        {
+            var matchingIndex = merged.FindIndex(candidate =>
+                string.Equals(candidate.ReceiptId, receipt.ReceiptId, StringComparison.Ordinal) &&
+                JsonContentEquals(candidate, receipt));
+            if (matchingIndex >= 0)
+            {
+                merged[matchingIndex] = receipt;
+            }
+            else
+            {
+                // A reused receipt id with a different body remains visible so the projector
+                // can fail closed with evidence-identity-conflict.
+                merged.Add(receipt);
+            }
+        }
+
+        return merged;
+    }
+
+    private static bool JsonContentEquals<T>(T left, T right) =>
+        JsonSerializer.SerializeToUtf8Bytes(left).AsSpan().SequenceEqual(
+            JsonSerializer.SerializeToUtf8Bytes(right));
+
     public IReadOnlyList<ReviewFinding> GetOpenAdvisoryFindings(
         IReadOnlyList<EffectiveAcceptanceCriteriaCorrection> criteriaCorrections) =>
         ReviewFindings.GetOpenAdvisoryFindings(MergedReviewFindings ?? [], criteriaCorrections);
@@ -132,7 +284,9 @@ public sealed record TaskDispatchRecord(
     string? ReviewFindingTouchProofDiagnostic = null,
     ReviewRetryCapReceipt? ReviewRetryCap = null,
     WorkerContextPackageReceipt? ContextPackageReceipt = null,
-    int PlannerSampleCount = 1)
+    int PlannerSampleCount = 1,
+    RetryContextFingerprint? RetryContextFingerprint = null,
+    PaidRouteClassification PaidRoute = PaidRouteClassification.Unknown)
 {
     public int BriefVersion { get; internal set; } = BriefVersion;
 
@@ -214,6 +368,41 @@ public static class DispatchResumeAdmission
             DispatchResumeAdmissionKind.WarmResume,
             "provider session id and spawn generation tuple match");
     }
+}
+
+public enum CancellationCandidateEvidenceKind
+{
+    Indeterminate,
+    ConfirmedUnchanged,
+    Changed,
+    Dirty,
+    Unsafe,
+    Unavailable
+}
+
+public sealed record CancellationCandidateEvidence(
+    CancellationCandidateEvidenceKind Kind,
+    string? CandidateSha,
+    string Reason,
+    string GitReceipt)
+{
+    public static CancellationCandidateEvidence Indeterminate(string reason = "cancellation evidence was not supplied") =>
+        new(CancellationCandidateEvidenceKind.Indeterminate, null, reason, "git-not-inspected");
+
+    public static CancellationCandidateEvidence ConfirmedUnchanged(string candidateSha, string gitReceipt) =>
+        new(CancellationCandidateEvidenceKind.ConfirmedUnchanged, candidateSha, "cancelled-no-candidate-change", gitReceipt);
+
+    public static CancellationCandidateEvidence Changed(string? candidateSha, string reason, string gitReceipt) =>
+        new(CancellationCandidateEvidenceKind.Changed, candidateSha, reason, gitReceipt);
+
+    public static CancellationCandidateEvidence Dirty(string? candidateSha, string reason, string gitReceipt) =>
+        new(CancellationCandidateEvidenceKind.Dirty, candidateSha, reason, gitReceipt);
+
+    public static CancellationCandidateEvidence Unsafe(string reason, string gitReceipt) =>
+        new(CancellationCandidateEvidenceKind.Unsafe, null, reason, gitReceipt);
+
+    public static CancellationCandidateEvidence Unavailable(string reason, string gitReceipt) =>
+        new(CancellationCandidateEvidenceKind.Unavailable, null, reason, gitReceipt);
 }
 
 public sealed record TaskProcessRecord(

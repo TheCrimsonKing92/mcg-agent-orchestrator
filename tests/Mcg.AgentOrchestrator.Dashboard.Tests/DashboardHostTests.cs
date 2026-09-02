@@ -389,7 +389,7 @@ public sealed class DashboardHostTests
                 Assert.Equal("/api/system/stop-dashboard", cleanupDocument.RootElement.GetProperty("StopCurrentUrl").GetString());
                 Assert.Equal("/api/system/run-build-test-cycle", cleanupDocument.RootElement.GetProperty("RunBuildTestCycleUrl").GetString());
                 Assert.Contains("Invoke-IsolatedDotnet.ps1 build Mcg.AgentOrchestrator.sln --no-restore --verbosity minimal", cleanupPlan, StringComparison.Ordinal);
-                Assert.Contains("Invoke-IsolatedDotnet.ps1 test Mcg.AgentOrchestrator.sln --verbosity minimal", cleanupPlan, StringComparison.Ordinal);
+                Assert.Contains("Invoke-TestSummary.ps1 -Target .\\Mcg.AgentOrchestrator.sln", cleanupPlan, StringComparison.Ordinal);
                 Assert.Contains("Get-Process Mcg.AgentOrchestrator.App -ErrorAction SilentlyContinue", cleanupPlan, StringComparison.Ordinal);
                 Assert.Contains("Invoke-DashboardBuildTestCycle.ps1", cleanupPlan, StringComparison.Ordinal);
             }

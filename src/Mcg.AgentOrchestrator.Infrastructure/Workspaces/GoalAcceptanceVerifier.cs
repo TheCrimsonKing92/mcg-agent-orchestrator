@@ -34,7 +34,50 @@ public sealed record AcceptanceCheckResult(
     bool TestResultIsExplicitCrossAttemptReuse = false,
     IReadOnlyList<string>? FailingTestIdentities = null,
     int? ExecutedTestCount = null,
-    AcceptanceFailureCauseEvidence? FailureCauseEvidence = null);
+    int? DiscoveredTestCount = null,
+    AcceptanceShardCompletionDecision? CompletionDecision = null,
+    string? ProcessStderrPath = null,
+    string? ProcessStderr = null,
+    string? GateHeartbeatPath = null,
+    AcceptanceFailureCauseEvidence? FailureCauseEvidence = null,
+    string? TestProjectPath = null,
+    IReadOnlyList<AcceptanceTestFailureAttribution>? FailingTestAttributions = null);
+
+public enum AcceptanceTestFailureOrigin
+{
+    Introduced,
+    Inherited,
+    Unattributed
+}
+
+public sealed record AcceptanceTestFailureAttribution(
+    string TestIdentity,
+    AcceptanceTestFailureOrigin Origin,
+    string Evidence);
+
+public sealed record AcceptanceShardCompletionDecision(
+    bool Passed,
+    string? FailedPredicate,
+    bool TimedOut,
+    int? ExitCode,
+    int? DiscoveredTestCount,
+    int? ExecutedTestCount,
+    string TrxOutcome,
+    string? PolicySignal = null,
+    int? NotExecutedTestCount = null);
+
+public static class AcceptanceShardCompletionPredicates
+{
+    public const string TimedOut = "timed-out";
+    public const string NonzeroExit = "nonzero-exit";
+    public const string MissingTrx = "missing-trx";
+    public const string MalformedTrx = "malformed-trx";
+    public const string ZeroTests = "zero-tests";
+    public const string IncompleteExecution = "incomplete-execution";
+    public const string FailingTrx = "failing-trx";
+    public const string CheckFailed = "check-failed";
+    public const string RetryEvidenceRetentionFailed = "retry-evidence-retention-failed";
+}
 
 public sealed record AcceptanceFailureCauseEvidence(
     AcceptanceFailureCause Cause,
@@ -98,7 +141,6 @@ internal static class AcceptanceFailureCauseReceiptCodec
         if (receipt is null ||
             receipt.ContractVersion != 1 ||
             !receipt.Kind.Equals("seeded-dispatch-repository-git-probe", StringComparison.Ordinal) ||
-            !receipt.Owner.Equals("ProcessOutputApparatus", StringComparison.Ordinal) ||
             string.IsNullOrWhiteSpace(receipt.Check) ||
             string.IsNullOrWhiteSpace(receipt.FixtureAttemptId) ||
             receipt.FixtureAttemptId.Equals("not-assigned", StringComparison.Ordinal) ||
@@ -107,22 +149,73 @@ internal static class AcceptanceFailureCauseReceiptCodec
             return false;
         }
 
-        return receipt.ProbeClassification switch
+        return receipt.Owner switch
         {
-            "EmptyRequiredOutput" =>
-                receipt.ProcessStarted && receipt.ExitCode == 0 &&
-                receipt.StandardOutputByteCount == 0 &&
-                !receipt.DrainTimedOut && !receipt.TimedOut && !receipt.DrainFailed &&
-                receipt.RepositoryHeadState is "ValidLooseReference" or
-                    "ValidPackedReference" or "ValidDetachedHead",
-            "LaunchFailure" => !receipt.ProcessStarted,
-            "ProcessTimeout" => receipt.ProcessStarted && receipt.TimedOut,
-            "DrainTimeout" => receipt.ProcessStarted && receipt.DrainTimedOut,
-            "DrainFailure" => receipt.ProcessStarted && receipt.DrainFailed,
-            "ProcessObservationFailure" => receipt.ProcessStarted && receipt.ExitCode is null or 0,
+            "ProcessOutputApparatus" => IsProcessOutputApparatus(receipt),
+            "FixturePublication" => IsFixturePublicationApparatus(receipt),
             _ => false
         };
     }
+
+    private static bool IsProcessOutputApparatus(AcceptanceFailureCauseReceiptV1 receipt)
+    {
+        if (receipt.RepositoryHeadState is not (
+            "ValidLooseReference" or "ValidPackedReference" or "ValidDetachedHead"))
+        {
+            return false;
+        }
+
+        return IsProcessFaultClassification(receipt);
+    }
+
+    private static bool IsFixturePublicationApparatus(AcceptanceFailureCauseReceiptV1 receipt)
+    {
+        if (receipt.RepositoryHeadState is not (
+            "RepositoryMissing" or "GitMetadataMissing" or "HeadMissing" or "HeadInvalid" or
+            "ReferenceMissing" or "ReferenceInvalid"))
+        {
+            return false;
+        }
+
+        return receipt.ProbeClassification switch
+        {
+            "NotRun" => !receipt.ProcessStarted && receipt.ExitCode is null &&
+                receipt.StandardOutputByteCount == 0 &&
+                !receipt.DrainTimedOut && !receipt.TimedOut && !receipt.DrainFailed,
+            "NonZeroExit" => receipt.ProcessStarted && receipt.ExitCode is not null and not 0 &&
+                !receipt.DrainTimedOut && !receipt.TimedOut && !receipt.DrainFailed,
+            "InvalidRequiredOutput" => receipt.ProcessStarted && receipt.ExitCode == 0 &&
+                receipt.StandardOutputByteCount > 0 &&
+                !receipt.DrainTimedOut && !receipt.TimedOut && !receipt.DrainFailed,
+            _ => IsProcessFaultClassification(receipt)
+        };
+    }
+
+    private static bool IsProcessFaultClassification(AcceptanceFailureCauseReceiptV1 receipt) =>
+        receipt.ProbeClassification switch
+        {
+            "EmptyRequiredOutput" => receipt.ProcessStarted && receipt.ExitCode == 0 &&
+                receipt.StandardOutputByteCount == 0 &&
+                !receipt.DrainTimedOut && !receipt.TimedOut && !receipt.DrainFailed,
+            "LaunchFailure" => !receipt.ProcessStarted && receipt.ExitCode is null &&
+                receipt.StandardOutputByteCount == 0 &&
+                receipt.StandardErrorByteCount > 0 &&
+                !receipt.DrainTimedOut && !receipt.TimedOut && !receipt.DrainFailed,
+            "ProcessTimeout" => receipt.ProcessStarted && receipt.TimedOut,
+            "DrainTimeout" => receipt.ProcessStarted && !receipt.TimedOut && receipt.DrainTimedOut,
+            "DrainFailure" => receipt.ProcessStarted && !receipt.TimedOut &&
+                !receipt.DrainTimedOut && receipt.DrainFailed,
+            "ProcessObservationFailure" => receipt.ProcessStarted &&
+                receipt.StandardOutputByteCount == 0 &&
+                receipt.StandardErrorByteCount > 0 &&
+                !receipt.DrainTimedOut && !receipt.TimedOut && !receipt.DrainFailed,
+            _ => false
+        };
+}
+
+public static class AcceptanceShardCompletionSignals
+{
+    public const string MissingTrxInjectedRunnerCompatibility = "missing-trx-injected-runner-compatibility";
 }
 
 internal sealed record AcceptanceProcessCleanupObservation(
@@ -139,15 +232,19 @@ public static class AcceptanceFailureClassifications
     public const string InheritedBaselineApparatus = "inherited-baseline-apparatus";
     public const string StructuralCoverageFailed = "structural-coverage-failed";
     public const string FocusedSelectionApparatusFailure = "focused-selection-apparatus-failure";
+    public const string FocusedSelectionAbsentAtBaseline = "focused-selection-absent-at-baseline";
+    public const string RetryEvidenceRetentionFailed = "retry-evidence-retention-failed";
     public const string FocusedSelectionReceiptUnreadable = "focused-selection-receipt-unreadable";
     public const string SeededRepositoryProcessOutputApparatus = "seeded-repository-process-output-apparatus";
+    public const string SeededRepositoryApparatus = "seeded-repository-apparatus";
 
     public static bool IsEnvironmentalApparatus(string? classification) =>
         classification is GateEnvironmentInterference or
             InheritedBaselineApparatus or
             FocusedSelectionApparatusFailure or
             FocusedSelectionReceiptUnreadable or
-            SeededRepositoryProcessOutputApparatus;
+            SeededRepositoryProcessOutputApparatus or
+            SeededRepositoryApparatus;
 }
 
 public enum FocusedEvidenceRejectionCode
@@ -300,7 +397,8 @@ public sealed class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
         TaskProcessResourceAccounting? ResourceAccounting = null,
         bool ResourceAccountingExpected = false,
         long StdoutBytes = 0,
-        long StderrBytes = 0);
+        long StderrBytes = 0,
+        string? Stderr = null);
 
     private static readonly Regex TestAttrPattern = new(
         @"^\s*\[\s*(?:Xunit\.)?(?:Fact|Theory)\s*(?:\(|,|\])",
@@ -336,6 +434,7 @@ public sealed class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
         "extracted Infrastructure test projects registered in engine.mtpInvocations also accept their " +
         "project label, file name, or full .csproj path";
     private const int FocusedEvidenceShortTimeoutTargetLimit = 4;
+    internal const int MaxFailureAttributionFocusedEvidenceIdentities = FocusedEvidenceShortTimeoutTargetLimit;
     public const string AcceptanceAttemptTrxPrefixVariable = "MCG_ACCEPTANCE_GATE_ATTEMPT_TRX_PREFIX";
 
     public static StartupContract ValidateStartupContract(string repositoryRoot)
@@ -378,11 +477,15 @@ public sealed class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
     private readonly AcceptanceStructuralCoverageEvaluator _structuralCoverageEvaluator;
     private readonly TimeProvider _timeProvider;
     private readonly Action<TimeSpan> _leaseSleep;
+    // The production runner owns process and TRX filesystem side effects. Injected runners return only a
+    // CommandResult unless their test explicitly creates a receipt, so missing TRX remains a typed compatibility
+    // signal on that seam rather than silently changing legacy synthetic verdicts.
+    private readonly bool _requiresTestTelemetryReceipt;
     private static readonly AsyncLocal<GateHeartbeatContext?> CurrentGateHeartbeatContext = new();
     private static readonly AsyncLocal<TestTelemetryInvocationAllocator?> CurrentTestTelemetryInvocationAllocator = new();
     private static readonly AsyncLocal<TestTelemetryInvocation?> CurrentTestTelemetryInvocation = new();
     private static readonly AsyncLocal<Action<AcceptanceGateProgress>?> CurrentGateProgressSink = new();
-    private static readonly AsyncLocal<Func<bool>?> CurrentGateCancellationProbe = new();
+    private static readonly AsyncLocal<GateCancellationProbes?> CurrentGateCancellationProbes = new();
     private static readonly AsyncLocal<AcceptanceGateEngineSettings?> CurrentGateEngineSettings = new();
     private static readonly AsyncLocal<string?> CurrentAcceptanceAttemptPrefix = new();
     private static readonly AsyncLocal<ManagedRunEnvironmentScope?> CurrentManagedRunEnvironmentScope = new();
@@ -410,6 +513,8 @@ public sealed class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
     internal static DotnetBaseBuildCache? BaseBuildCacheForTests { get; set; }
 
     private sealed record TestTelemetryInvocation(string Stem, int Ordinal);
+
+    private sealed record GateCancellationProbes(Func<bool> Poll, Func<bool> Boundary);
 
     private sealed class TestTelemetryInvocationAllocator
     {
@@ -440,7 +545,14 @@ public sealed class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
         CliTestsProject
     ];
 
-    public GoalAcceptanceVerifier() : this(RunProcessAsync, RunUtf8DiscoveryProcessAsync, TimeProvider.System) { }
+    public GoalAcceptanceVerifier()
+        : this(
+            RunProcessAsync,
+            RunUtf8DiscoveryProcessAsync,
+            TimeProvider.System,
+            requiresTestTelemetryReceipt: true)
+    {
+    }
 
     internal GoalAcceptanceVerifier(Func<string[], string, CancellationToken, Task<CommandResult>> runner)
         : this(runner, TimeProvider.System)
@@ -465,7 +577,7 @@ public sealed class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
         Func<string[], string, TimeSpan, CancellationToken, Task<CommandResult>> runner,
         TimeProvider timeProvider,
         Action<TimeSpan>? leaseSleep = null)
-        : this(runner, runner, timeProvider, leaseSleep)
+        : this(runner, runner, timeProvider, leaseSleep, requiresTestTelemetryReceipt: false)
     {
     }
 
@@ -473,7 +585,8 @@ public sealed class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
         Func<string[], string, TimeSpan, CancellationToken, Task<CommandResult>> runner,
         Func<string[], string, TimeSpan, CancellationToken, Task<CommandResult>> discoveryRunner,
         TimeProvider timeProvider,
-        Action<TimeSpan>? leaseSleep = null)
+        Action<TimeSpan>? leaseSleep = null,
+        bool requiresTestTelemetryReceipt = false)
     {
         _runner = runner;
         _structuralCoverageEvaluator = new AcceptanceStructuralCoverageEvaluator(
@@ -481,6 +594,7 @@ public sealed class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
             IsBuildArtifactIoException);
         _timeProvider = timeProvider;
         _leaseSleep = leaseSleep ?? Thread.Sleep;
+        _requiresTestTelemetryReceipt = requiresTestTelemetryReceipt;
     }
 
     public static IDisposable PushGateProgressSink(Action<AcceptanceGateProgress> sink)
@@ -490,11 +604,16 @@ public sealed class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
         return new RestoreAction(() => CurrentGateProgressSink.Value = previous);
     }
 
-    public static IDisposable PushGateCancellationProbe(Func<bool> shouldCancel)
+    public static IDisposable PushGateCancellationProbe(
+        Func<bool> shouldCancel,
+        Func<bool>? shouldCancelAtBoundary = null)
     {
-        var previous = CurrentGateCancellationProbe.Value;
-        CurrentGateCancellationProbe.Value = shouldCancel;
-        return new RestoreAction(() => CurrentGateCancellationProbe.Value = previous);
+        ArgumentNullException.ThrowIfNull(shouldCancel);
+        var previous = CurrentGateCancellationProbes.Value;
+        CurrentGateCancellationProbes.Value = new GateCancellationProbes(
+            shouldCancel,
+            shouldCancelAtBoundary ?? shouldCancel);
+        return new RestoreAction(() => CurrentGateCancellationProbes.Value = previous);
     }
 
     public static IDisposable PushAcceptanceAttemptResultsPrefix(string prefix)
@@ -686,6 +805,16 @@ public sealed class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
         var sanctionedRemovedTests = LoadSanctionedTestRemovals(worktreePath);
 
         var checks = new List<AcceptanceCheckResult>();
+        checks.AddRange(effectivePlan.SemanticDeduplications.Select(receipt =>
+            new AcceptanceCheckResult(
+                $"semantic execution deduplication: {receipt.PartitionId}",
+                true,
+                0,
+                null,
+                ResultSummary:
+                    $"kept_index={receipt.RetainedPlanIndex} dropped_index={receipt.DroppedPlanIndex} " +
+                    $"semantic_key_sha256={receipt.SemanticKeySha256}",
+                Advisory: true)));
         var retried = false;
         phaseAccountant.TransitionTo(AcceptanceGatePhaseNames.CheckExecution);
 
@@ -819,6 +948,7 @@ public sealed class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
         {
             checks.Add(partitionCacheReceipt);
         }
+        partitionVerdictCache?.RecordSemanticDeduplications(effectivePlan.SemanticDeduplications);
 
         if (effectivePlan.DotnetShardDisposition == DotnetShardDisposition.RunDotnetShards)
         {
@@ -890,9 +1020,33 @@ public sealed class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
         }
 
         phaseAccountant.TransitionTo(AcceptanceGatePhaseNames.Finalize);
+        var failureAttributionBudget = new AcceptanceFailureAttributionPlanner.FocusedInvocationBudget(
+            MaxFailureAttributionFocusedEvidenceIdentities);
+        var failureAttributionRequests = new (AcceptanceCheckResult Check, AcceptanceManifestCheck? ManifestCheck)[checks.Count];
         for (var index = 0; index < checks.Count; index++)
         {
-            checks[index] = AttachFailureCauseEvidence(checks[index]);
+            var check = AttachFailureCauseEvidence(checks[index]);
+            var manifestCheck = effectiveChecks.FirstOrDefault(candidate =>
+                candidate.Name.Equals(check.Name, StringComparison.Ordinal));
+            check = manifestCheck?.Project is { Length: > 0 } project
+                ? check with { TestProjectPath = project }
+                : check;
+            checks[index] = check;
+            failureAttributionRequests[index] = (check, manifestCheck);
+        }
+
+        var attributedChecks = await AttachTestFailureAttributionsBatchAsync(
+            failureAttributionRequests,
+            engineSettings,
+            worktreePath,
+            goalId,
+            stableSlotIndex,
+            stableSlotLease,
+            cancellationToken,
+            failureAttributionBudget).ConfigureAwait(false);
+        for (var index = 0; index < attributedChecks.Count; index++)
+        {
+            checks[index] = attributedChecks[index];
         }
 
         var failedCheck = checks.FirstOrDefault(check => !check.Advisory && !check.Passed);
@@ -921,6 +1075,195 @@ public sealed class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
         {
             throw AcceptanceGateEngineException.Capture(exception, phaseAccountant.Snapshot);
         }
+    }
+
+    internal async Task<AcceptanceCheckResult> AttachTestFailureAttributionsAsync(
+        AcceptanceCheckResult check,
+        AcceptanceManifestCheck? manifestCheck,
+        AcceptanceGateEngineSettings engineSettings,
+        string worktreePath,
+        GoalId? goalId,
+        int? stableSlotIndex,
+        DotnetBuildEnvironmentLease? stableSlotLease,
+        CancellationToken cancellationToken,
+        AcceptanceFailureAttributionPlanner.FocusedInvocationBudget? invocationBudget = null)
+    {
+        var attributed = await AttachTestFailureAttributionsBatchAsync(
+            [(check, manifestCheck)],
+            engineSettings,
+            worktreePath,
+            goalId,
+            stableSlotIndex,
+            stableSlotLease,
+            cancellationToken,
+            invocationBudget).ConfigureAwait(false);
+        return attributed[0];
+    }
+
+    private async Task<IReadOnlyList<AcceptanceCheckResult>> AttachTestFailureAttributionsBatchAsync(
+        IReadOnlyList<(AcceptanceCheckResult Check, AcceptanceManifestCheck? ManifestCheck)> requests,
+        AcceptanceGateEngineSettings engineSettings,
+        string worktreePath,
+        GoalId? goalId,
+        int? stableSlotIndex,
+        DotnetBuildEnvironmentLease? stableSlotLease,
+        CancellationToken cancellationToken,
+        AcceptanceFailureAttributionPlanner.FocusedInvocationBudget? invocationBudget = null)
+    {
+        using var engineScope = PushEngineSettings(engineSettings);
+        invocationBudget ??= new AcceptanceFailureAttributionPlanner.FocusedInvocationBudget(
+            MaxFailureAttributionFocusedEvidenceIdentities);
+        var results = requests.Select(request => request.Check).ToArray();
+        var prepared = new List<(
+            int Index,
+            AcceptanceCheckResult Check,
+            AcceptanceFailureAttributionPlanner.BoundedIdentitySelection IdentitySelection,
+            string[] Selectors,
+            AcceptanceFailureAttributionPlanner.CandidateSelectionPlan SelectionPlan)>();
+        for (var index = 0; index < requests.Count; index++)
+        {
+            var (check, manifestCheck) = requests[index];
+            if (check.Passed || check.Advisory ||
+                check.FailingTestIdentities is not { Count: > 0 } failingTestIdentities)
+            {
+                continue;
+            }
+
+            var identitySelection = invocationBudget.Select(failingTestIdentities);
+            var identities = identitySelection.All;
+            if (identities.Count == 0)
+            {
+                continue;
+            }
+
+            if (identitySelection.Selected.Count == 0)
+            {
+                results[index] = check with
+                {
+                    FailingTestAttributions = AcceptanceFailureAttributionPlanner.IncludeOmittedAsUnattributed(
+                        [],
+                        identitySelection.Omitted,
+                        MaxFailureAttributionFocusedEvidenceIdentities)
+                };
+                continue;
+            }
+
+            if (manifestCheck is null ||
+                !manifestCheck.Type.Equals("dotnet-test", StringComparison.OrdinalIgnoreCase) ||
+                string.IsNullOrWhiteSpace(manifestCheck.Project))
+            {
+                results[index] = Unattributed(
+                    check,
+                    identities,
+                    "acceptance check has no exact dotnet-test project mapping");
+                continue;
+            }
+
+            var selectors = identitySelection.Selected
+                .Select(AcceptanceFailureAttributionPlanner.NormalizeIdentity)
+                .ToArray();
+            if (selectors.Any(selector => selector.Length == 0 ||
+                    !Regex.IsMatch(selector, @"^[A-Za-z_][A-Za-z0-9_.]*$")))
+            {
+                results[index] = Unattributed(
+                    check,
+                    identities,
+                    "failing test identity cannot be represented by an exact focused selector");
+                continue;
+            }
+
+            var selectionPlan = AcceptanceFailureAttributionPlanner.BuildCandidateSelections(
+                ProjectLabel(manifestCheck.Project), selectors, engineSettings, worktreePath);
+            if (!selectionPlan.Succeeded)
+            {
+                results[index] = Unattributed(check, identities, selectionPlan.FailureEvidence!);
+                continue;
+            }
+
+            invocationBudget.Consume(identitySelection);
+            prepared.Add((index, check, identitySelection, selectors, selectionPlan));
+        }
+
+        if (prepared.Count == 0)
+        {
+            return results;
+        }
+
+        var focusedChecks = prepared
+            .SelectMany(item => item.SelectionPlan.Checks)
+            .GroupBy(check => check.Name, StringComparer.Ordinal)
+            .Select(group => group.First())
+            .ToArray();
+        var focusedCoverage = new FocusedEvidenceCoverage(
+            prepared
+                .SelectMany(item => item.SelectionPlan.Coverage.TargetToChecks)
+                .GroupBy(target => target.Target, StringComparer.Ordinal)
+                .Select(group => new FocusedEvidenceTargetCoverage(
+                    group.Key,
+                    group.SelectMany(target => target.CheckNames)
+                        .Distinct(StringComparer.Ordinal)
+                        .ToArray()))
+                .ToArray(),
+            ExecutionReason: "failure-attribution-gate-batch");
+        var baselineSha = ResolveGitScalar(worktreePath, "merge-base", "HEAD", "main");
+        FocusedEvidenceArmRunResult baseline;
+        try
+        {
+            baseline = await RunBaselineFocusedEvidenceArmAsync(
+                worktreePath,
+                baselineSha,
+                goalId,
+                focusedChecks,
+                focusedCoverage,
+                stableSlotIndex,
+                stableSlotLease,
+                cancellationToken,
+                classifyMissingSelectionsAsAbsent: true).ConfigureAwait(false);
+        }
+        catch (OperationCanceledException)
+        {
+            throw;
+        }
+        catch (Exception ex)
+        {
+            foreach (var item in prepared)
+            {
+                results[item.Index] = Unattributed(
+                    item.Check,
+                    item.IdentitySelection.All,
+                    $"focused baseline execution failed: {ex.GetType().Name}");
+            }
+
+            return results;
+        }
+
+        foreach (var item in prepared)
+        {
+            var attributions = AcceptanceFailureAttributionPlanner.IncludeOmittedAsUnattributed(
+                AcceptanceFailureAttributionPlanner.ClassifyBaselineFailures(
+                    item.IdentitySelection.Selected,
+                    item.Selectors,
+                    item.SelectionPlan.CheckNamesBySelector,
+                    baseline),
+                item.IdentitySelection.Omitted,
+                MaxFailureAttributionFocusedEvidenceIdentities);
+            results[item.Index] = item.Check with { FailingTestAttributions = attributions };
+        }
+
+        return results;
+
+        static AcceptanceCheckResult Unattributed(
+            AcceptanceCheckResult check,
+            IReadOnlyList<string> identities,
+            string evidence) => check with
+        {
+            FailingTestAttributions = identities
+                .Select(identity => new AcceptanceTestFailureAttribution(
+                    identity,
+                    AcceptanceTestFailureOrigin.Unattributed,
+                    evidence))
+                .ToArray()
+        };
     }
 
     internal static AcceptanceCheckResult AttachFailureCauseEvidence(AcceptanceCheckResult check)
@@ -962,7 +1305,8 @@ public sealed class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
             AcceptanceFailureClassifications.GateEnvironmentInterference or
             AcceptanceFailureClassifications.FocusedSelectionApparatusFailure or
             AcceptanceFailureClassifications.FocusedSelectionReceiptUnreadable or
-            AcceptanceFailureClassifications.SeededRepositoryProcessOutputApparatus =>
+            AcceptanceFailureClassifications.SeededRepositoryProcessOutputApparatus or
+            AcceptanceFailureClassifications.SeededRepositoryApparatus =>
                 AcceptanceFailureCause.EnvironmentalApparatus,
             _ => (AcceptanceFailureCause?)null
         };
@@ -1012,7 +1356,7 @@ public sealed class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
             return null;
         }
 
-        var markers = new List<string>();
+        var receipts = new List<AcceptanceFailureCauseReceiptV1>();
         var failedResultCount = 0;
         foreach (var trxPath in trxPaths.Where(File.Exists))
         {
@@ -1021,11 +1365,16 @@ public sealed class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
                 var failedResults = XDocument.Load(trxPath, LoadOptions.None)
                     .Descendants()
                     .Where(element =>
-                        element.Name.LocalName.Equals("UnitTestResult", StringComparison.Ordinal) &&
-                        string.Equals(
-                            element.Attribute("outcome")?.Value,
-                            "Failed",
-                            StringComparison.OrdinalIgnoreCase))
+                    {
+                        if (!element.Name.LocalName.Equals("UnitTestResult", StringComparison.Ordinal))
+                        {
+                            return false;
+                        }
+
+                        var outcome = element.Attribute("outcome")?.Value;
+                        return !string.Equals(outcome, "Passed", StringComparison.OrdinalIgnoreCase) &&
+                            !string.Equals(outcome, "NotExecuted", StringComparison.OrdinalIgnoreCase);
+                    })
                     .ToArray();
                 foreach (var result in failedResults)
                 {
@@ -1042,7 +1391,7 @@ public sealed class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
                         return null;
                     }
 
-                    markers.Add(AcceptanceFailureCauseReceiptCodec.Format(receipt));
+                    receipts.Add(receipt);
                 }
             }
             catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or System.Xml.XmlException)
@@ -1051,22 +1400,28 @@ public sealed class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
             }
         }
 
-        if (failedResultCount == 0 || markers.Count != failedResultCount)
+        if (failedResultCount == 0 || receipts.Count != failedResultCount)
         {
             return null;
         }
 
-        var evidence = string.Join(" | ", markers.Distinct(StringComparer.Ordinal));
+        var evidence = string.Join(
+            " | ",
+            receipts.Select(AcceptanceFailureCauseReceiptCodec.Format).Distinct(StringComparer.Ordinal));
         if (evidence.Length > 4096)
         {
             evidence = evidence[..4096];
         }
 
+        var sourceClassification = receipts.All(receipt =>
+            receipt.Owner.Equals("ProcessOutputApparatus", StringComparison.Ordinal))
+                ? AcceptanceFailureClassifications.SeededRepositoryProcessOutputApparatus
+                : AcceptanceFailureClassifications.SeededRepositoryApparatus;
         return new AcceptanceFailureCauseEvidence(
             AcceptanceFailureCause.EnvironmentalApparatus,
             evidence,
             checkName,
-            AcceptanceFailureClassifications.SeededRepositoryProcessOutputApparatus);
+            sourceClassification);
     }
 
     private static bool ShouldCaptureGateEngineFault(Exception exception) =>
@@ -1217,7 +1572,8 @@ public sealed class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
         DotnetBuildEnvironmentLease? stableSlotLease,
         DotnetBuildEnvironment? executionEnvironment,
         bool shutdownBuildServers,
-        CancellationToken cancellationToken)
+        CancellationToken cancellationToken,
+        bool continueAfterFailure = false)
     {
         using var armResultsScope = PushFocusedEvidenceArmResultsScope(arm);
         var engineSettings = EngineSettings;
@@ -1248,7 +1604,8 @@ public sealed class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
             stableSlotLease,
             dotnetTestBuildPhase,
             shardConcurrencyBudget,
-            cancellationToken).ConfigureAwait(false);
+            cancellationToken,
+            continueAfterFailure).ConfigureAwait(false);
         var checks = batch.Results;
         var disposition = ClassifyFocusedEvidenceArm(checks);
         var failed = checks.FirstOrDefault(check => !check.Passed);
@@ -1282,7 +1639,8 @@ public sealed class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
         FocusedEvidenceCoverage coverage,
         int? stableSlotIndex,
         DotnetBuildEnvironmentLease? stableSlotLease,
-        CancellationToken cancellationToken)
+        CancellationToken cancellationToken,
+        bool classifyMissingSelectionsAsAbsent = false)
     {
         if (string.IsNullOrWhiteSpace(baselineSha))
         {
@@ -1309,26 +1667,61 @@ public sealed class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
         GoalId? baselineEnvironmentId = null;
         try
         {
+            var sourcePlan = new AcceptanceFailureAttributionPlanner.BaselineSourceSelectionPlan(
+                focusedChecks,
+                []);
+            if (classifyMissingSelectionsAsAbsent)
+            {
+                sourcePlan = AcceptanceFailureAttributionPlanner.BuildBaselineSourceSelections(
+                    baselineSha,
+                    focusedChecks,
+                    ProjectLabel,
+                    EngineSettings,
+                    baselinePath);
+            }
+
             // The baseline owns a fresh artifact environment. Sharing candidate artifacts could make
             // a structurally broken baseline look like a meaningful RED arm.
-            baselineEnvironmentId = GoalId.New();
-            baselineEnvironment = DotnetBuildEnvironmentManager.CreateAttempt(
-                baselineEnvironmentId,
-                $"focused-evidence-baseline-{baselineSha[..Math.Min(8, baselineSha.Length)]}");
-            return await RunFocusedEvidenceArmAsync(
-                FindingEvidenceArm.Baseline,
-                baselineSha,
-                baselinePath,
-                // Ownerless execution gets an invocation-local build environment. Passing the goal
-                // id here would reuse candidate artifacts and invalidate the negative control.
-                null,
+            FocusedEvidenceArmRunResult executedArm;
+            if (sourcePlan.ExecutableChecks.Count == 0)
+            {
+                executedArm = new FocusedEvidenceArmRunResult(
+                    FindingEvidenceArm.Baseline,
+                    baselineSha,
+                    FindingEvidenceArmDisposition.Inconclusive,
+                    Accepted: true,
+                    Passed: false,
+                    "no focused baseline checks required execution",
+                    []);
+            }
+            else
+            {
+                baselineEnvironmentId = GoalId.New();
+                baselineEnvironment = DotnetBuildEnvironmentManager.CreateAttempt(
+                    baselineEnvironmentId,
+                    $"focused-evidence-baseline-{baselineSha[..Math.Min(8, baselineSha.Length)]}");
+                executedArm = await RunFocusedEvidenceArmAsync(
+                    FindingEvidenceArm.Baseline,
+                    baselineSha,
+                    baselinePath,
+                    // Ownerless execution gets an invocation-local build environment. Passing the goal
+                    // id here would reuse candidate artifacts and invalidate the negative control.
+                    null,
+                    sourcePlan.ExecutableChecks,
+                    coverage,
+                    stableSlotIndex,
+                    stableSlotLease,
+                    baselineEnvironment,
+                    shutdownBuildServers: true,
+                    cancellationToken: cancellationToken,
+                    continueAfterFailure: classifyMissingSelectionsAsAbsent).ConfigureAwait(false);
+            }
+
+            return AcceptanceFailureAttributionPlanner.CombineBaselineArm(
                 focusedChecks,
-                coverage,
-                stableSlotIndex,
-                stableSlotLease,
-                baselineEnvironment,
-                shutdownBuildServers: true,
-                cancellationToken: cancellationToken).ConfigureAwait(false);
+                executedArm,
+                sourcePlan.SourceClassificationChecks,
+                ClassifyFocusedEvidenceArm);
         }
         finally
         {
@@ -1504,7 +1897,8 @@ public sealed class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
         DotnetBuildEnvironmentLease? stableSlotLease,
         DotnetTestBuildPhase? dotnetTestBuildPhase,
         int maxConcurrentShards,
-        CancellationToken cancellationToken)
+        CancellationToken cancellationToken,
+        bool continueAfterFailure = false)
     {
         var results = new List<AcceptanceCheckResult>(batchChecks.Count);
         var retried = false;
@@ -1548,7 +1942,9 @@ public sealed class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
             retried |= checkResult.Retried;
             results.Add(checkResult.Result);
             index++;
-            if (!checkResult.Result.Passed && ShouldStopAfterFailedCheck(cacheContext, check))
+            if (!checkResult.Result.Passed &&
+                !continueAfterFailure &&
+                ShouldStopAfterFailedCheck(cacheContext, check))
             {
                 break;
             }
@@ -1572,14 +1968,11 @@ public sealed class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
         var allShardsUseMtp = shardChecks.All(UsesMicrosoftTestingPlatform);
         if (allShardsUseMtp && primaryBuildPhase is not null)
         {
-            var prebuild = await EnsureDotnetTestBuildPhaseAsync(
-                primaryBuildPhase,
-                shardChecks[0],
-                worktreePath,
-                goalId,
-                primarySlotIndex,
-                primaryLease,
-                "acceptance-infrastructure-shards-prebuild",
+            var prebuild = await AcceptanceGateCancellationMonitor.RunAsync(
+                activeToken => EnsureDotnetTestBuildPhaseAsync(
+                    primaryBuildPhase, shardChecks[0], worktreePath, goalId, primarySlotIndex, primaryLease,
+                    "acceptance-infrastructure-shards-prebuild", activeToken),
+                CurrentGateCancellationProbes.Value?.Poll,
                 cancellationToken).ConfigureAwait(false);
             if (prebuild.Run.Result.Passed)
             {
@@ -1819,9 +2212,12 @@ public sealed class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
             cancellationToken,
             testResultsDirectoryOverride).ConfigureAwait(false);
         var currentAttemptId = cacheContext?.AttemptId ?? CurrentAcceptanceAttemptIdOrNull();
+        var completionDecision = fresh.Result.CompletionDecision ?? InferPartitionCompletionDecision(fresh.Result);
         fresh = (fresh.Result with
         {
-            TestResultAttemptId = currentAttemptId
+            TestResultAttemptId = currentAttemptId,
+            CompletionDecision = completionDecision,
+            FailureClassification = fresh.Result.FailureClassification ?? completionDecision.FailedPredicate
         }, fresh.Retried);
 
         // Within-attempt flake tolerance: a failed infrastructure PARTITION can be an intermittent flake
@@ -1829,8 +2225,43 @@ public sealed class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
         // testhost handle still settling). Re-run the failed partition ONCE with the same slot lease and
         // build phase; if the re-run passes, the failure was a flake and the partition is treated as
         // passed. A genuine red fails both runs. Bounded to a single retry, only for true partitions.
-        if (cacheContext?.ShouldRerunWithinAttempt(check, fresh.Result.Passed) == true)
+        if (cacheContext?.ShouldRerunWithinAttempt(check, fresh.Result.CompletionDecision) == true)
         {
+            var original = fresh.Result;
+            var originalInvocationId = BuildInvocationIdentity(check, original.TestResultRunOrdinal, currentAttemptId);
+            AcceptanceRetainedDiagnostic? retainedDiagnostic = null;
+            try
+            {
+                retainedDiagnostic = AcceptanceAttemptArtifactCustody.RetainRetryDiagnostic(
+                    AcceptanceAttemptResultsPrefix,
+                    original.ArtifactsPath,
+                    $"{Slug(check.Name)}-run-{original.TestResultRunOrdinal.ToString(System.Globalization.CultureInfo.InvariantCulture)}",
+                    original.ProcessStderrPath,
+                    original.ProcessStderr,
+                    JsonSerializer.Serialize(original.CompletionDecision));
+                if (string.IsNullOrWhiteSpace(original.GateHeartbeatPath))
+                {
+                    throw new IOException(
+                        $"Retry-driving result '{originalInvocationId}' has no original heartbeat identity.");
+                }
+
+                GateHeartbeatArtifacts.AttachRetainedStderr(original.GateHeartbeatPath, retainedDiagnostic);
+            }
+            catch (IOException ex)
+            {
+                var evidenceFailure = BuildRetryEvidenceRetentionFailure(original, retainedDiagnostic, ex);
+                cacheContext.RecordExecution(check, evidenceFailure);
+                return (evidenceFailure, false);
+            }
+
+            var retryInvocation = AllocateTestTelemetryInvocation(check);
+            var retryInvocationId = BuildInvocationIdentity(check, retryInvocation.Ordinal, currentAttemptId);
+            cacheContext.RecordWithinAttemptRetry(
+                check,
+                original,
+                originalInvocationId,
+                retryInvocationId,
+                retainedDiagnostic);
             var rerun = await RunCheckWithCancellationProbeAsync(
                 check,
                 worktreePath,
@@ -1839,7 +2270,8 @@ public sealed class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
                 stableSlotLease,
                 dotnetTestBuildPhase,
                 cancellationToken,
-                testResultsDirectoryOverride).ConfigureAwait(false);
+                testResultsDirectoryOverride,
+                retryInvocation).ConfigureAwait(false);
             fresh = (rerun.Result with
             {
                 TestResultAttemptId = currentAttemptId
@@ -1851,6 +2283,35 @@ public sealed class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
         return fresh;
     }
 
+    private static AcceptanceCheckResult BuildRetryEvidenceRetentionFailure(
+        AcceptanceCheckResult original,
+        AcceptanceRetainedDiagnostic? retainedDiagnostic,
+        IOException exception)
+    {
+        var detail =
+            $"Within-attempt retry refused: {AcceptanceFailureClassifications.RetryEvidenceRetentionFailed}; " +
+            $"{exception.Message}" +
+            (retainedDiagnostic is null
+                ? string.Empty
+                : $" Retained diagnostic remains at '{retainedDiagnostic.Path}' (sha256={retainedDiagnostic.Sha256}).");
+        return original with
+        {
+            Passed = false,
+            OutputTail = string.IsNullOrWhiteSpace(original.OutputTail)
+                ? detail
+                : $"{original.OutputTail}{Environment.NewLine}{detail}",
+            ResultSummary = PrefixResultSummary(detail, original.ResultSummary),
+            FailureClassification = AcceptanceFailureClassifications.RetryEvidenceRetentionFailed,
+            CompletionDecision = original.CompletionDecision is null
+                ? null
+                : original.CompletionDecision with
+                {
+                    PolicySignal = AcceptanceFailureClassifications.RetryEvidenceRetentionFailed
+                },
+            ProcessStderrPath = retainedDiagnostic?.Path ?? original.ProcessStderrPath
+        };
+    }
+
     private async Task<(AcceptanceCheckResult Result, bool Retried)> RunCheckWithCancellationProbeAsync(
         AcceptanceManifestCheck check,
         string worktreePath,
@@ -1859,29 +2320,68 @@ public sealed class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
         DotnetBuildEnvironmentLease? stableSlotLease,
         DotnetTestBuildPhase? dotnetTestBuildPhase,
         CancellationToken cancellationToken,
-        string? testResultsDirectoryOverride = null)
+        string? testResultsDirectoryOverride = null,
+        TestTelemetryInvocation? invocationOverride = null)
     {
         ThrowIfGateCancellationRequested(cancellationToken);
-        var invocation = AllocateTestTelemetryInvocation(check);
+        var invocation = invocationOverride ?? AllocateTestTelemetryInvocation(check);
         using var invocationScope = PushTestTelemetryInvocation(invocation);
-        var result = await RunCheckAsync(
-                check,
-                worktreePath,
-                goalId,
-                stableSlotIndex,
-                stableSlotLease,
-                dotnetTestBuildPhase,
-                cancellationToken,
-                testResultsDirectoryOverride)
-            .ConfigureAwait(false);
+        var result = await AcceptanceGateCancellationMonitor.RunAsync(
+                activeToken => RunCheckAsync(check,
+                    worktreePath,
+                    goalId,
+                    stableSlotIndex,
+                    stableSlotLease,
+                    dotnetTestBuildPhase,
+                    activeToken,
+                    testResultsDirectoryOverride),
+                CurrentGateCancellationProbes.Value?.Poll, cancellationToken).ConfigureAwait(false);
         ThrowIfGateCancellationRequested(cancellationToken);
         return result;
+    }
+
+    private static string BuildInvocationIdentity(
+        AcceptanceManifestCheck check,
+        int ordinal,
+        string? attemptId) =>
+        $"{attemptId ?? "manual"}:{Slug(check.Name)}:{ordinal.ToString(System.Globalization.CultureInfo.InvariantCulture)}";
+
+    private static AcceptanceShardCompletionDecision InferPartitionCompletionDecision(AcceptanceCheckResult result)
+    {
+        if (result.Passed)
+        {
+            return new AcceptanceShardCompletionDecision(
+                true,
+                null,
+                false,
+                result.ExitCode,
+                result.DiscoveredTestCount,
+                result.ExecutedTestCount,
+                "not-applicable",
+                result.FailureClassification);
+        }
+
+        var predicate = result.FailureClassification ??
+            (result.Name.StartsWith("acceptance-check-timeout:", StringComparison.Ordinal)
+                ? AcceptanceShardCompletionPredicates.TimedOut
+                : result.ExitCode != 0
+                    ? AcceptanceShardCompletionPredicates.NonzeroExit
+                    : AcceptanceShardCompletionPredicates.CheckFailed);
+        return new AcceptanceShardCompletionDecision(
+            false,
+            predicate,
+            predicate.Equals(AcceptanceShardCompletionPredicates.TimedOut, StringComparison.Ordinal),
+            result.ExitCode,
+            result.DiscoveredTestCount,
+            result.ExecutedTestCount,
+            "not-available",
+            result.FailureClassification);
     }
 
     private static void ThrowIfGateCancellationRequested(CancellationToken cancellationToken)
     {
         cancellationToken.ThrowIfCancellationRequested();
-        if (CurrentGateCancellationProbe.Value?.Invoke() == true)
+        if (CurrentGateCancellationProbes.Value?.Boundary.Invoke() == true)
         {
             throw new OperationCanceledException("acceptance gate attempt cancelled by goal disposition");
         }
@@ -1894,7 +2394,7 @@ public sealed class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
             .Distinct(StringComparer.OrdinalIgnoreCase)
             .ToArray();
 
-    private static bool TryBuildFocusedEvidenceChecks(
+    internal static bool TryBuildFocusedEvidenceChecks(
         string request,
         AcceptanceGateEngineSettings engineSettings,
         string worktreePath,
@@ -2832,20 +3332,21 @@ public sealed class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
                 manifest.Checks,
                 worktreePath)
             : new StructuralCoverageDeclarationPlan(policyEffectiveChecks, []);
-        var effectiveChecks = ApplyDotnetShardDisposition(
+        var semanticDeduplication = DeduplicateSemanticExecutionChecks(ApplyDotnetShardDisposition(
             ExpandBroadInfrastructureChecks(
                 structuralCoverageDeclarations.Checks,
                 infrastructureTestLanes),
-            dotnetShardDisposition);
+            dotnetShardDisposition));
         return new EffectiveGatePlan(
             manifest,
-            effectiveChecks,
+            semanticDeduplication.Checks,
             infrastructureTestLanes,
             policyShardPlan,
             policyRequiredChecks,
             structuralCoverageDeclarations.UndeclaredProjects,
             structuralCoverageApplies,
-            dotnetShardDisposition);
+            dotnetShardDisposition,
+            semanticDeduplication.Receipts);
     }
 
     private static IReadOnlyList<AcceptanceManifestCheck> BuildRequiredPolicyChecks(
@@ -2860,7 +3361,7 @@ public sealed class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
             goalObjective: string.Empty,
             taskDescription: string.Empty,
             verificationPlan: null,
-            changedFiles);
+            changedFiles, RepositoryTestImpactPlanner.Plan(changedFiles, worktreePath));
         return policy.Checks
             .Where(c =>
                 c.Required &&
@@ -2893,6 +3394,61 @@ public sealed class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
 
         return effective;
     }
+
+    private static SemanticExecutionDeduplicationPlan DeduplicateSemanticExecutionChecks(
+        IReadOnlyList<AcceptanceManifestCheck> checks)
+    {
+        var keys = new Dictionary<string, (AcceptanceManifestCheck Check, int Index)>(StringComparer.OrdinalIgnoreCase);
+        var unique = new List<AcceptanceManifestCheck>(checks.Count);
+        var receipts = new List<SemanticExecutionDeduplicationReceipt>();
+        for (var index = 0; index < checks.Count; index++)
+        {
+            var check = checks[index];
+            var key = SemanticExecutionKey(check);
+            if (!TryGetInfrastructurePartitionId(check, out var partitionId, out _) ||
+                !keys.TryGetValue(key, out var retained))
+            {
+                keys[key] = (check, index);
+                unique.Add(check);
+                continue;
+            }
+
+            receipts.Add(new SemanticExecutionDeduplicationReceipt(
+                partitionId,
+                retained.Check.Name,
+                check.Name,
+                retained.Index,
+                index,
+                Convert.ToHexStringLower(SHA256.HashData(Encoding.UTF8.GetBytes(key)))));
+        }
+
+        return new SemanticExecutionDeduplicationPlan(unique, receipts);
+    }
+
+    private static string SemanticExecutionKey(AcceptanceManifestCheck check) =>
+        JsonSerializer.Serialize(new
+        {
+            check.Name,
+            check.Type,
+            check.Command,
+            Project = NormalizePath(check.Project),
+            check.Arguments,
+            check.Pattern,
+            FilePath = NormalizePath(check.FilePath),
+            check.TimeoutMinutes,
+            check.Advisory,
+            check.Runner,
+            check.EstimatedSerialSeconds,
+            ExclusiveResourceKeys = check.ExclusiveResourceKeys
+                .OrderBy(key => key, StringComparer.OrdinalIgnoreCase)
+                .ToArray(),
+            check.IsFocusedEvidenceSelection,
+            check.FocusedEvidenceTokens,
+            check.FocusedEvidenceSelections
+        });
+
+    internal static string SemanticExecutionKeyForTests(AcceptanceManifestCheck check) =>
+        SemanticExecutionKey(check);
 
     private static IEnumerable<AcceptanceManifestCheck> ExpandBroadInfrastructureCheck(
         AcceptanceManifestCheck check,
@@ -3170,8 +3726,7 @@ public sealed class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
         }
     }
 
-    private static string ComputeEffectiveAcceptanceManifestIdentity(
-        IReadOnlyList<AcceptanceManifestCheck> effectiveChecks)
+    private static string ComputeEffectiveAcceptanceManifestIdentity(IReadOnlyList<AcceptanceManifestCheck> effectiveChecks)
     {
         var canonicalChecks = effectiveChecks.Select(check => new
         {
@@ -3192,6 +3747,7 @@ public sealed class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
         var canonicalPlan = new
         {
             Checks = canonicalChecks,
+            ChangeScopedAcceptanceEnabled = AcceptancePolicyShardPlanner.ChangeScopedAcceptanceEnabled(),
             Engine = new
             {
                 settings.MaxConcurrentShards,
@@ -3734,7 +4290,8 @@ public sealed class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
         elapsed.Stop();
         var processPassed = !result.TimedOut && result.ExitCode == 0;
         EmitMissingTrxReceiptIfNeeded(processPassed, telemetry);
-        var executedTestCount = ExtractTrxExecutedTestCount(telemetry.Paths);
+        var trxEvidence = InspectTrxCompletionEvidence(telemetry.Paths);
+        var executedTestCount = trxEvidence.ExecutedTestCount;
         var selectionCoverage = check.IsFocusedEvidenceSelection && executedTestCount != 0
             ? InspectFocusedEvidenceSelectionCoverage(check.FocusedEvidenceSelections, telemetry.Paths)
             : FocusedEvidenceSelectionCoverage.Empty;
@@ -3742,7 +4299,17 @@ public sealed class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
         var unreadableReceipts = selectionCoverage.UnreadableReceiptPaths;
         var zeroTestApparatusFailure = check.IsFocusedEvidenceSelection &&
             (executedTestCount == 0 || uncoveredSelections.Count > 0 || unreadableReceipts.Count > 0);
-        var passed = processPassed && !zeroTestApparatusFailure;
+        var policyFailure = zeroTestApparatusFailure
+            ? unreadableReceipts.Count > 0
+                ? AcceptanceFailureClassifications.FocusedSelectionReceiptUnreadable
+                : AcceptanceFailureClassifications.FocusedSelectionApparatusFailure
+            : null;
+        var completionDecision = DecideTestShardCompletion(
+            result,
+            trxEvidence,
+            policyFailure,
+            requireTrxEvidence: _requiresTestTelemetryReceipt);
+        var passed = completionDecision.Passed;
         IReadOnlyList<string> failingTestIdentities = passed || zeroTestApparatusFailure
             ? []
             : ExtractTrxFailureIdentities(telemetry.Paths);
@@ -3771,14 +4338,20 @@ public sealed class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
             (long)elapsed.Elapsed.TotalMilliseconds,
             ResultSummary: resultSummary,
             TestResultPaths: durableTestResultPaths,
-            FailureClassification: zeroTestApparatusFailure
-                ? unreadableReceipts.Count > 0
-                    ? AcceptanceFailureClassifications.FocusedSelectionReceiptUnreadable
-                    : AcceptanceFailureClassifications.FocusedSelectionApparatusFailure
-                : null,
+            FailureClassification: policyFailure,
             TestResultRunOrdinal: CurrentTestTelemetryInvocation.Value?.Ordinal ?? 0,
             FailingTestIdentities: failingTestIdentities,
-            ExecutedTestCount: executedTestCount), false);
+            ExecutedTestCount: executedTestCount,
+            DiscoveredTestCount: trxEvidence.DiscoveredTestCount,
+            CompletionDecision: completionDecision,
+            ProcessStderrPath: result.StderrPath,
+            ProcessStderr: result.Stderr,
+            GateHeartbeatPath: ResolveGateHeartbeatPath(
+                check,
+                environment,
+                stableSlotIndex,
+                worktreePath,
+                CurrentTestTelemetryInvocation.Value?.Ordinal ?? 0)), false);
     }
 
     private async Task<(AcceptanceCheckResult Result, bool Retried)> RunManagedDotnetTestCheckAsync(
@@ -4156,10 +4729,20 @@ public sealed class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
             // A testhost can exit non-zero on SHUTDOWN ("host process exited unexpectedly") even after every
             // test passed. Honor the run's own Passed!/Failed:0 summary so a benign shutdown abort does not
             // block a green goal, while never masking a build/compile failure and still surfacing the tail.
-            var reportedAllPassed = !result.TimedOut && result.ExitCode != 0 && TestRunReportsAllPassed(result.Output);
-            var passed = !result.TimedOut && (result.ExitCode == 0 || reportedAllPassed);
             var telemetry = ResolveDotnetTestTelemetry(arguments, check, environment);
-            EmitMissingTrxReceiptIfNeeded(passed, telemetry);
+            var reportedAllPassed = telemetry is not null &&
+                !result.TimedOut && result.ExitCode != 0 && TestRunReportsAllPassed(result.Output);
+            EmitMissingTrxReceiptIfNeeded(!result.TimedOut && (result.ExitCode == 0 || reportedAllPassed), telemetry);
+            var trxEvidence = InspectTrxCompletionEvidence(telemetry?.Paths);
+            var completionDecision = telemetry is null
+                ? DecideNonTestCommandCompletion(result)
+                : DecideTestShardCompletion(
+                    result,
+                    trxEvidence,
+                    policySignal: reportedAllPassed ? "testhost-shutdown-all-passed" : null,
+                    allowNonzeroExit: reportedAllPassed,
+                    requireTrxEvidence: _requiresTestTelemetryReceipt);
+            var passed = completionDecision.Passed;
             IReadOnlyList<string> failingTestIdentities = passed
                 ? []
                 : ExtractTrxFailureIdentities(telemetry?.Paths);
@@ -4179,13 +4762,24 @@ public sealed class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
                 BuildManagedDotnetResultSummary(result, lockRemediationApplied),
                 TestResultPaths: durableTestResultPaths,
                 TestResultRunOrdinal: CurrentTestTelemetryInvocation.Value?.Ordinal ?? 0,
-                FailingTestIdentities: failingTestIdentities), lockRemediationApplied);
+                FailingTestIdentities: failingTestIdentities,
+                ExecutedTestCount: trxEvidence.ExecutedTestCount,
+                DiscoveredTestCount: trxEvidence.DiscoveredTestCount,
+                CompletionDecision: completionDecision,
+                ProcessStderrPath: result.StderrPath,
+                ProcessStderr: result.Stderr,
+                GateHeartbeatPath: ResolveGateHeartbeatPath(
+                    check,
+                    environment,
+                    stableSlotIndex,
+                    worktreePath,
+                    CurrentTestTelemetryInvocation.Value?.Ordinal ?? 0)), lockRemediationApplied);
         }
         catch (Exception ex) when (IsBuildArtifactIoException(ex) &&
             ex is not DotnetBuildSlotsBusyException and not BuildLockBlockedException)
         {
             var lockedPath = TryExtractPathFromException(ex) ?? environment.ArtifactsPath;
-            var attribution = AttributeBuildLock(lockedPath, worktreePath, "acceptance-check", check.Name);
+            var attribution = AttributeBuildLock(lockedPath, environment.ArtifactsPath, "acceptance-check", check.Name);
             var (result, _) = await RemediateBuildLockAndRetryAsync(
                 arguments,
                 worktreePath,
@@ -4220,10 +4814,20 @@ public sealed class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
             }
 
             elapsed.Stop();
-            var reportedAllPassed = !result.TimedOut && result.ExitCode != 0 && TestRunReportsAllPassed(result.Output);
-            var passed = !result.TimedOut && (result.ExitCode == 0 || reportedAllPassed);
             var telemetry = ResolveDotnetTestTelemetry(arguments, check, environment);
-            EmitMissingTrxReceiptIfNeeded(passed, telemetry);
+            var reportedAllPassed = telemetry is not null &&
+                !result.TimedOut && result.ExitCode != 0 && TestRunReportsAllPassed(result.Output);
+            EmitMissingTrxReceiptIfNeeded(!result.TimedOut && (result.ExitCode == 0 || reportedAllPassed), telemetry);
+            var trxEvidence = InspectTrxCompletionEvidence(telemetry?.Paths);
+            var completionDecision = telemetry is null
+                ? DecideNonTestCommandCompletion(result)
+                : DecideTestShardCompletion(
+                    result,
+                    trxEvidence,
+                    policySignal: reportedAllPassed ? "testhost-shutdown-all-passed" : null,
+                    allowNonzeroExit: reportedAllPassed,
+                    requireTrxEvidence: _requiresTestTelemetryReceipt);
+            var passed = completionDecision.Passed;
             IReadOnlyList<string> failingTestIdentities = passed
                 ? []
                 : ExtractTrxFailureIdentities(telemetry?.Paths);
@@ -4242,7 +4846,19 @@ public sealed class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
                 true,
                 BuildManagedDotnetResultSummary(result, transientCompilerLockRetried: true),
                 TestResultPaths: durableTestResultPaths,
-                FailingTestIdentities: failingTestIdentities), true);
+                TestResultRunOrdinal: CurrentTestTelemetryInvocation.Value?.Ordinal ?? 0,
+                FailingTestIdentities: failingTestIdentities,
+                ExecutedTestCount: trxEvidence.ExecutedTestCount,
+                DiscoveredTestCount: trxEvidence.DiscoveredTestCount,
+                CompletionDecision: completionDecision,
+                ProcessStderrPath: result.StderrPath,
+                ProcessStderr: result.Stderr,
+                GateHeartbeatPath: ResolveGateHeartbeatPath(
+                    check,
+                    environment,
+                    stableSlotIndex,
+                    worktreePath,
+                    CurrentTestTelemetryInvocation.Value?.Ordinal ?? 0)), true);
         }
         finally
         {
@@ -4323,7 +4939,7 @@ public sealed class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
         catch (Exception ex) when (IsBuildArtifactIoException(ex))
         {
             var lockedPath = TryExtractPathFromException(ex) ?? retryEnvironment.ArtifactsPath;
-            retryAttribution = AttributeBuildLock(lockedPath, worktreePath, "acceptance-retry", check.Name);
+            retryAttribution = AttributeBuildLock(lockedPath, retryEnvironment.ArtifactsPath, "acceptance-retry", check.Name);
         }
 
         if (retry is not null &&
@@ -4351,7 +4967,10 @@ public sealed class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
         var killed = false;
         foreach (var holder in attribution.Holders
             .Concat(retryAttribution.Holders)
-            .Where(holder => holder.IsOrchestratorOwned && holder.ProcessId.HasValue)
+            .Where(holder =>
+                holder.IsOrchestratorOwned &&
+                holder.ProcessId.HasValue &&
+                holder.ProcessId.Value != Environment.ProcessId)
             .DistinctBy(holder => holder.ProcessId!.Value))
         {
             killed |= WorkerProcessJobs.TryKillOrFallbackAndWait(holder.ProcessId!.Value, TimeSpan.FromSeconds(5));
@@ -4380,7 +4999,7 @@ public sealed class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
         catch (Exception ex) when (IsBuildArtifactIoException(ex))
         {
             var lockedPath = TryExtractPathFromException(ex) ?? killRetryEnvironment.ArtifactsPath;
-            throw new BuildLockBlockedException(AttributeBuildLock(lockedPath, worktreePath, "acceptance-kill-retry", check.Name));
+            throw new BuildLockBlockedException(AttributeBuildLock(lockedPath, killRetryEnvironment.ArtifactsPath, "acceptance-kill-retry", check.Name));
         }
 
         if (IsBuildLockFailure(
@@ -4423,7 +5042,7 @@ public sealed class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
             {
                 var exhaustedAttribution = AttributeBuildLock(
                     cycleAttribution.Path,
-                    worktreePath,
+                    retryEnvironment.ArtifactsPath,
                     "acceptance-transient-exhaustion",
                     check.Name);
                 EmitTransientNoHolderBuildLockRetryReceipt(
@@ -4455,7 +5074,7 @@ public sealed class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
             catch (Exception ex) when (IsBuildArtifactIoException(ex))
             {
                 var lockedPath = TryExtractPathFromException(ex) ?? retryEnvironment.ArtifactsPath;
-                var exceptionAttribution = AttributeBuildLock(lockedPath, worktreePath, "acceptance-transient-retry", check.Name);
+                var exceptionAttribution = AttributeBuildLock(lockedPath, retryEnvironment.ArtifactsPath, "acceptance-transient-retry", check.Name);
                 EmitTransientNoHolderBuildLockRetryReceipt(
                     check,
                     exceptionAttribution,
@@ -4473,7 +5092,7 @@ public sealed class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
 
                 var exhaustedAttribution = AttributeBuildLock(
                     exceptionAttribution.Path,
-                    worktreePath,
+                    retryEnvironment.ArtifactsPath,
                     "acceptance-transient-exhaustion",
                     check.Name);
                 throw new BuildLockBlockedException(exhaustedAttribution);
@@ -4496,7 +5115,7 @@ public sealed class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
             var finalAttribution = cycle == maxRetryCycles
                 ? AttributeBuildLock(
                     retryAttribution.Path,
-                    worktreePath,
+                    retryEnvironment.ArtifactsPath,
                     "acceptance-transient-exhaustion",
                     check.Name)
                 : retryAttribution;
@@ -4726,7 +5345,7 @@ public sealed class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
 
         var heartbeat = ReadGateHeartbeat(environment, check);
         consumedGateContext |= heartbeat?.Snapshot is not null;
-        foreach (var holder in BuildLiveHeartbeatHolders(heartbeat?.Snapshot, environment))
+        foreach (var holder in GateHeartbeatLockHolderProjection.Build(heartbeat?.Snapshot, environment))
         {
             if (!holders.Any(existing => existing.ProcessId == holder.ProcessId))
             {
@@ -4748,36 +5367,6 @@ public sealed class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
         };
         LockAttribution.EmitReceipt(enriched);
         return enriched;
-    }
-
-    private static IEnumerable<BuildLockHolder> BuildLiveHeartbeatHolders(
-        GateHeartbeatSnapshot? snapshot,
-        DotnetBuildEnvironment environment)
-    {
-        if (snapshot is null ||
-            snapshot.CommandLine is not null &&
-            !snapshot.CommandLine.Contains(environment.ArtifactsPath, StringComparison.OrdinalIgnoreCase))
-        {
-            yield break;
-        }
-
-        var pids = new[] { snapshot.ProcessId, snapshot.ChildPid }
-            .Where(pid => pid.HasValue)
-            .Select(pid => pid!.Value)
-            .Distinct()
-            .Where(IsProcessRunning)
-            .ToArray();
-        var commandLines = ProcessCommandLines.Read(pids);
-        foreach (var pid in pids)
-        {
-            commandLines.TryGetValue(pid, out var commandLine);
-            yield return new BuildLockHolder(
-                pid,
-                TryProcessName(pid),
-                string.IsNullOrWhiteSpace(commandLine) ? snapshot.CommandLine : commandLine,
-                true,
-                TryProcessStartTime(pid));
-        }
     }
 
     private static void EmitBuildLockClassificationContext(
@@ -5002,32 +5591,6 @@ public sealed class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
         catch (Exception ex) when (ex is ArgumentException or InvalidOperationException)
         {
             return false;
-        }
-    }
-
-    private static string? TryProcessName(int processId)
-    {
-        try
-        {
-            using var process = Process.GetProcessById(processId);
-            return process.ProcessName;
-        }
-        catch
-        {
-            return null;
-        }
-    }
-
-    private static DateTimeOffset? TryProcessStartTime(int processId)
-    {
-        try
-        {
-            using var process = Process.GetProcessById(processId);
-            return new DateTimeOffset(process.StartTime.ToUniversalTime(), TimeSpan.Zero);
-        }
-        catch
-        {
-            return null;
         }
     }
 
@@ -6854,7 +7417,9 @@ public sealed class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
                 definitionsByTestId.TryGetValue(
                     result.Attribute("testId")?.Value ?? string.Empty,
                     out var definition);
-                var testName = ResolveTrxTestName(result, definition);
+                var testName = AcceptanceTrxTestIdentityResolver.Resolve(result, definition)
+                    ?? result.Attribute("testId")?.Value?.Trim()
+                    ?? "unknown test";
                 var message = result
                     .Descendants()
                     .FirstOrDefault(element =>
@@ -6881,16 +7446,15 @@ public sealed class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
             .Descendants()
             .Where(element =>
                 element.Name.LocalName.Equals("UnitTestResult", StringComparison.Ordinal) &&
-                string.Equals(
-                    element.Attribute("outcome")?.Value,
-                    "Failed",
-                    StringComparison.OrdinalIgnoreCase))
+                AcceptanceTrxOutcomeTaxonomy.IsFatal(element.Attribute("outcome")?.Value))
             .Select(result =>
             {
                 definitionsByTestId.TryGetValue(
                     result.Attribute("testId")?.Value ?? string.Empty,
                     out var definition);
-                return ResolveTrxTestName(result, definition);
+                return AcceptanceTrxTestIdentityResolver.Resolve(result, definition) ??
+                    result.Attribute("testId")?.Value?.Trim() ??
+                    "unknown test";
             })
             .Where(identity => !string.IsNullOrWhiteSpace(identity))
             .Distinct(StringComparer.Ordinal)
@@ -6922,39 +7486,193 @@ public sealed class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
             .ToArray();
     }
 
-    private static int? ExtractTrxExecutedTestCount(IEnumerable<string>? trxPaths)
+    private static TrxCompletionEvidence InspectTrxCompletionEvidence(IEnumerable<string>? trxPaths)
     {
-        if (trxPaths is null)
+        var paths = trxPaths?.ToArray() ?? [];
+        if (paths.Length == 0 || paths.All(path => !File.Exists(path)))
         {
-            return null;
+            return new TrxCompletionEvidence(null, null, null, "missing", false, AcceptanceShardCompletionPredicates.MissingTrx);
         }
 
-        foreach (var trxPath in trxPaths.Where(File.Exists))
+        var discovered = 0;
+        var executed = 0;
+        var notExecuted = 0;
+        var sawReceipt = false;
+        var allPassed = true;
+        var outcomes = new List<string>();
+        foreach (var path in paths.Where(File.Exists))
         {
             try
             {
-                var counters = XDocument.Load(trxPath, LoadOptions.None)
-                    .Descendants()
-                    .FirstOrDefault(element => element.Name.LocalName.Equals(
-                        "Counters",
-                        StringComparison.Ordinal));
-                if (int.TryParse(
-                        counters?.Attribute("executed")?.Value,
-                        System.Globalization.NumberStyles.None,
-                        System.Globalization.CultureInfo.InvariantCulture,
-                        out var executed))
-                {
-                    return executed;
-                }
+                var document = XDocument.Load(path, LoadOptions.None);
+                var counters = document.Descendants().FirstOrDefault(element =>
+                    element.Name.LocalName.Equals("Counters", StringComparison.Ordinal));
+                var results = document.Descendants().Where(element =>
+                    element.Name.LocalName.Equals("UnitTestResult", StringComparison.Ordinal)).ToArray();
+                var definitions = document.Descendants().Count(element =>
+                    element.Name.LocalName.Equals("UnitTest", StringComparison.Ordinal));
+                var receiptDiscovered = TryReadTrxCounter(counters, "total") ?? definitions;
+                var receiptExecuted = TryReadTrxCounter(counters, "executed") ?? results.Length;
+                var receiptNotExecuted = TryReadTrxCounter(counters, "notExecuted") ?? 0;
+                var resultSummary = document.Descendants().FirstOrDefault(element =>
+                    element.Name.LocalName.Equals("ResultSummary", StringComparison.Ordinal));
+                var summaryOutcome = resultSummary?.Attribute("outcome")?.Value;
+                var receiptPassed = IsPassingTrxReceipt(summaryOutcome, counters, results);
+
+                sawReceipt = true;
+                discovered = checked(discovered + receiptDiscovered);
+                executed = checked(executed + receiptExecuted);
+                notExecuted = checked(notExecuted + receiptNotExecuted);
+                allPassed &= receiptPassed;
+                outcomes.Add(string.IsNullOrWhiteSpace(summaryOutcome) ? "results-only" : summaryOutcome);
             }
-            catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or System.Xml.XmlException)
+            catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or System.Xml.XmlException or OverflowException)
             {
-                // Missing or unreadable count evidence is unknown, never zero by inference.
+                return new TrxCompletionEvidence(null, null, null, "malformed", false, AcceptanceShardCompletionPredicates.MalformedTrx);
             }
         }
 
-        return null;
+        if (!sawReceipt)
+        {
+            return new TrxCompletionEvidence(null, null, null, "missing", false, AcceptanceShardCompletionPredicates.MissingTrx);
+        }
+
+        return new TrxCompletionEvidence(
+            discovered,
+            executed,
+            notExecuted,
+            string.Join('+', outcomes.Distinct(StringComparer.OrdinalIgnoreCase)),
+            allPassed,
+            null);
     }
+
+    private static bool IsPassingTrxReceipt(
+        string? summaryOutcome,
+        XElement? counters,
+        IReadOnlyList<XElement> results)
+    {
+        var summaryCanBeGreen = string.IsNullOrWhiteSpace(summaryOutcome) ||
+            summaryOutcome.Equals("Passed", StringComparison.OrdinalIgnoreCase) ||
+            summaryOutcome.Equals("Completed", StringComparison.OrdinalIgnoreCase);
+        if (!summaryCanBeGreen)
+        {
+            return false;
+        }
+
+        if (AcceptanceTrxOutcomeTaxonomy.HasFatalCounter(name => TryReadTrxCounter(counters, name)))
+        {
+            return false;
+        }
+
+        return results.All(result =>
+        {
+            var outcome = result.Attribute("outcome")?.Value;
+            return string.Equals(outcome, "Passed", StringComparison.OrdinalIgnoreCase) ||
+                string.Equals(outcome, "NotExecuted", StringComparison.OrdinalIgnoreCase) ||
+                string.Equals(outcome, "Skipped", StringComparison.OrdinalIgnoreCase);
+        });
+    }
+
+    private static int? TryReadTrxCounter(XElement? counters, string name) =>
+        int.TryParse(
+            counters?.Attribute(name)?.Value,
+            System.Globalization.NumberStyles.None,
+            System.Globalization.CultureInfo.InvariantCulture,
+            out var value)
+                ? value
+                : null;
+
+    private static AcceptanceShardCompletionDecision DecideTestShardCompletion(
+        CommandResult result,
+        TrxCompletionEvidence trx,
+        string? policyFailure = null,
+        string? policySignal = null,
+        bool allowNonzeroExit = false,
+        bool requireTrxEvidence = true)
+    {
+        var missingTrxCompatibility = !requireTrxEvidence &&
+            string.Equals(
+                trx.FailedPredicate,
+                AcceptanceShardCompletionPredicates.MissingTrx,
+                StringComparison.Ordinal);
+        var failedPredicate = policyFailure;
+        if (failedPredicate is null && result.TimedOut)
+            failedPredicate = AcceptanceShardCompletionPredicates.TimedOut;
+        if (failedPredicate is null && result.ExitCode != 0 && !allowNonzeroExit)
+            failedPredicate = AcceptanceShardCompletionPredicates.NonzeroExit;
+        if (failedPredicate is null && !missingTrxCompatibility && trx.FailedPredicate is not null)
+            failedPredicate = trx.FailedPredicate;
+        if (failedPredicate is null && !missingTrxCompatibility && trx.DiscoveredTestCount == 0)
+            failedPredicate = AcceptanceShardCompletionPredicates.ZeroTests;
+        if (failedPredicate is null && !missingTrxCompatibility &&
+            trx.DiscoveredTestCount != (trx.ExecutedTestCount ?? 0) + (trx.NotExecutedTestCount ?? 0))
+            failedPredicate = AcceptanceShardCompletionPredicates.IncompleteExecution;
+        if (failedPredicate is null && !missingTrxCompatibility && !trx.Passed)
+            failedPredicate = AcceptanceShardCompletionPredicates.FailingTrx;
+
+        var effectivePolicySignal = policyFailure ?? policySignal;
+        if (failedPredicate is null && missingTrxCompatibility && effectivePolicySignal is null)
+        {
+            effectivePolicySignal = AcceptanceShardCompletionSignals.MissingTrxInjectedRunnerCompatibility;
+        }
+
+        return new AcceptanceShardCompletionDecision(
+            failedPredicate is null,
+            failedPredicate,
+            result.TimedOut,
+            result.ExitCode,
+            trx.DiscoveredTestCount,
+            trx.ExecutedTestCount,
+            trx.Outcome,
+            effectivePolicySignal,
+            trx.NotExecutedTestCount);
+    }
+
+    private static AcceptanceShardCompletionDecision DecideNonTestCommandCompletion(CommandResult result)
+    {
+        var failedPredicate = result.TimedOut
+            ? AcceptanceShardCompletionPredicates.TimedOut
+            : result.ExitCode != 0
+                ? AcceptanceShardCompletionPredicates.NonzeroExit
+                : null;
+        return new AcceptanceShardCompletionDecision(
+            failedPredicate is null,
+            failedPredicate,
+            result.TimedOut,
+            result.ExitCode,
+            null,
+            null,
+            "not-applicable");
+    }
+
+    internal static AcceptanceShardCompletionDecision DecideTestShardCompletionForTests(
+        CommandResult result,
+        int? discoveredTestCount,
+        int? executedTestCount,
+        string trxOutcome,
+        string? trxFailedPredicate = null,
+        string? policyFailure = null,
+        string? policySignal = null,
+        bool allowNonzeroExit = false,
+        int? notExecutedTestCount = 0) =>
+        DecideTestShardCompletion(
+            result,
+            new TrxCompletionEvidence(
+                discoveredTestCount,
+                executedTestCount,
+                notExecutedTestCount,
+                trxOutcome,
+                trxOutcome.Equals("passed", StringComparison.OrdinalIgnoreCase) ||
+                    trxOutcome.Equals("completed", StringComparison.OrdinalIgnoreCase),
+                trxFailedPredicate),
+            policyFailure,
+            policySignal,
+            allowNonzeroExit);
+
+    internal static AcceptanceShardCompletionDecision DecideTestShardCompletionFromTrxForTests(
+        CommandResult result,
+        IEnumerable<string> trxPaths) =>
+        DecideTestShardCompletion(result, InspectTrxCompletionEvidence(trxPaths));
 
     private static FocusedEvidenceSelectionCoverage InspectFocusedEvidenceSelectionCoverage(
         IReadOnlyList<IReadOnlyList<FocusedEvidenceFilterToken>> selections,
@@ -7003,13 +7721,9 @@ public sealed class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
                         definitionsByTestId.TryGetValue(
                             result.Attribute("testId")?.Value ?? string.Empty,
                             out var definition);
-                        var testMethod = definition?.Descendants()
-                            .FirstOrDefault(element => element.Name.LocalName.Equals("TestMethod", StringComparison.Ordinal));
-                        var className = testMethod?.Attribute("className")?.Value?.Trim();
-                        var methodName = testMethod?.Attribute("name")?.Value?.Trim();
-                        return !string.IsNullOrWhiteSpace(className) && !string.IsNullOrWhiteSpace(methodName)
-                            ? $"{className}.{methodName}"
-                            : ResolveTrxTestName(result, definition);
+                        return AcceptanceTrxTestIdentityResolver.Resolve(result, definition) ??
+                            result.Attribute("testId")?.Value?.Trim() ??
+                            "unknown test";
                     }));
             }
             catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or System.Xml.XmlException)
@@ -7028,46 +7742,6 @@ public sealed class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
 
     private static bool IsFocusedEvidenceIdentityMatch(string identity, string selection) =>
         identity.Contains(selection, StringComparison.OrdinalIgnoreCase);
-
-    private static string ResolveTrxTestName(XElement result, XElement? definition)
-    {
-        var testName = result.Attribute("testName")?.Value?.Trim();
-        var displayName = result.Descendants()
-            .Concat(definition?.Descendants() ?? [])
-            .Where(element =>
-                element.Name.LocalName.Equals("DisplayName", StringComparison.Ordinal) ||
-                element.Name.LocalName.Equals("Description", StringComparison.Ordinal))
-            .Select(element => element.Value.Trim())
-            .FirstOrDefault(value => !string.IsNullOrWhiteSpace(value));
-        displayName ??= definition?.Attribute("name")?.Value?.Trim();
-
-        if (!string.IsNullOrWhiteSpace(displayName) &&
-            (string.IsNullOrWhiteSpace(testName) ||
-                (LooksLikeQualifiedTestName(testName) && displayName.Length < testName.Length)))
-        {
-            return displayName;
-        }
-
-        if (!string.IsNullOrWhiteSpace(testName))
-        {
-            return testName;
-        }
-
-        var testMethod = definition?.Descendants()
-            .FirstOrDefault(element => element.Name.LocalName.Equals("TestMethod", StringComparison.Ordinal));
-        var className = testMethod?.Attribute("className")?.Value?.Trim();
-        var methodName = testMethod?.Attribute("name")?.Value?.Trim();
-        if (!string.IsNullOrWhiteSpace(className) && !string.IsNullOrWhiteSpace(methodName))
-        {
-            return $"{className}.{methodName}";
-        }
-
-        return result.Attribute("testId")?.Value?.Trim() ?? "unknown test";
-    }
-
-    private static bool LooksLikeQualifiedTestName(string value) =>
-        value.Contains('+', StringComparison.Ordinal) ||
-        value.Count(ch => ch == '.') >= 2;
 
     private static string? FirstNonEmptyLine(string? value) =>
         value?
@@ -7306,6 +7980,17 @@ public sealed class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
             environment,
             stableSlotIndex,
             worktreePath: null);
+
+    internal static string ResolveGateHeartbeatPathForTests(
+        string checkName,
+        string worktreePath,
+        int invocationOrdinal) =>
+        ResolveGateHeartbeatPath(
+            new AcceptanceManifestCheck { Name = checkName },
+            environment: null,
+            stableSlotIndex: null,
+            worktreePath,
+            invocationOrdinal);
 
     internal static string ResolveTrxPathForTests(string checkName, DotnetBuildEnvironment environment) =>
         ResolveTestTelemetry(new AcceptanceManifestCheck { Name = checkName }, environment).Paths[0];
@@ -7885,7 +8570,8 @@ public sealed class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
                         AccountingSource: accounting.AccountingSource),
                 ResourceAccountingExpected: OperatingSystem.IsWindows(),
                 stdoutBytes,
-                stderrBytes);
+                stderrBytes,
+                stderr);
         }
         finally
         {
@@ -8541,7 +9227,20 @@ public sealed class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
         IReadOnlyList<AcceptanceManifestCheck> PolicyRequiredChecks,
         IReadOnlyList<string> UndeclaredTestProjects,
         bool StructuralCoverageApplies,
-        DotnetShardDisposition DotnetShardDisposition);
+        DotnetShardDisposition DotnetShardDisposition,
+        IReadOnlyList<SemanticExecutionDeduplicationReceipt> SemanticDeduplications);
+
+    internal sealed record SemanticExecutionDeduplicationReceipt(
+        string PartitionId,
+        string RetainedCheckName,
+        string DroppedCheckName,
+        int RetainedPlanIndex,
+        int DroppedPlanIndex,
+        string SemanticKeySha256);
+
+    private sealed record SemanticExecutionDeduplicationPlan(
+        IReadOnlyList<AcceptanceManifestCheck> Checks,
+        IReadOnlyList<SemanticExecutionDeduplicationReceipt> Receipts);
 
     internal sealed record StructuralCoverageDeclarationPlan(
         IReadOnlyList<AcceptanceManifestCheck> Checks,
@@ -8713,6 +9412,14 @@ public sealed class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
         IReadOnlyList<string> UnreadableReceiptPaths);
 
     private sealed record DotnetTestTelemetry(IReadOnlyList<string> Paths, string[] Arguments);
+
+    private sealed record TrxCompletionEvidence(
+        int? DiscoveredTestCount,
+        int? ExecutedTestCount,
+        int? NotExecutedTestCount,
+        string Outcome,
+        bool Passed,
+        string? FailedPredicate);
 
     private sealed record DotnetBaseBuildCachePlan(
         string MainSha,

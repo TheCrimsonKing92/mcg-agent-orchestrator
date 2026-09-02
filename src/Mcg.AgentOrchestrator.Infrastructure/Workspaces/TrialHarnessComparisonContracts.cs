@@ -162,7 +162,9 @@ internal sealed record TrialHarnessResult(
     IReadOnlyList<string> Diagnostics,
     TrialWorkloadIdentity? WorkloadIdentity,
     TrialArmIdentity? ArmIdentity,
-    GoalTimingReportSnapshot? HistoricalTiming);
+    GoalTimingReportSnapshot? HistoricalTiming,
+    string? HermesTerminalReceiptPath = null,
+    HermesAcpTerminalReceipt? HermesTerminalReceipt = null);
 
 internal sealed record TrialComparisonResult(
     string RequestedBaseCommit,

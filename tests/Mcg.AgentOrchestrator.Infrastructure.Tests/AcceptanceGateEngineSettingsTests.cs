@@ -1,4 +1,5 @@
 using System.Reflection;
+using Mcg.AgentOrchestrator.App.Orchestration;
 using Mcg.AgentOrchestrator.Infrastructure;
 
 [Xunit.Collection(TestCollections.GoalAcceptanceVerifier)]
@@ -107,6 +108,7 @@ public sealed class AcceptanceGateEngineSettingsTests
             [
                 "AcceptanceGateEngineSettingsTests",
                 "AcceptanceOutputCaptureTests",
+                "GoalAcceptanceVerifierCancellationTests",
                 "GoalAcceptanceVerifierTests",
                 "GoalAcceptanceVerifierDotnetBuildSlotTests",
                 "HermeticVerificationEnvironmentTests",
@@ -442,6 +444,13 @@ public sealed class AcceptanceGateEngineSettingsTests
             var verifier = new GoalAcceptanceVerifier((arguments, _, timeout, _) =>
             {
                 calls.Add((arguments, timeout));
+                if (arguments.Length >= 2 &&
+                    arguments[0].Equals("dotnet", StringComparison.OrdinalIgnoreCase) &&
+                    arguments[1].Equals("test", StringComparison.OrdinalIgnoreCase))
+                {
+                    WriteVstestTrx(arguments, "CandidateLaneTests.Passes");
+                }
+
                 return Task.FromResult(new GoalAcceptanceVerifier.CommandResult(
                     0,
                     "Passed! - Failed: 0, Passed: 1, Skipped: 0, Total: 1."));
@@ -679,8 +688,17 @@ public sealed class AcceptanceGateEngineSettingsTests
             """);
         try
         {
-            var verifier = new GoalAcceptanceVerifier((_, _, _) =>
-                Task.FromResult(new GoalAcceptanceVerifier.CommandResult(0, "Passed: 1")));
+            var verifier = new GoalAcceptanceVerifier((arguments, _, _) =>
+            {
+                if (arguments.Length >= 2 &&
+                    arguments[0].Equals("dotnet", StringComparison.OrdinalIgnoreCase) &&
+                    arguments[1].Equals("test", StringComparison.OrdinalIgnoreCase))
+                {
+                    WriteVstestTrx(arguments, "CoreTests.Passes");
+                }
+
+                return Task.FromResult(new GoalAcceptanceVerifier.CommandResult(0, "Passed: 1"));
+            });
 
             var result = await verifier.RunAsync(root, stableSlotIndex: 1);
 
@@ -732,6 +750,11 @@ public sealed class AcceptanceGateEngineSettingsTests
             var verifier = new GoalAcceptanceVerifier((arguments, _, _) =>
             {
                 calls.Add(arguments);
+                if (arguments.Contains("--report-trx-filename"))
+                {
+                    WriteMtpTrx(arguments, "Example.Tests passes", "Example.Tests.Passes");
+                }
+
                 return Task.FromResult(new GoalAcceptanceVerifier.CommandResult(0, "Passed: 1"));
             });
 
@@ -1240,6 +1263,73 @@ public sealed class AcceptanceGateEngineSettingsTests
     }
 
     [Xunit.Fact]
+    public void EffectivePlanIdentityBindsChangeScopedModeWhenChecksMatch()
+    {
+        var root = CreateWorkspace("""
+            {
+              "version": 1,
+              "checks": [{
+                "name": "git diff whitespace",
+                "type": "command",
+                "command": "git",
+                "arguments": ["diff", "--check"]
+              }]
+            }
+            """);
+        var changedFiles = new[] { "Directory.Build.props" };
+        var previous = Environment.GetEnvironmentVariable("MCG_ACCEPTANCE_CHANGE_SCOPED");
+        try
+        {
+            Environment.SetEnvironmentVariable("MCG_ACCEPTANCE_CHANGE_SCOPED", "1");
+            Xunit.Assert.True(AcceptancePolicyShardPlanner.ChangeScopedAcceptanceEnabled());
+            var scopedChecks = GoalAcceptanceVerifier.BuildEffectiveAcceptanceChecksForTests(
+                root,
+                changedFiles);
+            var scopedIdentity = GoalAcceptanceVerifier.ComputeEffectiveAcceptancePlanIdentity(
+                root,
+                changedFiles);
+
+            Environment.SetEnvironmentVariable("MCG_ACCEPTANCE_CHANGE_SCOPED", "0");
+            Xunit.Assert.False(AcceptancePolicyShardPlanner.ChangeScopedAcceptanceEnabled());
+            var fullChecks = GoalAcceptanceVerifier.BuildEffectiveAcceptanceChecksForTests(
+                root,
+                changedFiles);
+            var fullIdentity = GoalAcceptanceVerifier.ComputeEffectiveAcceptancePlanIdentity(
+                root,
+                changedFiles);
+
+            Xunit.Assert.NotEmpty(scopedChecks);
+            Xunit.Assert.Equal(scopedChecks.Count, fullChecks.Count);
+            for (var index = 0; index < scopedChecks.Count; index++)
+            {
+                var scopedCheck = scopedChecks[index];
+                var fullCheck = fullChecks[index];
+                Xunit.Assert.Equal(scopedCheck.Name, fullCheck.Name);
+                Xunit.Assert.Equal(scopedCheck.Type, fullCheck.Type);
+                Xunit.Assert.Equal(scopedCheck.Command, fullCheck.Command);
+                Xunit.Assert.Equal(scopedCheck.Project, fullCheck.Project);
+                Xunit.Assert.Equal(scopedCheck.Arguments.ToArray(), fullCheck.Arguments.ToArray());
+                Xunit.Assert.Equal(scopedCheck.Pattern, fullCheck.Pattern);
+                Xunit.Assert.Equal(scopedCheck.FilePath, fullCheck.FilePath);
+                Xunit.Assert.Equal(scopedCheck.TimeoutMinutes, fullCheck.TimeoutMinutes);
+                Xunit.Assert.Equal(scopedCheck.Advisory, fullCheck.Advisory);
+                Xunit.Assert.Equal(scopedCheck.Runner, fullCheck.Runner);
+                Xunit.Assert.Equal(scopedCheck.EstimatedSerialSeconds, fullCheck.EstimatedSerialSeconds);
+                Xunit.Assert.Equal(
+                    scopedCheck.ExclusiveResourceKeys.ToArray(),
+                    fullCheck.ExclusiveResourceKeys.ToArray());
+            }
+
+            Xunit.Assert.NotEqual(scopedIdentity, fullIdentity);
+        }
+        finally
+        {
+            Environment.SetEnvironmentVariable("MCG_ACCEPTANCE_CHANGE_SCOPED", previous);
+            Directory.Delete(root, recursive: true);
+        }
+    }
+
+    [Xunit.Fact]
     public async Task GoalAcceptanceVerifierManifestChangeInvalidatesAllPartitionVerdicts()
     {
         var root = CreateWorkspace("""
@@ -1500,6 +1590,158 @@ public sealed class AcceptanceGateEngineSettingsTests
         }
     }
 
+    [Xunit.Fact(DisplayName = "GoalAcceptanceVerifier_semantic_duplicate_partitions_execute_once")]
+    public async Task GoalAcceptanceVerifierSemanticDuplicatePartitionsExecuteOnce()
+    {
+        const string checkName = "infrastructure tests: Remainder";
+        var root = CreateWorkspace("""
+            {
+              "version": 1,
+              "engine": {
+                "maxConcurrentShards": 1,
+                "partitionVerdictFullRerunEveryN": 1
+              },
+              "checks": [
+                {
+                  "name": "infrastructure tests: Remainder",
+                  "type": "dotnet-test",
+                  "runner": "vstest",
+                  "project": "tests/Mcg.AgentOrchestrator.Infrastructure.Tests/Mcg.AgentOrchestrator.Infrastructure.Tests.csproj",
+                  "arguments": ["--filter", "FullyQualifiedName~RemainderTests"]
+                },
+                {
+                  "name": "infrastructure tests: Remainder",
+                  "type": "dotnet-test",
+                  "runner": "vstest",
+                  "project": "tests/Mcg.AgentOrchestrator.Infrastructure.Tests/Mcg.AgentOrchestrator.Infrastructure.Tests.csproj",
+                  "arguments": ["--filter", "FullyQualifiedName~RemainderTests"]
+                }
+              ]
+            }
+            """);
+        var goalId = new Mcg.AgentOrchestrator.Core.GoalId("11111111111111111111111111111111");
+        var previousPrefix = Environment.GetEnvironmentVariable(
+            GoalAcceptanceVerifier.AcceptanceAttemptTrxPrefixVariable);
+        var attemptPrefix = Path.Combine(root, ".orchestrator", "semantic-dedup-attempt");
+        var invocations = 0;
+        GoalAcceptanceVerifier.ResolvePartitionVerdictCandidateTreeShaForTests = _ => "tree-semantic-dedup";
+        GoalAcceptanceVerifier.ResolvePartitionVerdictMainShaForTests = _ => "main-semantic-dedup";
+        GoalAcceptanceVerifier.ResolvePartitionVerdictVerifyingCommitShaForTests = _ => "commit-semantic-dedup";
+        GoalAcceptanceVerifier.PartitionVerdictWithinAttemptRerunEnabled = true;
+        try
+        {
+            var planned = GoalAcceptanceVerifier.BuildEffectiveAcceptanceChecksForTests(root);
+            Xunit.Assert.Single(planned, check => check.Name == checkName);
+
+            var verifier = new GoalAcceptanceVerifier((arguments, _, _) =>
+            {
+                if (arguments.Length < 2 ||
+                    !arguments[0].Equals("dotnet", StringComparison.OrdinalIgnoreCase) ||
+                    !arguments[1].Equals("test", StringComparison.OrdinalIgnoreCase))
+                {
+                    return Task.FromResult(new GoalAcceptanceVerifier.CommandResult(0, "Build server shutdown succeeded."));
+                }
+
+                invocations++;
+                WriteVstestTrx(arguments, "RemainderTests.Passes", testCount: 110);
+                var heartbeatPath =
+                    $"{attemptPrefix}.infrastructure-tests-remainder-{GoalAcceptanceVerifier.ShortHash(checkName)}.{GateHeartbeatArtifacts.FileName}";
+                File.WriteAllText(heartbeatPath, "{}");
+                return Task.FromResult(new GoalAcceptanceVerifier.CommandResult(0, "Passed: 110"));
+            });
+
+            Environment.SetEnvironmentVariable(
+                GoalAcceptanceVerifier.AcceptanceAttemptTrxPrefixVariable,
+                attemptPrefix);
+            var result = await verifier.RunAsync(root, goalId);
+
+            Xunit.Assert.True(result.Passed);
+            Xunit.Assert.False(result.Retried);
+            Xunit.Assert.Equal(1, invocations);
+            var partition = Xunit.Assert.Single(result.Checks!, check => check.Name == checkName);
+            Xunit.Assert.Equal(110, partition.DiscoveredTestCount);
+            Xunit.Assert.Equal(110, partition.ExecutedTestCount);
+            Xunit.Assert.Equal("Completed", partition.CompletionDecision!.TrxOutcome);
+            Xunit.Assert.Equal(0, partition.TestResultRunOrdinal);
+            var trxPath = Xunit.Assert.Single(partition.TestResultPaths!);
+            Xunit.Assert.True(File.Exists(trxPath));
+            Xunit.Assert.Equal("Completed", ReadTrxSummaryOutcome(trxPath));
+            Xunit.Assert.DoesNotContain("-run-1", Path.GetFileName(trxPath), StringComparison.Ordinal);
+
+            var attemptDirectory = Path.GetDirectoryName(attemptPrefix)!;
+            var attemptFilePrefix = Path.GetFileName(attemptPrefix);
+            var heartbeatPath = Xunit.Assert.Single(Directory.GetFiles(
+                attemptDirectory,
+                $"{attemptFilePrefix}.infrastructure-tests-remainder*.gate-heartbeat.json"));
+            Xunit.Assert.DoesNotContain("-run-1", Path.GetFileName(heartbeatPath), StringComparison.Ordinal);
+            Xunit.Assert.DoesNotContain(
+                GoalOperationJournal.Read(root, goalId).Entries,
+                entry => entry.Operation == "acceptance:partition-within-attempt-retry");
+            var deduplicationReceipt = Xunit.Assert.Single(
+                result.Checks!,
+                check => check.Name == "semantic execution deduplication: remainder");
+            Xunit.Assert.True(deduplicationReceipt.Advisory);
+            Xunit.Assert.Contains("semantic_key_sha256=", deduplicationReceipt.ResultSummary, StringComparison.Ordinal);
+            Xunit.Assert.Contains(
+                GoalOperationJournal.Read(root, goalId).Entries,
+                entry => entry.Operation == "acceptance:semantic-check-deduplication" &&
+                    entry.PartitionId == "remainder");
+        }
+        finally
+        {
+            Environment.SetEnvironmentVariable(
+                GoalAcceptanceVerifier.AcceptanceAttemptTrxPrefixVariable,
+                previousPrefix);
+            GoalAcceptanceVerifier.ResolvePartitionVerdictCandidateTreeShaForTests = null;
+            GoalAcceptanceVerifier.ResolvePartitionVerdictMainShaForTests = null;
+            GoalAcceptanceVerifier.ResolvePartitionVerdictVerifyingCommitShaForTests = null;
+            GoalAcceptanceVerifier.PartitionVerdictWithinAttemptRerunEnabled = true;
+            Directory.Delete(root, recursive: true);
+        }
+    }
+
+    [Xunit.Fact(DisplayName = "GoalAcceptanceVerifier_semantic_execution_key_covers_every_execution_control")]
+    public void GoalAcceptanceVerifierSemanticExecutionKeyCoversEveryExecutionControl()
+    {
+        var token = new GoalAcceptanceVerifier.FocusedEvidenceFilterToken(
+            "FullyQualifiedName~Example",
+            "FullyQualifiedName~Example",
+            GoalAcceptanceVerifier.FocusedEvidenceTokenKind.Class,
+            "Example",
+            "Example");
+        GoalAcceptanceVerifier.AcceptanceManifestCheck Create(
+            int? timeoutMinutes = 1,
+            bool advisory = false,
+            double estimatedSerialSeconds = 2,
+            IReadOnlyList<string>? exclusiveResourceKeys = null,
+            bool focused = false,
+            IReadOnlyList<IReadOnlyList<GoalAcceptanceVerifier.FocusedEvidenceFilterToken>>? selections = null) =>
+            new()
+            {
+                Name = "infrastructure tests: Remainder",
+                Type = "dotnet-test",
+                Runner = "vstest",
+                Project = "tests/Mcg.AgentOrchestrator.Infrastructure.Tests/Mcg.AgentOrchestrator.Infrastructure.Tests.csproj",
+                Arguments = ["--filter", "FullyQualifiedName~RemainderTests"],
+                TimeoutMinutes = timeoutMinutes,
+                Advisory = advisory,
+                EstimatedSerialSeconds = estimatedSerialSeconds,
+                ExclusiveResourceKeys = exclusiveResourceKeys ?? ["dotnet-build"],
+                IsFocusedEvidenceSelection = focused,
+                FocusedEvidenceTokens = focused ? [token] : [],
+                FocusedEvidenceSelections = selections ?? []
+            };
+
+        var baseline = GoalAcceptanceVerifier.SemanticExecutionKeyForTests(Create());
+        Xunit.Assert.NotEqual(baseline, GoalAcceptanceVerifier.SemanticExecutionKeyForTests(Create(timeoutMinutes: 2)));
+        Xunit.Assert.NotEqual(baseline, GoalAcceptanceVerifier.SemanticExecutionKeyForTests(Create(advisory: true)));
+        Xunit.Assert.NotEqual(baseline, GoalAcceptanceVerifier.SemanticExecutionKeyForTests(Create(estimatedSerialSeconds: 3)));
+        Xunit.Assert.NotEqual(baseline, GoalAcceptanceVerifier.SemanticExecutionKeyForTests(Create(exclusiveResourceKeys: ["another-resource"])));
+        Xunit.Assert.NotEqual(
+            baseline,
+            GoalAcceptanceVerifier.SemanticExecutionKeyForTests(Create(focused: true, selections: [[token]])));
+    }
+
     [Xunit.Fact(DisplayName = "GoalAcceptanceVerifier_same_named_checks_retain_invocation_receipts")]
     public async Task GoalAcceptanceVerifierSameNamedChecksRetainInvocationReceipts()
     {
@@ -1715,6 +1957,72 @@ public sealed class AcceptanceGateEngineSettingsTests
         }
     }
 
+    [Xunit.Fact(DisplayName = "GoalAcceptanceVerifier_missing_retry_heartbeat_preserves_original_red_result")]
+    public async Task GoalAcceptanceVerifierMissingRetryHeartbeatPreservesOriginalRedResult()
+    {
+        const string checkName = "infrastructure tests: Remainder";
+        var root = CreateWorkspace("""
+            {
+              "version": 1,
+              "engine": { "maxConcurrentShards": 1, "partitionVerdictFullRerunEveryN": 1 },
+              "checks": [
+                {
+                  "name": "infrastructure tests: Remainder",
+                  "type": "dotnet-test",
+                  "runner": "vstest",
+                  "project": "tests/Mcg.AgentOrchestrator.Infrastructure.Tests/Mcg.AgentOrchestrator.Infrastructure.Tests.csproj",
+                  "arguments": ["--filter", "FullyQualifiedName~RemainderTests"]
+                }
+              ]
+            }
+            """);
+        var goalId = new Mcg.AgentOrchestrator.Core.GoalId("99999999999999999999999999999999");
+        var invocations = 0;
+        GoalAcceptanceVerifier.ResolvePartitionVerdictCandidateTreeShaForTests = _ => "tree-missing-heartbeat";
+        GoalAcceptanceVerifier.ResolvePartitionVerdictMainShaForTests = _ => "main-missing-heartbeat";
+        GoalAcceptanceVerifier.ResolvePartitionVerdictVerifyingCommitShaForTests = _ => "commit-missing-heartbeat";
+        GoalAcceptanceVerifier.PartitionVerdictWithinAttemptRerunEnabled = true;
+        try
+        {
+            var verifier = new GoalAcceptanceVerifier((arguments, _, _) =>
+            {
+                if (arguments.Length < 2 || arguments[0] != "dotnet" || arguments[1] != "test")
+                {
+                    return Task.FromResult(new GoalAcceptanceVerifier.CommandResult(0, "Build server shutdown succeeded."));
+                }
+
+                invocations++;
+                return Task.FromResult(new GoalAcceptanceVerifier.CommandResult(
+                    1,
+                    "Failed: 1",
+                    Stderr: "original retry-driving stderr"));
+            });
+
+            var result = await verifier.RunAsync(root, goalId);
+
+            Xunit.Assert.False(result.Passed);
+            Xunit.Assert.False(result.Retried);
+            Xunit.Assert.Equal(1, invocations);
+            var partition = Xunit.Assert.Single(result.Checks!, check => check.Name == checkName);
+            Xunit.Assert.Equal(AcceptanceFailureClassifications.RetryEvidenceRetentionFailed, partition.FailureClassification);
+            Xunit.Assert.Contains("retry refused", partition.OutputTail, StringComparison.OrdinalIgnoreCase);
+            Xunit.Assert.NotNull(partition.ProcessStderrPath);
+            Xunit.Assert.True(File.Exists(partition.ProcessStderrPath));
+            Xunit.Assert.DoesNotContain(
+                GoalOperationJournal.Read(root, goalId).Entries,
+                entry => entry.Operation == "acceptance:partition-within-attempt-retry");
+        }
+        finally
+        {
+            GoalAcceptanceVerifier.ResolvePartitionVerdictCandidateTreeShaForTests = null;
+            GoalAcceptanceVerifier.ResolvePartitionVerdictMainShaForTests = null;
+            GoalAcceptanceVerifier.ResolvePartitionVerdictVerifyingCommitShaForTests = null;
+            GoalAcceptanceVerifier.PartitionVerdictWithinAttemptRerunEnabled = true;
+            DotnetBuildEnvironmentManager.TryDeleteGoalArtifacts(goalId);
+            Directory.Delete(root, recursive: true);
+        }
+    }
+
     [Xunit.Fact(DisplayName = "GoalAcceptanceVerifier_distinct_named_checks_keep_legacy_telemetry_names")]
     public async Task GoalAcceptanceVerifierDistinctNamedChecksKeepLegacyTelemetryNames()
     {
@@ -1862,7 +2170,10 @@ public sealed class AcceptanceGateEngineSettingsTests
     private static void WriteVstestTrx(
         string[] arguments,
         string testName,
-        string outcome = "Passed")
+        string outcome = "Passed",
+        int testCount = 1,
+        int skippedCount = 0,
+        string summaryOutcome = "Completed")
     {
         var resultsDirectoryIndex = Array.IndexOf(arguments, "--results-directory");
         var loggerIndex = Array.IndexOf(arguments, "--logger");
@@ -1874,15 +2185,31 @@ public sealed class AcceptanceGateEngineSettingsTests
         Directory.CreateDirectory(resultsDirectory);
         var testClass = testName[..testName.LastIndexOf('.')];
         var method = testName[(testName.LastIndexOf('.') + 1)..];
+        string ReceiptTestName(int index) => testCount == 1 ? testName : $"{testName}.{index}";
+        string ReceiptMethodName(int index) => testCount == 1 ? method : $"{method}{index}";
+        var definitions = string.Concat(Enumerable.Range(1, testCount).Select(index =>
+            $"<UnitTest id=\"{index}\" name=\"{ReceiptTestName(index)}\"><TestMethod className=\"{testClass}\" name=\"{ReceiptMethodName(index)}\" /></UnitTest>"));
+        var executedCount = testCount - skippedCount;
+        var results = string.Concat(Enumerable.Range(1, testCount).Select(index =>
+            $"<UnitTestResult testId=\"{index}\" testName=\"{ReceiptTestName(index)}\" outcome=\"{(index <= executedCount ? outcome : "NotExecuted")}\" />"));
+        var passed = outcome.Equals("Passed", StringComparison.OrdinalIgnoreCase) ? executedCount : 0;
+        var failed = outcome.Equals("Passed", StringComparison.OrdinalIgnoreCase) ? 0 : executedCount;
         File.WriteAllText(
             Path.Combine(resultsDirectory, logger[prefix.Length..]),
-            $"<TestRun><TestDefinitions><UnitTest id=\"1\" name=\"{testName}\"><TestMethod className=\"{testClass}\" name=\"{method}\" /></UnitTest></TestDefinitions><Results><UnitTestResult testId=\"1\" testName=\"{testName}\" outcome=\"{outcome}\" /></Results></TestRun>");
+            $"<TestRun><TestDefinitions>{definitions}</TestDefinitions><Results>{results}</Results><ResultSummary outcome=\"{summaryOutcome}\"><Counters total=\"{testCount}\" executed=\"{executedCount}\" passed=\"{passed}\" failed=\"{failed}\" notExecuted=\"{skippedCount}\" /></ResultSummary></TestRun>");
     }
 
     private static string ReadTrxOutcome(string path) =>
         System.Xml.Linq.XDocument.Load(path)
             .Descendants()
             .Single(element => element.Name.LocalName == "UnitTestResult")
+            .Attribute("outcome")!
+            .Value;
+
+    private static string ReadTrxSummaryOutcome(string path) =>
+        System.Xml.Linq.XDocument.Load(path)
+            .Descendants()
+            .Single(element => element.Name.LocalName == "ResultSummary")
             .Attribute("outcome")!
             .Value;
 
@@ -1897,7 +2224,7 @@ public sealed class AcceptanceGateEngineSettingsTests
         var method = methodIdentity[(methodIdentity.LastIndexOf('.') + 1)..];
         File.WriteAllText(
             Path.Combine(resultsDirectory, arguments[trxFileIndex + 1]),
-            $"<TestRun><TestDefinitions><UnitTest id=\"1\" name=\"{displayName}\"><TestMethod className=\"{testClass}\" name=\"{method}\" /></UnitTest></TestDefinitions><Results><UnitTestResult testId=\"1\" testName=\"{displayName}\" outcome=\"Passed\" /></Results></TestRun>");
+            $"<TestRun><TestDefinitions><UnitTest id=\"1\" name=\"{displayName}\"><TestMethod className=\"{testClass}\" name=\"{method}\" /></UnitTest></TestDefinitions><Results><UnitTestResult testId=\"1\" testName=\"{displayName}\" outcome=\"Passed\" /></Results><ResultSummary outcome=\"Completed\"><Counters total=\"1\" executed=\"1\" passed=\"1\" failed=\"0\" notExecuted=\"0\" /></ResultSummary></TestRun>");
     }
 
     private static string CreateMtpDiscoveryJson(

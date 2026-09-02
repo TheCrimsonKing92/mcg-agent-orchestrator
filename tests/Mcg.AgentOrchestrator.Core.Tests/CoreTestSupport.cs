@@ -22,6 +22,18 @@ internal static class CoreTestData
             new(AgentId.New(), "Reviewer", AgentRole.Reviewer, OpenAi("high"))
         ];
     }
+
+    public static string RequiredTestImpactFilter(RepositoryTestImpactCheck check)
+    {
+        var filterIndex = check.Command
+            .Select((argument, index) => (argument, index))
+            .Single(pair => pair.argument.Equals("--filter", StringComparison.Ordinal))
+            .index;
+        Xunit.Assert.True(
+            filterIndex + 1 < check.Command.Count,
+            "The test-impact command must provide a value after --filter.");
+        return check.Command[filterIndex + 1];
+    }
 }
 internal sealed class FakeClock : IClock
 {

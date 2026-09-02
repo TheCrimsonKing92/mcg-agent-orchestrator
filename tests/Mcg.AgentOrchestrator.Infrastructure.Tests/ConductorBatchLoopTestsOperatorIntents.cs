@@ -27,6 +27,7 @@ public sealed class ConductorBatchLoopTestsOperatorIntents : ConductorBatchLoopT
             var (kernel, goal) = SimpleGoal("Apply operator retry");
             var task = goal.Tasks.Single();
             kernel.ReportTaskProgress(goal.Id, task.Id, WorkTaskStatus.Failed, "Needs operator repair.");
+            kernel.RecordCriterionRetryFeedback(goal.Id, task.Id, ["stale source-size-ratchet diagnosis"]);
             var store = new SqliteOperatorIntentStore(
                 Path.Combine(root, "operator-intents.db"),
                 Path.Combine(root, "logs"));
@@ -37,7 +38,7 @@ public sealed class ConductorBatchLoopTestsOperatorIntents : ConductorBatchLoopT
                 goal.Id.Value,
                 task.Id.Value,
                 JsonSerializer.Serialize(
-                    new RetryOperatorIntentPayload("Operator repaired through inbox.", null),
+                    new RetryOperatorIntentPayload("Operator repaired through inbox.", null, RetryCause: RetryCause.ContractClarification),
                     new JsonSerializerOptions(JsonSerializerDefaults.Web)),
                 [],
                 "operator",
@@ -66,6 +67,31 @@ public sealed class ConductorBatchLoopTestsOperatorIntents : ConductorBatchLoopT
             Assert.NotNull(outcome);
             Assert.Equal(OperatorIntentStatus.Applied, outcome!.Status);
             Assert.Contains("Applied retry", outcome.Outcome, StringComparison.Ordinal);
+            Assert.Equal(["Operator repaired through inbox."], task.CriterionRetryFeedback);
+            Assert.Equal("Operator repaired through inbox.", task.AcceptedRetryFeedback?.Message);
+            Assert.Equal(1, task.CriterionRetryCount);
+            Assert.Equal(1, goal.AutomaticAcceptanceRetryCount);
+
+            var contextDirectory = WorkerContextArtifacts.Write(goal, task, root);
+            var brief = kernel.BuildTaskBrief(
+                goal.Id,
+                task.Id,
+                workingDirectory: root,
+                contextDirectory: contextDirectory,
+                emitTypedSourceBoundaries: true);
+            var package = WorkerProfileDispatcher.BuildContextPackage(goal, task, root, contextDirectory, brief);
+            var promptPath = Path.Combine(root, "prepared-prompt.md");
+            File.WriteAllText(promptPath, WorkerContextPackageBuilder.Render(package));
+            var receipt = WorkerRetryFeedbackPromptGuard.Validate(
+                goal,
+                task,
+                package,
+                WorkerContextPackageBuilder.CreateReceipt(package),
+                promptPath);
+            var prompt = File.ReadAllText(promptPath);
+            Assert.Contains("Operator repaired through inbox.", prompt, StringComparison.Ordinal);
+            Assert.DoesNotContain("stale source-size-ratchet diagnosis", prompt, StringComparison.Ordinal);
+            Assert.NotNull(receipt!.RetryFeedbackPromptReceipt);
         }
         finally
         {
@@ -126,7 +152,7 @@ public sealed class ConductorBatchLoopTestsOperatorIntents : ConductorBatchLoopT
                 goal.Id.Value,
                 task.Id.Value,
                 JsonSerializer.Serialize(
-                    new RetryOperatorIntentPayload("Acceptance evidence requires a correction.", null),
+                    new RetryOperatorIntentPayload("Acceptance evidence requires a correction.", null, RetryCause: RetryCause.CriterionEvidenceOwnerMismatch),
                     new JsonSerializerOptions(JsonSerializerDefaults.Web)),
                 [],
                 "operator",
@@ -221,7 +247,7 @@ public sealed class ConductorBatchLoopTestsOperatorIntents : ConductorBatchLoopT
                 goal.Id.Value,
                 task.Id.Value,
                 JsonSerializer.Serialize(
-                    new RetryOperatorIntentPayload("retry after persistence recovers", null),
+                    new RetryOperatorIntentPayload("retry after persistence recovers", null, RetryCause: RetryCause.ContractClarification),
                     new JsonSerializerOptions(JsonSerializerDefaults.Web)),
                 [],
                 "operator",
@@ -289,7 +315,7 @@ public sealed class ConductorBatchLoopTestsOperatorIntents : ConductorBatchLoopT
                 outsideGoal.Id.Value,
                 outsideTask.Id.Value,
                 JsonSerializer.Serialize(
-                    new RetryOperatorIntentPayload("retry outside scope", null),
+                    new RetryOperatorIntentPayload("retry outside scope", null, RetryCause: RetryCause.ContractClarification),
                     new JsonSerializerOptions(JsonSerializerDefaults.Web)),
                 [],
                 "operator",
@@ -336,7 +362,7 @@ public sealed class ConductorBatchLoopTestsOperatorIntents : ConductorBatchLoopT
                 goal.Id.Value,
                 TaskId.New().Value,
                 JsonSerializer.Serialize(
-                    new RetryOperatorIntentPayload("invalid task", null),
+                    new RetryOperatorIntentPayload("invalid task", null, RetryCause: RetryCause.ContractClarification),
                     new JsonSerializerOptions(JsonSerializerDefaults.Web)),
                 [],
                 "operator",
@@ -385,7 +411,7 @@ public sealed class ConductorBatchLoopTestsOperatorIntents : ConductorBatchLoopT
                 goal.Id.Value,
                 TaskId.New().Value,
                 JsonSerializer.Serialize(
-                    new RetryOperatorIntentPayload("invalid task", null),
+                    new RetryOperatorIntentPayload("invalid task", null, RetryCause: RetryCause.ContractClarification),
                     new JsonSerializerOptions(JsonSerializerDefaults.Web)),
                 [],
                 "operator",
@@ -507,7 +533,7 @@ public sealed class ConductorBatchLoopTestsOperatorIntents : ConductorBatchLoopT
             await SubmitAndTick(
                 "sequence-retry",
                 OperatorIntentVerbs.Retry,
-                new RetryOperatorIntentPayload("mechanical recovery", RetryRoundKind.Mechanical));
+                new RetryOperatorIntentPayload("mechanical recovery", RetryRoundKind.Mechanical, RetryCause: RetryCause.MainDriftConflict));
             await SubmitAndTick(
                 "sequence-progress",
                 OperatorIntentVerbs.Progress,
@@ -627,7 +653,7 @@ public sealed class ConductorBatchLoopTestsOperatorIntents : ConductorBatchLoopT
                 goal.Id.Value,
                 task.Id.Value,
                 JsonSerializer.Serialize(
-                    new RetryOperatorIntentPayload("Apply once.", null),
+                    new RetryOperatorIntentPayload("Apply once.", null, RetryCause: RetryCause.ContractClarification),
                     new JsonSerializerOptions(JsonSerializerDefaults.Web)),
                 [],
                 "operator",

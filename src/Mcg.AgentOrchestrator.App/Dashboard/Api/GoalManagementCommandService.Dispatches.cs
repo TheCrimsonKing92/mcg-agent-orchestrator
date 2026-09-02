@@ -8,6 +8,8 @@ namespace Mcg.AgentOrchestrator.App.Dashboard.Api;
 internal static partial class GoalManagementCommandService
 {
 internal static Func<int, bool> IsTrackedProcessRunningForReadyBatch { get; set; } = IsProcessRunning;
+internal static Func<int, SpawnProcessIdentity?> ReadTrackedProcessIdentityForReadyBatch { get; set; } =
+    DispatchProcessIdentityEvidence.ReadCurrent;
 
 public static IReadOnlyList<WorkerProfileDispatchResult> ProfileDispatchReadyTasks(
     AgentOrchestratorKernel kernel,
@@ -73,7 +75,8 @@ public static WorkerProfileDispatchResult ProfileDispatchTask(
             : null,
         citedPriorEvidenceResolver: CreateCitedPriorEvidenceResolver(workspace),
         sandboxOptions: sandboxOptions,
-        plannerSampleCount: ResolvePlannerSampleCount(workspace, plannerSampleCount));
+        plannerSampleCount: ResolvePlannerSampleCount(workspace, plannerSampleCount),
+        paidRoute: subscriptionMetadata?.PaidRoute ?? PaidRouteClassification.Unknown);
 }
 
 public static WorkerProfileDispatchResult RefreshPreparedDispatchBeforeStart(
@@ -206,7 +209,20 @@ private static ProfileSubscriptionMetadata? TryBuildProfileSubscriptionMetadata(
     var complexity = Enum.TryParse<TaskComplexity>(variables.GetValueOrDefault("taskComplexity"), out var parsedComplexity)
         ? parsedComplexity
         : (TaskComplexity?)null;
-    return new ProfileSubscriptionMetadata(variables, providerName, modelName, reasoningEffort, reasoningEffortReason, complexity);
+    if (!Enum.TryParse<PaidRouteClassification>(variables.GetValueOrDefault("paidRoute"), out var paidRoute) ||
+        paidRoute == PaidRouteClassification.Unknown)
+    {
+        throw new InvalidOperationException(
+            $"Subscription profile '{profile.Name}' did not resolve an explicit paid-route classification.");
+    }
+    return new ProfileSubscriptionMetadata(
+        variables,
+        providerName,
+        modelName,
+        reasoningEffort,
+        reasoningEffortReason,
+        complexity,
+        paidRoute);
 }
 
 private sealed record ProfileSubscriptionMetadata(
@@ -215,7 +231,8 @@ private sealed record ProfileSubscriptionMetadata(
     string? ModelName,
     string? ReasoningEffort,
     string? ReasoningEffortReason,
-    TaskComplexity? Complexity);
+    TaskComplexity? Complexity,
+    PaidRouteClassification PaidRoute);
 
 public static IReadOnlyList<WorkerProfileDispatchResult> SubscriptionDispatchReadyTasks(
     AgentOrchestratorKernel kernel,
@@ -338,17 +355,25 @@ public static SubscriptionStartResult StartSubscriptionReadyTasks(
         plannerSampleCount: ResolvePlannerSampleCount(workspace, plannerSampleCount, conductorPolicy));
     var containsInterruptedDispatchRecovery = batch.Dispatches.Any(dispatch =>
         dispatch.Task.InterruptedDispatchRecoveryId is not null);
+    var admittedTaskIds = new HashSet<TaskId>();
+    foreach (var prepared in batch.Dispatches)
+    {
+        var admission = EnsurePreparedRetryAdmission(kernel, workspace, goal.Id, prepared.Task);
+        if (admission.AllowsProcessStart)
+            admittedTaskIds.Add(prepared.Task.Id);
+    }
     if (!containsInterruptedDispatchRecovery &&
         checkpointBeforeWorkerStart is not null &&
-        batch.Dispatches.Count > 0)
+        admittedTaskIds.Count > 0)
     {
         checkpointBeforeWorkerStart(
             kernel,
             goal.Id,
-            batch.Dispatches[0].Task.Id,
+            batch.Dispatches.First(dispatch => admittedTaskIds.Contains(dispatch.Task.Id)).Task.Id,
             DispatchRecordCheckpointPhase.BeforeProcessStart);
     }
 
+    goal = kernel.GetGoal(goal.Id);
     var processes = StartDispatches(
         kernel,
         workspace,
@@ -361,7 +386,8 @@ public static SubscriptionStartResult StartSubscriptionReadyTasks(
         checkpointBeforeWorkerStart,
         readCurrentInterruptedDispatchState,
         runner: runner,
-        sandboxOptions: sandboxOptions);
+        sandboxOptions: sandboxOptions,
+        admittedTaskIds: admittedTaskIds);
     return new SubscriptionStartResult(
         batch.Dispatches,
         processes,
@@ -758,22 +784,20 @@ private static void ReconcileExitedAssignedProcessRecords(AgentOrchestratorKerne
 
 private static bool HasLiveTrackedProcess(TaskProcessRecord process)
 {
-    var processIds = new HashSet<int>(process.TrackedProcessIds);
     var heartbeat = ProcessLogReader.ReadHeartbeat(process);
-    if (heartbeat.IsAvailable)
+    if (!heartbeat.IsAvailable)
     {
-        if (heartbeat.ChildProcessId is { } childPid)
-        {
-            processIds.Add(childPid);
-        }
-
-        foreach (var ownedPid in heartbeat.OwnedProcessIds)
-        {
-            processIds.Add(ownedPid);
-        }
+        return false;
     }
 
-    return processIds.Any(IsTrackedProcessRunningForReadyBatch);
+    var candidates = heartbeat.OwnedProcessIds
+        .Concat(heartbeat.ChildProcessId is > 0 ? [heartbeat.ChildProcessId.Value] : [])
+        .Concat(heartbeat.ProcessId > 0 ? [heartbeat.ProcessId] : []);
+    return DispatchProcessIdentityEvidence.GetLiveRecordedOwnerProcessIds(
+        candidates,
+        heartbeat.OwnedProcessIdentities,
+        IsTrackedProcessRunningForReadyBatch,
+        ReadTrackedProcessIdentityForReadyBatch).Count > 0;
 }
 
 private static bool IsProcessRunning(int processId)
@@ -887,7 +911,8 @@ private static ProcessBatchExecutionResult StartDispatches(
     int? reviewAutoRetryStopRound = null,
     BackgroundDispatchRunner? runner = null,
     WorkerSandboxOptions? sandboxOptions = null,
-    ConductorAutonomyPolicy? conductorPolicy = null)
+    ConductorAutonomyPolicy? conductorPolicy = null,
+    IReadOnlySet<TaskId>? admittedTaskIds = null)
 {
     runner ??= new BackgroundDispatchRunner();
     var logRoot = workspace.LogDirectory;
@@ -907,7 +932,8 @@ private static ProcessBatchExecutionResult StartDispatches(
         (taskIdsToStart is null || taskIdsToStart.Contains(item.TaskId))))
     {
         var task = goal.Tasks.Single(task => task.Id == item.TaskId);
-        if (refreshBeforeStart)
+        var recoveringPreparedReservation = HasRecoverablePreparedReservation(task);
+        if (ShouldRefreshPreparedDispatchBeforeStart(task, refreshBeforeStart))
         {
             resolvedAgents ??= agents ?? AgentCatalogStore.Load(workspace.AgentCatalogPath).Agents;
             resolvedProfiles ??= profiles ?? WorkerProfileStore.Load(workspace.WorkerProfilePath);
@@ -922,6 +948,39 @@ private static ProcessBatchExecutionResult StartDispatches(
                 reviewAutoRetryStopRound,
                 sandboxOptions,
                 conductorPolicy: conductorPolicy);
+        }
+
+        RetryAdmissionResult? admission = null;
+        if (admittedTaskIds is null || !admittedTaskIds.Contains(task.Id))
+        {
+            admission = EnsurePreparedRetryAdmission(
+                kernel,
+                workspace,
+                goal.Id,
+                task,
+                recoveringPreparedReservation);
+            goal = kernel.GetGoal(goal.Id);
+            task = goal.Tasks.Single(candidate => candidate.Id == item.TaskId);
+            if (!admission.AllowsProcessStart)
+                continue;
+        }
+
+
+        var startReceipt = admission?.Receipt ?? task.RetryAdmissionHistory.LastOrDefault(receipt =>
+            receipt.LinkedDispatchAt == task.LastDispatch?.DispatchedAt &&
+            receipt.Decision is RetryAdmissionDecision.Allowed or RetryAdmissionDecision.ResumedReservation);
+        var requiresDurableStartClaim = task.LatestRetryAt is not null &&
+            task.LastDispatch?.PaidRoute == PaidRouteClassification.Paid;
+        if (requiresDurableStartClaim &&
+            (startReceipt is null || string.IsNullOrWhiteSpace(startReceipt.ReservationOwnerId)))
+        {
+            throw new InvalidOperationException(
+                $"Paid retry start requires a durable retry-admission receipt for task '{task.Id}'.");
+        }
+        if (requiresDurableStartClaim && checkpointBeforeWorkerStart is null)
+        {
+            throw new InvalidOperationException(
+                $"Paid retry start requires a durable process checkpoint for task '{task.Id}'.");
         }
 
         Action<AgentOrchestratorKernel, GoalId, TaskId, DispatchRecordCheckpointPhase>? batchCheckpoint =
@@ -942,7 +1001,47 @@ private static ProcessBatchExecutionResult StartDispatches(
             logRoot,
             batchCheckpoint,
             readCurrentInterruptedDispatchState,
-            sandboxOptions);
+            sandboxOptions,
+            !requiresDurableStartClaim ||
+                startReceipt is null ||
+                string.IsNullOrWhiteSpace(startReceipt.ReservationOwnerId)
+                ? null
+                : () =>
+                {
+                    var claim = RetryAdmissionReservationStore.TryClaimStartSnapshotAsync(
+                        workspace.SqliteStatePath,
+                        goal.Id,
+                        task.Id,
+                        startReceipt.LinkedDispatchAt,
+                        startReceipt.ReservationOwnerId,
+                        DateTimeOffset.UtcNow)
+                        .GetAwaiter()
+                        .GetResult();
+                    if (claim is null || !claim.Claimed)
+                        return false;
+                    kernel.ReplaceGoalWithSnapshot(claim.Snapshot);
+                    return true;
+                },
+            !requiresDurableStartClaim ||
+                startReceipt is null ||
+                string.IsNullOrWhiteSpace(startReceipt.ReservationOwnerId)
+                ? null
+                : () =>
+                {
+                    var confirmation = RetryAdmissionReservationStore.TryConfirmStartAsync(
+                            workspace.SqliteStatePath,
+                            goal.Id,
+                            task.Id,
+                            startReceipt.LinkedDispatchAt,
+                            startReceipt.ReservationOwnerId,
+                            DateTimeOffset.UtcNow)
+                        .GetAwaiter()
+                        .GetResult();
+                    if (confirmation is null || !confirmation.Claimed)
+                        return false;
+                    kernel.ReplaceGoalWithSnapshot(confirmation.Snapshot);
+                    return true;
+                });
         if (startResult.RecoveryAction is { } action)
         {
             recoveryActions.Add(action);
@@ -961,11 +1060,93 @@ private static ProcessBatchExecutionResult StartDispatches(
             continue;
         }
 
-        started.Add(task);
+        started.Add(kernel.GetTask(goal.Id, task.Id));
     }
 
     return new ProcessBatchExecutionResult(plan, started, recoveryActions, requeueSkippedCount, startFailures);
 }
+
+private static RetryAdmissionResult EnsurePreparedRetryAdmission(
+    AgentOrchestratorKernel kernel,
+    OrchestratorWorkspace workspace,
+    GoalId goalId,
+    TaskSpec task,
+    bool reservationRecoveryConfirmed = false)
+{
+    var dispatch = task.LastDispatch ??
+        throw new InvalidOperationException("Retry admission requires a prepared dispatch.");
+    var fingerprint = dispatch.RetryContextFingerprint ??
+        throw new InvalidOperationException("Prepared subscription dispatch is missing its retry-context fingerprint.");
+    var recordedAt = DateTimeOffset.UtcNow;
+    var reservationOwnerId = Guid.NewGuid().ToString("n");
+    var reservationLeaseExpiresAt = recordedAt.AddMinutes(1);
+    if (task.LatestRetryAt is not null && dispatch.PaidRoute == PaidRouteClassification.Unknown)
+    {
+        throw new InvalidOperationException(
+            $"Retry dispatch for task '{task.Id}' is missing an explicit paid-route classification.");
+    }
+    if (dispatch.PaidRoute != PaidRouteClassification.Paid || task.LatestRetryAt is null)
+    {
+        return kernel.RecordPreparedRetryAdmission(
+            goalId,
+            task.Id,
+            fingerprint,
+            dispatch.PaidRoute,
+            recordedAt,
+            RetryContextFingerprintFactory.GetOpenBlockingFindings(kernel.GetGoal(goalId)),
+            reservationOwnerId,
+            reservationLeaseExpiresAt,
+            reservationRecoveryConfirmed);
+    }
+
+    var persisted = RetryAdmissionReservationStore.TryReserveAsync(
+            workspace.SqliteStatePath,
+            goalId,
+            task.Id,
+            fingerprint,
+            dispatch.PaidRoute,
+            task.PendingRetryCause,
+            dispatch,
+            recordedAt,
+            reservationOwnerId,
+            reservationLeaseExpiresAt,
+            reservationRecoveryConfirmed)
+        .GetAwaiter()
+        .GetResult();
+    if (persisted is not null)
+    {
+        kernel.ReplaceGoalStateWithSnapshot(persisted.Snapshot, persisted.HumanInputRequests ?? []);
+        return persisted.Admission;
+    }
+
+    throw new InvalidOperationException(
+        $"Durable retry-admission reservation could not be created for goal '{goalId}' and task '{task.Id}'.");
+}
+
+private static bool HasRecoverablePreparedReservation(TaskSpec task)
+{
+    if (task.LastDispatch is not { } dispatch)
+        return false;
+
+    var receipt = task.RetryAdmissionHistory.LastOrDefault(candidate =>
+        candidate.LinkedDispatchAt == dispatch.DispatchedAt &&
+        candidate.WorkerStartedAt is null &&
+        candidate.Decision is RetryAdmissionDecision.Allowed or RetryAdmissionDecision.ResumedReservation);
+    if (receipt is null || receipt.WorkerStartClaimedAt is null)
+        return receipt is not null;
+
+    if (task.LastProcess is not { } process || HasLiveTrackedProcess(process))
+        return task.LastProcess is null;
+
+    const string outputSuffix = ".out.log";
+    if (!process.StandardOutputPath.EndsWith(outputSuffix, StringComparison.OrdinalIgnoreCase))
+        return false;
+    var startGatePath = process.StandardOutputPath[..^outputSuffix.Length] + ".start-gate";
+    return !File.Exists(startGatePath);
+}
+
+internal static bool ShouldRefreshPreparedDispatchBeforeStart(TaskSpec task, bool refreshBeforeStart) =>
+    refreshBeforeStart && !HasRecoverablePreparedReservation(task);
 
 internal static DispatchRecordCheckpointPhase ResolveBatchCheckpointPhase(
     ref bool processMayHaveStarted,

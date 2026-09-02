@@ -142,7 +142,7 @@ public sealed class DashboardRenderingTests
             goal.Id.Value,
             task.Id.Value,
             JsonSerializer.Serialize(
-                new RetryOperatorIntentPayload("dashboard retry", null),
+                new RetryOperatorIntentPayload("dashboard retry", null, RetryCause: RetryCause.ContractClarification),
                 new JsonSerializerOptions(JsonSerializerDefaults.Web)),
             [],
             "miles",
@@ -178,6 +178,7 @@ public sealed class DashboardRenderingTests
             kernel,
             goal,
             WorkerProfileCatalog.Default(),
+            ProcessCommandLineSnapshot.Empty,
             operatorIntents: persisted);
 
         Assert.Contains("Operator intent evidence", html, StringComparison.Ordinal);
@@ -712,7 +713,11 @@ public sealed class DashboardRenderingTests
 
     var monitor = DashboardResponseMapper.ToMonitorDto(kernel.BuildMonitor(goal.Id));
     var acceptance = DashboardResponseMapper.ToGoalAcceptanceSummaryDto(goal, kernel.BuildGoalAcceptanceSummary(goal.Id));
-    var workSummary = DashboardResponseMapper.ToGoalWorkSummaryDto(kernel, goal, WorkerProfileCatalog.Default());
+    var workSummary = DashboardResponseMapper.ToGoalWorkSummaryDto(
+        kernel,
+        goal,
+        WorkerProfileCatalog.Default(),
+        ProcessCommandLineSnapshot.Empty);
     var detail = DashboardResponseMapper.ToGoalDetailDto(kernel, goal);
     var monitoringBatch = DashboardMonitoringEvents.BuildBatch(kernel, goal, sinceEventId: 0);
 
@@ -775,6 +780,7 @@ public sealed class DashboardRenderingTests
         kernel,
         goal,
         WorkerProfileCatalog.Default(),
+        ProcessCommandLineSnapshot.Empty,
         executionDirectory: root);
     var summary = DashboardResponseMapper.ToGoalSummary(goal, root);
     var detail = DashboardResponseMapper.ToGoalDetailDto(kernel, goal, root);
@@ -1497,12 +1503,21 @@ public sealed class DashboardRenderingTests
 {
     var empty = Assert.ThrowsAny<ArgumentException>(() => DashboardRequestParser.ParseRetrySubmission(""));
     var json = Assert.ThrowsAny<ArgumentException>(() => DashboardRequestParser.ParseRetrySubmission("{\"message\":\"\"}"));
+    var plainText = DashboardRequestParser.ParseRetrySubmission("Retry with unavailable classification");
+    var missingCause = DashboardRequestParser.ParseRetrySubmission(
+        "{\"message\":\"Fix failed verification\"}");
+    var explicitUnknown = DashboardRequestParser.ParseRetrySubmission(
+        "{\"message\":\"Retry with unavailable classification\",\"cause\":\"Unknown\"}");
     var parsed = DashboardRequestParser.ParseRetrySubmission(
-        "{\"message\":\"Fix failed verification\",\"idempotencyKey\":\"dashboard-submit-1\"}");
+        "{\"message\":\"Fix failed verification\",\"cause\":\"NewTestFinding\",\"idempotencyKey\":\"dashboard-submit-1\"}");
 
     Assert.Contains("Retry note cannot be empty", empty.Message, StringComparison.Ordinal);
     Assert.Contains("non-empty 'message'", json.Message, StringComparison.Ordinal);
+    Assert.Equal(nameof(RetryCause.Unknown), plainText.Cause);
+    Assert.Equal(nameof(RetryCause.Unknown), missingCause.Cause);
+    Assert.Equal(nameof(RetryCause.Unknown), explicitUnknown.Cause);
     Assert.Equal("Fix failed verification", parsed.Message);
+    Assert.Equal(nameof(RetryCause.NewTestFinding), parsed.Cause);
     Assert.Equal("dashboard-submit-1", parsed.IdempotencyKey);
 }
     [Xunit.Fact(DisplayName = "DashboardRequestParser_requires_limit_review_confirmation_note")]
@@ -1864,7 +1879,7 @@ public sealed class DashboardRenderingTests
     Assert.Contains("/api/system/build-test-runs/log?path=", systemHtml, StringComparison.Ordinal);
     Assert.Contains(@".\scripts\Invoke-DashboardBuildTestCycle.ps1 -DashboardUrl http://localhost:5087/", systemHtml, StringComparison.Ordinal);
     Assert.Contains("Get-Process Mcg.AgentOrchestrator.App -ErrorAction SilentlyContinue", systemHtml, StringComparison.Ordinal);
-    Assert.Contains("Invoke-IsolatedDotnet.ps1 test Mcg.AgentOrchestrator.sln --verbosity minimal", systemHtml, StringComparison.Ordinal);
+    Assert.Contains("Invoke-TestSummary.ps1 -Target .\\Mcg.AgentOrchestrator.sln", systemHtml, StringComparison.Ordinal);
     Assert.Contains("Restart command", systemHtml, StringComparison.Ordinal);
     Assert.Contains(@".\mcg-orchestrator.cmd prototype-ui http://localhost:5087/ --refresh 5 --no-open", systemHtml, StringComparison.Ordinal);
     Assert.Contains("data-action=\"/api/system/stop-dashboard\"", systemHtml, StringComparison.Ordinal);
@@ -2010,6 +2025,9 @@ public sealed class DashboardRenderingTests
     Assert.Contains($"/api/goals/{goalPrefix}/tasks/3/retry", goalHtml, StringComparison.Ordinal);
     Assert.Contains("name=\"idempotencyKey\" value=\"dashboard-retry-", goalHtml, StringComparison.Ordinal);
     Assert.Contains("Retry note", goalHtml, StringComparison.Ordinal);
+    Assert.Contains("name=\"cause\"", goalHtml, StringComparison.Ordinal);
+    Assert.Contains("value=\"Unknown\"", goalHtml, StringComparison.Ordinal);
+    Assert.Contains("value=\"NewSourceFinding\"", goalHtml, StringComparison.Ordinal);
     Assert.Contains("What changed or what should be tried next?", goalHtml, StringComparison.Ordinal);
     Assert.Contains($"/api/goals/{goalPrefix}/tasks/3/profile-dispatch", goalHtml, StringComparison.Ordinal);
     Assert.Contains($"/api/goals/{goalPrefix}/tasks/3/subscription-dispatch", goalHtml, StringComparison.Ordinal);
@@ -2465,6 +2483,7 @@ public sealed class DashboardRenderingTests
         kernel,
         goal,
         WorkerProfileCatalog.Default(),
+        ProcessCommandLineSnapshot.Empty,
         changedFiles: ["src/Mcg.AgentOrchestrator.App/Cli/ConsoleViews.Tasks.cs"]);
     var html = DashboardRenderer.Render(kernel, RenderOptions(
         EnableOperatorControls: true,
@@ -2538,6 +2557,7 @@ public sealed class DashboardRenderingTests
         kernel,
         goal,
         WorkerProfileCatalog.Default(),
+        ProcessCommandLineSnapshot.Empty,
         executionDirectory: workspace.ExecutionDirectory);
     var html = DashboardRenderer.Render(kernel, RenderOptions(
         EnableOperatorControls: true,
@@ -2577,7 +2597,11 @@ public sealed class DashboardRenderingTests
 
     var control = DashboardNextActionControls.Build(goal, action, WorkerProfileCatalog.Default());
     var nextDto = DashboardResponseMapper.ToNextActionsDto(goal, kernel.BuildNextActions(goal.Id), WorkerProfileCatalog.Default()).Items.Single();
-    var workSummary = DashboardResponseMapper.ToGoalWorkSummaryDto(kernel, goal, WorkerProfileCatalog.Default());
+    var workSummary = DashboardResponseMapper.ToGoalWorkSummaryDto(
+        kernel,
+        goal,
+        WorkerProfileCatalog.Default(),
+        ProcessCommandLineSnapshot.Empty);
 
     Assert.Equal(NextActionKind.ExecuteRecordedDispatch, action.Kind);
     Assert.Equal($"/api/goals/{goalPrefix}/tasks/1/start?confirmDispatchStart=true", control!.Url);
@@ -2630,6 +2654,7 @@ public sealed class DashboardRenderingTests
         AgentDefinitions: agents));
     var flexiblePromptChars = AgentTaskRunner.PreviewRun(goal, goal.Tasks[1], agents).PromptCharacterCount;
     var apiPromptChars = AgentTaskRunner.PreviewRun(goal, goal.Tasks[2], agents).PromptCharacterCount;
+    Assert.True(apiPromptChars <= 4000, $"Expected simple API prompt to stay within threshold; apiPromptChars={apiPromptChars}; threshold=4000.");
     var stages = DashboardResponseMapper.ToGoalStageReadinessReportDto(goal, kernel.BuildStageReadinessReport(goal.Id), agents);
 
     Assert.Contains($"data-action-button=\"/api/goals/{goalPrefix}/tasks/1/run?confirmTaskRun=true\">Prepare subscription handoff</button>", html, StringComparison.Ordinal);
@@ -2692,7 +2717,12 @@ public sealed class DashboardRenderingTests
         .ToNextActionsDto(goal, kernel.BuildNextActions(goal.Id), WorkerProfileCatalog.Default(), agents)
         .Items
         .Single(item => item.TaskId == task.Id.Value);
-    var workSummary = DashboardResponseMapper.ToGoalWorkSummaryDto(kernel, goal, WorkerProfileCatalog.Default(), agents);
+    var workSummary = DashboardResponseMapper.ToGoalWorkSummaryDto(
+        kernel,
+        goal,
+        WorkerProfileCatalog.Default(),
+        ProcessCommandLineSnapshot.Empty,
+        agents);
     var stageDto = DashboardResponseMapper.ToGoalStageReadinessReportDto(goal, kernel.BuildStageReadinessReport(goal.Id), agents).Stages.Single();
 
     Assert.Equal(TaskComplexity.Complex, preview.TaskComplexity);
@@ -2966,7 +2996,11 @@ public sealed class DashboardRenderingTests
         new string('s', 5000),
         new string('e', 5000),
         DateTimeOffset.UtcNow));
-    kernel.RetryTask(goal.Id, task.Id, "Retry after failed verification.");
+    kernel.RetryTask(
+        goal.Id,
+        task.Id,
+        "Retry after failed verification.",
+        retryCause: RetryCause.NewTestFinding);
     var risk = SubscriptionPromptCostGuard.EvaluateReadySubscriptionStart(
         goal,
         agents,
@@ -3061,7 +3095,11 @@ public sealed class DashboardRenderingTests
         View: DashboardView.Goal,
         FocusGoalPrefix: goalPrefix));
     var taskDto = DashboardResponseMapper.ToTaskDetailDto(goal, task);
-    var workSummary = DashboardResponseMapper.ToGoalWorkSummaryDto(kernel, goal, WorkerProfileCatalog.Default());
+    var workSummary = DashboardResponseMapper.ToGoalWorkSummaryDto(
+        kernel,
+        goal,
+        WorkerProfileCatalog.Default(),
+        ProcessCommandLineSnapshot.Empty);
     var evidenceDto = DashboardResponseMapper.ToGoalEvidenceSummaryDto(goal, kernel.BuildGoalEvidenceSummary(goal.Id));
     var transcript = GoalTranscriptRenderer.Render(kernel, goal, WorkerProfileCatalog.Default());
     var taskNumber = goal.Tasks.Select((candidate, index) => (candidate, index))
@@ -3119,7 +3157,12 @@ public sealed class DashboardRenderingTests
         Subscription: new SubscriptionLaunchProfile("codex-cli"));
     kernel.ActivateGoal(goal.Id, [agent]);
 
-    var workSummary = DashboardResponseMapper.ToGoalWorkSummaryDto(kernel, goal, WorkerProfileCatalog.Default(), [agent]);
+    var workSummary = DashboardResponseMapper.ToGoalWorkSummaryDto(
+        kernel,
+        goal,
+        WorkerProfileCatalog.Default(),
+        ProcessCommandLineSnapshot.Empty,
+        [agent]);
 
     Assert.True(workSummary.ParallelPlan is not null);
     Assert.Equal(2, workSummary.ParallelPlan!.Batches.Count);
@@ -3314,7 +3357,11 @@ public sealed class DashboardRenderingTests
 
     var detail = DashboardResponseMapper.ToTaskDetailDto(goal, task);
     var logs = DashboardResponseMapper.ToProcessLogDto(goal, task);
-    var workSummary = DashboardResponseMapper.ToGoalWorkSummaryDto(kernel, goal, WorkerProfileCatalog.Default());
+    var workSummary = DashboardResponseMapper.ToGoalWorkSummaryDto(
+        kernel,
+        goal,
+        WorkerProfileCatalog.Default(),
+        ProcessCommandLineSnapshot.Empty);
     var html = DashboardRenderer.Render(kernel, RenderOptions(EnableOperatorControls: true, View: DashboardView.Goal, FocusGoalPrefix: goal.Id.Value[..8]));
     var transcript = GoalTranscriptRenderer.Render(kernel, goal, WorkerProfileCatalog.Default());
 

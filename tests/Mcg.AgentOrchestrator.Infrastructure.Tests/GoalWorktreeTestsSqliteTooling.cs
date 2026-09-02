@@ -1,7 +1,9 @@
 using System.Diagnostics;
 using System.Globalization;
 using System.Runtime.CompilerServices;
+using System.Text;
 using System.Text.Json;
+using System.Text.RegularExpressions;
 using System.Threading;
 using Mcg.AgentOrchestrator.App.Cli;
 using Mcg.AgentOrchestrator.App.Orchestration;
@@ -33,15 +35,13 @@ public sealed class GoalWorktreeTestsSqliteTooling : GoalWorktreeTestBase
         startInfo.ArgumentList.Add(Path.Combine(repoRoot, "scripts", "Invoke-RepoScript.ps1"));
         startInfo.ArgumentList.Add("scripts\\Find-OrchestratorLocks.ps1");
 
-        using var process = Process.Start(startInfo)
-            ?? throw new InvalidOperationException("Failed to start Invoke-RepoScript.ps1.");
-        var stderr = process.StandardError.ReadToEnd();
-        var stdout = process.StandardOutput.ReadToEnd();
+        var result = RunRedirectedProcess(startInfo, "Find-OrchestratorLocks.ps1");
+        var stderr = result.Stderr;
+        var stdout = result.Stdout;
 
-        Assert.True(process.WaitForExit(30000), "Find-OrchestratorLocks.ps1 did not exit within 30 seconds.");
         Assert.True(
-            process.ExitCode is 0 or 2,
-            $"Expected Find-OrchestratorLocks.ps1 to exit 0 or 2, got {process.ExitCode}. stderr: {stderr}");
+            result.ExitCode is 0 or 2,
+            $"Expected Find-OrchestratorLocks.ps1 to exit 0 or 2, got {result.ExitCode}. stderr: {stderr}");
         Assert.DoesNotContain("A positional parameter cannot be found that accepts argument", stderr, StringComparison.Ordinal);
         Assert.False(
             ContainsUnexpectedLockQueryEcho(stdout),
@@ -119,23 +119,63 @@ public sealed class GoalWorktreeTestsSqliteTooling : GoalWorktreeTestBase
             "Mcg.AgentOrchestrator.App",
             "Cli",
             "RepoProcessCliCommand.cs"));
-        Assert.DoesNotContain("ProcessCommandLines.Read", cliCommandText, StringComparison.Ordinal);
-        Assert.DoesNotContain("wmic", cliCommandText, StringComparison.OrdinalIgnoreCase);
-        Assert.DoesNotContain("Get-CimInstance", cliCommandText, StringComparison.OrdinalIgnoreCase);
-        Assert.DoesNotContain("Win32_Process", cliCommandText, StringComparison.OrdinalIgnoreCase);
+        Assert.Contains("ProcessCommandLines.Snapshot", cliCommandText, StringComparison.Ordinal);
+        Assert.DoesNotContain("OpenProcess", cliCommandText, StringComparison.Ordinal);
+        var buildEnvironmentManagerText = File.ReadAllText(Path.Combine(
+            repoRoot,
+            "src",
+            "Mcg.AgentOrchestrator.Infrastructure",
+            "Workspaces",
+            "DotnetBuildEnvironmentManager.cs"));
+        Assert.Contains("ProcessCommandLines.SnapshotByNames", buildEnvironmentManagerText, StringComparison.Ordinal);
+        Assert.DoesNotContain("GetProcessesByName", buildEnvironmentManagerText, StringComparison.Ordinal);
 
-        foreach (var relativePath in new[]
+        var inspectedFiles = Directory
+            .EnumerateFiles(Path.Combine(repoRoot, "src"), "*", SearchOption.AllDirectories)
+            .Concat(Directory.EnumerateFiles(Path.Combine(repoRoot, "scripts"), "*.ps1", SearchOption.AllDirectories))
+            .Append(Path.Combine(repoRoot, "docs", "operator-runbook.md"))
+            .Where(path => !path.Contains($"{Path.DirectorySeparatorChar}bin{Path.DirectorySeparatorChar}", StringComparison.OrdinalIgnoreCase))
+            .Where(path => !path.Contains($"{Path.DirectorySeparatorChar}obj{Path.DirectorySeparatorChar}", StringComparison.OrdinalIgnoreCase));
+        foreach (var path in inspectedFiles)
         {
-            Path.Combine("scripts", "Get-RepoProcessInfo.ps1"),
-            Path.Combine("scripts", "Stop-RepoProcess.ps1"),
-            Path.Combine("scripts", "Find-OrchestratorLocks.ps1"),
-            Path.Combine("scripts", "Get-OrchestratorSnapshot.ps1")
-        })
-        {
-            var text = File.ReadAllText(Path.Combine(repoRoot, relativePath));
-            Assert.DoesNotContain("Get-CimInstance", text, StringComparison.OrdinalIgnoreCase);
-            Assert.DoesNotContain("Win32_Process", text, StringComparison.OrdinalIgnoreCase);
+            var text = File.ReadAllText(path);
+            Assert.Null(FindForbiddenProcessQuery(text, path));
         }
+    }
+
+    [Xunit.Theory]
+    [Xunit.InlineData("wmic process get ProcessId")]
+    [Xunit.InlineData("wmic.exe   process where ProcessId=42")]
+    [Xunit.InlineData("new ProcessStart" + "Info {\r\n    FileName = \"wmi" + "c\",\r\n    Arguments = \"process get ProcessId,CommandLine /format:list\"\r\n}")]
+    [Xunit.InlineData("Get-CimInstance Win32_Process")]
+    [Xunit.InlineData("new ManagementObjectSearcher(query)")]
+    public void ProcessQueryGuard_ForbiddenSpellings_AreRejected(string source)
+    {
+        var failure = FindForbiddenProcessQuery(source, "synthetic-source");
+
+        Assert.NotNull(failure);
+        Assert.Contains("Forbidden process-query mechanism", failure, StringComparison.Ordinal);
+    }
+
+    [Xunit.Theory]
+    [Xunit.InlineData("Get-CimInstance Win32_PhysicalMemory")]
+    [Xunit.InlineData("Get-CimInstance Win32_BIOS")]
+    public void ProcessQueryGuard_HardwareInventory_IsAllowed(string source) =>
+        Assert.Null(FindForbiddenProcessQuery(source, "synthetic-source"));
+
+    private static string? FindForbiddenProcessQuery(string source, string path)
+    {
+        string[] patterns =
+        [
+            @"(?im)\bwmic(?:\.exe)?\b[^\r\n]*\bprocess\b",
+            """(?is)\bFileName\s*=\s*["']wmic(?:\.exe)?["']\s*,?\s*(?:\r?\n[^\r\n]*){0,4}\bArguments\s*=\s*["'][^"'\r\n]*\bprocess\b""",
+            @"(?i)\bWin32_Process\b",
+            @"(?i)\bManagementObjectSearcher\b"
+        ];
+        var pattern = patterns.FirstOrDefault(candidate => Regex.IsMatch(source, candidate));
+        return pattern is null
+            ? null
+            : $"Forbidden process-query mechanism matched '{pattern}' in {path}.";
     }
 
     [Xunit.Fact(DisplayName = "GetRepoProcessInfo_reports_exact_pid_lineage_through_repo_prefix")]
@@ -160,13 +200,11 @@ public sealed class GoalWorktreeTestsSqliteTooling : GoalWorktreeTestBase
         startInfo.ArgumentList.Add("-Id");
         startInfo.ArgumentList.Add(Environment.ProcessId.ToString(CultureInfo.InvariantCulture));
 
-        using var process = Process.Start(startInfo)
-            ?? throw new InvalidOperationException("Failed to start Get-RepoProcessInfo.ps1.");
-        var stdout = process.StandardOutput.ReadToEnd();
-        var stderr = process.StandardError.ReadToEnd();
+        var result = RunRedirectedProcess(startInfo, "Get-RepoProcessInfo.ps1");
+        var stdout = result.Stdout;
+        var stderr = result.Stderr;
 
-        Assert.True(process.WaitForExit(30000), "Get-RepoProcessInfo.ps1 did not exit within 30 seconds.");
-        Assert.Equal(0, process.ExitCode);
+        Assert.Equal(0, result.ExitCode);
         Assert.True(string.IsNullOrWhiteSpace(stderr), stderr);
         Assert.True(stdout.Contains($"PROCESS id={Environment.ProcessId}", StringComparison.Ordinal), stdout);
         Assert.True(stdout.Contains("parent=", StringComparison.Ordinal), stdout);
@@ -212,13 +250,11 @@ public sealed class GoalWorktreeTestsSqliteTooling : GoalWorktreeTestBase
             startInfo.ArgumentList.Add("definitely-not-in-this-process-command-line");
             startInfo.ArgumentList.Add("-Force");
 
-            using var process = Process.Start(startInfo)
-                ?? throw new InvalidOperationException("Failed to start Stop-RepoProcess.ps1.");
-            var stdout = process.StandardOutput.ReadToEnd();
-            var stderr = process.StandardError.ReadToEnd();
+            var result = RunRedirectedProcess(startInfo, "Stop-RepoProcess.ps1");
+            var stdout = result.Stdout;
+            var stderr = result.Stderr;
 
-            Assert.True(process.WaitForExit(30000), "Stop-RepoProcess.ps1 did not exit within 30 seconds.");
-            Assert.Equal(0, process.ExitCode);
+            Assert.Equal(1, result.ExitCode);
             Assert.True(string.IsNullOrWhiteSpace(stderr), stderr);
             Assert.True(
                 stdout.Contains($"PROCESS id={target.Id} status=refused reason=command-mismatch", StringComparison.Ordinal),
@@ -258,13 +294,11 @@ public sealed class GoalWorktreeTestsSqliteTooling : GoalWorktreeTestBase
         startInfo.ArgumentList.Add("scripts\\Invoke-InfrastructureTestPartition.ps1");
         startInfo.ArgumentList.Add("-List");
 
-        using var process = Process.Start(startInfo)
-            ?? throw new InvalidOperationException("Failed to start Invoke-InfrastructureTestPartition.ps1.");
-        var stdout = process.StandardOutput.ReadToEnd();
-        var stderr = process.StandardError.ReadToEnd();
+        var result = RunRedirectedProcess(startInfo, "Invoke-InfrastructureTestPartition.ps1 -List");
+        var stdout = result.Stdout;
+        var stderr = result.Stderr;
 
-        Assert.True(process.WaitForExit(30000), "Invoke-InfrastructureTestPartition.ps1 -List did not exit within 30 seconds.");
-        Assert.Equal(0, process.ExitCode);
+        Assert.Equal(0, result.ExitCode);
         Assert.Contains("- Remainder: Infrastructure coverage outside the named focused partitions.", stdout);
         Assert.DoesNotContain("ConductorBatchLoopVerificationReconcileTests", stdout, StringComparison.Ordinal);
         Assert.True(string.IsNullOrWhiteSpace(stderr), stderr);
@@ -303,6 +337,19 @@ public sealed class GoalWorktreeTestsSqliteTooling : GoalWorktreeTestBase
                 >> "%DOTNET_SHIM_LOG%" echo temp=%TEMP%
                 if not exist "%TEMP%" mkdir "%TEMP%"
                 > "%TEMP%\shim-scratch.tmp" echo scratch
+                if "%~1"=="build-server" exit /b 0
+                if /I not "%~1"=="build" exit /b 0
+                set "ARTIFACTS="
+                :parse_artifacts
+                if "%~1"=="" goto create_artifacts
+                if /I "%~1"=="--artifacts-path" set "ARTIFACTS=%~2"
+                shift
+                goto parse_artifacts
+                :create_artifacts
+                set "TEST_DIR=%ARTIFACTS%\bin\Fake.Infrastructure.Tests\debug"
+                mkdir "%TEST_DIR%" >nul 2>nul
+                > "%TEST_DIR%\Fake.Infrastructure.Tests.dll" echo managed
+                > "%TEST_DIR%\Fake.Infrastructure.Tests.exe" echo apphost
                 exit /b 0
                 """);
 
@@ -334,14 +381,12 @@ public sealed class GoalWorktreeTestsSqliteTooling : GoalWorktreeTestBase
             startInfo.Environment[DotnetBuildEnvironmentManager.IsolatedRootOverrideVariable] = isolatedRoot;
             startInfo.Environment.Remove(WorkerSandboxOptions.DispatchWorkerVariable);
 
-            using var process = Process.Start(startInfo)
-                ?? throw new InvalidOperationException("Failed to start Invoke-IsolatedDotnet.ps1.");
-            var stdout = process.StandardOutput.ReadToEnd();
-            var stderr = process.StandardError.ReadToEnd();
-            Assert.True(process.WaitForExit(30000), "Invoke-IsolatedDotnet.ps1 did not exit within 30 seconds.");
+            var result = RunRedirectedProcess(startInfo, "Invoke-IsolatedDotnet.ps1");
+            var stdout = result.Stdout;
+            var stderr = result.Stderr;
             Assert.True(
-                process.ExitCode == 0,
-                $"Invoke-IsolatedDotnet.ps1 exited {process.ExitCode}.{Environment.NewLine}stdout:{Environment.NewLine}{stdout}{Environment.NewLine}stderr:{Environment.NewLine}{stderr}");
+                result.ExitCode == 0,
+                $"Invoke-IsolatedDotnet.ps1 exited {result.ExitCode}.{Environment.NewLine}stdout:{Environment.NewLine}{stdout}{Environment.NewLine}stderr:{Environment.NewLine}{stderr}");
 
             var log = File.ReadAllText(logPath);
             var repoScratch = Path.Combine(repo, ".t");
@@ -406,12 +451,10 @@ public sealed class GoalWorktreeTestsSqliteTooling : GoalWorktreeTestBase
             startInfo.ArgumentList.Add("conduct");
             startInfo.ArgumentList.Add("--loop");
 
-            using var process = Process.Start(startInfo)
-                ?? throw new InvalidOperationException("Failed to start Invoke-RepoScript.ps1.");
-            var stdout = process.StandardOutput.ReadToEnd();
-            var stderr = process.StandardError.ReadToEnd();
-            Assert.True(process.WaitForExit(30000), "Start-OrchestratorCommand.ps1 did not exit within 30 seconds.");
-            Assert.Equal(0, process.ExitCode);
+            var result = RunRedirectedProcess(startInfo, "Start-OrchestratorCommand.ps1");
+            var stdout = result.Stdout;
+            var stderr = result.Stderr;
+            Assert.Equal(0, result.ExitCode);
             Assert.True(string.IsNullOrWhiteSpace(stderr), stderr);
 
             var outputLines = stdout.Split(
@@ -760,6 +803,299 @@ public sealed class GoalWorktreeTestsSqliteTooling : GoalWorktreeTestBase
             DeleteDirectory(linkedWorktree);
         }
     }
+
+    [Xunit.Fact(DisplayName = "Redirected_process_runner_drains_output_larger_than_pipe_capacity")]
+    public void RedirectedProcessRunnerDrainsOutputLargerThanPipeCapacity()
+    {
+        var startInfo = CreatePowerShellStartInfo("[Console]::Out.Write(('x' * 1048576))");
+
+        var result = RunRedirectedProcess(startInfo, "large-output fixture", timeoutMs: 10000);
+
+        Assert.Equal(0, result.ExitCode);
+        Assert.False(result.TimedOut);
+        Assert.True(result.StreamsDrained);
+        Assert.Equal(1048576, result.StdoutChars);
+        Assert.True(result.Stdout.Length < result.StdoutChars);
+        Assert.True(string.IsNullOrEmpty(result.Stderr));
+    }
+
+    [Xunit.Fact(DisplayName = "Redirected_process_runner_times_out_and_kills_child_tree")]
+    public void RedirectedProcessRunnerTimesOutAndKillsChildTree()
+    {
+        var marker = $"mcg-redirected-runner-{Guid.NewGuid():N}";
+        var childPidPath = Path.Combine(Path.GetTempPath(), marker + ".pid");
+        var escapedChildPidPath = childPidPath.Replace("'", "''", StringComparison.Ordinal);
+        var escapedMarker = marker.Replace("'", "''", StringComparison.Ordinal);
+        var startInfo = CreatePowerShellStartInfo(
+            $"$child = Start-Process powershell.exe -ArgumentList '-NoProfile','-Command','Start-Sleep -Seconds 120 # {escapedMarker}' -WindowStyle Hidden -PassThru; " +
+            $"Set-Content -LiteralPath '{escapedChildPidPath}' -Value $child.Id -NoNewline; " +
+            "Write-Output ('CHILD_PID=' + $child.Id); Start-Sleep -Seconds 120");
+        int? childPid = null;
+
+        try
+        {
+            var result = RunRedirectedProcess(
+                startInfo,
+                "sleeping-child fixture",
+                timeoutMs: 1000,
+                failOnTimeout: false);
+
+            Assert.True(result.TimedOut);
+            Assert.True(result.ProcessReaped);
+            Assert.True(result.StreamsDrained);
+            Assert.Contains("CHILD_PID=", result.Stdout, StringComparison.Ordinal);
+            Assert.True(File.Exists(childPidPath), "Sleeping-child fixture did not publish its child pid.");
+
+            childPid = int.Parse(File.ReadAllText(childPidPath), CultureInfo.InvariantCulture);
+            Assert.True(WaitForProcessExit(childPid.Value, 5000), $"Child process {childPid} survived the timed-out process-tree kill.");
+        }
+        finally
+        {
+            if (childPid is int leakedChildPid)
+            {
+                KillProcessForTestCleanup(leakedChildPid);
+            }
+
+            File.Delete(childPidPath);
+        }
+    }
+
+    private static ProcessStartInfo CreatePowerShellStartInfo(string command)
+    {
+        var startInfo = new ProcessStartInfo
+        {
+            FileName = "powershell.exe",
+            UseShellExecute = false,
+            RedirectStandardOutput = true,
+            RedirectStandardError = true,
+            CreateNoWindow = true
+        };
+        startInfo.ArgumentList.Add("-NoProfile");
+        startInfo.ArgumentList.Add("-NonInteractive");
+        startInfo.ArgumentList.Add("-Command");
+        startInfo.ArgumentList.Add(command);
+        return startInfo;
+    }
+
+    private static RedirectedProcessResult RunRedirectedProcess(
+        ProcessStartInfo startInfo,
+        string displayName,
+        int timeoutMs = 30000,
+        bool failOnTimeout = true)
+    {
+        const int drainTimeoutMs = 5000;
+        using var process = Process.Start(startInfo)
+            ?? throw new InvalidOperationException($"Failed to start {displayName}.");
+        var stdout = new BoundedTextCapture();
+        var stderr = new BoundedTextCapture();
+        var stdoutDrain = DrainAsync(process.StandardOutput, stdout);
+        var stderrDrain = DrainAsync(process.StandardError, stderr);
+
+        var timedOut = !process.WaitForExit(timeoutMs);
+        var processReaped = true;
+        if (timedOut)
+        {
+            TryKillProcessTree(process);
+            processReaped = WaitForProcessExit(process, drainTimeoutMs);
+        }
+
+        var streamsDrained = WaitForDrainCompletion(stdoutDrain, stderrDrain, drainTimeoutMs);
+        var result = new RedirectedProcessResult(
+            processReaped && process.HasExited ? process.ExitCode : null,
+            stdout.Snapshot(),
+            stderr.Snapshot(),
+            stdout.TotalChars,
+            stderr.TotalChars,
+            timedOut,
+            processReaped,
+            streamsDrained);
+
+        if (timedOut && failOnTimeout)
+        {
+            Assert.Fail(
+                $"{displayName} did not exit within {timeoutMs}ms; " +
+                $"processReaped={processReaped}; streamsDrained={streamsDrained}.{Environment.NewLine}" +
+                $"stdout:{Environment.NewLine}{result.Stdout}{Environment.NewLine}" +
+                $"stderr:{Environment.NewLine}{result.Stderr}");
+        }
+
+        if (!streamsDrained && failOnTimeout)
+        {
+            Assert.Fail(
+                $"{displayName} exited but redirected streams did not close within {drainTimeoutMs}ms.{Environment.NewLine}" +
+                $"stdout:{Environment.NewLine}{result.Stdout}{Environment.NewLine}" +
+                $"stderr:{Environment.NewLine}{result.Stderr}");
+        }
+
+        return result;
+    }
+
+    private static async Task DrainAsync(StreamReader reader, BoundedTextCapture capture)
+    {
+        var buffer = new char[4096];
+        while (true)
+        {
+            var read = await reader.ReadAsync(buffer.AsMemory()).ConfigureAwait(false);
+            if (read == 0)
+            {
+                return;
+            }
+
+            capture.Append(buffer, read);
+        }
+    }
+
+    private static bool WaitForDrainCompletion(Task stdoutDrain, Task stderrDrain, int timeoutMs)
+    {
+        var drains = Task.WhenAll(stdoutDrain, stderrDrain);
+        var completed = Task.WhenAny(drains, Task.Delay(timeoutMs)).GetAwaiter().GetResult();
+        if (!ReferenceEquals(completed, drains))
+        {
+            _ = drains.ContinueWith(
+                static task => _ = task.Exception,
+                CancellationToken.None,
+                TaskContinuationOptions.OnlyOnFaulted | TaskContinuationOptions.ExecuteSynchronously,
+                TaskScheduler.Default);
+            return false;
+        }
+
+        drains.GetAwaiter().GetResult();
+        return true;
+    }
+
+    private static void TryKillProcessTree(Process process)
+    {
+        try
+        {
+            process.Refresh();
+            if (!process.HasExited)
+            {
+                process.Kill(entireProcessTree: true);
+            }
+        }
+        catch (InvalidOperationException)
+        {
+            // Natural exit won the race with the timeout path.
+        }
+        catch (System.ComponentModel.Win32Exception) when (HasExited(process))
+        {
+            // Natural exit won the race after the process handle was refreshed.
+        }
+    }
+
+    private static bool WaitForProcessExit(Process process, int timeoutMs)
+    {
+        try
+        {
+            return process.HasExited || process.WaitForExit(timeoutMs);
+        }
+        catch (InvalidOperationException)
+        {
+            return true;
+        }
+    }
+
+    private static bool WaitForProcessExit(int processId, int timeoutMs)
+    {
+        try
+        {
+            using var process = Process.GetProcessById(processId);
+            return process.WaitForExit(timeoutMs);
+        }
+        catch (ArgumentException)
+        {
+            return true;
+        }
+    }
+
+    private static void KillProcessForTestCleanup(int processId)
+    {
+        try
+        {
+            using var process = Process.GetProcessById(processId);
+            if (!process.HasExited)
+            {
+                process.Kill(entireProcessTree: true);
+                _ = process.WaitForExit(5000);
+            }
+        }
+        catch (ArgumentException)
+        {
+            // The timed-out runner already reaped its marked child.
+        }
+        catch (InvalidOperationException)
+        {
+            // Natural exit won the cleanup race.
+        }
+    }
+
+    private static bool HasExited(Process process)
+    {
+        try
+        {
+            return process.HasExited;
+        }
+        catch (InvalidOperationException)
+        {
+            return true;
+        }
+    }
+
+    private sealed class BoundedTextCapture
+    {
+        private const int MaxCapturedChars = 65536;
+        private readonly Lock gate = new();
+        private readonly StringBuilder text = new();
+        private long totalChars;
+
+        public long TotalChars
+        {
+            get
+            {
+                lock (gate)
+                {
+                    return totalChars;
+                }
+            }
+        }
+
+        public void Append(char[] buffer, int count)
+        {
+            lock (gate)
+            {
+                totalChars += count;
+                var retained = Math.Min(count, MaxCapturedChars - text.Length);
+                if (retained > 0)
+                {
+                    text.Append(buffer, 0, retained);
+                }
+            }
+        }
+
+        public string Snapshot()
+        {
+            lock (gate)
+            {
+                if (totalChars <= text.Length)
+                {
+                    return text.ToString();
+                }
+
+                return text + Environment.NewLine +
+                    $"[truncated: retained first {text.Length} of {totalChars} characters]";
+            }
+        }
+    }
+
+    private sealed record RedirectedProcessResult(
+        int? ExitCode,
+        string Stdout,
+        string Stderr,
+        long StdoutChars,
+        long StderrChars,
+        bool TimedOut,
+        bool ProcessReaped,
+        bool StreamsDrained);
 
     private const string LockQueryCommandText = "repo-process-info --locks";
 

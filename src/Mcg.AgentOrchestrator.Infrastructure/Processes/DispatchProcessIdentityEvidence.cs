@@ -47,21 +47,54 @@ internal static class DispatchProcessIdentityEvidence
         }
     }
 
-    internal static bool IsRecordedOwnerOrUnknown(
+    internal static bool IsRecordedOwner(
+        int processId,
+        IReadOnlyList<SpawnProcessIdentity>? recordedIdentities,
+        Func<int, SpawnProcessIdentity?> readCurrentIdentity) =>
+        ClassifyRecordedOwner(processId, recordedIdentities, readCurrentIdentity) ==
+        SpawnTrackedProcessStatus.LiveMatch;
+
+    internal static SpawnTrackedProcessStatus ClassifyRecordedOwner(
         int processId,
         IReadOnlyList<SpawnProcessIdentity>? recordedIdentities,
         Func<int, SpawnProcessIdentity?> readCurrentIdentity)
     {
-        var recorded = recordedIdentities?.FirstOrDefault(identity => identity.ProcessId == processId);
-        if (recorded is null)
+        var recorded = recordedIdentities?
+            .Where(identity => identity.ProcessId == processId)
+            .ToArray();
+        if (recorded is not { Length: > 0 })
         {
-            return true;
+            return SpawnTrackedProcessStatus.Unknown;
         }
 
         var current = readCurrentIdentity(processId);
-        return SpawnProcessIdentityReader.EvaluateRecordedIdentity(recorded, current, out _) !=
-               SpawnTrackedProcessStatus.DeadOrRecycled;
+        var statuses = recorded
+            .Select(identity => SpawnProcessIdentityReader.EvaluateRecordedIdentity(identity, current, out _))
+            .ToArray();
+        if (statuses.Contains(SpawnTrackedProcessStatus.LiveMatch))
+        {
+            return SpawnTrackedProcessStatus.LiveMatch;
+        }
+
+        return statuses.All(status => status == SpawnTrackedProcessStatus.DeadOrRecycled)
+            ? SpawnTrackedProcessStatus.DeadOrRecycled
+            : SpawnTrackedProcessStatus.Unknown;
     }
+
+    internal static IReadOnlyList<int> GetLiveRecordedOwnerProcessIds(
+        IEnumerable<int> candidateProcessIds,
+        IReadOnlyList<SpawnProcessIdentity>? recordedIdentities,
+        Func<int, bool> isProcessRunning,
+        Func<int, SpawnProcessIdentity?>? readCurrentIdentity = null) =>
+        candidateProcessIds
+            .Where(processId => processId > 0)
+            .Distinct()
+            .Where(isProcessRunning)
+            .Where(processId => IsRecordedOwner(
+                processId,
+                recordedIdentities,
+                readCurrentIdentity ?? ReadCurrent))
+            .ToArray();
 
     internal static IReadOnlyList<SpawnProcessIdentity> Read(JsonElement root)
     {

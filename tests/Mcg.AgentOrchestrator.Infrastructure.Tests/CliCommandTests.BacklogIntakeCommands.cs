@@ -601,7 +601,7 @@ public sealed class CliCommandTestsBacklogIntakeCommands : CliCommandTestBase
         Xunit.Assert.Contains("docs/usage.md", docs.FileScopes);
         Xunit.Assert.Contains(docs.RequiredVerification, item => item.Contains("documentation diff", StringComparison.Ordinal));
         Xunit.Assert.True(code.CanCreateGoal);
-        Xunit.Assert.Contains(code.RequiredTools, item => item.Contains("Invoke-IsolatedDotnet", StringComparison.Ordinal));
+        Xunit.Assert.Contains(code.RequiredTools, item => item.Contains("Invoke-TestSummary", StringComparison.Ordinal));
         Xunit.Assert.Single(code.TaskBoundaries);
         Xunit.Assert.Equal(AgentRole.Developer, code.TaskBoundaries[0].Role);
         Xunit.Assert.True(high.CanCreateGoal);

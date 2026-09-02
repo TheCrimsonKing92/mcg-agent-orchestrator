@@ -44,7 +44,10 @@ public sealed class TaskBriefTests
     Assert.Contains("Developer retry note.", brief.Content, StringComparison.Ordinal);
     Assert.Contains("HUMAN_INPUT:", brief.Content, StringComparison.Ordinal);
     Assert.Contains("Report only changed files", brief.Content, StringComparison.Ordinal);
-    Assert.Contains("Keep the response concise", brief.Content, StringComparison.Ordinal);
+    Assert.Contains("No goal repeats/generic progress", brief.Content, StringComparison.Ordinal);
+    Assert.Contains("Keep blockers/tests/errors/sources", brief.Content, StringComparison.Ordinal);
+    Assert.Contains("keep Planner/Researcher artifacts complete", brief.Content, StringComparison.Ordinal);
+    Assert.Contains("excerpt only if missing/conflicting/malformed", brief.Content, StringComparison.Ordinal);
     Assert.Contains("Model fit: <provider>/<model or launcher> - adequate|overkill|underpowered - <task shape> - <short reason>", brief.Content, StringComparison.Ordinal);
     Assert.Contains("**/bin/**", brief.Content, StringComparison.Ordinal);
     Assert.Contains("**/obj/**", brief.Content, StringComparison.Ordinal);
@@ -299,7 +302,10 @@ public sealed class TaskBriefTests
     Assert.Contains("Avoid generic status summaries", brief, StringComparison.Ordinal);
     Assert.Contains("Keep the response evidence-focused", brief, StringComparison.Ordinal);
     Assert.Contains("omit generic progress and long logs", brief, StringComparison.Ordinal);
-    Assert.True(!brief.Contains("Keep the response concise", StringComparison.Ordinal));
+    Assert.Contains("Keep complete blocker/test/error/source evidence", brief, StringComparison.Ordinal);
+    Assert.Contains("required Planner/Researcher artifacts", brief, StringComparison.Ordinal);
+    Assert.Contains("excerpt only if missing, contradictory, or malformed", brief, StringComparison.Ordinal);
+    Assert.True(!brief.Contains("No goal repeats/generic progress", StringComparison.Ordinal));
 }
 
     [Xunit.Fact(DisplayName = "BuildTaskBrief_adds_exhaustive_reviewer_contract_for_all_intake_labels")]
@@ -1273,6 +1279,17 @@ public sealed class TaskBriefTests
                 "",
                 DateTimeOffset.UtcNow,
                 MergedReviewFindings: findings));
+        kernel.RecordTaskVerification(
+            goal.Id,
+            reviewer.Id,
+            new TaskVerificationRecord(
+                "review current canonical state",
+                "C:\\repo",
+                0,
+                "structured review current",
+                "",
+                DateTimeOffset.UtcNow.AddSeconds(1),
+                MergedReviewFindings: findings));
         for (var index = 0; index < 12; index++)
         {
             kernel.RecordTaskNote(goal.Id, developer.Id, $"operational retry noise {index:D2} {new string('x', 300)}");
@@ -1287,6 +1304,8 @@ public sealed class TaskBriefTests
         Assert.Contains("Distinct actionable finding 00.", brief, StringComparison.Ordinal);
         Assert.Contains("finding-13", brief, StringComparison.Ordinal);
         Assert.Contains("Distinct actionable finding 13.", brief, StringComparison.Ordinal);
+        Assert.Equal(1, brief.Split("stable_id=finding-00", StringSplitOptions.None).Length - 1);
+        Assert.Equal(1, brief.Split("stable_id=finding-13", StringSplitOptions.None).Length - 1);
         Assert.DoesNotContain("structured_finding_overflow", brief, StringComparison.Ordinal);
     }
 

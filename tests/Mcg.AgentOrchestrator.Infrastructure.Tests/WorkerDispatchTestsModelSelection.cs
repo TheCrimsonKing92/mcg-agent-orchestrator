@@ -2838,7 +2838,7 @@ public void WorkerProfileDispatcherRejectsDeveloperSubscriptionProfilesThatCanno
     Assert.Contains("Developer: Fix the login bug.", content, StringComparison.Ordinal);
     Assert.Contains("Compatibility pointer (v1, hash-bound", content, StringComparison.Ordinal);
     Assert.Contains($"prior/{priorTask.Id.Value}/verification-output", content, StringComparison.Ordinal);
-    Assert.Contains("MANDATORY READ: path=.orchestrator-context/legacy-handoff/", content, StringComparison.Ordinal);
+    Assert.Contains("PROJECTED RECEIPT: path=.orchestrator-context/legacy-handoff/", content, StringComparison.Ordinal);
     Assert.DoesNotContain(new string('a', VerificationTextBounds.PreviewHeadChars), content, StringComparison.Ordinal);
     Assert.DoesNotContain(new string('b', VerificationTextBounds.PreviewTailChars), content, StringComparison.Ordinal);
     var materializationPath = Path.Combine(
@@ -2847,9 +2847,14 @@ public void WorkerProfileDispatcherRejectsDeveloperSubscriptionProfilesThatCanno
         "legacy-handoff",
         priorTask.Id.Value,
         "verification-output.bin");
-    Assert.Equal(System.Text.Encoding.UTF8.GetBytes(fullStdout), File.ReadAllBytes(materializationPath));
+    var projectedOutput = WorkerVerificationEvidence.ProjectStandardOutputForContext(
+        priorTask,
+        priorTask.LastVerification!);
+    var projectedBytes = System.Text.Encoding.UTF8.GetBytes(projectedOutput);
+    Assert.Equal(projectedBytes, File.ReadAllBytes(materializationPath));
+    Assert.Equal(fullStdout, priorTask.LastVerification!.AuthoritativeStandardOutput);
     Assert.Equal(
-        System.Text.Encoding.UTF8.GetBytes(fullStdout),
+        projectedBytes,
         Assert.Single(new LegacyHandoffCompatibilityResolver(_ => null, workingDirectory)
             .ResolveAllFromMarkdown(content)));
 }
