@@ -17,6 +17,7 @@ public sealed class DotnetBuildEnvironmentManagerTestsLockAttributionLandingFixt
     public void LockAttributionProcessFallbackCreatesOneOperationSnapshot()
     {
         var snapshotCalls = 0;
+        var snapshotStartedAt = DateTimeOffset.Parse("2026-09-01T12:00:00Z");
         LockAttribution.DisableRestartManagerForTests = true;
         LockAttribution.HandleExecutableForTests = Path.Combine(Path.GetTempPath(), $"missing-handle-{Guid.NewGuid():N}.exe");
         LockAttribution.ProcessCommandLineSnapshotForTests = () =>
@@ -37,8 +38,8 @@ public sealed class DotnetBuildEnvironmentManagerTestsLockAttributionLandingFixt
                         101,
                         1,
                         "dotnet",
-                        null,
-                        null,
+                        "C:\\Program Files\\dotnet\\dotnet.exe",
+                        snapshotStartedAt,
                         "dotnet test C:\\repo\\locked.dll C:\\repo\\.orchestrator-worktrees\\goal",
                         ProcessInspectionStatus.Available),
                     [202] = new(
@@ -60,8 +61,54 @@ public sealed class DotnetBuildEnvironmentManagerTestsLockAttributionLandingFixt
             Assert.Equal(1, snapshotCalls);
             Assert.Equal(2, attribution.Holders.Count);
             Assert.Contains(attribution.Holders, holder => holder.ProcessId == Environment.ProcessId);
-            Assert.Contains(attribution.Holders, holder => holder.ProcessId == 101);
+            var snapshotHolder = Assert.Single(attribution.Holders, holder => holder.ProcessId == 101);
+            Assert.Equal("dotnet", snapshotHolder.ProcessName);
+            Assert.Equal(snapshotStartedAt, snapshotHolder.ProcessStartTime);
             Assert.DoesNotContain(attribution.Holders, holder => holder.ProcessId == 202);
+        }
+        finally
+        {
+            LockAttribution.ProcessCommandLineSnapshotForTests = null;
+            LockAttribution.HandleExecutableForTests = null;
+            LockAttribution.DisableRestartManagerForTests = false;
+        }
+    }
+
+    [Xunit.Fact]
+    public void ProcessFallbackPartialIdentityKeepsUnavailableCandidateFailClosed()
+    {
+        LockAttribution.DisableRestartManagerForTests = true;
+        LockAttribution.HandleExecutableForTests = Path.Combine(Path.GetTempPath(), $"missing-handle-{Guid.NewGuid():N}.exe");
+        LockAttribution.ProcessCommandLineSnapshotForTests = () =>
+            new ProcessCommandLineSnapshot(
+                new Dictionary<int, ProcessInspectionRecord>
+                {
+                    [101] = new(
+                        101,
+                        1,
+                        "dotnet",
+                        null,
+                        null,
+                        "dotnet test C:\\repo\\locked.dll C:\\repo\\.orchestrator-worktrees\\goal",
+                        ProcessInspectionStatus.Available),
+                    [202] = new(
+                        202,
+                        1,
+                        "dotnet",
+                        "C:\\Program Files\\dotnet\\dotnet.exe",
+                        DateTimeOffset.Parse("2026-09-01T12:00:00Z"),
+                        "dotnet test C:\\repo\\locked.dll C:\\repo\\.orchestrator-worktrees\\goal",
+                        ProcessInspectionStatus.AccessDenied)
+                });
+
+        try
+        {
+            var holder = Assert.Single(LockAttribution.Attribute("C:\\repo\\locked.dll").Holders);
+
+            Assert.Equal(101, holder.ProcessId);
+            Assert.Equal("dotnet", holder.ProcessName);
+            Assert.Null(holder.ProcessStartTime);
+            Assert.True(holder.IsOrchestratorOwned);
         }
         finally
         {

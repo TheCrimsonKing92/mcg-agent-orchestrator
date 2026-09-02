@@ -594,6 +594,8 @@ public sealed class GoalAcceptanceVerifierDotnetBuildSlotTestsFocusedEvidence : 
             RenderClass("FirstAttributionTests", firstIdentities) + "\n" +
             RenderClass("SecondAttributionTests", secondIdentities));
         var focusedCalls = new System.Collections.Concurrent.ConcurrentBag<string[]>();
+        var focusedWorkingDirectories = new System.Collections.Concurrent.ConcurrentBag<string>();
+        var focusedBuildCalls = new System.Collections.Concurrent.ConcurrentBag<string[]>();
         try
         {
             AssertGitSucceeded(root, "init", "-b", "main");
@@ -601,8 +603,14 @@ public sealed class GoalAcceptanceVerifierDotnetBuildSlotTestsFocusedEvidence : 
             AssertGitSucceeded(root, "config", "user.name", "Gate Cap Fixture");
             AssertGitSucceeded(root, "add", ".");
             AssertGitSucceeded(root, "commit", "-m", "baseline");
-            var verifier = new GoalAcceptanceVerifier((args, _, _, _) =>
+            var verifier = new GoalAcceptanceVerifier((args, workingDirectory, _, _) =>
             {
+                if (args is ["dotnet", "build", ..] &&
+                    workingDirectory.Contains("mcg-focused-evidence-baselines", StringComparison.OrdinalIgnoreCase))
+                {
+                    focusedBuildCalls.Add(args);
+                }
+
                 if (!IsMtpExecutableCall(args, "Mcg.AgentOrchestrator.Infrastructure.Tests"))
                 {
                     return Task.FromResult(new GoalAcceptanceVerifier.CommandResult(0, "Build succeeded."));
@@ -612,11 +620,12 @@ public sealed class GoalAcceptanceVerifierDotnetBuildSlotTestsFocusedEvidence : 
                 if (methodIndex >= 0)
                 {
                     focusedCalls.Add(args);
+                    focusedWorkingDirectories.Add(workingDirectory);
                     var selectedIdentity = args[methodIndex + 1].Trim('*');
-                    WriteMtpTrx(args, executedTestCount: 1, [selectedIdentity]);
+                    WriteFailedMtpTrx(args, [selectedIdentity]);
                     return Task.FromResult(new GoalAcceptanceVerifier.CommandResult(
-                        0,
-                        "Passed! - Failed: 0, Passed: 1, Skipped: 0, Total: 1."));
+                        1,
+                        "Failed! - Failed: 1, Passed: 0, Skipped: 0, Total: 1."));
                 }
 
                 var filterIndex = Array.IndexOf(args, "--filter-class");
@@ -637,6 +646,8 @@ public sealed class GoalAcceptanceVerifierDotnetBuildSlotTestsFocusedEvidence : 
             Assert.Equal(
                 GoalAcceptanceVerifier.MaxFailureAttributionFocusedEvidenceIdentities,
                 focusedCalls.Count);
+            Assert.Single(focusedWorkingDirectories.Distinct(StringComparer.OrdinalIgnoreCase));
+            Assert.Single(focusedBuildCalls);
             var attributions = result.Checks!
                 .Where(check => !check.Passed)
                 .SelectMany(check => check.FailingTestAttributions ?? [])
@@ -647,6 +658,9 @@ public sealed class GoalAcceptanceVerifierDotnetBuildSlotTestsFocusedEvidence : 
             Assert.Equal(2, omitted.Length);
             Assert.All(omitted, attribution =>
                 Assert.Equal(AcceptanceTestFailureOrigin.Unattributed, attribution.Origin));
+            Assert.All(
+                attributions.Except(omitted),
+                attribution => Assert.Equal(AcceptanceTestFailureOrigin.Inherited, attribution.Origin));
         }
         finally
         {

@@ -16,9 +16,11 @@ internal static class GitCli
     // Applied to every invocation so git fails fast and never wedges:
     //  - core.fsmonitor=false / gc.auto=0 / maintenance.auto=false: never spawn a background daemon
     //    that could inherit the output pipe or keep a lock alive after git returns.
+    //  - core.longpaths=true: keep revision/path arguments usable from deeply nested fixture worktrees.
     private static readonly string[] HardeningConfig =
     [
         "-c", "core.fsmonitor=false",
+        "-c", "core.longpaths=true",
         "-c", "gc.auto=0",
         "-c", "maintenance.auto=false",
     ];

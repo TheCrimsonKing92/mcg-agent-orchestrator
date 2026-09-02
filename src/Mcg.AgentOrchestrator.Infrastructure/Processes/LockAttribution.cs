@@ -535,12 +535,19 @@ internal static partial class LockAttribution
                 "process-snapshot-unavailable");
         }
 
-        var holders = snapshot.Read(snapshot.Records.Keys)
-            .Where(pair =>
-                IsOrchestratorOwned(pair.Value, ownershipHint) &&
-                CommandLineReferencesLock(pair.Value, path, ownershipHint))
-            .OrderBy(pair => pair.Key)
-            .Select(pair => new BuildLockHolder(pair.Key, TryProcessName(pair.Key), pair.Value, true, TryProcessStartTime(pair.Key)))
+        var holders = snapshot.Records.Values
+            .Where(record =>
+                record.Status == ProcessInspectionStatus.Available &&
+                !string.IsNullOrWhiteSpace(record.CommandLine) &&
+                IsOrchestratorOwned(record.CommandLine, ownershipHint) &&
+                CommandLineReferencesLock(record.CommandLine, path, ownershipHint))
+            .OrderBy(record => record.ProcessId)
+            .Select(record => new BuildLockHolder(
+                record.ProcessId,
+                string.IsNullOrWhiteSpace(record.Name) ? null : record.Name,
+                record.CommandLine,
+                true,
+                record.StartedAt))
             .Take(8)
             .ToArray();
         return new BuildLockAttribution(path, holders, "process-snapshot");

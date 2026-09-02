@@ -56,7 +56,7 @@ internal static class GoalBoardCommand
 
         // Machine process discovery is deliberately captured once for the entire board. Every goal
         // disposition evaluates against this immutable snapshot.
-        var processSnapshot = (processSnapshotFactory ?? ProcessCommandLines.Snapshot)();
+        var processSnapshot = (processSnapshotFactory ?? ProcessCommandLines.SnapshotOperation)();
         var clock = new BoardClock(now);
         var dispositionSurface = new GoalOperatorDispositionSurface(
             clock,

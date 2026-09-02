@@ -7,6 +7,12 @@
     <DefaultItemExcludes>$(DefaultItemExcludes);**\artifacts\**;**/artifacts/**;**\.scratch\**;**/.scratch/**</DefaultItemExcludes>
     <DefaultItemExcludesInProjectFolder>$(DefaultItemExcludesInProjectFolder);**\artifacts\**;**/artifacts/**;**\.scratch\**;**/.scratch/**</DefaultItemExcludesInProjectFolder>
   </PropertyGroup>
+  <PropertyGroup Condition="'$(AuditPipeline)' == 'true'">
+    <NuGetAudit>true</NuGetAudit>
+    <NuGetAuditMode>all</NuGetAuditMode>
+    <NuGetAuditLevel>low</NuGetAuditLevel>
+    <WarningsAsErrors>$(WarningsAsErrors);NU1900;NU1901;NU1902;NU1903;NU1904;NU1905</WarningsAsErrors>
+  </PropertyGroup>
   <PropertyGroup Condition="'$(McgIsolatedArtifactsPath)' != ''">
     <!-- Keep native MTP build outputs isolated without setting the SDK-reserved ArtifactsPath.
          .NET 10 forwards ArtifactsPath to the test app as an artifacts-path option, which xUnit MTP v2

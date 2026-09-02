@@ -5,10 +5,56 @@ using Mcg.AgentOrchestrator.Infrastructure;
 public sealed class CleanTestBaselineTests
 {
     [Xunit.Theory]
-    [Xunit.InlineData(null, true)]
-    [Xunit.InlineData(0, true)]
-    [Xunit.InlineData(128, false)]
-    public void ProcessObservationReceiptRequiresNoObservedChildFailure(int? exitCode, bool expected)
+    [Xunit.InlineData("FixturePublication", "NotRun", "RepositoryMissing", false, null, 0, 0, true)]
+    [Xunit.InlineData("FixturePublication", "EmptyRequiredOutput", "HeadMissing", true, 0, 0, 0, true)]
+    [Xunit.InlineData("FixturePublication", "NonZeroExit", "ReferenceInvalid", true, 128, 0, 0, true)]
+    [Xunit.InlineData("FixturePublication", "NonZeroExit", "ValidLooseReference", true, 128, 0, 0, false)]
+    [Xunit.InlineData("ProcessOutputApparatus", "ProcessObservationFailure", "ValidLooseReference", true, 0, 0, 31, true)]
+    [Xunit.InlineData("ProcessOutputApparatus", "ProcessObservationFailure", "ValidLooseReference", true, 0, 0, 0, false)]
+    [Xunit.InlineData("ProcessOutputApparatus", "ProcessObservationFailure", "HeadMissing", true, 0, 0, 31, false)]
+    public void SeededRepositoryCauseReceiptDecisionTableRequiresPositiveOwnerEvidence(
+        string owner,
+        string classification,
+        string headState,
+        bool processStarted,
+        int? exitCode,
+        long stdoutBytes,
+        long stderrBytes,
+        bool expected)
+    {
+        var receipt = new AcceptanceFailureCauseReceiptV1(
+            1,
+            "seeded-dispatch-repository-git-probe",
+            owner,
+            classification,
+            processStarted,
+            exitCode,
+            stdoutBytes,
+            stderrBytes,
+            false,
+            false,
+            false,
+            headState,
+            "TemplateHeadCommit",
+            "create-decision-table",
+            1);
+
+        Assert.Equal(
+            expected,
+            AcceptanceFailureCauseReceiptCodec.TryParse(
+                AcceptanceFailureCauseReceiptCodec.Format(receipt),
+                out _));
+    }
+
+    [Xunit.Theory]
+    [Xunit.InlineData(null, 31, true)]
+    [Xunit.InlineData(0, 31, true)]
+    [Xunit.InlineData(128, 31, true)]
+    [Xunit.InlineData(128, 0, false)]
+    public void ProcessObservationReceiptRetainsParentFaultWithAnyChildExit(
+        int? exitCode,
+        long stderrBytes,
+        bool expected)
     {
         var receipt = new AcceptanceFailureCauseReceiptV1(
             ContractVersion: 1,
@@ -18,7 +64,7 @@ public sealed class CleanTestBaselineTests
             ProcessStarted: true,
             ExitCode: exitCode,
             StandardOutputByteCount: 0,
-            StandardErrorByteCount: 31,
+            StandardErrorByteCount: stderrBytes,
             DrainTimedOut: false,
             TimedOut: false,
             DrainFailed: false,
@@ -32,6 +78,59 @@ public sealed class CleanTestBaselineTests
             out _);
 
         Assert.Equal(expected, parsed);
+    }
+
+    [Xunit.Theory]
+    [Xunit.InlineData("ProcessOutputApparatus", "ValidLooseReference", "LaunchFailure", false, null, false, false, false, true)]
+    [Xunit.InlineData("ProcessOutputApparatus", "ValidLooseReference", "ProcessTimeout", true, null, true, false, false, true)]
+    [Xunit.InlineData("ProcessOutputApparatus", "ValidLooseReference", "DrainTimeout", true, 0, false, true, false, true)]
+    [Xunit.InlineData("ProcessOutputApparatus", "ValidLooseReference", "DrainFailure", true, 0, false, false, true, true)]
+    [Xunit.InlineData("ProcessOutputApparatus", "ValidLooseReference", "ProcessObservationFailure", true, 128, false, false, false, true)]
+    [Xunit.InlineData("FixturePublication", "HeadMissing", "LaunchFailure", false, null, false, false, false, true)]
+    [Xunit.InlineData("FixturePublication", "HeadMissing", "ProcessTimeout", true, null, true, false, false, true)]
+    [Xunit.InlineData("FixturePublication", "HeadMissing", "DrainTimeout", true, 0, false, true, false, true)]
+    [Xunit.InlineData("FixturePublication", "HeadMissing", "DrainFailure", true, 0, false, false, true, true)]
+    [Xunit.InlineData("FixturePublication", "HeadMissing", "ProcessObservationFailure", true, 128, false, false, false, true)]
+    [Xunit.InlineData("ProcessOutputApparatus", "HeadMissing", "LaunchFailure", false, null, false, false, false, false)]
+    [Xunit.InlineData("FixturePublication", "ValidLooseReference", "LaunchFailure", false, null, false, false, false, false)]
+    [Xunit.InlineData("ProcessOutputApparatus", "ValidLooseReference", "LaunchFailure", true, null, false, false, false, false)]
+    [Xunit.InlineData("FixturePublication", "HeadMissing", "ProcessTimeout", true, null, false, false, false, false)]
+    [Xunit.InlineData("ProcessOutputApparatus", "ValidLooseReference", "DrainTimeout", true, 0, true, true, false, false)]
+    [Xunit.InlineData("FixturePublication", "HeadMissing", "DrainFailure", true, 0, false, true, true, false)]
+    [Xunit.InlineData("ProcessOutputApparatus", "ValidLooseReference", "ProcessObservationFailure", true, 128, false, false, true, false)]
+    public void SeededRepositoryFaultReceiptDecisionTableRequiresCoherentEvidence(
+        string owner,
+        string headState,
+        string classification,
+        bool processStarted,
+        int? exitCode,
+        bool timedOut,
+        bool drainTimedOut,
+        bool drainFailed,
+        bool expected)
+    {
+        var receipt = new AcceptanceFailureCauseReceiptV1(
+            ContractVersion: 1,
+            Kind: "seeded-dispatch-repository-git-probe",
+            Owner: owner,
+            ProbeClassification: classification,
+            ProcessStarted: processStarted,
+            ExitCode: exitCode,
+            StandardOutputByteCount: 0,
+            StandardErrorByteCount: 31,
+            DrainTimedOut: drainTimedOut,
+            TimedOut: timedOut,
+            DrainFailed: drainFailed,
+            RepositoryHeadState: headState,
+            Check: "TemplateHeadCommit",
+            FixtureAttemptId: "create-fault-decision-table",
+            ProbeOrdinal: 1);
+
+        Assert.Equal(
+            expected,
+            AcceptanceFailureCauseReceiptCodec.TryParse(
+                AcceptanceFailureCauseReceiptCodec.Format(receipt),
+                out _));
     }
 
     [Xunit.Fact]
@@ -184,6 +283,119 @@ public sealed class CleanTestBaselineTests
                 AcceptanceFailureCause.EnvironmentalApparatus,
                 receipt.FailureCauseEvidence?.Cause);
             Assert.Equal(checkName, receipt.FailureCauseEvidence?.CheckName);
+        }
+        finally
+        {
+            File.Delete(trxPath);
+        }
+    }
+
+    [Xunit.Theory]
+    [Xunit.InlineData("Timeout")]
+    [Xunit.InlineData("Aborted")]
+    [Xunit.InlineData("Error")]
+    public void VerifierMixedApparatusAndUnreceiptedFatalOutcomeFailsClosed(string fatalOutcome)
+    {
+        const string checkName = "infrastructure tests: Remainder";
+        var receipt = new AcceptanceFailureCauseReceiptV1(
+            1, "seeded-dispatch-repository-git-probe", "ProcessOutputApparatus",
+            "EmptyRequiredOutput", true, 0, 0, 0, false, false, false,
+            "ValidLooseReference", "PublishedTopLevel", "create-mixed-outcome", 1);
+        var trxPath = Path.Combine(Path.GetTempPath(), $"mixed-outcome-{Guid.NewGuid():N}.trx");
+        try
+        {
+            File.WriteAllText(
+                trxPath,
+                $"""
+                <TestRun><Results>
+                  <UnitTestResult testId="1" outcome="Failed"><Output><ErrorInfo><Message>{AcceptanceFailureCauseReceiptCodec.Format(receipt)}</Message></ErrorInfo></Output></UnitTestResult>
+                  <UnitTestResult testId="2" outcome="{fatalOutcome}"><Output><ErrorInfo><Message>ordinary {fatalOutcome} failure</Message></ErrorInfo></Output></UnitTestResult>
+                </Results></TestRun>
+                """);
+
+            var result = GoalAcceptanceVerifier.AttachFailureCauseEvidence(
+                new AcceptanceCheckResult(checkName, false, 1, "mixed failure outcomes", TestResultPaths: [trxPath]));
+
+            Assert.Null(result.FailureClassification);
+            Assert.Null(result.FailureCauseEvidence);
+        }
+        finally
+        {
+            File.Delete(trxPath);
+        }
+    }
+
+    [Xunit.Theory]
+    [Xunit.InlineData("Timeout")]
+    [Xunit.InlineData("Aborted")]
+    [Xunit.InlineData("Error")]
+    public void VerifierAllFatalOutcomesWithApparatusReceiptsRemainClassified(string fatalOutcome)
+    {
+        const string checkName = "infrastructure tests: Remainder";
+        var receipt = new AcceptanceFailureCauseReceiptV1(
+            1, "seeded-dispatch-repository-git-probe", "ProcessOutputApparatus",
+            "EmptyRequiredOutput", true, 0, 0, 0, false, false, false,
+            "ValidLooseReference", "PublishedTopLevel", "create-all-apparatus", 1);
+        var marker = AcceptanceFailureCauseReceiptCodec.Format(receipt);
+        var trxPath = Path.Combine(Path.GetTempPath(), $"all-apparatus-{Guid.NewGuid():N}.trx");
+        try
+        {
+            File.WriteAllText(
+                trxPath,
+                $"""
+                <TestRun><Results>
+                  <UnitTestResult testId="1" outcome="Failed"><Output><ErrorInfo><Message>{marker}</Message></ErrorInfo></Output></UnitTestResult>
+                  <UnitTestResult testId="2" outcome="{fatalOutcome}"><Output><ErrorInfo><Message>{marker}</Message></ErrorInfo></Output></UnitTestResult>
+                  <UnitTestResult testId="3" outcome="Passed" />
+                  <UnitTestResult testId="4" outcome="NotExecuted" />
+                </Results></TestRun>
+                """);
+
+            var result = GoalAcceptanceVerifier.AttachFailureCauseEvidence(
+                new AcceptanceCheckResult(checkName, false, 1, "typed apparatus outcomes", TestResultPaths: [trxPath]));
+
+            Assert.Equal(
+                AcceptanceFailureClassifications.SeededRepositoryProcessOutputApparatus,
+                result.FailureClassification);
+            Assert.Equal(AcceptanceFailureCause.EnvironmentalApparatus, result.FailureCauseEvidence?.Cause);
+        }
+        finally
+        {
+            File.Delete(trxPath);
+        }
+    }
+
+    [Xunit.Fact]
+    public void VerifierMixedSeededRepositoryOwnersUseGeneralApparatusClassification()
+    {
+        const string checkName = "infrastructure tests: Worker dispatch fixtures";
+        var processReceipt = new AcceptanceFailureCauseReceiptV1(
+            1, "seeded-dispatch-repository-git-probe", "ProcessOutputApparatus",
+            "EmptyRequiredOutput", true, 0, 0, 0, false, false, false,
+            "ValidLooseReference", "PublishedTopLevel", "create-process", 2);
+        var fixtureReceipt = new AcceptanceFailureCauseReceiptV1(
+            1, "seeded-dispatch-repository-git-probe", "FixturePublication",
+            "NotRun", false, null, 0, 0, false, false, false,
+            "GitMetadataMissing", "TemplateMetadata", "create-fixture", 1);
+        var trxPath = Path.Combine(Path.GetTempPath(), $"mixed-cause-{Guid.NewGuid():N}.trx");
+        try
+        {
+            var processMarker = AcceptanceFailureCauseReceiptCodec.Format(processReceipt);
+            var fixtureMarker = AcceptanceFailureCauseReceiptCodec.Format(fixtureReceipt);
+            File.WriteAllText(
+                trxPath,
+                $"""
+                <TestRun><Results>
+                  <UnitTestResult testId="1" outcome="Failed"><Output><ErrorInfo><Message>{processMarker}</Message></ErrorInfo></Output></UnitTestResult>
+                  <UnitTestResult testId="2" outcome="Failed"><Output><ErrorInfo><Message>{fixtureMarker}</Message></ErrorInfo></Output></UnitTestResult>
+                </Results></TestRun>
+                """);
+
+            var result = GoalAcceptanceVerifier.AttachFailureCauseEvidence(
+                new AcceptanceCheckResult(checkName, false, 1, "typed failures", TestResultPaths: [trxPath]));
+
+            Assert.Equal(AcceptanceFailureClassifications.SeededRepositoryApparatus, result.FailureClassification);
+            Assert.Equal(AcceptanceFailureCause.EnvironmentalApparatus, result.FailureCauseEvidence?.Cause);
         }
         finally
         {
