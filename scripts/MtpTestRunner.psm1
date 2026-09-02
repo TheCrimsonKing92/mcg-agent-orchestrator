@@ -696,19 +696,22 @@ function Invoke-MtpBuild {
         [Parameter(Mandatory = $true)][object[]]$Projects,
         [Parameter(Mandatory = $true)][string]$Configuration,
         [Parameter(Mandatory = $true)][string]$DotnetPath,
-        [Parameter(Mandatory = $true)][string]$BuildLogDirectory
+        [Parameter(Mandatory = $true)][string]$RunDirectory
     )
 
     foreach ($project in $Projects) {
         $buildTarget = [System.IO.Path]::GetFullPath((Join-Path $RepositoryRoot ([string]$project.project)))
         $appHost = Resolve-MtpAppHostPath -RepositoryRoot $RepositoryRoot -Invocation $project -Configuration $Configuration
         $outputDirectory = Split-Path -Parent $appHost
-        $projectName = [System.IO.Path]::GetFileNameWithoutExtension([string]$project.project)
-        $buildLogBudget = [Math]::Max(32, [Math]::Min(200, 240 - $BuildLogDirectory.Length - 1))
-        $buildLogName = Get-MtpBoundedFileName -Stem "build-$projectName" -Suffix '.build.log' -MaximumLength $buildLogBudget
-        $buildLog = Join-Path $BuildLogDirectory $buildLogName
+        $projectName = [System.IO.Path]::GetFileNameWithoutExtension($buildTarget)
+        $buildLogNameBudget = [Math]::Max(32, [Math]::Min(200, 240 - $RunDirectory.Length - 1))
+        $buildLogName = Get-MtpBoundedFileName -Stem "build-$projectName" -Suffix '.log' -MaximumLength $buildLogNameBudget
+        $buildLogPath = Join-Path $RunDirectory $buildLogName
+        $captureLogName = Get-MtpBoundedFileName -Stem "build-$projectName-capture" -Suffix '.log' -MaximumLength $buildLogNameBudget
+        $captureLogPath = Join-Path $RunDirectory $captureLogName
         Write-Host "Building test target: $buildTarget ($Configuration) -> $outputDirectory"
-        Write-Host "Build output log: $buildLog"
+        Write-Host "Build output log: $buildLogPath"
+        Write-Host "Build capture log: $captureLogPath"
         $arguments = [string[]]@(
             $DotnetPath,
             'build',
@@ -719,15 +722,18 @@ function Invoke-MtpBuild {
             $outputDirectory,
             '--nologo',
             '--verbosity',
-            'minimal'
+            'minimal',
+            '-clp:ErrorsOnly;Summary',
+            '-fl',
+            "-flp:LogFile=$buildLogPath;Verbosity=Normal"
         )
-        $build = Invoke-MtpBuildProcess -Executable $DotnetPath -Arguments $arguments -OutputLog $buildLog -WorkingDirectory $RepositoryRoot
+        $build = Invoke-MtpBuildProcess -Executable $DotnetPath -Arguments $arguments -OutputLog $captureLogPath -WorkingDirectory $RepositoryRoot
         if (-not $build.Started -or -not [string]::IsNullOrWhiteSpace([string]$build.StartFailureMessage)) {
             Write-Host "BUILD FAILURE - could not start '$DotnetPath build': $($build.StartFailureMessage)"
             return $false
         }
         if (-not $build.DrainConfirmed) {
-            Write-Host "BUILD OUTPUT DRAIN INCOMPLETE - continuing with exit code $($build.ExitCode). Captured stderr/stdout: $buildLog"
+            Write-Host "BUILD OUTPUT DRAIN INCOMPLETE - continuing with exit code $($build.ExitCode). Captured stderr/stdout: $captureLogPath"
         }
         if ($build.ExitCode -ne 0) {
             Write-Host "BUILD FAILURE - '$DotnetPath build' exited $($build.ExitCode). The managed MTP runner was not launched."
@@ -1251,7 +1257,7 @@ function Invoke-MtpTestRun {
         Set-MtpHermeticEnvironment -RepositoryRoot $RepositoryRoot -WritableRoot $runDirectory
         Write-Host "Results directory: $runDirectory"
         if (-not $NoBuild) {
-            if (-not (Invoke-MtpBuild -RepositoryRoot $RepositoryRoot -Projects $projects -Configuration $Configuration -DotnetPath $DotnetPath -BuildLogDirectory $runDirectory)) {
+            if (-not (Invoke-MtpBuild -RepositoryRoot $RepositoryRoot -Projects $projects -Configuration $Configuration -DotnetPath $DotnetPath -RunDirectory $runDirectory)) {
                 Write-Host "Retained diagnostic directory: $runDirectory"
                 return New-MtpTerminalResult -Outcome failed -ExitCode $script:ExitCodes.Build -ResultsDirectory $runDirectory -ArtifactsRetained $true
             }

@@ -593,8 +593,8 @@ public sealed class ConductorDriverTests
             ]);
 
     internal static FocusedEvidenceRunResult DualArmFindingEvidence(
-        string request,
-        FindingEvidenceArmDisposition baselineDisposition)
+        string request, FindingEvidenceArmDisposition baselineDisposition,
+        string candidateSha = "candidate-sha")
     {
         var candidateCheck = new AcceptanceCheckResult(
             "candidate focused evidence",
@@ -634,7 +634,7 @@ public sealed class ConductorDriverTests
             [
                 new FocusedEvidenceArmRunResult(
                     FindingEvidenceArm.Candidate,
-                    "candidate-sha",
+                    candidateSha,
                     FindingEvidenceArmDisposition.Green,
                     Accepted: true,
                     Passed: true,
@@ -832,11 +832,12 @@ public sealed class ConductorDriverTests
     [Xunit.Fact(DisplayName = "ConductorDriver_WorkspaceReady_spawn_fail_then_recorded_start_success_advances_without_escalation")]
     public void ConductorDriverWorkspaceReadySpawnFailThenRecordedStartSuccessAdvancesWithoutEscalation()
     {
-        var (_, goal) = SimpleGoal();
+        var (kernel, goal) = SimpleGoal();
         var dispatchStartCalls = 0;
         var recordedStartCalls = 0;
         var shutdownCalled = false;
         var escalated = false;
+        var phaseTimings = new List<string>();
 
         var driver = MakeDriver(
             getFacts: _ => new GoalLifecycleFacts(WorkspaceExists: true),
@@ -844,15 +845,23 @@ public sealed class ConductorDriverTests
             dispatchAndStart: _ =>
             {
                 dispatchStartCalls++;
+                kernel.ReplaceGoalWithSnapshot(kernel.ExportGoalSnapshot(goal.Id));
+                DispatchTask(kernel, goal, goal.Tasks.Single());
                 return DispatchStartOutcome.SpawnFailed("Dispatched 1 task(s) but no processes started (spawn failed)");
             },
-            startRecordedDispatches: _ =>
+            startRecordedDispatches: currentGoal =>
             {
                 recordedStartCalls++;
+                Assert.False(ReferenceEquals(goal, currentGoal));
+                Assert.Equal(WorkTaskStatus.Assigned, goal.Tasks.Single().Status);
+                Assert.Equal(WorkTaskStatus.Running, currentGoal.Tasks.Single().Status);
+                Assert.NotNull(currentGoal.Tasks.Single().LastDispatch);
                 return DispatchStartOutcome.Started();
             },
             buildServerShutdown: () => { shutdownCalled = true; },
             writeEscalation: (_, _, _) => { escalated = true; });
+        driver.PhaseTimingSink = phaseTimings.Add;
+        driver.BeginTick(kernel, tick: 1);
 
         var result = driver.AdvanceOnce(goal, ConductorAutonomyPolicy.Conservative);
 
@@ -861,12 +870,17 @@ public sealed class ConductorDriverTests
         Assert.True(shutdownCalled);
         Assert.False(escalated);
         Assert.True(result.Outcome is ConductorAdvanceOutcome.Executed);
+        Assert.Contains(
+            phaseTimings,
+            line => line.Contains("phase=dispatch-prep", StringComparison.Ordinal) &&
+                    line.Contains("retry=spawn-failed", StringComparison.Ordinal) &&
+                    line.Contains(" task=", StringComparison.Ordinal));
     }
 
     [Xunit.Fact(DisplayName = "ConductorDriver_recoverable_sandbox_prep_action_is_remediated_and_start_retried")]
     public void ConductorDriverRecoverableSandboxPrepActionIsRemediatedAndStartRetried()
     {
-        var (_, goal) = SimpleGoal();
+        var (kernel, goal) = SimpleGoal();
         var action = new WorkerSandboxPrepRecoverableAction(
             Worktree: @"C:\repo\.orchestrator-worktrees\abc12345",
             SandboxRoot: @"C:\repo\.orchestrator-worktrees\abc12345\.mcg-sandbox",
@@ -885,11 +899,17 @@ public sealed class ConductorDriverTests
             dispatchAndStart: _ =>
             {
                 dispatchStartCalls++;
+                kernel.ReplaceGoalWithSnapshot(kernel.ExportGoalSnapshot(goal.Id));
+                DispatchTask(kernel, goal, goal.Tasks.Single());
                 return DispatchStartOutcome.RecoverableSandboxPrep(action);
             },
-            startRecordedDispatches: _ =>
+            startRecordedDispatches: currentGoal =>
             {
                 recordedStartCalls++;
+                Assert.False(ReferenceEquals(goal, currentGoal));
+                Assert.Equal(WorkTaskStatus.Assigned, goal.Tasks.Single().Status);
+                Assert.Equal(WorkTaskStatus.Running, currentGoal.Tasks.Single().Status);
+                Assert.NotNull(currentGoal.Tasks.Single().LastDispatch);
                 return DispatchStartOutcome.Started();
             },
             retryTask: (goalId, taskId, note) =>
@@ -904,6 +924,7 @@ public sealed class ConductorDriverTests
                 return true;
             },
             writeEscalation: (_, _, _) => { escalated = true; });
+        driver.BeginTick(kernel, tick: 1);
 
         var result = driver.AdvanceOnce(goal, ConductorAutonomyPolicy.Conservative);
 
@@ -913,6 +934,43 @@ public sealed class ConductorDriverTests
         Assert.Equal(0, retryTaskCalls);
         Assert.False(escalated);
         Assert.True(result.Outcome is ConductorAdvanceOutcome.Executed);
+    }
+
+    [Xunit.Fact(DisplayName = "ConductorDriver_sandbox_retry_refreshes_replaced_goal_before_readiness_decision")]
+    public void ConductorDriverSandboxRetryRefreshesReplacedGoalBeforeReadinessDecision()
+    {
+        var (kernel, goal) = SimpleGoal();
+        var action = NewSandboxRecoveryAction();
+        var readinessInspected = false;
+        var driver = MakeDriver(
+            getFacts: _ => new GoalLifecycleFacts(WorkspaceExists: true),
+            dispatchAndStart: _ =>
+            {
+                kernel.ReplaceGoalWithSnapshot(kernel.ExportGoalSnapshot(goal.Id));
+                DispatchTask(kernel, goal, goal.Tasks.Single());
+                return DispatchStartOutcome.RecoverableSandboxPrep(action);
+            },
+            startRecordedDispatches: currentGoal =>
+            {
+                Assert.True(ReferenceEquals(kernel.GetGoal(goal.Id), currentGoal));
+                kernel.ReplaceGoalWithSnapshot(kernel.ExportGoalSnapshot(goal.Id));
+                return DispatchStartOutcome.EmptyBatch("retry started no processes");
+            },
+            recoverSandboxPrep: _ => true,
+            evaluateReadiness: currentGoal =>
+            {
+                readinessInspected = true;
+                Assert.True(ReferenceEquals(kernel.GetGoal(goal.Id), currentGoal));
+                return new DispatchReadinessDeferred(
+                    DateTimeOffset.UtcNow.AddMinutes(1),
+                    "provider cooldown");
+            });
+        driver.BeginTick(kernel, tick: 1);
+
+        var result = driver.AdvanceOnce(goal, ConductorAutonomyPolicy.Conservative);
+
+        Assert.True(readinessInspected);
+        Assert.IsType<ConductorAdvanceOutcome.Held>(result.Outcome);
     }
 
     [Xunit.Fact(DisplayName = "ConductorDriver_recorded_start_mixed_started_and_recovery_keeps_recovery_action")]
@@ -987,6 +1045,46 @@ public sealed class ConductorDriverTests
 
         Assert.Equal(DispatchStartOutcomeCategory.SpawnFailed, outcome.Category);
         Assert.Equal(failureReason, outcome.Reason);
+    }
+
+    [Xunit.Fact(DisplayName = "ConductorDriver_recorded_start_empty_batch_prioritizes_running_task_diagnostic")]
+    public void ConductorDriverRecordedStartEmptyBatchPrioritizesRunningTaskDiagnostic()
+    {
+        var (_, goal) = SoftwareGoal();
+        var completedTask = goal.Tasks[0];
+        var runningTask = goal.Tasks[1];
+        var plan = new ProcessBatchPlan(
+            goal.Id,
+            goal.Objective,
+            goal.Status,
+            ProcessBatchActionKind.StartDispatches,
+            ReadyCount: 0,
+            SkippedCount: 2,
+            Items:
+            [
+                new ProcessBatchPlanItem(
+                    completedTask.Id,
+                    completedTask.RequiredRole,
+                    completedTask.Description,
+                    WorkTaskStatus.Completed,
+                    ProcessBatchItemStatus.Skipped,
+                    "Task status is Completed; only running dispatched tasks can be started."),
+                new ProcessBatchPlanItem(
+                    runningTask.Id,
+                    runningTask.RequiredRole,
+                    runningTask.Description,
+                    WorkTaskStatus.Running,
+                    ProcessBatchItemStatus.Skipped,
+                    "Task has no recorded dispatch.")
+            ]);
+        var result = new ProcessBatchExecutionResult(plan, []);
+
+        var outcome = ConductorDriver.ClassifyRecordedDispatchStartForConductor(result);
+
+        Assert.Equal(DispatchStartOutcomeCategory.EmptyBatch, outcome.Category);
+        Assert.Equal(
+            "Dispatch recorded but no process was startable: Task has no recorded dispatch.",
+            outcome.Reason);
     }
 
     [Xunit.Fact(DisplayName = "ConductorDriver_subscription_start_registration_failure_is_spawn_failure")]

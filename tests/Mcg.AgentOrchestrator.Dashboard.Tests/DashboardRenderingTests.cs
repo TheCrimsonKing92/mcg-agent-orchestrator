@@ -178,6 +178,7 @@ public sealed class DashboardRenderingTests
             kernel,
             goal,
             WorkerProfileCatalog.Default(),
+            ProcessCommandLineSnapshot.Empty,
             operatorIntents: persisted);
 
         Assert.Contains("Operator intent evidence", html, StringComparison.Ordinal);
@@ -712,7 +713,11 @@ public sealed class DashboardRenderingTests
 
     var monitor = DashboardResponseMapper.ToMonitorDto(kernel.BuildMonitor(goal.Id));
     var acceptance = DashboardResponseMapper.ToGoalAcceptanceSummaryDto(goal, kernel.BuildGoalAcceptanceSummary(goal.Id));
-    var workSummary = DashboardResponseMapper.ToGoalWorkSummaryDto(kernel, goal, WorkerProfileCatalog.Default());
+    var workSummary = DashboardResponseMapper.ToGoalWorkSummaryDto(
+        kernel,
+        goal,
+        WorkerProfileCatalog.Default(),
+        ProcessCommandLineSnapshot.Empty);
     var detail = DashboardResponseMapper.ToGoalDetailDto(kernel, goal);
     var monitoringBatch = DashboardMonitoringEvents.BuildBatch(kernel, goal, sinceEventId: 0);
 
@@ -775,6 +780,7 @@ public sealed class DashboardRenderingTests
         kernel,
         goal,
         WorkerProfileCatalog.Default(),
+        ProcessCommandLineSnapshot.Empty,
         executionDirectory: root);
     var summary = DashboardResponseMapper.ToGoalSummary(goal, root);
     var detail = DashboardResponseMapper.ToGoalDetailDto(kernel, goal, root);
@@ -2477,6 +2483,7 @@ public sealed class DashboardRenderingTests
         kernel,
         goal,
         WorkerProfileCatalog.Default(),
+        ProcessCommandLineSnapshot.Empty,
         changedFiles: ["src/Mcg.AgentOrchestrator.App/Cli/ConsoleViews.Tasks.cs"]);
     var html = DashboardRenderer.Render(kernel, RenderOptions(
         EnableOperatorControls: true,
@@ -2550,6 +2557,7 @@ public sealed class DashboardRenderingTests
         kernel,
         goal,
         WorkerProfileCatalog.Default(),
+        ProcessCommandLineSnapshot.Empty,
         executionDirectory: workspace.ExecutionDirectory);
     var html = DashboardRenderer.Render(kernel, RenderOptions(
         EnableOperatorControls: true,
@@ -2589,7 +2597,11 @@ public sealed class DashboardRenderingTests
 
     var control = DashboardNextActionControls.Build(goal, action, WorkerProfileCatalog.Default());
     var nextDto = DashboardResponseMapper.ToNextActionsDto(goal, kernel.BuildNextActions(goal.Id), WorkerProfileCatalog.Default()).Items.Single();
-    var workSummary = DashboardResponseMapper.ToGoalWorkSummaryDto(kernel, goal, WorkerProfileCatalog.Default());
+    var workSummary = DashboardResponseMapper.ToGoalWorkSummaryDto(
+        kernel,
+        goal,
+        WorkerProfileCatalog.Default(),
+        ProcessCommandLineSnapshot.Empty);
 
     Assert.Equal(NextActionKind.ExecuteRecordedDispatch, action.Kind);
     Assert.Equal($"/api/goals/{goalPrefix}/tasks/1/start?confirmDispatchStart=true", control!.Url);
@@ -2705,7 +2717,12 @@ public sealed class DashboardRenderingTests
         .ToNextActionsDto(goal, kernel.BuildNextActions(goal.Id), WorkerProfileCatalog.Default(), agents)
         .Items
         .Single(item => item.TaskId == task.Id.Value);
-    var workSummary = DashboardResponseMapper.ToGoalWorkSummaryDto(kernel, goal, WorkerProfileCatalog.Default(), agents);
+    var workSummary = DashboardResponseMapper.ToGoalWorkSummaryDto(
+        kernel,
+        goal,
+        WorkerProfileCatalog.Default(),
+        ProcessCommandLineSnapshot.Empty,
+        agents);
     var stageDto = DashboardResponseMapper.ToGoalStageReadinessReportDto(goal, kernel.BuildStageReadinessReport(goal.Id), agents).Stages.Single();
 
     Assert.Equal(TaskComplexity.Complex, preview.TaskComplexity);
@@ -3078,7 +3095,11 @@ public sealed class DashboardRenderingTests
         View: DashboardView.Goal,
         FocusGoalPrefix: goalPrefix));
     var taskDto = DashboardResponseMapper.ToTaskDetailDto(goal, task);
-    var workSummary = DashboardResponseMapper.ToGoalWorkSummaryDto(kernel, goal, WorkerProfileCatalog.Default());
+    var workSummary = DashboardResponseMapper.ToGoalWorkSummaryDto(
+        kernel,
+        goal,
+        WorkerProfileCatalog.Default(),
+        ProcessCommandLineSnapshot.Empty);
     var evidenceDto = DashboardResponseMapper.ToGoalEvidenceSummaryDto(goal, kernel.BuildGoalEvidenceSummary(goal.Id));
     var transcript = GoalTranscriptRenderer.Render(kernel, goal, WorkerProfileCatalog.Default());
     var taskNumber = goal.Tasks.Select((candidate, index) => (candidate, index))
@@ -3136,7 +3157,12 @@ public sealed class DashboardRenderingTests
         Subscription: new SubscriptionLaunchProfile("codex-cli"));
     kernel.ActivateGoal(goal.Id, [agent]);
 
-    var workSummary = DashboardResponseMapper.ToGoalWorkSummaryDto(kernel, goal, WorkerProfileCatalog.Default(), [agent]);
+    var workSummary = DashboardResponseMapper.ToGoalWorkSummaryDto(
+        kernel,
+        goal,
+        WorkerProfileCatalog.Default(),
+        ProcessCommandLineSnapshot.Empty,
+        [agent]);
 
     Assert.True(workSummary.ParallelPlan is not null);
     Assert.Equal(2, workSummary.ParallelPlan!.Batches.Count);
@@ -3331,7 +3357,11 @@ public sealed class DashboardRenderingTests
 
     var detail = DashboardResponseMapper.ToTaskDetailDto(goal, task);
     var logs = DashboardResponseMapper.ToProcessLogDto(goal, task);
-    var workSummary = DashboardResponseMapper.ToGoalWorkSummaryDto(kernel, goal, WorkerProfileCatalog.Default());
+    var workSummary = DashboardResponseMapper.ToGoalWorkSummaryDto(
+        kernel,
+        goal,
+        WorkerProfileCatalog.Default(),
+        ProcessCommandLineSnapshot.Empty);
     var html = DashboardRenderer.Render(kernel, RenderOptions(EnableOperatorControls: true, View: DashboardView.Goal, FocusGoalPrefix: goal.Id.Value[..8]));
     var transcript = GoalTranscriptRenderer.Render(kernel, goal, WorkerProfileCatalog.Default());
 

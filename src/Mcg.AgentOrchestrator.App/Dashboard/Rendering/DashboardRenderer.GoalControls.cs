@@ -14,7 +14,8 @@ public static partial class DashboardRenderer
         StringBuilder html,
         AgentOrchestratorKernel kernel,
         Goal goal,
-        DashboardRenderOptions options)
+        DashboardRenderOptions options,
+        ProcessInspectionSnapshotScope processInspection)
     {
         var goalPrefix = Encode(goal.Id.Value[..8]);
         var subscriptionCost = BuildSubscriptionCostPreview(kernel, goal, options);
@@ -31,7 +32,7 @@ public static partial class DashboardRenderer
         html.AppendLine("<section class=\"goal-control-group goal-control-group-wide\">");
         html.AppendLine("<h4>Quick reports</h4>");
         html.AppendLine("<p class=\"section-note\">Human-readable previews with links to the full raw output.</p>");
-        RenderGoalDataViewPreviews(html, kernel, goal, goalPrefix, options);
+        RenderGoalDataViewPreviews(html, kernel, goal, goalPrefix, options, processInspection);
         html.AppendLine("</section>");
         html.AppendLine("<section class=\"goal-control-group goal-control-group-dispatch\">");
         html.AppendLine("<h4>Goal automation</h4>");

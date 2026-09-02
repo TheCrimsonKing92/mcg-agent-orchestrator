@@ -422,13 +422,13 @@ public sealed class MtpTestRunnerScriptTests
 
         var metacharacterResultsRoot = Path.Combine(
             sandbox.ResultsRoot,
-            "meta%SystemRoot%&chars-output");
+            "%CD%&");
         var result = sandbox.RunPartition("GoalWorktree", resultsRoot: metacharacterResultsRoot);
 
         Assert.True(result.ExitCode == 0, result.Stdout + result.Stderr);
         Assert.True(File.Exists(sandbox.ArgumentLog), result.Stdout + result.Stderr);
         Assert.Contains(File.ReadAllLines(sandbox.ArgumentLog), argument =>
-            argument.Contains("meta%SystemRoot%&chars", StringComparison.Ordinal));
+            argument.Contains("%CD%&", StringComparison.Ordinal));
         Assert.Equal("completed", TerminalSummary(result).GetProperty("outcome").GetString());
     }
 
@@ -657,6 +657,10 @@ public sealed class MtpTestRunnerScriptTests
         Xunit.Assert.Contains("$startInfo.CreateNoWindow = $true", sources[2], StringComparison.Ordinal);
         Xunit.Assert.Contains("Resolve-MtpManagedAssemblyPath", sources[2], StringComparison.Ordinal);
         Xunit.Assert.Contains("$executable = if ($usesManagedAssembly) { $DotnetPath }", sources[2], StringComparison.Ordinal);
+        Xunit.Assert.Contains("'-clp:ErrorsOnly;Summary'", sources[2], StringComparison.Ordinal);
+        Xunit.Assert.Contains("Get-MtpBoundedFileName -Stem \"build-$projectName\"", sources[2], StringComparison.Ordinal);
+        Xunit.Assert.Contains("-flp:LogFile=$buildLogPath;Verbosity=Normal", sources[2], StringComparison.Ordinal);
+        Xunit.Assert.Contains("Build output log: $buildLogPath", sources[2], StringComparison.Ordinal);
         Xunit.Assert.DoesNotContain(
             "$executable = if ([string]::IsNullOrWhiteSpace($RunnerPath)) { $expectedAppHost }",
             sources[2],

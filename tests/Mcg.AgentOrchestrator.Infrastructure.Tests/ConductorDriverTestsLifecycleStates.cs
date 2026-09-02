@@ -819,12 +819,17 @@ public sealed partial class ConductorDriverTestsLifecycleStates
         Xunit.Assert.Equal(0, task.CriterionRetryCount);
     }
 
-    [Xunit.Fact(DisplayName = "ConductorDriver_introduced_environmental_apparatus_regates_without_retry")]
-    public void ConductorDriverIntroducedEnvironmentalApparatusRegatesWithoutRetry()
+    [Xunit.Theory]
+    [Xunit.InlineData(AcceptanceFailureClassifications.SeededRepositoryProcessOutputApparatus)]
+    [Xunit.InlineData(AcceptanceFailureClassifications.SeededRepositoryApparatus)]
+    public void ConductorDriverIntroducedEnvironmentalApparatusRegatesWithoutRetry(
+        string failureClassification)
     {
-        var (kernel, goal) = SimpleGoal();
-        var task = goal.Tasks.Single();
-        PassVerification(kernel, goal, task);
+        var (kernel, goal) = SoftwareGoal("Five-role typed apparatus re-gate");
+        foreach (var task in goal.Tasks)
+        {
+            PassVerification(kernel, goal, task);
+        }
         var retryCalled = false;
         var acceptanceRuns = 0;
         var escalationWrites = 0;
@@ -833,8 +838,8 @@ public sealed partial class ConductorDriverTestsLifecycleStates
             "infrastructure tests: Remainder",
             false,
             1,
-            "typed seeded repository process/output apparatus receipt",
-            FailureClassification: AcceptanceFailureClassifications.SeededRepositoryProcessOutputApparatus,
+            "typed seeded repository fixture/process apparatus receipt",
+            FailureClassification: failureClassification,
             ExecutedTestCount: 42);
         var acceptance = new AcceptanceVerificationSummary(
             false,
@@ -884,8 +889,9 @@ public sealed partial class ConductorDriverTestsLifecycleStates
         Xunit.Assert.Equal(1, escalationWrites);
         Xunit.Assert.True(goal.LatestAcceptanceFailure?.IsEnvironmentalApparatus);
         Xunit.Assert.False(retryCalled);
-        Xunit.Assert.Equal(WorkTaskStatus.Completed, task.Status);
-        Xunit.Assert.Equal(0, task.CriterionRetryCount);
+        Xunit.Assert.Equal(5, goal.Tasks.Count);
+        Xunit.Assert.All(goal.Tasks, task => Xunit.Assert.Equal(WorkTaskStatus.Completed, task.Status));
+        Xunit.Assert.All(goal.Tasks, task => Xunit.Assert.Equal(0, task.CriterionRetryCount));
 
         Xunit.Assert.Equal(1, kernel.RetryAcceptanceGate(goal.Id, "Operator confirmed the apparatus repair."));
         Xunit.Assert.Null(goal.LatestAcceptanceFailure);

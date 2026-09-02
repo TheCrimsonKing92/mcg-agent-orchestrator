@@ -51,11 +51,13 @@ private static bool HandleRecover(CliExecutionContext context, IReadOnlyList<str
         actions++;
     }
 
+    var processInspection = new ProcessInspectionSnapshotScope(ProcessCommandLines.SnapshotOperation);
     var worktreeRecovery = GoalRecoveryPlanner.Build(
         context.Kernel,
         goal,
         context.Workspace.ExecutionDirectory,
-        includeCleanupBackoff: false);
+        includeCleanupBackoff: false,
+        processSnapshotFactory: processInspection.Get);
     var worktreeBlocksDiagnosis = worktreeRecovery.WorktreeDirty == true ||
         !string.IsNullOrWhiteSpace(worktreeRecovery.WorktreeStatusError);
     if (worktreeRecovery.WorktreeDirty == true)
@@ -91,7 +93,7 @@ private static bool HandleRecover(CliExecutionContext context, IReadOnlyList<str
         }
 
         if (task.LastProcess is { CompletedAt: null } && task.LastVerification is null &&
-            DispatchRecoveryView.Evaluate(goal, task) is { } recoveryDecision)
+            DispatchRecoveryView.Evaluate(goal, task, processInspection.Get()) is { } recoveryDecision)
         {
             PrintRecoverDispatchRecovery(task, goal, recoveryDecision);
             if (recoveryDecision.Action is DispatchRecoveryAction.Hold or DispatchRecoveryAction.ClassifyBlocker)
@@ -101,7 +103,12 @@ private static bool HandleRecover(CliExecutionContext context, IReadOnlyList<str
 
             var runner = new BackgroundDispatchRunner();
             var outcome = runner.ReconcileLatestProcess(context.Kernel, goal.Id, task.Id);
-            runner.ApplyRefreshOutcomeAndWriteDiagnostics(context.Kernel, goal.Id, task.Id, outcome);
+            runner.ApplyRefreshOutcomeAndWriteDiagnostics(
+                context.Kernel,
+                goal.Id,
+                task.Id,
+                outcome,
+                processInspection.Get);
             goal = context.Kernel.GetGoal(goal.Id);
             context.CurrentGoal = goal;
             var refreshedTask = goal.Tasks.First(candidate => candidate.Id == task.Id);

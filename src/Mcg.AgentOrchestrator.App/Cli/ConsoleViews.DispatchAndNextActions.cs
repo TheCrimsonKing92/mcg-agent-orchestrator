@@ -77,8 +77,11 @@ public static void PrintNextActions(
     WorkerProfileCatalog workerProfiles,
     IReadOnlyList<AgentDefinition>? agents = null,
     GoalHealthReport? health = null,
-    GoalOperatorDisposition? conductorDisposition = null)
+    GoalOperatorDisposition? conductorDisposition = null,
+    Func<ProcessCommandLineSnapshot>? processSnapshotFactory = null)
 {
+    var processInspection = new ProcessInspectionSnapshotScope(
+        processSnapshotFactory ?? ProcessCommandLines.SnapshotOperation);
     Console.WriteLine();
     Console.WriteLine($"Goal {actions.GoalId.Value[..8]} {actions.Status}: {OutputTextPreview.CreateSummary(actions.Objective).Text}");
     if (health is not null)
@@ -90,7 +93,8 @@ public static void PrintNextActions(
     var operatorDisposition = conductorDisposition ?? new GoalOperatorDispositionSurface().Evaluate(
         goal,
         pendingHumanInputCount: 0,
-        verificationSatisfied);
+        verificationSatisfied,
+        commandLineSnapshot: processInspection.Get());
     PrintOperatorDisposition(operatorDisposition);
 
     Console.WriteLine("Next actions:");
@@ -99,7 +103,7 @@ public static void PrintNextActions(
     {
         var item = actions.Items[index];
         Console.WriteLine($"  {index + 1}. {item.Kind}: {OutputTextPreview.CreateTimeline(item.Message).Text}");
-        if (DispatchRecoveryView.EvaluateState(goal, item) is { } dispatchState)
+        if (DispatchRecoveryView.EvaluateState(goal, item, processInspection.Get()) is { } dispatchState)
         {
             PrintDispatchState(dispatchState, "     ");
         }

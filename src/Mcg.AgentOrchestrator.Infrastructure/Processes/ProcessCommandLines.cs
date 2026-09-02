@@ -9,6 +9,17 @@ internal static class ProcessCommandLines
 {
     public static ProcessCommandLineSnapshot Snapshot() => ToSnapshot(ReadAllRecords());
 
+    public static ProcessCommandLineSnapshot SnapshotOperation()
+    {
+        if (OperatingSystem.IsWindows())
+        {
+            var operation = WindowsNativeProcessInspection.BeginOperation();
+            return new ProcessCommandLineSnapshot(processIds => operation.ReadRequested(processIds));
+        }
+
+        return Snapshot();
+    }
+
     public static ProcessCommandLineSnapshot Snapshot(IEnumerable<int> pids) =>
         ToSnapshot(ReadRecords(pids.Distinct().ToArray()));
 
@@ -32,6 +43,18 @@ internal static class ProcessCommandLines
             .Where(pair => names.Contains(pair.Value.Name))
             .ToDictionary(pair => pair.Key, pair => pair.Value);
         return new ProcessCommandLineSnapshot(records);
+    }
+
+    public static ProcessCommandLineSnapshot Snapshot(ProcessInspectionQuery query)
+    {
+        if (OperatingSystem.IsWindows())
+        {
+            return ToSnapshot(WindowsNativeProcessInspection.BeginOperation().ReadCandidates(query));
+        }
+
+        // Keep the established /proc behavior intact. The caller applies the same final query
+        // predicates after this snapshot; only Windows needs the native-read cost bound here.
+        return Snapshot();
     }
 
     public static Dictionary<int, string> Read(IEnumerable<int> pids)
@@ -166,8 +189,11 @@ internal static class ProcessCommandLines
 
 public sealed class ProcessCommandLineSnapshot
 {
-    private readonly IReadOnlyDictionary<int, ProcessInspectionRecord> _records;
+    private readonly Dictionary<int, ProcessInspectionRecord> _records;
     private readonly Action<int>? _onRead;
+    private readonly Func<IReadOnlyCollection<int>, WindowsNativeProcessInspection.ProcessInspectionResult>? _readRecords;
+    private ProcessInspectionFailure? _failure;
+    private bool _hasLazyRead;
 
     internal ProcessCommandLineSnapshot(IReadOnlyDictionary<int, string> commandLines, Action<int>? onRead = null)
         : this(commandLines.ToDictionary(
@@ -195,25 +221,42 @@ public sealed class ProcessCommandLineSnapshot
         ProcessInspectionFailure? failure,
         Action<int>? onRead = null)
     {
-        _records = records;
-        Failure = failure;
+        _records = records.ToDictionary(pair => pair.Key, pair => pair.Value);
+        _failure = failure;
         _onRead = onRead;
+    }
+
+    internal ProcessCommandLineSnapshot(
+        Func<IReadOnlyCollection<int>, WindowsNativeProcessInspection.ProcessInspectionResult> readRecords)
+    {
+        _records = [];
+        _readRecords = readRecords;
     }
 
     public static ProcessCommandLineSnapshot Empty { get; } = new(new Dictionary<int, string>());
 
-    public IReadOnlyDictionary<int, ProcessInspectionRecord> Records => _records;
+    public IReadOnlyDictionary<int, ProcessInspectionRecord> Records => _readRecords is null
+        ? _records
+        : throw new InvalidOperationException(
+            "A partial operation-backed process snapshot cannot be enumerated as a complete snapshot; request explicit process ids instead.");
 
-    public ProcessInspectionFailure? Failure { get; }
+    public ProcessInspectionFailure? Failure => _readRecords is not null && !_hasLazyRead
+        ? throw new InvalidOperationException(
+            "A partial operation-backed process snapshot has not inspected any requested process ids.")
+        : _failure;
 
-    public bool TryGetRecord(int processId, out ProcessInspectionRecord record) =>
-        _records.TryGetValue(processId, out record!);
+    public bool TryGetRecord(int processId, out ProcessInspectionRecord record)
+    {
+        EnsureRecords([processId]);
+        return _records.TryGetValue(processId, out record!);
+    }
 
     public IReadOnlyDictionary<int, string> Read(IEnumerable<int> pids)
     {
         var result = new Dictionary<int, string>();
         var distinctPids = pids.Distinct().ToArray();
         _onRead?.Invoke(distinctPids.Length);
+        EnsureRecords(distinctPids);
         foreach (var pid in distinctPids)
         {
             if (_records.TryGetValue(pid, out var record) &&
@@ -225,5 +268,27 @@ public sealed class ProcessCommandLineSnapshot
         }
 
         return result;
+    }
+
+    private void EnsureRecords(IReadOnlyCollection<int> processIds)
+    {
+        if (_readRecords is null)
+        {
+            return;
+        }
+
+        var missing = processIds.Where(processId => !_records.ContainsKey(processId)).Distinct().ToArray();
+        if (missing.Length == 0)
+        {
+            return;
+        }
+
+        var inspected = _readRecords(missing);
+        _hasLazyRead = true;
+        _failure ??= inspected.Failure;
+        foreach (var pair in inspected.Records)
+        {
+            _records[pair.Key] = pair.Value;
+        }
     }
 }

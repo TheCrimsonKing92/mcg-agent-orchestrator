@@ -68,7 +68,7 @@ internal static class ConductorOperatorDispositionSnapshots
         AgentOrchestratorKernel kernel,
         string? executionDirectory)
     {
-        return Build(kernel, executionDirectory, ProcessCommandLines.Snapshot);
+        return Build(kernel, executionDirectory, ProcessCommandLines.SnapshotOperation);
     }
 
     internal static IReadOnlyList<ConductorOperatorDispositionSnapshot> Build(
