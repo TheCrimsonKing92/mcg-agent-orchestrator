@@ -382,6 +382,75 @@ public sealed class StorageRetentionMaintenanceTests
         }
     }
 
+    [Xunit.Fact]
+    public async Task AcceptanceRetention_WhenAttemptWriterLeaseIsHeld_DefersGoalWithoutDeleting()
+    {
+        using var fixture = new RetentionFixture();
+        var goalDirectory = Path.Combine(fixture.OrchestratorDirectory, "acceptance-gate-attempts", GoalId);
+        Directory.CreateDirectory(goalDirectory);
+        fixture.WriteAttempt(goalDirectory, "final", 2, failed: false, reconciled: true);
+        fixture.WriteAttempt(goalDirectory, "old", 1, failed: false, reconciled: true);
+        var oldLog = Path.Combine(goalDirectory, "old.out.log");
+        File.WriteAllText(oldLog, "old");
+        SetAge(oldLog, 30);
+        using var acquired = new ManualResetEventSlim();
+        using var release = new ManualResetEventSlim();
+        var holder = Task.Run(() =>
+        {
+            using var mutex = new Mutex(false, StorageRetentionMaintenance.AttemptLeaseNameFor(goalDirectory));
+            mutex.WaitOne();
+            acquired.Set();
+            if (!release.Wait(TimeSpan.FromSeconds(30)))
+            {
+                throw new TimeoutException("Acceptance writer lease test release signal was not observed.");
+            }
+            mutex.ReleaseMutex();
+        });
+
+        Assert.True(acquired.Wait(TimeSpan.FromSeconds(30)), "Acceptance writer lease holder did not acquire the mutex.");
+        try
+        {
+            var result = fixture.Run(TerminalGoal(WorkTaskStatus.Completed));
+
+            Assert.True(File.Exists(oldLog));
+            Assert.Contains(result.Decisions, decision =>
+                decision.Family == EvidenceArtifactFamily.AcceptanceGateAttempts &&
+                decision.Action == EvidenceRetentionAction.DeferredLease &&
+                decision.Reason == "attempt-writer-lease-unavailable");
+        }
+        finally
+        {
+            release.Set();
+            await holder;
+        }
+    }
+
+    [Xunit.Fact]
+    public void Sweep_WhenLaterFamilyThrows_ReturnsPartialFailedDecisionLedger()
+    {
+        using var fixture = new RetentionFixture();
+        var deletedPath = fixture.WriteSuccessfulExit(Now.AddDays(-30));
+
+        var result = StorageRetentionMaintenance.Run(
+            fixture.LogDirectory,
+            fixture.OrchestratorDirectory,
+            fixture.ExecutionDirectory,
+            [TerminalGoal(WorkTaskStatus.Completed)],
+            Now,
+            beforeGoalJournalArchiveForTests: () => throw new IOException("injected archive failure"));
+
+        Assert.False(File.Exists(deletedPath));
+        Assert.True(result.Failed);
+        Assert.Contains(result.Decisions, decision =>
+            decision.Action == EvidenceRetentionAction.Deleted &&
+            decision.BytesReclaimed > 0);
+        Assert.Contains(result.Decisions, decision =>
+            decision.Action == EvidenceRetentionAction.Failed &&
+            decision.Reason == "sweep-failed" &&
+            !string.IsNullOrWhiteSpace(decision.FailureExceptionType));
+        Assert.Contains("status=partial-failed", RunEventMaintenanceCadence.FormatArtifactRetentionReceipt(result), StringComparison.Ordinal);
+    }
+
     [Xunit.Fact(DisplayName = "GoalOperationJournal_archive_is_skipped_by_ReadAll")]
     public void ArchiveIsSkippedByReadAll()
     {

@@ -21,7 +21,8 @@ internal enum EvidenceRetentionAction
     DeferredLive,
     DeferredLocked,
     DeferredLease,
-    RetainedUndecidable
+    RetainedUndecidable,
+    Failed
 }
 
 internal enum EvidenceOwnerResolution

@@ -38,9 +38,10 @@ internal static class RunEventMaintenanceCadence
                 ensureSchema: !File.Exists(runEventStorePath));
             var latest = LatestMaintenanceMarker(store, conductEventsLogPath);
             var latestVacuum = LatestVacuumMarker(store);
+            var artifactFailureDue = HasUnresolvedArtifactRetentionFailure(store, latest);
             var vacuumDue = IsOffPeakVacuumWindow(now) &&
                 (latestVacuum is null || now - latestVacuum.Value >= VacuumInterval);
-            if (latest is not null && now - latest.Value < Interval && !vacuumDue)
+            if (latest is not null && now - latest.Value < Interval && !vacuumDue && !artifactFailureDue)
             {
                 NextDueByStorePath[cadenceKey] = NextDue(latest.Value);
                 return SkippedResult();
@@ -87,15 +88,22 @@ internal static class RunEventMaintenanceCadence
                 {
                     TryAppendVacuumReceipt(store, result, now);
                 }
-                NextDueByStorePath[cadenceKey] = NextDue(now);
+                if (artifactRetention?.Failed == true)
+                {
+                    NextDueByStorePath.TryRemove(cadenceKey, out _);
+                }
+                else
+                {
+                    NextDueByStorePath[cadenceKey] = NextDue(now);
+                }
             }
 
             return new RunEventMaintenanceCadenceResult(
                 Attempted: true,
                 Skipped: false,
                 Deferred: result.Deferred,
-                Failed: false,
-                Reason: result.DeferredReason,
+                Failed: artifactRetention?.Failed == true,
+                Reason: artifactRetention?.Failed == true ? "storage-retention-failed" : result.DeferredReason,
                 Maintenance: result,
                 ArtifactRetention: artifactRetention);
         }
@@ -213,10 +221,10 @@ internal static class RunEventMaintenanceCadence
             EvidenceRetentionAction.DeferredLease or
             EvidenceRetentionAction.DeferredLive or
             EvidenceRetentionAction.DeferredLocked);
-        var status = result.Decisions.Any(decision => decision.Action == EvidenceRetentionAction.DeferredLease)
-            ? "deferred"
-            : deferred > 0 ? "partial" : "completed";
-        return $"STORAGE_RETENTION policyVersion={EvidenceRetentionPolicy.Version} sweepId={result.SweepId} status={status} decisions={result.Decisions.Count} reclaimedBytes={reclaimedBytes} deferred={deferred}";
+        var status = ArtifactRetentionStatus(result, reclaimedBytes, deferred);
+        var actions = FormatDecisionCounts(result.Decisions, decision => decision.Action.ToString());
+        var reasons = FormatDecisionCounts(result.Decisions, decision => decision.Reason);
+        return $"STORAGE_RETENTION policyVersion={EvidenceRetentionPolicy.Version} sweepId={result.SweepId} status={status} decisions={result.Decisions.Count} reclaimedBytes={reclaimedBytes} deferred={deferred} actions={actions} reasons={reasons}";
     }
 
     internal static void AppendArtifactRetentionReceipt(
@@ -231,11 +239,19 @@ internal static class RunEventMaintenanceCadence
             EvidenceRetentionAction.DeferredLease or
             EvidenceRetentionAction.DeferredLive or
             EvidenceRetentionAction.DeferredLocked);
+        var reclaimedBytes = result.Decisions.Sum(decision => decision.BytesReclaimed);
+        var status = ArtifactRetentionStatus(result, reclaimedBytes, deferred ? 1 : 0);
         store.AppendAsync(new RunEventAppend(
             RunEventTypes.EvidenceRetention,
             GoalId: null,
             Operation: ArtifactRetentionOperation,
-            Status: deferred ? "Partial" : "Completed",
+            Status: status switch
+            {
+                "failed" => "Failed",
+                "partial-failed" => "Failed",
+                "partial" or "deferred" => "Partial",
+                _ => "Completed"
+            },
             Detail: FormatArtifactRetentionReceipt(result),
             PayloadJson: JsonSerializer.Serialize(new
             {
@@ -247,7 +263,7 @@ internal static class RunEventMaintenanceCadence
                 result.AcceptanceArtifactsDeleted,
                 result.PromptArtifactsDeleted,
                 result.GoalJournalsArchived,
-                reclaimedBytes = result.Decisions.Sum(decision => decision.BytesReclaimed),
+                reclaimedBytes,
                 decisionsTruncated = truncated,
                 totalDecisionCount = result.Decisions.Count,
                 decisions
@@ -255,6 +271,53 @@ internal static class RunEventMaintenanceCadence
             OccurredAt: occurredAt))
             .GetAwaiter()
             .GetResult();
+    }
+
+    private static string ArtifactRetentionStatus(
+        StorageRetentionResult result,
+        long reclaimedBytes,
+        int deferred)
+    {
+        if (result.Failed)
+        {
+            return reclaimedBytes > 0 ? "partial-failed" : "failed";
+        }
+
+        if (result.Decisions.Any(decision => decision.Action == EvidenceRetentionAction.DeferredLease))
+        {
+            return "deferred";
+        }
+
+        return deferred > 0 ? "partial" : "completed";
+    }
+
+    private static string FormatDecisionCounts(
+        IReadOnlyList<EvidenceRetentionDecision> decisions,
+        Func<EvidenceRetentionDecision, string> selector) =>
+        string.Join(",", decisions
+            .GroupBy(selector, StringComparer.Ordinal)
+            .OrderBy(group => group.Key, StringComparer.Ordinal)
+            .Select(group => $"{Sanitize(group.Key)}:{group.Count()}"));
+
+    private static bool HasUnresolvedArtifactRetentionFailure(
+        SqliteRunEventStore store,
+        DateTimeOffset? latestMaintenance)
+    {
+        try
+        {
+            var latestArtifact = store.ReadLatestAsync(
+                    RunEventTypes.EvidenceRetention,
+                    ArtifactRetentionOperation)
+                .GetAwaiter()
+                .GetResult();
+            return latestArtifact is not null &&
+                string.Equals(latestArtifact.Status, "Failed", StringComparison.OrdinalIgnoreCase) &&
+                (latestMaintenance is null || latestArtifact.OccurredAt >= latestMaintenance.Value);
+        }
+        catch
+        {
+            return false;
+        }
     }
 
     private static DateTimeOffset? LatestVacuumMarker(SqliteRunEventStore store)

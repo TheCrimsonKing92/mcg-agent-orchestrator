@@ -922,6 +922,8 @@ internal sealed class ConductorParallelAcceptanceAttemptCoordinator
         AcceptanceStableSlotExhaustionPolicy stableSlotExhaustionPolicy,
         ConductorParallelAcceptanceAttempt? reservedAttempt = null)
     {
+        using var artifactLease = StorageRetentionMaintenance.AcquireAttemptWriterLease(
+            Path.Combine(_rootDirectory, candidate.Goal.Id.Value));
         var attempt = reservedAttempt ?? CreateAttempt(
             candidate,
             policy,
@@ -954,7 +956,7 @@ internal sealed class ConductorParallelAcceptanceAttemptCoordinator
 
                 _attemptCompletionGateForTests.HoldForTests(
                     held,
-                    () => RunAttempt(held, candidate, policy, runAcceptance));
+                    () => RunAttemptWithArtifactLease(held, candidate, policy, runAcceptance));
                 return ConductorParallelAcceptanceAttemptDecision.Started(held);
             }
 
@@ -968,7 +970,7 @@ internal sealed class ConductorParallelAcceptanceAttemptCoordinator
                         return;
                     }
 
-                    RunAttempt(activeAttempt, candidate, policy, runAcceptance);
+                    RunAttemptWithArtifactLease(activeAttempt, candidate, policy, runAcceptance);
                 }));
             var launched = TryPersistOwnerProcess(attempt, launch.ProcessId);
             if (launched.Outcome == ConductorParallelAcceptanceAttemptOutcome.Running)
@@ -1024,12 +1026,15 @@ internal sealed class ConductorParallelAcceptanceAttemptCoordinator
         ConductorAutonomyPolicy policy,
         ConductorParallelAcceptanceRunAcceptance runAcceptance)
     {
-        RunAttempt(attempt, candidate, policy, runAcceptance);
+        RunAttemptWithArtifactLease(attempt, candidate, policy, runAcceptance);
     }
 
     internal static int RunOwnedProcess(string metadataPath)
     {
         ConductorParallelAcceptanceAttempt? attempt = null;
+        using var artifactLease = StorageRetentionMaintenance.AcquireAttemptWriterLease(
+            Path.GetDirectoryName(metadataPath) ?? throw new InvalidOperationException(
+                "acceptance attempt metadata path has no parent directory"));
         try
         {
             attempt = JsonSerializer.Deserialize<ConductorParallelAcceptanceAttempt>(
@@ -1145,6 +1150,18 @@ internal sealed class ConductorParallelAcceptanceAttemptCoordinator
 
             return 1;
         }
+    }
+
+    private void RunAttemptWithArtifactLease(
+        ConductorParallelAcceptanceAttempt attempt,
+        ConductorParallelAcceptanceCandidate candidate,
+        ConductorAutonomyPolicy policy,
+        ConductorParallelAcceptanceRunAcceptance runAcceptance)
+    {
+        using var artifactLease = StorageRetentionMaintenance.AcquireAttemptWriterLease(
+            Path.GetDirectoryName(attempt.MetadataPath) ?? throw new InvalidOperationException(
+                "acceptance attempt metadata path has no parent directory"));
+        RunAttempt(attempt, candidate, policy, runAcceptance);
     }
 
     internal static ConductorAutonomyPolicy ResolveAttemptPolicy(ConductorParallelAcceptanceAttempt attempt)

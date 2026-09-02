@@ -636,6 +636,31 @@ public sealed class RunEventStoreTests
         Assert.Equal(12, payload.RootElement.GetProperty("reclaimedBytes").GetInt64());
         Assert.False(payload.RootElement.GetProperty("decisionsTruncated").GetBoolean());
         Assert.Equal(2, payload.RootElement.GetProperty("decisions").GetArrayLength());
+        Assert.Contains("actions=DeferredLocked:1,Deleted:1", receipt.Detail, StringComparison.Ordinal);
+        Assert.Contains("reasons=exclusive-delete-failed:1,past-deletion-age:1", receipt.Detail, StringComparison.Ordinal);
+
+        var failedResult = result with
+        {
+            SweepId = "sweep-2",
+            Decisions =
+            [
+                result.Decisions[0],
+                new EvidenceRetentionDecision(
+                    EvidenceArtifactFamily.RunEvents,
+                    EvidenceRetentionAction.Failed,
+                    root,
+                    null,
+                    EvidenceOwnerResolution.Unrecorded,
+                    "sweep-failed",
+                    FailureExceptionType: nameof(IOException))
+            ]
+        };
+        RunEventMaintenanceCadence.AppendArtifactRetentionReceipt(store, failedResult, now.AddSeconds(1));
+        var failedReceipt = Assert.IsType<RunEventRecord>(await store.ReadLatestAsync(
+            RunEventTypes.EvidenceRetention,
+            RunEventMaintenanceCadence.ArtifactRetentionOperation));
+        Assert.Equal("Failed", failedReceipt.Status);
+        Assert.Contains("status=partial-failed", failedReceipt.Detail, StringComparison.Ordinal);
     }
 
     private static Task<RunEventRecord> AppendGoalOperationAsync(

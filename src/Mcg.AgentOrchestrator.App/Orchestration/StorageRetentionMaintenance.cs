@@ -41,7 +41,10 @@ internal sealed record StorageRetentionResult(
     int PromptArtifactsDeleted,
     int GoalJournalsArchived,
     string SweepId,
-    IReadOnlyList<EvidenceRetentionDecision> Decisions);
+    IReadOnlyList<EvidenceRetentionDecision> Decisions)
+{
+    public bool Failed => Decisions.Any(decision => decision.Action == EvidenceRetentionAction.Failed);
+}
 
 internal static partial class StorageRetentionMaintenance
 {
@@ -90,7 +93,8 @@ internal static partial class StorageRetentionMaintenance
         string orchestratorDirectory,
         string executionDirectory,
         IReadOnlyCollection<StorageRetentionGoal> goals,
-        DateTimeOffset now)
+        DateTimeOffset now,
+        Action? beforeGoalJournalArchiveForTests = null)
     {
         var decisions = new List<EvidenceRetentionDecision>();
         var sweepId = Guid.NewGuid().ToString("N");
@@ -119,24 +123,32 @@ internal static partial class StorageRetentionMaintenance
                 return new StorageRetentionResult(0, 0, 0, 0, 0, 0, sweepId, decisions);
             }
 
-            var worker = SweepWorkerArtifacts(logDirectory, goals, now, decisions);
-            var acceptance = SweepAcceptanceArtifacts(
-                orchestratorDirectory,
-                goals,
-                now,
-                decisions);
-            var prompts = SweepPrompts(orchestratorDirectory, goals, now, decisions);
-            RecordGoalEventPreservation(orchestratorDirectory, goals, decisions);
-            var journals = ArchiveGoalJournals(executionDirectory, goals, decisions);
-            return new StorageRetentionResult(
-                worker.Deleted,
-                worker.Compressed,
-                acceptance.Receipts,
-                acceptance.Deleted,
-                prompts,
-                journals,
-                sweepId,
-                decisions);
+            try
+            {
+                SweepWorkerArtifacts(logDirectory, goals, now, decisions);
+                SweepAcceptanceArtifacts(
+                    orchestratorDirectory,
+                    goals,
+                    now,
+                    decisions);
+                SweepPrompts(orchestratorDirectory, goals, now, decisions);
+                RecordGoalEventPreservation(orchestratorDirectory, goals, decisions);
+                beforeGoalJournalArchiveForTests?.Invoke();
+                ArchiveGoalJournals(executionDirectory, goals, decisions);
+            }
+            catch (Exception ex)
+            {
+                decisions.Add(new EvidenceRetentionDecision(
+                    EvidenceArtifactFamily.RunEvents,
+                    EvidenceRetentionAction.Failed,
+                    orchestratorDirectory,
+                    null,
+                    EvidenceOwnerResolution.Unrecorded,
+                    "sweep-failed",
+                    FailureExceptionType: ex.GetType().Name));
+            }
+
+            return BuildResult(sweepId, decisions);
         }
         finally
         {
@@ -153,6 +165,39 @@ internal static partial class StorageRetentionMaintenance
         var hash = Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(normalized)));
         return $"Local\\mcg-storage-retention-{hash[..24]}";
     }
+
+    internal static string AttemptLeaseNameFor(string goalDirectory)
+    {
+        var normalized = Path.GetFullPath(goalDirectory).ToUpperInvariant();
+        var hash = Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(normalized)));
+        return $"Local\\mcg-acceptance-artifacts-{hash[..24]}";
+    }
+
+    internal static IDisposable AcquireAttemptWriterLease(string goalDirectory) =>
+        MutexLease.Acquire(AttemptLeaseNameFor(goalDirectory));
+
+    private static StorageRetentionResult BuildResult(
+        string sweepId,
+        IReadOnlyList<EvidenceRetentionDecision> decisions) =>
+        new(
+            decisions.Count(decision =>
+                decision.Family == EvidenceArtifactFamily.DispatchLogs &&
+                decision.Action == EvidenceRetentionAction.Deleted),
+            decisions.Count(decision =>
+                decision.Family == EvidenceArtifactFamily.DispatchLogs &&
+                decision.Action == EvidenceRetentionAction.Compressed),
+            decisions.Count(decision => decision.Action == EvidenceRetentionAction.ReceiptWritten),
+            decisions.Count(decision =>
+                (decision.Family is EvidenceArtifactFamily.AcceptanceGateAttempts or EvidenceArtifactFamily.PreReviewEvidenceAttempts) &&
+                decision.Action == EvidenceRetentionAction.Deleted),
+            decisions.Count(decision =>
+                decision.Family == EvidenceArtifactFamily.Prompts &&
+                decision.Action == EvidenceRetentionAction.Deleted),
+            decisions.Count(decision =>
+                decision.Family == EvidenceArtifactFamily.GoalOperationJournals &&
+                decision.Reason == "retired-journal-archived"),
+            sweepId,
+            decisions);
 
     private static (int Deleted, int Compressed) SweepWorkerArtifacts(
         string logDirectory,
@@ -433,6 +478,19 @@ internal static partial class StorageRetentionMaintenance
         var candidates = new List<(FileInfo File, bool CountBound, string GoalId)>();
         foreach (var goalDirectory in Directory.EnumerateDirectories(root, "*", SearchOption.TopDirectoryOnly))
         {
+            using var attemptLease = MutexLease.TryAcquire(AttemptLeaseNameFor(goalDirectory));
+            if (attemptLease is null)
+            {
+                decisions.Add(new EvidenceRetentionDecision(
+                    family,
+                    EvidenceRetentionAction.DeferredLease,
+                    goalDirectory,
+                    null,
+                    EvidenceOwnerResolution.Unrecorded,
+                    "attempt-writer-lease-unavailable"));
+                continue;
+            }
+
             var goalId = Path.GetFileName(goalDirectory);
             var owners = goals.Where(goal => goal.GoalId.Equals(goalId, StringComparison.OrdinalIgnoreCase)).ToArray();
             if (owners.Length != 1)
@@ -949,5 +1007,80 @@ internal static partial class StorageRetentionMaintenance
     {
         try { return new FileInfo(path).Length; }
         catch (Exception ex) when (ex is IOException or UnauthorizedAccessException) { return 0; }
+    }
+
+    private sealed class MutexLease : IDisposable
+    {
+        private readonly Mutex _mutex;
+        private bool _ownsMutex;
+
+        private MutexLease(Mutex mutex, bool ownsMutex)
+        {
+            _mutex = mutex;
+            _ownsMutex = ownsMutex;
+        }
+
+        public static MutexLease Acquire(string name)
+        {
+            var mutex = new Mutex(false, name);
+            try
+            {
+                try
+                {
+                    mutex.WaitOne();
+                }
+                catch (AbandonedMutexException)
+                {
+                }
+
+                return new MutexLease(mutex, ownsMutex: true);
+            }
+            catch
+            {
+                mutex.Dispose();
+                throw;
+            }
+        }
+
+        public static MutexLease? TryAcquire(string name)
+        {
+            var mutex = new Mutex(false, name);
+            try
+            {
+                var ownsMutex = false;
+                try
+                {
+                    ownsMutex = mutex.WaitOne(0);
+                }
+                catch (AbandonedMutexException)
+                {
+                    ownsMutex = true;
+                }
+
+                if (!ownsMutex)
+                {
+                    mutex.Dispose();
+                    return null;
+                }
+
+                return new MutexLease(mutex, ownsMutex: true);
+            }
+            catch
+            {
+                mutex.Dispose();
+                throw;
+            }
+        }
+
+        public void Dispose()
+        {
+            if (_ownsMutex)
+            {
+                _mutex.ReleaseMutex();
+                _ownsMutex = false;
+            }
+
+            _mutex.Dispose();
+        }
     }
 }
