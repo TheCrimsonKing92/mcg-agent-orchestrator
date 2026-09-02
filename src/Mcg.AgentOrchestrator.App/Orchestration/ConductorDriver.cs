@@ -3061,12 +3061,22 @@ internal sealed partial class ConductorDriver
             fileScopes: [],
             branchHeadSha: candidateSha?.Trim(),
             mainHeadSha: null);
-        var attemptDecision = _focusedEvidenceAttemptCoordinator.EvaluateFocusedEvidence(
-            candidate,
-            policy,
-            request,
-            _runDualArmFocusedEvidence,
-            requestContext);
+        ConductorParallelAcceptanceAttemptDecision attemptDecision;
+        try
+        {
+            attemptDecision = _focusedEvidenceAttemptCoordinator.EvaluateFocusedEvidence(
+                candidate,
+                policy,
+                request,
+                _runDualArmFocusedEvidence,
+                requestContext);
+        }
+        catch (AcceptanceArtifactWriterLeaseBusyException ex)
+        {
+            decision = VerifyingFindingAutoRetryDecision.Hold(
+                $"Background {source} focused-evidence artifact writer is busy; retry on next conduct tick. {ex.Message}");
+            return false;
+        }
         evidenceAttempt = attemptDecision.Attempt;
         if (attemptDecision.Kind is
             ConductorParallelAcceptanceAttemptDecisionKind.Started or
@@ -4785,11 +4795,26 @@ internal sealed partial class ConductorDriver
             fileScopes: [],
             branchHeadSha: context.CandidateSha,
             mainHeadSha: null);
-        var attemptDecision = _focusedEvidenceAttemptCoordinator.EvaluateFocusedEvidence(
-            candidate,
-            policy,
-            context.FocusedRequest,
-            _runFocusedEvidence);
+        ConductorParallelAcceptanceAttemptDecision attemptDecision;
+        try
+        {
+            attemptDecision = _focusedEvidenceAttemptCoordinator.EvaluateFocusedEvidence(
+                candidate,
+                policy,
+                context.FocusedRequest,
+                _runFocusedEvidence);
+        }
+        catch (AcceptanceArtifactWriterLeaseBusyException ex)
+        {
+            result = MakeResult(
+                goal.Id.Value,
+                goalPrefix,
+                policy,
+                new ConductorAdvanceOutcome.Held(
+                    fromState,
+                    $"Background pre-review evidence artifact writer is busy; retry on next conduct tick. {ex.Message}"));
+            return true;
+        }
         if (attemptDecision.Kind is
             ConductorParallelAcceptanceAttemptDecisionKind.Started or
             ConductorParallelAcceptanceAttemptDecisionKind.Running)

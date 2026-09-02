@@ -22,6 +22,7 @@ public static class RunEventTypes
     public const string ConductorLifecycle = "conductor.lifecycle";
     public const string ConductorSupervision = "conductor.supervision";
     public const string RunEventMaintenance = "run-events.maintenance";
+    public const string EvidenceRetention = "retention.reclamation";
     public const string PostLandingCanary = "acceptance.post-landing-canary";
 }
 

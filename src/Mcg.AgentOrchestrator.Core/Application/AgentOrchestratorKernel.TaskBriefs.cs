@@ -48,6 +48,7 @@ public sealed partial class AgentOrchestratorKernel
         IReadOnlyList<ReviewFinding> state = [];
         List<string>? skipped = null;
         var latestFindingOccurrences = new Dictionary<string, DateTimeOffset>(StringComparer.Ordinal);
+        string? lastAcceptedReviewedCommit = null;
         foreach (var verification in goal.Tasks
             .Where(candidate => candidate.RequiredRole == role)
             .SelectMany(candidate => candidate.VerificationHistory)
@@ -71,18 +72,23 @@ public sealed partial class AgentOrchestratorKernel
             }
 
             var recordedViolation = verification.ReviewFindingContractViolation;
-            if (recordedViolation is not null &&
-                !ReviewFindingConvergence.IsRejectedCapResolutionRound(recordedViolation))
+            if (!ShouldReplayStoredReviewFindingRound(verification))
             {
-                (skipped ??= []).Add($"{recordedViolation.Code}: {recordedViolation.Message}");
+                (skipped ??= []).Add($"{recordedViolation!.Code}: {recordedViolation.Message}");
                 continue;
             }
 
             try
             {
-                state = recordedViolation is null
-                    ? ReviewFindingConvergence.ApplyRound(state, round)
-                    : ReviewFindingConvergence.ApplyRejectedCapResolutionRound(state, round, recordedViolation);
+                state = recordedViolation switch
+                {
+                    null => ReviewFindingConvergence.ApplyRound(state, round),
+                    { } rejected when ReviewFindingConvergence.IsRejectedCapResolutionRound(rejected) =>
+                        ReviewFindingConvergence.ApplyRejectedCapResolutionRound(state, round, rejected),
+                    { } rejected when ReviewFindingConvergence.IsRejectedIdentityTransitionRound(rejected) =>
+                        ReviewFindingConvergence.ApplyRejectedIdentityTransitionRound(state, round, rejected),
+                    _ => state
+                };
                 if (recordedViolation is not null)
                 {
                     (skipped ??= []).Add($"{recordedViolation.Code}: {recordedViolation.Message}");
@@ -90,15 +96,45 @@ public sealed partial class AgentOrchestratorKernel
 
                 foreach (var finding in round.Findings.Where(finding =>
                              recordedViolation is null ||
-                             !ReviewFindingConvergence.IsRejectedCapResolutionTransition(recordedViolation, finding.StableId)))
+                             (!ReviewFindingConvergence.IsRejectedCapResolutionTransition(recordedViolation, finding.StableId) &&
+                              !ReviewFindingConvergence.IsRejectedIdentityTransition(recordedViolation, finding.StableId))))
                 {
                     latestFindingOccurrences[finding.StableId] = verification.CompletedAt;
                 }
                 state = ApplyHumanInputSupersedeFindingResolutions(goal, state, latestFindingOccurrences);
+                if (!string.IsNullOrWhiteSpace(verification.ReviewedCommit))
+                {
+                    lastAcceptedReviewedCommit = verification.ReviewedCommit.Trim();
+                }
             }
             catch (ReviewFindingConvergenceException error)
             {
-                (skipped ??= []).Add($"{error.Code}: {error.Message}");
+                var replayError = error;
+                if (ReviewFindingConvergence.CanCanonicalizeIdentityTransitions(error.Violation) &&
+                    SameNonEmptyReviewedCommit(lastAcceptedReviewedCommit, verification.ReviewedCommit))
+                {
+                    try
+                    {
+                        state = ReviewFindingConvergence.ApplyCanonicalizedIdentityTransitionRound(
+                            state,
+                            round,
+                            error.Violation,
+                            out _);
+                        foreach (var finding in round.Findings)
+                        {
+                            latestFindingOccurrences[finding.StableId] = verification.CompletedAt;
+                        }
+                        state = ApplyHumanInputSupersedeFindingResolutions(goal, state, latestFindingOccurrences);
+                        lastAcceptedReviewedCommit = verification.ReviewedCommit!.Trim();
+                        continue;
+                    }
+                    catch (ReviewFindingConvergenceException canonicalizedError)
+                    {
+                        replayError = canonicalizedError;
+                    }
+                }
+
+                (skipped ??= []).Add($"{replayError.Code}: {replayError.Message}");
             }
         }
 
@@ -1263,6 +1299,7 @@ public sealed partial class AgentOrchestratorKernel
         }
 
         lines.Add("Actively check OPEN_ACTIVE_RECHECK, RESOLVED_CARRIED anchors listed in ROUND_DIFF_TOUCHED_ANCHORS, and net-new code. The touched-anchor set also authorizes a persistent open finding to keep its stable ID at the defect's current location. Carry every other resolved finding forward as resolved.");
+        lines.Add("Output contract: emit exactly one findings entry for every OPEN_ACTIVE_RECHECK stable_id (`resolved` with concrete closure evidence if fixed, otherwise `open`). Narrative does not update the convergence ledger; omission leaves the finding open.");
         lines.Add(string.Empty);
         return lines;
     }

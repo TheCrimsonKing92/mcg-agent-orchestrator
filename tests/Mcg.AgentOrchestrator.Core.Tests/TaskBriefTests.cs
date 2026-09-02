@@ -193,6 +193,14 @@ public sealed class TaskBriefTests
         "- B-1 | severity=blocking | src/B.cs::B.Run | carry forward; do not re-review unless this exact anchor was touched.",
         brief,
         StringComparison.Ordinal);
+    Assert.Contains(
+        "emit exactly one findings entry for every OPEN_ACTIVE_RECHECK stable_id",
+        brief,
+        StringComparison.Ordinal);
+    Assert.Contains(
+        "Narrative does not update the convergence ledger; omission leaves the finding open.",
+        brief,
+        StringComparison.Ordinal);
 }
 
     [Xunit.Fact(DisplayName = "AgentTaskRunner_prefers_bounded_source_survey_for_research_prompts")]

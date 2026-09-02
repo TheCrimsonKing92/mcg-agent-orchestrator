@@ -107,6 +107,8 @@ public sealed class AgentOutputDirectivesTests
             "End needs-work verdict prose with this exact standalone line immediately before WORKER_RESULT: `no other blocking findings exist in this diff`. Keep it outside `blockers`.";
         foreach (var requirements in new[] { complex, compact })
         {
+            Assert.Contains("Emit exactly one `findings` entry per OPEN_ACTIVE_RECHECK stable_id", requirements, StringComparison.Ordinal);
+            Assert.Contains("Narrative does not update the ledger; omission leaves it open", requirements, StringComparison.Ordinal);
             Assert.Contains("complete candidate diff supplied for the current round", requirements, StringComparison.Ordinal);
             Assert.Contains("enumerate every blocking finding", requirements, StringComparison.Ordinal);
             Assert.Contains("file:line", requirements, StringComparison.Ordinal);

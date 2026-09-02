@@ -205,6 +205,28 @@ public sealed class MtpTestRunnerScriptTests
         Xunit.Assert.Matches(@"-[0-9a-f]{16}\.trx$", fileName);
     }
 
+    [Xunit.Fact]
+    public void InitializeResultsDirectory_WritesAtomicOwnershipSidecar()
+    {
+        var module = Path.Combine(RepositoryRoot(), "scripts", "MtpTestRunner.psm1").Replace("'", "''", StringComparison.Ordinal);
+        var nonce = Guid.NewGuid().ToString("N");
+        var command = $"Import-Module '{module}' -Force; " +
+            $"$root = Join-Path (Get-DefaultMtpResultsRoot) 'sidecar-{nonce}'; " +
+            "try { $env:MCG_ACCEPTANCE_GATE_ATTEMPT_ID = 'attempt-123'; " +
+            "$dir = Initialize-MtpResultsDirectory -ResultsRoot $root -RunLabel 'ownership'; " +
+            "Get-Content -Raw (Join-Path $dir '.mtp-run-ownership.json') } " +
+            "finally { Remove-Item Env:MCG_ACCEPTANCE_GATE_ATTEMPT_ID -ErrorAction SilentlyContinue; Remove-Item -LiteralPath $root -Recurse -Force -ErrorAction SilentlyContinue }";
+
+        var result = RunPowerShellCommand(RepositoryRoot(), command);
+
+        Xunit.Assert.True(result.ExitCode == 0, result.Stdout + result.Stderr);
+        using var document = JsonDocument.Parse(result.Stdout.Trim());
+        Xunit.Assert.Equal(1, document.RootElement.GetProperty("schemaVersion").GetInt32());
+        Xunit.Assert.Equal("attempt-123", document.RootElement.GetProperty("attemptId").GetString());
+        Xunit.Assert.Equal("ownership", document.RootElement.GetProperty("runLabel").GetString());
+        Xunit.Assert.True(document.RootElement.GetProperty("ownerProcessId").GetInt32() > 0);
+    }
+
     [Xunit.Fact(DisplayName = "MTP_partition_validation_comes_from_manifest_and_precedes_build")]
     public void MtpPartitionValidationComesFromManifestAndPrecedesBuild()
     {

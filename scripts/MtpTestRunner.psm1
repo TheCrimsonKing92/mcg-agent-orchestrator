@@ -452,6 +452,37 @@ function Get-DefaultMtpResultsRoot {
     return Join-Path $localAppData 'Temp\Low\mcg-tests'
 }
 
+function Write-MtpRunOwnershipSidecar {
+    param(
+        [Parameter(Mandatory = $true)][string]$ResultsDirectory,
+        [Parameter(Mandatory = $true)][string]$RunLabel
+    )
+
+    $receiptPath = Join-Path $ResultsDirectory '.mtp-run-ownership.json'
+    $temporaryPath = $receiptPath + ".tmp-$([Guid]::NewGuid().ToString('N'))"
+    try {
+        $attemptId = [System.Environment]::GetEnvironmentVariable('MCG_ACCEPTANCE_GATE_ATTEMPT_ID')
+        if ([string]::IsNullOrWhiteSpace($attemptId)) {
+            $attemptId = 'unowned'
+        }
+        $receipt = [ordered]@{
+            schemaVersion = 1
+            attemptId = $attemptId
+            machineName = [System.Environment]::MachineName
+            ownerProcessId = $PID
+            createdAt = [DateTimeOffset]::UtcNow
+            runLabel = $RunLabel
+        }
+        [System.IO.File]::WriteAllText($temporaryPath, ($receipt | ConvertTo-Json -Compress))
+        Move-Item -LiteralPath $temporaryPath -Destination $receiptPath -ErrorAction Stop
+        return $true
+    }
+    catch {
+        Remove-Item -LiteralPath $temporaryPath -Force -ErrorAction SilentlyContinue
+        return $false
+    }
+}
+
 function Initialize-MtpResultsDirectory {
     param(
         [string]$ResultsRoot,
@@ -494,6 +525,7 @@ function Initialize-MtpResultsDirectory {
         Remove-Item -LiteralPath $runDirectory -Recurse -Force -ErrorAction Stop
         throw "Results root '$resolvedRoot' is too long for bounded MTP TRX paths. Choose a shorter directory beneath the Low-integrity-writable root."
     }
+    [void](Write-MtpRunOwnershipSidecar -ResultsDirectory $runDirectory -RunLabel $RunLabel)
     return $runDirectory
 }
 
