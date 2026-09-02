@@ -1334,10 +1334,13 @@ public sealed class DispatchExecutionTests
             "review-2", "C:\\repo", 0, round2, string.Empty, clock.UtcNow, WorkerResultPresent: true));
 
         Assert.Equal(WorkTaskStatus.Failed, reviewer.Status);
+        var violation = Assert.IsType<ReviewFindingContractViolation>(
+            reviewer.LastVerification!.ReviewFindingContractViolation);
+        Assert.Equal(ReviewFindingConvergence.OmittedOpenFindingViolationCode, violation.Code);
         Assert.Contains(goal.Timeline, evt =>
             evt.TaskId == reviewer.Id &&
             evt.Kind == ProgressKind.TaskFailed &&
-            evt.Message.Contains("verdict rejected", StringComparison.Ordinal) &&
+            evt.Message.Contains("structured findings invalid", StringComparison.Ordinal) &&
             evt.Message.Contains("F-1", StringComparison.Ordinal));
     }
 
@@ -1940,7 +1943,7 @@ public sealed class DispatchExecutionTests
         kernel.RecordDispatchBaseCommit(goal.Id, reviewer.Id, "same-commit");
         var moved = StructuredReviewerResult(
             "pass",
-            """[{"stable_id":"A-1","state":"open","location":{"file":"src/B.cs","region":"B.Run","hunk":"guard"},"description":"Readability suggestion.","severity":"advisory"}]""",
+            """[{"stable_id":"A-1","state":"open","location":{"file":"src/B.cs","region":"B.Run","hunk":"guard"},"description":"Readability suggestion.","severity":"advisory"},{"stable_id":"A-2","state":"open","location":{"file":"src/C.cs","region":"C.Run"},"description":"Second suggestion.","severity":"advisory"}]""",
             "none");
 
         kernel.RecordDispatchExecutionResult(goal.Id, reviewer.Id, new TaskVerificationRecord(
@@ -1950,7 +1953,8 @@ public sealed class DispatchExecutionTests
         Assert.Null(reviewer.LastVerification!.ReviewFindingContractViolation);
         Assert.Equal(
             new ReviewFindingLocation("src/A.cs", "A.Run", "guard"),
-            Assert.Single(reviewer.LastVerification.MergedReviewFindings!).Location);
+            reviewer.LastVerification.MergedReviewFindings!.Single(finding => finding.StableId == "A-1").Location);
+        Assert.Contains(reviewer.LastVerification.MergedReviewFindings, finding => finding.StableId == "A-2");
         Assert.Contains(goal.Timeline, evt =>
             evt.TaskId == reviewer.Id &&
             evt.Kind == ProgressKind.TaskNote &&
@@ -1958,6 +1962,15 @@ public sealed class DispatchExecutionTests
             evt.Message.Contains("canonical_stable_id=A-1", StringComparison.Ordinal));
         Assert.DoesNotContain(goal.Timeline, evt =>
             evt.TaskId == reviewer.Id && evt.Kind == ProgressKind.TaskFailed);
+
+        clock.Advance();
+        kernel.RetryTask(goal.Id, reviewer.Id, "recheck canonicalized round");
+        var nextBrief = kernel.BuildTaskBrief(goal.Id, reviewer.Id).Content;
+        Assert.Contains("OPEN_ACTIVE_RECHECK count=2", nextBrief, StringComparison.Ordinal);
+        Assert.Contains(
+            "- A-2 | severity=advisory | src/C.cs::C.Run | Second suggestion.",
+            nextBrief,
+            StringComparison.Ordinal);
     }
 
     [Xunit.Fact(DisplayName = "RecordDispatchExecutionResult_canonicalized_identity_reentry_records_untouched_reopen")]
@@ -2139,6 +2152,15 @@ public sealed class DispatchExecutionTests
         Assert.Equal(
             ReviewFindingConvergence.IdentityMovedViolationCode,
             restoredReviewer.LastVerification.ReviewFindingContractViolation?.Code);
+
+        clock.Advance();
+        kernel.RetryTask(goal.Id, reviewer.Id, "recheck salvaged identity round");
+        var nextBrief = kernel.BuildTaskBrief(goal.Id, reviewer.Id).Content;
+        Assert.Contains("OPEN_ACTIVE_RECHECK count=2", nextBrief, StringComparison.Ordinal);
+        Assert.Contains(
+            "- A-2 | severity=advisory | src/C.cs::C.Run | Second suggestion.",
+            nextBrief,
+            StringComparison.Ordinal);
     }
 
     [Xunit.Fact(DisplayName = "RecordDispatchExecutionResult_canonicalized_identity_is_recorded_as_a_note")]

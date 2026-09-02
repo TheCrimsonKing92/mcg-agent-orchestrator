@@ -256,6 +256,44 @@ public sealed class WorkerResultBlockersTests
         Assert.Equal(carried, Assert.Single(result));
     }
 
+    [Xunit.Fact(DisplayName = "ReviewFindingConvergence_rejects_pass_that_omits_open_stable_ids")]
+    public void ReviewFindingConvergenceRejectsPassThatOmitsOpenStableIds()
+    {
+        var open = new ReviewFinding(
+            "F-1",
+            ReviewFindingState.Open,
+            new ReviewFindingLocation("src/A.cs", "A.Run", "guard"),
+            "Missing guard.");
+        var resolved = new ReviewFinding(
+            "F-2",
+            ReviewFindingState.Resolved,
+            new ReviewFindingLocation("src/B.cs", "B.Run"),
+            "Closed issue.");
+
+        var error = Assert.Throws<ReviewFindingConvergenceException>(() =>
+            ReviewFindingConvergence.ValidateExplicitOpenFindingCoverage(
+                [open, resolved],
+                new ReviewFindingRound([], [])));
+
+        Assert.Equal(ReviewFindingConvergence.OmittedOpenFindingViolationCode, error.Code);
+        var mismatch = Assert.Single(error.Violation.IdentityMismatches!);
+        Assert.Equal("F-1", mismatch.PriorStableId);
+        Assert.Equal("<omitted>", mismatch.SubmittedStableId);
+    }
+
+    [Xunit.Fact(DisplayName = "ReviewFindingConvergence_accepts_explicit_open_id_after_exact_anchor_canonicalization")]
+    public void ReviewFindingConvergenceAcceptsExplicitOpenIdAfterExactAnchorCanonicalization()
+    {
+        var anchor = new ReviewFindingLocation("src/A.cs", "A.Run", "guard");
+        var open = new ReviewFinding("F-1", ReviewFindingState.Open, anchor, "Missing guard.");
+        var submitted = new ReviewFinding("F-NEW", ReviewFindingState.Resolved, anchor, "Guard added.");
+
+        ReviewFindingConvergence.ValidateExplicitOpenFindingCoverage(
+            [open],
+            new ReviewFindingRound([submitted], []),
+            [new ReviewFindingIdentityCanonicalization("F-1", "F-NEW", anchor)]);
+    }
+
     [Xunit.Fact(DisplayName = "ReviewFindingConvergence_allows_open_set_growth_from_a_new_identity_at_a_new_anchor")]
     public void ReviewFindingConvergenceAllowsOpenSetGrowthFromNewIdentityAtNewAnchor()
     {

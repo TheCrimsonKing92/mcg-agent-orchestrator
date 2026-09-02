@@ -568,6 +568,7 @@ public static class ReviewFindingConvergence
     public const string NeedsWorkWithoutOpenFindingsViolationCode = "ERR_REVIEW_NEEDS_WORK_WITHOUT_OPEN_FINDINGS";
     public const string NoOpenFindingsForTargetViolationCode = "ERR_REVIEW_NO_OPEN_FINDINGS_FOR_TARGET";
     public const string UnprovenResolutionAtCapViolationCode = "ERR_REVIEW_FINDING_UNPROVEN_RESOLUTION_AT_CAP";
+    public const string OmittedOpenFindingViolationCode = "ERR_REVIEW_FINDING_OPEN_ID_OMITTED";
 
     public const string MissingReviewRetryCapReceiptViolationCode = "ERR_REVIEW_FINDING_MISSING_CAP_RECEIPT";
 
@@ -682,6 +683,60 @@ public static class ReviewFindingConvergence
         return merged
             .OrderBy(finding => finding.StableId, StringComparer.Ordinal)
             .ToArray();
+    }
+
+    public static void ValidateExplicitOpenFindingCoverage(
+        IReadOnlyList<ReviewFinding> previous,
+        ReviewFindingRound nextRound,
+        IReadOnlyList<ReviewFindingIdentityCanonicalization>? canonicalizations = null)
+    {
+        ArgumentNullException.ThrowIfNull(previous);
+        ArgumentNullException.ThrowIfNull(nextRound);
+
+        var submittedIds = nextRound.Findings
+            .Select(finding => finding.StableId)
+            .ToHashSet(StringComparer.Ordinal);
+        foreach (var canonicalization in canonicalizations ?? [])
+        {
+            submittedIds.Add(canonicalization.PriorStableId);
+        }
+        var omitted = previous
+            .Where(finding =>
+                finding.State == ReviewFindingState.Open &&
+                !submittedIds.Contains(finding.StableId))
+            .OrderBy(finding => finding.StableId, StringComparer.Ordinal)
+            .ToArray();
+        if (omitted.Length == 0)
+        {
+            return;
+        }
+
+        var message =
+            $"Reviewer pass omitted OPEN_ACTIVE_RECHECK stable_id(s): {string.Join(", ", omitted.Select(finding => finding.StableId))}. " +
+            "Every prior open ID requires an explicit open or resolved findings entry; narrative and omission do not update the ledger.";
+        var mismatches = omitted
+            .Select(finding => new ReviewFindingIdentityMismatch(
+                OmittedOpenFindingViolationCode,
+                message,
+                finding.StableId,
+                "<omitted>",
+                finding.Location,
+                finding.Location))
+            .ToArray();
+        var first = omitted[0];
+        throw new ReviewFindingConvergenceException(
+            OmittedOpenFindingViolationCode,
+            CountOpen(previous),
+            CountOpen(nextRound.Findings),
+            message,
+            new ReviewFindingContractViolation(
+                OmittedOpenFindingViolationCode,
+                message,
+                first.StableId,
+                "<omitted>",
+                first.Location,
+                first.Location,
+                mismatches));
     }
 
     internal static bool IsRejectedCapResolutionRound(ReviewFindingContractViolation violation) =>
