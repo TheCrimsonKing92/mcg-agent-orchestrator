@@ -453,7 +453,7 @@ public sealed class StorageRetentionMaintenanceTests
     }
 
     [Xunit.Fact]
-    public void MtpRetention_TerminalOwnedAgedRun_IsDeletedByScheduledPolicy()
+    public async Task MtpRetention_TerminalOwnedAgedRun_IsDeletedByScheduledPolicy()
     {
         using var fixture = new RetentionFixture();
         using var localAppData = new EnvironmentVariableScope("LOCALAPPDATA", fixture.LocalApplicationDataDirectory);
@@ -463,14 +463,18 @@ public sealed class StorageRetentionMaintenanceTests
         fixture.WriteAttempt(goalDirectory, "mtp-old", ordinal: 1, failed: false, reconciled: true);
         fixture.WriteAttempt(goalDirectory, "mtp-final", ordinal: 2, failed: false, reconciled: true);
         var runDirectory = fixture.WriteMtpRun("mtp-old", Now.AddDays(-30));
-        var kernel = new AgentOrchestratorKernel();
-        var goal = kernel.CreateGoal(
-            new GoalId(GoalId),
-            "terminal MTP retention fixture",
-            [new TaskSpec(new TaskId(TaskId), "fixture task", AgentRole.Developer)]);
-        goal = kernel.CancelGoal(goal.Id, "fixture terminal state");
+        var repository = InfrastructureTestSupport.CreateMigratedStateRepository(workspace.SqliteStatePath);
+        await repository.SaveGoalSnapshotsAsync([
+            GoalSnapshotFor(GoalId, GoalStatus.Completed, WorkTaskStatus.Completed)
+        ]);
 
-        var result = StorageRetentionMaintenance.Run(workspace, [goal], Now);
+        var cadence = RunEventMaintenanceCadence.TryRunIfDue(
+            Path.Combine(fixture.ExecutionDirectory, "run-events-mtp-terminal.db"),
+            Path.Combine(fixture.LogDirectory, "mtp-terminal-conduct.jsonl"),
+            () => Now,
+            workspace: workspace,
+            mtpResultsRootOverride: fixture.MtpResultsRoot);
+        var result = Assert.IsType<StorageRetentionResult>(cadence.ArtifactRetention);
 
         Assert.False(Directory.Exists(runDirectory));
         Assert.Contains(result.Decisions, decision =>
@@ -480,7 +484,7 @@ public sealed class StorageRetentionMaintenanceTests
     }
 
     [Xunit.Fact]
-    public void MtpRetention_NonTerminalOwner_IsPreservedWithDecision()
+    public async Task MtpRetention_NonTerminalOwner_IsPreservedWithDecision()
     {
         using var fixture = new RetentionFixture();
         using var localAppData = new EnvironmentVariableScope("LOCALAPPDATA", fixture.LocalApplicationDataDirectory);
@@ -489,13 +493,18 @@ public sealed class StorageRetentionMaintenanceTests
         Directory.CreateDirectory(goalDirectory);
         fixture.WriteAttempt(goalDirectory, "mtp-active", ordinal: 1, failed: false, reconciled: true);
         var runDirectory = fixture.WriteMtpRun("mtp-active", Now.AddDays(-30));
-        var kernel = new AgentOrchestratorKernel();
-        var goal = kernel.CreateGoal(
-            new GoalId(GoalId),
-            "active MTP retention fixture",
-            [new TaskSpec(new TaskId(TaskId), "fixture task", AgentRole.Developer)]);
+        var repository = InfrastructureTestSupport.CreateMigratedStateRepository(workspace.SqliteStatePath);
+        await repository.SaveGoalSnapshotsAsync([
+            GoalSnapshotFor(GoalId, GoalStatus.Active, WorkTaskStatus.Running)
+        ]);
 
-        var result = StorageRetentionMaintenance.Run(workspace, [goal], Now);
+        var cadence = RunEventMaintenanceCadence.TryRunIfDue(
+            Path.Combine(fixture.ExecutionDirectory, "run-events-mtp-active.db"),
+            Path.Combine(fixture.LogDirectory, "mtp-active-conduct.jsonl"),
+            () => Now,
+            workspace: workspace,
+            mtpResultsRootOverride: fixture.MtpResultsRoot);
+        var result = Assert.IsType<StorageRetentionResult>(cadence.ArtifactRetention);
 
         Assert.True(Directory.Exists(runDirectory));
         Assert.Contains(result.Decisions, decision =>
@@ -582,10 +591,17 @@ public sealed class StorageRetentionMaintenanceTests
 
         Assert.False(File.Exists(deletedPath));
         var retention = Assert.IsType<StorageRetentionResult>(result.ArtifactRetention);
+        Assert.True(result.Failed);
+        Assert.True(retention.Failed);
         Assert.Contains(retention.Decisions, decision =>
             decision.Action == EvidenceRetentionAction.Deleted && decision.Path == deletedPath);
-        Assert.Contains("storage-retention-sweep", File.ReadAllText(conductLogPath), StringComparison.Ordinal);
-        Assert.Contains("policyVersion=", File.ReadAllText(conductLogPath), StringComparison.Ordinal);
+        Assert.Contains(retention.Decisions, decision =>
+            decision.Action == EvidenceRetentionAction.Failed &&
+            decision.Reason == "receipt-persistence-failed");
+        var conductLog = File.ReadAllText(conductLogPath);
+        Assert.Contains("storage-retention-sweep", conductLog, StringComparison.Ordinal);
+        Assert.Contains("policyVersion=", conductLog, StringComparison.Ordinal);
+        Assert.Contains("status=partial-failed", conductLog, StringComparison.Ordinal);
     }
 
     [Xunit.Fact(DisplayName = "GoalOperationJournal_archive_is_skipped_by_ReadAll")]

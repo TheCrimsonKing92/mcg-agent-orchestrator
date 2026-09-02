@@ -82,7 +82,21 @@ internal static class RunEventMaintenanceCadence
                 var artifactReceipt = FormatArtifactRetentionReceipt(artifactRetention);
                 Console.WriteLine(artifactReceipt);
                 journal.AppendRequired("storage-retention-sweep", null, artifactReceipt, now);
-                AppendArtifactRetentionReceipt(store, artifactRetention, now);
+                try
+                {
+                    AppendArtifactRetentionReceipt(store, artifactRetention, now);
+                }
+                catch (Exception ex)
+                {
+                    artifactRetention = WithReceiptPersistenceFailure(
+                        artifactRetention,
+                        runEventStorePath,
+                        ex);
+                    var failedReceipt = FormatArtifactRetentionReceipt(artifactRetention);
+                    Console.WriteLine(failedReceipt);
+                    journal.AppendRequired("storage-retention-sweep", null, failedReceipt, now);
+                    throw;
+                }
             }
             if (!result.Deferred)
             {
@@ -275,6 +289,23 @@ internal static class RunEventMaintenanceCadence
             .GetAwaiter()
             .GetResult();
     }
+
+    private static StorageRetentionResult WithReceiptPersistenceFailure(
+        StorageRetentionResult result,
+        string runEventStorePath,
+        Exception exception) =>
+        result with
+        {
+            Decisions = result.Decisions.Append(new EvidenceRetentionDecision(
+                    EvidenceArtifactFamily.RunEvents,
+                    EvidenceRetentionAction.Failed,
+                    Path.GetFullPath(runEventStorePath),
+                    null,
+                    EvidenceOwnerResolution.Unrecorded,
+                    "receipt-persistence-failed",
+                    FailureExceptionType: exception.GetType().Name))
+                .ToArray()
+        };
 
     private static string ArtifactRetentionStatus(
         StorageRetentionResult result,

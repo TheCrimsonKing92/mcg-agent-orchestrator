@@ -334,6 +334,7 @@ internal sealed class ConductorParallelAcceptanceAttemptCoordinator
     private readonly Action<ConductorParallelAcceptanceAttempt, string>? _heartbeatWritten;
     private readonly ConductorParallelAcceptanceAttemptCompletionGateForTests? _attemptCompletionGateForTests;
     private readonly Action<ConductorParallelAcceptanceAttempt, string>? _cleanupObservedForTests;
+    private readonly Action? _attemptWriterLeaseAcquiringForTests;
     private readonly Func<ConductorParallelAcceptanceAttempt, ConductorParallelAcceptanceCandidate, DotnetBuildEnvironmentLease?> _acquireStableSlotLease;
     private readonly TimeSpan _buildPermitBusyTimeout;
     private readonly Action<TimeSpan>? _buildPermitSleep;
@@ -356,7 +357,8 @@ internal sealed class ConductorParallelAcceptanceAttemptCoordinator
         ConductEventLogWriter? conductEventLogWriter = null,
         TimeProvider? timeProvider = null,
         TimeSpan? buildPermitBusyTimeout = null,
-        Action<TimeSpan>? buildPermitSleep = null)
+        Action<TimeSpan>? buildPermitSleep = null,
+        Action? attemptWriterLeaseAcquiringForTests = null)
     {
         if (runInline && attemptCompletionGateForTests is not null)
         {
@@ -378,6 +380,7 @@ internal sealed class ConductorParallelAcceptanceAttemptCoordinator
         _heartbeatWritten = heartbeatWritten;
         _attemptCompletionGateForTests = attemptCompletionGateForTests;
         _cleanupObservedForTests = cleanupObservedForTests;
+        _attemptWriterLeaseAcquiringForTests = attemptWriterLeaseAcquiringForTests;
         _acquireStableSlotLease = acquireStableSlotLease ?? AcquireAttemptStableSlotLease;
         _conductEventLogWriter = conductEventLogWriter;
         _buildPermitBusyTimeout = buildPermitBusyTimeout ?? DotnetBuildEnvironmentManager.DefaultSlotBusyPollTimeout;
@@ -514,6 +517,9 @@ internal sealed class ConductorParallelAcceptanceAttemptCoordinator
         ConductorFocusedEvidenceRequestContext? requestContext,
         AcceptanceStableSlotExhaustionPolicy stableSlotExhaustionPolicy)
     {
+        _attemptWriterLeaseAcquiringForTests?.Invoke();
+        using var artifactLease = StorageRetentionMaintenance.AcquireAttemptWriterLease(
+            Path.Combine(_rootDirectory, candidate.Goal.Id.Value));
         var current = TryReadLatest(candidate.Goal.Id.Value);
         if (current is not null && IsLiveInvalidatedAttempt(current))
         {
@@ -922,8 +928,6 @@ internal sealed class ConductorParallelAcceptanceAttemptCoordinator
         AcceptanceStableSlotExhaustionPolicy stableSlotExhaustionPolicy,
         ConductorParallelAcceptanceAttempt? reservedAttempt = null)
     {
-        using var artifactLease = StorageRetentionMaintenance.AcquireAttemptWriterLease(
-            Path.Combine(_rootDirectory, candidate.Goal.Id.Value));
         var attempt = reservedAttempt ?? CreateAttempt(
             candidate,
             policy,

@@ -326,6 +326,87 @@ public sealed class ConductorEvidenceAttemptLifecycleTests
     }
 
     [Fact]
+    public async Task SupersedingAttempt_WaitsForWriterLeaseBeforeMutatingArtifacts()
+    {
+        var root = CreateTempDirectory();
+        try
+        {
+            var attemptRoot = Path.Combine(root, "attempts");
+            var kernel = new AgentOrchestratorKernel();
+            var goal = kernel.CreateGoal("Serialize focused evidence replacement with retention");
+            var firstCandidate = ConductorParallelAcceptanceCandidate.Create(goal, 0, [], "branch-1", "main-1");
+            var firstCoordinator = new ConductorParallelAcceptanceAttemptCoordinator(
+                attemptRoot,
+                launchOwnedProcess: _ => new ConductorParallelAcceptanceOwnedProcessLaunchResult(7113),
+                acquireStableSlotLease: (_, _) => null);
+            var first = firstCoordinator.EvaluateFocusedEvidence(
+                firstCandidate,
+                ConductorAutonomyPolicy.Permissive,
+                "run focused tests",
+                PassingEvidence);
+            firstCoordinator.RunAttemptForTests(
+                first.Attempt,
+                firstCandidate,
+                ConductorAutonomyPolicy.Permissive,
+                (attemptCandidate, _, _, _) => ConductorParallelAcceptanceRunResult.Focused(
+                    attemptCandidate,
+                    PassingEvidence(attemptCandidate.Goal, "run focused tests", null, CancellationToken.None)));
+
+            var goalDirectory = Path.Combine(attemptRoot, goal.Id.Value);
+            var sequencePath = Path.Combine(goalDirectory, "attempt-sequence.txt");
+            var sequenceBefore = File.ReadAllText(sequencePath);
+            using var holderAcquired = new ManualResetEventSlim();
+            using var holderRelease = new ManualResetEventSlim();
+            var holder = Task.Run(() =>
+            {
+                using var lease = StorageRetentionMaintenance.AcquireAttemptWriterLease(goalDirectory);
+                holderAcquired.Set();
+                if (!holderRelease.Wait(TimeSpan.FromSeconds(30)))
+                {
+                    throw new TimeoutException("Acceptance writer lease release signal was not observed.");
+                }
+            });
+            Assert.True(holderAcquired.Wait(TimeSpan.FromSeconds(30)), "Acceptance writer lease was not acquired.");
+
+            using var replacementAtLeaseBoundary = new ManualResetEventSlim();
+            var replacementCoordinator = new ConductorParallelAcceptanceAttemptCoordinator(
+                attemptRoot,
+                isProcessAlive: _ => false,
+                launchOwnedProcess: _ => new ConductorParallelAcceptanceOwnedProcessLaunchResult(7114),
+                acquireStableSlotLease: (_, _) => null,
+                attemptWriterLeaseAcquiringForTests: replacementAtLeaseBoundary.Set);
+            var replacementCandidate = ConductorParallelAcceptanceCandidate.Create(goal, 0, [], "branch-2", "main-1");
+            var replacementTask = Task.Run(() => replacementCoordinator.EvaluateFocusedEvidence(
+                replacementCandidate,
+                ConductorAutonomyPolicy.Permissive,
+                "run focused tests",
+                PassingEvidence));
+
+            string sequenceWhileLeaseHeld;
+            try
+            {
+                Assert.True(
+                    replacementAtLeaseBoundary.Wait(TimeSpan.FromSeconds(30)),
+                    "Replacement did not reach the acceptance writer lease boundary.");
+                sequenceWhileLeaseHeld = File.ReadAllText(sequencePath);
+            }
+            finally
+            {
+                holderRelease.Set();
+                await holder;
+            }
+
+            var replacement = await replacementTask;
+            Assert.Equal(sequenceBefore, sequenceWhileLeaseHeld);
+            Assert.NotEqual(first.Attempt.AttemptId, replacement.Attempt.AttemptId);
+        }
+        finally
+        {
+            Directory.Delete(root, recursive: true);
+        }
+    }
+
+    [Fact]
     public void HeldReason_RefreshesElapsedWithoutChangingHoldIdentity()
     {
         var root = CreateTempDirectory();
