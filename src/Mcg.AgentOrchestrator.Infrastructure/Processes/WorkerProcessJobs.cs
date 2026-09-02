@@ -91,6 +91,7 @@ internal sealed class RegisteredOwnedProcess : IDisposable
     internal StreamReader StandardOutput => Process.StandardOutput;
     internal StreamReader StandardError => Process.StandardError;
     internal OwnedChildStartMetadata StartMetadata { get; }
+    internal SpawnProcessIdentity? Identity => _registration.Identity;
     internal bool HasOpenNativeHandle =>
         _processHandle is { IsClosed: false, IsInvalid: false };
     internal bool IsDisposed => _process is null;
@@ -1648,7 +1649,8 @@ public static class WorkerProcessJobs
         Action<string>? emit = null)
     {
         ArgumentNullException.ThrowIfNull(results);
-        foreach (var result in results)
+        var materialized = results.ToArray();
+        foreach (var result in materialized)
         {
             var diagnostic = TempRootJanitor.FormatDiagnostic(result);
             try
@@ -1667,6 +1669,16 @@ public static class WorkerProcessJobs
                 Debug.WriteLine(
                     $"[WorkerProcessJobs] Failed to emit temp-root reap receipt: {ex.GetType().Name}");
             }
+        }
+
+        try
+        {
+            TempRootApparatusLossReceiptStore.RecordDeletedOwners(materialized);
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+        {
+            Debug.WriteLine(
+                $"[WorkerProcessJobs] Failed to persist typed temp-root receipt: {ex.GetType().Name}");
         }
     }
 

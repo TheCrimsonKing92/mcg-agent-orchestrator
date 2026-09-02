@@ -41,7 +41,9 @@ public sealed record AcceptanceCheckResult(
     string? GateHeartbeatPath = null,
     AcceptanceFailureCauseEvidence? FailureCauseEvidence = null,
     string? TestProjectPath = null,
-    IReadOnlyList<AcceptanceTestFailureAttribution>? FailingTestAttributions = null);
+    IReadOnlyList<AcceptanceTestFailureAttribution>? FailingTestAttributions = null,
+    int? ChildProcessId = null,
+    DateTimeOffset? ChildProcessStartedAt = null);
 
 public enum AcceptanceTestFailureOrigin
 {
@@ -237,6 +239,7 @@ public static class AcceptanceFailureClassifications
     public const string FocusedSelectionReceiptUnreadable = "focused-selection-receipt-unreadable";
     public const string SeededRepositoryProcessOutputApparatus = "seeded-repository-process-output-apparatus";
     public const string SeededRepositoryApparatus = "seeded-repository-apparatus";
+    public const string SharedGateApparatusInvalidated = "shared-gate-apparatus-invalidated";
 
     public static bool IsEnvironmentalApparatus(string? classification) =>
         classification is GateEnvironmentInterference or
@@ -244,7 +247,8 @@ public static class AcceptanceFailureClassifications
             FocusedSelectionApparatusFailure or
             FocusedSelectionReceiptUnreadable or
             SeededRepositoryProcessOutputApparatus or
-            SeededRepositoryApparatus;
+            SeededRepositoryApparatus or
+            SharedGateApparatusInvalidated;
 }
 
 public enum FocusedEvidenceRejectionCode
@@ -398,7 +402,9 @@ public sealed class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
         bool ResourceAccountingExpected = false,
         long StdoutBytes = 0,
         long StderrBytes = 0,
-        string? Stderr = null);
+        string? Stderr = null,
+        int? ChildProcessId = null,
+        DateTimeOffset? ChildProcessStartedAt = null);
 
     private static readonly Regex TestAttrPattern = new(
         @"^\s*\[\s*(?:Xunit\.)?(?:Fact|Theory)\s*(?:\(|,|\])",
@@ -620,8 +626,16 @@ public sealed class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(prefix);
         var previous = CurrentAcceptanceAttemptPrefix.Value;
-        CurrentAcceptanceAttemptPrefix.Value = Path.GetFullPath(prefix);
-        return new RestoreAction(() => CurrentAcceptanceAttemptPrefix.Value = previous);
+        var resolvedPrefix = Path.GetFullPath(prefix);
+        CurrentAcceptanceAttemptPrefix.Value = resolvedPrefix;
+        var receiptScope = TempRootApparatusLossReceiptStore.PushScope(
+            Path.GetFileName(resolvedPrefix.TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar)),
+            TempRootApparatusLossReceiptStore.ResolvePath(resolvedPrefix));
+        return new RestoreAction(() =>
+        {
+            receiptScope.Dispose();
+            CurrentAcceptanceAttemptPrefix.Value = previous;
+        });
     }
 
     private static ManagedRunEnvironmentScope PushManagedRunEnvironmentScope()
@@ -796,7 +810,9 @@ public sealed class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
                     ResolveGitScalar(path, "rev-parse", "HEAD"),
                 CurrentAcceptanceAttemptId,
                 () => ComputeEffectiveAcceptanceManifestIdentity(effectiveChecks),
-                () => EngineSettings.EnforceStructuralCoverage));
+                () => EngineSettings.EnforceStructuralCoverage,
+                () => TempRootApparatusLossReceiptStore.Read(
+                    TempRootApparatusLossReceiptStore.ResolvePath(AcceptanceAttemptResultsPrefix))));
         var dotnetTestBuildPhase = GateUsesStableSlot(stableSlotIndex, stableSlotLease)
             ? CreateDotnetTestBuildPhase(worktreePath, effectiveChecks, changedFiles, policyShardPlan)
             : null;
@@ -1950,7 +1966,9 @@ public sealed class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
             }
         }
 
-        return new CheckBatchResult(results, retried);
+        return new CheckBatchResult(
+            cacheContext?.ApplySharedApparatusInvalidation(results) ?? results,
+            retried);
     }
 
     private async Task<CheckBatchResult> RunInfrastructureShardBatchAsync(
@@ -1997,6 +2015,7 @@ public sealed class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
         var activeShards = new List<(Task Task, IReadOnlyList<string> ResourceKeys)>();
         var shardConcurrency = new GateShardConcurrencyCounter();
         var failures = new List<Exception>();
+        using var sharedApparatusCancellation = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
 
         async Task RunShardAsync(IndexedShard shard)
         {
@@ -2017,7 +2036,7 @@ public sealed class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
                 worker.SlotIndex,
                 worker.Lease,
                 worker.BuildPhase,
-                cancellationToken,
+                sharedApparatusCancellation.Token,
                 shardResultsDirectory).ConfigureAwait(false);
             shardClock.Stop();
             outcomes[shard.Index] = new ShardRunOutcome(run.Result, run.Retried);
@@ -2079,7 +2098,11 @@ public sealed class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
             }
             catch (Exception exception)
             {
-                failures.Add(exception);
+                if (exception is not OperationCanceledException ||
+                    cacheContext?.SharedApparatusInvalidation is null)
+                {
+                    failures.Add(exception);
+                }
             }
             finally
             {
@@ -2092,6 +2115,12 @@ public sealed class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
                     }
                 }
             }
+
+            if (cacheContext?.SharedApparatusInvalidation is not null)
+            {
+                pendingShards.Clear();
+                await sharedApparatusCancellation.CancelAsync().ConfigureAwait(false);
+            }
         }
 
         if (failures.Count > 0)
@@ -2103,7 +2132,8 @@ public sealed class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
         var wallElapsed = _timeProvider.GetElapsedTime(wallClock);
         AcceptanceGatePhaseAccountant.RecordCurrentLaneExecution(wallElapsed);
         AcceptanceGatePhaseAccountant.TransitionCurrent(AcceptanceGatePhaseNames.CheckExecution);
-        if (outcomes.Any(outcome => outcome is null))
+        if (outcomes.Any(outcome => outcome is null) &&
+            cacheContext?.SharedApparatusInvalidation is null)
         {
             throw new InvalidOperationException(
                 "Concurrent infrastructure shard execution completed without a verdict for every shard.");
@@ -2116,9 +2146,11 @@ public sealed class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
             primarySlotIndex,
             wallElapsed,
             shardConcurrency.Count);
-        var completed = outcomes.Select(outcome => outcome!).ToArray();
+        var completed = outcomes.Where(outcome => outcome is not null).Select(outcome => outcome!).ToArray();
         return new CheckBatchResult(
-            completed.Select(outcome => outcome.Result).ToArray(),
+            cacheContext?.ApplySharedApparatusInvalidation(
+                completed.Select(outcome => outcome.Result).ToArray()) ??
+                completed.Select(outcome => outcome.Result).ToArray(),
             completed.Any(outcome => outcome.Retried));
     }
 
@@ -2225,6 +2257,7 @@ public sealed class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
         // testhost handle still settling). Re-run the failed partition ONCE with the same slot lease and
         // build phase; if the re-run passes, the failure was a flake and the partition is treated as
         // passed. A genuine red fails both runs. Bounded to a single retry, only for true partitions.
+        fresh = (cacheContext?.ObserveSharedApparatusEvidence(check, fresh.Result) ?? fresh.Result, fresh.Retried);
         if (cacheContext?.ShouldRerunWithinAttempt(check, fresh.Result.CompletionDecision) == true)
         {
             var original = fresh.Result;
@@ -4351,7 +4384,9 @@ public sealed class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
                 environment,
                 stableSlotIndex,
                 worktreePath,
-                CurrentTestTelemetryInvocation.Value?.Ordinal ?? 0)), false);
+                CurrentTestTelemetryInvocation.Value?.Ordinal ?? 0),
+            ChildProcessId: result.ChildProcessId,
+            ChildProcessStartedAt: result.ChildProcessStartedAt), false);
     }
 
     private async Task<(AcceptanceCheckResult Result, bool Retried)> RunManagedDotnetTestCheckAsync(
@@ -4773,7 +4808,9 @@ public sealed class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
                     environment,
                     stableSlotIndex,
                     worktreePath,
-                    CurrentTestTelemetryInvocation.Value?.Ordinal ?? 0)), lockRemediationApplied);
+                    CurrentTestTelemetryInvocation.Value?.Ordinal ?? 0),
+                ChildProcessId: result.ChildProcessId,
+                ChildProcessStartedAt: result.ChildProcessStartedAt), lockRemediationApplied);
         }
         catch (Exception ex) when (IsBuildArtifactIoException(ex) &&
             ex is not DotnetBuildSlotsBusyException and not BuildLockBlockedException)
@@ -4858,7 +4895,9 @@ public sealed class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
                     environment,
                     stableSlotIndex,
                     worktreePath,
-                    CurrentTestTelemetryInvocation.Value?.Ordinal ?? 0)), true);
+                    CurrentTestTelemetryInvocation.Value?.Ordinal ?? 0),
+                ChildProcessId: result.ChildProcessId,
+                ChildProcessStartedAt: result.ChildProcessStartedAt), true);
         }
         finally
         {
@@ -8374,6 +8413,8 @@ public sealed class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
             heartbeatContext?.BuildEnvironmentRoot);
 
         int? startedProcessId = null;
+        int? completedProcessId = null;
+        DateTimeOffset? completedProcessStartedAt = null;
         try
         {
             captureDrainCts = new CancellationTokenSource();
@@ -8414,6 +8455,8 @@ public sealed class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
 
             process = StartAcceptanceProcess(startInfo, workingDirectory, registrationIdentityReader);
             startedProcessId = process.Id;
+            completedProcessId = process.Id;
+            completedProcessStartedAt = process.Identity?.StartedAt;
             ObserveProcessCleanup(cleanupObserver, process.Id, process, "started");
             if (captureConnections is not null)
             {
@@ -8571,7 +8614,9 @@ public sealed class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
                 ResourceAccountingExpected: OperatingSystem.IsWindows(),
                 stdoutBytes,
                 stderrBytes,
-                stderr);
+                stderr,
+                completedProcessId,
+                completedProcessStartedAt);
         }
         finally
         {

@@ -323,6 +323,31 @@ public sealed class WorkerProcessJobsTests : IDisposable
         });
     }
 
+    [Xunit.Fact]
+    public void WorkerProcessJobs_MultipleDeletedOwners_PersistsOneTypedAttemptReceipt()
+    {
+        var root = Path.Combine(Path.GetTempPath(), "mcg-typed-reap-receipt", Guid.NewGuid().ToString("N"));
+        var receiptPath = Path.Combine(root, "receipts.jsonl");
+        var startedAt = DateTimeOffset.Parse("2026-09-02T12:00:00Z");
+        var first = AvailableProcess(4249) with { StartedAt = startedAt };
+        var second = AvailableProcess(4250) with { StartedAt = startedAt.AddSeconds(1) };
+        var results = new[]
+        {
+            DeletedResult(root, first),
+            DeletedResult(root, second)
+        };
+
+        using (TempRootApparatusLossReceiptStore.PushScope("attempt-a", receiptPath))
+        {
+            WorkerProcessJobs.EmitTempRootReapResults(results, _ => { });
+        }
+
+        var receipt = Assert.Single(TempRootApparatusLossReceiptStore.Read(receiptPath));
+        Assert.Equal("attempt-a", receipt.GateInvocationId);
+        Assert.Equal(root, receipt.SharedRoot);
+        Assert.Equal([4249, 4250], receipt.DestroyedOwners.Select(owner => owner.OwnerProcessId));
+    }
+
     private static ProcessInspectionRecord AvailableProcess(int processId) =>
         new(
             processId,
@@ -332,6 +357,27 @@ public sealed class WorkerProcessJobsTests : IDisposable
             StartedAt: DateTimeOffset.Parse("2026-08-30T12:00:00Z"),
             CommandLine: "testhost controlled-probe",
             ProcessInspectionStatus.Available);
+
+    private static TempRootJanitorReapResult DeletedResult(
+        string sharedRoot,
+        ProcessInspectionRecord owner)
+    {
+        var path = TempRootJanitor.BuildOwnedRootPath(sharedRoot, owner.ProcessId);
+        return new TempRootJanitorReapResult(
+            owner.ProcessId,
+            sharedRoot,
+            path,
+            "test-owned-deletion",
+            owner,
+            owner with { Status = ProcessInspectionStatus.Exited },
+            TempRootJanitorReapDisposition.Deleted,
+            new TempRootJanitorDeleteResult(
+                path,
+                TempRootJanitorDeleteStatus.Deleted,
+                null,
+                null,
+                0));
+    }
 
     private static ProcessInspectionRecord ExitedProcess(int processId) =>
         new(

@@ -82,7 +82,8 @@ internal sealed record AcceptancePartitionVerdictCacheOptions(
     Func<string, string?> ResolveVerifyingCommitSha,
     Func<string> ResolveAttemptId,
     Func<string> ResolveManifestIdentity,
-    Func<bool> EnforceStructuralCoverage);
+    Func<bool> EnforceStructuralCoverage,
+    Func<IReadOnlyList<TempRootApparatusLossReceiptV1>>? ResolveApparatusLossReceipts = null);
 
 internal sealed class AcceptancePartitionVerdictCache
 {
@@ -102,6 +103,9 @@ internal sealed class AcceptancePartitionVerdictCache
     private readonly List<PartitionVerdictExecutionReceipt> _executed = [];
     private readonly List<PartitionWithinAttemptRetryReceipt> _retries = [];
     private readonly List<PartitionVerdictRecord> _freshRecords = [];
+    private readonly List<(string PartitionId, AcceptanceCheckResult Result)> _failedPartitions = [];
+    private readonly Func<IReadOnlyList<TempRootApparatusLossReceiptV1>> _resolveApparatusLossReceipts;
+    private AcceptanceSharedApparatusInvalidation? _sharedApparatusInvalidation;
 
     private AcceptancePartitionVerdictCache(
         string goalId,
@@ -117,7 +121,8 @@ internal sealed class AcceptancePartitionVerdictCache
         int priorReuseAttemptCount,
         bool forceFullRerun,
         bool withinAttemptRerunEnabled,
-        Func<bool> enforceStructuralCoverage)
+        Func<bool> enforceStructuralCoverage,
+        Func<IReadOnlyList<TempRootApparatusLossReceiptV1>> resolveApparatusLossReceipts)
     {
         GoalId = goalId;
         CandidateTreeSha = candidateTreeSha;
@@ -133,6 +138,7 @@ internal sealed class AcceptancePartitionVerdictCache
         ForceFullRerun = forceFullRerun;
         _withinAttemptRerunEnabled = withinAttemptRerunEnabled;
         _enforceStructuralCoverage = enforceStructuralCoverage;
+        _resolveApparatusLossReceipts = resolveApparatusLossReceipts;
     }
 
     internal string GoalId { get; }
@@ -146,6 +152,10 @@ internal sealed class AcceptancePartitionVerdictCache
     internal int PartitionCount { get; }
     internal int PriorReuseAttemptCount { get; }
     internal bool ForceFullRerun { get; }
+    internal AcceptanceSharedApparatusInvalidation? SharedApparatusInvalidation
+    {
+        get { lock (_gate) return _sharedApparatusInvalidation; }
+    }
 
     internal static AcceptancePartitionVerdictCache? Create(AcceptancePartitionVerdictCacheOptions options)
     {
@@ -200,7 +210,8 @@ internal sealed class AcceptancePartitionVerdictCache
             priorReuseAttemptCount,
             forceFullRerun,
             options.WithinAttemptRerunEnabled,
-            options.EnforceStructuralCoverage);
+            options.EnforceStructuralCoverage,
+            options.ResolveApparatusLossReceipts ?? (() => []));
     }
 
     internal AcceptanceCheckResult? TryReuse(AcceptanceManifestCheck check)
@@ -230,8 +241,85 @@ internal sealed class AcceptancePartitionVerdictCache
         AcceptanceManifestCheck check,
         AcceptanceShardCompletionDecision? decision) =>
         _withinAttemptRerunEnabled &&
+        SharedApparatusInvalidation is null &&
         decision is { Passed: false, FailedPredicate: { Length: > 0 } } &&
         GoalAcceptanceVerifier.TryGetInfrastructurePartitionId(check, out _, out _);
+
+    internal AcceptanceCheckResult ObserveSharedApparatusEvidence(
+        AcceptanceManifestCheck check,
+        AcceptanceCheckResult result)
+    {
+        if (result.Passed ||
+            !TryBuildCacheKey(check, out var partitionId, out _, out _) ||
+            result.ChildProcessId is not > 0 ||
+            result.ChildProcessStartedAt is null)
+        {
+            return result;
+        }
+
+        lock (_gate)
+        {
+            _failedPartitions.RemoveAll(failure =>
+                failure.PartitionId.Equals(partitionId, StringComparison.OrdinalIgnoreCase));
+            _failedPartitions.Add((partitionId, result));
+            _sharedApparatusInvalidation ??=
+                AcceptanceSharedApparatusInvalidationClassifier.Classify(
+                    AttemptId,
+                    _failedPartitions,
+                    ReadApparatusLossReceipts());
+            return DecorateSharedApparatusFailure(result, _sharedApparatusInvalidation);
+        }
+    }
+
+    internal IReadOnlyList<AcceptanceCheckResult> ApplySharedApparatusInvalidation(
+        IReadOnlyList<AcceptanceCheckResult> results)
+    {
+        lock (_gate)
+        {
+            return _sharedApparatusInvalidation is null
+                ? results
+                : results.Select(result => DecorateSharedApparatusFailure(
+                    result,
+                    _sharedApparatusInvalidation)).ToArray();
+        }
+    }
+
+    private IReadOnlyList<TempRootApparatusLossReceiptV1> ReadApparatusLossReceipts()
+    {
+        try { return _resolveApparatusLossReceipts() ?? []; }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or System.Text.Json.JsonException)
+        {
+            return [];
+        }
+    }
+
+    private static AcceptanceCheckResult DecorateSharedApparatusFailure(
+        AcceptanceCheckResult result,
+        AcceptanceSharedApparatusInvalidation? invalidation)
+    {
+        if (invalidation is null ||
+            result.ChildProcessId is not { } processId ||
+            result.ChildProcessStartedAt is not { } processStartedAt ||
+            !invalidation.AffectedOwners.Any(owner =>
+                owner.OwnerProcessId == processId &&
+                owner.OwnerStartedAt == processStartedAt))
+        {
+            return result;
+        }
+
+        var evidence =
+            $"receipt_id={invalidation.FirstReceipt.ReceiptId} gate_invocation_id={invalidation.FirstReceipt.GateInvocationId} " +
+            $"affected_owners={string.Join(',', invalidation.AffectedOwners.Select(owner => owner.PartitionId))}";
+        return result with
+        {
+            FailureClassification = AcceptanceFailureClassifications.SharedGateApparatusInvalidated,
+            FailureCauseEvidence = new AcceptanceFailureCauseEvidence(
+                AcceptanceFailureCause.EnvironmentalApparatus,
+                evidence,
+                result.Name,
+                AcceptanceFailureClassifications.SharedGateApparatusInvalidated)
+        };
+    }
 
     internal bool ShouldRerunWithinAttempt(AcceptanceManifestCheck check, bool passed) =>
         ShouldRerunWithinAttempt(
