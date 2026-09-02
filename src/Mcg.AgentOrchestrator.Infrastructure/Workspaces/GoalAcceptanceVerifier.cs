@@ -1804,14 +1804,11 @@ public sealed class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
         var allShardsUseMtp = shardChecks.All(UsesMicrosoftTestingPlatform);
         if (allShardsUseMtp && primaryBuildPhase is not null)
         {
-            var prebuild = await EnsureDotnetTestBuildPhaseAsync(
-                primaryBuildPhase,
-                shardChecks[0],
-                worktreePath,
-                goalId,
-                primarySlotIndex,
-                primaryLease,
-                "acceptance-infrastructure-shards-prebuild",
+            var prebuild = await AcceptanceGateCancellationMonitor.RunAsync(
+                activeToken => EnsureDotnetTestBuildPhaseAsync(
+                    primaryBuildPhase, shardChecks[0], worktreePath, goalId, primarySlotIndex, primaryLease,
+                    "acceptance-infrastructure-shards-prebuild", activeToken),
+                CurrentGateCancellationProbe.Value,
                 cancellationToken).ConfigureAwait(false);
             if (prebuild.Run.Result.Passed)
             {
