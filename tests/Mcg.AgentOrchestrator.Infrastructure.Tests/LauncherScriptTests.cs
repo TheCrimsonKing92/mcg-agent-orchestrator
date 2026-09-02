@@ -126,13 +126,14 @@ public sealed class LauncherScriptTests
         var result = RunInvokeRepoScript(
             sandbox.RepositoryRoot,
             "scripts\\Invoke-OrchestratorCommand.ps1",
-            "workspace",
-            "remove",
-            "abc12345");
+            "goal",
+            "--pipeline",
+            "five-role",
+            "placeholder");
 
         Assert.Equal(0, result.ExitCode);
         Assert.True(string.IsNullOrWhiteSpace(result.Stderr), result.Stderr);
-        Assert.Equal("launcher workspace remove abc12345", File.ReadAllText(sandbox.InvocationPath).Trim());
+        Assert.Equal("launcher goal placeholder --pipeline five-role", File.ReadAllText(sandbox.InvocationPath).Trim());
     }
 
     [Xunit.Fact(DisplayName = "InvokeOrchestratorCommand_default_path_refreshes_git_head_marker_after_stale_rebuild")]
@@ -166,9 +167,10 @@ public sealed class LauncherScriptTests
             "scripts\\Start-OrchestratorCommand.ps1",
             "-Name",
             "fresh-launcher-test",
-            "workspace",
-            "remove",
-            "abc12345");
+            "goal",
+            "--pipeline",
+            "five-role",
+            "placeholder");
 
         Assert.Equal(0, result.ExitCode);
         Assert.True(string.IsNullOrWhiteSpace(result.Stderr), result.Stderr);
@@ -176,7 +178,7 @@ public sealed class LauncherScriptTests
         var root = document.RootElement;
         var args = root.GetProperty("args").EnumerateArray().Select(argument => argument.GetString()).ToArray();
         var launcherPath = Path.Combine(sandbox.RepositoryRoot, "mcg-orchestrator.cmd");
-        Assert.Equal(new[] { launcherPath, "workspace", "remove", "abc12345" }, args);
+        Assert.Equal(new[] { launcherPath, "goal", "placeholder", "--pipeline", "five-role" }, args);
 
         var stdoutPath = root.GetProperty("stdoutPath").GetString()
             ?? throw new InvalidOperationException("Start command did not emit stdoutPath.");
@@ -187,7 +189,7 @@ public sealed class LauncherScriptTests
             Thread.Sleep(100);
         }
 
-        Assert.Equal("launcher workspace remove abc12345", File.ReadAllText(sandbox.InvocationPath).Trim());
+        Assert.Equal("launcher goal placeholder --pipeline five-role", File.ReadAllText(sandbox.InvocationPath).Trim());
     }
 
     [Xunit.Fact(DisplayName = "StartOrchestratorCommand_writes_last_drive_journal_for_conduct_loop")]

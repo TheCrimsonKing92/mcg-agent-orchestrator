@@ -16,6 +16,7 @@
 [CmdletBinding(PositionalBinding = $false)]
 param(
     [string]$AppDll,
+    [string]$Pipeline,
 
     [Parameter(ValueFromRemainingArguments = $true)]
     [string[]]$Arguments
@@ -25,6 +26,11 @@ Set-StrictMode -Version Latest
 $ErrorActionPreference = "Stop"
 
 $Arguments = @($Arguments)
+if ($PSBoundParameters.ContainsKey('Pipeline')) {
+    # PowerShell otherwise abbreviates --pipeline to the common
+    # -PipelineVariable parameter and silently removes it from the CLI argv.
+    $Arguments += @('--pipeline', $Pipeline)
+}
 if ($Arguments.Count -eq 0) {
     throw "Usage: .\scripts\Invoke-RepoScript.ps1 scripts\Invoke-OrchestratorCommand.ps1 <orchestrator-args...>"
 }
