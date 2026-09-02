@@ -499,16 +499,28 @@ public sealed class MtpTestRunnerScriptTests
         Xunit.Assert.Contains(launchLines, line =>
             line.StartsWith("CMDCMDLINE=", StringComparison.OrdinalIgnoreCase) &&
             line.Contains("/d /s /c", StringComparison.OrdinalIgnoreCase));
-        var arguments = Xunit.Assert.Single(launchLines, line =>
-            line.StartsWith("ARGS=", StringComparison.OrdinalIgnoreCase));
-        Xunit.Assert.Contains("build", arguments, StringComparison.OrdinalIgnoreCase);
-        Xunit.Assert.Contains(
-            Path.Combine(sandbox.Root, "tests", "Mcg.AgentOrchestrator.Infrastructure.Tests", "Mcg.AgentOrchestrator.Infrastructure.Tests.csproj"),
-            arguments,
-            StringComparison.OrdinalIgnoreCase);
-        Xunit.Assert.Contains("--configuration Debug", arguments, StringComparison.OrdinalIgnoreCase);
-        Xunit.Assert.Contains("--output", arguments, StringComparison.OrdinalIgnoreCase);
-        Xunit.Assert.Contains("--nologo --verbosity minimal", arguments, StringComparison.OrdinalIgnoreCase);
+        var arguments = launchLines
+            .Where(line => line.StartsWith("ARG=", StringComparison.OrdinalIgnoreCase))
+            .Select(line => line["ARG=".Length..])
+            .ToArray();
+        var project = Path.Combine(
+            sandbox.Root,
+            "tests",
+            "Mcg.AgentOrchestrator.Infrastructure.Tests",
+            "Mcg.AgentOrchestrator.Infrastructure.Tests.csproj");
+        var output = Path.Combine(
+            sandbox.Root,
+            "bin",
+            "Mcg.AgentOrchestrator.Infrastructure.Tests",
+            "Debug");
+        Xunit.Assert.Equal("build", arguments[0]);
+        Xunit.Assert.Equal(project, arguments[1], ignoreCase: true);
+        Xunit.Assert.Equal(["--configuration", "Debug", "--output"], arguments[2..5]);
+        Xunit.Assert.Equal(output, arguments[5], ignoreCase: true);
+        Xunit.Assert.Equal(["--nologo", "--verbosity", "minimal", "-clp:ErrorsOnly;Summary", "-fl"], arguments[6..11]);
+        Xunit.Assert.StartsWith("-flp:LogFile=", arguments[11], StringComparison.OrdinalIgnoreCase);
+        Xunit.Assert.EndsWith(";Verbosity=Normal", arguments[11], StringComparison.Ordinal);
+        Xunit.Assert.Equal("-nodeReuse:false", arguments[12]);
         Xunit.Assert.Contains("compiler diagnostic from stub", result.Stdout, StringComparison.Ordinal);
         Xunit.Assert.Contains("Build succeeded.", result.Stdout, StringComparison.Ordinal);
     }
@@ -518,7 +530,8 @@ public sealed class MtpTestRunnerScriptTests
     {
         using var sandbox = ScriptSandbox.Create("success", rootNamePrefix: "build-meta%SystemRoot%&chars");
         var buildMarker = Path.Combine(sandbox.Root, "build-started.txt");
-        var fakeDotnet = sandbox.CreateBuildStub(exitCode: 0, buildMarker);
+        var launchLog = Path.Combine(sandbox.Root, "meta-build-launch.txt");
+        var fakeDotnet = sandbox.CreateBuildStub(exitCode: 0, buildMarker, launchLogPath: launchLog);
 
         var result = sandbox.RunPartition("GoalWorktree", noBuild: false, dotnetPath: fakeDotnet);
 
@@ -526,6 +539,92 @@ public sealed class MtpTestRunnerScriptTests
         Xunit.Assert.True(File.Exists(buildMarker), result.Stdout + result.Stderr);
         Xunit.Assert.Contains("Build succeeded.", result.Stdout, StringComparison.Ordinal);
         Xunit.Assert.Contains("build-meta%SystemRoot%&chars", result.Stdout, StringComparison.Ordinal);
+        var arguments = File.ReadAllLines(launchLog)
+            .Where(line => line.StartsWith("ARG=", StringComparison.OrdinalIgnoreCase))
+            .Select(line => line["ARG=".Length..])
+            .ToArray();
+        Xunit.Assert.Contains(arguments, argument => argument.Equals(
+            Path.Combine(
+                sandbox.Root,
+                "tests",
+                "Mcg.AgentOrchestrator.Infrastructure.Tests",
+                "Mcg.AgentOrchestrator.Infrastructure.Tests.csproj"),
+            StringComparison.OrdinalIgnoreCase));
+        Xunit.Assert.Contains(arguments, argument =>
+            argument.StartsWith("-flp:LogFile=", StringComparison.OrdinalIgnoreCase) &&
+            argument.EndsWith(";Verbosity=Normal", StringComparison.Ordinal));
+    }
+
+    [Xunit.Fact]
+    public void MtpBuildStartInfoSuppressesWindowsForExeAndCmdTargets()
+    {
+        var module = Path.Combine(RepositoryRoot(), "scripts", "MtpTestRunner.psm1").Replace("'", "''", StringComparison.Ordinal);
+        var command =
+            $"Import-Module '{module}' -Force; " +
+            "$module = Get-Module MtpTestRunner; " +
+            "$result = & $module { " +
+            "$exe = New-MtpProcessStartInfo -Executable 'C:\\tools\\dotnet.exe' -Arguments @('C:\\tools\\dotnet.exe','build','-nodeReuse:false'); " +
+            "$cmd = New-MtpProcessStartInfo -Executable 'C:\\tools\\dotnet.cmd' -Arguments @('C:\\tools\\dotnet.cmd','build','-nodeReuse:false'); " +
+            "[ordered]@{ exeCreateNoWindow = $exe.CreateNoWindow; exeUseShellExecute = $exe.UseShellExecute; exeRedirectOut = $exe.RedirectStandardOutput; exeRedirectError = $exe.RedirectStandardError; exeFileName = $exe.FileName; cmdCreateNoWindow = $cmd.CreateNoWindow; cmdUseShellExecute = $cmd.UseShellExecute; cmdRedirectOut = $cmd.RedirectStandardOutput; cmdRedirectError = $cmd.RedirectStandardError; cmdArguments = $cmd.Arguments } }; " +
+            "$result | ConvertTo-Json -Compress";
+
+        var result = RunPowerShellCommand(RepositoryRoot(), command);
+
+        Xunit.Assert.True(result.ExitCode == 0, result.Stdout + result.Stderr);
+        using var document = JsonDocument.Parse(result.Stdout.Trim());
+        var root = document.RootElement;
+        Xunit.Assert.True(root.GetProperty("exeCreateNoWindow").GetBoolean());
+        Xunit.Assert.False(root.GetProperty("exeUseShellExecute").GetBoolean());
+        Xunit.Assert.True(root.GetProperty("exeRedirectOut").GetBoolean());
+        Xunit.Assert.True(root.GetProperty("exeRedirectError").GetBoolean());
+        Xunit.Assert.Equal("C:\\tools\\dotnet.exe", root.GetProperty("exeFileName").GetString(), ignoreCase: true);
+        Xunit.Assert.True(root.GetProperty("cmdCreateNoWindow").GetBoolean());
+        Xunit.Assert.False(root.GetProperty("cmdUseShellExecute").GetBoolean());
+        Xunit.Assert.True(root.GetProperty("cmdRedirectOut").GetBoolean());
+        Xunit.Assert.True(root.GetProperty("cmdRedirectError").GetBoolean());
+        Xunit.Assert.StartsWith("/d /s /c", root.GetProperty("cmdArguments").GetString(), StringComparison.OrdinalIgnoreCase);
+    }
+
+    [Xunit.Fact]
+    public void MtpBuildTimeoutTerminatesExactOwnedDescendantsAndIsNotAStartFailure()
+    {
+        using var sandbox = ScriptSandbox.Create("success");
+        var pidLog = Path.Combine(sandbox.Root, "hanging-build-pids.txt");
+        var fakeDotnet = sandbox.CreateHangingBuildStub(pidLog);
+        sandbox.SetBuildTimeoutSeconds(5);
+
+        var result = sandbox.RunPartition("GoalWorktree", noBuild: false, dotnetPath: fakeDotnet);
+
+        Xunit.Assert.Equal(23, result.ExitCode);
+        Xunit.Assert.Contains("BUILD TIMEOUT", result.Stdout, StringComparison.Ordinal);
+        Xunit.Assert.DoesNotContain("could not start", result.Stdout, StringComparison.OrdinalIgnoreCase);
+        Xunit.Assert.True(File.Exists(pidLog), result.Stdout + result.Stderr);
+        foreach (var pid in File.ReadAllLines(pidLog).Select(int.Parse))
+        {
+            try
+            {
+                using var process = Process.GetProcessById(pid);
+                Xunit.Assert.True(process.WaitForExit(10_000), $"Owned build descendant PID {pid} survived timeout cleanup.");
+            }
+            catch (ArgumentException)
+            {
+                // The exact recorded process lifetime has already exited.
+            }
+        }
+    }
+
+    [Xunit.Fact]
+    public void MtpBuildStartFailureIsDistinctFromMonitoringFailure()
+    {
+        using var sandbox = ScriptSandbox.Create("success");
+        var missingDotnet = Path.Combine(sandbox.Root, "missing-dotnet.exe");
+
+        var result = sandbox.RunPartition("GoalWorktree", noBuild: false, dotnetPath: missingDotnet);
+
+        Xunit.Assert.Equal(23, result.ExitCode);
+        Xunit.Assert.Contains("BUILD FAILURE - could not start", result.Stdout, StringComparison.Ordinal);
+        Xunit.Assert.DoesNotContain("BUILD MONITOR FAILURE", result.Stdout, StringComparison.Ordinal);
+        Xunit.Assert.DoesNotContain("BUILD TIMEOUT", result.Stdout, StringComparison.Ordinal);
     }
 
     [Xunit.Fact(DisplayName = "MTP_no_build_missing_managed_assembly_reports_path_and_build_command")]
@@ -660,6 +759,10 @@ public sealed class MtpTestRunnerScriptTests
         Xunit.Assert.Contains("'-clp:ErrorsOnly;Summary'", sources[2], StringComparison.Ordinal);
         Xunit.Assert.Contains("Get-MtpBoundedFileName -Stem \"build-$projectName\"", sources[2], StringComparison.Ordinal);
         Xunit.Assert.Contains("-flp:LogFile=$buildLogPath;Verbosity=Normal", sources[2], StringComparison.Ordinal);
+        Xunit.Assert.Contains("'-nodeReuse:false'", sources[2], StringComparison.Ordinal);
+        Xunit.Assert.DoesNotContain("$process.WaitForExit()", sources[2], StringComparison.Ordinal);
+        Xunit.Assert.Contains("$process.WaitForExit($TimeoutSeconds * 1000)", sources[2], StringComparison.Ordinal);
+        Xunit.Assert.Contains("MonitoringFailureMessage = $monitoringFailureMessage", sources[2], StringComparison.Ordinal);
         Xunit.Assert.Contains("Build output log: $buildLogPath", sources[2], StringComparison.Ordinal);
         Xunit.Assert.DoesNotContain(
             "$executable = if ([string]::IsNullOrWhiteSpace($RunnerPath)) { $expectedAppHost }",
@@ -1108,18 +1211,58 @@ public sealed class MtpTestRunnerScriptTests
             var lines = new List<string>
             {
                 "@echo off",
+                "setlocal EnableExtensions EnableDelayedExpansion",
                 $"echo started>\"{EscapeBatchPercent(markerPath)}\""
             };
             if (launchLogPath is not null)
             {
                 var escapedLaunchLog = EscapeBatchPercent(launchLogPath);
                 lines.Add($"echo CMDCMDLINE=%CMDCMDLINE%>\"{escapedLaunchLog}\"");
-                lines.Add($"echo ARGS=%*>>\"{escapedLaunchLog}\"");
+                lines.Add(":mcg_argument_loop");
+                lines.Add("if \"%~1\"==\"\" goto mcg_arguments_done");
+                lines.Add("set \"mcg_argument=%~1\"");
+                lines.Add($"echo ARG=!mcg_argument!>>\"{escapedLaunchLog}\"");
+                lines.Add("shift");
+                lines.Add("goto mcg_argument_loop");
+                lines.Add(":mcg_arguments_done");
             }
             lines.Add($"echo compiler diagnostic from stub{diagnosticRedirection}");
             lines.Add($"exit /b {exitCode}");
             File.WriteAllText(path, string.Join(Environment.NewLine, lines) + Environment.NewLine);
             return path;
+        }
+
+        public string CreateHangingBuildStub(string pidLogPath)
+        {
+            var scriptPath = Path.Combine(Root, "HangingBuild.ps1");
+            var escapedPidLog = pidLogPath.Replace("'", "''", StringComparison.Ordinal);
+            File.WriteAllText(
+                scriptPath,
+                string.Join(Environment.NewLine, new[]
+                {
+                    "Start-Sleep -Milliseconds 500",
+                    "$child = Start-Process powershell.exe -ArgumentList @('-NoProfile','-NonInteractive','-Command','while ($true) { Start-Sleep -Seconds 60 }') -WindowStyle Hidden -PassThru",
+                    $"Set-Content -LiteralPath '{escapedPidLog}' -Value @($PID, $child.Id)",
+                    "while ($true) { Start-Sleep -Seconds 60 }"
+                }) + Environment.NewLine);
+            var path = Path.Combine(Root, "hanging-dotnet.cmd");
+            File.WriteAllText(path, $"""
+                @echo off
+                powershell.exe -NoProfile -ExecutionPolicy Bypass -File "{scriptPath}"
+                exit /b %ERRORLEVEL%
+                """);
+            return path;
+        }
+
+        public void SetBuildTimeoutSeconds(int seconds)
+        {
+            var modulePath = Path.Combine(Root, "scripts", "MtpTestRunner.psm1");
+            var source = File.ReadAllText(modulePath);
+            source = source.Replace(
+                "$script:MtpBuildTimeoutSeconds = 780",
+                $"$script:MtpBuildTimeoutSeconds = {seconds}",
+                StringComparison.Ordinal);
+            File.WriteAllText(modulePath, source);
         }
 
         private static string EscapeBatchPercent(string value) => value.Replace("%", "%%", StringComparison.Ordinal);

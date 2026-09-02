@@ -16,6 +16,7 @@ $script:ExitCodes = [pscustomobject]@{
 $script:MtpGracefulExitSeconds = 15
 $script:MtpExitConfirmationSeconds = 10
 $script:MtpOutputDrainSeconds = 10
+$script:MtpBuildTimeoutSeconds = 780
 
 if ($null -eq ('McgMtpProcessOutputCapture' -as [type])) {
     Add-Type -TypeDefinition @'
@@ -618,14 +619,22 @@ function Invoke-MtpBuildProcess {
         [Parameter(Mandatory = $true)][string]$Executable,
         [Parameter(Mandatory = $true)][string[]]$Arguments,
         [Parameter(Mandatory = $true)][string]$OutputLog,
-        [Parameter(Mandatory = $true)][string]$WorkingDirectory
+        [Parameter(Mandatory = $true)][string]$WorkingDirectory,
+        [ValidateRange(1, 86400)][int]$TimeoutSeconds = $script:MtpBuildTimeoutSeconds
     )
 
     $process = [System.Diagnostics.Process]::new()
     $capture = $null
+    $ownedJob = $null
     $started = $false
+    $jobAssigned = $false
+    $processId = $null
+    $startTimeUtc = $null
     $exitCode = $null
     $startFailureMessage = $null
+    $monitoringFailureMessage = $null
+    $timedOut = $false
+    $cleanupConfirmed = $true
     $drainConfirmed = $false
     try {
         $startInfo = New-MtpProcessStartInfo -Executable $Executable -Arguments $Arguments
@@ -633,41 +642,86 @@ function Invoke-MtpBuildProcess {
         $process.StartInfo = $startInfo
         $capture = [McgMtpProcessOutputCapture]::new($OutputLog)
         $capture.Attach($process)
+        if (Test-MtpWindows) {
+            $ownedJob = [McgMtpOwnedJob]::new($false)
+        }
 
         try {
             $started = $process.Start()
             if (-not $started) {
                 $startFailureMessage = 'Process.Start returned false.'
             }
-            else {
-                $process.BeginOutputReadLine()
-                $process.BeginErrorReadLine()
-                $process.WaitForExit()
-                $exitCode = $process.ExitCode
-                $drainConfirmed = $capture.WaitForCompletion($script:MtpOutputDrainSeconds * 1000)
-            }
         }
         catch {
             $startFailureMessage = $_.Exception.Message
-            if ($started) {
-                try {
-                    if (-not $process.HasExited) {
-                        $process.WaitForExit()
-                    }
-                    $exitCode = $process.ExitCode
-                    $drainConfirmed = $capture.WaitForCompletion($script:MtpOutputDrainSeconds * 1000)
+        }
+
+        if ($started) {
+            try {
+                $processId = $process.Id
+                if ($null -ne $ownedJob) {
+                    $ownedJob.Assign($process)
+                    $jobAssigned = $true
                 }
-                catch {
-                    # Preserve the first launch/monitoring failure as the actionable diagnostic.
+                $startTimeUtc = $process.StartTime.ToUniversalTime()
+                $process.BeginOutputReadLine()
+                $process.BeginErrorReadLine()
+                if (-not $process.WaitForExit($TimeoutSeconds * 1000)) {
+                    $timedOut = $true
                 }
+            }
+            catch {
+                $monitoringFailureMessage = $_.Exception.Message
             }
         }
     }
     catch {
-        $startFailureMessage = $_.Exception.Message
+        if (-not $started -and [string]::IsNullOrWhiteSpace($startFailureMessage)) {
+            $startFailureMessage = $_.Exception.Message
+        }
+        elseif ([string]::IsNullOrWhiteSpace($monitoringFailureMessage)) {
+            $monitoringFailureMessage = $_.Exception.Message
+        }
     }
     finally {
         try {
+            if ($started) {
+                $jobHasDescendants = $false
+                if ($jobAssigned) {
+                    try {
+                        $jobHasDescendants = -not $ownedJob.IsEmpty
+                    }
+                    catch {
+                        $jobHasDescendants = $true
+                        if ([string]::IsNullOrWhiteSpace($monitoringFailureMessage)) {
+                            $monitoringFailureMessage = "Could not inspect the owned build job: $($_.Exception.Message)"
+                        }
+                    }
+                }
+                $mustTerminate = $timedOut -or
+                    -not [string]::IsNullOrWhiteSpace($monitoringFailureMessage) -or
+                    -not $process.HasExited -or
+                    $jobHasDescendants
+                if ($mustTerminate -and ($jobAssigned -or $null -ne $startTimeUtc)) {
+                    $cleanupJob = if ($jobAssigned) { $ownedJob } else { $null }
+                    $cleanupStartTimeUtc = if ($null -ne $startTimeUtc) { $startTimeUtc } else { [datetime]::MinValue }
+                    $cleanupConfirmed = Stop-MtpOwnedProcessTree -Process $process -StartTimeUtc $cleanupStartTimeUtc -OwnedJob $cleanupJob
+                }
+                $processExitConfirmed = $process.HasExited -or $process.WaitForExit($script:MtpExitConfirmationSeconds * 1000)
+                $cleanupConfirmed = $cleanupConfirmed -and $processExitConfirmed
+                if ($jobAssigned) {
+                    try {
+                        $cleanupConfirmed = $cleanupConfirmed -and $ownedJob.IsEmpty
+                    }
+                    catch {
+                        $cleanupConfirmed = $false
+                    }
+                }
+                if ($process.HasExited) {
+                    $exitCode = $process.ExitCode
+                }
+                $drainConfirmed = $capture.WaitForCompletion($script:MtpOutputDrainSeconds * 1000)
+            }
             if ($null -ne $capture) {
                 try {
                     $capture.Detach($process)
@@ -678,14 +732,25 @@ function Invoke-MtpBuildProcess {
             }
         }
         finally {
-            $process.Dispose()
+            try {
+                $process.Dispose()
+            }
+            finally {
+                if ($null -ne $ownedJob) {
+                    $ownedJob.Dispose()
+                }
+            }
         }
     }
 
     return [pscustomobject]@{
         ExitCode = $exitCode
+        ProcessId = $processId
         Started = $started
         StartFailureMessage = $startFailureMessage
+        MonitoringFailureMessage = $monitoringFailureMessage
+        TimedOut = $timedOut
+        CleanupConfirmed = $cleanupConfirmed
         DrainConfirmed = $drainConfirmed
     }
 }
@@ -725,11 +790,24 @@ function Invoke-MtpBuild {
             'minimal',
             '-clp:ErrorsOnly;Summary',
             '-fl',
-            "-flp:LogFile=$buildLogPath;Verbosity=Normal"
+            "-flp:LogFile=$buildLogPath;Verbosity=Normal",
+            '-nodeReuse:false'
         )
         $build = Invoke-MtpBuildProcess -Executable $DotnetPath -Arguments $arguments -OutputLog $captureLogPath -WorkingDirectory $RepositoryRoot
         if (-not $build.Started -or -not [string]::IsNullOrWhiteSpace([string]$build.StartFailureMessage)) {
             Write-Host "BUILD FAILURE - could not start '$DotnetPath build': $($build.StartFailureMessage)"
+            return $false
+        }
+        if ($build.TimedOut) {
+            Write-Host "BUILD TIMEOUT - exact owned process lifetime rooted at PID $($build.ProcessId) ('$DotnetPath build') exceeded ${script:MtpBuildTimeoutSeconds}s."
+            return $false
+        }
+        if (-not [string]::IsNullOrWhiteSpace([string]$build.MonitoringFailureMessage)) {
+            Write-Host "BUILD MONITOR FAILURE - PID $($build.ProcessId) ('$DotnetPath build'): $($build.MonitoringFailureMessage)"
+            return $false
+        }
+        if (-not $build.CleanupConfirmed) {
+            Write-Host "BUILD CLEANUP FAILURE - exact owned process lifetime rooted at PID $($build.ProcessId) ('$DotnetPath build') was not fully terminated."
             return $false
         }
         if (-not $build.DrainConfirmed) {
@@ -847,7 +925,7 @@ function ConvertTo-MtpCommandLineArgument {
     }
     $charactersRequiringQuotes = @(' ', "`t", "`n", "`r", '"')
     if ($QuoteCmdMetaCharacters) {
-        $charactersRequiringQuotes += @('&', '|', '<', '>', '(', ')', '^')
+        $charactersRequiringQuotes += @('&', '|', '<', '>', '(', ')', '^', ';')
     }
     $requiresQuotes = $Value.Length -eq 0 -or $Value.IndexOfAny([char[]]$charactersRequiringQuotes) -ge 0
     if (-not $requiresQuotes) {
