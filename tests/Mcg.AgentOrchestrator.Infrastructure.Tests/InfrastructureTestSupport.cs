@@ -348,6 +348,8 @@ private static WorkerDispatchTestsSeededRepositoryFactory.GitProbeResult RunGitP
     var standardErrorPath = Path.Combine(captureDirectory, captureIdentity + ".stderr");
     OwnedProcessGroup.SuspendedProcessStart? launch = null;
     Process? process = null;
+    FileStream? standardOutputStream = null;
+    FileStream? standardErrorStream = null;
     var processStarted = false;
     int? childProcessId = null;
     DateTimeOffset? childStartedAt = null;
@@ -359,6 +361,8 @@ private static WorkerDispatchTestsSeededRepositoryFactory.GitProbeResult RunGitP
             standardErrorPath);
         process = launch.Process;
         processStarted = true;
+        standardOutputStream = OpenRetainedCaptureStream(standardOutputPath);
+        standardErrorStream = OpenRetainedCaptureStream(standardErrorPath);
         command = FormatCommand(startInfo.FileName, startInfo.ArgumentList);
         childProcessId = process.Id;
         try
@@ -387,8 +391,8 @@ private static WorkerDispatchTestsSeededRepositoryFactory.GitProbeResult RunGitP
         }
 
         beforeCaptureRead?.Invoke(standardOutputPath, standardErrorPath);
-        var standardOutputCapture = CaptureFile(standardOutputPath);
-        var standardErrorCapture = CaptureFile(standardErrorPath);
+        var standardOutputCapture = CaptureStreamAsync(standardOutputStream).GetAwaiter().GetResult();
+        var standardErrorCapture = CaptureStreamAsync(standardErrorStream).GetAwaiter().GetResult();
         var standardOutput = Encoding.UTF8.GetString(standardOutputCapture.Prefix);
         var standardError = Encoding.UTF8.GetString(standardErrorCapture.Prefix);
         var boundedOutput = WorkerDispatchTestsSeededRepositoryFactory.GitProbeResult.BoundDiagnostic(standardOutput);
@@ -458,21 +462,22 @@ private static WorkerDispatchTestsSeededRepositoryFactory.GitProbeResult RunGitP
     }
     finally
     {
+        standardOutputStream?.Dispose();
+        standardErrorStream?.Dispose();
         launch?.Dispose();
         TryDeleteCaptureFile(standardOutputPath);
         TryDeleteCaptureFile(standardErrorPath);
     }
 }
 
-private static CapturedStream CaptureFile(string path)
-{
-    using var stream = new FileStream(
+private static FileStream OpenRetainedCaptureStream(string path) =>
+    new(
         path,
         FileMode.Open,
         FileAccess.Read,
-        FileShare.ReadWrite | FileShare.Delete);
-    return CaptureStreamAsync(stream).GetAwaiter().GetResult();
-}
+        FileShare.ReadWrite | FileShare.Delete,
+        bufferSize: 4096,
+        FileOptions.SequentialScan);
 
 private static void TryDeleteCaptureFile(string path)
 {

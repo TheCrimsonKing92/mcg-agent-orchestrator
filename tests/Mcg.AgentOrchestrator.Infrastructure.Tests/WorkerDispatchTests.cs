@@ -15,8 +15,30 @@ using System.Text.Json;
 
 public abstract class WorkerDispatchTestSupport
 {
+    private static readonly string SeededRepositoryFactoryRoot = CreateSeededRepositoryFactoryRoot();
+    private static int _seededRepositoryDirectoryOrdinal;
     private static readonly WorkerDispatchTestsSeededRepositoryFactory SeededDispatchRepositories =
-        new(InfrastructureTestSupport.CreateTempDirectory, SeedDispatchRepositoryTemplate);
+        new(
+            AllocateSeededRepositoryDirectory,
+            SeedDispatchRepositoryTemplate,
+            SeededRepositoryFactoryRoot);
+
+    private static string CreateSeededRepositoryFactoryRoot()
+    {
+        var path = Path.Combine(
+            Path.GetTempPath(),
+            $"seeded-repository-factory-{Environment.ProcessId:x}-{Guid.NewGuid():N}");
+        Directory.CreateDirectory(path);
+        return path;
+    }
+
+    private static string AllocateSeededRepositoryDirectory()
+    {
+        var ordinal = Interlocked.Increment(ref _seededRepositoryDirectoryOrdinal);
+        var path = Path.Combine(SeededRepositoryFactoryRoot, $"owned-{ordinal}-{Guid.NewGuid():N}");
+        Directory.CreateDirectory(path);
+        return path;
+    }
 
     protected static string CreateTempDirectory()
     {

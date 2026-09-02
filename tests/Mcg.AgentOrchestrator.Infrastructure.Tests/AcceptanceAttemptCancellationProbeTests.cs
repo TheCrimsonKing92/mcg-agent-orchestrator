@@ -41,4 +41,38 @@ public sealed class AcceptanceAttemptCancellationProbeTests
             AcceptanceAttemptCancellationCause.StoppedDisposition,
             probe.CancellationDecision?.Cause);
     }
+
+    [Xunit.Fact]
+    public void BoundaryObserverBypassesCachedContinueAndLatchesCancellation()
+    {
+        var time = new RecordingTimeProvider();
+        var reads = 0;
+        var stopRequested = false;
+        var probe = new AcceptanceAttemptCancellationProbe(
+            () =>
+            {
+                reads++;
+                return stopRequested
+                    ? AcceptanceAttemptCancellationDecision.Cancel(
+                        AcceptanceAttemptCancellationCause.StoppedDisposition,
+                        GoalStatus.Parked)
+                    : AcceptanceAttemptCancellationDecision.Continue(GoalStatus.Verifying);
+            },
+            TimeSpan.FromSeconds(2),
+            time);
+
+        Assert.False(probe.ShouldCancel());
+        Assert.Equal(1, reads);
+
+        stopRequested = true;
+        Assert.True(probe.ShouldCancelNow());
+        Assert.Equal(2, reads);
+
+        stopRequested = false;
+        Assert.True(probe.ShouldCancel());
+        Assert.Equal(2, reads);
+        Assert.Equal(
+            AcceptanceAttemptCancellationCause.StoppedDisposition,
+            probe.CancellationDecision?.Cause);
+    }
 }
