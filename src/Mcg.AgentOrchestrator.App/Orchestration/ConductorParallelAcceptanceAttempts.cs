@@ -517,10 +517,16 @@ internal sealed class ConductorParallelAcceptanceAttemptCoordinator
         ConductorFocusedEvidenceRequestContext? requestContext,
         AcceptanceStableSlotExhaustionPolicy stableSlotExhaustionPolicy)
     {
+        var current = TryReadLatest(candidate.Goal.Id.Value);
+        if (current is not null && (IsLiveInvalidatedAttempt(current) || IsLiveAttempt(current)))
+        {
+            return ConductorParallelAcceptanceAttemptDecision.Running(current);
+        }
+
         _attemptWriterLeaseAcquiringForTests?.Invoke();
         using var artifactLease = StorageRetentionMaintenance.AcquireAttemptWriterLease(
             Path.Combine(_rootDirectory, candidate.Goal.Id.Value));
-        var current = TryReadLatest(candidate.Goal.Id.Value);
+        current = TryReadLatest(candidate.Goal.Id.Value);
         if (current is not null && IsLiveInvalidatedAttempt(current))
         {
             return ConductorParallelAcceptanceAttemptDecision.Running(current);
@@ -1033,12 +1039,12 @@ internal sealed class ConductorParallelAcceptanceAttemptCoordinator
         RunAttemptWithArtifactLease(attempt, candidate, policy, runAcceptance);
     }
 
-    internal static int RunOwnedProcess(string metadataPath)
+    internal static int RunOwnedProcess(
+        string metadataPath,
+        TimeSpan? attemptWriterLeaseTimeout = null)
     {
         ConductorParallelAcceptanceAttempt? attempt = null;
-        using var artifactLease = StorageRetentionMaintenance.AcquireAttemptWriterLease(
-            Path.GetDirectoryName(metadataPath) ?? throw new InvalidOperationException(
-                "acceptance attempt metadata path has no parent directory"));
+        IDisposable? artifactLease = null;
         try
         {
             attempt = JsonSerializer.Deserialize<ConductorParallelAcceptanceAttempt>(
@@ -1049,6 +1055,10 @@ internal sealed class ConductorParallelAcceptanceAttemptCoordinator
                 throw new InvalidOperationException("acceptance attempt metadata was empty");
             }
 
+            artifactLease = StorageRetentionMaintenance.AcquireAttemptWriterLease(
+                Path.GetDirectoryName(metadataPath) ?? throw new InvalidOperationException(
+                    "acceptance attempt metadata path has no parent directory"),
+                attemptWriterLeaseTimeout);
             RedirectConsole(attempt);
             var executionDirectory = !string.IsNullOrWhiteSpace(attempt.ExecutionDirectory)
                 ? attempt.ExecutionDirectory!
@@ -1131,6 +1141,7 @@ internal sealed class ConductorParallelAcceptanceAttemptCoordinator
         {
             if (attempt is not null)
             {
+                var transient = IsTransientAttemptIo(ex);
                 TryAppend(attempt.StderrPath, $"{ex}{Environment.NewLine}");
                 TryWriteExit(attempt.ExitCodePath, 1);
                 var coordinator = new ConductorParallelAcceptanceAttemptCoordinator(
@@ -1141,11 +1152,13 @@ internal sealed class ConductorParallelAcceptanceAttemptCoordinator
                         : new ConductEventLogWriter(attempt.ConductEventLogPath));
                 coordinator.CompleteWithoutResult(
                     attempt with { OwnerProcessId = Environment.ProcessId },
-                    IsTransientAttemptIo(ex)
-                        ? ConductorParallelAcceptanceAttemptOutcome.CorruptArtifacts
-                        : ConductorParallelAcceptanceAttemptOutcome.Failed,
+                    ex is TimeoutException
+                        ? ConductorParallelAcceptanceAttemptOutcome.InfrastructureDeferred
+                        : transient
+                            ? ConductorParallelAcceptanceAttemptOutcome.CorruptArtifacts
+                            : ConductorParallelAcceptanceAttemptOutcome.Failed,
                     ex.Message,
-                    transient: IsTransientAttemptIo(ex));
+                    transient: transient);
             }
             else
             {
@@ -1153,6 +1166,10 @@ internal sealed class ConductorParallelAcceptanceAttemptCoordinator
             }
 
             return 1;
+        }
+        finally
+        {
+            artifactLease?.Dispose();
         }
     }
 
@@ -2929,7 +2946,7 @@ internal sealed class ConductorParallelAcceptanceAttemptCoordinator
 
     private static bool IsTransientAttemptIo(Exception ex) =>
         ex is not DotnetBuildSlotsBusyException and not BuildLockBlockedException &&
-        (ex is IOException or UnauthorizedAccessException ||
+        (ex is IOException or UnauthorizedAccessException or TimeoutException ||
             ex.InnerException is not null && IsTransientAttemptIo(ex.InnerException));
 
     private static string ReadAllTextSharedWithRetry(string path)

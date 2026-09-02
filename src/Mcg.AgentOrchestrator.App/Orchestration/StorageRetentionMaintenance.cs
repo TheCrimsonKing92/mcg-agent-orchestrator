@@ -812,8 +812,7 @@ internal static partial class StorageRetentionMaintenance
                     directory,
                     null,
                     EvidenceOwnerResolution.Unrecorded,
-                    invalidReason,
-                    BytesAttempted: SafeDirectoryLength(directory)));
+                    invalidReason));
                 continue;
             }
 
@@ -839,8 +838,7 @@ internal static partial class StorageRetentionMaintenance
                     null,
                     owners is null ? EvidenceOwnerResolution.Unmatched : EvidenceOwnerResolution.AmbiguousPrefix,
                     owners is null ? "mtp-attempt-owner-not-recorded" : "mtp-attempt-owner-is-ambiguous",
-                    ownership.AttemptId,
-                    BytesAttempted: SafeDirectoryLength(directory)));
+                    ownership.AttemptId));
                 continue;
             }
 
@@ -1402,20 +1400,6 @@ internal static partial class StorageRetentionMaintenance
     {
         try { return new FileInfo(path).Length; }
         catch (Exception ex) when (ex is IOException or UnauthorizedAccessException) { return 0; }
-    }
-
-    private static long SafeDirectoryLength(string path)
-    {
-        try
-        {
-            return Directory.EnumerateFiles(path, "*", SearchOption.AllDirectories)
-                .Select(SafeLength)
-                .Sum();
-        }
-        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
-        {
-            return 0;
-        }
     }
 
     private static (bool Success, long BytesAttempted, string? ExceptionType) TryDeleteDirectory(string path)

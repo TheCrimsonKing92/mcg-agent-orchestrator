@@ -12,6 +12,7 @@ internal static class RunEventMaintenanceCadence
     internal const string VacuumOperation = "run-events:vacuum";
     internal const string ArtifactRetentionOperation = "storage-retention:sweep";
     internal static readonly TimeSpan Interval = TimeSpan.FromHours(24);
+    internal static readonly TimeSpan ArtifactFailureRetryInterval = TimeSpan.FromHours(1);
     internal static readonly TimeSpan VacuumInterval = TimeSpan.FromDays(7);
     private static readonly ConcurrentDictionary<string, DateTimeOffset> NextDueByStorePath =
         new(StringComparer.OrdinalIgnoreCase);
@@ -22,7 +23,9 @@ internal static class RunEventMaintenanceCadence
         Func<DateTimeOffset>? utcNow = null,
         Func<SqliteRunEventStore, RunEventMaintenanceOptions, RunEventMaintenanceResult>? maintenanceOperation = null,
         OrchestratorWorkspace? workspace = null,
-        string? mtpResultsRootOverride = null)
+        string? mtpResultsRootOverride = null,
+        Func<OrchestratorWorkspace, IReadOnlyCollection<StorageRetentionGoal>, DateTimeOffset, string?, StorageRetentionResult>?
+            artifactRetentionOperation = null)
     {
         var now = (utcNow ?? (() => DateTimeOffset.UtcNow))();
         var cadenceKey = Path.GetFullPath(runEventStorePath);
@@ -40,12 +43,19 @@ internal static class RunEventMaintenanceCadence
                 ensureSchema: !File.Exists(runEventStorePath));
             var latest = LatestMaintenanceMarker(store, conductEventsLogPath);
             var latestVacuum = LatestVacuumMarker(store);
-            var artifactFailureDue = HasUnresolvedArtifactRetentionFailure(store, latest);
+            var unresolvedArtifactFailure = LatestUnresolvedArtifactRetentionFailure(store, latest);
+            var artifactFailureRetryDue = unresolvedArtifactFailure?.Add(ArtifactFailureRetryInterval);
+            var artifactFailureDue = artifactFailureRetryDue is not null && now >= artifactFailureRetryDue.Value;
             var vacuumDue = IsOffPeakVacuumWindow(now) &&
                 (latestVacuum is null || now - latestVacuum.Value >= VacuumInterval);
             if (latest is not null && now - latest.Value < Interval && !vacuumDue && !artifactFailureDue)
             {
-                NextDueByStorePath[cadenceKey] = NextDue(latest.Value);
+                var scheduledDue = NextDue(latest.Value);
+                if (artifactFailureRetryDue is not null && artifactFailureRetryDue.Value < scheduledDue)
+                {
+                    scheduledDue = artifactFailureRetryDue.Value;
+                }
+                NextDueByStorePath[cadenceKey] = scheduledDue;
                 return SkippedResult();
             }
 
@@ -68,13 +78,15 @@ internal static class RunEventMaintenanceCadence
                 : maintenanceOperation(store, options);
             artifactRetention = workspace is null || retentionGoals is null
                 ? null
-                : StorageRetentionMaintenance.Run(
-                    workspace.LogDirectory,
-                    workspace.OrchestratorDirectory,
-                    workspace.ExecutionDirectory,
-                    retentionGoals,
-                    now,
-                    mtpResultsRoot: mtpResultsRootOverride ?? StorageRetentionMaintenance.DefaultMtpResultsRoot());
+                : artifactRetentionOperation is null
+                    ? StorageRetentionMaintenance.Run(
+                        workspace.LogDirectory,
+                        workspace.OrchestratorDirectory,
+                        workspace.ExecutionDirectory,
+                        retentionGoals,
+                        now,
+                        mtpResultsRoot: mtpResultsRootOverride ?? StorageRetentionMaintenance.DefaultMtpResultsRoot())
+                    : artifactRetentionOperation(workspace, retentionGoals, now, mtpResultsRootOverride);
             var receipt = FormatReceipt("cadence", options, result);
             Console.WriteLine(receipt);
             TryAppendJournal(journal, "run-events-maintenance", receipt, now);
@@ -108,7 +120,7 @@ internal static class RunEventMaintenanceCadence
                 }
                 if (artifactRetention?.Failed == true)
                 {
-                    NextDueByStorePath.TryRemove(cadenceKey, out _);
+                    NextDueByStorePath[cadenceKey] = now.Add(ArtifactFailureRetryInterval);
                 }
                 else
                 {
@@ -127,6 +139,7 @@ internal static class RunEventMaintenanceCadence
         }
         catch (Exception ex)
         {
+            NextDueByStorePath[cadenceKey] = now.Add(ArtifactFailureRetryInterval);
             var line = $"RUN_EVENTS_MAINTENANCE_FAILED exception={ex.GetType().Name} message={Sanitize(ex.Message)}";
             Console.WriteLine(line);
             TryAppendJournal(journal, "run-events-maintenance-failed", line, now);
@@ -235,10 +248,9 @@ internal static class RunEventMaintenanceCadence
     internal static string FormatArtifactRetentionReceipt(StorageRetentionResult result)
     {
         var reclaimedBytes = result.Decisions.Sum(decision => decision.BytesReclaimed);
-        var mtpUnreclaimableBytes = result.Decisions
-            .Where(decision => decision.Family == EvidenceArtifactFamily.MtpTestRuns)
-            .Where(decision => decision.Action == EvidenceRetentionAction.RetainedUndecidable)
-            .Sum(decision => decision.BytesAttempted);
+        var mtpUnreclaimableDirectoriesUnmeasured = result.Decisions.Count(decision =>
+            decision.Family == EvidenceArtifactFamily.MtpTestRuns &&
+            decision.Action == EvidenceRetentionAction.RetainedUndecidable);
         var deferred = result.Decisions.Count(decision => decision.Action is
             EvidenceRetentionAction.DeferredLease or
             EvidenceRetentionAction.DeferredLive or
@@ -246,7 +258,7 @@ internal static class RunEventMaintenanceCadence
         var status = ArtifactRetentionStatus(result, reclaimedBytes, deferred);
         var actions = FormatDecisionCounts(result.Decisions, decision => decision.Action.ToString());
         var reasons = FormatDecisionCounts(result.Decisions, decision => decision.Reason);
-        return $"STORAGE_RETENTION policyVersion={EvidenceRetentionPolicy.Version} sweepId={result.SweepId} status={status} durationMs={result.Duration.TotalMilliseconds:F0} decisions={result.Decisions.Count} reclaimedBytes={reclaimedBytes} mtpUnreclaimableBytes={mtpUnreclaimableBytes} deferred={deferred} actions={actions} reasons={reasons}";
+        return $"STORAGE_RETENTION policyVersion={EvidenceRetentionPolicy.Version} sweepId={result.SweepId} status={status} durationMs={result.Duration.TotalMilliseconds:F0} decisions={result.Decisions.Count} reclaimedBytes={reclaimedBytes} mtpUnreclaimableDirectoriesUnmeasured={mtpUnreclaimableDirectoriesUnmeasured} deferred={deferred} actions={actions} reasons={reasons}";
     }
 
     internal static void AppendArtifactRetentionReceipt(
@@ -274,10 +286,9 @@ internal static class RunEventMaintenanceCadence
             EvidenceRetentionAction.DeferredLive or
             EvidenceRetentionAction.DeferredLocked);
         var reclaimedBytes = result.Decisions.Sum(decision => decision.BytesReclaimed);
-        var mtpUnreclaimableBytes = result.Decisions
-            .Where(decision => decision.Family == EvidenceArtifactFamily.MtpTestRuns)
-            .Where(decision => decision.Action == EvidenceRetentionAction.RetainedUndecidable)
-            .Sum(decision => decision.BytesAttempted);
+        var mtpUnreclaimableDirectoriesUnmeasured = result.Decisions.Count(decision =>
+            decision.Family == EvidenceArtifactFamily.MtpTestRuns &&
+            decision.Action == EvidenceRetentionAction.RetainedUndecidable);
         var status = ArtifactRetentionStatus(result, reclaimedBytes, deferred ? 1 : 0);
         store.AppendAsync(new RunEventAppend(
             RunEventTypes.EvidenceRetention,
@@ -302,7 +313,7 @@ internal static class RunEventMaintenanceCadence
                 result.PromptArtifactsDeleted,
                 result.GoalJournalsArchived,
                 reclaimedBytes,
-                mtpUnreclaimableBytes,
+                mtpUnreclaimableDirectoriesUnmeasured,
                 durationMs = result.Duration.TotalMilliseconds,
                 decisionsTruncated = truncated,
                 destructiveDecisionsDropped = destructive.Length - keptDestructive.Length,
@@ -357,7 +368,7 @@ internal static class RunEventMaintenanceCadence
             .OrderBy(group => group.Key, StringComparer.Ordinal)
             .Select(group => $"{Sanitize(group.Key)}:{group.Count()}"));
 
-    private static bool HasUnresolvedArtifactRetentionFailure(
+    private static DateTimeOffset? LatestUnresolvedArtifactRetentionFailure(
         SqliteRunEventStore store,
         DateTimeOffset? latestMaintenance)
     {
@@ -370,11 +381,13 @@ internal static class RunEventMaintenanceCadence
                 .GetResult();
             return latestArtifact is not null &&
                 string.Equals(latestArtifact.Status, "Failed", StringComparison.OrdinalIgnoreCase) &&
-                (latestMaintenance is null || latestArtifact.OccurredAt >= latestMaintenance.Value);
+                (latestMaintenance is null || latestArtifact.OccurredAt >= latestMaintenance.Value)
+                    ? latestArtifact.OccurredAt
+                    : null;
         }
         catch
         {
-            return false;
+            return null;
         }
     }
 

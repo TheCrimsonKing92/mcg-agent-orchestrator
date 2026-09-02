@@ -303,28 +303,30 @@ public sealed class StorageRetentionMaintenanceTests
             Now,
             beforeAttemptCandidateDeletionForTests: directory =>
             {
-                contenderAcquired = Task.Run(() =>
+                var contender = new Thread(() =>
                 {
-                    using var contender = new Mutex(false, StorageRetentionMaintenance.AttemptLeaseNameFor(directory));
+                    using var contenderMutex = new Mutex(false, StorageRetentionMaintenance.AttemptLeaseNameFor(directory));
                     var acquired = false;
                     try
                     {
-                        acquired = contender.WaitOne(0);
-                        return acquired;
+                        acquired = contenderMutex.WaitOne(0);
                     }
                     catch (AbandonedMutexException)
                     {
                         acquired = true;
-                        return true;
                     }
                     finally
                     {
                         if (acquired)
                         {
-                            contender.ReleaseMutex();
+                            contenderMutex.ReleaseMutex();
                         }
+                        contenderAcquired = acquired;
                     }
-                }).GetAwaiter().GetResult();
+                });
+                contender.IsBackground = true;
+                contender.Start();
+                Assert.True(contender.Join(TimeSpan.FromSeconds(10)), "Lease contender thread did not finish.");
             });
 
         Assert.False(contenderAcquired);
@@ -681,7 +683,7 @@ public sealed class StorageRetentionMaintenanceTests
     }
 
     [Xunit.Fact]
-    public void MtpRetention_LegacyDirectoryReportsUnreclaimableBytes()
+    public void MtpRetention_LegacyDirectoryReportsBytesAsUnmeasuredWithoutRecursiveWalk()
     {
         using var fixture = new RetentionFixture();
         var legacyDirectory = Path.Combine(fixture.MtpResultsRoot, "legacy-without-sidecar");
@@ -700,9 +702,13 @@ public sealed class StorageRetentionMaintenanceTests
             item.Path == legacyDirectory &&
             item.Action == EvidenceRetentionAction.RetainedUndecidable);
 
-        Assert.Equal(123, decision.BytesAttempted);
+        Assert.Equal(0, decision.BytesAttempted);
+        Assert.DoesNotContain(
+            "mtpUnreclaimableBytes=",
+            RunEventMaintenanceCadence.FormatArtifactRetentionReceipt(result),
+            StringComparison.Ordinal);
         Assert.Contains(
-            "mtpUnreclaimableBytes=123",
+            "mtpUnreclaimableDirectoriesUnmeasured=1",
             RunEventMaintenanceCadence.FormatArtifactRetentionReceipt(result),
             StringComparison.Ordinal);
     }
