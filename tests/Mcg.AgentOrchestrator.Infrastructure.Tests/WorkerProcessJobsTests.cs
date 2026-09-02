@@ -348,6 +348,28 @@ public sealed class WorkerProcessJobsTests : IDisposable
         Assert.Equal([4249, 4250], receipt.DestroyedOwners.Select(owner => owner.OwnerProcessId));
     }
 
+    [Xunit.Fact]
+    public void TempRootReceiptScope_AppliesAttemptLocalChildContract()
+    {
+        var environment = new Dictionary<string, string?>(StringComparer.OrdinalIgnoreCase)
+        {
+            [TempRootApparatusLossReceiptStore.GateInvocationIdVariable] = "ambient-attempt",
+            [TempRootApparatusLossReceiptStore.ReceiptPathVariable] = "ambient-path"
+        };
+        var receiptPath = Path.Combine(Path.GetTempPath(), "attempt-local", "receipt.jsonl");
+
+        using (TempRootApparatusLossReceiptStore.PushScope("attempt-local", receiptPath))
+        {
+            TempRootApparatusLossReceiptStore.ApplyCurrentScope(environment);
+            Assert.Equal("attempt-local", environment[TempRootApparatusLossReceiptStore.GateInvocationIdVariable]);
+            Assert.Equal(receiptPath, environment[TempRootApparatusLossReceiptStore.ReceiptPathVariable]);
+        }
+
+        TempRootApparatusLossReceiptStore.ApplyCurrentScope(environment);
+        Assert.DoesNotContain(TempRootApparatusLossReceiptStore.GateInvocationIdVariable, environment.Keys);
+        Assert.DoesNotContain(TempRootApparatusLossReceiptStore.ReceiptPathVariable, environment.Keys);
+    }
+
     private static ProcessInspectionRecord AvailableProcess(int processId) =>
         new(
             processId,

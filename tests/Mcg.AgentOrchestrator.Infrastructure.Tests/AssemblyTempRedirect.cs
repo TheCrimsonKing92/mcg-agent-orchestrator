@@ -220,9 +220,11 @@ internal static class AssemblyTempRedirect
         ArgumentNullException.ThrowIfNull(timings);
 
         var outcomes = new List<TempRootDeleteOutcome>();
+        var destroyedOwners = new List<TempRootApparatusDestroyedOwner>();
         foreach (var candidate in boundedCandidates)
         {
             var path = Path.Combine(sharedRoot, candidate.Name);
+            var capturedOwner = TryReadOwnedRootIdentity(path, candidate.ProcessId);
             TempRootDeleteOutcome outcome;
             IDisposable? deletionLease = null;
             try
@@ -249,6 +251,10 @@ internal static class AssemblyTempRedirect
             }
 
             timings.RecordDelete(outcome);
+            if (outcome.Status == TempRootDeleteStatus.Deleted && capturedOwner is not null)
+            {
+                destroyedOwners.Add(capturedOwner);
+            }
             TryWriteReceipt(
                 writeReceipt,
                 () => FormatReapReceipt(
@@ -264,7 +270,51 @@ internal static class AssemblyTempRedirect
             outcomes.Add(outcome);
         }
 
+        TempRootApparatusLossReceiptStore.RecordDeletedOwners(sharedRoot, destroyedOwners);
+
         return outcomes;
+    }
+
+    internal static TempRootApparatusDestroyedOwner? TryReadOwnedRootIdentity(
+        string rootPath,
+        int expectedProcessId)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(rootPath);
+        ArgumentOutOfRangeException.ThrowIfNegativeOrZero(expectedProcessId);
+        try
+        {
+            using var stream = new FileStream(
+                RootLeasePath(rootPath),
+                FileMode.Open,
+                FileAccess.Read,
+                FileShare.ReadWrite | FileShare.Delete);
+            using var reader = new StreamReader(stream, System.Text.Encoding.UTF8);
+            var fields = reader.ReadToEnd()
+                .Split(';', StringSplitOptions.RemoveEmptyEntries)
+                .Select(field => field.Split('=', 2))
+                .Where(field => field.Length == 2)
+                .ToDictionary(field => field[0], field => field[1], StringComparer.Ordinal);
+            return fields.TryGetValue("pid", out var pidText) &&
+                int.TryParse(
+                    pidText,
+                    System.Globalization.NumberStyles.None,
+                    System.Globalization.CultureInfo.InvariantCulture,
+                    out var processId) &&
+                processId == expectedProcessId &&
+                fields.TryGetValue("startedAt", out var startedAtText) &&
+                DateTimeOffset.TryParseExact(
+                    startedAtText,
+                    "O",
+                    System.Globalization.CultureInfo.InvariantCulture,
+                    System.Globalization.DateTimeStyles.RoundtripKind,
+                    out var startedAt)
+                ? new TempRootApparatusDestroyedOwner(processId, startedAt, rootPath)
+                : null;
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or FormatException or ArgumentException)
+        {
+            return null;
+        }
     }
 
     internal static string FormatReapReceipt(

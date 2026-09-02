@@ -594,13 +594,15 @@ public sealed class AssemblyTempRedirectTests
     private static TempRootCandidate Candidate(string path, bool requiresLowLabel = false) =>
         new(path, requiresLowLabel);
 
-    private static MtpProbeProcess StartMtpProbe(
+    internal static MtpProbeProcess StartMtpProbe(
         string executable,
         string testAssembly,
         string root,
         string receiptPath,
         string readyEventName,
-        string releaseEventName)
+        string releaseEventName,
+        string? gateInvocationId = null,
+        string? apparatusReceiptPath = null)
     {
         var startInfo = BuildMtpProbeStartInfo(
             executable,
@@ -608,7 +610,9 @@ public sealed class AssemblyTempRedirectTests
             root,
             receiptPath,
             readyEventName,
-            releaseEventName);
+            releaseEventName,
+            gateInvocationId,
+            apparatusReceiptPath);
         var process = new Process { StartInfo = startInfo };
         Assert.True(process.Start(), $"Failed to start MTP assembly '{testAssembly}' with '{executable}'.");
         process.StandardInput.Close();
@@ -625,7 +629,9 @@ public sealed class AssemblyTempRedirectTests
         string root,
         string receiptPath,
         string readyEventName,
-        string releaseEventName)
+        string releaseEventName,
+        string? gateInvocationId = null,
+        string? apparatusReceiptPath = null)
     {
         Assert.True(
             IsManagedMtpProbeLaunch(executable, testAssembly),
@@ -646,6 +652,11 @@ public sealed class AssemblyTempRedirectTests
         startInfo.Environment[AssemblyTempRedirectChildSmokeTests.ReleaseEventVariable] = releaseEventName;
         startInfo.Environment[AssemblyTempRedirectChildSmokeTests.ParentProcessIdVariable] =
             Environment.ProcessId.ToString(CultureInfo.InvariantCulture);
+        if (!string.IsNullOrWhiteSpace(gateInvocationId) && !string.IsNullOrWhiteSpace(apparatusReceiptPath))
+        {
+            startInfo.Environment[TempRootApparatusLossReceiptStore.GateInvocationIdVariable] = gateInvocationId;
+            startInfo.Environment[TempRootApparatusLossReceiptStore.ReceiptPathVariable] = apparatusReceiptPath;
+        }
         startInfo.ArgumentList.Add(testAssembly);
         startInfo.ArgumentList.Add("--filter-class");
         startInfo.ArgumentList.Add("*AssemblyTempRedirectChildSmokeTests*");
@@ -686,7 +697,7 @@ public sealed class AssemblyTempRedirectTests
         startInfo.Environment["TMP"] = Path.Combine(root, "inherited-temp");
     }
 
-    private static async Task<TempRootProbeReceipt> WaitForProbeReceiptAsync(
+    internal static async Task<TempRootProbeReceipt> WaitForProbeReceiptAsync(
         string label,
         MtpProbeProcess process,
         WaitHandle ready,
@@ -781,7 +792,7 @@ public sealed class AssemblyTempRedirectTests
             FormatProcessFailure(label, result));
     }
 
-    private static void DeleteDirectory(string path)
+    internal static void DeleteDirectory(string path)
     {
         try
         {

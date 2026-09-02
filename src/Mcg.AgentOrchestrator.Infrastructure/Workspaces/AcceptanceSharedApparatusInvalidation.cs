@@ -29,6 +29,8 @@ internal sealed record AcceptanceSharedApparatusInvalidation(
 internal static class TempRootApparatusLossReceiptStore
 {
     private const string FileName = "temp-root-apparatus-loss.v1.jsonl";
+    internal const string GateInvocationIdVariable = "MCG_ACCEPTANCE_GATE_INVOCATION_ID";
+    internal const string ReceiptPathVariable = "MCG_ACCEPTANCE_TEMP_ROOT_LOSS_RECEIPT_PATH";
     private static readonly JsonSerializerOptions JsonOptions = new(JsonSerializerDefaults.Web);
     private static readonly AsyncLocal<ReceiptContext?> CurrentContext = new();
 
@@ -75,28 +77,65 @@ internal static class TempRootApparatusLossReceiptStore
                 result.CapturedOwner?.StartedAt is not null)
             .GroupBy(result => result.SharedRoot, StringComparer.OrdinalIgnoreCase))
         {
-            var owners = group
+            RecordDeletedOwners(
+                group.Key,
+                group
                 .Select(result => new TempRootApparatusDestroyedOwner(
                     result.ProcessId,
                     result.CapturedOwner!.StartedAt!.Value,
                     result.Path))
-                .DistinctBy(owner => owner.OwnerProcessId)
-                .ToArray();
-            if (owners.Length < 2)
-            {
-                continue;
-            }
-
-            Append(
-                context.Path,
-                new TempRootApparatusLossReceiptV1(
-                    1,
-                    context.GateInvocationId,
-                    Guid.NewGuid().ToString("N"),
-                    group.Key,
-                    owners,
-                    DateTimeOffset.UtcNow));
+                .ToArray());
         }
+    }
+
+    internal static void RecordDeletedOwners(
+        string sharedRoot,
+        IEnumerable<TempRootApparatusDestroyedOwner> destroyedOwners)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(sharedRoot);
+        ArgumentNullException.ThrowIfNull(destroyedOwners);
+        var context = ResolveContext();
+        if (context is null)
+        {
+            return;
+        }
+
+        var owners = destroyedOwners
+            .Where(owner => owner.OwnerProcessId > 0 &&
+                owner.OwnerStartedAt != default &&
+                PathsEqual(
+                    owner.OwnedRootPath,
+                    TempRootJanitor.BuildOwnedRootPath(sharedRoot, owner.OwnerProcessId)))
+            .DistinctBy(owner => owner.OwnerProcessId)
+            .ToArray();
+        if (owners.Length < 2)
+        {
+            return;
+        }
+
+        Append(
+            context.Path,
+            new TempRootApparatusLossReceiptV1(
+                1,
+                context.GateInvocationId,
+                Guid.NewGuid().ToString("N"),
+                sharedRoot,
+                owners,
+                DateTimeOffset.UtcNow));
+    }
+
+    internal static void ApplyCurrentScope(IDictionary<string, string?> environment)
+    {
+        ArgumentNullException.ThrowIfNull(environment);
+        if (CurrentContext.Value is not { } context)
+        {
+            environment.Remove(GateInvocationIdVariable);
+            environment.Remove(ReceiptPathVariable);
+            return;
+        }
+
+        environment[GateInvocationIdVariable] = context.GateInvocationId;
+        environment[ReceiptPathVariable] = context.Path;
     }
 
     internal static IReadOnlyList<TempRootApparatusLossReceiptV1> Read(string? path)
@@ -126,6 +165,32 @@ internal static class TempRootApparatusLossReceiptStore
     }
 
     private sealed record ReceiptContext(string GateInvocationId, string Path);
+
+    private static ReceiptContext? ResolveContext()
+    {
+        if (CurrentContext.Value is { } current)
+        {
+            return current;
+        }
+
+        var gateInvocationId = Environment.GetEnvironmentVariable(GateInvocationIdVariable);
+        var path = Environment.GetEnvironmentVariable(ReceiptPathVariable);
+        return string.IsNullOrWhiteSpace(gateInvocationId) || string.IsNullOrWhiteSpace(path)
+            ? null
+            : new ReceiptContext(gateInvocationId, path);
+    }
+
+    private static bool PathsEqual(string left, string right)
+    {
+        try
+        {
+            return Path.GetFullPath(left).Equals(Path.GetFullPath(right), StringComparison.OrdinalIgnoreCase);
+        }
+        catch (Exception ex) when (ex is ArgumentException or NotSupportedException or PathTooLongException)
+        {
+            return false;
+        }
+    }
 
     private sealed class RestoreScope(Action restore) : IDisposable
     {

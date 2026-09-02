@@ -8,6 +8,8 @@ internal static class AssemblyTempRedirect
 {
     internal const string LowInheritableLevel = "(OI)(CI)L";
     internal const int MaxRootsReapedPerProcess = 32;
+    private const string RootLeaseSuffix = ".owner.lock";
+    private static FileStream? processRootLease;
 
     [ModuleInitializer]
     internal static void Install()
@@ -34,6 +36,14 @@ internal static class AssemblyTempRedirect
             return;
         }
 
+        var rootLease = TryAcquireOwnedRootLease(selection.SelectedRoot);
+        if (rootLease is null)
+        {
+            return;
+        }
+
+        processRootLease = rootLease;
+
         Environment.SetEnvironmentVariable("TMP", selection.SelectedRoot, EnvironmentVariableTarget.Process);
         Environment.SetEnvironmentVariable("TEMP", selection.SelectedRoot, EnvironmentVariableTarget.Process);
 
@@ -41,7 +51,7 @@ internal static class AssemblyTempRedirect
         // process is gone. Both are required — exit handlers do not run for killed processes,
         // and this repository cancels dispatches and times out gates routinely.
         ReapOrphanedRoots(selection.SelectedRoot);
-        AppDomain.CurrentDomain.ProcessExit += (_, _) => _ = TryDeleteTree(selection.SelectedRoot);
+        AppDomain.CurrentDomain.ProcessExit += (_, _) => ReleaseOwnedRoot(selection.SelectedRoot);
     }
 
     internal static IReadOnlyList<string> SelectReapableRoots(
@@ -127,10 +137,16 @@ internal static class AssemblyTempRedirect
                               candidate => Directory.GetLastWriteTimeUtc(Path.Combine(sharedRoot, candidate))))
                           .Take(MaxRootsReapedPerProcess)
                           .ToArray();
+            var destroyedOwners = new List<TempRootApparatusDestroyedOwner>();
             foreach (var candidate in RevalidateExitedRoots(bounded, inspect))
             {
                 var path = Path.Combine(sharedRoot, candidate.Name);
+                var capturedOwner = TryReadOwnedRootIdentity(path, candidate.ProcessId);
                 var outcome = deleteTree(path);
+                if (outcome.Status == TempRootJanitorDeleteStatus.Deleted && capturedOwner is not null)
+                {
+                    destroyedOwners.Add(capturedOwner);
+                }
                 TryWriteReceipt(
                     writeReceipt,
                     () => FormatReapReceipt(
@@ -140,6 +156,8 @@ internal static class AssemblyTempRedirect
                         candidate.Observation,
                         outcome));
             }
+
+            TempRootApparatusLossReceiptStore.RecordDeletedOwners(sharedRoot, destroyedOwners);
         }
         catch (Exception)
         {
@@ -147,6 +165,90 @@ internal static class AssemblyTempRedirect
             // a ModuleInitializer, so anything escaping here kills the apphost before discovery and
             // the lane reports zero tests with no failing test to point at.
         }
+    }
+
+    internal static string RootLeasePath(string rootPath)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(rootPath);
+        var fullPath = Path.GetFullPath(rootPath)
+            .TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar);
+        var parent = Path.GetDirectoryName(fullPath)
+            ?? throw new InvalidOperationException($"Temp root '{rootPath}' has no parent directory.");
+        return Path.Combine(parent, $".{Path.GetFileName(fullPath)}{RootLeaseSuffix}");
+    }
+
+    internal static FileStream? TryAcquireOwnedRootLease(string rootPath)
+    {
+        FileStream? lease = null;
+        try
+        {
+            lease = new FileStream(
+                RootLeasePath(rootPath),
+                FileMode.OpenOrCreate,
+                FileAccess.ReadWrite,
+                FileShare.Read,
+                bufferSize: 256,
+                FileOptions.WriteThrough);
+            lease.SetLength(0);
+            using (var writer = new StreamWriter(lease, System.Text.Encoding.UTF8, leaveOpen: true))
+            {
+                using var process = System.Diagnostics.Process.GetCurrentProcess();
+                writer.Write($"pid={Environment.ProcessId};startedAt={process.StartTime.ToUniversalTime():O};path={Environment.ProcessPath}");
+                writer.Flush();
+            }
+
+            lease.Flush(flushToDisk: true);
+            lease.Position = 0;
+            return lease;
+        }
+        catch
+        {
+            lease?.Dispose();
+            return null;
+        }
+    }
+
+    internal static TempRootApparatusDestroyedOwner? TryReadOwnedRootIdentity(
+        string rootPath,
+        int expectedProcessId)
+    {
+        try
+        {
+            using var stream = new FileStream(
+                RootLeasePath(rootPath),
+                FileMode.Open,
+                FileAccess.Read,
+                FileShare.ReadWrite | FileShare.Delete);
+            using var reader = new StreamReader(stream, System.Text.Encoding.UTF8);
+            var fields = reader.ReadToEnd()
+                .Split(';', StringSplitOptions.RemoveEmptyEntries)
+                .Select(field => field.Split('=', 2))
+                .Where(field => field.Length == 2)
+                .ToDictionary(field => field[0], field => field[1], StringComparer.Ordinal);
+            return fields.TryGetValue("pid", out var pidText) &&
+                int.TryParse(pidText, out var processId) &&
+                processId == expectedProcessId &&
+                fields.TryGetValue("startedAt", out var startedAtText) &&
+                DateTimeOffset.TryParseExact(
+                    startedAtText,
+                    "O",
+                    System.Globalization.CultureInfo.InvariantCulture,
+                    System.Globalization.DateTimeStyles.RoundtripKind,
+                    out var startedAt)
+                ? new TempRootApparatusDestroyedOwner(processId, startedAt, rootPath)
+                : null;
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or FormatException or ArgumentException)
+        {
+            return null;
+        }
+    }
+
+    private static void ReleaseOwnedRoot(string rootPath)
+    {
+        Interlocked.Exchange(ref processRootLease, null)?.Dispose();
+        _ = TryDeleteTree(rootPath);
+        try { File.Delete(RootLeasePath(rootPath)); } catch { }
     }
 
     // Use one exact-candidate native snapshot per phase. The second read closes the selection-to-delete
