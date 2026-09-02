@@ -1825,6 +1825,7 @@ internal sealed class ConductorParallelAcceptanceAttemptCoordinator
         var id = rawId[..Math.Min(64, rawId.Length)];
         var directory = Path.Combine(_rootDirectory, candidate.Goal.Id.Value);
         Directory.CreateDirectory(directory);
+        PruneOldAttempts(directory, RetainedAttemptCountPerGoal - 1);
         var ordinal = AllocateOrdinal(directory);
         var prefix = Path.Combine(directory, id);
         var focusedMembers = focusedEvidenceRequest?
@@ -2616,6 +2617,87 @@ internal sealed class ConductorParallelAcceptanceAttemptCoordinator
 
     private static string TemporarySiblingPath(string path) =>
         $"{path}.{Guid.NewGuid():N}.tmp";
+
+    private static void PruneOldAttempts(string directory, int retainCount)
+    {
+        if (!Directory.Exists(directory))
+        {
+            return;
+        }
+
+        var attempts = Directory.EnumerateFiles(directory, "*.attempt.json")
+            .Select(path => new
+            {
+                Path = path,
+                Attempt = TryReadAttemptFile(path),
+                Timestamp = File.GetLastWriteTimeUtc(path)
+            })
+            .ToArray();
+        var protectedAttemptIds = EvidenceRetentionPolicy.ProtectedAttemptIds(attempts
+            .Where(item => item.Attempt is not null)
+            .Select(item => new RetentionAttemptIdentity(
+                item.Attempt!.AttemptId,
+                item.Attempt.Ordinal,
+                item.Attempt.StartedAt,
+                item.Attempt.Outcome == ConductorParallelAcceptanceAttemptOutcome.Failed,
+                item.Attempt.ReconciledAt is not null))
+            .ToArray());
+        var staleAttempts = attempts
+            .OrderByDescending(item => item.Attempt?.Ordinal ?? int.MinValue)
+            .ThenByDescending(item => item.Attempt?.StartedAt.UtcDateTime ?? item.Timestamp)
+            .ThenByDescending(
+                item => item.Attempt?.AttemptId ?? Path.GetFileName(item.Path),
+                StringComparer.Ordinal)
+            .Skip(Math.Max(0, retainCount))
+            .Where(item => item.Attempt is null || !protectedAttemptIds.Contains(item.Attempt.AttemptId))
+            .ToArray();
+
+        foreach (var item in staleAttempts)
+        {
+            var prefix = item.Path[..^".attempt.json".Length];
+            foreach (var path in Directory.EnumerateFiles(directory, Path.GetFileName(prefix) + ".*")
+                .Where(path => !path.EndsWith(".test-identities.json", StringComparison.OrdinalIgnoreCase)))
+            {
+                TryDeleteFile(path);
+            }
+
+            var receiptDirectory = prefix + ".receipts";
+            if (Directory.Exists(receiptDirectory))
+            {
+                try
+                {
+                    Directory.Delete(receiptDirectory, recursive: true);
+                }
+                catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+                {
+                    Console.Error.WriteLine(
+                        $"ATTEMPT_RECEIPT_PRUNE_FAILED path=\"{receiptDirectory}\" error=\"{ex.Message}\"");
+                }
+            }
+        }
+    }
+
+    internal static void PruneOldAttemptsForTests(string directory, int retainCount) =>
+        PruneOldAttempts(directory, retainCount);
+
+    internal ConductorParallelAcceptanceAttempt CreateAttemptForTests(
+        ConductorParallelAcceptanceCandidate candidate)
+    {
+        var attempt = CreateAttempt(
+            candidate,
+            ConductorAutonomyPolicy.Permissive,
+            GateDispatchKind,
+            focusedEvidenceRequest: null,
+            requestContext: null,
+            AcceptanceStableSlotExhaustionPolicy.Fail);
+        Persist(attempt);
+        return attempt;
+    }
+
+    private static void TryDeleteFile(string path)
+    {
+        try { File.Delete(path); } catch { }
+    }
 
     private static ConductorParallelAcceptanceAttempt? TryReadAttemptFile(string path)
     {

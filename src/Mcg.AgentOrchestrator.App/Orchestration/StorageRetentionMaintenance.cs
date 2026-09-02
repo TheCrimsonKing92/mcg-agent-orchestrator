@@ -1,3 +1,4 @@
+using System.Diagnostics;
 using System.IO.Compression;
 using System.Security.Cryptography;
 using System.Text;
@@ -41,7 +42,8 @@ internal sealed record StorageRetentionResult(
     int PromptArtifactsDeleted,
     int GoalJournalsArchived,
     string SweepId,
-    IReadOnlyList<EvidenceRetentionDecision> Decisions)
+    IReadOnlyList<EvidenceRetentionDecision> Decisions,
+    TimeSpan Duration = default)
 {
     public bool Failed => Decisions.Any(decision => decision.Action == EvidenceRetentionAction.Failed);
 }
@@ -52,7 +54,7 @@ internal static partial class StorageRetentionMaintenance
     internal static readonly TimeSpan WorkerDeletionAge = TimeSpan.FromDays(14);
     internal static readonly TimeSpan AcceptanceArtifactMaxAge = TimeSpan.FromDays(14);
     internal static readonly TimeSpan MtpResultMaxAge = TimeSpan.FromDays(14);
-    internal const long AcceptanceArtifactMaxBytes = 256L * 1024 * 1024;
+    internal const long AcceptanceArtifactMaxBytesPerGoal = 256L * 1024 * 1024;
     internal const int MtpResultMaxRetainedDirectories = 100;
 
     [GeneratedRegex("^(?<dispatch>(?<goal>[0-9a-f]{8})-(?<task>[0-9a-f]{8})-[0-9]{14})", RegexOptions.IgnoreCase | RegexOptions.CultureInvariant)]
@@ -66,7 +68,13 @@ internal static partial class StorageRetentionMaintenance
         var retentionGoals = goals.Select(goal => new StorageRetentionGoal(
             goal.Id.Value,
             goal.Status,
-            goal.Tasks.ToDictionary(task => task.Id.Value, task => task.Status, StringComparer.OrdinalIgnoreCase)))
+            goal.Tasks.ToDictionary(task => task.Id.Value, task => task.Status, StringComparer.OrdinalIgnoreCase),
+            goal.Tasks
+                .Select(task => task.LastDispatch?.PromptPath)
+                .Where(path => !string.IsNullOrWhiteSpace(path))
+                .Select(path => Path.GetFullPath(path!))
+                .Distinct(StringComparer.OrdinalIgnoreCase)
+                .ToArray()))
             .ToArray();
         return Run(
             workspace.LogDirectory,
@@ -103,10 +111,13 @@ internal static partial class StorageRetentionMaintenance
         IReadOnlyCollection<StorageRetentionGoal> goals,
         DateTimeOffset now,
         Action? beforeGoalJournalArchiveForTests = null,
-        string? mtpResultsRoot = null)
+        string? mtpResultsRoot = null,
+        long? acceptanceArtifactMaxBytesForTests = null,
+        Action<string>? beforeAttemptCandidateDeletionForTests = null)
     {
         var decisions = new List<EvidenceRetentionDecision>();
         var sweepId = Guid.NewGuid().ToString("N");
+        var startedTimestamp = Stopwatch.GetTimestamp();
         using var lease = new Mutex(false, LeaseNameFor(orchestratorDirectory));
         var ownsLease = false;
         try
@@ -129,7 +140,16 @@ internal static partial class StorageRetentionMaintenance
                     null,
                     EvidenceOwnerResolution.Unrecorded,
                     "sweep-lease-unavailable"));
-                return new StorageRetentionResult(0, 0, 0, 0, 0, 0, sweepId, decisions);
+                return new StorageRetentionResult(
+                    0,
+                    0,
+                    0,
+                    0,
+                    0,
+                    0,
+                    sweepId,
+                    decisions,
+                    Stopwatch.GetElapsedTime(startedTimestamp));
             }
 
             try
@@ -140,6 +160,9 @@ internal static partial class StorageRetentionMaintenance
                     orchestratorDirectory,
                     goals,
                     now,
+                    sweepId,
+                    acceptanceArtifactMaxBytesForTests ?? AcceptanceArtifactMaxBytesPerGoal,
+                    beforeAttemptCandidateDeletionForTests,
                     decisions);
                 SweepPrompts(orchestratorDirectory, goals, now, decisions);
                 RecordGoalEventPreservation(orchestratorDirectory, goals, decisions);
@@ -158,7 +181,10 @@ internal static partial class StorageRetentionMaintenance
                     FailureExceptionType: ex.GetType().Name));
             }
 
-            return BuildResult(sweepId, decisions);
+            return BuildResult(sweepId, decisions) with
+            {
+                Duration = Stopwatch.GetElapsedTime(startedTimestamp)
+            };
         }
         finally
         {
@@ -194,8 +220,24 @@ internal static partial class StorageRetentionMaintenance
         return Path.Combine(localApplicationData, "Temp", "Low", "mcg-tests");
     }
 
-    internal static IDisposable AcquireAttemptWriterLease(string goalDirectory) =>
-        MutexLease.Acquire(AttemptLeaseNameFor(goalDirectory));
+    internal static IDisposable AcquireAttemptWriterLease(
+        string goalDirectory,
+        TimeSpan? timeout = null,
+        Action<string>? receipt = null)
+    {
+        var effectiveTimeout = timeout ?? TimeSpan.FromSeconds(30);
+        var lease = MutexLease.TryAcquire(AttemptLeaseNameFor(goalDirectory), effectiveTimeout);
+        if (lease is not null)
+        {
+            return lease;
+        }
+
+        var detail =
+            $"ACCEPTANCE_ARTIFACT_LEASE_TIMEOUT goal_directory=\"{goalDirectory}\" timeout_ms={effectiveTimeout.TotalMilliseconds:F0}";
+        receipt?.Invoke(detail);
+        Console.Error.WriteLine(detail);
+        throw new TimeoutException(detail);
+    }
 
     private static StorageRetentionResult BuildResult(
         string sweepId,
@@ -460,6 +502,9 @@ internal static partial class StorageRetentionMaintenance
         string orchestratorDirectory,
         IReadOnlyCollection<StorageRetentionGoal> goals,
         DateTimeOffset now,
+        string sweepId,
+        long acceptanceArtifactMaxBytes,
+        Action<string>? beforeAttemptCandidateDeletionForTests,
         List<EvidenceRetentionDecision> decisions)
     {
         var totals = (Receipts: 0, Deleted: 0);
@@ -474,6 +519,9 @@ internal static partial class StorageRetentionMaintenance
                 family.Family,
                 goals,
                 now,
+                sweepId,
+                acceptanceArtifactMaxBytes,
+                beforeAttemptCandidateDeletionForTests,
                 decisions);
             totals.Receipts += result.Receipts;
             totals.Deleted += result.Deleted;
@@ -487,6 +535,9 @@ internal static partial class StorageRetentionMaintenance
         EvidenceArtifactFamily family,
         IReadOnlyCollection<StorageRetentionGoal> goals,
         DateTimeOffset now,
+        string sweepId,
+        long acceptanceArtifactMaxBytes,
+        Action<string>? beforeAttemptCandidateDeletionForTests,
         List<EvidenceRetentionDecision> decisions)
     {
         if (!Directory.Exists(root))
@@ -496,7 +547,6 @@ internal static partial class StorageRetentionMaintenance
 
         var receipts = 0;
         var deleted = 0;
-        var candidates = new List<(FileInfo File, bool CountBound, string GoalId)>();
         foreach (var goalDirectory in Directory.EnumerateDirectories(root, "*", SearchOption.TopDirectoryOnly))
         {
             using var attemptLease = MutexLease.TryAcquire(AttemptLeaseNameFor(goalDirectory));
@@ -512,6 +562,7 @@ internal static partial class StorageRetentionMaintenance
                 continue;
             }
 
+            var candidates = new List<(FileInfo File, bool CountBound, string GoalId)>();
             var goalId = Path.GetFileName(goalDirectory);
             var owners = goals.Where(goal => goal.GoalId.Equals(goalId, StringComparison.OrdinalIgnoreCase)).ToArray();
             if (owners.Length != 1)
@@ -589,7 +640,25 @@ internal static partial class StorageRetentionMaintenance
                     continue;
                 }
 
-                if (!TryWriteSuccessfulTrxReceipt(trxPath))
+                var attempt = attempts.FirstOrDefault(identity => BelongsToAttempt(trxPath, identity.AttemptId));
+                if (attempt is null)
+                {
+                    decisions.Add(new EvidenceRetentionDecision(
+                        family,
+                        EvidenceRetentionAction.RetainedUndecidable,
+                        trxPath,
+                        goal.GoalId,
+                        EvidenceOwnerResolution.UniqueTerminal,
+                        "trx-attempt-ownership-unresolved"));
+                    continue;
+                }
+
+                if (!TryWriteSuccessfulTrxReceipt(
+                    trxPath,
+                    sweepId,
+                    goal.GoalId,
+                    attempt.AttemptId,
+                    now))
                 {
                     decisions.Add(new EvidenceRetentionDecision(
                         family,
@@ -657,7 +726,8 @@ internal static partial class StorageRetentionMaintenance
                     continue;
                 }
 
-                if (!path.EndsWith(".test-identities.json", StringComparison.OrdinalIgnoreCase))
+                if (!path.EndsWith(".trx", StringComparison.OrdinalIgnoreCase) &&
+                    !path.EndsWith(".test-identities.json", StringComparison.OrdinalIgnoreCase))
                 {
                     candidates.Add((
                         new FileInfo(path),
@@ -665,39 +735,53 @@ internal static partial class StorageRetentionMaintenance
                         goal.GoalId));
                 }
             }
-        }
 
-        var totalBytes = Directory.EnumerateFiles(root, "*", SearchOption.AllDirectories)
-            .Select(SafeLength)
-            .Sum();
-        foreach (var candidate in candidates
-            .OrderBy(item => item.File.LastWriteTimeUtc)
-            .ThenBy(item => item.File.FullName, StringComparer.OrdinalIgnoreCase))
-        {
-            var aged = now - candidate.File.LastWriteTimeUtc > AcceptanceArtifactMaxAge;
-            if (!candidate.CountBound && !aged && totalBytes <= AcceptanceArtifactMaxBytes)
+            var totalCandidateBytes = candidates.Sum(candidate => SafeLength(candidate.File.FullName));
+            beforeAttemptCandidateDeletionForTests?.Invoke(goalDirectory);
+            foreach (var candidate in candidates
+                .OrderBy(item => item.File.LastWriteTimeUtc)
+                .ThenBy(item => item.File.FullName, StringComparer.OrdinalIgnoreCase))
             {
-                continue;
-            }
+                var age = now - candidate.File.LastWriteTimeUtc;
+                var aged = age > AcceptanceArtifactMaxAge;
+                var byteBoundEligible =
+                    totalCandidateBytes > acceptanceArtifactMaxBytes &&
+                    age > WorkerCompressionAge;
+                if (!candidate.CountBound && !aged && !byteBoundEligible)
+                {
+                    if (totalCandidateBytes > acceptanceArtifactMaxBytes)
+                    {
+                        decisions.Add(new EvidenceRetentionDecision(
+                            family,
+                            EvidenceRetentionAction.Preserved,
+                            candidate.File.FullName,
+                            candidate.GoalId,
+                            EvidenceOwnerResolution.UniqueTerminal,
+                            "byte-bound-unsatisfiable-fresh-evidence"));
+                    }
 
-            var length = SafeLength(candidate.File.FullName);
-            var deletion = TryDeleteExclusive(candidate.File.FullName);
-            decisions.Add(new EvidenceRetentionDecision(
-                family,
-                deletion.Success ? EvidenceRetentionAction.Deleted : EvidenceRetentionAction.DeferredLocked,
-                candidate.File.FullName,
-                candidate.GoalId,
-                EvidenceOwnerResolution.UniqueTerminal,
-                deletion.Success
-                    ? candidate.CountBound ? "past-count-bound" : aged ? "past-age-bound" : "past-byte-bound"
-                    : "exclusive-delete-failed",
-                BytesAttempted: length,
-                BytesReclaimed: deletion.Success ? length : 0,
-                FailureExceptionType: deletion.ExceptionType));
-            if (deletion.Success)
-            {
-                deleted++;
-                totalBytes = Math.Max(0, totalBytes - length);
+                    continue;
+                }
+
+                var length = SafeLength(candidate.File.FullName);
+                var deletion = TryDeleteExclusive(candidate.File.FullName);
+                decisions.Add(new EvidenceRetentionDecision(
+                    family,
+                    deletion.Success ? EvidenceRetentionAction.Deleted : EvidenceRetentionAction.DeferredLocked,
+                    candidate.File.FullName,
+                    candidate.GoalId,
+                    EvidenceOwnerResolution.UniqueTerminal,
+                    deletion.Success
+                        ? candidate.CountBound ? "past-count-bound" : aged ? "past-age-bound" : "past-byte-bound"
+                        : "exclusive-delete-failed",
+                    BytesAttempted: length,
+                    BytesReclaimed: deletion.Success ? length : 0,
+                    FailureExceptionType: deletion.ExceptionType));
+                if (deletion.Success)
+                {
+                    deleted++;
+                    totalCandidateBytes = Math.Max(0, totalCandidateBytes - length);
+                }
             }
         }
 
@@ -728,7 +812,8 @@ internal static partial class StorageRetentionMaintenance
                     directory,
                     null,
                     EvidenceOwnerResolution.Unrecorded,
-                    invalidReason));
+                    invalidReason,
+                    BytesAttempted: SafeDirectoryLength(directory)));
                 continue;
             }
 
@@ -754,7 +839,8 @@ internal static partial class StorageRetentionMaintenance
                     null,
                     owners is null ? EvidenceOwnerResolution.Unmatched : EvidenceOwnerResolution.AmbiguousPrefix,
                     owners is null ? "mtp-attempt-owner-not-recorded" : "mtp-attempt-owner-is-ambiguous",
-                    ownership.AttemptId));
+                    ownership.AttemptId,
+                    BytesAttempted: SafeDirectoryLength(directory)));
                 continue;
             }
 
@@ -1032,7 +1118,12 @@ internal static partial class StorageRetentionMaintenance
         }
     }
 
-    private static bool TryWriteSuccessfulTrxReceipt(string trxPath)
+    private static bool TryWriteSuccessfulTrxReceipt(
+        string trxPath,
+        string sweepId,
+        string goalId,
+        string attemptId,
+        DateTimeOffset recordedAt)
     {
         var receiptPath = trxPath + ".test-identities.json";
         if (File.Exists(receiptPath))
@@ -1040,7 +1131,9 @@ internal static partial class StorageRetentionMaintenance
             try
             {
                 using var existing = JsonDocument.Parse(File.ReadAllText(receiptPath));
-                return existing.RootElement.TryGetProperty("testIdentities", out var identities) &&
+                return existing.RootElement.TryGetProperty("source", out var source) &&
+                    string.Equals(source.GetString(), Path.GetFileName(trxPath), StringComparison.OrdinalIgnoreCase) &&
+                    existing.RootElement.TryGetProperty("testIdentities", out var identities) &&
                     identities.ValueKind == JsonValueKind.Array && identities.GetArrayLength() > 0;
             }
             catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or JsonException)
@@ -1053,6 +1146,7 @@ internal static partial class StorageRetentionMaintenance
         try
         {
             using var input = new FileStream(trxPath, FileMode.Open, FileAccess.Read, FileShare.None);
+            var trxBytes = input.Length;
             var document = XDocument.Load(input, LoadOptions.None);
             var counters = document.Descendants().FirstOrDefault(element => element.Name.LocalName == "Counters");
             if (counters is null ||
@@ -1079,7 +1173,13 @@ internal static partial class StorageRetentionMaintenance
             }
             var receipt = new
             {
+                policyVersion = EvidenceRetentionPolicy.Version,
+                sweepId,
+                goalId,
+                attemptId,
                 source = Path.GetFileName(trxPath),
+                trxBytes,
+                recordedAt,
                 total = counters.Attribute("total")?.Value,
                 executed = counters.Attribute("executed")?.Value,
                 passed = counters.Attribute("passed")?.Value,
@@ -1304,6 +1404,20 @@ internal static partial class StorageRetentionMaintenance
         catch (Exception ex) when (ex is IOException or UnauthorizedAccessException) { return 0; }
     }
 
+    private static long SafeDirectoryLength(string path)
+    {
+        try
+        {
+            return Directory.EnumerateFiles(path, "*", SearchOption.AllDirectories)
+                .Select(SafeLength)
+                .Sum();
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+        {
+            return 0;
+        }
+    }
+
     private static (bool Success, long BytesAttempted, string? ExceptionType) TryDeleteDirectory(string path)
     {
         try
@@ -1353,29 +1467,9 @@ internal static partial class StorageRetentionMaintenance
             _ownsMutex = ownsMutex;
         }
 
-        public static MutexLease Acquire(string name)
-        {
-            var mutex = new Mutex(false, name);
-            try
-            {
-                try
-                {
-                    mutex.WaitOne();
-                }
-                catch (AbandonedMutexException)
-                {
-                }
+        public static MutexLease? TryAcquire(string name) => TryAcquire(name, TimeSpan.Zero);
 
-                return new MutexLease(mutex, ownsMutex: true);
-            }
-            catch
-            {
-                mutex.Dispose();
-                throw;
-            }
-        }
-
-        public static MutexLease? TryAcquire(string name)
+        public static MutexLease? TryAcquire(string name, TimeSpan timeout)
         {
             var mutex = new Mutex(false, name);
             try
@@ -1383,7 +1477,7 @@ internal static partial class StorageRetentionMaintenance
                 var ownsMutex = false;
                 try
                 {
-                    ownsMutex = mutex.WaitOne(0);
+                    ownsMutex = mutex.WaitOne(timeout);
                 }
                 catch (AbandonedMutexException)
                 {

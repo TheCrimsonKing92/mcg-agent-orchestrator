@@ -1,3 +1,4 @@
+using System.Diagnostics;
 using System.Text.Json;
 using Mcg.AgentOrchestrator.App.Orchestration;
 using Mcg.AgentOrchestrator.Core;
@@ -8,6 +9,81 @@ namespace Mcg.AgentOrchestrator.Infrastructure.Tests;
 
 public sealed class ConductorEvidenceAttemptLifecycleTests
 {
+    [Fact]
+    public async Task AttemptWriterLease_WhenHeld_TimesOutWithTypedReceipt()
+    {
+        var root = CreateTempDirectory();
+        using var holderAcquired = new ManualResetEventSlim();
+        using var holderRelease = new ManualResetEventSlim();
+        var holder = Task.Run(() =>
+        {
+            using var mutex = new Mutex(false, StorageRetentionMaintenance.AttemptLeaseNameFor(root));
+            mutex.WaitOne();
+            try
+            {
+                holderAcquired.Set();
+                Assert.True(holderRelease.Wait(TimeSpan.FromSeconds(10)));
+            }
+            finally
+            {
+                mutex.ReleaseMutex();
+            }
+        });
+
+        Assert.True(holderAcquired.Wait(TimeSpan.FromSeconds(10)));
+        string? receipt = null;
+        var started = Stopwatch.StartNew();
+        try
+        {
+            var exception = Assert.Throws<TimeoutException>(() =>
+                StorageRetentionMaintenance.AcquireAttemptWriterLease(
+                    root,
+                    TimeSpan.FromMilliseconds(50),
+                    value => receipt = value));
+
+            Assert.Contains("ACCEPTANCE_ARTIFACT_LEASE_TIMEOUT", exception.Message, StringComparison.Ordinal);
+            Assert.Contains("timeout_ms=50", receipt, StringComparison.Ordinal);
+            Assert.True(started.Elapsed < TimeSpan.FromSeconds(2));
+        }
+        finally
+        {
+            holderRelease.Set();
+            await holder;
+            Directory.Delete(root, recursive: true);
+        }
+    }
+
+    [Fact]
+    public void AttemptArtifactPruningBoundsRetainedAttemptSets()
+    {
+        var root = CreateTempDirectory();
+        try
+        {
+            var kernel = new AgentOrchestratorKernel();
+            var goal = kernel.CreateGoal("Bound active acceptance attempt artifacts");
+            var candidate = ConductorParallelAcceptanceCandidate.Create(
+                goal,
+                0,
+                [],
+                branchHeadSha: "branch-bounded",
+                mainHeadSha: "main-bounded");
+            var coordinator = new ConductorParallelAcceptanceAttemptCoordinator(root);
+            for (var ordinal = 1; ordinal <= 22; ordinal++)
+            {
+                coordinator.CreateAttemptForTests(candidate);
+            }
+
+            var goalDirectory = Path.Combine(root, goal.Id.Value);
+            Assert.Equal(
+                ConductorParallelAcceptanceAttemptCoordinator.RetainedAttemptCountPerGoal,
+                Directory.GetFiles(goalDirectory, "*.attempt.json").Length);
+        }
+        finally
+        {
+            Directory.Delete(root, recursive: true);
+        }
+    }
+
     [Fact]
     public void MultiSelectionSingleFindingUsesRequestDispositionForAttemptAndEventLabels()
     {

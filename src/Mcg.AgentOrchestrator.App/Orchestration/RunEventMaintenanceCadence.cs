@@ -54,6 +54,7 @@ internal static class RunEventMaintenanceCadence
                 : StorageRetentionMaintenance.LoadPersistedGoals(
                     new SqliteOrchestratorStateRepository(workspace.SqliteStatePath));
             var terminalGoalIds = retentionGoals?
+                .Where(goal => goal.IsTerminal)
                 .Select(goal => goal.GoalId)
                 .ToArray();
             var options = RunEventMaintenanceOptions.Default with
@@ -234,6 +235,10 @@ internal static class RunEventMaintenanceCadence
     internal static string FormatArtifactRetentionReceipt(StorageRetentionResult result)
     {
         var reclaimedBytes = result.Decisions.Sum(decision => decision.BytesReclaimed);
+        var mtpUnreclaimableBytes = result.Decisions
+            .Where(decision => decision.Family == EvidenceArtifactFamily.MtpTestRuns)
+            .Where(decision => decision.Action == EvidenceRetentionAction.RetainedUndecidable)
+            .Sum(decision => decision.BytesAttempted);
         var deferred = result.Decisions.Count(decision => decision.Action is
             EvidenceRetentionAction.DeferredLease or
             EvidenceRetentionAction.DeferredLive or
@@ -241,7 +246,7 @@ internal static class RunEventMaintenanceCadence
         var status = ArtifactRetentionStatus(result, reclaimedBytes, deferred);
         var actions = FormatDecisionCounts(result.Decisions, decision => decision.Action.ToString());
         var reasons = FormatDecisionCounts(result.Decisions, decision => decision.Reason);
-        return $"STORAGE_RETENTION policyVersion={EvidenceRetentionPolicy.Version} sweepId={result.SweepId} status={status} decisions={result.Decisions.Count} reclaimedBytes={reclaimedBytes} deferred={deferred} actions={actions} reasons={reasons}";
+        return $"STORAGE_RETENTION policyVersion={EvidenceRetentionPolicy.Version} sweepId={result.SweepId} status={status} durationMs={result.Duration.TotalMilliseconds:F0} decisions={result.Decisions.Count} reclaimedBytes={reclaimedBytes} mtpUnreclaimableBytes={mtpUnreclaimableBytes} deferred={deferred} actions={actions} reasons={reasons}";
     }
 
     internal static void AppendArtifactRetentionReceipt(
@@ -250,13 +255,29 @@ internal static class RunEventMaintenanceCadence
         DateTimeOffset occurredAt)
     {
         const int decisionLimit = 256;
-        var decisions = result.Decisions.Take(decisionLimit).ToArray();
+        var destructive = result.Decisions
+            .Where(decision => decision.Action is
+                EvidenceRetentionAction.Deleted or
+                EvidenceRetentionAction.Compressed)
+            .ToArray();
+        var keptDestructive = destructive.Take(decisionLimit).ToArray();
+        var decisions = keptDestructive
+            .Concat(result.Decisions
+                .Where(decision => decision.Action is not (
+                    EvidenceRetentionAction.Deleted or
+                    EvidenceRetentionAction.Compressed))
+                .Take(Math.Max(0, decisionLimit - keptDestructive.Length)))
+            .ToArray();
         var truncated = result.Decisions.Count > decisions.Length;
         var deferred = result.Decisions.Any(decision => decision.Action is
             EvidenceRetentionAction.DeferredLease or
             EvidenceRetentionAction.DeferredLive or
             EvidenceRetentionAction.DeferredLocked);
         var reclaimedBytes = result.Decisions.Sum(decision => decision.BytesReclaimed);
+        var mtpUnreclaimableBytes = result.Decisions
+            .Where(decision => decision.Family == EvidenceArtifactFamily.MtpTestRuns)
+            .Where(decision => decision.Action == EvidenceRetentionAction.RetainedUndecidable)
+            .Sum(decision => decision.BytesAttempted);
         var status = ArtifactRetentionStatus(result, reclaimedBytes, deferred ? 1 : 0);
         store.AppendAsync(new RunEventAppend(
             RunEventTypes.EvidenceRetention,
@@ -281,7 +302,10 @@ internal static class RunEventMaintenanceCadence
                 result.PromptArtifactsDeleted,
                 result.GoalJournalsArchived,
                 reclaimedBytes,
+                mtpUnreclaimableBytes,
+                durationMs = result.Duration.TotalMilliseconds,
                 decisionsTruncated = truncated,
+                destructiveDecisionsDropped = destructive.Length - keptDestructive.Length,
                 totalDecisionCount = result.Decisions.Count,
                 decisions
             }),

@@ -663,6 +663,93 @@ public sealed class RunEventStoreTests
         Assert.Contains("status=partial-failed", failedReceipt.Detail, StringComparison.Ordinal);
     }
 
+    [Xunit.Fact]
+    public async Task ArtifactRetentionReceiptRetainsEveryDestructiveDecisionPastNominalLimit()
+    {
+        var root = CreateTempDirectory();
+        var store = new SqliteRunEventStore(Path.Combine(root, "run-events-destructive-retention.db"));
+        var preserved = Enumerable.Range(0, 300)
+            .Select(index => new EvidenceRetentionDecision(
+                EvidenceArtifactFamily.AcceptanceGateAttempts,
+                EvidenceRetentionAction.Preserved,
+                $"preserved-{index:D3}.log",
+                "goal-1",
+                EvidenceOwnerResolution.UniqueTerminal,
+                "preserved"));
+        var deleted = new[]
+        {
+            new EvidenceRetentionDecision(
+                EvidenceArtifactFamily.AcceptanceGateAttempts,
+                EvidenceRetentionAction.Deleted,
+                "deleted-late-1.log",
+                "goal-1",
+                EvidenceOwnerResolution.UniqueTerminal,
+                "past-age-bound",
+                BytesAttempted: 10,
+                BytesReclaimed: 10),
+            new EvidenceRetentionDecision(
+                EvidenceArtifactFamily.AcceptanceGateAttempts,
+                EvidenceRetentionAction.Deleted,
+                "deleted-late-2.log",
+                "goal-1",
+                EvidenceOwnerResolution.UniqueTerminal,
+                "past-count-bound",
+                BytesAttempted: 20,
+                BytesReclaimed: 20)
+        };
+        var result = new StorageRetentionResult(
+            WorkerArtifactsDeleted: 0,
+            WorkerLogsCompressed: 0,
+            SuccessfulTrxReceiptsWritten: 0,
+            AcceptanceArtifactsDeleted: 2,
+            PromptArtifactsDeleted: 0,
+            GoalJournalsArchived: 0,
+            SweepId: "sweep-destructive-retention",
+            Decisions: preserved.Concat(deleted).ToArray());
+
+        RunEventMaintenanceCadence.AppendArtifactRetentionReceipt(store, result, DateTimeOffset.UtcNow);
+
+        var receipt = Assert.IsType<RunEventRecord>(await store.ReadLatestAsync(
+            RunEventTypes.EvidenceRetention,
+            RunEventMaintenanceCadence.ArtifactRetentionOperation));
+        using var payload = JsonDocument.Parse(receipt.PayloadJson);
+        var paths = payload.RootElement.GetProperty("decisions")
+            .EnumerateArray()
+            .Select(item => item.GetProperty("Path").GetString())
+            .ToArray();
+        Assert.True(payload.RootElement.GetProperty("decisionsTruncated").GetBoolean());
+        Assert.Equal(0, payload.RootElement.GetProperty("destructiveDecisionsDropped").GetInt32());
+        Assert.Contains("deleted-late-1.log", paths);
+        Assert.Contains("deleted-late-2.log", paths);
+
+        var destructiveOverflow = Enumerable.Range(0, 300)
+            .Select(index => new EvidenceRetentionDecision(
+                EvidenceArtifactFamily.AcceptanceGateAttempts,
+                EvidenceRetentionAction.Deleted,
+                $"deleted-overflow-{index:D3}.log",
+                "goal-1",
+                EvidenceOwnerResolution.UniqueTerminal,
+                "past-age-bound",
+                BytesAttempted: 1,
+                BytesReclaimed: 1))
+            .ToArray();
+        RunEventMaintenanceCadence.AppendArtifactRetentionReceipt(
+            store,
+            result with
+            {
+                SweepId = "sweep-destructive-overflow",
+                AcceptanceArtifactsDeleted = destructiveOverflow.Length,
+                Decisions = destructiveOverflow
+            },
+            DateTimeOffset.UtcNow.AddSeconds(1));
+        var overflowReceipt = Assert.IsType<RunEventRecord>(await store.ReadLatestAsync(
+            RunEventTypes.EvidenceRetention,
+            RunEventMaintenanceCadence.ArtifactRetentionOperation));
+        using var overflowPayload = JsonDocument.Parse(overflowReceipt.PayloadJson);
+        Assert.Equal(256, overflowPayload.RootElement.GetProperty("decisions").GetArrayLength());
+        Assert.Equal(44, overflowPayload.RootElement.GetProperty("destructiveDecisionsDropped").GetInt32());
+    }
+
     private static Task<RunEventRecord> AppendGoalOperationAsync(
         SqliteRunEventStore store,
         string goalId,
