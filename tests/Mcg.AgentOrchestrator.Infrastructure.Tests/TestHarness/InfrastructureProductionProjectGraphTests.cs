@@ -85,6 +85,25 @@ public sealed class InfrastructureProductionProjectGraphTests
         }
     }
 
+    [Xunit.Fact(DisplayName = "Production project references do not fork shared-output graph nodes with global properties")]
+    public void ProductionProjectReferencesDoNotForkSharedOutputGraphNodes()
+    {
+        var root = InfrastructureTestSupport.FindRepositoryRoot();
+        var projectFiles = Directory
+            .EnumerateFiles(Path.Combine(root, "src"), "*.csproj", SearchOption.AllDirectories)
+            .Where(path => !IsGeneratedPath(path));
+
+        foreach (var projectFile in projectFiles)
+        {
+            var document = XDocument.Load(projectFile, LoadOptions.SetLineInfo);
+            foreach (var reference in document.Descendants()
+                         .Where(element => element.Name.LocalName == "ProjectReference"))
+            {
+                Assert.Null(reference.Attribute("AdditionalProperties"));
+            }
+        }
+    }
+
     private static Dictionary<string, ProductionProject> LoadProductionProjects(string root)
     {
         var src = Path.Combine(root, "src");

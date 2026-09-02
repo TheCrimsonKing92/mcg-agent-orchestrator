@@ -593,8 +593,8 @@ public sealed class ConductorDriverTests
             ]);
 
     internal static FocusedEvidenceRunResult DualArmFindingEvidence(
-        string request,
-        FindingEvidenceArmDisposition baselineDisposition)
+        string request, FindingEvidenceArmDisposition baselineDisposition,
+        string candidateSha = "candidate-sha")
     {
         var candidateCheck = new AcceptanceCheckResult(
             "candidate focused evidence",
@@ -634,7 +634,7 @@ public sealed class ConductorDriverTests
             [
                 new FocusedEvidenceArmRunResult(
                     FindingEvidenceArm.Candidate,
-                    "candidate-sha",
+                    candidateSha,
                     FindingEvidenceArmDisposition.Green,
                     Accepted: true,
                     Passed: true,

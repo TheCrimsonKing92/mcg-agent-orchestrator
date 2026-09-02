@@ -1804,14 +1804,11 @@ public sealed class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
         var allShardsUseMtp = shardChecks.All(UsesMicrosoftTestingPlatform);
         if (allShardsUseMtp && primaryBuildPhase is not null)
         {
-            var prebuild = await EnsureDotnetTestBuildPhaseAsync(
-                primaryBuildPhase,
-                shardChecks[0],
-                worktreePath,
-                goalId,
-                primarySlotIndex,
-                primaryLease,
-                "acceptance-infrastructure-shards-prebuild",
+            var prebuild = await AcceptanceGateCancellationMonitor.RunAsync(
+                activeToken => EnsureDotnetTestBuildPhaseAsync(
+                    primaryBuildPhase, shardChecks[0], worktreePath, goalId, primarySlotIndex, primaryLease,
+                    "acceptance-infrastructure-shards-prebuild", activeToken),
+                CurrentGateCancellationProbe.Value,
                 cancellationToken).ConfigureAwait(false);
             if (prebuild.Run.Result.Passed)
             {
@@ -2165,16 +2162,16 @@ public sealed class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
         ThrowIfGateCancellationRequested(cancellationToken);
         var invocation = invocationOverride ?? AllocateTestTelemetryInvocation(check);
         using var invocationScope = PushTestTelemetryInvocation(invocation);
-        var result = await RunCheckAsync(
-                check,
-                worktreePath,
-                goalId,
-                stableSlotIndex,
-                stableSlotLease,
-                dotnetTestBuildPhase,
-                cancellationToken,
-                testResultsDirectoryOverride)
-            .ConfigureAwait(false);
+        var result = await AcceptanceGateCancellationMonitor.RunAsync(
+                activeToken => RunCheckAsync(check,
+                    worktreePath,
+                    goalId,
+                    stableSlotIndex,
+                    stableSlotLease,
+                    dotnetTestBuildPhase,
+                    activeToken,
+                    testResultsDirectoryOverride),
+                CurrentGateCancellationProbe.Value, cancellationToken).ConfigureAwait(false);
         ThrowIfGateCancellationRequested(cancellationToken);
         return result;
     }
