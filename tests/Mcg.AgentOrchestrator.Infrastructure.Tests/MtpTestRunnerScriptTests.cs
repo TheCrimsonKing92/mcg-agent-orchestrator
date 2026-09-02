@@ -586,31 +586,23 @@ public sealed class MtpTestRunnerScriptTests
     }
 
     [Xunit.Fact]
-    public void MtpBuildTimeoutTerminatesExactOwnedDescendantsAndIsNotAStartFailure()
+    public void MtpBuildLifetimeHasNoFixedTimeoutOrKillOnCloseOwnedJob()
     {
-        using var sandbox = ScriptSandbox.Create("success");
-        var pidLog = Path.Combine(sandbox.Root, "hanging-build-pids.txt");
-        var fakeDotnet = sandbox.CreateHangingBuildStub(pidLog);
-        sandbox.SetBuildTimeoutSeconds(5);
+        var source = File.ReadAllText(Path.Combine(RepositoryRoot(), "scripts", "MtpTestRunner.psm1"));
+        var start = source.IndexOf("function Invoke-MtpBuildProcess", StringComparison.Ordinal);
+        var end = source.IndexOf("function Invoke-MtpBuild {", start, StringComparison.Ordinal);
 
-        var result = sandbox.RunPartition("GoalWorktree", noBuild: false, dotnetPath: fakeDotnet);
-
-        Xunit.Assert.Equal(23, result.ExitCode);
-        Xunit.Assert.Contains("BUILD TIMEOUT", result.Stdout, StringComparison.Ordinal);
-        Xunit.Assert.DoesNotContain("could not start", result.Stdout, StringComparison.OrdinalIgnoreCase);
-        Xunit.Assert.True(File.Exists(pidLog), result.Stdout + result.Stderr);
-        foreach (var pid in File.ReadAllLines(pidLog).Select(int.Parse))
-        {
-            try
-            {
-                using var process = Process.GetProcessById(pid);
-                Xunit.Assert.True(process.WaitForExit(10_000), $"Owned build descendant PID {pid} survived timeout cleanup.");
-            }
-            catch (ArgumentException)
-            {
-                // The exact recorded process lifetime has already exited.
-            }
-        }
+        Xunit.Assert.True(start >= 0 && end > start, "Expected to find the complete Invoke-MtpBuildProcess function.");
+        var body = source[start..end];
+        Xunit.Assert.DoesNotContain("TimeoutSeconds", body, StringComparison.Ordinal);
+        Xunit.Assert.DoesNotContain("MtpBuildTimeoutSeconds", body, StringComparison.Ordinal);
+        Xunit.Assert.DoesNotContain("McgMtpOwnedJob", body, StringComparison.Ordinal);
+        Xunit.Assert.DoesNotContain("$ownedJob", body, StringComparison.Ordinal);
+        Xunit.Assert.Contains("$process.WaitForExit()", body, StringComparison.Ordinal);
+        Xunit.Assert.Contains("$process.BeginOutputReadLine()", body, StringComparison.Ordinal);
+        Xunit.Assert.Contains("$process.BeginErrorReadLine()", body, StringComparison.Ordinal);
+        Xunit.Assert.Contains("$capture.WaitForCompletion($script:MtpOutputDrainSeconds * 1000)", body, StringComparison.Ordinal);
+        Xunit.Assert.Contains("Stop-MtpOwnedProcessTree -Process $process -StartTimeUtc $startTimeUtc -OwnedJob $null", body, StringComparison.Ordinal);
     }
 
     [Xunit.Fact]
@@ -760,8 +752,8 @@ public sealed class MtpTestRunnerScriptTests
         Xunit.Assert.Contains("Get-MtpBoundedFileName -Stem \"build-$projectName\"", sources[2], StringComparison.Ordinal);
         Xunit.Assert.Contains("-flp:LogFile=$buildLogPath;Verbosity=Normal", sources[2], StringComparison.Ordinal);
         Xunit.Assert.Contains("'-nodeReuse:false'", sources[2], StringComparison.Ordinal);
-        Xunit.Assert.DoesNotContain("$process.WaitForExit()", sources[2], StringComparison.Ordinal);
-        Xunit.Assert.Contains("$process.WaitForExit($TimeoutSeconds * 1000)", sources[2], StringComparison.Ordinal);
+        Xunit.Assert.Contains("$process.WaitForExit()", sources[2], StringComparison.Ordinal);
+        Xunit.Assert.DoesNotContain("MtpBuildTimeoutSeconds", sources[2], StringComparison.Ordinal);
         Xunit.Assert.Contains("MonitoringFailureMessage = $monitoringFailureMessage", sources[2], StringComparison.Ordinal);
         Xunit.Assert.Contains("Build output log: $buildLogPath", sources[2], StringComparison.Ordinal);
         Xunit.Assert.DoesNotContain(
@@ -1230,39 +1222,6 @@ public sealed class MtpTestRunnerScriptTests
             lines.Add($"exit /b {exitCode}");
             File.WriteAllText(path, string.Join(Environment.NewLine, lines) + Environment.NewLine);
             return path;
-        }
-
-        public string CreateHangingBuildStub(string pidLogPath)
-        {
-            var scriptPath = Path.Combine(Root, "HangingBuild.ps1");
-            var escapedPidLog = pidLogPath.Replace("'", "''", StringComparison.Ordinal);
-            File.WriteAllText(
-                scriptPath,
-                string.Join(Environment.NewLine, new[]
-                {
-                    "Start-Sleep -Milliseconds 500",
-                    "$child = Start-Process powershell.exe -ArgumentList @('-NoProfile','-NonInteractive','-Command','while ($true) { Start-Sleep -Seconds 60 }') -WindowStyle Hidden -PassThru",
-                    $"Set-Content -LiteralPath '{escapedPidLog}' -Value @($PID, $child.Id)",
-                    "while ($true) { Start-Sleep -Seconds 60 }"
-                }) + Environment.NewLine);
-            var path = Path.Combine(Root, "hanging-dotnet.cmd");
-            File.WriteAllText(path, $"""
-                @echo off
-                powershell.exe -NoProfile -ExecutionPolicy Bypass -File "{scriptPath}"
-                exit /b %ERRORLEVEL%
-                """);
-            return path;
-        }
-
-        public void SetBuildTimeoutSeconds(int seconds)
-        {
-            var modulePath = Path.Combine(Root, "scripts", "MtpTestRunner.psm1");
-            var source = File.ReadAllText(modulePath);
-            source = source.Replace(
-                "$script:MtpBuildTimeoutSeconds = 780",
-                $"$script:MtpBuildTimeoutSeconds = {seconds}",
-                StringComparison.Ordinal);
-            File.WriteAllText(modulePath, source);
         }
 
         private static string EscapeBatchPercent(string value) => value.Replace("%", "%%", StringComparison.Ordinal);
