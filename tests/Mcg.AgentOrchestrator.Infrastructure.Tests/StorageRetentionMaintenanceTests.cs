@@ -2,6 +2,7 @@ using Mcg.AgentOrchestrator.App.Orchestration;
 using Mcg.AgentOrchestrator.Core;
 using Mcg.AgentOrchestrator.Infrastructure;
 
+[Xunit.Collection(TestCollections.EnvMutation)]
 public sealed class StorageRetentionMaintenanceTests
 {
     private static readonly DateTimeOffset Now = DateTimeOffset.Parse("2026-08-20T12:00:00Z");
@@ -451,6 +452,142 @@ public sealed class StorageRetentionMaintenanceTests
         Assert.Contains("status=partial-failed", RunEventMaintenanceCadence.FormatArtifactRetentionReceipt(result), StringComparison.Ordinal);
     }
 
+    [Xunit.Fact]
+    public void MtpRetention_TerminalOwnedAgedRun_IsDeletedByScheduledPolicy()
+    {
+        using var fixture = new RetentionFixture();
+        using var localAppData = new EnvironmentVariableScope("LOCALAPPDATA", fixture.LocalApplicationDataDirectory);
+        var workspace = OrchestratorWorkspace.ForDirectory(fixture.ExecutionDirectory);
+        var goalDirectory = Path.Combine(workspace.OrchestratorDirectory, "acceptance-gate-attempts", GoalId);
+        Directory.CreateDirectory(goalDirectory);
+        fixture.WriteAttempt(goalDirectory, "mtp-old", ordinal: 1, failed: false, reconciled: true);
+        fixture.WriteAttempt(goalDirectory, "mtp-final", ordinal: 2, failed: false, reconciled: true);
+        var runDirectory = fixture.WriteMtpRun("mtp-old", Now.AddDays(-30));
+        var kernel = new AgentOrchestratorKernel();
+        var goal = kernel.CreateGoal(
+            new GoalId(GoalId),
+            "terminal MTP retention fixture",
+            [new TaskSpec(new TaskId(TaskId), "fixture task", AgentRole.Developer)]);
+        goal = kernel.CancelGoal(goal.Id, "fixture terminal state");
+
+        var result = StorageRetentionMaintenance.Run(workspace, [goal], Now);
+
+        Assert.False(Directory.Exists(runDirectory));
+        Assert.Contains(result.Decisions, decision =>
+            decision.Family == EvidenceArtifactFamily.MtpTestRuns &&
+            decision.Action == EvidenceRetentionAction.Deleted &&
+            decision.AttemptId == "mtp-old");
+    }
+
+    [Xunit.Fact]
+    public void MtpRetention_NonTerminalOwner_IsPreservedWithDecision()
+    {
+        using var fixture = new RetentionFixture();
+        using var localAppData = new EnvironmentVariableScope("LOCALAPPDATA", fixture.LocalApplicationDataDirectory);
+        var workspace = OrchestratorWorkspace.ForDirectory(fixture.ExecutionDirectory);
+        var goalDirectory = Path.Combine(workspace.OrchestratorDirectory, "acceptance-gate-attempts", GoalId);
+        Directory.CreateDirectory(goalDirectory);
+        fixture.WriteAttempt(goalDirectory, "mtp-active", ordinal: 1, failed: false, reconciled: true);
+        var runDirectory = fixture.WriteMtpRun("mtp-active", Now.AddDays(-30));
+        var kernel = new AgentOrchestratorKernel();
+        var goal = kernel.CreateGoal(
+            new GoalId(GoalId),
+            "active MTP retention fixture",
+            [new TaskSpec(new TaskId(TaskId), "fixture task", AgentRole.Developer)]);
+
+        var result = StorageRetentionMaintenance.Run(workspace, [goal], Now);
+
+        Assert.True(Directory.Exists(runDirectory));
+        Assert.Contains(result.Decisions, decision =>
+            decision.Family == EvidenceArtifactFamily.MtpTestRuns &&
+            decision.Action == EvidenceRetentionAction.Preserved &&
+            decision.OwnerResolution == EvidenceOwnerResolution.NonTerminal &&
+            decision.AttemptId == "mtp-active");
+    }
+
+    [Xunit.Fact]
+    public void MtpRetention_YoungTerminalRuns_AreBoundedByCount()
+    {
+        using var fixture = new RetentionFixture();
+        using var localAppData = new EnvironmentVariableScope("LOCALAPPDATA", fixture.LocalApplicationDataDirectory);
+        var workspace = OrchestratorWorkspace.ForDirectory(fixture.ExecutionDirectory);
+        var goalDirectory = Path.Combine(workspace.OrchestratorDirectory, "acceptance-gate-attempts", GoalId);
+        Directory.CreateDirectory(goalDirectory);
+        for (var ordinal = 1; ordinal <= StorageRetentionMaintenance.MtpResultMaxRetainedDirectories + 2; ordinal++)
+        {
+            var attemptId = $"mtp-{ordinal:D3}";
+            fixture.WriteAttempt(goalDirectory, attemptId, ordinal, failed: false, reconciled: true);
+            if (ordinal <= StorageRetentionMaintenance.MtpResultMaxRetainedDirectories + 1)
+            {
+                fixture.WriteMtpRun(attemptId, Now.AddMinutes(-ordinal));
+            }
+        }
+        var kernel = new AgentOrchestratorKernel();
+        var goal = kernel.CreateGoal(
+            new GoalId(GoalId),
+            "bounded MTP retention fixture",
+            [new TaskSpec(new TaskId(TaskId), "fixture task", AgentRole.Developer)]);
+        goal = kernel.CancelGoal(goal.Id, "fixture terminal state");
+
+        var result = StorageRetentionMaintenance.Run(workspace, [goal], Now);
+
+        var root = Path.Combine(fixture.LocalApplicationDataDirectory, "Temp", "Low", "mcg-tests");
+        Assert.Contains(result.Decisions, decision =>
+            decision.Family == EvidenceArtifactFamily.MtpTestRuns &&
+            decision.Action == EvidenceRetentionAction.Deleted &&
+            decision.Reason == "past-count-bound");
+        Assert.Equal(
+            StorageRetentionMaintenance.MtpResultMaxRetainedDirectories,
+            Directory.GetDirectories(root, "retained-*", SearchOption.TopDirectoryOnly).Length);
+    }
+
+    [Xunit.Fact]
+    public async Task ReceiptAppendFailure_PreservesDestructiveLedgerAndRequiredJournalReceipt()
+    {
+        using var fixture = new RetentionFixture();
+        var workspace = OrchestratorWorkspace.ForDirectory(fixture.ExecutionDirectory);
+        var repository = InfrastructureTestSupport.CreateMigratedStateRepository(workspace.SqliteStatePath);
+        await repository.SaveGoalSnapshotsAsync([
+            GoalSnapshotFor(GoalId, GoalStatus.Completed, WorkTaskStatus.Completed)
+        ]);
+        var deletedPath = fixture.WriteSuccessfulExit(Now.AddDays(-30));
+        var runEventStorePath = Path.Combine(fixture.ExecutionDirectory, "run-events-receipt-failure.db");
+        var conductLogPath = Path.Combine(fixture.LogDirectory, "receipt-failure-conduct.jsonl");
+
+        var result = RunEventMaintenanceCadence.TryRunIfDue(
+            runEventStorePath,
+            conductLogPath,
+            () => Now,
+            maintenanceOperation: (_, _) =>
+            {
+                File.Delete(runEventStorePath);
+                Directory.CreateDirectory(runEventStorePath);
+                return new RunEventMaintenanceResult(
+                    Deferred: false,
+                    DeferredReason: null,
+                    ConductorTickRowsDeleted: 0,
+                    AgedConductorTickRowsDeleted: 0,
+                    OversizedConductorTickRowsDeleted: 0,
+                    DeletedPayloadBytesEstimate: 0,
+                    MaxRowsDeletedInTransaction: 0,
+                    Duration: TimeSpan.Zero,
+                    BytesBefore: 0,
+                    BytesAfter: 0,
+                    VacuumRequested: false,
+                    VacuumCompleted: false,
+                    VacuumDeferred: false);
+            },
+            workspace: workspace,
+            mtpResultsRootOverride: fixture.MtpResultsRoot);
+
+        Assert.False(File.Exists(deletedPath));
+        var retention = Assert.IsType<StorageRetentionResult>(result.ArtifactRetention);
+        Assert.Contains(retention.Decisions, decision =>
+            decision.Action == EvidenceRetentionAction.Deleted && decision.Path == deletedPath);
+        Assert.Contains("storage-retention-sweep", File.ReadAllText(conductLogPath), StringComparison.Ordinal);
+        Assert.Contains("policyVersion=", File.ReadAllText(conductLogPath), StringComparison.Ordinal);
+    }
+
     [Xunit.Fact(DisplayName = "GoalOperationJournal_archive_is_skipped_by_ReadAll")]
     public void ArchiveIsSkippedByReadAll()
     {
@@ -556,6 +693,8 @@ public sealed class StorageRetentionMaintenanceTests
         }
 
         public string ExecutionDirectory => _root;
+        public string LocalApplicationDataDirectory => Path.Combine(_root, "LocalAppData");
+        public string MtpResultsRoot => Path.Combine(LocalApplicationDataDirectory, "Temp", "Low", "mcg-tests");
         public string OrchestratorDirectory => Path.Combine(_root, ".orchestrator");
         public string LogDirectory => Path.Combine(OrchestratorDirectory, "logs");
 
@@ -606,6 +745,26 @@ public sealed class StorageRetentionMaintenanceTests
             return path;
         }
 
+        public string WriteMtpRun(string attemptId, DateTimeOffset createdAt)
+        {
+            var root = Path.Combine(LocalApplicationDataDirectory, "Temp", "Low", "mcg-tests");
+            var directory = Path.Combine(root, $"retained-{attemptId}");
+            Directory.CreateDirectory(directory);
+            File.WriteAllText(
+                Path.Combine(directory, ".mtp-run-ownership.json"),
+                System.Text.Json.JsonSerializer.Serialize(new
+                {
+                    schemaVersion = 1,
+                    attemptId,
+                    machineName = Environment.MachineName,
+                    ownerProcessId = 0,
+                    createdAt,
+                    runLabel = "retention-fixture"
+                }));
+            File.WriteAllText(Path.Combine(directory, "failure.trx"), "retained failure evidence");
+            return directory;
+        }
+
         public StorageRetentionResult Run(params StorageRetentionGoal[] goals) =>
             StorageRetentionMaintenance.Run(LogDirectory, OrchestratorDirectory, ExecutionDirectory, goals, Now);
 
@@ -613,5 +772,21 @@ public sealed class StorageRetentionMaintenanceTests
         {
             try { Directory.Delete(_root, recursive: true); } catch { }
         }
+    }
+
+
+    private sealed class EnvironmentVariableScope : IDisposable
+    {
+        private readonly string _name;
+        private readonly string? _original;
+
+        public EnvironmentVariableScope(string name, string value)
+        {
+            _name = name;
+            _original = Environment.GetEnvironmentVariable(name);
+            Environment.SetEnvironmentVariable(name, value);
+        }
+
+        public void Dispose() => Environment.SetEnvironmentVariable(_name, _original);
     }
 }

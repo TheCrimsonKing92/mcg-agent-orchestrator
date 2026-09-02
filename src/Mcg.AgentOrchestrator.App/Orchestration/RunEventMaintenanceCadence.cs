@@ -21,7 +21,8 @@ internal static class RunEventMaintenanceCadence
         string conductEventsLogPath,
         Func<DateTimeOffset>? utcNow = null,
         Func<SqliteRunEventStore, RunEventMaintenanceOptions, RunEventMaintenanceResult>? maintenanceOperation = null,
-        OrchestratorWorkspace? workspace = null)
+        OrchestratorWorkspace? workspace = null,
+        string? mtpResultsRootOverride = null)
     {
         var now = (utcNow ?? (() => DateTimeOffset.UtcNow))();
         var cadenceKey = Path.GetFullPath(runEventStorePath);
@@ -31,6 +32,7 @@ internal static class RunEventMaintenanceCadence
         }
 
         var journal = new ConductEventLogWriter(conductEventsLogPath);
+        StorageRetentionResult? artifactRetention = null;
         try
         {
             var store = new SqliteRunEventStore(
@@ -63,14 +65,15 @@ internal static class RunEventMaintenanceCadence
             var result = maintenanceOperation is null
                 ? store.MaintainAsync(options).GetAwaiter().GetResult()
                 : maintenanceOperation(store, options);
-            var artifactRetention = workspace is null || retentionGoals is null
+            artifactRetention = workspace is null || retentionGoals is null
                 ? null
                 : StorageRetentionMaintenance.Run(
                     workspace.LogDirectory,
                     workspace.OrchestratorDirectory,
                     workspace.ExecutionDirectory,
                     retentionGoals,
-                    now);
+                    now,
+                    mtpResultsRoot: mtpResultsRootOverride ?? StorageRetentionMaintenance.DefaultMtpResultsRoot());
             var receipt = FormatReceipt("cadence", options, result);
             Console.WriteLine(receipt);
             TryAppendJournal(journal, "run-events-maintenance", receipt, now);
@@ -78,7 +81,7 @@ internal static class RunEventMaintenanceCadence
             {
                 var artifactReceipt = FormatArtifactRetentionReceipt(artifactRetention);
                 Console.WriteLine(artifactReceipt);
-                TryAppendJournal(journal, "storage-retention-sweep", artifactReceipt, now);
+                journal.AppendRequired("storage-retention-sweep", null, artifactReceipt, now);
                 AppendArtifactRetentionReceipt(store, artifactRetention, now);
             }
             if (!result.Deferred)
@@ -119,7 +122,7 @@ internal static class RunEventMaintenanceCadence
                 Failed: true,
                 Reason: ex.GetType().Name,
                 Maintenance: null,
-                ArtifactRetention: null);
+                ArtifactRetention: artifactRetention);
         }
     }
 
