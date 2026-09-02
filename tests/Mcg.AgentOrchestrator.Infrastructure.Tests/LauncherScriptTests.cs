@@ -400,23 +400,41 @@ public sealed class LauncherScriptTests
 
             var firstInvocationPath = Path.Combine(repositoryRoot, "dotnet-first.log");
             var secondInvocationPath = Path.Combine(repositoryRoot, "dotnet-second.log");
-            var firstTask = Task.Run(() => RunProcess(
-                CreateStartInfo(firstInvocationPath),
-                "first concurrent SQLite helper"));
-            var secondTask = Task.Run(() => RunProcess(
-                CreateStartInfo(secondInvocationPath),
-                "second concurrent SQLite helper"));
+            using var firstProcess = Process.Start(CreateStartInfo(firstInvocationPath))
+                ?? throw new InvalidOperationException("Failed to start first concurrent SQLite helper.");
+            using var secondProcess = Process.Start(CreateStartInfo(secondInvocationPath))
+                ?? throw new InvalidOperationException("Failed to start second concurrent SQLite helper.");
+            var firstStdout = firstProcess.StandardOutput.ReadToEndAsync();
+            var firstStderr = firstProcess.StandardError.ReadToEndAsync();
+            var secondStdout = secondProcess.StandardOutput.ReadToEndAsync();
+            var secondStderr = secondProcess.StandardError.ReadToEndAsync();
+            var firstEntered = false;
+            var secondEntered = false;
             try
             {
-                Assert.True(entered.WaitOne(TimeSpan.FromSeconds(20)), "One helper did not reach the artifact host.");
-                Assert.True(entered.WaitOne(TimeSpan.FromSeconds(20)), "Both helpers did not reach the artifact host.");
+                firstEntered = entered.WaitOne(TimeSpan.FromSeconds(20));
+                secondEntered = firstEntered && entered.WaitOne(TimeSpan.FromSeconds(20));
             }
             finally
             {
                 release.Set();
             }
 
-            var results = Task.WhenAll(firstTask, secondTask).GetAwaiter().GetResult();
+            Assert.True(firstProcess.WaitForExit(90000), "First concurrent SQLite helper did not exit within 90 seconds.");
+            Assert.True(secondProcess.WaitForExit(90000), "Second concurrent SQLite helper did not exit within 90 seconds.");
+            var results = new[]
+            {
+                new ProcessResult(
+                    firstProcess.ExitCode,
+                    firstStdout.GetAwaiter().GetResult(),
+                    firstStderr.GetAwaiter().GetResult()),
+                new ProcessResult(
+                    secondProcess.ExitCode,
+                    secondStdout.GetAwaiter().GetResult(),
+                    secondStderr.GetAwaiter().GetResult())
+            };
+            Assert.True(firstEntered, $"One helper did not reach the artifact host. {FormatProcessResults(results)}");
+            Assert.True(secondEntered, $"Both helpers did not reach the artifact host. {FormatProcessResults(results)}");
             Assert.All(results, result =>
             {
                 Assert.Equal(0, result.ExitCode);
@@ -2630,6 +2648,14 @@ public sealed class LauncherScriptTests
         var stderr = process.StandardError.ReadToEnd();
         Assert.True(process.WaitForExit(90000), $"{description} did not exit within 90 seconds.");
         return new ProcessResult(process.ExitCode, stdout, stderr);
+    }
+
+    private static string FormatProcessResults(IEnumerable<ProcessResult> results)
+    {
+        return string.Join(
+            " | ",
+            results.Select((result, index) =>
+                $"process={index + 1} exit={result.ExitCode} stdout={result.Stdout.Trim()} stderr={result.Stderr.Trim()}"));
     }
 
     private static string CreateSqliteToolSmokeDb()

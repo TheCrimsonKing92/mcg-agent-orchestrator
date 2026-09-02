@@ -86,76 +86,72 @@ function Assert-FreshnessCheckAvailable {
     }
 }
 
-$freshnessExitCode = Get-ArtifactFreshnessExitCode
-Assert-FreshnessCheckAvailable -ExitCode $freshnessExitCode
-if ($freshnessExitCode -ne 0) {
-    $hashAlgorithm = [System.Security.Cryptography.SHA256]::Create()
+$hashAlgorithm = [System.Security.Cryptography.SHA256]::Create()
+try {
+    $repoHashBytes = $hashAlgorithm.ComputeHash([System.Text.Encoding]::UTF8.GetBytes($repoRoot.ToUpperInvariant()))
+    $repoHash = ([System.BitConverter]::ToString($repoHashBytes)).Replace("-", "").Substring(0, 16)
+}
+finally {
+    $hashAlgorithm.Dispose()
+}
+
+$artifactMutex = [System.Threading.Mutex]::new($false, "Local\mcg-sqlite-tool-artifact-$repoHash")
+$mutexHeld = $false
+try {
     try {
-        $repoHashBytes = $hashAlgorithm.ComputeHash([System.Text.Encoding]::UTF8.GetBytes($repoRoot.ToUpperInvariant()))
-        $repoHash = ([System.BitConverter]::ToString($repoHashBytes)).Replace("-", "").Substring(0, 16)
+        $mutexHeld = $artifactMutex.WaitOne([TimeSpan]::FromSeconds(30))
     }
-    finally {
-        $hashAlgorithm.Dispose()
+    catch [System.Threading.AbandonedMutexException] {
+        $mutexHeld = $true
     }
 
-    $buildMutex = [System.Threading.Mutex]::new($false, "Local\mcg-sqlite-tool-build-$repoHash")
-    $mutexHeld = $false
-    try {
+    if (-not $mutexHeld) {
+        Write-ActionableFailure "SQLite helper artifact validation or rebuild is already in progress; retry after the current operator command finishes."
+    }
+
+    $freshnessExitCode = Get-ArtifactFreshnessExitCode
+    Assert-FreshnessCheckAvailable -ExitCode $freshnessExitCode
+    if ($freshnessExitCode -ne 0) {
+        $requiredAssets = @(
+            (Join-Path $repoRoot "scripts\OrchestratorSqliteTools\obj\project.assets.json"),
+            (Join-Path $repoRoot "src\Mcg.AgentOrchestrator.Core\obj\project.assets.json")
+        )
+        $missingAssets = @($requiredAssets | Where-Object { -not (Test-Path -LiteralPath $_ -PathType Leaf) })
+        if ($missingAssets.Count -gt 0) {
+            Write-ActionableFailure "SQLite helper artifact is missing or stale and no-restored build assets are unavailable; run .\scripts\Invoke-RepoScript.ps1 scripts\Invoke-PackageAudit.ps1 online, then retry."
+        }
+
+        $buildLog = [System.IO.Path]::GetTempFileName()
         try {
-            $mutexHeld = $buildMutex.WaitOne([TimeSpan]::FromSeconds(30))
+            & $dotnetHost build $projectPath --no-restore --nologo --verbosity quiet `
+                -clp:ErrorsOnly -p:UseSharedCompilation=false -p:McgIsolatedArtifactsPath= *> $buildLog
+            $buildExit = $LASTEXITCODE
         }
-        catch [System.Threading.AbandonedMutexException] {
-            $mutexHeld = $true
+        catch {
+            $buildExit = 1
+        }
+        finally {
+            Remove-Item -LiteralPath $buildLog -Force -ErrorAction SilentlyContinue
         }
 
-        if (-not $mutexHeld) {
-            Write-ActionableFailure "SQLite helper artifact rebuild is already in progress; retry after the current operator command finishes."
+        if ($buildExit -ne 0 -or -not (Test-Path -LiteralPath $artifactPath -PathType Leaf)) {
+            Write-ActionableFailure "SQLite helper no-restore rebuild failed; run .\scripts\Invoke-RepoScript.ps1 scripts\Invoke-PackageAudit.ps1 online, then retry."
         }
 
+        & $markerScript -RepositoryRoot $repoRoot -MarkerPath $markerPath
         $freshnessExitCode = Get-ArtifactFreshnessExitCode
         Assert-FreshnessCheckAvailable -ExitCode $freshnessExitCode
         if ($freshnessExitCode -ne 0) {
-            $requiredAssets = @(
-                (Join-Path $repoRoot "scripts\OrchestratorSqliteTools\obj\project.assets.json"),
-                (Join-Path $repoRoot "src\Mcg.AgentOrchestrator.Core\obj\project.assets.json")
-            )
-            $missingAssets = @($requiredAssets | Where-Object { -not (Test-Path -LiteralPath $_ -PathType Leaf) })
-            if ($missingAssets.Count -gt 0) {
-                Write-ActionableFailure "SQLite helper artifact is missing or stale and no-restored build assets are unavailable; run .\scripts\Invoke-RepoScript.ps1 scripts\Invoke-PackageAudit.ps1 online, then retry."
-            }
-
-            $buildLog = [System.IO.Path]::GetTempFileName()
-            try {
-                & $dotnetHost build $projectPath --no-restore --nologo --verbosity quiet `
-                    -clp:ErrorsOnly -p:UseSharedCompilation=false -p:McgIsolatedArtifactsPath= *> $buildLog
-                $buildExit = $LASTEXITCODE
-            }
-            catch {
-                $buildExit = 1
-            }
-            finally {
-                Remove-Item -LiteralPath $buildLog -Force -ErrorAction SilentlyContinue
-            }
-
-            if ($buildExit -ne 0 -or -not (Test-Path -LiteralPath $artifactPath -PathType Leaf)) {
-                Write-ActionableFailure "SQLite helper no-restore rebuild failed; run .\scripts\Invoke-RepoScript.ps1 scripts\Invoke-PackageAudit.ps1 online, then retry."
-            }
-
-            & $markerScript -RepositoryRoot $repoRoot -MarkerPath $markerPath
-            $freshnessExitCode = Get-ArtifactFreshnessExitCode
-            Assert-FreshnessCheckAvailable -ExitCode $freshnessExitCode
-            if ($freshnessExitCode -ne 0) {
-                Write-ActionableFailure "SQLite helper rebuild did not produce an artifact matching current source and git HEAD; inspect the repository state, then retry."
-            }
+            Write-ActionableFailure "SQLite helper rebuild did not produce an artifact matching current source and git HEAD; inspect the repository state, then retry."
         }
     }
-    finally {
-        if ($mutexHeld) {
-            $buildMutex.ReleaseMutex()
-        }
-
-        $buildMutex.Dispose()
+}
+finally {
+    if ($mutexHeld) {
+        $artifactMutex.ReleaseMutex()
     }
+
+    $artifactMutex.Dispose()
 }
 
 & $dotnetHost $artifactPath $toolCommand @toolArguments
