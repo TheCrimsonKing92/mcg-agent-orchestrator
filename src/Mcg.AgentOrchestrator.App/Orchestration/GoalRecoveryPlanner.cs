@@ -37,7 +37,8 @@ internal static class GoalRecoveryPlanner
         AgentOrchestratorKernel kernel,
         Goal goal,
         string executionDirectory,
-        bool includeCleanupBackoff = true)
+        bool includeCleanupBackoff = true,
+        Func<ProcessCommandLineSnapshot>? processSnapshotFactory = null)
     {
         var worktree = GoalWorktrees.TryResolve(executionDirectory, goal.Id);
         GitCli.WorktreeStatusInspection? worktreeInspection = worktree is null
@@ -64,11 +65,13 @@ internal static class GoalRecoveryPlanner
             : null;
         var pendingInput = kernel.BuildHumanInputWorklist(goal.Id).OpenCount;
         var findings = new List<GoalRecoveryTaskFinding>();
+        var processInspection = new ProcessInspectionSnapshotScope(
+            processSnapshotFactory ?? ProcessCommandLines.SnapshotOperation);
 
         for (var index = 0; index < goal.Tasks.Count; index++)
         {
             var task = goal.Tasks[index];
-            AddTaskFindings(findings, goal, task, index + 1);
+            AddTaskFindings(findings, goal, task, index + 1, processInspection);
         }
 
         var actions = BuildRecommendedActions(goal, worktree, dirty, worktreeStatusError, hasDiff, buildLease, cleanupBackoff, pendingInput, findings);
@@ -113,11 +116,16 @@ internal static class GoalRecoveryPlanner
             .ToArray();
     }
 
-    private static void AddTaskFindings(List<GoalRecoveryTaskFinding> findings, Goal goal, TaskSpec task, int taskNumber)
+    private static void AddTaskFindings(
+        List<GoalRecoveryTaskFinding> findings,
+        Goal goal,
+        TaskSpec task,
+        int taskNumber,
+        ProcessInspectionSnapshotScope processInspection)
     {
         if (task.LastProcess is { CompletedAt: null } process && task.LastVerification is null)
         {
-            var recoveryDecision = DispatchRecoveryView.Evaluate(goal, task)!;
+            var recoveryDecision = DispatchRecoveryView.Evaluate(goal, task, processInspection.Get())!;
             var apparatusHold = recoveryDecision.Action == DispatchRecoveryAction.Hold &&
                 !string.IsNullOrWhiteSpace(recoveryDecision.Blocker);
             var alive = !apparatusHold &&

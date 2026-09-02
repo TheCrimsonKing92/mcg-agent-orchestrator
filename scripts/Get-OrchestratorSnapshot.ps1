@@ -128,10 +128,13 @@ function Get-LockKind {
 
 function Read-OperationProcessInventory {
     $helper = Join-Path $repoRoot "scripts\Get-RepoProcessInfo.ps1"
-    # A single-space predicate selects every command line relevant to this snapshot while
-    # still making the CLI surface typed failures for records whose command line is unreadable.
-    # PowerShell drops an empty-string script argument before it reaches the CLI.
-    $lines = @(& $helper -CommandContains " " -Newest ([int]::MaxValue))
+    # Seed names are available from the native enumeration, so filter on them before opening
+    # processes for identity and command-line reads. The single-space predicate retains the
+    # existing available-command contract; PowerShell drops an empty-string script argument.
+    $lines = @(& $helper `
+        -Name @("dotnet", "DispatchProcessHost", "Mcg.AgentOrchestrator*") `
+        -CommandContains " " `
+        -Newest ([int]::MaxValue))
     $lastExitCodeVariable = Get-Variable -Name LASTEXITCODE -ErrorAction SilentlyContinue
     $helperExitCode = if ($null -eq $lastExitCodeVariable) { 0 } else { $lastExitCodeVariable.Value }
     $processes = [System.Collections.Generic.List[object]]::new()
@@ -178,6 +181,11 @@ function Read-OperationProcessInventory {
                 Status = $Matches.status
                 RawLine = $line
             })
+            continue
+        }
+
+        if ($line -match '^PROCESS_QUERY_SUMMARY operation=filter-incidental\s') {
+            $diagnostics.Add($line)
             continue
         }
 

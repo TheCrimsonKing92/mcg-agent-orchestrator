@@ -674,6 +674,7 @@ public sealed class ProgressiveReviewGlanceTests
                 kernel,
                 goal,
                 WorkerProfileCatalog.Default(),
+                ProcessCommandLineSnapshot.Empty,
                 executionDirectory: root);
 
             var visible = Xunit.Assert.Single(dto.ProgressiveReviewGlanceGuards!);

@@ -13,7 +13,8 @@ public static partial class DashboardRenderer
         AgentOrchestratorKernel kernel,
         Goal goal,
         string goalPrefix,
-        DashboardRenderOptions options)
+        DashboardRenderOptions options,
+        ProcessInspectionSnapshotScope processInspection)
     {
         var monitor = kernel.BuildMonitor(goal.Id);
         var nextActions = kernel.BuildNextActions(goal.Id);
@@ -28,6 +29,7 @@ public static partial class DashboardRenderer
             kernel,
             goal,
             RequireWorkerProfiles(options),
+            processInspection.Get(),
             options.AgentDefinitions,
             executionDirectory: options.Workspace?.ExecutionDirectory,
             changedFiles: options.FocusGoalChangedFiles).TestImpact;
