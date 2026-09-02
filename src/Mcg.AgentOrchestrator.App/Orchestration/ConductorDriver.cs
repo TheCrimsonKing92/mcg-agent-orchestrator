@@ -4592,10 +4592,12 @@ internal sealed partial class ConductorDriver
         }
 
         var start = fromState == GoalLifecycleState.Dispatched ? _startRecordedDispatches : _dispatchAndStart;
+        var dispatchTimingGoal = goal;
         var startClock = Stopwatch.StartNew();
         var outcome = start(goal, policy);
         startClock.Stop();
-        EmitPhaseTiming("dispatch-prep", goal, startClock.Elapsed, $"tasks={CountAssignedTasks(goal)} result={outcome.Category}");
+        EmitPhaseTiming("dispatch-prep", dispatchTimingGoal, startClock.Elapsed, $"tasks={CountAssignedTasks(dispatchTimingGoal)} result={outcome.Category}");
+        goal = GetCurrentGoal(goal);
         if (outcome.Category == DispatchStartOutcomeCategory.RecoverableSandboxPrep)
         {
             if (!TryRecoverSandboxPrep(outcome, goalPrefix, out var recoveryFailure))
@@ -4609,7 +4611,8 @@ internal sealed partial class ConductorDriver
             startClock.Restart();
             outcome = retryStart(goal, policy);
             startClock.Stop();
-            EmitPhaseTiming("dispatch-prep", goal, startClock.Elapsed, $"tasks={CountAssignedTasks(goal)} result={outcome.Category} retry=sandbox-prep");
+            EmitPhaseTiming("dispatch-prep", dispatchTimingGoal, startClock.Elapsed, $"tasks={CountAssignedTasks(dispatchTimingGoal)} result={outcome.Category} retry=sandbox-prep");
+            goal = GetCurrentGoal(goal);
         }
 
         if (outcome.Category == DispatchStartOutcomeCategory.SpawnFailed)
@@ -4629,7 +4632,8 @@ internal sealed partial class ConductorDriver
             startClock.Restart();
             outcome = retryStart(goal, policy);
             startClock.Stop();
-            EmitPhaseTiming("dispatch-prep", goal, startClock.Elapsed, $"tasks={CountAssignedTasks(goal)} result={outcome.Category} retry=spawn-failed");
+            EmitPhaseTiming("dispatch-prep", dispatchTimingGoal, startClock.Elapsed, $"tasks={CountAssignedTasks(dispatchTimingGoal)} result={outcome.Category} retry=spawn-failed");
+            goal = GetCurrentGoal(goal);
             if (outcome.Category == DispatchStartOutcomeCategory.EmptyBatch)
             {
                 outcome = firstFailure;
@@ -4682,6 +4686,9 @@ internal sealed partial class ConductorDriver
 
         return Escalate(goal, goalPrefix, policy, fromState, outcome.Reason!);
     }
+
+    private Goal GetCurrentGoal(Goal goal) =>
+        (_cohortKernel ?? _conductorTickKernel)?.GetGoal(goal.Id) ?? goal;
 
     private bool TryRunPreReviewEvidenceStage(
         Goal goal,
@@ -5443,6 +5450,12 @@ internal sealed partial class ConductorDriver
     {
         var skippedReason = plan.Items
             .Where(item => item.Status == ProcessBatchItemStatus.Skipped)
+            .OrderBy(item => item.TaskStatus switch
+            {
+                WorkTaskStatus.Running => 0,
+                WorkTaskStatus.Assigned => 1,
+                _ => 2
+            })
             .Select(item => item.Reason)
             .FirstOrDefault(reason => !string.IsNullOrWhiteSpace(reason));
         return skippedReason is null
