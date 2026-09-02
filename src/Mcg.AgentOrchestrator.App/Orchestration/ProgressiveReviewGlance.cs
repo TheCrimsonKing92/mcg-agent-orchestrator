@@ -485,8 +485,6 @@ Transcript tail:
         if (!string.Equals(dispatchState.CurrentRoundKey, roundKey, StringComparison.Ordinal))
         {
             dispatchState.CurrentRoundKey = roundKey;
-            dispatchState.LastReviewedMaterialHash = null;
-            dispatchState.LastReviewedAt = null;
         }
 
         if (state.FiredCount >= _options.PerRoundBudget)

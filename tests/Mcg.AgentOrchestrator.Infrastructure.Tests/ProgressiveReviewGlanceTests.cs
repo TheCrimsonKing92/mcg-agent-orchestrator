@@ -1448,6 +1448,189 @@ public sealed class ProgressiveReviewGlanceTests
         Xunit.Assert.True(receipt.AvoidedInputTokens > 0);
     }
 
+    [Xunit.Fact(DisplayName = "ProgressiveReviewGlance_unchanged_material_is_suppressed_across_redispatch")]
+    public void UnchangedMaterialIsSuppressedAcrossRedispatch()
+    {
+        var now = new DateTimeOffset(2026, 8, 31, 20, 0, 0, TimeSpan.Zero);
+        var clock = new TestClock(now);
+        var (kernel, goal, task) = RunningDeveloperRound(now, clock: clock);
+        var runner = new ControlledGlanceRunner();
+        runner.EnqueueCompleted(new ProgressiveReviewGlanceDispatchResult(
+            ProgressiveReviewGlanceVerdict.OnTrack,
+            "aligned",
+            "material evidence reviewed"));
+        var coordinator = NewCoordinator(
+            runner,
+            new RecordingGlanceEvents(),
+            new ProgressiveReviewGlanceOptions(FirstElapsedThreshold: TimeSpan.Zero),
+            () => clock.UtcNow,
+            liveChanges: (_, _) => new DispatchLiveChangeSnapshot(["a.cs", "b.cs", "c.cs"], ["a.cs", "b.cs", "c.cs"], 0));
+
+        _ = coordinator.Observe(kernel, [goal]);
+        _ = coordinator.Observe(kernel, [goal]);
+        kernel.RecordDispatchExecutionResult(
+            goal.Id,
+            task.Id,
+            new TaskVerificationRecord("codex exec", "C:\\work", 1, "failed", "", now.AddMinutes(1)));
+        kernel.RetryTask(goal.Id, task.Id, "Retry with the same material evidence.");
+        clock.UtcNow = now.AddMinutes(2);
+        kernel.RecordTaskDispatch(
+            goal.Id,
+            task.Id,
+            new TaskDispatchRecord(
+                "codex-cli",
+                "codex exec",
+                @"C:\work",
+                clock.UtcNow,
+                BaseCommit: "base"));
+
+        var redispatch = coordinator.Observe(kernel, [goal]);
+
+        Xunit.Assert.Single(runner.Calls);
+        Xunit.Assert.Contains(
+            redispatch.ProgressLines,
+            line => line.Contains("cause=UnchangedMaterialEvidence", StringComparison.Ordinal));
+    }
+
+    [Xunit.Fact(DisplayName = "ProgressiveReviewGlance_invalid_result_allows_unchanged_material_retry")]
+    public void InvalidResultAllowsUnchangedMaterialRetry()
+    {
+        var now = new DateTimeOffset(2026, 8, 31, 20, 0, 0, TimeSpan.Zero);
+        var (kernel, goal, _) = RunningDeveloperRound(now);
+        var runner = new ControlledGlanceRunner();
+        runner.EnqueueCompleted(new ProgressiveReviewGlanceDispatchResult(
+            ProgressiveReviewGlanceVerdict.Invalid,
+            "runner failed",
+            "transient runner failure",
+            FailureCause: ProgressiveReviewGlanceFailureCause.RunnerException));
+        runner.EnqueueCompleted(new ProgressiveReviewGlanceDispatchResult(
+            ProgressiveReviewGlanceVerdict.OnTrack,
+            "aligned after retry",
+            "same material evidence reviewed"));
+        var coordinator = NewCoordinator(
+            runner,
+            new RecordingGlanceEvents(),
+            new ProgressiveReviewGlanceOptions(
+                FirstElapsedThreshold: TimeSpan.Zero,
+                ElapsedInterval: TimeSpan.FromMinutes(15)),
+            () => now,
+            liveChanges: (_, _) => new DispatchLiveChangeSnapshot(["a.cs", "b.cs", "c.cs"], ["a.cs", "b.cs", "c.cs"], 0));
+
+        _ = coordinator.Observe(kernel, [goal]);
+        _ = coordinator.Observe(kernel, [goal]);
+        now += TimeSpan.FromMinutes(16);
+        var retry = coordinator.Observe(kernel, [goal]);
+
+        Xunit.Assert.Equal(2, runner.Calls.Count);
+        Xunit.Assert.Contains(retry.ProgressLines, line => line.Contains("result=started", StringComparison.Ordinal));
+        Xunit.Assert.DoesNotContain(
+            retry.ProgressLines,
+            line => line.Contains("cause=UnchangedMaterialEvidence", StringComparison.Ordinal));
+    }
+
+    [Xunit.Fact(DisplayName = "ProgressiveReviewGlance_concern_is_retained_after_on_track_result")]
+    public void ConcernIsRetainedAfterOnTrackResult()
+    {
+        var now = new DateTimeOffset(2026, 8, 31, 20, 0, 0, TimeSpan.Zero);
+        var (kernel, goal, task) = RunningDeveloperRound(now);
+        var runner = new ControlledGlanceRunner();
+        runner.EnqueueCompleted(new ProgressiveReviewGlanceDispatchResult(
+            ProgressiveReviewGlanceVerdict.Concern,
+            "Acceptance criterion B appears untouched.",
+            "diff lacks criterion B"));
+        runner.EnqueueCompleted(new ProgressiveReviewGlanceDispatchResult(
+            ProgressiveReviewGlanceVerdict.OnTrack,
+            "later work is aligned",
+            "new diff addresses the current path"));
+        var diff = "first diff";
+        var coordinator = NewCoordinator(
+            runner,
+            new RecordingGlanceEvents(),
+            new ProgressiveReviewGlanceOptions(
+                FirstElapsedThreshold: TimeSpan.Zero,
+                ElapsedInterval: TimeSpan.FromMinutes(15)),
+            () => now,
+            liveChanges: (_, _) => new DispatchLiveChangeSnapshot(["a.cs", "b.cs", "c.cs"], ["a.cs", "b.cs", "c.cs"], 0),
+            diffReader: (_, _) => diff);
+
+        _ = coordinator.Observe(kernel, [goal]);
+        _ = coordinator.Observe(kernel, [goal]);
+        diff = "second materially changed diff";
+        now += TimeSpan.FromMinutes(16);
+        _ = coordinator.Observe(kernel, [goal]);
+        _ = coordinator.Observe(kernel, [goal]);
+        kernel.RecordDispatchExecutionResult(
+            goal.Id,
+            task.Id,
+            new TaskVerificationRecord("codex exec", "C:\\work", 1, "failed", "", now.AddMinutes(1)));
+
+        var failedRound = coordinator.Observe(kernel, [goal]);
+
+        Xunit.Assert.True(failedRound.MutatedTaskState);
+        Xunit.Assert.Equal(2, runner.Calls.Count);
+        Xunit.Assert.Contains(goal.Timeline, evt =>
+            evt.TaskId == task.Id &&
+            evt.Kind == ProgressKind.TaskNote &&
+            evt.Message.Contains("Acceptance criterion B appears untouched.", StringComparison.Ordinal));
+    }
+
+    [Xunit.Fact(DisplayName = "ProgressiveReviewGlance_dispatch_call_budget_is_cumulative_across_redispatch")]
+    public void DispatchCallBudgetIsCumulativeAcrossRedispatch()
+    {
+        var now = new DateTimeOffset(2026, 8, 31, 20, 0, 0, TimeSpan.Zero);
+        var clock = new TestClock(now);
+        var (kernel, goal, task) = RunningDeveloperRound(now, clock: clock);
+        var runner = new ControlledGlanceRunner();
+        runner.EnqueueCompleted(new ProgressiveReviewGlanceDispatchResult(
+            ProgressiveReviewGlanceVerdict.OnTrack,
+            "first round aligned",
+            "first material evidence reviewed"));
+        runner.EnqueueCompleted(new ProgressiveReviewGlanceDispatchResult(
+            ProgressiveReviewGlanceVerdict.OnTrack,
+            "second round aligned",
+            "second material evidence reviewed"));
+        var events = new RecordingGlanceEvents();
+        var diff = "round one diff";
+        var coordinator = NewCoordinator(
+            runner,
+            events,
+            new ProgressiveReviewGlanceOptions(
+                FirstElapsedThreshold: TimeSpan.Zero,
+                PerDispatchGlanceBudget: 2,
+                MaterialUnchangedEscapeInterval: TimeSpan.Zero),
+            () => clock.UtcNow,
+            liveChanges: (_, _) => new DispatchLiveChangeSnapshot(["a.cs", "b.cs", "c.cs"], ["a.cs", "b.cs", "c.cs"], 0),
+            diffReader: (_, _) => diff);
+
+        _ = coordinator.Observe(kernel, [goal]);
+        _ = coordinator.Observe(kernel, [goal]);
+        CompleteFailedDispatchAndRedispatch(kernel, goal, task, clock, now.AddMinutes(2));
+        diff = "round two diff";
+        _ = coordinator.Observe(kernel, [goal]);
+        _ = coordinator.Observe(kernel, [goal]);
+        CompleteFailedDispatchAndRedispatch(kernel, goal, task, clock, now.AddMinutes(4));
+        diff = "round three diff";
+
+        var suppressed = coordinator.Observe(kernel, [goal]);
+
+        Xunit.Assert.Equal(2, runner.Calls.Count);
+        Xunit.Assert.Contains(
+            suppressed.ProgressLines,
+            line => line.Contains("cause=PerDispatchCallBudgetExhausted", StringComparison.Ordinal));
+
+        kernel.RecordDispatchExecutionResult(
+            goal.Id,
+            task.Id,
+            new TaskVerificationRecord("codex exec", "C:\\work", 1, "failed", "", clock.UtcNow.AddMinutes(1)));
+        _ = coordinator.Observe(kernel, [goal]);
+
+        var receipt = Xunit.Assert.Single(
+            events.CircuitReceipts,
+            candidate => candidate.AdmissionOutcome == "PerDispatchCallBudgetExhausted");
+        Xunit.Assert.Equal("glance-budget", receipt.ProbeOutcome);
+        Xunit.Assert.Equal(1, receipt.AvoidedCallCount);
+    }
+
     [Xunit.Fact(DisplayName = "ProgressiveReviewGlance_transcript_growth_bucket_is_material_evidence")]
     public void TranscriptGrowthBucketIsMaterialEvidence()
     {
@@ -2099,6 +2282,30 @@ public sealed class ProgressiveReviewGlanceTests
                 ProviderSessionId: providerSessionId,
                 WorktreeHeadSha: worktreeHeadSha));
         return (kernel, goal, task);
+    }
+
+    private static void CompleteFailedDispatchAndRedispatch(
+        AgentOrchestratorKernel kernel,
+        Goal goal,
+        TaskSpec task,
+        TestClock clock,
+        DateTimeOffset redispatchedAt)
+    {
+        kernel.RecordDispatchExecutionResult(
+            goal.Id,
+            task.Id,
+            new TaskVerificationRecord("codex exec", "C:\\work", 1, "failed", "", redispatchedAt.AddMinutes(-1)));
+        kernel.RetryTask(goal.Id, task.Id, "Retry with new material evidence.");
+        clock.UtcNow = redispatchedAt;
+        kernel.RecordTaskDispatch(
+            goal.Id,
+            task.Id,
+            new TaskDispatchRecord(
+                "codex-cli",
+                "codex exec",
+                @"C:\work",
+                redispatchedAt,
+                BaseCommit: "base"));
     }
 
     private static (ProgressiveReviewSteerIntent Intent, string GlanceInputHash) CaptureSteerIntentForSession(
