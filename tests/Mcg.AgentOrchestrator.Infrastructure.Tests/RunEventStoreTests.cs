@@ -590,6 +590,54 @@ public sealed class RunEventStoreTests
             RunEventMaintenanceCadence.VacuumOperation));
     }
 
+    [Xunit.Fact]
+    public async Task ArtifactRetentionReceipt_PersistsTypedPartialDecisions()
+    {
+        var root = CreateTempDirectory();
+        var store = new SqliteRunEventStore(Path.Combine(root, "run-events.db"));
+        var now = DateTimeOffset.Parse("2026-09-02T12:00:00Z");
+        var result = new StorageRetentionResult(
+            WorkerArtifactsDeleted: 1,
+            WorkerLogsCompressed: 0,
+            SuccessfulTrxReceiptsWritten: 0,
+            AcceptanceArtifactsDeleted: 0,
+            PromptArtifactsDeleted: 0,
+            GoalJournalsArchived: 0,
+            SweepId: "sweep-1",
+            Decisions:
+            [
+                new EvidenceRetentionDecision(
+                    EvidenceArtifactFamily.DispatchLogs,
+                    EvidenceRetentionAction.Deleted,
+                    "deleted.log",
+                    "goal-1",
+                    EvidenceOwnerResolution.UniqueTerminal,
+                    "past-deletion-age",
+                    BytesAttempted: 12,
+                    BytesReclaimed: 12),
+                new EvidenceRetentionDecision(
+                    EvidenceArtifactFamily.AcceptanceGateAttempts,
+                    EvidenceRetentionAction.DeferredLocked,
+                    "locked.trx",
+                    "goal-1",
+                    EvidenceOwnerResolution.UniqueTerminal,
+                    "exclusive-delete-failed",
+                    FailureExceptionType: nameof(IOException))
+            ]);
+
+        RunEventMaintenanceCadence.AppendArtifactRetentionReceipt(store, result, now);
+
+        var receipt = Assert.IsType<RunEventRecord>(await store.ReadLatestAsync(
+            RunEventTypes.EvidenceRetention,
+            RunEventMaintenanceCadence.ArtifactRetentionOperation));
+        Assert.Equal("Partial", receipt.Status);
+        using var payload = JsonDocument.Parse(receipt.PayloadJson);
+        Assert.Equal(1, payload.RootElement.GetProperty("policyVersion").GetInt32());
+        Assert.Equal(12, payload.RootElement.GetProperty("reclaimedBytes").GetInt64());
+        Assert.False(payload.RootElement.GetProperty("decisionsTruncated").GetBoolean());
+        Assert.Equal(2, payload.RootElement.GetProperty("decisions").GetArrayLength());
+    }
+
     private static Task<RunEventRecord> AppendGoalOperationAsync(
         SqliteRunEventStore store,
         string goalId,

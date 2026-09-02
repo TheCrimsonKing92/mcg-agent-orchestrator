@@ -10,6 +10,7 @@ internal static class RunEventMaintenanceCadence
 {
     internal const string Operation = "run-events:maintenance";
     internal const string VacuumOperation = "run-events:vacuum";
+    internal const string ArtifactRetentionOperation = "storage-retention:sweep";
     internal static readonly TimeSpan Interval = TimeSpan.FromHours(24);
     internal static readonly TimeSpan VacuumInterval = TimeSpan.FromDays(7);
     private static readonly ConcurrentDictionary<string, DateTimeOffset> NextDueByStorePath =
@@ -47,7 +48,7 @@ internal static class RunEventMaintenanceCadence
 
             var retentionGoals = workspace is null
                 ? null
-                : StorageRetentionMaintenance.LoadPersistedTerminalGoals(
+                : StorageRetentionMaintenance.LoadPersistedGoals(
                     new SqliteOrchestratorStateRepository(workspace.SqliteStatePath));
             var terminalGoalIds = retentionGoals?
                 .Select(goal => goal.GoalId)
@@ -72,6 +73,13 @@ internal static class RunEventMaintenanceCadence
             var receipt = FormatReceipt("cadence", options, result);
             Console.WriteLine(receipt);
             TryAppendJournal(journal, "run-events-maintenance", receipt, now);
+            if (artifactRetention is not null)
+            {
+                var artifactReceipt = FormatArtifactRetentionReceipt(artifactRetention);
+                Console.WriteLine(artifactReceipt);
+                TryAppendJournal(journal, "storage-retention-sweep", artifactReceipt, now);
+                AppendArtifactRetentionReceipt(store, artifactRetention, now);
+            }
             if (!result.Deferred)
             {
                 TryAppendRunEventReceipt(store, "cadence", options, result, now);
@@ -196,6 +204,57 @@ internal static class RunEventMaintenanceCadence
         {
             // Maintenance receipts are observability; a failed receipt write must not fail maintenance.
         }
+    }
+
+    internal static string FormatArtifactRetentionReceipt(StorageRetentionResult result)
+    {
+        var reclaimedBytes = result.Decisions.Sum(decision => decision.BytesReclaimed);
+        var deferred = result.Decisions.Count(decision => decision.Action is
+            EvidenceRetentionAction.DeferredLease or
+            EvidenceRetentionAction.DeferredLive or
+            EvidenceRetentionAction.DeferredLocked);
+        var status = result.Decisions.Any(decision => decision.Action == EvidenceRetentionAction.DeferredLease)
+            ? "deferred"
+            : deferred > 0 ? "partial" : "completed";
+        return $"STORAGE_RETENTION policyVersion={EvidenceRetentionPolicy.Version} sweepId={result.SweepId} status={status} decisions={result.Decisions.Count} reclaimedBytes={reclaimedBytes} deferred={deferred}";
+    }
+
+    internal static void AppendArtifactRetentionReceipt(
+        SqliteRunEventStore store,
+        StorageRetentionResult result,
+        DateTimeOffset occurredAt)
+    {
+        const int decisionLimit = 256;
+        var decisions = result.Decisions.Take(decisionLimit).ToArray();
+        var truncated = result.Decisions.Count > decisions.Length;
+        var deferred = result.Decisions.Any(decision => decision.Action is
+            EvidenceRetentionAction.DeferredLease or
+            EvidenceRetentionAction.DeferredLive or
+            EvidenceRetentionAction.DeferredLocked);
+        store.AppendAsync(new RunEventAppend(
+            RunEventTypes.EvidenceRetention,
+            GoalId: null,
+            Operation: ArtifactRetentionOperation,
+            Status: deferred ? "Partial" : "Completed",
+            Detail: FormatArtifactRetentionReceipt(result),
+            PayloadJson: JsonSerializer.Serialize(new
+            {
+                policyVersion = EvidenceRetentionPolicy.Version,
+                result.SweepId,
+                result.WorkerArtifactsDeleted,
+                result.WorkerLogsCompressed,
+                result.SuccessfulTrxReceiptsWritten,
+                result.AcceptanceArtifactsDeleted,
+                result.PromptArtifactsDeleted,
+                result.GoalJournalsArchived,
+                reclaimedBytes = result.Decisions.Sum(decision => decision.BytesReclaimed),
+                decisionsTruncated = truncated,
+                totalDecisionCount = result.Decisions.Count,
+                decisions
+            }),
+            OccurredAt: occurredAt))
+            .GetAwaiter()
+            .GetResult();
     }
 
     private static DateTimeOffset? LatestVacuumMarker(SqliteRunEventStore store)

@@ -1,4 +1,6 @@
 using System.IO.Compression;
+using System.Security.Cryptography;
+using System.Text;
 using System.Text.Json;
 using System.Text.RegularExpressions;
 using System.Xml.Linq;
@@ -10,15 +12,25 @@ namespace Mcg.AgentOrchestrator.App.Orchestration;
 internal sealed record StorageRetentionGoal(
     string GoalId,
     GoalStatus Status,
-    IReadOnlyDictionary<string, WorkTaskStatus> TaskStatuses)
+    IReadOnlyDictionary<string, WorkTaskStatus> TaskStatuses,
+    IReadOnlyCollection<string>? PromptPaths = null)
 {
     public bool IsTerminal => Status is GoalStatus.Completed or GoalStatus.Failed or GoalStatus.Cancelled or GoalStatus.Superseded;
 
-    public static StorageRetentionGoal FromSnapshot(GoalSnapshot snapshot) =>
-        new(
+    public static StorageRetentionGoal FromSnapshot(GoalSnapshot snapshot)
+    {
+        var promptPaths = snapshot.Tasks
+            .SelectMany(task => (task.DispatchHistory ?? []).Append(task.LastDispatch))
+            .Where(dispatch => !string.IsNullOrWhiteSpace(dispatch?.PromptPath))
+            .Select(dispatch => Path.GetFullPath(dispatch!.PromptPath!))
+            .Distinct(StringComparer.OrdinalIgnoreCase)
+            .ToArray();
+        return new(
             snapshot.Id,
             snapshot.Status,
-            snapshot.Tasks.ToDictionary(task => task.Id, task => task.Status, StringComparer.OrdinalIgnoreCase));
+            snapshot.Tasks.ToDictionary(task => task.Id, task => task.Status, StringComparer.OrdinalIgnoreCase),
+            promptPaths);
+    }
 }
 
 internal sealed record StorageRetentionResult(
@@ -26,7 +38,10 @@ internal sealed record StorageRetentionResult(
     int WorkerLogsCompressed,
     int SuccessfulTrxReceiptsWritten,
     int AcceptanceArtifactsDeleted,
-    int GoalJournalsArchived);
+    int PromptArtifactsDeleted,
+    int GoalJournalsArchived,
+    string SweepId,
+    IReadOnlyList<EvidenceRetentionDecision> Decisions);
 
 internal static partial class StorageRetentionMaintenance
 {
@@ -51,17 +66,14 @@ internal static partial class StorageRetentionMaintenance
         return Run(workspace.LogDirectory, workspace.OrchestratorDirectory, workspace.ExecutionDirectory, retentionGoals, now);
     }
 
-    internal static IReadOnlyCollection<StorageRetentionGoal> LoadPersistedTerminalGoals(
+    internal static IReadOnlyCollection<StorageRetentionGoal> LoadPersistedGoals(
         ITransactionalOrchestratorStateRepository stateRepository)
     {
-        var terminalGoalIds = stateRepository.ListConductLoopGoalMetadataAsync().GetAwaiter().GetResult()
-            .Where(summary =>
-                Enum.TryParse<GoalStatus>(summary.Status, ignoreCase: true, out var status) &&
-                status is GoalStatus.Completed or GoalStatus.Failed or GoalStatus.Cancelled or GoalStatus.Superseded)
+        var goalIds = stateRepository.ListConductLoopGoalMetadataAsync().GetAwaiter().GetResult()
             .Select(summary => new GoalId(summary.Id))
             .ToArray();
-        var goals = new List<StorageRetentionGoal>(terminalGoalIds.Length);
-        foreach (var goalId in terminalGoalIds)
+        var goals = new List<StorageRetentionGoal>(goalIds.Length);
+        foreach (var goalId in goalIds)
         {
             var snapshot = stateRepository.LoadGoalAsync(goalId).GetAwaiter().GetResult();
             if (snapshot is not null)
@@ -80,21 +92,73 @@ internal static partial class StorageRetentionMaintenance
         IReadOnlyCollection<StorageRetentionGoal> goals,
         DateTimeOffset now)
     {
-        var worker = SweepWorkerArtifacts(logDirectory, goals, now);
-        var acceptance = SweepAcceptanceArtifacts(orchestratorDirectory, goals, now);
-        var journals = ArchiveGoalJournals(executionDirectory, goals);
-        return new StorageRetentionResult(
-            worker.Deleted,
-            worker.Compressed,
-            acceptance.Receipts,
-            acceptance.Deleted,
-            journals);
+        var decisions = new List<EvidenceRetentionDecision>();
+        var sweepId = Guid.NewGuid().ToString("N");
+        using var lease = new Mutex(false, LeaseNameFor(orchestratorDirectory));
+        var ownsLease = false;
+        try
+        {
+            try
+            {
+                ownsLease = lease.WaitOne(0);
+            }
+            catch (AbandonedMutexException)
+            {
+                ownsLease = true;
+            }
+
+            if (!ownsLease)
+            {
+                decisions.Add(new EvidenceRetentionDecision(
+                    EvidenceArtifactFamily.RunEvents,
+                    EvidenceRetentionAction.DeferredLease,
+                    orchestratorDirectory,
+                    null,
+                    EvidenceOwnerResolution.Unrecorded,
+                    "sweep-lease-unavailable"));
+                return new StorageRetentionResult(0, 0, 0, 0, 0, 0, sweepId, decisions);
+            }
+
+            var worker = SweepWorkerArtifacts(logDirectory, goals, now, decisions);
+            var acceptance = SweepAcceptanceArtifacts(
+                orchestratorDirectory,
+                goals,
+                now,
+                decisions);
+            var prompts = SweepPrompts(orchestratorDirectory, goals, now, decisions);
+            RecordGoalEventPreservation(orchestratorDirectory, goals, decisions);
+            var journals = ArchiveGoalJournals(executionDirectory, goals, decisions);
+            return new StorageRetentionResult(
+                worker.Deleted,
+                worker.Compressed,
+                acceptance.Receipts,
+                acceptance.Deleted,
+                prompts,
+                journals,
+                sweepId,
+                decisions);
+        }
+        finally
+        {
+            if (ownsLease)
+            {
+                lease.ReleaseMutex();
+            }
+        }
+    }
+
+    internal static string LeaseNameFor(string orchestratorDirectory)
+    {
+        var normalized = Path.GetFullPath(orchestratorDirectory).ToUpperInvariant();
+        var hash = Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(normalized)));
+        return $"Local\\mcg-storage-retention-{hash[..24]}";
     }
 
     private static (int Deleted, int Compressed) SweepWorkerArtifacts(
         string logDirectory,
         IReadOnlyCollection<StorageRetentionGoal> goals,
-        DateTimeOffset now)
+        DateTimeOffset now,
+        List<EvidenceRetentionDecision> decisions)
     {
         if (!Directory.Exists(logDirectory))
         {
@@ -119,40 +183,146 @@ internal static partial class StorageRetentionMaintenance
                 dispatchPrefix => dispatchPrefix,
                 dispatchPrefix => DispatchFailed(logDirectory, dispatchPrefix),
                 StringComparer.OrdinalIgnoreCase);
-        var deleted = TryDeleteExclusive(Path.Combine(logDirectory, "dispatch-diagnostics.jsonl")) ? 1 : 0;
+        var lastFailedDispatches = artifacts
+            .Where(artifact =>
+                artifact.Match.Success &&
+                byPrefix.TryGetValue(artifact.Match.Groups["goal"].Value, out var goal) &&
+                goal.IsTerminal &&
+                goal.TaskStatuses.Count(pair => pair.Key.StartsWith(
+                    artifact.Match.Groups["task"].Value,
+                    StringComparison.OrdinalIgnoreCase)) == 1)
+            .GroupBy(
+                artifact => $"{artifact.Match.Groups["goal"].Value}:{artifact.Match.Groups["task"].Value}",
+                StringComparer.OrdinalIgnoreCase)
+            .Select(group => group
+                .Select(artifact => artifact.Match.Groups["dispatch"].Value)
+                .Distinct(StringComparer.OrdinalIgnoreCase)
+                .Where(dispatch => dispatchFailures[dispatch])
+                .OrderByDescending(dispatch => dispatch, StringComparer.OrdinalIgnoreCase)
+                .FirstOrDefault())
+            .OfType<string>()
+            .ToHashSet(StringComparer.OrdinalIgnoreCase);
+        var legacyDiagnostics = Path.Combine(logDirectory, "dispatch-diagnostics.jsonl");
+        if (File.Exists(legacyDiagnostics))
+        {
+            decisions.Add(new EvidenceRetentionDecision(
+                EvidenceArtifactFamily.DispatchLogs,
+                EvidenceRetentionAction.RetainedUndecidable,
+                legacyDiagnostics,
+                null,
+                EvidenceOwnerResolution.Unrecorded,
+                "global-diagnostics-have-no-unique-goal-owner"));
+        }
+
+        var deleted = 0;
         var compressed = 0;
         foreach (var artifact in artifacts)
         {
             var (path, match) = artifact;
-            if (!match.Success || !byPrefix.TryGetValue(match.Groups["goal"].Value, out var goal) || !goal.IsTerminal)
+            if (!match.Success)
             {
+                continue;
+            }
+
+            if (!byPrefix.TryGetValue(match.Groups["goal"].Value, out var goal))
+            {
+                decisions.Add(new EvidenceRetentionDecision(
+                    EvidenceArtifactFamily.DispatchLogs,
+                    EvidenceRetentionAction.RetainedUndecidable,
+                    path,
+                    null,
+                    EvidenceOwnerResolution.AmbiguousPrefix,
+                    "goal-prefix-is-unmatched-or-ambiguous"));
+                continue;
+            }
+
+            if (!goal.IsTerminal)
+            {
+                decisions.Add(new EvidenceRetentionDecision(
+                    EvidenceArtifactFamily.DispatchLogs,
+                    EvidenceRetentionAction.Preserved,
+                    path,
+                    goal.GoalId,
+                    EvidenceOwnerResolution.NonTerminal,
+                    "goal-is-non-terminal"));
                 continue;
             }
 
             var taskPrefix = match.Groups["task"].Value;
             var matchingTasks = goal.TaskStatuses
                 .Where(pair => pair.Key.StartsWith(taskPrefix, StringComparison.OrdinalIgnoreCase))
-                .Select(pair => pair.Value)
                 .ToArray();
-            var preserveRaw = goal.Status == GoalStatus.Failed && matchingTasks.Length == 0 ||
-                matchingTasks.Any(status => status is WorkTaskStatus.Failed or WorkTaskStatus.WaitingForHuman) ||
-                dispatchFailures[match.Groups["dispatch"].Value];
+            if (matchingTasks.Length != 1)
+            {
+                decisions.Add(new EvidenceRetentionDecision(
+                    EvidenceArtifactFamily.DispatchLogs,
+                    EvidenceRetentionAction.RetainedUndecidable,
+                    path,
+                    goal.GoalId,
+                    matchingTasks.Length == 0
+                        ? EvidenceOwnerResolution.Unmatched
+                        : EvidenceOwnerResolution.AmbiguousPrefix,
+                    matchingTasks.Length == 0 ? "task-prefix-unmatched" : "task-prefix-ambiguous"));
+                continue;
+            }
+
+            var preserveRaw = lastFailedDispatches.Contains(match.Groups["dispatch"].Value);
             if (preserveRaw)
             {
+                decisions.Add(new EvidenceRetentionDecision(
+                    EvidenceArtifactFamily.DispatchLogs,
+                    EvidenceRetentionAction.Preserved,
+                    path,
+                    goal.GoalId,
+                    EvidenceOwnerResolution.UniqueTerminal,
+                    "failure-evidence"));
                 continue;
             }
 
             var age = now - File.GetLastWriteTimeUtc(path);
             if (age > WorkerDeletionAge)
             {
-                if (TryDeleteExclusive(path))
+                var length = SafeLength(path);
+                var deletion = TryDeleteExclusive(path);
+                decisions.Add(new EvidenceRetentionDecision(
+                    EvidenceArtifactFamily.DispatchLogs,
+                    deletion.Success ? EvidenceRetentionAction.Deleted : EvidenceRetentionAction.DeferredLocked,
+                    path,
+                    goal.GoalId,
+                    EvidenceOwnerResolution.UniqueTerminal,
+                    deletion.Success ? "past-deletion-age" : "exclusive-delete-failed",
+                    BytesAttempted: length,
+                    BytesReclaimed: deletion.Success ? length : 0,
+                    FailureExceptionType: deletion.ExceptionType));
+                if (deletion.Success)
                 {
                     deleted++;
                 }
                 continue;
             }
 
-            if (age >= WorkerCompressionAge && IsRawWorkerLog(path) && TryCompressExclusive(path))
+            if (age < WorkerCompressionAge || !IsRawWorkerLog(path))
+            {
+                decisions.Add(new EvidenceRetentionDecision(
+                    EvidenceArtifactFamily.DispatchLogs,
+                    EvidenceRetentionAction.Preserved,
+                    path,
+                    goal.GoalId,
+                    EvidenceOwnerResolution.UniqueTerminal,
+                    "within-grace-period"));
+                continue;
+            }
+
+            var compression = TryCompressExclusive(path);
+            decisions.Add(new EvidenceRetentionDecision(
+                EvidenceArtifactFamily.DispatchLogs,
+                compression.Success ? EvidenceRetentionAction.Compressed : EvidenceRetentionAction.DeferredLocked,
+                path,
+                goal.GoalId,
+                EvidenceOwnerResolution.UniqueTerminal,
+                compression.Success ? "past-compression-age" : "exclusive-compression-failed",
+                FailureExceptionType: compression.ExceptionType));
+            if (compression.Success)
             {
                 compressed++;
             }
@@ -196,7 +366,7 @@ internal static partial class StorageRetentionMaintenance
          path.EndsWith(".err.log", StringComparison.OrdinalIgnoreCase) ||
          Path.GetFileName(path).Contains(".log.part-", StringComparison.OrdinalIgnoreCase));
 
-    private static bool TryCompressExclusive(string path)
+    private static (bool Success, string? ExceptionType) TryCompressExclusive(string path)
     {
         var gzipPath = path + ".gz";
         var temporaryPath = gzipPath + $".{Guid.NewGuid():N}.tmp";
@@ -211,49 +381,168 @@ internal static partial class StorageRetentionMaintenance
 
             File.Move(temporaryPath, gzipPath, overwrite: true);
             File.Delete(path);
-            return true;
+            return (true, null);
         }
         catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
         {
             TryDelete(temporaryPath);
-            return false;
+            return (false, ex.GetType().Name);
         }
     }
 
     private static (int Receipts, int Deleted) SweepAcceptanceArtifacts(
         string orchestratorDirectory,
         IReadOnlyCollection<StorageRetentionGoal> goals,
-        DateTimeOffset now)
+        DateTimeOffset now,
+        List<EvidenceRetentionDecision> decisions)
     {
-        var root = Path.Combine(orchestratorDirectory, "acceptance-gate-attempts");
+        var totals = (Receipts: 0, Deleted: 0);
+        foreach (var family in new[]
+        {
+            (Directory: "acceptance-gate-attempts", Family: EvidenceArtifactFamily.AcceptanceGateAttempts),
+            (Directory: "pre-review-evidence-attempts", Family: EvidenceArtifactFamily.PreReviewEvidenceAttempts)
+        })
+        {
+            var result = SweepAttemptRoot(
+                Path.Combine(orchestratorDirectory, family.Directory),
+                family.Family,
+                goals,
+                now,
+                decisions);
+            totals.Receipts += result.Receipts;
+            totals.Deleted += result.Deleted;
+        }
+
+        return totals;
+    }
+
+    private static (int Receipts, int Deleted) SweepAttemptRoot(
+        string root,
+        EvidenceArtifactFamily family,
+        IReadOnlyCollection<StorageRetentionGoal> goals,
+        DateTimeOffset now,
+        List<EvidenceRetentionDecision> decisions)
+    {
         if (!Directory.Exists(root))
         {
             return (0, 0);
         }
 
-        var terminal = goals.Where(goal => goal.IsTerminal)
-            .ToDictionary(goal => goal.GoalId, StringComparer.OrdinalIgnoreCase);
         var receipts = 0;
         var deleted = 0;
-        var candidates = new List<FileInfo>();
+        var candidates = new List<(FileInfo File, bool CountBound, string GoalId)>();
         foreach (var goalDirectory in Directory.EnumerateDirectories(root, "*", SearchOption.TopDirectoryOnly))
         {
             var goalId = Path.GetFileName(goalDirectory);
-            if (!terminal.ContainsKey(goalId))
+            var owners = goals.Where(goal => goal.GoalId.Equals(goalId, StringComparison.OrdinalIgnoreCase)).ToArray();
+            if (owners.Length != 1)
             {
+                decisions.Add(new EvidenceRetentionDecision(
+                    family,
+                    EvidenceRetentionAction.RetainedUndecidable,
+                    goalDirectory,
+                    null,
+                    owners.Length == 0 ? EvidenceOwnerResolution.Unmatched : EvidenceOwnerResolution.AmbiguousPrefix,
+                    "goal-directory-has-no-unique-full-id-owner"));
                 continue;
             }
 
-            var lastFailingAttempt = FindLastFailingAttempt(goalDirectory);
+            var goal = owners[0];
+            if (!goal.IsTerminal)
+            {
+                decisions.Add(new EvidenceRetentionDecision(
+                    family,
+                    EvidenceRetentionAction.Preserved,
+                    goalDirectory,
+                    goal.GoalId,
+                    EvidenceOwnerResolution.NonTerminal,
+                    "goal-is-non-terminal"));
+                continue;
+            }
+
+            if (!TryReadAttemptIdentities(goalDirectory, goal.GoalId, out var attempts, out var invalidReason))
+            {
+                decisions.Add(new EvidenceRetentionDecision(
+                    family,
+                    EvidenceRetentionAction.RetainedUndecidable,
+                    goalDirectory,
+                    goal.GoalId,
+                    EvidenceOwnerResolution.UniqueTerminal,
+                    invalidReason));
+                continue;
+            }
+
+            var live = attempts.FirstOrDefault(attempt => !attempt.Reconciled);
+            if (live is not null)
+            {
+                decisions.Add(new EvidenceRetentionDecision(
+                    family,
+                    EvidenceRetentionAction.DeferredLive,
+                    goalDirectory,
+                    goal.GoalId,
+                    EvidenceOwnerResolution.UniqueTerminal,
+                    "attempt-is-unreconciled",
+                    live.AttemptId,
+                    live.Ordinal));
+                continue;
+            }
+
+            var protectedAttemptIds = EvidenceRetentionPolicy.ProtectedAttemptIds(attempts);
+            var countBoundAttemptIds = EvidenceRetentionPolicy.AttemptIdsPastCountBound(
+                attempts,
+                ConductorParallelAcceptanceAttemptCoordinator.RetainedAttemptCountPerGoal,
+                protectedAttemptIds);
             foreach (var trxPath in Directory.EnumerateFiles(goalDirectory, "*.trx", SearchOption.AllDirectories))
             {
-                if (BelongsToAttempt(trxPath, lastFailingAttempt) || !TryWriteSuccessfulTrxReceipt(trxPath))
+                var protectedAttempt = protectedAttemptIds.FirstOrDefault(id => BelongsToAttempt(trxPath, id));
+                if (protectedAttempt is not null)
                 {
+                    var identity = attempts.Single(attempt => attempt.AttemptId.Equals(protectedAttempt, StringComparison.OrdinalIgnoreCase));
+                    decisions.Add(new EvidenceRetentionDecision(
+                        family,
+                        EvidenceRetentionAction.Preserved,
+                        trxPath,
+                        goal.GoalId,
+                        EvidenceOwnerResolution.UniqueTerminal,
+                        identity.Failed ? "last-failing-attempt" : "final-attempt",
+                        identity.AttemptId,
+                        identity.Ordinal));
+                    continue;
+                }
+
+                if (!TryWriteSuccessfulTrxReceipt(trxPath))
+                {
+                    decisions.Add(new EvidenceRetentionDecision(
+                        family,
+                        EvidenceRetentionAction.Preserved,
+                        trxPath,
+                        goal.GoalId,
+                        EvidenceOwnerResolution.UniqueTerminal,
+                        "trx-is-failing-or-unreadable"));
                     continue;
                 }
 
                 receipts++;
-                if (TryDeleteExclusive(trxPath))
+                decisions.Add(new EvidenceRetentionDecision(
+                    family,
+                    EvidenceRetentionAction.ReceiptWritten,
+                    trxPath + ".test-identities.json",
+                    goal.GoalId,
+                    EvidenceOwnerResolution.UniqueTerminal,
+                    "successful-trx-identities-preserved"));
+                var length = SafeLength(trxPath);
+                var deletion = TryDeleteExclusive(trxPath);
+                decisions.Add(new EvidenceRetentionDecision(
+                    family,
+                    deletion.Success ? EvidenceRetentionAction.Deleted : EvidenceRetentionAction.DeferredLocked,
+                    trxPath,
+                    goal.GoalId,
+                    EvidenceOwnerResolution.UniqueTerminal,
+                    deletion.Success ? "successful-trx-reduced-to-receipt" : "exclusive-delete-failed",
+                    BytesAttempted: length,
+                    BytesReclaimed: deletion.Success ? length : 0,
+                    FailureExceptionType: deletion.ExceptionType));
+                if (deletion.Success)
                 {
                     deleted++;
                 }
@@ -261,9 +550,28 @@ internal static partial class StorageRetentionMaintenance
 
             foreach (var path in Directory.EnumerateFiles(goalDirectory, "*", SearchOption.AllDirectories))
             {
-                if (!IsAcceptanceSummary(path) && !BelongsToAttempt(path, lastFailingAttempt))
+                var protectedAttempt = protectedAttemptIds.FirstOrDefault(id => BelongsToAttempt(path, id));
+                if (protectedAttempt is not null)
                 {
-                    candidates.Add(new FileInfo(path));
+                    var identity = attempts.Single(attempt => attempt.AttemptId.Equals(protectedAttempt, StringComparison.OrdinalIgnoreCase));
+                    decisions.Add(new EvidenceRetentionDecision(
+                        family,
+                        EvidenceRetentionAction.Preserved,
+                        path,
+                        goal.GoalId,
+                        EvidenceOwnerResolution.UniqueTerminal,
+                        identity.Failed ? "last-failing-attempt" : "final-attempt",
+                        identity.AttemptId,
+                        identity.Ordinal));
+                    continue;
+                }
+
+                if (!IsAcceptanceIndex(path) && !path.EndsWith(".test-identities.json", StringComparison.OrdinalIgnoreCase))
+                {
+                    candidates.Add((
+                        new FileInfo(path),
+                        countBoundAttemptIds.Any(id => BelongsToAttempt(path, id)),
+                        goal.GoalId));
                 }
             }
         }
@@ -271,16 +579,31 @@ internal static partial class StorageRetentionMaintenance
         var totalBytes = Directory.EnumerateFiles(root, "*", SearchOption.AllDirectories)
             .Select(SafeLength)
             .Sum();
-        foreach (var candidate in candidates.OrderBy(file => file.LastWriteTimeUtc).ThenBy(file => file.FullName, StringComparer.OrdinalIgnoreCase))
+        foreach (var candidate in candidates
+            .OrderBy(item => item.File.LastWriteTimeUtc)
+            .ThenBy(item => item.File.FullName, StringComparer.OrdinalIgnoreCase))
         {
-            var aged = now - candidate.LastWriteTimeUtc > AcceptanceArtifactMaxAge;
-            if (!aged && totalBytes <= AcceptanceArtifactMaxBytes)
+            var aged = now - candidate.File.LastWriteTimeUtc > AcceptanceArtifactMaxAge;
+            if (!candidate.CountBound && !aged && totalBytes <= AcceptanceArtifactMaxBytes)
             {
                 continue;
             }
 
-            var length = SafeLength(candidate.FullName);
-            if (TryDeleteExclusive(candidate.FullName))
+            var length = SafeLength(candidate.File.FullName);
+            var deletion = TryDeleteExclusive(candidate.File.FullName);
+            decisions.Add(new EvidenceRetentionDecision(
+                family,
+                deletion.Success ? EvidenceRetentionAction.Deleted : EvidenceRetentionAction.DeferredLocked,
+                candidate.File.FullName,
+                candidate.GoalId,
+                EvidenceOwnerResolution.UniqueTerminal,
+                deletion.Success
+                    ? candidate.CountBound ? "past-count-bound" : aged ? "past-age-bound" : "past-byte-bound"
+                    : "exclusive-delete-failed",
+                BytesAttempted: length,
+                BytesReclaimed: deletion.Success ? length : 0,
+                FailureExceptionType: deletion.ExceptionType));
+            if (deletion.Success)
             {
                 deleted++;
                 totalBytes = Math.Max(0, totalBytes - length);
@@ -290,39 +613,73 @@ internal static partial class StorageRetentionMaintenance
         return (receipts, deleted);
     }
 
-    private static string? FindLastFailingAttempt(string goalDirectory)
+    private static bool TryReadAttemptIdentities(
+        string goalDirectory,
+        string expectedGoalId,
+        out IReadOnlyCollection<RetentionAttemptIdentity> attempts,
+        out string reason)
     {
-        return Directory.EnumerateFiles(goalDirectory, "*.attempt.json", SearchOption.TopDirectoryOnly)
-            .Select(path => new { Path = path, Outcome = TryReadAttemptOutcome(path), At = File.GetLastWriteTimeUtc(path) })
-            .Where(item => item.Outcome == "failed")
-            .OrderByDescending(item => item.At)
-            .Select(item => Path.GetFileName(item.Path)[..^".attempt.json".Length])
-            .FirstOrDefault();
-    }
-
-    private static string? TryReadAttemptOutcome(string path)
-    {
+        var result = new List<RetentionAttemptIdentity>();
         try
         {
-            using var stream = new FileStream(path, FileMode.Open, FileAccess.Read, FileShare.ReadWrite | FileShare.Delete);
-            using var document = JsonDocument.Parse(stream);
-            if (!document.RootElement.TryGetProperty("outcome", out var outcome))
+            foreach (var path in Directory.EnumerateFiles(goalDirectory, "*.attempt.json", SearchOption.TopDirectoryOnly))
             {
-                return null;
+                using var stream = new FileStream(path, FileMode.Open, FileAccess.Read, FileShare.ReadWrite | FileShare.Delete);
+                using var document = JsonDocument.Parse(stream);
+                var root = document.RootElement;
+                if (!root.TryGetProperty("attemptId", out var attemptIdValue) ||
+                    attemptIdValue.ValueKind != JsonValueKind.String ||
+                    !root.TryGetProperty("goalId", out var goalIdValue) ||
+                    goalIdValue.ValueKind != JsonValueKind.String ||
+                    !root.TryGetProperty("ordinal", out var ordinalValue) ||
+                    !ordinalValue.TryGetInt32(out var ordinal) ||
+                    !root.TryGetProperty("startedAt", out var startedAtValue) ||
+                    !startedAtValue.TryGetDateTimeOffset(out var startedAt) ||
+                    !root.TryGetProperty("outcome", out var outcomeValue))
+                {
+                    attempts = [];
+                    reason = "attempt-metadata-missing-authoritative-identity";
+                    return false;
+                }
+
+                var attemptId = attemptIdValue.GetString()!;
+                var serializedGoalId = goalIdValue.GetString();
+                var expectedAttemptId = Path.GetFileName(path)[..^".attempt.json".Length];
+                if (!expectedGoalId.Equals(Path.GetFileName(goalDirectory), StringComparison.OrdinalIgnoreCase) ||
+                    !expectedGoalId.Equals(serializedGoalId, StringComparison.OrdinalIgnoreCase) ||
+                    !expectedAttemptId.Equals(attemptId, StringComparison.OrdinalIgnoreCase))
+                {
+                    attempts = [];
+                    reason = "attempt-metadata-canonical-identity-mismatch";
+                    return false;
+                }
+
+                var failed = outcomeValue.ValueKind == JsonValueKind.Number && outcomeValue.TryGetInt32(out var numeric)
+                    ? numeric == (int)ConductorParallelAcceptanceAttemptOutcome.Failed
+                    : outcomeValue.ValueKind == JsonValueKind.String &&
+                      outcomeValue.GetString()?.Equals("failed", StringComparison.OrdinalIgnoreCase) == true;
+                var reconciled = root.TryGetProperty("reconciledAt", out var reconciledAt) &&
+                    reconciledAt.ValueKind == JsonValueKind.String &&
+                    reconciledAt.TryGetDateTimeOffset(out _);
+                result.Add(new RetentionAttemptIdentity(attemptId, ordinal, startedAt, failed, reconciled));
             }
 
-            if (outcome.ValueKind == JsonValueKind.String)
+            if (result.Count == 0)
             {
-                return outcome.GetString()?.ToLowerInvariant();
+                attempts = [];
+                reason = "goal-directory-has-no-attempt-metadata";
+                return false;
             }
 
-            return outcome.ValueKind == JsonValueKind.Number && outcome.TryGetInt32(out var numeric) && numeric == 2
-                ? "failed"
-                : null;
+            attempts = result;
+            reason = string.Empty;
+            return true;
         }
         catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or JsonException)
         {
-            return null;
+            attempts = [];
+            reason = $"attempt-metadata-unreadable:{ex.GetType().Name}";
+            return false;
         }
     }
 
@@ -391,10 +748,7 @@ internal static partial class StorageRetentionMaintenance
         }
     }
 
-    private static bool IsAcceptanceSummary(string path) =>
-        path.EndsWith(".attempt.json", StringComparison.OrdinalIgnoreCase) ||
-        path.EndsWith(".result.json", StringComparison.OrdinalIgnoreCase) ||
-        path.EndsWith(".test-identities.json", StringComparison.OrdinalIgnoreCase) ||
+    private static bool IsAcceptanceIndex(string path) =>
         Path.GetFileName(path).Equals("attempt-sequence.txt", StringComparison.OrdinalIgnoreCase);
 
     private static bool BelongsToAttempt(string path, string? attemptId)
@@ -409,9 +763,115 @@ internal static partial class StorageRetentionMaintenance
                 .Any(segment => segment.Equals(attemptId + ".receipts", StringComparison.OrdinalIgnoreCase));
     }
 
+    private static int SweepPrompts(
+        string orchestratorDirectory,
+        IReadOnlyCollection<StorageRetentionGoal> goals,
+        DateTimeOffset now,
+        List<EvidenceRetentionDecision> decisions)
+    {
+        var root = Path.Combine(orchestratorDirectory, "prompts");
+        if (!Directory.Exists(root))
+        {
+            return 0;
+        }
+
+        var ownersByPath = goals
+            .SelectMany(goal => (goal.PromptPaths ?? []).Select(path => (Path: Path.GetFullPath(path), Goal: goal)))
+            .GroupBy(item => item.Path, StringComparer.OrdinalIgnoreCase)
+            .ToDictionary(group => group.Key, group => group.Select(item => item.Goal).Distinct().ToArray(), StringComparer.OrdinalIgnoreCase);
+        var deleted = 0;
+        foreach (var path in Directory.EnumerateFiles(root, "*", SearchOption.TopDirectoryOnly))
+        {
+            var fullPath = Path.GetFullPath(path);
+            if (!ownersByPath.TryGetValue(fullPath, out var owners) || owners.Length != 1)
+            {
+                decisions.Add(new EvidenceRetentionDecision(
+                    EvidenceArtifactFamily.Prompts,
+                    EvidenceRetentionAction.RetainedUndecidable,
+                    path,
+                    null,
+                    owners is { Length: > 1 } ? EvidenceOwnerResolution.AmbiguousPrefix : EvidenceOwnerResolution.Unrecorded,
+                    owners is { Length: > 1 } ? "prompt-path-has-multiple-recorded-owners" : "prompt-path-is-unrecorded"));
+                continue;
+            }
+
+            var goal = owners[0];
+            if (!goal.IsTerminal)
+            {
+                decisions.Add(new EvidenceRetentionDecision(
+                    EvidenceArtifactFamily.Prompts,
+                    EvidenceRetentionAction.Preserved,
+                    path,
+                    goal.GoalId,
+                    EvidenceOwnerResolution.NonTerminal,
+                    "goal-is-non-terminal"));
+                continue;
+            }
+
+            if (now - File.GetLastWriteTimeUtc(path) <= WorkerDeletionAge)
+            {
+                decisions.Add(new EvidenceRetentionDecision(
+                    EvidenceArtifactFamily.Prompts,
+                    EvidenceRetentionAction.Preserved,
+                    path,
+                    goal.GoalId,
+                    EvidenceOwnerResolution.UniqueTerminal,
+                    "within-grace-period"));
+                continue;
+            }
+
+            var length = SafeLength(path);
+            var deletion = TryDeleteExclusive(path);
+            decisions.Add(new EvidenceRetentionDecision(
+                EvidenceArtifactFamily.Prompts,
+                deletion.Success ? EvidenceRetentionAction.Deleted : EvidenceRetentionAction.DeferredLocked,
+                path,
+                goal.GoalId,
+                EvidenceOwnerResolution.UniqueTerminal,
+                deletion.Success ? "past-deletion-age" : "exclusive-delete-failed",
+                BytesAttempted: length,
+                BytesReclaimed: deletion.Success ? length : 0,
+                FailureExceptionType: deletion.ExceptionType));
+            if (deletion.Success)
+            {
+                deleted++;
+            }
+        }
+
+        return deleted;
+    }
+
+    private static void RecordGoalEventPreservation(
+        string orchestratorDirectory,
+        IReadOnlyCollection<StorageRetentionGoal> goals,
+        List<EvidenceRetentionDecision> decisions)
+    {
+        var root = Path.Combine(orchestratorDirectory, "goal-events");
+        if (!Directory.Exists(root))
+        {
+            return;
+        }
+
+        foreach (var path in Directory.EnumerateFiles(root, "*.jsonl", SearchOption.TopDirectoryOnly))
+        {
+            var goalId = Path.GetFileNameWithoutExtension(path);
+            var owners = goals.Where(goal => goal.GoalId.Equals(goalId, StringComparison.OrdinalIgnoreCase)).ToArray();
+            decisions.Add(new EvidenceRetentionDecision(
+                EvidenceArtifactFamily.GoalEvents,
+                owners.Length == 1 ? EvidenceRetentionAction.Preserved : EvidenceRetentionAction.RetainedUndecidable,
+                path,
+                owners.Length == 1 ? owners[0].GoalId : null,
+                owners.Length == 1
+                    ? owners[0].IsTerminal ? EvidenceOwnerResolution.UniqueTerminal : EvidenceOwnerResolution.NonTerminal
+                    : EvidenceOwnerResolution.Unmatched,
+                owners.Length == 1 ? "replay-contract-requires-raw-jsonl" : "goal-event-owner-unmatched"));
+        }
+    }
+
     private static int ArchiveGoalJournals(
         string executionDirectory,
-        IReadOnlyCollection<StorageRetentionGoal> goals)
+        IReadOnlyCollection<StorageRetentionGoal> goals,
+        List<EvidenceRetentionDecision> decisions)
     {
         var archived = 0;
         foreach (var goal in goals.Where(goal => goal.IsTerminal))
@@ -440,17 +900,31 @@ internal static partial class StorageRetentionMaintenance
                 }
                 File.Move(source, destination);
                 archived++;
+                decisions.Add(new EvidenceRetentionDecision(
+                    EvidenceArtifactFamily.GoalOperationJournals,
+                    EvidenceRetentionAction.Preserved,
+                    destination,
+                    goal.GoalId,
+                    EvidenceOwnerResolution.UniqueTerminal,
+                    "retired-journal-archived"));
             }
             catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
             {
-                // Active readers/writers keep the journal in place; the next daily sweep retries it.
+                decisions.Add(new EvidenceRetentionDecision(
+                    EvidenceArtifactFamily.GoalOperationJournals,
+                    EvidenceRetentionAction.DeferredLocked,
+                    source,
+                    goal.GoalId,
+                    EvidenceOwnerResolution.UniqueTerminal,
+                    "journal-archive-failed",
+                    FailureExceptionType: ex.GetType().Name));
             }
         }
 
         return archived;
     }
 
-    private static bool TryDeleteExclusive(string path)
+    private static (bool Success, string? ExceptionType) TryDeleteExclusive(string path)
     {
         try
         {
@@ -458,11 +932,11 @@ internal static partial class StorageRetentionMaintenance
             {
             }
             File.Delete(path);
-            return true;
+            return (true, null);
         }
         catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
         {
-            return false;
+            return (false, ex.GetType().Name);
         }
     }
 

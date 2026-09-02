@@ -318,7 +318,7 @@ internal sealed class ConductorParallelAcceptanceAttemptCoordinator
     private static readonly JsonSerializerOptions JsonOptions = new(JsonSerializerDefaults.Web) { WriteIndented = true };
     private static readonly object MetadataWriteGate = new();
     private static readonly ConcurrentDictionary<int, Process> OwnedProcessDrains = new();
-    private const int RetainedAttemptCountPerGoal = 20;
+    internal const int RetainedAttemptCountPerGoal = 20;
     private static readonly TimeSpan DefaultHeartbeatInterval = TimeSpan.FromSeconds(15);
 
     private readonly string _rootDirectory;
@@ -1804,7 +1804,6 @@ internal sealed class ConductorParallelAcceptanceAttemptCoordinator
         var id = rawId[..Math.Min(64, rawId.Length)];
         var directory = Path.Combine(_rootDirectory, candidate.Goal.Id.Value);
         Directory.CreateDirectory(directory);
-        PruneOldAttempts(directory, RetainedAttemptCountPerGoal - 1);
         var ordinal = AllocateOrdinal(directory);
         var prefix = Path.Combine(directory, id);
         var focusedMembers = focusedEvidenceRequest?
@@ -2596,53 +2595,6 @@ internal sealed class ConductorParallelAcceptanceAttemptCoordinator
 
     private static string TemporarySiblingPath(string path) =>
         $"{path}.{Guid.NewGuid():N}.tmp";
-
-    private static void PruneOldAttempts(string directory, int retainCount)
-    {
-        if (!Directory.Exists(directory))
-        {
-            return;
-        }
-
-        var staleAttempts = Directory.EnumerateFiles(directory, "*.attempt.json")
-            .Select(path => new
-            {
-                Path = path,
-                Attempt = TryReadAttemptFile(path),
-                Timestamp = File.GetLastWriteTimeUtc(path)
-            })
-            .OrderByDescending(item => item.Attempt?.StartedAt.UtcDateTime ?? item.Timestamp)
-            .Skip(Math.Max(0, retainCount))
-            .ToArray();
-
-        foreach (var item in staleAttempts)
-        {
-            var prefix = item.Path[..^".attempt.json".Length];
-            foreach (var path in Directory.EnumerateFiles(directory, Path.GetFileName(prefix) + ".*"))
-            {
-                TryDeleteFile(path);
-            }
-
-            var receiptDirectory = prefix + ".receipts";
-            if (Directory.Exists(receiptDirectory))
-            {
-                try
-                {
-                    Directory.Delete(receiptDirectory, recursive: true);
-                }
-                catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
-                {
-                    Console.Error.WriteLine(
-                        $"ATTEMPT_RECEIPT_PRUNE_FAILED path=\"{receiptDirectory}\" error=\"{ex.Message}\"");
-                }
-            }
-        }
-    }
-
-    private static void TryDeleteFile(string path)
-    {
-        try { File.Delete(path); } catch { }
-    }
 
     private static ConductorParallelAcceptanceAttempt? TryReadAttemptFile(string path)
     {
