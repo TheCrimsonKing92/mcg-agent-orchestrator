@@ -144,6 +144,8 @@
       "PowerShell(.\\scripts\\Invoke-OrchestratorSqliteTool.ps1 *)",
       "PowerShell(./scripts/Invoke-PackageAudit.ps1 *)",
       "PowerShell(.\\scripts\\Invoke-PackageAudit.ps1 *)",
+      "PowerShell(./scripts/Invoke-PackageBootstrap.ps1 *)",
+      "PowerShell(.\\scripts\\Invoke-PackageBootstrap.ps1 *)",
       "PowerShell(./scripts/Get-RepoProcessInfo.ps1 *)",
       "PowerShell(.\\scripts\\Get-RepoProcessInfo.ps1 *)",
       "PowerShell(./scripts/Show-OrchestratorLogArtifacts.ps1 *)",

@@ -218,6 +218,7 @@ public sealed class LauncherScriptTests
         var repoRoot = FindLauncherSourceRoot();
         var helper = File.ReadAllText(Path.Combine(repoRoot, "scripts", "Invoke-OrchestratorSqliteTool.ps1"));
         var auditScript = File.ReadAllText(Path.Combine(repoRoot, "scripts", "Invoke-PackageAudit.ps1"));
+        var bootstrapScript = File.ReadAllText(Path.Combine(repoRoot, "scripts", "Invoke-PackageBootstrap.ps1"));
         var runbook = File.ReadAllText(Path.Combine(repoRoot, "docs", "operator-runbook.md"));
         var claudeSettings = File.ReadAllText(Path.Combine(repoRoot, ".claude", "settings.json"));
         var buildProps = File.ReadAllText(Path.Combine(repoRoot, "Directory.Build.props"));
@@ -226,6 +227,16 @@ public sealed class LauncherScriptTests
             "scripts",
             "OrchestratorSqliteTools",
             "OrchestratorSqliteTools.csproj"));
+        var infrastructureProject = File.ReadAllText(Path.Combine(
+            repoRoot,
+            "src",
+            "Mcg.AgentOrchestrator.Infrastructure",
+            "Mcg.AgentOrchestrator.Infrastructure.csproj"));
+        var operatorCommsProject = File.ReadAllText(Path.Combine(
+            repoRoot,
+            "src",
+            "Mcg.AgentOrchestrator.Infrastructure.OperatorComms",
+            "Mcg.AgentOrchestrator.Infrastructure.OperatorComms.csproj"));
 
         Assert.DoesNotContain("dotnetArguments = @(\"run\"", helper, StringComparison.Ordinal);
         Assert.Contains("Test-OrchestratorArtifactFreshness.ps1", helper, StringComparison.Ordinal);
@@ -236,11 +247,23 @@ public sealed class LauncherScriptTests
         Assert.Contains("build diagnostics were preserved at $buildLog", helper, StringComparison.Ordinal);
         Assert.Contains("Remove-Item -LiteralPath $buildLog", helper, StringComparison.Ordinal);
         Assert.Contains("-p:AuditPipeline=true", auditScript, StringComparison.Ordinal);
+        Assert.DoesNotContain("NuGetAudit=false", auditScript, StringComparison.OrdinalIgnoreCase);
+        Assert.Contains("-p:NuGetAudit=false", bootstrapScript, StringComparison.Ordinal);
+        Assert.Contains(".\\scripts\\Invoke-RepoScript.ps1 scripts\\Invoke-PackageBootstrap.ps1", runbook, StringComparison.Ordinal);
         Assert.Contains(".\\scripts\\Invoke-RepoScript.ps1 scripts\\Invoke-PackageAudit.ps1", runbook, StringComparison.Ordinal);
+        Assert.Contains("Invoke-PackageBootstrap.ps1 *", claudeSettings, StringComparison.Ordinal);
         Assert.Contains("Invoke-PackageAudit.ps1 *", claudeSettings, StringComparison.Ordinal);
         Assert.Contains("<NuGetAudit>true</NuGetAudit>", buildProps, StringComparison.Ordinal);
         Assert.DoesNotContain("<NuGetAudit>false</NuGetAudit>", buildProps, StringComparison.Ordinal);
+        Assert.Contains("Microsoft.Data.Sqlite\" Version=\"9.0.19\"", project, StringComparison.Ordinal);
+        Assert.Contains("Microsoft.Data.Sqlite\" Version=\"9.0.19\"", infrastructureProject, StringComparison.Ordinal);
+        Assert.Contains("Microsoft.Data.Sqlite\" Version=\"9.0.19\"", operatorCommsProject, StringComparison.Ordinal);
+        Assert.DoesNotContain("9.0.6", project, StringComparison.Ordinal);
+        Assert.DoesNotContain("9.0.6", infrastructureProject, StringComparison.Ordinal);
+        Assert.DoesNotContain("9.0.6", operatorCommsProject, StringComparison.Ordinal);
         Assert.DoesNotContain("NU1903", project, StringComparison.Ordinal);
+        Assert.DoesNotContain("NU1903", infrastructureProject, StringComparison.Ordinal);
+        Assert.DoesNotContain("NU1903", operatorCommsProject, StringComparison.Ordinal);
     }
 
     [Xunit.Fact]
@@ -278,7 +301,7 @@ public sealed class LauncherScriptTests
                 StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries);
             Assert.Single(errorLines);
             Assert.Contains("no-restored build assets are unavailable", errorLines[0], StringComparison.OrdinalIgnoreCase);
-            Assert.Contains("Invoke-RepoScript.ps1 scripts\\Invoke-PackageAudit.ps1", errorLines[0], StringComparison.Ordinal);
+            Assert.Contains("Invoke-RepoScript.ps1 scripts\\Invoke-PackageBootstrap.ps1", errorLines[0], StringComparison.Ordinal);
             Assert.DoesNotContain("NU1900", errorLines[0], StringComparison.OrdinalIgnoreCase);
             Assert.DoesNotContain("NU1301", errorLines[0], StringComparison.OrdinalIgnoreCase);
         }
@@ -681,7 +704,7 @@ public sealed class LauncherScriptTests
             StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries);
         Assert.Single(errorLines);
         Assert.Contains("no-restored build assets are unavailable", errorLines[0], StringComparison.OrdinalIgnoreCase);
-        Assert.Contains("Invoke-PackageAudit.ps1", errorLines[0], StringComparison.Ordinal);
+        Assert.Contains("Invoke-PackageBootstrap.ps1", errorLines[0], StringComparison.Ordinal);
         Assert.DoesNotContain("NU1900", errorLines[0], StringComparison.OrdinalIgnoreCase);
         Assert.DoesNotContain("NU1301", errorLines[0], StringComparison.OrdinalIgnoreCase);
         Assert.False(File.Exists(sandbox.DotnetLogPath), "Missing assets must fail before invoking dotnet.");
