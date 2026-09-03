@@ -36,7 +36,7 @@ internal sealed class GoalReplacementRetryableTimeoutException(
     public long ClaimVersion { get; } = claimVersion;
 }
 
-internal static class CliPersistentStateRunner
+internal static partial class CliPersistentStateRunner
 {
     internal static Action? AfterGoalReplacementLeaseAcquisitionFailed { get; set; }
     internal static Action? BeforeGoalReplacementFailureClaimObservation { get; set; }
@@ -4149,7 +4149,13 @@ internal static class CliPersistentStateRunner
                             (false, snapshot, new AcceptanceMergeGuardPreflightResult(currentGuard, concurrentMismatch)));
                     }
 
-                    ReplayAcceptancePreflightRepairs(initialSnapshot, proposedKernel, currentKernel, request.GoalId);
+                    ReplayAcceptancePreflightRepairs(
+                        initialSnapshot,
+                        proposedKernel,
+                        currentKernel,
+                        request.GoalId,
+                        request.CurrentBranchHeadSha,
+                        request.CurrentMainHeadSha);
                     var preparedGuard = AcceptanceMergeGuard.Capture(currentKernel, request.GoalId);
                     if (AcceptanceMergeGuard.Compare(request.ProposedGuard, preparedGuard) is { } repairMismatch)
                     {
@@ -4164,57 +4170,6 @@ internal static class CliPersistentStateRunner
             .GetAwaiter()
             .GetResult();
     }
-
-    private static void ReplayAcceptancePreflightRepairs(
-        GoalSnapshot initialSnapshot,
-        AgentOrchestratorKernel proposedKernel,
-        AgentOrchestratorKernel currentKernel,
-        GoalId goalId)
-    {
-        var initialKernel = KernelFromGoalSnapshot(initialSnapshot);
-        var initialGoal = initialKernel.GetGoal(goalId);
-        var proposedGoal = proposedKernel.GetGoal(goalId);
-        var currentGoal = currentKernel.GetGoal(goalId);
-
-        foreach (var proposedTask in proposedGoal.Tasks)
-        {
-            var initialTask = initialGoal.Tasks.Single(task => task.Id == proposedTask.Id);
-            if (!SameAcceptancePreflightValue(initialTask.LastVerification, proposedTask.LastVerification) &&
-                proposedTask.LastVerification is { } verification)
-            {
-                currentKernel.RecordTaskVerification(goalId, proposedTask.Id, verification);
-            }
-        }
-
-        if (initialGoal.Status == GoalStatus.Completed && proposedGoal.Status == GoalStatus.Verified)
-        {
-            currentKernel.NormalizePrematureCompletedGoalToVerified(
-                goalId,
-                "acceptance: persisted the Completed-to-Verified repair before verification.");
-        }
-        else if (initialGoal.Status == GoalStatus.Verifying && proposedGoal.Status == GoalStatus.Verified)
-        {
-            currentKernel.ReconcileGoalAcceptanceVerified(
-                goalId,
-                "acceptance: persisted the Verifying-to-Verified repair before verification.");
-        }
-        else if (proposedGoal.Status == GoalStatus.Verified && currentKernel.GetGoal(goalId).Status != GoalStatus.Verified)
-        {
-            currentKernel.ReconcileGoalVerificationStatus(
-                goalId,
-                "acceptance: persisted task verification repairs before verification.");
-        }
-
-        if (proposedGoal.LatestAcceptanceFailure is null &&
-            initialGoal.LatestAcceptanceFailure is not null &&
-            SameAcceptancePreflightValue(currentGoal.LatestAcceptanceFailure, initialGoal.LatestAcceptanceFailure))
-        {
-            currentKernel.ClearAcceptanceFailure(goalId);
-        }
-    }
-
-    private static bool SameAcceptancePreflightValue<T>(T left, T right) =>
-        string.Equals(JsonSerializer.Serialize(left), JsonSerializer.Serialize(right), StringComparison.Ordinal);
 
     private static bool ExecuteAcceptanceQueueOutsideTransaction(
         IReadOnlyList<string> args,

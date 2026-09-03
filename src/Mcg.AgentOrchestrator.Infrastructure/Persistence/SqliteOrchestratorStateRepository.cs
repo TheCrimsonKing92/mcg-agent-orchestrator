@@ -1885,7 +1885,7 @@ public sealed class SqliteOrchestratorStateRepository : IOrchestratorStateOutbox
             return snapshot;
         }
 
-        if (snapshot.Status is GoalStatus.Failed or GoalStatus.Cancelled or GoalStatus.Superseded)
+        if (snapshot.Status is GoalStatus.Failed or GoalStatus.AcceptanceFailed or GoalStatus.Cancelled or GoalStatus.Superseded)
         {
             return snapshot;
         }

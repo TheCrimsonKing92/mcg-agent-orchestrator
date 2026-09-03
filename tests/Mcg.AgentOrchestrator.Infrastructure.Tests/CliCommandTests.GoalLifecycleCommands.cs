@@ -4114,6 +4114,108 @@ public sealed class CliCommandTestsGoalLifecycleCleanupHooksAcceptance : CliComm
             string.Equals(entry.MainHeadSha, oldMain, StringComparison.OrdinalIgnoreCase));
     }
 
+    [Xunit.Fact]
+    public void AcceptanceFailed_OldCandidatePair_RunsFreshGate()
+    {
+        var root = CreateShortAcceptanceRepository();
+        var kernel = new AgentOrchestratorKernel();
+        var task = new TaskSpec(TaskId.New(), "Implement something", AgentRole.Developer);
+        var goal = kernel.CreateGoal("Retry a stale failed acceptance verdict", [task]);
+        IReadOnlyList<AgentDefinition> agents = AgentCatalog.Default().Agents;
+        var providers = new InMemoryModelProviderRegistry([]);
+        var profiles = WorkerProfileCatalog.Default();
+        Goal? currentGoal = goal;
+        kernel.ActivateGoal(goal.Id, agents);
+        kernel.RecordTaskVerification(
+            goal.Id,
+            task.Id,
+            ManualVerificationRecorder.Create(true, "Passed.", root, DateTimeOffset.Parse("2026-09-03T12:00:00Z")));
+        var oldMain = RunGitOutput(root, "rev-parse", "HEAD").Trim();
+        var worktree = CommitGoalWork(root, goal.Id, "feature.txt", "goal work");
+        var oldBranch = RunGitOutput(worktree, "rev-parse", "HEAD").Trim();
+        Xunit.Assert.True(kernel.BeginGoalAcceptanceVerification(goal.Id, "Run acceptance."));
+        Xunit.Assert.True(kernel.ReconcileGoalAcceptanceFailed(
+            goal.Id,
+            ["old acceptance failure"],
+            "Acceptance failed against the old candidate pair.",
+            oldBranch,
+            oldMain));
+        GoalOperationJournal.AcceptanceFailed(
+            root,
+            goal,
+            "acceptance",
+            oldBranch,
+            oldMain,
+            "old acceptance failure");
+        File.WriteAllText(Path.Combine(root, "main-change.txt"), "main moved");
+        RunGitOutput(root, "add", "main-change.txt");
+        RunGitOutput(root, "commit", "-m", "Move main");
+
+        var verifier = new ProbeAcceptanceVerifier(() => { });
+        var output = CaptureConsole(() => CliCommandDispatcher.ExecuteCommand(
+            ["acceptance", "--keep-workspace", "--no-record"],
+            kernel,
+            CreateRefinedWorkspace(root),
+            ref agents,
+            providers,
+            ref profiles,
+            ref currentGoal,
+            acceptanceVerifier: verifier,
+            phaseTimings: new CliPhaseTimingRecorder("acceptance"),
+            stableSlotAcquisitionTimeout: TimeSpan.FromSeconds(1)));
+
+        Xunit.Assert.Contains("superseded failure is historical", output);
+        Xunit.Assert.Equal(1, verifier.RunCount);
+        Xunit.Assert.Equal(GoalStatus.Completed, kernel.GetGoal(goal.Id).Status);
+        Xunit.Assert.Null(kernel.GetGoal(goal.Id).LatestAcceptanceFailure);
+    }
+
+    [Xunit.Fact]
+    public void AcceptanceFailed_CurrentCandidatePair_StaysBlocked()
+    {
+        var root = CreateShortAcceptanceRepository();
+        var kernel = new AgentOrchestratorKernel();
+        var task = new TaskSpec(TaskId.New(), "Implement something", AgentRole.Developer);
+        var goal = kernel.CreateGoal("Keep a current failed acceptance verdict", [task]);
+        IReadOnlyList<AgentDefinition> agents = AgentCatalog.Default().Agents;
+        var providers = new InMemoryModelProviderRegistry([]);
+        var profiles = WorkerProfileCatalog.Default();
+        Goal? currentGoal = goal;
+        kernel.ActivateGoal(goal.Id, agents);
+        kernel.RecordTaskVerification(
+            goal.Id,
+            task.Id,
+            ManualVerificationRecorder.Create(true, "Passed.", root, DateTimeOffset.Parse("2026-09-03T12:00:00Z")));
+        var mainHead = RunGitOutput(root, "rev-parse", "HEAD").Trim();
+        var worktree = CommitGoalWork(root, goal.Id, "feature.txt", "goal work");
+        var branchHead = RunGitOutput(worktree, "rev-parse", "HEAD").Trim();
+        Xunit.Assert.True(kernel.BeginGoalAcceptanceVerification(goal.Id, "Run acceptance."));
+        Xunit.Assert.True(kernel.ReconcileGoalAcceptanceFailed(
+            goal.Id,
+            ["current acceptance failure"],
+            "Acceptance failed against the current candidate pair.",
+            branchHead,
+            mainHead));
+
+        var verifier = new ProbeAcceptanceVerifier(() => { });
+        var output = CaptureConsole(() => CliCommandDispatcher.ExecuteCommand(
+            ["acceptance", "--keep-workspace", "--no-record"],
+            kernel,
+            CreateRefinedWorkspace(root),
+            ref agents,
+            providers,
+            ref profiles,
+            ref currentGoal,
+            acceptanceVerifier: verifier,
+            phaseTimings: new CliPhaseTimingRecorder("acceptance"),
+            stableSlotAcquisitionTimeout: TimeSpan.FromSeconds(1)));
+
+        Xunit.Assert.Contains("acceptance: not accepted", output);
+        Xunit.Assert.Equal(0, verifier.RunCount);
+        Xunit.Assert.Equal(GoalStatus.AcceptanceFailed, kernel.GetGoal(goal.Id).Status);
+        Xunit.Assert.NotNull(kernel.GetGoal(goal.Id).LatestAcceptanceFailure);
+    }
+
     [Xunit.Fact(DisplayName = "Monitor_lifecycle_facts_ignore_superseded_candidate_failure")]
     public void MonitorLifecycleFactsIgnoreSupersededCandidateFailure()
     {

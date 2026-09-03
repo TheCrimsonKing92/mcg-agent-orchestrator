@@ -48,6 +48,25 @@ internal static bool RunAcceptanceWorkspaceMergeCore(CliExecutionContext context
         context.CurrentGoal = normalizedGoal;
     }
 
+    if (goal.Status == GoalStatus.AcceptanceFailed)
+    {
+        var failedWorktreePath = context.Worktrees.TryResolve(context.Workspace.ExecutionDirectory, goal.Id);
+        var failedBranchHead = TryResolveGitHead(context, failedWorktreePath);
+        var failedMainHead = TryResolveGitHead(context, context.Workspace.ExecutionDirectory);
+        if (ClearSupersededAcceptanceFailureForCandidate(
+            context,
+            goal,
+            failedBranchHead,
+            failedMainHead))
+        {
+            goal = context.Kernel.GetGoal(goal.Id);
+            context.CurrentGoal = goal;
+            Console.WriteLine(
+                $"Acceptance history: superseded failure is historical for candidate " +
+                $"{FormatAcceptanceCandidate(failedBranchHead, failedMainHead)}.");
+        }
+    }
+
     if (goal.Status != GoalStatus.Verified)
     {
         return false;
@@ -138,7 +157,9 @@ internal static bool RunAcceptanceWorkspaceMergeCore(CliExecutionContext context
         var proposedMergeGuard = AcceptanceMergeGuard.Capture(context.Kernel, goal.Id);
         var preflightGuard = context.PrepareAcceptanceMergeGuard(new AcceptanceMergeGuardPreflightRequest(
             goal.Id,
-            proposedMergeGuard));
+            proposedMergeGuard,
+            testedWorktreeHead,
+            testedMainHead));
         expectedMergeGuard = preflightGuard.CurrentGuard;
         if (preflightGuard.GuardAbort is { } preflightMismatch)
         {
@@ -755,6 +776,14 @@ private static bool ClearSupersededAcceptanceFailureForCandidate(
         string.Equals(failure.MainHeadSha, mainHeadSha, StringComparison.OrdinalIgnoreCase))
     {
         return false;
+    }
+
+    if (goal.Status == GoalStatus.AcceptanceFailed)
+    {
+        return context.Kernel.RestoreVerifiedForSupersededAcceptanceFailure(
+            goal.Id,
+            branchHeadSha,
+            mainHeadSha);
     }
 
     context.Kernel.ClearAcceptanceFailure(goal.Id);

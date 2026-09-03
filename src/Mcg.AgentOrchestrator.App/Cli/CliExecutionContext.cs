@@ -261,7 +261,9 @@ internal sealed record AcceptanceMergeCommitRequest(
 
 internal sealed record AcceptanceMergeGuardPreflightRequest(
     GoalId GoalId,
-    AcceptanceMergeGuardSnapshot ProposedGuard);
+    AcceptanceMergeGuardSnapshot ProposedGuard,
+    string? CurrentBranchHeadSha,
+    string? CurrentMainHeadSha);
 
 internal sealed record AcceptanceMergeGuardPreflightResult(
     AcceptanceMergeGuardSnapshot CurrentGuard,

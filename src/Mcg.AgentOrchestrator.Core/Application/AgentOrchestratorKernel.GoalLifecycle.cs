@@ -747,6 +747,48 @@ public sealed partial class AgentOrchestratorKernel
         goal.ClearAcceptanceFailure();
     }
 
+    public bool RestoreVerifiedForSupersededAcceptanceFailure(
+        GoalId goalId,
+        string? currentBranchHeadSha,
+        string? currentMainHeadSha)
+    {
+        var goal = GetGoal(goalId);
+        if (goal.Status != GoalStatus.AcceptanceFailed ||
+            goal.LatestAcceptanceFailure is not { } failure ||
+            string.IsNullOrWhiteSpace(failure.BranchHeadSha) ||
+            string.IsNullOrWhiteSpace(failure.MainHeadSha) ||
+            string.IsNullOrWhiteSpace(currentBranchHeadSha) ||
+            string.IsNullOrWhiteSpace(currentMainHeadSha))
+        {
+            return false;
+        }
+
+        if (string.Equals(failure.BranchHeadSha, currentBranchHeadSha, StringComparison.OrdinalIgnoreCase) &&
+            string.Equals(failure.MainHeadSha, currentMainHeadSha, StringComparison.OrdinalIgnoreCase))
+        {
+            return false;
+        }
+
+        if (goal.Tasks.Any(task => task.Status is not (WorkTaskStatus.Completed or WorkTaskStatus.Cancelled)) ||
+            goal.Tasks.Any(task =>
+                task.Status == WorkTaskStatus.Completed &&
+                task.LastVerification is not { Succeeded: true }))
+        {
+            return false;
+        }
+
+        goal.ClearAcceptanceFailure();
+        goal.SetStatus(GoalStatus.Verified);
+        Append(
+            goal,
+            null,
+            ProgressKind.GoalPolicyDecision,
+            $"Superseded acceptance failure restored Verified: " +
+            $"recorded branch={failure.BranchHeadSha} main={failure.MainHeadSha}; " +
+            $"current branch={currentBranchHeadSha} main={currentMainHeadSha}.");
+        return true;
+    }
+
     public int RetryAcceptanceGate(GoalId goalId, string operatorReason)
     {
         var goal = GetGoal(goalId);
