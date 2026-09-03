@@ -103,13 +103,15 @@ internal static class AssemblyTempRedirect
             selectedRoot,
             WindowsNativeProcessInspection.Read,
             TryDeleteTree,
-            Console.Error.WriteLine);
+            Console.Error.WriteLine,
+            TempRootApparatusLossReceiptStore.RecordDeletedOwners);
 
     internal static void ReapOrphanedRoots(
         string selectedRoot,
         Func<IEnumerable<int>?, WindowsNativeProcessInspection.ProcessInspectionResult> inspect,
         Func<string, TempRootJanitorDeleteResult> deleteTree,
-        Action<string>? writeReceipt)
+        Action<string>? writeReceipt,
+        Action<string, IEnumerable<TempRootApparatusDestroyedOwner>>? recordApparatusLoss = null)
     {
         ArgumentNullException.ThrowIfNull(inspect);
         ArgumentNullException.ThrowIfNull(deleteTree);
@@ -126,6 +128,11 @@ internal static class AssemblyTempRedirect
                 .OfType<string>()
                 .ToArray();
             var liveProcessIds = SnapshotLiveProcessIds(siblings, Environment.ProcessId, inspect);
+            var liveOwners = CaptureLiveOwnedRootIdentities(
+                sharedRoot,
+                siblings,
+                Environment.ProcessId,
+                liveProcessIds);
             var reapableByProcess = SelectReapableRoots(
                 siblings,
                 Environment.ProcessId,
@@ -137,10 +144,23 @@ internal static class AssemblyTempRedirect
                               candidate => Directory.GetLastWriteTimeUtc(Path.Combine(sharedRoot, candidate))))
                           .Take(MaxRootsReapedPerProcess)
                           .ToArray();
+            var sharedRootExisted = Directory.Exists(sharedRoot);
+            var parentLossRecorded = false;
             foreach (var candidate in RevalidateExitedRoots(bounded, inspect))
             {
                 var path = Path.Combine(sharedRoot, candidate.Name);
                 var outcome = deleteTree(path);
+                if (!parentLossRecorded &&
+                    sharedRootExisted &&
+                    outcome.Status == TempRootJanitorDeleteStatus.Deleted &&
+                    !Directory.Exists(sharedRoot) &&
+                    liveOwners.Length >= 2)
+                {
+                    parentLossRecorded = TryRecordApparatusLoss(
+                        recordApparatusLoss,
+                        sharedRoot,
+                        liveOwners);
+                }
                 TryWriteReceipt(
                     writeReceipt,
                     () => FormatReapReceipt(
@@ -198,6 +218,49 @@ internal static class AssemblyTempRedirect
         {
             lease?.Dispose();
             return null;
+        }
+    }
+
+    private static TempRootApparatusDestroyedOwner[] CaptureLiveOwnedRootIdentities(
+        string sharedRoot,
+        IEnumerable<string> siblingDirectoryNames,
+        int currentProcessId,
+        HashSet<int> liveProcessIds) =>
+        siblingDirectoryNames
+            .Select(name => new
+            {
+                Name = name,
+                Parsed = TryParseProcessTempRootName(name, out var processId),
+                ProcessId = processId
+            })
+            .Where(candidate => candidate.Parsed &&
+                (candidate.ProcessId == currentProcessId || liveProcessIds.Contains(candidate.ProcessId)))
+            .Select(candidate => TryReadOwnedRootIdentity(
+                Path.Combine(sharedRoot, candidate.Name),
+                candidate.ProcessId))
+            .Where(owner => owner is not null)
+            .Select(owner => owner!)
+            .ToArray();
+
+    private static bool TryRecordApparatusLoss(
+        Action<string, IEnumerable<TempRootApparatusDestroyedOwner>>? recordApparatusLoss,
+        string sharedRoot,
+        IReadOnlyList<TempRootApparatusDestroyedOwner> liveOwners)
+    {
+        if (recordApparatusLoss is null)
+        {
+            return false;
+        }
+
+        try
+        {
+            recordApparatusLoss(sharedRoot, liveOwners);
+            return true;
+        }
+        catch
+        {
+            // Typed diagnostics remain best-effort in the module initializer.
+            return false;
         }
     }
 

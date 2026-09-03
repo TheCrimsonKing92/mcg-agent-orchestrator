@@ -69,7 +69,8 @@ internal static class AssemblyTempRedirect
             timings,
             totalClock,
             DeleteTree,
-            Console.Error.WriteLine);
+            Console.Error.WriteLine,
+            TempRootApparatusLossReceiptStore.RecordDeletedOwners);
         AppDomain.CurrentDomain.ProcessExit += (_, _) => ReleaseOwnedRoot(selection.SelectedRoot);
         TryPublishTimingDiagnostic(timingDiagnostic);
     }
@@ -142,7 +143,8 @@ internal static class AssemblyTempRedirect
         TempRootStartupTimings timings,
         Func<IEnumerable<int>?, WindowsNativeProcessInspection.ProcessInspectionResult> inspect,
         Func<string, TempRootDeleteOutcome> deleteTree,
-        Action<string>? writeReceipt)
+        Action<string>? writeReceipt,
+        Action<string, IEnumerable<TempRootApparatusDestroyedOwner>>? recordApparatusLoss = null)
     {
         ArgumentNullException.ThrowIfNull(inspect);
         timings.ReapRan = true;
@@ -165,6 +167,11 @@ internal static class AssemblyTempRedirect
 
             phaseClock.Restart();
             var liveProcessIds = SnapshotLiveProcessIds(siblings, Environment.ProcessId, inspect);
+            var liveOwners = CaptureLiveOwnedRootIdentities(
+                sharedRoot,
+                siblings,
+                Environment.ProcessId,
+                liveProcessIds);
             phaseClock.Stop();
             timings.ReapProcessSnapshotElapsedMilliseconds = phaseClock.ElapsedMilliseconds;
 
@@ -192,7 +199,9 @@ internal static class AssemblyTempRedirect
                 deleteTree,
                 TryAcquireDeletionLease,
                 timings,
-                writeReceipt);
+                writeReceipt,
+                liveOwners,
+                recordApparatusLoss);
             SweepOrphanedRootLeases(sharedRoot, writeReceipt);
             phaseClock.Stop();
             timings.ReapDeleteElapsedMilliseconds = phaseClock.ElapsedMilliseconds;
@@ -211,7 +220,9 @@ internal static class AssemblyTempRedirect
         Func<string, TempRootDeleteOutcome> deleteTree,
         Func<string, IDisposable?> acquireDeletionLease,
         TempRootStartupTimings timings,
-        Action<string>? writeReceipt)
+        Action<string>? writeReceipt,
+        IReadOnlyList<TempRootApparatusDestroyedOwner>? liveOwners = null,
+        Action<string, IEnumerable<TempRootApparatusDestroyedOwner>>? recordApparatusLoss = null)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(sharedRoot);
         ArgumentNullException.ThrowIfNull(boundedCandidates);
@@ -220,6 +231,8 @@ internal static class AssemblyTempRedirect
         ArgumentNullException.ThrowIfNull(timings);
 
         var outcomes = new List<TempRootDeleteOutcome>();
+        var sharedRootExisted = Directory.Exists(sharedRoot);
+        var parentLossRecorded = false;
         foreach (var candidate in boundedCandidates)
         {
             var path = Path.Combine(sharedRoot, candidate.Name);
@@ -249,6 +262,17 @@ internal static class AssemblyTempRedirect
             }
 
             timings.RecordDelete(outcome);
+            if (!parentLossRecorded &&
+                sharedRootExisted &&
+                outcome.Status == TempRootDeleteStatus.Deleted &&
+                !Directory.Exists(sharedRoot) &&
+                liveOwners is { Count: >= 2 })
+            {
+                parentLossRecorded = TryRecordApparatusLoss(
+                    recordApparatusLoss,
+                    sharedRoot,
+                    liveOwners);
+            }
             TryWriteReceipt(
                 writeReceipt,
                 () => FormatReapReceipt(
@@ -265,6 +289,49 @@ internal static class AssemblyTempRedirect
         }
 
         return outcomes;
+    }
+
+    private static TempRootApparatusDestroyedOwner[] CaptureLiveOwnedRootIdentities(
+        string sharedRoot,
+        IEnumerable<string> siblingDirectoryNames,
+        int currentProcessId,
+        HashSet<int> liveProcessIds) =>
+        siblingDirectoryNames
+            .Select(name => new
+            {
+                Name = name,
+                Parsed = TryParseProcessTempRootName(name, out var processId),
+                ProcessId = processId
+            })
+            .Where(candidate => candidate.Parsed &&
+                (candidate.ProcessId == currentProcessId || liveProcessIds.Contains(candidate.ProcessId)))
+            .Select(candidate => TryReadOwnedRootIdentity(
+                Path.Combine(sharedRoot, candidate.Name),
+                candidate.ProcessId))
+            .Where(owner => owner is not null)
+            .Select(owner => owner!)
+            .ToArray();
+
+    private static bool TryRecordApparatusLoss(
+        Action<string, IEnumerable<TempRootApparatusDestroyedOwner>>? recordApparatusLoss,
+        string sharedRoot,
+        IReadOnlyList<TempRootApparatusDestroyedOwner> liveOwners)
+    {
+        if (recordApparatusLoss is null)
+        {
+            return false;
+        }
+
+        try
+        {
+            recordApparatusLoss(sharedRoot, liveOwners);
+            return true;
+        }
+        catch
+        {
+            // Typed diagnostics remain best-effort in the module initializer.
+            return false;
+        }
     }
 
     internal static TempRootApparatusDestroyedOwner? TryReadOwnedRootIdentity(
@@ -570,7 +637,8 @@ internal static class AssemblyTempRedirect
         TempRootStartupTimings timings,
         Stopwatch totalClock,
         Func<string, TempRootDeleteOutcome> deleteTree,
-        Action<string>? writeReceipt)
+        Action<string>? writeReceipt,
+        Action<string, IEnumerable<TempRootApparatusDestroyedOwner>>? recordApparatusLoss = null)
     {
         try
         {
@@ -579,7 +647,8 @@ internal static class AssemblyTempRedirect
                 timings,
                 WindowsNativeProcessInspection.Read,
                 deleteTree,
-                writeReceipt);
+                writeReceipt,
+                recordApparatusLoss);
             totalClock.Stop();
             timings.TotalElapsedMilliseconds = totalClock.ElapsedMilliseconds;
             return TryFormatTimingDiagnostic(timings);
