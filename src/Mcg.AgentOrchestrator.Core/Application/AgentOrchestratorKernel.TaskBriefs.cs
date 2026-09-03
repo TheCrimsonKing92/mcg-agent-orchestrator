@@ -354,7 +354,8 @@ public sealed partial class AgentOrchestratorKernel
                 segments,
                 contextDirectory!,
                 "research-notes.md",
-                "Durable Research Notes");
+                "Durable Research Notes",
+                collapsePriority: 10);
         }
 
         if (usesFileAccessContext &&
@@ -364,7 +365,8 @@ public sealed partial class AgentOrchestratorKernel
                 segments,
                 contextDirectory!,
                 "planner-plan.md",
-                "Durable Planner Plan");
+                "Durable Planner Plan",
+                collapsePriority: 20);
         }
 
         var reviewerConvergenceScope = BuildReviewerConvergenceScopeBriefBlock(
@@ -769,7 +771,7 @@ public sealed partial class AgentOrchestratorKernel
             simpleLines.Insert(
                 2,
                 role == AgentRole.Planner && hasDurableResearch
-                    ? "Use the complete Durable Research Notes supplied below; synthesize from them and do not run another broad repository source survey."
+                    ? "Use the complete Durable Research Notes supplied in the context package; synthesize from them and do not run another broad repository source survey."
                     : "When surveying files, start with the dashboard source survey or /api/source-survey?max=8, or use rg excluding **/bin/**, **/obj/**, .scratch, and prototype state.");
             simpleLines.AddRange(AgentOutputDirectives.WorkerResultTemplateLinesForRole(role));
             simpleLines.Add(modelFitInstruction);
@@ -790,7 +792,7 @@ public sealed partial class AgentOrchestratorKernel
             role == AgentRole.Planner && hasDurableResearch
                 ?
                 [
-                    "Use the complete Durable Research Notes supplied below; synthesize from them and do not run another broad repository source survey."
+                    "Use the complete Durable Research Notes supplied in the context package; synthesize from them and do not run another broad repository source survey."
                 ]
                 :
                 [
@@ -806,7 +808,8 @@ public sealed partial class AgentOrchestratorKernel
         ICollection<TaskBriefSegment> segments,
         string contextDirectory,
         string fileName,
-        string heading)
+        string heading,
+        int collapsePriority)
     {
         var path = Path.Combine(contextDirectory, fileName);
         if (!File.Exists(path))
@@ -823,12 +826,18 @@ public sealed partial class AgentOrchestratorKernel
         var hash = Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(text))).ToLowerInvariant();
         segments.Add(TaskBriefSegment.Projected(
             $"context/{fileName}",
-        [
-            $"## {heading}",
-            $"Artifact identity: {fileName}; sha256:{hash}",
-            text,
-            string.Empty
-        ]));
+            [
+                $"## {heading}",
+                $"Artifact identity: {fileName}; sha256:{hash}",
+                text,
+                string.Empty
+            ],
+            [
+                $"## {heading}",
+                $"Read {fileName} in the context directory for the complete artifact; sha256:{hash}. Inline copy collapsed to stay under the role file-access prompt budget.",
+                string.Empty
+            ],
+            collapsePriority));
     }
 
     private static IReadOnlyList<string> BuildAcceptanceFailureBriefBlock(Goal goal, TaskSpec task, string? workingDirectory)
