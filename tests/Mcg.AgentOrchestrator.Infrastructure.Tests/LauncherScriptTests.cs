@@ -435,6 +435,7 @@ public sealed class LauncherScriptTests
                 [void]$release.WaitOne()
                 [IO.File]::WriteAllText($env:SQLITE_TEST_INVOCATION, ($args -join " "))
                 Write-Output "SQLite wrapper concurrent"
+                exit 0
                 """);
 
             var enteredName = $"Local\\sqlite-helper-entered-{Guid.NewGuid():N}";
@@ -1947,6 +1948,7 @@ public sealed class LauncherScriptTests
             File.WriteAllText(dotnetShimPath, """
                 [IO.File]::WriteAllLines($env:SQLITE_TEST_INVOCATION, @($args))
                 Write-Output "DOTNET_SHIM_INVOKED"
+                exit 0
                 """);
             var wrapperPath = Path.Combine(scriptsPath, "Invoke-RepoScript.ps1");
             var result = RunPowerShellCommand(repositoryRoot, $"""
