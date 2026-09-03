@@ -152,21 +152,35 @@ internal sealed partial class ConductorDriver
                     lease,
                     cancellationToken,
                     omitStableSlotIndexWithoutLease: true);
-        var decision = _parallelAcceptanceAttemptCoordinator.Evaluate(
-            candidate,
-            policy,
-            runAcceptance,
-            _isConductorTick
-                ? AcceptanceStableSlotExhaustionPolicy.Fail
-                : AcceptanceStableSlotExhaustionPolicy.DegradeToSerial);
-        if (_isConductorTick &&
-            decision.Kind == ConductorParallelAcceptanceAttemptDecisionKind.Started &&
-            decision.Attempt.Outcome != ConductorParallelAcceptanceAttemptOutcome.Running)
+        ConductorParallelAcceptanceAttemptDecision decision;
+        try
         {
             decision = _parallelAcceptanceAttemptCoordinator.Evaluate(
                 candidate,
                 policy,
-                runAcceptance);
+                runAcceptance,
+                _isConductorTick
+                    ? AcceptanceStableSlotExhaustionPolicy.Fail
+                    : AcceptanceStableSlotExhaustionPolicy.DegradeToSerial);
+            if (_isConductorTick &&
+                decision.Kind == ConductorParallelAcceptanceAttemptDecisionKind.Started &&
+                decision.Attempt.Outcome != ConductorParallelAcceptanceAttemptOutcome.Running)
+            {
+                decision = _parallelAcceptanceAttemptCoordinator.Evaluate(
+                    candidate,
+                    policy,
+                    runAcceptance);
+            }
+        }
+        catch (AcceptanceArtifactWriterLeaseBusyException ex)
+        {
+            return MakeResult(
+                goal.Id.Value,
+                goalPrefix,
+                policy,
+                new ConductorAdvanceOutcome.Held(
+                    GoalLifecycleState.Verified,
+                    $"Acceptance artifact writer busy; retry on next conduct tick. {ex.Message}"));
         }
 
         if (!_isConductorTick &&

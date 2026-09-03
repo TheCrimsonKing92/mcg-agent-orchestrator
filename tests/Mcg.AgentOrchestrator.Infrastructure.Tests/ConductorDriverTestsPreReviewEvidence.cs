@@ -64,7 +64,8 @@ public sealed class ConductorDriverTestsPreReviewEvidence
             PassVerification(kernel, goal, task);
         }
 
-        string? retryMessage = null;
+        var retryMessages = new List<string>();
+        var escalations = new List<string>();
         var driver = MakeDriver(
             getFacts: _ => new GoalLifecycleFacts(WorkspaceExists: true),
             getPreReviewEvidenceContext: _ => FocusedPreReviewContext("rejected-sha"),
@@ -78,15 +79,28 @@ public sealed class ConductorDriverTestsPreReviewEvidence
                 kernel.RecordPreReviewEvidence(goalId, taskId, receipt),
             retryTaskWithRoundKind: (goalId, taskId, message, roundKind) =>
             {
-                retryMessage = message;
+                retryMessages.Add(message);
                 return kernel.RetryTask(goalId, taskId, message, retryRoundKind: roundKind);
-            });
+            },
+            writeEscalation: (_, _, message) => escalations.Add(message));
 
         driver.AdvanceOnce(goal, ConductorAutonomyPolicy.Permissive);
 
-        Assert.Equal(WorkTaskStatus.Assigned, tester.Status);
-        Assert.Contains("outcome=unknown", retryMessage, StringComparison.Ordinal);
-        Assert.DoesNotContain("outcome=valid-evidence", retryMessage, StringComparison.Ordinal);
+        Assert.Equal(
+            WorkTaskStatus.Assigned,
+            kernel.Goals.Single(candidate => candidate.Id == goal.Id).Tasks.Single(task => task.Id == tester.Id).Status);
+        Assert.Contains("outcome=unknown", retryMessages.Single(), StringComparison.Ordinal);
+        Assert.DoesNotContain("outcome=valid-evidence", retryMessages.Single(), StringComparison.Ordinal);
+
+        var afterRetry = kernel.Goals.Single(candidate => candidate.Id == goal.Id);
+        PassVerification(kernel, afterRetry, afterRetry.Tasks.Single(task => task.Id == tester.Id));
+        var second = driver.AdvanceOnce(
+            kernel.Goals.Single(candidate => candidate.Id == goal.Id),
+            ConductorAutonomyPolicy.Permissive);
+
+        Assert.Single(retryMessages);
+        Assert.IsType<ConductorAdvanceOutcome.Escalated>(second.Outcome);
+        Assert.Contains("no further paid retry was started", Assert.Single(escalations), StringComparison.Ordinal);
     }
 
     [Xunit.Fact(Timeout = 30_000)]
@@ -729,6 +743,92 @@ public sealed class ConductorDriverTestsPreReviewEvidence
         Assert.True(result.Outcome is ConductorAdvanceOutcome.Executed);
     }
 
+    [Xunit.Fact]
+    public void ConductorDriverGeneratedArtifactMappingRetriesWritableDeveloperInsteadOfTester()
+    {
+        var (kernel, goal) = SoftwareGoal();
+        var developer = goal.Tasks.Single(task => task.RequiredRole == AgentRole.Developer);
+        var reviewer = goal.Tasks.Single(task => task.RequiredRole == AgentRole.Reviewer);
+        foreach (var task in goal.Tasks.TakeWhile(task => task.Id != reviewer.Id))
+        {
+            PassVerification(kernel, goal, task);
+        }
+
+        var retriedTaskIds = new List<TaskId>();
+        string? retryMessage = null;
+        var escalations = new List<string>();
+        var driver = MakeDriver(
+            getFacts: _ => new GoalLifecycleFacts(WorkspaceExists: true),
+            getPreReviewEvidenceContext: _ => ConductorDriver.BuildPreReviewEvidenceContext(
+                "generated-sha",
+                ["src/Mcg.AgentOrchestrator.Core/bin/Debug/generated.dll"]),
+            recordPreReviewEvidence: (goalId, taskId, receipt) =>
+                kernel.RecordPreReviewEvidence(goalId, taskId, receipt),
+            retryTaskWithRoundKind: (goalId, taskId, message, roundKind) =>
+            {
+                retriedTaskIds.Add(taskId);
+                retryMessage = message;
+                return kernel.RetryTask(goalId, taskId, message, retryRoundKind: roundKind);
+            },
+            dispatchAndStart: _ => DispatchStartOutcome.Started(),
+            writeEscalation: (_, _, message) => escalations.Add(message));
+
+        var first = driver.AdvanceOnce(goal, ConductorAutonomyPolicy.Permissive);
+
+        Assert.Equal([developer.Id], retriedTaskIds);
+        Assert.Contains("src/Mcg.AgentOrchestrator.Core/bin/Debug/generated.dll", retryMessage, StringComparison.Ordinal);
+        var afterRetry = kernel.Goals.Single(candidate => candidate.Id == goal.Id);
+        Assert.Equal(WorkTaskStatus.Assigned, afterRetry.Tasks.Single(task => task.RequiredRole == AgentRole.Tester).Status);
+        Assert.True(first.Outcome is ConductorAdvanceOutcome.Executed);
+
+        PassVerification(kernel, afterRetry, afterRetry.Tasks.Single(task => task.RequiredRole == AgentRole.Developer));
+        var afterDeveloper = kernel.Goals.Single(candidate => candidate.Id == goal.Id);
+        PassVerification(kernel, afterDeveloper, afterDeveloper.Tasks.Single(task => task.RequiredRole == AgentRole.Tester));
+        var readyAgain = kernel.Goals.Single(candidate => candidate.Id == goal.Id);
+
+        var second = driver.AdvanceOnce(readyAgain, ConductorAutonomyPolicy.Permissive);
+
+        Assert.Equal([developer.Id], retriedTaskIds);
+        Assert.IsType<ConductorAdvanceOutcome.Escalated>(second.Outcome);
+        Assert.Single(escalations);
+        Assert.Contains("no further paid retry was started", escalations[0], StringComparison.Ordinal);
+        Assert.Contains("src/Mcg.AgentOrchestrator.Core/bin/Debug/generated.dll", escalations[0], StringComparison.Ordinal);
+    }
+
+    [Xunit.Fact]
+    public void ConductorDriverPreReviewUsesEmptyCandidateDiffInsteadOfGeneratedPathsFromBrief()
+    {
+        var root = CreateTempDirectory();
+        RunGit(root, "init");
+        RunGit(root, "checkout", "-b", "main");
+        RunGit(root, "config", "user.email", "test@example.com");
+        RunGit(root, "config", "user.name", "Test User");
+        File.WriteAllText(Path.Combine(root, "README.md"), "initial");
+        RunGit(root, "add", ".");
+        RunGit(root, "commit", "-m", "initial");
+        var kernel = new AgentOrchestratorKernel();
+        var goal = kernel.CreateGoal(
+            "Review a clean candidate after historical src/App/bin/Debug/generated.dll evidence");
+        _ = GoalWorktrees.Ensure(root, goal.Id);
+
+        var workspace = OrchestratorWorkspace.ForDirectory(root);
+        var driver = new ConductorDriver(
+            kernel,
+            workspace,
+            new FakeAcceptanceVerifier(),
+            DefaultAgents(),
+            WorkerProfileCatalog.Default());
+
+        var context = driver.GetPreReviewEvidenceContext(goal);
+
+        Assert.NotNull(context.CandidateSha);
+        Assert.True(context.NoApplicableTests);
+        Assert.False(context.MappingNeedsInput);
+        Assert.False(context.RequiresSourceCleanup);
+        Assert.Empty(context.SourceCleanupPaths ?? []);
+        Assert.Contains("No changed files detected", context.MappingReason, StringComparison.Ordinal);
+    }
+
     [Xunit.Fact(DisplayName = "ConductorDriver_pre_review_mapper_routes_project_and_exclusion_checks_to_bounded_evidence")]
     public void ConductorDriverPreReviewMapperRoutesProjectAndExclusionChecksToBoundedEvidence()
     {
@@ -1034,7 +1134,8 @@ public sealed class ConductorDriverTestsPreReviewEvidence
             PassVerification(kernel, goal, task);
         }
 
-        TaskId? retriedTaskId = null;
+        var retriedTaskIds = new List<TaskId>();
+        var escalations = new List<string>();
         var check = new AcceptanceCheckResult(
             "focused selection",
             false,
@@ -1067,17 +1168,28 @@ public sealed class ConductorDriverTestsPreReviewEvidence
                 kernel.RecordPreReviewEvidence(goalId, taskId, receipt),
             retryTaskWithRoundKind: (goalId, taskId, message, roundKind) =>
             {
-                retriedTaskId = taskId;
+                retriedTaskIds.Add(taskId);
                 return kernel.RetryTask(goalId, taskId, message, retryRoundKind: roundKind);
             },
-            dispatchAndStart: _ => DispatchStartOutcome.Started());
+            dispatchAndStart: _ => DispatchStartOutcome.Started(),
+            writeEscalation: (_, _, message) => escalations.Add(message));
 
         driver.AdvanceOnce(goal, ConductorAutonomyPolicy.Permissive);
 
-        Assert.Equal(tester.Id, retriedTaskId);
+        Assert.Equal([tester.Id], retriedTaskIds);
         Assert.Equal(WorkTaskStatus.Completed, developer.Status);
         Assert.Equal(PreReviewEvidenceDisposition.MappingNeedsInput, reviewer.PreReviewEvidenceReceipt?.Disposition);
         Assert.Empty(reviewer.PreReviewEvidenceReceipt?.FailingTestIdentities ?? []);
+
+        var afterRetry = kernel.Goals.Single(candidate => candidate.Id == goal.Id);
+        PassVerification(kernel, afterRetry, afterRetry.Tasks.Single(task => task.Id == tester.Id));
+        var second = driver.AdvanceOnce(
+            kernel.Goals.Single(candidate => candidate.Id == goal.Id),
+            ConductorAutonomyPolicy.Permissive);
+
+        Assert.Equal([tester.Id], retriedTaskIds);
+        Assert.IsType<ConductorAdvanceOutcome.Escalated>(second.Outcome);
+        Assert.Contains("no further paid retry was started", Assert.Single(escalations), StringComparison.Ordinal);
     }
 
     [Xunit.Fact]

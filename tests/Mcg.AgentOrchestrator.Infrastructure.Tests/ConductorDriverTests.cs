@@ -1117,6 +1117,42 @@ public sealed class ConductorDriverTests
         Assert.Equal(failureReason, outcome.Reason);
     }
 
+    [Xunit.Fact]
+    public void ConductorDriverPreparedDispatchWithoutStartReportsBothStateViews()
+    {
+        var (kernel, goal) = SimpleGoal();
+        var task = goal.Tasks.Single();
+        DispatchTask(kernel, goal, task);
+        var plan = new ProcessBatchPlan(
+            goal.Id,
+            goal.Objective,
+            goal.Status,
+            ProcessBatchActionKind.StartDispatches,
+            ReadyCount: 0,
+            SkippedCount: 1,
+            Items:
+            [
+                new ProcessBatchPlanItem(
+                    task.Id,
+                    task.RequiredRole,
+                    task.Description,
+                    WorkTaskStatus.Assigned,
+                    ProcessBatchItemStatus.Skipped,
+                    "Task status is Assigned; only running dispatched tasks can be started.")
+            ]);
+        var result = new SubscriptionStartResult(
+            [new WorkerProfileDispatchResult(task, @"C:\repo\.orchestrator\prompts\task.md")],
+            new ProcessBatchExecutionResult(plan, []),
+            new ParallelExecutionPlan([], []),
+            []);
+
+        var outcome = ConductorDriver.ClassifySubscriptionStartForConductor(result);
+
+        Assert.Equal(DispatchStartOutcomeCategory.SpawnFailed, outcome.Category);
+        Assert.Contains("Task status is Assigned", outcome.Reason, StringComparison.Ordinal);
+        Assert.Contains($"{task.Id.Value[..8]}:status=Running:admission=none", outcome.Reason, StringComparison.Ordinal);
+    }
+
     [Xunit.Fact(DisplayName = "ConductorDriver_recorded_start_mixed_started_and_registration_failure_keeps_live_progress")]
     public void ConductorDriverRecordedStartMixedStartedAndRegistrationFailureKeepsLiveProgress()
     {

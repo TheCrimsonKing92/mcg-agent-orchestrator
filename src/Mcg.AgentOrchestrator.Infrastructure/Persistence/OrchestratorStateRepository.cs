@@ -223,13 +223,15 @@ public interface IOrchestratorStateOutboxRepository : ITransactionalOrchestrator
 public sealed record GoalSnapshotSaveRequest(
     GoalSnapshot Baseline,
     GoalSnapshot Current,
-    IReadOnlyList<HumanInputRequestSnapshot>? HumanInputRequests = null);
+    IReadOnlyList<HumanInputRequestSnapshot>? HumanInputRequests = null,
+    bool RejectConflict = false);
 
 public sealed record GoalSnapshotSaveResult(
     string GoalId,
     GoalSnapshotSaveDisposition Disposition,
     GoalSnapshot? PersistedSnapshot,
-    string Message);
+    string Message,
+    IReadOnlyList<HumanInputRequestSnapshot>? PersistedHumanInputRequests = null);
 
 public enum GoalSnapshotSaveDisposition
 {

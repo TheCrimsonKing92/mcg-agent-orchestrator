@@ -1568,8 +1568,8 @@ public sealed class LauncherScriptTests
         Assert.DoesNotContain("bin\\Debug\\net10.0\\Mcg.AgentOrchestrator.App.dll", script, StringComparison.Ordinal);
     }
 
-    [Xunit.Fact(DisplayName = "ResolveRunDir_repopulates_cached_copy_when_native_sqlite_asset_is_missing")]
-    public void ResolveRunDirRepopulatesCachedCopyWhenNativeSqliteAssetIsMissing()
+    [Xunit.Fact(DisplayName = "ResolveRunDir_ignores_legacy_partial_cache_without_pruning_it")]
+    public void ResolveRunDirIgnoresLegacyPartialCacheWithoutPruningIt()
     {
         var repoRoot = FindLauncherSourceRoot();
         var root = Path.Combine(Path.GetTempPath(), $"resolve-run-dir-{Guid.NewGuid():N}");
@@ -1583,9 +1583,10 @@ public sealed class LauncherScriptTests
             Directory.CreateDirectory(Path.GetDirectoryName(nativeSource)!);
             File.WriteAllText(nativeSource, "native");
 
-            var runDir = Path.Combine(root, "mcg-run", OutputContentHashPrefix(appOutput));
-            Directory.CreateDirectory(runDir);
-            File.Copy(appDll, Path.Combine(runDir, Path.GetFileName(appDll)));
+            var legacyRunDir = Path.Combine(root, "mcg-run", "legacy-partial-live-entry");
+            Directory.CreateDirectory(legacyRunDir);
+            File.Copy(appDll, Path.Combine(legacyRunDir, Path.GetFileName(appDll)));
+            Directory.SetLastWriteTimeUtc(legacyRunDir, DateTime.UtcNow.AddDays(-30));
 
             var result = RunPowerShellCommand(repoRoot, $"""
                 $ErrorActionPreference = 'Stop'
@@ -1596,8 +1597,13 @@ public sealed class LauncherScriptTests
 
             Assert.Equal(0, result.ExitCode);
             Assert.True(string.IsNullOrWhiteSpace(result.Stderr), result.Stderr);
-            Assert.Equal(runDir, result.Stdout.Trim());
+            var runDir = result.Stdout.Trim();
+            Assert.StartsWith(Path.Combine(root, "mcg-run", "v2"), runDir, StringComparison.OrdinalIgnoreCase);
+            Assert.Equal(Path.Combine(root, "mcg-run", "v2", OutputContentDigest(appOutput)), runDir, ignoreCase: true);
             Assert.True(File.Exists(Path.Combine(runDir, "runtimes", "win-x64", "native", "e_sqlite3.dll")));
+            Assert.True(File.Exists(Path.Combine(runDir, ".mcg-run-closure.json")));
+            Assert.True(Directory.Exists(legacyRunDir));
+            Assert.False(File.Exists(Path.Combine(legacyRunDir, "runtimes", "win-x64", "native", "e_sqlite3.dll")));
         }
         finally
         {
@@ -1651,6 +1657,145 @@ public sealed class LauncherScriptTests
                     secondRunDirectory,
                     "Mcg.AgentOrchestrator.Infrastructure.Providers.dll",
                     SearchOption.AllDirectories));
+        }
+        finally
+        {
+            TryDeleteDirectory(root);
+        }
+    }
+
+    [Xunit.Fact(DisplayName = "ResolveRunDir_invalid_v2_entry_fails_closed_without_mutation")]
+    public void ResolveRunDirInvalidV2EntryFailsClosedWithoutMutation()
+    {
+        var repoRoot = FindLauncherSourceRoot();
+        var root = Path.Combine(Path.GetTempPath(), $"resolve-run-dir-invalid-{Guid.NewGuid():N}");
+        var appOutput = Path.Combine(root, "app");
+        Directory.CreateDirectory(Path.Combine(appOutput, "runtimes", "win-x64", "native"));
+        try
+        {
+            var appDll = Path.Combine(appOutput, "Mcg.AgentOrchestrator.App.dll");
+            File.WriteAllText(appDll, "valid source app");
+            File.WriteAllText(Path.Combine(appOutput, "Mcg.AgentOrchestrator.Infrastructure.dll"), "valid source dependency");
+            File.WriteAllText(Path.Combine(appOutput, "runtimes", "win-x64", "native", "e_sqlite3.dll"), "native");
+
+            var invalidRun = Path.Combine(root, "mcg-run", "v2", OutputContentDigest(appOutput));
+            Directory.CreateDirectory(invalidRun);
+            var cachedApp = Path.Combine(invalidRun, Path.GetFileName(appDll));
+            File.WriteAllText(cachedApp, "do not modify this invalid published entry");
+            var sentinel = Path.Combine(invalidRun, "operator-owned-sentinel.txt");
+            File.WriteAllText(sentinel, "preserve");
+
+            var result = RunPowerShellCommand(repoRoot, $"""
+                $env:TEMP = '{EscapePowerShellSingleQuoted(root)}'
+                $env:TMP = '{EscapePowerShellSingleQuoted(root)}'
+                & '{EscapePowerShellSingleQuoted(Path.Combine(repoRoot, "scripts", "resolve-run-dir.ps1"))}' '{EscapePowerShellSingleQuoted(appDll)}'
+                """);
+
+            Assert.NotEqual(0, result.ExitCode);
+            Assert.True(string.IsNullOrWhiteSpace(result.Stdout), result.Stdout);
+            Assert.Contains("invalid and will not be modified or launched", result.Stderr, StringComparison.OrdinalIgnoreCase);
+            Assert.Equal("do not modify this invalid published entry", File.ReadAllText(cachedApp));
+            Assert.Equal("preserve", File.ReadAllText(sentinel));
+        }
+        finally
+        {
+            TryDeleteDirectory(root);
+        }
+    }
+
+    [Xunit.Fact(DisplayName = "ResolveRunDir_concurrent_publishers_expose_only_one_complete_closure")]
+    public void ResolveRunDirConcurrentPublishersExposeOnlyOneCompleteClosure()
+    {
+        var repoRoot = FindLauncherSourceRoot();
+        var root = Path.Combine(Path.GetTempPath(), $"resolve-run-dir-concurrent-{Guid.NewGuid():N}");
+        var appOutput = Path.Combine(root, "app");
+        Directory.CreateDirectory(Path.Combine(appOutput, "runtimes", "win-x64", "native"));
+        try
+        {
+            var appDll = Path.Combine(appOutput, "Mcg.AgentOrchestrator.App.dll");
+            File.WriteAllText(appDll, "app");
+            File.WriteAllText(Path.Combine(appOutput, "runtimes", "win-x64", "native", "e_sqlite3.dll"), "native");
+            for (var index = 0; index < 24; index++)
+            {
+                File.WriteAllBytes(
+                    Path.Combine(appOutput, $"dependency-{index:D2}.bin"),
+                    Enumerable.Repeat((byte)index, 256 * 1024).ToArray());
+            }
+
+            using var first = ProcessTreeGuiSuppression.Start(CreateResolverStartInfo(repoRoot, root, appDll));
+            using var second = ProcessTreeGuiSuppression.Start(CreateResolverStartInfo(repoRoot, root, appDll));
+            var versionRoot = Path.Combine(root, "mcg-run", "v2");
+            while (!first.HasExited || !second.HasExited)
+            {
+                if (Directory.Exists(versionRoot))
+                {
+                    foreach (var published in Directory.EnumerateDirectories(versionRoot)
+                                 .Where(path => !Path.GetFileName(path).StartsWith(".staging-", StringComparison.Ordinal)))
+                    {
+                        Assert.True(File.Exists(Path.Combine(published, ".mcg-run-closure.json")),
+                            $"Published path became visible before its completion marker: {published}");
+                        foreach (var source in Directory.EnumerateFiles(appOutput, "*", SearchOption.AllDirectories))
+                        {
+                            var relative = Path.GetRelativePath(appOutput, source);
+                            Assert.True(File.Exists(Path.Combine(published, relative)),
+                                $"Published path became visible before '{relative}' was copied.");
+                        }
+                    }
+                }
+                Thread.Sleep(2);
+            }
+
+            Assert.True(first.WaitForExit(30000));
+            Assert.True(second.WaitForExit(30000));
+            var firstOutput = first.StandardOutput.ReadToEnd().Trim();
+            var firstError = first.StandardError.ReadToEnd();
+            var secondOutput = second.StandardOutput.ReadToEnd().Trim();
+            var secondError = second.StandardError.ReadToEnd();
+            Assert.True(first.ExitCode == 0, firstError);
+            Assert.True(second.ExitCode == 0, secondError);
+            Assert.Equal(firstOutput, secondOutput, ignoreCase: true);
+            Assert.True(File.Exists(Path.Combine(firstOutput, ".mcg-run-closure.json")));
+            Assert.Empty(Directory.EnumerateDirectories(versionRoot, ".staging-*", SearchOption.TopDirectoryOnly));
+        }
+        finally
+        {
+            TryDeleteDirectory(root);
+        }
+    }
+
+    [Xunit.Fact(DisplayName = "ResolveRunDir_locked_source_fails_closed_without_publishing")]
+    public void ResolveRunDirLockedSourceFailsClosedWithoutPublishing()
+    {
+        var repoRoot = FindLauncherSourceRoot();
+        var root = Path.Combine(Path.GetTempPath(), $"resolve-run-dir-locked-{Guid.NewGuid():N}");
+        var appOutput = Path.Combine(root, "app");
+        Directory.CreateDirectory(Path.Combine(appOutput, "runtimes", "win-x64", "native"));
+        try
+        {
+            var appDll = Path.Combine(appOutput, "Mcg.AgentOrchestrator.App.dll");
+            var lockedDependency = Path.Combine(appOutput, "Mcg.AgentOrchestrator.Infrastructure.dll");
+            File.WriteAllText(appDll, "valid source app");
+            File.WriteAllText(lockedDependency, "locked source dependency");
+            File.WriteAllText(Path.Combine(appOutput, "runtimes", "win-x64", "native", "e_sqlite3.dll"), "native");
+
+            ProcessResult result;
+            using (File.Open(lockedDependency, FileMode.Open, FileAccess.Read, FileShare.None))
+            {
+                result = RunPowerShellCommand(repoRoot, $"""
+                    $env:TEMP = '{EscapePowerShellSingleQuoted(root)}'
+                    $env:TMP = '{EscapePowerShellSingleQuoted(root)}'
+                    & '{EscapePowerShellSingleQuoted(Path.Combine(repoRoot, "scripts", "resolve-run-dir.ps1"))}' '{EscapePowerShellSingleQuoted(appDll)}'
+                    """);
+            }
+
+            Assert.NotEqual(0, result.ExitCode);
+            Assert.True(string.IsNullOrWhiteSpace(result.Stdout), result.Stdout);
+            Assert.False(string.IsNullOrWhiteSpace(result.Stderr));
+            var versionRoot = Path.Combine(root, "mcg-run", "v2");
+            if (Directory.Exists(versionRoot))
+            {
+                Assert.Empty(Directory.EnumerateDirectories(versionRoot));
+            }
         }
         finally
         {
@@ -2623,6 +2768,31 @@ public sealed class LauncherScriptTests
         return RunProcess(startInfo, "PowerShell command");
     }
 
+    private static ProcessStartInfo CreateResolverStartInfo(
+        string repositoryRoot,
+        string tempRoot,
+        string appDll)
+    {
+        var startInfo = new ProcessStartInfo
+        {
+            FileName = "powershell.exe",
+            WorkingDirectory = repositoryRoot,
+            UseShellExecute = false,
+            RedirectStandardOutput = true,
+            RedirectStandardError = true,
+            CreateNoWindow = true
+        };
+        startInfo.Environment["TEMP"] = tempRoot;
+        startInfo.Environment["TMP"] = tempRoot;
+        startInfo.ArgumentList.Add("-NoProfile");
+        startInfo.ArgumentList.Add("-ExecutionPolicy");
+        startInfo.ArgumentList.Add("Bypass");
+        startInfo.ArgumentList.Add("-File");
+        startInfo.ArgumentList.Add(Path.Combine(repositoryRoot, "scripts", "resolve-run-dir.ps1"));
+        startInfo.ArgumentList.Add(appDll);
+        return startInfo;
+    }
+
     private static void AssertForwardedArguments(string stdout, string[] expected)
     {
         using var document = JsonDocument.Parse(stdout);
@@ -2648,7 +2818,7 @@ public sealed class LauncherScriptTests
     private static string RetiredManualLandingScriptName() =>
         string.Concat("Land-", "Verified", "Goal.ps1");
 
-    private static string OutputContentHashPrefix(string outputDirectory)
+    private static string OutputContentDigest(string outputDirectory)
     {
         var payload = new StringBuilder();
         foreach (var file in Directory.GetFiles(outputDirectory, "*", SearchOption.AllDirectories)
@@ -2661,8 +2831,7 @@ public sealed class LauncherScriptTests
             payload.Append('\n');
         }
 
-        return Convert.ToHexString(SHA1.HashData(Encoding.UTF8.GetBytes(payload.ToString())))
-            .Substring(0, 16);
+        return Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(payload.ToString())));
     }
 
     private static void TryDeleteDirectory(string path)

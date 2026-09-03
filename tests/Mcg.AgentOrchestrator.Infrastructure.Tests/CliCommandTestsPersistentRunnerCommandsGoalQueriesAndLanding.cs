@@ -257,6 +257,415 @@ public sealed class CliCommandTestsPersistentRunnerCommandsGoalQueriesAndLanding
             receipt);
     }
 
+    [Xunit.Theory(DisplayName = "CliPersistentStateRunner_tick_conflict_rebases_live_kernel_before_next_action")]
+    [Xunit.InlineData(GoalSnapshotSaveDisposition.Merged)]
+    [Xunit.InlineData(GoalSnapshotSaveDisposition.Skipped)]
+    public void PersistentRunnerTickConflictRebasesLiveKernelBeforeNextAction(
+        GoalSnapshotSaveDisposition disposition)
+    {
+        var kernel = new AgentOrchestratorKernel();
+        var testerTaskId = TaskId.New();
+        var reviewerTaskId = TaskId.New();
+        var goal = kernel.CreateGoal(
+            "Do not redispatch an obsolete task after a checkpoint merge",
+            [
+                new TaskSpec(testerTaskId, "Obsolete Tester", AgentRole.Tester),
+                new TaskSpec(reviewerTaskId, "Current Reviewer", AgentRole.Reviewer)
+            ]);
+        var stale = kernel.ExportGoalSnapshot(goal.Id);
+        var persisted = stale with
+        {
+            Tasks = stale.Tasks.Select(task => task.Id == testerTaskId.Value
+                ? task with { Status = WorkTaskStatus.Completed }
+                : task with { Status = WorkTaskStatus.Assigned }).ToArray()
+        };
+
+        var rebased = CliPersistentStateRunner.RebaseCheckpointAfterDurableSave(
+            kernel,
+            new GoalSnapshotSaveResult(
+                goal.Id.Value,
+                disposition,
+                persisted,
+                "stored version advanced during tick"));
+
+        Xunit.Assert.True(rebased);
+        var liveGoal = kernel.GetGoal(goal.Id);
+        Xunit.Assert.Equal(
+            WorkTaskStatus.Completed,
+            liveGoal.Tasks.Single(task => task.Id == testerTaskId).Status);
+        Xunit.Assert.Equal(
+            WorkTaskStatus.Assigned,
+            liveGoal.Tasks.Single(task => task.Id == reviewerTaskId).Status);
+    }
+
+    [Xunit.Fact(DisplayName = "CliPersistentStateRunner_tick_conflict_replaces_goal_scoped_human_input_state")]
+    public void PersistentRunnerTickConflictReplacesGoalScopedHumanInputState()
+    {
+        var seed = new AgentOrchestratorKernel();
+        var goal = seed.CreateGoal("Restore authoritative human-input state");
+        var authoritative = AgentOrchestratorKernel.FromSnapshot(seed.ExportSnapshot());
+        var storedOpen = authoritative.RequestHumanInput(goal.Id, null, "Still awaiting operator input.");
+        var storedAnswered = authoritative.RequestHumanInput(goal.Id, null, "Already answered by the operator.");
+        authoritative.SubmitHumanInput(storedAnswered.Id, "Approved.");
+        var live = AgentOrchestratorKernel.FromSnapshot(seed.ExportSnapshot());
+        var staleOnly = live.RequestHumanInput(goal.Id, null, "Created only by the rejected tick.");
+        var authoritativeSnapshot = authoritative.ExportSnapshot();
+
+        var rebased = CliPersistentStateRunner.RebaseCheckpointAfterDurableSave(
+            live,
+            new GoalSnapshotSaveResult(
+                goal.Id.Value,
+                GoalSnapshotSaveDisposition.Skipped,
+                authoritative.ExportGoalSnapshot(goal.Id),
+                "stored version advanced during tick",
+                authoritativeSnapshot.HumanInputRequests));
+
+        Xunit.Assert.True(rebased);
+        var restored = live.ExportSnapshot().HumanInputRequests;
+        Xunit.Assert.DoesNotContain(restored, request => request.Id == staleOnly.Id.Value);
+        Xunit.Assert.False(restored.Single(request => request.Id == storedOpen.Id.Value).IsCompleted);
+        var answered = restored.Single(request => request.Id == storedAnswered.Id.Value);
+        Xunit.Assert.True(answered.IsCompleted);
+        Xunit.Assert.Equal("Approved.", answered.Answer);
+    }
+
+    [Xunit.Fact(DisplayName = "CliPersistentStateRunner_critical_checkpoint_marks_request_and_allows_matching_baseline")]
+    public void PersistentRunnerCriticalCheckpointMarksRequestAndAllowsMatchingBaseline()
+    {
+        var kernel = new AgentOrchestratorKernel();
+        var goal = kernel.CreateGoal(
+            "Start the selected worker from a matching baseline",
+            [new TaskSpec(TaskId.New(), "Selected worker", AgentRole.Reviewer)]);
+        var baseline = kernel.ExportGoalSnapshot(goal.Id);
+        var repository = new InMemoryTransactionalStateRepository(kernel)
+        {
+            GoalSnapshotSaveResultFactory = requests => requests.Select(request => new GoalSnapshotSaveResult(
+                request.Current.Id,
+                GoalSnapshotSaveDisposition.Saved,
+                request.Current,
+                "saved",
+                request.HumanInputRequests)).ToArray()
+        };
+        var applied = false;
+
+        CliPersistentStateRunner.PersistCriticalGoalSnapshotsOrThrow(
+            repository,
+            kernel,
+            [goal.Id],
+            new Dictionary<string, GoalSnapshot>(StringComparer.Ordinal) { [goal.Id.Value] = baseline },
+            "C:/fixture/state.db",
+            _ => applied = true);
+
+        Xunit.Assert.True(applied);
+        Xunit.Assert.True(Xunit.Assert.Single(repository.LastGoalSnapshotSaveRequests!).RejectConflict);
+    }
+
+    [Xunit.Fact(DisplayName = "CliPersistentStateRunner_dynamic_load_captures_only_missing_tick_baselines")]
+    public void PersistentRunnerDynamicLoadCapturesOnlyMissingTickBaselines()
+    {
+        var loaded = new AgentOrchestratorKernel();
+        var existing = loaded.CreateGoal("Existing tick goal");
+        var originalExisting = loaded.ExportGoalSnapshot(existing.Id);
+        var baselines = new Dictionary<string, GoalSnapshot>(StringComparer.Ordinal)
+        {
+            [existing.Id.Value] = originalExisting
+        };
+        loaded.RequestHumanInput(existing.Id, null, "External update after tick start.");
+        var added = loaded.CreateGoal("Dynamically ingested goal");
+
+        CliPersistentStateRunner.CaptureMissingConductLoopTickBaselines(baselines, loaded);
+
+        Xunit.Assert.Equal(originalExisting, baselines[existing.Id.Value]);
+        Xunit.Assert.Equal(
+            JsonSerializer.Serialize(loaded.ExportGoalSnapshot(added.Id)),
+            JsonSerializer.Serialize(baselines[added.Id.Value]));
+    }
+
+    [Xunit.Fact(DisplayName = "CliPersistentStateRunner_critical_checkpoint_fails_closed_without_tick_baseline")]
+    public void PersistentRunnerCriticalCheckpointFailsClosedWithoutTickBaseline()
+    {
+        var kernel = new AgentOrchestratorKernel();
+        var goal = kernel.CreateGoal("Never dispatch without a tick baseline");
+        var repository = new InMemoryTransactionalStateRepository(kernel);
+
+        var error = Xunit.Assert.Throws<DispatchCheckpointConflictException>(() =>
+            CliPersistentStateRunner.PersistCriticalGoalSnapshotsOrThrow(
+                repository,
+                kernel,
+                [goal.Id],
+                new Dictionary<string, GoalSnapshot>(StringComparer.Ordinal),
+                "C:/fixture/state.db",
+                _ => throw new Xunit.Sdk.XunitException("No durable result may be applied without a baseline.")));
+
+        Xunit.Assert.Contains("no tick baseline", error.Message, StringComparison.Ordinal);
+        Xunit.Assert.Null(repository.LastGoalSnapshotSaveRequests);
+    }
+
+    [Xunit.Fact(DisplayName = "CliExecutionContext_critical_checkpoint_fails_closed_without_durable_writer")]
+    public void CliExecutionContextCriticalCheckpointFailsClosedWithoutDurableWriter()
+    {
+        var root = CreateTempDirectory();
+        var kernel = new AgentOrchestratorKernel();
+        var goal = kernel.CreateGoal("Do not acknowledge a missing critical writer");
+        var context = new CliExecutionContext(
+            kernel,
+            OrchestratorWorkspace.ForDirectory(root),
+            new InMemoryModelProviderRegistry([]),
+            [],
+            WorkerProfileCatalog.Default(),
+            goal);
+
+        var error = Xunit.Assert.Throws<InvalidOperationException>(() =>
+            context.PersistCriticalGoalCheckpoint(kernel, [goal.Id]));
+
+        Xunit.Assert.Contains("worker start was aborted", error.Message, StringComparison.Ordinal);
+    }
+
+    [Xunit.Fact(DisplayName = "CliPersistentStateRunner_single_goal_conduct_uses_strict_critical_checkpoint")]
+    public void PersistentRunnerSingleGoalConductUsesStrictCriticalCheckpoint()
+    {
+        var root = CreateTempDirectory();
+        var workspace = CreateRefinedWorkspace(root);
+        EnsureGitRepository(root);
+        RunGit(root, "add", ".agents/skills");
+        RunGit(root, "commit", "-m", "add test skills");
+        var kernel = new AgentOrchestratorKernel();
+        var task = new TaskSpec(TaskId.New(), "Run only from authoritative state.", AgentRole.Planner);
+        var goal = kernel.CreateGoal("Fence one-shot conduct dispatch", [task]);
+        kernel.SetGoalRefinedSpec(goal.Id, new RefinedSpec(
+            "One-shot conduct checkpoint fixture is already refined.",
+            ["The selected worker cannot start after an authoritative task update."],
+            VerificationClass.TestVerifiable,
+            [],
+            []));
+        var agent = SubscriptionPlanner("safe-profile", "Safe Planner");
+        IReadOnlyList<AgentDefinition> agents = [agent];
+        kernel.ActivateGoal(goal.Id, agents);
+        GoalWorktrees.Ensure(root, goal.Id);
+
+        var authoritativeKernel = AgentOrchestratorKernel.FromSnapshot(kernel.ExportSnapshot());
+        authoritativeKernel.ReportTaskProgress(
+            goal.Id,
+            task.Id,
+            WorkTaskStatus.Completed,
+            "Operator completed the task before dispatch.");
+        authoritativeKernel.RecordTaskVerification(
+            goal.Id,
+            task.Id,
+            new TaskVerificationRecord("manual", root, 0, "passed", string.Empty, DateTimeOffset.UtcNow));
+        var authoritative = authoritativeKernel.ExportGoalSnapshot(goal.Id);
+        var repository = new InMemoryTransactionalStateRepository(kernel);
+        var criticalRequests = 0;
+        repository.GoalSnapshotSaveResultFactory = requests => requests.Select(request =>
+        {
+            criticalRequests++;
+            Xunit.Assert.True(request.RejectConflict);
+            return new GoalSnapshotSaveResult(
+                request.Current.Id,
+                GoalSnapshotSaveDisposition.Skipped,
+                authoritative,
+                "stored version advanced before one-shot conduct dispatch",
+                []);
+        }).ToArray();
+        var workerProfiles = new WorkerProfileCatalog(
+            [new WorkerProfile("safe-profile", "Write-Output {subscriptionModelName}; Write-Output {promptPath}")]);
+        Goal? currentGoal = goal;
+
+        var changed = CliPersistentStateRunner.ExecuteCommand(
+            ["conduct", goal.Id.Value[..8]],
+            repository,
+            workspace,
+            ref agents,
+            new InMemoryModelProviderRegistry([]),
+            ref workerProfiles,
+            ref currentGoal);
+
+        Xunit.Assert.True(changed);
+        Xunit.Assert.True(criticalRequests > 0);
+        Xunit.Assert.Equal(0, repository.TransactGoalCount);
+        Xunit.Assert.DoesNotContain(
+            workspace.LogDirectory is { } logDirectory && Directory.Exists(logDirectory)
+                ? Directory.GetFiles(logDirectory, "*.start-gate", SearchOption.AllDirectories)
+                : [],
+            _ => true);
+    }
+
+    [Xunit.Fact(DisplayName = "CliPersistentStateRunner_critical_checkpoint_accepts_own_paid_retry_reservation_and_start_claim")]
+    public void PersistentRunnerCriticalCheckpointAcceptsOwnPaidRetryReservationAndStartClaim()
+    {
+        var root = CreateTempDirectory();
+        var databasePath = Path.Combine(root, "state.db");
+        _ = StateDbMigrations.EnsureUpToDate(databasePath);
+        var at = DateTimeOffset.Parse("2026-09-02T12:00:00Z");
+        var kernel = new AgentOrchestratorKernel();
+        var task = new TaskSpec(TaskId.New(), "Retry paid work after a source finding.", AgentRole.Developer);
+        var goal = kernel.CreateGoal("Accept the dispatch's own reservation write", [task]);
+        kernel.ActivateGoal(goal.Id, AgentCatalog.Default().Agents);
+        kernel.RetryTask(goal.Id, task.Id, "Repair the source finding.", RetryCause.NewSourceFinding);
+        var fingerprint = RetryContextFingerprintBuilder.Build(new RetryContextFingerprintInput(
+            goal.Id.Value,
+            task.Id.Value,
+            task.RequiredRole,
+            "OpenAI",
+            AgentCatalog.OpenAiSolSubscriptionModelAlias,
+            PaidRouteClassification.Paid,
+            "candidate",
+            "criteria",
+            [],
+            [],
+            [],
+            [],
+            "base",
+            "main"));
+        var dispatch = new TaskDispatchRecord(
+            "worker",
+            "Write-Output safe",
+            root,
+            at,
+            RetryContextFingerprint: fingerprint,
+            PaidRoute: PaidRouteClassification.Paid);
+        var repository = new SqliteOrchestratorStateRepository(databasePath);
+        repository.SaveAsync(kernel).GetAwaiter().GetResult();
+        var tickBaseline = kernel.ExportGoalSnapshot(goal.Id);
+        var tickBaselines = new Dictionary<string, GoalSnapshot>(StringComparer.Ordinal)
+        {
+            [goal.Id.Value] = tickBaseline
+        };
+        var reservation = RetryAdmissionReservationStore.TryReserveAsync(
+                databasePath,
+                goal.Id,
+                task.Id,
+                fingerprint,
+                PaidRouteClassification.Paid,
+                RetryCause.NewSourceFinding,
+                dispatch,
+                at,
+                "owner-a",
+                at.AddMinutes(1))
+            .GetAwaiter()
+            .GetResult();
+        var persisted = Xunit.Assert.IsType<RetryAdmissionSnapshotResult>(reservation);
+        kernel.ReplaceGoalStateWithSnapshot(persisted.Snapshot, persisted.HumanInputRequests ?? []);
+        tickBaselines[goal.Id.Value] = persisted.Snapshot;
+        IReadOnlyList<GoalSnapshotSaveResult>? applied = null;
+
+        CliPersistentStateRunner.PersistCriticalGoalSnapshotsOrThrow(
+            repository,
+            kernel,
+            [goal.Id],
+            tickBaselines,
+            databasePath,
+            results => applied = results);
+
+        var result = Xunit.Assert.Single(applied!);
+        Xunit.Assert.Equal(GoalSnapshotSaveDisposition.Saved, result.Disposition);
+        Xunit.Assert.Single(result.PersistedSnapshot!.Tasks.Single().RetryAdmissionHistory!);
+
+        var claim = RetryAdmissionReservationStore.TryClaimStartSnapshotAsync(
+                databasePath,
+                goal.Id,
+                task.Id,
+                dispatch.DispatchedAt,
+                "owner-a",
+                at.AddSeconds(1))
+            .GetAwaiter()
+            .GetResult();
+        var claimed = Xunit.Assert.IsType<RetryAdmissionStartClaimResult>(claim);
+        Xunit.Assert.True(claimed.Claimed);
+        kernel.ReplaceGoalWithSnapshot(claimed.Snapshot);
+        tickBaselines[goal.Id.Value] = claimed.Snapshot;
+        kernel.RecordTaskProcessStarted(
+            goal.Id,
+            task.Id,
+            new TaskProcessRecord(
+                4101,
+                dispatch.Command,
+                dispatch.WorkingDirectory,
+                Path.Combine(root, "worker.out.log"),
+                Path.Combine(root, "worker.err.log"),
+                Path.Combine(root, "worker.exit"),
+                at.AddSeconds(1),
+                null,
+                null));
+        applied = null;
+
+        CliPersistentStateRunner.PersistCriticalGoalSnapshotsOrThrow(
+            repository,
+            kernel,
+            [goal.Id],
+            tickBaselines,
+            databasePath,
+            results => applied = results);
+
+        result = Xunit.Assert.Single(applied!);
+        Xunit.Assert.Equal(GoalSnapshotSaveDisposition.Saved, result.Disposition);
+        var startedTask = result.PersistedSnapshot!.Tasks.Single();
+        Xunit.Assert.NotNull(startedTask.LastProcess);
+        Xunit.Assert.NotNull(Xunit.Assert.Single(startedTask.RetryAdmissionHistory!).WorkerStartClaimedAt);
+    }
+
+    [Xunit.Fact(DisplayName = "CliPersistentStateRunner_critical_checkpoint_rebases_before_conflict_abort")]
+    public void PersistentRunnerCriticalCheckpointRebasesBeforeConflictAbort()
+    {
+        var kernel = new AgentOrchestratorKernel();
+        var taskId = TaskId.New();
+        var goal = kernel.CreateGoal(
+            "Abort a stale worker start",
+            [new TaskSpec(taskId, "Obsolete worker", AgentRole.Tester)]);
+        kernel.ActivateGoal(goal.Id, AgentCatalog.Default().Agents);
+        var baseline = kernel.ExportGoalSnapshot(goal.Id);
+        kernel.RecordTaskDispatch(
+            goal.Id,
+            taskId,
+            new TaskDispatchRecord("stale-worker", "fixture", "C:/fixture", DateTimeOffset.UtcNow));
+        var storedOpen = new HumanInputRequestSnapshot(
+            HumanInputRequestId.New().Value,
+            goal.Id.Value,
+            null,
+            "Authoritative operator wait.",
+            DateTimeOffset.UtcNow);
+        var authoritative = baseline with
+        {
+            Tasks = baseline.Tasks.Select(task => task with { Status = WorkTaskStatus.Completed }).ToArray()
+        };
+        var repository = new InMemoryTransactionalStateRepository(kernel)
+        {
+            GoalSnapshotSaveResultFactory = requests =>
+            {
+                Xunit.Assert.True(Xunit.Assert.Single(requests).RejectConflict);
+                return
+                [
+                    new GoalSnapshotSaveResult(
+                        goal.Id.Value,
+                        GoalSnapshotSaveDisposition.Skipped,
+                        authoritative,
+                        "stored version advanced during tick",
+                        [storedOpen])
+                ];
+            }
+        };
+        var applied = false;
+
+        _ = Xunit.Assert.Throws<DispatchCheckpointConflictException>(() =>
+            CliPersistentStateRunner.PersistCriticalGoalSnapshotsOrThrow(
+                repository,
+                kernel,
+                [goal.Id],
+                new Dictionary<string, GoalSnapshot>(StringComparer.Ordinal) { [goal.Id.Value] = baseline },
+                "C:/fixture/state.db",
+                results =>
+                {
+                    applied = true;
+                    foreach (var result in results)
+                        CliPersistentStateRunner.RebaseCheckpointAfterDurableSave(kernel, result);
+                }));
+
+        Xunit.Assert.True(applied);
+        Xunit.Assert.Equal(WorkTaskStatus.Completed, kernel.GetGoal(goal.Id).Tasks.Single().Status);
+        Xunit.Assert.Null(kernel.GetGoal(goal.Id).Tasks.Single().LastDispatch);
+        Xunit.Assert.Equal(storedOpen.Id, Xunit.Assert.Single(kernel.ExportSnapshot().HumanInputRequests).Id);
+    }
+
 
     [Xunit.Fact(DisplayName = "CliPersistentStateRunner_conduct_loop_does_not_treat_completed_metadata_as_landed")]
     public void PersistentRunnerConductLoopDoesNotTreatCompletedMetadataAsLanded()

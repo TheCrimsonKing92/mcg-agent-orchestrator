@@ -1269,6 +1269,91 @@ public sealed partial class ConductorBatchLoopTestsParallelAcceptance : Conducto
             line.Contains("result=executed", StringComparison.Ordinal));
     }
 
+    [Xunit.Fact]
+    public void BatchLoopWriterLeaseContentionDefersAcceptanceAdmissionWithoutEscalation()
+    {
+        var kernel = new AgentOrchestratorKernel();
+        var goal = CreateVerifiedSimpleGoal(
+            kernel,
+            "Update src/Mcg.AgentOrchestrator.App/Orchestration/WriterLeaseBusy.cs");
+        var attemptRoot = CreateTempDirectory("mcg-conductor-acceptance-attempts");
+        var goalDirectory = Path.Combine(attemptRoot, goal.Id.Value);
+        Directory.CreateDirectory(goalDirectory);
+        var escalations = 0;
+        var acceptanceRuns = 0;
+        var coordinator = ThreadedAcceptanceAttemptCoordinator(attemptRoot, out var waitForAttempts);
+        using var leaseReady = new ManualResetEventSlim(false);
+        using var releaseLease = new ManualResetEventSlim(false);
+        Exception? leaseFailure = null;
+        var leaseHolder = new Thread(() =>
+        {
+            try
+            {
+                using var writerLease = StorageRetentionMaintenance.AcquireAttemptWriterLease(goalDirectory);
+                leaseReady.Set();
+                if (!releaseLease.Wait(TimeSpan.FromSeconds(5)))
+                {
+                    throw new TimeoutException("Test writer lease was not released before its failsafe timeout.");
+                }
+            }
+            catch (Exception ex)
+            {
+                leaseFailure = ex;
+                leaseReady.Set();
+            }
+        })
+        {
+            IsBackground = true,
+            Name = "acceptance-artifact-writer-lease-holder"
+        };
+        leaseHolder.Start();
+
+        try
+        {
+            Assert.True(leaseReady.Wait(TimeSpan.FromSeconds(5)));
+            Assert.Null(leaseFailure);
+            var driver = MakeDriver(
+                getFacts: _ => new GoalLifecycleFacts(WorkspaceExists: true),
+                runAcceptanceWithSlot: (_, _) =>
+                {
+                    acceptanceRuns++;
+                    return AcceptanceVerificationSummary.PassedWithNoUnmetCriteria;
+                },
+                writeEscalation: (_, _, _) => escalations++,
+                getLandingFileScopes: _ =>
+                    ["src/Mcg.AgentOrchestrator.App/Orchestration/WriterLeaseBusy.cs"],
+                parallelAcceptanceAttemptCoordinator: coordinator);
+            BatchTickSummary? tick = null;
+
+            var summary = new ConductorBatchLoop().Run(
+                kernel,
+                driver,
+                ConductorAutonomyPolicy.Conservative,
+                NoStopPath(),
+                maxIterations: 1,
+                onTick: value => tick = value);
+
+            Assert.Equal(0, summary.Advanced);
+            Assert.Equal(1, summary.Held);
+            Assert.Equal(0, summary.Escalated);
+            Assert.Equal(0, escalations);
+            Assert.Equal(0, acceptanceRuns);
+            Assert.Equal(GoalStatus.Verified, goal.Status);
+            Assert.Empty(Directory.EnumerateFiles(goalDirectory, "*.attempt.json"));
+            Assert.Contains(tick!.ProgressLines!, line =>
+                line.Contains("result=deferred", StringComparison.Ordinal) &&
+                line.Contains("reason=acceptance-artifact-writer-busy", StringComparison.Ordinal));
+        }
+        finally
+        {
+            releaseLease.Set();
+            Assert.True(leaseHolder.Join(TimeSpan.FromSeconds(5)));
+            waitForAttempts();
+            TryDeleteDirectory(attemptRoot);
+        }
+        Assert.Null(leaseFailure);
+    }
+
     [Xunit.Fact(DisplayName = "BatchLoop_build_lock_blocked_gate_retries_and_lands_on_later_tick")]
     public void BatchLoopBuildLockBlockedGateRetriesAndLandsOnLaterTick()
     {
@@ -1809,8 +1894,8 @@ public sealed partial class ConductorBatchLoopTestsParallelAcceptance : Conducto
         }
     }
 
-    [Xunit.Fact(DisplayName = "ParallelAcceptance_records_and_prunes_attempt_trx_with_attempt_artifacts")]
-    public void ParallelAcceptanceRecordsAndPrunesAttemptTrxWithAttemptArtifacts()
+    [Xunit.Fact(DisplayName = "ParallelAcceptance_records_and_retains_non_terminal_attempt_trx_with_attempt_artifacts")]
+    public void ParallelAcceptanceRecordsAndRetainsNonTerminalAttemptTrxWithAttemptArtifacts()
     {
         var (_, goal) = SimpleGoal("Update src/Mcg.AgentOrchestrator.App/Orchestration/AttemptTrx.cs");
         var attemptRoot = CreateTempDirectory("mcg-conductor-acceptance-attempts");
@@ -1863,8 +1948,8 @@ public sealed partial class ConductorBatchLoopTestsParallelAcceptance : Conducto
 
             Assert.NotNull(firstAttemptPath);
             Assert.NotNull(firstTrxPath);
-            Assert.False(File.Exists(firstAttemptPath!));
-            Assert.False(File.Exists(firstTrxPath!));
+            Assert.True(File.Exists(firstAttemptPath!));
+            Assert.True(File.Exists(firstTrxPath!));
             Assert.NotNull(latestAttempt);
             Assert.True(File.Exists(latestAttempt!.MetadataPath));
         }
@@ -5155,7 +5240,16 @@ public sealed partial class ConductorBatchLoopTestsParallelAcceptance : Conducto
         var waitBudget = Stopwatch.StartNew();
         while (waitBudget.Elapsed < TimeSpan.FromSeconds(30))
         {
-            var decision = coordinator.Evaluate(candidate, ConductorAutonomyPolicy.Conservative, PassingRun);
+            ConductorParallelAcceptanceAttemptDecision decision;
+            try
+            {
+                decision = coordinator.Evaluate(candidate, ConductorAutonomyPolicy.Conservative, PassingRun);
+            }
+            catch (AcceptanceArtifactWriterLeaseBusyException)
+            {
+                Thread.Sleep(20);
+                continue;
+            }
             if (decision.Attempt.Outcome == expected)
             {
                 return decision;

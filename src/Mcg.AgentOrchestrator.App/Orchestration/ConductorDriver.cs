@@ -17,7 +17,11 @@ internal sealed record PreReviewEvidenceContext(
     string? FocusedRequest,
     string MappingReason,
     bool NoApplicableTests,
-    bool MappingNeedsInput);
+    bool MappingNeedsInput,
+    IReadOnlyList<string>? SourceCleanupPaths = null)
+{
+    public bool RequiresSourceCleanup => SourceCleanupPaths is { Count: > 0 };
+}
 
 internal sealed record WorkerAdmissionSnapshot(
     int ConfiguredWorkerCap,
@@ -244,7 +248,8 @@ internal sealed partial class ConductorDriver
         IModelProviderRegistry? providers = null,
         Action<AgentOrchestratorKernel, IReadOnlyCollection<GoalId>>? persistCriticalDispatchStart = null,
         Func<GoalId, TaskId, InterruptedDispatchStateRead>? readCurrentInterruptedDispatchState = null,
-        bool runAcceptanceAttemptsInCurrentProcess = false)
+        bool runAcceptanceAttemptsInCurrentProcess = false,
+        Action<GoalSnapshot>? recordDurableGoalBaseline = null)
     {
         var dir = workspace.ExecutionDirectory;
         _executionDirectory = dir;
@@ -394,12 +399,20 @@ internal sealed partial class ConductorDriver
                                 checkpointPhase);
                             criticalCheckpointPersisted = true;
                             DispatchRecordWriteSucceededSink?.Invoke(goalId);
-                        },
+                    },
                     readCurrentInterruptedDispatchState: readCurrentInterruptedDispatchState,
-                    conductorPolicy: policy);
+                    conductorPolicy: policy,
+                    recordDurableGoalBaseline: recordDurableGoalBaseline);
             }
             catch (DispatchRecordWriteException ex)
             {
+                if (ex.PreservesAuthoritativeState)
+                {
+                    var reason = ex.InnerException?.Message ?? ex.Message;
+                    GoalOperationJournal.Failed(dir, goal, "conductor:dispatch", reason);
+                    return DispatchStartOutcome.Deferred(reason);
+                }
+
                 if (!ex.ProcessMayHaveStarted && !criticalCheckpointPersisted)
                     kernel.ReplaceGoalWithSnapshot(goalSnapshotBeforeDispatch);
                 throw;
@@ -461,7 +474,14 @@ internal sealed partial class ConductorDriver
                             DispatchRecordWriteSucceededSink?.Invoke(goalId);
                         },
                     readCurrentInterruptedDispatchState: readCurrentInterruptedDispatchState,
-                    conductorPolicy: policy);
+                    conductorPolicy: policy,
+                    recordDurableGoalBaseline: recordDurableGoalBaseline);
+            }
+            catch (DispatchRecordWriteException ex) when (ex.PreservesAuthoritativeState)
+            {
+                var reason = ex.InnerException?.Message ?? ex.Message;
+                GoalOperationJournal.Failed(dir, goal, "conductor:dispatch-start", reason);
+                return DispatchStartOutcome.Deferred(reason);
             }
             catch (Exception ex) when (ex is not DispatchRecordWriteException)
             {
@@ -996,9 +1016,7 @@ internal sealed partial class ConductorDriver
         SliceBatchParentExecutionGuard = new SliceBatchParentExecutionGuard(() => kernel.Goals);
         _isVerificationGateSatisfied = goal => kernel.BuildVerificationGate(goal.Id).IsSatisfied;
         _gateReadyCandidateProjector = GateReadyCandidateProjector.CreateForRepository(dir);
-        _getPreReviewEvidenceContext = goal => BuildPreReviewEvidenceContext(
-            TryResolveAcceptanceBranchHead(goal),
-            _getLandingFileScopes(goal), GoalWorktrees.TryResolve(dir, goal.Id));
+        _getPreReviewEvidenceContext = goal => BuildPreReviewEvidenceContext(goal, dir);
         _getFindingEvidenceEngineSettings = goal => AcceptanceGateEngineSettings.Load(
             GoalWorktrees.TryResolve(dir, goal.Id) ?? dir);
         _resolveFindingEvidenceSiblingClasses = (goal, project, requestedClass) =>
@@ -1433,7 +1451,7 @@ internal sealed partial class ConductorDriver
 
         var reason = result.Dispatches.Count == 0
             ? DescribeEmptyBatch(result.ParallelPlan, result.BlockedDiagnostics)
-            : $"Dispatched {result.Dispatches.Count} task(s) but no processes started (spawn failed)";
+            : FormatPreparedDispatchWithoutStart(result);
         return result.Dispatches.Count == 0
             ? DispatchStartOutcome.EmptyBatch(reason)
             : DispatchStartOutcome.SpawnFailed(reason);
@@ -3061,12 +3079,22 @@ internal sealed partial class ConductorDriver
             fileScopes: [],
             branchHeadSha: candidateSha?.Trim(),
             mainHeadSha: null);
-        var attemptDecision = _focusedEvidenceAttemptCoordinator.EvaluateFocusedEvidence(
-            candidate,
-            policy,
-            request,
-            _runDualArmFocusedEvidence,
-            requestContext);
+        ConductorParallelAcceptanceAttemptDecision attemptDecision;
+        try
+        {
+            attemptDecision = _focusedEvidenceAttemptCoordinator.EvaluateFocusedEvidence(
+                candidate,
+                policy,
+                request,
+                _runDualArmFocusedEvidence,
+                requestContext);
+        }
+        catch (AcceptanceArtifactWriterLeaseBusyException ex)
+        {
+            decision = VerifyingFindingAutoRetryDecision.Hold(
+                $"Background {source} focused-evidence artifact writer is busy; retry on next conduct tick. {ex.Message}");
+            return false;
+        }
         evidenceAttempt = attemptDecision.Attempt;
         if (attemptDecision.Kind is
             ConductorParallelAcceptanceAttemptDecisionKind.Started or
@@ -4689,7 +4717,7 @@ internal sealed partial class ConductorDriver
     }
 
     private Goal GetCurrentGoal(Goal goal) =>
-        (_cohortKernel ?? _conductorTickKernel)?.GetGoal(goal.Id) ?? goal;
+        (_cohortKernel ?? _conductorTickKernel)?.Goals.SingleOrDefault(candidate => candidate.Id == goal.Id) ?? goal;
 
     private bool TryRunPreReviewEvidenceStage(
         Goal goal,
@@ -4758,7 +4786,33 @@ internal sealed partial class ConductorDriver
                 [],
                 [],
                 evidencePointer: null);
-            if (TryRoutePreReviewEvidenceToTester(
+            if (TryStopRepeatedPreReviewMappingRetry(
+                    goal,
+                    reviewerTask,
+                    goalPrefix,
+                    policy,
+                    fromState,
+                    context,
+                    currentReceipt,
+                    out result))
+            {
+                return true;
+            }
+
+            if (context.RequiresSourceCleanup && TryRoutePreReviewEvidenceToDeveloper(
+                    goal,
+                    reviewerTask,
+                    goalPrefix,
+                    policy,
+                    $"pre-review source cleanup required for candidate {context.CandidateSha}: remove the generated " +
+                    $"artifacts from the candidate and commit the cleanup before retrying; " +
+                    $"paths={FormatSourceCleanupPaths(context.SourceCleanupPaths)}",
+                    out result))
+            {
+                return true;
+            }
+
+            if (!context.RequiresSourceCleanup && TryRoutePreReviewEvidenceToTester(
                     goal,
                     reviewerTask,
                     goalPrefix,
@@ -4769,13 +4823,19 @@ internal sealed partial class ConductorDriver
                 return true;
             }
 
+            var routingRequirement = context.RequiresSourceCleanup
+                ? "source cleanup requires a writable Developer"
+                : "deterministic test-impact mapping requires typed operator/Tester selection";
             result = Escalate(
                 goal,
                 goalPrefix,
                 policy,
                 fromState,
-                $"PRE_REVIEW_MAPPING_NEEDS_INPUT: deterministic test-impact mapping requires typed operator/Tester selection; " +
+                $"PRE_REVIEW_MAPPING_NEEDS_INPUT: {routingRequirement}; " +
                 $"Reviewer dispatch is blocked for candidate {context.CandidateSha}. Reason: {context.MappingReason}. " +
+                (context.RequiresSourceCleanup
+                    ? $"Remove and commit these paths before retrying: {FormatSourceCleanupPaths(context.SourceCleanupPaths)}. "
+                    : string.Empty) +
                 $"Receipt round={receipt.ReviewerRound}.");
             return true;
         }
@@ -4786,11 +4846,26 @@ internal sealed partial class ConductorDriver
             fileScopes: [],
             branchHeadSha: context.CandidateSha,
             mainHeadSha: null);
-        var attemptDecision = _focusedEvidenceAttemptCoordinator.EvaluateFocusedEvidence(
-            candidate,
-            policy,
-            context.FocusedRequest,
-            _runFocusedEvidence);
+        ConductorParallelAcceptanceAttemptDecision attemptDecision;
+        try
+        {
+            attemptDecision = _focusedEvidenceAttemptCoordinator.EvaluateFocusedEvidence(
+                candidate,
+                policy,
+                context.FocusedRequest,
+                _runFocusedEvidence);
+        }
+        catch (AcceptanceArtifactWriterLeaseBusyException ex)
+        {
+            result = MakeResult(
+                goal.Id.Value,
+                goalPrefix,
+                policy,
+                new ConductorAdvanceOutcome.Held(
+                    fromState,
+                    $"Background pre-review evidence artifact writer is busy; retry on next conduct tick. {ex.Message}"));
+            return true;
+        }
         if (attemptDecision.Kind is
             ConductorParallelAcceptanceAttemptDecisionKind.Started or
             ConductorParallelAcceptanceAttemptDecisionKind.Running)
@@ -4857,6 +4932,19 @@ internal sealed partial class ConductorDriver
                 evidence.Checks,
                 [],
                 evidencePointer);
+            if (TryStopRepeatedPreReviewMappingRetry(
+                    goal,
+                    reviewerTask,
+                    goalPrefix,
+                    policy,
+                    fromState,
+                    context,
+                    currentReceipt,
+                    out result))
+            {
+                return true;
+            }
+
             if (TryRoutePreReviewEvidenceToTester(
                     goal,
                     reviewerTask,
@@ -4892,6 +4980,19 @@ internal sealed partial class ConductorDriver
                     [],
                     evidencePointer);
                 var mismatch = $"pre-review evidence mapping failure for candidate {context.CandidateSha}: {mappingFailure}";
+                if (TryStopRepeatedPreReviewMappingRetry(
+                        goal,
+                        reviewerTask,
+                        goalPrefix,
+                        policy,
+                        fromState,
+                        context,
+                        currentReceipt,
+                        out result))
+                {
+                    return true;
+                }
+
                 if (TryRoutePreReviewEvidenceToTester(
                         goal,
                         reviewerTask,
@@ -4900,32 +5001,6 @@ internal sealed partial class ConductorDriver
                         mismatch,
                         out result))
                 {
-                    return true;
-                }
-
-                if (currentReceipt is { Disposition: PreReviewEvidenceDisposition.MappingNeedsInput } &&
-                    string.Equals(currentReceipt.CandidateSha, context.CandidateSha, StringComparison.OrdinalIgnoreCase))
-                {
-                    var suppressedCount = 1 + goal.Timeline.Count(evt =>
-                        evt.Kind == ProgressKind.PreReviewMappingEscalationSuppressed &&
-                        evt.TaskId == reviewerTask.Id &&
-                        evt.Message.Contains($"candidate_sha={context.CandidateSha}", StringComparison.OrdinalIgnoreCase) &&
-                        evt.Message.Contains(
-                            $"disposition={PreReviewEvidenceDisposition.MappingNeedsInput}",
-                            StringComparison.Ordinal));
-                    _recordPreReviewMappingEscalationSuppressed(
-                        goal.Id,
-                        reviewerTask.Id,
-                        context.CandidateSha,
-                        suppressedCount);
-                    result = MakeResult(
-                        goal.Id.Value,
-                        goalPrefix,
-                        policy,
-                        new ConductorAdvanceOutcome.Held(
-                            fromState,
-                            $"PRE_REVIEW_MAPPING_NEEDS_INPUT repeat suppressed for candidate {context.CandidateSha}; " +
-                            $"suppressed_count={suppressedCount}."));
                     return true;
                 }
 
@@ -4965,6 +5040,19 @@ internal sealed partial class ConductorDriver
             var apparatusDetail =
                 $"pre-review focused selection apparatus failure for candidate {context.CandidateSha}; " +
                 $"the run executed zero tests and is not candidate-failure evidence; pointer={evidencePointer ?? "none"}";
+            if (TryStopRepeatedPreReviewMappingRetry(
+                    goal,
+                    reviewerTask,
+                    goalPrefix,
+                    policy,
+                    fromState,
+                    context,
+                    currentReceipt,
+                    out result))
+            {
+                return true;
+            }
+
             if (TryRoutePreReviewEvidenceToTester(
                     goal,
                     reviewerTask,
@@ -5028,8 +5116,98 @@ internal sealed partial class ConductorDriver
             : $"pre-review build repair: candidate {context.CandidateSha}; diagnostic: {buildDiagnostic}; " +
                 $"evidence pointer: {evidencePointer ?? "none"}";
         _retryTask(goal.Id, developerTask.Id, retryMessage, RetryRoundKind.Mechanical, RetryCause.NewSourceFinding);
-        var retryState = GoalLifecycle.ResolveState(goal, GetFacts(goal));
-        result = ExecuteDispatchAndStart(goal, goalPrefix, policy, retryState);
+        var refreshedGoal = GetCurrentGoal(goal);
+        var retryState = GoalLifecycle.ResolveState(refreshedGoal, GetFacts(refreshedGoal));
+        result = ExecuteDispatchAndStart(refreshedGoal, goalPrefix, policy, retryState);
+        return true;
+    }
+
+    private bool TryStopRepeatedPreReviewMappingRetry(
+        Goal goal,
+        TaskSpec reviewerTask,
+        string goalPrefix,
+        ConductorAutonomyPolicy policy,
+        GoalLifecycleState fromState,
+        PreReviewEvidenceContext context,
+        PreReviewEvidenceReceipt? priorReceipt,
+        out ConductorAdvanceResult result)
+    {
+        if (priorReceipt is not { Disposition: PreReviewEvidenceDisposition.MappingNeedsInput } ||
+            !priorReceipt.MatchesCurrentCandidate(
+                goal.Id.Value,
+                context.CandidateSha!,
+                context.SelectedFocusedTests))
+        {
+            result = default!;
+            return false;
+        }
+
+        var requiredRole = context.RequiresSourceCleanup ? AgentRole.Developer : AgentRole.Tester;
+        var repairTask = TasksBefore(goal, reviewerTask)
+            .LastOrDefault(task => task.RequiredRole == requiredRole);
+        if (repairTask is not null)
+        {
+            var remedy = context.RequiresSourceCleanup
+                ? $" Remove and commit these paths: {FormatSourceCleanupPaths(context.SourceCleanupPaths)}."
+                : " Correct the test-impact mapping or provide an explicit focused-test selection before retrying.";
+            result = Escalate(
+                goal,
+                goalPrefix,
+                policy,
+                fromState,
+                $"PRE_REVIEW_MAPPING_RETRY_DID_NOT_CONVERGE: automatic {requiredRole} retry left candidate " +
+                $"{context.CandidateSha} with the same mapping-needed disposition; no further paid retry was started.{remedy}");
+            return true;
+        }
+
+        var suppressedCount = 1 + goal.Timeline.Count(evt =>
+            evt.Kind == ProgressKind.PreReviewMappingEscalationSuppressed &&
+            evt.TaskId == reviewerTask.Id &&
+            evt.Message.Contains($"candidate_sha={context.CandidateSha}", StringComparison.OrdinalIgnoreCase) &&
+            evt.Message.Contains(
+                $"disposition={PreReviewEvidenceDisposition.MappingNeedsInput}",
+                StringComparison.Ordinal));
+        _recordPreReviewMappingEscalationSuppressed(
+            goal.Id,
+            reviewerTask.Id,
+            context.CandidateSha!,
+            suppressedCount);
+        result = MakeResult(
+            goal.Id.Value,
+            goalPrefix,
+            policy,
+            new ConductorAdvanceOutcome.Held(
+                fromState,
+                $"PRE_REVIEW_MAPPING_NEEDS_INPUT repeat suppressed for candidate {context.CandidateSha}; " +
+                $"suppressed_count={suppressedCount}."));
+        return true;
+    }
+
+    private bool TryRoutePreReviewEvidenceToDeveloper(
+        Goal goal,
+        TaskSpec reviewerTask,
+        string goalPrefix,
+        ConductorAutonomyPolicy policy,
+        string reason,
+        out ConductorAdvanceResult result)
+    {
+        var developerTask = TasksBefore(goal, reviewerTask)
+            .LastOrDefault(task => task.RequiredRole == AgentRole.Developer);
+        if (developerTask is null)
+        {
+            result = default!;
+            return false;
+        }
+
+        _retryTask(
+            goal.Id,
+            developerTask.Id,
+            reason,
+            RetryRoundKind.Mechanical,
+            RetryCause.NewSourceFinding);
+        var refreshedGoal = GetCurrentGoal(goal);
+        var retryState = GoalLifecycle.ResolveState(refreshedGoal, GetFacts(refreshedGoal));
+        result = ExecuteDispatchAndStart(refreshedGoal, goalPrefix, policy, retryState);
         return true;
     }
 
@@ -5055,29 +5233,51 @@ internal sealed partial class ConductorDriver
             reason,
             RetryRoundKind.Mechanical,
             RetryCause.NewTestFinding);
-        var retryState = GoalLifecycle.ResolveState(goal, GetFacts(goal));
-        result = ExecuteDispatchAndStart(goal, goalPrefix, policy, retryState);
+        var refreshedGoal = GetCurrentGoal(goal);
+        var retryState = GoalLifecycle.ResolveState(refreshedGoal, GetFacts(refreshedGoal));
+        result = ExecuteDispatchAndStart(refreshedGoal, goalPrefix, policy, retryState);
         return true;
     }
+
+    internal static PreReviewEvidenceContext BuildPreReviewEvidenceContext(Goal goal, string executionDirectory)
+    {
+        var worktreePath = GoalWorktrees.TryResolve(executionDirectory, goal.Id);
+        var candidateSha = worktreePath is null ? null : TryResolveGitHead(worktreePath);
+        var changedFiles = worktreePath is null
+            ? Array.Empty<string>()
+            : GoalAcceptanceEvidenceBundleBuilder.GetChangedFiles(worktreePath);
+        return BuildPreReviewEvidenceContext(
+            candidateSha,
+            changedFiles,
+            worktreePath);
+    }
+
+    internal PreReviewEvidenceContext GetPreReviewEvidenceContext(Goal goal) =>
+        _getPreReviewEvidenceContext(goal);
 
     internal static PreReviewEvidenceContext BuildPreReviewEvidenceContext(
         string? candidateSha, IReadOnlyList<string> changedFiles, string? repositoryRoot = null)
     {
-        var plan = string.IsNullOrWhiteSpace(repositoryRoot) ? RepositoryTestImpactPlanner.Plan(changedFiles) : RepositoryTestImpactPlanner.Plan(changedFiles, repositoryRoot);
+        var changeSummary = RepositoryChangeClassifier.Classify(changedFiles);
+        var plan = string.IsNullOrWhiteSpace(repositoryRoot)
+            ? RepositoryTestImpactPlanner.Plan(changeSummary)
+            : RepositoryTestImpactPlanner.Plan(changeSummary, repositoryRoot);
         if (!plan.RequiresBuild &&
             plan.Checks.Count > 0 &&
             plan.Checks.All(check => check.Command.Count == 0))
         {
-            var generatedArtifactsBlock = plan.Summary.Contains(
-                "Generated artifacts",
-                StringComparison.OrdinalIgnoreCase);
+            var generatedArtifactsBlock = changeSummary.HasGeneratedArtifacts;
             return new PreReviewEvidenceContext(
                 candidateSha,
                 [],
                 null,
                 plan.Summary,
                 NoApplicableTests: !generatedArtifactsBlock,
-                MappingNeedsInput: generatedArtifactsBlock);
+                MappingNeedsInput: generatedArtifactsBlock,
+                SourceCleanupPaths: changeSummary.Files
+                    .Where(file => file.IsGeneratedArtifact)
+                    .Select(file => file.Path)
+                    .ToArray());
         }
 
         var focusedChecks = plan.Checks
@@ -5462,6 +5662,38 @@ internal sealed partial class ConductorDriver
         return skippedReason is null
             ? "Dispatch recorded but no process was startable."
             : $"Dispatch recorded but no process was startable: {skippedReason}";
+    }
+
+    private static string FormatPreparedDispatchWithoutStart(SubscriptionStartResult result)
+    {
+        const int maxPreparedDiagnostics = 8;
+        var preparedState = result.Dispatches
+            .Take(maxPreparedDiagnostics)
+            .Select(dispatch =>
+            {
+                var task = dispatch.Task;
+                var admission = task.RetryAdmissionHistory.LastOrDefault(receipt =>
+                    receipt.LinkedDispatchAt == task.LastDispatch?.DispatchedAt);
+                var admissionState = admission is null
+                    ? "none"
+                    : $"{admission.Decision}/{admission.Route}/{admission.Cause}";
+                return $"{task.Id.Value[..8]}:status={task.Status}:admission={admissionState}";
+            })
+            .ToArray();
+        var omitted = result.Dispatches.Count - preparedState.Length;
+        var omittedSuffix = omitted > 0 ? $",...(+{omitted})" : string.Empty;
+        return $"Prepared {result.Dispatches.Count} dispatch(es) but no process was startable; " +
+               $"{FormatNoRecordedDispatchStartedReason(result.Processes.Plan)}; " +
+               $"prepared=[{string.Join(',', preparedState)}{omittedSuffix}]";
+    }
+
+    private static string FormatSourceCleanupPaths(IReadOnlyList<string>? paths)
+    {
+        const int maxPaths = 20;
+        var available = paths ?? [];
+        var listed = string.Join(", ", available.Take(maxPaths).Select(path => $"'{path}'"));
+        var omitted = available.Count - Math.Min(available.Count, maxPaths);
+        return omitted > 0 ? $"[{listed}, ... (+{omitted})]" : $"[{listed}]";
     }
 
     // Turns an empty subscription dispatch batch into an ACTIONABLE escalation. When the parallel

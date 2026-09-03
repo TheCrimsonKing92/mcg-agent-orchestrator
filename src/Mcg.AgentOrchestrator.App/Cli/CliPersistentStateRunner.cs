@@ -915,16 +915,21 @@ internal static class CliPersistentStateRunner
         var operatorIntentStore = SqliteOperatorIntentStore.ForDirectories(
             workspace.OrchestratorDirectory,
             workspace.LogDirectory);
+        var tickBaselines = new Dictionary<string, GoalSnapshot>(StringComparer.Ordinal);
         AgentOrchestratorKernel LoadLoopKernel() => LoadLoopKernelForGoals([]);
 
-        AgentOrchestratorKernel LoadLoopKernelForGoals(IReadOnlyCollection<string> trackedGoalIds) =>
-            LoadConductLoopKernel(
+        AgentOrchestratorKernel LoadLoopKernelForGoals(IReadOnlyCollection<string> trackedGoalIds)
+        {
+            var loaded = LoadConductLoopKernel(
                 stateRepository,
                 operatorIntentStore.ListActionableGoalIdsAsync().GetAwaiter().GetResult()
                     .Concat(trackedGoalIds)
                     .Distinct(StringComparer.Ordinal)
                     .ToArray(),
                 workspace.ExecutionDirectory);
+            CaptureMissingConductLoopTickBaselines(tickBaselines, loaded);
+            return loaded;
+        }
         var startupStopPath = Path.Combine(workspace.ExecutionDirectory, ConductorBatchLoop.StopFileName);
         TransientSqliteLoadHold? initialConductLoopLoadHold = null;
         var kernel = LoadInitialConductLoopKernelWithTransientHold(
@@ -932,7 +937,7 @@ internal static class CliPersistentStateRunner
             workspace,
             stopRequested: () => File.Exists(startupStopPath),
             onHoldExhausted: hold => initialConductLoopLoadHold = hold);
-        var tickBaselines = kernel.ExportSnapshot().Goals.ToDictionary(goal => goal.Id, StringComparer.Ordinal);
+        tickBaselines = kernel.ExportSnapshot().Goals.ToDictionary(goal => goal.Id, StringComparer.Ordinal);
         TerminalGoalSweepResult? sweep = null;
         try
         {
@@ -979,6 +984,15 @@ internal static class CliPersistentStateRunner
             var results = stateRepository.SaveGoalSnapshotsWithMergeAsync(requests, CancellationToken.None).GetAwaiter().GetResult();
             ApplyDurableResults(checkpoint, results);
         }
+
+        void PersistCriticalGoals(AgentOrchestratorKernel checkpoint, IReadOnlyCollection<GoalId> changedGoalIds)
+            => PersistCriticalGoalSnapshotsOrThrow(
+                stateRepository,
+                checkpoint,
+                changedGoalIds,
+                tickBaselines,
+                workspace.SqliteStatePath,
+                results => ApplyDurableResults(checkpoint, results));
 
         IReadOnlyList<GoalSnapshotCheckpointResult> CheckpointGoals(
             AgentOrchestratorKernel checkpoint,
@@ -1036,6 +1050,11 @@ internal static class CliPersistentStateRunner
             var persistedTerminalGoalIdValues = new HashSet<string>(StringComparer.Ordinal);
             foreach (var result in results)
             {
+                if (RebaseCheckpointAfterDurableSave(checkpoint, result) &&
+                    loopCurrentGoal?.Id.Value == result.GoalId)
+                {
+                    loopCurrentGoal = checkpoint.GetGoal(new GoalId(result.GoalId));
+                }
                 if (result.PersistedSnapshot is not null)
                 {
                     if (IsConductLoopTerminalStatus(result.PersistedSnapshot.Status.ToString()))
@@ -1081,7 +1100,9 @@ internal static class CliPersistentStateRunner
             reloadParkedGoalSafetyNetKernel: () => LoadConductLoopParkedGoalSafetyNetKernel(stateRepository),
             reloadKernelForGoals: LoadLoopKernelForGoals,
             checkpointGoalKernel: CheckpointGoals,
-            initialConductLoopLoadHold: initialConductLoopLoadHold);
+            initialConductLoopLoadHold: initialConductLoopLoadHold,
+            persistCriticalGoalKernel: PersistCriticalGoals,
+            recordDurableGoalBaseline: snapshot => tickBaselines[snapshot.Id] = snapshot);
 
         // A successful handoff has transferred the lease and authority to the successor. All incumbent
         // tick state was persisted before handoff; do not write once the successor owns the loop.
@@ -1089,6 +1110,99 @@ internal static class CliPersistentStateRunner
             _ = CheckpointGoals(kernel, kernel.Goals.Select(goal => goal.Id).ToArray());
         currentGoal = loopCurrentGoal;
         return shouldSave;
+    }
+
+    internal static bool RebaseCheckpointAfterDurableSave(
+        AgentOrchestratorKernel checkpoint,
+        GoalSnapshotSaveResult result)
+    {
+        ArgumentNullException.ThrowIfNull(checkpoint);
+        ArgumentNullException.ThrowIfNull(result);
+
+        if (result.PersistedSnapshot is null ||
+            result.Disposition is not (GoalSnapshotSaveDisposition.Merged or GoalSnapshotSaveDisposition.Skipped))
+        {
+            return false;
+        }
+
+        // A merge/skip means the store, not the submitted tick snapshot, is authoritative. Keeping
+        // the old aggregate alive lets the following tick repeat a side effect for a task that the
+        // merged row has already advanced (for example, redispatching a manually verified Tester).
+        if (result.PersistedHumanInputRequests is null)
+        {
+            checkpoint.ReplaceGoalWithSnapshot(result.PersistedSnapshot);
+        }
+        else
+        {
+            checkpoint.ReplaceGoalStateWithSnapshot(
+                result.PersistedSnapshot,
+                result.PersistedHumanInputRequests);
+        }
+        return true;
+    }
+
+    internal static void CaptureMissingConductLoopTickBaselines(
+        IDictionary<string, GoalSnapshot> tickBaselines,
+        AgentOrchestratorKernel loadedKernel)
+    {
+        ArgumentNullException.ThrowIfNull(tickBaselines);
+        ArgumentNullException.ThrowIfNull(loadedKernel);
+        foreach (var goal in loadedKernel.ExportSnapshot().Goals)
+            tickBaselines.TryAdd(goal.Id, goal);
+    }
+
+    internal static void PersistCriticalGoalSnapshotsOrThrow(
+        ITransactionalOrchestratorStateRepository stateRepository,
+        AgentOrchestratorKernel checkpoint,
+        IReadOnlyCollection<GoalId> changedGoalIds,
+        IReadOnlyDictionary<string, GoalSnapshot> tickBaselines,
+        string databasePath,
+        Action<IReadOnlyList<GoalSnapshotSaveResult>> applyDurableResults)
+    {
+        ArgumentNullException.ThrowIfNull(stateRepository);
+        ArgumentNullException.ThrowIfNull(checkpoint);
+        ArgumentNullException.ThrowIfNull(changedGoalIds);
+        ArgumentNullException.ThrowIfNull(tickBaselines);
+        ArgumentException.ThrowIfNullOrWhiteSpace(databasePath);
+        ArgumentNullException.ThrowIfNull(applyDurableResults);
+
+        var missingBaselines = changedGoalIds
+            .Where(goalId => !tickBaselines.ContainsKey(goalId.Value))
+            .Select(goalId => goalId.Value)
+            .ToArray();
+        if (missingBaselines.Length > 0)
+        {
+            throw new DispatchCheckpointConflictException(
+                $"Critical dispatch checkpoint has no tick baseline for goal(s) {string.Join(',', missingBaselines.Select(id => id[..Math.Min(8, id.Length)]))}; worker start was aborted.");
+        }
+
+        var requests = BuildConductLoopCheckpointRequests(
+                checkpoint,
+                changedGoalIds,
+                tickBaselines,
+                stateRepository,
+                databasePath,
+                containTransientBaselineLoads: false,
+                out _)
+            .Select(request => request with { RejectConflict = true })
+            .ToArray();
+        if (requests.Length != changedGoalIds.Count)
+        {
+            throw new InvalidOperationException(
+                $"Critical dispatch checkpoint could not resolve every requested goal ({requests.Length}/{changedGoalIds.Count}).");
+        }
+
+        var results = stateRepository.SaveGoalSnapshotsWithMergeAsync(requests, CancellationToken.None)
+            .GetAwaiter()
+            .GetResult();
+        applyDurableResults(results);
+
+        var conflict = results.FirstOrDefault(result => result.Disposition != GoalSnapshotSaveDisposition.Saved);
+        if (conflict is not null)
+        {
+            throw new DispatchCheckpointConflictException(
+                $"Critical dispatch checkpoint rejected stale state for goal {conflict.GoalId[..Math.Min(8, conflict.GoalId.Length)]}; worker start was aborted and the next tick will re-evaluate the authoritative task state.");
+        }
     }
 
     internal static GoalSnapshotSaveRequest[] BuildConductLoopCheckpointRequests(
@@ -3800,6 +3914,10 @@ internal static class CliPersistentStateRunner
             ("goalCount", 1));
         var initialGoalSnapshot = ExportGoalSnapshot(kernel, goalId);
         var initialGoalJson = JsonSerializer.Serialize(initialGoalSnapshot);
+        var conductTickBaselines = new Dictionary<string, GoalSnapshot>(StringComparer.Ordinal)
+        {
+            [initialGoalSnapshot.Id] = initialGoalSnapshot
+        };
 
         var reconcileStarted = System.Diagnostics.Stopwatch.StartNew();
         var targetSweep = TerminalGoalSweep.Run(kernel, workspace.ExecutionDirectory, goalId, orchestratorDirectory: workspace.OrchestratorDirectory);
@@ -3820,6 +3938,7 @@ internal static class CliPersistentStateRunner
         var updatedCurrentGoal = currentGoal;
         var acceptanceFinalStatePersisted = false;
         var acceptanceGuardAborted = false;
+        var criticalCheckpointRejected = false;
 
         void Persist(AgentOrchestratorKernel checkpoint) =>
             PersistSingleGoalSnapshot(stateRepository, checkpoint, goalId);
@@ -3827,6 +3946,42 @@ internal static class CliPersistentStateRunner
         void PersistCurrentGoal(AgentOrchestratorKernel checkpoint, GoalId goalId)
         {
             PersistSingleGoalSnapshot(stateRepository, checkpoint, goalId);
+        }
+
+        void ApplyCriticalDurableResults(
+            AgentOrchestratorKernel checkpoint,
+            IReadOnlyList<GoalSnapshotSaveResult> results)
+        {
+            foreach (var result in results)
+            {
+                _ = RebaseCheckpointAfterDurableSave(checkpoint, result);
+                if (result.PersistedSnapshot is not null)
+                    conductTickBaselines[result.GoalId] = result.PersistedSnapshot;
+            }
+        }
+
+        void PersistCriticalCurrentGoal(
+            AgentOrchestratorKernel checkpoint,
+            IReadOnlyCollection<GoalId> changedGoalIds)
+        {
+            try
+            {
+                PersistCriticalGoalSnapshotsOrThrow(
+                    stateRepository,
+                    checkpoint,
+                    changedGoalIds,
+                    conductTickBaselines,
+                    workspace.SqliteStatePath,
+                    results => ApplyCriticalDurableResults(checkpoint, results));
+            }
+            catch (DispatchCheckpointConflictException)
+            {
+                // The rejected checkpoint already rebased this kernel to the store's authoritative
+                // snapshot. A generic end-of-command write would reopen a second-writer window and
+                // could replace a newer operator update with that just-rebased snapshot.
+                criticalCheckpointRejected = true;
+                throw;
+            }
         }
 
         AcceptanceMergeGuardPreflightResult PrepareAcceptanceMergeGuard(AcceptanceMergeGuardPreflightRequest request)
@@ -3904,7 +4059,9 @@ internal static class CliPersistentStateRunner
             acceptanceVerifier: acceptanceVerifier,
             phaseTimings: phaseTimings,
             registerAcceptanceGuardAbort: () => acceptanceGuardAborted = true,
-            prepareAcceptanceMergeGuard: PrepareAcceptanceMergeGuard);
+            prepareAcceptanceMergeGuard: PrepareAcceptanceMergeGuard,
+            persistCriticalGoalKernel: PersistCriticalCurrentGoal,
+            recordDurableGoalBaseline: snapshot => conductTickBaselines[snapshot.Id] = snapshot);
 
         currentGoal = updatedCurrentGoal;
 
@@ -3926,7 +4083,8 @@ internal static class CliPersistentStateRunner
         {
             if (persistOnlyCurrentGoal && currentGoal is not null)
             {
-                PersistCurrentGoal(kernel, currentGoal.Id);
+                if (!criticalCheckpointRejected)
+                    PersistCurrentGoal(kernel, currentGoal.Id);
             }
             else
             {
