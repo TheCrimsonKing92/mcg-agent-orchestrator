@@ -1,7 +1,6 @@
 using Mcg.AgentOrchestrator.App.Cli;
 using Mcg.AgentOrchestrator.App.Orchestration;
 using Mcg.AgentOrchestrator.Infrastructure;
-using Microsoft.Data.Sqlite;
 using System.Diagnostics;
 using System.Runtime.CompilerServices;
 using System.Security.Cryptography;
@@ -1898,7 +1897,7 @@ public sealed class LauncherScriptTests
         Directory.CreateDirectory(coreSourcePath);
         Directory.CreateDirectory(Path.Combine(outputPath, "runtimes", "win-x64", "native"));
 
-        var dbPath = CreateSqliteToolSmokeDb();
+        var dbPath = Path.Combine(repositoryRoot, "state.db");
         try
         {
             var sourceRoot = FindLauncherSourceRoot();
@@ -1947,7 +1946,7 @@ public sealed class LauncherScriptTests
             var dotnetShimPath = Path.Combine(repositoryRoot, "dotnet.ps1");
             File.WriteAllText(dotnetShimPath, """
                 [IO.File]::WriteAllLines($env:SQLITE_TEST_INVOCATION, @($args))
-                Write-Output "SQLite wrapper smoke"
+                Write-Output "DOTNET_SHIM_INVOKED"
                 """);
             var wrapperPath = Path.Combine(scriptsPath, "Invoke-RepoScript.ps1");
             var result = RunPowerShellCommand(repositoryRoot, $"""
@@ -1961,7 +1960,7 @@ public sealed class LauncherScriptTests
             Assert.True(string.IsNullOrWhiteSpace(result.Stderr), result.Stderr);
             Assert.DoesNotContain("NU1900", result.Stdout, StringComparison.OrdinalIgnoreCase);
             Assert.DoesNotContain("NU1301", result.Stdout, StringComparison.OrdinalIgnoreCase);
-            Assert.Contains("SQLite wrapper smoke", result.Stdout);
+            Assert.Contains("DOTNET_SHIM_INVOKED", result.Stdout);
             var invocation = File.ReadAllLines(invocationPath);
             Assert.Equal(6, invocation.Length);
             Assert.Equal(artifactPath, invocation[0], ignoreCase: true);
@@ -1976,7 +1975,6 @@ public sealed class LauncherScriptTests
         finally
         {
             TryDeleteDirectory(repositoryRoot);
-            TryDeleteDirectory(Path.GetDirectoryName(dbPath)!);
         }
     }
 
@@ -3019,29 +3017,6 @@ public sealed class LauncherScriptTests
             " | ",
             results.Select((result, index) =>
                 $"process={index + 1} exit={result.ExitCode} stdout={result.Stdout.Trim()} stderr={result.Stderr.Trim()}"));
-    }
-
-    private static string CreateSqliteToolSmokeDb()
-    {
-        var directory = Path.Combine(Path.GetTempPath(), $"sqlite-tool-smoke-{Guid.NewGuid():N}");
-        Directory.CreateDirectory(directory);
-        var dbPath = Path.Combine(directory, "state.db");
-        using var connection = new SqliteConnection($"Data Source={dbPath};Mode=ReadWriteCreate;Pooling=False;");
-        connection.Open();
-        using var create = connection.CreateCommand();
-        create.CommandText = """
-            CREATE TABLE goals (
-                id TEXT NOT NULL PRIMARY KEY,
-                status TEXT NOT NULL,
-                snapshot_json TEXT NOT NULL,
-                updated_at TEXT NOT NULL,
-                version INTEGER NOT NULL DEFAULT 0
-            );
-            INSERT INTO goals (id, status, snapshot_json, updated_at, version)
-            VALUES ('11111111111111111111111111111111', 'Active', '{"Objective":"SQLite wrapper smoke"}', '2026-06-30T00:00:00.0000000Z', 1);
-            """;
-        create.ExecuteNonQuery();
-        return dbPath;
     }
 
     private static void WaitForFile(string path, TimeSpan timeout)
