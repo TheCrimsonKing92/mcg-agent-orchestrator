@@ -64,30 +64,6 @@ internal static class TempRootApparatusLossReceiptStore
         SharedJsonlFile.AppendLine(path, JsonSerializer.Serialize(receipt, JsonOptions));
     }
 
-    internal static void RecordDeletedOwners(IEnumerable<TempRootJanitorReapResult> results)
-    {
-        var context = CurrentContext.Value;
-        if (context is null)
-        {
-            return;
-        }
-
-        foreach (var group in results
-            .Where(result => result.Disposition == TempRootJanitorReapDisposition.Deleted &&
-                result.CapturedOwner?.StartedAt is not null)
-            .GroupBy(result => result.SharedRoot, StringComparer.OrdinalIgnoreCase))
-        {
-            RecordDeletedOwners(
-                group.Key,
-                group
-                .Select(result => new TempRootApparatusDestroyedOwner(
-                    result.ProcessId,
-                    result.CapturedOwner!.StartedAt!.Value,
-                    result.Path))
-                .ToArray());
-        }
-    }
-
     internal static void RecordDeletedOwners(
         string sharedRoot,
         IEnumerable<TempRootApparatusDestroyedOwner> destroyedOwners)
@@ -210,6 +186,8 @@ internal static class AcceptanceSharedApparatusInvalidationClassifier
         ArgumentNullException.ThrowIfNull(failedPartitions);
         ArgumentNullException.ThrowIfNull(receipts);
 
+        TempRootApparatusLossReceiptV1? firstReceipt = null;
+        var affectedOwners = new List<AcceptanceSharedApparatusAffectedOwner>();
         foreach (var receipt in receipts)
         {
             if (!IsEligibleReceipt(receipt, gateInvocationId))
@@ -226,13 +204,30 @@ internal static class AcceptanceSharedApparatusInvalidationClassifier
                 .Select(owner => owner!)
                 .DistinctBy(owner => owner.PartitionId, StringComparer.OrdinalIgnoreCase)
                 .ToArray();
-            if (affected.Length >= 2)
+            if (affected.Length < 2)
             {
-                return new AcceptanceSharedApparatusInvalidation(receipt, affected);
+                continue;
+            }
+
+            firstReceipt ??= receipt;
+            if (!PathsEqual(firstReceipt.SharedRoot, receipt.SharedRoot))
+            {
+                continue;
+            }
+
+            foreach (var owner in affected)
+            {
+                if (!affectedOwners.Any(existing =>
+                    existing.PartitionId.Equals(owner.PartitionId, StringComparison.OrdinalIgnoreCase)))
+                {
+                    affectedOwners.Add(owner);
+                }
             }
         }
 
-        return null;
+        return firstReceipt is null
+            ? null
+            : new AcceptanceSharedApparatusInvalidation(firstReceipt, affectedOwners);
     }
 
     private static bool IsEligibleReceipt(

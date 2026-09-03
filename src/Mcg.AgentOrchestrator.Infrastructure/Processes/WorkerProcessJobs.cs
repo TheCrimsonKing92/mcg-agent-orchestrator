@@ -1649,8 +1649,7 @@ public static class WorkerProcessJobs
         Action<string>? emit = null)
     {
         ArgumentNullException.ThrowIfNull(results);
-        var materialized = results.ToArray();
-        foreach (var result in materialized)
+        foreach (var result in results)
         {
             var diagnostic = TempRootJanitor.FormatDiagnostic(result);
             try
@@ -1671,15 +1670,6 @@ public static class WorkerProcessJobs
             }
         }
 
-        try
-        {
-            TempRootApparatusLossReceiptStore.RecordDeletedOwners(materialized);
-        }
-        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
-        {
-            Debug.WriteLine(
-                $"[WorkerProcessJobs] Failed to persist typed temp-root receipt: {ex.GetType().Name}");
-        }
     }
 
     private static bool TryDetachAndDispose(RegisteredJob job)

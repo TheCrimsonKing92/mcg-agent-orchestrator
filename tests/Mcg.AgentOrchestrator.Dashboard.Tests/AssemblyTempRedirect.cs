@@ -137,16 +137,10 @@ internal static class AssemblyTempRedirect
                               candidate => Directory.GetLastWriteTimeUtc(Path.Combine(sharedRoot, candidate))))
                           .Take(MaxRootsReapedPerProcess)
                           .ToArray();
-            var destroyedOwners = new List<TempRootApparatusDestroyedOwner>();
             foreach (var candidate in RevalidateExitedRoots(bounded, inspect))
             {
                 var path = Path.Combine(sharedRoot, candidate.Name);
-                var capturedOwner = TryReadOwnedRootIdentity(path, candidate.ProcessId);
                 var outcome = deleteTree(path);
-                if (outcome.Status == TempRootJanitorDeleteStatus.Deleted && capturedOwner is not null)
-                {
-                    destroyedOwners.Add(capturedOwner);
-                }
                 TryWriteReceipt(
                     writeReceipt,
                     () => FormatReapReceipt(
@@ -157,7 +151,6 @@ internal static class AssemblyTempRedirect
                         outcome));
             }
 
-            TempRootApparatusLossReceiptStore.RecordDeletedOwners(sharedRoot, destroyedOwners);
         }
         catch (Exception)
         {

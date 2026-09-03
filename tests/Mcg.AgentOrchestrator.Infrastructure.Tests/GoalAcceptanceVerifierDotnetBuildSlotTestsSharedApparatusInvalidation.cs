@@ -140,6 +140,114 @@ public sealed class GoalAcceptanceVerifierDotnetBuildSlotTestsSharedApparatusInv
         }
     }
 
+    [Xunit.Fact(Timeout = 60_000)]
+    public async Task CorrelatedLoss_SequentialBatchStopsPendingShards()
+    {
+        GoalAcceptanceVerifier.ResolveShardCoreBudgetForTests = () => 1;
+        GoalAcceptanceVerifier.PartitionVerdictWithinAttemptRerunEnabled = false;
+        SetPartitionVerdictKeyHooks("sequential-tree", "sequential-main", "sequential-candidate");
+        var root = CreateCheckedInManifestShapeWorkspace();
+        var attemptPrefix = Path.Combine(root, "attempt", "sequential-loss-attempt");
+        var receiptPath = TempRootApparatusLossReceiptStore.ResolvePath(attemptPrefix)!;
+        var sharedRoot = Path.Combine(root, "owned-temp-parent");
+        var firstStartedAt = DateTimeOffset.Parse("2026-09-02T14:00:00Z");
+        var secondStartedAt = firstStartedAt.AddSeconds(1);
+        var shardCalls = new List<string>();
+        DotnetBuildEnvironmentLease? lease = null;
+        DotnetBuildEnvironment? environment = null;
+        try
+        {
+            using var attemptScope = GoalAcceptanceVerifier.PushAcceptanceAttemptResultsPrefix(attemptPrefix);
+            Task<GoalAcceptanceVerifier.CommandResult> RunAsync(
+                string[] args,
+                string _,
+                CancellationToken cancellationToken)
+            {
+                if (TryWriteMtpBuildArtifacts(args, "sequential shared apparatus fixture"))
+                {
+                    return Task.FromResult(new GoalAcceptanceVerifier.CommandResult(0, "Build succeeded."));
+                }
+
+                var filterIndex = Array.IndexOf(args, "--filter-class");
+                if (filterIndex < 0)
+                {
+                    filterIndex = Array.IndexOf(args, "--filter-not-class");
+                }
+                if (filterIndex < 0 || !IsMtpExecutableCall(args, "Mcg.AgentOrchestrator.Infrastructure.Tests"))
+                {
+                    return Task.FromResult(new GoalAcceptanceVerifier.CommandResult(0, "Passed: 1"));
+                }
+
+                WriteMtpTrx(args);
+                shardCalls.Add(args[filterIndex + 1]);
+                return shardCalls.Count switch
+                {
+                    1 => Task.FromResult(FailedShard(6101, firstStartedAt, "first owner lost")),
+                    2 => Task.FromResult(AppendReceiptAndFailSecond()),
+                    _ => throw new InvalidOperationException("A pending sequential partition ran after shared apparatus invalidation.")
+                };
+            }
+
+            GoalAcceptanceVerifier.CommandResult AppendReceiptAndFailSecond()
+            {
+                TempRootApparatusLossReceiptStore.Append(
+                    receiptPath,
+                    new TempRootApparatusLossReceiptV1(
+                        1,
+                        "sequential-loss-attempt",
+                        "sequential-discriminating-receipt",
+                        sharedRoot,
+                        [
+                            DestroyedOwner(sharedRoot, 6101, firstStartedAt),
+                            DestroyedOwner(sharedRoot, 6102, secondStartedAt)
+                        ],
+                        firstStartedAt.AddMinutes(1)));
+                return FailedShard(6102, secondStartedAt, "second owner lost");
+            }
+
+            var verifier = new GoalAcceptanceVerifier(RunAsync);
+            lease = DotnetBuildEnvironmentManager.AcquireFirstAvailableStableSlotExecutionLock(
+                TimeSpan.FromSeconds(2));
+            environment = lease.Environment;
+
+            var result = await verifier.RunAsync(
+                root,
+                new GoalId("6f9ddf547adb404187dc00863bb749c1"),
+                changedFiles: ["src/Mcg.AgentOrchestrator.Infrastructure/Workspaces/GoalAcceptanceVerifier.cs"],
+                stableSlotIndex: StableSlotIndex(environment.ArtifactsPath),
+                stableSlotLease: lease,
+                cancellationToken: TestContext.Current.CancellationToken);
+
+            Xunit.Assert.False(result.Passed);
+            Xunit.Assert.Equal(2, shardCalls.Count);
+            var invalidated = Xunit.Assert.Single(
+                result.Checks!,
+                check => check.FailureClassification ==
+                    AcceptanceFailureClassifications.SharedGateApparatusInvalidated);
+            Xunit.Assert.Contains(
+                "receipt_id=sequential-discriminating-receipt",
+                invalidated.FailureCauseEvidence?.Evidence,
+                StringComparison.Ordinal);
+            Xunit.Assert.DoesNotContain(
+                result.Checks!,
+                check => !check.Passed &&
+                    check.Name.StartsWith("infrastructure tests:", StringComparison.Ordinal) &&
+                    check.FailureClassification != AcceptanceFailureClassifications.SharedGateApparatusInvalidated);
+        }
+        finally
+        {
+            lease?.Dispose();
+            if (environment is not null)
+            {
+                DotnetBuildEnvironmentManager.TryCleanupSuccessfulRun(environment);
+            }
+            GoalAcceptanceVerifier.ResolveShardCoreBudgetForTests = null;
+            GoalAcceptanceVerifier.PartitionVerdictWithinAttemptRerunEnabled = true;
+            ResetPartitionVerdictKeyHooks();
+            DeleteDirectoryWithRetry(root);
+        }
+    }
+
     private static GoalAcceptanceVerifier.CommandResult FailedShard(
         int processId,
         DateTimeOffset startedAt,

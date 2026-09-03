@@ -220,11 +220,9 @@ internal static class AssemblyTempRedirect
         ArgumentNullException.ThrowIfNull(timings);
 
         var outcomes = new List<TempRootDeleteOutcome>();
-        var destroyedOwners = new List<TempRootApparatusDestroyedOwner>();
         foreach (var candidate in boundedCandidates)
         {
             var path = Path.Combine(sharedRoot, candidate.Name);
-            var capturedOwner = TryReadOwnedRootIdentity(path, candidate.ProcessId);
             TempRootDeleteOutcome outcome;
             IDisposable? deletionLease = null;
             try
@@ -251,10 +249,6 @@ internal static class AssemblyTempRedirect
             }
 
             timings.RecordDelete(outcome);
-            if (outcome.Status == TempRootDeleteStatus.Deleted && capturedOwner is not null)
-            {
-                destroyedOwners.Add(capturedOwner);
-            }
             TryWriteReceipt(
                 writeReceipt,
                 () => FormatReapReceipt(
@@ -269,8 +263,6 @@ internal static class AssemblyTempRedirect
 
             outcomes.Add(outcome);
         }
-
-        TempRootApparatusLossReceiptStore.RecordDeletedOwners(sharedRoot, destroyedOwners);
 
         return outcomes;
     }

@@ -1920,6 +1920,11 @@ public sealed class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
         var retried = false;
         for (var index = 0; index < batchChecks.Count;)
         {
+            if (cacheContext?.SharedApparatusInvalidation is not null)
+            {
+                break;
+            }
+
             var check = batchChecks[index];
             if (TryGetInfrastructurePartitionId(check, out _, out _) &&
                 stableSlotIndex.HasValue &&
@@ -1958,6 +1963,10 @@ public sealed class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
             retried |= checkResult.Retried;
             results.Add(checkResult.Result);
             index++;
+            if (cacheContext?.SharedApparatusInvalidation is not null)
+            {
+                break;
+            }
             if (!checkResult.Result.Passed &&
                 !continueAfterFailure &&
                 ShouldStopAfterFailedCheck(cacheContext, check))
@@ -2305,10 +2314,16 @@ public sealed class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
                 cancellationToken,
                 testResultsDirectoryOverride,
                 retryInvocation).ConfigureAwait(false);
-            fresh = (rerun.Result with
+            var rerunDecision = rerun.Result.CompletionDecision ?? InferPartitionCompletionDecision(rerun.Result);
+            var rerunResult = rerun.Result with
             {
-                TestResultAttemptId = currentAttemptId
-            }, true);
+                TestResultAttemptId = currentAttemptId,
+                CompletionDecision = rerunDecision,
+                FailureClassification = rerun.Result.FailureClassification ?? rerunDecision.FailedPredicate
+            };
+            fresh = (
+                cacheContext.ObserveSharedApparatusEvidence(check, rerunResult),
+                true);
         }
 
         cacheContext?.RecordExecution(check, fresh.Result);

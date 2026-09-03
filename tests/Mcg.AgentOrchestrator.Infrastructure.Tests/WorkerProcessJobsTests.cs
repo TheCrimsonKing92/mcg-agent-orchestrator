@@ -324,7 +324,7 @@ public sealed class WorkerProcessJobsTests : IDisposable
     }
 
     [Xunit.Fact]
-    public void WorkerProcessJobs_MultipleDeletedOwners_PersistsOneTypedAttemptReceipt()
+    public void WorkerProcessJobs_PostMortemDeletedOwners_DoNotPersistApparatusLossReceipt()
     {
         var root = Path.Combine(Path.GetTempPath(), "mcg-typed-reap-receipt", Guid.NewGuid().ToString("N"));
         var receiptPath = Path.Combine(root, "receipts.jsonl");
@@ -342,10 +342,7 @@ public sealed class WorkerProcessJobsTests : IDisposable
             WorkerProcessJobs.EmitTempRootReapResults(results, _ => { });
         }
 
-        var receipt = Assert.Single(TempRootApparatusLossReceiptStore.Read(receiptPath));
-        Assert.Equal("attempt-a", receipt.GateInvocationId);
-        Assert.Equal(root, receipt.SharedRoot);
-        Assert.Equal([4249, 4250], receipt.DestroyedOwners.Select(owner => owner.OwnerProcessId));
+        Assert.Empty(TempRootApparatusLossReceiptStore.Read(receiptPath));
     }
 
     [Xunit.Fact]

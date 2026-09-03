@@ -218,7 +218,7 @@ public sealed class AcceptancePartitionVerdictCacheTests : IDisposable
     }
 
     [Fact]
-    public void SharedApparatusInvalidation_PidReuseOrWrongOwnedPath_PreservesCandidateRetry()
+    public void SharedApparatusInvalidation_OneTickStartMismatch_PreservesCandidateRetry()
     {
         var startedAt = DateTimeOffset.Parse("2026-09-02T12:00:00Z");
         var sharedRoot = Path.Combine(_root, "owned-shared-root");
@@ -228,8 +228,8 @@ public sealed class AcceptancePartitionVerdictCacheTests : IDisposable
             "identity-mismatch",
             sharedRoot,
             [
-                new(101, startedAt.AddMinutes(-1), TempRootJanitor.BuildOwnedRootPath(sharedRoot, 101)),
-                new(202, startedAt.AddSeconds(1), Path.Combine(sharedRoot, "p202-wrong"))
+                new(101, startedAt.AddTicks(-1), TempRootJanitor.BuildOwnedRootPath(sharedRoot, 101)),
+                new(202, startedAt.AddSeconds(1), TempRootJanitor.BuildOwnedRootPath(sharedRoot, 202))
             ],
             startedAt.AddMinutes(1));
         var cache = CreateCache("attempt", resolveApparatusLossReceipts: () => [receipt]);
@@ -290,6 +290,125 @@ public sealed class AcceptancePartitionVerdictCacheTests : IDisposable
             result => result.FailureClassification == AcceptanceFailureClassifications.SharedGateApparatusInvalidated);
         var unrelated = Assert.Single(decorated, result => result.Name == "unrelated candidate failure");
         Assert.Null(unrelated.FailureClassification);
+    }
+
+    [Fact]
+    public void SharedApparatusInvalidation_LatchedReceiptAccumulatesLaterCorrelatedOwner()
+    {
+        var startedAt = DateTimeOffset.Parse("2026-09-02T12:00:00Z");
+        var sharedRoot = Path.Combine(_root, "owned-shared-root");
+        var firstReceipt = Receipt(
+            "first",
+            "attempt",
+            sharedRoot,
+            startedAt,
+            (101, startedAt),
+            (202, startedAt.AddSeconds(1)));
+        var laterReceipt = Receipt(
+            "later",
+            "attempt",
+            sharedRoot,
+            startedAt.AddSeconds(2),
+            (202, startedAt.AddSeconds(1)),
+            (303, startedAt.AddSeconds(2)));
+        var cache = CreateCache("attempt", resolveApparatusLossReceipts: () => [firstReceipt, laterReceipt]);
+        var secondPartition = Partition("Process");
+        var thirdPartition = Partition("Dispatch");
+
+        _ = cache.ObserveSharedApparatusEvidence(
+            _partition,
+            FailedOwnerResult(_partition.Name, 101, startedAt));
+        _ = cache.ObserveSharedApparatusEvidence(
+            secondPartition,
+            FailedOwnerResult(secondPartition.Name, 202, startedAt.AddSeconds(1)));
+        var third = cache.ObserveSharedApparatusEvidence(
+            thirdPartition,
+            FailedOwnerResult(thirdPartition.Name, 303, startedAt.AddSeconds(2)));
+
+        var invalidation = Assert.IsType<AcceptanceSharedApparatusInvalidation>(cache.SharedApparatusInvalidation);
+        Assert.Equal("first", invalidation.FirstReceipt.ReceiptId);
+        Assert.Equal(
+            ["cache", "process", "dispatch"],
+            invalidation.AffectedOwners.Select(owner => owner.PartitionId));
+        Assert.Equal(AcceptanceFailureClassifications.SharedGateApparatusInvalidated, third.FailureClassification);
+    }
+
+    [Fact]
+    public void SharedApparatusInvalidation_CompleteAttemptJournalsFirstReceiptAndExactOwnerIdentities()
+    {
+        var startedAt = DateTimeOffset.Parse("2026-09-02T12:00:00Z");
+        var sharedRoot = Path.Combine(_root, "owned-shared-root");
+        var receipt = Receipt(
+            "durable-first",
+            "durable-attempt",
+            sharedRoot,
+            startedAt,
+            (101, startedAt),
+            (202, startedAt.AddSeconds(1)));
+        var cache = CreateCache(
+            "durable-attempt",
+            resolveApparatusLossReceipts: () => [receipt]);
+        var secondPartition = Partition("Process");
+        var firstResult = FailedOwnerResult(_partition.Name, 101, startedAt);
+        var secondResult = FailedOwnerResult(secondPartition.Name, 202, startedAt.AddSeconds(1));
+
+        _ = cache.ObserveSharedApparatusEvidence(_partition, firstResult);
+        _ = cache.ObserveSharedApparatusEvidence(secondPartition, secondResult);
+        cache.RecordExecution(_partition, firstResult);
+        cache.RecordExecution(secondPartition, secondResult);
+        Assert.NotNull(cache.CompleteAttempt());
+
+        var entryLine = Assert.Single(
+            SharedJsonlFile.ReadAllLines(cache.JournalPath),
+            line => line.Contains("acceptance:shared-apparatus-invalidated", StringComparison.Ordinal));
+        using var entry = System.Text.Json.JsonDocument.Parse(entryLine);
+        var invalidation = entry.RootElement.GetProperty("sharedApparatusInvalidation");
+        Assert.Equal(
+            "durable-first",
+            invalidation.GetProperty("firstReceipt").GetProperty("receiptId").GetString());
+        var owners = invalidation.GetProperty("affectedOwners").EnumerateArray().ToArray();
+        Assert.Equal(2, owners.Length);
+        Assert.Equal([101, 202], owners.Select(owner => owner.GetProperty("ownerProcessId").GetInt32()));
+        Assert.Equal(
+            [
+                TempRootJanitor.BuildOwnedRootPath(sharedRoot, 101),
+                TempRootJanitor.BuildOwnedRootPath(sharedRoot, 202)
+            ],
+            owners.Select(owner => owner.GetProperty("ownedRootPath").GetString()));
+    }
+
+    [Fact]
+    public void SharedApparatusInvalidation_OriginalIdentitySurvivesRerunObservation()
+    {
+        var startedAt = DateTimeOffset.Parse("2026-09-02T12:00:00Z");
+        var sharedRoot = Path.Combine(_root, "owned-shared-root");
+        var receipt = Receipt(
+            "rerun-first",
+            "rerun-attempt",
+            sharedRoot,
+            startedAt,
+            (101, startedAt),
+            (202, startedAt.AddSeconds(1)));
+        var cache = CreateCache(
+            "rerun-attempt",
+            resolveApparatusLossReceipts: () => [receipt]);
+        var secondPartition = Partition("Process");
+        var rerunStartedAt = startedAt.AddSeconds(10);
+
+        _ = cache.ObserveSharedApparatusEvidence(
+            _partition,
+            FailedOwnerResult(_partition.Name, 101, startedAt));
+        var rerun = cache.ObserveSharedApparatusEvidence(
+            _partition,
+            FailedOwnerResult(_partition.Name, 909, rerunStartedAt));
+        _ = cache.ObserveSharedApparatusEvidence(
+            secondPartition,
+            FailedOwnerResult(secondPartition.Name, 202, startedAt.AddSeconds(1)));
+
+        var collapsed = cache.ApplySharedApparatusInvalidation([rerun]);
+        var invalidated = Assert.Single(collapsed);
+        Assert.Equal(AcceptanceFailureClassifications.SharedGateApparatusInvalidated, invalidated.FailureClassification);
+        Assert.Contains("receipt_id=rerun-first", invalidated.FailureCauseEvidence?.Evidence, StringComparison.Ordinal);
     }
 
     [Theory]

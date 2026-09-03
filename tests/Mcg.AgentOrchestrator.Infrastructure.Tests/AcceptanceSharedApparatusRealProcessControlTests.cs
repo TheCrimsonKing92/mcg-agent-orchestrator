@@ -14,25 +14,26 @@ public sealed class AcceptanceSharedApparatusRealProcessControlTests
 
         var root = CreateRoot("correlated");
         var attemptId = $"real-process-{Guid.NewGuid():N}";
-        var attemptPrefix = Path.Combine(root, "attempt", attemptId);
-        var receiptPath = TempRootApparatusLossReceiptStore.ResolvePath(attemptPrefix)!;
+        var receiptPath = TempRootApparatusLossReceiptStore.ResolvePath(
+            Path.Combine(root, "attempt", attemptId))!;
+        var apparatusParent = Path.Combine(root, "disposable-owned-parent");
         var candidateRoot = Path.Combine(root, "candidate-worktree");
         var candidateMarker = Path.Combine(candidateRoot, "candidate.txt");
         const string candidateSha = "candidate-sha-before-apparatus-loss";
+        Directory.CreateDirectory(apparatusParent);
         Directory.CreateDirectory(candidateRoot);
         File.WriteAllText(candidateMarker, candidateSha);
 
         var releaseName = $"Local\\mcg-shared-apparatus-release-{Guid.NewGuid():N}";
         var firstReadyName = $"Local\\mcg-shared-apparatus-ready-{Guid.NewGuid():N}";
         var secondReadyName = $"Local\\mcg-shared-apparatus-ready-{Guid.NewGuid():N}";
-        var reaperReadyName = $"Local\\mcg-shared-apparatus-reaper-{Guid.NewGuid():N}";
+        var deletedName = $"Local\\mcg-shared-apparatus-deleted-{Guid.NewGuid():N}";
         using var release = new EventWaitHandle(false, EventResetMode.ManualReset, releaseName);
         using var firstReady = new EventWaitHandle(false, EventResetMode.ManualReset, firstReadyName);
         using var secondReady = new EventWaitHandle(false, EventResetMode.ManualReset, secondReadyName);
-        using var reaperReady = new EventWaitHandle(false, EventResetMode.ManualReset, reaperReadyName);
+        using var deleted = new EventWaitHandle(false, EventResetMode.ManualReset, deletedName);
         MtpProbeProcess? firstProcess = null;
         MtpProbeProcess? secondProcess = null;
-        MtpProbeProcess? reaperProcess = null;
         try
         {
             var executable = InfrastructureTestSupport.ResolveDotnetHostPath();
@@ -43,14 +44,18 @@ public sealed class AcceptanceSharedApparatusRealProcessControlTests
                 root,
                 Path.Combine(root, "first-probe.json"),
                 firstReadyName,
-                releaseName);
+                releaseName,
+                apparatusParentPath: apparatusParent,
+                apparatusDeletionEventName: deletedName);
             secondProcess = AssemblyTempRedirectTests.StartMtpProbe(
                 executable,
                 testAssembly,
                 root,
                 Path.Combine(root, "second-probe.json"),
                 secondReadyName,
-                releaseName);
+                releaseName,
+                apparatusParentPath: apparatusParent,
+                apparatusDeletionEventName: deletedName);
 
             var firstReceiptTask = AssemblyTempRedirectTests.WaitForProbeReceiptAsync(
                 "first",
@@ -66,42 +71,76 @@ public sealed class AcceptanceSharedApparatusRealProcessControlTests
             var secondProbe = await secondReceiptTask;
             Assert.True(Directory.Exists(firstProbe.FixtureRepositoryPath));
             Assert.True(Directory.Exists(secondProbe.FixtureRepositoryPath));
+            Assert.False(string.IsNullOrWhiteSpace(firstProbe.HeadCommit));
+            Assert.False(string.IsNullOrWhiteSpace(secondProbe.HeadCommit));
+            Assert.Equal(
+                firstProbe.HeadCommit,
+                InfrastructureTestSupport.TryGetGitHead(firstProbe.FixtureRepositoryPath));
+            Assert.Equal(
+                secondProbe.HeadCommit,
+                InfrastructureTestSupport.TryGetGitHead(secondProbe.FixtureRepositoryPath));
             Assert.Equal(2, new[] { firstProbe.ProcessId, secondProbe.ProcessId }.Distinct().Count());
-            var firstStartedAt = new DateTimeOffset(firstProcess.Process.StartTime.ToUniversalTime());
-            var secondStartedAt = new DateTimeOffset(secondProcess.Process.StartTime.ToUniversalTime());
+            var liveInspection = WindowsNativeProcessInspection.Read(
+                [firstProbe.ProcessId, secondProbe.ProcessId]);
+            Assert.Null(liveInspection.Failure);
+            var firstIdentity = Assert.Contains(firstProbe.ProcessId, liveInspection.Records);
+            var secondIdentity = Assert.Contains(secondProbe.ProcessId, liveInspection.Records);
+            Assert.True(firstIdentity.StartedAt.HasValue);
+            Assert.True(secondIdentity.StartedAt.HasValue);
+            var firstStartedAt = firstIdentity.StartedAt.Value;
+            var secondStartedAt = secondIdentity.StartedAt.Value;
             var sharedRoot = AssertSameSharedRoot(firstProbe, secondProbe);
+            Assert.Equal(apparatusParent, sharedRoot, ignoreCase: true);
 
-            firstProcess.Process.Kill(entireProcessTree: true);
-            secondProcess.Process.Kill(entireProcessTree: true);
-            _ = await Task.WhenAll(
+            TempRootJanitorOwnedParentDeleteResult deletion;
+            using (TempRootApparatusLossReceiptStore.PushScope(attemptId, receiptPath))
+            {
+                deletion = TempRootJanitor.DeleteOwnedParentWithReceipt(apparatusParent);
+            }
+            Assert.Equal(TempRootJanitorDeleteStatus.Deleted, deletion.DeleteResult.Status);
+            Assert.Equal(
+                new[] { firstProbe.ProcessId, secondProbe.ProcessId }.Order(),
+                deletion.CapturedLiveOwners.Select(owner => owner.OwnerProcessId).Order());
+            Assert.False(Directory.Exists(apparatusParent));
+
+            var typedReceipt = Assert.Single(TempRootApparatusLossReceiptStore.Read(receiptPath));
+            Assert.Equal(attemptId, typedReceipt.GateInvocationId);
+            Assert.Equal(sharedRoot, typedReceipt.SharedRoot, ignoreCase: true);
+            var expectedOwners = new Dictionary<int, DateTimeOffset>
+            {
+                [firstProbe.ProcessId] = firstStartedAt,
+                [secondProbe.ProcessId] = secondStartedAt
+            };
+            Assert.Equal(
+                expectedOwners.Keys.Order(),
+                typedReceipt.DestroyedOwners.Select(owner => owner.OwnerProcessId).Order());
+            Assert.All(
+                typedReceipt.DestroyedOwners,
+                owner =>
+                {
+                    Assert.Equal(expectedOwners[owner.OwnerProcessId], owner.OwnerStartedAt);
+                    Assert.Equal(
+                        TempRootJanitor.BuildOwnedRootPath(sharedRoot, owner.OwnerProcessId),
+                        owner.OwnedRootPath,
+                        ignoreCase: true);
+                });
+            deleted.Set();
+
+            var childResults = await Task.WhenAll(
                 firstProcess.WaitForExitAsync(TestContext.Current.CancellationToken),
                 secondProcess.WaitForExitAsync(TestContext.Current.CancellationToken));
+            Assert.All(childResults, result =>
+            {
+                Assert.NotEqual(0, result.ExitCode);
+                Assert.Contains(
+                    "Seeded repository sentinel lost: RepositoryMissing",
+                    result.Stdout + result.Stderr,
+                    StringComparison.Ordinal);
+            });
             await firstProcess.DisposeAsync();
             await secondProcess.DisposeAsync();
             firstProcess = null;
             secondProcess = null;
-
-            reaperProcess = AssemblyTempRedirectTests.StartMtpProbe(
-                executable,
-                testAssembly,
-                root,
-                Path.Combine(root, "reaper-probe.json"),
-                reaperReadyName,
-                releaseName,
-                attemptId,
-                receiptPath);
-            var reaperProbe = await AssemblyTempRedirectTests.WaitForProbeReceiptAsync(
-                "reaper",
-                reaperProcess,
-                reaperReady,
-                TestContext.Current.CancellationToken);
-            Assert.Equal(sharedRoot, Path.GetDirectoryName(reaperProbe.TempRoot), ignoreCase: true);
-            Assert.False(Directory.Exists(firstProbe.TempRoot));
-            Assert.False(Directory.Exists(secondProbe.TempRoot));
-            release.Set();
-            _ = await reaperProcess.WaitForExitAsync(TestContext.Current.CancellationToken);
-            await reaperProcess.DisposeAsync();
-            reaperProcess = null;
 
             var alpha = Partition("Alpha");
             var beta = Partition("Beta");
@@ -123,32 +162,30 @@ public sealed class AcceptanceSharedApparatusRealProcessControlTests
                 cache.SharedApparatusInvalidation);
             Assert.Equal(attemptId, invalidation.FirstReceipt.GateInvocationId);
             Assert.Equal(["alpha", "beta"], invalidation.AffectedOwners.Select(owner => owner.PartitionId));
+            Assert.Equal(
+                [firstProbe.TempRoot, secondProbe.TempRoot],
+                invalidation.AffectedOwners.Select(owner => owner.OwnedRootPath));
             Assert.False(cache.ShouldRerunWithinAttempt(beta, second.CompletionDecision));
             Assert.Equal(
                 AcceptanceFailureClassifications.SharedGateApparatusInvalidated,
                 second.FailureClassification);
+            Assert.Contains(
+                System.Text.Json.JsonSerializer.Serialize(firstProbe.TempRoot).Trim('"'),
+                second.FailureCauseEvidence?.Evidence,
+                StringComparison.OrdinalIgnoreCase);
+            Assert.Contains(
+                System.Text.Json.JsonSerializer.Serialize(secondProbe.TempRoot).Trim('"'),
+                second.FailureCauseEvidence?.Evidence,
+                StringComparison.OrdinalIgnoreCase);
             Assert.Equal(candidateSha, cache.CandidateTreeSha);
             Assert.Equal(candidateSha, File.ReadAllText(candidateMarker));
             Assert.True(Directory.Exists(candidateRoot));
-            Assert.False(Directory.Exists(firstProbe.TempRoot));
-            Assert.False(Directory.Exists(secondProbe.TempRoot));
 
-            var typedReceipt = Assert.Single(TempRootApparatusLossReceiptStore.Read(receiptPath));
-            var expectedOwners = new Dictionary<int, DateTimeOffset>
-            {
-                [firstProbe.ProcessId] = firstStartedAt,
-                [secondProbe.ProcessId] = secondStartedAt
-            };
-            Assert.Equal(
-                expectedOwners.Keys.Order(),
-                typedReceipt.DestroyedOwners.Select(owner => owner.OwnerProcessId).Order());
-            Assert.All(
-                typedReceipt.DestroyedOwners,
-                owner => Assert.Equal(expectedOwners[owner.OwnerProcessId], owner.OwnerStartedAt));
         }
         finally
         {
             release.Set();
+            deleted.Set();
             if (firstProcess is not null)
             {
                 await firstProcess.DisposeAsync();
@@ -156,10 +193,6 @@ public sealed class AcceptanceSharedApparatusRealProcessControlTests
             if (secondProcess is not null)
             {
                 await secondProcess.DisposeAsync();
-            }
-            if (reaperProcess is not null)
-            {
-                await reaperProcess.DisposeAsync();
             }
             AssemblyTempRedirectTests.DeleteDirectory(root);
         }
@@ -177,14 +210,15 @@ public sealed class AcceptanceSharedApparatusRealProcessControlTests
         var attemptId = $"isolated-{Guid.NewGuid():N}";
         var receiptPath = TempRootApparatusLossReceiptStore.ResolvePath(
             Path.Combine(root, "attempt", attemptId))!;
+        var apparatusParent = Path.Combine(root, "disposable-owned-parent");
+        Directory.CreateDirectory(apparatusParent);
         var releaseName = $"Local\\mcg-isolated-apparatus-release-{Guid.NewGuid():N}";
         var readyName = $"Local\\mcg-isolated-apparatus-ready-{Guid.NewGuid():N}";
-        var reaperReadyName = $"Local\\mcg-isolated-apparatus-reaper-{Guid.NewGuid():N}";
+        var deletedName = $"Local\\mcg-isolated-apparatus-deleted-{Guid.NewGuid():N}";
         using var release = new EventWaitHandle(false, EventResetMode.ManualReset, releaseName);
         using var ready = new EventWaitHandle(false, EventResetMode.ManualReset, readyName);
-        using var reaperReady = new EventWaitHandle(false, EventResetMode.ManualReset, reaperReadyName);
+        using var deleted = new EventWaitHandle(false, EventResetMode.ManualReset, deletedName);
         MtpProbeProcess? process = null;
-        MtpProbeProcess? reaperProcess = null;
         try
         {
             process = AssemblyTempRedirectTests.StartMtpProbe(
@@ -193,7 +227,9 @@ public sealed class AcceptanceSharedApparatusRealProcessControlTests
                 root,
                 Path.Combine(root, "isolated-probe.json"),
                 readyName,
-                releaseName);
+                releaseName,
+                apparatusParentPath: apparatusParent,
+                apparatusDeletionEventName: deletedName);
             var probe = await AssemblyTempRedirectTests.WaitForProbeReceiptAsync(
                 "isolated",
                 process,
@@ -201,30 +237,24 @@ public sealed class AcceptanceSharedApparatusRealProcessControlTests
                 TestContext.Current.CancellationToken);
             Assert.True(Directory.Exists(probe.FixtureRepositoryPath));
             var startedAt = new DateTimeOffset(process.Process.StartTime.ToUniversalTime());
-            process.Process.Kill(entireProcessTree: true);
-            _ = await process.WaitForExitAsync(TestContext.Current.CancellationToken);
+
+            TempRootJanitorOwnedParentDeleteResult deletion;
+            using (TempRootApparatusLossReceiptStore.PushScope(attemptId, receiptPath))
+            {
+                deletion = TempRootJanitor.DeleteOwnedParentWithReceipt(apparatusParent);
+            }
+            Assert.Equal(TempRootJanitorDeleteStatus.Deleted, deletion.DeleteResult.Status);
+            Assert.Single(deletion.CapturedLiveOwners);
+            Assert.False(Directory.Exists(probe.TempRoot));
+            deleted.Set();
+            var processResult = await process.WaitForExitAsync(TestContext.Current.CancellationToken);
+            Assert.NotEqual(0, processResult.ExitCode);
+            Assert.Contains(
+                "Seeded repository sentinel lost: RepositoryMissing",
+                processResult.Stdout + processResult.Stderr,
+                StringComparison.Ordinal);
             await process.DisposeAsync();
             process = null;
-
-            reaperProcess = AssemblyTempRedirectTests.StartMtpProbe(
-                InfrastructureTestSupport.ResolveDotnetHostPath(),
-                typeof(AssemblyTempRedirectTests).Assembly.Location,
-                root,
-                Path.Combine(root, "isolated-reaper-probe.json"),
-                reaperReadyName,
-                releaseName,
-                attemptId,
-                receiptPath);
-            _ = await AssemblyTempRedirectTests.WaitForProbeReceiptAsync(
-                "isolated reaper",
-                reaperProcess,
-                reaperReady,
-                TestContext.Current.CancellationToken);
-            Assert.False(Directory.Exists(probe.TempRoot));
-            release.Set();
-            _ = await reaperProcess.WaitForExitAsync(TestContext.Current.CancellationToken);
-            await reaperProcess.DisposeAsync();
-            reaperProcess = null;
 
             var partition = Partition("Isolated");
             var cache = CreateCache(root, attemptId, "isolated-candidate", [partition], receiptPath);
@@ -240,15 +270,80 @@ public sealed class AcceptanceSharedApparatusRealProcessControlTests
         finally
         {
             release.Set();
+            deleted.Set();
             if (process is not null)
             {
                 await process.DisposeAsync();
             }
-            if (reaperProcess is not null)
-            {
-                await reaperProcess.DisposeAsync();
-            }
             AssemblyTempRedirectTests.DeleteDirectory(root);
+        }
+    }
+
+    [Fact]
+    public void OwnedParentDeletion_ExactLiveOwnersDeletesAndRecords()
+    {
+        var parent = CreateRoot("owned-parent-unit-live");
+        var startedAt = DateTimeOffset.Parse("2026-09-03T04:00:00Z");
+        var first = OwnedProcess(4101, startedAt);
+        var second = OwnedProcess(4102, startedAt.AddSeconds(1));
+        Directory.CreateDirectory(TempRootJanitor.BuildOwnedRootPath(parent, first.ProcessId));
+        Directory.CreateDirectory(TempRootJanitor.BuildOwnedRootPath(parent, second.ProcessId));
+        IReadOnlyList<TempRootApparatusDestroyedOwner>? recordedOwners = null;
+        try
+        {
+            var result = TempRootJanitor.DeleteOwnedParentWithReceipt(
+                parent,
+                _ => Inspected(first, second),
+                TempRootJanitor.DeleteTree,
+                (_, owners) => recordedOwners = owners.ToArray());
+
+            Assert.Equal(TempRootJanitorDeleteStatus.Deleted, result.DeleteResult.Status);
+            Assert.Equal([4101, 4102], result.CapturedLiveOwners.Select(owner => owner.OwnerProcessId));
+            Assert.Equal([4101, 4102], Assert.IsAssignableFrom<IReadOnlyList<TempRootApparatusDestroyedOwner>>(recordedOwners)
+                .Select(owner => owner.OwnerProcessId));
+            Assert.False(Directory.Exists(parent));
+        }
+        finally
+        {
+            AssemblyTempRedirectTests.DeleteDirectory(parent);
+        }
+    }
+
+    [Fact]
+    public void OwnedParentDeletion_ExitedOwnerRefusesDeletionAndReceipt()
+    {
+        var parent = CreateRoot("owned-parent-unit-exited");
+        var startedAt = DateTimeOffset.Parse("2026-09-03T04:00:00Z");
+        var first = OwnedProcess(4201, startedAt);
+        var second = OwnedProcess(4202, startedAt.AddSeconds(1));
+        Directory.CreateDirectory(TempRootJanitor.BuildOwnedRootPath(parent, first.ProcessId));
+        Directory.CreateDirectory(TempRootJanitor.BuildOwnedRootPath(parent, second.ProcessId));
+        var deleteCalls = 0;
+        var receiptCalls = 0;
+        try
+        {
+            var result = TempRootJanitor.DeleteOwnedParentWithReceipt(
+                parent,
+                _ => Inspected(first, second with
+                {
+                    Status = ProcessInspectionStatus.Exited,
+                    StartedAt = null
+                }),
+                path =>
+                {
+                    deleteCalls++;
+                    return TempRootJanitor.DeleteTree(path);
+                },
+                (_, _) => receiptCalls++);
+
+            Assert.Equal(TempRootJanitorDeleteStatus.Failed, result.DeleteResult.Status);
+            Assert.Equal(0, deleteCalls);
+            Assert.Equal(0, receiptCalls);
+            Assert.True(Directory.Exists(parent));
+        }
+        finally
+        {
+            AssemblyTempRedirectTests.DeleteDirectory(parent);
         }
     }
 
@@ -272,6 +367,21 @@ public sealed class AcceptanceSharedApparatusRealProcessControlTests
                 () => "real-process-control-manifest",
                 () => true,
                 () => TempRootApparatusLossReceiptStore.Read(receiptPath))));
+
+    private static ProcessInspectionRecord OwnedProcess(int processId, DateTimeOffset startedAt) =>
+        new(
+            processId,
+            ParentProcessId: Environment.ProcessId,
+            Name: "testhost",
+            ExecutablePath: Environment.ProcessPath,
+            StartedAt: startedAt,
+            CommandLine: "managed owned-parent control",
+            ProcessInspectionStatus.Available);
+
+    private static WindowsNativeProcessInspection.ProcessInspectionResult Inspected(
+        params ProcessInspectionRecord[] records) =>
+        WindowsNativeProcessInspection.ProcessInspectionResult.Success(
+            records.ToDictionary(record => record.ProcessId));
 
     private static GoalAcceptanceVerifier.AcceptanceManifestCheck Partition(string id) => new()
     {
