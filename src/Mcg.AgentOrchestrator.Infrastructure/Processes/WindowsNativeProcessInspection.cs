@@ -274,7 +274,10 @@ internal static class WindowsNativeProcessInspection
                 var child = Read(childSeed);
                 if (!CanEstablishLiveIdentity(parent) ||
                     !CanEstablishLiveIdentity(child) ||
-                    child.StartedAt!.Value < parent.StartedAt!.Value)
+                    ProcessTreeEdgeEligibility.Evaluate(
+                        parentSeed.ProcessId,
+                        parent.StartedAt,
+                        child).Decision != ProcessTreeEdgeDecision.Eligible)
                 {
                     continue;
                 }
@@ -370,8 +373,10 @@ internal static class WindowsNativeProcessInspection
                 // Known temporal inversion proves that this is a stale parent-PID edge;
                 // prune its entire subtree. An unreadable identity remains an unknown
                 // refusal candidate, but never flows into identity-bound ownership.
-                if (child.StartedAt is { } childStartedAt &&
-                    childStartedAt < parent.EarliestPossibleStart)
+                if (ProcessTreeEdgeEligibility.Evaluate(
+                        parent.ProcessId,
+                        parent.EarliestPossibleStart,
+                        child).Decision == ProcessTreeEdgeDecision.TemporalInversion)
                 {
                     continue;
                 }
@@ -921,6 +926,9 @@ internal static class WindowsNativeProcessInspection
         IReadOnlyDictionary<int, ProcessInspectionRecord> Records,
         ProcessInspectionFailure? Failure)
     {
+        internal IReadOnlyList<ProcessTreeEdgeVerdict> EdgeVerdicts { get; init; } = [];
+        internal int TruncatedEdgeVerdictCount { get; init; }
+
         public static ProcessInspectionResult Success(IReadOnlyDictionary<int, ProcessInspectionRecord> records) =>
             new(records, null);
 

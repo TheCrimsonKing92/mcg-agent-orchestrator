@@ -338,6 +338,143 @@ public sealed class WindowsNativeProcessInspectionTests
     }
 
     [Xunit.Fact]
+    public void Operation_RecycledParentEdge_ExcludesAllegedChildAndSubtree()
+    {
+        const int parentPid = 31_292;
+        const int recycledChildPid = 1_056;
+        const int allegedGrandchildPid = 2_000;
+        var parentStartedAt = DateTimeOffset.Parse("2026-09-03T12:00:00Z");
+        WindowsNativeProcessInspection.ProcessInspectionSeed[] seeds =
+        [
+            new(parentPid, 1, "conhost"),
+            new(recycledChildPid, parentPid, "OneDrive.Sync.Service"),
+            new(allegedGrandchildPid, recycledChildPid, "alleged-grandchild")
+        ];
+        var starts = new Dictionary<int, DateTimeOffset>
+        {
+            [parentPid] = parentStartedAt,
+            [recycledChildPid] = DateTimeOffset.Parse("2026-09-02T12:00:00Z"),
+            [allegedGrandchildPid] = parentStartedAt.AddMinutes(1)
+        };
+        var operation = new ProcessInspectionOperation(
+            WindowsNativeProcessInspection.ProcessEnumerationResult.Success(seeds),
+            seed => Available(seed, starts[seed.ProcessId]));
+
+        var result = operation.ReadCandidates(QueryFor(parentPid));
+
+        Assert.Equal<int>([parentPid], result.Records.Keys);
+        Assert.DoesNotContain(recycledChildPid, result.Records.Keys);
+        Assert.DoesNotContain(allegedGrandchildPid, result.Records.Keys);
+        var verdict = Assert.Single(result.EdgeVerdicts);
+        Assert.Equal(ProcessTreeEdgeDecision.TemporalInversion, verdict.Decision);
+        Assert.Equal(parentPid, verdict.ParentProcessId);
+        Assert.Equal(parentPid, verdict.AnchorProcessId);
+        Assert.Equal(parentStartedAt, verdict.AnchorStartedAt);
+        Assert.Equal(recycledChildPid, verdict.ChildProcessId);
+        Assert.Equal(DateTimeOffset.Parse("2026-09-02T12:00:00Z"), verdict.ChildStartedAt);
+    }
+
+    [Xunit.Fact]
+    public void Operation_ValidParentChildEdge_RetainsDescendants()
+    {
+        const int parentPid = 100;
+        WindowsNativeProcessInspection.ProcessInspectionSeed[] seeds =
+        [
+            new(parentPid, 1, "parent"),
+            new(101, parentPid, "child"),
+            new(102, 101, "grandchild")
+        ];
+        var parentStartedAt = DateTimeOffset.Parse("2026-09-03T12:00:00Z");
+        var operation = new ProcessInspectionOperation(
+            WindowsNativeProcessInspection.ProcessEnumerationResult.Success(seeds),
+            seed => Available(seed, parentStartedAt.AddSeconds(seed.ProcessId - parentPid)));
+
+        var result = operation.ReadCandidates(QueryFor(parentPid));
+
+        Assert.Equal<int>([100, 101, 102], result.Records.Keys.Order());
+        Assert.Empty(result.EdgeVerdicts);
+        Assert.Equal(0, result.TruncatedEdgeVerdictCount);
+    }
+
+    [Xunit.Fact]
+    public void EdgeEligibility_UnreadableChildIdentity_IsTypedUnavailable()
+    {
+        var child = new ProcessInspectionRecord(
+            101,
+            100,
+            "child",
+            null,
+            null,
+            null,
+            ProcessInspectionStatus.AccessDenied);
+
+        var verdict = ProcessTreeEdgeEligibility.Evaluate(
+            100,
+            DateTimeOffset.Parse("2026-09-03T12:00:00Z"),
+            child);
+
+        Assert.Equal(ProcessTreeEdgeDecision.IdentityUnavailable, verdict.Decision);
+        Assert.Contains("PROCESS_EDGE_UNVERIFIED", verdict.Format());
+        Assert.Contains("parent-anchor=100", verdict.Format());
+        Assert.Contains("parent-anchor-created=2026-09-03T12:00:00.0000000+00:00", verdict.Format());
+        Assert.Contains("child-created=unknown", verdict.Format());
+    }
+
+    [Xunit.Fact]
+    public void Operation_UnreadableChildIdentity_RetainsChildWithoutGuessingEdgeValid()
+    {
+        const int parentPid = 100;
+        WindowsNativeProcessInspection.ProcessInspectionSeed[] seeds =
+        [
+            new(parentPid, 1, "parent"),
+            new(101, parentPid, "unreadable-child")
+        ];
+        var parentStartedAt = DateTimeOffset.Parse("2026-09-03T12:00:00Z");
+        var operation = new ProcessInspectionOperation(
+            WindowsNativeProcessInspection.ProcessEnumerationResult.Success(seeds),
+            seed => seed.ProcessId == parentPid
+                ? Available(seed, parentStartedAt)
+                : new ProcessInspectionRecord(
+                    seed.ProcessId,
+                    seed.ParentProcessId,
+                    seed.Name,
+                    null,
+                    null,
+                    null,
+                    ProcessInspectionStatus.AccessDenied));
+
+        var result = operation.ReadCandidates(QueryFor(parentPid));
+        var child = result.Records[101];
+        var verdict = ProcessTreeEdgeEligibility.Evaluate(parentPid, parentStartedAt, child);
+
+        Assert.Equal<int>([100, 101], result.Records.Keys.Order());
+        Assert.Equal(ProcessTreeEdgeDecision.IdentityUnavailable, verdict.Decision);
+    }
+
+    [Xunit.Fact]
+    public void Operation_RecycledParentEdges_RecordBoundedExclusionVerdicts()
+    {
+        const int parentPid = 100;
+        var parentStartedAt = DateTimeOffset.Parse("2026-09-03T12:00:00Z");
+        var seeds = new[] { new WindowsNativeProcessInspection.ProcessInspectionSeed(parentPid, 1, "parent") }
+            .Concat(Enumerable.Range(200, 10).Select(processId =>
+                new WindowsNativeProcessInspection.ProcessInspectionSeed(processId, parentPid, $"child-{processId}")))
+            .ToArray();
+        var operation = new ProcessInspectionOperation(
+            WindowsNativeProcessInspection.ProcessEnumerationResult.Success(seeds),
+            seed => Available(
+                seed,
+                seed.ProcessId == parentPid ? parentStartedAt : parentStartedAt.AddDays(-1)));
+
+        var result = operation.ReadCandidates(QueryFor(parentPid));
+
+        Assert.Equal(8, result.EdgeVerdicts.Count);
+        Assert.Equal(2, result.TruncatedEdgeVerdictCount);
+        Assert.All(result.EdgeVerdicts, verdict =>
+            Assert.Equal(ProcessTreeEdgeDecision.TemporalInversion, verdict.Decision));
+    }
+
+    [Xunit.Fact]
     public void Operation_PrefixQuery_ReadsFamilyCandidates()
     {
         var readIds = new List<int>();
@@ -372,6 +509,27 @@ public sealed class WindowsNativeProcessInspectionTests
         Assert.Contains(41, result.Records.Keys);
         Assert.DoesNotContain(99, result.Records.Keys);
     }
+
+    private static ProcessInspectionQuery QueryFor(int processId) =>
+        new(
+            new HashSet<int>([processId]),
+            new HashSet<int>(),
+            new HashSet<string>(StringComparer.OrdinalIgnoreCase),
+            IncludeChildren: true,
+            IncludeAll: false,
+            AncestorProcessIds: new HashSet<int>());
+
+    private static ProcessInspectionRecord Available(
+        WindowsNativeProcessInspection.ProcessInspectionSeed seed,
+        DateTimeOffset startedAt) =>
+        new(
+            seed.ProcessId,
+            seed.ParentProcessId,
+            seed.Name,
+            Path.Combine("fixture", seed.Name + ".exe"),
+            startedAt,
+            seed.Name,
+            ProcessInspectionStatus.Available);
 
     [Xunit.Fact]
     public void Snapshot_LazyRecordsAccess_FailsLoudly()
