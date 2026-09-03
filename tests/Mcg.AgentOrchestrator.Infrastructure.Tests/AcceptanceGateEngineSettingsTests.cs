@@ -46,6 +46,7 @@ public sealed class AcceptanceGateEngineSettingsTests
                 "AcceptanceVerdictCarryForwardTests",
                 "CliCommandTestsGoalLifecycleCleanupHooks",
                 "CliCommandTestsPersistentRunnerCommands",
+                "CliPersistentStateRunnerAcceptanceFailureRecoveryTests",
                 "CliCommandTestsSubscriptionDispatchCommands",
                 "GoalGitFactIndexTests",
                 "GoalsPruneTests",
