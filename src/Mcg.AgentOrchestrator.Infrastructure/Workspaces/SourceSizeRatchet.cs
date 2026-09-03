@@ -74,8 +74,8 @@ internal static class SourceSizeRatchet
             // Goal 0e0aa816 extracted the fallback acceptance-start transition to its own partial-class source file.
             // Raised for goal cdde61cc: bounded gate-engine fault reconciliation belongs at the terminal
             // state seam that owns retry exhaustion and prevents candidate-failure classification.
-            // Reconciled after integrating main e1f6f11c at its measured post-merge size.
-            new SourceSizeCeiling("src/Mcg.AgentOrchestrator.App/Orchestration/ConductorBatchLoop.cs", 5185),
+            // Tightened after live acceptance reservation logic moved to its partial-class collaborator.
+            new SourceSizeCeiling("src/Mcg.AgentOrchestrator.App/Orchestration/ConductorBatchLoop.cs", 5182),
             // Raised for goal 18afe5f2: missing-build-evidence rejection and commit suppression
             // must run where parsed worker results and authoritative changed paths meet. Raised again
             // for goal 0d39b5a3, which adds the narrow Planner sample launch and completion-selection

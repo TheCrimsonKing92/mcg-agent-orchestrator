@@ -2724,7 +2724,6 @@ internal sealed partial class ConductorBatchLoop
             return new Dictionary<string, ParallelLandingOutcome>(StringComparer.Ordinal);
         }
 
-        var activeCandidates = new List<ConductorParallelAcceptanceCandidate>();
         var results = new Dictionary<string, ParallelLandingOutcome>(StringComparer.Ordinal);
         var deferredByAdmission = 0;
         var orderedEligible = OrderParallelAcceptanceEligibleGoals(eligible
@@ -2735,6 +2734,30 @@ internal sealed partial class ConductorBatchLoop
                 GetDependencyHoldReason(goal, completedGoals, escalatedGoals, kernel) is null &&
                 TryHasUnresolvedPersistedVerifiedAcceptanceEscalation(goal, driver) == false)
             .ToArray());
+        var activeReservations = BuildActiveParallelAcceptanceReservations(
+            driver.ParallelAcceptanceAttemptCoordinator,
+            kernel.Goals.Where(goal => goal.Status != GoalStatus.Completed).ToArray());
+        if (activeReservations.Failure is { } capacityFailure)
+        {
+            var reason =
+                $"acceptance capacity state unavailable; retry on next conduct tick: {SanitizeReason(capacityFailure.Message)}";
+            foreach (var goal in orderedEligible)
+            {
+                results[goal.Id.Value] = new ParallelLandingOutcome(
+                    ParallelAcceptanceHeld(goal, policy, reason),
+                    null);
+            }
+
+            RecordParallelAcceptanceProgress(
+                $"ADMISSION tick={tick} result=held reason=acceptance-capacity-state-unavailable detail={SanitizeReason(capacityFailure.Message)}",
+                changedGoalLines);
+            return results;
+        }
+
+        var liveAttempts = activeReservations.Attempts;
+        var activeCandidates = activeReservations.Candidates;
+        var activeAttemptIds = activeReservations.AttemptIds;
+        var activeAttemptSlotIndexes = activeReservations.StableSlotIndexes;
         foreach (var goal in orderedEligible)
         {
             try
@@ -2743,41 +2766,6 @@ internal sealed partial class ConductorBatchLoop
                 [goal.Id.Value]);
             if (sameGoalAttempts.Count == 0)
             {
-                continue;
-            }
-
-            var verificationGate = kernel.BuildVerificationGate(goal.Id);
-            if (!verificationGate.IsSatisfied)
-            {
-                var blockingReasons = string.Join(
-                    ',',
-                    verificationGate.Tasks
-                        .Where(task => task.GateStatus != VerificationGateStatus.Passed)
-                        .Select(task => $"{task.Role}:{task.Reason}"));
-                var reason = BoundSingleLine(
-                    $"inconsistent {goal.Status} state: authoritative task verification gate unsatisfied ({blockingReasons}); " +
-                    "apply verify-manual or retry before acceptance");
-                results[goal.Id.Value] = new ParallelLandingOutcome(
-                    EscalateParallelAcceptanceSafely(driver, goal, policy, reason),
-                    null);
-                RecordParallelAcceptanceProgress(
-                    $"ADMISSION tick={tick} result=escalated reason=authoritative-verification-gate-unsatisfied goal={goal.Id.Value[..8]} detail={SanitizeReason(reason)}",
-                    changedGoalLines);
-                continue;
-            }
-
-            var engineHealth = _acceptanceEngineCircuit?.Read();
-            if (IsAcceptanceEngineCircuitHoldRequired(goal.Status, engineHealth))
-            {
-                results[goal.Id.Value] = new ParallelLandingOutcome(
-                    ParallelAcceptanceHeld(
-                        goal,
-                        policy,
-                        BuildAcceptanceEngineHoldReason(engineHealth!)),
-                    null);
-                RecordParallelAcceptanceProgress(
-                    $"ADMISSION tick={tick} result=held reason=acceptance-engine-circuit goal={goal.Id.Value[..8]} health={engineHealth.Health}",
-                    changedGoalLines);
                 continue;
             }
 
@@ -2817,6 +2805,55 @@ internal sealed partial class ConductorBatchLoop
                              StringComparison.Ordinal)))
             {
                 driver.ParallelAcceptanceAttemptCoordinator.MarkReconciled(terminalSibling.Attempt);
+            }
+
+            if (running.Length > 0)
+            {
+                results[goal.Id.Value] = ReserveRunningParallelAcceptanceAttempts(
+                    kernel,
+                    driver,
+                    goal,
+                    policy,
+                    tick,
+                    running,
+                    changedGoalLines,
+                    changedGoalIds);
+                continue;
+            }
+
+            var verificationGate = kernel.BuildVerificationGate(goal.Id);
+            if (!verificationGate.IsSatisfied)
+            {
+                var blockingReasons = string.Join(
+                    ',',
+                    verificationGate.Tasks
+                        .Where(task => task.GateStatus != VerificationGateStatus.Passed)
+                        .Select(task => $"{task.Role}:{task.Reason}"));
+                var reason = BoundSingleLine(
+                    $"inconsistent {goal.Status} state: authoritative task verification gate unsatisfied ({blockingReasons}); " +
+                    "apply verify-manual or retry before acceptance");
+                results[goal.Id.Value] = new ParallelLandingOutcome(
+                    EscalateParallelAcceptanceSafely(driver, goal, policy, reason),
+                    null);
+                RecordParallelAcceptanceProgress(
+                    $"ADMISSION tick={tick} result=escalated reason=authoritative-verification-gate-unsatisfied goal={goal.Id.Value[..8]} detail={SanitizeReason(reason)}",
+                    changedGoalLines);
+                continue;
+            }
+
+            var engineHealth = _acceptanceEngineCircuit?.Read();
+            if (IsAcceptanceEngineCircuitHoldRequired(goal.Status, engineHealth))
+            {
+                results[goal.Id.Value] = new ParallelLandingOutcome(
+                    ParallelAcceptanceHeld(
+                        goal,
+                        policy,
+                        BuildAcceptanceEngineHoldReason(engineHealth!)),
+                    null);
+                RecordParallelAcceptanceProgress(
+                    $"ADMISSION tick={tick} result=held reason=acceptance-engine-circuit goal={goal.Id.Value[..8]} health={engineHealth.Health}",
+                    changedGoalLines);
+                continue;
             }
 
             if (retainedTerminal is null)
@@ -2903,17 +2940,19 @@ internal sealed partial class ConductorBatchLoop
                 goal.Id,
                 driver.ProjectGateReadyCandidate(goal, policy)))
             .ToArray();
-        var speculativePlan = ConductorSpeculativeAcceptanceCohortPlanner.Plan(speculativeCandidates);
-        EmitProgress(speculativePlan.FormatReceipt(tick));
-        var liveAttemptGoalIds = driver.ParallelAcceptanceAttemptCoordinator.GetLiveAttemptGoalIds(
-            orderedEligible.Select(goal => goal.Id.Value));
+        EmitProgress(ConductorSpeculativeAcceptanceCohortPlanner.Plan(speculativeCandidates).FormatReceipt(tick));
+        var liveAttemptGoalIds = liveAttempts
+            .Select(attempt => attempt.GoalId)
+            .ToHashSet(StringComparer.Ordinal);
+        var activeCohortCapacity = driver.GetActiveAcceptanceCohortCapacity();
         var cohortEligible = orderedEligible
             .Where(goal => !liveAttemptGoalIds.Contains(goal.Id.Value))
             .ToArray();
         var productionCandidates = speculativeCandidates
             .Where(candidate => !liveAttemptGoalIds.Contains(candidate.GoalId.Value))
             .ToArray();
-        if (driver.MergeTrainsEnabled &&
+        if (activeAttemptIds.Count + activeCohortCapacity.ActiveRootCount < configuredAcceptanceWidth &&
+            driver.MergeTrainsEnabled &&
             cohortEligible.Length >= ConductorMergeTrainSelector.MinimumMembers &&
             !cohortEligible.Any(goal => IsAcceptanceEngineCircuitHoldRequired(
                 goal.Status,
@@ -2943,7 +2982,8 @@ internal sealed partial class ConductorBatchLoop
                 .ToArray();
         }
         GoalId? forcedCohortCandidate = null;
-        if (driver.AcceptanceCohortsEnabled &&
+        if (activeAttemptIds.Count + activeCohortCapacity.ActiveRootCount < configuredAcceptanceWidth &&
+            driver.AcceptanceCohortsEnabled &&
             cohortEligible.Length >= ConductorAcceptanceCohortSelector.CohortSize &&
             !cohortEligible.Any(goal => IsAcceptanceEngineCircuitHoldRequired(
                 goal.Status,
@@ -2990,6 +3030,7 @@ internal sealed partial class ConductorBatchLoop
                 RecordParallelAcceptanceProgress(
                     $"ACCEPTANCE_COHORT tick={tick} members={string.Join(',', cohortSelection.Members.Select(member => member.GoalId.Value[..8]))} {cohortRun.Detail}",
                     changedGoalLines);
+                activeCohortCapacity = driver.GetActiveAcceptanceCohortCapacity();
             }
             else if (cohortDecision.Exclusions.Count > 0)
             {
@@ -3086,6 +3127,18 @@ internal sealed partial class ConductorBatchLoop
                 continue;
             }
 
+            if (activeAttemptIds.Count + activeCohortCapacity.ActiveRootCount >= acceptanceSlotCount)
+            {
+                deferredByAdmission++;
+                results[goal.Id.Value] = new ParallelLandingOutcome(
+                    ParallelAcceptanceHeld(
+                        goal,
+                        policy,
+                        $"candidate manifest slot cap {acceptanceSlotCount} reached; retry on next conduct tick"),
+                    null);
+                continue;
+            }
+
             ParallelAcceptanceOldestWaiterObservation? stalledOldestBypass = null;
             if (!liveAttemptGoalIds.Contains(goal.Id.Value) &&
                 oldestWaiter is not null &&
@@ -3103,7 +3156,9 @@ internal sealed partial class ConductorBatchLoop
                         driver,
                         goal,
                         policy,
-                        Math.Min(activeCandidates.Count, acceptanceSlotCount - 1),
+                        SelectAvailableParallelAcceptanceSlot(
+                            activeAttemptSlotIndexes,
+                            acceptanceSlotCount),
                         out var deferredBuildException);
                     if (deferredCandidate is not null)
                     {
@@ -3135,23 +3190,13 @@ internal sealed partial class ConductorBatchLoop
                 }
             }
 
-            if (activeCandidates.Count >= acceptanceSlotCount)
-            {
-                deferredByAdmission++;
-                results[goal.Id.Value] = new ParallelLandingOutcome(
-                    ParallelAcceptanceHeld(
-                        goal,
-                        policy,
-                        $"candidate manifest slot cap {acceptanceSlotCount} reached; retry on next conduct tick"),
-                    null);
-                continue;
-            }
-
             var candidate = TryBuildParallelAcceptanceCandidate(
                 driver,
                 goal,
                 policy,
-                activeCandidates.Count,
+                SelectAvailableParallelAcceptanceSlot(
+                    activeAttemptSlotIndexes,
+                    acceptanceSlotCount),
                 out var buildException);
             if (candidate is null)
             {
@@ -3262,7 +3307,12 @@ internal sealed partial class ConductorBatchLoop
                     {
                         changedGoalIds.Add(candidate.Goal.Id);
                     }
-                    activeCandidates.Add(candidate);
+                    ReserveParallelAcceptanceCandidate(
+                        candidate,
+                        decision.Attempt,
+                        activeCandidates,
+                        activeAttemptIds,
+                        activeAttemptSlotIndexes);
                     oldestServedThisTick |= goal.Id == oldestWaiter?.Id;
                     RecordParallelAcceptanceFairnessGrant(goal.Id.Value, oldestWaiter?.Id.Value);
                     RecordParallelAcceptanceFairnessAdmission(
@@ -3286,7 +3336,12 @@ internal sealed partial class ConductorBatchLoop
                     {
                         changedGoalIds.Add(candidate.Goal.Id);
                     }
-                    activeCandidates.Add(candidate);
+                    ReserveParallelAcceptanceCandidate(
+                        candidate,
+                        decision.Attempt,
+                        activeCandidates,
+                        activeAttemptIds,
+                        activeAttemptSlotIndexes);
                     oldestServedThisTick |= goal.Id == oldestWaiter?.Id;
                     RecordParallelAcceptanceFairnessGrant(goal.Id.Value, oldestWaiter?.Id.Value);
                     RecordParallelAcceptanceFairnessAdmission(
@@ -3380,11 +3435,6 @@ internal sealed partial class ConductorBatchLoop
 
         return results;
     }
-
-    private static string FormatCohortPairExclusions(
-        IReadOnlyList<ConductorAcceptanceCohortPairExclusion> exclusions) =>
-        string.Join(',', exclusions.Select(exclusion =>
-            $"{exclusion.FirstGoalId.Value[..8]}:{exclusion.SecondGoalId.Value[..8]}:{exclusion.Reason}"));
 
     internal static void ReconcileParallelAcceptanceTerminalState(
         AgentOrchestratorKernel kernel,
@@ -3527,13 +3577,6 @@ internal sealed partial class ConductorBatchLoop
         }
     }
 
-    private static IReadOnlyList<Goal> OrderParallelAcceptanceEligibleGoals(IReadOnlyList<Goal> eligible) =>
-        eligible
-            .OrderBy(ParallelAcceptanceVerifiedAt)
-            .ThenBy(goal => goal.Timeline.FirstOrDefault()?.OccurredAt ?? DateTimeOffset.MinValue)
-            .ThenBy(goal => goal.Id.Value, StringComparer.Ordinal)
-            .ToArray();
-
     internal static Goal? SelectOldestParallelAcceptanceWaiter(
         IReadOnlyList<Goal> orderedEligible,
         IReadOnlySet<string> liveAttemptGoalIds) =>
@@ -3596,23 +3639,6 @@ internal sealed partial class ConductorBatchLoop
         {
             return true;
         }
-    }
-
-    private static DateTimeOffset ParallelAcceptanceVerifiedAt(Goal goal)
-    {
-        var lastVerification = goal.Tasks
-            .Select(task => task.LastVerification?.CompletedAt)
-            .Where(completedAt => completedAt.HasValue)
-            .Select(completedAt => completedAt!.Value)
-            .DefaultIfEmpty(goal.Timeline.FirstOrDefault()?.OccurredAt ?? DateTimeOffset.MinValue)
-            .Max();
-        return goal.Timeline
-            .Where(evt =>
-                evt.Kind == ProgressKind.GoalPolicyDecision &&
-                evt.Message.Contains("Verified", StringComparison.OrdinalIgnoreCase))
-            .Select(evt => evt.OccurredAt)
-            .DefaultIfEmpty(lastVerification)
-            .Min();
     }
 
     private static bool HasCompletedPassedVerificationForAllTasks(Goal goal) =>
@@ -3795,35 +3821,6 @@ internal sealed partial class ConductorBatchLoop
             return null;
         }
     }
-
-    private static ConductorParallelAcceptanceCandidate? TryBuildParallelAcceptanceCandidate(
-        ConductorDriver driver,
-        Goal goal,
-        ConductorAutonomyPolicy policy,
-        int slotIndex,
-        out Exception? exception)
-    {
-        exception = null;
-        try
-        {
-            return driver.TryBuildParallelAcceptanceCandidate(goal, policy, slotIndex);
-        }
-        catch (Exception ex)
-        {
-            exception = ex;
-            return null;
-        }
-    }
-
-    private static string FormatParallelAcceptanceCandidateUnavailable(Exception exception) =>
-        exception is ConductorDriver.EvidenceMutationLeaseUnavailableException
-            ? exception.Message
-            : $"parallel acceptance candidate unavailable; retry on next conduct tick: {SanitizeReason(exception.Message)}";
-
-    private static string FormatParallelAcceptanceCandidateUnavailableDetail(Exception exception) =>
-        exception is ConductorDriver.EvidenceMutationLeaseUnavailableException
-            ? SanitizeReason(exception.Message)
-            : SanitizeReason(exception.Message);
 
     internal static TerminalGoalRemedyExecutionResult ExecuteReconcileSweepAcceptanceRemedy(
         AgentOrchestratorKernel kernel,

@@ -438,7 +438,7 @@ internal sealed class ConductorParallelAcceptanceAttemptCoordinator
             foreach (var path in Directory.EnumerateFiles(directory, "*.attempt.json"))
             {
                 var attempt = ReadCanonicalAttempt(path, goalId);
-                if (!IsReconciled(attempt))
+                if (!IsReconciled(attempt) || IsCapacityReservingAttempt(attempt))
                 {
                     attempts.Add(attempt);
                 }
@@ -466,8 +466,18 @@ internal sealed class ConductorParallelAcceptanceAttemptCoordinator
                 $"Acceptance attempt identity changed at canonical metadata path '{attempt.MetadataPath}'.");
         }
 
+        if (IsCapacityReservingInvalidatedAttempt(current))
+        {
+            return ConductorParallelAcceptanceAttemptDecision.Running(current);
+        }
+
         if (IsReconciled(current))
         {
+            if (IsTerminalWithoutRunOutcome(current.Outcome))
+            {
+                return ConductorParallelAcceptanceAttemptDecision.TerminalWithoutRun(current);
+            }
+
             throw new InvalidDataException(
                 $"Acceptance attempt '{current.AttemptId}' was selected for observation after reconciliation.");
         }
@@ -873,23 +883,16 @@ internal sealed class ConductorParallelAcceptanceAttemptCoordinator
         return attempt is not null && IsLiveAttempt(attempt);
     }
 
-    internal IReadOnlySet<string> GetLiveAttemptGoalIds(IEnumerable<string> goalIds)
-    {
-        ArgumentNullException.ThrowIfNull(goalIds);
+    internal IReadOnlyList<ConductorParallelAcceptanceAttempt> GetCapacityReservingAttempts(IEnumerable<string> goalIds) =>
+        GetUnreconciledAttempts(goalIds)
+            .Where(IsCapacityReservingAttempt)
+            .ToArray();
 
-        var liveGoalIds = new HashSet<string>(StringComparer.Ordinal);
-        foreach (var goalId in goalIds.Distinct(StringComparer.Ordinal))
-        {
-            ArgumentException.ThrowIfNullOrWhiteSpace(goalId);
-            var attempt = TryReadLatest(goalId);
-            if (attempt is not null && IsLiveAttempt(attempt))
-            {
-                liveGoalIds.Add(goalId);
-            }
-        }
-
-        return liveGoalIds;
-    }
+    internal IReadOnlySet<string> GetLiveAttemptGoalIds(IEnumerable<string> goalIds) =>
+        GetUnreconciledAttempts(goalIds)
+            .Where(attempt => IsLiveAttempt(attempt) || IsLiveInvalidatedAttempt(attempt))
+            .Select(attempt => attempt.GoalId)
+            .ToHashSet(StringComparer.Ordinal);
 
     internal string DescribeFocusedEvidenceHold(ConductorParallelAcceptanceAttempt attempt)
     {
@@ -925,6 +928,24 @@ internal sealed class ConductorParallelAcceptanceAttemptCoordinator
         !File.Exists(attempt.ExitCodePath) &&
         _isProcessAlive(attempt.OwnerProcessId) &&
         !IsHeartbeatStale(attempt);
+
+    private bool IsCapacityReservingAttempt(ConductorParallelAcceptanceAttempt attempt) =>
+        attempt switch
+        {
+            { Outcome: ConductorParallelAcceptanceAttemptOutcome.Running, ReconciledAt: null } =>
+                !File.Exists(attempt.ResultPath) &&
+                !File.Exists(attempt.ExitCodePath) &&
+                _isProcessAlive(attempt.OwnerProcessId),
+            { Outcome: ConductorParallelAcceptanceAttemptOutcome.StaleCandidate, ReconciledAt: not null } =>
+                IsCapacityReservingInvalidatedAttempt(attempt),
+            _ => false
+        };
+
+    private bool IsCapacityReservingInvalidatedAttempt(ConductorParallelAcceptanceAttempt attempt) =>
+        attempt.Outcome == ConductorParallelAcceptanceAttemptOutcome.StaleCandidate &&
+        attempt.ReconciledAt.HasValue &&
+        !File.Exists(attempt.ExitCodePath) &&
+        _isProcessAlive(attempt.OwnerProcessId);
 
     internal IReadOnlyList<string> TakePendingLeaseReceipts(ConductorParallelAcceptanceAttempt attempt)
     {
