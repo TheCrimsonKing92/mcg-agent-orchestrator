@@ -7652,8 +7652,6 @@ public sealed class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
         var failedPredicate = policyFailure;
         if (failedPredicate is null && result.TimedOut)
             failedPredicate = AcceptanceShardCompletionPredicates.TimedOut;
-        if (failedPredicate is null && result.ExitCode != 0 && !allowNonzeroExit)
-            failedPredicate = AcceptanceShardCompletionPredicates.NonzeroExit;
         if (failedPredicate is null && !missingTrxCompatibility && trx.FailedPredicate is not null)
             failedPredicate = trx.FailedPredicate;
         if (failedPredicate is null && !missingTrxCompatibility && trx.DiscoveredTestCount == 0)
@@ -7663,6 +7661,8 @@ public sealed class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
             failedPredicate = AcceptanceShardCompletionPredicates.IncompleteExecution;
         if (failedPredicate is null && !missingTrxCompatibility && !trx.Passed)
             failedPredicate = AcceptanceShardCompletionPredicates.FailingTrx;
+        if (failedPredicate is null && result.ExitCode != 0 && !allowNonzeroExit)
+            failedPredicate = AcceptanceShardCompletionPredicates.NonzeroExit;
 
         var effectivePolicySignal = policyFailure ?? policySignal;
         if (failedPredicate is null && missingTrxCompatibility && effectivePolicySignal is null)

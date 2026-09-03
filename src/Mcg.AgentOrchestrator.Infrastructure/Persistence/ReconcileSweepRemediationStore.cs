@@ -38,6 +38,7 @@ public sealed class ReconcileSweepRemediationStore : IReconcileSweepRemediationS
     private readonly int _busyTimeoutSeconds;
     private readonly Func<int, TimeSpan, CancellationToken, Task>? _busyRetryDelay;
     private readonly SqliteWriteTelemetry _writeTelemetry;
+    private readonly TimeProvider _timeProvider;
 
     public ReconcileSweepRemediationStore(string dbPath)
         : this(dbPath, busyTimeoutSeconds: 5, busyRetryDelay: null)
@@ -48,7 +49,8 @@ public sealed class ReconcileSweepRemediationStore : IReconcileSweepRemediationS
         string dbPath,
         int busyTimeoutSeconds,
         Func<int, TimeSpan, CancellationToken, Task>? busyRetryDelay,
-        SqliteWriteTelemetryOptions? writeTelemetryOptions = null)
+        SqliteWriteTelemetryOptions? writeTelemetryOptions = null,
+        TimeProvider? timeProvider = null)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(dbPath);
         ArgumentOutOfRangeException.ThrowIfNegative(busyTimeoutSeconds);
@@ -56,6 +58,7 @@ public sealed class ReconcileSweepRemediationStore : IReconcileSweepRemediationS
         _busyTimeoutSeconds = busyTimeoutSeconds;
         _busyRetryDelay = busyRetryDelay;
         _writeTelemetry = new SqliteWriteTelemetry(_dbPath, writeTelemetryOptions);
+        _timeProvider = timeProvider ?? TimeProvider.System;
         Directory.CreateDirectory(Path.GetDirectoryName(_dbPath)!);
         if (StateDbWriteSession.TryExecute(_dbPath, EnsureSchema))
         {
@@ -214,9 +217,22 @@ public sealed class ReconcileSweepRemediationStore : IReconcileSweepRemediationS
 
     public IDisposable? TryAcquireAcceptanceLease(string goalId, string owner, TimeSpan staleAfter)
     {
-        return TryClaimAcceptanceLease(goalId, owner, staleAfter)
-            ? new AcceptanceLease(this, goalId, owner)
-            : null;
+        ArgumentOutOfRangeException.ThrowIfLessThanOrEqual(staleAfter, TimeSpan.Zero);
+        if (!TryClaimAcceptanceLease(goalId, owner, staleAfter))
+        {
+            return null;
+        }
+
+        try
+        {
+            return new AcceptanceLease(this, goalId, owner, staleAfter, _timeProvider);
+        }
+        catch
+        {
+            try { ReleaseAcceptanceLease(goalId, owner); }
+            catch { }
+            throw;
+        }
     }
 
     public string? TryGetAcceptanceLeaseOwner(string goalId)
@@ -284,7 +300,12 @@ public sealed class ReconcileSweepRemediationStore : IReconcileSweepRemediationS
         var activeTransactionResult = false;
         if (StateDbWriteSession.TryExecute(
                 _dbPath,
-                connection => activeTransactionResult = TryClaimAcceptanceLease(connection, goalId, owner, staleAfter)))
+                connection => activeTransactionResult = TryClaimAcceptanceLease(
+                    connection,
+                    goalId,
+                    owner,
+                    staleAfter,
+                    _timeProvider.GetUtcNow())))
         {
             return activeTransactionResult;
         }
@@ -293,7 +314,12 @@ public sealed class ReconcileSweepRemediationStore : IReconcileSweepRemediationS
         BeginImmediate(connection);
         try
         {
-            var acquired = TryClaimAcceptanceLease(connection, goalId, owner, staleAfter);
+            var acquired = TryClaimAcceptanceLease(
+                connection,
+                goalId,
+                owner,
+                staleAfter,
+                _timeProvider.GetUtcNow());
             Commit(connection);
             return acquired;
         }
@@ -308,9 +334,9 @@ public sealed class ReconcileSweepRemediationStore : IReconcileSweepRemediationS
         SqliteConnection connection,
         string goalId,
         string owner,
-        TimeSpan staleAfter)
+        TimeSpan staleAfter,
+        DateTimeOffset now)
     {
-        var now = DateTimeOffset.UtcNow;
         using (var delete = connection.CreateCommand())
         {
             delete.CommandText = "DELETE FROM reconcile_acceptance_leases WHERE goal_id = $goal AND acquired_at < $stale";
@@ -325,6 +351,75 @@ public sealed class ReconcileSweepRemediationStore : IReconcileSweepRemediationS
         insert.Parameters.AddWithValue("$owner", owner);
         insert.Parameters.AddWithValue("$at", now.ToString("O"));
         return insert.ExecuteNonQuery() == 1;
+    }
+
+    private bool RenewAcceptanceLease(string goalId, string owner)
+    {
+        var renewed = false;
+        if (StateDbWriteSession.TryExecute(
+                _dbPath,
+                connection => renewed = RenewAcceptanceLease(
+                    connection,
+                    goalId,
+                    owner,
+                    _timeProvider.GetUtcNow())))
+        {
+            return renewed;
+        }
+
+        using var connection = Open();
+        BeginImmediate(connection);
+        try
+        {
+            renewed = RenewAcceptanceLease(
+                connection,
+                goalId,
+                owner,
+                _timeProvider.GetUtcNow());
+            Commit(connection);
+            return renewed;
+        }
+        catch
+        {
+            Rollback(connection);
+            throw;
+        }
+    }
+
+    private static bool RenewAcceptanceLease(
+        SqliteConnection connection,
+        string goalId,
+        string owner,
+        DateTimeOffset renewedAtUtc)
+    {
+        using var command = connection.CreateCommand();
+        command.CommandText = "UPDATE reconcile_acceptance_leases SET acquired_at = $at WHERE goal_id = $goal AND owner = $owner";
+        command.Parameters.AddWithValue("$at", renewedAtUtc.ToString("O"));
+        command.Parameters.AddWithValue("$goal", goalId);
+        command.Parameters.AddWithValue("$owner", owner);
+        return command.ExecuteNonQuery() == 1;
+    }
+
+    private void RecordAcceptanceLeaseRenewalFailure(
+        string goalId,
+        string owner,
+        Exception exception,
+        string disposition)
+    {
+        try
+        {
+            _writeTelemetry.EmitFailure(
+                "reconcile-acceptance-lease-renew",
+                exception,
+                attemptCount: 1,
+                disposition: disposition,
+                goalId: goalId,
+                owner: owner);
+        }
+        catch
+        {
+            // Renewal diagnostics cannot crash the protected operation.
+        }
     }
 
     public void ReleaseAcceptanceLease(string goalId, string owner)
@@ -524,12 +619,64 @@ public sealed class ReconcileSweepRemediationStore : IReconcileSweepRemediationS
         command.ExecuteNonQuery();
     }
 
-    private sealed class AcceptanceLease(
-        ReconcileSweepRemediationStore store,
-        string goalId,
-        string owner) : IDisposable
+    private sealed class AcceptanceLease : IDisposable
     {
+        private readonly ReconcileSweepRemediationStore _store;
+        private readonly string _goalId;
+        private readonly string _owner;
+        private readonly ITimer _renewalTimer;
         private int _disposed;
+        private int _renewalTerminal;
+
+        public AcceptanceLease(
+            ReconcileSweepRemediationStore store,
+            string goalId,
+            string owner,
+            TimeSpan staleAfter,
+            TimeProvider timeProvider)
+        {
+            _store = store;
+            _goalId = goalId;
+            _owner = owner;
+            var interval = RenewalInterval(staleAfter);
+            _renewalTimer = timeProvider.CreateTimer(
+                static state => ((AcceptanceLease)state!).Renew(),
+                this,
+                interval,
+                interval);
+        }
+
+        private static TimeSpan RenewalInterval(TimeSpan staleAfter) =>
+            TimeSpan.FromTicks(Math.Max(1, staleAfter.Ticks / 4));
+
+        private void Renew()
+        {
+            if (Volatile.Read(ref _disposed) != 0 || Volatile.Read(ref _renewalTerminal) != 0)
+            {
+                return;
+            }
+
+            try
+            {
+                if (!_store.RenewAcceptanceLease(_goalId, _owner) &&
+                    Interlocked.Exchange(ref _renewalTerminal, 1) == 0)
+                {
+                    _store.RecordAcceptanceLeaseRenewalFailure(
+                        _goalId,
+                        _owner,
+                        new InvalidOperationException("The owner-qualified acceptance lease row no longer exists."),
+                        "lease-lost-owner-mismatch");
+                }
+            }
+            catch (Exception ex)
+            {
+                _store.RecordAcceptanceLeaseRenewalFailure(
+                    _goalId,
+                    _owner,
+                    ex,
+                    "lease-preserved-renewal-failed");
+            }
+        }
 
         public void Dispose()
         {
@@ -537,9 +684,10 @@ public sealed class ReconcileSweepRemediationStore : IReconcileSweepRemediationS
             {
                 return;
             }
+            _renewalTimer.Dispose();
             try
             {
-                store.ReleaseAcceptanceLease(goalId, owner);
+                _store.ReleaseAcceptanceLease(_goalId, _owner);
             }
             catch
             {

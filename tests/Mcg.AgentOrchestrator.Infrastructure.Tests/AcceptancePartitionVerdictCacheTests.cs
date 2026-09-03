@@ -412,15 +412,17 @@ public sealed class AcceptancePartitionVerdictCacheTests : IDisposable
     }
 
     [Theory]
-    [InlineData(true, -1, 1, 1, "passed", null, null, AcceptanceShardCompletionPredicates.TimedOut)]
-    [InlineData(false, 1, 1, 1, "passed", null, null, AcceptanceShardCompletionPredicates.NonzeroExit)]
-    [InlineData(false, 0, null, null, "missing", AcceptanceShardCompletionPredicates.MissingTrx, null, AcceptanceShardCompletionPredicates.MissingTrx)]
-    [InlineData(false, 0, null, null, "malformed", AcceptanceShardCompletionPredicates.MalformedTrx, null, AcceptanceShardCompletionPredicates.MalformedTrx)]
-    [InlineData(false, 0, 0, 0, "passed", null, null, AcceptanceShardCompletionPredicates.ZeroTests)]
-    [InlineData(false, 0, 2, 1, "passed", null, null, AcceptanceShardCompletionPredicates.IncompleteExecution)]
-    [InlineData(false, 0, 1, 1, "failed", null, null, AcceptanceShardCompletionPredicates.FailingTrx)]
-    [InlineData(false, 0, 1, 1, "passed", null, AcceptanceFailureClassifications.FocusedSelectionApparatusFailure, AcceptanceFailureClassifications.FocusedSelectionApparatusFailure)]
-    public void CompletionDecision_FailedPredicate_DrivesTypedPartitionRetry(
+    [InlineData(true, -1, 1, 1, "passed", null, null, AcceptanceShardCompletionPredicates.TimedOut, true)]
+    [InlineData(false, 1, 1, 1, "passed", null, null, AcceptanceShardCompletionPredicates.NonzeroExit, true)]
+    [InlineData(false, 0, null, null, "missing", AcceptanceShardCompletionPredicates.MissingTrx, null, AcceptanceShardCompletionPredicates.MissingTrx, true)]
+    [InlineData(false, 0, null, null, "malformed", AcceptanceShardCompletionPredicates.MalformedTrx, null, AcceptanceShardCompletionPredicates.MalformedTrx, true)]
+    [InlineData(false, 0, 0, 0, "passed", null, null, AcceptanceShardCompletionPredicates.ZeroTests, true)]
+    [InlineData(false, 0, 2, 1, "passed", null, null, AcceptanceShardCompletionPredicates.IncompleteExecution, true)]
+    [InlineData(false, 1, 1, 1, "failed", null, null, AcceptanceShardCompletionPredicates.FailingTrx, false)]
+    [InlineData(false, 0, 1, 1, "passed", null, AcceptanceFailureClassifications.FocusedSelectionApparatusFailure, AcceptanceFailureClassifications.FocusedSelectionApparatusFailure, true)]
+    [InlineData(false, 0, 1, 1, "passed", null, AcceptanceFailureClassifications.StructuralCoverageFailed, AcceptanceFailureClassifications.StructuralCoverageFailed, false)]
+    [InlineData(false, 0, 1, 1, "passed", null, AcceptanceFailureClassifications.FocusedSelectionAbsentAtBaseline, AcceptanceFailureClassifications.FocusedSelectionAbsentAtBaseline, false)]
+    public void CompletionDecision_FailedPredicate_RerunsOnlyIndeterminateInfrastructureFailure(
         bool timedOut,
         int exitCode,
         int? discovered,
@@ -428,7 +430,8 @@ public sealed class AcceptancePartitionVerdictCacheTests : IDisposable
         string trxOutcome,
         string? trxFailedPredicate,
         string? policyFailure,
-        string expectedPredicate)
+        string expectedPredicate,
+        bool expectedRerun)
     {
         var cache = CreateCache("typed-retry", withinAttemptRerunEnabled: true);
         var decision = GoalAcceptanceVerifier.DecideTestShardCompletionForTests(
@@ -441,7 +444,7 @@ public sealed class AcceptancePartitionVerdictCacheTests : IDisposable
 
         Assert.False(decision.Passed);
         Assert.Equal(expectedPredicate, decision.FailedPredicate);
-        Assert.True(cache.ShouldRerunWithinAttempt(_partition, decision));
+        Assert.Equal(expectedRerun, cache.ShouldRerunWithinAttempt(_partition, decision));
     }
 
     [Fact]
