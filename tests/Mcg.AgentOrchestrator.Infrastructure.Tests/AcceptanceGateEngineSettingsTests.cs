@@ -15,7 +15,7 @@ public sealed class AcceptanceGateEngineSettingsTests
         Xunit.Assert.Equal(6, settings.MaxConcurrentShards);
         Xunit.Assert.Equal(5, settings.PartitionVerdictFullRerunEveryN);
         Xunit.Assert.Equal(AcceptanceGateEngineSettings.DefaultOutputCaptureLimitBytes, settings.OutputCaptureLimitBytes);
-        Xunit.Assert.Equal(19, settings.InfrastructureTestLanes.Count);
+        Xunit.Assert.Equal(20, settings.InfrastructureTestLanes.Count);
         Xunit.Assert.Equal(7, startupContract.ManifestCheckCount);
         using var manifestDocument = System.Text.Json.JsonDocument.Parse(
             File.ReadAllText(Path.Combine(repositoryRoot, "config", "acceptance-manifest.json")));
