@@ -1881,16 +1881,79 @@ public sealed class LauncherScriptTests
         AssertForwardedArguments(result.Stdout, ["alpha", " ", " gamma "]);
     }
 
-    [Xunit.Fact(DisplayName = "InvokeRepoScript_orchestrator_sqlite_tool_list_goals_smoke")]
-    public void InvokeRepoScriptOrchestratorSqliteToolListGoalsSmoke()
+    [Xunit.Fact]
+    public void ReadOnlySqliteHelperRunsCurrentArtifactWithoutBuild()
     {
-        var repoRoot = FindRepositoryRoot();
+        if (!OperatingSystem.IsWindows())
+        {
+            return;
+        }
+
+        var repositoryRoot = Path.Combine(Path.GetTempPath(), $"sqlite-helper-current-{Guid.NewGuid():N}");
+        var scriptsPath = Path.Combine(repositoryRoot, "scripts");
+        var toolSourcePath = Path.Combine(scriptsPath, "OrchestratorSqliteTools");
+        var coreSourcePath = Path.Combine(repositoryRoot, "src", "Mcg.AgentOrchestrator.Core");
+        var outputPath = Path.Combine(toolSourcePath, "bin", "Debug", "net10.0");
+        Directory.CreateDirectory(toolSourcePath);
+        Directory.CreateDirectory(coreSourcePath);
+        Directory.CreateDirectory(Path.Combine(outputPath, "runtimes", "win-x64", "native"));
+
         var dbPath = CreateSqliteToolSmokeDb();
         try
         {
-            var wrapperPath = Path.Combine(repoRoot, "scripts", "Invoke-RepoScript.ps1");
-            var result = RunPowerShellCommand(repoRoot, $"""
+            var sourceRoot = FindLauncherSourceRoot();
+            foreach (var scriptName in new[]
+                     {
+                         "Invoke-RepoScript.ps1",
+                         "Invoke-OrchestratorSqliteTool.ps1",
+                         "Test-OrchestratorArtifactFreshness.ps1"
+                     })
+            {
+                File.Copy(Path.Combine(sourceRoot, "scripts", scriptName), Path.Combine(scriptsPath, scriptName));
+            }
+
+            File.WriteAllText(Path.Combine(toolSourcePath, "Program.cs"), "Console.WriteLine(\"test\");");
+            File.WriteAllText(
+                Path.Combine(toolSourcePath, "OrchestratorSqliteTools.csproj"),
+                "<Project Sdk=\"Microsoft.NET.Sdk\" />");
+            File.WriteAllText(Path.Combine(coreSourcePath, "Core.cs"), "internal sealed class Core;");
+            File.WriteAllText(Path.Combine(repositoryRoot, "Directory.Build.props"), "<Project />");
+            File.WriteAllText(Path.Combine(repositoryRoot, "Directory.Build.rsp"), "-nodeReuse:false");
+            File.WriteAllText(Path.Combine(repositoryRoot, "global.json"), "{}");
+
+            RunGit(repositoryRoot, "init", "--initial-branch=main");
+            RunGit(repositoryRoot, "config", "user.email", "test@example.invalid");
+            RunGit(repositoryRoot, "config", "user.name", "SQLite Helper Test");
+            RunGit(repositoryRoot, "add", ".");
+            RunGit(repositoryRoot, "commit", "-m", "base");
+
+            var artifactPath = Path.Combine(outputPath, "OrchestratorSqliteTools.dll");
+            File.WriteAllText(artifactPath, "current artifact");
+            File.WriteAllText(Path.Combine(outputPath, "OrchestratorSqliteTools.deps.json"), "{}");
+            File.WriteAllText(Path.Combine(outputPath, "OrchestratorSqliteTools.runtimeconfig.json"), "{}");
+            File.WriteAllText(Path.Combine(outputPath, "runtimes", "win-x64", "native", "e_sqlite3.dll"), "native");
+            File.WriteAllText(artifactPath + ".git-head", RunGitForOutput(repositoryRoot, "rev-parse", "HEAD").Trim());
+
+            var baseline = new DateTime(2026, 9, 1, 12, 0, 0, DateTimeKind.Utc);
+            File.SetLastWriteTimeUtc(Path.Combine(toolSourcePath, "Program.cs"), baseline);
+            File.SetLastWriteTimeUtc(Path.Combine(toolSourcePath, "OrchestratorSqliteTools.csproj"), baseline);
+            File.SetLastWriteTimeUtc(Path.Combine(coreSourcePath, "Core.cs"), baseline);
+            File.SetLastWriteTimeUtc(Path.Combine(repositoryRoot, "Directory.Build.props"), baseline);
+            File.SetLastWriteTimeUtc(Path.Combine(repositoryRoot, "Directory.Build.rsp"), baseline);
+            File.SetLastWriteTimeUtc(Path.Combine(repositoryRoot, "global.json"), baseline);
+            File.SetLastWriteTimeUtc(artifactPath, baseline.AddMinutes(1));
+
+            var invocationPath = Path.Combine(repositoryRoot, "dotnet-invocation.txt");
+            var dotnetShimPath = Path.Combine(repositoryRoot, "dotnet.ps1");
+            File.WriteAllText(dotnetShimPath, """
+                [IO.File]::WriteAllLines($env:SQLITE_TEST_INVOCATION, @($args))
+                Write-Output "SQLite wrapper smoke"
+                """);
+            var wrapperPath = Path.Combine(scriptsPath, "Invoke-RepoScript.ps1");
+            var result = RunPowerShellCommand(repositoryRoot, $"""
                 $ErrorActionPreference = 'Stop'
+                $env:MCG_ORCHESTRATOR_DOTNET_PATH = '{EscapePowerShellSingleQuoted(dotnetShimPath)}'
+                $env:SQLITE_TEST_INVOCATION = '{EscapePowerShellSingleQuoted(invocationPath)}'
                 & '{EscapePowerShellSingleQuoted(wrapperPath)}' 'scripts\Invoke-OrchestratorSqliteTool.ps1' list-goals --db '{EscapePowerShellSingleQuoted(dbPath)}' --limit 10
                 """);
 
@@ -1899,19 +1962,21 @@ public sealed class LauncherScriptTests
             Assert.DoesNotContain("NU1900", result.Stdout, StringComparison.OrdinalIgnoreCase);
             Assert.DoesNotContain("NU1301", result.Stdout, StringComparison.OrdinalIgnoreCase);
             Assert.Contains("SQLite wrapper smoke", result.Stdout);
+            var invocation = File.ReadAllLines(invocationPath);
+            Assert.Equal(6, invocation.Length);
+            Assert.Equal(artifactPath, invocation[0], ignoreCase: true);
+            Assert.Equal("list-goals", invocation[1]);
+            Assert.Equal("--db", invocation[2]);
+            Assert.Equal(dbPath, invocation[3], ignoreCase: true);
+            Assert.Equal("--limit", invocation[4]);
+            Assert.Equal("10", invocation[5]);
+            Assert.DoesNotContain(invocation, argument => argument.Contains("build", StringComparison.OrdinalIgnoreCase));
+            Assert.DoesNotContain(invocation, argument => argument.Contains("run --project", StringComparison.OrdinalIgnoreCase));
         }
         finally
         {
-            try
-            {
-                Directory.Delete(Path.GetDirectoryName(dbPath)!, recursive: true);
-            }
-            catch (IOException)
-            {
-            }
-            catch (UnauthorizedAccessException)
-            {
-            }
+            TryDeleteDirectory(repositoryRoot);
+            TryDeleteDirectory(Path.GetDirectoryName(dbPath)!);
         }
     }
 
