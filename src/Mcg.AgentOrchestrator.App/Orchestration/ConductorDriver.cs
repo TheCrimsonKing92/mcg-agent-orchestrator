@@ -244,7 +244,8 @@ internal sealed partial class ConductorDriver
         IModelProviderRegistry? providers = null,
         Action<AgentOrchestratorKernel, IReadOnlyCollection<GoalId>>? persistCriticalDispatchStart = null,
         Func<GoalId, TaskId, InterruptedDispatchStateRead>? readCurrentInterruptedDispatchState = null,
-        bool runAcceptanceAttemptsInCurrentProcess = false)
+        bool runAcceptanceAttemptsInCurrentProcess = false,
+        Action<GoalSnapshot>? recordDurableGoalBaseline = null)
     {
         var dir = workspace.ExecutionDirectory;
         _executionDirectory = dir;
@@ -394,12 +395,20 @@ internal sealed partial class ConductorDriver
                                 checkpointPhase);
                             criticalCheckpointPersisted = true;
                             DispatchRecordWriteSucceededSink?.Invoke(goalId);
-                        },
+                    },
                     readCurrentInterruptedDispatchState: readCurrentInterruptedDispatchState,
-                    conductorPolicy: policy);
+                    conductorPolicy: policy,
+                    recordDurableGoalBaseline: recordDurableGoalBaseline);
             }
             catch (DispatchRecordWriteException ex)
             {
+                if (ex.PreservesAuthoritativeState)
+                {
+                    var reason = ex.InnerException?.Message ?? ex.Message;
+                    GoalOperationJournal.Failed(dir, goal, "conductor:dispatch", reason);
+                    return DispatchStartOutcome.Deferred(reason);
+                }
+
                 if (!ex.ProcessMayHaveStarted && !criticalCheckpointPersisted)
                     kernel.ReplaceGoalWithSnapshot(goalSnapshotBeforeDispatch);
                 throw;
@@ -461,7 +470,14 @@ internal sealed partial class ConductorDriver
                             DispatchRecordWriteSucceededSink?.Invoke(goalId);
                         },
                     readCurrentInterruptedDispatchState: readCurrentInterruptedDispatchState,
-                    conductorPolicy: policy);
+                    conductorPolicy: policy,
+                    recordDurableGoalBaseline: recordDurableGoalBaseline);
+            }
+            catch (DispatchRecordWriteException ex) when (ex.PreservesAuthoritativeState)
+            {
+                var reason = ex.InnerException?.Message ?? ex.Message;
+                GoalOperationJournal.Failed(dir, goal, "conductor:dispatch-start", reason);
+                return DispatchStartOutcome.Deferred(reason);
             }
             catch (Exception ex) when (ex is not DispatchRecordWriteException)
             {
@@ -4698,7 +4714,7 @@ internal sealed partial class ConductorDriver
     }
 
     private Goal GetCurrentGoal(Goal goal) =>
-        (_cohortKernel ?? _conductorTickKernel)?.GetGoal(goal.Id) ?? goal;
+        (_cohortKernel ?? _conductorTickKernel)?.Goals.SingleOrDefault(candidate => candidate.Id == goal.Id) ?? goal;
 
     private bool TryRunPreReviewEvidenceStage(
         Goal goal,

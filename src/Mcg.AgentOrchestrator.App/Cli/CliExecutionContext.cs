@@ -35,7 +35,9 @@ internal sealed class CliExecutionContext(
     Func<AgentOrchestratorKernel, IReadOnlyCollection<GoalId>, IReadOnlyList<GoalSnapshotCheckpointResult>>? checkpointGoalKernel = null,
     TransientSqliteLoadHold? initialConductLoopLoadHold = null,
     Action<Goal, GoalReplacementCommand>? finalizeGoalReplacement = null,
-    Action? reportGoalCreationProgress = null)
+    Action? reportGoalCreationProgress = null,
+    Action<AgentOrchestratorKernel, IReadOnlyCollection<GoalId>>? persistCriticalGoalKernel = null,
+    Action<GoalSnapshot>? recordDurableGoalBaseline = null)
 {
 public AgentOrchestratorKernel Kernel { get; } = kernel;
 
@@ -61,6 +63,22 @@ public void PersistCheckpoint(AgentOrchestratorKernel checkpointKernel) => persi
 
 public void PersistGoalCheckpoint(AgentOrchestratorKernel checkpointKernel, IReadOnlyCollection<GoalId> changedGoalIds) =>
     persistGoalKernel?.Invoke(checkpointKernel, changedGoalIds);
+
+public void PersistCriticalGoalCheckpoint(
+    AgentOrchestratorKernel checkpointKernel,
+    IReadOnlyCollection<GoalId> changedGoalIds)
+{
+    if (persistCriticalGoalKernel is null)
+    {
+        throw new InvalidOperationException(
+            "Critical goal persistence is unavailable; worker start was aborted.");
+    }
+
+    persistCriticalGoalKernel(checkpointKernel, changedGoalIds);
+}
+
+public void RecordDurableGoalBaseline(GoalSnapshot snapshot) =>
+    recordDurableGoalBaseline?.Invoke(snapshot);
 
 public IReadOnlyList<GoalSnapshotCheckpointResult> CheckpointGoals(
     AgentOrchestratorKernel checkpointKernel,

@@ -1509,12 +1509,13 @@ private static bool? TryExecuteGoalCommand(string command, IReadOnlyList<string>
                     context.WorkerProfiles,
                     context.Channel,
                     context.Providers,
-                    context.PersistGoalCheckpoint,
-                    (goalId, taskId) => BackgroundDispatchRunner.ReadCurrentState(
+                    persistCriticalDispatchStart: context.PersistCriticalGoalCheckpoint,
+                    readCurrentInterruptedDispatchState: (goalId, taskId) => BackgroundDispatchRunner.ReadCurrentState(
                         context.ReloadKernel(),
                         goalId,
                         taskId),
-                    context.RunInjectedAcceptanceVerifierInCurrentProcess);
+                    runAcceptanceAttemptsInCurrentProcess: context.RunInjectedAcceptanceVerifierInCurrentProcess,
+                    recordDurableGoalBaseline: context.RecordDurableGoalBaseline);
                 var postLandingCanary = PostLandingCanaryFactory.CreateDefault(
                     context.Workspace,
                     line =>
@@ -1809,12 +1810,13 @@ private static bool? TryExecuteGoalCommand(string command, IReadOnlyList<string>
                 context.WorkerProfiles,
                 context.Channel,
                 context.Providers,
-                context.PersistGoalCheckpoint,
-                (goalId, taskId) => BackgroundDispatchRunner.ReadCurrentState(
+                persistCriticalDispatchStart: context.PersistCriticalGoalCheckpoint,
+                readCurrentInterruptedDispatchState: (goalId, taskId) => BackgroundDispatchRunner.ReadCurrentState(
                     context.ReloadKernel(),
                     goalId,
                     taskId),
-                context.RunInjectedAcceptanceVerifierInCurrentProcess);
+                runAcceptanceAttemptsInCurrentProcess: context.RunInjectedAcceptanceVerifierInCurrentProcess,
+                recordDurableGoalBaseline: context.RecordDurableGoalBaseline);
 
             // Single-goal continuous mode: drive just this goal to its next checkpoint without the
             // whole-kernel loop, so adding a goal never requires stopping a running loop and other

@@ -901,6 +901,9 @@ public sealed class WorkerDispatchTestsDispatchPreparation : WorkerDispatchTestS
             .SaveAsync(kernel)
             .GetAwaiter()
             .GetResult();
+        var repository = new SqliteOrchestratorStateRepository(workspace.SqliteStatePath);
+        var tickBaselines = kernel.ExportSnapshot().Goals.ToDictionary(snapshot => snapshot.Id, StringComparer.Ordinal);
+        var recordedDurableBaselines = new List<GoalSnapshot>();
         var checkpointCalls = 0;
         var processStartCalls = 0;
         var startedDispatchIdentities = new List<DateTimeOffset>();
@@ -925,17 +928,35 @@ public sealed class WorkerDispatchTestsDispatchPreparation : WorkerDispatchTestS
                     checkpointPhases.Add(checkpointPhase);
                     startedDispatchIdentities.Add(Assert.IsType<DateTimeOffset>(
                         checkpointKernel.GetTask(checkpointGoalId, checkpointTaskId).LastDispatch?.DispatchedAt));
-                    new SqliteOrchestratorStateRepository(workspace.SqliteStatePath)
-                        .SaveAsync(checkpointKernel)
-                        .GetAwaiter()
-                        .GetResult();
+                    CliPersistentStateRunner.PersistCriticalGoalSnapshotsOrThrow(
+                        repository,
+                        checkpointKernel,
+                        [checkpointGoalId],
+                        tickBaselines,
+                        workspace.SqliteStatePath,
+                        results =>
+                        {
+                            foreach (var result in results)
+                            {
+                                _ = CliPersistentStateRunner.RebaseCheckpointAfterDurableSave(checkpointKernel, result);
+                                if (result.PersistedSnapshot is not null)
+                                    tickBaselines[result.GoalId] = result.PersistedSnapshot;
+                            }
+                        });
                 },
                 runner: runner,
-                sandboxOptions: DisabledSandbox));
+                sandboxOptions: DisabledSandbox,
+                recordDurableGoalBaseline: snapshot =>
+                {
+                    recordedDurableBaselines.Add(snapshot);
+                    tickBaselines[snapshot.Id] = snapshot;
+                }));
 
         Assert.Null(exception);
         Assert.Equal(1, processStartCalls);
         Assert.True(checkpointCalls > 0);
+        Assert.NotEmpty(recordedDurableBaselines);
+        Assert.All(recordedDurableBaselines, snapshot => Assert.Equal(goal.Id.Value, snapshot.Id));
         Assert.Equal(
             1,
             checkpointPhases.Count(phase => phase == DispatchRecordCheckpointPhase.ProcessMayHaveStarted));
@@ -1222,26 +1243,80 @@ public sealed class WorkerDispatchTestsDispatchPreparation : WorkerDispatchTestS
         Assert.Equal(expected, dispatch.RetryContextFingerprint);
     }
 
-    [Xunit.Fact(DisplayName = "StartDispatches_checkpoint_phase_stays_post_process_after_first_spawn")]
-    public void StartDispatchesCheckpointPhaseStaysPostProcessAfterFirstSpawn()
+    [Xunit.Fact(DisplayName = "StartDispatches_second_task_prestart_checkpoint_remains_prestart")]
+    public void StartDispatchesSecondTaskPrestartCheckpointRemainsPrestart()
     {
-        var processMayHaveStarted = false;
+        var root = CreateTempDirectory();
+        var workspace = OrchestratorWorkspace.ForDirectory(root);
+        _ = StateDbMigrations.EnsureUpToDate(workspace.SqliteStatePath);
+        var kernel = new AgentOrchestratorKernel();
+        var first = new TaskSpec(TaskId.New(), "Run first safe fixture.", AgentRole.Planner);
+        var second = new TaskSpec(TaskId.New(), "Abort second fixture before spawn.", AgentRole.Planner);
+        var goal = kernel.CreateGoal("Keep checkpoint phase scoped to each process", [first, second]);
+        var agent = SubscriptionPlannerAgent("planner", "Planner");
+        kernel.ActivateGoal(goal.Id, [agent]);
+        var at = DateTimeOffset.UtcNow;
+        RetryContextFingerprint FingerprintFor(TaskSpec task) => RetryContextFingerprintBuilder.Build(
+            new RetryContextFingerprintInput(
+                goal.Id.Value,
+                task.Id.Value,
+                task.RequiredRole,
+                "OpenAI",
+                AgentCatalog.OpenAiSubscriptionModelAlias,
+                PaidRouteClassification.Unknown,
+                "candidate",
+                "criteria",
+                [],
+                [],
+                [],
+                [],
+                "base",
+                "main"));
+        kernel.RecordTaskDispatch(
+            goal.Id,
+            first.Id,
+            new TaskDispatchRecord(
+                "fixture",
+                "Write-Output safe",
+                root,
+                at,
+                RetryContextFingerprint: FingerprintFor(first)));
+        kernel.RecordTaskDispatch(
+            goal.Id,
+            second.Id,
+            new TaskDispatchRecord(
+                "fixture",
+                "Write-Output safe",
+                root,
+                at.AddTicks(1),
+                RetryContextFingerprint: FingerprintFor(second)));
+        var phases = new List<(TaskId TaskId, DispatchRecordCheckpointPhase Phase)>();
 
-        Assert.Equal(
-            DispatchRecordCheckpointPhase.BeforeProcessStart,
-            GoalManagementCommandService.ResolveBatchCheckpointPhase(
-                ref processMayHaveStarted,
-                DispatchRecordCheckpointPhase.BeforeProcessStart));
-        Assert.Equal(
-            DispatchRecordCheckpointPhase.ProcessMayHaveStarted,
-            GoalManagementCommandService.ResolveBatchCheckpointPhase(
-                ref processMayHaveStarted,
-                DispatchRecordCheckpointPhase.ProcessMayHaveStarted));
-        Assert.Equal(
-            DispatchRecordCheckpointPhase.ProcessMayHaveStarted,
-            GoalManagementCommandService.ResolveBatchCheckpointPhase(
-                ref processMayHaveStarted,
-                DispatchRecordCheckpointPhase.BeforeProcessStart));
+        var conflict = Assert.Throws<DispatchCheckpointConflictException>(() =>
+            GoalManagementCommandService.StartDispatches(
+                kernel,
+                workspace,
+                goal,
+                [agent],
+                DispatchTestProfiles(),
+                refreshBeforeStart: false,
+                checkpointBeforeWorkerStart: (_, _, taskId, phase) =>
+                {
+                    phases.Add((taskId, phase));
+                    if (taskId == second.Id && phase == DispatchRecordCheckpointPhase.BeforeProcessStart)
+                    {
+                        throw new DispatchCheckpointConflictException(
+                            "Authoritative state changed before the second process start.");
+                    }
+                },
+                sandboxOptions: DisabledSandbox));
+
+        Assert.Contains("second process start", conflict.Message, StringComparison.Ordinal);
+        Assert.Contains(phases, entry =>
+            entry.TaskId == first.Id && entry.Phase == DispatchRecordCheckpointPhase.ProcessMayHaveStarted);
+        Assert.Contains(phases, entry =>
+            entry.TaskId == second.Id && entry.Phase == DispatchRecordCheckpointPhase.BeforeProcessStart);
+        Assert.Null(kernel.GetTask(goal.Id, second.Id).LastProcess);
     }
 
     [Xunit.Fact(DisplayName = "Context_window_is_provider_responsive_and_qwen_code_tax_is_a_profile_reserve")]

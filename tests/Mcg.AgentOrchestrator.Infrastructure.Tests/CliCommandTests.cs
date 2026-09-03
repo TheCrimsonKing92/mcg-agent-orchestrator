@@ -607,6 +607,11 @@ public abstract class CliCommandTestBase
 
         public int LastSavedGoalStateHumanInputCount { get; private set; }
 
+        public IReadOnlyCollection<GoalSnapshotSaveRequest>? LastGoalSnapshotSaveRequests { get; private set; }
+
+        public Func<IReadOnlyCollection<GoalSnapshotSaveRequest>, IReadOnlyList<GoalSnapshotSaveResult>>?
+            GoalSnapshotSaveResultFactory { get; set; }
+
         public List<string> LoadedGoalIds { get; } = [];
 
         public List<IReadOnlyList<string>> LoadGoalBatches { get; } = [];
@@ -705,6 +710,10 @@ public abstract class CliCommandTestBase
             IReadOnlyCollection<GoalSnapshotSaveRequest> goals,
             CancellationToken cancellationToken = default)
         {
+            LastGoalSnapshotSaveRequests = goals.ToArray();
+            if (GoalSnapshotSaveResultFactory is not null)
+                return GoalSnapshotSaveResultFactory(goals);
+
             var snapshots = goals.Select(goal => goal.Current).ToArray();
             await SaveGoalSnapshotsAsync(snapshots, cancellationToken);
             return snapshots

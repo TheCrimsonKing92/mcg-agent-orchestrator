@@ -435,7 +435,7 @@ public sealed class BackgroundDispatchRunner
             ?? throw new InvalidOperationException("Failed to start background dispatch process.");
         if (!WorkerProcessJobs.TryRegister(process, $"{goalId.Value}:{taskId.Value}", out var registrationFailure))
         {
-            process.Dispose();
+            TerminateUnreleasedDispatchHost(process);
             kernel.ReportTaskProgress(goalId, taskId, WorkTaskStatus.Failed, registrationFailure);
             checkpointBeforeWorkerStart?.Invoke(kernel, goalId, taskId, DispatchRecordCheckpointPhase.ProcessMayHaveStarted);
             return DispatchProcessStartResult.Failed(registrationFailure);

@@ -1752,6 +1752,82 @@ public sealed class SqliteOrchestratorStateRepositoryTests
         Assert.Contains(restoredGoal.Timeline, evt => evt.Kind == ProgressKind.TaskProcessStarted);
     }
 
+    [Xunit.Fact(DisplayName = "SqliteOrchestratorStateRepository_critical_dispatch_checkpoint_rejects_stale_tick_without_overwrite")]
+    public async Task CriticalDispatchCheckpointRejectsStaleTickWithoutOverwrite()
+    {
+        var repo = new SqliteOrchestratorStateRepository(TempDb());
+        var kernel = new AgentOrchestratorKernel();
+        var goal = GoalLifecycleCommands.CreateAndActivateSimpleGoal(
+            kernel,
+            AgentCatalog.Default().Agents,
+            "Reject stale paid dispatch");
+        var task = goal.Tasks.Single();
+        await repo.SaveAsync(kernel);
+        var baseline = kernel.ExportGoalSnapshot(goal.Id);
+
+        var staleTickKernel = AgentOrchestratorKernel.FromSnapshot(new OrchestratorSnapshot([baseline], []));
+        staleTickKernel.RecordTaskDispatch(
+            goal.Id,
+            task.Id,
+            new TaskDispatchRecord("codex-cli", "codex exec", "C:\\work", DateTimeOffset.UtcNow));
+        var staleTick = staleTickKernel.ExportGoalSnapshot(goal.Id);
+
+        await repo.TransactGoalAsync<bool>(
+            goal.Id,
+            (stored, _) =>
+            {
+                var operatorKernel = AgentOrchestratorKernel.FromSnapshot(new OrchestratorSnapshot([stored!], []));
+                operatorKernel.ReportTaskProgress(goal.Id, task.Id, WorkTaskStatus.Completed, "Operator preserved existing work.");
+                operatorKernel.RecordTaskVerification(
+                    goal.Id,
+                    task.Id,
+                    new TaskVerificationRecord("manual", "C:\\work", 0, "passed", string.Empty, DateTimeOffset.UtcNow));
+                return Task.FromResult((true, operatorKernel.ExportGoalSnapshot(goal.Id), true));
+            });
+
+        var result = Assert.Single(await repo.SaveGoalSnapshotsWithMergeAsync(
+            [new GoalSnapshotSaveRequest(baseline, staleTick, RejectConflict: true)]));
+
+        Assert.Equal(GoalSnapshotSaveDisposition.Skipped, result.Disposition);
+        Assert.Contains("rejected stale tick snapshot", result.Message, StringComparison.Ordinal);
+        Assert.Equal(WorkTaskStatus.Completed, result.PersistedSnapshot!.Tasks.Single().Status);
+        var restoredTask = (await repo.LoadAsync()).GetTask(goal.Id, task.Id);
+        Assert.Equal(WorkTaskStatus.Completed, restoredTask.Status);
+        Assert.True(restoredTask.LastVerification!.Succeeded);
+        Assert.Null(restoredTask.LastDispatch);
+    }
+
+    [Xunit.Fact(DisplayName = "SqliteOrchestratorStateRepository_critical_dispatch_checkpoint_rejects_same_field_divergence")]
+    public async Task CriticalDispatchCheckpointRejectsSameFieldDivergence()
+    {
+        var repo = new SqliteOrchestratorStateRepository(TempDb());
+        var kernel = new AgentOrchestratorKernel();
+        var goal = GoalLifecycleCommands.CreateAndActivateSimpleGoal(
+            kernel,
+            AgentCatalog.Default().Agents,
+            "Reject same-field critical conflict");
+        await repo.SaveAsync(kernel);
+        var baseline = kernel.ExportGoalSnapshot(goal.Id);
+        var stored = baseline with
+        {
+            Tasks = baseline.Tasks.Select(task => task with { Status = WorkTaskStatus.Completed }).ToArray()
+        };
+        _ = await repo.TransactGoalAsync(
+            goal.Id,
+            (_, _) => Task.FromResult((true, (GoalSnapshot?)stored, true)));
+        var current = baseline with
+        {
+            Tasks = baseline.Tasks.Select(task => task with { Status = WorkTaskStatus.Running }).ToArray()
+        };
+
+        var result = Assert.Single(await repo.SaveGoalSnapshotsWithMergeAsync(
+            [new GoalSnapshotSaveRequest(baseline, current, RejectConflict: true)]));
+
+        Assert.Equal(GoalSnapshotSaveDisposition.Skipped, result.Disposition);
+        Assert.Equal(WorkTaskStatus.Completed, result.PersistedSnapshot!.Tasks.Single().Status);
+        Assert.Equal(WorkTaskStatus.Completed, (await repo.LoadAsync()).GetTask(goal.Id, goal.Tasks.Single().Id).Status);
+    }
+
     [Xunit.Fact(DisplayName = "SqliteOrchestratorStateRepository_round_trips_gracefully_detached_process_marker")]
     public async Task SqliteOrchestratorStateRepositoryRoundTripsGracefullyDetachedProcessMarker()
     {

@@ -338,6 +338,135 @@ public sealed partial class ConductorDriverTestsAcceptanceCoordination
         Assert.NotNull(kernel.GetGoal(goal.Id).Tasks.Single().LastProcess);
     }
 
+    [Xunit.Fact(DisplayName = "ConductorDriver_critical_checkpoint_conflict_holds_without_starting_stale_worker")]
+    public void ConductorDriverCriticalCheckpointConflictHoldsWithoutStartingStaleWorker()
+    {
+        var root = CreateTempDirectory();
+        SeedLocalSkillCatalog(root);
+        RunGit(root, "init");
+        RunGit(root, "checkout", "-b", "main");
+        RunGit(root, "config", "user.email", "test@example.com");
+        RunGit(root, "config", "user.name", "Test User");
+        File.WriteAllText(Path.Combine(root, "README.md"), "initial");
+        RunGit(root, "add", ".");
+        RunGit(root, "commit", "-m", "initial");
+
+        var workspace = OrchestratorWorkspace.ForDirectory(root);
+        _ = StateDbMigrations.EnsureUpToDate(workspace.SqliteStatePath);
+        var (kernel, goal) = SimpleGoal("Reject stale critical dispatch checkpoint");
+        kernel.SetGoalRefinedSpec(goal.Id, new RefinedSpec(
+            "Critical checkpoint conflict fixture is already refined.",
+            ["No stale paid worker starts after an operator advances the task."],
+            VerificationClass.TestVerifiable,
+            [],
+            []));
+        GoalWorktrees.Ensure(root, goal.Id);
+        var task = goal.Tasks.Single();
+        var authoritativeKernel = AgentOrchestratorKernel.FromSnapshot(
+            new OrchestratorSnapshot([kernel.ExportGoalSnapshot(goal.Id)], []));
+        authoritativeKernel.ReportTaskProgress(
+            goal.Id,
+            task.Id,
+            WorkTaskStatus.Completed,
+            "Operator preserved existing work.");
+        authoritativeKernel.RecordTaskVerification(
+            goal.Id,
+            task.Id,
+            new TaskVerificationRecord("manual", root, 0, "passed", string.Empty, DateTimeOffset.UtcNow));
+        var authoritative = authoritativeKernel.ExportGoalSnapshot(goal.Id);
+        var successfulCheckpointNotifications = 0;
+        var driver = new ConductorDriver(
+            kernel,
+            workspace,
+            new FakeAcceptanceVerifier(),
+            DefaultAgents(),
+            WorkerProfileCatalog.Default(),
+            persistCriticalDispatchStart: (checkpoint, _) =>
+            {
+                checkpoint.ReplaceGoalWithSnapshot(authoritative);
+                throw new DispatchCheckpointConflictException(
+                    "Critical dispatch checkpoint rejected stale state; worker start was aborted.");
+            });
+        driver.DispatchRecordWriteSucceededSink = _ => successfulCheckpointNotifications++;
+
+        var result = driver.AdvanceOnce(goal, ConductorAutonomyPolicy.Conservative);
+
+        var held = Assert.IsType<ConductorAdvanceOutcome.Held>(result.Outcome);
+        Assert.Contains("worker start was aborted", held.Reason, StringComparison.Ordinal);
+        var liveTask = kernel.GetTask(goal.Id, task.Id);
+        Assert.Equal(WorkTaskStatus.Completed, liveTask.Status);
+        Assert.NotNull(liveTask.LastVerification);
+        Assert.Null(liveTask.LastDispatch);
+        Assert.Null(liveTask.LastProcess);
+        Assert.Equal(0, successfulCheckpointNotifications);
+    }
+
+    [Xunit.Fact(DisplayName = "ConductorDriver_terminal_critical_checkpoint_conflict_holds_after_authoritative_eviction")]
+    public void ConductorDriverTerminalCriticalCheckpointConflictHoldsAfterAuthoritativeEviction()
+    {
+        var root = CreateTempDirectory();
+        SeedLocalSkillCatalog(root);
+        RunGit(root, "init");
+        RunGit(root, "checkout", "-b", "main");
+        RunGit(root, "config", "user.email", "test@example.com");
+        RunGit(root, "config", "user.name", "Test User");
+        File.WriteAllText(Path.Combine(root, "README.md"), "initial");
+        RunGit(root, "add", ".");
+        RunGit(root, "commit", "-m", "initial");
+
+        var workspace = OrchestratorWorkspace.ForDirectory(root);
+        _ = StateDbMigrations.EnsureUpToDate(workspace.SqliteStatePath);
+        var (kernel, goal) = SimpleGoal("Honor terminal state during dispatch checkpoint");
+        kernel.SetGoalRefinedSpec(goal.Id, new RefinedSpec(
+            "Terminal checkpoint conflict fixture is already refined.",
+            ["A concurrently cancelled goal cannot crash the conductor."],
+            VerificationClass.TestVerifiable,
+            [],
+            []));
+        GoalWorktrees.Ensure(root, goal.Id);
+        var authoritativeKernel = AgentOrchestratorKernel.FromSnapshot(
+            new OrchestratorSnapshot([kernel.ExportGoalSnapshot(goal.Id)], []));
+        authoritativeKernel.CancelGoal(goal.Id, "Operator cancelled obsolete work.");
+        var authoritative = authoritativeKernel.ExportGoalSnapshot(goal.Id);
+        var driver = new ConductorDriver(
+            kernel,
+            workspace,
+            new FakeAcceptanceVerifier(),
+            DefaultAgents(),
+            WorkerProfileCatalog.Default(),
+            persistCriticalDispatchStart: (checkpoint, _) =>
+            {
+                checkpoint.ReplaceGoalWithSnapshot(authoritative);
+                checkpoint.EvictTerminalGoalAggregates([goal.Id]);
+                throw new DispatchCheckpointConflictException(
+                    "Critical dispatch checkpoint rejected terminal authoritative state; worker start was aborted.");
+            });
+
+        var result = driver.AdvanceOnce(goal, ConductorAutonomyPolicy.Conservative);
+
+        var held = Assert.IsType<ConductorAdvanceOutcome.Held>(result.Outcome);
+        Assert.Contains("worker start was aborted", held.Reason, StringComparison.Ordinal);
+        Assert.DoesNotContain(kernel.Goals, candidate => candidate.Id == goal.Id);
+    }
+
+    [Xunit.Theory(DisplayName = "DispatchRecordWriteException_authoritative_conflict_is_soft_only_before_process_start")]
+    [Xunit.InlineData(DispatchRecordCheckpointPhase.BeforeProcessStart, true)]
+    [Xunit.InlineData(DispatchRecordCheckpointPhase.ProcessMayHaveStarted, false)]
+    public void DispatchRecordWriteExceptionAuthoritativeConflictIsSoftOnlyBeforeProcessStart(
+        DispatchRecordCheckpointPhase phase,
+        bool expected)
+    {
+        var error = DispatchRecordWriteException.From(
+            new DispatchCheckpointConflictException("stale critical checkpoint"),
+            phase,
+            "dispatch-start",
+            GoalId.New(),
+            TaskId.New());
+
+        Assert.Equal(expected, error.PreservesAuthoritativeState);
+        Assert.Equal(phase == DispatchRecordCheckpointPhase.ProcessMayHaveStarted, error.IsFatal);
+    }
+
     [Xunit.Fact]
     public void ConductorDriverReplacementLeaseBlocksWorkspaceEvidenceMutation()
     {
