@@ -43,7 +43,7 @@ public sealed class GoalAcceptanceVerifierSplitFactParityTests
             .OrderBy(type => type.Name, StringComparer.Ordinal)
             .ToArray();
 
-        Assert.Equal(11, buildSlotFragments.Length);
+        Assert.Equal(12, buildSlotFragments.Length);
         Assert.All(
             buildSlotFragments,
             fragment => Assert.Equal(TestCollections.JobAccounting, CollectionName(fragment)));
