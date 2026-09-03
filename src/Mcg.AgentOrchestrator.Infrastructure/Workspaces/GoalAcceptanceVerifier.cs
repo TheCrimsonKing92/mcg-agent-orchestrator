@@ -8301,7 +8301,8 @@ public sealed class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
         TimeSpan commandTimeout,
         CancellationToken cancellationToken = default,
         Action<AcceptanceProcessCleanupObservation>? cleanupObserver = null,
-        CancellationToken timeoutSignal = default) =>
+        CancellationToken timeoutSignal = default,
+        Action<SpawnProcessIdentity>? commandIdentityObserver = null) =>
         RunProcessAsync(
             arguments,
             workingDirectory,
@@ -8309,7 +8310,8 @@ public sealed class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
             forceUtf8ConsoleOutput: false,
             cancellationToken,
             cleanupObserver,
-            timeoutSignal);
+            timeoutSignal,
+            commandIdentityObserver: commandIdentityObserver);
 
     internal static Task<(CommandResult Result, string HeartbeatPath)> RunProcessWithHeartbeatForTestsAsync(
         string[] arguments,
@@ -8393,7 +8395,8 @@ public sealed class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
         CancellationToken cancellationToken,
         Action<AcceptanceProcessCleanupObservation>? cleanupObserver = null,
         CancellationToken timeoutSignal = default,
-        Func<Process, SpawnProcessIdentityReadResult>? registrationIdentityReader = null)
+        Func<Process, SpawnProcessIdentityReadResult>? registrationIdentityReader = null,
+        Action<SpawnProcessIdentity>? commandIdentityObserver = null)
     {
         // Keep the shell command semantics, but own the capture file offsets in this process. The
         // drain keeps consuming after the cap so a noisy child cannot block or grow the files.
@@ -8420,6 +8423,7 @@ public sealed class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
         Task<CaptureLimitResult>[]? captureDrains = null;
         Stream[]? captureSources = null;
         RegisteredOwnedProcess? process = null;
+        AcceptanceCommandProcessIdentityTracker? commandIdentityTracker = null;
         var heartbeatFinalized = false;
         var registrationReleased = false;
         var processDisposed = false;
@@ -8472,6 +8476,8 @@ public sealed class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
             }
 
             process = StartAcceptanceProcess(startInfo, workingDirectory, registrationIdentityReader);
+            commandIdentityTracker = new AcceptanceCommandProcessIdentityTracker(process, commandIdentityObserver);
+            commandIdentityTracker.Start();
             startedProcessId = process.Id;
             completedProcessId = process.Id;
             completedProcessStartedAt = process.Identity?.StartedAt;
@@ -8570,6 +8576,10 @@ public sealed class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
             var stderrBytes = TryGetFileLength(stderrPath);
             elapsed.Stop();
             var exitCode = timedOut ? -1 : process.ExitCode;
+            await commandIdentityTracker.DisposeAsync().ConfigureAwait(false);
+            completedProcessId = commandIdentityTracker.Identity?.ProcessId ?? completedProcessId;
+            completedProcessStartedAt = commandIdentityTracker.Identity?.StartedAt ?? completedProcessStartedAt;
+            commandIdentityTracker = null;
             keepOutputFiles = timedOut || exitCode != 0;
             WorkerProcessJobAccounting? accounting = null;
             try
@@ -8638,6 +8648,11 @@ public sealed class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
         }
         finally
         {
+            if (commandIdentityTracker is not null)
+            {
+                await commandIdentityTracker.DisposeAsync().ConfigureAwait(false);
+            }
+
             if (captureDrainCts is not null)
             {
                 await CancelCaptureDrainsAsync(

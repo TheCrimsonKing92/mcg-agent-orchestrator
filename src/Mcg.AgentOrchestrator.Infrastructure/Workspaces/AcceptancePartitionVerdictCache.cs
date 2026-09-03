@@ -304,6 +304,12 @@ internal sealed class AcceptancePartitionVerdictCache
             var incidentEmitted = false;
             foreach (var result in results)
             {
+                if (result.Passed)
+                {
+                    collapsed.Add(result);
+                    continue;
+                }
+
                 var partitionId = _failedPartitions
                     .FirstOrDefault(failure => failure.Result.Name.Equals(result.Name, StringComparison.Ordinal))
                     .PartitionId;

@@ -45,7 +45,9 @@ internal static class SourceSizeRatchet
             // classification belong at the verifier boundary that converts TRX output into gate attribution.
             // Reconciled after main 4ba0dba0 and dda4a341 added reviewed cancellation-boundary and
             // gate-wide attribution batching behavior; 9688 is the measured combined post-rebase size.
-            new SourceSizeCeiling("src/Mcg.AgentOrchestrator.Infrastructure/Workspaces/GoalAcceptanceVerifier.cs", 9688),
+            // Raised for goal 6f9ddf54: the verifier must carry the job-owned command-child identity rather
+            // than the Windows shell wrapper identity into acceptance evidence used for root correlation.
+            new SourceSizeCeiling("src/Mcg.AgentOrchestrator.Infrastructure/Workspaces/GoalAcceptanceVerifier.cs", 9710),
             // Goal 682f25a1 re-derived this row after integrating goal c2eae988, whose acceptance
             // cancellation seam had already added 74 net lines before the multi-file ratchet landed.
             // Raised for goal a22c7293: slice admission must run where all dispatch paths converge.

@@ -411,6 +411,57 @@ public sealed class AcceptancePartitionVerdictCacheTests : IDisposable
         Assert.Contains("receipt_id=rerun-first", invalidated.FailureCauseEvidence?.Evidence, StringComparison.Ordinal);
     }
 
+    [Fact(DisplayName = "Shared apparatus invalidation passing rerun does not consume incident")]
+    public void SharedApparatusInvalidation_PassingRerunDoesNotConsumeIncident()
+    {
+        var startedAt = DateTimeOffset.Parse("2026-09-02T12:00:00Z");
+        var sharedRoot = Path.Combine(_root, "owned-shared-root");
+        var receipt = Receipt(
+            "rerun-pass",
+            "rerun-pass-attempt",
+            sharedRoot,
+            startedAt,
+            (101, startedAt),
+            (202, startedAt.AddSeconds(1)));
+        var cache = CreateCache(
+            "rerun-pass-attempt",
+            resolveApparatusLossReceipts: () => [receipt]);
+        var secondPartition = Partition("Process");
+
+        _ = cache.ObserveSharedApparatusEvidence(
+            _partition,
+            FailedOwnerResult(_partition.Name, 101, startedAt));
+        var affectedFailure = cache.ObserveSharedApparatusEvidence(
+            secondPartition,
+            FailedOwnerResult(secondPartition.Name, 202, startedAt.AddSeconds(1)));
+        var passingRerun = new AcceptanceCheckResult(
+            _partition.Name,
+            true,
+            0,
+            null,
+            CompletionDecision: new AcceptanceShardCompletionDecision(
+                true,
+                null,
+                false,
+                1,
+                1,
+                1,
+                "passed"),
+            ChildProcessId: 909,
+            ChildProcessStartedAt: startedAt.AddSeconds(10));
+
+        var collapsed = cache.ApplySharedApparatusInvalidation(
+            [passingRerun, affectedFailure, new AcceptanceCheckResult("unrelated pass", true, 0, null)]);
+
+        var invalidated = Assert.Single(
+            collapsed,
+            result => result.FailureClassification == AcceptanceFailureClassifications.SharedGateApparatusInvalidated);
+        Assert.False(invalidated.Passed);
+        Assert.Equal(secondPartition.Name, invalidated.Name);
+        Assert.Contains(collapsed, result => result.Name == _partition.Name && result.Passed);
+        Assert.Contains(collapsed, result => result.Name == "unrelated pass" && result.Passed);
+    }
+
     [Theory]
     [InlineData(true, -1, 1, 1, "passed", null, null, AcceptanceShardCompletionPredicates.TimedOut, true)]
     [InlineData(false, 1, 1, 1, "passed", null, null, AcceptanceShardCompletionPredicates.NonzeroExit, true)]

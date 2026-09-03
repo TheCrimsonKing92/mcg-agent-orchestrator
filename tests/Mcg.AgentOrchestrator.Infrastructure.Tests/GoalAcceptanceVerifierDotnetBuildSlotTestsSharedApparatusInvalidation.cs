@@ -1,5 +1,7 @@
 using Mcg.AgentOrchestrator.Core;
 using Mcg.AgentOrchestrator.Infrastructure;
+using System.Diagnostics;
+using System.Text.Json;
 
 [Xunit.Collection(TestCollections.JobAccounting)]
 public sealed class GoalAcceptanceVerifierDotnetBuildSlotTestsSharedApparatusInvalidation
@@ -248,6 +250,66 @@ public sealed class GoalAcceptanceVerifierDotnetBuildSlotTestsSharedApparatusInv
         }
     }
 
+    [Xunit.Fact(DisplayName = "RunProcessAsync Windows shell carries MTP test-host identity", Timeout = 60_000)]
+    public async Task RunProcessAsync_WindowsShellCarriesMtpTestHostIdentity()
+    {
+        if (!OperatingSystem.IsWindows())
+        {
+            return;
+        }
+
+        var root = Path.Combine(Path.GetTempPath(), "mcg-acceptance-owned-identity", Guid.NewGuid().ToString("N"));
+        Directory.CreateDirectory(root);
+        var configPath = Path.Combine(root, AcceptanceOwnedIdentityProbe.ConfigFileName);
+        var receiptPath = Path.Combine(root, "identity-receipt.json");
+        var readyName = $"Local\\mcg-acceptance-owned-identity-ready-{Guid.NewGuid():N}";
+        var releaseName = $"Local\\mcg-acceptance-owned-identity-release-{Guid.NewGuid():N}";
+        using var ready = new EventWaitHandle(false, EventResetMode.ManualReset, readyName);
+        using var release = new EventWaitHandle(false, EventResetMode.ManualReset, releaseName);
+        var commandIdentityObserved = new TaskCompletionSource<SpawnProcessIdentity>(
+            TaskCreationOptions.RunContinuationsAsynchronously);
+        File.WriteAllText(
+            configPath,
+            JsonSerializer.Serialize(new AcceptanceOwnedIdentityProbe(receiptPath, readyName, releaseName)));
+
+        try
+        {
+            var runTask = GoalAcceptanceVerifier.RunProcessForTestsAsync(
+                [
+                    InfrastructureTestSupport.ResolveDotnetHostPath(),
+                    typeof(AcceptanceOwnedIdentityProbeChildTests).Assembly.Location,
+                    "--filter-class",
+                    "*AcceptanceOwnedIdentityProbeChildTests*"
+                ],
+                root,
+                TimeSpan.FromSeconds(45),
+                TestContext.Current.CancellationToken,
+                commandIdentityObserver: identity => commandIdentityObserved.TrySetResult(identity));
+            await AssemblyTempRedirectTests.WaitForSignalAsync(
+                ready,
+                TestContext.Current.CancellationToken);
+            var expected = JsonSerializer.Deserialize<AcceptanceOwnedIdentityReceipt>(File.ReadAllText(receiptPath));
+            Xunit.Assert.NotNull(expected);
+            var observed = await commandIdentityObserved.Task.WaitAsync(
+                TimeSpan.FromSeconds(10),
+                TestContext.Current.CancellationToken);
+            Xunit.Assert.Equal(expected.ProcessId, observed.ProcessId);
+            Xunit.Assert.Equal(expected.StartedAt, observed.StartedAt);
+            release.Set();
+
+            var result = await runTask;
+
+            Xunit.Assert.Equal(0, result.ExitCode);
+            Xunit.Assert.Equal(expected.ProcessId, result.ChildProcessId);
+            Xunit.Assert.Equal(expected.StartedAt, result.ChildProcessStartedAt);
+        }
+        finally
+        {
+            release.Set();
+            DeleteDirectoryWithRetry(root);
+        }
+    }
+
     private static GoalAcceptanceVerifier.CommandResult FailedShard(
         int processId,
         DateTimeOffset startedAt,
@@ -285,5 +347,49 @@ public sealed class GoalAcceptanceVerifierDotnetBuildSlotTestsSharedApparatusInv
         }
 
         return true;
+    }
+}
+
+internal sealed record AcceptanceOwnedIdentityProbe(
+    string ReceiptPath,
+    string ReadyEventName,
+    string ReleaseEventName)
+{
+    internal const string ConfigFileName = ".acceptance-owned-identity-probe.json";
+}
+
+internal sealed record AcceptanceOwnedIdentityReceipt(int ProcessId, DateTimeOffset StartedAt);
+
+public sealed class AcceptanceOwnedIdentityProbeChildTests
+{
+    [Xunit.Fact]
+    public async Task PublishOwnedIdentityAndWaitForRelease()
+    {
+        var repositoryRoot = Environment.GetEnvironmentVariable("MCG_ORCHESTRATOR_REPOSITORY_ROOT");
+        if (string.IsNullOrWhiteSpace(repositoryRoot))
+        {
+            return;
+        }
+
+        var configPath = Path.Combine(repositoryRoot, AcceptanceOwnedIdentityProbe.ConfigFileName);
+        if (!File.Exists(configPath))
+        {
+            return;
+        }
+
+        var config = JsonSerializer.Deserialize<AcceptanceOwnedIdentityProbe>(File.ReadAllText(configPath));
+        Xunit.Assert.NotNull(config);
+        using var process = Process.GetCurrentProcess();
+        File.WriteAllText(
+            config.ReceiptPath,
+            JsonSerializer.Serialize(new AcceptanceOwnedIdentityReceipt(
+                process.Id,
+                new DateTimeOffset(process.StartTime.ToUniversalTime()))));
+        using var ready = EventWaitHandle.OpenExisting(config.ReadyEventName);
+        using var release = EventWaitHandle.OpenExisting(config.ReleaseEventName);
+        ready.Set();
+        await AssemblyTempRedirectTests.WaitForSignalAsync(
+            release,
+            TestContext.Current.CancellationToken);
     }
 }
