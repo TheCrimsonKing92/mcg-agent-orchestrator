@@ -415,23 +415,51 @@ public sealed class GoalAcceptanceVerifierDotnetBuildSlotTestsSlotGateJobResourc
         var dotnetPath = InfrastructureTestSupport.ResolveDotnetHostPath();
         var acceptanceAssemblyDirectory = Path.GetDirectoryName(typeof(GoalAcceptanceVerifier).Assembly.Location)!;
         const string probeAssemblyName = "Mcg.AgentOrchestrator.IsolatedDotnetProbe.dll";
-        var colocatedProbeAssemblyPath = Path.Combine(acceptanceAssemblyDirectory, probeAssemblyName);
-        var targetFrameworkDirectory = new DirectoryInfo(acceptanceAssemblyDirectory);
-        var configurationDirectory = targetFrameworkDirectory.Parent;
-        var defaultLayoutProbeAssemblyPath = configurationDirectory?.Parent?.Parent is { } testProjectDirectory
-            ? Path.Combine(
+        const string probeProjectName = "Mcg.AgentOrchestrator.IsolatedDotnetProbe";
+        var leafDirectory = new DirectoryInfo(acceptanceAssemblyDirectory);
+        var parentDirectory = leafDirectory.Parent;
+        var candidateProbeAssemblyPaths = new List<string>
+        {
+            Path.Combine(acceptanceAssemblyDirectory, probeAssemblyName),
+        };
+        // Default SDK layout: <testProject>/bin/<Configuration>/<TargetFramework>.
+        if (parentDirectory?.Parent?.Parent is { } testProjectDirectory)
+        {
+            candidateProbeAssemblyPaths.Add(Path.Combine(
                 testProjectDirectory.FullName,
                 "Fixtures",
                 "IsolatedDotnetProbe",
                 "bin",
-                configurationDirectory.Name,
-                targetFrameworkDirectory.Name,
-                probeAssemblyName)
-            : string.Empty;
-        var probeAssemblyPath = File.Exists(colocatedProbeAssemblyPath)
-            ? colocatedProbeAssemblyPath
-            : defaultLayoutProbeAssemblyPath;
-        Assert.True(File.Exists(probeAssemblyPath), $"Missing process-tree probe: {probeAssemblyPath}");
+                parentDirectory.Name,
+                leafDirectory.Name,
+                probeAssemblyName));
+        }
+
+        // Centralized artifacts layout: <artifacts>/bin/<Project>/<configuration>. The probe is
+        // referenced with ReferenceOutputAssembly="false", so its managed assembly is never copied
+        // beside the test assembly even though its apphost and runtime config are.
+        if (parentDirectory?.Parent is { } projectOutputRoot)
+        {
+            candidateProbeAssemblyPaths.Add(Path.Combine(
+                projectOutputRoot.FullName,
+                probeProjectName,
+                leafDirectory.Name,
+                probeAssemblyName));
+        }
+
+        var probeAssemblyPath = string.Empty;
+        foreach (var candidate in candidateProbeAssemblyPaths)
+        {
+            if (File.Exists(candidate))
+            {
+                probeAssemblyPath = candidate;
+                break;
+            }
+        }
+
+        Assert.True(
+            probeAssemblyPath.Length > 0,
+            $"Missing process-tree probe. Tried: {string.Join("; ", candidateProbeAssemblyPaths)}");
         var arguments = new[] { dotnetPath, probeAssemblyPath, "spawn-descendant", childPidPath };
         using var fixtureTimeout = new CancellationTokenSource(TimeSpan.FromSeconds(30));
         using var cancellation = CancellationTokenSource.CreateLinkedTokenSource(fixtureTimeout.Token);
