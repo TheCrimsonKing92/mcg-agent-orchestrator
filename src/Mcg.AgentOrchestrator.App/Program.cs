@@ -26,6 +26,37 @@ if (args.Length >= 1 && args[0] == PostLandingCanaryCommand.SubcommandName)
     return PostLandingCanaryCommand.Run(args);
 }
 
+// Process inspection and guarded stopping deliberately bypass workspace, provider, and catalog
+// startup. These bounded operator primitives must remain available and cheap while unrelated
+// orchestrator source is changing; their wrapper only reuses an older build when this early path
+// and its process subsystem are unchanged.
+if (args.Length >= 1 && args[0].Equals("repo-process-info", StringComparison.OrdinalIgnoreCase))
+{
+    try
+    {
+        RepoProcessCliCommand.PrintInfo(args, Console.Out);
+        return 0;
+    }
+    catch (Exception ex)
+    {
+        Console.Error.WriteLine($"Error: {ex.Message}");
+        return 1;
+    }
+}
+
+if (args.Length >= 1 && args[0].Equals("repo-process-stop", StringComparison.OrdinalIgnoreCase))
+{
+    try
+    {
+        return RepoProcessCliCommand.Stop(args, Console.Out) ? 0 : 1;
+    }
+    catch (Exception ex)
+    {
+        Console.Error.WriteLine($"Error: {ex.Message}");
+        return 1;
+    }
+}
+
 var executionDirectory = Environment.GetEnvironmentVariable(OrchestratorWorkspace.RepoRootEnvironmentVariable);
 OrchestratorProjectSelection projectSelection;
 OrchestratorTenantSelection tenantSelection;

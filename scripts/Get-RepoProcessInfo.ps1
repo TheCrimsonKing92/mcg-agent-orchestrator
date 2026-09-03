@@ -45,7 +45,31 @@ if ($IncludeChildren) { $arguments += '--include-children' }
 if ($Locks) { $arguments += '--locks' }
 
 try {
-    & (Join-Path $repoRoot 'scripts\Invoke-OrchestratorCommand.ps1') @arguments
+    $resolver = Join-Path $repoRoot 'scripts\Resolve-RepoProcessAppDll.ps1'
+    $resolvedAppDll = @()
+    try {
+        if (Test-Path -LiteralPath $resolver -PathType Leaf) {
+            $resolvedAppDll = @(& $resolver -RepositoryRoot $repoRoot)
+            if ($LASTEXITCODE -ne 0) {
+                $resolvedAppDll = @()
+            }
+        }
+    }
+    catch {
+        $resolvedAppDll = @()
+    }
+
+    if ($resolvedAppDll.Count -eq 1) {
+        $dotnetHost = if ([string]::IsNullOrWhiteSpace($env:MCG_ORCHESTRATOR_DOTNET_PATH)) {
+            'dotnet'
+        } else {
+            $env:MCG_ORCHESTRATOR_DOTNET_PATH
+        }
+        & $dotnetHost $resolvedAppDll[0] @arguments
+    }
+    else {
+        & (Join-Path $repoRoot 'scripts\Invoke-OrchestratorCommand.ps1') @arguments
+    }
     if ($LASTEXITCODE -is [int] -and $LASTEXITCODE -ne 0) {
         exit $LASTEXITCODE
     }

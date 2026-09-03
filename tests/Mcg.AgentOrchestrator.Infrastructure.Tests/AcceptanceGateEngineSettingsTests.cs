@@ -1923,13 +1923,16 @@ public sealed class AcceptanceGateEngineSettingsTests
                         "Previous invocation heartbeat child remained alive before the later same-named check ran.");
                 }
 
-                WriteVstestTrx(
-                    arguments,
-                    currentInvocation == 0 ? "RemainderTests.Fails" : "RemainderTests.Passes",
-                    currentInvocation == 0 ? "Failed" : "Passed");
+                if (currentInvocation != 0)
+                {
+                    WriteVstestTrx(
+                        arguments,
+                        "RemainderTests.Passes",
+                        "Passed");
+                }
                 return Task.FromResult(new GoalAcceptanceVerifier.CommandResult(
                     currentInvocation == 0 ? 1 : 0,
-                    currentInvocation == 0 ? "Failed: 1" : "Passed: 1"));
+                    currentInvocation == 0 ? "Test runner exited before producing TRX." : "Passed: 1"));
             });
 
             Environment.SetEnvironmentVariable(

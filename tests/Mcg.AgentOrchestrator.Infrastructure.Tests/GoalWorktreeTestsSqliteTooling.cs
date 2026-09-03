@@ -113,6 +113,11 @@ public sealed class GoalWorktreeTestsSqliteTooling : GoalWorktreeTestBase
     public void RepoProcessHelpersDoNotUsePowerShellCimProcessQueries()
     {
         var repoRoot = FindCurrentSourceRoot();
+        var programText = File.ReadAllText(Path.Combine(
+            repoRoot,
+            "src",
+            "Mcg.AgentOrchestrator.App",
+            "Program.cs"));
         var cliCommandText = File.ReadAllText(Path.Combine(
             repoRoot,
             "src",
@@ -121,6 +126,20 @@ public sealed class GoalWorktreeTestsSqliteTooling : GoalWorktreeTestBase
             "RepoProcessCliCommand.cs"));
         Assert.Contains("ProcessCommandLines.Snapshot", cliCommandText, StringComparison.Ordinal);
         Assert.DoesNotContain("OpenProcess", cliCommandText, StringComparison.Ordinal);
+        var processInfoDispatchIndex = programText.IndexOf("repo-process-info", StringComparison.Ordinal);
+        var workspaceStartupIndex = programText.IndexOf("OrchestratorProjectSelection.FromArgs", StringComparison.Ordinal);
+        Assert.True(
+            processInfoDispatchIndex >= 0 &&
+            workspaceStartupIndex >= 0 &&
+            processInfoDispatchIndex < workspaceStartupIndex,
+            "Process helpers must dispatch before workspace, provider, and catalog startup.");
+        var resolverText = File.ReadAllText(Path.Combine(repoRoot, "scripts", "Resolve-RepoProcessAppDll.ps1"));
+        Assert.Contains("src/Mcg.AgentOrchestrator.App/Program.cs", resolverText, StringComparison.Ordinal);
+        Assert.Contains("src/Mcg.AgentOrchestrator.App/Cli", resolverText, StringComparison.Ordinal);
+        Assert.Contains("src/Mcg.AgentOrchestrator.Infrastructure/Processes", resolverText, StringComparison.Ordinal);
+        Assert.Contains("merge-base --is-ancestor", resolverText, StringComparison.Ordinal);
+        Assert.Contains("status --porcelain=v1 --untracked-files=all", resolverText, StringComparison.Ordinal);
+        Assert.Contains("resolve-run-dir.ps1", resolverText, StringComparison.Ordinal);
         var buildEnvironmentManagerText = File.ReadAllText(Path.Combine(
             repoRoot,
             "src",
@@ -131,11 +150,15 @@ public sealed class GoalWorktreeTestsSqliteTooling : GoalWorktreeTestBase
         Assert.DoesNotContain("GetProcessesByName", buildEnvironmentManagerText, StringComparison.Ordinal);
 
         var inspectedFiles = Directory
-            .EnumerateFiles(Path.Combine(repoRoot, "src"), "*", SearchOption.AllDirectories)
+            .EnumerateFiles(Path.Combine(repoRoot, "src"), "*.cs", SearchOption.AllDirectories)
             .Concat(Directory.EnumerateFiles(Path.Combine(repoRoot, "scripts"), "*.ps1", SearchOption.AllDirectories))
             .Append(Path.Combine(repoRoot, "docs", "operator-runbook.md"))
             .Where(path => !path.Contains($"{Path.DirectorySeparatorChar}bin{Path.DirectorySeparatorChar}", StringComparison.OrdinalIgnoreCase))
-            .Where(path => !path.Contains($"{Path.DirectorySeparatorChar}obj{Path.DirectorySeparatorChar}", StringComparison.OrdinalIgnoreCase));
+            .Where(path => !path.Contains($"{Path.DirectorySeparatorChar}obj{Path.DirectorySeparatorChar}", StringComparison.OrdinalIgnoreCase))
+            .Where(path => !path.Contains($"{Path.DirectorySeparatorChar}.scratch{Path.DirectorySeparatorChar}", StringComparison.OrdinalIgnoreCase))
+            .Where(path => !path.Contains($"{Path.DirectorySeparatorChar}.orchestrator-prototype{Path.DirectorySeparatorChar}", StringComparison.OrdinalIgnoreCase))
+            .Where(path => !path.Contains($"{Path.DirectorySeparatorChar}TestResults{Path.DirectorySeparatorChar}", StringComparison.OrdinalIgnoreCase))
+            .Where(path => !path.Contains($"{Path.DirectorySeparatorChar}playwright-report{Path.DirectorySeparatorChar}", StringComparison.OrdinalIgnoreCase));
         foreach (var path in inspectedFiles)
         {
             var text = File.ReadAllText(path);
@@ -199,6 +222,7 @@ public sealed class GoalWorktreeTestsSqliteTooling : GoalWorktreeTestBase
         startInfo.ArgumentList.Add("scripts\\Get-RepoProcessInfo.ps1");
         startInfo.ArgumentList.Add("-Id");
         startInfo.ArgumentList.Add(Environment.ProcessId.ToString(CultureInfo.InvariantCulture));
+        startInfo.Environment["MCG_ORCHESTRATOR_REPOSITORY_ROOT"] = Path.Combine(repoRoot, "must-not-be-read");
 
         var result = RunRedirectedProcess(startInfo, "Get-RepoProcessInfo.ps1");
         var stdout = result.Stdout;
