@@ -274,7 +274,7 @@ public sealed class LocalProcessVerifier
             ? $"{timeout.TotalMinutes:0.#}m"
             : $"{timeout.TotalSeconds:0.#}s";
 
-    private static async Task<CommandResult> RunCommandAsync(
+    internal static async Task<CommandResult> RunCommandAsync(
         string fileName,
         IReadOnlyList<string> args,
         string workingDirectory,
@@ -310,14 +310,36 @@ public sealed class LocalProcessVerifier
 
         try
         {
-            var stdoutTask = process.StandardOutput.ReadToEndAsync(timeoutCts.Token);
-            var stderrTask = process.StandardError.ReadToEndAsync(timeoutCts.Token);
+            var stdoutDrain = PipeDrain.Start(process.StandardOutput, "local-verification-stdout-drain");
+            var stderrDrain = PipeDrain.Start(process.StandardError, "local-verification-stderr-drain");
 
             await process.WaitForExitAsync(timeoutCts.Token).ConfigureAwait(false);
 
-            var stdout = await stdoutTask.ConfigureAwait(false);
-            var stderr = await stderrTask.ConfigureAwait(false);
+            var remainingMilliseconds = Math.Max(
+                0,
+                (int)Math.Min(int.MaxValue, (commandTimeout - elapsed.Elapsed).TotalMilliseconds));
+            var drainDeadline = Environment.TickCount64 + remainingMilliseconds;
+            var stdoutDrained = stdoutDrain.Join(drainDeadline);
+            var stderrDrained = stderrDrain.Join(drainDeadline);
+            var stdout = stdoutDrain.Text;
+            var stderr = stderrDrain.Text;
             elapsed.Stop();
+            if (!stdoutDrained || !stderrDrained)
+            {
+                var diagnostic = PipeDrain.DescribeTimeout(
+                    "local verification",
+                    remainingMilliseconds,
+                    stdoutDrain,
+                    stderrDrain);
+                return new CommandResult(
+                    -1,
+                    stdout,
+                    PipeDrain.AppendDiagnostic(stderr, diagnostic),
+                    TimedOut: true,
+                    Timeout: commandTimeout,
+                    Elapsed: elapsed.Elapsed);
+            }
+
             return new CommandResult(process.ExitCode, stdout, stderr, Elapsed: elapsed.Elapsed);
         }
         catch (OperationCanceledException) when (!cancellationToken.IsCancellationRequested)

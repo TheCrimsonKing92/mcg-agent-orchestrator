@@ -1559,7 +1559,7 @@ internal static partial class CliCommandHandlers
         return arguments;
     }
 
-    private static int RunStableSlotProcess(
+    internal static int RunStableSlotProcess(
         string fileName,
         IReadOnlyList<string> arguments,
         string workingDirectory,
@@ -1596,11 +1596,24 @@ internal static partial class CliCommandHandlers
 
         using (process)
         {
-            var standardOutput = process.StandardOutput.ReadToEndAsync();
-            var standardError = process.StandardError.ReadToEndAsync();
+            var standardOutput = PipeDrain.Start(process.StandardOutput, "cli-process-stdout-drain");
+            var standardError = PipeDrain.Start(process.StandardError, "cli-process-stderr-drain");
             process.WaitForExit();
-            Console.Out.Write(standardOutput.GetAwaiter().GetResult());
-            Console.Error.Write(standardError.GetAwaiter().GetResult());
+            var drainDeadline = Environment.TickCount64 + PipeDrain.DefaultTimeoutMilliseconds;
+            var outputDrained = standardOutput.Join(drainDeadline);
+            var errorDrained = standardError.Join(drainDeadline);
+            Console.Out.Write(standardOutput.Text);
+            Console.Error.Write(standardError.Text);
+            if (!outputDrained || !errorDrained)
+            {
+                Console.Error.WriteLine(PipeDrain.DescribeTimeout(
+                    "CLI child process",
+                    PipeDrain.DefaultTimeoutMilliseconds,
+                    standardOutput,
+                    standardError));
+                return process.ExitCode == 0 ? 1 : process.ExitCode;
+            }
+
             return process.ExitCode;
         }
     }

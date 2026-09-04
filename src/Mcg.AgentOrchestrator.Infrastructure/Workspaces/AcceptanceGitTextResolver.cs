@@ -32,18 +32,29 @@ internal static class AcceptanceGitTextResolver
             // as the child's output exceeds the pipe buffer (~4KB): the child blocks writing, the
             // 5s wait expires, and the caller sees null. The acceptance manifest crossed that size
             // when the engine section landed, which turned every trusted-manifest read into a refusal.
-            var standardOutputTask = process.StandardOutput.ReadToEndAsync();
-            var standardErrorTask = process.StandardError.ReadToEndAsync();
+            var standardOutputDrain = PipeDrain.Start(process.StandardOutput, "acceptance-git-stdout-drain");
+            var standardErrorDrain = PipeDrain.Start(process.StandardError, "acceptance-git-stderr-drain");
             if (!process.WaitForExit(5000))
             {
                 try { process.Kill(entireProcessTree: true); } catch { /* best effort */ }
                 try { process.WaitForExit(1000); } catch { /* best effort */ }
-                try { Task.WhenAll(standardOutputTask, standardErrorTask).Wait(1000); } catch { /* best effort */ }
                 return null;
             }
 
-            Task.WhenAll(standardOutputTask, standardErrorTask).GetAwaiter().GetResult();
-            return process.ExitCode == 0 ? standardOutputTask.Result : null;
+            var drainDeadline = Environment.TickCount64 + PipeDrain.DefaultTimeoutMilliseconds;
+            var outputDrained = standardOutputDrain.Join(drainDeadline);
+            var errorDrained = standardErrorDrain.Join(drainDeadline);
+            if (!outputDrained || !errorDrained)
+            {
+                System.Diagnostics.Trace.TraceWarning(PipeDrain.DescribeTimeout(
+                    "acceptance git",
+                    PipeDrain.DefaultTimeoutMilliseconds,
+                    standardOutputDrain,
+                    standardErrorDrain));
+                return null;
+            }
+
+            return process.ExitCode == 0 ? standardOutputDrain.Text : null;
         }
         catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or InvalidOperationException)
         {
