@@ -48,14 +48,17 @@ public sealed class GoalWorktreeTestsGitHelperDiagnostics : GoalWorktreeTestBase
             var exception = Assert.Throws<InvalidOperationException>(
                 () => GoalWorktrees.HasBranch(directory, GoalId.New()));
 
-            Assert.Contains("to be inside a git work tree", exception.Message, StringComparison.Ordinal);
-            Assert.Contains("probe='git rev-parse --is-inside-work-tree'", exception.Message, StringComparison.Ordinal);
+            // Assert.Contains truncates the inspected string to 50 characters on failure, which hid the
+            // probe evidence this message exists to carry (2026-09-04: exit=128 with EMPTY stderr under
+            // parallel load, and the drain/pool diagnostics were cut off). Fail with the whole message.
+            AssertMessageContains(exception.Message, "to be inside a git work tree");
+            AssertMessageContains(exception.Message, "probe='git rev-parse --is-inside-work-tree'");
             // git reports "not a git repository" with exit 128; an empty-output probe would report exit=0.
-            Assert.Contains("exit=128", exception.Message, StringComparison.Ordinal);
-            Assert.Contains("processStarted=True", exception.Message, StringComparison.Ordinal);
-            Assert.Contains("stdoutBytes=", exception.Message, StringComparison.Ordinal);
-            Assert.Contains("directoryExists=True", exception.Message, StringComparison.Ordinal);
-            Assert.Contains("not a git repository", exception.Message, StringComparison.OrdinalIgnoreCase);
+            AssertMessageContains(exception.Message, "exit=128");
+            AssertMessageContains(exception.Message, "processStarted=True");
+            AssertMessageContains(exception.Message, "stdoutBytes=");
+            AssertMessageContains(exception.Message, "directoryExists=True");
+            AssertMessageContains(exception.Message, "not a git repository");
         }
         finally
         {
@@ -198,6 +201,13 @@ public sealed class GoalWorktreeTestsGitHelperDiagnostics : GoalWorktreeTestBase
         {
             DeleteDirectory(repo);
         }
+    }
+
+    private static void AssertMessageContains(string message, string expected)
+    {
+        Assert.True(
+            message.Contains(expected, StringComparison.OrdinalIgnoreCase),
+            $"Expected '{expected}' in the failure message. Full message:{Environment.NewLine}{message}");
     }
 
     private static string CreateEmptyRepository()
