@@ -104,6 +104,14 @@ internal static partial class StorageRetentionMaintenance
         return goals;
     }
 
+    internal static IReadOnlyCollection<string> SelectGoalOperationPrunableIds(
+        IEnumerable<StorageRetentionGoal> goals) =>
+        goals
+            .Where(goal => goal.Status is GoalStatus.Completed or GoalStatus.Cancelled or GoalStatus.Superseded)
+            .Select(goal => goal.GoalId)
+            .Distinct(StringComparer.OrdinalIgnoreCase)
+            .ToArray();
+
     internal static StorageRetentionResult Run(
         string logDirectory,
         string orchestratorDirectory,

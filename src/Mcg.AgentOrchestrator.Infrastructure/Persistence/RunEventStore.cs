@@ -57,12 +57,26 @@ public sealed record RunEventMaintenanceOptions(
     bool LegacyOversizedConductorTickPurge = false,
     int MaintenanceLockCommandTimeoutSeconds = 30,
     TimeSpan? TerminalGoalOperationMaxAge = null,
-    IReadOnlyCollection<string>? TerminalGoalIds = null)
+    IReadOnlyCollection<string>? TerminalGoalIds = null,
+    long MaxDatabaseBytes = 512L * 1024 * 1024,
+    TimeSpan? RecentTerminalGoalProtectionAge = null,
+    int MaxDeleteBatchesPerPass = 4,
+    int MaxIncrementalVacuumPagesPerPass = 4096,
+    int ConsecutiveNoProgressAttempts = 0,
+    int MaxNoProgressAttempts = 3,
+    TimeSpan? ContinuationDelay = null,
+    long MaterialGrowthToleranceBytes = 4096,
+    bool OfflineVacuumAuthorized = false)
 {
     public static RunEventMaintenanceOptions Default { get; } = new(TimeSpan.FromDays(7));
 
     public TimeSpan EffectiveTerminalGoalOperationMaxAge =>
         TerminalGoalOperationMaxAge ?? TimeSpan.FromDays(30);
+
+    public TimeSpan EffectiveRecentTerminalGoalProtectionAge =>
+        RecentTerminalGoalProtectionAge ?? TimeSpan.FromDays(7);
+
+    public TimeSpan EffectiveContinuationDelay => ContinuationDelay ?? TimeSpan.FromMinutes(5);
 }
 
 public sealed record RunEventMaintenanceResult(
@@ -79,14 +93,27 @@ public sealed record RunEventMaintenanceResult(
     bool VacuumRequested,
     bool VacuumCompleted,
     bool VacuumDeferred,
-    int TerminalGoalOperationRowsDeleted = 0);
+    int TerminalGoalOperationRowsDeleted = 0,
+    SqliteMaintenanceDisposition Disposition = SqliteMaintenanceDisposition.Completed,
+    SqliteMaintenanceReason Reason = SqliteMaintenanceReason.None,
+    SqliteStorageSnapshot? StorageBefore = null,
+    SqliteStorageSnapshot? StorageAfterMutation = null,
+    SqliteStorageSnapshot? StorageAfterConvergence = null,
+    SqliteCheckpointResult? Checkpoint = null,
+    int RemainingEligibleRows = 0,
+    long RemainingBytesOverBudget = 0,
+    DateTimeOffset? NextAttemptAt = null,
+    int ConsecutiveNoProgressAttempts = 0,
+    int DeleteBatchesCompleted = 0);
 
 public sealed class SqliteRunEventStore : IRunEventStore
 {
     private const int DefaultMaxBusyRetries = 6;
+    private static readonly TimeSpan MinimumRecentTerminalGoalProtectionAge = TimeSpan.FromDays(7);
     private readonly string _dbPath;
     private readonly int _busyTimeoutMilliseconds;
     private readonly int _maxBusyRetries;
+    private readonly Func<CancellationToken, Task>? _beforeVacuumConvergenceCheckpoint;
 
     public SqliteRunEventStore(
         string dbPath,
@@ -101,6 +128,15 @@ public sealed class SqliteRunEventStore : IRunEventStore
         {
             EnsureSchema();
         }
+    }
+
+    internal SqliteRunEventStore(
+        string dbPath,
+        Func<CancellationToken, Task> beforeVacuumConvergenceCheckpoint)
+        : this(dbPath)
+    {
+        _beforeVacuumConvergenceCheckpoint = beforeVacuumConvergenceCheckpoint
+            ?? throw new ArgumentNullException(nameof(beforeVacuumConvergenceCheckpoint));
     }
 
     private string ConnectionString => $"Data Source={_dbPath};Mode=ReadWriteCreate;Pooling=False;";
@@ -324,51 +360,174 @@ public sealed class SqliteRunEventStore : IRunEventStore
                 "The maintenance lock command timeout must be positive.");
         }
 
+        if (options.MaxDatabaseBytes <= 0)
+            throw new ArgumentOutOfRangeException(nameof(options.MaxDatabaseBytes));
+        if (options.MaxDeleteBatchesPerPass <= 0)
+            throw new ArgumentOutOfRangeException(nameof(options.MaxDeleteBatchesPerPass));
+        if (options.MaxIncrementalVacuumPagesPerPass <= 0)
+            throw new ArgumentOutOfRangeException(nameof(options.MaxIncrementalVacuumPagesPerPass));
+        if (options.MaxNoProgressAttempts <= 0)
+            throw new ArgumentOutOfRangeException(nameof(options.MaxNoProgressAttempts));
+        if (options.Vacuum && !options.OfflineVacuumAuthorized)
+            throw new InvalidOperationException("Full VACUUM requires an exclusive offline maintenance lease.");
+
+        var terminalGoalOperationMaxAge = options.EffectiveTerminalGoalOperationMaxAge;
+        var recentTerminalGoalProtectionAge = options.EffectiveRecentTerminalGoalProtectionAge;
+        if (terminalGoalOperationMaxAge <= TimeSpan.Zero)
+            throw new ArgumentOutOfRangeException(nameof(options.TerminalGoalOperationMaxAge));
+        if (recentTerminalGoalProtectionAge < MinimumRecentTerminalGoalProtectionAge)
+        {
+            throw new ArgumentOutOfRangeException(
+                nameof(options.RecentTerminalGoalProtectionAge),
+                recentTerminalGoalProtectionAge,
+                $"Recent terminal goal evidence must be protected for at least {MinimumRecentTerminalGoalProtectionAge.TotalDays:0} days.");
+        }
+        if (recentTerminalGoalProtectionAge > terminalGoalOperationMaxAge)
+        {
+            throw new ArgumentException(
+                "Recent terminal goal protection cannot exceed the terminal goal operation maximum age.",
+                nameof(options.RecentTerminalGoalProtectionAge));
+        }
+
         var clock = Stopwatch.StartNew();
-        var bytesBefore = GetDatabaseBytes();
+        var now = options.UtcNow ?? DateTimeOffset.UtcNow;
         await using var conn = OpenConnection(busyTimeoutMilliseconds: 0);
         await PopulateTerminalGoalsAsync(conn, options.TerminalGoalIds, cancellationToken).ConfigureAwait(false);
-        var oversized = await PruneOversizedConductorTicksAsync(conn, options, cancellationToken).ConfigureAwait(false);
+        var storageBefore = SqliteStorageSnapshot.Measure(_dbPath);
+        var remainingBatchBudget = Math.Max(1, options.MaxDeleteBatchesPerPass);
+        var oversized = await PruneOversizedConductorTicksAsync(
+            conn, options, remainingBatchBudget, cancellationToken).ConfigureAwait(false);
+        remainingBatchBudget = Math.Max(0, remainingBatchBudget - oversized.BatchesCompleted);
         var aged = options.LegacyOversizedConductorTickPurge
             ? ConductorTickPruneResult.Empty
-            : await PruneAgedConductorTicksAsync(conn, options, cancellationToken).ConfigureAwait(false);
-        var goalOperations = await PruneAgedTerminalGoalOperationsAsync(conn, options, cancellationToken).ConfigureAwait(false);
-        var deferred = oversized.Deferred || aged.Deferred || goalOperations.Deferred;
+            : await PruneAgedConductorTicksAsync(
+                conn, options, remainingBatchBudget, cancellationToken).ConfigureAwait(false);
+        remainingBatchBudget = Math.Max(0, remainingBatchBudget - aged.BatchesCompleted);
+        var goalOperations = await PruneAgedTerminalGoalOperationsAsync(
+            conn, options, remainingBatchBudget, cancellationToken).ConfigureAwait(false);
+        remainingBatchBudget = Math.Max(0, remainingBatchBudget - goalOperations.BatchesCompleted);
+        var pressureCheckpoint = await ReadCheckpointAsync(conn, cancellationToken).ConfigureAwait(false);
+        var storageBeforeBytePressure = SqliteStorageSnapshot.Measure(_dbPath);
+        var bytePressureRequired = pressureCheckpoint.Completed &&
+            storageBeforeBytePressure.TotalBytes > options.MaxDatabaseBytes;
+        var bytePressureProbeDeferredByWorkCap = bytePressureRequired &&
+            remainingBatchBudget == 0 &&
+            !goalOperations.HasMore;
+        var bytePressureOperations = bytePressureRequired &&
+            remainingBatchBudget > 0 &&
+            !goalOperations.HasMore
+            ? await PruneTerminalGoalOperationsUnderBytePressureAsync(
+                conn, options, remainingBatchBudget, cancellationToken).ConfigureAwait(false)
+            : ConductorTickPruneResult.Empty;
+        remainingBatchBudget = Math.Max(0, remainingBatchBudget - bytePressureOperations.BatchesCompleted);
+        var allGoalOperations = goalOperations.Combine(bytePressureOperations);
+        var deferred = oversized.Deferred || aged.Deferred || allGoalOperations.Deferred;
+        var afterMutation = SqliteStorageSnapshot.Measure(_dbPath);
         if (deferred)
         {
+            var deferredAttempts = options.ConsecutiveNoProgressAttempts + 1;
+            var retryLimitReached = deferredAttempts >= options.MaxNoProgressAttempts;
             clock.Stop();
             return new RunEventMaintenanceResult(
-                Deferred: true,
-                DeferredReason: "database-busy",
+                Deferred: !retryLimitReached,
+                DeferredReason: retryLimitReached ? "database-busy-limit" : "database-busy",
                 ConductorTickRowsDeleted: oversized.RowsDeleted + aged.RowsDeleted,
                 AgedConductorTickRowsDeleted: aged.RowsDeleted,
                 OversizedConductorTickRowsDeleted: oversized.RowsDeleted,
-                DeletedPayloadBytesEstimate: oversized.DeletedPayloadBytesEstimate + aged.DeletedPayloadBytesEstimate,
-                MaxRowsDeletedInTransaction: Math.Max(oversized.MaxRowsDeletedInTransaction, aged.MaxRowsDeletedInTransaction),
+                DeletedPayloadBytesEstimate: oversized.DeletedPayloadBytesEstimate + aged.DeletedPayloadBytesEstimate + allGoalOperations.DeletedPayloadBytesEstimate,
+                MaxRowsDeletedInTransaction: Math.Max(Math.Max(oversized.MaxRowsDeletedInTransaction, aged.MaxRowsDeletedInTransaction), allGoalOperations.MaxRowsDeletedInTransaction),
                 Duration: clock.Elapsed,
-                BytesBefore: bytesBefore,
-                BytesAfter: GetDatabaseBytes(),
+                BytesBefore: storageBefore.TotalBytes,
+                BytesAfter: afterMutation.TotalBytes,
                 VacuumRequested: options.Vacuum,
                 VacuumCompleted: false,
                 VacuumDeferred: false,
-                TerminalGoalOperationRowsDeleted: goalOperations.RowsDeleted);
+                TerminalGoalOperationRowsDeleted: allGoalOperations.RowsDeleted,
+                Disposition: retryLimitReached
+                    ? SqliteMaintenanceDisposition.Stalled
+                    : SqliteMaintenanceDisposition.Deferred,
+                Reason: retryLimitReached
+                    ? SqliteMaintenanceReason.DatabaseBusyLimit
+                    : SqliteMaintenanceReason.DatabaseBusy,
+                StorageBefore: storageBefore,
+                StorageAfterMutation: afterMutation,
+                StorageAfterConvergence: afterMutation,
+                RemainingEligibleRows: oversized.NextBatchRows + aged.NextBatchRows + allGoalOperations.NextBatchRows,
+                RemainingBytesOverBudget: BytesOverBudget(afterMutation, options.MaxDatabaseBytes),
+                NextAttemptAt: retryLimitReached
+                    ? null
+                    : now.Add(DeferredBackoff(options.EffectiveContinuationDelay, deferredAttempts)),
+                ConsecutiveNoProgressAttempts: deferredAttempts,
+                DeleteBatchesCompleted: oversized.BatchesCompleted + aged.BatchesCompleted + allGoalOperations.BatchesCompleted);
         }
 
         var vacuumCompleted = false;
         var vacuumDeferred = false;
+        var checkpoint = await ReadCheckpointAsync(conn, cancellationToken).ConfigureAwait(false);
+        var autoVacuumMode = await ReadPragmaLongAsync(conn, "auto_vacuum", cancellationToken).ConfigureAwait(false);
+        var freelistCount = await ReadPragmaLongAsync(conn, "freelist_count", cancellationToken).ConfigureAwait(false);
+        var incrementalVacuumCapReached = false;
+        if (checkpoint.Completed && autoVacuumMode == 2 && freelistCount > 0)
+        {
+            var pages = Math.Min(freelistCount, Math.Max(1, options.MaxIncrementalVacuumPagesPerPass));
+            incrementalVacuumCapReached = pages < freelistCount;
+            await RunNonQueryAsync(
+                conn,
+                $"PRAGMA incremental_vacuum({pages.ToString(CultureInfo.InvariantCulture)})",
+                cancellationToken).ConfigureAwait(false);
+            checkpoint = await ReadCheckpointAsync(conn, cancellationToken).ConfigureAwait(false);
+        }
+
         if (options.Vacuum)
         {
-            try
-            {
-                await RunNonQueryAsync(conn, "PRAGMA wal_checkpoint(TRUNCATE)", cancellationToken).ConfigureAwait(false);
-                await RunNonQueryAsync(conn, "VACUUM", cancellationToken).ConfigureAwait(false);
-                vacuumCompleted = true;
-            }
-            catch (SqliteException ex) when (IsTransientLock(ex))
+            if (!checkpoint.Completed)
             {
                 vacuumDeferred = true;
             }
+            else
+            {
+                try
+                {
+                    await RunNonQueryAsync(conn, "VACUUM", cancellationToken).ConfigureAwait(false);
+                    afterMutation = SqliteStorageSnapshot.Measure(_dbPath);
+                    if (_beforeVacuumConvergenceCheckpoint is not null)
+                    {
+                        await _beforeVacuumConvergenceCheckpoint(cancellationToken).ConfigureAwait(false);
+                    }
+                    checkpoint = await ReadCheckpointAsync(conn, cancellationToken).ConfigureAwait(false);
+                    vacuumCompleted = checkpoint.Completed;
+                    vacuumDeferred = !checkpoint.Completed;
+                }
+                catch (SqliteException ex) when (IsTransientLock(ex))
+                {
+                    vacuumDeferred = true;
+                }
+            }
         }
+
+        var afterConvergence = SqliteStorageSnapshot.Measure(_dbPath);
+        var remainingEligibleRows = oversized.NextBatchRows + aged.NextBatchRows + allGoalOperations.NextBatchRows;
+        var remainingBytes = BytesOverBudget(afterConvergence, options.MaxDatabaseBytes);
+        var rowsDeleted = oversized.RowsDeleted + aged.RowsDeleted + allGoalOperations.RowsDeleted;
+        var madeProgress = rowsDeleted > 0 || afterConvergence.TotalBytes < storageBefore.TotalBytes;
+        var noProgressAttempts = (!checkpoint.Completed || vacuumDeferred || remainingBytes > 0) && !madeProgress
+            ? options.ConsecutiveNoProgressAttempts + 1
+            : 0;
+        var decision = SqliteMaintenanceClassifier.Classify(
+            storageBefore,
+            afterConvergence,
+            checkpoint,
+            remainingEligibleRows,
+            remainingBytes,
+            noProgressAttempts,
+            options.MaxNoProgressAttempts,
+            checked((int)autoVacuumMode),
+            freelistCount,
+            vacuumDeferred,
+            options.MaterialGrowthToleranceBytes,
+            now.Add(options.EffectiveContinuationDelay),
+            workCapReachedWithByteWorkPending:
+                (bytePressureProbeDeferredByWorkCap || incrementalVacuumCapReached) && remainingBytes > 0);
 
         clock.Stop();
         return new RunEventMaintenanceResult(
@@ -377,15 +536,36 @@ public sealed class SqliteRunEventStore : IRunEventStore
             ConductorTickRowsDeleted: oversized.RowsDeleted + aged.RowsDeleted,
             AgedConductorTickRowsDeleted: aged.RowsDeleted,
             OversizedConductorTickRowsDeleted: oversized.RowsDeleted,
-            DeletedPayloadBytesEstimate: oversized.DeletedPayloadBytesEstimate + aged.DeletedPayloadBytesEstimate,
-            MaxRowsDeletedInTransaction: Math.Max(oversized.MaxRowsDeletedInTransaction, aged.MaxRowsDeletedInTransaction),
+            DeletedPayloadBytesEstimate: oversized.DeletedPayloadBytesEstimate + aged.DeletedPayloadBytesEstimate + allGoalOperations.DeletedPayloadBytesEstimate,
+            MaxRowsDeletedInTransaction: Math.Max(Math.Max(oversized.MaxRowsDeletedInTransaction, aged.MaxRowsDeletedInTransaction), allGoalOperations.MaxRowsDeletedInTransaction),
             Duration: clock.Elapsed,
-            BytesBefore: bytesBefore,
-            BytesAfter: GetDatabaseBytes(),
+            BytesBefore: storageBefore.TotalBytes,
+            BytesAfter: afterConvergence.TotalBytes,
             VacuumRequested: options.Vacuum,
             VacuumCompleted: vacuumCompleted,
             VacuumDeferred: vacuumDeferred,
-            TerminalGoalOperationRowsDeleted: goalOperations.RowsDeleted);
+            TerminalGoalOperationRowsDeleted: allGoalOperations.RowsDeleted,
+            Disposition: decision.Disposition,
+            Reason: decision.Reason,
+            StorageBefore: storageBefore,
+            StorageAfterMutation: afterMutation,
+            StorageAfterConvergence: afterConvergence,
+            Checkpoint: checkpoint,
+            RemainingEligibleRows: remainingEligibleRows,
+            RemainingBytesOverBudget: remainingBytes,
+            NextAttemptAt: decision.NextAttemptAt,
+            ConsecutiveNoProgressAttempts: noProgressAttempts,
+            DeleteBatchesCompleted: oversized.BatchesCompleted + aged.BatchesCompleted + allGoalOperations.BatchesCompleted);
+    }
+
+    private static long BytesOverBudget(SqliteStorageSnapshot storage, long maximumBytes) =>
+        Math.Max(0, storage.TotalBytes - maximumBytes);
+
+    private static TimeSpan DeferredBackoff(TimeSpan initialDelay, int attempt)
+    {
+        var multiplier = 1L << Math.Clamp(attempt - 1, 0, 6);
+        var ticks = Math.Min(TimeSpan.FromHours(6).Ticks, checked(initialDelay.Ticks * multiplier));
+        return TimeSpan.FromTicks(ticks);
     }
 
     private static async Task PopulateTerminalGoalsAsync(
@@ -432,9 +612,12 @@ public sealed class SqliteRunEventStore : IRunEventStore
         if (!string.IsNullOrEmpty(directory))
             Directory.CreateDirectory(directory);
 
+        var isNewDatabase = !File.Exists(_dbPath) || new FileInfo(_dbPath).Length == 0;
         using var conn = new SqliteConnection(ConnectionString);
         conn.Open();
         RunNonQuery(conn, "PRAGMA busy_timeout=30000");
+        if (isNewDatabase)
+            RunNonQuery(conn, "PRAGMA auto_vacuum=INCREMENTAL");
         RunNonQuery(conn, "PRAGMA journal_mode=WAL");
         RunNonQuery(conn, """
             CREATE TABLE IF NOT EXISTS run_events (
@@ -480,6 +663,7 @@ public sealed class SqliteRunEventStore : IRunEventStore
     private async Task<ConductorTickPruneResult> PruneOversizedConductorTicksAsync(
         SqliteConnection conn,
         RunEventMaintenanceOptions options,
+        int maxBatches,
         CancellationToken cancellationToken)
     {
         var maxPayloadBytes = Math.Max(0, options.MaxConductorTickPayloadBytes);
@@ -529,12 +713,14 @@ public sealed class SqliteRunEventStore : IRunEventStore
                 deleteCommand.Parameters.AddWithValue("$batch_size", batchSize);
             },
             options.MaintenanceLockCommandTimeoutSeconds,
+            maxBatches,
             cancellationToken).ConfigureAwait(false);
     }
 
     private async Task<ConductorTickPruneResult> PruneAgedConductorTicksAsync(
         SqliteConnection conn,
         RunEventMaintenanceOptions options,
+        int maxBatches,
         CancellationToken cancellationToken)
     {
         var keepRows = Math.Max(0, options.MinConductorTickRowsToKeep);
@@ -596,12 +782,14 @@ public sealed class SqliteRunEventStore : IRunEventStore
                 deleteCommand.Parameters.AddWithValue("$batch_size", batchSize);
             },
             options.MaintenanceLockCommandTimeoutSeconds,
+            maxBatches,
             cancellationToken).ConfigureAwait(false);
     }
 
     private async Task<ConductorTickPruneResult> PruneAgedTerminalGoalOperationsAsync(
         SqliteConnection conn,
         RunEventMaintenanceOptions options,
+        int maxBatches,
         CancellationToken cancellationToken)
     {
         if (options.TerminalGoalIds is null || options.TerminalGoalIds.Count == 0)
@@ -612,6 +800,35 @@ public sealed class SqliteRunEventStore : IRunEventStore
         var cutoff = (options.UtcNow ?? DateTimeOffset.UtcNow)
             .Subtract(options.EffectiveTerminalGoalOperationMaxAge)
             .ToString("O", CultureInfo.InvariantCulture);
+        return await PruneTerminalGoalOperationsBeforeAsync(
+            conn, options, cutoff, maxBatches, cancellationToken).ConfigureAwait(false);
+    }
+
+    private async Task<ConductorTickPruneResult> PruneTerminalGoalOperationsUnderBytePressureAsync(
+        SqliteConnection conn,
+        RunEventMaintenanceOptions options,
+        int maxBatches,
+        CancellationToken cancellationToken)
+    {
+        if (options.TerminalGoalIds is null || options.TerminalGoalIds.Count == 0)
+        {
+            return ConductorTickPruneResult.Empty;
+        }
+
+        var cutoff = (options.UtcNow ?? DateTimeOffset.UtcNow)
+            .Subtract(options.EffectiveRecentTerminalGoalProtectionAge)
+            .ToString("O", CultureInfo.InvariantCulture);
+        return await PruneTerminalGoalOperationsBeforeAsync(
+            conn, options, cutoff, maxBatches, cancellationToken).ConfigureAwait(false);
+    }
+
+    private async Task<ConductorTickPruneResult> PruneTerminalGoalOperationsBeforeAsync(
+        SqliteConnection conn,
+        RunEventMaintenanceOptions options,
+        string cutoff,
+        int maxBatches,
+        CancellationToken cancellationToken)
+    {
         var batchSize = NormalizeDeleteBatchSize(options.DeleteBatchSize);
         return await PruneConductorTickBatchesAsync(
             conn,
@@ -661,6 +878,7 @@ public sealed class SqliteRunEventStore : IRunEventStore
                 deleteCommand.Parameters.AddWithValue("$batch_size", batchSize);
             },
             options.MaintenanceLockCommandTimeoutSeconds,
+            maxBatches,
             cancellationToken).ConfigureAwait(false);
     }
 
@@ -670,12 +888,14 @@ public sealed class SqliteRunEventStore : IRunEventStore
         Action<SqliteCommand> configureStatsCommand,
         Action<SqliteCommand> configureDeleteCommand,
         int lockCommandTimeoutSeconds,
+        int maxBatches,
         CancellationToken cancellationToken)
     {
         var rowsDeleted = 0;
         var deletedPayloadBytesEstimate = 0L;
         var maxRowsDeletedInTransaction = 0;
-        while (true)
+        var batchesCompleted = 0;
+        while (batchesCompleted < Math.Max(0, maxBatches))
         {
             try
             {
@@ -691,7 +911,10 @@ public sealed class SqliteRunEventStore : IRunEventStore
                     rowsDeleted,
                     deletedPayloadBytesEstimate,
                     maxRowsDeletedInTransaction,
-                    Deferred: true);
+                    Deferred: true,
+                    HasMore: true,
+                    NextBatchRows: 0,
+                    BatchesCompleted: batchesCompleted);
             }
 
             var committed = false;
@@ -708,7 +931,10 @@ public sealed class SqliteRunEventStore : IRunEventStore
                         rowsDeleted,
                         deletedPayloadBytesEstimate,
                         maxRowsDeletedInTransaction,
-                        Deferred: false);
+                        Deferred: false,
+                        HasMore: false,
+                        NextBatchRows: 0,
+                        BatchesCompleted: batchesCompleted);
                 }
 
                 await using var deleteCommand = conn.CreateCommand();
@@ -720,13 +946,17 @@ public sealed class SqliteRunEventStore : IRunEventStore
                 rowsDeleted += deleted;
                 deletedPayloadBytesEstimate += batchPayloadBytes;
                 maxRowsDeletedInTransaction = Math.Max(maxRowsDeletedInTransaction, deleted);
+                batchesCompleted++;
                 if (deleted < batchSize)
                 {
                     return new ConductorTickPruneResult(
                         rowsDeleted,
                         deletedPayloadBytesEstimate,
                         maxRowsDeletedInTransaction,
-                        Deferred: false);
+                        Deferred: false,
+                        HasMore: false,
+                        NextBatchRows: 0,
+                        BatchesCompleted: batchesCompleted);
                 }
             }
             finally
@@ -743,6 +973,18 @@ public sealed class SqliteRunEventStore : IRunEventStore
                 }
             }
         }
+
+        await using var remainingCommand = conn.CreateCommand();
+        configureStatsCommand(remainingCommand);
+        var remaining = await ReadBatchStatsAsync(remainingCommand, cancellationToken).ConfigureAwait(false);
+        return new ConductorTickPruneResult(
+            rowsDeleted,
+            deletedPayloadBytesEstimate,
+            maxRowsDeletedInTransaction,
+            Deferred: false,
+            HasMore: remaining.Rows > 0,
+            NextBatchRows: remaining.Rows,
+            BatchesCompleted: batchesCompleted);
     }
 
     private static async Task<(int Rows, long PayloadBytes)> ReadBatchStatsAsync(
@@ -756,6 +998,34 @@ public sealed class SqliteRunEventStore : IRunEventStore
         }
 
         return (Convert.ToInt32(reader.GetInt64(0)), reader.GetInt64(1));
+    }
+
+    private static async Task<SqliteCheckpointResult> ReadCheckpointAsync(
+        SqliteConnection connection,
+        CancellationToken cancellationToken)
+    {
+        await using var command = connection.CreateCommand();
+        command.CommandText = "PRAGMA wal_checkpoint(TRUNCATE)";
+        await using var reader = await command.ExecuteReaderAsync(cancellationToken).ConfigureAwait(false);
+        if (!await reader.ReadAsync(cancellationToken).ConfigureAwait(false))
+        {
+            throw new InvalidOperationException("SQLite returned no wal_checkpoint receipt.");
+        }
+
+        return new SqliteCheckpointResult(
+            Convert.ToInt32(reader.GetInt64(0)),
+            Convert.ToInt32(reader.GetInt64(1)),
+            Convert.ToInt32(reader.GetInt64(2)));
+    }
+
+    private static async Task<long> ReadPragmaLongAsync(
+        SqliteConnection connection,
+        string pragma,
+        CancellationToken cancellationToken)
+    {
+        await using var command = connection.CreateCommand();
+        command.CommandText = "PRAGMA " + pragma;
+        return Convert.ToInt64(await command.ExecuteScalarAsync(cancellationToken).ConfigureAwait(false));
     }
 
     private static int NormalizeDeleteBatchSize(int value) => Math.Clamp(value, 1, 1000);
@@ -783,24 +1053,6 @@ public sealed class SqliteRunEventStore : IRunEventStore
         await cmd.ExecuteNonQueryAsync(cancellationToken).ConfigureAwait(false);
     }
 
-    private long GetDatabaseBytes()
-    {
-        var total = File.Exists(_dbPath) ? new FileInfo(_dbPath).Length : 0;
-        var wal = _dbPath + "-wal";
-        if (File.Exists(wal))
-        {
-            total += new FileInfo(wal).Length;
-        }
-
-        var shm = _dbPath + "-shm";
-        if (File.Exists(shm))
-        {
-            total += new FileInfo(shm).Length;
-        }
-
-        return total;
-    }
-
     private static bool IsTransientLock(SqliteException ex) =>
         ex.SqliteErrorCode == 5 || ex.SqliteErrorCode == 6;
 
@@ -825,8 +1077,21 @@ public sealed class SqliteRunEventStore : IRunEventStore
         int RowsDeleted,
         long DeletedPayloadBytesEstimate,
         int MaxRowsDeletedInTransaction,
-        bool Deferred)
+        bool Deferred,
+        bool HasMore,
+        int NextBatchRows,
+        int BatchesCompleted)
     {
-        public static ConductorTickPruneResult Empty { get; } = new(0, 0, 0, Deferred: false);
+        public static ConductorTickPruneResult Empty { get; } = new(
+            0, 0, 0, Deferred: false, HasMore: false, NextBatchRows: 0, BatchesCompleted: 0);
+
+        public ConductorTickPruneResult Combine(ConductorTickPruneResult other) => new(
+            RowsDeleted + other.RowsDeleted,
+            DeletedPayloadBytesEstimate + other.DeletedPayloadBytesEstimate,
+            Math.Max(MaxRowsDeletedInTransaction, other.MaxRowsDeletedInTransaction),
+            Deferred || other.Deferred,
+            HasMore || other.HasMore,
+            NextBatchRows + other.NextBatchRows,
+            BatchesCompleted + other.BatchesCompleted);
     }
 }
