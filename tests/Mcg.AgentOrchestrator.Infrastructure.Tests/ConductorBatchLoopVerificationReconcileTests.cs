@@ -264,6 +264,48 @@ public sealed class ConductorBatchLoopVerificationReconcileTests
             evt.Message.Contains("Tick merge reconciled stored all-task verification gates", StringComparison.Ordinal));
     }
 
+    [Xunit.Fact]
+    public async Task TickMerge_AcceptanceFailedStoreState_RemainsFailed()
+    {
+        var repo = CreateMigratedStateRepository(TempDb());
+        var seed = new AgentOrchestratorKernel();
+        var goal = GoalLifecycleCommands.CreateAndActivateSimpleGoal(seed, DefaultAgents(), "Preserve failed acceptance");
+        var task = goal.Tasks.Single();
+        seed.ReportTaskProgress(goal.Id, task.Id, WorkTaskStatus.Completed, "Worker finished.");
+        seed.RecordTaskVerification(
+            goal.Id,
+            task.Id,
+            new TaskVerificationRecord("dotnet test", "C:\\work", 0, "ok", "", DateTimeOffset.UtcNow));
+        await repo.SaveAsync(seed);
+        var baseline = seed.ExportSnapshot().Goals.Single();
+
+        var tickKernel = AgentOrchestratorKernel.FromSnapshot(new OrchestratorSnapshot([baseline], []));
+        tickKernel.RecordGoalPolicyDecision(goal.Id, "Batch loop tick retained stale verified state.");
+        var staleTickSnapshot = tickKernel.ExportSnapshot().Goals.Single();
+
+        await repo.TransactGoalAsync<bool>(
+            goal.Id,
+            (stored, _) =>
+            {
+                var storedKernel = AgentOrchestratorKernel.FromSnapshot(new OrchestratorSnapshot([stored!], []));
+                Xunit.Assert.True(storedKernel.BeginGoalAcceptanceVerification(goal.Id, "Run acceptance."));
+                Xunit.Assert.True(storedKernel.ReconcileGoalAcceptanceFailed(
+                    goal.Id,
+                    ["infrastructure tests"],
+                    "Acceptance failed.",
+                    "candidate-sha",
+                    "main-sha"));
+                return Task.FromResult((true, storedKernel.ExportSnapshot().Goals.Single(), true));
+            });
+
+        var results = await repo.SaveGoalSnapshotsWithMergeAsync([new GoalSnapshotSaveRequest(baseline, staleTickSnapshot)]);
+
+        Xunit.Assert.Equal(GoalSnapshotSaveDisposition.Merged, Xunit.Assert.Single(results).Disposition);
+        var reloadedGoal = (await repo.LoadAsync()).GetGoal(goal.Id);
+        Xunit.Assert.Equal(GoalStatus.AcceptanceFailed, reloadedGoal.Status);
+        Xunit.Assert.NotNull(reloadedGoal.LatestAcceptanceFailure);
+    }
+
     private static void RunOneTick(
         AgentOrchestratorKernel kernel,
         SqliteOrchestratorStateRepository repo)

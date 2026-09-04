@@ -124,9 +124,9 @@ public sealed class ConductorCrossTickTests
         var kernel = new AgentOrchestratorKernel();
         var running = CreateGoal(kernel, "Update src/RunningAcrossTicks.cs");
         // This injected rejection is scenario control, not failure behavior under test. After
-        // tick 1 it keeps the live goal out of the rebuilt active-candidate list. Under the
-        // pre-fix waiter selection that goal remains the oldest waiter; recording it as served
-        // would reset the bounded-overtake counter and mask the cross-tick fairness regression.
+        // tick 1 it proves a live attempt retains its occupied slot without rebuilding its
+        // candidate scope. Re-reading it would both lose durable capacity and reset the
+        // bounded-overtake counter that exposes the cross-tick fairness regression.
         var rejectRunningCandidateRebuild = false;
         var rejectedRunningCandidateRebuildCount = 0;
         var paidWorkerStartCount = 0;
@@ -162,7 +162,7 @@ public sealed class ConductorCrossTickTests
         fixture.RunTickForTests(kernel, driver);
 
         var primerHandle = fixture.RequiredHandleForTests(primer);
-        Assert.Equal(1, rejectedRunningCandidateRebuildCount);
+        Assert.Equal(0, rejectedRunningCandidateRebuildCount);
         Assert.Equal(ConductorBatchLoop.DefaultParallelAcceptanceCapacity, fixture.HeldAttemptCapacity);
         Assert.Equal(2, fixture.HeldAttemptCapacity);
         Assert.Equal(2, fixture.HeldAttemptCount);
@@ -180,7 +180,7 @@ public sealed class ConductorCrossTickTests
         BatchTickSummary? admissionTick = null;
         fixture.RunTickForTests(kernel, driver, tick => admissionTick = tick);
 
-        Assert.Equal(2, rejectedRunningCandidateRebuildCount);
+        Assert.Equal(0, rejectedRunningCandidateRebuildCount);
         Assert.Contains(admissionTick!.ProgressLines!, line =>
             line.Contains($"ACCEPTANCE goal={waiting.Id.Value[..8]}", StringComparison.Ordinal) &&
             line.Contains("result=started", StringComparison.Ordinal));

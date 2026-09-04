@@ -17,7 +17,40 @@ $ErrorActionPreference = 'Stop'
 
 $repoRoot = Split-Path -Parent $PSScriptRoot
 try {
-    $output = @(& (Join-Path $repoRoot 'scripts\Invoke-OrchestratorCommand.ps1') repo-process-info --locks)
+    $resolver = Join-Path $repoRoot 'scripts\Resolve-RepoProcessAppDll.ps1'
+    $resolvedAppDll = @()
+    try {
+        if (-not [string]::IsNullOrWhiteSpace($env:MCG_PHASE_TRACE)) {
+            Write-Output 'MCG_PHASE=resolve-app-dll'
+        }
+        if (Test-Path -LiteralPath $resolver -PathType Leaf) {
+            $resolvedAppDll = @(& $resolver -RepositoryRoot $repoRoot)
+            if ($LASTEXITCODE -ne 0) {
+                $resolvedAppDll = @()
+            }
+        }
+    }
+    catch {
+        $resolvedAppDll = @()
+    }
+
+    if ($resolvedAppDll.Count -eq 1) {
+        if (-not [string]::IsNullOrWhiteSpace($env:MCG_PHASE_TRACE)) {
+            Write-Output 'MCG_PHASE=run-cli-direct'
+        }
+        $dotnetHost = if ([string]::IsNullOrWhiteSpace($env:MCG_ORCHESTRATOR_DOTNET_PATH)) {
+            'dotnet'
+        } else {
+            $env:MCG_ORCHESTRATOR_DOTNET_PATH
+        }
+        $output = @(& $dotnetHost $resolvedAppDll[0] repo-process-info --locks)
+    }
+    else {
+        if (-not [string]::IsNullOrWhiteSpace($env:MCG_PHASE_TRACE)) {
+            Write-Output 'MCG_PHASE=rebuild-and-run-cli'
+        }
+        $output = @(& (Join-Path $repoRoot 'scripts\Invoke-OrchestratorCommand.ps1') repo-process-info --locks)
+    }
     $exitCode = if ($LASTEXITCODE -is [int]) { $LASTEXITCODE } else { 0 }
     if ($exitCode -ne 0) {
         $output

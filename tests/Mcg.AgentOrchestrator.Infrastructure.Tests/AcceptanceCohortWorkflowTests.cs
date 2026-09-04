@@ -2343,6 +2343,106 @@ public sealed class AcceptanceCohortWorkflowTests : GoalWorktreeTestBase
     }
 
     [Fact]
+    public void ProductionBatch_TwoLiveCohortRootsFillSharedAcceptanceCapacity()
+    {
+        var repo = CreateReducedAcceptanceCohortRepository();
+        var trx = Path.Combine(Path.GetTempPath(), $"cohort-shared-capacity-{Guid.NewGuid():N}.trx");
+        using var gateStarted = new ManualResetEventSlim();
+        using var gateRelease = new ManualResetEventSlim();
+        var previousIsolatedRoot = Environment.GetEnvironmentVariable(
+            DotnetBuildEnvironmentManager.IsolatedRootOverrideVariable);
+        ConductorDriver? driver = null;
+        try
+        {
+            Environment.SetEnvironmentVariable(
+                DotnetBuildEnvironmentManager.IsolatedRootOverrideVariable,
+                Path.Combine(repo, ".dotnet-test-root"));
+            AddAcceptanceManifest(repo);
+            File.WriteAllText(trx, ValidPassingTrx());
+            var kernel = new AgentOrchestratorKernel();
+            var goals = Enumerable.Range(0, 5)
+                .Select(index => CreateCompletedGoal(kernel, $"Shared capacity member {index}", repo))
+                .ToArray();
+            var paths = new[]
+            {
+                "src/Mcg.AgentOrchestrator.Infrastructure/CapacityFirst.cs",
+                "tests/CapacitySecond.cs",
+                "src/Mcg.AgentOrchestrator.Core/CapacityThird.cs",
+                "tests/CapacityFourth.cs",
+                "src/Mcg.AgentOrchestrator.App/CapacityWaiter.cs"
+            };
+            for (var index = 0; index < goals.Length; index++)
+            {
+                _ = CreateWorktreeCandidate(repo, goals[index].Id, paths[index], $"capacity-{index}");
+            }
+
+            var verifier = new BlockingAcceptanceVerifier(
+                gateStarted,
+                gateRelease,
+                new AcceptanceVerificationResult(
+                    Passed: true,
+                    Skipped: false,
+                    ExitCode: 0,
+                    OutputTail: null,
+                    Checks: [new AcceptanceCheckResult("shared-capacity-gate", true, 0, null)],
+                    TestResultPaths: [trx]));
+            driver = new ConductorDriver(
+                kernel,
+                OrchestratorWorkspace.ForDirectory(repo),
+                verifier,
+                AgentCatalog.Default().Agents,
+                WorkerProfileCatalog.Default());
+            var first = ProjectSelection(driver, goals[0], goals[1]);
+            var second = ProjectSelection(driver, goals[2], goals[3]);
+
+            _ = driver.RunAcceptanceCohort(
+                first,
+                [goals[0], goals[1]],
+                ConductorAutonomyPolicy.Permissive,
+                runGateInBackground: true);
+            _ = driver.RunAcceptanceCohort(
+                second,
+                [goals[2], goals[3]],
+                ConductorAutonomyPolicy.Permissive,
+                runGateInBackground: true);
+            Assert.True(
+                SpinWait.SpinUntil(() => verifier.RunCount == 2, TimeSpan.FromSeconds(10)),
+                "Both controlled cohort roots did not enter the verifier.");
+
+            var capacity = driver.GetActiveAcceptanceCohortCapacity();
+            Assert.Equal(2, capacity.ActiveRootCount);
+            BatchTickSummary? tick = null;
+            new ConductorBatchLoop().Run(
+                kernel,
+                driver,
+                ConductorAutonomyPolicy.Permissive,
+                Path.Combine(repo, "stop-does-not-exist"),
+                maxIterations: 1,
+                onTick: current => tick = current);
+
+            Assert.Empty(driver.ParallelAcceptanceAttemptCoordinator.GetUnreconciledAttempts([goals[4].Id.Value]));
+            Assert.Equal(GoalStatus.Verified, goals[4].Status);
+            Assert.Contains(tick!.ProgressLines!, line =>
+                line.Contains("reason=parallel-acceptance-slot-cap", StringComparison.Ordinal));
+        }
+        finally
+        {
+            gateRelease.Set();
+            if (driver is not null)
+            {
+                _ = SpinWait.SpinUntil(
+                    () => driver.GetActiveAcceptanceCohortCapacity().ActiveRootCount == 0,
+                    TimeSpan.FromSeconds(10));
+            }
+            Environment.SetEnvironmentVariable(
+                DotnetBuildEnvironmentManager.IsolatedRootOverrideVariable,
+                previousIsolatedRoot);
+            if (File.Exists(trx)) File.Delete(trx);
+            DeleteDirectory(repo);
+        }
+    }
+
+    [Fact]
     public void ProductionBatch_OrdinaryParallelAcceptanceStillStartsPromptlyAndReconcilesLater()
     {
         var repo = CreateReducedAcceptanceCohortRepository();

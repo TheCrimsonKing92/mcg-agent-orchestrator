@@ -118,6 +118,7 @@ public sealed class BackgroundDispatchRunner
     private readonly Func<string, Stream> _openLogReadStream;
     private readonly Func<ProcessStartInfo, Process?> _startProcess;
     private readonly Func<OrchestratorBuildCheckRequest, OrchestratorBuildCheckResult> _runOrchestratorBuildCheck;
+    private readonly Func<ProcessCommandLineSnapshot> _processCommandLineSnapshotFactory;
     private readonly Dictionary<ProcessLogCacheKey, ProcessLogSnapshot> _processLogCache = [];
     private readonly object _processLogCacheGate = new();
 
@@ -138,7 +139,8 @@ public sealed class BackgroundDispatchRunner
         Action? beforeGoalWorktreeInspection = null,
         Func<ProcessStartInfo, Process?>? startProcess = null,
         Func<OrchestratorBuildCheckRequest, OrchestratorBuildCheckResult>? runOrchestratorBuildCheck = null,
-        Func<int, (DateTimeOffset StartedAt, string ImagePath)?>? readProcessIdentity = null)
+        Func<int, (DateTimeOffset StartedAt, string ImagePath)?>? readProcessIdentity = null,
+        Func<ProcessCommandLineSnapshot>? processCommandLineSnapshotFactory = null)
     {
         _clock = clock ?? new SystemClock();
         _postOutputIdleTimeout = postOutputIdleTimeout ?? DefaultPostOutputIdleTimeout;
@@ -173,6 +175,7 @@ public sealed class BackgroundDispatchRunner
         _worktreeCommitter = new DispatchWorktreeCommitter(beforeWorktreeInspection: beforeGoalWorktreeInspection);
         _startProcess = startProcess ?? Process.Start;
         _runOrchestratorBuildCheck = runOrchestratorBuildCheck ?? OrchestratorBuildEvidenceCheck.RunDefault;
+        _processCommandLineSnapshotFactory = processCommandLineSnapshotFactory ?? ProcessCommandLines.SnapshotOperation;
     }
     private static bool IsDispatchStartDisabledByEnvironment()
     {
@@ -432,7 +435,7 @@ public sealed class BackgroundDispatchRunner
             ?? throw new InvalidOperationException("Failed to start background dispatch process.");
         if (!WorkerProcessJobs.TryRegister(process, $"{goalId.Value}:{taskId.Value}", out var registrationFailure))
         {
-            process.Dispose();
+            TerminateUnreleasedDispatchHost(process);
             kernel.ReportTaskProgress(goalId, taskId, WorkTaskStatus.Failed, registrationFailure);
             checkpointBeforeWorkerStart?.Invoke(kernel, goalId, taskId, DispatchRecordCheckpointPhase.ProcessMayHaveStarted);
             return DispatchProcessStartResult.Failed(registrationFailure);
@@ -641,6 +644,7 @@ public sealed class BackgroundDispatchRunner
     public int SweepExitedProcesses(AgentOrchestratorKernel kernel, GoalId? onlyGoalId = null)
     {
         var reconciled = 0;
+        var processInspection = new ProcessInspectionSnapshotScope(_processCommandLineSnapshotFactory);
         foreach (var goal in kernel.Goals.Where(goal => onlyGoalId is null || goal.Id == onlyGoalId))
         {
             foreach (var task in goal.Tasks)
@@ -651,8 +655,7 @@ public sealed class BackgroundDispatchRunner
                                    WorkTaskStatus.Cancelled ||
                     process is null ||
                     process.WasCancelled ||
-                    HasProcessOnlyCompletionAlreadyApplied(task, process) ||
-                    HasRecordedCompletionForProcess(task, process))
+                    DispatchProcessCompletionState.HasAlreadyBeenApplied(task, process))
                 {
                     continue;
                 }
@@ -683,7 +686,7 @@ public sealed class BackgroundDispatchRunner
                         verdict.RecoveryDecision)
                     : new DispatchRefreshOutcome(process, null, RecoveryDecision: verdict.RecoveryDecision);
 
-                ApplyRefreshOutcomeAndWriteDiagnostics(kernel, goal.Id, task.Id, outcome);
+                ApplyRefreshOutcomeAndWriteDiagnostics(kernel, goal.Id, task.Id, outcome, processInspection.Get);
                 if (outcome.RecoveryDecision?.Action != DispatchRecoveryAction.Hold)
                 {
                     reconciled++;
@@ -693,26 +696,6 @@ public sealed class BackgroundDispatchRunner
 
         return reconciled;
     }
-
-    private static bool HasRecordedCompletionForProcess(TaskSpec task, TaskProcessRecord process)
-    {
-        if (process.CompletedAt is null || process.ExitCode is null)
-        {
-            return false;
-        }
-
-        return task.VerificationHistory.Any(verification =>
-            verification.ExitCode == process.ExitCode &&
-            verification.Command.Equals(process.Command, StringComparison.Ordinal) &&
-            verification.WorkingDirectory.Equals(process.WorkingDirectory, StringComparison.OrdinalIgnoreCase) &&
-            verification.CompletedAt == process.CompletedAt);
-    }
-
-    private static bool HasProcessOnlyCompletionAlreadyApplied(TaskSpec task, TaskProcessRecord process) =>
-        task.Status == WorkTaskStatus.Completed &&
-        task.LastVerification is not null &&
-        process.CompletedAt is not null &&
-        process.ExitCode is not null;
 
     public TaskProcessRecord RefreshLatestProcess(AgentOrchestratorKernel kernel, GoalId goalId, TaskId taskId) =>
         RefreshLatestProcessWithOutcome(kernel, goalId, taskId).ProcessRecord;
@@ -731,7 +714,8 @@ public sealed class BackgroundDispatchRunner
         AgentOrchestratorKernel kernel,
         GoalId goalId,
         TaskId taskId,
-        DispatchRefreshOutcome outcome)
+        DispatchRefreshOutcome outcome,
+        Func<ProcessCommandLineSnapshot>? getProcessSnapshot = null)
     {
         ApplyRefreshOutcome(kernel, goalId, taskId, outcome);
         if (outcome.DiagnosticPayload is not { } diagnostic)
@@ -745,7 +729,25 @@ public sealed class BackgroundDispatchRunner
             outcome.ProcessRecord,
             diagnostic.ExitCode,
             diagnostic.StandardOutput,
-            diagnostic.StandardError);
+            diagnostic.StandardError,
+            (getProcessSnapshot ?? _processCommandLineSnapshotFactory)());
+    }
+
+    public void ApplyRefreshOutcomesAndWriteDiagnostics(
+        AgentOrchestratorKernel kernel,
+        GoalId goalId,
+        IReadOnlyList<(TaskId TaskId, DispatchRefreshOutcome Outcome)> outcomes)
+    {
+        var processInspection = new ProcessInspectionSnapshotScope(_processCommandLineSnapshotFactory);
+        foreach (var (taskId, outcome) in outcomes)
+        {
+            ApplyRefreshOutcomeAndWriteDiagnostics(
+                kernel,
+                goalId,
+                taskId,
+                outcome,
+                processInspection.Get);
+        }
     }
 
     public DispatchRefreshOutcome ReconcileLatestProcess(AgentOrchestratorKernel kernel, GoalId goalId, TaskId taskId)
@@ -753,7 +755,7 @@ public sealed class BackgroundDispatchRunner
         var task = kernel.GetTask(goalId, taskId);
         var processRecord = task.LastProcess
             ?? throw new InvalidOperationException($"Task '{taskId}' has no background process to refresh.");
-        if (HasProcessOnlyCompletionAlreadyApplied(task, processRecord) || HasRecordedCompletionForProcess(task, processRecord))
+        if (DispatchProcessCompletionState.HasAlreadyBeenApplied(task, processRecord))
         {
             return new DispatchRefreshOutcome(processRecord, null);
         }
@@ -3117,10 +3119,8 @@ public sealed class BackgroundDispatchRunner
             : standardError.TrimEnd() + Environment.NewLine + diagnostic;
     }
 
-    private static bool TryKillProcess(int processId)
-    {
-        return WorkerProcessJobs.TryKillOrFallback(processId);
-    }
+    private static bool TryKillProcess(int processId) =>
+        WorkerProcessJobs.TryKillOrFallback(processId);
 
     internal static string FormatResourceReceipt(
         GoalId goalId,

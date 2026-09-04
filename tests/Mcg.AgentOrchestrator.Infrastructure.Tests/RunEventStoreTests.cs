@@ -379,6 +379,177 @@ public sealed class RunEventStoreTests
         Assert.Equal("sentinel".Length, exclusive.Length);
     }
 
+    [Xunit.Fact]
+    public async Task RunEventMaintenanceCadence_FailedArtifactSweepRetriesOnlyAfterPersistedBackoff()
+    {
+        var root = CreateTempDirectory();
+        var db = Path.Combine(root, "run-events.db");
+        var logPath = Path.Combine(root, "logs", ConductEventLogWriter.CurrentFileName);
+        var now = DateTimeOffset.Parse("2026-09-02T12:00:00Z");
+        var markerAt = now.AddMinutes(-1);
+        var store = new SqliteRunEventStore(db);
+        await store.AppendAsync(new RunEventAppend(
+            RunEventTypes.RunEventMaintenance,
+            null,
+            RunEventMaintenanceCadence.Operation,
+            "Completed",
+            "fresh marker",
+            "{}",
+            OccurredAt: markerAt));
+        await store.AppendAsync(new RunEventAppend(
+            RunEventTypes.EvidenceRetention,
+            null,
+            RunEventMaintenanceCadence.ArtifactRetentionOperation,
+            "Failed",
+            "failed retention sweep",
+            "{}",
+            OccurredAt: markerAt));
+        var calls = 0;
+        var completedMaintenance = new RunEventMaintenanceResult(
+            Deferred: false,
+            DeferredReason: null,
+            ConductorTickRowsDeleted: 0,
+            AgedConductorTickRowsDeleted: 0,
+            OversizedConductorTickRowsDeleted: 0,
+            DeletedPayloadBytesEstimate: 0,
+            MaxRowsDeletedInTransaction: 0,
+            Duration: TimeSpan.Zero,
+            BytesBefore: 0,
+            BytesAfter: 0,
+            VacuumRequested: false,
+            VacuumCompleted: false,
+            VacuumDeferred: false);
+
+        var beforeBackoff = RunEventMaintenanceCadence.TryRunIfDue(
+            db,
+            logPath,
+            () => now,
+            (_, _) =>
+            {
+                calls++;
+                return completedMaintenance;
+            });
+        var afterBackoff = RunEventMaintenanceCadence.TryRunIfDue(
+            db,
+            logPath,
+            () => markerAt.Add(RunEventMaintenanceCadence.ArtifactFailureRetryInterval).AddSeconds(1),
+            (_, _) =>
+            {
+                calls++;
+                return completedMaintenance;
+            });
+
+        Assert.True(beforeBackoff.Skipped);
+        Assert.True(afterBackoff.Attempted);
+        Assert.Equal(1, calls);
+    }
+
+    [Xunit.Fact]
+    public void RunEventMaintenanceCadence_FailedArtifactSweepSetsInMemoryBackoff()
+    {
+        var root = CreateTempDirectory();
+        var executionDirectory = Path.Combine(root, "workspace");
+        Directory.CreateDirectory(executionDirectory);
+        var workspace = OrchestratorWorkspace.ForDirectory(executionDirectory);
+        InfrastructureTestSupport.CreateMigratedStateRepository(workspace.SqliteStatePath);
+        var db = Path.Combine(root, "run-events.db");
+        var logPath = Path.Combine(root, "logs", ConductEventLogWriter.CurrentFileName);
+        var now = DateTimeOffset.Parse("2026-09-02T12:00:00Z");
+        var artifactCalls = 0;
+        var completedMaintenance = new RunEventMaintenanceResult(
+            Deferred: false,
+            DeferredReason: null,
+            ConductorTickRowsDeleted: 0,
+            AgedConductorTickRowsDeleted: 0,
+            OversizedConductorTickRowsDeleted: 0,
+            DeletedPayloadBytesEstimate: 0,
+            MaxRowsDeletedInTransaction: 0,
+            Duration: TimeSpan.Zero,
+            BytesBefore: 0,
+            BytesAfter: 0,
+            VacuumRequested: false,
+            VacuumCompleted: false,
+            VacuumDeferred: false);
+        var failedRetention = new StorageRetentionResult(
+            WorkerArtifactsDeleted: 0,
+            WorkerLogsCompressed: 0,
+            SuccessfulTrxReceiptsWritten: 0,
+            AcceptanceArtifactsDeleted: 0,
+            PromptArtifactsDeleted: 0,
+            GoalJournalsArchived: 0,
+            SweepId: "failed-sweep",
+            Decisions:
+            [
+                new EvidenceRetentionDecision(
+                    EvidenceArtifactFamily.RunEvents,
+                    EvidenceRetentionAction.Failed,
+                    workspace.OrchestratorDirectory,
+                    null,
+                    EvidenceOwnerResolution.Unrecorded,
+                    "sweep-failed")
+            ]);
+
+        StorageRetentionResult FailRetention(
+            OrchestratorWorkspace _workspace,
+            IReadOnlyCollection<StorageRetentionGoal> _goals,
+            DateTimeOffset _now,
+            string? _mtpResultsRoot)
+        {
+            artifactCalls++;
+            return failedRetention;
+        }
+
+        RunEventMaintenanceCadenceResult RunAt(DateTimeOffset timestamp) =>
+            RunEventMaintenanceCadence.TryRunIfDue(
+                db,
+                logPath,
+                () => timestamp,
+                maintenanceOperation: (_, _) => completedMaintenance,
+                workspace: workspace,
+                artifactRetentionOperation: FailRetention);
+
+        var failed = RunAt(now);
+        File.Delete(db);
+        File.Delete(logPath);
+        var beforeBackoff = RunAt(now.AddMinutes(1));
+        var afterBackoff = RunAt(now.Add(RunEventMaintenanceCadence.ArtifactFailureRetryInterval).AddSeconds(1));
+
+        Assert.True(failed.Failed);
+        Assert.True(beforeBackoff.Skipped);
+        Assert.True(afterBackoff.Attempted);
+        Assert.Equal(2, artifactCalls);
+    }
+
+    [Xunit.Fact]
+    public void RunEventMaintenanceCadence_ExceptionSetsInMemoryBackoff()
+    {
+        var root = CreateTempDirectory();
+        var db = Path.Combine(root, "run-events.db");
+        var logPath = Path.Combine(root, "logs", ConductEventLogWriter.CurrentFileName);
+        var now = DateTimeOffset.Parse("2026-09-02T12:00:00Z");
+        var calls = 0;
+
+        RunEventMaintenanceCadenceResult RunAt(DateTimeOffset timestamp) =>
+            RunEventMaintenanceCadence.TryRunIfDue(
+                db,
+                logPath,
+                () => timestamp,
+                maintenanceOperation: (_, _) =>
+                {
+                    calls++;
+                    throw new IOException("injected maintenance failure");
+                });
+
+        var failed = RunAt(now);
+        var beforeBackoff = RunAt(now.AddMinutes(1));
+        var afterBackoff = RunAt(now.Add(RunEventMaintenanceCadence.ArtifactFailureRetryInterval).AddSeconds(1));
+
+        Assert.True(failed.Failed);
+        Assert.True(beforeBackoff.Skipped);
+        Assert.True(afterBackoff.Failed);
+        Assert.Equal(2, calls);
+    }
+
     [Xunit.Fact(DisplayName = "RunEventMaintenanceCadence_production_default_runs_store_maintenance")]
     public async Task RunEventMaintenanceCadenceProductionDefaultRunsStoreMaintenance()
     {
@@ -588,6 +759,166 @@ public sealed class RunEventStoreTests
         Assert.NotNull(await store.ReadLatestAsync(
             RunEventTypes.RunEventMaintenance,
             RunEventMaintenanceCadence.VacuumOperation));
+    }
+
+    [Xunit.Fact]
+    public async Task ArtifactRetentionReceipt_PersistsTypedPartialDecisions()
+    {
+        var root = CreateTempDirectory();
+        var store = new SqliteRunEventStore(Path.Combine(root, "run-events.db"));
+        var now = DateTimeOffset.Parse("2026-09-02T12:00:00Z");
+        var result = new StorageRetentionResult(
+            WorkerArtifactsDeleted: 1,
+            WorkerLogsCompressed: 0,
+            SuccessfulTrxReceiptsWritten: 0,
+            AcceptanceArtifactsDeleted: 0,
+            PromptArtifactsDeleted: 0,
+            GoalJournalsArchived: 0,
+            SweepId: "sweep-1",
+            Decisions:
+            [
+                new EvidenceRetentionDecision(
+                    EvidenceArtifactFamily.DispatchLogs,
+                    EvidenceRetentionAction.Deleted,
+                    "deleted.log",
+                    "goal-1",
+                    EvidenceOwnerResolution.UniqueTerminal,
+                    "past-deletion-age",
+                    BytesAttempted: 12,
+                    BytesReclaimed: 12),
+                new EvidenceRetentionDecision(
+                    EvidenceArtifactFamily.AcceptanceGateAttempts,
+                    EvidenceRetentionAction.DeferredLocked,
+                    "locked.trx",
+                    "goal-1",
+                    EvidenceOwnerResolution.UniqueTerminal,
+                    "exclusive-delete-failed",
+                    FailureExceptionType: nameof(IOException))
+            ]);
+
+        RunEventMaintenanceCadence.AppendArtifactRetentionReceipt(store, result, now);
+
+        var receipt = Assert.IsType<RunEventRecord>(await store.ReadLatestAsync(
+            RunEventTypes.EvidenceRetention,
+            RunEventMaintenanceCadence.ArtifactRetentionOperation));
+        Assert.Equal("Partial", receipt.Status);
+        using var payload = JsonDocument.Parse(receipt.PayloadJson);
+        Assert.Equal(1, payload.RootElement.GetProperty("policyVersion").GetInt32());
+        Assert.Equal(12, payload.RootElement.GetProperty("reclaimedBytes").GetInt64());
+        Assert.False(payload.RootElement.GetProperty("decisionsTruncated").GetBoolean());
+        Assert.Equal(2, payload.RootElement.GetProperty("decisions").GetArrayLength());
+        Assert.Contains("actions=DeferredLocked:1,Deleted:1", receipt.Detail, StringComparison.Ordinal);
+        Assert.Contains("reasons=exclusive-delete-failed:1,past-deletion-age:1", receipt.Detail, StringComparison.Ordinal);
+
+        var failedResult = result with
+        {
+            SweepId = "sweep-2",
+            Decisions =
+            [
+                result.Decisions[0],
+                new EvidenceRetentionDecision(
+                    EvidenceArtifactFamily.RunEvents,
+                    EvidenceRetentionAction.Failed,
+                    root,
+                    null,
+                    EvidenceOwnerResolution.Unrecorded,
+                    "sweep-failed",
+                    FailureExceptionType: nameof(IOException))
+            ]
+        };
+        RunEventMaintenanceCadence.AppendArtifactRetentionReceipt(store, failedResult, now.AddSeconds(1));
+        var failedReceipt = Assert.IsType<RunEventRecord>(await store.ReadLatestAsync(
+            RunEventTypes.EvidenceRetention,
+            RunEventMaintenanceCadence.ArtifactRetentionOperation));
+        Assert.Equal("Failed", failedReceipt.Status);
+        Assert.Contains("status=partial-failed", failedReceipt.Detail, StringComparison.Ordinal);
+    }
+
+    [Xunit.Fact]
+    public async Task ArtifactRetentionReceiptRetainsEveryDestructiveDecisionPastNominalLimit()
+    {
+        var root = CreateTempDirectory();
+        var store = new SqliteRunEventStore(Path.Combine(root, "run-events-destructive-retention.db"));
+        var preserved = Enumerable.Range(0, 300)
+            .Select(index => new EvidenceRetentionDecision(
+                EvidenceArtifactFamily.AcceptanceGateAttempts,
+                EvidenceRetentionAction.Preserved,
+                $"preserved-{index:D3}.log",
+                "goal-1",
+                EvidenceOwnerResolution.UniqueTerminal,
+                "preserved"));
+        var deleted = new[]
+        {
+            new EvidenceRetentionDecision(
+                EvidenceArtifactFamily.AcceptanceGateAttempts,
+                EvidenceRetentionAction.Deleted,
+                "deleted-late-1.log",
+                "goal-1",
+                EvidenceOwnerResolution.UniqueTerminal,
+                "past-age-bound",
+                BytesAttempted: 10,
+                BytesReclaimed: 10),
+            new EvidenceRetentionDecision(
+                EvidenceArtifactFamily.AcceptanceGateAttempts,
+                EvidenceRetentionAction.Deleted,
+                "deleted-late-2.log",
+                "goal-1",
+                EvidenceOwnerResolution.UniqueTerminal,
+                "past-count-bound",
+                BytesAttempted: 20,
+                BytesReclaimed: 20)
+        };
+        var result = new StorageRetentionResult(
+            WorkerArtifactsDeleted: 0,
+            WorkerLogsCompressed: 0,
+            SuccessfulTrxReceiptsWritten: 0,
+            AcceptanceArtifactsDeleted: 2,
+            PromptArtifactsDeleted: 0,
+            GoalJournalsArchived: 0,
+            SweepId: "sweep-destructive-retention",
+            Decisions: preserved.Concat(deleted).ToArray());
+
+        RunEventMaintenanceCadence.AppendArtifactRetentionReceipt(store, result, DateTimeOffset.UtcNow);
+
+        var receipt = Assert.IsType<RunEventRecord>(await store.ReadLatestAsync(
+            RunEventTypes.EvidenceRetention,
+            RunEventMaintenanceCadence.ArtifactRetentionOperation));
+        using var payload = JsonDocument.Parse(receipt.PayloadJson);
+        var paths = payload.RootElement.GetProperty("decisions")
+            .EnumerateArray()
+            .Select(item => item.GetProperty("Path").GetString())
+            .ToArray();
+        Assert.True(payload.RootElement.GetProperty("decisionsTruncated").GetBoolean());
+        Assert.Equal(0, payload.RootElement.GetProperty("destructiveDecisionsDropped").GetInt32());
+        Assert.Contains("deleted-late-1.log", paths);
+        Assert.Contains("deleted-late-2.log", paths);
+
+        var destructiveOverflow = Enumerable.Range(0, 300)
+            .Select(index => new EvidenceRetentionDecision(
+                EvidenceArtifactFamily.AcceptanceGateAttempts,
+                EvidenceRetentionAction.Deleted,
+                $"deleted-overflow-{index:D3}.log",
+                "goal-1",
+                EvidenceOwnerResolution.UniqueTerminal,
+                "past-age-bound",
+                BytesAttempted: 1,
+                BytesReclaimed: 1))
+            .ToArray();
+        RunEventMaintenanceCadence.AppendArtifactRetentionReceipt(
+            store,
+            result with
+            {
+                SweepId = "sweep-destructive-overflow",
+                AcceptanceArtifactsDeleted = destructiveOverflow.Length,
+                Decisions = destructiveOverflow
+            },
+            DateTimeOffset.UtcNow.AddSeconds(1));
+        var overflowReceipt = Assert.IsType<RunEventRecord>(await store.ReadLatestAsync(
+            RunEventTypes.EvidenceRetention,
+            RunEventMaintenanceCadence.ArtifactRetentionOperation));
+        using var overflowPayload = JsonDocument.Parse(overflowReceipt.PayloadJson);
+        Assert.Equal(256, overflowPayload.RootElement.GetProperty("decisions").GetArrayLength());
+        Assert.Equal(44, overflowPayload.RootElement.GetProperty("destructiveDecisionsDropped").GetInt32());
     }
 
     private static Task<RunEventRecord> AppendGoalOperationAsync(

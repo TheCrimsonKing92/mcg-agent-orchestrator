@@ -19,6 +19,7 @@ public sealed class GoalWorktreeTestsSqliteTooling : GoalWorktreeTestBase
     public void InvokeRepoScriptRunsFindOrchestratorLocksWithoutSyntheticArgument()
     {
         var repoRoot = FindCurrentSourceRoot();
+        using var appOutput = PrepareRepoProcessAppOutput(repoRoot);
         var startInfo = new ProcessStartInfo
         {
             FileName = "powershell.exe",
@@ -34,6 +35,7 @@ public sealed class GoalWorktreeTestsSqliteTooling : GoalWorktreeTestBase
         startInfo.ArgumentList.Add("-File");
         startInfo.ArgumentList.Add(Path.Combine(repoRoot, "scripts", "Invoke-RepoScript.ps1"));
         startInfo.ArgumentList.Add("scripts\\Find-OrchestratorLocks.ps1");
+        startInfo.Environment["MCG_ORCHESTRATOR_APP_OUTPUT"] = appOutput.Path;
 
         var result = RunRedirectedProcess(startInfo, "Find-OrchestratorLocks.ps1");
         var stderr = result.Stderr;
@@ -113,6 +115,11 @@ public sealed class GoalWorktreeTestsSqliteTooling : GoalWorktreeTestBase
     public void RepoProcessHelpersDoNotUsePowerShellCimProcessQueries()
     {
         var repoRoot = FindCurrentSourceRoot();
+        var programText = File.ReadAllText(Path.Combine(
+            repoRoot,
+            "src",
+            "Mcg.AgentOrchestrator.App",
+            "Program.cs"));
         var cliCommandText = File.ReadAllText(Path.Combine(
             repoRoot,
             "src",
@@ -121,6 +128,20 @@ public sealed class GoalWorktreeTestsSqliteTooling : GoalWorktreeTestBase
             "RepoProcessCliCommand.cs"));
         Assert.Contains("ProcessCommandLines.Snapshot", cliCommandText, StringComparison.Ordinal);
         Assert.DoesNotContain("OpenProcess", cliCommandText, StringComparison.Ordinal);
+        var processInfoDispatchIndex = programText.IndexOf("repo-process-info", StringComparison.Ordinal);
+        var workspaceStartupIndex = programText.IndexOf("OrchestratorProjectSelection.FromArgs", StringComparison.Ordinal);
+        Assert.True(
+            processInfoDispatchIndex >= 0 &&
+            workspaceStartupIndex >= 0 &&
+            processInfoDispatchIndex < workspaceStartupIndex,
+            "Process helpers must dispatch before workspace, provider, and catalog startup.");
+        var resolverText = File.ReadAllText(Path.Combine(repoRoot, "scripts", "Resolve-RepoProcessAppDll.ps1"));
+        Assert.Contains("src/Mcg.AgentOrchestrator.App/Program.cs", resolverText, StringComparison.Ordinal);
+        Assert.Contains("src/Mcg.AgentOrchestrator.App/Cli", resolverText, StringComparison.Ordinal);
+        Assert.Contains("src/Mcg.AgentOrchestrator.Infrastructure/Processes", resolverText, StringComparison.Ordinal);
+        Assert.Contains("merge-base --is-ancestor", resolverText, StringComparison.Ordinal);
+        Assert.Contains("status --porcelain=v1 --untracked-files=all", resolverText, StringComparison.Ordinal);
+        Assert.Contains("resolve-run-dir.ps1", resolverText, StringComparison.Ordinal);
         var buildEnvironmentManagerText = File.ReadAllText(Path.Combine(
             repoRoot,
             "src",
@@ -131,11 +152,15 @@ public sealed class GoalWorktreeTestsSqliteTooling : GoalWorktreeTestBase
         Assert.DoesNotContain("GetProcessesByName", buildEnvironmentManagerText, StringComparison.Ordinal);
 
         var inspectedFiles = Directory
-            .EnumerateFiles(Path.Combine(repoRoot, "src"), "*", SearchOption.AllDirectories)
+            .EnumerateFiles(Path.Combine(repoRoot, "src"), "*.cs", SearchOption.AllDirectories)
             .Concat(Directory.EnumerateFiles(Path.Combine(repoRoot, "scripts"), "*.ps1", SearchOption.AllDirectories))
             .Append(Path.Combine(repoRoot, "docs", "operator-runbook.md"))
             .Where(path => !path.Contains($"{Path.DirectorySeparatorChar}bin{Path.DirectorySeparatorChar}", StringComparison.OrdinalIgnoreCase))
-            .Where(path => !path.Contains($"{Path.DirectorySeparatorChar}obj{Path.DirectorySeparatorChar}", StringComparison.OrdinalIgnoreCase));
+            .Where(path => !path.Contains($"{Path.DirectorySeparatorChar}obj{Path.DirectorySeparatorChar}", StringComparison.OrdinalIgnoreCase))
+            .Where(path => !path.Contains($"{Path.DirectorySeparatorChar}.scratch{Path.DirectorySeparatorChar}", StringComparison.OrdinalIgnoreCase))
+            .Where(path => !path.Contains($"{Path.DirectorySeparatorChar}.orchestrator-prototype{Path.DirectorySeparatorChar}", StringComparison.OrdinalIgnoreCase))
+            .Where(path => !path.Contains($"{Path.DirectorySeparatorChar}TestResults{Path.DirectorySeparatorChar}", StringComparison.OrdinalIgnoreCase))
+            .Where(path => !path.Contains($"{Path.DirectorySeparatorChar}playwright-report{Path.DirectorySeparatorChar}", StringComparison.OrdinalIgnoreCase));
         foreach (var path in inspectedFiles)
         {
             var text = File.ReadAllText(path);
@@ -182,6 +207,7 @@ public sealed class GoalWorktreeTestsSqliteTooling : GoalWorktreeTestBase
     public void GetRepoProcessInfoReportsExactPidLineageThroughRepoPrefix()
     {
         var repoRoot = FindCurrentSourceRoot();
+        using var appOutput = PrepareRepoProcessAppOutput(repoRoot);
         var startInfo = new ProcessStartInfo
         {
             FileName = "powershell.exe",
@@ -199,6 +225,8 @@ public sealed class GoalWorktreeTestsSqliteTooling : GoalWorktreeTestBase
         startInfo.ArgumentList.Add("scripts\\Get-RepoProcessInfo.ps1");
         startInfo.ArgumentList.Add("-Id");
         startInfo.ArgumentList.Add(Environment.ProcessId.ToString(CultureInfo.InvariantCulture));
+        startInfo.Environment["MCG_ORCHESTRATOR_REPOSITORY_ROOT"] = Path.Combine(repoRoot, "must-not-be-read");
+        startInfo.Environment["MCG_ORCHESTRATOR_APP_OUTPUT"] = appOutput.Path;
 
         var result = RunRedirectedProcess(startInfo, "Get-RepoProcessInfo.ps1");
         var stdout = result.Stdout;
@@ -215,6 +243,7 @@ public sealed class GoalWorktreeTestsSqliteTooling : GoalWorktreeTestBase
     public void StopRepoProcessRefusesExactPidWhenCommandGuardMismatches()
     {
         var repoRoot = FindCurrentSourceRoot();
+        using var appOutput = PrepareRepoProcessAppOutput(repoRoot);
         var targetStartInfo = new ProcessStartInfo
         {
             FileName = "powershell.exe",
@@ -249,6 +278,7 @@ public sealed class GoalWorktreeTestsSqliteTooling : GoalWorktreeTestBase
             startInfo.ArgumentList.Add("-CommandContains");
             startInfo.ArgumentList.Add("definitely-not-in-this-process-command-line");
             startInfo.ArgumentList.Add("-Force");
+            startInfo.Environment["MCG_ORCHESTRATOR_APP_OUTPUT"] = appOutput.Path;
 
             var result = RunRedirectedProcess(startInfo, "Stop-RepoProcess.ps1");
             var stdout = result.Stdout;
@@ -271,6 +301,126 @@ public sealed class GoalWorktreeTestsSqliteTooling : GoalWorktreeTestBase
                 Assert.True(target.WaitForExit(5000), "Disposable process did not exit after test cleanup.");
             }
         }
+    }
+
+    [Xunit.Fact]
+    public void RepoProcessHelpersFirstAndSecondCallsUsePreparedAppOutputInsideBound()
+    {
+        if (!OperatingSystem.IsWindows())
+        {
+            return;
+        }
+
+        var repo = CreateRepoProcessHelperRepository();
+        try
+        {
+            Assert.False(File.Exists(Path.Combine(repo, "mcg-orchestrator.cmd")));
+            Assert.False(Directory.Exists(Path.Combine(repo, "src")));
+            using var appOutput = PrepareRepoProcessAppOutput(repo);
+            string[] helperScripts =
+            [
+                "Get-RepoProcessInfo.ps1",
+                "Find-OrchestratorLocks.ps1",
+                "Stop-RepoProcess.ps1"
+            ];
+            foreach (var helperScript in helperScripts)
+            {
+                var first = RunRedirectedProcess(
+                    CreateRepoProcessHelperStartInfo(repo, helperScript, appOutput.Path),
+                    $"first {helperScript}",
+                    timeoutMs: 30000);
+
+                AssertRepoProcessHelperResult(helperScript, first);
+                Assert.False(first.TimedOut);
+
+                var second = RunRedirectedProcess(
+                    CreateRepoProcessHelperStartInfo(repo, helperScript, appOutput.Path),
+                    $"second {helperScript}",
+                    timeoutMs: 30000);
+
+                AssertRepoProcessHelperResult(helperScript, second);
+                Assert.False(second.TimedOut);
+            }
+        }
+        finally
+        {
+            DeleteDirectory(repo);
+        }
+    }
+
+    [Xunit.Fact]
+    public void MissingAppArtifactRefusesWithoutPermittingARebuild()
+    {
+        if (!OperatingSystem.IsWindows())
+        {
+            return;
+        }
+
+        var repo = CreateRepoProcessHelperRepository();
+        var emptyOutput = Path.Combine(Path.GetTempPath(), "mcg-missing-app-output-" + Guid.NewGuid().ToString("N"));
+        Directory.CreateDirectory(emptyOutput);
+        try
+        {
+            var helperResult = RunRedirectedProcess(
+                CreateRepoProcessHelperStartInfo(repo, "Get-RepoProcessInfo.ps1", emptyOutput),
+                "Get-RepoProcessInfo.ps1 missing-artifact control");
+
+            Assert.Equal(1, helperResult.ExitCode);
+            Assert.Contains("PROCESS_QUERY_UNAVAILABLE", helperResult.Stdout, StringComparison.Ordinal);
+            Assert.Contains("MCG_PHASE=rebuild-and-run-cli", helperResult.Stdout, StringComparison.Ordinal);
+
+            var resolverStartInfo = CreateRepoScriptStartInfo(repo, "scripts\\Resolve-RepoProcessAppDll.ps1");
+            resolverStartInfo.ArgumentList.Add("-RepositoryRoot");
+            resolverStartInfo.ArgumentList.Add(repo);
+            resolverStartInfo.Environment["MCG_ORCHESTRATOR_APP_OUTPUT"] = emptyOutput;
+            var resolverResult = RunRedirectedProcess(
+                resolverStartInfo,
+                "Resolve-RepoProcessAppDll.ps1 missing-artifact control");
+
+            Assert.Equal(1, resolverResult.ExitCode);
+            Assert.Contains(
+                "MCG_APP_DLL_UNRESOLVED reason=missing-artifact",
+                resolverResult.Stdout,
+                StringComparison.Ordinal);
+        }
+        finally
+        {
+            DeleteDirectory(emptyOutput);
+            DeleteDirectory(repo);
+        }
+    }
+
+    [Xunit.Fact]
+    public void RedirectedProcessTimeoutNamesTheLastReportedPhase()
+    {
+        var startInfo = CreatePowerShellStartInfo(
+            "Write-Output 'MCG_PHASE=rebuild-and-run-cli'; " +
+            "$gate = [System.Threading.ManualResetEventSlim]::new($false); $gate.Wait()");
+
+        var failure = Record.Exception(() => RunRedirectedProcess(
+            startInfo,
+            "phase-reporting fixture",
+            timeoutMs: 1000));
+
+        Assert.NotNull(failure);
+        Assert.Contains("phase=rebuild-and-run-cli", failure.Message, StringComparison.Ordinal);
+        Assert.Contains("processReaped=True; streamsDrained=True", failure.Message, StringComparison.Ordinal);
+    }
+
+    [Xunit.Theory]
+    [Xunit.InlineData("Get-RepoProcessInfo.ps1")]
+    [Xunit.InlineData("Find-OrchestratorLocks.ps1")]
+    [Xunit.InlineData("Stop-RepoProcess.ps1")]
+    public void RepoProcessHelperReportsRebuildPhaseBeforeFallback(string helperScript)
+    {
+        var scriptText = File.ReadAllText(Path.Combine(FindCurrentSourceRoot(), "scripts", helperScript));
+        var phaseIndex = scriptText.IndexOf("MCG_PHASE=rebuild-and-run-cli", StringComparison.Ordinal);
+        var fallbackIndex = scriptText.IndexOf("Invoke-OrchestratorCommand.ps1", StringComparison.Ordinal);
+
+        Assert.True(phaseIndex >= 0, $"{helperScript} does not report its rebuild phase.");
+        Assert.True(
+            fallbackIndex > phaseIndex,
+            $"{helperScript} must report the rebuild phase before invoking the fallback launcher.");
     }
 
     [Xunit.Fact(DisplayName = "Infrastructure_partition_helper_keeps_reconcile_tests_in_remainder")]
@@ -860,6 +1010,205 @@ public sealed class GoalWorktreeTestsSqliteTooling : GoalWorktreeTestBase
         }
     }
 
+    private static string CreateRepoProcessHelperRepository()
+    {
+        var sourceRoot = FindCurrentSourceRoot();
+        var repo = CreateSeededRepository();
+        try
+        {
+            var scriptsDirectory = Path.Combine(repo, "scripts");
+            Directory.CreateDirectory(scriptsDirectory);
+            string[] scripts =
+            [
+                "Find-OrchestratorLocks.ps1",
+                "Get-RepoProcessInfo.ps1",
+                "Invoke-OrchestratorCommand.ps1",
+                "Invoke-RepoScript.ps1",
+                "Resolve-RepoProcessAppDll.ps1",
+                "Stop-RepoProcess.ps1",
+                "resolve-run-dir.ps1"
+            ];
+            foreach (var script in scripts)
+            {
+                File.Copy(
+                    Path.Combine(sourceRoot, "scripts", script),
+                    Path.Combine(scriptsDirectory, script));
+            }
+
+            return repo;
+        }
+        catch
+        {
+            DeleteDirectory(repo);
+            throw;
+        }
+    }
+
+    private static PreparedAppOutput PrepareRepoProcessAppOutput(string repositoryRoot)
+    {
+        var sourceRoot = FindCurrentSourceRoot();
+        var appOutput = Path.Combine(
+            Path.GetTempPath(),
+            "mcg-repo-helper-app-output-" + Guid.NewGuid().ToString("N"));
+        CopyAppOutput(AppContext.BaseDirectory, appOutput);
+        try
+        {
+            var appDll = Path.Combine(appOutput, "Mcg.AgentOrchestrator.App.dll");
+            var markerPath = appDll + ".git-head";
+            Assert.True(File.Exists(appDll), $"Test output does not contain the referenced App assembly: {appDll}");
+
+            var startInfo = CreateRepoScriptStartInfo(sourceRoot, "scripts\\Update-AppDllGitHeadMarker.ps1");
+            startInfo.ArgumentList.Add("-RepositoryRoot");
+            startInfo.ArgumentList.Add(repositoryRoot);
+            startInfo.ArgumentList.Add("-MarkerPath");
+            startInfo.ArgumentList.Add(markerPath);
+            var result = RunRedirectedProcess(startInfo, "Update-AppDllGitHeadMarker.ps1", timeoutMs: 10000);
+
+            Assert.Equal(0, result.ExitCode);
+            Assert.True(File.Exists(markerPath), $"App marker was not prepared before the bounded helper call: {markerPath}");
+
+            var resolverStartInfo = CreateRepoScriptStartInfo(repositoryRoot, "scripts\\Resolve-RepoProcessAppDll.ps1");
+            resolverStartInfo.ArgumentList.Add("-RepositoryRoot");
+            resolverStartInfo.ArgumentList.Add(repositoryRoot);
+            resolverStartInfo.Environment["MCG_ORCHESTRATOR_APP_OUTPUT"] = appOutput;
+            var resolverResult = RunRedirectedProcess(
+                resolverStartInfo,
+                "Resolve-RepoProcessAppDll.ps1 preparation");
+            Assert.Equal(0, resolverResult.ExitCode);
+            Assert.True(
+                File.Exists(resolverResult.Stdout.Trim()),
+                $"Resolver preparation did not produce a runnable App assembly: {resolverResult.Stdout}");
+
+            return new PreparedAppOutput(appOutput);
+        }
+        catch
+        {
+            _ = GoalWorktrees.DeleteDirectory(appOutput);
+            throw;
+        }
+    }
+
+    private static void CopyAppOutput(string source, string destination)
+    {
+        try
+        {
+            Directory.CreateDirectory(destination);
+            foreach (var sourceDirectory in Directory.EnumerateDirectories(source, "*", SearchOption.AllDirectories))
+            {
+                Directory.CreateDirectory(Path.Combine(destination, Path.GetRelativePath(source, sourceDirectory)));
+            }
+
+            foreach (var sourceFile in Directory.EnumerateFiles(source, "*", SearchOption.AllDirectories))
+            {
+                if (Path.GetFileName(sourceFile).Equals(
+                    "Mcg.AgentOrchestrator.App.dll.git-head",
+                    StringComparison.OrdinalIgnoreCase))
+                {
+                    continue;
+                }
+
+                var destinationFile = Path.Combine(destination, Path.GetRelativePath(source, sourceFile));
+                File.Copy(sourceFile, destinationFile);
+            }
+        }
+        catch
+        {
+            if (Directory.Exists(destination))
+            {
+                _ = GoalWorktrees.DeleteDirectory(destination);
+            }
+            throw;
+        }
+    }
+
+    private static ProcessStartInfo CreateRepoProcessHelperStartInfo(
+        string repo,
+        string helperScript,
+        string appOutput)
+    {
+        var startInfo = CreateRepoScriptStartInfo(repo, "scripts\\" + helperScript);
+        switch (helperScript)
+        {
+            case "Get-RepoProcessInfo.ps1":
+                startInfo.ArgumentList.Add("-Id");
+                startInfo.ArgumentList.Add(Environment.ProcessId.ToString(CultureInfo.InvariantCulture));
+                break;
+            case "Stop-RepoProcess.ps1":
+                startInfo.ArgumentList.Add("-Id");
+                startInfo.ArgumentList.Add(Environment.ProcessId.ToString(CultureInfo.InvariantCulture));
+                startInfo.ArgumentList.Add("-CommandContains");
+                startInfo.ArgumentList.Add("definitely-not-in-this-process-command-line");
+                startInfo.ArgumentList.Add("-Force");
+                break;
+            case "Find-OrchestratorLocks.ps1":
+                break;
+            default:
+                throw new ArgumentOutOfRangeException(nameof(helperScript), helperScript, "Unknown repo process helper.");
+        }
+
+        startInfo.Environment["MCG_ORCHESTRATOR_APP_OUTPUT"] = appOutput;
+        return startInfo;
+    }
+
+    private static ProcessStartInfo CreateRepoScriptStartInfo(string repo, string scriptPath)
+    {
+        var startInfo = new ProcessStartInfo
+        {
+            FileName = "powershell.exe",
+            WorkingDirectory = repo,
+            UseShellExecute = false,
+            RedirectStandardOutput = true,
+            RedirectStandardError = true,
+            CreateNoWindow = true
+        };
+        startInfo.ArgumentList.Add("-NoProfile");
+        startInfo.ArgumentList.Add("-ExecutionPolicy");
+        startInfo.ArgumentList.Add("Bypass");
+        startInfo.ArgumentList.Add("-File");
+        startInfo.ArgumentList.Add(Path.Combine(repo, "scripts", "Invoke-RepoScript.ps1"));
+        startInfo.ArgumentList.Add(scriptPath);
+        return startInfo;
+    }
+
+    private static void AssertRepoProcessHelperResult(string helperScript, RedirectedProcessResult result)
+    {
+        Assert.True(string.IsNullOrWhiteSpace(result.Stderr), result.Stderr);
+        Assert.Contains("MCG_PHASE=run-cli-direct", result.Stdout, StringComparison.Ordinal);
+        Assert.DoesNotContain("MCG_PHASE=rebuild-and-run-cli", result.Stdout, StringComparison.Ordinal);
+        switch (helperScript)
+        {
+            case "Get-RepoProcessInfo.ps1":
+                Assert.Equal(0, result.ExitCode);
+                Assert.Contains($"PROCESS id={Environment.ProcessId}", result.Stdout, StringComparison.Ordinal);
+                break;
+            case "Stop-RepoProcess.ps1":
+                Assert.Equal(1, result.ExitCode);
+                Assert.Contains(
+                    $"PROCESS id={Environment.ProcessId} status=refused reason=command-mismatch",
+                    result.Stdout,
+                    StringComparison.Ordinal);
+                break;
+            case "Find-OrchestratorLocks.ps1":
+                Assert.True(result.ExitCode is 0 or 2, result.Stdout);
+                Assert.False(ContainsUnexpectedLockQueryEcho(result.Stdout));
+                break;
+            default:
+                throw new ArgumentOutOfRangeException(nameof(helperScript), helperScript, "Unknown repo process helper.");
+        }
+    }
+
+    private sealed class PreparedAppOutput(string path) : IDisposable
+    {
+        public string Path { get; } = path;
+
+        public void Dispose()
+        {
+            Assert.True(
+                GoalWorktrees.DeleteDirectory(Path),
+                $"Could not remove prepared App output directory: {Path}");
+        }
+    }
+
     private static ProcessStartInfo CreatePowerShellStartInfo(string command)
     {
         var startInfo = new ProcessStartInfo
@@ -884,6 +1233,7 @@ public sealed class GoalWorktreeTestsSqliteTooling : GoalWorktreeTestBase
         bool failOnTimeout = true)
     {
         const int drainTimeoutMs = 5000;
+        startInfo.Environment["MCG_PHASE_TRACE"] = "1";
         using var process = Process.Start(startInfo)
             ?? throw new InvalidOperationException($"Failed to start {displayName}.");
         var stdout = new BoundedTextCapture();
@@ -909,11 +1259,12 @@ public sealed class GoalWorktreeTestsSqliteTooling : GoalWorktreeTestBase
             timedOut,
             processReaped,
             streamsDrained);
+        var phase = ExtractLastReportedPhase(result.Stdout);
 
         if (timedOut && failOnTimeout)
         {
             Assert.Fail(
-                $"{displayName} did not exit within {timeoutMs}ms; " +
+                $"{displayName} did not exit within {timeoutMs}ms; phase={phase}; " +
                 $"processReaped={processReaped}; streamsDrained={streamsDrained}.{Environment.NewLine}" +
                 $"stdout:{Environment.NewLine}{result.Stdout}{Environment.NewLine}" +
                 $"stderr:{Environment.NewLine}{result.Stderr}");
@@ -922,12 +1273,29 @@ public sealed class GoalWorktreeTestsSqliteTooling : GoalWorktreeTestBase
         if (!streamsDrained && failOnTimeout)
         {
             Assert.Fail(
-                $"{displayName} exited but redirected streams did not close within {drainTimeoutMs}ms.{Environment.NewLine}" +
+                $"{displayName} exited but redirected streams did not close within {drainTimeoutMs}ms; " +
+                $"phase={phase}.{Environment.NewLine}" +
                 $"stdout:{Environment.NewLine}{result.Stdout}{Environment.NewLine}" +
                 $"stderr:{Environment.NewLine}{result.Stderr}");
         }
 
         return result;
+    }
+
+    private static string ExtractLastReportedPhase(string stdout)
+    {
+        const string prefix = "MCG_PHASE=";
+        var phase = "unknown";
+        foreach (var rawLine in stdout.Split(['\r', '\n'], StringSplitOptions.RemoveEmptyEntries))
+        {
+            var line = rawLine.Trim();
+            if (line.StartsWith(prefix, StringComparison.Ordinal) && line.Length > prefix.Length)
+            {
+                phase = line[prefix.Length..];
+            }
+        }
+
+        return phase;
     }
 
     private static async Task DrainAsync(StreamReader reader, BoundedTextCapture capture)

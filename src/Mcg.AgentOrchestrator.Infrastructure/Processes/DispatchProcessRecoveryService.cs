@@ -61,7 +61,6 @@ internal sealed class DispatchProcessRecoveryService
     private readonly Action<string, int, string> _writeExitArtifact;
     private readonly Func<TaskProcessRecord, bool, int, DispatchWorktreeInspectionStatus, DispatchRecoveryDecision> _evaluateRecovery;
     private readonly IDispatchDiagnosticWriter _diagnosticWriter;
-    private readonly Func<IEnumerable<int>, IReadOnlyDictionary<int, string>> _readCommandLines;
 
     internal DispatchProcessRecoveryService(
         IClock? clock = null,
@@ -79,8 +78,7 @@ internal sealed class DispatchProcessRecoveryService
         Action<string, int, string>? writeExitArtifact = null,
         Func<TaskProcessRecord, bool, int, DispatchWorktreeInspectionStatus, DispatchRecoveryDecision>? evaluateRecovery = null,
         IDispatchDiagnosticWriter? diagnosticWriter = null,
-        Func<int, SpawnProcessIdentity?>? readProcessIdentity = null,
-        Func<IEnumerable<int>, IReadOnlyDictionary<int, string>>? readCommandLines = null)
+        Func<int, SpawnProcessIdentity?>? readProcessIdentity = null)
     {
         _clock = clock ?? new SystemClock();
         _postOutputIdleTimeout = postOutputIdleTimeout ?? TimeSpan.FromMinutes(2);
@@ -101,7 +99,6 @@ internal sealed class DispatchProcessRecoveryService
         var recoveryPolicy = new DispatchRecoveryPolicy(_clock);
         _evaluateRecovery = evaluateRecovery ?? recoveryPolicy.Evaluate;
         _diagnosticWriter = diagnosticWriter ?? new FileDiagnosticWriter();
-        _readCommandLines = readCommandLines ?? ProcessCommandLines.Read;
     }
 
     internal DispatchProcessRefreshVerdict ClassifyRefresh(
@@ -760,7 +757,8 @@ internal sealed class DispatchProcessRecoveryService
         TaskProcessRecord processRecord,
         int exitCode,
         string standardOutput,
-        string standardError)
+        string standardError,
+        ProcessCommandLineSnapshot commandLineSnapshot)
     {
         try
         {
@@ -780,10 +778,13 @@ internal sealed class DispatchProcessRecoveryService
             var dispatchState = new DispatchStateSurface(
                 _clock,
                 _isStillRunning,
-                readCommandLines: _readCommandLines,
-                readProcessIdentity: processId => _readProcessIdentity(processId) is { } identity
-                    ? (identity.StartedAt, identity.ImagePath)
-                    : null).Evaluate(goalId, task);
+                readProcessIdentity: processId =>
+                    commandLineSnapshot.TryGetRecord(processId, out var record) &&
+                    record.Status == ProcessInspectionStatus.Available &&
+                    record.StartedAt is { } startedAt &&
+                    !string.IsNullOrWhiteSpace(record.ExecutablePath)
+                        ? (startedAt, record.ExecutablePath)
+                        : null).Evaluate(goalId, task, commandLineSnapshot);
             var record = new DispatchDiagnosticRecord(
                 goalId.Value,
                 taskId.Value,

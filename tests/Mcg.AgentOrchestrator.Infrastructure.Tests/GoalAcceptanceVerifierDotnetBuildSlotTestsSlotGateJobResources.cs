@@ -399,6 +399,156 @@ public sealed class GoalAcceptanceVerifierDotnetBuildSlotTestsSlotGateJobResourc
         }
     }
 
+    [Xunit.Fact(DisplayName = "GoalAcceptanceVerifier cancellation kills its ready descendant tree and releases ownership")]
+    public async Task ProductionRunnerCancellationKillsReadyDescendantTree()
+    {
+        if (!OperatingSystem.IsWindows())
+        {
+            return;
+        }
+
+        var root = CreateTempDirectory();
+        var registryPath = Path.Combine(root, "spawn-registry.db");
+        var childPidPath = Path.Combine(root, "descendant.pid");
+        var heartbeatPath = Path.Combine(root, "cancellation-heartbeat.json");
+        var observations = new ConcurrentQueue<AcceptanceProcessCleanupObservation>();
+        var dotnetPath = InfrastructureTestSupport.ResolveDotnetHostPath();
+        var acceptanceAssemblyDirectory = Path.GetDirectoryName(typeof(GoalAcceptanceVerifier).Assembly.Location)!;
+        const string probeAssemblyName = "Mcg.AgentOrchestrator.IsolatedDotnetProbe.dll";
+        const string probeProjectName = "Mcg.AgentOrchestrator.IsolatedDotnetProbe";
+        var leafDirectory = new DirectoryInfo(acceptanceAssemblyDirectory);
+        var parentDirectory = leafDirectory.Parent;
+        var candidateProbeAssemblyPaths = new List<string>
+        {
+            Path.Combine(acceptanceAssemblyDirectory, probeAssemblyName),
+        };
+        // Default SDK layout: <testProject>/bin/<Configuration>/<TargetFramework>.
+        if (parentDirectory?.Parent?.Parent is { } testProjectDirectory)
+        {
+            candidateProbeAssemblyPaths.Add(Path.Combine(
+                testProjectDirectory.FullName,
+                "Fixtures",
+                "IsolatedDotnetProbe",
+                "bin",
+                parentDirectory.Name,
+                leafDirectory.Name,
+                probeAssemblyName));
+        }
+
+        // Centralized artifacts layout: <artifacts>/bin/<Project>/<configuration>. The probe is
+        // referenced with ReferenceOutputAssembly="false", so its managed assembly is never copied
+        // beside the test assembly even though its apphost and runtime config are.
+        if (parentDirectory?.Parent is { } projectOutputRoot)
+        {
+            candidateProbeAssemblyPaths.Add(Path.Combine(
+                projectOutputRoot.FullName,
+                probeProjectName,
+                leafDirectory.Name,
+                probeAssemblyName));
+        }
+
+        var probeAssemblyPath = string.Empty;
+        foreach (var candidate in candidateProbeAssemblyPaths)
+        {
+            if (File.Exists(candidate))
+            {
+                probeAssemblyPath = candidate;
+                break;
+            }
+        }
+
+        Assert.True(
+            probeAssemblyPath.Length > 0,
+            $"Missing process-tree probe. Tried: {string.Join("; ", candidateProbeAssemblyPaths)}");
+        var arguments = new[] { dotnetPath, probeAssemblyPath, "spawn-descendant", childPidPath };
+        using var fixtureTimeout = new CancellationTokenSource(TimeSpan.FromSeconds(30));
+        using var cancellation = CancellationTokenSource.CreateLinkedTokenSource(fixtureTimeout.Token);
+        var fixtureBound = Task.Delay(Timeout.InfiniteTimeSpan, fixtureTimeout.Token);
+        Process? child = null;
+        Task<(GoalAcceptanceVerifier.CommandResult Result, string HeartbeatPath)>? run = null;
+        _ = StateDbMigrations.EnsureUpToDate(registryPath);
+        WorkerProcessJobs.ConfigureRegistry(registryPath);
+        Assert.Empty(WorkerProcessJobs.ListActiveRegistryEntriesForTests());
+
+        try
+        {
+            run = GoalAcceptanceVerifier.RunProcessWithHeartbeatForTestsAsync(
+                arguments,
+                root,
+                TimeSpan.FromMinutes(1),
+                heartbeatPath,
+                observations.Enqueue,
+                cancellation.Token,
+                registrationIdentityReader: DeterministicRegistrationIdentity);
+
+            var childPid = 0;
+            while (!File.Exists(childPidPath) ||
+                   !int.TryParse(
+                       File.ReadAllText(childPidPath).Trim(),
+                       System.Globalization.CultureInfo.InvariantCulture,
+                       out childPid) ||
+                   childPid <= 0)
+            {
+                await Task.Delay(25, fixtureTimeout.Token);
+            }
+
+            try
+            {
+                child = Process.GetProcessById(childPid);
+            }
+            catch (ArgumentException exception)
+            {
+                throw new Xunit.Sdk.XunitException(
+                    $"Descendant exited before the cancellation control. pid={childPid}; {exception.Message}");
+            }
+            child.Refresh();
+            Assert.False(child.HasExited, $"Descendant exited before the cancellation control. pid={childPid}");
+            Assert.Single(WorkerProcessJobs.ListActiveRegistryEntriesForTests());
+
+            cancellation.Cancel();
+            Assert.Same(run, await Task.WhenAny(run, fixtureBound));
+            await Assert.ThrowsAnyAsync<OperationCanceledException>(async () => await run);
+            await child.WaitForExitAsync(fixtureTimeout.Token);
+
+            Assert.Empty(WorkerProcessJobs.ListActiveRegistryEntriesForTests());
+            Assert.Equal(
+                ["started", "heartbeat-final", "registration-released", "owned-child-disposed"],
+                observations.Select(observation => observation.Stage).ToArray());
+            var disposed = Assert.Single(
+                observations,
+                observation => observation.Stage == "owned-child-disposed");
+            Assert.False(disposed.RegistryActive);
+            Assert.False(disposed.JobActive);
+            Assert.False(disposed.NativeHandleOpen);
+            Assert.True(disposed.ProcessDisposed);
+        }
+        finally
+        {
+            cancellation.Cancel();
+            if (run is not null)
+            {
+                try { await run.WaitAsync(fixtureTimeout.Token); } catch { }
+            }
+
+            if (child is not null)
+            {
+                try
+                {
+                    if (!child.HasExited)
+                    {
+                        child.Kill(entireProcessTree: true);
+                        await child.WaitForExitAsync(fixtureTimeout.Token);
+                    }
+                }
+                catch { }
+                child.Dispose();
+            }
+
+            WorkerProcessJobs.ClearRegistryForTests();
+            DeleteDirectoryWithRetry(root);
+        }
+    }
+
     [Xunit.Fact(DisplayName = "GoalAcceptanceVerifier_rejects_unbounded_focused_evidence_request")]
     public async Task GoalAcceptanceVerifierRejectsUnboundedFocusedEvidenceRequest()
     {

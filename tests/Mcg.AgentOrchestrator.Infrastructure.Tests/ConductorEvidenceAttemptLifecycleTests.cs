@@ -1,3 +1,4 @@
+using System.Diagnostics;
 using System.Text.Json;
 using Mcg.AgentOrchestrator.App.Orchestration;
 using Mcg.AgentOrchestrator.Core;
@@ -8,6 +9,317 @@ namespace Mcg.AgentOrchestrator.Infrastructure.Tests;
 
 public sealed class ConductorEvidenceAttemptLifecycleTests
 {
+    [Fact]
+    public async Task AttemptWriterLease_WhenHeld_TimesOutWithTypedReceipt()
+    {
+        var root = CreateTempDirectory();
+        using var holderAcquired = new ManualResetEventSlim();
+        using var holderRelease = new ManualResetEventSlim();
+        var holder = Task.Run(() =>
+        {
+            using var mutex = new Mutex(false, StorageRetentionMaintenance.AttemptLeaseNameFor(root));
+            mutex.WaitOne();
+            try
+            {
+                holderAcquired.Set();
+                Assert.True(holderRelease.Wait(TimeSpan.FromSeconds(10)));
+            }
+            finally
+            {
+                mutex.ReleaseMutex();
+            }
+        });
+
+        Assert.True(holderAcquired.Wait(TimeSpan.FromSeconds(10)));
+        string? receipt = null;
+        var started = Stopwatch.StartNew();
+        try
+        {
+            var exception = Assert.Throws<TimeoutException>(() =>
+                StorageRetentionMaintenance.AcquireAttemptWriterLease(
+                    root,
+                    TimeSpan.FromMilliseconds(50),
+                    value => receipt = value));
+
+            Assert.Contains("ACCEPTANCE_ARTIFACT_LEASE_TIMEOUT", exception.Message, StringComparison.Ordinal);
+            Assert.Contains("timeout_ms=50", receipt, StringComparison.Ordinal);
+            Assert.True(started.Elapsed < TimeSpan.FromSeconds(2));
+        }
+        finally
+        {
+            holderRelease.Set();
+            await holder;
+            Directory.Delete(root, recursive: true);
+        }
+    }
+
+    [Fact]
+    public void LiveAttemptObservation_DoesNotEnterWriterLeaseBoundary()
+    {
+        var root = CreateTempDirectory();
+        using var holderAcquired = new ManualResetEventSlim();
+        using var holderRelease = new ManualResetEventSlim();
+        Thread? observationThread = null;
+        Thread? holder = null;
+        Exception? holderException = null;
+        Exception? observationException = null;
+        try
+        {
+            var attemptRoot = Path.Combine(root, "attempts");
+            var kernel = new AgentOrchestratorKernel();
+            var goal = kernel.CreateGoal("Observe a live acceptance attempt without taking its writer lease");
+            var candidate = ConductorParallelAcceptanceCandidate.Create(goal, 0, [], "branch-live", "main-live");
+            var starter = new ConductorParallelAcceptanceAttemptCoordinator(
+                attemptRoot,
+                isProcessAlive: processId => processId == 7115,
+                launchOwnedProcess: _ => new ConductorParallelAcceptanceOwnedProcessLaunchResult(7115),
+                acquireStableSlotLease: (_, _) => null);
+            var started = starter.EvaluateFocusedEvidence(
+                candidate,
+                ConductorAutonomyPolicy.Permissive,
+                "run focused tests",
+                PassingEvidence);
+            Assert.Equal(ConductorParallelAcceptanceAttemptDecisionKind.Started, started.Kind);
+
+            var goalDirectory = Path.Combine(attemptRoot, goal.Id.Value);
+            holder = new Thread(() =>
+            {
+                try
+                {
+                    using var lease = StorageRetentionMaintenance.AcquireAttemptWriterLease(goalDirectory);
+                    holderAcquired.Set();
+                    if (!holderRelease.Wait(TimeSpan.FromSeconds(10)))
+                    {
+                        throw new TimeoutException("Writer-lease holder release signal was not observed.");
+                    }
+                }
+                catch (Exception ex)
+                {
+                    holderException = ex;
+                }
+            });
+            holder.IsBackground = true;
+            holder.Start();
+            Assert.True(holderAcquired.Wait(TimeSpan.FromSeconds(10)));
+
+            var leaseBoundaryEntered = false;
+            var observer = new ConductorParallelAcceptanceAttemptCoordinator(
+                attemptRoot,
+                isProcessAlive: processId => processId == 7115,
+                launchOwnedProcess: _ => throw new InvalidOperationException("live observation must not launch"),
+                acquireStableSlotLease: (_, _) => null,
+                attemptWriterLeaseAcquiringForTests: () => leaseBoundaryEntered = true);
+            ConductorParallelAcceptanceAttemptDecision? observed = null;
+            observationThread = new Thread(() =>
+            {
+                try
+                {
+                    observed = observer.EvaluateFocusedEvidence(
+                        candidate,
+                        ConductorAutonomyPolicy.Permissive,
+                        "run focused tests",
+                        PassingEvidence);
+                }
+                catch (Exception ex)
+                {
+                    observationException = ex;
+                }
+            });
+            observationThread.IsBackground = true;
+            observationThread.Start();
+
+            Assert.True(
+                observationThread.Join(TimeSpan.FromSeconds(5)),
+                "Live observation blocked at the writer-lease boundary.");
+            Assert.Null(observationException);
+            Assert.NotNull(observed);
+            Assert.Equal(ConductorParallelAcceptanceAttemptDecisionKind.Running, observed.Kind);
+            Assert.False(leaseBoundaryEntered);
+
+            var falseNegativeLeaseBoundaryEntered = false;
+            var falseNegativeObserver = new ConductorParallelAcceptanceAttemptCoordinator(
+                attemptRoot,
+                isProcessAlive: _ => false,
+                launchOwnedProcess: _ => throw new InvalidOperationException("lease-busy observation must not launch"),
+                acquireStableSlotLease: (_, _) => null,
+                attemptWriterLeaseAcquiringForTests: () => falseNegativeLeaseBoundaryEntered = true);
+            var falseNegativeElapsed = Stopwatch.StartNew();
+
+            var leaseBusy = Assert.Throws<AcceptanceArtifactWriterLeaseBusyException>(() =>
+                falseNegativeObserver.EvaluateFocusedEvidence(
+                    candidate,
+                    ConductorAutonomyPolicy.Permissive,
+                    "run focused tests",
+                    PassingEvidence));
+
+            Assert.Equal(started.Attempt.AttemptId, leaseBusy.ObservedAttemptId);
+            Assert.True(falseNegativeLeaseBoundaryEntered);
+            Assert.True(falseNegativeElapsed.Elapsed < TimeSpan.FromSeconds(2));
+        }
+        finally
+        {
+            holderRelease.Set();
+            if (holder is not null)
+            {
+                holder.Join(TimeSpan.FromSeconds(10));
+            }
+            if (observationThread is not null && observationThread.IsAlive)
+            {
+                observationThread.Join(TimeSpan.FromSeconds(10));
+            }
+            Directory.Delete(root, recursive: true);
+        }
+        Assert.Null(holderException);
+    }
+
+    [Fact]
+    public void WriterLeaseBusyBeforeFirstMetadataWriteSignalsDeferredObservation()
+    {
+        var root = CreateTempDirectory();
+        using var holderAcquired = new ManualResetEventSlim();
+        using var holderRelease = new ManualResetEventSlim();
+        Exception? holderException = null;
+        Thread? holder = null;
+        try
+        {
+            var attemptRoot = Path.Combine(root, "attempts");
+            var kernel = new AgentOrchestratorKernel();
+            var goal = kernel.CreateGoal("Defer while first acceptance metadata is not visible");
+            var candidate = ConductorParallelAcceptanceCandidate.Create(goal, 0, [], "branch-new", "main-new");
+            var goalDirectory = Path.Combine(attemptRoot, goal.Id.Value);
+            Directory.CreateDirectory(goalDirectory);
+            holder = new Thread(() =>
+            {
+                try
+                {
+                    using var lease = StorageRetentionMaintenance.AcquireAttemptWriterLease(goalDirectory);
+                    holderAcquired.Set();
+                    if (!holderRelease.Wait(TimeSpan.FromSeconds(10)))
+                    {
+                        throw new TimeoutException("Writer-lease holder release signal was not observed.");
+                    }
+                }
+                catch (Exception ex)
+                {
+                    holderException = ex;
+                }
+            });
+            holder.IsBackground = true;
+            holder.Start();
+            Assert.True(holderAcquired.Wait(TimeSpan.FromSeconds(10)));
+
+            var observer = new ConductorParallelAcceptanceAttemptCoordinator(
+                attemptRoot,
+                isProcessAlive: _ => false,
+                launchOwnedProcess: _ => throw new InvalidOperationException("lease-busy observation must not launch"),
+                acquireStableSlotLease: (_, _) => null);
+            var elapsed = Stopwatch.StartNew();
+
+            var leaseBusy = Assert.Throws<AcceptanceArtifactWriterLeaseBusyException>(() =>
+                observer.EvaluateFocusedEvidence(
+                    candidate,
+                    ConductorAutonomyPolicy.Permissive,
+                    "run focused tests",
+                    PassingEvidence));
+
+            Assert.Null(leaseBusy.ObservedAttemptId);
+            Assert.Equal(Path.GetFullPath(goalDirectory), Path.GetFullPath(leaseBusy.GoalDirectory));
+            Assert.True(elapsed.Elapsed < TimeSpan.FromSeconds(2));
+        }
+        finally
+        {
+            holderRelease.Set();
+            holder?.Join(TimeSpan.FromSeconds(10));
+            Directory.Delete(root, recursive: true);
+        }
+
+        Assert.Null(holderException);
+    }
+
+    [Fact]
+    public void OwnedProcess_LeaseTimeoutWritesTransientExitReceipt()
+    {
+        var root = CreateTempDirectory();
+        using var holderAcquired = new ManualResetEventSlim();
+        using var holderRelease = new ManualResetEventSlim();
+        Exception? holderException = null;
+        var holder = new Thread(() =>
+        {
+            try
+            {
+                var goalDirectory = Directory.EnumerateDirectories(root).Single();
+                using var lease = StorageRetentionMaintenance.AcquireAttemptWriterLease(goalDirectory);
+                holderAcquired.Set();
+                if (!holderRelease.Wait(TimeSpan.FromSeconds(10)))
+                {
+                    throw new TimeoutException("Writer-lease holder release signal was not observed.");
+                }
+            }
+            catch (Exception ex)
+            {
+                holderException = ex;
+            }
+        });
+        holder.IsBackground = true;
+        try
+        {
+            var kernel = new AgentOrchestratorKernel();
+            var goal = kernel.CreateGoal("Write a typed child exit receipt after writer-lease timeout");
+            var candidate = ConductorParallelAcceptanceCandidate.Create(goal, 0, [], "branch-timeout", "main-timeout");
+            var coordinator = new ConductorParallelAcceptanceAttemptCoordinator(root);
+            var attempt = coordinator.CreateAttemptForTests(candidate);
+            holder.Start();
+            Assert.True(holderAcquired.Wait(TimeSpan.FromSeconds(10)));
+
+            var exitCode = ConductorParallelAcceptanceAttemptCoordinator.RunOwnedProcess(
+                attempt.MetadataPath,
+                TimeSpan.FromMilliseconds(50));
+
+            Assert.Equal(1, exitCode);
+            Assert.Equal("1", File.ReadAllText(attempt.ExitCodePath));
+            var persisted = JsonSerializer.Deserialize<ConductorParallelAcceptanceAttempt>(
+                File.ReadAllText(attempt.MetadataPath),
+                new JsonSerializerOptions { PropertyNameCaseInsensitive = true });
+            Assert.Equal(ConductorParallelAcceptanceAttemptOutcome.InfrastructureDeferred, persisted?.Outcome);
+        }
+        finally
+        {
+            holderRelease.Set();
+            holder.Join(TimeSpan.FromSeconds(10));
+            Directory.Delete(root, recursive: true);
+        }
+        Assert.Null(holderException);
+    }
+
+    [Fact]
+    public void NonTerminalAttemptCreationRetainsEveryAttemptArtifact()
+    {
+        var root = CreateTempDirectory();
+        try
+        {
+            var kernel = new AgentOrchestratorKernel();
+            var goal = kernel.CreateGoal("Bound active acceptance attempt artifacts");
+            var candidate = ConductorParallelAcceptanceCandidate.Create(
+                goal,
+                0,
+                [],
+                branchHeadSha: "branch-bounded",
+                mainHeadSha: "main-bounded");
+            var coordinator = new ConductorParallelAcceptanceAttemptCoordinator(root);
+            for (var ordinal = 1; ordinal <= 22; ordinal++)
+            {
+                coordinator.CreateAttemptForTests(candidate);
+            }
+
+            var goalDirectory = Path.Combine(root, goal.Id.Value);
+            Assert.Equal(22, Directory.GetFiles(goalDirectory, "*.attempt.json").Length);
+        }
+        finally
+        {
+            Directory.Delete(root, recursive: true);
+        }
+    }
+
     [Fact]
     public void MultiSelectionSingleFindingUsesRequestDispositionForAttemptAndEventLabels()
     {
@@ -318,6 +630,96 @@ public sealed class ConductorEvidenceAttemptLifecycleTests
             Assert.Equal("superseded", end.GetProperty("outcome").GetString());
             Assert.Equal(expectedCause, end.GetProperty("cause").GetString());
             Assert.Equal(replacement.Attempt.AttemptId, end.GetProperty("superseded_by").GetString());
+        }
+        finally
+        {
+            Directory.Delete(root, recursive: true);
+        }
+    }
+
+    [Fact]
+    public async Task SupersedingAttempt_DefersMutationWhileWriterLeaseIsHeld()
+    {
+        var root = CreateTempDirectory();
+        try
+        {
+            var attemptRoot = Path.Combine(root, "attempts");
+            var kernel = new AgentOrchestratorKernel();
+            var goal = kernel.CreateGoal("Serialize focused evidence replacement with retention");
+            var firstCandidate = ConductorParallelAcceptanceCandidate.Create(goal, 0, [], "branch-1", "main-1");
+            var firstCoordinator = new ConductorParallelAcceptanceAttemptCoordinator(
+                attemptRoot,
+                launchOwnedProcess: _ => new ConductorParallelAcceptanceOwnedProcessLaunchResult(7113),
+                acquireStableSlotLease: (_, _) => null);
+            var first = firstCoordinator.EvaluateFocusedEvidence(
+                firstCandidate,
+                ConductorAutonomyPolicy.Permissive,
+                "run focused tests",
+                PassingEvidence);
+            firstCoordinator.RunAttemptForTests(
+                first.Attempt,
+                firstCandidate,
+                ConductorAutonomyPolicy.Permissive,
+                (attemptCandidate, _, _, _) => ConductorParallelAcceptanceRunResult.Focused(
+                    attemptCandidate,
+                    PassingEvidence(attemptCandidate.Goal, "run focused tests", null, CancellationToken.None)));
+
+            var goalDirectory = Path.Combine(attemptRoot, goal.Id.Value);
+            var sequencePath = Path.Combine(goalDirectory, "attempt-sequence.txt");
+            var sequenceBefore = File.ReadAllText(sequencePath);
+            using var holderAcquired = new ManualResetEventSlim();
+            using var holderRelease = new ManualResetEventSlim();
+            var holder = Task.Run(() =>
+            {
+                using var lease = StorageRetentionMaintenance.AcquireAttemptWriterLease(goalDirectory);
+                holderAcquired.Set();
+                if (!holderRelease.Wait(TimeSpan.FromSeconds(30)))
+                {
+                    throw new TimeoutException("Acceptance writer lease release signal was not observed.");
+                }
+            });
+            Assert.True(holderAcquired.Wait(TimeSpan.FromSeconds(30)), "Acceptance writer lease was not acquired.");
+
+            using var replacementAtLeaseBoundary = new ManualResetEventSlim();
+            var replacementCoordinator = new ConductorParallelAcceptanceAttemptCoordinator(
+                attemptRoot,
+                isProcessAlive: _ => false,
+                launchOwnedProcess: _ => new ConductorParallelAcceptanceOwnedProcessLaunchResult(7114),
+                acquireStableSlotLease: (_, _) => null,
+                attemptWriterLeaseAcquiringForTests: replacementAtLeaseBoundary.Set);
+            var replacementCandidate = ConductorParallelAcceptanceCandidate.Create(goal, 0, [], "branch-2", "main-1");
+            var replacementTask = Task.Run(() => replacementCoordinator.EvaluateFocusedEvidence(
+                replacementCandidate,
+                ConductorAutonomyPolicy.Permissive,
+                "run focused tests",
+                PassingEvidence));
+
+            string sequenceWhileLeaseHeld;
+            AcceptanceArtifactWriterLeaseBusyException leaseBusy;
+            try
+            {
+                Assert.True(
+                    replacementAtLeaseBoundary.Wait(TimeSpan.FromSeconds(30)),
+                    "Replacement did not reach the acceptance writer lease boundary.");
+                sequenceWhileLeaseHeld = File.ReadAllText(sequencePath);
+                leaseBusy = await Assert.ThrowsAsync<AcceptanceArtifactWriterLeaseBusyException>(async () =>
+                    await replacementTask.WaitAsync(TimeSpan.FromSeconds(2)));
+            }
+            finally
+            {
+                holderRelease.Set();
+                await holder;
+            }
+
+            Assert.Equal(sequenceBefore, sequenceWhileLeaseHeld);
+            Assert.Equal(first.Attempt.AttemptId, leaseBusy.ObservedAttemptId);
+
+            var replacement = replacementCoordinator.EvaluateFocusedEvidence(
+                replacementCandidate,
+                ConductorAutonomyPolicy.Permissive,
+                "run focused tests",
+                PassingEvidence);
+            Assert.NotEqual(first.Attempt.AttemptId, replacement.Attempt.AttemptId);
         }
         finally
         {

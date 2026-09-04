@@ -231,7 +231,17 @@ internal sealed class AcceptancePartitionVerdictCache
         AcceptanceShardCompletionDecision? decision) =>
         _withinAttemptRerunEnabled &&
         decision is { Passed: false, FailedPredicate: { Length: > 0 } } &&
+        IsRetryableWithinAttempt(decision.FailedPredicate) &&
         GoalAcceptanceVerifier.TryGetInfrastructurePartitionId(check, out _, out _);
+
+    private static bool IsRetryableWithinAttempt(string failedPredicate) =>
+        failedPredicate is AcceptanceShardCompletionPredicates.TimedOut or
+            AcceptanceShardCompletionPredicates.NonzeroExit or
+            AcceptanceShardCompletionPredicates.MissingTrx or
+            AcceptanceShardCompletionPredicates.MalformedTrx or
+            AcceptanceShardCompletionPredicates.ZeroTests or
+            AcceptanceShardCompletionPredicates.IncompleteExecution ||
+        AcceptanceFailureClassifications.IsEnvironmentalApparatus(failedPredicate);
 
     internal bool ShouldRerunWithinAttempt(AcceptanceManifestCheck check, bool passed) =>
         ShouldRerunWithinAttempt(

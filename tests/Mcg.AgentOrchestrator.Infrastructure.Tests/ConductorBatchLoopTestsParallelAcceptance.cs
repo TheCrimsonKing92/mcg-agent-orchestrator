@@ -282,7 +282,7 @@ public sealed partial class ConductorBatchLoopTestsParallelAcceptance : Conducto
                 NoStopPath(),
                 maxIterations: 1);
             Assert.True(primerEntered.Wait(TimeSpan.FromSeconds(5)));
-
+            Assert.True(SpinWait.SpinUntil(() => !coordinator.HasLiveAttempt(primer.Id.Value), TimeSpan.FromSeconds(5)));
             PassVerificationAt(kernel, waiting, waiting.Tasks.Single(), now.AddMinutes(2));
             BatchTickSummary? admissionTick = null;
             new ConductorBatchLoop().Run(
@@ -1269,6 +1269,91 @@ public sealed partial class ConductorBatchLoopTestsParallelAcceptance : Conducto
             line.Contains("result=executed", StringComparison.Ordinal));
     }
 
+    [Xunit.Fact]
+    public void BatchLoopWriterLeaseContentionDefersAcceptanceAdmissionWithoutEscalation()
+    {
+        var kernel = new AgentOrchestratorKernel();
+        var goal = CreateVerifiedSimpleGoal(
+            kernel,
+            "Update src/Mcg.AgentOrchestrator.App/Orchestration/WriterLeaseBusy.cs");
+        var attemptRoot = CreateTempDirectory("mcg-conductor-acceptance-attempts");
+        var goalDirectory = Path.Combine(attemptRoot, goal.Id.Value);
+        Directory.CreateDirectory(goalDirectory);
+        var escalations = 0;
+        var acceptanceRuns = 0;
+        var coordinator = ThreadedAcceptanceAttemptCoordinator(attemptRoot, out var waitForAttempts);
+        using var leaseReady = new ManualResetEventSlim(false);
+        using var releaseLease = new ManualResetEventSlim(false);
+        Exception? leaseFailure = null;
+        var leaseHolder = new Thread(() =>
+        {
+            try
+            {
+                using var writerLease = StorageRetentionMaintenance.AcquireAttemptWriterLease(goalDirectory);
+                leaseReady.Set();
+                if (!releaseLease.Wait(TimeSpan.FromSeconds(5)))
+                {
+                    throw new TimeoutException("Test writer lease was not released before its failsafe timeout.");
+                }
+            }
+            catch (Exception ex)
+            {
+                leaseFailure = ex;
+                leaseReady.Set();
+            }
+        })
+        {
+            IsBackground = true,
+            Name = "acceptance-artifact-writer-lease-holder"
+        };
+        leaseHolder.Start();
+
+        try
+        {
+            Assert.True(leaseReady.Wait(TimeSpan.FromSeconds(5)));
+            Assert.Null(leaseFailure);
+            var driver = MakeDriver(
+                getFacts: _ => new GoalLifecycleFacts(WorkspaceExists: true),
+                runAcceptanceWithSlot: (_, _) =>
+                {
+                    acceptanceRuns++;
+                    return AcceptanceVerificationSummary.PassedWithNoUnmetCriteria;
+                },
+                writeEscalation: (_, _, _) => escalations++,
+                getLandingFileScopes: _ =>
+                    ["src/Mcg.AgentOrchestrator.App/Orchestration/WriterLeaseBusy.cs"],
+                parallelAcceptanceAttemptCoordinator: coordinator);
+            BatchTickSummary? tick = null;
+
+            var summary = new ConductorBatchLoop().Run(
+                kernel,
+                driver,
+                ConductorAutonomyPolicy.Conservative,
+                NoStopPath(),
+                maxIterations: 1,
+                onTick: value => tick = value);
+
+            Assert.Equal(0, summary.Advanced);
+            Assert.Equal(1, summary.Held);
+            Assert.Equal(0, summary.Escalated);
+            Assert.Equal(0, escalations);
+            Assert.Equal(0, acceptanceRuns);
+            Assert.Equal(GoalStatus.Verified, goal.Status);
+            Assert.Empty(Directory.EnumerateFiles(goalDirectory, "*.attempt.json"));
+            Assert.Contains(tick!.ProgressLines!, line =>
+                line.Contains("result=deferred", StringComparison.Ordinal) &&
+                line.Contains("reason=acceptance-artifact-writer-busy", StringComparison.Ordinal));
+        }
+        finally
+        {
+            releaseLease.Set();
+            Assert.True(leaseHolder.Join(TimeSpan.FromSeconds(5)));
+            waitForAttempts();
+            TryDeleteDirectory(attemptRoot);
+        }
+        Assert.Null(leaseFailure);
+    }
+
     [Xunit.Fact(DisplayName = "BatchLoop_build_lock_blocked_gate_retries_and_lands_on_later_tick")]
     public void BatchLoopBuildLockBlockedGateRetriesAndLandsOnLaterTick()
     {
@@ -1809,8 +1894,8 @@ public sealed partial class ConductorBatchLoopTestsParallelAcceptance : Conducto
         }
     }
 
-    [Xunit.Fact(DisplayName = "ParallelAcceptance_records_and_prunes_attempt_trx_with_attempt_artifacts")]
-    public void ParallelAcceptanceRecordsAndPrunesAttemptTrxWithAttemptArtifacts()
+    [Xunit.Fact(DisplayName = "ParallelAcceptance_records_and_retains_non_terminal_attempt_trx_with_attempt_artifacts")]
+    public void ParallelAcceptanceRecordsAndRetainsNonTerminalAttemptTrxWithAttemptArtifacts()
     {
         var (_, goal) = SimpleGoal("Update src/Mcg.AgentOrchestrator.App/Orchestration/AttemptTrx.cs");
         var attemptRoot = CreateTempDirectory("mcg-conductor-acceptance-attempts");
@@ -1863,8 +1948,8 @@ public sealed partial class ConductorBatchLoopTestsParallelAcceptance : Conducto
 
             Assert.NotNull(firstAttemptPath);
             Assert.NotNull(firstTrxPath);
-            Assert.False(File.Exists(firstAttemptPath!));
-            Assert.False(File.Exists(firstTrxPath!));
+            Assert.True(File.Exists(firstAttemptPath!));
+            Assert.True(File.Exists(firstTrxPath!));
             Assert.NotNull(latestAttempt);
             Assert.True(File.Exists(latestAttempt!.MetadataPath));
         }
@@ -2588,12 +2673,20 @@ public sealed partial class ConductorBatchLoopTestsParallelAcceptance : Conducto
         }
     }
 
-    [Xunit.Fact(DisplayName = "BatchLoop_introduced_typed_apparatus_restores_Verified_for_regate")]
+    [Xunit.Fact(Timeout = 30_000)]
+    [Xunit.Trait("Category", "CrossTick")]
     public void BatchLoopIntroducedTypedApparatusRestoresVerifiedForRegate()
     {
         var kernel = new AgentOrchestratorKernel();
-        var goal = CreateVerifiedSimpleGoal(kernel, "Update src/Mcg.AgentOrchestrator.App/Orchestration/IntroducedRegate.cs");
-        var task = goal.Tasks.Single();
+        var plan = GoalObjectivePlanner.Build(
+            "Update src/Mcg.AgentOrchestrator.App/Orchestration/IntroducedRegate.cs",
+            GoalIntakePipeline.FiveRole,
+            kernel.BuildTaskDurationStats());
+        var goal = GoalLifecycleCommands.CreateAndActivateGoal(kernel, DefaultAgents(), plan);
+        foreach (var task in goal.Tasks)
+        {
+            PassVerification(kernel, goal, task);
+        }
         var attemptRoot = CreateTempDirectory("mcg-conductor-acceptance-attempts");
         var acceptanceRuns = 0;
         var apparatus = new AcceptanceCheckResult(
@@ -2647,8 +2740,9 @@ public sealed partial class ConductorBatchLoopTestsParallelAcceptance : Conducto
             Assert.Equal(1, summary.Held);
             Assert.Equal(1, acceptanceRuns);
             Assert.Equal(GoalStatus.Verified, goal.Status);
-            Assert.Equal(WorkTaskStatus.Completed, task.Status);
-            Assert.Equal(0, task.CriterionRetryCount);
+            Assert.Equal(5, goal.Tasks.Count);
+            Assert.All(goal.Tasks, task => Assert.Equal(WorkTaskStatus.Completed, task.Status));
+            Assert.All(goal.Tasks, task => Assert.Equal(0, task.CriterionRetryCount));
             Assert.True(goal.LatestAcceptanceFailure?.IsEnvironmentalApparatus);
             Assert.Equal("Verified", goal.CurrentHold?.State);
         }
@@ -3895,6 +3989,10 @@ public sealed partial class ConductorBatchLoopTestsParallelAcceptance : Conducto
                 """
                 {
                   "version": 1,
+                  "engine": {
+                    "enforceStructuralCoverage": false,
+                    "timeouts": {}
+                  },
                   "checks": [
                     { "name": "first target", "type": "command", "command": "first-target", "arguments": ["--ok"] },
                     { "name": "second target", "type": "command", "command": "second-target", "arguments": ["--should-not-run"] }
@@ -3906,7 +4004,7 @@ public sealed partial class ConductorBatchLoopTestsParallelAcceptance : Conducto
         RunGit(root, "commit", "-m", "Seed acceptance manifest");
         var workspace = OrchestratorWorkspace.ForDirectory(root);
         var kernel = new AgentOrchestratorKernel();
-        var goal = CreateVerifiedSimpleGoal(kernel, "Update src/Mcg.AgentOrchestrator.App/Orchestration/ParkBoundary.cs");
+        var goal = CreateVerifiedSimpleGoal(kernel, "Update docs/ParkBoundary.md");
         var stateRepository = OpenStateRepository(workspace.SqliteStatePath);
         var attemptRoot = CreateTempDirectory("mcg-conductor-acceptance-attempts");
         var calls = new List<string[]>();
@@ -3915,11 +4013,13 @@ public sealed partial class ConductorBatchLoopTestsParallelAcceptance : Conducto
         try
         {
             var worktree = GoalWorktrees.Ensure(root, goal.Id);
-            Directory.CreateDirectory(Path.Combine(worktree, "config"));
-            Directory.CreateDirectory(Path.Combine(worktree, "src", "Mcg.AgentOrchestrator.App", "Orchestration"));
+            var fixtureEngine = AcceptanceGateEngineSettings.Load(worktree);
+            Assert.Empty(fixtureEngine.InfrastructureTestLanes);
+            Assert.Empty(fixtureEngine.MtpInvocations);
+            Directory.CreateDirectory(Path.Combine(worktree, "docs"));
             File.WriteAllText(
-                Path.Combine(worktree, "src", "Mcg.AgentOrchestrator.App", "Orchestration", "ParkBoundary.cs"),
-                "namespace Mcg.AgentOrchestrator.App.Orchestration; internal static class ParkBoundary { }");
+                Path.Combine(worktree, "docs", "ParkBoundary.md"),
+                "target-boundary cancellation fixture");
             RunGit(worktree, "add", "-A");
             RunGit(worktree, "commit", "-m", "Goal work");
             stateRepository.SaveAsync(kernel).GetAwaiter().GetResult();
@@ -3946,20 +4046,26 @@ public sealed partial class ConductorBatchLoopTestsParallelAcceptance : Conducto
             var candidate = ConductorParallelAcceptanceCandidate.Create(
                 goal,
                 0,
-                ["src/Mcg.AgentOrchestrator.App/Orchestration/ParkBoundary.cs"]);
+                ["docs/ParkBoundary.md"]);
 
+            ConductorParallelAcceptanceAttemptDecision? decision = null;
             var output = AsyncLocalConsoleRouter.Capture(() =>
             {
-                var decision = coordinator.Evaluate(
+                decision = coordinator.Evaluate(
                     candidate,
                     ConductorAutonomyPolicy.Conservative,
                     driver.RunParallelLandingAcceptance);
-
-                Assert.Equal(ConductorParallelAcceptanceAttemptOutcome.Cancelled, decision.Attempt.Outcome);
             });
 
-            Assert.True(firstTargetCompleted);
+            Assert.NotNull(decision);
+            Assert.True(
+                firstTargetCompleted,
+                $"First target did not run. Calls: [{string.Join(" | ", calls.Select(call => string.Join(" ", call)))}]");
             Assert.DoesNotContain(calls, call => call.Length > 0 && call[0] == "second-target");
+            Assert.True(
+                decision.Attempt.Outcome == ConductorParallelAcceptanceAttemptOutcome.Cancelled,
+                $"Expected cancellation at the target boundary, got {decision.Attempt.Outcome}: " +
+                $"{decision.Attempt.Detail}; calls=[{string.Join(" | ", calls.Select(call => string.Join(" ", call)))}]");
             Assert.Contains("ACCEPTANCE_LEASE_RELEASE", output);
             Assert.Equal(1, CountOccurrences(output, "ACCEPTANCE_LEASE_RELEASE"));
             using var reacquired = DotnetBuildEnvironmentManager.AcquireLeaseExecutionLock(
@@ -5134,7 +5240,16 @@ public sealed partial class ConductorBatchLoopTestsParallelAcceptance : Conducto
         var waitBudget = Stopwatch.StartNew();
         while (waitBudget.Elapsed < TimeSpan.FromSeconds(30))
         {
-            var decision = coordinator.Evaluate(candidate, ConductorAutonomyPolicy.Conservative, PassingRun);
+            ConductorParallelAcceptanceAttemptDecision decision;
+            try
+            {
+                decision = coordinator.Evaluate(candidate, ConductorAutonomyPolicy.Conservative, PassingRun);
+            }
+            catch (AcceptanceArtifactWriterLeaseBusyException)
+            {
+                Thread.Sleep(20);
+                continue;
+            }
             if (decision.Attempt.Outcome == expected)
             {
                 return decision;

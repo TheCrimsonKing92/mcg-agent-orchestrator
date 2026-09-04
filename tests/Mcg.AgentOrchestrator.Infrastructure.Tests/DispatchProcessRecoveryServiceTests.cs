@@ -22,11 +22,24 @@ public sealed class DispatchProcessRecoveryServiceTests
             new Dictionary<string, string>(StringComparer.Ordinal),
             liveProcessIds: new HashSet<int> { process.ProcessId },
             diagnosticWriter: writer,
-            readCommandLines: processIds =>
+            readProcessIdentity: _ => throw new InvalidOperationException(
+                "diagnostic projection must reuse snapshot identity"));
+        var processSnapshot = new ProcessCommandLineSnapshot(
+            new Dictionary<int, ProcessInspectionRecord>
+            {
+                [process.ProcessId] = new(
+                    process.ProcessId,
+                    1,
+                    "worker",
+                    @"C:\workers\worker.exe",
+                    IdentityStartedAt,
+                    process.Command,
+                    ProcessInspectionStatus.Available)
+            },
+            requestedCount =>
             {
                 commandLineReads++;
-                Xunit.Assert.Equal([process.ProcessId], processIds);
-                return new Dictionary<int, string> { [process.ProcessId] = process.Command };
+                Xunit.Assert.Equal(1, requestedCount);
             });
 
         service.TryWriteDiagnosticRecord(
@@ -36,7 +49,8 @@ public sealed class DispatchProcessRecoveryServiceTests
             process,
             exitCode: 0,
             standardOutput: string.Empty,
-            standardError: string.Empty);
+            standardError: string.Empty,
+            processSnapshot);
 
         Xunit.Assert.Equal(1, commandLineReads);
         Xunit.Assert.NotNull(writer.Record);
@@ -271,7 +285,7 @@ public sealed class DispatchProcessRecoveryServiceTests
         List<int>? killedProcessIds = null,
         Func<string, ExitCodeReadResult>? readExitArtifact = null,
         IDispatchDiagnosticWriter? diagnosticWriter = null,
-        Func<IEnumerable<int>, IReadOnlyDictionary<int, string>>? readCommandLines = null)
+        Func<int, SpawnProcessIdentity?>? readProcessIdentity = null)
     {
         liveProcessIds ??= new HashSet<int>();
         killedProcessIds ??= [];
@@ -296,8 +310,8 @@ public sealed class DispatchProcessRecoveryServiceTests
             writeExitArtifact: (_, _, _) => throw new InvalidOperationException("classification must not write an exit artifact"),
             evaluateRecovery: (_, _, _, _) => RecoveryDecision(),
             diagnosticWriter: diagnosticWriter ?? new FileDiagnosticWriter(),
-            readProcessIdentity: processId => new SpawnProcessIdentity(processId, IdentityStartedAt, @"C:\workers\worker.exe"),
-            readCommandLines: readCommandLines);
+            readProcessIdentity: readProcessIdentity ??
+                (processId => new SpawnProcessIdentity(processId, IdentityStartedAt, @"C:\workers\worker.exe")));
     }
 
     private sealed class CaptureDiagnosticWriter : IDispatchDiagnosticWriter

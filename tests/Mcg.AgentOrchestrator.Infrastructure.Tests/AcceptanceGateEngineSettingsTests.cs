@@ -15,7 +15,7 @@ public sealed class AcceptanceGateEngineSettingsTests
         Xunit.Assert.Equal(6, settings.MaxConcurrentShards);
         Xunit.Assert.Equal(5, settings.PartitionVerdictFullRerunEveryN);
         Xunit.Assert.Equal(AcceptanceGateEngineSettings.DefaultOutputCaptureLimitBytes, settings.OutputCaptureLimitBytes);
-        Xunit.Assert.Equal(19, settings.InfrastructureTestLanes.Count);
+        Xunit.Assert.Equal(20, settings.InfrastructureTestLanes.Count);
         Xunit.Assert.Equal(7, startupContract.ManifestCheckCount);
         using var manifestDocument = System.Text.Json.JsonDocument.Parse(
             File.ReadAllText(Path.Combine(repositoryRoot, "config", "acceptance-manifest.json")));
@@ -46,6 +46,7 @@ public sealed class AcceptanceGateEngineSettingsTests
                 "AcceptanceVerdictCarryForwardTests",
                 "CliCommandTestsGoalLifecycleCleanupHooks",
                 "CliCommandTestsPersistentRunnerCommands",
+                "CliPersistentStateRunnerAcceptanceFailureRecoveryTests",
                 "CliCommandTestsSubscriptionDispatchCommands",
                 "GoalGitFactIndexTests",
                 "GoalsPruneTests",
@@ -108,6 +109,7 @@ public sealed class AcceptanceGateEngineSettingsTests
             [
                 "AcceptanceGateEngineSettingsTests",
                 "AcceptanceOutputCaptureTests",
+                "GoalAcceptanceVerifierCancellationTests",
                 "GoalAcceptanceVerifierTests",
                 "GoalAcceptanceVerifierDotnetBuildSlotTests",
                 "HermeticVerificationEnvironmentTests",
@@ -1921,13 +1923,16 @@ public sealed class AcceptanceGateEngineSettingsTests
                         "Previous invocation heartbeat child remained alive before the later same-named check ran.");
                 }
 
-                WriteVstestTrx(
-                    arguments,
-                    currentInvocation == 0 ? "RemainderTests.Fails" : "RemainderTests.Passes",
-                    currentInvocation == 0 ? "Failed" : "Passed");
+                if (currentInvocation != 0)
+                {
+                    WriteVstestTrx(
+                        arguments,
+                        "RemainderTests.Passes",
+                        "Passed");
+                }
                 return Task.FromResult(new GoalAcceptanceVerifier.CommandResult(
                     currentInvocation == 0 ? 1 : 0,
-                    currentInvocation == 0 ? "Failed: 1" : "Passed: 1"));
+                    currentInvocation == 0 ? "Test runner exited before producing TRX." : "Passed: 1"));
             });
 
             Environment.SetEnvironmentVariable(

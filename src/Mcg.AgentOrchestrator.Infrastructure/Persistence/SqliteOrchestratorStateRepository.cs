@@ -705,7 +705,19 @@ public sealed class SqliteOrchestratorStateRepository : IOrchestratorStateOutbox
                                 request.Current.Id,
                                 GoalSnapshotSaveDisposition.Saved,
                                 state.Goal,
-                                "stored version matched tick baseline")));
+                                "stored version matched tick baseline",
+                                state.HumanInputRequests)));
+                    }
+
+                    if (request.RejectConflict)
+                    {
+                        return Task.FromResult<(bool ShouldSave, GoalStateSnapshot? NewState, GoalSnapshotSaveResult Result)>(
+                            (false, null, new GoalSnapshotSaveResult(
+                                request.Current.Id,
+                                GoalSnapshotSaveDisposition.Skipped,
+                                storedSnapshot,
+                                "stored version advanced during critical dispatch checkpoint; rejected stale tick snapshot",
+                                storedState!.HumanInputRequests)));
                     }
 
                     if (!TryMergeGoalSnapshots(request.Baseline, storedSnapshot, request.Current, out var merged, out var reason))
@@ -715,7 +727,8 @@ public sealed class SqliteOrchestratorStateRepository : IOrchestratorStateOutbox
                                 request.Current.Id,
                                 GoalSnapshotSaveDisposition.Skipped,
                                 storedSnapshot,
-                                reason)));
+                                reason,
+                                storedState!.HumanInputRequests)));
                     }
 
                     var normalized = NormalizeStoredVerificationStatus(merged, out var normalizedReason);
@@ -728,7 +741,8 @@ public sealed class SqliteOrchestratorStateRepository : IOrchestratorStateOutbox
                             request.Current.Id,
                             GoalSnapshotSaveDisposition.Merged,
                             mergedState.Goal,
-                            resultReason)));
+                            resultReason,
+                            mergedState.HumanInputRequests)));
                 },
                 cancellationToken);
             results.Add(result);
@@ -1871,7 +1885,7 @@ public sealed class SqliteOrchestratorStateRepository : IOrchestratorStateOutbox
             return snapshot;
         }
 
-        if (snapshot.Status is GoalStatus.Failed or GoalStatus.Cancelled or GoalStatus.Superseded)
+        if (snapshot.Status is GoalStatus.Failed or GoalStatus.AcceptanceFailed or GoalStatus.Cancelled or GoalStatus.Superseded)
         {
             return snapshot;
         }

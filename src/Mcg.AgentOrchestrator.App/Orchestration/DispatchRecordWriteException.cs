@@ -9,6 +9,8 @@ internal enum DispatchRecordWriteFailureCause
     Unrecoverable
 }
 
+internal sealed class DispatchCheckpointConflictException(string message) : InvalidOperationException(message);
+
 internal sealed class DispatchRecordWriteException : InvalidOperationException
 {
     internal DispatchRecordWriteException(
@@ -39,6 +41,9 @@ internal sealed class DispatchRecordWriteException : InvalidOperationException
 
     internal bool ProcessMayHaveStarted =>
         CheckpointPhase == DispatchRecordCheckpointPhase.ProcessMayHaveStarted;
+
+    internal bool PreservesAuthoritativeState =>
+        !ProcessMayHaveStarted && InnerException is DispatchCheckpointConflictException;
 
     internal bool IsFatal =>
         ProcessMayHaveStarted || Cause == DispatchRecordWriteFailureCause.Unrecoverable;

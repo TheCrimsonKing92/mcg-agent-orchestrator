@@ -15,8 +15,30 @@ using System.Text.Json;
 
 public abstract class WorkerDispatchTestSupport
 {
+    private static readonly string SeededRepositoryFactoryRoot = CreateSeededRepositoryFactoryRoot();
+    private static int _seededRepositoryDirectoryOrdinal;
     private static readonly WorkerDispatchTestsSeededRepositoryFactory SeededDispatchRepositories =
-        new(InfrastructureTestSupport.CreateTempDirectory, SeedDispatchRepositoryTemplate);
+        new(
+            AllocateSeededRepositoryDirectory,
+            SeedDispatchRepositoryTemplate,
+            SeededRepositoryFactoryRoot);
+
+    private static string CreateSeededRepositoryFactoryRoot()
+    {
+        var path = Path.Combine(
+            Path.GetTempPath(),
+            $"seeded-repository-factory-{Environment.ProcessId:x}-{Guid.NewGuid():N}");
+        Directory.CreateDirectory(path);
+        return path;
+    }
+
+    private static string AllocateSeededRepositoryDirectory()
+    {
+        var ordinal = Interlocked.Increment(ref _seededRepositoryDirectoryOrdinal);
+        var path = Path.Combine(SeededRepositoryFactoryRoot, $"owned-{ordinal}-{Guid.NewGuid():N}");
+        Directory.CreateDirectory(path);
+        return path;
+    }
 
     protected static string CreateTempDirectory()
     {
@@ -1447,8 +1469,8 @@ public sealed class WorkerDispatchPlannerHandoffTests : WorkerDispatchTestSuppor
         Assert.Equal(GoalStatus.Active, goal.Status);
     }
 
-    [Xunit.Fact(DisplayName = "Research_first_pipeline_blocks_Planner_then_injects_full_artifacts_without_survey_or_retry_trimming")]
-    public void ResearchFirstPipelineBlocksPlannerThenInjectsFullArtifactsWithoutSurveyOrRetryTrimming()
+    [Xunit.Fact(DisplayName = "Research_first_pipeline_blocks_Planner_then_collapses_large_file_backed_artifacts_losslessly")]
+    public void ResearchFirstPipelineBlocksPlannerThenCollapsesLargeFileBackedArtifactsLosslessly()
     {
         var root = CreateSeededDispatchRepository();
         var kernel = new AgentOrchestratorKernel();
@@ -1521,7 +1543,15 @@ public sealed class WorkerDispatchPlannerHandoffTests : WorkerDispatchTestSuppor
         var contextDirectory = Path.Combine(root, ".orchestrator-context", goal.Id.Value);
         var plannerDigest = File.ReadAllText(Path.Combine(contextDirectory, "digest.md"));
         Assert.Contains("## Durable Research Notes", plannerPrompt, StringComparison.Ordinal);
-        Assert.Contains("CURRENT-SOURCE-RESEARCH-9182", plannerPrompt, StringComparison.Ordinal);
+        Assert.DoesNotContain("CURRENT-SOURCE-RESEARCH-9182", plannerPrompt, StringComparison.Ordinal);
+        Assert.Contains(
+            "Read research-notes.md in the context directory for the complete artifact",
+            plannerPrompt,
+            StringComparison.Ordinal);
+        Assert.Contains(
+            "CURRENT-SOURCE-RESEARCH-9182",
+            File.ReadAllText(Path.Combine(contextDirectory, "research-notes.md")),
+            StringComparison.Ordinal);
         Assert.Contains("selected-skills.md: read the selected planning skill", plannerDigest, StringComparison.Ordinal);
         Assert.DoesNotContain("Prefer the dashboard source survey", plannerPrompt, StringComparison.Ordinal);
         Assert.False(File.Exists(Path.Combine(contextDirectory, "source-survey.md")));
@@ -1580,9 +1610,16 @@ public sealed class WorkerDispatchPlannerHandoffTests : WorkerDispatchTestSuppor
         var persistedPlan = File.ReadAllText(Path.Combine(contextDirectory, "planner-plan.md"));
         Assert.Equal(largePlan.ReplaceLineEndings("\n"), persistedPlan);
         Assert.Contains("## Durable Planner Plan", developerPrompt, StringComparison.Ordinal);
-        Assert.Contains("PLAN-TAIL-BYTE-IDENTITY-4417", developerPrompt, StringComparison.Ordinal);
-        Assert.Contains("CURRENT-SOURCE-RESEARCH-9182", developerPrompt, StringComparison.Ordinal);
-        Assert.DoesNotContain("inline plan collapsed", developerPrompt, StringComparison.OrdinalIgnoreCase);
+        Assert.DoesNotContain("PLAN-TAIL-BYTE-IDENTITY-4417", developerPrompt, StringComparison.Ordinal);
+        Assert.DoesNotContain("CURRENT-SOURCE-RESEARCH-9182", developerPrompt, StringComparison.Ordinal);
+        Assert.Contains(
+            "Read planner-plan.md in the context directory for the complete artifact",
+            developerPrompt,
+            StringComparison.Ordinal);
+        Assert.Contains(
+            "Read research-notes.md in the context directory for the complete artifact",
+            developerPrompt,
+            StringComparison.Ordinal);
 
         var testerContext = new WorkerArtifactWriter().Write(goal, testerSpec, root);
         var testerBrief = kernel.BuildTaskBrief(
@@ -1598,8 +1635,12 @@ public sealed class WorkerDispatchPlannerHandoffTests : WorkerDispatchTestSuppor
             contextDirectory: reviewerContext).Content;
         Assert.Equal(persistedPlan, File.ReadAllText(Path.Combine(testerContext, "planner-plan.md")));
         Assert.Equal(persistedPlan, File.ReadAllText(Path.Combine(reviewerContext, "planner-plan.md")));
-        Assert.Contains("PLAN-TAIL-BYTE-IDENTITY-4417", testerBrief, StringComparison.Ordinal);
-        Assert.Contains("PLAN-TAIL-BYTE-IDENTITY-4417", reviewerBrief, StringComparison.Ordinal);
+        Assert.DoesNotContain("PLAN-TAIL-BYTE-IDENTITY-4417", testerBrief, StringComparison.Ordinal);
+        Assert.DoesNotContain("PLAN-TAIL-BYTE-IDENTITY-4417", reviewerBrief, StringComparison.Ordinal);
+        Assert.Contains("Read planner-plan.md in the context directory", testerBrief, StringComparison.Ordinal);
+        Assert.Contains("Read planner-plan.md in the context directory", reviewerBrief, StringComparison.Ordinal);
+        Assert.Contains("sha256:", testerBrief, StringComparison.Ordinal);
+        Assert.Contains("sha256:", reviewerBrief, StringComparison.Ordinal);
     }
 
     [Xunit.Fact(DisplayName = "Legacy_Planner_brief_without_durable_research_keeps_source_discovery_guidance")]

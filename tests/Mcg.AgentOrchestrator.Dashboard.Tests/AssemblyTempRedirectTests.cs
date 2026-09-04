@@ -18,6 +18,7 @@ public sealed class AssemblyTempRedirectTests
         var secondRoot = TempRootJanitor.BuildOwnedRootPath(sharedRoot, secondPid);
         var reads = new List<int[]>();
         var deleted = new List<string>();
+        var receipts = new List<string>();
         Directory.CreateDirectory(selectedRoot);
         Directory.CreateDirectory(firstRoot);
         Directory.CreateDirectory(secondRoot);
@@ -36,17 +37,68 @@ public sealed class AssemblyTempRedirectTests
                                 ? ExitedProcess(processId)
                                 : AvailableProcess(processId)));
                 },
-                deleted.Add);
+                path =>
+                {
+                    deleted.Add(path);
+                    return new TempRootJanitorDeleteResult(
+                        path,
+                        TempRootJanitorDeleteStatus.Deleted,
+                        ExceptionType: null,
+                        FailurePath: null,
+                        ReadOnlyAttributesCleared: 0);
+                },
+                receipts.Add);
 
             Xunit.Assert.Equal(2, reads.Count);
             Xunit.Assert.Equal([firstPid, secondPid], reads[0]);
             Xunit.Assert.Equal([firstPid, secondPid], reads[1]);
             Xunit.Assert.Equal([firstRoot], deleted, StringComparer.OrdinalIgnoreCase);
+            var receipt = Xunit.Assert.Single(receipts);
+            Xunit.Assert.Contains($"actorPid={Environment.ProcessId}", receipt, StringComparison.Ordinal);
+            Xunit.Assert.Contains($"candidatePid={firstPid}", receipt, StringComparison.Ordinal);
+            Xunit.Assert.Contains("observedStatus=Exited", receipt, StringComparison.Ordinal);
+            Xunit.Assert.Contains("deleteStatus=Deleted", receipt, StringComparison.Ordinal);
         }
         finally
         {
             _ = TempRootJanitor.DeleteTree(sharedRoot);
         }
+    }
+
+    [Xunit.Fact]
+    public void ReapReceiptPinsEveryDiagnosticFieldAndEscaping()
+    {
+        var observation = new ProcessInspectionRecord(
+            ProcessId: 42,
+            ParentProcessId: 7,
+            Name: "former host",
+            ExecutablePath: "C:\\Program Files\\test\"host.exe",
+            StartedAt: DateTimeOffset.Parse("2026-08-30T12:00:00Z"),
+            CommandLine: null,
+            ProcessInspectionStatus.Exited);
+        var outcome = new TempRootJanitorDeleteResult(
+            Path: "C:\\temp root\\p2a\"",
+            Status: TempRootJanitorDeleteStatus.Failed,
+            ExceptionType: "Injected Failure",
+            FailurePath: "C:\\temp root\\leaf \"x\"",
+            ReadOnlyAttributesCleared: 3);
+
+        var receipt = AssemblyTempRedirect.FormatReapReceipt(
+            actorProcessId: 11,
+            candidateProcessId: 42,
+            path: outcome.Path,
+            observation: observation,
+            outcome: outcome);
+
+        Xunit.Assert.Equal(
+            "assembly-temp-reaper actorPid=11 candidatePid=42 " +
+            "path=\"C:\\temp root\\p2a\\\"\" " +
+            "observedPid=42 observedStatus=Exited observedName=\"former host\" " +
+            "observedStartedAt=\"2026-08-30T12:00:00.0000000+00:00\" " +
+            "observedExecutablePath=\"C:\\Program Files\\test\\\"host.exe\" " +
+            "deleteStatus=Failed exceptionType=Injected_Failure " +
+            "failurePath=\"C:\\temp root\\leaf \\\"x\\\"\" readOnlyCleared=3",
+            receipt);
     }
 
     private static ProcessInspectionRecord ExitedProcess(int processId) =>

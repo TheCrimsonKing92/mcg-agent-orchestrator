@@ -485,6 +485,17 @@ public sealed partial class AgentOrchestratorKernel
                     $"Tester WORKER_RESULT structured findings invalid: {violation.Message}");
                 return true;
             }
+
+            if (task.RequiredRole == AgentRole.Reviewer &&
+                violation.Code == ReviewFindingConvergence.OmittedOpenFindingViolationCode)
+            {
+                ReportTaskProgress(
+                    goalId,
+                    task.Id,
+                    WorkTaskStatus.Failed,
+                    $"Reviewer WORKER_RESULT structured findings invalid: {violation.Message}");
+                return true;
+            }
         }
 
         if (verification.WorkerResultPresent &&
@@ -586,7 +597,7 @@ public sealed partial class AgentOrchestratorKernel
             out _,
             out var suppressedFindings);
         if (verification.WorkerResultPresent &&
-            task.RequiredRole == AgentRole.Reviewer)
+            task.RequiredRole is AgentRole.Reviewer or AgentRole.Tester)
         {
             foreach (var item in suppressedFindings)
             {
@@ -597,7 +608,7 @@ public sealed partial class AgentOrchestratorKernel
                     goal,
                     task.Id,
                     ProgressKind.TaskNote,
-                    $"Suppressed Reviewer structured finding matching operator criteria correction: stable_id={item.Finding.StableId}; finding: {item.Finding.Description}; superseded criterion: {item.Correction.SupersededCriterion}; correction recorded {item.Correction.RecordedAt:u} by {item.Correction.Actor}.{capAudit}");
+                    $"Suppressed {task.RequiredRole} structured finding matching operator criteria correction: stable_id={item.Finding.StableId}; finding: {item.Finding.Description}; superseded criterion: {item.Correction.SupersededCriterion}; correction recorded {item.Correction.RecordedAt:u} by {item.Correction.Actor}.{capAudit}");
             }
         }
 
@@ -648,6 +659,21 @@ public sealed partial class AgentOrchestratorKernel
                 task.Id,
                 WorkTaskStatus.Failed,
                 $"Tester WORKER_RESULT reported blocker: {testerBlocker}; same Tester retry or operator action required.");
+            return true;
+        }
+
+        if (verification.WorkerResultPresent &&
+            task.RequiredRole == AgentRole.Tester &&
+            openBlockingFindings.Count > 0)
+        {
+            var openIds = string.Join(
+                ", ",
+                openBlockingFindings.Select(finding => finding.StableId));
+            ReportTaskProgress(
+                goalId,
+                task.Id,
+                WorkTaskStatus.Failed,
+                $"Tester WORKER_RESULT rejected: merged structured finding state still has open blocking stable_id(s): {openIds}; automatic ownership routing required.");
             return true;
         }
 
@@ -758,6 +784,7 @@ public sealed partial class AgentOrchestratorKernel
                 ReviewFindingContractViolation = violation,
                 MergedReviewFindings = violation is not null &&
                     (ReviewFindingConvergence.IsRejectedCapResolutionRound(violation) ||
+                     violation.Code == ReviewFindingConvergence.OmittedOpenFindingViolationCode ||
                      identityTransitionSalvaged)
                     ? mergedFindings
                     : null
@@ -809,11 +836,7 @@ public sealed partial class AgentOrchestratorKernel
             .OrderBy(candidate => candidate.CompletedAt))
         {
             var isCurrentRound = ReferenceEquals(verification, currentVerification);
-            if (!isCurrentRound &&
-                verification.ReviewFindingContractViolation is { } historicalViolation &&
-                !ReviewFindingConvergence.IsRejectedCapResolutionRound(historicalViolation) &&
-                !(ReviewFindingConvergence.IsRejectedIdentityTransitionRound(historicalViolation) &&
-                  verification.MergedReviewFindings is not null))
+            if (!isCurrentRound && !ShouldReplayStoredReviewFindingRound(verification))
             {
                 // The durable violation marks this worker-authored round as rejected. Replaying it would
                 // let an invalid structural transition mutate the accepted ledger.
@@ -836,6 +859,11 @@ public sealed partial class AgentOrchestratorKernel
                 if (isCurrentRound)
                 {
                     var nextState = ReviewFindingConvergence.ApplyRound(state, round, out canonicalizations);
+                    if (role == AgentRole.Reviewer &&
+                        WorkerResultBlockers.TryFindPassVerdict(currentVerification))
+                    {
+                        ReviewFindingConvergence.ValidateExplicitOpenFindingCoverage(state, round, canonicalizations);
+                    }
                     if (role == AgentRole.Reviewer && reviewRetryCap is { IsAtCap: true })
                     {
                         ReviewFindingConvergence.ValidateResolutionAtCap(
@@ -1065,6 +1093,12 @@ public sealed partial class AgentOrchestratorKernel
         !string.IsNullOrWhiteSpace(prior) &&
         !string.IsNullOrWhiteSpace(current) &&
         string.Equals(prior.Trim(), current.Trim(), StringComparison.OrdinalIgnoreCase);
+
+    private static bool ShouldReplayStoredReviewFindingRound(TaskVerificationRecord verification) =>
+        verification.ReviewFindingContractViolation is not { } violation ||
+        ReviewFindingConvergence.IsRejectedCapResolutionRound(violation) ||
+        (ReviewFindingConvergence.IsRejectedIdentityTransitionRound(violation) &&
+         verification.MergedReviewFindings is not null);
 
     private static string BuildCompletionMessageWithAdvisoryBlocker(
         string message,

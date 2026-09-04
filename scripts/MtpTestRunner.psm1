@@ -11,11 +11,60 @@ $script:ExitCodes = [pscustomobject]@{
     ZeroTests = 27
     Cleanup = 28
     Timeout = 29
+    StartupHook = 30
 }
 
 $script:MtpGracefulExitSeconds = 15
 $script:MtpExitConfirmationSeconds = 10
 $script:MtpOutputDrainSeconds = 10
+$script:MtpClosureMarkerName = '.mcg-mtp-closure.json'
+$script:MtpClosureSchemaVersion = 1
+$script:MtpClosureSnapshotAttempts = 3
+$script:MtpStartupHookSchemaVersion = 1
+$script:MtpStartupHookAssemblyName = 'Mcg.AgentOrchestrator.FaultDialogStartupHook.dll'
+$script:MtpStartupHookMarkerName = '.mcg-startup-hook.json'
+$script:MtpStartupHookSource = @'
+using System;
+using System.Runtime.InteropServices;
+
+public static class StartupHook
+{
+    private const uint FailCriticalErrors = 0x0001;
+    private const uint NoGpFaultErrorBox = 0x0002;
+    private const uint NoOpenFileErrorBox = 0x8000;
+    private const uint WerFaultReportingNoUi = 0x0020;
+
+    public static void Initialize()
+    {
+        uint mode = GetErrorMode();
+        SetErrorMode((mode | FailCriticalErrors | NoOpenFileErrorBox) & ~NoGpFaultErrorBox);
+        uint werFlags;
+        if (WerGetFlags(GetCurrentProcess(), out werFlags) == 0)
+        {
+            WerSetFlags(werFlags | WerFaultReportingNoUi);
+        }
+        else
+        {
+            WerSetFlags(WerFaultReportingNoUi);
+        }
+    }
+
+    [DllImport("kernel32.dll")]
+    private static extern uint GetErrorMode();
+
+    [DllImport("kernel32.dll")]
+    private static extern uint SetErrorMode(uint mode);
+
+    [DllImport("kernel32.dll")]
+    private static extern int WerSetFlags(uint flags);
+
+    [DllImport("kernel32.dll")]
+    private static extern int WerGetFlags(IntPtr process, out uint flags);
+
+    [DllImport("kernel32.dll")]
+    private static extern IntPtr GetCurrentProcess();
+}
+'@
 
 if ($null -eq ('McgMtpProcessOutputCapture' -as [type])) {
     Add-Type -TypeDefinition @'
@@ -272,6 +321,61 @@ public sealed class McgMtpOwnedJob : IDisposable
 '@
 }
 
+# Keep this type in its own guard. PowerShell modules can be re-imported after the output-capture
+# type above is already loaded, and coupling the guards would leave this newer helper undefined.
+if ($null -eq ('McgMtpSuppressedProcessStart' -as [type])) {
+    Add-Type -TypeDefinition @'
+using System;
+using System.Diagnostics;
+using System.Runtime.InteropServices;
+
+public static class McgMtpSuppressedProcessStart
+{
+    public const uint FailCriticalErrors = 0x0001;
+    public const uint NoGpFaultErrorBox = 0x0002;
+    public const uint NoOpenFileErrorBox = 0x8000;
+    public const uint SuppressedFlags = FailCriticalErrors | NoGpFaultErrorBox | NoOpenFileErrorBox;
+
+    private static readonly object Gate = new object();
+
+    public static bool Start(Process process)
+    {
+        if (process == null)
+        {
+            throw new ArgumentNullException("process");
+        }
+
+        if (Environment.OSVersion.Platform != PlatformID.Win32NT)
+        {
+            return process.Start();
+        }
+
+        lock (Gate)
+        {
+            uint original = GetErrorMode();
+            SetErrorMode(original | SuppressedFlags);
+            try
+            {
+                // Windows child processes inherit the parent's process error mode unless created
+                // with CREATE_DEFAULT_ERROR_MODE. System.Diagnostics.Process does not request it.
+                return process.Start();
+            }
+            finally
+            {
+                SetErrorMode(original);
+            }
+        }
+    }
+
+    [DllImport("kernel32.dll")]
+    private static extern uint GetErrorMode();
+
+    [DllImport("kernel32.dll")]
+    private static extern uint SetErrorMode(uint mode);
+}
+'@
+}
+
 function Test-MtpWindows {
     return [System.Environment]::OSVersion.Platform -eq [System.PlatformID]::Win32NT
 }
@@ -452,6 +556,37 @@ function Get-DefaultMtpResultsRoot {
     return Join-Path $localAppData 'Temp\Low\mcg-tests'
 }
 
+function Write-MtpRunOwnershipSidecar {
+    param(
+        [Parameter(Mandatory = $true)][string]$ResultsDirectory,
+        [Parameter(Mandatory = $true)][string]$RunLabel
+    )
+
+    $receiptPath = Join-Path $ResultsDirectory '.mtp-run-ownership.json'
+    $temporaryPath = $receiptPath + ".tmp-$([Guid]::NewGuid().ToString('N'))"
+    try {
+        $attemptId = [System.Environment]::GetEnvironmentVariable('MCG_ACCEPTANCE_GATE_ATTEMPT_ID')
+        if ([string]::IsNullOrWhiteSpace($attemptId)) {
+            $attemptId = 'unowned'
+        }
+        $receipt = [ordered]@{
+            schemaVersion = 1
+            attemptId = $attemptId
+            machineName = [System.Environment]::MachineName
+            ownerProcessId = $PID
+            createdAt = [DateTimeOffset]::UtcNow
+            runLabel = $RunLabel
+        }
+        [System.IO.File]::WriteAllText($temporaryPath, ($receipt | ConvertTo-Json -Compress))
+        Move-Item -LiteralPath $temporaryPath -Destination $receiptPath -ErrorAction Stop
+        return $true
+    }
+    catch {
+        Remove-Item -LiteralPath $temporaryPath -Force -ErrorAction SilentlyContinue
+        return $false
+    }
+}
+
 function Initialize-MtpResultsDirectory {
     param(
         [string]$ResultsRoot,
@@ -494,6 +629,7 @@ function Initialize-MtpResultsDirectory {
         Remove-Item -LiteralPath $runDirectory -Recurse -Force -ErrorAction Stop
         throw "Results root '$resolvedRoot' is too long for bounded MTP TRX paths. Choose a shorter directory beneath the Low-integrity-writable root."
     }
+    [void](Write-MtpRunOwnershipSidecar -ResultsDirectory $runDirectory -RunLabel $RunLabel)
     return $runDirectory
 }
 
@@ -613,39 +749,518 @@ function Get-MtpTargetProjects {
     return $selected
 }
 
+function Get-MtpProjectName {
+    param([Parameter(Mandatory = $true)]$Invocation)
+
+    return [System.IO.Path]::GetFileNameWithoutExtension([string]$Invocation.project)
+}
+
+function Get-MtpProjectToken {
+    param([Parameter(Mandatory = $true)]$Invocation)
+
+    $projectName = Get-MtpProjectName -Invocation $Invocation
+    $sha = [System.Security.Cryptography.SHA256]::Create()
+    try {
+        $bytes = $sha.ComputeHash([System.Text.Encoding]::UTF8.GetBytes($projectName))
+        return ([System.BitConverter]::ToString($bytes) -replace '-', '').Substring(0, 12)
+    }
+    finally {
+        $sha.Dispose()
+    }
+}
+
+function Get-MtpClosureDirectory {
+    param(
+        [Parameter(Mandatory = $true)][string]$RunDirectory,
+        [Parameter(Mandatory = $true)]$Invocation
+    )
+
+    return Join-Path (Join-Path $RunDirectory '.c') (Get-MtpProjectToken -Invocation $Invocation)
+}
+
+function Get-MtpClosureManagedAssemblyPath {
+    param(
+        [Parameter(Mandatory = $true)][string]$RunDirectory,
+        [Parameter(Mandatory = $true)]$Invocation
+    )
+
+    $projectName = Get-MtpProjectName -Invocation $Invocation
+    return Join-Path (Get-MtpClosureDirectory -RunDirectory $RunDirectory -Invocation $Invocation) "$projectName.dll"
+}
+
+function Get-MtpClosureSnapshot {
+    param(
+        [Parameter(Mandatory = $true)][string]$Path,
+        [switch]$ExcludeMarker
+    )
+
+    $root = [System.IO.Path]::GetFullPath($Path)
+    if (-not $root.EndsWith([System.IO.Path]::DirectorySeparatorChar.ToString(), [System.StringComparison]::Ordinal)) {
+        $root += [System.IO.Path]::DirectorySeparatorChar
+    }
+    $payload = [System.Text.StringBuilder]::new()
+    $fileCount = 0
+    foreach ($file in (Get-ChildItem -LiteralPath $Path -Force -Recurse -File | Sort-Object FullName)) {
+        if ($ExcludeMarker -and $file.Name.Equals($script:MtpClosureMarkerName, [System.StringComparison]::Ordinal)) {
+            continue
+        }
+        if (-not $file.FullName.StartsWith($root, [System.StringComparison]::OrdinalIgnoreCase)) {
+            throw "MTP closure file escaped its root: $($file.FullName)"
+        }
+        $relative = $file.FullName.Substring($root.Length).Replace('\', '/')
+        $sha = [System.Security.Cryptography.SHA256]::Create()
+        $stream = $null
+        try {
+            $stream = [System.IO.File]::Open($file.FullName, [System.IO.FileMode]::Open, [System.IO.FileAccess]::Read, [System.IO.FileShare]::Read)
+            $fileHash = [System.BitConverter]::ToString($sha.ComputeHash($stream)) -replace '-', ''
+        }
+        finally {
+            if ($null -ne $stream) {
+                $stream.Dispose()
+            }
+            $sha.Dispose()
+        }
+        [void]$payload.Append($relative)
+        [void]$payload.Append(':')
+        [void]$payload.Append($fileHash)
+        [void]$payload.Append("`n")
+        $fileCount++
+    }
+
+    $payloadSha = [System.Security.Cryptography.SHA256]::Create()
+    try {
+        $digestBytes = $payloadSha.ComputeHash([System.Text.Encoding]::UTF8.GetBytes($payload.ToString()))
+        $digest = [System.BitConverter]::ToString($digestBytes) -replace '-', ''
+    }
+    finally {
+        $payloadSha.Dispose()
+    }
+    return [pscustomobject]@{ Digest = $digest; FileCount = $fileCount }
+}
+
+function Assert-MtpClosureShape {
+    param(
+        [Parameter(Mandatory = $true)][string]$Path,
+        [Parameter(Mandatory = $true)][string]$ManagedAssemblyLeaf
+    )
+
+    $managedAssembly = Join-Path $Path $ManagedAssemblyLeaf
+    if (-not (Test-Path -LiteralPath $managedAssembly -PathType Leaf)) {
+        throw "MTP closure is missing managed test assembly '$ManagedAssemblyLeaf': $Path"
+    }
+
+    $depsLeaf = [System.IO.Path]::ChangeExtension($ManagedAssemblyLeaf, '.deps.json')
+    $depsPath = Join-Path $Path $depsLeaf
+    if (-not (Test-Path -LiteralPath $depsPath -PathType Leaf)) {
+        throw "MTP closure is missing dependency manifest '$depsLeaf': $Path"
+    }
+    $deps = Get-Content -LiteralPath $depsPath -Raw | ConvertFrom-Json
+    foreach ($library in @($deps.libraries.PSObject.Properties)) {
+        $assemblyName = ([string]$library.Name -split '/', 2)[0]
+        if (-not $assemblyName.StartsWith('Mcg.AgentOrchestrator.', [System.StringComparison]::Ordinal)) {
+            continue
+        }
+        $dependencyLeaf = "$assemblyName.dll"
+        if (-not (Test-Path -LiteralPath (Join-Path $Path $dependencyLeaf) -PathType Leaf)) {
+            throw "MTP closure dependency manifest requires missing repository assembly '$dependencyLeaf': $Path"
+        }
+    }
+
+    $repositoryAssemblies = @(Get-ChildItem -LiteralPath $Path -Force -File -Filter 'Mcg.AgentOrchestrator*.dll')
+    if ($repositoryAssemblies.Count -eq 0) {
+        throw "MTP closure contains no repository assemblies: $Path"
+    }
+    $productVersions = [System.Collections.Generic.List[string]]::new()
+    foreach ($assembly in $repositoryAssemblies) {
+        $productVersion = [System.Diagnostics.FileVersionInfo]::GetVersionInfo($assembly.FullName).ProductVersion
+        if ([string]::IsNullOrWhiteSpace([string]$productVersion)) {
+            throw "MTP closure repository assembly has no ProductVersion and is not trusted: $($assembly.FullName)"
+        }
+        $productVersions.Add([string]$productVersion)
+    }
+    $productVersions = @($productVersions | Sort-Object -Unique)
+    if ($productVersions.Count -ne 1) {
+        throw "MTP closure repository assemblies do not share one ProductVersion: path='$Path' versions='$($productVersions -join ',')'."
+    }
+}
+
+function Complete-MtpClosurePublication {
+    param(
+        [Parameter(Mandatory = $true)][string]$StagingDirectory,
+        [Parameter(Mandatory = $true)][string]$PublishedDirectory,
+        [Parameter(Mandatory = $true)][string]$ManagedAssemblyLeaf,
+        [Parameter(Mandatory = $true)][string]$ProjectName
+    )
+
+    Assert-MtpClosureShape -Path $StagingDirectory -ManagedAssemblyLeaf $ManagedAssemblyLeaf
+    $snapshot = Get-MtpClosureSnapshot -Path $StagingDirectory
+    $marker = [ordered]@{
+        schemaVersion = $script:MtpClosureSchemaVersion
+        project = $ProjectName
+        digest = $snapshot.Digest
+        fileCount = $snapshot.FileCount
+        sealedAtUtc = [DateTimeOffset]::UtcNow.ToString('o')
+    }
+    [System.IO.File]::WriteAllText(
+        (Join-Path $StagingDirectory $script:MtpClosureMarkerName),
+        ($marker | ConvertTo-Json -Compress),
+        [System.Text.Encoding]::UTF8)
+    [System.IO.Directory]::Move($StagingDirectory, $PublishedDirectory)
+    Assert-MtpSealedClosure -Path $PublishedDirectory -ManagedAssemblyLeaf $ManagedAssemblyLeaf -ExpectedProject $ProjectName
+}
+
+function Assert-MtpSealedClosure {
+    param(
+        [Parameter(Mandatory = $true)][string]$Path,
+        [Parameter(Mandatory = $true)][string]$ManagedAssemblyLeaf,
+        [Parameter(Mandatory = $true)][string]$ExpectedProject
+    )
+
+    Assert-MtpClosureShape -Path $Path -ManagedAssemblyLeaf $ManagedAssemblyLeaf
+    $markerPath = Join-Path $Path $script:MtpClosureMarkerName
+    if (-not (Test-Path -LiteralPath $markerPath -PathType Leaf)) {
+        throw "MTP closure has no completion marker and will not be executed: $Path"
+    }
+    $marker = Get-Content -LiteralPath $markerPath -Raw | ConvertFrom-Json
+    if ([int]$marker.schemaVersion -ne $script:MtpClosureSchemaVersion -or
+        -not ([string]$marker.project).Equals($ExpectedProject, [System.StringComparison]::Ordinal)) {
+        throw "MTP closure completion marker is incompatible: $markerPath"
+    }
+    $snapshot = Get-MtpClosureSnapshot -Path $Path -ExcludeMarker
+    if (-not ([string]$marker.digest).Equals($snapshot.Digest, [System.StringComparison]::Ordinal) -or
+        [int]$marker.fileCount -ne $snapshot.FileCount) {
+        throw "MTP closure completion marker does not match its recursive payload: $Path"
+    }
+}
+
+function Copy-MtpStableNoBuildClosure {
+    param(
+        [Parameter(Mandatory = $true)][string]$SourceDirectory,
+        [Parameter(Mandatory = $true)][string]$PublishedDirectory,
+        [Parameter(Mandatory = $true)][string]$ManagedAssemblyLeaf,
+        [Parameter(Mandatory = $true)][string]$ProjectName
+    )
+
+    $sourceManagedAssembly = Join-Path $SourceDirectory $ManagedAssemblyLeaf
+    if (-not (Test-Path -LiteralPath $sourceManagedAssembly -PathType Leaf)) {
+        throw "No-build source managed assembly is missing: $sourceManagedAssembly"
+    }
+    $parent = Split-Path -Parent $PublishedDirectory
+    [void](New-Item -ItemType Directory -Force -Path $parent)
+    $lastFailure = $null
+    for ($attempt = 1; $attempt -le $script:MtpClosureSnapshotAttempts; $attempt++) {
+        $staging = Join-Path $parent ".s-$([Guid]::NewGuid().ToString('N').Substring(0, 8))"
+        try {
+            $before = Get-MtpClosureSnapshot -Path $SourceDirectory
+            [void](New-Item -ItemType Directory -Path $staging -ErrorAction Stop)
+            Get-ChildItem -LiteralPath $SourceDirectory -Force | Copy-Item -Destination $staging -Recurse -Force -ErrorAction Stop
+            $staged = Get-MtpClosureSnapshot -Path $staging
+            $after = Get-MtpClosureSnapshot -Path $SourceDirectory
+            if (-not $before.Digest.Equals($staged.Digest, [System.StringComparison]::Ordinal) -or
+                -not $before.Digest.Equals($after.Digest, [System.StringComparison]::Ordinal) -or
+                $before.FileCount -ne $staged.FileCount -or
+                $before.FileCount -ne $after.FileCount) {
+                $lastFailure = "source output changed while snapshotting attempt $attempt of $script:MtpClosureSnapshotAttempts"
+                continue
+            }
+            Complete-MtpClosurePublication -StagingDirectory $staging -PublishedDirectory $PublishedDirectory -ManagedAssemblyLeaf $ManagedAssemblyLeaf -ProjectName $ProjectName
+            $staging = $null
+            return
+        }
+        catch {
+            $lastFailure = $_.Exception.Message
+            if ($attempt -eq $script:MtpClosureSnapshotAttempts) {
+                throw
+            }
+        }
+        finally {
+            if ($null -ne $staging -and (Test-Path -LiteralPath $staging)) {
+                Remove-Item -LiteralPath $staging -Recurse -Force -ErrorAction SilentlyContinue
+            }
+        }
+    }
+    throw "Could not create a stable sealed MTP closure for '$ProjectName'. $lastFailure"
+}
+
+function Get-MtpSha256Text {
+    param([Parameter(Mandatory = $true)][string]$Text)
+
+    $sha = [System.Security.Cryptography.SHA256]::Create()
+    try {
+        $bytes = $sha.ComputeHash([System.Text.Encoding]::UTF8.GetBytes($Text))
+        return [System.BitConverter]::ToString($bytes) -replace '-', ''
+    }
+    finally {
+        $sha.Dispose()
+    }
+}
+
+function Get-MtpSha256File {
+    param([Parameter(Mandatory = $true)][string]$Path)
+
+    $sha = [System.Security.Cryptography.SHA256]::Create()
+    $stream = $null
+    try {
+        $stream = [System.IO.File]::Open($Path, [System.IO.FileMode]::Open, [System.IO.FileAccess]::Read, [System.IO.FileShare]::Read)
+        $bytes = $sha.ComputeHash($stream)
+        return [System.BitConverter]::ToString($bytes) -replace '-', ''
+    }
+    finally {
+        if ($null -ne $stream) {
+            $stream.Dispose()
+        }
+        $sha.Dispose()
+    }
+}
+
+function Assert-MtpFaultDialogStartupHook {
+    param(
+        [Parameter(Mandatory = $true)][string]$Path,
+        [Parameter(Mandatory = $true)][string]$ExpectedSourceDigest
+    )
+
+    $assemblyPath = Join-Path $Path $script:MtpStartupHookAssemblyName
+    $markerPath = Join-Path $Path $script:MtpStartupHookMarkerName
+    if (-not (Test-Path -LiteralPath $assemblyPath -PathType Leaf) -or
+        -not (Test-Path -LiteralPath $markerPath -PathType Leaf)) {
+        throw "Fault-dialog startup-hook cache is incomplete: $Path"
+    }
+    try {
+        $marker = Get-Content -LiteralPath $markerPath -Raw -ErrorAction Stop | ConvertFrom-Json -ErrorAction Stop
+    }
+    catch {
+        throw "Fault-dialog startup-hook marker is invalid at '$markerPath': $($_.Exception.Message)"
+    }
+    if ([int]$marker.schemaVersion -ne $script:MtpStartupHookSchemaVersion -or
+        -not ([string]$marker.sourceDigest).Equals($ExpectedSourceDigest, [System.StringComparison]::Ordinal)) {
+        throw "Fault-dialog startup-hook marker does not match the current source: $markerPath"
+    }
+    $assemblyDigest = Get-MtpSha256File -Path $assemblyPath
+    if (-not $assemblyDigest.Equals([string]$marker.assemblyDigest, [System.StringComparison]::Ordinal)) {
+        throw "Fault-dialog startup-hook assembly digest does not match its marker: $assemblyPath"
+    }
+    return $assemblyPath
+}
+
+function Resolve-MtpFaultDialogStartupHook {
+    if (-not (Test-MtpWindows)) {
+        return $null
+    }
+
+    $sourceDigest = Get-MtpSha256Text -Text $script:MtpStartupHookSource
+    $cacheParent = Join-Path ([System.IO.Path]::GetTempPath()) 'mcg-mtp-startup-hook\v1'
+    $publishedDirectory = Join-Path $cacheParent $sourceDigest
+    if (Test-Path -LiteralPath $publishedDirectory) {
+        return Assert-MtpFaultDialogStartupHook -Path $publishedDirectory -ExpectedSourceDigest $sourceDigest
+    }
+
+    [void](New-Item -ItemType Directory -Force -Path $cacheParent)
+    $stagingDirectory = Join-Path $cacheParent ".staging-$PID-$([Guid]::NewGuid().ToString('N'))"
+    try {
+        [void](New-Item -ItemType Directory -Path $stagingDirectory -ErrorAction Stop)
+        $stagingAssembly = Join-Path $stagingDirectory $script:MtpStartupHookAssemblyName
+        Add-Type -TypeDefinition $script:MtpStartupHookSource -OutputAssembly $stagingAssembly -OutputType Library -ErrorAction Stop
+        $assemblyDigest = Get-MtpSha256File -Path $stagingAssembly
+        $marker = [ordered]@{
+            schemaVersion = $script:MtpStartupHookSchemaVersion
+            sourceDigest = $sourceDigest
+            assemblyDigest = $assemblyDigest
+        }
+        $marker | ConvertTo-Json -Compress | Set-Content -LiteralPath (Join-Path $stagingDirectory $script:MtpStartupHookMarkerName) -Encoding UTF8 -ErrorAction Stop
+
+        try {
+            [System.IO.Directory]::Move($stagingDirectory, $publishedDirectory)
+            $stagingDirectory = $null
+        }
+        catch [System.IO.IOException] {
+            if (-not (Test-Path -LiteralPath $publishedDirectory)) {
+                throw
+            }
+        }
+        return Assert-MtpFaultDialogStartupHook -Path $publishedDirectory -ExpectedSourceDigest $sourceDigest
+    }
+    finally {
+        if ($null -ne $stagingDirectory -and (Test-Path -LiteralPath $stagingDirectory)) {
+            Remove-Item -LiteralPath $stagingDirectory -Recurse -Force -ErrorAction SilentlyContinue
+        }
+    }
+}
+
+function Invoke-MtpBuildProcess {
+    param(
+        [Parameter(Mandatory = $true)][string]$Executable,
+        [Parameter(Mandatory = $true)][string[]]$Arguments,
+        [Parameter(Mandatory = $true)][string]$OutputLog,
+        [Parameter(Mandatory = $true)][string]$WorkingDirectory,
+        [string]$StartupHookPath
+    )
+
+    $process = [System.Diagnostics.Process]::new()
+    $capture = $null
+    $started = $false
+    $processId = $null
+    $startTimeUtc = $null
+    $exitCode = $null
+    $startFailureMessage = $null
+    $monitoringFailureMessage = $null
+    $cleanupConfirmed = $true
+    $drainConfirmed = $false
+    try {
+        $startInfo = New-MtpProcessStartInfo -Executable $Executable -Arguments $Arguments -StartupHookPath $StartupHookPath
+        $startInfo.WorkingDirectory = $WorkingDirectory
+        $process.StartInfo = $startInfo
+        $capture = [McgMtpProcessOutputCapture]::new($OutputLog)
+        $capture.Attach($process)
+
+        try {
+            $started = [McgMtpSuppressedProcessStart]::Start($process)
+            if (-not $started) {
+                $startFailureMessage = 'Process.Start returned false.'
+            }
+        }
+        catch {
+            $startFailureMessage = $_.Exception.Message
+        }
+
+        if ($started) {
+            try {
+                $processId = $process.Id
+                $startTimeUtc = $process.StartTime.ToUniversalTime()
+                $process.BeginOutputReadLine()
+                $process.BeginErrorReadLine()
+                $process.WaitForExit()
+            }
+            catch {
+                $monitoringFailureMessage = $_.Exception.Message
+            }
+        }
+    }
+    catch {
+        if (-not $started -and [string]::IsNullOrWhiteSpace($startFailureMessage)) {
+            $startFailureMessage = $_.Exception.Message
+        }
+        elseif ([string]::IsNullOrWhiteSpace($monitoringFailureMessage)) {
+            $monitoringFailureMessage = $_.Exception.Message
+        }
+    }
+    finally {
+        try {
+            if ($started) {
+                $mustTerminate = -not [string]::IsNullOrWhiteSpace($monitoringFailureMessage) -or -not $process.HasExited
+                if ($mustTerminate -and $null -ne $startTimeUtc) {
+                    $cleanupConfirmed = Stop-MtpOwnedProcessTree -Process $process -StartTimeUtc $startTimeUtc -OwnedJob $null
+                }
+                $processExitConfirmed = $process.HasExited -or $process.WaitForExit($script:MtpExitConfirmationSeconds * 1000)
+                $cleanupConfirmed = $cleanupConfirmed -and $processExitConfirmed
+                if ($process.HasExited) {
+                    $exitCode = $process.ExitCode
+                }
+                $drainConfirmed = $capture.WaitForCompletion($script:MtpOutputDrainSeconds * 1000)
+            }
+            if ($null -ne $capture) {
+                try {
+                    $capture.Detach($process)
+                }
+                finally {
+                    $capture.Dispose()
+                }
+            }
+        }
+        finally {
+            $process.Dispose()
+        }
+    }
+
+    return [pscustomobject]@{
+        ExitCode = $exitCode
+        ProcessId = $processId
+        Started = $started
+        StartFailureMessage = $startFailureMessage
+        MonitoringFailureMessage = $monitoringFailureMessage
+        CleanupConfirmed = $cleanupConfirmed
+        DrainConfirmed = $drainConfirmed
+    }
+}
+
 function Invoke-MtpBuild {
     param(
         [Parameter(Mandatory = $true)][string]$RepositoryRoot,
         [Parameter(Mandatory = $true)][object[]]$Projects,
         [Parameter(Mandatory = $true)][string]$Configuration,
-        [Parameter(Mandatory = $true)][string]$DotnetPath
+        [Parameter(Mandatory = $true)][string]$DotnetPath,
+        [Parameter(Mandatory = $true)][string]$RunDirectory,
+        [string]$StartupHookPath,
+        [switch]$RequireManagedClosure
     )
 
     foreach ($project in $Projects) {
         $buildTarget = [System.IO.Path]::GetFullPath((Join-Path $RepositoryRoot ([string]$project.project)))
-        $appHost = Resolve-MtpAppHostPath -RepositoryRoot $RepositoryRoot -Invocation $project -Configuration $Configuration
-        $outputDirectory = Split-Path -Parent $appHost
+        $projectName = Get-MtpProjectName -Invocation $project
+        $publishedDirectory = Get-MtpClosureDirectory -RunDirectory $RunDirectory -Invocation $project
+        $closureParent = Split-Path -Parent $publishedDirectory
+        [void](New-Item -ItemType Directory -Force -Path $closureParent)
+        $outputDirectory = Join-Path $closureParent ".b-$([Guid]::NewGuid().ToString('N').Substring(0, 8))"
+        $buildLogNameBudget = [Math]::Max(32, [Math]::Min(200, 240 - $RunDirectory.Length - 1))
+        $buildLogName = Get-MtpBoundedFileName -Stem "build-$projectName" -Suffix '.log' -MaximumLength $buildLogNameBudget
+        $buildLogPath = Join-Path $RunDirectory $buildLogName
+        $captureLogName = Get-MtpBoundedFileName -Stem "build-$projectName-capture" -Suffix '.log' -MaximumLength $buildLogNameBudget
+        $captureLogPath = Join-Path $RunDirectory $captureLogName
         Write-Host "Building test target: $buildTarget ($Configuration) -> $outputDirectory"
-        $previousErrorActionPreference = $ErrorActionPreference
+        Write-Host "Build output log: $buildLogPath"
+        Write-Host "Build capture log: $captureLogPath"
+        $arguments = [string[]]@(
+            $DotnetPath,
+            'build',
+            $buildTarget,
+            '--configuration',
+            $Configuration,
+            '--output',
+            $outputDirectory,
+            '--nologo',
+            '--verbosity',
+            'minimal',
+            '-clp:ErrorsOnly;Summary',
+            '-fl',
+            "-flp:LogFile=$buildLogPath;Verbosity=Normal",
+            '-nodeReuse:false'
+        )
         try {
-            # Windows PowerShell promotes native stderr redirected through 2>&1 to an
-            # ErrorRecord. Build warnings still need to stream, but they must not turn a
-            # successful dotnet exit code into a synthetic BUILD FAILURE.
-            $ErrorActionPreference = 'Continue'
-            & $DotnetPath build $buildTarget --configuration $Configuration --output $outputDirectory --nologo --verbosity minimal 2>&1 |
-                ForEach-Object { Write-Host $_ }
-            $buildExit = $LASTEXITCODE
-        }
-        catch {
-            Write-Host "BUILD FAILURE - could not start '$DotnetPath build': $($_.Exception.Message)"
-            return $false
+            $build = Invoke-MtpBuildProcess -Executable $DotnetPath -Arguments $arguments -OutputLog $captureLogPath -WorkingDirectory $RepositoryRoot -StartupHookPath $StartupHookPath
+            if (-not $build.Started -or -not [string]::IsNullOrWhiteSpace([string]$build.StartFailureMessage)) {
+                Write-Host "BUILD FAILURE - could not start '$DotnetPath build': $($build.StartFailureMessage)"
+                return $false
+            }
+            if (-not [string]::IsNullOrWhiteSpace([string]$build.MonitoringFailureMessage)) {
+                Write-Host "BUILD MONITOR FAILURE - PID $($build.ProcessId) ('$DotnetPath build'): $($build.MonitoringFailureMessage)"
+                return $false
+            }
+            if (-not $build.CleanupConfirmed) {
+                Write-Host "BUILD CLEANUP FAILURE - exact owned process lifetime rooted at PID $($build.ProcessId) ('$DotnetPath build') was not fully terminated."
+                return $false
+            }
+            if (-not $build.DrainConfirmed) {
+                Write-Host "BUILD OUTPUT DRAIN INCOMPLETE - continuing with exit code $($build.ExitCode). Captured stderr/stdout: $captureLogPath"
+            }
+            if ($build.ExitCode -ne 0) {
+                Write-Host "BUILD FAILURE - '$DotnetPath build' exited $($build.ExitCode). The managed MTP runner was not launched."
+                return $false
+            }
+
+            if ($RequireManagedClosure) {
+                try {
+                    Complete-MtpClosurePublication -StagingDirectory $outputDirectory -PublishedDirectory $publishedDirectory -ManagedAssemblyLeaf "$projectName.dll" -ProjectName $projectName
+                    $outputDirectory = $null
+                }
+                catch {
+                    Write-Host "BUILD CLOSURE FAILURE - '$projectName' output was not published or executed: $($_.Exception.Message)"
+                    return $false
+                }
+            }
         }
         finally {
-            $ErrorActionPreference = $previousErrorActionPreference
-        }
-        if ($buildExit -ne 0) {
-            Write-Host "BUILD FAILURE - '$DotnetPath build' exited $buildExit. The managed MTP runner was not launched."
-            return $false
+            if ($null -ne $outputDirectory -and (Test-Path -LiteralPath $outputDirectory)) {
+                Remove-Item -LiteralPath $outputDirectory -Recurse -Force -ErrorAction SilentlyContinue
+            }
         }
     }
     Write-Host 'Build succeeded.'
@@ -755,7 +1370,7 @@ function ConvertTo-MtpCommandLineArgument {
     }
     $charactersRequiringQuotes = @(' ', "`t", "`n", "`r", '"')
     if ($QuoteCmdMetaCharacters) {
-        $charactersRequiringQuotes += @('&', '|', '<', '>', '(', ')', '^')
+        $charactersRequiringQuotes += @('&', '|', '<', '>', '(', ')', '^', ';')
     }
     $requiresQuotes = $Value.Length -eq 0 -or $Value.IndexOfAny([char[]]$charactersRequiringQuotes) -ge 0
     if (-not $requiresQuotes) {
@@ -799,7 +1414,8 @@ function ConvertTo-MtpCommandLineArgument {
 function New-MtpProcessStartInfo {
     param(
         [Parameter(Mandatory = $true)][string]$Executable,
-        [Parameter(Mandatory = $true)][string[]]$Arguments
+        [Parameter(Mandatory = $true)][string[]]$Arguments,
+        [string]$StartupHookPath
     )
 
     $startInfo = [System.Diagnostics.ProcessStartInfo]::new()
@@ -837,6 +1453,20 @@ function New-MtpProcessStartInfo {
         }) -join ' ')
         $startInfo.FileName = $Executable
         $startInfo.Arguments = $argumentLine
+    }
+    if (-not [string]::IsNullOrWhiteSpace($StartupHookPath)) {
+        $existingHooks = if ($startInfo.EnvironmentVariables.ContainsKey('DOTNET_STARTUP_HOOKS')) {
+            [string]$startInfo.EnvironmentVariables['DOTNET_STARTUP_HOOKS']
+        }
+        else {
+            $null
+        }
+        $startInfo.EnvironmentVariables['DOTNET_STARTUP_HOOKS'] = if ([string]::IsNullOrWhiteSpace($existingHooks)) {
+            $StartupHookPath
+        }
+        else {
+            $existingHooks + [System.IO.Path]::PathSeparator + $StartupHookPath
+        }
     }
     return $startInfo
 }
@@ -886,7 +1516,7 @@ function Stop-MtpOwnedProcessTree {
             $taskkill = [System.Diagnostics.Process]::new()
             $taskkill.StartInfo = $taskkillInfo
             try {
-                if (-not $taskkill.Start()) {
+            if (-not [McgMtpSuppressedProcessStart]::Start($taskkill)) {
                     Write-Host "CLEANUP FAILURE - taskkill did not start for owned PID $($Process.Id)."
                     return $false
                 }
@@ -929,6 +1559,7 @@ function Invoke-MtpAppHost {
         [Parameter(Mandatory = $true)][string]$Executable,
         [Parameter(Mandatory = $true)][string[]]$Arguments,
         [Parameter(Mandatory = $true)][string]$OutputLog,
+        [string]$StartupHookPath,
         [switch]$AllowBreakaway,
         [ValidateRange(1, 86400)][int]$TestHostTimeoutSeconds = 780
     )
@@ -954,9 +1585,9 @@ function Invoke-MtpAppHost {
             $ownedJob = [McgMtpOwnedJob]::new($AllowBreakaway.IsPresent)
         }
         $process = [System.Diagnostics.Process]::new()
-        $process.StartInfo = New-MtpProcessStartInfo -Executable $Executable -Arguments $Arguments
+        $process.StartInfo = New-MtpProcessStartInfo -Executable $Executable -Arguments $Arguments -StartupHookPath $StartupHookPath
         $capture.Attach($process)
-        if (-not $process.Start()) {
+        if (-not [McgMtpSuppressedProcessStart]::Start($process)) {
             throw "Process.Start returned false for '$Executable'."
         }
         $processStarted = $true
@@ -1162,12 +1793,37 @@ function Invoke-MtpTestRun {
     $allExitsConfirmed = $true
     $environmentSnapshot = Get-MtpEnvironmentSnapshot
     try {
+        $startupHookPath = Resolve-MtpFaultDialogStartupHook
+    }
+    catch {
+        Write-Host "STARTUP HOOK FAILURE - managed build/test processes were not launched: $($_.Exception.Message)"
+        Write-Host "Retained diagnostic directory: $runDirectory"
+        return New-MtpTerminalResult -Outcome failed -ExitCode $script:ExitCodes.StartupHook -ResultsDirectory $runDirectory -ArtifactsRetained $true
+    }
+    try {
         Set-MtpHermeticEnvironment -RepositoryRoot $RepositoryRoot -WritableRoot $runDirectory
         Write-Host "Results directory: $runDirectory"
+        $usesManagedAssembly = [string]::IsNullOrWhiteSpace($RunnerPath)
         if (-not $NoBuild) {
-            if (-not (Invoke-MtpBuild -RepositoryRoot $RepositoryRoot -Projects $projects -Configuration $Configuration -DotnetPath $DotnetPath)) {
+            if (-not (Invoke-MtpBuild -RepositoryRoot $RepositoryRoot -Projects $projects -Configuration $Configuration -DotnetPath $DotnetPath -RunDirectory $runDirectory -StartupHookPath $startupHookPath -RequireManagedClosure:$usesManagedAssembly)) {
                 Write-Host "Retained diagnostic directory: $runDirectory"
                 return New-MtpTerminalResult -Outcome failed -ExitCode $script:ExitCodes.Build -ResultsDirectory $runDirectory -ArtifactsRetained $true
+            }
+        }
+        elseif ($usesManagedAssembly) {
+            foreach ($project in $projects) {
+                $projectName = Get-MtpProjectName -Invocation $project
+                $sourceAssembly = Resolve-MtpManagedAssemblyPath -RepositoryRoot $RepositoryRoot -Invocation $project -Configuration $Configuration
+                $sourceDirectory = Split-Path -Parent $sourceAssembly
+                $publishedDirectory = Get-MtpClosureDirectory -RunDirectory $runDirectory -Invocation $project
+                try {
+                    Copy-MtpStableNoBuildClosure -SourceDirectory $sourceDirectory -PublishedDirectory $publishedDirectory -ManagedAssemblyLeaf "$projectName.dll" -ProjectName $projectName
+                }
+                catch {
+                    Write-Host "NO-BUILD CLOSURE FAILURE - '$projectName' shared output was not copied or executed: $($_.Exception.Message)"
+                    Write-Host "Retained diagnostic directory: $runDirectory"
+                    return New-MtpTerminalResult -Outcome failed -ExitCode $script:ExitCodes.MissingRunnerArtifact -ResultsDirectory $runDirectory -ArtifactsRetained $true
+                }
             }
         }
 
@@ -1177,24 +1833,31 @@ function Invoke-MtpTestRun {
         }
         $invocationIndex = 0
         foreach ($project in $projects) {
-            $expectedAppHost = Resolve-MtpAppHostPath -RepositoryRoot $RepositoryRoot -Invocation $project -Configuration $Configuration
-            $managedAssembly = Resolve-MtpManagedAssemblyPath -RepositoryRoot $RepositoryRoot -Invocation $project -Configuration $Configuration
-            $usesManagedAssembly = [string]::IsNullOrWhiteSpace($RunnerPath)
+            $projectName = Get-MtpProjectName -Invocation $project
+            $managedAssembly = Get-MtpClosureManagedAssemblyPath -RunDirectory $runDirectory -Invocation $project
             $executable = if ($usesManagedAssembly) { $DotnetPath } else { [System.IO.Path]::GetFullPath($RunnerPath) }
             $requiredExecutable = if ($usesManagedAssembly) { $managedAssembly } else { $executable }
             if (-not (Test-Path -LiteralPath $requiredExecutable -PathType Leaf)) {
                 $projectPath = Join-Path $RepositoryRoot ([string]$project.project)
-                $outputDirectory = Split-Path -Parent $expectedAppHost
                 $missingArtifact = if ($usesManagedAssembly) { 'MANAGED ASSEMBLY' } else { 'RUNNER' }
-                Write-Host "MISSING $missingArtifact - expected '$requiredExecutable'. Build it with: $DotnetPath build `"$projectPath`" --configuration $Configuration --output `"$outputDirectory`""
+                Write-Host "MISSING $missingArtifact - expected sealed run-local artifact '$requiredExecutable'. Build it with the managed MTP runner: $DotnetPath build `"$projectPath`" --configuration $Configuration"
                 Write-Host "Retained diagnostic directory: $runDirectory"
                 return New-MtpTerminalResult -Outcome failed -ExitCode $script:ExitCodes.MissingRunnerArtifact -ResultsDirectory $runDirectory -ArtifactsRetained $true
+            }
+            if ($usesManagedAssembly) {
+                try {
+                    Assert-MtpSealedClosure -Path (Split-Path -Parent $managedAssembly) -ManagedAssemblyLeaf "$projectName.dll" -ExpectedProject $projectName
+                }
+                catch {
+                    Write-Host "RUNNER CLOSURE FAILURE - '$projectName' closure was not executed: $($_.Exception.Message)"
+                    Write-Host "Retained diagnostic directory: $runDirectory"
+                    return New-MtpTerminalResult -Outcome failed -ExitCode $script:ExitCodes.MissingRunnerArtifact -ResultsDirectory $runDirectory -ArtifactsRetained $true
+                }
             }
 
             foreach ($filter in $filterList) {
                 for ($attempt = 1; $attempt -le $Repeat; $attempt++) {
                 $invocationIndex++
-                $projectName = [System.IO.Path]::GetFileNameWithoutExtension([string]$project.project)
                 $stem = "$RunLabel-$projectName-$invocationIndex-r$attempt-$filter"
                 $fileNameBudget = [Math]::Min(200, 240 - $runDirectory.Length - 1)
                 $trxFileName = Get-MtpBoundedFileName -Stem $stem -MaximumLength $fileNameBudget
@@ -1220,7 +1883,7 @@ function Invoke-MtpTestRun {
                 if ($usesManagedAssembly) {
                     $arguments = @($executable) + @($arguments)
                 }
-                $run = Invoke-MtpAppHost -Executable $executable -Arguments $arguments -OutputLog $outputLog -AllowBreakaway:$AllowBreakaway -TestHostTimeoutSeconds $TestHostTimeoutSeconds
+                $run = Invoke-MtpAppHost -Executable $executable -Arguments $arguments -OutputLog $outputLog -StartupHookPath $startupHookPath -AllowBreakaway:$AllowBreakaway -TestHostTimeoutSeconds $TestHostTimeoutSeconds
                 $lastOwnedProcessId = $run.OwnedProcessId
                 $lastRunnerExitCode = $run.ExitCode
                 $allExitsConfirmed = $allExitsConfirmed -and [bool]$run.ExitConfirmed

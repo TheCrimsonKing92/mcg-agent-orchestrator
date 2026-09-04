@@ -272,6 +272,99 @@ public sealed class ConductorDriverTestsContractRepairBounds
         Assert.IsType<ConductorAdvanceOutcome.Executed>(result.Outcome);
     }
 
+    [Xunit.Fact(DisplayName = "Omitted open Reviewer IDs consume mechanical repair without reopening Developer")]
+    public void OmittedOpenReviewerIdsMechanicallyRetryReviewerWithoutDeveloperReopen()
+    {
+        var (kernel, goal) = SoftwareGoal();
+        var developer = goal.Tasks.Single(task => task.RequiredRole == AgentRole.Developer);
+        var tester = goal.Tasks.Single(task => task.RequiredRole == AgentRole.Tester);
+        var reviewer = goal.Tasks.Single(task => task.RequiredRole == AgentRole.Reviewer);
+        PassVerification(kernel, goal, developer);
+        PassVerification(kernel, goal, tester);
+        var open = new ReviewFinding(
+            "F-OMITTED",
+            ReviewFindingState.Open,
+            new ReviewFindingLocation("src/A.cs", "A.Run", "guard"),
+            "Guard remains advisory.",
+            FindingSeverity.Advisory);
+        DispatchTask(kernel, goal, reviewer, "review-open");
+        kernel.RecordDispatchExecutionResult(goal.Id, reviewer.Id, new TaskVerificationRecord(
+            "review-open",
+            "C:\\tmp",
+            0,
+            ReviewerPassWithFinding(open),
+            string.Empty,
+            DateTimeOffset.UtcNow,
+            WorkerResultPresent: true));
+        Assert.Contains(
+            reviewer.LastVerification!.MergedReviewFindings!,
+            finding => finding.StableId == open.StableId && finding.State == ReviewFindingState.Open);
+
+        kernel.RetryTask(goal.Id, reviewer.Id, "confirm advisory resolution");
+        Assert.Contains(
+            reviewer.VerificationHistory,
+            verification => verification.MergedReviewFindings?.Any(
+                finding => finding.StableId == open.StableId && finding.State == ReviewFindingState.Open) == true);
+        DispatchTask(kernel, goal, reviewer, "review-omitted");
+        var omittedPass = string.Join(
+            Environment.NewLine,
+            "WORKER_RESULT:",
+            "files: none",
+            "commands: review",
+            "tests: pass - inspected evidence",
+            "blockers: none",
+            "findings: []",
+            "touched_anchors: []",
+            "verdict: pass",
+            "END_WORKER_RESULT");
+        kernel.RecordDispatchExecutionResult(goal.Id, reviewer.Id, new TaskVerificationRecord(
+            "review-omitted",
+            "C:\\tmp",
+            0,
+            omittedPass,
+            string.Empty,
+            DateTimeOffset.UtcNow,
+            StandardOutputPath: "C:\\tmp\\reviewer.out.log",
+            WorkerResultPresent: true));
+
+        Assert.True(WorkerResultBlockers.TryFindReviewFindingRound(reviewer.LastVerification, out _, out var parseDiagnostic), parseDiagnostic);
+        Assert.True(WorkerResultBlockers.TryFindPassVerdict(reviewer.LastVerification));
+        Assert.Contains(
+            reviewer.LastVerification!.MergedReviewFindings!,
+            finding => finding.StableId == open.StableId && finding.State == ReviewFindingState.Open);
+        Assert.Equal(WorkTaskStatus.Failed, reviewer.Status);
+        Assert.Equal(
+            ReviewFindingConvergence.OmittedOpenFindingViolationCode,
+            reviewer.LastVerification!.ReviewFindingContractViolation?.Code);
+        TaskId? retriedTaskId = null;
+        RetryRoundKind? retryRoundKind = null;
+        string? retryMessage = null;
+        string? escalation = null;
+        var driver = MakeDriver(
+            getFacts: _ => GoalLifecycleFacts.None,
+            retryTaskWithRoundKind: (goalId, taskId, message, roundKind) =>
+            {
+                retriedTaskId = taskId;
+                retryRoundKind = roundKind;
+                retryMessage = message;
+                return kernel.RetryTask(goalId, taskId, message, retryRoundKind: roundKind);
+            },
+            writeEscalation: (_, _, message) => escalation = message);
+
+        var result = driver.AdvanceOnce(goal, ConductorAutonomyPolicy.Permissive);
+
+        Assert.Equal(reviewer.Id, retriedTaskId);
+        Assert.Equal(RetryRoundKind.Mechanical, retryRoundKind);
+        Assert.Equal(WorkTaskStatus.Completed, developer.Status);
+        Assert.Equal(WorkTaskStatus.Completed, tester.Status);
+        Assert.Equal(WorkTaskStatus.Assigned, reviewer.Status);
+        Assert.Contains(ReviewFindingConvergence.OmittedOpenFindingViolationCode, retryMessage, StringComparison.Ordinal);
+        Assert.Contains("avoided_developer_reopen=1", retryMessage, StringComparison.Ordinal);
+        Assert.Contains("stable_id: F-OMITTED", retryMessage, StringComparison.Ordinal);
+        Assert.Null(escalation);
+        Assert.IsType<ConductorAdvanceOutcome.Executed>(result.Outcome);
+    }
+
     [Xunit.Fact(DisplayName = "ConductorDriver_tester_contract_violation_mechanically_retries_the_same_tester")]
     public void ConductorDriverTesterContractViolationMechanicallyRetriesSameTester()
     {

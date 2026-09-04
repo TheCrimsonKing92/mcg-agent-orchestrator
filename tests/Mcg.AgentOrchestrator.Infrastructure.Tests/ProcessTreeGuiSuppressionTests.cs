@@ -44,6 +44,7 @@ public sealed class ProcessTreeGuiSuppressionTests
                 dir,
                 redirectStandardInput: false);
             startInfo.CreateNoWindow = true;
+            startInfo.Environment.Remove("DOTNET_STARTUP_HOOKS");
             startInfo.Environment["MCG_PROBE_OUTPUT"] = probePath;
 
             Process process;
@@ -152,6 +153,7 @@ public sealed class ProcessTreeGuiSuppressionTests
             var originalErrorMode = WindowsProbe.GetErrorMode();
             var parentAlreadyHasVisibleConsole = WindowsProbe.CurrentConsoleIsVisible();
             var startInfo = WorkerProcessRunner.BuildPowerShellStartInfo(rootCommand, dir, redirectStandardInput: false);
+            startInfo.Environment.Remove("DOTNET_STARTUP_HOOKS");
             startInfo.Environment["MCG_PROBE_SHELL"] = WorkerShell.Executable;
             startInfo.Environment["MCG_PROBE_SCRIPT"] = childScript;
             startInfo.Environment["MCG_PROBE_OUTPUT"] = probePath;
@@ -179,6 +181,165 @@ public sealed class ProcessTreeGuiSuppressionTests
         }
         finally
         {
+            try { Directory.Delete(dir, recursive: true); } catch { }
+        }
+    }
+
+    [Fact(DisplayName = "MTP build and runner spawns inherit fault-dialog suppression and restore parent mode")]
+    public void MtpSpawnsInheritFaultDialogSuppressionAndRestoreParentMode()
+    {
+        if (!OperatingSystem.IsWindows())
+        {
+            return;
+        }
+
+        var originalErrorMode = WindowsProbe.GetErrorMode();
+        var clearedErrorMode = originalErrorMode & ~ProcessTreeGuiSuppression.SuppressedErrorModeFlags;
+        var dir = Path.Combine(Path.GetTempPath(), "mcg-mtp-error-mode-tests", Guid.NewGuid().ToString("n"));
+        Directory.CreateDirectory(dir);
+        try
+        {
+            var modulePath = Path.Combine(FindRepoRoot(), "scripts", "MtpTestRunner.psm1");
+            var childScript = Path.Combine(dir, "read-error-mode.ps1");
+            var outerScript = Path.Combine(dir, "exercise-mtp-spawns.ps1");
+            var buildModePath = Path.Combine(dir, "build-mode.txt");
+            var runnerModePath = Path.Combine(dir, "runner-mode.txt");
+            var buildLog = Path.Combine(dir, "build.log");
+            var runnerLog = Path.Combine(dir, "runner.log");
+
+            File.WriteAllText(
+                childScript,
+                """
+                Add-Type -TypeDefinition @"
+                using System;
+                using System.Runtime.InteropServices;
+                public static class McgMtpChildErrorModeProbe
+                {
+                    [DllImport("kernel32.dll")]
+                    public static extern uint GetErrorMode();
+                    [DllImport("kernel32.dll")]
+                    public static extern int WerGetFlags(IntPtr process, out uint flags);
+                }
+                "@
+                $werFlags = [uint32]0
+                $werResult = [McgMtpChildErrorModeProbe]::WerGetFlags([System.Diagnostics.Process]::GetCurrentProcess().Handle, [ref]$werFlags)
+                [ordered]@{
+                    errorMode = [McgMtpChildErrorModeProbe]::GetErrorMode()
+                    werFlags = $werFlags
+                    werResult = $werResult
+                } | ConvertTo-Json -Compress | Set-Content -LiteralPath $env:MCG_PROBE_OUTPUT -Encoding Ascii
+                """);
+            File.WriteAllText(
+                outerScript,
+                """
+                $ErrorActionPreference = 'Stop'
+                Add-Type -TypeDefinition @"
+                using System.Runtime.InteropServices;
+                public static class McgMtpOuterErrorModeProbe
+                {
+                    [DllImport("kernel32.dll")]
+                    public static extern uint GetErrorMode();
+                }
+                "@
+                $before = [McgMtpOuterErrorModeProbe]::GetErrorMode()
+                Import-Module $env:MCG_PROBE_MODULE -Force
+                $module = Get-Module MtpTestRunner
+                $startupHook = & $module { Resolve-MtpFaultDialogStartupHook }
+
+                $env:MCG_PROBE_OUTPUT = $env:MCG_PROBE_BUILD_OUTPUT
+                $build = & $module {
+                    param($hook)
+                    $arguments = [string[]]@($env:MCG_PROBE_SHELL, '-NoProfile', '-NonInteractive', '-File', $env:MCG_PROBE_SCRIPT)
+                    Invoke-MtpBuildProcess -Executable $env:MCG_PROBE_SHELL -Arguments $arguments -OutputLog $env:MCG_PROBE_BUILD_LOG -WorkingDirectory $env:MCG_PROBE_WORKING -StartupHookPath $hook
+                } $startupHook
+                $afterBuild = [McgMtpOuterErrorModeProbe]::GetErrorMode()
+
+                $env:MCG_PROBE_OUTPUT = $env:MCG_PROBE_RUNNER_OUTPUT
+                $runner = & $module {
+                    param($hook)
+                    $arguments = [string[]]@($env:MCG_PROBE_SHELL, '-NoProfile', '-NonInteractive', '-ExecutionPolicy', 'Bypass', '-File', $env:MCG_PROBE_SCRIPT)
+                    Invoke-MtpAppHost -Executable $env:MCG_PROBE_SHELL -Arguments $arguments -OutputLog $env:MCG_PROBE_RUNNER_LOG -StartupHookPath $hook -AllowBreakaway -TestHostTimeoutSeconds 30
+                } $startupHook
+                $afterRunner = [McgMtpOuterErrorModeProbe]::GetErrorMode()
+
+                $missing = & $module {
+                    param($hook)
+                    $arguments = [string[]]@($env:MCG_PROBE_MISSING)
+                    Invoke-MtpBuildProcess -Executable $env:MCG_PROBE_MISSING -Arguments $arguments -OutputLog $env:MCG_PROBE_FAILURE_LOG -WorkingDirectory $env:MCG_PROBE_WORKING -StartupHookPath $hook
+                } $startupHook
+                $afterFailure = [McgMtpOuterErrorModeProbe]::GetErrorMode()
+
+                [ordered]@{
+                    before = $before
+                    afterBuild = $afterBuild
+                    afterRunner = $afterRunner
+                    afterFailure = $afterFailure
+                    buildStarted = $build.Started
+                    runnerExit = $runner.ExitCode
+                    missingStarted = $missing.Started
+                } | ConvertTo-Json -Compress
+                """);
+
+            var startInfo = WorkerProcessRunner.BuildPowerShellStartInfo(
+                $"& '{outerScript.Replace("'", "''", StringComparison.Ordinal)}'",
+                dir,
+                redirectStandardInput: false);
+            startInfo.CreateNoWindow = true;
+            startInfo.Environment.Remove("DOTNET_STARTUP_HOOKS");
+            startInfo.Environment["MCG_PROBE_MODULE"] = modulePath;
+            startInfo.Environment["MCG_PROBE_SHELL"] = WorkerShell.Executable;
+            startInfo.Environment["MCG_PROBE_SCRIPT"] = childScript;
+            startInfo.Environment["MCG_PROBE_BUILD_OUTPUT"] = buildModePath;
+            startInfo.Environment["MCG_PROBE_RUNNER_OUTPUT"] = runnerModePath;
+            startInfo.Environment["MCG_PROBE_BUILD_LOG"] = buildLog;
+            startInfo.Environment["MCG_PROBE_RUNNER_LOG"] = runnerLog;
+            startInfo.Environment["MCG_PROBE_FAILURE_LOG"] = Path.Combine(dir, "failure.log");
+            startInfo.Environment["MCG_PROBE_WORKING"] = dir;
+            startInfo.Environment["MCG_PROBE_MISSING"] = Path.Combine(dir, "missing-process.exe");
+
+            _ = WindowsProbe.SetErrorMode(clearedErrorMode);
+            using var process = Process.Start(startInfo)
+                ?? throw new InvalidOperationException("Failed to start standalone MTP error-mode probe.");
+            var stdoutRead = process.StandardOutput.ReadToEndAsync();
+            var stderrRead = process.StandardError.ReadToEndAsync();
+            Assert.True(process.WaitForExit(30_000), "Timed out waiting for standalone MTP error-mode probe.");
+            var stdout = stdoutRead.GetAwaiter().GetResult();
+            var stderr = stderrRead.GetAwaiter().GetResult();
+            Assert.Equal(0, process.ExitCode);
+            Assert.True(File.Exists(buildModePath), $"Build child did not report error mode. stdout={stdout} stderr={stderr}");
+            Assert.True(File.Exists(runnerModePath), $"Runner child did not report error mode. stdout={stdout} stderr={stderr}");
+
+            using var document = JsonDocument.Parse(stdout.Trim());
+            var result = document.RootElement;
+            Assert.Equal(clearedErrorMode, result.GetProperty("before").GetUInt32());
+            Assert.Equal(clearedErrorMode, result.GetProperty("afterBuild").GetUInt32());
+            Assert.Equal(clearedErrorMode, result.GetProperty("afterRunner").GetUInt32());
+            Assert.Equal(clearedErrorMode, result.GetProperty("afterFailure").GetUInt32());
+            Assert.True(result.GetProperty("buildStarted").GetBoolean());
+            Assert.Equal(0, result.GetProperty("runnerExit").GetInt32());
+            Assert.False(result.GetProperty("missingStarted").GetBoolean());
+
+            foreach (var probePath in new[] { buildModePath, runnerModePath })
+            {
+                using var childDocument = JsonDocument.Parse(File.ReadAllText(probePath));
+                var child = childDocument.RootElement;
+                var childMode = child.GetProperty("errorMode").GetUInt32();
+                const uint retainedErrorModeFlags = 0x8001;
+                const uint noGpFaultErrorBox = 0x0002;
+                const uint werFaultReportingNoUi = 0x0020;
+                Assert.Equal(
+                    retainedErrorModeFlags,
+                    childMode & retainedErrorModeFlags);
+                Assert.Equal(0u, childMode & noGpFaultErrorBox);
+                Assert.Equal(0, child.GetProperty("werResult").GetInt32());
+                Assert.Equal(
+                    werFaultReportingNoUi,
+                    child.GetProperty("werFlags").GetUInt32() & werFaultReportingNoUi);
+            }
+        }
+        finally
+        {
+            _ = WindowsProbe.SetErrorMode(originalErrorMode);
             try { Directory.Delete(dir, recursive: true); } catch { }
         }
     }

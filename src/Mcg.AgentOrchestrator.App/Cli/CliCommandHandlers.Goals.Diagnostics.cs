@@ -27,7 +27,7 @@ private static void PrintBoundedGoalDiagnostics(CliExecutionContext context)
     var verificationSatisfied = goal.Tasks.Count > 0 && goal.Tasks.All(task => task.LastVerification?.Succeeded == true);
     var dispatchSurface = new DispatchStateSurface(inspectWorktree: false);
     var dispositionSurface = new GoalOperatorDispositionSurface(dispatchSurface: dispatchSurface);
-    var processSnapshot = ProcessCommandLines.Snapshot();
+    var processSnapshot = ProcessCommandLines.SnapshotOperation();
     var disposition = dispositionSurface.Evaluate(
         goal,
         pendingHumanInputCount: context.Kernel.BuildHumanInputWorklist(goal.Id).OpenCount,

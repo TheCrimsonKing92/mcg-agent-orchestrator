@@ -899,10 +899,18 @@ public sealed class WorkerProcessJobsTests : IDisposable
         {
             wrapper = StartLongRunningShell();
 
-            Assert.True(WorkerProcessJobs.TryRegister(
+            // A bare Assert.True discarded the registration diagnostic when this failed the gate on
+            // 2026-09-04 (first failure on record). Carry the reason so the next one names its stage.
+            Func<Process, SpawnProcessIdentity?> forbiddenReader =
+                _ => throw new InvalidOperationException("Identity reader must not run without a registry.");
+            var registered = WorkerProcessJobs.TryRegister(
                 wrapper,
                 "in-memory-only",
-                _ => throw new InvalidOperationException("Identity reader must not run without a registry.")));
+                forbiddenReader,
+                forbiddenReader,
+                _ => { },
+                out var registrationDiagnostic);
+            Assert.True(registered, $"TryRegister failed: {registrationDiagnostic}");
             Assert.True(WorkerProcessJobs.HasRegisteredJob(wrapper.Id));
 
             WorkerProcessJobs.Release(wrapper.Id);

@@ -1678,7 +1678,7 @@ internal sealed class OwnedProcessAttachmentException : Win32Exception
 internal sealed class OwnedProcessLaunchException : Win32Exception
 {
     public OwnedProcessLaunchException(int nativeErrorCode, string operationMessage, string jobEvidence)
-        : base(nativeErrorCode, operationMessage)
+        : base(nativeErrorCode, ComposeMessage(nativeErrorCode, operationMessage, jobEvidence))
     {
         OperationMessage = operationMessage;
         JobEvidence = jobEvidence;
@@ -1686,4 +1686,17 @@ internal sealed class OwnedProcessLaunchException : Win32Exception
 
     public string OperationMessage { get; }
     public string JobEvidence { get; }
+
+    // The native error code and job evidence are captured at the throw site but only Message is
+    // serialised into a TRX, so without this a launch failure is unattributable from its artifact.
+    private static string ComposeMessage(int nativeErrorCode, string operationMessage, string jobEvidence)
+    {
+        var evidence = string.IsNullOrWhiteSpace(jobEvidence) ? "none" : jobEvidence.Trim();
+        if (evidence.Length > 400)
+        {
+            evidence = evidence[..400];
+        }
+
+        return $"{operationMessage} nativeErrorCode={nativeErrorCode} (0x{nativeErrorCode:X8}); jobEvidence={evidence}";
+    }
 }

@@ -265,6 +265,38 @@ public sealed class ReconcileSweepRemediationTests
     }
 
     [Xunit.Fact]
+    public void HeldAcceptanceLeaseRenewsBeyondItsOriginalStaleWindow()
+    {
+        var staleAfter = TimeSpan.FromMinutes(30);
+        var clock = new ImmediateLeaseRenewalTimeProvider(
+            new DateTimeOffset(2026, 9, 3, 12, 0, 0, TimeSpan.Zero));
+        var store = new ReconcileSweepRemediationStore(
+            NewDatabasePath(),
+            busyTimeoutSeconds: 5,
+            busyRetryDelay: null,
+            writeTelemetryOptions: null,
+            timeProvider: clock);
+
+        using var held = store.TryAcquireAcceptanceLease("goal-renew", "owner-1", staleAfter);
+        var renewed = store.TryGetAcceptanceLease("goal-renew", staleAfter);
+        clock.Advance(TimeSpan.FromMinutes(23));
+        var overlapping = store.TryAcquireAcceptanceLease("goal-renew", "owner-2", staleAfter);
+
+        Xunit.Assert.NotNull(held);
+        Xunit.Assert.Equal(TimeSpan.FromMinutes(7.5), clock.DueTime);
+        Xunit.Assert.Equal(clock.DueTime, clock.Period);
+        Xunit.Assert.NotNull(renewed);
+        Xunit.Assert.Equal(
+            new DateTimeOffset(2026, 9, 3, 12, 7, 30, TimeSpan.Zero),
+            renewed.AcquiredAtUtc);
+        Xunit.Assert.Null(overlapping);
+
+        held.Dispose();
+        using var afterRelease = store.TryAcquireAcceptanceLease("goal-renew", "owner-2", staleAfter);
+        Xunit.Assert.NotNull(afterRelease);
+    }
+
+    [Xunit.Fact]
     public void StoreAndReleasedAcceptanceLeaseDoNotRetainDatabaseFileHandles()
     {
         var dbPath = NewDatabasePath();
@@ -511,4 +543,43 @@ public sealed class ReconcileSweepRemediationTests
 
     private static JsonObject ReadLastReceipt(string path) =>
         JsonNode.Parse(File.ReadLines(path).Last())!.AsObject();
+
+    private sealed class ImmediateLeaseRenewalTimeProvider(DateTimeOffset utcNow) : TimeProvider
+    {
+        private DateTimeOffset _utcNow = utcNow;
+
+        public TimeSpan DueTime { get; private set; }
+
+        public TimeSpan Period { get; private set; }
+
+        public override DateTimeOffset GetUtcNow() => _utcNow;
+
+        public void Advance(TimeSpan duration) => _utcNow += duration;
+
+        public override ITimer CreateTimer(
+            TimerCallback callback,
+            object? state,
+            TimeSpan dueTime,
+            TimeSpan period)
+        {
+            DueTime = dueTime;
+            Period = period;
+            Advance(dueTime);
+            callback(state);
+            return InertTimer.Instance;
+        }
+
+        private sealed class InertTimer : ITimer
+        {
+            public static InertTimer Instance { get; } = new();
+
+            public bool Change(TimeSpan dueTime, TimeSpan period) => true;
+
+            public void Dispose()
+            {
+            }
+
+            public ValueTask DisposeAsync() => ValueTask.CompletedTask;
+        }
+    }
 }

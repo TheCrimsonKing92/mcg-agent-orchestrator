@@ -333,7 +333,8 @@ public static SubscriptionStartResult StartSubscriptionReadyTasks(
     BackgroundDispatchRunner? runner = null,
     WorkerSandboxOptions? sandboxOptions = null,
     int? plannerSampleCount = null,
-    ConductorAutonomyPolicy? conductorPolicy = null)
+    ConductorAutonomyPolicy? conductorPolicy = null,
+    Action<GoalSnapshot>? recordDurableGoalBaseline = null)
 {
     ReconcileExitedAssignedProcessRecords(kernel, goal);
     goal = kernel.GetGoal(goal.Id);
@@ -358,7 +359,12 @@ public static SubscriptionStartResult StartSubscriptionReadyTasks(
     var admittedTaskIds = new HashSet<TaskId>();
     foreach (var prepared in batch.Dispatches)
     {
-        var admission = EnsurePreparedRetryAdmission(kernel, workspace, goal.Id, prepared.Task);
+        var admission = EnsurePreparedRetryAdmission(
+            kernel,
+            workspace,
+            goal.Id,
+            prepared.Task,
+            recordDurableGoalBaseline: recordDurableGoalBaseline);
         if (admission.AllowsProcessStart)
             admittedTaskIds.Add(prepared.Task.Id);
     }
@@ -387,7 +393,8 @@ public static SubscriptionStartResult StartSubscriptionReadyTasks(
         readCurrentInterruptedDispatchState,
         runner: runner,
         sandboxOptions: sandboxOptions,
-        admittedTaskIds: admittedTaskIds);
+        admittedTaskIds: admittedTaskIds,
+        recordDurableGoalBaseline: recordDurableGoalBaseline);
     return new SubscriptionStartResult(
         batch.Dispatches,
         processes,
@@ -878,7 +885,8 @@ public static ProcessBatchExecutionResult StartDispatches(
     int? reviewAutoRetryStopRound = null,
     BackgroundDispatchRunner? runner = null,
     WorkerSandboxOptions? sandboxOptions = null,
-    ConductorAutonomyPolicy? conductorPolicy = null)
+    ConductorAutonomyPolicy? conductorPolicy = null,
+    Action<GoalSnapshot>? recordDurableGoalBaseline = null)
 {
     return StartDispatches(
         kernel,
@@ -894,7 +902,8 @@ public static ProcessBatchExecutionResult StartDispatches(
         reviewAutoRetryStopRound,
         runner,
         sandboxOptions,
-        conductorPolicy);
+        conductorPolicy,
+        recordDurableGoalBaseline: recordDurableGoalBaseline);
 }
 
 private static ProcessBatchExecutionResult StartDispatches(
@@ -912,7 +921,8 @@ private static ProcessBatchExecutionResult StartDispatches(
     BackgroundDispatchRunner? runner = null,
     WorkerSandboxOptions? sandboxOptions = null,
     ConductorAutonomyPolicy? conductorPolicy = null,
-    IReadOnlySet<TaskId>? admittedTaskIds = null)
+    IReadOnlySet<TaskId>? admittedTaskIds = null,
+    Action<GoalSnapshot>? recordDurableGoalBaseline = null)
 {
     runner ??= new BackgroundDispatchRunner();
     var logRoot = workspace.LogDirectory;
@@ -921,9 +931,6 @@ private static ProcessBatchExecutionResult StartDispatches(
     var recoveryActions = new List<WorkerSandboxPrepRecoverableAction>();
     var startFailures = new List<DispatchProcessStartFailure>();
     var requeueSkippedCount = 0;
-    // Once any dispatch host has been created, every later checkpoint in this goal batch is on the
-    // orphan-sensitive side of the boundary, including the next task's nominal pre-start checkpoint.
-    var processMayHaveStarted = false;
     IReadOnlyList<AgentDefinition>? resolvedAgents = null;
     WorkerProfileCatalog? resolvedProfiles = null;
 
@@ -958,7 +965,8 @@ private static ProcessBatchExecutionResult StartDispatches(
                 workspace,
                 goal.Id,
                 task,
-                recoveringPreparedReservation);
+                recoveringPreparedReservation,
+                recordDurableGoalBaseline);
             goal = kernel.GetGoal(goal.Id);
             task = goal.Tasks.Single(candidate => candidate.Id == item.TaskId);
             if (!admission.AllowsProcessStart)
@@ -992,7 +1000,7 @@ private static ProcessBatchExecutionResult StartDispatches(
                         checkpointKernel,
                         checkpointGoalId,
                         checkpointTaskId,
-                        ResolveBatchCheckpointPhase(ref processMayHaveStarted, requestedPhase));
+                        requestedPhase);
                 };
         var startResult = runner.TryStartLatestDispatch(
             kernel,
@@ -1020,6 +1028,7 @@ private static ProcessBatchExecutionResult StartDispatches(
                     if (claim is null || !claim.Claimed)
                         return false;
                     kernel.ReplaceGoalWithSnapshot(claim.Snapshot);
+                    recordDurableGoalBaseline?.Invoke(claim.Snapshot);
                     return true;
                 },
             !requiresDurableStartClaim ||
@@ -1040,6 +1049,7 @@ private static ProcessBatchExecutionResult StartDispatches(
                     if (confirmation is null || !confirmation.Claimed)
                         return false;
                     kernel.ReplaceGoalWithSnapshot(confirmation.Snapshot);
+                    recordDurableGoalBaseline?.Invoke(confirmation.Snapshot);
                     return true;
                 });
         if (startResult.RecoveryAction is { } action)
@@ -1071,7 +1081,8 @@ private static RetryAdmissionResult EnsurePreparedRetryAdmission(
     OrchestratorWorkspace workspace,
     GoalId goalId,
     TaskSpec task,
-    bool reservationRecoveryConfirmed = false)
+    bool reservationRecoveryConfirmed = false,
+    Action<GoalSnapshot>? recordDurableGoalBaseline = null)
 {
     var dispatch = task.LastDispatch ??
         throw new InvalidOperationException("Retry admission requires a prepared dispatch.");
@@ -1116,6 +1127,7 @@ private static RetryAdmissionResult EnsurePreparedRetryAdmission(
     if (persisted is not null)
     {
         kernel.ReplaceGoalStateWithSnapshot(persisted.Snapshot, persisted.HumanInputRequests ?? []);
+        recordDurableGoalBaseline?.Invoke(persisted.Snapshot);
         return persisted.Admission;
     }
 
@@ -1147,16 +1159,6 @@ private static bool HasRecoverablePreparedReservation(TaskSpec task)
 
 internal static bool ShouldRefreshPreparedDispatchBeforeStart(TaskSpec task, bool refreshBeforeStart) =>
     refreshBeforeStart && !HasRecoverablePreparedReservation(task);
-
-internal static DispatchRecordCheckpointPhase ResolveBatchCheckpointPhase(
-    ref bool processMayHaveStarted,
-    DispatchRecordCheckpointPhase requestedPhase)
-{
-    processMayHaveStarted |= requestedPhase == DispatchRecordCheckpointPhase.ProcessMayHaveStarted;
-    return processMayHaveStarted
-        ? DispatchRecordCheckpointPhase.ProcessMayHaveStarted
-        : DispatchRecordCheckpointPhase.BeforeProcessStart;
-}
 
 public static ProcessBatchExecutionResult RefreshDispatches(
     AgentOrchestratorKernel kernel,
