@@ -594,13 +594,17 @@ public sealed class AssemblyTempRedirectTests
     private static TempRootCandidate Candidate(string path, bool requiresLowLabel = false) =>
         new(path, requiresLowLabel);
 
-    private static MtpProbeProcess StartMtpProbe(
+    internal static MtpProbeProcess StartMtpProbe(
         string executable,
         string testAssembly,
         string root,
         string receiptPath,
         string readyEventName,
-        string releaseEventName)
+        string releaseEventName,
+        string? gateInvocationId = null,
+        string? apparatusReceiptPath = null,
+        string? apparatusParentPath = null,
+        string? apparatusDeletionEventName = null)
     {
         var startInfo = BuildMtpProbeStartInfo(
             executable,
@@ -608,7 +612,11 @@ public sealed class AssemblyTempRedirectTests
             root,
             receiptPath,
             readyEventName,
-            releaseEventName);
+            releaseEventName,
+            gateInvocationId,
+            apparatusReceiptPath,
+            apparatusParentPath,
+            apparatusDeletionEventName);
         var process = new Process { StartInfo = startInfo };
         Assert.True(process.Start(), $"Failed to start MTP assembly '{testAssembly}' with '{executable}'.");
         process.StandardInput.Close();
@@ -625,7 +633,11 @@ public sealed class AssemblyTempRedirectTests
         string root,
         string receiptPath,
         string readyEventName,
-        string releaseEventName)
+        string releaseEventName,
+        string? gateInvocationId = null,
+        string? apparatusReceiptPath = null,
+        string? apparatusParentPath = null,
+        string? apparatusDeletionEventName = null)
     {
         Assert.True(
             IsManagedMtpProbeLaunch(executable, testAssembly),
@@ -646,6 +658,18 @@ public sealed class AssemblyTempRedirectTests
         startInfo.Environment[AssemblyTempRedirectChildSmokeTests.ReleaseEventVariable] = releaseEventName;
         startInfo.Environment[AssemblyTempRedirectChildSmokeTests.ParentProcessIdVariable] =
             Environment.ProcessId.ToString(CultureInfo.InvariantCulture);
+        if (!string.IsNullOrWhiteSpace(gateInvocationId) && !string.IsNullOrWhiteSpace(apparatusReceiptPath))
+        {
+            startInfo.Environment[TempRootApparatusLossReceiptStore.GateInvocationIdVariable] = gateInvocationId;
+            startInfo.Environment[TempRootApparatusLossReceiptStore.ReceiptPathVariable] = apparatusReceiptPath;
+        }
+        if (!string.IsNullOrWhiteSpace(apparatusParentPath) &&
+            !string.IsNullOrWhiteSpace(apparatusDeletionEventName))
+        {
+            startInfo.Environment[AssemblyTempRedirectChildSmokeTests.ApparatusParentPathVariable] = apparatusParentPath;
+            startInfo.Environment[AssemblyTempRedirectChildSmokeTests.ApparatusDeletionEventVariable] =
+                apparatusDeletionEventName;
+        }
         startInfo.ArgumentList.Add(testAssembly);
         startInfo.ArgumentList.Add("--filter-class");
         startInfo.ArgumentList.Add("*AssemblyTempRedirectChildSmokeTests*");
@@ -686,7 +710,7 @@ public sealed class AssemblyTempRedirectTests
         startInfo.Environment["TMP"] = Path.Combine(root, "inherited-temp");
     }
 
-    private static async Task<TempRootProbeReceipt> WaitForProbeReceiptAsync(
+    internal static async Task<TempRootProbeReceipt> WaitForProbeReceiptAsync(
         string label,
         MtpProbeProcess process,
         WaitHandle ready,
@@ -781,7 +805,7 @@ public sealed class AssemblyTempRedirectTests
             FormatProcessFailure(label, result));
     }
 
-    private static void DeleteDirectory(string path)
+    internal static void DeleteDirectory(string path)
     {
         try
         {
@@ -934,12 +958,21 @@ public sealed class AssemblyTempRedirectChildSmokeTests
     internal const string ReadyEventVariable = "MCG_MTP_TEMP_ROOT_READY_EVENT";
     internal const string ReleaseEventVariable = "MCG_MTP_TEMP_ROOT_RELEASE_EVENT";
     internal const string ParentProcessIdVariable = "MCG_MTP_TEMP_ROOT_PARENT_PROCESS_ID";
+    internal const string ApparatusParentPathVariable = "MCG_MTP_APPARATUS_PARENT_PATH";
+    internal const string ApparatusDeletionEventVariable = "MCG_MTP_APPARATUS_DELETION_EVENT";
 
     [Fact]
     public async Task ProcessTempRootSupportsAnExclusiveMutableFixtureRepository()
     {
         if (!OperatingSystem.IsWindows())
         {
+            return;
+        }
+
+        var apparatusParentPath = Environment.GetEnvironmentVariable(ApparatusParentPathVariable);
+        if (!string.IsNullOrWhiteSpace(apparatusParentPath))
+        {
+            await RunApparatusVictimAsync(apparatusParentPath);
             return;
         }
 
@@ -1023,6 +1056,63 @@ public sealed class AssemblyTempRedirectChildSmokeTests
         }
     }
 
+    private static async Task RunApparatusVictimAsync(string apparatusParentPath)
+    {
+        var receiptPath = Environment.GetEnvironmentVariable(ReceiptPathVariable);
+        var readyEventName = Environment.GetEnvironmentVariable(ReadyEventVariable);
+        var deletionEventName = Environment.GetEnvironmentVariable(ApparatusDeletionEventVariable);
+        Assert.False(string.IsNullOrWhiteSpace(receiptPath));
+        Assert.False(string.IsNullOrWhiteSpace(readyEventName));
+        Assert.False(string.IsNullOrWhiteSpace(deletionEventName));
+
+        var ownedRoot = TempRootJanitor.BuildOwnedRootPath(apparatusParentPath, Environment.ProcessId);
+        var repositoryPath = Path.Combine(ownedRoot, "seeded-repository");
+        var headCommit = SeedRepository(repositoryPath);
+        Directory.CreateDirectory(Path.GetDirectoryName(receiptPath)!);
+        File.WriteAllText(
+            receiptPath,
+            JsonSerializer.Serialize(new TempRootProbeReceipt(
+                Environment.ProcessId,
+                Environment.ProcessPath ?? string.Empty,
+                ownedRoot,
+                repositoryPath,
+                Environment.ProcessId.ToString(CultureInfo.InvariantCulture),
+                headCommit)));
+
+        using var ready = EventWaitHandle.OpenExisting(readyEventName);
+        using var deleted = EventWaitHandle.OpenExisting(deletionEventName);
+        ready.Set();
+        await AssemblyTempRedirectTests.WaitForSignalAsync(deleted, TestContext.Current.CancellationToken);
+
+        Assert.True(
+            Directory.Exists(repositoryPath),
+            $"Seeded repository sentinel lost: RepositoryMissing path='{repositoryPath}' head='{headCommit}'.");
+    }
+
+    private static string SeedRepository(string repositoryPath)
+    {
+        Directory.CreateDirectory(repositoryPath);
+        AssertGitSucceeded(repositoryPath, ["init", "--initial-branch=main"]);
+        File.WriteAllText(Path.Combine(repositoryPath, "seed.txt"), "seeded apparatus victim");
+        AssertGitSucceeded(repositoryPath, ["add", "seed.txt"]);
+        AssertGitSucceeded(
+            repositoryPath,
+            [
+                "-c", "user.name=apparatus-control",
+                "-c", "user.email=apparatus-control@example.invalid",
+                "commit", "-m", "seed"
+            ]);
+        var head = InfrastructureTestSupport.RunGitProbe(repositoryPath, ["rev-parse", "HEAD"]);
+        Assert.True(head.Succeeded, head.ToString());
+        return head.StandardOutput.Trim();
+    }
+
+    private static void AssertGitSucceeded(string repositoryPath, IReadOnlyList<string> arguments)
+    {
+        var result = InfrastructureTestSupport.RunGitProbe(repositoryPath, arguments);
+        Assert.True(result.Succeeded, result.ToString());
+    }
+
     private static async Task WaitForReleaseOrParentExitAsync(WaitHandle release, Process parentProcess)
     {
         using var cancellation = new CancellationTokenSource();
@@ -1048,7 +1138,8 @@ internal sealed record TempRootProbeReceipt(
     string ProcessPath,
     string TempRoot,
     string FixtureRepositoryPath,
-    string OwnerContents);
+    string OwnerContents,
+    string? HeadCommit = null);
 
 internal sealed class MtpProbeProcess(
     Process process,

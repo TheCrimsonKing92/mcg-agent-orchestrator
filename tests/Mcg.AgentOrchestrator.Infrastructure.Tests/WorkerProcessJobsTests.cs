@@ -323,6 +323,50 @@ public sealed class WorkerProcessJobsTests : IDisposable
         });
     }
 
+    [Xunit.Fact]
+    public void WorkerProcessJobs_PostMortemDeletedOwners_DoNotPersistApparatusLossReceipt()
+    {
+        var root = Path.Combine(Path.GetTempPath(), "mcg-typed-reap-receipt", Guid.NewGuid().ToString("N"));
+        var receiptPath = Path.Combine(root, "receipts.jsonl");
+        var startedAt = DateTimeOffset.Parse("2026-09-02T12:00:00Z");
+        var first = AvailableProcess(4249) with { StartedAt = startedAt };
+        var second = AvailableProcess(4250) with { StartedAt = startedAt.AddSeconds(1) };
+        var results = new[]
+        {
+            DeletedResult(root, first),
+            DeletedResult(root, second)
+        };
+
+        using (TempRootApparatusLossReceiptStore.PushScope("attempt-a", receiptPath))
+        {
+            WorkerProcessJobs.EmitTempRootReapResults(results, _ => { });
+        }
+
+        Assert.Empty(TempRootApparatusLossReceiptStore.Read(receiptPath));
+    }
+
+    [Xunit.Fact]
+    public void TempRootReceiptScope_AppliesAttemptLocalChildContract()
+    {
+        var environment = new Dictionary<string, string?>(StringComparer.OrdinalIgnoreCase)
+        {
+            [TempRootApparatusLossReceiptStore.GateInvocationIdVariable] = "ambient-attempt",
+            [TempRootApparatusLossReceiptStore.ReceiptPathVariable] = "ambient-path"
+        };
+        var receiptPath = Path.Combine(Path.GetTempPath(), "attempt-local", "receipt.jsonl");
+
+        using (TempRootApparatusLossReceiptStore.PushScope("attempt-local", receiptPath))
+        {
+            TempRootApparatusLossReceiptStore.ApplyCurrentScope(environment);
+            Assert.Equal("attempt-local", environment[TempRootApparatusLossReceiptStore.GateInvocationIdVariable]);
+            Assert.Equal(receiptPath, environment[TempRootApparatusLossReceiptStore.ReceiptPathVariable]);
+        }
+
+        TempRootApparatusLossReceiptStore.ApplyCurrentScope(environment);
+        Assert.DoesNotContain(TempRootApparatusLossReceiptStore.GateInvocationIdVariable, environment.Keys);
+        Assert.DoesNotContain(TempRootApparatusLossReceiptStore.ReceiptPathVariable, environment.Keys);
+    }
+
     private static ProcessInspectionRecord AvailableProcess(int processId) =>
         new(
             processId,
@@ -332,6 +376,27 @@ public sealed class WorkerProcessJobsTests : IDisposable
             StartedAt: DateTimeOffset.Parse("2026-08-30T12:00:00Z"),
             CommandLine: "testhost controlled-probe",
             ProcessInspectionStatus.Available);
+
+    private static TempRootJanitorReapResult DeletedResult(
+        string sharedRoot,
+        ProcessInspectionRecord owner)
+    {
+        var path = TempRootJanitor.BuildOwnedRootPath(sharedRoot, owner.ProcessId);
+        return new TempRootJanitorReapResult(
+            owner.ProcessId,
+            sharedRoot,
+            path,
+            "test-owned-deletion",
+            owner,
+            owner with { Status = ProcessInspectionStatus.Exited },
+            TempRootJanitorReapDisposition.Deleted,
+            new TempRootJanitorDeleteResult(
+                path,
+                TempRootJanitorDeleteStatus.Deleted,
+                null,
+                null,
+                0));
+    }
 
     private static ProcessInspectionRecord ExitedProcess(int processId) =>
         new(

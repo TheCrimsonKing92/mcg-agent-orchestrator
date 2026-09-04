@@ -66,6 +66,69 @@ public sealed class AssemblyTempRedirectTests
     }
 
     [Xunit.Fact]
+    public void StartupSweepRecordsTypedReceiptWhenDeleteSeamRemovesSharedParent()
+    {
+        var sharedRoot = Path.Combine(Path.GetTempPath(), $"dashboard-parent-loss-{Guid.NewGuid():N}");
+        var selectedRoot = TempRootJanitor.BuildOwnedRootPath(sharedRoot, Environment.ProcessId);
+        var abandonedPid = 0x3030;
+        var livePid = 0x4040;
+        var abandonedRoot = TempRootJanitor.BuildOwnedRootPath(sharedRoot, abandonedPid);
+        var liveRoot = TempRootJanitor.BuildOwnedRootPath(sharedRoot, livePid);
+        var currentStartedAt = DateTimeOffset.Parse("2026-09-03T12:00:00Z");
+        var liveStartedAt = DateTimeOffset.Parse("2026-09-03T12:00:01Z");
+        var typedReceipts = new List<(string SharedRoot, TempRootApparatusDestroyedOwner[] Owners)>();
+        Directory.CreateDirectory(selectedRoot);
+        Directory.CreateDirectory(abandonedRoot);
+        Directory.CreateDirectory(liveRoot);
+        WriteOwnerLease(selectedRoot, Environment.ProcessId, currentStartedAt);
+        WriteOwnerLease(liveRoot, livePid, liveStartedAt);
+
+        try
+        {
+            AssemblyTempRedirect.ReapOrphanedRoots(
+                selectedRoot,
+                ids => WindowsNativeProcessInspection.ProcessInspectionResult.Success(
+                    ids!.ToDictionary(
+                        processId => processId,
+                        processId => processId == livePid
+                            ? AvailableProcess(processId) with { StartedAt = liveStartedAt }
+                            : ExitedProcess(processId))),
+                path =>
+                {
+                    _ = TempRootJanitor.DeleteTree(sharedRoot);
+                    return new TempRootJanitorDeleteResult(
+                        path,
+                        TempRootJanitorDeleteStatus.Deleted,
+                        ExceptionType: null,
+                        FailurePath: null,
+                        ReadOnlyAttributesCleared: 0);
+                },
+                writeReceipt: null,
+                (root, owners) => typedReceipts.Add((root, owners.ToArray())));
+
+            var receipt = Xunit.Assert.Single(typedReceipts);
+            Xunit.Assert.Equal(sharedRoot, receipt.SharedRoot, StringComparer.OrdinalIgnoreCase);
+            Xunit.Assert.Equal(
+                new[] { Environment.ProcessId, livePid }.Order(),
+                receipt.Owners.Select(owner => owner.OwnerProcessId).Order());
+            var currentOwner = Xunit.Assert.Single(
+                receipt.Owners,
+                owner => owner.OwnerProcessId == Environment.ProcessId);
+            Xunit.Assert.Equal(currentStartedAt, currentOwner.OwnerStartedAt);
+            Xunit.Assert.Equal(selectedRoot, currentOwner.OwnedRootPath, StringComparer.OrdinalIgnoreCase);
+            var liveOwner = Xunit.Assert.Single(
+                receipt.Owners,
+                owner => owner.OwnerProcessId == livePid);
+            Xunit.Assert.Equal(liveStartedAt, liveOwner.OwnerStartedAt);
+            Xunit.Assert.Equal(liveRoot, liveOwner.OwnedRootPath, StringComparer.OrdinalIgnoreCase);
+        }
+        finally
+        {
+            _ = TempRootJanitor.DeleteTree(sharedRoot);
+        }
+    }
+
+    [Xunit.Fact]
     public void ReapReceiptPinsEveryDiagnosticFieldAndEscaping()
     {
         var observation = new ProcessInspectionRecord(
@@ -120,4 +183,9 @@ public sealed class AssemblyTempRedirectTests
             StartedAt: DateTimeOffset.Parse("2026-08-30T12:00:00Z"),
             CommandLine: "testhost dashboard-startup-batch-control",
             ProcessInspectionStatus.Available);
+
+    private static void WriteOwnerLease(string rootPath, int processId, DateTimeOffset startedAt) =>
+        File.WriteAllText(
+            AssemblyTempRedirect.RootLeasePath(rootPath),
+            $"pid={processId};startedAt={startedAt:O};path=testhost");
 }

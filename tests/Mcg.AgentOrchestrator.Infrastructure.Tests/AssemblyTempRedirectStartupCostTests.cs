@@ -149,6 +149,89 @@ public sealed class AssemblyTempRedirectStartupCostTests(ITestOutputHelper outpu
     }
 
     [Fact]
+    public void BoundedReapRecordsTypedReceiptOnlyWhenOwnedParentDisappears()
+    {
+        var sharedRoot = Path.Combine(Path.GetTempPath(), $"mcg-parent-loss-{Guid.NewGuid():N}");
+        var candidateRoot = AssemblyTempRedirect.BuildProcessTempRoot(sharedRoot, 0x1010);
+        var firstLiveRoot = AssemblyTempRedirect.BuildProcessTempRoot(sharedRoot, 0x2020);
+        var secondLiveRoot = AssemblyTempRedirect.BuildProcessTempRoot(sharedRoot, 0x3030);
+        var liveOwners = new[]
+        {
+            new TempRootApparatusDestroyedOwner(
+                0x2020,
+                DateTimeOffset.Parse("2026-09-03T12:00:00Z"),
+                firstLiveRoot),
+            new TempRootApparatusDestroyedOwner(
+                0x3030,
+                DateTimeOffset.Parse("2026-09-03T12:00:01Z"),
+                secondLiveRoot)
+        };
+        var typedReceipts = new List<(string SharedRoot, TempRootApparatusDestroyedOwner[] Owners)>();
+        Directory.CreateDirectory(candidateRoot);
+        Directory.CreateDirectory(firstLiveRoot);
+        Directory.CreateDirectory(secondLiveRoot);
+
+        try
+        {
+            _ = AssemblyTempRedirect.ReapBoundedRoots(
+                sharedRoot,
+                [Revalidated(Path.GetFileName(candidateRoot))],
+                path =>
+                {
+                    _ = TempRootJanitor.DeleteTree(sharedRoot);
+                    return TempRootDeleteOutcome.Deleted(path, readOnlyAttributesCleared: 0);
+                },
+                _ => new MemoryStream(),
+                new TempRootStartupTimings { ReapRan = true },
+                writeReceipt: null,
+                liveOwners,
+                (root, owners) => typedReceipts.Add((root, owners.ToArray())));
+
+            var receipt = Assert.Single(typedReceipts);
+            Assert.Equal(sharedRoot, receipt.SharedRoot, StringComparer.OrdinalIgnoreCase);
+            Assert.Equal(liveOwners, receipt.Owners);
+        }
+        finally
+        {
+            _ = TempRootJanitor.DeleteTree(sharedRoot);
+        }
+    }
+
+    [Fact]
+    public void BoundedReapDoesNotRecordTypedReceiptForRoutineOwnedRootDeletion()
+    {
+        var sharedRoot = Path.Combine(Path.GetTempPath(), $"mcg-routine-reap-{Guid.NewGuid():N}");
+        var candidateRoot = AssemblyTempRedirect.BuildProcessTempRoot(sharedRoot, 0x1010);
+        var liveOwners = new[]
+        {
+            new TempRootApparatusDestroyedOwner(0x2020, DateTimeOffset.UtcNow, AssemblyTempRedirect.BuildProcessTempRoot(sharedRoot, 0x2020)),
+            new TempRootApparatusDestroyedOwner(0x3030, DateTimeOffset.UtcNow, AssemblyTempRedirect.BuildProcessTempRoot(sharedRoot, 0x3030))
+        };
+        var typedReceiptCount = 0;
+        Directory.CreateDirectory(candidateRoot);
+
+        try
+        {
+            _ = AssemblyTempRedirect.ReapBoundedRoots(
+                sharedRoot,
+                [Revalidated(Path.GetFileName(candidateRoot))],
+                AssemblyTempRedirect.DeleteTree,
+                _ => new MemoryStream(),
+                new TempRootStartupTimings { ReapRan = true },
+                writeReceipt: null,
+                liveOwners,
+                (_, _) => typedReceiptCount++);
+
+            Assert.Equal(0, typedReceiptCount);
+            Assert.True(Directory.Exists(sharedRoot));
+        }
+        finally
+        {
+            _ = TempRootJanitor.DeleteTree(sharedRoot);
+        }
+    }
+
+    [Fact]
     public void BoundedReapRequiresExclusiveOwnerLeaseBeforeDeletingSiblingRoot()
     {
         var sharedRoot = Path.Combine(Path.GetTempPath(), $"mcg-reap-lease-{Guid.NewGuid():N}");

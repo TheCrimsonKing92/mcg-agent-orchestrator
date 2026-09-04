@@ -42,6 +42,11 @@ internal sealed record TempRootJanitorReapResult(
     TempRootJanitorReapDisposition Disposition,
     TempRootJanitorDeleteResult? DeleteResult);
 
+internal sealed record TempRootJanitorOwnedParentDeleteResult(
+    string Path,
+    IReadOnlyList<TempRootApparatusDestroyedOwner> CapturedLiveOwners,
+    TempRootJanitorDeleteResult DeleteResult);
+
 /// <summary>
 /// Removes the process-owned test roots whose names encode the owning process id.
 /// </summary>
@@ -58,6 +63,106 @@ internal static class TempRootJanitor
 
     internal static TempRootJanitorDeleteResult ReapOwnedRoot(string sharedRoot, int processId) =>
         DeleteTree(BuildOwnedRootPath(sharedRoot, processId));
+
+    internal static TempRootJanitorOwnedParentDeleteResult DeleteOwnedParentWithReceipt(string parentPath) =>
+        DeleteOwnedParentWithReceipt(
+            parentPath,
+            WindowsNativeProcessInspection.Read,
+            DeleteTree,
+            TempRootApparatusLossReceiptStore.RecordDeletedOwners);
+
+    internal static TempRootJanitorOwnedParentDeleteResult DeleteOwnedParentWithReceipt(
+        string parentPath,
+        Func<IEnumerable<int>?, WindowsNativeProcessInspection.ProcessInspectionResult> inspect,
+        Func<string, TempRootJanitorDeleteResult> deleteTree,
+        Action<string, IEnumerable<TempRootApparatusDestroyedOwner>> recordDeletedOwners)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(parentPath);
+        ArgumentNullException.ThrowIfNull(inspect);
+        ArgumentNullException.ThrowIfNull(deleteTree);
+        ArgumentNullException.ThrowIfNull(recordDeletedOwners);
+
+        var fullParentPath = Path.GetFullPath(parentPath)
+            .TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar);
+        string[] childPaths;
+        try
+        {
+            childPaths = Directory.GetDirectories(fullParentPath, "*", SearchOption.TopDirectoryOnly);
+        }
+        catch (Exception ex) when (IsFileSystemFailure(ex))
+        {
+            return new TempRootJanitorOwnedParentDeleteResult(
+                fullParentPath,
+                [],
+                Failed(fullParentPath, ex, fullParentPath, readOnlyAttributesCleared: 0));
+        }
+
+        var candidates = childPaths
+            .Select(path => new
+            {
+                Path = path,
+                Parsed = TryParseOwnedRootProcessId(Path.GetFileName(path), out var processId),
+                ProcessId = processId
+            })
+            .ToArray();
+        if (candidates.Length == 0 || candidates.Any(candidate => !candidate.Parsed))
+        {
+            var exception = new InvalidOperationException(
+                "Owned-parent deletion requires one or more direct p{pid} roots and no unowned child directories.");
+            return new TempRootJanitorOwnedParentDeleteResult(
+                fullParentPath,
+                [],
+                Failed(fullParentPath, exception, fullParentPath, readOnlyAttributesCleared: 0));
+        }
+
+        WindowsNativeProcessInspection.ProcessInspectionResult inspection;
+        try
+        {
+            inspection = inspect(candidates.Select(candidate => candidate.ProcessId));
+        }
+        catch (Exception ex)
+        {
+            return new TempRootJanitorOwnedParentDeleteResult(
+                fullParentPath,
+                [],
+                Failed(fullParentPath, ex, fullParentPath, readOnlyAttributesCleared: 0));
+        }
+
+        var owners = candidates
+            .Select(candidate =>
+                inspection.Failure is null &&
+                inspection.Records.TryGetValue(candidate.ProcessId, out var observed) &&
+                observed is { Status: ProcessInspectionStatus.Available, StartedAt: not null }
+                    ? new TempRootApparatusDestroyedOwner(
+                        candidate.ProcessId,
+                        observed.StartedAt.Value,
+                        candidate.Path)
+                    : null)
+            .Where(owner => owner is not null)
+            .Select(owner => owner!)
+            .ToArray();
+        if (owners.Length != candidates.Length)
+        {
+            var exception = new InvalidOperationException(
+                "Owned-parent deletion refused because every direct owned root was not tied to a live process identity.");
+            return new TempRootJanitorOwnedParentDeleteResult(
+                fullParentPath,
+                owners,
+                Failed(fullParentPath, exception, fullParentPath, readOnlyAttributesCleared: 0));
+        }
+
+        var deletion = deleteTree(fullParentPath) ?? Failed(
+            fullParentPath,
+            new InvalidOperationException("The owned-parent delete seam returned no result."),
+            fullParentPath,
+            readOnlyAttributesCleared: 0);
+        if (deletion.Status == TempRootJanitorDeleteStatus.Deleted)
+        {
+            recordDeletedOwners(fullParentPath, owners);
+        }
+
+        return new TempRootJanitorOwnedParentDeleteResult(fullParentPath, owners, deletion);
+    }
 
     internal static IReadOnlyList<TempRootJanitorReapResult> ReapOwnedRoots(IEnumerable<int> processIds) =>
         ReapOwnedRoots(SnapshotOwnedRoots(processIds));
@@ -296,6 +401,19 @@ internal static class TempRootJanitor
         } &&
         !string.IsNullOrWhiteSpace(owner.ExecutablePath) &&
         !string.IsNullOrWhiteSpace(owner.CommandLine);
+
+    private static bool TryParseOwnedRootProcessId(string? directoryName, out int processId)
+    {
+        processId = 0;
+        return !string.IsNullOrWhiteSpace(directoryName) &&
+            directoryName[0] == 'p' &&
+            int.TryParse(
+                directoryName.AsSpan(1),
+                System.Globalization.NumberStyles.HexNumber,
+                System.Globalization.CultureInfo.InvariantCulture,
+                out processId) &&
+            processId > 0;
+    }
 
     private static bool IsDirectChild(string sharedRoot, string candidatePath)
     {

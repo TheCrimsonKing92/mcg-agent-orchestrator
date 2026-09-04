@@ -91,6 +91,9 @@ internal sealed class RegisteredOwnedProcess : IDisposable
     internal StreamReader StandardOutput => Process.StandardOutput;
     internal StreamReader StandardError => Process.StandardError;
     internal OwnedChildStartMetadata StartMetadata { get; }
+    internal SpawnProcessIdentity? Identity => _registration.Identity;
+    internal SpawnProcessIdentity? TryReadDirectChildIdentity() =>
+        WorkerProcessJobs.TryReadDirectChildIdentity(_processId, _registration.Group);
     internal bool HasOpenNativeHandle =>
         _processHandle is { IsClosed: false, IsInvalid: false };
     internal bool IsDisposed => _process is null;
@@ -1667,6 +1670,44 @@ public static class WorkerProcessJobs
                 Debug.WriteLine(
                     $"[WorkerProcessJobs] Failed to emit temp-root reap receipt: {ex.GetType().Name}");
             }
+        }
+
+    }
+
+    internal static SpawnProcessIdentity? TryReadDirectChildIdentity(
+        int parentProcessId,
+        OwnedProcessGroup group)
+    {
+        try
+        {
+            var ownedProcessIds = SnapshotOwnedProcessIds(group);
+            if (ownedProcessIds.Count == 0)
+            {
+                return null;
+            }
+
+            var inspection = WindowsNativeProcessInspection.Read(ownedProcessIds);
+            if (inspection.Failure is not null)
+            {
+                return null;
+            }
+
+            var child = inspection.Records.Values
+                .Where(record =>
+                    record.ParentProcessId == parentProcessId &&
+                    record.Status == ProcessInspectionStatus.Available &&
+                    record.StartedAt is not null &&
+                    !string.IsNullOrWhiteSpace(record.ExecutablePath))
+                .OrderBy(record => record.StartedAt)
+                .ThenBy(record => record.ProcessId)
+                .FirstOrDefault();
+            return child is null
+                ? null
+                : new SpawnProcessIdentity(child.ProcessId, child.StartedAt!.Value, child.ExecutablePath!);
+        }
+        catch
+        {
+            return null;
         }
     }
 
