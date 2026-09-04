@@ -183,7 +183,9 @@ public sealed class ChildOutputDrainAdoptionSaturationTests
             new PipeDrainThreadPoolSaturationTests.SynchronousOnlyTextReader(
                 $"Hermes {HermesAcpAdapter.PinnedRelease} {HermesAcpAdapter.PinnedCommit}"),
             TextReader.Null);
-        var acp = new FakeHermesProcess(new StringReader(SuccessProtocol()), new StringReader(stderr));
+        var acp = new FakeHermesProcess(
+            new StringReader(SuccessProtocol()),
+            new PipeDrainThreadPoolSaturationTests.SynchronousOnlyTextReader(stderr));
         using var progress = new StringWriter();
         try
         {

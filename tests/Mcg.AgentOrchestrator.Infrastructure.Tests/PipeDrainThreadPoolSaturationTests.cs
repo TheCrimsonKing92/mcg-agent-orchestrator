@@ -31,16 +31,29 @@ public sealed class PipeDrainThreadPoolSaturationTests
 
     internal static void RunWithSaturatedThreadPool(Action action)
     {
-        using var release = new ManualResetEventSlim(false);
+        var release = new ManualResetEventSlim(false);
         ThreadPool.GetMinThreads(out var minWorkerThreads, out _);
         var blockedItems = Math.Max(minWorkerThreads, Environment.ProcessorCount) * 2 + 32;
+        var callbacksCompleted = new CountdownEvent(blockedItems);
         try
         {
             for (var i = 0; i < blockedItems; i++)
             {
                 ThreadPool.UnsafeQueueUserWorkItem(
-                    static state => ((ManualResetEventSlim)state!).Wait(),
-                    release);
+                    static state =>
+                    {
+                        var (releaseSignal, completionSignal) =
+                            ((ManualResetEventSlim, CountdownEvent))state!;
+                        try
+                        {
+                            releaseSignal.Wait();
+                        }
+                        finally
+                        {
+                            completionSignal.Signal();
+                        }
+                    },
+                    (release, callbacksCompleted));
             }
 
             Thread.Sleep(250);
@@ -49,6 +62,16 @@ public sealed class PipeDrainThreadPoolSaturationTests
         finally
         {
             release.Set();
+            if (!callbacksCompleted.Wait(TimeSpan.FromSeconds(5)))
+            {
+                throw new TimeoutException(
+                    $"Thread-pool saturation callbacks did not complete after release; " +
+                    $"remainingCallbacks={callbacksCompleted.CurrentCount}; " +
+                    $"poolPendingWorkItems={ThreadPool.PendingWorkItemCount}.");
+            }
+
+            callbacksCompleted.Dispose();
+            release.Dispose();
         }
     }
 
