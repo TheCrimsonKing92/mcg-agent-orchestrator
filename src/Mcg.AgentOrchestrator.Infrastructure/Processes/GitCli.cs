@@ -105,7 +105,15 @@ internal static class GitCli
                 TryKillTree(process);
                 var timedOutOutput = outputTask.Status == TaskStatus.RanToCompletion ? outputTask.Result : string.Empty;
                 var timedOutError = errorTask.Status == TaskStatus.RanToCompletion ? errorTask.Result : string.Empty;
-                return new GitResult(process.ExitCode, timedOutOutput, timedOutError, DrainTimedOut: true);
+                // A drain that outlives an exited child has two known shapes: a reader task that never
+                // started (thread-pool starvation under parallel test load) and one still blocked on a pipe
+                // held open by another process. Record which so the consumer's receipt can tell them apart.
+                var drainDiagnostic = DescribeDrainTimeout(outputTask, errorTask, process);
+                return new GitResult(
+                    process.ExitCode,
+                    timedOutOutput,
+                    string.IsNullOrEmpty(timedOutError) ? drainDiagnostic : timedOutError + Environment.NewLine + drainDiagnostic,
+                    DrainTimedOut: true);
             }
 
             var output = outputTask.Status == TaskStatus.RanToCompletion ? outputTask.Result : string.Empty;
@@ -122,6 +130,30 @@ internal static class GitCli
     {
         try { process.Kill(entireProcessTree: true); }
         catch { /* best-effort: process may have already exited */ }
+    }
+
+    private static string DescribeDrainTimeout(Task outputTask, Task errorTask, Process process)
+    {
+        ThreadPool.GetMinThreads(out var minWorkerThreads, out var minCompletionPortThreads);
+        ThreadPool.GetAvailableThreads(out var availableWorkerThreads, out var availableCompletionPortThreads);
+        string stdoutStreamAsync;
+        try
+        {
+            stdoutStreamAsync = process.StandardOutput.BaseStream is FileStream stream
+                ? stream.IsAsync.ToString().ToLowerInvariant()
+                : "not-filestream";
+        }
+        catch (Exception ex) when (ex is InvalidOperationException or ObjectDisposedException)
+        {
+            stdoutStreamAsync = "unavailable";
+        }
+
+        return $"git output drain timed out after {DrainTimeoutMilliseconds}ms with the child exited: " +
+            $"stdoutTask={outputTask.Status}; stderrTask={errorTask.Status}; " +
+            $"poolThreads={ThreadPool.ThreadCount}; poolPendingWorkItems={ThreadPool.PendingWorkItemCount}; " +
+            $"poolMinWorkers={minWorkerThreads}; poolAvailableWorkers={availableWorkerThreads}; " +
+            $"poolMinCompletionPorts={minCompletionPortThreads}; poolAvailableCompletionPorts={availableCompletionPortThreads}; " +
+            $"stdoutStreamAsync={stdoutStreamAsync}";
     }
 
     // Returns true when the worktree has commit-worthy uncommitted changes, or when the
