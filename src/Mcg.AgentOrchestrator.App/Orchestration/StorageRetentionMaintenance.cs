@@ -54,11 +54,18 @@ internal static partial class StorageRetentionMaintenance
     internal static readonly TimeSpan WorkerDeletionAge = TimeSpan.FromDays(14);
     internal static readonly TimeSpan AcceptanceArtifactMaxAge = TimeSpan.FromDays(14);
     internal static readonly TimeSpan MtpResultMaxAge = TimeSpan.FromDays(14);
+    internal static readonly TimeSpan MtpUnattributedMaxAge = TimeSpan.FromHours(48);
+    internal static readonly TimeSpan MtpUnattributedMinAge = TimeSpan.FromMinutes(30);
     internal const long AcceptanceArtifactMaxBytesPerGoal = 256L * 1024 * 1024;
+    internal const long MtpUnattributedMaxBytes = 2L * 1024 * 1024 * 1024;
     internal const int MtpResultMaxRetainedDirectories = 100;
+    internal const int MtpUnattributedReclaimsPerSweep = 400;
 
     [GeneratedRegex("^(?<dispatch>(?<goal>[0-9a-f]{8})-(?<task>[0-9a-f]{8})-[0-9]{14})", RegexOptions.IgnoreCase | RegexOptions.CultureInvariant)]
     private static partial Regex DispatchArtifactNameRegex();
+
+    [GeneratedRegex("^p[0-9A-Fa-f]+$", RegexOptions.CultureInvariant)]
+    private static partial Regex MtpProcessRootNameRegex();
 
     public static StorageRetentionResult Run(
         OrchestratorWorkspace workspace,
@@ -122,7 +129,9 @@ internal static partial class StorageRetentionMaintenance
         string? mtpResultsRoot = null,
         long? acceptanceArtifactMaxBytesForTests = null,
         Action<string>? beforeAttemptCandidateDeletionForTests = null,
-        Action<string>? beforeMtpCandidateDeletionForTests = null)
+        Action<string>? beforeMtpCandidateDeletionForTests = null,
+        long? mtpUnattributedMaxBytesForTests = null,
+        int? mtpUnattributedReclaimsPerSweepForTests = null)
     {
         var decisions = new List<EvidenceRetentionDecision>();
         var sweepId = Guid.NewGuid().ToString("N");
@@ -170,6 +179,8 @@ internal static partial class StorageRetentionMaintenance
                     goals,
                     now,
                     beforeMtpCandidateDeletionForTests,
+                    mtpUnattributedMaxBytesForTests ?? MtpUnattributedMaxBytes,
+                    mtpUnattributedReclaimsPerSweepForTests ?? MtpUnattributedReclaimsPerSweep,
                     decisions);
                 SweepAcceptanceArtifacts(
                     orchestratorDirectory,
@@ -844,6 +855,8 @@ internal static partial class StorageRetentionMaintenance
         IReadOnlyCollection<StorageRetentionGoal> goals,
         DateTimeOffset now,
         Action<string>? beforeCandidateDeletionForTests,
+        long unattributedMaxBytes,
+        int unattributedReclaimsPerSweep,
         List<EvidenceRetentionDecision> decisions)
     {
         var retainedAttemptOwnerKeys = new HashSet<string>(StringComparer.Ordinal);
@@ -854,8 +867,21 @@ internal static partial class StorageRetentionMaintenance
 
         var attemptOwners = BuildMtpAttemptOwnerIndex(orchestratorDirectory, goals);
         var candidates = new List<MtpRetentionCandidate>();
+        var unattributed = new List<MtpUnattributedCandidate>();
         foreach (var directory in Directory.EnumerateDirectories(resultsRoot, "*", SearchOption.TopDirectoryOnly))
         {
+            if (MtpProcessRootNameRegex().IsMatch(Path.GetFileName(directory)))
+            {
+                decisions.Add(new EvidenceRetentionDecision(
+                    EvidenceArtifactFamily.MtpTestRuns,
+                    EvidenceRetentionAction.Preserved,
+                    directory,
+                    null,
+                    EvidenceOwnerResolution.Unrecorded,
+                    "mtp-process-temp-root-owned-by-reaper"));
+                continue;
+            }
+
             if (!TryReadMtpRunOwnership(directory, out var ownership, out var invalidReason))
             {
                 decisions.Add(new EvidenceRetentionDecision(
@@ -865,6 +891,15 @@ internal static partial class StorageRetentionMaintenance
                     null,
                     EvidenceOwnerResolution.Unrecorded,
                     invalidReason));
+                continue;
+            }
+
+            if (!ownership.IsAttributed)
+            {
+                unattributed.Add(new MtpUnattributedCandidate(
+                    directory,
+                    ownership.CreatedAt,
+                    ownership.OwnerProcessId));
                 continue;
             }
 
@@ -1073,7 +1108,142 @@ internal static partial class StorageRetentionMaintenance
                 deletion.ExceptionType));
         }
 
+        SweepUnattributedMtpRuns(
+            unattributed,
+            now,
+            Math.Max(0, unattributedMaxBytes),
+            Math.Max(0, unattributedReclaimsPerSweep),
+            decisions);
+
         return retainedAttemptOwnerKeys;
+    }
+
+    private static void SweepUnattributedMtpRuns(
+        IReadOnlyCollection<MtpUnattributedCandidate> candidates,
+        DateTimeOffset now,
+        long maxBytes,
+        int maxReclaims,
+        List<EvidenceRetentionDecision> decisions)
+    {
+        var measurable = new List<MtpUnattributedMeasuredCandidate>(candidates.Count);
+        foreach (var candidate in candidates
+                     .OrderBy(item => item.CreatedAt)
+                     .ThenBy(item => item.Path, StringComparer.OrdinalIgnoreCase))
+        {
+            if (candidate.CreatedAt > now || now - candidate.CreatedAt < MtpUnattributedMinAge)
+            {
+                decisions.Add(UnattributedDecision(
+                    candidate,
+                    EvidenceRetentionAction.Preserved,
+                    "mtp-unattributed-is-young"));
+                continue;
+            }
+
+            if (candidate.OwnerProcessId is int ownerProcessId && IsProcessAlive(ownerProcessId))
+            {
+                decisions.Add(UnattributedDecision(
+                    candidate,
+                    EvidenceRetentionAction.Preserved,
+                    "mtp-unattributed-owner-is-live"));
+                continue;
+            }
+
+            var measurement = TryMeasureDirectory(candidate.Path);
+            if (!measurement.Success)
+            {
+                decisions.Add(UnattributedDecision(
+                    candidate,
+                    EvidenceRetentionAction.RetainedUndecidable,
+                    "mtp-unattributed-size-is-unreadable",
+                    failureExceptionType: measurement.ExceptionType));
+                continue;
+            }
+
+            measurable.Add(new MtpUnattributedMeasuredCandidate(candidate, measurement.Bytes));
+        }
+
+        var retainedBytes = measurable.Aggregate(
+            0L,
+            (total, candidate) => candidate.Bytes > long.MaxValue - total
+                ? long.MaxValue
+                : total + candidate.Bytes);
+        var reclaimed = 0;
+        foreach (var measured in measurable)
+        {
+            var candidate = measured.Candidate;
+            var pastAgeBound = now - candidate.CreatedAt >= MtpUnattributedMaxAge;
+            var pastSizeBound = retainedBytes > maxBytes;
+            if (!pastAgeBound && !pastSizeBound)
+            {
+                decisions.Add(UnattributedDecision(
+                    candidate,
+                    EvidenceRetentionAction.Preserved,
+                    "mtp-unattributed-inside-age-and-size-bounds"));
+                continue;
+            }
+
+            if (reclaimed >= maxReclaims)
+            {
+                decisions.Add(UnattributedDecision(
+                    candidate,
+                    EvidenceRetentionAction.Preserved,
+                    "mtp-unattributed-deferred-to-next-sweep"));
+                continue;
+            }
+
+            var deletion = TryDeleteDirectory(candidate.Path);
+            decisions.Add(UnattributedDecision(
+                candidate,
+                deletion.Success ? EvidenceRetentionAction.Deleted : EvidenceRetentionAction.DeferredLocked,
+                deletion.Success
+                    ? pastAgeBound ? "mtp-unattributed-past-age-bound" : "mtp-unattributed-past-size-bound"
+                    : "exclusive-delete-failed",
+                deletion.BytesAttempted,
+                deletion.Success ? deletion.BytesAttempted : 0,
+                deletion.ExceptionType));
+            if (deletion.Success)
+            {
+                reclaimed++;
+                retainedBytes = Math.Max(0, retainedBytes - measured.Bytes);
+            }
+        }
+    }
+
+    private static EvidenceRetentionDecision UnattributedDecision(
+        MtpUnattributedCandidate candidate,
+        EvidenceRetentionAction action,
+        string reason,
+        long bytesAttempted = 0,
+        long bytesReclaimed = 0,
+        string? failureExceptionType = null) =>
+        new(
+            EvidenceArtifactFamily.MtpTestRuns,
+            action,
+            candidate.Path,
+            null,
+            EvidenceOwnerResolution.Unrecorded,
+            reason,
+            AttemptId: "unowned",
+            BytesAttempted: bytesAttempted,
+            BytesReclaimed: bytesReclaimed,
+            FailureExceptionType: failureExceptionType);
+
+    private static bool IsProcessAlive(int processId)
+    {
+        if (processId <= 0)
+        {
+            return false;
+        }
+
+        try
+        {
+            using var process = Process.GetProcessById(processId);
+            return !process.HasExited;
+        }
+        catch (Exception ex) when (ex is ArgumentException or InvalidOperationException)
+        {
+            return false;
+        }
     }
 
     private static bool TryRefreshMtpAttemptOwner(
@@ -1197,15 +1367,27 @@ internal static partial class StorageRetentionMaintenance
             }
 
             var attemptId = attemptIdValue.GetString()!;
-            if (attemptId.Equals("unowned", StringComparison.OrdinalIgnoreCase) ||
-                !attemptId.Equals(Path.GetFileName(attemptId), StringComparison.Ordinal))
+            if (!attemptId.Equals(Path.GetFileName(attemptId), StringComparison.Ordinal))
             {
                 ownership = default!;
                 reason = "mtp-ownership-attempt-is-unrecorded";
                 return false;
             }
 
-            ownership = new MtpRunOwnership(attemptId, createdAt);
+            int? ownerProcessId = null;
+            if (root.TryGetProperty("ownerProcessId", out var ownerProcessIdValue) &&
+                ownerProcessIdValue.ValueKind == JsonValueKind.Number &&
+                ownerProcessIdValue.TryGetInt32(out var parsedOwnerProcessId) &&
+                parsedOwnerProcessId > 0)
+            {
+                ownerProcessId = parsedOwnerProcessId;
+            }
+
+            ownership = new MtpRunOwnership(
+                attemptId,
+                createdAt,
+                IsAttributed: !attemptId.Equals("unowned", StringComparison.OrdinalIgnoreCase),
+                ownerProcessId);
             reason = string.Empty;
             return true;
         }
@@ -1617,6 +1799,30 @@ internal static partial class StorageRetentionMaintenance
         catch (Exception ex) when (ex is IOException or UnauthorizedAccessException) { return 0; }
     }
 
+    private static (bool Success, long Bytes, string? ExceptionType) TryMeasureDirectory(string path)
+    {
+        try
+        {
+            var directory = new DirectoryInfo(path);
+            if ((directory.Attributes & FileAttributes.ReparsePoint) != 0)
+            {
+                return (false, 0, nameof(IOException));
+            }
+
+            long bytes = 0;
+            foreach (var file in directory.EnumerateFiles("*", SearchOption.AllDirectories))
+            {
+                bytes = checked(bytes + file.Length);
+            }
+
+            return (true, bytes, null);
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or OverflowException)
+        {
+            return (false, 0, ex.GetType().Name);
+        }
+    }
+
     private static (bool Success, long BytesAttempted, string? ExceptionType) TryDeleteDirectory(string path)
     {
         try
@@ -1642,7 +1848,20 @@ internal static partial class StorageRetentionMaintenance
         }
     }
 
-    private sealed record MtpRunOwnership(string AttemptId, DateTimeOffset CreatedAt);
+    private sealed record MtpRunOwnership(
+        string AttemptId,
+        DateTimeOffset CreatedAt,
+        bool IsAttributed,
+        int? OwnerProcessId);
+
+    private sealed record MtpUnattributedCandidate(
+        string Path,
+        DateTimeOffset CreatedAt,
+        int? OwnerProcessId);
+
+    private sealed record MtpUnattributedMeasuredCandidate(
+        MtpUnattributedCandidate Candidate,
+        long Bytes);
 
     private sealed record MtpAttemptOwner(
         StorageRetentionGoal Goal,
