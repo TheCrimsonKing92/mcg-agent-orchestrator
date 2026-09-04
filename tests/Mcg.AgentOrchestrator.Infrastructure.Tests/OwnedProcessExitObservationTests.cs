@@ -11,16 +11,29 @@ public sealed class OwnedProcessExitObservationTests
     [Xunit.Fact(Skip = "Requires Windows suspended-process handles.", SkipUnless = nameof(IsWindows))]
     public void WaitAndRead_FastExitUnderPoolSaturation_ReturnsKnownCode()
     {
-        using var release = new ManualResetEventSlim(false);
+        var release = new ManualResetEventSlim(false);
         ThreadPool.GetMinThreads(out var minWorkerThreads, out _);
         var blockedItems = Math.Max(minWorkerThreads, Environment.ProcessorCount) * 2 + 32;
+        var blockedItemsCompleted = new CountdownEvent(blockedItems);
+        var blockerState = (Release: release, Completed: blockedItemsCompleted);
         try
         {
             for (var i = 0; i < blockedItems; i++)
             {
                 ThreadPool.UnsafeQueueUserWorkItem(
-                    static state => ((ManualResetEventSlim)state!).Wait(),
-                    release);
+                    static state =>
+                    {
+                        var (release, completed) = ((ManualResetEventSlim Release, CountdownEvent Completed))state!;
+                        try
+                        {
+                            release.Wait();
+                        }
+                        finally
+                        {
+                            completed.Signal();
+                        }
+                    },
+                    blockerState);
             }
 
             // Match the established GitCli saturation fixture so queued blockers occupy the
@@ -43,6 +56,14 @@ public sealed class OwnedProcessExitObservationTests
         finally
         {
             release.Set();
+            var blockersCompleted = blockedItemsCompleted.Wait(TimeSpan.FromSeconds(30));
+            if (blockersCompleted)
+            {
+                blockedItemsCompleted.Dispose();
+                release.Dispose();
+            }
+
+            Xunit.Assert.True(blockersCompleted, "Thread-pool saturation blockers did not complete after release.");
         }
     }
 
@@ -68,13 +89,10 @@ public sealed class OwnedProcessExitObservationTests
         var startInfo = new ProcessStartInfo
         {
             FileName = "cmd.exe",
+            Arguments = "/d /c exit 7",
             UseShellExecute = false,
             CreateNoWindow = true
         };
-        startInfo.ArgumentList.Add("/d");
-        startInfo.ArgumentList.Add("/c");
-        startInfo.ArgumentList.Add("exit");
-        startInfo.ArgumentList.Add("7");
         return startInfo;
     }
 }
