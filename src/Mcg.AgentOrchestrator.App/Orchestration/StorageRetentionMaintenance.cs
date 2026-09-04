@@ -131,7 +131,8 @@ internal static partial class StorageRetentionMaintenance
         Action<string>? beforeAttemptCandidateDeletionForTests = null,
         Action<string>? beforeMtpCandidateDeletionForTests = null,
         long? mtpUnattributedMaxBytesForTests = null,
-        int? mtpUnattributedReclaimsPerSweepForTests = null)
+        int? mtpUnattributedReclaimsPerSweepForTests = null,
+        Func<int, bool>? mtpProcessHasExitedForTests = null)
     {
         var decisions = new List<EvidenceRetentionDecision>();
         var sweepId = Guid.NewGuid().ToString("N");
@@ -181,6 +182,7 @@ internal static partial class StorageRetentionMaintenance
                     beforeMtpCandidateDeletionForTests,
                     mtpUnattributedMaxBytesForTests ?? MtpUnattributedMaxBytes,
                     mtpUnattributedReclaimsPerSweepForTests ?? MtpUnattributedReclaimsPerSweep,
+                    mtpProcessHasExitedForTests,
                     decisions);
                 SweepAcceptanceArtifacts(
                     orchestratorDirectory,
@@ -857,6 +859,7 @@ internal static partial class StorageRetentionMaintenance
         Action<string>? beforeCandidateDeletionForTests,
         long unattributedMaxBytes,
         int unattributedReclaimsPerSweep,
+        Func<int, bool>? processHasExitedForTests,
         List<EvidenceRetentionDecision> decisions)
     {
         var retainedAttemptOwnerKeys = new HashSet<string>(StringComparer.Ordinal);
@@ -1113,6 +1116,7 @@ internal static partial class StorageRetentionMaintenance
             now,
             Math.Max(0, unattributedMaxBytes),
             Math.Max(0, unattributedReclaimsPerSweep),
+            processHasExitedForTests,
             decisions);
 
         return retainedAttemptOwnerKeys;
@@ -1123,6 +1127,7 @@ internal static partial class StorageRetentionMaintenance
         DateTimeOffset now,
         long maxBytes,
         int maxReclaims,
+        Func<int, bool>? processHasExitedForTests,
         List<EvidenceRetentionDecision> decisions)
     {
         var measurable = new List<MtpUnattributedMeasuredCandidate>(candidates.Count);
@@ -1139,7 +1144,8 @@ internal static partial class StorageRetentionMaintenance
                 continue;
             }
 
-            if (candidate.OwnerProcessId is int ownerProcessId && IsProcessAlive(ownerProcessId))
+            if (candidate.OwnerProcessId is int ownerProcessId &&
+                IsProcessAlive(ownerProcessId, processHasExitedForTests))
             {
                 decisions.Add(UnattributedDecision(
                     candidate,
@@ -1228,7 +1234,7 @@ internal static partial class StorageRetentionMaintenance
             BytesReclaimed: bytesReclaimed,
             FailureExceptionType: failureExceptionType);
 
-    private static bool IsProcessAlive(int processId)
+    private static bool IsProcessAlive(int processId, Func<int, bool>? processHasExitedForTests)
     {
         if (processId <= 0)
         {
@@ -1237,12 +1243,21 @@ internal static partial class StorageRetentionMaintenance
 
         try
         {
+            if (processHasExitedForTests is not null)
+            {
+                return !processHasExitedForTests(processId);
+            }
+
             using var process = Process.GetProcessById(processId);
             return !process.HasExited;
         }
         catch (Exception ex) when (ex is ArgumentException or InvalidOperationException)
         {
             return false;
+        }
+        catch (System.ComponentModel.Win32Exception)
+        {
+            return true;
         }
     }
 

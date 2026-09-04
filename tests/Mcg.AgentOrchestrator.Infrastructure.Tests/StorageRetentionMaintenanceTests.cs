@@ -838,6 +838,61 @@ public sealed class StorageRetentionMaintenanceTests
     }
 
     [Xunit.Fact]
+    public void MtpUnattributedRetention_InaccessibleOwnerIsPreservedAndSweepContinues()
+    {
+        using var fixture = new RetentionFixture();
+        var laterFamilyReached = false;
+        var inaccessibleOwner = fixture.WriteUnattributedMtpRun(
+            "summary-inaccessible-owner",
+            Now.AddHours(-50),
+            ownerProcessId: 1234);
+
+        var result = StorageRetentionMaintenance.Run(
+            fixture.LogDirectory,
+            fixture.OrchestratorDirectory,
+            fixture.ExecutionDirectory,
+            [],
+            Now,
+            beforeGoalJournalArchiveForTests: () => laterFamilyReached = true,
+            mtpResultsRoot: fixture.MtpResultsRoot,
+            mtpProcessHasExitedForTests: _ =>
+                throw new System.ComponentModel.Win32Exception(5, "Access is denied."));
+
+        Assert.True(Directory.Exists(inaccessibleOwner));
+        Assert.True(laterFamilyReached);
+        Assert.False(result.Failed, "An inaccessible live owner must not abort the retention sweep.");
+        Assert.Contains(result.Decisions, decision =>
+            decision.Path == inaccessibleOwner &&
+            decision.Action == EvidenceRetentionAction.Preserved &&
+            decision.Reason == "mtp-unattributed-owner-is-live");
+    }
+
+    [Xunit.Fact]
+    public void MtpUnattributedRetention_DeadOwnerIsEligibleForReclamation()
+    {
+        using var fixture = new RetentionFixture();
+        var deadOwner = fixture.WriteUnattributedMtpRun(
+            "summary-dead-owner",
+            Now.AddHours(-50),
+            ownerProcessId: 1234);
+
+        var result = StorageRetentionMaintenance.Run(
+            fixture.LogDirectory,
+            fixture.OrchestratorDirectory,
+            fixture.ExecutionDirectory,
+            [],
+            Now,
+            mtpResultsRoot: fixture.MtpResultsRoot,
+            mtpProcessHasExitedForTests: _ => true);
+
+        Assert.False(Directory.Exists(deadOwner));
+        Assert.Contains(result.Decisions, decision =>
+            decision.Path == deadOwner &&
+            decision.Action == EvidenceRetentionAction.Deleted &&
+            decision.Reason == "mtp-unattributed-past-age-bound");
+    }
+
+    [Xunit.Fact]
     public void MtpUnattributedRetention_SizeRuleReclaimsOldestFirstUntilWithinBudget()
     {
         using var fixture = new RetentionFixture();
