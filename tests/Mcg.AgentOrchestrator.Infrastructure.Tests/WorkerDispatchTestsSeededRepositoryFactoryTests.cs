@@ -1040,6 +1040,46 @@ public sealed class WorkerDispatchTestsSeededRepositoryFactoryTests
         Xunit.Assert.Equal(string.Empty, result.StandardError);
     }
 
+    [Xunit.Fact(Skip = "Requires Windows owned-file capture semantics.", SkipUnless = nameof(IsWindows))]
+    public void RunGitProbe_OwnedExitHandleDisposedBeforeRead_ReportsUnavailable()
+    {
+        using var scope = new FactoryScope();
+        var created = scope.Factory.Create();
+
+        var result = InfrastructureTestSupport.RunGitProbe(
+            created.PublishedIdentity.RepositoryPath,
+            ["rev-parse", "--show-toplevel"],
+            beforeOwnedExitObservation: launch =>
+            {
+                var transfer = launch.TransferOwnedProcess();
+                transfer.ProcessHandle.Dispose();
+                transfer.Process.Dispose();
+                launch.Group.Dispose();
+            });
+
+        Xunit.Assert.True(result.ProcessStarted);
+        Xunit.Assert.Null(result.ExitCode);
+        Xunit.Assert.Equal(
+            WorkerDispatchTestsSeededRepositoryFactory.GitProbeClassification.ProcessObservationFailure,
+            result.Classification);
+        Xunit.Assert.Contains(
+            "Owned process exit handle is unavailable",
+            result.StandardError,
+            StringComparison.Ordinal);
+        Xunit.Assert.DoesNotContain(
+            "Process was not started by this object",
+            result.StandardError,
+            StringComparison.Ordinal);
+        Xunit.Assert.DoesNotContain(
+            "Process was not started by this object",
+            result.StandardOutput,
+            StringComparison.Ordinal);
+        Xunit.Assert.DoesNotContain(
+            "Process was not started by this object",
+            result.ToString(),
+            StringComparison.Ordinal);
+    }
+
     [Xunit.Fact]
     public void Create_TemplateCommitBlankFailure_DoesNotRetryOrLoseReceipt()
     {
