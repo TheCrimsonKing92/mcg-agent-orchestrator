@@ -1,4 +1,5 @@
 using System.Diagnostics;
+using System.Text;
 
 namespace Mcg.AgentOrchestrator.Infrastructure;
 
@@ -87,30 +88,39 @@ internal static class GitCli
                 return new GitResult(1, string.Empty, "failed to start git process", ProcessStarted: false);
             processStarted = true;
 
-            // Drain asynchronously so WaitForExit's timeout is real: a synchronous ReadToEnd would
-            // block on an inherited pipe even after git exits, and the timeout would never fire.
-            var outputTask = process.StandardOutput.ReadToEndAsync();
-            var errorTask = process.StandardError.ReadToEndAsync();
+            // Drain on dedicated threads, never the thread pool. Under parallel test load the pool can be
+            // fully blocked; ReadToEndAsync then never starts inside the drain window and the output that
+            // is already sitting in the pipe is discarded as "" next to a real exit code — the "git exits 0
+            // with no output" flake family (proven deterministically by GitCliThreadPoolSaturationTests).
+            // Dedicated threads also keep WaitForExit's timeout real: a synchronous ReadToEnd on this
+            // thread would block on an inherited pipe after git exits.
+            var outputDrain = PipeDrain.Start(process.StandardOutput, "git-stdout-drain");
+            var errorDrain = PipeDrain.Start(process.StandardError, "git-stderr-drain");
 
             if (!process.WaitForExit(timeoutMilliseconds))
             {
                 TryKillTree(process);
-                return new GitResult(-1, string.Empty, $"git {string.Join(' ', args)} timed out after {timeoutMilliseconds}ms");
+                return new GitResult(-1, outputDrain.Text, $"git {string.Join(' ', args)} timed out after {timeoutMilliseconds}ms");
             }
 
             // git has exited; bound the drain so a detached grandchild holding the pipe can't keep us
             // here. With the hardening config above this should complete immediately.
-            if (!Task.WaitAll([outputTask, errorTask], DrainTimeoutMilliseconds))
+            var drainDeadline = Environment.TickCount64 + DrainTimeoutMilliseconds;
+            var outputDrained = outputDrain.Join(drainDeadline);
+            var errorDrained = errorDrain.Join(drainDeadline);
+            if (!outputDrained || !errorDrained)
             {
                 TryKillTree(process);
-                var timedOutOutput = outputTask.Status == TaskStatus.RanToCompletion ? outputTask.Result : string.Empty;
-                var timedOutError = errorTask.Status == TaskStatus.RanToCompletion ? errorTask.Result : string.Empty;
-                return new GitResult(process.ExitCode, timedOutOutput, timedOutError, DrainTimedOut: true);
+                var drainDiagnostic = DescribeDrainTimeout(outputDrain, errorDrain);
+                var timedOutError = errorDrain.Text;
+                return new GitResult(
+                    process.ExitCode,
+                    outputDrain.Text,
+                    string.IsNullOrEmpty(timedOutError) ? drainDiagnostic : timedOutError + Environment.NewLine + drainDiagnostic,
+                    DrainTimedOut: true);
             }
 
-            var output = outputTask.Status == TaskStatus.RanToCompletion ? outputTask.Result : string.Empty;
-            var error = errorTask.Status == TaskStatus.RanToCompletion ? errorTask.Result : string.Empty;
-            return new GitResult(process.ExitCode, output, error);
+            return new GitResult(process.ExitCode, outputDrain.Text, errorDrain.Text);
         }
         catch (Exception ex) when (ex is InvalidOperationException or IOException or System.ComponentModel.Win32Exception)
         {
@@ -122,6 +132,93 @@ internal static class GitCli
     {
         try { process.Kill(entireProcessTree: true); }
         catch { /* best-effort: process may have already exited */ }
+    }
+
+    private static string DescribeDrainTimeout(PipeDrain outputDrain, PipeDrain errorDrain)
+    {
+        ThreadPool.GetMinThreads(out var minWorkerThreads, out _);
+        ThreadPool.GetAvailableThreads(out var availableWorkerThreads, out _);
+        return $"git output drain timed out after {DrainTimeoutMilliseconds}ms with the child exited: " +
+            $"stdoutDrain={outputDrain.Describe()}; stderrDrain={errorDrain.Describe()}; " +
+            $"poolThreads={ThreadPool.ThreadCount}; poolPendingWorkItems={ThreadPool.PendingWorkItemCount}; " +
+            $"poolMinWorkers={minWorkerThreads}; poolAvailableWorkers={availableWorkerThreads}";
+    }
+
+    // Reads one redirected stream to EOF on a dedicated background thread so the drain never waits on
+    // the thread pool, and exposes whatever has been read so far if the caller's deadline expires.
+    private sealed class PipeDrain
+    {
+        private readonly StreamReader _reader;
+        private readonly StringBuilder _buffer = new();
+        private readonly Thread _thread;
+        private volatile bool _completed;
+        private volatile string? _failure;
+
+        private PipeDrain(StreamReader reader, string name)
+        {
+            _reader = reader;
+            _thread = new Thread(Run) { IsBackground = true, Name = name };
+        }
+
+        public static PipeDrain Start(StreamReader reader, string name)
+        {
+            var drain = new PipeDrain(reader, name);
+            drain._thread.Start();
+            return drain;
+        }
+
+        public string Text
+        {
+            get
+            {
+                lock (_buffer)
+                {
+                    return _buffer.ToString();
+                }
+            }
+        }
+
+        public bool Join(long deadlineTickCount)
+        {
+            var remaining = (int)Math.Clamp(deadlineTickCount - Environment.TickCount64, 0, int.MaxValue);
+            return _thread.Join(remaining);
+        }
+
+        public string Describe()
+        {
+            int bytes;
+            lock (_buffer)
+            {
+                bytes = _buffer.Length;
+            }
+
+            var state = _completed ? "completed" : _thread.IsAlive ? "running" : "not-started";
+            return $"{state}(chars={bytes}{(_failure is null ? string.Empty : $", failure={_failure}")})";
+        }
+
+        private void Run()
+        {
+            var chunk = new char[4096];
+            try
+            {
+                int read;
+                while ((read = _reader.Read(chunk, 0, chunk.Length)) > 0)
+                {
+                    lock (_buffer)
+                    {
+                        _buffer.Append(chunk, 0, read);
+                    }
+                }
+            }
+            catch (Exception ex) when (ex is IOException or ObjectDisposedException or InvalidOperationException)
+            {
+                _failure = ex.GetType().Name + ": " + ex.Message;
+            }
+            finally
+            {
+                _completed = true;
+            }
+        }
     }
 
     // Returns true when the worktree has commit-worthy uncommitted changes, or when the

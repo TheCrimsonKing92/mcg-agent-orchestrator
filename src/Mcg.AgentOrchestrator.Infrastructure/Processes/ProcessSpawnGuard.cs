@@ -7,6 +7,7 @@ namespace Mcg.AgentOrchestrator.Infrastructure;
 public static class ProcessSpawnGuard
 {
     private const uint HandleFlagInherit = 0x00000001;
+    private const int ErrorInvalidHandle = 6;
     private const uint FileTypeDisk = 0x0001;
     private const uint FileNameNormalized = 0x0;
     private const int ProcessHandleInformation = 51;
@@ -42,8 +43,16 @@ public static class ProcessSpawnGuard
                 continue;
             }
 
-            var hasResolvedTargetPath = TryGetDiskHandlePath(handle, out var path) && fileNames.Length > 0;
-            if (hasResolvedTargetPath &&
+            // Only handles that resolve to a disk file are in scope. Anonymous pipes, events, job and
+            // process handles that are inheritable at this instant belong to another launch in flight on
+            // a different thread (Process.Start keeps its child's std pipe ends inheritable until
+            // CreateProcess returns); clearing their flag starts that child with invalid std handles.
+            if (!TryGetDiskHandlePath(handle, out var path))
+            {
+                continue;
+            }
+
+            if (fileNames.Length > 0 &&
                 !fileNames.Any(fileName => IsSameFileName(path, fileName)))
             {
                 continue;
@@ -51,7 +60,16 @@ public static class ProcessSpawnGuard
 
             if (!SetHandleInformation(handle, HandleFlagInherit, 0))
             {
-                throw new Win32Exception(Marshal.GetLastWin32Error(), "Failed to clear inheritable flag for disk handle.");
+                var error = Marshal.GetLastWin32Error();
+                if (error == ErrorInvalidHandle)
+                {
+                    // Closed by its owner between enumeration and here; nothing to clear.
+                    continue;
+                }
+
+                throw new Win32Exception(
+                    error,
+                    $"Failed to clear inheritable flag for disk handle '{path}': win32={error} (0x{error:X8}).");
             }
 
             cleared++;

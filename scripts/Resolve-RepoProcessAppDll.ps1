@@ -11,7 +11,11 @@ if ([string]::IsNullOrWhiteSpace($RepositoryRoot)) {
 }
 
 $repoRoot = [System.IO.Path]::GetFullPath($RepositoryRoot)
-$appOutput = Join-Path $repoRoot 'src\Mcg.AgentOrchestrator.App\bin\Debug\net10.0'
+$appOutput = if ([string]::IsNullOrWhiteSpace($env:MCG_ORCHESTRATOR_APP_OUTPUT)) {
+    Join-Path $repoRoot 'src\Mcg.AgentOrchestrator.App\bin\Debug\net10.0'
+} else {
+    [System.IO.Path]::GetFullPath($env:MCG_ORCHESTRATOR_APP_OUTPUT)
+}
 $appDll = Join-Path $appOutput 'Mcg.AgentOrchestrator.App.dll'
 $markerPath = "$appDll.git-head"
 $relevantPathspec = @(
@@ -28,6 +32,7 @@ $relevantPathspec = @(
 try {
     if (-not (Test-Path -LiteralPath $appDll -PathType Leaf) -or
         -not (Test-Path -LiteralPath $markerPath -PathType Leaf)) {
+        Write-Output 'MCG_APP_DLL_UNRESOLVED reason=missing-artifact'
         exit 1
     }
 

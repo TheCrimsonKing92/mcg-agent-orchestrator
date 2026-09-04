@@ -1,3 +1,6 @@
+using Mcg.AgentOrchestrator.Core;
+using Mcg.AgentOrchestrator.Infrastructure;
+
 public sealed class GoalWorktreeTestsGitHelperDiagnostics : GoalWorktreeTestBase
 {
     public static bool IsWindows => OperatingSystem.IsWindows();
@@ -29,6 +32,37 @@ public sealed class GoalWorktreeTestsGitHelperDiagnostics : GoalWorktreeTestBase
         finally
         {
             DeleteDirectory(repo);
+        }
+    }
+
+    // A bare "not inside a git work tree" message is thrown identically for a genuinely non-git
+    // directory, a probe that exited 0 with empty output, a timeout, and a probe that never started.
+    // The diagnostic must carry the probe evidence so those are distinguishable from the artifact.
+    [Xunit.Fact]
+    public void RequireGitWorkTreeFailureCarriesProbeEvidence()
+    {
+        var directory = Path.Combine(Path.GetTempPath(), "not-a-repo-" + Guid.NewGuid().ToString("n"));
+        Directory.CreateDirectory(directory);
+        try
+        {
+            var exception = Assert.Throws<InvalidOperationException>(
+                () => GoalWorktrees.HasBranch(directory, GoalId.New()));
+
+            // Assert.Contains truncates the inspected string to 50 characters on failure, which hid the
+            // probe evidence this message exists to carry (2026-09-04: exit=128 with EMPTY stderr under
+            // parallel load, and the drain/pool diagnostics were cut off). Fail with the whole message.
+            AssertMessageContains(exception.Message, "to be inside a git work tree");
+            AssertMessageContains(exception.Message, "probe='git rev-parse --is-inside-work-tree'");
+            // git reports "not a git repository" with exit 128; an empty-output probe would report exit=0.
+            AssertMessageContains(exception.Message, "exit=128");
+            AssertMessageContains(exception.Message, "processStarted=True");
+            AssertMessageContains(exception.Message, "stdoutBytes=");
+            AssertMessageContains(exception.Message, "directoryExists=True");
+            AssertMessageContains(exception.Message, "not a git repository");
+        }
+        finally
+        {
+            DeleteDirectory(directory);
         }
     }
 
@@ -167,6 +201,13 @@ public sealed class GoalWorktreeTestsGitHelperDiagnostics : GoalWorktreeTestBase
         {
             DeleteDirectory(repo);
         }
+    }
+
+    private static void AssertMessageContains(string message, string expected)
+    {
+        Assert.True(
+            message.Contains(expected, StringComparison.OrdinalIgnoreCase),
+            $"Expected '{expected}' in the failure message. Full message:{Environment.NewLine}{message}");
     }
 
     private static string CreateEmptyRepository()

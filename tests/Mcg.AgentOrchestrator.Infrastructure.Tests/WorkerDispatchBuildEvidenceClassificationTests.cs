@@ -27,7 +27,7 @@ public sealed class WorkerDispatchBuildEvidenceClassificationTests : WorkerDispa
                 return new(true, 0, "PASS build: 0 errors (Invoke-WorkerBuildCheck) projects=1");
             }).RefreshLatestProcess(kernel, goal.Id, task.Id);
 
-        Xunit.Assert.Equal(WorkTaskStatus.Completed, task.Status);
+        AssertCompleted(task);
         Xunit.Assert.Equal(0, task.LastVerification!.ExitCode);
         Xunit.Assert.NotNull(request);
         Xunit.Assert.Equal(["src/Feature/Feature.csproj"], request.Projects);
@@ -64,7 +64,7 @@ public sealed class WorkerDispatchBuildEvidenceClassificationTests : WorkerDispa
         runner.RefreshLatestProcess(kernel, goal.Id, task.Id);
         runner.RefreshLatestProcess(kernel, goal.Id, task.Id);
 
-        Xunit.Assert.Equal(WorkTaskStatus.Completed, task.Status);
+        AssertCompleted(task);
         Xunit.Assert.Equal(1, buildChecks);
     }
 
@@ -193,7 +193,7 @@ public sealed class WorkerDispatchBuildEvidenceClassificationTests : WorkerDispa
             "deferred - Invoke-WorkerBuildCheck passed with 0 errors; acceptance gate owns tests",
             AddCompiledFeature);
 
-        Xunit.Assert.Equal(WorkTaskStatus.Completed, task.Status);
+        AssertCompleted(task);
         Xunit.Assert.Equal(0, task.LastVerification!.ExitCode);
         Xunit.Assert.Equal(string.Empty, ReadGit(worktree, ["status", "--short"]));
     }
@@ -205,7 +205,7 @@ public sealed class WorkerDispatchBuildEvidenceClassificationTests : WorkerDispa
             "deferred - acceptance gate owns tests",
             worktree => File.WriteAllText(Path.Combine(worktree, "README.md"), "documentation"));
 
-        Xunit.Assert.Equal(WorkTaskStatus.Completed, task.Status);
+        AssertCompleted(task);
         Xunit.Assert.Equal(0, task.LastVerification!.ExitCode);
         Xunit.Assert.Equal(string.Empty, ReadGit(worktree, ["status", "--short"]));
     }
@@ -254,8 +254,37 @@ public sealed class WorkerDispatchBuildEvidenceClassificationTests : WorkerDispa
 
         new BackgroundDispatchRunner(clock).RefreshLatestProcess(kernel, goal.Id, task.Id);
 
-        Xunit.Assert.Equal(WorkTaskStatus.Completed, task.Status);
+        AssertCompleted(task);
         Xunit.Assert.Equal(0, task.LastVerification!.ExitCode);
+    }
+
+    // A bare status mismatch discards the classifier's reason; every gate failure of this class so far
+    // reported only "Expected: Completed / Actual: Failed". Carry the verification receipt so the next
+    // failure names its diagnostic marker (worktree-inspection-failed, required-file-change-evidence-missing, ...).
+    private static void AssertCompleted(TaskSpec task)
+    {
+        if (task.Status == WorkTaskStatus.Completed)
+        {
+            return;
+        }
+
+        var verification = task.LastVerification;
+        Xunit.Assert.Fail(
+            $"Expected task status Completed but found {task.Status}. " +
+            $"exit={(verification is null ? "none" : verification.ExitCode.ToString())}; " +
+            $"stderr={Tail(verification?.StandardError)}; stdout={Tail(verification?.StandardOutput)}");
+    }
+
+    private static string Tail(string? text)
+    {
+        if (string.IsNullOrWhiteSpace(text))
+        {
+            return "<empty>";
+        }
+
+        var normalized = text.Replace("\r\n", "\n", StringComparison.Ordinal).Trim();
+        const int limit = 1200;
+        return normalized.Length <= limit ? normalized : "..." + normalized[^limit..];
     }
 
     private static (TaskSpec Task, string Worktree) RefreshDeveloper(

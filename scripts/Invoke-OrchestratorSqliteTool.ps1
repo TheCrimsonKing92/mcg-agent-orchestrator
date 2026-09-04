@@ -118,7 +118,7 @@ try {
         )
         $missingAssets = @($requiredAssets | Where-Object { -not (Test-Path -LiteralPath $_ -PathType Leaf) })
         if ($missingAssets.Count -gt 0) {
-            Write-ActionableFailure "SQLite helper artifact is missing or stale and no-restored build assets are unavailable; run .\scripts\Invoke-RepoScript.ps1 scripts\Invoke-PackageBootstrap.ps1 online, then retry."
+            Write-ActionableFailure "SQLite helper artifact is missing or stale and no-restored build assets are unavailable; run .\scripts\Invoke-RepoScript.ps1 scripts\Invoke-PackageBootstrap.ps1, then retry."
         }
 
         $buildLogDirectory = Join-Path $repoRoot ".orchestrator\logs"
@@ -134,7 +134,7 @@ try {
         }
 
         if ($buildExit -ne 0 -or -not (Test-Path -LiteralPath $artifactPath -PathType Leaf)) {
-            Write-ActionableFailure "SQLite helper no-restore rebuild failed; build diagnostics were preserved at $buildLog. Resolve the reported build error, or run .\scripts\Invoke-RepoScript.ps1 scripts\Invoke-PackageBootstrap.ps1 online when restore assets need repair, then retry."
+            Write-ActionableFailure "SQLite helper no-restore rebuild failed; build diagnostics were preserved at $buildLog. Resolve the reported build error, or run .\scripts\Invoke-RepoScript.ps1 scripts\Invoke-PackageBootstrap.ps1 when restore assets need repair, then retry."
         }
 
         Remove-Item -LiteralPath $buildLog -Force -ErrorAction SilentlyContinue
