@@ -544,9 +544,39 @@ internal sealed class OwnedProcessGroup : IDisposable
 
         private sealed class NativeProcessWaitHandle : WaitHandle
         {
+            private readonly SafeFileHandle _processHandle;
+            private bool _addedRef;
+
             internal NativeProcessWaitHandle(SafeFileHandle processHandle)
             {
-                SafeWaitHandle = new SafeWaitHandle(processHandle.DangerousGetHandle(), ownsHandle: false);
+                _processHandle = processHandle;
+                try
+                {
+                    processHandle.DangerousAddRef(ref _addedRef);
+                    SafeWaitHandle = new SafeWaitHandle(processHandle.DangerousGetHandle(), ownsHandle: false);
+                }
+                catch
+                {
+                    ReleaseProcessHandle();
+                    throw;
+                }
+            }
+
+            protected override void Dispose(bool explicitDisposing)
+            {
+                base.Dispose(explicitDisposing);
+                ReleaseProcessHandle();
+            }
+
+            private void ReleaseProcessHandle()
+            {
+                if (!_addedRef)
+                {
+                    return;
+                }
+
+                _addedRef = false;
+                _processHandle.DangerousRelease();
             }
         }
     }

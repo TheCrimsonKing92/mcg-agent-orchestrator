@@ -84,6 +84,28 @@ public sealed class OwnedProcessExitObservationTests
         Xunit.Assert.Equal(7, launch.TryReadOwnedExitCode());
     }
 
+    [Xunit.Fact(Skip = "Requires Windows suspended-process handles.", SkipUnless = nameof(IsWindows))]
+    public async Task WaitAsync_TransferredHandleDisposedDuringWait_StillObservesExit()
+    {
+        using var launch = OwnedProcessGroup.StartSuspended(CreateFastExitStartInfo());
+        using var cancellation = new CancellationTokenSource(TimeSpan.FromSeconds(30));
+        var waitTask = launch.WaitForOwnedExitAsync(cancellation.Token);
+        var transfer = launch.TransferOwnedProcess();
+        try
+        {
+            transfer.ProcessHandle.Dispose();
+            launch.Resume();
+
+            await waitTask;
+        }
+        finally
+        {
+            transfer.ProcessHandle.Dispose();
+            transfer.Process.Dispose();
+            launch.Group.Dispose();
+        }
+    }
+
     private static ProcessStartInfo CreateFastExitStartInfo()
     {
         var startInfo = new ProcessStartInfo
