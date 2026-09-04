@@ -442,11 +442,34 @@ public static partial class GoalWorktrees
 
     private static void RequireGitWorkTree(string executionDirectory, int gitTimeoutMilliseconds)
     {
-        if (!IsGitWorkTree(executionDirectory, gitTimeoutMilliseconds))
+        // Carry the probe evidence into the diagnostic. A bare "not a work tree" message cannot
+        // distinguish a genuinely non-git directory from a probe that exited 0 with empty output,
+        // timed out, or never started - and those have different causes and different fixes.
+        var result = GitCli.Run(executionDirectory, gitTimeoutMilliseconds, "rev-parse", "--is-inside-work-tree");
+        if (result.ExitCode == 0 && result.Output.Trim().Equals("true", StringComparison.OrdinalIgnoreCase))
         {
-            throw new InvalidOperationException(
-                $"Goal workspaces require '{executionDirectory}' to be inside a git work tree.");
+            return;
         }
+
+        var stdout = result.Output ?? string.Empty;
+        var shownStdout = stdout.Trim();
+        if (shownStdout.Length > 60)
+        {
+            shownStdout = shownStdout[..60];
+        }
+
+        var stderr = (result.Error ?? string.Empty).Trim();
+        if (stderr.Length > 200)
+        {
+            stderr = stderr[..200];
+        }
+
+        throw new InvalidOperationException(
+            $"Goal workspaces require '{executionDirectory}' to be inside a git work tree. " +
+            $"probe='git rev-parse --is-inside-work-tree'; exit={result.ExitCode}; " +
+            $"processStarted={result.ProcessStarted}; drainTimedOut={result.DrainTimedOut}; " +
+            $"stdoutBytes={stdout.Length}; stdout='{shownStdout}'; stderr='{stderr}'; " +
+            $"directoryExists={Directory.Exists(executionDirectory)}");
     }
 
 }

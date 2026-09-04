@@ -1,3 +1,6 @@
+using Mcg.AgentOrchestrator.Core;
+using Mcg.AgentOrchestrator.Infrastructure;
+
 public sealed class GoalWorktreeTestsGitHelperDiagnostics : GoalWorktreeTestBase
 {
     public static bool IsWindows => OperatingSystem.IsWindows();
@@ -29,6 +32,34 @@ public sealed class GoalWorktreeTestsGitHelperDiagnostics : GoalWorktreeTestBase
         finally
         {
             DeleteDirectory(repo);
+        }
+    }
+
+    // A bare "not inside a git work tree" message is thrown identically for a genuinely non-git
+    // directory, a probe that exited 0 with empty output, a timeout, and a probe that never started.
+    // The diagnostic must carry the probe evidence so those are distinguishable from the artifact.
+    [Xunit.Fact]
+    public void RequireGitWorkTreeFailureCarriesProbeEvidence()
+    {
+        var directory = Path.Combine(Path.GetTempPath(), "not-a-repo-" + Guid.NewGuid().ToString("n"));
+        Directory.CreateDirectory(directory);
+        try
+        {
+            var exception = Assert.Throws<InvalidOperationException>(
+                () => GoalWorktrees.HasBranch(directory, GoalId.New()));
+
+            Assert.Contains("to be inside a git work tree", exception.Message, StringComparison.Ordinal);
+            Assert.Contains("probe='git rev-parse --is-inside-work-tree'", exception.Message, StringComparison.Ordinal);
+            // git reports "not a git repository" with exit 128; an empty-output probe would report exit=0.
+            Assert.Contains("exit=128", exception.Message, StringComparison.Ordinal);
+            Assert.Contains("processStarted=True", exception.Message, StringComparison.Ordinal);
+            Assert.Contains("stdoutBytes=", exception.Message, StringComparison.Ordinal);
+            Assert.Contains("directoryExists=True", exception.Message, StringComparison.Ordinal);
+            Assert.Contains("not a git repository", exception.Message, StringComparison.OrdinalIgnoreCase);
+        }
+        finally
+        {
+            DeleteDirectory(directory);
         }
     }
 
