@@ -316,6 +316,7 @@ internal static class RunEventMaintenanceCadence
     internal static string FormatArtifactRetentionReceipt(StorageRetentionResult result)
     {
         var reclaimedBytes = result.Decisions.Sum(decision => decision.BytesReclaimed);
+        var mtpUnattributed = GetMtpUnattributedRetentionCounters(result);
         var mtpUnreclaimableDirectoriesUnmeasured = result.Decisions.Count(decision =>
             decision.Family == EvidenceArtifactFamily.MtpTestRuns &&
             decision.Action == EvidenceRetentionAction.RetainedUndecidable);
@@ -330,7 +331,7 @@ internal static class RunEventMaintenanceCadence
         var status = ArtifactRetentionStatus(result, reclaimedBytes, deferred, retainedUndecidable);
         var actions = FormatDecisionCounts(result.Decisions, decision => decision.Action.ToString());
         var reasons = FormatDecisionCounts(result.Decisions, decision => decision.Reason);
-        return $"STORAGE_RETENTION policyVersion={EvidenceRetentionPolicy.Version} sweepId={result.SweepId} status={status} durationMs={result.Duration.TotalMilliseconds:F0} decisions={result.Decisions.Count} reclaimedBytes={reclaimedBytes} retainedUndecidable={retainedUndecidable} nonTerminalUnbounded={nonTerminalUnbounded} mtpUnreclaimableDirectoriesUnmeasured={mtpUnreclaimableDirectoriesUnmeasured} deferred={deferred} actions={actions} reasons={reasons}";
+        return $"STORAGE_RETENTION policyVersion={EvidenceRetentionPolicy.Version} sweepId={result.SweepId} status={status} durationMs={result.Duration.TotalMilliseconds:F0} decisions={result.Decisions.Count} reclaimedBytes={reclaimedBytes} retainedUndecidable={retainedUndecidable} nonTerminalUnbounded={nonTerminalUnbounded} mtpUnreclaimableDirectoriesUnmeasured={mtpUnreclaimableDirectoriesUnmeasured} mtpUnattributedExamined={mtpUnattributed.Examined} mtpUnattributedReclaimed={mtpUnattributed.Reclaimed} mtpUnattributedRetainedLive={mtpUnattributed.RetainedLive} mtpUnattributedRetainedYoung={mtpUnattributed.RetainedYoung} mtpUnattributedBytesReclaimed={mtpUnattributed.BytesReclaimed} deferred={deferred} actions={actions} reasons={reasons}";
     }
 
     internal static void AppendArtifactRetentionReceipt(
@@ -358,6 +359,7 @@ internal static class RunEventMaintenanceCadence
             EvidenceRetentionAction.DeferredLive or
             EvidenceRetentionAction.DeferredLocked);
         var reclaimedBytes = result.Decisions.Sum(decision => decision.BytesReclaimed);
+        var mtpUnattributed = GetMtpUnattributedRetentionCounters(result);
         var mtpUnreclaimableDirectoriesUnmeasured = result.Decisions.Count(decision =>
             decision.Family == EvidenceArtifactFamily.MtpTestRuns &&
             decision.Action == EvidenceRetentionAction.RetainedUndecidable);
@@ -392,6 +394,11 @@ internal static class RunEventMaintenanceCadence
                 retainedUndecidable,
                 nonTerminalUnbounded,
                 mtpUnreclaimableDirectoriesUnmeasured,
+                mtpUnattributedExamined = mtpUnattributed.Examined,
+                mtpUnattributedReclaimed = mtpUnattributed.Reclaimed,
+                mtpUnattributedRetainedLive = mtpUnattributed.RetainedLive,
+                mtpUnattributedRetainedYoung = mtpUnattributed.RetainedYoung,
+                mtpUnattributedBytesReclaimed = mtpUnattributed.BytesReclaimed,
                 durationMs = result.Duration.TotalMilliseconds,
                 decisionsTruncated = truncated,
                 destructiveDecisionsDropped = destructive.Length - keptDestructive.Length,
@@ -401,6 +408,26 @@ internal static class RunEventMaintenanceCadence
             OccurredAt: occurredAt))
             .GetAwaiter()
             .GetResult();
+    }
+
+    private static (
+        int Examined,
+        int Reclaimed,
+        int RetainedLive,
+        int RetainedYoung,
+        long BytesReclaimed) GetMtpUnattributedRetentionCounters(StorageRetentionResult result)
+    {
+        var decisions = result.Decisions
+            .Where(decision =>
+                decision.Family == EvidenceArtifactFamily.MtpTestRuns &&
+                decision.AttemptId?.Equals("unowned", StringComparison.OrdinalIgnoreCase) == true)
+            .ToArray();
+        return (
+            decisions.Length,
+            decisions.Count(decision => decision.Action == EvidenceRetentionAction.Deleted),
+            decisions.Count(decision => decision.Reason == "mtp-unattributed-owner-is-live"),
+            decisions.Count(decision => decision.Reason == "mtp-unattributed-is-young"),
+            decisions.Sum(decision => decision.BytesReclaimed));
     }
 
     private static StorageRetentionResult WithReceiptPersistenceFailure(

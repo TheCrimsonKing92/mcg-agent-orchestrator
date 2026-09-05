@@ -794,6 +794,210 @@ public sealed class StorageRetentionMaintenanceTests
     }
 
     [Xunit.Fact]
+    public void MtpUnattributedRetention_ReclaimsAged_KeepsLiveAndYoung()
+    {
+        using var fixture = new RetentionFixture();
+        var aged = fixture.WriteUnattributedMtpRun("summary-aged", Now.AddHours(-50));
+        var live = fixture.WriteUnattributedMtpRun(
+            "summary-live",
+            Now.AddHours(-50),
+            ownerProcessId: Environment.ProcessId);
+        var young = fixture.WriteUnattributedMtpRun("summary-young", Now.AddMinutes(-5));
+
+        var result = StorageRetentionMaintenance.Run(
+            fixture.LogDirectory,
+            fixture.OrchestratorDirectory,
+            fixture.ExecutionDirectory,
+            [],
+            Now,
+            mtpResultsRoot: fixture.MtpResultsRoot);
+
+        Assert.False(Directory.Exists(aged));
+        Assert.True(Directory.Exists(live));
+        Assert.True(Directory.Exists(young));
+        Assert.Contains(result.Decisions, decision =>
+            decision.Path == aged &&
+            decision.Action == EvidenceRetentionAction.Deleted &&
+            decision.Reason == "mtp-unattributed-past-age-bound");
+        Assert.Contains(result.Decisions, decision =>
+            decision.Path == live &&
+            decision.Action == EvidenceRetentionAction.Preserved &&
+            decision.Reason == "mtp-unattributed-owner-is-live");
+        Assert.Contains(result.Decisions, decision =>
+            decision.Path == young &&
+            decision.Action == EvidenceRetentionAction.Preserved &&
+            decision.Reason == "mtp-unattributed-is-young");
+        var reclaimedBytes = Assert.Single(result.Decisions, decision => decision.Path == aged).BytesReclaimed;
+        Assert.True(reclaimedBytes > 0);
+        var receipt = RunEventMaintenanceCadence.FormatArtifactRetentionReceipt(result);
+        Assert.Contains("mtpUnattributedExamined=3", receipt, StringComparison.Ordinal);
+        Assert.Contains("mtpUnattributedReclaimed=1", receipt, StringComparison.Ordinal);
+        Assert.Contains("mtpUnattributedRetainedLive=1", receipt, StringComparison.Ordinal);
+        Assert.Contains("mtpUnattributedRetainedYoung=1", receipt, StringComparison.Ordinal);
+        Assert.Contains($"mtpUnattributedBytesReclaimed={reclaimedBytes}", receipt, StringComparison.Ordinal);
+    }
+
+    [Xunit.Fact]
+    public void MtpUnattributedRetention_InaccessibleOwnerIsPreservedAndSweepContinues()
+    {
+        using var fixture = new RetentionFixture();
+        var laterFamilyReached = false;
+        var inaccessibleOwner = fixture.WriteUnattributedMtpRun(
+            "summary-inaccessible-owner",
+            Now.AddHours(-50),
+            ownerProcessId: 1234);
+
+        var result = StorageRetentionMaintenance.Run(
+            fixture.LogDirectory,
+            fixture.OrchestratorDirectory,
+            fixture.ExecutionDirectory,
+            [],
+            Now,
+            beforeGoalJournalArchiveForTests: () => laterFamilyReached = true,
+            mtpResultsRoot: fixture.MtpResultsRoot,
+            mtpProcessHasExitedForTests: _ =>
+                throw new System.ComponentModel.Win32Exception(5, "Access is denied."));
+
+        Assert.True(Directory.Exists(inaccessibleOwner));
+        Assert.True(laterFamilyReached);
+        Assert.False(result.Failed, "An inaccessible live owner must not abort the retention sweep.");
+        Assert.Contains(result.Decisions, decision =>
+            decision.Path == inaccessibleOwner &&
+            decision.Action == EvidenceRetentionAction.Preserved &&
+            decision.Reason == "mtp-unattributed-owner-is-live");
+    }
+
+    [Xunit.Fact]
+    public void MtpUnattributedRetention_DeadOwnerIsEligibleForReclamation()
+    {
+        using var fixture = new RetentionFixture();
+        var deadOwner = fixture.WriteUnattributedMtpRun(
+            "summary-dead-owner",
+            Now.AddHours(-50),
+            ownerProcessId: 1234);
+
+        var result = StorageRetentionMaintenance.Run(
+            fixture.LogDirectory,
+            fixture.OrchestratorDirectory,
+            fixture.ExecutionDirectory,
+            [],
+            Now,
+            mtpResultsRoot: fixture.MtpResultsRoot,
+            mtpProcessHasExitedForTests: _ => true);
+
+        Assert.False(Directory.Exists(deadOwner));
+        Assert.Contains(result.Decisions, decision =>
+            decision.Path == deadOwner &&
+            decision.Action == EvidenceRetentionAction.Deleted &&
+            decision.Reason == "mtp-unattributed-past-age-bound");
+    }
+
+    [Xunit.Fact]
+    public void MtpUnattributedRetention_SizeRuleReclaimsOldestFirstUntilWithinBudget()
+    {
+        using var fixture = new RetentionFixture();
+        var oldest = fixture.WriteUnattributedMtpRun("summary-oldest", Now.AddHours(-3), payloadBytes: 128);
+        var middle = fixture.WriteUnattributedMtpRun("summary-middle", Now.AddHours(-2), payloadBytes: 128);
+        var newest = fixture.WriteUnattributedMtpRun("summary-newest", Now.AddHours(-1), payloadBytes: 128);
+        var maxBytes = DirectoryBytes(newest);
+
+        var result = StorageRetentionMaintenance.Run(
+            fixture.LogDirectory,
+            fixture.OrchestratorDirectory,
+            fixture.ExecutionDirectory,
+            [],
+            Now,
+            mtpResultsRoot: fixture.MtpResultsRoot,
+            mtpUnattributedMaxBytesForTests: maxBytes);
+
+        Assert.False(Directory.Exists(oldest));
+        Assert.False(Directory.Exists(middle));
+        Assert.True(Directory.Exists(newest));
+        Assert.Equal(
+            [oldest, middle],
+            result.Decisions
+                .Where(decision =>
+                    decision.Action == EvidenceRetentionAction.Deleted &&
+                    decision.Reason == "mtp-unattributed-past-size-bound")
+                .Select(decision => decision.Path)
+                .ToArray());
+    }
+
+    [Xunit.Fact]
+    public void MtpUnattributedRetention_PerSweepBoundDrainsAcrossSweeps()
+    {
+        const int reclaimBound = 2;
+        using var fixture = new RetentionFixture();
+        for (var ordinal = 0; ordinal < reclaimBound + 3; ordinal++)
+        {
+            fixture.WriteUnattributedMtpRun(
+                $"summary-aged-{ordinal}",
+                Now.AddHours(-60 + ordinal));
+        }
+
+        var first = StorageRetentionMaintenance.Run(
+            fixture.LogDirectory,
+            fixture.OrchestratorDirectory,
+            fixture.ExecutionDirectory,
+            [],
+            Now,
+            mtpResultsRoot: fixture.MtpResultsRoot,
+            mtpUnattributedMaxBytesForTests: long.MaxValue,
+            mtpUnattributedReclaimsPerSweepForTests: reclaimBound);
+
+        Assert.Equal(3, Directory.GetDirectories(fixture.MtpResultsRoot).Length);
+        Assert.Equal(reclaimBound, first.Decisions.Count(decision =>
+            decision.Action == EvidenceRetentionAction.Deleted &&
+            decision.AttemptId == "unowned"));
+        Assert.Contains(first.Decisions, decision =>
+            decision.Reason == "mtp-unattributed-deferred-to-next-sweep");
+
+        var second = StorageRetentionMaintenance.Run(
+            fixture.LogDirectory,
+            fixture.OrchestratorDirectory,
+            fixture.ExecutionDirectory,
+            [],
+            Now,
+            mtpResultsRoot: fixture.MtpResultsRoot,
+            mtpUnattributedMaxBytesForTests: long.MaxValue,
+            mtpUnattributedReclaimsPerSweepForTests: reclaimBound);
+
+        Assert.Single(Directory.GetDirectories(fixture.MtpResultsRoot));
+        Assert.Equal(reclaimBound, second.Decisions.Count(decision =>
+            decision.Action == EvidenceRetentionAction.Deleted &&
+            decision.AttemptId == "unowned"));
+    }
+
+    [Xunit.Fact]
+    public void MtpUnattributedRetention_SkipsProcessRootsAndLeaseFiles()
+    {
+        using var fixture = new RetentionFixture();
+        var processRoot = Path.Combine(fixture.MtpResultsRoot, "p1a2b");
+        Directory.CreateDirectory(processRoot);
+        var leaseFile = Path.Combine(fixture.MtpResultsRoot, ".p1a2b.owner.lock");
+        File.WriteAllText(leaseFile, "lease");
+
+        var result = StorageRetentionMaintenance.Run(
+            fixture.LogDirectory,
+            fixture.OrchestratorDirectory,
+            fixture.ExecutionDirectory,
+            [],
+            Now,
+            mtpResultsRoot: fixture.MtpResultsRoot,
+            mtpUnattributedMaxBytesForTests: 0);
+
+        Assert.True(Directory.Exists(processRoot));
+        Assert.True(File.Exists(leaseFile));
+        Assert.Contains(result.Decisions, decision =>
+            decision.Path == processRoot &&
+            decision.Action == EvidenceRetentionAction.Preserved &&
+            decision.Reason == "mtp-process-temp-root-owned-by-reaper");
+        Assert.DoesNotContain(result.Decisions, decision =>
+            decision.Path == processRoot &&
+            decision.Action == EvidenceRetentionAction.Deleted);
+    }
+
+    [Xunit.Fact]
     public async Task MtpRetention_TerminalOwnedAgedRun_IsDeletedByScheduledPolicy()
     {
         using var fixture = new RetentionFixture();
@@ -1210,6 +1414,10 @@ public sealed class StorageRetentionMaintenanceTests
 
     private static void SetAge(string path, int days) => File.SetLastWriteTimeUtc(path, Now.AddDays(-days).UtcDateTime);
 
+    private static long DirectoryBytes(string path) =>
+        Directory.EnumerateFiles(path, "*", SearchOption.AllDirectories)
+            .Sum(file => new FileInfo(file).Length);
+
     private sealed class RetentionFixture : IDisposable
     {
         private readonly string _root = Path.Combine(Path.GetTempPath(), "mcg-retention-tests", Guid.NewGuid().ToString("n"));
@@ -1291,6 +1499,32 @@ public sealed class StorageRetentionMaintenanceTests
                     runLabel = "retention-fixture"
                 }));
             File.WriteAllText(Path.Combine(directory, "failure.trx"), "retained failure evidence");
+            return directory;
+        }
+
+        public string WriteUnattributedMtpRun(
+            string name,
+            DateTimeOffset createdAt,
+            int? ownerProcessId = null,
+            int payloadBytes = 0)
+        {
+            var directory = Path.Combine(MtpResultsRoot, name);
+            Directory.CreateDirectory(directory);
+            File.WriteAllText(
+                Path.Combine(directory, ".mtp-run-ownership.json"),
+                System.Text.Json.JsonSerializer.Serialize(new
+                {
+                    schemaVersion = 1,
+                    attemptId = "unowned",
+                    machineName = Environment.MachineName,
+                    ownerProcessId,
+                    createdAt,
+                    runLabel = "retention-fixture"
+                }));
+            if (payloadBytes > 0)
+            {
+                File.WriteAllBytes(Path.Combine(directory, "payload.bin"), new byte[payloadBytes]);
+            }
             return directory;
         }
 
