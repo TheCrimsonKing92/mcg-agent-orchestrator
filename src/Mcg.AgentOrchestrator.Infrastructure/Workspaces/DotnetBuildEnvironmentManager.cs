@@ -324,6 +324,7 @@ public static class DotnetBuildEnvironmentManager
         var delay = sleep ?? DefaultLeaseSleep;
         var waitTimeout = timeout ?? DefaultSlotBusyPollTimeout;
         var timeoutAt = clock.GetUtcNow().Add(waitTimeout);
+        DateTimeOffset? waitStartedAt = null;
         var waitingReported = false;
         while (true)
         {
@@ -341,7 +342,8 @@ public static class DotnetBuildEnvironmentManager
 
                 if (TryOpenLeaseExecutionLock(environment, out var stream, out var blockedAttribution))
                 {
-                    return new DotnetBuildLeaseAcquisition.Acquired(new DotnetBuildEnvironmentLease(environment, stream));
+                    return new DotnetBuildLeaseAcquisition.Acquired(new DotnetBuildEnvironmentLease(
+                        environment, stream, waitStartedAt is null ? TimeSpan.Zero : clock.GetUtcNow() - waitStartedAt.Value));
                 }
                 if (blockedAttribution is not null)
                 {
@@ -352,6 +354,7 @@ public static class DotnetBuildEnvironmentManager
             var leastRecentlyLeased = FindLeastRecentlyLeasedStableSlot(slotCount);
             if (!waitingReported)
             {
+                waitStartedAt = clock.GetUtcNow();
                 onWait?.Invoke(new DotnetBuildStableSlotWait(leastRecentlyLeased.SlotIndex, leastRecentlyLeased.OwnerProcessId));
                 waitingReported = true;
             }
@@ -374,7 +377,8 @@ public static class DotnetBuildEnvironmentManager
 
             if (TryOpenLeaseExecutionLock(target, out var targetStream, out var targetBlockedAttribution))
             {
-                return new DotnetBuildLeaseAcquisition.Acquired(new DotnetBuildEnvironmentLease(target, targetStream));
+                return new DotnetBuildLeaseAcquisition.Acquired(new DotnetBuildEnvironmentLease(
+                    target, targetStream, waitStartedAt is null ? TimeSpan.Zero : clock.GetUtcNow() - waitStartedAt.Value));
             }
             if (targetBlockedAttribution is not null)
             {
@@ -2587,13 +2591,15 @@ public sealed class DotnetBuildEnvironmentLease : IDisposable
     private Action? _executionLockReleaseObserver;
     private int _state;
 
-    internal DotnetBuildEnvironmentLease(DotnetBuildEnvironment environment, FileStream stream)
+    internal DotnetBuildEnvironmentLease(DotnetBuildEnvironment environment, FileStream stream, TimeSpan? slotWaitDuration = null)
     {
         Environment = environment;
         _stream = stream;
+        SlotWaitDuration = slotWaitDuration;
     }
 
     public DotnetBuildEnvironment Environment { get; }
+    public TimeSpan? SlotWaitDuration { get; }
 
     internal bool IsExecutionLockHeld => Volatile.Read(ref _state) == 0;
 

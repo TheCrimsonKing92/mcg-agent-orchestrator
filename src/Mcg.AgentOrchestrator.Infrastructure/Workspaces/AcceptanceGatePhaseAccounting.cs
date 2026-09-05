@@ -98,7 +98,11 @@ public sealed record AcceptanceGatePhaseBreakdown(
     TimeSpan LaneExecutionDuration,
     TimeSpan AttributedPhaseDuration,
     TimeSpan UnattributedDuration,
-    IReadOnlyList<AcceptanceGatePhaseDuration> Phases);
+    IReadOnlyList<AcceptanceGatePhaseDuration> Phases,
+    int? EffectiveShardConcurrency = null,
+    int? PeakShardConcurrency = null,
+    TimeSpan? LongestLaneDuration = null,
+    TimeSpan? SlotWaitDuration = null);
 
 internal sealed class AcceptanceGatePhaseAccountant : IDisposable
 {
@@ -117,6 +121,10 @@ internal sealed class AcceptanceGatePhaseAccountant : IDisposable
     private long _currentPhaseStartedTimestamp;
     private TimeSpan _recordedLaneDuration;
     private bool _hasRecordedLaneDuration;
+    private int? _effectiveShardConcurrency;
+    private int? _peakShardConcurrency;
+    private long _longestLaneTicks;
+    private TimeSpan? _slotWaitDuration;
     private string _outcome = "faulted";
     private bool _disposed;
 
@@ -147,6 +155,15 @@ internal sealed class AcceptanceGatePhaseAccountant : IDisposable
 
     internal static void RecordCurrentLaneExecution(TimeSpan duration) =>
         CurrentAccountant.Value?.RecordLaneExecution(duration);
+
+    internal static void RecordCurrentLaneScheduling(int effectiveConcurrency, int peakConcurrency) =>
+        CurrentAccountant.Value?.RecordLaneScheduling(effectiveConcurrency, peakConcurrency);
+
+    internal static void RecordCurrentLaneSample(TimeSpan duration) =>
+        CurrentAccountant.Value?.RecordLaneSample(duration);
+
+    internal static void RecordCurrentSlotWait(TimeSpan? duration) =>
+        CurrentAccountant.Value?.RecordSlotWait(duration);
 
     internal static AcceptanceGateDiagnosticSnapshot CurrentSnapshot =>
         CurrentAccountant.Value?.Snapshot ?? new(null, null);
@@ -210,6 +227,32 @@ internal sealed class AcceptanceGatePhaseAccountant : IDisposable
             _phaseDurations[AcceptanceGatePhaseNames.LaneExecution] += duration;
             _currentPhase = null;
         }
+    }
+
+    internal void RecordLaneScheduling(int effectiveConcurrency, int peakConcurrency)
+    {
+        ObjectDisposedException.ThrowIf(_disposed, this);
+        _effectiveShardConcurrency = effectiveConcurrency;
+        _peakShardConcurrency = peakConcurrency;
+    }
+
+    internal void RecordLaneSample(TimeSpan duration)
+    {
+        var candidate = duration.Ticks;
+        var observed = Volatile.Read(ref _longestLaneTicks);
+        while (candidate > observed)
+        {
+            var prior = Interlocked.CompareExchange(ref _longestLaneTicks, candidate, observed);
+            if (prior == observed)
+                break;
+            observed = prior;
+        }
+    }
+
+    internal void RecordSlotWait(TimeSpan? duration)
+    {
+        ObjectDisposedException.ThrowIf(_disposed, this);
+        _slotWaitDuration = duration;
     }
 
     internal void MarkCompleted(bool passed) => _outcome = passed ? "completed" : "failed";
@@ -299,7 +342,11 @@ internal sealed class AcceptanceGatePhaseAccountant : IDisposable
             laneDuration,
             attributedDuration,
             unattributedDuration,
-            phases);
+            phases,
+            _effectiveShardConcurrency,
+            _peakShardConcurrency,
+            _longestLaneTicks > 0 ? TimeSpan.FromTicks(_longestLaneTicks) : null,
+            _slotWaitDuration);
     }
 
     private static string FormatCompact(AcceptanceGatePhaseBreakdown breakdown)
@@ -313,6 +360,10 @@ internal sealed class AcceptanceGatePhaseAccountant : IDisposable
             $"outcome={breakdown.Outcome}",
             $"total_ms={Milliseconds(breakdown.TotalDuration)}",
             $"lane_ms={Milliseconds(breakdown.LaneExecutionDuration)}",
+            $"shard_concurrency_effective={breakdown.EffectiveShardConcurrency?.ToString(CultureInfo.InvariantCulture) ?? "unavailable"}",
+            $"shard_concurrency_peak={breakdown.PeakShardConcurrency?.ToString(CultureInfo.InvariantCulture) ?? "unavailable"}",
+            $"longest_lane_ms={(breakdown.LongestLaneDuration is { } longestLane ? Milliseconds(longestLane) : "unavailable")}",
+            $"slot_wait_ms={(breakdown.SlotWaitDuration is { } slotWait ? Milliseconds(slotWait) : "unavailable")}",
             $"attributed_ms={Milliseconds(breakdown.AttributedPhaseDuration)}",
             $"unattributed_ms={Milliseconds(breakdown.UnattributedDuration)}"
         };

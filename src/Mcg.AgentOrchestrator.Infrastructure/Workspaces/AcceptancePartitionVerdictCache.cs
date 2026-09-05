@@ -1,3 +1,4 @@
+using System.Collections.Concurrent;
 using System.Text.Json;
 using Mcg.AgentOrchestrator.Core;
 using AcceptanceManifestCheck = Mcg.AgentOrchestrator.Infrastructure.GoalAcceptanceVerifier.AcceptanceManifestCheck;
@@ -61,12 +62,15 @@ internal sealed record PartitionVerdictRecord(
     bool Passed,
     string Verdict,
     IReadOnlyList<string> TestResultPaths,
-    DateTimeOffset RecordedAt);
+    DateTimeOffset RecordedAt,
+    string? ClosureHash = null);
 
 internal sealed record PartitionVerdictReuseReceipt(
     string PartitionId,
     string SourceAttemptId,
-    string CacheKey);
+    string CacheKey,
+    string ReuseRule = "pair",
+    string? ClosureHash = null);
 
 internal sealed record PartitionVerdictExecutionReceipt(
     string PartitionId,
@@ -84,7 +88,8 @@ internal sealed record AcceptancePartitionVerdictCacheOptions(
     Func<string> ResolveAttemptId,
     Func<string> ResolveManifestIdentity,
     Func<bool> EnforceStructuralCoverage,
-    Func<IReadOnlyList<TempRootApparatusLossReceiptV1>>? ResolveApparatusLossReceipts = null);
+    Func<IReadOnlyList<TempRootApparatusLossReceiptV1>>? ResolveApparatusLossReceipts = null,
+    Func<AcceptanceManifestCheck, string?>? ResolveClosureHash = null);
 
 internal sealed class AcceptancePartitionVerdictCache
 {
@@ -107,6 +112,9 @@ internal sealed class AcceptancePartitionVerdictCache
     private readonly List<PartitionVerdictRecord> _freshRecords = [];
     private readonly List<(string PartitionId, AcceptanceCheckResult Result)> _failedPartitions = [];
     private readonly Func<IReadOnlyList<TempRootApparatusLossReceiptV1>> _resolveApparatusLossReceipts;
+    private readonly Func<AcceptanceManifestCheck, string?> _resolveClosureHash;
+    private readonly AcceptanceClosureVerdictIndex _closureIndex;
+    private readonly ConcurrentDictionary<string, Lazy<string?>> _closureHashes = new(StringComparer.OrdinalIgnoreCase);
     private AcceptanceSharedApparatusInvalidation? _sharedApparatusInvalidation;
 
     private AcceptancePartitionVerdictCache(
@@ -124,7 +132,9 @@ internal sealed class AcceptancePartitionVerdictCache
         bool forceFullRerun,
         bool withinAttemptRerunEnabled,
         Func<bool> enforceStructuralCoverage,
-        Func<IReadOnlyList<TempRootApparatusLossReceiptV1>> resolveApparatusLossReceipts)
+        Func<IReadOnlyList<TempRootApparatusLossReceiptV1>> resolveApparatusLossReceipts,
+        Func<AcceptanceManifestCheck, string?> resolveClosureHash,
+        AcceptanceClosureVerdictIndex closureIndex)
     {
         GoalId = goalId;
         CandidateTreeSha = candidateTreeSha;
@@ -141,6 +151,8 @@ internal sealed class AcceptancePartitionVerdictCache
         _withinAttemptRerunEnabled = withinAttemptRerunEnabled;
         _enforceStructuralCoverage = enforceStructuralCoverage;
         _resolveApparatusLossReceipts = resolveApparatusLossReceipts;
+        _resolveClosureHash = resolveClosureHash;
+        _closureIndex = closureIndex;
     }
 
     internal string GoalId { get; }
@@ -213,27 +225,45 @@ internal sealed class AcceptancePartitionVerdictCache
             forceFullRerun,
             options.WithinAttemptRerunEnabled,
             options.EnforceStructuralCoverage,
-            options.ResolveApparatusLossReceipts ?? (() => []));
+            options.ResolveApparatusLossReceipts ?? (() => []),
+            options.ResolveClosureHash ?? (check => AcceptanceLaneClosureHasher.TryCompute(options.WorktreePath, check)),
+            new AcceptanceClosureVerdictIndex(options.WorktreePath));
     }
 
     internal AcceptanceCheckResult? TryReuse(AcceptanceManifestCheck check)
     {
-        if (!TryBuildCacheKey(check, out var partitionId, out _, out var cacheKey) ||
-            ForceFullRerun ||
-            LatestGreenVerdict(_journal, GoalId, cacheKey) is not { } cached ||
-            !HasReusableStructuralCoverageEvidence(cached))
+        if (!TryBuildCacheKey(check, out var partitionId, out var filterHash, out var cacheKey) || ForceFullRerun)
         {
             return null;
         }
 
-        RecordReuse(new PartitionVerdictReuseReceipt(partitionId, cached.AttemptId, cacheKey));
+        var cached = LatestGreenVerdict(_journal, GoalId, cacheKey);
+        var reuseRule = "pair";
+        string? closureHash = null;
+        if (cached is null)
+        {
+            closureHash = ResolveClosureHash(check);
+            if (string.IsNullOrWhiteSpace(closureHash) ||
+                _closureIndex.FindLatest(ManifestIdentity, filterHash, closureHash) is not { } contentVerdict)
+                return null;
+            cached = new PartitionVerdictRecord(
+                GoalId, contentVerdict.SourceAttemptId, CandidateTreeSha, MainSha, filterHash,
+                partitionId, cacheKey, true, "GREEN", contentVerdict.TestResultPaths,
+                contentVerdict.RecordedAt, closureHash);
+            reuseRule = "closure";
+        }
+        if (!HasReusableStructuralCoverageEvidence(cached))
+            return null;
+
+        RecordReuse(new PartitionVerdictReuseReceipt(partitionId, cached.AttemptId, cacheKey, reuseRule, closureHash));
         return new AcceptanceCheckResult(
             check.Name,
             true,
             0,
             null,
             ResultSummary:
-                $"partition-verdict-cache reused source_attempt_id={cached.AttemptId} cache_key={cacheKey}",
+                $"partition-verdict-cache reused source_attempt_id={cached.AttemptId} cache_key={cacheKey} " +
+                $"reuse_rule={reuseRule} closure_hash={closureHash ?? "not-applicable"}",
             TestResultPaths: cached.TestResultPaths,
             TestResultAttemptId: cached.AttemptId,
             TestResultIsExplicitCrossAttemptReuse: true);
@@ -465,6 +495,7 @@ internal sealed class AcceptancePartitionVerdictCache
             return;
         }
 
+        var closureHash = result.Passed ? ResolveClosureHash(check) : null;
         lock (_gate)
         {
             _executed.Add(new PartitionVerdictExecutionReceipt(
@@ -481,7 +512,8 @@ internal sealed class AcceptancePartitionVerdictCache
                 result.Passed,
                 result.Passed ? "GREEN" : "RED",
                 result.TestResultPaths ?? [],
-                DateTimeOffset.UtcNow));
+                DateTimeOffset.UtcNow,
+                closureHash));
         }
     }
 
@@ -548,6 +580,8 @@ internal sealed class AcceptancePartitionVerdictCache
         AppendPartitionVerdictJournalEntries(
             JournalPath,
             BuildPartitionVerdictJournalEntries(this, receipt, aggregateVerdict, attemptCount, summaryRecordedAt));
+        foreach (var record in _freshRecords.Where(record => record.Passed && !string.IsNullOrWhiteSpace(record.ClosureHash)))
+            _closureIndex.AppendGreen(ManifestIdentity, record.PartitionFilterHash, record.ClosureHash!, record.AttemptId, record.TestResultPaths);
         Console.WriteLine($"PARTITION_VERDICT_CACHE {receipt}");
         Console.Out.Flush();
         return new AcceptanceCheckResult(
@@ -566,6 +600,11 @@ internal sealed class AcceptancePartitionVerdictCache
             _reused.Add(receipt);
         }
     }
+
+    private string? ResolveClosureHash(AcceptanceManifestCheck check) =>
+        _closureHashes.GetOrAdd(
+            check.Project ?? check.Name,
+            _ => new Lazy<string?>(() => _resolveClosureHash(check), LazyThreadSafetyMode.ExecutionAndPublication)).Value;
 
     private bool TryBuildCacheKey(
         AcceptanceManifestCheck check,
@@ -633,7 +672,8 @@ internal sealed class AcceptancePartitionVerdictCache
         reused.Count == 0
             ? "[]"
             : "[" + string.Join("|", reused.Select(receipt =>
-                $"{{partition_id={receipt.PartitionId},source_attempt_id={receipt.SourceAttemptId},cache_key={receipt.CacheKey}}}")) + "]";
+                $"{{partition_id={receipt.PartitionId},source_attempt_id={receipt.SourceAttemptId},cache_key={receipt.CacheKey}," +
+                $"reuse_rule={receipt.ReuseRule},closure_hash={receipt.ClosureHash ?? "not-applicable"}}}")) + "]";
 
     private static string FormatPartitionExecutionReceipt(IReadOnlyList<PartitionVerdictExecutionReceipt> executed) =>
         executed.Count == 0

@@ -53,12 +53,22 @@ public sealed record GateLoadContext(
 internal sealed class GateShardConcurrencyCounter
 {
     private int _count;
+    private int _peak;
 
     public int Count => Volatile.Read(ref _count);
+    public int Peak => Volatile.Read(ref _peak);
 
     public IDisposable Enter()
     {
-        Interlocked.Increment(ref _count);
+        var count = Interlocked.Increment(ref _count);
+        var observed = Volatile.Read(ref _peak);
+        while (count > observed)
+        {
+            var prior = Interlocked.CompareExchange(ref _peak, count, observed);
+            if (prior == observed)
+                break;
+            observed = prior;
+        }
         return new Scope(this);
     }
 
