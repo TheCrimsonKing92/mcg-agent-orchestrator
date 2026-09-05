@@ -2023,7 +2023,8 @@ internal sealed partial class ConductorDriver
             return true;
         }
 
-        if (triggeringTask.LastVerification is { MergedReviewFindings: null } latestVerification &&
+        if (triggeringTask.RequiredRole == AgentRole.Reviewer &&
+            triggeringTask.LastVerification is { MergedReviewFindings: null } latestVerification &&
             !VerifyingFindingCurrency.HasCurrentOpenBlockingFinding(goal, AgentRole.Reviewer, latestVerification.CompletedAt) &&
             !VerifyingFindingCurrency.HasCurrentOpenBlockingFinding(goal, AgentRole.Tester, latestVerification.CompletedAt))
         {

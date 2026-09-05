@@ -22,6 +22,7 @@ public sealed class ConductorDriverTestsStaleFindingRouting
 
         RecordCommittedDeveloperPass(kernel, goal, developer, startedAt);
         RecordTesterFindings(kernel, goal, tester, startedAt.AddMinutes(3));
+        kernel.RetryTask(goal.Id, developer.Id, "Developer fixes resolved the Tester findings.");
         RecordCommittedDeveloperPass(kernel, goal, developer, startedAt.AddMinutes(12));
         kernel.ReportTaskProgress(goal.Id, tester.Id, WorkTaskStatus.Completed, "Operator closed the Tester after confirming the fixes.");
         kernel.RecordTaskVerification(
@@ -49,10 +50,11 @@ public sealed class ConductorDriverTestsStaleFindingRouting
                 return kernel.RetryTask(goalId, taskId, message, retryRoundKind: roundKind);
             });
 
+        var timelineCountBeforeAdvance = goal.Timeline.Count;
         var result = driver.AdvanceOnce(goal, ConductorAutonomyPolicy.Permissive);
 
         Assert.Equal(reviewer.Id, retriedTaskId);
-        Assert.DoesNotContain(goal.Timeline, evt =>
+        Assert.DoesNotContain(goal.Timeline.Skip(timelineCountBeforeAdvance), evt =>
             evt.TaskId == developer.Id && evt.Kind == ProgressKind.TaskRetried);
         Assert.DoesNotContain("owned-exit-200x-saturation-test-missing", retryMessage, StringComparison.Ordinal);
         Assert.DoesNotContain("owned-exit-disposed-handle-probe-test-missing", retryMessage, StringComparison.Ordinal);
