@@ -7,7 +7,8 @@ internal sealed record PostLandingCanaryProbeResult(
     bool Green,
     PostLandingCanaryFailureReason? FailureReason,
     int ExecutedTestCount,
-    string Detail);
+    string Detail,
+    string SlotResolution = "ambient-grid");
 
 internal static class PostLandingCanaryCommand
 {
@@ -25,6 +26,10 @@ internal static class PostLandingCanaryCommand
             return 2;
         }
 
+        var slotResolution = string.IsNullOrWhiteSpace(Environment.GetEnvironmentVariable(
+            DotnetBuildEnvironmentManager.IsolatedRootOverrideVariable))
+            ? "ambient-grid"
+            : "isolated-root";
         PostLandingCanaryProbeResult probe;
         try
         {
@@ -44,18 +49,21 @@ internal static class PostLandingCanaryCommand
                     true,
                     null,
                     executedTestCount,
-                    $"accept verdict with {executedTestCount} executed test(s)")
+                    $"accept verdict with {executedTestCount} executed test(s)",
+                    slotResolution)
                 : verification.Passed
                     ? new PostLandingCanaryProbeResult(
                         false,
                         PostLandingCanaryFailureReason.EmptyReceipt,
                         0,
-                        "accept verdict had an empty or missing core-tests receipt")
+                        "accept verdict had an empty or missing core-tests receipt",
+                        slotResolution)
                     : new PostLandingCanaryProbeResult(
                         false,
                         ClassifyFailure(verification, executedTestCount),
                         executedTestCount,
-                        verification.OutputTail ?? "gate returned a reject verdict");
+                        verification.OutputTail ?? "gate returned a reject verdict",
+                        slotResolution);
         }
         catch (Exception ex)
         {
@@ -63,7 +71,8 @@ internal static class PostLandingCanaryCommand
                 false,
                 PostLandingCanaryFailureReason.InfrastructureError,
                 0,
-                $"{ex.GetType().Name}: {ex.Message}");
+                $"{ex.GetType().Name}: {ex.Message}",
+                slotResolution);
         }
 
         Console.WriteLine(ResultPrefix + JsonSerializer.Serialize(
