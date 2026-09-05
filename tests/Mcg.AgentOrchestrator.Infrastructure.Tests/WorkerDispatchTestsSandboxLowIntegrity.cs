@@ -781,9 +781,9 @@ public sealed class WorkerDispatchTestsSandboxLowIntegrity : WorkerDispatchTestS
     Assert.Contains("--permission-mode 'dontAsk'", researcher.LastDispatch.Command, StringComparison.Ordinal);
     Assert.Contains("--restricted", researcher.LastDispatch.Command, StringComparison.Ordinal);
     Assert.Contains("--tools 'Read,Glob,Grep,Bash,WebFetch,WebSearch,TodoWrite'", researcher.LastDispatch.Command, StringComparison.Ordinal);
-    Assert.Contains("--allowed-tools 'Read,Glob,Grep,WebFetch,WebSearch,TodoWrite'", researcher.LastDispatch.Command, StringComparison.Ordinal);
+    Assert.Contains("--allowed-tools 'Read,Glob,Grep,Bash(git log *),Bash(rg *),WebFetch,WebSearch,TodoWrite'", researcher.LastDispatch.Command, StringComparison.Ordinal);
     Assert.Contains("--disallowed-tools 'Edit,Write,NotebookEdit'", researcher.LastDispatch.Command, StringComparison.Ordinal);
-    Assert.DoesNotContain("--allowed-tools 'Read,Glob,Grep,Bash", researcher.LastDispatch.Command, StringComparison.Ordinal);
+    Assert.DoesNotContain("--allowed-tools 'Read,Glob,Grep,Bash,", researcher.LastDispatch.Command, StringComparison.Ordinal);
     Assert.DoesNotContain(",Task", researcher.LastDispatch.Command, StringComparison.Ordinal);
     Assert.DoesNotContain("--permission-mode 'plan'", researcher.LastDispatch.Command, StringComparison.Ordinal);
     Assert.True(!researcher.LastDispatch.Command.Contains("workspace-write", StringComparison.Ordinal));
@@ -943,6 +943,7 @@ public sealed class WorkerDispatchTestsSandboxLowIntegrity : WorkerDispatchTestS
     Assert.Contains("--permission-mode 'bypassPermissions'", developerTask.LastDispatch!.Command, StringComparison.Ordinal);
     Assert.Contains("--permission-mode 'dontAsk'", reviewerTask.LastDispatch!.Command, StringComparison.Ordinal);
     Assert.Contains("--restricted", reviewerTask.LastDispatch.Command, StringComparison.Ordinal);
+    Assert.Contains("--allowed-tools 'Read,Glob,Grep,Bash(git log *),Bash(rg *),WebFetch,WebSearch,TodoWrite'", reviewerTask.LastDispatch.Command, StringComparison.Ordinal);
     Assert.Contains("--disallowed-tools 'Edit,Write,NotebookEdit'", reviewerTask.LastDispatch.Command, StringComparison.Ordinal);
     Assert.DoesNotContain(",Task", reviewerTask.LastDispatch.Command, StringComparison.Ordinal);
     Assert.DoesNotContain("--permission-mode 'plan'", reviewerTask.LastDispatch.Command, StringComparison.Ordinal);
@@ -988,9 +989,9 @@ public sealed class WorkerDispatchTestsSandboxLowIntegrity : WorkerDispatchTestS
     Assert.Contains("--permission-mode 'dontAsk'", researcherTask.LastDispatch!.Command, StringComparison.Ordinal);
     Assert.Contains("--restricted", researcherTask.LastDispatch.Command, StringComparison.Ordinal);
     Assert.Contains("--tools 'Read,Glob,Grep,Bash,WebFetch,WebSearch,TodoWrite'", researcherTask.LastDispatch.Command, StringComparison.Ordinal);
-    Assert.Contains("--allowed-tools 'Read,Glob,Grep,WebFetch,WebSearch,TodoWrite'", researcherTask.LastDispatch.Command, StringComparison.Ordinal);
+    Assert.Contains("--allowed-tools 'Read,Glob,Grep,Bash(git log *),Bash(rg *),WebFetch,WebSearch,TodoWrite'", researcherTask.LastDispatch.Command, StringComparison.Ordinal);
     Assert.Contains("--disallowed-tools 'Edit,Write,NotebookEdit'", researcherTask.LastDispatch.Command, StringComparison.Ordinal);
-    Assert.DoesNotContain("--allowed-tools 'Read,Glob,Grep,Bash", researcherTask.LastDispatch.Command, StringComparison.Ordinal);
+    Assert.DoesNotContain("--allowed-tools 'Read,Glob,Grep,Bash,", researcherTask.LastDispatch.Command, StringComparison.Ordinal);
     Assert.DoesNotContain(",Task", researcherTask.LastDispatch.Command, StringComparison.Ordinal);
     Assert.Contains("--permission-mode 'bypassPermissions'", developerTask.LastDispatch!.Command, StringComparison.Ordinal);
     Assert.DoesNotContain("--restricted", developerTask.LastDispatch.Command, StringComparison.Ordinal);

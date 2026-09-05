@@ -6,7 +6,7 @@ public static class ProviderCommandBuilder
 {
     public const string ClaudeReadOnlyPermissionMode = "dontAsk";
     public const string ClaudeReadOnlyTools = "Read,Glob,Grep,Bash,WebFetch,WebSearch,TodoWrite";
-    public const string ClaudeReadOnlyAllowedTools = "Read,Glob,Grep,WebFetch,WebSearch,TodoWrite";
+    public const string ClaudeReadOnlyAllowedTools = "Read,Glob,Grep,Bash(git log *),Bash(rg *),WebFetch,WebSearch,TodoWrite";
     public const string ClaudeReadOnlyDisallowedTools = "Edit,Write,NotebookEdit";
 
     public static IReadOnlyList<string> Build(
