@@ -30,7 +30,6 @@ public sealed class TaskProcessTests
     kernel.RecordTaskProcessStarted(goal.Id, alreadyRunning.Id, new TaskProcessRecord(1234, "echo running", "C:\\repo", "out.log", "err.log", "exit.txt", clock.UtcNow, null, null));
     failed.SetStatus(WorkTaskStatus.Failed);
     completed.SetStatus(WorkTaskStatus.Completed);
-    kernel.RecordTaskDispatch(goal.Id, admissionHeld.Id, new TaskDispatchRecord("local", "echo held", "C:\\repo", clock.UtcNow));
     admissionHeld.SetRetryAdmissionHold(RetryAdmissionRoute.HumanClarification);
     admissionHeld.SetStatus(WorkTaskStatus.Failed);
 

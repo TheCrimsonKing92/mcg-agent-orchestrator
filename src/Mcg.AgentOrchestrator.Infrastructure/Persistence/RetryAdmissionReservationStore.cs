@@ -19,7 +19,8 @@ public static class RetryAdmissionReservationStore
         CancellationToken cancellationToken = default,
         DateTimeOffset? retryMarkerAt = null,
         RetryRoundKind? retryRoundKind = null,
-        string? retryMessage = null)
+        string? retryMessage = null,
+        TaskSnapshot? retryReplayTask = null)
     {
         var repository = new SqliteOrchestratorStateRepository(stateDatabasePath);
         return repository.TransactGoalStateAsync<RetryAdmissionSnapshotResult?>(
@@ -44,6 +45,26 @@ public static class RetryAdmissionReservationStore
                     }
 
                     var persistedTask = reservationSnapshot.Tasks.Single(task => task.Id == taskId.Value);
+                    if (retryReplayTask is not null)
+                    {
+                        if (retryReplayTask.Id != taskId.Value ||
+                            retryReplayTask.LatestRetryAt != retriedAt ||
+                            retryReplayTask.Status is not (WorkTaskStatus.Pending or WorkTaskStatus.Assigned) ||
+                            retryReplayTask.LastDispatch is not null ||
+                            retryReplayTask.LastProcess is not null)
+                        {
+                            throw new InvalidOperationException(
+                                $"Retry admission replay baseline for task '{taskId}' does not describe the exact post-retry, pre-dispatch state.");
+                        }
+
+                        persistedTask = retryReplayTask;
+                        reservationSnapshot = reservationSnapshot with
+                        {
+                            Tasks = reservationSnapshot.Tasks
+                                .Select(task => task.Id == taskId.Value ? retryReplayTask : task)
+                                .ToArray()
+                        };
+                    }
                     taskBeforeRetry = persistedTask;
                     var persistedRetryEvent = reservationSnapshot.Timeline.LastOrDefault(evt =>
                         evt.TaskId == taskId.Value &&

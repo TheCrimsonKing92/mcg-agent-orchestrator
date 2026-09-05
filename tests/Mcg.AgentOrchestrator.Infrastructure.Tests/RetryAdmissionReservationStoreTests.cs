@@ -219,6 +219,62 @@ public sealed class RetryAdmissionReservationStoreTests
     }
 
     [Xunit.Fact]
+    public async Task RetryMarkerReplay_RunningDurableSnapshot_DoesNotRejectSettledInMemoryRetry()
+    {
+        var root = Path.Combine(Path.GetTempPath(), "mcg-retry-admission-tests", Guid.NewGuid().ToString("N"));
+        Directory.CreateDirectory(root);
+        var databasePath = Path.Combine(root, "state.db");
+        _ = StateDbMigrations.EnsureUpToDate(databasePath);
+        var kernel = new AgentOrchestratorKernel();
+        var task = new TaskSpec(TaskId.New(), "Retry after process exit", AgentRole.Developer);
+        var goal = kernel.CreateGoal("Replay retry over stale running snapshot", [task]);
+        kernel.ActivateGoal(goal.Id, AgentCatalog.Default().Agents);
+        var firstAt = DateTimeOffset.Parse("2026-09-05T10:00:00Z");
+        var firstDispatch = new TaskDispatchRecord("worker", "command-a", root, firstAt);
+        kernel.RecordTaskDispatch(goal.Id, task.Id, firstDispatch);
+        kernel.RecordTaskProcessStarted(goal.Id, task.Id, new TaskProcessRecord(
+            4242, firstDispatch.Command, root, "out.log", "err.log", "exit.txt", firstAt, null, null));
+        var repository = new SqliteOrchestratorStateRepository(databasePath);
+        await repository.SaveAsync(kernel);
+
+        kernel.RecordTaskProcessRefreshed(
+            goal.Id,
+            task.Id,
+            kernel.GetTask(goal.Id, task.Id).LastProcess! with { CompletedAt = firstAt.AddSeconds(10), ExitCode = 1 },
+            new TaskVerificationRecord(
+                firstDispatch.Command, root, 1, string.Empty, "worker failed", firstAt.AddSeconds(10)));
+        Assert.Equal(WorkTaskStatus.Failed, kernel.GetTask(goal.Id, task.Id).Status);
+        kernel.RetryTask(goal.Id, task.Id, "Retry the settled failure.", RetryCause.EnvironmentApparatusFailure);
+        var retriedTask = kernel.GetTask(goal.Id, task.Id);
+        var retryReplayTask = kernel.ExportGoalSnapshot(goal.Id).Tasks.Single(candidate => candidate.Id == task.Id.Value);
+        var fingerprint = RetryContextFingerprintBuilder.Build(new RetryContextFingerprintInput(
+            goal.Id.Value, task.Id.Value, task.RequiredRole, "OpenAI", "gpt",
+            PaidRouteClassification.Paid, "candidate", "criteria", [], [], [], [], "base", "main"));
+        var secondAt = firstAt.AddMinutes(1);
+        var secondDispatch = new TaskDispatchRecord(
+            "worker", "command-b", root, secondAt,
+            RetryContextFingerprint: fingerprint,
+            PaidRoute: PaidRouteClassification.Paid);
+
+        var reservation = await RetryAdmissionReservationStore.TryReserveAsync(
+            databasePath, goal.Id, task.Id, fingerprint, PaidRouteClassification.Paid,
+            RetryCause.EnvironmentApparatusFailure, secondDispatch, secondAt, "owner-b", secondAt.AddMinutes(1),
+            retryMarkerAt: retriedTask.LatestRetryAt,
+            retryRoundKind: retriedTask.PendingRetryRoundKind,
+            retryMessage: "Retry the settled failure.",
+            retryReplayTask: retryReplayTask);
+
+        Assert.NotNull(reservation);
+        Assert.True(reservation!.Admission.AllowsProcessStart);
+        var persisted = await repository.LoadAsync();
+        Assert.Equal(WorkTaskStatus.Running, persisted.GetTask(goal.Id, task.Id).Status);
+        Assert.Equal(secondAt, persisted.GetTask(goal.Id, task.Id).LastDispatch?.DispatchedAt);
+        Assert.Contains(persisted.GetGoal(goal.Id).Timeline, evt =>
+            evt.TaskId == task.Id && evt.Kind == ProgressKind.TaskRetried &&
+            evt.Message == "Retry the settled failure.");
+    }
+
+    [Xunit.Fact]
     public async Task PreventedReservation_CompletedDownstreamReviewer_Preserved()
     {
         var root = Path.Combine(Path.GetTempPath(), "mcg-retry-admission-tests", Guid.NewGuid().ToString("N"));

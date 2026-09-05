@@ -341,6 +341,9 @@ public static SubscriptionStartResult StartSubscriptionReadyTasks(
     var safeBatch = SelectFirstParallelSafeAssignedBatch(goal, agents, approveHighRiskOwnership);
     EnsureRefinedForSelectedTasks(kernel, workspace, providers, goal, safeBatch.TaskIds);
     goal = kernel.GetGoal(goal.Id);
+    var retryReplayTasks = kernel.ExportGoalSnapshot(goal.Id).Tasks
+        .Where(task => safeBatch.TaskIds.Contains(new TaskId(task.Id)) && task.LatestRetryAt is not null)
+        .ToDictionary(task => new TaskId(task.Id));
     var batch = WorkerProfileDispatcher.PrepareSubscriptionReadyBatch(
         kernel,
         goal,
@@ -364,6 +367,7 @@ public static SubscriptionStartResult StartSubscriptionReadyTasks(
             workspace,
             goal.Id,
             prepared.Task,
+            retryReplayTask: retryReplayTasks.GetValueOrDefault(prepared.Task.Id),
             recordDurableGoalBaseline: recordDurableGoalBaseline);
         if (admission.AllowsProcessStart)
             admittedTaskIds.Add(prepared.Task.Id);
@@ -967,15 +971,13 @@ private static ProcessBatchExecutionResult StartDispatches(
                 goal.Id,
                 task,
                 recoveringPreparedReservation,
-                recordDurableGoalBaseline);
+                recordDurableGoalBaseline: recordDurableGoalBaseline);
             goal = kernel.GetGoal(goal.Id);
             task = goal.Tasks.Single(candidate => candidate.Id == item.TaskId);
             if (!admission.AllowsProcessStart)
             {
-                var reason = admission.Receipt.Route == RetryAdmissionRoute.ReservationLease &&
-                             admission.Receipt.ReservationLeaseExpiresAt is { } leaseExpiresAt
-                    ? $"Prepared retry reservation is owned until {leaseExpiresAt:u}."
-                    : $"Retry admission is held for route {admission.Receipt.Route}.";
+                var reason = kernel.BuildProcessBatchPlan(goal.Id, ProcessBatchActionKind.StartDispatches).Items
+                    .Single(candidate => candidate.TaskId == task.Id).Reason;
                 startRefusals.Add(new DispatchProcessStartRefusal(task.Id, reason));
                 continue;
             }
@@ -1096,6 +1098,7 @@ private static RetryAdmissionResult EnsurePreparedRetryAdmission(
     GoalId goalId,
     TaskSpec task,
     bool reservationRecoveryConfirmed = false,
+    TaskSnapshot? retryReplayTask = null,
     Action<GoalSnapshot>? recordDurableGoalBaseline = null)
 {
     var dispatch = task.LastDispatch ??
@@ -1106,14 +1109,6 @@ private static RetryAdmissionResult EnsurePreparedRetryAdmission(
     var reservationOwnerId = Guid.NewGuid().ToString("n");
     var reservationLeaseExpiresAt = recordedAt.AddMinutes(1);
     var retryMarkerAt = task.LatestRetryAt;
-    var retryMessage = retryMarkerAt is null
-        ? null
-        : kernel.GetGoal(goalId).Timeline.LastOrDefault(evt =>
-            evt.TaskId == task.Id &&
-            evt.Kind == ProgressKind.TaskRetried &&
-            evt.OccurredAt >= retryMarkerAt.Value)?.Message ??
-          throw new InvalidOperationException(
-              $"Retry admission cannot persist task '{task.Id}' because its retry marker has no matching TaskRetried event.");
     if (task.LatestRetryAt is not null && dispatch.PaidRoute == PaidRouteClassification.Unknown)
     {
         throw new InvalidOperationException(
@@ -1133,6 +1128,13 @@ private static RetryAdmissionResult EnsurePreparedRetryAdmission(
             reservationRecoveryConfirmed);
     }
 
+    var retryMessage = kernel.GetGoal(goalId).Timeline.LastOrDefault(evt =>
+        evt.TaskId == task.Id &&
+        evt.Kind == ProgressKind.TaskRetried &&
+        evt.OccurredAt >= retryMarkerAt!.Value)?.Message ??
+        throw new InvalidOperationException(
+            $"Retry admission cannot persist task '{task.Id}' because its retry marker has no matching TaskRetried event.");
+
     var persisted = RetryAdmissionReservationStore.TryReserveAsync(
             workspace.SqliteStatePath,
             goalId,
@@ -1147,7 +1149,8 @@ private static RetryAdmissionResult EnsurePreparedRetryAdmission(
             reservationRecoveryConfirmed,
             retryMarkerAt: retryMarkerAt,
             retryRoundKind: task.PendingRetryRoundKind,
-            retryMessage: retryMessage)
+            retryMessage: retryMessage,
+            retryReplayTask: retryReplayTask)
         .GetAwaiter()
         .GetResult();
     if (persisted is not null)

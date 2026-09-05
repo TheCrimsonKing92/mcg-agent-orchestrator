@@ -1118,7 +1118,7 @@ internal sealed partial class ConductorBatchLoop
                     if (!TryAdvanceGoal(
                         () =>
                         {
-                            var beforeRefresh = BuildEscalatedGoalStateFingerprint(goal);
+                            var beforeRefresh = GoalProjectionCache.BuildFingerprint(goal);
                             var runningHoldReason = DetachedDispatchHoldReasonBuilder.Build(goal, _refreshGoalDispatchesBeforeAdvance(kernel, goal));
                             if (_progressiveReviewGlances is not null && watchInterval is not null)
                             {
@@ -1158,7 +1158,7 @@ internal sealed partial class ConductorBatchLoop
                             }
 
                             goalProjectionCache.Invalidate(goal.Id);
-                            var afterRefresh = BuildEscalatedGoalStateFingerprint(goal);
+                            var afterRefresh = GoalProjectionCache.BuildFingerprint(goal);
                             if (!string.Equals(beforeRefresh, afterRefresh, StringComparison.Ordinal))
                             {
                                 changedGoalIds.Add(goal.Id);
@@ -4504,7 +4504,7 @@ internal sealed partial class ConductorBatchLoop
                 ? TryResolveLifecycleState(driver, goal) switch
                 {
                     "LifecycleState=unknown" => entry.StateFingerprint,
-                    nameof(GoalLifecycleState.AwaitingClarification) => entry.StateFingerprint,
+                    nameof(GoalLifecycleState.AwaitingClarification) => BuildEscalatedGoalStateFingerprint(goal),
                     var state => $"clarification={state}"
                 }
                 : BuildEscalatedGoalStateFingerprint(goal);
@@ -5112,7 +5112,7 @@ internal sealed class GoalProjectionCache
 
     internal void Invalidate(GoalId goalId) => _entries.Remove(goalId);
 
-    private static string BuildFingerprint(Goal goal)
+    internal static string BuildFingerprint(Goal goal)
     {
         var taskParts = goal.Tasks
             .OrderBy(task => task.Id.Value, StringComparer.Ordinal)

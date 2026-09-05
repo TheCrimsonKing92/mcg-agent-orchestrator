@@ -255,22 +255,25 @@ public sealed partial class AgentOrchestratorKernel
 
     private static (ProcessBatchItemStatus Status, string Reason) GetStartDispatchReadiness(TaskSpec task)
     {
-        if (task.LastDispatch is not null &&
-            task.RetryAdmissionHoldRoute is { } holdRoute &&
+        if (task.RetryAdmissionHoldRoute is { } holdRoute &&
             holdRoute != RetryAdmissionRoute.ReservationLease)
         {
             return (ProcessBatchItemStatus.Skipped, $"Retry admission is held for route {holdRoute}.");
         }
 
-        if (task.LastDispatch is not null &&
-            task.RetryAdmissionHoldRoute == RetryAdmissionRoute.ReservationLease &&
+        if (task.RetryAdmissionHoldRoute == RetryAdmissionRoute.ReservationLease &&
             task.RetryAdmissionHistory.LastOrDefault(receipt =>
-                receipt.LinkedDispatchAt == task.LastDispatch.DispatchedAt &&
-                receipt.Decision is RetryAdmissionDecision.Allowed or RetryAdmissionDecision.ResumedReservation) is { } reservation &&
+                receipt.Route == RetryAdmissionRoute.ReservationLease &&
+                receipt.ReservationLeaseExpiresAt is not null) is { } reservation &&
             reservation.ReservationLeaseExpiresAt is { } leaseExpiresAt &&
             DateTimeOffset.UtcNow < leaseExpiresAt)
         {
             return (ProcessBatchItemStatus.Skipped, $"Prepared retry reservation is owned until {leaseExpiresAt:u}.");
+        }
+
+        if (task.RetryAdmissionHoldRoute == RetryAdmissionRoute.ReservationLease)
+        {
+            return (ProcessBatchItemStatus.Skipped, $"Retry admission is held for route {RetryAdmissionRoute.ReservationLease}.");
         }
 
         if (task.Status != WorkTaskStatus.Running)
