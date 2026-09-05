@@ -68,6 +68,7 @@ internal static class CliCommandHelp
     public const string TrialCompareUsage = "Usage: trial-compare --spec <path> [--receipts <directory>] [--timeout-seconds <seconds>] [--format text|json]. Spec source: explicit baseCommit + canonical workload, or historical goal/task/dispatch selector (mutually exclusive).";
     public const string AcceptanceEngineUsage = "Usage: acceptance-engine status | acceptance-engine clear <repair-or-operator-note>";
     public const string RunEventsMaintenanceUsage = "Usage: run-events-maintenance [--tick-max-age-days <days>] [--keep-tick-rows <count>] [--payload-max-bytes <bytes>] [--batch-size <rows>] [--legacy-purge-oversized-ticks] [--vacuum]";
+    public const string StateDatabaseMaintenanceUsage = "Usage: state-db-maintenance plan | state-db-maintenance execute --confirm-offline | state-db-maintenance convert-copy --output <path> --confirm-offline | state-db-maintenance convert-live --confirm-offline --confirm-live-replacement";
     public const string RunEventUsage = "Usage: run-event show <sequence> [--format text|json]";
 
     private static readonly CommandHelpEntry Conduct = new(
@@ -458,6 +459,11 @@ internal static class CliCommandHelp
         "Prune high-churn run-events.db conductor tick rows and optionally reclaim free pages when idle.",
         ["--tick-max-age-days", "--keep-tick-rows", "--payload-max-bytes", "--batch-size", "--legacy-purge-oversized-ticks", "--vacuum", "--help", "-h"]);
 
+    private static readonly CommandHelpEntry StateDatabaseMaintenance = new(
+        StateDatabaseMaintenanceUsage,
+        "Plan/execute bounded reclamation, create a validated conversion copy, or explicitly replace state.db during an off-peak exclusive-maintenance window.",
+        ["--confirm-offline", "--confirm-live-replacement", "--output", "--help", "-h"]);
+
     private static readonly CommandHelpEntry RunEvent = new(
         RunEventUsage,
         "Show one stored run event by sequence, including goal-less event receipt text.",
@@ -838,6 +844,12 @@ internal static class CliCommandHelp
         if (args[0].Equals("run-events-maintenance", StringComparison.OrdinalIgnoreCase))
         {
             entry = RunEventsMaintenance;
+            return true;
+        }
+
+        if (args[0].Equals("state-db-maintenance", StringComparison.OrdinalIgnoreCase))
+        {
+            entry = StateDatabaseMaintenance;
             return true;
         }
 

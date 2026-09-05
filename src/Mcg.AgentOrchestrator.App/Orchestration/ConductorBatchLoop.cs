@@ -82,6 +82,7 @@ internal sealed partial class ConductorBatchLoop
     private readonly Func<double> _writeJitter;
     private readonly Func<string, GoalStatus?> _evictedGoalStatusLookup;
     private readonly TimeSpan _blockedRecheckHeartbeatInterval;
+    private readonly OrchestratorWorkspace? _workspace;
     // Janitorial phases run only on the conductor loop thread; acceptance work never mutates this state.
     private readonly Dictionary<string, int> _consecutiveJanitorialFailures = new(StringComparer.Ordinal);
     private static readonly AsyncLocal<ConductEventLogWriter?> CurrentConductEventLogWriter = new();
@@ -114,7 +115,8 @@ internal sealed partial class ConductorBatchLoop
         ConductorLifecycleRecorder? lifecycleRecorder = null,
         Func<double>? writeJitter = null,
         TimeSpan? blockedRecheckHeartbeatInterval = null,
-        Func<AgentOrchestratorKernel, IReadOnlySet<string>, TerminalGoalSweepResult?>? measuredSweepWithCheckpointHolds = null)
+        Func<AgentOrchestratorKernel, IReadOnlySet<string>, TerminalGoalSweepResult?>? measuredSweepWithCheckpointHolds = null,
+        OrchestratorWorkspace? workspace = null)
     {
         _sweep = measuredSweepWithCheckpointHolds is not null
             ? measuredSweepWithCheckpointHolds
@@ -145,6 +147,7 @@ internal sealed partial class ConductorBatchLoop
         _writeJitter = writeJitter ?? Random.Shared.NextDouble;
         _evictedGoalStatusLookup = evictedGoalStatusLookup ?? (_ => null);
         _blockedRecheckHeartbeatInterval = blockedRecheckHeartbeatInterval ?? DefaultBlockedRecheckHeartbeatInterval;
+        _workspace = workspace;
         if (_blockedRecheckHeartbeatInterval <= TimeSpan.Zero || _blockedRecheckHeartbeatInterval > TimeSpan.FromMinutes(10))
         {
             throw new ArgumentOutOfRangeException(nameof(blockedRecheckHeartbeatInterval));
@@ -179,15 +182,21 @@ internal sealed partial class ConductorBatchLoop
         Func<AgentOrchestratorKernel, IReadOnlyCollection<GoalId>, IReadOnlyList<GoalSnapshotCheckpointResult>>? checkpointGoalTick = null,
         Func<bool>? hasTransientLoadHold = null)
     {
+        var leaseDirectory = Path.GetDirectoryName(Path.GetFullPath(stopFilePath)) ?? Directory.GetCurrentDirectory();
+        var leaseAcquisition = AcquireActiveDatabaseLeases(leaseDirectory, busyWriteDelay);
+        if (!leaseAcquisition.Succeeded)
+            return leaseAcquisition.DeferredSummary!;
+
+        using var activeConductorLease = leaseAcquisition.StateLease!;
+        using var activeRunEventLease = leaseAcquisition.RunEventLease!;
         _consecutiveJanitorialFailures.Clear();
-        var previousConductEventLogWriter = CurrentConductEventLogWriter.Value;
+        var previousConductEventLogWriter = leaseAcquisition.PreviousConductEventLogWriter;
         var previousRetryDiagnostics = CurrentRetryDiagnostics.Value;
         var previousSuccessfulLandingSink = driver.SuccessfulLandingSink;
         var previousDispatchRecordWriteSucceededSink = driver.DispatchRecordWriteSucceededSink;
         var previousLandingMutationBlocker = driver.LandingMutationBlocker;
         var canaryTasks = new List<Task<PostLandingCanaryDisposition>>();
         var canaryTasksGate = new object();
-        CurrentConductEventLogWriter.Value = _conductEventLogWriter;
         CurrentRetryDiagnostics.Value = new RetryDiagnosticCoalescer(_utcNow);
         var totalTicks = 0;
         var blockedRecheckCycles = 0;
@@ -1827,7 +1836,7 @@ internal sealed partial class ConductorBatchLoop
         if (writer is null || !TryClassifyConductEvent(line, out var kind, out var goalId))
             return;
 
-        var required = kind is "loop-relaunch-rollback" or "loop-janitorial-failure" or "loop-janitorial-degraded" or "goal-stalled" or "sweep-blocker" or
+        var required = kind is "loop-start-deferred" or "loop-relaunch-rollback" or "loop-janitorial-failure" or "loop-janitorial-degraded" or "goal-stalled" or "sweep-blocker" or
             "sweep-remedy-attempt" or "sweep-remedy-result" or "sweep-escalation" or
             "blocked-recheck-heartbeat" or "policy-reload-failed" ||
             line.StartsWith("LOOP_HANDOFF_FAILED ", StringComparison.Ordinal);
@@ -1884,6 +1893,7 @@ internal sealed partial class ConductorBatchLoop
             "LOOP_JANITORIAL_RETRYING" => "loop-janitorial-retry",
             "LOOP_JANITORIAL_RETRY_SUCCEEDED" => "loop-janitorial-retry",
             "LOOP_START" => "loop-start",
+            "LOOP_START_DEFERRED" => "loop-start-deferred",
             "LOOP_STOP" => "loop-stop",
             "POLICY_RELOAD" => "policy-reload",
             "POLICY_RELOAD_FAILED" => "policy-reload-failed",

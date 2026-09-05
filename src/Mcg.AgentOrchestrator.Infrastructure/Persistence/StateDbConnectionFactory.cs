@@ -34,6 +34,7 @@ internal static class StateDbConnectionFactory
 
         if (profile == StateDbConnectionProfile.ReadWrite)
         {
+            _ = StateDatabaseOfflineConversion.RecoverInterruptedReplacement(dbPath);
             var directory = Path.GetDirectoryName(dbPath);
             if (!string.IsNullOrEmpty(directory))
                 Directory.CreateDirectory(directory);

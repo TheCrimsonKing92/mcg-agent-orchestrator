@@ -13,7 +13,6 @@ internal static class RunEventMaintenanceCadence
     internal const string ArtifactRetentionOperation = "storage-retention:sweep";
     internal static readonly TimeSpan Interval = TimeSpan.FromHours(24);
     internal static readonly TimeSpan ArtifactFailureRetryInterval = TimeSpan.FromHours(1);
-    internal static readonly TimeSpan VacuumInterval = TimeSpan.FromDays(7);
     private static readonly ConcurrentDictionary<string, DateTimeOffset> NextDueByStorePath =
         new(StringComparer.OrdinalIgnoreCase);
 
@@ -41,14 +40,36 @@ internal static class RunEventMaintenanceCadence
             var store = new SqliteRunEventStore(
                 runEventStorePath,
                 ensureSchema: !File.Exists(runEventStorePath));
+            var latestArtifact = LatestArtifactRetentionState(store);
+            var artifactFailureRetryDue = latestArtifact is { Failed: true }
+                ? latestArtifact.OccurredAt.Add(ArtifactFailureRetryInterval)
+                : (DateTimeOffset?)null;
+            var artifactRetentionDue = latestArtifact switch
+            {
+                { Failed: true } => now >= artifactFailureRetryDue,
+                { Failed: false } when workspace is not null => now - latestArtifact.OccurredAt >= Interval,
+                null when workspace is not null => true,
+                _ => false
+            };
+            var latestState = LatestMaintenanceState(store);
+            if (latestState?.Disposition is SqliteMaintenanceDisposition.Incomplete or SqliteMaintenanceDisposition.Deferred &&
+                latestState.NextAttemptAt is { } continuationDue &&
+                now < continuationDue &&
+                !artifactRetentionDue)
+            {
+                NextDueByStorePath[cadenceKey] = artifactFailureRetryDue is { } retryDue && retryDue < continuationDue
+                    ? retryDue
+                    : continuationDue;
+                return SkippedResult();
+            }
             var latest = LatestMaintenanceMarker(store, conductEventsLogPath);
-            var latestVacuum = LatestVacuumMarker(store);
-            var unresolvedArtifactFailure = LatestUnresolvedArtifactRetentionFailure(store, latest);
-            var artifactFailureRetryDue = unresolvedArtifactFailure?.Add(ArtifactFailureRetryInterval);
-            var artifactFailureDue = artifactFailureRetryDue is not null && now >= artifactFailureRetryDue.Value;
-            var vacuumDue = IsOffPeakVacuumWindow(now) &&
-                (latestVacuum is null || now - latestVacuum.Value >= VacuumInterval);
-            if (latest is not null && now - latest.Value < Interval && !vacuumDue && !artifactFailureDue)
+            var continuationDueNow = latestState?.Disposition is
+                SqliteMaintenanceDisposition.Incomplete or SqliteMaintenanceDisposition.Deferred &&
+                (latestState.NextAttemptAt is null || now >= latestState.NextAttemptAt);
+            if (latest is not null &&
+                now - latest.Value < Interval &&
+                !continuationDueNow &&
+                !artifactRetentionDue)
             {
                 var scheduledDue = NextDue(latest.Value);
                 if (artifactFailureRetryDue is not null && artifactFailureRetryDue.Value < scheduledDue)
@@ -63,20 +84,23 @@ internal static class RunEventMaintenanceCadence
                 ? null
                 : StorageRetentionMaintenance.LoadPersistedGoals(
                     new SqliteOrchestratorStateRepository(workspace.SqliteStatePath));
-            var terminalGoalIds = retentionGoals?
-                .Where(goal => goal.IsTerminal)
-                .Select(goal => goal.GoalId)
-                .ToArray();
+            var terminalGoalIds = retentionGoals is null
+                ? null
+                : StorageRetentionMaintenance.SelectGoalOperationPrunableIds(retentionGoals);
             var options = RunEventMaintenanceOptions.Default with
             {
                 UtcNow = now,
-                Vacuum = vacuumDue,
-                TerminalGoalIds = terminalGoalIds
+                // Full VACUUM is an explicitly offline operator action. The live conductor
+                // performs only bounded deletion, checkpointing, and incremental reclamation.
+                Vacuum = false,
+                TerminalGoalIds = terminalGoalIds,
+                ConsecutiveNoProgressAttempts = latestState?.ConsecutiveNoProgressAttempts ?? 0
             };
             var result = maintenanceOperation is null
                 ? store.MaintainAsync(options).GetAwaiter().GetResult()
                 : maintenanceOperation(store, options);
-            artifactRetention = workspace is null || retentionGoals is null
+            result = BoundDeferredResult(result, options, now);
+            artifactRetention = workspace is null || retentionGoals is null || !artifactRetentionDue
                 ? null
                 : artifactRetentionOperation is null
                     ? StorageRetentionMaintenance.Run(
@@ -90,6 +114,7 @@ internal static class RunEventMaintenanceCadence
             var receipt = FormatReceipt("cadence", options, result);
             Console.WriteLine(receipt);
             TryAppendJournal(journal, "run-events-maintenance", receipt, now);
+            TryAppendRunEventReceipt(store, "cadence", options, result, now);
             if (artifactRetention is not null)
             {
                 var artifactReceipt = FormatArtifactRetentionReceipt(artifactRetention);
@@ -111,29 +136,41 @@ internal static class RunEventMaintenanceCadence
                     throw;
                 }
             }
-            if (!result.Deferred)
+            if (result.Disposition != SqliteMaintenanceDisposition.Deferred)
             {
-                TryAppendRunEventReceipt(store, "cadence", options, result, now);
-                if (result.VacuumCompleted)
+                if (result.VacuumCompleted && result.Disposition == SqliteMaintenanceDisposition.Completed)
                 {
                     TryAppendVacuumReceipt(store, result, now);
                 }
-                if (artifactRetention?.Failed == true)
-                {
-                    NextDueByStorePath[cadenceKey] = now.Add(ArtifactFailureRetryInterval);
-                }
-                else
-                {
-                    NextDueByStorePath[cadenceKey] = NextDue(now);
-                }
             }
+            var scheduledNextDue = result.NextAttemptAt ?? NextDue(now);
+            var nextArtifactDue = artifactRetention switch
+            {
+                { Failed: true } => now.Add(ArtifactFailureRetryInterval),
+                null when latestArtifact is { Failed: true } =>
+                    artifactFailureRetryDue > now ? artifactFailureRetryDue : now.Add(ArtifactFailureRetryInterval),
+                null when latestArtifact is { Failed: false } && workspace is not null =>
+                    latestArtifact.OccurredAt.Add(Interval),
+                _ => (DateTimeOffset?)null
+            };
+            if (nextArtifactDue is { } artifactDue && artifactDue < scheduledNextDue)
+            {
+                scheduledNextDue = artifactDue;
+            }
+            NextDueByStorePath[cadenceKey] = scheduledNextDue;
 
             return new RunEventMaintenanceCadenceResult(
                 Attempted: true,
                 Skipped: false,
                 Deferred: result.Deferred,
                 Failed: artifactRetention?.Failed == true,
-                Reason: artifactRetention?.Failed == true ? "storage-retention-failed" : result.DeferredReason,
+                Reason: artifactRetention?.Failed == true
+                    ? "storage-retention-failed"
+                    : result.Deferred
+                        ? result.DeferredReason ?? result.Reason.ToString()
+                        : result.Disposition == SqliteMaintenanceDisposition.Completed
+                            ? null
+                            : result.Reason.ToString(),
                 Maintenance: result,
                 ArtifactRetention: artifactRetention);
         }
@@ -167,24 +204,41 @@ internal static class RunEventMaintenanceCadence
     internal static bool IsOffPeakVacuumWindow(DateTimeOffset now) =>
         now.DayOfWeek == DayOfWeek.Sunday && now.Hour >= 2 && now.Hour < 5;
 
-    internal static DateTimeOffset NextDue(DateTimeOffset now)
+    internal static DateTimeOffset NextDue(DateTimeOffset now) => now.Add(Interval);
+
+    private static RunEventMaintenanceResult BoundDeferredResult(
+        RunEventMaintenanceResult result,
+        RunEventMaintenanceOptions options,
+        DateTimeOffset now)
     {
-        var dailyDue = now.Add(Interval);
-        var daysUntilSunday = ((int)DayOfWeek.Sunday - (int)now.DayOfWeek + 7) % 7;
-        var vacuumDue = new DateTimeOffset(
-            now.Year,
-            now.Month,
-            now.Day,
-            2,
-            0,
-            0,
-            TimeSpan.Zero).AddDays(daysUntilSunday);
-        if (vacuumDue <= now)
+        if (result.Disposition != SqliteMaintenanceDisposition.Deferred)
+            return result;
+
+        var attempts = Math.Max(
+            result.ConsecutiveNoProgressAttempts,
+            options.ConsecutiveNoProgressAttempts + 1);
+        if (attempts >= options.MaxNoProgressAttempts)
         {
-            vacuumDue = vacuumDue.AddDays(7);
+            return result with
+            {
+                Deferred = false,
+                DeferredReason = "database-busy-limit",
+                Disposition = SqliteMaintenanceDisposition.Stalled,
+                Reason = SqliteMaintenanceReason.DatabaseBusyLimit,
+                NextAttemptAt = null,
+                ConsecutiveNoProgressAttempts = attempts
+            };
         }
 
-        return vacuumDue < dailyDue ? vacuumDue : dailyDue;
+        var multiplier = 1L << Math.Clamp(attempts - 1, 0, 6);
+        var delayTicks = Math.Min(
+            Interval.Ticks,
+            checked(options.EffectiveContinuationDelay.Ticks * multiplier));
+        return result with
+        {
+            NextAttemptAt = now.Add(TimeSpan.FromTicks(delayTicks)),
+            ConsecutiveNoProgressAttempts = attempts
+        };
     }
 
     public static string FormatReceipt(
@@ -192,9 +246,12 @@ internal static class RunEventMaintenanceCadence
         RunEventMaintenanceOptions options,
         RunEventMaintenanceResult result)
     {
-        var status = result.Deferred ? "deferred" : "completed";
+        var status = result.Disposition.ToString().ToLowerInvariant();
+        var before = result.StorageBefore ?? new SqliteStorageSnapshot(result.BytesBefore, 0, 0, 0);
+        var mutation = result.StorageAfterMutation ?? new SqliteStorageSnapshot(result.BytesAfter, 0, 0, 0);
+        var after = result.StorageAfterConvergence ?? new SqliteStorageSnapshot(result.BytesAfter, 0, 0, 0);
         return string.Create(CultureInfo.InvariantCulture,
-            $"RUN_EVENTS_MAINTENANCE mode={mode} status={status} agedDeleted={result.AgedConductorTickRowsDeleted} oversizedDeleted={result.OversizedConductorTickRowsDeleted} totalDeleted={result.ConductorTickRowsDeleted} terminalGoalOperationsDeleted={result.TerminalGoalOperationRowsDeleted} payloadBytesEstimate={result.DeletedPayloadBytesEstimate} maxRowsPerTransaction={result.MaxRowsDeletedInTransaction} durationMs={(long)result.Duration.TotalMilliseconds} tickMaxAgeDays={options.ConductorTickMaxAge.TotalDays:0.###} terminalGoalOperationMaxAgeDays={options.EffectiveTerminalGoalOperationMaxAge.TotalDays:0.###} keepTickRows={options.MinConductorTickRowsToKeep} payloadMaxBytes={options.MaxConductorTickPayloadBytes} batchSize={Math.Clamp(options.DeleteBatchSize, 1, 1000)} bytesBefore={result.BytesBefore} bytesAfter={result.BytesAfter} vacuumRequested={result.VacuumRequested} vacuumCompleted={result.VacuumCompleted} vacuumDeferred={result.VacuumDeferred}{(string.IsNullOrWhiteSpace(result.DeferredReason) ? "" : $" deferredReason={Sanitize(result.DeferredReason)}")}");
+            $"RUN_EVENTS_MAINTENANCE mode={mode} status={status} reason={result.Reason} agedDeleted={result.AgedConductorTickRowsDeleted} oversizedDeleted={result.OversizedConductorTickRowsDeleted} totalDeleted={result.ConductorTickRowsDeleted} terminalGoalOperationsDeleted={result.TerminalGoalOperationRowsDeleted} payloadBytesEstimate={result.DeletedPayloadBytesEstimate} maxRowsPerTransaction={result.MaxRowsDeletedInTransaction} batchesCompleted={result.DeleteBatchesCompleted} remainingEligibleRows={result.RemainingEligibleRows} remainingBytesOverBudget={result.RemainingBytesOverBudget} durationMs={(long)result.Duration.TotalMilliseconds} tickMaxAgeDays={options.ConductorTickMaxAge.TotalDays:0.###} terminalGoalOperationMaxAgeDays={options.EffectiveTerminalGoalOperationMaxAge.TotalDays:0.###} recentTerminalProtectionDays={options.EffectiveRecentTerminalGoalProtectionAge.TotalDays:0.###} keepTickRows={options.MinConductorTickRowsToKeep} payloadMaxBytes={options.MaxConductorTickPayloadBytes} batchSize={Math.Clamp(options.DeleteBatchSize, 1, 1000)} maxBatchesPerPass={options.MaxDeleteBatchesPerPass} beforeMain={before.MainDatabaseBytes} beforeWal={before.WalBytes} beforeShm={before.ShmBytes} beforeOther={before.OtherTransientBytes} beforeTotal={before.TotalBytes} mutationMain={mutation.MainDatabaseBytes} mutationWal={mutation.WalBytes} mutationShm={mutation.ShmBytes} mutationOther={mutation.OtherTransientBytes} mutationTotal={mutation.TotalBytes} afterMain={after.MainDatabaseBytes} afterWal={after.WalBytes} afterShm={after.ShmBytes} afterOther={after.OtherTransientBytes} afterTotal={after.TotalBytes} checkpointBusy={result.Checkpoint?.Busy ?? -1} checkpointLogPages={result.Checkpoint?.LogPages ?? -1} checkpointedPages={result.Checkpoint?.CheckpointedPages ?? -1} nextAttemptAt={result.NextAttemptAt?.ToString("O", CultureInfo.InvariantCulture) ?? "none"} noProgressAttempts={result.ConsecutiveNoProgressAttempts} vacuumRequested={result.VacuumRequested} vacuumCompleted={result.VacuumCompleted} vacuumDeferred={result.VacuumDeferred}{(string.IsNullOrWhiteSpace(result.DeferredReason) ? "" : $" deferredReason={Sanitize(result.DeferredReason)}")}");
     }
 
     public static void TryAppendRunEventReceipt(
@@ -210,13 +267,15 @@ internal static class RunEventMaintenanceCadence
                 RunEventTypes.RunEventMaintenance,
                 GoalId: null,
                 Operation: Operation,
-                Status: result.Deferred ? "Deferred" : "Completed",
+                Status: result.Disposition.ToString(),
                 Detail: FormatReceipt(mode, options, result),
                 PayloadJson: JsonSerializer.Serialize(new
                 {
                     mode,
                     result.Deferred,
                     result.DeferredReason,
+                    disposition = result.Disposition.ToString(),
+                    reason = result.Reason.ToString(),
                     result.ConductorTickRowsDeleted,
                     result.AgedConductorTickRowsDeleted,
                     result.OversizedConductorTickRowsDeleted,
@@ -225,6 +284,15 @@ internal static class RunEventMaintenanceCadence
                     durationMs = (long)result.Duration.TotalMilliseconds,
                     result.BytesBefore,
                     result.BytesAfter,
+                    result.StorageBefore,
+                    result.StorageAfterMutation,
+                    result.StorageAfterConvergence,
+                    result.Checkpoint,
+                    result.RemainingEligibleRows,
+                    result.RemainingBytesOverBudget,
+                    nextAttemptAt = result.NextAttemptAt,
+                    consecutiveNoProgressAttempts = result.ConsecutiveNoProgressAttempts,
+                    result.DeleteBatchesCompleted,
                     result.VacuumRequested,
                     result.VacuumCompleted,
                     result.VacuumDeferred,
@@ -384,9 +452,8 @@ internal static class RunEventMaintenanceCadence
             .OrderBy(group => group.Key, StringComparer.Ordinal)
             .Select(group => $"{Sanitize(group.Key)}:{group.Count()}"));
 
-    private static DateTimeOffset? LatestUnresolvedArtifactRetentionFailure(
-        SqliteRunEventStore store,
-        DateTimeOffset? latestMaintenance)
+    private static LatestArtifactRetentionReceipt? LatestArtifactRetentionState(
+        SqliteRunEventStore store)
     {
         try
         {
@@ -395,11 +462,11 @@ internal static class RunEventMaintenanceCadence
                     ArtifactRetentionOperation)
                 .GetAwaiter()
                 .GetResult();
-            return latestArtifact is not null &&
-                string.Equals(latestArtifact.Status, "Failed", StringComparison.OrdinalIgnoreCase) &&
-                (latestMaintenance is null || latestArtifact.OccurredAt >= latestMaintenance.Value)
-                    ? latestArtifact.OccurredAt
-                    : null;
+            return latestArtifact is null
+                ? null
+                : new LatestArtifactRetentionReceipt(
+                    latestArtifact.OccurredAt,
+                    string.Equals(latestArtifact.Status, "Failed", StringComparison.OrdinalIgnoreCase));
         }
         catch
         {
@@ -415,6 +482,47 @@ internal static class RunEventMaintenanceCadence
                 .GetAwaiter()
                 .GetResult()
                 ?.OccurredAt;
+        }
+        catch
+        {
+            return null;
+        }
+    }
+
+    private static LatestMaintenanceReceipt? LatestMaintenanceState(SqliteRunEventStore store)
+    {
+        try
+        {
+            var record = store.ReadLatestAsync(RunEventTypes.RunEventMaintenance, Operation)
+                .GetAwaiter()
+                .GetResult();
+            if (record is null || string.IsNullOrWhiteSpace(record.PayloadJson))
+                return null;
+
+            using var document = JsonDocument.Parse(record.PayloadJson);
+            var root = document.RootElement;
+            if (!root.TryGetProperty("disposition", out var dispositionProperty) ||
+                !Enum.TryParse<SqliteMaintenanceDisposition>(
+                    dispositionProperty.GetString(), ignoreCase: true, out var disposition))
+            {
+                return null;
+            }
+
+            DateTimeOffset? nextAttemptAt = null;
+            if (root.TryGetProperty("nextAttemptAt", out var nextProperty) &&
+                nextProperty.ValueKind == JsonValueKind.String &&
+                DateTimeOffset.TryParse(
+                    nextProperty.GetString(), CultureInfo.InvariantCulture, DateTimeStyles.RoundtripKind, out var parsed))
+            {
+                nextAttemptAt = parsed;
+            }
+
+            var noProgressAttempts = root.TryGetProperty("consecutiveNoProgressAttempts", out var attemptsProperty) &&
+                attemptsProperty.TryGetInt32(out var parsedAttempts)
+                ? Math.Max(0, parsedAttempts)
+                : 0;
+
+            return new LatestMaintenanceReceipt(record.OccurredAt, disposition, nextAttemptAt, noProgressAttempts);
         }
         catch
         {
@@ -535,6 +643,16 @@ internal static class RunEventMaintenanceCadence
             ? "none"
             : value.ReplaceLineEndings(" ").Replace(' ', '_');
 }
+
+internal sealed record LatestMaintenanceReceipt(
+    DateTimeOffset OccurredAt,
+    SqliteMaintenanceDisposition Disposition,
+    DateTimeOffset? NextAttemptAt,
+    int ConsecutiveNoProgressAttempts);
+
+internal sealed record LatestArtifactRetentionReceipt(
+    DateTimeOffset OccurredAt,
+    bool Failed);
 
 internal sealed record RunEventMaintenanceCadenceResult(
     bool Attempted,

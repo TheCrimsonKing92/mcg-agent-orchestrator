@@ -1759,7 +1759,8 @@ private static bool? TryExecuteGoalCommand(string command, IReadOnlyList<string>
                     evictedGoalStatusLookup: resolveEvictedGoalStatus,
                     lifecycleRecorder: new ConductorLifecycleRecorder(
                         new SqliteRunEventStore(context.Workspace.RunEventStorePath)),
-                    blockedRecheckHeartbeatInterval: reconcileSweepOptions.HeartbeatInterval).Run(
+                    blockedRecheckHeartbeatInterval: reconcileSweepOptions.HeartbeatInterval,
+                    workspace: context.Workspace).Run(
                     context.Kernel, loopDriver, loopPolicy, stopFilePath, loopMaxIter,
                     watchInterval: watchInterval, onTick: onTick, wakeSignal: loopWakeSignal, maxDuration: maxDuration,
                     persistTick: context.PersistCheckpoint, keepAliveWhenIdle: loopDaemon,
@@ -1864,7 +1865,8 @@ private static bool? TryExecuteGoalCommand(string command, IReadOnlyList<string>
                     progressiveReviewSteering: ProgressiveReviewSteeringCoordinator.CreateDefault(context.Workspace, context.Agents, context.WorkerProfiles, context.Providers),
                     postLandingCanary: PostLandingCanaryFactory.CreateDefault(context.Workspace),
                     lifecycleRecorder: new ConductorLifecycleRecorder(
-                        new SqliteRunEventStore(context.Workspace.RunEventStorePath))).Run(
+                        new SqliteRunEventStore(context.Workspace.RunEventStorePath)),
+                    workspace: context.Workspace).Run(
                     context.Kernel, conductDriver, conductPolicy, watchStopPath,
                     watchInterval: TimeSpan.FromSeconds(watchPollSeconds),
                     onTick: ConductorTickPusher.CreateStoreCallback(context.Workspace.RunEventStorePath),

@@ -317,10 +317,13 @@ public sealed class RunEventStoreTests
             LegacyOversizedConductorTickPurge: true));
 
         Assert.False(result.Deferred);
+        Assert.Equal(SqliteMaintenanceDisposition.Incomplete, result.Disposition);
+        Assert.Equal(SqliteMaintenanceReason.WorkCapReached, result.Reason);
         Assert.Equal(0, result.AgedConductorTickRowsDeleted);
-        Assert.Equal(1001, result.OversizedConductorTickRowsDeleted);
+        Assert.Equal(1000, result.OversizedConductorTickRowsDeleted);
+        Assert.Equal(1, result.RemainingEligibleRows);
         Assert.True(result.MaxRowsDeletedInTransaction <= 250);
-        Assert.Equal(1001 * 20, result.DeletedPayloadBytesEstimate);
+        Assert.Equal(1000 * 20, result.DeletedPayloadBytesEstimate);
         var remaining = await store.ReadSinceAsync(maxCount: 10);
         Assert.Contains(remaining, evt => evt.Sequence == oldHealthy.Sequence);
     }
@@ -442,6 +445,74 @@ public sealed class RunEventStoreTests
         Assert.True(beforeBackoff.Skipped);
         Assert.True(afterBackoff.Attempted);
         Assert.Equal(1, calls);
+    }
+
+    [Xunit.Fact]
+    public async Task RunEventMaintenanceCadence_DeferredDatabaseReceiptDoesNotResolveFailedArtifactSweep()
+    {
+        var root = CreateTempDirectory();
+        var executionDirectory = Path.Combine(root, "workspace");
+        Directory.CreateDirectory(executionDirectory);
+        var workspace = OrchestratorWorkspace.ForDirectory(executionDirectory);
+        InfrastructureTestSupport.CreateMigratedStateRepository(workspace.SqliteStatePath);
+        var db = Path.Combine(root, "run-events.db");
+        var logPath = Path.Combine(root, "logs", ConductEventLogWriter.CurrentFileName);
+        var failedAt = DateTimeOffset.Parse("2026-09-02T12:00:00Z");
+        var store = new SqliteRunEventStore(db);
+        await store.AppendAsync(new RunEventAppend(
+            RunEventTypes.EvidenceRetention,
+            null,
+            RunEventMaintenanceCadence.ArtifactRetentionOperation,
+            "Failed",
+            "failed retention sweep",
+            "{}",
+            OccurredAt: failedAt));
+        await store.AppendAsync(new RunEventAppend(
+            RunEventTypes.RunEventMaintenance,
+            null,
+            RunEventMaintenanceCadence.Operation,
+            "Deferred",
+            "database maintenance deferred",
+            JsonSerializer.Serialize(new
+            {
+                disposition = SqliteMaintenanceDisposition.Deferred.ToString(),
+                nextAttemptAt = failedAt.AddMinutes(45),
+                consecutiveNoProgressAttempts = 1
+            }),
+            OccurredAt: failedAt.AddMinutes(30)));
+        var completedMaintenance = new RunEventMaintenanceResult(
+            Deferred: false,
+            DeferredReason: null,
+            ConductorTickRowsDeleted: 0,
+            AgedConductorTickRowsDeleted: 0,
+            OversizedConductorTickRowsDeleted: 0,
+            DeletedPayloadBytesEstimate: 0,
+            MaxRowsDeletedInTransaction: 0,
+            Duration: TimeSpan.Zero,
+            BytesBefore: 0,
+            BytesAfter: 0,
+            VacuumRequested: false,
+            VacuumCompleted: false,
+            VacuumDeferred: false);
+        var successfulRetention = new StorageRetentionResult(0, 0, 0, 0, 0, 0, "retry-success", []);
+        var artifactCalls = 0;
+
+        var result = RunEventMaintenanceCadence.TryRunIfDue(
+            db,
+            logPath,
+            () => failedAt.Add(RunEventMaintenanceCadence.ArtifactFailureRetryInterval).AddSeconds(1),
+            maintenanceOperation: (_, _) => completedMaintenance,
+            workspace: workspace,
+            artifactRetentionOperation: (_, _, _, _) =>
+            {
+                artifactCalls++;
+                return successfulRetention;
+            });
+
+        Assert.True(result.Attempted);
+        Assert.False(result.Failed);
+        Assert.Same(successfulRetention, result.ArtifactRetention);
+        Assert.Equal(1, artifactCalls);
     }
 
     [Xunit.Fact]
@@ -645,6 +716,7 @@ public sealed class RunEventStoreTests
                 TimeSpan.FromDays(1),
                 MinConductorTickRowsToKeep: 0,
                 Vacuum: true,
+                OfflineVacuumAuthorized: true,
                 UtcNow: DateTimeOffset.Parse("2026-07-16T12:00:00Z"),
                 MaintenanceLockCommandTimeoutSeconds: 1));
 
@@ -699,8 +771,8 @@ public sealed class RunEventStoreTests
         Assert.Single(await store.ReadSinceAsync(goalId: "active-goal"));
     }
 
-    [Xunit.Fact(DisplayName = "RunEventMaintenanceCadence_requests_vacuum_only_in_weekly_off_peak_window")]
-    public void RunEventMaintenanceCadenceRequestsVacuumOnlyInWeeklyOffPeakWindow()
+    [Xunit.Fact(DisplayName = "RunEventMaintenanceCadence_keeps_off_peak_classification_separate_from_daily_due_time")]
+    public void RunEventMaintenanceCadenceKeepsOffPeakClassificationSeparateFromDailyDueTime()
     {
         Assert.True(RunEventMaintenanceCadence.IsOffPeakVacuumWindow(
             DateTimeOffset.Parse("2026-08-23T03:00:00Z")));
@@ -709,12 +781,12 @@ public sealed class RunEventStoreTests
         Assert.False(RunEventMaintenanceCadence.IsOffPeakVacuumWindow(
             DateTimeOffset.Parse("2026-08-24T03:00:00Z")));
         Assert.Equal(
-            DateTimeOffset.Parse("2026-08-23T02:00:00Z"),
+            DateTimeOffset.Parse("2026-08-23T12:00:00Z"),
             RunEventMaintenanceCadence.NextDue(DateTimeOffset.Parse("2026-08-22T12:00:00Z")));
     }
 
-    [Xunit.Fact(DisplayName = "RunEventMaintenanceCadence_fresh_daily_marker_does_not_suppress_due_off_peak_vacuum")]
-    public async Task FreshDailyMarkerDoesNotSuppressDueOffPeakVacuum()
+    [Xunit.Fact(DisplayName = "RunEventMaintenanceCadence_fresh_daily_marker_suppresses_inline_vacuum")]
+    public async Task FreshDailyMarkerSuppressesInlineVacuum()
     {
         var root = CreateTempDirectory();
         var db = Path.Combine(root, "run-events.db");
@@ -754,9 +826,9 @@ public sealed class RunEventStoreTests
                     VacuumDeferred: false);
             });
 
-        Assert.True(result.Attempted);
-        Assert.True(observedOptions?.Vacuum);
-        Assert.NotNull(await store.ReadLatestAsync(
+        Assert.True(result.Skipped);
+        Assert.Null(observedOptions);
+        Assert.Null(await store.ReadLatestAsync(
             RunEventTypes.RunEventMaintenance,
             RunEventMaintenanceCadence.VacuumOperation));
     }

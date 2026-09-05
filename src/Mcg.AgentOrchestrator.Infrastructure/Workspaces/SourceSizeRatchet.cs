@@ -77,7 +77,9 @@ internal static class SourceSizeRatchet
             // Raised for goal cdde61cc: bounded gate-engine fault reconciliation belongs at the terminal
             // state seam that owns retry exhaustion and prevents candidate-failure classification.
             // Tightened after live acceptance reservation logic moved to its partial-class collaborator.
-            new SourceSizeCeiling("src/Mcg.AgentOrchestrator.App/Orchestration/ConductorBatchLoop.cs", 5182),
+            // Reconciled after integrating main cc4d7b58 and goal f46ecbee at their measured combined size:
+            // the goal's state/run-event maintenance leases remain scoped to the active conductor loop.
+            new SourceSizeCeiling("src/Mcg.AgentOrchestrator.App/Orchestration/ConductorBatchLoop.cs", 5192),
             // Raised for goal 18afe5f2: missing-build-evidence rejection and commit suppression
             // must run where parsed worker results and authoritative changed paths meet. Raised again
             // for goal 0d39b5a3, which adds the narrow Planner sample launch and completion-selection

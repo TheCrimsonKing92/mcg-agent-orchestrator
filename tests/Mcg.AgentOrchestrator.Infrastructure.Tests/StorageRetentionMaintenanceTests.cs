@@ -127,6 +127,23 @@ public sealed class StorageRetentionMaintenanceTests
         Assert.Contains(goals, goal => goal.Status == GoalStatus.Active);
     }
 
+    [Xunit.Fact(DisplayName = "RunEventRetention_failed_blocked_and_active_goal_evidence_is_not_prunable")]
+    public void FailedBlockedAndActiveGoalEvidenceIsNotPrunable()
+    {
+        var emptyTasks = new Dictionary<string, WorkTaskStatus>();
+        var ids = StorageRetentionMaintenance.SelectGoalOperationPrunableIds([
+            new StorageRetentionGoal("completed", GoalStatus.Completed, emptyTasks),
+            new StorageRetentionGoal("cancelled", GoalStatus.Cancelled, emptyTasks),
+            new StorageRetentionGoal("superseded", GoalStatus.Superseded, emptyTasks),
+            new StorageRetentionGoal("failed", GoalStatus.Failed, emptyTasks),
+            new StorageRetentionGoal("acceptance-failed", GoalStatus.AcceptanceFailed, emptyTasks),
+            new StorageRetentionGoal("waiting", GoalStatus.WaitingForHuman, emptyTasks),
+            new StorageRetentionGoal("active", GoalStatus.Active, emptyTasks)
+        ]);
+
+        Assert.Equal(["completed", "cancelled", "superseded"], ids);
+    }
+
     [Xunit.Fact]
     public async Task Cadence_NonTerminalGoal_OperationRowsSurvivePruning()
     {

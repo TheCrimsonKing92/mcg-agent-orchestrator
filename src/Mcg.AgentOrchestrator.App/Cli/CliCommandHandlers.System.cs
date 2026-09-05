@@ -256,6 +256,10 @@ internal static partial class CliCommandHandlers
                 HandleRunEventsMaintenance(parts, context);
                 return false;
 
+            case "state-db-maintenance":
+                HandleStateDatabaseMaintenance(parts, context);
+                return false;
+
             case "run-event":
             {
                 if (parts.Count is < 3 or > 5 ||
@@ -942,19 +946,29 @@ internal static partial class CliCommandHandlers
         var store = new SqliteRunEventStore(
             context.Workspace.RunEventStorePath,
             ensureSchema: !File.Exists(context.Workspace.RunEventStorePath));
+        SqliteMaintenanceLease? vacuumLease = null;
+        if (vacuum && !SqliteMaintenanceLease.TryAcquireExclusive(
+                SqliteMaintenanceLease.ForDatabase(context.Workspace.RunEventStorePath), out vacuumLease))
+        {
+            throw new InvalidOperationException(
+                "Full run-events VACUUM was refused because active conductor work holds the maintenance lease.");
+        }
+
+        using var heldVacuumLease = vacuumLease;
         var options = new RunEventMaintenanceOptions(
             TimeSpan.FromDays(retentionDays),
             keepRows,
             vacuum,
             MaxConductorTickPayloadBytes: payloadMaxBytes,
             DeleteBatchSize: batchSize,
-            LegacyOversizedConductorTickPurge: legacyPurge);
+            LegacyOversizedConductorTickPurge: legacyPurge,
+            OfflineVacuumAuthorized: vacuum);
         var result = store.MaintainAsync(options)
             .GetAwaiter()
             .GetResult();
 
         var mode = legacyPurge ? "legacy-purge" : "manual";
-        var status = result.Deferred ? "deferred" : "completed";
+        var status = result.Disposition.ToString().ToLowerInvariant();
         var receipt = RunEventMaintenanceCadence.FormatReceipt(mode, options, result);
         Console.WriteLine(receipt);
         try
@@ -982,14 +996,118 @@ internal static partial class CliCommandHandlers
             Console.WriteLine($"deferredReason={result.DeferredReason}");
         }
 
-        if (!result.Deferred)
+        RunEventMaintenanceCadence.TryAppendRunEventReceipt(
+            store,
+            mode,
+            options,
+            result,
+            DateTimeOffset.UtcNow);
+    }
+
+    private static void HandleStateDatabaseMaintenance(
+        IReadOnlyList<string> parts,
+        CliExecutionContext context) =>
+        HandleStateDatabaseMaintenance(
+            parts,
+            context,
+            GateHeartbeatArtifacts.ReadStableSlots().Any(status => !status.IsAvailable),
+            conversionUtcNow: null);
+
+    internal static void HandleStateDatabaseMaintenance(
+        IReadOnlyList<string> parts,
+        CliExecutionContext context,
+        bool activeGate,
+        DateTimeOffset? conversionUtcNow)
+    {
+        if (parts.Count < 2 ||
+            (!parts[1].Equals("plan", StringComparison.OrdinalIgnoreCase) &&
+             !parts[1].Equals("execute", StringComparison.OrdinalIgnoreCase) &&
+             !parts[1].Equals("convert-copy", StringComparison.OrdinalIgnoreCase) &&
+             !parts[1].Equals("convert-live", StringComparison.OrdinalIgnoreCase)))
         {
-            RunEventMaintenanceCadence.TryAppendRunEventReceipt(
-                store,
-                mode,
-                options,
-                result,
-                DateTimeOffset.UtcNow);
+            throw new ArgumentException(CliCommandHelp.StateDatabaseMaintenanceUsage);
+        }
+
+        var databasePath = context.Workspace.SqliteStatePath;
+        var activeDispatchOrGate = activeGate || context.Kernel.Goals.Any(goal =>
+            goal.Tasks.Any(task =>
+                task.Status == WorkTaskStatus.Running ||
+                task.LastProcess is { IsRunning: true }));
+        if (parts[1].Equals("plan", StringComparison.OrdinalIgnoreCase))
+        {
+            var leasePath = SqliteMaintenanceLease.ForDatabase(databasePath);
+            var activeConductor = !SqliteMaintenanceLease.TryAcquireExclusive(leasePath, out var probeLease);
+            probeLease?.Dispose();
+            var metrics = StateDatabaseMaintenance.Probe(databasePath);
+            var plan = StateDatabaseMaintenance.Plan(metrics, activeConductor, activeDispatchOrGate);
+            Console.WriteLine(string.Create(CultureInfo.InvariantCulture,
+                $"STATE_DB_MAINTENANCE_PLAN decision={plan.Decision} reason={plan.Reason} activeConductor={activeConductor} activeDispatchOrGate={activeDispatchOrGate} pageCount={metrics.PageCount} pageSize={metrics.PageSize} freelistCount={metrics.FreelistCount} reclaimableBytes={metrics.ReclaimableBytes} databaseBytes={metrics.DatabaseBytes} journalMode={metrics.JournalMode} autoVacuum={metrics.AutoVacuumMode}"));
+            return;
+        }
+
+        if (parts[1].Equals("convert-copy", StringComparison.OrdinalIgnoreCase) ||
+            parts[1].Equals("convert-live", StringComparison.OrdinalIgnoreCase))
+        {
+            var conversionOptions = ResolveStateDatabaseConversionOptions(parts, activeDispatchOrGate, conversionUtcNow);
+            var conversion = StateDatabaseOfflineConversion.ExecuteAsync(
+                    databasePath,
+                    conversionOptions)
+                .GetAwaiter()
+                .GetResult();
+            WriteStateDatabaseMaintenanceReceipt(context, conversion.FormatReceipt(), "state-db-offline-conversion");
+            return;
+        }
+
+        if (!HasCliConfirmation(parts, "--confirm-offline"))
+            throw new ArgumentException(CliCommandHelp.StateDatabaseMaintenanceUsage);
+
+        var result = StateDatabaseMaintenance.ExecuteAsync(databasePath, activeDispatchOrGate)
+            .GetAwaiter()
+            .GetResult();
+        WriteStateDatabaseMaintenanceReceipt(context, result.FormatReceipt(), "state-db-maintenance");
+    }
+
+    internal static StateDatabaseOfflineConversionOptions ResolveStateDatabaseConversionOptions(
+        IReadOnlyList<string> parts,
+        bool activeDispatchOrGate,
+        DateTimeOffset? utcNow = null)
+    {
+        var createCopy = parts.Count > 1 &&
+            parts[1].Equals("convert-copy", StringComparison.OrdinalIgnoreCase);
+        var replaceLive = parts.Count > 1 &&
+            parts[1].Equals("convert-live", StringComparison.OrdinalIgnoreCase);
+        var outputPath = GetFlagValue(parts, "--output");
+        if ((!createCopy && !replaceLive) ||
+            !HasCliConfirmation(parts, "--confirm-offline") ||
+            (createCopy && string.IsNullOrWhiteSpace(outputPath)) ||
+            (replaceLive && (!HasCliConfirmation(parts, "--confirm-live-replacement") || outputPath is not null)))
+        {
+            throw new ArgumentException(CliCommandHelp.StateDatabaseMaintenanceUsage);
+        }
+
+        return new StateDatabaseOfflineConversionOptions(
+            createCopy
+                ? StateDatabaseOfflineConversionMode.CreateCopy
+                : StateDatabaseOfflineConversionMode.ReplaceLive,
+            CopyOutputPath: outputPath,
+            ExplicitlyAuthorized: true,
+            ActiveDispatchOrGate: activeDispatchOrGate,
+            UtcNow: utcNow);
+    }
+
+    private static void WriteStateDatabaseMaintenanceReceipt(
+        CliExecutionContext context,
+        string receipt,
+        string eventKind)
+    {
+        Console.WriteLine(receipt);
+        try
+        {
+            new ConductEventLogWriter(context.Workspace.ConductEventsLogPath)
+                .Append(eventKind, null, receipt);
+        }
+        catch
+        {
         }
     }
 
