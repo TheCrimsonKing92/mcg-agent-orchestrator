@@ -353,8 +353,8 @@ internal static class ConductorSelfRelaunch
         using var process = Process.Start(startInfo)
             ?? throw new InvalidOperationException($"Failed to start {fileName}.");
         process.StandardInput.Close();
-        var stdoutTask = process.StandardOutput.ReadToEndAsync();
-        var stderrTask = process.StandardError.ReadToEndAsync();
+        var stdoutDrain = PipeDrain.Start(process.StandardOutput, "self-relaunch-stdout-drain");
+        var stderrDrain = PipeDrain.Start(process.StandardError, "self-relaunch-stderr-drain");
         using var timeoutCts = new CancellationTokenSource(timeout);
         using var linkedCts = CancellationTokenSource.CreateLinkedTokenSource(
             timeoutCts.Token,
@@ -381,15 +381,41 @@ internal static class ConductorSelfRelaunch
 
             return new CapturedProcessResult(
                 -1,
-                stdoutTask.GetAwaiter().GetResult(),
-                stderrTask.GetAwaiter().GetResult(),
+                stdoutDrain.Text,
+                stderrDrain.Text,
                 TimedOut: true);
+        }
+
+        var drainDeadline = Environment.TickCount64 + PipeDrain.DefaultTimeoutMilliseconds;
+        var outputDrained = stdoutDrain.Join(drainDeadline);
+        var errorDrained = stderrDrain.Join(drainDeadline);
+        var stderr = stderrDrain.Text;
+        if (!outputDrained || !errorDrained)
+        {
+            stderr = PipeDrain.AppendDiagnostic(
+                stderr,
+                PipeDrain.DescribeTimeout(
+                    "conductor self-relaunch",
+                    PipeDrain.DefaultTimeoutMilliseconds,
+                    stdoutDrain,
+                    stderrDrain));
         }
 
         return new CapturedProcessResult(
             process.ExitCode,
-            stdoutTask.GetAwaiter().GetResult(),
-            stderrTask.GetAwaiter().GetResult());
+            stdoutDrain.Text,
+            stderr,
+            TimedOut: !outputDrained || !errorDrained);
+    }
+
+    internal static (int ExitCode, string Stdout, string Stderr, bool TimedOut) RunProcessForTests(
+        string fileName,
+        IReadOnlyList<string> arguments,
+        string workingDirectory,
+        TimeSpan timeout)
+    {
+        var result = RunProcess(fileName, arguments, workingDirectory, timeout);
+        return (result.ExitCode, result.Stdout, result.Stderr, result.TimedOut);
     }
 
     private static void EnsureSucceeded(

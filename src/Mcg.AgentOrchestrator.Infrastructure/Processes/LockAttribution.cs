@@ -475,8 +475,8 @@ internal static partial class LockAttribution
 
             diagnostics?.Record("handle-process-start", "started");
             try { process.StandardInput.Close(); } catch { }
-            var outputTask = process.StandardOutput.ReadToEndAsync();
-            var errorTask = process.StandardError.ReadToEndAsync();
+            var outputDrain = PipeDrain.Start(process.StandardOutput, "handle64-stdout-drain");
+            var errorDrain = PipeDrain.Start(process.StandardError, "handle64-stderr-drain");
             if (!process.WaitForExit(testHooks.HandleProbeTimeout ?? HandleProbeTimeout))
             {
                 diagnostics?.Record("handle-wait", "timed-out");
@@ -499,8 +499,6 @@ internal static partial class LockAttribution
                     diagnostics?.Record("handle-reap", $"failed-{exception.GetType().Name}");
                 }
 
-                _ = Task.WhenAny(outputTask, Task.Delay(TimeSpan.FromSeconds(1)));
-                _ = Task.WhenAny(errorTask, Task.Delay(TimeSpan.FromSeconds(1)));
                 return new BuildLockAttribution(
                     path,
                     [new BuildLockHolder(null, "unknown-probe-timeout", null, false)],
@@ -508,7 +506,25 @@ internal static partial class LockAttribution
             }
 
             diagnostics?.Record("handle-wait", $"exited-{process.ExitCode}");
-            var output = outputTask.GetAwaiter().GetResult() + Environment.NewLine + errorTask.GetAwaiter().GetResult();
+            var drainDeadline = Environment.TickCount64 + PipeDrain.DefaultTimeoutMilliseconds;
+            var outputDrained = outputDrain.Join(drainDeadline);
+            var errorDrained = errorDrain.Join(drainDeadline);
+            if (!outputDrained || !errorDrained)
+            {
+                var drainDiagnostic = PipeDrain.DescribeTimeout(
+                    "handle64",
+                    PipeDrain.DefaultTimeoutMilliseconds,
+                    outputDrain,
+                    errorDrain);
+                diagnostics?.Record("handle-drain", drainDiagnostic);
+                Trace.TraceWarning(drainDiagnostic);
+                return new BuildLockAttribution(
+                    path,
+                    [new BuildLockHolder(null, "unknown-probe-timeout", null, false)],
+                    "handle64-timeout");
+            }
+
+            var output = outputDrain.Text + Environment.NewLine + errorDrain.Text;
             var holders = ParseHandleOutput(output, ownershipHint);
             diagnostics?.Record("handle-parse", holders.Count == 0 ? "empty" : $"holders-{holders.Count}");
             return holders.Count == 0 ? null : new BuildLockAttribution(path, holders, "handle64");

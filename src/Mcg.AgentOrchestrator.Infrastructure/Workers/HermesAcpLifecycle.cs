@@ -176,7 +176,7 @@ internal sealed class HermesAcpLifecycle
         var permissionPolicyViolated = false;
         var unexpectedChild = false;
         IHermesAcpProcess? process = null;
-        Task<string>? stderrDrain = null;
+        PipeDrain? stderrDrain = null;
         Task? stdoutDrain = null;
         HermesAcpJsonRpcClient? rpc = null;
 
@@ -184,7 +184,7 @@ internal sealed class HermesAcpLifecycle
         {
             await ValidatePinnedVersionAsync(plan, cancellationToken).ConfigureAwait(false);
             process = _launcher.Start(plan.StartInfo);
-            stderrDrain = process.StandardError.ReadToEndAsync(cancellationToken);
+            stderrDrain = PipeDrain.Start(process.StandardError, "hermes-acp-stderr-drain");
             rpc = new HermesAcpJsonRpcClient(
                 process.StandardInput,
                 process.StandardOutput,
@@ -258,7 +258,17 @@ internal sealed class HermesAcpLifecycle
             }
 
             exitCode = process.ExitCode;
-            stderr = await stderrDrain.WaitAsync(ShutdownTimeout, cancellationToken).ConfigureAwait(false);
+            var stderrDrainDeadline = Environment.TickCount64 + (long)ShutdownTimeout.TotalMilliseconds;
+            if (!stderrDrain.Join(stderrDrainDeadline))
+            {
+                throw new TimeoutException(PipeDrain.DescribeTimeout(
+                    "Hermes ACP",
+                    (int)ShutdownTimeout.TotalMilliseconds,
+                    stdoutDrain: null,
+                    stderrDrain: stderrDrain));
+            }
+
+            stderr = stderrDrain.Text;
             if (!string.IsNullOrWhiteSpace(stderr))
             {
                 await progress.WriteAsync(stderr).ConfigureAwait(false);
@@ -310,7 +320,21 @@ internal sealed class HermesAcpLifecycle
 
                     if (stderrDrain is not null)
                     {
-                        stderr = await stderrDrain.WaitAsync(ShutdownTimeout).ConfigureAwait(false);
+                        var stderrDrainDeadline = Environment.TickCount64 + (long)ShutdownTimeout.TotalMilliseconds;
+                        if (stderrDrain.Join(stderrDrainDeadline))
+                        {
+                            stderr = stderrDrain.Text;
+                        }
+                        else
+                        {
+                            stderr = PipeDrain.AppendDiagnostic(
+                                stderrDrain.Text,
+                                PipeDrain.DescribeTimeout(
+                                    "Hermes ACP",
+                                    (int)ShutdownTimeout.TotalMilliseconds,
+                                    stdoutDrain: null,
+                                    stderrDrain: stderrDrain));
+                        }
                     }
                 }
                 catch
@@ -375,16 +399,27 @@ internal sealed class HermesAcpLifecycle
 
         using var process = _launcher.Start(startInfo);
         process.CompleteInput();
-        var stdout = process.StandardOutput.ReadToEndAsync(cancellationToken);
-        var stderr = process.StandardError.ReadToEndAsync(cancellationToken);
+        var stdout = PipeDrain.Start(process.StandardOutput, "hermes-version-stdout-drain");
+        var stderr = PipeDrain.Start(process.StandardError, "hermes-version-stderr-drain");
         if (!await WaitForExitAsync(process, VersionTimeout, cancellationToken).ConfigureAwait(false))
         {
             process.Kill();
             throw new TimeoutException("Hermes version preflight did not exit within 30 seconds.");
         }
 
-        var versionOutput = (await stdout.ConfigureAwait(false)) + Environment.NewLine +
-            (await stderr.ConfigureAwait(false));
+        var drainDeadline = Environment.TickCount64 + PipeDrain.DefaultTimeoutMilliseconds;
+        var stdoutDrained = stdout.Join(drainDeadline);
+        var stderrDrained = stderr.Join(drainDeadline);
+        if (!stdoutDrained || !stderrDrained)
+        {
+            throw new TimeoutException(PipeDrain.DescribeTimeout(
+                "Hermes version preflight",
+                PipeDrain.DefaultTimeoutMilliseconds,
+                stdout,
+                stderr));
+        }
+
+        var versionOutput = stdout.Text + Environment.NewLine + stderr.Text;
         if (process.ExitCode != 0)
         {
             throw new InvalidOperationException($"Hermes version preflight exited {process.ExitCode}: {versionOutput.Trim()}");
