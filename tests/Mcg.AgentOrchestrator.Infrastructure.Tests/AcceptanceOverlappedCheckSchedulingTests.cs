@@ -2,7 +2,7 @@ using Mcg.AgentOrchestrator.Core;
 using Mcg.AgentOrchestrator.Infrastructure;
 
 [Collection(TestCollections.JobAccounting)]
-public sealed class GoalAcceptanceVerifierTestsOverlappedCheckScheduling
+public sealed class AcceptanceOverlappedCheckSchedulingTests
     : GoalAcceptanceVerifierDotnetBuildSlotTests
 {
     [Fact]

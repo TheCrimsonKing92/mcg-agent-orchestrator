@@ -70,6 +70,13 @@ internal static class AcceptanceLaneClosureHasher
                 if (File.Exists(Path.Combine(root, rootBuildInput)))
                     members.Add(rootBuildInput);
             }
+            foreach (var repositoryDirectory in new[] { "scripts", "docs", "config" })
+            {
+                if (Directory.Exists(Path.Combine(root, repositoryDirectory)))
+                    members.Add(repositoryDirectory);
+            }
+            foreach (var solution in Directory.EnumerateFiles(root, "*.sln", SearchOption.TopDirectoryOnly))
+                members.Add(ToGitPath(root, solution));
             if (members.Count == 0 || RunGit(root, ["status", "--porcelain", "--", .. members]) is not { } status || status.Length != 0)
                 return null;
 

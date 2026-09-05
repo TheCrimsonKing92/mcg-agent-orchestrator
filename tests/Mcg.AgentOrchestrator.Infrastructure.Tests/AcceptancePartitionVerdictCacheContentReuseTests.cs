@@ -2,6 +2,7 @@ using Mcg.AgentOrchestrator.Core;
 using Mcg.AgentOrchestrator.Infrastructure;
 using System.Diagnostics;
 
+[Xunit.Collection("IsolatedProcessSpawning")]
 public sealed class AcceptancePartitionVerdictCacheContentReuseTests : GoalAcceptanceVerifierTestBase, IDisposable
 {
     private readonly string _root = Path.Combine(Path.GetTempPath(), $"mcg-content-reuse-{Guid.NewGuid():N}");
@@ -38,6 +39,25 @@ public sealed class AcceptancePartitionVerdictCacheContentReuseTests : GoalAccep
         Assert.Null(changed.TryReuse(_lane));
     }
 
+    [Fact]
+    public void ScriptsOnlyChange_DoesNotReuseGreenLane()
+    {
+        Directory.CreateDirectory(_root);
+        CreateRepository();
+        var first = CreateCache(new GoalId("11111111111111111111111111111111"), "attempt-one", "tree-a", "main-a");
+        first.RecordExecution(_lane, PassedResult());
+        Assert.NotNull(first.CompleteAttempt());
+
+        File.AppendAllText(Path.Combine(_root, "scripts", "probe.ps1"), Environment.NewLine + "# changed runtime input");
+        RunGit("add", "scripts/probe.ps1");
+        RunGit("commit", "-m", "change runtime script");
+
+        var changed = CreateCache(new GoalId("22222222222222222222222222222222"), "attempt-two", "tree-b", "main-b");
+
+        // Against the pre-fix closure this assertion fails because scripts are omitted from its hash.
+        Assert.Null(changed.TryReuse(_lane));
+    }
+
     public void Dispose()
     {
         DeleteDirectoryWithRetry(_root);
@@ -70,10 +90,12 @@ public sealed class AcceptancePartitionVerdictCacheContentReuseTests : GoalAccep
         var libraryProject = Path.Combine(_root, "src", "TestLibrary");
         Directory.CreateDirectory(testProject);
         Directory.CreateDirectory(libraryProject);
+        Directory.CreateDirectory(Path.Combine(_root, "scripts"));
         File.WriteAllText(Path.Combine(testProject, "Mcg.AgentOrchestrator.Infrastructure.Tests.csproj"),
             "<Project Sdk=\"Microsoft.NET.Sdk\"><ItemGroup><ProjectReference Include=\"../../src/TestLibrary/TestLibrary.csproj\" /></ItemGroup></Project>");
         File.WriteAllText(Path.Combine(libraryProject, "TestLibrary.csproj"), "<Project Sdk=\"Microsoft.NET.Sdk\" />");
         File.WriteAllText(Path.Combine(libraryProject, "Probe.cs"), "internal sealed class Probe { }");
+        File.WriteAllText(Path.Combine(_root, "scripts", "probe.ps1"), "Write-Output probe");
         File.WriteAllText(Path.Combine(_root, "Directory.Build.props"), "<Project />");
         RunGit("init");
         RunGit("config", "user.email", "tests@example.invalid");

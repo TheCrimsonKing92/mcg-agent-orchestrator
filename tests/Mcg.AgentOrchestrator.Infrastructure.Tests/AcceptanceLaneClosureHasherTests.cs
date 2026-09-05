@@ -1,6 +1,7 @@
 using Mcg.AgentOrchestrator.Infrastructure;
 using System.Diagnostics;
 
+[Xunit.Collection("IsolatedProcessSpawning")]
 public sealed class AcceptanceLaneClosureHasherTests : GoalAcceptanceVerifierTestBase, IDisposable
 {
     private readonly string _root = Path.Combine(Path.GetTempPath(), $"mcg-closure-hasher-{Guid.NewGuid():N}");
