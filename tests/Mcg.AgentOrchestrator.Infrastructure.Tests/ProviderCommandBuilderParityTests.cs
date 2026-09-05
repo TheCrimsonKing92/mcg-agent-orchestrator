@@ -132,15 +132,22 @@ public sealed class ProviderCommandBuilderParityTests
                 !isWriteCapable &&
                 valueState == "populated")
             {
-                Assert.Contains("--permission-mode 'default'", routed, StringComparison.Ordinal);
+                Assert.Contains("--permission-mode 'dontAsk'", routed, StringComparison.Ordinal);
+                Assert.Contains("--restricted", routed, StringComparison.Ordinal);
                 Assert.Contains(
-                    "--allowed-tools 'Read,Glob,Grep,Bash,WebFetch,WebSearch,TodoWrite,Task'",
+                    "--tools 'Read,Glob,Grep,Bash,WebFetch,WebSearch,TodoWrite'",
+                    routed,
+                    StringComparison.Ordinal);
+                Assert.Contains(
+                    "--allowed-tools 'Read,Glob,Grep,WebFetch,WebSearch,TodoWrite'",
                     routed,
                     StringComparison.Ordinal);
                 Assert.Contains(
                     "--disallowed-tools 'Edit,Write,NotebookEdit'",
                     routed,
                     StringComparison.Ordinal);
+                Assert.DoesNotContain("--allowed-tools 'Read,Glob,Grep,Bash", routed, StringComparison.Ordinal);
+                Assert.DoesNotContain(",Task", routed, StringComparison.Ordinal);
                 Assert.DoesNotContain("--permission-mode 'plan'", routed, StringComparison.Ordinal);
             }
             else
@@ -192,7 +199,7 @@ public sealed class ProviderCommandBuilderParityTests
             sessionId: "12345678-1234-1234-1234-123456789abc");
 
         Assert.Equal(
-            "claude -p --model 'claude-sonnet-4-6' --permission-mode 'default' --allowed-tools 'Read,Glob,Grep,Bash,WebFetch,WebSearch,TodoWrite,Task' --disallowed-tools 'Edit,Write,NotebookEdit' --session-id 12345678-1234-1234-1234-123456789abc",
+            "claude -p --model 'claude-sonnet-4-6' --permission-mode 'dontAsk' --restricted --tools 'Read,Glob,Grep,Bash,WebFetch,WebSearch,TodoWrite' --allowed-tools 'Read,Glob,Grep,WebFetch,WebSearch,TodoWrite' --disallowed-tools 'Edit,Write,NotebookEdit' --session-id 12345678-1234-1234-1234-123456789abc",
             string.Join(' ', command));
     }
 

@@ -778,8 +778,13 @@ public sealed class WorkerDispatchTestsSandboxLowIntegrity : WorkerDispatchTestS
         sandboxOptions: new WorkerSandboxOptions(false, WorkerSandboxOptions.DefaultAccount, WorkerSandboxOptions.DefaultCredentialTarget));
 
     Assert.Equal("claude-cli", researcher.LastDispatch!.WorkerName);
-    Assert.Contains("--permission-mode 'default'", researcher.LastDispatch.Command, StringComparison.Ordinal);
+    Assert.Contains("--permission-mode 'dontAsk'", researcher.LastDispatch.Command, StringComparison.Ordinal);
+    Assert.Contains("--restricted", researcher.LastDispatch.Command, StringComparison.Ordinal);
+    Assert.Contains("--tools 'Read,Glob,Grep,Bash,WebFetch,WebSearch,TodoWrite'", researcher.LastDispatch.Command, StringComparison.Ordinal);
+    Assert.Contains("--allowed-tools 'Read,Glob,Grep,WebFetch,WebSearch,TodoWrite'", researcher.LastDispatch.Command, StringComparison.Ordinal);
     Assert.Contains("--disallowed-tools 'Edit,Write,NotebookEdit'", researcher.LastDispatch.Command, StringComparison.Ordinal);
+    Assert.DoesNotContain("--allowed-tools 'Read,Glob,Grep,Bash", researcher.LastDispatch.Command, StringComparison.Ordinal);
+    Assert.DoesNotContain(",Task", researcher.LastDispatch.Command, StringComparison.Ordinal);
     Assert.DoesNotContain("--permission-mode 'plan'", researcher.LastDispatch.Command, StringComparison.Ordinal);
     Assert.True(!researcher.LastDispatch.Command.Contains("workspace-write", StringComparison.Ordinal));
 }
@@ -936,15 +941,16 @@ public sealed class WorkerDispatchTestsSandboxLowIntegrity : WorkerDispatchTestS
     WorkerProfileDispatcher.PrepareSubscriptionTask(kernel, reviewerGoal, reviewerTask, [reviewerAgent], WorkerProfileCatalog.Default(), promptRoot, workingDirectory, dispatchedAt, claudeAuthProbe: authProbe);
 
     Assert.Contains("--permission-mode 'bypassPermissions'", developerTask.LastDispatch!.Command, StringComparison.Ordinal);
-    Assert.Contains("--permission-mode 'default'", reviewerTask.LastDispatch!.Command, StringComparison.Ordinal);
+    Assert.Contains("--permission-mode 'dontAsk'", reviewerTask.LastDispatch!.Command, StringComparison.Ordinal);
+    Assert.Contains("--restricted", reviewerTask.LastDispatch.Command, StringComparison.Ordinal);
     Assert.Contains("--disallowed-tools 'Edit,Write,NotebookEdit'", reviewerTask.LastDispatch.Command, StringComparison.Ordinal);
+    Assert.DoesNotContain(",Task", reviewerTask.LastDispatch.Command, StringComparison.Ordinal);
     Assert.DoesNotContain("--permission-mode 'plan'", reviewerTask.LastDispatch.Command, StringComparison.Ordinal);
 }
 
     [Xunit.Fact(DisplayName = "WorkerProfileDispatcher_claude_read_only_dispatch_denies_edit_tools_and_developer_dispatch_does_not")]
     public void WorkerProfileDispatcherClaudeReadOnlyDispatchDeniesEditToolsAndDeveloperDispatchDoesNot()
 {
-    const string deniedEditTools = "--disallowed-tools 'Edit,Write,NotebookEdit'";
     var root = CreateSeededDispatchRepository();
     var promptRoot = Path.Combine(root, "prompts");
     var dispatchedAt = DateTimeOffset.Parse("2026-06-02T12:00:00Z");
@@ -979,11 +985,16 @@ public sealed class WorkerDispatchTestsSandboxLowIntegrity : WorkerDispatchTestS
     WorkerProfileDispatcher.PrepareSubscriptionTask(kernel, researcherGoal, researcherTask, [researcherAgent], WorkerProfileCatalog.Default(), promptRoot, researcherWorkingDirectory, dispatchedAt, claudeAuthProbe: authProbe);
     WorkerProfileDispatcher.PrepareSubscriptionTask(kernel, developerGoal, developerTask, [developerAgent], WorkerProfileCatalog.Default(), promptRoot, developerWorkingDirectory, dispatchedAt, claudeAuthProbe: authProbe);
 
-    Assert.Contains(deniedEditTools, researcherTask.LastDispatch!.Command, StringComparison.Ordinal);
-    Assert.Contains("Edit", deniedEditTools, StringComparison.Ordinal);
-    Assert.Contains("Write", deniedEditTools, StringComparison.Ordinal);
-    Assert.Contains("NotebookEdit", deniedEditTools, StringComparison.Ordinal);
+    Assert.Contains("--permission-mode 'dontAsk'", researcherTask.LastDispatch!.Command, StringComparison.Ordinal);
+    Assert.Contains("--restricted", researcherTask.LastDispatch.Command, StringComparison.Ordinal);
+    Assert.Contains("--tools 'Read,Glob,Grep,Bash,WebFetch,WebSearch,TodoWrite'", researcherTask.LastDispatch.Command, StringComparison.Ordinal);
+    Assert.Contains("--allowed-tools 'Read,Glob,Grep,WebFetch,WebSearch,TodoWrite'", researcherTask.LastDispatch.Command, StringComparison.Ordinal);
+    Assert.Contains("--disallowed-tools 'Edit,Write,NotebookEdit'", researcherTask.LastDispatch.Command, StringComparison.Ordinal);
+    Assert.DoesNotContain("--allowed-tools 'Read,Glob,Grep,Bash", researcherTask.LastDispatch.Command, StringComparison.Ordinal);
+    Assert.DoesNotContain(",Task", researcherTask.LastDispatch.Command, StringComparison.Ordinal);
     Assert.Contains("--permission-mode 'bypassPermissions'", developerTask.LastDispatch!.Command, StringComparison.Ordinal);
+    Assert.DoesNotContain("--restricted", developerTask.LastDispatch.Command, StringComparison.Ordinal);
+    Assert.DoesNotContain("--allowed-tools", developerTask.LastDispatch.Command, StringComparison.Ordinal);
     Assert.DoesNotContain("--disallowed-tools", developerTask.LastDispatch.Command, StringComparison.Ordinal);
 }
 

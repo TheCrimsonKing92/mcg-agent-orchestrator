@@ -14,9 +14,10 @@ The boundaries below come from these live controls:
   `src/Mcg.AgentOrchestrator.Infrastructure/Workers/WorkerArtifactWriter.cs:346-356`).
 - Dispatch role classification gives Developer and Tester writable settings and marks Planner, Researcher,
   and Reviewer read-only (`src/Mcg.AgentOrchestrator.Infrastructure/Workers/WorkerProfileDispatcher.cs:3160` and
-  `src/Mcg.AgentOrchestrator.Infrastructure/Workers/WorkerProfileDispatcher.cs:3170`).
-  The built-in Claude command builder turns that read-only sentinel into default mode with an explicit tool
-  allow/deny policy (`src/Mcg.AgentOrchestrator.Infrastructure/Workers/ProviderCommandBuilder.cs:117`).
+  `src/Mcg.AgentOrchestrator.Infrastructure/Workers/WorkerProfileDispatcher.cs:3171`).
+  The built-in Claude command builder turns that read-only sentinel into restricted `dontAsk` mode with an
+  explicit tool availability/allow/deny policy that omits delegated agents and only auto-approves read tools
+  (`src/Mcg.AgentOrchestrator.Infrastructure/Workers/ProviderCommandBuilder.cs:130-136`).
   Preflight separately requires a goal workspace and patch-capable profile for writable roles
   (`src/Mcg.AgentOrchestrator.Infrastructure/Workers/WorkerSandboxCapabilityPlanner.cs:9-36`).
 - Worker sandboxes do not grant ref-level Git writes: creating `.git/packed-refs.lock` is denied. No worker

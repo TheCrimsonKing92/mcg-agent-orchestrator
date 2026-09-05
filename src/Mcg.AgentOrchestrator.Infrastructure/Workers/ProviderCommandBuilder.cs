@@ -4,8 +4,9 @@ namespace Mcg.AgentOrchestrator.Infrastructure;
 
 public static class ProviderCommandBuilder
 {
-    public const string ClaudeReadOnlyPermissionMode = "default";
-    public const string ClaudeReadOnlyAllowedTools = "Read,Glob,Grep,Bash,WebFetch,WebSearch,TodoWrite,Task";
+    public const string ClaudeReadOnlyPermissionMode = "dontAsk";
+    public const string ClaudeReadOnlyTools = "Read,Glob,Grep,Bash,WebFetch,WebSearch,TodoWrite";
+    public const string ClaudeReadOnlyAllowedTools = "Read,Glob,Grep,WebFetch,WebSearch,TodoWrite";
     public const string ClaudeReadOnlyDisallowedTools = "Edit,Write,NotebookEdit";
 
     public static IReadOnlyList<string> Build(
@@ -126,6 +127,9 @@ public static class ProviderCommandBuilder
         };
         if (isReadOnly)
         {
+            command.Add("--restricted");
+            command.Add("--tools");
+            command.Add(Expand(ClaudeReadOnlyTools));
             command.Add("--allowed-tools");
             command.Add(Expand(ClaudeReadOnlyAllowedTools));
             command.Add("--disallowed-tools");
