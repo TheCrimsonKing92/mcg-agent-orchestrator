@@ -132,7 +132,9 @@ internal static class SourceSizeRatchet
             // the focused failure-state and dispatch-start invariant tests.
             // Raised for goal ae54b5eb: the existing driver owner proves a refused prepared start writes
             // exactly one retry and one dispatch across two conductor ticks before stable set-aside.
-            new SourceSizeCeiling("tests/Mcg.AgentOrchestrator.Infrastructure.Tests/ConductorDriverTests.cs", 1608),
+            // Raised for goal ae54b5eb: the additional 64 lines prove the round-2 refused-start reporting
+            // and admission snapshot reload behavior in the existing driver test owner.
+            new SourceSizeCeiling("tests/Mcg.AgentOrchestrator.Infrastructure.Tests/ConductorDriverTests.cs", 1672),
             // Goal ce3c3917 keeps acquired, unavailable, and exceptional lease-lifecycle coverage together
             // in the acceptance-coordination owner rather than splitting one behavioral contract.
             // Raised for goal 13630c9f: acceptance coordination owns the structured apparatus cause
