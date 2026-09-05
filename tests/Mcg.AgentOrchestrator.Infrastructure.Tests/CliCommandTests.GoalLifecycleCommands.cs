@@ -22,7 +22,7 @@ public sealed class CliCommandTestsGoalLifecycleCommands : CliCommandTestBase
             ["goal", "Update src/Mcg.AgentOrchestrator.App/Cli/CliCommandHelp.cs", "--pipeline", "five-role"],
             interactive);
         Xunit.Assert.Equal(interactive, oneShot);
-        Xunit.Assert.Contains("--pipeline <auto|five-role>", CliCommandHelp.GoalUsage, StringComparison.Ordinal);
+        Xunit.Assert.Contains("--pipeline <auto|five-role|developer-reviewer|developer-only>", CliCommandHelp.GoalUsage, StringComparison.Ordinal);
     }
 
     [Xunit.Fact]
@@ -85,7 +85,7 @@ public sealed class CliCommandTestsGoalLifecycleCommands : CliCommandTestBase
         foreach (var args in new[]
         {
             new[] { "goal", "Update docs/usage.md", "--pipeline" },
-            new[] { "goal", "Update docs/usage.md", "--pipeline", "developer-reviewer" },
+            new[] { "goal", "Update docs/usage.md", "--pipeline", "two-role" },
             new[] { "goal", "Update docs/usage.md", "--pipeline", "auto", "--pipeline", "five-role" }
         })
         {

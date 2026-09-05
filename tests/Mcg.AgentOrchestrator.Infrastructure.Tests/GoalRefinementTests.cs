@@ -701,8 +701,8 @@ public sealed class GoalRefinementTests
         }
     }
 
-    [Xunit.Fact(DisplayName = "GoalLifecycleCommands_records_auto_pipeline_decision_and_creates_reviewer_lane")]
-    public void GoalLifecycleCommandsRecordsAutoPipelineDecisionAndCreatesReviewerLane()
+    [Xunit.Fact(DisplayName = "GoalLifecycleCommands_records_auto_pipeline_decision_and_creates_five_role_lane")]
+    public void GoalLifecycleCommandsRecordsAutoPipelineDecisionAndCreatesFiveRoleLane()
     {
         var kernel = new AgentOrchestratorKernel();
 
@@ -711,10 +711,12 @@ public sealed class GoalRefinementTests
             AgentCatalog.Default().Agents,
             "Update security token rollback behavior in src/Mcg.AgentOrchestrator.App/AuthPolicy.cs and tests/Mcg.AgentOrchestrator.Infrastructure.Tests/AuthPolicyTests.cs");
 
-        Xunit.Assert.Equal([AgentRole.Developer, AgentRole.Reviewer], goal.Tasks.Select(task => task.RequiredRole));
+        Xunit.Assert.Equal(
+            [AgentRole.Researcher, AgentRole.Planner, AgentRole.Developer, AgentRole.Tester, AgentRole.Reviewer],
+            goal.Tasks.Select(task => task.RequiredRole));
         Xunit.Assert.Contains(goal.Timeline, evt =>
             evt.Kind == ProgressKind.GoalPolicyDecision &&
-            evt.Message.Contains("Intake pipeline decision (auto): developer-reviewer", StringComparison.Ordinal) &&
+            evt.Message.Contains("Intake pipeline decision (auto): five-role", StringComparison.Ordinal) &&
             evt.Message.Contains("security-risk", StringComparison.Ordinal));
     }
 
@@ -740,11 +742,44 @@ public sealed class GoalRefinementTests
     {
         Xunit.Assert.Equal(GoalIntakePipelineRequest.Auto, GoalIntakePipelineRequestParser.Parse("AUTO"));
         Xunit.Assert.Equal(GoalIntakePipelineRequest.FiveRole, GoalIntakePipelineRequestParser.Parse("Five-Role"));
+        Xunit.Assert.Equal(GoalIntakePipelineRequest.DeveloperReviewer, GoalIntakePipelineRequestParser.Parse("Developer-Reviewer"));
+        Xunit.Assert.Equal(GoalIntakePipelineRequest.DeveloperOnly, GoalIntakePipelineRequestParser.Parse("Developer-Only"));
         Xunit.Assert.Null(GoalIntakePipelineRequest.Auto.ToPipelineOverride());
         Xunit.Assert.Equal(GoalIntakePipeline.FiveRole, GoalIntakePipelineRequest.FiveRole.ToPipelineOverride());
+        Xunit.Assert.Equal(GoalIntakePipeline.DeveloperReviewer, GoalIntakePipelineRequest.DeveloperReviewer.ToPipelineOverride());
+        Xunit.Assert.Equal(GoalIntakePipeline.DeveloperOnly, GoalIntakePipelineRequest.DeveloperOnly.ToPipelineOverride());
+        Xunit.Assert.Equal("auto", GoalIntakePipelineRequest.Auto.ToCanonicalValue());
+        Xunit.Assert.Equal("five-role", GoalIntakePipelineRequest.FiveRole.ToCanonicalValue());
+        Xunit.Assert.Equal("developer-reviewer", GoalIntakePipelineRequest.DeveloperReviewer.ToCanonicalValue());
+        Xunit.Assert.Equal("developer-only", GoalIntakePipelineRequest.DeveloperOnly.ToCanonicalValue());
 
-        var exception = Xunit.Assert.Throws<ArgumentException>(() => GoalIntakePipelineRequestParser.Parse("developer-reviewer"));
-        Xunit.Assert.Contains("auto, five-role", exception.Message, StringComparison.Ordinal);
+        var exception = Xunit.Assert.Throws<ArgumentException>(() => GoalIntakePipelineRequestParser.Parse("two-role"));
+        Xunit.Assert.Contains("auto, five-role, developer-reviewer, developer-only", exception.Message, StringComparison.Ordinal);
+    }
+
+    [Xunit.Fact]
+    public void GoalObjectivePlannerAutomaticPipelinePreservesAllRiskReasons()
+    {
+        const string objective =
+            "Migrate authentication token rollback through an external service API across " +
+            "src/Mcg.AgentOrchestrator.App/AuthPolicy.cs " +
+            "tests/Mcg.AgentOrchestrator.Infrastructure.Tests/AuthPolicyTests.cs " +
+            "scripts/RepairAuth.ps1 and config/auth.json.";
+
+        var plan = GoalObjectivePlanner.Build(objective);
+
+        Xunit.Assert.Contains("high-risk", plan.RiskLabels);
+        Xunit.Assert.Contains("security-risk", plan.RiskLabels);
+        Xunit.Assert.Contains("multi-scope", plan.RiskLabels);
+        Xunit.Assert.Contains("external-dependency", plan.RiskLabels);
+        Xunit.Assert.Contains("complex", plan.RiskLabels);
+        Xunit.Assert.Equal(GoalIntakePipeline.FiveRole, plan.PipelineDecision.Pipeline);
+        Xunit.Assert.False(plan.PipelineDecision.IsOverride);
+        Xunit.Assert.Contains("high-risk objective needs pre-acceptance review", plan.PipelineDecision.Reasons);
+        Xunit.Assert.Contains("security-risk objective needs pre-acceptance review", plan.PipelineDecision.Reasons);
+        Xunit.Assert.Contains("multi-scope objective needs reviewer coverage across touched areas", plan.PipelineDecision.Reasons);
+        Xunit.Assert.Contains("external-dependency objective needs integration-risk review", plan.PipelineDecision.Reasons);
+        Xunit.Assert.Contains("complex objective needs reviewer coverage before acceptance", plan.PipelineDecision.Reasons);
     }
 
     [Xunit.Fact]
@@ -758,7 +793,8 @@ public sealed class GoalRefinementTests
         var output = AsyncLocalConsoleRouter.Capture(() => ConsoleViews.PrintGoalObjectivePlan(forcedPlan));
         var goal = GoalLifecycleCommands.CreateAndActivateGoal(kernel, AgentCatalog.Default().Agents, forcedPlan);
 
-        Xunit.Assert.Equal(GoalIntakePipeline.DeveloperReviewer, automaticPlan.PipelineDecision.Pipeline);
+        Xunit.Assert.Equal(GoalIntakePipeline.FiveRole, automaticPlan.PipelineDecision.Pipeline);
+        Xunit.Assert.False(automaticPlan.PipelineDecision.IsOverride);
         Xunit.Assert.Equal(
             [AgentRole.Researcher, AgentRole.Planner, AgentRole.Developer, AgentRole.Tester, AgentRole.Reviewer],
             goal.Tasks.Select(task => task.RequiredRole));
@@ -822,7 +858,7 @@ public sealed class GoalRefinementTests
         Xunit.Assert.Equal(TaskComplexity.Simple, plan.EstimatedComplexity);
         Xunit.Assert.DoesNotContain("complex", plan.RiskLabels);
         Xunit.Assert.Contains("docs/operator-runbook.md", plan.FileScopes);
-        Xunit.Assert.Equal(GoalIntakePipeline.DeveloperOnly, plan.PipelineDecision.Pipeline);
+        Xunit.Assert.Equal(GoalIntakePipeline.FiveRole, plan.PipelineDecision.Pipeline);
     }
 
     [Xunit.Fact]
@@ -836,7 +872,7 @@ public sealed class GoalRefinementTests
 
         Xunit.Assert.Equal(TaskComplexity.Complex, plan.EstimatedComplexity);
         Xunit.Assert.Contains("complex", plan.RiskLabels);
-        Xunit.Assert.Equal(GoalIntakePipeline.DeveloperReviewer, plan.PipelineDecision.Pipeline);
+        Xunit.Assert.Equal(GoalIntakePipeline.FiveRole, plan.PipelineDecision.Pipeline);
     }
 
     [Xunit.Fact]

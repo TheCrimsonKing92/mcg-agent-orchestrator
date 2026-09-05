@@ -683,9 +683,11 @@ public sealed class CliCommandTestsPersistentRunnerCommandsGoalIntakeAndReplacem
         Goal? currentGoal = null;
         const string objective = "Update src/Mcg.AgentOrchestrator.App/Cli/CliCommandHelp.cs with one focused assertion.";
 
-        Xunit.Assert.NotEqual(
+        var automaticPlan = GoalObjectivePlanner.Build(objective);
+        Xunit.Assert.Equal(
             GoalIntakePipeline.FiveRole,
-            GoalObjectivePlanner.Build(objective).PipelineDecision.Pipeline);
+            automaticPlan.PipelineDecision.Pipeline);
+        Xunit.Assert.False(automaticPlan.PipelineDecision.IsOverride);
 
         _ = CaptureConsole(() => CliPersistentStateRunner.ExecuteCommand(
             ["goal", objective, "--pipeline", "five-role"],

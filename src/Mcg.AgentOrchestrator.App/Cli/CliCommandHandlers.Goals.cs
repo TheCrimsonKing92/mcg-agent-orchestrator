@@ -233,7 +233,7 @@ private static GoalIntakePipelineRequest? ResolveGoalIntakePipelineRequest(IRead
 
     if (requests.Distinct().Count() > 1)
     {
-        throw new ArgumentException("Conflicting --pipeline values were supplied; choose exactly one of: auto, five-role.");
+        throw new ArgumentException($"Conflicting --pipeline values were supplied; choose exactly one of: {GoalIntakePipelineRequestParser.AllowedValues}.");
     }
 
     return requests.Count == 0 ? null : requests[0];
@@ -359,7 +359,7 @@ private static bool? TryExecuteGoalCommand(string command, IReadOnlyList<string>
                     replacementObjective,
                     claim.OwnerGoalId,
                     claim.Version,
-                    pipelineRequest == GoalIntakePipelineRequest.FiveRole ? "five-role" : "auto",
+                    (pipelineRequest ?? GoalIntakePipelineRequest.Auto).ToCanonicalValue(),
                     requestedAgentOverrides));
             return true;
         }
