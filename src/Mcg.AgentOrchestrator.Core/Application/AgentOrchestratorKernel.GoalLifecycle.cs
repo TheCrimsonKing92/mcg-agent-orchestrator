@@ -1196,7 +1196,12 @@ public sealed partial class AgentOrchestratorKernel
         return goal;
     }
 
-    public void ReportTaskProgress(GoalId goalId, TaskId taskId, WorkTaskStatus status, string message)
+    public void ReportTaskProgress(
+        GoalId goalId,
+        TaskId taskId,
+        WorkTaskStatus status,
+        string message,
+        string? observedCandidate = null)
     {
         if (status is WorkTaskStatus.Pending or WorkTaskStatus.Assigned or WorkTaskStatus.WaitingForHuman)
         {
@@ -1220,7 +1225,11 @@ public sealed partial class AgentOrchestratorKernel
         Append(goal, taskId, kind, message);
         if (status is WorkTaskStatus.Completed or WorkTaskStatus.Failed or WorkTaskStatus.Cancelled)
         {
-            ReconcileRetainedDownstreamTasks(goal, task, _clock.UtcNow);
+            ReconcileRetainedDownstreamTasks(
+                goal,
+                task,
+                _clock.UtcNow,
+                observedCandidate: observedCandidate);
         }
 
         RefreshGoalStatus(goal);
@@ -1338,7 +1347,8 @@ public sealed partial class AgentOrchestratorKernel
         Goal goal,
         TaskSpec retriedTask,
         DateTimeOffset reconciledAt,
-        string? provenCancelledCandidate = null)
+        string? provenCancelledCandidate = null,
+        string? observedCandidate = null)
     {
         if (retriedTask.LatestRetryAt is null)
         {
@@ -1346,7 +1356,7 @@ public sealed partial class AgentOrchestratorKernel
         }
 
         var currentCandidateSha = retriedTask.Status == WorkTaskStatus.Completed
-            ? retriedTask.LastDispatch?.ResultCommit
+            ? retriedTask.LastDispatch?.ResultCommit ?? observedCandidate
             : retriedTask.Status == WorkTaskStatus.Cancelled
                 ? provenCancelledCandidate
                 : null;
@@ -1357,9 +1367,18 @@ public sealed partial class AgentOrchestratorKernel
         foreach (var downstream in goal.Tasks.Where(task =>
                      IsDownstreamRole(retriedTask.RequiredRole, task.RequiredRole) &&
                      task.Status == WorkTaskStatus.Completed &&
-                     task.LastVerification is not null &&
-                     !SameNonEmptyReviewedCommit(task.LastVerification.ReviewedCommit, currentCandidateSha)))
+                     task.LastVerification is not null))
         {
+            if (SameNonEmptyReviewedCommit(downstream.LastVerification!.ReviewedCommit, currentCandidateSha))
+            {
+                Append(
+                    goal,
+                    downstream.Id,
+                    ProgressKind.TaskUpdated,
+                    $"Preserved {downstream.RequiredRole} task because retried upstream {retriedTask.RequiredRole} task {retriedTask.Id.Value[..8]} completed with unchanged candidate {currentCandidate}.");
+                continue;
+            }
+
             var reviewedCandidate = string.IsNullOrWhiteSpace(downstream.LastVerification!.ReviewedCommit)
                 ? "unknown"
                 : downstream.LastVerification.ReviewedCommit.Trim();
