@@ -853,6 +853,7 @@ public sealed class ConductorBatchLoopTestsSetAsideReadmit : ConductorBatchLoopT
         kernel.ReportTaskProgress(failedGoal.Id, failedTask.Id, WorkTaskStatus.Failed, "Needs operator repair.");
         var escalations = 0;
         var heldAttempts = 0;
+        var snapshotReloaded = false;
 
         var driver = MakeDriver(
             getFacts: goal => goal.Id == heldGoal.Id
@@ -877,12 +878,66 @@ public sealed class ConductorBatchLoopTestsSetAsideReadmit : ConductorBatchLoopT
             NoStopPath(),
             maxIterations: 3,
             watchInterval: TimeSpan.FromMilliseconds(1),
-            sleepFunc: _ => false);
+            sleepFunc: _ =>
+            {
+                if (!snapshotReloaded)
+                {
+                    kernel.ReplaceGoalWithSnapshot(kernel.ExportGoalSnapshot(failedGoal.Id));
+                    snapshotReloaded = true;
+                }
+                return false;
+            });
 
         Assert.Equal(3, summary.Ticks);
         Assert.Equal(1, summary.Escalated);
         Assert.Equal(1, escalations);
         Assert.Equal(3, heldAttempts);
+        Assert.DoesNotContain(kernel.GetGoal(failedGoal.Id).Timeline, evt =>
+            evt.Kind == ProgressKind.GoalPolicyDecision &&
+            evt.Message.Contains("re-admitted escalated goal", StringComparison.Ordinal));
+    }
+
+    [Xunit.Fact(DisplayName = "BatchLoop_readmits_snapshot_reloaded_goal_when_durable_task_fields_change")]
+    public void BatchLoopReadmitsSnapshotReloadedGoalWhenDurableTaskFieldsChange()
+    {
+        var kernel = new AgentOrchestratorKernel();
+        var goal = GoalLifecycleCommands.CreateAndActivateSimpleGoal(kernel, DefaultAgents(), "failed goal");
+        var task = goal.Tasks.Single();
+        kernel.ReportTaskProgress(goal.Id, task.Id, WorkTaskStatus.Failed, "Needs operator repair.");
+        var snapshotChanged = false;
+        var workspaceCreates = 0;
+        var driver = MakeDriver(
+            getFacts: _ => GoalLifecycleFacts.None,
+            createWorkspace: _ =>
+            {
+                workspaceCreates++;
+                return "C:\\goal";
+            });
+
+        var summary = new ConductorBatchLoop().Run(
+            kernel,
+            driver,
+            ConductorAutonomyPolicy.Conservative,
+            NoStopPath(),
+            maxIterations: 2,
+            watchInterval: TimeSpan.FromMilliseconds(1),
+            sleepFunc: _ =>
+            {
+                if (!snapshotChanged)
+                {
+                    kernel.ReplaceGoalWithSnapshot(kernel.ExportGoalSnapshot(goal.Id));
+                    kernel.RetryTask(goal.Id, task.Id, "Durable operator repair.", RetryCause.ContractClarification);
+                    snapshotChanged = true;
+                }
+                return false;
+            });
+
+        Assert.Equal(2, summary.Ticks);
+        Assert.Equal(1, summary.Escalated);
+        Assert.Equal(1, workspaceCreates);
+        Assert.Contains(kernel.GetGoal(goal.Id).Timeline, evt =>
+            evt.Kind == ProgressKind.GoalPolicyDecision &&
+            evt.Message.Contains("re-admitted escalated goal", StringComparison.Ordinal));
     }
 
     [Xunit.Fact(DisplayName = "BatchLoop_sets_aside_ownership_hold_escalation_without_relanding")]

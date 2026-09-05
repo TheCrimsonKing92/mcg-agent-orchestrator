@@ -184,10 +184,11 @@ public sealed class RetryAdmissionReservationStoreTests
                 "worker", "worktree", 1, "", "provider interrupted", firstAt.AddSeconds(2),
                 DispatchStartedAt: firstAt.AddSeconds(1)));
         kernel.ReportTaskProgress(goal.Id, task.Id, WorkTaskStatus.Failed, "Provider interrupted the paid attempt.");
+        await repository.SaveAsync(kernel);
         var secondAt = firstAt.AddMinutes(2);
         kernel.RetryTask(
             goal.Id, task.Id, "Provider interrupted the paid attempt.", RetryCause.ProviderInterruption);
-        await repository.SaveAsync(kernel);
+        var inMemoryRetryAt = task.LatestRetryAt;
         var secondDispatch = new TaskDispatchRecord(
             "worker", "command-b", "worktree", secondAt,
             RetryContextFingerprint: fingerprint,
@@ -195,12 +196,16 @@ public sealed class RetryAdmissionReservationStoreTests
 
         var prevented = await RetryAdmissionReservationStore.TryReserveAsync(
             databasePath, goal.Id, task.Id, fingerprint, PaidRouteClassification.Paid,
-            RetryCause.ProviderInterruption, secondDispatch, secondAt, "owner-b", secondAt.AddMinutes(1));
+            RetryCause.ProviderInterruption, secondDispatch, secondAt, "owner-b", secondAt.AddMinutes(1),
+            retryMarkerAt: inMemoryRetryAt,
+            retryRoundKind: task.PendingRetryRoundKind);
 
         Assert.Equal(RetryAdmissionDecision.Prevented, prevented!.Decision);
         var persisted = await repository.LoadAsync();
         var persistedGoal = persisted.GetGoal(goal.Id);
         var persistedTask = persistedGoal.Tasks.Single(candidate => candidate.Id == task.Id);
+        Assert.Equal(inMemoryRetryAt, persistedTask.LatestRetryAt);
+        Assert.Equal(RetryCause.ProviderInterruption, persistedTask.PendingRetryCause);
         Assert.Equal(RetryAdmissionRoute.EnvironmentalHold, persistedTask.RetryAdmissionHoldRoute);
         Assert.Contains(
             persistedGoal.Timeline,

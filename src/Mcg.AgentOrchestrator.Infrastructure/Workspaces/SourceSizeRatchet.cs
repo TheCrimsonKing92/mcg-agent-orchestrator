@@ -81,7 +81,9 @@ internal static class SourceSizeRatchet
             // Tightened after live acceptance reservation logic moved to its partial-class collaborator.
             // Reconciled after integrating main cc4d7b58 and goal f46ecbee at their measured combined size:
             // the goal's state/run-event maintenance leases remain scoped to the active conductor loop.
-            new SourceSizeCeiling("src/Mcg.AgentOrchestrator.App/Orchestration/ConductorBatchLoop.cs", 5192),
+            // Raised for goal ae54b5eb: set-aside fingerprints retain lifecycle rechecks while comparing
+            // retry/candidate task state independently of the kernel goal instance reloaded by admission.
+            new SourceSizeCeiling("src/Mcg.AgentOrchestrator.App/Orchestration/ConductorBatchLoop.cs", 5195),
             // Raised for goal 18afe5f2: missing-build-evidence rejection and commit suppression
             // must run where parsed worker results and authoritative changed paths meet. Raised again
             // for goal 0d39b5a3, which adds the narrow Planner sample launch and completion-selection
@@ -128,7 +130,9 @@ internal static class SourceSizeRatchet
             // Reconciled after integrating main e1f6f11c at the measured shared-fixture size.
             // Raised for goal 8263a08c: the shared fixture forwards the exited-dispatch reconciler used by
             // the focused failure-state and dispatch-start invariant tests.
-            new SourceSizeCeiling("tests/Mcg.AgentOrchestrator.Infrastructure.Tests/ConductorDriverTests.cs", 1544),
+            // Raised for goal ae54b5eb: the existing driver owner proves a refused prepared start writes
+            // exactly one retry and one dispatch across two conductor ticks before stable set-aside.
+            new SourceSizeCeiling("tests/Mcg.AgentOrchestrator.Infrastructure.Tests/ConductorDriverTests.cs", 1608),
             // Goal ce3c3917 keeps acquired, unavailable, and exceptional lease-lifecycle coverage together
             // in the acceptance-coordination owner rather than splitting one behavioral contract.
             // Raised for goal 13630c9f: acceptance coordination owns the structured apparatus cause

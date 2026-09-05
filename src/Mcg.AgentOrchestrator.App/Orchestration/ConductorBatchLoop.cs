@@ -4670,6 +4670,7 @@ internal sealed partial class ConductorBatchLoop
         Dictionary<string, BatchSetAsideEntry>? selfClearedSetAsideEntries = null,
         TerminalGoalSweepResult? sweepResult = null)
     {
+        goal = kernel.GetGoal(goal.Id);
         BatchSetAsideEntry? selfClearedEntry = null;
         if (selfClearedSetAsideEntries is not null)
         {
@@ -4715,6 +4716,7 @@ internal sealed partial class ConductorBatchLoop
     {
         var lifecycleState = TryResolveLifecycleState(driver, goal);
         var attentionCount = kernel.GetPendingHumanInput(goal.Id).Count;
+        var candidate = driver.GetPreReviewEvidenceContext(goal).CandidateSha?.Trim() ?? "none";
         var taskParts = goal.Tasks
             .OrderBy(task => task.Id.Value, StringComparer.Ordinal)
             .Select(task =>
@@ -4725,12 +4727,13 @@ internal sealed partial class ConductorBatchLoop
                     task.Id.Value,
                     task.Status.ToString(),
                     task.LastDispatch is null ? "dispatch=none" : $"dispatch={task.LastDispatch.DispatchedAt.UtcTicks}:{task.LastDispatch.WorkerName}",
+                    task.LatestRetryAt is null ? "retry=none" : $"retry={task.LatestRetryAt.Value.UtcTicks}",
                     task.LastProcess is null ? "process=none" : $"process={task.LastProcess.IsRunning}:{task.LastProcess.CompletedAt?.UtcTicks}:{task.LastProcess.ExitCode}:{task.LastProcess.WasCancelled}",
                     task.LastVerification is null ? "verification=none" : $"verification={task.LastVerification.Succeeded}:{task.LastVerification.ExitCode}:{task.LastVerification.CompletedAt.UtcTicks}",
                     task.LastExecution is null ? "execution=none" : $"execution={task.LastExecution.StopReason}:{task.LastExecution.CompletedAt.UtcTicks}"
                     }));
 
-        return string.Join("|", new[] { goal.Status.ToString(), lifecycleState, $"attention={attentionCount}" }.Concat(taskParts));
+        return string.Join("|", new[] { $"lifecycle={lifecycleState}", $"candidate={candidate}", $"attention={attentionCount}" }.Concat(taskParts));
     }
 
     private static string TryResolveLifecycleState(ConductorDriver driver, Goal goal)

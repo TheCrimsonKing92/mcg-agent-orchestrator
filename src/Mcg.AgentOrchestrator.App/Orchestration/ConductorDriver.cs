@@ -1491,7 +1491,7 @@ internal sealed partial class ConductorDriver
                 $"Skipped {result.RequeueSkippedCount} automatic interrupted-dispatch requeue(s) after terminal-state preflight");
         }
 
-        return DispatchStartOutcome.EmptyBatch(FormatNoRecordedDispatchStartedReason(result.Plan));
+        return DispatchStartOutcome.EmptyBatch(DispatchStartRefusalReasonBuilder.Build(result));
     }
 
     public ConductorAdvanceResult AdvanceOnce(
@@ -5716,23 +5716,6 @@ internal sealed partial class ConductorDriver
                     task.RequiredRole) &&
                 candidate.Status != WorkTaskStatus.Completed));
 
-    private static string FormatNoRecordedDispatchStartedReason(ProcessBatchPlan plan)
-    {
-        var skippedReason = plan.Items
-            .Where(item => item.Status == ProcessBatchItemStatus.Skipped)
-            .OrderBy(item => item.TaskStatus switch
-            {
-                WorkTaskStatus.Running => 0,
-                WorkTaskStatus.Assigned => 1,
-                _ => 2
-            })
-            .Select(item => item.Reason)
-            .FirstOrDefault(reason => !string.IsNullOrWhiteSpace(reason));
-        return skippedReason is null
-            ? "Dispatch recorded but no process was startable."
-            : $"Dispatch recorded but no process was startable: {skippedReason}";
-    }
-
     private static string FormatPreparedDispatchWithoutStart(SubscriptionStartResult result)
     {
         const int maxPreparedDiagnostics = 8;
@@ -5752,7 +5735,7 @@ internal sealed partial class ConductorDriver
         var omitted = result.Dispatches.Count - preparedState.Length;
         var omittedSuffix = omitted > 0 ? $",...(+{omitted})" : string.Empty;
         return $"Prepared {result.Dispatches.Count} dispatch(es) but no process was startable; " +
-               $"{FormatNoRecordedDispatchStartedReason(result.Processes.Plan)}; " +
+               $"{DispatchStartRefusalReasonBuilder.Build(result.Processes, result.Dispatches)}; " +
                $"prepared=[{string.Join(',', preparedState)}{omittedSuffix}]";
     }
 

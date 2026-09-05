@@ -16,7 +16,9 @@ public static class RetryAdmissionReservationStore
         string reservationOwnerId,
         DateTimeOffset reservationLeaseExpiresAt,
         bool reservationRecoveryConfirmed = false,
-        CancellationToken cancellationToken = default)
+        CancellationToken cancellationToken = default,
+        DateTimeOffset? retryMarkerAt = null,
+        RetryRoundKind? retryRoundKind = null)
     {
         var repository = new SqliteOrchestratorStateRepository(stateDatabasePath);
         return repository.TransactGoalStateAsync<RetryAdmissionSnapshotResult?>(
@@ -37,7 +39,9 @@ public static class RetryAdmissionReservationStore
                     recordedAt,
                     reservationOwnerId,
                     reservationLeaseExpiresAt,
-                    reservationRecoveryConfirmed);
+                    reservationRecoveryConfirmed,
+                    retryMarkerAt,
+                    retryRoundKind);
                 var kernel = AgentOrchestratorKernel.FromSnapshot(
                     new OrchestratorSnapshot([reservation.Snapshot], state.HumanInputRequests));
                 kernel.ApplyPersistedRetryAdmissionOutcome(goalId, taskId, reservation.Admission);

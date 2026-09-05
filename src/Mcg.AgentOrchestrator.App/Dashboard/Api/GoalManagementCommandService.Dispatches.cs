@@ -930,6 +930,7 @@ private static ProcessBatchExecutionResult StartDispatches(
     var started = new List<TaskSpec>();
     var recoveryActions = new List<WorkerSandboxPrepRecoverableAction>();
     var startFailures = new List<DispatchProcessStartFailure>();
+    var startRefusals = new List<DispatchProcessStartRefusal>();
     var requeueSkippedCount = 0;
     IReadOnlyList<AgentDefinition>? resolvedAgents = null;
     WorkerProfileCatalog? resolvedProfiles = null;
@@ -970,7 +971,14 @@ private static ProcessBatchExecutionResult StartDispatches(
             goal = kernel.GetGoal(goal.Id);
             task = goal.Tasks.Single(candidate => candidate.Id == item.TaskId);
             if (!admission.AllowsProcessStart)
+            {
+                var reason = admission.Receipt.Route == RetryAdmissionRoute.ReservationLease &&
+                             admission.Receipt.ReservationLeaseExpiresAt is { } leaseExpiresAt
+                    ? $"Prepared retry reservation is owned until {leaseExpiresAt:u}."
+                    : $"Retry admission is held for route {admission.Receipt.Route}.";
+                startRefusals.Add(new DispatchProcessStartRefusal(task.Id, reason));
                 continue;
+            }
         }
 
 
@@ -1073,7 +1081,13 @@ private static ProcessBatchExecutionResult StartDispatches(
         started.Add(kernel.GetTask(goal.Id, task.Id));
     }
 
-    return new ProcessBatchExecutionResult(plan, started, recoveryActions, requeueSkippedCount, startFailures);
+    return new ProcessBatchExecutionResult(
+        plan,
+        started,
+        recoveryActions,
+        requeueSkippedCount,
+        startFailures,
+        StartRefusals: startRefusals);
 }
 
 private static RetryAdmissionResult EnsurePreparedRetryAdmission(
@@ -1121,7 +1135,9 @@ private static RetryAdmissionResult EnsurePreparedRetryAdmission(
             recordedAt,
             reservationOwnerId,
             reservationLeaseExpiresAt,
-            reservationRecoveryConfirmed)
+            reservationRecoveryConfirmed,
+            retryMarkerAt: task.LatestRetryAt,
+            retryRoundKind: task.PendingRetryRoundKind)
         .GetAwaiter()
         .GetResult();
     if (persisted is not null)

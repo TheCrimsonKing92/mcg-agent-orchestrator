@@ -1119,7 +1119,7 @@ public sealed class ConductorDriverTests
         Assert.Equal(failureReason, outcome.Reason);
     }
 
-    [Xunit.Fact]
+    [Xunit.Fact(DisplayName = "ConductorDriver_prepared_dispatch_without_start_reports_both_state_views")]
     public void ConductorDriverPreparedDispatchWithoutStartReportsBothStateViews()
     {
         var (kernel, goal) = SimpleGoal();
@@ -1144,15 +1144,79 @@ public sealed class ConductorDriverTests
             ]);
         var result = new SubscriptionStartResult(
             [new WorkerProfileDispatchResult(task, @"C:\repo\.orchestrator\prompts\task.md")],
-            new ProcessBatchExecutionResult(plan, []),
+            new ProcessBatchExecutionResult(
+                plan,
+                [],
+                StartRefusals: [new DispatchProcessStartRefusal(task.Id, "Retry admission is held for route ReservationLease.")]),
             new ParallelExecutionPlan([], []),
             []);
 
         var outcome = ConductorDriver.ClassifySubscriptionStartForConductor(result);
 
         Assert.Equal(DispatchStartOutcomeCategory.SpawnFailed, outcome.Category);
-        Assert.Contains("Task status is Assigned", outcome.Reason, StringComparison.Ordinal);
+        Assert.Contains(
+            $"task {task.Id.Value[..8]}: Retry admission is held for route ReservationLease.",
+            outcome.Reason,
+            StringComparison.Ordinal);
         Assert.Contains($"{task.Id.Value[..8]}:status=Running:admission=none", outcome.Reason, StringComparison.Ordinal);
+    }
+
+    [Xunit.Fact(DisplayName = "ConductorDriver_repeated_refused_start_stays_set_aside_after_first_retry_and_dispatch")]
+    public void ConductorDriverRepeatedRefusedStartStaysSetAsideAfterFirstRetryAndDispatch()
+    {
+        var (kernel, goal) = SimpleGoal();
+        var task = goal.Tasks.Single();
+        const string failedCommand = "powershell.exe -Command broken";
+        DispatchTask(kernel, goal, task, failedCommand);
+        kernel.RecordDispatchExecutionResult(
+            goal.Id,
+            task.Id,
+            new TaskVerificationRecord(
+                failedCommand,
+                "C:\\tmp",
+                1,
+                string.Empty,
+                "powershell.exe: ParserError: Unexpected token '}' in expression.",
+                DateTimeOffset.UtcNow,
+                ProviderFailureKind: ProviderFailureKind.RateLimit));
+        var heldGoal = GoalLifecycleCommands.CreateAndActivateSimpleGoal(kernel, DefaultAgents(), "held sibling");
+        var refusedReason = $"task {task.Id.Value[..8]}: Retry admission is held for route ReservationLease.";
+        string? setAsideReason = null;
+        var dispatchRecordsBeforeTicks = goal.Timeline.Count(evt => evt.Kind == ProgressKind.TaskDispatchRecorded);
+        var driver = MakeDriver(
+            getFacts: _ => new GoalLifecycleFacts(WorkspaceExists: true),
+            dispatchAndStart: currentGoal =>
+            {
+                if (currentGoal.Id == heldGoal.Id)
+                    return DispatchStartOutcome.EmptyBatch("Held sibling remains eligible.");
+                DispatchTask(kernel, kernel.GetGoal(currentGoal.Id), kernel.GetTask(currentGoal.Id, task.Id));
+                return DispatchStartOutcome.SpawnFailed(refusedReason);
+            },
+            startRecordedDispatches: currentGoal => currentGoal.Id == heldGoal.Id
+                ? DispatchStartOutcome.EmptyBatch("Held sibling remains eligible.")
+                : DispatchStartOutcome.EmptyBatch(refusedReason),
+            buildServerShutdown: () => { },
+            retryTaskWithCause: (goalId, taskId, message, roundKind, cause) =>
+                kernel.RetryTask(goalId, taskId, message, cause, retryRoundKind: roundKind),
+            recordCriterionRetryFeedback: kernel.RecordCriterionRetryFeedback,
+            writeEscalation: (_, _, reason) => setAsideReason = reason);
+
+        var summary = new ConductorBatchLoop().Run(
+            kernel,
+            driver,
+            ConductorAutonomyPolicy.Permissive,
+            Path.Combine(Path.GetTempPath(), $"mcg-no-stop-{Guid.NewGuid():N}"),
+            maxIterations: 2,
+            watchInterval: TimeSpan.FromMilliseconds(1),
+            sleepFunc: _ => false);
+
+        Assert.Equal(2, summary.Ticks);
+        Assert.Single(kernel.GetGoal(goal.Id).Timeline.Where(evt => evt.Kind == ProgressKind.TaskRetried));
+        Assert.Equal(
+            dispatchRecordsBeforeTicks + 1,
+            kernel.GetGoal(goal.Id).Timeline.Count(evt => evt.Kind == ProgressKind.TaskDispatchRecorded));
+        Assert.Contains(task.Id.Value[..8], setAsideReason, StringComparison.Ordinal);
+        Assert.Contains("Retry admission is held", setAsideReason, StringComparison.Ordinal);
     }
 
     [Xunit.Fact(DisplayName = "ConductorDriver_recorded_start_mixed_started_and_registration_failure_keeps_live_progress")]
