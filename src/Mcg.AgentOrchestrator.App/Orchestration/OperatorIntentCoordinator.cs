@@ -16,19 +16,24 @@ internal sealed class OperatorIntentCoordinator
 
     private readonly IOperatorIntentStore _store;
     private readonly Func<DateTimeOffset> _utcNow;
+    private readonly Func<GoalId, string?>? _goalHeadResolver;
     private readonly Dictionary<string, List<(string IntentId, string Outcome)>> _pendingCompletions =
         new(StringComparer.Ordinal);
 
     public OperatorIntentCoordinator(
         IOperatorIntentStore store,
-        Func<DateTimeOffset>? utcNow = null)
+        Func<DateTimeOffset>? utcNow = null,
+        Func<GoalId, string?>? goalHeadResolver = null)
     {
         _store = store;
         _utcNow = utcNow ?? (() => DateTimeOffset.UtcNow);
+        _goalHeadResolver = goalHeadResolver;
     }
 
     public static OperatorIntentCoordinator CreateDefault(OrchestratorWorkspace workspace) =>
-        new(SqliteOperatorIntentStore.ForDirectories(workspace.OrchestratorDirectory, workspace.LogDirectory));
+        new(
+            SqliteOperatorIntentStore.ForDirectories(workspace.OrchestratorDirectory, workspace.LogDirectory),
+            goalHeadResolver: goalId => ResolveGoalHead(workspace.ExecutionDirectory, goalId));
 
     public IReadOnlyList<string> ListActionableGoalIds() =>
         _store.ListActionableGoalIdsAsync().GetAwaiter().GetResult();
@@ -153,7 +158,7 @@ internal sealed class OperatorIntentCoordinator
         }
     }
 
-    private static void Apply(
+    private void Apply(
         AgentOrchestratorKernel kernel,
         Goal goal,
         OperatorIntentRecord intent)
@@ -164,7 +169,8 @@ internal sealed class OperatorIntentCoordinator
         }
 
         var taskId = new TaskId(intent.TaskId);
-        if (!goal.Tasks.Any(task => task.Id == taskId))
+        var task = goal.Tasks.FirstOrDefault(task => task.Id == taskId);
+        if (task is null)
         {
             throw new KeyNotFoundException($"Task '{intent.TaskId}' was not found in goal '{goal.Id.Value}'.");
         }
@@ -173,7 +179,17 @@ internal sealed class OperatorIntentCoordinator
         {
             case OperatorIntentVerbs.Progress:
                 var progress = Deserialize<ProgressOperatorIntentPayload>(intent);
-                kernel.ReportTaskProgress(goal.Id, taskId, progress.Status, progress.Message);
+                var observedCandidate = progress.Status == WorkTaskStatus.Completed &&
+                    task.LatestRetryAt is not null &&
+                    task.LastDispatch?.ResultCommit is null
+                    ? TryResolveGoalHead(goal.Id)
+                    : null;
+                kernel.ReportTaskProgress(
+                    goal.Id,
+                    taskId,
+                    progress.Status,
+                    progress.Message,
+                    observedCandidate);
                 break;
 
             case OperatorIntentVerbs.Retry:
@@ -226,6 +242,30 @@ internal sealed class OperatorIntentCoordinator
             default:
                 throw new InvalidOperationException($"Unsupported operator intent verb '{intent.Verb}'.");
         }
+    }
+
+    private string? TryResolveGoalHead(GoalId goalId)
+    {
+        try
+        {
+            return _goalHeadResolver?.Invoke(goalId);
+        }
+        catch
+        {
+            return null;
+        }
+    }
+
+    private static string? ResolveGoalHead(string executionDirectory, GoalId goalId)
+    {
+        var worktreePath = GoalWorktrees.TryResolve(executionDirectory, goalId);
+        if (worktreePath is null)
+        {
+            return null;
+        }
+
+        var head = GitCli.Run(worktreePath, "rev-parse", "HEAD");
+        return head.Succeeded ? head.Output.Trim() : null;
     }
 
     private void AddPendingCompletion(string goalId, string intentId, string outcome)
