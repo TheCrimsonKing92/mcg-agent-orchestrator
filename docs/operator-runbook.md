@@ -146,9 +146,12 @@ list by the product name finds nothing and reads as "the loop is dead".
 At `--max-duration` the supervised child exits, then its still-running continuity supervisor builds repository
 HEAD into the existing commit-keyed staging area, validates the staged `.dll.git-head`, self-checks the
 content-addressed run directory, and launches that staged DLL with `--continuity-child`. The supervisor waits
-for the successor's first `LOOP_START` before recording success. If staging or readiness fails, it records the
-typed cause and relaunches the incumbent command; after repeated staging failures it stops retrying builds for
-the lifetime of that supervisor and keeps renewing with the incumbent command.
+for the successor's first `LOOP_READY ` line before recording success. The successor emits that stable prefix
+to its generation stdout after acquiring the loop lease and loading state, before its pre-loop terminal sweep;
+`LOOP_START ` remains the operator-visible signal that the sweep finished and the tick loop began. If staging
+or readiness fails, the supervisor records the typed cause and relaunches the incumbent command; after repeated
+staging failures it stops retrying builds for the lifetime of that supervisor and keeps renewing with the
+incumbent command.
 
 Tail `.orchestrator/logs/conduct-events.log` for terminal evidence. Success is `LOOP_HANDOFF` with both
 `stagedSourceCommit=<sha>` and `repositoryHead=<sha>`; failure is `LOOP_HANDOFF_FAILED phase=<phase>

@@ -932,42 +932,53 @@ internal static partial class CliPersistentStateRunner
         }
         var startupStopPath = Path.Combine(workspace.ExecutionDirectory, ConductorBatchLoop.StopFileName);
         TransientSqliteLoadHold? initialConductLoopLoadHold = null;
-        var kernel = LoadInitialConductLoopKernelWithTransientHold(
-            LoadLoopKernel,
-            workspace,
-            stopRequested: () => File.Exists(startupStopPath),
-            onHoldExhausted: hold => initialConductLoopLoadHold = hold);
-        tickBaselines = kernel.ExportSnapshot().Goals.ToDictionary(goal => goal.Id, StringComparer.Ordinal);
-        TerminalGoalSweepResult? sweep = null;
-        try
+        var currentGoalAtStartup = currentGoal;
+        var kernel = RunConductPreLoopStartup(
+            () => conductLoopLease.IsHeld,
+            () => LoadInitialConductLoopKernelWithTransientHold(
+                LoadLoopKernel,
+                workspace,
+                stopRequested: () => File.Exists(startupStopPath),
+                onHoldExhausted: hold => initialConductLoopLoadHold = hold),
+            loaded => $"{ConductorContinuitySupervisor.LoopReadyLinePrefix}lock=acquired state=loaded goals={loaded.Goals.Count}",
+            Console.WriteLine,
+            RunStartupSweep);
+
+        AgentOrchestratorKernel RunStartupSweep(AgentOrchestratorKernel startupKernel)
         {
-            var watchGoalId = ResolveConductWatchGoalId(args, kernel, currentGoal, stateRepository);
-            var sweepKernel = LoadConductLoopSweepKernel(stateRepository, kernel, workspace.ExecutionDirectory, watchGoalId);
-            sweep = TerminalGoalSweep.Run(sweepKernel, workspace.ExecutionDirectory, watchGoalId, orchestratorDirectory: workspace.OrchestratorDirectory);
-            var metadataOnlyExcludedGoalCount = CountMetadataOnlyTerminalSweepExclusions(
-                stateRepository,
-                workspace.ExecutionDirectory,
-                watchGoalId);
-            if (metadataOnlyExcludedGoalCount > 0)
+            tickBaselines = startupKernel.ExportSnapshot().Goals.ToDictionary(goal => goal.Id, StringComparer.Ordinal);
+            try
             {
-                sweep = sweep with { ExcludedGoalCount = sweep.ExcludedGoalCount + metadataOnlyExcludedGoalCount };
+                var watchGoalId = ResolveConductWatchGoalId(args, startupKernel, currentGoalAtStartup, stateRepository);
+                var sweepKernel = LoadConductLoopSweepKernel(stateRepository, startupKernel, workspace.ExecutionDirectory, watchGoalId);
+                var sweep = TerminalGoalSweep.Run(sweepKernel, workspace.ExecutionDirectory, watchGoalId, orchestratorDirectory: workspace.OrchestratorDirectory);
+                var metadataOnlyExcludedGoalCount = CountMetadataOnlyTerminalSweepExclusions(
+                    stateRepository,
+                    workspace.ExecutionDirectory,
+                    watchGoalId);
+                if (metadataOnlyExcludedGoalCount > 0)
+                {
+                    sweep = sweep with { ExcludedGoalCount = sweep.ExcludedGoalCount + metadataOnlyExcludedGoalCount };
+                }
+
+                ConsoleViews.PrintTerminalGoalSweep(sweep, includeBlockers: ConductLoopWillExitBeforeFirstTick(args, workspace.ExecutionDirectory));
+                TerminalGoalSweepAttention.Surface(sweepKernel, sweep, workspace.OrchestratorDirectory, watchGoalId);
+                if (sweep.Changed)
+                {
+                    PersistSweepChanges(sweepKernel, stateRepository, sweep.Goals.Select(goal => goal.GoalId).ToArray());
+                    startupKernel = LoadLoopKernel();
+                    tickBaselines = startupKernel.ExportSnapshot().Goals.ToDictionary(goal => goal.Id, StringComparer.Ordinal);
+                }
+
+                GoalWorktreeOrphanSweepScheduler.SweepIfDue(workspace.ExecutionDirectory, sweepKernel);
+                RemoteGitMirror.TryStartBackgroundProcessing(sweepKernel, workspace.ExecutionDirectory, watchGoalId);
+            }
+            catch (Exception ex)
+            {
+                EmitPreLoopJanitorialFailure(workspace, ex);
             }
 
-            ConsoleViews.PrintTerminalGoalSweep(sweep, includeBlockers: ConductLoopWillExitBeforeFirstTick(args, workspace.ExecutionDirectory));
-            TerminalGoalSweepAttention.Surface(sweepKernel, sweep, workspace.OrchestratorDirectory, watchGoalId);
-            if (sweep.Changed)
-            {
-                PersistSweepChanges(sweepKernel, stateRepository, sweep.Goals.Select(goal => goal.GoalId).ToArray());
-                kernel = LoadLoopKernel();
-                tickBaselines = kernel.ExportSnapshot().Goals.ToDictionary(goal => goal.Id, StringComparer.Ordinal);
-            }
-
-            GoalWorktreeOrphanSweepScheduler.SweepIfDue(workspace.ExecutionDirectory, sweepKernel);
-            RemoteGitMirror.TryStartBackgroundProcessing(sweepKernel, workspace.ExecutionDirectory, watchGoalId);
-        }
-        catch (Exception ex)
-        {
-            EmitPreLoopJanitorialFailure(workspace, ex);
+            return startupKernel;
         }
 
         var loopCurrentGoal = ResolveCurrentGoal(kernel, currentGoal?.Id.Value);
@@ -1110,6 +1121,23 @@ internal static partial class CliPersistentStateRunner
             _ = CheckpointGoals(kernel, kernel.Goals.Select(goal => goal.Id).ToArray());
         currentGoal = loopCurrentGoal;
         return shouldSave;
+    }
+
+    internal static TState RunConductPreLoopStartup<TState>(
+        Func<bool> loopLeaseHeld,
+        Func<TState> loadState,
+        Func<TState, string> formatReadinessLine,
+        Action<string> emitLine,
+        Func<TState, TState> runStartupSweep)
+    {
+        if (!loopLeaseHeld())
+        {
+            throw new InvalidOperationException("Cannot report conductor readiness without the loop lease.");
+        }
+
+        var state = loadState();
+        emitLine(formatReadinessLine(state));
+        return runStartupSweep(state);
     }
 
     internal static bool RebaseCheckpointAfterDurableSave(
