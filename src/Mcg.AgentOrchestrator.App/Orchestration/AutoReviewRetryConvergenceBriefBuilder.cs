@@ -416,17 +416,18 @@ internal static class AutoReviewRetryConvergenceBriefBuilder
             .ToArray();
     }
 
-    private static IReadOnlyList<ReviewFinding> ReadStructuredReviewFindingState(
+    internal static IReadOnlyList<ReviewFinding> ReadStructuredReviewFindingState(
         Goal goal,
         AgentRole role,
         DateTimeOffset completedAt)
     {
         var state = goal.Tasks
             .Where(task => task.RequiredRole == role)
-            .SelectMany(task => task.VerificationHistory)
-            .Where(verification =>
-                verification.CompletedAt <= completedAt &&
-                verification.MergedReviewFindings is not null)
+            .SelectMany(task => task.VerificationHistory
+                .Where(verification =>
+                    verification.CompletedAt <= completedAt &&
+                    verification.MergedReviewFindings is not null &&
+                    VerifyingFindingCurrency.IsCurrent(goal, task, verification)))
             .OrderByDescending(verification => verification.CompletedAt)
             .Select(verification => verification.MergedReviewFindings!)
             .FirstOrDefault() ?? [];

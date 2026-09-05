@@ -99,6 +99,7 @@ internal sealed partial class ConductorDriver
     private readonly Func<Goal, DeveloperBranchIntegrationResult> _integrateMainBeforeDeveloperDispatch;
     private readonly Func<Goal, ConductorAutonomyPolicy, DispatchStartOutcome> _dispatchAndStart;
     private readonly Func<Goal, ConductorAutonomyPolicy, DispatchStartOutcome> _startRecordedDispatches;
+    private readonly Func<Goal, TaskId, bool> _reconcileExitedDispatch;
     private readonly Func<TimeSpan, string> _buildServerShutdown;
     private readonly TimeSpan _buildServerShutdownTimeout;
     private readonly Func<Goal, int?, DotnetBuildEnvironmentLease?, CancellationToken, AcceptanceVerificationSummary> _runAcceptanceVerification;
@@ -273,6 +274,14 @@ internal sealed partial class ConductorDriver
         _cohortWorkspace = workspace;
         _cohortAcceptanceVerifier = acceptanceVerifier;
         _cohortEventWriter = eventWriter;
+        var dispatchRunner = new BackgroundDispatchRunner();
+        _reconcileExitedDispatch = (goal, taskId) =>
+        {
+            dispatchRunner.RefreshLatestProcessWithOutcome(kernel, goal.Id, taskId);
+            var task = kernel.GetTask(goal.Id, taskId);
+            return task.LastProcess is { } process &&
+                   DispatchProcessCompletionState.HasAlreadyBeenApplied(task, process);
+        };
         _cohortAcceptanceStore = new CohortAcceptanceStore(
             Path.Combine(workspace.OrchestratorDirectory, "cohort-acceptance.db"));
         _startCohortGateBackground = action =>
@@ -1276,7 +1285,8 @@ internal sealed partial class ConductorDriver
         Func<Goal, ReconcileAcceptanceLeaseState?>? getEvidenceMutationLease = null,
         Func<Goal, (string? BranchHeadSha, string? MainHeadSha)>? resolveAcceptanceHeads = null,
         Func<DateTimeOffset>? utcNow = null, string? executionDirectory = null, Action<string, string>? acceptanceEventSink = null,
-        Action<TimeSpan>? noTickAcceptancePollDelay = null, TimeSpan? noTickAcceptancePollTimeout = null)
+        Action<TimeSpan>? noTickAcceptancePollDelay = null, TimeSpan? noTickAcceptancePollTimeout = null,
+        Func<Goal, TaskId, bool>? reconcileExitedDispatch = null)
     {
         _getFacts = getFacts;
         _getRunningPaidWorkerCount = getRunningPaidWorkerCount;
@@ -1290,6 +1300,7 @@ internal sealed partial class ConductorDriver
         _startRecordedDispatches = startRecordedDispatches is null
             ? _dispatchAndStart
             : (goal, _) => startRecordedDispatches(goal);
+        _reconcileExitedDispatch = reconcileExitedDispatch ?? ((_, _) => false);
         _buildServerShutdownTimeout = buildServerShutdownTimeout ?? DefaultBuildServerShutdownTimeout;
         _buildServerShutdown = timeout => RunBoundedBuildServerShutdown(
             buildServerShutdown ?? (() => { }),
@@ -1527,6 +1538,43 @@ internal sealed partial class ConductorDriver
                     new ConductorAdvanceOutcome.Held(
                         state,
                         $"Failure handling deferred while task {runningSibling.Id.Value[..8]} still has a live worker process."));
+            }
+
+            var exitedUnappliedTaskIds = goal.Tasks
+                .Where(task => task.LastProcess is { } process &&
+                               DispatchProcessCompletionState.IsExitedWithoutAppliedCompletion(task, process))
+                .Select(task => task.Id)
+                .ToArray();
+            if (exitedUnappliedTaskIds.Length > 0)
+            {
+                foreach (var taskId in exitedUnappliedTaskIds)
+                {
+                    _reconcileExitedDispatch(goal, taskId);
+                    goal = GetCurrentGoal(goal);
+                }
+
+                state = GoalLifecycle.ResolveState(goal, GetFacts(goal));
+                var stillUnapplied = goal.Tasks.FirstOrDefault(task =>
+                    task.LastProcess is { } process &&
+                    DispatchProcessCompletionState.IsExitedWithoutAppliedCompletion(task, process));
+                if (stillUnapplied is not null)
+                {
+                    return MakeResult(
+                        goalId,
+                        goalPrefix,
+                        policy,
+                        new ConductorAdvanceOutcome.Held(
+                            state,
+                            $"Failure handling deferred for task {stillUnapplied.Id.Value[..8]}: latest process record exited without an applied completion (exited-unapplied-process-record)."));
+                }
+
+                return MakeResult(
+                    goalId,
+                    goalPrefix,
+                    policy,
+                    new ConductorAdvanceOutcome.Held(
+                        state,
+                        $"Reconciled exited dispatch for task {exitedUnappliedTaskIds[0].Value[..8]} before failure handling (reconcile-before-failure-handling); deferring the retry decision to the next tick."));
             }
 
             var inconclusiveTester = goal.Tasks.FirstOrDefault(t =>
@@ -1922,7 +1970,12 @@ internal sealed partial class ConductorDriver
         decision = VerifyingFindingAutoRetryDecision.None;
         var trigger = goal.Tasks
             .Select(task => BuildTesterDeveloperOwnedFindingTrigger(goal, task))
-            .FirstOrDefault(candidate => candidate is not null);
+            .FirstOrDefault(candidate =>
+                candidate is not null &&
+                VerifyingFindingCurrency.IsCurrent(
+                    goal,
+                    candidate.TriggeringTask,
+                    candidate.TriggeringTask.LastVerification!));
         if (trigger is null)
         {
             foreach (var requestingTask in goal.Tasks.Where(task => task.LastVerification is not null))
@@ -2015,6 +2068,11 @@ internal sealed partial class ConductorDriver
                     : $"auto-review-retry stopped at review round {round}/{policy.ReviewAutoRetryStopRound} for task {targetTask.Id.Value[..8]}; " +
                         $"operator decision required (split, supersede, or continue). Findings: {TrimForConductorMessage(trigger.Finding)}. " +
                         $"Full {triggeringTask.RequiredRole.ToString().ToLowerInvariant()} output: {outputArtifact}");
+            return true;
+        }
+
+        if (TryBuildMissingFindingResultRetry(goal, triggeringTask, round, out decision))
+        {
             return true;
         }
 
@@ -2175,22 +2233,8 @@ internal sealed partial class ConductorDriver
         }
     }
 
-    private static bool HasCommittedOutput(TaskSpec task)
-    {
-        if (task.LastVerification?.HasCommittedChanges is true)
-        {
-            return true;
-        }
-
-        var dispatch = task.LastDispatch;
-        if (dispatch is null || string.IsNullOrWhiteSpace(dispatch.ResultCommit))
-        {
-            return false;
-        }
-
-        return string.IsNullOrWhiteSpace(dispatch.BaseCommit) ||
-            !string.Equals(dispatch.BaseCommit, dispatch.ResultCommit, StringComparison.OrdinalIgnoreCase);
-    }
+    private static bool HasCommittedOutput(TaskSpec task) =>
+        VerifyingFindingCurrency.HasCommittedOutput(task);
 
     private bool TryBuildFindingEvidenceRequest(
         Goal goal,
@@ -4588,6 +4632,32 @@ internal sealed partial class ConductorDriver
         {
             return MakeResult(goal.Id.Value, goalPrefix, policy,
                 new ConductorAdvanceOutcome.Held(fromState, sliceDecision.Reason!));
+        }
+
+        var exitedUnappliedTaskIds = goal.Tasks
+            .Where(task => task.LastProcess is { } process &&
+                           DispatchProcessCompletionState.IsExitedWithoutAppliedCompletion(task, process))
+            .Select(task => task.Id)
+            .ToArray();
+        foreach (var taskId in exitedUnappliedTaskIds)
+        {
+            _reconcileExitedDispatch(goal, taskId);
+            goal = GetCurrentGoal(goal);
+        }
+
+        var unreconciledTask = goal.Tasks.FirstOrDefault(task =>
+            task.LastProcess is { } process &&
+            DispatchProcessCompletionState.IsExitedWithoutAppliedCompletion(task, process));
+        if (unreconciledTask is not null)
+        {
+            var reason =
+                $"Dispatch start refused for task {unreconciledTask.Id.Value[..8]}: latest process record exited without an applied completion (exited-unapplied-process-record).";
+            _recordTaskNote(goal.Id, unreconciledTask.Id, reason);
+            return MakeResult(
+                goal.Id.Value,
+                goalPrefix,
+                policy,
+                new ConductorAdvanceOutcome.Held(fromState, reason));
         }
 
         if (fromState == GoalLifecycleState.WorkspaceReady &&

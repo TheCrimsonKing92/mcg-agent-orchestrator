@@ -470,7 +470,8 @@ public sealed class ConductorDriverTests
         Action<Goal, IReadOnlyList<string>, string?, string?, IReadOnlyList<AcceptanceCheckAttribution>?, string?>? recordAcceptanceFailure = null,
         Func<Goal, (string? BranchHeadSha, string? MainHeadSha)>? resolveAcceptanceHeads = null,
         Func<Goal, IReadOnlyList<string>>? getLandingFileScopes = null,
-        string? executionDirectory = null)
+        string? executionDirectory = null,
+        Func<Goal, TaskId, bool>? reconcileExitedDispatch = null)
     {
         return new ConductorDriver(
             getFacts ?? (_ => GoalLifecycleFacts.None),
@@ -528,7 +529,8 @@ public sealed class ConductorDriverTests
             recordAcceptanceFailureWithAttribution: recordAcceptanceFailure,
             resolveAcceptanceHeads: resolveAcceptanceHeads,
             getLandingFileScopes: getLandingFileScopes,
-            executionDirectory: executionDirectory);
+            executionDirectory: executionDirectory,
+            reconcileExitedDispatch: reconcileExitedDispatch);
     }
 
     internal static PreReviewEvidenceContext FocusedPreReviewContext(string sha) =>

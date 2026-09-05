@@ -2,9 +2,9 @@ using Mcg.AgentOrchestrator.Core;
 
 namespace Mcg.AgentOrchestrator.Infrastructure;
 
-internal static class DispatchProcessCompletionState
+public static class DispatchProcessCompletionState
 {
-    internal static bool HasAlreadyBeenApplied(TaskSpec task, TaskProcessRecord process) =>
+    public static bool HasAlreadyBeenApplied(TaskSpec task, TaskProcessRecord process) =>
         (task.Status == WorkTaskStatus.Completed &&
          task.LastVerification is not null &&
          process.CompletedAt is not null &&
@@ -16,4 +16,9 @@ internal static class DispatchProcessCompletionState
              verification.Command.Equals(process.Command, StringComparison.Ordinal) &&
              verification.WorkingDirectory.Equals(process.WorkingDirectory, StringComparison.OrdinalIgnoreCase) &&
              verification.CompletedAt == process.CompletedAt));
+
+    public static bool IsExitedWithoutAppliedCompletion(TaskSpec task, TaskProcessRecord process) =>
+        process is { CompletedAt: not null, ExitCode: not null } &&
+        !process.WasCancelled &&
+        !HasAlreadyBeenApplied(task, process);
 }

@@ -68,7 +68,9 @@ internal static class SourceSizeRatchet
             // before request normalization at the finding-evidence orchestration boundary they govern.
             // Reconciled after integrating main e1f6f11c: reviewed conductor changes already on main
             // brought this file to the measured post-merge size.
-            new SourceSizeCeiling("src/Mcg.AgentOrchestrator.App/Orchestration/ConductorDriver.cs", 6731),
+            // Raised for goal 8263a08c: exited-dispatch reconciliation must precede the existing failure
+            // retry ladder and guard the shared dispatch-start boundary before LastProcess is replaced.
+            new SourceSizeCeiling("src/Mcg.AgentOrchestrator.App/Orchestration/ConductorDriver.cs", 6805),
             // Raised for goal dadadfac: set-aside re-admission must be decided where the loop already holds
             // the goal, its recorded set-aside entry, and the current sweep blockers together.
             // Raised for goal 289b469d: registration-fault hold/escalation must be decided at the existing
@@ -122,7 +124,9 @@ internal static class SourceSizeRatchet
             // Raised for goal 52590d3e: the shared driver fixture forwards the typed suppression recorder
             // so tests can prove no focused or paid downstream execution starts.
             // Reconciled after integrating main e1f6f11c at the measured shared-fixture size.
-            new SourceSizeCeiling("tests/Mcg.AgentOrchestrator.Infrastructure.Tests/ConductorDriverTests.cs", 1542),
+            // Raised for goal 8263a08c: the shared fixture forwards the exited-dispatch reconciler used by
+            // the focused failure-state and dispatch-start invariant tests.
+            new SourceSizeCeiling("tests/Mcg.AgentOrchestrator.Infrastructure.Tests/ConductorDriverTests.cs", 1544),
             // Goal ce3c3917 keeps acquired, unavailable, and exceptional lease-lifecycle coverage together
             // in the acceptance-coordination owner rather than splitting one behavioral contract.
             // Raised for goal 13630c9f: acceptance coordination owns the structured apparatus cause
