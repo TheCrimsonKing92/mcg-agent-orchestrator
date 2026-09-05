@@ -1,8 +1,88 @@
 using Mcg.AgentOrchestrator.Core;
 using Mcg.AgentOrchestrator.Infrastructure;
 
-public sealed class AcceptanceOverlappedCheckSchedulingTests : GoalAcceptanceVerifierDotnetBuildSlotTests
+[Collection(TestCollections.JobAccounting)]
+public sealed class GoalAcceptanceVerifierTestsOverlappedCheckScheduling
+    : GoalAcceptanceVerifierDotnetBuildSlotTests
 {
+    [Fact]
+    public async Task VerifierAttemptCarriesKnownLaneTimingAndSlotWaitIntoBreakdown()
+    {
+        var root = CreateManifestWorkspace("""
+            {
+              "version": 1,
+              "engine": {
+                "maxConcurrentShards": 2,
+                "infrastructureTestLanes": [
+                  { "name": "Alpha", "filter": "FullyQualifiedName~AlphaShardTests" },
+                  { "name": "Remainder", "filter": "FullyQualifiedName!~AlphaShardTests&Category!=HostIntegration" }
+                ],
+                "mtpInvocations": [{
+                  "project": "tests/Mcg.AgentOrchestrator.Infrastructure.Tests/Mcg.AgentOrchestrator.Infrastructure.Tests.csproj",
+                  "executablePathTemplate": "bin/{projectName}/{configuration}/{projectName}{executableExtension}",
+                  "firewallExecutablePathTemplate": "bin/{projectName}/{configuration}/{projectName}.exe",
+                  "arguments": ["{executable}", "--no-ansi", "--progress", "off", "--results-directory", "{resultsDirectory}", "--report-trx", "--report-trx-filename", "{trxFileName}"]
+                }]
+              },
+              "checks": [
+                { "name": "infrastructure tests", "type": "dotnet-test", "runner": "mtp", "project": "tests/Mcg.AgentOrchestrator.Infrastructure.Tests/Mcg.AgentOrchestrator.Infrastructure.Tests.csproj", "arguments": ["--verbosity", "minimal"] }
+              ],
+              "forbiddenChangedPathGlobs": []
+            }
+            """);
+        var time = new RecordingTimeProvider();
+        var progress = new List<AcceptanceGateProgress>();
+        GoalAcceptanceVerifier.ResolveShardCoreBudgetForTests = () => 2;
+        try
+        {
+            Task<GoalAcceptanceVerifier.CommandResult> RunAsync(
+                string[] arguments,
+                string _,
+                CancellationToken __)
+            {
+                if (TryWriteMtpBuildArtifacts(arguments))
+                    return Task.FromResult(new GoalAcceptanceVerifier.CommandResult(0, "Build succeeded."));
+
+                var filterClassIndex = Array.IndexOf(arguments, "--filter-class");
+                var isAlpha = filterClassIndex >= 0 &&
+                    arguments[filterClassIndex + 1].Contains("AlphaShardTests", StringComparison.Ordinal);
+                if (isAlpha)
+                    time.Advance(TimeSpan.FromMilliseconds(400));
+                else
+                    time.Advance(TimeSpan.FromMilliseconds(750));
+                WriteMtpTrx(arguments);
+                return Task.FromResult(new GoalAcceptanceVerifier.CommandResult(0, "passed deterministically"));
+            }
+
+            var verifier = new GoalAcceptanceVerifier(RunAsync, time);
+            using var sink = GoalAcceptanceVerifier.PushGateProgressSink(progress.Add);
+            using var lease = DotnetBuildEnvironmentManager.AcquireFirstAvailableStableSlotExecutionLock(TimeSpan.FromSeconds(2));
+            var expectedSlotWait = lease.SlotWaitDuration;
+
+            var result = await verifier.RunAsync(
+                root,
+                new GoalId("55555555555555555555555555555555"),
+                stableSlotIndex: StableSlotIndex(lease.Environment.ArtifactsPath),
+                stableSlotLease: lease);
+
+            Assert.True(result.Passed, result.OutputTail);
+            var emitted = Assert.Single(progress, item => item.Phase == "gate-phase-breakdown");
+            var breakdown = Assert.IsType<AcceptanceGatePhaseBreakdown>(emitted.PhaseBreakdown);
+            Assert.Equal(2, breakdown.EffectiveShardConcurrency);
+            Assert.Equal(1, breakdown.PeakShardConcurrency);
+            Assert.Equal(TimeSpan.FromMilliseconds(750), breakdown.LongestLaneDuration);
+            Assert.Equal(expectedSlotWait, breakdown.SlotWaitDuration);
+            Assert.Contains("shard_concurrency_effective=2", emitted.CurrentTarget, StringComparison.Ordinal);
+            Assert.Contains("longest_lane_ms=750", emitted.CurrentTarget, StringComparison.Ordinal);
+            Assert.DoesNotContain("slot_wait_ms=unavailable", emitted.CurrentTarget, StringComparison.Ordinal);
+        }
+        finally
+        {
+            GoalAcceptanceVerifier.ResolveShardCoreBudgetForTests = null;
+            DeleteDirectoryWithRetry(root);
+        }
+    }
+
     [Fact]
     public async Task IndependentCommandStartsBeforeLanesComplete_AndStructuralCoverageWaitsForLanes()
     {

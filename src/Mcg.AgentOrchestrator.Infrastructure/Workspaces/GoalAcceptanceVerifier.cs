@@ -2028,7 +2028,7 @@ public sealed class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
         {
             using var shardExecution = shardConcurrency.Enter();
             OnInfrastructureShardResourcesAcquiredForTests?.Invoke(shard.Check.Name);
-            var shardClock = Stopwatch.StartNew();
+            var shardStarted = _timeProvider.GetTimestamp();
             var worker = new ShardWorkerLease(
                 primarySlotIndex,
                 primaryLease,
@@ -2045,16 +2045,16 @@ public sealed class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
                 worker.BuildPhase,
                 sharedApparatusCancellation.Token,
                 shardResultsDirectory).ConfigureAwait(false);
-            shardClock.Stop();
-            AcceptanceGatePhaseAccountant.RecordCurrentLaneSample(shardClock.Elapsed);
+            var shardElapsed = _timeProvider.GetElapsedTime(shardStarted);
+            AcceptanceGatePhaseAccountant.RecordCurrentLaneSample(shardElapsed);
             outcomes[shard.Index] = new ShardRunOutcome(run.Result, run.Retried);
-            AcceptanceLaneDurationStore.Record(shard.Check, run.Result, shardClock.Elapsed);
+            AcceptanceLaneDurationStore.Record(shard.Check, run.Result, shardElapsed);
             EmitShardTimingProgress(
                 goalId,
                 "shard-complete",
                 shard.Check.Name,
                 worker.SlotIndex,
-                shardClock.Elapsed,
+                shardElapsed,
                 shardConcurrency.Count);
         }
 

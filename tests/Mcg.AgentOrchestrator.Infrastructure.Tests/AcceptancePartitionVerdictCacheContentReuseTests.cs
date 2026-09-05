@@ -89,7 +89,8 @@ public sealed class AcceptancePartitionVerdictCacheContentReuseTests : GoalAccep
             WorkingDirectory = _root,
             RedirectStandardOutput = true,
             RedirectStandardError = true,
-            UseShellExecute = false
+            UseShellExecute = false,
+            CreateNoWindow = true
         };
         foreach (var argument in arguments)
             startInfo.ArgumentList.Add(argument);
