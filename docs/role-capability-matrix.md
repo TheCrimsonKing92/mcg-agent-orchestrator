@@ -12,8 +12,12 @@ The boundaries below come from these live controls:
   `Invoke-IsolatedDotnet.ps1`, and other worker-side test execution, and routes tests to the acceptance gate
   (`src/Mcg.AgentOrchestrator.Infrastructure/Workers/WorkerArtifactWriter.cs:251-260` and
   `src/Mcg.AgentOrchestrator.Infrastructure/Workers/WorkerArtifactWriter.cs:346-356`).
-- Dispatch variables give Developer and Tester a writable sandbox and give Planner, Researcher, and
-  Reviewer read-only/plan modes (`src/Mcg.AgentOrchestrator.Infrastructure/Workers/WorkerProfileDispatcher.cs:2131-2148`).
+- Dispatch role classification gives Developer and Tester writable settings and marks Planner, Researcher,
+  and Reviewer read-only (`src/Mcg.AgentOrchestrator.Infrastructure/Workers/WorkerProfileDispatcher.cs:3160` and
+  `src/Mcg.AgentOrchestrator.Infrastructure/Workers/WorkerProfileDispatcher.cs:3171`).
+  The built-in Claude command builder turns that read-only sentinel into restricted `dontAsk` mode with an
+  explicit tool availability/allow/deny policy that omits delegated agents and only auto-approves read tools
+  (`src/Mcg.AgentOrchestrator.Infrastructure/Workers/ProviderCommandBuilder.cs:130-136`).
   Preflight separately requires a goal workspace and patch-capable profile for writable roles
   (`src/Mcg.AgentOrchestrator.Infrastructure/Workers/WorkerSandboxCapabilityPlanner.cs:9-36`).
 - Worker sandboxes do not grant ref-level Git writes: creating `.git/packed-refs.lock` is denied. No worker

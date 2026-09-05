@@ -4,6 +4,11 @@ namespace Mcg.AgentOrchestrator.Infrastructure;
 
 public static class ProviderCommandBuilder
 {
+    public const string ClaudeReadOnlyPermissionMode = "dontAsk";
+    public const string ClaudeReadOnlyTools = "Read,Glob,Grep,Bash,WebFetch,WebSearch,TodoWrite";
+    public const string ClaudeReadOnlyAllowedTools = "Read,Glob,Grep,Bash(git log *),Bash(git diff *),Bash(git show *),Bash(git status *),Bash(git merge-base *),Bash(git rev-parse *),Bash(git blame *),Bash(git ls-files *),Bash(git branch *),Bash(git cat-file *),Bash(rg *),WebFetch,WebSearch,TodoWrite";
+    public const string ClaudeReadOnlyDisallowedTools = "Edit,Write,NotebookEdit";
+
     public static IReadOnlyList<string> Build(
         ProviderKind providerKind,
         string modelAlias,
@@ -110,6 +115,7 @@ public static class ProviderCommandBuilder
         string resolvedPermissionMode,
         string? sessionId)
     {
+        var isReadOnly = string.Equals(resolvedPermissionMode, "plan", StringComparison.Ordinal);
         var command = new List<string>
         {
             "claude",
@@ -117,8 +123,18 @@ public static class ProviderCommandBuilder
             "--model",
             Expand(modelAlias),
             "--permission-mode",
-            Expand(resolvedPermissionMode)
+            Expand(isReadOnly ? ClaudeReadOnlyPermissionMode : resolvedPermissionMode)
         };
+        if (isReadOnly)
+        {
+            command.Add("--restricted");
+            command.Add("--tools");
+            command.Add(Expand(ClaudeReadOnlyTools));
+            command.Add("--allowed-tools");
+            command.Add(Expand(ClaudeReadOnlyAllowedTools));
+            command.Add("--disallowed-tools");
+            command.Add(Expand(ClaudeReadOnlyDisallowedTools));
+        }
         if (!string.IsNullOrWhiteSpace(sessionId))
         {
             command.Add("--session-id");

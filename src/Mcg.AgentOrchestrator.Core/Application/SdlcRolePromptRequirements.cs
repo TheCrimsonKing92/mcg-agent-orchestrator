@@ -3,6 +3,8 @@ namespace Mcg.AgentOrchestrator.Core;
 internal static class SdlcRolePromptRequirements
 {
     private const string IntakeRiskLabelsMarker = "risk labels:";
+    private const string ResearcherStdoutOnlyContract =
+        "- Stdout is the only channel the orchestrator reads: print the complete research artifact as your final message. Never write a plan file or any other file, and never reply with only a summary or a file path.";
     internal const int ReviewerComplexRequirementsMaxChars = 4371;
     internal const int ReviewerCompactRequirementsMaxChars = 3346;
 
@@ -41,6 +43,7 @@ internal static class SdlcRolePromptRequirements
             AgentRole.Researcher =>
             [
                 "## Researcher Requirements",
+                ResearcherStdoutOnlyContract,
                 "- Do NOT build the solution or run tests. A live conductor holds the built assemblies, so your build will fail on a file lock and consume your whole session on lock recovery. Inspect source, git history, and committed receipts instead. If a question can only be settled by executing tests, say so and name the exact test classes so the Tester or a Conductor-side evidence request can settle it.",
                 "- Produce the durable research artifact under the required Current source findings, Prior goal evidence, Upstream capabilities, and Likely seams and risks headings.",
                 "- Lead with concrete findings tied to repository-local files, APIs, tests, or primary external sources; include file paths, commands, URLs, or symbol names for each material claim.",
@@ -186,6 +189,7 @@ internal static class SdlcRolePromptRequirements
             AgentRole.Researcher =>
             [
                 "## Researcher Requirements",
+                ResearcherStdoutOnlyContract,
                 "- Do NOT build the solution or run tests. A live conductor holds the built assemblies, so your build will fail on a file lock and consume your whole session on lock recovery. Inspect source, git history, and committed receipts instead. If a question can only be settled by executing tests, say so and name the exact test classes so the Tester or a Conductor-side evidence request can settle it.",
                 "- Produce the durable research artifact under the required Current source findings, Prior goal evidence, Upstream capabilities, and Likely seams and risks headings.",
                 "- Lead with repository evidence: file paths, symbols, APIs, tests, primary sources, and commands or file inspections.",
