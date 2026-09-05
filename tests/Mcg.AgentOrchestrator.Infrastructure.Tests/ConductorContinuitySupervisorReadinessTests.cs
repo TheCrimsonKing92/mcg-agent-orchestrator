@@ -156,6 +156,20 @@ public sealed class ConductorContinuitySupervisorReadinessTests
     }
 
     [Xunit.Fact]
+    public void PreLoopReadiness_EmitsTimestampedStdoutAndJournalEvent()
+    {
+        var workspace = OrchestratorWorkspace.ForDirectory(CreateTempDirectory());
+        var line = ConductorContinuitySupervisor.LoopReadyLinePrefix + "lock=acquired state=loaded goals=2";
+
+        var stdout = CaptureConsole(() => CliPersistentStateRunner.EmitPreLoopReadiness(workspace, line));
+
+        Assert.StartsWith(line + " ts=", stdout.Trim(), StringComparison.Ordinal);
+        var conductEvent = Assert.Single(File.ReadAllLines(workspace.ConductEventsLogPath));
+        Assert.Contains("\"eventKind\":\"loop-ready\"", conductEvent, StringComparison.Ordinal);
+        Assert.Contains($"\"detail\":\"{line}\"", conductEvent, StringComparison.Ordinal);
+    }
+
+    [Xunit.Fact]
     public void PreLoopStartup_HeldLeaseEmitsReadyBeforeSweep()
     {
         var observed = new List<string>();

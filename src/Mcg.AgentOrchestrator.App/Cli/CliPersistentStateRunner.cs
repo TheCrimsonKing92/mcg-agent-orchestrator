@@ -941,7 +941,7 @@ internal static partial class CliPersistentStateRunner
                 stopRequested: () => File.Exists(startupStopPath),
                 onHoldExhausted: hold => initialConductLoopLoadHold = hold),
             loaded => $"{ConductorContinuitySupervisor.LoopReadyLinePrefix}lock=acquired state=loaded goals={loaded.Goals.Count}",
-            Console.WriteLine,
+            line => EmitPreLoopReadiness(workspace, line),
             RunStartupSweep);
 
         AgentOrchestratorKernel RunStartupSweep(AgentOrchestratorKernel startupKernel)
@@ -1322,6 +1322,24 @@ internal static partial class CliPersistentStateRunner
         catch
         {
             // Shared event streaming is advisory; stdout remains the primary conduct log.
+        }
+    }
+
+    internal static void EmitPreLoopReadiness(OrchestratorWorkspace workspace, string line)
+    {
+        ArgumentNullException.ThrowIfNull(workspace);
+        ArgumentException.ThrowIfNullOrWhiteSpace(line);
+        var emittedAt = DateTimeOffset.UtcNow;
+        Console.WriteLine($"{line} ts={emittedAt:O}");
+        Console.Out.Flush();
+        try
+        {
+            new ConductEventLogWriter(workspace.ConductEventsLogPath)
+                .Append("loop-ready", null, line, emittedAt);
+        }
+        catch
+        {
+            // Shared event streaming is advisory; stdout remains the primary readiness signal.
         }
     }
 
