@@ -1359,9 +1359,26 @@ public sealed class PostLandingCanaryTests : CliCommandTestBase
         var resolver = new FixedAppBinaryResolver(
             appDllPath,
             _ => File.WriteAllText(concurrentSentinel, "unrelated source-worktree activity"));
+        var occupiedBuildRoot = Path.Combine(testRoot, "foreign-slot-owner");
+        var previousIsolatedRoot = Environment.GetEnvironmentVariable(
+            DotnetBuildEnvironmentManager.IsolatedRootOverrideVariable);
         var clock = Stopwatch.StartNew();
         try
         {
+            Environment.SetEnvironmentVariable(
+                DotnetBuildEnvironmentManager.IsolatedRootOverrideVariable,
+                occupiedBuildRoot);
+            using var firstForeignSlot = DotnetBuildEnvironmentManager.AcquireFirstAvailableStableSlotExecutionLock(
+                TimeSpan.Zero);
+            using var secondForeignSlot = DotnetBuildEnvironmentManager.AcquireFirstAvailableStableSlotExecutionLock(
+                TimeSpan.Zero);
+            Assert.Equal(
+                DotnetBuildEnvironmentManager.StableSlotCount,
+                new[]
+                {
+                    firstForeignSlot.Environment.BuildPermitIndex,
+                    secondForeignSlot.Environment.BuildPermitIndex
+                }.Distinct().Count());
             File.WriteAllText(dirtySentinel, "operator-owned uncommitted content");
             var statusBefore = ReadGitStatus(repositoryRoot);
             Assert.Contains(
@@ -1380,6 +1397,8 @@ public sealed class PostLandingCanaryTests : CliCommandTestBase
                 $"PostLandingCanary known-green elapsed={clock.Elapsed.TotalSeconds:F2}s baseline=38.02s");
 
             Assert.True(outcome.Green, outcome.Detail);
+            Assert.DoesNotContain(nameof(DotnetBuildSlotsBusyException), outcome.Detail, StringComparison.Ordinal);
+            Assert.Equal("isolated-root", outcome.SlotResolution);
             Assert.True(outcome.ExecutedTestCount > 0);
             Assert.Equal(1, resolver.CallCount);
             Assert.Equal(landingSha, resolver.SourceSha);
@@ -1406,7 +1425,9 @@ public sealed class PostLandingCanaryTests : CliCommandTestBase
             var probe = JsonSerializer.Deserialize<PostLandingCanaryProbeResult>(
                 resultLine[PostLandingCanaryCommand.ResultPrefix.Length..],
                 new JsonSerializerOptions { PropertyNameCaseInsensitive = true });
-            Assert.True(Assert.IsType<PostLandingCanaryProbeResult>(probe).Green);
+            var typedProbe = Assert.IsType<PostLandingCanaryProbeResult>(probe);
+            Assert.True(typedProbe.Green);
+            Assert.Equal("isolated-root", typedProbe.SlotResolution);
             Assert.NotEmpty(Directory.GetFiles(
                 logDirectory,
                 $"post-landing-canary-{landingSha}-*.trx"));
@@ -1440,6 +1461,9 @@ public sealed class PostLandingCanaryTests : CliCommandTestBase
         }
         finally
         {
+            Environment.SetEnvironmentVariable(
+                DotnetBuildEnvironmentManager.IsolatedRootOverrideVariable,
+                previousIsolatedRoot);
             DeleteDirectoryLoudly(testRoot);
             Assert.False(Directory.Exists(testRoot), $"Disposable canary repository cleanup failed: {testRoot}");
         }

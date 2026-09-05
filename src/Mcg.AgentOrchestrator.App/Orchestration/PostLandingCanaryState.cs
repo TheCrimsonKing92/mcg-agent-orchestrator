@@ -182,16 +182,21 @@ internal sealed record PostLandingCanaryOutcome(
     bool Green,
     PostLandingCanaryFailureReason? FailureReason,
     int ExecutedTestCount,
-    string Detail)
+    string Detail,
+    string? SlotResolution = null)
 {
-    internal static PostLandingCanaryOutcome Passed(int executedTestCount, string detail) =>
-        new(true, null, executedTestCount, detail);
+    internal static PostLandingCanaryOutcome Passed(
+        int executedTestCount,
+        string detail,
+        string? slotResolution = null) =>
+        new(true, null, executedTestCount, detail, slotResolution);
 
     internal static PostLandingCanaryOutcome Failed(
         PostLandingCanaryFailureReason reason,
         string detail,
-        int executedTestCount = 0) =>
-        new(false, reason, executedTestCount, detail);
+        int executedTestCount = 0,
+        string? slotResolution = null) =>
+        new(false, reason, executedTestCount, detail, slotResolution);
 }
 
 internal sealed record PostLandingCanaryEventPayload(
@@ -205,7 +210,8 @@ internal sealed record PostLandingCanaryEventPayload(
     DateTimeOffset? CompletedAt,
     string? OperatorNote = null,
     int AttemptCount = 0,
-    DateTimeOffset? NotBefore = null)
+    DateTimeOffset? NotBefore = null,
+    string? SlotResolution = null)
 {
     internal const string CanaryTag = "canary";
 }

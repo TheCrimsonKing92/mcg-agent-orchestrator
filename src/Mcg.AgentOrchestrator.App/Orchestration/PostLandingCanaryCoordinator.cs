@@ -341,7 +341,8 @@ internal sealed class PostLandingCanaryCoordinator
                 failureReason,
                 outcome.ExecutedTestCount,
                 startedAt,
-                completedAt),
+                completedAt,
+                slotResolution: outcome.SlotResolution),
             PostLandingCanaryEventIds.Receipt(request.LandingSha),
             completedAt,
             CancellationToken.None).ConfigureAwait(false);
@@ -397,7 +398,8 @@ internal sealed class PostLandingCanaryCoordinator
             verdictFailureReason,
             outcome.ExecutedTestCount,
             startedAt,
-            completedAt);
+            completedAt,
+            slotResolution: outcome.SlotResolution);
         try
         {
             await _events.AppendOnceAsync(
@@ -664,7 +666,8 @@ internal sealed class PostLandingCanaryCoordinator
         DateTimeOffset? startedAt = null,
         DateTimeOffset? completedAt = null,
         int attemptCount = 0,
-        DateTimeOffset? notBefore = null) =>
+        DateTimeOffset? notBefore = null,
+        string? slotResolution = null) =>
         new(
             PostLandingCanaryEventPayload.CanaryTag,
             request.LandingSha,
@@ -675,7 +678,8 @@ internal sealed class PostLandingCanaryCoordinator
             startedAt,
             completedAt,
             AttemptCount: attemptCount,
-            NotBefore: notBefore);
+            NotBefore: notBefore,
+            SlotResolution: slotResolution);
 
     private static string? FailureToken(PostLandingCanaryFailureReason? reason) => reason switch
     {

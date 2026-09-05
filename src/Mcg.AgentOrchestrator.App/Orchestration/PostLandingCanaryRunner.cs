@@ -117,9 +117,13 @@ internal sealed class PostLandingCanaryRunner : IPostLandingCanaryRunner
         var logs = new PostLandingCanaryLogSession(_logDirectory, request.LandingSha);
         var canaryRepositoryRoot = await CreateIsolatedWorktreeAsync(request.LandingSha, logs, cancellationToken)
             .ConfigureAwait(false);
+        var canaryBuildEnvironmentRoot = Path.Combine(
+            Path.GetTempPath(),
+            $"mcg-pc-{Environment.ProcessId}-{Guid.NewGuid():N}"[..24]);
         Exception? runFailure = null;
         try
         {
+            Directory.CreateDirectory(canaryBuildEnvironmentRoot);
             var baseline = await ReadRepositoryStateAsync(canaryRepositoryRoot, logs, cancellationToken)
                 .ConfigureAwait(false);
             if (!baseline.HeadSha.Equals(request.LandingSha, StringComparison.OrdinalIgnoreCase))
@@ -165,7 +169,8 @@ internal sealed class PostLandingCanaryRunner : IPostLandingCanaryRunner
                 logs,
                 "run-canary-probe",
                 cancellationToken,
-                logs.ReceiptPrefix).ConfigureAwait(false);
+                logs.ReceiptPrefix,
+                canaryBuildEnvironmentRoot).ConfigureAwait(false);
 
             var current = await ReadRepositoryStateAsync(canaryRepositoryRoot, logs, cancellationToken)
                 .ConfigureAwait(false);
@@ -215,11 +220,12 @@ internal sealed class PostLandingCanaryRunner : IPostLandingCanaryRunner
             }
 
             return probe.Green
-                ? PostLandingCanaryOutcome.Passed(probe.ExecutedTestCount, probe.Detail)
+                ? PostLandingCanaryOutcome.Passed(probe.ExecutedTestCount, probe.Detail, probe.SlotResolution)
                 : PostLandingCanaryOutcome.Failed(
                     probe.FailureReason ?? PostLandingCanaryFailureReason.InfrastructureError,
                     probe.Detail,
-                    probe.ExecutedTestCount);
+                    probe.ExecutedTestCount,
+                    probe.SlotResolution);
         }
         catch (Exception ex)
         {
@@ -235,6 +241,20 @@ internal sealed class PostLandingCanaryRunner : IPostLandingCanaryRunner
             catch when (runFailure is not null)
             {
                 // Preserve the primary canary failure; stale temporary worktrees are pruned by git maintenance.
+            }
+            finally
+            {
+                try
+                {
+                    if (Directory.Exists(canaryBuildEnvironmentRoot))
+                    {
+                        Directory.Delete(canaryBuildEnvironmentRoot, recursive: true);
+                    }
+                }
+                catch when (runFailure is not null)
+                {
+                    // Preserve the primary canary failure; the isolated root contains only run-scoped build state.
+                }
             }
         }
     }
@@ -454,7 +474,8 @@ internal sealed class PostLandingCanaryRunner : IPostLandingCanaryRunner
         PostLandingCanaryLogSession logs,
         string operation,
         CancellationToken cancellationToken,
-        string? acceptanceAttemptResultsPrefix = null)
+        string? acceptanceAttemptResultsPrefix = null,
+        string? dotnetIsolatedRoot = null)
     {
         var nativeFileCapture = OperatingSystem.IsWindows();
         var (stdoutPath, stderrPath) = logs.CreateCaptureFiles(operation);
@@ -467,9 +488,16 @@ internal sealed class PostLandingCanaryRunner : IPostLandingCanaryRunner
         GoalAcceptanceVerifier.ConfigureHermeticVerificationEnvironment(startInfo.Environment, workingDirectory);
         if (!string.IsNullOrWhiteSpace(acceptanceAttemptResultsPrefix))
         {
+            if (string.IsNullOrWhiteSpace(dotnetIsolatedRoot))
+            {
+                throw new InvalidOperationException("A canary probe launch requires an isolated dotnet build root.");
+            }
+
             // Set this after hermetic cleanup: it is a run-scoped output contract, not ambient operator state.
             startInfo.Environment[GoalAcceptanceVerifier.AcceptanceAttemptTrxPrefixVariable] =
                 Path.GetFullPath(acceptanceAttemptResultsPrefix);
+            startInfo.Environment[DotnetBuildEnvironmentManager.IsolatedRootOverrideVariable] =
+                Path.GetFullPath(dotnetIsolatedRoot);
         }
         using var process = nativeFileCapture
             ? WorkerProcessJobs.StartRegisteredWithFileCaptureOrThrow(
