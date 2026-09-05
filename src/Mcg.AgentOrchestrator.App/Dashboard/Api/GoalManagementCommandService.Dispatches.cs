@@ -1105,6 +1105,15 @@ private static RetryAdmissionResult EnsurePreparedRetryAdmission(
     var recordedAt = DateTimeOffset.UtcNow;
     var reservationOwnerId = Guid.NewGuid().ToString("n");
     var reservationLeaseExpiresAt = recordedAt.AddMinutes(1);
+    var retryMarkerAt = task.LatestRetryAt;
+    var retryMessage = retryMarkerAt is null
+        ? null
+        : kernel.GetGoal(goalId).Timeline.LastOrDefault(evt =>
+            evt.TaskId == task.Id &&
+            evt.Kind == ProgressKind.TaskRetried &&
+            evt.OccurredAt >= retryMarkerAt.Value)?.Message ??
+          throw new InvalidOperationException(
+              $"Retry admission cannot persist task '{task.Id}' because its retry marker has no matching TaskRetried event.");
     if (task.LatestRetryAt is not null && dispatch.PaidRoute == PaidRouteClassification.Unknown)
     {
         throw new InvalidOperationException(
@@ -1136,8 +1145,9 @@ private static RetryAdmissionResult EnsurePreparedRetryAdmission(
             reservationOwnerId,
             reservationLeaseExpiresAt,
             reservationRecoveryConfirmed,
-            retryMarkerAt: task.LatestRetryAt,
-            retryRoundKind: task.PendingRetryRoundKind)
+            retryMarkerAt: retryMarkerAt,
+            retryRoundKind: task.PendingRetryRoundKind,
+            retryMessage: retryMessage)
         .GetAwaiter()
         .GetResult();
     if (persisted is not null)

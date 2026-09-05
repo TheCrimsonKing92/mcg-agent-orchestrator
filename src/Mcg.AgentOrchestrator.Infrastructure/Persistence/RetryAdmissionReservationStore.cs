@@ -18,7 +18,8 @@ public static class RetryAdmissionReservationStore
         bool reservationRecoveryConfirmed = false,
         CancellationToken cancellationToken = default,
         DateTimeOffset? retryMarkerAt = null,
-        RetryRoundKind? retryRoundKind = null)
+        RetryRoundKind? retryRoundKind = null,
+        string? retryMessage = null)
     {
         var repository = new SqliteOrchestratorStateRepository(stateDatabasePath);
         return repository.TransactGoalStateAsync<RetryAdmissionSnapshotResult?>(
@@ -29,8 +30,52 @@ public static class RetryAdmissionReservationStore
                 if (state is null)
                     return Task.FromResult((false, (GoalStateSnapshot?)null, (RetryAdmissionSnapshotResult?)null));
 
+                var reservationSnapshot = state.Goal;
+                if (retryMarkerAt is { } retriedAt)
+                {
+                    if (string.IsNullOrWhiteSpace(retryMessage))
+                    {
+                        throw new InvalidOperationException(
+                            $"Retry admission cannot persist task '{taskId}' without its TaskRetried message.");
+                    }
+
+                    var persistedTask = reservationSnapshot.Tasks.Single(task => task.Id == taskId.Value);
+                    var persistedRetryEvent = reservationSnapshot.Timeline.LastOrDefault(evt =>
+                        evt.TaskId == taskId.Value &&
+                        evt.Kind == ProgressKind.TaskRetried &&
+                        evt.OccurredAt >= retriedAt);
+                    var retryEventAlreadyPersisted =
+                        persistedTask.LatestRetryAt == retriedAt &&
+                        string.Equals(persistedRetryEvent?.Message, retryMessage, StringComparison.Ordinal);
+                    var retryClock = new RetryMarkerClock(retriedAt);
+                    var retryKernel = AgentOrchestratorKernel.FromSnapshot(
+                        new OrchestratorSnapshot([reservationSnapshot], state.HumanInputRequests),
+                        retryClock);
+                    if (!retryEventAlreadyPersisted)
+                    {
+                        retryKernel.RetryTask(
+                            goalId,
+                            taskId,
+                            retryMessage,
+                            cause,
+                            retryRoundKind: retryRoundKind);
+                    }
+
+                    var durableTask = retryKernel.GetTask(goalId, taskId);
+                    var preparedDispatchAlreadyPersisted =
+                        durableTask.LastDispatch?.DispatchedAt == preparedDispatch.DispatchedAt &&
+                        string.Equals(durableTask.LastDispatch.WorkerName, preparedDispatch.WorkerName, StringComparison.Ordinal);
+                    if (!preparedDispatchAlreadyPersisted)
+                    {
+                        retryClock.UtcNow = recordedAt;
+                        retryKernel.RecordTaskDispatch(goalId, taskId, preparedDispatch);
+                    }
+
+                    reservationSnapshot = retryKernel.ExportGoalSnapshot(goalId);
+                }
+
                 var reservation = RetryAdmissionSnapshotReservation.Apply(
-                    state.Goal,
+                    reservationSnapshot,
                     taskId,
                     fingerprint,
                     paidRoute,
@@ -39,9 +84,7 @@ public static class RetryAdmissionReservationStore
                     recordedAt,
                     reservationOwnerId,
                     reservationLeaseExpiresAt,
-                    reservationRecoveryConfirmed,
-                    retryMarkerAt,
-                    retryRoundKind);
+                    reservationRecoveryConfirmed);
                 var kernel = AgentOrchestratorKernel.FromSnapshot(
                     new OrchestratorSnapshot([reservation.Snapshot], state.HumanInputRequests));
                 kernel.ApplyPersistedRetryAdmissionOutcome(goalId, taskId, reservation.Admission);
@@ -56,6 +99,11 @@ public static class RetryAdmissionReservationStore
                     (RetryAdmissionSnapshotResult?)result));
             },
             cancellationToken);
+    }
+
+    private sealed class RetryMarkerClock(DateTimeOffset utcNow) : IClock
+    {
+        public DateTimeOffset UtcNow { get; set; } = utcNow;
     }
 
     public static Task<bool?> TryClaimStartAsync(

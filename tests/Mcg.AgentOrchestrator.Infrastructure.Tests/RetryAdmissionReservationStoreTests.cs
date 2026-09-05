@@ -156,6 +156,7 @@ public sealed class RetryAdmissionReservationStoreTests
         var kernel = new AgentOrchestratorKernel();
         var task = new TaskSpec(TaskId.New(), "Retry provider interruption", AgentRole.Developer);
         var goal = kernel.CreateGoal("Persist prevented retry routing atomically", [task]);
+        kernel.ActivateGoal(goal.Id, AgentCatalog.Default().Agents);
         kernel.RetryTask(goal.Id, task.Id, "Provider interrupted the paid attempt.", RetryCause.ProviderInterruption);
         var repository = new SqliteOrchestratorStateRepository(databasePath);
         await repository.SaveAsync(kernel);
@@ -188,7 +189,8 @@ public sealed class RetryAdmissionReservationStoreTests
         var secondAt = firstAt.AddMinutes(2);
         kernel.RetryTask(
             goal.Id, task.Id, "Provider interrupted the paid attempt.", RetryCause.ProviderInterruption);
-        var inMemoryRetryAt = task.LatestRetryAt;
+        var inMemoryTask = kernel.GetTask(goal.Id, task.Id);
+        var inMemoryRetryAt = inMemoryTask.LatestRetryAt;
         var secondDispatch = new TaskDispatchRecord(
             "worker", "command-b", "worktree", secondAt,
             RetryContextFingerprint: fingerprint,
@@ -198,7 +200,8 @@ public sealed class RetryAdmissionReservationStoreTests
             databasePath, goal.Id, task.Id, fingerprint, PaidRouteClassification.Paid,
             RetryCause.ProviderInterruption, secondDispatch, secondAt, "owner-b", secondAt.AddMinutes(1),
             retryMarkerAt: inMemoryRetryAt,
-            retryRoundKind: task.PendingRetryRoundKind);
+            retryRoundKind: inMemoryTask.PendingRetryRoundKind,
+            retryMessage: "Provider interrupted the paid attempt.");
 
         Assert.Equal(RetryAdmissionDecision.Prevented, prevented!.Decision);
         var persisted = await repository.LoadAsync();

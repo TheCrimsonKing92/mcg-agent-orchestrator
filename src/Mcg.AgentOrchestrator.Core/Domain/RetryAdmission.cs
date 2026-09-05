@@ -112,15 +112,11 @@ public static class RetryAdmissionSnapshotReservation
         DateTimeOffset recordedAt,
         string reservationOwnerId,
         DateTimeOffset reservationLeaseExpiresAt,
-        bool reservationRecoveryConfirmed = false,
-        DateTimeOffset? retryMarkerAt = null,
-        RetryRoundKind? retryRoundKind = null)
+        bool reservationRecoveryConfirmed = false)
     {
         ArgumentNullException.ThrowIfNull(snapshot);
         var goal = Goal.FromSnapshot(snapshot);
         var task = goal.FindTask(taskId);
-        if (retryMarkerAt is { } retriedAt)
-            task.RecordRetry(retriedAt, cause, retryRoundKind);
         var result = RetryAdmissionPolicy.Evaluate(
             task,
             fingerprint,
