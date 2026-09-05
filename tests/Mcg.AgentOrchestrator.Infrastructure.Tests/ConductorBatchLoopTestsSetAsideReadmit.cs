@@ -915,6 +915,31 @@ public sealed class ConductorBatchLoopTestsSetAsideReadmit : ConductorBatchLoopT
             evt.Message.Contains("re-admitted escalated goal", StringComparison.Ordinal));
     }
 
+    [Xunit.Fact]
+    public void SetAsideFingerprint_EvidenceContextThrows_TickContinues()
+    {
+        var kernel = new AgentOrchestratorKernel();
+        var goal = GoalLifecycleCommands.CreateAndActivateSimpleGoal(kernel, DefaultAgents(), "failed goal");
+        var task = goal.Tasks.Single();
+        kernel.ReportTaskProgress(goal.Id, task.Id, WorkTaskStatus.Failed, "Needs operator repair.");
+        var driver = MakeDriver(
+            getFacts: _ => GoalLifecycleFacts.None,
+            getPreReviewEvidenceContext: _ => throw new InvalidOperationException(
+                "Set-aside fingerprints must not launch evidence discovery."));
+
+        var summary = new ConductorBatchLoop().Run(
+            kernel,
+            driver,
+            ConductorAutonomyPolicy.Conservative,
+            NoStopPath(),
+            maxIterations: 1,
+            watchInterval: TimeSpan.FromMilliseconds(1),
+            sleepFunc: _ => false);
+
+        Assert.Equal(1, summary.Ticks);
+        Assert.Equal(1, summary.Escalated);
+    }
+
     [Xunit.Fact(DisplayName = "BatchLoop_readmits_snapshot_reloaded_goal_when_durable_task_fields_change")]
     public void BatchLoopReadmitsSnapshotReloadedGoalWhenDurableTaskFieldsChange()
     {

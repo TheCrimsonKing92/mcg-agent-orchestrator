@@ -1118,7 +1118,7 @@ internal sealed partial class ConductorBatchLoop
                     if (!TryAdvanceGoal(
                         () =>
                         {
-                            var beforeRefresh = BuildEscalatedGoalStateFingerprint(kernel, driver, goal);
+                            var beforeRefresh = BuildEscalatedGoalStateFingerprint(goal);
                             var runningHoldReason = DetachedDispatchHoldReasonBuilder.Build(goal, _refreshGoalDispatchesBeforeAdvance(kernel, goal));
                             if (_progressiveReviewGlances is not null && watchInterval is not null)
                             {
@@ -1158,7 +1158,7 @@ internal sealed partial class ConductorBatchLoop
                             }
 
                             goalProjectionCache.Invalidate(goal.Id);
-                            var afterRefresh = BuildEscalatedGoalStateFingerprint(kernel, driver, goal);
+                            var afterRefresh = BuildEscalatedGoalStateFingerprint(goal);
                             if (!string.Equals(beforeRefresh, afterRefresh, StringComparison.Ordinal))
                             {
                                 changedGoalIds.Add(goal.Id);
@@ -4500,7 +4500,14 @@ internal sealed partial class ConductorBatchLoop
                 // while still preserving the pre-existing state-change readmission path below.
             }
 
-            var currentFingerprint = BuildEscalatedGoalStateFingerprint(kernel, driver, goal);
+            var currentFingerprint = entry.Condition == BatchSetAsideCondition.AwaitingClarification
+                ? TryResolveLifecycleState(driver, goal) switch
+                {
+                    "LifecycleState=unknown" => entry.StateFingerprint,
+                    nameof(GoalLifecycleState.AwaitingClarification) => entry.StateFingerprint,
+                    var state => $"clarification={state}"
+                }
+                : BuildEscalatedGoalStateFingerprint(goal);
             if (string.Equals(currentFingerprint, entry.StateFingerprint, StringComparison.Ordinal))
             {
                 continue;
@@ -4689,7 +4696,7 @@ internal sealed partial class ConductorBatchLoop
         setAsideGoals[goal.Id.Value] = new BatchSetAsideEntry(
             goal.Id.Value,
             condition,
-            BuildEscalatedGoalStateFingerprint(kernel, driver, goal),
+            BuildEscalatedGoalStateFingerprint(goal),
             lastSelfClearEvidenceFingerprint,
             sweepBlocker?.Kind,
             sweepBlocker is null
@@ -4709,14 +4716,8 @@ internal sealed partial class ConductorBatchLoop
     private static string BuildSweepBlockerFingerprint(TerminalGoalSweepBlocker blocker) =>
         $"{blocker.Kind}\n{blocker.Evidence}\n{blocker.Command}";
 
-    private static string BuildEscalatedGoalStateFingerprint(
-        AgentOrchestratorKernel kernel,
-        ConductorDriver driver,
-        Goal goal)
+    private static string BuildEscalatedGoalStateFingerprint(Goal goal)
     {
-        var lifecycleState = TryResolveLifecycleState(driver, goal);
-        var attentionCount = kernel.GetPendingHumanInput(goal.Id).Count;
-        var candidate = driver.GetPreReviewEvidenceContext(goal).CandidateSha?.Trim() ?? "none";
         var taskParts = goal.Tasks
             .OrderBy(task => task.Id.Value, StringComparer.Ordinal)
             .Select(task =>
@@ -4725,15 +4726,13 @@ internal sealed partial class ConductorBatchLoop
                     new[]
                     {
                     task.Id.Value,
+                    $"candidate={task.LastDispatch?.ResultCommit?.Trim() ?? task.LastVerification?.ReviewedCommit?.Trim() ?? "none"}",
                     task.Status.ToString(),
                     task.LastDispatch is null ? "dispatch=none" : $"dispatch={task.LastDispatch.DispatchedAt.UtcTicks}:{task.LastDispatch.WorkerName}",
-                    task.LatestRetryAt is null ? "retry=none" : $"retry={task.LatestRetryAt.Value.UtcTicks}",
-                    task.LastProcess is null ? "process=none" : $"process={task.LastProcess.IsRunning}:{task.LastProcess.CompletedAt?.UtcTicks}:{task.LastProcess.ExitCode}:{task.LastProcess.WasCancelled}",
-                    task.LastVerification is null ? "verification=none" : $"verification={task.LastVerification.Succeeded}:{task.LastVerification.ExitCode}:{task.LastVerification.CompletedAt.UtcTicks}",
-                    task.LastExecution is null ? "execution=none" : $"execution={task.LastExecution.StopReason}:{task.LastExecution.CompletedAt.UtcTicks}"
+                    task.LatestRetryAt is null ? "retry=none" : $"retry={task.LatestRetryAt.Value.UtcTicks}"
                     }));
 
-        return string.Join("|", new[] { $"lifecycle={lifecycleState}", $"candidate={candidate}", $"attention={attentionCount}" }.Concat(taskParts));
+        return string.Join("|", taskParts);
     }
 
     private static string TryResolveLifecycleState(ConductorDriver driver, Goal goal)

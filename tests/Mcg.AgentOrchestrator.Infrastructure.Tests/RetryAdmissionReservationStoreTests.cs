@@ -219,6 +219,77 @@ public sealed class RetryAdmissionReservationStoreTests
     }
 
     [Xunit.Fact]
+    public async Task PreventedReservation_CompletedDownstreamReviewer_Preserved()
+    {
+        var root = Path.Combine(Path.GetTempPath(), "mcg-retry-admission-tests", Guid.NewGuid().ToString("N"));
+        Directory.CreateDirectory(root);
+        var databasePath = Path.Combine(root, "state.db");
+        _ = StateDbMigrations.EnsureUpToDate(databasePath);
+        var kernel = new AgentOrchestratorKernel();
+        var researcher = new TaskSpec(TaskId.New(), "Research", AgentRole.Researcher);
+        var planner = new TaskSpec(TaskId.New(), "Plan", AgentRole.Planner);
+        var developer = new TaskSpec(TaskId.New(), "Implement", AgentRole.Developer);
+        var tester = new TaskSpec(TaskId.New(), "Test", AgentRole.Tester);
+        var reviewer = new TaskSpec(TaskId.New(), "Review", AgentRole.Reviewer);
+        var goal = kernel.CreateGoal("Preserve downstream state on denied retry", [researcher, planner, developer, tester, reviewer]);
+        kernel.ActivateGoal(goal.Id, AgentCatalog.Default().Agents);
+        kernel.RetryTask(goal.Id, developer.Id, "Prepare the first attempt.", RetryCause.NewSourceFinding);
+        var repository = new SqliteOrchestratorStateRepository(databasePath);
+        await repository.SaveAsync(kernel);
+        var fingerprint = RetryContextFingerprintBuilder.Build(new RetryContextFingerprintInput(
+            goal.Id.Value, developer.Id.Value, developer.RequiredRole, "OpenAI", "gpt",
+            PaidRouteClassification.Paid, "candidate", "criteria", [], [], [], [], "base", "main"));
+        var firstAt = DateTimeOffset.Parse("2026-08-25T12:00:00Z");
+        var dispatch = new TaskDispatchRecord(
+            "worker", "command", "worktree", firstAt,
+            RetryContextFingerprint: fingerprint,
+            PaidRoute: PaidRouteClassification.Paid);
+        var first = await RetryAdmissionReservationStore.TryReserveAsync(
+            databasePath, goal.Id, developer.Id, fingerprint, PaidRouteClassification.Paid,
+            RetryCause.NewSourceFinding, dispatch, firstAt, "owner-a", firstAt.AddMinutes(5));
+        Assert.Equal(RetryAdmissionDecision.Allowed, first!.Decision);
+
+        kernel = await repository.LoadAsync();
+        kernel.ReportTaskProgress(goal.Id, developer.Id, WorkTaskStatus.Failed, "Needs repair.");
+        var reviewerVerification = new TaskVerificationRecord(
+            "review", "worktree", 0, "review passed", string.Empty, firstAt.AddSeconds(1),
+            WorkerResultPresent: true,
+            ReviewedCommit: "candidate",
+            MergedReviewFindings: [],
+            CompletionVerdictVerifiedSuccess: true,
+            CompletionVerdictRule: "test-fixture");
+        kernel.RecordTaskVerification(goal.Id, reviewer.Id, reviewerVerification);
+        kernel.ReportTaskProgress(goal.Id, reviewer.Id, WorkTaskStatus.Completed, "Review complete.");
+        await repository.SaveAsync(kernel);
+        var durableBeforeRetry = await repository.LoadAsync();
+        Assert.Equal(WorkTaskStatus.Completed, durableBeforeRetry.GetTask(goal.Id, reviewer.Id).Status);
+        Assert.Equal(
+            reviewerVerification.CompletedAt,
+            durableBeforeRetry.GetTask(goal.Id, reviewer.Id).LastVerification?.CompletedAt);
+        var durableGoalStatus = durableBeforeRetry.GetGoal(goal.Id).Status;
+
+        kernel.RetryTask(goal.Id, developer.Id, "Retry the same attempt.", RetryCause.NewSourceFinding);
+        var retryTask = kernel.GetTask(goal.Id, developer.Id);
+        var prevented = await RetryAdmissionReservationStore.TryReserveAsync(
+            databasePath, goal.Id, developer.Id, fingerprint, PaidRouteClassification.Paid,
+            RetryCause.NewSourceFinding, dispatch, firstAt.AddMinutes(1), "owner-b", firstAt.AddMinutes(6),
+            retryMarkerAt: retryTask.LatestRetryAt,
+            retryRoundKind: retryTask.PendingRetryRoundKind,
+            retryMessage: "Retry the same attempt.");
+
+        Assert.Equal(RetryAdmissionDecision.Prevented, prevented!.Decision);
+        var persisted = await repository.LoadAsync();
+        var persistedGoal = persisted.GetGoal(goal.Id);
+        var persistedReviewer = persisted.GetTask(goal.Id, reviewer.Id);
+        Assert.Equal(durableGoalStatus, persistedGoal.Status);
+        Assert.Equal(WorkTaskStatus.Completed, persistedReviewer.Status);
+        Assert.Equal(reviewerVerification.CompletedAt, persistedReviewer.LastVerification?.CompletedAt);
+        Assert.DoesNotContain(
+            persistedGoal.Timeline,
+            item => item.TaskId == reviewer.Id && item.Kind == ProgressKind.TaskRetried);
+    }
+
+    [Xunit.Fact]
     public async Task StartedReservationCannotBeRecoveredByAnotherOwner()
     {
         var root = Path.Combine(Path.GetTempPath(), "mcg-retry-admission-tests", Guid.NewGuid().ToString("N"));

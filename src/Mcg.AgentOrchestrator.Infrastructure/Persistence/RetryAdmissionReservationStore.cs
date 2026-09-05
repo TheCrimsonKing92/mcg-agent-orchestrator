@@ -30,7 +30,8 @@ public static class RetryAdmissionReservationStore
                 if (state is null)
                     return Task.FromResult((false, (GoalStateSnapshot?)null, (RetryAdmissionSnapshotResult?)null));
 
-                var reservationSnapshot = state.Goal;
+                var goalBeforeRetry = state.Goal;
+                var reservationSnapshot = goalBeforeRetry;
                 AgentOrchestratorKernel? retryKernel = null;
                 RetryMarkerClock? retryClock = null;
                 TaskSnapshot? taskBeforeRetry = null;
@@ -62,6 +63,7 @@ public static class RetryAdmissionReservationStore
                             taskId,
                             retryMessage,
                             cause,
+                            invalidateDownstream: false,
                             retryRoundKind: retryRoundKind);
                     }
 
@@ -111,10 +113,15 @@ public static class RetryAdmissionReservationStore
                     };
                     reservation = reservation with
                     {
-                        Snapshot = reservation.Snapshot with
+                        Snapshot = goalBeforeRetry with
                         {
-                            Tasks = reservation.Snapshot.Tasks
+                            Tasks = goalBeforeRetry.Tasks
                                 .Select(task => task.Id == taskId.Value ? retryMarkedTask : task)
+                                .ToArray(),
+                            Timeline = goalBeforeRetry.Timeline
+                                .Concat(reservation.Snapshot.Timeline
+                                    .Skip(goalBeforeRetry.Timeline.Count)
+                                    .Where(item => item.TaskId == taskId.Value && item.Kind == ProgressKind.TaskRetried))
                                 .ToArray()
                         }
                     };
