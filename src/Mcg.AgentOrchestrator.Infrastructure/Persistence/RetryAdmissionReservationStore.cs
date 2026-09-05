@@ -31,6 +31,9 @@ public static class RetryAdmissionReservationStore
                     return Task.FromResult((false, (GoalStateSnapshot?)null, (RetryAdmissionSnapshotResult?)null));
 
                 var reservationSnapshot = state.Goal;
+                AgentOrchestratorKernel? retryKernel = null;
+                RetryMarkerClock? retryClock = null;
+                TaskSnapshot? taskBeforeRetry = null;
                 if (retryMarkerAt is { } retriedAt)
                 {
                     if (string.IsNullOrWhiteSpace(retryMessage))
@@ -40,6 +43,7 @@ public static class RetryAdmissionReservationStore
                     }
 
                     var persistedTask = reservationSnapshot.Tasks.Single(task => task.Id == taskId.Value);
+                    taskBeforeRetry = persistedTask;
                     var persistedRetryEvent = reservationSnapshot.Timeline.LastOrDefault(evt =>
                         evt.TaskId == taskId.Value &&
                         evt.Kind == ProgressKind.TaskRetried &&
@@ -47,8 +51,8 @@ public static class RetryAdmissionReservationStore
                     var retryEventAlreadyPersisted =
                         persistedTask.LatestRetryAt == retriedAt &&
                         string.Equals(persistedRetryEvent?.Message, retryMessage, StringComparison.Ordinal);
-                    var retryClock = new RetryMarkerClock(retriedAt);
-                    var retryKernel = AgentOrchestratorKernel.FromSnapshot(
+                    retryClock = new RetryMarkerClock(retriedAt);
+                    retryKernel = AgentOrchestratorKernel.FromSnapshot(
                         new OrchestratorSnapshot([reservationSnapshot], state.HumanInputRequests),
                         retryClock);
                     if (!retryEventAlreadyPersisted)
@@ -59,16 +63,6 @@ public static class RetryAdmissionReservationStore
                             retryMessage,
                             cause,
                             retryRoundKind: retryRoundKind);
-                    }
-
-                    var durableTask = retryKernel.GetTask(goalId, taskId);
-                    var preparedDispatchAlreadyPersisted =
-                        durableTask.LastDispatch?.DispatchedAt == preparedDispatch.DispatchedAt &&
-                        string.Equals(durableTask.LastDispatch.WorkerName, preparedDispatch.WorkerName, StringComparison.Ordinal);
-                    if (!preparedDispatchAlreadyPersisted)
-                    {
-                        retryClock.UtcNow = recordedAt;
-                        retryKernel.RecordTaskDispatch(goalId, taskId, preparedDispatch);
                     }
 
                     reservationSnapshot = retryKernel.ExportGoalSnapshot(goalId);
@@ -85,6 +79,46 @@ public static class RetryAdmissionReservationStore
                     reservationOwnerId,
                     reservationLeaseExpiresAt,
                     reservationRecoveryConfirmed);
+                // A denied admission persists only the retry marker, leaving a failed task Failed; the prepared dispatch is persisted only when start is allowed.
+                if (retryKernel is not null && reservation.Admission.AllowsProcessStart)
+                {
+                    var durableTask = retryKernel.GetTask(goalId, taskId);
+                    var preparedDispatchAlreadyPersisted =
+                        durableTask.LastDispatch?.DispatchedAt == preparedDispatch.DispatchedAt &&
+                        string.Equals(durableTask.LastDispatch.WorkerName, preparedDispatch.WorkerName, StringComparison.Ordinal);
+                    if (!preparedDispatchAlreadyPersisted)
+                    {
+                        retryClock!.UtcNow = recordedAt;
+                        retryKernel.RecordTaskDispatch(goalId, taskId, preparedDispatch);
+                    }
+
+                    reservation = RetryAdmissionSnapshotReservation.Apply(
+                        retryKernel.ExportGoalSnapshot(goalId), taskId, fingerprint, paidRoute, cause,
+                        preparedDispatch, recordedAt, reservationOwnerId, reservationLeaseExpiresAt,
+                        reservationRecoveryConfirmed);
+                }
+                else if (taskBeforeRetry is not null)
+                {
+                    var deniedTask = reservation.Snapshot.Tasks.Single(task => task.Id == taskId.Value);
+                    var retryMarkedTask = taskBeforeRetry with
+                    {
+                        LatestRetryAt = deniedTask.LatestRetryAt,
+                        PendingRetryRoundKind = deniedTask.PendingRetryRoundKind,
+                        PendingRetryCause = deniedTask.PendingRetryCause,
+                        RetryAdmissionHistory = deniedTask.RetryAdmissionHistory,
+                        RetryAdmissionHoldRoute = deniedTask.RetryAdmissionHoldRoute,
+                        PendingReviewFindingRepairCheckpoint = deniedTask.PendingReviewFindingRepairCheckpoint
+                    };
+                    reservation = reservation with
+                    {
+                        Snapshot = reservation.Snapshot with
+                        {
+                            Tasks = reservation.Snapshot.Tasks
+                                .Select(task => task.Id == taskId.Value ? retryMarkedTask : task)
+                                .ToArray()
+                        }
+                    };
+                }
                 var kernel = AgentOrchestratorKernel.FromSnapshot(
                     new OrchestratorSnapshot([reservation.Snapshot], state.HumanInputRequests));
                 kernel.ApplyPersistedRetryAdmissionOutcome(goalId, taskId, reservation.Admission);
