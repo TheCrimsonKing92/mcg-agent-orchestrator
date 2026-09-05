@@ -37,7 +37,8 @@ internal static class VerifyingFindingCurrency
 
         var supersededByLaterResult = verifyingTask.VerificationHistory.Any(verification =>
             verification.CompletedAt > findingRecord.CompletedAt &&
-            (!verification.WorkerResultPresent || verification.MergedReviewFindings is not null));
+            (verification.MergedReviewFindings is not null ||
+             IsLatestCompletedResult(verifyingTask, verification)));
         if (supersededByLaterResult)
         {
             return false;
@@ -49,6 +50,11 @@ internal static class VerifyingFindingCurrency
             task.LastVerification is { } developerVerification &&
             developerVerification.CompletedAt > findingRecord.CompletedAt);
     }
+
+    private static bool IsLatestCompletedResult(TaskSpec task, TaskVerificationRecord verification) =>
+        task.Status == WorkTaskStatus.Completed &&
+        verification.Succeeded &&
+        task.LastVerification?.HasSameRoundIdentity(verification) is true;
 
     internal static bool HasCurrentOpenBlockingFinding(
         Goal goal,

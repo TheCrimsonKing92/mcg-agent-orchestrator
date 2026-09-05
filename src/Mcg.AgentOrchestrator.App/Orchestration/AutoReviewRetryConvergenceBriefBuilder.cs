@@ -416,7 +416,7 @@ internal static class AutoReviewRetryConvergenceBriefBuilder
             .ToArray();
     }
 
-    private static IReadOnlyList<ReviewFinding> ReadStructuredReviewFindingState(
+    internal static IReadOnlyList<ReviewFinding> ReadStructuredReviewFindingState(
         Goal goal,
         AgentRole role,
         DateTimeOffset completedAt)

@@ -9,7 +9,7 @@ using static ConductorDriverTests;
 [Xunit.Collection("IsolatedProcessSpawning")]
 public sealed class ConductorDriverTestsStaleFindingRouting
 {
-    // Before the currency fix, both fixtures below retried the Developer because the
+    // Before the currency fix, the first two fixtures retried the Developer because the
     // convergence brief resurrected the Tester's superseded findings from verification history.
     [Xunit.Fact]
     public void StaleTesterFindingAfterOperatorCloseDoesNotReopenDeveloper()
@@ -38,6 +38,10 @@ public sealed class ConductorDriverTestsStaleFindingRouting
         Assert.Equal(WorkTaskStatus.Completed, tester.Status);
         Assert.Equal(WorkTaskStatus.Failed, reviewer.Status);
         Assert.Null(reviewer.LastVerification!.MergedReviewFindings);
+        Assert.Empty(AutoReviewRetryConvergenceBriefBuilder.ReadStructuredReviewFindingState(
+            goal,
+            AgentRole.Tester,
+            reviewer.LastVerification.CompletedAt));
 
         TaskId? retriedTaskId = null;
         string? retryMessage = null;
@@ -79,6 +83,10 @@ public sealed class ConductorDriverTestsStaleFindingRouting
 
         Assert.Equal(WorkTaskStatus.Failed, reviewer.Status);
         Assert.Null(reviewer.LastVerification!.MergedReviewFindings);
+        Assert.Empty(AutoReviewRetryConvergenceBriefBuilder.ReadStructuredReviewFindingState(
+            goal,
+            AgentRole.Tester,
+            reviewer.LastVerification.CompletedAt));
 
         TaskId? retriedTaskId = null;
         string? retryMessage = null;
@@ -100,6 +108,54 @@ public sealed class ConductorDriverTestsStaleFindingRouting
         Assert.DoesNotContain("owned-exit-200x-saturation-test-missing", retryMessage, StringComparison.Ordinal);
         Assert.DoesNotContain("owned-exit-disposed-handle-probe-test-missing", retryMessage, StringComparison.Ordinal);
         Assert.True(result.Outcome is ConductorAdvanceOutcome.Executed);
+    }
+
+    [Xunit.Fact]
+    public void ManualPassSupersedesTesterFindingWithoutNewDeveloperCompletion()
+    {
+        var (kernel, goal) = SoftwareGoal();
+        var developer = goal.Tasks.Single(task => task.RequiredRole == AgentRole.Developer);
+        var tester = goal.Tasks.Single(task => task.RequiredRole == AgentRole.Tester);
+        var startedAt = new DateTimeOffset(2026, 9, 4, 21, 30, 0, TimeSpan.Zero);
+
+        RecordCommittedDeveloperPass(kernel, goal, developer, startedAt);
+        RecordTesterFindings(kernel, goal, tester, startedAt.AddMinutes(3));
+        kernel.ReportTaskProgress(goal.Id, tester.Id, WorkTaskStatus.Completed, "Operator closed the Tester.");
+        kernel.RecordTaskVerification(
+            goal.Id,
+            tester.Id,
+            ManualVerificationRecorder.Create(
+                passed: true,
+                "Operator confirmed the Tester finding is resolved.",
+                "C:\\tmp",
+                startedAt.AddMinutes(4)));
+
+        Assert.Equal(WorkTaskStatus.Completed, tester.Status);
+        Assert.Empty(AutoReviewRetryConvergenceBriefBuilder.ReadStructuredReviewFindingState(goal, tester));
+    }
+
+    [Xunit.Fact]
+    public void ApparatusFailedTesterRerunDoesNotResolveItsCurrentFinding()
+    {
+        var (kernel, goal) = SoftwareGoal();
+        var developer = goal.Tasks.Single(task => task.RequiredRole == AgentRole.Developer);
+        var tester = goal.Tasks.Single(task => task.RequiredRole == AgentRole.Tester);
+        var startedAt = new DateTimeOffset(2026, 9, 4, 21, 30, 0, TimeSpan.Zero);
+
+        RecordCommittedDeveloperPass(kernel, goal, developer, startedAt);
+        RecordTesterFindings(kernel, goal, tester, startedAt.AddMinutes(3));
+        kernel.RetryTask(goal.Id, tester.Id, "Retry Tester after an apparatus failure.");
+        RecordUnparseableNeedsWork(kernel, goal, tester, startedAt.AddMinutes(4), "test");
+
+        Assert.Equal(WorkTaskStatus.Failed, tester.Status);
+        Assert.Null(tester.LastVerification!.MergedReviewFindings);
+        var findings = AutoReviewRetryConvergenceBriefBuilder.ReadStructuredReviewFindingState(
+            goal,
+            AgentRole.Tester,
+            tester.LastVerification.CompletedAt);
+        Assert.Equal(2, findings.Count);
+        Assert.Contains(findings, finding =>
+            finding.StableId == "owned-exit-200x-saturation-test-missing");
     }
 
     private static void RecordCommittedDeveloperPass(
@@ -177,11 +233,19 @@ public sealed class ConductorDriverTestsStaleFindingRouting
         AgentOrchestratorKernel kernel,
         Goal goal,
         TaskSpec reviewer,
-        DateTimeOffset completedAt)
+        DateTimeOffset completedAt) =>
+        RecordUnparseableNeedsWork(kernel, goal, reviewer, completedAt, "review");
+
+    private static void RecordUnparseableNeedsWork(
+        AgentOrchestratorKernel kernel,
+        Goal goal,
+        TaskSpec task,
+        DateTimeOffset completedAt,
+        string command)
     {
-        DispatchTask(kernel, goal, reviewer, "review");
-        kernel.RecordDispatchExecutionResult(goal.Id, reviewer.Id, new TaskVerificationRecord(
-            "review",
+        DispatchTask(kernel, goal, task, command);
+        kernel.RecordDispatchExecutionResult(goal.Id, task.Id, new TaskVerificationRecord(
+            command,
             "C:\\tmp",
             1,
             string.Join(
