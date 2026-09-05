@@ -438,6 +438,50 @@ internal sealed class OwnedProcessGroup : IDisposable
 
         internal OwnedProcessGroup Group { get; }
         internal Process Process { get; }
+        internal bool HasOwnedExitObservation =>
+            _processHandle is { IsClosed: false, IsInvalid: false };
+
+        internal int? TryReadOwnedExitCode()
+        {
+            var processHandle = RequireExitObservationHandle();
+            using var waitHandle = new NativeProcessWaitHandle(processHandle);
+            return waitHandle.WaitOne(TimeSpan.Zero)
+                ? WindowsJob.ReadProcessExitCode(processHandle)
+                : null;
+        }
+
+        internal bool WaitForOwnedExit(TimeSpan timeout)
+        {
+            using var waitHandle = new NativeProcessWaitHandle(RequireExitObservationHandle());
+            return waitHandle.WaitOne(timeout);
+        }
+
+        internal async Task WaitForOwnedExitAsync(CancellationToken cancellationToken)
+        {
+            using var waitHandle = new NativeProcessWaitHandle(RequireExitObservationHandle());
+            var completion = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+            var registeredWait = ThreadPool.RegisterWaitForSingleObject(
+                waitHandle,
+                static (state, _) => ((TaskCompletionSource)state!).TrySetResult(),
+                completion,
+                Timeout.InfiniteTimeSpan,
+                executeOnlyOnce: true);
+            using var cancellationRegistration = cancellationToken.Register(
+                static state =>
+                {
+                    var (source, token) = ((TaskCompletionSource Source, CancellationToken Token))state!;
+                    source.TrySetCanceled(token);
+                },
+                (completion, cancellationToken));
+            try
+            {
+                await completion.Task.ConfigureAwait(false);
+            }
+            finally
+            {
+                registeredWait.Unregister(null);
+            }
+        }
 
         internal void Resume()
         {
@@ -486,6 +530,54 @@ internal sealed class OwnedProcessGroup : IDisposable
             _processHandle?.Dispose();
             _processHandle = null;
             Process.Dispose();
+        }
+
+        private SafeFileHandle RequireExitObservationHandle()
+        {
+            if (!HasOwnedExitObservation)
+            {
+                throw new InvalidOperationException("Owned process exit handle is unavailable for exit observation.");
+            }
+
+            return _processHandle!;
+        }
+
+        private sealed class NativeProcessWaitHandle : WaitHandle
+        {
+            private readonly SafeFileHandle _processHandle;
+            private bool _addedRef;
+
+            internal NativeProcessWaitHandle(SafeFileHandle processHandle)
+            {
+                _processHandle = processHandle;
+                try
+                {
+                    processHandle.DangerousAddRef(ref _addedRef);
+                    SafeWaitHandle = new SafeWaitHandle(processHandle.DangerousGetHandle(), ownsHandle: false);
+                }
+                catch
+                {
+                    ReleaseProcessHandle();
+                    throw;
+                }
+            }
+
+            protected override void Dispose(bool explicitDisposing)
+            {
+                base.Dispose(explicitDisposing);
+                ReleaseProcessHandle();
+            }
+
+            private void ReleaseProcessHandle()
+            {
+                if (!_addedRef)
+                {
+                    return;
+                }
+
+                _addedRef = false;
+                _processHandle.DangerousRelease();
+            }
         }
     }
 

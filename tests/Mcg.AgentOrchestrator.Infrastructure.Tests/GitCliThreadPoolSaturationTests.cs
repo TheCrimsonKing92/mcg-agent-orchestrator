@@ -15,7 +15,12 @@ public sealed class GitCliThreadPoolSaturationTests
     public void GitCliRunDrainsOutputWhileTheThreadPoolIsSaturated()
     {
         var repo = CreateSeededRepository();
-        using var release = new ManualResetEventSlim(false);
+        // Deliberately NOT disposed: the queued work items below outlive this method, and any item that
+        // has not yet started when the method returns would call Wait() on a disposed event and throw
+        // ObjectDisposedException on a pool thread, crashing the test host (observed on a copy of this
+        // test in goal 715e53b7: 25 unhandled exceptions, exit 0xE0434352). A set, undisposed slim event
+        // holds no kernel object and is collected with the closure.
+        var release = new ManualResetEventSlim(false);
         ThreadPool.GetMinThreads(out var minWorkerThreads, out _);
         // Twice the minimum plus a margin: the pool injects roughly one or two threads per second
         // above the minimum, so the backlog outlives GitCli's 5 s drain window.

@@ -29,6 +29,7 @@ public sealed class ProcessSpawningCollectionSplitTests
         typeof(GoalWorktreeIsolatedDotnetTests),
         typeof(LauncherScriptTests),
         typeof(MtpTestRunnerScriptTests),
+        typeof(OwnedProcessExitObservationTests),
         typeof(ProcessTreeGuiSuppressionTests)
     ];
 

@@ -96,7 +96,8 @@ internal static WorkerDispatchTestsSeededRepositoryFactory.GitProbeResult RunGit
     IReadOnlyDictionary<string, string>? commandEnvironment = null,
     Func<Process, bool>? startProcess = null,
     IReadOnlyDictionary<string, string?>? inheritedEnvironment = null,
-    Action<string, string>? beforeOwnedCaptureRead = null)
+    Action<string, string>? beforeOwnedCaptureRead = null,
+    Action<OwnedProcessGroup.SuspendedProcessStart>? beforeOwnedExitObservation = null)
 {
     var executable = ResolveNativeGitExecutable(inheritedEnvironment);
     var effectiveArguments = new[]
@@ -180,7 +181,8 @@ internal static WorkerDispatchTestsSeededRepositoryFactory.GitProbeResult RunGit
             workingDirectory,
             command,
             environmentContract + "; capture=owned-file-handles; inheritedHandles=stdout,stderr",
-            beforeOwnedCaptureRead);
+            beforeOwnedCaptureRead,
+            beforeOwnedExitObservation);
     }
 
     startInfo.RedirectStandardInput = true;
@@ -336,7 +338,8 @@ private static WorkerDispatchTestsSeededRepositoryFactory.GitProbeResult RunGitP
     string workingDirectory,
     string command,
     string environmentContract,
-    Action<string, string>? beforeCaptureRead)
+    Action<string, string>? beforeCaptureRead,
+    Action<OwnedProcessGroup.SuspendedProcessStart>? beforeExitObservation)
 {
     var repositoryDirectory = Path.GetFullPath(workingDirectory);
     // Capture files must live outside the probed repository tree. Seeded-repository fixtures
@@ -375,32 +378,26 @@ private static WorkerDispatchTestsSeededRepositoryFactory.GitProbeResult RunGitP
         }
 
         launch.Resume();
-        var timedOut = false;
-        using (var timeout = new CancellationTokenSource(TimeSpan.FromSeconds(60)))
+        var timedOut = !launch.WaitForOwnedExit(TimeSpan.FromSeconds(60));
+        if (timedOut)
         {
-            try
-            {
-                process.WaitForExitAsync(timeout.Token).GetAwaiter().GetResult();
-            }
-            catch (OperationCanceledException)
-            {
-                timedOut = true;
-                launch.Group.Kill();
-                try { process.WaitForExit(5000); } catch { }
-            }
+            launch.Group.Kill();
+            _ = launch.WaitForOwnedExit(TimeSpan.FromSeconds(5));
         }
 
         beforeCaptureRead?.Invoke(standardOutputPath, standardErrorPath);
+        beforeExitObservation?.Invoke(launch);
         var standardOutputCapture = CaptureStreamAsync(standardOutputStream).GetAwaiter().GetResult();
         var standardErrorCapture = CaptureStreamAsync(standardErrorStream).GetAwaiter().GetResult();
         var standardOutput = Encoding.UTF8.GetString(standardOutputCapture.Prefix);
         var standardError = Encoding.UTF8.GetString(standardErrorCapture.Prefix);
         var boundedOutput = WorkerDispatchTestsSeededRepositoryFactory.GitProbeResult.BoundDiagnostic(standardOutput);
         var boundedError = WorkerDispatchTestsSeededRepositoryFactory.GitProbeResult.BoundDiagnostic(standardError);
+        var observedExitCode = launch.TryReadOwnedExitCode();
         return new WorkerDispatchTestsSeededRepositoryFactory.GitProbeResult(
             command,
             ProcessStarted: true,
-            ExitCode: process.HasExited ? process.ExitCode : null,
+            ExitCode: observedExitCode,
             StandardOutput: boundedOutput,
             StandardError: boundedError,
             DrainTimedOut: false,
@@ -418,7 +415,7 @@ private static WorkerDispatchTestsSeededRepositoryFactory.GitProbeResult RunGitP
             ChildStartedAt: childStartedAt,
             Classification: ClassifyGitProbe(
                 processStarted: true,
-                process.HasExited ? process.ExitCode : null,
+                observedExitCode,
                 timedOut,
                 drainTimedOut: false,
                 drainFailed: false));
@@ -426,13 +423,14 @@ private static WorkerDispatchTestsSeededRepositoryFactory.GitProbeResult RunGitP
     catch (Exception ex)
     {
         int? observedExitCode = null;
-        if (processStarted && process is not null)
+        if (processStarted && launch is not null)
         {
             try
             {
-                observedExitCode = process.HasExited ? process.ExitCode : null;
+                observedExitCode = launch.TryReadOwnedExitCode();
             }
-            catch (InvalidOperationException)
+            catch (Exception observationFailure)
+                when (observationFailure is InvalidOperationException or System.ComponentModel.Win32Exception)
             {
                 // The parent-side observation failed after the native launch created the Git child.
             }
