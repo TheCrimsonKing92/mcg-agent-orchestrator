@@ -781,7 +781,7 @@ public sealed class WorkerDispatchTestsSandboxLowIntegrity : WorkerDispatchTestS
     Assert.Contains("--permission-mode 'dontAsk'", researcher.LastDispatch.Command, StringComparison.Ordinal);
     Assert.Contains("--restricted", researcher.LastDispatch.Command, StringComparison.Ordinal);
     Assert.Contains("--tools 'Read,Glob,Grep,Bash,WebFetch,WebSearch,TodoWrite'", researcher.LastDispatch.Command, StringComparison.Ordinal);
-    Assert.Contains("--allowed-tools 'Read,Glob,Grep,Bash(git log *),Bash(rg *),WebFetch,WebSearch,TodoWrite'", researcher.LastDispatch.Command, StringComparison.Ordinal);
+    Assert.Contains("--allowed-tools 'Read,Glob,Grep,Bash(git log *),Bash(git diff *),Bash(git show *),Bash(git status *),Bash(git merge-base *),Bash(git rev-parse *),Bash(git blame *),Bash(git ls-files *),Bash(git branch *),Bash(git cat-file *),Bash(rg *),WebFetch,WebSearch,TodoWrite'", researcher.LastDispatch.Command, StringComparison.Ordinal);
     Assert.Contains("--disallowed-tools 'Edit,Write,NotebookEdit'", researcher.LastDispatch.Command, StringComparison.Ordinal);
     Assert.DoesNotContain("--allowed-tools 'Read,Glob,Grep,Bash,", researcher.LastDispatch.Command, StringComparison.Ordinal);
     Assert.DoesNotContain(",Task", researcher.LastDispatch.Command, StringComparison.Ordinal);
@@ -943,7 +943,7 @@ public sealed class WorkerDispatchTestsSandboxLowIntegrity : WorkerDispatchTestS
     Assert.Contains("--permission-mode 'bypassPermissions'", developerTask.LastDispatch!.Command, StringComparison.Ordinal);
     Assert.Contains("--permission-mode 'dontAsk'", reviewerTask.LastDispatch!.Command, StringComparison.Ordinal);
     Assert.Contains("--restricted", reviewerTask.LastDispatch.Command, StringComparison.Ordinal);
-    Assert.Contains("--allowed-tools 'Read,Glob,Grep,Bash(git log *),Bash(rg *),WebFetch,WebSearch,TodoWrite'", reviewerTask.LastDispatch.Command, StringComparison.Ordinal);
+    Assert.Contains("--allowed-tools 'Read,Glob,Grep,Bash(git log *),Bash(git diff *),Bash(git show *),Bash(git status *),Bash(git merge-base *),Bash(git rev-parse *),Bash(git blame *),Bash(git ls-files *),Bash(git branch *),Bash(git cat-file *),Bash(rg *),WebFetch,WebSearch,TodoWrite'", reviewerTask.LastDispatch.Command, StringComparison.Ordinal);
     Assert.Contains("--disallowed-tools 'Edit,Write,NotebookEdit'", reviewerTask.LastDispatch.Command, StringComparison.Ordinal);
     Assert.DoesNotContain(",Task", reviewerTask.LastDispatch.Command, StringComparison.Ordinal);
     Assert.DoesNotContain("--permission-mode 'plan'", reviewerTask.LastDispatch.Command, StringComparison.Ordinal);
@@ -989,10 +989,22 @@ public sealed class WorkerDispatchTestsSandboxLowIntegrity : WorkerDispatchTestS
     Assert.Contains("--permission-mode 'dontAsk'", researcherTask.LastDispatch!.Command, StringComparison.Ordinal);
     Assert.Contains("--restricted", researcherTask.LastDispatch.Command, StringComparison.Ordinal);
     Assert.Contains("--tools 'Read,Glob,Grep,Bash,WebFetch,WebSearch,TodoWrite'", researcherTask.LastDispatch.Command, StringComparison.Ordinal);
-    Assert.Contains("--allowed-tools 'Read,Glob,Grep,Bash(git log *),Bash(rg *),WebFetch,WebSearch,TodoWrite'", researcherTask.LastDispatch.Command, StringComparison.Ordinal);
+    Assert.Contains("--allowed-tools 'Read,Glob,Grep,Bash(git log *),Bash(git diff *),Bash(git show *),Bash(git status *),Bash(git merge-base *),Bash(git rev-parse *),Bash(git blame *),Bash(git ls-files *),Bash(git branch *),Bash(git cat-file *),Bash(rg *),WebFetch,WebSearch,TodoWrite'", researcherTask.LastDispatch.Command, StringComparison.Ordinal);
     Assert.Contains("--disallowed-tools 'Edit,Write,NotebookEdit'", researcherTask.LastDispatch.Command, StringComparison.Ordinal);
     Assert.DoesNotContain("--allowed-tools 'Read,Glob,Grep,Bash,", researcherTask.LastDispatch.Command, StringComparison.Ordinal);
     Assert.DoesNotContain(",Task", researcherTask.LastDispatch.Command, StringComparison.Ordinal);
+    var allowedTools = researcherTask.LastDispatch.Command
+        .Split("--allowed-tools '", 2, StringSplitOptions.None)[1]
+        .Split('\'', 2)[0]
+        .Split(',');
+    Assert.DoesNotContain(
+        allowedTools,
+        tool => tool.Equals("Bash", StringComparison.Ordinal) ||
+            tool.StartsWith("Bash(git commit ", StringComparison.Ordinal) ||
+            tool.StartsWith("Bash(git push ", StringComparison.Ordinal) ||
+            tool.StartsWith("Bash(git checkout ", StringComparison.Ordinal) ||
+            tool.StartsWith("Bash(git reset ", StringComparison.Ordinal) ||
+            tool.StartsWith("Bash(git worktree ", StringComparison.Ordinal));
     Assert.Contains("--permission-mode 'bypassPermissions'", developerTask.LastDispatch!.Command, StringComparison.Ordinal);
     Assert.DoesNotContain("--restricted", developerTask.LastDispatch.Command, StringComparison.Ordinal);
     Assert.DoesNotContain("--allowed-tools", developerTask.LastDispatch.Command, StringComparison.Ordinal);
