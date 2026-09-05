@@ -686,4 +686,94 @@ public sealed class ConductorBatchLoopTestsOperatorIntents : ConductorBatchLoopT
             }
         }
     }
+
+    [Xunit.Fact]
+    public async Task ProgressCompletion_UsesResolvedGoalHead()
+    {
+        var root = CreateTempDirectory("mcg-loop-operator-head");
+        try
+        {
+            var kernel = new AgentOrchestratorKernel();
+            var goal = kernel.CreateGoal(
+                "Apply an operator close against the current candidate",
+                [
+                    new TaskSpec(TaskId.New(), "Implement fix", AgentRole.Developer),
+                    new TaskSpec(TaskId.New(), "Test fix", AgentRole.Tester),
+                    new TaskSpec(TaskId.New(), "Review fix", AgentRole.Reviewer)
+                ]);
+            kernel.ActivateGoal(goal.Id, DefaultAgents());
+            var developer = goal.Tasks.Single(task => task.RequiredRole == AgentRole.Developer);
+            var tester = goal.Tasks.Single(task => task.RequiredRole == AgentRole.Tester);
+            var reviewer = goal.Tasks.Single(task => task.RequiredRole == AgentRole.Reviewer);
+            CompleteCandidateDispatch(kernel, goal, developer, "aaa111");
+            CompleteCandidateDispatch(kernel, goal, tester, "aaa111");
+            CompleteCandidateDispatch(kernel, goal, reviewer, "aaa111");
+            kernel.RetryTask(goal.Id, developer.Id, "Close unchanged work mechanically.");
+
+            var store = new SqliteOperatorIntentStore(
+                Path.Combine(root, "operator-intents.db"),
+                Path.Combine(root, "logs"));
+            var intent = new OperatorIntentRecord(
+                Guid.NewGuid().ToString("N"),
+                "operator-close-current-head",
+                OperatorIntentVerbs.Progress,
+                goal.Id.Value,
+                developer.Id.Value,
+                JsonSerializer.Serialize(
+                    new ProgressOperatorIntentPayload(WorkTaskStatus.Completed, "Operator closed unchanged work."),
+                    new JsonSerializerOptions(JsonSerializerDefaults.Web)),
+                [],
+                "operator",
+                "cli",
+                "local-process",
+                DateTimeOffset.UtcNow);
+            await store.EnqueueAsync(intent);
+            GoalId? resolvedGoalId = null;
+            var coordinator = new OperatorIntentCoordinator(
+                store,
+                goalHeadResolver: goalId =>
+                {
+                    resolvedGoalId = goalId;
+                    return "aaa111";
+                });
+
+            var result = coordinator.ExecutePending(kernel, goal);
+
+            Assert.True(result.MutatedGoalState);
+            Assert.Equal(goal.Id, resolvedGoalId);
+            Assert.Equal(WorkTaskStatus.Completed, tester.Status);
+            Assert.Equal(WorkTaskStatus.Completed, reviewer.Status);
+            Assert.Equal(OperatorIntentStatus.Claimed, (await store.GetAsync(intent.Id))!.Status);
+        }
+        finally
+        {
+            TryDeleteDirectory(root);
+        }
+    }
+
+    private static void CompleteCandidateDispatch(
+        AgentOrchestratorKernel kernel,
+        Goal goal,
+        TaskSpec task,
+        string candidate)
+    {
+        kernel.RecordTaskDispatch(
+            goal.Id,
+            task.Id,
+            new TaskDispatchRecord(task.RequiredRole.ToString(), "worker", "C:\\repo", DateTimeOffset.UtcNow));
+        kernel.RecordDispatchBaseCommit(goal.Id, task.Id, candidate);
+        kernel.RecordDispatchResultCommit(goal.Id, task.Id, candidate);
+        kernel.ReportTaskProgress(goal.Id, task.Id, WorkTaskStatus.Completed, $"{task.RequiredRole} done.");
+        kernel.RecordTaskVerification(
+            goal.Id,
+            task.Id,
+            new TaskVerificationRecord(
+                "dotnet test",
+                "C:\\repo",
+                0,
+                "passed",
+                string.Empty,
+                DateTimeOffset.UtcNow,
+                ReviewedCommit: candidate));
+    }
 }
