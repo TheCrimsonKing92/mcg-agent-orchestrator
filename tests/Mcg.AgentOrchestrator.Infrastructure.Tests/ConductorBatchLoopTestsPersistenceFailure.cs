@@ -933,6 +933,38 @@ public sealed class ConductorBatchLoopTestsPersistenceFailure : ConductorBatchLo
 
     // ── Per-tick write scope: persistGoalTick fires once with exactly the goals that changed ──
 
+    [Xunit.Fact]
+    public void RefreshTaskNoteWithoutDurableTaskFieldChange_IsPersistedThisTick()
+    {
+        var kernel = new AgentOrchestratorKernel();
+        var goal = GoalLifecycleCommands.CreateAndActivateSimpleGoal(kernel, DefaultAgents(), "refresh note persistence");
+        var task = goal.Tasks.Single();
+        StartProcess(kernel, goal, task, DateTimeOffset.Parse("2026-09-05T10:00:00Z"), "base");
+        var refreshes = 0;
+        var persistedGoalBatches = new List<GoalId[]>();
+        var loop = new ConductorBatchLoop(refreshGoalDispatchesBeforeAdvance: (refreshKernel, refreshGoal) =>
+        {
+            refreshes++;
+            if (refreshes == 2)
+                refreshKernel.RecordTaskNote(refreshGoal.Id, task.Id, "Apparatus hold discovered during refresh.");
+            return null;
+        });
+
+        loop.Run(
+            kernel,
+            MakeDriver(getFacts: _ => new GoalLifecycleFacts(WorkspaceExists: true)),
+            ConductorAutonomyPolicy.Conservative,
+            NoStopPath(),
+            maxIterations: 2,
+            watchInterval: TimeSpan.FromMilliseconds(1),
+            sleepFunc: _ => false,
+            persistGoalTick: (_, changedGoalIds) => persistedGoalBatches.Add(changedGoalIds.ToArray()));
+
+        Assert.Equal(2, refreshes);
+        Assert.Equal(2, persistedGoalBatches.Count);
+        Assert.Contains(goal.Id, persistedGoalBatches[1]);
+    }
+
     [Xunit.Fact(DisplayName = "PersistGoalTick_busy_exhausted_aborts_changed_goal_tick")]
     public void PersistGoalTickBusyExhaustedAbortsChangedGoalTick()
     {

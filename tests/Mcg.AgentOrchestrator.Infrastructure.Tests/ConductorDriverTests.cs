@@ -352,6 +352,58 @@ public sealed class ConductorDriverTests
         return path;
     }
 
+    private static async Task<(OrchestratorWorkspace Workspace, RetryContextFingerprint Fingerprint)>
+        SeedFailedTaskWithActiveRetryReservationAsync(
+            AgentOrchestratorKernel kernel,
+            Goal goal,
+            TaskSpec task)
+    {
+        var workspace = OrchestratorWorkspace.ForDirectory(CreateTempDirectory());
+        _ = StateDbMigrations.EnsureUpToDate(workspace.SqliteStatePath);
+        var repository = new SqliteOrchestratorStateRepository(workspace.SqliteStatePath);
+        var fingerprint = new RetryContextFingerprint(
+            RetryContextFingerprint.CurrentSchemaVersion,
+            "same-paid-candidate");
+        var firstDispatchAt = DateTimeOffset.Parse("2026-09-05T10:00:00Z");
+        var firstDispatch = new TaskDispatchRecord(
+            "test-worker",
+            "powershell.exe -Command first",
+            "C:\\tmp",
+            firstDispatchAt,
+            RetryContextFingerprint: fingerprint,
+            PaidRoute: PaidRouteClassification.Paid);
+        kernel.RecordTaskDispatch(goal.Id, task.Id, firstDispatch);
+        await repository.SaveAsync(kernel);
+        var firstReservation = await RetryAdmissionReservationStore.TryReserveAsync(
+            workspace.SqliteStatePath,
+            goal.Id,
+            task.Id,
+            fingerprint,
+            PaidRouteClassification.Paid,
+            RetryCause.EnvironmentApparatusFailure,
+            firstDispatch,
+            firstDispatchAt,
+            "orphaned-owner",
+            DateTimeOffset.UtcNow.AddMinutes(5));
+        Assert.NotNull(firstReservation);
+        Assert.True(firstReservation!.Admission.AllowsProcessStart);
+        kernel.ReplaceGoalWithSnapshot(firstReservation.Snapshot);
+        kernel.RecordDispatchExecutionResult(
+            goal.Id,
+            task.Id,
+            new TaskVerificationRecord(
+                firstDispatch.Command,
+                firstDispatch.WorkingDirectory,
+                1,
+                string.Empty,
+                "powershell.exe: ParserError: Unexpected token '}' in expression.",
+                DateTimeOffset.UtcNow,
+                ProviderFailureKind: ProviderFailureKind.RateLimit));
+        await repository.SaveAsync(kernel);
+        Assert.Equal(WorkTaskStatus.Failed, kernel.GetTask(goal.Id, task.Id).Status);
+        return (workspace, fingerprint);
+    }
+
     internal static void RunGit(string workingDirectory, params string[] args)
     {
         var result = GitCli.Run(workingDirectory, args);
@@ -1119,40 +1171,115 @@ public sealed class ConductorDriverTests
         Assert.Equal(failureReason, outcome.Reason);
     }
 
-    [Xunit.Fact]
-    public void ConductorDriverPreparedDispatchWithoutStartReportsBothStateViews()
+    [Xunit.Fact(DisplayName = "ConductorDriver_prepared_dispatch_without_start_reports_both_state_views")]
+    public async Task ConductorDriverPreparedDispatchWithoutStartReportsBothStateViews()
     {
         var (kernel, goal) = SimpleGoal();
         var task = goal.Tasks.Single();
-        DispatchTask(kernel, goal, task);
-        var plan = new ProcessBatchPlan(
-            goal.Id,
-            goal.Objective,
-            goal.Status,
-            ProcessBatchActionKind.StartDispatches,
-            ReadyCount: 0,
-            SkippedCount: 1,
-            Items:
-            [
-                new ProcessBatchPlanItem(
-                    task.Id,
-                    task.RequiredRole,
-                    task.Description,
-                    WorkTaskStatus.Assigned,
-                    ProcessBatchItemStatus.Skipped,
-                    "Task status is Assigned; only running dispatched tasks can be started.")
-            ]);
+        var seeded = await SeedFailedTaskWithActiveRetryReservationAsync(kernel, goal, task);
+        kernel.RetryTask(goal.Id, task.Id, "Retry the refused candidate.", RetryCause.EnvironmentApparatusFailure);
+        var preparedTask = kernel.GetTask(goal.Id, task.Id);
+        var preparedDispatch = new TaskDispatchRecord(
+            "test-worker",
+            "powershell.exe -Command second",
+            "C:\\tmp",
+            DateTimeOffset.Parse("2026-09-05T10:01:00Z"),
+            RetryContextFingerprint: seeded.Fingerprint,
+            PaidRoute: PaidRouteClassification.Paid);
+        kernel.RecordTaskDispatch(goal.Id, task.Id, preparedDispatch);
+        var prepared = new WorkerProfileDispatchResult(preparedTask, @"C:\repo\.orchestrator\prompts\task.md");
+        var processes = GoalManagementCommandService.StartDispatches(
+            kernel,
+            seeded.Workspace,
+            kernel.GetGoal(goal.Id),
+            refreshBeforeStart: false);
         var result = new SubscriptionStartResult(
-            [new WorkerProfileDispatchResult(task, @"C:\repo\.orchestrator\prompts\task.md")],
-            new ProcessBatchExecutionResult(plan, []),
+            [prepared],
+            processes,
             new ParallelExecutionPlan([], []),
             []);
 
+        var refusal = Assert.Single(processes.StartRefusals!);
+        Assert.Equal(task.Id, refusal.TaskId);
+        Assert.Contains("Prepared retry reservation is owned until", refusal.Reason, StringComparison.Ordinal);
+        Assert.Null(kernel.GetTask(goal.Id, task.Id).LastProcess);
         var outcome = ConductorDriver.ClassifySubscriptionStartForConductor(result);
 
         Assert.Equal(DispatchStartOutcomeCategory.SpawnFailed, outcome.Category);
-        Assert.Contains("Task status is Assigned", outcome.Reason, StringComparison.Ordinal);
+        Assert.Contains(
+            $"task {task.Id.Value[..8]}: Prepared retry reservation is owned until",
+            outcome.Reason,
+            StringComparison.Ordinal);
         Assert.Contains($"{task.Id.Value[..8]}:status=Running:admission=none", outcome.Reason, StringComparison.Ordinal);
+    }
+
+    [Xunit.Fact(DisplayName = "ConductorDriver_repeated_refused_start_stays_set_aside_after_first_retry_and_dispatch")]
+    public async Task ConductorDriverRepeatedRefusedStartStaysSetAsideAfterFirstRetryAndDispatch()
+    {
+        var (kernel, goal) = SimpleGoal();
+        var task = goal.Tasks.Single();
+        var seeded = await SeedFailedTaskWithActiveRetryReservationAsync(kernel, goal, task);
+        var repository = new SqliteOrchestratorStateRepository(seeded.Workspace.SqliteStatePath);
+        var heldGoal = GoalLifecycleCommands.CreateAndActivateSimpleGoal(kernel, DefaultAgents(), "held sibling");
+        string? setAsideReason = null;
+        var retriesBeforeTicks = kernel.GetGoal(goal.Id).Timeline.Count(evt => evt.Kind == ProgressKind.TaskRetried);
+        int retriesAfterFirstTick = -1, dispatchesAfterFirstTick = -1;
+        var startAttempts = 0;
+        var driver = MakeDriver(
+            getFacts: _ => new GoalLifecycleFacts(WorkspaceExists: true),
+            dispatchAndStart: currentGoal =>
+            {
+                if (currentGoal.Id == heldGoal.Id)
+                    return DispatchStartOutcome.EmptyBatch("Held sibling remains eligible.");
+                startAttempts++;
+                var preparedDispatch = new TaskDispatchRecord("test-worker", "powershell.exe -Command retry",
+                    "C:\\tmp", DateTimeOffset.Parse("2026-09-05T10:01:00Z"),
+                    RetryContextFingerprint: seeded.Fingerprint,
+                    PaidRoute: PaidRouteClassification.Paid);
+                kernel.RecordTaskDispatch(currentGoal.Id, task.Id, preparedDispatch);
+                var preparedTask = kernel.GetTask(currentGoal.Id, task.Id);
+                var processes = GoalManagementCommandService.StartDispatches(kernel, seeded.Workspace,
+                    kernel.GetGoal(currentGoal.Id),
+                    refreshBeforeStart: false);
+                return ConductorDriver.ClassifySubscriptionStartForConductor(new SubscriptionStartResult(
+                    [new WorkerProfileDispatchResult(preparedTask, @"C:\repo\.orchestrator\prompts\task.md")],
+                    processes, new ParallelExecutionPlan([], []), []));
+            },
+            startRecordedDispatches: currentGoal => currentGoal.Id == heldGoal.Id
+                ? DispatchStartOutcome.EmptyBatch("Held sibling remains eligible.")
+                : DispatchStartOutcome.EmptyBatch("Prepared retry remains held."),
+            buildServerShutdown: () => { },
+            retryTaskWithCause: (goalId, taskId, message, roundKind, cause) =>
+                kernel.RetryTask(goalId, taskId, message, cause, retryRoundKind: roundKind),
+            recordCriterionRetryFeedback: kernel.RecordCriterionRetryFeedback,
+            writeEscalation: (_, _, reason) => setAsideReason = reason);
+
+        var summary = new ConductorBatchLoop().Run(kernel, driver, ConductorAutonomyPolicy.Permissive,
+            Path.Combine(Path.GetTempPath(), $"mcg-no-stop-{Guid.NewGuid():N}"),
+            maxIterations: 2,
+            watchInterval: TimeSpan.FromMilliseconds(1),
+            sleepFunc: _ =>
+            {
+                var persisted = repository.LoadGoalAsync(goal.Id).GetAwaiter().GetResult();
+                Assert.NotNull(persisted);
+                kernel.ReplaceGoalStateWithSnapshot(persisted!, []);
+                Assert.Equal(GoalStatus.Active, kernel.GetGoal(goal.Id).Status);
+                var durableTask = kernel.GetTask(goal.Id, task.Id);
+                Assert.Equal(WorkTaskStatus.Failed, durableTask.Status);
+                Assert.NotNull(durableTask.LatestRetryAt);
+                retriesAfterFirstTick = kernel.GetGoal(goal.Id).Timeline.Count(evt => evt.Kind == ProgressKind.TaskRetried);
+                dispatchesAfterFirstTick = kernel.GetGoal(goal.Id).Timeline.Count(evt => evt.Kind == ProgressKind.TaskDispatchRecorded);
+                return false;
+            });
+        Assert.Equal(2, summary.Ticks);
+        Assert.Equal(1, startAttempts);
+        Assert.Equal(retriesBeforeTicks + 1, retriesAfterFirstTick);
+        Assert.Equal(1, dispatchesAfterFirstTick);
+        Assert.Equal(retriesAfterFirstTick, kernel.GetGoal(goal.Id).Timeline.Count(evt => evt.Kind == ProgressKind.TaskRetried));
+        Assert.Equal(dispatchesAfterFirstTick, kernel.GetGoal(goal.Id).Timeline.Count(evt => evt.Kind == ProgressKind.TaskDispatchRecorded));
+        Assert.Contains(task.Id.Value[..8], setAsideReason, StringComparison.Ordinal);
+        Assert.Contains("Prepared retry reservation is owned until", setAsideReason, StringComparison.Ordinal);
+        Assert.Equal(WorkTaskStatus.Failed, kernel.GetTask(goal.Id, task.Id).Status);
     }
 
     [Xunit.Fact(DisplayName = "ConductorDriver_recorded_start_mixed_started_and_registration_failure_keeps_live_progress")]

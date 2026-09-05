@@ -12,25 +12,40 @@ public sealed class TaskProcessTests
         [
             new TaskSpec(TaskId.New(), "Ready", AgentRole.Developer),
             new TaskSpec(TaskId.New(), "No dispatch", AgentRole.Tester),
-            new TaskSpec(TaskId.New(), "Already running", AgentRole.Reviewer)
+            new TaskSpec(TaskId.New(), "Already running", AgentRole.Reviewer),
+            new TaskSpec(TaskId.New(), "Failed", AgentRole.Developer),
+            new TaskSpec(TaskId.New(), "Completed", AgentRole.Tester),
+            new TaskSpec(TaskId.New(), "Admission held", AgentRole.Reviewer)
         ]);
     kernel.ActivateGoal(goal.Id, DefaultAgents());
     var ready = goal.Tasks[0];
     var noDispatch = goal.Tasks[1];
     var alreadyRunning = goal.Tasks[2];
+    var failed = goal.Tasks[3];
+    var completed = goal.Tasks[4];
+    var admissionHeld = goal.Tasks[5];
     kernel.RecordTaskDispatch(goal.Id, ready.Id, new TaskDispatchRecord("local", "echo ready", "C:\\repo", clock.UtcNow));
     kernel.ReportTaskProgress(goal.Id, noDispatch.Id, WorkTaskStatus.Running, "Started without dispatch.");
     kernel.RecordTaskDispatch(goal.Id, alreadyRunning.Id, new TaskDispatchRecord("local", "echo running", "C:\\repo", clock.UtcNow));
     kernel.RecordTaskProcessStarted(goal.Id, alreadyRunning.Id, new TaskProcessRecord(1234, "echo running", "C:\\repo", "out.log", "err.log", "exit.txt", clock.UtcNow, null, null));
+    failed.SetStatus(WorkTaskStatus.Failed);
+    completed.SetStatus(WorkTaskStatus.Completed);
+    admissionHeld.SetRetryAdmissionHold(RetryAdmissionRoute.HumanClarification);
+    admissionHeld.SetStatus(WorkTaskStatus.Failed);
 
     var plan = kernel.BuildProcessBatchPlan(goal.Id, ProcessBatchActionKind.StartDispatches);
 
     Assert.Equal(ProcessBatchActionKind.StartDispatches, plan.Action);
     Assert.Equal(1, plan.ReadyCount);
-    Assert.Equal(2, plan.SkippedCount);
+    Assert.Equal(5, plan.SkippedCount);
     Assert.Equal(ProcessBatchItemStatus.Ready, plan.Items.Single(item => item.TaskId == ready.Id).Status);
     Assert.Contains("no recorded dispatch", plan.Items.Single(item => item.TaskId == noDispatch.Id).Reason, StringComparison.Ordinal);
     Assert.Contains("already has a running process", plan.Items.Single(item => item.TaskId == alreadyRunning.Id).Reason, StringComparison.Ordinal);
+    Assert.Contains("Task status is Failed", plan.Items.Single(item => item.TaskId == failed.Id).Reason, StringComparison.Ordinal);
+    Assert.Contains("Task status is Completed", plan.Items.Single(item => item.TaskId == completed.Id).Reason, StringComparison.Ordinal);
+    Assert.Equal(
+        "Retry admission is held for route HumanClarification.",
+        plan.Items.Single(item => item.TaskId == admissionHeld.Id).Reason);
 }
     [Xunit.Fact(DisplayName = "BuildProcessBatchPlan_explains_refresh_dispatch_readiness")]
     public void BuildProcessBatchPlanExplainsRefreshDispatchReadiness()

@@ -97,6 +97,7 @@ public abstract class ConductorBatchLoopTests
         Func<Goal, ReconcileAcceptanceLeaseState?>? getEvidenceMutationLease = null,
         Action<Goal, IReadOnlyList<string>, string?, string?, IReadOnlyList<AcceptanceCheckAttribution>?, string?>? recordAcceptanceFailure = null,
         Func<Goal, (string? BranchHeadSha, string? MainHeadSha)>? resolveAcceptanceHeads = null,
+        Func<Goal, PreReviewEvidenceContext>? getPreReviewEvidenceContext = null,
         Func<DateTimeOffset>? utcNow = null,
         string? executionDirectory = null) =>
         new ConductorDriver(
@@ -139,6 +140,7 @@ public abstract class ConductorBatchLoopTests
             getEvidenceMutationLease: getEvidenceMutationLease,
             recordAcceptanceFailureWithAttribution: recordAcceptanceFailure,
             resolveAcceptanceHeads: resolveAcceptanceHeads,
+            getPreReviewEvidenceContext: getPreReviewEvidenceContext,
             utcNow: utcNow,
             executionDirectory: executionDirectory);
 
