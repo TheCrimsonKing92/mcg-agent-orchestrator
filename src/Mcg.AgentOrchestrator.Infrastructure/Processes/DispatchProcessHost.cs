@@ -943,6 +943,69 @@ public static class DispatchProcessHost
 
     internal static IWorkerIntegrityLabeler? IntegrityLabelerOverrideForTests;
 
+    internal sealed class HeartbeatWriteGuard(string destinationPath, bool durable)
+    {
+        private readonly object _gate = new();
+        private bool _terminalWritten;
+
+        internal static Action<string, string>? BeforeMoveForTests;
+
+        internal void Write(string state, string payload) =>
+            WriteCore(state, payload, terminal: false);
+
+        internal void WriteTerminal(string state, string payload) =>
+            WriteCore(state, payload, terminal: true);
+
+        private void WriteCore(string state, string payload, bool terminal)
+        {
+            string? temporaryPath = null;
+            try
+            {
+                if (!terminal && Volatile.Read(ref _terminalWritten))
+                {
+                    return;
+                }
+
+                temporaryPath = $"{destinationPath}.{Guid.NewGuid():N}.tmp";
+                if (durable)
+                {
+                    WriteAllTextDurable(temporaryPath, payload);
+                }
+                else
+                {
+                    File.WriteAllText(temporaryPath, payload);
+                }
+
+                BeforeMoveForTests?.Invoke(destinationPath, state);
+                lock (_gate)
+                {
+                    if (!terminal && _terminalWritten)
+                    {
+                        return;
+                    }
+
+                    File.Move(temporaryPath, destinationPath, overwrite: true);
+                    temporaryPath = null;
+                    if (terminal)
+                    {
+                        _terminalWritten = true;
+                    }
+                }
+            }
+            catch
+            {
+                // Heartbeats are best-effort; publication failures must not fail the dispatch.
+            }
+            finally
+            {
+                if (temporaryPath is not null)
+                {
+                    try { File.Delete(temporaryPath); } catch { }
+                }
+            }
+        }
+    }
+
     private static IWorkerIntegrityLabeler ResolveIntegrityLabeler() =>
         IntegrityLabelerOverrideForTests ?? IntegrityLabeler;
 
@@ -1184,6 +1247,12 @@ public static void DropToLow() {
         var heartbeatInterval = parameters.HeartbeatIntervalMilliseconds > 0
             ? TimeSpan.FromMilliseconds(parameters.HeartbeatIntervalMilliseconds)
             : HeartbeatInterval;
+        var heartbeatWriter = string.IsNullOrWhiteSpace(parameters.HeartbeatPath)
+            ? null
+            : new HeartbeatWriteGuard(parameters.HeartbeatPath, durable: false);
+        var prepHeartbeatWriter = string.IsNullOrWhiteSpace(parameters.PrepHeartbeatPath)
+            ? null
+            : new HeartbeatWriteGuard(parameters.PrepHeartbeatPath, durable: true);
 
         void RecordFallbackDiagnostic(string diagnostic)
         {
@@ -1307,9 +1376,9 @@ public static void DropToLow() {
             }
         }
 
-        void WriteHeartbeat(string state)
+        void WriteHeartbeat(string state, bool terminal = false)
         {
-            if (string.IsNullOrWhiteSpace(parameters.HeartbeatPath))
+            if (heartbeatWriter is null)
             {
                 return;
             }
@@ -1364,15 +1433,14 @@ public static void DropToLow() {
                 exitFileExists = File.Exists(parameters.ExitCodePath)
             };
 
-            try
+            var serializedPayload = JsonSerializer.Serialize(payload, JsonOptions);
+            if (terminal)
             {
-                var tmp = parameters.HeartbeatPath + ".tmp";
-                File.WriteAllText(tmp, JsonSerializer.Serialize(payload, JsonOptions));
-                File.Move(tmp, parameters.HeartbeatPath, overwrite: true);
+                heartbeatWriter.WriteTerminal(state, serializedPayload);
             }
-            catch
+            else
             {
-                // Heartbeat is best-effort; never let it fail the dispatch.
+                heartbeatWriter.Write(state, serializedPayload);
             }
         }
 
@@ -1395,9 +1463,9 @@ public static void DropToLow() {
             return (identityBoundOwnedPids, identitySnapshot.Recorded);
         }
 
-        void WritePrepHeartbeat(string state)
+        void WritePrepHeartbeat(string state, bool terminal = false)
         {
-            if (string.IsNullOrWhiteSpace(parameters.PrepHeartbeatPath))
+            if (prepHeartbeatWriter is null)
             {
                 return;
             }
@@ -1414,15 +1482,14 @@ public static void DropToLow() {
                 exitFileExists = !string.IsNullOrWhiteSpace(parameters.PrepExitCodePath) && File.Exists(parameters.PrepExitCodePath)
             };
 
-            try
+            var serializedPayload = JsonSerializer.Serialize(payload, JsonOptions);
+            if (terminal)
             {
-                var tmp = parameters.PrepHeartbeatPath + ".tmp";
-                WriteAllTextDurable(tmp, JsonSerializer.Serialize(payload, JsonOptions));
-                File.Move(tmp, parameters.PrepHeartbeatPath, overwrite: true);
+                prepHeartbeatWriter.WriteTerminal(state, serializedPayload);
             }
-            catch
+            else
             {
-                // Prep heartbeat is best-effort; the exit artifact is the terminal signal.
+                prepHeartbeatWriter.Write(state, serializedPayload);
             }
         }
 
@@ -1457,7 +1524,7 @@ public static void DropToLow() {
                 }
             }
 
-            WritePrepHeartbeat(prepExitCode == 0 ? "exited" : "failed");
+            WritePrepHeartbeat(prepExitCode == 0 ? "exited" : "failed", terminal: true);
         }
 
         using var heartbeatTimer = new Timer(_ => WriteHeartbeat("running"), null, Timeout.Infinite, Timeout.Infinite);
@@ -1585,7 +1652,7 @@ public static void DropToLow() {
             CompletePrep(exitCode == 0 ? 0 : 1);
             // One final heartbeat synchronizes the selected-child handle with the childPid receipt.
             // Freeze that selection into the child record before publishing the completion signal.
-            WriteHeartbeat("exited");
+            WriteHeartbeat("exited", terminal: true);
             WriteSelectedChildExitRecord();
             WorkerProcessJobs.ReadAccountingAndDispose(workerGroup, kill: false, captureAccounting: false, out _);
             // The exit file is the completion signal consumed by BackgroundDispatchRunner. Publish it

@@ -436,6 +436,101 @@ public sealed class DispatchProcessHostTests
         }
     }
 
+    [Xunit.Fact]
+    public void TerminalHeartbeat_ParkedPeriodicWrite_RemainsTerminal()
+    {
+        var dir = Path.Combine(Path.GetTempPath(), "mcg-dispatch-host-heartbeat-race-tests", Guid.NewGuid().ToString("n"));
+        Directory.CreateDirectory(dir);
+        Task<int>? runTask = null;
+        var periodicWriteTimedOut = 0;
+        using var periodicWriteParked = new ManualResetEventSlim();
+        using var releasePeriodicWrite = new ManualResetEventSlim();
+        var workerGatePath = Path.Combine(dir, "release-worker");
+        var heartbeatPath = Path.Combine(dir, "heartbeat.json");
+        try
+        {
+            DispatchProcessHost.HeartbeatWriteGuard.BeforeMoveForTests = (destinationPath, state) =>
+            {
+                if (!string.Equals(destinationPath, heartbeatPath, StringComparison.Ordinal) ||
+                    !string.Equals(state, "running", StringComparison.Ordinal))
+                {
+                    return;
+                }
+
+                periodicWriteParked.Set();
+                if (!releasePeriodicWrite.Wait(TimeSpan.FromSeconds(10)))
+                {
+                    Interlocked.Exchange(ref periodicWriteTimedOut, 1);
+                }
+            };
+
+            var command =
+                $"while (!(Test-Path -LiteralPath '{EscapePowerShellSingleQuoted(workerGatePath)}')) " +
+                "{ Start-Sleep -Milliseconds 10 }; exit 0";
+            var parameters = new DispatchProcessHost.DispatchRunParameters(
+                command,
+                dir,
+                Path.Combine(dir, "out.log"),
+                Path.Combine(dir, "err.log"),
+                Path.Combine(dir, "exit.txt"),
+                heartbeatPath,
+                DisableSharedCompilation: false,
+                Provider: WorkerSandboxProvider.Claude,
+                HeartbeatIntervalMilliseconds: 25);
+            var parametersPath = Path.Combine(dir, "dispatch.json");
+            DispatchProcessHost.WriteParameters(parametersPath, parameters);
+
+            runTask = Task.Run(() => DispatchProcessHost.Run(parametersPath));
+            Assert.True(
+                periodicWriteParked.Wait(TimeSpan.FromSeconds(10)),
+                "A periodic heartbeat write did not reach the pre-publication hook.");
+
+            File.WriteAllText(workerGatePath, "release");
+            Assert.True(
+                SpinWait.SpinUntil(() => ReadHeartbeatState(heartbeatPath) == "exited", TimeSpan.FromSeconds(10)),
+                "The terminal heartbeat was not published while the periodic write was parked.");
+
+            releasePeriodicWrite.Set();
+            Assert.Equal(0, runTask.GetAwaiter().GetResult());
+            Assert.Equal(0, Volatile.Read(ref periodicWriteTimedOut));
+            Assert.Equal("exited", ReadHeartbeatState(heartbeatPath));
+        }
+        finally
+        {
+            DispatchProcessHost.HeartbeatWriteGuard.BeforeMoveForTests = null;
+            releasePeriodicWrite.Set();
+            try { File.WriteAllText(workerGatePath, "release"); } catch { }
+            try { runTask?.Wait(TimeSpan.FromSeconds(5)); } catch { }
+            try { Directory.Delete(dir, recursive: true); } catch { }
+        }
+    }
+
+    [Xunit.Fact]
+    public void HeartbeatWriteGuard_TerminalPublished_RejectsLateNonTerminalWrite()
+    {
+        var dir = Path.Combine(Path.GetTempPath(), "mcg-heartbeat-write-guard-tests", Guid.NewGuid().ToString("n"));
+        Directory.CreateDirectory(dir);
+        try
+        {
+            var heartbeatPath = Path.Combine(dir, "heartbeat.json");
+            var writer = new DispatchProcessHost.HeartbeatWriteGuard(heartbeatPath, durable: false);
+
+            writer.Write("running", "{\"state\":\"running\"}");
+            Assert.Equal("running", ReadHeartbeatState(heartbeatPath));
+
+            writer.WriteTerminal("exited", "{\"state\":\"exited\"}");
+            Assert.Equal("exited", ReadHeartbeatState(heartbeatPath));
+
+            writer.Write("running", "{\"state\":\"running\"}");
+            Assert.Equal("exited", ReadHeartbeatState(heartbeatPath));
+            Assert.Empty(Directory.EnumerateFiles(dir, "heartbeat.json.*.tmp"));
+        }
+        finally
+        {
+            try { Directory.Delete(dir, recursive: true); } catch { }
+        }
+    }
+
     [Xunit.Fact(DisplayName = "DispatchProcessHost_records_failed_stderr_diagnostic_append_in_fallback_artifact")]
     public void DispatchProcessHostRecordsFailedDiagnosticAppend()
     {
@@ -3015,6 +3110,23 @@ public sealed class DispatchProcessHostTests
         finally
         {
             CloseHandle(token);
+        }
+    }
+
+    private static string? ReadHeartbeatState(string path)
+    {
+        try
+        {
+            using var heartbeat = JsonDocument.Parse(File.ReadAllText(path));
+            return heartbeat.RootElement.GetProperty("state").GetString();
+        }
+        catch (IOException)
+        {
+            return null;
+        }
+        catch (JsonException)
+        {
+            return null;
         }
     }
 
