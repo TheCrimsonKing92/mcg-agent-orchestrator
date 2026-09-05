@@ -1922,7 +1922,12 @@ internal sealed partial class ConductorDriver
         decision = VerifyingFindingAutoRetryDecision.None;
         var trigger = goal.Tasks
             .Select(task => BuildTesterDeveloperOwnedFindingTrigger(goal, task))
-            .FirstOrDefault(candidate => candidate is not null);
+            .FirstOrDefault(candidate =>
+                candidate is not null &&
+                VerifyingFindingCurrency.IsCurrent(
+                    goal,
+                    candidate.TriggeringTask,
+                    candidate.TriggeringTask.LastVerification!));
         if (trigger is null)
         {
             foreach (var requestingTask in goal.Tasks.Where(task => task.LastVerification is not null))
@@ -2015,6 +2020,21 @@ internal sealed partial class ConductorDriver
                     : $"auto-review-retry stopped at review round {round}/{policy.ReviewAutoRetryStopRound} for task {targetTask.Id.Value[..8]}; " +
                         $"operator decision required (split, supersede, or continue). Findings: {TrimForConductorMessage(trigger.Finding)}. " +
                         $"Full {triggeringTask.RequiredRole.ToString().ToLowerInvariant()} output: {outputArtifact}");
+            return true;
+        }
+
+        if (triggeringTask.LastVerification is { MergedReviewFindings: null } latestVerification &&
+            !VerifyingFindingCurrency.HasCurrentOpenBlockingFinding(goal, AgentRole.Reviewer, latestVerification.CompletedAt) &&
+            !VerifyingFindingCurrency.HasCurrentOpenBlockingFinding(goal, AgentRole.Tester, latestVerification.CompletedAt))
+        {
+            decision = VerifyingFindingAutoRetryDecision.Retry(
+                triggeringTask,
+                $"auto-review-retry round {round}: {triggeringTask.RequiredRole} task {triggeringTask.Id.Value[..8]} " +
+                "reported needs-work, but its structured finding result was missing or unparseable and no current open blocking finding exists. " +
+                "Re-run the verifying role against the current Developer output; do not reopen the Developer from superseded finding history.",
+                null,
+                RetryRoundKind.Mechanical,
+                RetryCause.EnvironmentApparatusFailure);
             return true;
         }
 
@@ -2175,22 +2195,8 @@ internal sealed partial class ConductorDriver
         }
     }
 
-    private static bool HasCommittedOutput(TaskSpec task)
-    {
-        if (task.LastVerification?.HasCommittedChanges is true)
-        {
-            return true;
-        }
-
-        var dispatch = task.LastDispatch;
-        if (dispatch is null || string.IsNullOrWhiteSpace(dispatch.ResultCommit))
-        {
-            return false;
-        }
-
-        return string.IsNullOrWhiteSpace(dispatch.BaseCommit) ||
-            !string.Equals(dispatch.BaseCommit, dispatch.ResultCommit, StringComparison.OrdinalIgnoreCase);
-    }
+    private static bool HasCommittedOutput(TaskSpec task) =>
+        VerifyingFindingCurrency.HasCommittedOutput(task);
 
     private bool TryBuildFindingEvidenceRequest(
         Goal goal,

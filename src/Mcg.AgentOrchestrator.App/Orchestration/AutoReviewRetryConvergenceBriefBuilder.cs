@@ -423,10 +423,11 @@ internal static class AutoReviewRetryConvergenceBriefBuilder
     {
         var state = goal.Tasks
             .Where(task => task.RequiredRole == role)
-            .SelectMany(task => task.VerificationHistory)
-            .Where(verification =>
-                verification.CompletedAt <= completedAt &&
-                verification.MergedReviewFindings is not null)
+            .SelectMany(task => task.VerificationHistory
+                .Where(verification =>
+                    verification.CompletedAt <= completedAt &&
+                    verification.MergedReviewFindings is not null &&
+                    VerifyingFindingCurrency.IsCurrent(goal, task, verification)))
             .OrderByDescending(verification => verification.CompletedAt)
             .Select(verification => verification.MergedReviewFindings!)
             .FirstOrDefault() ?? [];
