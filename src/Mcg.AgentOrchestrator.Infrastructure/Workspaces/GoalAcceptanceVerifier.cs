@@ -8263,8 +8263,7 @@ public sealed class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
         name.Equals("GIT_AUTHOR_EMAIL", StringComparison.OrdinalIgnoreCase) ||
         name.Equals("GIT_COMMITTER_NAME", StringComparison.OrdinalIgnoreCase) ||
         name.Equals("GIT_COMMITTER_EMAIL", StringComparison.OrdinalIgnoreCase) ||
-        name.Equals(AcceptanceAttemptTrxPrefixVariable, StringComparison.OrdinalIgnoreCase) ||
-        name.Equals(DotnetBuildEnvironmentManager.IsolatedRootOverrideVariable, StringComparison.OrdinalIgnoreCase) ||
+        name.Equals(AcceptanceAttemptTrxPrefixVariable, StringComparison.OrdinalIgnoreCase) || name.Equals(DotnetBuildEnvironmentManager.IsolatedRootOverrideVariable, StringComparison.OrdinalIgnoreCase) ||
         name.Equals(TempRootApparatusLossReceiptStore.GateInvocationIdVariable, StringComparison.OrdinalIgnoreCase) ||
         name.Equals(TempRootApparatusLossReceiptStore.ReceiptPathVariable, StringComparison.OrdinalIgnoreCase) ||
         name.Equals("MCG_ORCHESTRATOR_REPOSITORY_ROOT", StringComparison.OrdinalIgnoreCase);
