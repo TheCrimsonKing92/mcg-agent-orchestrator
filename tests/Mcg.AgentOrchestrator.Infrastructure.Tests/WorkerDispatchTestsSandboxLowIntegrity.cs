@@ -753,8 +753,8 @@ public sealed class WorkerDispatchTestsSandboxLowIntegrity : WorkerDispatchTestS
         evt.Message.Contains("provenance=orchestrator", StringComparison.Ordinal));
 }
 
-    [Xunit.Fact(DisplayName = "WorkerProfileDispatcher_researcher_dispatch_uses_claude_plan_mode")]
-    public void WorkerProfileDispatcherResearcherDispatchUsesClaudePlanMode()
+    [Xunit.Fact(DisplayName = "WorkerProfileDispatcher_researcher_dispatch_uses_claude_read_only_tool_policy")]
+    public void WorkerProfileDispatcherResearcherDispatchUsesClaudeReadOnlyToolPolicy()
 {
     var root = CreateTempDirectory();
     var promptRoot = Path.Combine(root, "prompts");
@@ -778,7 +778,9 @@ public sealed class WorkerDispatchTestsSandboxLowIntegrity : WorkerDispatchTestS
         sandboxOptions: new WorkerSandboxOptions(false, WorkerSandboxOptions.DefaultAccount, WorkerSandboxOptions.DefaultCredentialTarget));
 
     Assert.Equal("claude-cli", researcher.LastDispatch!.WorkerName);
-    Assert.Contains("--permission-mode 'plan'", researcher.LastDispatch.Command, StringComparison.Ordinal);
+    Assert.Contains("--permission-mode 'default'", researcher.LastDispatch.Command, StringComparison.Ordinal);
+    Assert.Contains("--disallowed-tools 'Edit,Write,NotebookEdit'", researcher.LastDispatch.Command, StringComparison.Ordinal);
+    Assert.DoesNotContain("--permission-mode 'plan'", researcher.LastDispatch.Command, StringComparison.Ordinal);
     Assert.True(!researcher.LastDispatch.Command.Contains("workspace-write", StringComparison.Ordinal));
 }
 
@@ -897,8 +899,8 @@ public sealed class WorkerDispatchTestsSandboxLowIntegrity : WorkerDispatchTestS
             WorkerSandboxProvider.Codex));
     }
 
-    [Xunit.Fact(DisplayName = "WorkerProfileDispatcher_claude_resolves_plan_for_reviewer_and_bypassPermissions_for_developer")]
-    public void WorkerProfileDispatcherClaudeResolvesPlanForReviewerAndBypassPermissionsForDeveloper()
+    [Xunit.Fact(DisplayName = "WorkerProfileDispatcher_claude_resolves_read_only_tool_policy_for_reviewer_and_bypassPermissions_for_developer")]
+    public void WorkerProfileDispatcherClaudeResolvesReadOnlyToolPolicyForReviewerAndBypassPermissionsForDeveloper()
 {
     var root = CreateSeededDispatchRepository();
     var promptRoot = Path.Combine(root, "prompts");
@@ -934,7 +936,55 @@ public sealed class WorkerDispatchTestsSandboxLowIntegrity : WorkerDispatchTestS
     WorkerProfileDispatcher.PrepareSubscriptionTask(kernel, reviewerGoal, reviewerTask, [reviewerAgent], WorkerProfileCatalog.Default(), promptRoot, workingDirectory, dispatchedAt, claudeAuthProbe: authProbe);
 
     Assert.Contains("--permission-mode 'bypassPermissions'", developerTask.LastDispatch!.Command, StringComparison.Ordinal);
-    Assert.Contains("--permission-mode 'plan'", reviewerTask.LastDispatch!.Command, StringComparison.Ordinal);
+    Assert.Contains("--permission-mode 'default'", reviewerTask.LastDispatch!.Command, StringComparison.Ordinal);
+    Assert.Contains("--disallowed-tools 'Edit,Write,NotebookEdit'", reviewerTask.LastDispatch.Command, StringComparison.Ordinal);
+    Assert.DoesNotContain("--permission-mode 'plan'", reviewerTask.LastDispatch.Command, StringComparison.Ordinal);
+}
+
+    [Xunit.Fact(DisplayName = "WorkerProfileDispatcher_claude_read_only_dispatch_denies_edit_tools_and_developer_dispatch_does_not")]
+    public void WorkerProfileDispatcherClaudeReadOnlyDispatchDeniesEditToolsAndDeveloperDispatchDoesNot()
+{
+    const string deniedEditTools = "--disallowed-tools 'Edit,Write,NotebookEdit'";
+    var root = CreateSeededDispatchRepository();
+    var promptRoot = Path.Combine(root, "prompts");
+    var dispatchedAt = DateTimeOffset.Parse("2026-06-02T12:00:00Z");
+    var kernel = new AgentOrchestratorKernel();
+    var researcherGoal = kernel.CreateGoal("Research the change", [new TaskSpec(TaskId.New(), "Inspect the implementation.", AgentRole.Researcher)]);
+    var developerGoal = kernel.CreateGoal("Implement the change", [new TaskSpec(TaskId.New(), "Add the feature.", AgentRole.Developer)]);
+    var researcherWorkingDirectory = GoalWorktrees.Ensure(root, researcherGoal.Id);
+    var developerWorkingDirectory = GoalWorktrees.Ensure(root, developerGoal.Id);
+    var researcherAgent = new AgentDefinition(
+        new AgentId("anthropic-researcher"),
+        "Anthropic researcher",
+        AgentRole.Researcher,
+        new ModelProfile("Anthropic", "claude-sonnet-4-20250514", ModelCapability.Text, SubscriptionMode.ApiKey, MaxOutputTokens: AgentCatalog.RoutineApiMaxOutputTokens),
+        ExecutionPolicy: AgentExecutionPolicy.SubscriptionOnly,
+        Subscription: new SubscriptionLaunchProfile("claude-cli", "claude-sonnet"));
+    var developerAgent = new AgentDefinition(
+        new AgentId("anthropic-developer"),
+        "Anthropic developer",
+        AgentRole.Developer,
+        new ModelProfile("Anthropic", "claude-sonnet-4-20250514", ModelCapability.Text, SubscriptionMode.ApiKey, MaxOutputTokens: AgentCatalog.RoutineApiMaxOutputTokens),
+        ExecutionPolicy: AgentExecutionPolicy.SubscriptionOnly,
+        Subscription: new SubscriptionLaunchProfile("claude-cli", "claude-sonnet"));
+    kernel.ActivateGoal(researcherGoal.Id, [researcherAgent]);
+    kernel.ActivateGoal(developerGoal.Id, [developerAgent]);
+    var researcherTask = researcherGoal.Tasks.Single();
+    var developerTask = developerGoal.Tasks.Single();
+    var authProbe = () => new ClaudeCliAuthState(
+        HasAnthropicApiKey: true,
+        HasCliCredentialArtifact: false,
+        CredentialArtifactPath: null);
+
+    WorkerProfileDispatcher.PrepareSubscriptionTask(kernel, researcherGoal, researcherTask, [researcherAgent], WorkerProfileCatalog.Default(), promptRoot, researcherWorkingDirectory, dispatchedAt, claudeAuthProbe: authProbe);
+    WorkerProfileDispatcher.PrepareSubscriptionTask(kernel, developerGoal, developerTask, [developerAgent], WorkerProfileCatalog.Default(), promptRoot, developerWorkingDirectory, dispatchedAt, claudeAuthProbe: authProbe);
+
+    Assert.Contains(deniedEditTools, researcherTask.LastDispatch!.Command, StringComparison.Ordinal);
+    Assert.Contains("Edit", deniedEditTools, StringComparison.Ordinal);
+    Assert.Contains("Write", deniedEditTools, StringComparison.Ordinal);
+    Assert.Contains("NotebookEdit", deniedEditTools, StringComparison.Ordinal);
+    Assert.Contains("--permission-mode 'bypassPermissions'", developerTask.LastDispatch!.Command, StringComparison.Ordinal);
+    Assert.DoesNotContain("--disallowed-tools", developerTask.LastDispatch.Command, StringComparison.Ordinal);
 }
 
 }

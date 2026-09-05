@@ -4,6 +4,10 @@ namespace Mcg.AgentOrchestrator.Infrastructure;
 
 public static class ProviderCommandBuilder
 {
+    public const string ClaudeReadOnlyPermissionMode = "default";
+    public const string ClaudeReadOnlyAllowedTools = "Read,Glob,Grep,Bash,WebFetch,WebSearch,TodoWrite,Task";
+    public const string ClaudeReadOnlyDisallowedTools = "Edit,Write,NotebookEdit";
+
     public static IReadOnlyList<string> Build(
         ProviderKind providerKind,
         string modelAlias,
@@ -110,6 +114,7 @@ public static class ProviderCommandBuilder
         string resolvedPermissionMode,
         string? sessionId)
     {
+        var isReadOnly = string.Equals(resolvedPermissionMode, "plan", StringComparison.Ordinal);
         var command = new List<string>
         {
             "claude",
@@ -117,8 +122,15 @@ public static class ProviderCommandBuilder
             "--model",
             Expand(modelAlias),
             "--permission-mode",
-            Expand(resolvedPermissionMode)
+            Expand(isReadOnly ? ClaudeReadOnlyPermissionMode : resolvedPermissionMode)
         };
+        if (isReadOnly)
+        {
+            command.Add("--allowed-tools");
+            command.Add(Expand(ClaudeReadOnlyAllowedTools));
+            command.Add("--disallowed-tools");
+            command.Add(Expand(ClaudeReadOnlyDisallowedTools));
+        }
         if (!string.IsNullOrWhiteSpace(sessionId))
         {
             command.Add("--session-id");

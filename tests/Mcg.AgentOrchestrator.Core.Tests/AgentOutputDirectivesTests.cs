@@ -153,6 +153,24 @@ public sealed class AgentOutputDirectivesTests
             StringComparison.Ordinal);
     }
 
+    [Xunit.Fact(DisplayName = "Researcher_requirements_lead_with_stdout_only_no_plan_file_contract")]
+    public void ResearcherRequirementsLeadWithStdoutOnlyNoPlanFileContract()
+    {
+        const string requirement = "- Stdout is the only channel the orchestrator reads: print the complete research artifact as your final message. Never write a plan file or any other file, and never reply with only a summary or a file path.";
+
+        foreach (var requirements in new[]
+                 {
+                     SdlcRolePromptRequirements.BuildPlainText(AgentRole.Researcher),
+                     SdlcRolePromptRequirements.BuildPlainText(AgentRole.Researcher, TaskComplexity.Simple)
+                 })
+        {
+            var lines = requirements.Split(Environment.NewLine);
+            Assert.Equal("## Researcher Requirements", lines[0]);
+            Assert.Equal(requirement, lines[1]);
+            Assert.Contains(requirement, requirements, StringComparison.Ordinal);
+        }
+    }
+
     [Xunit.Fact(DisplayName = "Developer_requirements_always_require_failure_evidence_before_editing")]
     public void DeveloperRequirementsAlwaysRequireFailureEvidenceBeforeEditing()
     {

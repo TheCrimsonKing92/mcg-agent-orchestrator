@@ -17,7 +17,7 @@ public static class WorkerSandboxCapabilityPlanner
     {
         if (task.RequiredRole is not (AgentRole.Developer or AgentRole.Tester))
         {
-            return new WorkerSandboxCapabilityResult(true, "read-only", $"{task.RequiredRole} tasks run with read-only/plan sandbox settings.");
+            return new WorkerSandboxCapabilityResult(true, "read-only", $"{task.RequiredRole} tasks run with read-only worker settings.");
         }
 
         if (!File.Exists(Path.Combine(workingDirectory, ".git")))
