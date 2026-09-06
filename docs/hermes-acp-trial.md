@@ -9,7 +9,7 @@ Hermes ACP is registered as a typed, non-self-committing capability for an opt-i
 - Peeled commit: `5fc308a70719a83cccdbba4c0e39c23f5a8239d5`
 - Policy: `config/trials/hermes-acp-v2026.8.27.json`
 
-Both release and peeled commit must appear in locally captured version output before a model call. A tag-object-only, branch, mutable package range, mismatched executable, or hidden model/provider fallback fails preflight.
+Before any model call, the lifecycle reads the operating-system image path of the launched `--version` child and derives its enclosing Git checkout from that path. It then requires the exact clean tracked `HEAD`, annotated tag object, and peeled commit above. Native version output is only a refusing consistency check for the release, Git install method, and derived install directory; self-reported text never selects or authorizes a checkout. The stateless verifier creates one receipt per lifecycle run; the lifecycle independently validates its pin, evidence, and freshness before ACP launch, and no persisted receipt is ever loaded to authorize a later run. Terminal validation binds to that same in-memory receipt; an independently replayed receipt outside the one-minute freshness window refuses. Untracked installation products such as `.venv` are allowed, while tracked modifications, stale receipts, a tag-object-only identity, mutable package range, mismatched executable, or hidden model/provider fallback fail preflight.
 
 ## Authority and confinement
 
@@ -22,6 +22,8 @@ The checked adapter reads the existing prompt file as bytes, verifies its SHA-25
 The pinned upstream surface does not document enforceable delegation or code-execution disable switches, nor ACP terminal usage equivalent to one-shot `--usage-file`. Those are unresolved live preconditions. Until a separately reviewed wrapper proves both from ACP protocol receipts, the disposition remains `TrialOnly` / not adopted.
 
 ## Checked operator command
+
+`hermes-acp-verify-identity --executable <absolute-path>` runs only the owned `--version` child and emits the typed executable-identity receipt, including the OS image path, Git identities, native stdout/stderr, exit code, and job teardown. It accepts optional `--working-directory`, `--hermes-home`, and `--receipt` paths. This check makes no ACP session, authentication, or model call and is the operator-owned real-installation acceptance step for the pinned candidate.
 
 `hermes-acp-trial` is the checked one-shot ACP client owned by the App. It requires `--confirm-live-hermes-start` and an explicit `--role`, reads the prompt from `--prompt` or `MCG_TRIAL_BRIEF_PATH`, verifies `--prompt-sha256` or `MCG_TRIAL_BRIEF_SHA256`, starts `hermes --safe-mode acp`, and writes `hermes-acp-terminal-receipt.json` inside the supplied sandbox. Planner, Researcher, and Reviewer permission requests are denied. Developer and Tester may select only an `allow_once` option, and only when every reported file location is inside the assigned worktree. An outside, missing, malformed, execute, or `.git`-scoped request is refused without being misreported as a containment-policy violation; an unsupported ACP client method still records a terminal policy violation. The whole-process sandbox remains the security boundary. Only the final authoritative worker output is written to stdout; JSON-RPC progress and the receipt location go to stderr.
 

@@ -478,6 +478,8 @@ internal static class CliCommandHelp
             ["hermes-acp-trial"] = Flags(
                 "--confirm-live-hermes-start", "--prompt", "--prompt-sha256", "--workspace",
                 "--sandbox", "--provider", "--model", "--role", "--receipt"),
+            ["hermes-acp-verify-identity"] = Flags(
+                "--executable", "--working-directory", "--hermes-home", "--receipt"),
             ["provider-smoke"] = Flags("--confirm-all", "--confirm-paid-smoke"),
             ["prototype-ui"] = DashboardFlags(),
             ["serve-dashboard"] = DashboardFlags(),

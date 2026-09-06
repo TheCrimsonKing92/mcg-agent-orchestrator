@@ -617,6 +617,12 @@ internal static partial class CliCommandHandlers
                     .GetResult();
                 return false;
 
+            case "hermes-acp-verify-identity":
+                HermesAcpCliCommand.ExecuteIdentityVerificationAsync(parts, Console.Out)
+                    .GetAwaiter()
+                    .GetResult();
+                return false;
+
             case "architecture":
                 ConsoleViews.PrintArchitecture(BuildCliArchitectureReport(context));
                 return false;
