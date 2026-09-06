@@ -8,23 +8,26 @@ public sealed class PipeDrainThreadPoolSaturationTests
     public void PipeDrainReadsToEndWhilePoolDependentAsyncReadIsStarved()
     {
         const string expected = "complete-pipe-output";
+        using var asyncReadRelease = new ManualResetEventSlim(false);
+        var asyncReader = new HeldAsyncTextReader(expected, asyncReadRelease);
         Task<string>? poolDependentRead = null;
         try
         {
             RunWithSaturatedThreadPool(() =>
             {
-                poolDependentRead = new SynchronousOnlyTextReader(expected).ReadToEndAsync();
+                poolDependentRead = asyncReader.ReadToEndAsync();
                 var drain = PipeDrain.Start(new SynchronousOnlyTextReader(expected), "pipe-drain-saturation-test");
 
                 Assert.True(
                     drain.Join(Environment.TickCount64 + 2_000),
                     PipeDrain.DescribeTimeout("test", 2_000, drain, null));
                 Assert.Equal(expected, drain.Text);
-                Assert.False(poolDependentRead.IsCompleted, "Negative control unexpectedly found a free thread-pool worker.");
+                Assert.False(poolDependentRead.IsCompleted, "Negative control completed before its explicit release.");
             });
         }
         finally
         {
+            asyncReadRelease.Set();
             poolDependentRead?.GetAwaiter().GetResult();
         }
     }
@@ -34,6 +37,8 @@ public sealed class PipeDrainThreadPoolSaturationTests
         var release = new ManualResetEventSlim(false);
         ThreadPool.GetMinThreads(out var minWorkerThreads, out _);
         var blockedItems = Math.Max(minWorkerThreads, Environment.ProcessorCount) * 2 + 32;
+        var callbacksToObserve = Math.Max(minWorkerThreads, Environment.ProcessorCount);
+        var callbacksStarted = new SemaphoreSlim(0, blockedItems);
         var callbacksCompleted = new CountdownEvent(blockedItems);
         try
         {
@@ -42,10 +47,11 @@ public sealed class PipeDrainThreadPoolSaturationTests
                 ThreadPool.UnsafeQueueUserWorkItem(
                     static state =>
                     {
-                        var (releaseSignal, completionSignal) =
-                            ((ManualResetEventSlim, CountdownEvent))state!;
+                        var (releaseSignal, startedSignal, completionSignal) =
+                            ((ManualResetEventSlim, SemaphoreSlim, CountdownEvent))state!;
                         try
                         {
+                            startedSignal.Release();
                             releaseSignal.Wait();
                         }
                         finally
@@ -53,10 +59,20 @@ public sealed class PipeDrainThreadPoolSaturationTests
                             completionSignal.Signal();
                         }
                     },
-                    (release, callbacksCompleted));
+                    (release, callbacksStarted, callbacksCompleted));
             }
 
-            Thread.Sleep(250);
+            for (var i = 0; i < callbacksToObserve; i++)
+            {
+                if (!callbacksStarted.Wait(TimeSpan.FromSeconds(10)))
+                {
+                    throw new TimeoutException(
+                        $"Thread-pool saturation callbacks did not start; " +
+                        $"observedStarts={i}; expectedStarts={callbacksToObserve}; " +
+                        $"poolPendingWorkItems={ThreadPool.PendingWorkItemCount}.");
+                }
+            }
+
             action();
         }
         finally
@@ -70,12 +86,25 @@ public sealed class PipeDrainThreadPoolSaturationTests
                     $"poolPendingWorkItems={ThreadPool.PendingWorkItemCount}.");
             }
 
+            callbacksStarted.Dispose();
             callbacksCompleted.Dispose();
             release.Dispose();
         }
     }
 
-    internal sealed class SynchronousOnlyTextReader(string text) : TextReader
+    private sealed class HeldAsyncTextReader(
+        string text,
+        ManualResetEventSlim release) : SynchronousOnlyTextReader(text)
+    {
+        public override Task<string> ReadToEndAsync() => Task.Run(
+            () =>
+            {
+                release.Wait();
+                return ReadToEnd();
+            });
+    }
+
+    internal class SynchronousOnlyTextReader(string text) : TextReader
     {
         private int _position;
 
