@@ -1,0 +1,15 @@
+<?xml version="1.0" encoding="utf-8"?>
+<TestRun id="b96290ae-ec15-47e6-a69e-65dabfbedc1e" name="MTP xUnit.net v3 aborted fixture" runUser="runner" xmlns="http://microsoft.com/schemas/VisualStudio/TeamTest/2010">
+  <Results>
+    <UnitTestResult executionId="5f9783ab-e2e5-48bf-bfa2-b7b97d9a0cf2" testId="268454ff-f240-42d4-8a4d-b15ee04337eb" testName="Aborted test without failure record" outcome="Aborted" />
+  </Results>
+  <TestDefinitions>
+    <UnitTest name="Aborted test without failure record" storage="mcg.agentorchestrator.infrastructure.tests.dll" id="268454ff-f240-42d4-8a4d-b15ee04337eb">
+      <Execution id="5f9783ab-e2e5-48bf-bfa2-b7b97d9a0cf2" />
+      <TestMethod codeBase="Mcg.AgentOrchestrator.Infrastructure.Tests.dll" adapterTypeName="executor://xunit/V3" className="Mcg.AgentOrchestrator.Infrastructure.Tests.RepresentativeTests" name="Aborts" />
+    </UnitTest>
+  </TestDefinitions>
+  <ResultSummary outcome="Aborted">
+    <Counters total="1" executed="1" passed="0" failed="0" error="0" timeout="0" aborted="1" inconclusive="0" passedButRunAborted="0" notRunnable="0" notExecuted="0" disconnected="0" warning="0" completed="1" inProgress="0" pending="0" />
+  </ResultSummary>
+</TestRun>

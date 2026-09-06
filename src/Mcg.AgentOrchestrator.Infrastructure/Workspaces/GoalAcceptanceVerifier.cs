@@ -383,7 +383,7 @@ public interface IGoalAcceptanceVerifier
         CancellationToken cancellationToken = default);
 }
 
-public sealed class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
+public sealed partial class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
 {
     public sealed record StartupContract(
         int ManifestCheckCount,
@@ -4369,7 +4369,9 @@ public sealed class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
             : $"'{check.Name}' had selection(s) matching 0 tests: {string.Join(", ", uncoveredSelections)}.";
         var outputTail = zeroTestApparatusFailure
             ? $"Focused evidence selection apparatus failure: {apparatusDetail}"
-            : passed ? null : BuildMtpFailureOutput(check.Name, result, telemetry);
+            : passed
+                ? null
+                : BuildMtpFailureOutput(check.Name, result, telemetry, trxEvidence, completionDecision);
         var resultSummary = zeroTestApparatusFailure
             ? PrefixResultSummary(
                 $"{(unreadableReceipts.Count > 0 ? "focused-selection-receipt-unreadable" : "focused-selection-apparatus-failure")} executed={executedTestCount?.ToString(System.Globalization.CultureInfo.InvariantCulture) ?? "unknown"}",
@@ -7396,56 +7398,6 @@ public sealed class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
 
         Console.WriteLine($"TRX_TELEMETRY_UNAVAILABLE paths={QuoteProgressToken(string.Join(";", missing))}");
         Console.Out.Flush();
-    }
-
-    private static string BuildMtpFailureOutput(
-        string checkName,
-        CommandResult result,
-        DotnetTestTelemetry telemetry)
-    {
-        var details = new List<string>();
-        var commandOutput = result.TimedOut
-            ? BuildTimeoutOutput(result)
-            : TailOutput(result.Output);
-        if (!string.IsNullOrWhiteSpace(commandOutput))
-        {
-            details.Add(commandOutput);
-        }
-
-        var trxPaths = telemetry.Paths.Where(File.Exists).ToArray();
-        if (trxPaths.Length == 0)
-        {
-            details.Add(
-                $"[FAIL] {checkName}: failed — no TRX produced (shard was killed or crashed before reporter flushed)");
-            return string.Join(Environment.NewLine, details);
-        }
-
-        var failures = new List<string>();
-        foreach (var trxPath in trxPaths)
-        {
-            try
-            {
-                failures.AddRange(ExtractTrxFailureEvidence(trxPath));
-            }
-            catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or System.Xml.XmlException)
-            {
-                details.Add(
-                    $"[FAIL] {checkName}: failed — TRX found but could not be read ({FirstNonEmptyLine(ex.Message)})");
-                return string.Join(Environment.NewLine, details);
-            }
-        }
-
-        if (failures.Count == 0)
-        {
-            details.Add(
-                $"[FAIL] {checkName}: failed — TRX found but contained no failure records (process may have exited before tests ran)");
-        }
-        else
-        {
-            details.AddRange(failures);
-        }
-
-        return string.Join(Environment.NewLine, details);
     }
 
     internal static IReadOnlyList<string> ExtractTrxFailureEvidence(string trxPath)
