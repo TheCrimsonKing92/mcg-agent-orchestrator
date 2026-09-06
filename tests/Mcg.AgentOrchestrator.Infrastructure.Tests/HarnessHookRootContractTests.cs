@@ -166,11 +166,14 @@ public sealed class HarnessHookRootContractTests
     private static string ReadHookCommand(string root, string eventName)
     {
         using var settings = JsonDocument.Parse(File.ReadAllText(Path.Combine(root, ".claude", "settings.json")));
-        return settings.RootElement
+        var hook = settings.RootElement
             .GetProperty("hooks")
             .GetProperty(eventName)[0]
-            .GetProperty("hooks")[0]
-            .GetProperty("command")
+            .GetProperty("hooks")[0];
+        // These tests execute the declared shell through WorkerProcessRunner. The
+        // hook host must not default to Bash and reinterpret PowerShell syntax.
+        Assert.Equal("powershell", hook.GetProperty("shell").GetString());
+        return hook.GetProperty("command")
             .GetString()
             ?? throw new InvalidOperationException($"Hook command for '{eventName}' was empty.");
     }
