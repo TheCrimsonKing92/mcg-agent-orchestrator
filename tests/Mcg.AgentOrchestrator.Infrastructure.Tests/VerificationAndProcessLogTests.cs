@@ -240,7 +240,7 @@ public sealed class VerificationAndProcessLogTests
     Assert.True(reviewTask.LastVerification is not null);
     Assert.True(reviewTask.LastVerification!.StandardOutput.Length <= 20_000);
     Assert.True(reviewTask.LastVerification.StandardError.Length <= 20_000);
-    Assert.Equal(BackgroundDispatchRunner.ReadBoundedBestEffort(stdoutPath), reviewTask.LastVerification.StandardOutput);
+    Assert.Equal(ProcessLogReader.ReadBoundedBestEffort(stdoutPath), reviewTask.LastVerification.StandardOutput);
     Assert.StartsWith(stdoutHead, reviewTask.LastVerification.StandardOutput, StringComparison.Ordinal);
     Assert.EndsWith(stdoutTail, reviewTask.LastVerification.StandardOutput, StringComparison.Ordinal);
     Assert.StartsWith(stderrHead, reviewTask.LastVerification.StandardError, StringComparison.Ordinal);
@@ -304,7 +304,256 @@ public sealed class VerificationAndProcessLogTests
     Assert.True(
         reviewTask.LastVerification!.WorkerResultPresent,
         "WORKER_RESULT must still be detected when the block opens inside the head-preview window");
+    Assert.DoesNotContain("decision-text-truncated", reviewTask.LastVerification.StandardError, StringComparison.Ordinal);
 }
+
+    [Xunit.Fact]
+    public void RefreshLatestProcessUsesCompleteStdoutForAnOverCapWorkerResult()
+    {
+        var root = CreateTempDirectory();
+        var kernel = new AgentOrchestratorKernel();
+        var reviewTask = new TaskSpec(TaskId.New(), "Review worker output", AgentRole.Reviewer);
+        var goal = kernel.CreateGoal("Use complete stdout for worker-result decisions", [reviewTask]);
+        kernel.ActivateGoal(goal.Id, AgentCatalog.Default().Agents);
+        var priorOutput =
+            "WORKER_RESULT:" + Environment.NewLine +
+            "files: none" + Environment.NewLine +
+            "commands: prior review" + Environment.NewLine +
+            "tests: pass - prior review passed" + Environment.NewLine +
+            "findings: [{\"stable_id\":\"over-cap-finding\",\"state\":\"open\",\"severity\":\"blocking\"," +
+            "\"category\":\"operator-owned\",\"location\":{\"file\":\"src/Some/File.cs\",\"region\":\"SomeMethod\"}," +
+            "\"description\":\"Prior category must be replaced.\"}]" + Environment.NewLine +
+            "touched_anchors: []" + Environment.NewLine +
+            "blockers: P1 prior category" + Environment.NewLine +
+            "model_fit: Anthropic/claude-opus-5 - adequate" + Environment.NewLine +
+            "skills: none" + Environment.NewLine +
+            "confidence: high" + Environment.NewLine +
+            "END_WORKER_RESULT";
+        kernel.RecordTaskDispatch(goal.Id, reviewTask.Id, new TaskDispatchRecord("local", "prior-review", root, DateTimeOffset.UtcNow));
+        kernel.RecordDispatchExecutionResult(
+            goal.Id,
+            reviewTask.Id,
+            new TaskVerificationRecord(
+                "prior-review",
+                root,
+                1,
+                priorOutput,
+                string.Empty,
+                DateTimeOffset.UtcNow,
+                WorkerResultPresent: true,
+                FullStandardOutput: priorOutput));
+        Assert.Equal(FindingCategory.OperatorOwned, Assert.Single(reviewTask.LastVerification!.MergedReviewFindings!).Category);
+        kernel.RetryTask(goal.Id, reviewTask.Id, "Reviewer corrected the finding category.");
+        var stdoutPath = Path.Combine(root, "out.log");
+        var stderrPath = Path.Combine(root, "err.log");
+        var exitPath = Path.Combine(root, "exit.txt");
+        var childExitPath = Path.Combine(root, "child-exit.json");
+        var stdout =
+            "WORKER_RESULT:" + Environment.NewLine +
+            "files: src/Some/File.cs" + Environment.NewLine +
+            "commands: focused review" + Environment.NewLine +
+            "tests: pass - focused review passed" + Environment.NewLine +
+            "findings: [{\"stable_id\":\"over-cap-finding\",\"state\":\"open\",\"severity\":\"blocking\"," +
+            "\"category\":\"correctness\",\"location\":{\"file\":\"src/Some/File.cs\",\"region\":\"SomeMethod\"}," +
+            "\"description\":\"" + new string('D', 20_100) + "\"}]" + Environment.NewLine +
+            "touched_anchors: []" + Environment.NewLine +
+            "blockers: none" + Environment.NewLine +
+            "model_fit: Anthropic/claude-opus-5 - adequate" + Environment.NewLine +
+            "skills: none" + Environment.NewLine +
+            "confidence: high" + Environment.NewLine +
+            "END_WORKER_RESULT";
+        File.WriteAllText(stdoutPath, stdout);
+        File.WriteAllText(stderrPath, string.Empty);
+        File.WriteAllText(exitPath, "1");
+        File.WriteAllText(
+            childExitPath,
+            System.Text.Json.JsonSerializer.Serialize(
+                new DispatchProcessHost.DispatchChildExitRecord(888888, 0, DateTimeOffset.UtcNow),
+                new System.Text.Json.JsonSerializerOptions { PropertyNamingPolicy = System.Text.Json.JsonNamingPolicy.CamelCase }));
+        using var activeWriter = new FileStream(
+            stdoutPath,
+            FileMode.Open,
+            FileAccess.Write,
+            FileShare.ReadWrite | FileShare.Delete);
+        kernel.RecordTaskDispatch(goal.Id, reviewTask.Id, new TaskDispatchRecord("local", "fake-cmd", root, DateTimeOffset.UtcNow));
+        kernel.RecordTaskProcessStarted(
+            goal.Id,
+            reviewTask.Id,
+            new TaskProcessRecord(
+                999999,
+                "fake-cmd",
+                root,
+                stdoutPath,
+                stderrPath,
+                exitPath,
+                DateTimeOffset.UtcNow,
+                null,
+                null,
+                ChildExitRecordPath: childExitPath));
+
+        var runner = new BackgroundDispatchRunner(isStillRunning: _ => false);
+        runner.RefreshLatestProcess(kernel, goal.Id, reviewTask.Id);
+
+        Assert.True(stdout.Length > VerificationTextBounds.MaxRetainedChars);
+        Assert.True(
+            reviewTask.LastVerification!.WorkerResultPresent,
+            "The complete stdout contains a valid WORKER_RESULT, so a capped decision snapshot must not make it absent");
+        var finding = Assert.Single(reviewTask.LastVerification.MergedReviewFindings!);
+        Assert.Equal("over-cap-finding", finding.StableId);
+        Assert.Equal(FindingCategory.Correctness, finding.Category);
+        Assert.True(reviewTask.LastVerification.ReconciledToSuccess);
+        Assert.Equal(0, reviewTask.LastVerification.ExitCode);
+        Assert.True(reviewTask.LastVerification.StandardOutput.Length <= VerificationTextBounds.MaxRetainedChars);
+        Assert.Contains(
+            $"decision-text-truncated source=stdout dropped_chars={stdout.Length - VerificationTextBounds.MaxRetainedChars}",
+            reviewTask.LastVerification.StandardError,
+            StringComparison.Ordinal);
+        Assert.Contains(
+            $"dropped_scope=selected-decision-content retained_chars={VerificationTextBounds.MaxRetainedChars} " +
+            $"cap={VerificationTextBounds.MaxRetainedChars}",
+            reviewTask.LastVerification.StandardError,
+            StringComparison.Ordinal);
+        Assert.Contains($"complete_artifact='{stdoutPath}'", reviewTask.LastVerification.StandardError, StringComparison.Ordinal);
+    }
+
+    [Xunit.Fact]
+    public void RefreshLatestProcessPreservesWorkerResultInTheBoundedFallbackSnapshot()
+    {
+        var root = CreateTempDirectory();
+        var kernel = new AgentOrchestratorKernel();
+        var reviewTask = new TaskSpec(TaskId.New(), "Review worker output", AgentRole.Reviewer);
+        var goal = kernel.CreateGoal("Preserve worker result in bounded snapshot", [reviewTask]);
+        kernel.ActivateGoal(goal.Id, AgentCatalog.Default().Agents);
+        var stdoutPath = Path.Combine(root, "out.log");
+        var stderrPath = Path.Combine(root, "err.log");
+        var exitPath = Path.Combine(root, "exit.txt");
+        var decisionProse = string.Join(
+            Environment.NewLine,
+            Enumerable.Repeat("tests: pass - verbose decision-significant prose " + new string('P', 100), 150));
+        var stdout = decisionProse + Environment.NewLine +
+            "WORKER_RESULT:" + Environment.NewLine +
+            "files: none" + Environment.NewLine +
+            "commands: focused review" + Environment.NewLine +
+            "tests: pass - focused review passed" + Environment.NewLine +
+            "blockers: none" + Environment.NewLine +
+            "model_fit: Anthropic/claude-opus-5 - adequate" + Environment.NewLine +
+            "skills: none" + Environment.NewLine +
+            "confidence: high" + Environment.NewLine +
+            "END_WORKER_RESULT";
+        File.WriteAllText(stdoutPath, stdout);
+        File.WriteAllText(stderrPath, string.Empty);
+        File.WriteAllText(exitPath, "0");
+        kernel.RecordTaskDispatch(goal.Id, reviewTask.Id, new TaskDispatchRecord("local", "fake-cmd", root, DateTimeOffset.UtcNow));
+        var processRecord = new TaskProcessRecord(
+            999999,
+            "fake-cmd",
+            root,
+            stdoutPath,
+            stderrPath,
+            exitPath,
+            DateTimeOffset.UtcNow,
+            null,
+            null);
+        kernel.RecordTaskProcessStarted(goal.Id, reviewTask.Id, processRecord);
+        var decisionSnapshot = new ProcessLogReader().ReadBestEffort(processRecord, stdoutPath);
+
+        Assert.True(decisionSnapshot.DecisionText.Length <= VerificationTextBounds.MaxRetainedChars);
+        Assert.Contains("WORKER_RESULT:", decisionSnapshot.DecisionText, StringComparison.Ordinal);
+        Assert.Contains("END_WORKER_RESULT", decisionSnapshot.DecisionText, StringComparison.Ordinal);
+        Stream OpenAndRemoveStdout(string path)
+        {
+            var content = File.ReadAllBytes(path);
+            if (string.Equals(path, stdoutPath, StringComparison.Ordinal))
+            {
+                File.Delete(path);
+            }
+            return new MemoryStream(content, writable: false);
+        }
+
+        var runner = new BackgroundDispatchRunner(isStillRunning: _ => false, openLogReadStream: OpenAndRemoveStdout);
+        runner.RefreshLatestProcess(kernel, goal.Id, reviewTask.Id);
+
+        Assert.False(File.Exists(stdoutPath));
+        Assert.True(
+            reviewTask.LastVerification!.WorkerResultPresent,
+            "When the complete artifact becomes unavailable, the bounded fallback must retain the contractual block");
+        Assert.Contains("decision-text-truncated source=stdout", reviewTask.LastVerification.StandardError, StringComparison.Ordinal);
+        Assert.Contains(
+            $"retained_chars={VerificationTextBounds.MaxRetainedChars} cap={VerificationTextBounds.MaxRetainedChars}",
+            reviewTask.LastVerification.StandardError,
+            StringComparison.Ordinal);
+    }
+
+    [Xunit.Theory]
+    [Xunit.InlineData(false)]
+    [Xunit.InlineData(true)]
+    public void RefreshLatestProcessRejectsAbsentOrMalformedOverCapWorkerResults(bool malformedBlock)
+    {
+        var root = CreateTempDirectory();
+        var kernel = new AgentOrchestratorKernel();
+        var reviewTask = new TaskSpec(TaskId.New(), "Review worker output", AgentRole.Reviewer);
+        var goal = kernel.CreateGoal("Reject invalid over-cap worker result", [reviewTask]);
+        kernel.ActivateGoal(goal.Id, AgentCatalog.Default().Agents);
+        var stdoutPath = Path.Combine(root, "out.log");
+        var stderrPath = Path.Combine(root, "err.log");
+        var exitPath = Path.Combine(root, "exit.txt");
+        var stdout = malformedBlock
+            ? "WORKER_RESULT:" + Environment.NewLine +
+              "files: none" + Environment.NewLine +
+              "commands: focused review" + Environment.NewLine +
+              "tests: pass - " + new string('T', 20_100) + Environment.NewLine +
+              "blockers: none" + Environment.NewLine +
+              "model_fit: Anthropic/claude-opus-5 - adequate" + Environment.NewLine +
+              "skills: none" + Environment.NewLine +
+              "END_WORKER_RESULT"
+            : string.Join(
+                Environment.NewLine,
+                Enumerable.Repeat("tests: pass - no worker-result block " + new string('T', 100), 200));
+        File.WriteAllText(stdoutPath, stdout);
+        File.WriteAllText(stderrPath, string.Empty);
+        File.WriteAllText(exitPath, "0");
+        kernel.RecordTaskDispatch(goal.Id, reviewTask.Id, new TaskDispatchRecord("local", "fake-cmd", root, DateTimeOffset.UtcNow));
+        kernel.RecordTaskProcessStarted(
+            goal.Id,
+            reviewTask.Id,
+            new TaskProcessRecord(999999, "fake-cmd", root, stdoutPath, stderrPath, exitPath, DateTimeOffset.UtcNow, null, null));
+
+        var runner = new BackgroundDispatchRunner(isStillRunning: _ => false);
+        runner.RefreshLatestProcess(kernel, goal.Id, reviewTask.Id);
+
+        Assert.True(stdout.Length > VerificationTextBounds.MaxRetainedChars);
+        Assert.False(reviewTask.LastVerification!.WorkerResultPresent);
+        Assert.Null(reviewTask.LastVerification.MergedReviewFindings);
+    }
+
+    [Xunit.Fact]
+    public void RefreshLatestProcessCompleteStdoutPreservesBareCarriageReturnMarkers()
+    {
+        var root = CreateTempDirectory();
+        var kernel = new AgentOrchestratorKernel();
+        var reviewTask = new TaskSpec(TaskId.New(), "Review worker output", AgentRole.Reviewer);
+        var goal = kernel.CreateGoal("Read bare carriage return worker result", [reviewTask]);
+        kernel.ActivateGoal(goal.Id, AgentCatalog.Default().Agents);
+        var stdoutPath = Path.Combine(root, "out.log");
+        var stderrPath = Path.Combine(root, "err.log");
+        var exitPath = Path.Combine(root, "exit.txt");
+        File.WriteAllText(
+            stdoutPath,
+            "prefix\rWORKER_RESULT:\rfiles: none\rcommands: focused review\rtests: pass - focused review passed" +
+            "\rblockers: none\rmodel_fit: test/test - adequate\rskills: none\rconfidence: high\rEND_WORKER_RESULT\r");
+        File.WriteAllText(stderrPath, string.Empty);
+        File.WriteAllText(exitPath, "0");
+        kernel.RecordTaskDispatch(goal.Id, reviewTask.Id, new TaskDispatchRecord("local", "fake-cmd", root, DateTimeOffset.UtcNow));
+        kernel.RecordTaskProcessStarted(
+            goal.Id,
+            reviewTask.Id,
+            new TaskProcessRecord(999999, "fake-cmd", root, stdoutPath, stderrPath, exitPath, DateTimeOffset.UtcNow, null, null));
+
+        var outcome = new BackgroundDispatchRunner(isStillRunning: _ => false)
+            .ReconcileLatestProcess(kernel, goal.Id, reviewTask.Id);
+
+        Assert.True(outcome.Verification!.WorkerResultPresent);
+    }
 
     [Xunit.Fact(DisplayName = "RefreshLatestProcess_ignores_prompt_human_input_and_upstream_blocker_in_stderr")]
     public void RefreshLatestProcessIgnoresPromptHumanInputAndUpstreamBlockerInStderr()
@@ -472,13 +721,16 @@ public sealed class VerificationAndProcessLogTests
     var stdout =
         new string('O', VerificationTextBounds.PreviewHeadChars) +
         Environment.NewLine +
-        new string('M', 2_000) +
+        string.Join(
+            Environment.NewLine,
+            Enumerable.Repeat("tests: pass - decision prefill " + new string('M', 100), 120)) +
         Environment.NewLine +
         "HUMAN_INPUT: Which branch should I modify?" +
         Environment.NewLine +
         new string('N', 2_000) +
         Environment.NewLine +
         new string('T', VerificationTextBounds.PreviewTailChars);
+    Assert.True(stdout.Length > VerificationTextBounds.MaxRetainedChars);
     File.WriteAllText(stdoutPath, stdout);
     File.WriteAllText(stderrPath, string.Empty);
     File.WriteAllText(exitPath, "0");
