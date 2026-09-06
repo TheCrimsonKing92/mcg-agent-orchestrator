@@ -1,0 +1,36 @@
+# Architecture migration — execution record
+
+Authorized for implementation and validation on 2026-09-06. Decision basis: [system audit](triage/system-architecture-audit-2026-09-06.md). Priority remains reliability, landing throughput, then measured token efficiency without quality loss.
+
+This is the implementation record, not a completion claim. Goal state, dispatches, evidence and backlog status remain in their canonical SQLite stores. Scratch briefs are temporary command inputs.
+
+## Required outcomes
+
+| Stage | Delivered architectural boundary | Implementation / validation state |
+|---|---|---|
+| Queries | Inspection uses a read capability, no writer/outbox draining, bounded goal reads and compatible CLI behavior | First vertical slice `task`/`tasks`: goal `7c57509f`, candidate under review. Explicit-query held-writer probe passes; implicit/error fallbacks and test-project placement need correction. Remaining inspection routes require inventory and migration. |
+| Transitions | Typed lifecycle commands, goal-version conflict handling, atomic state/outbox writes, truthful committed outcomes | Unpark slice `06b62ff8` depends on queries. Unpark is a pure state transition; do not invent an external notification to exercise an outbox. Effectful park remains a follow-on requiring atomic state/delivery intent and truthful effect outcomes. Preserve direct offline recovery. |
+| Application | UI-free dispatch/advancement/task operations; dashboard and CLI adapt shared typed results | Goal `f5db9754` depends on reconciliation `e9fb9f63` and transition `06b62ff8`; implementation must remove old ownership, not forward back to it. |
+| Acceptance | Attempt identity/lifecycle/evidence belongs to an attempt owner; verifier composes separately owned build, invocation, scheduling and adjudication | Goal `6032a3d4` follows gate-floor `a1088fcb` and orphan ownership `99f7b1f1`. Tests need real isolation and preserved discovery. |
+| Workflow decisions | Conductor policy produces typed, attributed decisions; effect execution and completion are separately owned | Goal `42115646` follows application extraction and orphan ownership. First complete policy slice is the Failed lifecycle, preserving characterized precedence and existing retry/admission invariants. |
+| Hosts | Independently publishable headless runtime and optional dashboard; explicit composition and compatible entry points | Goal `ac61f820` follows application, acceptance and policy extraction. Measure dependency/publish/startup changes. |
+| Persistent operation | Queryable runtime generation/readiness/ownership, safe update/child adoption and offline recovery | Build on current supervisor/lease/staging. Service lifecycle is independent of sole-writer migration. |
+| Evidence/economics | Reconciled transition → execution → acceptance → integration → activation receipts, measured coverage and matched provider trials | Existing Hermes identity slice `bbf6fe7c` received a successful operator identity/teardown receipt. This is not ACP fit or adoption. |
+
+## Migration constraints
+
+- Read-only extraction may remove write acquisition immediately. Mutation locks may shorten only after version checks/recomputation and atomic writes protect the migrated path.
+- Keep disciplined direct CAS writes during migration. Before making any further recovery operation inbox-only, provide a fenced offline applier and prove it works with the runtime down. A queued request is not a completed recovery.
+- Do not infer service ownership from a `--daemon` flag. The curated board is now operated with bounded daemon mode; the service/hosting architecture still requires implementation.
+- Preserve deterministic acceptance, isolated worktrees, role capabilities, structured findings and no-false-completion safeguards. A helper extraction or passing worker exit does not establish an architectural outcome.
+- No concurrent ownership of the same migration seam. Sequence against live fixes, integrate current main through the conductor, then perform independent cross-family review and fresh execution validation.
+- For every claimed benefit, retain baseline/candidate identity, exact inputs, observed output, meaningful negative controls and the correct evidence owner. Missing telemetry is not zero usage or proof of absence of a write.
+
+## Current operator receipts
+
+- Initial query goal: `7c57509f1c9341868530141eab01fb7f`, request key `rearchitecture-20260906-query-isolation`, five-role pipeline, slice of architecture owner `16ea5b17`.
+- The first new runtime inherited a restricted Git environment and could not create the goal branch. It was orderly stopped, and the same curated board restarted with authorized Git/provider access. The next runtime created the worktree and started its Researcher; no duplicate goal was created.
+- Hermes candidate `85a11e2b816b0a500420d5f49144df5e329e5051`: App build passed. Version-only identity probe exited 0; release `v2026.8.27`, head/peeled commit `5fc308a70719a83cccdbba4c0e39c23f5a8239d5`, annotated tag `fcebd62163497e77e5de00d26d2ed86cb4ef8761`, clean installation and confirmed version-job teardown. Raw receipts: `.orchestrator/operator-evidence/rearchitecture-20260906/hermes-identity/`. Reviewer retry intent `a289f9748621439fbd9d015e44d83700` was applied; acceptance still required.
+- Reconciliation prerequisite `e9fb9f63`: Reviewer blocker confirmed against current source. `StaleDispatchProcessReconciler` constructs a terminal record with null verification and treats unavailable heartbeat as no live process. Developer retry `bac9fa538bcf4b5fa6ff800620dde751` directs use of existing authoritative refresh outcomes, preservation of Hold/Live/unknown evidence, and exact-once terminal-result application. No waiver was issued.
+- Query candidate `2da2bdb4`: App build passes. In the same controlled fixture (31 synthetic goals, separate connection holding `BEGIN IMMEDIATE`), baseline `8ff16e2b` did not complete inside the 8-second writer window; candidate explicit task query completed while the writer remained held in 4546ms, exit 0 and unchanged goal snapshots. This proves that path's read behavior, not a population latency improvement. Candidate still falls back to mutation authority for implicit selection and missing/ambiguous targets, and the new tests incorrectly permit that behavior. Both this defect and the actual CLI test-project ownership mismatch were recorded on Reviewer task 5 before acceptance. Receipts: `.orchestrator/operator-evidence/rearchitecture-20260906/queries/`.
+- Hermes acceptance attempt `bbf6fe7c-0-20260906034559313-8e6097172fad4d31b9a0b370b073a6cb` failed the disabled-collection ownership invariant: Hermes process tests mapped to Remainder while sharing the `ProcessSpawning` collection with two other lanes without a shared exclusive resource. The conductor routed the concrete TRX failure to Developer. Version identity success does not waive this gate.
