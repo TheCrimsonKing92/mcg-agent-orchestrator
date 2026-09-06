@@ -130,4 +130,53 @@ public sealed class CliCommandTestsHumanInputSupersede : CliCommandTestBase
         Assert.DoesNotContain("Use 5 seconds", brief, StringComparison.Ordinal);
         Assert.Contains("Notice text remains", brief, StringComparison.Ordinal);
     }
+
+    [Xunit.Fact]
+    public async Task SupersedeCommand_RefreshesLinkedPrecedentCompatibilitySnapshot()
+    {
+        var root = CreateTempDirectory();
+        var workspace = OrchestratorWorkspace.ForDirectory(root);
+        var kernel = new AgentOrchestratorKernel();
+        var goal = kernel.CreateGoal("Choose a billing provider.");
+        var correlationKey = $"spec-clarification:{goal.Id.Value}:billing-provider";
+        var store = CollaborationItemStore.ForDirectory(workspace.OrchestratorDirectory);
+        var raised = await store.RaiseAsync(
+            CollaborationItemType.Clarification,
+            goal.Id.Value,
+            "Billing provider",
+            "Stripe or Paddle?",
+            correlationKey);
+        Assert.True(await store.TryResolveAsync(
+            correlationKey,
+            "A",
+            briefVersion: goal.AuthoritativeBrief.Version));
+        var resolved = Assert.Single(await store.ListAsync(goal.Id.Value));
+        Assert.NotNull(resolved.AuthoritativeAnswer);
+        var firstAnswer = resolved.AuthoritativeAnswer!;
+        var precedents = new SpecRefinerPrecedentStore(workspace.SpecRefinerPrecedentsPath);
+        await precedents.RecordPrecedentAsync(
+            "billing-provider",
+            firstAnswer.Text,
+            "Operator clarification answer.",
+            originItemId: resolved.Id,
+            originGoalId: resolved.GoalId,
+            originAnswerId: firstAnswer.Id,
+            originBriefVersion: firstAnswer.BriefVersion);
+
+        ExecuteCliAndCapture(
+            ["supersede", goal.Id.Value[..8], raised.Id[..8], "B"],
+            kernel,
+            workspace);
+
+        var updated = Assert.Single(await store.ListAsync(goal.Id.Value));
+        Assert.NotNull(updated.AuthoritativeAnswer);
+        var current = updated.AuthoritativeAnswer!;
+        var precedent = await precedents.TryGetPrecedentAsync("billing-provider");
+        Assert.NotNull(precedent);
+        Assert.Equal("B", current.Text);
+        Assert.Equal("B", precedent!.Choice);
+        Assert.Equal(updated.Id, precedent.OriginItemId);
+        Assert.Equal(current.Id, precedent.OriginAnswerId);
+        Assert.Equal(current.BriefVersion, precedent.OriginBriefVersion);
+    }
 }

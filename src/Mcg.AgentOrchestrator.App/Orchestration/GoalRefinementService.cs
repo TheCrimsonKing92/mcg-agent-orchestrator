@@ -277,39 +277,46 @@ internal sealed class GoalRefinementService
                     ?? await _precedents.TryGetPrecedentAsync(fork.Kind, cancellationToken);
                 if (precedent is not null)
                 {
-                    AddDecisionIfMissing(
-                        decisions,
-                        fork.Question,
-                        precedent.Choice,
-                        $"Precedent ({topicKey}): {precedent.Rationale}");
+                    var authoritativePrecedent = await ResolveAuthoritativePrecedentAsync(
+                        precedent,
+                        topicKey,
+                        cancellationToken);
+                    if (authoritativePrecedent is not null)
+                    {
+                        AddDecisionIfMissing(
+                            decisions,
+                            fork.Question,
+                            authoritativePrecedent.Value.Choice,
+                            authoritativePrecedent.Value.Rationale);
+                        continue;
+                    }
                 }
-                else if (!surfacedTopicKeys.Add(topicKey) ||
+
+                if (!surfacedTopicKeys.Add(topicKey) ||
                     !surfacedNormalizedQuestionKeys.Add(normalizedQuestionKey))
                 {
                     continue;
                 }
-                else
-                {
-                    var correlationKey = BuildCorrelationKey(goalId, topicKey);
-                    await _raiseCollaborationItem(
-                        CollaborationItemType.Clarification,
-                        goalId.Value,
-                        BuildClarificationSubject(topicKey),
-                        BuildClarificationBody(
-                            fork,
-                            includeObjectiveInNextClarification ? goal.Objective : null),
-                        correlationKey,
-                        cancellationToken);
-                    raisedClarificationRound = true;
-                    includeObjectiveInNextClarification = false;
-                    openQuestions.Add(new RefinedSpecOpenQuestion(
-                        correlationKey,
-                        fork.Question,
-                        fork.Kind,
-                        "Open",
-                        TopicKey: topicKey,
-                        NormalizedQuestionKey: normalizedQuestionKey));
-                }
+
+                var correlationKey = BuildCorrelationKey(goalId, topicKey);
+                await _raiseCollaborationItem(
+                    CollaborationItemType.Clarification,
+                    goalId.Value,
+                    BuildClarificationSubject(topicKey),
+                    BuildClarificationBody(
+                        fork,
+                        includeObjectiveInNextClarification ? goal.Objective : null),
+                    correlationKey,
+                    cancellationToken);
+                raisedClarificationRound = true;
+                includeObjectiveInNextClarification = false;
+                openQuestions.Add(new RefinedSpecOpenQuestion(
+                    correlationKey,
+                    fork.Question,
+                    fork.Kind,
+                    "Open",
+                    TopicKey: topicKey,
+                    NormalizedQuestionKey: normalizedQuestionKey));
             }
             else
             {
@@ -393,14 +400,136 @@ internal sealed class GoalRefinementService
         var topicKey = ExtractTopicKey(correlationKey);
         if (!string.IsNullOrWhiteSpace(topicKey))
         {
-            await _precedents.RecordPrecedentAsync(
-                topicKey,
-                answer,
-                $"Resolved via operator (key: {correlationKey})",
-                cancellationToken);
+            var resolvedItem = (await _collaboration.ListAsync(goalId, cancellationToken))
+                .FirstOrDefault(item =>
+                    string.Equals(item.CorrelationKey, correlationKey, StringComparison.Ordinal));
+            var authoritativeAnswer = resolvedItem?.AuthoritativeAnswer;
+            if (resolvedItem is not null &&
+                authoritativeAnswer is not null &&
+                !string.IsNullOrWhiteSpace(resolvedItem.GoalId))
+            {
+                await _precedents.RecordPrecedentAsync(
+                    topicKey,
+                    authoritativeAnswer.Text,
+                    "Operator clarification answer.",
+                    cancellationToken,
+                    resolvedItem.Id,
+                    resolvedItem.GoalId,
+                    authoritativeAnswer.Id,
+                    authoritativeAnswer.BriefVersion);
+            }
         }
 
         return true;
+    }
+
+    private async Task<(string Choice, string Rationale)?> ResolveAuthoritativePrecedentAsync(
+        SpecRefinerPrecedent precedent,
+        string topicKey,
+        CancellationToken cancellationToken)
+    {
+        var effectivePrecedent = precedent;
+        if (!precedent.HasAnyOriginReference)
+        {
+            var recoveredOrigins = (await _collaboration.ListAsync(cancellationToken: cancellationToken))
+                .Where(item =>
+                    item.Type == CollaborationItemType.Clarification &&
+                    !string.IsNullOrWhiteSpace(item.GoalId) &&
+                    item.CorrelationKey is not null &&
+                    string.Equals(
+                        ExtractTopicKey(item.CorrelationKey),
+                        precedent.ForkKind,
+                        StringComparison.OrdinalIgnoreCase))
+                .SelectMany(item => (item.AnswerHistory ?? [])
+                    .Where(answer => string.Equals(answer.Text, precedent.Choice, StringComparison.Ordinal))
+                    .Select(answer => (Item: item, Answer: answer)))
+                .ToArray();
+            if (recoveredOrigins.Length == 0)
+            {
+                return (
+                    precedent.Choice,
+                    $"Unlinked legacy precedent ({topicKey}): {precedent.Rationale}");
+            }
+            if (recoveredOrigins.Length != 1)
+            {
+                var allMatchesRemainAuthoritative = recoveredOrigins.All(candidate =>
+                    !candidate.Answer.IsRetracted &&
+                    string.Equals(
+                        candidate.Item.AuthoritativeAnswer?.Id,
+                        candidate.Answer.Id,
+                        StringComparison.Ordinal));
+                return allMatchesRemainAuthoritative
+                    ? (
+                        precedent.Choice,
+                        $"Unlinked legacy precedent ({topicKey}; multiple current associations): {precedent.Rationale}")
+                    : null;
+            }
+
+            var recovered = recoveredOrigins[0];
+            effectivePrecedent = precedent with
+            {
+                OriginItemId = recovered.Item.Id,
+                OriginGoalId = recovered.Item.GoalId,
+                OriginAnswerId = recovered.Answer.Id,
+                OriginBriefVersion = recovered.Answer.BriefVersion
+            };
+        }
+
+        if (!effectivePrecedent.HasCompleteOriginReference)
+            return null;
+
+        var originItem = (await _collaboration.ListAsync(effectivePrecedent.OriginGoalId, cancellationToken))
+            .FirstOrDefault(item =>
+                string.Equals(item.Id, effectivePrecedent.OriginItemId, StringComparison.Ordinal) &&
+                string.Equals(item.GoalId, effectivePrecedent.OriginGoalId, StringComparison.Ordinal));
+        if (originItem is null ||
+            originItem.Type != CollaborationItemType.Clarification ||
+            string.IsNullOrWhiteSpace(originItem.CorrelationKey) ||
+            !string.Equals(
+                ExtractTopicKey(originItem.CorrelationKey),
+                effectivePrecedent.ForkKind,
+                StringComparison.OrdinalIgnoreCase))
+        {
+            return null;
+        }
+
+        var history = originItem.AnswerHistory ?? [];
+        var referencedAnswer = history.FirstOrDefault(answer =>
+            string.Equals(answer.Id, effectivePrecedent.OriginAnswerId, StringComparison.Ordinal));
+        var authoritativeAnswer = originItem.AuthoritativeAnswer;
+        if (referencedAnswer is null ||
+            authoritativeAnswer is null ||
+            referencedAnswer.BriefVersion != effectivePrecedent.OriginBriefVersion ||
+            !ReachesAuthoritativeAnswer(referencedAnswer, authoritativeAnswer, history))
+        {
+            return null;
+        }
+
+        var briefBasis = authoritativeAnswer.BriefVersion?.ToString() ?? "unknown";
+        return (
+            authoritativeAnswer.Text,
+            $"Authoritative clarification precedent (topic: {topicKey}, item: {originItem.Id}, " +
+            $"answer: {authoritativeAnswer.Id}, brief: {briefBasis}).");
+    }
+
+    private static bool ReachesAuthoritativeAnswer(
+        HumanInputAnswerRecord referencedAnswer,
+        HumanInputAnswerRecord authoritativeAnswer,
+        IReadOnlyList<HumanInputAnswerRecord> history)
+    {
+        HumanInputAnswerRecord? current = referencedAnswer;
+        var visited = new HashSet<string>(StringComparer.Ordinal);
+        while (current is not null && visited.Add(current.Id))
+        {
+            if (string.Equals(current.Id, authoritativeAnswer.Id, StringComparison.Ordinal))
+                return true;
+            if (string.IsNullOrWhiteSpace(current.SupersededByAnswerId))
+                return false;
+            current = history.FirstOrDefault(answer =>
+                string.Equals(answer.Id, current.SupersededByAnswerId, StringComparison.Ordinal));
+        }
+
+        return false;
     }
 
     // Resolves a clarification, writes the answer into the matching RefinedSpec question,
