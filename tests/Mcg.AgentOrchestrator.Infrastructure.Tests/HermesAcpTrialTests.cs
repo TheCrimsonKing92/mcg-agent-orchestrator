@@ -479,6 +479,7 @@ public sealed class HermesAcpTrialTests
             Arguments = "/d /c exit 0"
         };
 
+        var operationStarted = Stopwatch.GetTimestamp();
         using var process = new HermesAcpProcessLauncher().Start(startInfo);
         process.CompleteInput();
         var stdout = process.StandardOutput.ReadToEndAsync(TestContext.Current.CancellationToken);
@@ -491,7 +492,14 @@ public sealed class HermesAcpTrialTests
             process.ExitCode == 0,
             $"Expected exit 0, observed {process.ExitCode}. stdout='{stdoutText}' stderr='{stderrText}'.");
         Assert.True(process.JobExitConfirmed);
+        var jobExitObservation = process.DescribeJobExitObservation();
+        var operationElapsed = Stopwatch.GetElapsedTime(operationStarted);
+        Assert.Contains("confirmed=true", jobExitObservation, StringComparison.Ordinal);
         Assert.True(process.SurvivorInventoryEmpty);
+        Console.WriteLine(
+            $"process-lifecycle-receipt seam=job-completion variant=isolated " +
+            $"operation=HermesAcpProcessLauncher.WaitForExit elapsed_ms={operationElapsed.TotalMilliseconds:F3} " +
+            $"result={jobExitObservation}");
     }
 
     [Xunit.Fact]
@@ -510,6 +518,7 @@ public sealed class HermesAcpTrialTests
             Arguments = "-NoLogo -NoProfile -NonInteractive -Command \"$child = Start-Process powershell.exe -WindowStyle Hidden -PassThru -ArgumentList '-NoLogo -NoProfile -NonInteractive -Command Start-Sleep -Seconds 30'; [Console]::Out.WriteLine($child.Id)\""
         };
 
+        var operationStarted = Stopwatch.GetTimestamp();
         using var process = new HermesAcpProcessLauncher().Start(startInfo);
         process.CompleteInput();
         var stderr = process.StandardError.ReadToEndAsync(TestContext.Current.CancellationToken);
@@ -517,15 +526,71 @@ public sealed class HermesAcpTrialTests
         var stdout = process.StandardOutput.ReadToEndAsync(TestContext.Current.CancellationToken);
         await process.WaitForExitAsync(TestContext.Current.CancellationToken);
 
-        Assert.True(int.TryParse(childLine, out _), $"Expected child pid, observed '{childLine}'.");
+        Assert.True(int.TryParse(childLine, out var childPid), $"Expected child pid, observed '{childLine}'.");
         Assert.False(process.JobExitConfirmed);
+        var observation = process.DescribeJobExitObservation();
+        Assert.Contains("confirmed=false", observation, StringComparison.Ordinal);
+        Assert.Contains("source=job-active-ids", observation, StringComparison.Ordinal);
+        Assert.Contains("read=ok", observation, StringComparison.Ordinal);
+        Assert.Matches(@"observed_active_count=[1-9][0-9]*", observation);
+        Assert.Matches($@"observed_active_pids=[^;]*\b{childPid}\b", observation);
+        Assert.Contains("root_pid=", observation, StringComparison.Ordinal);
+        Assert.Matches(@"root_in_active=(?:true|false)", observation);
         Assert.False(process.SurvivorInventoryEmpty);
+        var operationElapsed = Stopwatch.GetElapsedTime(operationStarted);
+        Console.WriteLine(
+            $"process-lifecycle-receipt seam=job-completion variant=surviving-grandchild " +
+            $"candidate_pid={childPid} operation=HermesAcpProcessLauncher.WaitForExit " +
+            $"elapsed_ms={operationElapsed.TotalMilliseconds:F3} result={observation}");
 
         process.Kill();
         _ = await stdout;
         _ = await stderr;
         Assert.True(process.JobExitConfirmed);
         Assert.True(process.SurvivorInventoryEmpty);
+    }
+
+    [Xunit.Fact]
+    public async Task JobExitRefusalProjectsObservationIntoExceptionAndReceipt()
+    {
+        using var fixture = new Fixture();
+        using var identity = new HermesIdentityTestFixture();
+        var request = fixture.Request();
+        var version = new FakeHermesProcess(
+            identity.NativeVersionOutput,
+            launchedImagePath: identity.ExecutablePath);
+        var protocol = string.Join(Environment.NewLine,
+        [
+            JsonSerializer.Serialize(new { jsonrpc = "2.0", id = 1, result = new { protocolVersion = 1 } }),
+            JsonSerializer.Serialize(new
+            {
+                jsonrpc = "2.0",
+                id = 2,
+                result = new { sessionId = "session-1", models = new { currentModelId = "OpenAI:gpt-test" } }
+            }),
+            JsonSerializer.Serialize(new { jsonrpc = "2.0", id = 3, result = new { stopReason = "end_turn" } })
+        ]);
+        const string Observation = "job-exit-observation: confirmed=false; source=job-active-ids; read=ok; observed_active_count=1; observed_active_pids=4242; root_pid=4141; root_in_active=false";
+        var acp = new FakeHermesProcess(
+            protocol,
+            jobExitConfirmed: false,
+            survivorInventoryEmpty: false,
+            jobExitObservation: Observation);
+        var receiptPath = Path.Combine(fixture.Sandbox, "job-exit-failure.json");
+
+        var error = await Assert.ThrowsAsync<InvalidOperationException>(() =>
+            new HermesAcpLifecycle(
+                launcher: new FakeHermesProcessLauncher(version, acp),
+                identityVerifier: identity.Verifier).RunAsync(
+                request,
+                receiptPath,
+                TextWriter.Null));
+
+        Assert.Contains(Observation, error.Message, StringComparison.Ordinal);
+        var receipt = ReadReceipt(receiptPath);
+        Assert.Contains(Observation, receipt.Failure, StringComparison.Ordinal);
+        Assert.False(receipt.JobExitConfirmed);
+        Assert.True(acp.Killed);
     }
 
     [Xunit.Fact]
@@ -1170,7 +1235,8 @@ public sealed class HermesAcpTrialTests
         int exitCode = 0,
         bool jobExitConfirmed = true,
         bool survivorInventoryEmpty = true,
-        string? launchedImagePath = null) : IHermesAcpProcess
+        string? launchedImagePath = null,
+        string jobExitObservation = "job-exit-observation=unavailable") : IHermesAcpProcess
     {
         private readonly StringWriter _input = new();
         private readonly StringReader _output = new(output);
@@ -1181,6 +1247,7 @@ public sealed class HermesAcpTrialTests
         public TextReader StandardError => _error;
         public int ExitCode { get; } = exitCode;
         public bool JobExitConfirmed { get; } = jobExitConfirmed;
+        public string DescribeJobExitObservation() => jobExitObservation;
         public bool SurvivorInventoryEmpty { get; } = survivorInventoryEmpty;
         public string? LaunchedImagePath { get; } = launchedImagePath;
         public string Input => _input.ToString();
