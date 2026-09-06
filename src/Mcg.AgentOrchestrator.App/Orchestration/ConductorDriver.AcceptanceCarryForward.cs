@@ -14,7 +14,21 @@ internal sealed partial class ConductorDriver
         ConductorAutonomyPolicy policy,
         AcceptanceVerificationSummary acceptance)
     {
-        _ = CarryForwardGreenVerdict(candidate, acceptance);
+        var disposition = CarryForwardGreenVerdict(candidate, acceptance);
+        if (disposition is not (
+            AcceptanceMainAdvanceDisposition.Disjoint or
+            AcceptanceMainAdvanceDisposition.Unchanged))
+        {
+            return MakeResult(
+                candidate.Goal.Id.Value,
+                candidate.GoalPrefix,
+                policy,
+                new ConductorAdvanceOutcome.Held(
+                    GoalLifecycleState.Verified,
+                    $"Main advanced with overlapping or unclassifiable changes; " +
+                    $"revalidation required before landing. {disposition.FormatReceipt()}"));
+        }
+
         return CompleteLandingAfterAcceptance(candidate.Goal, candidate.GoalPrefix, policy, acceptance);
     }
 
