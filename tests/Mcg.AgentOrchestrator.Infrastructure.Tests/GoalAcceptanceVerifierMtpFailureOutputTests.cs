@@ -45,6 +45,25 @@ public sealed class GoalAcceptanceVerifierMtpFailureOutputTests
     }
 
     [Xunit.Fact]
+    public void TimedOutGreenReceiptDoesNotReportPostRunExit()
+    {
+        var result = new GoalAcceptanceVerifier.CommandResult(
+            1,
+            "Test run summary: Passed! - Mcg.AgentOrchestrator.Infrastructure.Tests.dll",
+            TimedOut: true,
+            Timeout: TimeSpan.FromMinutes(5));
+
+        var output = GoalAcceptanceVerifier.BuildMtpFailureOutputForTests(
+            "infrastructure tests: Worker dispatch fixtures",
+            result,
+            [MtpFixturePath("mtp-xunit-v3-green-run.trx.xml")]);
+
+        Assert.Contains("predicate=timed-out", output, StringComparison.Ordinal);
+        Assert.DoesNotContain("after the run completed", output, StringComparison.Ordinal);
+        Assert.DoesNotContain("exited before tests ran", output, StringComparison.Ordinal);
+    }
+
+    [Xunit.Fact]
     public void AbortedReceiptAvoidsPreRunClaim()
     {
         var result = new GoalAcceptanceVerifier.CommandResult(1, "Runner exited after reporting one test.");
@@ -106,6 +125,26 @@ public sealed class GoalAcceptanceVerifierMtpFailureOutputTests
     public void CensusOnlyRunsForForcedExit(int exitCode, bool expected)
     {
         Assert.Equal(expected, AssemblyExitThreadCensus.ShouldReportForExitCode(exitCode));
+    }
+
+    [Xunit.Fact]
+    public void CensusReportsTotalAndNewestThreadsWhenDetailsAreTruncated()
+    {
+        var threads = Enumerable.Range(0, 20)
+            .Select(id => (Id: id, StartedAt: new DateTime(2026, 1, 1).AddSeconds(id)))
+            .ToArray();
+
+        var census = AssemblyExitThreadCensus.ProjectNewestThreadsForReport(
+            threads,
+            thread => thread.StartedAt,
+            thread => $"id:{thread.Id}");
+        var diagnostic = AssemblyExitThreadCensus.BuildCensusDiagnostic(1, census);
+
+        Assert.Equal(20, census.TotalCount);
+        Assert.Equal(16, census.Threads.Count);
+        Assert.Equal("id:19", census.Threads[0]);
+        Assert.Equal("id:4", census.Threads[^1]);
+        Assert.Contains("new_os_threads=20 reported_os_threads=16 truncated=true", diagnostic, StringComparison.Ordinal);
     }
 
     private static string MtpFixturePath(string fileName) =>

@@ -40,21 +40,18 @@ internal static class AssemblyExitThreadCensus
             }
 
             using var process = Process.GetCurrentProcess();
-            var survivors = process.Threads
+            var census = ProjectNewestThreadsForReport(
+                process.Threads
                 .Cast<ProcessThread>()
-                .Where(thread => !_baselineThreadIds.Contains(thread.Id))
-                .Take(MaximumReportedThreads)
-                .Select(DescribeThread)
-                .ToArray();
-            if (survivors.Length == 0)
+                .Where(thread => !_baselineThreadIds.Contains(thread.Id)),
+                GetThreadStartTimeOrMinValue,
+                DescribeThread);
+            if (census.TotalCount == 0)
             {
                 return;
             }
 
-            Console.Error.WriteLine(
-                $"test-host-exit-thread-census exit_code={Environment.ExitCode.ToString(CultureInfo.InvariantCulture)} " +
-                $"new_os_threads={survivors.Length.ToString(CultureInfo.InvariantCulture)} " +
-                $"threads={string.Join(';', survivors)}");
+            Console.Error.WriteLine(BuildCensusDiagnostic(Environment.ExitCode, census));
         }
         catch (Exception ex)
         {
@@ -63,6 +60,41 @@ internal static class AssemblyExitThreadCensus
     }
 
     internal static bool ShouldReportForExitCode(int exitCode) => exitCode == 1;
+
+    internal static ThreadCensusProjection ProjectNewestThreadsForReport<T>(
+        IEnumerable<T> threads,
+        Func<T, DateTime> getStartTime,
+        Func<T, string> describe)
+    {
+        var newestFirst = threads
+            .Select(thread => (Thread: thread, StartTime: getStartTime(thread)))
+            .OrderByDescending(item => item.StartTime)
+            .ToArray();
+        var descriptions = newestFirst
+            .Take(MaximumReportedThreads)
+            .Select(item => describe(item.Thread))
+            .ToArray();
+        return new ThreadCensusProjection(newestFirst.Length, descriptions);
+    }
+
+    internal static string BuildCensusDiagnostic(int exitCode, ThreadCensusProjection census) =>
+        $"test-host-exit-thread-census exit_code={exitCode.ToString(CultureInfo.InvariantCulture)} " +
+        $"new_os_threads={census.TotalCount.ToString(CultureInfo.InvariantCulture)} " +
+        $"reported_os_threads={census.Threads.Count.ToString(CultureInfo.InvariantCulture)} " +
+        $"truncated={census.Truncated.ToString().ToLowerInvariant()} " +
+        $"threads={string.Join(';', census.Threads)}";
+
+    private static DateTime GetThreadStartTimeOrMinValue(ProcessThread thread)
+    {
+        try
+        {
+            return thread.StartTime;
+        }
+        catch
+        {
+            return DateTime.MinValue;
+        }
+    }
 
     private static string DescribeThread(ProcessThread thread)
     {
@@ -93,5 +125,10 @@ internal static class AssemblyExitThreadCensus
         {
             // Diagnostics must never change the test-host exit path.
         }
+    }
+
+    internal sealed record ThreadCensusProjection(int TotalCount, IReadOnlyList<string> Threads)
+    {
+        internal bool Truncated => TotalCount > Threads.Count;
     }
 }
