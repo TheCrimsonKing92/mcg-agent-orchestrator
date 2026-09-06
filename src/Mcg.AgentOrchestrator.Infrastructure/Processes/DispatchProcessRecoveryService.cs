@@ -243,6 +243,19 @@ internal sealed class DispatchProcessRecoveryService
                 verdict = Live(recoveryDecision, worktreeInspectionStatus);
                 return false;
             }
+
+            if (AnyObservedProcessHasUnknownIdentity(processRecord, observedHeartbeat))
+            {
+                verdict = Hold(
+                    new DispatchRecoveryDecision(
+                        DispatchRecoveryAction.Hold,
+                        DispatchRecoveryPolicy.ToActionName(DispatchRecoveryAction.Hold),
+                        GetHeartbeatPath(processRecord),
+                        "a live tracked process was observed, but its identity evidence is unavailable or does not prove ownership",
+                        "process-identity-unavailable"),
+                    worktreeInspectionStatus);
+                return true;
+            }
         }
         else
         {
@@ -577,6 +590,14 @@ internal sealed class DispatchProcessRecoveryService
                 processId,
                 heartbeat?.OwnedProcessIdentities,
                 _readProcessIdentity));
+
+    private bool AnyObservedProcessHasUnknownIdentity(TaskProcessRecord processRecord, DispatchHeartbeat? heartbeat) =>
+        GetObservedProcessIds(processRecord, heartbeat).Any(processId =>
+            _isStillRunning(processId) &&
+            DispatchProcessIdentityEvidence.ClassifyRecordedOwner(
+                processId,
+                heartbeat?.OwnedProcessIdentities,
+                _readProcessIdentity) == SpawnTrackedProcessStatus.Unknown);
 
     private static IReadOnlyList<int> GetObservedProcessIds(TaskProcessRecord processRecord, DispatchHeartbeat? heartbeat)
     {

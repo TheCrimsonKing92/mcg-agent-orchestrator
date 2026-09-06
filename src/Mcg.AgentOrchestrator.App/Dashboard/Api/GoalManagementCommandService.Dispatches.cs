@@ -766,15 +766,21 @@ private static string ResolveReadyBlockedProvider(TaskSpec task, IReadOnlyList<A
 }
 
 private static void ReconcileExitedAssignedProcessRecords(AgentOrchestratorKernel kernel, Goal goal)
-    => StaleDispatchProcessReconciler.Reconcile(
+{
+    var runner = new BackgroundDispatchRunner(
+        isStillRunning: IsTrackedProcessRunningForReadyBatch,
+        readProcessIdentity: processId => ReadTrackedProcessIdentityForReadyBatch(processId) is { } identity
+            ? (identity.StartedAt, identity.ImagePath)
+            : null);
+    StaleDispatchProcessReconciler.Reconcile(
         kernel,
+        runner,
         goal,
-        StaleDispatchProcessReconciler.AssignedOnly,
-        IsTrackedProcessRunningForReadyBatch,
-        ReadTrackedProcessIdentityForReadyBatch);
+        StaleDispatchProcessReconciler.AssignedOnly);
+}
 
 private static bool HasLiveTrackedProcess(TaskProcessRecord process)
-    => StaleDispatchProcessReconciler.HasLiveTrackedProcess(
+    => StaleDispatchProcessReconciler.HasLiveOrUnknownTrackedProcess(
         process,
         IsTrackedProcessRunningForReadyBatch,
         ReadTrackedProcessIdentityForReadyBatch);

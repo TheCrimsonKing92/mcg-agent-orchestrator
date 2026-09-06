@@ -10,58 +10,67 @@ internal static class StaleDispatchProcessReconciler
     internal static readonly IReadOnlySet<WorkTaskStatus> AssignedOnly =
         new HashSet<WorkTaskStatus> { WorkTaskStatus.Assigned };
 
-    internal static int Reconcile(AgentOrchestratorKernel kernel)
+    internal static int Reconcile(AgentOrchestratorKernel kernel) =>
+        Reconcile(kernel, new BackgroundDispatchRunner());
+
+    internal static int Reconcile(
+        AgentOrchestratorKernel kernel,
+        BackgroundDispatchRunner runner)
     {
         ArgumentNullException.ThrowIfNull(kernel);
-        return kernel.Goals.Sum(goal => Reconcile(kernel, goal, ConductorStatuses));
+        ArgumentNullException.ThrowIfNull(runner);
+        return kernel.Goals.Sum(goal => Reconcile(kernel, runner, goal, ConductorStatuses));
     }
 
     internal static int Reconcile(
         AgentOrchestratorKernel kernel,
+        BackgroundDispatchRunner runner,
         Goal goal,
-        IReadOnlySet<WorkTaskStatus> eligibleStatuses,
-        Func<int, bool>? isProcessRunning = null,
-        Func<int, SpawnProcessIdentity?>? readProcessIdentity = null,
-        Func<DateTimeOffset>? utcNow = null)
+        IReadOnlySet<WorkTaskStatus> eligibleStatuses)
     {
         ArgumentNullException.ThrowIfNull(kernel);
+        ArgumentNullException.ThrowIfNull(runner);
         ArgumentNullException.ThrowIfNull(goal);
         ArgumentNullException.ThrowIfNull(eligibleStatuses);
-        isProcessRunning ??= IsProcessRunning;
-        readProcessIdentity ??= DispatchProcessIdentityEvidence.ReadCurrent;
-        utcNow ??= () => DateTimeOffset.UtcNow;
         var reconciled = 0;
 
         foreach (var task in goal.Tasks)
         {
             if (!eligibleStatuses.Contains(task.Status) ||
                 task.LastProcess is not { IsRunning: true } process ||
-                !DispatchExitArtifacts.TryRead(process.ExitCodePath, out var exitArtifact) ||
-                exitArtifact.Origin == DispatchExitArtifactOrigin.Synthetic ||
-                HasLiveTrackedProcess(process, isProcessRunning, readProcessIdentity))
+                !File.Exists(process.ExitCodePath) ||
+                (DispatchExitArtifacts.TryRead(process.ExitCodePath, out var exitArtifact) &&
+                 exitArtifact.Origin == DispatchExitArtifactOrigin.Synthetic))
             {
                 continue;
             }
 
-            var completed = process with
+            var outcome = runner.ReconcileLatestProcess(kernel, goal.Id, task.Id);
+            if (outcome.ProcessRecord.IsRunning ||
+                outcome.RecoveryDecision?.Action == DispatchRecoveryAction.Hold)
             {
-                CompletedAt = utcNow(),
-                ExitCode = exitArtifact.ExitCode,
-                ExitArtifactOrigin = exitArtifact.Origin,
-                ExitArtifactReason = exitArtifact.Reason
-            };
-            kernel.RecordTaskProcessRefreshed(goal.Id, task.Id, completed, verification: null);
+                continue;
+            }
+
+            runner.ApplyRefreshOutcomeAndWriteDiagnostics(kernel, goal.Id, task.Id, outcome);
+            var refreshedTask = kernel.GetTask(goal.Id, task.Id);
+            if (refreshedTask.LastProcess is not { IsRunning: false } completed ||
+                !DispatchProcessCompletionState.HasAlreadyBeenApplied(refreshedTask, completed))
+            {
+                continue;
+            }
+
             kernel.RecordTaskNote(
                 goal.Id,
                 task.Id,
-                $"Auto-cleared stale LastProcess.IsRunning before dispatch; pid {process.ProcessId} had exit artifact {process.ExitCodePath} with exit {exitArtifact.ExitCode}.");
+                $"Reconciled completed dispatch before preparing another dispatch; pid {process.ProcessId} exited with {completed.ExitCode}.");
             reconciled++;
         }
 
         return reconciled;
     }
 
-    internal static bool HasLiveTrackedProcess(
+    internal static bool HasLiveOrUnknownTrackedProcess(
         TaskProcessRecord process,
         Func<int, bool> isProcessRunning,
         Func<int, SpawnProcessIdentity?> readProcessIdentity)
@@ -69,29 +78,20 @@ internal static class StaleDispatchProcessReconciler
         var heartbeat = ProcessLogReader.ReadHeartbeat(process);
         if (!heartbeat.IsAvailable)
         {
-            return false;
+            return process.CompletionTrackedProcessIds.Any(isProcessRunning);
         }
 
-        var candidates = heartbeat.OwnedProcessIds
+        var candidates = process.CompletionTrackedProcessIds
+            .Concat(heartbeat.OwnedProcessIds)
             .Concat(heartbeat.ChildProcessId is > 0 ? [heartbeat.ChildProcessId.Value] : [])
             .Concat(heartbeat.ProcessId > 0 ? [heartbeat.ProcessId] : []);
-        return DispatchProcessIdentityEvidence.GetLiveRecordedOwnerProcessIds(
-            candidates,
-            heartbeat.OwnedProcessIdentities,
-            isProcessRunning,
-            readProcessIdentity).Count > 0;
-    }
-
-    private static bool IsProcessRunning(int processId)
-    {
-        try
-        {
-            using var process = System.Diagnostics.Process.GetProcessById(processId);
-            return !process.HasExited;
-        }
-        catch (Exception ex) when (ex is ArgumentException or InvalidOperationException or System.ComponentModel.Win32Exception)
-        {
-            return false;
-        }
+        return candidates
+            .Where(processId => processId > 0)
+            .Distinct()
+            .Where(isProcessRunning)
+            .Any(processId => DispatchProcessIdentityEvidence.ClassifyRecordedOwner(
+                processId,
+                heartbeat.OwnedProcessIdentities,
+                readProcessIdentity) != SpawnTrackedProcessStatus.DeadOrRecycled);
     }
 }
