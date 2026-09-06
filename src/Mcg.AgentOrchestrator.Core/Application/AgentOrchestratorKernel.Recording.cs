@@ -774,11 +774,20 @@ public sealed partial class AgentOrchestratorKernel
                 verification,
                 task.LastDispatch?.ReviewRetryCap,
                 out var mergedFindings,
-                out _,
+                out var diagnostic,
                 out var violation,
                 out var identityTransitionSalvaged,
                 out var canonicalizations))
         {
+            if (violation is null && !string.IsNullOrWhiteSpace(diagnostic))
+            {
+                Append(
+                    goal,
+                    task.Id,
+                    ProgressKind.TaskNote,
+                    ReviewFindingParseRejectionNote.Build(task.RequiredRole, verification, diagnostic));
+            }
+
             return verification with
             {
                 ReviewFindingContractViolation = violation,

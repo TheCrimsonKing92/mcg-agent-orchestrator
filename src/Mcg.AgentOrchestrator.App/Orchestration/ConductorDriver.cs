@@ -2071,7 +2071,7 @@ internal sealed partial class ConductorDriver
             return true;
         }
 
-        if (TryBuildMissingFindingResultRetry(goal, triggeringTask, round, out decision))
+        if (TryBuildMissingFindingResultRetry(goal, triggeringTask, trigger.Finding, round, out decision))
         {
             return true;
         }

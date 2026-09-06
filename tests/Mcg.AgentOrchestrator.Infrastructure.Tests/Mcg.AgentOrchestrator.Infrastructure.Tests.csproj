@@ -29,6 +29,7 @@
     <Compile Remove="Fixtures\RealProcessShardProbe\**\*.cs" />
     <Content Include="TestData\Fixtures\progressive-review-10bd7223.json" CopyToOutputDirectory="PreserveNewest" />
     <Content Include="Fixtures\PlannerOutputContract\*.out.txt" CopyToOutputDirectory="PreserveNewest" />
+    <Content Include="Fixtures\ReviewerFindingsParse\*.out.txt" CopyToOutputDirectory="PreserveNewest" />
     <Content Include="Fixtures\CodexJsonl\*.jsonl" CopyToOutputDirectory="PreserveNewest" />
     <Content Include="..\..\config\trials\hermes-acp-v2026.8.27.json"
              Link="config\trials\hermes-acp-v2026.8.27.json"
