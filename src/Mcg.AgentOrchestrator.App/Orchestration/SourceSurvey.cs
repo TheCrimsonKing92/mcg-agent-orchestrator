@@ -1,3 +1,5 @@
+using Mcg.AgentOrchestrator.Infrastructure;
+
 namespace Mcg.AgentOrchestrator.App.Orchestration;
 
 internal sealed record SourceSurveyReport(
@@ -8,33 +10,16 @@ internal sealed record SourceSurveyReport(
     IReadOnlyList<string> Files,
     IReadOnlyList<SourceSurveyGroup> Groups,
     IReadOnlyList<string> ExcludedDirectoryNames,
-    string RecommendedCommand);
+    string RecommendedCommand,
+    string InventorySource = "filesystem-fallback",
+    bool TraversalComplete = true,
+    IReadOnlyList<string>? IncompleteReasons = null);
 
 internal sealed record SourceSurveyGroup(string Directory, int Count);
 
 internal static class SourceSurvey
 {
     public const int DefaultMaxFiles = 200;
-
-    private static readonly string[] ExcludedDirectoryNames =
-    [
-        ".git",
-        ".orchestrator",
-        ".orchestrator-demo",
-        ".orchestrator-prototype",
-        ".orchestrator-worktrees",
-        ".scratch",
-        "artifacts",
-        "bin",
-        "TestResults",
-        "obj",
-        "node_modules",
-        "playwright-report"
-    ];
-
-    private static readonly HashSet<string> ExcludedDirectoryNameSet = new(
-        ExcludedDirectoryNames,
-        StringComparer.OrdinalIgnoreCase);
 
     public static SourceSurveyReport Build(string root, int maxFiles = DefaultMaxFiles)
     {
@@ -50,10 +35,11 @@ internal static class SourceSurvey
         }
 
         var limit = Math.Clamp(maxFiles, 1, 1000);
+        var inventory = RepositorySourceInventory.Build(fullRoot);
         var files = new List<string>(limit);
         var total = 0;
 
-        foreach (var file in EnumerateSourceFiles(fullRoot))
+        foreach (var file in inventory.Files)
         {
             total++;
             if (files.Count < limit)
@@ -76,91 +62,24 @@ internal static class SourceSurvey
             total,
             files,
             groups,
-            ExcludedDirectoryNames,
-            BuildRecommendedCommand());
-    }
-
-    private static IEnumerable<string> EnumerateSourceFiles(string root)
-    {
-        foreach (var directory in EnumerateSourceDirectoryPaths(root))
-        {
-            foreach (var file in EnumerateFiles(directory).OrderBy(path => path, StringComparer.OrdinalIgnoreCase))
-            {
-                yield return Path.GetRelativePath(root, file).Replace(Path.DirectorySeparatorChar, '/');
-            }
-        }
+            RepositorySourceInventory.ExcludedDirectoryNames,
+            RepositorySourceInventory.BuildRecommendedRgCommand(),
+            inventory.Origin,
+            inventory.Complete,
+            inventory.IncompleteReasons);
     }
 
     internal static IReadOnlyList<string> EnumerateSourceDirectories(string root)
     {
         var fullRoot = Path.GetFullPath(root);
-        return EnumerateSourceDirectoryPaths(fullRoot)
-            .Skip(1)
-            .Select(directory => Path.GetRelativePath(fullRoot, directory).Replace(Path.DirectorySeparatorChar, '/'))
+        return RepositorySourceInventory.Build(fullRoot).Directories
+            .Where(directory => directory.Length > 0)
             .ToArray();
-    }
-
-    private static IEnumerable<string> EnumerateSourceDirectoryPaths(string root)
-    {
-        var directories = new Stack<string>();
-        directories.Push(root);
-
-        while (directories.Count > 0)
-        {
-            var directory = directories.Pop();
-            yield return directory;
-            foreach (var child in EnumerateDirectories(directory).OrderByDescending(path => path, StringComparer.OrdinalIgnoreCase))
-            {
-                if (!ExcludedDirectoryNameSet.Contains(Path.GetFileName(child)))
-                {
-                    directories.Push(child);
-                }
-            }
-        }
-    }
-
-    private static IEnumerable<string> EnumerateDirectories(string directory)
-    {
-        try
-        {
-            return Directory.EnumerateDirectories(directory);
-        }
-        catch (IOException)
-        {
-            return [];
-        }
-        catch (UnauthorizedAccessException)
-        {
-            return [];
-        }
-    }
-
-    private static IEnumerable<string> EnumerateFiles(string directory)
-    {
-        try
-        {
-            return Directory.EnumerateFiles(directory);
-        }
-        catch (IOException)
-        {
-            return [];
-        }
-        catch (UnauthorizedAccessException)
-        {
-            return [];
-        }
     }
 
     private static string GetTopLevelDirectory(string relativePath)
     {
         var index = relativePath.IndexOf('/', StringComparison.Ordinal);
         return index < 0 ? "." : relativePath[..index];
-    }
-
-    private static string BuildRecommendedCommand()
-    {
-        return "rg --files -g \"!**/artifacts/**\" -g \"!**/bin/**\" -g \"!**/TestResults/**\" -g \"!**/obj/**\" -g \"!**/.scratch/**\" " +
-            "-g \"!**/.orchestrator/**\" -g \"!**/.orchestrator-demo/**\" -g \"!**/.orchestrator-prototype/**\" " +
-            "-g \"!**/.orchestrator-worktrees/**\" -g \"!**/node_modules/**\" -g \"!**/playwright-report/**\"";
     }
 }

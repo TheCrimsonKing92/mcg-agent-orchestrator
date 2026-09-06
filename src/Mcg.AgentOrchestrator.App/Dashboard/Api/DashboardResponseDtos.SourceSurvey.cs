@@ -8,6 +8,9 @@ internal sealed record SourceSurveyDto(
     IReadOnlyList<string> Files,
     IReadOnlyList<SourceSurveyGroupDto> Groups,
     IReadOnlyList<string> ExcludedDirectoryNames,
-    string RecommendedCommand);
+    string RecommendedCommand,
+    string InventorySource,
+    bool TraversalComplete,
+    IReadOnlyList<string> IncompleteReasons);
 
 internal sealed record SourceSurveyGroupDto(string Directory, int Count);
