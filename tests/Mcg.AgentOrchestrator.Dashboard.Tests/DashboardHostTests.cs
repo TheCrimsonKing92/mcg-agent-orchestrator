@@ -141,6 +141,8 @@ public sealed class DashboardHostTests
 
             Assert.True(sourceSurvey.Contains("\"MaxFiles\": 8", StringComparison.Ordinal));
             Assert.True(defaultSourceSurvey.Contains("\"MaxFiles\": 8", StringComparison.Ordinal));
+            Assert.Contains("\"InventorySource\": \"filesystem-fallback\"", sourceSurvey, StringComparison.Ordinal);
+            Assert.Contains("\"TraversalComplete\": true", sourceSurvey, StringComparison.Ordinal);
             Assert.Equal(HttpStatusCode.Forbidden, createGoalResponse.StatusCode);
             Assert.True(createGoal.Contains("dashboard read-only", StringComparison.Ordinal));
             Assert.Equal(HttpStatusCode.Forbidden, getTaskOperationResponse.StatusCode);
