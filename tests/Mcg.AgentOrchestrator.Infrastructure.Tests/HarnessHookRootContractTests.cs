@@ -80,9 +80,29 @@ public sealed class HarnessHookRootContractTests
 
         Assert.Equal(0, benign.ExitCode);
         Assert.Empty(benign.StandardError);
-        Assert.NotEqual(0, blocked.ExitCode);
+        Assert.Equal(2, blocked.ExitCode);
         Assert.Contains("BLOCKED compound shell command", blocked.StandardError, StringComparison.Ordinal);
         Assert.Contains("chaining &&", blocked.StandardError, StringComparison.Ordinal);
+    }
+
+    [Xunit.Fact]
+    public async Task RenderedCompoundHook_WithoutRoot_BlocksWithActionableDiagnostic()
+    {
+        using var fixture = HookWorkspace.Create();
+        var command =
+            "$env:CLAUDE_PROJECT_DIR = $null; " +
+            ReadHookCommand(fixture.Root, "PreToolUse");
+        using var timeout = new CancellationTokenSource(TimeSpan.FromSeconds(20));
+
+        var result = await WorkerProcessRunner.RunBufferedAsync(
+            new WorkerProcessRunRequest(command, fixture.Root),
+            timeout.Token);
+
+        Assert.Equal(2, result.ExitCode);
+        Assert.Contains(
+            "Repository hook root is unavailable: set CLAUDE_PROJECT_DIR to the worktree root",
+            result.StandardError,
+            StringComparison.Ordinal);
     }
 
     [Xunit.Fact]
