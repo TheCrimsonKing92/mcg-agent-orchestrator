@@ -18,6 +18,24 @@ public sealed class ConductorDriverTestsUnparseableFindingBlockersRoute
     }
 
     [Xunit.Fact]
+    public void BlockersRouteRequiresAValidWorkerResultEnvelope()
+    {
+        var (kernel, goal) = SoftwareGoal();
+        var reviewer = goal.Tasks.Single(task => task.RequiredRole == AgentRole.Reviewer);
+        DispatchTask(kernel, goal, reviewer, "review");
+        kernel.RecordDispatchExecutionResult(goal.Id, reviewer.Id, new TaskVerificationRecord(
+            "review",
+            "C:\\tmp",
+            1,
+            "blockers: blocking defect\nverdict: needs-work",
+            string.Empty,
+            DateTimeOffset.UtcNow,
+            WorkerResultPresent: false));
+
+        Xunit.Assert.False(UnparseableFindingBlockersRoute.PrefersBlockersTextRoute(reviewer, "blocking defect"));
+    }
+
+    [Xunit.Fact]
     public void BlockersRouteRejectsReviewerWithParsedStructuredFindings()
     {
         var (kernel, goal) = SoftwareGoal();

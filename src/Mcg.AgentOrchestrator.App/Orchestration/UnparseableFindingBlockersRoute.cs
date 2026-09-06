@@ -9,7 +9,11 @@ internal static class UnparseableFindingBlockersRoute
         ArgumentNullException.ThrowIfNull(triggeringTask);
 
         return triggeringTask.RequiredRole == AgentRole.Reviewer &&
-            triggeringTask.LastVerification is { MergedReviewFindings: null } &&
+            triggeringTask.LastVerification is
+            {
+                WorkerResultPresent: true,
+                MergedReviewFindings: null
+            } &&
             !string.IsNullOrWhiteSpace(blockersText);
     }
 }

@@ -53,6 +53,17 @@ public sealed class ConductorBatchLoopTestsStaleProcessReconcile : ConductorBatc
                 goal.Id,
                 task.Id,
                 new TaskProcessRecord(int.MaxValue, "review", root, stdout, stderr, exit, now, null, null));
+            var snapshot = kernel.ExportGoalSnapshot(goal.Id);
+            kernel.ReplaceGoalWithSnapshot(snapshot with
+            {
+                Tasks = snapshot.Tasks
+                    .Select(candidate => candidate.Id == task.Id.Value
+                        ? candidate with { Status = WorkTaskStatus.Assigned }
+                        : candidate)
+                    .ToArray()
+            });
+            goal = kernel.GetGoal(goal.Id);
+            task = kernel.GetTask(goal.Id, task.Id);
             var preparationObserved = false;
             var driver = ConductorDriverTests.MakeDriver(
                 getFacts: _ => new GoalLifecycleFacts(WorkspaceExists: true),

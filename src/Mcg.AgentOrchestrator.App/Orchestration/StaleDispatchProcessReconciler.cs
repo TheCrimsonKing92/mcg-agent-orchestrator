@@ -1,12 +1,11 @@
 using Mcg.AgentOrchestrator.Core;
 using Mcg.AgentOrchestrator.Infrastructure;
+using System.Diagnostics;
 
 namespace Mcg.AgentOrchestrator.App.Orchestration;
 
 internal static class StaleDispatchProcessReconciler
 {
-    private static readonly IReadOnlySet<WorkTaskStatus> ConductorStatuses =
-        new HashSet<WorkTaskStatus> { WorkTaskStatus.Assigned, WorkTaskStatus.Running };
     internal static readonly IReadOnlySet<WorkTaskStatus> AssignedOnly =
         new HashSet<WorkTaskStatus> { WorkTaskStatus.Assigned };
 
@@ -19,19 +18,23 @@ internal static class StaleDispatchProcessReconciler
     {
         ArgumentNullException.ThrowIfNull(kernel);
         ArgumentNullException.ThrowIfNull(runner);
-        return kernel.Goals.Sum(goal => Reconcile(kernel, runner, goal, ConductorStatuses));
+        return kernel.Goals.Sum(goal => Reconcile(kernel, runner, goal, AssignedOnly));
     }
 
     internal static int Reconcile(
         AgentOrchestratorKernel kernel,
         BackgroundDispatchRunner runner,
         Goal goal,
-        IReadOnlySet<WorkTaskStatus> eligibleStatuses)
+        IReadOnlySet<WorkTaskStatus> eligibleStatuses,
+        Func<int, bool>? isProcessRunning = null,
+        Func<int, SpawnProcessIdentity?>? readProcessIdentity = null)
     {
         ArgumentNullException.ThrowIfNull(kernel);
         ArgumentNullException.ThrowIfNull(runner);
         ArgumentNullException.ThrowIfNull(goal);
         ArgumentNullException.ThrowIfNull(eligibleStatuses);
+        isProcessRunning ??= IsProcessRunning;
+        readProcessIdentity ??= DispatchProcessIdentityEvidence.ReadCurrent;
         var reconciled = 0;
 
         foreach (var task in goal.Tasks)
@@ -41,6 +44,11 @@ internal static class StaleDispatchProcessReconciler
                 !File.Exists(process.ExitCodePath) ||
                 (DispatchExitArtifacts.TryRead(process.ExitCodePath, out var exitArtifact) &&
                  exitArtifact.Origin == DispatchExitArtifactOrigin.Synthetic))
+            {
+                continue;
+            }
+
+            if (HasLiveOrUnknownTrackedProcess(process, isProcessRunning, readProcessIdentity))
             {
                 continue;
             }
@@ -93,5 +101,18 @@ internal static class StaleDispatchProcessReconciler
                 processId,
                 heartbeat.OwnedProcessIdentities,
                 readProcessIdentity) != SpawnTrackedProcessStatus.DeadOrRecycled);
+    }
+
+    private static bool IsProcessRunning(int processId)
+    {
+        try
+        {
+            using var process = Process.GetProcessById(processId);
+            return !process.HasExited;
+        }
+        catch
+        {
+            return false;
+        }
     }
 }

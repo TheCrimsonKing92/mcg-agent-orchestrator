@@ -85,7 +85,9 @@ public sealed class StaleDispatchProcessReconcilerTests
                 fixture.Kernel,
                 runner,
                 fixture.Goal,
-                StaleDispatchProcessReconciler.AssignedOnly);
+                StaleDispatchProcessReconciler.AssignedOnly,
+                pid => childAlive && pid == childIdentity.ProcessId,
+                pid => pid == childIdentity.ProcessId ? childIdentity : null);
 
             Xunit.Assert.Equal(0, count);
             var heldProcess = Xunit.Assert.IsType<TaskProcessRecord>(fixture.Task.LastProcess);
@@ -94,7 +96,12 @@ public sealed class StaleDispatchProcessReconcilerTests
             Xunit.Assert.Null(fixture.Task.LastVerification);
             childAlive = false;
             Xunit.Assert.Equal(1, StaleDispatchProcessReconciler.Reconcile(
-                fixture.Kernel, runner, fixture.Goal, StaleDispatchProcessReconciler.AssignedOnly));
+                fixture.Kernel,
+                runner,
+                fixture.Goal,
+                StaleDispatchProcessReconciler.AssignedOnly,
+                pid => childAlive && pid == childIdentity.ProcessId,
+                pid => pid == childIdentity.ProcessId ? childIdentity : null));
             Xunit.Assert.NotNull(fixture.Task.LastVerification);
         }
         finally
@@ -155,7 +162,9 @@ public sealed class StaleDispatchProcessReconcilerTests
                 fixture.Kernel,
                 runner,
                 fixture.Goal,
-                StaleDispatchProcessReconciler.AssignedOnly);
+                StaleDispatchProcessReconciler.AssignedOnly,
+                pid => processAlive && pid == processId,
+                _ => null);
 
             Xunit.Assert.Equal(0, count);
             var heldProcess = Xunit.Assert.IsType<TaskProcessRecord>(fixture.Task.LastProcess);
@@ -165,7 +174,12 @@ public sealed class StaleDispatchProcessReconcilerTests
             Xunit.Assert.Empty(fixture.Kernel.HumanInputRequests);
             processAlive = false;
             Xunit.Assert.Equal(1, StaleDispatchProcessReconciler.Reconcile(
-                fixture.Kernel, runner, fixture.Goal, StaleDispatchProcessReconciler.AssignedOnly));
+                fixture.Kernel,
+                runner,
+                fixture.Goal,
+                StaleDispatchProcessReconciler.AssignedOnly,
+                pid => processAlive && pid == processId,
+                _ => null));
             Xunit.Assert.NotNull(fixture.Task.LastVerification);
         }
         finally
