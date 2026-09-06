@@ -109,6 +109,40 @@ public sealed class TaskBriefTests
     Assert.Contains("category: spec-defect", brief, StringComparison.Ordinal);
 }
 
+    [Xunit.Fact]
+    public void BuildTaskBriefPlannerRendersOnlyTheAuthoritativeRefinedCriteriaList()
+    {
+        var kernel = new AgentOrchestratorKernel(new FakeClock());
+        var planner = new TaskSpec(TaskId.New(), "Plan the mapped implementation", AgentRole.Planner);
+        var objective = """
+            Keep criteria aligned.
+
+            ## Acceptance criteria
+
+            1. First declared criterion.
+            2. Second declared criterion.
+            """;
+        var goal = kernel.CreateGoal(objective, [planner]);
+        kernel.SetGoalRefinedSpec(goal.Id, new RefinedSpec(
+            $"Implement: {objective}",
+            ["First refined criterion.", "Second refined criterion.", "Third refined criterion."],
+            VerificationClass.TestVerifiable,
+            [],
+            []));
+
+        var brief = kernel.BuildTaskBrief(goal.Id, planner.Id).Content;
+
+        Assert.Contains(
+            "Acceptance criteria (authoritative list validated by PlannerOutputContract):",
+            brief,
+            StringComparison.Ordinal);
+        Assert.Contains("1. First refined criterion.", brief, StringComparison.Ordinal);
+        Assert.Contains("3. Third refined criterion.", brief, StringComparison.Ordinal);
+        Assert.DoesNotContain("First declared criterion.", brief, StringComparison.Ordinal);
+        Assert.DoesNotContain("Second declared criterion.", brief, StringComparison.Ordinal);
+        Assert.Equal(1, CountOccurrences(brief, "1. First refined criterion."));
+    }
+
     [Xunit.Fact(DisplayName = "BuildTaskBrief_reviewer_convergence_scope_preserves_finding_severity")]
     public void BuildTaskBriefReviewerConvergenceScopePreservesFindingSeverity()
 {

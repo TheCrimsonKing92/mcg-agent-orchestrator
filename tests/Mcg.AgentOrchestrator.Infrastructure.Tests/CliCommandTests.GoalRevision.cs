@@ -32,14 +32,32 @@ public sealed class CliCommandTestsGoalRevision : CliCommandTestBase
         var workspace = CreateRefinedWorkspace(root);
         var kernel = new AgentOrchestratorKernel();
         var goal = kernel.CreateGoal("Original CLI brief", [new TaskSpec(TaskId.New(), "work", AgentRole.Developer)]);
+        kernel.SetGoalRefinedSpec(goal.Id, new RefinedSpec(
+            "Original CLI behavior",
+            ["Original CLI criterion"],
+            VerificationClass.TestVerifiable,
+            [],
+            []));
 
+        var revisedBriefPath = Path.Combine(root, "revised-cli-brief.md");
+        File.WriteAllText(revisedBriefPath, """
+            Revised CLI brief
+
+            ## Acceptance criteria
+
+            1. First revised criterion.
+            2. Second revised criterion.
+            """);
         var parts = CliArgumentParser.SplitCommand(
-            $"revise {goal.Id.Value[..8]} Revised CLI brief --reason narrower slice");
+            $"revise {goal.Id.Value[..8]} --brief-file {revisedBriefPath} --reason narrower slice");
         var output = ExecuteCliAndCapture(parts, kernel, workspace);
         var history = ExecuteCliAndCapture(["revise", goal.Id.Value[..8], "--history"], kernel, workspace);
 
-        Xunit.Assert.Equal("Revised CLI brief", goal.Objective);
+        Xunit.Assert.StartsWith("Revised CLI brief", goal.Objective, StringComparison.Ordinal);
         Xunit.Assert.Contains("authoritative=v2", output, StringComparison.Ordinal);
+        Xunit.Assert.Contains("refined-criteria=2", output, StringComparison.Ordinal);
+        Xunit.Assert.Contains("  refined acceptance criteria:", output, StringComparison.Ordinal);
+        Xunit.Assert.Contains("    2. Second revised criterion.", output, StringComparison.Ordinal);
         Xunit.Assert.Contains("completed-unchanged=0", output, StringComparison.Ordinal);
         Xunit.Assert.Contains("v1 superseded-by=v2", history, StringComparison.Ordinal);
         Xunit.Assert.Contains("Original CLI brief", history, StringComparison.Ordinal);

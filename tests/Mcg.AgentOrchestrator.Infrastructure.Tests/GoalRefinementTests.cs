@@ -10,6 +10,50 @@ public sealed class GoalRefinementTests
 {
     // --- Binding selection and configuration failures ---
 
+    [Xunit.Fact]
+    public void SpecRefinerPromptRequiresOneToOneDeclaredCriterionMapping()
+    {
+        var prompt = SpecRefinerPlanner.BuildPrompt("Refine these criteria.");
+
+        Xunit.Assert.Contains(
+            "Never split one numbered objective criterion into multiple refined entries, and never merge multiple numbered objective criteria into one refined entry.",
+            prompt,
+            StringComparison.Ordinal);
+    }
+
+    [Xunit.Fact]
+    public async Task GoalRefinementServiceKeepsBf434fdbCriterionFiveAsOneRefinedEntry()
+    {
+        const string criterion = "Reviewer evidence that no other shipped caller depends on the automatic DeveloperReviewer result: cite each read of PipelineDecision.Pipeline in src (the planner file has reads around lines 502, 536 and 553) and state whether it is display-only or behavioural.";
+        var objective = $"""
+            Preserve the historical acceptance criterion.
+
+            ## Acceptance criteria
+
+            1. {criterion}
+            """;
+        var response = """
+            ```json
+            {
+              "behavioralContract": "Preserve evidence classification.",
+              "acceptanceCriteria": [
+                "Reviewer evidence that no other shipped caller depends on the automatic DeveloperReviewer result: cite each read of PipelineDecision.Pipeline in src (the planner file has reads around lines 502, 536 and 553)",
+                "and state whether it is display-only or behavioural."
+              ],
+              "verificationClass": "TestVerifiable",
+              "decisions": [],
+              "forks": []
+            }
+            ```
+            """;
+        var (service, kernel, goalId, _) = BuildScenario(responseJson: response, objective: objective);
+
+        var result = await service.RefineAsync(kernel, goalId);
+
+        Xunit.Assert.Equal([criterion], result.Spec.AcceptanceCriteria);
+        Xunit.Assert.Equal([criterion], kernel.GetGoal(goalId).RefinedSpec!.AcceptanceCriteria);
+    }
+
     [Xunit.Fact(DisplayName = "GoalRefinementService_throws_when_no_refiner_binding")]
     public async Task ThrowsWhenNoRefinerBinding()
     {
@@ -1544,7 +1588,7 @@ public sealed class GoalRefinementTests
         var planner = kernel.GetGoal(goalId).Tasks.First(task => task.RequiredRole == AgentRole.Planner);
         var brief = kernel.BuildTaskBrief(goalId, planner.Id).Content;
         Xunit.Assert.Equal(
-            declaredCriteria.Select(criterion => $"- {criterion}"),
+            declaredCriteria.Select((criterion, index) => $"{index + 1}. {criterion}"),
             ExtractRenderedAcceptanceCriteria(brief));
 
         var contractRoot = CreateTempDirectory();
@@ -2730,7 +2774,7 @@ public sealed class GoalRefinementTests
     private static string[] ExtractRenderedAcceptanceCriteria(string brief)
     {
         var normalizedBrief = brief.ReplaceLineEndings("\n");
-        const string acceptanceHeading = "Acceptance criteria:\n";
+        const string acceptanceHeading = "Acceptance criteria (authoritative list validated by PlannerOutputContract):\n";
         var acceptanceHeadingIndex = normalizedBrief.IndexOf(acceptanceHeading, StringComparison.Ordinal);
         Xunit.Assert.True(acceptanceHeadingIndex >= 0, "Planner brief is missing its acceptance criteria heading.");
         var acceptanceStart = acceptanceHeadingIndex + acceptanceHeading.Length;
