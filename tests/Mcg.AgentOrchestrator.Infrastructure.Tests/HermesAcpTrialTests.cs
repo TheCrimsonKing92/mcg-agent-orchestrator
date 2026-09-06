@@ -481,6 +481,8 @@ public sealed class HermesAcpTrialTests
 
         var operationStarted = Stopwatch.GetTimestamp();
         using var process = new HermesAcpProcessLauncher().Start(startInfo);
+        Assert.True(process.ProcessId > 0);
+        Assert.True(process.ProcessStartedAt.HasValue);
         process.CompleteInput();
         var stdout = process.StandardOutput.ReadToEndAsync(TestContext.Current.CancellationToken);
         var stderr = process.StandardError.ReadToEndAsync(TestContext.Current.CancellationToken);
@@ -498,6 +500,7 @@ public sealed class HermesAcpTrialTests
         Assert.True(process.SurvivorInventoryEmpty);
         Console.WriteLine(
             $"process-lifecycle-receipt seam=job-completion variant=isolated " +
+            $"candidate_pid={process.ProcessId} candidate_started_at={process.ProcessStartedAt.Value:O} " +
             $"operation=HermesAcpProcessLauncher.WaitForExit elapsed_ms={operationElapsed.TotalMilliseconds:F3} " +
             $"result={jobExitObservation}");
     }
@@ -520,6 +523,8 @@ public sealed class HermesAcpTrialTests
 
         var operationStarted = Stopwatch.GetTimestamp();
         using var process = new HermesAcpProcessLauncher().Start(startInfo);
+        Assert.True(process.ProcessId > 0);
+        Assert.True(process.ProcessStartedAt.HasValue);
         process.CompleteInput();
         var stderr = process.StandardError.ReadToEndAsync(TestContext.Current.CancellationToken);
         var childLine = await process.StandardOutput.ReadLineAsync(TestContext.Current.CancellationToken);
@@ -527,6 +532,8 @@ public sealed class HermesAcpTrialTests
         await process.WaitForExitAsync(TestContext.Current.CancellationToken);
 
         Assert.True(int.TryParse(childLine, out var childPid), $"Expected child pid, observed '{childLine}'.");
+        using var childProcess = Process.GetProcessById(childPid);
+        var childStartedAt = new DateTimeOffset(childProcess.StartTime.ToUniversalTime(), TimeSpan.Zero);
         Assert.False(process.JobExitConfirmed);
         var observation = process.DescribeJobExitObservation();
         Assert.Contains("confirmed=false", observation, StringComparison.Ordinal);
@@ -540,7 +547,9 @@ public sealed class HermesAcpTrialTests
         var operationElapsed = Stopwatch.GetElapsedTime(operationStarted);
         Console.WriteLine(
             $"process-lifecycle-receipt seam=job-completion variant=surviving-grandchild " +
-            $"candidate_pid={childPid} operation=HermesAcpProcessLauncher.WaitForExit " +
+            $"candidate_pid={childPid} candidate_started_at={childStartedAt:O} " +
+            $"root_pid={process.ProcessId} root_started_at={process.ProcessStartedAt.Value:O} " +
+            $"operation=HermesAcpProcessLauncher.WaitForExit " +
             $"elapsed_ms={operationElapsed.TotalMilliseconds:F3} result={observation}");
 
         process.Kill();
@@ -548,6 +557,10 @@ public sealed class HermesAcpTrialTests
         _ = await stderr;
         Assert.True(process.JobExitConfirmed);
         Assert.True(process.SurvivorInventoryEmpty);
+        var teardownObservation = process.DescribeJobExitObservation();
+        Assert.Contains("source=accounting-handle-wait", teardownObservation, StringComparison.Ordinal);
+        Assert.Contains("wait=confirmed", teardownObservation, StringComparison.Ordinal);
+        Assert.Contains("read=not-observed", teardownObservation, StringComparison.Ordinal);
     }
 
     [Xunit.Fact]

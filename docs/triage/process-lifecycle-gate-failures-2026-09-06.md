@@ -1,6 +1,6 @@
 # Process-lifecycle gate evidence, 2026-09-06
 
-This slice preserves evidence for five gate signatures without assigning an unproved shared cause. The original registration and Hermes tests both passed in a focused replay on 2026-09-06 (2 passed, 0 failed), so no causal production fix, timeout change, retry expansion, waiver, or serialization change is included.
+This slice preserves evidence for five gate signatures from parent backlog `2666349128b7461a824a004566658ebc` without assigning an unproved shared cause. The original registration and Hermes tests both passed in a focused replay on 2026-09-06 (2 passed, 0 failed), so no causal production fix, timeout change, retry expansion, waiver, or serialization change is included.
 
 | Signature | Current owner and decision path | Evidence previously retained | Evidence previously discarded | Disposition |
 | --- | --- | --- | --- | --- |
@@ -10,7 +10,7 @@ This slice preserves evidence for five gate signatures without assigning an unpr
 | `GoalAcceptanceVerifierSlotGateRetryReapsRecordedHeartbeatChildBeforeRebuild` | `GoalAcceptanceVerifierDotnetBuildSlotTestsSlotGateJobResources.cs` invokes a nested core-test gate while exercising slot-gate cleanup. | Nested-gate failure result. | The discriminating concurrent operation or state transition was never recorded. | Unresolved; focused and 25-repeat passes do not establish a cause. |
 | `AliveSuccessorHardCeilingReportsAliveTimeout` | `ConductorLoopHandoff.TryStartSuccessor` emits the terminal `processAlive` and `terminalReason` decision. | Terminal handoff outcome. | No production evidence gap remains for the observed assertion. | `ConductorLoopHandoffTests.cs` contains the test-only controlled correction: 0 ms and 400 ms probe-delay cases accept that the intermediate Pending event is optional. No production edit here. |
 
-Registration diagnostics contain fixed fields only, format timestamps as round-trip UTC values, and reduce image paths to file names. Job diagnostics cap active IDs at eight and never contain arguments, environment values, credentials, prompt text, or directory paths. Existing return values and kill/dispose ordering remain unchanged.
+Registration diagnostics contain fixed fields only, format timestamps as round-trip UTC values, and reduce image paths to file names. Job diagnostics cap active IDs at eight, distinguish active-ID reads from accounting-handle wait outcomes, and mark fields that were not observed instead of synthesizing a successful read. They never contain arguments, environment values, credentials, prompt text, or directory paths. Existing return values and kill/dispose ordering remain unchanged.
 
 The repeatable Windows harness is `scripts/Invoke-ProcessLifecycleEvidenceHarness.ps1`. For each iteration it runs isolated and changed-variable registration/job cases and emits one bounded line containing candidate/process identity, operation, observed timing, exact result, and managed-runner exit code. A non-reproduction remains unresolved.
 
