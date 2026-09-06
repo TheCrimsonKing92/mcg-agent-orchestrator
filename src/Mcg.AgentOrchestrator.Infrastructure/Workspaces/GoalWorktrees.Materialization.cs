@@ -474,7 +474,78 @@ public static partial class GoalWorktrees
             return false;
         }
 
-        output = FilterInternalArtifactStatusEntries(result.Output);
+        var statusOutput = FilterInternalArtifactStatusEntries(result.Output);
+        var eolResult = gitRunner(worktreePath, ["ls-files", "--eol", "-z"]);
+        if (!eolResult.Succeeded || eolResult.DrainTimedOut)
+        {
+            output = string.Empty;
+            failure = $"byte-preserving tracked-file scan could not be verified: {DescribeGitFailure(eolResult)}";
+            return false;
+        }
+
+        if (!TryParseImplicitConversionPaths(eolResult.Output, out var implicitPaths, out failure))
+        {
+            output = string.Empty;
+            return false;
+        }
+
+        var entries = statusOutput.Split('\0', StringSplitOptions.RemoveEmptyEntries).ToList();
+        var explicitPaths = entries
+            .Where(entry => entry.StartsWith(" M ", StringComparison.Ordinal) && entry.Length > 3)
+            .Select(entry => entry[3..])
+            .ToHashSet(StringComparer.Ordinal);
+        foreach (var path in implicitPaths)
+        {
+            if (explicitPaths.Add(path))
+            {
+                entries.Add($" M {path}");
+            }
+        }
+
+        output = entries.Count == 0 ? string.Empty : string.Join('\0', entries) + '\0';
+        failure = string.Empty;
+        return true;
+    }
+
+    private static bool TryParseImplicitConversionPaths(
+        string eolOutput,
+        out IReadOnlyList<string> paths,
+        out string failure)
+    {
+        var parsed = new List<string>();
+        foreach (var entry in eolOutput.Split('\0', StringSplitOptions.RemoveEmptyEntries))
+        {
+            var separator = entry.IndexOf('\t');
+            if (separator <= 0 || separator == entry.Length - 1)
+            {
+                paths = [];
+                failure = "byte-preserving tracked-file scan returned a malformed receipt";
+                return false;
+            }
+
+            var metadata = entry[..separator].Split(' ', StringSplitOptions.RemoveEmptyEntries);
+            var path = entry[(separator + 1)..];
+            if (metadata.Length != 3 ||
+                !metadata[0].StartsWith("i/", StringComparison.Ordinal) ||
+                !metadata[1].StartsWith("w/", StringComparison.Ordinal) ||
+                !metadata[2].StartsWith("attr/", StringComparison.Ordinal) ||
+                string.IsNullOrWhiteSpace(path))
+            {
+                paths = [];
+                failure = "byte-preserving tracked-file scan returned a malformed receipt";
+                return false;
+            }
+
+            if (metadata[0] == "i/lf" &&
+                metadata[1] == "w/crlf" &&
+                metadata[2] == "attr/-text" &&
+                !GitCli.IsOrchestratorInternalArtifactPath(path))
+            {
+                parsed.Add(path);
+            }
+        }
+
+        paths = parsed;
         failure = string.Empty;
         return true;
     }

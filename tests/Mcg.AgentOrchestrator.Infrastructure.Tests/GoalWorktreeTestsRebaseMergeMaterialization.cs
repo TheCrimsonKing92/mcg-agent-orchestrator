@@ -113,8 +113,52 @@ public sealed class GoalWorktreeTestsRebaseMergeMaterialization : GoalWorktreeTe
             Assert.NotEqual(
                 RunGitOutput(fixture.Worktree, "rev-parse", "HEAD:fixture.txt"),
                 RunGitOutput(fixture.Worktree, "hash-object", "--no-filters", "--", "fixture.txt"));
-            Assert.Equal("M fixture.txt", ReadStatus(fixture.Worktree).TrimStart());
+            var statusAfter = ReadStatus(fixture.Worktree).TrimStart();
+            Assert.True(
+                statusAfter is "" or "M fixture.txt",
+                $"Expected Git's cached status to be clean or report fixture.txt modified, but got '{statusAfter}'.");
             Assert.Contains((byte)'\r', File.ReadAllBytes(fixture.FixturePath));
+        }
+        finally
+        {
+            DeleteDirectory(repo);
+        }
+    }
+
+    [Xunit.Fact]
+    public void RepairsSplitCommitMaterializationWhenPorcelainStatusIsCacheBlind()
+    {
+        var repo = CreateSeededRepository();
+        try
+        {
+            var goalId = GoalId.New();
+            var fixture = PrepareRawDefect(repo, goalId);
+            var statusReads = 0;
+            GitCli.GitResult Runner(string workingDirectory, string[] arguments)
+            {
+                if (arguments.SequenceEqual(["status", "--porcelain=v1", "-z", "--untracked-files=all"]) &&
+                    Interlocked.Increment(ref statusReads) <= 2)
+                {
+                    return new GitCli.GitResult(0, string.Empty, string.Empty);
+                }
+
+                return GitCli.Run(workingDirectory, arguments);
+            }
+
+            var result = GoalWorktrees.ValidatePostRebaseMaterialization(
+                fixture.Worktree,
+                GoalWorktrees.BranchName(goalId),
+                fixture.BaseBranch,
+                goalId,
+                Runner);
+
+            Assert.Equal(GoalWorktreeRebaseStatus.Rebased, result.Status);
+            Assert.Equal(3, statusReads);
+            Assert.Equal(["fixture.txt"], result.RematerializedFiles);
+            Assert.Equal(
+                RunGitOutput(fixture.Worktree, "rev-parse", "HEAD:fixture.txt"),
+                RunGitOutput(fixture.Worktree, "hash-object", "--no-filters", "--", "fixture.txt"));
+            Assert.Equal(string.Empty, ReadStatus(fixture.Worktree));
         }
         finally
         {
@@ -254,6 +298,39 @@ public sealed class GoalWorktreeTestsRebaseMergeMaterialization : GoalWorktreeTe
 
             Assert.Equal(GoalWorktreeRebaseStatus.IncompleteMaterialization, result.Status);
             Assert.Contains("output drain timed out", result.Message, StringComparison.Ordinal);
+            Assert.Equal(bytesBefore, File.ReadAllBytes(fixture.FixturePath));
+            Assert.Null(result.PreimageDirectory);
+        }
+        finally
+        {
+            DeleteDirectory(repo);
+        }
+    }
+
+    [Xunit.Fact]
+    public void BytePreservingScanFailureFailsClosedWithoutWriting()
+    {
+        var repo = CreateSeededRepository();
+        try
+        {
+            var goalId = GoalId.New();
+            var fixture = PrepareRawDefect(repo, goalId);
+            var bytesBefore = File.ReadAllBytes(fixture.FixturePath);
+            GitCli.GitResult Runner(string workingDirectory, string[] arguments) =>
+                arguments.SequenceEqual(["ls-files", "--eol", "-z"])
+                    ? new GitCli.GitResult(19, string.Empty, "injected tracked-file scan refusal")
+                    : GitCli.Run(workingDirectory, arguments);
+
+            var result = GoalWorktrees.ValidatePostRebaseMaterialization(
+                fixture.Worktree,
+                GoalWorktrees.BranchName(goalId),
+                fixture.BaseBranch,
+                goalId,
+                Runner);
+
+            Assert.Equal(GoalWorktreeRebaseStatus.IncompleteMaterialization, result.Status);
+            Assert.Contains("tracked-file scan", result.Message, StringComparison.Ordinal);
+            Assert.Contains("exit=19", result.Message, StringComparison.Ordinal);
             Assert.Equal(bytesBefore, File.ReadAllBytes(fixture.FixturePath));
             Assert.Null(result.PreimageDirectory);
         }
