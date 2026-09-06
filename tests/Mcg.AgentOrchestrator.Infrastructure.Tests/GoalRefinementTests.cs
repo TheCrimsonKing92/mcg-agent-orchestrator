@@ -1567,6 +1567,61 @@ public sealed class GoalRefinementTests
         Xunit.Assert.Single(await store.ListAsync(thirdGoal.Id.Value));
     }
 
+    [Xunit.Fact(DisplayName = "GoalRefinementService_linked_precedent_remains_applicable_after_origin_brief_revision")]
+    public async Task LinkedPrecedentRemainsApplicableAfterOriginBriefRevision()
+    {
+        const string matchingJson = """
+            ```json
+            {
+              "behavioralContract": "Integrates with billing.",
+              "acceptanceCriteria": ["Charge applied"],
+              "verificationClass": "TestVerifiable",
+              "decisions": [],
+              "forks": [{"kind": "external-contract", "topicKey": "billing-provider", "refinerConfidence": "low", "blastRadius": "high", "question": "Stripe or Paddle?", "choice": "", "rationale": "No prior art."}]
+            }
+            ```
+            """;
+        var root = CreateTempDirectory();
+        var workspace = OrchestratorWorkspace.ForDirectory(root);
+        var providers = new InMemoryModelProviderRegistry([
+            new FakeSmokeProvider(text: matchingJson, providerName: "fake-refiner")
+        ]);
+        ModelFunctionCatalogStore.Save(workspace.ModelFunctionCatalogPath, new ModelFunctionCatalog([
+            new ModelFunctionBinding(
+                ModelFunctionPurposes.SpecRefiner,
+                ModelLane.CheapApi,
+                new ModelProfile("fake-refiner", "fake-model", ModelCapability.Text, SubscriptionMode.ApiKey))
+        ]));
+        var kernel = new AgentOrchestratorKernel();
+        var originGoal = kernel.CreateGoal("Choose a billing provider.");
+        var service = CreateWorkspaceService(workspace, providers);
+        var store = CollaborationItemStore.ForDirectory(workspace.OrchestratorDirectory);
+
+        await service.RefineAsync(kernel, originGoal.Id);
+        var originItem = Xunit.Assert.Single(await store.ListAsync(originGoal.Id.Value));
+        Xunit.Assert.True(await service.TryResolveOpenClarificationAsync(
+            kernel,
+            originItem.CorrelationKey!,
+            "A"));
+        var authoritativeAnswer = Xunit.Assert.Single(
+            await store.ListAsync(originGoal.Id.Value)).AuthoritativeAnswer;
+        Xunit.Assert.NotNull(authoritativeAnswer);
+        kernel.ReviseGoalBrief(
+            originGoal.Id,
+            "Choose a billing provider under the revised compliance constraints.",
+            "Clarify the compliance basis without replacing the provider answer.");
+        var laterGoal = kernel.CreateGoal("Choose the same billing provider again.");
+
+        var result = await service.RefineAsync(kernel, laterGoal.Id);
+
+        var decision = Xunit.Assert.Single(result.Spec.Decisions);
+        Xunit.Assert.Equal(2, originGoal.AuthoritativeBrief.Version);
+        Xunit.Assert.Equal(1, authoritativeAnswer.BriefVersion);
+        Xunit.Assert.Equal("A", decision.Choice);
+        Xunit.Assert.Contains("brief: 1", decision.Rationale, StringComparison.Ordinal);
+        Xunit.Assert.Empty(await store.ListAsync(laterGoal.Id.Value));
+    }
+
     // --- HasOpenClarification static helper ---
 
     [Xunit.Fact(DisplayName = "HasOpenClarification_true_when_raised_clarification_item_exists")]
