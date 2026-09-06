@@ -1,4 +1,5 @@
 using System.Text.Json;
+using Mcg.AgentOrchestrator.App.Cli;
 using Mcg.AgentOrchestrator.Core;
 using Mcg.AgentOrchestrator.Infrastructure;
 
@@ -154,9 +155,8 @@ public sealed class CliGoalUnparkConcurrentWriterTests : CliGoalUnparkTestSuppor
                 {
                     if (attempt == 1)
                     {
-                        await writer.SaveGoalSnapshotsAsync(
-                            [snapshot with { Objective = "Concurrent human-input writer" }],
-                            token);
+                        await writer.TransactGoalStateAsync(seed.GoalId, (state, _) => Task.FromResult(
+                            (true, (GoalStateSnapshot?)(state! with { Goal = state.Goal with { Objective = "Concurrent human-input writer" } }), true)), token);
                     }
                 }
             };

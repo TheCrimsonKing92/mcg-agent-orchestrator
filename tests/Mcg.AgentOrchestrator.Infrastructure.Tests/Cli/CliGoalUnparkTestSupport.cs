@@ -8,6 +8,7 @@ public abstract class CliGoalUnparkTestSupport : CliTaskQueryTestSupport
     private protected static async Task<UnparkSeed> CreateParkedSeed(string root, string objective = "Parked goal")
     {
         var workspace = OrchestratorWorkspace.ForDirectory(root);
+        StateDbMigrations.EnsureUpToDate(workspace.SqliteStatePath);
         var repository = new SqliteOrchestratorStateRepository(workspace.SqliteStatePath);
         var kernel = new AgentOrchestratorKernel();
         var task = new TaskSpec(TaskId.New(), "Preserve this task", AgentRole.Developer);
@@ -23,6 +24,7 @@ public abstract class CliGoalUnparkTestSupport : CliTaskQueryTestSupport
     private protected static async Task<UnparkSeed> CreateParkedOpenHumanWaitSeed(string root)
     {
         var workspace = OrchestratorWorkspace.ForDirectory(root);
+        StateDbMigrations.EnsureUpToDate(workspace.SqliteStatePath);
         var repository = new SqliteOrchestratorStateRepository(workspace.SqliteStatePath);
         var kernel = new AgentOrchestratorKernel();
         var task = new TaskSpec(TaskId.New(), "Preserve this open human wait", AgentRole.Developer);
@@ -30,7 +32,8 @@ public abstract class CliGoalUnparkTestSupport : CliTaskQueryTestSupport
         kernel.ActivateGoal(goal.Id, AgentCatalog.Default().Agents);
         var request = kernel.RequestHumanInput(goal.Id, task.Id, "Preserve this open human input.");
         await repository.SaveAsync(kernel);
-        await repository.SaveGoalSnapshotsAsync([kernel.ExportGoalSnapshot(goal.Id) with { Status = GoalStatus.Parked }]);
+        await repository.TransactGoalStateAsync(goal.Id, (state, _) => Task.FromResult(
+            (true, (GoalStateSnapshot?)(state! with { Goal = state.Goal with { Status = GoalStatus.Parked } }), true)));
         return new UnparkSeed(workspace, repository, goal.Id, task.Id, request.Id);
     }
 
