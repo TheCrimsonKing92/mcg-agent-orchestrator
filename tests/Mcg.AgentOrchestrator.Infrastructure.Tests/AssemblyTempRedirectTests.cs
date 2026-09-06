@@ -8,6 +8,29 @@ using Mcg.AgentOrchestrator.Infrastructure;
 public sealed class AssemblyTempRedirectTests
 {
     [Fact]
+    public void AssemblyFixtureCleanupRejectsFailedDeletionAndRetainsCause()
+    {
+        var failure = TempRootDeleteOutcome.Failure(
+            "owned-root",
+            "IOException",
+            "owned-root/locked.file",
+            readOnlyAttributesCleared: 0);
+
+        var exception = Assert.Throws<InvalidOperationException>(
+            () => AssemblyTempRootCleanupFixture.EnsureSuccessful(failure));
+
+        Assert.Contains("IOException", exception.Message, StringComparison.Ordinal);
+        Assert.Contains("locked.file", exception.Message, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void AssemblyFixtureCleanupAcceptsDeletedOrUnownedRoot()
+    {
+        AssemblyTempRootCleanupFixture.EnsureSuccessful(null);
+        AssemblyTempRootCleanupFixture.EnsureSuccessful(TempRootDeleteOutcome.Deleted("owned-root"));
+    }
+
+    [Fact]
     public void RevalidateExitedRootsRetainsReplacementAndAmbiguousProcessInstances()
     {
         var exitedPid = 0x2a;
@@ -130,6 +153,81 @@ public sealed class AssemblyTempRedirectTests
                 $"assembly-temp-redirect selected={receipt.TempRoot}",
                 result.Stderr,
                 StringComparison.OrdinalIgnoreCase);
+            Assert.Contains(
+                "assembly-temp-cleanup owner=assembly-fixture phase=completed-before-runner-return",
+                result.Stderr,
+                StringComparison.Ordinal);
+            Assert.DoesNotContain(
+                "[FATAL ERROR] Foreground threads were left running",
+                result.Stderr,
+                StringComparison.Ordinal);
+            Assert.False(
+                Directory.Exists(receipt.TempRoot),
+                $"The completed MTP host retained its owned temp root '{receipt.TempRoot}'.");
+        }
+        finally
+        {
+            release.Set();
+            if (process is not null)
+            {
+                await process.DisposeAsync();
+            }
+            DeleteDirectory(root);
+        }
+    }
+
+    [Fact(Timeout = 60_000)]
+    public async Task FailedTestHostStillCompletesAssemblyFixtureCleanup()
+    {
+        if (!OperatingSystem.IsWindows())
+        {
+            return;
+        }
+
+        var root = Path.Combine(Path.GetTempPath(), $"mtp-temp-failed-host-{Guid.NewGuid():N}");
+        var executable = ResolveDotnetHostPath();
+        var testAssembly = typeof(AssemblyTempRedirectTests).Assembly.Location;
+        Directory.CreateDirectory(root);
+        var releaseName = $"Local\\mcg-mtp-temp-release-{Guid.NewGuid():N}";
+        var readyName = $"Local\\mcg-mtp-temp-ready-{Guid.NewGuid():N}";
+        using var release = new EventWaitHandle(false, EventResetMode.ManualReset, releaseName);
+        using var ready = new EventWaitHandle(false, EventResetMode.ManualReset, readyName);
+        MtpProbeProcess? process = null;
+        try
+        {
+            process = StartMtpProbe(
+                executable,
+                testAssembly,
+                root,
+                Path.Combine(root, "receipt.json"),
+                readyName,
+                releaseName,
+                forceTestFailure: true);
+            var receipt = await WaitForProbeReceiptAsync(
+                "failed-test",
+                process,
+                ready,
+                TestContext.Current.CancellationToken);
+
+            release.Set();
+            var result = await process.WaitForExitAsync(TestContext.Current.CancellationToken);
+
+            Assert.NotEqual(0, result.ExitCode);
+            Assert.Contains(
+                "intentional temp-root cleanup probe failure",
+                result.Stdout + result.Stderr,
+                StringComparison.Ordinal);
+            Assert.Contains(
+                "assembly-temp-cleanup owner=assembly-fixture phase=completed-before-runner-return",
+                result.Stderr,
+                StringComparison.Ordinal);
+            Assert.DoesNotContain(
+                "[FATAL ERROR] Foreground threads were left running",
+                result.Stderr,
+                StringComparison.Ordinal);
+            Assert.False(
+                Directory.Exists(receipt.TempRoot),
+                $"The failed MTP host retained its owned temp root '{receipt.TempRoot}'.");
         }
         finally
         {
@@ -604,7 +702,8 @@ public sealed class AssemblyTempRedirectTests
         string? gateInvocationId = null,
         string? apparatusReceiptPath = null,
         string? apparatusParentPath = null,
-        string? apparatusDeletionEventName = null)
+        string? apparatusDeletionEventName = null,
+        bool forceTestFailure = false)
     {
         var startInfo = BuildMtpProbeStartInfo(
             executable,
@@ -616,7 +715,8 @@ public sealed class AssemblyTempRedirectTests
             gateInvocationId,
             apparatusReceiptPath,
             apparatusParentPath,
-            apparatusDeletionEventName);
+            apparatusDeletionEventName,
+            forceTestFailure);
         var process = new Process { StartInfo = startInfo };
         Assert.True(process.Start(), $"Failed to start MTP assembly '{testAssembly}' with '{executable}'.");
         process.StandardInput.Close();
@@ -637,7 +737,8 @@ public sealed class AssemblyTempRedirectTests
         string? gateInvocationId = null,
         string? apparatusReceiptPath = null,
         string? apparatusParentPath = null,
-        string? apparatusDeletionEventName = null)
+        string? apparatusDeletionEventName = null,
+        bool forceTestFailure = false)
     {
         Assert.True(
             IsManagedMtpProbeLaunch(executable, testAssembly),
@@ -669,6 +770,10 @@ public sealed class AssemblyTempRedirectTests
             startInfo.Environment[AssemblyTempRedirectChildSmokeTests.ApparatusParentPathVariable] = apparatusParentPath;
             startInfo.Environment[AssemblyTempRedirectChildSmokeTests.ApparatusDeletionEventVariable] =
                 apparatusDeletionEventName;
+        }
+        if (forceTestFailure)
+        {
+            startInfo.Environment[AssemblyTempRedirectChildSmokeTests.ForceFailureVariable] = "1";
         }
         startInfo.ArgumentList.Add(testAssembly);
         startInfo.ArgumentList.Add("--filter-class");
@@ -960,6 +1065,7 @@ public sealed class AssemblyTempRedirectChildSmokeTests
     internal const string ParentProcessIdVariable = "MCG_MTP_TEMP_ROOT_PARENT_PROCESS_ID";
     internal const string ApparatusParentPathVariable = "MCG_MTP_APPARATUS_PARENT_PATH";
     internal const string ApparatusDeletionEventVariable = "MCG_MTP_APPARATUS_DELETION_EVENT";
+    internal const string ForceFailureVariable = "MCG_MTP_TEMP_ROOT_FORCE_FAILURE";
 
     [Fact]
     public async Task ProcessTempRootSupportsAnExclusiveMutableFixtureRepository()
@@ -1053,6 +1159,14 @@ public sealed class AssemblyTempRedirectChildSmokeTests
             {
                 // Parent assertions report child output and the retained receipt on failure.
             }
+        }
+
+        if (string.Equals(
+                Environment.GetEnvironmentVariable(ForceFailureVariable),
+                "1",
+                StringComparison.Ordinal))
+        {
+            Assert.Fail("intentional temp-root cleanup probe failure");
         }
     }
 

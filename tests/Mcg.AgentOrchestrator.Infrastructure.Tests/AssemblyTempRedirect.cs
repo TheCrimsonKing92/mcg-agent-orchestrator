@@ -11,6 +11,8 @@ internal static class AssemblyTempRedirect
     internal const int MaxRootsReapedPerProcess = 32;
     private const string RootLeaseSuffix = ".owner.lock";
     private static FileStream? processRootLease;
+    private static string? processRootPath;
+    private static int cleanupState;
     internal static string? StartupTimingDiagnostic { get; private set; }
 
     [ModuleInitializer]
@@ -57,6 +59,7 @@ internal static class AssemblyTempRedirect
         }
 
         processRootLease = rootLease;
+        processRootPath = selection.SelectedRoot;
 
         Environment.SetEnvironmentVariable("TMP", selection.SelectedRoot, EnvironmentVariableTarget.Process);
         Environment.SetEnvironmentVariable("TEMP", selection.SelectedRoot, EnvironmentVariableTarget.Process);
@@ -71,7 +74,14 @@ internal static class AssemblyTempRedirect
             DeleteTree,
             Console.Error.WriteLine,
             TempRootApparatusLossReceiptStore.RecordDeletedOwners);
-        AppDomain.CurrentDomain.ProcessExit += (_, _) => ReleaseOwnedRoot(selection.SelectedRoot);
+        AppDomain.CurrentDomain.ProcessExit += (_, _) =>
+        {
+            var outcome = ReleaseOwnedRoot(AssemblyTempRootCleanupOwner.ProcessExitFallback);
+            if (outcome?.Status == TempRootDeleteStatus.Failed)
+            {
+                Environment.ExitCode = 1;
+            }
+        };
         TryPublishTimingDiagnostic(timingDiagnostic);
     }
 
@@ -613,12 +623,84 @@ internal static class AssemblyTempRedirect
         return deleted;
     }
 
-    private static void ReleaseOwnedRoot(string rootPath)
+    internal static TempRootDeleteOutcome? ReleaseOwnedRoot(AssemblyTempRootCleanupOwner owner)
     {
-        Interlocked.Exchange(ref processRootLease, null)?.Dispose();
-        _ = DeleteTree(rootPath);
-        TryDeleteRootLease(rootPath);
+        var rootPath = Volatile.Read(ref processRootPath);
+        if (rootPath is null || !TryClaimCleanup(owner))
+        {
+            return null;
+        }
+
+        var clock = Stopwatch.StartNew();
+        TempRootDeleteOutcome outcome;
+        try
+        {
+            Interlocked.Exchange(ref processRootLease, null)?.Dispose();
+            outcome = DeleteTree(rootPath);
+            if (outcome.Status is TempRootDeleteStatus.Deleted or TempRootDeleteStatus.AlreadyAbsent)
+            {
+                TryDeleteRootLease(rootPath);
+            }
+        }
+        catch (Exception ex)
+        {
+            outcome = TempRootDeleteOutcome.Failure(rootPath, ex);
+        }
+        finally
+        {
+            clock.Stop();
+        }
+
+        Volatile.Write(
+            ref cleanupState,
+            outcome.Status == TempRootDeleteStatus.Failed ? CleanupFailed : CleanupCompleted);
+        if (outcome.Status is TempRootDeleteStatus.Deleted or TempRootDeleteStatus.AlreadyAbsent)
+        {
+            Volatile.Write(ref processRootPath, null);
+        }
+        TryWriteReceipt(
+            Console.Error.WriteLine,
+            () => FormatCleanupDiagnostic(owner, outcome, clock.ElapsedMilliseconds));
+        return outcome;
     }
+
+    private const int CleanupPending = 0;
+    private const int CleanupRunning = 1;
+    private const int CleanupCompleted = 2;
+    private const int CleanupFailed = 3;
+
+    private static bool TryClaimCleanup(AssemblyTempRootCleanupOwner owner)
+    {
+        if (Interlocked.CompareExchange(ref cleanupState, CleanupRunning, CleanupPending) == CleanupPending)
+        {
+            return true;
+        }
+
+        return owner == AssemblyTempRootCleanupOwner.ProcessExitFallback &&
+               Interlocked.CompareExchange(ref cleanupState, CleanupRunning, CleanupFailed) == CleanupFailed;
+    }
+
+    internal static string FormatCleanupDiagnostic(
+        AssemblyTempRootCleanupOwner owner,
+        TempRootDeleteOutcome outcome,
+        long elapsedMilliseconds)
+    {
+        var phase = owner == AssemblyTempRootCleanupOwner.AssemblyFixture
+            ? "completed-before-runner-return"
+            : "process-exit-fallback";
+        return
+            $"assembly-temp-cleanup owner={OwnerToken(owner)} phase={phase} " +
+            $"process_id={Environment.ProcessId.ToString(System.Globalization.CultureInfo.InvariantCulture)} " +
+            $"elapsed_ms={elapsedMilliseconds.ToString(System.Globalization.CultureInfo.InvariantCulture)} " +
+            $"delete_status={outcome.Status} root={QuoteDiagnostic(outcome.Path)}";
+    }
+
+    private static string OwnerToken(AssemblyTempRootCleanupOwner owner) => owner switch
+    {
+        AssemblyTempRootCleanupOwner.AssemblyFixture => "assembly-fixture",
+        AssemblyTempRootCleanupOwner.ProcessExitFallback => "process-exit-fallback",
+        _ => throw new ArgumentOutOfRangeException(nameof(owner), owner, null)
+    };
 
     private static void TryDeleteRootLease(string rootPath)
     {

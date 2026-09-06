@@ -118,35 +118,6 @@ public sealed class GoalAcceptanceVerifierMtpFailureOutputTests
         }
     }
 
-    [Xunit.Theory]
-    [Xunit.InlineData(0, false)]
-    [Xunit.InlineData(1, true)]
-    [Xunit.InlineData(2, false)]
-    public void CensusOnlyRunsForForcedExit(int exitCode, bool expected)
-    {
-        Assert.Equal(expected, AssemblyExitThreadCensus.ShouldReportForExitCode(exitCode));
-    }
-
-    [Xunit.Fact]
-    public void CensusReportsTotalAndNewestThreadsWhenDetailsAreTruncated()
-    {
-        var threads = Enumerable.Range(0, 20)
-            .Select(id => (Id: id, StartedAt: new DateTime(2026, 1, 1).AddSeconds(id)))
-            .ToArray();
-
-        var census = AssemblyExitThreadCensus.ProjectNewestThreadsForReport(
-            threads,
-            thread => thread.StartedAt,
-            thread => $"id:{thread.Id}");
-        var diagnostic = AssemblyExitThreadCensus.BuildCensusDiagnostic(1, census);
-
-        Assert.Equal(20, census.TotalCount);
-        Assert.Equal(16, census.Threads.Count);
-        Assert.Equal("id:19", census.Threads[0]);
-        Assert.Equal("id:4", census.Threads[^1]);
-        Assert.Contains("new_os_threads=20 reported_os_threads=16 truncated=true", diagnostic, StringComparison.Ordinal);
-    }
-
     private static string MtpFixturePath(string fileName) =>
         Path.Combine(
             InfrastructureTestSupport.FindRepositoryRoot(),
