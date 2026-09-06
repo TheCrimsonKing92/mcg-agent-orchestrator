@@ -1,3 +1,4 @@
+using Mcg.AgentOrchestrator.App.Orchestration;
 using Mcg.AgentOrchestrator.Core;
 using Mcg.AgentOrchestrator.Core.Conductor;
 
@@ -6,6 +7,35 @@ using static ConductorDriverTests;
 [Xunit.Collection("IsolatedProcessSpawning")]
 public sealed class ConductorDriverTestsUnparseableFindingBlockersRoute
 {
+    [Xunit.Fact]
+    public void BlockersRouteRequiresReviewerAndMissingStructuredFindings()
+    {
+        var reviewer = new TaskSpec(TaskId.New(), "Review", AgentRole.Reviewer);
+        var tester = new TaskSpec(TaskId.New(), "Test", AgentRole.Tester);
+
+        Xunit.Assert.False(UnparseableFindingBlockersRoute.PrefersBlockersTextRoute(reviewer, string.Empty));
+        Xunit.Assert.False(UnparseableFindingBlockersRoute.PrefersBlockersTextRoute(tester, "blocking defect"));
+    }
+
+    [Xunit.Fact]
+    public void BlockersRouteRejectsReviewerWithParsedStructuredFindings()
+    {
+        var (kernel, goal) = SoftwareGoal();
+        var reviewer = goal.Tasks.Single(task => task.RequiredRole == AgentRole.Reviewer);
+        DispatchTask(kernel, goal, reviewer, "review");
+        kernel.RecordDispatchExecutionResult(goal.Id, reviewer.Id, new TaskVerificationRecord(
+            "review",
+            "C:\\tmp",
+            1,
+            "WORKER_RESULT:\nfindings: []\ntouched_anchors: []\nblockers: blocking defect\nverdict: needs-work\nEND_WORKER_RESULT",
+            string.Empty,
+            DateTimeOffset.UtcNow,
+            WorkerResultPresent: true));
+
+        Xunit.Assert.NotNull(reviewer.LastVerification?.MergedReviewFindings);
+        Xunit.Assert.False(UnparseableFindingBlockersRoute.PrefersBlockersTextRoute(reviewer, "blocking defect"));
+    }
+
     [Xunit.Fact]
     public void NeedsWorkWithBlockersAndEmptyFindingsRetriesDeveloperWithoutRedispatchingReviewer()
     {

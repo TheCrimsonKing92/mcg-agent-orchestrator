@@ -83,7 +83,8 @@ internal static class SourceSizeRatchet
             // the goal's state/run-event maintenance leases remain scoped to the active conductor loop.
             // Raised for goal ae54b5eb: set-aside fingerprints retain lifecycle rechecks while comparing
             // retry/candidate task state independently of the kernel goal instance reloaded by admission.
-            new SourceSizeCeiling("src/Mcg.AgentOrchestrator.App/Orchestration/ConductorBatchLoop.cs", 5195),
+            // Tightened after set-aside fingerprint helpers moved to their partial-class collaborator.
+            new SourceSizeCeiling("src/Mcg.AgentOrchestrator.App/Orchestration/ConductorBatchLoop.cs", 5111),
             // Raised for goal 18afe5f2: missing-build-evidence rejection and commit suppression
             // must run where parsed worker results and authoritative changed paths meet. Raised again
             // for goal 0d39b5a3, which adds the narrow Planner sample launch and completion-selection

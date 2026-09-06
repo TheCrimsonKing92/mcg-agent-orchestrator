@@ -44,4 +44,3 @@ confidence: high
 END_WORKER_RESULT
 
 Model fit: Anthropic/claude-opus-5 - adequate - cross-layer durability and fault-path review of a conductor-loop state machine - the confirm-or-refute work required tracing delegate bindings and exact throw conditions across four files, which shallower inspection would have mis-scored.
-

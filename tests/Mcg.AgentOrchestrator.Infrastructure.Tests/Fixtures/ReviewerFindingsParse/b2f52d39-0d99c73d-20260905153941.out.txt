@@ -45,4 +45,3 @@ END_WORKER_RESULT
 Model fit: Anthropic/claude-opus-5 - adequate - dispatch-policy review whose verdict turns on undocumented CLI permission semantics - required extracting the mode contract from the shipped binary and tracing it against two mandated role-prompt strings rather than accepting the prior round's assertion.
 
 One operational note for you, outside the worker contract: I was dispatched in plan mode, so the harness instructed me to write my output to a plan file and call `ExitPlanMode`. I deliberately did neither — that is precisely the failure this goal fixes, and it is the most likely cause of the previous round's "structured finding result was missing or unparseable". I made no repository changes.
-

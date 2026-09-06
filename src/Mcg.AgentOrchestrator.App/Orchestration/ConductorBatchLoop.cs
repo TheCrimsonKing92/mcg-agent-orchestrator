@@ -130,7 +130,7 @@ internal sealed partial class ConductorBatchLoop
         }
         _reapGoalRunningDispatches = reapGoalRunningDispatches ?? ((_, _) => { });
         _detachGoalRunningDispatches = detachGoalRunningDispatches ?? _reapGoalRunningDispatches;
-        _recoverInterruptedDispatches = recoverInterruptedDispatches ?? (_ => { });
+        _recoverInterruptedDispatches = kernel => { StaleDispatchProcessReconciler.Reconcile(kernel); recoverInterruptedDispatches?.Invoke(kernel); };
         _refreshGoalDispatchesBeforeAdvance = refreshGoalDispatchesBeforeAdvance ?? ((_, _) => null);
         _watchProgressReporter = watchProgressReporter ?? new ConductorWatchProgressReporter();
         _operatorIntents = operatorIntents;
@@ -248,6 +248,7 @@ internal sealed partial class ConductorBatchLoop
         var excludedGoals = new HashSet<string>(StringComparer.Ordinal);
         var setAsideGoals = new Dictionary<string, BatchSetAsideEntry>(StringComparer.Ordinal);
         var selfClearedSetAsideEntries = new Dictionary<string, BatchSetAsideEntry>(StringComparer.Ordinal);
+        var readmittedRetryReservations = new HashSet<string>(StringComparer.Ordinal);
         var completedGoals = new HashSet<string>(StringComparer.Ordinal);
         var escalatedGoals = new HashSet<string>(StringComparer.Ordinal);
         var reapedGoals = new HashSet<string>(StringComparer.Ordinal);
@@ -588,7 +589,9 @@ internal sealed partial class ConductorBatchLoop
                 excludedGoals,
                 escalatedGoals,
                 reapedGoals,
-                goalProjectionCache);
+                goalProjectionCache,
+                _utcNow(),
+                readmittedRetryReservations);
             MarkCompletedDependencyGoals(kernel, driver, onlyGoalId, completedGoals, goalProjectionCache);
             ReconcileUnscopedDispatchableGoals(
                 kernel,
@@ -4366,7 +4369,9 @@ internal sealed partial class ConductorBatchLoop
         HashSet<string> excludedGoals,
         HashSet<string> escalatedGoals,
         HashSet<string> reapedGoals,
-        GoalProjectionCache goalProjectionCache)
+        GoalProjectionCache goalProjectionCache,
+        DateTimeOffset now,
+        HashSet<string> readmittedRetryReservations)
     {
         foreach (var entry in setAsideGoals.Values.ToArray())
         {
@@ -4378,6 +4383,26 @@ internal sealed partial class ConductorBatchLoop
             var goal = kernel.Goals.FirstOrDefault(g => g.Id.Value == entry.GoalId);
             if (goal is null || IsTerminalGoal(goal))
             {
+                continue;
+            }
+
+            if (entry.Condition == BatchSetAsideCondition.LifecycleEscalation &&
+                RetryReservationReadmission.TrySelectExpired(
+                    goal,
+                    now,
+                    readmittedRetryReservations,
+                    out var expiredTask,
+                    out var expiredReceipt))
+            {
+                readmittedRetryReservations.Add(expiredReceipt.ReceiptId);
+                goalProjectionCache.Invalidate(goal.Id);
+                setAsideGoals.Remove(entry.GoalId);
+                escalatedGoals.Remove(entry.GoalId);
+                reapedGoals.Remove(entry.GoalId);
+                kernel.RecordGoalPolicyDecision(
+                    goal.Id,
+                    $"Batch loop re-admitted goal after retry reservation expired: task={expiredTask.Id.Value[..8]}; " +
+                    $"receipt={expiredReceipt.ReceiptId}; expired={expiredReceipt.ReservationLeaseExpiresAt:O}.");
                 continue;
             }
 
@@ -4651,114 +4676,6 @@ internal sealed partial class ConductorBatchLoop
         foreach (var goal in scopedGoals)
         {
             unscopedDispatchableTicks.Remove(goal.Id.Value);
-        }
-    }
-
-    private static BatchSetAsideCondition GetSetAsideCondition(ConductorAdvanceResult result) =>
-        result.Outcome switch
-        {
-            ConductorAdvanceOutcome.Escalated { State: GoalLifecycleState.AwaitingClarification } =>
-                BatchSetAsideCondition.AwaitingClarification,
-            ConductorAdvanceOutcome.Escalated
-            {
-                State: GoalLifecycleState.Verified,
-                Reason: var reason
-            } when reason.StartsWith("pre-landing rebase conflict", StringComparison.OrdinalIgnoreCase) =>
-                BatchSetAsideCondition.PreLandingRebaseConflict,
-            _ => BatchSetAsideCondition.LifecycleEscalation
-        };
-
-    private static void SetAside(
-        AgentOrchestratorKernel kernel,
-        ConductorDriver driver,
-        Goal goal,
-        BatchSetAsideCondition condition,
-        Dictionary<string, BatchSetAsideEntry> setAsideGoals,
-        Dictionary<string, BatchSetAsideEntry>? selfClearedSetAsideEntries = null,
-        TerminalGoalSweepResult? sweepResult = null)
-    {
-        goal = kernel.GetGoal(goal.Id);
-        BatchSetAsideEntry? selfClearedEntry = null;
-        if (selfClearedSetAsideEntries is not null)
-        {
-            selfClearedSetAsideEntries.TryGetValue(goal.Id.Value, out selfClearedEntry);
-        }
-        var lastSelfClearEvidenceFingerprint =
-            condition is BatchSetAsideCondition.PreLandingRebaseConflict or BatchSetAsideCondition.LifecycleEscalation
-                ? selfClearedEntry?.LastSelfClearEvidenceFingerprint
-                : null;
-        var sweepBlocker = condition == BatchSetAsideCondition.LifecycleEscalation
-            ? SelectControllingSweepBlocker(sweepResult?.Goals
-                .Where(result => result.GoalId == goal.Id)
-                .SelectMany(result => result.Blockers) ?? [])
-            : null;
-        selfClearedSetAsideEntries?.Remove(goal.Id.Value);
-        setAsideGoals[goal.Id.Value] = new BatchSetAsideEntry(
-            goal.Id.Value,
-            condition,
-            BuildEscalatedGoalStateFingerprint(goal),
-            lastSelfClearEvidenceFingerprint,
-            sweepBlocker?.Kind,
-            sweepBlocker is null
-                ? null
-                : BuildSweepBlockerFingerprint(sweepBlocker));
-    }
-
-    private static TerminalGoalSweepBlocker? SelectControllingSweepBlocker(
-        IEnumerable<TerminalGoalSweepBlocker> blockers) =>
-        blockers
-            .OrderBy(blocker => blocker.Remedy.SafetyClass == TerminalGoalRemedySafetyClass.OperatorOnly ? 0 : 1)
-            .ThenBy(blocker => blocker.Kind, StringComparer.Ordinal)
-            .ThenBy(blocker => blocker.Evidence, StringComparer.Ordinal)
-            .ThenBy(blocker => blocker.Command, StringComparer.Ordinal)
-            .FirstOrDefault();
-
-    private static string BuildSweepBlockerFingerprint(TerminalGoalSweepBlocker blocker) =>
-        $"{blocker.Kind}\n{blocker.Evidence}\n{blocker.Command}";
-
-    private static string BuildEscalatedGoalStateFingerprint(Goal goal)
-    {
-        var taskParts = goal.Tasks
-            .OrderBy(task => task.Id.Value, StringComparer.Ordinal)
-            .Select(task =>
-                string.Join(
-                    ":",
-                    new[]
-                    {
-                    task.Id.Value,
-                    $"candidate={task.LastDispatch?.ResultCommit?.Trim() ?? task.LastVerification?.ReviewedCommit?.Trim() ?? "none"}",
-                    task.Status.ToString(),
-                    task.LastDispatch is null ? "dispatch=none" : $"dispatch={task.LastDispatch.DispatchedAt.UtcTicks}:{task.LastDispatch.WorkerName}",
-                    task.LatestRetryAt is null ? "retry=none" : $"retry={task.LatestRetryAt.Value.UtcTicks}"
-                    }));
-
-        return string.Join("|", taskParts);
-    }
-
-    private static string TryResolveLifecycleState(ConductorDriver driver, Goal goal)
-    {
-        try
-        {
-            return GoalLifecycle.ResolveState(goal, driver.GetFacts(goal)).ToString();
-        }
-        catch
-        {
-            return "LifecycleState=unknown";
-        }
-    }
-
-    private static string TryResolveLifecycleState(
-        GoalProjectionCache goalProjectionCache,
-        ConductorDriver driver,
-        Goal goal)
-    {
-        try
-        {
-            return goalProjectionCache.ResolveState(goal, driver).ToString();
-        }
-        catch
-        {
-            return "LifecycleState=unknown";
         }
     }
 

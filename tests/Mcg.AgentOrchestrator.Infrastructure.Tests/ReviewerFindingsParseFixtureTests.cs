@@ -18,10 +18,11 @@ public sealed class ReviewerFindingsParseFixtureTests
         string expectedSourceSha256)
     {
         var path = Path.Combine(AppContext.BaseDirectory, "Fixtures", "ReviewerFindingsParse", fileName);
-        var stdout = File.ReadAllText(path).ReplaceLineEndings("\n").TrimEnd('\n');
+        var fixtureBytes = File.ReadAllBytes(path);
         Xunit.Assert.Equal(
             expectedSourceSha256,
-            Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(stdout))));
+            Convert.ToHexString(SHA256.HashData(fixtureBytes)));
+        var stdout = Encoding.UTF8.GetString(fixtureBytes);
 
         var verification = new TaskVerificationRecord(
             "review",

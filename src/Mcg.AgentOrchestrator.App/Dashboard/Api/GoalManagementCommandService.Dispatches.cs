@@ -766,50 +766,18 @@ private static string ResolveReadyBlockedProvider(TaskSpec task, IReadOnlyList<A
 }
 
 private static void ReconcileExitedAssignedProcessRecords(AgentOrchestratorKernel kernel, Goal goal)
-{
-    foreach (var task in goal.Tasks)
-    {
-        if (task.Status != WorkTaskStatus.Assigned ||
-            task.LastProcess is not { IsRunning: true } process ||
-            !DispatchExitArtifacts.TryRead(process.ExitCodePath, out var exitArtifact) ||
-            exitArtifact.Origin == DispatchExitArtifactOrigin.Synthetic ||
-            HasLiveTrackedProcess(process))
-        {
-            continue;
-        }
-
-        var completed = process with
-        {
-            CompletedAt = DateTimeOffset.UtcNow,
-            ExitCode = exitArtifact.ExitCode,
-            ExitArtifactOrigin = exitArtifact.Origin,
-            ExitArtifactReason = exitArtifact.Reason
-        };
-        kernel.RecordTaskProcessRefreshed(goal.Id, task.Id, completed, verification: null);
-        kernel.RecordTaskNote(
-            goal.Id,
-            task.Id,
-            $"Auto-cleared stale LastProcess.IsRunning before dispatch; pid {process.ProcessId} had exit artifact {process.ExitCodePath} with exit {exitArtifact.ExitCode}.");
-    }
-}
+    => StaleDispatchProcessReconciler.Reconcile(
+        kernel,
+        goal,
+        StaleDispatchProcessReconciler.AssignedOnly,
+        IsTrackedProcessRunningForReadyBatch,
+        ReadTrackedProcessIdentityForReadyBatch);
 
 private static bool HasLiveTrackedProcess(TaskProcessRecord process)
-{
-    var heartbeat = ProcessLogReader.ReadHeartbeat(process);
-    if (!heartbeat.IsAvailable)
-    {
-        return false;
-    }
-
-    var candidates = heartbeat.OwnedProcessIds
-        .Concat(heartbeat.ChildProcessId is > 0 ? [heartbeat.ChildProcessId.Value] : [])
-        .Concat(heartbeat.ProcessId > 0 ? [heartbeat.ProcessId] : []);
-    return DispatchProcessIdentityEvidence.GetLiveRecordedOwnerProcessIds(
-        candidates,
-        heartbeat.OwnedProcessIdentities,
+    => StaleDispatchProcessReconciler.HasLiveTrackedProcess(
+        process,
         IsTrackedProcessRunningForReadyBatch,
-        ReadTrackedProcessIdentityForReadyBatch).Count > 0;
-}
+        ReadTrackedProcessIdentityForReadyBatch);
 
 private static bool IsProcessRunning(int processId)
 {
