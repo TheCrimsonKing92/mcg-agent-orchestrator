@@ -42,7 +42,7 @@ public sealed record DispatchHeartbeatStatus(
     internal IReadOnlyList<SpawnProcessIdentity> OwnedProcessIdentities { get; init; } = [];
 }
 
-public static class ProcessLogReader
+public sealed partial class ProcessLogReader
 {
     public static ProcessLogSnapshot Read(TaskProcessRecord process)
     {

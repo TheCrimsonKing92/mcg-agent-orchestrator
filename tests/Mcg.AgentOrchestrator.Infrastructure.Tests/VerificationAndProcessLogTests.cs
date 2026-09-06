@@ -240,7 +240,7 @@ public sealed class VerificationAndProcessLogTests
     Assert.True(reviewTask.LastVerification is not null);
     Assert.True(reviewTask.LastVerification!.StandardOutput.Length <= 20_000);
     Assert.True(reviewTask.LastVerification.StandardError.Length <= 20_000);
-    Assert.Equal(BackgroundDispatchRunner.ReadBoundedBestEffort(stdoutPath), reviewTask.LastVerification.StandardOutput);
+    Assert.Equal(ProcessLogReader.ReadBoundedBestEffort(stdoutPath), reviewTask.LastVerification.StandardOutput);
     Assert.StartsWith(stdoutHead, reviewTask.LastVerification.StandardOutput, StringComparison.Ordinal);
     Assert.EndsWith(stdoutTail, reviewTask.LastVerification.StandardOutput, StringComparison.Ordinal);
     Assert.StartsWith(stderrHead, reviewTask.LastVerification.StandardError, StringComparison.Ordinal);
@@ -444,10 +444,22 @@ public sealed class VerificationAndProcessLogTests
         File.WriteAllText(stderrPath, string.Empty);
         File.WriteAllText(exitPath, "0");
         kernel.RecordTaskDispatch(goal.Id, reviewTask.Id, new TaskDispatchRecord("local", "fake-cmd", root, DateTimeOffset.UtcNow));
-        kernel.RecordTaskProcessStarted(
-            goal.Id,
-            reviewTask.Id,
-            new TaskProcessRecord(999999, "fake-cmd", root, stdoutPath, stderrPath, exitPath, DateTimeOffset.UtcNow, null, null));
+        var processRecord = new TaskProcessRecord(
+            999999,
+            "fake-cmd",
+            root,
+            stdoutPath,
+            stderrPath,
+            exitPath,
+            DateTimeOffset.UtcNow,
+            null,
+            null);
+        kernel.RecordTaskProcessStarted(goal.Id, reviewTask.Id, processRecord);
+        var decisionSnapshot = new ProcessLogReader().ReadBestEffort(processRecord, stdoutPath);
+
+        Assert.True(decisionSnapshot.DecisionText.Length <= VerificationTextBounds.MaxRetainedChars);
+        Assert.Contains("WORKER_RESULT:", decisionSnapshot.DecisionText, StringComparison.Ordinal);
+        Assert.Contains("END_WORKER_RESULT", decisionSnapshot.DecisionText, StringComparison.Ordinal);
         Stream OpenAndRemoveStdout(string path)
         {
             var content = File.ReadAllBytes(path);

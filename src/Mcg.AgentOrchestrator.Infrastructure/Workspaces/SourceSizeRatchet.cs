@@ -102,10 +102,9 @@ internal static class SourceSizeRatchet
             // existing dispatch-completion boundary; projection and classification remain extracted.
             // Goal 17d96426 adds Hermes to the existing provider-to-sandbox mapping and writability
             // decision; both checks belong at this dispatch boundary and add five measured lines.
-            // Goal 3b9d6b12 keeps complete-log authority, bounded-snapshot diagnostics, and completion
-            // classification together at their existing process-completion seam; 3263 is measured after
-            // correcting permissive live-log reads and the same-artifact consumers.
-            new SourceSizeCeiling("src/Mcg.AgentOrchestrator.Infrastructure/Processes/BackgroundDispatchRunner.cs", 3263),
+            // Goal 3b9d6b12 moved complete-log authority, decision selection, normalization, caching, and
+            // bounded snapshots to ProcessLogReader; the runner now retains only completion sequencing.
+            new SourceSizeCeiling("src/Mcg.AgentOrchestrator.Infrastructure/Processes/BackgroundDispatchRunner.cs", 2660),
             // Goal 5a75fed0 extracted typed projection parsing and literal restoration into
             // WorkerContextProjectionResidual, leaving the dispatcher to sequence package assembly.
             // Goal fd252fe4 adds retry fingerprints for the resolved provider, model, paid route, and
