@@ -15,18 +15,20 @@ public sealed class RunGoalServiceTests
         return root;
     }
 
-    private static RunGoalService.SleepFunc WaitForNextExitFile(string logDirectory)
+    private static RunGoalService.SleepFunc WaitForCurrentExitFile(Goal goal, string logDirectory)
     {
-        var seen = 0;
         return async (_, ct) =>
         {
             Directory.CreateDirectory(logDirectory);
             while (true)
             {
-                var current = Directory.EnumerateFiles(logDirectory, "*.exit.txt").Count();
-                if (current > seen)
+                var trackedExitPaths = goal.Tasks
+                    .Select(task => task.LastProcess)
+                    .Where(process => process is { IsRunning: true })
+                    .Select(process => Path.GetFullPath(process!.ExitCodePath))
+                    .ToHashSet(StringComparer.OrdinalIgnoreCase);
+                if (trackedExitPaths.Any(File.Exists))
                 {
-                    seen = current;
                     return;
                 }
 
@@ -44,13 +46,10 @@ public sealed class RunGoalServiceTests
                 watcher.Renamed += signalRename;
                 watcher.Error += signalError;
 
-                // Close the create-before-subscribe race without polling. If no file exists yet, the next
-                // filesystem event releases the production loop while the cancellation token remains the
-                // unchanged fail-safe for a genuinely missing dispatch exit artifact.
-                current = Directory.EnumerateFiles(logDirectory, "*.exit.txt").Count();
-                if (current > seen)
+                // Exit artifacts are durable level signals until RunGoalService refreshes the owning task.
+                // Re-check after subscribing to close the create-before-subscribe race without polling.
+                if (trackedExitPaths.Any(File.Exists))
                 {
-                    seen = current;
                     return;
                 }
 
@@ -191,7 +190,7 @@ public sealed class RunGoalServiceTests
             completedAt));
     }
 
-    [Xunit.Fact(DisplayName = "RunGoalService_completes_all_tasks_sequentially_and_stops_with_no_actions")]
+    [Xunit.Fact(Timeout = 30_000, DisplayName = "RunGoalService_completes_all_tasks_sequentially_and_stops_with_no_actions")]
     public async Task RunGoalServiceCompletesAllTasksSequentiallyAndStopsWithNoActions()
     {
         var root = CreateTempDirectory();
@@ -211,7 +210,7 @@ public sealed class RunGoalServiceTests
             goal,
             allowLargePaidSubscriptionStart: false,
             pollInterval: TimeSpan.FromMilliseconds(50),
-            sleep: WaitForNextExitFile(workspace.LogDirectory),
+            sleep: WaitForCurrentExitFile(goal, workspace.LogDirectory),
             cancellationToken: TestContext.Current.CancellationToken);
 
         Assert.True(result.Executed);
@@ -391,7 +390,7 @@ public sealed class RunGoalServiceTests
             goal,
             allowLargePaidSubscriptionStart: false,
             pollInterval: TimeSpan.FromMilliseconds(50),
-            sleep: WaitForNextExitFile(workspace.LogDirectory),
+            sleep: WaitForCurrentExitFile(goal, workspace.LogDirectory),
             cancellationToken: cts.Token);
 
         Assert.True(result.Executed);
@@ -443,7 +442,7 @@ public sealed class RunGoalServiceTests
             goal,
             allowLargePaidSubscriptionStart: false,
             pollInterval: TimeSpan.FromMilliseconds(50),
-            sleep: WaitForNextExitFile(workspace.LogDirectory),
+            sleep: WaitForCurrentExitFile(goal, workspace.LogDirectory),
             cancellationToken: cts.Token);
 
         Assert.True(result.Executed);
@@ -477,7 +476,7 @@ public sealed class RunGoalServiceTests
             goal,
             allowLargePaidSubscriptionStart: false,
             pollInterval: TimeSpan.FromMilliseconds(50),
-            sleep: WaitForNextExitFile(workspace.LogDirectory),
+            sleep: WaitForCurrentExitFile(goal, workspace.LogDirectory),
             cancellationToken: cts.Token);
 
         Assert.True(result.Executed);
@@ -639,7 +638,7 @@ public sealed class RunGoalServiceTests
             goal,
             allowLargePaidSubscriptionStart: false,
             pollInterval: TimeSpan.FromMilliseconds(50),
-            sleep: WaitForNextExitFile(workspace.LogDirectory),
+            sleep: WaitForCurrentExitFile(goal, workspace.LogDirectory),
             cancellationToken: cts.Token);
 
         Assert.True(result.Executed);
@@ -688,7 +687,7 @@ public sealed class RunGoalServiceTests
             goal,
             allowLargePaidSubscriptionStart: false,
             pollInterval: TimeSpan.FromMilliseconds(50),
-            sleep: WaitForNextExitFile(workspace.LogDirectory),
+            sleep: WaitForCurrentExitFile(goal, workspace.LogDirectory),
             cancellationToken: cts.Token);
 
         Assert.True(result.Executed);
@@ -802,7 +801,7 @@ public sealed class RunGoalServiceTests
             goal,
             allowLargePaidSubscriptionStart: false,
             pollInterval: TimeSpan.FromMilliseconds(50),
-            sleep: WaitForNextExitFile(workspace.LogDirectory),
+            sleep: WaitForCurrentExitFile(goal, workspace.LogDirectory),
             cancellationToken: cts.Token);
 
         Assert.True(result.Executed);
