@@ -499,13 +499,15 @@ internal sealed class HermesAcpLifecycle
                     "version child left live members in its owned process job after kill");
             }
 
-            return await _identityVerifier.VerifyAsync(
+            var identity = await _identityVerifier.VerifyAsync(
                 process.LaunchedImagePath,
                 stdout.Text,
                 stderr.Text,
                 process.ExitCode,
                 process.JobExitConfirmed,
                 cancellationToken).ConfigureAwait(false);
+            GitHermesExecutableIdentityVerifier.ValidateReceipt(identity, pin: _identityVerifier.Pin);
+            return identity;
         }
     }
 

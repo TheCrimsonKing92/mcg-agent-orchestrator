@@ -662,6 +662,13 @@ public sealed class HermesAcpTrialTests
         await AssertLifecycleIdentityRefusal(
             run,
             correct.NativeVersionOutput,
+            null,
+            correct.Verifier,
+            HermesIdentityRefusal.ImagePathUnavailable);
+
+        await AssertLifecycleIdentityRefusal(
+            run,
+            correct.NativeVersionOutput,
             correct.ExecutablePath,
             new GitHermesExecutableIdentityVerifier(correct.Pin with { Commit = new string('0', 40) }),
             HermesIdentityRefusal.WrongCommit);
@@ -685,6 +692,37 @@ public sealed class HermesAcpTrialTests
             correct.ExecutablePath,
             correct.Verifier,
             HermesIdentityRefusal.WorkingTreeModified);
+
+        var outsideCheckout = Path.Combine(run.Root, "hermes.exe");
+        File.WriteAllText(outsideCheckout, "fixture executable");
+        await AssertLifecycleIdentityRefusal(
+            run,
+            NativeVersionOutput(run.Root),
+            outsideCheckout,
+            correct.Verifier,
+            HermesIdentityRefusal.NotGitCheckout);
+    }
+
+    [Xunit.Fact]
+    public async Task StaleIdentityReceiptRefusesBeforeAcpLaunch()
+    {
+        using var run = new Fixture();
+        using var identity = new HermesIdentityTestFixture();
+        var staleReceipt = identity.Receipt(DateTimeOffset.UtcNow - TimeSpan.FromMinutes(2));
+        var version = new FakeHermesProcess(identity.NativeVersionOutput, launchedImagePath: identity.ExecutablePath);
+        var forbiddenAcp = new FakeHermesProcess(string.Empty);
+        var launcher = new FakeHermesProcessLauncher(version, forbiddenAcp);
+        var receiptPath = Path.Combine(run.Sandbox, "identity-stale.json");
+
+        var error = await Assert.ThrowsAsync<HermesIdentityException>(() =>
+            new HermesAcpLifecycle(
+                launcher: launcher,
+                identityVerifier: new FixedHermesIdentityVerifier(identity.Pin, staleReceipt)).RunAsync(
+                run.Request(), receiptPath, TextWriter.Null));
+
+        Assert.Equal(HermesIdentityRefusal.ReceiptStale, error.Reason);
+        Assert.Single(launcher.StartInfos);
+        Assert.Equal(error.Reason, ReadReceipt(receiptPath).IdentityRefusal);
     }
 
     [Xunit.Fact]
@@ -1013,7 +1051,7 @@ public sealed class HermesAcpTrialTests
     private static async Task AssertLifecycleIdentityRefusal(
         Fixture run,
         string versionOutput,
-        string launchedImagePath,
+        string? launchedImagePath,
         IHermesExecutableIdentityVerifier verifier,
         HermesIdentityRefusal expectedReason)
     {
@@ -1030,6 +1068,11 @@ public sealed class HermesAcpTrialTests
         Assert.Single(launcher.StartInfos);
         Assert.Equal(expectedReason, ReadReceipt(receiptPath).IdentityRefusal);
     }
+
+    private static string NativeVersionOutput(string installRoot) =>
+        $"Hermes Agent v0.20.6 (2026.8.27){Environment.NewLine}" +
+        $"Install directory: {installRoot}{Environment.NewLine}" +
+        "Install method: git";
 
     private const string SuccessfulWorkerResult = """
         WORKER_RESULT:
@@ -1099,6 +1142,25 @@ public sealed class HermesAcpTrialTests
         {
             StartCount++;
             throw new Win32Exception("fixture executable missing");
+        }
+    }
+
+    private sealed class FixedHermesIdentityVerifier(
+        HermesPinnedIdentity pin,
+        HermesExecutableIdentityReceipt receipt) : IHermesExecutableIdentityVerifier
+    {
+        public HermesPinnedIdentity Pin { get; } = pin;
+
+        public Task<HermesExecutableIdentityReceipt> VerifyAsync(
+            string? launchedImagePath,
+            string versionStandardOutput,
+            string versionStandardError,
+            int versionExitCode,
+            bool versionJobExitConfirmed,
+            CancellationToken cancellationToken)
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            return Task.FromResult(receipt);
         }
     }
 
