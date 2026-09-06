@@ -1,6 +1,5 @@
 using Mcg.AgentOrchestrator.Infrastructure;
 
-[Xunit.Collection(TestCollections.GoalAcceptanceVerifier)]
 public sealed class GoalAcceptanceVerifierMtpFailureOutputTests
 {
     [Xunit.Fact]
@@ -58,6 +57,46 @@ public sealed class GoalAcceptanceVerifierMtpFailureOutputTests
         Assert.Contains("TRX reports 1 of 1 tests executed (outcome=Aborted)", output, StringComparison.Ordinal);
         Assert.Contains("predicate=failing-trx", output, StringComparison.Ordinal);
         Assert.DoesNotContain("exited before tests ran", output, StringComparison.Ordinal);
+    }
+
+    [Xunit.Theory]
+    [Xunit.InlineData(true)]
+    [Xunit.InlineData(false)]
+    public void ZeroOrUnknownExecutedCountRetainsPreRunPossibility(bool includeZeroCounters)
+    {
+        var trxPath = Path.Combine(Path.GetTempPath(), $"mtp-empty-{Guid.NewGuid():N}.trx");
+        try
+        {
+            File.WriteAllText(
+                trxPath,
+                includeZeroCounters
+                    ? """
+                      <TestRun xmlns="http://microsoft.com/schemas/VisualStudio/TeamTest/2010">
+                        <ResultSummary outcome="Completed">
+                          <Counters total="0" executed="0" passed="0" failed="0" notExecuted="0" />
+                        </ResultSummary>
+                      </TestRun>
+                      """
+                    : """
+                      <TestRun xmlns="http://microsoft.com/schemas/VisualStudio/TeamTest/2010">
+                        <ResultSummary outcome="Completed" />
+                      </TestRun>
+                      """);
+
+            var output = GoalAcceptanceVerifier.BuildMtpFailureOutputForTests(
+                "infrastructure tests: empty shard",
+                new GoalAcceptanceVerifier.CommandResult(1, "Runner exited without reporting a test."),
+                [trxPath]);
+
+            Assert.Contains(
+                "TRX found but contained no failure records (process may have exited before tests ran)",
+                output,
+                StringComparison.Ordinal);
+        }
+        finally
+        {
+            File.Delete(trxPath);
+        }
     }
 
     [Xunit.Theory]
