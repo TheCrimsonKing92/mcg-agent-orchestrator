@@ -136,7 +136,21 @@ public sealed partial class AgentOrchestratorKernel
             }
         }
 
-        var version = goal.ReviseBrief(newBrief, reason, _clock.UtcNow);
+        var recordedAt = _clock.UtcNow;
+        var version = goal.ReviseBrief(newBrief, reason, recordedAt);
+        var refinedCriteriaCount = default(int?);
+        var refinedCriteriaReDerived = false;
+        var declaredCriteria = AcceptanceCriteriaParser.ParseDeclared(newBrief);
+        if (declaredCriteria.Count > 0 &&
+            goal.RefinedSpec is { } currentSpec &&
+            !currentSpec.AcceptanceCriteria.SequenceEqual(declaredCriteria, StringComparer.Ordinal))
+        {
+            goal.RecordRefinedSpec(
+                currentSpec with { AcceptanceCriteria = declaredCriteria.ToArray() },
+                recordedAt);
+            refinedCriteriaCount = declaredCriteria.Count;
+            refinedCriteriaReDerived = true;
+        }
         foreach (var supersession in supersessions)
         {
             SupersedeHumanInput(
@@ -165,7 +179,14 @@ public sealed partial class AgentOrchestratorKernel
             ProgressKind.GoalBriefRevised,
             $"Goal brief revised: v{version.Version - 1} superseded by v{version.Version}; " +
             $"notYetStarted={notYetStarted.Length}; inFlight={inFlight.Length}; completed={completed.Length}.{reasonSuffix}");
-        return new GoalBriefRevisionResult(goal.Id, version, notYetStarted, inFlight, completed);
+        return new GoalBriefRevisionResult(
+            goal.Id,
+            version,
+            notYetStarted,
+            inFlight,
+            completed,
+            refinedCriteriaCount,
+            refinedCriteriaReDerived);
     }
 
     public TaskSpec AddTask(
