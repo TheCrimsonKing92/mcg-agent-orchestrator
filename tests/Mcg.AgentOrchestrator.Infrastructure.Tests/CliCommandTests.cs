@@ -597,6 +597,8 @@ public abstract class CliCommandTestBase
 
         public int ListOutboxMessagesCount { get; private set; }
 
+        public int ListGoalMetadataCount { get; private set; }
+
         public int CompletedHumanInputQueryCount { get; private set; }
 
         public long LoadedGoalSnapshotJsonBytes { get; private set; }
@@ -631,6 +633,17 @@ public abstract class CliCommandTestBase
         public bool ThrowOnLoadAsync { get; set; }
 
         public bool ThrowOnLoadWhileInTransaction { get; set; }
+
+        public bool ThrowOnWrite { get; set; }
+
+        public bool ThrowOnTransact { get; set; }
+
+        public bool ThrowOnOutbox { get; set; }
+
+        public void SeedOutboxMessage(OrchestratorStateOutboxMessage message) =>
+            _outbox.Add(message.Id, message);
+
+        public bool HasOutboxMessage(string id) => _outbox.ContainsKey(id);
 
         public Task<AgentOrchestratorKernel> LoadAsync(CancellationToken cancellationToken = default)
         {
@@ -683,6 +696,9 @@ public abstract class CliCommandTestBase
 
         public Task SaveAsync(AgentOrchestratorKernel kernel, CancellationToken cancellationToken = default)
         {
+            if (ThrowOnWrite)
+                throw new InvalidOperationException("State writes are not allowed for this test.");
+
             SaveAsyncCount++;
             _kernel = Clone(kernel);
             return Task.CompletedTask;
@@ -692,6 +708,9 @@ public abstract class CliCommandTestBase
             IReadOnlyCollection<GoalSnapshot> goals,
             CancellationToken cancellationToken = default)
         {
+            if (ThrowOnWrite)
+                throw new InvalidOperationException("Goal snapshot writes are not allowed for this test.");
+
             SaveGoalSnapshotsCount++;
             if (goals.Count == 0)
                 return Task.CompletedTask;
@@ -725,14 +744,17 @@ public abstract class CliCommandTestBase
                 .ToArray();
         }
 
-        public Task<IReadOnlyList<GoalSummary>> ListGoalMetadataAsync(CancellationToken cancellationToken = default) =>
-            Task.FromResult<IReadOnlyList<GoalSummary>>(_kernel.Goals
+        public Task<IReadOnlyList<GoalSummary>> ListGoalMetadataAsync(CancellationToken cancellationToken = default)
+        {
+            ListGoalMetadataCount++;
+            return Task.FromResult<IReadOnlyList<GoalSummary>>(_kernel.Goals
                 .Select(goal => new GoalSummary(
                     goal.Id.Value,
                     CleanedUpGoalIds.Contains(goal.Id.Value) ? "CleanedUp" : goal.Status.ToString(),
                     goal.Objective,
                     DateTimeOffset.UtcNow.ToString("O")))
                 .ToList());
+        }
 
         public Task<IReadOnlyList<GoalSummary>> ListConductLoopGoalMetadataAsync(CancellationToken cancellationToken = default) =>
             Task.FromResult<IReadOnlyList<GoalSummary>>(_kernel.Goals
@@ -783,6 +805,9 @@ public abstract class CliCommandTestBase
             Func<AgentOrchestratorKernel, Func<Task>, CancellationToken, Task<(bool ShouldSave, T Result)>> transaction,
             CancellationToken cancellationToken = default)
         {
+            if (ThrowOnTransact)
+                throw new InvalidOperationException("State transactions are not allowed for this test.");
+
             TransactionCount++;
             TransactAsyncCount++;
             if (BeforeNextTransaction is { } before)
@@ -823,6 +848,9 @@ public abstract class CliCommandTestBase
                 IReadOnlyList<OrchestratorStateOutboxMessage> OutboxMessages)>> transaction,
             CancellationToken cancellationToken = default)
         {
+            if (ThrowOnTransact)
+                throw new InvalidOperationException("State transactions are not allowed for this test.");
+
             TransactionCount++;
             TransactAsyncCount++;
             if (BeforeNextTransaction is { } before)
@@ -853,6 +881,9 @@ public abstract class CliCommandTestBase
             string kind,
             CancellationToken cancellationToken = default)
         {
+            if (ThrowOnOutbox)
+                throw new InvalidOperationException("Outbox reads are not allowed for this test.");
+
             ListOutboxMessagesCount++;
             return Task.FromResult<IReadOnlyList<OrchestratorStateOutboxMessage>>(_outbox.Values
                 .Where(message => message.Kind.Equals(kind, StringComparison.Ordinal))
@@ -866,6 +897,9 @@ public abstract class CliCommandTestBase
             Func<OrchestratorStateOutboxMessage, CancellationToken, Task<OrchestratorStateOutboxProcessingResult>> processor,
             CancellationToken cancellationToken = default)
         {
+            if (ThrowOnOutbox)
+                throw new InvalidOperationException("Outbox claims are not allowed for this test.");
+
             TransactionCount++;
             TransactAsyncCount++;
             IsInTransaction = true;
@@ -928,6 +962,9 @@ public abstract class CliCommandTestBase
             Func<GoalSnapshot?, CancellationToken, Task<(bool ShouldSave, GoalSnapshot? NewSnapshot, T Result)>> transaction,
             CancellationToken cancellationToken = default)
         {
+            if (ThrowOnTransact)
+                throw new InvalidOperationException("State transactions are not allowed for this test.");
+
             TransactionCount++;
             TransactGoalCount++;
             if (BeforeNextTransaction is { } before)
@@ -961,6 +998,9 @@ public abstract class CliCommandTestBase
             Func<GoalStateSnapshot?, CancellationToken, Task<(bool ShouldSave, GoalStateSnapshot? NewState, T Result)>> transaction,
             CancellationToken cancellationToken = default)
         {
+            if (ThrowOnTransact)
+                throw new InvalidOperationException("State transactions are not allowed for this test.");
+
             TransactionCount++;
             TransactGoalCount++;
             if (BeforeNextTransaction is { } before)

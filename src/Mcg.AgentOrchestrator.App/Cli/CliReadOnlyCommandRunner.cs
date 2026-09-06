@@ -13,6 +13,7 @@ internal static class CliReadOnlyCommandRunner
         IOperatorChannel? channel,
         ref IReadOnlyList<AgentDefinition> agents,
         ref WorkerProfileCatalog workerProfiles,
+        ref Goal? currentGoal,
         out bool changed)
     {
         if (GoalBoardCommand.IsBoardCommand(args))
@@ -22,21 +23,36 @@ internal static class CliReadOnlyCommandRunner
             return true;
         }
 
-        if (!TrialCompareCliCommand.RequiresHistoricalState(args))
+        if (TrialCompareCliCommand.RequiresHistoricalState(args))
         {
-            changed = false;
-            return false;
+            changed = ExecuteHistoricalTrialCompare(
+                args,
+                stateRepository,
+                workspace,
+                ref agents,
+                providers,
+                ref workerProfiles,
+                channel);
+            return true;
         }
 
-        changed = ExecuteHistoricalTrialCompare(
-            args,
-            stateRepository,
-            workspace,
-            ref agents,
-            providers,
-            ref workerProfiles,
-            channel);
-        return true;
+        if (CliTaskQueryCommand.IsTaskQueryCommand(args) &&
+            CliTaskQueryCommand.TryExecute(
+                args,
+                stateRepository,
+                workspace,
+                providers,
+                channel,
+                ref agents,
+                ref workerProfiles,
+                ref currentGoal))
+        {
+            changed = false;
+            return true;
+        }
+
+        changed = false;
+        return false;
     }
 
     internal static bool ExecuteHistoricalTrialCompare(
