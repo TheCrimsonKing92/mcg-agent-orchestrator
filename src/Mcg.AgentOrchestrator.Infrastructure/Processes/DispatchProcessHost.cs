@@ -465,6 +465,14 @@ public static class DispatchProcessHost
         startInfo.Environment.Remove("CLAUDE_CONFIG_DIR");
         startInfo.Environment.Remove("GROK_HOME");
         startInfo.Environment.Remove("HERMES_HOME");
+        startInfo.Environment.Remove(HarnessHookRootContract.EnvironmentVariableName);
+
+        var hookRoot = HarnessHookRootContract.Apply(startInfo);
+        var hookDiagnostic = HarnessHookRootContract.DescribeUnsupported(hookRoot);
+        if (hookDiagnostic is not null && !string.IsNullOrWhiteSpace(stderrPath))
+        {
+            AppendDispatchStderrDiagnostic(stderrPath, hookDiagnostic);
+        }
 
         if (provider == WorkerSandboxProvider.Codex)
         {

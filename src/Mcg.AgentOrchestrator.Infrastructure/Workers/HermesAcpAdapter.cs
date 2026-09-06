@@ -91,6 +91,7 @@ internal sealed class HermesAcpAdapter
         startInfo.ArgumentList.Add("acp");
         startInfo.Environment["HERMES_HOME"] = hermesHome;
         startInfo.Environment["HERMES_ACP_SKIP_CONFIGURED_MCP"] = "1";
+        HarnessHookRootContract.Apply(startInfo);
         return new(startInfo, promptBytes, promptSha256, hermesHome, PinnedRelease, PinnedCommit);
     }
 
