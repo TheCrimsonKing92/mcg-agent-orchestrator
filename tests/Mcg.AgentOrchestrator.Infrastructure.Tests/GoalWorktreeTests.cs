@@ -2180,7 +2180,7 @@ public sealed class GoalWorktreeIsolatedDotnetTests : GoalWorktreeTestBase
                 machineName = Environment.MachineName,
                 lastAcquiredAt = DateTimeOffset.UtcNow
             }));
-        CopyDirectory(ResolveProbeOutputDirectory(), dependencyDirectory);
+        CopyProbeOutput(ResolveProbeOutputDirectory(), dependencyDirectory);
         Assert.True(File.Exists(assemblyPath), $"Probe output is missing {assemblyPath}.");
         Assert.True(File.Exists(executablePath), $"Probe output is missing {executablePath}.");
         if (!includeAssembly)
@@ -2379,17 +2379,13 @@ public sealed class GoalWorktreeIsolatedDotnetTests : GoalWorktreeTestBase
         await ready.Task;
     }
 
-    private static void CopyDirectory(string source, string destination)
+    private static void CopyProbeOutput(string source, string destination)
     {
-        foreach (var directory in Directory.EnumerateDirectories(source, "*", SearchOption.AllDirectories))
+        // The probe has no project/package dependencies. A sealed test closure also
+        // contains the test host and application; copy only this probe's artifacts.
+        foreach (var file in Directory.EnumerateFiles(source, $"{ProbeProjectName}.*", SearchOption.TopDirectoryOnly))
         {
-            Directory.CreateDirectory(Path.Combine(destination, Path.GetRelativePath(source, directory)));
-        }
-
-        foreach (var file in Directory.EnumerateFiles(source, "*", SearchOption.AllDirectories))
-        {
-            var target = Path.Combine(destination, Path.GetRelativePath(source, file));
-            Directory.CreateDirectory(Path.GetDirectoryName(target)!);
+            var target = Path.Combine(destination, Path.GetFileName(file));
             File.Copy(file, target);
         }
     }
@@ -2397,6 +2393,11 @@ public sealed class GoalWorktreeIsolatedDotnetTests : GoalWorktreeTestBase
     private static string ResolveProbeOutputDirectory()
     {
         var testOutput = new DirectoryInfo(AppContext.BaseDirectory);
+        if (File.Exists(Path.Combine(testOutput.FullName, $"{ProbeProjectName}.exe")))
+        {
+            return testOutput.FullName;
+        }
+
         var configurationDirectory = testOutput.Name.StartsWith("net", StringComparison.OrdinalIgnoreCase)
             ? testOutput.Parent
             : testOutput;
