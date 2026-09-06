@@ -146,7 +146,7 @@ public sealed class StaleDispatchProcessReconcilerTests
     }
 
     [Xunit.Fact]
-    public void UnavailableLiveProcessIdentityPreservesRunningResult()
+    public void MissingHeartbeatDoesNotTrustBareLivePid()
     {
         var fixture = CreateFixture(DispatchExitArtifacts.Native(0, "worker exited", FixedNow));
         var processId = fixture.Task.LastProcess!.ProcessId;
@@ -158,6 +158,12 @@ public sealed class StaleDispatchProcessReconcilerTests
                 new TestClock(FixedNow),
                 isStillRunning: pid => processAlive && pid == processId,
                 readProcessIdentity: _ => null);
+            Xunit.Assert.False(StaleDispatchProcessReconciler.HasLiveOrUnknownTrackedProcess(
+                originalProcess!,
+                pid => processAlive && pid == processId,
+                _ => null));
+            var runnerOutcome = runner.ReconcileLatestProcess(fixture.Kernel, fixture.Goal.Id, fixture.Task.Id);
+            Xunit.Assert.False(runnerOutcome.ProcessRecord.IsRunning);
             var count = StaleDispatchProcessReconciler.Reconcile(
                 fixture.Kernel,
                 runner,
@@ -166,21 +172,12 @@ public sealed class StaleDispatchProcessReconcilerTests
                 pid => processAlive && pid == processId,
                 _ => null);
 
-            Xunit.Assert.Equal(0, count);
-            var heldProcess = Xunit.Assert.IsType<TaskProcessRecord>(fixture.Task.LastProcess);
-            Xunit.Assert.Same(originalProcess, heldProcess);
-            Xunit.Assert.True(heldProcess.IsRunning);
-            Xunit.Assert.Null(fixture.Task.LastVerification);
-            Xunit.Assert.Empty(fixture.Kernel.HumanInputRequests);
-            processAlive = false;
-            Xunit.Assert.Equal(1, StaleDispatchProcessReconciler.Reconcile(
-                fixture.Kernel,
-                runner,
-                fixture.Goal,
-                StaleDispatchProcessReconciler.AssignedOnly,
-                pid => processAlive && pid == processId,
-                _ => null));
+            Xunit.Assert.Equal(1, count);
+            var completedProcess = Xunit.Assert.IsType<TaskProcessRecord>(fixture.Task.LastProcess);
+            Xunit.Assert.NotSame(originalProcess, completedProcess);
+            Xunit.Assert.False(completedProcess.IsRunning);
             Xunit.Assert.NotNull(fixture.Task.LastVerification);
+            Xunit.Assert.Empty(fixture.Kernel.HumanInputRequests);
         }
         finally
         {

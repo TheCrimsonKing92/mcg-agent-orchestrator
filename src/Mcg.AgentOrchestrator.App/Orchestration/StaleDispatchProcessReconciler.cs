@@ -54,8 +54,7 @@ internal static class StaleDispatchProcessReconciler
             }
 
             var outcome = runner.ReconcileLatestProcess(kernel, goal.Id, task.Id);
-            if (outcome.ProcessRecord.IsRunning ||
-                outcome.RecoveryDecision?.Action == DispatchRecoveryAction.Hold)
+            if (outcome.ProcessRecord.IsRunning)
             {
                 continue;
             }
@@ -86,7 +85,7 @@ internal static class StaleDispatchProcessReconciler
         var heartbeat = ProcessLogReader.ReadHeartbeat(process);
         if (!heartbeat.IsAvailable)
         {
-            return process.CompletionTrackedProcessIds.Any(isProcessRunning);
+            return false;
         }
 
         var candidates = process.CompletionTrackedProcessIds

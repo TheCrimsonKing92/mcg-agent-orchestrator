@@ -564,7 +564,7 @@ public sealed class AdvanceLoopTests
     kernel.RecordTaskProcessStarted(
         goal.Id,
         task.Id,
-        new TaskProcessRecord(28516, "old dispatch", root, stdout, stderr, exit, clock, null, null));
+        new TaskProcessRecord(Environment.ProcessId, "old dispatch", root, stdout, stderr, exit, clock, null, null));
 
     var snapshot = kernel.ExportSnapshot();
     var goalSnapshot = snapshot.Goals.Single();

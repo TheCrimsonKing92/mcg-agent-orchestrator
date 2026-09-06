@@ -776,7 +776,9 @@ private static void ReconcileExitedAssignedProcessRecords(AgentOrchestratorKerne
         kernel,
         runner,
         goal,
-        StaleDispatchProcessReconciler.AssignedOnly);
+        StaleDispatchProcessReconciler.AssignedOnly,
+        IsTrackedProcessRunningForReadyBatch,
+        ReadTrackedProcessIdentityForReadyBatch);
 }
 
 private static bool HasLiveTrackedProcess(TaskProcessRecord process)
