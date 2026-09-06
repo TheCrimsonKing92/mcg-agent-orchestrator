@@ -1268,6 +1268,20 @@ public sealed class BackgroundDispatchRunner
         var errorSnapshot = ReadProcessLogBestEffort(processRecord, processRecord.StandardErrorPath);
         var decisionStandardOutput = outputSnapshot.DecisionText;
         var decisionStandardError = errorSnapshot.DecisionText;
+        if (outputSnapshot.DecisionTruncatedChars > 0)
+        {
+            standardErrorDiagnostic = AppendDiagnostic(
+                standardErrorDiagnostic ?? string.Empty,
+                $"decision-text-truncated source=stdout dropped_chars={outputSnapshot.DecisionTruncatedChars} " +
+                $"complete_artifact='{processRecord.StandardOutputPath}'");
+        }
+        if (errorSnapshot.DecisionTruncatedChars > 0)
+        {
+            standardErrorDiagnostic = AppendDiagnostic(
+                standardErrorDiagnostic ?? string.Empty,
+                $"decision-text-truncated source=stderr dropped_chars={errorSnapshot.DecisionTruncatedChars} " +
+                $"complete_artifact='{processRecord.StandardErrorPath}'");
+        }
         string? finalPlannerRejectionDiagnostic = null;
         var hasChildExitRecord = TryReadChildExitRecord(processRecord.ChildExitRecordPath, out var childExitRecord);
         var wrapperExitReconciled = false;
@@ -1407,10 +1421,17 @@ public sealed class BackgroundDispatchRunner
             }
         }
 
+        // Read once after role-specific contracts may have appended durable receipts, then reuse this same
+        // complete artifact for presence and the stored verification record. Normalize only bare carriage
+        // returns for parsing; the authoritative stored content remains byte-complete and unchanged.
+        var fullStandardOutput = ReadCompleteLog(processRecord.StandardOutputPath);
+        var authoritativeStandardOutput = fullStandardOutput.Content is { } authoritativeContent
+            ? NormalizeCompleteDecisionText(authoritativeContent)
+            : decisionStandardOutput;
         var providerFailureKind = _completionClassifier.ParseProviderFailureKind(task.LastDispatch, observedExitCode, decisionStandardOutput, decisionStandardError);
         var workerResultPresent = _completionClassifier.HasWorkerResultArtifact(
             processRecord.WorkingDirectory,
-            decisionStandardOutput);
+            authoritativeStandardOutput);
         var hasCommittedChanges = false;
         var orchestratorCommitted = false;
         var completedWorktreeInspection = RequiresFileChangeEvidence(task)
@@ -1718,7 +1739,6 @@ public sealed class BackgroundDispatchRunner
         // Keep orchestrator-ingested plan text in the captured stdout artifact, whose path is
         // recorded below, but out of the worker decision stream and bounded verification
         // snapshot. Kernel classification reparses the snapshot for directives and blockers.
-        var fullStandardOutput = ReadCompleteLog(processRecord.StandardOutputPath);
         var fullStandardError = ReadCompleteLog(processRecord.StandardErrorPath);
         var standardOutput = outputSnapshot.BoundedText;
         var standardError = AppendDiagnostic(
@@ -2592,6 +2612,40 @@ public sealed class BackgroundDispatchRunner
 
     private sealed record CompleteLogReadResult(string? Content, string? UnavailableReason);
 
+    private static string NormalizeCompleteDecisionText(string content)
+    {
+        var hasBareCarriageReturn = false;
+        for (var index = 0; index < content.Length; index++)
+        {
+            if (content[index] == '\r' && (index + 1 == content.Length || content[index + 1] != '\n'))
+            {
+                hasBareCarriageReturn = true;
+                break;
+            }
+        }
+
+        if (!hasBareCarriageReturn)
+        {
+            return content;
+        }
+
+        var normalized = new StringBuilder(content.Length);
+        for (var index = 0; index < content.Length; index++)
+        {
+            var ch = content[index];
+            if (ch == '\r' && (index + 1 == content.Length || content[index + 1] != '\n'))
+            {
+                normalized.Append(Environment.NewLine);
+            }
+            else
+            {
+                normalized.Append(ch);
+            }
+        }
+
+        return normalized.ToString();
+    }
+
     private ProcessLogSnapshot ReadProcessLogFileBestEffort(string path, long length)
     {
         if (!File.Exists(path))
@@ -2705,8 +2759,10 @@ public sealed class BackgroundDispatchRunner
     {
         const int MaxDecisionChars = VerificationTextBounds.MaxRetainedChars;
         var decision = new StringBuilder(Math.Min(MaxDecisionChars, VerificationTextBounds.BoundThreshold));
+        var workerResult = new StringBuilder(Math.Min(MaxDecisionChars, VerificationTextBounds.BoundThreshold));
         var prefixRemaining = VerificationTextBounds.PreviewHeadChars;
         var inWorkerResult = false;
+        var decisionTruncatedChars = 0L;
         var lineBuffer = new StringBuilder();
         var retainedPrefix = new StringBuilder(VerificationTextBounds.BoundThreshold);
         var tail = new char[VerificationTextBounds.PreviewTailChars];
@@ -2737,6 +2793,7 @@ public sealed class BackgroundDispatchRunner
             var normalized = NormalizeWorkerResultMarker(line);
             var isOpener = IsWorkerResultOpener(normalized);
             var isEndMarker = !isOpener && IsWorkerResultEndMarker(normalized);
+            var isWorkerResultLine = isOpener || inWorkerResult || isEndMarker;
             var isDecisionContent =
                 isOpener || isEndMarker || inWorkerResult || IsDecisionSignificantLine(line, containsFinalOutput);
 
@@ -2745,7 +2802,7 @@ public sealed class BackgroundDispatchRunner
                 var take = Math.Min(prefixRemaining, line.Length);
                 if (!isDecisionContent)
                 {
-                    AppendDecisionLine(decision, line[..take], MaxDecisionChars);
+                    decisionTruncatedChars += AppendDecisionLine(decision, line[..take], MaxDecisionChars);
                 }
 
                 // Consume the head budget either way: it measures how far into the log we are, not how much
@@ -2760,7 +2817,10 @@ public sealed class BackgroundDispatchRunner
 
             if (isDecisionContent)
             {
-                AppendDecisionLine(decision, line, MaxDecisionChars);
+                decisionTruncatedChars += AppendDecisionLine(
+                    isWorkerResultLine ? workerResult : decision,
+                    line,
+                    MaxDecisionChars);
             }
 
             if (isEndMarker)
@@ -2826,12 +2886,35 @@ public sealed class BackgroundDispatchRunner
         }
 
         var bounded = BuildBoundedText(retainedPrefix, tail, tailStart, tailCount, totalChars, path);
-        var decisionText = decision.ToString().TrimEnd();
+        var decisionProse = decision.ToString().TrimEnd();
+        var workerResultText = workerResult.ToString().TrimEnd();
+        string decisionText;
+        if (workerResultText.Length == 0)
+        {
+            decisionText = decisionProse;
+        }
+        else
+        {
+            // WORKER_RESULT is contractual; surrounding prose is not. Preserve the captured block at the end
+            // of the same fixed-size decision snapshot and evict prose first, rather than raising the cap and
+            // moving the cliff. A block larger than the cap is still bounded here; completed-result decisions
+            // use the complete stdout artifact as their authority.
+            var separatorLength = decisionProse.Length > 0 ? Environment.NewLine.Length : 0;
+            var retainedProseLength = Math.Max(0, Math.Min(
+                decisionProse.Length,
+                MaxDecisionChars - workerResultText.Length - separatorLength));
+            decisionTruncatedChars += decisionProse.Length - retainedProseLength;
+            var retainedProse = decisionProse[..retainedProseLength].TrimEnd();
+            decisionText = retainedProse.Length == 0
+                ? workerResultText
+                : retainedProse + Environment.NewLine + workerResultText;
+        }
         return new ProcessLogSnapshot(
             length,
             ContainsCodexFinalOutput(decisionText),
             decisionText,
-            bounded);
+            bounded,
+            decisionTruncatedChars);
     }
 
     private static string BuildBoundedText(
@@ -2858,27 +2941,35 @@ public sealed class BackgroundDispatchRunner
         bool FinalOutputSeen,
         string DecisionText,
         string BoundedText,
+        long DecisionTruncatedChars = 0,
         bool ReadSucceeded = true);
 
-    private static void AppendDecisionLine(StringBuilder target, string line, int maxChars)
+    private static long AppendDecisionLine(StringBuilder target, string line, int maxChars)
     {
-        if (string.IsNullOrEmpty(line) || target.Length >= maxChars)
+        if (string.IsNullOrEmpty(line))
         {
-            return;
+            return 0;
         }
 
+        var attemptedChars = (long)line.Length + (target.Length > 0 ? Environment.NewLine.Length : 0);
+        if (target.Length >= maxChars)
+        {
+            return attemptedChars;
+        }
         if (target.Length > 0)
         {
             if (target.Length + Environment.NewLine.Length >= maxChars)
             {
-                return;
+                return attemptedChars;
             }
 
             target.AppendLine();
         }
 
         var remaining = maxChars - target.Length;
-        target.Append(line, 0, Math.Min(line.Length, remaining));
+        var appendedChars = Math.Min(line.Length, remaining);
+        target.Append(line, 0, appendedChars);
+        return line.Length - appendedChars;
     }
 
     private static bool IsDecisionSignificantLine(string line) =>
