@@ -173,8 +173,14 @@ public static partial class GoalWorktrees
         }
 
         paths = parsed;
+        if (parsed.Count == 0)
+        {
+            failure = "post-rebase status contained no commit-worthy paths after parsing";
+            return false;
+        }
+
         failure = string.Empty;
-        return parsed.Count > 0;
+        return true;
     }
 
     private static bool TryClassifyCandidate(
@@ -468,9 +474,23 @@ public static partial class GoalWorktrees
             return false;
         }
 
-        output = result.Output;
+        output = FilterInternalArtifactStatusEntries(result.Output);
         failure = string.Empty;
         return true;
+    }
+
+    private static string FilterInternalArtifactStatusEntries(string statusOutput)
+    {
+        if (statusOutput.Length == 0)
+        {
+            return statusOutput;
+        }
+
+        var retained = statusOutput
+            .Split('\0', StringSplitOptions.RemoveEmptyEntries)
+            .Where(entry => entry.Length < 4 || !GitCli.IsOrchestratorInternalArtifactPath(entry[3..]))
+            .ToArray();
+        return retained.Length == 0 ? string.Empty : string.Join('\0', retained) + '\0';
     }
 
     private static bool TryReadSingleLine(

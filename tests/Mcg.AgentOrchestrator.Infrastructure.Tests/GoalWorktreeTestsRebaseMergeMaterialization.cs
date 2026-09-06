@@ -36,6 +36,32 @@ public sealed class GoalWorktreeTestsRebaseMergeMaterialization : GoalWorktreeTe
     }
 
     [Xunit.Fact]
+    public void IgnoresWorkerResultArtifactDuringPostRebaseMaterialization()
+    {
+        var repo = CreateSeededRepository();
+        try
+        {
+            var goalId = GoalId.New();
+            var fixture = PrepareFixture(repo, goalId, splitAttributeCommit: true);
+            File.WriteAllText(Path.Combine(fixture.Worktree, "WORKER_RESULT.md"), "worker receipt");
+
+            var rebase = GoalWorktrees.TryRebaseOntoMain(repo, goalId);
+
+            Assert.Equal(GoalWorktreeRebaseStatus.Rebased, rebase.Status);
+            Assert.Equal(["fixture.txt"], rebase.RematerializedFiles);
+            Assert.Equal(
+                RunGitOutput(fixture.Worktree, "rev-parse", "HEAD:fixture.txt"),
+                RunGitOutput(fixture.Worktree, "hash-object", "--no-filters", "--", "fixture.txt"));
+            Assert.Contains("WORKER_RESULT.md", ReadStatus(fixture.Worktree), StringComparison.Ordinal);
+            Assert.False(GitCli.IsWorktreeDirty(fixture.Worktree));
+        }
+        finally
+        {
+            DeleteDirectory(repo);
+        }
+    }
+
+    [Xunit.Fact]
     public void TogetherCommittedAttributesRemainCleanControl()
     {
         var splitRepo = CreateSeededRepository();
@@ -57,6 +83,10 @@ public sealed class GoalWorktreeTestsRebaseMergeMaterialization : GoalWorktreeTe
             Assert.Empty(togetherResult.RematerializedFiles!);
             Assert.Null(togetherResult.PreimageDirectory);
             Assert.Equal(string.Empty, ReadStatus(together.Worktree));
+            Assert.Equal(
+                RunGitOutput(together.Worktree, "rev-parse", "HEAD:fixture.txt"),
+                RunGitOutput(together.Worktree, "hash-object", "--no-filters", "--", "fixture.txt"));
+            Assert.DoesNotContain((byte)'\r', File.ReadAllBytes(together.FixturePath));
             Assert.Equal(
                 RunGitOutput(split.Worktree, "rev-parse", "HEAD^{tree}"),
                 RunGitOutput(together.Worktree, "rev-parse", "HEAD^{tree}"));
