@@ -19,14 +19,23 @@ internal sealed partial class ConductorDriver
             AcceptanceMainAdvanceDisposition.Disjoint or
             AcceptanceMainAdvanceDisposition.Unchanged))
         {
+            var reason = disposition switch
+            {
+                AcceptanceMainAdvanceDisposition.Overlap =>
+                    "Main advanced with overlapping changes; revalidation required before landing.",
+                AcceptanceMainAdvanceDisposition.Unknown =>
+                    "Acceptance candidate relationship could not be classified; revalidation required before landing.",
+                _ => throw new InvalidOperationException(
+                    $"Unsupported acceptance main-advance disposition {disposition.GetType().Name}.")
+            };
             return MakeResult(
                 candidate.Goal.Id.Value,
                 candidate.GoalPrefix,
                 policy,
                 new ConductorAdvanceOutcome.Held(
                     GoalLifecycleState.Verified,
-                    $"Main advanced with overlapping or unclassifiable changes; " +
-                    $"revalidation required before landing. {disposition.FormatReceipt()}"));
+                    $"{reason} {disposition.FormatReceipt()}",
+                    StableIdentity: BuildRevalidationHoldIdentity(candidate)));
         }
 
         return CompleteLandingAfterAcceptance(candidate.Goal, candidate.GoalPrefix, policy, acceptance);
@@ -168,6 +177,21 @@ internal sealed partial class ConductorDriver
 
     private static bool GitSucceeded(GitCli.GitResult result) =>
         result.Succeeded && !result.DrainTimedOut;
+
+    private string BuildRevalidationHoldIdentity(ConductorParallelAcceptanceCandidate candidate)
+    {
+        try
+        {
+            var current = _resolveAcceptanceHeads(candidate.Goal);
+            return $"acceptance-revalidation:" +
+                $"{current.BranchHeadSha ?? candidate.BranchHeadSha ?? "unknown"}:" +
+                $"{current.MainHeadSha ?? candidate.MainHeadSha ?? "unknown"}";
+        }
+        catch
+        {
+            return $"acceptance-revalidation:{candidate.CandidateKey}";
+        }
+    }
 
     private static string BuildCarryForwardReceipt(
         AcceptanceMainAdvanceDisposition disposition,

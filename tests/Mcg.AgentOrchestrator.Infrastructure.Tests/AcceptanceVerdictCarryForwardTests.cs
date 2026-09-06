@@ -72,6 +72,10 @@ public sealed class AcceptanceVerdictCarryForwardTests : HostCapacityBoundTestBa
                 "verified=scripts/Invoke-ProcessLifecycleEvidenceHarness.ps1",
                 held.Reason,
                 StringComparison.Ordinal);
+            Assert.Equal(
+                $"acceptance-revalidation:{ReadGit(fixture.Worktree, "rev-parse", "HEAD")}:" +
+                ReadGit(repo, "rev-parse", "main"),
+                held.StableIdentity);
             Assert.Equal(racingMain, ReadGit(repo, "rev-parse", "main"));
             Assert.DoesNotContain(
                 GoalOperationJournal.Read(repo, fixture.Goal.Id).Entries,
@@ -221,6 +225,10 @@ public sealed class AcceptanceVerdictCarryForwardTests : HostCapacityBoundTestBa
 
             var held = Assert.IsType<ConductorAdvanceOutcome.Held>(result.Outcome);
             Assert.Equal(GoalLifecycleState.Verified, held.State);
+            Assert.StartsWith(
+                "Acceptance candidate relationship could not be classified;",
+                held.Reason,
+                StringComparison.Ordinal);
             Assert.Contains("revalidation required before landing", held.Reason, StringComparison.Ordinal);
             Assert.Contains("disposition=unknown", held.Reason, StringComparison.Ordinal);
             Assert.DoesNotContain(
