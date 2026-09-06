@@ -22,7 +22,7 @@ internal static class CliTaskQueryCommand
     {
         if (CliCommandHelp.IsCommandSpecificHelp(args))
         {
-            ExecuteAgainstKernel(
+            ExecuteAgainstKernelAndCommitCurrentGoal(
                 args,
                 new AgentOrchestratorKernel(),
                 workspace,
@@ -30,108 +30,123 @@ internal static class CliTaskQueryCommand
                 channel,
                 ref agents,
                 ref workerProfiles,
-                ref currentGoal);
+                ref currentGoal,
+                currentGoal);
             return;
         }
 
+        // Preserve the dispatcher's validation order: help is handled first, then invalid flags
+        // fail before any goal resolution or repository read.
+        CliCommandHelp.ThrowIfInvalidFlags(args);
         var metadata = stateQueries.ListGoalMetadataAsync().GetAwaiter().GetResult();
-        var target = ResolveTarget(args, metadata, currentGoal);
-        if (target.GoalId is null)
-        {
-            ExecuteAgainstKernel(
-                target.DispatchArgs,
-                new AgentOrchestratorKernel(),
-                workspace,
-                providers,
-                channel,
-                ref agents,
-                ref workerProfiles,
-                ref currentGoal);
-            return;
-        }
-
-        var commandKernel = stateQueries.LoadGoalsAsync([target.GoalId]).GetAwaiter().GetResult();
-        var loadedGoal = commandKernel.Goals.SingleOrDefault(goal => goal.Id == target.GoalId);
-        if (loadedGoal is null)
-        {
-            throw new KeyNotFoundException(
-                $"Goal '{target.MissingGoalSelector ?? target.GoalId.Value}' was not found.");
-        }
-
-        Goal? commandCurrentGoal = loadedGoal;
-        ExecuteAgainstKernel(
+        var target = ResolveTarget(args, stateQueries, metadata, currentGoal);
+        ExecuteAgainstKernelAndCommitCurrentGoal(
             target.DispatchArgs,
-            commandKernel,
+            target.Kernel,
             workspace,
             providers,
             channel,
             ref agents,
             ref workerProfiles,
-            ref commandCurrentGoal);
-        currentGoal = commandCurrentGoal;
+            ref currentGoal,
+            target.Goal);
     }
 
     private static TaskQueryTarget ResolveTarget(
         IReadOnlyList<string> args,
+        IOrchestratorStateQueries stateQueries,
         IReadOnlyList<GoalSummary> metadata,
         Goal? currentGoal)
     {
-        var implicitGoalId = ResolveImplicitGoalId(metadata, currentGoal);
         if (!args[0].Equals("task", StringComparison.OrdinalIgnoreCase))
-            return new TaskQueryTarget(implicitGoalId, args, implicitGoalId?.Value);
+            return ResolveImplicitTarget(args, stateQueries, metadata, currentGoal);
 
         if (args.Count > 1 && args[1].Equals("--goal", StringComparison.OrdinalIgnoreCase))
         {
             if (args.Count < 4)
-                return new TaskQueryTarget(implicitGoalId, args, implicitGoalId?.Value);
+                return new TaskQueryTarget(new AgentOrchestratorKernel(), null, args);
 
-            var goalId = ResolveExplicitGoalId(metadata, args[2]);
-            return new TaskQueryTarget(goalId, args, args[2]);
+            var explicitTarget = LoadGoalMatches(stateQueries, metadata, args[2]);
+            var explicitGoal = ResolveExplicitGoal(explicitTarget, args[2]);
+            return new TaskQueryTarget(explicitTarget, explicitGoal, args);
         }
 
         if (!HasInlineGoalPrefixShape(args))
-            return new TaskQueryTarget(implicitGoalId, args, implicitGoalId?.Value);
+            return ResolveImplicitTarget(args, stateQueries, metadata, currentGoal);
 
-        var inlineMatches = FindGoalMatches(metadata, args[1]);
-        if (inlineMatches.Length == 1)
+        var inlineKernel = LoadGoalMatches(stateQueries, metadata, args[1]);
+        if (inlineKernel.Goals.Count == 1)
         {
-            var goalId = new GoalId(inlineMatches[0].Id);
+            var inlineGoal = inlineKernel.Goals.Single();
             return new TaskQueryTarget(
-                goalId,
-                [args[0], "--goal", goalId.Value, .. args.Skip(2)],
-                args[1]);
+                inlineKernel,
+                inlineGoal,
+                [args[0], "--goal", inlineGoal.Id.Value, .. args.Skip(2)]);
         }
 
-        IReadOnlyList<string> dispatchArgs = implicitGoalId is null
+        var implicitTarget = ResolveImplicitTarget(args, stateQueries, metadata, currentGoal);
+        var dispatchArgs = implicitTarget.Goal is null
             ? args
-            : [args[0], "--goal", implicitGoalId.Value, args[1], .. args.Skip(2)];
-        return new TaskQueryTarget(implicitGoalId, dispatchArgs, implicitGoalId?.Value);
+            : [args[0], "--goal", implicitTarget.Goal.Id.Value, args[1], .. args.Skip(2)];
+        return implicitTarget with { DispatchArgs = dispatchArgs };
     }
 
-    private static GoalId? ResolveImplicitGoalId(IReadOnlyList<GoalSummary> metadata, Goal? currentGoal)
+    private static TaskQueryTarget ResolveImplicitTarget(
+        IReadOnlyList<string> args,
+        IOrchestratorStateQueries stateQueries,
+        IReadOnlyList<GoalSummary> metadata,
+        Goal? currentGoal)
     {
-        var current = currentGoal is null
-            ? null
-            : metadata.FirstOrDefault(goal =>
-                goal.Id.Equals(currentGoal.Id.Value, StringComparison.OrdinalIgnoreCase));
-        if (current is not null)
-            return new GoalId(current.Id);
-
-        var latest = metadata
+        var candidates = metadata
             .Select((goal, index) => (Goal: goal, Index: index))
             .OrderByDescending(candidate => candidate.Goal.CreatedAt ?? DateTimeOffset.MinValue)
             .ThenBy(candidate => candidate.Index)
             .Select(candidate => candidate.Goal)
-            .FirstOrDefault();
-        return latest is null ? null : new GoalId(latest.Id);
+            .ToList();
+        if (currentGoal is not null)
+        {
+            var current = candidates.FirstOrDefault(goal =>
+                goal.Id.Equals(currentGoal.Id.Value, StringComparison.OrdinalIgnoreCase));
+            if (current is not null)
+            {
+                candidates.Remove(current);
+                candidates.Insert(0, current);
+            }
+        }
+
+        foreach (var candidate in candidates)
+        {
+            var goalId = new GoalId(candidate.Id);
+            var kernel = stateQueries.LoadGoalsAsync([goalId]).GetAwaiter().GetResult();
+            var goal = kernel.Goals.SingleOrDefault(loaded => loaded.Id == goalId);
+            if (goal is not null)
+                return new TaskQueryTarget(kernel, goal, args);
+        }
+
+        return new TaskQueryTarget(new AgentOrchestratorKernel(), null, args);
     }
 
-    private static GoalId ResolveExplicitGoalId(IReadOnlyList<GoalSummary> metadata, string prefix)
+    private static AgentOrchestratorKernel LoadGoalMatches(
+        IOrchestratorStateQueries stateQueries,
+        IReadOnlyList<GoalSummary> metadata,
+        string prefix)
     {
-        var matches = FindGoalMatches(metadata, prefix);
+        var goalIds = FindGoalMatches(metadata, prefix)
+            .Select(summary => new GoalId(summary.Id))
+            .ToArray();
+        return goalIds.Length == 0
+            ? new AgentOrchestratorKernel()
+            : stateQueries.LoadGoalsAsync(goalIds).GetAwaiter().GetResult();
+    }
+
+    private static Goal ResolveExplicitGoal(AgentOrchestratorKernel kernel, string prefix)
+    {
+        var matches = kernel.Goals
+            .Where(goal => goal.Id.Value.StartsWith(prefix, StringComparison.OrdinalIgnoreCase))
+            .ToArray();
         return matches.Length switch
         {
-            1 => new GoalId(matches[0].Id),
+            1 => matches[0],
             0 => throw new KeyNotFoundException($"Goal '{prefix}' was not found."),
             _ => throw new InvalidOperationException($"Goal prefix '{prefix}' is ambiguous.")
         };
@@ -174,8 +189,32 @@ internal static class CliTaskQueryCommand
         }
     }
 
+    private static void ExecuteAgainstKernelAndCommitCurrentGoal(
+        IReadOnlyList<string> args,
+        AgentOrchestratorKernel commandKernel,
+        OrchestratorWorkspace workspace,
+        IModelProviderRegistry providers,
+        IOperatorChannel? channel,
+        ref IReadOnlyList<AgentDefinition> agents,
+        ref WorkerProfileCatalog workerProfiles,
+        ref Goal? currentGoal,
+        Goal? initialCurrentGoal)
+    {
+        var commandCurrentGoal = initialCurrentGoal;
+        ExecuteAgainstKernel(
+            args,
+            commandKernel,
+            workspace,
+            providers,
+            channel,
+            ref agents,
+            ref workerProfiles,
+            ref commandCurrentGoal);
+        currentGoal = commandCurrentGoal;
+    }
+
     private sealed record TaskQueryTarget(
-        GoalId? GoalId,
-        IReadOnlyList<string> DispatchArgs,
-        string? MissingGoalSelector);
+        AgentOrchestratorKernel Kernel,
+        Goal? Goal,
+        IReadOnlyList<string> DispatchArgs);
 }

@@ -54,6 +54,8 @@ public abstract class CliTaskQueryTestSupport
 
         public bool DisappearSelectedGoals { get; init; }
 
+        public HashSet<string> UnavailableGoalIds { get; } = new(StringComparer.Ordinal);
+
         public int FullLoadAttempts { get; private set; }
 
         public int LoadGoalsCount { get; private set; }
@@ -90,7 +92,10 @@ public abstract class CliTaskQueryTestSupport
             if (DisappearSelectedGoals)
                 return Task.FromResult(new AgentOrchestratorKernel());
 
-            var filtered = FilterGoals(_kernel, goalIds);
+            var availableGoalIds = goalIds
+                .Where(goalId => !UnavailableGoalIds.Contains(goalId.Value))
+                .ToArray();
+            var filtered = FilterGoals(_kernel, availableGoalIds);
             LoadedGoalIds.AddRange(filtered.Goals.Select(goal => goal.Id.Value));
             return Task.FromResult(filtered);
         }

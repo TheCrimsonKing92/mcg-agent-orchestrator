@@ -153,32 +153,59 @@ public sealed class CliCommandTestsTaskQueries : CliTaskQueryTestSupport
         {
             var workspace = OrchestratorWorkspace.ForDirectory(root);
             var seed = CreateSeed();
-            var cases = new[]
+            var cases = new (string[] Args, int ExpectedGoalLoads)[]
             {
-                new[] { "task", "99" },
-                ["task", "11111111"],
-                ["task", "deadbeef"],
-                ["task", "feedface"],
-                ["task", "abc", "1"],
-                ["tasks", "status"],
-                ["tasks", "unknown", "value"],
-                ["task", "--bogus", "1"]
+                (new[] { "task", "99" }, 1),
+                (["task", "11111111"], 1),
+                (["task", "deadbeef"], 1),
+                (["task", "feedface"], 1),
+                (["task", "abc", "1"], 2),
+                (["tasks", "status"], 1),
+                (["tasks", "unknown", "value"], 1)
             };
 
-            foreach (var args in cases)
+            foreach (var testCase in cases)
             {
-                var expected = CaptureLegacyException(args, seed.Kernel, workspace, seed.Target.Id.Value);
+                var expected = CaptureLegacyException(testCase.Args, seed.Kernel, workspace, seed.Target.Id.Value);
                 var repository = new ProbeStateRepository(seed.Kernel) { ThrowOnOutbox = true };
                 Goal? currentGoal = seed.Target;
 
-                var actual = CapturePersistentException(args, repository, workspace, ref currentGoal);
+                var actual = CapturePersistentException(testCase.Args, repository, workspace, ref currentGoal);
 
                 Xunit.Assert.Equal(expected.GetType(), actual.GetType());
                 Xunit.Assert.Equal(expected.Message, actual.Message);
                 Xunit.Assert.Equal(seed.Target.Id, currentGoal!.Id);
                 AssertNoMutation(repository);
-                Xunit.Assert.Equal(1, repository.LoadGoalsCount);
+                Xunit.Assert.Equal(testCase.ExpectedGoalLoads, repository.LoadGoalsCount);
             }
+        }
+        finally
+        {
+            Directory.Delete(root, recursive: true);
+        }
+    }
+
+    [Xunit.Fact]
+    public void InvalidFlags_PrecedeGoalResolutionAndReads()
+    {
+        var root = CreateTempDirectory();
+        try
+        {
+            var workspace = OrchestratorWorkspace.ForDirectory(root);
+            var seed = CreateSeed();
+            var args = new[] { "task", "--goal", "missing0", "1", "--bogus" };
+            var expected = CaptureLegacyException(args, seed.Kernel, workspace, seed.Target.Id.Value);
+            var repository = new ProbeStateRepository(seed.Kernel) { ThrowOnOutbox = true };
+            Goal? currentGoal = seed.Target;
+
+            var actual = CapturePersistentException(args, repository, workspace, ref currentGoal);
+
+            Xunit.Assert.Equal(expected.GetType(), actual.GetType());
+            Xunit.Assert.Equal(expected.Message, actual.Message);
+            Xunit.Assert.Equal(seed.Target.Id, currentGoal!.Id);
+            Xunit.Assert.Equal(0, repository.ListGoalMetadataCount);
+            Xunit.Assert.Equal(0, repository.LoadGoalsCount);
+            AssertNoMutation(repository);
         }
         finally
         {
@@ -259,6 +286,36 @@ public sealed class CliCommandTestsTaskQueries : CliTaskQueryTestSupport
     }
 
     [Xunit.Fact]
+    public void ImplicitGoal_SkipsUnavailableNewestMetadata()
+    {
+        var root = CreateTempDirectory();
+        try
+        {
+            var seed = CreateSeed();
+            var repository = new ProbeStateRepository(seed.Kernel) { ThrowOnOutbox = true };
+            repository.UnavailableGoalIds.Add(seed.Other.Id.Value);
+            Goal? currentGoal = null;
+
+            var output = ExecutePersistent(
+                ["tasks"],
+                repository,
+                OrchestratorWorkspace.ForDirectory(root),
+                ref currentGoal);
+
+            Xunit.Assert.Contains(seed.First.Description, output, StringComparison.Ordinal);
+            Xunit.Assert.Equal(seed.Target.Id, currentGoal!.Id);
+            Xunit.Assert.Equal(1, repository.ListGoalMetadataCount);
+            Xunit.Assert.Equal(2, repository.LoadGoalsCount);
+            Xunit.Assert.Equal([seed.Target.Id.Value], repository.LoadedGoalIds);
+            AssertNoMutation(repository);
+        }
+        finally
+        {
+            Directory.Delete(root, recursive: true);
+        }
+    }
+
+    [Xunit.Fact]
     public void EmptyStore_QueryErrorsWithoutEnteringMutationRoute()
     {
         var root = CreateTempDirectory();
@@ -271,21 +328,33 @@ public sealed class CliCommandTestsTaskQueries : CliTaskQueryTestSupport
                 new[] { "tasks" },
                 ["task"]
             };
+            var staleKernel = new AgentOrchestratorKernel();
+            var staleGoal = staleKernel.CreateGoal(
+                new GoalId("stale000dddddddddddddddddddddddd"),
+                "Stale current goal",
+                [new TaskSpec(new TaskId("staletaskddddddddddddddddddddddd"), "Stale task", AgentRole.Developer)]);
 
             foreach (var args in cases)
             {
-                var expected = CaptureLegacyException(args, empty, workspace, currentGoalId: null);
-                var repository = new ProbeStateRepository(empty) { ThrowOnOutbox = true };
-                Goal? currentGoal = null;
+                foreach (var suppliedCurrentGoal in new Goal?[] { null, staleGoal })
+                {
+                    var expected = CaptureLegacyException(
+                        args,
+                        empty,
+                        workspace,
+                        suppliedCurrentGoal?.Id.Value);
+                    var repository = new ProbeStateRepository(empty) { ThrowOnOutbox = true };
+                    var currentGoal = suppliedCurrentGoal;
 
-                var actual = CapturePersistentException(args, repository, workspace, ref currentGoal);
+                    var actual = CapturePersistentException(args, repository, workspace, ref currentGoal);
 
-                Xunit.Assert.Equal(expected.GetType(), actual.GetType());
-                Xunit.Assert.Equal(expected.Message, actual.Message);
-                Xunit.Assert.Null(currentGoal);
-                Xunit.Assert.Equal(1, repository.ListGoalMetadataCount);
-                Xunit.Assert.Equal(0, repository.LoadGoalsCount);
-                AssertNoMutation(repository);
+                    Xunit.Assert.Equal(expected.GetType(), actual.GetType());
+                    Xunit.Assert.Equal(expected.Message, actual.Message);
+                    Xunit.Assert.Equal(suppliedCurrentGoal?.Id, currentGoal?.Id);
+                    Xunit.Assert.Equal(1, repository.ListGoalMetadataCount);
+                    Xunit.Assert.Equal(0, repository.LoadGoalsCount);
+                    AssertNoMutation(repository);
+                }
             }
         }
         finally
@@ -371,17 +440,35 @@ public sealed class CliCommandTestsTaskQueries : CliTaskQueryTestSupport
                 var repository = new ProbeStateRepository(seed.Kernel);
                 Goal? currentGoal = seed.Target;
 
-                var exception = CapturePersistentException(
-                    args,
-                    repository,
-                    OrchestratorWorkspace.ForDirectory(root),
-                    ref currentGoal);
+                if (args[0].Equals("add-task", StringComparison.Ordinal))
+                {
+                    var exception = CapturePersistentException(
+                        args,
+                        repository,
+                        OrchestratorWorkspace.ForDirectory(root),
+                        ref currentGoal);
+                    Xunit.Assert.Equal("State mutation is not allowed for this test.", exception.Message);
+                    Xunit.Assert.Equal(1, repository.MutationAttempts);
+                }
+                else
+                {
+                    var output = ExecutePersistent(
+                        args,
+                        repository,
+                        OrchestratorWorkspace.ForDirectory(root),
+                        ref currentGoal);
+                    Xunit.Assert.Contains("Operator intent queued:", output, StringComparison.Ordinal);
+                    Xunit.Assert.Contains($"verb={args[0]}", output, StringComparison.Ordinal);
+                    Xunit.Assert.Equal(0, repository.MutationAttempts);
+                }
 
-                Xunit.Assert.Equal("State mutation is not allowed for this test.", exception.Message);
-                Xunit.Assert.True(repository.MutationAttempts >= 1);
                 Xunit.Assert.True(repository.ListOutboxMessagesCount >= 1);
                 Xunit.Assert.Equal(0, repository.ListGoalMetadataCount);
                 Xunit.Assert.Equal(0, repository.LoadGoalsCount);
+                Xunit.Assert.Equal(0, repository.FullLoadAttempts);
+                Xunit.Assert.Equal(0, repository.SaveAttempts);
+                Xunit.Assert.Equal(0, repository.MergeSaveAttempts);
+                Xunit.Assert.Equal(0, repository.OutboxClaimAttempts);
             }
             finally
             {
@@ -406,7 +493,8 @@ public sealed class CliCommandTestsTaskQueries : CliTaskQueryTestSupport
                 OrchestratorWorkspace.ForDirectory(root),
                 ref currentGoal);
 
-            Xunit.Assert.Contains("task <task-number", output, StringComparison.Ordinal);
+            Xunit.Assert.Contains("Usage: task [options]", output, StringComparison.Ordinal);
+            Xunit.Assert.Contains("Run this operator command.", output, StringComparison.Ordinal);
             Xunit.Assert.Equal(0, repository.ListGoalMetadataCount);
             Xunit.Assert.Equal(0, repository.LoadGoalsCount);
             AssertNoMutation(repository);
