@@ -62,7 +62,7 @@ internal static partial class CliPersistentStateRunner
         {
             var snapshot = stateRepository.LoadGoalAsync(goalId).GetAwaiter().GetResult()
                 ?? throw new KeyNotFoundException($"Goal '{goalId.Value}' was not found.");
-            var kernel = KernelFromGoalSnapshot(snapshot);
+            var kernel = RestoreGoalExactly(snapshot);
             return CliCommandHandlers.ApplyGoalUnparkWithoutRendering(command, kernel, goalId);
         }
 
@@ -78,7 +78,7 @@ internal static partial class CliPersistentStateRunner
                             throw new KeyNotFoundException($"Goal '{goalId.Value}' was not found.");
                         }
 
-                        var kernel = KernelFromGoalSnapshot(snapshot);
+                        var kernel = RestoreGoalExactly(snapshot);
                         var applicationOutcome = CliCommandHandlers.ApplyGoalUnparkWithoutRendering(command, kernel, goalId);
                         var updatedSnapshot = applicationOutcome.ShouldSave
                             ? ExportGoalSnapshot(kernel, goalId)
@@ -93,7 +93,14 @@ internal static partial class CliPersistentStateRunner
             return new CliCommandHandlers.GoalLifecycleTransitionOutcome(
                 CliCommandHandlers.GoalLifecycleTransitionDisposition.ConflictExhausted,
                 goalId,
-                GoalStatus.Parked);
+                ObservedStatus: null);
         }
+    }
+
+    private static AgentOrchestratorKernel RestoreGoalExactly(GoalSnapshot snapshot)
+    {
+        var kernel = new AgentOrchestratorKernel();
+        kernel.ReplaceGoalWithSnapshot(snapshot);
+        return kernel;
     }
 }

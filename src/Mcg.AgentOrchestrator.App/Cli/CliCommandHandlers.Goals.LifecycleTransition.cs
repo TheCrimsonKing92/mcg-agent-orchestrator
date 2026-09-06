@@ -23,7 +23,7 @@ internal static partial class CliCommandHandlers
     internal sealed record GoalLifecycleTransitionOutcome(
         GoalLifecycleTransitionDisposition Disposition,
         GoalId GoalId,
-        GoalStatus ObservedStatus,
+        GoalStatus? ObservedStatus,
         Goal? Goal = null,
         ProgressEvent? CommittedTimelineEvent = null,
         string? RejectionReason = null)
@@ -97,10 +97,20 @@ internal static partial class CliCommandHandlers
                     throw new InvalidOperationException("Committed unpark outcome is missing its timeline event.");
                 }
 
-                new Mcg.AgentOrchestrator.Infrastructure.GoalLifecycleEventWriter(workspace.GoalLifecycleEventsDirectory)
-                    .AppendTimelineEvent(outcome.CommittedTimelineEvent);
                 Console.WriteLine($"Goal unparked {outcome.GoalId.Value[..8]}.");
                 Console.WriteLine("Status change: Parked -> Active");
+                try
+                {
+                    new Mcg.AgentOrchestrator.Infrastructure.GoalLifecycleEventWriter(workspace.GoalLifecycleEventsDirectory)
+                        .AppendTimelineEvent(outcome.CommittedTimelineEvent);
+                }
+                catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+                {
+                    throw new GoalLifecycleProjectionException(
+                        $"Goal '{outcome.GoalId.Value[..8]}' is committed Active, but lifecycle event projection failed: {ex.Message}",
+                        ex);
+                }
+
                 return;
 
             case GoalLifecycleTransitionDisposition.DryRun:
@@ -122,4 +132,7 @@ internal static partial class CliCommandHandlers
                 throw new InvalidOperationException($"Unsupported lifecycle transition outcome: {outcome.Disposition}.");
         }
     }
+
+    internal sealed class GoalLifecycleProjectionException(string message, Exception innerException)
+        : IOException(message, innerException);
 }
