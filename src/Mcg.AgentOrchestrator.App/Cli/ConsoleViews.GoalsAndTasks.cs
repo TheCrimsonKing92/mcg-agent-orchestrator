@@ -90,29 +90,32 @@ public static void PrintGoal(
     if (!tasksOnly)
     {
         var declaredCriteria = AcceptanceCriteriaParser.ParseDeclared(goal.Objective);
-        Console.WriteLine($"Brief acceptance criteria ({declaredCriteria.Count}):");
-        for (var index = 0; index < declaredCriteria.Count; index++)
+        if (declaredCriteria.Count > 0 || goal.RefinedSpec is not null)
         {
-            Console.WriteLine($"  {index + 1}. {declaredCriteria[index].Trim().ReplaceLineEndings(" ")}");
-        }
-
-        if (goal.RefinedSpec is not { } refinedSpec)
-        {
-            Console.WriteLine($"Refined acceptance criteria: pending refinement (brief declares {declaredCriteria.Count})");
-        }
-        else
-        {
-            Console.WriteLine($"Refined acceptance criteria ({refinedSpec.AcceptanceCriteria.Count}):");
-            for (var index = 0; index < refinedSpec.AcceptanceCriteria.Count; index++)
+            Console.WriteLine($"Brief acceptance criteria ({declaredCriteria.Count}):");
+            for (var index = 0; index < declaredCriteria.Count; index++)
             {
-                Console.WriteLine($"  {index + 1}. {refinedSpec.AcceptanceCriteria[index].Trim().ReplaceLineEndings(" ")}");
+                Console.WriteLine($"  {index + 1}. {declaredCriteria[index].Trim().ReplaceLineEndings(" ")}");
             }
 
-            if (declaredCriteria.Count != refinedSpec.AcceptanceCriteria.Count)
+            if (goal.RefinedSpec is not { } refinedSpec)
             {
-                Console.WriteLine(
-                    $"WARNING: refined acceptance criteria count {refinedSpec.AcceptanceCriteria.Count} " +
-                    $"differs from brief declared count {declaredCriteria.Count}.");
+                Console.WriteLine($"Refined acceptance criteria: pending refinement (brief declares {declaredCriteria.Count})");
+            }
+            else
+            {
+                Console.WriteLine($"Refined acceptance criteria ({refinedSpec.AcceptanceCriteria.Count}):");
+                for (var index = 0; index < refinedSpec.AcceptanceCriteria.Count; index++)
+                {
+                    Console.WriteLine($"  {index + 1}. {refinedSpec.AcceptanceCriteria[index].Trim().ReplaceLineEndings(" ")}");
+                }
+
+                if (declaredCriteria.Count > 0 && declaredCriteria.Count != refinedSpec.AcceptanceCriteria.Count)
+                {
+                    Console.WriteLine(
+                        $"WARNING: refined acceptance criteria count {refinedSpec.AcceptanceCriteria.Count} " +
+                        $"differs from brief declared count {declaredCriteria.Count}.");
+                }
             }
         }
     }

@@ -4,6 +4,24 @@ using Mcg.AgentOrchestrator.Core;
 public sealed class ConsoleViewsRefinedCriteriaTests
 {
     [Xunit.Fact]
+    public void PrintGoalDoesNotWarnWhenBriefHasNoDeclaredCriteria()
+    {
+        var kernel = new AgentOrchestratorKernel();
+        var goal = kernel.CreateGoal("Keep criteria visible.");
+        kernel.SetGoalRefinedSpec(goal.Id, new RefinedSpec(
+            "Keep the refined list visible.",
+            ["Refined criterion."],
+            VerificationClass.TestVerifiable,
+            [],
+            []));
+
+        var output = InfrastructureTestSupport.CaptureConsole(() => ConsoleViews.PrintGoal(goal));
+
+        Xunit.Assert.Contains("Refined acceptance criteria (1):", output, StringComparison.Ordinal);
+        Xunit.Assert.DoesNotContain("WARNING: refined acceptance criteria count", output, StringComparison.Ordinal);
+    }
+
+    [Xunit.Fact]
     public void PrintGoalRendersRefinedCriteriaAndWarnsWhenDeclaredCountDiffers()
     {
         var kernel = new AgentOrchestratorKernel();
