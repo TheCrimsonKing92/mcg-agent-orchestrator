@@ -1052,33 +1052,18 @@ internal sealed class ConductorParallelAcceptanceAttemptCoordinator
         }
         catch (ConductorParallelAcceptanceAttemptCompletionGateViolationException ex)
         {
-            var rejected = attempt with
-            {
-                Outcome = ConductorParallelAcceptanceAttemptOutcome.LaunchFailed,
-                CompletedAt = _utcNow(),
-                LastHeartbeatAt = _utcNow(),
-                Detail = ex.Message
-            };
-            Persist(rejected);
-            TryAppend(attempt.StderrPath, $"test completion gate rejected attempt: {ex.Message}{Environment.NewLine}");
-            TryWriteExit(attempt.ExitCodePath, 1);
+            CompleteLaunchFailure(
+                attempt,
+                ex,
+                $"test completion gate rejected attempt: {ex.Message}{Environment.NewLine}");
             throw;
         }
         catch (Exception ex)
         {
-            var transientFailureCount = IsTransientAttemptIo(ex)
-                ? CountConsecutiveTransientFailures(attempt) + 1
-                : 0;
-            var failed = attempt with
-            {
-                Outcome = ConductorParallelAcceptanceAttemptOutcome.LaunchFailed,
-                CompletedAt = _utcNow(),
-                Detail = ex.Message,
-                TransientFailureCount = transientFailureCount
-            };
-            Persist(failed);
-            TryAppend(attempt.StderrPath, $"launch failed: {ex}{Environment.NewLine}");
-            TryWriteExit(attempt.ExitCodePath, 1);
+            var failed = CompleteLaunchFailure(
+                attempt,
+                ex,
+                $"launch failed: {ex}{Environment.NewLine}");
             return ConductorParallelAcceptanceAttemptDecision.TerminalWithoutRun(failed);
         }
     }
@@ -1662,6 +1647,38 @@ internal sealed class ConductorParallelAcceptanceAttemptCoordinator
         ConductorParallelAcceptanceAttempt attempt,
         Exception exception) =>
         CompleteOwnedProcessFailure(attempt, exception);
+
+    private ConductorParallelAcceptanceAttempt CompleteLaunchFailure(
+        ConductorParallelAcceptanceAttempt attempt,
+        Exception exception,
+        string stderrDetail)
+    {
+        var transient = IsTransientAttemptIo(exception);
+        var claimedTerminal = TryPersistTerminal(attempt, current => current with
+        {
+            Outcome = ConductorParallelAcceptanceAttemptOutcome.LaunchFailed,
+            CompletedAt = _utcNow(),
+            LastHeartbeatAt = _utcNow(),
+            Detail = exception.Message,
+            TransientFailureCount = transient
+                ? CountConsecutiveTransientFailures(current) + 1
+                : current.TransientFailureCount
+        });
+        TryAppendAttemptLog(attempt.StderrPath, stderrDetail);
+        WriteTerminalExitReceipt(attempt, claimedTerminal, claimedExitCode: 1);
+        return TryReadAttemptFile(attempt.MetadataPath) ?? attempt with
+        {
+            Outcome = ConductorParallelAcceptanceAttemptOutcome.LaunchFailed,
+            CompletedAt = _utcNow(),
+            LastHeartbeatAt = _utcNow(),
+            Detail = exception.Message
+        };
+    }
+
+    internal ConductorParallelAcceptanceAttempt CompleteLaunchFailureForTests(
+        ConductorParallelAcceptanceAttempt attempt,
+        Exception exception) =>
+        CompleteLaunchFailure(attempt, exception, $"launch failed: {exception}{Environment.NewLine}");
 
     private ConductorParallelAcceptanceAttemptDecision? TryCompleteRunningAttempt(
         ConductorParallelAcceptanceAttempt attempt,

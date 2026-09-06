@@ -573,13 +573,17 @@ public sealed class ConductorEvidenceAttemptLifecycleTests
                 },
                 acquireStableSlotLease: (_, _) => CreateFakeStableSlotLease(root));
             var attempt = coordinator.CreateAttemptForTests(candidate);
-            var runTask = Task.Run(() => coordinator.RunAttemptForTests(
-                attempt,
-                candidate,
-                ConductorAutonomyPolicy.Permissive,
-                (attemptCandidate, _) => ConductorParallelAcceptanceRunResult.Accepted(
-                    attemptCandidate,
-                    AcceptanceVerificationSummary.PassedWithNoUnmetCriteria)));
+            var runTask = Task.Factory.StartNew(
+                () => coordinator.RunAttemptForTests(
+                    attempt,
+                    candidate,
+                    ConductorAutonomyPolicy.Permissive,
+                    (attemptCandidate, _) => ConductorParallelAcceptanceRunResult.Accepted(
+                        attemptCandidate,
+                        AcceptanceVerificationSummary.PassedWithNoUnmetCriteria)),
+                CancellationToken.None,
+                TaskCreationOptions.LongRunning,
+                TaskScheduler.Default);
 
             Assert.True(cleanupReached.Wait(TimeSpan.FromSeconds(10)));
             Assert.Equal("0", File.ReadAllText(attempt.ExitCodePath));
@@ -600,6 +604,44 @@ public sealed class ConductorEvidenceAttemptLifecycleTests
         finally
         {
             allowCleanupFailure.Set();
+            Directory.Delete(root, recursive: true);
+        }
+    }
+
+    [Fact]
+    public void LaunchFailureAfterPublishedResult_DoesNotReplaceTerminalReceipts()
+    {
+        var root = CreateTempDirectory();
+        try
+        {
+            var kernel = new AgentOrchestratorKernel();
+            var goal = kernel.CreateGoal("Retain acceptance result across late launch failure");
+            var candidate = ConductorParallelAcceptanceCandidate.Create(goal, 0, [], "branch-launch", "main-launch");
+            var coordinator = new ConductorParallelAcceptanceAttemptCoordinator(
+                root,
+                acquireStableSlotLease: (_, _) => null);
+            var attempt = coordinator.CreateAttemptForTests(candidate);
+            coordinator.RunAttemptForTests(
+                attempt,
+                candidate,
+                ConductorAutonomyPolicy.Permissive,
+                (attemptCandidate, _) => ConductorParallelAcceptanceRunResult.Accepted(
+                    attemptCandidate,
+                    AcceptanceVerificationSummary.PassedWithNoUnmetCriteria));
+
+            var completed = coordinator.CompleteLaunchFailureForTests(
+                attempt,
+                new IOException("parent publication read failed after result"));
+
+            Assert.Equal(ConductorParallelAcceptanceAttemptOutcome.Passed, completed.Outcome);
+            Assert.Equal("0", File.ReadAllText(attempt.ExitCodePath));
+            Assert.True(JsonSerializer.Deserialize<ConductorParallelAcceptanceRunArtifact>(
+                File.ReadAllText(attempt.ResultPath),
+                new JsonSerializerOptions { PropertyNameCaseInsensitive = true })?.Acceptance?.Passed);
+            Assert.Contains("parent publication read failed after result", File.ReadAllText(attempt.StderrPath), StringComparison.Ordinal);
+        }
+        finally
+        {
             Directory.Delete(root, recursive: true);
         }
     }
