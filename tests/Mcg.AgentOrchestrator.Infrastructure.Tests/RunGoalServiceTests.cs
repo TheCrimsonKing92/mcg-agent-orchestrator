@@ -203,8 +203,6 @@ public sealed class RunGoalServiceTests
         var goal = CreateRefinedGoal(kernel, "Sequential echo run", [task1, task2]);
         var agent = EchoAgent();
         var profiles = EchoProfiles();
-        using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(30));
-
         var result = await RunGoalService.RunAsync(
             kernel,
             [agent],
@@ -214,7 +212,7 @@ public sealed class RunGoalServiceTests
             allowLargePaidSubscriptionStart: false,
             pollInterval: TimeSpan.FromMilliseconds(50),
             sleep: WaitForNextExitFile(workspace.LogDirectory),
-            cancellationToken: cts.Token);
+            cancellationToken: TestContext.Current.CancellationToken);
 
         Assert.True(result.Executed);
         Assert.Equal(2, result.CompletedTasks.Count);
