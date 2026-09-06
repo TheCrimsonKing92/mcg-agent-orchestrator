@@ -99,6 +99,34 @@ public sealed class GoalWorktreeTestsRebaseMergeMaterialization : GoalWorktreeTe
     }
 
     [Xunit.Fact]
+    public void AcceptsValidExplicitEolMetadataFromRealGit()
+    {
+        var repo = CreateSeededRepository();
+        try
+        {
+            var goalId = GoalId.New();
+            var fixture = PrepareFixture(
+                repo,
+                goalId,
+                splitAttributeCommit: false,
+                attributeLine: "*.txt text eol=lf\n");
+            var eolReceipt = RunGitOutput(fixture.Worktree, "ls-files", "--eol", "-z", "--", "fixture.txt");
+
+            var result = GoalWorktrees.TryRebaseOntoMain(repo, goalId);
+
+            Assert.Contains("attr/text eol=lf", eolReceipt, StringComparison.Ordinal);
+            Assert.Contains("\tfixture.txt", eolReceipt, StringComparison.Ordinal);
+            Assert.Equal(GoalWorktreeRebaseStatus.Rebased, result.Status);
+            Assert.Empty(result.RematerializedFiles!);
+            Assert.Equal(string.Empty, ReadStatus(fixture.Worktree));
+        }
+        finally
+        {
+            DeleteDirectory(repo);
+        }
+    }
+
+    [Xunit.Fact]
     public void RestoreTheDefectControlExposesSplitCommitByteDrift()
     {
         var repo = CreateSeededRepository();
@@ -331,6 +359,38 @@ public sealed class GoalWorktreeTestsRebaseMergeMaterialization : GoalWorktreeTe
             Assert.Equal(GoalWorktreeRebaseStatus.IncompleteMaterialization, result.Status);
             Assert.Contains("tracked-file scan", result.Message, StringComparison.Ordinal);
             Assert.Contains("exit=19", result.Message, StringComparison.Ordinal);
+            Assert.Equal(bytesBefore, File.ReadAllBytes(fixture.FixturePath));
+            Assert.Null(result.PreimageDirectory);
+        }
+        finally
+        {
+            DeleteDirectory(repo);
+        }
+    }
+
+    [Xunit.Fact]
+    public void MalformedBytePreservingScanReceiptFailsClosedWithoutWriting()
+    {
+        var repo = CreateSeededRepository();
+        try
+        {
+            var goalId = GoalId.New();
+            var fixture = PrepareRawDefect(repo, goalId);
+            var bytesBefore = File.ReadAllBytes(fixture.FixturePath);
+            GitCli.GitResult Runner(string workingDirectory, string[] arguments) =>
+                arguments.SequenceEqual(["ls-files", "--eol", "-z"])
+                    ? new GitCli.GitResult(0, "i/lf    w/crlf    malformed\tfixture.txt\0", string.Empty)
+                    : GitCli.Run(workingDirectory, arguments);
+
+            var result = GoalWorktrees.ValidatePostRebaseMaterialization(
+                fixture.Worktree,
+                GoalWorktrees.BranchName(goalId),
+                fixture.BaseBranch,
+                goalId,
+                Runner);
+
+            Assert.Equal(GoalWorktreeRebaseStatus.IncompleteMaterialization, result.Status);
+            Assert.Contains("malformed receipt", result.Message, StringComparison.Ordinal);
             Assert.Equal(bytesBefore, File.ReadAllBytes(fixture.FixturePath));
             Assert.Null(result.PreimageDirectory);
         }

@@ -523,12 +523,9 @@ public static partial class GoalWorktrees
                 return false;
             }
 
-            var metadata = entry[..separator].Split(' ', StringSplitOptions.RemoveEmptyEntries);
+            var metadata = entry[..separator];
             var path = entry[(separator + 1)..];
-            if (metadata.Length != 3 ||
-                !metadata[0].StartsWith("i/", StringComparison.Ordinal) ||
-                !metadata[1].StartsWith("w/", StringComparison.Ordinal) ||
-                !metadata[2].StartsWith("attr/", StringComparison.Ordinal) ||
+            if (!TryParseEolMetadata(metadata, out var indexEol, out var worktreeEol, out var attributes) ||
                 string.IsNullOrWhiteSpace(path))
             {
                 paths = [];
@@ -536,9 +533,9 @@ public static partial class GoalWorktrees
                 return false;
             }
 
-            if (metadata[0] == "i/lf" &&
-                metadata[1] == "w/crlf" &&
-                metadata[2] == "attr/-text" &&
+            if (indexEol == "i/lf" &&
+                worktreeEol == "w/crlf" &&
+                attributes == "attr/-text" &&
                 !GitCli.IsOrchestratorInternalArtifactPath(path))
             {
                 parsed.Add(path);
@@ -548,6 +545,43 @@ public static partial class GoalWorktrees
         paths = parsed;
         failure = string.Empty;
         return true;
+    }
+
+    private static bool TryParseEolMetadata(
+        string metadata,
+        out string indexEol,
+        out string worktreeEol,
+        out string attributes)
+    {
+        indexEol = string.Empty;
+        worktreeEol = string.Empty;
+        attributes = string.Empty;
+
+        var indexEnd = metadata.IndexOf(' ');
+        if (indexEnd <= 0)
+            return false;
+
+        var worktreeStart = indexEnd;
+        while (worktreeStart < metadata.Length && metadata[worktreeStart] == ' ')
+            worktreeStart++;
+
+        var worktreeEnd = metadata.IndexOf(' ', worktreeStart);
+        if (worktreeStart == metadata.Length || worktreeEnd <= worktreeStart)
+            return false;
+
+        var attributesStart = worktreeEnd;
+        while (attributesStart < metadata.Length && metadata[attributesStart] == ' ')
+            attributesStart++;
+
+        if (attributesStart == metadata.Length)
+            return false;
+
+        indexEol = metadata[..indexEnd];
+        worktreeEol = metadata[worktreeStart..worktreeEnd];
+        attributes = metadata[attributesStart..].TrimEnd(' ');
+        return indexEol.StartsWith("i/", StringComparison.Ordinal) &&
+               worktreeEol.StartsWith("w/", StringComparison.Ordinal) &&
+               attributes.StartsWith("attr/", StringComparison.Ordinal);
     }
 
     private static string FilterInternalArtifactStatusEntries(string statusOutput)
