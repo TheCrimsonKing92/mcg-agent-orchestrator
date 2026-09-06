@@ -2393,7 +2393,10 @@ public sealed class GoalWorktreeIsolatedDotnetTests : GoalWorktreeTestBase
     private static string ResolveProbeOutputDirectory()
     {
         var testOutput = new DirectoryInfo(AppContext.BaseDirectory);
-        if (File.Exists(Path.Combine(testOutput.FullName, $"{ProbeProjectName}.exe")))
+        // ReferenceOutputAssembly=false can copy the apphost without the managed
+        // assembly. Only a complete probe can override the sibling project output.
+        if (File.Exists(Path.Combine(testOutput.FullName, $"{ProbeProjectName}.exe")) &&
+            File.Exists(Path.Combine(testOutput.FullName, $"{ProbeProjectName}.dll")))
         {
             return testOutput.FullName;
         }
