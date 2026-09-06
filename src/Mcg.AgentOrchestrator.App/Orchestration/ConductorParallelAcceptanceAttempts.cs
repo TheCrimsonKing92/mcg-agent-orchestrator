@@ -1376,11 +1376,10 @@ internal sealed class ConductorParallelAcceptanceAttemptCoordinator
                 TransientFailureCount = IsBoundedTransientFailure(outcome, AcceptanceRunDetail(run))
                     ? CountConsecutiveTransientFailures(current) + 1
                     : current.TransientFailureCount
-            }, out var durableAttempt);
+            });
             WriteTerminalExitReceipt(
                 attempt,
                 claimedTerminal,
-                durableAttempt,
                 outcome == ConductorParallelAcceptanceAttemptOutcome.Passed ? 0 : 1);
             if (!string.IsNullOrWhiteSpace(stderrDetail))
             {
@@ -1636,8 +1635,8 @@ internal sealed class ConductorParallelAcceptanceAttemptCoordinator
             TransientFailureCount = transient
                 ? CountConsecutiveTransientFailures(current) + 1
                 : current.TransientFailureCount
-        }, out var durableAttempt);
-        WriteTerminalExitReceipt(attempt, claimedTerminal, durableAttempt, claimedExitCode: 1);
+        });
+        WriteTerminalExitReceipt(attempt, claimedTerminal, claimedExitCode: 1);
         TryAppendAttemptLog(attempt.StderrPath, $"{outcome}: {detail}{Environment.NewLine}");
         WriteHeartbeat(attempt, "exiting");
     }
@@ -2096,19 +2095,12 @@ internal sealed class ConductorParallelAcceptanceAttemptCoordinator
 
     private bool TryPersistTerminal(
         ConductorParallelAcceptanceAttempt attempt,
-        Func<ConductorParallelAcceptanceAttempt, ConductorParallelAcceptanceAttempt> transition) =>
-        TryPersistTerminal(attempt, transition, out _);
-
-    private bool TryPersistTerminal(
-        ConductorParallelAcceptanceAttempt attempt,
-        Func<ConductorParallelAcceptanceAttempt, ConductorParallelAcceptanceAttempt> transition,
-        out ConductorParallelAcceptanceAttempt? durableAttempt)
+        Func<ConductorParallelAcceptanceAttempt, ConductorParallelAcceptanceAttempt> transition)
     {
         ConductorParallelAcceptanceAttempt terminal;
         lock (MetadataWriteGate)
         {
             var current = TryReadAttemptFile(attempt.MetadataPath);
-            durableAttempt = current;
             if (current is null ||
                 !string.Equals(current.AttemptId, attempt.AttemptId, StringComparison.Ordinal) ||
                 current.Outcome != ConductorParallelAcceptanceAttemptOutcome.Running)
@@ -2119,7 +2111,6 @@ internal sealed class ConductorParallelAcceptanceAttemptCoordinator
 
             terminal = transition(current);
             WriteAttemptFile(terminal);
-            durableAttempt = terminal;
         }
 
         EmitEvidenceEnd(terminal);
@@ -2436,8 +2427,8 @@ internal sealed class ConductorParallelAcceptanceAttemptCoordinator
         Console.SetError(stderr);
         return new Dictionary<string, TextWriter>(StringComparer.OrdinalIgnoreCase)
         {
-            [Path.GetFullPath(attempt.StdoutPath)] = stdout,
-            [Path.GetFullPath(attempt.StderrPath)] = stderr
+            [Path.GetFullPath(attempt.StdoutPath)] = Console.Out,
+            [Path.GetFullPath(attempt.StderrPath)] = Console.Error
         };
     }
 
@@ -2829,7 +2820,6 @@ internal sealed class ConductorParallelAcceptanceAttemptCoordinator
     private static void WriteTerminalExitReceipt(
         ConductorParallelAcceptanceAttempt attempt,
         bool claimedTerminal,
-        ConductorParallelAcceptanceAttempt? durableAttempt,
         int claimedExitCode)
     {
         if (claimedTerminal)
@@ -2843,12 +2833,9 @@ internal sealed class ConductorParallelAcceptanceAttemptCoordinator
             return;
         }
 
-        var exitCode = durableAttempt is not null &&
-            string.Equals(durableAttempt.AttemptId, attempt.AttemptId, StringComparison.Ordinal) &&
-            durableAttempt.Outcome == ConductorParallelAcceptanceAttemptOutcome.Passed
-                ? 0
-                : 1;
-        TryWriteExit(attempt.ExitCodePath, exitCode);
+        // Terminal metadata and the attempt exit receipt have different owners. Losing the metadata
+        // claim preserves the parent's decision, but does not change this completion path's exit claim.
+        TryWriteExit(attempt.ExitCodePath, claimedExitCode);
     }
 
     private void AppendAttemptLog(string path, string text)

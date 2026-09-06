@@ -330,9 +330,117 @@ public sealed class ConductorEvidenceAttemptLifecycleTests
                 File.ReadAllText(attempt.MetadataPath),
                 new JsonSerializerOptions { PropertyNameCaseInsensitive = true });
             Assert.Equal(ConductorParallelAcceptanceAttemptOutcome.Passed, persisted?.Outcome);
+            var stderr = File.ReadAllText(attempt.StderrPath);
+            Assert.Contains("terminal outcome ignored", stderr, StringComparison.Ordinal);
+            Assert.Contains("CorruptArtifacts:", stderr, StringComparison.Ordinal);
             Assert.Equal(
                 GoalTerminalReconciliationEvidenceState.Present,
                 GoalTerminalReconciliationEvidenceResolver.Resolve(attempt.MetadataPath).State);
+        }
+        finally
+        {
+            Directory.Delete(root, recursive: true);
+        }
+    }
+
+    [Fact]
+    public void PassedResult_WhenParentAlreadyClaimedTerminal_WritesOwnedProcessExitWithoutChangingParentDecision()
+    {
+        var root = CreateTempDirectory();
+        try
+        {
+            var kernel = new AgentOrchestratorKernel();
+            var goal = kernel.CreateGoal("Keep process exit distinct from a lost terminal claim");
+            var candidate = ConductorParallelAcceptanceCandidate.Create(
+                goal,
+                0,
+                [],
+                branchHeadSha: "branch-lost-claim",
+                mainHeadSha: "main-lost-claim");
+            ConductorParallelAcceptanceAttemptCoordinator coordinator = null!;
+            coordinator = new ConductorParallelAcceptanceAttemptCoordinator(
+                root,
+                acquireStableSlotLease: (_, _) => null,
+                resultPublishedForTests: publishedAttempt =>
+                {
+                    Assert.False(File.Exists(publishedAttempt.ExitCodePath));
+                    Assert.True(coordinator.InvalidateCurrent(
+                        goal.Id.Value,
+                        "parent retained its terminal decision"));
+                });
+            var attempt = coordinator.CreateAttemptForTests(candidate);
+
+            coordinator.RunAttemptForTests(
+                attempt,
+                candidate,
+                ConductorAutonomyPolicy.Permissive,
+                (attemptCandidate, _) => ConductorParallelAcceptanceRunResult.Accepted(
+                    attemptCandidate,
+                    AcceptanceVerificationSummary.PassedWithNoUnmetCriteria));
+
+            using var result = JsonDocument.Parse(File.ReadAllText(attempt.ResultPath));
+            Assert.True(result.RootElement.GetProperty("acceptance").GetProperty("passed").GetBoolean());
+            Assert.Equal("0", File.ReadAllText(attempt.ExitCodePath));
+            var persisted = JsonSerializer.Deserialize<ConductorParallelAcceptanceAttempt>(
+                File.ReadAllText(attempt.MetadataPath),
+                new JsonSerializerOptions { PropertyNameCaseInsensitive = true });
+            Assert.Equal(ConductorParallelAcceptanceAttemptOutcome.StaleCandidate, persisted?.Outcome);
+            Assert.NotNull(persisted?.ReconciledAt);
+            Assert.Equal("parent retained its terminal decision", persisted?.Detail);
+            Assert.Equal(
+                GoalTerminalReconciliationEvidenceState.Present,
+                GoalTerminalReconciliationEvidenceResolver.Resolve(attempt.MetadataPath).State);
+        }
+        finally
+        {
+            Directory.Delete(root, recursive: true);
+        }
+    }
+
+    [Fact]
+    public void PassedResult_WhenTerminalMetadataIdentityIsInvalid_WritesOwnedExitButDoesNotManufacturePass()
+    {
+        var root = CreateTempDirectory();
+        try
+        {
+            var kernel = new AgentOrchestratorKernel();
+            var goal = kernel.CreateGoal("Keep invalid terminal metadata distinct from process exit");
+            var candidate = ConductorParallelAcceptanceCandidate.Create(
+                goal,
+                0,
+                [],
+                branchHeadSha: "branch-invalid-claim",
+                mainHeadSha: "main-invalid-claim");
+            var coordinator = new ConductorParallelAcceptanceAttemptCoordinator(
+                root,
+                acquireStableSlotLease: (_, _) => null,
+                resultPublishedForTests: publishedAttempt =>
+                {
+                    Assert.False(File.Exists(publishedAttempt.ExitCodePath));
+                    var current = JsonSerializer.Deserialize<ConductorParallelAcceptanceAttempt>(
+                        File.ReadAllText(publishedAttempt.MetadataPath),
+                        new JsonSerializerOptions { PropertyNameCaseInsensitive = true });
+                    Assert.NotNull(current);
+                    File.WriteAllText(
+                        publishedAttempt.MetadataPath,
+                        JsonSerializer.Serialize(current with { AttemptId = "replacement-attempt" }));
+                });
+            var attempt = coordinator.CreateAttemptForTests(candidate);
+
+            coordinator.RunAttemptForTests(
+                attempt,
+                candidate,
+                ConductorAutonomyPolicy.Permissive,
+                (attemptCandidate, _) => ConductorParallelAcceptanceRunResult.Accepted(
+                    attemptCandidate,
+                    AcceptanceVerificationSummary.PassedWithNoUnmetCriteria));
+
+            using var result = JsonDocument.Parse(File.ReadAllText(attempt.ResultPath));
+            Assert.True(result.RootElement.GetProperty("acceptance").GetProperty("passed").GetBoolean());
+            Assert.Equal("0", File.ReadAllText(attempt.ExitCodePath));
+            var evidence = GoalTerminalReconciliationEvidenceResolver.Resolve(attempt.MetadataPath);
+            Assert.Equal(GoalTerminalReconciliationEvidenceState.Invalid, evidence.State);
+            Assert.Contains("identity does not match", evidence.Detail, StringComparison.Ordinal);
         }
         finally
         {
@@ -497,12 +605,13 @@ public sealed class ConductorEvidenceAttemptLifecycleTests
     }
 
     [Fact]
-    public void ResultReaderOverlap_DoesNotChangePublishedVerdict()
+    public void ResultReaderOverlap_ObservesImmutablePublishedResultWithoutChangingVerdict()
     {
         var root = CreateTempDirectory();
         using var readerReady = new ManualResetEventSlim();
         using var releaseReader = new ManualResetEventSlim();
         Task? readerTask = null;
+        bool? observedPassed = null;
         try
         {
             var kernel = new AgentOrchestratorKernel();
@@ -521,7 +630,12 @@ public sealed class ConductorEvidenceAttemptLifecycleTests
                             publishedAttempt.ResultPath,
                             FileMode.Open,
                             FileAccess.Read,
-                            FileShare.ReadWrite | FileShare.Delete);
+                            FileShare.Read);
+                        using var published = JsonDocument.Parse(reader);
+                        observedPassed = published.RootElement
+                            .GetProperty("acceptance")
+                            .GetProperty("passed")
+                            .GetBoolean();
                         readerReady.Set();
                         Assert.True(releaseReader.Wait(TimeSpan.FromSeconds(10)));
                     });
@@ -537,6 +651,7 @@ public sealed class ConductorEvidenceAttemptLifecycleTests
                     AcceptanceVerificationSummary.PassedWithNoUnmetCriteria));
 
             Assert.Equal("0", File.ReadAllText(attempt.ExitCodePath));
+            Assert.True(observedPassed);
             Assert.Equal(
                 GoalTerminalReconciliationEvidenceState.Present,
                 GoalTerminalReconciliationEvidenceResolver.Resolve(attempt.MetadataPath).State);
