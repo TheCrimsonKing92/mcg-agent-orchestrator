@@ -5723,24 +5723,6 @@ internal sealed partial class ConductorDriver
             out _);
     }
 
-    private ConductorAdvanceResult? RebaseBeforeMerge(
-        Goal goal,
-        string goalPrefix,
-        ConductorAutonomyPolicy policy,
-        out GoalWorktreeRebaseStatus rebaseStatus)
-    {
-        // In a parallel acceptance batch, a sibling goal may advance main after this goal's
-        // acceptance finished. Re-check the branch immediately before the serialized merge.
-        return RebaseOrRetire(
-            goal,
-            goalPrefix,
-            policy,
-            "pre-merge",
-            applySideEffects: true,
-            out _,
-            out rebaseStatus);
-    }
-
     internal LandingEscalationRecheckResult RecheckPreLandingRebaseConflict(Goal goal)
         => _recheckPreLandingRebaseConflict(goal);
 

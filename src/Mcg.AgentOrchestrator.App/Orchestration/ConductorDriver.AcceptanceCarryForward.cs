@@ -9,6 +9,24 @@ internal sealed partial class ConductorDriver
     private const string AcceptanceMainAdvanceOperation = "conductor:acceptance-main-advance";
     private const string AcceptanceMainAdvanceCarryOperation = "conductor:acceptance-main-advance-carry";
 
+    private ConductorAdvanceResult? RebaseBeforeMerge(
+        Goal goal,
+        string goalPrefix,
+        ConductorAutonomyPolicy policy,
+        out GoalWorktreeRebaseStatus rebaseStatus)
+    {
+        // In a parallel acceptance batch, a sibling goal may advance main after this goal's
+        // acceptance finished. Re-check the branch immediately before the serialized merge.
+        return RebaseOrRetire(
+            goal,
+            goalPrefix,
+            policy,
+            "pre-merge",
+            applySideEffects: true,
+            out _,
+            out rebaseStatus);
+    }
+
     private ConductorAdvanceResult CompleteLandingAfterRacingLandingCarryForward(
         ConductorParallelAcceptanceCandidate candidate,
         ConductorAutonomyPolicy policy,
