@@ -13,7 +13,7 @@ using Mcg.AgentOrchestrator.Infrastructure;
 using Microsoft.Data.Sqlite;
 
 
-public sealed class GoalWorktreeTestsSqliteTooling : GoalWorktreeTestBase
+public sealed partial class GoalWorktreeTestsSqliteTooling : GoalWorktreeTestBase
 {
     [Xunit.Fact(DisplayName = "InvokeRepoScript_runs_FindOrchestratorLocks_without_synthetic_argument")]
     public void InvokeRepoScriptRunsFindOrchestratorLocksWithoutSyntheticArgument()
