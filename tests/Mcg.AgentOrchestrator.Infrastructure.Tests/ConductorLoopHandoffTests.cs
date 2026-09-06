@@ -162,8 +162,10 @@ public sealed class ConductorLoopHandoffTests
         }
     }
 
-    [Fact(DisplayName = "ConductorLoopHandoff_alive_successor_hard_ceiling_reports_alive_timeout")]
-    public void AliveSuccessorHardCeilingReportsAliveTimeout()
+    [Theory(DisplayName = "ConductorLoopHandoff_alive_successor_hard_ceiling_reports_alive_timeout")]
+    [InlineData(0)]
+    [InlineData(400)]
+    public void AliveSuccessorHardCeilingReportsAliveTimeout(int probeDelayMilliseconds)
     {
         var root = CreateTempDirectory("mcg-conduct-loop-handoff-hard-timeout");
         try
@@ -176,7 +178,11 @@ public sealed class ConductorLoopHandoffTests
                         root,
                         verificationTimeout: TimeSpan.FromMilliseconds(50),
                         verificationHardTimeout: TimeSpan.FromMilliseconds(300),
-                        loopStartProbe: (_, _) => false),
+                        loopStartProbe: (_, _) =>
+                        {
+                            Thread.Sleep(probeDelayMilliseconds);
+                            return false;
+                        }),
                     new ConductorLoopHandoffRequest(12, TimeSpan.FromHours(4), 0),
                     request =>
                     {
@@ -190,7 +196,8 @@ public sealed class ConductorLoopHandoffTests
             Assert.Equal("successor-alive-timeout", result.Reason);
             Assert.Contains("processAlive=true", result.VerificationOutcome, StringComparison.Ordinal);
             Assert.Contains("terminalReason=alive-timeout", result.VerificationOutcome, StringComparison.Ordinal);
-            Assert.Contains("LOOP_HANDOFF_PENDING", output, StringComparison.Ordinal);
+            // A poll can first observe the hard deadline; an intermediate Pending event is optional here.
+            // AliveSuccessorWaitsPastLegacyTimeoutUntilLoopStart separately verifies the Pending transition.
             Assert.Contains("LOOP_HANDOFF_FAILED", output, StringComparison.Ordinal);
         }
         finally
