@@ -14,7 +14,10 @@ internal interface IHermesAcpProcess : IDisposable
     TextReader StandardOutput { get; }
     TextReader StandardError { get; }
     int ExitCode { get; }
+    int ProcessId => 0;
+    DateTimeOffset? ProcessStartedAt => null;
     bool JobExitConfirmed { get; }
+    string DescribeJobExitObservation() => "job-exit-observation=unavailable";
     bool SurvivorInventoryEmpty { get; }
     string? LaunchedImagePath { get; }
     void CompleteInput();
@@ -51,14 +54,18 @@ internal sealed class HermesAcpProcessLauncher : IHermesAcpProcessLauncher
         private readonly Process _process;
         private readonly SafeFileHandle _processHandle;
         private readonly OwnedProcessGroup _processGroup;
+        private readonly DateTimeOffset? _processStartedAt;
+        private SpawnProcessIdentity? _launchedIdentity;
         private readonly HashSet<SpawnProcessIdentity> _observedIdentities = [];
         private bool? _terminatedJobExitConfirmed;
+        private JobExitObservation? _jobExitObservation;
 
         public HermesAcpProcess(OwnedProcessGroup.RedirectedOwnedProcessStart launched)
         {
             _process = launched.Process;
             _processHandle = launched.ProcessHandle;
             _processGroup = launched.Group;
+            _processStartedAt = TryReadProcessStartedAt();
             StandardInput = launched.StandardInput;
             StandardOutput = launched.StandardOutput;
             StandardError = launched.StandardError;
@@ -69,15 +76,29 @@ internal sealed class HermesAcpProcessLauncher : IHermesAcpProcessLauncher
         public TextReader StandardOutput { get; }
         public TextReader StandardError { get; }
         public int ExitCode => OwnedProcessGroup.ReadProcessExitCode(_processHandle);
-        public bool JobExitConfirmed => _terminatedJobExitConfirmed ??
-            (_processGroup.TryGetActiveProcessIds(out var processIds) && processIds.Count == 0);
+        public int ProcessId => _process.Id;
+        public DateTimeOffset? ProcessStartedAt => _processStartedAt;
+        public bool JobExitConfirmed
+        {
+            get
+            {
+                if (_terminatedJobExitConfirmed is bool terminated)
+                {
+                    return terminated;
+                }
+
+                return CaptureJobExitObservation("job-active-ids");
+            }
+        }
+        public string DescribeJobExitObservation() =>
+            _jobExitObservation?.Describe() ?? "job-exit-observation=unavailable";
         public bool SurvivorInventoryEmpty => _observedIdentities.All(identity =>
             DispatchProcessIdentityEvidence.ClassifyRecordedOwner(
                 identity.ProcessId,
                 [identity],
                 DispatchProcessIdentityEvidence.ReadCurrent) != SpawnTrackedProcessStatus.LiveMatch);
         public string? LaunchedImagePath =>
-            _observedIdentities.FirstOrDefault(identity => identity.ProcessId == _process.Id)?.ImagePath ??
+            ReadLaunchedIdentity()?.ImagePath ??
             TryReadMainModulePath();
         public void CompleteInput() => StandardInput.Close();
         public void Kill()
@@ -92,6 +113,17 @@ internal sealed class HermesAcpProcessLauncher : IHermesAcpProcessLauncher
                     _terminatedJobExitConfirmed = OwnedProcessGroup.WaitForJobExit(
                         accountingHandle,
                         TimeSpan.FromSeconds(10));
+                    if (_terminatedJobExitConfirmed.Value)
+                    {
+                        RecordConfirmedJobExit("accounting-handle-wait");
+                    }
+                    else
+                    {
+                        CaptureJobExitObservation(
+                            "post-accounting-wait-active-ids",
+                            confirmed: false,
+                            JobExitWaitState.TimedOut);
+                    }
                 }
 
                 return;
@@ -104,8 +136,9 @@ internal sealed class HermesAcpProcessLauncher : IHermesAcpProcessLauncher
                 if (!_process.HasExited) _process.Kill(entireProcessTree: true);
             }
             catch { }
-            _terminatedJobExitConfirmed = _processGroup.TryGetActiveProcessIds(out var processIds) &&
-                processIds.Count == 0;
+            _terminatedJobExitConfirmed = CaptureJobExitObservation(
+                "post-kill-active-ids",
+                waitState: JobExitWaitState.AccountingHandleUnavailable);
         }
 
         public async Task WaitForExitAsync(CancellationToken cancellationToken)
@@ -140,6 +173,35 @@ internal sealed class HermesAcpProcessLauncher : IHermesAcpProcessLauncher
             }
         }
 
+        private bool CaptureJobExitObservation(
+            string source,
+            bool? confirmed = null,
+            JobExitWaitState waitState = JobExitWaitState.NotAttempted)
+        {
+            var readSucceeded = _processGroup.TryGetActiveProcessIds(out var processIds);
+            var observedProcessIds = readSucceeded ? processIds.ToArray() : [];
+            var result = confirmed ?? (readSucceeded && observedProcessIds.Length == 0);
+            _jobExitObservation = new JobExitObservation(
+                result,
+                source,
+                readSucceeded,
+                waitState,
+                observedProcessIds,
+                _process.Id);
+            return result;
+        }
+
+        private void RecordConfirmedJobExit(string source)
+        {
+            _jobExitObservation = new JobExitObservation(
+                Confirmed: true,
+                source,
+                ReadSucceeded: null,
+                JobExitWaitState.Confirmed,
+                ActiveProcessIds: [],
+                _process.Id);
+        }
+
         private string? TryReadMainModulePath()
         {
             try { return _process.MainModule?.FileName; }
@@ -147,6 +209,85 @@ internal sealed class HermesAcpProcessLauncher : IHermesAcpProcessLauncher
             {
                 return null;
             }
+        }
+
+        private DateTimeOffset? TryReadProcessStartedAt()
+        {
+            try { return new DateTimeOffset(_process.StartTime.ToUniversalTime(), TimeSpan.Zero); }
+            catch (Exception ex) when (ex is InvalidOperationException or Win32Exception or NotSupportedException)
+            {
+                return null;
+            }
+        }
+
+        private SpawnProcessIdentity? ReadLaunchedIdentity() =>
+            _launchedIdentity ??= DispatchProcessIdentityEvidence.ReadCurrent(_process.Id);
+
+        private sealed record JobExitObservation(
+            bool Confirmed,
+            string Source,
+            bool? ReadSucceeded,
+            JobExitWaitState WaitState,
+            IReadOnlyList<int> ActiveProcessIds,
+            int RootProcessId)
+        {
+            private const int ProcessIdLimit = 8;
+
+            internal string Describe()
+            {
+                var activeCount = ReadSucceeded is true
+                    ? ActiveProcessIds.Count.ToString(System.Globalization.CultureInfo.InvariantCulture)
+                    : ReadSucceeded is false ? "unknown" : "not-observed";
+                var activeProcessIds = ReadSucceeded is true
+                    ? DescribeProcessIds(ActiveProcessIds)
+                    : ReadSucceeded is false ? "unavailable" : "not-observed";
+                var rootInActive = ReadSucceeded is true
+                    ? ActiveProcessIds.Contains(RootProcessId).ToString().ToLowerInvariant()
+                    : ReadSucceeded is false ? "unavailable" : "not-observed";
+                var readState = ReadSucceeded switch
+                {
+                    true => "ok",
+                    false => "unreadable",
+                    null => "not-observed"
+                };
+                return $"job-exit-observation: confirmed={Confirmed.ToString().ToLowerInvariant()}; " +
+                    $"source={Source}; wait={DescribeWaitState(WaitState)}; read={readState}; " +
+                    $"observed_active_count={activeCount}; observed_active_pids={activeProcessIds}; " +
+                    $"root_pid={RootProcessId.ToString(System.Globalization.CultureInfo.InvariantCulture)}; " +
+                    $"root_in_active={rootInActive}";
+            }
+
+            private static string DescribeWaitState(JobExitWaitState waitState) => waitState switch
+            {
+                JobExitWaitState.NotAttempted => "not-attempted",
+                JobExitWaitState.Confirmed => "confirmed",
+                JobExitWaitState.TimedOut => "timed-out",
+                JobExitWaitState.AccountingHandleUnavailable => "accounting-handle-unavailable",
+                _ => throw new InvalidOperationException($"Unknown job-exit wait state '{waitState}'.")
+            };
+
+            private static string DescribeProcessIds(IReadOnlyList<int> processIds)
+            {
+                if (processIds.Count == 0)
+                {
+                    return "none";
+                }
+
+                var bounded = string.Join(",", processIds
+                    .Take(ProcessIdLimit)
+                    .Select(processId => processId.ToString(System.Globalization.CultureInfo.InvariantCulture)));
+                return processIds.Count <= ProcessIdLimit
+                    ? bounded
+                    : $"{bounded},+{(processIds.Count - ProcessIdLimit).ToString(System.Globalization.CultureInfo.InvariantCulture)}-more";
+            }
+        }
+
+        private enum JobExitWaitState
+        {
+            NotAttempted,
+            Confirmed,
+            TimedOut,
+            AccountingHandleUnavailable
         }
     }
 }
@@ -274,8 +415,10 @@ internal sealed class HermesAcpLifecycle
             survivorInventoryEmpty = process.SurvivorInventoryEmpty;
             if (!jobExitConfirmed)
             {
+                var jobExitObservation = process.DescribeJobExitObservation();
                 process.Kill();
-                throw new InvalidOperationException("Hermes ACP owned process job still had live members after root exit.");
+                throw new InvalidOperationException(
+                    $"Hermes ACP owned process job still had live members after root exit. {jobExitObservation}");
             }
 
             exitCode = process.ExitCode;
@@ -493,10 +636,11 @@ internal sealed class HermesAcpLifecycle
 
             if (!process.JobExitConfirmed)
             {
+                var jobExitObservation = process.DescribeJobExitObservation();
                 process.Kill();
                 throw new HermesIdentityException(
                     HermesIdentityRefusal.VersionProbeUnresolvedChild,
-                    "version child left live members in its owned process job after kill");
+                    $"version child left live members in its owned process job after kill; {jobExitObservation}");
             }
 
             var identity = await _identityVerifier.VerifyAsync(

@@ -837,12 +837,15 @@ public static class WorkerProcessJobs
         // publication that has not reached the durable registry yet, or a recycled PID behind a
         // stale in-memory entry. None is safe to accept as success without a registration state
         // machine, so fail closed and terminate the candidate rather than bypassing ownership.
-        if (Jobs.ContainsKey(process.Id))
+        if (Jobs.TryGetValue(process.Id, out var conflictingRegistration))
         {
+            var observedIdentity = ObserveRegistrationCandidateIdentity(process);
             registrationFailure = BuildRegistrationFailure(
                 process.Id,
                 "duplicate-or-recycled-pid",
-                "process-tree-termination-requested");
+                "process-tree-termination-requested",
+                conflictingRegistration.Identity,
+                observedIdentity);
             TryTerminateUnregisteredProcess(process);
             return false;
         }
@@ -972,10 +975,16 @@ public static class WorkerProcessJobs
                 return false;
             }
 
+            _ = Jobs.TryGetValue(process.Id, out conflictingRegistration);
+            var observedIdentity = victimIdentity is null
+                ? ObserveRegistrationCandidateIdentity(process)
+                : new RegistrationIdentityObservation(victimIdentity, "ok");
             registrationFailure = BuildRegistrationFailure(
                 process.Id,
                 "duplicate-or-recycled-pid",
-                "attached-process-tree-termination-requested");
+                "attached-process-tree-termination-requested",
+                conflictingRegistration?.Identity,
+                observedIdentity);
             ReadAccountingAndDispose(group, kill: true, captureAccounting: false, out _);
             group = null;
             duplicate?.Dispose();
@@ -1045,6 +1054,83 @@ public static class WorkerProcessJobs
 
     private static string BuildRegistrationFailure(int processId, string stage, string cleanup) =>
         $"worker-process-registration-failed: pid={processId.ToString(System.Globalization.CultureInfo.InvariantCulture)}; stage={stage}; cleanup={cleanup}";
+
+    private static string BuildRegistrationFailure(
+        int processId,
+        string stage,
+        string cleanup,
+        SpawnProcessIdentity? recordedIdentity,
+        RegistrationIdentityObservation observedIdentity)
+    {
+        var mismatch = DescribeIdentityMismatch(recordedIdentity, observedIdentity);
+        var conflict = mismatch switch
+        {
+            "none" => "duplicate-registration",
+            "start-time" or "image" or "start-time,image" => "recycled-pid",
+            _ => "indeterminate"
+        };
+        return BuildRegistrationFailure(processId, stage, cleanup) +
+            $"; conflict={conflict}" +
+            $"; recorded_started_at={FormatStartedAt(recordedIdentity)}" +
+            $"; recorded_image={FormatImageName(recordedIdentity)}" +
+            $"; observed_started_at={FormatStartedAt(observedIdentity.Identity)}" +
+            $"; observed_image={FormatImageName(observedIdentity.Identity)}" +
+            $"; mismatch={mismatch}";
+    }
+
+    private static RegistrationIdentityObservation ObserveRegistrationCandidateIdentity(Process process)
+    {
+        try
+        {
+            var identity = ReadIdentityOnce(process);
+            return new RegistrationIdentityObservation(identity, identity is null ? "unavailable" : "ok");
+        }
+        catch (Exception ex) when (ex is Win32Exception or InvalidOperationException or NotSupportedException or UnauthorizedAccessException)
+        {
+            return new RegistrationIdentityObservation(null, "unreadable");
+        }
+    }
+
+    private static string DescribeIdentityMismatch(
+        SpawnProcessIdentity? recordedIdentity,
+        RegistrationIdentityObservation observedIdentity)
+    {
+        if (recordedIdentity is null)
+        {
+            return "recorded-identity-unavailable";
+        }
+
+        if (observedIdentity.Identity is null)
+        {
+            return observedIdentity.ReadStatus == "unreadable"
+                ? "observed-identity-unreadable"
+                : "observed-identity-unavailable";
+        }
+
+        var startTimeMismatch = recordedIdentity.StartedAt != observedIdentity.Identity.StartedAt;
+        var imageMismatch = !recordedIdentity.ImagePath.Equals(
+            observedIdentity.Identity.ImagePath,
+            StringComparison.OrdinalIgnoreCase);
+        return (startTimeMismatch, imageMismatch) switch
+        {
+            (false, false) => "none",
+            (true, false) => "start-time",
+            (false, true) => "image",
+            (true, true) => "start-time,image"
+        };
+    }
+
+    private static string FormatStartedAt(SpawnProcessIdentity? identity) =>
+        identity?.StartedAt.ToString("O", System.Globalization.CultureInfo.InvariantCulture) ?? "unavailable";
+
+    private static string FormatImageName(SpawnProcessIdentity? identity) =>
+        identity is null || string.IsNullOrWhiteSpace(identity.ImagePath)
+            ? "unavailable"
+            : Path.GetFileName(identity.ImagePath);
+
+    private sealed record RegistrationIdentityObservation(
+        SpawnProcessIdentity? Identity,
+        string ReadStatus);
 
     private static string BuildRegistrationDegradation(int processId, string stage, string readEvidence) =>
         $"worker-process-registration-degraded: pid={processId.ToString(System.Globalization.CultureInfo.InvariantCulture)}; stage={stage}; {readEvidence}; outcome=durable-registration-skipped-process-preserved";

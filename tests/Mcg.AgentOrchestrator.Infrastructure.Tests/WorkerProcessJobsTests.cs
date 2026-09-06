@@ -1620,6 +1620,126 @@ public sealed class WorkerProcessJobsTests : IDisposable
         }
     }
 
+    [Xunit.Theory]
+    [Xunit.InlineData(true, "recycled-pid", "start-time,image")]
+    [Xunit.InlineData(false, "duplicate-registration", "none")]
+    public void DuplicateRegistrationProjectsIdentityDecision(
+        bool identityMismatch,
+        string expectedConflict,
+        string expectedMismatch)
+    {
+        if (!OperatingSystem.IsWindows())
+        {
+            return;
+        }
+
+        var dbPath = Path.Combine(
+            Path.GetTempPath(),
+            "mcg-worker-job-tests",
+            Guid.NewGuid().ToString("n"),
+            "state.db");
+        Directory.CreateDirectory(Path.GetDirectoryName(dbPath)!);
+        _ = StateDbMigrations.EnsureUpToDate(dbPath);
+        WorkerProcessJobs.ConfigureRegistry(dbPath);
+        Process? candidate = null;
+        try
+        {
+            candidate = StartLongRunningShell();
+            var observedStartedAt = new DateTimeOffset(
+                candidate.StartTime.ToUniversalTime(),
+                TimeSpan.Zero);
+            var observedImage = candidate.MainModule?.FileName
+                ?? throw new InvalidOperationException("Candidate image was unavailable before registration.");
+            var recordedStartedAt = identityMismatch ? observedStartedAt.AddMinutes(-1) : observedStartedAt;
+            var recordedImage = identityMismatch
+                ? Path.Combine("recorded", "synthetic-candidate.exe")
+                : observedImage;
+
+            Assert.True(WorkerProcessJobs.TryRegister(
+                candidate,
+                "diagnostic-incumbent",
+                process => new SpawnProcessIdentity(process.Id, recordedStartedAt, recordedImage),
+                owner => new SpawnProcessIdentity(owner.Id, recordedStartedAt, "synthetic-owner.exe"),
+                _ => { },
+                out var firstDiagnostic), firstDiagnostic);
+
+            var operationStarted = Stopwatch.GetTimestamp();
+            var registered = WorkerProcessJobs.TryRegister(candidate, "diagnostic-candidate", out var failure);
+            var operationElapsed = Stopwatch.GetElapsedTime(operationStarted);
+            Assert.False(registered);
+
+            Assert.Contains($"conflict={expectedConflict}", failure, StringComparison.Ordinal);
+            Assert.Contains($"recorded_started_at={recordedStartedAt:O}", failure, StringComparison.Ordinal);
+            Assert.Contains($"recorded_image={Path.GetFileName(recordedImage)}", failure, StringComparison.OrdinalIgnoreCase);
+            Assert.Contains($"observed_started_at={observedStartedAt:O}", failure, StringComparison.Ordinal);
+            Assert.Contains($"observed_image={Path.GetFileName(observedImage)}", failure, StringComparison.OrdinalIgnoreCase);
+            Assert.Contains($"mismatch={expectedMismatch}", failure, StringComparison.Ordinal);
+            Assert.DoesNotContain(recordedImage, failure, StringComparison.OrdinalIgnoreCase);
+            Assert.True(WorkerProcessJobs.HasActiveJobForTests(candidate.Id));
+            Assert.True(WaitUntilNotRunning(candidate.Id, TimeSpan.FromSeconds(5)));
+            Console.WriteLine(
+                $"process-lifecycle-receipt seam=registration variant={(identityMismatch ? "conflicting-identity" : "matching-identity")} " +
+                $"candidate_pid={candidate.Id} candidate_started_at={observedStartedAt:O} " +
+                $"recorded_started_at={recordedStartedAt:O} operation=TryRegister " +
+                $"elapsed_ms={operationElapsed.TotalMilliseconds:F3} result={failure}");
+        }
+        finally
+        {
+            if (candidate is not null)
+            {
+                try { WorkerProcessJobs.Release(candidate.Id); } catch { }
+                try { if (!candidate.HasExited) candidate.Kill(entireProcessTree: true); } catch { }
+                candidate.Dispose();
+            }
+
+            WorkerProcessJobs.ClearRegistryForTests();
+            try { Directory.Delete(Path.GetDirectoryName(dbPath)!, recursive: true); } catch { }
+        }
+    }
+
+    [Xunit.Fact]
+    public void RegistrationWithoutConflictProducesHarnessReceipt()
+    {
+        if (!OperatingSystem.IsWindows())
+        {
+            return;
+        }
+
+        Process? candidate = null;
+        try
+        {
+            candidate = StartLongRunningShell();
+            var candidateStartedAt = new DateTimeOffset(
+                candidate.StartTime.ToUniversalTime(),
+                TimeSpan.Zero);
+            var candidateImage = Path.GetFileName(candidate.MainModule?.FileName);
+            var operationStarted = Stopwatch.GetTimestamp();
+
+            var registered = WorkerProcessJobs.TryRegister(
+                candidate,
+                "diagnostic-isolated",
+                out var failure);
+            var operationElapsed = Stopwatch.GetElapsedTime(operationStarted);
+
+            Assert.True(registered, failure);
+            Assert.True(WorkerProcessJobs.HasActiveJobForTests(candidate.Id));
+            Console.WriteLine(
+                $"process-lifecycle-receipt seam=registration variant=isolated " +
+                $"candidate_pid={candidate.Id} candidate_started_at={candidateStartedAt:O} " +
+                $"candidate_image={candidateImage} operation=TryRegister " +
+                $"elapsed_ms={operationElapsed.TotalMilliseconds:F3} result=registered");
+        }
+        finally
+        {
+            if (candidate is not null)
+            {
+                try { WorkerProcessJobs.Release(candidate.Id); } catch { }
+                try { if (!candidate.HasExited) candidate.Kill(entireProcessTree: true); } catch { }
+                candidate.Dispose();
+            }
+        }
+    }
+
     [Xunit.Fact(DisplayName = "WorkerProcessJobs_owned_child_uses_retained_handle_for_fast_exit_and_metadata")]
     public async Task WorkerProcessJobsOwnedChildUsesRetainedHandleForFastExitAndMetadata()
     {
