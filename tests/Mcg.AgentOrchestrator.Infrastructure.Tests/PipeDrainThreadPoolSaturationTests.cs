@@ -4,31 +4,31 @@ using Mcg.AgentOrchestrator.Infrastructure;
 [Xunit.Collection(TestCollections.ProcessSpawning)]
 public sealed class PipeDrainThreadPoolSaturationTests
 {
-    [Xunit.Fact(DisplayName = "PipeDrain_reads_to_end_while_pool_dependent_async_read_is_starved")]
-    public void PipeDrainReadsToEndWhilePoolDependentAsyncReadIsStarved()
+    [Xunit.Fact]
+    public void PipeDrainReadsOnDedicatedThreadWhileAsyncReadIsHeld()
     {
         const string expected = "complete-pipe-output";
         using var asyncReadRelease = new ManualResetEventSlim(false);
         var asyncReader = new HeldAsyncTextReader(expected, asyncReadRelease);
-        Task<string>? poolDependentRead = null;
+        var drainReader = new HeldAsyncTextReader(expected, asyncReadRelease);
+        var poolDependentRead = asyncReader.ReadToEndAsync();
         try
         {
-            RunWithSaturatedThreadPool(() =>
-            {
-                poolDependentRead = asyncReader.ReadToEndAsync();
-                var drain = PipeDrain.Start(new SynchronousOnlyTextReader(expected), "pipe-drain-saturation-test");
+            var drain = PipeDrain.Start(drainReader, "pipe-drain-dedicated-thread-test");
 
-                Assert.True(
-                    drain.Join(Environment.TickCount64 + 2_000),
-                    PipeDrain.DescribeTimeout("test", 2_000, drain, null));
-                Assert.Equal(expected, drain.Text);
-                Assert.False(poolDependentRead.IsCompleted, "Negative control completed before its explicit release.");
-            });
+            Assert.True(
+                drain.Join(Environment.TickCount64 + 2_000),
+                PipeDrain.DescribeTimeout("test", 2_000, drain, null));
+            Assert.Equal(expected, drain.Text);
+            Assert.False(
+                drainReader.ReadOccurredOnThreadPool,
+                "PipeDrain read on a thread-pool worker instead of its dedicated thread.");
+            Assert.False(poolDependentRead.IsCompleted, "Negative control completed before its explicit release.");
         }
         finally
         {
             asyncReadRelease.Set();
-            poolDependentRead?.GetAwaiter().GetResult();
+            Assert.Equal(expected, poolDependentRead.GetAwaiter().GetResult());
         }
     }
 
@@ -108,8 +108,11 @@ public sealed class PipeDrainThreadPoolSaturationTests
     {
         private int _position;
 
+        internal bool ReadOccurredOnThreadPool { get; private set; }
+
         public override int Read(char[] buffer, int index, int count)
         {
+            ReadOccurredOnThreadPool |= Thread.CurrentThread.IsThreadPoolThread;
             var remaining = text.Length - _position;
             if (remaining <= 0)
             {
