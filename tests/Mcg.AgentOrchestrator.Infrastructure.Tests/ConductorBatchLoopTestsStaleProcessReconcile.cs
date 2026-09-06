@@ -19,8 +19,10 @@ public sealed class ConductorBatchLoopTestsStaleProcessReconcile : ConductorBatc
         try
         {
             var now = DateTimeOffset.Parse("2026-09-05T15:48:00Z");
-            var (kernel, goal) = ConductorDriverTests.SimpleGoal("Reconcile before dispatch preparation");
-            var task = goal.Tasks.Single();
+            var kernel = new AgentOrchestratorKernel();
+            var task = new TaskSpec(TaskId.New(), "Review the candidate", AgentRole.Reviewer);
+            var goal = kernel.CreateGoal("Reconcile before dispatch preparation", [task]);
+            kernel.ActivateGoal(goal.Id, DefaultAgents());
             var stdout = Path.Combine(root, "out.log");
             var stderr = Path.Combine(root, "err.log");
             var exit = Path.Combine(root, "exit.txt");
@@ -38,6 +40,43 @@ public sealed class ConductorBatchLoopTestsStaleProcessReconcile : ConductorBatc
             var preparationObserved = false;
             var driver = ConductorDriverTests.MakeDriver(
                 getFacts: _ => new GoalLifecycleFacts(WorkspaceExists: true),
+                reconcileExitedDispatch: (_, taskId) =>
+                {
+                    var completedTask = kernel.GetTask(goal.Id, taskId);
+                    var completedProcess = Xunit.Assert.IsType<TaskProcessRecord>(completedTask.LastProcess);
+                    Xunit.Assert.False(completedProcess.IsRunning);
+                    Xunit.Assert.NotNull(completedProcess.CompletedAt);
+                    Xunit.Assert.NotNull(completedProcess.ExitCode);
+                    var workerResult = string.Join(Environment.NewLine,
+                    [
+                        "WORKER_RESULT:",
+                        "files: none",
+                        "commands: review",
+                        "tests: pass - inspected candidate",
+                        "commit: none",
+                        "blockers: none",
+                        "model_fit: test/reviewer - adequate - review - fixture",
+                        "skills: none",
+                        "confidence: high",
+                        "findings: []",
+                        "verdict: pass",
+                        "END_WORKER_RESULT"
+                    ]);
+                    kernel.RecordTaskProcessRefreshed(
+                        goal.Id,
+                        taskId,
+                        completedProcess,
+                        new TaskVerificationRecord(
+                            completedProcess.Command,
+                            completedProcess.WorkingDirectory,
+                            completedProcess.ExitCode.Value,
+                            workerResult,
+                            string.Empty,
+                            completedProcess.CompletedAt.Value,
+                            StandardOutputPath: stdout,
+                            WorkerResultPresent: true));
+                    return true;
+                },
                 startRecordedDispatches: _ =>
                 {
                     preparationObserved = true;

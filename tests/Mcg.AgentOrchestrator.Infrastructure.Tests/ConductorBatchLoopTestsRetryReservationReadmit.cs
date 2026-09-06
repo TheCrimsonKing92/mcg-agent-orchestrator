@@ -50,6 +50,7 @@ public sealed class ConductorBatchLoopTestsRetryReservationReadmit : ConductorBa
             task.Id,
             new RetryAdmissionResult(RetryAdmissionDecision.Prevented, contenderReceipt));
 
+        var taskStateBeforeExpiry = JsonSerializer.Serialize(kernel.ExportGoalSnapshot(goal.Id).Tasks.Single());
         var snapshots = new List<string>();
         var driver = ConductorDriverTests.MakeDriver(
             getFacts: _ => new GoalLifecycleFacts(WorkspaceExists: true),
@@ -70,9 +71,9 @@ public sealed class ConductorBatchLoopTestsRetryReservationReadmit : ConductorBa
                 return false;
             });
 
-        Xunit.Assert.Equal(3, summary.Ticks);
+        Xunit.Assert.Equal(2, summary.Ticks);
         Xunit.Assert.Equal(2, snapshots.Count);
-        Xunit.Assert.Equal(snapshots[0], snapshots[1]);
+        Xunit.Assert.All(snapshots, snapshot => Xunit.Assert.Equal(taskStateBeforeExpiry, snapshot));
         var readmissions = goal.Timeline.Where(evt =>
             evt.Kind == ProgressKind.GoalPolicyDecision &&
             evt.Message.Contains("retry reservation expired", StringComparison.Ordinal)).ToArray();
