@@ -2395,7 +2395,7 @@ public sealed class SqliteOrchestratorStateRepository : IOrchestratorStateOutbox
             // load and our CAS write. Treat this as a transient error and retry the full
             // load-mutate-CAS cycle — same retry budget as SQLITE_BUSY.
             if (attempt >= MaxOptimisticConcurrencyRetries)
-                throw new InvalidOperationException(
+                throw new GoalTransactionConflictException(
                     $"TransactGoalAsync: optimistic concurrency retries exhausted for goal {goalId.Value[..8]}");
 
             await Task.Delay(versionMismatchDelay, cancellationToken);
@@ -2450,7 +2450,7 @@ public sealed class SqliteOrchestratorStateRepository : IOrchestratorStateOutbox
                 return result;
 
             if (attempt >= MaxOptimisticConcurrencyRetries)
-                throw new InvalidOperationException(
+                throw new GoalTransactionConflictException(
                     $"TransactGoalStateAsync: optimistic concurrency retries exhausted for goal {goalId.Value[..8]}");
 
             await Task.Delay(versionMismatchDelay, cancellationToken);

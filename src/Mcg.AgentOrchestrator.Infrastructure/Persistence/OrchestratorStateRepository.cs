@@ -138,6 +138,8 @@ public sealed record GoalStateSnapshot(
     GoalSnapshot Goal,
     IReadOnlyList<HumanInputRequestSnapshot> HumanInputRequests);
 
+public sealed class GoalTransactionConflictException(string message) : InvalidOperationException(message);
+
 public sealed record OrchestratorStateOutboxMessage(
     string Id,
     string Kind,
