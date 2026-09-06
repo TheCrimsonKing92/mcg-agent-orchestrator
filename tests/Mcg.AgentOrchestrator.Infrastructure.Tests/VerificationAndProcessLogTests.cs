@@ -347,6 +347,7 @@ public sealed class VerificationAndProcessLogTests
         var stdoutPath = Path.Combine(root, "out.log");
         var stderrPath = Path.Combine(root, "err.log");
         var exitPath = Path.Combine(root, "exit.txt");
+        var childExitPath = Path.Combine(root, "child-exit.json");
         var stdout =
             "WORKER_RESULT:" + Environment.NewLine +
             "files: src/Some/File.cs" + Environment.NewLine +
@@ -356,19 +357,39 @@ public sealed class VerificationAndProcessLogTests
             "\"category\":\"correctness\",\"location\":{\"file\":\"src/Some/File.cs\",\"region\":\"SomeMethod\"}," +
             "\"description\":\"" + new string('D', 20_100) + "\"}]" + Environment.NewLine +
             "touched_anchors: []" + Environment.NewLine +
-            "blockers: P1 something is wrong" + Environment.NewLine +
+            "blockers: none" + Environment.NewLine +
             "model_fit: Anthropic/claude-opus-5 - adequate" + Environment.NewLine +
             "skills: none" + Environment.NewLine +
             "confidence: high" + Environment.NewLine +
             "END_WORKER_RESULT";
         File.WriteAllText(stdoutPath, stdout);
         File.WriteAllText(stderrPath, string.Empty);
-        File.WriteAllText(exitPath, "0");
+        File.WriteAllText(exitPath, "1");
+        File.WriteAllText(
+            childExitPath,
+            System.Text.Json.JsonSerializer.Serialize(
+                new DispatchProcessHost.DispatchChildExitRecord(888888, 0, DateTimeOffset.UtcNow),
+                new System.Text.Json.JsonSerializerOptions { PropertyNamingPolicy = System.Text.Json.JsonNamingPolicy.CamelCase }));
+        using var activeWriter = new FileStream(
+            stdoutPath,
+            FileMode.Open,
+            FileAccess.Write,
+            FileShare.ReadWrite | FileShare.Delete);
         kernel.RecordTaskDispatch(goal.Id, reviewTask.Id, new TaskDispatchRecord("local", "fake-cmd", root, DateTimeOffset.UtcNow));
         kernel.RecordTaskProcessStarted(
             goal.Id,
             reviewTask.Id,
-            new TaskProcessRecord(999999, "fake-cmd", root, stdoutPath, stderrPath, exitPath, DateTimeOffset.UtcNow, null, null));
+            new TaskProcessRecord(
+                999999,
+                "fake-cmd",
+                root,
+                stdoutPath,
+                stderrPath,
+                exitPath,
+                DateTimeOffset.UtcNow,
+                null,
+                null,
+                ChildExitRecordPath: childExitPath));
 
         var runner = new BackgroundDispatchRunner(isStillRunning: _ => false);
         runner.RefreshLatestProcess(kernel, goal.Id, reviewTask.Id);
@@ -380,9 +401,16 @@ public sealed class VerificationAndProcessLogTests
         var finding = Assert.Single(reviewTask.LastVerification.MergedReviewFindings!);
         Assert.Equal("over-cap-finding", finding.StableId);
         Assert.Equal(FindingCategory.Correctness, finding.Category);
+        Assert.True(reviewTask.LastVerification.ReconciledToSuccess);
+        Assert.Equal(0, reviewTask.LastVerification.ExitCode);
         Assert.True(reviewTask.LastVerification.StandardOutput.Length <= VerificationTextBounds.MaxRetainedChars);
         Assert.Contains(
             $"decision-text-truncated source=stdout dropped_chars={stdout.Length - VerificationTextBounds.MaxRetainedChars}",
+            reviewTask.LastVerification.StandardError,
+            StringComparison.Ordinal);
+        Assert.Contains(
+            $"dropped_scope=selected-decision-content retained_chars={VerificationTextBounds.MaxRetainedChars} " +
+            $"cap={VerificationTextBounds.MaxRetainedChars}",
             reviewTask.LastVerification.StandardError,
             StringComparison.Ordinal);
         Assert.Contains($"complete_artifact='{stdoutPath}'", reviewTask.LastVerification.StandardError, StringComparison.Ordinal);
@@ -438,6 +466,10 @@ public sealed class VerificationAndProcessLogTests
             reviewTask.LastVerification!.WorkerResultPresent,
             "When the complete artifact becomes unavailable, the bounded fallback must retain the contractual block");
         Assert.Contains("decision-text-truncated source=stdout", reviewTask.LastVerification.StandardError, StringComparison.Ordinal);
+        Assert.Contains(
+            $"retained_chars={VerificationTextBounds.MaxRetainedChars} cap={VerificationTextBounds.MaxRetainedChars}",
+            reviewTask.LastVerification.StandardError,
+            StringComparison.Ordinal);
     }
 
     [Xunit.Theory]
@@ -677,13 +709,16 @@ public sealed class VerificationAndProcessLogTests
     var stdout =
         new string('O', VerificationTextBounds.PreviewHeadChars) +
         Environment.NewLine +
-        new string('M', 2_000) +
+        string.Join(
+            Environment.NewLine,
+            Enumerable.Repeat("tests: pass - decision prefill " + new string('M', 100), 120)) +
         Environment.NewLine +
         "HUMAN_INPUT: Which branch should I modify?" +
         Environment.NewLine +
         new string('N', 2_000) +
         Environment.NewLine +
         new string('T', VerificationTextBounds.PreviewTailChars);
+    Assert.True(stdout.Length > VerificationTextBounds.MaxRetainedChars);
     File.WriteAllText(stdoutPath, stdout);
     File.WriteAllText(stderrPath, string.Empty);
     File.WriteAllText(exitPath, "0");

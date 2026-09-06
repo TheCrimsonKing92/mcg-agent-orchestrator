@@ -1268,11 +1268,17 @@ public sealed class BackgroundDispatchRunner
         var errorSnapshot = ReadProcessLogBestEffort(processRecord, processRecord.StandardErrorPath);
         var decisionStandardOutput = outputSnapshot.DecisionText;
         var decisionStandardError = errorSnapshot.DecisionText;
+        var fullStandardOutput = ReadCompleteLog(processRecord.StandardOutputPath);
+        var authoritativeStandardOutput = fullStandardOutput.Content is { } initialAuthoritativeContent
+            ? NormalizeCompleteDecisionText(initialAuthoritativeContent)
+            : decisionStandardOutput;
         if (outputSnapshot.DecisionTruncatedChars > 0)
         {
             standardErrorDiagnostic = AppendDiagnostic(
                 standardErrorDiagnostic ?? string.Empty,
                 $"decision-text-truncated source=stdout dropped_chars={outputSnapshot.DecisionTruncatedChars} " +
+                $"dropped_scope=selected-decision-content retained_chars={outputSnapshot.DecisionText.Length} " +
+                $"cap={VerificationTextBounds.MaxRetainedChars} " +
                 $"complete_artifact='{processRecord.StandardOutputPath}'");
         }
         if (errorSnapshot.DecisionTruncatedChars > 0)
@@ -1280,6 +1286,8 @@ public sealed class BackgroundDispatchRunner
             standardErrorDiagnostic = AppendDiagnostic(
                 standardErrorDiagnostic ?? string.Empty,
                 $"decision-text-truncated source=stderr dropped_chars={errorSnapshot.DecisionTruncatedChars} " +
+                $"dropped_scope=selected-decision-content retained_chars={errorSnapshot.DecisionText.Length} " +
+                $"cap={VerificationTextBounds.MaxRetainedChars} " +
                 $"complete_artifact='{processRecord.StandardErrorPath}'");
         }
         string? finalPlannerRejectionDiagnostic = null;
@@ -1293,11 +1301,11 @@ public sealed class BackgroundDispatchRunner
             resourceAccounting = resourceAccounting with { Reaped = true };
         }
         var goal = kernel.GetGoal(goalId);
-        var humanInputDirective = AgentOutputDirectives.ParseHumanInputRequest(decisionStandardOutput, task.RequiredRole);
+        var humanInputDirective = AgentOutputDirectives.ParseHumanInputRequest(authoritativeStandardOutput, task.RequiredRole);
         var hasRoleCapability = DispatchRoleOutputCapabilities.TryGet(task.RequiredRole, out var dispatchRoleCapability);
         var completeNonBlockedWorkerResult = hasRoleCapability && _completionClassifier.HasSuccessfulWorkerResult(
             processRecord.WorkingDirectory,
-            decisionStandardOutput,
+            authoritativeStandardOutput,
             decisionStandardError,
             allowNoChangedFiles: true,
             requireNoBlockers: true,
@@ -1352,7 +1360,7 @@ public sealed class BackgroundDispatchRunner
                 ? goal.RefinedSpec?.AcceptanceCriteria ?? []
                 : null;
             var capturedPlannerOutput = PlannerOutputContract.ReadCapturedOutputTail(processRecord.StandardOutputPath);
-            var evidenceRequest = AgentOutputDirectives.ParseHumanInputRequest(decisionStandardOutput, AgentRole.Planner);
+            var evidenceRequest = AgentOutputDirectives.ParseHumanInputRequest(authoritativeStandardOutput, AgentRole.Planner);
             PlannerOutputContractResult plannerContract;
             if (evidenceRequest.IsMalformed)
             {
@@ -1421,13 +1429,13 @@ public sealed class BackgroundDispatchRunner
             }
         }
 
-        // Read once after role-specific contracts may have appended durable receipts, then reuse this same
+        // Refresh after role-specific contracts may have appended durable receipts, then reuse this same
         // complete artifact for presence and the stored verification record. Normalize only bare carriage
         // returns for parsing; the authoritative stored content remains byte-complete and unchanged.
-        var fullStandardOutput = ReadCompleteLog(processRecord.StandardOutputPath);
-        var authoritativeStandardOutput = fullStandardOutput.Content is { } authoritativeContent
+        fullStandardOutput = ReadCompleteLog(processRecord.StandardOutputPath);
+        authoritativeStandardOutput = fullStandardOutput.Content is { } authoritativeContent
             ? NormalizeCompleteDecisionText(authoritativeContent)
-            : decisionStandardOutput;
+            : authoritativeStandardOutput;
         var providerFailureKind = _completionClassifier.ParseProviderFailureKind(task.LastDispatch, observedExitCode, decisionStandardOutput, decisionStandardError);
         var workerResultPresent = _completionClassifier.HasWorkerResultArtifact(
             processRecord.WorkingDirectory,
@@ -2596,9 +2604,18 @@ public sealed class BackgroundDispatchRunner
     {
         try
         {
-            return File.Exists(path)
-                ? new CompleteLogReadResult(File.ReadAllText(path), null)
-                : new CompleteLogReadResult(null, "missing");
+            if (!File.Exists(path))
+            {
+                return new CompleteLogReadResult(null, "missing");
+            }
+
+            using var stream = new FileStream(
+                path,
+                FileMode.Open,
+                FileAccess.Read,
+                FileShare.ReadWrite | FileShare.Delete);
+            using var reader = new StreamReader(stream);
+            return new CompleteLogReadResult(reader.ReadToEnd(), null);
         }
         catch (IOException)
         {
