@@ -265,7 +265,7 @@ internal static partial class CliPersistentStateRunner
 
         if (IsGoalLifecycleDispositionCommand(args))
         {
-            return ExecuteCommandWithoutTransaction(args, stateRepository, workspace, ref agents, providers, ref workerProfiles, ref currentGoal, channel);
+            return ExecuteGoalLifecycleDispositionCommand(args, stateRepository, workspace, ref agents, providers, ref workerProfiles, ref currentGoal, channel);
         }
 
         if (args.Count > 0 && !ShouldRunInStateTransaction(args[0]))
