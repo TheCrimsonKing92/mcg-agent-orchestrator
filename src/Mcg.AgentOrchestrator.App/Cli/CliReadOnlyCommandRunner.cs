@@ -36,8 +36,9 @@ internal static class CliReadOnlyCommandRunner
             return true;
         }
 
-        if (CliTaskQueryCommand.IsTaskQueryCommand(args) &&
-            CliTaskQueryCommand.TryExecute(
+        if (CliTaskQueryCommand.IsTaskQueryCommand(args))
+        {
+            CliTaskQueryCommand.Execute(
                 args,
                 stateRepository,
                 workspace,
@@ -45,8 +46,7 @@ internal static class CliReadOnlyCommandRunner
                 channel,
                 ref agents,
                 ref workerProfiles,
-                ref currentGoal))
-        {
+                ref currentGoal);
             changed = false;
             return true;
         }

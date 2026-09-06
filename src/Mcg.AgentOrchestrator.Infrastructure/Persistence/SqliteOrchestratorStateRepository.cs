@@ -1492,6 +1492,12 @@ public sealed class SqliteOrchestratorStateRepository : IOrchestratorStateOutbox
                 status,
                 objective,
                 updated_at,
+                (
+                    SELECT json_extract(evt.value, '$.OccurredAt')
+                    FROM json_each(goals.snapshot_json, '$.Timeline') AS evt
+                    ORDER BY CAST(evt.key AS INTEGER) ASC
+                    LIMIT 1
+                ) AS created_at,
                 {ActiveWithFailedTaskConditionSql()}
             FROM goals
             ORDER BY updated_at DESC
@@ -1505,7 +1511,10 @@ public sealed class SqliteOrchestratorStateRepository : IOrchestratorStateOutbox
                 reader.GetString(1),
                 reader.GetString(2),
                 reader.GetString(3),
-                Condition: reader.IsDBNull(4) ? null : reader.GetString(4)));
+                CreatedAt: reader.IsDBNull(4)
+                    ? null
+                    : DateTimeOffset.Parse(reader.GetString(4), CultureInfo.InvariantCulture),
+                Condition: reader.IsDBNull(5) ? null : reader.GetString(5)));
         }
 
         return results;

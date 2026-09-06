@@ -593,9 +593,13 @@ public abstract class CliCommandTestBase
 
         public int SaveGoalSnapshotsCount { get; private set; }
 
+        public int SaveGoalSnapshotsWithMergeCount { get; private set; }
+
         public int SaveAsyncCount { get; private set; }
 
         public int ListOutboxMessagesCount { get; private set; }
+
+        public int TryProcessOutboxMessageCount { get; private set; }
 
         public int ListGoalMetadataCount { get; private set; }
 
@@ -729,6 +733,10 @@ public abstract class CliCommandTestBase
             IReadOnlyCollection<GoalSnapshotSaveRequest> goals,
             CancellationToken cancellationToken = default)
         {
+            SaveGoalSnapshotsWithMergeCount++;
+            if (ThrowOnWrite)
+                throw new InvalidOperationException("Goal snapshot merge writes are not allowed for this test.");
+
             LastGoalSnapshotSaveRequests = goals.ToArray();
             if (GoalSnapshotSaveResultFactory is not null)
                 return GoalSnapshotSaveResultFactory(goals);
@@ -881,10 +889,10 @@ public abstract class CliCommandTestBase
             string kind,
             CancellationToken cancellationToken = default)
         {
+            ListOutboxMessagesCount++;
             if (ThrowOnOutbox)
                 throw new InvalidOperationException("Outbox reads are not allowed for this test.");
 
-            ListOutboxMessagesCount++;
             return Task.FromResult<IReadOnlyList<OrchestratorStateOutboxMessage>>(_outbox.Values
                 .Where(message => message.Kind.Equals(kind, StringComparison.Ordinal))
                 .OrderBy(message => message.CreatedAt)
@@ -897,6 +905,7 @@ public abstract class CliCommandTestBase
             Func<OrchestratorStateOutboxMessage, CancellationToken, Task<OrchestratorStateOutboxProcessingResult>> processor,
             CancellationToken cancellationToken = default)
         {
+            TryProcessOutboxMessageCount++;
             if (ThrowOnOutbox)
                 throw new InvalidOperationException("Outbox claims are not allowed for this test.");
 
