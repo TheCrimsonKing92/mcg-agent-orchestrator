@@ -23,6 +23,7 @@ public sealed class StaleDispatchProcessReconcilerTests
             Xunit.Assert.Equal(DispatchExitArtifactOrigin.Native, process.ExitArtifactOrigin);
             Xunit.Assert.False(process.WasCancelled);
             var verification = Xunit.Assert.IsType<TaskVerificationRecord>(fixture.Task.LastVerification);
+            Xunit.Assert.Contains("WORKER_RESULT:", verification.StandardOutput, StringComparison.Ordinal);
 
             Xunit.Assert.Equal(
                 0,
@@ -32,6 +33,8 @@ public sealed class StaleDispatchProcessReconcilerTests
                     fixture.Goal,
                     StaleDispatchProcessReconciler.AssignedOnly));
             Xunit.Assert.Same(verification, fixture.Task.LastVerification);
+            Xunit.Assert.Single(fixture.Goal.Timeline.Where(evt =>
+                evt.Message.Contains("Reconciled completed dispatch", StringComparison.Ordinal)));
         }
         finally
         {
@@ -68,11 +71,13 @@ public sealed class StaleDispatchProcessReconcilerTests
         File.WriteAllText(
             BackgroundDispatchRunner.GetHeartbeatPath(fixture.Task.LastProcess!),
             "{\"pid\":28516,\"childPid\":28517,\"ownedPids\":[28517],\"ownedProcessIdentities\":[{\"processId\":28517,\"startedAt\":\"2026-09-05T15:48:01Z\",\"imagePath\":\"C:\\\\workers\\\\child.exe\"}],\"state\":\"running\",\"lastObservedAt\":\"2026-09-05T15:48:00Z\",\"lastProgressAt\":\"2026-09-05T15:48:00Z\",\"stdoutBytes\":4,\"stderrBytes\":0,\"ownedCpuMs\":1}");
+        var originalProcess = fixture.Task.LastProcess;
         try
         {
+            var childAlive = true;
             var runner = new BackgroundDispatchRunner(
                 new TestClock(FixedNow),
-                isStillRunning: pid => pid == childIdentity.ProcessId,
+                isStillRunning: pid => childAlive && pid == childIdentity.ProcessId,
                 readProcessIdentity: pid => pid == childIdentity.ProcessId
                     ? (childIdentity.StartedAt, childIdentity.ImagePath)
                     : null);
@@ -83,15 +88,14 @@ public sealed class StaleDispatchProcessReconcilerTests
                 StaleDispatchProcessReconciler.AssignedOnly);
 
             Xunit.Assert.Equal(0, count);
-            Xunit.Assert.Equal(
-                0,
-                StaleDispatchProcessReconciler.Reconcile(
-                    fixture.Kernel,
-                    runner,
-                    fixture.Goal,
-                    StaleDispatchProcessReconciler.AssignedOnly));
-            Xunit.Assert.True(fixture.Task.LastProcess is { IsRunning: true });
+            var heldProcess = Xunit.Assert.IsType<TaskProcessRecord>(fixture.Task.LastProcess);
+            Xunit.Assert.Same(originalProcess, heldProcess);
+            Xunit.Assert.True(heldProcess.IsRunning);
             Xunit.Assert.Null(fixture.Task.LastVerification);
+            childAlive = false;
+            Xunit.Assert.Equal(1, StaleDispatchProcessReconciler.Reconcile(
+                fixture.Kernel, runner, fixture.Goal, StaleDispatchProcessReconciler.AssignedOnly));
+            Xunit.Assert.NotNull(fixture.Task.LastVerification);
         }
         finally
         {
@@ -106,9 +110,11 @@ public sealed class StaleDispatchProcessReconcilerTests
             DispatchExitArtifacts.Native(0, "primary Planner exited", FixedNow),
             AgentRole.Planner,
             plannerSampleCount: 2);
+        var originalProcess = fixture.Task.LastProcess;
         try
         {
-            var runner = new BackgroundDispatchRunner(new TestClock(FixedNow), isStillRunning: _ => false);
+            var clock = new TestClock(FixedNow);
+            var runner = new BackgroundDispatchRunner(clock, isStillRunning: _ => false);
             var count = StaleDispatchProcessReconciler.Reconcile(
                 fixture.Kernel,
                 runner,
@@ -116,16 +122,15 @@ public sealed class StaleDispatchProcessReconcilerTests
                 StaleDispatchProcessReconciler.AssignedOnly);
 
             Xunit.Assert.Equal(0, count);
-            Xunit.Assert.Equal(
-                0,
-                StaleDispatchProcessReconciler.Reconcile(
-                    fixture.Kernel,
-                    runner,
-                    fixture.Goal,
-                    StaleDispatchProcessReconciler.AssignedOnly));
-            Xunit.Assert.True(fixture.Task.LastProcess is { IsRunning: true });
+            var heldProcess = Xunit.Assert.IsType<TaskProcessRecord>(fixture.Task.LastProcess);
+            Xunit.Assert.Same(originalProcess, heldProcess);
+            Xunit.Assert.True(heldProcess.IsRunning);
             Xunit.Assert.Null(fixture.Task.LastVerification);
             Xunit.Assert.Empty(fixture.Kernel.HumanInputRequests);
+            clock.UtcNow = FixedNow.AddMinutes(6);
+            Xunit.Assert.Equal(1, StaleDispatchProcessReconciler.Reconcile(
+                fixture.Kernel, runner, fixture.Goal, StaleDispatchProcessReconciler.AssignedOnly));
+            Xunit.Assert.NotNull(fixture.Task.LastVerification);
         }
         finally
         {
@@ -138,11 +143,13 @@ public sealed class StaleDispatchProcessReconcilerTests
     {
         var fixture = CreateFixture(DispatchExitArtifacts.Native(0, "worker exited", FixedNow));
         var processId = fixture.Task.LastProcess!.ProcessId;
+        var originalProcess = fixture.Task.LastProcess;
         try
         {
+            var processAlive = true;
             var runner = new BackgroundDispatchRunner(
                 new TestClock(FixedNow),
-                isStillRunning: pid => pid == processId,
+                isStillRunning: pid => processAlive && pid == processId,
                 readProcessIdentity: _ => null);
             var count = StaleDispatchProcessReconciler.Reconcile(
                 fixture.Kernel,
@@ -151,16 +158,15 @@ public sealed class StaleDispatchProcessReconcilerTests
                 StaleDispatchProcessReconciler.AssignedOnly);
 
             Xunit.Assert.Equal(0, count);
-            Xunit.Assert.Equal(
-                0,
-                StaleDispatchProcessReconciler.Reconcile(
-                    fixture.Kernel,
-                    runner,
-                    fixture.Goal,
-                    StaleDispatchProcessReconciler.AssignedOnly));
-            Xunit.Assert.True(fixture.Task.LastProcess is { IsRunning: true });
+            var heldProcess = Xunit.Assert.IsType<TaskProcessRecord>(fixture.Task.LastProcess);
+            Xunit.Assert.Same(originalProcess, heldProcess);
+            Xunit.Assert.True(heldProcess.IsRunning);
             Xunit.Assert.Null(fixture.Task.LastVerification);
             Xunit.Assert.Empty(fixture.Kernel.HumanInputRequests);
+            processAlive = false;
+            Xunit.Assert.Equal(1, StaleDispatchProcessReconciler.Reconcile(
+                fixture.Kernel, runner, fixture.Goal, StaleDispatchProcessReconciler.AssignedOnly));
+            Xunit.Assert.NotNull(fixture.Task.LastVerification);
         }
         finally
         {
@@ -230,6 +236,6 @@ public sealed class StaleDispatchProcessReconcilerTests
 
     private sealed class TestClock(DateTimeOffset utcNow) : IClock
     {
-        public DateTimeOffset UtcNow => utcNow;
+        public DateTimeOffset UtcNow { get; set; } = utcNow;
     }
 }
