@@ -5,7 +5,8 @@
         "hooks": [
           {
             "type": "command",
-            "command": "pwsh -NoProfile -File \"$CLAUDE_PROJECT_DIR/.claude/hooks/Emit-Timestamp.ps1\""
+            "shell": "powershell",
+            "command": "pwsh -NoProfile -Command 'if ([string]::IsNullOrWhiteSpace([Environment]::GetEnvironmentVariable(\"CLAUDE_PROJECT_DIR\"))) { [Console]::Error.WriteLine(\"Repository hook root is unavailable: set CLAUDE_PROJECT_DIR to the worktree root before invoking this hook.\"); exit 3 }; & ([IO.Path]::Combine([Environment]::GetEnvironmentVariable(\"CLAUDE_PROJECT_DIR\"), \".claude\", \"hooks\", \"Emit-Timestamp.ps1\"))'"
           }
         ]
       }
@@ -16,7 +17,8 @@
         "hooks": [
           {
             "type": "command",
-            "command": "pwsh -NoProfile -File \"$CLAUDE_PROJECT_DIR/.claude/hooks/Block-CompoundShell.ps1\""
+            "shell": "powershell",
+            "command": "pwsh -NoProfile -Command 'if ([string]::IsNullOrWhiteSpace([Environment]::GetEnvironmentVariable(\"CLAUDE_PROJECT_DIR\"))) { [Console]::Error.WriteLine(\"Repository hook root is unavailable: set CLAUDE_PROJECT_DIR to the worktree root before invoking this hook.\"); exit 3 }; & ([IO.Path]::Combine([Environment]::GetEnvironmentVariable(\"CLAUDE_PROJECT_DIR\"), \".claude\", \"hooks\", \"Block-CompoundShell.ps1\"))'; if (-not $?) { exit 2 }"
           }
         ]
       }

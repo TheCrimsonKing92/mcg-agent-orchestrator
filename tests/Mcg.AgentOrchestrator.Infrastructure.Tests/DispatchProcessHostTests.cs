@@ -956,6 +956,9 @@ public sealed class DispatchProcessHostTests
             var grokHome = Path.Combine(sandboxRoot, "grok-home");
             Assert.Equal(grokHome, startInfo.Environment["GROK_HOME"]);
             Assert.True(Directory.Exists(grokHome));
+            Assert.Equal(
+                worktree.Replace('\\', '/'),
+                startInfo.Environment[HarnessHookRootContract.EnvironmentVariableName]);
             Assert.False(startInfo.Environment.ContainsKey("CODEX_HOME"));
             Assert.False(startInfo.Environment.ContainsKey("CLAUDE_CONFIG_DIR"));
         }
