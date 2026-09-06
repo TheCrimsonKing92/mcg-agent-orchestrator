@@ -887,6 +887,9 @@ public sealed class HermesAcpTrialTests
         Assert.True(plan.StartInfo.RedirectStandardError);
         Assert.False(plan.StartInfo.UseShellExecute);
         Assert.True(plan.StartInfo.CreateNoWindow);
+        Assert.Equal(
+            fixture.Workspace.Replace('\\', '/'),
+            plan.StartInfo.Environment[HarnessHookRootContract.EnvironmentVariableName]);
     }
 
     [Xunit.Fact]

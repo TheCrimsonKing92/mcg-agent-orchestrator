@@ -46,6 +46,7 @@ public static class WorkerProcessRunner
         }
 
         startInfo.ArgumentList.Add(command);
+        HarnessHookRootContract.Apply(startInfo);
         return startInfo;
     }
 
