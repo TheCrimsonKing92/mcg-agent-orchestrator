@@ -2,16 +2,47 @@ using Mcg.AgentOrchestrator.Core;
 using Mcg.AgentOrchestrator.Infrastructure;
 using Mcg.AgentOrchestrator.App.Cli;
 using System.Diagnostics;
+using System.ComponentModel;
 using System.Security.Cryptography;
 using System.Text;
 using System.Text.Json;
 
+[Xunit.Collection(TestCollections.ProcessSpawning)]
 public sealed class HermesAcpTrialTests
 {
     [Xunit.Fact]
     public void AppRegistersOperatorTriggerableHermesAcpLifecycleCommand()
     {
         Assert.Contains("hermes-acp-trial", CliArgumentParser.RecognizedCommands);
+        Assert.Contains("hermes-acp-verify-identity", CliArgumentParser.RecognizedCommands);
+    }
+
+    [Xunit.Fact]
+    public async Task IdentityCommandRunsVersionOnlyReceiptPathWithoutModelInputs()
+    {
+        using var fixture = new HermesIdentityTestFixture();
+        var output = new StringWriter();
+        var receiptPath = Path.Combine(fixture.Root, "identity-receipt.json");
+        string? observedExecutable = null;
+
+        var receipt = await HermesAcpCliCommand.ExecuteIdentityVerificationAsync(
+            [
+                "hermes-acp-verify-identity",
+                "--executable", fixture.ExecutablePath,
+                "--working-directory", fixture.Root,
+                "--receipt", receiptPath
+            ],
+            output,
+            (executable, _, _, _) =>
+            {
+                observedExecutable = executable;
+                return Task.FromResult(fixture.Receipt(DateTimeOffset.UtcNow));
+            });
+
+        Assert.Equal(fixture.ExecutablePath, observedExecutable);
+        Assert.Equal(fixture.Pin.Commit, receipt.HeadCommit);
+        Assert.True(File.Exists(receiptPath));
+        Assert.Contains("versionStandardOutput", output.ToString(), StringComparison.Ordinal);
     }
 
     [Xunit.Fact]
@@ -91,9 +122,10 @@ public sealed class HermesAcpTrialTests
     }
 
     [Xunit.Fact]
-    public async Task LifecycleDrivesJsonRpcAndPersistsValidatedTerminalReceipt()
+    public async Task LifecycleAcceptsNativeVersionOnlyWithGitProvenance()
     {
         using var fixture = new Fixture();
+        using var identity = new HermesIdentityTestFixture();
         var promptPath = Path.Combine(fixture.Workspace, "brief.md");
         File.WriteAllText(promptPath, "protocol prompt");
         var request = new HermesAcpRequest(
@@ -104,8 +136,7 @@ public sealed class HermesAcpTrialTests
             "gpt-test",
             "OpenAI",
             AgentRole.Developer);
-        var version = new FakeHermesProcess(
-            $"Hermes {HermesAcpAdapter.PinnedRelease} {HermesAcpAdapter.PinnedCommit}");
+        var version = new FakeHermesProcess(identity.NativeVersionOutput, launchedImagePath: identity.ExecutablePath);
         var protocol = string.Join(Environment.NewLine,
         [
             JsonSerializer.Serialize(new { jsonrpc = "2.0", id = 1, result = new { protocolVersion = 1 } }),
@@ -176,7 +207,7 @@ public sealed class HermesAcpTrialTests
         var launcher = new FakeHermesProcessLauncher(version, acp);
         var receiptPath = Path.Combine(fixture.Sandbox, "terminal-receipt.json");
 
-        var receipt = await new HermesAcpLifecycle(launcher: launcher).RunAsync(
+        var receipt = await new HermesAcpLifecycle(launcher: launcher, identityVerifier: identity.Verifier).RunAsync(
             request,
             receiptPath,
             TextWriter.Null);
@@ -188,6 +219,8 @@ public sealed class HermesAcpTrialTests
         Assert.True(receipt.JobExitConfirmed);
         Assert.False(receipt.PermissionPolicyViolated);
         Assert.False(receipt.UnexpectedChild);
+        Assert.NotNull(receipt.ExecutableIdentity);
+        Assert.Equal(identity.Pin.Commit, receipt.ExecutableIdentity.HeadCommit);
         Assert.True(File.Exists(receiptPath));
         var persisted = JsonSerializer.Deserialize<HermesAcpTerminalReceipt>(
             File.ReadAllText(receiptPath),
@@ -499,6 +532,7 @@ public sealed class HermesAcpTrialTests
     public async Task LifecyclePersistsFailureReceiptAfterConfirmedTeardown()
     {
         using var fixture = new Fixture();
+        using var identity = new HermesIdentityTestFixture();
         var promptPath = Path.Combine(fixture.Workspace, "brief.md");
         File.WriteAllText(promptPath, "protocol prompt");
         var request = new HermesAcpRequest(
@@ -509,8 +543,7 @@ public sealed class HermesAcpTrialTests
             "gpt-test",
             "OpenAI",
             AgentRole.Developer);
-        var version = new FakeHermesProcess(
-            $"Hermes {HermesAcpAdapter.PinnedRelease} {HermesAcpAdapter.PinnedCommit}");
+        var version = new FakeHermesProcess(identity.NativeVersionOutput, launchedImagePath: identity.ExecutablePath);
         var protocol = string.Join(Environment.NewLine,
         [
             JsonSerializer.Serialize(new { jsonrpc = "2.0", id = 1, result = new { protocolVersion = 1 } }),
@@ -525,7 +558,9 @@ public sealed class HermesAcpTrialTests
         var receiptPath = Path.Combine(fixture.Sandbox, "terminal-failure.json");
 
         var error = await Assert.ThrowsAsync<InvalidOperationException>(() =>
-            new HermesAcpLifecycle(launcher: new FakeHermesProcessLauncher(version, acp)).RunAsync(
+            new HermesAcpLifecycle(
+                launcher: new FakeHermesProcessLauncher(version, acp),
+                identityVerifier: identity.Verifier).RunAsync(
                 request,
                 receiptPath,
                 TextWriter.Null));
@@ -540,6 +575,116 @@ public sealed class HermesAcpTrialTests
         Assert.False(receipt.JobExitConfirmed);
         Assert.Equal(17, receipt.ExitCode);
         Assert.True(acp.Killed);
+    }
+
+    [Xunit.Fact]
+    public async Task VersionProbeFailureRefusesBeforeAcpLaunchWithTypedReason()
+    {
+        using var fixture = new Fixture();
+        var request = fixture.Request();
+        var version = new FakeHermesProcess("probe failed", exitCode: 17);
+        var launcher = new FakeHermesProcessLauncher(version);
+
+        var receiptPath = Path.Combine(fixture.Sandbox, "failed-version.json");
+        var error = await Assert.ThrowsAsync<HermesIdentityException>(() =>
+            new HermesAcpLifecycle(launcher: launcher).RunAsync(
+                request, receiptPath, TextWriter.Null));
+
+        Assert.Equal(HermesIdentityRefusal.VersionProbeFailed, error.Reason);
+        Assert.Single(launcher.StartInfos);
+        Assert.Equal(error.Reason, ReadReceipt(receiptPath).IdentityRefusal);
+    }
+
+    [Xunit.Fact]
+    public async Task MissingVersionExecutableRefusesBeforeAcpLaunchWithTypedReason()
+    {
+        using var fixture = new Fixture();
+        var launcher = new MissingExecutableLauncher();
+
+        var receiptPath = Path.Combine(fixture.Sandbox, "missing-version.json");
+        var error = await Assert.ThrowsAsync<HermesIdentityException>(() =>
+            new HermesAcpLifecycle(launcher: launcher).RunAsync(
+                fixture.Request(), receiptPath, TextWriter.Null));
+
+        Assert.Equal(HermesIdentityRefusal.VersionProbeMissingExecutable, error.Reason);
+        Assert.Equal(1, launcher.StartCount);
+        Assert.Equal(error.Reason, ReadReceipt(receiptPath).IdentityRefusal);
+    }
+
+    [Xunit.Fact]
+    public async Task VersionProbeTimeoutKillsChildAndRefusesBeforeAcpLaunch()
+    {
+        using var fixture = new Fixture();
+        var request = fixture.Request();
+        var version = new FakeHermesProcess("");
+        var launcher = new FakeHermesProcessLauncher(version);
+
+        var receiptPath = Path.Combine(fixture.Sandbox, "timed-out-version.json");
+        var error = await Assert.ThrowsAsync<HermesIdentityException>(() =>
+            new HermesAcpLifecycle(
+                launcher: launcher,
+                versionExitWait: (_, _, _) => Task.FromResult(false)).RunAsync(
+                request, receiptPath, TextWriter.Null));
+
+        Assert.Equal(HermesIdentityRefusal.VersionProbeTimedOut, error.Reason);
+        Assert.Single(launcher.StartInfos);
+        Assert.True(version.Killed);
+        Assert.Equal(error.Reason, ReadReceipt(receiptPath).IdentityRefusal);
+    }
+
+    [Xunit.Fact]
+    public async Task VersionProbeUnresolvedChildIsKilledAndRefusesBeforeAcpLaunch()
+    {
+        using var fixture = new Fixture();
+        var request = fixture.Request();
+        var version = new FakeHermesProcess("native", jobExitConfirmed: false);
+        var launcher = new FakeHermesProcessLauncher(version);
+
+        var receiptPath = Path.Combine(fixture.Sandbox, "unresolved-version.json");
+        var error = await Assert.ThrowsAsync<HermesIdentityException>(() =>
+            new HermesAcpLifecycle(launcher: launcher).RunAsync(
+                request, receiptPath, TextWriter.Null));
+
+        Assert.Equal(HermesIdentityRefusal.VersionProbeUnresolvedChild, error.Reason);
+        Assert.Single(launcher.StartInfos);
+        Assert.True(version.Killed);
+        Assert.Equal(error.Reason, ReadReceipt(receiptPath).IdentityRefusal);
+    }
+
+    [Xunit.Fact]
+    public async Task GitIdentityRefusalsAllStopBeforeAcpLaunch()
+    {
+        using var run = new Fixture();
+        using var correct = new HermesIdentityTestFixture();
+        using var other = new HermesIdentityTestFixture();
+        using var lightweight = new HermesIdentityTestFixture(annotatedTag: false);
+
+        await AssertLifecycleIdentityRefusal(
+            run,
+            correct.NativeVersionOutput,
+            correct.ExecutablePath,
+            new GitHermesExecutableIdentityVerifier(correct.Pin with { Commit = new string('0', 40) }),
+            HermesIdentityRefusal.WrongCommit);
+        await AssertLifecycleIdentityRefusal(
+            run,
+            other.NativeVersionOutput,
+            correct.ExecutablePath,
+            correct.Verifier,
+            HermesIdentityRefusal.InstallDirectoryTextMismatch);
+        await AssertLifecycleIdentityRefusal(
+            run,
+            lightweight.NativeVersionOutput,
+            lightweight.ExecutablePath,
+            lightweight.Verifier,
+            HermesIdentityRefusal.TagNotAnnotated);
+
+        File.AppendAllText(correct.TrackedSourcePath, "modified");
+        await AssertLifecycleIdentityRefusal(
+            run,
+            correct.NativeVersionOutput,
+            correct.ExecutablePath,
+            correct.Verifier,
+            HermesIdentityRefusal.WorkingTreeModified);
     }
 
     [Xunit.Fact]
@@ -840,7 +985,51 @@ public sealed class HermesAcpTrialTests
         StopReason: "end_turn",
         PinnedRelease: HermesAcpAdapter.PinnedRelease,
         PinnedCommit: HermesAcpAdapter.PinnedCommit,
-        SurvivorInventoryEmpty: true);
+        SurvivorInventoryEmpty: true,
+        ExecutableIdentity: ValidIdentityReceipt());
+
+    private static HermesExecutableIdentityReceipt ValidIdentityReceipt() => new(
+        ImagePath: "C:\\fixture\\hermes.exe",
+        InstallRoot: "C:\\fixture",
+        ReportedInstallDirectory: "C:\\fixture",
+        InstallMethod: "git",
+        Release: HermesAcpAdapter.PinnedRelease,
+        HeadCommit: HermesAcpAdapter.PinnedCommit,
+        TagObject: HermesAcpAdapter.PinnedTagObject,
+        PeeledCommit: HermesAcpAdapter.PinnedCommit,
+        ReportedVersionLine: "Hermes Agent v0.20.6 (2026.8.27)",
+        WorkingTreeClean: true,
+        VerifiedAtUtc: DateTimeOffset.UtcNow,
+        VersionStandardOutput: "Hermes Agent v0.20.6 (2026.8.27)",
+        VersionStandardError: string.Empty,
+        VersionExitCode: 0,
+        VersionJobExitConfirmed: true);
+
+    private static HermesAcpTerminalReceipt ReadReceipt(string path) =>
+        JsonSerializer.Deserialize<HermesAcpTerminalReceipt>(
+            File.ReadAllText(path),
+            new JsonSerializerOptions(JsonSerializerDefaults.Web))!;
+
+    private static async Task AssertLifecycleIdentityRefusal(
+        Fixture run,
+        string versionOutput,
+        string launchedImagePath,
+        IHermesExecutableIdentityVerifier verifier,
+        HermesIdentityRefusal expectedReason)
+    {
+        var version = new FakeHermesProcess(versionOutput, launchedImagePath: launchedImagePath);
+        var forbiddenAcp = new FakeHermesProcess(string.Empty);
+        var launcher = new FakeHermesProcessLauncher(version, forbiddenAcp);
+        var receiptPath = Path.Combine(run.Sandbox, $"identity-{expectedReason}.json");
+
+        var error = await Assert.ThrowsAsync<HermesIdentityException>(() =>
+            new HermesAcpLifecycle(launcher: launcher, identityVerifier: verifier).RunAsync(
+                run.Request(), receiptPath, TextWriter.Null));
+
+        Assert.Equal(expectedReason, error.Reason);
+        Assert.Single(launcher.StartInfos);
+        Assert.Equal(expectedReason, ReadReceipt(receiptPath).IdentityRefusal);
+    }
 
     private const string SuccessfulWorkerResult = """
         WORKER_RESULT:
@@ -870,6 +1059,20 @@ public sealed class HermesAcpTrialTests
         public string Workspace { get; }
         public string Sandbox { get; }
 
+        public HermesAcpRequest Request()
+        {
+            var promptPath = Path.Combine(Workspace, "brief.md");
+            File.WriteAllText(promptPath, "protocol prompt");
+            return new HermesAcpRequest(
+                promptPath,
+                Sha256("protocol prompt"),
+                Workspace,
+                Sandbox,
+                "gpt-test",
+                "OpenAI",
+                AgentRole.Developer);
+        }
+
         public void Dispose()
         {
             if (Directory.Exists(Root)) Directory.Delete(Root, recursive: true);
@@ -888,12 +1091,24 @@ public sealed class HermesAcpTrialTests
         }
     }
 
+    private sealed class MissingExecutableLauncher : IHermesAcpProcessLauncher
+    {
+        public int StartCount { get; private set; }
+
+        public IHermesAcpProcess Start(ProcessStartInfo startInfo)
+        {
+            StartCount++;
+            throw new Win32Exception("fixture executable missing");
+        }
+    }
+
     private sealed class FakeHermesProcess(
         string output,
         string error = "",
         int exitCode = 0,
         bool jobExitConfirmed = true,
-        bool survivorInventoryEmpty = true) : IHermesAcpProcess
+        bool survivorInventoryEmpty = true,
+        string? launchedImagePath = null) : IHermesAcpProcess
     {
         private readonly StringWriter _input = new();
         private readonly StringReader _output = new(output);
@@ -905,6 +1120,7 @@ public sealed class HermesAcpTrialTests
         public int ExitCode { get; } = exitCode;
         public bool JobExitConfirmed { get; } = jobExitConfirmed;
         public bool SurvivorInventoryEmpty { get; } = survivorInventoryEmpty;
+        public string? LaunchedImagePath { get; } = launchedImagePath;
         public string Input => _input.ToString();
         public bool OutputReachedEnd { get; private set; }
         public bool InputCompleted { get; private set; }

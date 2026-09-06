@@ -554,7 +554,7 @@ internal static partial class CliPersistentStateRunner
             "gate-status" or "acceptance-engine" or "run-event" or
             "project" => true,
             "trial-compare" => !TrialCompareCliCommand.RequiresHistoricalState(args),
-            "hermes-acp-trial" => true,
+            "hermes-acp-trial" or "hermes-acp-verify-identity" => true,
             _ => false,
         };
     }

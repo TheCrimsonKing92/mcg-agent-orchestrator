@@ -42,7 +42,9 @@ internal sealed record HermesAcpTerminalReceipt(
     string? PinnedRelease = null,
     string? PinnedCommit = null,
     string? Failure = null,
-    bool SurvivorInventoryEmpty = false);
+    bool SurvivorInventoryEmpty = false,
+    HermesExecutableIdentityReceipt? ExecutableIdentity = null,
+    HermesIdentityRefusal? IdentityRefusal = null);
 
 internal sealed class HermesAcpAdapter
 {
@@ -92,7 +94,11 @@ internal sealed class HermesAcpAdapter
         return new(startInfo, promptBytes, promptSha256, hermesHome, PinnedRelease, PinnedCommit);
     }
 
-    public static void ValidateTerminalReceipt(HermesAcpRequest request, HermesAcpTerminalReceipt receipt)
+    public static void ValidateTerminalReceipt(
+        HermesAcpRequest request,
+        HermesAcpTerminalReceipt receipt,
+        HermesPinnedIdentity? pin = null,
+        HermesExecutableIdentityReceipt? expectedSameRunIdentity = null)
     {
         ArgumentNullException.ThrowIfNull(request);
         ArgumentNullException.ThrowIfNull(receipt);
@@ -112,6 +118,12 @@ internal sealed class HermesAcpAdapter
             throw new InvalidOperationException("Hermes ACP permission policy was violated.");
         if (receipt.UnexpectedChild)
             throw new InvalidOperationException("Hermes ACP launched an unexpected child process.");
+        if (expectedSameRunIdentity is not null && !ReferenceEquals(receipt.ExecutableIdentity, expectedSameRunIdentity))
+            throw new HermesIdentityException(HermesIdentityRefusal.ReceiptStale, "terminal receipt did not retain the identity receipt created by this lifecycle run");
+        GitHermesExecutableIdentityVerifier.ValidateReceipt(
+            receipt.ExecutableIdentity,
+            pin: pin,
+            enforceFreshness: expectedSameRunIdentity is null);
         if (!WorkerResultParser.TryParseFields(receipt.FinalOutput, out _, out var error))
             throw new InvalidOperationException($"Hermes ACP final output did not contain an authoritative WORKER_RESULT: {error}");
     }
@@ -139,15 +151,6 @@ internal sealed class HermesAcpAdapter
             new JsonSerializerOptions(JsonSerializerDefaults.Web) { WriteIndented = true });
         File.WriteAllText(temporaryPath, json + Environment.NewLine);
         File.Move(temporaryPath, fullPath, overwrite: true);
-    }
-
-    public static void ValidateVersionOutput(string versionOutput)
-    {
-        if (!versionOutput.Contains(PinnedRelease, StringComparison.OrdinalIgnoreCase) ||
-            !versionOutput.Contains(PinnedCommit, StringComparison.OrdinalIgnoreCase))
-        {
-            throw new InvalidOperationException($"Hermes executable is not pinned to {PinnedRelease} ({PinnedCommit}).");
-        }
     }
 
     private static string RequireDirectory(string path, string name)

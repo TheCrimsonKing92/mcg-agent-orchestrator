@@ -164,6 +164,7 @@ public sealed class ChildOutputDrainAdoptionSaturationTests
 
     private static (HermesAcpTerminalReceipt Receipt, string Progress) RunHermesLifecycle(string stderr)
     {
+        using var identity = new HermesIdentityTestFixture();
         var root = Path.Combine(Path.GetTempPath(), "mcg-hermes-drain-" + Guid.NewGuid().ToString("N"));
         var workspace = Path.Combine(root, "workspace");
         var sandbox = Path.Combine(root, "sandbox");
@@ -181,15 +182,18 @@ public sealed class ChildOutputDrainAdoptionSaturationTests
             AgentRole.Developer);
         var version = new FakeHermesProcess(
             new PipeDrainThreadPoolSaturationTests.SynchronousOnlyTextReader(
-                $"Hermes {HermesAcpAdapter.PinnedRelease} {HermesAcpAdapter.PinnedCommit}"),
-            TextReader.Null);
+                identity.NativeVersionOutput),
+            TextReader.Null,
+            identity.ExecutablePath);
         var acp = new FakeHermesProcess(
             new StringReader(SuccessProtocol()),
             new PipeDrainThreadPoolSaturationTests.SynchronousOnlyTextReader(stderr));
         using var progress = new StringWriter();
         try
         {
-            var task = new HermesAcpLifecycle(launcher: new FakeHermesProcessLauncher(version, acp)).RunAsync(
+            var task = new HermesAcpLifecycle(
+                launcher: new FakeHermesProcessLauncher(version, acp),
+                identityVerifier: identity.Verifier).RunAsync(
                 request,
                 Path.Combine(sandbox, "terminal-receipt.json"),
                 progress);
@@ -264,7 +268,7 @@ public sealed class ChildOutputDrainAdoptionSaturationTests
         public IHermesAcpProcess Start(ProcessStartInfo startInfo) => _processes.Dequeue();
     }
 
-    private sealed class FakeHermesProcess(TextReader output, TextReader error) : IHermesAcpProcess
+    private sealed class FakeHermesProcess(TextReader output, TextReader error, string? launchedImagePath = null) : IHermesAcpProcess
     {
         private readonly StringWriter _input = new();
 
@@ -274,6 +278,7 @@ public sealed class ChildOutputDrainAdoptionSaturationTests
         public int ExitCode => 0;
         public bool JobExitConfirmed => true;
         public bool SurvivorInventoryEmpty => true;
+        public string? LaunchedImagePath { get; } = launchedImagePath;
         public void CompleteInput() { }
         public void Kill() { }
         public Task WaitForExitAsync(CancellationToken cancellationToken) => Task.CompletedTask;

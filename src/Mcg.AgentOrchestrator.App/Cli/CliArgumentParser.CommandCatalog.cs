@@ -11,6 +11,7 @@ internal static IReadOnlyList<string> RecognizedCommands { get; } =
     "project",
     "trial-compare",
     "hermes-acp-trial",
+    "hermes-acp-verify-identity",
     "provider-smoke",
     "prototype",
     "prototype-ui",
