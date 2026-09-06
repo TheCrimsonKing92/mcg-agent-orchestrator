@@ -357,14 +357,39 @@ internal static class RepositorySourceInventory
     {
         try
         {
-            var info = new FileInfo(file);
-            if (info.LinkTarget is null)
+            var normalizedRoot = Path.TrimEndingDirectorySeparator(Path.GetFullPath(root));
+            var comparer = GetPathComparer();
+            for (FileSystemInfo? current = new FileInfo(file); current is not null; current = current switch
             {
-                return true;
+                FileInfo fileInfo => fileInfo.Directory,
+                DirectoryInfo directoryInfo => directoryInfo.Parent,
+                _ => null
+            })
+            {
+                var currentPath = Path.TrimEndingDirectorySeparator(Path.GetFullPath(current.FullName));
+                if (comparer.Equals(currentPath, normalizedRoot))
+                {
+                    return true;
+                }
+
+                if (!IsWithinRoot(currentPath, normalizedRoot))
+                {
+                    return false;
+                }
+
+                if ((current.Attributes & FileAttributes.ReparsePoint) == 0)
+                {
+                    continue;
+                }
+
+                var resolved = current.ResolveLinkTarget(returnFinalTarget: true);
+                if (resolved is null || !IsWithinRoot(Path.GetFullPath(resolved.FullName), normalizedRoot))
+                {
+                    return false;
+                }
             }
 
-            var resolved = info.ResolveLinkTarget(returnFinalTarget: true);
-            return resolved is not null && IsWithinRoot(Path.GetFullPath(resolved.FullName), root);
+            return false;
         }
         catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or PathTooLongException or NotSupportedException)
         {

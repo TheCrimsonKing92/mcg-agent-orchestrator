@@ -1,4 +1,5 @@
 using Mcg.AgentOrchestrator.Infrastructure;
+using System.Diagnostics;
 
 [Collection("IsolatedProcessSpawning")]
 public sealed class RepositorySourceInventoryTests
@@ -81,6 +82,69 @@ public sealed class RepositorySourceInventoryTests
         Assert.Contains(inventory.IncompleteReasons, reason => reason.Contains("link boundary", StringComparison.Ordinal));
         Assert.Contains("src/App.cs", inventory.Files);
         Assert.DoesNotContain(inventory.Files, path => path.Contains("External.cs", StringComparison.Ordinal));
+    }
+
+    [Fact]
+    public void GitInventorySkipsTrackedFileThroughOutsideJunction()
+    {
+        if (!OperatingSystem.IsWindows())
+        {
+            Assert.Skip("Directory junctions are a Windows-specific fixture.");
+        }
+
+        var root = CreateTempDirectory();
+        var outside = CreateTempDirectory();
+        var junctionPath = Path.Combine(root, "linked-source");
+        try
+        {
+            Assert.True(GitCli.Run(root, "init").Succeeded);
+            Write(outside, "External.cs", "internal sealed class External { }");
+            CreateDirectoryJunction(junctionPath, outside);
+            Assert.True(GitCli.Run(root, "add", "linked-source/External.cs").Succeeded);
+
+            var inventory = RepositorySourceInventory.Build(root);
+
+            Assert.Equal("git", inventory.Origin);
+            Assert.False(inventory.Complete);
+            Assert.Equal(1, inventory.SkippedLinkBoundaryCount);
+            Assert.Contains(inventory.IncompleteReasons, reason => reason.Contains("link boundary", StringComparison.Ordinal));
+            Assert.DoesNotContain("linked-source/External.cs", inventory.Files);
+        }
+        finally
+        {
+            if (Directory.Exists(junctionPath))
+            {
+                Directory.Delete(junctionPath);
+            }
+
+            Directory.Delete(outside, recursive: true);
+        }
+    }
+
+    private static void CreateDirectoryJunction(string junctionPath, string targetPath)
+    {
+        using var process = Process.Start(new ProcessStartInfo
+        {
+            FileName = "cmd.exe",
+            RedirectStandardOutput = true,
+            RedirectStandardError = true,
+            UseShellExecute = false,
+            CreateNoWindow = true,
+            ArgumentList = { "/d", "/c", "mklink", "/J", junctionPath, targetPath }
+        }) ?? throw new InvalidOperationException("Could not start the directory-junction fixture process.");
+        var outputTask = process.StandardOutput.ReadToEndAsync();
+        var errorTask = process.StandardError.ReadToEndAsync();
+        if (!process.WaitForExit(10_000))
+        {
+            process.Kill(entireProcessTree: true);
+            throw new TimeoutException("Directory-junction fixture did not exit within 10 seconds.");
+        }
+
+        Task.WhenAll(outputTask, errorTask).WaitAsync(TimeSpan.FromSeconds(5)).GetAwaiter().GetResult();
+        Assert.True(
+            process.ExitCode == 0,
+            $"Directory-junction fixture failed with exit {process.ExitCode}. stdout: {outputTask.Result} stderr: {errorTask.Result}");
+        Assert.True((File.GetAttributes(junctionPath) & FileAttributes.ReparsePoint) != 0);
     }
 
     private static void Write(string root, string relativePath, string content)
