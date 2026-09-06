@@ -691,6 +691,7 @@ public sealed class SqliteOrchestratorStateRepositoryTests
         Assert.True(listing.All(m => !string.IsNullOrEmpty(m.Status)));
         Assert.True(listing.All(m => !string.IsNullOrEmpty(m.Objective)));
         Assert.True(listing.All(m => !string.IsNullOrEmpty(m.UpdatedAt)));
+        Assert.True(listing.All(m => m.CreatedAt is not null));
     }
 
     [Xunit.Fact(DisplayName = "SqliteOrchestratorStateRepository_list_metadata_surfaces_active_failed_condition")]

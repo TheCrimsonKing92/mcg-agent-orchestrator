@@ -2,13 +2,18 @@ using Mcg.AgentOrchestrator.Core;
 
 namespace Mcg.AgentOrchestrator.Infrastructure;
 
-public interface IOrchestratorStateRepository
+public interface IOrchestratorStateQueries
 {
-    Task<AgentOrchestratorKernel> LoadAsync(CancellationToken cancellationToken = default);
-
     Task<AgentOrchestratorKernel> LoadGoalsAsync(
         IReadOnlyCollection<GoalId> goalIds,
         CancellationToken cancellationToken = default);
+
+    Task<IReadOnlyList<GoalSummary>> ListGoalMetadataAsync(CancellationToken cancellationToken = default);
+}
+
+public interface IOrchestratorStateRepository : IOrchestratorStateQueries
+{
+    Task<AgentOrchestratorKernel> LoadAsync(CancellationToken cancellationToken = default);
 
     Task SaveAsync(AgentOrchestratorKernel kernel, CancellationToken cancellationToken = default);
 
@@ -17,8 +22,6 @@ public interface IOrchestratorStateRepository
         AgentOrchestratorKernel kernel,
         CancellationToken cancellationToken = default) =>
         SaveAsync(kernel, cancellationToken);
-
-    Task<IReadOnlyList<GoalSummary>> ListGoalMetadataAsync(CancellationToken cancellationToken = default);
 
     Task<IReadOnlyList<GoalSummary>> ListConductLoopGoalMetadataAsync(CancellationToken cancellationToken = default);
 
