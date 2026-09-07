@@ -556,7 +556,12 @@ public sealed class DotnetBuildEnvironmentManagerTests
         using var process = Process.Start(startInfo) ?? throw new InvalidOperationException("Failed to start focused runner.");
         var stdout = process.StandardOutput.ReadToEnd();
         var stderr = process.StandardError.ReadToEnd();
-        Assert.True(process.WaitForExit(15000), "Focused runner did not exit within 15 seconds.");
+        // Supervision includes a fixed conservative cleanup allowance in addition to the
+        // focused runner's total budget. It is a ceiling, not a measured latency percentile.
+        var outerDeadline = TimeSpan.FromSeconds(checked(budgetSeconds + 7));
+        Assert.True(
+            process.WaitForExit(outerDeadline),
+            $"Focused runner did not exit within {outerDeadline.TotalSeconds} seconds for a {budgetSeconds}-second budget.");
         return (process.ExitCode, stdout, stderr);
     }
 

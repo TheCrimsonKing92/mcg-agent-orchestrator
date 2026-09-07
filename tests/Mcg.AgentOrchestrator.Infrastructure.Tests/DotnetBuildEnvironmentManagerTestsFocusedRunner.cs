@@ -453,6 +453,9 @@ public sealed class DotnetBuildEnvironmentManagerTestsFocusedRunner
                 Assert.Fail(diagnostics);
             }
             Assert.Equal(2, result.ExitCode);
+            Assert.True(
+                File.Exists(startedPath),
+                "The focused child must execute the marker-writing test before the budget control terminates its tree.");
             Assert.True(File.Exists(receiptPath), diagnostics);
             using var receipt = JsonDocument.Parse(File.ReadAllText(receiptPath));
             Assert.Equal("BLOCKED", receipt.RootElement.GetProperty("outcome").GetString());
@@ -881,6 +884,8 @@ public sealed class DotnetBuildEnvironmentManagerTestsFocusedRunner
             Assert.Equal("not-acquired", receipt.RootElement.GetProperty("leaseState").GetString());
             Assert.False(receipt.RootElement.GetProperty("leaseReleased").GetBoolean());
             Assert.Equal("not-started", receipt.RootElement.GetProperty("childProcess").GetProperty("stateAfter").GetString());
+            // This shim only observes PowerShell-resolved '& dotnet' calls. The receipt's
+            // not-started child state above is the child-launch oracle for this fixture.
             Assert.False(File.Exists(logPath));
         }
         finally
