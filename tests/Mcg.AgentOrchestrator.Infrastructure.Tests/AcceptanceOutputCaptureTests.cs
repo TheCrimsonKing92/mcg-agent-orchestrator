@@ -181,8 +181,8 @@ public sealed class AcceptanceOutputCaptureTests : GoalAcceptanceVerifierTestBas
         finally
         {
             source.ReleaseEof();
-            await drain.WaitAsync(TimeSpan.FromSeconds(5));
             GoalAcceptanceVerifier.CapturePublicationInterval = previousInterval;
+            await drain.WaitAsync(TimeSpan.FromSeconds(5));
             try { File.Delete(path); } catch { }
         }
     }
@@ -222,8 +222,8 @@ public sealed class AcceptanceOutputCaptureTests : GoalAcceptanceVerifierTestBas
         {
             stdoutSource.ReleaseEof();
             stderrSource.ReleaseEof();
-            await Task.WhenAll(stdoutDrain, stderrDrain).WaitAsync(TimeSpan.FromSeconds(5));
             GoalAcceptanceVerifier.CapturePublicationInterval = previousInterval;
+            await Task.WhenAll(stdoutDrain, stderrDrain).WaitAsync(TimeSpan.FromSeconds(5));
             try { File.Delete(stdoutPath); } catch { }
             try { File.Delete(stderrPath); } catch { }
         }

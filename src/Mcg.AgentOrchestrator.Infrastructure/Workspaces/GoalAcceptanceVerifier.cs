@@ -9014,49 +9014,51 @@ public sealed partial class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
         {
             try
             {
+                async Task PublishPendingOutputAsync()
+                {
+                    await destination.FlushAsync(cancellationToken).ConfigureAwait(false);
+                    publicationPending = false;
+                    publicationDelayCancellation?.Cancel();
+                    publicationDelayCancellation?.Dispose();
+                    publicationDelayCancellation = null;
+                    publicationDelay = null;
+                }
+
                 while (true)
                 {
                     if (publicationPending && publicationDelay?.IsCompleted == true)
                     {
-                        await destination.FlushAsync(cancellationToken).ConfigureAwait(false);
-                        publicationPending = false;
-                        publicationDelayCancellation.Cancel();
-                        publicationDelayCancellation.Dispose();
-                        publicationDelayCancellation = null;
-                        publicationDelay = null;
+                        await PublishPendingOutputAsync().ConfigureAwait(false);
                     }
 
                     int read;
-                    var readTask = source.ReadAsync(buffer, cancellationToken).AsTask();
+                    Task<int>? readTask = null;
                     try
                     {
+                        readTask = source.ReadAsync(buffer, cancellationToken).AsTask();
                         if (publicationPending &&
                             publicationDelay is not null &&
                             !readTask.IsCompleted &&
                             ReferenceEquals(
-                                await Task.WhenAny(readTask, publicationDelay).ConfigureAwait(false),
-                                publicationDelay))
+                                 await Task.WhenAny(readTask, publicationDelay).ConfigureAwait(false),
+                                 publicationDelay))
                         {
-                            await destination.FlushAsync(cancellationToken).ConfigureAwait(false);
-                            publicationPending = false;
-                            publicationDelayCancellation!.Cancel();
-                            publicationDelayCancellation.Dispose();
-                            publicationDelayCancellation = null;
-                            publicationDelay = null;
+                            await PublishPendingOutputAsync().ConfigureAwait(false);
                         }
 
-                        try
-                        {
-                            read = await readTask.ConfigureAwait(false);
-                        }
-                        catch (IOException ex) when (IsClosedPipe(ex))
-                        {
-                            break;
-                        }
+                        read = await readTask.ConfigureAwait(false);
+                    }
+                    catch (IOException ex) when (IsClosedPipe(ex))
+                    {
+                        break;
                     }
                     catch
                     {
-                        ObservePotentialTaskFailure(readTask);
+                        if (readTask is not null)
+                        {
+                            ObservePotentialTaskFailure(readTask);
+                        }
+
                         throw;
                     }
                     if (read == 0)

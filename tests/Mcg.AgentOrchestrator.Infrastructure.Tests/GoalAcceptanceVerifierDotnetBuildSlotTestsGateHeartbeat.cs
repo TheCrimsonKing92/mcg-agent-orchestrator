@@ -96,6 +96,7 @@ public sealed class GoalAcceptanceVerifierDotnetBuildSlotTestsGateHeartbeat : Go
             """);
         var previousHeartbeat = GoalAcceptanceVerifier.HeartbeatInterval;
         var previousProgress = GoalAcceptanceVerifier.ProgressInterval;
+        var previousCapturePublication = GoalAcceptanceVerifier.CapturePublicationInterval;
         var observed = new ConcurrentQueue<AcceptanceGateProgress>();
         var outputObserved = new TaskCompletionSource<AcceptanceGateProgress>(
             TaskCreationOptions.RunContinuationsAsynchronously);
@@ -107,6 +108,7 @@ public sealed class GoalAcceptanceVerifierDotnetBuildSlotTestsGateHeartbeat : Go
             TryDeleteStableSlotHeartbeat(0);
             GoalAcceptanceVerifier.HeartbeatInterval = TimeSpan.FromMilliseconds(100);
             GoalAcceptanceVerifier.ProgressInterval = TimeSpan.FromMilliseconds(200);
+            GoalAcceptanceVerifier.CapturePublicationInterval = TimeSpan.FromMilliseconds(100);
             using var sink = GoalAcceptanceVerifier.PushGateProgressSink(item =>
             {
                 observed.Enqueue(item);
@@ -155,6 +157,7 @@ public sealed class GoalAcceptanceVerifierDotnetBuildSlotTestsGateHeartbeat : Go
         {
             GoalAcceptanceVerifier.HeartbeatInterval = previousHeartbeat;
             GoalAcceptanceVerifier.ProgressInterval = previousProgress;
+            GoalAcceptanceVerifier.CapturePublicationInterval = previousCapturePublication;
             try { DeleteDirectoryWithRetry(root); } catch { }
         }
     }
