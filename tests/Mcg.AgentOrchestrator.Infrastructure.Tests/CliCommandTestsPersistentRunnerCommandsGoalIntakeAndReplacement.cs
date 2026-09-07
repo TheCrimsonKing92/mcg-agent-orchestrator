@@ -2452,8 +2452,7 @@ public sealed class CliCommandTestsPersistentRunnerCommandsGoalIntakeAndReplacem
 
         GoalCreationSideEffectDelivery.BeforeStateCommit = _ =>
         {
-            using var connection = new Microsoft.Data.Sqlite.SqliteConnection(
-                $"Data Source={workspace.BacklogStorePath};Pooling=False");
+            using var connection = new Microsoft.Data.Sqlite.SqliteConnection($"Data Source={workspace.BacklogStorePath};Pooling=False");
             connection.Open();
             using var command = connection.CreateCommand();
             command.CommandText = "UPDATE backlog_dependencies SET prerequisite_id = $missing WHERE dependent_id = $source";
@@ -2597,8 +2596,7 @@ public sealed class CliCommandTestsPersistentRunnerCommandsGoalIntakeAndReplacem
         var repository = new InMemoryTransactionalStateRepository(new AgentOrchestratorKernel());
         repository.BeforeNextTransaction = _ =>
         {
-            using var connection = new Microsoft.Data.Sqlite.SqliteConnection(
-                $"Data Source={workspace.BacklogStorePath};Pooling=False");
+            using var connection = new Microsoft.Data.Sqlite.SqliteConnection($"Data Source={workspace.BacklogStorePath};Pooling=False");
             connection.Open();
             using var command = connection.CreateCommand();
             command.CommandText = "DELETE FROM backlog WHERE id = $id";

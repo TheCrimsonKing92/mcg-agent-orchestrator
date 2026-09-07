@@ -116,8 +116,7 @@ public sealed class CliCommandTestsPersistentRunnerCommandsStartupAndMetadata : 
         var orchestratorDirectory = Path.Combine(root, ".orchestrator");
         var statePath = Path.Combine(orchestratorDirectory, "state.db");
         Directory.CreateDirectory(orchestratorDirectory);
-        using (var connection = new Microsoft.Data.Sqlite.SqliteConnection(
-            $"Data Source={statePath};Pooling=False"))
+        using (var connection = new Microsoft.Data.Sqlite.SqliteConnection($"Data Source={statePath};Pooling=False"))
         {
             connection.Open();
         }
