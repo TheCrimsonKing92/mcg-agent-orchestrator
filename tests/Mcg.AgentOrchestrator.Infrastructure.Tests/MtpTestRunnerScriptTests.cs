@@ -727,8 +727,16 @@ public sealed class MtpTestRunnerScriptTests
         var receipt = File.ReadAllText(receiptPath)
             .Replace(declaredDirectory + Path.DirectorySeparatorChar, evaluatedDirectory + Path.DirectorySeparatorChar, StringComparison.Ordinal)
             .Replace(
+                $"S\tsource\t{Path.Combine(evaluatedDirectory, "receipt-source.cs")}\t{Convert.ToHexString(System.Security.Cryptography.SHA256.HashData(File.ReadAllBytes(Path.Combine(declaredDirectory, "receipt-source.cs"))))}",
+                $"S\tsource\t{Path.Combine(declaredDirectory, "receipt-source.cs")}\t{Convert.ToHexString(System.Security.Cryptography.SHA256.HashData(File.ReadAllBytes(Path.Combine(declaredDirectory, "receipt-source.cs"))))}",
+                StringComparison.Ordinal)
+            .Replace(
                 $"K\tassemblySha256\t{Convert.ToHexString(System.Security.Cryptography.SHA256.HashData(File.ReadAllBytes(declaredAssembly)))}",
                 $"K\tassemblySha256\t{Convert.ToHexString(System.Security.Cryptography.SHA256.HashData(File.ReadAllBytes(evaluatedAssembly)))}",
+                StringComparison.Ordinal)
+            .Replace(
+                $"F\tclosure\t{evaluatedAssembly}\t{Convert.ToHexString(System.Security.Cryptography.SHA256.HashData(File.ReadAllBytes(declaredAssembly)))}",
+                $"F\tclosure\t{evaluatedAssembly}\t{Convert.ToHexString(System.Security.Cryptography.SHA256.HashData(File.ReadAllBytes(evaluatedAssembly)))}",
                 StringComparison.Ordinal);
         File.WriteAllText(receiptPath, receipt);
 
@@ -792,8 +800,29 @@ public sealed class MtpTestRunnerScriptTests
 
         Xunit.Assert.Equal(24, result.ExitCode);
         Xunit.Assert.Contains("NO-BUILD CLOSURE FAILURE", result.Stdout, StringComparison.Ordinal);
-        Xunit.Assert.Contains("has no ProductVersion and is not trusted", result.Stdout, StringComparison.Ordinal);
+        Xunit.Assert.Contains("receipt closure file checksum mismatch", result.Stdout, StringComparison.Ordinal);
         Xunit.Assert.False(File.Exists(sandbox.ArgumentLog), "The fake dotnet runner must not be launched for an unsealed closure.");
+    }
+
+    [Xunit.Fact(DisplayName = "MTP_no_build_rejects_a_receipt_verified_output_with_a_changed_copied_dependency_before_launch")]
+    public void MtpNoBuildRejectsVerifiedOutputWithChangedCopiedDependencyBeforeLaunch()
+    {
+        using var sandbox = ScriptSandbox.Create("success");
+        var managedAssembly = sandbox.CreateManagedAssemblyPlaceholder();
+        var outputDirectory = Path.GetDirectoryName(managedAssembly)!;
+        var copiedDependency = Path.Combine(outputDirectory, "Mcg.AgentOrchestrator.App.dll");
+        var differentValidDependency = Path.Combine(outputDirectory, "Mcg.AgentOrchestrator.Core.dll");
+        Xunit.Assert.True(File.Exists(copiedDependency));
+        Xunit.Assert.True(File.Exists(differentValidDependency));
+        File.Copy(differentValidDependency, copiedDependency, overwrite: true);
+
+        var result = sandbox.RunPartition(
+            "GoalWorktree",
+            dotnetPath: sandbox.RunnerPath,
+            runnerOverride: false);
+
+        Xunit.Assert.Equal(24, result.ExitCode);
+        Xunit.Assert.False(File.Exists(sandbox.ArgumentLog), "The fake dotnet runner must not launch a closure with a changed copied dependency.");
     }
 
     [Xunit.Fact(DisplayName = "MTP_medium_integrity_results_override_fails_before_runner_launch")]
@@ -1271,18 +1300,11 @@ public sealed class MtpTestRunnerScriptTests
             File.WriteAllText(fakeRunnerScript, $$"""
                 param([Parameter(ValueFromRemainingArguments = $true)][string[]]$Arguments)
                 if ($Arguments.Count -gt 0 -and $Arguments[0] -eq 'msbuild') {
-                    @{
-                        Properties = @{
-                            TargetPath = '{{Path.Combine(root, "tests", "Mcg.AgentOrchestrator.Infrastructure.Tests", "bin", "Debug", "net10.0", "Mcg.AgentOrchestrator.Infrastructure.Tests.dll")}}'
-                            TargetFramework = 'net10.0'
-                            RuntimeIdentifier = ''
-                        }
-                        Items = @{
-                            Compile = @(
-                                @{ Identity = '{{Path.Combine(root, "bin", "Mcg.AgentOrchestrator.Infrastructure.Tests", "Debug", "receipt-source.cs")}}' }
-                            )
-                        }
-                    } | ConvertTo-Json -Compress
+                    $targetPath = '{{Path.Combine(root, "tests", "Mcg.AgentOrchestrator.Infrastructure.Tests", "bin", "Debug", "net10.0", "Mcg.AgentOrchestrator.Infrastructure.Tests.dll")}}'
+                    $sourcePath = '{{Path.Combine(root, "bin", "Mcg.AgentOrchestrator.Infrastructure.Tests", "Debug", "receipt-source.cs")}}'
+                    $open = [char]123
+                    $close = [char]125
+                    Write-Output ($open + '"Properties":' + $open + '"TargetPath":' + ($targetPath | ConvertTo-Json -Compress) + ',"TargetFramework":"net10.0","RuntimeIdentifier":""' + $close + ',"Items":' + $open + '"Compile":[' + $open + '"Identity":' + ($sourcePath | ConvertTo-Json -Compress) + $close + ']' + $close + $close)
                     exit 0
                 }
                 $Arguments | Set-Content -LiteralPath '{{escapedArgumentLog}}'
@@ -1416,7 +1438,7 @@ public sealed class MtpTestRunnerScriptTests
             File.WriteAllText(sourcePath, "// receipt source");
             var receiptLines = new[]
             {
-                "K\tschemaVersion\t1",
+                "K\tschemaVersion\t2",
                 $"K\tproject\t{Path.Combine(Root, "tests", "Mcg.AgentOrchestrator.Infrastructure.Tests", "Mcg.AgentOrchestrator.Infrastructure.Tests.csproj")}",
                 "K\tconfiguration\tDebug",
                 "K\ttargetFramework\tnet10.0",
@@ -1427,7 +1449,10 @@ public sealed class MtpTestRunnerScriptTests
                 $"K\tassemblySha256\t{Sha256(path)}",
                 $"K\tpdbSha256\t{Sha256(pdbPath)}",
                 $"S\tsource\t{sourcePath}\t{Sha256(sourcePath)}"
-            };
+            }.Concat(Directory.EnumerateFiles(outputDirectory)
+                .Where(path => !Path.GetFileName(path).Equals(".mcg-build-receipt.txt", StringComparison.OrdinalIgnoreCase))
+                .OrderBy(path => path, StringComparer.OrdinalIgnoreCase)
+                .Select(path => $"F\tclosure\t{path}\t{Sha256(path)}"));
             File.WriteAllLines(Path.Combine(outputDirectory, ".mcg-build-receipt.txt"), receiptLines);
             Xunit.Assert.True(File.Exists(path), $"Expected managed test assembly fixture at '{path}'.");
             return path;

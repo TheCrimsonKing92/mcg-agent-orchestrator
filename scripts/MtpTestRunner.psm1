@@ -20,7 +20,7 @@ $script:MtpOutputDrainSeconds = 10
 $script:MtpClosureMarkerName = '.mcg-mtp-closure.json'
 $script:MtpClosureSchemaVersion = 1
 $script:MtpBuildReceiptName = '.mcg-build-receipt.txt'
-$script:MtpBuildReceiptSchemaVersion = 1
+$script:MtpBuildReceiptSchemaVersion = 2
 $script:MtpClosureSnapshotAttempts = 3
 $script:MtpStartupHookSchemaVersion = 1
 $script:MtpStartupHookAssemblyName = 'Mcg.AgentOrchestrator.FaultDialogStartupHook.dll'
@@ -1010,6 +1010,7 @@ function Read-MtpBuildReceipt {
     }
     $headers = @{}
     $sources = [System.Collections.Generic.List[object]]::new()
+    $closureFiles = [System.Collections.Generic.List[object]]::new()
     try {
         foreach ($line in @(Get-Content -LiteralPath $Path -ErrorAction Stop)) {
             $parts = @([string]$line -split "`t", 4)
@@ -1023,6 +1024,10 @@ function Read-MtpBuildReceipt {
             }
             if ($parts.Count -eq 4 -and $parts[0] -eq 'S' -and $parts[1] -eq 'source' -and -not [string]::IsNullOrWhiteSpace($parts[2])) {
                 $sources.Add([pscustomobject]@{ Path = $parts[2]; Sha256 = $parts[3] })
+                continue
+            }
+            if ($parts.Count -eq 4 -and $parts[0] -eq 'F' -and $parts[1] -eq 'closure' -and -not [string]::IsNullOrWhiteSpace($parts[2])) {
+                $closureFiles.Add([pscustomobject]@{ Path = $parts[2]; Sha256 = $parts[3] })
                 continue
             }
             throw "receipt line is malformed: '$line'"
@@ -1039,7 +1044,10 @@ function Read-MtpBuildReceipt {
     if ([string]$headers['schemaVersion'] -ne [string]$script:MtpBuildReceiptSchemaVersion) {
         throw "build receipt has unsupported schemaVersion '$($headers['schemaVersion'])': $Path"
     }
-    return [pscustomobject]@{ Path = $Path; Headers = $headers; Sources = $sources.ToArray() }
+    if ($closureFiles.Count -eq 0) {
+        throw "build receipt contains no closure files: $Path"
+    }
+    return [pscustomobject]@{ Path = $Path; Headers = $headers; Sources = $sources.ToArray(); ClosureFiles = $closureFiles.ToArray() }
 }
 
 function Assert-MtpBuildReceipt {
@@ -1094,6 +1102,32 @@ function Assert-MtpBuildReceipt {
             if (-not $actual.Equals([string]$source.Sha256, [System.StringComparison]::OrdinalIgnoreCase)) {
                 throw "receipt source checksum mismatch: path='$($source.Path)' recorded='$($source.Sha256)' actual='$actual'"
             }
+        }
+        $expectedDirectoryPrefix = [System.IO.Path]::GetFullPath($Directory).TrimEnd([char]'\', [char]'/') + [System.IO.Path]::DirectorySeparatorChar
+        $recordedClosurePaths = [System.Collections.Generic.List[string]]::new()
+        foreach ($closureFile in @($receipt.ClosureFiles)) {
+            $closurePath = [System.IO.Path]::GetFullPath([string]$closureFile.Path)
+            if (-not $closurePath.StartsWith($expectedDirectoryPrefix, [System.StringComparison]::OrdinalIgnoreCase)) {
+                throw "receipt closure file escapes its output directory: path='$closurePath' directory='$Directory'"
+            }
+            if (-not (Test-Path -LiteralPath $closurePath -PathType Leaf)) {
+                throw "receipt closure file is missing: $closurePath"
+            }
+            $actual = Get-MtpSha256File -Path $closurePath
+            if (-not $actual.Equals([string]$closureFile.Sha256, [System.StringComparison]::OrdinalIgnoreCase)) {
+                throw "receipt closure file checksum mismatch: path='$closurePath' recorded='$($closureFile.Sha256)' actual='$actual'"
+            }
+            $recordedClosurePaths.Add($closurePath)
+        }
+        $currentClosurePaths = @(Get-ChildItem -LiteralPath $Directory -Force -Recurse -File |
+            Where-Object { -not $_.Name.Equals($script:MtpBuildReceiptName, [System.StringComparison]::OrdinalIgnoreCase) -and -not $_.Name.Equals("$script:MtpBuildReceiptName.tmp", [System.StringComparison]::OrdinalIgnoreCase) } |
+            ForEach-Object { [System.IO.Path]::GetFullPath($_.FullName) } |
+            Sort-Object -Unique)
+        $recordedClosurePaths = @($recordedClosurePaths | Sort-Object -Unique)
+        $missingClosureFiles = @($recordedClosurePaths | Where-Object { $_ -notin $currentClosurePaths })
+        $unexpectedClosureFiles = @($currentClosurePaths | Where-Object { $_ -notin $recordedClosurePaths })
+        if ($missingClosureFiles.Count -gt 0 -or $unexpectedClosureFiles.Count -gt 0) {
+            throw "receipt closure file set does not match output: missing='$($missingClosureFiles -join ';')' unexpected='$($unexpectedClosureFiles -join ';')'"
         }
         if ($ExpectedSourcePaths.Count -gt 0) {
             $recordedSources = @($receipt.Sources | ForEach-Object { [System.IO.Path]::GetFullPath([string]$_.Path) } | Sort-Object -Unique)

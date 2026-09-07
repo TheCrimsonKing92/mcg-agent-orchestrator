@@ -20,6 +20,8 @@
       <_McgReceiptOutputFiles Include="$(TargetDir)$(TargetName).pdb">
         <Kind>pdb</Kind>
       </_McgReceiptOutputFiles>
+      <_McgReceiptClosureFiles Include="$(TargetDir)**\*"
+                               Exclude="$(TargetDir).mcg-build-receipt.txt;$(TargetDir).mcg-build-receipt.txt.tmp" />
     </ItemGroup>
     <GetFileHash Files="@(_McgReceiptSources)" Algorithm="SHA256" HashEncoding="hex">
       <Output TaskParameter="Items" ItemName="_McgReceiptSourceHashes" />
@@ -27,9 +29,12 @@
     <GetFileHash Files="@(_McgReceiptOutputFiles)" Algorithm="SHA256" HashEncoding="hex">
       <Output TaskParameter="Items" ItemName="_McgReceiptOutputHashes" />
     </GetFileHash>
+    <GetFileHash Files="@(_McgReceiptClosureFiles)" Algorithm="SHA256" HashEncoding="hex">
+      <Output TaskParameter="Items" ItemName="_McgReceiptClosureHashes" />
+    </GetFileHash>
 
     <ItemGroup>
-      <_McgReceiptLines Include="K&#x9;schemaVersion&#x9;1" />
+      <_McgReceiptLines Include="K&#x9;schemaVersion&#x9;2" />
       <_McgReceiptLines Include="K&#x9;project&#x9;$(MSBuildProjectFullPath)" />
       <_McgReceiptLines Include="K&#x9;configuration&#x9;$(Configuration)" />
       <_McgReceiptLines Include="K&#x9;targetFramework&#x9;$(TargetFramework)" />
@@ -40,6 +45,7 @@
       <_McgReceiptLines Include="K&#x9;assemblySha256&#x9;%(_McgReceiptOutputHashes.FileHash)" Condition="'%(_McgReceiptOutputHashes.Kind)' == 'assembly'" />
       <_McgReceiptLines Include="K&#x9;pdbSha256&#x9;%(_McgReceiptOutputHashes.FileHash)" Condition="'%(_McgReceiptOutputHashes.Kind)' == 'pdb'" />
       <_McgReceiptLines Include="S&#x9;source&#x9;%(_McgReceiptSourceHashes.FullPath)&#x9;%(_McgReceiptSourceHashes.FileHash)" />
+      <_McgReceiptLines Include="F&#x9;closure&#x9;%(_McgReceiptClosureHashes.FullPath)&#x9;%(_McgReceiptClosureHashes.FileHash)" />
     </ItemGroup>
 
     <WriteLinesToFile File="$(_McgReceiptTemporaryPath)" Lines="@(_McgReceiptLines)" Overwrite="true" Encoding="UTF-8" />
