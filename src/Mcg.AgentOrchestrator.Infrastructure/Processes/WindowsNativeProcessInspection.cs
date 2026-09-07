@@ -1,6 +1,5 @@
 using System.Runtime.InteropServices;
 using System.Text;
-using Microsoft.Win32.SafeHandles;
 
 namespace Mcg.AgentOrchestrator.Infrastructure;
 
@@ -64,7 +63,7 @@ internal static class WindowsNativeProcessInspection
 
     internal static ProcessLifecycleIdentityReadResult ReadLifecycleIdentity(
         int expectedProcessId,
-        SafeFileHandle processHandle)
+        SafeHandle processHandle)
     {
         ArgumentOutOfRangeException.ThrowIfLessThan(expectedProcessId, 1);
         ArgumentNullException.ThrowIfNull(processHandle);
@@ -77,6 +76,30 @@ internal static class WindowsNativeProcessInspection
         {
             return new(null, null, ProcessInspectionStatus.NativeFailure, 0, "process-handle-validation");
         }
+
+        var addedReference = false;
+        try
+        {
+            processHandle.DangerousAddRef(ref addedReference);
+            return ReadLifecycleIdentity(expectedProcessId, processHandle.DangerousGetHandle());
+        }
+        catch (ObjectDisposedException)
+        {
+            return new(null, null, ProcessInspectionStatus.NativeFailure, 0, "process-handle-validation");
+        }
+        finally
+        {
+            if (addedReference)
+            {
+                processHandle.DangerousRelease();
+            }
+        }
+    }
+
+    private static ProcessLifecycleIdentityReadResult ReadLifecycleIdentity(
+        int expectedProcessId,
+        IntPtr processHandle)
+    {
 
         var actualProcessId = GetProcessId(processHandle);
         if (actualProcessId == 0)
@@ -926,10 +949,7 @@ internal static class WindowsNativeProcessInspection
     private static extern bool GetExitCodeProcess(IntPtr processHandle, out uint exitCode);
 
     [DllImport("kernel32.dll", SetLastError = true)]
-    private static extern bool GetExitCodeProcess(SafeFileHandle processHandle, out uint exitCode);
-
-    [DllImport("kernel32.dll", SetLastError = true)]
-    private static extern uint GetProcessId(SafeFileHandle processHandle);
+    private static extern uint GetProcessId(IntPtr processHandle);
 
     [DllImport("kernel32.dll", SetLastError = true)]
     private static extern bool TerminateProcess(IntPtr processHandle, uint exitCode);
@@ -944,24 +964,9 @@ internal static class WindowsNativeProcessInspection
         StringBuilder executablePath,
         ref uint size);
 
-    [DllImport("kernel32.dll", SetLastError = true, CharSet = CharSet.Unicode)]
-    private static extern bool QueryFullProcessImageName(
-        SafeFileHandle processHandle,
-        int flags,
-        StringBuilder executablePath,
-        ref uint size);
-
     [DllImport("kernel32.dll", SetLastError = true)]
     private static extern bool GetProcessTimes(
         IntPtr processHandle,
-        out long creationTime,
-        out long exitTime,
-        out long kernelTime,
-        out long userTime);
-
-    [DllImport("kernel32.dll", SetLastError = true)]
-    private static extern bool GetProcessTimes(
-        SafeFileHandle processHandle,
         out long creationTime,
         out long exitTime,
         out long kernelTime,

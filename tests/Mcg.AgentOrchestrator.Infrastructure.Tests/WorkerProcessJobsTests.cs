@@ -1809,13 +1809,15 @@ public sealed class WorkerProcessJobsTests : IDisposable
         try
         {
             var startInfo = CreateIsolatedDotnetProbeStartInfo(readyPath);
-            using (var negativeControl = OwnedProcessGroup.StartSuspendedContained(startInfo))
+            var negativeControl = OwnedProcessGroup.StartSuspendedContained(startInfo);
+            var negativeControlProcessId = negativeControl.Process.Id;
+            using (negativeControl)
             {
                 var mainModuleFailure = Assert.Throws<Win32Exception>(
                     () => _ = negativeControl.Process.MainModule?.FileName);
                 Assert.Equal(299, mainModuleFailure.NativeErrorCode);
 
-                var nativeIdentity = negativeControl.ReadLifecycleIdentity();
+                var nativeIdentity = negativeControl.ReadLifecycleIdentity(negativeControl.Process.Id);
                 Assert.Equal(ProcessInspectionStatus.Available, nativeIdentity.Status);
                 Assert.NotNull(nativeIdentity.StartedAt);
                 Assert.False(string.IsNullOrWhiteSpace(nativeIdentity.ExecutablePath));
@@ -1823,6 +1825,9 @@ public sealed class WorkerProcessJobsTests : IDisposable
                 negativeControl.Group.Kill();
                 Assert.True(negativeControl.WaitForOwnedExit(TimeSpan.FromSeconds(5)));
             }
+            var closedHandleIdentity = negativeControl.ReadLifecycleIdentity(negativeControlProcessId);
+            Assert.Equal(ProcessInspectionStatus.NativeFailure, closedHandleIdentity.Status);
+            Assert.Equal("process-handle-validation", closedHandleIdentity.Operation);
 
             var registrationStarted = Stopwatch.GetTimestamp();
             child = WorkerProcessJobs.StartRegisteredOwnedOrThrow(
@@ -1841,14 +1846,19 @@ public sealed class WorkerProcessJobsTests : IDisposable
 
             Assert.True(File.Exists(readyPath), "Suspended child did not publish its readiness sentinel after resume.");
             var identity = Assert.IsType<SpawnProcessIdentity>(child.Identity);
+            Assert.Equal(1, child.IdentityReadAttempts);
             Assert.Equal(child.Id, identity.ProcessId);
             Assert.Equal(entry.ProcessStartedAt, identity.StartedAt);
             Assert.Equal(entry.ImagePath, identity.ImagePath, ignoreCase: true);
+            Assert.Equal(
+                SpawnTrackedProcessStatus.LiveMatch,
+                SpawnProcessIdentityReader.EvaluateTrackedProcess(entry, out var observedProcess, out _));
+            Assert.IsType<Process>(observedProcess).Dispose();
             Assert.True(
                 entry.RegisteredAt <= File.GetLastWriteTimeUtc(readyPath),
                 $"Registration {entry.RegisteredAt:O} must precede readiness {File.GetLastWriteTimeUtc(readyPath):O}.");
             Console.WriteLine(
-                $"suspended-registration-receipt pid={child.Id} identity_attempts=1 " +
+                $"suspended-registration-receipt pid={child.Id} identity_attempts={child.IdentityReadAttempts} " +
                 $"elapsed_ms={registrationElapsed.TotalMilliseconds:F3} registered_at={entry.RegisteredAt:O} " +
                 $"ready_at={File.GetLastWriteTimeUtc(readyPath):O} image={Path.GetFileName(entry.ImagePath)}");
         }
@@ -2317,32 +2327,30 @@ public sealed class WorkerProcessJobsTests : IDisposable
     private static ProcessStartInfo CreateIsolatedDotnetProbeStartInfo(string readyPath)
     {
         var assemblyDirectory = new DirectoryInfo(Path.GetDirectoryName(typeof(WorkerProcessJobsTests).Assembly.Location)!);
-        var configurationDirectory = assemblyDirectory.Parent;
-        var binDirectory = configurationDirectory?.Parent;
-        var testProjectDirectory = binDirectory?.Parent;
+        var parentDirectory = assemblyDirectory.Parent;
         var probeAssemblyName = "Mcg.AgentOrchestrator.IsolatedDotnetProbe.dll";
         var candidates = new List<string>
         {
             Path.Combine(assemblyDirectory.FullName, probeAssemblyName)
         };
-        if (testProjectDirectory is not null && configurationDirectory is not null)
+        if (parentDirectory?.Parent?.Parent is { } testProjectDirectory)
         {
             candidates.Add(Path.Combine(
                 testProjectDirectory.FullName,
                 "Fixtures",
                 "IsolatedDotnetProbe",
                 "bin",
-                configurationDirectory.Name,
+                parentDirectory.Name,
                 assemblyDirectory.Name,
                 probeAssemblyName));
         }
 
-        if (binDirectory?.Parent is { } artifactsBin && configurationDirectory is not null)
+        if (parentDirectory?.Parent is { } projectOutputRoot)
         {
             candidates.Add(Path.Combine(
-                artifactsBin.FullName,
+                projectOutputRoot.FullName,
                 "Mcg.AgentOrchestrator.IsolatedDotnetProbe",
-                configurationDirectory.Name,
+                assemblyDirectory.Name,
                 probeAssemblyName));
         }
 

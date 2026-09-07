@@ -29,6 +29,7 @@ internal sealed class RegisteredJob
         SafeFileHandle? DuplicateAccountingHandle,
         WorkerProcessJobAccounting? RegistrationSnapshot,
         SpawnProcessIdentity? Identity = null,
+        int IdentityReadAttempts = 0,
         bool RequiresDurableDetach = false,
         object? LifecycleAuthority = null)
     {
@@ -36,6 +37,7 @@ internal sealed class RegisteredJob
         this.DuplicateAccountingHandle = DuplicateAccountingHandle;
         this.RegistrationSnapshot = RegistrationSnapshot;
         this.Identity = Identity;
+        this.IdentityReadAttempts = IdentityReadAttempts;
         this.RequiresDurableDetach = RequiresDurableDetach;
         this.LifecycleAuthority = LifecycleAuthority;
     }
@@ -44,6 +46,7 @@ internal sealed class RegisteredJob
     internal SafeFileHandle? DuplicateAccountingHandle { get; }
     internal WorkerProcessJobAccounting? RegistrationSnapshot { get; }
     internal SpawnProcessIdentity? Identity { get; }
+    internal int IdentityReadAttempts { get; }
     internal bool RequiresDurableDetach { get; }
     internal object? LifecycleAuthority { get; }
     internal bool RequiresOwnedRelease => LifecycleAuthority is not null;
@@ -92,6 +95,7 @@ internal sealed class RegisteredOwnedProcess : IDisposable
     internal StreamReader StandardError => Process.StandardError;
     internal OwnedChildStartMetadata StartMetadata { get; }
     internal SpawnProcessIdentity? Identity => _registration.Identity;
+    internal int IdentityReadAttempts => _registration.IdentityReadAttempts;
     internal SpawnProcessIdentity? TryReadDirectChildIdentity() =>
         WorkerProcessJobs.TryReadDirectChildIdentity(_processId, _registration.Group);
     internal bool HasOpenNativeHandle =>
@@ -861,6 +865,7 @@ public static class WorkerProcessJobs
         {
             group ??= (attachProcess ?? OwnedProcessGroup.Attach)(process);
             SpawnProcessIdentity? victimIdentity = null;
+            var victimIdentityReadAttempts = 0;
             SpawnProcessIdentity? ownerIdentity = null;
             var durableRegistrationAvailable = registry is not null;
             if (registry is not null)
@@ -868,6 +873,7 @@ public static class WorkerProcessJobs
                 failureStage = "victim-identity-read";
                 var victimRead = readVictimIdentity(process);
                 victimIdentity = victimRead.Identity;
+                victimIdentityReadAttempts = victimRead.Attempts;
                 if (victimIdentity is null)
                 {
                     registrationFailure = BuildRegistrationDegradation(
@@ -905,6 +911,7 @@ public static class WorkerProcessJobs
                 duplicate,
                 snapshot,
                 victimIdentity,
+                victimIdentityReadAttempts,
                 RequiresDurableDetach: registry is not null && durableRegistrationAvailable,
                 LifecycleAuthority: lifecycleAuthority);
             if (Jobs.TryAdd(process.Id, registeredJob))
@@ -1223,7 +1230,7 @@ public static class WorkerProcessJobs
         ArgumentNullException.ThrowIfNull(launch);
         return process =>
         {
-            var read = launch.ReadLifecycleIdentity();
+            var read = launch.ReadLifecycleIdentity(process.Id);
             var evidence = $"status={read.Status.ToString().ToLowerInvariant()} attempts=1 " +
                 $"source={read.Operation} native_error_code={read.NativeError.ToString(CultureInfo.InvariantCulture)}";
             return read.Status == ProcessInspectionStatus.Available &&

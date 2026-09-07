@@ -448,6 +448,11 @@ internal static class SpawnProcessIdentityReader
             var recorded = new SpawnProcessIdentity(entry.ProcessId, entry.ProcessStartedAt, entry.ImagePath);
             var live = TryRead(process, out var identity) ? identity : null;
             var status = EvaluateRecordedIdentity(recorded, live, out evidence);
+            if (status != SpawnTrackedProcessStatus.LiveMatch &&
+                TryReadNativeLifecycleIdentity(process) is { } nativeIdentity)
+            {
+                status = EvaluateRecordedIdentity(recorded, nativeIdentity, out evidence);
+            }
             if (status != SpawnTrackedProcessStatus.LiveMatch)
             {
                 process.Dispose();
@@ -470,6 +475,21 @@ internal static class SpawnProcessIdentityReader
             process = null;
             return SpawnTrackedProcessStatus.Unknown;
         }
+    }
+
+    private static SpawnProcessIdentity? TryReadNativeLifecycleIdentity(Process process)
+    {
+        if (!OperatingSystem.IsWindows())
+        {
+            return null;
+        }
+
+        var read = WindowsNativeProcessInspection.ReadLifecycleIdentity(process.Id, process.SafeHandle);
+        return read.Status == ProcessInspectionStatus.Available &&
+               read.StartedAt is { } startedAt &&
+               !string.IsNullOrWhiteSpace(read.ExecutablePath)
+            ? new SpawnProcessIdentity(process.Id, startedAt, read.ExecutablePath)
+            : null;
     }
 
     public static SpawnOwnerLiveness EvaluateOwner(SpawnRegistryEntry entry, out string evidence)
