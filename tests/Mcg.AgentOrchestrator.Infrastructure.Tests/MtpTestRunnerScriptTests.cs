@@ -699,6 +699,48 @@ public sealed class MtpTestRunnerScriptTests
         Xunit.Assert.False(File.Exists(sandbox.ArgumentLog));
     }
 
+    [Xunit.Fact(DisplayName = "MTP_no_build_rejects_two_receipt_verified_candidates_with_different_assemblies")]
+    public void MtpNoBuildRejectsAmbiguousVerifiedCandidatesBeforeLaunch()
+    {
+        using var sandbox = ScriptSandbox.Create("success");
+        var declaredAssembly = sandbox.CreateManagedAssemblyPlaceholder();
+        var declaredDirectory = Path.GetDirectoryName(declaredAssembly)!;
+        var evaluatedDirectory = Path.Combine(
+            sandbox.Root,
+            "tests",
+            "Mcg.AgentOrchestrator.Infrastructure.Tests",
+            "bin",
+            "Debug",
+            "net10.0");
+        Directory.CreateDirectory(evaluatedDirectory);
+        foreach (var source in Directory.EnumerateFiles(declaredDirectory))
+        {
+            File.Copy(source, Path.Combine(evaluatedDirectory, Path.GetFileName(source)), overwrite: true);
+        }
+
+        var evaluatedAssembly = Path.Combine(evaluatedDirectory, Path.GetFileName(declaredAssembly));
+        using (var stream = new FileStream(evaluatedAssembly, FileMode.Append, FileAccess.Write, FileShare.None))
+        {
+            stream.WriteByte(0);
+        }
+        var receiptPath = Path.Combine(evaluatedDirectory, ".mcg-build-receipt.txt");
+        var receipt = File.ReadAllText(receiptPath)
+            .Replace(declaredDirectory + Path.DirectorySeparatorChar, evaluatedDirectory + Path.DirectorySeparatorChar, StringComparison.Ordinal)
+            .Replace(
+                $"K\tassemblySha256\t{Convert.ToHexString(System.Security.Cryptography.SHA256.HashData(File.ReadAllBytes(declaredAssembly)))}",
+                $"K\tassemblySha256\t{Convert.ToHexString(System.Security.Cryptography.SHA256.HashData(File.ReadAllBytes(evaluatedAssembly)))}",
+                StringComparison.Ordinal);
+        File.WriteAllText(receiptPath, receipt);
+
+        var result = sandbox.RunPartition("GoalWorktree", dotnetPath: sandbox.RunnerPath, runnerOverride: false);
+
+        Xunit.Assert.Equal(24, result.ExitCode);
+        Xunit.Assert.Contains("ambiguous verified no-build outputs", result.Stdout, StringComparison.OrdinalIgnoreCase);
+        Xunit.Assert.Contains(declaredDirectory, result.Stdout, StringComparison.OrdinalIgnoreCase);
+        Xunit.Assert.Contains(evaluatedDirectory, result.Stdout, StringComparison.OrdinalIgnoreCase);
+        Xunit.Assert.False(File.Exists(sandbox.ArgumentLog), "The runner must not launch an ambiguous build output.");
+    }
+
     [Xunit.Fact(DisplayName = "MTP_no_build_rejects_receipt_for_a_different_target_framework_before_launch")]
     public void MtpNoBuildRejectsReceiptForDifferentTargetFrameworkBeforeLaunch()
     {
@@ -1234,6 +1276,11 @@ public sealed class MtpTestRunnerScriptTests
                             TargetPath = '{{Path.Combine(root, "tests", "Mcg.AgentOrchestrator.Infrastructure.Tests", "bin", "Debug", "net10.0", "Mcg.AgentOrchestrator.Infrastructure.Tests.dll")}}'
                             TargetFramework = 'net10.0'
                             RuntimeIdentifier = ''
+                        }
+                        Items = @{
+                            Compile = @(
+                                @{ Identity = '{{Path.Combine(root, "bin", "Mcg.AgentOrchestrator.Infrastructure.Tests", "Debug", "receipt-source.cs")}}' }
+                            )
                         }
                     } | ConvertTo-Json -Compress
                     exit 0

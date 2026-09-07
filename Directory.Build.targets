@@ -12,7 +12,8 @@
     </PropertyGroup>
 
     <ItemGroup>
-      <_McgReceiptSources Include="@(Compile)" />
+      <_McgReceiptSources Include="@(Compile)"
+                          Condition="$([System.String]::Copy('%(Compile.FullPath)').StartsWith('$(_McgReceiptRepositoryRoot)')) and !$([System.String]::Copy('%(Compile.FullPath)').Contains('\obj\'))" />
       <_McgReceiptOutputFiles Include="$(TargetPath)">
         <Kind>assembly</Kind>
       </_McgReceiptOutputFiles>
