@@ -104,6 +104,13 @@ public sealed class TempRootJanitorDeleteTests
 
                 inside.Close();
                 Assert.Empty(tracker.FindWithin(root));
+
+                inside.Open();
+                using var command = inside.CreateCommand();
+                command.CommandText = "SELECT 1";
+                Assert.Equal(1L, command.ExecuteScalar());
+                var reopened = Assert.Single(tracker.FindWithin(root));
+                Assert.Equal(open.Id, reopened.Id);
             }
 
             Assert.Empty(tracker.FindWithin(root));
@@ -112,6 +119,30 @@ public sealed class TempRootJanitorDeleteTests
         {
             TempRootJanitor.DeleteTreeWithRetry(root);
             TempRootJanitor.DeleteTreeWithRetry(outsideRoot);
+        }
+    }
+
+    [Fact]
+    public void StateDbTrackerDoesNotKeepAnOpenConnectionAlive()
+    {
+        var root = Path.Combine(Path.GetTempPath(), $"state-db-tracker-collection-{Guid.NewGuid():N}");
+        Directory.CreateDirectory(root);
+
+        try
+        {
+            using var tracker = new AssemblyTempRootCleanupFixture.StateDbOpenConnectionTracker();
+            var connectionReference = OpenTrackedConnectionWithoutRetainingIt(root, tracker);
+
+            GC.Collect();
+            GC.WaitForPendingFinalizers();
+            GC.Collect();
+
+            Assert.False(connectionReference.TryGetTarget(out _));
+            Assert.Empty(tracker.FindWithin(root));
+        }
+        finally
+        {
+            TempRootJanitor.DeleteTreeWithRetry(root);
         }
     }
 
@@ -126,15 +157,29 @@ public sealed class TempRootJanitorDeleteTests
         StateDbConnectionFactory.ConnectionOpenedForDiagnostics += ThrowingObserver;
         try
         {
+            using var tracker = new AssemblyTempRootCleanupFixture.StateDbOpenConnectionTracker();
             using var connection = StateDbConnectionFactory.Open(
                 databasePath,
                 StateDbConnectionProfile.ReadWrite);
             Assert.Equal(System.Data.ConnectionState.Open, connection.State);
+            Assert.Single(tracker.FindWithin(root));
         }
         finally
         {
             StateDbConnectionFactory.ConnectionOpenedForDiagnostics -= ThrowingObserver;
             TempRootJanitor.DeleteTreeWithRetry(root);
         }
+    }
+
+    [System.Runtime.CompilerServices.MethodImpl(System.Runtime.CompilerServices.MethodImplOptions.NoInlining)]
+    private static WeakReference<Microsoft.Data.Sqlite.SqliteConnection> OpenTrackedConnectionWithoutRetainingIt(
+        string root,
+        AssemblyTempRootCleanupFixture.StateDbOpenConnectionTracker tracker)
+    {
+        var connection = StateDbConnectionFactory.Open(
+            Path.Combine(root, "state.db"),
+            StateDbConnectionProfile.ReadWrite);
+        Assert.Single(tracker.FindWithin(root));
+        return new WeakReference<Microsoft.Data.Sqlite.SqliteConnection>(connection);
     }
 }

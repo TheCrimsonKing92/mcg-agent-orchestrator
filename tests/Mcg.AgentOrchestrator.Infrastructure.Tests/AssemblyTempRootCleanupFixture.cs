@@ -1,4 +1,3 @@
-using System.Collections.Concurrent;
 using System.Data;
 using Microsoft.Data.Sqlite;
 using Mcg.AgentOrchestrator.Infrastructure;
@@ -44,9 +43,10 @@ public sealed class AssemblyTempRootCleanupFixture : IAsyncDisposable
 
     internal sealed class StateDbOpenConnectionTracker : IDisposable
     {
-        private readonly ConcurrentDictionary<int, OpenConnection> openConnections = new();
+        private readonly object gate = new();
+        private readonly Dictionary<int, TrackedConnection> trackedConnections = [];
         private int nextConnectionId;
-        private int disposed;
+        private bool disposed;
 
         public StateDbOpenConnectionTracker()
         {
@@ -56,55 +56,86 @@ public sealed class AssemblyTempRootCleanupFixture : IAsyncDisposable
         internal IReadOnlyList<OpenConnection> FindWithin(string root)
         {
             var prefix = Path.TrimEndingDirectorySeparator(Path.GetFullPath(root)) + Path.DirectorySeparatorChar;
-            return openConnections.Values
-                .Where(candidate => candidate.DatabasePath.StartsWith(prefix, StringComparison.OrdinalIgnoreCase))
-                .OrderBy(candidate => candidate.Id)
-                .ToArray();
+            lock (gate)
+            {
+                if (disposed)
+                {
+                    return [];
+                }
+
+                var deadConnectionIds = new List<int>();
+                var openConnections = new List<OpenConnection>();
+                foreach (var (id, tracked) in trackedConnections)
+                {
+                    if (!tracked.Connection.TryGetTarget(out var connection))
+                    {
+                        deadConnectionIds.Add(id);
+                        continue;
+                    }
+
+                    if (connection.State == ConnectionState.Open &&
+                        tracked.Diagnostic.DatabasePath.StartsWith(prefix, StringComparison.OrdinalIgnoreCase))
+                    {
+                        openConnections.Add(tracked.Diagnostic);
+                    }
+                }
+
+                foreach (var id in deadConnectionIds)
+                {
+                    trackedConnections.Remove(id);
+                }
+
+                return openConnections
+                    .OrderBy(candidate => candidate.Id)
+                    .ToArray();
+            }
         }
 
         public void Dispose()
         {
-            if (Interlocked.Exchange(ref disposed, 1) != 0)
+            lock (gate)
             {
-                return;
+                if (disposed)
+                {
+                    return;
+                }
+
+                disposed = true;
+                trackedConnections.Clear();
             }
 
             StateDbConnectionFactory.ConnectionOpenedForDiagnostics -= ObserveConnection;
-            openConnections.Clear();
         }
 
         private void ObserveConnection(SqliteConnection connection, string databasePath)
         {
-            if (Volatile.Read(ref disposed) != 0)
-            {
-                return;
-            }
-
-            var id = Interlocked.Increment(ref nextConnectionId);
             var creationSite = Environment.StackTrace
                 .Split([Environment.NewLine], StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries)
                 .FirstOrDefault(line =>
                     line.Contains("Mcg.AgentOrchestrator.Infrastructure.Tests", StringComparison.Ordinal) &&
                     !line.Contains(nameof(StateDbOpenConnectionTracker), StringComparison.Ordinal))
                 ?? "unavailable";
-            openConnections[id] = new OpenConnection(
-                id,
-                databasePath,
-                Environment.CurrentManagedThreadId,
-                creationSite);
-
-            void Remove(object? sender, EventArgs args) => RemoveConnection(id);
-            connection.Disposed += Remove;
-            connection.StateChange += (sender, args) =>
+            lock (gate)
             {
-                if (args.CurrentState == ConnectionState.Closed)
+                if (disposed)
                 {
-                    RemoveConnection(id);
+                    return;
                 }
-            };
+
+                var id = ++nextConnectionId;
+                trackedConnections[id] = new TrackedConnection(
+                    new WeakReference<SqliteConnection>(connection),
+                    new OpenConnection(
+                        id,
+                        databasePath,
+                        Environment.CurrentManagedThreadId,
+                        creationSite));
+            }
         }
 
-        private void RemoveConnection(int id) => openConnections.TryRemove(id, out _);
+        private sealed record TrackedConnection(
+            WeakReference<SqliteConnection> Connection,
+            OpenConnection Diagnostic);
     }
 
     internal sealed record OpenConnection(int Id, string DatabasePath, int ThreadId, string CreationSite)
