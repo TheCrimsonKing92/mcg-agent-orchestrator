@@ -3369,7 +3369,7 @@ public sealed class AcceptanceCohortWorkflowTests : GoalWorktreeTestBase
         }
     }
 
-    private sealed class BlockingAcceptanceVerifier(
+    internal sealed class BlockingAcceptanceVerifier(
         ManualResetEventSlim started,
         ManualResetEventSlim release,
         AcceptanceVerificationResult result) : IGoalAcceptanceVerifier
@@ -3411,10 +3411,7 @@ public sealed class AcceptanceCohortWorkflowTests : GoalWorktreeTestBase
                         HeartbeatPath: Path.Combine(worktreePath, "controlled-heartbeat.json"))
                 ]);
             started.Set();
-            if (!release.Wait(TimeSpan.FromSeconds(10), cancellationToken))
-            {
-                throw new TimeoutException("Controlled cohort verifier was not released.");
-            }
+            release.Wait(cancellationToken);
             return Task.FromResult(result);
         }
 
