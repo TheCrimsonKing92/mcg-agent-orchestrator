@@ -497,6 +497,10 @@ public sealed partial class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
     private static readonly AsyncLocal<ManagedRunEnvironmentScope?> CurrentManagedRunEnvironmentScope = new();
     internal static TimeSpan HeartbeatInterval { get; set; } = TimeSpan.FromSeconds(5);
     internal static TimeSpan ProgressInterval { get; set; } = TimeSpan.FromSeconds(30);
+    // Once output has been consumed, carry one publication deadline across fast reads. This bounds
+    // external file visibility to this interval plus flush duration, and heartbeat observation to
+    // one additional HeartbeatInterval. Infinite/non-positive values preserve terminal-only flushing.
+    internal static TimeSpan CapturePublicationInterval { get; set; } = TimeSpan.FromSeconds(1);
     internal static TimeSpan TransientNoHolderBuildLockWaitWindow { get; set; } = TimeSpan.FromSeconds(75);
     internal static TimeSpan TransientNoHolderBuildLockPollInterval { get; set; } = TimeSpan.FromMilliseconds(250);
     internal static int TransientNoHolderBuildLockMaxRetryCycles { get; set; } = 2;
@@ -8997,6 +9001,9 @@ public sealed partial class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
         long writtenBytes = 0;
         long persistedBytes = 0;
         var limitReached = false;
+        var publicationPending = false;
+        CancellationTokenSource? publicationDelayCancellation = null;
+        Task? publicationDelay = null;
         await using (var destination = new FileStream(
             path,
             FileMode.Create,
@@ -9009,14 +9016,48 @@ public sealed partial class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
             {
                 while (true)
                 {
+                    if (publicationPending && publicationDelay?.IsCompleted == true)
+                    {
+                        await destination.FlushAsync(cancellationToken).ConfigureAwait(false);
+                        publicationPending = false;
+                        publicationDelayCancellation.Cancel();
+                        publicationDelayCancellation.Dispose();
+                        publicationDelayCancellation = null;
+                        publicationDelay = null;
+                    }
+
                     int read;
+                    var readTask = source.ReadAsync(buffer, cancellationToken).AsTask();
                     try
                     {
-                        read = await source.ReadAsync(buffer, cancellationToken).ConfigureAwait(false);
+                        if (publicationPending &&
+                            publicationDelay is not null &&
+                            !readTask.IsCompleted &&
+                            ReferenceEquals(
+                                await Task.WhenAny(readTask, publicationDelay).ConfigureAwait(false),
+                                publicationDelay))
+                        {
+                            await destination.FlushAsync(cancellationToken).ConfigureAwait(false);
+                            publicationPending = false;
+                            publicationDelayCancellation!.Cancel();
+                            publicationDelayCancellation.Dispose();
+                            publicationDelayCancellation = null;
+                            publicationDelay = null;
+                        }
+
+                        try
+                        {
+                            read = await readTask.ConfigureAwait(false);
+                        }
+                        catch (IOException ex) when (IsClosedPipe(ex))
+                        {
+                            break;
+                        }
                     }
-                    catch (IOException ex) when (IsClosedPipe(ex))
+                    catch
                     {
-                        break;
+                        ObservePotentialTaskFailure(readTask);
+                        throw;
                     }
                     if (read == 0)
                         break;
@@ -9030,6 +9071,20 @@ public sealed partial class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
                         await destination.WriteAsync(buffer.AsMemory(0, persist), cancellationToken)
                             .ConfigureAwait(false);
                         persistedBytes += persist;
+                        if (!publicationPending)
+                        {
+                            publicationPending = true;
+                            var publicationInterval = CapturePublicationInterval;
+                            if (publicationInterval > TimeSpan.Zero &&
+                                publicationInterval != Timeout.InfiniteTimeSpan)
+                            {
+                                publicationDelayCancellation =
+                                    CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
+                                publicationDelay = Task.Delay(
+                                    publicationInterval,
+                                    publicationDelayCancellation.Token);
+                            }
+                        }
                     }
 
                     if (!limitReached && writtenBytes >= limitBytes)
@@ -9051,6 +9106,14 @@ public sealed partial class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
                 // Closing the pipe reader is the reliable cancellation mechanism for synchronous
                 // redirected FileStreams on Windows; it can surface either exception.
             }
+            finally
+            {
+                if (publicationDelayCancellation is not null)
+                {
+                    publicationDelayCancellation.Cancel();
+                    publicationDelayCancellation.Dispose();
+                }
+            }
 
             await destination.FlushAsync(CancellationToken.None).ConfigureAwait(false);
         }
@@ -9065,6 +9128,21 @@ public sealed partial class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
         }
 
         return new CaptureLimitResult(path, writtenBytes, limitReached);
+    }
+
+    private static void ObservePotentialTaskFailure(Task task)
+    {
+        if (task.IsCompleted)
+        {
+            _ = task.Exception;
+            return;
+        }
+
+        _ = task.ContinueWith(
+            static completed => _ = completed.Exception,
+            CancellationToken.None,
+            TaskContinuationOptions.ExecuteSynchronously | TaskContinuationOptions.OnlyOnFaulted,
+            TaskScheduler.Default);
     }
 
     private static bool IsClosedPipe(IOException exception)
