@@ -255,7 +255,21 @@ internal sealed class TrialHarnessComparison(
             }
 
             using var launch = session.Start(command);
-            var exited = launch.WaitForExit(ToTimeoutMilliseconds(timeout));
+            var waitCancelled = false;
+            bool exited;
+            try
+            {
+                exited = launch.WaitForExit(ToTimeoutMilliseconds(timeout));
+            }
+            catch (OperationCanceledException ex)
+            {
+                exited = false;
+                waitCancelled = true;
+                state.Outcome = TrialHarnessOutcome.LaunchFailed;
+                state.Diagnostics.Add(ex.Message);
+                failures.Add($"Harness '{state.Spec.Name}' launch failed: {ex.Message}");
+            }
+
             if (exited)
             {
                 state.ExitCode = launch.ExitCode;
@@ -296,7 +310,7 @@ internal sealed class TrialHarnessComparison(
                 return;
             }
 
-            if (exited)
+            if (!waitCancelled && exited)
             {
                 if (state.WorkerResult.Status == TrialWorkerResultStatus.Valid)
                 {
@@ -310,7 +324,7 @@ internal sealed class TrialHarnessComparison(
                     failures.Add(failure);
                 }
             }
-            else
+            else if (!waitCancelled)
             {
                 state.Outcome = TrialHarnessOutcome.TimedOut;
                 var failure = $"Harness '{state.Spec.Name}' timed out after {timeout}.";

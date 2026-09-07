@@ -402,7 +402,15 @@ public sealed class TrialHarnessComparisonTests
         var alpha = result.Harnesses.Single(item => item.Name == "alpha");
         Xunit.Assert.False(result.Succeeded);
         Xunit.Assert.Equal(TrialHarnessOutcome.LaunchFailed, alpha.Outcome);
-        Xunit.Assert.Null(alpha.StandardOutput);
+        Xunit.Assert.NotNull(alpha.StandardOutput);
+        Xunit.Assert.NotNull(alpha.StandardError);
+        Xunit.Assert.True(alpha.StandardOutput.ContentAvailable);
+        Xunit.Assert.True(alpha.StandardError.ContentAvailable);
+        Xunit.Assert.False(alpha.StandardOutput.SourceStreamComplete);
+        Xunit.Assert.False(alpha.StandardError.SourceStreamComplete);
+        Xunit.Assert.Contains("WORKER_RESULT:", File.ReadAllText(alpha.StandardOutput.RetainedPath!), StringComparison.Ordinal);
+        Xunit.Assert.Equal("alpha stderr", File.ReadAllText(alpha.StandardError.RetainedPath!));
+        Xunit.Assert.Equal(TrialWorkerResultStatus.Valid, alpha.WorkerResult.Status);
         Xunit.Assert.Contains(alpha.Diagnostics, item => item.Contains("injected cancellation", StringComparison.Ordinal));
         Xunit.Assert.All(host.RootPaths, root => Xunit.Assert.False(Directory.Exists(root)));
     }
