@@ -50,13 +50,21 @@ public sealed class GoalIntakeRequestStoreTests
 
         var first = Start();
         var second = Start();
-        Xunit.Assert.True(ready.Wait(TimeSpan.FromSeconds(15)), "Both reservation attempts did not reach the event gate.");
-        release.Set();
-        var results = await Task.WhenAll(first, second).WaitAsync(TimeSpan.FromSeconds(15));
+        try
+        {
+            Xunit.Assert.True(ready.Wait(TimeSpan.FromSeconds(15)), "Both reservation attempts did not reach the event gate.");
+            release.Set();
+            var results = await Task.WhenAll(first, second).WaitAsync(TimeSpan.FromSeconds(15));
 
-        Xunit.Assert.Single(results, result => result.Kind == GoalIntakeReservationKind.Acquired);
-        Xunit.Assert.Single(results, result => result.Kind == GoalIntakeReservationKind.Replay);
-        Xunit.Assert.Equal(results[0].Record, results[1].Record);
+            Xunit.Assert.Single(results, result => result.Kind == GoalIntakeReservationKind.Acquired);
+            Xunit.Assert.Single(results, result => result.Kind == GoalIntakeReservationKind.Replay);
+            Xunit.Assert.Equal(results[0].Record, results[1].Record);
+        }
+        finally
+        {
+            release.Set();
+            await Task.WhenAll(first, second).WaitAsync(TimeSpan.FromSeconds(15));
+        }
     }
 
     [Xunit.Fact]

@@ -1,0 +1,15 @@
+<?xml version="1.0" encoding="utf-8"?>
+<TestRun id="770d8af6-5917-4693-b04e-c3b4339a31aa" name="MTP xUnit.net v3 green fixture" runUser="runner" xmlns="http://microsoft.com/schemas/VisualStudio/TeamTest/2010">
+  <Results>
+    <UnitTestResult executionId="689c68e4-831d-4be8-9627-86643524dd82" testId="eb0efdd0-c7ea-4076-a264-80ab27f86487" testName="Representative passing test" outcome="Passed" />
+  </Results>
+  <TestDefinitions>
+    <UnitTest name="Representative passing test" storage="mcg.agentorchestrator.infrastructure.tests.dll" id="eb0efdd0-c7ea-4076-a264-80ab27f86487">
+      <Execution id="689c68e4-831d-4be8-9627-86643524dd82" />
+      <TestMethod codeBase="Mcg.AgentOrchestrator.Infrastructure.Tests.dll" adapterTypeName="executor://xunit/V3" className="Mcg.AgentOrchestrator.Infrastructure.Tests.RepresentativeTests" name="Passes" />
+    </UnitTest>
+  </TestDefinitions>
+  <ResultSummary outcome="Completed">
+    <Counters total="373" executed="373" passed="373" failed="0" error="0" timeout="0" aborted="0" inconclusive="0" passedButRunAborted="0" notRunnable="0" notExecuted="0" disconnected="0" warning="0" completed="373" inProgress="0" pending="0" />
+  </ResultSummary>
+</TestRun>

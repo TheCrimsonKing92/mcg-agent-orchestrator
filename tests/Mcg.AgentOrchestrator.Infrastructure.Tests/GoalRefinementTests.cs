@@ -213,7 +213,8 @@ public sealed class GoalRefinementTests
 
         static int ReadCommittedOutboxCount(string databasePath, string messageId)
         {
-            using var connection = new SqliteConnection($"Data Source={databasePath};Mode=ReadOnly");
+            using var connection = new SqliteConnection(
+                $"Data Source={databasePath};Mode=ReadOnly;Pooling=False");
             connection.Open();
             using var command = connection.CreateCommand();
             command.CommandText = "SELECT COUNT(*) FROM state_outbox WHERE id = $id";

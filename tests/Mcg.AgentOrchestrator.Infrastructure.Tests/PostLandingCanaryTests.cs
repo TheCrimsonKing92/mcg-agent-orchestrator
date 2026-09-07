@@ -1505,13 +1505,17 @@ public sealed class PostLandingCanaryTests : CliCommandTestBase
                 $"post-landing-canary-{landingSha}-*.err.log");
             Assert.NotEmpty(stdoutLogs);
             Assert.NotEmpty(stderrLogs);
+            var stdoutContents = await Task.WhenAll(stdoutLogs.Select(path =>
+                GoalAcceptanceVerifier.ReadCapturedFileWithRetryAsync(path, captureLimitReached: false)));
+            var stderrContents = await Task.WhenAll(stderrLogs.Select(path =>
+                GoalAcceptanceVerifier.ReadCapturedFileWithRetryAsync(path, captureLimitReached: false)));
             if (!OperatingSystem.IsWindows())
             {
-                Assert.Contains(stdoutLogs, path =>
-                    File.ReadAllText(path).Contains("induced canary stdout", StringComparison.Ordinal));
+                Assert.Contains(stdoutContents, content =>
+                    content.Contains("induced canary stdout", StringComparison.Ordinal));
             }
-            Assert.Contains(stderrLogs, path =>
-                File.ReadAllText(path).Contains(expectedStderr, StringComparison.OrdinalIgnoreCase));
+            Assert.Contains(stderrContents, content =>
+                content.Contains(expectedStderr, StringComparison.OrdinalIgnoreCase));
         }
         finally
         {

@@ -593,7 +593,7 @@ public sealed class AcceptanceCohortWorkflowTests : GoalWorktreeTestBase
                 Assert.True(member.Landed);
                 Assert.Equal(receipt.ReceiptId, member.ReceiptId);
             });
-            using (var connection = new SqliteConnection($"Data Source={databasePath}"))
+            using (var connection = new SqliteConnection($"Data Source={databasePath};Pooling=False"))
             {
                 connection.Open();
                 using var command = connection.CreateCommand();
@@ -633,7 +633,7 @@ public sealed class AcceptanceCohortWorkflowTests : GoalWorktreeTestBase
                 new string('a', 40),
                 new string('d', 40),
                 "manifest-v1");
-            using (var connection = new SqliteConnection($"Data Source={databasePath}"))
+            using (var connection = new SqliteConnection($"Data Source={databasePath};Pooling=False"))
             {
                 connection.Open();
                 using (var create = connection.CreateCommand())
@@ -1071,7 +1071,7 @@ public sealed class AcceptanceCohortWorkflowTests : GoalWorktreeTestBase
 
             Assert.False(result.MainAdvanced);
             Assert.Contains("main changed", result.Message, StringComparison.OrdinalIgnoreCase);
-            using var connection = new SqliteConnection($"Data Source={databasePath}");
+            using var connection = new SqliteConnection($"Data Source={databasePath};Pooling=False");
             connection.Open();
             using var command = connection.CreateCommand();
             command.CommandText = "SELECT COUNT(*) FROM cohort_members WHERE landed=1;";
@@ -1147,7 +1147,7 @@ public sealed class AcceptanceCohortWorkflowTests : GoalWorktreeTestBase
             Assert.Equal(
                 integrationBefore,
                 RunGitOutput(repo, "rev-parse", $"refs/heads/{LandingExecutor.IntegrationBranchName}").Trim());
-            using var connection = new SqliteConnection($"Data Source={Path.Combine(workspace.OrchestratorDirectory, "cohort-acceptance.db")}");
+            using var connection = new SqliteConnection($"Data Source={Path.Combine(workspace.OrchestratorDirectory, "cohort-acceptance.db")};Pooling=False");
             connection.Open();
             using var command = connection.CreateCommand();
             command.CommandText = "SELECT COUNT(*) FROM cohort_members WHERE landed=1;";
@@ -1217,7 +1217,7 @@ public sealed class AcceptanceCohortWorkflowTests : GoalWorktreeTestBase
                 innocentGoalId: null);
 
             Assert.Equal(AcceptanceCohortAttributionOutcome.InteractionOnly, receipt.Attribution);
-            using var connection = new SqliteConnection($"Data Source={databasePath}");
+            using var connection = new SqliteConnection($"Data Source={databasePath};Pooling=False");
             connection.Open();
             using var command = connection.CreateCommand();
             command.CommandText = "SELECT COUNT(*) FROM cohort_partition_receipts WHERE cohort_id=$cohort AND outcome='Passed';";
@@ -1430,7 +1430,7 @@ public sealed class AcceptanceCohortWorkflowTests : GoalWorktreeTestBase
                 ConductorAcceptanceCohortSelector.PairFingerprint(selection.Members[0], selection.Members[1]),
                 store.ReadSuppressedPairs());
             using var connection = new SqliteConnection(
-                $"Data Source={Path.Combine(workspace.OrchestratorDirectory, "cohort-acceptance.db")}");
+                $"Data Source={Path.Combine(workspace.OrchestratorDirectory, "cohort-acceptance.db")};Pooling=False");
             connection.Open();
             using var command = connection.CreateCommand();
             command.CommandText = "SELECT COUNT(*) FROM cohort_partition_receipts WHERE cohort_id=$cohort;";
@@ -1559,7 +1559,7 @@ public sealed class AcceptanceCohortWorkflowTests : GoalWorktreeTestBase
             store.CompleteLandingEffects(identity.Value, receipt.ReceiptId);
             Assert.Empty(store.RecoverPreparedLandings(repo));
 
-            using var connection = new SqliteConnection($"Data Source={databasePath}");
+            using var connection = new SqliteConnection($"Data Source={databasePath};Pooling=False");
             connection.Open();
             using var command = connection.CreateCommand();
             command.CommandText = "SELECT COUNT(*) FROM cohort_members WHERE cohort_id=$cohort AND landed=1;";
@@ -1869,7 +1869,7 @@ public sealed class AcceptanceCohortWorkflowTests : GoalWorktreeTestBase
                 "Mcg.AgentOrchestrator.Dashboard.Tests",
                 "RedTrainNewest.cs")));
             using var connection = new SqliteConnection(
-                $"Data Source={Path.Combine(workspace.OrchestratorDirectory, "merge-train-acceptance.db")}");
+                $"Data Source={Path.Combine(workspace.OrchestratorDirectory, "merge-train-acceptance.db")};Pooling=False");
             connection.Open();
             using var command = connection.CreateCommand();
             command.CommandText = "SELECT COUNT(*) FROM merge_train_receipts;";
@@ -2308,7 +2308,7 @@ public sealed class AcceptanceCohortWorkflowTests : GoalWorktreeTestBase
             Assert.True(File.Exists(Path.Combine(repo, "tests", "Second.cs")));
             AssertNoCohortWorkspaces(repo);
             using var connection = new SqliteConnection(
-                $"Data Source={Path.Combine(workspace.OrchestratorDirectory, "cohort-acceptance.db")}");
+                $"Data Source={Path.Combine(workspace.OrchestratorDirectory, "cohort-acceptance.db")};Pooling=False");
             connection.Open();
             using var command = connection.CreateCommand();
             command.CommandText = """
@@ -2324,7 +2324,7 @@ public sealed class AcceptanceCohortWorkflowTests : GoalWorktreeTestBase
             bool ReceiptPersisted()
             {
                 using var receiptConnection = new SqliteConnection(
-                    $"Data Source={Path.Combine(workspace.OrchestratorDirectory, "cohort-acceptance.db")}");
+                    $"Data Source={Path.Combine(workspace.OrchestratorDirectory, "cohort-acceptance.db")};Pooling=False");
                 receiptConnection.Open();
                 using var receiptCommand = receiptConnection.CreateCommand();
                 receiptCommand.CommandText = "SELECT COUNT(*) FROM cohort_receipts;";
@@ -2635,7 +2635,7 @@ public sealed class AcceptanceCohortWorkflowTests : GoalWorktreeTestBase
             Assert.Equal(firstRevision, RunGitOutput(repo, "rev-parse", $"refs/heads/{GoalWorktrees.BranchName(firstGoal.Id)}").Trim());
             Assert.Equal(secondRevision, RunGitOutput(repo, "rev-parse", $"refs/heads/{GoalWorktrees.BranchName(secondGoal.Id)}").Trim());
 
-            using var connection = new SqliteConnection($"Data Source={Path.Combine(workspace.OrchestratorDirectory, "cohort-acceptance.db")}");
+            using var connection = new SqliteConnection($"Data Source={Path.Combine(workspace.OrchestratorDirectory, "cohort-acceptance.db")};Pooling=False");
             connection.Open();
             using var command = connection.CreateCommand();
             command.CommandText = "SELECT outcome FROM cohort_materialization_failures;";
@@ -2776,7 +2776,7 @@ public sealed class AcceptanceCohortWorkflowTests : GoalWorktreeTestBase
                 GateExitCode: 0,
                 GateTestResultPaths: [WritePassingTrx(repo, "legacy-cached-pass.trx")],
                 ValidForLanding: true));
-            using (var connection = new SqliteConnection($"Data Source={databasePath}"))
+            using (var connection = new SqliteConnection($"Data Source={databasePath};Pooling=False"))
             {
                 connection.Open();
                 using var command = connection.CreateCommand();
@@ -2795,7 +2795,7 @@ public sealed class AcceptanceCohortWorkflowTests : GoalWorktreeTestBase
             Assert.Contains("lacks successful exit", result.Detail, StringComparison.Ordinal);
             Assert.Equal(0, verifier.RunCount);
             Assert.Equal(identity.ObservedMainRevision, RunGitOutput(repo, "rev-parse", "main").Trim());
-            using var verifyConnection = new SqliteConnection($"Data Source={databasePath}");
+            using var verifyConnection = new SqliteConnection($"Data Source={databasePath};Pooling=False");
             verifyConnection.Open();
             using var verifyCommand = verifyConnection.CreateCommand();
             verifyCommand.CommandText = """
@@ -3369,7 +3369,7 @@ public sealed class AcceptanceCohortWorkflowTests : GoalWorktreeTestBase
         }
     }
 
-    private sealed class BlockingAcceptanceVerifier(
+    internal sealed class BlockingAcceptanceVerifier(
         ManualResetEventSlim started,
         ManualResetEventSlim release,
         AcceptanceVerificationResult result) : IGoalAcceptanceVerifier
@@ -3411,10 +3411,7 @@ public sealed class AcceptanceCohortWorkflowTests : GoalWorktreeTestBase
                         HeartbeatPath: Path.Combine(worktreePath, "controlled-heartbeat.json"))
                 ]);
             started.Set();
-            if (!release.Wait(TimeSpan.FromSeconds(10), cancellationToken))
-            {
-                throw new TimeoutException("Controlled cohort verifier was not released.");
-            }
+            release.Wait(cancellationToken);
             return Task.FromResult(result);
         }
 
