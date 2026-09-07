@@ -19,6 +19,8 @@ $script:MtpExitConfirmationSeconds = 10
 $script:MtpOutputDrainSeconds = 10
 $script:MtpClosureMarkerName = '.mcg-mtp-closure.json'
 $script:MtpClosureSchemaVersion = 1
+$script:MtpBuildReceiptName = '.mcg-build-receipt.txt'
+$script:MtpBuildReceiptSchemaVersion = 1
 $script:MtpClosureSnapshotAttempts = 3
 $script:MtpStartupHookSchemaVersion = 1
 $script:MtpStartupHookAssemblyName = 'Mcg.AgentOrchestrator.FaultDialogStartupHook.dll'
@@ -982,6 +984,104 @@ function Copy-MtpStableNoBuildClosure {
     throw "Could not create a stable sealed MTP closure for '$ProjectName'. $lastFailure"
 }
 
+function Get-MtpBuildReceiptPath {
+    param([Parameter(Mandatory = $true)][string]$Directory)
+
+    return Join-Path $Directory $script:MtpBuildReceiptName
+}
+
+function Read-MtpBuildReceipt {
+    param([Parameter(Mandatory = $true)][string]$Path)
+
+    if (-not (Test-Path -LiteralPath $Path -PathType Leaf)) {
+        throw "build receipt is missing: $Path"
+    }
+    $headers = @{}
+    $sources = [System.Collections.Generic.List[object]]::new()
+    try {
+        foreach ($line in @(Get-Content -LiteralPath $Path -ErrorAction Stop)) {
+            $parts = @([string]$line -split "`t", 4)
+            if ($parts.Count -eq 3 -and $parts[0] -eq 'K' -and -not [string]::IsNullOrWhiteSpace($parts[1]) -and -not $headers.ContainsKey($parts[1])) {
+                $headers[$parts[1]] = $parts[2]
+                continue
+            }
+            if ($parts.Count -eq 2 -and $parts[0] -eq 'K' -and $parts[1] -eq 'runtimeIdentifier' -and -not $headers.ContainsKey($parts[1])) {
+                $headers[$parts[1]] = ''
+                continue
+            }
+            if ($parts.Count -eq 4 -and $parts[0] -eq 'S' -and $parts[1] -eq 'source' -and -not [string]::IsNullOrWhiteSpace($parts[2])) {
+                $sources.Add([pscustomobject]@{ Path = $parts[2]; Sha256 = $parts[3] })
+                continue
+            }
+            throw "receipt line is malformed: '$line'"
+        }
+    }
+    catch {
+        throw "build receipt is unreadable at '$Path': $($_.Exception.Message)"
+    }
+    foreach ($required in @('schemaVersion', 'project', 'configuration', 'targetFramework', 'runtimeIdentifier', 'repositoryRoot', 'outputDirectory', 'assemblyLeaf', 'assemblySha256', 'pdbSha256')) {
+        if (-not $headers.ContainsKey($required) -or ($required -ne 'runtimeIdentifier' -and [string]::IsNullOrWhiteSpace([string]$headers[$required]))) {
+            throw "build receipt is missing required key '$required': $Path"
+        }
+    }
+    if ([string]$headers['schemaVersion'] -ne [string]$script:MtpBuildReceiptSchemaVersion) {
+        throw "build receipt has unsupported schemaVersion '$($headers['schemaVersion'])': $Path"
+    }
+    return [pscustomobject]@{ Path = $Path; Headers = $headers; Sources = $sources.ToArray() }
+}
+
+function Assert-MtpBuildReceipt {
+    param(
+        [Parameter(Mandatory = $true)][string]$Directory,
+        [Parameter(Mandatory = $true)][string]$ManagedAssemblyLeaf,
+        [Parameter(Mandatory = $true)][string]$RepositoryRoot,
+        [Parameter(Mandatory = $true)][string]$ProjectPath,
+        [Parameter(Mandatory = $true)][string]$Configuration
+    )
+
+    $repair = "dotnet build `"$ProjectPath`" --configuration $Configuration -p:McgIsolatedArtifactsPath=`"$RepositoryRoot`""
+    $receiptPath = Get-MtpBuildReceiptPath -Directory $Directory
+    try {
+        $receipt = Read-MtpBuildReceipt -Path $receiptPath
+        $expected = @{
+            project = [System.IO.Path]::GetFullPath($ProjectPath)
+            configuration = $Configuration
+            repositoryRoot = [System.IO.Path]::GetFullPath($RepositoryRoot).TrimEnd('\', '/') + [System.IO.Path]::DirectorySeparatorChar
+            outputDirectory = [System.IO.Path]::GetFullPath($Directory).TrimEnd('\', '/') + [System.IO.Path]::DirectorySeparatorChar
+            assemblyLeaf = $ManagedAssemblyLeaf
+        }
+        foreach ($key in $expected.Keys) {
+            if (-not ([string]$receipt.Headers[$key]).Equals([string]$expected[$key], [System.StringComparison]::OrdinalIgnoreCase)) {
+                throw "receipt key '$key' does not match: recorded='$($receipt.Headers[$key])' expected='$($expected[$key])'"
+            }
+        }
+        $assemblyPath = Join-Path $Directory $ManagedAssemblyLeaf
+        $pdbPath = [System.IO.Path]::ChangeExtension($assemblyPath, '.pdb')
+        foreach ($pair in @(@($assemblyPath, 'assemblySha256'), @($pdbPath, 'pdbSha256'))) {
+            if (-not (Test-Path -LiteralPath $pair[0] -PathType Leaf)) {
+                throw "receipt-bound file is missing: $($pair[0])"
+            }
+            $actual = Get-MtpSha256File -Path $pair[0]
+            if (-not $actual.Equals([string]$receipt.Headers[$pair[1]], [System.StringComparison]::OrdinalIgnoreCase)) {
+                throw "receipt $($pair[1]) mismatch: recorded='$($receipt.Headers[$pair[1]])' actual='$actual' path='$($pair[0])'"
+            }
+        }
+        foreach ($source in @($receipt.Sources)) {
+            if (-not (Test-Path -LiteralPath $source.Path -PathType Leaf)) {
+                throw "receipt source is missing or unverifiable: $($source.Path)"
+            }
+            $actual = Get-MtpSha256File -Path $source.Path
+            if (-not $actual.Equals([string]$source.Sha256, [System.StringComparison]::OrdinalIgnoreCase)) {
+                throw "receipt source checksum mismatch: path='$($source.Path)' recorded='$($source.Sha256)' actual='$actual'"
+            }
+        }
+        return $receipt
+    }
+    catch {
+        throw "No-build build receipt verification failed for '$Directory': $($_.Exception.Message). Repair: $repair"
+    }
+}
+
 function Get-MtpSha256Text {
     param([Parameter(Mandatory = $true)][string]$Text)
 
@@ -1319,6 +1419,71 @@ function Resolve-MtpManagedAssemblyPath {
         throw "MTP managed assembly path for '$($Invocation.project)' is invalid: $resolved"
     }
     return $resolved
+}
+
+function Resolve-MtpEvaluatedTargetPath {
+    param(
+        [Parameter(Mandatory = $true)][string]$RepositoryRoot,
+        [Parameter(Mandatory = $true)]$Invocation,
+        [Parameter(Mandatory = $true)][string]$Configuration,
+        [Parameter(Mandatory = $true)][string]$DotnetPath,
+        [Parameter(Mandatory = $true)][string]$RunDirectory
+    )
+
+    $projectPath = [System.IO.Path]::GetFullPath((Join-Path $RepositoryRoot ([string]$Invocation.project)))
+    $logPath = Join-Path $RunDirectory (Get-MtpBoundedFileName -Stem "msbuild-target-$([System.IO.Path]::GetFileNameWithoutExtension($projectPath))" -Suffix '.log' -MaximumLength 180)
+    $arguments = [string[]]@($DotnetPath, 'msbuild', $projectPath, '--nologo', "-p:Configuration=$Configuration", '-getProperty:TargetPath')
+    $probe = Invoke-MtpBuildProcess -Executable $DotnetPath -Arguments $arguments -OutputLog $logPath -WorkingDirectory $RepositoryRoot
+    if (-not $probe.Started -or -not [string]::IsNullOrWhiteSpace([string]$probe.StartFailureMessage) -or -not [string]::IsNullOrWhiteSpace([string]$probe.MonitoringFailureMessage) -or -not $probe.CleanupConfirmed -or $probe.ExitCode -ne 0) {
+        throw "MSBuild target-path evaluation failed for '$projectPath'; diagnostic log: $logPath"
+    }
+    $lines = @(Get-Content -LiteralPath $logPath | Where-Object { -not [string]::IsNullOrWhiteSpace([string]$_) })
+    if ($lines.Count -ne 1) {
+        throw "MSBuild target-path evaluation returned an ambiguous result for '$projectPath'; diagnostic log: $logPath"
+    }
+    $resolved = [System.IO.Path]::GetFullPath([string]$lines[0])
+    $repositoryPrefix = [System.IO.Path]::GetFullPath($RepositoryRoot).TrimEnd('\', '/') + [System.IO.Path]::DirectorySeparatorChar
+    if (-not $resolved.StartsWith($repositoryPrefix, [System.StringComparison]::OrdinalIgnoreCase) -or -not $resolved.EndsWith('.dll', [System.StringComparison]::OrdinalIgnoreCase)) {
+        throw "MSBuild target-path evaluation escaped the repository or did not resolve a managed assembly: $resolved"
+    }
+    return $resolved
+}
+
+function Select-MtpVerifiedBuildOutput {
+    param(
+        [Parameter(Mandatory = $true)][string]$RepositoryRoot,
+        [Parameter(Mandatory = $true)]$Invocation,
+        [Parameter(Mandatory = $true)][string]$Configuration,
+        [Parameter(Mandatory = $true)][string]$DotnetPath,
+        [Parameter(Mandatory = $true)][string]$RunDirectory
+    )
+
+    $projectName = Get-MtpProjectName -Invocation $Invocation
+    $projectPath = [System.IO.Path]::GetFullPath((Join-Path $RepositoryRoot ([string]$Invocation.project)))
+    $declaredAssembly = Resolve-MtpManagedAssemblyPath -RepositoryRoot $RepositoryRoot -Invocation $Invocation -Configuration $Configuration
+    $declaredDirectory = Split-Path -Parent $declaredAssembly
+    $rejections = [System.Collections.Generic.List[string]]::new()
+    try {
+        $receipt = Assert-MtpBuildReceipt -Directory $declaredDirectory -ManagedAssemblyLeaf "$projectName.dll" -RepositoryRoot $RepositoryRoot -ProjectPath $projectPath -Configuration $Configuration
+        Write-Host "NO-BUILD BUILD RECEIPT SELECTED - declared output '$declaredDirectory' assemblySha256=$($receipt.Headers['assemblySha256'])"
+        return $declaredDirectory
+    }
+    catch {
+        $rejections.Add("declared path '$declaredDirectory': $($_.Exception.Message)")
+    }
+
+    try {
+        $evaluatedAssembly = Resolve-MtpEvaluatedTargetPath -RepositoryRoot $RepositoryRoot -Invocation $Invocation -Configuration $Configuration -DotnetPath $DotnetPath -RunDirectory $RunDirectory
+        $evaluatedDirectory = Split-Path -Parent $evaluatedAssembly
+        $receipt = Assert-MtpBuildReceipt -Directory $evaluatedDirectory -ManagedAssemblyLeaf "$projectName.dll" -RepositoryRoot $RepositoryRoot -ProjectPath $projectPath -Configuration $Configuration
+        Write-Host "NO-BUILD BUILD RECEIPT SELECTED - evaluated output '$evaluatedDirectory' assemblySha256=$($receipt.Headers['assemblySha256'])"
+        return $evaluatedDirectory
+    }
+    catch {
+        $rejections.Add("evaluated path: $($_.Exception.Message)")
+    }
+
+    throw "No verified no-build output exists for '$projectName'. $($rejections -join ' | ')"
 }
 
 function New-MtpRunnerArguments {
@@ -1813,10 +1978,9 @@ function Invoke-MtpTestRun {
         elseif ($usesManagedAssembly) {
             foreach ($project in $projects) {
                 $projectName = Get-MtpProjectName -Invocation $project
-                $sourceAssembly = Resolve-MtpManagedAssemblyPath -RepositoryRoot $RepositoryRoot -Invocation $project -Configuration $Configuration
-                $sourceDirectory = Split-Path -Parent $sourceAssembly
                 $publishedDirectory = Get-MtpClosureDirectory -RunDirectory $runDirectory -Invocation $project
                 try {
+                    $sourceDirectory = Select-MtpVerifiedBuildOutput -RepositoryRoot $RepositoryRoot -Invocation $project -Configuration $Configuration -DotnetPath $DotnetPath -RunDirectory $runDirectory
                     Copy-MtpStableNoBuildClosure -SourceDirectory $sourceDirectory -PublishedDirectory $publishedDirectory -ManagedAssemblyLeaf "$projectName.dll" -ProjectName $projectName
                 }
                 catch {
@@ -1974,6 +2138,11 @@ Export-ModuleMember -Function @(
     'Get-DefaultMtpResultsRoot',
     'Initialize-MtpResultsDirectory',
     'Get-MtpTargetProjects',
+    'Get-MtpBuildReceiptPath',
+    'Read-MtpBuildReceipt',
+    'Assert-MtpBuildReceipt',
+    'Resolve-MtpEvaluatedTargetPath',
+    'Select-MtpVerifiedBuildOutput',
     'New-MtpRunnerArguments',
     'Read-MtpTrxResult',
     'New-MtpTerminalResult',
