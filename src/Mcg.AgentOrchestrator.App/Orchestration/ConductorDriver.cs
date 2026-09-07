@@ -1878,6 +1878,12 @@ internal sealed partial class ConductorDriver
             return null;
         }
 
+        if (task.LastVerification is { } latestVerification &&
+            !VerifyingFindingCurrency.IsCurrent(goal, task, latestVerification))
+        {
+            return null;
+        }
+
         string blocker;
         if (task.RequiredRole == AgentRole.Reviewer)
         {
