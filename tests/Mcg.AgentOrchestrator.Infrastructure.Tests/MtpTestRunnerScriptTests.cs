@@ -632,10 +632,8 @@ public sealed class MtpTestRunnerScriptTests
 
         Xunit.Assert.Equal(24, result.ExitCode);
         Xunit.Assert.Contains("NO-BUILD CLOSURE FAILURE", result.Stdout, StringComparison.Ordinal);
-        Xunit.Assert.Contains(
-            Path.Combine("bin", "Mcg.AgentOrchestrator.Infrastructure.Tests", "Debug", "Mcg.AgentOrchestrator.Infrastructure.Tests.dll"),
-            result.Stdout,
-            StringComparison.Ordinal);
+        Xunit.Assert.Contains("No verified no-build output exists", result.Stdout, StringComparison.OrdinalIgnoreCase);
+        Xunit.Assert.Contains("Repair: dotnet build", result.Stdout, StringComparison.OrdinalIgnoreCase);
         Xunit.Assert.Contains("was not copied or executed", result.Stdout, StringComparison.OrdinalIgnoreCase);
         Xunit.Assert.DoesNotContain("NO TRX", result.Stdout, StringComparison.OrdinalIgnoreCase);
     }
@@ -747,6 +745,54 @@ public sealed class MtpTestRunnerScriptTests
         Xunit.Assert.Contains(declaredDirectory, result.Stdout, StringComparison.OrdinalIgnoreCase);
         Xunit.Assert.Contains(evaluatedDirectory, result.Stdout, StringComparison.OrdinalIgnoreCase);
         Xunit.Assert.False(File.Exists(sandbox.ArgumentLog), "The runner must not launch an ambiguous build output.");
+    }
+
+    [Xunit.Fact(DisplayName = "MTP_no_build_rejects_two_receipt_verified_candidates_with_different_closure_dependencies")]
+    public void MtpNoBuildRejectsAmbiguousVerifiedCandidatesWithDifferentCopiedDependenciesBeforeLaunch()
+    {
+        using var sandbox = ScriptSandbox.Create("success");
+        var declaredAssembly = sandbox.CreateManagedAssemblyPlaceholder();
+        var declaredDirectory = Path.GetDirectoryName(declaredAssembly)!;
+        var evaluatedDirectory = Path.Combine(
+            sandbox.Root,
+            "tests",
+            "Mcg.AgentOrchestrator.Infrastructure.Tests",
+            "bin",
+            "Debug",
+            "net10.0");
+        Directory.CreateDirectory(evaluatedDirectory);
+        foreach (var source in Directory.EnumerateFiles(declaredDirectory))
+        {
+            File.Copy(source, Path.Combine(evaluatedDirectory, Path.GetFileName(source)), overwrite: true);
+        }
+
+        var evaluatedDependency = Path.Combine(evaluatedDirectory, "Mcg.AgentOrchestrator.App.dll");
+        using (var stream = new FileStream(evaluatedDependency, FileMode.Append, FileAccess.Write, FileShare.None))
+        {
+            stream.WriteByte(0);
+        }
+
+        var receiptPath = Path.Combine(evaluatedDirectory, ".mcg-build-receipt.txt");
+        var receipt = File.ReadAllText(receiptPath)
+            .Replace(declaredDirectory + Path.DirectorySeparatorChar, evaluatedDirectory + Path.DirectorySeparatorChar, StringComparison.Ordinal)
+            .Replace(
+                $"S\tsource\t{Path.Combine(evaluatedDirectory, "receipt-source.cs")}\t{Convert.ToHexString(System.Security.Cryptography.SHA256.HashData(File.ReadAllBytes(Path.Combine(declaredDirectory, "receipt-source.cs"))))}",
+                $"S\tsource\t{Path.Combine(declaredDirectory, "receipt-source.cs")}\t{Convert.ToHexString(System.Security.Cryptography.SHA256.HashData(File.ReadAllBytes(Path.Combine(declaredDirectory, "receipt-source.cs"))))}",
+                StringComparison.Ordinal)
+            .Replace(
+                $"F\tclosure\t{evaluatedDependency}\t{Convert.ToHexString(System.Security.Cryptography.SHA256.HashData(File.ReadAllBytes(Path.Combine(declaredDirectory, "Mcg.AgentOrchestrator.App.dll"))))}",
+                $"F\tclosure\t{evaluatedDependency}\t{Convert.ToHexString(System.Security.Cryptography.SHA256.HashData(File.ReadAllBytes(evaluatedDependency)))}",
+                StringComparison.Ordinal);
+        File.WriteAllText(receiptPath, receipt);
+
+        var result = sandbox.RunPartition("GoalWorktree", dotnetPath: sandbox.RunnerPath, runnerOverride: false);
+
+        Xunit.Assert.Equal(24, result.ExitCode);
+        Xunit.Assert.Contains("ambiguous verified no-build outputs", result.Stdout, StringComparison.OrdinalIgnoreCase);
+        Xunit.Assert.Contains(declaredDirectory, result.Stdout, StringComparison.OrdinalIgnoreCase);
+        Xunit.Assert.Contains(evaluatedDirectory, result.Stdout, StringComparison.OrdinalIgnoreCase);
+        Xunit.Assert.Contains("closureSha256=", result.Stdout, StringComparison.Ordinal);
+        Xunit.Assert.False(File.Exists(sandbox.ArgumentLog), "The runner must not launch a closure whose copied dependencies identify a different build.");
     }
 
     [Xunit.Fact(DisplayName = "MTP_no_build_rejects_receipt_for_a_different_target_framework_before_launch")]

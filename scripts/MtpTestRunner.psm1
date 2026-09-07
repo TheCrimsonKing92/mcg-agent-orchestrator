@@ -1484,6 +1484,24 @@ function Resolve-MtpManagedAssemblyPath {
     return $resolved
 }
 
+function Get-MtpBuildReceiptClosureDigest {
+    param(
+        [Parameter(Mandatory = $true)]$Receipt,
+        [Parameter(Mandatory = $true)][string]$Directory
+    )
+
+    $root = [System.IO.Path]::GetFullPath($Directory).TrimEnd('\', '/') + [System.IO.Path]::DirectorySeparatorChar
+    $entries = [System.Collections.Generic.List[string]]::new()
+    foreach ($closureFile in @($Receipt.ClosureFiles)) {
+        $path = [System.IO.Path]::GetFullPath([string]$closureFile.Path)
+        if (-not $path.StartsWith($root, [System.StringComparison]::OrdinalIgnoreCase)) {
+            throw "receipt closure file escapes its output directory while computing identity: path='$path' directory='$Directory'"
+        }
+        $entries.Add(($path.Substring($root.Length).Replace('\', '/') + ':' + [string]$closureFile.Sha256))
+    }
+    return Get-MtpSha256Text -Text (($entries | Sort-Object -Unique) -join "`n")
+}
+
 function Resolve-MtpEvaluatedTargetPath {
     param(
         [Parameter(Mandatory = $true)][string]$RepositoryRoot,
@@ -1588,7 +1606,12 @@ function Select-MtpVerifiedBuildOutput {
         }
         try {
             $receipt = Assert-MtpBuildReceipt -Directory $candidate.Directory -ManagedAssemblyLeaf "$projectName.dll" -RepositoryRoot $RepositoryRoot -ProjectPath $projectPath -Configuration $Configuration -TargetFramework $evaluatedIdentity.TargetFramework -RuntimeIdentifier $evaluatedIdentity.RuntimeIdentifier -ExpectedSourcePaths $evaluatedIdentity.CompilePaths -RepairCommand $candidate.Repair
-            $verified.Add([pscustomobject]@{ Label = $candidate.Label; Directory = $candidate.Directory; Receipt = $receipt })
+            $verified.Add([pscustomobject]@{
+                Label = $candidate.Label
+                Directory = $candidate.Directory
+                Receipt = $receipt
+                ClosureSha256 = Get-MtpBuildReceiptClosureDigest -Receipt $receipt -Directory $candidate.Directory
+            })
         }
         catch {
             $rejections.Add("$($candidate.Label) '$($candidate.Directory)': $($_.Exception.Message)")
@@ -1597,17 +1620,17 @@ function Select-MtpVerifiedBuildOutput {
     if ($verified.Count -eq 0) {
         throw "No verified no-build output exists for '$projectName'. $($rejections -join ' | ')"
     }
-    $hashes = @($verified | ForEach-Object { [string]$_.Receipt.Headers['assemblySha256'] } | Sort-Object -Unique)
-    if ($verified.Count -gt 1 -and $hashes.Count -gt 1) {
-        $identities = @($verified | ForEach-Object { "path='$($_.Directory)' assemblySha256=$($_.Receipt.Headers['assemblySha256'])" })
+    $closureHashes = @($verified | ForEach-Object { [string]$_.ClosureSha256 } | Sort-Object -Unique)
+    if ($verified.Count -gt 1 -and $closureHashes.Count -gt 1) {
+        $identities = @($verified | ForEach-Object { "path='$($_.Directory)' assemblySha256=$($_.Receipt.Headers['assemblySha256']) closureSha256=$($_.ClosureSha256)" })
         throw "Ambiguous verified no-build outputs for '$projectName'; refusing to select by path layout or timestamp. $($identities -join ' | '). Repair with either: dotnet build `"$projectPath`" --configuration $Configuration OR dotnet build `"$projectPath`" --configuration $Configuration -p:McgIsolatedArtifactsPath=`"$RepositoryRoot`""
     }
     $selected = @($verified | Where-Object { $_.Label -eq 'declared artifact output' } | Select-Object -First 1)
     if ($selected.Count -eq 0) {
         $selected = @($verified | Select-Object -First 1)
     }
-    $rejected = @($rejections) + @($verified | Where-Object { $_.Directory -ne $selected[0].Directory } | ForEach-Object { "verified equivalent candidate path='$($_.Directory)' assemblySha256=$($_.Receipt.Headers['assemblySha256'])" })
-    Write-Host "NO-BUILD BUILD RECEIPT SELECTED - $($selected[0].Label) '$($selected[0].Directory)' assemblySha256=$($selected[0].Receipt.Headers['assemblySha256']) rejected='$($rejected -join ' | ')'"
+    $rejected = @($rejections) + @($verified | Where-Object { $_.Directory -ne $selected[0].Directory } | ForEach-Object { "verified equivalent candidate path='$($_.Directory)' assemblySha256=$($_.Receipt.Headers['assemblySha256']) closureSha256=$($_.ClosureSha256)" })
+    Write-Host "NO-BUILD BUILD RECEIPT SELECTED - $($selected[0].Label) '$($selected[0].Directory)' assemblySha256=$($selected[0].Receipt.Headers['assemblySha256']) closureSha256=$($selected[0].ClosureSha256) rejected='$($rejected -join ' | ')'"
     return [pscustomobject]@{ Directory = $selected[0].Directory; Receipt = $selected[0].Receipt; Rejections = $rejected }
 }
 
