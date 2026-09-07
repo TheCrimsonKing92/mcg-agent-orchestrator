@@ -1385,7 +1385,8 @@ function Invoke-MtpBuild {
             '-clp:ErrorsOnly;Summary',
             '-fl',
             "-flp:LogFile=$buildLogPath;Verbosity=Normal",
-            '-nodeReuse:false'
+            '-nodeReuse:false',
+            "-p:McgBuildReceiptProject=$buildTarget"
         )
         try {
             $build = Invoke-MtpBuildProcess -Executable $DotnetPath -Arguments $arguments -OutputLog $captureLogPath -WorkingDirectory $RepositoryRoot -StartupHookPath $StartupHookPath
@@ -1683,7 +1684,7 @@ function ConvertTo-MtpCommandLineArgument {
     }
     $charactersRequiringQuotes = @(' ', "`t", "`n", "`r", '"')
     if ($QuoteCmdMetaCharacters) {
-        $charactersRequiringQuotes += @('&', '|', '<', '>', '(', ')', '^', ';')
+        $charactersRequiringQuotes += @('&', '|', '<', '>', '(', ')', '^', ';', '=')
     }
     $requiresQuotes = $Value.Length -eq 0 -or $Value.IndexOfAny([char[]]$charactersRequiringQuotes) -ge 0
     if (-not $requiresQuotes) {

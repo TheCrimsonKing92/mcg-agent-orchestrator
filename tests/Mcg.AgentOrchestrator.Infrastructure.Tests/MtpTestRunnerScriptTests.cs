@@ -542,6 +542,11 @@ public sealed class MtpTestRunnerScriptTests
         Xunit.Assert.StartsWith("-flp:LogFile=", arguments[11], StringComparison.OrdinalIgnoreCase);
         Xunit.Assert.EndsWith(";Verbosity=Normal", arguments[11], StringComparison.Ordinal);
         Xunit.Assert.Equal("-nodeReuse:false", arguments[12]);
+        Xunit.Assert.True(
+            arguments.Any(argument => argument.Equals(
+                $"-p:McgBuildReceiptProject={project}",
+                StringComparison.OrdinalIgnoreCase)),
+            string.Join(Environment.NewLine, arguments));
         Xunit.Assert.Contains("compiler diagnostic from stub", result.Stdout, StringComparison.Ordinal);
         Xunit.Assert.Contains("Build succeeded.", result.Stdout, StringComparison.Ordinal);
     }

@@ -4,7 +4,7 @@
     It detects stale outputs; it is not intended to defend against a maliciously edited receipt.
   -->
   <Target Name="McgWriteBuildReceipt" AfterTargets="Build"
-          Condition="'$(McgEmitBuildReceipt)' != 'false' and Exists('$(TargetPath)') and Exists('$(TargetDir)$(TargetName).pdb')">
+          Condition="'$(McgEmitBuildReceipt)' != 'false' and '$(IsTestProject)' == 'true' and ('$(McgBuildReceiptProject)' == '' or '$(MSBuildProjectFullPath)' == '$(McgBuildReceiptProject)') and Exists('$(TargetPath)') and Exists('$(TargetDir)$(TargetName).pdb')">
     <PropertyGroup>
       <_McgReceiptPath>$(TargetDir).mcg-build-receipt.txt</_McgReceiptPath>
       <_McgReceiptTemporaryPath>$(_McgReceiptPath).tmp</_McgReceiptTemporaryPath>
