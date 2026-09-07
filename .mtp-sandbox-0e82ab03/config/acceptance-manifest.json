@@ -1,0 +1,22 @@
+{
+  "engine": {
+    "infrastructureTestLanes": [
+      { "name": "Goal lane", "filter": "FullyQualifiedName~GoalWorktreeTests" }
+    ],
+    "localTestPartitions": [
+      { "name": "GoalWorktree", "description": "Goal tests.", "laneNames": [ "Goal lane" ] }
+    ],
+    "mtpInvocations": [
+      {
+        "project": "tests/Mcg.AgentOrchestrator.Infrastructure.Tests/Mcg.AgentOrchestrator.Infrastructure.Tests.csproj",
+        "executablePathTemplate": "bin/{projectName}/{configuration}/{projectName}{executableExtension}",
+        "firewallExecutablePathTemplate": "bin/{projectName}/{configuration}/{projectName}.exe",
+        "arguments": [
+          "{executable}", "--no-ansi", "--progress", "off",
+          "--results-directory", "{resultsDirectory}",
+          "--report-trx", "--report-trx-filename", "{trxFileName}"
+        ]
+      }
+    ]
+  }
+}
