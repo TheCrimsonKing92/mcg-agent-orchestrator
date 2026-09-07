@@ -699,6 +699,40 @@ public sealed class MtpTestRunnerScriptTests
         Xunit.Assert.False(File.Exists(sandbox.ArgumentLog));
     }
 
+    [Xunit.Fact(DisplayName = "MTP_no_build_rejects_receipt_for_a_different_target_framework_before_launch")]
+    public void MtpNoBuildRejectsReceiptForDifferentTargetFrameworkBeforeLaunch()
+    {
+        using var sandbox = ScriptSandbox.Create("success");
+        var managedAssembly = sandbox.CreateManagedAssemblyPlaceholder();
+        var receiptPath = Path.Combine(Path.GetDirectoryName(managedAssembly)!, ".mcg-build-receipt.txt");
+        File.WriteAllText(
+            receiptPath,
+            File.ReadAllText(receiptPath).Replace("K\ttargetFramework\tnet10.0", "K\ttargetFramework\tnet9.0", StringComparison.Ordinal));
+
+        var result = sandbox.RunPartition("GoalWorktree", dotnetPath: sandbox.RunnerPath, runnerOverride: false);
+
+        Xunit.Assert.Equal(24, result.ExitCode);
+        Xunit.Assert.Contains("receipt key 'targetFramework' does not match: recorded='net9.0' expected='net10.0'", result.Stdout, StringComparison.Ordinal);
+        Xunit.Assert.False(File.Exists(sandbox.ArgumentLog), "The runner must not launch a receipt for a different target framework.");
+    }
+
+    [Xunit.Fact(DisplayName = "MTP_no_build_rejects_receipt_for_a_different_runtime_identifier_before_launch")]
+    public void MtpNoBuildRejectsReceiptForDifferentRuntimeIdentifierBeforeLaunch()
+    {
+        using var sandbox = ScriptSandbox.Create("success");
+        var managedAssembly = sandbox.CreateManagedAssemblyPlaceholder();
+        var receiptPath = Path.Combine(Path.GetDirectoryName(managedAssembly)!, ".mcg-build-receipt.txt");
+        File.WriteAllText(
+            receiptPath,
+            File.ReadAllText(receiptPath).Replace("K\truntimeIdentifier\t", "K\truntimeIdentifier\twin-x64", StringComparison.Ordinal));
+
+        var result = sandbox.RunPartition("GoalWorktree", dotnetPath: sandbox.RunnerPath, runnerOverride: false);
+
+        Xunit.Assert.Equal(24, result.ExitCode);
+        Xunit.Assert.Contains("receipt key 'runtimeIdentifier' does not match: recorded='win-x64' expected=''", result.Stdout, StringComparison.Ordinal);
+        Xunit.Assert.False(File.Exists(sandbox.ArgumentLog), "The runner must not launch a receipt for a different runtime identifier.");
+    }
+
     [Xunit.Fact(DisplayName = "MTP_closure_no_build_never_launches_mixed_or_unversioned_repository_closure")]
     public void MtpNoBuildNeverLaunchesMixedOrUnversionedRepositoryClosure()
     {
@@ -1195,7 +1229,13 @@ public sealed class MtpTestRunnerScriptTests
             File.WriteAllText(fakeRunnerScript, $$"""
                 param([Parameter(ValueFromRemainingArguments = $true)][string[]]$Arguments)
                 if ($Arguments.Count -gt 0 -and $Arguments[0] -eq 'msbuild') {
-                    Write-Output '{{Path.Combine(root, "tests", "Mcg.AgentOrchestrator.Infrastructure.Tests", "bin", "Debug", "net10.0", "Mcg.AgentOrchestrator.Infrastructure.Tests.dll")}}'
+                    @{
+                        Properties = @{
+                            TargetPath = '{{Path.Combine(root, "tests", "Mcg.AgentOrchestrator.Infrastructure.Tests", "bin", "Debug", "net10.0", "Mcg.AgentOrchestrator.Infrastructure.Tests.dll")}}'
+                            TargetFramework = 'net10.0'
+                            RuntimeIdentifier = ''
+                        }
+                    } | ConvertTo-Json -Compress
                     exit 0
                 }
                 $Arguments | Set-Content -LiteralPath '{{escapedArgumentLog}}'
@@ -1333,7 +1373,7 @@ public sealed class MtpTestRunnerScriptTests
                 $"K\tproject\t{Path.Combine(Root, "tests", "Mcg.AgentOrchestrator.Infrastructure.Tests", "Mcg.AgentOrchestrator.Infrastructure.Tests.csproj")}",
                 "K\tconfiguration\tDebug",
                 "K\ttargetFramework\tnet10.0",
-                "K\truntimeIdentifier\tportable",
+                "K\truntimeIdentifier\t",
                 $"K\trepositoryRoot\t{Root}{Path.DirectorySeparatorChar}",
                 $"K\toutputDirectory\t{outputDirectory}{Path.DirectorySeparatorChar}",
                 "K\tassemblyLeaf\tMcg.AgentOrchestrator.Infrastructure.Tests.dll",

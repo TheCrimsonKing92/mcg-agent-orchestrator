@@ -1036,7 +1036,9 @@ function Assert-MtpBuildReceipt {
         [Parameter(Mandatory = $true)][string]$ManagedAssemblyLeaf,
         [Parameter(Mandatory = $true)][string]$RepositoryRoot,
         [Parameter(Mandatory = $true)][string]$ProjectPath,
-        [Parameter(Mandatory = $true)][string]$Configuration
+        [Parameter(Mandatory = $true)][string]$Configuration,
+        [Parameter(Mandatory = $true)][string]$TargetFramework,
+        [Parameter(Mandatory = $true)][AllowEmptyString()][string]$RuntimeIdentifier
     )
 
     $repair = "dotnet build `"$ProjectPath`" --configuration $Configuration -p:McgIsolatedArtifactsPath=`"$RepositoryRoot`""
@@ -1046,6 +1048,8 @@ function Assert-MtpBuildReceipt {
         $expected = @{
             project = [System.IO.Path]::GetFullPath($ProjectPath)
             configuration = $Configuration
+            targetFramework = $TargetFramework
+            runtimeIdentifier = $RuntimeIdentifier
             repositoryRoot = [System.IO.Path]::GetFullPath($RepositoryRoot).TrimEnd('\', '/') + [System.IO.Path]::DirectorySeparatorChar
             outputDirectory = [System.IO.Path]::GetFullPath($Directory).TrimEnd('\', '/') + [System.IO.Path]::DirectorySeparatorChar
             assemblyLeaf = $ManagedAssemblyLeaf
@@ -1432,21 +1436,33 @@ function Resolve-MtpEvaluatedTargetPath {
 
     $projectPath = [System.IO.Path]::GetFullPath((Join-Path $RepositoryRoot ([string]$Invocation.project)))
     $logPath = Join-Path $RunDirectory (Get-MtpBoundedFileName -Stem "msbuild-target-$([System.IO.Path]::GetFileNameWithoutExtension($projectPath))" -Suffix '.log' -MaximumLength 180)
-    $arguments = [string[]]@($DotnetPath, 'msbuild', $projectPath, '--nologo', "-p:Configuration=$Configuration", '-getProperty:TargetPath')
+    $arguments = [string[]]@($DotnetPath, 'msbuild', $projectPath, '--nologo', "-p:Configuration=$Configuration", '-getProperty:TargetPath,TargetFramework,RuntimeIdentifier')
     $probe = Invoke-MtpBuildProcess -Executable $DotnetPath -Arguments $arguments -OutputLog $logPath -WorkingDirectory $RepositoryRoot
     if (-not $probe.Started -or -not [string]::IsNullOrWhiteSpace([string]$probe.StartFailureMessage) -or -not [string]::IsNullOrWhiteSpace([string]$probe.MonitoringFailureMessage) -or -not $probe.CleanupConfirmed -or $probe.ExitCode -ne 0) {
         throw "MSBuild target-path evaluation failed for '$projectPath'; diagnostic log: $logPath"
     }
-    $lines = @(Get-Content -LiteralPath $logPath | Where-Object { -not [string]::IsNullOrWhiteSpace([string]$_) })
-    if ($lines.Count -ne 1) {
-        throw "MSBuild target-path evaluation returned an ambiguous result for '$projectPath'; diagnostic log: $logPath"
+    try {
+        $properties = (Get-Content -LiteralPath $logPath -Raw -ErrorAction Stop | ConvertFrom-Json -ErrorAction Stop).Properties
+        if ($null -eq $properties -or
+            [string]::IsNullOrWhiteSpace([string]$properties.TargetPath) -or
+            [string]::IsNullOrWhiteSpace([string]$properties.TargetFramework) -or
+            $null -eq $properties.PSObject.Properties['RuntimeIdentifier']) {
+            throw 'TargetPath, TargetFramework, or RuntimeIdentifier is missing.'
+        }
     }
-    $resolved = [System.IO.Path]::GetFullPath([string]$lines[0])
+    catch {
+        throw "MSBuild build-identity evaluation returned an invalid result for '$projectPath'; diagnostic log: $logPath; $($_.Exception.Message)"
+    }
+    $resolved = [System.IO.Path]::GetFullPath([string]$properties.TargetPath)
     $repositoryPrefix = [System.IO.Path]::GetFullPath($RepositoryRoot).TrimEnd('\', '/') + [System.IO.Path]::DirectorySeparatorChar
     if (-not $resolved.StartsWith($repositoryPrefix, [System.StringComparison]::OrdinalIgnoreCase) -or -not $resolved.EndsWith('.dll', [System.StringComparison]::OrdinalIgnoreCase)) {
         throw "MSBuild target-path evaluation escaped the repository or did not resolve a managed assembly: $resolved"
     }
-    return $resolved
+    return [pscustomobject]@{
+        TargetPath = $resolved
+        TargetFramework = [string]$properties.TargetFramework
+        RuntimeIdentifier = [string]$properties.RuntimeIdentifier
+    }
 }
 
 function Select-MtpVerifiedBuildOutput {
@@ -1460,11 +1476,12 @@ function Select-MtpVerifiedBuildOutput {
 
     $projectName = Get-MtpProjectName -Invocation $Invocation
     $projectPath = [System.IO.Path]::GetFullPath((Join-Path $RepositoryRoot ([string]$Invocation.project)))
+    $evaluatedIdentity = Resolve-MtpEvaluatedTargetPath -RepositoryRoot $RepositoryRoot -Invocation $Invocation -Configuration $Configuration -DotnetPath $DotnetPath -RunDirectory $RunDirectory
     $declaredAssembly = Resolve-MtpManagedAssemblyPath -RepositoryRoot $RepositoryRoot -Invocation $Invocation -Configuration $Configuration
     $declaredDirectory = Split-Path -Parent $declaredAssembly
     $rejections = [System.Collections.Generic.List[string]]::new()
     try {
-        $receipt = Assert-MtpBuildReceipt -Directory $declaredDirectory -ManagedAssemblyLeaf "$projectName.dll" -RepositoryRoot $RepositoryRoot -ProjectPath $projectPath -Configuration $Configuration
+        $receipt = Assert-MtpBuildReceipt -Directory $declaredDirectory -ManagedAssemblyLeaf "$projectName.dll" -RepositoryRoot $RepositoryRoot -ProjectPath $projectPath -Configuration $Configuration -TargetFramework $evaluatedIdentity.TargetFramework -RuntimeIdentifier $evaluatedIdentity.RuntimeIdentifier
         Write-Host "NO-BUILD BUILD RECEIPT SELECTED - declared output '$declaredDirectory' assemblySha256=$($receipt.Headers['assemblySha256'])"
         return $declaredDirectory
     }
@@ -1473,9 +1490,9 @@ function Select-MtpVerifiedBuildOutput {
     }
 
     try {
-        $evaluatedAssembly = Resolve-MtpEvaluatedTargetPath -RepositoryRoot $RepositoryRoot -Invocation $Invocation -Configuration $Configuration -DotnetPath $DotnetPath -RunDirectory $RunDirectory
+        $evaluatedAssembly = $evaluatedIdentity.TargetPath
         $evaluatedDirectory = Split-Path -Parent $evaluatedAssembly
-        $receipt = Assert-MtpBuildReceipt -Directory $evaluatedDirectory -ManagedAssemblyLeaf "$projectName.dll" -RepositoryRoot $RepositoryRoot -ProjectPath $projectPath -Configuration $Configuration
+        $receipt = Assert-MtpBuildReceipt -Directory $evaluatedDirectory -ManagedAssemblyLeaf "$projectName.dll" -RepositoryRoot $RepositoryRoot -ProjectPath $projectPath -Configuration $Configuration -TargetFramework $evaluatedIdentity.TargetFramework -RuntimeIdentifier $evaluatedIdentity.RuntimeIdentifier
         Write-Host "NO-BUILD BUILD RECEIPT SELECTED - evaluated output '$evaluatedDirectory' assemblySha256=$($receipt.Headers['assemblySha256'])"
         return $evaluatedDirectory
     }
