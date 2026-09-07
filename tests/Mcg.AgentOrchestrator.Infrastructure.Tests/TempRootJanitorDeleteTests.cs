@@ -77,4 +77,64 @@ public sealed class TempRootJanitorDeleteTests
         Assert.Equal(2, outcome.DeleteAttempts);
         Assert.False(Directory.Exists(root));
     }
+
+    [Fact]
+    public void StateDbTrackerReportsOnlyLiveFactoryConnectionsWithinOwnedRoot()
+    {
+        var root = Path.Combine(Path.GetTempPath(), $"state-db-tracker-{Guid.NewGuid():N}");
+        var outsideRoot = Path.Combine(Path.GetTempPath(), $"state-db-tracker-outside-{Guid.NewGuid():N}");
+        Directory.CreateDirectory(root);
+        Directory.CreateDirectory(outsideRoot);
+
+        try
+        {
+            using var tracker = new AssemblyTempRootCleanupFixture.StateDbOpenConnectionTracker();
+            using (var outside = StateDbConnectionFactory.Open(
+                       Path.Combine(outsideRoot, "state.db"),
+                       StateDbConnectionProfile.ReadWrite))
+            using (var inside = StateDbConnectionFactory.Open(
+                       Path.Combine(root, "state.db"),
+                       StateDbConnectionProfile.ReadWrite))
+            {
+                var open = Assert.Single(tracker.FindWithin(root));
+                Assert.Equal(Path.Combine(root, "state.db"), open.DatabasePath);
+                Assert.Equal(Environment.CurrentManagedThreadId, open.ThreadId);
+                Assert.Contains(nameof(StateDbTrackerReportsOnlyLiveFactoryConnectionsWithinOwnedRoot), open.CreationSite);
+                Assert.Contains("state-db-open-connection", open.FormatDiagnostic());
+
+                inside.Close();
+                Assert.Empty(tracker.FindWithin(root));
+            }
+
+            Assert.Empty(tracker.FindWithin(root));
+        }
+        finally
+        {
+            TempRootJanitor.DeleteTreeWithRetry(root);
+            TempRootJanitor.DeleteTreeWithRetry(outsideRoot);
+        }
+    }
+
+    [Fact]
+    public void StateDbDiagnosticObserverFailureDoesNotFailConnectionOpen()
+    {
+        var root = Path.Combine(Path.GetTempPath(), $"state-db-observer-failure-{Guid.NewGuid():N}");
+        var databasePath = Path.Combine(root, "state.db");
+        void ThrowingObserver(Microsoft.Data.Sqlite.SqliteConnection connection, string path) =>
+            throw new InvalidOperationException("synthetic diagnostic failure");
+
+        StateDbConnectionFactory.ConnectionOpenedForDiagnostics += ThrowingObserver;
+        try
+        {
+            using var connection = StateDbConnectionFactory.Open(
+                databasePath,
+                StateDbConnectionProfile.ReadWrite);
+            Assert.Equal(System.Data.ConnectionState.Open, connection.State);
+        }
+        finally
+        {
+            StateDbConnectionFactory.ConnectionOpenedForDiagnostics -= ThrowingObserver;
+            TempRootJanitor.DeleteTreeWithRetry(root);
+        }
+    }
 }
