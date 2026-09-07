@@ -129,6 +129,9 @@ public sealed class BudgetAwareRoutingTests
     {
         var kernel = new AgentOrchestratorKernel();
         var agents = AgentCatalog.Default().Agents;
+        var developerAgent = agents.Single(agent => agent.Role == AgentRole.Developer);
+        var scorecardProvider = developerAgent.Model.ProviderName;
+        var scorecardModel = developerAgent.Subscription!.ModelAlias!;
         var task = new TaskSpec(TaskId.New(), "Implement high-risk multi-scope persistence migration", AgentRole.Developer);
         var goal = kernel.CreateGoal("Complex dispatch planning", [task]);
         kernel.RecordGoalPolicyDecision(
@@ -139,8 +142,8 @@ public sealed class BudgetAwareRoutingTests
         var scorecard = new[]
         {
             new ModelOutcomeRecord(
-                "OpenAI",
-                AgentCatalog.OpenAiSolSubscriptionModelAlias,
+                scorecardProvider,
+                scorecardModel,
                 Completed: 3,
                 Failed: 0,
                 SelfRatedAdequate: 3,
@@ -151,8 +154,8 @@ public sealed class BudgetAwareRoutingTests
                 Reason: "3/3 recent dispatches completed.",
                 DispatchLane: "codex-cli"),
             new ModelOutcomeRecord(
-                "OpenAI",
-                AgentCatalog.OpenAiSolSubscriptionModelAlias,
+                scorecardProvider,
+                scorecardModel,
                 Completed: 0,
                 Failed: 3,
                 SelfRatedAdequate: 3,
