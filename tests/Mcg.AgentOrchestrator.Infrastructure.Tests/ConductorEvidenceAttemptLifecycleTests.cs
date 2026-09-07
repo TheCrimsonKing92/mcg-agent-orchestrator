@@ -30,11 +30,11 @@ public sealed class ConductorEvidenceAttemptLifecycleTests
             }
         });
 
-        Assert.True(holderAcquired.Wait(TimeSpan.FromSeconds(10)));
         string? receipt = null;
         var started = Stopwatch.StartNew();
         try
         {
+            Assert.True(holderAcquired.Wait(TimeSpan.FromSeconds(10)));
             var exception = Assert.Throws<TimeoutException>(() =>
                 StorageRetentionMaintenance.AcquireAttemptWriterLease(
                     root,
