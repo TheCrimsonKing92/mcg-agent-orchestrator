@@ -20,17 +20,7 @@ try
 
     for (var index = 0; index < options.Repeat; index++)
     {
-        if (options.OldMutation)
-        {
-            using var mutation = OldConsoleMutation.Create();
-            Console.WriteLine($"MARK:during:{index}");
-            Console.Error.WriteLine($"EMARK:during:{index}");
-            WriteHandleMarker($"during:{index}");
-        }
-        else
-        {
-            RunScope(options, index, writers);
-        }
+        RunScope(options, index, writers);
     }
 
     var input = Console.In.ReadLine();
@@ -106,8 +96,6 @@ sealed class ProbeOptions
     public required string WriterInitialization { get; init; }
     public required int Repeat { get; init; }
     public required int Nest { get; init; }
-    public required bool OldMutation { get; init; }
-
     public required bool UnrelatedThread { get; init; }
 
     public static ProbeOptions Parse(string[] args)
@@ -119,7 +107,6 @@ sealed class ProbeOptions
             WriterInitialization = values.GetValueOrDefault("--writer-init", "early"),
             Repeat = int.Parse(values.GetValueOrDefault("--repeat", "1"), System.Globalization.CultureInfo.InvariantCulture),
             Nest = int.Parse(values.GetValueOrDefault("--nest", "1"), System.Globalization.CultureInfo.InvariantCulture),
-            OldMutation = values.ContainsKey("--old-mutation"),
             UnrelatedThread = values.ContainsKey("--unrelated-thread")
         };
     }
