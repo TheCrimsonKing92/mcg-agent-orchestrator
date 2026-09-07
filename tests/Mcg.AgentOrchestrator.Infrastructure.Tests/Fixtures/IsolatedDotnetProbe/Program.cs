@@ -35,7 +35,10 @@ if (args.Length == 2 && args[0].Equals("spawn-descendant", StringComparison.Ordi
         pidTempPath,
         child.Id.ToString(System.Globalization.CultureInfo.InvariantCulture));
     File.Move(pidTempPath, args[1], overwrite: true);
+    var stdoutDrain = child.StandardOutput.ReadToEndAsync();
+    var stderrDrain = child.StandardError.ReadToEndAsync();
     await child.WaitForExitAsync();
+    await Task.WhenAll(stdoutDrain, stderrDrain);
     return child.ExitCode;
 }
 
