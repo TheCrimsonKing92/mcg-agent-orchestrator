@@ -441,6 +441,9 @@ internal sealed class OwnedProcessGroup : IDisposable
         internal bool HasOwnedExitObservation =>
             _processHandle is { IsClosed: false, IsInvalid: false };
 
+        internal WindowsNativeProcessInspection.ProcessLifecycleIdentityReadResult ReadLifecycleIdentity() =>
+            WindowsNativeProcessInspection.ReadLifecycleIdentity(Process.Id, RequireExitObservationHandle());
+
         internal int? TryReadOwnedExitCode()
         {
             var processHandle = RequireExitObservationHandle();

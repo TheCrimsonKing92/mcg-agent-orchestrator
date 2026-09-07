@@ -551,9 +551,9 @@ public static class WorkerProcessJobs
     {
         ArgumentNullException.ThrowIfNull(startInfo);
         var lifecycleAuthority = new object();
-        var identityReader = registrationIdentityReader ?? ProductionRegistrationIdentityReader;
         if (!OperatingSystem.IsWindows())
         {
+            var identityReader = registrationIdentityReader ?? ProductionRegistrationIdentityReader;
             var process = StartAndRegisterNonWindows(
                 startInfo,
                 ownerId,
@@ -572,7 +572,7 @@ public static class WorkerProcessJobs
             () => OwnedProcessGroup.StartSuspended(startInfo),
             startInfo,
             lifecycleAuthority,
-            identityReader,
+            registrationIdentityReader,
             ownerId);
     }
 
@@ -632,10 +632,11 @@ public static class WorkerProcessJobs
 
         using (launch)
         {
+            var victimIdentityReader = BuildSuspendedRegistrationIdentityReader(launch);
             if (!TryRegisterCore(
                     launch.Process,
                     ownerId,
-                    ProductionRegistrationIdentityReader,
+                    victimIdentityReader,
                     ProductionRegistrationIdentityReader,
                     out var registrationFailure,
                     launch.Group,
@@ -652,7 +653,7 @@ public static class WorkerProcessJobs
         Func<OwnedProcessGroup.SuspendedProcessStart> start,
         ProcessStartInfo startInfo,
         object lifecycleAuthority,
-        Func<Process, SpawnProcessIdentityReadResult> registrationIdentityReader,
+        Func<Process, SpawnProcessIdentityReadResult>? registrationIdentityReader,
         string? ownerId)
     {
         OwnedProcessGroup.SuspendedProcessStart launch;
@@ -669,11 +670,13 @@ public static class WorkerProcessJobs
 
         using (launch)
         {
+            var victimIdentityReader = registrationIdentityReader ?? BuildSuspendedRegistrationIdentityReader(launch);
+            var ownerIdentityReader = registrationIdentityReader ?? ProductionRegistrationIdentityReader;
             if (!TryRegisterCore(
                     launch.Process,
                     ownerId,
-                    registrationIdentityReader,
-                    registrationIdentityReader,
+                    victimIdentityReader,
+                    ownerIdentityReader,
                     out var registrationFailure,
                     launch.Group,
                     launch.Resume,
@@ -1212,6 +1215,26 @@ public static class WorkerProcessJobs
                 process.Id,
                 new DateTimeOffset(process.StartTime.ToUniversalTime(), TimeSpan.Zero),
                 imagePath);
+    }
+
+    private static Func<Process, SpawnProcessIdentityReadResult> BuildSuspendedRegistrationIdentityReader(
+        OwnedProcessGroup.SuspendedProcessStart launch)
+    {
+        ArgumentNullException.ThrowIfNull(launch);
+        return process =>
+        {
+            var read = launch.ReadLifecycleIdentity();
+            var evidence = $"status={read.Status.ToString().ToLowerInvariant()} attempts=1 " +
+                $"source={read.Operation} native_error_code={read.NativeError.ToString(CultureInfo.InvariantCulture)}";
+            return read.Status == ProcessInspectionStatus.Available &&
+                   read.StartedAt is { } startedAt &&
+                   !string.IsNullOrWhiteSpace(read.ExecutablePath)
+                ? new SpawnProcessIdentityReadResult(
+                    new SpawnProcessIdentity(process.Id, startedAt, read.ExecutablePath),
+                    1,
+                    evidence)
+                : new SpawnProcessIdentityReadResult(null, 1, evidence);
+        };
     }
 
     internal static string BuildExceptionEvidence(Exception exception)

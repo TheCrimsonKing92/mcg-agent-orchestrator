@@ -1791,6 +1791,87 @@ public sealed class WorkerProcessJobsTests : IDisposable
         Assert.True(child.IsDisposed);
     }
 
+    [Xunit.Fact(DisplayName = "WorkerProcessJobs_suspended_child_registers_native_identity_before_readiness")]
+    public async Task WorkerProcessJobsSuspendedChildRegistersNativeIdentityBeforeReadiness()
+    {
+        if (!OperatingSystem.IsWindows())
+        {
+            return;
+        }
+
+        var root = Path.Combine(Path.GetTempPath(), "mcg-worker-job-tests", Guid.NewGuid().ToString("n"));
+        var dbPath = Path.Combine(root, "state.db");
+        var readyPath = Path.Combine(root, "child-ready.pid");
+        Directory.CreateDirectory(root);
+        _ = StateDbMigrations.EnsureUpToDate(dbPath);
+        WorkerProcessJobs.ConfigureRegistry(dbPath);
+        RegisteredOwnedProcess? child = null;
+        try
+        {
+            var startInfo = CreateIsolatedDotnetProbeStartInfo(readyPath);
+            using (var negativeControl = OwnedProcessGroup.StartSuspendedContained(startInfo))
+            {
+                var mainModuleFailure = Assert.Throws<Win32Exception>(
+                    () => _ = negativeControl.Process.MainModule?.FileName);
+                Assert.Equal(299, mainModuleFailure.NativeErrorCode);
+
+                var nativeIdentity = negativeControl.ReadLifecycleIdentity();
+                Assert.Equal(ProcessInspectionStatus.Available, nativeIdentity.Status);
+                Assert.NotNull(nativeIdentity.StartedAt);
+                Assert.False(string.IsNullOrWhiteSpace(nativeIdentity.ExecutablePath));
+                Assert.False(File.Exists(readyPath));
+                negativeControl.Group.Kill();
+                Assert.True(negativeControl.WaitForOwnedExit(TimeSpan.FromSeconds(5)));
+            }
+
+            var registrationStarted = Stopwatch.GetTimestamp();
+            child = WorkerProcessJobs.StartRegisteredOwnedOrThrow(
+                CreateIsolatedDotnetProbeStartInfo(readyPath),
+                "suspended-native-identity");
+            var registrationElapsed = Stopwatch.GetElapsedTime(registrationStarted);
+            var entry = Assert.Single(
+                WorkerProcessJobs.ListActiveRegistryEntriesForTests(),
+                candidate => candidate.ProcessId == child.Id);
+
+            var readyDeadline = DateTimeOffset.UtcNow.AddSeconds(10);
+            while (!File.Exists(readyPath) && DateTimeOffset.UtcNow < readyDeadline)
+            {
+                await Task.Delay(10, TestContext.Current.CancellationToken);
+            }
+
+            Assert.True(File.Exists(readyPath), "Suspended child did not publish its readiness sentinel after resume.");
+            var identity = Assert.IsType<SpawnProcessIdentity>(child.Identity);
+            Assert.Equal(child.Id, identity.ProcessId);
+            Assert.Equal(entry.ProcessStartedAt, identity.StartedAt);
+            Assert.Equal(entry.ImagePath, identity.ImagePath, ignoreCase: true);
+            Assert.True(
+                entry.RegisteredAt <= File.GetLastWriteTimeUtc(readyPath),
+                $"Registration {entry.RegisteredAt:O} must precede readiness {File.GetLastWriteTimeUtc(readyPath):O}.");
+            Console.WriteLine(
+                $"suspended-registration-receipt pid={child.Id} identity_attempts=1 " +
+                $"elapsed_ms={registrationElapsed.TotalMilliseconds:F3} registered_at={entry.RegisteredAt:O} " +
+                $"ready_at={File.GetLastWriteTimeUtc(readyPath):O} image={Path.GetFileName(entry.ImagePath)}");
+        }
+        finally
+        {
+            if (child is not null)
+            {
+                try { child.Kill(entireProcessTree: true); } catch { }
+                try
+                {
+                    using var timeout = new CancellationTokenSource(TimeSpan.FromSeconds(5));
+                    await child.WaitForExitAsync(timeout.Token);
+                }
+                catch { }
+                try { _ = child.Release(out _); } catch { }
+                child.Dispose();
+            }
+
+            WorkerProcessJobs.ClearRegistryForTests();
+            try { Directory.Delete(root, recursive: true); } catch { }
+        }
+    }
+
     [Xunit.Fact]
     public void WorkerProcessJobsPidAssociatedStartInfoThrowsPredictedDiagnostic()
     {
@@ -2231,6 +2312,55 @@ public sealed class WorkerProcessJobsTests : IDisposable
         try { process.Kill(entireProcessTree: true); } catch { }
         process.Dispose();
         throw new InvalidOperationException("Started wrapper process did not expose a durable identity within the registration window.");
+    }
+
+    private static ProcessStartInfo CreateIsolatedDotnetProbeStartInfo(string readyPath)
+    {
+        var assemblyDirectory = new DirectoryInfo(Path.GetDirectoryName(typeof(WorkerProcessJobsTests).Assembly.Location)!);
+        var configurationDirectory = assemblyDirectory.Parent;
+        var binDirectory = configurationDirectory?.Parent;
+        var testProjectDirectory = binDirectory?.Parent;
+        var probeAssemblyName = "Mcg.AgentOrchestrator.IsolatedDotnetProbe.dll";
+        var candidates = new List<string>
+        {
+            Path.Combine(assemblyDirectory.FullName, probeAssemblyName)
+        };
+        if (testProjectDirectory is not null && configurationDirectory is not null)
+        {
+            candidates.Add(Path.Combine(
+                testProjectDirectory.FullName,
+                "Fixtures",
+                "IsolatedDotnetProbe",
+                "bin",
+                configurationDirectory.Name,
+                assemblyDirectory.Name,
+                probeAssemblyName));
+        }
+
+        if (binDirectory?.Parent is { } artifactsBin && configurationDirectory is not null)
+        {
+            candidates.Add(Path.Combine(
+                artifactsBin.FullName,
+                "Mcg.AgentOrchestrator.IsolatedDotnetProbe",
+                configurationDirectory.Name,
+                probeAssemblyName));
+        }
+
+        var probeAssembly = candidates.FirstOrDefault(File.Exists);
+        Assert.False(
+            string.IsNullOrWhiteSpace(probeAssembly),
+            $"Missing isolated dotnet probe. Tried: {string.Join("; ", candidates)}");
+        var startInfo = new ProcessStartInfo
+        {
+            FileName = InfrastructureTestSupport.ResolveDotnetHostPath(),
+            UseShellExecute = false,
+            CreateNoWindow = true,
+            WorkingDirectory = Path.GetDirectoryName(readyPath)!
+        };
+        startInfo.ArgumentList.Add(probeAssembly!);
+        startInfo.ArgumentList.Add("spawn-descendant");
+        startInfo.ArgumentList.Add(readyPath);
+        return startInfo;
     }
 
     private static int WaitForPidFile(string path)

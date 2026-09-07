@@ -1,5 +1,6 @@
 using System.Runtime.InteropServices;
 using System.Text;
+using Microsoft.Win32.SafeHandles;
 
 namespace Mcg.AgentOrchestrator.Infrastructure;
 
@@ -59,6 +60,92 @@ internal static class WindowsNativeProcessInspection
 
         var ids = requestedProcessIds.Where(id => id > 0).Distinct().ToArray();
         return BeginOperation().ReadRequested(ids);
+    }
+
+    internal static ProcessLifecycleIdentityReadResult ReadLifecycleIdentity(
+        int expectedProcessId,
+        SafeFileHandle processHandle)
+    {
+        ArgumentOutOfRangeException.ThrowIfLessThan(expectedProcessId, 1);
+        ArgumentNullException.ThrowIfNull(processHandle);
+        if (!OperatingSystem.IsWindows())
+        {
+            return new(null, null, ProcessInspectionStatus.UnsupportedTarget, 0, "platform-check");
+        }
+
+        if (processHandle.IsClosed || processHandle.IsInvalid)
+        {
+            return new(null, null, ProcessInspectionStatus.NativeFailure, 0, "process-handle-validation");
+        }
+
+        var actualProcessId = GetProcessId(processHandle);
+        if (actualProcessId == 0)
+        {
+            var error = Marshal.GetLastWin32Error();
+            return new(null, null, StatusFromError(error), error, "process-id-read");
+        }
+
+        if (actualProcessId != (uint)expectedProcessId)
+        {
+            return new(null, null, ProcessInspectionStatus.DeadOrRecycled, 0, "process-id-match");
+        }
+
+        if (!GetExitCodeProcess(processHandle, out var exitCode))
+        {
+            var error = Marshal.GetLastWin32Error();
+            return new(null, null, StatusFromError(error), error, "process-liveness-read-before-identity");
+        }
+
+        if (exitCode != StillActive)
+        {
+            return new(null, null, ProcessInspectionStatus.Exited, 0, "process-liveness-read-before-identity");
+        }
+
+        var capacity = 32768u;
+        var path = new StringBuilder((int)capacity);
+        if (!QueryFullProcessImageName(processHandle, 0, path, ref capacity))
+        {
+            var error = Marshal.GetLastWin32Error();
+            return new(null, null, StatusFromError(error), error, "process-image-read");
+        }
+
+        if (!GetProcessTimes(processHandle, out var creationTime, out _, out _, out _))
+        {
+            var error = Marshal.GetLastWin32Error();
+            return new(null, null, StatusFromError(error), error, "process-creation-time-read");
+        }
+
+        DateTimeOffset startedAt;
+        try
+        {
+            startedAt = new DateTimeOffset(DateTime.FromFileTimeUtc(creationTime), TimeSpan.Zero);
+        }
+        catch (ArgumentOutOfRangeException)
+        {
+            return new(null, null, ProcessInspectionStatus.MalformedData, 0, "process-creation-time-conversion");
+        }
+
+        actualProcessId = GetProcessId(processHandle);
+        if (actualProcessId == 0)
+        {
+            var error = Marshal.GetLastWin32Error();
+            return new(null, null, StatusFromError(error), error, "process-liveness-read-after-identity");
+        }
+
+        if (actualProcessId != (uint)expectedProcessId)
+        {
+            return new(null, null, ProcessInspectionStatus.DeadOrRecycled, 0, "process-id-match-after-identity");
+        }
+
+        if (!GetExitCodeProcess(processHandle, out exitCode))
+        {
+            var error = Marshal.GetLastWin32Error();
+            return new(null, null, StatusFromError(error), error, "process-liveness-read-after-identity");
+        }
+
+        return exitCode == StillActive
+            ? new(path.ToString(), startedAt, ProcessInspectionStatus.Available, 0, "kernel-lifecycle-identity")
+            : new(null, null, ProcessInspectionStatus.Exited, 0, "process-liveness-read-after-identity");
     }
 
     public static ProcessInspectionResult ReadByNames(IEnumerable<string> processNames)
@@ -544,7 +631,9 @@ internal static class WindowsNativeProcessInspection
         }
     }
 
-    private static ProcessInspectionStatus StatusFromLastError() => Marshal.GetLastWin32Error() switch
+    private static ProcessInspectionStatus StatusFromLastError() => StatusFromError(Marshal.GetLastWin32Error());
+
+    private static ProcessInspectionStatus StatusFromError(int error) => error switch
     {
         ErrorAccessDenied => ProcessInspectionStatus.AccessDenied,
         ErrorInvalidParameter => ProcessInspectionStatus.Exited,
@@ -801,6 +890,12 @@ internal static class WindowsNativeProcessInspection
             new(Array.Empty<ProcessInspectionSeed>(), failure);
     }
     internal readonly record struct ProcessOpenResult(IntPtr Handle, int Error);
+    internal sealed record ProcessLifecycleIdentityReadResult(
+        string? ExecutablePath,
+        DateTimeOffset? StartedAt,
+        ProcessInspectionStatus Status,
+        int NativeError,
+        string Operation);
     internal sealed record OpenedProcessReadResult(
         int ParentProcessId,
         string? ExecutablePath,
@@ -831,6 +926,12 @@ internal static class WindowsNativeProcessInspection
     private static extern bool GetExitCodeProcess(IntPtr processHandle, out uint exitCode);
 
     [DllImport("kernel32.dll", SetLastError = true)]
+    private static extern bool GetExitCodeProcess(SafeFileHandle processHandle, out uint exitCode);
+
+    [DllImport("kernel32.dll", SetLastError = true)]
+    private static extern uint GetProcessId(SafeFileHandle processHandle);
+
+    [DllImport("kernel32.dll", SetLastError = true)]
     private static extern bool TerminateProcess(IntPtr processHandle, uint exitCode);
 
     [DllImport("kernel32.dll", SetLastError = true)]
@@ -843,9 +944,24 @@ internal static class WindowsNativeProcessInspection
         StringBuilder executablePath,
         ref uint size);
 
+    [DllImport("kernel32.dll", SetLastError = true, CharSet = CharSet.Unicode)]
+    private static extern bool QueryFullProcessImageName(
+        SafeFileHandle processHandle,
+        int flags,
+        StringBuilder executablePath,
+        ref uint size);
+
     [DllImport("kernel32.dll", SetLastError = true)]
     private static extern bool GetProcessTimes(
         IntPtr processHandle,
+        out long creationTime,
+        out long exitTime,
+        out long kernelTime,
+        out long userTime);
+
+    [DllImport("kernel32.dll", SetLastError = true)]
+    private static extern bool GetProcessTimes(
+        SafeFileHandle processHandle,
         out long creationTime,
         out long exitTime,
         out long kernelTime,
