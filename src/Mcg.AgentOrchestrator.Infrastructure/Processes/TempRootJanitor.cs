@@ -12,7 +12,10 @@ internal sealed record TempRootJanitorDeleteResult(
     TempRootJanitorDeleteStatus Status,
     string? ExceptionType,
     string? FailurePath,
-    int ReadOnlyAttributesCleared);
+    int ReadOnlyAttributesCleared,
+    string? ExceptionMessage = null,
+    int? ExceptionHResult = null,
+    int DeleteAttempts = 0);
 
 internal sealed record TempRootJanitorOwnedRoot(
     int ProcessId,
@@ -53,6 +56,8 @@ internal sealed record TempRootJanitorOwnedParentDeleteResult(
 internal static class TempRootJanitor
 {
     private const string OwnedRootParentName = "mcg-tests";
+    private const int DeleteAttemptLimit = 6;
+    private static readonly TimeSpan InitialDeleteRetryDelay = TimeSpan.FromMilliseconds(50);
 
     internal static string BuildOwnedRootPath(string sharedRoot, int processId)
     {
@@ -455,53 +460,80 @@ internal static class TempRootJanitor
             ? "none"
             : value.Length <= maximumLength ? value : value[..maximumLength];
 
-    internal static TempRootJanitorDeleteResult DeleteTree(string path)
+    internal static TempRootJanitorDeleteResult DeleteTree(string path) =>
+        DeleteTree(path, retryTransientFailures: false, delayAction: null);
+
+    internal static TempRootJanitorDeleteResult DeleteTreeWithRetry(string path) =>
+        DeleteTree(path, retryTransientFailures: true, Thread.Sleep);
+
+    internal static TempRootJanitorDeleteResult DeleteTreeWithRetry(
+        string path,
+        Action<TimeSpan> delayAction)
+    {
+        ArgumentNullException.ThrowIfNull(delayAction);
+        return DeleteTree(path, retryTransientFailures: true, delayAction);
+    }
+
+    private static TempRootJanitorDeleteResult DeleteTree(
+        string path,
+        bool retryTransientFailures,
+        Action<TimeSpan>? delayAction)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(path);
 
-        try
-        {
-            Directory.Delete(path, recursive: true);
-            return Deleted(path, readOnlyAttributesCleared: 0);
-        }
-        catch (DirectoryNotFoundException)
-        {
-            return AlreadyAbsent(path);
-        }
-        catch (UnauthorizedAccessException)
-        {
-            // Clearing attributes is deliberately off the successful path. Git object stores and
-            // other test fixtures create read-only descendants which make recursive delete fail.
-        }
-        catch (Exception ex) when (IsFileSystemFailure(ex))
-        {
-            return Failed(path, ex, FindFirstInaccessiblePath(path), readOnlyAttributesCleared: 0);
-        }
-
         var cleared = 0;
-        try
+        var retryDelay = InitialDeleteRetryDelay;
+        Exception? lastFailure = null;
+        var attemptLimit = retryTransientFailures ? DeleteAttemptLimit : 2;
+        for (var attempt = 1; attempt <= attemptLimit; attempt++)
         {
-            cleared = ClearReadOnlyAttributes(path);
-        }
-        catch (Exception ex) when (IsFileSystemFailure(ex))
-        {
-            // Retry anyway: a partial clear can still make the tree deletable. If not, the delete
-            // outcome below remains the authoritative failure rather than this preparation error.
+            try
+            {
+                Directory.Delete(path, recursive: true);
+                return Deleted(path, cleared, attempt);
+            }
+            catch (DirectoryNotFoundException)
+            {
+                return AlreadyAbsent(path, cleared, attempt);
+            }
+            catch (Exception ex) when (IsFileSystemFailure(ex))
+            {
+                lastFailure = ex;
+                if (attempt == 1 && (retryTransientFailures || ex is UnauthorizedAccessException))
+                {
+                    try
+                    {
+                        // A recursive delete can surface either UnauthorizedAccessException or
+                        // IOException after encountering read-only or partially removed descendants.
+                        // Clear attributes once, then use the same bounded retry path for both.
+                        cleared = ClearReadOnlyAttributes(path);
+                    }
+                    catch (Exception clearException) when (IsFileSystemFailure(clearException))
+                    {
+                        // Preserve the delete exception as the authoritative failure. A partial
+                        // attribute clear can still make a later attempt succeed.
+                    }
+                }
+
+                var shouldRetry = attempt < attemptLimit &&
+                    (retryTransientFailures || ex is UnauthorizedAccessException);
+                if (shouldRetry)
+                {
+                    if (retryTransientFailures)
+                    {
+                        delayAction!(retryDelay);
+                        retryDelay += retryDelay;
+                    }
+                    continue;
+                }
+
+                return Failed(path, ex, FindFirstRemainingPath(path), cleared, attempt);
+            }
         }
 
-        try
-        {
-            Directory.Delete(path, recursive: true);
-            return Deleted(path, cleared);
-        }
-        catch (DirectoryNotFoundException)
-        {
-            return AlreadyAbsent(path, cleared);
-        }
-        catch (Exception ex) when (IsFileSystemFailure(ex))
-        {
-            return Failed(path, ex, FindFirstInaccessiblePath(path), cleared);
-        }
+        throw new InvalidOperationException(
+            $"Temp-root deletion exhausted its retry loop without a result for '{path}'.",
+            lastFailure);
     }
 
     private static int ClearReadOnlyAttributes(string root)
@@ -530,31 +562,18 @@ internal static class TempRootJanitor
         return cleared;
     }
 
-    private static string? FindFirstInaccessiblePath(string root)
+    private static string? FindFirstRemainingPath(string root)
     {
         try
         {
-            foreach (var path in Directory.EnumerateFileSystemEntries(
-                         root,
-                         "*",
-                         SearchOption.AllDirectories).Prepend(root))
-            {
-                try
-                {
-                    _ = File.GetAttributes(path);
-                }
-                catch (Exception ex) when (IsFileSystemFailure(ex))
-                {
-                    return path;
-                }
-            }
+            return Directory.EnumerateFileSystemEntries(root, "*", SearchOption.AllDirectories)
+                .OrderByDescending(path => path.Length)
+                .FirstOrDefault() ?? root;
         }
         catch (Exception ex) when (IsFileSystemFailure(ex))
         {
             return root;
         }
-
-        return root;
     }
 
     private static IEnumerable<string> EnumerateStandardSharedRoots()
@@ -572,35 +591,45 @@ internal static class TempRootJanitor
         }
     }
 
-    private static TempRootJanitorDeleteResult Deleted(string path, int readOnlyAttributesCleared) =>
+    private static TempRootJanitorDeleteResult Deleted(
+        string path,
+        int readOnlyAttributesCleared,
+        int deleteAttempts) =>
         new(
             path,
             TempRootJanitorDeleteStatus.Deleted,
             ExceptionType: null,
             FailurePath: null,
-            ReadOnlyAttributesCleared: readOnlyAttributesCleared);
+            ReadOnlyAttributesCleared: readOnlyAttributesCleared,
+            DeleteAttempts: deleteAttempts);
 
     private static TempRootJanitorDeleteResult AlreadyAbsent(
         string path,
-        int readOnlyAttributesCleared = 0) =>
+        int readOnlyAttributesCleared = 0,
+        int deleteAttempts = 1) =>
         new(
             path,
             TempRootJanitorDeleteStatus.AlreadyAbsent,
             ExceptionType: null,
             FailurePath: null,
-            ReadOnlyAttributesCleared: readOnlyAttributesCleared);
+            ReadOnlyAttributesCleared: readOnlyAttributesCleared,
+            DeleteAttempts: deleteAttempts);
 
     private static TempRootJanitorDeleteResult Failed(
         string path,
         Exception exception,
         string? failurePath,
-        int readOnlyAttributesCleared) =>
+        int readOnlyAttributesCleared,
+        int deleteAttempts = 1) =>
         new(
             path,
             TempRootJanitorDeleteStatus.Failed,
             exception.GetType().Name,
             failurePath,
-            readOnlyAttributesCleared);
+            readOnlyAttributesCleared,
+            exception.Message,
+            exception.HResult,
+            deleteAttempts);
 
     private static bool IsFileSystemFailure(Exception exception) =>
         exception is UnauthorizedAccessException or IOException;

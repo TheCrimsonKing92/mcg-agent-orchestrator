@@ -508,20 +508,39 @@ internal static class AssemblyTempRedirect
 
     internal static TempRootDeleteOutcome DeleteTree(string path)
     {
-        var result = TempRootJanitor.DeleteTree(path);
+        return MapDeleteOutcome(path, TempRootJanitor.DeleteTree(path));
+    }
+
+    internal static TempRootDeleteOutcome DeleteOwnedTree(string path)
+    {
+        return MapDeleteOutcome(path, TempRootJanitor.DeleteTreeWithRetry(path));
+    }
+
+    internal static TempRootDeleteOutcome DeleteOwnedTree(string path, Action<TimeSpan> delayAction)
+    {
+        return MapDeleteOutcome(path, TempRootJanitor.DeleteTreeWithRetry(path, delayAction));
+    }
+
+    private static TempRootDeleteOutcome MapDeleteOutcome(string path, TempRootJanitorDeleteResult result)
+    {
         return result.Status switch
         {
             TempRootJanitorDeleteStatus.Deleted => TempRootDeleteOutcome.Deleted(
                 path,
-                result.ReadOnlyAttributesCleared),
+                result.ReadOnlyAttributesCleared,
+                result.DeleteAttempts),
             TempRootJanitorDeleteStatus.AlreadyAbsent => TempRootDeleteOutcome.AlreadyAbsent(
                 path,
-                result.ReadOnlyAttributesCleared),
+                result.ReadOnlyAttributesCleared,
+                result.DeleteAttempts),
             _ => TempRootDeleteOutcome.Failure(
                 path,
                 result.ExceptionType ?? "unknown",
                 result.FailurePath,
-                result.ReadOnlyAttributesCleared)
+                result.ReadOnlyAttributesCleared,
+                result.ExceptionMessage,
+                result.ExceptionHResult,
+                result.DeleteAttempts)
         };
     }
 
@@ -636,7 +655,7 @@ internal static class AssemblyTempRedirect
         try
         {
             Interlocked.Exchange(ref processRootLease, null)?.Dispose();
-            outcome = DeleteTree(rootPath);
+            outcome = DeleteOwnedTree(rootPath);
             if (outcome.Status is TempRootDeleteStatus.Deleted or TempRootDeleteStatus.AlreadyAbsent)
             {
                 TryDeleteRootLease(rootPath);
@@ -692,8 +711,19 @@ internal static class AssemblyTempRedirect
             $"assembly-temp-cleanup owner={OwnerToken(owner)} phase={phase} " +
             $"process_id={Environment.ProcessId.ToString(System.Globalization.CultureInfo.InvariantCulture)} " +
             $"elapsed_ms={elapsedMilliseconds.ToString(System.Globalization.CultureInfo.InvariantCulture)} " +
-            $"delete_status={outcome.Status} root={QuoteDiagnostic(outcome.Path)}";
+            $"delete_status={outcome.Status} root={QuoteDiagnostic(outcome.Path)} " +
+            $"delete_attempts={outcome.DeleteAttempts.ToString(System.Globalization.CultureInfo.InvariantCulture)} " +
+            $"exception_type={SanitizeDiagnosticToken(outcome.ExceptionType ?? "none")} " +
+            $"exception_hresult={FormatHResult(outcome.ExceptionHResult)} " +
+            $"failure_path={QuoteDiagnostic(outcome.FailurePath ?? "none")} " +
+            $"exception_message={QuoteDiagnostic(SingleLine(outcome.ExceptionMessage ?? "none"))}";
     }
+
+    private static string FormatHResult(int? hresult) =>
+        hresult is null ? "none" : $"0x{unchecked((uint)hresult.Value):X8}";
+
+    private static string SingleLine(string value) =>
+        value.Replace('\r', ' ').Replace('\n', ' ');
 
     private static string OwnerToken(AssemblyTempRootCleanupOwner owner) => owner switch
     {
@@ -1106,23 +1136,34 @@ internal sealed record TempRootDeleteOutcome(
     TempRootDeleteStatus Status,
     string? ExceptionType,
     string? FailurePath = null,
-    int ReadOnlyAttributesCleared = 0)
+    int ReadOnlyAttributesCleared = 0,
+    string? ExceptionMessage = null,
+    int? ExceptionHResult = null,
+    int DeleteAttempts = 0)
 {
-    internal static TempRootDeleteOutcome Deleted(string path, int readOnlyAttributesCleared = 0) =>
+    internal static TempRootDeleteOutcome Deleted(
+        string path,
+        int readOnlyAttributesCleared = 0,
+        int deleteAttempts = 1) =>
         new(
             path,
             TempRootDeleteStatus.Deleted,
             ExceptionType: null,
             FailurePath: null,
-            ReadOnlyAttributesCleared: readOnlyAttributesCleared);
+            ReadOnlyAttributesCleared: readOnlyAttributesCleared,
+            DeleteAttempts: deleteAttempts);
 
-    internal static TempRootDeleteOutcome AlreadyAbsent(string path, int readOnlyAttributesCleared = 0) =>
+    internal static TempRootDeleteOutcome AlreadyAbsent(
+        string path,
+        int readOnlyAttributesCleared = 0,
+        int deleteAttempts = 1) =>
         new(
             path,
             TempRootDeleteStatus.AlreadyAbsent,
             ExceptionType: null,
             FailurePath: null,
-            ReadOnlyAttributesCleared: readOnlyAttributesCleared);
+            ReadOnlyAttributesCleared: readOnlyAttributesCleared,
+            DeleteAttempts: deleteAttempts);
 
     internal static TempRootDeleteOutcome RetainedLiveOwner(string path) =>
         new(
@@ -1133,14 +1174,32 @@ internal sealed record TempRootDeleteOutcome(
             ReadOnlyAttributesCleared: 0);
 
     internal static TempRootDeleteOutcome Failure(string path, Exception exception) =>
-        Failure(path, exception.GetType().Name, failurePath: null, readOnlyAttributesCleared: 0);
+        Failure(
+            path,
+            exception.GetType().Name,
+            failurePath: null,
+            readOnlyAttributesCleared: 0,
+            exception.Message,
+            exception.HResult,
+            deleteAttempts: 1);
 
     internal static TempRootDeleteOutcome Failure(
         string path,
         string exceptionType,
         string? failurePath,
-        int readOnlyAttributesCleared) =>
-        new(path, TempRootDeleteStatus.Failed, exceptionType, failurePath, readOnlyAttributesCleared);
+        int readOnlyAttributesCleared,
+        string? exceptionMessage = null,
+        int? exceptionHResult = null,
+        int deleteAttempts = 1) =>
+        new(
+            path,
+            TempRootDeleteStatus.Failed,
+            exceptionType,
+            failurePath,
+            readOnlyAttributesCleared,
+            exceptionMessage,
+            exceptionHResult,
+            deleteAttempts);
 }
 
 internal interface IWorkerIntegrityLabelerDiagnostics
