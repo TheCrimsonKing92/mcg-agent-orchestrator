@@ -453,7 +453,13 @@ The first commit is made on `goal/<prefix>` inside the worktree. The second merg
 
 If the worker ran at low integrity and git metadata under `.git\worktrees\<prefix>` rejects `index.lock`, the worker may exit 0 with a correct dirty worktree and no commit. Treat that as operator recovery, not an implementation failure: inspect the diff, run focused tests, commit the worker changes from a normal-integrity shell, then record manual verification and run acceptance.
 
-### 6.2.1 Manual landing for escalated risk
+### 6.2.1 Split-history rebase materialization
+
+With `core.autocrlf=true`, a rebase can replay a byte-exact content commit before the later commit that declares the path `-text`. Git can exit 0 with the final blob and attributes correct while the working file remains CRLF-materialized; porcelain status may report it dirty or remain cache-blind. `workspace rebase <goal-prefix>` therefore treats Git exit 0 as provisional: `GoalWorktrees` scans tracked EOL materialization independently of porcelain status, then verifies the resolved worktree, branch/index/blob identity, effective attributes, operation state, raw bytes, and final clean status before reporting integration readiness.
+
+When every dirty path is a tracked regular file with a clean index, effective `-text`, no binary/filter/diff driver, and a byte difference proven to be CRLF-only, `GoalWorktrees` preserves exact preimages under the worktree Git metadata, checks out only those paths, and prints a rematerialization receipt naming the writer, paths, and preimage directory. Any semantic or unowned change, bare-CR/mixed binary shape, unsupported mode, active Git operation, identity drift, command failure, or incomplete verification returns `IncompleteMaterialization` and refuses readiness. Inspect the named worktree and preserved preimages; copy any preimages needed for later diagnosis before `workspace remove`, because worktree removal deletes their per-worktree Git metadata. Do not reset the branch, rewrite its history, change expected hashes, waive whitespace gates, or apply process-wide conversion flags.
+
+### 6.2.2 Manual landing for escalated risk
 
 Security-risk and build-system goals may intentionally stop at the landing gate even after acceptance passes. When the escalation is only "review before landing", land out-of-band from the repository root on the main checkout and record it:
 
@@ -470,7 +476,7 @@ git merge --no-ff goal/<goal-prefix>
 
 Use this only after reviewing the diff and confirming the branch is the intended `goal/<prefix>`. Pre-landing verification merges happen on a scratch branch such as `verify/<prefix>`, never on `main`; `main` moves only at the actual landing step. Until the c0624af9 verification fix lands, a goal can reach `Verified` without executed self-tests, so before any hand-landing run the goal's own new/changed test classes and keep the receipts. `goal-mark-landed` records the out-of-band merge, writes a durable retired terminal disposition, and lets the conductor continue record/cleanup steps; it is not a replacement for acceptance or review.
 
-### 6.2.2 Optional remote mirror
+### 6.2.3 Optional remote mirror
 
 Remote mirroring is disabled unless `config/mirror.json` opts in. The file names git remotes already configured in the repository; the conductor uses plain `git push`, so it works with GitHub, GitLab, Gitea, Bitbucket, and bare SSH/filesystem remotes without forge APIs.
 

@@ -99,7 +99,7 @@ public sealed class TrialHarnessComparisonTests
     }
 
     [Xunit.Fact]
-    public void DurableReceiptsDoNotPersistHarnessOutputThatEchoesBrief()
+    public void ResultJsonDoesNotInlineRetainedOutputThatEchoesBrief()
     {
         const string secret = "TRIAL-BRIEF-OUTPUT-SECRET-8224d42e9f6a";
         using var fixture = new Fixture();
@@ -126,15 +126,15 @@ public sealed class TrialHarnessComparisonTests
             alpha.StandardOutput.ByteCount);
         Xunit.Assert.Equal(ComputeSha256(host.StdoutContent["alpha"]), alpha.StandardOutput.Sha256);
         Xunit.Assert.Equal(ComputeSha256(host.StderrContent["alpha"]), alpha.StandardError.Sha256);
-        var durableFiles = Directory.GetFiles(result.ReceiptDirectory, "*", SearchOption.AllDirectories);
-        Xunit.Assert.DoesNotContain(durableFiles, path =>
-            Path.GetFileName(path) is "stdout.log" or "stderr.log");
-        Xunit.Assert.All(durableFiles, path =>
+        var jsonReceipts = Directory.GetFiles(result.ReceiptDirectory, "*.json", SearchOption.AllDirectories);
+        Xunit.Assert.All(jsonReceipts, path =>
             Xunit.Assert.DoesNotContain(secret, File.ReadAllText(path), StringComparison.Ordinal));
+        Xunit.Assert.Contains(secret, File.ReadAllText(alpha.StandardOutput.RetainedPath!), StringComparison.Ordinal);
+        Xunit.Assert.Equal(secret, File.ReadAllText(alpha.StandardError.RetainedPath!));
     }
 
     [Xunit.Fact]
-    public void MalformedWorkerResultRetainsOnlyTypedFailureAndOutputMetadata()
+    public void MalformedWorkerResultRetainsFailureAndSeparateDiagnostic()
     {
         const string secret = "TRIAL-MALFORMED-OUTPUT-SECRET-9acf8e81b452";
         const string malformed = "WORKER_RESULT:\nblockers: none\nEND_WORKER_RESULT";
@@ -157,11 +157,10 @@ public sealed class TrialHarnessComparisonTests
         Xunit.Assert.Equal(System.Text.Encoding.UTF8.GetByteCount(malformed), alpha.StandardOutput?.ByteCount);
         Xunit.Assert.Equal(ComputeSha256(malformed), alpha.StandardOutput?.Sha256);
         Xunit.Assert.Equal(ComputeSha256(secret), alpha.StandardError?.Sha256);
-        var durableFiles = Directory.GetFiles(result.ReceiptDirectory, "*", SearchOption.AllDirectories);
-        Xunit.Assert.DoesNotContain(durableFiles, path =>
-            Path.GetFileName(path) is "stdout.log" or "stderr.log");
-        Xunit.Assert.All(durableFiles, path =>
+        var jsonReceipts = Directory.GetFiles(result.ReceiptDirectory, "*.json", SearchOption.AllDirectories);
+        Xunit.Assert.All(jsonReceipts, path =>
             Xunit.Assert.DoesNotContain(secret, File.ReadAllText(path), StringComparison.Ordinal));
+        Xunit.Assert.Equal(secret, File.ReadAllText(alpha.StandardError!.RetainedPath!));
     }
 
     [Xunit.Fact]
@@ -175,6 +174,274 @@ public sealed class TrialHarnessComparisonTests
 
         Xunit.Assert.Equal(first.Value, second.Value);
         Xunit.Assert.NotEqual(first.SourceProvenance, second.SourceProvenance);
+    }
+
+    [Xunit.Fact]
+    public void RunRetainsInspectableEvidenceAfterRootDeletion()
+    {
+        using var fixture = new Fixture();
+        var host = new FakeTrialRootHost(fixture.Root);
+        host.StdoutContent["alpha"] = $"alpha stdout\n{SuccessfulWorkerResult}";
+        host.StderrContent["alpha"] = "alpha stderr diagnostic";
+
+        var result = new TrialHarnessComparison(host).Run(fixture.Request(
+            new("alpha", "alpha.exe", []),
+            new("beta", "beta.exe", [])));
+
+        var alpha = result.Harnesses.Single(item => item.Name == "alpha");
+        var armDirectory = Path.GetDirectoryName(alpha.ReceiptPath)!;
+        Xunit.Assert.All(host.RootPaths, root => Xunit.Assert.False(Directory.Exists(root)));
+        Xunit.Assert.Equal(Path.Combine(armDirectory, "stdout.diagnostic.log"), alpha.StandardOutput!.RetainedPath);
+        Xunit.Assert.Equal(Path.Combine(armDirectory, "stderr.diagnostic.log"), alpha.StandardError!.RetainedPath);
+        Xunit.Assert.Equal(Path.Combine(armDirectory, "teardown-receipt.json"), alpha.TeardownReceiptPath);
+        Xunit.Assert.Equal(host.StdoutContent["alpha"], File.ReadAllText(alpha.StandardOutput.RetainedPath));
+        Xunit.Assert.Equal(host.StderrContent["alpha"], File.ReadAllText(alpha.StandardError.RetainedPath));
+        Xunit.Assert.True(alpha.StandardOutput.ContentAvailable);
+        Xunit.Assert.True(alpha.StandardError.ContentAvailable);
+        Xunit.Assert.False(alpha.StandardOutput.Truncated);
+        Xunit.Assert.False(alpha.StandardError.Truncated);
+        Xunit.Assert.True(alpha.StandardOutput.SourceStreamComplete);
+        Xunit.Assert.True(alpha.StandardError.SourceStreamComplete);
+        Xunit.Assert.Equal(alpha.WorkloadIdentity!.Value, alpha.StandardOutput.WorkloadIdentity);
+        Xunit.Assert.Equal(alpha.ArmIdentity!.Value, alpha.StandardOutput.ArmIdentity);
+        Xunit.Assert.False(string.IsNullOrWhiteSpace(alpha.StandardOutput.AttemptIdentity));
+        Xunit.Assert.Equal(alpha.StandardOutput.AttemptIdentity, alpha.StandardError.AttemptIdentity);
+        Xunit.Assert.Equal(ComputeSha256(File.ReadAllBytes(alpha.StandardOutput.RetainedPath)), alpha.StandardOutput.RetainedSha256);
+        Xunit.Assert.Equal(ComputeSha256(File.ReadAllBytes(alpha.StandardError.RetainedPath)), alpha.StandardError.RetainedSha256);
+        Xunit.Assert.Equal(ComputeSha256(File.ReadAllBytes(alpha.TeardownReceiptPath)), alpha.TeardownReceiptSha256);
+        var teardown = System.Text.Json.JsonSerializer.Deserialize<TrialTeardownReport>(File.ReadAllText(alpha.TeardownReceiptPath));
+        Xunit.Assert.Equal(host.RootPaths[0], teardown!.RootPath);
+        Xunit.Assert.Equal(alpha.SourceTeardownReceiptPath, teardown.ReceiptPath);
+    }
+
+    [Xunit.Fact]
+    public void AboveLimitOutputKeepsHeadTailAndOriginalVerdict()
+    {
+        using var fixture = new Fixture();
+        var host = new FakeTrialRootHost(fixture.Root);
+        var stdout = "HEAD-CONTEXT\n" + new string('x', TrialHarnessComparison.MaximumRetainedDiagnosticBytes + 512)
+            + "\nTAIL-CONTEXT\n" + SuccessfulWorkerResult;
+        host.StdoutContent["alpha"] = stdout;
+
+        var result = new TrialHarnessComparison(host).Run(fixture.Request(
+            new("alpha", "alpha.exe", []),
+            new("beta", "beta.exe", [])));
+
+        var alpha = result.Harnesses.Single(item => item.Name == "alpha");
+        var retained = File.ReadAllBytes(alpha.StandardOutput!.RetainedPath!);
+        var retainedText = System.Text.Encoding.UTF8.GetString(retained);
+        Xunit.Assert.True(result.Succeeded);
+        Xunit.Assert.Equal(TrialHarnessOutcome.Completed, alpha.Outcome);
+        Xunit.Assert.Equal(TrialWorkerResultStatus.Valid, alpha.WorkerResult.Status);
+        Xunit.Assert.Equal(TrialHarnessComparison.MaximumRetainedDiagnosticBytes, retained.Length);
+        Xunit.Assert.True(alpha.StandardOutput.Truncated);
+        Xunit.Assert.True(alpha.StandardOutput.SourceStreamComplete);
+        Xunit.Assert.StartsWith("HEAD-CONTEXT", retainedText, StringComparison.Ordinal);
+        Xunit.Assert.Contains("TAIL-CONTEXT", retainedText, StringComparison.Ordinal);
+        Xunit.Assert.Contains("END_WORKER_RESULT", retainedText, StringComparison.Ordinal);
+        Xunit.Assert.Contains("mcg-trial-diagnostic-truncated", retainedText, StringComparison.Ordinal);
+        Xunit.Assert.Equal(ComputeSha256(stdout), alpha.StandardOutput.Sha256);
+        Xunit.Assert.Equal(ComputeSha256(retained), alpha.StandardOutput.RetainedSha256);
+    }
+
+    [Xunit.Fact]
+    public void ValidResultOutsideInspectionTailCannotAuthorizeCompletion()
+    {
+        using var fixture = new Fixture();
+        var host = new FakeTrialRootHost(fixture.Root);
+        host.StdoutContent["alpha"] = SuccessfulWorkerResult
+            + new string('z', (1024 * 1024) + TrialHarnessComparison.MaximumRetainedDiagnosticBytes);
+
+        var result = new TrialHarnessComparison(host).Run(fixture.Request(
+            new("alpha", "alpha.exe", []),
+            new("beta", "beta.exe", [])));
+
+        var alpha = result.Harnesses.Single(item => item.Name == "alpha");
+        var retainedText = File.ReadAllText(alpha.StandardOutput!.RetainedPath!);
+        Xunit.Assert.False(result.Succeeded);
+        Xunit.Assert.Equal(TrialHarnessOutcome.WorkerResultInvalid, alpha.Outcome);
+        Xunit.Assert.Equal(TrialWorkerResultStatus.InspectionLimitExceeded, alpha.WorkerResult.Status);
+        Xunit.Assert.True(alpha.StandardOutput.Truncated);
+        Xunit.Assert.Contains("END_WORKER_RESULT", retainedText, StringComparison.Ordinal);
+    }
+
+    [Xunit.Fact]
+    public void EmptyOutputRemainsMissingAndRetainsCompleteEmptyBytes()
+    {
+        using var fixture = new Fixture();
+        var host = new FakeTrialRootHost(fixture.Root);
+        host.StdoutContent["alpha"] = string.Empty;
+
+        var result = new TrialHarnessComparison(host).Run(fixture.Request(
+            new("alpha", "alpha.exe", []),
+            new("beta", "beta.exe", [])));
+
+        var alpha = result.Harnesses.Single(item => item.Name == "alpha");
+        Xunit.Assert.False(result.Succeeded);
+        Xunit.Assert.Equal(TrialHarnessOutcome.WorkerResultInvalid, alpha.Outcome);
+        Xunit.Assert.Equal(TrialWorkerResultStatus.Missing, alpha.WorkerResult.Status);
+        Xunit.Assert.True(alpha.StandardOutput!.ContentAvailable);
+        Xunit.Assert.Equal(0, alpha.StandardOutput.ByteCount);
+        Xunit.Assert.Equal(0, alpha.StandardOutput.RetainedByteCount);
+        Xunit.Assert.False(alpha.StandardOutput.Truncated);
+        Xunit.Assert.True(alpha.StandardOutput.SourceStreamComplete);
+        Xunit.Assert.Empty(File.ReadAllBytes(alpha.StandardOutput.RetainedPath!));
+    }
+
+    [Xunit.Fact]
+    public void OutputPublicationFailureIsTypedAndCleanupStillRuns()
+    {
+        using var fixture = new Fixture();
+        var host = new FakeTrialRootHost(fixture.Root);
+        var comparison = new TrialHarnessComparison(host, (path, bytes) =>
+        {
+            if (path.EndsWith("stdout.diagnostic.log", StringComparison.OrdinalIgnoreCase))
+            {
+                throw new IOException("injected stdout publication failure");
+            }
+
+            File.WriteAllBytes(path, bytes);
+        });
+
+        var result = comparison.Run(fixture.Request(
+            new("alpha", "alpha.exe", []),
+            new("beta", "beta.exe", [])));
+
+        var alpha = result.Harnesses.Single(item => item.Name == "alpha");
+        Xunit.Assert.False(result.Succeeded);
+        Xunit.Assert.Equal(TrialHarnessOutcome.DiagnosticPublicationFailed, alpha.Outcome);
+        var failure = Xunit.Assert.Single(alpha.PublicationFailures!, item => item.Artifact == "stdout");
+        Xunit.Assert.Equal("output-copy", failure.Stage);
+        Xunit.Assert.Contains("injected stdout publication failure", failure.Message, StringComparison.Ordinal);
+        Xunit.Assert.False(alpha.StandardOutput!.ContentAvailable);
+        Xunit.Assert.True(alpha.StandardError!.ContentAvailable);
+        Xunit.Assert.True(File.Exists(alpha.TeardownReceiptPath));
+        Xunit.Assert.All(host.RootPaths, root => Xunit.Assert.False(Directory.Exists(root)));
+    }
+
+    [Xunit.Fact]
+    public void MissingTeardownReceiptIsTypedAfterRootDeletion()
+    {
+        using var fixture = new Fixture();
+        var host = new FakeTrialRootHost(fixture.Root);
+        host.MissingTeardownReceipt.Add("alpha");
+
+        var result = new TrialHarnessComparison(host).Run(fixture.Request(
+            new("alpha", "alpha.exe", []),
+            new("beta", "beta.exe", [])));
+
+        var alpha = result.Harnesses.Single(item => item.Name == "alpha");
+        Xunit.Assert.False(result.Succeeded);
+        Xunit.Assert.Equal(TrialHarnessOutcome.DiagnosticPublicationFailed, alpha.Outcome);
+        Xunit.Assert.Null(alpha.TeardownReceiptPath);
+        Xunit.Assert.NotNull(alpha.SourceTeardownReceiptPath);
+        Xunit.Assert.Contains(alpha.PublicationFailures!, item =>
+            item.Artifact == "teardown-receipt" && item.Stage == "teardown-copy");
+        Xunit.Assert.True(alpha.StandardOutput!.ContentAvailable);
+        Xunit.Assert.All(host.RootPaths, root => Xunit.Assert.False(Directory.Exists(root)));
+    }
+
+    [Xunit.Fact]
+    public void TeardownExceptionPreservesDiagnosticsAndRemovesRoot()
+    {
+        using var fixture = new Fixture();
+        var host = new FakeTrialRootHost(fixture.Root);
+        host.ThrowOnDestroy.Add("alpha");
+
+        var result = new TrialHarnessComparison(host).Run(fixture.Request(
+            new("alpha", "alpha.exe", []),
+            new("beta", "beta.exe", [])));
+
+        var alpha = result.Harnesses.Single(item => item.Name == "alpha");
+        Xunit.Assert.False(result.Succeeded);
+        Xunit.Assert.Equal(TrialHarnessOutcome.TeardownUnclean, alpha.Outcome);
+        Xunit.Assert.Contains(alpha.Diagnostics, item => item.Contains("teardown failed", StringComparison.Ordinal));
+        Xunit.Assert.True(alpha.StandardOutput!.ContentAvailable);
+        Xunit.Assert.Null(alpha.TeardownReceiptPath);
+        Xunit.Assert.All(host.RootPaths, root => Xunit.Assert.False(Directory.Exists(root)));
+    }
+
+    [Xunit.Fact]
+    public void OutputAndTeardownFailuresKeepTeardownOutcome()
+    {
+        using var fixture = new Fixture();
+        var host = new FakeTrialRootHost(fixture.Root);
+        host.ThrowOnDestroy.Add("alpha");
+        var comparison = new TrialHarnessComparison(host, (path, bytes) =>
+        {
+            if (path.EndsWith("stdout.diagnostic.log", StringComparison.OrdinalIgnoreCase))
+            {
+                throw new IOException("injected stdout publication failure");
+            }
+
+            File.WriteAllBytes(path, bytes);
+        });
+
+        var result = comparison.Run(fixture.Request(
+            new("alpha", "alpha.exe", []),
+            new("beta", "beta.exe", [])));
+
+        var alpha = result.Harnesses.Single(item => item.Name == "alpha");
+        Xunit.Assert.Equal(TrialHarnessOutcome.TeardownUnclean, alpha.Outcome);
+        Xunit.Assert.Contains(alpha.PublicationFailures!, item => item.Artifact == "stdout");
+        Xunit.Assert.Contains(alpha.Diagnostics, item => item.Contains("teardown failed", StringComparison.Ordinal));
+        Xunit.Assert.All(host.RootPaths, root => Xunit.Assert.False(Directory.Exists(root)));
+    }
+
+    [Xunit.Fact]
+    public void CancellationKeepsLaunchFailureAndCleanupOutcome()
+    {
+        using var fixture = new Fixture();
+        var host = new FakeTrialRootHost(fixture.Root);
+        host.CancelOnWait.Add("alpha");
+
+        var result = new TrialHarnessComparison(host).Run(fixture.Request(
+            new("alpha", "alpha.exe", []),
+            new("beta", "beta.exe", [])));
+
+        var alpha = result.Harnesses.Single(item => item.Name == "alpha");
+        Xunit.Assert.False(result.Succeeded);
+        Xunit.Assert.Equal(TrialHarnessOutcome.LaunchFailed, alpha.Outcome);
+        Xunit.Assert.NotNull(alpha.StandardOutput);
+        Xunit.Assert.NotNull(alpha.StandardError);
+        Xunit.Assert.True(alpha.StandardOutput.ContentAvailable);
+        Xunit.Assert.True(alpha.StandardError.ContentAvailable);
+        Xunit.Assert.False(alpha.StandardOutput.SourceStreamComplete);
+        Xunit.Assert.False(alpha.StandardError.SourceStreamComplete);
+        Xunit.Assert.Contains("WORKER_RESULT:", File.ReadAllText(alpha.StandardOutput.RetainedPath!), StringComparison.Ordinal);
+        Xunit.Assert.Equal("alpha stderr", File.ReadAllText(alpha.StandardError.RetainedPath!));
+        Xunit.Assert.Equal(TrialWorkerResultStatus.Valid, alpha.WorkerResult.Status);
+        Xunit.Assert.Contains(alpha.Diagnostics, item => item.Contains("injected cancellation", StringComparison.Ordinal));
+        Xunit.Assert.All(host.RootPaths, root => Xunit.Assert.False(Directory.Exists(root)));
+    }
+
+    [Xunit.Fact]
+    public void LegacyOutputMetadataReadsAsContentUnavailable()
+    {
+        const string json = """{"byteCount":12,"sha256":"abc"}""";
+        var metadata = System.Text.Json.JsonSerializer.Deserialize<TrialOutputMetadata>(
+            json,
+            new System.Text.Json.JsonSerializerOptions(System.Text.Json.JsonSerializerDefaults.Web));
+
+        Xunit.Assert.NotNull(metadata);
+        Xunit.Assert.False(metadata.ContentAvailable);
+        Xunit.Assert.Null(metadata.RetainedPath);
+        Xunit.Assert.Null(metadata.SourceStreamComplete);
+    }
+
+    [Xunit.Fact]
+    public void UnsafeHarnessNameCannotRedirectDurablePublication()
+    {
+        using var fixture = new Fixture();
+        var host = new FakeTrialRootHost(fixture.Root);
+
+        var exception = Xunit.Assert.Throws<ArgumentException>(() => new TrialHarnessComparison(host).Run(fixture.Request(
+            new("..\\escape", "alpha.exe", []),
+            new("beta", "beta.exe", []))));
+
+        Xunit.Assert.Contains("safe receipt-directory name", exception.Message, StringComparison.Ordinal);
+        Xunit.Assert.Empty(host.RootPaths);
+        Xunit.Assert.False(Directory.Exists(Path.Combine(fixture.Root, "escape")));
     }
 
     [Xunit.Fact]
@@ -280,6 +547,11 @@ public sealed class TrialHarnessComparisonTests
         Xunit.Assert.Equal(TrialHarnessOutcome.TimedOut, alpha.Outcome);
         Xunit.Assert.NotNull(alpha.StandardOutput);
         Xunit.Assert.NotNull(alpha.StandardError);
+        Xunit.Assert.True(alpha.StandardOutput.ContentAvailable);
+        Xunit.Assert.True(alpha.StandardError.ContentAvailable);
+        Xunit.Assert.False(alpha.StandardOutput.SourceStreamComplete);
+        Xunit.Assert.False(alpha.StandardError.SourceStreamComplete);
+        Xunit.Assert.Equal(TrialWorkerResultStatus.Valid, alpha.WorkerResult.Status);
         Xunit.Assert.Contains(alpha.Diagnostics, diagnostic => diagnostic.Contains("timed out", StringComparison.OrdinalIgnoreCase));
     }
 
@@ -399,6 +671,9 @@ public sealed class TrialHarnessComparisonTests
         Convert.ToHexString(System.Security.Cryptography.SHA256.HashData(System.Text.Encoding.UTF8.GetBytes(value)))
             .ToLowerInvariant();
 
+    private static string ComputeSha256(byte[] value) =>
+        Convert.ToHexString(System.Security.Cryptography.SHA256.HashData(value)).ToLowerInvariant();
+
     private sealed class FakeTrialRootHost(string fixtureRoot) : ITrialRootHost
     {
         public string FixtureRoot { get; } = fixtureRoot;
@@ -409,9 +684,12 @@ public sealed class TrialHarnessComparisonTests
         public HashSet<string> ThrowOnStart { get; } = new(StringComparer.OrdinalIgnoreCase);
         public HashSet<string> ThrowOnAddEnvironment { get; } = new(StringComparer.OrdinalIgnoreCase);
         public HashSet<string> TimeoutOnWait { get; } = new(StringComparer.OrdinalIgnoreCase);
+        public HashSet<string> CancelOnWait { get; } = new(StringComparer.OrdinalIgnoreCase);
         public HashSet<string> HoldCaptureFilesOpen { get; } = new(StringComparer.OrdinalIgnoreCase);
         public HashSet<string> UncleanTeardown { get; } = new(StringComparer.OrdinalIgnoreCase);
+        public HashSet<string> ThrowOnDestroy { get; } = new(StringComparer.OrdinalIgnoreCase);
         public HashSet<string> MissingStdout { get; } = new(StringComparer.OrdinalIgnoreCase);
+        public HashSet<string> MissingTeardownReceipt { get; } = new(StringComparer.OrdinalIgnoreCase);
         public Dictionary<string, string> StdoutContent { get; } = new(StringComparer.OrdinalIgnoreCase);
         public Dictionary<string, string> StderrContent { get; } = new(StringComparer.OrdinalIgnoreCase);
         public Dictionary<string, IReadOnlyDictionary<string, string?>> LaunchEnvironments { get; } = new(StringComparer.OrdinalIgnoreCase);
@@ -473,7 +751,8 @@ public sealed class TrialHarnessComparisonTests
                     stderr,
                     owner.ExitCodes.GetValueOrDefault(name),
                     !owner.TimeoutOnWait.Contains(name),
-                    owner.HoldCaptureFilesOpen.Contains(name));
+                    owner.HoldCaptureFilesOpen.Contains(name),
+                    owner.CancelOnWait.Contains(name));
             }
 
             public TrialTeardownReport Destroy()
@@ -483,7 +762,13 @@ public sealed class TrialHarnessComparisonTests
                     : Array.Empty<string>();
                 var clean = !owner.UncleanTeardown.Contains(name);
                 Directory.Delete(root, recursive: true);
-                return new TrialTeardownReport(
+                if (owner.ThrowOnDestroy.Contains(name))
+                {
+                    throw new IOException("injected teardown failure after root deletion");
+                }
+
+                var receiptPath = Path.Combine(owner.FixtureRoot, $"{name}.teardown.json");
+                var report = new TrialTeardownReport(
                     root,
                     RootRemoved: true,
                     [],
@@ -492,8 +777,14 @@ public sealed class TrialHarnessComparisonTests
                     outsideWrites,
                     TimeSpan.FromMilliseconds(1),
                     TimeSpan.FromMilliseconds(1),
-                    Path.Combine(owner.FixtureRoot, $"{name}.teardown.json"),
+                    receiptPath,
                     clean ? [] : ["job exit was not confirmed"]);
+                if (!owner.MissingTeardownReceipt.Contains(name))
+                {
+                    File.WriteAllText(receiptPath, System.Text.Json.JsonSerializer.Serialize(report));
+                }
+
+                return report;
             }
 
             public void Dispose()
@@ -507,12 +798,21 @@ public sealed class TrialHarnessComparisonTests
             private readonly FileStream? _stdoutWriter;
             private readonly FileStream? _stderrWriter;
 
-            public FakeLaunch(string stdout, string stderr, int exitCode, bool exits, bool holdCaptureFilesOpen)
+            private readonly bool _cancelOnWait;
+
+            public FakeLaunch(
+                string stdout,
+                string stderr,
+                int exitCode,
+                bool exits,
+                bool holdCaptureFilesOpen,
+                bool cancelOnWait)
             {
                 StdoutPath = stdout;
                 StderrPath = stderr;
                 ExitCode = exitCode;
                 _exits = exits;
+                _cancelOnWait = cancelOnWait;
                 if (holdCaptureFilesOpen)
                 {
                     _stdoutWriter = new FileStream(stdout, FileMode.Open, FileAccess.Write, FileShare.ReadWrite | FileShare.Delete);
@@ -523,7 +823,15 @@ public sealed class TrialHarnessComparisonTests
             public string StdoutPath { get; }
             public string StderrPath { get; }
             public int ExitCode { get; }
-            public bool WaitForExit(int milliseconds) => _exits;
+            public bool WaitForExit(int milliseconds)
+            {
+                if (_cancelOnWait)
+                {
+                    throw new OperationCanceledException("injected cancellation");
+                }
+
+                return _exits;
+            }
             public void Dispose()
             {
                 _stdoutWriter?.Dispose();

@@ -226,7 +226,8 @@ public abstract class GoalWorktreeTestBase
         using var conn = new SqliteConnection(new SqliteConnectionStringBuilder
         {
             DataSource = statePath,
-            Mode = SqliteOpenMode.ReadOnly
+            Mode = SqliteOpenMode.ReadOnly,
+            Pooling = false
         }.ToString());
         conn.Open();
         using var command = conn.CreateCommand();
@@ -251,7 +252,8 @@ public abstract class GoalWorktreeTestBase
         using var conn = new SqliteConnection(new SqliteConnectionStringBuilder
         {
             DataSource = statePath,
-            Mode = SqliteOpenMode.ReadOnly
+            Mode = SqliteOpenMode.ReadOnly,
+            Pooling = false
         }.ToString());
         conn.Open();
         using var command = conn.CreateCommand();
@@ -275,7 +277,8 @@ public abstract class GoalWorktreeTestBase
         using var conn = new SqliteConnection(new SqliteConnectionStringBuilder
         {
             DataSource = statePath,
-            Mode = SqliteOpenMode.ReadOnly
+            Mode = SqliteOpenMode.ReadOnly,
+            Pooling = false
         }.ToString());
         conn.Open();
         using var command = conn.CreateCommand();
@@ -374,7 +377,8 @@ public abstract class GoalWorktreeTestBase
         string? repositoryRootEnvironment,
         params string[] arguments)
     {
-        var sourceRoot = InfrastructureTestSupport.FindRepositoryRoot();
+        var toolPath = Path.Combine(AppContext.BaseDirectory, "OrchestratorSqliteTools.dll");
+        Assert.True(File.Exists(toolPath), $"Built OrchestratorSqliteTools assembly not found: {toolPath}");
         var startInfo = new ProcessStartInfo
         {
             FileName = "dotnet",
@@ -388,18 +392,21 @@ public abstract class GoalWorktreeTestBase
             startInfo.Environment[OrchestratorWorkspace.RepoRootEnvironmentVariable] = repositoryRootEnvironment;
         else
             startInfo.Environment.Remove(OrchestratorWorkspace.RepoRootEnvironmentVariable);
-        startInfo.ArgumentList.Add("run");
-        startInfo.ArgumentList.Add("--project");
-        startInfo.ArgumentList.Add(Path.Combine(sourceRoot, "scripts", "OrchestratorSqliteTools"));
-        startInfo.ArgumentList.Add("--");
+        startInfo.ArgumentList.Add(toolPath);
         foreach (var argument in arguments)
             startInfo.ArgumentList.Add(argument);
 
         using var process = Process.Start(startInfo)
             ?? throw new InvalidOperationException("Failed to start OrchestratorSqliteTools.");
-        var stdout = process.StandardOutput.ReadToEnd();
-        var stderr = process.StandardError.ReadToEnd();
-        Assert.True(process.WaitForExit(TimeSpan.FromSeconds(90)), "OrchestratorSqliteTools did not exit within 90 seconds.");
+        var stdoutDrain = process.StandardOutput.ReadToEndAsync();
+        var stderrDrain = process.StandardError.ReadToEndAsync();
+        var exited = process.WaitForExit(TimeSpan.FromSeconds(90));
+        if (!exited)
+            StopProcess(process);
+
+        var stdout = stdoutDrain.GetAwaiter().GetResult();
+        var stderr = stderrDrain.GetAwaiter().GetResult();
+        Assert.True(exited, "OrchestratorSqliteTools did not exit within 90 seconds.");
         return (process.ExitCode, stdout, stderr);
     }
 

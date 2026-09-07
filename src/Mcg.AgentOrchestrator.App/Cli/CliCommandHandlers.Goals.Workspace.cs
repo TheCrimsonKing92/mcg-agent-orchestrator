@@ -383,6 +383,17 @@ private static string FormatWorkspaceRebase(GoalWorktreeRebaseResult rebase)
         }
     }
 
+    if (rebase.RematerializedFiles is { Count: > 0 })
+    {
+        text += $"{Environment.NewLine}Rematerialization receipt (owner: GoalWorktrees):";
+        foreach (var file in rebase.RematerializedFiles)
+        {
+            text += $"{Environment.NewLine}  {file}";
+        }
+
+        text += $"{Environment.NewLine}Preimages: {rebase.PreimageDirectory}";
+    }
+
     if (!string.IsNullOrWhiteSpace(rebase.SuggestedCommand))
     {
         text += $"{Environment.NewLine}Next: {rebase.SuggestedCommand}";

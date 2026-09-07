@@ -22,7 +22,8 @@ public enum GoalWorktreeRebaseStatus
     MissingWorktree,
     DirtyWorktree,
     Conflict,
-    Failed
+    Failed,
+    IncompleteMaterialization
 }
 
 public sealed record GoalWorktreeRebaseResult(
@@ -30,7 +31,9 @@ public sealed record GoalWorktreeRebaseResult(
     string BranchName,
     string Message,
     IReadOnlyList<string> ConflictFiles,
-    string? SuggestedCommand)
+    string? SuggestedCommand,
+    IReadOnlyList<string>? RematerializedFiles = null,
+    string? PreimageDirectory = null)
 {
     public bool UpdatedBranch => Status == GoalWorktreeRebaseStatus.Rebased ||
         Status == GoalWorktreeRebaseStatus.AlreadyFastForwardable;

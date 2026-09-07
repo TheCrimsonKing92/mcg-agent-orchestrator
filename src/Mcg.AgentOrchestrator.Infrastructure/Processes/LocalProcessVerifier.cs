@@ -286,6 +286,7 @@ public sealed class LocalProcessVerifier
             FileName = fileName,
             RedirectStandardOutput = true,
             RedirectStandardError = true,
+            RedirectStandardInput = true,
             UseShellExecute = false,
             CreateNoWindow = true,
             WorkingDirectory = workingDirectory
@@ -300,9 +301,10 @@ public sealed class LocalProcessVerifier
         // as the acceptance gate: a verification result must describe the code, not the launch context.
         GoalAcceptanceVerifier.ConfigureHermeticVerificationEnvironment(startInfo.Environment, workingDirectory);
 
-        using var process = Process.Start(startInfo)
-            ?? throw new InvalidOperationException($"Failed to start process: {fileName}");
-        WorkerProcessJobs.RegisterOrThrow(process, $"local-verification:{workingDirectory}");
+        using var process = WorkerProcessJobs.StartRegisteredOwnedRedirectedOrThrow(
+            startInfo,
+            $"local-verification:{workingDirectory}");
+        process.CompleteInput();
 
         using var timeoutCts = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
         timeoutCts.CancelAfter(commandTimeout);
@@ -360,10 +362,6 @@ public sealed class LocalProcessVerifier
             try { WorkerProcessJobs.TryKillOrFallback(process.Id); } catch { /* best effort */ }
             try { process.Kill(entireProcessTree: true); } catch { /* best effort */ }
             throw;
-        }
-        finally
-        {
-            WorkerProcessJobs.Release(process.Id);
         }
     }
 }

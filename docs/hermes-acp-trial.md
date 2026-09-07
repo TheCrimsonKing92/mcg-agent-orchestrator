@@ -45,3 +45,17 @@ Automated tests prove command-to-lifecycle wiring, JSON-RPC framing, role- and w
 ## Stop conditions
 
 Stop immediately for containment escape, protected/shared `.git` modification, prompt mismatch or truncation, false completion, uncontrolled activity, missing usage, hidden fallback, GUI/firewall prompt, timeout, orphan, or unresolved child. Do not relax a threshold on retry. Missing evidence is not clean evidence.
+
+## Durable comparison diagnostics
+
+`trial-compare` copies each arm's stdout, stderr, and teardown receipt into that arm's durable receipt directory before the disposable root becomes unreachable. Output metadata binds those copies to the workload, arm, and launch attempt; records source and retained lengths and SHA-256 hashes; and marks encoding, truncation, and whether the source process had fully exited. Output retention is capped at 64 KiB per stream. Above that limit, the retained bytes contain bounded beginning and ending context separated by an explicit omission marker.
+
+These files prove which bytes were retained for diagnosis after teardown. They do not authorize completion: `TrialHarnessComparison` validates `WORKER_RESULT` only from the original pre-teardown stdout stream, and never substitutes a truncated diagnostic, a digest, or a plausible terminal block from the retained copy. Legacy metadata-only receipts remain readable with `contentAvailable=false`. The durable teardown path in `result.json` points beside that result receipt; its source Low-integrity path remains separately recorded for custody tracing.
+
+The operator-owned non-model control is `config/trials/evidence-retention-control.json`. From the repository root, run:
+
+```powershell
+.\scripts\Invoke-RepoScript.ps1 scripts\Invoke-OrchestratorCommand.ps1 trial-compare --spec config/trials/evidence-retention-control.json --receipts <isolated-receipts-directory> --timeout-seconds 120
+```
+
+After both owned jobs exit, verify each arm's `stdout.diagnostic.log`, `stderr.diagnostic.log`, `teardown-receipt.json`, and `result.json`; compare the retained hashes and fixed arm-specific text; and confirm the teardown receipt's `rootPath` no longer exists. This is a contained child round trip only: it makes no model, authentication, network, or tool call and does not authorize or modify the Hermes configuration. If the host cannot create the contained child, record the control as platform-limited rather than treating a fake-host test as the round trip.

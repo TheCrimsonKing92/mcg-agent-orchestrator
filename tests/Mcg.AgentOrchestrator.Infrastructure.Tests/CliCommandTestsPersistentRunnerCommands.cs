@@ -370,7 +370,7 @@ public sealed class CliCommandTestsPersistentRunnerCommands : CliCommandTestBase
                 new TaskDispatchRecord(profileName, "Write-Output ok", root, DateTimeOffset.UtcNow));
             await repository.SaveAsync(kernel);
 
-            using (var connection = new Microsoft.Data.Sqlite.SqliteConnection($"Data Source={workspace.SqliteStatePath}"))
+            using (var connection = new Microsoft.Data.Sqlite.SqliteConnection($"Data Source={workspace.SqliteStatePath};Pooling=False"))
             {
                 connection.Open();
                 using var trigger = connection.CreateCommand();

@@ -238,12 +238,7 @@ public static partial class GoalWorktrees
         }
         if (rebase.ExitCode == 0)
         {
-            return new GoalWorktreeRebaseResult(
-                GoalWorktreeRebaseStatus.Rebased,
-                branch,
-                $"Rebased {branch} onto {baseBranch}; acceptance can now fast-forward after review.",
-                [],
-                $"acceptance {Prefix(goalId)}");
+            return ValidatePostRebaseMaterialization(worktreePath, branch, baseBranch, goalId);
         }
 
         var conflictFiles = GetConflictFiles(worktreePath);
