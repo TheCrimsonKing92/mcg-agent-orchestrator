@@ -819,6 +819,11 @@ public sealed class DotnetBuildEnvironmentManagerTestsFocusedRunner
             return;
         }
 
+        // This is a conservative setup/cleanup ceiling, not a measured setup-latency percentile.
+        // The lease phase remains the one-second condition exercised by this fixture.
+        const int totalBudgetSeconds = 8;
+        const int leaseWaitSeconds = 1;
+
         var repoRoot = ResolveRepositoryRoot();
         var scriptPath = Path.Combine(repoRoot, "scripts", "Invoke-IsolatedDotnet.ps1");
         var root = CreateTempDirectory();
@@ -864,8 +869,8 @@ public sealed class DotnetBuildEnvironmentManagerTestsFocusedRunner
                 receiptPath,
                 logPath,
                 "no-slot-test",
-                budgetSeconds: 2,
-                leaseWaitSeconds: 1,
+                budgetSeconds: totalBudgetSeconds,
+                leaseWaitSeconds: leaseWaitSeconds,
                 projectFile);
 
             Assert.True(result.ExitCode == 3, $"Focused no-slot invocation exited {result.ExitCode}.{Environment.NewLine}{result.Stdout}{Environment.NewLine}{result.Stderr}");
