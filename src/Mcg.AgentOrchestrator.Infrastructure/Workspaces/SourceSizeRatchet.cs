@@ -191,9 +191,7 @@ internal static class SourceSizeRatchet
             // 5188 is the measured combined post-rebase size.
             // Reconciled after integrating main e1f6f11c at its measured post-merge test-owner size.
             new SourceSizeCeiling("tests/Mcg.AgentOrchestrator.Infrastructure.Tests/ConductorBatchLoopTestsParallelAcceptance.cs", 5282),
-            // Raised for goal baf5c395: the focused no-slot fixture's outer-deadline assertion
-            // keeps its total-budget and cleanup supervision in the existing process helper.
-            new SourceSizeCeiling("tests/Mcg.AgentOrchestrator.Infrastructure.Tests/DotnetBuildEnvironmentManagerTests.cs", 1485),
+            new SourceSizeCeiling("tests/Mcg.AgentOrchestrator.Infrastructure.Tests/DotnetBuildEnvironmentManagerTests.cs", 1480),
         });
 
     internal static IReadOnlyList<SourceSizeViolation> Evaluate(
