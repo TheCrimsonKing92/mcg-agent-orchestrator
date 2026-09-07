@@ -1578,6 +1578,7 @@ public sealed partial class AgentOrchestratorKernel
         foreach (var downstream in goal.Tasks.Where(task =>
                      task.RequiredRole is AgentRole.Tester or AgentRole.Reviewer &&
                      task.Status == WorkTaskStatus.Failed &&
+                     task.LastProcess is not { IsRunning: true } &&
                      task.LastVerification is not null))
         {
             var decision = VerifyingFindingCurrency.Evaluate(goal, downstream, downstream.LastVerification!);
