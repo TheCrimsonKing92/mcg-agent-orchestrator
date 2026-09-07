@@ -1,5 +1,6 @@
 using System.Security.Cryptography;
 using System.Text.Json;
+using Mcg.AgentOrchestrator.App.Orchestration;
 
 [Xunit.Collection(TestCollections.ProcessSpawning)]
 public sealed class MtpNoBuildReceiptIdentityTests
@@ -79,6 +80,59 @@ public sealed class MtpNoBuildReceiptIdentityTests
         Xunit.Assert.NotEqual(firstEvidence, secondEvidence);
         Xunit.Assert.True(File.Exists(Path.Combine(firstEvidence!, "run-identity.json")));
         Xunit.Assert.True(File.Exists(Path.Combine(secondEvidence!, "run-identity.json")));
+    }
+
+    [Xunit.Fact(DisplayName = "MTP_no_build_retains_each_clean_run_as_an_owned_direct_results_child")]
+    public void MtpNoBuildRetainsEachCleanRunAsAnOwnedDirectResultsChild()
+    {
+        using var sandbox = MtpTestRunnerScriptTests.ScriptSandbox.Create("success");
+        sandbox.CreateManagedAssemblyPlaceholder();
+
+        var result = sandbox.RunPartition("GoalWorktree", dotnetPath: sandbox.RunnerPath, runnerOverride: false);
+
+        Xunit.Assert.Equal(0, result.ExitCode);
+        var evidenceDirectory = TerminalSummary(result).GetProperty("retainedEvidenceDirectory").GetString();
+        Xunit.Assert.False(string.IsNullOrWhiteSpace(evidenceDirectory));
+        Xunit.Assert.Equal(sandbox.ResultsRoot, Path.GetDirectoryName(evidenceDirectory));
+        Xunit.Assert.False(Path.GetFileName(evidenceDirectory).EndsWith(".trx", StringComparison.OrdinalIgnoreCase));
+        var ownershipPath = Path.Combine(evidenceDirectory!, ".mtp-run-ownership.json");
+        Xunit.Assert.True(File.Exists(ownershipPath), $"Expected owned retention evidence at '{ownershipPath}'.");
+        using var ownership = JsonDocument.Parse(File.ReadAllText(ownershipPath));
+        Xunit.Assert.Equal(1, ownership.RootElement.GetProperty("schemaVersion").GetInt32());
+        Xunit.Assert.Equal("unowned", ownership.RootElement.GetProperty("attemptId").GetString());
+        Xunit.Assert.Equal("GoalWorktree", ownership.RootElement.GetProperty("runLabel").GetString());
+
+        var retention = StorageRetentionMaintenance.Run(
+            sandbox.Root,
+            Path.Combine(sandbox.Root, ".orchestrator"),
+            sandbox.Root,
+            [],
+            DateTimeOffset.UtcNow.AddDays(3),
+            mtpResultsRoot: sandbox.ResultsRoot,
+            mtpProcessHasExitedForTests: _ => true);
+        Xunit.Assert.False(
+            Directory.Exists(evidenceDirectory),
+            string.Join(Environment.NewLine, retention.Decisions.Select(decision => $"{decision.Action}:{decision.Reason}:{decision.Path}")));
+        Xunit.Assert.Contains(retention.Decisions, decision =>
+            decision.Path == evidenceDirectory &&
+            decision.Action == EvidenceRetentionAction.Deleted &&
+            decision.Reason == "mtp-unattributed-past-age-bound");
+    }
+
+    [Xunit.Fact(DisplayName = "MTP_no_build_keeps_original_artifacts_when_retained_evidence_ownership_write_fails")]
+    public void MtpNoBuildKeepsOriginalArtifactsWhenRetainedEvidenceOwnershipWriteFails()
+    {
+        using var sandbox = MtpTestRunnerScriptTests.ScriptSandbox.Create("success");
+        sandbox.CreateManagedAssemblyPlaceholder();
+
+        var result = sandbox.RunPartitionWithRejectedEvidenceOwnership();
+
+        Xunit.Assert.Equal(0, result.ExitCode);
+        Xunit.Assert.Contains("EVIDENCE RETENTION FAILURE", result.Stdout, StringComparison.Ordinal);
+        Xunit.Assert.Contains("Could not write retention ownership sidecar", result.Stdout, StringComparison.Ordinal);
+        var retainedRun = Xunit.Assert.Single(Directory.GetDirectories(sandbox.ResultsRoot)
+            .Where(directory => Directory.EnumerateFiles(directory, "*.runner.log", SearchOption.TopDirectoryOnly).Any()));
+        Xunit.Assert.True(Directory.EnumerateFiles(retainedRun, "*.trx", SearchOption.TopDirectoryOnly).Any());
     }
 
     [Xunit.Fact(DisplayName = "MTP_no_build_launches_a_verified_evaluated_standard_output")]

@@ -1600,6 +1600,28 @@ public sealed class MtpTestRunnerScriptTests
             return Run(startInfo);
         }
 
+        public ProcessResult RunPartitionWithRejectedEvidenceOwnership()
+        {
+            var module = Path.Combine(Root, "scripts", "MtpTestRunner.psm1").Replace("'", "''", StringComparison.Ordinal);
+            var manifest = Path.Combine(Root, "config", "acceptance-manifest.json").Replace("'", "''", StringComparison.Ordinal);
+            var root = Root.Replace("'", "''", StringComparison.Ordinal);
+            var resultsRoot = ResultsRoot.Replace("'", "''", StringComparison.Ordinal);
+            var runner = RunnerPath.Replace("'", "''", StringComparison.Ordinal);
+            var command =
+                $"Import-Module '{module}' -Force; " +
+                $"$manifest = Read-MtpTestManifest '{manifest}'; " +
+                "$ownershipWriter = { param($directory, $label) $false }; " +
+                $"$run = Invoke-MtpTestRun -RepositoryRoot '{root}' -Manifest $manifest " +
+                "-Target 'tests/Mcg.AgentOrchestrator.Infrastructure.Tests/Mcg.AgentOrchestrator.Infrastructure.Tests.csproj' " +
+                "-Filters 'FullyQualifiedName~GoalWorktreeTests' -RunLabel 'ownership-failure' -NoBuild " +
+                $"-ResultsRoot '{resultsRoot}' -RunnerPath '{runner}' -RetainedEvidenceOwnershipWriter $ownershipWriter; " +
+                "$run | ConvertTo-Json -Compress";
+            var startInfo = SandboxPowerShellStartInfo();
+            startInfo.ArgumentList.Add("-Command");
+            startInfo.ArgumentList.Add(command);
+            return Run(startInfo);
+        }
+
         public void DeleteManifest() => File.Delete(Path.Combine(Root, "config", "acceptance-manifest.json"));
 
         public ProcessResult RunModuleAndReportEnvironment()

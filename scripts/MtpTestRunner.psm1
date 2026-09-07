@@ -576,7 +576,7 @@ function Write-MtpRunOwnershipSidecar {
             attemptId = $attemptId
             machineName = [System.Environment]::MachineName
             ownerProcessId = $PID
-            createdAt = [DateTimeOffset]::UtcNow
+            createdAt = [DateTimeOffset]::UtcNow.ToString('o')
             runLabel = $RunLabel
         }
         [System.IO.File]::WriteAllText($temporaryPath, ($receipt | ConvertTo-Json -Compress))
@@ -2074,13 +2074,12 @@ function Write-MtpRunEvidenceReceipt {
         [Parameter(Mandatory = $true)][string[]]$TrxPaths,
         [string[]]$RequestedFilters = @(),
         [string[]]$ExecutedTestNames = @(),
-        [object[]]$BuildSelections = @()
+        [object[]]$BuildSelections = @(),
+        [scriptblock]$OwnershipWriter
     )
 
     $resultsRoot = Split-Path -Parent $RunDirectory
-    $evidenceParent = Join-Path $resultsRoot 'receipts'
-    [void](New-Item -ItemType Directory -Force -Path $evidenceParent)
-    $evidenceDirectory = Join-Path $evidenceParent (Get-MtpBoundedFileName -Stem "$RunLabel-$([DateTimeOffset]::UtcNow.ToString('yyyyMMddTHHmmssfff'))-$([Guid]::NewGuid().ToString('N').Substring(0, 8))" -MaximumLength 180)
+    $evidenceDirectory = Join-Path $resultsRoot (Get-MtpBoundedFileName -Stem "$RunLabel-$([DateTimeOffset]::UtcNow.ToString('yyyyMMddTHHmmssfff'))-$([Guid]::NewGuid().ToString('N').Substring(0, 8))" -Suffix '' -MaximumLength 180)
     [void](New-Item -ItemType Directory -Path $evidenceDirectory -ErrorAction Stop)
     $trxEvidence = [System.Collections.Generic.List[object]]::new()
     foreach ($trxPath in $TrxPaths) {
@@ -2123,6 +2122,15 @@ function Write-MtpRunEvidenceReceipt {
         trx = $trxEvidence.ToArray()
     }
     $evidence | ConvertTo-Json -Depth 8 | Set-Content -LiteralPath (Join-Path $evidenceDirectory 'run-identity.json') -Encoding UTF8 -ErrorAction Stop
+    $ownershipWritten = if ($null -eq $OwnershipWriter) {
+        Write-MtpRunOwnershipSidecar -ResultsDirectory $evidenceDirectory -RunLabel $RunLabel
+    }
+    else {
+        & $OwnershipWriter $evidenceDirectory $RunLabel
+    }
+    if (-not $ownershipWritten) {
+        throw "Could not write retention ownership sidecar for retained run evidence '$evidenceDirectory'. The original run directory remains available for diagnosis."
+    }
     return $evidenceDirectory
 }
 
@@ -2146,7 +2154,8 @@ function Invoke-MtpTestRun {
         [string]$RunnerPath,
         [string]$DotnetPath = 'dotnet',
         [switch]$AllowBreakaway,
-        [ValidateRange(1, 86400)][int]$TestHostTimeoutSeconds = 780
+        [ValidateRange(1, 86400)][int]$TestHostTimeoutSeconds = 780,
+        [scriptblock]$RetainedEvidenceOwnershipWriter
     )
 
     try {
@@ -2348,7 +2357,7 @@ function Invoke-MtpTestRun {
         }
 
         try {
-            $retainedEvidenceDirectory = Write-MtpRunEvidenceReceipt -RunDirectory $runDirectory -RunLabel $RunLabel -TrxPaths $trxPaths.ToArray() -RequestedFilters $filterList -ExecutedTestNames $executedTestNames.ToArray() -BuildSelections $buildSelections.ToArray()
+            $retainedEvidenceDirectory = Write-MtpRunEvidenceReceipt -RunDirectory $runDirectory -RunLabel $RunLabel -TrxPaths $trxPaths.ToArray() -RequestedFilters $filterList -ExecutedTestNames $executedTestNames.ToArray() -BuildSelections $buildSelections.ToArray() -OwnershipWriter $RetainedEvidenceOwnershipWriter
             Write-Host "Run identity and named TRX evidence retained: $retainedEvidenceDirectory"
         }
         catch {
