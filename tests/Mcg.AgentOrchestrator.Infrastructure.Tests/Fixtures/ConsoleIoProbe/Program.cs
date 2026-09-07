@@ -4,15 +4,19 @@ using System.Runtime.InteropServices;
 using System.Text;
 using Mcg.AgentOrchestrator.Infrastructure;
 
+if (args.Length > 0 && args[0] == "--startup-launch") return StartupPipeProbe.Launch(args[1..]);
+if (args.Length > 0 && args[0] == "--startup-child") return StartupPipeProbe.Run(args[1..]);
+
 var options = ProbeOptions.Parse(args);
 
 try
 {
     var writers = new RetainedConsoleWriters(options.WriterInitialization == "early");
 
-    Console.WriteLine("MARK:before");
-    Console.Error.WriteLine("EMARK:before");
-    WriteHandleMarker("before");
+    // Prelude diagnostics must not initialize Console.Out/Error in the lazy-writer cases.
+    WriteRawMarker(-11, "MARK:before");
+    WriteRawMarker(-12, "EMARK:before");
+    WriteHandleMarker("before", raw: true);
 
     for (var index = 0; index < options.Repeat; index++)
     {
@@ -55,7 +59,7 @@ static void RunScope(ProbeOptions options, int index, RetainedConsoleWriters wri
             {
                 "suppressed" => ProcessTreeGuiSuppression.AcquireSuppressedChildSpawn(),
                 "console" => ProcessTreeGuiSuppression.AcquireConsoleForChildSpawn(),
-                "start" => StartAndReturnScope(),
+                "start" => StartupPipeProbe.StartAndReturnScope(),
                 _ => throw new ArgumentOutOfRangeException(nameof(options.Scope), options.Scope, "Unknown scope.")
             });
         }
@@ -82,26 +86,18 @@ static void RunScope(ProbeOptions options, int index, RetainedConsoleWriters wri
     }
 }
 
-static IDisposable StartAndReturnScope()
+static void WriteRawMarker(int handleId, string marker)
 {
-    var cmd = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.System), "cmd.exe");
-    var startInfo = new ProcessStartInfo(cmd, "/d /q /c exit 0")
-    {
-        UseShellExecute = false,
-        CreateNoWindow = true,
-        RedirectStandardOutput = true,
-        RedirectStandardError = true
-    };
-    using var child = ProcessTreeGuiSuppression.Start(startInfo);
-    child.WaitForExit(5_000);
-    _ = child.StandardOutput.ReadToEnd();
-    _ = child.StandardError.ReadToEnd();
-    return NoopDisposable.Instance;
+    var bytes = Encoding.UTF8.GetBytes(marker + Environment.NewLine);
+    if (!Native.WriteFile(Native.GetStdHandle(handleId), bytes, (uint)bytes.Length, out var written, IntPtr.Zero) || written != bytes.Length)
+        throw new Win32Exception(Marshal.GetLastWin32Error(), "Failed to emit raw prelude marker.");
 }
 
-static void WriteHandleMarker(string phase)
+static void WriteHandleMarker(string phase, bool raw = false)
 {
-    Console.WriteLine($"HANDLE:{phase}:out={Native.GetFileType(Native.GetStdHandle(-11))},err={Native.GetFileType(Native.GetStdHandle(-12))},in={Native.GetFileType(Native.GetStdHandle(-10))},window={(Native.GetConsoleWindow() == IntPtr.Zero ? 0 : 1)}");
+    var marker = $"HANDLE:{phase}:out={Native.GetFileType(Native.GetStdHandle(-11))},err={Native.GetFileType(Native.GetStdHandle(-12))},in={Native.GetFileType(Native.GetStdHandle(-10))},window={(Native.GetConsoleWindow() == IntPtr.Zero ? 0 : 1)}";
+    if (raw) WriteRawMarker(-11, marker);
+    else Console.WriteLine(marker);
 }
 
 sealed class ProbeOptions
@@ -245,6 +241,9 @@ static class Native
 
     [DllImport("kernel32.dll")]
     internal static extern uint GetFileType(IntPtr handle);
+
+    [DllImport("kernel32.dll", SetLastError = true)]
+    internal static extern bool WriteFile(IntPtr handle, byte[] bytes, uint count, out uint written, IntPtr overlapped);
 
     [DllImport("kernel32.dll", SetLastError = true)]
     internal static extern bool FreeConsole();
