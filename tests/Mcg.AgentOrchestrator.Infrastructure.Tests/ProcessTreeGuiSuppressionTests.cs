@@ -50,7 +50,7 @@ public sealed class ProcessTreeGuiSuppressionTests
             Process process;
             using (var suppressedSpawn = ProcessTreeGuiSuppression.AcquireErrorModeForChildSpawn())
             {
-                Assert.False(suppressedSpawn.HiddenConsoleAcquired);
+                Assert.False(suppressedSpawn.ChildConsolePolicyApplied);
                 Assert.Equal(
                     ProcessTreeGuiSuppression.SuppressedErrorModeFlags,
                     WindowsProbe.GetErrorMode() & ProcessTreeGuiSuppression.SuppressedErrorModeFlags);
@@ -111,6 +111,9 @@ public sealed class ProcessTreeGuiSuppressionTests
                     [DllImport("kernel32.dll")]
                     public static extern IntPtr GetConsoleWindow();
 
+                    [DllImport("kernel32.dll", SetLastError = true)]
+                    public static extern uint GetConsoleProcessList(uint[] processList, uint processCount);
+
                     [DllImport("user32.dll")]
                     public static extern bool IsWindowVisible(IntPtr hWnd);
                 }
@@ -118,9 +121,13 @@ public sealed class ProcessTreeGuiSuppressionTests
 
                 $console = [McgNativeProbe]::GetConsoleWindow()
                 $visible = if ($console -eq [IntPtr]::Zero) { $false } else { [McgNativeProbe]::IsWindowVisible($console) }
+                $members = New-Object uint32[] 16
+                $memberCount = [McgNativeProbe]::GetConsoleProcessList($members, [uint32]$members.Length)
                 [pscustomobject]@{
                     errorMode = [uint32][McgNativeProbe]::GetErrorMode()
-                    hasConsole = ($console -ne [IntPtr]::Zero)
+                    # Windowless consoles deliberately have HWND=0. Process membership is the
+                    # reliable console-presence oracle for this descendant contract.
+                    hasConsole = ($memberCount -gt 0)
                     consoleVisible = $visible
                 } | ConvertTo-Json -Compress | Set-Content -LiteralPath $env:MCG_PROBE_OUTPUT -Encoding UTF8
                 """);
@@ -384,6 +391,33 @@ public sealed class ProcessTreeGuiSuppressionTests
             StringComparison.Ordinal);
         Assert.Contains("-NoNewWindow -PassThru -ErrorAction Stop", dispatchHostTests, StringComparison.Ordinal);
         Assert.DoesNotContain("burn" + "-cpu.ps1", dispatchHostTests, StringComparison.OrdinalIgnoreCase);
+    }
+
+    [Fact(DisplayName = "Process tree GUI suppression keeps console ownership in the child launch policy")]
+    public void ProcessTreeGuiSuppressionKeepsConsoleOwnershipInChildLaunchPolicy()
+    {
+        var root = FindRepoRoot();
+        var suppression = File.ReadAllText(Path.Combine(
+            root,
+            "src",
+            "Mcg.AgentOrchestrator.Infrastructure",
+            "Processes",
+            "ProcessTreeGuiSuppression.cs"));
+        var policy = File.ReadAllText(Path.Combine(
+            root,
+            "src",
+            "Mcg.AgentOrchestrator.Infrastructure",
+            "Processes",
+            "ChildConsoleLaunchPolicy.cs"));
+
+        Assert.DoesNotContain("Free" + "Console", suppression, StringComparison.Ordinal);
+        Assert.DoesNotContain("Attach" + "Console", suppression, StringComparison.Ordinal);
+        Assert.DoesNotContain("Thread.Sleep", suppression, StringComparison.Ordinal);
+        Assert.Contains("ChildConsoleLaunchPolicy.Prepare();", suppression, StringComparison.Ordinal);
+        Assert.Contains("PrepareDelayHookForTests?.Invoke();", policy, StringComparison.Ordinal);
+        Assert.True(
+            policy.IndexOf("PrepareDelayHookForTests?.Invoke();", StringComparison.Ordinal) <
+            policy.IndexOf("GetConsoleWindow", StringComparison.Ordinal));
     }
 
     private static string FindRepoRoot([System.Runtime.CompilerServices.CallerFilePath] string sourceFilePath = "")
