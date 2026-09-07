@@ -38,16 +38,10 @@ internal static class ProcessTreeGuiSuppression
                 return;
             }
 
-            try
-            {
-                // Console ownership belongs to the child created by this scope. The
-                // launcher never changes its console membership or standard handles.
-            }
-            finally
-            {
-                _disposed = true;
-                _onDispose?.Invoke();
-            }
+            // Console ownership belongs to the child created by this scope. The
+            // launcher never changes its console membership or standard handles.
+            _disposed = true;
+            _onDispose?.Invoke();
         }
     }
 

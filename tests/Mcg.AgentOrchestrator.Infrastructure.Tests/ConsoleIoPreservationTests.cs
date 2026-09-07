@@ -108,7 +108,7 @@ public sealed class ConsoleIoPreservationTests
             return;
         }
 
-        var result = await RunProbe(scope, writerInitialization, repeat, nest, oldMutation: false, unrelatedThread: true);
+        var result = await RunProbe(scope, writerInitialization, repeat, nest, unrelatedThread: true);
         Assert.Equal(0, result.ExitCode);
         Assert.DoesNotContain("FATAL:", result.Stdout + result.Stderr, StringComparison.Ordinal);
         Assert.Contains("STDIN:input-marker", result.Stdout, StringComparison.Ordinal);
@@ -128,7 +128,7 @@ public sealed class ConsoleIoPreservationTests
             line => Assert.Contains("out=3,err=3,in=3,window=0", line, StringComparison.Ordinal));
     }
 
-    private static async Task<ProbeResult> RunProbe(string scope, string writerInitialization, int repeat, int nest, bool oldMutation, bool unrelatedThread)
+    private static async Task<ProbeResult> RunProbe(string scope, string writerInitialization, int repeat, int nest, bool unrelatedThread)
     {
         var probe = ResolveProbeAssembly();
         var startInfo = new ProcessStartInfo("dotnet")
@@ -149,7 +149,6 @@ public sealed class ConsoleIoPreservationTests
         startInfo.ArgumentList.Add(repeat.ToString(System.Globalization.CultureInfo.InvariantCulture));
         startInfo.ArgumentList.Add("--nest");
         startInfo.ArgumentList.Add(nest.ToString(System.Globalization.CultureInfo.InvariantCulture));
-        if (oldMutation) startInfo.ArgumentList.Add("--old-mutation");
         if (unrelatedThread) startInfo.ArgumentList.Add("--unrelated-thread");
 
         using var process = Process.Start(startInfo) ?? throw new InvalidOperationException("Failed to start ConsoleIoProbe.");
