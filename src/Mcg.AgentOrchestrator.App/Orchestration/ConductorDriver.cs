@@ -1523,7 +1523,7 @@ internal sealed partial class ConductorDriver
 
         _normalizeLifecycleState(
             goal,
-            $"Conductor auto-repaired terminal goal with non-terminal task(s) before lifecycle resolution for goal {goalPrefix}.");
+            $"Conductor reconciled stale goal/task lifecycle state before lifecycle resolution for goal {goalPrefix}.");
 
         var facts = GetFacts(goal);
         var state = GoalLifecycle.ResolveState(goal, facts);

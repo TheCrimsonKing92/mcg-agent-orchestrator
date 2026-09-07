@@ -3,9 +3,15 @@ namespace Mcg.AgentOrchestrator.Core;
 public enum VerifyingFindingDisposition
 {
     Current,
+    InvalidatedByTaskRetry,
     SupersededByLaterVerification,
     SupersededByCompletedRepair
 }
+
+public sealed record VerifyingFindingCurrencyDecision(
+    VerifyingFindingDisposition Disposition,
+    TaskId? RepairTaskId = null,
+    string? RepairedCandidate = null);
 
 public static class VerifyingFindingCurrency
 {
@@ -30,11 +36,22 @@ public static class VerifyingFindingCurrency
     public static VerifyingFindingDisposition Classify(
         Goal goal,
         TaskSpec verifyingTask,
+        TaskVerificationRecord findingRecord) =>
+        Evaluate(goal, verifyingTask, findingRecord).Disposition;
+
+    public static VerifyingFindingCurrencyDecision Evaluate(
+        Goal goal,
+        TaskSpec verifyingTask,
         TaskVerificationRecord findingRecord)
     {
         ArgumentNullException.ThrowIfNull(goal);
         ArgumentNullException.ThrowIfNull(verifyingTask);
         ArgumentNullException.ThrowIfNull(findingRecord);
+
+        if (verifyingTask.LastVerification is null)
+        {
+            return new(VerifyingFindingDisposition.InvalidatedByTaskRetry);
+        }
 
         var supersededByLaterResult = verifyingTask.VerificationHistory.Any(verification =>
             verification.CompletedAt > findingRecord.CompletedAt &&
@@ -42,12 +59,20 @@ public static class VerifyingFindingCurrency
              IsLatestCompletedResult(verifyingTask, verification)));
         if (supersededByLaterResult)
         {
-            return VerifyingFindingDisposition.SupersededByLaterVerification;
+            return new(VerifyingFindingDisposition.SupersededByLaterVerification);
         }
 
-        return goal.Tasks.Any(task => IsCompletedRepairOf(task, findingRecord))
-            ? VerifyingFindingDisposition.SupersededByCompletedRepair
-            : VerifyingFindingDisposition.Current;
+        var completedRepair = goal.Tasks
+            .Where(task => IsCompletedRepairOf(task, findingRecord))
+            .OrderByDescending(task => task.LastVerification!.CompletedAt)
+            .ThenBy(task => task.Id.Value, StringComparer.Ordinal)
+            .FirstOrDefault();
+        return completedRepair is null
+            ? new(VerifyingFindingDisposition.Current)
+            : new(
+                VerifyingFindingDisposition.SupersededByCompletedRepair,
+                completedRepair.Id,
+                completedRepair.LastDispatch!.ResultCommit!.Trim());
     }
 
     public static bool IsCurrent(
@@ -92,7 +117,7 @@ public static class VerifyingFindingCurrency
             string.IsNullOrWhiteSpace(findingRecord.ReviewedCommit) ||
             string.IsNullOrWhiteSpace(dispatch.BaseCommit) ||
             string.IsNullOrWhiteSpace(dispatch.ResultCommit) ||
-            !SameCandidate(findingRecord.ReviewedCommit, dispatch.BaseCommit) ||
+            SameCandidate(findingRecord.ReviewedCommit, dispatch.ResultCommit) ||
             SameCandidate(dispatch.BaseCommit, dispatch.ResultCommit))
         {
             return false;

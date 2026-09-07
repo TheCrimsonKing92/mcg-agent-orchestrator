@@ -593,14 +593,7 @@ public sealed partial class AgentOrchestratorKernel
     public bool NormalizeGoalLifecycleState(GoalId goalId, string reason)
     {
         var goal = GetGoal(goalId);
-        var reconciled = false;
-        foreach (var developer in goal.Tasks.Where(task =>
-                     task.RequiredRole == AgentRole.Developer &&
-                     task.Status == WorkTaskStatus.Completed &&
-                     task.LatestRetryAt is not null))
-        {
-            reconciled |= ReconcileSupersededFailedDownstreamTasks(goal, developer, _clock.UtcNow);
-        }
+        var reconciled = ReconcileSupersededFailedDownstreamTasks(goal, _clock.UtcNow);
 
         if (reconciled)
         {
@@ -1569,37 +1562,45 @@ public sealed partial class AgentOrchestratorKernel
                 $"Invalidated {downstream.RequiredRole} task because retried upstream {retriedTask.RequiredRole} task {retriedTask.Id.Value[..8]} {invalidationReason}.");
         }
 
-        ReconcileSupersededFailedDownstreamTasks(goal, retriedTask, reconciledAt);
+        ReconcileSupersededFailedDownstreamTasks(goal, reconciledAt);
     }
 
     private bool ReconcileSupersededFailedDownstreamTasks(
         Goal goal,
-        TaskSpec retriedTask,
         DateTimeOffset reconciledAt)
     {
-        if (retriedTask.RequiredRole != AgentRole.Developer ||
-            retriedTask.Status != WorkTaskStatus.Completed ||
-            retriedTask.LatestRetryAt is null)
+        if (goal.Status is GoalStatus.Parked or GoalStatus.WaitingForHuman)
         {
             return false;
         }
 
         var reconciled = false;
         foreach (var downstream in goal.Tasks.Where(task =>
-                     IsDownstreamRole(retriedTask.RequiredRole, task.RequiredRole) &&
+                     task.RequiredRole is AgentRole.Tester or AgentRole.Reviewer &&
                      task.Status == WorkTaskStatus.Failed &&
-                     task.LastVerification is not null &&
-                     VerifyingFindingCurrency.Classify(goal, task, task.LastVerification) ==
-                         VerifyingFindingDisposition.SupersededByCompletedRepair))
+                     task.LastVerification is not null))
         {
-            var reviewedCandidate = downstream.LastVerification!.ReviewedCommit!.Trim();
-            var repairedCandidate = retriedTask.LastDispatch!.ResultCommit!.Trim();
-            ResetTaskForRetry(downstream, reconciledAt, retriedTask.PendingRetryCause);
+            var decision = VerifyingFindingCurrency.Evaluate(goal, downstream, downstream.LastVerification!);
+            if (decision.Disposition == VerifyingFindingDisposition.Current)
+            {
+                continue;
+            }
+
+            var reviewedCandidate = string.IsNullOrWhiteSpace(downstream.LastVerification!.ReviewedCommit)
+                ? "unknown"
+                : downstream.LastVerification.ReviewedCommit.Trim();
+            var repairTask = decision.RepairTaskId is { } repairTaskId
+                ? goal.FindTask(repairTaskId)
+                : null;
+            ResetTaskForRetry(downstream, reconciledAt, repairTask?.PendingRetryCause ?? downstream.PendingRetryCause);
+            var reason = decision.Disposition == VerifyingFindingDisposition.SupersededByCompletedRepair
+                ? $"completed Developer repair {repairTask!.Id.Value[..8]} produced candidate {decision.RepairedCandidate}"
+                : "a later verification superseded that stored verdict";
             Append(
                 goal,
                 downstream.Id,
                 ProgressKind.TaskRetried,
-                $"Invalidated superseded {downstream.RequiredRole} verdict for reviewed candidate {reviewedCandidate} because completed Developer repair {retriedTask.Id.Value[..8]} produced candidate {repairedCandidate}; historical findings remain in verification history.");
+                $"Invalidated superseded {downstream.RequiredRole} verdict for reviewed candidate {reviewedCandidate} because {reason}; historical findings remain in verification history.");
             reconciled = true;
         }
 
