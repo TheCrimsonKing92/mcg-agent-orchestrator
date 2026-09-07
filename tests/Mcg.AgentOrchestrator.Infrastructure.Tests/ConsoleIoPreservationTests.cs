@@ -17,7 +17,7 @@ public sealed class ConsoleIoPreservationTests
             return;
         }
 
-        var result = await RunProbe(scope, writerInitialization, repeat, nest, oldMutation: false);
+        var result = await RunProbe(scope, writerInitialization, repeat, nest, oldMutation: false, unrelatedThread: true);
         Assert.Equal(0, result.ExitCode);
         Assert.DoesNotContain("FATAL:", result.Stdout + result.Stderr, StringComparison.Ordinal);
         Assert.Contains("STDIN:input-marker", result.Stdout, StringComparison.Ordinal);
@@ -29,6 +29,8 @@ public sealed class ConsoleIoPreservationTests
         {
             Assert.Equal(1, Count(result.Stdout, $"MARK:during:{index}"));
             Assert.Equal(1, Count(result.Stderr, $"EMARK:during:{index}"));
+            Assert.Equal(1, Count(result.Stdout, $"MARK:unrelated:{index}"));
+            Assert.Equal(1, Count(result.Stderr, $"EMARK:unrelated:{index}"));
         }
 
         Assert.All(result.Stdout.Split('\n', StringSplitOptions.RemoveEmptyEntries).Where(line => line.StartsWith("HANDLE:", StringComparison.Ordinal)),
@@ -43,12 +45,12 @@ public sealed class ConsoleIoPreservationTests
             return;
         }
 
-        var result = await RunProbe("suppressed", "early", 1, 1, oldMutation: true);
+        var result = await RunProbe("suppressed", "early", 1, 1, oldMutation: true, unrelatedThread: false);
         Assert.Equal(0, result.ExitCode);
         Assert.Contains("HANDLE:during:0:out=3,err=3,in=3,window=1", result.Stdout, StringComparison.Ordinal);
     }
 
-    private static async Task<ProbeResult> RunProbe(string scope, string writerInitialization, int repeat, int nest, bool oldMutation)
+    private static async Task<ProbeResult> RunProbe(string scope, string writerInitialization, int repeat, int nest, bool oldMutation, bool unrelatedThread)
     {
         var probe = ResolveProbeAssembly();
         var startInfo = new ProcessStartInfo("dotnet")
@@ -70,6 +72,7 @@ public sealed class ConsoleIoPreservationTests
         startInfo.ArgumentList.Add("--nest");
         startInfo.ArgumentList.Add(nest.ToString(System.Globalization.CultureInfo.InvariantCulture));
         if (oldMutation) startInfo.ArgumentList.Add("--old-mutation");
+        if (unrelatedThread) startInfo.ArgumentList.Add("--unrelated-thread");
 
         using var process = Process.Start(startInfo) ?? throw new InvalidOperationException("Failed to start ConsoleIoProbe.");
         var stdoutRead = process.StandardOutput.ReadToEndAsync();

@@ -8,11 +8,7 @@ var options = ProbeOptions.Parse(args);
 
 try
 {
-    if (options.WriterInitialization == "early")
-    {
-        _ = Console.Out;
-        _ = Console.Error;
-    }
+    var writers = new RetainedConsoleWriters(options.WriterInitialization == "early");
 
     Console.WriteLine("MARK:before");
     Console.Error.WriteLine("EMARK:before");
@@ -29,7 +25,7 @@ try
         }
         else
         {
-            RunScope(options.Scope, index, options.Nest);
+            RunScope(options, index, writers);
         }
     }
 
@@ -48,25 +44,37 @@ catch (Exception ex)
     return 1;
 }
 
-static void RunScope(string scope, int index, int nest)
+static void RunScope(ProbeOptions options, int index, RetainedConsoleWriters writers)
 {
     var scopes = new Stack<IDisposable>();
     try
     {
-        for (var depth = 0; depth < nest; depth++)
+        for (var depth = 0; depth < options.Nest; depth++)
         {
-            scopes.Push(scope switch
+            scopes.Push(options.Scope switch
             {
                 "suppressed" => ProcessTreeGuiSuppression.AcquireSuppressedChildSpawn(),
                 "console" => ProcessTreeGuiSuppression.AcquireConsoleForChildSpawn(),
                 "start" => StartAndReturnScope(),
-                _ => throw new ArgumentOutOfRangeException(nameof(scope), scope, "Unknown scope.")
+                _ => throw new ArgumentOutOfRangeException(nameof(options.Scope), options.Scope, "Unknown scope.")
             });
         }
 
         Console.WriteLine($"MARK:during:{index}");
         Console.Error.WriteLine($"EMARK:during:{index}");
         WriteHandleMarker($"during:{index}");
+        if (options.UnrelatedThread)
+        {
+            // Keep the scope held until the unrelated thread has written through the
+            // same retained writers the caller would keep across child launches.
+            Task.Run(() =>
+            {
+                writers.Output.WriteLine($"MARK:unrelated:{index}");
+                writers.Error.WriteLine($"EMARK:unrelated:{index}");
+                writers.Output.Flush();
+                writers.Error.Flush();
+            }).GetAwaiter().GetResult();
+        }
     }
     finally
     {
@@ -104,6 +112,8 @@ sealed class ProbeOptions
     public required int Nest { get; init; }
     public required bool OldMutation { get; init; }
 
+    public required bool UnrelatedThread { get; init; }
+
     public static ProbeOptions Parse(string[] args)
     {
         var values = args.Chunk(2).ToDictionary(pair => pair[0], pair => pair.Length == 2 ? pair[1] : "true", StringComparer.Ordinal);
@@ -113,9 +123,29 @@ sealed class ProbeOptions
             WriterInitialization = values.GetValueOrDefault("--writer-init", "early"),
             Repeat = int.Parse(values.GetValueOrDefault("--repeat", "1"), System.Globalization.CultureInfo.InvariantCulture),
             Nest = int.Parse(values.GetValueOrDefault("--nest", "1"), System.Globalization.CultureInfo.InvariantCulture),
-            OldMutation = values.ContainsKey("--old-mutation")
+            OldMutation = values.ContainsKey("--old-mutation"),
+            UnrelatedThread = values.ContainsKey("--unrelated-thread")
         };
     }
+}
+
+sealed class RetainedConsoleWriters
+{
+    private TextWriter? _output;
+    private TextWriter? _error;
+
+    public RetainedConsoleWriters(bool captureImmediately)
+    {
+        if (captureImmediately)
+        {
+            _output = Console.Out;
+            _error = Console.Error;
+        }
+    }
+
+    public TextWriter Output => _output ??= Console.Out;
+
+    public TextWriter Error => _error ??= Console.Error;
 }
 
 sealed class OldConsoleMutation : IDisposable

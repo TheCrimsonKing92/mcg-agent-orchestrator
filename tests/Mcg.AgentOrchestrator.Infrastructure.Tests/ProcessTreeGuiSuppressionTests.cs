@@ -1,4 +1,5 @@
 using System.Diagnostics;
+using System.ComponentModel;
 using System.Globalization;
 using System.Runtime.InteropServices;
 using System.Text.Json;
@@ -419,6 +420,104 @@ public sealed class ProcessTreeGuiSuppressionTests
             policy.IndexOf("PrepareDelayHookForTests?.Invoke();", StringComparison.Ordinal) <
             policy.IndexOf("GetConsoleWindow", StringComparison.Ordinal));
     }
+
+    [Fact(DisplayName = "Child console preparation preserves native errors and does not retain launch ownership")]
+    public void ChildConsolePreparationPreservesNativeErrorsAndLeavesLaunchPathsUsable()
+    {
+        if (!OperatingSystem.IsWindows())
+        {
+            return;
+        }
+
+        const int expectedNativeError = 1234;
+        var expected = new Win32Exception(expectedNativeError, "Injected child-console preparation failure.");
+        ChildConsoleLaunchPolicy.PrepareDelayHookForTests = () => throw expected;
+        try
+        {
+            Assert.Same(expected, Assert.Throws<Win32Exception>(() =>
+            {
+                using var _ = ProcessTreeGuiSuppression.AcquireConsoleForChildSpawn();
+            }));
+            Assert.Same(expected, Assert.Throws<Win32Exception>(() =>
+            {
+                using var _ = ProcessTreeGuiSuppression.AcquireSuppressedChildSpawn();
+            }));
+            Assert.Same(expected, Assert.Throws<Win32Exception>(() =>
+            {
+                using var _ = ProcessTreeGuiSuppression.Start(CreateExitProcessStartInfo());
+            }));
+            Assert.Equal(expectedNativeError, expected.NativeErrorCode);
+        }
+        finally
+        {
+            ChildConsoleLaunchPolicy.PrepareDelayHookForTests = null;
+        }
+
+        using (ProcessTreeGuiSuppression.AcquireConsoleForChildSpawn()) { }
+        using (ProcessTreeGuiSuppression.AcquireSuppressedChildSpawn()) { }
+        using var process = ProcessTreeGuiSuppression.Start(CreateExitProcessStartInfo());
+        Assert.True(process.WaitForExit(15_000), "Launch remained blocked after preparation failure cleanup.");
+        Assert.Equal(0, process.ExitCode);
+    }
+
+    [Fact(DisplayName = "Child console preparation delay does not serialize an unrelated launch")]
+    public async Task ChildConsolePreparationDelayDoesNotSerializeUnrelatedLaunch()
+    {
+        if (!OperatingSystem.IsWindows())
+        {
+            return;
+        }
+
+        using var entered = new ManualResetEventSlim();
+        using var release = new ManualResetEventSlim();
+        var invocation = 0;
+        ChildConsoleLaunchPolicy.PrepareDelayHookForTests = () =>
+        {
+            if (Interlocked.Increment(ref invocation) == 1)
+            {
+                entered.Set();
+                release.Wait();
+            }
+        };
+
+        Task? delayedLaunch = null;
+        try
+        {
+            delayedLaunch = Task.Run(() =>
+            {
+                using var delayed = ProcessTreeGuiSuppression.Start(CreateExitProcessStartInfo());
+                Assert.True(delayed.WaitForExit(15_000), "Delayed launch did not exit after its barrier released.");
+                Assert.Equal(0, delayed.ExitCode);
+            });
+            Assert.True(entered.Wait(TimeSpan.FromSeconds(15)), "Delayed launch never entered child-console preparation.");
+
+            using var unrelated = ProcessTreeGuiSuppression.Start(CreateExitProcessStartInfo());
+            Assert.True(unrelated.WaitForExit(15_000), "Unrelated launch did not complete while preparation was held.");
+            Assert.Equal(0, unrelated.ExitCode);
+            Assert.False(delayedLaunch.IsCompleted, "Delayed launch completed before its release barrier was opened.");
+
+            release.Set();
+            await delayedLaunch;
+        }
+        finally
+        {
+            release.Set();
+            if (delayedLaunch is not null)
+            {
+                await delayedLaunch;
+            }
+
+            ChildConsoleLaunchPolicy.PrepareDelayHookForTests = null;
+        }
+    }
+
+    private static ProcessStartInfo CreateExitProcessStartInfo() => new(
+        Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.System), "cmd.exe"),
+        "/d /q /c exit 0")
+    {
+        UseShellExecute = false,
+        CreateNoWindow = true
+    };
 
     private static string FindRepoRoot([System.Runtime.CompilerServices.CallerFilePath] string sourceFilePath = "")
     {
