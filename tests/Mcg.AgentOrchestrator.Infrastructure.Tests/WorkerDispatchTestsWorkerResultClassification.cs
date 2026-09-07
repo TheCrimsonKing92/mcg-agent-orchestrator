@@ -301,8 +301,8 @@ public sealed class WorkerDispatchTestsWorkerResultClassification : WorkerDispat
         Assert.Equal(2, checkpointCount);
         Assert.Equal(WorkTaskStatus.Failed, secondCheckpointStatus);
         Assert.False(secondCheckpointHasProcess);
-        Assert.Contains("worker-process-registration-failed", startResult.FailureReason, StringComparison.Ordinal);
-        Assert.Contains("stage=durable-registry-write", startResult.FailureReason, StringComparison.Ordinal);
+        var registrationFailure = Assert.IsType<string>(startResult.FailureReason);
+        Assert.True(registrationFailure.Contains("worker-process-registration-failed", StringComparison.Ordinal) && registrationFailure.Contains("stage=durable-registry-write", StringComparison.Ordinal), $"Expected worker process registration failure at stage=durable-registry-write. Actual bounded FailureReason: {registrationFailure[..Math.Min(registrationFailure.Length, 2048)]}");
         Assert.Equal(WorkTaskStatus.Failed, restoredTask.Status);
         Assert.Null(restoredTask.LastProcess);
         Assert.Contains(restoredGoal.Timeline, evt =>
