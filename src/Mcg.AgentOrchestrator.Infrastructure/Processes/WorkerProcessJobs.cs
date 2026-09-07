@@ -63,6 +63,9 @@ internal sealed class RegisteredOwnedProcess : IDisposable
     private readonly object _lifecycleAuthority;
     private Process? _process;
     private SafeFileHandle? _processHandle;
+    private StreamWriter? _standardInput;
+    private StreamReader? _standardOutput;
+    private StreamReader? _standardError;
     private int _registrationReleased;
 
     internal RegisteredOwnedProcess(
@@ -90,9 +93,26 @@ internal sealed class RegisteredOwnedProcess : IDisposable
             startInfo.WorkingDirectory);
     }
 
+    internal RegisteredOwnedProcess(
+        OwnedProcessGroup.RedirectedOwnedProcessStart transfer,
+        ProcessStartInfo startInfo,
+        RegisteredJob registration,
+        object lifecycleAuthority)
+        : this(
+            transfer.Process,
+            transfer.ProcessHandle,
+            startInfo,
+            registration,
+            lifecycleAuthority)
+    {
+        _standardInput = transfer.StandardInput;
+        _standardOutput = transfer.StandardOutput;
+        _standardError = transfer.StandardError;
+    }
+
     internal int Id => Process.Id;
-    internal StreamReader StandardOutput => Process.StandardOutput;
-    internal StreamReader StandardError => Process.StandardError;
+    internal StreamReader StandardOutput => _standardOutput ?? Process.StandardOutput;
+    internal StreamReader StandardError => _standardError ?? Process.StandardError;
     internal OwnedChildStartMetadata StartMetadata { get; }
     internal SpawnProcessIdentity? Identity => _registration.Identity;
     internal int IdentityReadAttempts => _registration.IdentityReadAttempts;
@@ -120,6 +140,21 @@ internal sealed class RegisteredOwnedProcess : IDisposable
             }
 
             return unchecked((int)exitCode);
+        }
+    }
+
+    internal void CompleteInput()
+    {
+        if (_standardInput is not null)
+        {
+            _standardInput.Dispose();
+            _standardInput = null;
+            return;
+        }
+
+        if (Process.StartInfo.RedirectStandardInput)
+        {
+            Process.StandardInput.Dispose();
         }
     }
 
@@ -205,6 +240,12 @@ internal sealed class RegisteredOwnedProcess : IDisposable
         }
         finally
         {
+            _standardInput?.Dispose();
+            _standardInput = null;
+            _standardOutput?.Dispose();
+            _standardOutput = null;
+            _standardError?.Dispose();
+            _standardError = null;
             _processHandle?.Dispose();
             _processHandle = null;
             _process?.Dispose();
@@ -580,6 +621,54 @@ public static class WorkerProcessJobs
             ownerId);
     }
 
+    internal static RegisteredOwnedProcess StartRegisteredOwnedRedirectedOrThrow(
+        ProcessStartInfo startInfo,
+        string? ownerId = null)
+    {
+        ArgumentNullException.ThrowIfNull(startInfo);
+        if (!OperatingSystem.IsWindows())
+        {
+            return StartRegisteredOwnedOrThrow(startInfo, ownerId);
+        }
+
+        OwnedProcessGroup.SuspendedRedirectedProcessStart launch;
+        try
+        {
+            launch = OwnedProcessGroup.StartSuspendedContainedRedirected(startInfo);
+        }
+        catch (Exception ex) when (ex is Win32Exception or InvalidOperationException or NotSupportedException)
+        {
+            throw new InvalidOperationException(
+                $"worker-process-start-failed: stage=owned-process-group-launch; cleanup=owned-job-termination-requested; {BuildExceptionEvidence(ex)}",
+                ex);
+        }
+
+        using (launch)
+        {
+            var lifecycleAuthority = new object();
+            var victimIdentityReader = BuildSuspendedRegistrationIdentityReader(launch.ReadLifecycleIdentity);
+            if (!TryRegisterCore(
+                    launch.Process,
+                    ownerId,
+                    victimIdentityReader,
+                    ProductionRegistrationIdentityReader,
+                    out var registrationFailure,
+                    launch.Group,
+                    launch.Resume,
+                    lifecycleAuthority: lifecycleAuthority))
+            {
+                throw new InvalidOperationException(registrationFailure);
+            }
+
+            var registration = GetRegisteredJobOrThrow(launch.Process.Id, lifecycleAuthority);
+            return new RegisteredOwnedProcess(
+                launch.TransferOwnership(),
+                startInfo,
+                registration,
+                lifecycleAuthority);
+        }
+    }
+
     internal static RegisteredOwnedProcess AdoptRegisteredOwnedOrThrow(
         Process process,
         ProcessStartInfo startInfo,
@@ -636,7 +725,7 @@ public static class WorkerProcessJobs
 
         using (launch)
         {
-            var victimIdentityReader = BuildSuspendedRegistrationIdentityReader(launch);
+            var victimIdentityReader = BuildSuspendedRegistrationIdentityReader(launch.ReadLifecycleIdentity);
             if (!TryRegisterCore(
                     launch.Process,
                     ownerId,
@@ -674,7 +763,8 @@ public static class WorkerProcessJobs
 
         using (launch)
         {
-            var victimIdentityReader = registrationIdentityReader ?? BuildSuspendedRegistrationIdentityReader(launch);
+            var victimIdentityReader = registrationIdentityReader ??
+                BuildSuspendedRegistrationIdentityReader(launch.ReadLifecycleIdentity);
             var ownerIdentityReader = registrationIdentityReader ?? ProductionRegistrationIdentityReader;
             if (!TryRegisterCore(
                     launch.Process,
@@ -1225,12 +1315,12 @@ public static class WorkerProcessJobs
     }
 
     private static Func<Process, SpawnProcessIdentityReadResult> BuildSuspendedRegistrationIdentityReader(
-        OwnedProcessGroup.SuspendedProcessStart launch)
+        Func<int, WindowsNativeProcessInspection.ProcessLifecycleIdentityReadResult> readLifecycleIdentity)
     {
-        ArgumentNullException.ThrowIfNull(launch);
+        ArgumentNullException.ThrowIfNull(readLifecycleIdentity);
         return process =>
         {
-            var read = launch.ReadLifecycleIdentity(process.Id);
+            var read = readLifecycleIdentity(process.Id);
             var evidence = $"status={read.Status.ToString().ToLowerInvariant()} attempts=1 " +
                 $"source={read.Operation} native_error_code={read.NativeError.ToString(CultureInfo.InvariantCulture)}";
             return read.Status == ProcessInspectionStatus.Available &&

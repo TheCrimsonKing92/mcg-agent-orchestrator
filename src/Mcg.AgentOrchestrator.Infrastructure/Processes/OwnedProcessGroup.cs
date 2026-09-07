@@ -297,6 +297,11 @@ internal sealed class OwnedProcessGroup : IDisposable
 
     internal static string QuoteCommandArgument(string value)
     {
+        if (value.Length > 0 && value.IndexOfAny([' ', '\t', '\n', '\r', '"']) < 0)
+        {
+            return value;
+        }
+
         var quoted = new StringBuilder();
         quoted.Append('"');
         var backslashes = 0;
@@ -614,9 +619,15 @@ internal sealed class OwnedProcessGroup : IDisposable
             StandardError = new StreamReader(stderr, errorEncoding, detectEncodingFromByteOrderMarks: true, bufferSize: 1024, leaveOpen: false);
         }
 
-        internal TextWriter StandardInput { get; }
-        internal TextReader StandardOutput { get; }
-        internal TextReader StandardError { get; }
+        internal Process Process => _suspended.Process;
+        internal OwnedProcessGroup Group => _suspended.Group;
+        internal StreamWriter StandardInput { get; }
+        internal StreamReader StandardOutput { get; }
+        internal StreamReader StandardError { get; }
+
+        internal WindowsNativeProcessInspection.ProcessLifecycleIdentityReadResult ReadLifecycleIdentity(
+            int expectedProcessId) =>
+            _suspended.ReadLifecycleIdentity(expectedProcessId);
 
         internal void Resume() => _suspended.Resume();
 
@@ -651,9 +662,9 @@ internal sealed class OwnedProcessGroup : IDisposable
         Process Process,
         SafeFileHandle ProcessHandle,
         OwnedProcessGroup Group,
-        TextWriter StandardInput,
-        TextReader StandardOutput,
-        TextReader StandardError);
+        StreamWriter StandardInput,
+        StreamReader StandardOutput,
+        StreamReader StandardError);
 
     internal sealed record OwnedProcessStartTransfer(
         Process Process,

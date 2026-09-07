@@ -1882,6 +1882,39 @@ public sealed class WorkerProcessJobsTests : IDisposable
         }
     }
 
+    [Xunit.Fact(DisplayName = "WorkerProcessJobs_atomic_redirected_owned_start_closes_fast_exit_registration_window")]
+    public async Task WorkerProcessJobsAtomicRedirectedOwnedStartClosesFastExitRegistrationWindow()
+    {
+        if (!OperatingSystem.IsWindows())
+        {
+            return;
+        }
+
+        const string marker = "atomic-redirected-fast-exit";
+        var startInfo = new ProcessStartInfo
+        {
+            FileName = "cmd.exe",
+            RedirectStandardInput = true,
+            RedirectStandardOutput = true,
+            RedirectStandardError = true,
+            UseShellExecute = false,
+            CreateNoWindow = true
+        };
+        startInfo.ArgumentList.Add("/d");
+        startInfo.ArgumentList.Add("/c");
+        startInfo.ArgumentList.Add("echo");
+        startInfo.ArgumentList.Add(marker);
+        using var atomicFast = WorkerProcessJobs.StartRegisteredOwnedRedirectedOrThrow(
+            startInfo,
+            "atomic-redirected-fast");
+        atomicFast.CompleteInput();
+
+        Assert.True(WorkerProcessJobs.HasRegisteredJob(atomicFast.Id));
+        using var timeout = new CancellationTokenSource(TimeSpan.FromSeconds(5));
+        await atomicFast.WaitForExitAsync(timeout.Token);
+        Assert.Contains(marker, await atomicFast.StandardOutput.ReadToEndAsync(timeout.Token), StringComparison.Ordinal);
+    }
+
     [Xunit.Fact]
     public void WorkerProcessJobsPidAssociatedStartInfoThrowsPredictedDiagnostic()
     {
@@ -2621,7 +2654,7 @@ public sealed class WorkerProcessJobsTests : IDisposable
             [Path.Combine("src", "Mcg.AgentOrchestrator.Infrastructure", "Processes", "BackgroundDispatchRunner.cs")] =
                 "if (!WorkerProcessJobs.TryRegister(",
             [Path.Combine("src", "Mcg.AgentOrchestrator.Infrastructure", "Processes", "LocalProcessVerifier.cs")] =
-                "WorkerProcessJobs.RegisterOrThrow(",
+                "WorkerProcessJobs.StartRegisteredOwnedRedirectedOrThrow(",
             [Path.Combine("src", "Mcg.AgentOrchestrator.Infrastructure", "Workspaces", "GoalAcceptanceVerifier.cs")] =
                 "WorkerProcessJobs.StartRegisteredOwnedOrThrow(",
             [Path.Combine("src", "Mcg.AgentOrchestrator.App", "Orchestration", "PostLandingCanaryRunner.cs")] =
