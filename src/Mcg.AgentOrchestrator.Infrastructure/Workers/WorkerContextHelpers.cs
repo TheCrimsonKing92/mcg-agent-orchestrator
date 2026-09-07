@@ -27,5 +27,6 @@ internal static class WorkerContextHelpers
         AgentRole.Tester or
         AgentRole.Reviewer &&
         string.Equals(providerName, "OpenAI", StringComparison.OrdinalIgnoreCase) &&
-        string.Equals(modelName, AgentCatalog.OpenAiSolSubscriptionModelAlias, StringComparison.OrdinalIgnoreCase);
+        (string.Equals(modelName, AgentCatalog.OpenAiSolSubscriptionModelAlias, StringComparison.OrdinalIgnoreCase) ||
+         string.Equals(modelName, AgentCatalog.OpenAiTerraSubscriptionModelAlias, StringComparison.OrdinalIgnoreCase));
 }
