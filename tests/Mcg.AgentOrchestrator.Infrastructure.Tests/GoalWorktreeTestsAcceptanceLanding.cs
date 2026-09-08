@@ -116,6 +116,7 @@ public sealed class GoalWorktreeTestsAcceptanceLanding : GoalWorktreeTestBase
                 WorkerProfileCatalog.Default(),
                 goal)
             {
+                CleanupContext = CreateIsolatedCleanupContext(workspace.ExecutionDirectory),
                 AcceptanceVerifier = FakeAcceptanceVerifier.Failed("should not run", onRun: () => verifierRuns++)
             };
 
@@ -160,6 +161,7 @@ public sealed class GoalWorktreeTestsAcceptanceLanding : GoalWorktreeTestBase
             var profiles = WorkerProfileCatalog.Default();
             var context = new CliExecutionContext(kernel, workspace, providers, agents, profiles, goal)
             {
+                CleanupContext = CreateIsolatedCleanupContext(workspace.ExecutionDirectory),
                 AcceptanceVerifier = FakeAcceptanceVerifier.Passed()
             };
 
@@ -219,6 +221,7 @@ public sealed class GoalWorktreeTestsAcceptanceLanding : GoalWorktreeTestBase
             var fakeVerifier = FakeAcceptanceVerifier.Passed();
             var context = new CliExecutionContext(kernel, workspace, providers, agents, profiles, goal, channel)
             {
+                CleanupContext = CreateIsolatedCleanupContext(workspace.ExecutionDirectory),
                 AcceptanceVerifier = fakeVerifier
             };
 
@@ -253,7 +256,10 @@ public sealed class GoalWorktreeTestsAcceptanceLanding : GoalWorktreeTestBase
             IReadOnlyList<AgentDefinition> agents = [EchoDeveloper()];
             var providers = SeedSpecRefiner(workspace);
             var profiles = EchoProfiles();
-            var context = new CliExecutionContext(kernel, workspace, providers, agents, profiles, goal);
+            var context = new CliExecutionContext(kernel, workspace, providers, agents, profiles, goal)
+            {
+                CleanupContext = CreateIsolatedCleanupContext(workspace.ExecutionDirectory)
+            };
 
             // Dispatch must own workspace creation: none exists yet.
             Assert.True(GoalWorktrees.TryResolve(repo, goal.Id) is null);
@@ -876,6 +882,7 @@ public sealed class GoalWorktreeTestsAcceptanceLanding : GoalWorktreeTestBase
             var fakeVerifier = FakeAcceptanceVerifier.Passed();
             var context = new CliExecutionContext(kernel, workspace, providers, agents, profiles, goal)
             {
+                CleanupContext = CreateIsolatedCleanupContext(workspace.ExecutionDirectory),
                 AcceptanceVerifier = fakeVerifier
             };
 
@@ -908,12 +915,46 @@ public sealed class GoalWorktreeTestsAcceptanceLanding : GoalWorktreeTestBase
             var stateRepository = CreateMigratedStateRepository(workspace.SqliteStatePath);
             stateRepository.SaveAsync(kernel).GetAwaiter().GetResult();
 
-            using var verifierEntered = new ManualResetEventSlim(false);
-            using var releaseVerifier = new ManualResetEventSlim(false);
+            Exception? readFailure = null;
+            Exception? writeFailure = null;
+            TimeSpan? readElapsed = null;
+            TimeSpan? writeElapsed = null;
             var fakeVerifier = FakeAcceptanceVerifier.Passed(onRun: () =>
             {
-                verifierEntered.Set();
-                Assert.True(releaseVerifier.Wait(TimeSpan.FromSeconds(10)));
+                // Each repository operation opens its own connection. Keep verification on the
+                // stack until both probes finish, and report failures outside verifier handling.
+                AgentOrchestratorKernel? observed = null;
+                var readWatch = Stopwatch.StartNew();
+                try
+                {
+                    observed = stateRepository.LoadAsync().GetAwaiter().GetResult();
+                }
+                catch (Exception exception)
+                {
+                    readFailure = exception;
+                }
+                finally
+                {
+                    readElapsed = readWatch.Elapsed;
+                }
+
+                if (observed is null)
+                    return;
+
+                var writeWatch = Stopwatch.StartNew();
+                try
+                {
+                    // SaveAsync always acquires BEGIN IMMEDIATE, even for an unchanged snapshot.
+                    stateRepository.SaveAsync(observed).GetAwaiter().GetResult();
+                }
+                catch (Exception exception)
+                {
+                    writeFailure = exception;
+                }
+                finally
+                {
+                    writeElapsed = writeWatch.Elapsed;
+                }
             });
 
             IReadOnlyList<AgentDefinition> agents = AgentCatalog.Default().Agents;
@@ -921,48 +962,21 @@ public sealed class GoalWorktreeTestsAcceptanceLanding : GoalWorktreeTestBase
             var profiles = WorkerProfileCatalog.Default();
             Goal? currentGoal = goal;
 
-            var acceptanceTask = Task.Run(() =>
-            {
-                try
-                {
-                    var contextAgents = agents;
-                    var contextProfiles = profiles;
-                    var contextGoal = currentGoal;
+            var acceptanceWatch = Stopwatch.StartNew();
+            CliPersistentStateRunner.ExecuteCommand(
+                ["acceptance"], stateRepository, workspace, ref agents, providers,
+                ref profiles, ref currentGoal, acceptanceVerifier: fakeVerifier,
+                acceptanceCleanupContext: CreateIsolatedCleanupContext(workspace.ExecutionDirectory));
 
-                    var initialKernel = stateRepository.LoadAsync().GetAwaiter().GetResult();
-                    var context = new CliExecutionContext(
-                        initialKernel,
-                        workspace,
-                        providers,
-                        contextAgents,
-                        contextProfiles,
-                        contextGoal,
-                        null,
-                        () => stateRepository.LoadAsync().GetAwaiter().GetResult(),
-                        null,
-                        null)
-                    {
-                        AcceptanceVerifier = fakeVerifier
-                    };
-
-                    CliCommandHandlers.Execute(["acceptance"], context);
-                }
-                finally
-                {
-                    releaseVerifier.Set();
-                }
-            });
-
-            Assert.True(verifierEntered.Wait(TimeSpan.FromSeconds(5)));
-
-            var readTask = Task.Run(() => stateRepository.LoadAsync().GetAwaiter().GetResult());
-            Assert.True(readTask.Wait(TimeSpan.FromSeconds(1)));
-
-            var writeTask = Task.Run(() => stateRepository.SaveAsync(readTask.Result).GetAwaiter().GetResult());
-            Assert.True(writeTask.Wait(TimeSpan.FromSeconds(1)));
-
-            releaseVerifier.Set();
-            Assert.True(acceptanceTask.Wait(TimeSpan.FromSeconds(10)));
+            Console.WriteLine($"acceptance-lock-probe read_ms={readElapsed?.TotalMilliseconds} " +
+                $"write_ms={writeElapsed?.TotalMilliseconds} acceptance_ms={acceptanceWatch.Elapsed.TotalMilliseconds}");
+            Assert.Equal(1, fakeVerifier.RunCount);
+            Assert.Null(readFailure);
+            Assert.Null(writeFailure);
+            Assert.NotNull(readElapsed);
+            Assert.NotNull(writeElapsed);
+            Assert.True(readElapsed.Value < TimeSpan.FromSeconds(1), "State read exceeded the one-second verification-phase bound.");
+            Assert.True(writeElapsed.Value < TimeSpan.FromSeconds(1), "State write exceeded the one-second verification-phase bound.");
             Assert.True(File.Exists(Path.Combine(repo, "concurrency.txt")));
         }
         finally
@@ -984,7 +998,10 @@ public sealed class GoalWorktreeTestsAcceptanceLanding : GoalWorktreeTestBase
             IReadOnlyList<AgentDefinition> agents = [EchoDeveloper()];
             var providers = new InMemoryModelProviderRegistry([]);
             var profiles = EchoProfiles();
-            var context = new CliExecutionContext(kernel, workspace, providers, agents, profiles, goal);
+            var context = new CliExecutionContext(kernel, workspace, providers, agents, profiles, goal)
+            {
+                CleanupContext = CreateIsolatedCleanupContext(workspace.ExecutionDirectory)
+            };
 
             var output = CaptureConsole(() =>
             {
@@ -1107,6 +1124,7 @@ public sealed class GoalWorktreeTestsAcceptanceLanding : GoalWorktreeTestBase
             var fakeVerifier = FakeAcceptanceVerifier.Passed();
             var context = new CliExecutionContext(kernel, workspace, providers, agents, profiles, null)
             {
+                CleanupContext = CreateIsolatedCleanupContext(workspace.ExecutionDirectory),
                 AcceptanceVerifier = fakeVerifier,
                 RunGoalPollInterval = FastLifecyclePollInterval,
                 RunGoalSleep = SkipLifecycleSleep,
@@ -1145,7 +1163,10 @@ public sealed class GoalWorktreeTestsAcceptanceLanding : GoalWorktreeTestBase
         IReadOnlyList<AgentDefinition> agents = [EchoDeveloper()];
         var providers = new InMemoryModelProviderRegistry([]);
         var profiles = EchoProfiles();
-        var context = new CliExecutionContext(kernel, workspace, providers, agents, profiles, null);
+        var context = new CliExecutionContext(kernel, workspace, providers, agents, profiles, null)
+        {
+            CleanupContext = CreateIsolatedCleanupContext(workspace.ExecutionDirectory)
+        };
 
         var ex = Xunit.Assert.ThrowsAny<InvalidOperationException>(() => CliCommandHandlers.Execute(
             ["lifecycle-simple-goal", "Do work"],
@@ -1164,7 +1185,10 @@ public sealed class GoalWorktreeTestsAcceptanceLanding : GoalWorktreeTestBase
         IReadOnlyList<AgentDefinition> agents = [EchoDeveloper()];
         var providers = new InMemoryModelProviderRegistry([]);
         var profiles = EchoProfiles();
-        var context = new CliExecutionContext(kernel, workspace, providers, agents, profiles, null);
+        var context = new CliExecutionContext(kernel, workspace, providers, agents, profiles, null)
+        {
+            CleanupContext = CreateIsolatedCleanupContext(workspace.ExecutionDirectory)
+        };
 
         var ex = Xunit.Assert.ThrowsAny<InvalidOperationException>(() => CliCommandHandlers.Execute(
             ["lifecycle-simple-goal", "Do work", "--confirm-batch-start"],
@@ -1195,6 +1219,7 @@ public sealed class GoalWorktreeTestsAcceptanceLanding : GoalWorktreeTestBase
             var fakeVerifier = FakeAcceptanceVerifier.Failed("Focused tests failed");
             var context = new CliExecutionContext(kernel, workspace, providers, agents, profiles, null)
             {
+                CleanupContext = CreateIsolatedCleanupContext(workspace.ExecutionDirectory),
                 AcceptanceVerifier = fakeVerifier,
                 RunGoalPollInterval = FastLifecyclePollInterval,
                 RunGoalSleep = SkipLifecycleSleep,
@@ -1235,6 +1260,7 @@ public sealed class GoalWorktreeTestsAcceptanceLanding : GoalWorktreeTestBase
             var fakeVerifier = FakeAcceptanceVerifier.Throws(new InvalidOperationException("fake verifier boom"));
             var context = new CliExecutionContext(kernel, workspace, providers, agents, profiles, null)
             {
+                CleanupContext = CreateIsolatedCleanupContext(workspace.ExecutionDirectory),
                 AcceptanceVerifier = fakeVerifier,
                 RunGoalPollInterval = FastLifecyclePollInterval,
                 RunGoalSleep = SkipLifecycleSleep,

@@ -317,3 +317,41 @@ Anthropic review informed the required argument and whitespace-independent root-
 Its inference that post-verification reporting cannot affect completion latency was incorrect:
 reporting remains inside that wait. No causal connection to the separate synchronization failure
 has been established, and this patch does not change its deadlines or claim to resolve it.
+
+## Verification-phase database probe owns its lifetime
+
+The acceptance concurrency fixture now invokes `CliPersistentStateRunner.ExecuteCommand`, the
+entry point that owns acceptance transaction routing. The old fixture manually built a context
+and called the lower-level handler. It started acceptance on a background task and could dispose
+events and delete the repository after an assertion failed while that task was still active.
+
+The verifier callback now performs the independent-connection read and write synchronously,
+captures their exceptions and durations, and returns only after they finish. Assertions run
+outside production verifier exception handling. The original one-second read/write bounds and
+real merged-file assertion remain. Unrelated five-second entry and ten-second completion waits
+are removed with their events and background task; the managed test host bounds total execution.
+`LoadAsync` opens a connection and `SaveAsync` always acquires `BEGIN IMMEDIATE`, including for
+an unchanged snapshot. Their implementation has no repository-instance serialization lock, so
+the reviewer's hypothetical same-instance deadlock is not supported by the inspected source.
+
+The normal focused case passed: read 7.0224ms, write 4.6071ms, actual acceptance merge observed.
+A separately frozen production mutant holds an immediate transaction on the state database only
+across the actual verifier invocation, disposing it before subsequent acceptance persistence.
+With the identical test DLL, read succeeded in 35.3403ms; write failed in `BeginWriteAsync` with
+SQLite error 5 after 33913.0234ms. The post-callback `Assert.Null(writeFailure)` failed as intended,
+and the actual merge still completed. Both hosts exited with confirmed codes zero/two and no
+host timeout. This demonstrates writer exclusion at the real verification seam, not a cause for
+the earlier distinct startup/completion timing failures.
+
+The production source was restored byte-for-byte and normal App outputs rebuilt. Normal and
+mutated App PDBs match their respective sources. Shared test DLL SHA256:
+`77D8755DE9DED70AECEED257AAA95749A31C5EE20695DB16969AD60294D6D329`.
+Receipts: `cleanup-lock-paired-results.json`, `cleanup-lock-normal-app-source.json`,
+`cleanup-lock-negative-app-source.json`, and `cleanup-lock-callback-source.json` under the operator
+evidence directory. `Verify-CleanupLockPair.ps1` checks the paired outcome and source restoration.
+The normal acceptance/landing family subsequently passed 36/36 in 565.800 seconds, with host
+35048 exit zero confirmed and no timeout (`cleanup-lock-callback-landing-family/receipt.json`).
+The separately validated rebase/merge root migration passed 31/31 in 760.774 seconds
+(`cleanup-explicit-root-rebase-control/receipt.json`); no rebase source changed after that run.
+These family receipts close the previous 35/36 family result at this checkpoint. They do not prove
+whole-collection isolation, the remaining caller migration, full acceptance, or the performance goal.
