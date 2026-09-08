@@ -208,6 +208,69 @@ public sealed class CleanTestBaselineTests
     }
 
     [Xunit.Fact]
+    public void AttributeUsesExecutedMergeBaseIdentityEvidenceForUniformOrigin()
+    {
+        var current = GoalId.New();
+        var first = GoalId.New();
+        var second = GoalId.New();
+        const string checkName = "infrastructure tests";
+        const string identity = "Tests.BaselineFixture.Fails";
+        var journals = Journals(
+            (first, Entry(first, "main-a", "failed", [checkName])),
+            (second, Entry(second, "main-a", "failed", [checkName])));
+        var failedCheck = new AcceptanceCheckResult(
+            checkName,
+            false,
+            1,
+            "failure",
+            FailingTestIdentities: [identity],
+            FailingTestAttributions:
+            [
+                new AcceptanceTestFailureAttribution(
+                    identity,
+                    AcceptanceTestFailureOrigin.Inherited,
+                    "same focused identity failed at merge-base base-a")
+            ]);
+
+        var receipt = CleanTestBaseline.Resolve(journals, current, "main-a", null);
+        var attribution = Assert.Single(CleanTestBaseline.Attribute(
+            receipt, [checkName], journals, current, "main-a", [failedCheck]));
+
+        Assert.Equal(AcceptanceFailureOrigin.Inherited, attribution.Origin);
+        Assert.Contains("merge-base base-a", attribution.Evidence, StringComparison.Ordinal);
+    }
+
+    [Xunit.Fact]
+    public void AttributeMixedMergeBaseIdentityEvidenceRemainsUnattributed()
+    {
+        var current = GoalId.New();
+        var first = GoalId.New();
+        var second = GoalId.New();
+        const string checkName = "infrastructure tests";
+        var journals = Journals(
+            (first, Entry(first, "main-a", "failed", [checkName])),
+            (second, Entry(second, "main-a", "failed", [checkName])));
+        var failedCheck = new AcceptanceCheckResult(
+            checkName,
+            false,
+            1,
+            "failure",
+            FailingTestIdentities: ["Tests.One", "Tests.Two"],
+            FailingTestAttributions:
+            [
+                new AcceptanceTestFailureAttribution("Tests.One", AcceptanceTestFailureOrigin.Inherited, "failed at merge-base base-a"),
+                new AcceptanceTestFailureAttribution("Tests.Two", AcceptanceTestFailureOrigin.Introduced, "green at merge-base base-a")
+            ]);
+
+        var receipt = CleanTestBaseline.Resolve(journals, current, "main-a", null);
+        var attribution = Assert.Single(CleanTestBaseline.Attribute(
+            receipt, [checkName], journals, current, "main-a", [failedCheck]));
+
+        Assert.Equal(AcceptanceFailureOrigin.Unattributed, attribution.Origin);
+        Assert.Contains("correlation does not prove", attribution.Evidence, StringComparison.Ordinal);
+    }
+
+    [Xunit.Fact]
     public void AttributeVerifierClassificationReceiptSuppliesCauseWithExactIdentity()
     {
         var current = GoalId.New();
@@ -548,6 +611,23 @@ public sealed class CleanTestBaselineTests
     }
 
     [Xunit.Fact]
+    public void ResolveDistinctCandidateLineagesRemainObservedWithoutClaimingIdentityIsIncomplete()
+    {
+        var current = GoalId.New();
+        var first = GoalId.New();
+        var second = GoalId.New();
+        var journals = Journals(
+            (first, Entry(first, "main-a", "failed", ["core tests"], "candidate-a")),
+            (second, Entry(second, "main-a", "failed", ["core tests"], "candidate-b")));
+
+        var receipt = CleanTestBaseline.Resolve(journals, current, "main-a", null);
+
+        Assert.Equal(CleanBaselineAttestation.ObservedRedCorrelation, receipt.Attestation);
+        Assert.Contains("distinct candidate lineages", receipt.Evidence, StringComparison.Ordinal);
+        Assert.DoesNotContain("incomplete lineage identity", receipt.Evidence, StringComparison.Ordinal);
+    }
+
+    [Xunit.Fact]
     public void ResolveLegacyOrInconclusiveEvidenceRemainsUnattested()
     {
         var current = GoalId.New();
@@ -668,6 +748,7 @@ public sealed class CleanTestBaselineTests
 
             var item = Assert.Single(await store.ListAsync());
             Assert.Equal("clean-baseline-red:main-a", item.CorrelationKey);
+            Assert.Equal("Observed clean-test failure correlation at main-a", item.Subject);
             Assert.Equal(CollaborationItemStatus.Resolved, item.Status);
             Assert.Contains("main-b", item.Resolution, StringComparison.Ordinal);
         }

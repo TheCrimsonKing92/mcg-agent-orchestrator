@@ -934,16 +934,16 @@ public sealed partial class AgentOrchestratorKernel
             failure.FailedChecks.All(check => attributions.Any(item =>
                 item.CheckName.Equals(check, StringComparison.Ordinal) &&
                 item.Origin == AcceptanceFailureOrigin.Inherited &&
-                item.Cause != AcceptanceFailureCause.NotClassified)))
+                item.Cause == AcceptanceFailureCause.EnvironmentalApparatus)))
         {
             lines.Add("Do NOT attempt to fix these; they are not attributable to your diff. Report them and address only the introduced/unattributed checks.");
         }
         else if (attributions is { Count: > 0 } && failure.FailedChecks.Any(check => attributions.Any(item =>
                      item.CheckName.Equals(check, StringComparison.Ordinal) &&
                      item.Origin == AcceptanceFailureOrigin.Unattributed &&
-                     item.Evidence.Contains("observed", StringComparison.OrdinalIgnoreCase))))
+                     item.Cause == AcceptanceFailureCause.NotClassified)))
         {
-            lines.Add("Observed candidate correlation is not proof of origin. Report it and request baseline/run evidence; do not assume it is introduced or inherited or make a blind fix.");
+            lines.Add("One or more failure origins remain unproven. Report them and request exact baseline/run evidence; do not assume they are introduced or inherited or make a blind fix.");
         }
 
         lines.AddRange(BuildStructuredFailureReceiptLines(

@@ -1094,7 +1094,7 @@ public sealed class TaskBriefTests
                 new AcceptanceCheckAttribution(
                     "infrastructure tests",
                     AcceptanceFailureOrigin.Unattributed,
-                    "observed matching candidate check label; this correlation does not prove failure origin")
+                    "matching candidate check label; this correlation does not prove failure origin")
             ],
             "observed-red-correlation; candidate journals do not attest main");
         clock.Advance();
@@ -1102,8 +1102,64 @@ public sealed class TaskBriefTests
 
         var brief = kernel.BuildTaskBrief(goal.Id, developer.Id).Content;
 
-        Assert.Contains("Observed candidate correlation is not proof of origin", brief, StringComparison.Ordinal);
+        Assert.Contains("One or more failure origins remain unproven", brief, StringComparison.Ordinal);
         Assert.DoesNotContain("Do NOT attempt to fix these", brief, StringComparison.Ordinal);
+    }
+
+    [Xunit.Fact(DisplayName = "BuildTaskBrief_non_apparatus_inherited_record_does_not_suppress_fix")]
+    public void BuildTaskBriefNonApparatusInheritedRecordDoesNotSuppressFix()
+    {
+        var clock = new FakeClock();
+        var kernel = new AgentOrchestratorKernel(clock);
+        var developer = new TaskSpec(TaskId.New(), "Fix acceptance failure.", AgentRole.Developer);
+        var goal = kernel.CreateGoal("Recover non-apparatus acceptance failure", [developer]);
+        kernel.ActivateGoal(goal.Id, DefaultAgents());
+        kernel.RecordAcceptanceFailure(
+            goal.Id,
+            ["fixture check"],
+            "branch123456",
+            "main123456",
+            [
+                new AcceptanceCheckAttribution(
+                    "fixture check",
+                    AcceptanceFailureOrigin.Inherited,
+                    "focused identity failed at merge-base base-a",
+                    AcceptanceFailureCause.FixturePublication)
+            ]);
+        clock.Advance();
+        kernel.RetryTask(goal.Id, developer.Id, "Recover with current evidence.");
+
+        var brief = kernel.BuildTaskBrief(goal.Id, developer.Id).Content;
+
+        Assert.DoesNotContain("Do NOT attempt to fix these", brief, StringComparison.Ordinal);
+    }
+
+    [Xunit.Fact(DisplayName = "BuildTaskBrief_proven_apparatus_inherited_record_suppresses_fix")]
+    public void BuildTaskBriefProvenApparatusInheritedRecordSuppressesFix()
+    {
+        var clock = new FakeClock();
+        var kernel = new AgentOrchestratorKernel(clock);
+        var developer = new TaskSpec(TaskId.New(), "Fix acceptance failure.", AgentRole.Developer);
+        var goal = kernel.CreateGoal("Recover proven apparatus acceptance failure", [developer]);
+        kernel.ActivateGoal(goal.Id, DefaultAgents());
+        kernel.RecordAcceptanceFailure(
+            goal.Id,
+            ["apparatus check"],
+            "branch123456",
+            "main123456",
+            [
+                new AcceptanceCheckAttribution(
+                    "apparatus check",
+                    AcceptanceFailureOrigin.Inherited,
+                    "same focused identity failed at merge-base base-a",
+                    AcceptanceFailureCause.EnvironmentalApparatus)
+            ]);
+        clock.Advance();
+        kernel.RetryTask(goal.Id, developer.Id, "Recover with current evidence.");
+
+        var brief = kernel.BuildTaskBrief(goal.Id, developer.Id).Content;
+
+        Assert.Contains("Do NOT attempt to fix these", brief, StringComparison.Ordinal);
     }
 
     [Xunit.Fact(DisplayName = "BuildTaskBrief_legacy_unclassified_inherited_record_does_not_suppress_fix")]

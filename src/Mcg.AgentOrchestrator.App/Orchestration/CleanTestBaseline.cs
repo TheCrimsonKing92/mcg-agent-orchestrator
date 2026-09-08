@@ -84,15 +84,21 @@ internal static class CleanTestBaseline
                 .Where(item => (item.FailedCheckNames ?? [])
                     .Any(check => sharedChecks.Contains(check.Trim(), StringComparer.Ordinal)))
                 .ToArray();
-            var sameKnownCandidateLineage = correlatedEvidence.Length > 0 &&
-                correlatedEvidence.All(item => !string.IsNullOrWhiteSpace(item.BranchHeadSha)) &&
-                correlatedEvidence
-                    .Select(item => NormalizeSha(item.BranchHeadSha))
-                    .Distinct(StringComparer.OrdinalIgnoreCase)
-                    .Count() == 1;
-            var lineageDetail = sameKnownCandidateLineage
-                ? "the same candidate lineage"
-                : "candidate runs with incomplete lineage identity";
+            var knownLineages = correlatedEvidence
+                .Select(item => NormalizeSha(item.BranchHeadSha))
+                .Where(lineage => lineage is not null)
+                .Cast<string>()
+                .Distinct(StringComparer.OrdinalIgnoreCase)
+                .ToArray();
+            var lineageDetail = knownLineages.Length switch
+            {
+                0 => "candidate runs without lineage identity",
+                1 when correlatedEvidence.All(item => !string.IsNullOrWhiteSpace(item.BranchHeadSha)) =>
+                    "the same candidate lineage",
+                _ when correlatedEvidence.All(item => !string.IsNullOrWhiteSpace(item.BranchHeadSha)) =>
+                    "distinct candidate lineages",
+                _ => "candidate runs with partial lineage identity"
+            };
             return new CleanTestBaselineReceipt(
                 normalizedMain,
                 NormalizeSha(mergeBaseSha),
@@ -160,6 +166,16 @@ internal static class CleanTestBaseline
             .Select(check =>
             {
                 var causeEvidence = ResolveCauseEvidence(check, failedCheckReceipts);
+                var originEvidence = ResolveProvenOriginEvidence(check, failedCheckReceipts);
+                if (originEvidence is not null)
+                {
+                    return new AcceptanceCheckAttribution(
+                        check,
+                        originEvidence.Origin,
+                        CombineEvidence(originEvidence.Evidence, causeEvidence),
+                        causeEvidence?.Cause ?? AcceptanceFailureCause.NotClassified);
+                }
+
                 if (receipt.SharedFailingChecks.Contains(check, StringComparer.Ordinal))
                 {
                     var correlatedWith = evidence
@@ -180,23 +196,69 @@ internal static class CleanTestBaseline
                         causeEvidence?.Cause ?? AcceptanceFailureCause.NotClassified);
                 }
 
-                return receipt.Attestation == CleanBaselineAttestation.AttestedGreen
-                    ? new AcceptanceCheckAttribution(
-                        check,
-                        AcceptanceFailureOrigin.Introduced,
-                        CombineEvidence($"main {Short(normalizedMain)} is attested green", causeEvidence),
-                        causeEvidence?.Cause ?? AcceptanceFailureCause.NotClassified)
-                    : new AcceptanceCheckAttribution(
-                        check,
-                        AcceptanceFailureOrigin.Unattributed,
-                        CombineEvidence(
-                            receipt.Attestation == CleanBaselineAttestation.ObservedGreenCandidatePass
-                                ? $"observed candidate pass does not attest baseline health at main {Short(normalizedMain)}"
-                                : $"no authoritative baseline evidence at main {Short(normalizedMain)}",
-                            causeEvidence),
-                        causeEvidence?.Cause ?? AcceptanceFailureCause.NotClassified);
+                return new AcceptanceCheckAttribution(
+                    check,
+                    AcceptanceFailureOrigin.Unattributed,
+                    CombineEvidence(
+                        receipt.Attestation == CleanBaselineAttestation.ObservedGreenCandidatePass
+                            ? $"observed candidate pass does not attest baseline health at main {Short(normalizedMain)}"
+                            : $"no exact focused baseline attribution for check {check} at main {Short(normalizedMain)}",
+                        causeEvidence),
+                    causeEvidence?.Cause ?? AcceptanceFailureCause.NotClassified);
             })
             .ToArray();
+    }
+
+    private static ProvenOriginEvidence? ResolveProvenOriginEvidence(
+        string checkName,
+        IReadOnlyList<AcceptanceCheckResult>? failedCheckReceipts)
+    {
+        var matchingChecks = failedCheckReceipts?
+            .Where(check => !check.Passed && check.Name.Equals(checkName, StringComparison.Ordinal))
+            .ToArray() ?? [];
+        var identities = matchingChecks
+            .SelectMany(check => check.FailingTestIdentities ?? [])
+            .Select(identity => identity.Trim())
+            .Where(identity => identity.Length > 0)
+            .Distinct(StringComparer.Ordinal)
+            .ToArray();
+        if (identities.Length == 0)
+        {
+            return null;
+        }
+
+        var attributions = matchingChecks
+            .SelectMany(check => check.FailingTestAttributions ?? [])
+            .GroupBy(attribution => attribution.TestIdentity.Trim(), StringComparer.Ordinal)
+            .ToDictionary(group => group.Key, group => group.ToArray(), StringComparer.Ordinal);
+        if (identities.Any(identity =>
+                !attributions.TryGetValue(identity, out var values) ||
+                values.Length != 1 ||
+                values[0].Origin == AcceptanceTestFailureOrigin.Unattributed))
+        {
+            return null;
+        }
+
+        var selected = identities.Select(identity => attributions[identity][0]).ToArray();
+        var origins = selected.Select(attribution => attribution.Origin).Distinct().ToArray();
+        if (origins.Length != 1)
+        {
+            return null;
+        }
+
+        var origin = origins[0] switch
+        {
+            AcceptanceTestFailureOrigin.Inherited => AcceptanceFailureOrigin.Inherited,
+            AcceptanceTestFailureOrigin.Introduced => AcceptanceFailureOrigin.Introduced,
+            _ => AcceptanceFailureOrigin.Unattributed
+        };
+        return origin == AcceptanceFailureOrigin.Unattributed
+            ? null
+            : new ProvenOriginEvidence(
+                origin,
+                string.Join(" | ", selected
+                    .Select(attribution => attribution.Evidence.Trim())
+                    .Distinct(StringComparer.Ordinal)));
     }
 
     private static AcceptanceFailureCauseEvidence? ResolveCauseEvidence(
@@ -291,4 +353,6 @@ internal static class CleanTestBaseline
             .ToArray();
 
     private sealed record FailedCheckEvidence(GoalId GoalId, DateTimeOffset At, string CheckName);
+
+    private sealed record ProvenOriginEvidence(AcceptanceFailureOrigin Origin, string Evidence);
 }

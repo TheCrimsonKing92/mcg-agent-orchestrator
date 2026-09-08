@@ -4517,7 +4517,7 @@ internal sealed partial class ConductorDriver
             store.RaiseAsync(
                 CollaborationItemType.Decision,
                 goal.Id.Value,
-                $"Red clean-test baseline at {FormatShortSha(mainHeadSha)}",
+                $"Observed clean-test failure correlation at {FormatShortSha(mainHeadSha)}",
                 CleanTestBaseline.FormatJournalDetail(receipt),
                 activeCorrelationKey,
                 CancellationToken.None).GetAwaiter().GetResult();
@@ -4537,7 +4537,7 @@ internal sealed partial class ConductorDriver
         {
             store.TryResolveAsync(
                 item.CorrelationKey!,
-                $"clean-test baseline no longer active at main {FormatShortSha(mainHeadSha)}",
+                $"clean-test failure correlation no longer active at main {FormatShortSha(mainHeadSha)}",
                 CancellationToken.None).GetAwaiter().GetResult();
         }
     }
