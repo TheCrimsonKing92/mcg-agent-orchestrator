@@ -106,3 +106,45 @@ recovery reports that currently construct fixed defaults. Recovery and superviso
 explicitly disable cleanup-backoff reading do not require a clock for that disabled read.
 Parent environment/CWD/registry isolation, removal of justified-only-after-isolation collection
 constraints, whole-family integration acceptance and comparable gate timings remain open.
+
+## Operator continuation: explicit build-storage ownership
+
+`DotnetBuildStorageRoot` identifies an absolute normalized storage namespace; constructing it
+does not create directories or acquire capacity. Build creation, stable-slot operations, lease
+inspection, rotation, orphan cleanup, cache paths and successful-run cleanup can receive that
+value. Default callers resolve the existing environment override once at the operation boundary.
+Private path composition receives the resolved value rather than rereading ambient state.
+The persisted build-environment and lease formats are unchanged.
+
+Cleanup contexts carry an optional storage-root override. A sweep captures the default only
+when the operation starts, then uses the same value for its cleanup-debt path and actual deletion.
+The same-goal/two-root control proves removal in one namespace preserves the other's lease
+bytes. Its ignored-context arm specifically rejects survival of the intended owning root;
+damage to the other or ambient root is checked independently and cannot satisfy that control.
+The held-artifact cleanup case now uses explicit ownership instead of mutating the parent
+environment. This does not yet eliminate the collection's other environment mutations.
+
+Build-permit acquisition derives sibling locks from the supplied execution-lock directory.
+Independent Opus review identified a diagnostic regression in the first implementation:
+probing the requesting goal's artifacts attributed every busy permit to one artifact consumer.
+Both public acquisition routes reproduced that error with real held locks and a live child.
+The correction restores per-slot diagnostic artifact paths within the same owned namespace;
+it does not widen capacity or alter lock acquisition. The reviewed follow-up found no concrete
+regression. Arbitrary externally fabricated descriptor layouts are outside the constructor
+invariants exercised here; the full migration still must audit composition boundaries.
+
+Evidence in the driving repository:
+
+- `cleanup-owned-storage-remove-family`: 55/55 passed, owned exit zero, 806.994 seconds.
+- `cleanup-storage-manager-family`: 20/20 passed before the diagnostic-only correction.
+- `cleanup-permit-diagnostic-red-control`: both cases failed on the wrong owner PID, with
+  an observed test-host exit and no timeout.
+- `cleanup-storage-reviewed-lease-family`: 29/29 passed after the correction.
+- `cleanup-storage-reviewed-stable-family`: 22/22 passed after the correction.
+- `cleanup-storage-reviewed-owner-control`: both tightened ownership cases passed.
+
+The last three controls use frozen test assembly SHA-256
+`159B7DCC04B862364575F9F31D23ABCD09836182A6A3671ACD4DB8A0CBE395FD`,
+with source/PDB identities recorded separately. The prior full removal-family run predates
+the diagnostic correction and tightened assertion; it is not presented as a full run of the
+final binary. No acceptance critical-path improvement or complete goal acceptance is claimed.

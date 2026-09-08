@@ -11,8 +11,9 @@ internal sealed class WorktreeCleanupContext
 {
     public WorktreeCleanupContext(
         GoalWorktreeCleanupOptions options,
-        string? attentionStoreDirectory = null)
-        : this(GoalWorktreeCleanupHooks.ForConfiguration(options, attentionStoreDirectory))
+        string? attentionStoreDirectory = null,
+        DotnetBuildStorageRoot? buildStorageRoot = null)
+        : this(GoalWorktreeCleanupHooks.ForConfiguration(options, attentionStoreDirectory, buildStorageRoot))
     {
     }
 
@@ -28,8 +29,10 @@ internal sealed class WorktreeCleanupContext
 
     public static WorktreeCleanupContext Load(
         string? configurationBaseDirectory = null,
-        string? attentionStoreDirectory = null) =>
+        string? attentionStoreDirectory = null,
+        DotnetBuildStorageRoot? buildStorageRoot = null) =>
         new(
             WorktreeCleanupConfiguration.Load(configurationBaseDirectory ?? AppContext.BaseDirectory),
-            attentionStoreDirectory);
+            attentionStoreDirectory,
+            buildStorageRoot);
 }

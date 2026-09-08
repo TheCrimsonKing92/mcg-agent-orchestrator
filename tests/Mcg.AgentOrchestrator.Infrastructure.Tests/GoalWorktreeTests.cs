@@ -1217,6 +1217,7 @@ internal sealed class GoalWorktreeCleanupHooksBuilder
     private readonly GoalWorktreeCleanupHooks defaults = new();
 
     public Action<string, int> BuildServerShutdown { get; set; }
+    public DotnetBuildStorageRoot? BuildStorageRoot { get; set; }
     public ISandboxAclHelper SandboxAclHelper { get; set; }
     public Func<int, bool> TryKillRecordedProcess { get; set; }
     public Func<string, bool> DeleteDirectory { get; set; }
@@ -1269,6 +1270,7 @@ internal sealed class GoalWorktreeCleanupHooksBuilder
         return defaults with
         {
             BuildServerShutdown = BuildServerShutdown,
+            BuildStorageRoot = BuildStorageRoot,
             ResetSandboxAcl = acl.ResetSandboxAcl,
             TryKillRecordedProcess = TryKillRecordedProcess,
             DeleteDirectory = DeleteDirectory,

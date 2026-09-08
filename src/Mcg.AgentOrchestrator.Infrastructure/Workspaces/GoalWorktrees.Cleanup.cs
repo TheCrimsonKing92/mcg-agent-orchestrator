@@ -478,7 +478,8 @@ public static partial class GoalWorktrees
         GoalOwnedEphemeralSweepResult ownedEphemeralCleanup,
         GoalWorktreeCleanupHooks hooks)
     {
-        var root = DotnetBuildEnvironmentManager.GoalRoot(goalId);
+        var storageRoot = hooks.BuildStorageRoot ?? DotnetBuildEnvironmentManager.CaptureStorageRoot();
+        var root = DotnetBuildEnvironmentManager.GoalRoot(goalId, storageRoot);
         if (!Directory.Exists(root))
         {
             ClearCleanupNeeded(root, executionDirectory, hooks);
@@ -503,7 +504,7 @@ public static partial class GoalWorktrees
             ClearCleanupNeeded(root, executionDirectory, hooks);
         }
 
-        if (DotnetBuildEnvironmentManager.TryDeleteGoalArtifacts(goalId))
+        if (DotnetBuildEnvironmentManager.TryDeleteGoalArtifacts(goalId, storageRoot))
         {
             ClearCleanupNeeded(root, executionDirectory, hooks);
             return ownedEphemeralCleanup with { RemovedCount = ownedEphemeralCleanup.RemovedCount + 1 };

@@ -740,19 +740,108 @@ public sealed class GoalWorktreeTestsRemoveCleanup : GoalWorktreeTestBase
         }
     }
 
+    [Xunit.Fact]
+    public void BuildStorageRootIsAbsoluteAndNormalizedWithoutCreatingDirectories()
+    {
+        var path = Path.Combine(Path.GetTempPath(), "mcg-root-value-" + Guid.NewGuid().ToString("N"));
+        var root = new DotnetBuildStorageRoot(Path.Combine(path, "child", ".."));
+        Assert.Equal(Path.GetFullPath(path), root.RootPath);
+        Assert.False(Directory.Exists(path));
+        Assert.Throws<ArgumentException>(() => new DotnetBuildStorageRoot("relative-root"));
+        Assert.Throws<ArgumentException>(() => new DotnetBuildStorageRoot(" "));
+    }
+
+    [Xunit.Theory]
+    [Xunit.InlineData(false)]
+    [Xunit.InlineData(true)]
+    public void CleanupStorageOwnerSeparatesSameGoalArtifactsAndDetectsIgnoredContext(bool ignoreStorageRoot)
+    {
+        var repo = CreateSeededRepository();
+        try
+        {
+            var goalId = GoalId.New();
+            var rootA = new DotnetBuildStorageRoot(Path.Combine(repo, "storage-a"));
+            var rootB = new DotnetBuildStorageRoot(Path.Combine(repo, "storage-b"));
+            var first = DotnetBuildEnvironmentManager.CreateAttempt(goalId, "owner-a", storageRoot: rootA);
+            var second = DotnetBuildEnvironmentManager.CreateAttempt(goalId, "owner-b", storageRoot: rootB);
+            var survivorMetadata = File.ReadAllBytes(second.LeaseMetadataPath!);
+            var ambientGoalRoot = DotnetBuildEnvironmentManager.GoalRoot(goalId);
+            Assert.False(Directory.Exists(ambientGoalRoot));
+            GoalWorktrees.Ensure(repo, goalId);
+
+            var context = new WorktreeCleanupContext(GoalWorktreeCleanupOptions.Default, buildStorageRoot: rootA);
+            var operationHooks = ignoreStorageRoot ? context.Hooks with { BuildStorageRoot = null } : context.Hooks;
+            var result = GoalWorktrees.Remove(repo, goalId, hooks: operationHooks);
+            Assert.True(result.IsComplete);
+
+            Assert.Equal(survivorMetadata, File.ReadAllBytes(second.LeaseMetadataPath!));
+            Assert.False(Directory.Exists(ambientGoalRoot));
+            void AssertOwningRootRemoved() => Assert.False(Directory.Exists(first.RootPath));
+
+            if (ignoreStorageRoot)
+            {
+                // Failure must specifically be the surviving owning root, never another root's damage.
+                Assert.IsType<Xunit.Sdk.FalseException>(Xunit.Record.Exception(AssertOwningRootRemoved));
+            }
+            else
+            {
+                AssertOwningRootRemoved();
+                Assert.True(GoalWorktrees.Remove(repo, goalId,
+                    hooks: context.Hooks with { BuildStorageRoot = rootB }).IsComplete);
+                Assert.False(Directory.Exists(second.RootPath));
+            }
+        }
+        finally
+        {
+            DeleteDirectory(repo);
+        }
+    }
+
+    [Xunit.Fact]
+    public void ExplicitStorageRootKeepsCreationPermitAndRunCleanupInOneNamespace()
+    {
+        var repo = CreateSeededRepository();
+        try
+        {
+            var storageRoot = new DotnetBuildStorageRoot(Path.Combine(repo, "storage"));
+            var goalId = GoalId.New();
+            var environment = DotnetBuildEnvironmentManager.CreateAttempt(goalId, "owned-root", storageRoot: storageRoot);
+            Assert.Equal(Path.Combine(storageRoot.RootPath, "goals", goalId.Value[..8].ToLowerInvariant()), environment.RootPath);
+            Assert.Equal(Path.Combine(environment.RootPath, "artifacts"), environment.ArtifactsPath);
+            Assert.StartsWith(environment.RootPath + Path.DirectorySeparatorChar, environment.LeaseMetadataPath!);
+            Assert.Contains(environment.ArtifactsPath, environment.Arguments);
+            var acquired = Assert.IsType<DotnetBuildLeaseAcquisition.Acquired>(
+                DotnetBuildEnvironmentManager.TryAcquireFirstAvailableBuildPermit(environment, TimeSpan.Zero));
+            using (acquired.Lease)
+            {
+                Assert.Equal(Path.Combine(storageRoot.RootPath, "build-slots"),
+                    Path.GetDirectoryName(acquired.Lease.Environment.ExecutionLockPath));
+            }
+
+            Assert.Equal(environment.RootPath, DotnetBuildEnvironmentManager.InspectGoalLease(goalId, storageRoot).RootPath);
+            var run = DotnetBuildEnvironmentManager.CreateAttempt(null, "owned-run", storageRoot: storageRoot);
+            Assert.True(DotnetBuildEnvironmentManager.TryCleanupSuccessfulRun(run, storageRoot));
+            Assert.False(Directory.Exists(run.RootPath));
+            Assert.True(Directory.Exists(environment.RootPath));
+        }
+        finally
+        {
+            DeleteDirectory(repo);
+        }
+    }
+
     [Xunit.Fact(DisplayName = "GoalWorktrees_remove_persists_cleanup_needed_when_goal_artifacts_delete_fails")]
     public void GoalWorktreesRemovePersistsCleanupNeededWhenGoalArtifactsDeleteFails()
     {
         var repo = CreateSeededRepository();
-        var originalIsolatedRoot = Environment.GetEnvironmentVariable(DotnetBuildEnvironmentManager.IsolatedRootOverrideVariable);
         var originalLockHolders = CleanupHooks.FindLockHoldersForCleanup;
-        var isolatedRoot = Path.Combine(repo, "isolated-dotnet");
+        var storageRoot = new DotnetBuildStorageRoot(Path.Combine(repo, "isolated-dotnet"));
         try
         {
-            Environment.SetEnvironmentVariable(DotnetBuildEnvironmentManager.IsolatedRootOverrideVariable, isolatedRoot);
+            CleanupHooks.BuildStorageRoot = storageRoot;
             var goalId = GoalId.New();
             var path = GoalWorktrees.Ensure(repo, goalId);
-            var buildEnvironment = DotnetBuildEnvironmentManager.CreateAttempt(goalId, "cleanup-needed");
+            var buildEnvironment = DotnetBuildEnvironmentManager.CreateAttempt(goalId, "cleanup-needed", storageRoot: storageRoot);
             var lockedFile = Path.Combine(buildEnvironment.RootPath, "held-open.log");
             File.WriteAllText(lockedFile, "held");
             var lockReleased = false;
@@ -790,7 +879,6 @@ public sealed class GoalWorktreeTestsRemoveCleanup : GoalWorktreeTestBase
         }
         finally
         {
-            Environment.SetEnvironmentVariable(DotnetBuildEnvironmentManager.IsolatedRootOverrideVariable, originalIsolatedRoot);
             CleanupHooks.FindLockHoldersForCleanup = originalLockHolders;
             DeleteDirectory(repo);
         }

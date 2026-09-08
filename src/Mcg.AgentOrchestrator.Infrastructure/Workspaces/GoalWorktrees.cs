@@ -105,7 +105,8 @@ public sealed record GoalWorktreeCleanupHooks
     /// </summary>
     public static GoalWorktreeCleanupHooks ForConfiguration(
         GoalWorktreeCleanupOptions options,
-        string? attentionStoreDirectory = null)
+        string? attentionStoreDirectory = null,
+        DotnetBuildStorageRoot? buildStorageRoot = null)
     {
         ArgumentNullException.ThrowIfNull(options);
         var validatedOptions = options.Validate();
@@ -115,12 +116,16 @@ public sealed record GoalWorktreeCleanupHooks
 
         return new GoalWorktreeCleanupHooks
         {
+            BuildStorageRoot = buildStorageRoot,
             CleanupOptions = () => validatedOptions,
             CleanupAttentionStoreDirectory = () => normalizedAttentionStoreDirectory
         };
     }
 
     public Action<string, int> BuildServerShutdown { get; init; } = GoalWorktrees.DefaultBuildServerShutdown;
+    // Null preserves callers that configure the ambient root after constructing hook overrides.
+    // Cleanup resolves that default once per artifact sweep, never separately for lookup and delete.
+    public DotnetBuildStorageRoot? BuildStorageRoot { get; init; }
     public Action<string, int> ResetSandboxAcl { get; init; } = static (path, timeout) =>
         (OperatingSystem.IsWindows()
             ? (ISandboxAclHelper)new WindowsSandboxAclHelper()
