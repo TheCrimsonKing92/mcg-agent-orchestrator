@@ -2,6 +2,62 @@ using Mcg.AgentOrchestrator.Core;
 
 public sealed class ModelExecutionTests
 {
+    [Xunit.Theory]
+    [Xunit.InlineData(true)]
+    [Xunit.InlineData(null)]
+    public async Task ExecuteAssignedTaskPreservesCompleteAndLegacyDeveloperProgression(bool? assignedScopeComplete)
+    {
+        var clock = new FakeClock();
+        var kernel = new AgentOrchestratorKernel(clock);
+        var goal = kernel.CreateGoal("Implement the complete assigned scope");
+        var agents = DefaultAgents();
+        kernel.ActivateGoal(goal.Id, agents);
+        var task = goal.Tasks.First(task => task.RequiredRole == AgentRole.Developer);
+        var output = string.Join(
+            Environment.NewLine,
+            new[]
+            {
+            "WORKER_RESULT:",
+            "files: src/Complete.cs",
+            "commands: dotnet build",
+            "tests: deferred - Acceptance owns managed test execution",
+            "commit: none",
+            "blockers: none",
+            assignedScopeComplete is true ? "assigned_scope_complete: true" : null,
+            "model_fit: OpenAI/test - adequate - focused regression",
+            "skills: none",
+            "confidence: high",
+            "END_WORKER_RESULT"
+            }.OfType<string>());
+        var runner = new AgentTaskRunner(
+            kernel,
+            agents,
+            new InMemoryModelProviderRegistry([new FakeModelProvider("OpenAI", output)]),
+            clock);
+
+        await runner.RunAsync(goal.Id, task.Id);
+
+        task = kernel.GetTask(goal.Id, task.Id);
+        Assert.Equal(WorkTaskStatus.Completed, task.Status);
+        var completion = Assert.Single(goal.Timeline, evt => evt.TaskId == task.Id && evt.Kind == ProgressKind.TaskCompleted);
+        Assert.DoesNotContain(goal.Timeline, evt => evt.TaskId == task.Id && evt.Kind == ProgressKind.TaskFailed);
+        Assert.All(goal.Tasks.Where(other => other.RequiredRole is AgentRole.Tester or AgentRole.Reviewer),
+            other => Assert.NotEqual(WorkTaskStatus.Completed, other.Status));
+        if (assignedScopeComplete is true)
+        {
+            Assert.NotNull(task.LastVerification);
+            Assert.True(task.LastVerification.AssignedScopeComplete);
+            Assert.Single(goal.Timeline, evt => evt.TaskId == task.Id && evt.Kind == ProgressKind.TaskVerificationRecorded);
+            Assert.StartsWith("Task completed with passing verification: api-run ", completion.Message, StringComparison.Ordinal);
+        }
+        else
+        {
+            Assert.Null(task.LastVerification);
+            Assert.DoesNotContain(goal.Timeline, evt => evt.TaskId == task.Id && evt.Kind == ProgressKind.TaskVerificationRecorded);
+            Assert.Equal($"{agents.Single(agent => agent.Id == task.AssignedAgentId).Name} completed task.", completion.Message);
+        }
+    }
+
     [Xunit.Fact(DisplayName = "ExecuteAssignedTask_routes_incomplete_developer_scope_to_revision")]
     public async Task ExecuteAssignedTaskRoutesIncompleteDeveloperScopeToRevision()
     {
@@ -55,6 +111,7 @@ public sealed class ModelExecutionTests
         var request = restored.RequestHumanInput(goal.Id, task.Id, "Should the incomplete implementation be accepted?");
         restored.SubmitHumanInput(request.Id, "No; continue the assigned implementation.");
 
+        restoredTask = restored.GetTask(goal.Id, task.Id);
         Assert.Equal(WorkTaskStatus.Assigned, restoredTask.Status);
         Assert.DoesNotContain(
             restored.GetGoal(goal.Id).Timeline,
