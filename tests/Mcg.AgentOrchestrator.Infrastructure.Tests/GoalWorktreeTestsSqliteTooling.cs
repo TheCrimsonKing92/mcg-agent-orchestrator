@@ -1440,19 +1440,6 @@ public sealed partial class GoalWorktreeTestsSqliteTooling : GoalWorktreeTestBas
         }
     }
 
-    private static bool WaitForProcessExit(int processId, int timeoutMs)
-    {
-        try
-        {
-            using var process = Process.GetProcessById(processId);
-            return process.WaitForExit(timeoutMs);
-        }
-        catch (ArgumentException)
-        {
-            return true;
-        }
-    }
-
     private static OwnedProcessIdentity? TryReadOwnedProcessIdentity(string path)
     {
         try
@@ -1489,6 +1476,10 @@ public sealed partial class GoalWorktreeTestsSqliteTooling : GoalWorktreeTestBas
         {
             return false;
         }
+        catch (System.ComponentModel.Win32Exception)
+        {
+            return false;
+        }
     }
 
     private static bool WaitForOwnedProcessExit(OwnedProcessIdentity ownedProcess, int timeoutMs)
@@ -1503,6 +1494,10 @@ public sealed partial class GoalWorktreeTestsSqliteTooling : GoalWorktreeTestBas
             return true;
         }
         catch (InvalidOperationException)
+        {
+            return true;
+        }
+        catch (System.ComponentModel.Win32Exception)
         {
             return true;
         }
@@ -1526,6 +1521,10 @@ public sealed partial class GoalWorktreeTestsSqliteTooling : GoalWorktreeTestBas
         catch (InvalidOperationException)
         {
             // Natural exit won the cleanup race.
+        }
+        catch (System.ComponentModel.Win32Exception)
+        {
+            // The process identity could no longer be read safely for owned cleanup.
         }
     }
 
