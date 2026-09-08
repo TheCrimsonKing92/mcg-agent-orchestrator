@@ -400,7 +400,9 @@ public sealed partial class GoalWorktreeTestsSqliteTooling : GoalWorktreeTestBas
         var failure = Record.Exception(() => RunRedirectedProcess(
             startInfo,
             "phase-reporting fixture",
-            timeoutMs: 1000));
+            timeoutMs: 1000,
+            readyProbe: stdout => stdout.Contains("MCG_PHASE=rebuild-and-run-cli", StringComparison.Ordinal),
+            readyTimeoutMs: 30000));
 
         Assert.NotNull(failure);
         Assert.Contains("phase=rebuild-and-run-cli", failure.Message, StringComparison.Ordinal);
