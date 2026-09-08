@@ -379,9 +379,18 @@ public abstract class GoalWorktreeTestBase
             currentGoal)
         {
             AcceptanceVerifier = fakeVerifier,
+            CleanupContext = CreateIsolatedCleanupContext(repo),
             RunInjectedAcceptanceVerifierInCurrentProcess = true
         };
     }
+
+    private protected static WorktreeCleanupContext CreateIsolatedCleanupContext(
+        string repo,
+        GoalWorktreeCleanupHooks? hooks = null) =>
+        new((hooks ?? new GoalWorktreeCleanupHooks()) with
+        {
+            BuildStorageRoot = new DotnetBuildStorageRoot(Path.Combine(repo, ".orchestrator", "test-dotnet"))
+        });
 
     private protected static void RecordCancelledProcess(
         AgentOrchestratorKernel kernel,
@@ -636,6 +645,7 @@ public abstract class GoalWorktreeTestBase
     {
         public int RunCount { get; private set; }
         public bool StableSlotLeaseObserved { get; private set; }
+        public DotnetBuildEnvironment? ObservedEnvironment { get; private set; }
 
         public Task<AcceptanceVerificationResult> RunAsync(
             string worktreePath,
@@ -647,6 +657,7 @@ public abstract class GoalWorktreeTestBase
         {
             RunCount++;
             StableSlotLeaseObserved |= stableSlotLease is not null && stableSlotIndex is not null;
+            ObservedEnvironment = stableSlotLease?.Environment;
             onRun?.Invoke();
             if (exception is not null)
                 throw exception;

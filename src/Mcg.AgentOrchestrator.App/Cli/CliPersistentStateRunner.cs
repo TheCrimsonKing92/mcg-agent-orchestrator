@@ -78,7 +78,8 @@ internal static partial class CliPersistentStateRunner
         ref Goal? currentGoal,
         IOperatorChannel? channel = null,
         IGoalAcceptanceVerifier? acceptanceVerifier = null,
-        OperatorIntentSubmissionSource operatorIntentSubmissionSource = OperatorIntentSubmissionSource.Cli)
+        OperatorIntentSubmissionSource operatorIntentSubmissionSource = OperatorIntentSubmissionSource.Cli,
+        WorktreeCleanupContext? acceptanceCleanupContext = null)
     {
         if (CliReadOnlyCommandRunner.TryExecute(args, stateRepository, workspace, providers, channel, ref agents, ref workerProfiles, ref currentGoal, out var readOnlyResult))
             return readOnlyResult;
@@ -176,7 +177,8 @@ internal static partial class CliPersistentStateRunner
                 ref currentGoal,
                 channel,
                 acceptanceVerifier,
-                persistOnlyCurrentGoal: true);
+                persistOnlyCurrentGoal: true,
+                cleanupContext: acceptanceCleanupContext);
         }
 
         if (IsAcceptanceCommand(args))
@@ -190,7 +192,8 @@ internal static partial class CliPersistentStateRunner
                 ref workerProfiles,
                 ref currentGoal,
                 channel,
-                acceptanceVerifier);
+                acceptanceVerifier,
+                cleanupContext: acceptanceCleanupContext);
         }
 
         if (IsProcessRefreshCommand(args))
@@ -3931,11 +3934,12 @@ internal static partial class CliPersistentStateRunner
         ref Goal? currentGoal,
         IOperatorChannel? channel = null,
         IGoalAcceptanceVerifier? acceptanceVerifier = null,
-        bool persistOnlyCurrentGoal = false)
+        bool persistOnlyCurrentGoal = false,
+        WorktreeCleanupContext? cleanupContext = null)
     {
         if (args.Count > 0 && args[0].Equals("acceptance-queue", StringComparison.OrdinalIgnoreCase))
         {
-            return ExecuteAcceptanceQueueOutsideTransaction(args, stateRepository, workspace, ref agents, providers, ref workerProfiles, ref currentGoal, channel, acceptanceVerifier);
+            return ExecuteAcceptanceQueueOutsideTransaction(args, stateRepository, workspace, ref agents, providers, ref workerProfiles, ref currentGoal, channel, acceptanceVerifier, cleanupContext);
         }
 
         var phaseTimings = new CliPhaseTimingRecorder("acceptance");
@@ -3964,7 +3968,7 @@ internal static partial class CliPersistentStateRunner
         };
 
         var reconcileStarted = System.Diagnostics.Stopwatch.StartNew();
-        var cleanupContext = WorktreeCleanupContext.Load(attentionStoreDirectory: workspace.OrchestratorDirectory);
+        cleanupContext ??= WorktreeCleanupContext.Load(attentionStoreDirectory: workspace.OrchestratorDirectory);
         var targetSweep = TerminalGoalSweep.Run(
             kernel,
             workspace.ExecutionDirectory,
@@ -4128,7 +4132,8 @@ internal static partial class CliPersistentStateRunner
             registerAcceptanceGuardAbort: () => acceptanceGuardAborted = true,
             prepareAcceptanceMergeGuard: PrepareAcceptanceMergeGuard,
             persistCriticalGoalKernel: PersistCriticalCurrentGoal,
-            recordDurableGoalBaseline: snapshot => conductTickBaselines[snapshot.Id] = snapshot);
+            recordDurableGoalBaseline: snapshot => conductTickBaselines[snapshot.Id] = snapshot,
+            cleanupContext: cleanupContext);
 
         currentGoal = updatedCurrentGoal;
 
@@ -4247,7 +4252,8 @@ internal static partial class CliPersistentStateRunner
         ref WorkerProfileCatalog workerProfiles,
         ref Goal? currentGoal,
         IOperatorChannel? channel = null,
-        IGoalAcceptanceVerifier? acceptanceVerifier = null)
+        IGoalAcceptanceVerifier? acceptanceVerifier = null,
+        WorktreeCleanupContext? cleanupContext = null)
     {
         var kernel = stateRepository.LoadAsync().GetAwaiter().GetResult();
         var initialGoalSnapshots = kernel.ExportSnapshot().Goals.ToDictionary(snapshot => snapshot.Id, StringComparer.Ordinal);
@@ -4272,7 +4278,8 @@ internal static partial class CliPersistentStateRunner
                 stateRepository,
                 initialGoalSnapshots[request.GoalId.Value],
                 kernel,
-                request));
+                request),
+            cleanupContext: cleanupContext);
 
         if (shouldSave)
         {

@@ -176,7 +176,8 @@ The coordinator's complete build-manager call census is:
 There is one production launch-request construction and one production start-info invocation;
 both pass the explicit setting. The two pre-existing driver fallback coordinators inject a
 null-lease delegate and do not configure a storage override; their behavior is unchanged.
-No production caller outside the manager uses its stable-slot availability/owner query APIs.
+CLI acceptance also calls the stable-slot availability/owner APIs; its explicit-root migration
+is recorded below. The earlier manager-only survey missed that caller.
 CLI abandonment/rotation and heartbeat/load-context projections are separate remaining audit
 surfaces; this increment does not claim that every diagnostic projection supports an explicit
 in-process namespace.
@@ -194,3 +195,41 @@ Receipts are `cleanup-launch-required-*` under the driving repository's operator
 directory. Independent Opus review prompted preservation of default scrubbing, use of the
 existing transient launch carrier, explicit internal arguments and normalized fixture paths.
 Full collection isolation, integrated acceptance and measured gate improvement remain open.
+
+## CLI permit ownership and cleanup fixture responsibilities
+
+The original removal fixture's 54 test methods / 55 cases were moved into seven classes by
+responsibility. Member bodies were copied verbatim except the owned-child selector's containing
+class; later diagnostic changes retain captured CLI failure output. Manifest discovery preserved
+all 219 lane cases after this move. Two new CLI storage controls bring this family to 57 cases.
+The existing prefix filter covers the moved classes without a manifest census edit.
+
+Serial validation exposed a missed dependency before concurrency was enabled. One retained
+five-role lifecycle failure reached CLI acceptance and returned `SLOTS_BUSY` on the ambient
+build permits. The former collection fixture had supplied a process-global isolated root;
+removing it exposed the CLI selector's ambient `CreateAttempt`, availability and owner calls.
+Other failures without captured acceptance output retain an undetermined mechanism.
+
+CLI acceptance now reads the existing immutable `CleanupContext.Hooks.BuildStorageRoot` for
+all three calls. The resulting lease carries the verifier's environment. A custom selector may
+still supply a lease, but an explicitly configured namespace rejects a lease whose environment,
+artifacts or execution-lock path escapes it and releases that lease before failing. Membership
+is lexical and does not resolve filesystem links; it is a consistency check, not authorization.
+Persisted acceptance and acceptance-queue forward the same acceptance cleanup context through
+the dispatcher, including acceptance's preflight sweep. Default callers retain their prior
+configuration behavior. Other persistent-command/host migration surfaces remain open.
+
+The storage family passed 7/7 on source-matched test assembly
+`6DF4C2D7A351A6038F3514D3F92CB396980861369C30F0D15103C7FD9530D64B`:
+an actual CLI control fills one isolated root's permits, observes its busy outcome, then lands
+with an idle independent root and checks the verifier environment. A negative selector control
+supplies another root's lease, requires the specific namespace rejection and verifies release.
+Receipt: `cleanup-cli-root-storage-control` in the driving repository's operator evidence.
+The lifecycle family passed 10/10 in 230.227 seconds, and the full 57-case family passed serially
+in 786.747 seconds with seed 20260908 and four configured threads (parallelism disabled).
+Both used the same frozen assembly above, with managed-host exit zero and confirmed teardown.
+Fresh manifest discovery found 221 cases: all previous 219 plus exactly the two storage controls.
+Independent Opus review cleared this bounded increment after inspecting instance hook ownership
+and the explicit-root caller census. Parallel comparison and full acceptance remain required;
+no gate-wide speedup or complete collection isolation is claimed here. Host/heartbeat context
+projections and wider child-environment propagation are outside this increment's evidence.

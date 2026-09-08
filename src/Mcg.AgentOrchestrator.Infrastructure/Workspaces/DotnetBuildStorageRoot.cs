@@ -18,4 +18,15 @@ public sealed record DotnetBuildStorageRoot
     }
 
     public string RootPath { get; }
+
+    /// <summary>Checks lexical namespace membership; does not resolve filesystem links.</summary>
+    public bool ContainsPath(string path)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(path);
+        if (!Path.IsPathFullyQualified(path))
+            return false;
+        var relative = Path.GetRelativePath(RootPath, Path.GetFullPath(path));
+        return !Path.IsPathRooted(relative) && relative != ".." &&
+            !relative.StartsWith(".." + Path.DirectorySeparatorChar, StringComparison.Ordinal);
+    }
 }
