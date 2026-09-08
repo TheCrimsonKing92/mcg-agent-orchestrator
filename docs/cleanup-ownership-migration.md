@@ -422,3 +422,48 @@ Existing earlier acceptance/rebase receipts remain qualified to their prior chec
 Ensure calls and host/context construction still need the full caller audit; no collection guard,
 lane exclusion, or full acceptance requirement is removed by this checkpoint. No throughput claim
 is made from these timings.
+
+## Driver-owned acceptance coordinators preserve the configured namespace
+
+The production `ConductorDriver` constructor accepted cleanup hooks but constructed both its
+acceptance and focused-evidence coordinators without their existing `buildStorageRoot` argument.
+They consequently resolved the ambient namespace while cohort cleanup used the supplied hooks.
+The constructor now captures its immutable hooks before creating the coordinators and supplies
+their shared `BuildStorageRoot` to both. Null remains null; attempt-record directories remain
+separate and build-pool capacity is unchanged.
+
+This is a wiring correction at the existing owner. The coordinator stores the root at construction,
+uses it in both `AcquireCohortStableSlotLease` and `AcquireAttemptStableSlotLease`, and includes it
+in `ConductorParallelAcceptanceOwnedProcessLaunch`. `BuildOwnedProcessStartInfo` applies it to the
+owned child's environment after hermetic scrubbing, preserving the namespace for that child and
+its build descendants without mutating the parent environment. The existing configured-root
+controls exercise real permit acquisition and the child launch record/start-info contract; they
+do not by themselves establish a fresh external child round trip for this constructor change.
+
+The existing three-member production merge-train fixture now passes an explicit cleanup context
+instead of changing the process-wide build root. Its verifier records the actual lease root,
+artifacts path and execution-lock path; all must be inside the supplied namespace, alongside the
+existing one-gate/three-landings assertions. The first attempt stopped earlier at a null train
+selection and cannot attest root behavior. A diagnostic was added to report candidate projections
+if that prerequisite fails again. The earlier selection failure's cause remains undetermined.
+
+The next execution reached the intended assertion: all three paths belonged to the collection's
+ambient LocalLow root instead of the supplied fixture root. That red host exited two with no
+timeout. After only the production constructor correction, the same test DLL passed the root
+assertions and original landing assertions; host 33256 exited zero, no timeout, 48.966 seconds.
+Red host 39152 took 39.139 seconds. These are correctness controls, not a performance comparison.
+The identical test DLL in both controls has SHA256
+`6E1D9C1CDF413A990427759F50274CCA29B458A74C5F890192B62D6C4604075E`.
+The changed App DLL and test source have matching PDB checksums. Five existing ownership cases
+also passed: both configured-root permit-wait arms, child launch propagation, blocked-attempt
+re-gating, and complete partition sets for two independent verified goals.
+
+Evidence under the operator directory: `cleanup-coordinator-root-diagnostic-control` (the intended
+red), `cleanup-coordinator-root-green-control`, `cleanup-coordinator-root-green-ownership-controls`,
+and corresponding source/runtime manifests. `cleanup-coordinator-root-red-control` is the earlier
+inconclusive selection failure. Cross-family review is in `cleanup-coordinator-root-review.json`;
+its ordinary-lease and child-propagation questions were checked at the source sites and controls
+above. The review's uncertainty about whether the merge-train verifier uses the coordinator is
+resolved by `RunMergeTrain` calling `AcquireCohortStableSlotLease` and the executed red/green pair.
+Production focused-evidence constructor forwarding is source-verified here; its full-path
+integration and the remaining ambient fixture migrations remain part of the open goal.

@@ -1688,13 +1688,9 @@ public sealed class AcceptanceCohortWorkflowTests : GoalWorktreeTestBase
     public void ProductionMergeTrain_OneGateAttemptLandsThreeMembers()
     {
         var repo = CreateReducedAcceptanceCohortRepository();
-        var previousIsolatedRoot = Environment.GetEnvironmentVariable(
-            DotnetBuildEnvironmentManager.IsolatedRootOverrideVariable);
+        var cleanupContext = CreateIsolatedCleanupContext(repo);
         try
         {
-            Environment.SetEnvironmentVariable(
-                DotnetBuildEnvironmentManager.IsolatedRootOverrideVariable,
-                Path.Combine(repo, ".dotnet-test-root"));
             AddAcceptanceManifest(repo);
             AddSourceSizeAuthority(repo, ("tests/Mcg.AgentOrchestrator.Core.Tests/TrainFirst.cs", 1));
             var kernel = new AgentOrchestratorKernel();
@@ -1728,7 +1724,8 @@ public sealed class AcceptanceCohortWorkflowTests : GoalWorktreeTestBase
             ]);
             var workspace = OrchestratorWorkspace.ForDirectory(repo);
             var driver = new ConductorDriver(
-                kernel, workspace, verifier, AgentCatalog.Default().Agents, WorkerProfileCatalog.Default());
+                kernel, workspace, verifier, AgentCatalog.Default().Agents, WorkerProfileCatalog.Default(),
+                cleanupHooks: cleanupContext.Hooks);
             var selection = ProjectTrainSelection(driver, firstGoal, secondGoal, thirdGoal);
             var landings = new List<ConductorLandingReceipt>();
             driver.SuccessfulLandingSink = landings.Add;
@@ -1739,6 +1736,11 @@ public sealed class AcceptanceCohortWorkflowTests : GoalWorktreeTestBase
                 ConductorAutonomyPolicy.Permissive);
 
             Assert.Equal(1, verifier.RunCount);
+            var buildPaths = Assert.Single(verifier.ObservedBuildPaths);
+            Assert.NotEmpty(buildPaths);
+            Assert.All(buildPaths, path => Assert.True(
+                cleanupContext.Hooks.BuildStorageRoot!.ContainsPath(path),
+                $"Acceptance lease path must belong to the configured fixture root: {path}"));
             Assert.Equal(3, result.MemberResults.Count);
             Assert.Equal(3, landings.Count);
             Assert.Equal(MergeTrainGateOutcome.Passed, result.Receipt?.Outcome);
@@ -1762,9 +1764,6 @@ public sealed class AcceptanceCohortWorkflowTests : GoalWorktreeTestBase
         }
         finally
         {
-            Environment.SetEnvironmentVariable(
-                DotnetBuildEnvironmentManager.IsolatedRootOverrideVariable,
-                previousIsolatedRoot);
             DeleteDirectory(repo);
         }
     }
@@ -3239,7 +3238,10 @@ public sealed class AcceptanceCohortWorkflowTests : GoalWorktreeTestBase
         var candidates = goals.Select(goal => new ConductorSpeculativeAcceptanceCandidate(
             goal.Id,
             driver.ProjectGateReadyCandidate(goal, ConductorAutonomyPolicy.Permissive))).ToArray();
-        return Assert.IsType<ConductorMergeTrainSelection>(ConductorMergeTrainSelector.Select(candidates));
+        var selection = ConductorMergeTrainSelector.Select(candidates);
+        Assert.True(selection is not null,
+            $"Expected a merge train from candidate projections: {string.Join(" | ", candidates.Select(candidate => candidate.ToString()))}");
+        return selection;
     }
 
     private static void AssertNoMergeTrainWorkspaces(string repo)
@@ -3434,6 +3436,7 @@ public sealed class AcceptanceCohortWorkflowTests : GoalWorktreeTestBase
         internal int RunCount => _nextResult;
         internal List<GoalId?> GoalIds { get; } = [];
         internal List<IReadOnlyList<string>> ChangedFiles { get; } = [];
+        internal List<IReadOnlyList<string>> ObservedBuildPaths { get; } = [];
 
         public Task<AcceptanceVerificationResult> RunAsync(
             string worktreePath,
@@ -3445,6 +3448,12 @@ public sealed class AcceptanceCohortWorkflowTests : GoalWorktreeTestBase
         {
             GoalIds.Add(goalId);
             ChangedFiles.Add(changedFiles?.ToArray() ?? []);
+            ObservedBuildPaths.Add(stableSlotLease is null ? [] :
+            [
+                stableSlotLease.Environment.RootPath,
+                stableSlotLease.Environment.ArtifactsPath,
+                stableSlotLease.Environment.ExecutionLockPath
+            ]);
             Assert.True(_nextResult < results.Count, "The cohort invoked the acceptance verifier more times than expected.");
             return Task.FromResult(results[_nextResult++]);
         }

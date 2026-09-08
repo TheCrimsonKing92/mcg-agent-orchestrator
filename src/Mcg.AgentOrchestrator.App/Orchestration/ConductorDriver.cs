@@ -261,20 +261,22 @@ internal sealed partial class ConductorDriver
         _getAcceptanceSlotCount = _ => ConductorBatchLoop.DefaultParallelAcceptanceCapacity;
         _getWorkerAdmissionCapacity = () => ConductorBatchLoop.WorkerAdmissionCapacity;
         _parallelAcceptanceEnabled = true;
+        _cohortCleanupHooks = cleanupHooks ?? new GoalWorktreeCleanupHooks();
         _parallelAcceptanceAttemptCoordinator = new ConductorParallelAcceptanceAttemptCoordinator(
             Path.Combine(workspace.OrchestratorDirectory, "acceptance-gate-attempts"),
             dir,
             tryRunPreSlot: RunParallelLandingAcceptancePreSlot,
-            runInline: runAcceptanceAttemptsInCurrentProcess);
+            runInline: runAcceptanceAttemptsInCurrentProcess,
+            buildStorageRoot: _cohortCleanupHooks.BuildStorageRoot);
         (_acceptanceEventSink, _noTickAcceptancePollDelay, _noTickAcceptancePollTimeout) = CreateProductionAcceptanceWaitConfiguration(workspace);
         _focusedEvidenceAttemptCoordinator = new ConductorParallelAcceptanceAttemptCoordinator(
             Path.Combine(workspace.OrchestratorDirectory, "pre-review-evidence-attempts"),
             dir,
-            conductEventLogWriter: new ConductEventLogWriter(workspace.ConductEventsLogPath));
+            conductEventLogWriter: new ConductEventLogWriter(workspace.ConductEventsLogPath),
+            buildStorageRoot: _cohortCleanupHooks.BuildStorageRoot);
         var eventWriter = new GoalLifecycleEventWriter(workspace.GoalLifecycleEventsDirectory);
         _cohortKernel = kernel;
         _cohortWorkspace = workspace;
-        _cohortCleanupHooks = cleanupHooks ?? new GoalWorktreeCleanupHooks();
         _cohortAcceptanceVerifier = acceptanceVerifier;
         _cohortEventWriter = eventWriter;
         var dispatchRunner = new BackgroundDispatchRunner();
