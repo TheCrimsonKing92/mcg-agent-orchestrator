@@ -36,11 +36,19 @@ public abstract class GoalWorktreeTestBase
 
     private protected GoalWorktreeCleanupHooksBuilder CleanupHooks { get; } = new();
 
+    private GoalWorktreeCleanupHooks BuildCleanupHooksForRoot(string executionDirectory)
+    {
+        var hooks = CleanupHooks.Build();
+        return hooks.BuildStorageRoot is not null
+            ? hooks
+            : CreateIsolatedCleanupContext(executionDirectory, hooks).Hooks;
+    }
+
     private protected GoalWorktreeRemoveResult RemoveWorktree(
         string executionDirectory,
         GoalId goalId,
         AgentOrchestratorKernel? kernel = null) =>
-        GoalWorktrees.Remove(executionDirectory, goalId, kernel, CleanupHooks.Build());
+        GoalWorktrees.Remove(executionDirectory, goalId, kernel, BuildCleanupHooksForRoot(executionDirectory));
 
     private protected GoalWorktreeRemoveResult RemoveWorktree(
         string executionDirectory,
@@ -54,13 +62,13 @@ public abstract class GoalWorktreeTestBase
             kernel,
             gitTimeoutMilliseconds,
             forceTerminalCleanup,
-            CleanupHooks.Build());
+            BuildCleanupHooksForRoot(executionDirectory));
 
     private protected GoalWorktreeRemoveResult RemoveTerminalWorktree(
         string executionDirectory,
         GoalId goalId,
         AgentOrchestratorKernel kernel) =>
-        GoalWorktrees.RemoveTerminal(executionDirectory, goalId, kernel, CleanupHooks.Build());
+        GoalWorktrees.RemoveTerminal(executionDirectory, goalId, kernel, BuildCleanupHooksForRoot(executionDirectory));
 
     private protected GoalWorktreeRemoveResult RemoveTerminalWorktree(
         string executionDirectory,
@@ -74,24 +82,24 @@ public abstract class GoalWorktreeTestBase
             kernel,
             hasRegisteredWorktree,
             hasBranch,
-            CleanupHooks.Build());
+            BuildCleanupHooksForRoot(executionDirectory));
 
     private protected GoalWorktreeSweepResult SweepOrphanedWorktrees(
         string executionDirectory,
         AgentOrchestratorKernel? kernel = null) =>
-        GoalWorktrees.SweepOrphanedWorktrees(executionDirectory, kernel, CleanupHooks.Build());
+        GoalWorktrees.SweepOrphanedWorktrees(executionDirectory, kernel, BuildCleanupHooksForRoot(executionDirectory));
 
     private protected GoalOwnedEphemeralSweepResult SweepOwnedEphemeralDirectories(
         string executionDirectory,
         GoalId goalId,
         AgentOrchestratorKernel? kernel = null) =>
-        GoalWorktrees.SweepOwnedEphemeralDirectories(executionDirectory, goalId, kernel, CleanupHooks.Build());
+        GoalWorktrees.SweepOwnedEphemeralDirectories(executionDirectory, goalId, kernel, BuildCleanupHooksForRoot(executionDirectory));
 
     private protected GoalWorktreeCleanupBackoff? TryGetCleanupBackoff(string path) =>
         GoalWorktrees.TryGetCleanupBackoff(path, CleanupHooks.Build());
 
     private protected GoalWorktreeCleanupBackoff? TryGetCleanupBackoff(string executionDirectory, GoalId goalId) =>
-        GoalWorktrees.TryGetCleanupBackoff(executionDirectory, goalId, CleanupHooks.Build());
+        GoalWorktrees.TryGetCleanupBackoff(executionDirectory, goalId, BuildCleanupHooksForRoot(executionDirectory));
 
     private protected static AgentDefinition EchoDeveloper() => new(
         new AgentId("echo-developer"),

@@ -15,6 +15,58 @@ public sealed class GoalWorktreeTestsRemoveCleanupStorage : GoalWorktreeTestBase
 {
 
     [Xunit.Fact]
+    public void FixtureCleanupUsesEachRepositoryRootForSameGoalArtifacts()
+    {
+        var firstRepo = CreateSeededRepository();
+        var secondRepo = CreateSeededRepository();
+        try
+        {
+            var goalId = GoalId.New();
+            var firstRoot = new DotnetBuildStorageRoot(Path.Combine(firstRepo, ".orchestrator", "test-dotnet"));
+            var secondRoot = new DotnetBuildStorageRoot(Path.Combine(secondRepo, ".orchestrator", "test-dotnet"));
+            var first = DotnetBuildEnvironmentManager.CreateAttempt(goalId, "fixture-first", storageRoot: firstRoot);
+            var second = DotnetBuildEnvironmentManager.CreateAttempt(goalId, "fixture-second", storageRoot: secondRoot);
+            var secondMetadata = File.ReadAllBytes(second.LeaseMetadataPath!);
+
+            Assert.True(RemoveWorktree(firstRepo, goalId).IsComplete);
+            Assert.False(Directory.Exists(first.RootPath));
+            Assert.Equal(secondMetadata, File.ReadAllBytes(second.LeaseMetadataPath!));
+
+            Assert.True(RemoveWorktree(secondRepo, goalId).IsComplete);
+            Assert.False(Directory.Exists(second.RootPath));
+        }
+        finally
+        {
+            DeleteDirectory(firstRepo);
+            DeleteDirectory(secondRepo);
+        }
+    }
+
+    [Xunit.Fact]
+    public void FixtureCleanupPreservesExplicitStorageRootOverride()
+    {
+        var repo = CreateSeededRepository();
+        try
+        {
+            var goalId = GoalId.New();
+            var fallbackRoot = new DotnetBuildStorageRoot(Path.Combine(repo, ".orchestrator", "test-dotnet"));
+            var explicitRoot = new DotnetBuildStorageRoot(Path.Combine(repo, ".orchestrator", "explicit-dotnet"));
+            var fallback = DotnetBuildEnvironmentManager.CreateAttempt(goalId, "fixture-fallback", storageRoot: fallbackRoot);
+            var explicitlyOwned = DotnetBuildEnvironmentManager.CreateAttempt(goalId, "fixture-explicit", storageRoot: explicitRoot);
+            var fallbackMetadata = File.ReadAllBytes(fallback.LeaseMetadataPath!);
+            CleanupHooks.BuildStorageRoot = explicitRoot;
+
+            Assert.True(RemoveWorktree(repo, goalId).IsComplete);
+            Assert.False(Directory.Exists(explicitlyOwned.RootPath));
+            Assert.Equal(fallbackMetadata, File.ReadAllBytes(fallback.LeaseMetadataPath!));
+        }
+        finally
+        {
+            DeleteDirectory(repo);
+        }
+    }
+
+    [Xunit.Fact]
     public void BuildStorageRootIsAbsoluteAndNormalizedWithoutCreatingDirectories()
     {
         var path = Path.Combine(Path.GetTempPath(), "mcg-root-value-" + Guid.NewGuid().ToString("N"));

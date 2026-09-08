@@ -370,11 +370,55 @@ qualified to their prior checkpoint.
 The two backlog calls and policy-blocked call were build-verified after this change; they await
 the next affected-family run. Anthropic review found no concrete blocker for this checkpoint.
 
-The remaining fixture migration is not complete: `GoalWorktreeTestBase` removal and sweep helpers
-still call `CleanupHooks.Build()`, whose builder permits a null `BuildStorageRoot`. Such calls can
-resolve the ambient storage root even though their hook objects are independent. Before claiming
-whole-family isolation, bind those operations to their fixture repository's root while preserving
-explicit caller overrides, then check the artifact-producing callers and distinguishable-root
-controls. The remaining environment-mutating fixtures and collection-owned environment baseline
-retain their guards. Async console capture is already local to the async context; its implementation
+At this checkpoint, the base removal and sweep helpers still permitted a null `BuildStorageRoot`;
+the repair and its verification are recorded below. The remaining environment-mutating fixtures
+and collection-owned environment baseline retain their guards. Async console capture is already local to the async context; its implementation
 does not reassign `Console.Out` per test and is not evidence for adding another serialization guard.
+
+## Repository-bound fixture cleanup helpers
+
+The seven base helpers that receive an execution directory now preserve an explicit storage-root
+override or derive the existing fixture root from that directory. The path-only backoff lookup
+remains unchanged: its argument is an arbitrary cleanup path, and backoff keys do not use build
+artifact storage. Hooks are immutable snapshots; the record copy changes only `BuildStorageRoot`.
+`CreateIsolatedCleanupContext` combines and normalizes paths without creating directories. Its
+context and scheduler are non-disposable managed objects; scheduler construction validates policy
+and allocates instance state but starts no work and registers nothing globally. Discarding that
+unused scheduler therefore holds no external resource. Repeated construction derives the same root.
+
+Two new storage regressions use actual artifact cleanup. With the same goal ID in independent
+repositories, cleaning the first removes its artifacts and leaves the second lease metadata
+byte-for-byte intact; cleaning the second then removes its artifacts. The override control deletes
+the explicitly selected root's artifacts while preserving the fixture-default lease metadata.
+Before the helper repair, the first test failed because the first artifact directory survived even
+though Remove reported completion; the override control passed. Both pass after the repair with
+identical new-test source. The red failure precedes the second-root assertion, so it does not itself
+prove preservation of that other root.
+
+The complete removal family passed 62/62 (60 existing plus two new), 314.193 seconds. The orphan
+and ephemeral sweep family passed 16/16, 60.977 seconds. Both managed hosts exited zero with
+confirmed exit and no host timeout. The first orphan attempt failed all 16 tests during collection
+fixture construction because the operator sandbox denied its LocalLow claim file; no test body
+ran. The identical frozen runtime passed with that filesystem access. This is an observed access
+failure, not a product-test failure or a contention diagnosis.
+
+The current runtime hash is
+`51116149D57DF894517DA5452D79DA770D879B351A1BF3BE2BDC8748DE2677E0`.
+Evidence under `.orchestrator/operator-evidence/rearchitecture-20260906`:
+`cleanup-helper-root-red-control`, `cleanup-helper-root-green-family`,
+`cleanup-helper-root-green-orphan`, `cleanup-helper-root-green-orphan-host-access`, and the
+red/green source-checksum reports. Anthropic reviewed the actual diff in
+`cleanup-helper-root-final-review-network.json`; its lifetime and coverage conditions were checked
+against the definitions and executions above. The first review transport returned ConnectionRefused;
+the subsequent authorized network call completed normally.
+
+The inheritance inventory contains 21 classes. This checkpoint executes the seven RemoveCleanup
+classes and OrphanEphemeralSweep. The other 13 are AcceptanceCohortWorkflowTests,
+GoalWorktreeReducedFixtureTests, GoalWorktreeTestsAcceptanceRetry, GoalWorktreeIsolatedDotnetTests,
+GoalWorktreeAcceptanceContentionTests, and GoalWorktreeTests{CreationResolution,
+RebaseMergeMaterialization,GitHelperDiagnostics,AcceptanceLanding,RebaseMerge,SeedIsolation,
+SqliteTooling}, plus GoalWorktreeTestsCleanupHookDelegates.
+Existing earlier acceptance/rebase receipts remain qualified to their prior checkpoints. Direct
+Ensure calls and host/context construction still need the full caller audit; no collection guard,
+lane exclusion, or full acceptance requirement is removed by this checkpoint. No throughput claim
+is made from these timings.
