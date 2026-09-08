@@ -1075,11 +1075,14 @@ public static partial class GoalWorktrees
         }
     }
 
-    internal static List<WorktreeLockHolder> FindLockHolders(string path)
+    internal static List<WorktreeLockHolder> FindLockHolders(
+        string path,
+        Func<IEnumerable<string>, ProcessCommandLineSnapshot>? processCommandLineSnapshot = null)
     {
         var normalizedPath = NormalizePath(path);
-        var snapshot = ProcessCommandLineSnapshotForCleanupTests?.Invoke(LockHolderCandidates) ??
-            ProcessCommandLines.SnapshotByNames(LockHolderCandidates);
+        var snapshot = (processCommandLineSnapshot ??
+            (names => ProcessCommandLineSnapshotForCleanupTests?.Invoke(names) ??
+                ProcessCommandLines.SnapshotByNames(names)))(LockHolderCandidates);
         var holders = new List<WorktreeLockHolder>();
         if (snapshot.Failure is { } failure)
         {
