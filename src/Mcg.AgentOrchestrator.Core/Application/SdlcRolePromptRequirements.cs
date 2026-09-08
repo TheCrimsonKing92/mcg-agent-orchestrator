@@ -5,6 +5,10 @@ internal static class SdlcRolePromptRequirements
     private const string IntakeRiskLabelsMarker = "risk labels:";
     private const string ResearcherStdoutOnlyContract =
         "- Stdout is the only channel the orchestrator reads: print the complete research artifact as your final message. Never write a plan file or any other file, and never reply with only a summary or a file path.";
+    private const string TesterReceiptFirstContract =
+        "- RECEIPT-FIRST: Before emitting `evidence_request`, inspect each supplied receipt. Accept a passing receipt only when its candidate identity (commit/SHA) and selection coverage (`test_project`/`test_class`) match this round; cite its identity/path, mark covered obligations closed, and do not request them again. A missing, stale, mismatched, or unreadable receipt is unproven; name that disposition. When it conflicts with stale narrative, the verified matching receipt controls.";
+    private const string TesterInconclusiveReceiptContract =
+        "- A matching timeout/killed/no-results receipt is inconclusive, not a pass, and closes nothing. Before requesting an identical rerun, state a discriminating change in selection or observations; do not lengthen deadlines by default or invent a cause. Keep full-gate/operator-owned obligations open and owned; do not widen conditional criteria.";
     internal const int ReviewerComplexRequirementsMaxChars = 4371;
     internal const int ReviewerCompactRequirementsMaxChars = 3346;
 
@@ -69,6 +73,8 @@ internal static class SdlcRolePromptRequirements
             AgentRole.Tester =>
             [
                 "## Tester Requirements",
+                TesterReceiptFirstContract,
+                TesterInconclusiveReceiptContract,
                 "- PRIMARY PATH: prefer a Conductor-side run over executing tests yourself. Emit evidence_request with selections of test_project and test_class inside your findings JSON, and report tests: deferred naming what you requested. The Conductor runs that selection and returns receipts. This is faster, avoids composing runner commands for this platform and runner, and keeps large test output out of your context. Execute directly only when a test-class selection cannot settle the question.",
                 "- Derive a focused verification matrix from the requested behavior, changed files, and known risks.",
                 "- Run or attempt the exact verification commands relevant to this task.",
@@ -210,6 +216,8 @@ internal static class SdlcRolePromptRequirements
             AgentRole.Tester =>
             [
                 "## Tester Requirements",
+                TesterReceiptFirstContract,
+                TesterInconclusiveReceiptContract,
                 "- PRIMARY PATH: prefer a Conductor-side run over executing tests yourself. Emit evidence_request with selections of test_project and test_class inside your findings JSON, and report tests: deferred naming what you requested. The Conductor runs that selection and returns receipts. This is faster, avoids composing runner commands for this platform and runner, and keeps large test output out of your context. Execute directly only when a test-class selection cannot settle the question.",
                 "- Derive focused checks from the requested behavior and report concrete evidence.",
                 "- Run or attempt exact commands; include exit code and concise output summary.",

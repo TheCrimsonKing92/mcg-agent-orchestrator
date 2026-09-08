@@ -57,6 +57,22 @@ public sealed class TaskBriefTests
     Assert.True(!brief.Content.Contains("Context files:", StringComparison.Ordinal));
     Assert.True(!brief.Content.Contains("Complete this task as the assigned SDLC role", StringComparison.Ordinal));
 }
+
+    [Xunit.Fact(DisplayName = "BuildTaskBrief_renders_tester_receipt_first_decision_procedure")]
+    public void BuildTaskBriefRendersTesterReceiptFirstDecisionProcedure()
+    {
+        var kernel = new AgentOrchestratorKernel();
+        var tester = new TaskSpec(TaskId.New(), "Verify receipt consumption.", AgentRole.Tester);
+        var goal = kernel.CreateGoal("Prevent redundant Tester evidence requests.", [tester]);
+
+        var brief = kernel.BuildTaskBrief(goal.Id, tester.Id).Content;
+
+        Assert.True(
+            brief.IndexOf("RECEIPT-FIRST", StringComparison.Ordinal) <
+            brief.IndexOf("PRIMARY PATH", StringComparison.Ordinal));
+        Assert.Contains("matching timeout/killed/no-results receipt is inconclusive", brief, StringComparison.Ordinal);
+    }
+
     [Xunit.Fact(DisplayName = "BuildTaskBrief_prefers_bounded_source_survey_for_complex_tasks")]
     public void BuildTaskBriefPrefersBoundedSourceSurveyForComplexTasks()
 {

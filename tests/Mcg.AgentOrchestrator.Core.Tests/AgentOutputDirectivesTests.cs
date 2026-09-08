@@ -153,6 +153,44 @@ public sealed class AgentOutputDirectivesTests
             StringComparison.Ordinal);
     }
 
+    [Xunit.Fact(DisplayName = "Tester_requirements_consume_matching_receipts_before_requesting_a_run")]
+    public void TesterRequirementsConsumeMatchingReceiptsBeforeRequestingARun()
+    {
+        foreach (var requirements in new[]
+                 {
+                     SdlcRolePromptRequirements.BuildPlainText(AgentRole.Tester),
+                     SdlcRolePromptRequirements.BuildPlainText(AgentRole.Tester, TaskComplexity.Simple)
+                 })
+        {
+            Assert.True(
+                requirements.IndexOf("RECEIPT-FIRST", StringComparison.Ordinal) <
+                requirements.IndexOf("PRIMARY PATH", StringComparison.Ordinal));
+            Assert.Contains("candidate identity (commit/SHA)", requirements, StringComparison.Ordinal);
+            Assert.Contains("selection coverage (`test_project`/`test_class`)", requirements, StringComparison.Ordinal);
+            Assert.Contains("cite its identity/path", requirements, StringComparison.Ordinal);
+            Assert.Contains("mark covered obligations closed, and do not request them again", requirements, StringComparison.Ordinal);
+            Assert.Contains("missing, stale, mismatched, or unreadable receipt is unproven", requirements, StringComparison.Ordinal);
+            Assert.Contains("verified matching receipt controls", requirements, StringComparison.Ordinal);
+        }
+    }
+
+    [Xunit.Fact(DisplayName = "Tester_requirements_keep_matching_timeout_receipts_inconclusive")]
+    public void TesterRequirementsKeepMatchingTimeoutReceiptsInconclusive()
+    {
+        foreach (var requirements in new[]
+                 {
+                     SdlcRolePromptRequirements.BuildPlainText(AgentRole.Tester),
+                     SdlcRolePromptRequirements.BuildPlainText(AgentRole.Tester, TaskComplexity.Simple)
+                 })
+        {
+            Assert.Contains("timeout/killed/no-results receipt is inconclusive, not a pass, and closes nothing", requirements, StringComparison.Ordinal);
+            Assert.Contains("state a discriminating change in selection or observations", requirements, StringComparison.Ordinal);
+            Assert.Contains("do not lengthen deadlines by default or invent a cause", requirements, StringComparison.Ordinal);
+            Assert.Contains("full-gate/operator-owned obligations open and owned", requirements, StringComparison.Ordinal);
+            Assert.Contains("do not widen conditional criteria", requirements, StringComparison.Ordinal);
+        }
+    }
+
     [Xunit.Fact(DisplayName = "Researcher_requirements_lead_with_stdout_only_no_plan_file_contract")]
     public void ResearcherRequirementsLeadWithStdoutOnlyNoPlanFileContract()
     {
