@@ -208,6 +208,22 @@ public sealed class AcceptanceCriteriaParserTests
     }
 
     [Xunit.Fact]
+    public void Parse_StandaloneLabel_EmitsStructuredTestRemoval()
+    {
+        var text = """
+            Acceptance criteria:
+            - test-removal: `Example.Tests.RemoteMirrorTests.PushesMirror`
+            """;
+
+        var criteria = AcceptanceCriteriaParser.Parse(text);
+
+        var single = Xunit.Assert.Single(criteria);
+        Assert.Equal("test-removal", single.Type);
+        Assert.Equal("Example.Tests.RemoteMirrorTests.PushesMirror", single.TestIdentity);
+        Xunit.Assert.Null(single.Pattern);
+    }
+
+    [Xunit.Fact]
     public void ParseDeclared_StandaloneLabel_StopsAtRecognizedSectionAndTrailer()
     {
         var text = """
