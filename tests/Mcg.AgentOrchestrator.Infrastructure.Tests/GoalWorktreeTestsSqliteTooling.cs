@@ -1501,7 +1501,8 @@ public sealed partial class GoalWorktreeTestsSqliteTooling : GoalWorktreeTestBas
         }
         catch (System.ComponentModel.Win32Exception)
         {
-            return true;
+            // An unreadable process identity is not confirmation that the owned child exited.
+            return false;
         }
     }
 
