@@ -199,6 +199,40 @@ public sealed class ChaosGateAssignedScopeIncompleteTests : ChaosGateTestBase
         Assert.Contains("assigned_scope_complete requires true or false", outcome.EvidenceSummary, StringComparison.Ordinal);
     }
 
+    [Xunit.Fact(DisplayName = "AssignedScopeComplete_production_reconciliation_does_not_trust_bounded_preview_when_full_stdout_is_unavailable")]
+    public void ProductionReconciliationDoesNotTrustBoundedPreviewWhenFullStdoutIsUnavailable()
+    {
+        var root = CreateSeededRepo();
+        var output = RetainedPartialOutput()
+            .Replace("END_WORKER_RESULT", "assigned_scope_complete: false" + Environment.NewLine + "END_WORKER_RESULT", StringComparison.Ordinal);
+        var (kernel, goal, task, process) = CreateChaosDispatch(
+            root,
+            AgentRole.Developer,
+            output,
+            string.Empty,
+            mutateWorktree: worktree => CommitSourceFile(worktree, "src/Feature.cs", "// candidate with unavailable full stdout"));
+
+        Stream OpenAndRemoveStdout(string path)
+        {
+            var content = File.ReadAllBytes(path);
+            if (string.Equals(path, process.StandardOutputPath, StringComparison.Ordinal))
+            {
+                File.Delete(path);
+            }
+            return new MemoryStream(content, writable: false);
+        }
+
+        new BackgroundDispatchRunner(
+            isStillRunning: _ => false,
+            openLogReadStream: OpenAndRemoveStdout)
+            .RefreshLatestProcess(kernel, goal.Id, task.Id);
+
+        Assert.Equal("missing", task.LastVerification!.FullStandardOutputUnavailableReason);
+        Assert.Null(task.LastVerification.AssignedScopeComplete);
+        Assert.Equal(WorkTaskStatus.Completed, task.Status);
+        Assert.Equal(DispatchOutcomeKind.VerifiedSuccess, DispatchFailureClassifier.Classify(task, task.LastVerification).Kind);
+    }
+
     private static string RetainedPartialOutput() => string.Join(
         Environment.NewLine,
         "The sequence/versioned retry and legacy repair remain outside this implementation slice.",

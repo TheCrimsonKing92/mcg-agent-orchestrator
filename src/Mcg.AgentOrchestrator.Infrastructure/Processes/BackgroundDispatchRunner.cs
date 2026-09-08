@@ -1780,11 +1780,14 @@ public sealed class BackgroundDispatchRunner
         var heartbeatStdoutBytes = _recoveryService.TryReadHeartbeat(GetHeartbeatPath(processRecord), out var completionHeartbeat)
             ? completionHeartbeat.StandardOutputBytes
             : (long?)null;
-        var assignedScopeOutput = fullStandardOutput.Content ?? standardOutput;
-        var hasAssignedScopeComplete = WorkerResultBlockers.TryGetAssignedScopeComplete(
-            assignedScopeOutput,
-            out var assignedScopeComplete,
-            out _);
+        // The bounded snapshot is diagnostic evidence only. A scope declaration can steer a
+        // Developer into a bounded revision, so it must come from the authoritative artifact.
+        bool assignedScopeComplete = false;
+        var hasAssignedScopeComplete = fullStandardOutput.Content is { } assignedScopeOutput &&
+            WorkerResultBlockers.TryGetAssignedScopeComplete(
+                assignedScopeOutput,
+                out assignedScopeComplete,
+                out _);
 
         var verification = new TaskVerificationRecord(
             processRecord.Command,
