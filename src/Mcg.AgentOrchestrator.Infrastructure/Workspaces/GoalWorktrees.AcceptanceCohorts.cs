@@ -94,7 +94,7 @@ public static partial class GoalWorktrees
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(executionDirectory);
         ArgumentNullException.ThrowIfNull(member);
-        var operationCleanupHooks = cleanupHooks ?? GoalWorktreeCleanupHooks.Default;
+        var operationCleanupHooks = cleanupHooks ?? new GoalWorktreeCleanupHooks();
         var root = System.IO.Path.GetFullPath(executionDirectory);
         var normalizedMain = AcceptanceCohortMemberBinding.NormalizeRevision(
             observedMainRevision,
@@ -164,7 +164,7 @@ public static partial class GoalWorktrees
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(executionDirectory);
         ArgumentNullException.ThrowIfNull(members);
-        var operationCleanupHooks = cleanupHooks ?? GoalWorktreeCleanupHooks.Default;
+        var operationCleanupHooks = cleanupHooks ?? new GoalWorktreeCleanupHooks();
         if (members.Count != 2 || members[0].GoalId == members[1].GoalId)
         {
             throw new ArgumentException("A disposable acceptance cohort requires exactly two distinct members.", nameof(members));
@@ -287,7 +287,7 @@ public static partial class GoalWorktrees
         RecordCleanupNeeded(
             workspacePath,
             "cohort:worktree-remove-failed",
-            hooks: hooks ?? GoalWorktreeCleanupHooks.Default);
+            hooks: hooks ?? new GoalWorktreeCleanupHooks());
 
     private static void RemoveFailedMaterializationWorkspace(
         string executionDirectory,

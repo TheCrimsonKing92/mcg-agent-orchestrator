@@ -76,7 +76,7 @@ public static partial class GoalWorktrees
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(executionDirectory);
         ArgumentNullException.ThrowIfNull(members);
-        var operationCleanupHooks = cleanupHooks ?? GoalWorktreeCleanupHooks.Default;
+        var operationCleanupHooks = cleanupHooks ?? new GoalWorktreeCleanupHooks();
         if (members.Count is < 2 or > 3 || members.Select(member => member.GoalId).Distinct().Count() != members.Count)
         {
             throw new ArgumentException("A disposable merge train requires two or three distinct members.", nameof(members));

@@ -19,7 +19,7 @@ public static partial class GoalWorktrees
             precomputedHasBranch: null,
             forceTerminalCleanup: false,
             bypassCleanupBackoff: false,
-            hooks ?? GoalWorktreeCleanupHooks.Default);
+            hooks ?? new GoalWorktreeCleanupHooks());
 
     public static GoalWorktreeRemoveResult RemoveTerminal(
         string executionDirectory,
@@ -35,7 +35,7 @@ public static partial class GoalWorktrees
             precomputedHasBranch: null,
             forceTerminalCleanup: true,
             bypassCleanupBackoff: false,
-            hooks ?? GoalWorktreeCleanupHooks.Default);
+            hooks ?? new GoalWorktreeCleanupHooks());
 
     public static GoalWorktreeRemoveResult RemoveTerminalNow(
         string executionDirectory,
@@ -51,7 +51,7 @@ public static partial class GoalWorktrees
             precomputedHasBranch: null,
             forceTerminalCleanup: true,
             bypassCleanupBackoff: true,
-            hooks ?? GoalWorktreeCleanupHooks.Default);
+            hooks ?? new GoalWorktreeCleanupHooks());
 
     public static GoalWorktreeRemoveResult RemoveSupersededTerminal(
         string executionDirectory,
@@ -76,7 +76,7 @@ public static partial class GoalWorktrees
             hasBranch,
             forceTerminalCleanup: false,
             bypassCleanupBackoff: false,
-            hooks ?? GoalWorktreeCleanupHooks.Default,
+            hooks ?? new GoalWorktreeCleanupHooks(),
             expectedSupersededBranchTip: expectedBranchTip);
     }
 
@@ -96,7 +96,7 @@ public static partial class GoalWorktrees
             hasBranch,
             forceTerminalCleanup: false,
             bypassCleanupBackoff: false,
-            hooks ?? GoalWorktreeCleanupHooks.Default);
+            hooks ?? new GoalWorktreeCleanupHooks());
 
     public static GoalWorktreeRemoveResult RemoveTerminal(
         string executionDirectory,
@@ -114,7 +114,7 @@ public static partial class GoalWorktrees
             hasBranch,
             forceTerminalCleanup: true,
             bypassCleanupBackoff: false,
-            hooks ?? GoalWorktreeCleanupHooks.Default);
+            hooks ?? new GoalWorktreeCleanupHooks());
 
     public static GoalWorktreeRemoveResult Remove(
         string executionDirectory,
@@ -132,7 +132,7 @@ public static partial class GoalWorktrees
             precomputedHasBranch: null,
             forceTerminalCleanup,
             bypassCleanupBackoff: false,
-            hooks ?? GoalWorktreeCleanupHooks.Default);
+            hooks ?? new GoalWorktreeCleanupHooks());
 
     private static GoalWorktreeRemoveResult Remove(
         string executionDirectory,
@@ -406,7 +406,7 @@ public static partial class GoalWorktrees
         AgentOrchestratorKernel? kernel = null,
         GoalWorktreeCleanupHooks? hooks = null)
     {
-        hooks ??= GoalWorktreeCleanupHooks.Default;
+        hooks ??= new GoalWorktreeCleanupHooks();
         if (!IsGitWorkTree(executionDirectory))
         {
             return new GoalWorktreeSweepResult(0, []);
@@ -449,7 +449,7 @@ public static partial class GoalWorktrees
         AgentOrchestratorKernel? kernel = null,
         GoalWorktreeCleanupHooks? hooks = null)
     {
-        hooks ??= GoalWorktreeCleanupHooks.Default;
+        hooks ??= new GoalWorktreeCleanupHooks();
         var root = Path.GetFullPath(executionDirectory);
         var removed = 0;
         var leftovers = new List<string>();
@@ -1080,9 +1080,7 @@ public static partial class GoalWorktrees
         Func<IEnumerable<string>, ProcessCommandLineSnapshot>? processCommandLineSnapshot = null)
     {
         var normalizedPath = NormalizePath(path);
-        var snapshot = (processCommandLineSnapshot ??
-            (names => ProcessCommandLineSnapshotForCleanupTests?.Invoke(names) ??
-                ProcessCommandLines.SnapshotByNames(names)))(LockHolderCandidates);
+        var snapshot = (processCommandLineSnapshot ?? ProcessCommandLines.SnapshotByNames)(LockHolderCandidates);
         var holders = new List<WorktreeLockHolder>();
         if (snapshot.Failure is { } failure)
         {

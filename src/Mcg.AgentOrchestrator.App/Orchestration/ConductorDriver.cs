@@ -147,7 +147,7 @@ internal sealed partial class ConductorDriver
     private readonly GateReadyCandidateProjector? _gateReadyCandidateProjector;
     private readonly AgentOrchestratorKernel? _cohortKernel;
     private readonly OrchestratorWorkspace? _cohortWorkspace;
-    private readonly GoalWorktreeCleanupHooks _cohortCleanupHooks = GoalWorktreeCleanupHooks.Default;
+    private readonly GoalWorktreeCleanupHooks _cohortCleanupHooks = new();
     private readonly IGoalAcceptanceVerifier? _cohortAcceptanceVerifier;
     private readonly IGoalLifecycleEventWriter? _cohortEventWriter;
     private readonly CohortAcceptanceStore? _cohortAcceptanceStore;
@@ -274,7 +274,7 @@ internal sealed partial class ConductorDriver
         var eventWriter = new GoalLifecycleEventWriter(workspace.GoalLifecycleEventsDirectory);
         _cohortKernel = kernel;
         _cohortWorkspace = workspace;
-        _cohortCleanupHooks = cleanupHooks ?? GoalWorktreeCleanupHooks.Default;
+        _cohortCleanupHooks = cleanupHooks ?? new GoalWorktreeCleanupHooks();
         _cohortAcceptanceVerifier = acceptanceVerifier;
         _cohortEventWriter = eventWriter;
         var dispatchRunner = new BackgroundDispatchRunner();

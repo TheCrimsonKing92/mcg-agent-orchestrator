@@ -101,33 +101,6 @@ internal sealed record GoalWorktreeDeleteResult(
 public sealed record GoalWorktreeCleanupHooks
 {
     /// <summary>
-    /// A live compatibility view over the legacy process-wide hooks. Each delegate dereferences
-    /// the corresponding static when it is invoked; explicitly constructed hook records remain fixed.
-    /// </summary>
-    public static GoalWorktreeCleanupHooks Default { get; } = new()
-    {
-        BuildServerShutdown = static (path, timeout) => GoalWorktrees.BuildServerShutdown(path, timeout),
-        ResetSandboxAcl = static (path, timeout) => GoalWorktrees.SandboxAclHelper.ResetSandboxAcl(path, timeout),
-        TryKillRecordedProcess = static processId => GoalWorktrees.TryKillRecordedProcess(processId),
-        DeleteDirectory = static path => GoalWorktrees.DeleteDirectory(path),
-        DeleteDirectoryForCleanup = static path => GoalWorktrees.DeleteDirectoryForCleanup(path),
-        RunWorktreeRemove = static (directory, timeout, path, force) =>
-            GoalWorktrees.RunWorktreeRemove(directory, timeout, path, force),
-        RunWorktreePrune = static (directory, timeout, expireNow) =>
-            GoalWorktrees.RunWorktreePrune(directory, timeout, expireNow),
-        ProcessCommandLineSnapshot = static names =>
-            GoalWorktrees.ProcessCommandLineSnapshotForCleanupTests?.Invoke(names) ??
-            ProcessCommandLines.SnapshotByNames(names),
-        CleanupWarningSink = static warning => GoalWorktrees.CleanupWarningSink(warning),
-        CleanupElapsedMilliseconds = static () => GoalWorktrees.CleanupElapsedMilliseconds,
-        CleanupUtcNow = static () => GoalWorktrees.CleanupUtcNow(),
-        CleanupBackoffDuration = static () => GoalWorktrees.CleanupBackoffDuration,
-        CleanupBudgetExhaustedBackoffDuration = static () => GoalWorktrees.CleanupBudgetExhaustedBackoffDuration,
-        CleanupOptions = static () => GoalWorktrees.CleanupOptions,
-        CleanupAttentionStoreDirectory = static () => GoalWorktrees.CleanupAttentionStoreDirectory
-    };
-
-    /// <summary>
     /// Creates fixed cleanup hooks for one configured workspace operation.
     /// </summary>
     public static GoalWorktreeCleanupHooks ForConfiguration(
@@ -286,10 +259,10 @@ public static partial class GoalWorktrees
     private static readonly string[] LockHolderCandidates =
         ["dotnet", "VBCSCompiler", "MSBuild", "claude", "codex", "node", "powershell", "pwsh"];
     private static readonly TimeSpan BuildServerShutdownTimeout = TimeSpan.FromSeconds(10);
-    // Process-wide test seams; tests replacing these hooks must use the
-    // GoalWorktreeCleanupHooks collection so replacements cannot overlap.
-    // Called best-effort before directory deletion to release any
-    // VBCSCompiler/Roslyn/MSBuild file handles held by the acceptance build server.
+
+    // Test-only compatibility seams. Production cleanup constructs and carries an immutable
+    // GoalWorktreeCleanupHooks instance; these fields are retained until each legacy test is
+    // migrated to that explicit instance.
     internal static Action<string, int> BuildServerShutdown = DefaultBuildServerShutdown;
     internal static ISandboxAclHelper SandboxAclHelper { get; set; } =
         OperatingSystem.IsWindows() ? new WindowsSandboxAclHelper() : new NoOpSandboxAclHelper();
@@ -311,7 +284,7 @@ public static partial class GoalWorktrees
     public static GoalWorktreeCleanupOptions CleanupOptions { get; private set; } = GoalWorktreeCleanupOptions.Default;
     internal static string? CleanupAttentionStoreDirectory { get; private set; }
 
-    public static void ConfigureCleanup(
+    internal static void ConfigureCleanup(
         GoalWorktreeCleanupOptions options,
         string? attentionStoreDirectory = null)
     {
@@ -320,5 +293,4 @@ public static partial class GoalWorktrees
             ? null
             : Path.GetFullPath(attentionStoreDirectory);
     }
-
 }
