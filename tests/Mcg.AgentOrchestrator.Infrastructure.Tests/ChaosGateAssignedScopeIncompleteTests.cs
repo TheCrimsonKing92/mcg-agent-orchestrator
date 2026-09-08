@@ -48,6 +48,10 @@ public sealed class ChaosGateAssignedScopeIncompleteTests : ChaosGateTestBase
         Assert.True(task.LastVerification!.HasCommittedChanges);
         Assert.False(task.LastVerification.AssignedScopeComplete);
         Assert.NotNull(task.LastDispatch!.ResultCommit);
+        var worktree = task.LastDispatch.WorkingDirectory;
+        var resultCommit = ReadGit(worktree, ["rev-parse", task.LastDispatch.ResultCommit]);
+        Assert.Equal(resultCommit, ReadGit(worktree, ["rev-parse", "HEAD"]));
+        Assert.Equal(0, task.CriterionRetryCount);
         Assert.Equal(RecoveryRecommendation.AutoRetry, outcome.RecoveryRecommendation);
         Assert.Contains("rule=incomplete-scope-declaration", outcome.ClassifierReceipt, StringComparison.Ordinal);
 
@@ -58,6 +62,7 @@ public sealed class ChaosGateAssignedScopeIncompleteTests : ChaosGateTestBase
             createWorkspace: _ => root,
             dispatchAndStart: _ => DispatchStartOutcome.Started(),
             runAcceptance: _ => true,
+            recordCriterionRetryFeedback: kernel.RecordCriterionRetryFeedback,
             retryTaskWithCause: (goalId, taskId, message, _, retryCause) =>
             {
                 retries++;
@@ -71,7 +76,11 @@ public sealed class ChaosGateAssignedScopeIncompleteTests : ChaosGateTestBase
         Assert.Equal(1, retries);
         Assert.Equal(RetryCause.ContractClarification, cause);
         Assert.Equal(WorkTaskStatus.Assigned, task.Status);
-        Assert.NotNull(task.LastDispatch.ResultCommit);
+        Assert.Equal(1, task.CriterionRetryCount);
+        Assert.NotEmpty(task.CriterionRetryFeedback);
+        Assert.Null(task.LastDispatch);
+        Assert.Equal(resultCommit, ReadGit(worktree, ["rev-parse", "HEAD"]));
+        Assert.Equal("// incomplete candidate", File.ReadAllText(Path.Combine(worktree, "src", "Feature.cs")));
     }
 
     [Xunit.Fact(DisplayName = "AssignedScopeComplete_production_reconciliation_escalates_false_when_the_bounded_retry_budget_is_exhausted")]

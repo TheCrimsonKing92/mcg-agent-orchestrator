@@ -420,7 +420,8 @@ public sealed class DispatchOutcomeClassifyTests
         var verification = WorkerResultVerification(
             1,
             WorkerResultStdout("pass - focused verification completed", assignedScopeComplete: false),
-            standardError: VerifiedNoChangeDiagnostics(verificationRecognized: true));
+            standardError: VerifiedNoChangeDiagnostics(verificationRecognized: true))
+            with { AssignedScopeComplete = false };
 
         var outcome = DispatchFailureClassifier.Classify(
             RetryTaskWithBaseCommit(baseCommit),
@@ -688,7 +689,8 @@ public sealed class DispatchOutcomeClassifyTests
             WorkerResultStdout(
                 "pass - focused verification completed",
                 assignedScopeComplete: false),
-            hasCommittedChanges: true);
+            hasCommittedChanges: true)
+            with { AssignedScopeComplete = false };
 
         var outcome = DispatchFailureClassifier.Classify(
             DispatchedTaskWithResultCommit("29edee5c", "ce5e35c1"),
@@ -706,7 +708,7 @@ public sealed class DispatchOutcomeClassifyTests
             DispatchedTaskWithResultCommit("29edee5c", "ce5e35c1"),
             WorkerResultVerification(WorkerResultStdout(
                 "fail - 1 test failed",
-                assignedScopeComplete: false)));
+                assignedScopeComplete: false)) with { AssignedScopeComplete = false });
 
         Xunit.Assert.Contains("rule=succeeded-worker-result-failing-tests", outcome.ClassifierReceipt, StringComparison.Ordinal);
         Xunit.Assert.DoesNotContain("rule=incomplete-scope-declaration", outcome.ClassifierReceipt, StringComparison.Ordinal);
