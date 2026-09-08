@@ -46,6 +46,7 @@ public sealed class GoalWorktreeTestsRemoveCleanupDebt : GoalWorktreeTestBase
         var originalLockHolders = CleanupHooks.FindLockHoldersForCleanup;
         try
         {
+            var shutdownRequests = CaptureBuildServerShutdownRequests();
             var goalId = GoalId.New();
             var path = GoalWorktrees.Ensure(repo, goalId);
             var branch = GoalWorktrees.BranchName(goalId);
@@ -92,6 +93,7 @@ public sealed class GoalWorktreeTestsRemoveCleanupDebt : GoalWorktreeTestBase
 
             Assert.False(Directory.Exists(path));
             Assert.False(BranchExists(repo, branch));
+            AssertBuildServerShutdownRequests(shutdownRequests, path);
         }
         finally
         {
@@ -106,6 +108,7 @@ public sealed class GoalWorktreeTestsRemoveCleanupDebt : GoalWorktreeTestBase
         var repo = CreateSeededRepository();
         try
         {
+            var shutdownRequests = CaptureBuildServerShutdownRequests();
             var goalId = GoalId.New();
             var path = GoalWorktrees.Ensure(repo, goalId);
             var branch = GoalWorktrees.BranchName(goalId);
@@ -138,6 +141,7 @@ public sealed class GoalWorktreeTestsRemoveCleanupDebt : GoalWorktreeTestBase
 
             Assert.False(Directory.Exists(path));
             Assert.False(BranchExists(repo, branch));
+            AssertBuildServerShutdownRequests(shutdownRequests, path);
         }
         finally
         {
@@ -151,6 +155,7 @@ public sealed class GoalWorktreeTestsRemoveCleanupDebt : GoalWorktreeTestBase
         var repo = CreateSeededRepository();
         try
         {
+            var shutdownRequests = CaptureBuildServerShutdownRequests();
             var goalId = GoalId.New();
             var path = GoalWorktrees.Ensure(repo, goalId);
             var branch = GoalWorktrees.BranchName(goalId);
@@ -180,6 +185,7 @@ public sealed class GoalWorktreeTestsRemoveCleanupDebt : GoalWorktreeTestBase
                 // POSIX: the held handle does not block removal, so it completes.
                 Assert.True(partial.IsComplete);
             }
+            AssertBuildServerShutdownRequests(shutdownRequests, path);
         }
         finally
         {
@@ -314,6 +320,7 @@ public sealed class GoalWorktreeTestsRemoveCleanupDebt : GoalWorktreeTestBase
         var originalBackoff = CleanupHooks.CleanupBackoffDuration;
         try
         {
+            var shutdownRequests = CaptureBuildServerShutdownRequests();
             var goalId = GoalId.New();
             var path = GoalWorktrees.Ensure(repo, goalId);
             File.Delete(Path.Combine(path, ".git"));
@@ -341,6 +348,7 @@ public sealed class GoalWorktreeTestsRemoveCleanupDebt : GoalWorktreeTestBase
             Assert.True(result.Message.Contains("remaining_wait=00:10:00", StringComparison.Ordinal));
             Assert.True(Directory.Exists(path));
             Assert.True(HasCleanupNeededRecord(repo, path, "remove:leftover-directory"));
+            AssertBuildServerShutdownRequests(shutdownRequests, path);
         }
         finally
         {

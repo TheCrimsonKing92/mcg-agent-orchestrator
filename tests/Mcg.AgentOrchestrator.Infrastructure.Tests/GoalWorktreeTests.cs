@@ -384,6 +384,24 @@ public abstract class GoalWorktreeTestBase
         };
     }
 
+    private protected List<(string Path, int Budget)> CaptureBuildServerShutdownRequests()
+    {
+        var requests = new List<(string Path, int Budget)>();
+        CleanupHooks.BuildServerShutdown = (path, budget) => requests.Add((path, budget));
+        return requests;
+    }
+
+    private protected static void AssertBuildServerShutdownRequests(
+        List<(string Path, int Budget)> requests, string expectedPath)
+    {
+        Assert.NotEmpty(requests);
+        Assert.All(requests, request =>
+        {
+            Assert.Equal(expectedPath, request.Path);
+            Assert.InRange(request.Budget, 1, GitCli.DefaultTimeoutMilliseconds);
+        });
+    }
+
     private protected static WorktreeCleanupContext CreateIsolatedCleanupContext(
         string repo,
         GoalWorktreeCleanupHooks? hooks = null) =>
@@ -629,7 +647,7 @@ public abstract class GoalWorktreeTestBase
             AcceptanceVerificationResult? verification,
             bool verificationSkipped,
             string? executionDirectory = null) =>
-            DefaultCliGoalWorktreeService.Instance.BuildAcceptanceEvidence(
+            new DefaultCliGoalWorktreeService(new WorktreeCleanupContext(cleanupHooks)).BuildAcceptanceEvidence(
                 kernel,
                 goal,
                 worktreePath,

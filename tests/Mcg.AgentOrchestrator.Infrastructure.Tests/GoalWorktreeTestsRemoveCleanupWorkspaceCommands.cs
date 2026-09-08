@@ -13,6 +13,98 @@ using Microsoft.Data.Sqlite;
 
 public sealed class GoalWorktreeTestsRemoveCleanupWorkspaceCommands : GoalWorktreeTestBase
 {
+    [Xunit.Theory]
+    [Xunit.InlineData(null)]
+    [Xunit.InlineData(GitCli.DefaultTimeoutMilliseconds)]
+    public void CliWorktreeRemovalUsesItsContextCleanupOwner(int? timeout)
+    {
+        var repo = CreateSeededRepository();
+        var otherRepo = CreateSeededRepository();
+        try
+        {
+            var goalId = GoalId.New();
+            var path = GoalWorktrees.Ensure(repo, goalId);
+            File.Delete(Path.Combine(path, ".git"));
+            RunGit(repo, "worktree", "prune");
+            var shutdownRequests = new List<(string Path, int Budget)>();
+            var hooks = new GoalWorktreeCleanupHooks
+            {
+                BuildServerShutdown = (directory, budget) => shutdownRequests.Add((directory, budget))
+            };
+            var owner = CreateCleanupOwner(repo, hooks);
+            var otherGoalId = GoalId.New();
+            var otherPath = GoalWorktrees.Ensure(otherRepo, otherGoalId);
+            File.Delete(Path.Combine(otherPath, ".git"));
+            RunGit(otherRepo, "worktree", "prune");
+            var otherShutdownRequests = new List<(string Path, int Budget)>();
+            var otherOwner = CreateCleanupOwner(otherRepo, hooks with
+            {
+                BuildServerShutdown = (directory, budget) => otherShutdownRequests.Add((directory, budget))
+            });
+
+            var result = owner.Worktrees.Remove(repo, goalId, gitTimeoutMilliseconds: timeout);
+            Assert.Empty(otherShutdownRequests);
+            var otherResult = otherOwner.Worktrees.Remove(otherRepo, otherGoalId, gitTimeoutMilliseconds: timeout);
+
+            Assert.True(result.IsComplete, result.Message);
+            Assert.True(otherResult.IsComplete, otherResult.Message);
+            Assert.False(Directory.Exists(path));
+            Assert.False(Directory.Exists(otherPath));
+            Assert.False(BranchExists(repo, GoalWorktrees.BranchName(goalId)));
+            Assert.False(BranchExists(otherRepo, GoalWorktrees.BranchName(otherGoalId)));
+            var request = Assert.Single(shutdownRequests);
+            Assert.Equal(path, request.Path);
+            Assert.InRange(request.Budget, 1, timeout ?? GitCli.DefaultTimeoutMilliseconds);
+            var otherRequest = Assert.Single(otherShutdownRequests);
+            Assert.Equal(otherPath, otherRequest.Path);
+            Assert.InRange(otherRequest.Budget, 1, timeout ?? GitCli.DefaultTimeoutMilliseconds);
+        }
+        finally
+        {
+            DeleteDirectory(repo);
+            DeleteDirectory(otherRepo);
+        }
+    }
+
+    [Xunit.Fact]
+    public void CliWorktreeCreationUsesItsContextToClearAnOrphan()
+    {
+        var repo = CreateSeededRepository();
+        try
+        {
+            var goalId = GoalId.New();
+            var path = GoalWorktrees.WorktreePath(repo, goalId);
+            Directory.CreateDirectory(path);
+            File.WriteAllText(Path.Combine(path, "orphan.txt"), "left by an interrupted creation");
+            var deletedPaths = new List<string>();
+            var hooks = new GoalWorktreeCleanupHooks
+            {
+                DeleteDirectoryForCleanup = directory =>
+                {
+                    deletedPaths.Add(directory);
+                    return GoalWorktrees.DeleteDirectoryWithReason(directory);
+                }
+            };
+
+            var created = CreateCleanupOwner(repo, hooks).Worktrees.Ensure(repo, goalId);
+
+            Assert.Equal(path, created);
+            Assert.Equal(path, Assert.Single(deletedPaths));
+            Assert.False(File.Exists(Path.Combine(path, "orphan.txt")));
+            Assert.Equal(path, GoalWorktrees.TryResolve(repo, goalId));
+        }
+        finally
+        {
+            DeleteDirectory(repo);
+        }
+    }
+
+    private static CliExecutionContext CreateCleanupOwner(string repo, GoalWorktreeCleanupHooks hooks) =>
+        new(new AgentOrchestratorKernel(), OrchestratorWorkspace.ForDirectory(repo),
+            new InMemoryModelProviderRegistry([]), AgentCatalog.Default().Agents, WorkerProfileCatalog.Default(), null)
+        {
+            CleanupContext = CreateIsolatedCleanupContext(repo, hooks)
+        };
 
     [Xunit.Fact(DisplayName = "Cli_workspace_remove_force_terminal_cleanup_bypasses_escalated_backoff")]
     public void CliWorkspaceRemoveForceTerminalCleanupBypassesEscalatedBackoff()
@@ -50,7 +142,12 @@ public sealed class GoalWorktreeTestsRemoveCleanupWorkspaceCommands : GoalWorktr
                 attention.Body,
                 StringComparison.Ordinal);
 
-            var recoveringHooks = deferredHooks with { DeleteDirectory = configuredHooks.DeleteDirectory };
+            var shutdownRequests = new List<(string Path, int Budget)>();
+            var recoveringHooks = deferredHooks with
+            {
+                DeleteDirectory = configuredHooks.DeleteDirectory,
+                BuildServerShutdown = (directory, budget) => shutdownRequests.Add((directory, budget))
+            };
             var context = new CliExecutionContext(
                 kernel,
                 OrchestratorWorkspace.ForDirectory(repo),
@@ -67,6 +164,9 @@ public sealed class GoalWorktreeTestsRemoveCleanupWorkspaceCommands : GoalWorktr
                 context));
 
             Assert.False(Directory.Exists(path));
+            var shutdown = Assert.Single(shutdownRequests);
+            Assert.Equal(path, shutdown.Path);
+            Assert.InRange(shutdown.Budget, 1, GitCli.DefaultTimeoutMilliseconds);
             Assert.Null(GoalWorktrees.TryGetCleanupBackoff(repo, goal.Id, configuredHooks));
             Assert.Empty(attentionStore.GetAttentionQueueAsync().GetAwaiter().GetResult());
         }

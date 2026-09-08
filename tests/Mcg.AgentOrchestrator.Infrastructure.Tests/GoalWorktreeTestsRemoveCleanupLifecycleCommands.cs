@@ -118,6 +118,7 @@ public sealed class GoalWorktreeTestsRemoveCleanupLifecycleCommands : GoalWorktr
         var originalDeleteDirectory = CleanupHooks.DeleteDirectory;
         try
         {
+            var shutdownRequests = CaptureBuildServerShutdownRequests();
             var kernel = new AgentOrchestratorKernel();
             var goal = kernel.CreateGoal("Acceptance cleanup leftover test", [new TaskSpec(TaskId.New(), "Implement", AgentRole.Developer)]);
             kernel.ActivateGoal(goal.Id, AgentCatalog.Default().Agents);
@@ -178,6 +179,7 @@ public sealed class GoalWorktreeTestsRemoveCleanupLifecycleCommands : GoalWorktr
             Assert.Equal(GoalStatus.Completed, goal.Status);
             Assert.True(kernel.BuildGoalAcceptanceSummary(goal.Id).IsAccepted);
             Assert.True(Directory.Exists(worktreePath));
+            AssertBuildServerShutdownRequests(shutdownRequests, worktreePath);
         }
         finally
         {

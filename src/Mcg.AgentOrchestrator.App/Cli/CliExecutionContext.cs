@@ -147,7 +147,13 @@ public IGoalAcceptanceVerifier AcceptanceVerifier { get; init; } = new GoalAccep
 
 public bool RunInjectedAcceptanceVerifierInCurrentProcess { get; init; }
 
-    public ICliGoalWorktreeService Worktrees { get; init; } = DefaultCliGoalWorktreeService.Instance;
+    private ICliGoalWorktreeService? worktrees;
+
+    public ICliGoalWorktreeService Worktrees
+    {
+        get => worktrees ?? new DefaultCliGoalWorktreeService(CleanupContext);
+        init => worktrees = value;
+    }
 
     public WorktreeCleanupContext CleanupContext { get; init; } =
         new(GoalWorktreeCleanupOptions.Default);
@@ -341,13 +347,18 @@ internal interface ICliGoalWorktreeService
 
 internal sealed class DefaultCliGoalWorktreeService : ICliGoalWorktreeService
 {
-    public static DefaultCliGoalWorktreeService Instance { get; } = new();
+    private readonly GoalWorktreeCleanupHooks cleanupHooks;
 
-    private DefaultCliGoalWorktreeService() { }
+    public DefaultCliGoalWorktreeService(WorktreeCleanupContext cleanupContext)
+    {
+        ArgumentNullException.ThrowIfNull(cleanupContext);
+        cleanupHooks = cleanupContext.Hooks;
+    }
 
     public string BranchName(GoalId goalId) => GoalWorktrees.BranchName(goalId);
 
-    public string Ensure(string executionDirectory, GoalId goalId) => GoalWorktrees.Ensure(executionDirectory, goalId);
+    public string Ensure(string executionDirectory, GoalId goalId) =>
+        GoalWorktrees.Ensure(executionDirectory, goalId, cleanupHooks);
 
     public string? TryResolve(string executionDirectory, GoalId goalId) => GoalWorktrees.TryResolve(executionDirectory, goalId);
 
@@ -357,14 +368,14 @@ internal sealed class DefaultCliGoalWorktreeService : ICliGoalWorktreeService
         AgentOrchestratorKernel? kernel = null,
         int? gitTimeoutMilliseconds = null) =>
         gitTimeoutMilliseconds is { } timeout
-            ? GoalWorktrees.Remove(executionDirectory, goalId, kernel, timeout)
-            : GoalWorktrees.Remove(executionDirectory, goalId, kernel);
+            ? GoalWorktrees.Remove(executionDirectory, goalId, kernel, timeout, hooks: cleanupHooks)
+            : GoalWorktrees.Remove(executionDirectory, goalId, kernel, cleanupHooks);
 
     public GoalWorktreeRemoveResult RemoveTerminalNow(
         string executionDirectory,
         GoalId goalId,
         AgentOrchestratorKernel kernel) =>
-        GoalWorktrees.RemoveTerminalNow(executionDirectory, goalId, kernel);
+        GoalWorktrees.RemoveTerminalNow(executionDirectory, goalId, kernel, cleanupHooks);
 
     public bool IsGitWorkTree(string executionDirectory) => GoalWorktrees.IsGitWorkTree(executionDirectory);
 

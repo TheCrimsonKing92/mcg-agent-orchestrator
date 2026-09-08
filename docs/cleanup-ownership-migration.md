@@ -239,7 +239,61 @@ Receipt: `cleanup-cli-root-family-comparison.json` in the driving repository's o
 The first full 221-case manifest run under the Codex filesystem sandbox passed the migrated 57
 cases; the other 164 could not enter their test bodies because the existing collection fixture
 could not create its owned LocalLow claim file. One affected case passed on the unchanged frozen
-assembly with the required filesystem access. The complete lane is being validated with that
-access; neither the failed setup run nor that one passing control proves full-lane acceptance.
+assembly with the required filesystem access. The complete lane subsequently passed 221/221 in
+2365.314 seconds with that access, owned host exit zero and no timeout. Receipt:
+`cleanup-cli-root-manifest-authorized-control`. This validates that lane on its frozen candidate;
+it does not prove full acceptance or validate subsequent source changes.
 Full acceptance and complete collection isolation remain open. Host/heartbeat context projections
 and wider child-environment propagation are outside this increment's evidence.
+
+## CLI worktree service ownership and shutdown reachability
+
+A bounded diagnostic run replaced only `DefaultBuildServerShutdown`'s body with a record/no-op.
+The actual 57-case family passed, recording nine default-callback invocations across eight tests.
+This establishes callback reachability, not a cause for any gate failure. In particular, the real
+force-terminal CLI test supplied a shutdown no-op but still reached the default callback. The
+default CLI worktree adapter omitted its caller's cleanup hooks. Existing filesystem assertions
+passed despite this omission.
+
+`CliExecutionContext.Worktrees` now resolves an explicitly context-bound default adapter unless
+the caller injects a custom service. The getter does not cache: the adapter reads the final
+init-only `CleanupContext`. `Ensure`, timed and untimed `Remove`, and `RemoveTerminalNow` forward
+that context's hooks. The force-terminal command reaches `RemoveTerminalNow` through the existing
+workspace handler. No production assignment copies a `Worktrees` adapter into another context.
+The adapter is internal, and the only additional former singleton reference was the test
+acceptance-evidence forwarder.
+
+The regression cases observe callback ownership through both explicit roots, normal and timed
+removal, orphan creation recovery, and the actual forced-terminal CLI command. Orphan creation
+uses the typed `DeleteDirectoryForCleanup` hook; ordinary removal uses `DeleteDirectory`.
+Seven other directly invoked cleanup fixtures explicitly record shutdown requests while preserving
+their existing directory, branch, debt, budget and recovery assertions. Those seven fixture
+changes isolate test effects; they are not regressions for the CLI adapter omission. Default
+production shutdown behavior remains present. Callback path equality is not proof that the real
+SDK shutdown is scoped to a worktree: it invokes `dotnet build-server shutdown`, and its working
+directory alone establishes no SDK-server ownership. Backlog `623883f6` retains this broader issue.
+
+The first normal build passed; its 60-case family run completed 58 passed and two failed in
+564.845 seconds. Both failures were in new tests: creation recorded the wrong deletion hook, and
+an operator-selected 5000ms timed-removal budget returned a branch-kept result. The first test
+was corrected to observe the typed hook. The cause of the second result remains undetermined;
+the ownership test now exercises the timed overload with the repository's normal cleanup budget,
+without changing production budgets or claiming a latency improvement. Both owner contexts now
+perform actual removal and assert that each recorder receives only its own path.
+
+Normal and negative runtimes are frozen independently. The negative control restores the four
+adapter hook omissions while replacing only the default SDK shutdown effect with a no-op;
+production source is then restored byte-for-byte. The expected failure set is the four adapter
+regression cases, with the remaining nine workspace-command cases passing. Both arms compile
+identical regression source; six PDB/source checks establish normal and mutated production
+identity plus the matching test source (`cleanup-service-source-comparison.json`). Diagnostic
+and negative binaries are excluded from acceptance.
+
+The final normal arm passed 13/13 in 278.063 seconds; the negative arm passed nine and failed
+exactly the four expected cases in 277.734 seconds. Every negative failure was the empty caller
+recorder assertion, not a setup, timeout or branch assertion. Managed hosts 34444 and 52904
+confirmed exit with codes zero and two respectively, with no timeout. The test assembly itself
+was identical in both arms (`89D81643F14B6064D3DCE39A8D123903E8FF0638D0D6E70B15A41E26A27D317B`),
+and the verifier confirmed the same 13-case roster. Receipts: `cleanup-service-owner-paired-results.json`
+and `cleanup-service-source-comparison.json`. These are discriminating CLI ownership results;
+they are not a fresh 60-case family pass or full acceptance. Full goal completion remains unproven.

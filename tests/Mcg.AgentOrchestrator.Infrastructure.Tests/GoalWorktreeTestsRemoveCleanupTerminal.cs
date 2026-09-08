@@ -29,6 +29,7 @@ public sealed class GoalWorktreeTestsRemoveCleanupTerminal : GoalWorktreeTestBas
 
         try
         {
+            var shutdownRequests = CaptureBuildServerShutdownRequests();
             Directory.CreateDirectory(repo);
             RunGit(repo, "init");
             RunGit(repo, "config", "user.email", "tests@example.com");
@@ -78,6 +79,7 @@ public sealed class GoalWorktreeTestsRemoveCleanupTerminal : GoalWorktreeTestBas
                 NormalizePath(worktree),
                 RunGitOutput(repo, "worktree", "list", "--porcelain"),
                 StringComparison.OrdinalIgnoreCase);
+            AssertBuildServerShutdownRequests(shutdownRequests, worktree);
         }
         finally
         {

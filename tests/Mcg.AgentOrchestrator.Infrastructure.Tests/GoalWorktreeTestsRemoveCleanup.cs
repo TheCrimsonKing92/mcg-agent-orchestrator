@@ -176,6 +176,7 @@ public sealed class GoalWorktreeTestsRemoveCleanup : GoalWorktreeTestBase
         var repo = CreateSeededRepository();
         try
         {
+            var shutdownRequests = CaptureBuildServerShutdownRequests();
             var goalId = GoalId.New();
             var path = GoalWorktrees.Ensure(repo, goalId);
             var branch = GoalWorktrees.BranchName(goalId);
@@ -194,6 +195,7 @@ public sealed class GoalWorktreeTestsRemoveCleanup : GoalWorktreeTestBase
 
             Assert.False(Directory.Exists(path));
             Assert.False(BranchExists(repo, branch));
+            AssertBuildServerShutdownRequests(shutdownRequests, path);
         }
         finally
         {
