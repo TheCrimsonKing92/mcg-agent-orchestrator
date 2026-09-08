@@ -12,7 +12,7 @@ public sealed class ChaosGateAssignedScopeIncompleteTests : ChaosGateTestBase
         var (kernel, goal, task, _) = CreateChaosDispatch(
             root,
             AgentRole.Developer,
-            WorkerResultBlock("src/Feature.cs", "focused verification", "pass - focused verification passed"),
+            RetainedPartialOutput(),
             string.Empty,
             mutateWorktree: worktree => CommitSourceFile(worktree, "src/Feature.cs", "// legacy candidate"));
 
@@ -31,7 +31,7 @@ public sealed class ChaosGateAssignedScopeIncompleteTests : ChaosGateTestBase
     public void ProductionReconciliationRoutesFalseToBoundedRevisionAndPreservesCommit()
     {
         var root = CreateSeededRepo();
-        var output = WorkerResultBlock("src/Feature.cs", "focused verification", "pass - focused verification passed")
+        var output = RetainedPartialOutput()
             .Replace("END_WORKER_RESULT", "assigned_scope_complete: false" + Environment.NewLine + "END_WORKER_RESULT", StringComparison.Ordinal);
         var (kernel, goal, task, _) = CreateChaosDispatch(
             root,
@@ -73,4 +73,61 @@ public sealed class ChaosGateAssignedScopeIncompleteTests : ChaosGateTestBase
         Assert.Equal(WorkTaskStatus.Assigned, task.Status);
         Assert.NotNull(task.LastDispatch.ResultCommit);
     }
+
+    [Xunit.Fact(DisplayName = "AssignedScopeComplete_production_reconciliation_commits_dirty_incomplete_work_before_bounded_revision")]
+    public void ProductionReconciliationCommitsDirtyIncompleteWorkBeforeBoundedRevision()
+    {
+        var root = CreateSeededRepo();
+        var output = RetainedPartialOutput()
+            .Replace("END_WORKER_RESULT", "assigned_scope_complete: false" + Environment.NewLine + "END_WORKER_RESULT", StringComparison.Ordinal);
+        var (kernel, goal, task, _) = CreateChaosDispatch(
+            root,
+            AgentRole.Developer,
+            output,
+            string.Empty,
+            mutateWorktree: worktree =>
+            {
+                var path = Path.Combine(worktree, "src", "Feature.cs");
+                Directory.CreateDirectory(Path.GetDirectoryName(path)!);
+                File.WriteAllText(path, "// preserved dirty candidate");
+            });
+
+        new BackgroundDispatchRunner(isStillRunning: _ => false)
+            .RefreshLatestProcess(kernel, goal.Id, task.Id);
+
+        var outcome = DispatchFailureClassifier.Classify(task, task.LastVerification!);
+        Assert.Equal(WorkTaskStatus.Failed, task.Status);
+        Assert.True(task.LastVerification!.HasCommittedChanges);
+        Assert.NotNull(task.LastDispatch!.ResultCommit);
+        Assert.Equal(DispatchOutcomeKind.UnknownFailure, outcome.Kind);
+        Assert.Contains("rule=incomplete-scope-declaration", outcome.ClassifierReceipt, StringComparison.Ordinal);
+    }
+
+    [Xunit.Fact(DisplayName = "AssignedScopeComplete_production_reconciliation_rejects_malformed_scope_without_coercing_absence")]
+    public void ProductionReconciliationRejectsMalformedScopeWithoutCoercingAbsence()
+    {
+        var root = CreateSeededRepo();
+        var output = RetainedPartialOutput()
+            .Replace("END_WORKER_RESULT", "assigned_scope_complete: maybe" + Environment.NewLine + "END_WORKER_RESULT", StringComparison.Ordinal);
+        var (kernel, goal, task, _) = CreateChaosDispatch(
+            root,
+            AgentRole.Developer,
+            output,
+            string.Empty,
+            mutateWorktree: worktree => CommitSourceFile(worktree, "src/Feature.cs", "// malformed scope candidate"));
+
+        new BackgroundDispatchRunner(isStillRunning: _ => false)
+            .RefreshLatestProcess(kernel, goal.Id, task.Id);
+
+        var outcome = DispatchFailureClassifier.Classify(task, task.LastVerification!);
+        Assert.Equal(WorkTaskStatus.Failed, task.Status);
+        Assert.Null(task.LastVerification!.AssignedScopeComplete);
+        Assert.NotEqual(DispatchOutcomeKind.VerifiedSuccess, outcome.Kind);
+        Assert.Contains("assigned_scope_complete requires true or false", outcome.EvidenceSummary, StringComparison.Ordinal);
+    }
+
+    private static string RetainedPartialOutput() => string.Join(
+        Environment.NewLine,
+        "The sequence/versioned retry and legacy repair remain outside this implementation slice.",
+        WorkerResultBlock("src/Feature.cs", "focused verification", "pass - focused verification passed"));
 }

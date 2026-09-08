@@ -167,7 +167,8 @@ public sealed record TaskVerificationRecord(
                 : CompletionVerdictVerifiedSuccess,
             CompletionVerdictRule = preferredHasCompletionVerdict
                 ? preferred.CompletionVerdictRule
-                : CompletionVerdictRule
+                : CompletionVerdictRule,
+            AssignedScopeComplete = preferred.AssignedScopeComplete ?? AssignedScopeComplete
         };
     }
 

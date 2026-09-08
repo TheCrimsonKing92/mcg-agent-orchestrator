@@ -565,22 +565,10 @@ public static class WorkerResultBlockers
 
     public static bool? GetAssignedScopeComplete(TaskVerificationRecord? verification)
     {
-        if (verification is null)
-        {
-            return null;
-        }
-
-        if (verification.AssignedScopeComplete is not null)
-        {
-            return verification.AssignedScopeComplete;
-        }
-
-        return TryGetAssignedScopeComplete(
-            verification.AuthoritativeStandardOutput ?? verification.StandardOutput,
-            out var assignedScopeComplete,
-            out _)
-            ? assignedScopeComplete
-            : null;
+        // The dispatch result owner parses this optional field once, before recording the
+        // verification. Classification must use that durable observation rather than
+        // reinterpreting a bounded preview or a legacy/non-authoritative output artifact.
+        return verification?.AssignedScopeComplete;
     }
 
     public static bool HasCompleteWorkerResult(string workerOutput)

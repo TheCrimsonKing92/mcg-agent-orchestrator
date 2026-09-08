@@ -52,6 +52,57 @@ public sealed class AssignedScopeCompleteTests
         Xunit.Assert.False(restored.LastVerification!.AssignedScopeComplete);
     }
 
+    [Xunit.Fact]
+    public void SameRoundEnrichmentPreservesObservedValueForReloadAndClassification()
+    {
+        var completedAt = DateTimeOffset.UtcNow;
+        var task = new TaskSpec(TaskId.New(), "Implement assigned scope", AgentRole.Developer);
+        var initial = new TaskVerificationRecord(
+            "cmd", "C:\\repo", 0, "WORKER_RESULT:", string.Empty, completedAt,
+            WorkerResultPresent: true);
+        var enriched = new TaskVerificationRecord(
+            "cmd", "C:\\repo", 0, "WORKER_RESULT:", string.Empty, completedAt,
+            WorkerResultPresent: true,
+            AssignedScopeComplete: false);
+        task.RecordVerification(initial.MergeSameRoundEnrichment(enriched));
+
+        var restored = TaskSpec.FromSnapshot(task.ToSnapshot());
+        var outcome = DispatchFailureClassifier.Classify(restored, restored.LastVerification!);
+
+        Xunit.Assert.False(restored.LastVerification!.AssignedScopeComplete);
+        Xunit.Assert.Equal(DispatchOutcomeKind.UnknownFailure, outcome.Kind);
+        Xunit.Assert.Contains("rule=incomplete-scope-declaration", outcome.ClassifierReceipt, StringComparison.Ordinal);
+    }
+
+    [Xunit.Fact]
+    public void ClassifierUsesPersistedObservationRatherThanReparsingOutput()
+    {
+        var task = new TaskSpec(TaskId.New(), "Implement assigned scope", AgentRole.Developer);
+        var output = string.Join(
+            Environment.NewLine,
+            "WORKER_RESULT:",
+            "files: src/Feature.cs",
+            "commands: focused verification",
+            "tests: pass - focused verification passed",
+            "commit: abc1234",
+            "blockers: none",
+            "model_fit: fixture/model - adequate - scope test",
+            "skills: none",
+            "confidence: high",
+            "assigned_scope_complete: false",
+            "END_WORKER_RESULT");
+        var verification = new TaskVerificationRecord(
+            "test.exe", "C:\\repo", 0, output, string.Empty, DateTimeOffset.UtcNow,
+            WorkerResultPresent: true,
+            HasCommittedChanges: true,
+            AssignedScopeComplete: null);
+
+        var outcome = DispatchFailureClassifier.Classify(task, verification);
+
+        Xunit.Assert.Equal(DispatchOutcomeKind.VerifiedSuccess, outcome.Kind);
+        Xunit.Assert.DoesNotContain("incomplete-scope-declaration", outcome.ClassifierReceipt, StringComparison.Ordinal);
+    }
+
     [Xunit.Theory]
     [Xunit.InlineData(true, true, "pass - focused verification passed", "incomplete-scope-declaration")]
     [Xunit.InlineData(true, false, "pass - focused verification passed", "incomplete-scope-declaration")]
@@ -116,5 +167,33 @@ public sealed class AssignedScopeCompleteTests
 
         Xunit.Assert.Contains("rule=succeeded-worker-result-failing-tests", outcome.ClassifierReceipt, StringComparison.Ordinal);
         Xunit.Assert.DoesNotContain("incomplete-scope-declaration", outcome.ClassifierReceipt, StringComparison.Ordinal);
+    }
+
+    [Xunit.Fact]
+    public void ScopeCompleteCannotOverrideTesterFailure()
+    {
+        var task = new TaskSpec(TaskId.New(), "Verify candidate", AgentRole.Tester);
+        var output = string.Join(
+            Environment.NewLine,
+            "WORKER_RESULT:",
+            "files: none",
+            "commands: focused verification",
+            "tests: fail - deterministic failure",
+            "commit: none",
+            "blockers: none",
+            "model_fit: fixture/model - adequate - tester control",
+            "skills: none",
+            "confidence: high",
+            "assigned_scope_complete: true",
+            "END_WORKER_RESULT");
+        var verification = new TaskVerificationRecord(
+            "test.exe", "C:\\repo", 0, output, string.Empty, DateTimeOffset.UtcNow,
+            WorkerResultPresent: true,
+            AssignedScopeComplete: true);
+
+        var outcome = DispatchFailureClassifier.Classify(task, verification);
+
+        Xunit.Assert.Equal(DispatchOutcomeKind.UnknownFailure, outcome.Kind);
+        Xunit.Assert.Contains("rule=succeeded-worker-result-failing-tests", outcome.ClassifierReceipt, StringComparison.Ordinal);
     }
 }
