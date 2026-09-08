@@ -248,11 +248,6 @@ public sealed class GoalWorktreeTestsRemoveCleanup : GoalWorktreeTestBase
     public void CliWorkspaceRemoveForceTerminalCleanupBypassesEscalatedBackoff()
     {
         var repo = CreateSeededRepository();
-        var originalDelete = GoalWorktrees.DeleteDirectory;
-        var originalAcl = GoalWorktrees.SandboxAclHelper;
-        var originalShutdown = GoalWorktrees.BuildServerShutdown;
-        var originalLockHolders = GoalWorktrees.FindLockHoldersForCleanup;
-        var originalOptions = GoalWorktrees.CleanupOptions;
         try
         {
             var kernel = new AgentOrchestratorKernel();
@@ -264,17 +259,20 @@ public sealed class GoalWorktreeTestsRemoveCleanup : GoalWorktreeTestBase
             File.Delete(Path.Combine(path, ".git"));
             RunGit(repo, "worktree", "prune");
             kernel.CancelGoal(goal.Id, "Force cleanup test.");
-            GoalWorktrees.DeleteDirectory = _ => false;
-            GoalWorktrees.SandboxAclHelper = new NoOpSandboxAclHelper();
-            GoalWorktrees.BuildServerShutdown = (_, _) => { };
-            GoalWorktrees.FindLockHoldersForCleanup = _ => [];
-            GoalWorktrees.ConfigureCleanup(
+            var configuredHooks = GoalWorktreeCleanupHooks.ForConfiguration(
                 new GoalWorktreeCleanupOptions(TimeSpan.FromMinutes(5), 1, TimeSpan.FromDays(1)),
                 Path.Combine(repo, ".orchestrator"));
+            var deferredHooks = configuredHooks with
+            {
+                DeleteDirectory = _ => false,
+                ResetSandboxAcl = (_, _) => { },
+                BuildServerShutdown = (_, _) => { },
+                FindLockHoldersForCleanup = _ => []
+            };
 
-            var deferred = GoalWorktrees.RemoveTerminal(repo, goal.Id, kernel);
+            var deferred = GoalWorktrees.RemoveTerminal(repo, goal.Id, kernel, deferredHooks);
             Assert.False(deferred.IsComplete);
-            Assert.NotNull(GoalWorktrees.TryGetCleanupBackoff(repo, goal.Id));
+            Assert.NotNull(GoalWorktrees.TryGetCleanupBackoff(repo, goal.Id, deferredHooks));
             var attentionStore = CollaborationItemStore.ForDirectory(Path.Combine(repo, ".orchestrator"));
             var attention = Assert.Single(attentionStore.GetAttentionQueueAsync().GetAwaiter().GetResult());
             Assert.Contains(
@@ -282,31 +280,103 @@ public sealed class GoalWorktreeTestsRemoveCleanup : GoalWorktreeTestBase
                 attention.Body,
                 StringComparison.Ordinal);
 
-            GoalWorktrees.DeleteDirectory = originalDelete;
+            var recoveringHooks = deferredHooks with { DeleteDirectory = configuredHooks.DeleteDirectory };
             var context = new CliExecutionContext(
                 kernel,
                 OrchestratorWorkspace.ForDirectory(repo),
                 new InMemoryModelProviderRegistry([]),
                 AgentCatalog.Default().Agents,
                 WorkerProfileCatalog.Default(),
-                goal);
+                goal)
+            {
+                CleanupContext = new WorktreeCleanupContext(recoveringHooks)
+            };
 
             _ = CaptureConsole(() => CliCommandHandlers.Execute(
                 ["workspace", "remove", goal.Id.Value[..8], "--force-terminal-cleanup"],
                 context));
 
             Assert.False(Directory.Exists(path));
-            Assert.Null(GoalWorktrees.TryGetCleanupBackoff(repo, goal.Id));
+            Assert.Null(GoalWorktrees.TryGetCleanupBackoff(repo, goal.Id, configuredHooks));
             Assert.Empty(attentionStore.GetAttentionQueueAsync().GetAwaiter().GetResult());
         }
         finally
         {
-            GoalWorktrees.DeleteDirectory = originalDelete;
-            GoalWorktrees.SandboxAclHelper = originalAcl;
-            GoalWorktrees.BuildServerShutdown = originalShutdown;
-            GoalWorktrees.FindLockHoldersForCleanup = originalLockHolders;
-            GoalWorktrees.ConfigureCleanup(originalOptions);
             DeleteDirectory(repo);
+        }
+    }
+
+    [Xunit.Fact]
+    public async Task RemoveTerminalKeepsConcurrentPublicOperationsAndAttentionStoresIsolated()
+    {
+        var repositories = new List<string>();
+        using var rendezvous = new Barrier(2);
+        try
+        {
+            (string Repo, string Path, Goal Goal, AgentOrchestratorKernel Kernel,
+                GoalWorktreeCleanupHooks Hooks, ConcurrentBag<string> Deletes) CreateOperation()
+            {
+                var repo = CreateSeededRepository();
+                repositories.Add(repo);
+                var kernel = new AgentOrchestratorKernel();
+                var goal = kernel.CreateGoal("Concurrent terminal cleanup",
+                    [new TaskSpec(TaskId.New(), "Leave owned residue.", AgentRole.Developer)]);
+                kernel.ActivateGoal(goal.Id, AgentCatalog.Default().Agents);
+                var path = GoalWorktrees.Ensure(repo, goal.Id);
+                File.Delete(Path.Combine(path, ".git"));
+                RunGit(repo, "worktree", "prune");
+                kernel.CancelGoal(goal.Id, "Exercise isolated terminal cleanup.");
+                var deletes = new ConcurrentBag<string>();
+                var entered = 0;
+                var hooks = GoalWorktreeCleanupHooks.ForConfiguration(
+                    new GoalWorktreeCleanupOptions(TimeSpan.FromMinutes(5), 1, TimeSpan.FromDays(1)),
+                    Path.Combine(repo, ".orchestrator")) with
+                {
+                    DeleteDirectory = candidate =>
+                    {
+                        deletes.Add(candidate);
+                        if (Interlocked.Exchange(ref entered, 1) == 0 &&
+                            !rendezvous.SignalAndWait(TimeSpan.FromSeconds(30)))
+                        {
+                            throw new TimeoutException("Both public cleanup operations must overlap.");
+                        }
+                        return false;
+                    },
+                    ResetSandboxAcl = (_, _) => { },
+                    BuildServerShutdown = (_, _) => { },
+                    FindLockHoldersForCleanup = _ => [],
+                    CleanupWarningSink = _ => { }
+                };
+                return (repo, path, goal, kernel, hooks, deletes);
+            }
+
+            var first = CreateOperation();
+            var second = CreateOperation();
+            var results = await Task.WhenAll(
+                Task.Run(() => GoalWorktrees.RemoveTerminal(first.Repo, first.Goal.Id, first.Kernel, first.Hooks)),
+                Task.Run(() => GoalWorktrees.RemoveTerminal(second.Repo, second.Goal.Id, second.Kernel, second.Hooks)));
+
+            Assert.All(results, result => Assert.False(result.IsComplete));
+            Assert.Contains(first.Path, first.Deletes);
+            Assert.DoesNotContain(second.Path, first.Deletes);
+            Assert.Contains(second.Path, second.Deletes);
+            Assert.DoesNotContain(first.Path, second.Deletes);
+            foreach (var operation in new[] { first, second })
+            {
+                Assert.NotNull(GoalWorktrees.TryGetCleanupBackoff(operation.Repo, operation.Goal.Id, operation.Hooks));
+                var store = CollaborationItemStore.ForDirectory(Path.Combine(operation.Repo, ".orchestrator"));
+                var attention = Assert.Single(await store.GetAttentionQueueAsync());
+                Assert.Contains($"workspace remove {operation.Goal.Id.Value[..8]}", attention.Body, StringComparison.Ordinal);
+                var other = operation.Goal.Id == first.Goal.Id ? second : first;
+                Assert.DoesNotContain(other.Goal.Id.Value[..8], attention.Body, StringComparison.Ordinal);
+            }
+        }
+        finally
+        {
+            foreach (var repo in repositories)
+            {
+                DeleteDirectory(repo);
+            }
         }
     }
 

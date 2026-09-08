@@ -51,3 +51,31 @@ an explicitly validated, normalized operation value. Reintroducing the old adapt
 explicitly injected test hook observe another test's mutation and would regress this ownership
 migration. Any future mechanical test migration must build independent fixed records and pass them
 through the owning operation; it must not restore a global compatibility source.
+
+## Operator continuation: public cleanup paths
+
+`CliWorkspaceRemoveForceTerminalCleanupBypassesEscalatedBackoff` now constructs a
+fixed deferring record and a separate recovering record, then passes the latter
+through `CliExecutionContext.CleanupContext`. Recovery restores only the real
+delete delegate; ACL, build-server shutdown and lock-holder discovery remain
+suppressed in both phases, preserving the original test's operating conditions.
+The existing escalation, backoff, directory-removal and attention-clear assertions
+remain in place.
+
+`RemoveTerminalKeepsConcurrentPublicOperationsAndAttentionStoresIsolated` makes
+two public `RemoveTerminal` operations rendezvous inside their independent deletion
+hooks. It verifies separate invocation paths, backoff and attention stores, and
+goal attribution. This proves overlapping operations through the public cleanup
+entry point; it does not establish parallel safety of the entire test collection.
+
+The operator's build and focused control receipts are under
+`.orchestrator/operator-evidence/rearchitecture-20260906/cleanup-public-context-preserved-*`
+in the driving repository. The frozen test assembly's PDB matches the modified
+source. Independent Opus review `cleanup-cohort-contract-review.json` identified the
+recovery suppression mistake above before this increment was committed.
+
+Remaining completion work is unchanged: migrate the other legacy hook callers,
+remove parent environment mutation, prove the whole collection's isolation, remove
+its unnecessary serialization, and measure the resulting acceptance critical path.
+Full-class and collection evidence belongs after that migration; these two focused
+controls are not a completion or acceptance verdict for this goal.
