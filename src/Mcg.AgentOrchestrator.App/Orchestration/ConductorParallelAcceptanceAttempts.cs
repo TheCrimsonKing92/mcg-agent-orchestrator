@@ -1125,7 +1125,9 @@ internal sealed class ConductorParallelAcceptanceAttemptCoordinator
                 agents,
                 profiles,
                 NullOperatorChannel.Instance,
-                providers);
+                providers,
+                cleanupHooks: WorktreeCleanupContext.Load(
+                    attentionStoreDirectory: workspace.OrchestratorDirectory).Hooks);
             var policy = ResolveAttemptPolicy(attempt);
             var candidate = ConductorParallelAcceptanceCandidate.Create(
                 goal,

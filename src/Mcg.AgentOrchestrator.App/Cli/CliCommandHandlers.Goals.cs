@@ -1529,7 +1529,8 @@ private static bool? TryExecuteGoalCommand(string command, IReadOnlyList<string>
                         goalId,
                         taskId),
                     runAcceptanceAttemptsInCurrentProcess: context.RunInjectedAcceptanceVerifierInCurrentProcess,
-                    recordDurableGoalBaseline: context.RecordDurableGoalBaseline);
+                    recordDurableGoalBaseline: context.RecordDurableGoalBaseline,
+                    cleanupHooks: context.CleanupHooks);
                 var postLandingCanary = PostLandingCanaryFactory.CreateDefault(
                     context.Workspace,
                     line =>
@@ -1833,12 +1834,13 @@ private static bool? TryExecuteGoalCommand(string command, IReadOnlyList<string>
                 context.Channel,
                 context.Providers,
                 persistCriticalDispatchStart: context.PersistCriticalGoalCheckpoint,
-                readCurrentInterruptedDispatchState: (goalId, taskId) => BackgroundDispatchRunner.ReadCurrentState(
-                    context.ReloadKernel(),
-                    goalId,
-                    taskId),
-                runAcceptanceAttemptsInCurrentProcess: context.RunInjectedAcceptanceVerifierInCurrentProcess,
-                recordDurableGoalBaseline: context.RecordDurableGoalBaseline);
+                    readCurrentInterruptedDispatchState: (goalId, taskId) => BackgroundDispatchRunner.ReadCurrentState(
+                        context.ReloadKernel(),
+                        goalId,
+                        taskId),
+                    runAcceptanceAttemptsInCurrentProcess: context.RunInjectedAcceptanceVerifierInCurrentProcess,
+                    recordDurableGoalBaseline: context.RecordDurableGoalBaseline,
+                    cleanupHooks: context.CleanupHooks);
 
             // Single-goal continuous mode: drive just this goal to its next checkpoint without the
             // whole-kernel loop, so adding a goal never requires stopping a running loop and other

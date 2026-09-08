@@ -23,7 +23,7 @@ command operation; `GoalWorktreeCleanupHooks` is immutable for one cleanup opera
 | Cleanup policy | `ConfigureCleanup` wrote process-wide options | `WorktreeCleanupContext` creates fixed `CleanupOptions` from `WorktreeCleanupConfiguration.Load(AppContext.BaseDirectory)` | Validation and configured-hook normalization are covered by `WorktreeCleanupConfigurationTests`; delete `ConfigureCleanup` after callers migrate |
 | Attention-store location | `ConfigureCleanup` wrote a normalized process-wide path | Fixed `CleanupAttentionStoreDirectory` in the owning context | Relative-path normalization is covered by `WorktreeCleanupConfigurationTests`; delete static path after callers migrate |
 | Sweep policy and cadence | Static scheduler options plus directory-keyed last-sweep map | `GoalWorktreeOrphanSweepScheduler` instance in the owning context | Instance holds its own options, lock, and map; two-context isolation requires Acceptance evidence |
-| Acceptance-cohort cleanup debt | `RecordAcceptanceCohortCleanupNeeded` hardcodes live `Default` | Cohort workspace operation must receive explicit hooks | **Open:** thread hooks through the cohort API before removing `Default` |
+| Acceptance-cohort cleanup debt | `RecordAcceptanceCohortCleanupNeeded` selected live `Default` | Cohort, partition, and merge-train workspace carry the conductor's immutable hooks through materialization and disposal | Production conductor paths pass their owning hooks; direct/test callers retain a compatibility fallback until all test seams migrate |
 
 ## Production caller ownership
 
@@ -34,7 +34,7 @@ command operation; `GoalWorktreeCleanupHooks` is immutable for one cleanup opera
 | CLI readiness, recovery, next, conduct, lifecycle, and subscription-ready terminal sweeps | The command's `CleanupContext` | Each terminal sweep receives the same explicit hooks as its scheduler |
 | Persistent conduct startup, global reconcile, and acceptance preflight terminal sweeps | One locally loaded context per operation | Terminal sweep and cadence scheduler share that instance |
 | Dashboard hosted sweep | DI singleton context loaded from the configured application base directory | Hosted service receives the singleton scheduler |
-| Acceptance cohort failed-materialization path | No scoped context reaches this API | **Open:** it still selects `GoalWorktreeCleanupHooks.Default` |
+| Acceptance cohort, partition, and merge-train materialization | The conductor path selected `GoalWorktreeCleanupHooks.Default` during cleanup-debt recording | The conductor's `CleanupContext.Hooks` is carried by each disposable workspace | Production callers are migrated; nullable compatibility fallback remains for direct tests |
 | Nullable cleanup-hook overloads and `TerminalGoalSweep.Run` fallback | Compatibility fallback for direct callers and tests | **Open:** remove only after all callers pass explicit hooks |
 
 The `GoalWorktreeCleanupHooks` xUnit collection remains serialized because its fixture mutates the

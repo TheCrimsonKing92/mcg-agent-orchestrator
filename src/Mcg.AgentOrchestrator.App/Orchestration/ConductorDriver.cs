@@ -147,6 +147,7 @@ internal sealed partial class ConductorDriver
     private readonly GateReadyCandidateProjector? _gateReadyCandidateProjector;
     private readonly AgentOrchestratorKernel? _cohortKernel;
     private readonly OrchestratorWorkspace? _cohortWorkspace;
+    private readonly GoalWorktreeCleanupHooks _cohortCleanupHooks = GoalWorktreeCleanupHooks.Default;
     private readonly IGoalAcceptanceVerifier? _cohortAcceptanceVerifier;
     private readonly IGoalLifecycleEventWriter? _cohortEventWriter;
     private readonly CohortAcceptanceStore? _cohortAcceptanceStore;
@@ -250,7 +251,8 @@ internal sealed partial class ConductorDriver
         Action<AgentOrchestratorKernel, IReadOnlyCollection<GoalId>>? persistCriticalDispatchStart = null,
         Func<GoalId, TaskId, InterruptedDispatchStateRead>? readCurrentInterruptedDispatchState = null,
         bool runAcceptanceAttemptsInCurrentProcess = false,
-        Action<GoalSnapshot>? recordDurableGoalBaseline = null)
+        Action<GoalSnapshot>? recordDurableGoalBaseline = null,
+        GoalWorktreeCleanupHooks? cleanupHooks = null)
     {
         var dir = workspace.ExecutionDirectory;
         _executionDirectory = dir;
@@ -272,6 +274,7 @@ internal sealed partial class ConductorDriver
         var eventWriter = new GoalLifecycleEventWriter(workspace.GoalLifecycleEventsDirectory);
         _cohortKernel = kernel;
         _cohortWorkspace = workspace;
+        _cohortCleanupHooks = cleanupHooks ?? GoalWorktreeCleanupHooks.Default;
         _cohortAcceptanceVerifier = acceptanceVerifier;
         _cohortEventWriter = eventWriter;
         var dispatchRunner = new BackgroundDispatchRunner();
@@ -953,7 +956,11 @@ internal sealed partial class ConductorDriver
         _cleanup = goal =>
         {
             GoalOperationJournal.Begin(dir, goal, "conductor:cleanup", "Deferred goal cleanup scheduled for terminal sweep.");
-            var cleanupBackoff = GoalWorktrees.RecordGoalCleanupNeeded(dir, goal.Id, "remove:conductor-deferred");
+            var cleanupBackoff = GoalWorktrees.RecordGoalCleanupNeeded(
+                dir,
+                goal.Id,
+                "remove:conductor-deferred",
+                _cohortCleanupHooks);
             var path = GoalWorktrees.WorktreePath(dir, goal.Id);
             var message = cleanupBackoff is null
                 ? "Workspace cleanup deferred to terminal sweep."
@@ -3632,7 +3639,8 @@ internal sealed partial class ConductorDriver
             integration = GoalWorktrees.CreateAcceptanceCohortWorkspace(
                 _cohortWorkspace.ExecutionDirectory,
                 selection.Members[0].MainRevision,
-                bindings);
+                bindings,
+                _cohortCleanupHooks);
         }
         catch (AcceptanceCohortMaterializationException ex)
         {
@@ -4062,7 +4070,8 @@ internal sealed partial class ConductorDriver
             using var partition = GoalWorktrees.CreateAcceptancePartitionWorkspace(
                 workspace.ExecutionDirectory,
                 identity.ObservedMainRevision,
-                member);
+                member,
+                _cohortCleanupHooks);
             treeRevision = partition.TreeRevision;
             partitionManifest = verifier.ComputeEffectivePlanIdentity(
                 partition.Path,
