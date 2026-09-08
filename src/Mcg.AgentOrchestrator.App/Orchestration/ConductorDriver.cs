@@ -4508,7 +4508,8 @@ internal sealed partial class ConductorDriver
 
         var currentCorrelationKey =
             CleanBaselineRedCorrelationKeyPrefix + (mainHeadSha?.Trim().ToLowerInvariant() ?? "unknown");
-        var activeCorrelationKey = receipt.Attestation == CleanBaselineAttestation.AttestedRed
+        var activeCorrelationKey = receipt.Attestation is
+            CleanBaselineAttestation.AttestedRed or CleanBaselineAttestation.ObservedRedCorrelation
             ? currentCorrelationKey
             : null;
         if (activeCorrelationKey is not null)

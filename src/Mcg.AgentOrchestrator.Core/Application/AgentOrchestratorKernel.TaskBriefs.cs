@@ -929,12 +929,21 @@ public sealed partial class AgentOrchestratorKernel
                 ? $"- {check}"
                 : $"- {check} [{FormatAcceptanceFailureOrigin(attribution.Origin)}: {attribution.Evidence}]";
         }));
-        if (failure.CheckAttributions is { Count: > 0 } attributions &&
+        var attributions = failure.CheckAttributions;
+        if (attributions is { Count: > 0 } &&
             failure.FailedChecks.All(check => attributions.Any(item =>
                 item.CheckName.Equals(check, StringComparison.Ordinal) &&
-                item.Origin == AcceptanceFailureOrigin.Inherited)))
+                item.Origin == AcceptanceFailureOrigin.Inherited &&
+                item.Cause != AcceptanceFailureCause.NotClassified)))
         {
             lines.Add("Do NOT attempt to fix these; they are not attributable to your diff. Report them and address only the introduced/unattributed checks.");
+        }
+        else if (attributions is { Count: > 0 } && failure.FailedChecks.Any(check => attributions.Any(item =>
+                     item.CheckName.Equals(check, StringComparison.Ordinal) &&
+                     item.Origin == AcceptanceFailureOrigin.Unattributed &&
+                     item.Evidence.Contains("observed", StringComparison.OrdinalIgnoreCase))))
+        {
+            lines.Add("Observed candidate correlation is not proof of origin. Report it and request baseline/run evidence; do not assume it is introduced or inherited or make a blind fix.");
         }
 
         lines.AddRange(BuildStructuredFailureReceiptLines(

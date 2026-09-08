@@ -107,8 +107,8 @@ public sealed partial class ConductorDriverTestsAcceptanceCoordination
         Assert.Equal("candidate-a", classified.BranchHeadSha);
     }
 
-    [Xunit.Fact(DisplayName = "ConductorDriver_real_baseline_attribution_consumes_typed_acceptance_receipt")]
-    public void ConductorDriverRealBaselineAttributionConsumesTypedAcceptanceReceipt()
+    [Xunit.Fact(DisplayName = "ConductorDriver_observed_candidate_correlation_keeps_origin_unattributed")]
+    public void ConductorDriverObservedCandidateCorrelationKeepsOriginUnattributed()
     {
         var current = GoalId.New();
         var first = GoalId.New();
@@ -157,15 +157,16 @@ public sealed partial class ConductorDriverTestsAcceptanceCoordination
                 BaselineAttestation: CleanTestBaseline.FormatFailureAttestation(baseline)));
 
         var attribution = Assert.Single(classified.CheckAttributions!);
-        Assert.Equal(AcceptanceFailureOrigin.Inherited, attribution.Origin);
+        Assert.Equal(AcceptanceFailureOrigin.Unattributed, attribution.Origin);
         Assert.Equal(AcceptanceFailureCause.EnvironmentalApparatus, attribution.Cause);
         Assert.Equal(failedCheck.Name, failedCheck.FailureCauseEvidence?.CheckName);
         Assert.Equal(
             AcceptanceFailureClassifications.GateEnvironmentInterference,
             failedCheck.FailureCauseEvidence?.SourceClassification);
         Assert.Equal(
-            AcceptanceFailureClassifications.InheritedBaselineApparatus,
+            AcceptanceFailureClassifications.GateEnvironmentInterference,
             Assert.Single(classified.RequiredUnmetCriteria).FailureClassification);
+        Assert.True(ConductorDriver.IsEnvironmentalApparatusAcceptanceRun(classified));
     }
 
     [Xunit.Fact(DisplayName = "ConductorDriver_all_inherited_red_without_typed_cause_stays_unclassified")]

@@ -7,6 +7,8 @@ internal enum CleanBaselineAttestation
 {
     AttestedGreen,
     AttestedRed,
+    ObservedGreenCandidatePass,
+    ObservedRedCorrelation,
     Unattested
 }
 
@@ -24,7 +26,8 @@ internal sealed record CleanTestBaselineEvidence(
     DateTimeOffset At,
     string? MainHeadSha,
     string? AcceptanceOutcome,
-    IReadOnlyList<string>? FailedCheckNames);
+    IReadOnlyList<string>? FailedCheckNames,
+    string? BranchHeadSha = null);
 
 internal static class CleanTestBaseline
 {
@@ -77,14 +80,27 @@ internal static class CleanTestBaseline
                 .Select(item => item.GoalId)
                 .Distinct()
                 .Count();
+            var correlatedEvidence = failed
+                .Where(item => (item.FailedCheckNames ?? [])
+                    .Any(check => sharedChecks.Contains(check.Trim(), StringComparer.Ordinal)))
+                .ToArray();
+            var sameKnownCandidateLineage = correlatedEvidence.Length > 0 &&
+                correlatedEvidence.All(item => !string.IsNullOrWhiteSpace(item.BranchHeadSha)) &&
+                correlatedEvidence
+                    .Select(item => NormalizeSha(item.BranchHeadSha))
+                    .Distinct(StringComparer.OrdinalIgnoreCase)
+                    .Count() == 1;
+            var lineageDetail = sameKnownCandidateLineage
+                ? "the same candidate lineage"
+                : "candidate runs with incomplete lineage identity";
             return new CleanTestBaselineReceipt(
                 normalizedMain,
                 NormalizeSha(mergeBaseSha),
-                CleanBaselineAttestation.AttestedRed,
+                CleanBaselineAttestation.ObservedRedCorrelation,
                 source.GoalId.Value,
                 source.At,
                 sharedChecks,
-                $"{sharedChecks.Length} identical check(s) failed across {sourceGoalCount} goals");
+                $"observed {sharedChecks.Length} shared check label(s) across {sourceGoalCount} goals from {lineageDetail}; candidate journals do not record an executed baseline, matching failure signature, runtime, policy, or selection");
         }
 
         var green = matching
@@ -96,11 +112,11 @@ internal static class CleanTestBaseline
             return new CleanTestBaselineReceipt(
                 normalizedMain,
                 NormalizeSha(mergeBaseSha),
-                CleanBaselineAttestation.AttestedGreen,
+                CleanBaselineAttestation.ObservedGreenCandidatePass,
                 green.GoalId.Value,
                 green.At,
                 [],
-                $"integrated acceptance passed for goal {Short(green.GoalId.Value)}");
+                $"observed candidate acceptance pass for goal {Short(green.GoalId.Value)}; a candidate pass does not attest the baseline at main {Short(normalizedMain)}");
         }
 
         return Unattested(normalizedMain, mergeBaseSha);
@@ -146,7 +162,7 @@ internal static class CleanTestBaseline
                 var causeEvidence = ResolveCauseEvidence(check, failedCheckReceipts);
                 if (receipt.SharedFailingChecks.Contains(check, StringComparer.Ordinal))
                 {
-                    var inheritedFrom = evidence
+                    var correlatedWith = evidence
                         .Where(item => item.GoalId != currentGoal)
                         .Where(item =>
                             ShaEquals(item.MainHeadSha, normalizedMain) &&
@@ -154,16 +170,14 @@ internal static class CleanTestBaseline
                             (item.FailedCheckNames ?? []).Contains(check, StringComparer.Ordinal))
                         .OrderByDescending(item => item.At)
                         .FirstOrDefault();
-                    if (inheritedFrom is not null)
-                    {
-                        return new AcceptanceCheckAttribution(
-                            check,
-                            AcceptanceFailureOrigin.Inherited,
-                            CombineEvidence(
-                                $"also failed for goal {Short(inheritedFrom.GoalId.Value)} at main {Short(normalizedMain)}",
-                                causeEvidence),
-                            causeEvidence?.Cause ?? AcceptanceFailureCause.NotClassified);
-                    }
+                    var observedCorrelation = correlatedWith is null
+                        ? receipt.Evidence
+                        : $"observed matching candidate check label for goal {Short(correlatedWith.GoalId.Value)} at main {Short(normalizedMain)}; this correlation does not prove failure origin";
+                    return new AcceptanceCheckAttribution(
+                        check,
+                        AcceptanceFailureOrigin.Unattributed,
+                        CombineEvidence(observedCorrelation, causeEvidence),
+                        causeEvidence?.Cause ?? AcceptanceFailureCause.NotClassified);
                 }
 
                 return receipt.Attestation == CleanBaselineAttestation.AttestedGreen
@@ -175,7 +189,11 @@ internal static class CleanTestBaseline
                     : new AcceptanceCheckAttribution(
                         check,
                         AcceptanceFailureOrigin.Unattributed,
-                        CombineEvidence($"no baseline evidence at main {Short(normalizedMain)}", causeEvidence),
+                        CombineEvidence(
+                            receipt.Attestation == CleanBaselineAttestation.ObservedGreenCandidatePass
+                                ? $"observed candidate pass does not attest baseline health at main {Short(normalizedMain)}"
+                                : $"no authoritative baseline evidence at main {Short(normalizedMain)}",
+                            causeEvidence),
                         causeEvidence?.Cause ?? AcceptanceFailureCause.NotClassified);
             })
             .ToArray();
@@ -243,6 +261,8 @@ internal static class CleanTestBaseline
         {
             CleanBaselineAttestation.AttestedGreen => "attested-green",
             CleanBaselineAttestation.AttestedRed => "attested-red",
+            CleanBaselineAttestation.ObservedGreenCandidatePass => "observed-green-candidate-pass",
+            CleanBaselineAttestation.ObservedRedCorrelation => "observed-red-correlation",
             _ => "unattested"
         };
 
@@ -266,7 +286,8 @@ internal static class CleanTestBaseline
                 entry.At,
                 entry.MainHeadSha,
                 entry.AcceptanceOutcome,
-                entry.FailedCheckNames)))
+                entry.FailedCheckNames,
+                entry.BranchHeadSha)))
             .ToArray();
 
     private sealed record FailedCheckEvidence(GoalId GoalId, DateTimeOffset At, string CheckName);

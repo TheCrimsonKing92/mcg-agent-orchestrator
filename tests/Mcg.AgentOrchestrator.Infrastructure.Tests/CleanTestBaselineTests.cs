@@ -134,7 +134,7 @@ public sealed class CleanTestBaselineTests
     }
 
     [Xunit.Fact]
-    public void ResolveGreenMainAttributesCandidateFailureAsIntroduced()
+    public void ResolveCandidatePassRetainsOnlyObservedGreenEvidence()
     {
         var current = GoalId.New();
         var prior = GoalId.New();
@@ -145,12 +145,13 @@ public sealed class CleanTestBaselineTests
         var attribution = Assert.Single(CleanTestBaseline.Attribute(
             receipt, ["core tests"], journals, current, "main-a"));
 
-        Assert.Equal(CleanBaselineAttestation.AttestedGreen, receipt.Attestation);
-        Assert.Equal(AcceptanceFailureOrigin.Introduced, attribution.Origin);
+        Assert.Equal(CleanBaselineAttestation.ObservedGreenCandidatePass, receipt.Attestation);
+        Assert.Equal(AcceptanceFailureOrigin.Unattributed, attribution.Origin);
+        Assert.Contains("does not attest", attribution.Evidence, StringComparison.Ordinal);
     }
 
     [Xunit.Fact]
-    public void ResolveTwoGoalsSharingFailureAttributesAsInherited()
+    public void ResolveTwoGoalsSharingFailureRetainsOnlyObservedCorrelation()
     {
         var current = GoalId.New();
         var first = GoalId.New();
@@ -163,9 +164,9 @@ public sealed class CleanTestBaselineTests
         var attribution = Assert.Single(CleanTestBaseline.Attribute(
             receipt, ["infrastructure tests"], journals, current, "main-a"));
 
-        Assert.Equal(CleanBaselineAttestation.AttestedRed, receipt.Attestation);
+        Assert.Equal(CleanBaselineAttestation.ObservedRedCorrelation, receipt.Attestation);
         Assert.Equal(["infrastructure tests"], receipt.SharedFailingChecks);
-        Assert.Equal(AcceptanceFailureOrigin.Inherited, attribution.Origin);
+        Assert.Equal(AcceptanceFailureOrigin.Unattributed, attribution.Origin);
         Assert.Equal(AcceptanceFailureCause.NotClassified, attribution.Cause);
         Assert.True(
             attribution.Evidence.Contains(first.Value[..8], StringComparison.OrdinalIgnoreCase) ||
@@ -202,6 +203,7 @@ public sealed class CleanTestBaselineTests
         Assert.Equal(
             AcceptanceFailureCause.EnvironmentalApparatus,
             attribution.Cause);
+        Assert.Equal(AcceptanceFailureOrigin.Unattributed, attribution.Origin);
         Assert.Contains("git child receipt", attribution.Evidence, StringComparison.Ordinal);
     }
 
@@ -521,9 +523,46 @@ public sealed class CleanTestBaselineTests
         var attribution = Assert.Single(CleanTestBaseline.Attribute(
             receipt, ["core tests"], journals, current, "main-a"));
 
-        Assert.Equal(CleanBaselineAttestation.AttestedRed, receipt.Attestation);
+        Assert.Equal(CleanBaselineAttestation.ObservedRedCorrelation, receipt.Attestation);
         Assert.Equal(["core tests"], receipt.SharedFailingChecks);
-        Assert.Equal(AcceptanceFailureOrigin.Inherited, attribution.Origin);
+        Assert.Equal(AcceptanceFailureOrigin.Unattributed, attribution.Origin);
+    }
+
+    [Xunit.Fact]
+    public void ResolveRepeatedCandidateLineageRemainsObservedAndUnattributed()
+    {
+        var current = GoalId.New();
+        var first = GoalId.New();
+        var second = GoalId.New();
+        var journals = Journals(
+            (first, Entry(first, "main-a", "failed", ["core tests"], "candidate-a")),
+            (second, Entry(second, "main-a", "failed", ["core tests"], "candidate-a")));
+
+        var receipt = CleanTestBaseline.Resolve(journals, current, "main-a", null);
+        var attribution = Assert.Single(CleanTestBaseline.Attribute(
+            receipt, ["core tests"], journals, current, "main-a"));
+
+        Assert.Equal(CleanBaselineAttestation.ObservedRedCorrelation, receipt.Attestation);
+        Assert.Equal(AcceptanceFailureOrigin.Unattributed, attribution.Origin);
+        Assert.Contains("same candidate lineage", receipt.Evidence, StringComparison.Ordinal);
+    }
+
+    [Xunit.Fact]
+    public void ResolveLegacyOrInconclusiveEvidenceRemainsUnattested()
+    {
+        var current = GoalId.New();
+        var legacy = GoalId.New();
+        var inconclusive = GoalId.New();
+        var journals = Journals(
+            (legacy, Entry(legacy, "main-a", "unknown", ["core tests"])),
+            (inconclusive, Entry(inconclusive, "main-a", "failed", null)));
+
+        var receipt = CleanTestBaseline.Resolve(journals, current, "main-a", null);
+        var attribution = Assert.Single(CleanTestBaseline.Attribute(
+            receipt, ["core tests"], journals, current, "main-a"));
+
+        Assert.Equal(CleanBaselineAttestation.Unattested, receipt.Attestation);
+        Assert.Equal(AcceptanceFailureOrigin.Unattributed, attribution.Origin);
     }
 
     [Xunit.Fact]
@@ -578,6 +617,7 @@ public sealed class CleanTestBaselineTests
 
             var acceptance = Assert.Single(journal.Entries.Where(entry => entry.AcceptanceOutcome == "failed"));
             Assert.Equal(["core tests"], acceptance.FailedCheckNames);
+            Assert.Equal("branch-a", acceptance.BranchHeadSha);
             var baseline = Assert.Single(journal.LatestByOperation.Where(entry =>
                 entry.Operation == "conductor:clean-baseline"));
             Assert.Equal("main-a", baseline.MainHeadSha);
@@ -587,6 +627,7 @@ public sealed class CleanTestBaselineTests
             Assert.Equal(goal.Id, evidence.GoalId);
             Assert.Equal("failed", evidence.AcceptanceOutcome);
             Assert.Equal(["core tests"], evidence.FailedCheckNames);
+            Assert.Equal("branch-a", evidence.BranchHeadSha);
             Assert.Empty(GoalOperationJournal.ReadAcceptanceEvidenceForMain(root, "main-b"));
             Assert.Empty(GoalOperationJournal.ReadAcceptanceEvidenceForMain(root, "   "));
         }
@@ -608,7 +649,7 @@ public sealed class CleanTestBaselineTests
             var red = new CleanTestBaselineReceipt(
                 "main-a",
                 null,
-                CleanBaselineAttestation.AttestedRed,
+                CleanBaselineAttestation.ObservedRedCorrelation,
                 goal.Id.Value,
                 DateTimeOffset.UtcNow,
                 ["core tests"],
@@ -616,7 +657,7 @@ public sealed class CleanTestBaselineTests
             var green = new CleanTestBaselineReceipt(
                 "main-b",
                 null,
-                CleanBaselineAttestation.AttestedGreen,
+                CleanBaselineAttestation.ObservedGreenCandidatePass,
                 goal.Id.Value,
                 DateTimeOffset.UtcNow,
                 [],
@@ -658,7 +699,8 @@ public sealed class CleanTestBaselineTests
         GoalId goalId,
         string mainSha,
         string outcome,
-        IReadOnlyList<string>? failedChecks = null) =>
+        IReadOnlyList<string>? failedChecks = null,
+        string? branchHeadSha = null) =>
         new(
             Guid.NewGuid().ToString("N"),
             goalId,
@@ -666,6 +708,7 @@ public sealed class CleanTestBaselineTests
             outcome == "passed" ? GoalOperationStatus.Completed : GoalOperationStatus.Failed,
             DateTimeOffset.UtcNow,
             "receipt",
+            BranchHeadSha: branchHeadSha,
             MainHeadSha: mainSha,
             AcceptanceOutcome: outcome,
             FailedCheckNames: failedChecks);

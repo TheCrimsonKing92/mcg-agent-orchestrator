@@ -1074,8 +1074,65 @@ public sealed class TaskBriefTests
     Assert.Contains("- inherited check [inherited:", brief, StringComparison.Ordinal);
     Assert.Contains("- introduced check [introduced:", brief, StringComparison.Ordinal);
     Assert.Contains("- unknown check [unattributed:", brief, StringComparison.Ordinal);
-    Assert.DoesNotContain("Do NOT attempt to fix these", brief, StringComparison.Ordinal);
-}
+        Assert.DoesNotContain("Do NOT attempt to fix these", brief, StringComparison.Ordinal);
+    }
+
+    [Xunit.Fact(DisplayName = "BuildTaskBrief_observed_correlation_requests_evidence_without_not_attributable_instruction")]
+    public void BuildTaskBriefObservedCorrelationRequestsEvidenceWithoutNotAttributableInstruction()
+    {
+        var clock = new FakeClock();
+        var kernel = new AgentOrchestratorKernel(clock);
+        var developer = new TaskSpec(TaskId.New(), "Fix acceptance failure.", AgentRole.Developer);
+        var goal = kernel.CreateGoal("Recover observed acceptance failure", [developer]);
+        kernel.ActivateGoal(goal.Id, DefaultAgents());
+        kernel.RecordAcceptanceFailure(
+            goal.Id,
+            ["infrastructure tests"],
+            "branch123456",
+            "main123456",
+            [
+                new AcceptanceCheckAttribution(
+                    "infrastructure tests",
+                    AcceptanceFailureOrigin.Unattributed,
+                    "observed matching candidate check label; this correlation does not prove failure origin")
+            ],
+            "observed-red-correlation; candidate journals do not attest main");
+        clock.Advance();
+        kernel.RetryTask(goal.Id, developer.Id, "Recover with evidence.");
+
+        var brief = kernel.BuildTaskBrief(goal.Id, developer.Id).Content;
+
+        Assert.Contains("Observed candidate correlation is not proof of origin", brief, StringComparison.Ordinal);
+        Assert.DoesNotContain("Do NOT attempt to fix these", brief, StringComparison.Ordinal);
+    }
+
+    [Xunit.Fact(DisplayName = "BuildTaskBrief_legacy_unclassified_inherited_record_does_not_suppress_fix")]
+    public void BuildTaskBriefLegacyUnclassifiedInheritedRecordDoesNotSuppressFix()
+    {
+        var clock = new FakeClock();
+        var kernel = new AgentOrchestratorKernel(clock);
+        var developer = new TaskSpec(TaskId.New(), "Fix acceptance failure.", AgentRole.Developer);
+        var goal = kernel.CreateGoal("Recover legacy attributed acceptance failure", [developer]);
+        kernel.ActivateGoal(goal.Id, DefaultAgents());
+        kernel.RecordAcceptanceFailure(
+            goal.Id,
+            ["infrastructure tests"],
+            "branch123456",
+            "main123456",
+            [
+                new AcceptanceCheckAttribution(
+                    "infrastructure tests",
+                    AcceptanceFailureOrigin.Inherited,
+                    "also failed for goal deadbeef at main main1234")
+            ],
+            "attested-red; historical observed correlation");
+        clock.Advance();
+        kernel.RetryTask(goal.Id, developer.Id, "Recover with current evidence.");
+
+        var brief = kernel.BuildTaskBrief(goal.Id, developer.Id).Content;
+
+        Assert.DoesNotContain("Do NOT attempt to fix these", brief, StringComparison.Ordinal);
+    }
 
     [Xunit.Fact(DisplayName = "BuildTaskBrief_operator_retry_includes_last_failed_verification_receipt")]
     public void BuildTaskBriefOperatorRetryIncludesLastFailedVerificationReceipt()
