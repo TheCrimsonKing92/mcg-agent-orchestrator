@@ -35,11 +35,30 @@ public sealed class ModelExecutionTests
         Assert.Equal(WorkTaskStatus.Failed, task.Status);
         Assert.NotNull(task.LastVerification);
         Assert.False(task.LastVerification.AssignedScopeComplete);
+        Assert.StartsWith("api-run OpenAI/", task.LastVerification.Command, StringComparison.Ordinal);
         Assert.Contains(
             goal.Timeline,
             evt => evt.TaskId == task.Id &&
                 evt.Kind == ProgressKind.TaskFailed &&
                 evt.Message.Contains("assigned implementation scope incomplete", StringComparison.Ordinal));
+        Assert.Contains(
+            goal.Timeline,
+            evt => evt.TaskId == task.Id &&
+                evt.Kind == ProgressKind.TaskNote &&
+                evt.Message.Contains("rule=incomplete-scope-declaration", StringComparison.Ordinal));
+        Assert.DoesNotContain(goal.Timeline, evt => evt.TaskId == task.Id && evt.Kind == ProgressKind.TaskCompleted);
+
+        var restored = AgentOrchestratorKernel.FromSnapshot(kernel.ExportSnapshot(), clock);
+        var restoredTask = restored.GetTask(goal.Id, task.Id);
+        Assert.False(restoredTask.LastVerification!.AssignedScopeComplete);
+
+        var request = restored.RequestHumanInput(goal.Id, task.Id, "Should the incomplete implementation be accepted?");
+        restored.SubmitHumanInput(request.Id, "No; continue the assigned implementation.");
+
+        Assert.Equal(WorkTaskStatus.Assigned, restoredTask.Status);
+        Assert.DoesNotContain(
+            restored.GetGoal(goal.Id).Timeline,
+            evt => evt.TaskId == task.Id && evt.Kind == ProgressKind.TaskCompleted);
     }
 
     [Xunit.Fact(DisplayName = "ExecuteAssignedTask_calls_assigned_model_provider")]

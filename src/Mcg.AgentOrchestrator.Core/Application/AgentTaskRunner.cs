@@ -242,14 +242,32 @@ public sealed class AgentTaskRunner
 
         if (hasCompleteWorkerResult &&
             task.RequiredRole == AgentRole.Developer &&
-            WorkerResultBlockers.TryGetAssignedScopeComplete(output, out var assignedScopeComplete, out _) &&
-            !assignedScopeComplete)
+            WorkerResultBlockers.TryGetAssignedScopeComplete(output, out var assignedScopeComplete, out _))
         {
-            _kernel.ReportTaskProgress(
+            _kernel.RecordTaskVerification(
                 goal.Id,
                 task.Id,
-                WorkTaskStatus.Failed,
-                "Developer declared the assigned implementation scope incomplete; bounded revision or clarification is required before completion.");
+                new TaskVerificationRecord(
+                    $"api-run {resolvedModel.ProviderName}/{resolvedModel.ModelName}",
+                    string.Empty,
+                    0,
+                    output,
+                    string.Empty,
+                    execution.CompletedAt,
+                    WorkerResultPresent: true,
+                    FullStandardOutput: output,
+                    FullStandardError: string.Empty,
+                    AssignedScopeComplete: assignedScopeComplete));
+
+            if (!assignedScopeComplete)
+            {
+                _kernel.ReportTaskProgress(
+                    goal.Id,
+                    task.Id,
+                    WorkTaskStatus.Failed,
+                    "Developer declared the assigned implementation scope incomplete; bounded revision or clarification is required before completion.");
+            }
+
             return new AgentTaskRunResult(goal, task, execution);
         }
 
