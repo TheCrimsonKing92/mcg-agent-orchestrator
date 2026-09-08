@@ -148,3 +148,49 @@ The last three controls use frozen test assembly SHA-256
 with source/PDB identities recorded separately. The prior full removal-family run predates
 the diagnostic correction and tightened assertion; it is not presented as a full run of the
 final binary. No acceptance critical-path improvement or complete goal acceptance is claimed.
+
+## Operator continuation: acceptance launch configuration
+
+The acceptance coordinator now accepts an explicit `DotnetBuildStorageRoot` for its real
+attempt and cohort acquisitions. The existing transient owned-process launch request carries
+that setting to process-start construction. Both internal transport hops require a root argument;
+callers must deliberately pass either the setting or null. The persisted attempt record is
+unchanged. A storage setting selects execution configuration; it does not assert that a lease
+was acquired or grant cleanup authority through on-disk attempt data.
+
+An explicit setting is installed in the owned child's environment after the hermetic scrub.
+The child uses its existing build and cleanup default-resolution paths within that namespace.
+An unconfigured coordinator does not capture an ambient override into the launch request:
+null preserves the existing parent operation defaults and child environment scrub. The launch
+control checks this with an ambient collection root that differs from the explicit root.
+
+The coordinator's complete build-manager call census is:
+
+| Call | Namespace source |
+| --- | --- |
+| `AcquireFirstAvailableStableSlotExecutionLock` | Explicit coordinator setting, or existing default when null |
+| `CreateAttempt` | The same coordinator setting, or existing default when null |
+| `TryAcquireFirstAvailableBuildPermit` | The resulting environment's execution-lock directory; sibling permits preserve that directory |
+| Timeout/count constants and environment-key name | No storage operation |
+
+There is one production launch-request construction and one production start-info invocation;
+both pass the explicit setting. The two pre-existing driver fallback coordinators inject a
+null-lease delegate and do not configure a storage override; their behavior is unchanged.
+No production caller outside the manager uses its stable-slot availability/owner query APIs.
+CLI abandonment/rotation and heartbeat/load-context projections are separate remaining audit
+surfaces; this increment does not claim that every diagnostic projection supports an explicit
+in-process namespace.
+
+The two acceptance-contention controls now own temporary storage values without changing the
+parent environment, preserving blocked/re-gate and concurrent complete-partition assertions.
+The real owned-start success and legacy fast-exit negative fixtures also use explicit launch
+configuration, with the normalized root used for construction, assertions and teardown. Their
+manual child-root overwrite is removed. Parent isolation still comes from the existing
+`DotnetBuildSlots` collection fixture; removing that fixture is outside this increment.
+
+The final frozen test assembly is
+`01F893E17C73425C9FF2394210E4813877AE33385CA6E38A8E2E31AF256E1ACB`.
+Receipts are `cleanup-launch-required-*` under the driving repository's operator-evidence
+directory. Independent Opus review prompted preservation of default scrubbing, use of the
+existing transient launch carrier, explicit internal arguments and normalized fixture paths.
+Full collection isolation, integrated acceptance and measured gate improvement remain open.

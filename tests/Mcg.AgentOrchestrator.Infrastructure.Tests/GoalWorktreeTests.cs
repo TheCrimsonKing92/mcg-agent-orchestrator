@@ -2628,10 +2628,102 @@ public sealed class GoalWorktreeIsolatedDotnetTests : GoalWorktreeTestBase
 [Xunit.Collection(TestCollections.DotnetBuildSlots)]
 public sealed class GoalWorktreeAcceptanceContentionTests : GoalWorktreeTestBase
 {
+    [Xunit.Theory]
+    [Xunit.InlineData(true)]
+    [Xunit.InlineData(false)]
+    public void AcceptanceAttemptUsesOwnedStorageForRealPermitWait(bool useOwningRoot)
+    {
+        using var owner = new TemporaryBuildStorageRoot();
+        using var other = new TemporaryBuildStorageRoot();
+        var parentRoot = Environment.GetEnvironmentVariable(DotnetBuildEnvironmentManager.IsolatedRootOverrideVariable);
+        var attemptRoot = Path.Combine(Path.GetTempPath(), $"mcg-owned-acceptance-{Guid.NewGuid():N}");
+        var kernel = new AgentOrchestratorKernel();
+        var goal = CreateCompletedGoal(kernel, "Verify the owned acceptance permit namespace.", Environment.CurrentDirectory);
+        var candidate = ConductorParallelAcceptanceCandidate.Create(goal, 0, ["src/Owned.cs"], "branch", "main");
+        try
+        {
+            using var first = DotnetBuildEnvironmentManager.AcquireLeaseExecutionLock(
+                DotnetBuildEnvironmentManager.CreateStableSlotAttempt(0, storageRoot: owner.StorageRoot), TimeSpan.Zero);
+            using var second = DotnetBuildEnvironmentManager.AcquireLeaseExecutionLock(
+                DotnetBuildEnvironmentManager.CreateStableSlotAttempt(1, storageRoot: owner.StorageRoot), TimeSpan.Zero);
+            _ = DotnetBuildEnvironmentManager.CreateStableSlotAttempt(0, storageRoot: other.StorageRoot);
+            var selectedRoot = useOwningRoot ? owner.StorageRoot : other.StorageRoot;
+            var coordinator = new ConductorParallelAcceptanceAttemptCoordinator(
+                attemptRoot, runInline: true, buildPermitBusyTimeout: TimeSpan.Zero, buildStorageRoot: selectedRoot);
+            var decision = coordinator.Evaluate(candidate, ConductorAutonomyPolicy.Conservative,
+                (item, _, _, _) => ConductorParallelAcceptanceRunResult.Accepted(
+                    item, AcceptanceVerificationSummary.PassedWithNoUnmetCriteria));
+            Assert.True(Directory.Exists(DotnetBuildEnvironmentManager.GoalRoot(goal.Id, selectedRoot)));
+            void AssertBlocked() => Assert.Equal(ConductorParallelAcceptanceAttemptOutcome.BlockedBuildSlot, decision.Attempt.Outcome);
+            if (useOwningRoot)
+            {
+                AssertBlocked();
+                Assert.Equal(AcceptanceBuildPermitWaitReason.AllPermitsBusy, decision.Attempt.BuildPermitWaitReason);
+            }
+            else
+            {
+                Assert.Equal(ConductorParallelAcceptanceAttemptOutcome.Passed, decision.Attempt.Outcome);
+                Assert.Throws<Xunit.Sdk.EqualException>(AssertBlocked);
+            }
+            Assert.Equal(parentRoot, Environment.GetEnvironmentVariable(DotnetBuildEnvironmentManager.IsolatedRootOverrideVariable));
+        }
+        finally
+        {
+            if (Directory.Exists(attemptRoot)) Directory.Delete(attemptRoot, recursive: true);
+        }
+    }
+
+    [Xunit.Fact]
+    public void AcceptanceLaunchCarriesExplicitStorageWithoutChangingAttemptMetadata()
+    {
+        using var owner = new TemporaryBuildStorageRoot();
+        var parentRoot = Environment.GetEnvironmentVariable(DotnetBuildEnvironmentManager.IsolatedRootOverrideVariable);
+        Assert.False(string.IsNullOrWhiteSpace(parentRoot));
+        Assert.NotEqual(parentRoot, owner.StorageRoot.RootPath);
+        var attemptRoot = Path.Combine(Path.GetTempPath(), $"mcg-storage-transport-{Guid.NewGuid():N}");
+        var kernel = new AgentOrchestratorKernel();
+        var goal = CreateCompletedGoal(kernel, "Preserve acceptance storage across owned child launch.", Environment.CurrentDirectory);
+        var candidate = ConductorParallelAcceptanceCandidate.Create(goal, 0, ["src/Owned.cs"], "branch", "main");
+        try
+        {
+            ConductorParallelAcceptanceOwnedProcessLaunch? observedLaunch = null;
+            var coordinator = new ConductorParallelAcceptanceAttemptCoordinator(
+                attemptRoot, executionDirectory: attemptRoot, buildStorageRoot: owner.StorageRoot,
+                isProcessAlive: _ => true,
+                launchOwnedProcess: launch =>
+                {
+                    observedLaunch = launch;
+                    return new ConductorParallelAcceptanceOwnedProcessLaunchResult(Environment.ProcessId);
+                });
+            var decision = coordinator.Evaluate(candidate, ConductorAutonomyPolicy.Conservative,
+                (item, _, _, _) => ConductorParallelAcceptanceRunResult.Accepted(
+                    item, AcceptanceVerificationSummary.PassedWithNoUnmetCriteria));
+            var options = new JsonSerializerOptions(JsonSerializerDefaults.Web);
+            var json = File.ReadAllText(decision.Attempt.MetadataPath);
+            var restored = Assert.IsType<ConductorParallelAcceptanceAttempt>(
+                JsonSerializer.Deserialize<ConductorParallelAcceptanceAttempt>(json, options));
+            Assert.NotNull(observedLaunch);
+            Assert.Equal(owner.StorageRoot, observedLaunch.BuildStorageRoot);
+            Assert.False(System.Text.Json.Nodes.JsonNode.Parse(json)!.AsObject().ContainsKey("buildStorageRoot"));
+            var startInfo = ConductorParallelAcceptanceAttemptCoordinator.BuildOwnedProcessStartInfo(
+                restored, observedLaunch.BuildStorageRoot, "dotnet", [typeof(GoalWorktreeAcceptanceContentionTests).Assembly.Location]);
+            Assert.Equal(owner.StorageRoot.RootPath, startInfo.Environment[DotnetBuildEnvironmentManager.IsolatedRootOverrideVariable]);
+            Assert.Equal(parentRoot, Environment.GetEnvironmentVariable(DotnetBuildEnvironmentManager.IsolatedRootOverrideVariable));
+
+            var legacyStart = ConductorParallelAcceptanceAttemptCoordinator.BuildOwnedProcessStartInfo(
+                restored, null, "dotnet", [typeof(GoalWorktreeAcceptanceContentionTests).Assembly.Location]);
+            Assert.False(legacyStart.Environment.ContainsKey(DotnetBuildEnvironmentManager.IsolatedRootOverrideVariable));
+        }
+        finally
+        {
+            if (Directory.Exists(attemptRoot)) Directory.Delete(attemptRoot, recursive: true);
+        }
+    }
+
     [Xunit.Fact(DisplayName = "GoalWorktree_acceptance_contention_reconciles_blocked_attempt_before_clean_regate")]
     public void GoalWorktreeAcceptanceContentionReconcilesBlockedAttemptBeforeCleanRegate()
     {
-        using var isolatedRoot = new IsolatedDotnetRootScope();
+        using var isolatedRoot = new TemporaryBuildStorageRoot();
         var kernel = new AgentOrchestratorKernel();
         var goal = CreateCompletedGoal(kernel, "Verify clean acceptance re-gate.", Environment.CurrentDirectory);
         var candidate = ConductorParallelAcceptanceCandidate.Create(
@@ -2640,7 +2732,7 @@ public sealed class GoalWorktreeAcceptanceContentionTests : GoalWorktreeTestBase
             ["src/Regate.cs"],
             "branch",
             "main");
-        var environment = DotnetBuildEnvironmentManager.CreateAttempt(goal.Id, "contention-incumbent");
+        var environment = DotnetBuildEnvironmentManager.CreateAttempt(goal.Id, "contention-incumbent", storageRoot: isolatedRoot.StorageRoot);
         var buildPermit = environment.BuildPermitIndex
             ?? throw new InvalidOperationException("Goal build permit was not assigned.");
         var attemptRoot = Path.Combine(Path.GetTempPath(), $"mcg-regate-{Guid.NewGuid():N}");
@@ -2654,14 +2746,14 @@ public sealed class GoalWorktreeAcceptanceContentionTests : GoalWorktreeTestBase
                 foreach (var permitIndex in Enumerable.Range(0, DotnetBuildEnvironmentManager.BuildConcurrencySlotCount))
                 {
                     permitLeases.Add(DotnetBuildEnvironmentManager.AcquireLeaseExecutionLock(
-                        DotnetBuildEnvironmentManager.CreateStableSlotAttempt(permitIndex),
+                        DotnetBuildEnvironmentManager.CreateStableSlotAttempt(permitIndex, storageRoot: isolatedRoot.StorageRoot),
                         TimeSpan.Zero));
                 }
 
                 var blockedCoordinator = new ConductorParallelAcceptanceAttemptCoordinator(
                     attemptRoot,
                     runInline: true,
-                    buildPermitBusyTimeout: TimeSpan.Zero);
+                    buildPermitBusyTimeout: TimeSpan.Zero, buildStorageRoot: isolatedRoot.StorageRoot);
                 blocked = blockedCoordinator.Evaluate(
                     candidate,
                     ConductorAutonomyPolicy.Conservative,
@@ -2687,7 +2779,7 @@ public sealed class GoalWorktreeAcceptanceContentionTests : GoalWorktreeTestBase
 
             var regateCoordinator = new ConductorParallelAcceptanceAttemptCoordinator(
                 attemptRoot,
-                runInline: true);
+                runInline: true, buildStorageRoot: isolatedRoot.StorageRoot);
             var regated = regateCoordinator.Evaluate(
                 candidate,
                 ConductorAutonomyPolicy.Conservative,
@@ -2703,7 +2795,7 @@ public sealed class GoalWorktreeAcceptanceContentionTests : GoalWorktreeTestBase
                 ConductorParallelAcceptanceAttemptOutcome.Passed,
                 regated.Attempt.Outcome);
             Xunit.Assert.Equal(GoalStatus.Verified, goal.Status);
-            Xunit.Assert.True(DotnetBuildEnvironmentManager.IsStableSlotExecutionLeaseAvailable(buildPermit));
+            Xunit.Assert.True(DotnetBuildEnvironmentManager.IsStableSlotExecutionLeaseAvailable(buildPermit, storageRoot: isolatedRoot.StorageRoot));
         }
         finally
         {
@@ -2717,13 +2809,13 @@ public sealed class GoalWorktreeAcceptanceContentionTests : GoalWorktreeTestBase
     [Xunit.Fact(DisplayName = "GoalWorktree_concurrent_verified_goals_produce_complete_isolated_partition_sets")]
     public async Task GoalWorktreeConcurrentVerifiedGoalsProduceCompleteIsolatedPartitionSets()
     {
-        using var isolatedRoot = new IsolatedDotnetRootScope();
+        using var isolatedRoot = new TemporaryBuildStorageRoot();
         var kernel = new AgentOrchestratorKernel();
         var goalA = CreateCompletedGoal(kernel, "Verify isolated acceptance A.", Environment.CurrentDirectory);
-        var goalAPermit = DotnetBuildEnvironmentManager.CreateAttempt(goalA.Id, "permit-probe").BuildPermitIndex
+        var goalAPermit = DotnetBuildEnvironmentManager.CreateAttempt(goalA.Id, "permit-probe", storageRoot: isolatedRoot.StorageRoot).BuildPermitIndex
             ?? throw new InvalidOperationException("Goal A build permit was not assigned.");
         var goalB = CreateCompletedGoal(kernel, "Verify isolated acceptance B.", Environment.CurrentDirectory);
-        var goalBPermit = DotnetBuildEnvironmentManager.CreateAttempt(goalB.Id, "permit-probe").BuildPermitIndex
+        var goalBPermit = DotnetBuildEnvironmentManager.CreateAttempt(goalB.Id, "permit-probe", storageRoot: isolatedRoot.StorageRoot).BuildPermitIndex
             ?? throw new InvalidOperationException("Goal B build permit was not assigned.");
         for (var attempt = 0;
              attempt < 128 && goalAPermit == goalBPermit;
@@ -2733,7 +2825,7 @@ public sealed class GoalWorktreeAcceptanceContentionTests : GoalWorktreeTestBase
                 kernel,
                 $"Verify isolated acceptance B retry {attempt}.",
                 Environment.CurrentDirectory);
-            goalBPermit = DotnetBuildEnvironmentManager.CreateAttempt(goalB.Id, "permit-probe").BuildPermitIndex
+            goalBPermit = DotnetBuildEnvironmentManager.CreateAttempt(goalB.Id, "permit-probe", storageRoot: isolatedRoot.StorageRoot).BuildPermitIndex
                 ?? throw new InvalidOperationException("Goal B build permit was not assigned.");
         }
 
@@ -2754,7 +2846,7 @@ public sealed class GoalWorktreeAcceptanceContentionTests : GoalWorktreeTestBase
         var bothExecuting = new CountdownEvent(2);
         var release = new ManualResetEventSlim();
         var coverageByGoal = new ConcurrentDictionary<string, TestCoverageInvariantResult>();
-        var coordinator = new ConductorParallelAcceptanceAttemptCoordinator(attemptRoot, runInline: true);
+        var coordinator = new ConductorParallelAcceptanceAttemptCoordinator(attemptRoot, runInline: true, buildStorageRoot: isolatedRoot.StorageRoot);
 
         try
         {
@@ -2804,8 +2896,8 @@ public sealed class GoalWorktreeAcceptanceContentionTests : GoalWorktreeTestBase
                 GoalStatus.Verified,
                 goalA.Status);
             Xunit.Assert.Equal(GoalStatus.Verified, goalB.Status);
-            Xunit.Assert.True(DotnetBuildEnvironmentManager.IsStableSlotExecutionLeaseAvailable(goalAPermit));
-            Xunit.Assert.True(DotnetBuildEnvironmentManager.IsStableSlotExecutionLeaseAvailable(goalBPermit));
+            Xunit.Assert.True(DotnetBuildEnvironmentManager.IsStableSlotExecutionLeaseAvailable(goalAPermit, storageRoot: isolatedRoot.StorageRoot));
+            Xunit.Assert.True(DotnetBuildEnvironmentManager.IsStableSlotExecutionLeaseAvailable(goalBPermit, storageRoot: isolatedRoot.StorageRoot));
         }
         finally
         {
@@ -2836,23 +2928,23 @@ public sealed class GoalWorktreeAcceptanceContentionTests : GoalWorktreeTestBase
         return path;
     }
 
-    private sealed class IsolatedDotnetRootScope : IDisposable
+    private sealed class TemporaryBuildStorageRoot : IDisposable
     {
-        private readonly string? _previous;
+        public DotnetBuildStorageRoot StorageRoot { get; }
         private readonly string _root;
 
-        public IsolatedDotnetRootScope()
+        public TemporaryBuildStorageRoot()
         {
             _root = Path.Combine(
                 Path.GetTempPath(),
                 $"{DotnetBuildEnvironmentManager.RootDirectoryName}-goal-contention-{Guid.NewGuid():N}");
-            _previous = Environment.GetEnvironmentVariable(DotnetBuildEnvironmentManager.IsolatedRootOverrideVariable);
-            Environment.SetEnvironmentVariable(DotnetBuildEnvironmentManager.IsolatedRootOverrideVariable, _root);
+            StorageRoot = new DotnetBuildStorageRoot(_root);
+
         }
 
         public void Dispose()
         {
-            Environment.SetEnvironmentVariable(DotnetBuildEnvironmentManager.IsolatedRootOverrideVariable, _previous);
+
             if (Directory.Exists(_root))
             {
                 Directory.Delete(_root, recursive: true);

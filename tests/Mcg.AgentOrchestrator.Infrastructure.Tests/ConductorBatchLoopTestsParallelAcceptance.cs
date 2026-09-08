@@ -1838,6 +1838,7 @@ public sealed partial class ConductorBatchLoopTestsParallelAcceptance : Conducto
 
             var startInfo = ConductorParallelAcceptanceAttemptCoordinator.BuildOwnedProcessStartInfo(
                 attempt,
+                null,
                 "dotnet",
                 ["Mcg.AgentOrchestrator.App.dll"]);
 
@@ -3251,7 +3252,8 @@ public sealed partial class ConductorBatchLoopTestsParallelAcceptance : Conducto
             return;
         }
 
-        using var isolatedDotnetRoot = IsolatedDotnetRootScope();
+        var isolatedDotnetRoot = new DotnetBuildStorageRoot(
+            Path.Combine(Path.GetTempPath(), $"mcg-owned-start-build-{Guid.NewGuid():N}"));
         var root = CreateSeededGitRepository();
         var attemptRoot = CreateTempDirectory("mcg-conductor-owned-start");
         var kernel = new AgentOrchestratorKernel();
@@ -3298,10 +3300,11 @@ public sealed partial class ConductorBatchLoopTestsParallelAcceptance : Conducto
             var coordinator = new ConductorParallelAcceptanceAttemptCoordinator(
                 attemptRoot,
                 executionDirectory: root,
+                buildStorageRoot: isolatedDotnetRoot,
                 launchOwnedProcess: launch => LaunchExternalAcceptanceProcess(
                     launch,
                     useLegacyStartThenAttach,
-                    isolatedDotnetRoot.Value,
+                    isolatedDotnetRoot.RootPath,
                     externalProcesses));
             var candidate = ConductorParallelAcceptanceCandidate.Create(
                 goal,
@@ -3391,6 +3394,7 @@ public sealed partial class ConductorBatchLoopTestsParallelAcceptance : Conducto
             }
             TryDeleteDirectory(attemptRoot);
             TryDeleteDirectory(root);
+            TryDeleteDirectory(isolatedDotnetRoot.RootPath);
         }
     }
 
@@ -3404,12 +3408,10 @@ public sealed partial class ConductorBatchLoopTestsParallelAcceptance : Conducto
         Assert.True(File.Exists(appAssembly), $"App assembly was not available at {appAssembly}");
         var startInfo = ConductorParallelAcceptanceAttemptCoordinator.BuildOwnedProcessStartInfo(
             launch.Attempt,
+            launch.BuildStorageRoot,
             "dotnet",
             [appAssembly]);
-        // The production child is intentionally hermetic and scrubs MCG_* variables. This real-process
-        // fixture must reapply its test-only lease root so unrelated stable-slot users cannot preempt the
-        // owned-start seam that the test is meant to exercise.
-        startInfo.Environment[DotnetBuildEnvironmentManager.IsolatedRootOverrideVariable] = isolatedDotnetRoot;
+        // Exercise production transport of the explicit setting after the hermetic scrub.
         Assert.Equal(
             isolatedDotnetRoot,
             startInfo.Environment[DotnetBuildEnvironmentManager.IsolatedRootOverrideVariable]);
