@@ -33,6 +33,8 @@ public sealed class ModelExecutionTests
         await runner.RunAsync(goal.Id, task.Id);
 
         Assert.Equal(WorkTaskStatus.Failed, task.Status);
+        Assert.NotNull(task.LastVerification);
+        Assert.False(task.LastVerification.AssignedScopeComplete);
         Assert.Contains(
             goal.Timeline,
             evt => evt.TaskId == task.Id &&
