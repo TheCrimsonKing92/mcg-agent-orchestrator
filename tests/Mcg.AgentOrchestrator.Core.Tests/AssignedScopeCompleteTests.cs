@@ -168,6 +168,7 @@ public sealed class AssignedScopeCompleteTests
     [Xunit.Theory]
     [Xunit.InlineData(true, true, "pass - focused verification passed", "incomplete-scope-declaration")]
     [Xunit.InlineData(true, false, "pass - focused verification passed", "incomplete-scope-declaration")]
+    [Xunit.InlineData(false, true, "pass - focused verification passed", "incomplete-scope-declaration")]
     [Xunit.InlineData(false, false, "pass - focused verification passed", "incomplete-scope-declaration")]
     public void ExplicitIncompleteDeveloperScopeCannotReachAnySuccessPath(
         bool hasCommittedChanges,
