@@ -313,7 +313,7 @@ internal static partial class CliCommandHandlers
             }
 
             case "cleanup-status":
-                PrintCleanupStatus(context.Workspace.ExecutionDirectory, context.CleanupHooks);
+                PrintCleanupStatus(context.Workspace.ExecutionDirectory, context.CleanupContext.Hooks);
                 return false;
 
             case "attention":

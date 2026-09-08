@@ -152,7 +152,7 @@ public bool RunInjectedAcceptanceVerifierInCurrentProcess { get; init; }
     public WorktreeCleanupContext CleanupContext { get; init; } =
         new(GoalWorktreeCleanupOptions.Default);
 
-    public GoalWorktreeCleanupHooks CleanupHooks { get; init; } = GoalWorktreeCleanupHooks.Default;
+    public GoalWorktreeCleanupHooks CleanupHooks => CleanupContext.Hooks;
 
 public IGoalLifecycleEventWriter EventWriter { get; init; } = NullGoalLifecycleEventWriter.Instance;
 

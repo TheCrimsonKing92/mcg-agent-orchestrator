@@ -3115,7 +3115,7 @@ public sealed class CliCommandTestsGoalLifecycleCommandsCreation : CliCommandTes
             WorkerProfileCatalog.Default(),
             goal)
         {
-            CleanupHooks = hooks
+            CleanupContext = new WorktreeCleanupContext(hooks)
         };
 
         var output = CaptureConsole(() => CliCommandHandlers.Execute(["cleanup-status"], context));

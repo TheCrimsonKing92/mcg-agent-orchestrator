@@ -1060,6 +1060,7 @@ private static bool? TryExecuteGoalCommand(string command, IReadOnlyList<string>
                 context.Kernel,
                 context.Workspace.ExecutionDirectory,
                 context.CurrentGoal.Id,
+                cleanupHooks: context.CleanupContext.Hooks,
                 orchestratorDirectory: context.Workspace.OrchestratorDirectory);
             ConsoleViews.PrintTerminalGoalSweep(readinessSweep);
             TerminalGoalSweepAttention.Surface(context.Kernel, readinessSweep, context.Workspace.OrchestratorDirectory, context.CurrentGoal.Id);
@@ -1078,6 +1079,7 @@ private static bool? TryExecuteGoalCommand(string command, IReadOnlyList<string>
                 context.Kernel,
                 context.Workspace.ExecutionDirectory,
                 context.CurrentGoal.Id,
+                cleanupHooks: context.CleanupContext.Hooks,
                 orchestratorDirectory: context.Workspace.OrchestratorDirectory);
             ConsoleViews.PrintTerminalGoalSweep(recoverySweep);
             TerminalGoalSweepAttention.Surface(context.Kernel, recoverySweep, context.Workspace.OrchestratorDirectory, context.CurrentGoal.Id);
@@ -1312,6 +1314,7 @@ private static bool? TryExecuteGoalCommand(string command, IReadOnlyList<string>
                 context.Kernel,
                 context.Workspace.ExecutionDirectory,
                 context.CurrentGoal.Id,
+                cleanupHooks: context.CleanupContext.Hooks,
                 orchestratorDirectory: context.Workspace.OrchestratorDirectory);
             ConsoleViews.PrintTerminalGoalSweep(nextSweep);
             TerminalGoalSweepAttention.Surface(context.Kernel, nextSweep, context.Workspace.OrchestratorDirectory, context.CurrentGoal.Id);
@@ -1718,6 +1721,7 @@ private static bool? TryExecuteGoalCommand(string command, IReadOnlyList<string>
                         loopKernel,
                         context.Workspace.ExecutionDirectory,
                         cache: terminalSweepCache,
+                        cleanupHooks: context.CleanupContext.Hooks,
                         orchestratorDirectory: context.Workspace.OrchestratorDirectory);
                     var remediation = reconcileSweepCoordinator.Process(terminalSweep);
                     if (remediation.RemedySucceeded)
@@ -1726,6 +1730,7 @@ private static bool? TryExecuteGoalCommand(string command, IReadOnlyList<string>
                             loopKernel,
                             context.Workspace.ExecutionDirectory,
                             cache: terminalSweepCache,
+                            cleanupHooks: context.CleanupContext.Hooks,
                             orchestratorDirectory: context.Workspace.OrchestratorDirectory);
                         terminalSweep = remediatedSweep.PreserveTerminalizationsFrom(terminalSweep);
                     }

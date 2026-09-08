@@ -12,8 +12,13 @@ internal sealed class WorktreeCleanupContext
     public WorktreeCleanupContext(
         GoalWorktreeCleanupOptions options,
         string? attentionStoreDirectory = null)
+        : this(GoalWorktreeCleanupHooks.ForConfiguration(options, attentionStoreDirectory))
     {
-        Hooks = GoalWorktreeCleanupHooks.ForConfiguration(options, attentionStoreDirectory);
+    }
+
+    internal WorktreeCleanupContext(GoalWorktreeCleanupHooks hooks)
+    {
+        Hooks = hooks ?? throw new ArgumentNullException(nameof(hooks));
         Scheduler = new GoalWorktreeOrphanSweepScheduler(Hooks);
     }
 

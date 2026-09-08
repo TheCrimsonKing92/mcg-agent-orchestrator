@@ -89,8 +89,7 @@ public static bool ExecuteCommand(
         GoalMarkLandedElapsedMilliseconds = goalMarkLandedElapsedMilliseconds,
         StableSlotAcquisitionTimeout = stableSlotAcquisitionTimeout,
         StableSlotSelector = stableSlotSelector,
-        CleanupContext = operationCleanupContext,
-        CleanupHooks = operationCleanupContext.Hooks
+        CleanupContext = operationCleanupContext
     };
     bool changed;
     try
