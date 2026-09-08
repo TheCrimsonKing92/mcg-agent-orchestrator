@@ -104,6 +104,56 @@ public sealed class AssignedScopeCompleteTests
     }
 
     [Xunit.Theory]
+    [Xunit.InlineData(null)]
+    [Xunit.InlineData(true)]
+    public void CompleteOrAbsentScopePreservesOperatorOwnedDeferredEvidence(bool? assignedScopeComplete)
+    {
+        var task = new TaskSpec(TaskId.New(), "Implement assigned scope", AgentRole.Developer);
+        var output = string.Join(
+            Environment.NewLine,
+            "WORKER_RESULT:",
+            "files: none",
+            "tests: deferred - acceptance gate owns the full suite",
+            "blockers: none",
+            "END_WORKER_RESULT");
+        var verification = new TaskVerificationRecord(
+            "test.exe", "C:\\repo", 0, output, string.Empty, DateTimeOffset.UtcNow,
+            WorkerResultPresent: true,
+            AssignedScopeComplete: assignedScopeComplete);
+
+        var outcome = DispatchFailureClassifier.Classify(task, verification);
+
+        Xunit.Assert.Equal(DispatchOutcomeKind.VerifiedSuccess, outcome.Kind);
+        Xunit.Assert.DoesNotContain("incomplete-scope-declaration", outcome.ClassifierReceipt, StringComparison.Ordinal);
+    }
+
+    [Xunit.Fact]
+    public void UnavailableFullOutputDoesNotPromoteAPreviewScopeDeclaration()
+    {
+        var task = new TaskSpec(TaskId.New(), "Implement assigned scope", AgentRole.Developer);
+        var output = string.Join(
+            Environment.NewLine,
+            "WORKER_RESULT:",
+            "files: src/Feature.cs",
+            "tests: pass - focused verification passed",
+            "blockers: none",
+            "assigned_scope_complete: false",
+            "END_WORKER_RESULT");
+        var verification = new TaskVerificationRecord(
+            "test.exe", "C:\\repo", 0, output, string.Empty, DateTimeOffset.UtcNow,
+            WorkerResultPresent: true,
+            HasCommittedChanges: true,
+            FullStandardOutputUnavailableReason: "full stdout was unavailable",
+            AssignedScopeComplete: null);
+
+        var outcome = DispatchFailureClassifier.Classify(task, verification);
+
+        Xunit.Assert.Null(verification.AuthoritativeStandardOutput);
+        Xunit.Assert.Equal(DispatchOutcomeKind.VerifiedSuccess, outcome.Kind);
+        Xunit.Assert.DoesNotContain("incomplete-scope-declaration", outcome.ClassifierReceipt, StringComparison.Ordinal);
+    }
+
+    [Xunit.Theory]
     [Xunit.InlineData(true, true, "pass - focused verification passed", "incomplete-scope-declaration")]
     [Xunit.InlineData(true, false, "pass - focused verification passed", "incomplete-scope-declaration")]
     [Xunit.InlineData(false, false, "pass - focused verification passed", "incomplete-scope-declaration")]

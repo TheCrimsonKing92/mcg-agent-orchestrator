@@ -414,6 +414,25 @@ public sealed class DispatchOutcomeClassifyTests
     }
 
     [Xunit.Fact]
+    public void Classify_ExplicitIncompleteScopeCannotUseVerifiedNoChangeRecovery()
+    {
+        const string baseCommit = "48422231916172e8d172a0cc0428d13d222c071c";
+        var verification = WorkerResultVerification(
+            1,
+            WorkerResultStdout("pass - focused verification completed", assignedScopeComplete: false),
+            standardError: VerifiedNoChangeDiagnostics(verificationRecognized: true));
+
+        var outcome = DispatchFailureClassifier.Classify(
+            RetryTaskWithBaseCommit(baseCommit),
+            verification);
+
+        Xunit.Assert.Equal(DispatchOutcomeKind.UnknownFailure, outcome.Kind);
+        Xunit.Assert.Equal(RecoveryRecommendation.AutoRetry, outcome.RecoveryRecommendation);
+        Xunit.Assert.Contains("rule=incomplete-scope-declaration", outcome.ClassifierReceipt, StringComparison.Ordinal);
+        Xunit.Assert.DoesNotContain("rule=verified-no-change-round", outcome.ClassifierReceipt, StringComparison.Ordinal);
+    }
+
+    [Xunit.Fact]
     public void Classify_OperatorRecoverWithoutRecognizedVerification_Fails()
     {
         var verification = WorkerResultVerification(

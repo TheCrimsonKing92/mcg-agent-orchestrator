@@ -74,6 +74,79 @@ public sealed class ChaosGateAssignedScopeIncompleteTests : ChaosGateTestBase
         Assert.NotNull(task.LastDispatch.ResultCommit);
     }
 
+    [Xunit.Fact(DisplayName = "AssignedScopeComplete_production_reconciliation_escalates_false_when_the_bounded_retry_budget_is_exhausted")]
+    public void ProductionReconciliationEscalatesFalseWhenBoundedRetryBudgetIsExhausted()
+    {
+        var root = CreateSeededRepo();
+        var output = RetainedPartialOutput()
+            .Replace("END_WORKER_RESULT", "assigned_scope_complete: false" + Environment.NewLine + "END_WORKER_RESULT", StringComparison.Ordinal);
+        var (kernel, goal, task, _) = CreateChaosDispatch(
+            root,
+            AgentRole.Developer,
+            output,
+            string.Empty,
+            mutateWorktree: worktree => CommitSourceFile(worktree, "src/Feature.cs", "// incomplete candidate"));
+        new BackgroundDispatchRunner(isStillRunning: _ => false)
+            .RefreshLatestProcess(kernel, goal.Id, task.Id);
+        var retryCalled = false;
+        string? escalation = null;
+        var driver = ConductorDriverTests.MakeDriver(
+            getFacts: _ => GoalLifecycleFacts.None,
+            retryTaskWithCause: (_, _, _, _, _) =>
+            {
+                retryCalled = true;
+                throw new InvalidOperationException("The exhausted incomplete-scope round must not retry.");
+            },
+            writeEscalation: (_, _, reason) => escalation = reason);
+
+        var result = driver.AdvanceOnce(
+            goal,
+            ConductorAutonomyPolicy.Permissive with { MaxCriterionRetries = 0 });
+
+        Assert.False(retryCalled);
+        Assert.IsType<ConductorAdvanceOutcome.Escalated>(result.Outcome);
+        Assert.Contains("exhausted bounded real-failure retries (0/0)", escalation!, StringComparison.Ordinal);
+        Assert.NotNull(task.LastDispatch!.ResultCommit);
+        Assert.Equal(WorkTaskStatus.Failed, task.Status);
+    }
+
+    [Xunit.Fact(DisplayName = "AssignedScopeComplete_true_still_requires_downstream_acceptance")]
+    public void ScopeCompleteTrueStillRequiresDownstreamAcceptance()
+    {
+        var root = CreateSeededRepo();
+        var output = RetainedPartialOutput()
+            .Replace("END_WORKER_RESULT", "assigned_scope_complete: true" + Environment.NewLine + "END_WORKER_RESULT", StringComparison.Ordinal);
+        var (kernel, goal, task, _) = CreateChaosDispatch(
+            root,
+            AgentRole.Developer,
+            output,
+            string.Empty,
+            mutateWorktree: worktree => CommitSourceFile(worktree, "src/Feature.cs", "// complete candidate"));
+        new BackgroundDispatchRunner(isStillRunning: _ => false)
+            .RefreshLatestProcess(kernel, goal.Id, task.Id);
+        var acceptanceCalled = false;
+        var landingCalled = false;
+        var driver = ConductorDriverTests.MakeDriver(
+            getFacts: _ => GoalLifecycleFacts.None,
+            runAcceptance: _ =>
+            {
+                acceptanceCalled = true;
+                return false;
+            },
+            land: _ =>
+            {
+                landingCalled = true;
+                throw new InvalidOperationException("Acceptance failure must prevent landing.");
+            });
+
+        var result = driver.AdvanceOnce(goal, ConductorAutonomyPolicy.Permissive);
+
+        Assert.True(acceptanceCalled);
+        Assert.False(landingCalled);
+        Assert.True(result.Outcome is ConductorAdvanceOutcome.Executed or ConductorAdvanceOutcome.Escalated);
+        Assert.True(task.LastVerification!.AssignedScopeComplete);
+    }
+
     [Xunit.Fact(DisplayName = "AssignedScopeComplete_production_reconciliation_commits_dirty_incomplete_work_before_bounded_revision")]
     public void ProductionReconciliationCommitsDirtyIncompleteWorkBeforeBoundedRevision()
     {
