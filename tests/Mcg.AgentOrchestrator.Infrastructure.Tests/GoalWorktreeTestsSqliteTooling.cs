@@ -1118,7 +1118,7 @@ public sealed partial class GoalWorktreeTestsSqliteTooling : GoalWorktreeTestBas
         }
         catch
         {
-            _ = GoalWorktrees.DeleteDirectory(appOutput);
+            _ = GoalWorktrees.DeleteDirectoryWithRetry(appOutput);
             throw;
         }
     }
@@ -1150,7 +1150,7 @@ public sealed partial class GoalWorktreeTestsSqliteTooling : GoalWorktreeTestBas
         {
             if (Directory.Exists(destination))
             {
-                _ = GoalWorktrees.DeleteDirectory(destination);
+                _ = GoalWorktrees.DeleteDirectoryWithRetry(destination);
             }
             throw;
         }
@@ -1239,7 +1239,7 @@ public sealed partial class GoalWorktreeTestsSqliteTooling : GoalWorktreeTestBas
         public void Dispose()
         {
             Assert.True(
-                GoalWorktrees.DeleteDirectory(Path),
+                GoalWorktrees.DeleteDirectoryWithRetry(Path),
                 $"Could not remove prepared App output directory: {Path}");
         }
     }
@@ -1666,7 +1666,7 @@ public sealed class GoalWorktreeTestsCleanupHookDelegates : GoalWorktreeTestBase
 
         try
         {
-            Assert.True(GoalWorktrees.DeleteDirectory(root));
+            Assert.True(GoalWorktrees.DeleteDirectoryWithRetry(root));
             Assert.False(Directory.Exists(root));
         }
         finally

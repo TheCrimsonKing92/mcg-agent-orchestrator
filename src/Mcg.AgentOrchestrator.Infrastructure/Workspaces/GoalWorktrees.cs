@@ -260,36 +260,4 @@ public static partial class GoalWorktrees
         ["dotnet", "VBCSCompiler", "MSBuild", "claude", "codex", "node", "powershell", "pwsh"];
     private static readonly TimeSpan BuildServerShutdownTimeout = TimeSpan.FromSeconds(10);
 
-    // Test-only compatibility seams. Production cleanup constructs and carries an immutable
-    // GoalWorktreeCleanupHooks instance; these fields are retained until each legacy test is
-    // migrated to that explicit instance.
-    internal static Action<string, int> BuildServerShutdown = DefaultBuildServerShutdown;
-    internal static ISandboxAclHelper SandboxAclHelper { get; set; } =
-        OperatingSystem.IsWindows() ? new WindowsSandboxAclHelper() : new NoOpSandboxAclHelper();
-    internal static Func<int, bool> TryKillRecordedProcess { get; set; } = DefaultTryKillRecordedProcess;
-    internal static Func<string, bool> DeleteDirectory { get; set; } = DeleteDirectoryWithRetry;
-    internal static Func<string, GoalWorktreeDeleteResult> DeleteDirectoryForCleanup { get; set; } = DeleteDirectoryWithReason;
-    internal static Func<string, int, string, bool, GitCli.GitResult> RunWorktreeRemove { get; set; } =
-        DefaultRunWorktreeRemove;
-    internal static Func<string, int, bool, GitCli.GitResult> RunWorktreePrune { get; set; } =
-        DefaultRunWorktreePrune;
-    internal static Func<string, IReadOnlyList<WorktreeLockHolder>> FindLockHoldersForCleanup { get; set; } =
-        path => FindLockHolders(path);
-    internal static Action<GoalWorktreeCleanupWarning> CleanupWarningSink { get; set; } = DefaultCleanupWarningSink;
-    internal static Func<long>? CleanupElapsedMilliseconds { get; set; }
-    internal static Func<DateTimeOffset> CleanupUtcNow { get; set; } = () => DateTimeOffset.UtcNow;
-    internal static TimeSpan CleanupBackoffDuration { get; set; } = TimeSpan.FromMinutes(30);
-    internal static TimeSpan CleanupBudgetExhaustedBackoffDuration { get; set; } = TimeSpan.FromMinutes(1);
-    public static GoalWorktreeCleanupOptions CleanupOptions { get; private set; } = GoalWorktreeCleanupOptions.Default;
-    internal static string? CleanupAttentionStoreDirectory { get; private set; }
-
-    internal static void ConfigureCleanup(
-        GoalWorktreeCleanupOptions options,
-        string? attentionStoreDirectory = null)
-    {
-        CleanupOptions = options.Validate();
-        CleanupAttentionStoreDirectory = string.IsNullOrWhiteSpace(attentionStoreDirectory)
-            ? null
-            : Path.GetFullPath(attentionStoreDirectory);
-    }
 }

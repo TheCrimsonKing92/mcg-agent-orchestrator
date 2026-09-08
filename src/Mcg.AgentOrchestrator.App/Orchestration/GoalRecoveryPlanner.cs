@@ -38,7 +38,8 @@ internal static class GoalRecoveryPlanner
         Goal goal,
         string executionDirectory,
         bool includeCleanupBackoff = true,
-        Func<ProcessCommandLineSnapshot>? processSnapshotFactory = null)
+        Func<ProcessCommandLineSnapshot>? processSnapshotFactory = null,
+        GoalWorktreeCleanupHooks? cleanupHooks = null)
     {
         var worktree = GoalWorktrees.TryResolve(executionDirectory, goal.Id);
         GitCli.WorktreeStatusInspection? worktreeInspection = worktree is null
@@ -61,7 +62,7 @@ internal static class GoalRecoveryPlanner
         var operationJournal = GoalOperationJournal.Read(executionDirectory, goal.Id);
         var buildLease = DotnetBuildEnvironmentManager.InspectGoalLease(goal.Id);
         var cleanupBackoff = includeCleanupBackoff
-            ? GoalWorktrees.TryGetCleanupBackoff(executionDirectory, goal.Id)
+            ? GoalWorktrees.TryGetCleanupBackoff(executionDirectory, goal.Id, cleanupHooks)
             : null;
         var pendingInput = kernel.BuildHumanInputWorklist(goal.Id).OpenCount;
         var findings = new List<GoalRecoveryTaskFinding>();

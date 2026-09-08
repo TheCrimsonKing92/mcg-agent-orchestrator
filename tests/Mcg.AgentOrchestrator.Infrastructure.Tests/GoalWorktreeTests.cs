@@ -34,6 +34,65 @@ public abstract class GoalWorktreeTestBase
     private protected static string SeedRepositoryProcessRootPath =>
         TempRootJanitor.BuildOwnedRootPath(SeedRepositoryBaseRootPath, Environment.ProcessId);
 
+    private protected GoalWorktreeCleanupHooksBuilder CleanupHooks { get; } = new();
+
+    private protected GoalWorktreeRemoveResult RemoveWorktree(
+        string executionDirectory,
+        GoalId goalId,
+        AgentOrchestratorKernel? kernel = null) =>
+        GoalWorktrees.Remove(executionDirectory, goalId, kernel, CleanupHooks.Build());
+
+    private protected GoalWorktreeRemoveResult RemoveWorktree(
+        string executionDirectory,
+        GoalId goalId,
+        AgentOrchestratorKernel? kernel,
+        int gitTimeoutMilliseconds,
+        bool forceTerminalCleanup = false) =>
+        GoalWorktrees.Remove(
+            executionDirectory,
+            goalId,
+            kernel,
+            gitTimeoutMilliseconds,
+            forceTerminalCleanup,
+            CleanupHooks.Build());
+
+    private protected GoalWorktreeRemoveResult RemoveTerminalWorktree(
+        string executionDirectory,
+        GoalId goalId,
+        AgentOrchestratorKernel kernel) =>
+        GoalWorktrees.RemoveTerminal(executionDirectory, goalId, kernel, CleanupHooks.Build());
+
+    private protected GoalWorktreeRemoveResult RemoveTerminalWorktree(
+        string executionDirectory,
+        GoalId goalId,
+        AgentOrchestratorKernel kernel,
+        bool hasRegisteredWorktree,
+        bool hasBranch) =>
+        GoalWorktrees.RemoveTerminal(
+            executionDirectory,
+            goalId,
+            kernel,
+            hasRegisteredWorktree,
+            hasBranch,
+            CleanupHooks.Build());
+
+    private protected GoalWorktreeSweepResult SweepOrphanedWorktrees(
+        string executionDirectory,
+        AgentOrchestratorKernel? kernel = null) =>
+        GoalWorktrees.SweepOrphanedWorktrees(executionDirectory, kernel, CleanupHooks.Build());
+
+    private protected GoalOwnedEphemeralSweepResult SweepOwnedEphemeralDirectories(
+        string executionDirectory,
+        GoalId goalId,
+        AgentOrchestratorKernel? kernel = null) =>
+        GoalWorktrees.SweepOwnedEphemeralDirectories(executionDirectory, goalId, kernel, CleanupHooks.Build());
+
+    private protected GoalWorktreeCleanupBackoff? TryGetCleanupBackoff(string path) =>
+        GoalWorktrees.TryGetCleanupBackoff(path, CleanupHooks.Build());
+
+    private protected GoalWorktreeCleanupBackoff? TryGetCleanupBackoff(string executionDirectory, GoalId goalId) =>
+        GoalWorktrees.TryGetCleanupBackoff(executionDirectory, goalId, CleanupHooks.Build());
+
     private protected static AgentDefinition EchoDeveloper() => new(
         new AgentId("echo-developer"),
         "Echo Developer",
@@ -477,7 +536,7 @@ public abstract class GoalWorktreeTestBase
             int totalTokens) { }
     }
 
-    private protected sealed class CapturingGoalWorktreeService : ICliGoalWorktreeService
+    private protected sealed class CapturingGoalWorktreeService(GoalWorktreeCleanupHooks cleanupHooks) : ICliGoalWorktreeService
     {
         public int? RemoveTimeoutMilliseconds { get; private set; }
 
@@ -486,7 +545,7 @@ public abstract class GoalWorktreeTestBase
 
         public string BranchName(GoalId goalId) => GoalWorktrees.BranchName(goalId);
 
-        public string Ensure(string executionDirectory, GoalId goalId) => GoalWorktrees.Ensure(executionDirectory, goalId);
+        public string Ensure(string executionDirectory, GoalId goalId) => GoalWorktrees.Ensure(executionDirectory, goalId, cleanupHooks);
 
         public string? TryResolve(string executionDirectory, GoalId goalId) => GoalWorktrees.TryResolve(executionDirectory, goalId);
 
@@ -503,8 +562,17 @@ public abstract class GoalWorktreeTestBase
             }
 
             return gitTimeoutMilliseconds is { } timeout
-                ? GoalWorktrees.Remove(executionDirectory, goalId, kernel, timeout)
-                : GoalWorktrees.Remove(executionDirectory, goalId, kernel);
+                ? GoalWorktrees.Remove(
+                    executionDirectory,
+                    goalId,
+                    kernel,
+                    timeout,
+                    hooks: cleanupHooks)
+                : GoalWorktrees.Remove(
+                    executionDirectory,
+                    goalId,
+                    kernel,
+                    cleanupHooks);
         }
 
         public GoalWorktreeRemoveResult RemoveTerminalNow(
@@ -513,7 +581,11 @@ public abstract class GoalWorktreeTestBase
             AgentOrchestratorKernel kernel) =>
             RemoveTerminalNowOverride is not null
                 ? RemoveTerminalNowOverride(executionDirectory, goalId, kernel)
-                : GoalWorktrees.RemoveTerminalNow(executionDirectory, goalId, kernel);
+                : GoalWorktrees.RemoveTerminalNow(
+                    executionDirectory,
+                    goalId,
+                    kernel,
+                    cleanupHooks);
 
         public bool IsGitWorkTree(string executionDirectory) => GoalWorktrees.IsGitWorkTree(executionDirectory);
 
@@ -1137,6 +1209,94 @@ public sealed class GoalWorktreeReducedFixtureTests : GoalWorktreeTestBase
             DeleteDirectory(firstRepo);
             DeleteDirectory(secondRepo);
         }
+    }
+}
+
+internal sealed class GoalWorktreeCleanupHooksBuilder
+{
+    private readonly GoalWorktreeCleanupHooks defaults = new();
+
+    public Action<string, int> BuildServerShutdown { get; set; }
+    public ISandboxAclHelper SandboxAclHelper { get; set; }
+    public Func<int, bool> TryKillRecordedProcess { get; set; }
+    public Func<string, bool> DeleteDirectory { get; set; }
+    public Func<string, GoalWorktreeDeleteResult> DeleteDirectoryForCleanup { get; set; }
+    public Func<string, int, string, bool, GitCli.GitResult> RunWorktreeRemove { get; set; }
+    public Func<string, int, bool, GitCli.GitResult> RunWorktreePrune { get; set; }
+    public Func<string, IReadOnlyList<WorktreeLockHolder>> FindLockHoldersForCleanup { get; set; }
+    public Action<GoalWorktreeCleanupWarning> CleanupWarningSink { get; set; }
+    private Func<Func<long>?> cleanupElapsedFactory;
+    public Func<long>? CleanupElapsedMilliseconds
+    {
+        get => cleanupElapsedFactory();
+        set => cleanupElapsedFactory = () => value;
+    }
+    public Func<DateTimeOffset> CleanupUtcNow { get; set; }
+    public TimeSpan CleanupBackoffDuration { get; set; }
+    public TimeSpan CleanupBudgetExhaustedBackoffDuration { get; set; }
+    public GoalWorktreeCleanupOptions CleanupOptions { get; set; }
+    public string? CleanupAttentionStoreDirectory { get; set; }
+
+    public GoalWorktreeCleanupHooksBuilder()
+    {
+        BuildServerShutdown = defaults.BuildServerShutdown;
+        SandboxAclHelper = new DelegateSandboxAclHelper(defaults.ResetSandboxAcl);
+        TryKillRecordedProcess = defaults.TryKillRecordedProcess;
+        DeleteDirectory = defaults.DeleteDirectory;
+        DeleteDirectoryForCleanup = defaults.DeleteDirectoryForCleanup;
+        RunWorktreeRemove = defaults.RunWorktreeRemove;
+        RunWorktreePrune = defaults.RunWorktreePrune;
+        FindLockHoldersForCleanup = defaults.FindLockHoldersForCleanup;
+        CleanupWarningSink = defaults.CleanupWarningSink;
+        cleanupElapsedFactory = defaults.CleanupElapsedMilliseconds;
+        CleanupUtcNow = defaults.CleanupUtcNow;
+        CleanupBackoffDuration = defaults.CleanupBackoffDuration();
+        CleanupBudgetExhaustedBackoffDuration = defaults.CleanupBudgetExhaustedBackoffDuration();
+        CleanupOptions = defaults.CleanupOptions();
+        CleanupAttentionStoreDirectory = defaults.CleanupAttentionStoreDirectory();
+    }
+
+    public GoalWorktreeCleanupHooks Build()
+    {
+        // The builder belongs to one test. Each operation receives a value snapshot,
+        // including callbacks whose return values must not follow later arrangement.
+        var acl = SandboxAclHelper;
+        var elapsedFactory = cleanupElapsedFactory;
+        var backoff = CleanupBackoffDuration;
+        var budgetBackoff = CleanupBudgetExhaustedBackoffDuration;
+        var options = CleanupOptions;
+        var attentionDirectory = CleanupAttentionStoreDirectory;
+        return defaults with
+        {
+            BuildServerShutdown = BuildServerShutdown,
+            ResetSandboxAcl = acl.ResetSandboxAcl,
+            TryKillRecordedProcess = TryKillRecordedProcess,
+            DeleteDirectory = DeleteDirectory,
+            DeleteDirectoryForCleanup = DeleteDirectoryForCleanup,
+            RunWorktreeRemove = RunWorktreeRemove,
+            RunWorktreePrune = RunWorktreePrune,
+            FindLockHoldersForCleanup = FindLockHoldersForCleanup,
+            CleanupWarningSink = CleanupWarningSink,
+            CleanupElapsedMilliseconds = elapsedFactory,
+            CleanupUtcNow = CleanupUtcNow,
+            CleanupBackoffDuration = () => backoff,
+            CleanupBudgetExhaustedBackoffDuration = () => budgetBackoff,
+            CleanupOptions = () => options,
+            CleanupAttentionStoreDirectory = () => attentionDirectory
+        };
+    }
+
+    public void ConfigureCleanup(GoalWorktreeCleanupOptions options, string? attentionStoreDirectory = null)
+    {
+        CleanupOptions = options.Validate();
+        CleanupAttentionStoreDirectory = string.IsNullOrWhiteSpace(attentionStoreDirectory)
+            ? null
+            : Path.GetFullPath(attentionStoreDirectory);
+    }
+
+    private sealed class DelegateSandboxAclHelper(Action<string, int> reset) : ISandboxAclHelper
+    {
+        public void ResetSandboxAcl(string worktreePath, int timeoutMilliseconds) => reset(worktreePath, timeoutMilliseconds);
     }
 }
 

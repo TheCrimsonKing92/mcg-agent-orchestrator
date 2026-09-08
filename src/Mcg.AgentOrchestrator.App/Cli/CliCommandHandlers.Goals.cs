@@ -1084,7 +1084,9 @@ private static bool? TryExecuteGoalCommand(string command, IReadOnlyList<string>
             ConsoleViews.PrintTerminalGoalSweep(recoverySweep);
             TerminalGoalSweepAttention.Surface(context.Kernel, recoverySweep, context.Workspace.OrchestratorDirectory, context.CurrentGoal.Id);
             context.CurrentGoal = context.Kernel.GetGoal(context.CurrentGoal.Id);
-            ConsoleViews.PrintGoalRecoveryReport(GoalRecoveryPlanner.Build(context.Kernel, context.CurrentGoal, context.Workspace.ExecutionDirectory));
+            ConsoleViews.PrintGoalRecoveryReport(GoalRecoveryPlanner.Build(
+                context.Kernel, context.CurrentGoal, context.Workspace.ExecutionDirectory,
+                cleanupHooks: context.CleanupContext.Hooks));
             return recoverySweep.Changed;
 
         case "dogfood-eval":

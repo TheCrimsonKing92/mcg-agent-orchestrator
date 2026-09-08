@@ -18,8 +18,8 @@ public sealed class GoalWorktreeTestsOrphanEphemeralSweep : GoalWorktreeTestBase
     public void GoalWorktreesSweepDeletesOrphanedWorktreeDirectory()
     {
         var repo = CreateSeededRepository();
-        var originalAcl = GoalWorktrees.SandboxAclHelper;
-        var originalShutdown = GoalWorktrees.BuildServerShutdown;
+        var originalAcl = CleanupHooks.SandboxAclHelper;
+        var originalShutdown = CleanupHooks.BuildServerShutdown;
         try
         {
             var registeredPath = GoalWorktrees.Ensure(repo, GoalId.New());
@@ -27,10 +27,10 @@ public sealed class GoalWorktreeTestsOrphanEphemeralSweep : GoalWorktreeTestBase
             Directory.CreateDirectory(Path.Combine(orphanPath, ".mcg-sandbox"));
             File.WriteAllText(Path.Combine(orphanPath, ".mcg-sandbox", "leftover.txt"), "low-il residue");
             var acl = new RecordingSandboxAclHelper();
-            GoalWorktrees.SandboxAclHelper = acl;
-            GoalWorktrees.BuildServerShutdown = (_, _) => { };
+            CleanupHooks.SandboxAclHelper = acl;
+            CleanupHooks.BuildServerShutdown = (_, _) => { };
 
-            var result = GoalWorktrees.SweepOrphanedWorktrees(repo);
+            var result = SweepOrphanedWorktrees(repo);
 
             Assert.Equal(1, result.RemovedCount);
             Assert.Empty(result.LeftoverPaths);
@@ -40,8 +40,8 @@ public sealed class GoalWorktreeTestsOrphanEphemeralSweep : GoalWorktreeTestBase
         }
         finally
         {
-            GoalWorktrees.SandboxAclHelper = originalAcl;
-            GoalWorktrees.BuildServerShutdown = originalShutdown;
+            CleanupHooks.SandboxAclHelper = originalAcl;
+            CleanupHooks.BuildServerShutdown = originalShutdown;
             DeleteDirectory(repo);
         }
     }
@@ -50,7 +50,6 @@ public sealed class GoalWorktreeTestsOrphanEphemeralSweep : GoalWorktreeTestBase
     public void GoalWorktreesCleanupStatusContainsNonWalLegacyStateFailure()
     {
         var root = CreateTempDirectory();
-        var originalWarnings = GoalWorktrees.CleanupWarningSink;
         try
         {
             var orchestratorDirectory = Path.Combine(root, ".orchestrator");
@@ -66,9 +65,9 @@ public sealed class GoalWorktreeTestsOrphanEphemeralSweep : GoalWorktreeTestBase
             }
 
             var warnings = new List<GoalWorktreeCleanupWarning>();
-            GoalWorktrees.CleanupWarningSink = warnings.Add;
+            CleanupHooks.CleanupWarningSink = warnings.Add;
 
-            Assert.Empty(GoalWorktrees.ListCleanupDebt(root));
+            Assert.Empty(GoalWorktrees.ListCleanupDebt(root, CleanupHooks.Build()));
             Assert.Contains(
                 warnings,
                 warning =>
@@ -77,7 +76,6 @@ public sealed class GoalWorktreeTestsOrphanEphemeralSweep : GoalWorktreeTestBase
         }
         finally
         {
-            GoalWorktrees.CleanupWarningSink = originalWarnings;
             DeleteDirectory(root);
         }
     }
@@ -86,8 +84,8 @@ public sealed class GoalWorktreeTestsOrphanEphemeralSweep : GoalWorktreeTestBase
     public void GoalWorktreeOrphanSweepSchedulerSweepNowDeletesOrphanedWorktreeDirectory()
     {
         var repo = CreateSeededRepository();
-        var originalAcl = GoalWorktrees.SandboxAclHelper;
-        var originalShutdown = GoalWorktrees.BuildServerShutdown;
+        var originalAcl = CleanupHooks.SandboxAclHelper;
+        var originalShutdown = CleanupHooks.BuildServerShutdown;
         try
         {
             var registeredPath = GoalWorktrees.Ensure(repo, GoalId.New());
@@ -118,10 +116,10 @@ public sealed class GoalWorktreeTestsOrphanEphemeralSweep : GoalWorktreeTestBase
     public void ConductorCleanupRecordsCleanupNeededWithoutDeletingOnCriticalPath()
     {
         var repo = CreateSeededRepository();
-        var originalDelete = GoalWorktrees.DeleteDirectory;
-        var originalAcl = GoalWorktrees.SandboxAclHelper;
-        var originalShutdown = GoalWorktrees.BuildServerShutdown;
-        var originalLockHolders = GoalWorktrees.FindLockHoldersForCleanup;
+        var originalDelete = CleanupHooks.DeleteDirectory;
+        var originalAcl = CleanupHooks.SandboxAclHelper;
+        var originalShutdown = CleanupHooks.BuildServerShutdown;
+        var originalLockHolders = CleanupHooks.FindLockHoldersForCleanup;
         try
         {
             var kernel = new AgentOrchestratorKernel();
@@ -132,14 +130,6 @@ public sealed class GoalWorktreeTestsOrphanEphemeralSweep : GoalWorktreeTestBase
             GoalOperationJournal.Completed(repo, goal, "conductor:land", "landed");
             GoalOperationJournal.Completed(repo, goal, "conductor:record", "recorded");
 
-            var driver = new ConductorDriver(
-                kernel,
-                workspace,
-                FakeAcceptanceVerifier.Passed(),
-                AgentCatalog.Default().Agents,
-                WorkerProfileCatalog.Default(),
-                providers: new InMemoryModelProviderRegistry([]));
-
             // Simulate a previous incomplete git worktree removal: git metadata is gone, but
             // the directory is still present until the lock releases.
             File.Delete(Path.Combine(worktreePath, ".git"));
@@ -147,7 +137,7 @@ public sealed class GoalWorktreeTestsOrphanEphemeralSweep : GoalWorktreeTestBase
 
             var deleteAttempts = 0;
             var lockHolderProbes = 0;
-            GoalWorktrees.DeleteDirectory = path =>
+            CleanupHooks.DeleteDirectory = path =>
             {
                 deleteAttempts++;
                 if (deleteAttempts == 1)
@@ -158,25 +148,37 @@ public sealed class GoalWorktreeTestsOrphanEphemeralSweep : GoalWorktreeTestBase
                 Directory.Delete(path, recursive: true);
                 return true;
             };
-            GoalWorktrees.SandboxAclHelper = new NoOpSandboxAclHelper();
-            GoalWorktrees.BuildServerShutdown = (_, _) => { };
-            GoalWorktrees.FindLockHoldersForCleanup = _ => lockHolderProbes++ == 0
+            CleanupHooks.SandboxAclHelper = new NoOpSandboxAclHelper();
+            CleanupHooks.BuildServerShutdown = (_, _) => { };
+            CleanupHooks.FindLockHoldersForCleanup = _ => lockHolderProbes++ == 0
                 ? [new WorktreeLockHolder(Environment.ProcessId, "dotnet", "blocked cleanup test")]
                 : [];
+            var warnings = new List<GoalWorktreeCleanupWarning>();
+            CleanupHooks.CleanupWarningSink = warnings.Add;
+            var driver = new ConductorDriver(
+                kernel,
+                workspace,
+                FakeAcceptanceVerifier.Passed(),
+                AgentCatalog.Default().Agents,
+                WorkerProfileCatalog.Default(),
+                providers: new InMemoryModelProviderRegistry([]),
+                cleanupHooks: CleanupHooks.Build());
 
             var first = driver.AdvanceOnce(goal, ConductorAutonomyPolicy.Conservative);
             var executed = Assert.IsType<ConductorAdvanceOutcome.Executed>(first.Outcome);
             Assert.Equal(GoalLifecycleState.Recorded, executed.FromState);
             Assert.True(Directory.Exists(worktreePath));
             Assert.Equal(0, deleteAttempts);
-            Assert.NotNull(GoalWorktrees.TryGetCleanupBackoff(repo, goal.Id));
+            Assert.Equal(0, lockHolderProbes);
+            Assert.Contains(warnings, warning => warning.Operation == "remove:cleanup-needed");
+            Assert.NotNull(TryGetCleanupBackoff(repo, goal.Id));
         }
         finally
         {
-            GoalWorktrees.DeleteDirectory = originalDelete;
-            GoalWorktrees.SandboxAclHelper = originalAcl;
-            GoalWorktrees.BuildServerShutdown = originalShutdown;
-            GoalWorktrees.FindLockHoldersForCleanup = originalLockHolders;
+            CleanupHooks.DeleteDirectory = originalDelete;
+            CleanupHooks.SandboxAclHelper = originalAcl;
+            CleanupHooks.BuildServerShutdown = originalShutdown;
+            CleanupHooks.FindLockHoldersForCleanup = originalLockHolders;
             DeleteDirectory(repo);
         }
     }
@@ -185,8 +187,8 @@ public sealed class GoalWorktreeTestsOrphanEphemeralSweep : GoalWorktreeTestBase
     public void GoalWorktreesEnsureClearsExistingOrphanAndRetriesOnce()
     {
         var repo = CreateSeededRepository();
-        var originalAcl = GoalWorktrees.SandboxAclHelper;
-        var originalShutdown = GoalWorktrees.BuildServerShutdown;
+        var originalAcl = CleanupHooks.SandboxAclHelper;
+        var originalShutdown = CleanupHooks.BuildServerShutdown;
         try
         {
             var goalId = GoalId.New();
@@ -194,10 +196,10 @@ public sealed class GoalWorktreeTestsOrphanEphemeralSweep : GoalWorktreeTestBase
             Directory.CreateDirectory(Path.Combine(path, ".mcg-sandbox"));
             File.WriteAllText(Path.Combine(path, ".mcg-sandbox", "leftover.txt"), "low-il residue");
             var acl = new RecordingSandboxAclHelper();
-            GoalWorktrees.SandboxAclHelper = acl;
-            GoalWorktrees.BuildServerShutdown = (_, _) => { };
+            CleanupHooks.SandboxAclHelper = acl;
+            CleanupHooks.BuildServerShutdown = (_, _) => { };
 
-            var ensured = GoalWorktrees.Ensure(repo, goalId);
+            var ensured = GoalWorktrees.Ensure(repo, goalId, CleanupHooks.Build());
 
             Assert.Equal(path, ensured);
             Assert.True(File.Exists(Path.Combine(path, ".git")));
@@ -205,8 +207,8 @@ public sealed class GoalWorktreeTestsOrphanEphemeralSweep : GoalWorktreeTestBase
         }
         finally
         {
-            GoalWorktrees.SandboxAclHelper = originalAcl;
-            GoalWorktrees.BuildServerShutdown = originalShutdown;
+            CleanupHooks.SandboxAclHelper = originalAcl;
+            CleanupHooks.BuildServerShutdown = originalShutdown;
             DeleteDirectory(repo);
         }
     }
@@ -215,9 +217,9 @@ public sealed class GoalWorktreeTestsOrphanEphemeralSweep : GoalWorktreeTestBase
     public void GoalWorktreesSweepResetsAclOnlyAfterAccessDeniedDelete()
     {
         var repo = CreateSeededRepository();
-        var originalDelete = GoalWorktrees.DeleteDirectoryForCleanup;
-        var originalAcl = GoalWorktrees.SandboxAclHelper;
-        var originalShutdown = GoalWorktrees.BuildServerShutdown;
+        var originalDelete = CleanupHooks.DeleteDirectoryForCleanup;
+        var originalAcl = CleanupHooks.SandboxAclHelper;
+        var originalShutdown = CleanupHooks.BuildServerShutdown;
         try
         {
             var orphanPath = Path.Combine(repo, GoalWorktrees.DirectoryName, "orphaned-access-denied");
@@ -225,7 +227,7 @@ public sealed class GoalWorktreeTestsOrphanEphemeralSweep : GoalWorktreeTestBase
             File.WriteAllText(Path.Combine(orphanPath, ".mcg-sandbox", "leftover.txt"), "low-il residue");
             var deleteAttempts = 0;
             var acl = new RecordingSandboxAclHelper();
-            GoalWorktrees.DeleteDirectoryForCleanup = path =>
+            CleanupHooks.DeleteDirectoryForCleanup = path =>
             {
                 deleteAttempts++;
                 if (deleteAttempts == 1)
@@ -238,10 +240,10 @@ public sealed class GoalWorktreeTestsOrphanEphemeralSweep : GoalWorktreeTestBase
                 Directory.Delete(path, recursive: true);
                 return GoalWorktreeDeleteResult.Success;
             };
-            GoalWorktrees.SandboxAclHelper = acl;
-            GoalWorktrees.BuildServerShutdown = (_, _) => throw new InvalidOperationException("cheap orphan cleanup should not shut down build servers");
+            CleanupHooks.SandboxAclHelper = acl;
+            CleanupHooks.BuildServerShutdown = (_, _) => throw new InvalidOperationException("cheap orphan cleanup should not shut down build servers");
 
-            var result = GoalWorktrees.SweepOrphanedWorktrees(repo);
+            var result = SweepOrphanedWorktrees(repo);
 
             Assert.Equal(1, result.RemovedCount);
             Assert.Empty(result.LeftoverPaths);
@@ -251,9 +253,9 @@ public sealed class GoalWorktreeTestsOrphanEphemeralSweep : GoalWorktreeTestBase
         }
         finally
         {
-            GoalWorktrees.DeleteDirectoryForCleanup = originalDelete;
-            GoalWorktrees.SandboxAclHelper = originalAcl;
-            GoalWorktrees.BuildServerShutdown = originalShutdown;
+            CleanupHooks.DeleteDirectoryForCleanup = originalDelete;
+            CleanupHooks.SandboxAclHelper = originalAcl;
+            CleanupHooks.BuildServerShutdown = originalShutdown;
             DeleteDirectory(repo);
         }
     }
@@ -262,12 +264,12 @@ public sealed class GoalWorktreeTestsOrphanEphemeralSweep : GoalWorktreeTestBase
     public void GoalWorktreesSweepRecordsTimeoutBackoffAndSkipsRepeatAclReset()
     {
         var repo = CreateSeededRepository();
-        var originalDelete = GoalWorktrees.DeleteDirectoryForCleanup;
-        var originalAcl = GoalWorktrees.SandboxAclHelper;
-        var originalElapsed = GoalWorktrees.CleanupElapsedMilliseconds;
-        var originalWarnings = GoalWorktrees.CleanupWarningSink;
-        var originalNow = GoalWorktrees.CleanupUtcNow;
-        var originalBackoff = GoalWorktrees.CleanupBackoffDuration;
+        var originalDelete = CleanupHooks.DeleteDirectoryForCleanup;
+        var originalAcl = CleanupHooks.SandboxAclHelper;
+        var originalElapsed = CleanupHooks.CleanupElapsedMilliseconds;
+        var originalWarnings = CleanupHooks.CleanupWarningSink;
+        var originalNow = CleanupHooks.CleanupUtcNow;
+        var originalBackoff = CleanupHooks.CleanupBackoffDuration;
         try
         {
             var orphanPath = Path.Combine(repo, GoalWorktrees.DirectoryName, "orphaned-timeout");
@@ -277,17 +279,17 @@ public sealed class GoalWorktreeTestsOrphanEphemeralSweep : GoalWorktreeTestBase
             long elapsedMilliseconds = 0;
             var warnings = new List<GoalWorktreeCleanupWarning>();
             var acl = new RecordingSandboxAclHelper();
-            GoalWorktrees.DeleteDirectoryForCleanup = _ => GoalWorktreeDeleteResult.Failed(
+            CleanupHooks.DeleteDirectoryForCleanup = _ => GoalWorktreeDeleteResult.Failed(
                 GoalWorktreeDeleteFailureKind.AccessDenied,
                 "Access to the path is denied.");
-            GoalWorktrees.CleanupElapsedMilliseconds = () => elapsedMilliseconds;
-            GoalWorktrees.SandboxAclHelper = new TimeoutSandboxAclHelper(acl, () => elapsedMilliseconds = GitCli.DefaultTimeoutMilliseconds);
-            GoalWorktrees.CleanupWarningSink = warnings.Add;
-            GoalWorktrees.CleanupUtcNow = () => now;
-            GoalWorktrees.CleanupBackoffDuration = TimeSpan.FromMinutes(10);
+            CleanupHooks.CleanupElapsedMilliseconds = () => elapsedMilliseconds;
+            CleanupHooks.SandboxAclHelper = new TimeoutSandboxAclHelper(acl, () => elapsedMilliseconds = GitCli.DefaultTimeoutMilliseconds);
+            CleanupHooks.CleanupWarningSink = warnings.Add;
+            CleanupHooks.CleanupUtcNow = () => now;
+            CleanupHooks.CleanupBackoffDuration = TimeSpan.FromMinutes(10);
 
-            var first = GoalWorktrees.SweepOrphanedWorktrees(repo);
-            var second = GoalWorktrees.SweepOrphanedWorktrees(repo);
+            var first = SweepOrphanedWorktrees(repo);
+            var second = SweepOrphanedWorktrees(repo);
 
             Assert.Empty(first.LeftoverPaths.Where(path => !string.Equals(path, orphanPath, StringComparison.Ordinal)));
             Assert.Equal([orphanPath], second.LeftoverPaths);
@@ -303,12 +305,12 @@ public sealed class GoalWorktreeTestsOrphanEphemeralSweep : GoalWorktreeTestBase
         }
         finally
         {
-            GoalWorktrees.DeleteDirectoryForCleanup = originalDelete;
-            GoalWorktrees.SandboxAclHelper = originalAcl;
-            GoalWorktrees.CleanupElapsedMilliseconds = originalElapsed;
-            GoalWorktrees.CleanupWarningSink = originalWarnings;
-            GoalWorktrees.CleanupUtcNow = originalNow;
-            GoalWorktrees.CleanupBackoffDuration = originalBackoff;
+            CleanupHooks.DeleteDirectoryForCleanup = originalDelete;
+            CleanupHooks.SandboxAclHelper = originalAcl;
+            CleanupHooks.CleanupElapsedMilliseconds = originalElapsed;
+            CleanupHooks.CleanupWarningSink = originalWarnings;
+            CleanupHooks.CleanupUtcNow = originalNow;
+            CleanupHooks.CleanupBackoffDuration = originalBackoff;
             DeleteDirectory(repo);
         }
     }
@@ -317,30 +319,30 @@ public sealed class GoalWorktreeTestsOrphanEphemeralSweep : GoalWorktreeTestBase
     public void GoalWorktreesSweepQuietlyJournalsInBudgetBackoffSkip()
     {
         var repo = CreateSeededRepository();
-        var originalDelete = GoalWorktrees.DeleteDirectoryForCleanup;
-        var originalWarnings = GoalWorktrees.CleanupWarningSink;
-        var originalNow = GoalWorktrees.CleanupUtcNow;
-        var originalBackoff = GoalWorktrees.CleanupBackoffDuration;
+        var originalDelete = CleanupHooks.DeleteDirectoryForCleanup;
+        var originalWarnings = CleanupHooks.CleanupWarningSink;
+        var originalNow = CleanupHooks.CleanupUtcNow;
+        var originalBackoff = CleanupHooks.CleanupBackoffDuration;
         try
         {
             var orphanPath = Path.Combine(repo, GoalWorktrees.DirectoryName, "orphaned-quiet-skip");
             Directory.CreateDirectory(orphanPath);
             File.WriteAllText(Path.Combine(orphanPath, "leftover.txt"), "residue");
             var now = DateTimeOffset.Parse("2026-07-02T05:00:00Z");
-            GoalWorktrees.DeleteDirectoryForCleanup = _ => GoalWorktreeDeleteResult.Failed(
+            CleanupHooks.DeleteDirectoryForCleanup = _ => GoalWorktreeDeleteResult.Failed(
                 GoalWorktreeDeleteFailureKind.Transient,
                 "The process cannot access the file because it is being used by another process.");
-            GoalWorktrees.CleanupUtcNow = () => now;
-            GoalWorktrees.CleanupBackoffDuration = TimeSpan.FromMinutes(10);
-            GoalWorktrees.CleanupWarningSink = _ => { };
-            _ = GoalWorktrees.SweepOrphanedWorktrees(repo);
-            GoalWorktrees.CleanupWarningSink = originalWarnings;
+            CleanupHooks.CleanupUtcNow = () => now;
+            CleanupHooks.CleanupBackoffDuration = TimeSpan.FromMinutes(10);
+            CleanupHooks.CleanupWarningSink = _ => { };
+            _ = SweepOrphanedWorktrees(repo);
+            CleanupHooks.CleanupWarningSink = originalWarnings;
 
             string stdout = string.Empty;
             var stderr = CaptureConsoleError(() =>
                 stdout = CaptureConsole(() =>
                 {
-                    var second = GoalWorktrees.SweepOrphanedWorktrees(repo);
+                    var second = SweepOrphanedWorktrees(repo);
                     Assert.Equal([orphanPath], second.LeftoverPaths);
                 }));
 
@@ -350,10 +352,10 @@ public sealed class GoalWorktreeTestsOrphanEphemeralSweep : GoalWorktreeTestBase
         }
         finally
         {
-            GoalWorktrees.DeleteDirectoryForCleanup = originalDelete;
-            GoalWorktrees.CleanupWarningSink = originalWarnings;
-            GoalWorktrees.CleanupUtcNow = originalNow;
-            GoalWorktrees.CleanupBackoffDuration = originalBackoff;
+            CleanupHooks.DeleteDirectoryForCleanup = originalDelete;
+            CleanupHooks.CleanupWarningSink = originalWarnings;
+            CleanupHooks.CleanupUtcNow = originalNow;
+            CleanupHooks.CleanupBackoffDuration = originalBackoff;
             DeleteDirectory(repo);
         }
     }
@@ -362,12 +364,12 @@ public sealed class GoalWorktreeTestsOrphanEphemeralSweep : GoalWorktreeTestBase
     public void GoalWorktreesSweepEscalatesConsecutiveFailuresAndAutoResolvesAfterSlowRetry()
     {
         var repo = CreateSeededRepository();
-        var originalDelete = GoalWorktrees.DeleteDirectoryForCleanup;
-        var originalWarnings = GoalWorktrees.CleanupWarningSink;
-        var originalNow = GoalWorktrees.CleanupUtcNow;
-        var originalBackoff = GoalWorktrees.CleanupBackoffDuration;
-        var originalOptions = GoalWorktrees.CleanupOptions;
-        var originalLockHolders = GoalWorktrees.FindLockHoldersForCleanup;
+        var originalDelete = CleanupHooks.DeleteDirectoryForCleanup;
+        var originalWarnings = CleanupHooks.CleanupWarningSink;
+        var originalNow = CleanupHooks.CleanupUtcNow;
+        var originalBackoff = CleanupHooks.CleanupBackoffDuration;
+        var originalOptions = CleanupHooks.CleanupOptions;
+        var originalLockHolders = CleanupHooks.FindLockHoldersForCleanup;
         try
         {
             var orphanPath = Path.Combine(repo, GoalWorktrees.DirectoryName, "orphaned-escalates-once");
@@ -375,25 +377,25 @@ public sealed class GoalWorktreeTestsOrphanEphemeralSweep : GoalWorktreeTestBase
             File.WriteAllText(Path.Combine(orphanPath, "leftover.txt"), "residue");
             var now = DateTimeOffset.Parse("2026-07-02T05:00:00Z");
             var warnings = new List<GoalWorktreeCleanupWarning>();
-            GoalWorktrees.DeleteDirectoryForCleanup = _ => GoalWorktreeDeleteResult.Failed(
+            CleanupHooks.DeleteDirectoryForCleanup = _ => GoalWorktreeDeleteResult.Failed(
                 GoalWorktreeDeleteFailureKind.Transient,
                 "The process cannot access the file because it is being used by another process.");
-            GoalWorktrees.CleanupWarningSink = warnings.Add;
-            GoalWorktrees.CleanupUtcNow = () => now;
-            GoalWorktrees.CleanupBackoffDuration = TimeSpan.FromMinutes(10);
-            GoalWorktrees.ConfigureCleanup(
+            CleanupHooks.CleanupWarningSink = warnings.Add;
+            CleanupHooks.CleanupUtcNow = () => now;
+            CleanupHooks.CleanupBackoffDuration = TimeSpan.FromMinutes(10);
+            CleanupHooks.ConfigureCleanup(
                 new GoalWorktreeCleanupOptions(TimeSpan.FromMinutes(5), 3, TimeSpan.FromDays(1)),
                 Path.Combine(repo, ".orchestrator"));
-            GoalWorktrees.FindLockHoldersForCleanup = _ =>
+            CleanupHooks.FindLockHoldersForCleanup = _ =>
             [
                 new WorktreeLockHolder(1234, "dotnet", "dotnet test")
             ];
 
-            _ = GoalWorktrees.SweepOrphanedWorktrees(repo);
+            _ = SweepOrphanedWorktrees(repo);
             now = now.AddMinutes(11);
-            _ = GoalWorktrees.SweepOrphanedWorktrees(repo);
+            _ = SweepOrphanedWorktrees(repo);
             now = now.AddMinutes(11);
-            _ = GoalWorktrees.SweepOrphanedWorktrees(repo);
+            _ = SweepOrphanedWorktrees(repo);
 
             var escalations = warnings
                 .Where(warning => warning.Operation == "cleanup-debt-escalated")
@@ -402,33 +404,33 @@ public sealed class GoalWorktreeTestsOrphanEphemeralSweep : GoalWorktreeTestBase
             Assert.Contains("dotnet[pid=1234]", escalation.Exception.Message, StringComparison.Ordinal);
             Assert.Contains("dotnet test", escalation.Exception.Message, StringComparison.Ordinal);
             Assert.Equal(3, CleanupJournalSkipCount(repo, orphanPath));
-            var debt = Assert.Single(GoalWorktrees.ListCleanupDebt(repo));
+            var debt = Assert.Single(GoalWorktrees.ListCleanupDebt(repo, CleanupHooks.Build()));
             Assert.NotNull(debt.EscalatedAtUtc);
             Assert.Equal(TimeSpan.FromDays(1), debt.RemainingWait);
             var store = CollaborationItemStore.ForDirectory(Path.Combine(repo, ".orchestrator"));
             var attention = Assert.Single(store.GetAttentionQueueAsync().GetAwaiter().GetResult());
             Assert.Contains("Worktree cleanup escalated", attention.Subject, StringComparison.Ordinal);
 
-            GoalWorktrees.DeleteDirectoryForCleanup = _ =>
+            CleanupHooks.DeleteDirectoryForCleanup = _ =>
             {
                 Directory.Delete(orphanPath, recursive: true);
                 return GoalWorktreeDeleteResult.Success;
             };
             now = now.AddDays(1).AddMinutes(1);
-            var recovered = GoalWorktrees.SweepOrphanedWorktrees(repo);
+            var recovered = SweepOrphanedWorktrees(repo);
 
             Assert.Equal(1, recovered.RemovedCount);
-            Assert.Empty(GoalWorktrees.ListCleanupDebt(repo));
+            Assert.Empty(GoalWorktrees.ListCleanupDebt(repo, CleanupHooks.Build()));
             Assert.Empty(store.GetAttentionQueueAsync().GetAwaiter().GetResult());
         }
         finally
         {
-            GoalWorktrees.DeleteDirectoryForCleanup = originalDelete;
-            GoalWorktrees.CleanupWarningSink = originalWarnings;
-            GoalWorktrees.CleanupUtcNow = originalNow;
-            GoalWorktrees.CleanupBackoffDuration = originalBackoff;
-            GoalWorktrees.ConfigureCleanup(originalOptions);
-            GoalWorktrees.FindLockHoldersForCleanup = originalLockHolders;
+            CleanupHooks.DeleteDirectoryForCleanup = originalDelete;
+            CleanupHooks.CleanupWarningSink = originalWarnings;
+            CleanupHooks.CleanupUtcNow = originalNow;
+            CleanupHooks.CleanupBackoffDuration = originalBackoff;
+            CleanupHooks.ConfigureCleanup(originalOptions);
+            CleanupHooks.FindLockHoldersForCleanup = originalLockHolders;
             DeleteDirectory(repo);
         }
     }
@@ -437,29 +439,36 @@ public sealed class GoalWorktreeTestsOrphanEphemeralSweep : GoalWorktreeTestBase
     public void CliCleanupStatusListsPendingDebtAndEmptyState()
     {
         var repo = CreateSeededRepository();
-        var originalWarnings = GoalWorktrees.CleanupWarningSink;
-        var originalNow = GoalWorktrees.CleanupUtcNow;
-        var originalBackoff = GoalWorktrees.CleanupBackoffDuration;
+        var originalWarnings = CleanupHooks.CleanupWarningSink;
+        var originalNow = CleanupHooks.CleanupUtcNow;
+        var originalBackoff = CleanupHooks.CleanupBackoffDuration;
         try
         {
             var now = DateTimeOffset.Parse("2026-07-02T05:00:00Z");
             var kernel = new AgentOrchestratorKernel();
+            CleanupHooks.CleanupWarningSink = _ => { };
+            CleanupHooks.CleanupUtcNow = () => now;
+            CleanupHooks.CleanupBackoffDuration = TimeSpan.FromMinutes(10);
             var context = new CliExecutionContext(
                 kernel,
                 OrchestratorWorkspace.ForDirectory(repo),
                 new InMemoryModelProviderRegistry([]),
                 AgentCatalog.Default().Agents,
                 WorkerProfileCatalog.Default(),
-                currentGoal: null);
+                currentGoal: null)
+            {
+                CleanupContext = new WorktreeCleanupContext(CleanupHooks.Build())
+            };
 
             var empty = CaptureConsole(() => CliCommandHandlers.Execute(["cleanup-status"], context));
             Assert.Contains("Cleanup status: no pending cleanup debt.", empty, StringComparison.Ordinal);
 
             var goalId = GoalId.New();
-            GoalWorktrees.CleanupWarningSink = _ => { };
-            GoalWorktrees.CleanupUtcNow = () => now;
-            GoalWorktrees.CleanupBackoffDuration = TimeSpan.FromMinutes(10);
-            _ = GoalWorktrees.RecordGoalCleanupNeeded(repo, goalId, "remove:acceptance-deferred");
+            _ = GoalWorktrees.RecordGoalCleanupNeeded(
+                repo,
+                goalId,
+                "remove:acceptance-deferred",
+                CleanupHooks.Build());
             now = now.AddMinutes(5);
 
             var output = CaptureConsole(() => CliCommandHandlers.Execute(["cleanup-status"], context));
@@ -472,9 +481,9 @@ public sealed class GoalWorktreeTestsOrphanEphemeralSweep : GoalWorktreeTestBase
         }
         finally
         {
-            GoalWorktrees.CleanupWarningSink = originalWarnings;
-            GoalWorktrees.CleanupUtcNow = originalNow;
-            GoalWorktrees.CleanupBackoffDuration = originalBackoff;
+            CleanupHooks.CleanupWarningSink = originalWarnings;
+            CleanupHooks.CleanupUtcNow = originalNow;
+            CleanupHooks.CleanupBackoffDuration = originalBackoff;
             DeleteDirectory(repo);
         }
     }
@@ -483,20 +492,20 @@ public sealed class GoalWorktreeTestsOrphanEphemeralSweep : GoalWorktreeTestBase
     public void GoalWorktreesSweepRecordsBackoffForTransientOrphanDeleteFailure()
     {
         var repo = CreateSeededRepository();
-        var originalDelete = GoalWorktrees.DeleteDirectoryForCleanup;
-        var originalWarnings = GoalWorktrees.CleanupWarningSink;
+        var originalDelete = CleanupHooks.DeleteDirectoryForCleanup;
+        var originalWarnings = CleanupHooks.CleanupWarningSink;
         try
         {
             var orphanPath = Path.Combine(repo, GoalWorktrees.DirectoryName, "orphaned-transient");
             Directory.CreateDirectory(Path.Combine(orphanPath, ".mcg-sandbox"));
             File.WriteAllText(Path.Combine(orphanPath, ".mcg-sandbox", "leftover.txt"), "transient residue");
             var warnings = new List<GoalWorktreeCleanupWarning>();
-            GoalWorktrees.DeleteDirectoryForCleanup = _ => GoalWorktreeDeleteResult.Failed(
+            CleanupHooks.DeleteDirectoryForCleanup = _ => GoalWorktreeDeleteResult.Failed(
                 GoalWorktreeDeleteFailureKind.Transient,
                 "The process cannot access the file because it is being used by another process.");
-            GoalWorktrees.CleanupWarningSink = warnings.Add;
+            CleanupHooks.CleanupWarningSink = warnings.Add;
 
-            var result = GoalWorktrees.SweepOrphanedWorktrees(repo);
+            var result = SweepOrphanedWorktrees(repo);
 
             Assert.Equal([orphanPath], result.LeftoverPaths);
             Assert.True(Directory.Exists(orphanPath));
@@ -506,8 +515,8 @@ public sealed class GoalWorktreeTestsOrphanEphemeralSweep : GoalWorktreeTestBase
         }
         finally
         {
-            GoalWorktrees.DeleteDirectoryForCleanup = originalDelete;
-            GoalWorktrees.CleanupWarningSink = originalWarnings;
+            CleanupHooks.DeleteDirectoryForCleanup = originalDelete;
+            CleanupHooks.CleanupWarningSink = originalWarnings;
             DeleteDirectory(repo);
         }
     }
@@ -516,9 +525,9 @@ public sealed class GoalWorktreeTestsOrphanEphemeralSweep : GoalWorktreeTestBase
     public void GoalWorktreesSweepRecordsBackoffWhenSecondDeleteFailsAfterAclReset()
     {
         var repo = CreateSeededRepository();
-        var originalDelete = GoalWorktrees.DeleteDirectoryForCleanup;
-        var originalAcl = GoalWorktrees.SandboxAclHelper;
-        var originalWarnings = GoalWorktrees.CleanupWarningSink;
+        var originalDelete = CleanupHooks.DeleteDirectoryForCleanup;
+        var originalAcl = CleanupHooks.SandboxAclHelper;
+        var originalWarnings = CleanupHooks.CleanupWarningSink;
         try
         {
             var orphanPath = Path.Combine(repo, GoalWorktrees.DirectoryName, "orphaned-second-delete");
@@ -527,7 +536,7 @@ public sealed class GoalWorktreeTestsOrphanEphemeralSweep : GoalWorktreeTestBase
             var deleteAttempts = 0;
             var warnings = new List<GoalWorktreeCleanupWarning>();
             var acl = new RecordingSandboxAclHelper();
-            GoalWorktrees.DeleteDirectoryForCleanup = _ =>
+            CleanupHooks.DeleteDirectoryForCleanup = _ =>
             {
                 deleteAttempts++;
                 return GoalWorktreeDeleteResult.Failed(
@@ -538,10 +547,10 @@ public sealed class GoalWorktreeTestsOrphanEphemeralSweep : GoalWorktreeTestBase
                         ? "Access to the path is denied."
                         : "Directory deletion failed after ACL reset.");
             };
-            GoalWorktrees.SandboxAclHelper = acl;
-            GoalWorktrees.CleanupWarningSink = warnings.Add;
+            CleanupHooks.SandboxAclHelper = acl;
+            CleanupHooks.CleanupWarningSink = warnings.Add;
 
-            var result = GoalWorktrees.SweepOrphanedWorktrees(repo);
+            var result = SweepOrphanedWorktrees(repo);
 
             Assert.Equal([orphanPath], result.LeftoverPaths);
             Assert.Equal(2, deleteAttempts);
@@ -553,9 +562,9 @@ public sealed class GoalWorktreeTestsOrphanEphemeralSweep : GoalWorktreeTestBase
         }
         finally
         {
-            GoalWorktrees.DeleteDirectoryForCleanup = originalDelete;
-            GoalWorktrees.SandboxAclHelper = originalAcl;
-            GoalWorktrees.CleanupWarningSink = originalWarnings;
+            CleanupHooks.DeleteDirectoryForCleanup = originalDelete;
+            CleanupHooks.SandboxAclHelper = originalAcl;
+            CleanupHooks.CleanupWarningSink = originalWarnings;
             DeleteDirectory(repo);
         }
     }
@@ -581,7 +590,7 @@ public sealed class GoalWorktreeTestsOrphanEphemeralSweep : GoalWorktreeTestBase
             File.WriteAllText(Path.Combine(scratchPath, "body.md"), "body");
             File.WriteAllText(Path.Combine(unrelatedTempPath, "keep.txt"), "keep");
 
-            var result = GoalWorktrees.SweepOwnedEphemeralDirectories(repo, goalId);
+            var result = SweepOwnedEphemeralDirectories(repo, goalId);
 
             Assert.True(result.IsComplete);
             Assert.Equal(3, result.RemovedCount);
@@ -602,8 +611,8 @@ public sealed class GoalWorktreeTestsOrphanEphemeralSweep : GoalWorktreeTestBase
     public void GoalWorktreesOwnedEphemeralSweepPersistsCleanupNeededBackoff()
     {
         var repo = CreateSeededRepository();
-        var originalDelete = GoalWorktrees.DeleteDirectoryForCleanup;
-        var originalWarnings = GoalWorktrees.CleanupWarningSink;
+        var originalDelete = CleanupHooks.DeleteDirectoryForCleanup;
+        var originalWarnings = CleanupHooks.CleanupWarningSink;
         try
         {
             var goalId = GoalId.New();
@@ -613,17 +622,17 @@ public sealed class GoalWorktreeTestsOrphanEphemeralSweep : GoalWorktreeTestBase
             var warnings = new List<GoalWorktreeCleanupWarning>();
             var attempts = 0;
 
-            GoalWorktrees.DeleteDirectoryForCleanup = _ =>
+            CleanupHooks.DeleteDirectoryForCleanup = _ =>
             {
                 attempts++;
                 return GoalWorktreeDeleteResult.Failed(
                     GoalWorktreeDeleteFailureKind.Unknown,
                     "Directory deletion failed.");
             };
-            GoalWorktrees.CleanupWarningSink = warnings.Add;
+            CleanupHooks.CleanupWarningSink = warnings.Add;
 
-            var first = GoalWorktrees.SweepOwnedEphemeralDirectories(repo, goalId);
-            var second = GoalWorktrees.SweepOwnedEphemeralDirectories(repo, goalId);
+            var first = SweepOwnedEphemeralDirectories(repo, goalId);
+            var second = SweepOwnedEphemeralDirectories(repo, goalId);
 
             Assert.False(first.IsComplete);
             Assert.False(second.IsComplete);
@@ -636,8 +645,8 @@ public sealed class GoalWorktreeTestsOrphanEphemeralSweep : GoalWorktreeTestBase
         }
         finally
         {
-            GoalWorktrees.DeleteDirectoryForCleanup = originalDelete;
-            GoalWorktrees.CleanupWarningSink = originalWarnings;
+            CleanupHooks.DeleteDirectoryForCleanup = originalDelete;
+            CleanupHooks.CleanupWarningSink = originalWarnings;
             DeleteDirectory(repo);
         }
     }
@@ -646,8 +655,8 @@ public sealed class GoalWorktreeTestsOrphanEphemeralSweep : GoalWorktreeTestBase
     public void GoalWorktreesRemoveReportsOwnedEphemeralCleanupLeftover()
     {
         var repo = CreateSeededRepository();
-        var originalDeleteForCleanup = GoalWorktrees.DeleteDirectoryForCleanup;
-        var originalWarnings = GoalWorktrees.CleanupWarningSink;
+        var originalDeleteForCleanup = CleanupHooks.DeleteDirectoryForCleanup;
+        var originalWarnings = CleanupHooks.CleanupWarningSink;
         try
         {
             var goalId = GoalId.New();
@@ -657,15 +666,15 @@ public sealed class GoalWorktreeTestsOrphanEphemeralSweep : GoalWorktreeTestBase
             File.WriteAllText(Path.Combine(contextPath, "digest.md"), "digest");
             var warnings = new List<GoalWorktreeCleanupWarning>();
 
-            GoalWorktrees.DeleteDirectoryForCleanup = cleanupPath =>
+            CleanupHooks.DeleteDirectoryForCleanup = cleanupPath =>
                 cleanupPath.Equals(contextPath, StringComparison.OrdinalIgnoreCase)
                     ? GoalWorktreeDeleteResult.Failed(
                         GoalWorktreeDeleteFailureKind.Unknown,
                         "Directory deletion failed.")
                     : originalDeleteForCleanup(cleanupPath);
-            GoalWorktrees.CleanupWarningSink = warnings.Add;
+            CleanupHooks.CleanupWarningSink = warnings.Add;
 
-            var result = GoalWorktrees.Remove(repo, goalId);
+            var result = RemoveWorktree(repo, goalId);
 
             Assert.False(result.IsComplete);
             Assert.Equal(contextPath, result.LeftoverPath);
@@ -677,8 +686,8 @@ public sealed class GoalWorktreeTestsOrphanEphemeralSweep : GoalWorktreeTestBase
         }
         finally
         {
-            GoalWorktrees.DeleteDirectoryForCleanup = originalDeleteForCleanup;
-            GoalWorktrees.CleanupWarningSink = originalWarnings;
+            CleanupHooks.DeleteDirectoryForCleanup = originalDeleteForCleanup;
+            CleanupHooks.CleanupWarningSink = originalWarnings;
             DeleteDirectory(repo);
         }
     }

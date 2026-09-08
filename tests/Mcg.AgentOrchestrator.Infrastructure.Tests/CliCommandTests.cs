@@ -424,7 +424,7 @@ public abstract class CliCommandTestBase
         {
             if (Directory.Exists(root))
             {
-                _ = GoalWorktrees.DeleteDirectory(root);
+                _ = GoalWorktrees.DeleteDirectoryWithRetry(root);
             }
         }
         catch
