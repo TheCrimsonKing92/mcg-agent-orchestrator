@@ -531,6 +531,58 @@ public static class WorkerResultBlockers
         return false;
     }
 
+    public static bool TryGetAssignedScopeComplete(
+        string workerOutput,
+        out bool assignedScopeComplete,
+        out string? diagnostic)
+    {
+        assignedScopeComplete = false;
+        diagnostic = null;
+        var values = EnumerateWorkerResultLines(SplitRetainedLines(workerOutput))
+            .Where(line => TryFindField(line, "assigned_scope_complete", out _))
+            .Select(line =>
+            {
+                TryFindField(line, "assigned_scope_complete", out var value);
+                return value;
+            })
+            .ToArray();
+        if (values.Length == 0)
+        {
+            return false;
+        }
+
+        if (values.Length != 1 || !bool.TryParse(values[0], out assignedScopeComplete))
+        {
+            diagnostic = values.Length > 1
+                ? "assigned_scope_complete must appear exactly once with true or false."
+                : "assigned_scope_complete requires true or false.";
+            assignedScopeComplete = false;
+            return false;
+        }
+
+        return true;
+    }
+
+    public static bool? GetAssignedScopeComplete(TaskVerificationRecord? verification)
+    {
+        if (verification is null)
+        {
+            return null;
+        }
+
+        if (verification.AssignedScopeComplete is not null)
+        {
+            return verification.AssignedScopeComplete;
+        }
+
+        return TryGetAssignedScopeComplete(
+            verification.AuthoritativeStandardOutput ?? verification.StandardOutput,
+            out var assignedScopeComplete,
+            out _)
+            ? assignedScopeComplete
+            : null;
+    }
+
     public static bool HasCompleteWorkerResult(string workerOutput)
     {
         var fields = EnumerateWorkerResultLines(SplitRetainedLines(workerOutput))
@@ -560,6 +612,13 @@ public static class WorkerResultBlockers
                 diagnostic = "blockers: premise-invalid requires 'premise-invalid - <fact and evidence>'.";
                 return true;
             }
+        }
+
+        if (!TryGetAssignedScopeComplete(workerOutput, out _, out var assignedScopeDiagnostic) &&
+            assignedScopeDiagnostic is not null)
+        {
+            diagnostic = assignedScopeDiagnostic;
+            return true;
         }
 
         return false;

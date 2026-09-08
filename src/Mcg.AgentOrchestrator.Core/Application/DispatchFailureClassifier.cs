@@ -607,6 +607,46 @@ public static class DispatchFailureClassifier
                 BuildProviderModelRejectionEvidenceSummary(verification)));
         }
 
+        if (task.RequiredRole == AgentRole.Developer &&
+            WorkerResultBlockers.TryFindMalformedEvidenceBoundOutcome(
+                verification.AuthoritativeStandardOutput ?? verification.StandardOutput,
+                out var outputContractDiagnostic))
+        {
+            return BuildOutcome(
+                TaskOutcomeRules.UnknownFailure,
+                task,
+                verification,
+                workerResultPresent,
+                hasCommittedChanges,
+                new DispatchOutcome(
+                    DispatchOutcomeKind.UnknownFailure,
+                    exitCode,
+                    hasZeroByteOutput,
+                    null,
+                    null,
+                    RecoveryRecommendation.OperatorNeeded,
+                    $"Malformed WORKER_RESULT structured outcome: {outputContractDiagnostic}"));
+        }
+
+        if (task.RequiredRole == AgentRole.Developer &&
+            WorkerResultBlockers.GetAssignedScopeComplete(verification) is false)
+        {
+            return BuildOutcome(
+                TaskOutcomeRules.IncompleteScopeDeclaration,
+                task,
+                verification,
+                workerResultPresent,
+                hasCommittedChanges,
+                new DispatchOutcome(
+                    DispatchOutcomeKind.UnknownFailure,
+                    exitCode,
+                    hasZeroByteOutput,
+                    null,
+                    null,
+                    RecoveryRecommendation.AutoRetry,
+                    "Developer declared the assigned implementation scope incomplete."));
+        }
+
         if (HasGreenCommittedWorkerResultEvidence(verification, workerResultPresent, hasCommittedChanges))
         {
             return BuildOutcome(

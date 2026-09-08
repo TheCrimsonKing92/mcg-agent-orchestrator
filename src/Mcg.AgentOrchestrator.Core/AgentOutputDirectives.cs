@@ -86,6 +86,10 @@ public static class AgentOutputDirectives
         {
             lines.Add("citations: <repository files, docs, or evidence sources used>");
         }
+        else if (role == AgentRole.Developer)
+        {
+            lines.Add("assigned_scope_complete: <true|false - whether the implementation scope assigned to this Developer is complete; false requests a bounded revision and does not describe later Acceptance/operator evidence>");
+        }
         else if (role is AgentRole.Reviewer or AgentRole.Tester)
         {
             lines.Add("findings: <one-line JSON array of {stable_id,state:open|resolved,severity:blocking|advisory,category:spec-compliance|spec-defect|correctness|test-evidence|test-coverage|code-quality|operator-owned|acceptance-owned,location:{file,region,hunk?},description,evidence_request?:{selections:[{test_project,test_class}]}}; severity is required; evidence_request is optional on any category; [] when none>");

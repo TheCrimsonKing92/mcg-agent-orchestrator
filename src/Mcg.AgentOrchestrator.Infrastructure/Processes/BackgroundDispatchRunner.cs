@@ -1780,6 +1780,11 @@ public sealed class BackgroundDispatchRunner
         var heartbeatStdoutBytes = _recoveryService.TryReadHeartbeat(GetHeartbeatPath(processRecord), out var completionHeartbeat)
             ? completionHeartbeat.StandardOutputBytes
             : (long?)null;
+        var assignedScopeOutput = fullStandardOutput.Content ?? standardOutput;
+        var hasAssignedScopeComplete = WorkerResultBlockers.TryGetAssignedScopeComplete(
+            assignedScopeOutput,
+            out var assignedScopeComplete,
+            out _);
 
         var verification = new TaskVerificationRecord(
             processRecord.Command,
@@ -1808,7 +1813,8 @@ public sealed class BackgroundDispatchRunner
             FullStandardError: fullStandardError.Content,
             FullStandardOutputUnavailableReason: fullStandardOutput.UnavailableReason,
             FullStandardErrorUnavailableReason: fullStandardError.UnavailableReason,
-            PlannerCandidateDivergence: plannerCandidateDivergence);
+            PlannerCandidateDivergence: plannerCandidateDivergence,
+            AssignedScopeComplete: hasAssignedScopeComplete ? assignedScopeComplete : null);
 
         var outcome = new DispatchRefreshOutcome(
             completed,

@@ -207,11 +207,16 @@ public sealed class DispatchOutcomeClassifyTests
             HasCommittedChanges: hasCommittedChanges,
             HeartbeatStandardOutputBytes: stdout.Length);
 
-    private static string WorkerResultStdout(string tests, string blockers = "none", string? deferrals = null) =>
+    private static string WorkerResultStdout(
+        string tests,
+        string blockers = "none",
+        string? deferrals = null,
+        bool? assignedScopeComplete = null) =>
         $"WORKER_RESULT:{Environment.NewLine}" +
         $"files: none{Environment.NewLine}" +
         $"tests: {tests}{Environment.NewLine}" +
         (deferrals is null ? string.Empty : $"deferrals: {deferrals}{Environment.NewLine}") +
+        (assignedScopeComplete is null ? string.Empty : $"assigned_scope_complete: {assignedScopeComplete.Value.ToString().ToLowerInvariant()}{Environment.NewLine}") +
         $"blockers: {blockers}{Environment.NewLine}" +
         "END_WORKER_RESULT";
 
@@ -655,6 +660,50 @@ public sealed class DispatchOutcomeClassifyTests
         Xunit.Assert.Equal(DispatchOutcomeKind.UnknownFailure, outcome.Kind);
         Xunit.Assert.Contains("rule=succeeded-worker-result-failing-tests", outcome.ClassifierReceipt, StringComparison.Ordinal);
         Xunit.Assert.Contains("commit=orchestrator", outcome.ClassifierReceipt, StringComparison.Ordinal);
+    }
+
+    [Xunit.Fact(DisplayName = "Classify routes incomplete Developer scope to bounded revision before every success branch")]
+    public void ClassifyRoutesIncompleteDeveloperScopeToBoundedRevision()
+    {
+        var verification = WorkerResultVerification(
+            WorkerResultStdout(
+                "pass - focused verification completed",
+                assignedScopeComplete: false),
+            hasCommittedChanges: true);
+
+        var outcome = DispatchFailureClassifier.Classify(
+            DispatchedTaskWithResultCommit("29edee5c", "ce5e35c1"),
+            verification);
+
+        Xunit.Assert.Equal(DispatchOutcomeKind.UnknownFailure, outcome.Kind);
+        Xunit.Assert.Equal(RecoveryRecommendation.AutoRetry, outcome.RecoveryRecommendation);
+        Xunit.Assert.Contains("rule=incomplete-scope-declaration", outcome.ClassifierReceipt, StringComparison.Ordinal);
+    }
+
+    [Xunit.Fact(DisplayName = "Classify gives failing tests precedence over incomplete Developer scope")]
+    public void ClassifyGivesFailingTestsPrecedenceOverIncompleteDeveloperScope()
+    {
+        var outcome = DispatchFailureClassifier.Classify(
+            DispatchedTaskWithResultCommit("29edee5c", "ce5e35c1"),
+            WorkerResultVerification(WorkerResultStdout(
+                "fail - 1 test failed",
+                assignedScopeComplete: false)));
+
+        Xunit.Assert.Contains("rule=succeeded-worker-result-failing-tests", outcome.ClassifierReceipt, StringComparison.Ordinal);
+        Xunit.Assert.DoesNotContain("rule=incomplete-scope-declaration", outcome.ClassifierReceipt, StringComparison.Ordinal);
+    }
+
+    [Xunit.Fact(DisplayName = "Classify rejects malformed Developer scope declaration without treating it as incomplete")]
+    public void ClassifyRejectsMalformedDeveloperScopeDeclaration()
+    {
+        var outcome = DispatchFailureClassifier.Classify(
+            DispatchedTaskWithResultCommit("29edee5c", "ce5e35c1"),
+            WorkerResultVerification(WorkerResultStdout("pass - focused verification completed")
+                .Replace("blockers: none", "assigned_scope_complete: maybe")));
+
+        Xunit.Assert.Equal(DispatchOutcomeKind.UnknownFailure, outcome.Kind);
+        Xunit.Assert.Equal(RecoveryRecommendation.OperatorNeeded, outcome.RecoveryRecommendation);
+        Xunit.Assert.DoesNotContain("rule=incomplete-scope-declaration", outcome.ClassifierReceipt, StringComparison.Ordinal);
     }
 
     [Xunit.Fact(DisplayName = "Classify_does_not_apply_failing_tests_rule_to_read_only_roles")]
