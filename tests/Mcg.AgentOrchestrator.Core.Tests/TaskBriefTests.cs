@@ -67,10 +67,12 @@ public sealed class TaskBriefTests
 
         var brief = kernel.BuildTaskBrief(goal.Id, tester.Id).Content;
 
+        Assert.Contains("RECEIPT-FIRST", brief, StringComparison.Ordinal);
+        Assert.Contains("PRIMARY PATH", brief, StringComparison.Ordinal);
         Assert.True(
             brief.IndexOf("RECEIPT-FIRST", StringComparison.Ordinal) <
             brief.IndexOf("PRIMARY PATH", StringComparison.Ordinal));
-        Assert.Contains("matching timeout/killed/no-results receipt is inconclusive", brief, StringComparison.Ordinal);
+        Assert.Contains("timeout/killed/no-results is inconclusive", brief, StringComparison.OrdinalIgnoreCase);
     }
 
     [Xunit.Fact(DisplayName = "BuildTaskBrief_prefers_bounded_source_survey_for_complex_tasks")]

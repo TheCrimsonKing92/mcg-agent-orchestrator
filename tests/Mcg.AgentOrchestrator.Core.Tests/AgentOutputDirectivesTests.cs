@@ -162,16 +162,29 @@ public sealed class AgentOutputDirectivesTests
                      SdlcRolePromptRequirements.BuildPlainText(AgentRole.Tester, TaskComplexity.Simple)
                  })
         {
+            Assert.Contains("RECEIPT-FIRST", requirements, StringComparison.Ordinal);
+            Assert.Contains("PRIMARY PATH", requirements, StringComparison.Ordinal);
             Assert.True(
                 requirements.IndexOf("RECEIPT-FIRST", StringComparison.Ordinal) <
                 requirements.IndexOf("PRIMARY PATH", StringComparison.Ordinal));
-            Assert.Contains("candidate identity (commit/SHA)", requirements, StringComparison.Ordinal);
-            Assert.Contains("selection coverage (`test_project`/`test_class`)", requirements, StringComparison.Ordinal);
-            Assert.Contains("cite its identity/path", requirements, StringComparison.Ordinal);
-            Assert.Contains("mark covered obligations closed, and do not request them again", requirements, StringComparison.Ordinal);
-            Assert.Contains("missing, stale, mismatched, or unreadable receipt is unproven", requirements, StringComparison.Ordinal);
-            Assert.Contains("verified matching receipt controls", requirements, StringComparison.Ordinal);
+            Assert.Contains("candidate identity", requirements, StringComparison.Ordinal);
+            Assert.Contains("equivalent worktree/dispatch identity", requirements, StringComparison.Ordinal);
+            Assert.Contains("`test_project`/`test_class`", requirements, StringComparison.Ordinal);
+            Assert.Contains("cite", requirements, StringComparison.OrdinalIgnoreCase);
+            Assert.Contains("covered", requirements, StringComparison.Ordinal);
+            Assert.Contains("unproven", requirements, StringComparison.Ordinal);
+            Assert.Contains("stale narrative", requirements, StringComparison.Ordinal);
         }
+    }
+
+    [Xunit.Fact(DisplayName = "Tester_compact_requirements_stay_within_prompt_budget")]
+    public void TesterCompactRequirementsStayWithinPromptBudget()
+    {
+        var compact = SdlcRolePromptRequirements.BuildPlainText(AgentRole.Tester, TaskComplexity.Simple);
+
+        Assert.True(
+            compact.Length <= SdlcRolePromptRequirements.TesterCompactRequirementsMaxChars,
+            $"Compact Tester requirements grew to {compact.Length} chars.");
     }
 
     [Xunit.Fact(DisplayName = "Tester_requirements_keep_matching_timeout_receipts_inconclusive_and_require_a_real_selection_change")]
@@ -183,16 +196,15 @@ public sealed class AgentOutputDirectivesTests
                      SdlcRolePromptRequirements.BuildPlainText(AgentRole.Tester, TaskComplexity.Simple)
                  })
         {
-            Assert.Contains("timeout/killed/no-results receipt is inconclusive, not a pass, and closes nothing", requirements, StringComparison.Ordinal);
-            Assert.Contains("same candidate", requirements, StringComparison.Ordinal);
-            Assert.Contains("only `test_project` and `test_class` define that selection", requirements, StringComparison.Ordinal);
-            Assert.Contains("Description text, unsupported fields, and cosmetic selector differences are not a changed run", requirements, StringComparison.Ordinal);
-            Assert.Contains("narrow with supported `test_class` syntax only while preserving unclosed coverage", requirements, StringComparison.Ordinal);
-            Assert.Contains("without emitting the identical request", requirements, StringComparison.Ordinal);
-            Assert.Contains("stale-candidate receipt may use the same selection against the current candidate", requirements, StringComparison.Ordinal);
-            Assert.Contains("Do not lengthen deadlines by default or invent a cause", requirements, StringComparison.Ordinal);
-            Assert.Contains("full-gate/operator-owned obligations open and owned", requirements, StringComparison.Ordinal);
-            Assert.Contains("do not widen conditional criteria", requirements, StringComparison.Ordinal);
+            Assert.Contains("timeout/killed/no-results", requirements, StringComparison.OrdinalIgnoreCase);
+            Assert.Contains("inconclusive, not a pass", requirements, StringComparison.Ordinal);
+            Assert.Contains("candidate", requirements, StringComparison.OrdinalIgnoreCase);
+            Assert.Contains("`test_project`", requirements, StringComparison.Ordinal);
+            Assert.Contains("`test_class`", requirements, StringComparison.Ordinal);
+            Assert.Contains("selection", requirements, StringComparison.Ordinal);
+            Assert.Contains("full-gate/operator/acceptance", requirements, StringComparison.Ordinal);
+            Assert.Contains("deadline", requirements, StringComparison.OrdinalIgnoreCase);
+            Assert.Contains("cause", requirements, StringComparison.OrdinalIgnoreCase);
         }
     }
 

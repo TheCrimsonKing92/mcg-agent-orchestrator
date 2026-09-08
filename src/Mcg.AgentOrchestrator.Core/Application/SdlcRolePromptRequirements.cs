@@ -6,11 +6,16 @@ internal static class SdlcRolePromptRequirements
     private const string ResearcherStdoutOnlyContract =
         "- Stdout is the only channel the orchestrator reads: print the complete research artifact as your final message. Never write a plan file or any other file, and never reply with only a summary or a file path.";
     private const string TesterReceiptFirstContract =
-        "- RECEIPT-FIRST: Before emitting `evidence_request`, inspect each supplied receipt. Accept a passing receipt only when its candidate identity (commit/SHA) and selection coverage (`test_project`/`test_class`) match this round; cite its identity/path, mark covered obligations closed, and do not request them again. A missing, stale, mismatched, or unreadable receipt is unproven; name that disposition. When it conflicts with stale narrative, the verified matching receipt controls.";
+        "- RECEIPT-FIRST: Before emitting `evidence_request`, inspect each supplied receipt. Accept a passing receipt only when its candidate identity (commit/SHA or equivalent worktree/dispatch identity) and selection coverage (`test_project`/`test_class`) match this round; cite its identity/path, mark covered obligations closed, and do not request them again. A missing, stale, mismatched, or unreadable receipt is unproven; name that disposition. When it conflicts with stale narrative, the verified matching receipt controls.";
     private const string TesterInconclusiveReceiptContract =
         "- A matching timeout/killed/no-results receipt is inconclusive, not a pass, and closes nothing. For that same candidate, a claimed discriminating change must change the serialized `evidence_request` selection and the work it executes: only `test_project` and `test_class` define that selection. Description text, unsupported fields, and cosmetic selector differences are not a changed run. You may narrow with supported `test_class` syntax only while preserving unclosed coverage. If no justified changed selection is expressible, retain the open inconclusive finding and route the needed observation to its full-gate/operator/acceptance owner without emitting the identical request. A stale-candidate receipt may use the same selection against the current candidate. Do not lengthen deadlines by default or invent a cause. Keep full-gate/operator-owned obligations open and owned; do not widen conditional criteria.";
+    private const string TesterCompactReceiptFirstContract =
+        "- RECEIPT-FIRST: Inspect supplied receipts before `evidence_request`. Cite and reuse a passing receipt only when its candidate identity (commit/SHA or equivalent worktree/dispatch identity) and `test_project`/`test_class` coverage match; close covered work. Missing, stale, mismatched, or unreadable is unproven; verified matching evidence controls over stale narrative.";
+    private const string TesterCompactInconclusiveReceiptContract =
+        "- Timeout/killed/no-results is inconclusive, not a pass. For that candidate, do not repeat its selection without a stated discriminating `test_project`/`test_class` or observation change; otherwise keep it open and route the needed observation to its full-gate/operator/acceptance owner. Do not extend deadlines by default or invent causes; retain owned and conditional boundaries.";
     internal const int ReviewerComplexRequirementsMaxChars = 4371;
     internal const int ReviewerCompactRequirementsMaxChars = 3346;
+    internal const int TesterCompactRequirementsMaxChars = 3000;
 
     private const string ReviewerExhaustiveFindingsContract =
         "- Every `needs-work` verdict must inspect the complete candidate diff supplied for the current round and enumerate every blocking finding; never stop after the first. Put each in verdict prose and one semicolon-delimited `blockers` token (no literal semicolons), with file:line, severity `blocking` from `blocking|advisory`, and a violated acceptance criterion ID/label or clear quote/paraphrase. For deletions cite an old/new diff line; for file-wide defects, the defining line. Deduplicate only the same defect identity (stable_id preferred; otherwise normalized file/region+criterion+meaning), union criterion references, retain the most precise current anchor, and never merge by shared file, criterion, or cause. Order by violated criterion index, normalized file path, line/region, then stable_id; `blockers` uses that order. End needs-work verdict prose with this exact standalone line immediately before WORKER_RESULT: `no other blocking findings exist in this diff`. Keep it outside `blockers`.";
@@ -216,8 +221,8 @@ internal static class SdlcRolePromptRequirements
             AgentRole.Tester =>
             [
                 "## Tester Requirements",
-                TesterReceiptFirstContract,
-                TesterInconclusiveReceiptContract,
+                TesterCompactReceiptFirstContract,
+                TesterCompactInconclusiveReceiptContract,
                 "- PRIMARY PATH: prefer a Conductor-side run over executing tests yourself. Emit evidence_request with selections of test_project and test_class inside your findings JSON, and report tests: deferred naming what you requested. The Conductor runs that selection and returns receipts. This is faster, avoids composing runner commands for this platform and runner, and keeps large test output out of your context. Execute directly only when a test-class selection cannot settle the question.",
                 "- Derive focused checks from the requested behavior and report concrete evidence.",
                 "- Run or attempt exact commands; include exit code and concise output summary.",
