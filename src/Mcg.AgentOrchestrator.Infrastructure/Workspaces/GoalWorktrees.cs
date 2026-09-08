@@ -275,7 +275,6 @@ public static partial class GoalWorktrees
         DefaultRunWorktreePrune;
     internal static Func<string, IReadOnlyList<WorktreeLockHolder>> FindLockHoldersForCleanup { get; set; } =
         path => FindLockHolders(path);
-    internal static Func<IEnumerable<string>, ProcessCommandLineSnapshot>? ProcessCommandLineSnapshotForCleanupTests { get; set; }
     internal static Action<GoalWorktreeCleanupWarning> CleanupWarningSink { get; set; } = DefaultCleanupWarningSink;
     internal static Func<long>? CleanupElapsedMilliseconds { get; set; }
     internal static Func<DateTimeOffset> CleanupUtcNow { get; set; } = () => DateTimeOffset.UtcNow;
