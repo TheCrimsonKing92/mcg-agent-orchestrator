@@ -34,10 +34,20 @@ command operation; `GoalWorktreeCleanupHooks` is immutable for one cleanup opera
 | CLI readiness, recovery, next, conduct, lifecycle, and subscription-ready terminal sweeps | The command's `CleanupContext` | Each terminal sweep receives the same explicit hooks as its scheduler |
 | Persistent conduct startup, global reconcile, and acceptance preflight terminal sweeps | One locally loaded context per operation | Terminal sweep and cadence scheduler share that instance |
 | Dashboard hosted sweep | DI singleton context loaded from the configured application base directory | Hosted service receives the singleton scheduler |
-| Acceptance cohort, partition, and merge-train materialization | The conductor path selected `GoalWorktreeCleanupHooks.Default` during cleanup-debt recording | The conductor's `CleanupContext.Hooks` is carried by each disposable workspace | Production callers are migrated; nullable compatibility fallback remains for direct tests |
+| Acceptance cohort, partition, and merge-train materialization | The conductor previously selected a process-wide cleanup policy during cleanup-debt recording | The conductor's `CleanupContext.Hooks` is carried by each disposable workspace | Production callers pass their operation hook; nullable overload fallbacks construct fixed defaults only for direct callers and tests |
 | Nullable cleanup-hook overloads and `TerminalGoalSweep.Run` fallback | Compatibility fallback for direct callers and tests | **Open:** remove only after all callers pass explicit hooks |
 
 The `GoalWorktreeCleanupHooks` xUnit collection remains serialized because its fixture mutates the
 parent-process `MCG_DOTNET_ISOLATED_ROOT` and cleanup tests still mutate the listed legacy statics.
 It must remain until child-process environment and distinct git-root/process-registry isolation have
 Acceptance receipts.
+
+## Parked-branch reassessment
+
+The unlanded `c5c6640258a4e12eb854d78381dfb3238d5dd0fc` migration cannot be carried forward
+as-is. Its test builder derives from `GoalWorktreeCleanupHooks.Default`, which was a live adapter
+over the mutable static seams. The current record has fixed defaults and `ForConfiguration` creates
+an explicitly validated, normalized operation value. Reintroducing the old adapter would make an
+explicitly injected test hook observe another test's mutation and would regress this ownership
+migration. Any future mechanical test migration must build independent fixed records and pass them
+through the owning operation; it must not restore a global compatibility source.
