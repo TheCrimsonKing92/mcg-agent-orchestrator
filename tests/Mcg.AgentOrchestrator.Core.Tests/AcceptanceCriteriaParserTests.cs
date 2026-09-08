@@ -179,6 +179,91 @@ public sealed class AcceptanceCriteriaParserTests
             criteria);
     }
 
+    [Xunit.Theory]
+    [Xunit.InlineData("Acceptance criteria:")]
+    [Xunit.InlineData("  aCcEpTaNcE cRiTeRiA:  ")]
+    public void ParseDeclared_StandaloneLabel_PreservesNumberedCriteria(string heading)
+    {
+        var text = $"""
+            Brief preface.
+
+            {heading}
+            1. First declared criterion.
+            2. Second declared criterion,
+               with its indented continuation.
+            3. Third declared criterion.
+            4. Fourth declared criterion.
+            """;
+
+        var criteria = AcceptanceCriteriaParser.ParseDeclared(text);
+
+        Assert.Equal(
+            [
+                "First declared criterion.",
+                "Second declared criterion, with its indented continuation.",
+                "Third declared criterion.",
+                "Fourth declared criterion."
+            ],
+            criteria);
+    }
+
+    [Xunit.Fact]
+    public void ParseDeclared_StandaloneLabel_StopsAtRecognizedSectionAndTrailer()
+    {
+        var text = """
+            Acceptance criteria:
+            1. First declared criterion.
+
+            ## Scope
+            2. Unrelated numbered prose.
+
+            acceptance criteria:
+            3. Later declared criterion.
+
+            Verification:
+            4. Trailer prose.
+            """;
+
+        var criteria = AcceptanceCriteriaParser.ParseDeclared(text);
+
+        Assert.Equal(["First declared criterion."], criteria);
+        Assert.Equal(
+            "## Scope\n2. Unrelated numbered prose.\n\nacceptance criteria:\n3. Later declared criterion.\n\nVerification:\n4. Trailer prose.",
+            AcceptanceCriteriaParser.RemoveDeclaredSection(text));
+    }
+
+    [Xunit.Fact]
+    public void ParseDeclared_StandaloneLabel_StopsAtSubsequentStandaloneLabel()
+    {
+        var text = """
+            Acceptance criteria:
+            1. First declared criterion.
+
+            acceptance criteria:
+            2. Later declared criterion.
+            """;
+
+        Assert.Equal(["First declared criterion."], AcceptanceCriteriaParser.ParseDeclared(text));
+        Assert.Equal(
+            "acceptance criteria:\n2. Later declared criterion.",
+            AcceptanceCriteriaParser.RemoveDeclaredSection(text));
+    }
+
+    [Xunit.Fact]
+    public void ParseDeclared_OnlyRecognizesStandalonePlainLabel()
+    {
+        var text = """
+            This sentence mentions acceptance criteria: but is not a section.
+            1. Unrelated numbered prose.
+
+            Acceptance criteria
+            2. Still unrelated numbered prose.
+            """;
+
+        Assert.Empty(AcceptanceCriteriaParser.ParseDeclared(text));
+        Assert.Equal(text, AcceptanceCriteriaParser.RemoveDeclaredSection(text));
+    }
+
     [Xunit.Fact(DisplayName = "AcceptanceCriteriaParser_stops_at_plain_text_intake_trailer")]
     public void AcceptanceCriteriaParserStopsAtPlainTextIntakeTrailer()
     {
