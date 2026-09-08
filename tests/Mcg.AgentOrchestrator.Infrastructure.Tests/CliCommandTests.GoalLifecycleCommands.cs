@@ -4333,40 +4333,38 @@ public sealed class CliCommandTestsGoalLifecycleCleanupHooks : CliCommandTestBas
     {
         var root = CreateTempDirectory();
         var workspace = CreateRefinedWorkspace(root);
-        var originalNow = GoalWorktrees.CleanupUtcNow;
-        var originalBackoff = GoalWorktrees.CleanupBackoffDuration;
-        try
+        var now = DateTimeOffset.Parse("2026-07-03T12:00:00Z");
+        var hooks = new GoalWorktreeCleanupHooks
         {
-            var now = DateTimeOffset.Parse("2026-07-03T12:00:00Z");
-            GoalWorktrees.CleanupUtcNow = () => now;
-            GoalWorktrees.CleanupBackoffDuration = TimeSpan.FromMinutes(15);
-            var kernel = new AgentOrchestratorKernel();
-            var goal = kernel.CreateGoal("Cleanup debt visible in status");
-            GoalWorktrees.RecordGoalCleanupNeeded(workspace.ExecutionDirectory, goal.Id, "remove:branch-delete-failed");
-            IReadOnlyList<AgentDefinition> agents = AgentCatalog.Default().Agents;
-            var providers = new InMemoryModelProviderRegistry([]);
-            var profiles = WorkerProfileCatalog.Default();
-            Goal? currentGoal = goal;
+            CleanupUtcNow = () => now,
+            CleanupBackoffDuration = static () => TimeSpan.FromMinutes(15)
+        };
+        var kernel = new AgentOrchestratorKernel();
+        var goal = kernel.CreateGoal("Cleanup debt visible in status");
+        GoalWorktrees.RecordGoalCleanupNeeded(
+            workspace.ExecutionDirectory,
+            goal.Id,
+            "remove:branch-delete-failed",
+            hooks);
+        IReadOnlyList<AgentDefinition> agents = AgentCatalog.Default().Agents;
+        var providers = new InMemoryModelProviderRegistry([]);
+        var profiles = WorkerProfileCatalog.Default();
+        Goal? currentGoal = goal;
 
-            var output = CaptureConsole(() => CliCommandDispatcher.ExecuteCommand(
-                ["status", goal.Id.Value[..8]],
-                kernel,
-                workspace,
-                ref agents,
-                providers,
-                ref profiles,
-                ref currentGoal));
+        var output = CaptureConsole(() => CliCommandDispatcher.ExecuteCommand(
+            ["status", goal.Id.Value[..8]],
+            kernel,
+            workspace,
+            ref agents,
+            providers,
+            ref profiles,
+            ref currentGoal,
+            cleanupContext: new WorktreeCleanupContext(hooks)));
 
-            Xunit.Assert.Contains("Cleanup backoff:", output);
-            Xunit.Assert.Contains("reason=remove:branch-delete-failed", output);
-            Xunit.Assert.Contains("skip_until_utc=2026-07-03T12:15:00.0000000+00:00", output);
-            Xunit.Assert.Contains("remaining_wait=00:15:00", output);
-            Xunit.Assert.Contains($"Cleanup retry: conduct {goal.Id.Value[..8].ToLowerInvariant()} --loop", output);
-        }
-        finally
-        {
-            GoalWorktrees.CleanupUtcNow = originalNow;
-            GoalWorktrees.CleanupBackoffDuration = originalBackoff;
-        }
+        Xunit.Assert.Contains("Cleanup backoff:", output);
+        Xunit.Assert.Contains("reason=remove:branch-delete-failed", output);
+        Xunit.Assert.Contains("skip_until_utc=2026-07-03T12:15:00.0000000+00:00", output);
+        Xunit.Assert.Contains("remaining_wait=00:15:00", output);
+        Xunit.Assert.Contains($"Cleanup retry: conduct {goal.Id.Value[..8].ToLowerInvariant()} --loop", output);
     }
 }

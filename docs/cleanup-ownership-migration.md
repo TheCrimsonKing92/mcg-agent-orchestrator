@@ -6,12 +6,23 @@ command operation; `GoalWorktreeCleanupHooks` is immutable for one cleanup opera
 
 | Capability / state | Former semantics | Owner and lifecycle | Verification / migration state |
 | --- | --- | --- | --- |
-| All behavior hooks (build server through warning sink) | Mutable `GoalWorktrees` test seam, formerly read by live `Default` | Per-operation `GoalWorktreeCleanupHooks` | Production defaults are fresh immutable records; the legacy test seam is no longer observed by production and remains only until test migration |
-| Command-line snapshot | Test-only mutable `ProcessCommandLineSnapshotForCleanupTests`, formerly read by live `Default` | Per-operation `ProcessCommandLineSnapshot` | Production uses `ProcessCommandLines.SnapshotByNames`; migrate lock-holder tests before static removal |
-| Clocks and both backoffs | Mutable `GoalWorktrees` test seam, formerly read by live `Default` | Per-operation clock/backoff hook members; scheduler reads the same hook | Production defaults are fresh immutable records; migrate deterministic tests before static removal |
-| Cleanup policy | `ConfigureCleanup` test compatibility writes process-wide options | `WorktreeCleanupContext` creates fixed `CleanupOptions` from `WorktreeCleanupConfiguration.Load(AppContext.BaseDirectory)` | Production configuration is fixed in the context; migrate configuration tests before static compatibility removal |
-| Attention-store location | `ConfigureCleanup` test compatibility writes a normalized path | Fixed `CleanupAttentionStoreDirectory` in the owning context | Production configuration is fixed in the context; migrate configuration tests before static compatibility removal |
-| Sweep policy and cadence | Static scheduler options plus directory-keyed last-sweep map | `GoalWorktreeOrphanSweepScheduler` instance in the owning context | Instance holds its own options, lock, and map; two-context isolation requires Acceptance evidence |
+| `BuildServerShutdown` | Mutable static delegate | Immutable hook for one cleanup operation | Production uses the fixed record default; test writers remain in the two large cleanup families |
+| `ResetSandboxAcl` | Mutable `SandboxAclHelper` static | Immutable hook for one cleanup operation | Production uses the platform-specific fixed record default; test writers remain in the two large cleanup families |
+| `TryKillRecordedProcess` | Mutable static delegate | Immutable hook for one cleanup operation | Production uses the fixed record default; test writers remain in `GoalWorktreeTestsRemoveCleanup` |
+| `DeleteDirectory` | Mutable static delegate | Immutable hook for one cleanup operation | Production uses `DeleteDirectoryWithRetry`; test writers remain in the two large cleanup families |
+| `DeleteDirectoryForCleanup` | Mutable static delegate | Immutable hook for one cleanup operation | `TerminalGoalSweep` and cleanup APIs accept the owned hook; loop-policy test migrated in this change |
+| `RunWorktreeRemove` | Mutable static delegate | Immutable hook for one cleanup operation | Production uses `DefaultRunWorktreeRemove`; test writers remain in `GoalWorktreeTestsRemoveCleanup` |
+| `RunWorktreePrune` | Mutable static delegate | Immutable hook for one cleanup operation | Production uses `DefaultRunWorktreePrune`; test writers remain in `GoalWorktreeTestsRemoveCleanup` |
+| `FindLockHoldersForCleanup` | Mutable static delegate | Immutable hook for one cleanup operation | Production derives the default from the record's snapshot hook; test writers remain in the two large cleanup families |
+| `ProcessCommandLineSnapshot` | Mutable `ProcessCommandLineSnapshotForCleanupTests` static | Immutable hook for one cleanup operation | Added to the hook record; production uses `ProcessCommandLines.SnapshotByNames`; lock-holder tests already inject it |
+| `CleanupWarningSink` | Mutable static delegate | Immutable hook for one cleanup operation | CLI/status and terminal sweep receive it from their context; loop-policy test migrated, while landing and cleanup-family writers remain |
+| `CleanupElapsedMilliseconds` | Mutable static delegate | Immutable hook for one cleanup operation | Production uses no elapsed override; deterministic cleanup-family writers remain |
+| `CleanupUtcNow` | Mutable static delegate | Immutable hook for one cleanup operation | Scheduler and state cleanup read the operation hook; CLI status test migrated, cleanup-family writers remain |
+| `CleanupBackoffDuration` | Mutable static value | Immutable hook for one cleanup operation | CLI status test migrated; deterministic cleanup-family writers remain |
+| `CleanupBudgetExhaustedBackoffDuration` | Mutable static value | Immutable hook for one cleanup operation | Production uses the fixed one-minute record default; deterministic cleanup-family writers remain |
+| `CleanupOptions` | `ConfigureCleanup` changed process-wide policy | `WorktreeCleanupContext` owns a validated fixed record value | Context is built from `WorktreeCleanupConfiguration.Load(AppContext.BaseDirectory)`; configuration-family writers remain |
+| `CleanupAttentionStoreDirectory` | `ConfigureCleanup` changed a process-wide normalized path | `WorktreeCleanupContext` owns a normalized fixed record value | Program binds the workspace orchestrator directory; no production fallback to configuration statics |
+| Scheduler `Options`, gate, and `LastSweepByDirectory` | Static policy and process-wide directory cadence map | `GoalWorktreeOrphanSweepScheduler` instance in the context | Instance owns its lock and map; Acceptance must exercise two-context isolation |
 | Acceptance-cohort cleanup debt | `RecordAcceptanceCohortCleanupNeeded` selected live `Default` | Cohort, partition, and merge-train workspace carry the conductor's immutable hooks through materialization and disposal | Production conductor paths pass their owning hooks; direct/test callers retain a compatibility fallback until all test seams migrate |
 
 ## Production caller ownership
