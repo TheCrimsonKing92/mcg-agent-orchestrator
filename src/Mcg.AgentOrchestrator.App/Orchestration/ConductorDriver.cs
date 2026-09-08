@@ -4829,6 +4829,17 @@ internal sealed partial class ConductorDriver
             // otherwise the stale non-green receipt can never be replaced by a current result.
         }
 
+        if (TryGetReusableGreenPreReviewEvidence(
+                reviewerTask,
+                goal.Id.Value,
+                context.CandidateSha,
+                context.SelectedFocusedTests,
+                out var constituentReceipts))
+        {
+            RecordReusedPreReviewReceipt(goal, reviewerTask, context, round, constituentReceipts);
+            return false;
+        }
+
         if (context.NoApplicableTests)
         {
             RecordPreReviewReceipt(
@@ -5452,6 +5463,82 @@ internal sealed partial class ConductorDriver
             DateTimeOffset.UtcNow);
         _recordPreReviewEvidence(goal.Id, reviewerTask.Id, receipt);
         return receipt;
+    }
+
+    private static bool TryGetReusableGreenPreReviewEvidence(
+        TaskSpec reviewerTask,
+        string goalId,
+        string? candidateSha,
+        IReadOnlyList<string> requestedSelections,
+        out IReadOnlyList<PreReviewEvidenceReceipt> constituentReceipts)
+    {
+        constituentReceipts = [];
+        if (string.IsNullOrWhiteSpace(candidateSha) || requestedSelections.Count == 0)
+        {
+            return false;
+        }
+
+        var green = reviewerTask.PreReviewEvidenceHistory
+            .Where(receipt =>
+                string.Equals(receipt.GoalId, goalId, StringComparison.Ordinal) &&
+                string.Equals(receipt.CandidateSha, candidateSha, StringComparison.OrdinalIgnoreCase) &&
+                receipt.Disposition == PreReviewEvidenceDisposition.Green &&
+                receipt.FailedCheckCount == 0 &&
+                receipt.Checks.All(check => check.Passed))
+            .OrderByDescending(receipt => receipt.RecordedAt)
+            .ToArray();
+        if (green.Length == 0)
+        {
+            return false;
+        }
+
+        var coverage = new HashSet<string>(
+            green.SelectMany(receipt => receipt.SelectedFocusedTests),
+            StringComparer.Ordinal);
+        if (!requestedSelections.All(coverage.Contains))
+        {
+            return false;
+        }
+
+        constituentReceipts = green
+            .Where(receipt => receipt.SelectedFocusedTests.Any(coverageSelection =>
+                requestedSelections.Contains(coverageSelection, StringComparer.Ordinal)))
+            .ToArray();
+        return constituentReceipts.Count > 0;
+    }
+
+    private void RecordReusedPreReviewReceipt(
+        Goal goal,
+        TaskSpec reviewerTask,
+        PreReviewEvidenceContext context,
+        int round,
+        IReadOnlyList<PreReviewEvidenceReceipt> constituents)
+    {
+        var evidencePointers = constituents
+            .Select(receipt => receipt.EvidencePointer)
+            .Where(pointer => !string.IsNullOrWhiteSpace(pointer))
+            .Distinct(StringComparer.OrdinalIgnoreCase)
+            .OrderBy(pointer => pointer, StringComparer.OrdinalIgnoreCase)
+            .ToArray();
+        var receipt = new PreReviewEvidenceReceipt(
+            goal.Id.Value,
+            round,
+            context.CandidateSha!,
+            context.SelectedFocusedTests,
+            PreReviewEvidenceDisposition.Green,
+            PassedCheckCount: context.SelectedFocusedTests.Count,
+            FailedCheckCount: 0,
+            Checks: context.SelectedFocusedTests.Select(selection => new PreReviewEvidenceCheckReceipt(
+                selection,
+                selection,
+                Passed: true,
+                ExitCode: 0)).ToArray(),
+            FailingTestIdentities: [],
+            MappingReason: context.MappingReason + "; reused green current-candidate evidence coverage.",
+            EvidencePointer: evidencePointers.Length == 0 ? "reused-current-candidate" : string.Join(",", evidencePointers),
+            RecordedAt: DateTimeOffset.UtcNow,
+            Advisories: ["reused-current-candidate"]);
+        _recordPreReviewEvidence(goal.Id, reviewerTask.Id, receipt);
     }
 
     private static bool TryValidatePreReviewEvidenceCoverage(

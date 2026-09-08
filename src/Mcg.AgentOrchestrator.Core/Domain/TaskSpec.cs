@@ -7,6 +7,7 @@ public sealed class TaskSpec
     private readonly CappedVerificationHistory _verificationHistory = [];
     private readonly List<TaskDispatchRecord> _dispatchHistory = [];
     private readonly List<RetryAdmissionReceipt> _retryAdmissionHistory = [];
+    private readonly List<PreReviewEvidenceReceipt> _preReviewEvidenceHistory = [];
 
     public TaskSpec(TaskId id, string description, AgentRole requiredRole, string? verificationPlan = null)
     {
@@ -73,6 +74,8 @@ public sealed class TaskSpec
     public bool WasCancelledByConductor { get; private set; }
 
     public PreReviewEvidenceReceipt? PreReviewEvidenceReceipt { get; private set; }
+
+    public IReadOnlyList<PreReviewEvidenceReceipt> PreReviewEvidenceHistory => _preReviewEvidenceHistory;
 
     internal void AssignTo(AgentId agentId)
     {
@@ -258,7 +261,8 @@ public sealed class TaskSpec
             _retryAdmissionHistory.ToArray(),
             RetryAdmissionHoldRoute,
             PendingReviewFindingRepairCheckpoint,
-            AcceptedRetryFeedback);
+            AcceptedRetryFeedback,
+            _preReviewEvidenceHistory.ToArray());
     }
 
     internal static TaskSpec FromSnapshot(TaskSnapshot snapshot)
@@ -458,7 +462,10 @@ public sealed class TaskSpec
         task.PendingReviewFindingRepairCheckpoint = snapshot.PendingReviewFindingRepairCheckpoint;
         task.PendingRetryCause = snapshot.PendingRetryCause;
         task.RetryAdmissionHoldRoute = snapshot.RetryAdmissionHoldRoute;
-        task.PreReviewEvidenceReceipt = snapshot.PreReviewEvidenceReceipt;
+        task._preReviewEvidenceHistory.AddRange(
+            snapshot.PreReviewEvidenceHistory ??
+            (snapshot.PreReviewEvidenceReceipt is null ? [] : [snapshot.PreReviewEvidenceReceipt]));
+        task.PreReviewEvidenceReceipt = snapshot.PreReviewEvidenceReceipt ?? task._preReviewEvidenceHistory.LastOrDefault();
         task.InterruptedDispatchRecoveryId = snapshot.InterruptedDispatchRecoveryId;
         task.WasCancelledByConductor = snapshot.WasCancelledByConductor;
         return task;
@@ -630,11 +637,12 @@ public sealed class TaskSpec
     internal bool RecordPreReviewEvidence(PreReviewEvidenceReceipt receipt)
     {
         ArgumentNullException.ThrowIfNull(receipt);
-        if (PreReviewEvidenceReceipt?.ContentEquals(receipt) == true)
+        if (_preReviewEvidenceHistory.Any(existing => existing.ContentEquals(receipt)))
         {
             return false;
         }
 
+        _preReviewEvidenceHistory.Add(receipt);
         PreReviewEvidenceReceipt = receipt;
         return true;
     }

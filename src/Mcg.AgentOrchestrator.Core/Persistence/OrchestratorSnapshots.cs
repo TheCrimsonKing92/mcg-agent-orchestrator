@@ -120,7 +120,8 @@ public sealed record TaskSnapshot(
     IReadOnlyList<RetryAdmissionReceipt>? RetryAdmissionHistory = null,
     RetryAdmissionRoute? RetryAdmissionHoldRoute = null,
     ReviewFindingRepairCheckpoint? PendingReviewFindingRepairCheckpoint = null,
-    AcceptedRetryFeedback? AcceptedRetryFeedback = null);
+    AcceptedRetryFeedback? AcceptedRetryFeedback = null,
+    IReadOnlyList<PreReviewEvidenceReceipt>? PreReviewEvidenceHistory = null);
 
 public sealed record TaskExecutionSnapshot(
     string AgentId,
