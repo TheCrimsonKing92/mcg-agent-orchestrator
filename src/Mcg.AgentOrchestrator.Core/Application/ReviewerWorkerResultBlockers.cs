@@ -538,7 +538,7 @@ public static class WorkerResultBlockers
     {
         assignedScopeComplete = false;
         diagnostic = null;
-        var values = EnumerateWorkerResultLines(SplitRetainedLines(workerOutput))
+        var values = EnumerateCompleteWorkerResultLines(SplitRetainedLines(workerOutput))
             .Where(line => TryFindField(line, "assigned_scope_complete", out _))
             .Select(line =>
             {
@@ -565,9 +565,8 @@ public static class WorkerResultBlockers
 
     public static bool? GetAssignedScopeComplete(TaskVerificationRecord? verification)
     {
-        // The dispatch result owner parses this optional field once, before recording the
-        // verification. Classification must use that durable observation rather than
-        // reinterpreting a bounded preview or a legacy/non-authoritative output artifact.
+        // The dispatch result owner parses this optional field once before recording the
+        // verification. Classification uses that durable observation without reparsing output.
         return verification?.AssignedScopeComplete;
     }
 
@@ -680,6 +679,44 @@ public static class WorkerResultBlockers
         {
             yield return line;
         }
+    }
+
+    private static IEnumerable<string> EnumerateCompleteWorkerResultLines(IEnumerable<string> evidenceLines)
+    {
+        List<string>? latestCompleteBlock = null;
+        var currentBlock = new List<string>();
+        var inBlock = false;
+
+        foreach (var rawLine in evidenceLines)
+        {
+            var line = NormalizeWorkerResultLine(rawLine);
+            if (IsWorkerResultOpener(line))
+            {
+                inBlock = true;
+                currentBlock.Clear();
+                continue;
+            }
+
+            if (IsWorkerResultEndMarker(line))
+            {
+                if (inBlock)
+                {
+                    latestCompleteBlock = [.. currentBlock];
+                    currentBlock.Clear();
+                    inBlock = false;
+                }
+
+                continue;
+            }
+
+            if (inBlock && line.Length > 0)
+            {
+                currentBlock.Add(line);
+            }
+        }
+
+        // A newer unterminated block is truncation, not a fallback to an older declaration.
+        return inBlock ? [] : latestCompleteBlock ?? [];
     }
 
     private static bool TryFindBlockersField(string line, out string blocker)

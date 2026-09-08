@@ -3299,19 +3299,24 @@ internal sealed partial class ConductorDriver
     private static RetryCause? ResolveAutomaticRetryCause(TaskSpec task)
     {
         var verification = task.LastVerification;
+        if (verification is null)
+        {
+            return null;
+        }
+
         if (TaskOutcomeClassifier.IsIncompleteScopeDeclaration(
-                TaskOutcomeClassifier.TryExtractRule(
-                    DispatchFailureClassifier.Classify(task, verification).ClassifierReceipt)))
+            TaskOutcomeClassifier.TryExtractRule(
+                DispatchFailureClassifier.Classify(task, verification).ClassifierReceipt)))
         {
             return RetryCause.ContractClarification;
         }
 
-        if (verification?.ProviderFailureKind is ProviderFailureKind.RateLimit or ProviderFailureKind.Connectivity)
+        if (verification.ProviderFailureKind is ProviderFailureKind.RateLimit or ProviderFailureKind.Connectivity)
             return RetryCause.ProviderInterruption;
-        if (verification?.ProviderFailureKind == ProviderFailureKind.Sandbox1312)
+        if (verification.ProviderFailureKind == ProviderFailureKind.Sandbox1312)
             return RetryCause.EnvironmentApparatusFailure;
 
-        var findings = verification?.MergedReviewFindings?
+        var findings = verification.MergedReviewFindings?
             .Where(finding => finding.State == ReviewFindingState.Open && finding.Severity == FindingSeverity.Blocking)
             .ToArray() ?? [];
         if (findings.Any(finding => finding.Category is FindingCategory.OperatorOwned or FindingCategory.SpecDefect))

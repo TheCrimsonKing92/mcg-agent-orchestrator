@@ -2,6 +2,44 @@ using Mcg.AgentOrchestrator.Core;
 
 public sealed class ModelExecutionTests
 {
+    [Xunit.Fact(DisplayName = "ExecuteAssignedTask_routes_incomplete_developer_scope_to_revision")]
+    public async Task ExecuteAssignedTaskRoutesIncompleteDeveloperScopeToRevision()
+    {
+        var clock = new FakeClock();
+        var kernel = new AgentOrchestratorKernel(clock);
+        var goal = kernel.CreateGoal("Implement the complete assigned scope");
+        var agents = DefaultAgents();
+        kernel.ActivateGoal(goal.Id, agents);
+        var task = goal.Tasks.First(task => task.RequiredRole == AgentRole.Developer);
+        var output = string.Join(
+            Environment.NewLine,
+            "WORKER_RESULT:",
+            "files: src/Partial.cs",
+            "commands: dotnet build",
+            "tests: deferred - Acceptance owns managed test execution",
+            "commit: none",
+            "blockers: none",
+            "assigned_scope_complete: false",
+            "model_fit: OpenAI/test - adequate - focused regression",
+            "skills: none",
+            "confidence: high",
+            "END_WORKER_RESULT");
+        var runner = new AgentTaskRunner(
+            kernel,
+            agents,
+            new InMemoryModelProviderRegistry([new FakeModelProvider("OpenAI", output)]),
+            clock);
+
+        await runner.RunAsync(goal.Id, task.Id);
+
+        Assert.Equal(WorkTaskStatus.Failed, task.Status);
+        Assert.Contains(
+            goal.Timeline,
+            evt => evt.TaskId == task.Id &&
+                evt.Kind == ProgressKind.TaskFailed &&
+                evt.Message.Contains("assigned implementation scope incomplete", StringComparison.Ordinal));
+    }
+
     [Xunit.Fact(DisplayName = "ExecuteAssignedTask_calls_assigned_model_provider")]
     public async Task ExecuteAssignedTaskCallsAssignedModelProvider()
 {

@@ -40,6 +40,18 @@ public sealed class AssignedScopeCompleteTests
     }
 
     [Xunit.Fact]
+    public void ReaderIgnoresAScopeValueTruncatedBeforeTheEndMarker()
+    {
+        var output = $"WORKER_RESULT:{Environment.NewLine}assigned_scope_complete: f";
+
+        var found = WorkerResultBlockers.TryGetAssignedScopeComplete(output, out _, out var diagnostic);
+
+        Xunit.Assert.False(found);
+        Xunit.Assert.Null(diagnostic);
+        Xunit.Assert.False(WorkerResultBlockers.TryFindMalformedEvidenceBoundOutcome(output, out _));
+    }
+
+    [Xunit.Fact]
     public void SnapshotRoundTripPreservesObservedValue()
     {
         var task = new TaskSpec(TaskId.New(), "Implement assigned scope", AgentRole.Developer);
@@ -128,7 +140,7 @@ public sealed class AssignedScopeCompleteTests
     }
 
     [Xunit.Fact]
-    public void UnavailableFullOutputDoesNotPromoteAPreviewScopeDeclaration()
+    public void ClassifierUsesPersistedScopeObservationWhenFullOutputIsUnavailable()
     {
         var task = new TaskSpec(TaskId.New(), "Implement assigned scope", AgentRole.Developer);
         var output = string.Join(

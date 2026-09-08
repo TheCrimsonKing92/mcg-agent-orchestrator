@@ -240,6 +240,19 @@ public sealed class AgentTaskRunner
             return new AgentTaskRunResult(goal, task, execution);
         }
 
+        if (hasCompleteWorkerResult &&
+            task.RequiredRole == AgentRole.Developer &&
+            WorkerResultBlockers.TryGetAssignedScopeComplete(output, out var assignedScopeComplete, out _) &&
+            !assignedScopeComplete)
+        {
+            _kernel.ReportTaskProgress(
+                goal.Id,
+                task.Id,
+                WorkTaskStatus.Failed,
+                "Developer declared the assigned implementation scope incomplete; bounded revision or clarification is required before completion.");
+            return new AgentTaskRunResult(goal, task, execution);
+        }
+
         _kernel.ReportTaskProgress(goal.Id, task.Id, WorkTaskStatus.Completed, $"{agent.Name} completed task.");
 
         return new AgentTaskRunResult(goal, task, execution);
