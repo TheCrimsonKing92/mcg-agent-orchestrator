@@ -173,6 +173,21 @@ public sealed class BudgetAwareRoutingTests
         Assert.Equal("codex-cli", item.ProfileName);
         Assert.Equal(WorkerRouteDisposition.Selected, item.Route!.Disposition);
         Assert.Contains(item.Route.Reasons, reason => reason.Contains("scorecard=Prefer", StringComparison.OrdinalIgnoreCase));
+
+        var sparkDeveloperAgent = developerAgent with
+        {
+            Subscription = developerAgent.Subscription! with { WorkerProfileName = "codex-spark" }
+        };
+        var sparkAgents = agents
+            .Select(agent => agent.Id == developerAgent.Id ? sparkDeveloperAgent : agent)
+            .ToArray();
+
+        var sparkPlan = SubscriptionPlanBuilder.Build(updatedGoal, sparkAgents, DefaultProfiles, scorecard: scorecard);
+        var sparkItem = sparkPlan.Items.Single(i => i.Role == AgentRole.Developer);
+
+        Assert.Equal("codex-spark", sparkItem.ProfileName);
+        Assert.Equal(WorkerRouteDisposition.Blocked, sparkItem.Route!.Disposition);
+        Assert.Contains(sparkItem.Route.Reasons, reason => reason.Contains("scorecard=Avoid", StringComparison.OrdinalIgnoreCase));
     }
 
     [Xunit.Fact(DisplayName = "BudgetAwareRouting_budget_exhausted_suggests_ollama_fallback")]
