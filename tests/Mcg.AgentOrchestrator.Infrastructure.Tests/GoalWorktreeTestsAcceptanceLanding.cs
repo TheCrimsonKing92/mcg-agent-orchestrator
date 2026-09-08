@@ -806,7 +806,8 @@ public sealed class GoalWorktreeTestsAcceptanceLanding : GoalWorktreeTestBase
                     providers,
                     ref profiles,
                     ref currentGoal,
-                    acceptanceVerifier: FakeAcceptanceVerifier.Passed());
+                    acceptanceVerifier: FakeAcceptanceVerifier.Passed(),
+                    acceptanceCleanupContext: CreateIsolatedCleanupContext(workspace.ExecutionDirectory));
                 Assert.True(changed);
             });
 
@@ -1045,7 +1046,8 @@ public sealed class GoalWorktreeTestsAcceptanceLanding : GoalWorktreeTestBase
                     ref agents,
                     providers,
                     ref profiles,
-                    ref currentGoal);
+                    ref currentGoal,
+                    cleanupContext: CreateIsolatedCleanupContext(workspace.ExecutionDirectory));
 
                 Assert.False(changed);
             });
@@ -1092,7 +1094,8 @@ public sealed class GoalWorktreeTestsAcceptanceLanding : GoalWorktreeTestBase
                     ref agents,
                     providers,
                     ref profiles,
-                    ref currentGoal);
+                    ref currentGoal,
+                    cleanupContext: CreateIsolatedCleanupContext(workspace.ExecutionDirectory));
 
                 Assert.False(changed);
             });

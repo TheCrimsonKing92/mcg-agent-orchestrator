@@ -320,7 +320,8 @@ public sealed class GoalWorktreeTestsRebaseMerge : GoalWorktreeTestBase
                 ref agents,
                 providers,
                 ref profiles,
-                ref currentGoal));
+                ref currentGoal,
+                cleanupContext: CreateIsolatedCleanupContext(workspace.ExecutionDirectory)));
             var merge = GoalWorktrees.TryFastForwardMerge(repo, goal.Id);
 
             Assert.True(output.Contains("Rebased", StringComparison.Ordinal));
@@ -1113,7 +1114,8 @@ public sealed class GoalWorktreeTestsRebaseMerge : GoalWorktreeTestBase
                 ref agents,
                 providers,
                 ref profiles,
-                ref currentGoal));
+                ref currentGoal,
+                cleanupContext: CreateIsolatedCleanupContext(workspace.ExecutionDirectory)));
 
             Assert.True(ex.Message.Contains("policy 'safe-auto' blocks acceptance merge", StringComparison.Ordinal));
             Assert.False(File.Exists(Path.Combine(repo, "policy.txt")));

@@ -355,3 +355,26 @@ The separately validated rebase/merge root migration passed 31/31 in 760.774 sec
 (`cleanup-explicit-root-rebase-control/receipt.json`); no rebase source changed after that run.
 These family receipts close the previous 35/36 family result at this checkpoint. They do not prove
 whole-collection isolation, the remaining caller migration, full acceptance, or the performance goal.
+
+## Alternate CLI entry points and remaining fixture-root fallback
+
+Five additional fixture calls now pass an explicit cleanup context: persistent conduct for a
+completed goal, workspace rebase, policy-blocked acceptance, and two backlog read/help dispatcher
+calls. These use the existing `acceptanceCleanupContext` or `cleanupContext` parameter. The
+sanctioned build passed. Actual conduct/landing and rebase controls passed (58.692s and 27.233s),
+with confirmed clean host exits and no timeout. Both changed test files match the frozen test DLL
+`18917FD52CB569DC82550A74B6C4EDE2CC64D8E4E017AA11DCA48F708FD384B2`.
+Receipts: `cleanup-entrypoints-conduct-control` and `cleanup-entrypoints-rebase-control`.
+These are focused checks after the five-call change; the earlier 36/31 family receipts remain
+qualified to their prior checkpoint.
+The two backlog calls and policy-blocked call were build-verified after this change; they await
+the next affected-family run. Anthropic review found no concrete blocker for this checkpoint.
+
+The remaining fixture migration is not complete: `GoalWorktreeTestBase` removal and sweep helpers
+still call `CleanupHooks.Build()`, whose builder permits a null `BuildStorageRoot`. Such calls can
+resolve the ambient storage root even though their hook objects are independent. Before claiming
+whole-family isolation, bind those operations to their fixture repository's root while preserving
+explicit caller overrides, then check the artifact-producing callers and distinguishable-root
+controls. The remaining environment-mutating fixtures and collection-owned environment baseline
+retain their guards. Async console capture is already local to the async context; its implementation
+does not reassign `Console.Out` per test and is not evidence for adding another serialization guard.
