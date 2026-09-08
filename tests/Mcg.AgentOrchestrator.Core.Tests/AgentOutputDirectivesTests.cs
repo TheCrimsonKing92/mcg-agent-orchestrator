@@ -168,7 +168,7 @@ public sealed class AgentOutputDirectivesTests
                 requirements.IndexOf("RECEIPT-FIRST", StringComparison.Ordinal) <
                 requirements.IndexOf("PRIMARY PATH", StringComparison.Ordinal));
             Assert.Contains("candidate identity", requirements, StringComparison.Ordinal);
-            Assert.Contains("equivalent worktree/dispatch identity", requirements, StringComparison.Ordinal);
+            Assert.Contains("proven equivalent worktree/dispatch candidate identity/content", requirements, StringComparison.Ordinal);
             Assert.Contains("`test_project`/`test_class`", requirements, StringComparison.Ordinal);
             Assert.Contains("cite", requirements, StringComparison.OrdinalIgnoreCase);
             Assert.Contains("covered", requirements, StringComparison.Ordinal);
@@ -187,8 +187,8 @@ public sealed class AgentOutputDirectivesTests
             $"Compact Tester requirements grew to {compact.Length} chars.");
     }
 
-    [Xunit.Fact(DisplayName = "Tester_requirements_keep_matching_timeout_receipts_inconclusive_and_require_a_real_selection_change")]
-    public void TesterRequirementsKeepMatchingTimeoutReceiptsInconclusiveAndRequireARealSelectionChange()
+    [Xunit.Fact(DisplayName = "Tester_requirements_reject_unsupported_observation_change_pretexts_after_matching_timeout")]
+    public void TesterRequirementsRejectUnsupportedObservationChangePretextsAfterMatchingTimeout()
     {
         foreach (var requirements in new[]
                  {
@@ -202,6 +202,9 @@ public sealed class AgentOutputDirectivesTests
             Assert.Contains("`test_project`", requirements, StringComparison.Ordinal);
             Assert.Contains("`test_class`", requirements, StringComparison.Ordinal);
             Assert.Contains("selection", requirements, StringComparison.Ordinal);
+            Assert.Contains("only `test_project` and `test_class` define that selection", requirements, StringComparison.Ordinal);
+            Assert.Contains("unsupported fields", requirements, StringComparison.Ordinal);
+            Assert.Contains("cosmetic selector differences", requirements, StringComparison.Ordinal);
             Assert.Contains("full-gate/operator/acceptance", requirements, StringComparison.Ordinal);
             Assert.Contains("deadline", requirements, StringComparison.OrdinalIgnoreCase);
             Assert.Contains("cause", requirements, StringComparison.OrdinalIgnoreCase);
