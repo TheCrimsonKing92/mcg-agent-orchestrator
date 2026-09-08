@@ -47,6 +47,41 @@ public sealed class ConductorDriverTestsTesterFindingRetry
     }
 
     [Xunit.Fact]
+    public void DeveloperOwnedTesterFindingReopensDeveloperAfterItsLatestRetryProducedNoCommit()
+    {
+        var (kernel, goal) = SoftwareGoal();
+        var developer = goal.Tasks.Single(task => task.RequiredRole == AgentRole.Developer);
+        var tester = goal.Tasks.Single(task => task.RequiredRole == AgentRole.Tester);
+        PassVerification(kernel, goal, developer, hasCommittedChanges: true);
+        kernel.RetryTask(goal.Id, developer.Id, "A blocking source finding needs a correction.");
+        PassVerification(kernel, goal, developer, hasCommittedChanges: false);
+        RecordTesterFinding(kernel, goal, tester, FindingCategory.Correctness, includeEvidenceRequest: true);
+
+        TaskId? retriedTaskId = null;
+        var focusedRuns = 0;
+        var driver = MakeDriver(
+            getFacts: _ => GoalLifecycleFacts.None,
+            getPreReviewEvidenceContext: _ => NoPreReviewContext("abc1234"),
+            runFocusedEvidence: (_, request) =>
+            {
+                focusedRuns++;
+                return DualArmFindingEvidence(request, FindingEvidenceArmDisposition.Red, "abc1234");
+            },
+            dispatchAndStart: _ => DispatchStartOutcome.Started(),
+            retryTaskWithRoundKind: (goalId, taskId, message, roundKind) =>
+            {
+                retriedTaskId = taskId;
+                return kernel.RetryTask(goalId, taskId, message, retryRoundKind: roundKind);
+            });
+
+        var result = driver.AdvanceOnce(goal, ConductorAutonomyPolicy.Permissive);
+
+        Assert.Equal(0, focusedRuns);
+        Assert.Equal(developer.Id, retriedTaskId);
+        Assert.True(result.Outcome is ConductorAdvanceOutcome.Executed);
+    }
+
+    [Xunit.Fact]
     public void TestEvidenceTesterFindingUsesEvidencePath()
     {
         var (kernel, goal) = SoftwareGoal();

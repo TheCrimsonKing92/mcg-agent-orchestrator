@@ -34,7 +34,7 @@ internal sealed partial class ConductorDriver
             .TakeWhile(candidate => candidate.Id != task.Id)
             .LastOrDefault(candidate =>
                 candidate.RequiredRole == AgentRole.Developer &&
-                HasCommittedOutput(candidate));
+                HasEverCommittedOutput(candidate));
         var finding = string.Join(
             "; ",
             developerOwnedFindings.Select(item =>
@@ -156,11 +156,6 @@ internal sealed partial class ConductorDriver
             .OfType<FindingEvidenceReceipt>()
             .DistinctBy(receipt => receipt.ReceiptId, StringComparer.Ordinal)
             .ToArray();
-        if (constituentReceipts.Length < 2)
-        {
-            return false;
-        }
-
         var receiptId = CreateConstituentReuseReceiptId(candidateSha, identity, constituentReceipts);
         reusableReceipt = new FindingEvidenceReceipt(
             receiptId,
@@ -172,16 +167,17 @@ internal sealed partial class ConductorDriver
                 string.Join(", ", constituentReceipts.Select(receipt => receipt.ReceiptId)),
             Arms: constituentReceipts
                 .SelectMany(receipt => receipt.Arms ?? [])
-                .Distinct()
+                .GroupBy(arm => new
+                {
+                    arm.Arm,
+                    arm.Sha,
+                    arm.Disposition,
+                    arm.Accepted,
+                    arm.Passed
+                })
+                .Select(group => group.Last())
                 .ToArray(),
-            RequestDispositions:
-            [
-                new FindingEvidenceRequestDisposition(
-                    "reused-constituents",
-                    identity,
-                    "reused-green-constituents",
-                    string.Join(",", constituentReceipts.Select(receipt => receipt.ReceiptId)))
-            ]);
+            RequestDispositions: []);
         reusableOutcome = new FindingEvidenceOutcome(
             Honoured: true,
             ReceiptId: receiptId,
@@ -193,8 +189,14 @@ internal sealed partial class ConductorDriver
         string.Equals(BuildFindingEvidenceIdentity(receipt.Request), identity, StringComparison.Ordinal) ||
         (receipt.RequestDispositions ?? []).Any(disposition =>
             string.Equals(disposition.RequestIdentity, identity, StringComparison.Ordinal) &&
-            (disposition.Disposition.StartsWith("executed-", StringComparison.Ordinal) ||
-                string.Equals(disposition.Disposition, "reused-green-constituents", StringComparison.Ordinal)));
+            disposition.Disposition.StartsWith("executed-", StringComparison.Ordinal));
+
+    private static bool HasEverCommittedOutput(TaskSpec task) =>
+        task.VerificationHistory.Any(verification => verification.HasCommittedChanges) ||
+        task.DispatchHistory.Any(dispatch =>
+            !string.IsNullOrWhiteSpace(dispatch.ResultCommit) &&
+            (string.IsNullOrWhiteSpace(dispatch.BaseCommit) ||
+             !string.Equals(dispatch.BaseCommit, dispatch.ResultCommit, StringComparison.OrdinalIgnoreCase)));
 
     private static string CreateConstituentReuseReceiptId(
         string candidateSha,

@@ -166,6 +166,54 @@ public sealed class ConductorDriverTestsFindingEvidenceReuse
         Assert.True(latestFinding.EvidenceOutcome?.Honoured);
         Assert.Equal(FindingEvidenceOutcomeReason.ValidEvidence, latestFinding.EvidenceOutcome?.ResultReason);
         Assert.StartsWith("finding-evidence-reuse-", latestFinding.EvidenceOutcome?.ReceiptId);
+        Assert.Empty(
+            reviewer.VerificationHistory.Last().FindingEvidenceReceipts!.Single().RequestDispositions ?? []);
+    }
+
+    [Xunit.Fact]
+    public void NarrowerRequestAtSameCandidateReusesSingleCoveringGreenReceipt()
+    {
+        const string candidateSha = "abc1234";
+        var (kernel, goal) = SoftwareGoal();
+        var reviewer = goal.Tasks.Single(task => task.RequiredRole == AgentRole.Reviewer);
+        foreach (var task in goal.Tasks.Where(task => task.RequiredRole != AgentRole.Reviewer))
+        {
+            PassVerification(kernel, goal, task);
+        }
+
+        var broader = EvidenceFindingWithRequest(
+            "The broader request establishes green evidence.",
+            id: "broader-request",
+            classes: ["ConductorDriverTests", "GoalAcceptanceVerifierTests"]);
+        var narrower = EvidenceFindingWithRequest(
+            "The narrower request is covered by the broader receipt.",
+            id: "narrower-request",
+            classes: ["ConductorDriverTests"]);
+        var focusedRuns = 0;
+        var driver = MakeDriver(
+            getPreReviewEvidenceContext: _ => NoPreReviewContext(candidateSha),
+            runFocusedEvidence: (_, request) =>
+            {
+                focusedRuns++;
+                return DualArmFindingEvidence(request, FindingEvidenceArmDisposition.Red, candidateSha);
+            },
+            dispatchAndStart: _ => DispatchStartOutcome.Started(),
+            retryTaskWithRoundKind: (goalId, taskId, message, roundKind) =>
+                kernel.RetryTask(goalId, taskId, message, retryRoundKind: roundKind),
+            recordFindingEvidenceRequest: (goalId, taskId, message) =>
+                kernel.RecordFindingEvidenceRequest(goalId, taskId, message),
+            recordFindingEvidenceOutcome: (goalId, taskId, stableId, outcome, receipt) =>
+                kernel.RecordFindingEvidenceOutcome(goalId, taskId, stableId, outcome, receipt));
+
+        FailReviewerNeedsWork(kernel, goal, reviewer, "broader request", findings: [broader]);
+        driver.AdvanceOnce(goal, ConductorAutonomyPolicy.Permissive);
+        FailReviewerNeedsWork(kernel, goal, reviewer, "narrower request", findings: [narrower]);
+        driver.AdvanceOnce(goal, ConductorAutonomyPolicy.Permissive);
+
+        Assert.Equal(1, focusedRuns);
+        Assert.True(reviewer.VerificationHistory.Last().MergedReviewFindings!
+            .Single(item => item.StableId == narrower.StableId)
+            .EvidenceOutcome?.Honoured);
     }
 
     [Xunit.Fact]
