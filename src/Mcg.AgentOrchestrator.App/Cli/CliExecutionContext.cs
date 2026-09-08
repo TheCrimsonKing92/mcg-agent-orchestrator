@@ -147,9 +147,12 @@ public IGoalAcceptanceVerifier AcceptanceVerifier { get; init; } = new GoalAccep
 
 public bool RunInjectedAcceptanceVerifierInCurrentProcess { get; init; }
 
-public ICliGoalWorktreeService Worktrees { get; init; } = DefaultCliGoalWorktreeService.Instance;
+    public ICliGoalWorktreeService Worktrees { get; init; } = DefaultCliGoalWorktreeService.Instance;
 
-public GoalWorktreeCleanupHooks CleanupHooks { get; init; } = GoalWorktreeCleanupHooks.Default;
+    public WorktreeCleanupContext CleanupContext { get; init; } =
+        new(GoalWorktreeCleanupOptions.Default);
+
+    public GoalWorktreeCleanupHooks CleanupHooks { get; init; } = GoalWorktreeCleanupHooks.Default;
 
 public IGoalLifecycleEventWriter EventWriter { get; init; } = NullGoalLifecycleEventWriter.Instance;
 

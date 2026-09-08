@@ -95,10 +95,12 @@ public sealed class GoalWorktreeTestsOrphanEphemeralSweep : GoalWorktreeTestBase
             Directory.CreateDirectory(Path.Combine(orphanPath, ".mcg-sandbox"));
             File.WriteAllText(Path.Combine(orphanPath, ".mcg-sandbox", "leftover.txt"), "low-il residue");
             var acl = new RecordingSandboxAclHelper();
-            GoalWorktrees.SandboxAclHelper = acl;
-            GoalWorktrees.BuildServerShutdown = (_, _) => { };
-
-            var result = GoalWorktreeOrphanSweepScheduler.SweepNow(repo);
+            var scheduler = new GoalWorktreeOrphanSweepScheduler(new GoalWorktreeCleanupHooks
+            {
+                ResetSandboxAcl = acl.ResetSandboxAcl,
+                BuildServerShutdown = (_, _) => { }
+            });
+            var result = scheduler.SweepNow(repo);
 
             Assert.Equal(1, result.RemovedCount);
             Assert.Empty(result.LeftoverPaths);
@@ -108,8 +110,6 @@ public sealed class GoalWorktreeTestsOrphanEphemeralSweep : GoalWorktreeTestBase
         }
         finally
         {
-            GoalWorktrees.SandboxAclHelper = originalAcl;
-            GoalWorktrees.BuildServerShutdown = originalShutdown;
             DeleteDirectory(repo);
         }
     }

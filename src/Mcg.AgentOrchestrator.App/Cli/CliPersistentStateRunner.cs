@@ -986,7 +986,8 @@ internal static partial class CliPersistentStateRunner
                     tickBaselines = startupKernel.ExportSnapshot().Goals.ToDictionary(goal => goal.Id, StringComparer.Ordinal);
                 }
 
-                GoalWorktreeOrphanSweepScheduler.SweepIfDue(workspace.ExecutionDirectory, sweepKernel);
+                WorktreeCleanupContext.Load(attentionStoreDirectory: workspace.OrchestratorDirectory)
+                    .Scheduler.SweepIfDue(workspace.ExecutionDirectory, sweepKernel);
                 RemoteGitMirror.TryStartBackgroundProcessing(sweepKernel, workspace.ExecutionDirectory, watchGoalId);
             }
             catch (Exception ex)
@@ -3891,7 +3892,8 @@ internal static partial class CliPersistentStateRunner
         var candidates = CaptureRunningProcessIdentities(kernel);
         var runner = new BackgroundDispatchRunner();
         var reconciled = runner.SweepExitedProcesses(kernel);
-        GoalWorktreeOrphanSweepScheduler.SweepIfDue(workspace.ExecutionDirectory, kernel);
+        WorktreeCleanupContext.Load(attentionStoreDirectory: workspace.OrchestratorDirectory)
+            .Scheduler.SweepIfDue(workspace.ExecutionDirectory, kernel);
         RemoteGitMirror.TryStartBackgroundProcessing(kernel, workspace.ExecutionDirectory);
         Console.WriteLine($"Reconciled dispatches: {reconciled}");
 

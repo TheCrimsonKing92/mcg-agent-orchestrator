@@ -1732,7 +1732,7 @@ private static bool? TryExecuteGoalCommand(string command, IReadOnlyList<string>
                     terminalSweep = terminalSweep with { ProgressEvents = remediation.Events };
                     ConsoleViews.PrintTerminalGoalSweep(terminalSweep, includeBlockers: false);
                     TerminalGoalSweepAttention.Surface(loopKernel, terminalSweep, context.Workspace.OrchestratorDirectory);
-                    GoalWorktreeOrphanSweepScheduler.SweepIfDue(context.Workspace.ExecutionDirectory, loopKernel);
+                    context.CleanupContext.Scheduler.SweepIfDue(context.Workspace.ExecutionDirectory, loopKernel);
                     GoalRefinementWorkCoordinator.TryLaunchFirstPending(
                         new SqliteOrchestratorStateRepository(context.Workspace.SqliteStatePath),
                         context.Workspace);

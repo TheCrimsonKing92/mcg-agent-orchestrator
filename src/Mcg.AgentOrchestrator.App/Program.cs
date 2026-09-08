@@ -211,9 +211,10 @@ if (ConductorContinuitySupervisor.ShouldSupervise(
     }
 }
 
+WorktreeCleanupContext cleanupContext;
 try
 {
-    GoalWorktreeOrphanSweepScheduler.Configure(
+    cleanupContext = new WorktreeCleanupContext(
         WorktreeCleanupConfiguration.Load(AppContext.BaseDirectory),
         workspace.OrchestratorDirectory);
 }
@@ -329,7 +330,7 @@ if (CliPersistentStateRunner.SkipsKernelState(startupArgs))
     Goal? commandCurrentGoal = null;
     try
     {
-        CliCommandDispatcher.ExecuteCommand(startupArgs, commandKernel, workspace, ref agents, providers, ref workerProfiles, ref commandCurrentGoal, operatorChannel);
+        CliCommandDispatcher.ExecuteCommand(startupArgs, commandKernel, workspace, ref agents, providers, ref workerProfiles, ref commandCurrentGoal, operatorChannel, cleanupContext: cleanupContext);
         return ExitCompletedStartupCommand(0);
     }
     catch (CliExitException ex)
@@ -369,7 +370,8 @@ try
         RunsStartupCleanup(startupArgs),
         authorityTransferRequested,
         workspace.SqliteStatePath,
-        workspace.ExecutionDirectory);
+        workspace.ExecutionDirectory,
+        cleanupContext);
     stateRepository = new SqliteOrchestratorStateRepository(workspace.SqliteStatePath);
     kernel = await stateRepository.LoadAsync();
     currentGoal = OrchestratorEntityResolver.GetLatestGoal(kernel);
@@ -606,7 +608,8 @@ internal static class ProgramStartupLifecycle
         bool runsStartupCleanup,
         bool authorityTransferRequested,
         string stateStorePath,
-        string executionDirectory)
+        string executionDirectory,
+        WorktreeCleanupContext? cleanupContext = null)
     {
         WorkerProcessJobs.ConfigureRegistry(stateStorePath);
         if (authorityTransferRequested)
@@ -617,7 +620,8 @@ internal static class ProgramStartupLifecycle
         WorkerProcessJobs.SweepStartupOrphans();
         if (runsStartupCleanup)
         {
-            GoalWorktreeOrphanSweepScheduler.SweepNow(executionDirectory);
+            (cleanupContext ?? new WorktreeCleanupContext(GoalWorktreeCleanupOptions.Default))
+                .Scheduler.SweepNow(executionDirectory);
         }
     }
 }
