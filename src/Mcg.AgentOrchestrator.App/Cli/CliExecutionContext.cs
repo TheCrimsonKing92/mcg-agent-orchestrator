@@ -417,7 +417,9 @@ internal sealed class DefaultCliGoalWorktreeService : ICliGoalWorktreeService
         AcceptanceVerificationResult? verification,
         bool verificationSkipped,
         string? executionDirectory = null) =>
-        GoalAcceptanceEvidenceBundleBuilder.Build(kernel, goal, worktreePath, verification, verificationSkipped, executionDirectory);
+        GoalAcceptanceEvidenceBundleBuilder.Build(
+            kernel, goal, worktreePath, verification, verificationSkipped,
+            cleanupHooks.BuildStorageRoot, executionDirectory);
 }
 
 internal sealed record AcceptanceHostStopRequest(

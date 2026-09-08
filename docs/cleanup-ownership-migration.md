@@ -297,3 +297,23 @@ was identical in both arms (`89D81643F14B6064D3DCE39A8D123903E8FF0638D0D6E70B15A
 and the verifier confirmed the same 13-case roster. Receipts: `cleanup-service-owner-paired-results.json`
 and `cleanup-service-source-comparison.json`. These are discriminating CLI ownership results;
 they are not a fresh 60-case family pass or full acceptance. Full goal completion remains unproven.
+
+## Acceptance evidence uses the execution owner's storage root
+
+The context-bound CLI adapter now passes its build-storage root to the acceptance evidence
+builder. The builder requires this argument; an explicit null retains legacy ambient resolution.
+Previously the CLI could execute against its configured root while reporting a missing ambient
+root. This was a diagnostic projection defect, not evidence of an incorrect gate verdict.
+
+The real CLI storage-isolation case now checks that the reported root is present and equals the
+verifier's execution root while retaining its busy alternate-root and ambient-absence checks.
+The seven storage cases and the legacy-null provenance case passed (8/8). Both managed hosts
+exited with code zero, confirmed exit, and no timeout. Four PDB/source checks match the changed
+builder, adapter, and test files. Test assembly SHA256:
+`0CE1CDE121BCA08C2EE4CC26A6C8A911D5808664DC5C79AC67B0A6A1FE1F522B`.
+Receipts are `cleanup-evidence-root-storage-control/receipt.json` and
+`cleanup-evidence-root-provenance-control/receipt.json` under the operator evidence directory.
+Anthropic review informed the required argument and whitespace-independent root-line check.
+Its inference that post-verification reporting cannot affect completion latency was incorrect:
+reporting remains inside that wait. No causal connection to the separate synchronization failure
+has been established, and this patch does not change its deadlines or claim to resolve it.

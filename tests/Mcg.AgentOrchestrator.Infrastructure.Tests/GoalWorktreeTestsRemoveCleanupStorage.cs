@@ -71,6 +71,10 @@ public sealed class GoalWorktreeTestsRemoveCleanupStorage : GoalWorktreeTestBase
             Assert.Equal(GoalStatus.Completed, goal.Status);
             var environment = Assert.IsType<DotnetBuildEnvironment>(verifier.ObservedEnvironment);
             Assert.Equal(DotnetBuildEnvironmentManager.GoalRoot(goal.Id, rootB), environment.RootPath);
+            var reportedRoot = Assert.Single(accepted.Split('\n')
+                .Select(static line => line.Trim())
+                .Where(static line => line.StartsWith("root: ", StringComparison.Ordinal)));
+            Assert.Equal($"root: present {environment.RootPath}", reportedRoot);
             Assert.True(rootB.ContainsPath(environment.ExecutionLockPath), "CLI acceptance ignored its configured storage namespace.");
             Assert.True(rootB.ContainsPath(environment.ArtifactsPath));
             Assert.False(Directory.Exists(ambientGoalRoot));
