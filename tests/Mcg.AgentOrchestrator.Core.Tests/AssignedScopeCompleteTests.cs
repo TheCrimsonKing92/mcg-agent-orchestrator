@@ -51,4 +51,70 @@ public sealed class AssignedScopeCompleteTests
 
         Xunit.Assert.False(restored.LastVerification!.AssignedScopeComplete);
     }
+
+    [Xunit.Theory]
+    [Xunit.InlineData(true, true, "pass - focused verification passed", "incomplete-scope-declaration")]
+    [Xunit.InlineData(true, false, "pass - focused verification passed", "incomplete-scope-declaration")]
+    [Xunit.InlineData(false, false, "pass - focused verification passed", "incomplete-scope-declaration")]
+    public void ExplicitIncompleteDeveloperScopeCannotReachAnySuccessPath(
+        bool hasCommittedChanges,
+        bool workerResultPresent,
+        string tests,
+        string expectedRule)
+    {
+        var task = new TaskSpec(TaskId.New(), "Implement assigned scope", AgentRole.Developer);
+        var output = string.Join(
+            Environment.NewLine,
+            "WORKER_RESULT:",
+            "files: src/Feature.cs",
+            "commands: focused verification",
+            $"tests: {tests}",
+            "commit: abc1234",
+            "blockers: none",
+            "model_fit: fixture/model - adequate - scope test",
+            "skills: none",
+            "confidence: high",
+            "assigned_scope_complete: false",
+            "END_WORKER_RESULT");
+        var verification = new TaskVerificationRecord(
+            "test.exe", "C:\\repo", 0, output, string.Empty, DateTimeOffset.UtcNow,
+            WorkerResultPresent: workerResultPresent,
+            HasCommittedChanges: hasCommittedChanges,
+            AssignedScopeComplete: false);
+
+        var outcome = DispatchFailureClassifier.Classify(task, verification);
+
+        Xunit.Assert.NotEqual(DispatchOutcomeKind.VerifiedSuccess, outcome.Kind);
+        Xunit.Assert.Equal(RecoveryRecommendation.AutoRetry, outcome.RecoveryRecommendation);
+        Xunit.Assert.Contains($"rule={expectedRule}", outcome.ClassifierReceipt, StringComparison.Ordinal);
+    }
+
+    [Xunit.Fact]
+    public void FailingTestsTakePrecedenceOverAnIncompleteDeveloperDeclaration()
+    {
+        var task = new TaskSpec(TaskId.New(), "Implement assigned scope", AgentRole.Developer);
+        var output = string.Join(
+            Environment.NewLine,
+            "WORKER_RESULT:",
+            "files: src/Feature.cs",
+            "commands: focused verification",
+            "tests: fail - deterministic failure",
+            "commit: abc1234",
+            "blockers: none",
+            "model_fit: fixture/model - adequate - scope test",
+            "skills: none",
+            "confidence: high",
+            "assigned_scope_complete: false",
+            "END_WORKER_RESULT");
+        var verification = new TaskVerificationRecord(
+            "test.exe", "C:\\repo", 0, output, string.Empty, DateTimeOffset.UtcNow,
+            WorkerResultPresent: true,
+            HasCommittedChanges: true,
+            AssignedScopeComplete: false);
+
+        var outcome = DispatchFailureClassifier.Classify(task, verification);
+
+        Xunit.Assert.Contains("rule=succeeded-worker-result-failing-tests", outcome.ClassifierReceipt, StringComparison.Ordinal);
+        Xunit.Assert.DoesNotContain("incomplete-scope-declaration", outcome.ClassifierReceipt, StringComparison.Ordinal);
+    }
 }
