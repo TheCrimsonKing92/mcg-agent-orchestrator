@@ -2330,35 +2330,34 @@ internal sealed partial class ConductorDriver
             var identity = BuildFindingEvidenceIdentity(typedRequest);
             var mergedFinding = ReviewFindingConvergence.ResolveMergedFinding(
                 mergedFindings, round, finding.StableId);
-            if (mergedFinding?.EvidenceOutcome is { } priorOutcome)
+            var priorOutcome = mergedFinding?.EvidenceOutcome;
+            if (priorOutcome is not null && IsPermanentFindingEvidenceRefusal(priorOutcome))
             {
-                if (IsPermanentFindingEvidenceRefusal(priorOutcome))
-                {
-                    continue;
-                }
+                continue;
+            }
 
-                if (HasCurrentFindingEvidenceReceipt(
+            if (mergedFinding is not null &&
+                HasCurrentFindingEvidenceReceipt(
                         requestingTask,
                         mergedFinding,
                         typedRequest,
                         telemetryCandidateSha,
                         findingRoundFingerprint))
-                {
-                    continue;
-                }
+            {
+                continue;
+            }
 
-                if (TryGetReusableGreenFindingEvidenceReceipt(
-                        requestingTask,
-                        mergedFinding,
-                        typedRequest,
-                        telemetryCandidateSha,
-                        out var reusableReceipt))
-                {
-                    reusedGreenReceipt = true;
-                    ReattachReusableGreenFindingEvidence(
-                        goal, requestingTask, mergedFinding, priorOutcome, reusableReceipt);
-                    continue;
-                }
+            if (TryGetReusableGreenFindingEvidenceReceipt(
+                    requestingTask,
+                    typedRequest,
+                    telemetryCandidateSha,
+                    out var reusableOutcome,
+                    out var reusableReceipt))
+            {
+                reusedGreenReceipt = true;
+                ReattachReusableGreenFindingEvidence(
+                    goal, requestingTask, finding, reusableOutcome!, reusableReceipt!);
+                continue;
             }
 
             var groupIndex = groups.FindIndex(group => string.Equals(group.Identity, identity, StringComparison.Ordinal));

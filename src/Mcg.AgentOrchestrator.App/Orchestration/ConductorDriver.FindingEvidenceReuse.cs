@@ -94,26 +94,31 @@ internal sealed partial class ConductorDriver
 
     private static bool TryGetReusableGreenFindingEvidenceReceipt(
         TaskSpec requestingTask,
-        ReviewFinding finding,
         FindingEvidenceRequest request,
         string candidateSha,
+        out FindingEvidenceOutcome? reusableOutcome,
         out FindingEvidenceReceipt? reusableReceipt)
     {
+        reusableOutcome = null;
         reusableReceipt = null;
-        var outcome = finding.EvidenceOutcome;
-        var receiptId = outcome?.ReceiptId;
-        if (outcome is not { Honoured: true, ResultReason: FindingEvidenceOutcomeReason.ValidEvidence } ||
-            string.IsNullOrWhiteSpace(receiptId) ||
-            candidateSha == "unavailable")
+        if (candidateSha == "unavailable")
         {
             return false;
         }
 
         var identity = BuildFindingEvidenceIdentity(request);
+        var validOutcomesByReceiptId = requestingTask.VerificationHistory
+            .SelectMany(verification => verification.MergedReviewFindings ?? [])
+            .Select(finding => finding.EvidenceOutcome)
+            .OfType<FindingEvidenceOutcome>()
+            .Where(outcome =>
+                outcome is { Honoured: true, ReceiptId.Length: > 0, ResultReason: FindingEvidenceOutcomeReason.ValidEvidence })
+            .GroupBy(outcome => outcome.ReceiptId!, StringComparer.Ordinal)
+            .ToDictionary(group => group.Key, group => group.Last(), StringComparer.Ordinal);
         reusableReceipt = requestingTask.VerificationHistory
             .SelectMany(verification => verification.FindingEvidenceReceipts ?? [])
             .LastOrDefault(receipt =>
-                string.Equals(receipt.ReceiptId, receiptId, StringComparison.Ordinal) &&
+                validOutcomesByReceiptId.ContainsKey(receipt.ReceiptId) &&
                 string.Equals(receipt.CandidateSha, candidateSha, StringComparison.OrdinalIgnoreCase) &&
                 receipt is { Accepted: true, Passed: true } &&
                 (receipt.Arms ?? []).Any(arm =>
@@ -126,9 +131,13 @@ internal sealed partial class ConductorDriver
                     } &&
                     string.Equals(arm.Sha, candidateSha, StringComparison.OrdinalIgnoreCase)) &&
                 (receipt.RequestDispositions ?? []).Any(disposition =>
-                    string.Equals(disposition.FindingStableId, finding.StableId, StringComparison.Ordinal) &&
                     string.Equals(disposition.RequestIdentity, identity, StringComparison.Ordinal) &&
                     disposition.Disposition.StartsWith("executed-", StringComparison.Ordinal)));
+        if (reusableReceipt is not null)
+        {
+            reusableOutcome = validOutcomesByReceiptId[reusableReceipt.ReceiptId];
+        }
+
         return reusableReceipt is not null;
     }
 
