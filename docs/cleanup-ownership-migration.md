@@ -230,6 +230,16 @@ in 786.747 seconds with seed 20260908 and four configured threads (parallelism d
 Both used the same frozen assembly above, with managed-host exit zero and confirmed teardown.
 Fresh manifest discovery found 221 cases: all previous 219 plus exactly the two storage controls.
 Independent Opus review cleared this bounded increment after inspecting instance hook ownership
-and the explicit-root caller census. Parallel comparison and full acceptance remain required;
-no gate-wide speedup or complete collection isolation is claimed here. Host/heartbeat context
-projections and wider child-environment propagation are outside this increment's evidence.
+and the explicit-root caller census. The matched four-thread collections run passed 57/57 in
+381.623 seconds, against the same frozen assembly, roster and seed. Recorded test-result intervals
+show maximum overlap of four cases versus one serially. This single pair reduced family elapsed
+time by 51.49%; it does not establish internal-operation overlap or a full-gate improvement.
+Receipt: `cleanup-cli-root-family-comparison.json` in the driving repository's operator evidence.
+
+The first full 221-case manifest run under the Codex filesystem sandbox passed the migrated 57
+cases; the other 164 could not enter their test bodies because the existing collection fixture
+could not create its owned LocalLow claim file. One affected case passed on the unchanged frozen
+assembly with the required filesystem access. The complete lane is being validated with that
+access; neither the failed setup run nor that one passing control proves full-lane acceptance.
+Full acceptance and complete collection isolation remain open. Host/heartbeat context projections
+and wider child-environment propagation are outside this increment's evidence.
