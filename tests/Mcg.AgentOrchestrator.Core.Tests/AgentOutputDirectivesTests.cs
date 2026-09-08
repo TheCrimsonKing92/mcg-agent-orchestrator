@@ -174,8 +174,8 @@ public sealed class AgentOutputDirectivesTests
         }
     }
 
-    [Xunit.Fact(DisplayName = "Tester_requirements_keep_matching_timeout_receipts_inconclusive")]
-    public void TesterRequirementsKeepMatchingTimeoutReceiptsInconclusive()
+    [Xunit.Fact(DisplayName = "Tester_requirements_keep_matching_timeout_receipts_inconclusive_and_require_a_real_selection_change")]
+    public void TesterRequirementsKeepMatchingTimeoutReceiptsInconclusiveAndRequireARealSelectionChange()
     {
         foreach (var requirements in new[]
                  {
@@ -184,8 +184,13 @@ public sealed class AgentOutputDirectivesTests
                  })
         {
             Assert.Contains("timeout/killed/no-results receipt is inconclusive, not a pass, and closes nothing", requirements, StringComparison.Ordinal);
-            Assert.Contains("state a discriminating change in selection or observations", requirements, StringComparison.Ordinal);
-            Assert.Contains("do not lengthen deadlines by default or invent a cause", requirements, StringComparison.Ordinal);
+            Assert.Contains("same candidate", requirements, StringComparison.Ordinal);
+            Assert.Contains("only `test_project` and `test_class` define that selection", requirements, StringComparison.Ordinal);
+            Assert.Contains("Description text, unsupported fields, and cosmetic selector differences are not a changed run", requirements, StringComparison.Ordinal);
+            Assert.Contains("narrow with supported `test_class` syntax only while preserving unclosed coverage", requirements, StringComparison.Ordinal);
+            Assert.Contains("without emitting the identical request", requirements, StringComparison.Ordinal);
+            Assert.Contains("stale-candidate receipt may use the same selection against the current candidate", requirements, StringComparison.Ordinal);
+            Assert.Contains("Do not lengthen deadlines by default or invent a cause", requirements, StringComparison.Ordinal);
             Assert.Contains("full-gate/operator-owned obligations open and owned", requirements, StringComparison.Ordinal);
             Assert.Contains("do not widen conditional criteria", requirements, StringComparison.Ordinal);
         }
