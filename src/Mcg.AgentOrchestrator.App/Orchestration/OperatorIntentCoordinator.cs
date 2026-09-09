@@ -83,7 +83,8 @@ internal sealed class OperatorIntentCoordinator
             try
             {
                 var retryClarification = HandleRetryClarification(kernel, goal, intent);
-                if (retryClarification is RetryClarificationHandling.AwaitingExistingAnswer or RetryClarificationHandling.AwaitingNewAnswer)
+                if (retryClarification is RetryClarificationHandling.AwaitingExistingAnswer or
+                    RetryClarificationHandling.AwaitingNewAnswer or RetryClarificationHandling.AwaitingOtherHumanInput)
                 {
                     lines.Add($"OPERATOR_INTENT id={intent.Id} verb={intent.Verb} goal={goal.Id.Value[..8]} result=" +
                         (retryClarification == RetryClarificationHandling.AwaitingOtherHumanInput
