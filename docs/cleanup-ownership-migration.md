@@ -530,3 +530,16 @@ The earlier43% serial/parallel comparison describes the earlier candidate only.
 It does not establish performance or safety of this corrected candidate. Final
 scope-wide acceptance and fresh comparable timing remain outstanding. Do not
 remove the precise guard until GitRunner itself has per-operation ownership.
+
+### Prune ownership boundary (2026-09-09)
+
+GoalsPrunePlanner.Apply now requires cleanup hooks and forwards them to terminal
+cleanup; the CLI supplies its context. All four callers were audited. Prune
+fixtures use per-repository storage roots. The existing successful-prune test
+now checks owned artifacts are deleted and a second root for the same goal
+retains its marker. Removing only production forwarding fails the owned-root
+assertion. After restoring source, the final7-case class passed with zero skips,
+confirmed exit0 and clean teardown (cleanup-prune-foreign-root-final); final
+production/test PDB bindings match. Anthropic review and resolution are retained
+as cleanup-prune-review.json and cleanup-prune-review-resolution.md. Collection
+guards remain unchanged pending the integrated migration validation.
