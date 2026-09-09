@@ -104,7 +104,10 @@ internal static class SourceSizeRatchet
             // decision; both checks belong at this dispatch boundary and add five measured lines.
             // Goal 3b9d6b12 moved complete-log authority, decision selection, normalization, caching, and
             // bounded snapshots to ProcessLogReader; the runner now retains only completion sequencing.
-            new SourceSizeCeiling("src/Mcg.AgentOrchestrator.Infrastructure/Processes/BackgroundDispatchRunner.cs", 2660),
+            // Goal b3cba804 adds the authoritative-output-only scope-completion observation at the
+            // existing dispatch-completion boundary; the runner retains output-artifact authority
+            // and verification persistence while parsing stays with WorkerResultBlockers.
+            new SourceSizeCeiling("src/Mcg.AgentOrchestrator.Infrastructure/Processes/BackgroundDispatchRunner.cs", 2669),
             // Goal 5a75fed0 extracted typed projection parsing and literal restoration into
             // WorkerContextProjectionResidual, leaving the dispatcher to sequence package assembly.
             // Goal fd252fe4 adds retry fingerprints for the resolved provider, model, paid route, and
