@@ -1260,7 +1260,8 @@ public sealed class AcceptanceCohortWorkflowTests : GoalWorktreeTestBase
                 exception: null);
             var workspace = OrchestratorWorkspace.ForDirectory(repo);
             var driver = new ConductorDriver(
-                kernel, workspace, verifier, AgentCatalog.Default().Agents, WorkerProfileCatalog.Default());
+                kernel, workspace, verifier, AgentCatalog.Default().Agents, WorkerProfileCatalog.Default(),
+                cleanupHooks: CreateIsolatedCleanupContext(workspace.ExecutionDirectory).Hooks);
             var selection = ProjectSelection(driver, firstGoal, secondGoal);
             var mainBefore = RunGitOutput(repo, "rev-parse", "main").Trim();
             ConductorAcceptanceCohortRunResult? result = null;
@@ -1331,7 +1332,8 @@ public sealed class AcceptanceCohortWorkflowTests : GoalWorktreeTestBase
                 exception: null);
             var workspace = OrchestratorWorkspace.ForDirectory(repo);
             var driver = new ConductorDriver(
-                kernel, workspace, verifier, AgentCatalog.Default().Agents, WorkerProfileCatalog.Default());
+                kernel, workspace, verifier, AgentCatalog.Default().Agents, WorkerProfileCatalog.Default(),
+                cleanupHooks: CreateIsolatedCleanupContext(workspace.ExecutionDirectory).Hooks);
             var selection = ProjectSelection(driver, firstGoal, secondGoal);
             var mainBefore = RunGitOutput(repo, "rev-parse", "main").Trim();
             ConductorAcceptanceCohortRunResult? result = null;
@@ -1409,7 +1411,8 @@ public sealed class AcceptanceCohortWorkflowTests : GoalWorktreeTestBase
             ]);
             var workspace = OrchestratorWorkspace.ForDirectory(repo);
             var driver = new ConductorDriver(
-                kernel, workspace, verifier, AgentCatalog.Default().Agents, WorkerProfileCatalog.Default());
+                kernel, workspace, verifier, AgentCatalog.Default().Agents, WorkerProfileCatalog.Default(),
+                cleanupHooks: CreateIsolatedCleanupContext(workspace.ExecutionDirectory).Hooks);
             var selection = ProjectSelection(driver, firstGoal, secondGoal);
             var mainBefore = RunGitOutput(repo, "rev-parse", "main").Trim();
 
@@ -1473,7 +1476,8 @@ public sealed class AcceptanceCohortWorkflowTests : GoalWorktreeTestBase
             ]);
             var workspace = OrchestratorWorkspace.ForDirectory(repo);
             var driver = new ConductorDriver(
-                kernel, workspace, verifier, AgentCatalog.Default().Agents, WorkerProfileCatalog.Default());
+                kernel, workspace, verifier, AgentCatalog.Default().Agents, WorkerProfileCatalog.Default(),
+                cleanupHooks: CreateIsolatedCleanupContext(workspace.ExecutionDirectory).Hooks);
             var selection = ProjectSelection(driver, firstGoal, secondGoal);
             var mainBefore = RunGitOutput(repo, "rev-parse", "main").Trim();
 
@@ -1640,7 +1644,8 @@ public sealed class AcceptanceCohortWorkflowTests : GoalWorktreeTestBase
                     workspace,
                     FakeAcceptanceVerifier.Throws(new InvalidOperationException("Blocked recovery must not run a gate.")),
                     AgentCatalog.Default().Agents,
-                    WorkerProfileCatalog.Default());
+                    WorkerProfileCatalog.Default(),
+                cleanupHooks: CreateIsolatedCleanupContext(workspace.ExecutionDirectory).Hooks);
 
                 Assert.All(new[] { firstGoal, secondGoal }, goal =>
                     Assert.False(GoalOperationJournal.HasCompletedLandingEvidence(
@@ -1660,7 +1665,8 @@ public sealed class AcceptanceCohortWorkflowTests : GoalWorktreeTestBase
                 workspace,
                 FakeAcceptanceVerifier.Throws(new InvalidOperationException("Recovery must not run a gate.")),
                 AgentCatalog.Default().Agents,
-                WorkerProfileCatalog.Default());
+                WorkerProfileCatalog.Default(),
+                cleanupHooks: CreateIsolatedCleanupContext(workspace.ExecutionDirectory).Hooks);
             var recoveredReceipts = new List<ConductorLandingReceipt>();
             recoveredDriver.SuccessfulLandingSink = recoveredReceipts.Add;
 
@@ -1909,7 +1915,8 @@ public sealed class AcceptanceCohortWorkflowTests : GoalWorktreeTestBase
                 exception: new InvalidOperationException("A stale train must not invoke the gate."));
             var workspace = OrchestratorWorkspace.ForDirectory(repo);
             var driver = new ConductorDriver(
-                kernel, workspace, verifier, AgentCatalog.Default().Agents, WorkerProfileCatalog.Default());
+                kernel, workspace, verifier, AgentCatalog.Default().Agents, WorkerProfileCatalog.Default(),
+                cleanupHooks: CreateIsolatedCleanupContext(workspace.ExecutionDirectory).Hooks);
             var selection = ProjectTrainSelection(driver, firstGoal, secondGoal, thirdGoal);
             File.WriteAllText(Path.Combine(repo, "move-main.txt"), "new main");
             RunGit(repo, "add", "move-main.txt");
@@ -1964,7 +1971,8 @@ public sealed class AcceptanceCohortWorkflowTests : GoalWorktreeTestBase
                 new InvalidOperationException("acceptance manifest changed during train materialization"));
             var workspace = OrchestratorWorkspace.ForDirectory(repo);
             var driver = new ConductorDriver(
-                kernel, workspace, verifier, AgentCatalog.Default().Agents, WorkerProfileCatalog.Default());
+                kernel, workspace, verifier, AgentCatalog.Default().Agents, WorkerProfileCatalog.Default(),
+                cleanupHooks: CreateIsolatedCleanupContext(workspace.ExecutionDirectory).Hooks);
             var selection = ProjectTrainSelection(driver, firstGoal, secondGoal, thirdGoal);
 
             var result = driver.RunMergeTrain(
@@ -2571,7 +2579,8 @@ public sealed class AcceptanceCohortWorkflowTests : GoalWorktreeTestBase
                 workspace,
                 verifier,
                 AgentCatalog.Default().Agents,
-                WorkerProfileCatalog.Default());
+                WorkerProfileCatalog.Default(),
+                cleanupHooks: CreateIsolatedCleanupContext(workspace.ExecutionDirectory).Hooks);
             var selection = ProjectSelection(driver, firstGoal, secondGoal);
             var store = new CohortAcceptanceStore(
                 Path.Combine(workspace.OrchestratorDirectory, "cohort-acceptance.db"));
@@ -2636,7 +2645,8 @@ public sealed class AcceptanceCohortWorkflowTests : GoalWorktreeTestBase
                 workspace,
                 verifier,
                 AgentCatalog.Default().Agents,
-                WorkerProfileCatalog.Default());
+                WorkerProfileCatalog.Default(),
+                cleanupHooks: CreateIsolatedCleanupContext(workspace.ExecutionDirectory).Hooks);
             var selection = ProjectSelection(driver, firstGoal, secondGoal);
             var bindings = selection.BindMembers();
             var store = new CohortAcceptanceStore(Path.Combine(workspace.OrchestratorDirectory, "cohort-acceptance.db"));
@@ -2717,7 +2727,8 @@ public sealed class AcceptanceCohortWorkflowTests : GoalWorktreeTestBase
             var verifier = FakeAcceptanceVerifier.Throws(
                 new InvalidOperationException("An invalid cached pass must not be reused or rerun in place."));
             var driver = new ConductorDriver(
-                kernel, workspace, verifier, AgentCatalog.Default().Agents, WorkerProfileCatalog.Default());
+                kernel, workspace, verifier, AgentCatalog.Default().Agents, WorkerProfileCatalog.Default(),
+                cleanupHooks: CreateIsolatedCleanupContext(workspace.ExecutionDirectory).Hooks);
             var selection = ProjectSelection(driver, firstGoal, secondGoal);
             var bindings = selection.BindMembers();
             AcceptanceCohortIdentity identity;
@@ -2818,7 +2829,8 @@ public sealed class AcceptanceCohortWorkflowTests : GoalWorktreeTestBase
                 });
             var workspace = OrchestratorWorkspace.ForDirectory(repo);
             var driver = new ConductorDriver(
-                kernel, workspace, verifier, AgentCatalog.Default().Agents, WorkerProfileCatalog.Default());
+                kernel, workspace, verifier, AgentCatalog.Default().Agents, WorkerProfileCatalog.Default(),
+                cleanupHooks: CreateIsolatedCleanupContext(workspace.ExecutionDirectory).Hooks);
             var selection = ProjectSelection(driver, firstGoal, secondGoal);
 
             var result = driver.RunAcceptanceCohort(
@@ -2859,7 +2871,8 @@ public sealed class AcceptanceCohortWorkflowTests : GoalWorktreeTestBase
             var verifier = FakeAcceptanceVerifier.Throws(
                 new InvalidOperationException("A persisted infrastructure receipt must not rerun the cohort gate."));
             var driver = new ConductorDriver(
-                kernel, workspace, verifier, AgentCatalog.Default().Agents, WorkerProfileCatalog.Default());
+                kernel, workspace, verifier, AgentCatalog.Default().Agents, WorkerProfileCatalog.Default(),
+                cleanupHooks: CreateIsolatedCleanupContext(workspace.ExecutionDirectory).Hooks);
             var selection = ProjectSelection(driver, firstGoal, secondGoal);
             var bindings = selection.BindMembers();
             AcceptanceCohortIdentity identity;
@@ -2940,7 +2953,8 @@ public sealed class AcceptanceCohortWorkflowTests : GoalWorktreeTestBase
             ]);
             var workspace = OrchestratorWorkspace.ForDirectory(repo);
             var driver = new ConductorDriver(
-                kernel, workspace, verifier, AgentCatalog.Default().Agents, WorkerProfileCatalog.Default());
+                kernel, workspace, verifier, AgentCatalog.Default().Agents, WorkerProfileCatalog.Default(),
+                cleanupHooks: CreateIsolatedCleanupContext(workspace.ExecutionDirectory).Hooks);
             var selection = ProjectSelection(driver, firstGoal, secondGoal);
             var gateAdmitted = false;
 
@@ -3039,7 +3053,8 @@ public sealed class AcceptanceCohortWorkflowTests : GoalWorktreeTestBase
             ]);
             var workspace = OrchestratorWorkspace.ForDirectory(repo);
             var driver = new ConductorDriver(
-                kernel, workspace, verifier, AgentCatalog.Default().Agents, WorkerProfileCatalog.Default());
+                kernel, workspace, verifier, AgentCatalog.Default().Agents, WorkerProfileCatalog.Default(),
+                cleanupHooks: CreateIsolatedCleanupContext(workspace.ExecutionDirectory).Hooks);
             var selection = ProjectTrainSelection(driver, firstGoal, secondGoal, thirdGoal);
             var gateAdmitted = false;
 
