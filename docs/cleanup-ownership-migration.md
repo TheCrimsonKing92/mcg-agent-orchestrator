@@ -507,3 +507,26 @@ Anthropic review cleanup-status-forwarding-review found no concrete blocker.
 Earlier root-review compilation/path hypotheses are resolved by successful
 build and the passing root test; no configuration or ownership contract was
 weakened to get green. These focused checks do not replace final acceptance.
+
+### Preserve the real GitRunner serialization boundary (2026-09-09)
+
+Further source audit found that MainCasFailure_RestoresIntegrationRef_AndLandsNeitherMember
+mutates LandingExecutor.GitRunner, a remaining process-wide seam unrelated to
+cleanup hooks. Its complete method moved unchanged into
+AcceptanceCohortWorkflowTestsGitRunner under the precise LandingGitRunner
+nonparallel collection. The other five cohort classes remain parallel-capable.
+LandingExecutorTests still retains its existing nonparallel protection.
+
+The corrected48-case run cleanup-git-runner-guard-managed passed48/48, no skips,
+confirmed exit0, no timeout or cleanup diagnostic, in6m18.538s. Separate source
+bindings and exact-method-preservation receipts were checked. TRX timestamps
+show one guarded case and zero overlaps with the other47 cases. The installed
+xUnit4 collection contract documents DisableParallelization against any other
+tests. Cross-family review's inheritance/fixture concerns were checked against
+the abstract fact-free helper base and successful build; resolution is recorded
+in cleanup-git-runner-review-resolution.md.
+
+The earlier43% serial/parallel comparison describes the earlier candidate only.
+It does not establish performance or safety of this corrected candidate. Final
+scope-wide acceptance and fresh comparable timing remain outstanding. Do not
+remove the precise guard until GitRunner itself has per-operation ownership.

@@ -20,6 +20,10 @@ public sealed class GoalAcceptanceVerifierCollection : Xunit.ICollectionFixture<
 [Xunit.CollectionDefinition(TestCollections.GoalWorktreeCleanupHooks, DisableParallelization = true)]
 public sealed class GoalWorktreeCleanupHooksCollection : Xunit.ICollectionFixture<IsolatedDotnetRootFixture>;
 
+// Fault injection replaces LandingExecutor.GitRunner process-wide.
+[Xunit.CollectionDefinition(TestCollections.LandingGitRunner, DisableParallelization = true)]
+public sealed class LandingGitRunnerCollection;
+
 // Build-lease tests need a process-local isolated root but do not mutate cleanup-hook state.
 [Xunit.CollectionDefinition(TestCollections.IsolatedDotnetRoot, DisableParallelization = true)]
 public sealed class IsolatedDotnetRootCollection : Xunit.ICollectionFixture<IsolatedDotnetRootFixture>;
