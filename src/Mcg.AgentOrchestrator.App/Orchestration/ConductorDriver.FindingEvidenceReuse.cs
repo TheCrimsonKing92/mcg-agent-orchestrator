@@ -101,7 +101,7 @@ internal sealed partial class ConductorDriver
     {
         reusableOutcome = null;
         reusableReceipt = null;
-        if (candidateSha == "unavailable")
+        if (string.IsNullOrWhiteSpace(candidateSha) || candidateSha == "unavailable" || request.Selections is not { Count: > 0 })
         {
             return false;
         }
@@ -179,7 +179,8 @@ internal sealed partial class ConductorDriver
             Arms: armsByIdentity
                 .Select(group => group.Last())
                 .ToArray(),
-            RequestDispositions: []);
+            RequestDispositions: constituentReceipts.SelectMany(receipt => receipt.RequestDispositions ?? [])
+                .Distinct().ToArray());
         reusableOutcome = new FindingEvidenceOutcome(
             Honoured: true,
             ReceiptId: receiptId,
@@ -193,6 +194,8 @@ internal sealed partial class ConductorDriver
         IReadOnlyDictionary<string, FindingEvidenceOutcome> validOutcomesByReceiptId) =>
         validOutcomesByReceiptId.ContainsKey(receipt.ReceiptId) &&
         receipt is { Accepted: true, Passed: true } &&
+        (receipt.RequestDispositions ?? []).All(disposition =>
+            disposition.Disposition.StartsWith("executed-", StringComparison.Ordinal)) &&
         (receipt.Arms ?? []).Any(arm =>
             arm is
             {
@@ -204,9 +207,12 @@ internal sealed partial class ConductorDriver
             string.Equals(arm.Sha, candidateSha, StringComparison.OrdinalIgnoreCase));
 
     private static bool HasReusableRequestIdentity(FindingEvidenceReceipt receipt, string identity) =>
-        string.Equals(BuildFindingEvidenceIdentity(receipt.Request), identity, StringComparison.Ordinal) ||
+        (string.Equals(BuildFindingEvidenceIdentity(receipt.Request), identity, StringComparison.Ordinal) ||
         (receipt.RequestDispositions ?? []).Any(disposition =>
             string.Equals(disposition.RequestIdentity, identity, StringComparison.Ordinal) &&
+            disposition.Disposition.StartsWith("executed-", StringComparison.Ordinal))) &&
+        (receipt.RequestDispositions ?? []).All(disposition =>
+            !string.Equals(disposition.RequestIdentity, identity, StringComparison.Ordinal) ||
             disposition.Disposition.StartsWith("executed-", StringComparison.Ordinal));
 
     private static bool HasEverCommittedOutput(TaskSpec task) =>

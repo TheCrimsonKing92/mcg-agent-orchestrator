@@ -9,6 +9,52 @@ using static ConductorDriverTests;
 public sealed class ConductorDriverTestsFindingEvidenceReuse
 {
     [Xunit.Fact]
+    public void EmptySelectionCannotSynthesizeAnHonouredReceiptFromUnrelatedHistory()
+    {
+        const string candidateSha = "abc1234";
+        var (kernel, goal) = SoftwareGoal();
+        var reviewer = goal.Tasks.Single(task => task.RequiredRole == AgentRole.Reviewer);
+        foreach (var task in goal.Tasks.Where(task => task.RequiredRole != AgentRole.Reviewer))
+            PassVerification(kernel, goal, task);
+        var finding = EvidenceFindingWithRequest("Seed actual evidence history", id: "seed");
+        FailReviewerNeedsWork(kernel, goal, reviewer, "seed", findings: [finding]);
+        var driver = MakeDriver(
+            getPreReviewEvidenceContext: _ => NoPreReviewContext(candidateSha),
+            runFocusedEvidence: (_, request) => DualArmFindingEvidence(request, FindingEvidenceArmDisposition.Red, candidateSha),
+            dispatchAndStart: _ => DispatchStartOutcome.Started(),
+            retryTaskWithRoundKind: (goalId, taskId, message, kind) => kernel.RetryTask(goalId, taskId, message, retryRoundKind: kind),
+            recordFindingEvidenceRequest: (goalId, taskId, message) => kernel.RecordFindingEvidenceRequest(goalId, taskId, message),
+            recordFindingEvidenceOutcome: (goalId, taskId, id, outcome, receipt) => kernel.RecordFindingEvidenceOutcome(goalId, taskId, id, outcome, receipt));
+        driver.AdvanceOnce(goal, ConductorAutonomyPolicy.Permissive);
+        Assert.NotEmpty(reviewer.VerificationHistory.SelectMany(verification => verification.FindingEvidenceReceipts ?? []));
+        var method = typeof(ConductorDriver).GetMethod("TryGetReusableGreenFindingEvidenceReceipt",
+            System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Static)!;
+        object?[] arguments = [reviewer, finding.EvidenceRequest! with { Selections = [] }, candidateSha, null, null];
+        Assert.Equal(false, method.Invoke(null, arguments));
+        Assert.Null(arguments[3]);
+        Assert.Null(arguments[4]);
+    }
+
+    [Xunit.Theory]
+    [Xunit.InlineData("executed-dual-arm", true)]
+    [Xunit.InlineData("suppressed-budget", false)]
+    [Xunit.InlineData("not-executed", false)]
+    public void ExplicitNonExecutionCannotBecomeReusableGreenEvidence(string disposition, bool expected)
+    {
+        var request = EvidenceFindingWithRequest("control", id: "control").EvidenceRequest!;
+        var receipt = new FindingEvidenceReceipt("receipt", "candidate-a", request, true, true, "control",
+            Arms: [new(FindingEvidenceArm.Candidate, "candidate-a", FindingEvidenceArmDisposition.Green, true, true, "control")],
+            RequestDispositions: [new("control", "request-identity", disposition)]);
+        IReadOnlyDictionary<string, FindingEvidenceOutcome> outcomes = new Dictionary<string, FindingEvidenceOutcome>
+        {
+            ["receipt"] = new(Honoured: true, ReceiptId: "receipt", ResultReason: FindingEvidenceOutcomeReason.ValidEvidence)
+        };
+        var method = typeof(ConductorDriver).GetMethod("IsReusableGreenReceipt",
+            System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Static)!;
+        Assert.Equal(expected, method.Invoke(null, [receipt, "candidate-a", outcomes]));
+    }
+
+    [Xunit.Fact]
     public void ChangedFindingRoundAtSameCandidateReusesCandidateAndRequestBoundReceipt()
     {
         const string candidateSha = "abc1234";
@@ -62,8 +108,10 @@ public sealed class ConductorDriverTestsFindingEvidenceReuse
             item.Message.Contains("finding-evidence disposition=reused-green", StringComparison.Ordinal));
     }
 
-    [Xunit.Fact]
-    public void UnmatchedFindingRoundAtSameCandidateReusesRequestBoundReceipt()
+    [Xunit.Theory]
+    [Xunit.InlineData(false)]
+    [Xunit.InlineData(true)]
+    public void UnmatchedFindingRoundAtSameCandidateReusesRequestBoundReceipt(bool sameAnchor)
     {
         const string candidateSha = "abc1234";
         var (kernel, goal) = SoftwareGoal();
@@ -97,20 +145,24 @@ public sealed class ConductorDriverTestsFindingEvidenceReuse
         var unmatchedFinding = finding with
         {
             StableId = "same-sha-unmatched-finding",
+            Location = sameAnchor ? finding.Location : finding.Location with { Region = "A separate evidence obligation" },
             Description = "A new stable id requests the same focused evidence."
         };
         FailReviewerNeedsWork(kernel, goal, reviewer, "unmatched finding round", findings: [unmatchedFinding]);
+        var mergedId = sameAnchor ? finding.StableId : unmatchedFinding.StableId;
+        Assert.Contains(reviewer.LastVerification!.MergedReviewFindings!,
+            item => item.StableId == mergedId);
 
         driver.AdvanceOnce(goal, ConductorAutonomyPolicy.Permissive);
 
         Assert.Equal(1, focusedRuns);
         var latestFinding = reviewer.VerificationHistory.Last().MergedReviewFindings!
-            .Single(item => item.StableId == unmatchedFinding.StableId);
+            .Single(item => item.StableId == mergedId);
         Assert.True(latestFinding.EvidenceOutcome?.Honoured);
         Assert.Equal(FindingEvidenceOutcomeReason.ValidEvidence, latestFinding.EvidenceOutcome?.ResultReason);
         Assert.Contains(goal.Timeline, item =>
             item.Message.Contains("finding-evidence disposition=reused-green", StringComparison.Ordinal) &&
-            item.Message.Contains($"finding_id={unmatchedFinding.StableId}", StringComparison.Ordinal));
+            item.Message.Contains($"finding_id={mergedId}", StringComparison.Ordinal));
     }
 
     [Xunit.Fact]
@@ -166,8 +218,9 @@ public sealed class ConductorDriverTestsFindingEvidenceReuse
         Assert.True(latestFinding.EvidenceOutcome?.Honoured);
         Assert.Equal(FindingEvidenceOutcomeReason.ValidEvidence, latestFinding.EvidenceOutcome?.ResultReason);
         Assert.StartsWith("finding-evidence-reuse-", latestFinding.EvidenceOutcome?.ReceiptId);
-        Assert.Empty(
-            reviewer.VerificationHistory.Last().FindingEvidenceReceipts!.Single().RequestDispositions ?? []);
+        var dispositions = reviewer.VerificationHistory.Last().FindingEvidenceReceipts!.Single().RequestDispositions;
+        Assert.NotEmpty(dispositions!);
+        Assert.All(dispositions!, disposition => Assert.StartsWith("executed-", disposition.Disposition));
     }
 
     [Xunit.Fact]

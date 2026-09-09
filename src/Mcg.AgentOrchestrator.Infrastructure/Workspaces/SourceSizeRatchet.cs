@@ -70,7 +70,7 @@ internal static class SourceSizeRatchet
             // brought this file to the measured post-merge size.
             // Raised for goal 8263a08c: exited-dispatch reconciliation must precede the existing failure
             // retry ladder and guard the shared dispatch-start boundary before LastProcess is replaced.
-            new SourceSizeCeiling("src/Mcg.AgentOrchestrator.App/Orchestration/ConductorDriver.cs", 6805),
+            new SourceSizeCeiling("src/Mcg.AgentOrchestrator.App/Orchestration/ConductorDriver.cs", 6789),
             // Raised for goal dadadfac: set-aside re-admission must be decided where the loop already holds
             // the goal, its recorded set-aside entry, and the current sweep blockers together.
             // Raised for goal 289b469d: registration-fault hold/escalation must be decided at the existing

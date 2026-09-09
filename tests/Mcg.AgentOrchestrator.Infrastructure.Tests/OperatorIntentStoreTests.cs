@@ -112,7 +112,8 @@ public sealed class OperatorIntentStoreTests
                         item.Goal.Id.Value,
                         item.Task.Id.Value,
                         $"tick-intent-{item.Index}",
-                        $"tick-key-{item.Index}"));
+                        $"tick-key-{item.Index}",
+                        retryCause: RetryCause.NewSourceFinding));
                 }
                 catch (Exception ex)
                 {

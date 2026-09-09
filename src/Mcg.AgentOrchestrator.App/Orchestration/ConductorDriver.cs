@@ -2380,7 +2380,7 @@ internal sealed partial class ConductorDriver
             {
                 reusedGreenReceipt = true;
                 ReattachReusableGreenFindingEvidence(
-                    goal, requestingTask, finding, reusableOutcome!, reusableReceipt!);
+                    goal, requestingTask, mergedFinding ?? finding, reusableOutcome!, reusableReceipt!);
                 continue;
             }
 
@@ -4853,33 +4853,28 @@ internal sealed partial class ConductorDriver
 
         var round = GetCurrentReviewerRoundNumber(goal, reviewerTask);
         var currentReceipt = reviewerTask.PreReviewEvidenceReceipt;
-        if (currentReceipt is { } current &&
+        if (context.NoApplicableTests && !context.MappingNeedsInput &&
+            currentReceipt is { Disposition: PreReviewEvidenceDisposition.NoApplicableTests } current &&
             current.MatchesCurrentCandidate(goal.Id.Value, context.CandidateSha, context.SelectedFocusedTests))
         {
-            if (current.Disposition is PreReviewEvidenceDisposition.Green or PreReviewEvidenceDisposition.NoApplicableTests)
-            {
-                return false;
-            }
-            // Red or inconclusive evidence caused an upstream retry. Once that task completes,
-            // re-run the deterministic evidence even when the candidate SHA did not change;
-            // otherwise the stale non-green receipt can never be replaced by a current result.
+            return false;
         }
 
-        if (!context.MappingNeedsInput &&
-            TryGetReusableGreenPreReviewEvidence(
+        if (!context.MappingNeedsInput && !context.NoApplicableTests && !string.IsNullOrWhiteSpace(context.FocusedRequest) &&
+            PreReviewEvidenceReceipts.TryReuse(
                 reviewerTask,
                 goal.Id.Value,
                 context.CandidateSha,
                 context.SelectedFocusedTests,
                 out var constituentReceipts))
         {
-            RecordReusedPreReviewReceipt(goal, reviewerTask, context, round, constituentReceipts);
+            PreReviewEvidenceReceipts.RecordReuse(_recordPreReviewEvidence, goal, reviewerTask, context, round, constituentReceipts);
             return false;
         }
 
         if (context.NoApplicableTests)
         {
-            RecordPreReviewReceipt(
+            PreReviewEvidenceReceipts.Record(_recordPreReviewEvidence,
                 goal,
                 reviewerTask,
                 context,
@@ -4893,7 +4888,7 @@ internal sealed partial class ConductorDriver
 
         if (context.MappingNeedsInput || string.IsNullOrWhiteSpace(context.FocusedRequest))
         {
-            var receipt = RecordPreReviewReceipt(
+            var receipt = PreReviewEvidenceReceipts.Record(_recordPreReviewEvidence,
                 goal,
                 reviewerTask,
                 context,
@@ -5039,7 +5034,7 @@ internal sealed partial class ConductorDriver
         var evidencePointer = BuildPreReviewEvidencePointer(evidence);
         if (!evidence.Accepted)
         {
-            RecordPreReviewReceipt(
+            PreReviewEvidenceReceipts.Record(_recordPreReviewEvidence,
                 goal,
                 reviewerTask,
                 context,
@@ -5084,9 +5079,9 @@ internal sealed partial class ConductorDriver
 
         if (evidence.Passed)
         {
-            if (!TryValidatePreReviewEvidenceCoverage(context, evidence, out var mappingFailure))
+            if (!PreReviewEvidenceReceipts.ValidateCoverage(context, evidence, out var mappingFailure))
             {
-                RecordPreReviewReceipt(
+                PreReviewEvidenceReceipts.Record(_recordPreReviewEvidence,
                     goal,
                     reviewerTask,
                     context,
@@ -5130,7 +5125,7 @@ internal sealed partial class ConductorDriver
                 return true;
             }
 
-            RecordPreReviewReceipt(
+            PreReviewEvidenceReceipts.Record(_recordPreReviewEvidence,
                 goal,
                 reviewerTask,
                 context,
@@ -5144,7 +5139,7 @@ internal sealed partial class ConductorDriver
 
         if (evidence.OutcomeReason == FindingEvidenceOutcomeReason.ApparatusFailure)
         {
-            RecordPreReviewReceipt(
+            PreReviewEvidenceReceipts.Record(_recordPreReviewEvidence,
                 goal,
                 reviewerTask,
                 context,
@@ -5190,7 +5185,7 @@ internal sealed partial class ConductorDriver
         }
 
         var failingTests = ExtractFailingTestIdentities(evidence.Checks);
-        RecordPreReviewReceipt(
+        PreReviewEvidenceReceipts.Record(_recordPreReviewEvidence,
             goal, reviewerTask, context, round, PreReviewEvidenceDisposition.Red,
             evidence.Checks, failingTests, evidencePointer);
         var buildDiagnostic = failingTests.Count == 0
@@ -5467,145 +5462,6 @@ internal sealed partial class ConductorDriver
             plan.Summary,
             NoApplicableTests: false,
             MappingNeedsInput: requests.Count == 0);
-    }
-
-    private PreReviewEvidenceReceipt RecordPreReviewReceipt(
-        Goal goal,
-        TaskSpec reviewerTask,
-        PreReviewEvidenceContext context,
-        int round,
-        PreReviewEvidenceDisposition disposition,
-        IReadOnlyList<AcceptanceCheckResult> checks,
-        IReadOnlyList<string> failingTests,
-        string? evidencePointer)
-    {
-        var receipt = new PreReviewEvidenceReceipt(
-            goal.Id.Value,
-            round,
-            context.CandidateSha!,
-            context.SelectedFocusedTests,
-            disposition,
-            checks.Count(check => check.Passed),
-            checks.Count(check => !check.Passed),
-            checks.Select((check, index) => new PreReviewEvidenceCheckReceipt(
-                check.Name,
-                ResolvePreReviewReceiptTarget(context, index, checks.Count),
-                check.Passed,
-                check.ExitCode,
-                check.ArtifactsPath,
-                check.TestResultPaths)).ToArray(),
-            failingTests,
-            context.MappingReason,
-            evidencePointer,
-            DateTimeOffset.UtcNow);
-        _recordPreReviewEvidence(goal.Id, reviewerTask.Id, receipt);
-        return receipt;
-    }
-
-    private static bool TryGetReusableGreenPreReviewEvidence(
-        TaskSpec reviewerTask,
-        string goalId,
-        string? candidateSha,
-        IReadOnlyList<string> requestedSelections,
-        out IReadOnlyList<PreReviewEvidenceReceipt> constituentReceipts)
-    {
-        constituentReceipts = [];
-        if (string.IsNullOrWhiteSpace(candidateSha) || requestedSelections.Count == 0)
-        {
-            return false;
-        }
-
-        var currentCandidateReceipts = reviewerTask.PreReviewEvidenceHistory
-            .Where(receipt =>
-                string.Equals(receipt.GoalId, goalId, StringComparison.Ordinal) &&
-                string.Equals(receipt.CandidateSha, candidateSha, StringComparison.OrdinalIgnoreCase))
-            .OrderByDescending(receipt => receipt.RecordedAt)
-            .ToArray();
-        if (currentCandidateReceipts.Length == 0)
-        {
-            return false;
-        }
-
-        // The latest receipt for each selection is authoritative. An earlier green receipt must
-        // never hide a later red, incomplete, or mapping-needed result for the same candidate.
-        var latestReceipts = requestedSelections
-            .Select(selection => currentCandidateReceipts.FirstOrDefault(receipt =>
-                receipt.SelectedFocusedTests.Contains(selection, StringComparer.Ordinal)))
-            .ToArray();
-        if (latestReceipts.Any(receipt => receipt is null) ||
-            latestReceipts.Any(receipt =>
-                receipt is not
-                {
-                    Disposition: PreReviewEvidenceDisposition.Green,
-                    FailedCheckCount: 0
-                } ||
-                !receipt.Checks.All(check => check.Passed)))
-        {
-            return false;
-        }
-
-        constituentReceipts = latestReceipts
-            .OfType<PreReviewEvidenceReceipt>()
-            .Distinct()
-            .ToArray();
-        return constituentReceipts.Count > 0;
-    }
-
-    private void RecordReusedPreReviewReceipt(
-        Goal goal,
-        TaskSpec reviewerTask,
-        PreReviewEvidenceContext context,
-        int round,
-        IReadOnlyList<PreReviewEvidenceReceipt> constituents)
-    {
-        var evidencePointers = constituents
-            .Select(receipt => receipt.EvidencePointer)
-            .Where(pointer => !string.IsNullOrWhiteSpace(pointer))
-            .Distinct(StringComparer.OrdinalIgnoreCase)
-            .OrderBy(pointer => pointer, StringComparer.OrdinalIgnoreCase)
-            .ToArray();
-        var receipt = new PreReviewEvidenceReceipt(
-            goal.Id.Value,
-            round,
-            context.CandidateSha!,
-            context.SelectedFocusedTests,
-            PreReviewEvidenceDisposition.Green,
-            PassedCheckCount: context.SelectedFocusedTests.Count,
-            FailedCheckCount: 0,
-            // A reuse receipt must describe the original checks, never invent executions that
-            // did not occur in this reviewer round.
-            Checks: constituents.SelectMany(constituent => constituent.Checks).ToArray(),
-            FailingTestIdentities: [],
-            MappingReason: context.MappingReason + "; reused green current-candidate evidence coverage.",
-            EvidencePointer: evidencePointers.Length == 0 ? "reused-current-candidate" : string.Join(",", evidencePointers),
-            RecordedAt: DateTimeOffset.UtcNow,
-            Advisories: ["reused-current-candidate"]);
-        _recordPreReviewEvidence(goal.Id, reviewerTask.Id, receipt);
-    }
-
-    private static bool TryValidatePreReviewEvidenceCoverage(
-        PreReviewEvidenceContext context,
-        FocusedEvidenceRunResult evidence,
-        out string failure)
-    {
-        failure = string.Empty;
-        if (evidence.Checks.Count == context.SelectedFocusedTests.Count)
-        {
-            return true;
-        }
-
-        failure = $"cardinality mismatch: planned={context.SelectedFocusedTests.Count} actual={evidence.Checks.Count}";
-        return false;
-    }
-
-    private static string ResolvePreReviewReceiptTarget(
-        PreReviewEvidenceContext context,
-        int index,
-        int checkCount)
-    {
-        return checkCount == context.SelectedFocusedTests.Count
-            ? context.SelectedFocusedTests[index]
-            : "(unmapped: check/command cardinality mismatch)";
     }
 
     private static string BuildAddTesterCommand(string goalPrefix, string candidateSha) =>

@@ -649,7 +649,7 @@ public sealed class TaskSpec
     internal bool RecordPreReviewEvidence(PreReviewEvidenceReceipt receipt)
     {
         ArgumentNullException.ThrowIfNull(receipt);
-        if (_preReviewEvidenceHistory.Any(existing => existing.ContentEquals(receipt)))
+        if (PreReviewEvidenceReceipt?.ContentEquals(receipt) == true)
         {
             return false;
         }
