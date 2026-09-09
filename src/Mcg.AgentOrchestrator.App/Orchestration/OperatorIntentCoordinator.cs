@@ -25,6 +25,7 @@ internal sealed class OperatorIntentCoordinator
         NotRequired,
         AwaitingExistingAnswer,
         AwaitingNewAnswer,
+        AwaitingOtherHumanInput,
         Resumed
     }
 
@@ -84,8 +85,11 @@ internal sealed class OperatorIntentCoordinator
                 var retryClarification = HandleRetryClarification(kernel, goal, intent);
                 if (retryClarification is RetryClarificationHandling.AwaitingExistingAnswer or RetryClarificationHandling.AwaitingNewAnswer)
                 {
-                    lines.Add($"OPERATOR_INTENT id={intent.Id} verb={intent.Verb} goal={goal.Id.Value[..8]} result=awaiting-retry-cause");
-                    mutated = retryClarification == RetryClarificationHandling.AwaitingNewAnswer;
+                    lines.Add($"OPERATOR_INTENT id={intent.Id} verb={intent.Verb} goal={goal.Id.Value[..8]} result=" +
+                        (retryClarification == RetryClarificationHandling.AwaitingOtherHumanInput
+                            ? "awaiting-task-human-input"
+                            : "awaiting-retry-cause"));
+                    mutated |= retryClarification == RetryClarificationHandling.AwaitingNewAnswer;
                     break;
                 }
 
@@ -264,14 +268,7 @@ internal sealed class OperatorIntentCoordinator
 
         var taskId = new TaskId(intent.TaskId);
         var blockerFingerprint = $"operator-retry-cause:{intent.Id}";
-        var clarification = kernel.HumanInputRequests
-            .Where(request =>
-                request.GoalId == goal.Id &&
-                request.TaskId == taskId &&
-                (string.Equals(request.BlockerFingerprint, blockerFingerprint, StringComparison.Ordinal) ||
-                 request.BlockerFingerprint?.StartsWith(blockerFingerprint + ":correction:", StringComparison.Ordinal) == true))
-            .OrderByDescending(request => request.RequestedAt)
-            .FirstOrDefault();
+        var clarification = FindRetryCauseClarification(kernel, goal.Id, taskId, blockerFingerprint);
         if (clarification is null)
         {
             kernel.RequestHumanInputDeduplicated(
@@ -301,6 +298,18 @@ internal sealed class OperatorIntentCoordinator
             return RequestRetryCauseCorrection(kernel, goal, taskId, blockerFingerprint, clarification.Id);
         }
 
+        // The retry intent is already durably claimed.  Preserve it until unrelated required
+        // answers are complete, rather than asking the caller to race a second retry against
+        // the lifecycle guard in RetryTaskCore.
+        if (kernel.HumanInputRequests.Any(request =>
+                request.GoalId == goal.Id &&
+                request.TaskId == taskId &&
+                !request.IsCompleted &&
+                !IsRetryCauseClarification(request, blockerFingerprint)))
+        {
+            return RetryClarificationHandling.AwaitingOtherHumanInput;
+        }
+
         kernel.RetryTaskWithAuthoritativeFeedback(
             goal.Id,
             taskId,
@@ -314,6 +323,34 @@ internal sealed class OperatorIntentCoordinator
             GoalObjectivePlanner.BuildCapabilityWarnings(retry.Message));
         return RetryClarificationHandling.Resumed;
     }
+
+    private static HumanInputRequest? FindRetryCauseClarification(
+        AgentOrchestratorKernel kernel,
+        GoalId goalId,
+        TaskId taskId,
+        string rootFingerprint)
+    {
+        var requests = kernel.HumanInputRequests
+            .Where(request => request.GoalId == goalId && request.TaskId == taskId)
+            .ToArray();
+        var clarification = requests.SingleOrDefault(request =>
+            string.Equals(request.BlockerFingerprint, rootFingerprint, StringComparison.Ordinal));
+        while (clarification is not null)
+        {
+            var childFingerprint = $"{rootFingerprint}:correction:{clarification.Id.Value}";
+            var correction = requests.SingleOrDefault(request =>
+                string.Equals(request.BlockerFingerprint, childFingerprint, StringComparison.Ordinal));
+            if (correction is null)
+                return clarification;
+            clarification = correction;
+        }
+
+        return null;
+    }
+
+    private static bool IsRetryCauseClarification(HumanInputRequest request, string rootFingerprint) =>
+        string.Equals(request.BlockerFingerprint, rootFingerprint, StringComparison.Ordinal) ||
+        request.BlockerFingerprint?.StartsWith(rootFingerprint + ":correction:", StringComparison.Ordinal) == true;
 
     private static RetryClarificationHandling RequestRetryCauseCorrection(
         AgentOrchestratorKernel kernel,

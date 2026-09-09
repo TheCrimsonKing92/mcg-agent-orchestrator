@@ -5560,11 +5560,9 @@ internal sealed partial class ConductorDriver
             PreReviewEvidenceDisposition.Green,
             PassedCheckCount: context.SelectedFocusedTests.Count,
             FailedCheckCount: 0,
-            Checks: context.SelectedFocusedTests.Select(selection => new PreReviewEvidenceCheckReceipt(
-                selection,
-                selection,
-                Passed: true,
-                ExitCode: 0)).ToArray(),
+            // A reuse receipt must describe the original checks, never invent executions that
+            // did not occur in this reviewer round.
+            Checks: constituents.SelectMany(constituent => constituent.Checks).ToArray(),
             FailingTestIdentities: [],
             MappingReason: context.MappingReason + "; reused green current-candidate evidence coverage.",
             EvidencePointer: evidencePointers.Length == 0 ? "reused-current-candidate" : string.Join(",", evidencePointers),
@@ -5671,7 +5669,7 @@ internal sealed partial class ConductorDriver
         foreach (var task in goal.Tasks.Where(task => task.Status == WorkTaskStatus.Assigned))
         {
             PhaseTimingSink?.Invoke(
-                $"phase={phase} goal={goal.Id.Value[..8]} task={task.Id.Value[..8]} role={task.RequiredRole} elapsed_ms={(long)elapsed.TotalMilliseconds} {detail}");
+                $"phase={phase} goal={goal.Id.Value[..8]} task={task.Id.Value[..8]} role={task.RequiredRole} elapsed_ms={(long)Math.Ceiling(elapsed.TotalMilliseconds)} {detail}");
         }
     }
 
@@ -5687,7 +5685,7 @@ internal sealed partial class ConductorDriver
         foreach (var task in dispatched)
         {
             PhaseTimingSink?.Invoke(
-                $"phase={phase} goal={goal.Id.Value[..8]} task={task.TaskId.Value[..8]} role={task.Role} elapsed_ms={(long)elapsed.TotalMilliseconds} {detail}");
+                $"phase={phase} goal={goal.Id.Value[..8]} task={task.TaskId.Value[..8]} role={task.Role} elapsed_ms={(long)Math.Ceiling(elapsed.TotalMilliseconds)} {detail}");
         }
     }
 

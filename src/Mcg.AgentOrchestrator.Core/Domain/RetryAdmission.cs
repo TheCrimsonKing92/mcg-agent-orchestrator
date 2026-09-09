@@ -132,12 +132,74 @@ public static class RetryAdmissionSnapshotReservation
             reservationOwnerId,
             reservationLeaseExpiresAt,
             reservationRecoveryConfirmed);
+        result = RetryAdmissionReceiptContext.Enrich(goal, task, preparedDispatch, result);
         if (result.AllowsProcessStart)
             task.BindPreparedDispatch(preparedDispatch);
         task.RecordRetryAdmission(result.Receipt);
         if (!result.AllowsProcessStart)
             task.SetRetryAdmissionHold(result.Receipt.Route);
         return new RetryAdmissionSnapshotResult(goal.ToSnapshot(), result);
+    }
+}
+
+/// <summary>
+/// Adds the operator-facing identity needed to explain a repeat disposition.  This is kept at
+/// the shared admission seam so the in-memory and SQLite reservation paths cannot diverge.
+/// </summary>
+public static class RetryAdmissionReceiptContext
+{
+    public static RetryAdmissionResult Enrich(
+        Goal goal,
+        TaskSpec heldTask,
+        TaskDispatchRecord preparedDispatch,
+        RetryAdmissionResult result)
+    {
+        ArgumentNullException.ThrowIfNull(goal);
+        ArgumentNullException.ThrowIfNull(heldTask);
+        ArgumentNullException.ThrowIfNull(preparedDispatch);
+        ArgumentNullException.ThrowIfNull(result);
+
+        var openFindings = RetryContextFingerprintFactory.GetOpenBlockingFindings(goal);
+        var requiredTask = ResolveRequiredTaskChange(goal, heldTask, result.Receipt.Route);
+        return result with
+        {
+            Receipt = result.Receipt with
+            {
+                CandidateSha = preparedDispatch.ResultCommit ?? preparedDispatch.BaseCommit ??
+                    heldTask.LastDispatch?.ResultCommit ?? heldTask.LastDispatch?.BaseCommit ?? "unavailable",
+                StableFindingIds = openFindings
+                    .Select(finding => finding.StableId)
+                    .Distinct(StringComparer.Ordinal)
+                    .OrderBy(id => id, StringComparer.Ordinal)
+                    .ToArray(),
+                EvidenceIdentities = goal.Tasks
+                    .SelectMany(task => task.VerificationHistory)
+                    .SelectMany(verification => verification.FindingEvidenceReceipts ?? [])
+                    .Select(receipt => receipt.ReceiptId)
+                    .Distinct(StringComparer.Ordinal)
+                    .OrderBy(id => id, StringComparer.Ordinal)
+                    .ToArray(),
+                RequiredTaskChangeId = requiredTask.Id.Value
+            }
+        };
+    }
+
+    private static TaskSpec ResolveRequiredTaskChange(
+        Goal goal,
+        TaskSpec heldTask,
+        RetryAdmissionRoute route)
+    {
+        var targetRole = route switch
+        {
+            RetryAdmissionRoute.UpstreamImplementation => AgentRole.Developer,
+            RetryAdmissionRoute.EvidenceLane => AgentRole.Tester,
+            _ => heldTask.RequiredRole
+        };
+        return goal.Tasks
+            .TakeWhile(task => task.Id != heldTask.Id)
+            .LastOrDefault(task => task.RequiredRole == targetRole) ??
+            goal.Tasks.LastOrDefault(task => task.RequiredRole == targetRole) ??
+            heldTask;
     }
 }
 

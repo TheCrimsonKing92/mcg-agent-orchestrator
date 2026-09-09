@@ -1228,25 +1228,7 @@ public sealed partial class AgentOrchestratorKernel
             reservationOwnerId,
             reservationLeaseExpiresAt,
             reservationRecoveryConfirmed);
-        result = result with
-        {
-            Receipt = result.Receipt with
-            {
-                CandidateSha = task.LastDispatch.ResultCommit ?? task.LastDispatch.BaseCommit ?? "unavailable",
-                StableFindingIds = (openBlockingFindings ?? [])
-                    .Select(finding => finding.StableId)
-                    .Distinct(StringComparer.Ordinal)
-                    .OrderBy(id => id, StringComparer.Ordinal)
-                    .ToArray(),
-                EvidenceIdentities = task.VerificationHistory
-                    .SelectMany(verification => verification.FindingEvidenceReceipts ?? [])
-                    .Select(receipt => receipt.ReceiptId)
-                    .Distinct(StringComparer.Ordinal)
-                    .OrderBy(id => id, StringComparer.Ordinal)
-                    .ToArray(),
-                RequiredTaskChangeId = task.Id.Value
-            }
-        };
+        result = RetryAdmissionReceiptContext.Enrich(goal, task, task.LastDispatch, result);
         ApplyPreparedRetryAdmission(goalId, taskId, result);
         return result;
     }

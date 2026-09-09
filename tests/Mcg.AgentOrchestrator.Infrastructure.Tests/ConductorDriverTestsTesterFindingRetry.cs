@@ -124,7 +124,7 @@ public sealed class ConductorDriverTestsTesterFindingRetry
                 category: FindingCategory.Correctness)]);
 
         var focusedRuns = 0;
-        IReadOnlyList<TaskSpec>? dispatched = null;
+        IReadOnlyList<DispatchedTaskIdentity>? dispatched = null;
         var driver = MakeDriver(
             getFacts: _ => GoalLifecycleFacts.None,
             getPreReviewEvidenceContext: _ => NoPreReviewContext(candidateSha),
@@ -135,17 +135,21 @@ public sealed class ConductorDriverTestsTesterFindingRetry
             },
             dispatchAndStart: dispatchGoal =>
             {
-                dispatched = dispatchGoal.Tasks;
-                return DispatchStartOutcome.Started(dispatchGoal.Tasks);
-            });
+                var started = new[] { dispatchGoal.Tasks.Single(task => task.Id == developer.Id) };
+                var outcome = DispatchStartOutcome.Started(started);
+                dispatched = outcome.DispatchedTasks;
+                return outcome;
+            },
+            retryTaskWithCause: (goalId, taskId, message, roundKind, cause) =>
+                kernel.RetryTask(goalId, taskId, message, cause, retryRoundKind: roundKind));
 
         var result = driver.AdvanceOnce(goal, ConductorAutonomyPolicy.Permissive);
 
         Assert.Equal(0, focusedRuns);
         Assert.Single(reviewer.PreReviewEvidenceHistory);
         Assert.NotNull(dispatched);
-        Assert.Equal(developer.Id, Assert.Single(dispatched!).Id);
-        Assert.Equal(AgentRole.Developer, Assert.Single(dispatched!).RequiredRole);
+        Assert.Equal(developer.Id, Assert.Single(dispatched!).TaskId);
+        Assert.Equal(AgentRole.Developer, Assert.Single(dispatched!).Role);
         Assert.True(result.Outcome is ConductorAdvanceOutcome.Executed);
     }
 
