@@ -511,7 +511,7 @@ internal sealed class IcaclsIntegrityLabeler : IWorkerIntegrityLabeler
         try
         {
             var result = GetNamedSecurityInfo(
-                path,
+                NativeFilePath(path),
                 SeFileObject,
                 LabelSecurityInformation,
                 out owner,
@@ -689,6 +689,28 @@ internal sealed class IcaclsIntegrityLabeler : IWorkerIntegrityLabeler
     [DllImport("kernel32.dll", SetLastError = true)]
     private static extern IntPtr LocalFree(IntPtr memory);
 
+    // Win32 security APIs and icacls do not inherit .NET's long-path handling.
+    // Resolve ordinary paths before adding the extended prefix so relative segments
+    // and forward slashes retain their normal filesystem meaning.
+    internal static string NativeFilePath(string path)
+    {
+        if (!OperatingSystem.IsWindows() || path.StartsWith(@"\\?\", StringComparison.Ordinal)
+            || path.StartsWith(@"\\.\", StringComparison.Ordinal))
+        {
+            return path;
+        }
+
+        var fullPath = Path.GetFullPath(path);
+        if (fullPath.Length < 260)
+        {
+            return path;
+        }
+
+        return fullPath.StartsWith(@"\\", StringComparison.Ordinal)
+            ? @"\\?\UNC\" + fullPath[2..]
+            : @"\\?\" + fullPath;
+    }
+
     public bool SetIntegrity(string path, string level, bool recursive)
     {
         try
@@ -701,7 +723,7 @@ internal sealed class IcaclsIntegrityLabeler : IWorkerIntegrityLabeler
                 RedirectStandardOutput = true,
                 RedirectStandardError = true
             };
-            psi.ArgumentList.Add(path);
+            psi.ArgumentList.Add(NativeFilePath(path));
             psi.ArgumentList.Add("/setintegritylevel");
             psi.ArgumentList.Add(level);
             if (recursive)
