@@ -4,7 +4,7 @@ using Mcg.AgentOrchestrator.Core;
 using Mcg.AgentOrchestrator.Core.Conductor;
 using Mcg.AgentOrchestrator.Infrastructure;
 
-[Xunit.Collection(TestCollections.GoalWorktreeCleanupHooks)]
+[Xunit.Collection(TestCollections.LandingGitRunner)]
 public sealed class LandingExecutorTests
 {
     [Xunit.Fact(DisplayName = "LandingExecutor_failed_count_excludes_auto_recovered_empty_output_flake")]

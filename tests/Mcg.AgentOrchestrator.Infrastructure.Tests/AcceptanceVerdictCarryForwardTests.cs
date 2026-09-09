@@ -6,7 +6,6 @@ using Mcg.AgentOrchestrator.Infrastructure;
 using static ConductorDriverTests;
 using static LandingExecutorTests;
 
-[Xunit.Collection(TestCollections.GoalWorktreeCleanupHooks)]
 public sealed class AcceptanceVerdictCarryForwardTests
 {
     [Xunit.Fact]

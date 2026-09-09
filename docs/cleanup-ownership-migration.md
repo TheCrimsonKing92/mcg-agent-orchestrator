@@ -1,5 +1,16 @@
 # Cleanup ownership migration
 
+Current candidate status (2026-09-09): mutable cleanup hooks and scheduler policy
+have scoped owners; the obsolete cleanup collection and its two lane exclusion
+keys have been removed in the candidate. The first concurrent integration run
+passed all 228 cleanup and 395 lifecycle cases. Follow-up manifest checks exposed
+resource-scope metadata and the remaining token environment mutation; those were
+corrected and the 42-case manifest/token selection passed. That later correction
+is not covered by the earlier full-lane receipt. Do not treat focused or earlier
+receipts as the final candidate's native acceptance verdict.
+Commit `278aa387` is the pre-removal timing baseline with matching case identities.
+Final comparison, native acceptance, and landing remain required.
+
 This table is the completion inventory for cleanup ownership. A row remains open until its listed
 legacy path has no production or test caller. `WorktreeCleanupContext` is immutable for one host or
 command operation; `GoalWorktreeCleanupHooks` is immutable for one cleanup operation.
@@ -37,10 +48,17 @@ command operation; `GoalWorktreeCleanupHooks` is immutable for one cleanup opera
 | Acceptance cohort, partition, and merge-train materialization | The conductor previously selected a process-wide cleanup policy during cleanup-debt recording | The conductor's `CleanupContext.Hooks` is carried by each disposable workspace | Production callers pass their operation hook; nullable overload fallbacks construct fixed defaults only for direct callers and tests |
 | Nullable cleanup-hook overloads and `TerminalGoalSweep.Run` fallback | Compatibility fallback for direct callers and tests | **Open:** remove only after all callers pass explicit hooks |
 
-The `GoalWorktreeCleanupHooks` xUnit collection remains serialized because its fixture mutates the
-parent-process `MCG_DOTNET_ISOLATED_ROOT`; individual cases also retain process-wide environment and registry effects.
-It must remain until child-process environment and distinct git-root/process-registry isolation have
-Acceptance receipts.
+The candidate removes `GoalWorktreeCleanupHooks`: its CLI, verdict-carry-forward,
+and prune fixtures now receive explicit storage roots; the deletion-only fixture
+owns its target directory and needs no build-root fixture. Public-path positive
+and restored-defect controls are indexed below. The two affected lanes require
+fresh concurrent execution evidence before the removal can be accepted.
+
+`LandingGitRunner` remains a precise nonparallel collection for the still-mutable
+landing Git fault-injection seam. It retains `IsolatedDotnetRootFixture` for the
+legacy landing fixtures. That protection is not evidence that the remaining
+landing seam has been migrated, and must not be removed based on cleanup-hook
+isolation alone. Other environment and build-slot collections remain protected.
 
 ## Parked-branch reassessment
 
@@ -521,7 +539,7 @@ The corrected48-case run cleanup-git-runner-guard-managed passed48/48, no skips,
 confirmed exit0, no timeout or cleanup diagnostic, in6m18.538s. Separate source
 bindings and exact-method-preservation receipts were checked. TRX timestamps
 show one guarded case and zero overlaps with the other47 cases. The installed
-xUnit4 collection contract documents DisableParallelization against any other
+xUnit collection contract documents DisableParallelization against any other
 tests. Cross-family review's inheritance/fixture concerns were checked against
 the abstract fact-free helper base and successful build; resolution is recorded
 in cleanup-git-runner-review-resolution.md.
@@ -543,3 +561,30 @@ confirmed exit0 and clean teardown (cleanup-prune-foreign-root-final); final
 production/test PDB bindings match. Anthropic review and resolution are retained
 as cleanup-prune-review.json and cleanup-prune-review-resolution.md. Collection
 guards remain unchanged pending the integrated migration validation.
+
+### Full-lane integration and cross-process scope (2026-09-09)
+
+The guard-removal candidate passed228/228cleanup and395/395lifecycle tests on the
+same binary5FF4E1E4..., with zero skips and clean terminal receipts. Selected-case
+intervals overlapped1151.1395s; combined span1163.0128s. These measurements describe
+that candidate only. A pre-removal baseline at278aa387 is being executed with the
+same case identities, seed and per-process cap, obeying its original shared key.
+
+Manifest validation then exposed an incorrect equivalence between xUnit
+nonparallel collections and cross-process resource ownership. The owning
+LandingGitRunner definition now declares ProcessLocalTestCollection metadata;
+its static runner and environment are process-local and its fixture roots are
+atomically claimed unique directories. The guard preserves complete lane mapping
+and nonparallel-definition checks, and still requires shared keys for all
+unannotated collections. No central exception list is introduced.
+
+The token fixture no longer mutates parent environment: the existing public
+resolver delegates to an internal explicit environment reader, preserving process
+lookup and Windows User fallback. Composition consumes the resulting invalid
+token and all original landing/cleanup assertions remain. The final manifest and
+token selection passed42/42 with zero skips and clean exit. Source/PDB bindings
+include OperatorComms embedded symbols. Reviews and resolutions are recorded in
+cleanup-collection-scope-review, cleanup-token-input-review and
+cleanup-final-guards-review-resolution. Final native acceptance and matched-scope
+performance evidence remain required; the preceding623-case receipt predates
+these final metadata/token corrections.

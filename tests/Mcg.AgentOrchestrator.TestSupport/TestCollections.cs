@@ -4,7 +4,6 @@ public static class TestCollections
     public const string DotnetBuildSlots = "DotnetBuildSlots";
     public const string EnvMutation = "EnvMutation";
     public const string GoalAcceptanceVerifier = "GoalAcceptanceVerifier";
-    public const string GoalWorktreeCleanupHooks = "GoalWorktreeCleanupHooks";
     public const string IsolatedDotnetRoot = "IsolatedDotnetRoot";
     public const string JobAccounting = "JobAccounting";
     public const string LandingGitRunner = "LandingGitRunner";

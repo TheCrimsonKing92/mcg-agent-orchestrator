@@ -2723,7 +2723,6 @@ public sealed class CliCommandTestsIsolatedBuildLeaseCommands : CliCommandTestBa
     }
 }
 
-[Xunit.Collection(TestCollections.GoalWorktreeCleanupHooks)]
 public sealed class CliCommandTestsGoalLifecycleCleanupHooksAbandon : CliCommandTestBase
 {
     [Xunit.Fact(DisplayName = "Cli_abandon_goal_confirmed_cancels_and_removes_clean_workspace")]
@@ -3155,7 +3154,6 @@ public sealed class CliCommandTestsGoalLifecycleCommandsCreation : CliCommandTes
 
 }
 
-[Xunit.Collection(TestCollections.GoalWorktreeCleanupHooks)]
 public sealed class CliCommandTestsGoalLifecycleCleanupHooksAcceptance : CliCommandTestBase
 {
     [Xunit.Fact(DisplayName = "Cli_acceptance_records_dogfood_entry_in_sqlite_without_committing_log_file")]
@@ -4343,7 +4341,6 @@ public sealed class CliCommandTestsGoalLifecycleCleanupHooksAcceptance : CliComm
     }
 }
 
-[Xunit.Collection(TestCollections.GoalWorktreeCleanupHooks)]
 public sealed class CliCommandTestsGoalLifecycleCleanupHooks : CliCommandTestBase
 {
     [Xunit.Fact(DisplayName = "Cli_status_prints_cleanup_backoff_for_snapshot_visibility")]

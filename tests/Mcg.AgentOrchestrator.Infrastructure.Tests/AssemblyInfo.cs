@@ -15,14 +15,11 @@ public sealed class DotnetBuildSlotsCollection : Xunit.ICollectionFixture<Isolat
 [Xunit.CollectionDefinition(TestCollections.GoalAcceptanceVerifier, DisableParallelization = true)]
 public sealed class GoalAcceptanceVerifierCollection : Xunit.ICollectionFixture<IsolatedDotnetRootFixture>;
 
-// GoalWorktrees exposes cleanup hook seams and some CLI acceptance tests acquire real slot leases;
-// keep those process-wide replacements serial and off the host gate slots.
-[Xunit.CollectionDefinition(TestCollections.GoalWorktreeCleanupHooks, DisableParallelization = true)]
-public sealed class GoalWorktreeCleanupHooksCollection : Xunit.ICollectionFixture<IsolatedDotnetRootFixture>;
-
-// Fault injection replaces LandingExecutor.GitRunner process-wide.
+// Fault injection replaces LandingExecutor.GitRunner process-wide; legacy landing
+// fixtures also require an isolated build root. Scoped cleanup tests need neither guard.
 [Xunit.CollectionDefinition(TestCollections.LandingGitRunner, DisableParallelization = true)]
-public sealed class LandingGitRunnerCollection;
+[ProcessLocalTestCollection("GitRunner and environment overrides are process-local; fixture storage roots are atomically claimed unique directories.")]
+public sealed class LandingGitRunnerCollection : Xunit.ICollectionFixture<IsolatedDotnetRootFixture>;
 
 // Build-lease tests need a process-local isolated root but do not mutate cleanup-hook state.
 [Xunit.CollectionDefinition(TestCollections.IsolatedDotnetRoot, DisableParallelization = true)]

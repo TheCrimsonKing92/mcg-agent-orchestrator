@@ -3,7 +3,6 @@ using Mcg.AgentOrchestrator.App.Orchestration;
 using Mcg.AgentOrchestrator.Core;
 using Mcg.AgentOrchestrator.Infrastructure;
 
-[Xunit.Collection(TestCollections.GoalWorktreeCleanupHooks)]
 public sealed class GoalsPruneTests
 {
     private static GoalWorktreeCleanupHooks CreateCleanupHooks(string repo) =>
