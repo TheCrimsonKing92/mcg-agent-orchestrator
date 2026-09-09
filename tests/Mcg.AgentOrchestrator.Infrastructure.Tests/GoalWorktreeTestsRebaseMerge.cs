@@ -11,7 +11,6 @@ using Mcg.AgentOrchestrator.Infrastructure;
 using Microsoft.Data.Sqlite;
 
 
-[Xunit.Collection(TestCollections.GoalWorktreeCleanupHooks)]
 public sealed class GoalWorktreeTestsRebaseMerge : GoalWorktreeTestBase
 {
     [Xunit.Fact(DisplayName = "GoalWorktrees_fast_forwards_goal_branch_on_merge")]

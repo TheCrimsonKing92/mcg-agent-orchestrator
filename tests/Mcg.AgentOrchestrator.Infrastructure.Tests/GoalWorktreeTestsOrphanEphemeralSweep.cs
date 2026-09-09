@@ -11,7 +11,6 @@ using Mcg.AgentOrchestrator.Infrastructure;
 using Microsoft.Data.Sqlite;
 
 
-[Xunit.Collection(TestCollections.GoalWorktreeCleanupHooks)]
 public sealed class GoalWorktreeTestsOrphanEphemeralSweep : GoalWorktreeTestBase
 {
     [Xunit.Fact(DisplayName = "GoalWorktrees_sweep_deletes_orphaned_worktree_directory")]

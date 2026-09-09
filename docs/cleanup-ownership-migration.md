@@ -467,3 +467,21 @@ above. The review's uncertainty about whether the merge-train verifier uses the 
 resolved by `RunMergeTrain` calling `AcquireCohortStableSlotLease` and the executed red/green pair.
 Production focused-evidence constructor forwarding is source-verified here; its full-path
 integration and the remaining ambient fixture migrations remain part of the open goal.
+
+### Four additional collection memberships removed (2026-09-09)
+
+Removed the legacy cleanup collection from BlockingVerifier, RebaseMerge,
+RebaseMergeMaterialization, and OrphanEphemeralSweep after checking their scoped
+roots, instance hooks, repository discovery boundaries, and console capture.
+Cross-family review is recorded in cleanup-remaining-guards-review.json; the
+orphan scanner deliberately remains rooted in its owning repository, not its
+build-storage directory.
+
+The managed mixed-family run cleanup-migrated-families-parallel passed 113/113,
+zero skips, exit 0 with confirmed teardown and no timeout or cleanup diagnostic.
+It ran collection parallelism with five threads and seed 20260909 against binary
+8FC0A669194F1486483F734ADA1DCD5FE45A95EABAB96D7D83D3D99A011CA384;
+remaining-guard-binding source receipts bind all four changed files to that build.
+The lifecycle explicit-root negative control failed on ambient fallback and its
+restored positive passed 1/1 before this run. Remaining collection members and
+manifest exclusion keys still require migration; this is not final acceptance.
