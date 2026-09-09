@@ -78,7 +78,11 @@ public sealed record RetryAdmissionReceipt(
     DateTimeOffset? WorkerStartedAt = null,
     string? ReservationOwnerId = null,
     DateTimeOffset? ReservationLeaseExpiresAt = null,
-    DateTimeOffset? WorkerStartClaimedAt = null);
+    DateTimeOffset? WorkerStartClaimedAt = null,
+    string? CandidateSha = null,
+    IReadOnlyList<string>? StableFindingIds = null,
+    IReadOnlyList<string>? EvidenceIdentities = null,
+    string? RequiredTaskChangeId = null);
 
 public sealed record RetryAdmissionResult(
     RetryAdmissionDecision Decision,

@@ -1228,6 +1228,25 @@ public sealed partial class AgentOrchestratorKernel
             reservationOwnerId,
             reservationLeaseExpiresAt,
             reservationRecoveryConfirmed);
+        result = result with
+        {
+            Receipt = result.Receipt with
+            {
+                CandidateSha = task.LastDispatch.ResultCommit ?? task.LastDispatch.BaseCommit ?? "unavailable",
+                StableFindingIds = (openBlockingFindings ?? [])
+                    .Select(finding => finding.StableId)
+                    .Distinct(StringComparer.Ordinal)
+                    .OrderBy(id => id, StringComparer.Ordinal)
+                    .ToArray(),
+                EvidenceIdentities = task.VerificationHistory
+                    .SelectMany(verification => verification.FindingEvidenceReceipts ?? [])
+                    .Select(receipt => receipt.ReceiptId)
+                    .Distinct(StringComparer.Ordinal)
+                    .OrderBy(id => id, StringComparer.Ordinal)
+                    .ToArray(),
+                RequiredTaskChangeId = task.Id.Value
+            }
+        };
         ApplyPreparedRetryAdmission(goalId, taskId, result);
         return result;
     }
@@ -1266,7 +1285,7 @@ public sealed partial class AgentOrchestratorKernel
                         goal,
                         taskId,
                         ProgressKind.NoProgressRedispatchPrevented,
-                        $"NO_PROGRESS_REDISPATCH_PREVENTED fingerprint={result.Receipt.Fingerprint.Value} cause={result.Receipt.Cause} route={result.Receipt.Route} attempt={result.Receipt.LinkedDispatchAt:O}");
+                    FormatNoProgressRedispatchDisposition(result.Receipt));
                     return;
                 }
 
@@ -1282,7 +1301,7 @@ public sealed partial class AgentOrchestratorKernel
                 goal,
                 taskId,
                 ProgressKind.NoProgressRedispatchPrevented,
-                $"NO_PROGRESS_REDISPATCH_PREVENTED fingerprint={result.Receipt.Fingerprint.Value} cause={result.Receipt.Cause} route={result.Receipt.Route} attempt={result.Receipt.LinkedDispatchAt:O}");
+                FormatNoProgressRedispatchDisposition(result.Receipt));
             ApplyRetryAdmissionRoute(goal, task, result.Receipt);
         }
     }
@@ -1334,6 +1353,13 @@ public sealed partial class AgentOrchestratorKernel
                 throw new InvalidOperationException($"Unsupported retry-admission route '{receipt.Route}'.");
         }
     }
+
+    private static string FormatNoProgressRedispatchDisposition(RetryAdmissionReceipt receipt) =>
+        $"NO_PROGRESS_REDISPATCH_PREVENTED fingerprint={receipt.Fingerprint.Value} cause={receipt.Cause} route={receipt.Route} " +
+        $"attempt={receipt.LinkedDispatchAt:O} candidate_sha={receipt.CandidateSha ?? "unavailable"} " +
+        $"stable_finding_ids={string.Join(",", receipt.StableFindingIds ?? [])} " +
+        $"evidence_identities={string.Join(",", receipt.EvidenceIdentities ?? [])} " +
+        $"task_must_change={receipt.RequiredTaskChangeId ?? "unavailable"}";
 
     private void RoutePreventedRetryToAcceptanceRegate(
         Goal goal,

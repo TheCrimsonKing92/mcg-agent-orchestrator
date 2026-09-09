@@ -156,6 +156,18 @@ internal sealed partial class ConductorDriver
 
         var constituentReceipts = greenReceipts;
         var receiptId = CreateConstituentReuseReceiptId(candidateSha, identity, constituentReceipts);
+        var armsByIdentity = constituentReceipts
+            .SelectMany(receipt => receipt.Arms ?? [])
+            .GroupBy(arm => new { arm.Arm, arm.Sha });
+        if (armsByIdentity.Any(group => group
+                .Select(arm => new { arm.Disposition, arm.Accepted, arm.Passed })
+                .Distinct()
+                .Skip(1)
+                .Any()))
+        {
+            return false;
+        }
+
         reusableReceipt = new FindingEvidenceReceipt(
             receiptId,
             candidateSha,
@@ -164,16 +176,7 @@ internal sealed partial class ConductorDriver
             Passed: true,
             Summary: "Reused green focused evidence from constituent receipts: " +
                 string.Join(", ", constituentReceipts.Select(receipt => receipt.ReceiptId)),
-            Arms: constituentReceipts
-                .SelectMany(receipt => receipt.Arms ?? [])
-                .GroupBy(arm => new
-                {
-                    arm.Arm,
-                    arm.Sha,
-                    arm.Disposition,
-                    arm.Accepted,
-                    arm.Passed
-                })
+            Arms: armsByIdentity
                 .Select(group => group.Last())
                 .ToArray(),
             RequestDispositions: []);

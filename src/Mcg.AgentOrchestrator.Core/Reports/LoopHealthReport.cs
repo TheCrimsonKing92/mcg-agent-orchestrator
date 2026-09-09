@@ -42,7 +42,7 @@ public sealed record LoopHealthSnapshot(
     int RetryPaidAuthorityUnknownCount = 0,
     int RetryCauseUnavailableCount = 0,
     int EvidenceAttemptCount = 0,
-    long EvidenceElapsedMilliseconds = 0,
+    long? EvidenceElapsedMilliseconds = null,
     int EvidenceProviderUsageUnavailableCount = 0);
 
 public static class LoopHealthReport
@@ -159,11 +159,10 @@ public static class LoopHealthReport
         var paidAuthorityUnknown = allTasks.Sum(task => task.DispatchHistory
             .Skip(1)
             .Count(dispatch => dispatch.PaidRoute == PaidRouteClassification.Unknown));
-        var evidenceReceipts = allTasks.SelectMany(task => task.PreReviewEvidenceHistory).ToList();
-        var evidenceAttemptCount = evidenceReceipts.Count;
-        // Focused receipts deliberately do not infer provider usage or wall time from check
-        // artifacts.  Zero is an unavailable value, not a claimed duration.
-        const long evidenceElapsedMilliseconds = 0;
+        var evidenceAttemptCount = allTasks.Sum(task => task.PreReviewEvidenceAttemptCount);
+        // Focused receipts do not carry provider usage or elapsed time. Null is deliberately
+        // distinguishable from a measured zero until the attempt artifact contract supplies it.
+        long? evidenceElapsedMilliseconds = null;
 
         return new LoopHealthSnapshot(
             window.Count,

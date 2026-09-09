@@ -78,6 +78,9 @@ public sealed class TaskSpec
 
     public IReadOnlyList<PreReviewEvidenceReceipt> PreReviewEvidenceHistory => _preReviewEvidenceHistory;
 
+    // This is durable attempt accounting, not the bounded receipt cache length.
+    public int PreReviewEvidenceAttemptCount { get; private set; }
+
     internal void AssignTo(AgentId agentId)
     {
         AssignedAgentId = agentId;
@@ -263,7 +266,8 @@ public sealed class TaskSpec
             RetryAdmissionHoldRoute,
             PendingReviewFindingRepairCheckpoint,
             AcceptedRetryFeedback,
-            _preReviewEvidenceHistory.ToArray());
+            _preReviewEvidenceHistory.ToArray(),
+            PreReviewEvidenceAttemptCount);
     }
 
     internal static TaskSpec FromSnapshot(TaskSnapshot snapshot)
@@ -466,6 +470,9 @@ public sealed class TaskSpec
         task._preReviewEvidenceHistory.AddRange(
             snapshot.PreReviewEvidenceHistory ??
             (snapshot.PreReviewEvidenceReceipt is null ? [] : [snapshot.PreReviewEvidenceReceipt]));
+        task.PreReviewEvidenceAttemptCount = Math.Max(
+            task._preReviewEvidenceHistory.Count,
+            snapshot.PreReviewEvidenceAttemptCount);
         task.PreReviewEvidenceReceipt = snapshot.PreReviewEvidenceReceipt ?? task._preReviewEvidenceHistory.LastOrDefault();
         task.InterruptedDispatchRecoveryId = snapshot.InterruptedDispatchRecoveryId;
         task.WasCancelledByConductor = snapshot.WasCancelledByConductor;
@@ -644,6 +651,7 @@ public sealed class TaskSpec
         }
 
         _preReviewEvidenceHistory.Add(receipt);
+        PreReviewEvidenceAttemptCount++;
         if (_preReviewEvidenceHistory.Count > PreReviewEvidenceHistoryLimit)
         {
             _preReviewEvidenceHistory.RemoveRange(0, _preReviewEvidenceHistory.Count - PreReviewEvidenceHistoryLimit);

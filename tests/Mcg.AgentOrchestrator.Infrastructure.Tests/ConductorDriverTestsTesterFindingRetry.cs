@@ -82,6 +82,74 @@ public sealed class ConductorDriverTestsTesterFindingRetry
     }
 
     [Xunit.Fact]
+    public void PendingDeveloperRetryPreventsCombinedTesterReviewerEvidenceRepeatAndDispatchesDeveloper()
+    {
+        const string candidateSha = "abc1234";
+        var (kernel, goal) = SoftwareGoal();
+        var developer = goal.Tasks.Single(task => task.RequiredRole == AgentRole.Developer);
+        var tester = goal.Tasks.Single(task => task.RequiredRole == AgentRole.Tester);
+        var reviewer = goal.Tasks.Single(task => task.RequiredRole == AgentRole.Reviewer);
+        PassVerification(kernel, goal, developer, hasCommittedChanges: true);
+        kernel.RetryTask(
+            goal.Id,
+            developer.Id,
+            "The operator supplied an upstream source correction.",
+            retryCause: RetryCause.NewSourceFinding);
+        kernel.RecordPreReviewEvidence(goal.Id, reviewer.Id, new PreReviewEvidenceReceipt(
+            goal.Id.Value,
+            ReviewerRound: 1,
+            CandidateSha: candidateSha,
+            SelectedFocusedTests: ["Infrastructure.Tests: ConductorDriverTests"],
+            Disposition: PreReviewEvidenceDisposition.Green,
+            PassedCheckCount: 1,
+            FailedCheckCount: 0,
+            Checks: [new PreReviewEvidenceCheckReceipt(
+                "ConductorDriverTests",
+                "Infrastructure.Tests: ConductorDriverTests",
+                Passed: true,
+                ExitCode: 0)],
+            FailingTestIdentities: [],
+            MappingReason: "fixture green evidence",
+            EvidencePointer: "fixture://green",
+            RecordedAt: DateTimeOffset.UtcNow));
+        RecordTesterFinding(kernel, goal, tester, FindingCategory.Correctness, includeEvidenceRequest: true);
+        FailReviewerNeedsWork(
+            kernel,
+            goal,
+            reviewer,
+            "reviewer source finding",
+            findings: [EvidenceFindingWithRequest(
+                "The unchanged candidate still has a blocking source defect.",
+                id: "combined-reviewer-correctness",
+                category: FindingCategory.Correctness)]);
+
+        var focusedRuns = 0;
+        IReadOnlyList<TaskSpec>? dispatched = null;
+        var driver = MakeDriver(
+            getFacts: _ => GoalLifecycleFacts.None,
+            getPreReviewEvidenceContext: _ => NoPreReviewContext(candidateSha),
+            runFocusedEvidence: (_, request) =>
+            {
+                focusedRuns++;
+                return DualArmFindingEvidence(request, FindingEvidenceArmDisposition.Red, candidateSha);
+            },
+            dispatchAndStart: dispatchGoal =>
+            {
+                dispatched = dispatchGoal.Tasks;
+                return DispatchStartOutcome.Started(dispatchGoal.Tasks);
+            });
+
+        var result = driver.AdvanceOnce(goal, ConductorAutonomyPolicy.Permissive);
+
+        Assert.Equal(0, focusedRuns);
+        Assert.Single(reviewer.PreReviewEvidenceHistory);
+        Assert.NotNull(dispatched);
+        Assert.Equal(developer.Id, Assert.Single(dispatched!).Id);
+        Assert.Equal(AgentRole.Developer, Assert.Single(dispatched!).RequiredRole);
+        Assert.True(result.Outcome is ConductorAdvanceOutcome.Executed);
+    }
+
+    [Xunit.Fact]
     public void TestEvidenceTesterFindingUsesEvidencePath()
     {
         var (kernel, goal) = SoftwareGoal();

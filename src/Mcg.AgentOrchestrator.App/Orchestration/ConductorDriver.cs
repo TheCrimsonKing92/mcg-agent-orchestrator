@@ -4853,7 +4853,8 @@ internal sealed partial class ConductorDriver
             // otherwise the stale non-green receipt can never be replaced by a current result.
         }
 
-        if (TryGetReusableGreenPreReviewEvidence(
+        if (!context.MappingNeedsInput &&
+            TryGetReusableGreenPreReviewEvidence(
                 reviewerTask,
                 goal.Id.Value,
                 context.CandidateSha,
