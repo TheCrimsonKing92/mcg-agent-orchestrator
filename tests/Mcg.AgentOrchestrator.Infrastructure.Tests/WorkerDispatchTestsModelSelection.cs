@@ -861,6 +861,39 @@ public void WorkerProfileDispatcherRejectsVerifiedTaskDispatch()
     Assert.Contains("--model 'gpt-5.3-codex-spark'", task.LastDispatch.Command, StringComparison.Ordinal);
 }
 
+    [Xunit.Theory]
+    [Xunit.InlineData(0, false)]
+    [Xunit.InlineData(3, false)]
+    [Xunit.InlineData(1, true)]
+    public void DefaultTesterDispatchUsesTerraMediumWithTypedContextForComplexWork(int retries, bool classFinding)
+    {
+        var root = CreateTempDirectory();
+        var workingDirectory = Path.Combine(root, "repo");
+        Directory.CreateDirectory(workingDirectory);
+        File.WriteAllText(Path.Combine(workingDirectory, ".git"), "gitdir: ..");
+        var kernel = new AgentOrchestratorKernel();
+        var task = new TaskSpec(TaskId.New(), "Build comprehensive production integration tests for API CLI dashboard provider subscription worker persistence state, schema migration, rollback, deadlock, and authorization behavior.", AgentRole.Tester);
+        var goal = kernel.CreateGoal("Complex high-risk concurrency verification", [task]);
+        var agent = AgentCatalog.Default().GetRequired(AgentRole.Tester) with { IsProviderRoutingConstrained = true };
+        var catalogPath = Path.Combine(root, "agents.json");
+        AgentCatalogStore.Save(catalogPath, new AgentCatalog([agent]));
+        var agents = AgentCatalogStore.Load(catalogPath).Agents;
+        kernel.ActivateGoal(goal.Id, agents);
+        for (var attempt = 0; attempt < retries; attempt++)
+        {
+            kernel.RetryTask(goal.Id, task.Id, classFinding ? "Recheck every call site." : "Recheck the reported test failure.");
+        }
+
+        WorkerProfileDispatcher.PrepareSubscriptionTask(
+            kernel, goal, task, agents, WorkerProfileCatalog.Default(),
+            Path.Combine(root, "prompts"), workingDirectory, DateTimeOffset.UtcNow);
+
+        Assert.Equal(AgentCatalog.OpenAiTerraSubscriptionModelAlias, task.LastDispatch!.ModelName);
+        Assert.Equal(TaskComplexity.Complex, task.LastDispatch.TaskComplexity);
+        Assert.Contains("model_reasoning_effort='medium'", task.LastDispatch.Command, StringComparison.Ordinal);
+        Assert.NotNull(task.LastDispatch.ContextPackageReceipt);
+    }
+
     [Xunit.Fact(DisplayName = "WorkerProfileDispatcher_does_not_override_constrained_developer_alias_with_cheap_lane")]
     public void WorkerProfileDispatcherDoesNotOverrideConstrainedDeveloperAliasWithCheapLane()
 {
@@ -936,7 +969,7 @@ public void WorkerProfileDispatcherRejectsVerifiedTaskDispatch()
 
     Assert.Equal("codex-cli", task.LastDispatch!.WorkerName);
     // Subscription launch profiles always pin the configured alias; complexity only changes API-side model/effort.
-    Assert.Equal(AgentCatalog.OpenAiSolSubscriptionModelAlias, task.LastDispatch.ModelName);
+    Assert.Equal(AgentCatalog.OpenAiTerraSubscriptionModelAlias, task.LastDispatch.ModelName);
     Assert.Equal(TaskComplexity.Complex, task.LastDispatch.TaskComplexity);
     Assert.Equal("codex-cli", task.LastDispatch.DispatchLane);
     Assert.DoesNotContain("gpt-5.3-codex-spark", task.LastDispatch.Command, StringComparison.Ordinal);
@@ -1049,11 +1082,11 @@ public void WorkerProfileDispatcherRejectsVerifiedTaskDispatch()
 
     Assert.Equal("codex-cli", task.LastDispatch!.WorkerName);
     // Subscription launch profiles always pin the configured alias; fallback from spark still uses the configured default alias.
-    Assert.Equal(AgentCatalog.OpenAiSolSubscriptionModelAlias, task.LastDispatch.ModelName);
+    Assert.Equal(AgentCatalog.OpenAiTerraSubscriptionModelAlias, task.LastDispatch.ModelName);
     Assert.Equal("codex-cli", task.LastDispatch.DispatchLane);
     Assert.Contains("fallback-default-lane: spark unavailable", task.LastDispatch.ModelSelectionReason, StringComparison.Ordinal);
     // Subscription launch profiles always pin the configured alias; fallback from spark still uses the configured default alias.
-    Assert.Contains($"--model '{AgentCatalog.OpenAiSolSubscriptionModelAlias}'", task.LastDispatch.Command, StringComparison.Ordinal);
+    Assert.Contains($"--model '{AgentCatalog.OpenAiTerraSubscriptionModelAlias}'", task.LastDispatch.Command, StringComparison.Ordinal);
     Assert.DoesNotContain("gpt-5.3-codex-spark", task.LastDispatch.Command, StringComparison.Ordinal);
 }
 
@@ -1516,7 +1549,7 @@ public void WorkerProfileDispatcherRejectsVerifiedSubscriptionDispatch()
     var legacyAgent = AgentCatalog.Default().GetRequired(AgentRole.Researcher) with
     {
         Name = "Pinned OpenAI researcher",
-        Subscription = new SubscriptionLaunchProfile("codex-cli", AgentCatalog.OpenAiSolSubscriptionModelAlias),
+        Subscription = new SubscriptionLaunchProfile("codex-cli", AgentCatalog.OpenAiTerraSubscriptionModelAlias),
         IsProviderRoutingConstrained = null
     };
     AgentCatalogStore.Save(path, new AgentCatalog([legacyAgent]));
@@ -1678,7 +1711,7 @@ public void WorkerProfileDispatcherRejectsVerifiedSubscriptionDispatch()
     var preflight = File.ReadAllText(Path.Combine(workingDirectory, ".orchestrator-context", goal.Id.Value, "subscription-preflight.md"));
     Assert.Equal("codex-cli", task.LastDispatch!.WorkerName);
     Assert.Equal("OpenAI", task.LastDispatch.ProviderName);
-    Assert.Equal(AgentCatalog.OpenAiSolSubscriptionModelAlias, task.LastDispatch.ModelName);
+    Assert.Equal(AgentCatalog.OpenAiTerraSubscriptionModelAlias, task.LastDispatch.ModelName);
     Assert.Contains("model-selection: full-profile: light-role profile unavailable", preflight, StringComparison.Ordinal);
     Assert.Contains("not the expected claude CLI", preflight, StringComparison.Ordinal);
 }
@@ -1838,7 +1871,7 @@ public void WorkerProfileDispatcherRejectsVerifiedSubscriptionDispatch()
     var preflight = File.ReadAllText(Path.Combine(workingDirectory, ".orchestrator-context", goal.Id.Value, "subscription-preflight.md"));
     Assert.Equal("codex-cli", task.LastDispatch!.WorkerName);
     Assert.Equal("OpenAI", task.LastDispatch.ProviderName);
-    Assert.Equal(AgentCatalog.OpenAiSolSubscriptionModelAlias, task.LastDispatch.ModelName);
+    Assert.Equal(AgentCatalog.OpenAiTerraSubscriptionModelAlias, task.LastDispatch.ModelName);
     Assert.Contains("model-selection: fallback-full-profile: prior Researcher WORKER_RESULT missing field(s): citations", preflight, StringComparison.Ordinal);
 }
 
@@ -1898,7 +1931,7 @@ public void WorkerProfileDispatcherRejectsVerifiedSubscriptionDispatch()
     Assert.True(planItem.CanPrepare);
     Assert.Equal("codex-cli", planItem.ProfileName);
     Assert.Equal("OpenAI", planItem.ProviderName);
-    Assert.Equal(AgentCatalog.OpenAiSolSubscriptionModelAlias, planItem.SubscriptionModelName);
+    Assert.Equal(AgentCatalog.OpenAiTerraSubscriptionModelAlias, planItem.SubscriptionModelName);
     Assert.Equal(planItem.ProfileName, task.LastDispatch!.WorkerName);
     Assert.Equal(planItem.ProviderName, task.LastDispatch.ProviderName);
     Assert.Equal(planItem.SubscriptionModelName, task.LastDispatch.ModelName);
@@ -2124,7 +2157,7 @@ public void WorkerProfileDispatcherRejectsVerifiedSubscriptionDispatch()
     var preflight = File.ReadAllText(Path.Combine(workingDirectory, ".orchestrator-context", goal.Id.Value, "subscription-preflight.md"));
     Assert.Equal("codex-cli", task.LastDispatch!.WorkerName);
     Assert.Equal("OpenAI", task.LastDispatch.ProviderName);
-    Assert.Equal(AgentCatalog.OpenAiSolSubscriptionModelAlias, task.LastDispatch.ModelName);
+    Assert.Equal(AgentCatalog.OpenAiTerraSubscriptionModelAlias, task.LastDispatch.ModelName);
     Assert.Contains("model-selection: full-profile: role is write-capable or gate-heavy", preflight, StringComparison.Ordinal);
 }
 
@@ -2182,8 +2215,8 @@ public void WorkerProfileDispatcherRejectsVerifiedSubscriptionDispatch()
     Assert.Contains("model_reasoning_effort='xhigh'", highRiskTask.LastDispatch.Command, StringComparison.Ordinal);
     Assert.Equal("intake-risk", highRiskTask.LastDispatch.ReasoningEffortReason);
     Assert.Equal("codex-cli", normalTask.LastDispatch!.WorkerName);
-    Assert.Equal("low", normalTask.LastDispatch.ReasoningEffort);
-    Assert.Contains("model_reasoning_effort='low'", normalTask.LastDispatch.Command, StringComparison.Ordinal);
+    Assert.Equal("medium", normalTask.LastDispatch.ReasoningEffort);
+    Assert.Contains("model_reasoning_effort='medium'", normalTask.LastDispatch.Command, StringComparison.Ordinal);
     Assert.Equal("base", normalTask.LastDispatch.ReasoningEffortReason);
 }
 
@@ -2282,16 +2315,16 @@ public void WorkerProfileDispatcherRejectsVerifiedSubscriptionDispatch()
         dispatchedAt);
 
     // Subscription launch profiles always pin the configured alias; complexity only changes API-side model/effort.
-    Assert.Contains($"--model '{AgentCatalog.OpenAiSolSubscriptionModelAlias}'", developer.LastDispatch!.Command, StringComparison.Ordinal);
+    Assert.Contains($"--model '{AgentCatalog.OpenAiTerraSubscriptionModelAlias}'", developer.LastDispatch!.Command, StringComparison.Ordinal);
     Assert.Equal("OpenAI", developer.LastDispatch.ProviderName);
     // Subscription launch profiles always pin the configured alias; complexity only changes API-side model/effort.
-    Assert.Equal(AgentCatalog.OpenAiSolSubscriptionModelAlias, developer.LastDispatch.ModelName);
+    Assert.Equal(AgentCatalog.OpenAiTerraSubscriptionModelAlias, developer.LastDispatch.ModelName);
     Assert.Contains("model_reasoning_effort='high'", developer.LastDispatch.Command, StringComparison.Ordinal);
     var dispatchEvent = goal.Timeline.Single(evt =>
         evt.TaskId == developer.Id &&
         evt.Kind == ProgressKind.TaskDispatchRecorded);
     // Subscription launch profiles always pin the configured alias in dispatch metadata.
-    Assert.Contains($"OpenAI/{AgentCatalog.OpenAiSolSubscriptionModelAlias}", dispatchEvent.Message, StringComparison.Ordinal);
+    Assert.Contains($"OpenAI/{AgentCatalog.OpenAiTerraSubscriptionModelAlias}", dispatchEvent.Message, StringComparison.Ordinal);
 }
 
     [Xunit.Fact(DisplayName = "SubscriptionDispatch_override_model_beats_complex_path")]

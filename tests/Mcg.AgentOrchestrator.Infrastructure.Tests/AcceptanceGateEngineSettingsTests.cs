@@ -1226,6 +1226,207 @@ public sealed class AcceptanceGateEngineSettingsTests
     }
 
     [Xunit.Fact]
+    public async Task StructuralCoverageCanonicalPartitionsIgnoreFocusedCheckOrdering()
+    {
+        foreach (var focusedCheckFirst in new[] { true, false })
+        {
+            var checks = focusedCheckFirst
+                ? """
+                  {
+                    "name": "focused: selected infrastructure tests",
+                    "type": "dotnet-test",
+                    "runner": "vstest",
+                    "project": "tests/Mcg.AgentOrchestrator.Infrastructure.Tests/Mcg.AgentOrchestrator.Infrastructure.Tests.csproj",
+                    "arguments": ["--filter", "FullyQualifiedName~AlphaTests"]
+                  },
+                  {
+                    "name": "verified: infrastructure suite",
+                    "type": "dotnet-test",
+                    "runner": "vstest",
+                    "project": "tests/Mcg.AgentOrchestrator.Infrastructure.Tests/Mcg.AgentOrchestrator.Infrastructure.Tests.csproj"
+                  }
+                  """
+                : """
+                  {
+                    "name": "verified: infrastructure suite",
+                    "type": "dotnet-test",
+                    "runner": "vstest",
+                    "project": "tests/Mcg.AgentOrchestrator.Infrastructure.Tests/Mcg.AgentOrchestrator.Infrastructure.Tests.csproj"
+                  },
+                  {
+                    "name": "focused: selected infrastructure tests",
+                    "type": "dotnet-test",
+                    "runner": "vstest",
+                    "project": "tests/Mcg.AgentOrchestrator.Infrastructure.Tests/Mcg.AgentOrchestrator.Infrastructure.Tests.csproj",
+                    "arguments": ["--filter", "FullyQualifiedName~AlphaTests"]
+                  }
+                  """;
+            var root = CreateWorkspace($$"""
+                {
+                  "version": 1,
+                  "engine": {
+                    "maxConcurrentShards": 1,
+                    "enforceStructuralCoverage": true,
+                    "infrastructureTestLanes": [
+                      { "name": "alpha", "filter": "FullyQualifiedName~AlphaTests" },
+                      { "name": "beta", "filter": "FullyQualifiedName~BetaTests" }
+                    ]
+                  },
+                  "checks": [{{checks}}]
+                }
+                """);
+            GoalAcceptanceVerifier.ResolveMainWorktreePathForTests = _ => root;
+            GoalAcceptanceVerifier.ResolveDeletedTestFilesForTests = _ => [];
+            try
+            {
+                var verifier = new GoalAcceptanceVerifier((arguments, _, _) =>
+                {
+                    if (arguments.Contains("--list-tests"))
+                    {
+                        return Task.FromResult(new GoalAcceptanceVerifier.CommandResult(
+                            0,
+                            "The following Tests are available:\n  AlphaTests.Runs\n  BetaTests.Runs"));
+                    }
+
+                    if (arguments.Length >= 2 && arguments[0] == "dotnet" && arguments[1] == "test")
+                    {
+                        WriteVstestTrx(
+                            arguments,
+                            arguments.Contains("FullyQualifiedName~BetaTests")
+                                ? "BetaTests.Runs"
+                                : "AlphaTests.Runs");
+                    }
+
+                    return Task.FromResult(new GoalAcceptanceVerifier.CommandResult(0, "Build succeeded."));
+                });
+
+                var result = await verifier.RunAsync(root);
+
+                Xunit.Assert.True(result.Passed);
+                var structural = Xunit.Assert.Single(result.Checks!, check => check.Name.StartsWith(
+                    "structural test coverage", StringComparison.Ordinal));
+                Xunit.Assert.True(structural.Passed);
+                Xunit.Assert.Contains("discovered=2, executed=2", structural.ResultSummary, StringComparison.Ordinal);
+                Xunit.Assert.Contains(result.Checks!, check => check.Name == "verified: infrastructure suite: alpha");
+                Xunit.Assert.Contains(result.Checks!, check => check.Name == "verified: infrastructure suite: beta");
+            }
+            finally
+            {
+                GoalAcceptanceVerifier.ResolveMainWorktreePathForTests = null;
+                GoalAcceptanceVerifier.ResolveDeletedTestFilesForTests = null;
+                Directory.Delete(root, recursive: true);
+            }
+        }
+    }
+
+    [Xunit.Fact]
+    public async Task StructuralCoverageCanonicalPartitionsRejectCrossLaneFocusedEvidence()
+    {
+        var root = CreateWorkspace("""
+            {
+              "version": 1,
+              "engine": {
+                "maxConcurrentShards": 1,
+                "enforceStructuralCoverage": true,
+                "infrastructureTestLanes": [
+                  { "name": "alpha", "filter": "FullyQualifiedName~AlphaTests" },
+                  { "name": "beta", "filter": "FullyQualifiedName~BetaTests" }
+                ]
+              },
+              "checks": [
+                {
+                  "name": "focused: selected infrastructure tests",
+                  "type": "dotnet-test",
+                  "runner": "vstest",
+                  "project": "tests/Mcg.AgentOrchestrator.Infrastructure.Tests/Mcg.AgentOrchestrator.Infrastructure.Tests.csproj",
+                  "arguments": ["--filter", "FullyQualifiedName~AlphaTests"]
+                },
+                {
+                  "name": "verified: infrastructure suite",
+                  "type": "dotnet-test",
+                  "runner": "vstest",
+                  "project": "tests/Mcg.AgentOrchestrator.Infrastructure.Tests/Mcg.AgentOrchestrator.Infrastructure.Tests.csproj"
+                }
+              ]
+            }
+            """);
+        GoalAcceptanceVerifier.ResolveMainWorktreePathForTests = _ => root;
+        GoalAcceptanceVerifier.ResolveDeletedTestFilesForTests = _ => [];
+        try
+        {
+            var verifier = new GoalAcceptanceVerifier((arguments, _, _) =>
+            {
+                if (arguments.Contains("--list-tests"))
+                {
+                    return Task.FromResult(new GoalAcceptanceVerifier.CommandResult(
+                        0,
+                        "The following Tests are available:\n  AlphaTests.Runs\n  BetaTests.Runs"));
+                }
+
+                if (arguments.Length >= 2 && arguments[0] == "dotnet" && arguments[1] == "test")
+                {
+                    // A passing receipt in beta that reports alpha must not satisfy beta's required lane.
+                    WriteVstestTrx(arguments, "AlphaTests.Runs");
+                }
+
+                return Task.FromResult(new GoalAcceptanceVerifier.CommandResult(0, "Build succeeded."));
+            });
+
+            var result = await verifier.RunAsync(root);
+
+            Xunit.Assert.False(result.Passed);
+            var structural = Xunit.Assert.Single(result.Checks!, check => check.Name.StartsWith(
+                "structural test coverage", StringComparison.Ordinal));
+            Xunit.Assert.False(structural.Passed);
+            Xunit.Assert.Contains("missing=1, emptyPartitions=0", structural.ResultSummary, StringComparison.Ordinal);
+        }
+        finally
+        {
+            GoalAcceptanceVerifier.ResolveMainWorktreePathForTests = null;
+            GoalAcceptanceVerifier.ResolveDeletedTestFilesForTests = null;
+            Directory.Delete(root, recursive: true);
+        }
+    }
+
+    [Xunit.Fact]
+    public void StructuralCoverageCanonicalPartitionsRetainMissingRequiredLane()
+    {
+        var broadCheck = new GoalAcceptanceVerifier.AcceptanceManifestCheck
+        {
+            Name = "verified: infrastructure suite",
+            Type = "dotnet-test",
+            Project = "tests/Mcg.AgentOrchestrator.Infrastructure.Tests/Mcg.AgentOrchestrator.Infrastructure.Tests.csproj"
+        };
+        var lanes = new[]
+        {
+            new AcceptanceTestLane("alpha", "FullyQualifiedName~AlphaTests"),
+            new AcceptanceTestLane("beta", "FullyQualifiedName~BetaTests")
+        };
+        var effectiveChecks = new[]
+        {
+            new GoalAcceptanceVerifier.AcceptanceManifestCheck
+            {
+                Name = "verified: infrastructure suite: alpha",
+                Type = "dotnet-test",
+                Project = broadCheck.Project,
+                Arguments = ["--filter", "FullyQualifiedName~AlphaTests"]
+            }
+        };
+
+        var partitions = AcceptanceStructuralCoveragePartitionPlan.Resolve(
+            broadCheck,
+            effectiveChecks,
+            lanes);
+
+        Xunit.Assert.Equal(
+            [
+                "verified: infrastructure suite: alpha",
+                "structural coverage missing partition: beta"
+            ],
+            partitions.Select(partition => partition.Name));
+    }
+
+    [Xunit.Fact]
     public void EffectivePlanIdentityBindsScopeAndEnvironmentExpansion()
     {
         var root = CreateWorkspace("""

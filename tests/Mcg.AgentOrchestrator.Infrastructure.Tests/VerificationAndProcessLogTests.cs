@@ -585,7 +585,7 @@ public sealed class VerificationAndProcessLogTests
             commands: focused review
             tests: pass - focused review passed
             blockers: none
-            model_fit: OpenAI/{{AgentCatalog.OpenAiSolSubscriptionModelAlias}} - adequate
+            model_fit: OpenAI/{{AgentCatalog.OpenAiTerraSubscriptionModelAlias}} - adequate
             skills: none
             confidence: high
             END_WORKER_RESULT
@@ -597,7 +597,7 @@ public sealed class VerificationAndProcessLogTests
             commands: none
             tests: deferred - awaiting operator
             blockers: {{upstreamBlocker}}
-            model_fit: OpenAI/{{AgentCatalog.OpenAiSolSubscriptionModelAlias}} - adequate
+            model_fit: OpenAI/{{AgentCatalog.OpenAiTerraSubscriptionModelAlias}} - adequate
             skills: none
             confidence: high
             END_WORKER_RESULT
@@ -690,7 +690,7 @@ public sealed class VerificationAndProcessLogTests
             tests: pass - focused review passed
             commit: none
             blockers: none
-            model_fit: OpenAI/{AgentCatalog.OpenAiSolSubscriptionModelAlias} - adequate
+            model_fit: OpenAI/{AgentCatalog.OpenAiTerraSubscriptionModelAlias} - adequate
             skills: none
             confidence: high
             END_WORKER_RESULT
