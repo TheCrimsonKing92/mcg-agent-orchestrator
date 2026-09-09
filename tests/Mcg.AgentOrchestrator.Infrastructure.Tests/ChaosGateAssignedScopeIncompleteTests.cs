@@ -242,8 +242,17 @@ public sealed class ChaosGateAssignedScopeIncompleteTests : ChaosGateTestBase
         Assert.Equal(DispatchOutcomeKind.VerifiedSuccess, DispatchFailureClassifier.Classify(task, task.LastVerification).Kind);
     }
 
-    private static string RetainedPartialOutput() => string.Join(
-        Environment.NewLine,
-        "The sequence/versioned retry and legacy repair remain outside this implementation slice.",
-        WorkerResultBlock("src/Feature.cs", "focused verification", "pass - focused verification passed"));
+    private static string RetainedPartialOutput()
+    {
+        var bytes = File.ReadAllBytes(Path.Combine(
+            AppContext.BaseDirectory, "Fixtures", "WorkerOutput", "f57758c8-partial.out.txt"));
+        Assert.Equal(3930, bytes.Length);
+        Assert.Equal(
+            "13F9B2C9F5677B0DBD4391C70824472828EF793BA849E0CB6A695600A30AE4D8",
+            Convert.ToHexString(System.Security.Cryptography.SHA256.HashData(bytes)));
+        var output = System.Text.Encoding.UTF8.GetString(bytes);
+        Assert.DoesNotContain("assigned_scope_complete", output, StringComparison.Ordinal);
+        Assert.Equal(2, output.Split("END_WORKER_RESULT", StringSplitOptions.None).Length);
+        return output;
+    }
 }
