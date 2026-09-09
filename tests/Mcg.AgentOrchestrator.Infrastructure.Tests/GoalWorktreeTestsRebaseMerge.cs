@@ -747,6 +747,48 @@ public sealed class GoalWorktreeTestsRebaseMerge : GoalWorktreeTestBase
         }
     }
 
+    [Xunit.Fact(DisplayName = "Cli_acceptance_stale_criterion_evidence_blocks_merge for the current candidate")]
+    public void CliAcceptanceStaleCriterionEvidenceBlocksMergeForCurrentCandidate()
+    {
+        var repo = CreateSeededRepository();
+        try
+        {
+            var kernel = new AgentOrchestratorKernel();
+            var goal = CreateCompletedGoal(kernel, "Candidate-bound operator evidence", repo);
+            kernel.SetGoalRefinedSpec(goal.Id, new RefinedSpec(
+                "Observe the candidate", ["native observation"], VerificationClass.RealWorldDependent, [], [])
+            {
+                OperatorOwnedAcceptanceCriteria = ["native observation"]
+            });
+            var staleCandidate = RunGitOutput(repo, "rev-parse", "HEAD").Trim();
+            var obligation = kernel.MapCriterionEvidenceOwner(
+                goal.Id, 0, 1, CriterionEvidenceOwner.Operator, "operator@example",
+                "operator observation", "native-observation", staleCandidate);
+            kernel.RecordCriterionEvidence(
+                goal.Id, obligation.Id, CriterionEvidenceOwner.Operator, staleCandidate, "native-old",
+                "operator observation", true, "Observed only the prior candidate.");
+
+            var worktreePath = GoalWorktrees.Ensure(repo, goal.Id);
+            File.WriteAllText(Path.Combine(worktreePath, "feature.txt"), "goal work");
+            RunGit(worktreePath, "add", "-A");
+            RunGit(worktreePath, "commit", "-m", "Goal work");
+            var currentCandidate = RunGitOutput(repo, "rev-parse", GoalWorktrees.BranchName(goal.Id)).Trim();
+            Assert.NotEqual(staleCandidate, currentCandidate);
+
+            var context = CreateAcceptanceContext(kernel, repo, goal);
+            var output = CaptureConsole(() => CliCommandHandlers.Execute(["acceptance"], context));
+
+            Assert.Contains("merge blocked by outstanding criterion evidence", output, StringComparison.Ordinal);
+            Assert.False(File.Exists(Path.Combine(repo, "feature.txt")));
+            Assert.Contains(kernel.GetGoal(goal.Id).GetOutstandingCriterionEvidenceObligations(currentCandidate),
+                item => item.Id == obligation.Id && item.State == CriterionEvidenceState.Satisfied);
+        }
+        finally
+        {
+            DeleteDirectory(repo);
+        }
+    }
+
     [Xunit.Fact(DisplayName = "Cli_acceptance_non_accepted_verdict_does_not_stop_host_or_merge")]
     public void CliAcceptanceNonAcceptedVerdictDoesNotStopHostOrMerge()
     {

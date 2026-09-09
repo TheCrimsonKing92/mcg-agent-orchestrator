@@ -502,7 +502,8 @@ internal static bool RunAcceptanceWorkspaceMergeCore(CliExecutionContext context
         return false;
     }
 
-    var preMergeObligations = context.Kernel.GetGoal(goal.Id).OutstandingCriterionEvidenceObligations;
+    var preMergeObligations = context.Kernel.GetGoal(goal.Id)
+        .GetOutstandingCriterionEvidenceObligations(testedWorktreeHead);
     if (preMergeObligations.Count > 0)
     {
         Console.WriteLine(

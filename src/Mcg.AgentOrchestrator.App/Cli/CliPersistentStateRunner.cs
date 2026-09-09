@@ -4058,7 +4058,8 @@ internal static partial class CliPersistentStateRunner
                                 (false, snapshot, (guardedResult, snapshot)));
                         }
 
-                        var outstandingEvidence = transactionKernel.GetGoal(request.GoalId).OutstandingCriterionEvidenceObligations;
+                        var outstandingEvidence = transactionKernel.GetGoal(request.GoalId)
+                            .GetOutstandingCriterionEvidenceObligations(request.TestedWorktreeHead);
                         if (outstandingEvidence.Count > 0)
                         {
                             var evidenceMismatch = new AcceptanceMergeGuardMismatch(

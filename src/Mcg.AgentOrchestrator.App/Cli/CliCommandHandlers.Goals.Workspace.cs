@@ -55,7 +55,17 @@ private static bool HandleWorkspaceCommand(CliExecutionContext context, IReadOnl
             return false;
 
         case "merge":
-            var outstandingEvidence = context.Kernel.GetGoal(goal.Id).OutstandingCriterionEvidenceObligations;
+            var candidateHead = GitCli.Run(executionDirectory, "rev-parse", branch);
+            if (!candidateHead.Succeeded || string.IsNullOrWhiteSpace(candidateHead.Output))
+            {
+                Console.WriteLine(
+                    $"Workspace merge blocked: cannot resolve candidate head for {branch}: " +
+                    (string.IsNullOrWhiteSpace(candidateHead.Error) ? "git rev-parse failed." : candidateHead.Error.Trim()));
+                return false;
+            }
+
+            var outstandingEvidence = context.Kernel.GetGoal(goal.Id)
+                .GetOutstandingCriterionEvidenceObligations(candidateHead.Output.Trim());
             if (outstandingEvidence.Count > 0)
             {
                 Console.WriteLine(
