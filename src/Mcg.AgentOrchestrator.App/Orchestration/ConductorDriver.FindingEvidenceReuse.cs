@@ -116,11 +116,9 @@ internal sealed partial class ConductorDriver
             .GroupBy(outcome => outcome.ReceiptId!, StringComparer.Ordinal)
             .ToDictionary(group => group.Key, group => group.Last(), StringComparer.Ordinal);
         var currentCandidateReceipts = requestingTask.VerificationHistory
-            .SelectMany((verification, verificationIndex) =>
-                (verification.FindingEvidenceReceipts ?? [])
-                    .Select(receipt => new FindingEvidenceReceiptHistoryItem(receipt, verificationIndex)))
-            .Where(item => string.Equals(
-                item.Receipt.CandidateSha,
+            .SelectMany(verification => verification.FindingEvidenceReceipts ?? [])
+            .Where(receipt => string.Equals(
+                receipt.CandidateSha,
                 candidateSha,
                 StringComparison.OrdinalIgnoreCase))
             .ToArray();
@@ -132,12 +130,12 @@ internal sealed partial class ConductorDriver
         // The newest receipt covering a selection is authoritative. Do not let an earlier green
         // result hide a later candidate-red, incomplete, or rejected receipt at the same SHA.
         var latestReceipts = request.Selections
-            .Select(selection => currentCandidateReceipts.LastOrDefault(item =>
-                (item.Receipt.Request.Selections ?? []).Contains(selection)))
+            .Select(selection => currentCandidateReceipts.LastOrDefault(receipt =>
+                (receipt.Request.Selections ?? []).Contains(selection)))
             .ToArray();
         if (latestReceipts.Any(item => item is null) ||
             latestReceipts.Any(item => !IsReusableGreenReceipt(
-                item!.Receipt,
+                item!,
                 candidateSha,
                 validOutcomesByReceiptId)))
         {
@@ -145,7 +143,7 @@ internal sealed partial class ConductorDriver
         }
 
         var greenReceipts = latestReceipts
-            .Select(item => item!.Receipt)
+            .Select(item => item!)
             .DistinctBy(receipt => receipt.ReceiptId, StringComparer.Ordinal)
             .ToArray();
         reusableReceipt = greenReceipts.LastOrDefault(receipt =>
@@ -201,10 +199,6 @@ internal sealed partial class ConductorDriver
                 Passed: true
             } &&
             string.Equals(arm.Sha, candidateSha, StringComparison.OrdinalIgnoreCase));
-
-    private sealed record FindingEvidenceReceiptHistoryItem(
-        FindingEvidenceReceipt Receipt,
-        int VerificationIndex);
 
     private static bool HasReusableRequestIdentity(FindingEvidenceReceipt receipt, string identity) =>
         string.Equals(BuildFindingEvidenceIdentity(receipt.Request), identity, StringComparison.Ordinal) ||

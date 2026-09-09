@@ -1980,7 +1980,7 @@ internal sealed partial class ConductorDriver
         {
             trigger = goal.Tasks
                 .Where(task => task.RequiredRole == AgentRole.Reviewer)
-                .Select(task => BuildVerifyingFindingTrigger(goal, task))
+                .Select(task => BuildReviewerDeveloperOwnedFindingTrigger(goal, task))
                 .FirstOrDefault(candidate => candidate is not null);
         }
 
@@ -2173,6 +2173,22 @@ internal sealed partial class ConductorDriver
         }
 
         return new VerifyingFindingTrigger(task, blocker, [], upstreamDeveloper);
+    }
+
+    private VerifyingFindingTrigger? BuildReviewerDeveloperOwnedFindingTrigger(Goal goal, TaskSpec task)
+    {
+        var trigger = BuildVerifyingFindingTrigger(goal, task);
+        if (trigger is null ||
+            task.LastVerification is null ||
+            !VerifyingFindingCurrency.IsCurrent(goal, task, task.LastVerification))
+        {
+            return null;
+        }
+
+        var route = ResolveReviewerRetryRoute(goal, task, trigger.Finding);
+        return route is { TargetRole: AgentRole.Developer, EscalateToOperator: false }
+            ? trigger
+            : null;
     }
 
     private static string BuildReviewCapDecisionMessage(
