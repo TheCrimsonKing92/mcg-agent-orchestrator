@@ -367,9 +367,13 @@ public sealed class OperatorIntentStoreTests
     }
 
     [Xunit.Theory(DisplayName = "OperatorIntentCoordinator_invalid_retry_cause_reprompts_and_preserves_original_intent")]
-    [Xunit.InlineData("not a retry cause")]
-    [Xunit.InlineData("999")]
-    public async Task OperatorIntentCoordinatorInvalidRetryCauseRepromptsAndPreservesOriginalIntent(string invalidAnswer)
+    [Xunit.InlineData("not a retry cause", false)]
+    [Xunit.InlineData("999", false)]
+    [Xunit.InlineData("not a retry cause", true)]
+    [Xunit.InlineData("999", true)]
+    public async Task OperatorIntentCoordinatorInvalidRetryCauseRepromptsAndPreservesOriginalIntent(
+        string invalidAnswer,
+        bool anotherAnswerRequired)
     {
         var root = CreateTempDirectory();
         try
@@ -409,6 +413,22 @@ public sealed class OperatorIntentStoreTests
             var restoredReplacement = Xunit.Assert.Single(restored.GetPendingHumanInput(goal.Id));
             restored.SubmitHumanInput(restoredReplacement.Id, nameof(RetryCause.NewSourceFinding));
             var resumedCoordinator = new OperatorIntentCoordinator(store);
+            if (anotherAnswerRequired)
+            {
+                var otherRequest = restored.RequestHumanInput(
+                    goal.Id, task.Id, "Confirm the unrelated implementation requirement.",
+                    isAutoDefaultable: false, isDismissible: false);
+                Xunit.Assert.False(resumedCoordinator.ExecutePending(restored, restoredGoal).MutatedGoalState);
+                Xunit.Assert.Equal(OperatorIntentStatus.Claimed, (await store.GetAsync(intent.Id))!.Status);
+                Xunit.Assert.Empty(restoredGoal.Timeline.Where(item => item.Kind == ProgressKind.TaskRetried));
+
+                // Restart while the original intent still waits; answering the other obligation
+                // must resume that same correction once, without a second operator retry.
+                restored = AgentOrchestratorKernel.FromSnapshot(restored.ExportSnapshot());
+                restoredGoal = restored.GetGoal(goal.Id);
+                restored.SubmitHumanInput(otherRequest.Id, "Confirmed.");
+                resumedCoordinator = new OperatorIntentCoordinator(store);
+            }
             Xunit.Assert.True(resumedCoordinator.ExecutePending(restored, restoredGoal).MutatedGoalState);
 
             var resumedTask = restored.GetTask(goal.Id, task.Id);
