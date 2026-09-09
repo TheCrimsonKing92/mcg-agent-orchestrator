@@ -1679,7 +1679,10 @@ public sealed partial class AgentOrchestratorKernel
 
     private bool TryCompleteTaskWithPassingVerification(Goal goal, TaskSpec task, string message)
     {
-        if (task.Status == WorkTaskStatus.Completed || task.LastVerification is not { Succeeded: true })
+        if (task.Status == WorkTaskStatus.Completed ||
+            task.LastVerification is not { Succeeded: true } ||
+            (task.RequiredRole == AgentRole.Developer &&
+             WorkerResultBlockers.GetAssignedScopeComplete(task.LastVerification) is false))
         {
             return false;
         }

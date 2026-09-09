@@ -86,7 +86,8 @@ public sealed record TaskVerificationRecord(
     bool StandardErrorIsAuthoritative = true,
     PlannerCandidateDivergenceReceipt? PlannerCandidateDivergence = null,
     bool CompletionVerdictVerifiedSuccess = false,
-    string? CompletionVerdictRule = null)
+    string? CompletionVerdictRule = null,
+    bool? AssignedScopeComplete = null)
 {
     public string? AuthoritativeStandardOutput { get; init; } = FullStandardOutput ??
         (StandardOutputIsAuthoritative && FullStandardOutputUnavailableReason is null ? StandardOutput : null);
@@ -166,7 +167,8 @@ public sealed record TaskVerificationRecord(
                 : CompletionVerdictVerifiedSuccess,
             CompletionVerdictRule = preferredHasCompletionVerdict
                 ? preferred.CompletionVerdictRule
-                : CompletionVerdictRule
+                : CompletionVerdictRule,
+            AssignedScopeComplete = preferred.AssignedScopeComplete ?? AssignedScopeComplete
         };
     }
 
