@@ -87,6 +87,17 @@ public static void PrintGoal(
         }
     }
 
+    if (!tasksOnly && goal.CriterionEvidenceObligations.Count > 0)
+    {
+        Console.WriteLine("Criterion evidence obligations:");
+        foreach (var obligation in goal.CriterionEvidenceObligations.OrderBy(item => item.CriterionVersion).ThenBy(item => item.CriterionIndex))
+        {
+            Console.WriteLine($"  - {obligation.Id}: owner={obligation.Owner.ToString().ToLowerInvariant()} state={obligation.State.ToString().ToLowerInvariant()} next_action={obligation.RequiredScope} provenance={obligation.Provenance}");
+            if (!string.IsNullOrWhiteSpace(obligation.ReceiptId) || !string.IsNullOrWhiteSpace(obligation.CandidateSha))
+                Console.WriteLine($"    receipt={obligation.ReceiptId ?? "pending"} candidate={obligation.CandidateSha ?? "unbound"}");
+        }
+    }
+
     if (!tasksOnly)
     {
         var declaredCriteria = AcceptanceCriteriaParser.ParseDeclared(goal.Objective);

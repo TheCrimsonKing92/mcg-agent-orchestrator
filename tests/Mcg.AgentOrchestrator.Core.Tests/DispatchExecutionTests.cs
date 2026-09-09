@@ -1779,6 +1779,69 @@ public sealed class DispatchExecutionTests
         Assert.DoesNotContain("criteria attestation rejected", failure.Message, StringComparison.Ordinal);
     }
 
+    [Xunit.Fact(DisplayName = "RecordDispatchExecutionResult_authoritative_operator_criterion_defers_without_a_fake_met_verdict")]
+    public void RecordDispatchExecutionResultAuthoritativeOperatorCriterionDefersWithoutAFakeMetVerdict()
+    {
+        var clock = new FakeClock();
+        var kernel = new AgentOrchestratorKernel(clock);
+        var reviewer = new TaskSpec(TaskId.New(), "Review result", AgentRole.Reviewer);
+        var goal = kernel.CreateGoal("Defer operator evidence", [reviewer]);
+        kernel.SetGoalRefinedSpec(goal.Id, new RefinedSpec(
+            "Review source while retaining an operator observation",
+            ["operator observation"],
+            VerificationClass.RealWorldDependent,
+            [],
+            []) { OperatorOwnedAcceptanceCriteria = ["operator observation"] });
+        kernel.ActivateGoal(goal.Id, DefaultAgents());
+        kernel.RecordTaskDispatch(goal.Id, reviewer.Id, new TaskDispatchRecord(
+            "codex-cli", "review", "C:\\repo", clock.UtcNow));
+
+        var result = StructuredReviewerResult(
+            "pass",
+            "[]",
+            "none",
+            """[{"criterion_index":0,"verdict":"not-verifiable","evidence":"Awaiting a real operator observation."}]""");
+        kernel.RecordDispatchExecutionResult(goal.Id, reviewer.Id, new TaskVerificationRecord(
+            "review", "C:\\repo", 0, result, string.Empty, clock.UtcNow, WorkerResultPresent: true));
+
+        Assert.Equal(WorkTaskStatus.Completed, reviewer.Status);
+        var obligation = Assert.Single(goal.OutstandingCriterionEvidenceObligations);
+        Assert.Equal(CriterionEvidenceOwner.Operator, obligation.Owner);
+        Assert.Equal(CriterionEvidenceState.Pending, obligation.State);
+        Assert.Contains(goal.Timeline, item => item.Message.Contains("Deferred criterion evidence remains pending", StringComparison.Ordinal));
+    }
+
+    [Xunit.Fact(DisplayName = "Criterion evidence mapping and receipt persist without changing unrelated obligations")]
+    public void CriterionEvidenceMappingAndReceiptPersistWithoutChangingUnrelatedObligations()
+    {
+        var clock = new FakeClock();
+        var kernel = new AgentOrchestratorKernel(clock);
+        var developer = new TaskSpec(TaskId.New(), "Implement", AgentRole.Developer);
+        var goal = kernel.CreateGoal("Map legacy criterion evidence", [developer]);
+        kernel.SetGoalRefinedSpec(goal.Id, new RefinedSpec(
+            "Keep criterion identities durable",
+            ["first", "second"],
+            VerificationClass.TestVerifiable,
+            [],
+            []));
+
+        var mapped = kernel.MapCriterionEvidenceOwner(
+            goal.Id, 0, criterionVersion: 1, CriterionEvidenceOwner.Acceptance, "operator@example");
+        var satisfied = kernel.RecordCriterionEvidence(
+            goal.Id, mapped.Id, CriterionEvidenceOwner.Acceptance, "abc1234", "gate-1",
+            "deterministic acceptance execution", passed: true, "focused gate passed");
+        var snapshot = kernel.ExportGoalSnapshot(goal.Id);
+        var restored = AgentOrchestratorKernel.FromSnapshot(new OrchestratorSnapshot([snapshot], []), clock)
+            .GetGoal(goal.Id);
+
+        Assert.Equal(CriterionEvidenceState.Satisfied, satisfied.State);
+        Assert.Equal("gate-1", satisfied.ReceiptId);
+        Assert.DoesNotContain(restored.CriterionEvidenceObligations, item => item.CriterionIndex == 1);
+        var restoredEvidence = Assert.Single(restored.CriterionEvidenceObligations, item => item.CriterionIndex == 0);
+        Assert.Equal(CriterionEvidenceState.Satisfied, restoredEvidence.State);
+        Assert.Equal("abc1234", restoredEvidence.CandidateSha);
+    }
+
     [Xunit.Fact(DisplayName = "RecordDispatchExecutionResult_reviewer_pass_accepts_and_records_extra_criteria_attestations")]
     public void RecordDispatchExecutionResultReviewerPassAcceptsAndRecordsExtraCriteriaAttestations()
     {

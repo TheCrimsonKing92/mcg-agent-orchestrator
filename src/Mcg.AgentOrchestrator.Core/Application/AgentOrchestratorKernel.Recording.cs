@@ -545,12 +545,24 @@ public sealed partial class AgentOrchestratorKernel
                             refinedSpec.AcceptanceCriteria[item.CriterionIndex].Trim(),
                             StringComparison.OrdinalIgnoreCase)))
                 .ToArray();
-            if (nonPassingVerdicts.Length > 0 &&
+            var workerOwnedNonPassingVerdicts = nonPassingVerdicts
+                .Where(item => IsWorkerOwnedCriterionObligation(goal, item.CriterionIndex))
+                .ToArray();
+            foreach (var deferred in nonPassingVerdicts.Except(workerOwnedNonPassingVerdicts))
+            {
+                var obligation = goal.CriterionEvidenceObligations.Single(item =>
+                    item.CriterionIndex == deferred.CriterionIndex &&
+                    item.CriterionVersion == goal.AuthoritativeRefinedSpecVersion!.Version);
+                Append(goal, task.Id, ProgressKind.TaskNote,
+                    $"Deferred criterion evidence remains pending: obligation={obligation.Id}; owner={obligation.Owner}; " +
+                    $"state={obligation.State}; next_action={obligation.RequiredScope}; reviewer_verdict={deferred.Verdict}.");
+            }
+            if (workerOwnedNonPassingVerdicts.Length > 0 &&
                 WorkerResultBlockers.TryFindPassVerdict(verification))
             {
                 var details = string.Join(
                     "; ",
-                    nonPassingVerdicts.Select(item =>
+                    workerOwnedNonPassingVerdicts.Select(item =>
                         $"criterion_index={item.CriterionIndex} verdict={item.Verdict} evidence={item.Evidence}"));
                 nonPassingCriteriaDiagnostic =
                     $"Reviewer WORKER_RESULT criteria attestation rejected: non-waived criteria are not passing: {details}.";
@@ -714,6 +726,18 @@ public sealed partial class AgentOrchestratorKernel
         }
 
         return false;
+    }
+
+    private static bool IsWorkerOwnedCriterionObligation(Goal goal, int criterionIndex)
+    {
+        var version = goal.AuthoritativeRefinedSpecVersion?.Version;
+        var obligation = version is null
+            ? null
+            : goal.CriterionEvidenceObligations.SingleOrDefault(item =>
+                item.CriterionIndex == criterionIndex && item.CriterionVersion == version.Value);
+        // A legacy/malformed record has no authoritative ownership; do not
+        // convert it into a deferred obligation based on worker prose.
+        return obligation is null || obligation.Owner is CriterionEvidenceOwner.Worker or CriterionEvidenceOwner.Unknown;
     }
 
     public IReadOnlyList<ReviewFinding> GetOpenAdvisoryReviewFindings(GoalId goalId)

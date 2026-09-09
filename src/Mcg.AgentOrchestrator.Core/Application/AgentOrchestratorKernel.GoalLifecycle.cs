@@ -1083,6 +1083,15 @@ public sealed partial class AgentOrchestratorKernel
             throw new InvalidOperationException($"Goal '{goalId}' is {goal.Status}; only Verifying or Verified goals can be completed.");
         }
 
+        var outstandingObligations = goal.OutstandingCriterionEvidenceObligations;
+        if (outstandingObligations.Count > 0)
+        {
+            var detail = string.Join(", ", outstandingObligations.Select(item =>
+                $"{item.Id}:{item.Owner}:{item.State}"));
+            throw new InvalidOperationException(
+                $"Goal '{goalId}' cannot complete while criterion evidence obligations remain outstanding: {detail}.");
+        }
+
         if (goal.Status == GoalStatus.Verifying &&
             !goal.Tasks.All(task => task.Status is WorkTaskStatus.Completed or WorkTaskStatus.Cancelled))
         {
@@ -1122,6 +1131,15 @@ public sealed partial class AgentOrchestratorKernel
         {
             throw new InvalidOperationException(
                 $"Goal '{goalId}' is already terminal as {goal.Status}; merge evidence cannot rewrite that terminal outcome.");
+        }
+
+        var outstandingObligations = goal.OutstandingCriterionEvidenceObligations;
+        if (outstandingObligations.Count > 0)
+        {
+            var detail = string.Join(", ", outstandingObligations.Select(item =>
+                $"{item.Id}:{item.Owner}:{item.State}"));
+            throw new InvalidOperationException(
+                $"Goal '{goalId}' cannot complete from merge evidence while criterion evidence obligations remain outstanding: {detail}.");
         }
 
         if (goal.Tasks.Any(task =>
@@ -2230,6 +2248,26 @@ public sealed partial class AgentOrchestratorKernel
     {
         GetGoal(goalId).SetRefinedSpec(spec, _clock.UtcNow);
     }
+
+    public CriterionEvidenceObligation MapCriterionEvidenceOwner(
+        GoalId goalId,
+        int criterionIndex,
+        int criterionVersion,
+        CriterionEvidenceOwner owner,
+        string actor) =>
+        GetGoal(goalId).MapCriterionEvidenceOwner(criterionIndex, criterionVersion, owner, actor, _clock.UtcNow);
+
+    public CriterionEvidenceObligation RecordCriterionEvidence(
+        GoalId goalId,
+        string obligationId,
+        CriterionEvidenceOwner owner,
+        string candidateSha,
+        string receiptId,
+        string scope,
+        bool passed,
+        string detail) =>
+        GetGoal(goalId).RecordCriterionEvidence(
+            obligationId, owner, candidateSha, receiptId, scope, passed, detail, _clock.UtcNow);
 
     public RefinedSpecVersion RecordGoalRefinement(GoalId goalId, RefinedSpec spec)
     {

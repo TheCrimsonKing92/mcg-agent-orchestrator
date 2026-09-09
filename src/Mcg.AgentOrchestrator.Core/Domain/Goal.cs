@@ -11,6 +11,7 @@ public sealed class Goal
     private readonly List<GoalBriefVersion> _briefVersions = [];
     private readonly List<RefinedSpecVersion> _refinedSpecVersions = [];
     private readonly List<EffectiveAcceptanceCriteriaCorrection> _effectiveAcceptanceCriteriaCorrections = [];
+    private readonly List<CriterionEvidenceObligation> _criterionEvidenceObligations = [];
     private readonly HashSet<GoalId> _dependsOn = [];
 
     public Goal(GoalId id, string objective, IReadOnlyList<TaskSpec> tasks)
@@ -111,6 +112,13 @@ public sealed class Goal
 
     public IReadOnlyList<EffectiveAcceptanceCriteriaCorrection> EffectiveAcceptanceCriteriaCorrections => _effectiveAcceptanceCriteriaCorrections;
 
+    // The invariant is a goal-level outstanding proof obligation, not a task
+    // result. Only refinement or an attributed operator action may set Owner.
+    public IReadOnlyList<CriterionEvidenceObligation> CriterionEvidenceObligations => _criterionEvidenceObligations;
+
+    public IReadOnlyList<CriterionEvidenceObligation> OutstandingCriterionEvidenceObligations =>
+        _criterionEvidenceObligations.Where(obligation => obligation.State != CriterionEvidenceState.Satisfied).ToArray();
+
     public IReadOnlyCollection<GoalId> DependsOn => _dependsOn;
 
     public bool IsMetadataOnly { get; }
@@ -190,11 +198,150 @@ public sealed class Goal
                 spec,
                 recordedAt,
                 AuthoritativeBrief.Version));
+            EnsureCriterionEvidenceObligations(spec, criterionVersion: 1, recordedAt);
             return;
         }
 
         var currentIndex = _refinedSpecVersions.FindIndex(version => version.Version == current.Version);
         _refinedSpecVersions[currentIndex] = current with { Spec = spec };
+        EnsureCriterionEvidenceObligations(spec, current.Version, recordedAt);
+    }
+
+    internal void RestoreCriterionEvidenceObligations(IReadOnlyList<CriterionEvidenceObligation>? obligations)
+    {
+        _criterionEvidenceObligations.Clear();
+        foreach (var obligation in obligations ?? [])
+        {
+            if (obligation.CriterionIndex < 0 || obligation.CriterionVersion < 1 ||
+                string.IsNullOrWhiteSpace(obligation.Id) || string.IsNullOrWhiteSpace(obligation.Criterion) ||
+                string.IsNullOrWhiteSpace(obligation.RequiredScope) || string.IsNullOrWhiteSpace(obligation.Provenance))
+            {
+                throw new InvalidOperationException($"Goal '{Id.Value}' has an invalid criterion evidence obligation.");
+            }
+
+            if (_criterionEvidenceObligations.Any(existing => string.Equals(existing.Id, obligation.Id, StringComparison.Ordinal)))
+            {
+                throw new InvalidOperationException($"Goal '{Id.Value}' has duplicate criterion evidence obligation '{obligation.Id}'.");
+            }
+
+            _criterionEvidenceObligations.Add(obligation);
+        }
+    }
+
+    internal CriterionEvidenceObligation MapCriterionEvidenceOwner(
+        int criterionIndex,
+        int criterionVersion,
+        CriterionEvidenceOwner owner,
+        string actor,
+        DateTimeOffset recordedAt)
+    {
+        if (owner is CriterionEvidenceOwner.Worker or CriterionEvidenceOwner.Unknown)
+            throw new ArgumentOutOfRangeException(nameof(owner), "Only Acceptance or Operator may be assigned by an operator mapping.");
+
+        var specVersion = _refinedSpecVersions.SingleOrDefault(version => version.Version == criterionVersion)
+            ?? throw new InvalidOperationException($"Criterion version {criterionVersion} is not present on goal '{Id.Value}'.");
+        if (criterionIndex < 0 || criterionIndex >= specVersion.Spec.AcceptanceCriteria.Count)
+            throw new ArgumentOutOfRangeException(nameof(criterionIndex), "Criterion index is not present in the requested version.");
+
+        var id = CriterionEvidenceObligation.BuildId(criterionVersion, criterionIndex);
+        var existingIndex = _criterionEvidenceObligations.FindIndex(item => item.Id == id);
+        var mapped = new CriterionEvidenceObligation(
+            id,
+            criterionIndex,
+            criterionVersion,
+            RequireText(specVersion.Spec.AcceptanceCriteria[criterionIndex], nameof(criterionIndex)),
+            owner,
+            CriterionEvidenceState.Pending,
+            owner == CriterionEvidenceOwner.Acceptance ? "deterministic acceptance execution" : "operator observation",
+            $"operator mapping by {NormalizeSingleLine(actor, nameof(actor))}",
+            recordedAt);
+        if (existingIndex < 0)
+        {
+            _criterionEvidenceObligations.Add(mapped);
+            return mapped;
+        }
+
+        var existing = _criterionEvidenceObligations[existingIndex];
+        if (existing.State == CriterionEvidenceState.Satisfied)
+            throw new InvalidOperationException($"Criterion obligation '{id}' is already satisfied and cannot be re-owned.");
+        if (existing.Owner == owner && string.Equals(existing.Provenance, mapped.Provenance, StringComparison.Ordinal))
+            return existing;
+
+        _criterionEvidenceObligations[existingIndex] = mapped;
+        return mapped;
+    }
+
+    internal CriterionEvidenceObligation RecordCriterionEvidence(
+        string obligationId,
+        CriterionEvidenceOwner owner,
+        string candidateSha,
+        string receiptId,
+        string scope,
+        bool passed,
+        string detail,
+        DateTimeOffset recordedAt)
+    {
+        var index = _criterionEvidenceObligations.FindIndex(item => item.Id == obligationId);
+        if (index < 0)
+            throw new KeyNotFoundException($"Criterion evidence obligation '{obligationId}' was not found.");
+
+        var existing = _criterionEvidenceObligations[index];
+        if (existing.Owner != owner || !string.Equals(existing.RequiredScope, RequireText(scope, nameof(scope)), StringComparison.Ordinal))
+            throw new InvalidOperationException($"Evidence receipt is incompatible with obligation '{obligationId}'.");
+
+        candidateSha = RequireText(candidateSha, nameof(candidateSha));
+        receiptId = RequireText(receiptId, nameof(receiptId));
+        if (existing.State == CriterionEvidenceState.Satisfied)
+        {
+            if (string.Equals(existing.CandidateSha, candidateSha, StringComparison.OrdinalIgnoreCase) &&
+                string.Equals(existing.ReceiptId, receiptId, StringComparison.Ordinal))
+                return existing;
+            throw new InvalidOperationException($"Criterion obligation '{obligationId}' is already satisfied by an incompatible receipt.");
+        }
+
+        var updated = existing with
+        {
+            State = passed ? CriterionEvidenceState.Satisfied : CriterionEvidenceState.Failed,
+            CandidateSha = candidateSha,
+            ReceiptId = receiptId,
+            Detail = RequireText(detail, nameof(detail)),
+            RecordedAt = recordedAt
+        };
+        _criterionEvidenceObligations[index] = updated;
+        return updated;
+    }
+
+    private void EnsureCriterionEvidenceObligations(RefinedSpec spec, int criterionVersion, DateTimeOffset recordedAt)
+    {
+        for (var index = 0; index < spec.AcceptanceCriteria.Count; index++)
+        {
+            var id = CriterionEvidenceObligation.BuildId(criterionVersion, index);
+            if (_criterionEvidenceObligations.Any(existing => existing.Id == id))
+            {
+                continue;
+            }
+
+            var criterion = RequireText(spec.AcceptanceCriteria[index], nameof(spec));
+            var operatorOwned = spec.OperatorOwnedAcceptanceCriteria.Count(item =>
+                string.Equals(item.Trim(), criterion, StringComparison.Ordinal)) == 1;
+            if (!operatorOwned)
+            {
+                // Worker verification stays on task verification records. This
+                // collection represents only proof that survives worker scope.
+                continue;
+            }
+
+            _criterionEvidenceObligations.Add(new CriterionEvidenceObligation(
+                id,
+                index,
+                criterionVersion,
+                criterion,
+                CriterionEvidenceOwner.Operator,
+                CriterionEvidenceState.Pending,
+                "operator observation",
+                "authoritative refined spec",
+                recordedAt));
+        }
     }
 
     internal RefinedSpecVersion RecordRefinedSpec(RefinedSpec spec, DateTimeOffset recordedAt)
@@ -204,6 +351,7 @@ public sealed class Goal
         {
             var initial = new RefinedSpecVersion(1, spec, recordedAt, AuthoritativeBrief.Version);
             _refinedSpecVersions.Add(initial);
+            EnsureCriterionEvidenceObligations(spec, initial.Version, recordedAt);
             return initial;
         }
 
@@ -216,6 +364,7 @@ public sealed class Goal
             recordedAt,
             AuthoritativeBrief.Version);
         _refinedSpecVersions.Add(replacement);
+        EnsureCriterionEvidenceObligations(spec, replacement.Version, recordedAt);
         return replacement;
     }
 
@@ -508,7 +657,8 @@ public sealed class Goal
                 .ToArray(),
             SourceBacklogCoverage: SourceBacklogCoverage,
             SliceBatchParentId: SliceBatchParentId?.Value,
-            AcceptanceFailureDeferredForRetry: _acceptanceFailureDeferredForRetry);
+            AcceptanceFailureDeferredForRetry: _acceptanceFailureDeferredForRetry,
+            CriterionEvidenceObligations: _criterionEvidenceObligations.Count == 0 ? null : _criterionEvidenceObligations.ToArray());
     }
 
     internal static Goal FromSnapshot(GoalSnapshot snapshot)
@@ -573,6 +723,11 @@ public sealed class Goal
         else if (snapshot.RefinedSpec is { } legacyRefinedSpec)
         {
             goal.SetRefinedSpec(FromRefinedSpecSnapshot(legacyRefinedSpec), initialRecordedAt);
+        }
+
+        if (snapshot.CriterionEvidenceObligations is not null)
+        {
+            goal.RestoreCriterionEvidenceObligations(snapshot.CriterionEvidenceObligations);
         }
 
         if (snapshot.LatestAcceptanceFailure is { } failure)
