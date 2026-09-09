@@ -154,7 +154,8 @@ public sealed class TaskSpec
                     LastVerification.FullStandardErrorUnavailableReason,
                     LastVerification.PlannerCandidateDivergence,
                     LastVerification.CompletionVerdictVerifiedSuccess,
-                    LastVerification.CompletionVerdictRule),
+                    LastVerification.CompletionVerdictRule,
+                    LastVerification.AssignedScopeComplete),
             _verificationHistory
                 .Select(verification => new TaskVerificationSnapshot(
                     verification.Command,
@@ -183,7 +184,8 @@ public sealed class TaskSpec
                     verification.FullStandardErrorUnavailableReason,
                     verification.PlannerCandidateDivergence,
                     verification.CompletionVerdictVerifiedSuccess,
-                    verification.CompletionVerdictRule))
+                    verification.CompletionVerdictRule,
+                    verification.AssignedScopeComplete))
                 .ToList(),
             LastDispatch is null
                 ? null
@@ -336,7 +338,8 @@ public sealed class TaskSpec
                     StandardErrorIsAuthoritative: verification.AuthoritativeStandardError is not null,
                     PlannerCandidateDivergence: verification.PlannerCandidateDivergence,
                     CompletionVerdictVerifiedSuccess: verification.CompletionVerdictVerifiedSuccess,
-                    CompletionVerdictRule: verification.CompletionVerdictRule));
+                    CompletionVerdictRule: verification.CompletionVerdictRule,
+                    AssignedScopeComplete: verification.AssignedScopeComplete));
             }
         }
 
@@ -375,7 +378,8 @@ public sealed class TaskSpec
                 StandardErrorIsAuthoritative: snapshot.LastVerification.AuthoritativeStandardError is not null,
                 PlannerCandidateDivergence: snapshot.LastVerification.PlannerCandidateDivergence,
                 CompletionVerdictVerifiedSuccess: snapshot.LastVerification.CompletionVerdictVerifiedSuccess,
-                CompletionVerdictRule: snapshot.LastVerification.CompletionVerdictRule);
+                CompletionVerdictRule: snapshot.LastVerification.CompletionVerdictRule,
+                AssignedScopeComplete: snapshot.LastVerification.AssignedScopeComplete);
             var historyIndex = task._verificationHistory.FindLastIndex(
                 verification => verification.HasSameRoundIdentity(latestVerification));
             if (historyIndex < 0)
