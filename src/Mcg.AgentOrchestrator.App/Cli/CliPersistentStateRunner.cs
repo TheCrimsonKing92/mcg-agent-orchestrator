@@ -263,6 +263,16 @@ internal static partial class CliPersistentStateRunner
             return ExecuteGoalScopedTaskMutationCommand(args, stateRepository, workspace, ref agents, providers, ref workerProfiles, ref currentGoal, channel);
         }
 
+        if (IsCriterionEvidenceMutationCommand(args))
+        {
+            return SubmitCriterionEvidenceOperatorIntent(
+                args,
+                stateRepository,
+                workspace,
+                ref currentGoal,
+                operatorIntentSubmissionSource);
+        }
+
         if (IsGoalLifecycleDispositionCommand(args))
         {
             return ExecuteGoalLifecycleDispositionCommand(args, stateRepository, workspace, ref agents, providers, ref workerProfiles, ref currentGoal, channel);
@@ -616,6 +626,11 @@ internal static partial class CliPersistentStateRunner
             OperatorIntentVerbs.Progress or
             OperatorIntentVerbs.Retry or
             OperatorIntentVerbs.VerifyManual;
+
+    internal static bool IsCriterionEvidenceMutationCommand(IReadOnlyList<string> args) =>
+        args.Count > 0 && args[0].ToLowerInvariant() is
+            OperatorIntentVerbs.CriterionEvidenceMap or
+            OperatorIntentVerbs.CriterionEvidenceRecord;
 
     private static bool IsOperatorIntentStatusCommand(IReadOnlyList<string> args) =>
         args.Count > 0 &&
@@ -1867,6 +1882,107 @@ internal static partial class CliPersistentStateRunner
         }
 
         return false;
+    }
+
+    private static bool SubmitCriterionEvidenceOperatorIntent(
+        IReadOnlyList<string> args,
+        ITransactionalOrchestratorStateRepository stateRepository,
+        OrchestratorWorkspace workspace,
+        ref Goal? currentGoal,
+        OperatorIntentSubmissionSource submissionSource)
+    {
+        var goalSelector = ResolveFlagValue(args, "--goal")
+            ?? throw new ArgumentException($"{args[0]} requires --goal <goal-prefix>.");
+        var goalId = ResolveSingleGoalCommandGoalId(stateRepository, currentGoal?.Id.Value, goalSelector);
+        var snapshot = stateRepository.LoadGoalAsync(goalId).GetAwaiter().GetResult()
+            ?? throw new KeyNotFoundException($"Goal '{goalId.Value}' was not found.");
+        var kernel = KernelFromGoalSnapshot(snapshot, []);
+        var goal = kernel.GetGoal(goalId);
+        var values = PositionalCriterionEvidenceArguments(args);
+        object payload = args[0].ToLowerInvariant() switch
+        {
+            OperatorIntentVerbs.CriterionEvidenceMap => BuildCriterionEvidenceMappingPayload(values),
+            OperatorIntentVerbs.CriterionEvidenceRecord => BuildCriterionEvidenceReceiptPayload(values),
+            _ => throw new ArgumentException($"Unsupported criterion evidence command '{args[0]}'.")
+        };
+        var intentId = Guid.NewGuid().ToString("N");
+        var attribution = ResolveOperatorIntentAttribution(args, submissionSource);
+        var intent = new OperatorIntentRecord(
+            intentId,
+            ResolveFlagValue(args, "--idempotency-key") ?? intentId,
+            args[0].ToLowerInvariant(),
+            goal.Id.Value,
+            TaskId: null,
+            JsonSerializer.Serialize(payload, payload.GetType(), OperatorIntentJson.Options),
+            PayloadFileReferences: [],
+            Actor: attribution.Actor,
+            Channel: attribution.Channel,
+            AuthenticationAssurance: attribution.AuthenticationAssurance,
+            CreatedAt: DateTimeOffset.UtcNow);
+        var persisted = SqliteOperatorIntentStore
+            .ForDirectories(workspace.OrchestratorDirectory, workspace.LogDirectory)
+            .EnqueueAsync(intent)
+            .GetAwaiter()
+            .GetResult();
+        currentGoal = goal;
+        Console.WriteLine(
+            $"Operator intent queued: id={persisted.Id} verb={persisted.Verb} goal={goal.Id.Value} " +
+            $"status={persisted.Status}; poll with operator-intent-status {persisted.Id}.");
+        if (!ConductorLoopLease.IsActive(workspace.OrchestratorDirectory))
+        {
+            Console.WriteLine(ConductorLoopLease.InactiveWarning);
+        }
+
+        return false;
+    }
+
+    private static IReadOnlyList<string> PositionalCriterionEvidenceArguments(IReadOnlyList<string> args)
+    {
+        var values = new List<string>();
+        for (var index = 1; index < args.Count; index++)
+        {
+            if (args[index] is "--goal" or "--operator-actor" or "--idempotency-key")
+            {
+                index++;
+                continue;
+            }
+
+            if (args[index].StartsWith("--", StringComparison.Ordinal))
+            {
+                throw new ArgumentException($"Unsupported flag '{args[index]}' for {args[0]}.");
+            }
+
+            values.Add(args[index]);
+        }
+
+        return values;
+    }
+
+    private static CriterionEvidenceMappingOperatorIntentPayload BuildCriterionEvidenceMappingPayload(IReadOnlyList<string> values)
+    {
+        const string usage = "criterion-evidence-map --goal <goal> <criterion-index> <criterion-version> <acceptance|operator> <required-scope> <finding-stable-id> <candidate-sha>";
+        if (values.Count != 6 || !int.TryParse(values[0], out var index) || !int.TryParse(values[1], out var version) ||
+            !Enum.TryParse<CriterionEvidenceOwner>(values[2], true, out var owner) ||
+            owner is CriterionEvidenceOwner.Worker or CriterionEvidenceOwner.Unknown)
+        {
+            throw new ArgumentException($"Usage: {usage}");
+        }
+
+        return new CriterionEvidenceMappingOperatorIntentPayload(index, version, owner, values[3], values[4], values[5]);
+    }
+
+    private static CriterionEvidenceReceiptOperatorIntentPayload BuildCriterionEvidenceReceiptPayload(IReadOnlyList<string> values)
+    {
+        const string usage = "criterion-evidence-record --goal <goal> <obligation-id> <acceptance|operator> <candidate-sha> <receipt-id> <scope> <passed|failed> <detail>";
+        var isPassed = values.Count == 7 && values[5].Equals("passed", StringComparison.OrdinalIgnoreCase);
+        var isFailed = values.Count == 7 && values[5].Equals("failed", StringComparison.OrdinalIgnoreCase);
+        if (values.Count != 7 || !Enum.TryParse<CriterionEvidenceOwner>(values[1], true, out var owner) ||
+            owner != CriterionEvidenceOwner.Operator || (!isPassed && !isFailed))
+        {
+            throw new ArgumentException($"Usage: {usage}");
+        }
+
+        return new CriterionEvidenceReceiptOperatorIntentPayload(values[0], owner, values[2], values[3], values[4], isPassed, values[6]);
     }
 
     internal static OperatorIntentAttribution ResolveOperatorIntentAttribution(

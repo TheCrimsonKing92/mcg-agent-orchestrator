@@ -130,6 +130,8 @@ internal static IReadOnlyList<string> RecognizedCommands { get; } =
     "logs",
     "cancel-dispatch",
     "verify-manual",
+    "criterion-evidence-map",
+    "criterion-evidence-record",
     "verifications",
     "tasks",
     "task",

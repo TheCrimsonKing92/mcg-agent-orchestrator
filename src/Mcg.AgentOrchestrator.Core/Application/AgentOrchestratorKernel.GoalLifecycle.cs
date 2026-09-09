@@ -2254,8 +2254,19 @@ public sealed partial class AgentOrchestratorKernel
         int criterionIndex,
         int criterionVersion,
         CriterionEvidenceOwner owner,
-        string actor) =>
-        GetGoal(goalId).MapCriterionEvidenceOwner(criterionIndex, criterionVersion, owner, actor, _clock.UtcNow);
+        string actor,
+        string? requiredScope = null,
+        string? findingStableId = null,
+        string? expectedCandidateSha = null) =>
+        GetGoal(goalId).MapCriterionEvidenceOwner(
+            criterionIndex,
+            criterionVersion,
+            owner,
+            actor,
+            _clock.UtcNow,
+            requiredScope,
+            findingStableId,
+            expectedCandidateSha);
 
     public CriterionEvidenceObligation RecordCriterionEvidence(
         GoalId goalId,

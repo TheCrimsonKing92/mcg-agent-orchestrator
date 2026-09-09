@@ -233,10 +233,15 @@ public sealed class Goal
         int criterionVersion,
         CriterionEvidenceOwner owner,
         string actor,
-        DateTimeOffset recordedAt)
+        DateTimeOffset recordedAt,
+        string? requiredScope = null,
+        string? findingStableId = null,
+        string? expectedCandidateSha = null)
     {
         if (owner is CriterionEvidenceOwner.Worker or CriterionEvidenceOwner.Unknown)
             throw new ArgumentOutOfRangeException(nameof(owner), "Only Acceptance or Operator may be assigned by an operator mapping.");
+        if (string.IsNullOrWhiteSpace(expectedCandidateSha))
+            throw new ArgumentException("An operator mapping must bind the obligation to the current candidate SHA.", nameof(expectedCandidateSha));
 
         var specVersion = _refinedSpecVersions.SingleOrDefault(version => version.Version == criterionVersion)
             ?? throw new InvalidOperationException($"Criterion version {criterionVersion} is not present on goal '{Id.Value}'.");
@@ -252,9 +257,17 @@ public sealed class Goal
             RequireText(specVersion.Spec.AcceptanceCriteria[criterionIndex], nameof(criterionIndex)),
             owner,
             CriterionEvidenceState.Pending,
-            owner == CriterionEvidenceOwner.Acceptance ? "deterministic acceptance execution" : "operator observation",
+            RequireText(
+                requiredScope ?? (owner == CriterionEvidenceOwner.Acceptance
+                    ? "deterministic acceptance execution"
+                    : "operator observation"),
+                nameof(requiredScope)),
             $"operator mapping by {NormalizeSingleLine(actor, nameof(actor))}",
-            recordedAt);
+            recordedAt,
+            FindingStableId: string.IsNullOrWhiteSpace(findingStableId)
+                ? null
+                : NormalizeSingleLine(findingStableId, nameof(findingStableId)),
+            ExpectedCandidateSha: NormalizeSha(expectedCandidateSha));
         if (existingIndex < 0)
         {
             _criterionEvidenceObligations.Add(mapped);
@@ -286,7 +299,10 @@ public sealed class Goal
             throw new KeyNotFoundException($"Criterion evidence obligation '{obligationId}' was not found.");
 
         var existing = _criterionEvidenceObligations[index];
-        if (existing.Owner != owner || !string.Equals(existing.RequiredScope, RequireText(scope, nameof(scope)), StringComparison.Ordinal))
+        if (existing.Owner != owner ||
+            string.IsNullOrWhiteSpace(existing.ExpectedCandidateSha) ||
+            !string.Equals(existing.ExpectedCandidateSha, candidateSha, StringComparison.OrdinalIgnoreCase) ||
+            !string.Equals(existing.RequiredScope, RequireText(scope, nameof(scope)), StringComparison.Ordinal))
             throw new InvalidOperationException($"Evidence receipt is incompatible with obligation '{obligationId}'.");
 
         candidateSha = RequireText(candidateSha, nameof(candidateSha));

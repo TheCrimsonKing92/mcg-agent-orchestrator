@@ -19,6 +19,13 @@ public enum CriterionEvidenceState
     Satisfied
 }
 
+public static class CriterionEvidenceScopes
+{
+    // A successful normal acceptance run proves this exact, bounded scope. It
+    // cannot be substituted for a manual/native observation or a narrower gate.
+    public const string FullAcceptanceGate = "acceptance:full-gate";
+}
+
 public sealed record CriterionEvidenceObligation(
     string Id,
     int CriterionIndex,
@@ -31,7 +38,9 @@ public sealed record CriterionEvidenceObligation(
     DateTimeOffset RecordedAt,
     string? CandidateSha = null,
     string? ReceiptId = null,
-    string? Detail = null)
+    string? Detail = null,
+    string? FindingStableId = null,
+    string? ExpectedCandidateSha = null)
 {
     public bool IsPending => State == CriterionEvidenceState.Pending;
 

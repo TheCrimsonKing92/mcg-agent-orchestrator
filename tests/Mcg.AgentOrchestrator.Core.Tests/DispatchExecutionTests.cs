@@ -1811,6 +1811,55 @@ public sealed class DispatchExecutionTests
         Assert.Contains(goal.Timeline, item => item.Message.Contains("Deferred criterion evidence remains pending", StringComparison.Ordinal));
     }
 
+    [Xunit.Theory(DisplayName = "RecordDispatchExecutionResult_defers_authoritatively_mapped_acceptance_finding_without_reopening_worker")]
+    [Xunit.InlineData(AgentRole.Tester)]
+    [Xunit.InlineData(AgentRole.Reviewer)]
+    public void RecordDispatchExecutionResultDefersAuthoritativelyMappedAcceptanceFindingWithoutReopeningWorker(AgentRole role)
+    {
+        var clock = new FakeClock();
+        var kernel = new AgentOrchestratorKernel(clock);
+        var task = new TaskSpec(TaskId.New(), "Record structured evidence", role);
+        var goal = kernel.CreateGoal("Route acceptance-owned evidence", [task]);
+        kernel.SetGoalRefinedSpec(goal.Id, new RefinedSpec(
+            "Run the authoritative full acceptance control.",
+            ["The full acceptance control has a current-candidate receipt."],
+            VerificationClass.TestVerifiable,
+            [],
+            []));
+        kernel.MapCriterionEvidenceOwner(
+            goal.Id,
+            criterionIndex: 0,
+            criterionVersion: 1,
+            CriterionEvidenceOwner.Acceptance,
+            "operator@example",
+            requiredScope: "acceptance:full-core",
+            findingStableId: "acceptance-core-tests-not-dispositioned",
+            expectedCandidateSha: "candidate-123");
+        kernel.ActivateGoal(goal.Id, DefaultAgents());
+        kernel.RecordTaskDispatch(goal.Id, task.Id, new TaskDispatchRecord(
+            role.ToString(), "record-evidence", "C:\\repo", clock.UtcNow));
+
+        var result = StructuredReviewerResult(
+            "pass",
+            """[{"stable_id":"acceptance-core-tests-not-dispositioned","state":"open","location":{"file":"config/acceptance-manifest.json","region":"full-core"},"description":"Current candidate has no full-core receipt.","severity":"blocking","category":"acceptance-owned"}]""",
+            "none",
+            role == AgentRole.Reviewer
+                ? """[{"criterion_index":0,"verdict":"not-verifiable","evidence":"The acceptance owner must run acceptance:full-core."}]"""
+                : "[]");
+
+        kernel.RecordDispatchExecutionResult(goal.Id, task.Id, new TaskVerificationRecord(
+            "record-evidence", "C:\\repo", 0, result, string.Empty, clock.UtcNow, WorkerResultPresent: true));
+
+        Assert.Equal(WorkTaskStatus.Completed, task.Status);
+        var obligation = Assert.Single(goal.OutstandingCriterionEvidenceObligations);
+        Assert.Equal(CriterionEvidenceOwner.Acceptance, obligation.Owner);
+        Assert.Equal(CriterionEvidenceState.Pending, obligation.State);
+        Assert.Equal("acceptance-core-tests-not-dispositioned", obligation.FindingStableId);
+        Assert.Contains(goal.Timeline, item =>
+            item.Message.Contains("Deferred acceptance-owned finding remains pending", StringComparison.Ordinal) &&
+            item.Message.Contains("acceptance-core-tests-not-dispositioned", StringComparison.Ordinal));
+    }
+
     [Xunit.Fact(DisplayName = "Criterion evidence mapping and receipt persist without changing unrelated obligations")]
     public void CriterionEvidenceMappingAndReceiptPersistWithoutChangingUnrelatedObligations()
     {
@@ -1826,7 +1875,7 @@ public sealed class DispatchExecutionTests
             []));
 
         var mapped = kernel.MapCriterionEvidenceOwner(
-            goal.Id, 0, criterionVersion: 1, CriterionEvidenceOwner.Acceptance, "operator@example");
+            goal.Id, 0, criterionVersion: 1, CriterionEvidenceOwner.Acceptance, "operator@example", expectedCandidateSha: "abc1234");
         var satisfied = kernel.RecordCriterionEvidence(
             goal.Id, mapped.Id, CriterionEvidenceOwner.Acceptance, "abc1234", "gate-1",
             "deterministic acceptance execution", passed: true, "focused gate passed");

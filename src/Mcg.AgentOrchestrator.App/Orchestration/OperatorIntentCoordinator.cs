@@ -163,6 +163,34 @@ internal sealed class OperatorIntentCoordinator
         Goal goal,
         OperatorIntentRecord intent)
     {
+        switch (intent.Verb)
+        {
+            case OperatorIntentVerbs.CriterionEvidenceMap:
+                var mapping = Deserialize<CriterionEvidenceMappingOperatorIntentPayload>(intent);
+                kernel.MapCriterionEvidenceOwner(
+                    goal.Id,
+                    mapping.CriterionIndex,
+                    mapping.CriterionVersion,
+                    mapping.Owner,
+                    intent.Actor,
+                    mapping.RequiredScope,
+                    mapping.FindingStableId,
+                    mapping.CandidateSha);
+                return;
+            case OperatorIntentVerbs.CriterionEvidenceRecord:
+                var receipt = Deserialize<CriterionEvidenceReceiptOperatorIntentPayload>(intent);
+                kernel.RecordCriterionEvidence(
+                    goal.Id,
+                    receipt.ObligationId,
+                    receipt.Owner,
+                    receipt.CandidateSha,
+                    receipt.ReceiptId,
+                    receipt.Scope,
+                    receipt.Passed,
+                    receipt.Detail);
+                return;
+        }
+
         if (intent.TaskId is null)
         {
             throw new InvalidOperationException($"Operator intent verb '{intent.Verb}' requires a task id.");

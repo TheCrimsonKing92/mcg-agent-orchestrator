@@ -93,8 +93,12 @@ public static void PrintGoal(
         foreach (var obligation in goal.CriterionEvidenceObligations.OrderBy(item => item.CriterionVersion).ThenBy(item => item.CriterionIndex))
         {
             Console.WriteLine($"  - {obligation.Id}: owner={obligation.Owner.ToString().ToLowerInvariant()} state={obligation.State.ToString().ToLowerInvariant()} next_action={obligation.RequiredScope} provenance={obligation.Provenance}");
-            if (!string.IsNullOrWhiteSpace(obligation.ReceiptId) || !string.IsNullOrWhiteSpace(obligation.CandidateSha))
-                Console.WriteLine($"    receipt={obligation.ReceiptId ?? "pending"} candidate={obligation.CandidateSha ?? "unbound"}");
+            Console.WriteLine(
+                $"    mapped_candidate={obligation.ExpectedCandidateSha ?? "unbound"} " +
+                $"receipt={obligation.ReceiptId ?? "pending"} receipt_candidate={obligation.CandidateSha ?? "pending"} " +
+                $"finding={obligation.FindingStableId ?? "none"}");
+            if (!string.IsNullOrWhiteSpace(obligation.Detail))
+                Console.WriteLine($"    evidence_detail={OutputTextPreview.CreateSummary(obligation.Detail).Text}");
         }
     }
 

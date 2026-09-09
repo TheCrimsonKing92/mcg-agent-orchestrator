@@ -627,13 +627,30 @@ public sealed partial class AgentOrchestratorKernel
         var openBlockingFindings = ReviewFindings.GetOpenBlockingFindings(
             mergedFindings,
             goal.EffectiveAcceptanceCriteriaCorrections);
+        var workerBlockingFindings = openBlockingFindings
+            .Where(finding => !IsAuthoritativelyDeferredAcceptanceFinding(goal, finding))
+            .ToArray();
+        foreach (var deferredFinding in openBlockingFindings.Except(workerBlockingFindings))
+        {
+            var obligation = goal.CriterionEvidenceObligations.Single(item =>
+                item.Owner == CriterionEvidenceOwner.Acceptance &&
+                item.State != CriterionEvidenceState.Satisfied &&
+                string.Equals(item.FindingStableId, deferredFinding.StableId, StringComparison.Ordinal));
+            Append(
+                goal,
+                task.Id,
+                ProgressKind.TaskNote,
+                $"Deferred acceptance-owned finding remains pending: stable_id={deferredFinding.StableId}; " +
+                $"obligation={obligation.Id}; owner={obligation.Owner}; state={obligation.State}; " +
+                $"next_action={obligation.RequiredScope}.");
+        }
         if (verification.WorkerResultPresent &&
             task.RequiredRole == AgentRole.Reviewer &&
-            openBlockingFindings.Count > 0)
+            workerBlockingFindings.Length > 0)
         {
             var openIds = string.Join(
                 ", ",
-                openBlockingFindings.Select(finding => finding.StableId));
+                workerBlockingFindings.Select(finding => finding.StableId));
             ReportTaskProgress(
                 goalId,
                 task.Id,
@@ -676,11 +693,11 @@ public sealed partial class AgentOrchestratorKernel
 
         if (verification.WorkerResultPresent &&
             task.RequiredRole == AgentRole.Tester &&
-            openBlockingFindings.Count > 0)
+            workerBlockingFindings.Length > 0)
         {
             var openIds = string.Join(
                 ", ",
-                openBlockingFindings.Select(finding => finding.StableId));
+                workerBlockingFindings.Select(finding => finding.StableId));
             ReportTaskProgress(
                 goalId,
                 task.Id,
@@ -738,6 +755,22 @@ public sealed partial class AgentOrchestratorKernel
         // A legacy/malformed record has no authoritative ownership; do not
         // convert it into a deferred obligation based on worker prose.
         return obligation is null || obligation.Owner is CriterionEvidenceOwner.Worker or CriterionEvidenceOwner.Unknown;
+    }
+
+    private static bool IsAuthoritativelyDeferredAcceptanceFinding(Goal goal, ReviewFinding finding)
+    {
+        if (finding.Category != FindingCategory.AcceptanceOwned ||
+            string.IsNullOrWhiteSpace(finding.StableId))
+        {
+            return false;
+        }
+
+        // A worker's category is only a proposal. Deferral requires one live,
+        // explicit operator/refinement binding to the exact stable finding id.
+        return goal.CriterionEvidenceObligations.Count(item =>
+            item.Owner == CriterionEvidenceOwner.Acceptance &&
+            item.State != CriterionEvidenceState.Satisfied &&
+            string.Equals(item.FindingStableId, finding.StableId, StringComparison.Ordinal)) == 1;
     }
 
     public IReadOnlyList<ReviewFinding> GetOpenAdvisoryReviewFindings(GoalId goalId)
