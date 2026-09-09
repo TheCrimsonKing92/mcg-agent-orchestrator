@@ -116,6 +116,11 @@ public sealed class ConductorDriverTestsPreReviewReceiptReuse
         Assert.Equal([first, second], reviewer.PreReviewEvidenceReceipt?.SelectedFocusedTests);
         Assert.Contains("reused-current-candidate", reviewer.PreReviewEvidenceReceipt?.Advisories ?? []);
         Assert.Equal(2, reviewer.PreReviewEvidenceAttemptCount);
+        Assert.Equal(3, reviewer.PreReviewEvidenceHistory.Count);
+        var restored = AgentOrchestratorKernel.FromSnapshot(kernel.ExportSnapshot());
+        var restoredReviewer = restored.GetTask(goal.Id, reviewer.Id);
+        Assert.Equal(3, restoredReviewer.PreReviewEvidenceHistory.Count);
+        Assert.Equal(2, restoredReviewer.PreReviewEvidenceAttemptCount);
     }
 
     [Xunit.Fact(DisplayName = "ConductorDriver_pre_review_newer_red_at_same_candidate_does_not_reuse_older_green")]
