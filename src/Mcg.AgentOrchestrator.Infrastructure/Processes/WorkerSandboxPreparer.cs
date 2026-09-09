@@ -1,4 +1,6 @@
+using System.Buffers.Binary;
 using System.Diagnostics;
+using System.Runtime.InteropServices;
 using System.Security.Cryptography;
 using System.Text;
 using System.Text.Json;
@@ -462,6 +464,19 @@ internal sealed class WorkerSandboxPreparer(IWorkerIntegrityLabeler labeler)
 internal sealed class IcaclsIntegrityLabeler : IWorkerIntegrityLabeler
 {
     private readonly Func<ProcessStartInfo, Process?> startProcess;
+    private const uint LabelSecurityInformation = 0x00000010;
+    private const int SeFileObject = 1;
+    private const int ErrorSuccess = 0;
+    private const int AclHeaderSize = 8;
+    private const int AceHeaderSize = 4;
+    private const int MandatoryLabelAceType = 0x11;
+    private const byte ObjectInheritAce = 0x01;
+    private const byte ContainerInheritAce = 0x02;
+    private const byte InheritOnlyAce = 0x08;
+    private const uint NoWriteUp = 0x00000001;
+    private const uint LowIntegrityRid = 0x00001000;
+    private const uint MediumIntegrityRid = 0x00002000;
+    private const int MaximumAclBytes = 64 * 1024;
 
     public IcaclsIntegrityLabeler()
         : this(Process.Start)
@@ -475,71 +490,181 @@ internal sealed class IcaclsIntegrityLabeler : IWorkerIntegrityLabeler
 
     public IntegrityLabelState Query(string path)
     {
-        if (!File.Exists(path) && !Directory.Exists(path))
+        if (!OperatingSystem.IsWindows())
         {
             return new IntegrityLabelState(Exists: false, Low: false, Inheritable: false);
         }
 
+        IntPtr securityDescriptor = IntPtr.Zero;
         try
         {
-            var startInfo = new ProcessStartInfo
+            var result = GetNamedSecurityInfo(
+                path,
+                SeFileObject,
+                LabelSecurityInformation,
+                out _,
+                out _,
+                out _,
+                out var systemAcl,
+                out securityDescriptor);
+            if (result != ErrorSuccess)
             {
-                FileName = "icacls",
-                UseShellExecute = false,
-                CreateNoWindow = true,
-                RedirectStandardOutput = true,
-                RedirectStandardError = true
-            };
-            startInfo.ArgumentList.Add(path);
+                return new IntegrityLabelState(Exists: false, Low: false, Inheritable: false);
+            }
 
-            using var process = startProcess(startInfo);
-            if (process is null)
+            if (systemAcl == IntPtr.Zero || !TryCopyAcl(systemAcl, out var acl))
             {
                 return new IntegrityLabelState(Exists: true, Low: false, Inheritable: false);
             }
 
-            var output = process.StandardOutput.ReadToEnd();
-            _ = process.StandardError.ReadToEnd();
-            if (!process.WaitForExit(30_000) || process.ExitCode != 0)
-            {
-                return new IntegrityLabelState(Exists: true, Low: false, Inheritable: false);
-            }
-
-            return ParseQueryOutput(output);
+            return DecodeMandatoryLabelAcl(acl);
         }
         catch
         {
-            return new IntegrityLabelState(Exists: true, Low: false, Inheritable: false);
+            return new IntegrityLabelState(Exists: false, Low: false, Inheritable: false);
+        }
+        finally
+        {
+            if (securityDescriptor != IntPtr.Zero)
+            {
+                _ = LocalFree(securityDescriptor);
+            }
         }
     }
 
-    internal static IntegrityLabelState ParseQueryOutput(string output)
+    internal static IntegrityLabelState DecodeMandatoryLabelAcl(ReadOnlySpan<byte> acl)
     {
-        var mandatoryLabelRows = output
-            .Split(['\r', '\n'], StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries)
-            .Where(row => row.Contains("Mandatory Label\\", StringComparison.OrdinalIgnoreCase))
-            .ToArray();
-        if (mandatoryLabelRows.Length != 1)
+        if (acl.Length < AclHeaderSize)
         {
             return new IntegrityLabelState(Exists: true, Low: false, Inheritable: false);
         }
 
-        var mandatoryLabelRow = mandatoryLabelRows[0];
-        var low = mandatoryLabelRow.Contains(
-            "Mandatory Label\\Low Mandatory Level:",
-            StringComparison.OrdinalIgnoreCase);
-        var medium = mandatoryLabelRow.Contains(
-            "Mandatory Label\\Medium Mandatory Level:",
-            StringComparison.OrdinalIgnoreCase);
-        if (low && medium)
+        var aclSize = BinaryPrimitives.ReadUInt16LittleEndian(acl.Slice(2, sizeof(ushort)));
+        var aceCount = BinaryPrimitives.ReadUInt16LittleEndian(acl.Slice(4, sizeof(ushort)));
+        if (aclSize != acl.Length || aclSize < AclHeaderSize || aceCount == 0)
         {
             return new IntegrityLabelState(Exists: true, Low: false, Inheritable: false);
         }
 
-        var inheritable = mandatoryLabelRow.Contains("(OI)", StringComparison.OrdinalIgnoreCase) &&
-            mandatoryLabelRow.Contains("(CI)", StringComparison.OrdinalIgnoreCase);
-        return new IntegrityLabelState(Exists: true, low, inheritable, medium);
+        var offset = AclHeaderSize;
+        var mandatoryLabelCount = 0;
+        var labelState = new IntegrityLabelState(Exists: true, Low: false, Inheritable: false);
+        for (var index = 0; index < aceCount; index++)
+        {
+            if (offset > acl.Length - AceHeaderSize)
+            {
+                return new IntegrityLabelState(Exists: true, Low: false, Inheritable: false);
+            }
+
+            var aceType = acl[offset];
+            var aceFlags = acl[offset + 1];
+            var aceSize = BinaryPrimitives.ReadUInt16LittleEndian(acl.Slice(offset + 2, sizeof(ushort)));
+            if (aceSize < AceHeaderSize || aceSize > acl.Length - offset)
+            {
+                return new IntegrityLabelState(Exists: true, Low: false, Inheritable: false);
+            }
+
+            if (aceType == MandatoryLabelAceType)
+            {
+                mandatoryLabelCount++;
+                if (mandatoryLabelCount != 1 || !TryDecodeMandatoryLabelAce(acl.Slice(offset, aceSize), aceFlags, out labelState))
+                {
+                    return new IntegrityLabelState(Exists: true, Low: false, Inheritable: false);
+                }
+            }
+
+            offset += aceSize;
+        }
+
+        return offset == acl.Length && mandatoryLabelCount == 1
+            ? labelState
+            : new IntegrityLabelState(Exists: true, Low: false, Inheritable: false);
     }
+
+    private static bool TryCopyAcl(IntPtr systemAcl, out byte[] acl)
+    {
+        acl = [];
+        var header = new byte[AclHeaderSize];
+        Marshal.Copy(systemAcl, header, 0, header.Length);
+        var aclSize = BinaryPrimitives.ReadUInt16LittleEndian(header.AsSpan(2, sizeof(ushort)));
+        if (aclSize < AclHeaderSize || aclSize > MaximumAclBytes)
+        {
+            return false;
+        }
+
+        acl = new byte[aclSize];
+        Marshal.Copy(systemAcl, acl, 0, acl.Length);
+        return true;
+    }
+
+    private static bool TryDecodeMandatoryLabelAce(ReadOnlySpan<byte> ace, byte aceFlags, out IntegrityLabelState state)
+    {
+        state = new IntegrityLabelState(Exists: true, Low: false, Inheritable: false);
+        if (ace.Length < 12 || (aceFlags & InheritOnlyAce) != 0)
+        {
+            return false;
+        }
+
+        var mask = BinaryPrimitives.ReadUInt32LittleEndian(ace.Slice(AceHeaderSize, sizeof(uint)));
+        if ((mask & NoWriteUp) == 0)
+        {
+            return false;
+        }
+
+        var sid = ace.Slice(AceHeaderSize + sizeof(uint));
+        if (!TryReadIntegrityRid(sid, out var integrityRid))
+        {
+            return false;
+        }
+
+        var inheritable = (aceFlags & (ObjectInheritAce | ContainerInheritAce)) ==
+            (ObjectInheritAce | ContainerInheritAce);
+        state = integrityRid switch
+        {
+            LowIntegrityRid => new IntegrityLabelState(Exists: true, Low: true, Inheritable: inheritable),
+            MediumIntegrityRid => new IntegrityLabelState(Exists: true, Low: false, Inheritable: inheritable, Medium: true),
+            _ => new IntegrityLabelState(Exists: true, Low: false, Inheritable: false)
+        };
+        return integrityRid is LowIntegrityRid or MediumIntegrityRid;
+    }
+
+    private static bool TryReadIntegrityRid(ReadOnlySpan<byte> sid, out uint integrityRid)
+    {
+        integrityRid = 0;
+        if (sid.Length < 8 || sid[0] != 1 || sid[1] != 1)
+        {
+            return false;
+        }
+
+        var sidLength = 8 + (sid[1] * sizeof(uint));
+        if (sid.Length != sidLength)
+        {
+            return false;
+        }
+
+        ReadOnlySpan<byte> mandatoryLabelAuthority = [0, 0, 0, 0, 0, 16];
+        if (!sid.Slice(2, 6).SequenceEqual(mandatoryLabelAuthority))
+        {
+            return false;
+        }
+
+        integrityRid = BinaryPrimitives.ReadUInt32LittleEndian(sid.Slice(8, sizeof(uint)));
+        return true;
+    }
+
+    [DllImport("advapi32.dll", CharSet = CharSet.Unicode, SetLastError = true)]
+    private static extern uint GetNamedSecurityInfo(
+        string objectName,
+        int objectType,
+        uint securityInformation,
+        out IntPtr owner,
+        out IntPtr group,
+        out IntPtr dacl,
+        out IntPtr sacl,
+        out IntPtr securityDescriptor);
+
+    [DllImport("kernel32.dll", SetLastError = true)]
+    private static extern IntPtr LocalFree(IntPtr memory);
 
     public bool SetIntegrity(string path, string level, bool recursive)
     {

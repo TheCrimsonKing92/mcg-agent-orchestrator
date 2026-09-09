@@ -1,21 +1,170 @@
+using System.Buffers.Binary;
 using Mcg.AgentOrchestrator.Infrastructure;
 
 public sealed class IcaclsIntegrityLabelerTests
 {
     [Xunit.Fact]
-    public void QueryOutput_MediumInheritable_ReportsMediumNotLow()
+    public void DecodeMandatoryLabelAcl_LowObjectAndContainerInheritableNoWriteUp_IsTrusted()
     {
-        const string output = """
-            C:\workspace BUILTIN\Users:(OI)(CI)(RX)
-                        Mandatory Label\Medium Mandatory Level:(OI)(CI)(NW)
-            Successfully processed 1 files; Failed processing 0 files
-            """;
+        var state = IcaclsIntegrityLabeler.DecodeMandatoryLabelAcl(
+            BuildAcl(BuildMandatoryLabelAce(0x01 | 0x02, 0x00000001, 0x00001000)));
 
-        var state = IcaclsIntegrityLabeler.ParseQueryOutput(output);
+        Assert.True(state.Exists);
+        Assert.True(state.Low);
+        Assert.True(state.Inheritable);
+        Assert.False(state.Medium);
+    }
+
+    [Xunit.Fact]
+    public void DecodeMandatoryLabelAcl_MediumNoWriteUp_IsMediumNotLow()
+    {
+        var state = IcaclsIntegrityLabeler.DecodeMandatoryLabelAcl(
+            BuildAcl(BuildMandatoryLabelAce(0, 0x00000001, 0x00002000)));
 
         Assert.True(state.Exists);
         Assert.True(state.Medium);
-        Assert.True(state.Inheritable);
         Assert.False(state.Low);
+        Assert.False(state.Inheritable);
+    }
+
+    [Xunit.Fact]
+    public void DecodeMandatoryLabelAcl_InheritOnlyLabel_FailsClosed()
+    {
+        var state = IcaclsIntegrityLabeler.DecodeMandatoryLabelAcl(
+            BuildAcl(BuildMandatoryLabelAce(0x01 | 0x02 | 0x08, 0x00000001, 0x00001000)));
+
+        Assert.True(state.Exists);
+        Assert.False(state.Low);
+        Assert.False(state.Medium);
+        Assert.False(state.Inheritable);
+    }
+
+    [Xunit.Fact]
+    public void DecodeMandatoryLabelAcl_MissingNoWriteUpPolicy_FailsClosed()
+    {
+        var state = IcaclsIntegrityLabeler.DecodeMandatoryLabelAcl(
+            BuildAcl(BuildMandatoryLabelAce(0x01 | 0x02, 0, 0x00001000)));
+
+        Assert.False(state.Low);
+        Assert.False(state.Medium);
+        Assert.False(state.Inheritable);
+    }
+
+    [Xunit.Fact]
+    public void DecodeMandatoryLabelAcl_MultipleMandatoryLabels_FailsClosed()
+    {
+        var state = IcaclsIntegrityLabeler.DecodeMandatoryLabelAcl(BuildAcl(
+            BuildMandatoryLabelAce(0x01 | 0x02, 0x00000001, 0x00001000),
+            BuildMandatoryLabelAce(0x01 | 0x02, 0x00000001, 0x00002000)));
+
+        Assert.False(state.Low);
+        Assert.False(state.Medium);
+        Assert.False(state.Inheritable);
+    }
+
+    [Xunit.Fact]
+    public void DecodeMandatoryLabelAcl_InvalidSidAuthority_FailsClosed()
+    {
+        var invalidAuthority = BuildMandatoryLabelAce(0x01 | 0x02, 0x00000001, 0x00001000);
+        invalidAuthority[10] = 15;
+
+        var state = IcaclsIntegrityLabeler.DecodeMandatoryLabelAcl(BuildAcl(invalidAuthority));
+
+        Assert.False(state.Low);
+        Assert.False(state.Medium);
+        Assert.False(state.Inheritable);
+    }
+
+    [Xunit.Fact]
+    public void DecodeMandatoryLabelAcl_InvalidAclBounds_FailsClosed()
+    {
+        var malformedAcl = BuildAcl(BuildMandatoryLabelAce(0x01 | 0x02, 0x00000001, 0x00001000));
+        malformedAcl[2]++;
+
+        var state = IcaclsIntegrityLabeler.DecodeMandatoryLabelAcl(malformedAcl);
+
+        Assert.False(state.Low);
+        Assert.False(state.Medium);
+        Assert.False(state.Inheritable);
+    }
+
+    [Xunit.Fact]
+    public void DecodeMandatoryLabelAcl_InvalidSidLength_FailsClosed()
+    {
+        var malformedAce = BuildMandatoryLabelAce(0x01 | 0x02, 0x00000001, 0x00001000);
+        Array.Resize(ref malformedAce, malformedAce.Length + 4);
+        BinaryPrimitives.WriteUInt16LittleEndian(malformedAce.AsSpan(2), checked((ushort)malformedAce.Length));
+
+        var state = IcaclsIntegrityLabeler.DecodeMandatoryLabelAcl(BuildAcl(malformedAce));
+
+        Assert.False(state.Low);
+        Assert.False(state.Medium);
+        Assert.False(state.Inheritable);
+    }
+
+    [Xunit.Fact]
+    public void Query_UnsupportedPlatform_FailsClosed()
+    {
+        if (OperatingSystem.IsWindows())
+        {
+            return;
+        }
+
+        var state = new IcaclsIntegrityLabeler().Query(Path.GetTempPath());
+
+        Assert.False(state.Exists);
+        Assert.False(state.Low);
+        Assert.False(state.Medium);
+        Assert.False(state.Inheritable);
+    }
+
+    [Xunit.Fact]
+    public void Query_MissingPathFailsClosedWithoutStartingTheSetIntegrityHelper()
+    {
+        var processStarted = false;
+        var labeler = new IcaclsIntegrityLabeler(_ =>
+        {
+            processStarted = true;
+            return null;
+        });
+
+        var state = labeler.Query(Path.Combine(Path.GetTempPath(), Guid.NewGuid().ToString("n")));
+
+        Assert.False(processStarted);
+        Assert.False(state.Exists);
+        Assert.False(state.Low);
+        Assert.False(state.Medium);
+        Assert.False(state.Inheritable);
+    }
+
+    private static byte[] BuildAcl(params byte[][] aces)
+    {
+        var length = 8 + aces.Sum(ace => ace.Length);
+        var acl = new byte[length];
+        acl[0] = 2;
+        BinaryPrimitives.WriteUInt16LittleEndian(acl.AsSpan(2), checked((ushort)length));
+        BinaryPrimitives.WriteUInt16LittleEndian(acl.AsSpan(4), checked((ushort)aces.Length));
+        var offset = 8;
+        foreach (var ace in aces)
+        {
+            ace.CopyTo(acl, offset);
+            offset += ace.Length;
+        }
+
+        return acl;
+    }
+
+    private static byte[] BuildMandatoryLabelAce(byte flags, uint mask, uint rid)
+    {
+        var ace = new byte[20];
+        ace[0] = 0x11;
+        ace[1] = flags;
+        BinaryPrimitives.WriteUInt16LittleEndian(ace.AsSpan(2), checked((ushort)ace.Length));
+        BinaryPrimitives.WriteUInt32LittleEndian(ace.AsSpan(4), mask);
+        ace[8] = 1;
+        ace[9] = 1;
+        ace[15] = 16;
+        BinaryPrimitives.WriteUInt32LittleEndian(ace.AsSpan(16), rid);
+        return ace;
     }
 }
