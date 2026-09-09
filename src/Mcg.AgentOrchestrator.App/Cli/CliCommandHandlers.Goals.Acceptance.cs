@@ -502,6 +502,16 @@ internal static bool RunAcceptanceWorkspaceMergeCore(CliExecutionContext context
         return false;
     }
 
+    var preMergeObligations = context.Kernel.GetGoal(goal.Id)
+        .GetOutstandingCriterionEvidenceObligations(testedWorktreeHead);
+    if (preMergeObligations.Count > 0)
+    {
+        Console.WriteLine(
+            "Acceptance evidence: merge blocked by outstanding criterion evidence: " +
+            string.Join(", ", preMergeObligations.Select(item => $"{item.Id}:{item.Owner}:{item.State}")));
+        return false;
+    }
+
     var mergeStarted = System.Diagnostics.Stopwatch.StartNew();
     var mergeCommit = context.FinalizeAcceptanceMerge(new AcceptanceMergeCommitRequest(
             goal.Id,

@@ -1707,7 +1707,7 @@ internal sealed partial class ConductorDriver
                     $"Auto-retry real worker/command failure for task {realFailureTask.Id.Value[..8]} " +
                     $"(attempt {retryCount}/{policy.MaxCriterionRetries}); " +
                     string.Join("; ", retryFeedback);
-                var retryCause = ResolveAutomaticRetryCause(realFailureTask);
+                var retryCause = AutomaticWorkerRetryCause.Resolve(realFailureTask);
                 if (retryCause is null)
                 {
                     return Escalate(
@@ -2110,7 +2110,7 @@ internal sealed partial class ConductorDriver
             message,
             warning,
             null,
-            ResolveAutomaticRetryCause(triggeringTask) ?? RetryCause.CriterionEvidenceOwnerMismatch);
+            AutomaticWorkerRetryCause.Resolve(triggeringTask) ?? RetryCause.CriterionEvidenceOwnerMismatch);
         return true;
     }
     private VerifyingFindingTrigger? BuildVerifyingFindingTrigger(Goal goal, TaskSpec task)
@@ -3295,38 +3295,6 @@ internal sealed partial class ConductorDriver
     private sealed record ActionableCandidateRedAttribution(
         IReadOnlyList<ReviewFinding> Findings,
         IReadOnlyList<string> FailingTestIdentities);
-
-    private static RetryCause? ResolveAutomaticRetryCause(TaskSpec task)
-    {
-        var verification = task.LastVerification;
-        if (verification is null)
-        {
-            return null;
-        }
-
-        if (TaskOutcomeClassifier.IsIncompleteScopeDeclaration(
-            TaskOutcomeClassifier.TryExtractRule(
-                DispatchFailureClassifier.Classify(task, verification).ClassifierReceipt)))
-        {
-            return RetryCause.ContractClarification;
-        }
-
-        if (verification.ProviderFailureKind is ProviderFailureKind.RateLimit or ProviderFailureKind.Connectivity)
-            return RetryCause.ProviderInterruption;
-        if (verification.ProviderFailureKind == ProviderFailureKind.Sandbox1312)
-            return RetryCause.EnvironmentApparatusFailure;
-
-        var findings = verification.MergedReviewFindings?
-            .Where(finding => finding.State == ReviewFindingState.Open && finding.Severity == FindingSeverity.Blocking)
-            .ToArray() ?? [];
-        if (findings.Any(finding => finding.Category is FindingCategory.OperatorOwned or FindingCategory.SpecDefect))
-            return RetryCause.ContractClarification;
-        if (findings.Any(finding => finding.Category is FindingCategory.TestEvidence or FindingCategory.TestCoverage))
-            return RetryCause.NewTestFinding;
-        if (findings.Any(finding => finding.Category is FindingCategory.Correctness or FindingCategory.CodeQuality or FindingCategory.SpecCompliance))
-            return RetryCause.NewSourceFinding;
-        return null;
-    }
 
     private sealed record VerifyingFindingAutoRetryDecision(
         bool ShouldHold,
@@ -6198,7 +6166,14 @@ internal sealed partial class ConductorDriver
 
         if (acceptance.Passed)
         {
+            goal = GetCurrentGoal(goal);
             _clearAcceptanceFailure(goal);
+            var evidenceCandidateSha = acceptance.BranchHeadSha ?? _resolveAcceptanceHeads(goal).BranchHeadSha;
+            var evidenceHold = AcceptanceCriterionEvidence.RecordAndCreateHold(goal, evidenceCandidateSha, _cohortKernel ?? _conductorTickKernel);
+            if (evidenceHold is not null)
+            {
+                return MakeResult(goal.Id.Value, goalPrefix, policy, evidenceHold);
+            }
         }
 
         var landingFileScopes = _getLandingFileScopes(goal);
