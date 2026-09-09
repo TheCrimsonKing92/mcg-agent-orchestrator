@@ -1978,6 +1978,14 @@ internal sealed partial class ConductorDriver
                     candidate.TriggeringTask.LastVerification!));
         if (trigger is null)
         {
+            trigger = goal.Tasks
+                .Where(task => task.RequiredRole == AgentRole.Reviewer)
+                .Select(task => BuildVerifyingFindingTrigger(goal, task))
+                .FirstOrDefault(candidate => candidate is not null);
+        }
+
+        if (trigger is null)
+        {
             foreach (var requestingTask in goal.Tasks.Where(task => task.LastVerification is not null))
             {
                 if (TryBuildFindingEvidenceRequest(goal, requestingTask, policy, out decision))
@@ -5478,31 +5486,38 @@ internal sealed partial class ConductorDriver
             return false;
         }
 
-        var green = reviewerTask.PreReviewEvidenceHistory
+        var currentCandidateReceipts = reviewerTask.PreReviewEvidenceHistory
             .Where(receipt =>
                 string.Equals(receipt.GoalId, goalId, StringComparison.Ordinal) &&
-                string.Equals(receipt.CandidateSha, candidateSha, StringComparison.OrdinalIgnoreCase) &&
-                receipt.Disposition == PreReviewEvidenceDisposition.Green &&
-                receipt.FailedCheckCount == 0 &&
-                receipt.Checks.All(check => check.Passed))
+                string.Equals(receipt.CandidateSha, candidateSha, StringComparison.OrdinalIgnoreCase))
             .OrderByDescending(receipt => receipt.RecordedAt)
             .ToArray();
-        if (green.Length == 0)
+        if (currentCandidateReceipts.Length == 0)
         {
             return false;
         }
 
-        var coverage = new HashSet<string>(
-            green.SelectMany(receipt => receipt.SelectedFocusedTests),
-            StringComparer.Ordinal);
-        if (!requestedSelections.All(coverage.Contains))
+        // The latest receipt for each selection is authoritative. An earlier green receipt must
+        // never hide a later red, incomplete, or mapping-needed result for the same candidate.
+        var latestReceipts = requestedSelections
+            .Select(selection => currentCandidateReceipts.FirstOrDefault(receipt =>
+                receipt.SelectedFocusedTests.Contains(selection, StringComparer.Ordinal)))
+            .ToArray();
+        if (latestReceipts.Any(receipt => receipt is null) ||
+            latestReceipts.Any(receipt =>
+                receipt is not
+                {
+                    Disposition: PreReviewEvidenceDisposition.Green,
+                    FailedCheckCount: 0
+                } ||
+                !receipt.Checks.All(check => check.Passed)))
         {
             return false;
         }
 
-        constituentReceipts = green
-            .Where(receipt => receipt.SelectedFocusedTests.Any(coverageSelection =>
-                requestedSelections.Contains(coverageSelection, StringComparer.Ordinal)))
+        constituentReceipts = latestReceipts
+            .OfType<PreReviewEvidenceReceipt>()
+            .Distinct()
             .ToArray();
         return constituentReceipts.Count > 0;
     }

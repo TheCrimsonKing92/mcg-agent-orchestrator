@@ -115,47 +115,48 @@ internal sealed partial class ConductorDriver
                 outcome is { Honoured: true, ReceiptId.Length: > 0, ResultReason: FindingEvidenceOutcomeReason.ValidEvidence })
             .GroupBy(outcome => outcome.ReceiptId!, StringComparer.Ordinal)
             .ToDictionary(group => group.Key, group => group.Last(), StringComparer.Ordinal);
-        var greenReceipts = requestingTask.VerificationHistory
-            .SelectMany(verification => verification.FindingEvidenceReceipts ?? [])
-            .Where(receipt =>
-                validOutcomesByReceiptId.ContainsKey(receipt.ReceiptId) &&
-                string.Equals(receipt.CandidateSha, candidateSha, StringComparison.OrdinalIgnoreCase) &&
-                receipt is { Accepted: true, Passed: true } &&
-                (receipt.Arms ?? []).Any(arm =>
-                    arm is
-                    {
-                        Arm: FindingEvidenceArm.Candidate,
-                        Disposition: FindingEvidenceArmDisposition.Green,
-                        Accepted: true,
-                        Passed: true
-                    } &&
-                    string.Equals(arm.Sha, candidateSha, StringComparison.OrdinalIgnoreCase)))
+        var currentCandidateReceipts = requestingTask.VerificationHistory
+            .SelectMany((verification, verificationIndex) =>
+                (verification.FindingEvidenceReceipts ?? [])
+                    .Select(receipt => new FindingEvidenceReceiptHistoryItem(receipt, verificationIndex)))
+            .Where(item => string.Equals(
+                item.Receipt.CandidateSha,
+                candidateSha,
+                StringComparison.OrdinalIgnoreCase))
             .ToArray();
-        reusableReceipt = greenReceipts
-            .LastOrDefault(receipt =>
-                HasReusableRequestIdentity(receipt, identity));
+        if (currentCandidateReceipts.Length == 0)
+        {
+            return false;
+        }
+
+        // The newest receipt covering a selection is authoritative. Do not let an earlier green
+        // result hide a later candidate-red, incomplete, or rejected receipt at the same SHA.
+        var latestReceipts = request.Selections
+            .Select(selection => currentCandidateReceipts.LastOrDefault(item =>
+                (item.Receipt.Request.Selections ?? []).Contains(selection)))
+            .ToArray();
+        if (latestReceipts.Any(item => item is null) ||
+            latestReceipts.Any(item => !IsReusableGreenReceipt(
+                item!.Receipt,
+                candidateSha,
+                validOutcomesByReceiptId)))
+        {
+            return false;
+        }
+
+        var greenReceipts = latestReceipts
+            .Select(item => item!.Receipt)
+            .DistinctBy(receipt => receipt.ReceiptId, StringComparer.Ordinal)
+            .ToArray();
+        reusableReceipt = greenReceipts.LastOrDefault(receipt =>
+            HasReusableRequestIdentity(receipt, identity));
         if (reusableReceipt is not null)
         {
             reusableOutcome = validOutcomesByReceiptId[reusableReceipt.ReceiptId];
             return true;
         }
 
-        // A compatible batch can be reconstructed from green constituent receipts only when each
-        // normalized selection is present at this exact candidate. This deliberately does not
-        // treat a partial match as sufficient: a missing selection must run normally.
-        var constituents = request.Selections
-            .Select(selection => greenReceipts.LastOrDefault(receipt =>
-                (receipt.Request.Selections ?? []).Contains(selection)))
-            .ToArray();
-        if (constituents.Any(receipt => receipt is null))
-        {
-            return false;
-        }
-
-        var constituentReceipts = constituents
-            .OfType<FindingEvidenceReceipt>()
-            .DistinctBy(receipt => receipt.ReceiptId, StringComparer.Ordinal)
-            .ToArray();
+        var constituentReceipts = greenReceipts;
         var receiptId = CreateConstituentReuseReceiptId(candidateSha, identity, constituentReceipts);
         reusableReceipt = new FindingEvidenceReceipt(
             receiptId,
@@ -184,6 +185,26 @@ internal sealed partial class ConductorDriver
             ResultReason: FindingEvidenceOutcomeReason.ValidEvidence);
         return true;
     }
+
+    private static bool IsReusableGreenReceipt(
+        FindingEvidenceReceipt receipt,
+        string candidateSha,
+        IReadOnlyDictionary<string, FindingEvidenceOutcome> validOutcomesByReceiptId) =>
+        validOutcomesByReceiptId.ContainsKey(receipt.ReceiptId) &&
+        receipt is { Accepted: true, Passed: true } &&
+        (receipt.Arms ?? []).Any(arm =>
+            arm is
+            {
+                Arm: FindingEvidenceArm.Candidate,
+                Disposition: FindingEvidenceArmDisposition.Green,
+                Accepted: true,
+                Passed: true
+            } &&
+            string.Equals(arm.Sha, candidateSha, StringComparison.OrdinalIgnoreCase));
+
+    private sealed record FindingEvidenceReceiptHistoryItem(
+        FindingEvidenceReceipt Receipt,
+        int VerificationIndex);
 
     private static bool HasReusableRequestIdentity(FindingEvidenceReceipt receipt, string identity) =>
         string.Equals(BuildFindingEvidenceIdentity(receipt.Request), identity, StringComparison.Ordinal) ||

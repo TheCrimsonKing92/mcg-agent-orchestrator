@@ -364,4 +364,43 @@ public sealed class ConductorDriverTestsFindingEvidenceReuse
             reviewer.VerificationHistory.SelectMany(item => item.FindingEvidenceReceipts ?? []),
             receipt => Assert.False(receipt.Passed));
     }
+
+    [Xunit.Fact]
+    public void ReviewerCorrectnessFindingWithEvidenceRequestReopensDeveloperBeforeEvidenceRuns()
+    {
+        const string candidateSha = "abc1234";
+        var (kernel, goal) = SoftwareGoal();
+        var developer = goal.Tasks.Single(task => task.RequiredRole == AgentRole.Developer);
+        var reviewer = goal.Tasks.Single(task => task.RequiredRole == AgentRole.Reviewer);
+        foreach (var task in goal.Tasks.Where(task => task.RequiredRole != AgentRole.Reviewer))
+        {
+            PassVerification(kernel, goal, task, hasCommittedChanges: task.Id == developer.Id);
+        }
+
+        var finding = EvidenceFindingWithRequest(
+            "The candidate fails a correctness invariant.",
+            id: "reviewer-correctness-finding",
+            category: FindingCategory.Correctness);
+        FailReviewerNeedsWork(kernel, goal, reviewer, "correctness finding", findings: [finding]);
+        var focusedRuns = 0;
+        TaskId? retriedTaskId = null;
+        var driver = MakeDriver(
+            getPreReviewEvidenceContext: _ => NoPreReviewContext(candidateSha),
+            runFocusedEvidence: (_, request) =>
+            {
+                focusedRuns++;
+                return DualArmFindingEvidence(request, FindingEvidenceArmDisposition.Red, candidateSha);
+            },
+            dispatchAndStart: _ => DispatchStartOutcome.Started(),
+            retryTaskWithRoundKind: (goalId, taskId, message, roundKind) =>
+            {
+                retriedTaskId = taskId;
+                return kernel.RetryTask(goalId, taskId, message, retryRoundKind: roundKind);
+            });
+
+        driver.AdvanceOnce(goal, ConductorAutonomyPolicy.Permissive);
+
+        Assert.Equal(0, focusedRuns);
+        Assert.Equal(developer.Id, retriedTaskId);
+    }
 }

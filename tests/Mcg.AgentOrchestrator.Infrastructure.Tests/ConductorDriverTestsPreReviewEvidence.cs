@@ -603,6 +603,64 @@ public sealed class ConductorDriverTestsPreReviewEvidence
         Assert.Contains("reused-current-candidate", reviewer.PreReviewEvidenceReceipt?.Advisories ?? []);
     }
 
+    [Xunit.Fact(DisplayName = "ConductorDriver_pre_review_newer_red_at_same_candidate_does_not_reuse_older_green")]
+    public void ConductorDriverPreReviewNewerRedAtSameCandidateDoesNotReuseOlderGreen()
+    {
+        var (kernel, goal) = SoftwareGoal();
+        var reviewer = goal.Tasks.Single(task => task.RequiredRole == AgentRole.Reviewer);
+        foreach (var task in goal.Tasks.TakeWhile(task => task.Id != reviewer.Id))
+        {
+            PassVerification(kernel, goal, task);
+        }
+
+        const string selection = "Infrastructure.Tests: FullyQualifiedName~GoalWorktreeTests";
+        kernel.RecordPreReviewEvidence(goal.Id, reviewer.Id, new PreReviewEvidenceReceipt(
+            goal.Id.Value,
+            1,
+            "same-sha",
+            [selection],
+            PreReviewEvidenceDisposition.Green,
+            PassedCheckCount: 1,
+            FailedCheckCount: 0,
+            Checks: [new PreReviewEvidenceCheckReceipt(selection, selection, true, 0)],
+            FailingTestIdentities: [],
+            MappingReason: "seed green",
+            EvidencePointer: "C:\\receipts\\green",
+            RecordedAt: DateTimeOffset.UtcNow.AddMinutes(-1)));
+        kernel.RecordPreReviewEvidence(goal.Id, reviewer.Id, new PreReviewEvidenceReceipt(
+            goal.Id.Value,
+            2,
+            "same-sha",
+            [selection],
+            PreReviewEvidenceDisposition.Red,
+            PassedCheckCount: 0,
+            FailedCheckCount: 1,
+            Checks: [new PreReviewEvidenceCheckReceipt(selection, selection, false, 1)],
+            FailingTestIdentities: ["GoalWorktreeTests.RedirectedProcessTimeoutNamesTheLastReportedPhase"],
+            MappingReason: "candidate red",
+            EvidencePointer: "C:\\receipts\\red",
+            RecordedAt: DateTimeOffset.UtcNow));
+
+        var evidenceRuns = 0;
+        var driver = MakeDriver(
+            getFacts: _ => new GoalLifecycleFacts(WorkspaceExists: true),
+            getPreReviewEvidenceContext: _ => new PreReviewEvidenceContext(
+                "same-sha", [selection], selection, "same focused request", false, false),
+            runFocusedEvidence: (_, request) =>
+            {
+                evidenceRuns++;
+                return PassingPreReviewEvidence(request);
+            },
+            recordPreReviewEvidence: (goalId, taskId, receipt) =>
+                kernel.RecordPreReviewEvidence(goalId, taskId, receipt));
+
+        driver.AdvanceOnce(goal, ConductorAutonomyPolicy.Permissive);
+
+        Assert.Equal(1, evidenceRuns);
+        Assert.Equal(PreReviewEvidenceDisposition.Green, reviewer.PreReviewEvidenceReceipt?.Disposition);
+        Assert.DoesNotContain("reused-current-candidate", reviewer.PreReviewEvidenceReceipt?.Advisories ?? []);
+    }
+
     [Xunit.Fact(DisplayName = "ConductorDriver_pre_review_red_routes_developer_with_exact_failing_test_ids")]
     public void ConductorDriverPreReviewRedRoutesDeveloperWithExactFailingTestIds()
     {
