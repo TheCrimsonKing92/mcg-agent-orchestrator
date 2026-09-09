@@ -1841,9 +1841,12 @@ internal static partial class CliPersistentStateRunner
                 preparedCommand.Text
                     ?? throw new InvalidOperationException("Prepared progress command is missing text.")),
             OperatorIntentVerbs.Retry => BuildRetryPayload(preparedCommand),
-            OperatorIntentVerbs.VerifyManual => new ManualVerificationOperatorIntentPayload(
-                preparedCommand.ManualVerification
-                    ?? throw new InvalidOperationException("Prepared verify-manual command is missing verification evidence.")),
+            OperatorIntentVerbs.VerifyManual => preparedCommand.ManualVerification is { } manual
+                ? new ManualVerificationOperatorIntentPayload(Request: new ManualVerificationRequest(
+                    manual.ExitCode == 0,
+                    manual.ExitCode == 0 ? manual.AuthoritativeStandardOutput : manual.AuthoritativeStandardError,
+                    manual.WorkingDirectory))
+                : throw new InvalidOperationException("Prepared verify-manual command is missing verification evidence."),
             _ => throw new InvalidOperationException(
                 $"Goal-scoped mutation '{preparedCommand.Command}' is not backed by the operator intent inbox.")
         };
@@ -1960,7 +1963,7 @@ internal static partial class CliPersistentStateRunner
 
     private static CriterionEvidenceMappingOperatorIntentPayload BuildCriterionEvidenceMappingPayload(IReadOnlyList<string> values)
     {
-        const string usage = "criterion-evidence-map --goal <goal> <criterion-index> <criterion-version> <acceptance|operator> <required-scope> <finding-stable-id> <candidate-sha>";
+        var usage = CliCommandHelp.CriterionEvidenceMapUsage["Usage: ".Length..];
         if (values.Count != 6 || !int.TryParse(values[0], out var index) || !int.TryParse(values[1], out var version) ||
             !Enum.TryParse<CriterionEvidenceOwner>(values[2], true, out var owner) ||
             owner is CriterionEvidenceOwner.Worker or CriterionEvidenceOwner.Unknown)
@@ -1973,7 +1976,7 @@ internal static partial class CliPersistentStateRunner
 
     private static CriterionEvidenceReceiptOperatorIntentPayload BuildCriterionEvidenceReceiptPayload(IReadOnlyList<string> values)
     {
-        const string usage = "criterion-evidence-record --goal <goal> <obligation-id> <acceptance|operator> <candidate-sha> <receipt-id> <scope> <passed|failed> <detail>";
+        var usage = CliCommandHelp.CriterionEvidenceRecordUsage["Usage: ".Length..];
         var isPassed = values.Count == 7 && values[5].Equals("passed", StringComparison.OrdinalIgnoreCase);
         var isFailed = values.Count == 7 && values[5].Equals("failed", StringComparison.OrdinalIgnoreCase);
         if (values.Count != 7 || !Enum.TryParse<CriterionEvidenceOwner>(values[1], true, out var owner) ||

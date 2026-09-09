@@ -269,7 +269,7 @@ internal sealed class OperatorIntentCoordinator
 
             case OperatorIntentVerbs.VerifyManual:
                 var manual = Deserialize<ManualVerificationOperatorIntentPayload>(intent);
-                kernel.RecordTaskVerification(goal.Id, taskId, manual.Verification);
+                kernel.RecordTaskVerification(goal.Id, taskId, manual.ResolveVerification(intent.CreatedAt));
                 break;
 
             default:

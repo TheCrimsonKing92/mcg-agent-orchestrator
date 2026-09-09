@@ -642,14 +642,11 @@ public sealed partial class AgentOrchestratorKernel
             mergedFindings,
             goal.EffectiveAcceptanceCriteriaCorrections);
         var workerBlockingFindings = openBlockingFindings
-            .Where(finding => !IsAuthoritativelyDeferredAcceptanceFinding(goal, finding))
+            .Where(finding => FindAuthoritativelyDeferredAcceptanceObligation(goal, finding) is null)
             .ToArray();
         foreach (var deferredFinding in openBlockingFindings.Except(workerBlockingFindings))
         {
-            var obligation = goal.CriterionEvidenceObligations.Single(item =>
-                item.Owner == CriterionEvidenceOwner.Acceptance &&
-                item.State != CriterionEvidenceState.Satisfied &&
-                string.Equals(item.FindingStableId, deferredFinding.StableId, StringComparison.Ordinal));
+            var obligation = FindAuthoritativelyDeferredAcceptanceObligation(goal, deferredFinding)!;
             Append(
                 goal,
                 task.Id,
@@ -780,20 +777,22 @@ public sealed partial class AgentOrchestratorKernel
         return obligation is null || obligation.Owner is CriterionEvidenceOwner.Worker or CriterionEvidenceOwner.Unknown;
     }
 
-    private static bool IsAuthoritativelyDeferredAcceptanceFinding(Goal goal, ReviewFinding finding)
+    private static CriterionEvidenceObligation? FindAuthoritativelyDeferredAcceptanceObligation(Goal goal, ReviewFinding finding)
     {
         if (finding.Category != FindingCategory.AcceptanceOwned ||
             string.IsNullOrWhiteSpace(finding.StableId))
         {
-            return false;
+            return null;
         }
 
         // A worker's category is only a proposal. Deferral requires one live,
         // explicit operator/refinement binding to the exact stable finding id.
-        return goal.CriterionEvidenceObligations.Count(item =>
+        var currentVersion = goal.AuthoritativeRefinedSpecVersion?.Version;
+        var matches = goal.OutstandingCriterionEvidenceObligations.Where(item =>
             item.Owner == CriterionEvidenceOwner.Acceptance &&
-            item.State != CriterionEvidenceState.Satisfied &&
-            string.Equals(item.FindingStableId, finding.StableId, StringComparison.Ordinal)) == 1;
+            item.CriterionVersion == currentVersion &&
+            string.Equals(item.FindingStableId, finding.StableId, StringComparison.Ordinal)).ToArray();
+        return matches.Length == 1 ? matches[0] : null;
     }
 
     private static bool HasOnlyAuthoritativelyDeferredAcceptanceFindings(
@@ -804,7 +803,7 @@ public sealed partial class AgentOrchestratorKernel
             verification.MergedReviewFindings ?? [],
             goal.EffectiveAcceptanceCriteriaCorrections);
         return openFindings.Count > 0 && openFindings.All(finding =>
-            IsAuthoritativelyDeferredAcceptanceFinding(goal, finding));
+            FindAuthoritativelyDeferredAcceptanceObligation(goal, finding) is not null);
     }
 
     public IReadOnlyList<ReviewFinding> GetOpenAdvisoryReviewFindings(GoalId goalId)

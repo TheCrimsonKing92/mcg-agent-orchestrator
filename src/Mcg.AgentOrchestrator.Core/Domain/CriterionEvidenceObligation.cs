@@ -40,9 +40,46 @@ public sealed record CriterionEvidenceObligation(
     string? ReceiptId = null,
     string? Detail = null,
     string? FindingStableId = null,
-    string? ExpectedCandidateSha = null)
+    string? ExpectedCandidateSha = null,
+    IReadOnlyList<CriterionEvidenceReceipt>? PriorReceipts = null)
 {
     public bool IsPending => State == CriterionEvidenceState.Pending;
+
+    internal bool HasValidEvidenceState =>
+        Owner is CriterionEvidenceOwner.Operator or CriterionEvidenceOwner.Acceptance or CriterionEvidenceOwner.Unknown &&
+        State is CriterionEvidenceState.Pending or CriterionEvidenceState.Failed or CriterionEvidenceState.Satisfied &&
+        (Owner != CriterionEvidenceOwner.Unknown || State == CriterionEvidenceState.Pending) &&
+        (Owner != CriterionEvidenceOwner.Acceptance ||
+         (!string.IsNullOrWhiteSpace(ExpectedCandidateSha) && RequiredScope == CriterionEvidenceScopes.FullAcceptanceGate)) &&
+        (State == CriterionEvidenceState.Pending
+            ? CandidateSha is null && ReceiptId is null && Detail is null
+            : CurrentReceipt() is { IsWellFormed: true } &&
+              (string.IsNullOrWhiteSpace(ExpectedCandidateSha) ||
+               string.Equals(ExpectedCandidateSha, CandidateSha, StringComparison.OrdinalIgnoreCase))) &&
+        (PriorReceipts is null ||
+         (PriorReceipts.All(receipt => receipt is { IsWellFormed: true } && receipt.ReceiptId != ReceiptId) &&
+          PriorReceipts.Select(receipt => receipt.ReceiptId).Distinct(StringComparer.Ordinal).Count() == PriorReceipts.Count));
+
+    public bool HasSatisfiedEvidenceFor(string? candidateSha) =>
+        State == CriterionEvidenceState.Satisfied && HasValidEvidenceState &&
+        !string.IsNullOrWhiteSpace(candidateSha) &&
+        string.Equals(CandidateSha, candidateSha, StringComparison.OrdinalIgnoreCase) &&
+        (string.IsNullOrWhiteSpace(ExpectedCandidateSha) ||
+         string.Equals(ExpectedCandidateSha, candidateSha, StringComparison.OrdinalIgnoreCase));
+
+    internal CriterionEvidenceReceipt? FindReceipt(string receiptId) =>
+        CurrentReceipt() is { } current && current.ReceiptId == receiptId
+            ? current
+            : PriorReceipts?.SingleOrDefault(receipt => receipt.ReceiptId == receiptId);
+
+    internal IReadOnlyList<CriterionEvidenceReceipt>? ArchiveCurrentReceipt() =>
+        CurrentReceipt() is { } current ? [.. PriorReceipts ?? [], current] : PriorReceipts;
+
+    private CriterionEvidenceReceipt? CurrentReceipt() =>
+        State != CriterionEvidenceState.Pending && CandidateSha is not null && ReceiptId is not null && Detail is not null
+            ? new(Owner, CandidateSha, ReceiptId, RequiredScope, State == CriterionEvidenceState.Satisfied,
+                Detail, Provenance, RecordedAt)
+            : null;
 
     public static string BuildId(int criterionVersion, int criterionIndex) =>
         $"criterion-v{criterionVersion}-{criterionIndex}";

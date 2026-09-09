@@ -80,7 +80,7 @@ internal sealed partial class ConductorBatchLoop
     private readonly ConductorLifecycleRecorder? _lifecycleRecorder;
     private readonly Func<DateTimeOffset> _utcNow;
     private readonly Func<double> _writeJitter;
-    private readonly Func<string, GoalStatus?> _evictedGoalStatusLookup;
+    private readonly Func<string, ConductorGoalReloadObservation> _goalReloadObservation;
     private readonly TimeSpan _blockedRecheckHeartbeatInterval;
     private readonly OrchestratorWorkspace? _workspace;
     // Janitorial phases run only on the conductor loop thread; acceptance work never mutates this state.
@@ -111,7 +111,7 @@ internal sealed partial class ConductorBatchLoop
         bool selfRelaunchEnabled = DefaultSelfRelaunchEnabled,
         PostLandingCanaryCoordinator? postLandingCanary = null,
         AcceptanceEngineCircuitBreaker? acceptanceEngineCircuit = null,
-        Func<string, GoalStatus?>? evictedGoalStatusLookup = null,
+        Func<string, ConductorGoalReloadObservation>? goalReloadObservation = null,
         ConductorLifecycleRecorder? lifecycleRecorder = null,
         Func<double>? writeJitter = null,
         TimeSpan? blockedRecheckHeartbeatInterval = null,
@@ -145,7 +145,7 @@ internal sealed partial class ConductorBatchLoop
         _lifecycleRecorder = lifecycleRecorder;
         _utcNow = utcNow ?? (() => DateTimeOffset.UtcNow);
         _writeJitter = writeJitter ?? Random.Shared.NextDouble;
-        _evictedGoalStatusLookup = evictedGoalStatusLookup ?? (_ => null);
+        _goalReloadObservation = goalReloadObservation ?? (_ => new ConductorGoalReloadObservation.Missing());
         _blockedRecheckHeartbeatInterval = blockedRecheckHeartbeatInterval ?? DefaultBlockedRecheckHeartbeatInterval;
         _workspace = workspace;
         if (_blockedRecheckHeartbeatInterval <= TimeSpan.Zero || _blockedRecheckHeartbeatInterval > TimeSpan.FromMinutes(10))
@@ -611,6 +611,7 @@ internal sealed partial class ConductorBatchLoop
             var actionableIntentGoalIds = new HashSet<string>(StringComparer.Ordinal);
             var preWalkIntentLines = new List<string>();
             var preWalkIntentProcessed = false;
+            var intentsAwaitingReload = 0;
             if (_operatorIntents is not null)
             {
                 try
@@ -646,8 +647,15 @@ internal sealed partial class ConductorBatchLoop
                             continue;
                         }
 
-                        var isOutsideScope = kernel.Goals.Any(goal => goal.Id.Value == actionableGoalId);
-                        var evictedStatus = isOutsideScope ? null : _evictedGoalStatusLookup(actionableGoalId);
+                        var isOutsideScope = onlyGoalId is not null && actionableGoalId != onlyGoalId;
+                        var observation = isOutsideScope ? null : _goalReloadObservation(actionableGoalId);
+                        if (observation is ConductorGoalReloadObservation.NotObserved)
+                        {
+                            intentsAwaitingReload++;
+                            EmitProgress($"OPERATOR_INTENT goal={ShortGoalId(actionableGoalId)} result=deferred reason=awaiting-goal-reload");
+                            continue;
+                        }
+                        var evictedStatus = (observation as ConductorGoalReloadObservation.Terminal)?.Status;
                         var reason = isOutsideScope
                             ? $"goal is outside conductor scope {ShortGoalId(onlyGoalId!)}"
                             : evictedStatus is not null
@@ -832,9 +840,9 @@ internal sealed partial class ConductorBatchLoop
                     setAsideGoals,
                     transientRecheckableGoalIds: checkpointHeldGoals.Keys.ToHashSet(StringComparer.Ordinal));
                 var transientLoadRecheckPending = hasTransientLoadHold?.Invoke() == true;
-                if ((keepAliveWhenIdle && watchInterval is not null) || recheckableBlockedGoals > 0 || transientLoadRecheckPending)
+                if ((keepAliveWhenIdle && watchInterval is not null) || recheckableBlockedGoals > 0 || transientLoadRecheckPending || intentsAwaitingReload > 0)
                 {
-                    if (recheckableBlockedGoals > 0 || transientLoadRecheckPending)
+                    if (recheckableBlockedGoals > 0 || transientLoadRecheckPending || intentsAwaitingReload > 0)
                     {
                         blockedRecheckCycles++;
                         totalBlockedRechecks++;

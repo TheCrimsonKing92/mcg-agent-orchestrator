@@ -1591,6 +1591,7 @@ private static bool? TryExecuteGoalCommand(string command, IReadOnlyList<string>
                 var loopReaper = new BackgroundDispatchRunner();
                 var operatorIntents = OperatorIntentCoordinator.CreateDefault(context.Workspace);
                 var evictedGoalStatuses = new Dictionary<string, GoalStatus>(StringComparer.Ordinal);
+                var intentGoalReloadObservations = new Dictionary<string, ConductorGoalReloadObservation>(StringComparer.Ordinal);
                 var parkedGoalSafetyNetTick = 0;
                 var scheduledLoadHold = context.InitialConductLoopLoadHold;
                 TerminalGoalSweepResult reconcileSweep(
@@ -1598,6 +1599,7 @@ private static bool? TryExecuteGoalCommand(string command, IReadOnlyList<string>
                     IReadOnlySet<string> checkpointHeldGoalIds)
                 {
                     loopReaper.BeginRefreshCycle();
+                    intentGoalReloadObservations.Clear();
                     // Refresh tracked goals from persisted state before every tick, then ingest newly
                     // submitted goals. This keeps role handoff decisions tied to durable task status
                     // instead of stale loop-local objects.
@@ -1610,13 +1612,26 @@ private static bool? TryExecuteGoalCommand(string command, IReadOnlyList<string>
                         var trackedGoalIdSet = trackedGoalIds.ToHashSet(StringComparer.Ordinal);
                         var actionableGoalIds = operatorIntents.ListActionableGoalIds()
                             .ToHashSet(StringComparer.Ordinal);
+                        var requestedGoalIds = trackedGoalIds.Concat(actionableGoalIds).Distinct(StringComparer.Ordinal).ToArray();
                         if (CliPersistentStateRunner.TryReloadConductLoopKernel(
-                                () => context.ReloadKernel(trackedGoalIds),
+                                () => context.ReloadKernel(requestedGoalIds),
                                 context.Workspace,
                                 conductEventLogWriter,
                                 ref scheduledLoadHold,
                                 out var reloadedKernel))
                         {
+                            // The later inbox query may see arrivals newer than this reload. Absence
+                            // only proves a missing goal for ids actually requested by a successful load.
+                            foreach (var goalId in requestedGoalIds)
+                            {
+                                intentGoalReloadObservations[goalId] =
+                                    reloadedKernel!.TryGetKnownDependencyGoalStatus(new GoalId(goalId), out var loadedStatus)
+                                        ? Enum.TryParse<GoalStatus>(loadedStatus, ignoreCase: true, out var parsedStatus) &&
+                                          (parsedStatus == GoalStatus.Completed || GoalStatusSemantics.ExcludesFromConductorWorkingSet(parsedStatus))
+                                            ? new ConductorGoalReloadObservation.Terminal(parsedStatus)
+                                            : new ConductorGoalReloadObservation.NotObserved()
+                                        : new ConductorGoalReloadObservation.Missing();
+                            }
                             loopKernel.MarkKnownDependencyGoalStatuses(
                                 reloadedKernel!.KnownDependencyGoalStatuses.Where(pair =>
                                     !checkpointHeldGoalIds.Contains(pair.Key.Value)));
@@ -1728,19 +1743,9 @@ private static bool? TryExecuteGoalCommand(string command, IReadOnlyList<string>
                     RemoteGitMirror.TryStartBackgroundProcessing(loopKernel, context.Workspace.ExecutionDirectory);
                     return terminalSweep;
                 }
-                GoalStatus? resolveEvictedGoalStatus(string goalId)
-                {
-                    if (evictedGoalStatuses.TryGetValue(goalId, out var status))
-                    {
-                        return status;
-                    }
-
-                    return context.Kernel.TryGetKnownDependencyGoalStatus(new GoalId(goalId), out var knownStatus) &&
-                           Enum.TryParse<GoalStatus>(knownStatus, ignoreCase: true, out var parsedStatus) &&
-                           GoalStatusSemantics.ExcludesFromConductorWorkingSet(parsedStatus)
-                        ? parsedStatus
-                        : null;
-                }
+                ConductorGoalReloadObservation resolveGoalReloadObservation(string goalId)
+                    => intentGoalReloadObservations.GetValueOrDefault(goalId)
+                       ?? new ConductorGoalReloadObservation.NotObserved();
                 using var loopWakeSignal = watchInterval is not null
                     ? new FileSystemWatcherConductorWakeSignal(context.Workspace.LogDirectory)
                     : null;
@@ -1767,7 +1772,7 @@ private static bool? TryExecuteGoalCommand(string command, IReadOnlyList<string>
                     selfRelaunchEnabled: ConductorBatchLoop.ResolveSelfRelaunchEnabled(
                         Environment.GetEnvironmentVariable(ConductorBatchLoop.SelfRelaunchEnabledEnvironmentVariable)),
                     postLandingCanary: postLandingCanary,
-                    evictedGoalStatusLookup: resolveEvictedGoalStatus,
+                    goalReloadObservation: resolveGoalReloadObservation,
                     lifecycleRecorder: new ConductorLifecycleRecorder(
                         new SqliteRunEventStore(context.Workspace.RunEventStorePath)),
                     blockedRecheckHeartbeatInterval: reconcileSweepOptions.HeartbeatInterval,

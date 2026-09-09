@@ -87,17 +87,13 @@ public static async Task<object?> ApplyTaskActionAsync(
 
         case "verify-manual":
             var manual = DashboardRequestParser.ParseManualVerifySubmission(body);
-            var manualVerification = ManualVerificationRecorder.Create(
-                manual.Passed,
-                manual.Note,
-                workspace.ExecutionDirectory,
-                DateTimeOffset.UtcNow);
             return await EnqueueOperatorIntentAsync(
                 workspace,
                 goal,
                 task,
                 OperatorIntentVerbs.VerifyManual,
-                new ManualVerificationOperatorIntentPayload(manualVerification),
+                new ManualVerificationOperatorIntentPayload(Request: new ManualVerificationRequest(
+                    manual.Passed, manual.Note, workspace.ExecutionDirectory)),
                 manual.IdempotencyKey);
 
         case "complete-verify":
