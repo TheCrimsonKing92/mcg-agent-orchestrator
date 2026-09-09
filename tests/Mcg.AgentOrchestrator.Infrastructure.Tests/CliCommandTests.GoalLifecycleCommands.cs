@@ -1,4 +1,4 @@
-﻿using Mcg.AgentOrchestrator.App.Cli;
+using Mcg.AgentOrchestrator.App.Cli;
 using Mcg.AgentOrchestrator.App.CostControl;
 using Mcg.AgentOrchestrator.App.Dashboard.Api;
 using Mcg.AgentOrchestrator.App.Orchestration;
@@ -3214,9 +3214,8 @@ public sealed class CliCommandTestsGoalLifecycleCleanupHooksAcceptance : CliComm
     [Xunit.Fact(DisplayName = "Cli_acceptance_pins_selected_stable_slot_and_records_receipt")]
     public void CliAcceptancePinsSelectedStableSlotAndRecordsReceipt()
     {
-        var previousRoot = Environment.GetEnvironmentVariable(DotnetBuildEnvironmentManager.IsolatedRootOverrideVariable);
         var isolatedRoot = Path.Combine(Path.GetTempPath(), $"{DotnetBuildEnvironmentManager.RootDirectoryName}-cli-{Guid.NewGuid():N}");
-        Environment.SetEnvironmentVariable(DotnetBuildEnvironmentManager.IsolatedRootOverrideVariable, isolatedRoot);
+        var storageRoot = new DotnetBuildStorageRoot(isolatedRoot);
         var root = CreateShortAcceptanceRepository();
         try
         {
@@ -3247,12 +3246,13 @@ public sealed class CliCommandTestsGoalLifecycleCleanupHooksAcceptance : CliComm
             // acceptance under the no-overflow acquisition), while still proving acceptance
             // acquires and pins its own permit regardless of an unrelated held slot.
             var goalBuildPermit =
-                DotnetBuildEnvironmentManager.CreateAttempt(goal.Id, "permit-probe").BuildPermitIndex ?? 0;
-            var foreignSlot = DotnetBuildEnvironmentManager.CreateStableSlotAttempt(goalBuildPermit == 0 ? 1 : 0);
+                DotnetBuildEnvironmentManager.CreateAttempt(goal.Id, "permit-probe", storageRoot: storageRoot).BuildPermitIndex ?? 0;
+            var foreignSlot = DotnetBuildEnvironmentManager.CreateStableSlotAttempt(goalBuildPermit == 0 ? 1 : 0, storageRoot: storageRoot);
             using var foreignSlotLock = DotnetBuildEnvironmentManager.AcquireLeaseExecutionLock(foreignSlot);
             var leaseHeldObserved = false;
             var verifier = new ProbeAcceptanceVerifier(stableSlotLease =>
             {
+                Xunit.Assert.True(storageRoot.ContainsPath(stableSlotLease!.Environment.RootPath), $"Acceptance lease root {stableSlotLease.Environment.RootPath} escaped supplied root {storageRoot.RootPath}.");
                 var reacquire = Xunit.Assert.ThrowsAny<IOException>(() =>
                     DotnetBuildEnvironmentManager.AcquireLeaseExecutionLock(
                         stableSlotLease!.Environment,
@@ -3272,7 +3272,8 @@ public sealed class CliCommandTestsGoalLifecycleCleanupHooksAcceptance : CliComm
                 ref currentGoal,
                 acceptanceVerifier: verifier,
                 phaseTimings: new CliPhaseTimingRecorder("acceptance"),
-                stableSlotAcquisitionTimeout: TimeSpan.FromSeconds(1)));
+                stableSlotAcquisitionTimeout: TimeSpan.FromSeconds(1),
+                cleanupContext: WorktreeCleanupContext.Load(attentionStoreDirectory: workspace.OrchestratorDirectory, buildStorageRoot: storageRoot)));
 
             Xunit.Assert.Equal(goalBuildPermit, verifier.LastStableSlotIndex);
             var selectedSlot = verifier.LastStableSlotLease?.Environment.SlotOwnerToken;
@@ -3289,7 +3290,6 @@ public sealed class CliCommandTestsGoalLifecycleCleanupHooksAcceptance : CliComm
         }
         finally
         {
-            Environment.SetEnvironmentVariable(DotnetBuildEnvironmentManager.IsolatedRootOverrideVariable, previousRoot);
             if (Directory.Exists(isolatedRoot))
             {
                 Directory.Delete(isolatedRoot, recursive: true);
