@@ -311,6 +311,37 @@ public sealed class TaskVerificationTests
         Assert.Equal("candidate-sha", receipt.CandidateSha);
         Assert.Equal(PreReviewEvidenceDisposition.Green, receipt.Disposition);
         Assert.Equal("receipt\\result.trx", receipt.EvidencePointer);
+        Assert.Single(restored.GetGoal(goal.Id).FindTask(reviewer.Id).PreReviewEvidenceHistory);
+    }
+
+    [Xunit.Fact(DisplayName = "PreReviewEvidenceReceipt_history_round_trips_current_candidate_constituents")]
+    public void PreReviewEvidenceReceiptHistoryRoundTripsCurrentCandidateConstituents()
+    {
+        var kernel = new AgentOrchestratorKernel();
+        var reviewer = new TaskSpec(TaskId.New(), "Review.", AgentRole.Reviewer);
+        var goal = kernel.CreateGoal("Persist pre-review evidence constituents", [reviewer]);
+        PreReviewEvidenceReceipt Create(string selection) => new(
+            goal.Id.Value,
+            1,
+            "candidate-sha",
+            [selection],
+            PreReviewEvidenceDisposition.Green,
+            1,
+            0,
+            [new PreReviewEvidenceCheckReceipt(selection, selection, true, 0)],
+            [],
+            "mapped",
+            $"receipt\\{selection}.trx",
+            DateTimeOffset.UtcNow);
+        kernel.RecordPreReviewEvidence(goal.Id, reviewer.Id, Create("First"));
+        kernel.RecordPreReviewEvidence(goal.Id, reviewer.Id, Create("Second"));
+
+        var restored = AgentOrchestratorKernel.FromSnapshot(kernel.ExportSnapshot());
+        var restoredReviewer = restored.GetGoal(goal.Id).FindTask(reviewer.Id);
+
+        Assert.Equal(["First", "Second"], restoredReviewer.PreReviewEvidenceHistory
+            .SelectMany(receipt => receipt.SelectedFocusedTests));
+        Assert.Equal("Second", Assert.Single(restoredReviewer.PreReviewEvidenceReceipt!.SelectedFocusedTests));
     }
 
     [Xunit.Fact(DisplayName = "PreReviewEvidenceReceipt_is_structurally_idempotent_and_current_head_owned")]

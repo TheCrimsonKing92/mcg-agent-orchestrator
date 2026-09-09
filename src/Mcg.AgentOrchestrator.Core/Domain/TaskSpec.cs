@@ -3,10 +3,12 @@ namespace Mcg.AgentOrchestrator.Core;
 public sealed class TaskSpec
 {
     internal const int VerificationHistoryLimit = 20;
+    internal const int PreReviewEvidenceHistoryLimit = 20;
 
     private readonly CappedVerificationHistory _verificationHistory = [];
     private readonly List<TaskDispatchRecord> _dispatchHistory = [];
     private readonly List<RetryAdmissionReceipt> _retryAdmissionHistory = [];
+    private readonly List<PreReviewEvidenceReceipt> _preReviewEvidenceHistory = [];
 
     public TaskSpec(TaskId id, string description, AgentRole requiredRole, string? verificationPlan = null)
     {
@@ -73,6 +75,11 @@ public sealed class TaskSpec
     public bool WasCancelledByConductor { get; private set; }
 
     public PreReviewEvidenceReceipt? PreReviewEvidenceReceipt { get; private set; }
+
+    public IReadOnlyList<PreReviewEvidenceReceipt> PreReviewEvidenceHistory => _preReviewEvidenceHistory;
+
+    // This is durable attempt accounting, not the bounded receipt cache length.
+    public int PreReviewEvidenceAttemptCount { get; private set; }
 
     internal void AssignTo(AgentId agentId)
     {
@@ -260,7 +267,9 @@ public sealed class TaskSpec
             _retryAdmissionHistory.ToArray(),
             RetryAdmissionHoldRoute,
             PendingReviewFindingRepairCheckpoint,
-            AcceptedRetryFeedback);
+            AcceptedRetryFeedback,
+            _preReviewEvidenceHistory.ToArray(),
+            PreReviewEvidenceAttemptCount);
     }
 
     internal static TaskSpec FromSnapshot(TaskSnapshot snapshot)
@@ -462,7 +471,13 @@ public sealed class TaskSpec
         task.PendingReviewFindingRepairCheckpoint = snapshot.PendingReviewFindingRepairCheckpoint;
         task.PendingRetryCause = snapshot.PendingRetryCause;
         task.RetryAdmissionHoldRoute = snapshot.RetryAdmissionHoldRoute;
-        task.PreReviewEvidenceReceipt = snapshot.PreReviewEvidenceReceipt;
+        task._preReviewEvidenceHistory.AddRange(
+            snapshot.PreReviewEvidenceHistory ??
+            (snapshot.PreReviewEvidenceReceipt is null ? [] : [snapshot.PreReviewEvidenceReceipt]));
+        task.PreReviewEvidenceAttemptCount = Math.Max(
+            task._preReviewEvidenceHistory.Count,
+            snapshot.PreReviewEvidenceAttemptCount);
+        task.PreReviewEvidenceReceipt = snapshot.PreReviewEvidenceReceipt ?? task._preReviewEvidenceHistory.LastOrDefault();
         task.InterruptedDispatchRecoveryId = snapshot.InterruptedDispatchRecoveryId;
         task.WasCancelledByConductor = snapshot.WasCancelledByConductor;
         return task;
@@ -639,6 +654,12 @@ public sealed class TaskSpec
             return false;
         }
 
+        _preReviewEvidenceHistory.Add(receipt);
+        PreReviewEvidenceAttemptCount++;
+        if (_preReviewEvidenceHistory.Count > PreReviewEvidenceHistoryLimit)
+        {
+            _preReviewEvidenceHistory.RemoveRange(0, _preReviewEvidenceHistory.Count - PreReviewEvidenceHistoryLimit);
+        }
         PreReviewEvidenceReceipt = receipt;
         return true;
     }
