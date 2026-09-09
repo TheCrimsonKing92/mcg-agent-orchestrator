@@ -647,26 +647,17 @@ internal sealed partial class ConductorBatchLoop
                             continue;
                         }
 
-                        var isOutsideScope = onlyGoalId is not null && actionableGoalId != onlyGoalId;
-                        var observation = isOutsideScope ? null : _goalReloadObservation(actionableGoalId);
-                        if (observation is ConductorGoalReloadObservation.NotObserved)
+                        var disposition = UnloadedGoalIntentDisposition.Decide(actionableGoalId, onlyGoalId, _goalReloadObservation);
+                        if (disposition is UnloadedGoalIntentDisposition.AwaitingReload)
                         {
                             intentsAwaitingReload++;
                             EmitProgress($"OPERATOR_INTENT goal={ShortGoalId(actionableGoalId)} result=deferred reason=awaiting-goal-reload");
                             continue;
                         }
-                        var evictedStatus = (observation as ConductorGoalReloadObservation.Terminal)?.Status;
-                        var reason = isOutsideScope
-                            ? $"goal is outside conductor scope {ShortGoalId(onlyGoalId!)}"
-                            : evictedStatus is not null
-                                ? $"goal was evicted from the conductor working set because its stored status is {evictedStatus}; the intent was not applicable"
-                                : "goal was not found in conductor state";
-                        var reasonCode = evictedStatus is not null
-                            ? OperatorIntentCoordinator.TerminalGoalEvictedReasonCode
-                            : null;
+                        var rejection = (UnloadedGoalIntentDisposition.Rejected)disposition;
                         try
                         {
-                            var rejectedLines = _operatorIntents.RejectPending(actionableGoalId, reason, reasonCode);
+                            var rejectedLines = _operatorIntents.RejectPending(actionableGoalId, rejection.Reason, rejection.ReasonCode);
                             preWalkIntentLines.AddRange(rejectedLines);
                             preWalkIntentProcessed |= rejectedLines.Count > 0;
                         }

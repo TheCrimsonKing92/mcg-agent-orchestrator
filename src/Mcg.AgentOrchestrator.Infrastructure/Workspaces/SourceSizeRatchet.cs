@@ -70,7 +70,8 @@ internal static class SourceSizeRatchet
             // brought this file to the measured post-merge size.
             // Raised for goal 8263a08c: exited-dispatch reconciliation must precede the existing failure
             // retry ladder and guard the shared dispatch-start boundary before LastProcess is replaced.
-            new SourceSizeCeiling("src/Mcg.AgentOrchestrator.App/Orchestration/ConductorDriver.cs", 6805),
+            // Goal 1592104a extracted acceptance-owned evidence recording and outstanding-obligation diagnostics.
+            new SourceSizeCeiling("src/Mcg.AgentOrchestrator.App/Orchestration/ConductorDriver.cs", 6794),
             // Raised for goal dadadfac: set-aside re-admission must be decided where the loop already holds
             // the goal, its recorded set-aside entry, and the current sweep blockers together.
             // Raised for goal 289b469d: registration-fault hold/escalation must be decided at the existing
@@ -83,7 +84,8 @@ internal static class SourceSizeRatchet
             // the goal's state/run-event maintenance leases remain scoped to the active conductor loop.
             // Raised for goal ae54b5eb: set-aside fingerprints retain lifecycle rechecks while comparing
             // retry/candidate task state independently of the kernel goal instance reloaded by admission.
-            new SourceSizeCeiling("src/Mcg.AgentOrchestrator.App/Orchestration/ConductorBatchLoop.cs", 5195),
+            // Goal 1592104a moved unloaded-intent disposition to a collaborator that retains reload evidence.
+            new SourceSizeCeiling("src/Mcg.AgentOrchestrator.App/Orchestration/ConductorBatchLoop.cs", 5193),
             // Raised for goal 18afe5f2: missing-build-evidence rejection and commit suppression
             // must run where parsed worker results and authoritative changed paths meet. Raised again
             // for goal 0d39b5a3, which adds the narrow Planner sample launch and completion-selection
@@ -118,7 +120,8 @@ internal static class SourceSizeRatchet
             // Reconciled after integrating main e1f6f11c at its measured post-merge size.
             // Goal 9fe7200e journals LOOP_READY at the existing pre-loop orchestration boundary;
             // 4855 is the measured post-merge size after that required readiness signal was wired.
-            new SourceSizeCeiling("src/Mcg.AgentOrchestrator.App/Cli/CliPersistentStateRunner.cs", 4855),
+            // Goal 1592104a extracted evidence intent submission, status output, and metadata flag parsing.
+            new SourceSizeCeiling("src/Mcg.AgentOrchestrator.App/Cli/CliPersistentStateRunner.cs", 4845),
             new SourceSizeCeiling("tests/Mcg.AgentOrchestrator.Infrastructure.Tests/GoalAcceptanceVerifierTests.cs", 1566),
             // Goal 682f25a1 re-derived this row after integrating goal c2eae988, whose fault-isolation
             // eligibility coverage had already added 173 net lines before the multi-file ratchet landed.
