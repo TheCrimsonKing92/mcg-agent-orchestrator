@@ -6,7 +6,6 @@ using Mcg.AgentOrchestrator.Core.Conductor;
 using Mcg.AgentOrchestrator.Infrastructure;
 using Microsoft.Data.Sqlite;
 
-[Xunit.Collection(TestCollections.GoalWorktreeCleanupHooks)]
 public sealed class AcceptanceCohortWorkflowTests : GoalWorktreeTestBase
 {
     [Fact]
