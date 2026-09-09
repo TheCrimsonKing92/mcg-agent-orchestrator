@@ -1,6 +1,7 @@
 using System.Buffers.Binary;
 using Mcg.AgentOrchestrator.Infrastructure;
 
+[Xunit.Collection(TestCollections.ProcessSpawning)]
 public sealed class IcaclsIntegrityLabelerTests
 {
     [Xunit.Fact]
@@ -89,6 +90,44 @@ public sealed class IcaclsIntegrityLabelerTests
     }
 
     [Xunit.Fact]
+    public void DecodeMandatoryLabelAcl_UnsupportedAclRevision_FailsClosed()
+    {
+        var acl = BuildAcl(BuildMandatoryLabelAce(0x01 | 0x02, 0x00000001, 0x00001000));
+        acl[0] = 3;
+
+        var state = IcaclsIntegrityLabeler.DecodeMandatoryLabelAcl(acl);
+
+        Assert.False(state.Low);
+        Assert.False(state.Medium);
+        Assert.False(state.Inheritable);
+    }
+
+    [Xunit.Theory]
+    [Xunit.InlineData(0x01)]
+    [Xunit.InlineData(0x02)]
+    public void DecodeMandatoryLabelAcl_PartialInheritance_IsNotTrusted(byte inheritanceFlag)
+    {
+        var state = IcaclsIntegrityLabeler.DecodeMandatoryLabelAcl(
+            BuildAcl(BuildMandatoryLabelAce(inheritanceFlag, 0x00000001, 0x00001000)));
+
+        Assert.True(state.Exists);
+        Assert.True(state.Low);
+        Assert.False(state.Medium);
+        Assert.False(state.Inheritable);
+    }
+
+    [Xunit.Fact]
+    public void DecodeMandatoryLabelAcl_WithoutMandatoryLabel_FailsClosed()
+    {
+        var state = IcaclsIntegrityLabeler.DecodeMandatoryLabelAcl(BuildAcl(BuildNonLabelAce()));
+
+        Assert.True(state.Exists);
+        Assert.False(state.Low);
+        Assert.False(state.Medium);
+        Assert.False(state.Inheritable);
+    }
+
+    [Xunit.Fact]
     public void DecodeMandatoryLabelAcl_InvalidSidLength_FailsClosed()
     {
         var malformedAce = BuildMandatoryLabelAce(0x01 | 0x02, 0x00000001, 0x00001000);
@@ -135,6 +174,35 @@ public sealed class IcaclsIntegrityLabelerTests
         Assert.False(state.Low);
         Assert.False(state.Medium);
         Assert.False(state.Inheritable);
+        Assert.NotNull(state.NativeQueryError);
+    }
+
+    [Xunit.Fact]
+    public void Query_ProductionWrittenInheritableLowLabel_RoundTripsAsTrusted()
+    {
+        if (!OperatingSystem.IsWindows())
+        {
+            return;
+        }
+
+        var root = Path.Combine(Path.GetTempPath(), "mcg-native-label-" + Guid.NewGuid().ToString("N"));
+        Directory.CreateDirectory(root);
+        try
+        {
+            var labeler = new IcaclsIntegrityLabeler();
+
+            Assert.True(labeler.SetIntegrity(root, "(OI)(CI)L", recursive: false));
+            var low = labeler.Query(root);
+            Assert.True(low.Exists);
+            Assert.True(low.Low);
+            Assert.True(low.Inheritable);
+            Assert.False(low.Medium);
+            Assert.Null(low.NativeQueryError);
+        }
+        finally
+        {
+            try { Directory.Delete(root, recursive: true); } catch { }
+        }
     }
 
     private static byte[] BuildAcl(params byte[][] aces)
@@ -165,6 +233,14 @@ public sealed class IcaclsIntegrityLabelerTests
         ace[9] = 1;
         ace[15] = 16;
         BinaryPrimitives.WriteUInt32LittleEndian(ace.AsSpan(16), rid);
+        return ace;
+    }
+
+    private static byte[] BuildNonLabelAce()
+    {
+        var ace = new byte[4];
+        ace[0] = 0x00;
+        BinaryPrimitives.WriteUInt16LittleEndian(ace.AsSpan(2), checked((ushort)ace.Length));
         return ace;
     }
 }

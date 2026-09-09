@@ -48,7 +48,12 @@ internal interface IWorkerIntegrityLabeler
     bool SetIntegrity(string path, string level, bool recursive);
 }
 
-internal sealed record IntegrityLabelState(bool Exists, bool Low, bool Inheritable, bool Medium = false);
+internal sealed record IntegrityLabelState(
+    bool Exists,
+    bool Low,
+    bool Inheritable,
+    bool Medium = false,
+    int? NativeQueryError = null);
 
 internal sealed class WorkerSandboxPreparer(IWorkerIntegrityLabeler labeler)
 {
@@ -467,6 +472,9 @@ internal sealed class IcaclsIntegrityLabeler : IWorkerIntegrityLabeler
     private const uint LabelSecurityInformation = 0x00000010;
     private const int SeFileObject = 1;
     private const int ErrorSuccess = 0;
+    private const int NativeQueryLibraryUnavailable = -1;
+    private const int NativeQueryEntryPointUnavailable = -2;
+    private const int NativeQueryUnhandledFailure = -3;
     private const int AclHeaderSize = 8;
     private const int AceHeaderSize = 4;
     private const int MandatoryLabelAceType = 0x11;
@@ -495,6 +503,10 @@ internal sealed class IcaclsIntegrityLabeler : IWorkerIntegrityLabeler
             return new IntegrityLabelState(Exists: false, Low: false, Inheritable: false);
         }
 
+        IntPtr owner = IntPtr.Zero;
+        IntPtr group = IntPtr.Zero;
+        IntPtr discretionaryAcl = IntPtr.Zero;
+        IntPtr systemAcl = IntPtr.Zero;
         IntPtr securityDescriptor = IntPtr.Zero;
         try
         {
@@ -502,14 +514,14 @@ internal sealed class IcaclsIntegrityLabeler : IWorkerIntegrityLabeler
                 path,
                 SeFileObject,
                 LabelSecurityInformation,
-                out _,
-                out _,
-                out _,
-                out var systemAcl,
+                out owner,
+                out group,
+                out discretionaryAcl,
+                out systemAcl,
                 out securityDescriptor);
             if (result != ErrorSuccess)
             {
-                return new IntegrityLabelState(Exists: false, Low: false, Inheritable: false);
+                return NativeQueryFailed(checked((int)result));
             }
 
             if (systemAcl == IntPtr.Zero || !TryCopyAcl(systemAcl, out var acl))
@@ -519,9 +531,17 @@ internal sealed class IcaclsIntegrityLabeler : IWorkerIntegrityLabeler
 
             return DecodeMandatoryLabelAcl(acl);
         }
+        catch (DllNotFoundException)
+        {
+            return NativeQueryFailed(NativeQueryLibraryUnavailable);
+        }
+        catch (EntryPointNotFoundException)
+        {
+            return NativeQueryFailed(NativeQueryEntryPointUnavailable);
+        }
         catch
         {
-            return new IntegrityLabelState(Exists: false, Low: false, Inheritable: false);
+            return NativeQueryFailed(NativeQueryUnhandledFailure);
         }
         finally
         {
@@ -534,7 +554,7 @@ internal sealed class IcaclsIntegrityLabeler : IWorkerIntegrityLabeler
 
     internal static IntegrityLabelState DecodeMandatoryLabelAcl(ReadOnlySpan<byte> acl)
     {
-        if (acl.Length < AclHeaderSize)
+        if (acl.Length < AclHeaderSize || (acl[0] is not 2 and not 4))
         {
             return new IntegrityLabelState(Exists: true, Low: false, Inheritable: false);
         }
@@ -580,6 +600,9 @@ internal sealed class IcaclsIntegrityLabeler : IWorkerIntegrityLabeler
             ? labelState
             : new IntegrityLabelState(Exists: true, Low: false, Inheritable: false);
     }
+
+    private static IntegrityLabelState NativeQueryFailed(int errorCode) =>
+        new(Exists: false, Low: false, Inheritable: false, NativeQueryError: errorCode);
 
     private static bool TryCopyAcl(IntPtr systemAcl, out byte[] acl)
     {
@@ -652,7 +675,7 @@ internal sealed class IcaclsIntegrityLabeler : IWorkerIntegrityLabeler
         return true;
     }
 
-    [DllImport("advapi32.dll", CharSet = CharSet.Unicode, SetLastError = true)]
+    [DllImport("advapi32.dll", CharSet = CharSet.Unicode)]
     private static extern uint GetNamedSecurityInfo(
         string objectName,
         int objectType,
