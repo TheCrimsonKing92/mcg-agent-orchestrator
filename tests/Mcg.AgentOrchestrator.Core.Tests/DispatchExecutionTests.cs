@@ -1967,6 +1967,96 @@ public sealed class DispatchExecutionTests
         Assert.Equal("ownership mapping required", obligation.RequiredScope);
     }
 
+    [Xunit.Fact(DisplayName = "RecordDispatchExecutionResult_duplicate restored criterion ownership fails closed without throwing")]
+    public void RecordDispatchExecutionResultDuplicateRestoredCriterionOwnershipFailsClosedWithoutThrowing()
+    {
+        var clock = new FakeClock();
+        var source = new AgentOrchestratorKernel(clock);
+        var reviewer = new TaskSpec(TaskId.New(), "Review duplicate ownership", AgentRole.Reviewer);
+        var goal = source.CreateGoal("Duplicate evidence ownership", [reviewer]);
+        source.SetGoalRefinedSpec(goal.Id, new RefinedSpec(
+            "Require an operator observation", ["native proof"], VerificationClass.RealWorldDependent, [], [])
+        {
+            OperatorOwnedAcceptanceCriteria = ["native proof"]
+        });
+        source.ActivateGoal(goal.Id, DefaultAgents());
+        source.RecordTaskDispatch(goal.Id, reviewer.Id, new TaskDispatchRecord("codex-cli", "review", "C:\\repo", clock.UtcNow));
+        var snapshot = source.ExportGoalSnapshot(goal.Id) with
+        {
+            CriterionEvidenceObligations =
+            [
+                .. source.ExportGoalSnapshot(goal.Id).CriterionEvidenceObligations,
+                source.ExportGoalSnapshot(goal.Id).CriterionEvidenceObligations[0] with { Id = "criterion-v1-0" }
+            ]
+        };
+        var kernel = AgentOrchestratorKernel.FromSnapshot(new OrchestratorSnapshot([snapshot], []), clock);
+        var restoredTask = kernel.GetGoal(goal.Id).FindTask(reviewer.Id);
+
+        kernel.RecordDispatchExecutionResult(goal.Id, reviewer.Id, new TaskVerificationRecord(
+            "review", "C:\\repo", 0,
+            StructuredReviewerResult("pass", "[]", "none",
+                """[{"criterion_index":0,"verdict":"not-verifiable","evidence":"Ownership must be repaired."}]"""),
+            string.Empty, clock.UtcNow, WorkerResultPresent: true));
+
+        Assert.Equal(WorkTaskStatus.Failed, restoredTask.Status);
+        Assert.Contains(kernel.GetGoal(goal.Id).OutstandingCriterionEvidenceObligations,
+            item => item.Owner == CriterionEvidenceOwner.Unknown && item.RequiredScope == "ownership mapping required");
+    }
+
+    [Xunit.Fact(DisplayName = "Malformed criterion obligation repair creates an attributed pending replacement and persists history")]
+    public void MalformedCriterionObligationRepairCreatesAttributedPendingReplacementAndPersistsHistory()
+    {
+        var clock = new FakeClock();
+        var source = new AgentOrchestratorKernel(clock);
+        var goal = source.CreateGoal("Repair malformed evidence", [new TaskSpec(TaskId.New(), "Implement", AgentRole.Developer)]);
+        source.SetGoalRefinedSpec(goal.Id, new RefinedSpec("Retain native proof", ["native proof"], VerificationClass.RealWorldDependent, [], []));
+        var snapshot = source.ExportGoalSnapshot(goal.Id) with
+        {
+            CriterionEvidenceObligations =
+            [
+                new CriterionEvidenceObligation("malformed-persisted-0", 99, 99, "corrupt", CriterionEvidenceOwner.Unknown,
+                    CriterionEvidenceState.Pending, "ownership mapping required", "malformed persisted obligation", clock.UtcNow)
+            ]
+        };
+        var kernel = AgentOrchestratorKernel.FromSnapshot(new OrchestratorSnapshot([snapshot], []), clock);
+        var malformed = Assert.Single(kernel.GetGoal(goal.Id).OutstandingCriterionEvidenceObligations);
+
+        var replacement = kernel.RepairMalformedCriterionEvidenceObligation(
+            goal.Id, malformed.Id, 0, 1, CriterionEvidenceOwner.Operator, "operator@example", "restore identity",
+            "operator observation", "native-proof", "candidate-123");
+        var recorded = kernel.RecordCriterionEvidence(
+            goal.Id, replacement.Id, CriterionEvidenceOwner.Operator, "candidate-123", "native-1",
+            "operator observation", true, "native proof observed");
+        var restored = AgentOrchestratorKernel.FromSnapshot(new OrchestratorSnapshot([kernel.ExportGoalSnapshot(goal.Id)], []), clock)
+            .GetGoal(goal.Id);
+
+        Assert.Equal(CriterionEvidenceState.Satisfied, recorded.State);
+        Assert.Contains(restored.CriterionEvidenceObligations,
+            item => item.Id == malformed.Id && item.State == CriterionEvidenceState.Repaired && item.Provenance.Contains("operator@example", StringComparison.Ordinal) && item.Provenance.Contains("restore identity", StringComparison.Ordinal));
+        Assert.Contains(restored.CriterionEvidenceObligations,
+            item => item.Id == replacement.Id && item.State == CriterionEvidenceState.Satisfied && item.ReceiptId == "native-1");
+    }
+
+    [Xunit.Fact(DisplayName = "Equivalent refinement carries explicit evidence mapping forward as a pending current obligation")]
+    public void EquivalentRefinementCarriesExplicitEvidenceMappingForwardAsPendingCurrentObligation()
+    {
+        var clock = new FakeClock();
+        var kernel = new AgentOrchestratorKernel(clock);
+        var goal = kernel.CreateGoal("Carry mapped ownership", [new TaskSpec(TaskId.New(), "Implement", AgentRole.Developer)]);
+        var spec = new RefinedSpec("Require current full acceptance", ["full acceptance receipt"], VerificationClass.TestVerifiable, [], []);
+        kernel.SetGoalRefinedSpec(goal.Id, spec);
+        kernel.MapCriterionEvidenceOwner(goal.Id, 0, 1, CriterionEvidenceOwner.Acceptance, "operator@example",
+            CriterionEvidenceScopes.FullAcceptanceGate, "full-gate", "candidate-123");
+
+        kernel.RecordGoalRefinement(goal.Id, spec);
+
+        var current = Assert.Single(kernel.GetGoal(goal.Id).OutstandingCriterionEvidenceObligations);
+        Assert.Equal(2, current.CriterionVersion);
+        Assert.Equal(CriterionEvidenceOwner.Acceptance, current.Owner);
+        Assert.Equal(CriterionEvidenceState.Pending, current.State);
+        Assert.Equal("candidate-123", current.ExpectedCandidateSha);
+    }
+
     [Xunit.Fact(DisplayName = "RecordDispatchExecutionResult_reviewer_pass_accepts_and_records_extra_criteria_attestations")]
     public void RecordDispatchExecutionResultReviewerPassAcceptsAndRecordsExtraCriteriaAttestations()
     {

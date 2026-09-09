@@ -564,9 +564,16 @@ public sealed partial class AgentOrchestratorKernel
                 .ToArray();
             foreach (var deferred in nonPassingVerdicts.Except(workerOwnedNonPassingVerdicts))
             {
-                var obligation = goal.CriterionEvidenceObligations.Single(item =>
+                var matches = goal.CriterionEvidenceObligations.Where(item =>
                     item.CriterionIndex == deferred.CriterionIndex &&
-                    item.CriterionVersion == goal.AuthoritativeRefinedSpecVersion!.Version);
+                    item.CriterionVersion == goal.AuthoritativeRefinedSpecVersion!.Version).ToArray();
+                if (matches.Length != 1)
+                {
+                    nonPassingCriteriaDiagnostic =
+                        $"Reviewer WORKER_RESULT criteria attestation cannot be deferred: criterion_index={deferred.CriterionIndex} has {matches.Length} authoritative obligation records; operator repair is required.";
+                    continue;
+                }
+                var obligation = matches[0];
                 Append(goal, task.Id, ProgressKind.TaskNote,
                     $"Deferred criterion evidence remains pending: obligation={obligation.Id}; owner={obligation.Owner}; " +
                     $"state={obligation.State}; next_action={obligation.RequiredScope}; reviewer_verdict={deferred.Verdict}.");
@@ -768,13 +775,14 @@ public sealed partial class AgentOrchestratorKernel
     private static bool IsWorkerOwnedCriterionObligation(Goal goal, int criterionIndex)
     {
         var version = goal.AuthoritativeRefinedSpecVersion?.Version;
-        var obligation = version is null
-            ? null
-            : goal.CriterionEvidenceObligations.SingleOrDefault(item =>
-                item.CriterionIndex == criterionIndex && item.CriterionVersion == version.Value);
+        var matches = version is null
+            ? []
+            : goal.CriterionEvidenceObligations.Where(item =>
+                item.CriterionIndex == criterionIndex && item.CriterionVersion == version.Value).ToArray();
+        var obligation = matches.Length == 1 ? matches[0] : null;
         // A legacy/malformed record has no authoritative ownership; do not
         // convert it into a deferred obligation based on worker prose.
-        return obligation is null || obligation.Owner is CriterionEvidenceOwner.Worker or CriterionEvidenceOwner.Unknown;
+        return matches.Length != 1 || obligation is null || obligation.Owner is CriterionEvidenceOwner.Worker or CriterionEvidenceOwner.Unknown;
     }
 
     private static CriterionEvidenceObligation? FindAuthoritativelyDeferredAcceptanceObligation(Goal goal, ReviewFinding finding)

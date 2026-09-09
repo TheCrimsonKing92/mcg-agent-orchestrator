@@ -16,7 +16,11 @@ public enum CriterionEvidenceState
 {
     Pending,
     Failed,
-    Satisfied
+    Satisfied,
+    // A malformed, Unknown claim may only reach this terminal history state
+    // through the attributed repair operation.  It is not evidence and it
+    // always names the replacement obligation in Detail.
+    Repaired
 }
 
 public static class CriterionEvidenceScopes
@@ -47,11 +51,11 @@ public sealed record CriterionEvidenceObligation(
 
     internal bool HasValidEvidenceState =>
         Owner is CriterionEvidenceOwner.Operator or CriterionEvidenceOwner.Acceptance or CriterionEvidenceOwner.Unknown &&
-        State is CriterionEvidenceState.Pending or CriterionEvidenceState.Failed or CriterionEvidenceState.Satisfied &&
-        (Owner != CriterionEvidenceOwner.Unknown || State == CriterionEvidenceState.Pending) &&
+        State is CriterionEvidenceState.Pending or CriterionEvidenceState.Failed or CriterionEvidenceState.Satisfied or CriterionEvidenceState.Repaired &&
+        (Owner != CriterionEvidenceOwner.Unknown || State is CriterionEvidenceState.Pending or CriterionEvidenceState.Repaired) &&
         (Owner != CriterionEvidenceOwner.Acceptance ||
          (!string.IsNullOrWhiteSpace(ExpectedCandidateSha) && RequiredScope == CriterionEvidenceScopes.FullAcceptanceGate)) &&
-        (State == CriterionEvidenceState.Pending
+        (State is CriterionEvidenceState.Pending or CriterionEvidenceState.Repaired
             ? CandidateSha is null && ReceiptId is null && Detail is null
             : CurrentReceipt() is { IsWellFormed: true } &&
               (string.IsNullOrWhiteSpace(ExpectedCandidateSha) ||
@@ -76,7 +80,7 @@ public sealed record CriterionEvidenceObligation(
         CurrentReceipt() is { } current ? [.. PriorReceipts ?? [], current] : PriorReceipts;
 
     private CriterionEvidenceReceipt? CurrentReceipt() =>
-        State != CriterionEvidenceState.Pending && CandidateSha is not null && ReceiptId is not null && Detail is not null
+        State is not (CriterionEvidenceState.Pending or CriterionEvidenceState.Repaired) && CandidateSha is not null && ReceiptId is not null && Detail is not null
             ? new(Owner, CandidateSha, ReceiptId, RequiredScope, State == CriterionEvidenceState.Satisfied,
                 Detail, Provenance, RecordedAt)
             : null;

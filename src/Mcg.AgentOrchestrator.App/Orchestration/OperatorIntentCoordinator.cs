@@ -194,6 +194,20 @@ internal sealed class OperatorIntentCoordinator
                     receipt.Passed,
                     receipt.Detail);
                 return;
+            case OperatorIntentVerbs.CriterionEvidenceRepair:
+                var repair = Deserialize<CriterionEvidenceRepairOperatorIntentPayload>(intent);
+                kernel.RepairMalformedCriterionEvidenceObligation(
+                    goal.Id,
+                    repair.MalformedObligationId,
+                    repair.CriterionIndex,
+                    repair.CriterionVersion,
+                    repair.Owner,
+                    intent.Actor,
+                    repair.Reason,
+                    repair.RequiredScope,
+                    repair.FindingStableId,
+                    repair.CandidateSha);
+                return;
         }
 
         if (intent.TaskId is null)

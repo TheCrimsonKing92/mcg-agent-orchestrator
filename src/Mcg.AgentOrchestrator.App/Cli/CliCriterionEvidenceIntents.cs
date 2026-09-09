@@ -16,6 +16,7 @@ internal static class CliCriterionEvidenceIntents
         {
             OperatorIntentVerbs.CriterionEvidenceMap => BuildCriterionEvidenceMappingPayload(values),
             OperatorIntentVerbs.CriterionEvidenceRecord => BuildCriterionEvidenceReceiptPayload(values),
+            OperatorIntentVerbs.CriterionEvidenceRepair => BuildCriterionEvidenceRepairPayload(values),
             _ => throw new ArgumentException($"Unsupported criterion evidence command '{args[0]}'.")
         };
         var intentId = Guid.NewGuid().ToString("N");
@@ -93,6 +94,20 @@ internal static class CliCriterionEvidenceIntents
         }
 
         return new CriterionEvidenceReceiptOperatorIntentPayload(values[0], owner, values[2], values[3], values[4], isPassed, values[6]);
+    }
+
+    private static CriterionEvidenceRepairOperatorIntentPayload BuildCriterionEvidenceRepairPayload(IReadOnlyList<string> values)
+    {
+        var usage = CliCommandHelp.CriterionEvidenceRepairUsage["Usage: ".Length..];
+        if (values.Count != 8 || !int.TryParse(values[1], out var index) || !int.TryParse(values[2], out var version) ||
+            !Enum.TryParse<CriterionEvidenceOwner>(values[3], true, out var owner) ||
+            owner is CriterionEvidenceOwner.Worker or CriterionEvidenceOwner.Unknown)
+        {
+            throw new ArgumentException($"Usage: {usage}");
+        }
+
+        return new CriterionEvidenceRepairOperatorIntentPayload(
+            values[0], index, version, owner, values[4], values[5], values[6], values[7]);
     }
 
     public static void PrintStatus(

@@ -7,6 +7,7 @@ public static class OperatorIntentVerbs
     public const string VerifyManual = "verify-manual";
     public const string CriterionEvidenceMap = "criterion-evidence-map";
     public const string CriterionEvidenceRecord = "criterion-evidence-record";
+    public const string CriterionEvidenceRepair = "criterion-evidence-repair";
 }
 
 // These payloads state an operator's attributed request. They do not mutate a
@@ -27,3 +28,13 @@ public sealed record CriterionEvidenceReceiptOperatorIntentPayload(
     string Scope,
     bool Passed,
     string Detail);
+
+public sealed record CriterionEvidenceRepairOperatorIntentPayload(
+    string MalformedObligationId,
+    int CriterionIndex,
+    int CriterionVersion,
+    CriterionEvidenceOwner Owner,
+    string RequiredScope,
+    string FindingStableId,
+    string CandidateSha,
+    string Reason);

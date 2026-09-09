@@ -2280,6 +2280,21 @@ public sealed partial class AgentOrchestratorKernel
         GetGoal(goalId).RecordCriterionEvidence(
             obligationId, owner, candidateSha, receiptId, scope, passed, detail, _clock.UtcNow);
 
+    public CriterionEvidenceObligation RepairMalformedCriterionEvidenceObligation(
+        GoalId goalId,
+        string malformedObligationId,
+        int criterionIndex,
+        int criterionVersion,
+        CriterionEvidenceOwner owner,
+        string actor,
+        string reason,
+        string? requiredScope = null,
+        string? findingStableId = null,
+        string? expectedCandidateSha = null) =>
+        GetGoal(goalId).RepairMalformedCriterionEvidenceObligation(
+            malformedObligationId, criterionIndex, criterionVersion, owner, actor, reason, _clock.UtcNow,
+            requiredScope, findingStableId, expectedCandidateSha);
+
     public RefinedSpecVersion RecordGoalRefinement(GoalId goalId, RefinedSpec spec)
     {
         return GetGoal(goalId).RecordRefinedSpec(spec, _clock.UtcNow);

@@ -55,6 +55,14 @@ private static bool HandleWorkspaceCommand(CliExecutionContext context, IReadOnl
             return false;
 
         case "merge":
+            var outstandingEvidence = context.Kernel.GetGoal(goal.Id).OutstandingCriterionEvidenceObligations;
+            if (outstandingEvidence.Count > 0)
+            {
+                Console.WriteLine(
+                    "Workspace merge blocked by outstanding criterion evidence: " +
+                    string.Join(", ", outstandingEvidence.Select(item => $"{item.Id}:{item.Owner}:{item.State}")));
+                return false;
+            }
             var engineHealth = PostLandingCanaryFactory.CreateCircuit(context.Workspace).Read();
             var engineDecision = AcceptanceEngineAcceptanceGate.Decide(
                 engineHealth.Health,

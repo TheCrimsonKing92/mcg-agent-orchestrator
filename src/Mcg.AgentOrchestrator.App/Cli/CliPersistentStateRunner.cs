@@ -630,7 +630,8 @@ internal static partial class CliPersistentStateRunner
     internal static bool IsCriterionEvidenceMutationCommand(IReadOnlyList<string> args) =>
         args.Count > 0 && args[0].ToLowerInvariant() is
             OperatorIntentVerbs.CriterionEvidenceMap or
-            OperatorIntentVerbs.CriterionEvidenceRecord;
+            OperatorIntentVerbs.CriterionEvidenceRecord or
+            OperatorIntentVerbs.CriterionEvidenceRepair;
 
     private static bool IsOperatorIntentStatusCommand(IReadOnlyList<string> args) =>
         args.Count > 0 &&
@@ -4052,6 +4053,22 @@ internal static partial class CliPersistentStateRunner
                             var guardedResult = GuardedAcceptanceAbort(
                                 request.GoalId,
                                 headMismatch,
+                                request.PassingGateReceiptRecorded);
+                            return Task.FromResult<(bool ShouldSave, GoalSnapshot? NewSnapshot, (AcceptanceMergeCommitResult Result, GoalSnapshot Snapshot) Result)>(
+                                (false, snapshot, (guardedResult, snapshot)));
+                        }
+
+                        var outstandingEvidence = transactionKernel.GetGoal(request.GoalId).OutstandingCriterionEvidenceObligations;
+                        if (outstandingEvidence.Count > 0)
+                        {
+                            var evidenceMismatch = new AcceptanceMergeGuardMismatch(
+                                AcceptanceMergeGuardMismatchKind.CriterionEvidence,
+                                "Outstanding criterion evidence",
+                                "none",
+                                string.Join(", ", outstandingEvidence.Select(item => $"{item.Id}:{item.Owner}:{item.State}")));
+                            var guardedResult = GuardedAcceptanceAbort(
+                                request.GoalId,
+                                evidenceMismatch,
                                 request.PassingGateReceiptRecorded);
                             return Task.FromResult<(bool ShouldSave, GoalSnapshot? NewSnapshot, (AcceptanceMergeCommitResult Result, GoalSnapshot Snapshot) Result)>(
                                 (false, snapshot, (guardedResult, snapshot)));
