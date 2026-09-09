@@ -40,7 +40,10 @@ public sealed record LoopHealthSnapshot(
     int FiveRoleGoalCount = 0,
     int RetryFingerprintUnavailableCount = 0,
     int RetryPaidAuthorityUnknownCount = 0,
-    int RetryCauseUnavailableCount = 0);
+    int RetryCauseUnavailableCount = 0,
+    int EvidenceAttemptCount = 0,
+    long EvidenceElapsedMilliseconds = 0,
+    int EvidenceProviderUsageUnavailableCount = 0);
 
 public static class LoopHealthReport
 {
@@ -156,6 +159,11 @@ public static class LoopHealthReport
         var paidAuthorityUnknown = allTasks.Sum(task => task.DispatchHistory
             .Skip(1)
             .Count(dispatch => dispatch.PaidRoute == PaidRouteClassification.Unknown));
+        var evidenceReceipts = allTasks.SelectMany(task => task.PreReviewEvidenceHistory).ToList();
+        var evidenceAttemptCount = evidenceReceipts.Count;
+        // Focused receipts deliberately do not infer provider usage or wall time from check
+        // artifacts.  Zero is an unavailable value, not a claimed duration.
+        const long evidenceElapsedMilliseconds = 0;
 
         return new LoopHealthSnapshot(
             window.Count,
@@ -183,7 +191,10 @@ public static class LoopHealthReport
             fiveRoleGoals,
             fingerprintUnavailable,
             paidAuthorityUnknown,
-            legacyCauseUnavailable);
+            legacyCauseUnavailable,
+            evidenceAttemptCount,
+            evidenceElapsedMilliseconds,
+            evidenceAttemptCount);
     }
 
     // Emitted by BackgroundDispatchRunner when a dispatch exits 0 but the file-change guard fires.

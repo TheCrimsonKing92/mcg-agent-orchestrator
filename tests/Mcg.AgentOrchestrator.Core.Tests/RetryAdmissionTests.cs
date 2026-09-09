@@ -122,6 +122,33 @@ public sealed class RetryAdmissionTests
     }
 
     [Xunit.Fact]
+    public void IdenticalNonPaidRetryIsAlsoPrevented()
+    {
+        var task = RetryingTask();
+        var firstAttempt = DateTimeOffset.Parse("2026-08-25T12:01:00Z");
+        var secondAttempt = firstAttempt.AddMinutes(1);
+        var fingerprint = RetryContextFingerprintBuilder.Build(Input() with { PaidRoute = PaidRouteClassification.NonPaid });
+        task.RecordDispatch(Dispatch(firstAttempt, fingerprint) with { PaidRoute = PaidRouteClassification.NonPaid });
+        var allowed = RetryAdmissionPolicy.Evaluate(
+            task, fingerprint, PaidRouteClassification.NonPaid, RetryCause.NewSourceFinding,
+            firstAttempt, firstAttempt);
+        task.RecordRetryAdmission(allowed.Receipt);
+        task.MarkRetryAdmissionStarted(firstAttempt, firstAttempt.AddSeconds(1));
+        task.RecordVerification(new TaskVerificationRecord(
+            "worker", "worktree", 1, "", "failed", firstAttempt.AddSeconds(2),
+            DispatchStartedAt: firstAttempt.AddSeconds(1)));
+        task.RecordRetry(secondAttempt.AddSeconds(-1), RetryCause.NewSourceFinding);
+        task.RecordDispatch(Dispatch(secondAttempt, fingerprint) with { PaidRoute = PaidRouteClassification.NonPaid });
+
+        var prevented = RetryAdmissionPolicy.Evaluate(
+            task, fingerprint, PaidRouteClassification.NonPaid, RetryCause.NewSourceFinding,
+            secondAttempt, secondAttempt);
+
+        Assert.Equal(RetryAdmissionDecision.Prevented, prevented.Decision);
+        Assert.Equal(RetryCause.UnchangedContextRepeat, prevented.Receipt.Cause);
+    }
+
+    [Xunit.Fact]
     public void SuccessfulPaidAttemptDoesNotSuppressLaterIdenticalRetry()
     {
         var task = RetryingTask();

@@ -1446,7 +1446,7 @@ internal sealed partial class ConductorDriver
 
         if (result.Processes.Tasks.Count > 0)
         {
-            return DispatchStartOutcome.Started();
+            return DispatchStartOutcome.Started(result.Processes.Tasks);
         }
 
         if (result.Processes.StartFailures?.FirstOrDefault() is { } startFailure)
@@ -1477,7 +1477,7 @@ internal sealed partial class ConductorDriver
 
         if (result.Tasks.Count > 0)
         {
-            return DispatchStartOutcome.Started();
+            return DispatchStartOutcome.Started(result.Tasks);
         }
 
         if (result.StartFailures?.FirstOrDefault() is { } startFailure)
@@ -4717,7 +4717,7 @@ internal sealed partial class ConductorDriver
         var startClock = Stopwatch.StartNew();
         var outcome = start(goal, policy);
         startClock.Stop();
-        EmitPhaseTiming("dispatch-prep", dispatchTimingGoal, startClock.Elapsed, $"tasks={CountAssignedTasks(dispatchTimingGoal)} result={outcome.Category}");
+        EmitPhaseTiming("dispatch-prep", dispatchTimingGoal, outcome, startClock.Elapsed, $"result={outcome.Category}");
         goal = GetCurrentGoal(goal);
         if (outcome.Category == DispatchStartOutcomeCategory.RecoverableSandboxPrep)
         {
@@ -4732,7 +4732,7 @@ internal sealed partial class ConductorDriver
             startClock.Restart();
             outcome = retryStart(goal, policy);
             startClock.Stop();
-            EmitPhaseTiming("dispatch-prep", dispatchTimingGoal, startClock.Elapsed, $"tasks={CountAssignedTasks(dispatchTimingGoal)} result={outcome.Category} retry=sandbox-prep");
+            EmitPhaseTiming("dispatch-prep", dispatchTimingGoal, outcome, startClock.Elapsed, $"result={outcome.Category} retry=sandbox-prep");
             goal = GetCurrentGoal(goal);
         }
 
@@ -4753,7 +4753,7 @@ internal sealed partial class ConductorDriver
             startClock.Restart();
             outcome = retryStart(goal, policy);
             startClock.Stop();
-            EmitPhaseTiming("dispatch-prep", dispatchTimingGoal, startClock.Elapsed, $"tasks={CountAssignedTasks(dispatchTimingGoal)} result={outcome.Category} retry=spawn-failed");
+            EmitPhaseTiming("dispatch-prep", dispatchTimingGoal, outcome, startClock.Elapsed, $"result={outcome.Category} retry=spawn-failed");
             goal = GetCurrentGoal(goal);
             if (outcome.Category == DispatchStartOutcomeCategory.EmptyBatch)
             {
@@ -5671,6 +5671,22 @@ internal sealed partial class ConductorDriver
         {
             PhaseTimingSink?.Invoke(
                 $"phase={phase} goal={goal.Id.Value[..8]} task={task.Id.Value[..8]} role={task.RequiredRole} elapsed_ms={(long)elapsed.TotalMilliseconds} {detail}");
+        }
+    }
+
+    private void EmitPhaseTiming(string phase, Goal goal, DispatchStartOutcome outcome, TimeSpan elapsed, string detail)
+    {
+        var dispatched = outcome.DispatchedTasks ?? [];
+        if (dispatched.Count == 0)
+        {
+            EmitGoalPhaseTiming(phase, goal, elapsed, detail);
+            return;
+        }
+
+        foreach (var task in dispatched)
+        {
+            PhaseTimingSink?.Invoke(
+                $"phase={phase} goal={goal.Id.Value[..8]} task={task.TaskId.Value[..8]} role={task.Role} elapsed_ms={(long)elapsed.TotalMilliseconds} {detail}");
         }
     }
 

@@ -20,6 +20,8 @@ internal sealed class OperatorIntentCoordinator
     private readonly Dictionary<string, List<(string IntentId, string Outcome)>> _pendingCompletions =
         new(StringComparer.Ordinal);
 
+    private enum RetryClarificationHandling { NotRequired, AwaitingAnswer, Resumed }
+
     public OperatorIntentCoordinator(
         IOperatorIntentStore store,
         Func<DateTimeOffset>? utcNow = null,
@@ -73,14 +75,27 @@ internal sealed class OperatorIntentCoordinator
 
             try
             {
-                Apply(kernel, goal, intent);
+                var retryClarification = HandleRetryClarification(kernel, goal, intent);
+                if (retryClarification == RetryClarificationHandling.AwaitingAnswer)
+                {
+                    lines.Add($"OPERATOR_INTENT id={intent.Id} verb={intent.Verb} goal={goal.Id.Value[..8]} result=awaiting-retry-cause");
+                    mutated = true;
+                    break;
+                }
+
+                if (retryClarification != RetryClarificationHandling.Resumed)
+                {
+                    Apply(kernel, goal, intent);
+                }
                 kernel.RecordGoalPolicyDecision(
                     goal.Id,
                     $"{marker} verb={intent.Verb} task={intent.TaskId ?? "none"} actor={intent.Actor} channel={intent.Channel} auth={intent.AuthenticationAssurance}");
-                var outcome = $"Applied {intent.Verb} to goal {goal.Id.Value[..8]}" +
+                var outcome = (retryClarification == RetryClarificationHandling.Resumed
+                    ? "Applied retry continuation to goal "
+                    : $"Applied {intent.Verb} to goal ") + goal.Id.Value[..8] +
                     (intent.TaskId is null ? "." : $" task {intent.TaskId[..Math.Min(8, intent.TaskId.Length)]}.");
                 AddPendingCompletion(goal.Id.Value, intent.Id, outcome);
-                lines.Add($"OPERATOR_INTENT id={intent.Id} verb={intent.Verb} goal={goal.Id.Value[..8]} result=applied-pending-commit");
+                lines.Add($"OPERATOR_INTENT id={intent.Id} verb={intent.Verb} goal={goal.Id.Value[..8]} result={(retryClarification == RetryClarificationHandling.Resumed ? "retry-resumed-pending-commit" : "applied-pending-commit")}");
                 mutated = true;
                 break;
             }
@@ -203,24 +218,6 @@ internal sealed class OperatorIntentCoordinator
                     AutonomyAction.Retry,
                     OperatorIntentVerbs.Retry,
                     allowed: true);
-                if (retry.RetryCause is null or RetryCause.Unknown)
-                {
-                    kernel.RequestHumanInputDeduplicated(
-                        goal.Id,
-                        taskId,
-                        "The operator retry request has an Unknown retry cause. Classify the cause as " +
-                        "NewSourceFinding, NewTestFinding, CriterionEvidenceOwnerMismatch, " +
-                        "EnvironmentApparatusFailure, ContractClarification, MainDriftConflict, " +
-                        "ProviderInterruption, or UnchangedContextRepeat; then resubmit the retry with " +
-                        "the explicit cause. No retry was admitted.",
-                        HumanWaitKind.SpecClarification,
-                        isAutoDefaultable: false,
-                        isDismissible: false,
-                        isAnswerRequired: true,
-                        isExternallyBlocked: false,
-                        blockerFingerprint: $"operator-retry-cause:{intent.Id}");
-                    break;
-                }
                 kernel.RetryTaskWithAuthoritativeFeedback(
                     goal.Id,
                     taskId,
@@ -242,6 +239,68 @@ internal sealed class OperatorIntentCoordinator
             default:
                 throw new InvalidOperationException($"Unsupported operator intent verb '{intent.Verb}'.");
         }
+    }
+
+    private static RetryClarificationHandling HandleRetryClarification(
+        AgentOrchestratorKernel kernel,
+        Goal goal,
+        OperatorIntentRecord intent)
+    {
+        if (intent.Verb != OperatorIntentVerbs.Retry)
+            return RetryClarificationHandling.NotRequired;
+
+        var retry = Deserialize<RetryOperatorIntentPayload>(intent);
+        if (retry.RetryCause is not null and not RetryCause.Unknown)
+            return RetryClarificationHandling.NotRequired;
+
+        if (intent.TaskId is null)
+            throw new InvalidOperationException("Operator retry intent is missing its task identity.");
+
+        var taskId = new TaskId(intent.TaskId);
+        var blockerFingerprint = $"operator-retry-cause:{intent.Id}";
+        var clarification = kernel.HumanInputRequests
+            .Where(request => request.GoalId == goal.Id && request.TaskId == taskId)
+            .SingleOrDefault(request => string.Equals(request.BlockerFingerprint, blockerFingerprint, StringComparison.Ordinal));
+        if (clarification is null)
+        {
+            kernel.RequestHumanInputDeduplicated(
+                goal.Id,
+                taskId,
+                "The operator retry request has an Unknown retry cause. Classify the cause as " +
+                "NewSourceFinding, NewTestFinding, CriterionEvidenceOwnerMismatch, " +
+                "EnvironmentApparatusFailure, ContractClarification, MainDriftConflict, " +
+                "ProviderInterruption, or UnchangedContextRepeat. The original retry will resume automatically after this answer.",
+                HumanWaitKind.SpecClarification,
+                isAutoDefaultable: false,
+                isDismissible: false,
+                isAnswerRequired: true,
+                isExternallyBlocked: false,
+                blockerFingerprint: blockerFingerprint);
+            return RetryClarificationHandling.AwaitingAnswer;
+        }
+
+        if (!clarification.IsCompleted || string.IsNullOrWhiteSpace(clarification.Answer))
+            return RetryClarificationHandling.AwaitingAnswer;
+
+        if (!Enum.TryParse<RetryCause>(clarification.Answer.Trim(), ignoreCase: true, out var cause) ||
+            cause == RetryCause.Unknown)
+        {
+            throw new InvalidOperationException(
+                $"Retry cause answer for intent '{intent.Id}' is not a supported explicit retry cause.");
+        }
+
+        kernel.RetryTaskWithAuthoritativeFeedback(
+            goal.Id,
+            taskId,
+            retry.Message,
+            retryCause: cause,
+            retryRoundKind: retry.RetryRoundKind,
+            invalidateDownstream: true);
+        GoalLifecycleCommands.RecordCapabilityWarnings(
+            kernel,
+            goal.Id,
+            GoalObjectivePlanner.BuildCapabilityWarnings(retry.Message));
+        return RetryClarificationHandling.Resumed;
     }
 
     private string? TryResolveGoalHead(GoalId goalId)

@@ -3,6 +3,7 @@ namespace Mcg.AgentOrchestrator.Core;
 public sealed class TaskSpec
 {
     internal const int VerificationHistoryLimit = 20;
+    internal const int PreReviewEvidenceHistoryLimit = 20;
 
     private readonly CappedVerificationHistory _verificationHistory = [];
     private readonly List<TaskDispatchRecord> _dispatchHistory = [];
@@ -643,6 +644,10 @@ public sealed class TaskSpec
         }
 
         _preReviewEvidenceHistory.Add(receipt);
+        if (_preReviewEvidenceHistory.Count > PreReviewEvidenceHistoryLimit)
+        {
+            _preReviewEvidenceHistory.RemoveRange(0, _preReviewEvidenceHistory.Count - PreReviewEvidenceHistoryLimit);
+        }
         PreReviewEvidenceReceipt = receipt;
         return true;
     }

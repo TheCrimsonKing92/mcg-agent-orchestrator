@@ -345,9 +345,20 @@ public sealed class OperatorIntentStoreTests
             Xunit.Assert.DoesNotContain(
                 goal.Timeline,
                 item => item.TaskId == task.Id && item.Kind == ProgressKind.TaskRetried);
-            coordinator.CompletePersisted([goal.Id]);
-            var outcome = await store.GetAsync(intent.Id);
-            Xunit.Assert.Equal(OperatorIntentStatus.Applied, outcome!.Status);
+            Xunit.Assert.Equal(OperatorIntentStatus.Claimed, (await store.GetAsync(intent.Id))!.Status);
+
+            var restored = AgentOrchestratorKernel.FromSnapshot(kernel.ExportSnapshot());
+            var restoredGoal = restored.GetGoal(goal.Id);
+            var restoredRequest = Xunit.Assert.Single(restored.GetPendingHumanInput(goal.Id));
+            restored.SubmitHumanInput(restoredRequest.Id, nameof(RetryCause.NewSourceFinding));
+            var resumedCoordinator = new OperatorIntentCoordinator(store);
+            var resumed = resumedCoordinator.ExecutePending(restored, restoredGoal);
+            Xunit.Assert.True(resumed.MutatedGoalState);
+            Xunit.Assert.Equal(RetryCause.NewSourceFinding, restored.GetTask(goal.Id, task.Id).PendingRetryCause);
+            Xunit.Assert.Single(restoredGoal.Timeline.Where(item =>
+                item.TaskId == task.Id && item.Kind == ProgressKind.TaskRetried));
+            resumedCoordinator.CompletePersisted([goal.Id]);
+            Xunit.Assert.Equal(OperatorIntentStatus.Applied, (await store.GetAsync(intent.Id))!.Status);
         }
         finally
         {

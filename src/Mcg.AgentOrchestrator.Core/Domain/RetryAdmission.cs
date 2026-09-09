@@ -470,9 +470,11 @@ public static class RetryAdmissionPolicy
                 reservationLeaseExpiresAt);
         }
 
-        var priorSameContext = isPaidRetry
+        // The same source/evidence context is unsafe to repeat regardless of whether the
+        // launcher happens to charge for this attempt.  Paid retry accounting remains a
+        // separate metric; it is not an admission authority.
+        var priorSameContext = task.LatestRetryAt is not null
             ? task.RetryAdmissionHistory.LastOrDefault(receipt =>
-                receipt.PaidRoute == PaidRouteClassification.Paid &&
                 receipt.LinkedDispatchAt != linkedDispatchAt &&
                 receipt.Fingerprint == fingerprint &&
                 receipt.Decision is RetryAdmissionDecision.Allowed or RetryAdmissionDecision.ResumedReservation &&
