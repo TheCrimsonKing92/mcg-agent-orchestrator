@@ -785,7 +785,7 @@ internal sealed partial class ConductorDriver
         _focusedEvidenceRunnerConfigured = true;
 
         _retryTask = (goalId, taskId, message, retryRoundKind, cause) =>
-            kernel.RetryTask(goalId, taskId, message, retryRoundKind: retryRoundKind, retryCause: cause);
+            kernel.RetryTaskAutomatically(goalId, taskId, message, retryRoundKind: retryRoundKind, retryCause: cause);
         _recordTaskNote = (goalId, taskId, message) =>
         {
             kernel.RecordTaskNote(goalId, taskId, message);

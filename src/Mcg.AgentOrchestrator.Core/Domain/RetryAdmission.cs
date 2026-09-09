@@ -357,7 +357,7 @@ public static class RetryContextFingerprintFactory
                 goal.RefinedSpec,
                 goal.EffectiveAcceptanceCriteriaCorrections);
         var latestOperatorRetryFeedback = goal.Timeline
-            .Where(item => item.TaskId == task.Id && item.Kind == ProgressKind.TaskRetried)
+            .Where(item => item.TaskId == task.Id && item.Kind is ProgressKind.TaskRetried or ProgressKind.TaskRetryFeedbackUpdated)
             .OrderBy(item => item.OccurredAt)
             .LastOrDefault()?.Message;
         var retryFeedback = task.CriterionRetryFeedback
