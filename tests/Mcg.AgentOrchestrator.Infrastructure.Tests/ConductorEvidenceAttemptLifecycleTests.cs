@@ -15,7 +15,7 @@ public sealed class ConductorEvidenceAttemptLifecycleTests
         var root = CreateTempDirectory();
         using var holderAcquired = new ManualResetEventSlim();
         using var holderRelease = new ManualResetEventSlim();
-        var holder = Task.Run(() =>
+        var holder = Task.Factory.StartNew(() =>
         {
             using var mutex = new Mutex(false, StorageRetentionMaintenance.AttemptLeaseNameFor(root));
             mutex.WaitOne();
@@ -28,13 +28,13 @@ public sealed class ConductorEvidenceAttemptLifecycleTests
             {
                 mutex.ReleaseMutex();
             }
-        });
+        }, CancellationToken.None, TaskCreationOptions.LongRunning | TaskCreationOptions.DenyChildAttach, TaskScheduler.Default);
 
         string? receipt = null;
-        var started = Stopwatch.StartNew();
         try
         {
             Assert.True(holderAcquired.Wait(TimeSpan.FromSeconds(10)));
+            var started = Stopwatch.StartNew();
             var exception = Assert.Throws<TimeoutException>(() =>
                 StorageRetentionMaintenance.AcquireAttemptWriterLease(
                     root,
