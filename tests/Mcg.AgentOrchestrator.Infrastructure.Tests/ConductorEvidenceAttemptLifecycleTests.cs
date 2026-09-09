@@ -1109,7 +1109,7 @@ public sealed class ConductorEvidenceAttemptLifecycleTests
             var sequenceBefore = File.ReadAllText(sequencePath);
             using var holderAcquired = new ManualResetEventSlim();
             using var holderRelease = new ManualResetEventSlim();
-            var holder = Task.Run(() =>
+            var holder = Task.Factory.StartNew(() =>
             {
                 using var lease = StorageRetentionMaintenance.AcquireAttemptWriterLease(goalDirectory);
                 holderAcquired.Set();
@@ -1117,7 +1117,7 @@ public sealed class ConductorEvidenceAttemptLifecycleTests
                 {
                     throw new TimeoutException("Acceptance writer lease release signal was not observed.");
                 }
-            });
+            }, CancellationToken.None, TaskCreationOptions.LongRunning | TaskCreationOptions.DenyChildAttach, TaskScheduler.Default);
             Assert.True(holderAcquired.Wait(TimeSpan.FromSeconds(30)), "Acceptance writer lease was not acquired.");
 
             using var replacementAtLeaseBoundary = new ManualResetEventSlim();
@@ -1128,11 +1128,11 @@ public sealed class ConductorEvidenceAttemptLifecycleTests
                 acquireStableSlotLease: (_, _) => null,
                 attemptWriterLeaseAcquiringForTests: replacementAtLeaseBoundary.Set);
             var replacementCandidate = ConductorParallelAcceptanceCandidate.Create(goal, 0, [], "branch-2", "main-1");
-            var replacementTask = Task.Run(() => replacementCoordinator.EvaluateFocusedEvidence(
+            var replacementTask = Task.Factory.StartNew(() => replacementCoordinator.EvaluateFocusedEvidence(
                 replacementCandidate,
                 ConductorAutonomyPolicy.Permissive,
                 "run focused tests",
-                PassingEvidence));
+                PassingEvidence), CancellationToken.None, TaskCreationOptions.LongRunning | TaskCreationOptions.DenyChildAttach, TaskScheduler.Default);
 
             string sequenceWhileLeaseHeld;
             AcceptanceArtifactWriterLeaseBusyException leaseBusy;
