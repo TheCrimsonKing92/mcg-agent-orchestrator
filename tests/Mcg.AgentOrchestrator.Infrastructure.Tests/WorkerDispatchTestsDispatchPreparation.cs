@@ -868,7 +868,14 @@ public sealed class WorkerDispatchTestsDispatchPreparation : WorkerDispatchTestS
             [],
             []));
         var agent = SubscriptionPlannerAgent("planner", "Planner");
-        var agents = new[] { agent };
+        var testerAgent = new AgentDefinition(
+            new AgentId("tester"),
+            "Tester",
+            AgentRole.Tester,
+            new ModelProfile("OpenAI", AgentCatalog.OpenAiSubscriptionModelAlias, ModelCapability.Text, SubscriptionMode.ApiKey),
+            ExecutionPolicy: AgentExecutionPolicy.SubscriptionOnly,
+            Subscription: new SubscriptionLaunchProfile("codex-cli", AgentCatalog.OpenAiSubscriptionModelAlias, "low"));
+        var agents = new[] { agent, testerAgent };
         var profiles = DispatchTestProfiles();
         kernel.ActivateGoal(goal.Id, agents);
         kernel.RetryTask(
@@ -903,41 +910,68 @@ public sealed class WorkerDispatchTestsDispatchPreparation : WorkerDispatchTestS
             retryCause: RetryCause.ContractClarification);
         var completedSibling = kernel.AddTask(
             goal.Id,
-            AgentRole.Planner,
-            "Preserve completed sibling evidence during retry admission.",
+            AgentRole.Tester,
+            "Preserve reconciled tester evidence during retry admission.",
             agents);
         kernel.RecordTaskDispatch(
             goal.Id,
             completedSibling.Id,
-            new TaskDispatchRecord("completed sibling", "completed sibling", workingDirectory, firstAt));
-        new SqliteOrchestratorStateRepository(workspace.SqliteStatePath)
-            .SaveAsync(kernel)
-            .GetAwaiter()
-            .GetResult();
-        var repository = new SqliteOrchestratorStateRepository(workspace.SqliteStatePath);
-        var tickBaselines = kernel.ExportSnapshot().Goals.ToDictionary(snapshot => snapshot.Id, StringComparer.Ordinal);
+            new TaskDispatchRecord("tester", "tester", workingDirectory, firstAt));
         var siblingProcess = new TaskProcessRecord(
             4201,
-            "completed sibling",
+            "tester",
             workingDirectory,
             Path.Combine(root, "sibling.out.log"),
             Path.Combine(root, "sibling.err.log"),
             Path.Combine(root, "sibling.exit"),
             firstAt,
-            firstAt.AddSeconds(1),
-            0);
-        kernel.RecordTaskProcessRefreshed(
+            null,
+            null);
+        kernel.RecordTaskProcessStarted(
             goal.Id,
             completedSibling.Id,
-            siblingProcess,
+            siblingProcess);
+        kernel.RecordTaskVerification(
+            goal.Id,
+            completedSibling.Id,
             new TaskVerificationRecord(
-                "completed sibling",
+                "tester",
                 workingDirectory,
                 0,
                 "sibling complete",
                 string.Empty,
                 firstAt.AddSeconds(1)));
-        kernel.ReportTaskProgress(goal.Id, completedSibling.Id, WorkTaskStatus.Completed, "Sibling completed.");
+        var beforeReconcile = kernel.ExportGoalSnapshot(goal.Id);
+        var staleTester = beforeReconcile.Tasks.Single(task => task.Id == completedSibling.Id.Value) with
+        {
+            Status = WorkTaskStatus.Assigned,
+            LastProcess = new TaskProcessSnapshot(
+                siblingProcess.ProcessId,
+                siblingProcess.Command,
+                siblingProcess.WorkingDirectory,
+                siblingProcess.StandardOutputPath,
+                siblingProcess.StandardErrorPath,
+                siblingProcess.ExitCodePath,
+                siblingProcess.StartedAt,
+                siblingProcess.CompletedAt,
+                siblingProcess.ExitCode)
+        };
+        kernel = AgentOrchestratorKernel.FromSnapshot(kernel.ExportSnapshot() with
+        {
+            Goals = [beforeReconcile with
+            {
+                Tasks = beforeReconcile.Tasks
+                    .Select(task => task.Id == completedSibling.Id.Value ? staleTester : task)
+                    .ToArray()
+            }]
+        });
+        goal = kernel.GetGoal(goal.Id);
+        var repository = new SqliteOrchestratorStateRepository(workspace.SqliteStatePath);
+        repository.SaveAsync(kernel).GetAwaiter().GetResult();
+        var tickBaselines = kernel.ExportSnapshot().Goals.ToDictionary(snapshot => snapshot.Id, StringComparer.Ordinal);
+        DispatchExitArtifacts.Write(
+            siblingProcess.ExitCodePath,
+            DispatchExitArtifacts.Native(0, "tester exited", firstAt.AddSeconds(1)));
         const string unsavedNote = "unsaved-note-under-test";
         kernel.RecordTaskNote(goal.Id, planner.Id, unsavedNote);
         Assert.Contains(kernel.GetGoal(goal.Id).Timeline, item =>
@@ -1000,21 +1034,27 @@ public sealed class WorkerDispatchTestsDispatchPreparation : WorkerDispatchTestS
         Assert.Contains(firstDurableBaseline.Timeline, item =>
             item.Kind == ProgressKind.TaskNote && item.Message == unsavedNote);
         var persistedSibling = Assert.Single(firstDurableBaseline.Tasks, task => task.Id == completedSibling.Id.Value);
-        Assert.Equal(WorkTaskStatus.Completed, persistedSibling.Status);
+        Assert.Equal(WorkTaskStatus.Assigned, persistedSibling.Status);
         Assert.Equal(0, persistedSibling.LastProcess?.ExitCode);
+        Assert.NotNull(persistedSibling.LastProcess?.CompletedAt);
         Assert.NotNull(persistedSibling.LastVerification);
+        Assert.Contains(firstDurableBaseline.Timeline, item =>
+            item.Kind == ProgressKind.TaskNote &&
+            item.Message.StartsWith("Auto-cleared stale LastProcess.IsRunning", StringComparison.Ordinal));
         Assert.Contains(kernel.GetGoal(goal.Id).Timeline, item =>
             item.Kind == ProgressKind.TaskNote && item.Message == unsavedNote);
         var sibling = kernel.GetTask(goal.Id, completedSibling.Id);
-        Assert.Equal(WorkTaskStatus.Completed, sibling.Status);
+        Assert.Equal(WorkTaskStatus.Assigned, sibling.Status);
         Assert.Equal(0, sibling.LastProcess?.ExitCode);
+        Assert.NotNull(sibling.LastProcess?.CompletedAt);
         Assert.NotNull(sibling.LastVerification);
         var restoredGoal = repository.LoadAsync().GetAwaiter().GetResult().GetGoal(goal.Id);
         Assert.Contains(restoredGoal.Timeline, item =>
             item.Kind == ProgressKind.TaskNote && item.Message == unsavedNote);
         var restoredSibling = restoredGoal.Tasks.Single(task => task.Id == completedSibling.Id);
-        Assert.Equal(WorkTaskStatus.Completed, restoredSibling.Status);
+        Assert.Equal(WorkTaskStatus.Assigned, restoredSibling.Status);
         Assert.Equal(0, restoredSibling.LastProcess?.ExitCode);
+        Assert.NotNull(restoredSibling.LastProcess?.CompletedAt);
         Assert.NotNull(restoredSibling.LastVerification);
         Assert.Equal(
             1,
@@ -1031,6 +1071,79 @@ public sealed class WorkerDispatchTestsDispatchPreparation : WorkerDispatchTestS
             receipt =>
                 receipt.LinkedDispatchAt == latestDispatchAt &&
                 receipt.Decision is RetryAdmissionDecision.Allowed or RetryAdmissionDecision.ResumedReservation);
+    }
+
+    [Xunit.Fact]
+    public void ConcurrentDurableChangeAbortsPaidAdmissionBeforeReservation()
+    {
+        var root = CreateTempDirectory();
+        var workingDirectory = Path.Combine(root, "repo");
+        Directory.CreateDirectory(workingDirectory);
+        var workspace = OrchestratorWorkspace.ForDirectory(root, workingDirectory);
+        _ = StateDbMigrations.EnsureUpToDate(workspace.SqliteStatePath);
+        WriteSkill(workingDirectory, "orchestrator-dogfood");
+        var at = DateTimeOffset.Parse("2026-07-07T12:00:00Z");
+        var kernel = new AgentOrchestratorKernel(new TestClock(at));
+        var planner = new TaskSpec(TaskId.New(), "Retry only from an authoritative snapshot.", AgentRole.Planner);
+        var goal = kernel.CreateGoal("Abort paid admission on concurrent operator state", [planner]);
+        kernel.SetGoalRefinedSpec(goal.Id, new RefinedSpec(
+            "Abort paid admission on concurrent operator state",
+            ["A stale pre-admission checkpoint starts no worker and preserves operator state."],
+            VerificationClass.TestVerifiable,
+            [],
+            []));
+        var agent = SubscriptionPlannerAgent("planner", "Planner");
+        var agents = new[] { agent };
+        var profiles = DispatchTestProfiles();
+        kernel.ActivateGoal(goal.Id, agents);
+        kernel.RetryTask(goal.Id, planner.Id, "Retry with a fresh source finding.", RetryCause.NewSourceFinding);
+        var repository = new SqliteOrchestratorStateRepository(workspace.SqliteStatePath);
+        repository.SaveAsync(kernel).GetAwaiter().GetResult();
+        var tickBaselines = kernel.ExportSnapshot().Goals.ToDictionary(snapshot => snapshot.Id, StringComparer.Ordinal);
+        var checkpointCalls = 0;
+        var processStartCalls = 0;
+        const string operatorNote = "operator-change-after-tick-baseline";
+        var runner = new BackgroundDispatchRunner(
+            startProcess: startInfo =>
+            {
+                processStartCalls++;
+                return Process.Start(startInfo);
+            });
+
+        var conflict = Assert.Throws<DispatchCheckpointConflictException>(() =>
+            GoalManagementCommandService.StartSubscriptionReadyTasks(
+                kernel,
+                workspace,
+                goal,
+                agents,
+                profiles,
+                checkpointBeforeWorkerStart: (checkpointKernel, checkpointGoalId, _, phase) =>
+                {
+                    Assert.Equal(DispatchRecordCheckpointPhase.BeforeRetryAdmission, phase);
+                    checkpointCalls++;
+                    var operatorKernel = repository.LoadAsync().GetAwaiter().GetResult();
+                    operatorKernel.RecordTaskNote(checkpointGoalId, planner.Id, operatorNote);
+                    repository.SaveAsync(operatorKernel).GetAwaiter().GetResult();
+                    CliPersistentStateRunner.PersistCriticalGoalSnapshotsOrThrow(
+                        repository,
+                        checkpointKernel,
+                        [checkpointGoalId],
+                        tickBaselines,
+                        workspace.SqliteStatePath,
+                        _ => { });
+                },
+                runner: runner,
+                sandboxOptions: DisabledSandbox));
+
+        Assert.Contains("rejected stale state", conflict.Message, StringComparison.Ordinal);
+        Assert.Equal(1, checkpointCalls);
+        Assert.Equal(0, processStartCalls);
+        Assert.Null(kernel.GetTask(goal.Id, planner.Id).LastProcess);
+        Assert.Empty(kernel.GetTask(goal.Id, planner.Id).RetryAdmissionHistory);
+        var restoredGoal = repository.LoadAsync().GetAwaiter().GetResult().GetGoal(goal.Id);
+        Assert.Contains(restoredGoal.Timeline, item =>
+            item.Kind == ProgressKind.TaskNote && item.Message == operatorNote);
+        Assert.Empty(restoredGoal.Tasks.Single(task => task.Id == planner.Id).RetryAdmissionHistory);
     }
 
     [Xunit.Fact]
