@@ -652,7 +652,10 @@ public sealed class ConductorEvidenceAttemptLifecycleTests
         var root = CreateTempDirectory();
         using var readerReady = new ManualResetEventSlim();
         using var releaseReader = new ManualResetEventSlim();
-        Task? readerTask = null;
+        Thread? readerThread = null;
+        Exception? readerException = null;
+        var readerJoined = false;
+        var readerOnPoolThread = true;
         bool? observedPassed = null;
         try
         {
@@ -666,22 +669,37 @@ public sealed class ConductorEvidenceAttemptLifecycleTests
                 acquireStableSlotLease: (_, _) => null,
                 resultPublishedForTests: publishedAttempt =>
                 {
-                    readerTask = Task.Run(() =>
+                    readerThread = new Thread(() =>
                     {
-                        using var reader = new FileStream(
-                            publishedAttempt.ResultPath,
-                            FileMode.Open,
-                            FileAccess.Read,
-                            FileShare.Read);
-                        using var published = JsonDocument.Parse(reader);
-                        observedPassed = published.RootElement
-                            .GetProperty("acceptance")
-                            .GetProperty("passed")
-                            .GetBoolean();
-                        readerReady.Set();
-                        Assert.True(releaseReader.Wait(TimeSpan.FromSeconds(10)));
+                        try
+                        {
+                            readerOnPoolThread = Thread.CurrentThread.IsThreadPoolThread;
+                            using var reader = new FileStream(
+                                publishedAttempt.ResultPath,
+                                FileMode.Open,
+                                FileAccess.Read,
+                                FileShare.Read);
+                            using var published = JsonDocument.Parse(reader);
+                            observedPassed = published.RootElement
+                                .GetProperty("acceptance")
+                                .GetProperty("passed")
+                                .GetBoolean();
+                            readerReady.Set();
+                            Assert.True(releaseReader.Wait(TimeSpan.FromSeconds(10)));
+                        }
+                        catch (Exception ex)
+                        {
+                            readerException = ex;
+                        }
+                        finally
+                        {
+                            readerReady.Set();
+                        }
                     });
+                    readerThread.IsBackground = true;
+                    readerThread.Start();
                     Assert.True(readerReady.Wait(TimeSpan.FromSeconds(10)));
+                    Assert.Null(readerException);
                 });
 
             coordinator.RunAttemptForTests(
@@ -692,6 +710,7 @@ public sealed class ConductorEvidenceAttemptLifecycleTests
                     attemptCandidate,
                     AcceptanceVerificationSummary.PassedWithNoUnmetCriteria));
 
+            Assert.Null(readerException);
             Assert.Equal("0", File.ReadAllText(attempt.ExitCodePath));
             Assert.True(observedPassed);
             Assert.Equal(
@@ -701,9 +720,15 @@ public sealed class ConductorEvidenceAttemptLifecycleTests
         finally
         {
             releaseReader.Set();
-            readerTask?.GetAwaiter().GetResult();
-            Directory.Delete(root, recursive: true);
+            readerJoined = readerThread?.Join(TimeSpan.FromSeconds(10)) ?? true;
+            if (readerJoined)
+            {
+                Directory.Delete(root, recursive: true);
+            }
         }
+        Assert.True(readerJoined, "Result reader did not stop after its release signal.");
+        Assert.Null(readerException);
+        Assert.False(readerOnPoolThread);
     }
 
     [Fact]
