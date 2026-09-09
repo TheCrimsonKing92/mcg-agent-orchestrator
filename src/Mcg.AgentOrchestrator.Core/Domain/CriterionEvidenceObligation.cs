@@ -45,7 +45,9 @@ public sealed record CriterionEvidenceObligation(
     string? Detail = null,
     string? FindingStableId = null,
     string? ExpectedCandidateSha = null,
-    IReadOnlyList<CriterionEvidenceReceipt>? PriorReceipts = null)
+    IReadOnlyList<CriterionEvidenceReceipt>? PriorReceipts = null,
+    string? ReplacementObligationId = null,
+    CriterionEvidenceOwner? ReplacementOwner = null)
 {
     public bool IsPending => State == CriterionEvidenceState.Pending;
 

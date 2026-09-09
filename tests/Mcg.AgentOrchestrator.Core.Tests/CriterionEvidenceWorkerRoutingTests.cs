@@ -43,7 +43,7 @@ public sealed class CriterionEvidenceWorkerRoutingTests
         kernel.RecordDispatchExecutionResult(goal.Id, task.Id, new TaskVerificationRecord(
             "review", "C:\\fixture", 0, output, string.Empty, DateTimeOffset.UtcNow, WorkerResultPresent: true));
 
-        Assert.Equal(scenario == "current" ? WorkTaskStatus.Completed : WorkTaskStatus.Failed, task.Status);
+        Assert.Equal(scenario is "current" or "superseded" ? WorkTaskStatus.Completed : WorkTaskStatus.Failed, task.Status);
         var merged = task.LastVerification!.MergedReviewFindings!;
         Assert.Contains(merged, finding => finding.StableId == "missing-full-gate");
         if (scenario == "mixed")
@@ -58,6 +58,6 @@ public sealed class CriterionEvidenceWorkerRoutingTests
             Assert.DoesNotContain(goal.CriterionEvidenceObligations, item => item.State == CriterionEvidenceState.Satisfied);
         }
         if (scenario == "superseded")
-            Assert.DoesNotContain(goal.Timeline, item => item.Message.Contains("Deferred acceptance-owned finding remains pending", StringComparison.Ordinal));
+            Assert.Contains(goal.Timeline, item => item.Message.Contains("Deferred acceptance-owned finding remains pending", StringComparison.Ordinal));
     }
 }
