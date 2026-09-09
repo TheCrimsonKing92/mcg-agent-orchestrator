@@ -162,7 +162,7 @@ public sealed class GoalWorktreeTestsOrphanEphemeralSweep : GoalWorktreeTestBase
                 AgentCatalog.Default().Agents,
                 WorkerProfileCatalog.Default(),
                 providers: new InMemoryModelProviderRegistry([]),
-                cleanupHooks: CleanupHooks.Build());
+                cleanupHooks: CreateIsolatedCleanupContext(workspace.ExecutionDirectory, CleanupHooks.Build()).Hooks);
 
             var first = driver.AdvanceOnce(goal, ConductorAutonomyPolicy.Conservative);
             var executed = Assert.IsType<ConductorAdvanceOutcome.Executed>(first.Outcome);
