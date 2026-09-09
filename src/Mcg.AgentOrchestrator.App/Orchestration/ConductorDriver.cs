@@ -6187,7 +6187,15 @@ internal sealed partial class ConductorDriver
         if (acceptance.Passed)
         {
             _clearAcceptanceFailure(goal);
-            RecordFullAcceptanceEvidence(goal, acceptance);
+            var evidenceDiagnostic = RecordFullAcceptanceEvidence(goal, acceptance);
+            if (evidenceDiagnostic is not null)
+            {
+                return MakeResult(
+                    goal.Id.Value,
+                    goalPrefix,
+                    policy,
+                    new ConductorAdvanceOutcome.Held(GoalLifecycleState.Verified, evidenceDiagnostic));
+            }
             var outstandingObligations = goal.OutstandingCriterionEvidenceObligations;
             if (outstandingObligations.Count > 0)
             {
@@ -6342,13 +6350,13 @@ internal sealed partial class ConductorDriver
             new ConductorAdvanceOutcome.Executed(GoalLifecycleState.Verified, $"Landed: {landResult.Message}"));
     }
 
-    private void RecordFullAcceptanceEvidence(Goal goal, AcceptanceVerificationSummary acceptance)
+    private string? RecordFullAcceptanceEvidence(Goal goal, AcceptanceVerificationSummary acceptance)
     {
         var kernel = _conductorTickKernel ?? _cohortKernel;
         var candidateSha = acceptance.BranchHeadSha ?? _resolveAcceptanceHeads(goal).BranchHeadSha;
         if (kernel is null || string.IsNullOrWhiteSpace(candidateSha))
         {
-            return;
+            return "Acceptance passed but criterion evidence could not be recorded: the authoritative kernel or candidate SHA is unavailable. No obligation was resolved.";
         }
 
         var matching = goal.OutstandingCriterionEvidenceObligations
@@ -6371,6 +6379,8 @@ internal sealed partial class ConductorDriver
                 passed: true,
                 detail: "Normal deterministic full acceptance passed for the mapped candidate.");
         }
+
+        return null;
     }
 
     private ConductorAdvanceResult ExecuteRecord(Goal goal, string goalPrefix, ConductorAutonomyPolicy policy)

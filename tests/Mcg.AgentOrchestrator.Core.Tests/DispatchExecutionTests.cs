@@ -1832,7 +1832,7 @@ public sealed class DispatchExecutionTests
             criterionVersion: 1,
             CriterionEvidenceOwner.Acceptance,
             "operator@example",
-            requiredScope: "acceptance:full-core",
+            requiredScope: CriterionEvidenceScopes.FullAcceptanceGate,
             findingStableId: "acceptance-core-tests-not-dispositioned",
             expectedCandidateSha: "candidate-123");
         kernel.ActivateGoal(goal.Id, DefaultAgents());
@@ -1842,7 +1842,7 @@ public sealed class DispatchExecutionTests
         var result = StructuredReviewerResult(
             "pass",
             """[{"stable_id":"acceptance-core-tests-not-dispositioned","state":"open","location":{"file":"config/acceptance-manifest.json","region":"full-core"},"description":"Current candidate has no full-core receipt.","severity":"blocking","category":"acceptance-owned"}]""",
-            "none",
+            "Acceptance evidence is pending for the authoritative full-gate obligation.",
             role == AgentRole.Reviewer
                 ? """[{"criterion_index":0,"verdict":"not-verifiable","evidence":"The acceptance owner must run acceptance:full-core."}]"""
                 : "[]");
@@ -1850,7 +1850,10 @@ public sealed class DispatchExecutionTests
         kernel.RecordDispatchExecutionResult(goal.Id, task.Id, new TaskVerificationRecord(
             "record-evidence", "C:\\repo", 0, result, string.Empty, clock.UtcNow, WorkerResultPresent: true));
 
-        Assert.Equal(WorkTaskStatus.Completed, task.Status);
+        Assert.NotNull(task.LastVerification!.MergedReviewFindings);
+        Assert.True(
+            task.Status == WorkTaskStatus.Completed,
+            string.Join(" | ", goal.Timeline.Select(item => item.Message)));
         var obligation = Assert.Single(goal.OutstandingCriterionEvidenceObligations);
         Assert.Equal(CriterionEvidenceOwner.Acceptance, obligation.Owner);
         Assert.Equal(CriterionEvidenceState.Pending, obligation.State);
@@ -1858,6 +1861,42 @@ public sealed class DispatchExecutionTests
         Assert.Contains(goal.Timeline, item =>
             item.Message.Contains("Deferred acceptance-owned finding remains pending", StringComparison.Ordinal) &&
             item.Message.Contains("acceptance-core-tests-not-dispositioned", StringComparison.Ordinal));
+    }
+
+    [Xunit.Fact(DisplayName = "Criterion evidence mapping rejects an acceptance scope the conductor cannot prove")]
+    public void CriterionEvidenceMappingRejectsUnexecutableAcceptanceScope()
+    {
+        var clock = new FakeClock();
+        var kernel = new AgentOrchestratorKernel(clock);
+        var goal = kernel.CreateGoal("Reject unexecutable scope", [new TaskSpec(TaskId.New(), "Implement", AgentRole.Developer)]);
+        kernel.SetGoalRefinedSpec(goal.Id, new RefinedSpec(
+            "Require full acceptance", ["a full-gate receipt"], VerificationClass.TestVerifiable, [], []));
+
+        var error = Assert.Throws<ArgumentException>(() => kernel.MapCriterionEvidenceOwner(
+            goal.Id, 0, 1, CriterionEvidenceOwner.Acceptance, "operator", "acceptance:partial", "finding-1", "candidate-123"));
+
+        Assert.Contains(CriterionEvidenceScopes.FullAcceptanceGate, error.Message, StringComparison.Ordinal);
+    }
+
+    [Xunit.Fact(DisplayName = "Criterion evidence record binds a spec-created operator observation to its supplied candidate")]
+    public void CriterionEvidenceRecordBindsSpecCreatedOperatorObservation()
+    {
+        var clock = new FakeClock();
+        var kernel = new AgentOrchestratorKernel(clock);
+        var goal = kernel.CreateGoal("Record operator observation", [new TaskSpec(TaskId.New(), "Implement", AgentRole.Developer)]);
+        kernel.SetGoalRefinedSpec(goal.Id, new RefinedSpec(
+            "Retain an operator observation", ["native proof"], VerificationClass.RealWorldDependent, [], [])
+        {
+            OperatorOwnedAcceptanceCriteria = ["native proof"]
+        });
+        var obligation = Assert.Single(goal.OutstandingCriterionEvidenceObligations);
+
+        var recorded = kernel.RecordCriterionEvidence(
+            goal.Id, obligation.Id, CriterionEvidenceOwner.Operator, "candidate-123", "native-run-1",
+            "operator observation", passed: true, "operator observed the native round trip");
+
+        Assert.Equal(CriterionEvidenceState.Satisfied, recorded.State);
+        Assert.Equal("candidate-123", recorded.CandidateSha);
     }
 
     [Xunit.Fact(DisplayName = "Criterion evidence mapping and receipt persist without changing unrelated obligations")]
@@ -1878,7 +1917,7 @@ public sealed class DispatchExecutionTests
             goal.Id, 0, criterionVersion: 1, CriterionEvidenceOwner.Acceptance, "operator@example", expectedCandidateSha: "abc1234");
         var satisfied = kernel.RecordCriterionEvidence(
             goal.Id, mapped.Id, CriterionEvidenceOwner.Acceptance, "abc1234", "gate-1",
-            "deterministic acceptance execution", passed: true, "focused gate passed");
+            CriterionEvidenceScopes.FullAcceptanceGate, passed: true, "focused gate passed");
         var snapshot = kernel.ExportGoalSnapshot(goal.Id);
         var restored = AgentOrchestratorKernel.FromSnapshot(new OrchestratorSnapshot([snapshot], []), clock)
             .GetGoal(goal.Id);

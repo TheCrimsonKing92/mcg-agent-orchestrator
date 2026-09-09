@@ -250,23 +250,35 @@ public sealed class Goal
 
         var id = CriterionEvidenceObligation.BuildId(criterionVersion, criterionIndex);
         var existingIndex = _criterionEvidenceObligations.FindIndex(item => item.Id == id);
+        var normalizedScope = RequireText(
+            requiredScope ?? (owner == CriterionEvidenceOwner.Acceptance
+                ? CriterionEvidenceScopes.FullAcceptanceGate
+                : "operator observation"),
+            nameof(requiredScope));
+        if (owner == CriterionEvidenceOwner.Acceptance &&
+            !string.Equals(normalizedScope, CriterionEvidenceScopes.FullAcceptanceGate, StringComparison.Ordinal))
+        {
+            throw new ArgumentException(
+                $"Acceptance-owned evidence must require '{CriterionEvidenceScopes.FullAcceptanceGate}', the only scope the deterministic acceptance executor can prove.",
+                nameof(requiredScope));
+        }
+
         var mapped = new CriterionEvidenceObligation(
             id,
             criterionIndex,
             criterionVersion,
             RequireText(specVersion.Spec.AcceptanceCriteria[criterionIndex], nameof(criterionIndex)),
             owner,
-            CriterionEvidenceState.Pending,
-            RequireText(
-                requiredScope ?? (owner == CriterionEvidenceOwner.Acceptance
-                    ? "deterministic acceptance execution"
-                    : "operator observation"),
-                nameof(requiredScope)),
+            existingIndex >= 0 ? _criterionEvidenceObligations[existingIndex].State : CriterionEvidenceState.Pending,
+            normalizedScope,
             $"operator mapping by {NormalizeSingleLine(actor, nameof(actor))}",
             recordedAt,
             FindingStableId: string.IsNullOrWhiteSpace(findingStableId)
                 ? null
                 : NormalizeSingleLine(findingStableId, nameof(findingStableId)),
+            CandidateSha: existingIndex >= 0 ? _criterionEvidenceObligations[existingIndex].CandidateSha : null,
+            ReceiptId: existingIndex >= 0 ? _criterionEvidenceObligations[existingIndex].ReceiptId : null,
+            Detail: existingIndex >= 0 ? _criterionEvidenceObligations[existingIndex].Detail : null,
             ExpectedCandidateSha: NormalizeSha(expectedCandidateSha));
         if (existingIndex < 0)
         {
@@ -277,7 +289,10 @@ public sealed class Goal
         var existing = _criterionEvidenceObligations[existingIndex];
         if (existing.State == CriterionEvidenceState.Satisfied)
             throw new InvalidOperationException($"Criterion obligation '{id}' is already satisfied and cannot be re-owned.");
-        if (existing.Owner == owner && string.Equals(existing.Provenance, mapped.Provenance, StringComparison.Ordinal))
+        if (existing.Owner == owner &&
+            string.Equals(existing.RequiredScope, mapped.RequiredScope, StringComparison.Ordinal) &&
+            string.Equals(existing.ExpectedCandidateSha, mapped.ExpectedCandidateSha, StringComparison.OrdinalIgnoreCase) &&
+            string.Equals(existing.FindingStableId, mapped.FindingStableId, StringComparison.Ordinal))
             return existing;
 
         _criterionEvidenceObligations[existingIndex] = mapped;
@@ -300,8 +315,9 @@ public sealed class Goal
 
         var existing = _criterionEvidenceObligations[index];
         if (existing.Owner != owner ||
-            string.IsNullOrWhiteSpace(existing.ExpectedCandidateSha) ||
-            !string.Equals(existing.ExpectedCandidateSha, candidateSha, StringComparison.OrdinalIgnoreCase) ||
+            (existing.Owner == CriterionEvidenceOwner.Acceptance && string.IsNullOrWhiteSpace(existing.ExpectedCandidateSha)) ||
+            (!string.IsNullOrWhiteSpace(existing.ExpectedCandidateSha) &&
+             !string.Equals(existing.ExpectedCandidateSha, candidateSha, StringComparison.OrdinalIgnoreCase)) ||
             !string.Equals(existing.RequiredScope, RequireText(scope, nameof(scope)), StringComparison.Ordinal))
             throw new InvalidOperationException($"Evidence receipt is incompatible with obligation '{obligationId}'.");
 
@@ -338,9 +354,9 @@ public sealed class Goal
             }
 
             var criterion = RequireText(spec.AcceptanceCriteria[index], nameof(spec));
-            var operatorOwned = spec.OperatorOwnedAcceptanceCriteria.Count(item =>
-                string.Equals(item.Trim(), criterion, StringComparison.Ordinal)) == 1;
-            if (!operatorOwned)
+            var ownershipEntries = spec.OperatorOwnedAcceptanceCriteria.Count(item =>
+                string.Equals(item.Trim(), criterion, StringComparison.Ordinal));
+            if (ownershipEntries == 0)
             {
                 // Worker verification stays on task verification records. This
                 // collection represents only proof that survives worker scope.
@@ -352,10 +368,10 @@ public sealed class Goal
                 index,
                 criterionVersion,
                 criterion,
-                CriterionEvidenceOwner.Operator,
+                ownershipEntries == 1 ? CriterionEvidenceOwner.Operator : CriterionEvidenceOwner.Unknown,
                 CriterionEvidenceState.Pending,
-                "operator observation",
-                "authoritative refined spec",
+                ownershipEntries == 1 ? "operator observation" : "ownership mapping required",
+                ownershipEntries == 1 ? "authoritative refined spec" : "ambiguous authoritative refined spec ownership",
                 recordedAt));
         }
     }

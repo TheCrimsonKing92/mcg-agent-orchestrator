@@ -179,6 +179,11 @@ internal sealed class OperatorIntentCoordinator
                 return;
             case OperatorIntentVerbs.CriterionEvidenceRecord:
                 var receipt = Deserialize<CriterionEvidenceReceiptOperatorIntentPayload>(intent);
+                if (receipt.Owner != CriterionEvidenceOwner.Operator)
+                {
+                    throw new InvalidOperationException(
+                        "Only the conductor may record Acceptance-owned criterion evidence; operator intents may record Operator-owned observations only.");
+                }
                 kernel.RecordCriterionEvidence(
                     goal.Id,
                     receipt.ObligationId,

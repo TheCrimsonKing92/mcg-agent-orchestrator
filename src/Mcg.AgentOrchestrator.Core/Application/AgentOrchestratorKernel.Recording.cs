@@ -177,6 +177,20 @@ public sealed partial class AgentOrchestratorKernel
 
         var effectiveProviderFailureKind = verification.ProviderFailureKind;
         var outcome = DispatchFailureClassifier.Classify(task, verification, effectiveProviderFailureKind);
+        if (HasOnlyAuthoritativelyDeferredAcceptanceFindings(goal, verification))
+        {
+            // The worker still supplied a contract-conformant blocking report,
+            // but its authoritative finding is pending deterministic acceptance
+            // evidence rather than a paid-worker repair. Do not let the generic
+            // Tester blocker classifier reopen that worker.
+            outcome = outcome with
+            {
+                Kind = DispatchOutcomeKind.VerifiedSuccess,
+                EvidenceSummary = "Authoritatively mapped acceptance evidence remains pending.",
+                ClassifierReceipt = "CLASSIFIER rule=deferred-acceptance-owned-evidence; outcome_class=success; evidence=authoritative obligation pending.",
+                OutcomeClass = TaskOutcomeClass.Success
+            };
+        }
         if (verification.WorkerResultPresent &&
             task.RequiredRole is AgentRole.Planner or AgentRole.Researcher &&
             WorkerResultBlockers.TryFindPremiseInvalidEvidence(verification, out var premiseEvidence))
@@ -681,7 +695,15 @@ public sealed partial class AgentOrchestratorKernel
             return true;
         }
 
-        if (WorkerResultBlockers.TryFindTesterWorkerResultBlocker(task, verification, out var testerBlocker))
+        // A Tester/Reviewer can report its mandatory blocker text while the
+        // authoritative structured finding is already bound to Acceptance.
+        // The binding, not the prose, is what makes this a deferral.  Keep raw
+        // blockers load-bearing whenever any substantive worker finding remains.
+        var onlyAuthoritativelyDeferredBlockingFindings =
+            HasOnlyAuthoritativelyDeferredAcceptanceFindings(goal, verification);
+
+        if (!onlyAuthoritativelyDeferredBlockingFindings &&
+            WorkerResultBlockers.TryFindTesterWorkerResultBlocker(task, verification, out var testerBlocker))
         {
             ReportTaskProgress(
                 goalId,
@@ -706,7 +728,8 @@ public sealed partial class AgentOrchestratorKernel
             return true;
         }
 
-        if (verification.Succeeded &&
+        if (!onlyAuthoritativelyDeferredBlockingFindings &&
+            verification.Succeeded &&
             task.RequiredRole == AgentRole.Reviewer &&
             !WorkerResultBlockers.IsAdvisoryNoChangeContractBlocker(task, verification) &&
             WorkerResultBlockers.TryFindHardFailureBlocker(verification, out var blocker))
@@ -771,6 +794,17 @@ public sealed partial class AgentOrchestratorKernel
             item.Owner == CriterionEvidenceOwner.Acceptance &&
             item.State != CriterionEvidenceState.Satisfied &&
             string.Equals(item.FindingStableId, finding.StableId, StringComparison.Ordinal)) == 1;
+    }
+
+    private static bool HasOnlyAuthoritativelyDeferredAcceptanceFindings(
+        Goal goal,
+        TaskVerificationRecord verification)
+    {
+        var openFindings = ReviewFindings.GetOpenBlockingFindings(
+            verification.MergedReviewFindings ?? [],
+            goal.EffectiveAcceptanceCriteriaCorrections);
+        return openFindings.Count > 0 && openFindings.All(finding =>
+            IsAuthoritativelyDeferredAcceptanceFinding(goal, finding));
     }
 
     public IReadOnlyList<ReviewFinding> GetOpenAdvisoryReviewFindings(GoalId goalId)
