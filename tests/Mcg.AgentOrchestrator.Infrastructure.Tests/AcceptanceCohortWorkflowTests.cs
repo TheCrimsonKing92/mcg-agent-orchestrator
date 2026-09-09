@@ -1772,13 +1772,9 @@ public sealed class AcceptanceCohortWorkflowTests : GoalWorktreeTestBase
     public void ProductionMergeTrain_RedNewestDropsThenShorterTrainLands()
     {
         var repo = CreateReducedAcceptanceCohortRepository();
-        var previousIsolatedRoot = Environment.GetEnvironmentVariable(
-            DotnetBuildEnvironmentManager.IsolatedRootOverrideVariable);
+        var cleanupContext = CreateIsolatedCleanupContext(repo);
         try
         {
-            Environment.SetEnvironmentVariable(
-                DotnetBuildEnvironmentManager.IsolatedRootOverrideVariable,
-                Path.Combine(repo, ".dotnet-test-root"));
             AddAcceptanceManifest(repo);
             var kernel = new AgentOrchestratorKernel();
             var firstGoal = CreateCompletedGoal(kernel, "First RED train member", repo);
@@ -1813,7 +1809,8 @@ public sealed class AcceptanceCohortWorkflowTests : GoalWorktreeTestBase
             ]);
             var workspace = OrchestratorWorkspace.ForDirectory(repo);
             var driver = new ConductorDriver(
-                kernel, workspace, verifier, AgentCatalog.Default().Agents, WorkerProfileCatalog.Default());
+                kernel, workspace, verifier, AgentCatalog.Default().Agents, WorkerProfileCatalog.Default(),
+                cleanupHooks: cleanupContext.Hooks);
             var selection = ProjectTrainSelection(driver, firstGoal, secondGoal, thirdGoal);
 
             var result = driver.RunMergeTrain(
@@ -1877,9 +1874,6 @@ public sealed class AcceptanceCohortWorkflowTests : GoalWorktreeTestBase
         }
         finally
         {
-            Environment.SetEnvironmentVariable(
-                DotnetBuildEnvironmentManager.IsolatedRootOverrideVariable,
-                previousIsolatedRoot);
             DeleteDirectory(repo);
         }
     }
@@ -2061,13 +2055,9 @@ public sealed class AcceptanceCohortWorkflowTests : GoalWorktreeTestBase
         var trx = Path.Combine(Path.GetTempPath(), $"cohort-member-pair-{Guid.NewGuid():N}.trx");
         using var gateStarted = new ManualResetEventSlim();
         using var gateRelease = new ManualResetEventSlim();
-        var previousIsolatedRoot = Environment.GetEnvironmentVariable(
-            DotnetBuildEnvironmentManager.IsolatedRootOverrideVariable);
+        var cleanupContext = CreateIsolatedCleanupContext(repo);
         try
         {
-            Environment.SetEnvironmentVariable(
-                DotnetBuildEnvironmentManager.IsolatedRootOverrideVariable,
-                Path.Combine(repo, ".dotnet-test-root"));
             AddAcceptanceManifest(repo);
             File.WriteAllText(trx, ValidPassingTrx());
             var kernel = new AgentOrchestratorKernel();
@@ -2094,7 +2084,8 @@ public sealed class AcceptanceCohortWorkflowTests : GoalWorktreeTestBase
                 OrchestratorWorkspace.ForDirectory(repo),
                 verifier,
                 AgentCatalog.Default().Agents,
-                WorkerProfileCatalog.Default());
+                WorkerProfileCatalog.Default(),
+                cleanupHooks: cleanupContext.Hooks);
             var selection = ProjectSelection(driver, firstGoal, secondGoal);
             var originalPairFingerprint = ConductorAcceptanceCohortSelector.PairFingerprint(
                 selection.Members[0],
@@ -2146,9 +2137,6 @@ public sealed class AcceptanceCohortWorkflowTests : GoalWorktreeTestBase
                           Path.Combine(repo, GoalWorktrees.DirectoryName),
                           "c-*").Any(),
                 TimeSpan.FromSeconds(10));
-            Environment.SetEnvironmentVariable(
-                DotnetBuildEnvironmentManager.IsolatedRootOverrideVariable,
-                previousIsolatedRoot);
             if (File.Exists(trx)) File.Delete(trx);
             DeleteDirectory(repo);
         }
@@ -2161,13 +2149,9 @@ public sealed class AcceptanceCohortWorkflowTests : GoalWorktreeTestBase
         var trx = Path.Combine(Path.GetTempPath(), $"cohort-production-{Guid.NewGuid():N}.trx");
         using var gateStarted = new ManualResetEventSlim();
         using var gateRelease = new ManualResetEventSlim();
-        var previousIsolatedRoot = Environment.GetEnvironmentVariable(
-            DotnetBuildEnvironmentManager.IsolatedRootOverrideVariable);
+        var cleanupContext = CreateIsolatedCleanupContext(repo);
         try
         {
-            Environment.SetEnvironmentVariable(
-                DotnetBuildEnvironmentManager.IsolatedRootOverrideVariable,
-                Path.Combine(repo, ".dotnet-test-root"));
             AddAcceptanceManifest(repo);
             File.WriteAllText(trx, ValidPassingTrx());
             var kernel = new AgentOrchestratorKernel();
@@ -2195,7 +2179,8 @@ public sealed class AcceptanceCohortWorkflowTests : GoalWorktreeTestBase
                 workspace,
                 verifier,
                 AgentCatalog.Default().Agents,
-                WorkerProfileCatalog.Default());
+                WorkerProfileCatalog.Default(),
+                cleanupHooks: cleanupContext.Hooks);
             var fairnessStore = new CohortAcceptanceStore(
                 Path.Combine(workspace.OrchestratorDirectory, "cohort-acceptance.db"));
             fairnessStore.RecordOvertake(firstGoal.Id);
@@ -2333,9 +2318,6 @@ public sealed class AcceptanceCohortWorkflowTests : GoalWorktreeTestBase
         finally
         {
             gateRelease.Set();
-            Environment.SetEnvironmentVariable(
-                DotnetBuildEnvironmentManager.IsolatedRootOverrideVariable,
-                previousIsolatedRoot);
             if (File.Exists(trx)) File.Delete(trx);
             DeleteDirectory(repo);
         }
@@ -2348,14 +2330,10 @@ public sealed class AcceptanceCohortWorkflowTests : GoalWorktreeTestBase
         var trx = Path.Combine(Path.GetTempPath(), $"cohort-shared-capacity-{Guid.NewGuid():N}.trx");
         using var gateStarted = new ManualResetEventSlim();
         using var gateRelease = new ManualResetEventSlim();
-        var previousIsolatedRoot = Environment.GetEnvironmentVariable(
-            DotnetBuildEnvironmentManager.IsolatedRootOverrideVariable);
+        var cleanupContext = CreateIsolatedCleanupContext(repo);
         ConductorDriver? driver = null;
         try
         {
-            Environment.SetEnvironmentVariable(
-                DotnetBuildEnvironmentManager.IsolatedRootOverrideVariable,
-                Path.Combine(repo, ".dotnet-test-root"));
             AddAcceptanceManifest(repo);
             File.WriteAllText(trx, ValidPassingTrx());
             var kernel = new AgentOrchestratorKernel();
@@ -2390,7 +2368,8 @@ public sealed class AcceptanceCohortWorkflowTests : GoalWorktreeTestBase
                 OrchestratorWorkspace.ForDirectory(repo),
                 verifier,
                 AgentCatalog.Default().Agents,
-                WorkerProfileCatalog.Default());
+                WorkerProfileCatalog.Default(),
+                cleanupHooks: cleanupContext.Hooks);
             var first = ProjectSelection(driver, goals[0], goals[1]);
             var second = ProjectSelection(driver, goals[2], goals[3]);
 
@@ -2433,9 +2412,6 @@ public sealed class AcceptanceCohortWorkflowTests : GoalWorktreeTestBase
                     () => driver.GetActiveAcceptanceCohortCapacity().ActiveRootCount == 0,
                     TimeSpan.FromSeconds(10));
             }
-            Environment.SetEnvironmentVariable(
-                DotnetBuildEnvironmentManager.IsolatedRootOverrideVariable,
-                previousIsolatedRoot);
             if (File.Exists(trx)) File.Delete(trx);
             DeleteDirectory(repo);
         }
@@ -2554,29 +2530,22 @@ public sealed class AcceptanceCohortWorkflowTests : GoalWorktreeTestBase
     public void CohortStableSlotLease_RefusesToExceedTrustedHostGateCap()
     {
         var root = Path.Combine(Path.GetTempPath(), $"cohort-slot-cap-{Guid.NewGuid():N}");
-        var previousIsolatedRoot = Environment.GetEnvironmentVariable(
-            DotnetBuildEnvironmentManager.IsolatedRootOverrideVariable);
+        var storageRoot = new DotnetBuildStorageRoot(root);
         try
         {
-            Environment.SetEnvironmentVariable(
-                DotnetBuildEnvironmentManager.IsolatedRootOverrideVariable,
-                root);
             using var first = Assert.IsType<DotnetBuildLeaseAcquisition.Acquired>(
-                DotnetBuildEnvironmentManager.TryAcquireStableSlotExecutionLock(0, TimeSpan.Zero)).Lease;
+                DotnetBuildEnvironmentManager.TryAcquireStableSlotExecutionLock(0, TimeSpan.Zero, storageRoot: storageRoot)).Lease;
             using var second = Assert.IsType<DotnetBuildLeaseAcquisition.Acquired>(
-                DotnetBuildEnvironmentManager.TryAcquireStableSlotExecutionLock(1, TimeSpan.Zero)).Lease;
+                DotnetBuildEnvironmentManager.TryAcquireStableSlotExecutionLock(1, TimeSpan.Zero, storageRoot: storageRoot)).Lease;
             var coordinator = new ConductorParallelAcceptanceAttemptCoordinator(
                 Path.Combine(root, "attempts"),
-                runInline: true);
+                runInline: true, buildStorageRoot: storageRoot);
 
             Assert.Throws<DotnetBuildSlotsBusyException>(() =>
                 coordinator.AcquireCohortStableSlotLease("cohort-v2-slot-cap", timeout: TimeSpan.Zero));
         }
         finally
         {
-            Environment.SetEnvironmentVariable(
-                DotnetBuildEnvironmentManager.IsolatedRootOverrideVariable,
-                previousIsolatedRoot);
             DeleteDirectory(root);
         }
     }
