@@ -2332,6 +2332,83 @@ public sealed class AcceptanceCohortWorkflowTests : GoalWorktreeTestBase
     }
 
     [Fact]
+    public void IndependentWorkspaceDrivers_OverlapWithoutSharingStorageRoots()
+    {
+        var repositories = new List<string>();
+        var drivers = new List<ConductorDriver>();
+        var roots = new List<DotnetBuildStorageRoot>();
+        var verifiers = new List<BlockingAcceptanceVerifier>();
+        using var firstStarted = new ManualResetEventSlim();
+        using var secondStarted = new ManualResetEventSlim();
+        using var release = new ManualResetEventSlim();
+        var starts = new[] { firstStarted, secondStarted };
+        var drained = true;
+        try
+        {
+            for (var index = 0; index < starts.Length; index++)
+            {
+                var repo = CreateReducedAcceptanceCohortRepository();
+                repositories.Add(repo);
+                AddAcceptanceManifest(repo);
+                var kernel = new AgentOrchestratorKernel();
+                var first = CreateCompletedGoal(kernel, $"Workspace {index} first member", repo);
+                var second = CreateCompletedGoal(kernel, $"Workspace {index} second member", repo);
+                _ = CreateWorktreeCandidate(repo, first.Id,
+                    "src/Mcg.AgentOrchestrator.Core/IndependentFirst.cs", "first");
+                _ = CreateWorktreeCandidate(repo, second.Id,
+                    "tests/IndependentSecond.cs", "second");
+                var context = CreateIsolatedCleanupContext(repo);
+                roots.Add(context.Hooks.BuildStorageRoot!);
+                var verifier = new BlockingAcceptanceVerifier(starts[index], release,
+                    new AcceptanceVerificationResult(
+                        Passed: true,
+                        Skipped: false,
+                        ExitCode: 0,
+                        OutputTail: null,
+                        Checks: [new AcceptanceCheckResult("independent-root-gate", true, 0, null)],
+                        TestResultPaths: [WritePassingTrx(repo, "independent-root.trx")]));
+                verifiers.Add(verifier);
+                var driver = new ConductorDriver(kernel, OrchestratorWorkspace.ForDirectory(repo),
+                    verifier, AgentCatalog.Default().Agents, WorkerProfileCatalog.Default(),
+                    cleanupHooks: context.Hooks);
+                drivers.Add(driver);
+                _ = driver.RunAcceptanceCohort(ProjectSelection(driver, first, second),
+                    [first, second], ConductorAutonomyPolicy.Permissive, runGateInBackground: true);
+            }
+
+            Assert.True(firstStarted.Wait(TimeSpan.FromSeconds(30)), "First workspace gate did not enter.");
+            Assert.True(secondStarted.Wait(TimeSpan.FromSeconds(30)), "Second workspace gate did not enter.");
+            Assert.False(release.IsSet);
+            Assert.NotEqual(roots[0].RootPath, roots[1].RootPath);
+            for (var index = 0; index < drivers.Count; index++)
+            {
+                Assert.Equal(1, drivers[index].GetActiveAcceptanceCohortCapacity().ActiveRootCount);
+                Assert.True(verifiers[index].StableSlotLeaseObserved);
+                Assert.True(roots[index].ContainsPath(verifiers[index].StableSlotRootPath),
+                    $"Workspace {index} acquired lease root '{verifiers[index].StableSlotRootPath}' " +
+                    $"outside configured root '{roots[index].RootPath}'.");
+                Assert.False(roots[1 - index].ContainsPath(verifiers[index].StableSlotRootPath));
+            }
+        }
+        finally
+        {
+            release.Set();
+            foreach (var driver in drivers)
+            {
+                drained &= SpinWait.SpinUntil(
+                    () => driver.GetActiveAcceptanceCohortCapacity().ActiveRootCount == 0,
+                    TimeSpan.FromSeconds(30));
+            }
+            if (drained)
+            {
+                foreach (var repo in repositories)
+                    DeleteDirectory(repo);
+            }
+        }
+        Assert.True(drained, "Independent workspace gate did not drain after release.");
+    }
+
+    [Fact]
     public void ProductionBatch_TwoLiveCohortRootsFillSharedAcceptanceCapacity()
     {
         var repo = CreateReducedAcceptanceCohortRepository();
@@ -3364,6 +3441,7 @@ public sealed class AcceptanceCohortWorkflowTests : GoalWorktreeTestBase
 
         internal int RunCount => Volatile.Read(ref _runCount);
         internal bool StableSlotLeaseObserved { get; private set; }
+        internal string StableSlotRootPath { get; private set; } = string.Empty;
         internal string WorktreePath { get; private set; } = string.Empty;
 
         public Task<AcceptanceVerificationResult> RunAsync(
@@ -3377,6 +3455,7 @@ public sealed class AcceptanceCohortWorkflowTests : GoalWorktreeTestBase
             Interlocked.Increment(ref _runCount);
             WorktreePath = worktreePath;
             StableSlotLeaseObserved = stableSlotLease is not null && stableSlotIndex is not null;
+            StableSlotRootPath = stableSlotLease?.Environment.RootPath ?? string.Empty;
             var now = DateTimeOffset.UtcNow;
             typeof(GoalAcceptanceVerifier)
                 .GetMethod("EmitGateProgress", System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Static)!
