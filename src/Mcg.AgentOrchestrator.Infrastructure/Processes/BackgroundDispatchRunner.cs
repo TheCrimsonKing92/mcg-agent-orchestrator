@@ -10,7 +10,8 @@ namespace Mcg.AgentOrchestrator.Infrastructure;
 public enum DispatchRecordCheckpointPhase
 {
     BeforeProcessStart,
-    ProcessMayHaveStarted
+    ProcessMayHaveStarted,
+    BeforeRetryAdmission
 }
 
 public sealed record DispatchRefreshOutcome(

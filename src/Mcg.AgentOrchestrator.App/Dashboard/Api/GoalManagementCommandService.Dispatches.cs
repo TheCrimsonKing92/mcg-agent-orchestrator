@@ -359,9 +359,32 @@ public static SubscriptionStartResult StartSubscriptionReadyTasks(
         plannerSampleCount: ResolvePlannerSampleCount(workspace, plannerSampleCount, conductorPolicy));
     var containsInterruptedDispatchRecovery = batch.Dispatches.Any(dispatch =>
         dispatch.Task.InterruptedDispatchRecoveryId is not null);
+
+    // A paid retry reservation reads a whole goal snapshot from SQLite and then replaces the
+    // kernel with that snapshot. Commit mutations accumulated during this tick first, so the
+    // reservation can only return a forward extension of the current state.
+    if (!containsInterruptedDispatchRecovery &&
+        checkpointBeforeWorkerStart is not null &&
+        batch.Dispatches.FirstOrDefault(dispatch =>
+            RequiresDurableAdmissionSnapshotReplacement(dispatch.Task)) is { } replacing)
+    {
+        checkpointBeforeWorkerStart(
+            kernel,
+            goal.Id,
+            replacing.Task.Id,
+            DispatchRecordCheckpointPhase.BeforeRetryAdmission);
+        goal = kernel.GetGoal(goal.Id);
+    }
+
     var admittedTaskIds = new HashSet<TaskId>();
     foreach (var prepared in batch.Dispatches)
     {
+        if (kernel.GetTask(goal.Id, prepared.Task.Id).LastDispatch?.DispatchedAt
+            != prepared.Task.LastDispatch?.DispatchedAt)
+        {
+            continue;
+        }
+
         var admission = EnsurePreparedRetryAdmission(
             kernel,
             workspace,
@@ -1114,7 +1137,7 @@ private static RetryAdmissionResult EnsurePreparedRetryAdmission(
         throw new InvalidOperationException(
             $"Retry dispatch for task '{task.Id}' is missing an explicit paid-route classification.");
     }
-    if (dispatch.PaidRoute != PaidRouteClassification.Paid || task.LatestRetryAt is null)
+    if (!RequiresDurableAdmissionSnapshotReplacement(task))
     {
         return kernel.RecordPreparedRetryAdmission(
             goalId,
@@ -1163,6 +1186,9 @@ private static RetryAdmissionResult EnsurePreparedRetryAdmission(
     throw new InvalidOperationException(
         $"Durable retry-admission reservation could not be created for goal '{goalId}' and task '{task.Id}'.");
 }
+
+private static bool RequiresDurableAdmissionSnapshotReplacement(TaskSpec task) =>
+    task.LastDispatch is { PaidRoute: PaidRouteClassification.Paid } && task.LatestRetryAt is not null;
 
 private static bool HasRecoverablePreparedReservation(TaskSpec task)
 {
