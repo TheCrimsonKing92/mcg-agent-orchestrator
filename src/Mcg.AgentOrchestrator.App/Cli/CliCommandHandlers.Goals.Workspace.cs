@@ -372,9 +372,12 @@ private static void RecordDeferredGoalCleanup(CliExecutionContext context, Goal 
     }
 }
 
-private static void PrintGoalCleanupBackoffStatus(string executionDirectory, GoalId goalId)
+private static void PrintGoalCleanupBackoffStatus(
+    string executionDirectory,
+    GoalId goalId,
+    GoalWorktreeCleanupHooks hooks)
 {
-    var backoff = GoalWorktrees.TryGetCleanupBackoff(executionDirectory, goalId);
+    var backoff = GoalWorktrees.TryGetCleanupBackoff(executionDirectory, goalId, hooks);
     if (backoff is null)
         return;
 

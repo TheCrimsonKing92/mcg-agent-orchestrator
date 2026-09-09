@@ -11,6 +11,16 @@ using System.Text.Json.Nodes;
 
 public abstract class CliCommandTestBase
 {
+    private protected static WorktreeCleanupContext CreateIsolatedCleanupContext(
+        OrchestratorWorkspace workspace,
+        GoalWorktreeCleanupHooks? hooks = null)
+    {
+        var root = new DotnetBuildStorageRoot(Path.Combine(workspace.ExecutionDirectory, ".orchestrator", "test-dotnet"));
+        return hooks is null
+            ? WorktreeCleanupContext.Load(attentionStoreDirectory: workspace.OrchestratorDirectory, buildStorageRoot: root)
+            : new WorktreeCleanupContext(hooks with { BuildStorageRoot = root });
+    }
+
     private protected static OrchestratorWorkspace CreateRefinedWorkspace(string root)
     {
         SeedLocalSkillCatalog(root);

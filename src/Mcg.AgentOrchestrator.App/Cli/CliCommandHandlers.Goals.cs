@@ -1028,7 +1028,10 @@ private static bool? TryExecuteGoalCommand(string command, IReadOnlyList<string>
                 tasksOnly);
             if (!tasksOnly)
             {
-                PrintGoalCleanupBackoffStatus(context.Workspace.ExecutionDirectory, context.CurrentGoal.Id);
+                PrintGoalCleanupBackoffStatus(
+                    context.Workspace.ExecutionDirectory,
+                    context.CurrentGoal.Id,
+                    context.CleanupContext.Hooks);
             }
 
             return false;

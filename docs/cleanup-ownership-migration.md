@@ -485,3 +485,25 @@ remaining-guard-binding source receipts bind all four changed files to that buil
 The lifecycle explicit-root negative control failed on ambient fallback and its
 restored positive passed 1/1 before this run. Remaining collection members and
 manifest exclusion keys still require migration; this is not final acceptance.
+
+### Remaining CLI fixture root ownership and status forwarding (2026-09-09)
+
+Nineteen dispatcher invocations across the three cleanup-hook CLI classes now
+receive workspace-owned build roots; existing custom hooks are retained. The
+verdict-carry-forward driver receives its own root too. The obsolete ambient
+fixture assertion now checks the explicit root; the real CLI pinned-slot
+negative control remains the behavioral ownership proof. Collection memberships
+and cross-lane exclusion keys remain pending their final migration checks.
+
+Managed cleanup-final-roots-managed ran 43 cases: 42 passed and the status
+backoff assertion failed. Status discarded CleanupContext.Hooks when reading
+backoff, so remaining wait used wall-clock time instead of the supplied clock.
+Forwarding those same hooks through PrintGoalCleanupBackoffStatus restored
+43/43 passing, zero skips, confirmed exit0 and clean teardown in
+cleanup-status-forwarding-managed. Production PDB/source bindings were checked;
+the test assembly is unchanged between the failing and passing runs (SHA
+90E87EF4015709F7B121193FAB9B70575A78181CA84BCC8531AC03AA1B29946E).
+Anthropic review cleanup-status-forwarding-review found no concrete blocker.
+Earlier root-review compilation/path hypotheses are resolved by successful
+build and the passing root test; no configuration or ownership contract was
+weakened to get green. These focused checks do not replace final acceptance.

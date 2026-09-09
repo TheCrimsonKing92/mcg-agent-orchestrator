@@ -268,7 +268,11 @@ public sealed class AcceptanceVerdictCarryForwardTests
             workspace,
             new FakeAcceptanceVerifier(),
             DefaultAgents(),
-            WorkerProfileCatalog.Default());
+            WorkerProfileCatalog.Default(),
+            cleanupHooks: WorktreeCleanupContext.Load(
+                attentionStoreDirectory: workspace.OrchestratorDirectory,
+                buildStorageRoot: new DotnetBuildStorageRoot(
+                    Path.Combine(workspace.ExecutionDirectory, ".orchestrator", "test-dotnet"))).Hooks);
         return new CandidateFixture(
             workspace,
             kernel,
