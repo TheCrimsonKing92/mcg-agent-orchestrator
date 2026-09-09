@@ -729,7 +729,9 @@ public sealed class WorkerDispatchTestsDispatchPreparation : WorkerDispatchTestS
                 sandboxOptions: DisabledSandbox));
 
         Assert.Contains("Durable retry-admission reservation", ex.Message, StringComparison.Ordinal);
-        Assert.Equal(0, checkpointCalls);
+        // Paid retries flush current-tick state before the durable reservation read. The
+        // reservation still fails closed and never starts a worker when no durable goal exists.
+        Assert.Equal(1, checkpointCalls);
         Assert.Null(planner.LastProcess);
     }
 
@@ -829,7 +831,9 @@ public sealed class WorkerDispatchTestsDispatchPreparation : WorkerDispatchTestS
             sandboxOptions: DisabledSandbox);
 
         Assert.Empty(result.Processes.Tasks);
-        Assert.Equal(0, checkpointCalls);
+        // The pre-admission checkpoint preserves current-tick state even when the reservation
+        // later prevents an unchanged retry. Prevention still starts no worker.
+        Assert.Equal(1, checkpointCalls);
         var persistedGoal = kernel.GetGoal(goal.Id);
         var persistedPlanner = persistedGoal.Tasks.Single(candidate => candidate.Id == planner.Id);
         Assert.Null(persistedPlanner.LastProcess);
@@ -984,12 +988,6 @@ public sealed class WorkerDispatchTestsDispatchPreparation : WorkerDispatchTestS
                 recordDurableGoalBaseline: snapshot =>
                 {
                     recordedDurableBaselines.Add(snapshot);
-                    Assert.Contains(snapshot.Timeline, item =>
-                        item.Kind == ProgressKind.TaskNote && item.Message == unsavedNote);
-                    var persistedSibling = Assert.Single(snapshot.Tasks, task => task.Id == completedSibling.Id.Value);
-                    Assert.Equal(WorkTaskStatus.Completed, persistedSibling.Status);
-                    Assert.Equal(0, persistedSibling.LastProcess?.ExitCode);
-                    Assert.NotNull(persistedSibling.LastVerification);
                     tickBaselines[snapshot.Id] = snapshot;
                 }));
 
@@ -998,6 +996,13 @@ public sealed class WorkerDispatchTestsDispatchPreparation : WorkerDispatchTestS
         Assert.True(checkpointCalls > 0);
         Assert.NotEmpty(recordedDurableBaselines);
         Assert.All(recordedDurableBaselines, snapshot => Assert.Equal(goal.Id.Value, snapshot.Id));
+        var firstDurableBaseline = recordedDurableBaselines[0];
+        Assert.Contains(firstDurableBaseline.Timeline, item =>
+            item.Kind == ProgressKind.TaskNote && item.Message == unsavedNote);
+        var persistedSibling = Assert.Single(firstDurableBaseline.Tasks, task => task.Id == completedSibling.Id.Value);
+        Assert.Equal(WorkTaskStatus.Completed, persistedSibling.Status);
+        Assert.Equal(0, persistedSibling.LastProcess?.ExitCode);
+        Assert.NotNull(persistedSibling.LastVerification);
         Assert.Contains(kernel.GetGoal(goal.Id).Timeline, item =>
             item.Kind == ProgressKind.TaskNote && item.Message == unsavedNote);
         var sibling = kernel.GetTask(goal.Id, completedSibling.Id);
