@@ -57,8 +57,10 @@ public sealed class ConductorDriverTestsPreReviewReceiptReuse
         Assert.Equal(PreReviewEvidenceDisposition.Green, reviewer.PreReviewEvidenceReceipt!.Disposition);
     }
 
-    [Xunit.Fact(DisplayName = "ConductorDriver_pre_review_reuses_current_candidate_constituent_green_coverage")]
-    public void ConductorDriverPreReviewReusesCurrentCandidateConstituentGreenCoverage()
+    [Xunit.Theory(DisplayName = "ConductorDriver_pre_review_reuses_current_candidate_constituent_green_coverage")]
+    [Xunit.InlineData(false)]
+    [Xunit.InlineData(true)]
+    public void ConductorDriverPreReviewReusesCurrentCandidateConstituentGreenCoverage(bool deferred)
     {
         var (kernel, goal) = SoftwareGoal();
         var reviewer = goal.Tasks.Single(task => task.RequiredRole == AgentRole.Reviewer);
@@ -87,6 +89,7 @@ public sealed class ConductorDriverTestsPreReviewReceiptReuse
 
         var evidenceRuns = 0;
         var dispatches = 0;
+        var receiptRecords = 0;
         var driver = MakeDriver(
             getFacts: _ => new GoalLifecycleFacts(WorkspaceExists: true),
             getPreReviewEvidenceContext: _ => new PreReviewEvidenceContext(
@@ -102,17 +105,30 @@ public sealed class ConductorDriverTestsPreReviewReceiptReuse
                 throw new InvalidOperationException("covered evidence must not execute again");
             },
             recordPreReviewEvidence: (goalId, taskId, receipt) =>
-                kernel.RecordPreReviewEvidence(goalId, taskId, receipt),
+                kernel.RecordPreReviewEvidence(goalId, taskId, receipt with
+                {
+                    RecordedAt = DateTimeOffset.UnixEpoch.AddSeconds(++receiptRecords)
+                }),
             dispatchAndStart: _ =>
             {
                 dispatches++;
-                return DispatchStartOutcome.Started();
+                return deferred
+                    ? DispatchStartOutcome.Deferred("controlled provider cooldown")
+                    : DispatchStartOutcome.Started();
             });
 
-        driver.AdvanceOnce(goal, ConductorAutonomyPolicy.Permissive);
+        var ticks = deferred ? 25 : 1;
+        for (var tick = 0; tick < ticks; tick++)
+        {
+            var outcome = driver.AdvanceOnce(goal, ConductorAutonomyPolicy.Permissive).Outcome;
+            if (deferred)
+                Assert.IsType<ConductorAdvanceOutcome.Held>(outcome);
+        }
 
         Assert.Equal(0, evidenceRuns);
-        Assert.Equal(1, dispatches);
+        Assert.Equal(ticks, dispatches);
+        if (deferred)
+            Assert.Equal(WorkTaskStatus.Assigned, reviewer.Status);
         Assert.Equal([first, second], reviewer.PreReviewEvidenceReceipt?.SelectedFocusedTests);
         Assert.Contains("reused-current-candidate", reviewer.PreReviewEvidenceReceipt?.Advisories ?? []);
         Assert.Equal(2, reviewer.PreReviewEvidenceAttemptCount);

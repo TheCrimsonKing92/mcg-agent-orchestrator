@@ -476,7 +476,7 @@ public sealed class TaskSpec
             (snapshot.PreReviewEvidenceReceipt is null ? [] : [snapshot.PreReviewEvidenceReceipt]));
         task.PreReviewEvidenceAttemptCount = Math.Max(
             task._preReviewEvidenceHistory.Count(receipt =>
-                receipt is not null && !(receipt.Advisories ?? []).Contains("reused-current-candidate", StringComparer.Ordinal)),
+                receipt is not null && !receipt.IsSyntheticReuse),
             snapshot.PreReviewEvidenceAttemptCount);
         task.PreReviewEvidenceReceipt = snapshot.PreReviewEvidenceReceipt ?? task._preReviewEvidenceHistory.LastOrDefault();
         task.InterruptedDispatchRecoveryId = snapshot.InterruptedDispatchRecoveryId;
@@ -656,7 +656,7 @@ public sealed class TaskSpec
         }
 
         _preReviewEvidenceHistory.Add(receipt);
-        if (!(receipt.Advisories ?? []).Contains("reused-current-candidate", StringComparer.Ordinal))
+        if (!receipt.IsSyntheticReuse)
         {
             PreReviewEvidenceAttemptCount++;
         }

@@ -125,9 +125,9 @@ internal static class PreReviewEvidenceReceipts
             Checks: checks,
             FailingTestIdentities: [],
             MappingReason: context.MappingReason + "; reused green current-candidate evidence coverage.",
-            EvidencePointer: evidencePointers.Length == 0 ? "reused-current-candidate" : string.Join(",", evidencePointers),
+            EvidencePointer: evidencePointers.Length == 0 ? PreReviewEvidenceReceipt.SyntheticReuseAdvisory : string.Join(",", evidencePointers),
             RecordedAt: DateTimeOffset.UtcNow,
-            Advisories: ["reused-current-candidate"]);
+            Advisories: [PreReviewEvidenceReceipt.SyntheticReuseAdvisory]);
         record(goal.Id, reviewerTask.Id, receipt);
     }
 
