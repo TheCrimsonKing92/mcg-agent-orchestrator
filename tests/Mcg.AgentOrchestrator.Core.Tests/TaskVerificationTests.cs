@@ -375,10 +375,13 @@ public sealed class TaskVerificationTests
                 "receipt\\result.trx",
                 recordedAt.AddSeconds(receiptNumber++));
 
-        kernel.RecordPreReviewEvidence(goal.Id, reviewer.Id, CreateReceipt());
-        kernel.RecordPreReviewEvidence(goal.Id, reviewer.Id, CreateReceipt());
+        var receipt = CreateReceipt();
+        kernel.RecordPreReviewEvidence(goal.Id, reviewer.Id, receipt);
+        kernel.RecordPreReviewEvidence(goal.Id, reviewer.Id, receipt);
+        kernel.RecordPreReviewEvidence(goal.Id, reviewer.Id, receipt with { RecordedAt = receipt.RecordedAt.AddTicks(1) });
 
-        Assert.Single(goal.Timeline.Where(evt => evt.Kind == ProgressKind.PreReviewEvidenceRecorded));
+        Assert.Equal(2, goal.Timeline.Count(evt => evt.Kind == ProgressKind.PreReviewEvidenceRecorded));
+        Assert.Equal(2, reviewer.PreReviewEvidenceAttemptCount);
         Assert.True(reviewer.PreReviewEvidenceReceipt!.MatchesCurrentCandidate(
             goal.Id.Value,
             "candidate-sha",

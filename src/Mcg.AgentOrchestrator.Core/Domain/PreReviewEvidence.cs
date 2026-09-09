@@ -55,6 +55,7 @@ public sealed record PreReviewEvidenceReceipt(
         FailingTestIdentities.SequenceEqual(other.FailingTestIdentities, StringComparer.Ordinal) &&
         string.Equals(MappingReason, other.MappingReason, StringComparison.Ordinal) &&
         string.Equals(EvidencePointer, other.EvidencePointer, StringComparison.OrdinalIgnoreCase) &&
+        RecordedAt == other.RecordedAt &&
         (Advisories ?? []).SequenceEqual(other.Advisories ?? [], StringComparer.Ordinal);
 
     private static bool CheckContentEquals(

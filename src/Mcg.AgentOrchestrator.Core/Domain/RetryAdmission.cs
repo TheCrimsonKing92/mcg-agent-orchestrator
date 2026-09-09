@@ -82,7 +82,8 @@ public sealed record RetryAdmissionReceipt(
     string? CandidateSha = null,
     IReadOnlyList<string>? StableFindingIds = null,
     IReadOnlyList<string>? EvidenceIdentities = null,
-    string? RequiredTaskChangeId = null);
+    string? RequiredTaskChangeId = null,
+    bool EvidenceIdentitiesTruncated = false);
 
 public sealed record RetryAdmissionResult(
     RetryAdmissionDecision Decision,
@@ -148,6 +149,8 @@ public static class RetryAdmissionSnapshotReservation
 /// </summary>
 public static class RetryAdmissionReceiptContext
 {
+    internal const int MaxEvidenceIdentities = 12;
+
     public static RetryAdmissionResult Enrich(
         Goal goal,
         TaskSpec heldTask,
@@ -161,25 +164,29 @@ public static class RetryAdmissionReceiptContext
 
         var openFindings = RetryContextFingerprintFactory.GetOpenBlockingFindings(goal);
         var requiredTask = ResolveRequiredTaskChange(goal, heldTask, result.Receipt.Route);
+        var candidateSha = preparedDispatch.ResultCommit ?? preparedDispatch.BaseCommit ??
+            heldTask.LastDispatch?.ResultCommit ?? heldTask.LastDispatch?.BaseCommit ?? "unavailable";
+        var evidenceIdentities = goal.Tasks
+            .SelectMany(task => task.VerificationHistory)
+            .SelectMany(verification => verification.FindingEvidenceReceipts ?? [])
+            .Where(receipt => string.Equals(receipt.CandidateSha, candidateSha, StringComparison.OrdinalIgnoreCase))
+            .Select(receipt => receipt.ReceiptId)
+            .Distinct(StringComparer.Ordinal)
+            .OrderBy(id => id, StringComparer.Ordinal)
+            .ToArray();
         return result with
         {
             Receipt = result.Receipt with
             {
-                CandidateSha = preparedDispatch.ResultCommit ?? preparedDispatch.BaseCommit ??
-                    heldTask.LastDispatch?.ResultCommit ?? heldTask.LastDispatch?.BaseCommit ?? "unavailable",
+                CandidateSha = candidateSha,
                 StableFindingIds = openFindings
                     .Select(finding => finding.StableId)
                     .Distinct(StringComparer.Ordinal)
                     .OrderBy(id => id, StringComparer.Ordinal)
                     .ToArray(),
-                EvidenceIdentities = goal.Tasks
-                    .SelectMany(task => task.VerificationHistory)
-                    .SelectMany(verification => verification.FindingEvidenceReceipts ?? [])
-                    .Select(receipt => receipt.ReceiptId)
-                    .Distinct(StringComparer.Ordinal)
-                    .OrderBy(id => id, StringComparer.Ordinal)
-                    .ToArray(),
-                RequiredTaskChangeId = requiredTask.Id.Value
+                EvidenceIdentities = evidenceIdentities.Take(MaxEvidenceIdentities).ToArray(),
+                RequiredTaskChangeId = requiredTask.Id.Value,
+                EvidenceIdentitiesTruncated = evidenceIdentities.Length > MaxEvidenceIdentities
             }
         };
     }

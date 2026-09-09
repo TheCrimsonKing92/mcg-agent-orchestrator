@@ -655,7 +655,10 @@ public sealed class TaskSpec
         }
 
         _preReviewEvidenceHistory.Add(receipt);
-        PreReviewEvidenceAttemptCount++;
+        if (!(receipt.Advisories ?? []).Contains("reused-current-candidate", StringComparer.Ordinal))
+        {
+            PreReviewEvidenceAttemptCount++;
+        }
         if (_preReviewEvidenceHistory.Count > PreReviewEvidenceHistoryLimit)
         {
             _preReviewEvidenceHistory.RemoveRange(0, _preReviewEvidenceHistory.Count - PreReviewEvidenceHistoryLimit);

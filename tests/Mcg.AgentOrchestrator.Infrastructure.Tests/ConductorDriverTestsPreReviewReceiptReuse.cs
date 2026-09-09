@@ -115,6 +115,7 @@ public sealed class ConductorDriverTestsPreReviewReceiptReuse
         Assert.Equal(1, dispatches);
         Assert.Equal([first, second], reviewer.PreReviewEvidenceReceipt?.SelectedFocusedTests);
         Assert.Contains("reused-current-candidate", reviewer.PreReviewEvidenceReceipt?.Advisories ?? []);
+        Assert.Equal(2, reviewer.PreReviewEvidenceAttemptCount);
     }
 
     [Xunit.Fact(DisplayName = "ConductorDriver_pre_review_newer_red_at_same_candidate_does_not_reuse_older_green")]
