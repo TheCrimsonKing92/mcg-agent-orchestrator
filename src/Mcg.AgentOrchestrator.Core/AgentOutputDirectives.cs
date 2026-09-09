@@ -24,7 +24,13 @@ public static class AgentOutputDirectives
     public static IReadOnlyList<string> WorkerResultTemplateLinesForRole(AgentRole? role)
     {
         var lines = new List<string>();
-        if (role == AgentRole.Planner)
+        if (role == AgentRole.Developer)
+        {
+            lines.Add(
+                "Developer: for `assigned_scope_complete`, enter the literal `true` or `false` alone on its field line; do not add a dash, explanation, punctuation, or quotes. " +
+                "This reports whether your assigned implementation scope is complete; `false` requests a bounded revision and does not describe later Acceptance/operator evidence.");
+        }
+        else if (role == AgentRole.Planner)
         {
             lines.Add(
                 "Planner: print the complete decision-changing plan in stdout before WORKER_RESULT; stdout is authoritative, and a summary or private model-home file path alone is invalid. " +
@@ -88,7 +94,7 @@ public static class AgentOutputDirectives
         }
         else if (role == AgentRole.Developer)
         {
-            lines.Add("assigned_scope_complete: <true|false - whether the implementation scope assigned to this Developer is complete; false requests a bounded revision and does not describe later Acceptance/operator evidence>");
+            lines.Add("assigned_scope_complete: <true|false>");
         }
         else if (role is AgentRole.Reviewer or AgentRole.Tester)
         {

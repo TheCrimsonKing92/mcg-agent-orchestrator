@@ -7,7 +7,14 @@ public sealed class AssignedScopeCompleteTests
     {
         var lines = AgentOutputDirectives.WorkerResultTemplateLinesForRole(AgentRole.Developer);
 
-        Xunit.Assert.Contains(lines, line => line.StartsWith("assigned_scope_complete:", StringComparison.Ordinal));
+        Xunit.Assert.Contains("assigned_scope_complete: <true|false>", lines);
+        Xunit.Assert.Contains(
+            "Developer: for `assigned_scope_complete`, enter the literal `true` or `false` alone on its field line; do not add a dash, explanation, punctuation, or quotes. This reports whether your assigned implementation scope is complete; `false` requests a bounded revision and does not describe later Acceptance/operator evidence.",
+            lines);
+        Xunit.Assert.DoesNotContain(
+            lines,
+            line => line.StartsWith("assigned_scope_complete:", StringComparison.Ordinal) &&
+                    !string.Equals(line, "assigned_scope_complete: <true|false>", StringComparison.Ordinal));
         Xunit.Assert.DoesNotContain("assigned_scope_complete", AgentOutputDirectives.WorkerResultFieldNames);
     }
 
@@ -27,6 +34,8 @@ public sealed class AssignedScopeCompleteTests
 
     [Xunit.Theory]
     [Xunit.InlineData("maybe")]
+    [Xunit.InlineData("false - only 1 of 2 assigned artifacts created")]
+    [Xunit.InlineData("true.")]
     [Xunit.InlineData("true\nassigned_scope_complete: false")]
     public void ReaderRejectsMalformedOrConflictingValue(string value)
     {
