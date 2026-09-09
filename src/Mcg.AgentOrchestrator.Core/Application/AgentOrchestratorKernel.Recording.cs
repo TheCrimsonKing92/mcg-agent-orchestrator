@@ -1341,6 +1341,7 @@ public sealed partial class AgentOrchestratorKernel
         $"attempt={receipt.LinkedDispatchAt:O} candidate_sha={receipt.CandidateSha ?? "unavailable"} " +
         $"stable_finding_ids={string.Join(",", receipt.StableFindingIds ?? [])} " +
         $"evidence_identities={string.Join(",", receipt.EvidenceIdentities ?? [])} " +
+        $"evidence_identities_truncated={receipt.EvidenceIdentitiesTruncated.ToString().ToLowerInvariant()} " +
         $"task_must_change={receipt.RequiredTaskChangeId ?? "unavailable"}";
 
     private void RoutePreventedRetryToAcceptanceRegate(

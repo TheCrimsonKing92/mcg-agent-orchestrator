@@ -259,6 +259,13 @@ public sealed class DiscordGatewayTests
         var coordinator = new OperatorIntentCoordinator(intentStore);
         Assert.True(coordinator.ExecutePending(liveKernel, liveGoal).MutatedGoalState);
         await repository.SaveAsync(liveKernel);
+        var clarification = Assert.Single(liveKernel.HumanInputRequests.Where(request =>
+            request.GoalId == goal.Id &&
+            request.TaskId == task.Id &&
+            !request.IsCompleted));
+        liveKernel.SubmitHumanInput(clarification.Id, RetryCause.NewSourceFinding.ToString());
+        Assert.True(coordinator.ExecutePending(liveKernel, liveGoal).MutatedGoalState);
+        await repository.SaveAsync(liveKernel);
         coordinator.CompletePersisted([goal.Id]);
 
         var outcome = await intentStore.GetAsync(intent.Id);

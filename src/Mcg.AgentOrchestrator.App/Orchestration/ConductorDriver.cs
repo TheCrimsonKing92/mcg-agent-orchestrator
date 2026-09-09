@@ -1982,6 +1982,10 @@ internal sealed partial class ConductorDriver
                 .Where(task => task.RequiredRole == AgentRole.Reviewer)
                 .Select(task => BuildReviewerDeveloperOwnedFindingTrigger(goal, task))
                 .FirstOrDefault(candidate => candidate is not null);
+            if (trigger is not null)
+            {
+                RecordReviewerFindingEvidenceSuppressionIfApplicable(goal, trigger.TriggeringTask);
+            }
         }
 
         if (trigger is null)
@@ -2191,6 +2195,82 @@ internal sealed partial class ConductorDriver
             : null;
     }
 
+    private enum ReviewerFindingEvidenceSuppressionDisposition { None, Deferred, Recorded }
+
+    private ReviewerFindingEvidenceSuppressionDisposition RecordReviewerFindingEvidenceSuppressionIfApplicable(
+        Goal goal,
+        TaskSpec requestingTask)
+    {
+        if (!WorkerResultBlockers.TryFindReviewFindingRound(requestingTask.LastVerification, out var round, out _))
+        {
+            return ReviewerFindingEvidenceSuppressionDisposition.None;
+        }
+
+        var requestingFindings = round.Findings
+            .Where(finding =>
+                finding.State == ReviewFindingState.Open &&
+                finding.EvidenceRequest is not null)
+            .ToArray();
+        if (requestingFindings.Length == 0)
+        {
+            return ReviewerFindingEvidenceSuppressionDisposition.None;
+        }
+
+        var candidateSha = _getPreReviewEvidenceContext(goal).CandidateSha?.Trim();
+        var candidateShaAvailable = ConductorGitRevisionReader.IsValid(candidateSha);
+        var reviewedCandidateSha = requestingTask.LastVerification?.ReviewedCommit?.Trim();
+        var requestTargetsCurrentCandidate =
+            !candidateShaAvailable ||
+            !ConductorGitRevisionReader.IsValid(reviewedCandidateSha) ||
+            string.Equals(candidateSha, reviewedCandidateSha, StringComparison.OrdinalIgnoreCase);
+        if (!requestTargetsCurrentCandidate)
+        {
+            return ReviewerFindingEvidenceSuppressionDisposition.None;
+        }
+
+        var mergedFindings = requestingTask.LastVerification?.MergedReviewFindings ?? [];
+        var openBlockingFindings = ReviewFindings.GetOpenBlockingFindings(
+            mergedFindings.Count > 0 ? mergedFindings : round.Findings,
+            goal.EffectiveAcceptanceCriteriaCorrections);
+        var suppressionRoute = ReviewerFindingEvidenceSuppressionRouting.Resolve(
+            requestingTask.LastVerification,
+            goal.EffectiveAcceptanceCriteriaCorrections,
+            openBlockingFindings);
+        if (suppressionRoute.DeferToReviewRetryRoute)
+        {
+            return ReviewerFindingEvidenceSuppressionDisposition.Deferred;
+        }
+
+        if (suppressionRoute.WritableBlockerIds.Length == 0)
+        {
+            return ReviewerFindingEvidenceSuppressionDisposition.None;
+        }
+
+        var telemetryCandidateSha = candidateShaAvailable ? candidateSha! : "unavailable";
+        var reason = candidateShaAvailable
+            ? "unresolved-writable-blockers-on-unchanged-candidate"
+            : "candidate-sha-unavailable-with-unresolved-writable-blockers";
+        foreach (var requestIdentity in requestingFindings
+                     .Select(finding => BuildFindingEvidenceIdentity(finding.EvidenceRequest!))
+                     .Distinct(StringComparer.Ordinal))
+        {
+            _recordFindingEvidenceSuppressed(
+                goal.Id,
+                requestingTask.Id,
+                telemetryCandidateSha,
+                suppressionRoute.WritableBlockerIds,
+                CreateFindingEvidenceRequestId(requestIdentity),
+                suppressionRoute.ChosenOwner ?? throw new InvalidOperationException("Writable finding suppression requires a feasible upstream owner."),
+                reason,
+                CreateFindingEvidenceSuppressionIdentity(
+                    telemetryCandidateSha,
+                    requestIdentity,
+                    suppressionRoute.WritableBlockerIds));
+        }
+
+        return ReviewerFindingEvidenceSuppressionDisposition.Recorded;
+    }
+
     private static string BuildReviewCapDecisionMessage(
         Goal goal,
         TaskSpec reviewerTask,
@@ -2288,49 +2368,10 @@ internal sealed partial class ConductorDriver
 
         var findingRoundFingerprint = BuildFindingRoundFingerprint(requestingTask, round);
 
-        if (requestingTask.RequiredRole == AgentRole.Reviewer)
+        if (requestingTask.RequiredRole == AgentRole.Reviewer &&
+            RecordReviewerFindingEvidenceSuppressionIfApplicable(goal, requestingTask) is not ReviewerFindingEvidenceSuppressionDisposition.None)
         {
-            var openBlockingFindings = ReviewFindings.GetOpenBlockingFindings(
-                mergedFindings.Count > 0 ? mergedFindings : round.Findings,
-                goal.EffectiveAcceptanceCriteriaCorrections);
-            var suppressionRoute = ReviewerFindingEvidenceSuppressionRouting.Resolve(
-                requestingTask.LastVerification, goal.EffectiveAcceptanceCriteriaCorrections, openBlockingFindings);
-            if (suppressionRoute.DeferToReviewRetryRoute)
-            {
-                return false;
-            }
-            var writableBlockerIds = suppressionRoute.WritableBlockerIds;
-            var reviewedCandidateSha = requestingTask.LastVerification?.ReviewedCommit?.Trim();
-            var requestTargetsCurrentCandidate =
-                !candidateShaAvailable ||
-                !ConductorGitRevisionReader.IsValid(reviewedCandidateSha) ||
-                string.Equals(candidateSha, reviewedCandidateSha, StringComparison.OrdinalIgnoreCase);
-            if (writableBlockerIds.Length > 0 && requestTargetsCurrentCandidate)
-            {
-                var reason = candidateShaAvailable
-                    ? "unresolved-writable-blockers-on-unchanged-candidate"
-                    : "candidate-sha-unavailable-with-unresolved-writable-blockers";
-                foreach (var requestIdentity in requestingFindings
-                             .Select(finding => BuildFindingEvidenceIdentity(finding.EvidenceRequest!))
-                             .Distinct(StringComparer.Ordinal))
-                {
-                    var requestId = CreateFindingEvidenceRequestId(requestIdentity);
-                    _recordFindingEvidenceSuppressed(
-                        goal.Id,
-                        requestingTask.Id,
-                        telemetryCandidateSha,
-                        writableBlockerIds,
-                        requestId,
-                        suppressionRoute.ChosenOwner ?? throw new InvalidOperationException("Writable finding suppression requires a feasible upstream owner."),
-                        reason,
-                        CreateFindingEvidenceSuppressionIdentity(
-                            telemetryCandidateSha,
-                            requestIdentity,
-                            writableBlockerIds));
-                }
-
-                return false;
-            }
+            return false;
         }
 
         var groups = new List<FindingEvidenceRequestGroup>();

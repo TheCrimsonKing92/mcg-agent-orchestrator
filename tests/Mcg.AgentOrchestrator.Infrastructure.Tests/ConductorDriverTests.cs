@@ -529,7 +529,8 @@ public sealed class ConductorDriverTests
             getFacts ?? (_ => GoalLifecycleFacts.None),
             getRunningCount ?? (() => 0),
             createWorkspace ?? (_ => "/tmp/workspace"),
-            dispatchAndStart ?? (_ => DispatchStartOutcome.Started()),
+            dispatchAndStart ?? (goal => DispatchStartOutcome.Started(
+                goal.Tasks.Where(task => task.Status == WorkTaskStatus.Assigned).ToArray())),
             startRecordedDispatches,
             buildServerShutdown,
             runAcceptanceSummary ?? (goal => (runAcceptance ?? (_ => true))(goal)
@@ -910,7 +911,7 @@ public sealed class ConductorDriverTests
                 Assert.Equal(WorkTaskStatus.Assigned, goal.Tasks.Single().Status);
                 Assert.Equal(WorkTaskStatus.Running, currentGoal.Tasks.Single().Status);
                 Assert.NotNull(currentGoal.Tasks.Single().LastDispatch);
-                return DispatchStartOutcome.Started();
+                return DispatchStartOutcome.Started([currentGoal.Tasks.Single()]);
             },
             buildServerShutdown: () => { shutdownCalled = true; },
             writeEscalation: (_, _, _) => { escalated = true; });
