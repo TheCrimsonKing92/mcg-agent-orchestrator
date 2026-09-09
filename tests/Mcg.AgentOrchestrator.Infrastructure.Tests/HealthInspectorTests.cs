@@ -6,6 +6,40 @@ using System.Net.Sockets;
 
 public sealed class HealthInspectorTests
 {
+    [Xunit.Fact]
+    public void ProfileInspectionPreservesFullReportValidationWithoutProviderCommandProbes()
+    {
+        var catalog = new WorkerProfileCatalog(
+        [
+            new WorkerProfile("ok", "agent-cli --prompt {promptPath}"),
+            new WorkerProfile("missing", "missing-cli {promptPath}"),
+            new WorkerProfile("echo-only", "Write-Output {promptPath}"),
+            new WorkerProfile("local-echo", "Write-Output {promptPath}"),
+            new WorkerProfile("codex-cli", "codex exec --sandbox workspace-write --cd {workingDirectory}"),
+            new WorkerProfile("claude-cli", "claude -p {promptPath} --permission-mode bypassPermissions")
+        ]);
+        static bool CommandExists(string command) => command is "agent-cli" or "Write-Output" or "codex";
+        var inspectedCommands = new List<string>();
+        var profiles = OrchestratorHealthInspector.InspectWorkerProfiles(catalog, command =>
+        {
+            inspectedCommands.Add(command);
+            return CommandExists(command);
+        });
+        Assert.Equal(new[] { "agent-cli", "missing-cli", "Write-Output", "Write-Output", "codex", "claude" }, inspectedCommands);
+        Assert.True(profiles.Single(profile => profile.Name == "ok").IsResolvable);
+        Assert.False(profiles.Single(profile => profile.Name == "missing").IsResolvable);
+        Assert.True(profiles.Single(profile => profile.Name == "echo-only").IsEchoOnly);
+        Assert.Contains("Diagnostic echo", profiles.Single(profile => profile.Name == "local-echo").Detail, StringComparison.Ordinal);
+        Assert.True(profiles.Single(profile => profile.Name == "codex-cli").IsPatchCapable);
+        Assert.True(profiles.Single(profile => profile.Name == "claude-cli").IsOptional);
+        Assert.False(profiles.Single(profile => profile.Name == "claude-cli").IsResolvable);
+
+        var report = OrchestratorHealthInspector.Inspect(
+            new Dictionary<string, string?>(StringComparer.OrdinalIgnoreCase),
+            AgentCatalog.Default(), catalog, CommandExists);
+        Assert.Equal(report.WorkerProfiles, profiles);
+    }
+
     [Xunit.Fact(DisplayName = "OrchestratorHealthInspector_reports_provider_key_status")]
     public void OrchestratorHealthInspectorReportsProviderKeyStatus()
 {
