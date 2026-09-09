@@ -9,7 +9,7 @@ public sealed class AssignedScopeCompleteTests
 
         Xunit.Assert.Contains("assigned_scope_complete: <true|false>", lines);
         Xunit.Assert.Contains(
-            "Developer: for `assigned_scope_complete`, enter the literal `true` or `false` alone on its field line; do not add a dash, explanation, punctuation, or quotes. This reports whether your assigned implementation scope is complete; `false` requests a bounded revision and does not describe later Acceptance/operator evidence.",
+            "Developer: set `assigned_scope_complete` to `true` only when your assigned implementation is complete; `false` requests bounded revision and excludes later Acceptance/operator evidence.",
             lines);
         Xunit.Assert.DoesNotContain(
             lines,
