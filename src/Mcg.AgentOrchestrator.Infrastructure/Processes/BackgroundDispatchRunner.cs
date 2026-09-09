@@ -1780,6 +1780,14 @@ public sealed class BackgroundDispatchRunner
         var heartbeatStdoutBytes = _recoveryService.TryReadHeartbeat(GetHeartbeatPath(processRecord), out var completionHeartbeat)
             ? completionHeartbeat.StandardOutputBytes
             : (long?)null;
+        // The bounded snapshot is diagnostic evidence only. A scope declaration can steer a
+        // Developer into a bounded revision, so it must come from the authoritative artifact.
+        bool assignedScopeComplete = false;
+        var hasAssignedScopeComplete = fullStandardOutput.Content is { } assignedScopeOutput &&
+            WorkerResultBlockers.TryGetAssignedScopeComplete(
+                assignedScopeOutput,
+                out assignedScopeComplete,
+                out _);
 
         var verification = new TaskVerificationRecord(
             processRecord.Command,
@@ -1808,7 +1816,8 @@ public sealed class BackgroundDispatchRunner
             FullStandardError: fullStandardError.Content,
             FullStandardOutputUnavailableReason: fullStandardOutput.UnavailableReason,
             FullStandardErrorUnavailableReason: fullStandardError.UnavailableReason,
-            PlannerCandidateDivergence: plannerCandidateDivergence);
+            PlannerCandidateDivergence: plannerCandidateDivergence,
+            AssignedScopeComplete: hasAssignedScopeComplete ? assignedScopeComplete : null);
 
         var outcome = new DispatchRefreshOutcome(
             completed,
