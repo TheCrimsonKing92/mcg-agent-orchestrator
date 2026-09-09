@@ -684,6 +684,7 @@ public sealed class ConductorEvidenceAttemptLifecycleTests
                                 .GetProperty("acceptance")
                                 .GetProperty("passed")
                                 .GetBoolean();
+                            readerReady.Set();
                             Assert.True(releaseReader.Wait(TimeSpan.FromSeconds(10)));
                         }
                         catch (Exception ex)
@@ -698,6 +699,7 @@ public sealed class ConductorEvidenceAttemptLifecycleTests
                     readerThread.IsBackground = true;
                     readerThread.Start();
                     Assert.True(readerReady.Wait(TimeSpan.FromSeconds(10)));
+                    Assert.Null(readerException);
                 });
 
             coordinator.RunAttemptForTests(
@@ -719,9 +721,13 @@ public sealed class ConductorEvidenceAttemptLifecycleTests
         {
             releaseReader.Set();
             readerJoined = readerThread?.Join(TimeSpan.FromSeconds(10)) ?? true;
-            Directory.Delete(root, recursive: true);
+            if (readerJoined)
+            {
+                Directory.Delete(root, recursive: true);
+            }
         }
         Assert.True(readerJoined, "Result reader did not stop after its release signal.");
+        Assert.Null(readerException);
         Assert.False(readerOnPoolThread);
     }
 
