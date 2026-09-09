@@ -82,7 +82,10 @@ public sealed partial class AgentOrchestratorKernel
                 VerificationGateReason.OutputTokenLimit);
         }
 
-        if (WorkerResultBlockers.TryFindTesterWorkerResultBlocker(task, task.LastVerification, out var testerBlocker))
+        var onlyAuthoritativelyDeferredEvidence = task.Status == WorkTaskStatus.Completed &&
+            task.LastVerification is { } verified && HasOnlyAuthoritativelyDeferredAcceptanceFindings(goal, verified);
+        if (!onlyAuthoritativelyDeferredEvidence &&
+            WorkerResultBlockers.TryFindTesterWorkerResultBlocker(task, task.LastVerification, out var testerBlocker))
         {
             return new TaskVerificationGate(
                 task.Id,
@@ -94,7 +97,7 @@ public sealed partial class AgentOrchestratorKernel
                 VerificationGateReason.TesterWorkerResultBlocker);
         }
 
-        if (task.RequiredRole == AgentRole.Reviewer &&
+        if (!onlyAuthoritativelyDeferredEvidence && task.RequiredRole == AgentRole.Reviewer &&
             !WorkerResultBlockers.IsAdvisoryNoChangeContractBlocker(task, task.LastVerification) &&
             WorkerResultBlockers.TryFindHardFailureBlocker(task.LastVerification, out var reviewerBlocker) &&
             TryGetUnsuppressedReviewerBlocker(goal, reviewerBlocker, out var effectiveReviewerBlocker))

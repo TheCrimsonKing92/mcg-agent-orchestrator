@@ -11,6 +11,7 @@ public sealed class CriterionEvidenceWorkerRoutingTests
     [Xunit.InlineData(AgentRole.Reviewer, "unmapped")]
     [Xunit.InlineData(AgentRole.Tester, "superseded")]
     [Xunit.InlineData(AgentRole.Reviewer, "superseded")]
+    [Xunit.InlineData(AgentRole.Reviewer, "not-met")]
     public void WorkerResultDeferralRequiresCurrentAuthorityAndPreservesCodeBlockers(AgentRole role, string scenario)
     {
         var kernel = new AgentOrchestratorKernel();
@@ -32,12 +33,13 @@ public sealed class CriterionEvidenceWorkerRoutingTests
         var findings = """{"stable_id":"missing-full-gate","state":"open","location":{"file":"config/acceptance-manifest.json","region":"full-gate"},"description":"The acceptance executor has not produced a receipt.","severity":"blocking","category":"acceptance-owned"}""";
         if (scenario == "mixed")
             findings += """,{"stable_id":"missing-failure-path","state":"open","location":{"file":"src/Example.cs","region":"Execute"},"description":"The failure path returns success.","severity":"blocking","category":"correctness"}""";
+        var criterionVerdict = scenario == "not-met" ? "not-met" : "not-verifiable";
         var output = string.Join(Environment.NewLine,
             "WORKER_RESULT:", "files: none", "commands: inspect", "tests: pass - fixture source checks",
             "commit: none", "blockers: Evidence and findings are recorded below.", $"findings: [{findings}]",
             "touched_anchors: []",
-            "criteria_verdicts: [{\"criterion_index\":0,\"verdict\":\"met\",\"evidence\":\"See acceptance finding\"},{\"criterion_index\":1,\"verdict\":\"met\",\"evidence\":\"Source inspected; see findings\"}]",
-            "verdict: pass", "model_fit: fixture/model - deterministic integration control", "skills: none",
+            "criteria_verdicts: [{\"criterion_index\":0,\"verdict\":\"" + criterionVerdict + "\",\"evidence\":\"See acceptance finding\"},{\"criterion_index\":1,\"verdict\":\"met\",\"evidence\":\"Source inspected; see findings\"}]",
+            "verdict: needs-work", "model_fit: fixture/model - deterministic integration control", "skills: none",
             "confidence: high", "END_WORKER_RESULT");
 
         kernel.RecordDispatchExecutionResult(goal.Id, task.Id, new TaskVerificationRecord(
@@ -51,6 +53,11 @@ public sealed class CriterionEvidenceWorkerRoutingTests
             Assert.Contains(merged, finding => finding.StableId == "missing-failure-path");
             Assert.Contains(goal.Timeline, item => item.Kind == ProgressKind.TaskFailed &&
                 (role == AgentRole.Tester || item.Message.Contains("missing-failure-path", StringComparison.Ordinal)));
+        }
+        if (scenario == "not-met")
+        {
+            Assert.Contains(goal.Timeline, item => item.Kind == ProgressKind.TaskFailed && item.Message.Contains("verdict=not-met", StringComparison.Ordinal));
+            Assert.DoesNotContain(goal.Timeline, item => item.Message.Contains("reviewer_verdict=not-met", StringComparison.Ordinal));
         }
         if (scenario == "current")
         {

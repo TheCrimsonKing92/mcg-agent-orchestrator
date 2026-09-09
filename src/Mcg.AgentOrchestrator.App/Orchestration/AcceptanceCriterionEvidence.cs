@@ -1,10 +1,28 @@
 using Mcg.AgentOrchestrator.Core;
+using Mcg.AgentOrchestrator.Core.Conductor;
 
 namespace Mcg.AgentOrchestrator.App.Orchestration;
 
 // Records only the obligations owned by a successful full gate; other evidence still blocks landing.
 internal static class AcceptanceCriterionEvidence
 {
+    public static ConductorAdvanceOutcome.Held? RecordAndCreateHold(Goal goal, string? candidateSha, AgentOrchestratorKernel? kernel)
+    {
+        var diagnostic = RecordAndDescribeOutstanding(goal, candidateSha, kernel);
+        return diagnostic is null ? null : new ConductorAdvanceOutcome.Held(
+            GoalLifecycleState.Verified, diagnostic, StableIdentity: HoldIdentity(goal, candidateSha));
+    }
+
+    public static string HoldIdentity(Goal goal, string? candidateSha)
+    {
+        var obligations = goal.GetOutstandingCriterionEvidenceObligations(candidateSha)
+            .OrderBy(item => item.Id, StringComparer.Ordinal)
+            .Select(item => $"{item.Id}:{item.FindingStableId}:{item.Owner}:{item.State}:{item.RequiredScope}");
+        var payload = $"{candidateSha}:{goal.AuthoritativeRefinedSpecVersion?.Version}:{string.Join("|", obligations)}";
+        return "criterion-evidence:" + Convert.ToHexString(System.Security.Cryptography.SHA256.HashData(
+            System.Text.Encoding.UTF8.GetBytes(payload)));
+    }
+
     public static string? RecordAndDescribeOutstanding(Goal goal, string? candidateSha, AgentOrchestratorKernel? kernel)
     {
         var diagnostic = RecordFullAcceptanceEvidence(goal, candidateSha, kernel);

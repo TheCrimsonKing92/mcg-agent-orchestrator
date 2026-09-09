@@ -560,7 +560,8 @@ public sealed partial class AgentOrchestratorKernel
                             StringComparison.OrdinalIgnoreCase)))
                 .ToArray();
             var workerOwnedNonPassingVerdicts = nonPassingVerdicts
-                .Where(item => IsWorkerOwnedCriterionObligation(goal, item.CriterionIndex))
+                .Where(item => !item.Verdict.Equals("not-verifiable", StringComparison.Ordinal) ||
+                    IsWorkerOwnedCriterionObligation(goal, item.CriterionIndex))
                 .ToArray();
             foreach (var deferred in nonPassingVerdicts.Except(workerOwnedNonPassingVerdicts))
             {
@@ -578,8 +579,7 @@ public sealed partial class AgentOrchestratorKernel
                     $"Deferred criterion evidence remains pending: obligation={obligation.Id}; owner={obligation.Owner}; " +
                     $"state={obligation.State}; next_action={obligation.RequiredScope}; reviewer_verdict={deferred.Verdict}.");
             }
-            if (workerOwnedNonPassingVerdicts.Length > 0 &&
-                WorkerResultBlockers.TryFindPassVerdict(verification))
+            if (workerOwnedNonPassingVerdicts.Length > 0)
             {
                 var details = string.Join(
                     "; ",
@@ -687,9 +687,15 @@ public sealed partial class AgentOrchestratorKernel
             return true;
         }
 
+        // A non-pass verdict is required by the worker contract when a blocking
+        // finding remains. Its authoritative owner determines whether another
+        // worker correction can resolve it.
+        var onlyAuthoritativelyDeferredBlockingFindings =
+            openBlockingFindings.Count > 0 && workerBlockingFindings.Length == 0;
         if (verification.WorkerResultPresent &&
             task.RequiredRole == AgentRole.Reviewer &&
-            !WorkerResultBlockers.TryFindPassVerdict(verification))
+            !WorkerResultBlockers.TryFindPassVerdict(verification) &&
+            !onlyAuthoritativelyDeferredBlockingFindings)
         {
             ReportTaskProgress(
                 goalId,
@@ -703,9 +709,6 @@ public sealed partial class AgentOrchestratorKernel
         // authoritative structured finding is already bound to Acceptance.
         // The binding, not the prose, is what makes this a deferral.  Keep raw
         // blockers load-bearing whenever any substantive worker finding remains.
-        var onlyAuthoritativelyDeferredBlockingFindings =
-            HasOnlyAuthoritativelyDeferredAcceptanceFindings(goal, verification);
-
         if (!onlyAuthoritativelyDeferredBlockingFindings &&
             WorkerResultBlockers.TryFindTesterWorkerResultBlocker(task, verification, out var testerBlocker))
         {
@@ -796,8 +799,9 @@ public sealed partial class AgentOrchestratorKernel
         // A worker's category is only a proposal. Deferral requires one live,
         // explicit operator/refinement binding to the exact stable finding id.
         var currentVersion = goal.AuthoritativeRefinedSpecVersion?.Version;
-        var matches = goal.OutstandingCriterionEvidenceObligations.Where(item =>
+        var matches = goal.CriterionEvidenceObligations.Where(item =>
             item.Owner == CriterionEvidenceOwner.Acceptance &&
+            item.HasValidEvidenceState &&
             item.CriterionVersion == currentVersion &&
             string.Equals(item.FindingStableId, finding.StableId, StringComparison.Ordinal)).ToArray();
         return matches.Length == 1 ? matches[0] : null;
@@ -807,6 +811,12 @@ public sealed partial class AgentOrchestratorKernel
         Goal goal,
         TaskVerificationRecord verification)
     {
+        if (WorkerResultBlockers.TryFindCriteriaVerdicts(verification, out var verdicts, out _) &&
+            verdicts.Any(item => item.Verdict == "not-met" && goal.RefinedSpec is { } spec &&
+                item.CriterionIndex >= 0 && item.CriterionIndex < spec.AcceptanceCriteria.Count &&
+                !goal.EffectiveAcceptanceCriteriaCorrections.Any(correction => correction.IsWaiver &&
+                    string.Equals(correction.SupersededCriterion, spec.AcceptanceCriteria[item.CriterionIndex].Trim(), StringComparison.OrdinalIgnoreCase))))
+            return false;
         var openFindings = ReviewFindings.GetOpenBlockingFindings(
             verification.MergedReviewFindings ?? [],
             goal.EffectiveAcceptanceCriteriaCorrections);

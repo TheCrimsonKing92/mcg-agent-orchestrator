@@ -6166,16 +6166,13 @@ internal sealed partial class ConductorDriver
 
         if (acceptance.Passed)
         {
+            goal = GetCurrentGoal(goal);
             _clearAcceptanceFailure(goal);
             var evidenceCandidateSha = acceptance.BranchHeadSha ?? _resolveAcceptanceHeads(goal).BranchHeadSha;
-            var evidenceDiagnostic = AcceptanceCriterionEvidence.RecordAndDescribeOutstanding(goal, evidenceCandidateSha, _conductorTickKernel ?? _cohortKernel);
-            if (evidenceDiagnostic is not null)
+            var evidenceHold = AcceptanceCriterionEvidence.RecordAndCreateHold(goal, evidenceCandidateSha, _cohortKernel ?? _conductorTickKernel);
+            if (evidenceHold is not null)
             {
-                return MakeResult(
-                    goal.Id.Value,
-                    goalPrefix,
-                    policy,
-                    new ConductorAdvanceOutcome.Held(GoalLifecycleState.Verified, evidenceDiagnostic));
+                return MakeResult(goal.Id.Value, goalPrefix, policy, evidenceHold);
             }
         }
 
