@@ -212,20 +212,53 @@ public sealed class Goal
         _criterionEvidenceObligations.Clear();
         foreach (var obligation in obligations ?? [])
         {
-            if (obligation.CriterionIndex < 0 || obligation.CriterionVersion < 1 ||
-                string.IsNullOrWhiteSpace(obligation.Id) || string.IsNullOrWhiteSpace(obligation.Criterion) ||
-                string.IsNullOrWhiteSpace(obligation.RequiredScope) || string.IsNullOrWhiteSpace(obligation.Provenance))
+            if (!IsValidCriterionEvidenceObligation(obligation) ||
+                _criterionEvidenceObligations.Any(existing => string.Equals(existing.Id, obligation.Id, StringComparison.Ordinal)))
             {
-                throw new InvalidOperationException($"Goal '{Id.Value}' has an invalid criterion evidence obligation.");
-            }
-
-            if (_criterionEvidenceObligations.Any(existing => string.Equals(existing.Id, obligation.Id, StringComparison.Ordinal)))
-            {
-                throw new InvalidOperationException($"Goal '{Id.Value}' has duplicate criterion evidence obligation '{obligation.Id}'.");
+                _criterionEvidenceObligations.Add(CreateMalformedCriterionEvidenceObligation(obligation));
+                continue;
             }
 
             _criterionEvidenceObligations.Add(obligation);
         }
+    }
+
+    private bool IsValidCriterionEvidenceObligation(CriterionEvidenceObligation obligation) =>
+        obligation.CriterionIndex >= 0 &&
+        obligation.CriterionVersion >= 1 &&
+        !string.IsNullOrWhiteSpace(obligation.Id) &&
+        !string.IsNullOrWhiteSpace(obligation.Criterion) &&
+        !string.IsNullOrWhiteSpace(obligation.RequiredScope) &&
+        !string.IsNullOrWhiteSpace(obligation.Provenance);
+
+    private CriterionEvidenceObligation CreateMalformedCriterionEvidenceObligation(CriterionEvidenceObligation malformed)
+    {
+        var version = _refinedSpecVersions.SingleOrDefault(item => item.Version == malformed.CriterionVersion);
+        var canRecoverIdentity = version is not null &&
+            malformed.CriterionIndex >= 0 &&
+            malformed.CriterionIndex < version.Spec.AcceptanceCriteria.Count;
+        var criterionVersion = canRecoverIdentity ? malformed.CriterionVersion : 0;
+        var criterionIndex = canRecoverIdentity ? malformed.CriterionIndex : -1;
+        var id = canRecoverIdentity
+            ? CriterionEvidenceObligation.BuildId(criterionVersion, criterionIndex)
+            : $"malformed-persisted-{_criterionEvidenceObligations.Count}";
+        while (_criterionEvidenceObligations.Any(existing => string.Equals(existing.Id, id, StringComparison.Ordinal)))
+        {
+            id = $"{id}-duplicate";
+        }
+
+        return new CriterionEvidenceObligation(
+            id,
+            criterionIndex,
+            criterionVersion,
+            canRecoverIdentity
+                ? version!.Spec.AcceptanceCriteria[criterionIndex]
+                : "Malformed persisted criterion evidence obligation",
+            CriterionEvidenceOwner.Unknown,
+            CriterionEvidenceState.Pending,
+            "ownership mapping required",
+            "malformed persisted obligation; operator mapping or explicit audited correction required",
+            malformed.RecordedAt);
     }
 
     internal CriterionEvidenceObligation MapCriterionEvidenceOwner(

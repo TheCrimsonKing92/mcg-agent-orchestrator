@@ -1930,6 +1930,43 @@ public sealed class DispatchExecutionTests
         Assert.Equal("abc1234", restoredEvidence.CandidateSha);
     }
 
+    [Xunit.Fact(DisplayName = "Criterion evidence restore retains a malformed persisted obligation as actionable unknown state")]
+    public void CriterionEvidenceRestoreRetainsMalformedPersistedObligationAsActionableUnknownState()
+    {
+        var clock = new FakeClock();
+        var kernel = new AgentOrchestratorKernel(clock);
+        var goal = kernel.CreateGoal("Recover malformed evidence", [new TaskSpec(TaskId.New(), "Implement", AgentRole.Developer)]);
+        kernel.SetGoalRefinedSpec(goal.Id, new RefinedSpec(
+            "Retain malformed state for operator repair", ["native proof"], VerificationClass.RealWorldDependent, [], [])
+        {
+            OperatorOwnedAcceptanceCriteria = ["native proof"]
+        });
+        var snapshot = kernel.ExportGoalSnapshot(goal.Id) with
+        {
+            CriterionEvidenceObligations =
+            [
+                new CriterionEvidenceObligation(
+                    Id: "",
+                    CriterionIndex: 0,
+                    CriterionVersion: 1,
+                    Criterion: "native proof",
+                    Owner: CriterionEvidenceOwner.Operator,
+                    State: CriterionEvidenceState.Pending,
+                    RequiredScope: "operator observation",
+                    Provenance: "corrupt persisted value",
+                    RecordedAt: clock.UtcNow)
+            ]
+        };
+
+        var restored = AgentOrchestratorKernel.FromSnapshot(new OrchestratorSnapshot([snapshot], []), clock)
+            .GetGoal(goal.Id);
+
+        var obligation = Assert.Single(restored.OutstandingCriterionEvidenceObligations);
+        Assert.Equal(CriterionEvidenceOwner.Unknown, obligation.Owner);
+        Assert.Equal(CriterionEvidenceState.Pending, obligation.State);
+        Assert.Equal("ownership mapping required", obligation.RequiredScope);
+    }
+
     [Xunit.Fact(DisplayName = "RecordDispatchExecutionResult_reviewer_pass_accepts_and_records_extra_criteria_attestations")]
     public void RecordDispatchExecutionResultReviewerPassAcceptsAndRecordsExtraCriteriaAttestations()
     {
