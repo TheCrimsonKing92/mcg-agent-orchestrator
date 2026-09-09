@@ -9,6 +9,52 @@ using static ConductorDriverTests;
 public sealed class ConductorDriverTestsFindingEvidenceReuse
 {
     [Xunit.Fact]
+    public void EmptySelectionCannotSynthesizeAnHonouredReceiptFromUnrelatedHistory()
+    {
+        const string candidateSha = "abc1234";
+        var (kernel, goal) = SoftwareGoal();
+        var reviewer = goal.Tasks.Single(task => task.RequiredRole == AgentRole.Reviewer);
+        foreach (var task in goal.Tasks.Where(task => task.RequiredRole != AgentRole.Reviewer))
+            PassVerification(kernel, goal, task);
+        var finding = EvidenceFindingWithRequest("Seed actual evidence history", id: "seed");
+        FailReviewerNeedsWork(kernel, goal, reviewer, "seed", findings: [finding]);
+        var driver = MakeDriver(
+            getPreReviewEvidenceContext: _ => NoPreReviewContext(candidateSha),
+            runFocusedEvidence: (_, request) => DualArmFindingEvidence(request, FindingEvidenceArmDisposition.Red, candidateSha),
+            dispatchAndStart: _ => DispatchStartOutcome.Started(),
+            retryTaskWithRoundKind: (goalId, taskId, message, kind) => kernel.RetryTask(goalId, taskId, message, retryRoundKind: kind),
+            recordFindingEvidenceRequest: (goalId, taskId, message) => kernel.RecordFindingEvidenceRequest(goalId, taskId, message),
+            recordFindingEvidenceOutcome: (goalId, taskId, id, outcome, receipt) => kernel.RecordFindingEvidenceOutcome(goalId, taskId, id, outcome, receipt));
+        driver.AdvanceOnce(goal, ConductorAutonomyPolicy.Permissive);
+        Assert.NotEmpty(reviewer.VerificationHistory.SelectMany(verification => verification.FindingEvidenceReceipts ?? []));
+        var method = typeof(ConductorDriver).GetMethod("TryGetReusableGreenFindingEvidenceReceipt",
+            System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Static)!;
+        object?[] arguments = [reviewer, finding.EvidenceRequest! with { Selections = [] }, candidateSha, null, null];
+        Assert.Equal(false, method.Invoke(null, arguments));
+        Assert.Null(arguments[3]);
+        Assert.Null(arguments[4]);
+    }
+
+    [Xunit.Theory]
+    [Xunit.InlineData("executed-dual-arm", true)]
+    [Xunit.InlineData("suppressed-budget", false)]
+    [Xunit.InlineData("not-executed", false)]
+    public void ExplicitNonExecutionCannotBecomeReusableGreenEvidence(string disposition, bool expected)
+    {
+        var request = EvidenceFindingWithRequest("control", id: "control").EvidenceRequest!;
+        var receipt = new FindingEvidenceReceipt("receipt", "candidate-a", request, true, true, "control",
+            Arms: [new(FindingEvidenceArm.Candidate, "candidate-a", FindingEvidenceArmDisposition.Green, true, true, "control")],
+            RequestDispositions: [new("control", "request-identity", disposition)]);
+        IReadOnlyDictionary<string, FindingEvidenceOutcome> outcomes = new Dictionary<string, FindingEvidenceOutcome>
+        {
+            ["receipt"] = new(Honoured: true, ReceiptId: "receipt", ResultReason: FindingEvidenceOutcomeReason.ValidEvidence)
+        };
+        var method = typeof(ConductorDriver).GetMethod("IsReusableGreenReceipt",
+            System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Static)!;
+        Assert.Equal(expected, method.Invoke(null, [receipt, "candidate-a", outcomes]));
+    }
+
+    [Xunit.Fact]
     public void ChangedFindingRoundAtSameCandidateReusesCandidateAndRequestBoundReceipt()
     {
         const string candidateSha = "abc1234";
@@ -60,6 +106,211 @@ public sealed class ConductorDriverTestsFindingEvidenceReuse
             Assert.Single(reviewer.VerificationHistory.Last().FindingEvidenceReceipts!).ReceiptId);
         Assert.Contains(goal.Timeline, item =>
             item.Message.Contains("finding-evidence disposition=reused-green", StringComparison.Ordinal));
+    }
+
+    [Xunit.Theory]
+    [Xunit.InlineData(false)]
+    [Xunit.InlineData(true)]
+    public void UnmatchedFindingRoundAtSameCandidateReusesRequestBoundReceipt(bool sameAnchor)
+    {
+        const string candidateSha = "abc1234";
+        var (kernel, goal) = SoftwareGoal();
+        var reviewer = goal.Tasks.Single(task => task.RequiredRole == AgentRole.Reviewer);
+        foreach (var task in goal.Tasks.Where(task => task.RequiredRole != AgentRole.Reviewer))
+        {
+            PassVerification(kernel, goal, task);
+        }
+
+        var finding = EvidenceFindingWithRequest(
+            "The first finding round needs focused evidence.",
+            id: "same-sha-original-finding");
+        FailReviewerNeedsWork(kernel, goal, reviewer, "first finding round", findings: [finding]);
+        var focusedRuns = 0;
+        var driver = MakeDriver(
+            getPreReviewEvidenceContext: _ => NoPreReviewContext(candidateSha),
+            runFocusedEvidence: (_, request) =>
+            {
+                focusedRuns++;
+                return DualArmFindingEvidence(request, FindingEvidenceArmDisposition.Red, candidateSha);
+            },
+            dispatchAndStart: _ => DispatchStartOutcome.Started(),
+            retryTaskWithRoundKind: (goalId, taskId, message, roundKind) =>
+                kernel.RetryTask(goalId, taskId, message, retryRoundKind: roundKind),
+            recordFindingEvidenceRequest: (goalId, taskId, message) =>
+                kernel.RecordFindingEvidenceRequest(goalId, taskId, message),
+            recordFindingEvidenceOutcome: (goalId, taskId, stableId, outcome, receipt) =>
+                kernel.RecordFindingEvidenceOutcome(goalId, taskId, stableId, outcome, receipt));
+
+        driver.AdvanceOnce(goal, ConductorAutonomyPolicy.Permissive);
+        var unmatchedFinding = finding with
+        {
+            StableId = "same-sha-unmatched-finding",
+            Location = sameAnchor ? finding.Location : finding.Location with { Region = "A separate evidence obligation" },
+            Description = "A new stable id requests the same focused evidence."
+        };
+        FailReviewerNeedsWork(kernel, goal, reviewer, "unmatched finding round", findings: [unmatchedFinding]);
+        var mergedId = sameAnchor ? finding.StableId : unmatchedFinding.StableId;
+        Assert.Contains(reviewer.LastVerification!.MergedReviewFindings!,
+            item => item.StableId == mergedId);
+
+        driver.AdvanceOnce(goal, ConductorAutonomyPolicy.Permissive);
+
+        Assert.Equal(1, focusedRuns);
+        var latestFinding = reviewer.VerificationHistory.Last().MergedReviewFindings!
+            .Single(item => item.StableId == mergedId);
+        Assert.True(latestFinding.EvidenceOutcome?.Honoured);
+        Assert.Equal(FindingEvidenceOutcomeReason.ValidEvidence, latestFinding.EvidenceOutcome?.ResultReason);
+        Assert.Contains(goal.Timeline, item =>
+            item.Message.Contains("finding-evidence disposition=reused-green", StringComparison.Ordinal) &&
+            item.Message.Contains($"finding_id={mergedId}", StringComparison.Ordinal));
+    }
+
+    [Xunit.Fact]
+    public void UnionRequestAtSameCandidateReusesConstituentGreenReceipts()
+    {
+        const string candidateSha = "abc1234";
+        var (kernel, goal) = SoftwareGoal();
+        var reviewer = goal.Tasks.Single(task => task.RequiredRole == AgentRole.Reviewer);
+        foreach (var task in goal.Tasks.Where(task => task.RequiredRole != AgentRole.Reviewer))
+        {
+            PassVerification(kernel, goal, task);
+        }
+
+        var first = EvidenceFindingWithRequest(
+            "The first constituent needs focused evidence.",
+            id: "union-first",
+            classes: ["ConductorDriverTests"]);
+        var second = EvidenceFindingWithRequest(
+            "The second constituent needs focused evidence.",
+            id: "union-second",
+            classes: ["GoalAcceptanceVerifierTests"]);
+        var union = EvidenceFindingWithRequest(
+            "The compatible union should reuse both green constituents.",
+            id: "union-request",
+            classes: ["ConductorDriverTests", "GoalAcceptanceVerifierTests"]);
+        var focusedRuns = 0;
+        var driver = MakeDriver(
+            getPreReviewEvidenceContext: _ => NoPreReviewContext(candidateSha),
+            runFocusedEvidence: (_, request) =>
+            {
+                focusedRuns++;
+                return DualArmFindingEvidence(request, FindingEvidenceArmDisposition.Red, candidateSha);
+            },
+            dispatchAndStart: _ => DispatchStartOutcome.Started(),
+            retryTaskWithRoundKind: (goalId, taskId, message, roundKind) =>
+                kernel.RetryTask(goalId, taskId, message, retryRoundKind: roundKind),
+            recordFindingEvidenceRequest: (goalId, taskId, message) =>
+                kernel.RecordFindingEvidenceRequest(goalId, taskId, message),
+            recordFindingEvidenceOutcome: (goalId, taskId, stableId, outcome, receipt) =>
+                kernel.RecordFindingEvidenceOutcome(goalId, taskId, stableId, outcome, receipt));
+
+        FailReviewerNeedsWork(kernel, goal, reviewer, "first constituent", findings: [first]);
+        driver.AdvanceOnce(goal, ConductorAutonomyPolicy.Permissive);
+        FailReviewerNeedsWork(kernel, goal, reviewer, "second constituent", findings: [second]);
+        driver.AdvanceOnce(goal, ConductorAutonomyPolicy.Permissive);
+        FailReviewerNeedsWork(kernel, goal, reviewer, "union request", findings: [union]);
+
+        driver.AdvanceOnce(goal, ConductorAutonomyPolicy.Permissive);
+
+        Assert.Equal(2, focusedRuns);
+        var latestFinding = reviewer.VerificationHistory.Last().MergedReviewFindings!
+            .Single(item => item.StableId == union.StableId);
+        Assert.True(latestFinding.EvidenceOutcome?.Honoured);
+        Assert.Equal(FindingEvidenceOutcomeReason.ValidEvidence, latestFinding.EvidenceOutcome?.ResultReason);
+        Assert.StartsWith("finding-evidence-reuse-", latestFinding.EvidenceOutcome?.ReceiptId);
+        var dispositions = reviewer.VerificationHistory.Last().FindingEvidenceReceipts!.Single().RequestDispositions;
+        Assert.NotEmpty(dispositions!);
+        Assert.All(dispositions!, disposition => Assert.StartsWith("executed-", disposition.Disposition));
+    }
+
+    [Xunit.Fact]
+    public void NarrowerRequestAtSameCandidateReusesSingleCoveringGreenReceipt()
+    {
+        const string candidateSha = "abc1234";
+        var (kernel, goal) = SoftwareGoal();
+        var reviewer = goal.Tasks.Single(task => task.RequiredRole == AgentRole.Reviewer);
+        foreach (var task in goal.Tasks.Where(task => task.RequiredRole != AgentRole.Reviewer))
+        {
+            PassVerification(kernel, goal, task);
+        }
+
+        var broader = EvidenceFindingWithRequest(
+            "The broader request establishes green evidence.",
+            id: "broader-request",
+            classes: ["ConductorDriverTests", "GoalAcceptanceVerifierTests"]);
+        var narrower = EvidenceFindingWithRequest(
+            "The narrower request is covered by the broader receipt.",
+            id: "narrower-request",
+            classes: ["ConductorDriverTests"]);
+        var focusedRuns = 0;
+        var driver = MakeDriver(
+            getPreReviewEvidenceContext: _ => NoPreReviewContext(candidateSha),
+            runFocusedEvidence: (_, request) =>
+            {
+                focusedRuns++;
+                return DualArmFindingEvidence(request, FindingEvidenceArmDisposition.Red, candidateSha);
+            },
+            dispatchAndStart: _ => DispatchStartOutcome.Started(),
+            retryTaskWithRoundKind: (goalId, taskId, message, roundKind) =>
+                kernel.RetryTask(goalId, taskId, message, retryRoundKind: roundKind),
+            recordFindingEvidenceRequest: (goalId, taskId, message) =>
+                kernel.RecordFindingEvidenceRequest(goalId, taskId, message),
+            recordFindingEvidenceOutcome: (goalId, taskId, stableId, outcome, receipt) =>
+                kernel.RecordFindingEvidenceOutcome(goalId, taskId, stableId, outcome, receipt));
+
+        FailReviewerNeedsWork(kernel, goal, reviewer, "broader request", findings: [broader]);
+        driver.AdvanceOnce(goal, ConductorAutonomyPolicy.Permissive);
+        FailReviewerNeedsWork(kernel, goal, reviewer, "narrower request", findings: [narrower]);
+        driver.AdvanceOnce(goal, ConductorAutonomyPolicy.Permissive);
+
+        Assert.Equal(1, focusedRuns);
+        Assert.True(reviewer.VerificationHistory.Last().MergedReviewFindings!
+            .Single(item => item.StableId == narrower.StableId)
+            .EvidenceOutcome?.Honoured);
+    }
+
+    [Xunit.Fact]
+    public void UnionRequestWithUncoveredSelectionDoesNotReuseConstituentReceipt()
+    {
+        const string candidateSha = "abc1234";
+        var (kernel, goal) = SoftwareGoal();
+        var reviewer = goal.Tasks.Single(task => task.RequiredRole == AgentRole.Reviewer);
+        foreach (var task in goal.Tasks.Where(task => task.RequiredRole != AgentRole.Reviewer))
+        {
+            PassVerification(kernel, goal, task);
+        }
+
+        var first = EvidenceFindingWithRequest(
+            "The only covered constituent needs focused evidence.",
+            id: "uncovered-first",
+            classes: ["ConductorDriverTests"]);
+        var union = EvidenceFindingWithRequest(
+            "The union has an uncovered constituent and must run.",
+            id: "uncovered-union",
+            classes: ["ConductorDriverTests", "GoalAcceptanceVerifierTests"]);
+        var focusedRuns = 0;
+        var driver = MakeDriver(
+            getPreReviewEvidenceContext: _ => NoPreReviewContext(candidateSha),
+            runFocusedEvidence: (_, request) =>
+            {
+                focusedRuns++;
+                return DualArmFindingEvidence(request, FindingEvidenceArmDisposition.Red, candidateSha);
+            },
+            dispatchAndStart: _ => DispatchStartOutcome.Started(),
+            retryTaskWithRoundKind: (goalId, taskId, message, roundKind) =>
+                kernel.RetryTask(goalId, taskId, message, retryRoundKind: roundKind),
+            recordFindingEvidenceRequest: (goalId, taskId, message) =>
+                kernel.RecordFindingEvidenceRequest(goalId, taskId, message),
+            recordFindingEvidenceOutcome: (goalId, taskId, stableId, outcome, receipt) =>
+                kernel.RecordFindingEvidenceOutcome(goalId, taskId, stableId, outcome, receipt));
+
+        FailReviewerNeedsWork(kernel, goal, reviewer, "covered constituent", findings: [first]);
+        driver.AdvanceOnce(goal, ConductorAutonomyPolicy.Permissive);
+        FailReviewerNeedsWork(kernel, goal, reviewer, "uncovered union", findings: [union]);
+
+        driver.AdvanceOnce(goal, ConductorAutonomyPolicy.Permissive);
+
+        Assert.Equal(2, focusedRuns);
     }
 
     [Xunit.Fact]
@@ -165,5 +416,44 @@ public sealed class ConductorDriverTestsFindingEvidenceReuse
         Assert.All(
             reviewer.VerificationHistory.SelectMany(item => item.FindingEvidenceReceipts ?? []),
             receipt => Assert.False(receipt.Passed));
+    }
+
+    [Xunit.Fact]
+    public void ReviewerCorrectnessFindingWithEvidenceRequestReopensDeveloperBeforeEvidenceRuns()
+    {
+        const string candidateSha = "abc1234";
+        var (kernel, goal) = SoftwareGoal();
+        var developer = goal.Tasks.Single(task => task.RequiredRole == AgentRole.Developer);
+        var reviewer = goal.Tasks.Single(task => task.RequiredRole == AgentRole.Reviewer);
+        foreach (var task in goal.Tasks.Where(task => task.RequiredRole != AgentRole.Reviewer))
+        {
+            PassVerification(kernel, goal, task, hasCommittedChanges: task.Id == developer.Id);
+        }
+
+        var finding = EvidenceFindingWithRequest(
+            "The candidate fails a correctness invariant.",
+            id: "reviewer-correctness-finding",
+            category: FindingCategory.Correctness);
+        FailReviewerNeedsWork(kernel, goal, reviewer, "correctness finding", findings: [finding]);
+        var focusedRuns = 0;
+        TaskId? retriedTaskId = null;
+        var driver = MakeDriver(
+            getPreReviewEvidenceContext: _ => NoPreReviewContext(candidateSha),
+            runFocusedEvidence: (_, request) =>
+            {
+                focusedRuns++;
+                return DualArmFindingEvidence(request, FindingEvidenceArmDisposition.Red, candidateSha);
+            },
+            dispatchAndStart: _ => DispatchStartOutcome.Started(),
+            retryTaskWithRoundKind: (goalId, taskId, message, roundKind) =>
+            {
+                retriedTaskId = taskId;
+                return kernel.RetryTask(goalId, taskId, message, retryRoundKind: roundKind);
+            });
+
+        driver.AdvanceOnce(goal, ConductorAutonomyPolicy.Permissive);
+
+        Assert.Equal(0, focusedRuns);
+        Assert.Equal(developer.Id, retriedTaskId);
     }
 }

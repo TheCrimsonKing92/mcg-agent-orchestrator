@@ -1336,6 +1336,7 @@ public sealed partial class AgentOrchestratorKernel
             reservationOwnerId,
             reservationLeaseExpiresAt,
             reservationRecoveryConfirmed);
+        result = RetryAdmissionReceiptContext.Enrich(goal, task, task.LastDispatch, result);
         ApplyPreparedRetryAdmission(goalId, taskId, result);
         return result;
     }
@@ -1374,7 +1375,7 @@ public sealed partial class AgentOrchestratorKernel
                         goal,
                         taskId,
                         ProgressKind.NoProgressRedispatchPrevented,
-                        $"NO_PROGRESS_REDISPATCH_PREVENTED fingerprint={result.Receipt.Fingerprint.Value} cause={result.Receipt.Cause} route={result.Receipt.Route} attempt={result.Receipt.LinkedDispatchAt:O}");
+                    FormatNoProgressRedispatchDisposition(result.Receipt));
                     return;
                 }
 
@@ -1390,7 +1391,7 @@ public sealed partial class AgentOrchestratorKernel
                 goal,
                 taskId,
                 ProgressKind.NoProgressRedispatchPrevented,
-                $"NO_PROGRESS_REDISPATCH_PREVENTED fingerprint={result.Receipt.Fingerprint.Value} cause={result.Receipt.Cause} route={result.Receipt.Route} attempt={result.Receipt.LinkedDispatchAt:O}");
+                FormatNoProgressRedispatchDisposition(result.Receipt));
             ApplyRetryAdmissionRoute(goal, task, result.Receipt);
         }
     }
@@ -1442,6 +1443,14 @@ public sealed partial class AgentOrchestratorKernel
                 throw new InvalidOperationException($"Unsupported retry-admission route '{receipt.Route}'.");
         }
     }
+
+    private static string FormatNoProgressRedispatchDisposition(RetryAdmissionReceipt receipt) =>
+        $"NO_PROGRESS_REDISPATCH_PREVENTED fingerprint={receipt.Fingerprint.Value} cause={receipt.Cause} route={receipt.Route} " +
+        $"attempt={receipt.LinkedDispatchAt:O} candidate_sha={receipt.CandidateSha ?? "unavailable"} " +
+        $"stable_finding_ids={string.Join(",", receipt.StableFindingIds ?? [])} " +
+        $"evidence_identities={string.Join(",", receipt.EvidenceIdentities ?? [])} " +
+        $"evidence_identities_truncated={receipt.EvidenceIdentitiesTruncated.ToString().ToLowerInvariant()} " +
+        $"task_must_change={receipt.RequiredTaskChangeId ?? "unavailable"}";
 
     private void RoutePreventedRetryToAcceptanceRegate(
         Goal goal,

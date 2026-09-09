@@ -44,6 +44,20 @@ public sealed class ConductorDriverTestsDeferredEvidenceTicks
         kernel.RecordDispatchExecutionResult(goal.Id, reviewer.Id, new TaskVerificationRecord(
             "review", "C:\\fixture", 0, output, "", DateTimeOffset.UtcNow, WorkerResultPresent: true));
         Assert.Equal(WorkTaskStatus.Completed, reviewer.Status);
+        kernel.RecordPreReviewEvidence(goal.Id, reviewer.Id, new PreReviewEvidenceReceipt(
+            goal.Id.Value,
+            ReviewerRound: 1,
+            CandidateSha: candidateSha,
+            SelectedFocusedTests: ["Infrastructure.Tests: ConductorDriverTests"],
+            Disposition: PreReviewEvidenceDisposition.Green,
+            PassedCheckCount: 1,
+            FailedCheckCount: 0,
+            Checks: [new PreReviewEvidenceCheckReceipt(
+                "ConductorDriverTests", "Infrastructure.Tests: ConductorDriverTests", Passed: true, ExitCode: 0)],
+            FailingTestIdentities: [],
+            MappingReason: "Focused evidence coexists with pending external obligations",
+            EvidencePointer: "fixture://focused-green",
+            RecordedAt: DateTimeOffset.UtcNow));
 
         var starts = 0;
         var retries = 0;
@@ -72,6 +86,11 @@ public sealed class ConductorDriverTestsDeferredEvidenceTicks
                     JsonSerializer.Serialize(kernel.ExportSnapshot()))!);
                 goal = kernel.GetGoal(goal.Id);
             }
+            var persistedReviewer = goal.Tasks.Single(task => task.Id == reviewer.Id);
+            var focusedReceipt = Assert.Single(persistedReviewer.PreReviewEvidenceHistory);
+            Assert.Equal(candidateSha, focusedReceipt.CandidateSha);
+            Assert.Equal("fixture://focused-green", focusedReceipt.EvidencePointer);
+            Assert.Equal(PreReviewEvidenceDisposition.Green, focusedReceipt.Disposition);
             driver.BeginTick(kernel, tick + 1);
             var result = driver.AdvanceOnce(goal, ConductorAutonomyPolicy.Permissive);
             var held = Assert.IsType<ConductorAdvanceOutcome.Held>(result.Outcome);

@@ -1,4 +1,5 @@
 using Mcg.AgentOrchestrator.App.Orchestration;
+using Mcg.AgentOrchestrator.App.Dashboard.Api;
 using Mcg.AgentOrchestrator.Core;
 using Mcg.AgentOrchestrator.Core.Conductor;
 using System.Text.Json;
@@ -47,11 +48,202 @@ public sealed class ConductorDriverTestsTesterFindingRetry
     }
 
     [Xunit.Fact]
-    public void TestEvidenceTesterFindingUsesEvidencePath()
+    public void DeveloperOwnedTesterFindingReopensDeveloperAfterItsLatestRetryProducedNoCommit()
     {
         var (kernel, goal) = SoftwareGoal();
         var developer = goal.Tasks.Single(task => task.RequiredRole == AgentRole.Developer);
         var tester = goal.Tasks.Single(task => task.RequiredRole == AgentRole.Tester);
+        PassVerification(kernel, goal, developer, hasCommittedChanges: true);
+        kernel.RetryTask(goal.Id, developer.Id, "A blocking source finding needs a correction.");
+        PassVerification(kernel, goal, developer, hasCommittedChanges: false);
+        RecordTesterFinding(kernel, goal, tester, FindingCategory.Correctness, includeEvidenceRequest: true);
+
+        TaskId? retriedTaskId = null;
+        var focusedRuns = 0;
+        var driver = MakeDriver(
+            getFacts: _ => GoalLifecycleFacts.None,
+            getPreReviewEvidenceContext: _ => NoPreReviewContext("abc1234"),
+            runFocusedEvidence: (_, request) =>
+            {
+                focusedRuns++;
+                return DualArmFindingEvidence(request, FindingEvidenceArmDisposition.Red, "abc1234");
+            },
+            dispatchAndStart: _ => DispatchStartOutcome.Started(),
+            retryTaskWithRoundKind: (goalId, taskId, message, roundKind) =>
+            {
+                retriedTaskId = taskId;
+                return kernel.RetryTask(goalId, taskId, message, retryRoundKind: roundKind);
+            });
+
+        var result = driver.AdvanceOnce(goal, ConductorAutonomyPolicy.Permissive);
+
+        Assert.Equal(0, focusedRuns);
+        Assert.Equal(developer.Id, retriedTaskId);
+        Assert.True(result.Outcome is ConductorAdvanceOutcome.Executed);
+    }
+
+    [Xunit.Theory]
+    [Xunit.InlineData(false)]
+    [Xunit.InlineData(true)]
+    public void PendingDeveloperRetryPreventsCombinedTesterReviewerEvidenceRepeatAndDispatchesDeveloper(bool restart)
+    {
+        const string candidateSha = "abc1234";
+        var (kernel, goal) = SoftwareGoal();
+        var developer = goal.Tasks.Single(task => task.RequiredRole == AgentRole.Developer);
+        var tester = goal.Tasks.Single(task => task.RequiredRole == AgentRole.Tester);
+        var reviewer = goal.Tasks.Single(task => task.RequiredRole == AgentRole.Reviewer);
+        foreach (var predecessor in goal.Tasks.TakeWhile(task => task.Id != developer.Id))
+            PassVerification(kernel, goal, predecessor);
+        PassVerification(kernel, goal, developer, hasCommittedChanges: true);
+        kernel.RecordDispatchResultCommit(goal.Id, developer.Id, candidateSha);
+        kernel.RetryTask(
+            goal.Id,
+            developer.Id,
+            "The operator supplied an upstream source correction.",
+            retryCause: RetryCause.NewSourceFinding);
+        kernel.RecordPreReviewEvidence(goal.Id, reviewer.Id, new PreReviewEvidenceReceipt(
+            goal.Id.Value,
+            ReviewerRound: 1,
+            CandidateSha: candidateSha,
+            SelectedFocusedTests: ["Infrastructure.Tests: ConductorDriverTests"],
+            Disposition: PreReviewEvidenceDisposition.Green,
+            PassedCheckCount: 1,
+            FailedCheckCount: 0,
+            Checks: [new PreReviewEvidenceCheckReceipt(
+                "ConductorDriverTests",
+                "Infrastructure.Tests: ConductorDriverTests",
+                Passed: true,
+                ExitCode: 0)],
+            FailingTestIdentities: [],
+            MappingReason: "fixture green evidence",
+            EvidencePointer: "fixture://green",
+            RecordedAt: DateTimeOffset.UtcNow));
+        RecordTesterFinding(kernel, goal, tester, FindingCategory.Correctness, includeEvidenceRequest: true);
+        FailReviewerNeedsWork(
+            kernel,
+            goal,
+            reviewer,
+            "reviewer source finding",
+            findings: [EvidenceFindingWithRequest(
+                "The unchanged candidate still has a blocking source defect.",
+                id: "combined-reviewer-correctness",
+                category: FindingCategory.Correctness)]);
+
+        var focusedRuns = 0;
+        IReadOnlyList<DispatchedTaskIdentity>? dispatched = null;
+        var additionalRetries = new List<(TaskId Target, RetryRoundKind? Kind, RetryCause Cause)>();
+        var starts = 0;
+        var capacityAvailable = false;
+        var pendingRetryAt = developer.LatestRetryAt;
+        var admittedRetries = goal.Timeline.Count(evt => evt.TaskId == developer.Id && evt.Kind == ProgressKind.TaskRetried);
+        var driver = MakeDriver(
+            getFacts: _ => new GoalLifecycleFacts(WorkspaceExists: true),
+            getPreReviewEvidenceContext: _ => NoPreReviewContext(candidateSha),
+            runFocusedEvidence: (_, request) =>
+            {
+                focusedRuns++;
+                return DualArmFindingEvidence(request, FindingEvidenceArmDisposition.Red, candidateSha);
+            },
+            dispatchAndStart: dispatchGoal =>
+            {
+                if (!capacityAvailable)
+                    return DispatchStartOutcome.EmptyBatch("Fixture provider capacity temporarily unavailable.");
+                var batch = GoalManagementCommandService.BuildReadyTaskParallelPlan(dispatchGoal, DefaultAgents())
+                    .Batches.FirstOrDefault();
+                var started = dispatchGoal.Tasks.Where(task =>
+                    batch?.IntentIds.Contains(task.Id.Value) == true).ToArray();
+                foreach (var task in started)
+                {
+                    starts++;
+                    DispatchTask(kernel, dispatchGoal, task);
+                    kernel.RecordTaskProcessStarted(dispatchGoal.Id, task.Id, new TaskProcessRecord(
+                        12345, "test.exe", @"C:\tmp", @"C:\tmp\stdout", @"C:\tmp\stderr", @"C:\tmp\exit",
+                        StartedAt: DateTimeOffset.UtcNow, CompletedAt: null, ExitCode: null));
+                }
+                var outcome = DispatchStartOutcome.Started(started);
+                dispatched = outcome.DispatchedTasks;
+                return outcome;
+            },
+            retryTaskWithCause: (goalId, taskId, message, roundKind, cause) =>
+            {
+                additionalRetries.Add((taskId, roundKind, cause));
+                return kernel.RetryTaskAutomatically(goalId, taskId, message, cause, retryRoundKind: roundKind);
+            },
+            recordTaskNote: (goalId, taskId, message) => kernel.RecordTaskNote(goalId, taskId, message));
+
+        driver.AdvanceOnce(goal, ConductorAutonomyPolicy.Permissive);
+        var proposal = Assert.Single(additionalRetries);
+        Assert.Equal((developer.Id, (RetryRoundKind?)null, RetryCause.NewSourceFinding), proposal);
+        Assert.Equal(admittedRetries, goal.Timeline.Count(evt => evt.TaskId == developer.Id && evt.Kind == ProgressKind.TaskRetried));
+        Assert.Equal(0, starts);
+        Assert.Equal(WorkTaskStatus.Assigned, tester.Status);
+        Assert.Equal(WorkTaskStatus.Assigned, reviewer.Status);
+        Assert.Null(tester.LastVerification);
+        Assert.Null(reviewer.LastVerification);
+        var notes = goal.Timeline.Count(evt => evt.TaskId == developer.Id && evt.Kind == ProgressKind.TaskRetryFeedbackUpdated);
+        Assert.Equal(1, notes);
+        Assert.NotEmpty(tester.VerificationHistory);
+        Assert.NotEmpty(reviewer.VerificationHistory);
+        if (restart)
+        {
+            var persisted = JsonSerializer.Serialize(kernel.ExportSnapshot());
+            kernel = AgentOrchestratorKernel.FromSnapshot(JsonSerializer.Deserialize<OrchestratorSnapshot>(persisted)!);
+            goal = kernel.GetGoal(goal.Id);
+            developer = goal.Tasks.Single(task => task.Id == developer.Id);
+            tester = goal.Tasks.Single(task => task.Id == tester.Id);
+            reviewer = goal.Tasks.Single(task => task.Id == reviewer.Id);
+        }
+        var timelineCount = goal.Timeline.Count;
+        driver.AdvanceOnce(goal, ConductorAutonomyPolicy.Permissive);
+        Assert.Equal(timelineCount, goal.Timeline.Count);
+        Assert.Single(additionalRetries);
+        Assert.Equal(notes, goal.Timeline.Count(evt => evt.TaskId == developer.Id && evt.Kind == ProgressKind.TaskRetryFeedbackUpdated));
+        capacityAvailable = true;
+        var result = driver.AdvanceOnce(goal, ConductorAutonomyPolicy.Permissive);
+
+        Assert.Single(additionalRetries);
+        Assert.Equal(pendingRetryAt, developer.LatestRetryAt);
+        Assert.Equal(0, focusedRuns);
+        Assert.Single(reviewer.PreReviewEvidenceHistory);
+        Assert.True(dispatched is not null, JsonSerializer.Serialize(new
+        {
+            Outcome = result.Outcome.ToString(),
+            goal.Status,
+            Tasks = goal.Tasks.Select(task => new { task.RequiredRole, task.Status })
+        }));
+        Assert.Equal(developer.Id, Assert.Single(dispatched!).TaskId);
+        Assert.Equal(AgentRole.Developer, Assert.Single(dispatched!).Role);
+        Assert.True(result.Outcome is ConductorAdvanceOutcome.Executed);
+        var brief = kernel.BuildTaskBrief(goal.Id, developer.Id).Content;
+        Assert.Contains("T-FINDING", brief);
+        Assert.Contains("combined-reviewer-correctness", brief);
+        var next = driver.AdvanceOnce(goal, ConductorAutonomyPolicy.Permissive);
+        Assert.IsType<ConductorAdvanceOutcome.Held>(next.Outcome);
+        Assert.Single(additionalRetries);
+        Assert.Equal(1, starts);
+
+        kernel.RecordDispatchResultCommit(goal.Id, developer.Id, "def5678");
+        kernel.RecordTaskProcessRefreshed(goal.Id, developer.Id,
+            developer.LastProcess! with { CompletedAt = DateTimeOffset.UtcNow, ExitCode = 0 }, null);
+        kernel.RecordTaskVerification(goal.Id, developer.Id, new TaskVerificationRecord(
+            "test.exe", @"C:\tmp", 0, "ok", "", DateTimeOffset.UtcNow, HasCommittedChanges: true));
+        Assert.Equal(WorkTaskStatus.Completed, developer.Status);
+        driver.AdvanceOnce(goal, ConductorAutonomyPolicy.Permissive);
+        Assert.Equal(tester.Id, Assert.Single(dispatched!).TaskId);
+        Assert.Equal(2, starts);
+        Assert.Null(tester.LastVerification);
+        Assert.NotEmpty(tester.VerificationHistory);
+        Assert.Equal(WorkTaskStatus.Assigned, reviewer.Status);
+    }
+
+    [Xunit.Theory]
+    [Xunit.InlineData(AgentRole.Tester)]
+    [Xunit.InlineData(AgentRole.Reviewer)]
+    public void TestEvidenceFindingUsesEvidencePath(AgentRole requestingRole)
+    {
+        var (kernel, goal) = SoftwareGoal();
+        var developer = goal.Tasks.Single(task => task.RequiredRole == AgentRole.Developer);
+        var tester = goal.Tasks.Single(task => task.RequiredRole == requestingRole);
         PassVerification(kernel, goal, developer, hasCommittedChanges: true);
         RecordTesterFinding(kernel, goal, tester, FindingCategory.TestEvidence, includeEvidenceRequest: true);
 
