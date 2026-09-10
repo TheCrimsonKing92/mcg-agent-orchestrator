@@ -806,7 +806,8 @@ public sealed class ConductorBatchLoopTestsSelfHandoff : ConductorBatchLoopTests
         Assert.Contains("ProcThreadAttributeHandleList", source, StringComparison.Ordinal);
         Assert.Contains("ExtendedStartupInfoPresent", source, StringComparison.Ordinal);
         Assert.Equal(0x01080600u, ConductorLoopHandoff.WindowsSuccessorCreationFlags);
-        Assert.DoesNotContain("WindowsCreationFlags.CreateNoWindow", source, StringComparison.Ordinal);
+        Assert.Contains("suppressionScope?.ChildCreationFlags", source, StringComparison.Ordinal);
+        Assert.Contains("CreateNoWindow = 0x08000000", source, StringComparison.Ordinal);
         Assert.DoesNotContain("WindowsCreationFlags.DetachedProcess", source, StringComparison.Ordinal);
 
         var jobSource = File.ReadAllText(Path.Combine(InfrastructureTestSupport.FindRepositoryRoot(), "src", "Mcg.AgentOrchestrator.Infrastructure", "Processes", "OwnedProcessGroup.cs"));
@@ -845,7 +846,7 @@ public sealed class ConductorBatchLoopTestsSelfHandoff : ConductorBatchLoopTests
                 {
                     suppressionScopeActive = true;
                     return new ProcessTreeGuiSuppression.ConsoleSpawnScope(
-                        hiddenConsoleAcquired: true,
+                        childConsolePolicyApplied: true,
                         onDispose: () => suppressionScopeActive = false);
                 },
                 beforeCreateProcess: () => Assert.True(
@@ -864,7 +865,7 @@ public sealed class ConductorBatchLoopTestsSelfHandoff : ConductorBatchLoopTests
             Assert.Contains("spawnPath=windows-createprocess", conductEvents, StringComparison.Ordinal);
             Assert.Matches("incumbentConsole=(present|absent)", conductEvents);
             Assert.Matches("incumbentConsoleAttached=(true|false)", conductEvents);
-            Assert.Contains("suppression=hidden-console-acquired", conductEvents, StringComparison.Ordinal);
+            Assert.Contains("suppression=child-owned-hidden-console", conductEvents, StringComparison.Ordinal);
             Assert.True(WaitUntil(
                 () => File.Exists(stdoutPath) && ReadAllTextShared(stdoutPath).Contains(stdoutMarker, StringComparison.Ordinal),
                 TimeSpan.FromSeconds(10)),

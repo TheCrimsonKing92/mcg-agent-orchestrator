@@ -921,8 +921,8 @@ internal static partial class ConductorLoopHandoff
                     var spawnConsole = ProbeWindowsConsoleState();
                     var suppression = suppressionFailure is not null
                         ? "acquisition-failed"
-                        : suppressionScope?.HiddenConsoleAcquired == true
-                            ? "hidden-console-acquired"
+                        : suppressionScope?.ChildConsolePolicyApplied == true
+                            ? "child-owned-hidden-console"
                             : "existing-console-preserved";
                     TryAppendWindowsSpawnEvent(
                         request,
@@ -939,7 +939,7 @@ internal static partial class ConductorLoopHandoff
                             lpProcessAttributes: IntPtr.Zero,
                             lpThreadAttributes: IntPtr.Zero,
                             bInheritHandles: true,
-                            dwCreationFlags: (WindowsCreationFlags)WindowsSuccessorCreationFlags,
+                            dwCreationFlags: (WindowsCreationFlags)(WindowsSuccessorCreationFlags | (suppressionScope?.ChildCreationFlags ?? 0)),
                             lpEnvironment: environment,
                             lpCurrentDirectory: request.WorkingDirectory,
                             lpStartupInfo: ref startupInfo,
@@ -1503,6 +1503,7 @@ internal static partial class ConductorLoopHandoff
         CreateNewProcessGroup = 0x00000200,
         CreateUnicodeEnvironment = 0x00000400,
         CreateBreakawayFromJob = 0x01000000,
+        CreateNoWindow = 0x08000000,
         ExtendedStartupInfoPresent = 0x00080000
     }
 

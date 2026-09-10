@@ -765,7 +765,7 @@ internal sealed class OwnedProcessGroup : IDisposable
                     IntPtr.Zero,
                     IntPtr.Zero,
                     useStandardHandles,
-                    CreateSuspended | CreateUnicodeEnvironment | ExtendedStartupInfoPresent,
+                    CreateSuspended | CreateUnicodeEnvironment | ExtendedStartupInfoPresent | suppression.ChildCreationFlags,
                     environment,
                     workingDirectory,
                     ref startupInfo,
