@@ -48,10 +48,12 @@ public sealed class PipeDrainSaturationProbeChildTests
     {
         const string expected = "complete-pipe-output";
         Task<string>? poolDependentRead = null;
+        TaskCompletionSource<bool>? poolWorkItemExecuted = null;
         Exception? failure = null;
         string? failureKind = null;
         BoundedSaturationEvidence? evidence = null;
-        var poolDependentReadCompleted = false;
+        var poolDependentReadCompletedAfterObservation = false;
+        var poolWorkItemExecutedDuringObservation = false;
 
         try
         {
@@ -60,7 +62,10 @@ public sealed class PipeDrainSaturationProbeChildTests
                 evidence = currentEvidence;
                 poolDependentRead = new PipeDrainThreadPoolSaturationTests.SynchronousOnlyTextReader(expected)
                     .ReadToEndAsync();
-                poolDependentReadCompleted = poolDependentRead.IsCompleted;
+                poolWorkItemExecuted = new TaskCompletionSource<bool>(TaskCreationOptions.RunContinuationsAsynchronously);
+                ThreadPool.UnsafeQueueUserWorkItem(
+                    static state => ((TaskCompletionSource<bool>)state!).TrySetResult(true),
+                    poolWorkItemExecuted);
 
                 if (mode == DedicatedReaderMode)
                 {
@@ -74,22 +79,37 @@ public sealed class PipeDrainSaturationProbeChildTests
                     }
 
                     Xunit.Assert.Equal(expected, drain.Text);
-                    if (poolDependentReadCompleted)
+                    poolDependentReadCompletedAfterObservation = poolDependentRead.Wait(TimeSpan.FromSeconds(2));
+                    poolWorkItemExecutedDuringObservation = poolWorkItemExecuted.Task.IsCompleted;
+                    if (poolWorkItemExecutedDuringObservation)
                     {
                         failureKind = "negative-control-unsaturated";
                         throw new Xunit.Sdk.XunitException("Negative control unexpectedly found a free thread-pool worker.");
                     }
+
+                    Xunit.Assert.False(
+                        poolDependentReadCompletedAfterObservation,
+                        "Negative control completed within the two-second starvation observation window.");
 
                     return;
                 }
 
                 if (mode == PoolDependentReaderMode)
                 {
-                    if (!poolDependentReadCompleted)
+                    poolDependentReadCompletedAfterObservation = poolDependentRead.Wait(TimeSpan.FromSeconds(2));
+                    poolWorkItemExecutedDuringObservation = poolWorkItemExecuted.Task.IsCompleted;
+                    if (poolWorkItemExecutedDuringObservation)
+                    {
+                        failureKind = "dedicated-reader-substitution-unsaturated";
+                        throw new Xunit.Sdk.XunitException(
+                            "Dedicated-reader substitution found a free thread-pool worker during the observation window.");
+                    }
+
+                    if (!poolDependentReadCompletedAfterObservation)
                     {
                         failureKind = "dedicated-reader-substitution-starved";
                         throw new Xunit.Sdk.XunitException(
-                            "Dedicated-reader substitution remained starved as required by the negative control.");
+                            "Dedicated-reader substitution remained starved for the two-second observation window.");
                     }
 
                     failureKind = "dedicated-reader-substitution-completed";
@@ -113,6 +133,11 @@ public sealed class PipeDrainSaturationProbeChildTests
                 poolDependentRead.GetAwaiter().GetResult();
             }
 
+            if (poolWorkItemExecuted is not null)
+            {
+                poolWorkItemExecuted.Task.GetAwaiter().GetResult();
+            }
+
             var receipt = new PipeDrainSaturationProbeReceipt(
                 mode,
                 Environment.ProcessId,
@@ -121,7 +146,8 @@ public sealed class PipeDrainSaturationProbeChildTests
                 evidence?.ThreadCountBefore ?? ThreadPool.ThreadCount,
                 ThreadPool.ThreadCount,
                 evidence?.AvailableWorkersAfterBarrier ?? -1,
-                poolDependentReadCompleted,
+                poolDependentReadCompletedAfterObservation,
+                poolWorkItemExecutedDuringObservation,
                 failure is null ? "passed" : "failed",
                 failureKind);
             File.WriteAllText(receiptPath, JsonSerializer.Serialize(receipt));
@@ -142,6 +168,7 @@ internal sealed record PipeDrainSaturationProbeReceipt(
     int ThreadCountBefore,
     int ThreadCountAfter,
     int AvailableWorkersAfterBarrier,
-    bool PoolDependentReadCompleted,
+    bool PoolDependentReadCompletedAfterObservation,
+    bool PoolWorkItemExecutedDuringObservation,
     string Outcome,
     string? FailureKind);

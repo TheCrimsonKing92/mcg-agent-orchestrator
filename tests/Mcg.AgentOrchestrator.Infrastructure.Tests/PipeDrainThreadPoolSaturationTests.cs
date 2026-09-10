@@ -15,22 +15,38 @@ public sealed class PipeDrainThreadPoolSaturationTests
         Assert.Equal("passed", result.Receipt.Outcome);
         Assert.Equal(PipeDrainSaturationProbeChildTests.DedicatedReaderMode, result.Receipt.Mode);
         Assert.Equal(0, result.Receipt.AvailableWorkersAfterBarrier);
-        Assert.False(result.Receipt.PoolDependentReadCompleted, "Negative control unexpectedly found a free thread-pool worker.");
+        Assert.False(
+            result.Receipt.PoolDependentReadCompletedAfterObservation,
+            "Negative control completed within the two-second starvation observation window.");
+        Assert.False(
+            result.Receipt.PoolWorkItemExecutedDuringObservation,
+            "Direct pool-work-item control unexpectedly ran during the starvation observation window.");
     }
 
     [Xunit.Fact(DisplayName = "PipeDrain_reads_to_end_while_pool_dependent_async_read_is_starved_after_parent_pool_growth")]
     public void PipeDrainReadsToEndWhilePoolDependentAsyncReadIsStarvedAfterParentPoolGrowth()
     {
         var before = ThreadPool.ThreadCount;
+        ThreadPool.GetMinThreads(out var minWorkerThreads, out _);
+        var legacyBlockerCount = Math.Max(minWorkerThreads, Environment.ProcessorCount) * 2 + 32;
         RunWithSaturatedThreadPool(static () => { });
         var after = ThreadPool.ThreadCount;
-        Assert.True(after > before, $"Parent pool did not grow: before={before}; after={after}.");
+        Assert.True(
+            before >= legacyBlockerCount || after > before,
+            $"Parent pool had neither legacy-scale warm history nor observed growth: " +
+            $"before={before}; after={after}; legacyBlockerCount={legacyBlockerCount}.");
 
         var result = RunSaturationProbe(PipeDrainSaturationProbeChildTests.DedicatedReaderMode);
 
         Assert.True(result.ExitCode == 0, result.DescribeFailure());
         Assert.Equal("passed", result.Receipt.Outcome);
         Assert.Equal(0, result.Receipt.AvailableWorkersAfterBarrier);
+        Assert.False(
+            result.Receipt.PoolDependentReadCompletedAfterObservation,
+            "Negative control completed within the two-second starvation observation window.");
+        Assert.False(
+            result.Receipt.PoolWorkItemExecutedDuringObservation,
+            "Direct pool-work-item control unexpectedly ran during the starvation observation window.");
     }
 
     [Xunit.Fact(DisplayName = "PipeDrain_saturation_probe_fails_when_dedicated_reader_is_replaced_by_pool_dependent_reading")]
@@ -40,6 +56,14 @@ public sealed class PipeDrainThreadPoolSaturationTests
 
         Assert.True(result.ExitCode != 0, result.DescribeFailure());
         Assert.Equal("failed", result.Receipt.Outcome);
+        Assert.Equal(PipeDrainSaturationProbeChildTests.PoolDependentReaderMode, result.Receipt.Mode);
+        Assert.Equal(0, result.Receipt.AvailableWorkersAfterBarrier);
+        Assert.False(
+            result.Receipt.PoolDependentReadCompletedAfterObservation,
+            "Pool-dependent substitute completed within the two-second starvation observation window.");
+        Assert.False(
+            result.Receipt.PoolWorkItemExecutedDuringObservation,
+            "Direct pool-work-item control unexpectedly ran during the substitution observation window.");
         Assert.Equal("dedicated-reader-substitution-starved", result.Receipt.FailureKind);
     }
 
