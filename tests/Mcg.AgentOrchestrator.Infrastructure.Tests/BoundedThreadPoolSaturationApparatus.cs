@@ -89,6 +89,78 @@ internal static class BoundedThreadPoolSaturationApparatus
         }
     }
 
+    // Grows this process's worker pool to the legacy saturation scale before any bound is applied, so the
+    // warm-history arm reproduces prior pool growth inside the isolated child instead of depending on
+    // whatever history the shared test runner happens to carry.
+    internal static WarmPoolHistoryEvidence EstablishWarmPoolHistory()
+    {
+        if (Thread.CurrentThread.IsThreadPoolThread)
+        {
+            throw new InvalidOperationException("failureKind=warm-history-on-pool-thread");
+        }
+
+        ThreadPool.GetMinThreads(out var originalMinWorkers, out var originalMinIo);
+        var threadCountBeforeWarm = ThreadPool.ThreadCount;
+
+        // Same scale as the shared saturation helper's blocker formula, so the grown history matches the
+        // magnitude that produced the original warm-pool failure rather than an arbitrary count.
+        var warmWorkerCount = Math.Max(originalMinWorkers, Environment.ProcessorCount) * 2 + 32;
+        var minSet = false;
+        int warmThreadCountPeak;
+        using var release = new ManualResetEventSlim(false);
+        using var entered = new CountdownEvent(warmWorkerCount);
+        using var completed = new CountdownEvent(warmWorkerCount);
+
+        try
+        {
+            // Raising the worker minimum makes thread creation immediate up to that minimum, so growth is
+            // established by the barrier below rather than by waiting on throttled hill-climbing injection.
+            minSet = ThreadPool.SetMinThreads(warmWorkerCount, originalMinIo);
+            if (!minSet)
+            {
+                throw new InvalidOperationException(
+                    $"failureKind=warm-set-min-failed warmWorkerCount={warmWorkerCount}");
+            }
+
+            for (var index = 0; index < warmWorkerCount; index++)
+            {
+                QueueBlocker(entered, release, completed, signalsEntry: true);
+            }
+
+            if (!entered.Wait(TimeSpan.FromSeconds(30)))
+            {
+                throw new TimeoutException(
+                    $"failureKind=warm-barrier-timeout warmWorkerCount={warmWorkerCount} " +
+                    $"threadCount={ThreadPool.ThreadCount} pendingWorkItems={ThreadPool.PendingWorkItemCount}");
+            }
+
+            warmThreadCountPeak = ThreadPool.ThreadCount;
+            if (warmThreadCountPeak < warmWorkerCount)
+            {
+                throw new InvalidOperationException(
+                    $"failureKind=warm-growth-not-observed warmThreadCountPeak={warmThreadCountPeak} " +
+                    $"warmWorkerCount={warmWorkerCount}");
+            }
+        }
+        finally
+        {
+            release.Set();
+            if (completed.CurrentCount != 0 && !completed.Wait(TimeSpan.FromSeconds(30)))
+            {
+                throw new TimeoutException(
+                    $"failureKind=warm-cleanup-timeout remainingCallbacks={completed.CurrentCount} " +
+                    $"pendingWorkItems={ThreadPool.PendingWorkItemCount}");
+            }
+
+            if (minSet && !ThreadPool.SetMinThreads(originalMinWorkers, originalMinIo))
+            {
+                throw new InvalidOperationException("failureKind=warm-restore-min-failed");
+            }
+        }
+
+        return new WarmPoolHistoryEvidence(warmWorkerCount, threadCountBeforeWarm, warmThreadCountPeak);
+    }
+
     private static void QueueBlocker(
         CountdownEvent entered,
         ManualResetEventSlim release,
@@ -117,6 +189,11 @@ internal static class BoundedThreadPoolSaturationApparatus
             (entered, release, completed, signalsEntry));
     }
 }
+
+internal sealed record WarmPoolHistoryEvidence(
+    int WarmWorkerCount,
+    int ThreadCountBeforeWarm,
+    int WarmThreadCountPeak);
 
 internal sealed record BoundedSaturationEvidence(
     int WorkerBound,

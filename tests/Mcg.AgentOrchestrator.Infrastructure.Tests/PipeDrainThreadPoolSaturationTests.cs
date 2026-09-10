@@ -2,7 +2,7 @@ using System.Diagnostics;
 using System.Text.Json;
 using Mcg.AgentOrchestrator.Infrastructure;
 
-// Serialized: this test deliberately occupies the thread pool while the dedicated reader runs.
+// Serialized: these facts launch probe processes that own their own bounded thread-pool capacity.
 [Xunit.Collection(TestCollections.ProcessSpawning)]
 public sealed class PipeDrainThreadPoolSaturationTests
 {
@@ -23,23 +23,28 @@ public sealed class PipeDrainThreadPoolSaturationTests
             "Direct pool-work-item control unexpectedly ran during the starvation observation window.");
     }
 
-    [Xunit.Fact(DisplayName = "PipeDrain_reads_to_end_while_pool_dependent_async_read_is_starved_after_parent_pool_growth")]
-    public void PipeDrainReadsToEndWhilePoolDependentAsyncReadIsStarvedAfterParentPoolGrowth()
+    [Xunit.Fact(DisplayName = "PipeDrain_reads_to_end_while_pool_dependent_async_read_is_starved_after_prior_pool_growth")]
+    public void PipeDrainReadsToEndWhilePoolDependentAsyncReadIsStarvedAfterPriorPoolGrowth()
     {
-        var before = ThreadPool.ThreadCount;
-        ThreadPool.GetMinThreads(out var minWorkerThreads, out _);
-        var legacyBlockerCount = Math.Max(minWorkerThreads, Environment.ProcessorCount) * 2 + 32;
-        RunWithSaturatedThreadPool(static () => { });
-        var after = ThreadPool.ThreadCount;
-        Assert.True(
-            before >= legacyBlockerCount || after > before,
-            $"Parent pool had neither legacy-scale warm history nor observed growth: " +
-            $"before={before}; after={after}; legacyBlockerCount={legacyBlockerCount}.");
-
-        var result = RunSaturationProbe(PipeDrainSaturationProbeChildTests.DedicatedReaderMode);
+        // The prior pool growth is established inside the probe process, so the warm-history arm proves
+        // independence from shared-runner state instead of depending on the runner's own pool history.
+        var result = RunSaturationProbe(PipeDrainSaturationProbeChildTests.WarmedDedicatedReaderMode);
 
         Assert.True(result.ExitCode == 0, result.DescribeFailure());
         Assert.Equal("passed", result.Receipt.Outcome);
+        Assert.Equal(PipeDrainSaturationProbeChildTests.WarmedDedicatedReaderMode, result.Receipt.Mode);
+        Assert.True(
+            result.Receipt.WarmThreadCountPeak >= result.Receipt.WarmWorkerCount
+                && result.Receipt.WarmWorkerCount > 0,
+            $"Probe pool did not reach legacy-scale warm history: " +
+            $"threadCountBeforeWarm={result.Receipt.ThreadCountBeforeWarm}; " +
+            $"warmThreadCountPeak={result.Receipt.WarmThreadCountPeak}; " +
+            $"warmWorkerCount={result.Receipt.WarmWorkerCount}.{Environment.NewLine}{result.DescribeFailure()}");
+        Assert.True(
+            result.Receipt.ThreadCountBefore > result.Receipt.WorkerBound,
+            $"Probe pool was no longer grown beyond the bound when capacity was bounded: " +
+            $"threadCountBefore={result.Receipt.ThreadCountBefore}; " +
+            $"workerBound={result.Receipt.WorkerBound}.{Environment.NewLine}{result.DescribeFailure()}");
         Assert.Equal(0, result.Receipt.AvailableWorkersAfterBarrier);
         Assert.False(
             result.Receipt.PoolDependentReadCompletedAfterObservation,

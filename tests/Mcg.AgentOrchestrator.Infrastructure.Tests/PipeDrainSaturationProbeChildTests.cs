@@ -7,6 +7,7 @@ public sealed class PipeDrainSaturationProbeChildTests
     internal const string ModeVariable = "MCG_PIPE_DRAIN_SATURATION_PROBE_MODE";
     internal const string ReceiptPathVariable = "MCG_PIPE_DRAIN_SATURATION_PROBE_RECEIPT";
     internal const string DedicatedReaderMode = "dedicated-reader";
+    internal const string WarmedDedicatedReaderMode = "warmed-dedicated-reader";
     internal const string PoolDependentReaderMode = "pool-dependent-reader";
 
     [Xunit.Fact]
@@ -52,11 +53,26 @@ public sealed class PipeDrainSaturationProbeChildTests
         Exception? failure = null;
         string? failureKind = null;
         BoundedSaturationEvidence? evidence = null;
+        WarmPoolHistoryEvidence? warmEvidence = null;
         var poolDependentReadCompletedAfterObservation = false;
         var poolWorkItemExecutedDuringObservation = false;
+        var readerMode = mode == WarmedDedicatedReaderMode ? DedicatedReaderMode : mode;
 
         try
         {
+            if (mode == WarmedDedicatedReaderMode)
+            {
+                try
+                {
+                    warmEvidence = BoundedThreadPoolSaturationApparatus.EstablishWarmPoolHistory();
+                }
+                catch
+                {
+                    failureKind = "warm-history-not-established";
+                    throw;
+                }
+            }
+
             BoundedThreadPoolSaturationApparatus.RunWithBoundedSaturatedThreadPool(currentEvidence =>
             {
                 evidence = currentEvidence;
@@ -67,7 +83,7 @@ public sealed class PipeDrainSaturationProbeChildTests
                     static state => ((TaskCompletionSource<bool>)state!).TrySetResult(true),
                     poolWorkItemExecuted);
 
-                if (mode == DedicatedReaderMode)
+                if (readerMode == DedicatedReaderMode)
                 {
                     var drain = PipeDrain.Start(
                         new PipeDrainThreadPoolSaturationTests.SynchronousOnlyTextReader(expected),
@@ -94,7 +110,7 @@ public sealed class PipeDrainSaturationProbeChildTests
                     return;
                 }
 
-                if (mode == PoolDependentReaderMode)
+                if (readerMode == PoolDependentReaderMode)
                 {
                     poolDependentReadCompletedAfterObservation = poolDependentRead.Wait(TimeSpan.FromSeconds(2));
                     poolWorkItemExecutedDuringObservation = poolWorkItemExecuted.Task.IsCompleted;
@@ -146,6 +162,9 @@ public sealed class PipeDrainSaturationProbeChildTests
                 evidence?.ThreadCountBefore ?? ThreadPool.ThreadCount,
                 ThreadPool.ThreadCount,
                 evidence?.AvailableWorkersAfterBarrier ?? -1,
+                warmEvidence?.WarmWorkerCount ?? 0,
+                warmEvidence?.ThreadCountBeforeWarm ?? 0,
+                warmEvidence?.WarmThreadCountPeak ?? 0,
                 poolDependentReadCompletedAfterObservation,
                 poolWorkItemExecutedDuringObservation,
                 failure is null ? "passed" : "failed",
@@ -168,6 +187,9 @@ internal sealed record PipeDrainSaturationProbeReceipt(
     int ThreadCountBefore,
     int ThreadCountAfter,
     int AvailableWorkersAfterBarrier,
+    int WarmWorkerCount,
+    int ThreadCountBeforeWarm,
+    int WarmThreadCountPeak,
     bool PoolDependentReadCompletedAfterObservation,
     bool PoolWorkItemExecutedDuringObservation,
     string Outcome,
