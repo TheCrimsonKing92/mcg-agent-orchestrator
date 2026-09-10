@@ -110,9 +110,9 @@ internal static class SourceSizeRatchet
             // existing dispatch-completion boundary; the runner retains output-artifact authority
             // and verification persistence while parsing stays with WorkerResultBlockers.
             // Goal 0d92976e adds the BeforeRetryAdmission checkpoint phase to preserve
-            // current-tick evidence before retry admission replaces the goal snapshot; 2670 is
+            // current-tick evidence before retry admission replaces the goal snapshot; 2669 is
             // the measured post-change size of the existing dispatch-state contract.
-            new SourceSizeCeiling("src/Mcg.AgentOrchestrator.Infrastructure/Processes/BackgroundDispatchRunner.cs", 2670),
+            new SourceSizeCeiling("src/Mcg.AgentOrchestrator.Infrastructure/Processes/BackgroundDispatchRunner.cs", 2669),
             // Goal 5a75fed0 extracted typed projection parsing and literal restoration into
             // WorkerContextProjectionResidual, leaving the dispatcher to sequence package assembly.
             // Goal fd252fe4 adds retry fingerprints for the resolved provider, model, paid route, and

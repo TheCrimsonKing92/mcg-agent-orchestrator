@@ -399,26 +399,8 @@ public sealed class BackgroundDispatchRunner
         if (spawnReceipt.WorktreeHeadSha is not null)
             kernel.RecordDispatchBaseCommit(goalId, taskId, spawnReceipt.WorktreeHeadSha);
 
-        var currentTask = kernel.GetTask(goalId, taskId);
-        if (currentTask.InterruptedDispatchRecoveryId is { } interruptedDispatchId &&
-            TryReadAutoRequeueBlocker(kernel, goalId, taskId, readCurrentState, out var blocker))
+        if (TryRejectInterruptedDispatchRecovery(kernel, goalId, taskId, readCurrentState))
         {
-            kernel.RecordTaskRequeueSkipped(
-                goalId,
-                taskId,
-                interruptedDispatchId,
-                blocker.BlockingEntity,
-                blocker.TerminalState,
-                blocker.Reason,
-                blocker.Detail);
-            if (blocker.Reason == "terminal-state")
-            {
-                kernel.ConcludeInterruptedDispatchRecovery(
-                    goalId,
-                    taskId,
-                    blocker.GoalStatus,
-                    blocker.TaskStatus);
-            }
             return DispatchProcessStartResult.Skipped();
         }
 
@@ -2387,6 +2369,23 @@ public sealed class BackgroundDispatchRunner
             message,
             RetryCause.ProviderInterruption,
             dispatchId);
+        return true;
+    }
+
+    internal static bool TryRejectInterruptedDispatchRecovery(
+        AgentOrchestratorKernel kernel,
+        GoalId goalId,
+        TaskId taskId,
+        Func<GoalId, TaskId, InterruptedDispatchStateRead>? readCurrentState)
+    {
+        if (kernel.GetTask(goalId, taskId).InterruptedDispatchRecoveryId is not { } dispatchId ||
+            !TryReadAutoRequeueBlocker(kernel, goalId, taskId, readCurrentState, out var blocker))
+            return false;
+
+        kernel.RecordTaskRequeueSkipped(goalId, taskId, dispatchId, blocker.BlockingEntity,
+            blocker.TerminalState, blocker.Reason, blocker.Detail);
+        if (blocker.Reason == "terminal-state")
+            kernel.ConcludeInterruptedDispatchRecovery(goalId, taskId, blocker.GoalStatus, blocker.TaskStatus);
         return true;
     }
 

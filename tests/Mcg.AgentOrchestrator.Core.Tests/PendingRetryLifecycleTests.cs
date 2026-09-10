@@ -3,6 +3,69 @@ using Mcg.AgentOrchestrator.Core;
 
 public sealed class PendingRetryLifecycleTests
 {
+    [Xunit.Theory]
+    [Xunit.InlineData(PaidRouteClassification.Paid)]
+    [Xunit.InlineData(PaidRouteClassification.NonPaid)]
+    [Xunit.InlineData(PaidRouteClassification.Unknown)]
+    public void PreparedDispatchAdmissionMetadataSurvivesSnapshotRoundTrip(PaidRouteClassification route)
+    {
+        var kernel = new AgentOrchestratorKernel();
+        var goal = kernel.CreateGoal("Preserve prepared admission", [new TaskSpec(TaskId.New(), "Implement", AgentRole.Developer)]);
+        kernel.ActivateGoal(goal.Id, DefaultAgents());
+        var task = goal.Tasks.Single();
+        kernel.RetryTask(goal.Id, task.Id, "Retry with current evidence", RetryCause.NewSourceFinding);
+        var fingerprint = new RetryContextFingerprint(1, "prepared-admission-context");
+        var dispatch = new TaskDispatchRecord("worker", "command", "worktree", DateTimeOffset.UtcNow,
+            RetryContextFingerprint: fingerprint, PaidRoute: route);
+        kernel.RecordTaskDispatch(goal.Id, task.Id, dispatch);
+
+        var snapshot = kernel.ExportSnapshot();
+        var saved = snapshot.Goals.Single().Tasks.Single();
+        Assert.Equal(fingerprint, saved.LastDispatch!.RetryContextFingerprint);
+        Assert.Equal(route, saved.LastDispatch.PaidRoute);
+        Assert.Equal(saved.LastDispatch, Assert.Single(saved.DispatchHistory!));
+        var restored = AgentOrchestratorKernel.FromSnapshot(
+            JsonSerializer.Deserialize<OrchestratorSnapshot>(JsonSerializer.Serialize(snapshot))!);
+        var restoredTask = restored.GetTask(goal.Id, task.Id);
+        Assert.Equal(fingerprint, restoredTask.LastDispatch!.RetryContextFingerprint);
+        Assert.Equal(route, restoredTask.LastDispatch.PaidRoute);
+        Assert.Equal(restoredTask.LastDispatch, Assert.Single(restoredTask.DispatchHistory));
+        Assert.Equal(dispatch.DispatchedAt, restoredTask.LastDispatch.DispatchedAt);
+    }
+
+    [Xunit.Theory]
+    [Xunit.InlineData(true, true)]
+    [Xunit.InlineData(false, true)]
+    [Xunit.InlineData(true, false)]
+    public void LegacyAdmissionMetadataRecoveryRequiresMatchingIdentityAndMissingFields(bool sameIdentity, bool missingFields)
+    {
+        var kernel = new AgentOrchestratorKernel();
+        var goal = kernel.CreateGoal("Restore exact prepared admission", [new TaskSpec(TaskId.New(), "Implement", AgentRole.Developer)]);
+        kernel.ActivateGoal(goal.Id, DefaultAgents());
+        var task = goal.Tasks.Single();
+        var original = new RetryContextFingerprint(1, "history-context");
+        var current = new RetryContextFingerprint(1, "current-context");
+        kernel.RecordTaskDispatch(goal.Id, task.Id, new TaskDispatchRecord("worker", "command", "worktree", DateTimeOffset.UtcNow,
+            RetryContextFingerprint: original, PaidRoute: PaidRouteClassification.Paid));
+        var snapshot = kernel.ExportSnapshot();
+        var savedGoal = snapshot.Goals.Single();
+        var savedTask = savedGoal.Tasks.Single();
+        var legacyCurrent = savedTask.LastDispatch! with
+        {
+            Command = sameIdentity ? "command" : "different-command",
+            RetryContextFingerprint = missingFields ? null : current,
+            PaidRoute = missingFields ? PaidRouteClassification.Unknown : PaidRouteClassification.NonPaid
+        };
+        snapshot = snapshot with { Goals = [savedGoal with { Tasks = [savedTask with { LastDispatch = legacyCurrent }] }] };
+
+        var restored = AgentOrchestratorKernel.FromSnapshot(snapshot).GetTask(goal.Id, task.Id);
+        var shouldRecover = sameIdentity && missingFields;
+        Assert.Equal(shouldRecover ? original : legacyCurrent.RetryContextFingerprint, restored.LastDispatch!.RetryContextFingerprint);
+        Assert.Equal(shouldRecover ? PaidRouteClassification.Paid : legacyCurrent.PaidRoute, restored.LastDispatch.PaidRoute);
+        Assert.Equal(legacyCurrent.Command, restored.LastDispatch.Command);
+        Assert.Equal(restored.LastDispatch, Assert.Single(restored.DispatchHistory));
+    }
+
     [Xunit.Fact]
     public void RepeatingTheAdmissionMessageDoesNotAppendFeedback()
     {

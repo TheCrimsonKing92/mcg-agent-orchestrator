@@ -189,36 +189,7 @@ public sealed class TaskSpec
                 .ToList(),
             LastDispatch is null
                 ? null
-                : new TaskDispatchSnapshot(
-                    LastDispatch.WorkerName,
-                    LastDispatch.Command,
-                    LastDispatch.WorkingDirectory,
-                    LastDispatch.DispatchedAt,
-                    LastDispatch.ProviderName,
-                    LastDispatch.ModelName,
-                    LastDispatch.ReasoningEffort,
-                    LastDispatch.TaskComplexity,
-                    LastDispatch.PromptCharacterCount,
-                    LastDispatch.UsesComplexModel,
-                    LastDispatch.BaseCommit,
-                    LastDispatch.ResultCommit,
-                    LastDispatch.SandboxLowIntegrity,
-                    LastDispatch.PromptPath,
-                    LastDispatch.WorkerProviderKind,
-                    LastDispatch.ReasoningEffortReason,
-                    LastDispatch.DispatchLane,
-                    LastDispatch.ModelSelectionReason,
-                    LastDispatch.ProviderSessionId,
-                    LastDispatch.WorktreeHeadSha,
-                    LastDispatch.DirtyStateHash,
-                    LastDispatch.ProviderSessionRetiredAt,
-                    LastDispatch.ReviewFindingTouchedAnchors,
-                    LastDispatch.BriefVersion,
-                    LastDispatch.BriefSnapshot,
-                    LastDispatch.ReviewFindingTouchProofDiagnostic,
-                    LastDispatch.ReviewRetryCap,
-                    LastDispatch.ContextPackageReceipt,
-                    LastDispatch.PlannerSampleCount),
+                : ToDispatchSnapshot(LastDispatch),
             LastProcess is null
                 ? null
                 : new TaskProcessSnapshot(
@@ -416,6 +387,24 @@ public sealed class TaskSpec
                 dispatch => dispatch.DispatchedAt == currentDispatch.DispatchedAt);
             if (historyIndex >= 0)
             {
+                var historical = task._dispatchHistory[historyIndex];
+                // Older snapshots omitted both admission fields from LastDispatch while
+                // preserving them in history. Recover only from the same dispatch identity.
+                if (currentDispatch.RetryContextFingerprint is null &&
+                    currentDispatch.PaidRoute == PaidRouteClassification.Unknown &&
+                    historical.RetryContextFingerprint is not null &&
+                    currentDispatch.WorkerName == historical.WorkerName &&
+                    currentDispatch.Command == historical.Command &&
+                    currentDispatch.WorkingDirectory == historical.WorkingDirectory &&
+                    currentDispatch.ProviderName == historical.ProviderName &&
+                    currentDispatch.ModelName == historical.ModelName)
+                {
+                    currentDispatch = currentDispatch with
+                    {
+                        RetryContextFingerprint = historical.RetryContextFingerprint,
+                        PaidRoute = historical.PaidRoute
+                    };
+                }
                 task._dispatchHistory[historyIndex] = currentDispatch;
             }
             else
