@@ -1,4 +1,5 @@
 using Mcg.AgentOrchestrator.App.Orchestration;
+using Mcg.AgentOrchestrator.Core;
 
 public sealed class DispatchStartOutcomeTests
 {
@@ -20,5 +21,16 @@ public sealed class DispatchStartOutcomeTests
             "Subscription dispatch start failed");
         Assert.Equal(DispatchStartOutcomeCategory.SpawnFailed, mapped.Category);
         Assert.Equal("Subscription dispatch start failed: worker command refused", mapped.Reason);
+    }
+
+    [Xunit.Fact(DisplayName = "DispatchStartOutcome_carries_the_actual_started_task_identity")]
+    public void CarriesActualStartedTaskIdentity()
+    {
+        var developer = new TaskSpec(TaskId.New(), "Implement", AgentRole.Developer);
+        var outcome = DispatchStartOutcome.Started([developer]);
+
+        var actual = Assert.Single(outcome.DispatchedTasks!);
+        Assert.Equal(developer.Id, actual.TaskId);
+        Assert.Equal(AgentRole.Developer, actual.Role);
     }
 }

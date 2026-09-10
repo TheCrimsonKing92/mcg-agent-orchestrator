@@ -2229,26 +2229,61 @@ public sealed class DispatchProcessHostTests
         try
         {
             CreateLinkedWorktree(repo, worktree);
-            var warmup = RunMeasuredDispatch(root, worktree, logs, "warmup");
-            Assert.Equal("complete", warmup.Phase);
-
+            MeasuredDispatch? warmup = null;
             var receiptHitMeasurements = new List<MeasuredDispatch>();
-            for (var attempt = 1; attempt <= 5; attempt++)
+            var artifactWriteAttempted = false;
+            Exception? artifactWriteFailure = null;
+
+            void WriteMeasurementArtifactBestEffort()
             {
-                var measurement = RunMeasuredDispatch(root, worktree, logs, $"receipt-hit-{attempt}");
-                receiptHitMeasurements.Add(measurement);
+                if (warmup is null || artifactWriteAttempted)
+                {
+                    return;
+                }
+
+                artifactWriteAttempted = true;
+                try
+                {
+                    var measurementArtifact = WriteReceiptHitMeasurementArtifact(warmup, receiptHitMeasurements);
+                    Console.WriteLine($"receipt-hit measurement artifact: {measurementArtifact}");
+                }
+                catch (Exception exception)
+                {
+                    artifactWriteFailure = exception;
+                }
             }
 
-            Assert.All(receiptHitMeasurements, measurement =>
+            try
             {
-                Assert.Equal("receipt-hit", measurement.Phase);
-                Assert.InRange(measurement.SandboxPrepElapsedMs, 0, 10_000);
-                Assert.InRange(measurement.DispatchElapsedMs, 0, 10_000);
-                Assert.Contains("worker-first-output", File.ReadAllText(measurement.StdoutPath), StringComparison.Ordinal);
-            });
+                warmup = RunMeasuredDispatch(root, worktree, logs, "warmup");
+                Assert.Equal("complete", warmup.Phase);
 
-            var measurementArtifact = WriteReceiptHitMeasurementArtifact(warmup, receiptHitMeasurements);
-            Console.WriteLine($"receipt-hit measurement artifact: {measurementArtifact}");
+                for (var attempt = 1; attempt <= 5; attempt++)
+                {
+                    var measurement = RunMeasuredDispatch(root, worktree, logs, $"receipt-hit-{attempt}");
+                    receiptHitMeasurements.Add(measurement);
+                }
+
+                WriteMeasurementArtifactBestEffort();
+
+                Assert.All(receiptHitMeasurements, measurement =>
+                {
+                    Assert.Equal("receipt-hit", measurement.Phase);
+                    Assert.InRange(measurement.SandboxPrepElapsedMs, 0, 10_000);
+                    Assert.InRange(measurement.DispatchElapsedMs, 0, 10_000);
+                    Assert.Contains("worker-first-output", File.ReadAllText(measurement.StdoutPath), StringComparison.Ordinal);
+                });
+
+                if (artifactWriteFailure is not null)
+                {
+                    throw new InvalidOperationException("Failed to write the receipt-hit measurement artifact.", artifactWriteFailure);
+                }
+            }
+            catch
+            {
+                WriteMeasurementArtifactBestEffort();
+                throw;
+            }
         }
         finally
         {
@@ -2412,18 +2447,22 @@ public sealed class DispatchProcessHostTests
 
         var artifact = new
         {
-            beforeReceiptHitElapsedMs = new[] { 123070, 123946, 122308, 128467 },
+            measurementModel = "DispatchElapsedMs includes SandboxPrepElapsedMs; dispatchMinusSandboxPrepElapsedMs is the exclusive remainder.",
             warmup = new
             {
                 phase = warmup.Phase,
                 sandboxPrepElapsedMs = warmup.SandboxPrepElapsedMs,
-                dispatchElapsedMs = warmup.DispatchElapsedMs
+                dispatchElapsedMs = warmup.DispatchElapsedMs,
+                dispatchMinusSandboxPrepElapsedMs = warmup.DispatchElapsedMs - warmup.SandboxPrepElapsedMs,
+                sandboxPrepEvents = SerializeSandboxPrepEvents(warmup.SandboxPrepEvents)
             },
             receiptHits = receiptHitMeasurements.Select(measurement => new
             {
                 phase = measurement.Phase,
                 sandboxPrepElapsedMs = measurement.SandboxPrepElapsedMs,
-                dispatchElapsedMs = measurement.DispatchElapsedMs
+                dispatchElapsedMs = measurement.DispatchElapsedMs,
+                dispatchMinusSandboxPrepElapsedMs = measurement.DispatchElapsedMs - measurement.SandboxPrepElapsedMs,
+                sandboxPrepEvents = SerializeSandboxPrepEvents(measurement.SandboxPrepEvents)
             }).ToArray()
         };
 
@@ -2503,7 +2542,8 @@ public sealed class DispatchProcessHostTests
             Assert.NotEqual(heartbeatPath, prepHeartbeatPath);
         }
 
-        var terminalPrepEvent = ReadSandboxPrepEvents(stderrPath)
+        var sandboxPrepEvents = ReadSandboxPrepEvents(stderrPath);
+        var terminalPrepEvent = sandboxPrepEvents
             .LastOrDefault(evt =>
             {
                 var phase = evt.GetProperty("phase").GetString();
@@ -2516,7 +2556,8 @@ public sealed class DispatchProcessHostTests
             terminalPrepEvent.GetProperty("phase").GetString() ?? string.Empty,
             elapsed.GetInt64(),
             stopwatch.ElapsedMilliseconds,
-            stdoutPath);
+            stdoutPath,
+            sandboxPrepEvents.Select(ToSandboxPrepEvent).ToArray());
     }
 
     private static JsonElement[] ReadSandboxPrepEvents(string stderrPath)
@@ -2526,6 +2567,20 @@ public sealed class DispatchProcessHostTests
             .Select(line => JsonDocument.Parse(line).RootElement.Clone())
             .ToArray();
     }
+
+    private static object[] SerializeSandboxPrepEvents(IReadOnlyCollection<SandboxPrepEvent> events)
+        => events.Select(evt => new
+        {
+            phase = evt.Phase,
+            startedAt = evt.StartedAt,
+            elapsedMs = evt.ElapsedMs
+        }).Cast<object>().ToArray();
+
+    private static SandboxPrepEvent ToSandboxPrepEvent(JsonElement evt)
+        => new(
+            evt.GetProperty("phase").GetString() ?? string.Empty,
+            evt.GetProperty("startedAt").GetDateTimeOffset(),
+            evt.TryGetProperty("elapsedMs", out var elapsedMs) ? elapsedMs.GetInt64() : null);
 
     private static ProcessStartInfo BuildGrandchildReapWrapperStartInfo(
         string fixtureRoot,
@@ -2812,7 +2867,10 @@ public sealed class DispatchProcessHostTests
         string Phase,
         long SandboxPrepElapsedMs,
         long DispatchElapsedMs,
-        string StdoutPath);
+        string StdoutPath,
+        IReadOnlyCollection<SandboxPrepEvent> SandboxPrepEvents);
+
+    private sealed record SandboxPrepEvent(string Phase, DateTimeOffset StartedAt, long? ElapsedMs);
 
     private static string EscapePowerShellSingleQuoted(string value)
         => value.Replace("'", "''", StringComparison.Ordinal);

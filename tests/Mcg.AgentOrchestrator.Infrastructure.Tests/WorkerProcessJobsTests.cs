@@ -1240,6 +1240,7 @@ public sealed class WorkerProcessJobsTests : IDisposable
         Directory.CreateDirectory(root);
         _ = StateDbMigrations.EnsureUpToDate(dbPath);
         Process? newlyRegisteredWorker = null;
+        var registeredWorkerId = 0;
         try
         {
             ProgramStartupLifecycle.InitializeWorkerProcessTracking(
@@ -1250,21 +1251,36 @@ public sealed class WorkerProcessJobsTests : IDisposable
 
             newlyRegisteredWorker = StartLongRunningShell();
             Assert.True(WorkerProcessJobs.TryRegister(newlyRegisteredWorker, "new-dispatch"));
+            registeredWorkerId = newlyRegisteredWorker.Id;
             var registered = Assert.Single(WorkerProcessJobs.ListActiveRegistryEntriesForTests());
             Assert.Equal("new-dispatch", registered.OwnerId);
             Assert.Equal(Environment.ProcessId, registered.OwnerProcessId);
         }
         finally
         {
-            WorkerProcessJobs.ClearRegistryForTests();
-            if (newlyRegisteredWorker is not null)
+            try
             {
-                try { newlyRegisteredWorker.Kill(entireProcessTree: true); } catch { }
-                newlyRegisteredWorker.Dispose();
+                if (newlyRegisteredWorker is not null)
+                {
+                    try
+                    {
+                        if (registeredWorkerId != 0) WorkerProcessJobs.Release(registeredWorkerId);
+                    }
+                    finally
+                    {
+                        try { newlyRegisteredWorker.Kill(entireProcessTree: true); } catch { }
+                        newlyRegisteredWorker.Dispose();
+                    }
+                }
             }
-
-            try { Directory.Delete(root, recursive: true); } catch { }
+            finally
+            {
+                WorkerProcessJobs.ClearRegistryForTests();
+                try { Directory.Delete(root, recursive: true); } catch { }
+            }
         }
+
+        Assert.False(WorkerProcessJobs.HasRegisteredJob(registeredWorkerId));
     }
 
     [Xunit.Fact(DisplayName = "ProgramStartupLifecycle_handoff_configures_registry_without_sweeping_incumbent_processes")]
@@ -1276,6 +1292,7 @@ public sealed class WorkerProcessJobsTests : IDisposable
         _ = StateDbMigrations.EnsureUpToDate(dbPath);
         Process? incumbentWorker = null;
         Process? successorWorker = null;
+        var successorWorkerId = 0;
         try
         {
             incumbentWorker = StartLongRunningShell();
@@ -1291,27 +1308,42 @@ public sealed class WorkerProcessJobsTests : IDisposable
             Assert.True(IsRunning(incumbentWorker.Id));
             successorWorker = StartLongRunningShell();
             Assert.True(WorkerProcessJobs.TryRegister(successorWorker, "successor-dispatch"));
+            successorWorkerId = successorWorker.Id;
             var activeEntries = WorkerProcessJobs.ListActiveRegistryEntriesForTests();
             Assert.Contains(activeEntries, entry => entry.OwnerId == "incumbent-dispatch");
             Assert.Contains(activeEntries, entry => entry.OwnerId == "successor-dispatch");
         }
         finally
         {
-            WorkerProcessJobs.ClearRegistryForTests();
-            if (incumbentWorker is not null)
+            try
             {
-                try { incumbentWorker.Kill(entireProcessTree: true); } catch { }
-                incumbentWorker.Dispose();
+                if (successorWorker is not null)
+                {
+                    try
+                    {
+                        if (successorWorkerId != 0) WorkerProcessJobs.Release(successorWorkerId);
+                    }
+                    finally
+                    {
+                        try { successorWorker.Kill(entireProcessTree: true); } catch { }
+                        successorWorker.Dispose();
+                    }
+                }
             }
-
-            if (successorWorker is not null)
+            finally
             {
-                try { successorWorker.Kill(entireProcessTree: true); } catch { }
-                successorWorker.Dispose();
-            }
+                if (incumbentWorker is not null)
+                {
+                    try { incumbentWorker.Kill(entireProcessTree: true); } catch { }
+                    incumbentWorker.Dispose();
+                }
 
-            try { Directory.Delete(root, recursive: true); } catch { }
+                WorkerProcessJobs.ClearRegistryForTests();
+                try { Directory.Delete(root, recursive: true); } catch { }
+            }
         }
+
+        Assert.False(WorkerProcessJobs.HasRegisteredJob(successorWorkerId));
     }
 
     [Xunit.Fact(DisplayName = "ProgramStartupLifecycle_authority_transfer_signal_suppresses_cleanup_for_every_command")]

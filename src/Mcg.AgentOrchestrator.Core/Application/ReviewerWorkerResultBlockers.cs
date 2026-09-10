@@ -531,6 +531,45 @@ public static class WorkerResultBlockers
         return false;
     }
 
+    public static bool TryGetAssignedScopeComplete(
+        string workerOutput,
+        out bool assignedScopeComplete,
+        out string? diagnostic)
+    {
+        assignedScopeComplete = false;
+        diagnostic = null;
+        var values = EnumerateCompleteWorkerResultLines(SplitRetainedLines(workerOutput))
+            .Where(line => TryFindField(line, "assigned_scope_complete", out _))
+            .Select(line =>
+            {
+                TryFindField(line, "assigned_scope_complete", out var value);
+                return value;
+            })
+            .ToArray();
+        if (values.Length == 0)
+        {
+            return false;
+        }
+
+        if (values.Length != 1 || !bool.TryParse(values[0], out assignedScopeComplete))
+        {
+            diagnostic = values.Length > 1
+                ? "assigned_scope_complete must appear exactly once with true or false."
+                : "assigned_scope_complete requires true or false.";
+            assignedScopeComplete = false;
+            return false;
+        }
+
+        return true;
+    }
+
+    public static bool? GetAssignedScopeComplete(TaskVerificationRecord? verification)
+    {
+        // The dispatch result owner parses this optional field once before recording the
+        // verification. Classification uses that durable observation without reparsing output.
+        return verification?.AssignedScopeComplete;
+    }
+
     public static bool HasCompleteWorkerResult(string workerOutput)
     {
         var fields = EnumerateWorkerResultLines(SplitRetainedLines(workerOutput))
@@ -560,6 +599,13 @@ public static class WorkerResultBlockers
                 diagnostic = "blockers: premise-invalid requires 'premise-invalid - <fact and evidence>'.";
                 return true;
             }
+        }
+
+        if (!TryGetAssignedScopeComplete(workerOutput, out _, out var assignedScopeDiagnostic) &&
+            assignedScopeDiagnostic is not null)
+        {
+            diagnostic = assignedScopeDiagnostic;
+            return true;
         }
 
         return false;
@@ -633,6 +679,44 @@ public static class WorkerResultBlockers
         {
             yield return line;
         }
+    }
+
+    private static IEnumerable<string> EnumerateCompleteWorkerResultLines(IEnumerable<string> evidenceLines)
+    {
+        List<string>? latestCompleteBlock = null;
+        var currentBlock = new List<string>();
+        var inBlock = false;
+
+        foreach (var rawLine in evidenceLines)
+        {
+            var line = NormalizeWorkerResultLine(rawLine);
+            if (IsWorkerResultOpener(line))
+            {
+                inBlock = true;
+                currentBlock.Clear();
+                continue;
+            }
+
+            if (IsWorkerResultEndMarker(line))
+            {
+                if (inBlock)
+                {
+                    latestCompleteBlock = [.. currentBlock];
+                    currentBlock.Clear();
+                    inBlock = false;
+                }
+
+                continue;
+            }
+
+            if (inBlock && line.Length > 0)
+            {
+                currentBlock.Add(line);
+            }
+        }
+
+        // A newer unterminated block is truncation, not a fallback to an older declaration.
+        return inBlock ? [] : latestCompleteBlock ?? [];
     }
 
     private static bool TryFindBlockersField(string line, out string blocker)

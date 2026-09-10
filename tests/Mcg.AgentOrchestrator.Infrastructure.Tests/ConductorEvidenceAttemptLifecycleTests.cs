@@ -15,7 +15,7 @@ public sealed class ConductorEvidenceAttemptLifecycleTests
         var root = CreateTempDirectory();
         using var holderAcquired = new ManualResetEventSlim();
         using var holderRelease = new ManualResetEventSlim();
-        var holder = Task.Run(() =>
+        var holder = Task.Factory.StartNew(() =>
         {
             using var mutex = new Mutex(false, StorageRetentionMaintenance.AttemptLeaseNameFor(root));
             mutex.WaitOne();
@@ -28,13 +28,13 @@ public sealed class ConductorEvidenceAttemptLifecycleTests
             {
                 mutex.ReleaseMutex();
             }
-        });
+        }, CancellationToken.None, TaskCreationOptions.LongRunning | TaskCreationOptions.DenyChildAttach, TaskScheduler.Default);
 
         string? receipt = null;
-        var started = Stopwatch.StartNew();
         try
         {
             Assert.True(holderAcquired.Wait(TimeSpan.FromSeconds(10)));
+            var started = Stopwatch.StartNew();
             var exception = Assert.Throws<TimeoutException>(() =>
                 StorageRetentionMaintenance.AcquireAttemptWriterLease(
                     root,
@@ -652,7 +652,10 @@ public sealed class ConductorEvidenceAttemptLifecycleTests
         var root = CreateTempDirectory();
         using var readerReady = new ManualResetEventSlim();
         using var releaseReader = new ManualResetEventSlim();
-        Task? readerTask = null;
+        Thread? readerThread = null;
+        Exception? readerException = null;
+        var readerJoined = false;
+        var readerOnPoolThread = true;
         bool? observedPassed = null;
         try
         {
@@ -666,22 +669,37 @@ public sealed class ConductorEvidenceAttemptLifecycleTests
                 acquireStableSlotLease: (_, _) => null,
                 resultPublishedForTests: publishedAttempt =>
                 {
-                    readerTask = Task.Run(() =>
+                    readerThread = new Thread(() =>
                     {
-                        using var reader = new FileStream(
-                            publishedAttempt.ResultPath,
-                            FileMode.Open,
-                            FileAccess.Read,
-                            FileShare.Read);
-                        using var published = JsonDocument.Parse(reader);
-                        observedPassed = published.RootElement
-                            .GetProperty("acceptance")
-                            .GetProperty("passed")
-                            .GetBoolean();
-                        readerReady.Set();
-                        Assert.True(releaseReader.Wait(TimeSpan.FromSeconds(10)));
+                        try
+                        {
+                            readerOnPoolThread = Thread.CurrentThread.IsThreadPoolThread;
+                            using var reader = new FileStream(
+                                publishedAttempt.ResultPath,
+                                FileMode.Open,
+                                FileAccess.Read,
+                                FileShare.Read);
+                            using var published = JsonDocument.Parse(reader);
+                            observedPassed = published.RootElement
+                                .GetProperty("acceptance")
+                                .GetProperty("passed")
+                                .GetBoolean();
+                            readerReady.Set();
+                            Assert.True(releaseReader.Wait(TimeSpan.FromSeconds(10)));
+                        }
+                        catch (Exception ex)
+                        {
+                            readerException = ex;
+                        }
+                        finally
+                        {
+                            readerReady.Set();
+                        }
                     });
+                    readerThread.IsBackground = true;
+                    readerThread.Start();
                     Assert.True(readerReady.Wait(TimeSpan.FromSeconds(10)));
+                    Assert.Null(readerException);
                 });
 
             coordinator.RunAttemptForTests(
@@ -692,6 +710,7 @@ public sealed class ConductorEvidenceAttemptLifecycleTests
                     attemptCandidate,
                     AcceptanceVerificationSummary.PassedWithNoUnmetCriteria));
 
+            Assert.Null(readerException);
             Assert.Equal("0", File.ReadAllText(attempt.ExitCodePath));
             Assert.True(observedPassed);
             Assert.Equal(
@@ -701,9 +720,15 @@ public sealed class ConductorEvidenceAttemptLifecycleTests
         finally
         {
             releaseReader.Set();
-            readerTask?.GetAwaiter().GetResult();
-            Directory.Delete(root, recursive: true);
+            readerJoined = readerThread?.Join(TimeSpan.FromSeconds(10)) ?? true;
+            if (readerJoined)
+            {
+                Directory.Delete(root, recursive: true);
+            }
         }
+        Assert.True(readerJoined, "Result reader did not stop after its release signal.");
+        Assert.Null(readerException);
+        Assert.False(readerOnPoolThread);
     }
 
     [Fact]
@@ -1084,7 +1109,7 @@ public sealed class ConductorEvidenceAttemptLifecycleTests
             var sequenceBefore = File.ReadAllText(sequencePath);
             using var holderAcquired = new ManualResetEventSlim();
             using var holderRelease = new ManualResetEventSlim();
-            var holder = Task.Run(() =>
+            var holder = Task.Factory.StartNew(() =>
             {
                 using var lease = StorageRetentionMaintenance.AcquireAttemptWriterLease(goalDirectory);
                 holderAcquired.Set();
@@ -1092,7 +1117,7 @@ public sealed class ConductorEvidenceAttemptLifecycleTests
                 {
                     throw new TimeoutException("Acceptance writer lease release signal was not observed.");
                 }
-            });
+            }, CancellationToken.None, TaskCreationOptions.LongRunning | TaskCreationOptions.DenyChildAttach, TaskScheduler.Default);
             Assert.True(holderAcquired.Wait(TimeSpan.FromSeconds(30)), "Acceptance writer lease was not acquired.");
 
             using var replacementAtLeaseBoundary = new ManualResetEventSlim();
@@ -1103,11 +1128,11 @@ public sealed class ConductorEvidenceAttemptLifecycleTests
                 acquireStableSlotLease: (_, _) => null,
                 attemptWriterLeaseAcquiringForTests: replacementAtLeaseBoundary.Set);
             var replacementCandidate = ConductorParallelAcceptanceCandidate.Create(goal, 0, [], "branch-2", "main-1");
-            var replacementTask = Task.Run(() => replacementCoordinator.EvaluateFocusedEvidence(
+            var replacementTask = Task.Factory.StartNew(() => replacementCoordinator.EvaluateFocusedEvidence(
                 replacementCandidate,
                 ConductorAutonomyPolicy.Permissive,
                 "run focused tests",
-                PassingEvidence));
+                PassingEvidence), CancellationToken.None, TaskCreationOptions.LongRunning | TaskCreationOptions.DenyChildAttach, TaskScheduler.Default);
 
             string sequenceWhileLeaseHeld;
             AcceptanceArtifactWriterLeaseBusyException leaseBusy;

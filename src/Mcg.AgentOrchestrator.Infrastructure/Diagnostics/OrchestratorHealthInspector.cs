@@ -62,12 +62,20 @@ public static class OrchestratorHealthInspector
             InspectOllamaProvider(environment)
         };
 
-        var profiles = workerProfiles.Profiles
-            .Select(profile => InspectProfile(profile, commandExists))
-            .ToList();
+        var profiles = InspectWorkerProfiles(workerProfiles, commandExists);
         var agentValidations = InspectAgents(agents, providers, profiles).ToList();
 
         return new OrchestratorHealthReport(providers, agentValidations, profiles);
+    }
+
+    public static IReadOnlyList<WorkerProfileValidation> InspectWorkerProfiles(
+        WorkerProfileCatalog workerProfiles,
+        Func<string, bool>? commandExists = null)
+    {
+        var resolveCommand = commandExists ?? LocalCommandExists;
+        return workerProfiles.Profiles
+            .Select(profile => InspectProfile(profile, resolveCommand))
+            .ToList();
     }
 
     public static OrchestratorHealthReport InspectCurrentEnvironment(

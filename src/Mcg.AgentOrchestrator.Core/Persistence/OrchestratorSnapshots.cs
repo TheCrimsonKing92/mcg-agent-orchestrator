@@ -27,7 +27,8 @@ public sealed record GoalSnapshot(
     IReadOnlyList<RefinedSpecVersionSnapshot>? RefinedSpecVersions = null,
     SourceBacklogCoverage? SourceBacklogCoverage = null,
     string? SliceBatchParentId = null,
-    bool? AcceptanceFailureDeferredForRetry = null);
+    bool? AcceptanceFailureDeferredForRetry = null,
+    IReadOnlyList<CriterionEvidenceObligation>? CriterionEvidenceObligations = null);
 
 public sealed record GoalHoldSnapshot(
     string Identity,
@@ -120,7 +121,9 @@ public sealed record TaskSnapshot(
     IReadOnlyList<RetryAdmissionReceipt>? RetryAdmissionHistory = null,
     RetryAdmissionRoute? RetryAdmissionHoldRoute = null,
     ReviewFindingRepairCheckpoint? PendingReviewFindingRepairCheckpoint = null,
-    AcceptedRetryFeedback? AcceptedRetryFeedback = null);
+    AcceptedRetryFeedback? AcceptedRetryFeedback = null,
+    IReadOnlyList<PreReviewEvidenceReceipt>? PreReviewEvidenceHistory = null,
+    int PreReviewEvidenceAttemptCount = 0);
 
 public sealed record TaskExecutionSnapshot(
     string AgentId,
@@ -168,7 +171,8 @@ public sealed record TaskVerificationSnapshot(
     string? AuthoritativeStandardErrorUnavailableReason = null,
     PlannerCandidateDivergenceReceipt? PlannerCandidateDivergence = null,
     bool CompletionVerdictVerifiedSuccess = false,
-    string? CompletionVerdictRule = null)
+    string? CompletionVerdictRule = null,
+    bool? AssignedScopeComplete = null)
 {
     public string StandardOutput { get; init; } = VerificationTextBounds.BoundText(StandardOutput, StandardOutputPath);
 

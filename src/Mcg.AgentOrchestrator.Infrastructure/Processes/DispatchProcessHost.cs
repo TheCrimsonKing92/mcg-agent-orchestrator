@@ -391,14 +391,14 @@ public static class DispatchProcessHost
             var sandboxBin = CreateSandboxBinDirectory(sandboxRoot);
             Directory.CreateDirectory(tempDir);
             ConfigurePowerShellModuleAnalysisCache(startInfo.Environment, sandboxRoot);
-            WriteWorkerCommandShims(sandboxBin, startInfo.Environment["PATH"]);
+            TrackAction("materialize-shims", () => WriteWorkerCommandShims(sandboxBin, startInfo.Environment["PATH"]));
 
-            SeedProviderEnvironment(startInfo, parameters.Provider, sandboxRoot, parameters.StderrPath);
-            SeedWorkerCaBundle(startInfo, sandboxRoot, parameters.StderrPath);
+            TrackAction("materialize-provider-seed", () => SeedProviderEnvironment(startInfo, parameters.Provider, sandboxRoot, parameters.StderrPath));
+            TrackAction("materialize-ca-bundle", () => SeedWorkerCaBundle(startInfo, sandboxRoot, parameters.StderrPath));
 
             // Keep the sandbox scratch out of git's view so it never registers as a dirty/untracked path:
             // the worktree must read as clean after the orchestrator commits the worker's real edits.
-            ExcludeSandboxFromGit(parameters.WorkingDirectory);
+            TrackAction("materialize-git-exclude", () => ExcludeSandboxFromGit(parameters.WorkingDirectory));
 
             startInfo.Environment["TEMP"] = tempDir;
             startInfo.Environment["TMP"] = tempDir;
@@ -406,12 +406,15 @@ public static class DispatchProcessHost
             // its disposable module-analysis cache inside the ignored worker sandbox; relocating
             // LOCALAPPDATA/APPDATA breaks unrelated per-user tool and PowerShell resolution.
             startInfo.Environment["PATH"] = BuildLowIntegrityPath(startInfo.Environment["PATH"], WorkerShell.Executable, sandboxBin);
-            WriteLowIntegritySetupArtifact(sandboxRoot, parameters.WorkingDirectory, effectivePreparation);
-
-            // Prepend a self-drop-to-Low wrapper. ArgumentList is [BaseArgs..., Command]; replace Command
-            // with ". 'drop.ps1'; <Command>" so the worker (and its children: codex/node) run Low.
             var dropScript = Path.Combine(sandboxRoot, "drop-to-low.ps1");
-            File.WriteAllText(dropScript, DropToLowScript);
+            TrackAction("materialize-artifacts", () =>
+            {
+                WriteLowIntegritySetupArtifact(sandboxRoot, parameters.WorkingDirectory, effectivePreparation);
+
+                // Prepend a self-drop-to-Low wrapper. ArgumentList is [BaseArgs..., Command]; replace Command
+                // with ". 'drop.ps1'; <Command>" so the worker (and its children: codex/node) run Low.
+                File.WriteAllText(dropScript, DropToLowScript);
+            });
             var lastIndex = startInfo.ArgumentList.Count - 1;
             if (lastIndex >= 0)
             {

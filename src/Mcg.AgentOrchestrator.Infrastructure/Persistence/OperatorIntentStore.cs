@@ -22,9 +22,6 @@ public sealed record RetryOperatorIntentPayload(
     string AutonomyPolicy = "supervised-auto",
     RetryCause? RetryCause = null);
 
-public sealed record ManualVerificationOperatorIntentPayload(
-    TaskVerificationRecord Verification);
-
 public sealed record OperatorIntentRecord(
     string Id,
     string IdempotencyKey,

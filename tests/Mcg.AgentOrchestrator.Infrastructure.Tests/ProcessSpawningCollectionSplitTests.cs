@@ -29,6 +29,7 @@ public sealed class ProcessSpawningCollectionSplitTests
         typeof(ConductorSuccessorSelfCheckTests),
         typeof(DispatchProcessHostTests),
         typeof(GoalWorktreeIsolatedDotnetTests),
+        typeof(IcaclsIntegrityLabelerTests),
         typeof(LauncherScriptTests),
         typeof(MtpTestRunnerScriptTests),
         typeof(OwnedProcessExitObservationTests),

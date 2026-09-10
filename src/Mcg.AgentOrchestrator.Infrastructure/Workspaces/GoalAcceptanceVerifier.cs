@@ -5843,7 +5843,10 @@ public sealed partial class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
             IReadOnlyList<TestPartitionCoverage> ResolvePartitions()
             {
                 IEnumerable<AcceptanceManifestCheck> partitionChecks = IsBroadInfrastructureTestCheck(broadCheck)
-                    ? ExpandBroadInfrastructureCheck(broadCheck, infrastructureTestLanes)
+                    ? AcceptanceStructuralCoveragePartitionPlan.Resolve(
+                        broadCheck,
+                        effectiveChecks,
+                        infrastructureTestLanes)
                     : effectiveChecks.Where(check =>
                         check.Type.Equals("dotnet-test", StringComparison.OrdinalIgnoreCase) &&
                         string.Equals(NormalizePath(check.Project), NormalizePath(broadCheck.Project), StringComparison.OrdinalIgnoreCase));

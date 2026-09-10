@@ -3,10 +3,12 @@ namespace Mcg.AgentOrchestrator.Core;
 public sealed class TaskSpec
 {
     internal const int VerificationHistoryLimit = 20;
+    internal const int PreReviewEvidenceHistoryLimit = 20;
 
     private readonly CappedVerificationHistory _verificationHistory = [];
     private readonly List<TaskDispatchRecord> _dispatchHistory = [];
     private readonly List<RetryAdmissionReceipt> _retryAdmissionHistory = [];
+    private readonly List<PreReviewEvidenceReceipt> _preReviewEvidenceHistory = [];
 
     public TaskSpec(TaskId id, string description, AgentRole requiredRole, string? verificationPlan = null)
     {
@@ -73,6 +75,11 @@ public sealed class TaskSpec
     public bool WasCancelledByConductor { get; private set; }
 
     public PreReviewEvidenceReceipt? PreReviewEvidenceReceipt { get; private set; }
+
+    public IReadOnlyList<PreReviewEvidenceReceipt> PreReviewEvidenceHistory => _preReviewEvidenceHistory;
+
+    // This is durable attempt accounting, not the bounded receipt cache length.
+    public int PreReviewEvidenceAttemptCount { get; private set; }
 
     internal void AssignTo(AgentId agentId)
     {
@@ -147,7 +154,8 @@ public sealed class TaskSpec
                     LastVerification.FullStandardErrorUnavailableReason,
                     LastVerification.PlannerCandidateDivergence,
                     LastVerification.CompletionVerdictVerifiedSuccess,
-                    LastVerification.CompletionVerdictRule),
+                    LastVerification.CompletionVerdictRule,
+                    LastVerification.AssignedScopeComplete),
             _verificationHistory
                 .Select(verification => new TaskVerificationSnapshot(
                     verification.Command,
@@ -176,7 +184,8 @@ public sealed class TaskSpec
                     verification.FullStandardErrorUnavailableReason,
                     verification.PlannerCandidateDivergence,
                     verification.CompletionVerdictVerifiedSuccess,
-                    verification.CompletionVerdictRule))
+                    verification.CompletionVerdictRule,
+                    verification.AssignedScopeComplete))
                 .ToList(),
             LastDispatch is null
                 ? null
@@ -258,7 +267,9 @@ public sealed class TaskSpec
             _retryAdmissionHistory.ToArray(),
             RetryAdmissionHoldRoute,
             PendingReviewFindingRepairCheckpoint,
-            AcceptedRetryFeedback);
+            AcceptedRetryFeedback,
+            _preReviewEvidenceHistory.ToArray(),
+            PreReviewEvidenceAttemptCount);
     }
 
     internal static TaskSpec FromSnapshot(TaskSnapshot snapshot)
@@ -327,7 +338,8 @@ public sealed class TaskSpec
                     StandardErrorIsAuthoritative: verification.AuthoritativeStandardError is not null,
                     PlannerCandidateDivergence: verification.PlannerCandidateDivergence,
                     CompletionVerdictVerifiedSuccess: verification.CompletionVerdictVerifiedSuccess,
-                    CompletionVerdictRule: verification.CompletionVerdictRule));
+                    CompletionVerdictRule: verification.CompletionVerdictRule,
+                    AssignedScopeComplete: verification.AssignedScopeComplete));
             }
         }
 
@@ -366,7 +378,8 @@ public sealed class TaskSpec
                 StandardErrorIsAuthoritative: snapshot.LastVerification.AuthoritativeStandardError is not null,
                 PlannerCandidateDivergence: snapshot.LastVerification.PlannerCandidateDivergence,
                 CompletionVerdictVerifiedSuccess: snapshot.LastVerification.CompletionVerdictVerifiedSuccess,
-                CompletionVerdictRule: snapshot.LastVerification.CompletionVerdictRule);
+                CompletionVerdictRule: snapshot.LastVerification.CompletionVerdictRule,
+                AssignedScopeComplete: snapshot.LastVerification.AssignedScopeComplete);
             var historyIndex = task._verificationHistory.FindLastIndex(
                 verification => verification.HasSameRoundIdentity(latestVerification));
             if (historyIndex < 0)
@@ -458,7 +471,14 @@ public sealed class TaskSpec
         task.PendingReviewFindingRepairCheckpoint = snapshot.PendingReviewFindingRepairCheckpoint;
         task.PendingRetryCause = snapshot.PendingRetryCause;
         task.RetryAdmissionHoldRoute = snapshot.RetryAdmissionHoldRoute;
-        task.PreReviewEvidenceReceipt = snapshot.PreReviewEvidenceReceipt;
+        task._preReviewEvidenceHistory.AddRange(
+            snapshot.PreReviewEvidenceHistory ??
+            (snapshot.PreReviewEvidenceReceipt is null ? [] : [snapshot.PreReviewEvidenceReceipt]));
+        task.PreReviewEvidenceAttemptCount = Math.Max(
+            task._preReviewEvidenceHistory.Count(receipt =>
+                receipt is not null && !receipt.IsSyntheticReuse),
+            snapshot.PreReviewEvidenceAttemptCount);
+        task.PreReviewEvidenceReceipt = snapshot.PreReviewEvidenceReceipt ?? task._preReviewEvidenceHistory.LastOrDefault();
         task.InterruptedDispatchRecoveryId = snapshot.InterruptedDispatchRecoveryId;
         task.WasCancelledByConductor = snapshot.WasCancelledByConductor;
         return task;
@@ -635,6 +655,15 @@ public sealed class TaskSpec
             return false;
         }
 
+        _preReviewEvidenceHistory.Add(receipt);
+        if (!receipt.IsSyntheticReuse)
+        {
+            PreReviewEvidenceAttemptCount++;
+        }
+        if (_preReviewEvidenceHistory.Count > PreReviewEvidenceHistoryLimit)
+        {
+            _preReviewEvidenceHistory.RemoveRange(0, _preReviewEvidenceHistory.Count - PreReviewEvidenceHistoryLimit);
+        }
         PreReviewEvidenceReceipt = receipt;
         return true;
     }

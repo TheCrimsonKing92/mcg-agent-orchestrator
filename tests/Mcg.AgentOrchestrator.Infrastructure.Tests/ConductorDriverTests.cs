@@ -910,7 +910,7 @@ public sealed class ConductorDriverTests
                 Assert.Equal(WorkTaskStatus.Assigned, goal.Tasks.Single().Status);
                 Assert.Equal(WorkTaskStatus.Running, currentGoal.Tasks.Single().Status);
                 Assert.NotNull(currentGoal.Tasks.Single().LastDispatch);
-                return DispatchStartOutcome.Started();
+                return DispatchStartOutcome.Started(currentGoal.Tasks);
             },
             buildServerShutdown: () => { shutdownCalled = true; },
             writeEscalation: (_, _, _) => { escalated = true; });
@@ -928,7 +928,7 @@ public sealed class ConductorDriverTests
             phaseTimings,
             line => line.Contains("phase=dispatch-prep", StringComparison.Ordinal) &&
                     line.Contains("retry=spawn-failed", StringComparison.Ordinal) &&
-                    line.Contains(" task=", StringComparison.Ordinal));
+                    line.Contains($" task={goal.Tasks.Single().Id.Value[..8]} role={goal.Tasks.Single().RequiredRole} ", StringComparison.Ordinal));
     }
 
     [Xunit.Fact(DisplayName = "ConductorDriver_recoverable_sandbox_prep_action_is_remediated_and_start_retried")]

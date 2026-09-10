@@ -55,6 +55,24 @@ private static bool HandleWorkspaceCommand(CliExecutionContext context, IReadOnl
             return false;
 
         case "merge":
+            var candidateHead = GitCli.Run(executionDirectory, "rev-parse", branch);
+            if (!candidateHead.Succeeded || string.IsNullOrWhiteSpace(candidateHead.Output))
+            {
+                Console.WriteLine(
+                    $"Workspace merge blocked: cannot resolve candidate head for {branch}: " +
+                    (string.IsNullOrWhiteSpace(candidateHead.Error) ? "git rev-parse failed." : candidateHead.Error.Trim()));
+                return false;
+            }
+
+            var outstandingEvidence = context.Kernel.GetGoal(goal.Id)
+                .GetOutstandingCriterionEvidenceObligations(candidateHead.Output.Trim());
+            if (outstandingEvidence.Count > 0)
+            {
+                Console.WriteLine(
+                    "Workspace merge blocked by outstanding criterion evidence: " +
+                    string.Join(", ", outstandingEvidence.Select(item => $"{item.Id}:{item.Owner}:{item.State}")));
+                return false;
+            }
             var engineHealth = PostLandingCanaryFactory.CreateCircuit(context.Workspace).Read();
             var engineDecision = AcceptanceEngineAcceptanceGate.Decide(
                 engineHealth.Health,

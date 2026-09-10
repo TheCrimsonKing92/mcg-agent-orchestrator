@@ -207,6 +207,25 @@ internal static class CliCommandHelp
         "Record manual verification evidence for a task.",
         ["--goal", "--text-file", "--idempotency-key", "--operator-actor", "--help", "-h"]);
 
+    public const string CriterionEvidenceMapUsage = "Usage: criterion-evidence-map --goal <goal-prefix> <criterion-index> <criterion-version> <acceptance|operator> <required-scope> <finding-stable-id> <candidate-sha> [--idempotency-key <key>] [--operator-actor <actor>]";
+    public const string CriterionEvidenceRecordUsage = "Usage: criterion-evidence-record --goal <goal-prefix> <obligation-id> operator <candidate-sha> <receipt-id> <scope> <passed|failed> <detail> [--idempotency-key <key>] [--operator-actor <actor>]";
+    public const string CriterionEvidenceRepairUsage = "Usage: criterion-evidence-repair --goal <goal-prefix> <malformed-obligation-id> <criterion-index> <criterion-version> <acceptance|operator> <required-scope> <finding-stable-id> <candidate-sha> <reason> [--idempotency-key <key>] [--operator-actor <actor>]";
+
+    private static readonly CommandHelpEntry CriterionEvidenceMap = new(
+        CriterionEvidenceMapUsage,
+        "Queue a candidate-bound criterion ownership mapping for the conductor.",
+        ["--goal", "--idempotency-key", "--operator-actor", "--help", "-h"]);
+
+    private static readonly CommandHelpEntry CriterionEvidenceRecord = new(
+        CriterionEvidenceRecordUsage,
+        "Queue operator evidence for a mapped criterion. Acceptance evidence comes from the acceptance executor.",
+        ["--goal", "--idempotency-key", "--operator-actor", "--help", "-h"]);
+
+    private static readonly CommandHelpEntry CriterionEvidenceRepair = new(
+        CriterionEvidenceRepairUsage,
+        "Queue an attributed repair that rebinds one malformed Unknown claim; the replacement remains pending until valid evidence arrives.",
+        ["--goal", "--idempotency-key", "--operator-actor", "--help", "-h"]);
+
     private static readonly CommandHelpEntry Recover = new(
         RecoverUsage,
         "Recover stuck goal/task state with an operator note.",
@@ -792,6 +811,24 @@ internal static class CliCommandHelp
         if (args[0].Equals("verify-manual", StringComparison.OrdinalIgnoreCase))
         {
             entry = VerifyManual;
+            return true;
+        }
+
+        if (args[0].Equals("criterion-evidence-map", StringComparison.OrdinalIgnoreCase))
+        {
+            entry = CriterionEvidenceMap;
+            return true;
+        }
+
+        if (args[0].Equals("criterion-evidence-record", StringComparison.OrdinalIgnoreCase))
+        {
+            entry = CriterionEvidenceRecord;
+            return true;
+        }
+
+        if (args[0].Equals("criterion-evidence-repair", StringComparison.OrdinalIgnoreCase))
+        {
+            entry = CriterionEvidenceRepair;
             return true;
         }
 
