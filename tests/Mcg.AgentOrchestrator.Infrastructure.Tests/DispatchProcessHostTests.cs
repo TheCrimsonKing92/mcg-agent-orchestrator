@@ -872,6 +872,16 @@ public sealed class DispatchProcessHostTests
         try
         {
             Directory.CreateDirectory(worktree);
+
+            // Isolated synthetic login source. Claude seeding fails closed on an unusable source, so
+            // without an injected source this fixture would resolve the operator's REAL profile
+            // credential store and pass or fail according to host auth rather than sandbox scoping.
+            var credentialSource = Path.Combine(root, "claude-source");
+            Directory.CreateDirectory(credentialSource);
+            File.WriteAllText(
+                Path.Combine(credentialSource, ".credentials.json"),
+                "{\"claudeAiOauth\":{\"accessToken\":\"synthetic-sandbox-scoping-token\"}}");
+
             var startInfo = CreateSandboxStartInfo(worktree);
             var parameters = CreateSandboxParameters(root, worktree, WorkerSandboxProvider.Claude);
 
@@ -879,14 +889,30 @@ public sealed class DispatchProcessHostTests
                 startInfo,
                 parameters,
                 new WorkerSandboxPreparer(new RecordingIntegrityLabeler(new IntegrityLabelState(Exists: true, Low: true, Inheritable: true))),
-                protectWorkspaceBoundary: _ => { });
+                protectWorkspaceBoundary: _ => { },
+                providerEnvironmentReader: name => name switch
+                {
+                    "CLAUDE_CONFIG_DIR" => credentialSource,
+                    // Explicitly absent: API-key mode would bypass source seeding entirely, so a host
+                    // that happens to export a key must not change what this fixture exercises.
+                    "ANTHROPIC_API_KEY" => null,
+                    _ => null,
+                });
 
             var sandboxRoot = Path.Combine(worktree, ".mcg-sandbox");
             Assert.False(startInfo.Environment.ContainsKey("CODEX_HOME"));
             Assert.False(Directory.Exists(Path.Combine(sandboxRoot, "codex-home")));
             Assert.True(Directory.Exists(Path.Combine(sandboxRoot, "temp")));
             Assert.True(Directory.Exists(Path.Combine(sandboxRoot, "bin")));
-            Assert.Equal(Path.Combine(sandboxRoot, "claude-config"), startInfo.Environment["CLAUDE_CONFIG_DIR"]);
+            var claudeConfig = Path.Combine(sandboxRoot, "claude-config");
+            Assert.Equal(claudeConfig, startInfo.Environment["CLAUDE_CONFIG_DIR"]);
+
+            // The injected source is the one that was seeded: proves the seam is actually honored,
+            // so a regression cannot silently fall back to the host store and still pass here.
+            Assert.Contains(
+                "synthetic-sandbox-scoping-token",
+                File.ReadAllText(Path.Combine(claudeConfig, ".credentials.json")),
+                StringComparison.Ordinal);
         }
         finally
         {

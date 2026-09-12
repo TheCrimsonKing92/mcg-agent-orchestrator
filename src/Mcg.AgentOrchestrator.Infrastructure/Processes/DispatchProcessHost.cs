@@ -292,7 +292,14 @@ public static class DispatchProcessHost
         WorkerSandboxPreparer preparer,
         Action<string, DateTimeOffset, TimeSpan>? recordStep = null,
         Action<string>? protectWorkspaceBoundary = null,
-        Action<string>? protectGitMetadata = null)
+        Action<string>? protectGitMetadata = null,
+        // Same injected-environment seam SeedProviderEnvironment already exposes, surfaced here so a
+        // sandbox test that only needs a Claude-shaped provider can point seeding at a synthetic
+        // login source. One reader covers both inputs the Claude path reads (ANTHROPIC_API_KEY and
+        // CLAUDE_CONFIG_DIR), so an injected test resolves nothing from process environment. Without
+        // it those tests fall through to the operator's REAL profile credential store, which makes
+        // them depend on host auth and fail closed on any machine without a Claude login.
+        Func<string, string?>? providerEnvironmentReader = null)
     {
         if (!OperatingSystem.IsWindows())
         {
@@ -393,7 +400,12 @@ public static class DispatchProcessHost
             ConfigurePowerShellModuleAnalysisCache(startInfo.Environment, sandboxRoot);
             TrackAction("materialize-shims", () => WriteWorkerCommandShims(sandboxBin, startInfo.Environment["PATH"]));
 
-            TrackAction("materialize-provider-seed", () => SeedProviderEnvironment(startInfo, parameters.Provider, sandboxRoot, parameters.StderrPath));
+            TrackAction("materialize-provider-seed", () => SeedProviderEnvironment(
+                startInfo,
+                parameters.Provider,
+                sandboxRoot,
+                parameters.StderrPath,
+                environmentReader: providerEnvironmentReader));
             TrackAction("materialize-ca-bundle", () => SeedWorkerCaBundle(startInfo, sandboxRoot, parameters.StderrPath));
 
             // Keep the sandbox scratch out of git's view so it never registers as a dirty/untracked path:
