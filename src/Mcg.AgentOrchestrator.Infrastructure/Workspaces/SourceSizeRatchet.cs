@@ -129,10 +129,10 @@ internal static class SourceSizeRatchet
             // Goal 1592104a extracted evidence intent submission, status output, and metadata flag parsing.
             // Goal 5daaa1db passes the operation-owned cleanup context through CLI acceptance and
             // terminal sweeps; policy and cadence remain in WorktreeCleanupContext, not this runner.
-            // Raised by eight lines for the same goal's caller correction: the metadata-only goals
-            // listing and terminal-sweep candidate resolution must resolve their cleanup owner where
-            // the command is routed, so the owner threads through this runner's own call sites.
-            new SourceSizeCeiling("src/Mcg.AgentOrchestrator.App/Cli/CliPersistentStateRunner.cs", 4858),
+            // Raised eight lines for metadata-only goals and terminal-sweep caller ownership;
+            // five further lines preserve conduct-loop and global-reconcile scheduler cadence.
+            // The operation owner threads through this runner's own call sites.
+            new SourceSizeCeiling("src/Mcg.AgentOrchestrator.App/Cli/CliPersistentStateRunner.cs", 4863),
             new SourceSizeCeiling("tests/Mcg.AgentOrchestrator.Infrastructure.Tests/GoalAcceptanceVerifierTests.cs", 1566),
             // Goal 682f25a1 re-derived this row after integrating goal c2eae988, whose fault-isolation
             // eligibility coverage had already added 173 net lines before the multi-file ratchet landed.

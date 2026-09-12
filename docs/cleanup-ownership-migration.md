@@ -631,3 +631,23 @@ no executed receipt covers, so fresh focused execution of the named controls and
 a fresh full native acceptance at the delivered candidate are still required
 before landing. Overall performance and configured live-host evidence stay
 operator-owned.
+
+### Operation cadence preservation
+
+The persistent runner passes the supplied cleanup context through both conduct and global reconcile.
+Conduct startup and the loop dispatcher share one scheduler; separate operation contexts retain independent
+cadence. `CliCommandTestsCleanupCadence` checks both commands before the interval, at its one-hour boundary,
+and with an independent context using a controlled clock. The existing Cli lane selects this class.
+The runner size ceiling increases from 4858 to 4863 lines for explicit context parameters and forwarding;
+this bounded ownership repair does not claim to decompose the runner.
+
+Forwarding audit: single-goal conduct already passes `acceptanceCleanupContext` to
+`ExecuteAcceptanceOutsideTransaction`. Goal-scoped `refresh-dispatch` and `refresh-dispatches`
+refresh process records and persist those results; they do not invoke the worktree orphan scheduler.
+Conduct startup itself calls `cleanupContext.Scheduler.SweepIfDue`; the same context also reaches
+`CliCommandDispatcher`, so the startup stamp governs later loop cleanup. The `recent` rows guard
+against an extra sweep by either stage, whereas `due` intentionally pins inclusive interval expiry.
+A supplied context is borrowed and its scheduler state is updated; it is not disposed by these callees.
+Omission remains supported for top-level operations, which load their own configured context.
+The manifest's Cli selector starts with `FullyQualifiedName~CliCommandTests`; the new class matches it
+and none of that lane's three exclusions.

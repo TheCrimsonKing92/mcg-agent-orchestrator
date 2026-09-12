@@ -166,7 +166,7 @@ internal static partial class CliPersistentStateRunner
         // dispatch it started — the goal then re-dispatches the same stage forever and can't advance.
         if (IsConductLoop(args))
         {
-            return ExecuteConductLoopOutsideTransaction(args, stateRepository, workspace, ref agents, providers, ref workerProfiles, ref currentGoal, channel);
+            return ExecuteConductLoopOutsideTransaction(args, stateRepository, workspace, ref agents, providers, ref workerProfiles, ref currentGoal, channel, acceptanceCleanupContext);
         }
 
         if (IsSingleGoalConductCommand(args))
@@ -202,7 +202,7 @@ internal static partial class CliPersistentStateRunner
 
         if (IsProcessRefreshCommand(args))
         {
-            return ExecuteProcessRefreshOutsideTransaction(args, stateRepository, workspace, ref agents, providers, ref workerProfiles, ref currentGoal);
+            return ExecuteProcessRefreshOutsideTransaction(args, stateRepository, workspace, ref agents, providers, ref workerProfiles, ref currentGoal, acceptanceCleanupContext);
         }
 
         if (IsBacklogIntakeGoalCreationCommand(args) && HasRequestKey(args))
@@ -932,8 +932,10 @@ internal static partial class CliPersistentStateRunner
         IModelProviderRegistry providers,
         ref WorkerProfileCatalog workerProfiles,
         ref Goal? currentGoal,
-        IOperatorChannel? channel = null)
+        IOperatorChannel? channel = null,
+        WorktreeCleanupContext? cleanupContext = null)
     {
+        cleanupContext ??= WorktreeCleanupContext.Load(attentionStoreDirectory: workspace.OrchestratorDirectory);
         using var conductLoopLease = ConductorLoopLeaseController.Acquire(workspace.OrchestratorDirectory);
         var operatorIntentStore = SqliteOperatorIntentStore.ForDirectories(
             workspace.OrchestratorDirectory,
@@ -973,7 +975,7 @@ internal static partial class CliPersistentStateRunner
             try
             {
                 var watchGoalId = ResolveConductWatchGoalId(args, startupKernel, currentGoalAtStartup, stateRepository);
-                var cleanupContext = WorktreeCleanupContext.Load(attentionStoreDirectory: workspace.OrchestratorDirectory);
+                // Startup and loop share the operation scheduler and its cadence.
                 var sweepKernel = LoadConductLoopSweepKernel(
                     stateRepository, startupKernel, workspace.ExecutionDirectory, watchGoalId, cleanupContext.Hooks);
                 var sweep = TerminalGoalSweep.Run(
@@ -1141,7 +1143,8 @@ internal static partial class CliPersistentStateRunner
             checkpointGoalKernel: CheckpointGoals,
             initialConductLoopLoadHold: initialConductLoopLoadHold,
             persistCriticalGoalKernel: PersistCriticalGoals,
-            recordDurableGoalBaseline: snapshot => tickBaselines[snapshot.Id] = snapshot);
+            recordDurableGoalBaseline: snapshot => tickBaselines[snapshot.Id] = snapshot,
+            cleanupContext: cleanupContext);
 
         // A successful handoff has transferred the lease and authority to the successor. All incumbent
         // tick state was persisted before handoff; do not write once the successor owns the loop.
@@ -3825,7 +3828,8 @@ internal static partial class CliPersistentStateRunner
         ref IReadOnlyList<AgentDefinition> agents,
         IModelProviderRegistry providers,
         ref WorkerProfileCatalog workerProfiles,
-        ref Goal? currentGoal)
+        ref Goal? currentGoal,
+        WorktreeCleanupContext? cleanupContext = null)
     {
         var command = args[0].ToLowerInvariant();
         CliCommandHelp.ThrowIfInvalidFlags(args);
@@ -3836,7 +3840,7 @@ internal static partial class CliPersistentStateRunner
         var commandArgs = refreshOptions?.TargetParts ?? args;
         if (command.Equals("reconcile", StringComparison.OrdinalIgnoreCase))
         {
-            return ExecuteGlobalProcessReconcile(args, stateRepository, workspace, ref currentGoal);
+            return ExecuteGlobalProcessReconcile(args, stateRepository, workspace, ref currentGoal, cleanupContext);
         }
 
         var goalId = ResolveSingleGoalCommandGoalId(stateRepository, currentGoal?.Id.Value, ResolveProcessRefreshGoalPrefix(commandArgs));
@@ -3900,7 +3904,8 @@ internal static partial class CliPersistentStateRunner
         IReadOnlyList<string> args,
         ITransactionalOrchestratorStateRepository stateRepository,
         OrchestratorWorkspace workspace,
-        ref Goal? currentGoal)
+        ref Goal? currentGoal,
+        WorktreeCleanupContext? cleanupContext = null)
     {
         var kernel = stateRepository.LoadAsync().GetAwaiter().GetResult();
         currentGoal = ResolveCurrentGoal(kernel, currentGoal?.Id.Value);
@@ -3908,7 +3913,7 @@ internal static partial class CliPersistentStateRunner
         var candidates = CaptureRunningProcessIdentities(kernel);
         var runner = new BackgroundDispatchRunner();
         var reconciled = runner.SweepExitedProcesses(kernel);
-        var cleanupContext = WorktreeCleanupContext.Load(attentionStoreDirectory: workspace.OrchestratorDirectory);
+        cleanupContext ??= WorktreeCleanupContext.Load(attentionStoreDirectory: workspace.OrchestratorDirectory);
         cleanupContext.Scheduler.SweepIfDue(workspace.ExecutionDirectory, kernel);
         RemoteGitMirror.TryStartBackgroundProcessing(kernel, workspace.ExecutionDirectory);
         Console.WriteLine($"Reconciled dispatches: {reconciled}");
