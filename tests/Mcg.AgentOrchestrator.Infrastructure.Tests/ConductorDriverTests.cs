@@ -1192,7 +1192,15 @@ public sealed class ConductorDriverTests
             kernel,
             seeded.Workspace,
             kernel.GetGoal(goal.Id),
-            refreshBeforeStart: false);
+            refreshBeforeStart: false,
+            checkpointBeforeWorkerStart: (checkpointKernel, checkpointGoalId, checkpointTaskId, phase) =>
+            {
+                Assert.Equal(goal.Id, checkpointGoalId);
+                Assert.Equal(task.Id, checkpointTaskId);
+                Assert.Equal(DispatchRecordCheckpointPhase.BeforeRetryAdmission, phase);
+                new SqliteOrchestratorStateRepository(seeded.Workspace.SqliteStatePath)
+                    .SaveAsync(checkpointKernel).GetAwaiter().GetResult();
+            });
         var result = new SubscriptionStartResult(
             [prepared],
             processes,
@@ -1223,6 +1231,7 @@ public sealed class ConductorDriverTests
         var heldGoal = GoalLifecycleCommands.CreateAndActivateSimpleGoal(kernel, DefaultAgents(), "held sibling");
         string? setAsideReason = null;
         var retriesBeforeTicks = kernel.GetGoal(goal.Id).Timeline.Count(evt => evt.Kind == ProgressKind.TaskRetried);
+        var dispatchesBeforeTicks = kernel.GetGoal(goal.Id).Timeline.Count(evt => evt.Kind == ProgressKind.TaskDispatchRecorded);
         int retriesAfterFirstTick = -1, dispatchesAfterFirstTick = -1;
         var startAttempts = 0;
         var driver = MakeDriver(
@@ -1240,7 +1249,14 @@ public sealed class ConductorDriverTests
                 var preparedTask = kernel.GetTask(currentGoal.Id, task.Id);
                 var processes = GoalManagementCommandService.StartDispatches(kernel, seeded.Workspace,
                     kernel.GetGoal(currentGoal.Id),
-                    refreshBeforeStart: false);
+                    refreshBeforeStart: false,
+                    checkpointBeforeWorkerStart: (checkpointKernel, checkpointGoalId, checkpointTaskId, phase) =>
+                    {
+                        Assert.Equal(currentGoal.Id, checkpointGoalId);
+                        Assert.Equal(task.Id, checkpointTaskId);
+                        Assert.Equal(DispatchRecordCheckpointPhase.BeforeRetryAdmission, phase);
+                        repository.SaveAsync(checkpointKernel).GetAwaiter().GetResult();
+                    });
                 return ConductorDriver.ClassifySubscriptionStartForConductor(new SubscriptionStartResult(
                     [new WorkerProfileDispatchResult(preparedTask, @"C:\repo\.orchestrator\prompts\task.md")],
                     processes, new ParallelExecutionPlan([], []), []));
@@ -1257,6 +1273,7 @@ public sealed class ConductorDriverTests
         var summary = new ConductorBatchLoop().Run(kernel, driver, ConductorAutonomyPolicy.Permissive,
             Path.Combine(Path.GetTempPath(), $"mcg-no-stop-{Guid.NewGuid():N}"),
             maxIterations: 2,
+            persistTick: checkpointKernel => repository.SaveAsync(checkpointKernel).GetAwaiter().GetResult(),
             watchInterval: TimeSpan.FromMilliseconds(1),
             sleepFunc: _ =>
             {
@@ -1265,7 +1282,10 @@ public sealed class ConductorDriverTests
                 kernel.ReplaceGoalStateWithSnapshot(persisted!, []);
                 Assert.Equal(GoalStatus.Active, kernel.GetGoal(goal.Id).Status);
                 var durableTask = kernel.GetTask(goal.Id, task.Id);
-                Assert.Equal(WorkTaskStatus.Failed, durableTask.Status);
+                // The checkpoint preserves the recorded dispatch; refusal must not restore the stale failed snapshot.
+                Assert.Equal(WorkTaskStatus.Running, durableTask.Status);
+                Assert.Null(durableTask.LastProcess);
+                Assert.Equal("powershell.exe -Command retry", durableTask.LastDispatch?.Command);
                 Assert.NotNull(durableTask.LatestRetryAt);
                 retriesAfterFirstTick = kernel.GetGoal(goal.Id).Timeline.Count(evt => evt.Kind == ProgressKind.TaskRetried);
                 dispatchesAfterFirstTick = kernel.GetGoal(goal.Id).Timeline.Count(evt => evt.Kind == ProgressKind.TaskDispatchRecorded);
@@ -1274,12 +1294,18 @@ public sealed class ConductorDriverTests
         Assert.Equal(2, summary.Ticks);
         Assert.Equal(1, startAttempts);
         Assert.Equal(retriesBeforeTicks + 1, retriesAfterFirstTick);
-        Assert.Equal(1, dispatchesAfterFirstTick);
+        Assert.Equal(dispatchesBeforeTicks + 1, dispatchesAfterFirstTick);
         Assert.Equal(retriesAfterFirstTick, kernel.GetGoal(goal.Id).Timeline.Count(evt => evt.Kind == ProgressKind.TaskRetried));
         Assert.Equal(dispatchesAfterFirstTick, kernel.GetGoal(goal.Id).Timeline.Count(evt => evt.Kind == ProgressKind.TaskDispatchRecorded));
         Assert.Contains(task.Id.Value[..8], setAsideReason, StringComparison.Ordinal);
         Assert.Contains("Prepared retry reservation is owned until", setAsideReason, StringComparison.Ordinal);
-        Assert.Equal(WorkTaskStatus.Failed, kernel.GetTask(goal.Id, task.Id).Status);
+        Assert.Equal(WorkTaskStatus.Running, kernel.GetTask(goal.Id, task.Id).Status);
+        Assert.Null(kernel.GetTask(goal.Id, task.Id).LastProcess);
+        var coldKernel = await repository.LoadAsync();
+        var coldGoal = coldKernel.GetGoal(goal.Id);
+        Assert.Equal(GoalLifecycleState.Dispatched, GoalLifecycle.ResolveState(coldGoal));
+        Assert.Equal(dispatchesAfterFirstTick, coldGoal.Timeline.Count(evt => evt.Kind == ProgressKind.TaskDispatchRecorded));
+        Assert.Equal(retriesAfterFirstTick, coldGoal.Timeline.Count(evt => evt.Kind == ProgressKind.TaskRetried));
     }
 
     [Xunit.Fact(DisplayName = "ConductorDriver_recorded_start_mixed_started_and_registration_failure_keeps_live_progress")]

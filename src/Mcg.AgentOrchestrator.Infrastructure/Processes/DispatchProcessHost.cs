@@ -1982,6 +1982,11 @@ public static void DropToLow() {
 
     internal static int? SelectHeartbeatChildPid(Process? worker, IReadOnlyList<int> ownedPids)
     {
+        if (OperatingSystem.IsWindows() && ownedPids.Count > 0)
+        {
+            var inspection = WindowsNativeProcessInspection.Read(ownedPids);
+            ownedPids = ProcessObservationRoles.CommandCandidates(ownedPids, inspection.Records);
+        }
         int? workerId = null;
         var workerRunning = false;
         if (worker is not null)

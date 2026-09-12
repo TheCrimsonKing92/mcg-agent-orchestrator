@@ -348,6 +348,7 @@ public sealed class DispatchProcessHostTests
         Task<int>? runTask = null;
         int? heartbeatChildPid = null;
         var gatePath = Path.Combine(dir, "release-child");
+        var readyPath = Path.Combine(dir, "child-ready");
         try
         {
             var stdoutPath = Path.Combine(dir, "out.log");
@@ -359,7 +360,7 @@ public sealed class DispatchProcessHostTests
             var shell = EscapePowerShellSingleQuoted(WorkerShell.Executable);
             File.WriteAllText(
                 childScriptPath,
-                $"while (!(Test-Path -LiteralPath '{EscapePowerShellSingleQuoted(gatePath)}')) {{ [void][Math]::Sqrt(1234567) }}{Environment.NewLine}exit 23",
+                $"[IO.File]::WriteAllText('{EscapePowerShellSingleQuoted(readyPath)}', [string]$PID); while (!(Test-Path -LiteralPath '{EscapePowerShellSingleQuoted(gatePath)}')) {{ [void][Math]::Sqrt(1234567) }}{Environment.NewLine}exit 23",
                 new UTF8Encoding(encoderShouldEmitUTF8Identifier: false));
             var command =
                 $"& '{shell}' -NoProfile -NonInteractive -InputFormat None -File " +
@@ -384,7 +385,7 @@ public sealed class DispatchProcessHostTests
                 {
                     try
                     {
-                        if (!File.Exists(heartbeatPath))
+                        if (!File.Exists(heartbeatPath) || !File.Exists(readyPath))
                             return false;
 
                         using var heartbeat = JsonDocument.Parse(File.ReadAllText(heartbeatPath));
@@ -395,6 +396,8 @@ public sealed class DispatchProcessHostTests
                             return false;
                         }
 
+                        if (!int.TryParse(File.ReadAllText(readyPath), out var readyPid) || childPid.GetInt32() != readyPid)
+                            return false;
                         heartbeatChildPid = childPid.GetInt32();
                         return true;
                     }
