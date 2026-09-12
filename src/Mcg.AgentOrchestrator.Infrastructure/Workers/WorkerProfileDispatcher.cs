@@ -64,44 +64,6 @@ public sealed class WorkerSubscriptionPreflightException : InvalidOperationExcep
     public IReadOnlyList<string> Findings { get; }
 }
 
-public sealed record ClaudeCliAuthState(
-    bool HasAnthropicApiKey,
-    bool HasCliCredentialArtifact,
-    string? CredentialArtifactPath);
-
-public static class ClaudeCliAuthProbe
-{
-    public const string AuthUnavailableErrorCode = "ERR_CLAUDE_AUTH_UNAVAILABLE";
-
-    public static ClaudeCliAuthState FromEnvironment() =>
-        From(environmentReader: null, defaultHomeProvider: null);
-
-    /// <summary>
-    /// Shares one selection and validation rule with worker sandbox seeding
-    /// (<see cref="ClaudeCredentialSource"/>): a non-blank CLAUDE_CONFIG_DIR is authoritative and
-    /// never falls back to another profile, and a login artifact counts only when
-    /// <c>.credentials.json</c> holds a non-empty OAuth access token. Preferences, settings and
-    /// config files alone are not login material.
-    /// A positive result is LOCAL MATERIAL presence only; it is never proof of a live session, and
-    /// expiry and service acceptance are not evaluated here.
-    /// Environment and default-home inputs are injectable so tests stay deterministic without
-    /// mutating process-global environment state.
-    /// </summary>
-    internal static ClaudeCliAuthState From(
-        Func<string, string?>? environmentReader,
-        Func<string?>? defaultHomeProvider)
-    {
-        var read = environmentReader ?? ClaudeCredentialSource.ProcessEnvironmentReader;
-        var hasApiKey = !string.IsNullOrWhiteSpace(read(ClaudeCredentialSource.ApiKeyEnvironmentVariable));
-        var inspection = ClaudeCredentialSource.Inspect(read, defaultHomeProvider);
-
-        return new ClaudeCliAuthState(
-            hasApiKey,
-            inspection.HasLocalAuthMaterial,
-            inspection.HasLocalAuthMaterial ? inspection.CredentialFilePath : null);
-    }
-}
-
 public sealed record DispatchModelOverride(string? ProfileName, string? ModelName, string? ReasoningEffort);
 
 public static class WorkerProfileDispatcher
@@ -744,7 +706,11 @@ public static class WorkerProfileDispatcher
 
         if (!authState.HasCliCredentialArtifact)
         {
-            findings.Add("auth: Claude CLI Low-IL auth preflight found no API key and no CLI credential artifact");
+            // Stays an `auth:` observation on purpose: admission policy is unchanged, and the hard
+            // stop for an unusable login is the pre-launch seeding failure in ClaudeCredentialSource.
+            findings.Add(
+                "auth: Claude CLI Low-IL auth preflight found no API key and no CLI credential artifact; " +
+                (authState.UnavailableReason ?? "no credential source was inspected"));
             return;
         }
 

@@ -119,7 +119,11 @@ internal static class SourceSizeRatchet
             // repository identities; 3229 is the measured combined post-rebase size.
             // Goal 52049d08 adds profile-aware policy selection, immutable receipt reuse, and compact
             // retry-projection wiring at this package-assembly boundary; each behavior remains extracted.
-            new SourceSizeCeiling("src/Mcg.AgentOrchestrator.Infrastructure/Workers/WorkerProfileDispatcher.cs", 3234),
+            // Goal df9ddb05 LOWERED this from 3234: ClaudeCliAuthState and ClaudeCliAuthProbe moved out
+            // to ClaudeCredentialSource.cs so the Claude credential selection rule and both consumers'
+            // views of it live in one file and cannot drift apart again. The dispatcher keeps only the
+            // preflight finding call site. 3200 is the measured post-extraction size.
+            new SourceSizeCeiling("src/Mcg.AgentOrchestrator.Infrastructure/Workers/WorkerProfileDispatcher.cs", 3200),
             // Raised for goal fd252fe4: the single typed retry-cause argument belongs at the durable CLI
             // command-application boundary; classification and admission behavior remain elsewhere.
             // Goal 17d96426 classifies the stateless Hermes trial beside the existing stateless commands.

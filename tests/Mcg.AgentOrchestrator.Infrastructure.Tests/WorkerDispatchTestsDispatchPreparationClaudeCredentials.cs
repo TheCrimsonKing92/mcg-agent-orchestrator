@@ -2,6 +2,8 @@ using Mcg.AgentOrchestrator.Infrastructure;
 using System;
 using System.Diagnostics;
 using System.IO;
+using System.Linq;
+using System.Security.Cryptography;
 
 /// <summary>
 /// Claude credential source selection + preflight + sandbox seeding regressions.
@@ -26,6 +28,13 @@ public sealed class WorkerDispatchTestsDispatchPreparationClaudeCredentials
         "{\"claudeAiOauth\":{\"accessToken\":\"\",\"refreshToken\":\"\"}}";
 
     private const string MalformedCredentials = "{\"claudeAiOauth\": {\"accessToken\": ";
+
+    // Reason phrases owned by ClaudeCredentialSource.Describe. They are asserted here as distinct
+    // strings so a future edit cannot collapse two different failure shapes into one message.
+    private const string MissingFileReason = ".credentials.json is absent";
+    private const string EmptyFileReason = ".credentials.json is empty";
+    private const string UnreadableFileReason = ".credentials.json could not be read";
+    private const string MalformedFileReason = ".credentials.json is not a readable JSON object";
 
     [Xunit.Fact(DisplayName = "Claude_explicit_config_dir_drives_preflight_selection_and_seeding")]
     public void ExplicitConfigDirectoryDrivesPreflightSelectionAndSeeding()
@@ -68,6 +77,9 @@ public sealed class WorkerDispatchTestsDispatchPreparationClaudeCredentials
             Assert.DoesNotContain("WRONG-PROFILE-SENTINEL", seeded);
             Assert.Equal("{\"theme\":\"dark\"}", File.ReadAllText(Path.Combine(seededDir!, "settings.json")));
             Assert.Equal(string.Empty, ReadDiagnostics(stderrPath));
+
+            AssertPreflightAndSeedingAgreeOnOneResolvedSource(auth, explicitDir, seededDir!);
+            Assert.True(auth.IsExplicitSource);
         }
         finally
         {
@@ -166,6 +178,12 @@ public sealed class WorkerDispatchTestsDispatchPreparationClaudeCredentials
                 File.ReadAllText(Path.Combine(seededDir!, ".credentials.json")));
             Assert.Equal("{\"theme\":\"light\"}", File.ReadAllText(Path.Combine(seededDir!, "settings.json")));
             Assert.Equal(string.Empty, ReadDiagnostics(stderrPath));
+
+            AssertPreflightAndSeedingAgreeOnOneResolvedSource(
+                auth,
+                Path.Combine(defaultHome, ".claude"),
+                seededDir!);
+            Assert.False(auth.IsExplicitSource);
         }
         finally
         {
@@ -381,6 +399,349 @@ public sealed class WorkerDispatchTestsDispatchPreparationClaudeCredentials
             DeleteQuietly(root);
         }
     }
+
+    [Xunit.Fact(DisplayName = "Claude_preflight_reports_the_rejected_explicit_source_and_its_reason")]
+    public void ClaudePreflightReportsTheRejectedExplicitSourceAndItsReason()
+    {
+        var root = CreateFixtureRoot();
+        try
+        {
+            var defaultHome = Path.Combine(root, "default-home");
+            WriteProfile(defaultHome, ".claude", WrongProfileSentinelCredentials);
+            var missingExplicitDir = Path.Combine(root, "operator-config-missing");
+
+            var auth = ClaudeCliAuthProbe.From(
+                ClaudeEnvironment(configDirectory: missingExplicitDir),
+                () => defaultHome);
+
+            Assert.False(auth.HasCliCredentialArtifact);
+            Assert.Null(auth.CredentialArtifactPath);
+
+            // The attempted candidate must survive a failed probe. Reporting only "no artifact"
+            // leaves an operator unable to tell WHICH login source preflight rejected, which is the
+            // exact gap that let preflight and seeding disagree unnoticed.
+            Assert.True(auth.IsExplicitSource);
+            Assert.Equal(Path.GetFullPath(missingExplicitDir), auth.SelectedSourceDirectory);
+            Assert.NotNull(auth.UnavailableReason);
+            Assert.Contains("CLAUDE_CONFIG_DIR", auth.UnavailableReason!);
+            Assert.Contains(Path.GetFullPath(missingExplicitDir), auth.UnavailableReason!);
+            Assert.Contains("the directory does not exist", auth.UnavailableReason!);
+
+            // Explicit source never falls through, so the default profile must appear nowhere in the
+            // reported candidate set.
+            Assert.DoesNotContain("WRONG-PROFILE-SENTINEL", auth.UnavailableReason!);
+            Assert.DoesNotContain(
+                Path.GetFullPath(Path.Combine(defaultHome, ".claude")),
+                auth.UnavailableReason!);
+        }
+        finally
+        {
+            DeleteQuietly(root);
+        }
+    }
+
+    [Xunit.Fact(DisplayName = "Claude_preflight_reports_the_rejected_default_profile_source_and_its_reason")]
+    public void ClaudePreflightReportsTheRejectedDefaultProfileSourceAndItsReason()
+    {
+        var root = CreateFixtureRoot();
+        try
+        {
+            var defaultHome = Path.Combine(root, "default-home");
+            Directory.CreateDirectory(Path.Combine(defaultHome, ".claude"));
+
+            var auth = ClaudeCliAuthProbe.From(ClaudeEnvironment(), () => defaultHome);
+
+            Assert.False(auth.HasCliCredentialArtifact);
+            Assert.False(auth.IsExplicitSource);
+            Assert.Equal(
+                Path.GetFullPath(Path.Combine(defaultHome, ".claude")),
+                auth.SelectedSourceDirectory);
+            Assert.NotNull(auth.UnavailableReason);
+            Assert.Contains("default profile", auth.UnavailableReason!);
+            Assert.Contains(Path.GetFullPath(Path.Combine(defaultHome, ".claude")), auth.UnavailableReason!);
+            Assert.Contains(MissingFileReason, auth.UnavailableReason!);
+        }
+        finally
+        {
+            DeleteQuietly(root);
+        }
+    }
+
+    [Xunit.Fact(DisplayName = "Claude_unusable_source_reasons_stay_distinct_per_failure_shape")]
+    public void ClaudeUnusableSourceReasonsStayDistinctPerFailureShape()
+    {
+        var missing = CaptureSeedFailure(directory => Directory.CreateDirectory(directory));
+        var empty = CaptureSeedFailure(directory => WriteCredentialFile(directory, string.Empty));
+        var malformed = CaptureSeedFailure(directory => WriteCredentialFile(directory, MalformedCredentials));
+
+        // Each failure shape keeps its own phrase: 'missing' must never read as 'unparseable'.
+        Assert.Contains(MissingFileReason, missing.Message);
+        Assert.DoesNotContain(EmptyFileReason, missing.Message);
+        Assert.DoesNotContain(MalformedFileReason, missing.Message);
+        Assert.DoesNotContain(UnreadableFileReason, missing.Message);
+
+        Assert.Contains(EmptyFileReason, empty.Message);
+        Assert.DoesNotContain(MissingFileReason, empty.Message);
+        Assert.DoesNotContain(MalformedFileReason, empty.Message);
+
+        Assert.Contains(MalformedFileReason, malformed.Message);
+        Assert.DoesNotContain(MissingFileReason, malformed.Message);
+        Assert.DoesNotContain(EmptyFileReason, malformed.Message);
+
+        // All three remain the same typed pre-launch failure, and each says so on stderr too.
+        foreach (var failure in new[] { missing, empty, malformed })
+        {
+            Assert.Equal(ClaudeCliAuthProbe.AuthUnavailableErrorCode, failure.ErrorCode);
+            Assert.Contains(ClaudeCliAuthProbe.AuthUnavailableErrorCode, failure.Diagnostics);
+        }
+    }
+
+    [Xunit.Fact(DisplayName = "Claude_unreadable_credential_file_reports_its_own_reason")]
+    public void ClaudeUnreadableCredentialFileReportsItsOwnReason()
+    {
+        // Share-mode locking is only enforced on Windows; elsewhere the file would read fine and the
+        // assertion below would be testing nothing.
+        if (!OperatingSystem.IsWindows())
+        {
+            return;
+        }
+
+        // The exclusive handle is owned by the capture helper, which releases it before fixture
+        // cleanup so a locked file cannot leak temp state.
+        var failure = CaptureSeedFailureHoldingSource(directory =>
+        {
+            WriteCredentialFile(directory, ValidSyntheticCredentials);
+            return new FileStream(
+                Path.Combine(directory, ".credentials.json"),
+                FileMode.Open,
+                FileAccess.Read,
+                FileShare.None);
+        });
+
+        // Present-but-unreadable is its own reason: an operator must not be told the file is absent.
+        Assert.Equal(ClaudeCliAuthProbe.AuthUnavailableErrorCode, failure.ErrorCode);
+        Assert.Contains(UnreadableFileReason, failure.Message);
+        Assert.DoesNotContain(MissingFileReason, failure.Message);
+        Assert.DoesNotContain(MalformedFileReason, failure.Message);
+        Assert.DoesNotContain(EmptyFileReason, failure.Message);
+    }
+
+    [Xunit.Fact(DisplayName = "Claude_credential_diagnostics_never_reproduce_source_token_material")]
+    public void ClaudeCredentialDiagnosticsNeverReproduceSourceTokenMaterial()
+    {
+        // Empty access token with the secret parked in the refresh-token position.
+        AssertSentinelIsNeverEmitted(sentinel =>
+            "{\"claudeAiOauth\":{\"accessToken\":\"\",\"refreshToken\":\"" + sentinel + "\"}}");
+
+        // Unparseable text: the secret sits in the raw bytes the parser choked on.
+        AssertSentinelIsNeverEmitted(sentinel =>
+            "{\"claudeAiOauth\":{\"accessToken\":\"" + sentinel + "\"");
+    }
+
+    [Xunit.Fact(DisplayName = "Claude_seeding_writes_only_inside_the_sandbox_and_leaves_the_host_source_unmutated")]
+    public void ClaudeSeedingWritesOnlyInsideTheSandboxAndLeavesTheHostSourceUnmutated()
+    {
+        var root = CreateFixtureRoot();
+        try
+        {
+            var defaultHome = Path.Combine(root, "default-home");
+            var sourceDir = WriteProfile(defaultHome, ".claude", ValidSyntheticCredentials, "{\"theme\":\"host\"}");
+            File.WriteAllText(Path.Combine(sourceDir, "config.json"), "{\"autoUpdates\":true}");
+            var sourceCredentialFile = Path.GetFullPath(Path.Combine(sourceDir, ".credentials.json"));
+            var hostSnapshot = SnapshotDirectory(sourceDir);
+
+            var environmentReader = ClaudeEnvironment();
+            Func<string?> defaultHomeProvider = () => defaultHome;
+            var startInfo = CreateStartInfo(root);
+            var sandboxRoot = Path.Combine(root, ".mcg-sandbox");
+
+            DispatchProcessHost.SeedProviderEnvironment(
+                startInfo,
+                WorkerSandboxProvider.Claude,
+                sandboxRoot,
+                stderrPath: null,
+                anthropicApiKeyAccessor: null,
+                claudeCredentialDirectoryAccessor: null,
+                environmentReader: environmentReader,
+                defaultHomeProvider: defaultHomeProvider);
+
+            Assert.True(startInfo.Environment.TryGetValue("CLAUDE_CONFIG_DIR", out var seededDir));
+
+            // Seeding is a one-way copy: the host login is read, never rewritten, and nothing is
+            // added beside it. Compared by content hash so no credential bytes reach test output.
+            Assert.Equal(hostSnapshot, SnapshotDirectory(sourceDir));
+
+            // Credential material exists in exactly two places: the host source and this sandbox.
+            var sandboxPrefix = Path.GetFullPath(sandboxRoot) + Path.DirectorySeparatorChar;
+            var credentialFiles = Directory
+                .EnumerateFiles(root, ".credentials.json", SearchOption.AllDirectories)
+                .Select(Path.GetFullPath)
+                .OrderBy(path => path, StringComparer.Ordinal)
+                .ToArray();
+            Assert.Equal(2, credentialFiles.Length);
+            Assert.Contains(sourceCredentialFile, credentialFiles);
+            Assert.All(
+                credentialFiles.Where(path => !PathsMatch(path, sourceCredentialFile)),
+                path => Assert.StartsWith(sandboxPrefix, path, StringComparison.OrdinalIgnoreCase));
+            Assert.Equal(
+                Path.GetFullPath(Path.Combine(sandboxRoot, "claude-config")),
+                Path.GetFullPath(seededDir!));
+        }
+        finally
+        {
+            DeleteQuietly(root);
+        }
+    }
+
+    /// <summary>
+    /// Binds preflight's resolved source to the bytes seeding wrote. Neither side of the equality is
+    /// a test constant: if the two ever recomputed selection independently, this fails.
+    /// </summary>
+    private static void AssertPreflightAndSeedingAgreeOnOneResolvedSource(
+        ClaudeCliAuthState auth,
+        string expectedSourceDirectory,
+        string seededDirectory)
+    {
+        Assert.NotNull(auth.CredentialArtifactPath);
+        Assert.Null(auth.UnavailableReason);
+        Assert.Equal(Path.GetFullPath(expectedSourceDirectory), auth.SelectedSourceDirectory);
+        Assert.Equal(auth.SelectedSourceDirectory, Path.GetDirectoryName(auth.CredentialArtifactPath));
+        Assert.Equal(
+            HashFile(auth.CredentialArtifactPath!),
+            HashFile(Path.Combine(seededDirectory, ".credentials.json")));
+    }
+
+    private static void AssertSentinelIsNeverEmitted(Func<string, string> credentialsFactory)
+    {
+        var sentinel = "REDACTION-SENTINEL-" + Guid.NewGuid().ToString("n");
+        var failure = CaptureSeedFailure(directory =>
+            WriteCredentialFile(directory, credentialsFactory(sentinel)));
+
+        // Hollow-pass guard: the sentinel must really be in the material that was read, otherwise
+        // "absent from diagnostics" proves nothing.
+        Assert.Contains(sentinel, failure.SourceCredentialText);
+
+        Assert.DoesNotContain(sentinel, failure.Message);
+        Assert.DoesNotContain(sentinel, failure.ExceptionText);
+        Assert.DoesNotContain(sentinel, failure.Diagnostics);
+        Assert.All(failure.Findings, finding => Assert.DoesNotContain(sentinel, finding));
+
+        // The preflight view of the same material must be redacted too. Record ToString sweeps every
+        // property, so a future field carrying bytes would trip here.
+        Assert.False(failure.PreflightAuth.HasCliCredentialArtifact);
+        Assert.DoesNotContain(sentinel, failure.PreflightAuth.UnavailableReason ?? string.Empty);
+        Assert.DoesNotContain(sentinel, failure.PreflightAuth.ToString());
+    }
+
+    /// <summary>
+    /// Seeds a fixture source shaped by <paramref name="prepareSource"/>, drives the real dispatch
+    /// seeding entry point, and returns the typed pre-launch failure alongside the preflight view of
+    /// the same source. Everything the caller needs is captured while the fixture is still alive, so
+    /// no assertion depends on a deleted temp tree. Also pins the two invariants every
+    /// unusable-source case shares: no worker environment is published and no destination artifact
+    /// is created.
+    /// </summary>
+    private static SeedFailure CaptureSeedFailure(Action<string> prepareSource) =>
+        CaptureSeedFailureHoldingSource(directory =>
+        {
+            prepareSource(directory);
+            return null;
+        });
+
+    /// <summary>
+    /// <see cref="CaptureSeedFailure(Action{string})"/> for fixtures that must keep an OS handle open
+    /// across the seeding call. The handle is disposed before fixture cleanup.
+    /// </summary>
+    private static SeedFailure CaptureSeedFailureHoldingSource(Func<string, IDisposable?> prepareSource)
+    {
+        var root = CreateFixtureRoot();
+        IDisposable? sourceHandle = null;
+        try
+        {
+            var sourceDir = Path.Combine(root, "operator-config");
+            sourceHandle = prepareSource(sourceDir);
+
+            var startInfo = CreateStartInfo(root);
+            var sandboxRoot = Path.Combine(root, ".mcg-sandbox");
+            var stderrPath = Path.Combine(root, "dispatch.stderr.log");
+
+            var failure = Assert.Throws<WorkerSubscriptionPreflightException>(() =>
+                DispatchProcessHost.SeedProviderEnvironment(
+                    startInfo,
+                    WorkerSandboxProvider.Claude,
+                    sandboxRoot,
+                    stderrPath,
+                    anthropicApiKeyAccessor: () => null,
+                    claudeCredentialDirectoryAccessor: () => sourceDir));
+
+            Assert.False(startInfo.Environment.ContainsKey("CLAUDE_CONFIG_DIR"));
+            Assert.False(Directory.Exists(Path.Combine(sandboxRoot, "claude-config")));
+
+            return new SeedFailure(
+                failure.Message,
+                failure.ToString(),
+                failure.ErrorCode,
+                failure.Findings.ToArray(),
+                ReadDiagnostics(stderrPath),
+                sourceDir,
+                ReadSourceCredentialText(sourceDir),
+                ClaudeCliAuthProbe.From(
+                    ClaudeEnvironment(configDirectory: sourceDir),
+                    () => Path.Combine(root, "unused-home")));
+        }
+        finally
+        {
+            sourceHandle?.Dispose();
+            DeleteQuietly(root);
+        }
+    }
+
+    /// <summary>
+    /// Best-effort read of the fixture's own credential text. Absent or locked fixtures yield an
+    /// empty string, which fails the sentinel test's hollow-pass guard loudly rather than silently.
+    /// </summary>
+    private static string ReadSourceCredentialText(string sourceDirectory)
+    {
+        try
+        {
+            return File.ReadAllText(Path.Combine(sourceDirectory, ".credentials.json"));
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+        {
+            return string.Empty;
+        }
+    }
+
+    private sealed record SeedFailure(
+        string Message,
+        string ExceptionText,
+        string? ErrorCode,
+        string[] Findings,
+        string Diagnostics,
+        string SourceDirectory,
+        string SourceCredentialText,
+        ClaudeCliAuthState PreflightAuth);
+
+    private static void WriteCredentialFile(string directory, string credentialsJson)
+    {
+        Directory.CreateDirectory(directory);
+        File.WriteAllText(Path.Combine(directory, ".credentials.json"), credentialsJson);
+    }
+
+    /// <summary>Relative path plus content hash, so equality proves bytes without printing them.</summary>
+    private static string[] SnapshotDirectory(string directory) => Directory
+        .EnumerateFiles(directory, "*", SearchOption.AllDirectories)
+        .Select(file => Path.GetRelativePath(directory, file) + "=" + HashFile(file))
+        .OrderBy(entry => entry, StringComparer.Ordinal)
+        .ToArray();
+
+    private static string HashFile(string path) =>
+        Convert.ToHexString(SHA256.HashData(File.ReadAllBytes(path)));
+
+    private static bool PathsMatch(string left, string right) => string.Equals(
+        left,
+        right,
+        OperatingSystem.IsWindows() ? StringComparison.OrdinalIgnoreCase : StringComparison.Ordinal);
 
     private static void AssertUnusableSourcePreservesDestination(string sourceCredentials, string profileName)
     {

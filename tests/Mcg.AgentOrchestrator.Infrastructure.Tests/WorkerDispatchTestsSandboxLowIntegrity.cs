@@ -70,6 +70,58 @@ public sealed class WorkerDispatchTestsSandboxLowIntegrity : WorkerDispatchTestS
     Assert.DoesNotContain("Low-IL Claude subscription dispatch is refused before worker start", findings);
 }
 
+    [Xunit.Fact(DisplayName = "WorkerProfileDispatcher_preflight_names_the_rejected_claude_login_source_and_reason")]
+    public void WorkerProfileDispatcherPreflightNamesTheRejectedClaudeLoginSourceAndReason()
+{
+    var root = CreateSeededDispatchRepository();
+    var kernel = new AgentOrchestratorKernel();
+    var goal = kernel.CreateGoal("Verify Claude auth preflight diagnostics", [new TaskSpec(TaskId.New(), "Test the implementation.", AgentRole.Tester)]);
+    var agent = new AgentDefinition(
+        new AgentId("tester"),
+        "Tester",
+        AgentRole.Tester,
+        new ModelProfile("Anthropic", "claude-sonnet-4-6", ModelCapability.Text, SubscriptionMode.ApiKey, "medium"),
+        ExecutionPolicy: AgentExecutionPolicy.SubscriptionOnly,
+        Subscription: new SubscriptionLaunchProfile("claude-cli", "claude-sonnet-4-6", "medium"));
+    kernel.ActivateGoal(goal.Id, [agent]);
+    var task = goal.Tasks.Single();
+    var worktree = GoalWorktrees.Ensure(root, goal.Id);
+    var sandbox = new WorkerSandboxOptions(true, WorkerSandboxOptions.DefaultAccount, WorkerSandboxOptions.DefaultCredentialTarget);
+    var rejectedSource = Path.Combine(root, "operator-config-missing");
+    var authProbe = () => new ClaudeCliAuthState(
+        HasAnthropicApiKey: false,
+        HasCliCredentialArtifact: false,
+        CredentialArtifactPath: null,
+        SelectedSourceDirectory: rejectedSource,
+        IsExplicitSource: true,
+        UnavailableReason: "sole candidate explicit CLAUDE_CONFIG_DIR login source '" + rejectedSource + "' was rejected because the directory does not exist");
+
+    var preflight = WorkerProfileDispatcher.PreflightSubscriptionTask(
+        goal,
+        task,
+        [agent],
+        WorkerProfileCatalog.Default(),
+        worktree,
+        DateTimeOffset.Parse("2026-09-12T16:00:00Z"),
+        claudeAuthProbe: authProbe,
+        sandboxOptions: sandbox);
+
+    var authFinding = preflight.Findings.Single(finding =>
+        finding.StartsWith("auth: Claude CLI Low-IL auth preflight found no", StringComparison.Ordinal));
+
+    // The finding must name WHICH source was attempted and WHY it was rejected. "found no credential
+    // artifact" alone is what let preflight and seeding disagree without anyone noticing.
+    Assert.Contains(rejectedSource, authFinding);
+    Assert.Contains("CLAUDE_CONFIG_DIR", authFinding);
+    Assert.Contains("the directory does not exist", authFinding);
+
+    // Admission policy is frozen: this stays an `auth:` observation. The hard stop for an unusable
+    // login is the pre-launch seeding failure, not a `blocked:` admission finding.
+    Assert.DoesNotContain("blocked:", authFinding);
+    Assert.DoesNotContain("sk-ant-", authFinding);
+    Assert.Null(task.LastProcess);
+}
+
     [Xunit.Fact(DisplayName = "WorkerProfileDispatcher_preflight_allows_light_role_claude_auth_via_sandbox_credential_seeding")]
     public void WorkerProfileDispatcherPreflightAllowsLightRoleClaudeAuthViaSandboxCredentialSeeding()
 {

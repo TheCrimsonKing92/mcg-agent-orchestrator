@@ -38,6 +38,66 @@ internal sealed record ClaudeCredentialInspection(
 }
 
 /// <summary>
+/// Preflight's view of the ONE credential source <see cref="ClaudeCredentialSource"/> selected.
+/// <paramref name="SelectedSourceDirectory"/>, <paramref name="IsExplicitSource"/> and
+/// <paramref name="UnavailableReason"/> carry paths and sanitized reason phrases only - never token,
+/// refresh-token or API-key material, and never raw credential bytes.
+/// </summary>
+public sealed record ClaudeCliAuthState(
+    bool HasAnthropicApiKey,
+    bool HasCliCredentialArtifact,
+    string? CredentialArtifactPath,
+    string? SelectedSourceDirectory = null,
+    bool IsExplicitSource = false,
+    string? UnavailableReason = null);
+
+/// <summary>
+/// Auth preflight's entry point into the shared credential contract. It lives beside
+/// <see cref="ClaudeCredentialSource"/> rather than beside the dispatcher so the selection rule,
+/// its validation and both of its consumers' views stay in one file and cannot drift apart.
+/// </summary>
+public static class ClaudeCliAuthProbe
+{
+    public const string AuthUnavailableErrorCode = "ERR_CLAUDE_AUTH_UNAVAILABLE";
+
+    public static ClaudeCliAuthState FromEnvironment() =>
+        From(environmentReader: null, defaultHomeProvider: null);
+
+    /// <summary>
+    /// Shares one selection and validation rule with worker sandbox seeding
+    /// (<see cref="ClaudeCredentialSource"/>): a non-blank CLAUDE_CONFIG_DIR is authoritative and
+    /// never falls back to another profile, and a login artifact counts only when
+    /// <c>.credentials.json</c> holds a non-empty OAuth access token. Preferences, settings and
+    /// config files alone are not login material.
+    /// A positive result is LOCAL MATERIAL presence only; it is never proof of a live session, and
+    /// expiry and service acceptance are not evaluated here.
+    /// Environment and default-home inputs are injectable so tests stay deterministic without
+    /// mutating process-global environment state.
+    /// </summary>
+    internal static ClaudeCliAuthState From(
+        Func<string, string?>? environmentReader,
+        Func<string?>? defaultHomeProvider)
+    {
+        var read = environmentReader ?? ClaudeCredentialSource.ProcessEnvironmentReader;
+        var hasApiKey = !string.IsNullOrWhiteSpace(read(ClaudeCredentialSource.ApiKeyEnvironmentVariable));
+        var inspection = ClaudeCredentialSource.Inspect(read, defaultHomeProvider);
+
+        // The selected directory is reported UNCONDITIONALLY, including when nothing usable was
+        // found: without it an operator cannot tell which login source preflight rejected, which is
+        // exactly how preflight and sandbox seeding drifted apart unnoticed.
+        return new ClaudeCliAuthState(
+            hasApiKey,
+            inspection.HasLocalAuthMaterial,
+            inspection.HasLocalAuthMaterial ? inspection.CredentialFilePath : null,
+            inspection.DirectoryPath,
+            inspection.IsExplicitSource,
+            inspection.HasLocalAuthMaterial
+                ? null
+                : ClaudeCredentialSource.DescribeRejectedSource(inspection));
+    }
+}
+
+/// <summary>
 /// The one place that decides which Claude CLI login is authoritative and whether it is usable.
 /// Auth preflight and worker sandbox seeding both go through here so they can never disagree.
 /// Selection is deliberately narrow: a non-blank CLAUDE_CONFIG_DIR is authoritative and never falls
@@ -286,10 +346,7 @@ internal static class ClaudeCredentialSource
             ClaudeCliAuthProbe.AuthUnavailableErrorCode +
             ": Claude worker dispatch stopped before launch. " +
             ApiKeyEnvironmentVariable + " is not set and the " +
-            (inspection.IsExplicitSource
-                ? "explicit " + ConfigDirectoryEnvironmentVariable + " login source"
-                : "default profile login source") +
-            " '" + (inspection.DirectoryPath ?? "<unresolved>") + "' is unusable: " +
+            DescribeSource(inspection) + " is unusable: " +
             (reasonOverride ?? Describe(inspection.Status)) +
             ". Repair the selected login source before retrying dispatch.";
 
@@ -300,6 +357,27 @@ internal static class ClaudeCredentialSource
             ClaudeCliAuthProbe.AuthUnavailableErrorCode,
             new[] { diagnostic });
     }
+
+    /// <summary>
+    /// Sanitized preflight summary of the one source that was attempted: source kind, directory path
+    /// and reason phrase only - never a token value, never raw credential JSON, never exception text.
+    /// Auth preflight reports this so the source it names is provably the source seeding would use.
+    /// </summary>
+    /// <remarks>
+    /// The candidate list is exactly ONE entry by contract, not by omission: a non-blank
+    /// CLAUDE_CONFIG_DIR is authoritative and must never fall back to another profile, and when it is
+    /// blank the default profile is the only remaining candidate. Do not re-add fallback enumeration
+    /// to make this list longer - falling through would silently seed a different account's login.
+    /// </remarks>
+    internal static string DescribeRejectedSource(ClaudeCredentialInspection inspection) =>
+        "sole candidate " + DescribeSource(inspection) + " was rejected because " +
+        Describe(inspection.Status);
+
+    private static string DescribeSource(ClaudeCredentialInspection inspection) =>
+        (inspection.IsExplicitSource
+            ? "explicit " + ConfigDirectoryEnvironmentVariable + " login source"
+            : "default profile login source") +
+        " '" + (inspection.DirectoryPath ?? "<unresolved>") + "'";
 
     private static string Describe(ClaudeCredentialStatus status) => status switch
     {
