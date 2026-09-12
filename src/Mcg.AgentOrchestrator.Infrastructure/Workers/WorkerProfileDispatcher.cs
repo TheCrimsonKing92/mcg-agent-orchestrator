@@ -73,62 +73,32 @@ public static class ClaudeCliAuthProbe
 {
     public const string AuthUnavailableErrorCode = "ERR_CLAUDE_AUTH_UNAVAILABLE";
 
-    public static ClaudeCliAuthState FromEnvironment()
+    public static ClaudeCliAuthState FromEnvironment() =>
+        From(environmentReader: null, defaultHomeProvider: null);
+
+    /// <summary>
+    /// Shares one selection and validation rule with worker sandbox seeding
+    /// (<see cref="ClaudeCredentialSource"/>): a non-blank CLAUDE_CONFIG_DIR is authoritative and
+    /// never falls back to another profile, and a login artifact counts only when
+    /// <c>.credentials.json</c> holds a non-empty OAuth access token. Preferences, settings and
+    /// config files alone are not login material.
+    /// A positive result is LOCAL MATERIAL presence only; it is never proof of a live session, and
+    /// expiry and service acceptance are not evaluated here.
+    /// Environment and default-home inputs are injectable so tests stay deterministic without
+    /// mutating process-global environment state.
+    /// </summary>
+    internal static ClaudeCliAuthState From(
+        Func<string, string?>? environmentReader,
+        Func<string?>? defaultHomeProvider)
     {
-        var hasApiKey = !string.IsNullOrWhiteSpace(Environment.GetEnvironmentVariable("ANTHROPIC_API_KEY"));
-        var artifactPath = FindCredentialArtifactPath();
-        return new ClaudeCliAuthState(hasApiKey, artifactPath is not null, artifactPath);
-    }
+        var read = environmentReader ?? ClaudeCredentialSource.ProcessEnvironmentReader;
+        var hasApiKey = !string.IsNullOrWhiteSpace(read(ClaudeCredentialSource.ApiKeyEnvironmentVariable));
+        var inspection = ClaudeCredentialSource.Inspect(read, defaultHomeProvider);
 
-    private static string? FindCredentialArtifactPath()
-    {
-        foreach (var path in EnumerateCandidateCredentialPaths())
-        {
-            if (File.Exists(path))
-            {
-                return path;
-            }
-
-            if (Directory.Exists(path) &&
-                Directory.EnumerateFileSystemEntries(path).Any(IsClaudeCredentialArtifact))
-            {
-                return path;
-            }
-        }
-
-        return null;
-    }
-
-    private static IEnumerable<string> EnumerateCandidateCredentialPaths()
-    {
-        var configured = Environment.GetEnvironmentVariable("CLAUDE_CONFIG_DIR");
-        if (!string.IsNullOrWhiteSpace(configured))
-        {
-            yield return configured;
-        }
-
-        var userProfile = Environment.GetEnvironmentVariable("USERPROFILE");
-        if (!string.IsNullOrWhiteSpace(userProfile))
-        {
-            yield return Path.Combine(userProfile, ".claude.json");
-            yield return Path.Combine(userProfile, ".claude");
-        }
-
-        var home = Environment.GetEnvironmentVariable("HOME");
-        if (!string.IsNullOrWhiteSpace(home))
-        {
-            yield return Path.Combine(home, ".claude.json");
-            yield return Path.Combine(home, ".claude");
-        }
-    }
-
-    private static bool IsClaudeCredentialArtifact(string path)
-    {
-        var fileName = Path.GetFileName(path);
-        return fileName.Equals(".credentials.json", StringComparison.OrdinalIgnoreCase) ||
-            fileName.Equals("credentials.json", StringComparison.OrdinalIgnoreCase) ||
-            fileName.Equals("config.json", StringComparison.OrdinalIgnoreCase) ||
-            fileName.Equals("settings.json", StringComparison.OrdinalIgnoreCase);
+        return new ClaudeCliAuthState(
+            hasApiKey,
+            inspection.HasLocalAuthMaterial,
+            inspection.HasLocalAuthMaterial ? inspection.CredentialFilePath : null);
     }
 }
 

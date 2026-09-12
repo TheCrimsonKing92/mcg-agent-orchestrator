@@ -462,7 +462,9 @@ public static class DispatchProcessHost
         string sandboxRoot,
         string? stderrPath = null,
         Func<string?>? anthropicApiKeyAccessor = null,
-        Func<string>? claudeCredentialDirectoryAccessor = null)
+        Func<string>? claudeCredentialDirectoryAccessor = null,
+        Func<string, string?>? environmentReader = null,
+        Func<string?>? defaultHomeProvider = null)
     {
         startInfo.Environment.Remove("CODEX_HOME");
         startInfo.Environment.Remove("CLAUDE_CONFIG_DIR");
@@ -493,7 +495,9 @@ public static class DispatchProcessHost
                 sandboxRoot,
                 stderrPath,
                 anthropicApiKeyAccessor,
-                claudeCredentialDirectoryAccessor);
+                claudeCredentialDirectoryAccessor,
+                environmentReader,
+                defaultHomeProvider);
             return;
         }
 
@@ -614,55 +618,42 @@ public static class DispatchProcessHost
         string sandboxRoot,
         string? stderrPath,
         Func<string?>? anthropicApiKeyAccessor,
-        Func<string>? claudeCredentialDirectoryAccessor)
+        Func<string>? claudeCredentialDirectoryAccessor,
+        Func<string, string?>? environmentReader = null,
+        Func<string?>? defaultHomeProvider = null)
     {
         var claudeConfigDir = Path.Combine(sandboxRoot, "claude-config");
-        Directory.CreateDirectory(claudeConfigDir);
 
-        var apiKey = (anthropicApiKeyAccessor ?? ReadAnthropicApiKey)();
+        var apiKey = anthropicApiKeyAccessor is not null
+            ? anthropicApiKeyAccessor()
+            : (environmentReader ?? ClaudeCredentialSource.ProcessEnvironmentReader)(
+                ClaudeCredentialSource.ApiKeyEnvironmentVariable);
+
         if (!string.IsNullOrWhiteSpace(apiKey))
         {
+            // Explicit API-key precedence: subscription source validation is bypassed entirely, so
+            // an unusable CLI login must neither fail nor warn in this mode.
             startInfo.Environment["ANTHROPIC_API_KEY"] = apiKey;
         }
         else
         {
-            // Subscription auth: seed the sandbox config with the operator's persisted CLI login so
-            // the Low-IL worker authenticates without an API key. claude-cli reads credentials from
-            // the ROOT of CLAUDE_CONFIG_DIR; a Low-IL process can read the Medium-labeled copies.
-            var userClaudeDir = (claudeCredentialDirectoryAccessor ?? ResolveClaudeCredentialDirectory)();
-            var seededCredentials = false;
-            foreach (var fileName in new[] { ".credentials.json", "settings.json" })
-            {
-                var source = Path.Combine(userClaudeDir, fileName);
-                if (File.Exists(source))
-                {
-                    File.Copy(source, Path.Combine(claudeConfigDir, fileName), overwrite: true);
-                    seededCredentials = seededCredentials || fileName == ".credentials.json";
-                }
-            }
-
-            if (!seededCredentials && !string.IsNullOrWhiteSpace(stderrPath))
-            {
-                AppendDispatchStderrDiagnostic(
-                    stderrPath,
-                    "Claude worker sandbox diagnostic: ANTHROPIC_API_KEY is not set and no CLI credentials were found to seed; Claude may fail to authenticate.");
-            }
+            // Subscription auth: the shared source seam owns selection, validation and the copy. It
+            // throws WorkerSubscriptionPreflightException (with the sanitized diagnostic published
+            // to stderr first) before any destination artifact is created, so dispatch stops rather
+            // than launching against a stale destination login.
+            ClaudeCredentialSource.SeedSubscriptionCredentials(
+                claudeConfigDir,
+                claudeCredentialDirectoryAccessor,
+                environmentReader,
+                defaultHomeProvider,
+                string.IsNullOrWhiteSpace(stderrPath)
+                    ? null
+                    : diagnostic => AppendDispatchStderrDiagnostic(stderrPath!, diagnostic));
         }
 
-        var settingsPath = Path.Combine(claudeConfigDir, "settings.json");
-        if (!File.Exists(settingsPath))
-        {
-            File.WriteAllText(settingsPath, "{}\n");
-        }
-
+        ClaudeCredentialSource.EnsureSandboxSettings(claudeConfigDir);
         startInfo.Environment["CLAUDE_CONFIG_DIR"] = claudeConfigDir;
     }
-
-    private static string? ReadAnthropicApiKey() =>
-        Environment.GetEnvironmentVariable("ANTHROPIC_API_KEY");
-
-    private static string ResolveClaudeCredentialDirectory() =>
-        Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.UserProfile), ".claude");
 
     private static void AppendDispatchStderrDiagnostic(string stderrPath, string message)
     {
