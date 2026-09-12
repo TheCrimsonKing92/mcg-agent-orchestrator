@@ -1,6 +1,7 @@
 using System;
 using System.IO;
 using System.Text.Json;
+using System.Threading;
 
 namespace Mcg.AgentOrchestrator.Infrastructure;
 
@@ -38,7 +39,7 @@ internal sealed record ClaudeCredentialInspection(
 }
 
 /// <summary>
-/// Preflight's view of the ONE credential source <see cref="ClaudeCredentialSource"/> selected.
+/// Preflight's view of the ONE credential source <see cref="ClaudeCredentialResolver"/> selected.
 /// <paramref name="SelectedSourceDirectory"/>, <paramref name="IsExplicitSource"/> and
 /// <paramref name="UnavailableReason"/> carry paths and sanitized reason phrases only - never token,
 /// refresh-token or API-key material, and never raw credential bytes.
@@ -49,11 +50,21 @@ public sealed record ClaudeCliAuthState(
     string? CredentialArtifactPath,
     string? SelectedSourceDirectory = null,
     bool IsExplicitSource = false,
-    string? UnavailableReason = null);
+    string? UnavailableReason = null)
+{
+    /// <summary>
+    /// The ONE resolved result this view was built from, carried so the next consumer in the same
+    /// process (sandbox seeding) consumes THIS resolution instead of recomputing selection. Null only
+    /// for a hand-built state, such as an injected test probe.
+    /// Internal on purpose: an internal member is excluded from the record's generated printer, so the
+    /// resolution - and the validated credential bytes it holds - can never reach ToString output.
+    /// </summary>
+    internal ClaudeCredentialResolution? Resolution { get; init; }
+}
 
 /// <summary>
 /// Auth preflight's entry point into the shared credential contract. It lives beside
-/// <see cref="ClaudeCredentialSource"/> rather than beside the dispatcher so the selection rule,
+/// <see cref="ClaudeCredentialResolver"/> rather than beside the dispatcher so the selection rule,
 /// its validation and both of its consumers' views stay in one file and cannot drift apart.
 /// </summary>
 public static class ClaudeCliAuthProbe
@@ -64,45 +75,175 @@ public static class ClaudeCliAuthProbe
         From(environmentReader: null, defaultHomeProvider: null);
 
     /// <summary>
-    /// Shares one selection and validation rule with worker sandbox seeding
-    /// (<see cref="ClaudeCredentialSource"/>): a non-blank CLAUDE_CONFIG_DIR is authoritative and
-    /// never falls back to another profile, and a login artifact counts only when
-    /// <c>.credentials.json</c> holds a non-empty OAuth access token. Preferences, settings and
-    /// config files alone are not login material.
-    /// A positive result is LOCAL MATERIAL presence only; it is never proof of a live session, and
-    /// expiry and service acceptance are not evaluated here.
-    /// Environment and default-home inputs are injectable so tests stay deterministic without
-    /// mutating process-global environment state.
+    /// Convenience overload for a caller that owns no resolver yet: it creates one, which means this
+    /// call IS that resolver's single resolution. A caller that must hand the same resolved result to
+    /// sandbox seeding has to create the resolver itself and use <see cref="From(ClaudeCredentialResolver)"/>.
     /// </summary>
     internal static ClaudeCliAuthState From(
         Func<string, string?>? environmentReader,
-        Func<string?>? defaultHomeProvider)
+        Func<string?>? defaultHomeProvider) =>
+        From(new ClaudeCredentialResolver(environmentReader, defaultHomeProvider));
+
+    /// <summary>
+    /// Builds preflight's view FROM the resolver's single resolved result and carries that result on
+    /// the returned state, so seeding sharing this resolver consumes the same object rather than
+    /// recomputing selection.
+    /// The rule is the resolver's, not preflight's: a non-blank CLAUDE_CONFIG_DIR is authoritative and
+    /// never falls back to another profile, and a login artifact counts only when
+    /// <c>.credentials.json</c> holds a non-empty OAuth access token. Preferences, settings and config
+    /// files alone are not login material.
+    /// A positive result is LOCAL MATERIAL presence only; it is never proof of a live session, and
+    /// expiry and service acceptance are not evaluated here.
+    /// </summary>
+    internal static ClaudeCliAuthState From(ClaudeCredentialResolver resolver)
     {
-        var read = environmentReader ?? ClaudeCredentialSource.ProcessEnvironmentReader;
-        var hasApiKey = !string.IsNullOrWhiteSpace(read(ClaudeCredentialSource.ApiKeyEnvironmentVariable));
-        var inspection = ClaudeCredentialSource.Inspect(read, defaultHomeProvider);
+        var hasApiKey = !string.IsNullOrWhiteSpace(
+            resolver.ReadEnvironment(ClaudeCredentialSource.ApiKeyEnvironmentVariable));
+        var resolution = resolver.Resolve();
+        var inspection = resolution.Inspection;
 
         // The selected directory is reported UNCONDITIONALLY, including when nothing usable was
         // found: without it an operator cannot tell which login source preflight rejected, which is
         // exactly how preflight and sandbox seeding drifted apart unnoticed.
         return new ClaudeCliAuthState(
             hasApiKey,
-            inspection.HasLocalAuthMaterial,
-            inspection.HasLocalAuthMaterial ? inspection.CredentialFilePath : null,
+            resolution.HasLocalAuthMaterial,
+            resolution.HasLocalAuthMaterial ? inspection.CredentialFilePath : null,
             inspection.DirectoryPath,
             inspection.IsExplicitSource,
-            inspection.HasLocalAuthMaterial
+            resolution.HasLocalAuthMaterial
                 ? null
-                : ClaudeCredentialSource.DescribeRejectedSource(inspection));
+                : ClaudeCredentialSource.DescribeRejectedSource(inspection))
+        {
+            Resolution = resolution,
+        };
     }
 }
 
 /// <summary>
-/// The one place that decides which Claude CLI login is authoritative and whether it is usable.
-/// Auth preflight and worker sandbox seeding both go through here so they can never disagree.
+/// ONE resolved credential source: the selection outcome plus the credential payload that selection
+/// validated. Produced exactly once by <see cref="ClaudeCredentialResolver"/> and then handed to every
+/// consumer, so preflight's reported source and the bytes seeding writes come from the same decision.
+/// Deliberately NOT a record: no compiler-generated printer or equality member may ever reach
+/// <see cref="ValidatedPayload"/>.
+/// </summary>
+internal sealed class ClaudeCredentialResolution
+{
+    internal ClaudeCredentialResolution(ClaudeCredentialInspection inspection, byte[]? validatedPayload)
+    {
+        Inspection = inspection;
+        ValidatedPayload = validatedPayload;
+    }
+
+    internal ClaudeCredentialInspection Inspection { get; }
+
+    /// <summary>
+    /// The bytes selection read and validated, or null when the source is unusable. They are written
+    /// only into a sandbox config directory and never appear in a diagnostic, log or exception.
+    /// </summary>
+    internal byte[]? ValidatedPayload { get; }
+
+    internal bool HasLocalAuthMaterial => Inspection.HasLocalAuthMaterial;
+
+    /// <summary>Path and status only, so an accidental interpolation cannot print credential bytes.</summary>
+    public override string ToString() =>
+        nameof(ClaudeCredentialResolution) + "(" +
+        (Inspection.DirectoryPath ?? "<unresolved>") + ", " + Inspection.Status + ")";
+}
+
+/// <summary>
+/// The one place that decides which Claude CLI login is authoritative and whether it is usable:
+/// ONE resolver instance is ONE resolution. The first <see cref="Resolve"/> performs the only
+/// selection and the only credential read; every later caller receives that same
+/// <see cref="ClaudeCredentialResolution"/> instance. Auth preflight and worker sandbox seeding share
+/// a resolver, so the source preflight reports is the object seeding consumes - not a second
+/// computation that can disagree with it.
 /// Selection is deliberately narrow: a non-blank CLAUDE_CONFIG_DIR is authoritative and never falls
 /// back to another profile; otherwise the default home profile directory is used. Environment and
 /// default-home inputs are injectable so tests are deterministic without mutating process state.
+/// </summary>
+/// <remarks>
+/// PROCESS SCOPE: the conductor resolves during dispatch preflight, while seeding runs in the detached
+/// dispatch host (<c>DispatchProcessHost.Run</c>) - a separate process that cannot share an object
+/// with its parent. Within each process the transported resolution is the only decision; across the
+/// boundary this type, its single-candidate rule and its injected inputs are the only decider, so the
+/// two processes cannot select different sources. Do not "reconcile" that by re-resolving inside a
+/// consumer: recomputation is exactly the drift this type exists to remove.
+/// </remarks>
+internal sealed class ClaudeCredentialResolver
+{
+    private readonly Func<string, string?> _environmentReader;
+    private readonly Func<string?>? _defaultHomeProvider;
+    private readonly Func<string>? _explicitDirectoryAccessor;
+    private readonly object _gate = new();
+    private ClaudeCredentialResolution? _resolution;
+    private int _resolutionCount;
+
+    /// <param name="environmentReader">Reads CLAUDE_CONFIG_DIR and ANTHROPIC_API_KEY; process env by default.</param>
+    /// <param name="defaultHomeProvider">Supplies the home root for the fallback candidate.</param>
+    /// <param name="explicitDirectoryAccessor">
+    /// Pre-selected source directory seam (an operator-explicit override supplied by the caller). When
+    /// present it replaces candidate evaluation and counts as explicit, so it never falls through to
+    /// the default profile either.
+    /// </param>
+    internal ClaudeCredentialResolver(
+        Func<string, string?>? environmentReader = null,
+        Func<string?>? defaultHomeProvider = null,
+        Func<string>? explicitDirectoryAccessor = null)
+    {
+        _environmentReader = environmentReader ?? ClaudeCredentialSource.ProcessEnvironmentReader;
+        _defaultHomeProvider = defaultHomeProvider;
+        _explicitDirectoryAccessor = explicitDirectoryAccessor;
+    }
+
+    /// <summary>
+    /// How many times selection actually ran. Consumers sharing one resolver must leave this at 1: a
+    /// second computation is the preflight/seeding disagreement this type exists to prevent, so tests
+    /// assert it rather than trusting two results to look alike.
+    /// </summary>
+    internal int ResolutionCount => Volatile.Read(ref _resolutionCount);
+
+    /// <summary>
+    /// The resolver's own environment view, so a consumer that also needs ANTHROPIC_API_KEY reads it
+    /// through the same injected reader instead of reaching for process state.
+    /// </summary>
+    internal string? ReadEnvironment(string name) => _environmentReader(name);
+
+    /// <summary>
+    /// Returns this resolver's single resolved result, computing it on first call and returning the
+    /// identical instance afterwards.
+    /// </summary>
+    internal ClaudeCredentialResolution Resolve()
+    {
+        if (Volatile.Read(ref _resolution) is { } resolved)
+        {
+            return resolved;
+        }
+
+        lock (_gate)
+        {
+            if (_resolution is { } existing)
+            {
+                return existing;
+            }
+
+            var (directoryPath, isExplicitSource) = _explicitDirectoryAccessor is not null
+                ? (_explicitDirectoryAccessor(), true)
+                : ClaudeCredentialSource.ResolveLocation(_environmentReader, _defaultHomeProvider);
+
+            _resolutionCount++;
+            var resolution = ClaudeCredentialSource.Load(directoryPath, isExplicitSource);
+            Volatile.Write(ref _resolution, resolution);
+            return resolution;
+        }
+    }
+}
+
+/// <summary>
+/// Mechanics of the shared credential contract: candidate evaluation, material validation, sandbox
+/// seeding and the sanitized diagnostics. Only <see cref="ClaudeCredentialResolver"/> may call
+/// <see cref="ResolveLocation"/> or <see cref="Load"/> - going around it is how a consumer would
+/// reintroduce a second, disagreeing selection.
 /// </summary>
 internal static class ClaudeCredentialSource
 {
@@ -114,40 +255,31 @@ internal static class ClaudeCredentialSource
     internal static readonly Func<string, string?> ProcessEnvironmentReader =
         static name => Environment.GetEnvironmentVariable(name);
 
-    /// <summary>Preflight view of the authoritative source: locations and reason only, no bytes.</summary>
-    internal static ClaudeCredentialInspection Inspect(
-        Func<string, string?>? environmentReader = null,
-        Func<string?>? defaultHomeProvider = null)
-    {
-        var (directoryPath, isExplicitSource) = ResolveLocation(environmentReader, defaultHomeProvider);
-        return Load(directoryPath, isExplicitSource).Inspection;
-    }
-
     /// <summary>
-    /// Validates the operator's Claude CLI login source and seeds the validated payload into the
-    /// worker sandbox config root (claude-cli reads credentials from the ROOT of CLAUDE_CONFIG_DIR).
+    /// Seeds the resolver's already-validated payload into the worker sandbox config root (claude-cli
+    /// reads credentials from the ROOT of CLAUDE_CONFIG_DIR) and returns the resolved result it
+    /// consumed, so a caller can report exactly which source was seeded.
+    /// Selection is NOT repeated here: the result comes from <paramref name="resolver"/>, which is the
+    /// same object auth preflight reported when both share a resolver.
     /// Throws <see cref="WorkerSubscriptionPreflightException"/> carrying
     /// <see cref="ClaudeCliAuthProbe.AuthUnavailableErrorCode"/> and a sanitized diagnostic BEFORE
     /// creating, overwriting or deleting any destination artifact when the source is unresolved,
     /// missing, unreadable, malformed or empty. Copy failures surface the same way and are never
     /// swallowed into a successful launch. API-key mode never reaches this method.
     /// </summary>
-    internal static void SeedSubscriptionCredentials(
+    internal static ClaudeCredentialResolution SeedSubscriptionCredentials(
         string destinationDirectory,
-        Func<string>? credentialDirectoryAccessor = null,
-        Func<string, string?>? environmentReader = null,
-        Func<string?>? defaultHomeProvider = null,
+        ClaudeCredentialResolver resolver,
         Action<string>? diagnosticSink = null)
     {
-        // The existing injected-directory seam stays supported and counts as operator-explicit.
-        var (directoryPath, isExplicitSource) = credentialDirectoryAccessor is not null
-            ? (credentialDirectoryAccessor(), true)
-            : ResolveLocation(environmentReader, defaultHomeProvider);
+        // The ONE resolved result, transported rather than recomputed.
+        var resolution = resolver.Resolve();
+        var inspection = resolution.Inspection;
 
-        // Material validation happens FIRST. No shortcut (including source == destination) may let
-        // unusable material through, and nothing in the destination is touched until it passes.
-        var (inspection, payload) = Load(directoryPath, isExplicitSource);
-        if (payload is null)
+        // Material validation already happened during that resolution. No shortcut (including
+        // source == destination) may let unusable material through, and nothing in the destination is
+        // touched until it passes.
+        if (resolution.ValidatedPayload is not { } payload)
         {
             throw Unavailable(inspection, diagnosticSink);
         }
@@ -156,14 +288,14 @@ internal static class ClaudeCredentialSource
         {
             // The validated source already IS the sandbox config root: nothing to copy and nothing
             // to rewrite, so its bytes stay exactly as validated.
-            return;
+            return resolution;
         }
 
         try
         {
             Directory.CreateDirectory(destinationDirectory);
 
-            // Seed the bytes that were just validated, never a second read of the file.
+            // Seed the bytes that were validated during resolution, never a second read of the file.
             File.WriteAllBytes(Path.Combine(destinationDirectory, CredentialsFileName), payload);
 
             var sourceSettings = Path.Combine(inspection.DirectoryPath!, SettingsFileName);
@@ -182,6 +314,8 @@ internal static class ClaudeCredentialSource
                 diagnosticSink,
                 "copying the validated login into the worker sandbox failed (" + ex.GetType().Name + ")");
         }
+
+        return resolution;
     }
 
     /// <summary>
@@ -198,7 +332,11 @@ internal static class ClaudeCredentialSource
         }
     }
 
-    private static (string? DirectoryPath, bool IsExplicitSource) ResolveLocation(
+    /// <summary>
+    /// Candidate evaluation. Call only from <see cref="ClaudeCredentialResolver.Resolve"/>, which owns
+    /// the single resolution every consumer shares.
+    /// </summary>
+    internal static (string? DirectoryPath, bool IsExplicitSource) ResolveLocation(
         Func<string, string?>? environmentReader,
         Func<string?>? defaultHomeProvider)
     {
@@ -245,16 +383,16 @@ internal static class ClaudeCredentialSource
     }
 
     /// <summary>
-    /// Reads and validates the candidate credential payload exactly once. The returned bytes ARE the
-    /// validated payload; they stay local to this type and are only ever written to the sandbox.
+    /// Reads and validates the selected candidate exactly once and returns the resolved result every
+    /// consumer then shares. The carried bytes ARE the validated payload; they stay inside the
+    /// resolution and are only ever written to a sandbox config directory.
+    /// Call only from <see cref="ClaudeCredentialResolver.Resolve"/>.
     /// </summary>
-    private static (ClaudeCredentialInspection Inspection, byte[]? Payload) Load(
-        string? directoryPath,
-        bool isExplicitSource)
+    internal static ClaudeCredentialResolution Load(string? directoryPath, bool isExplicitSource)
     {
         if (string.IsNullOrWhiteSpace(directoryPath))
         {
-            return (new(null, null, isExplicitSource, ClaudeCredentialStatus.SourceUnresolved), null);
+            return new(new(null, null, isExplicitSource, ClaudeCredentialStatus.SourceUnresolved), null);
         }
 
         string fullPath;
@@ -264,18 +402,18 @@ internal static class ClaudeCredentialSource
         }
         catch (Exception ex) when (ex is ArgumentException or NotSupportedException or PathTooLongException)
         {
-            return (new(directoryPath, null, isExplicitSource, ClaudeCredentialStatus.SourceUnresolved), null);
+            return new(new(directoryPath, null, isExplicitSource, ClaudeCredentialStatus.SourceUnresolved), null);
         }
 
         if (!Directory.Exists(fullPath))
         {
-            return (new(fullPath, null, isExplicitSource, ClaudeCredentialStatus.DirectoryMissing), null);
+            return new(new(fullPath, null, isExplicitSource, ClaudeCredentialStatus.DirectoryMissing), null);
         }
 
         var credentialPath = Path.Combine(fullPath, CredentialsFileName);
         if (!File.Exists(credentialPath))
         {
-            return (new(fullPath, null, isExplicitSource, ClaudeCredentialStatus.CredentialFileMissing), null);
+            return new(new(fullPath, null, isExplicitSource, ClaudeCredentialStatus.CredentialFileMissing), null);
         }
 
         byte[] payload;
@@ -285,13 +423,13 @@ internal static class ClaudeCredentialSource
         }
         catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
         {
-            return (
+            return new(
                 new(fullPath, credentialPath, isExplicitSource, ClaudeCredentialStatus.CredentialFileUnreadable),
                 null);
         }
 
         var status = Evaluate(payload);
-        return (
+        return new(
             new(fullPath, credentialPath, isExplicitSource, status),
             status == ClaudeCredentialStatus.LocalMaterialPresent ? payload : null);
     }

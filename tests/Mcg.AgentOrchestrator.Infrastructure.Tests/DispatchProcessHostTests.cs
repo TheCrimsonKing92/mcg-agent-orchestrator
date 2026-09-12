@@ -913,6 +913,20 @@ public sealed class DispatchProcessHostTests
                 "synthetic-sandbox-scoping-token",
                 File.ReadAllText(Path.Combine(claudeConfig, ".credentials.json")),
                 StringComparison.Ordinal);
+
+            // The setup artifact reports the resolved source seeding consumed - source kind, directory
+            // and status only. It is the same resolved result, so the artifact cannot name one login
+            // while the sandbox holds another, and it carries no credential material.
+            using var setup = JsonDocument.Parse(
+                File.ReadAllText(Path.Combine(sandboxRoot, DispatchProcessHost.LowIntegritySetupArtifactName)));
+            var recordedSource = setup.RootElement.GetProperty("credentialSource");
+            Assert.Equal(Path.GetFullPath(credentialSource), recordedSource.GetProperty("directory").GetString());
+            Assert.True(recordedSource.GetProperty("isExplicitSource").GetBoolean());
+            Assert.Equal("LocalMaterialPresent", recordedSource.GetProperty("status").GetString());
+            Assert.DoesNotContain(
+                "synthetic-sandbox-scoping-token",
+                setup.RootElement.GetRawText(),
+                StringComparison.Ordinal);
         }
         finally
         {

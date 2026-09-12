@@ -400,7 +400,11 @@ public static class DispatchProcessHost
             ConfigurePowerShellModuleAnalysisCache(startInfo.Environment, sandboxRoot);
             TrackAction("materialize-shims", () => WriteWorkerCommandShims(sandboxBin, startInfo.Environment["PATH"]));
 
-            TrackAction("materialize-provider-seed", () => SeedProviderEnvironment(
+            // The credential source this dispatch actually seeded, carried to the setup artifact so an
+            // operator can read which login a worker was launched with. It is the resolved result
+            // seeding consumed, not a re-derived guess about it.
+            ClaudeCredentialResolution? seededCredentialSource = null;
+            TrackAction("materialize-provider-seed", () => seededCredentialSource = SeedProviderEnvironment(
                 startInfo,
                 parameters.Provider,
                 sandboxRoot,
@@ -421,7 +425,11 @@ public static class DispatchProcessHost
             var dropScript = Path.Combine(sandboxRoot, "drop-to-low.ps1");
             TrackAction("materialize-artifacts", () =>
             {
-                WriteLowIntegritySetupArtifact(sandboxRoot, parameters.WorkingDirectory, effectivePreparation);
+                WriteLowIntegritySetupArtifact(
+                    sandboxRoot,
+                    parameters.WorkingDirectory,
+                    effectivePreparation,
+                    seededCredentialSource);
 
                 // Prepend a self-drop-to-Low wrapper. ArgumentList is [BaseArgs..., Command]; replace Command
                 // with ". 'drop.ps1'; <Command>" so the worker (and its children: codex/node) run Low.
@@ -468,7 +476,12 @@ public static class DispatchProcessHost
         environment["PSModuleAnalysisCachePath"] = Path.Combine(powershellDirectory, "ModuleAnalysisCache");
     }
 
-    internal static void SeedProviderEnvironment(
+    /// <summary>
+    /// Publishes the provider's sandbox environment onto <paramref name="startInfo"/>. For Claude
+    /// subscription auth it returns the ONE resolved credential source that was seeded, so a caller
+    /// can report which login the worker will use; every other provider and API-key mode return null.
+    /// </summary>
+    internal static ClaudeCredentialResolution? SeedProviderEnvironment(
         ProcessStartInfo startInfo,
         WorkerSandboxProvider provider,
         string sandboxRoot,
@@ -476,7 +489,12 @@ public static class DispatchProcessHost
         Func<string?>? anthropicApiKeyAccessor = null,
         Func<string>? claudeCredentialDirectoryAccessor = null,
         Func<string, string?>? environmentReader = null,
-        Func<string?>? defaultHomeProvider = null)
+        Func<string?>? defaultHomeProvider = null,
+        // Transported-resolution seam: a caller that already resolved the Claude credential source
+        // (auth preflight) passes its resolver so seeding consumes that ONE resolved result instead of
+        // computing a second selection that could disagree. It takes precedence over the three
+        // accessor/reader inputs above, which only describe how to build a resolver when none exists.
+        ClaudeCredentialResolver? claudeCredentialResolver = null)
     {
         startInfo.Environment.Remove("CODEX_HOME");
         startInfo.Environment.Remove("CLAUDE_CONFIG_DIR");
@@ -497,32 +515,36 @@ public static class DispatchProcessHost
             Directory.CreateDirectory(codexHome);
             SeedCodexAuth(codexHome);
             startInfo.Environment["CODEX_HOME"] = codexHome;
-            return;
+            return null;
         }
 
         if (provider == WorkerSandboxProvider.Claude)
         {
-            SeedClaudeEnvironment(
+            return SeedClaudeEnvironment(
                 startInfo,
                 sandboxRoot,
                 stderrPath,
                 anthropicApiKeyAccessor,
-                claudeCredentialDirectoryAccessor,
-                environmentReader,
-                defaultHomeProvider);
-            return;
+                // One resolver for this dispatch: either the caller's resolved result travels in, or
+                // this is the first consumer and the resolver it builds performs the single selection.
+                claudeCredentialResolver ?? new ClaudeCredentialResolver(
+                    environmentReader,
+                    defaultHomeProvider,
+                    claudeCredentialDirectoryAccessor));
         }
 
         if (provider == WorkerSandboxProvider.Grok)
         {
             SeedGrokEnvironment(startInfo, sandboxRoot, stderrPath);
-            return;
+            return null;
         }
 
         if (provider == WorkerSandboxProvider.Hermes)
         {
             SeedHermesEnvironment(startInfo, sandboxRoot);
         }
+
+        return null;
     }
 
     internal static void SeedWorkerCaBundle(ProcessStartInfo startInfo, string sandboxRoot, string? stderrPath = null)
@@ -625,22 +647,26 @@ public static class DispatchProcessHost
         }
     }
 
-    private static void SeedClaudeEnvironment(
+    /// <summary>
+    /// Seeds the sandbox Claude config root from <paramref name="resolver"/>'s single resolved source
+    /// and returns that resolved result, or null in API-key mode where no source is consumed.
+    /// </summary>
+    private static ClaudeCredentialResolution? SeedClaudeEnvironment(
         ProcessStartInfo startInfo,
         string sandboxRoot,
         string? stderrPath,
         Func<string?>? anthropicApiKeyAccessor,
-        Func<string>? claudeCredentialDirectoryAccessor,
-        Func<string, string?>? environmentReader = null,
-        Func<string?>? defaultHomeProvider = null)
+        ClaudeCredentialResolver resolver)
     {
         var claudeConfigDir = Path.Combine(sandboxRoot, "claude-config");
 
+        // Read through the resolver's own environment view so the API-key decision and the credential
+        // selection cannot be answered by two different environments.
         var apiKey = anthropicApiKeyAccessor is not null
             ? anthropicApiKeyAccessor()
-            : (environmentReader ?? ClaudeCredentialSource.ProcessEnvironmentReader)(
-                ClaudeCredentialSource.ApiKeyEnvironmentVariable);
+            : resolver.ReadEnvironment(ClaudeCredentialSource.ApiKeyEnvironmentVariable);
 
+        ClaudeCredentialResolution? seededSource = null;
         if (!string.IsNullOrWhiteSpace(apiKey))
         {
             // Explicit API-key precedence: subscription source validation is bypassed entirely, so
@@ -649,15 +675,13 @@ public static class DispatchProcessHost
         }
         else
         {
-            // Subscription auth: the shared source seam owns selection, validation and the copy. It
-            // throws WorkerSubscriptionPreflightException (with the sanitized diagnostic published
-            // to stderr first) before any destination artifact is created, so dispatch stops rather
-            // than launching against a stale destination login.
-            ClaudeCredentialSource.SeedSubscriptionCredentials(
+            // Subscription auth: the resolver owns selection and validation, and seeding consumes
+            // that one resolved result. It throws WorkerSubscriptionPreflightException (with the
+            // sanitized diagnostic published to stderr first) before any destination artifact is
+            // created, so dispatch stops rather than launching against a stale destination login.
+            seededSource = ClaudeCredentialSource.SeedSubscriptionCredentials(
                 claudeConfigDir,
-                claudeCredentialDirectoryAccessor,
-                environmentReader,
-                defaultHomeProvider,
+                resolver,
                 string.IsNullOrWhiteSpace(stderrPath)
                     ? null
                     : diagnostic => AppendDispatchStderrDiagnostic(stderrPath!, diagnostic));
@@ -665,6 +689,7 @@ public static class DispatchProcessHost
 
         ClaudeCredentialSource.EnsureSandboxSettings(claudeConfigDir);
         startInfo.Environment["CLAUDE_CONFIG_DIR"] = claudeConfigDir;
+        return seededSource;
     }
 
     private static void AppendDispatchStderrDiagnostic(string stderrPath, string message)
@@ -1144,7 +1169,8 @@ public static void DropToLow() {
     private static void WriteLowIntegritySetupArtifact(
         string sandboxRoot,
         string worktree,
-        WorkerSandboxPreparationResult preparation)
+        WorkerSandboxPreparationResult preparation,
+        ClaudeCredentialResolution? seededCredentialSource = null)
     {
         var artifact = new
         {
@@ -1153,7 +1179,15 @@ public static void DropToLow() {
             sandboxRecursiveRelabel = preparation.SandboxRecursiveRelabel,
             prepReceiptHit = preparation.PrepReceiptHit,
             sandboxRoot,
-            worktree
+            worktree,
+            // Source kind, directory and status only - never token, refresh-token or API-key material
+            // and never credential file contents. Null in API-key mode and for other providers.
+            credentialSource = seededCredentialSource is null ? null : new
+            {
+                directory = seededCredentialSource.Inspection.DirectoryPath,
+                isExplicitSource = seededCredentialSource.Inspection.IsExplicitSource,
+                status = seededCredentialSource.Inspection.Status.ToString()
+            }
         };
         File.WriteAllText(
             Path.Combine(sandboxRoot, LowIntegritySetupArtifactName),

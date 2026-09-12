@@ -46,11 +46,12 @@ public sealed class WorkerDispatchTestsDispatchPreparationClaudeCredentials
             var defaultHome = Path.Combine(root, "default-home");
             WriteProfile(defaultHome, ".claude", WrongProfileSentinelCredentials);
 
-            var environmentReader = ClaudeEnvironment(configDirectory: explicitDir);
-            Func<string?> defaultHomeProvider = () => defaultHome;
+            // ONE resolver, shared by preflight and seeding: the resolved result preflight reports is
+            // the object handed to seeding, and the counting inputs prove nothing resolved twice.
+            var inputs = new CountingSelectionInputs(configDirectory: explicitDir, defaultHome: defaultHome);
+            var resolver = new ClaudeCredentialResolver(inputs.EnvironmentReader, inputs.DefaultHomeProvider);
 
-            // Preflight and seeding must agree on the same source, selected from the same inputs.
-            var auth = ClaudeCliAuthProbe.From(environmentReader, defaultHomeProvider);
+            var auth = ClaudeCliAuthProbe.From(resolver);
             Assert.False(auth.HasAnthropicApiKey);
             Assert.True(auth.HasCliCredentialArtifact);
             Assert.Equal(
@@ -61,15 +62,14 @@ public sealed class WorkerDispatchTestsDispatchPreparationClaudeCredentials
             var sandboxRoot = Path.Combine(root, ".mcg-sandbox");
             var stderrPath = Path.Combine(root, "dispatch.stderr.log");
 
-            DispatchProcessHost.SeedProviderEnvironment(
+            var seededSource = DispatchProcessHost.SeedProviderEnvironment(
                 startInfo,
                 WorkerSandboxProvider.Claude,
                 sandboxRoot,
                 stderrPath,
                 anthropicApiKeyAccessor: null,
                 claudeCredentialDirectoryAccessor: null,
-                environmentReader: environmentReader,
-                defaultHomeProvider: defaultHomeProvider);
+                claudeCredentialResolver: resolver);
 
             Assert.True(startInfo.Environment.TryGetValue("CLAUDE_CONFIG_DIR", out var seededDir));
             var seeded = File.ReadAllText(Path.Combine(seededDir!, ".credentials.json"));
@@ -78,8 +78,22 @@ public sealed class WorkerDispatchTestsDispatchPreparationClaudeCredentials
             Assert.Equal("{\"theme\":\"dark\"}", File.ReadAllText(Path.Combine(seededDir!, "settings.json")));
             Assert.Equal(string.Empty, ReadDiagnostics(stderrPath));
 
-            AssertPreflightAndSeedingAgreeOnOneResolvedSource(auth, explicitDir, seededDir!);
+            AssertPreflightAndSeedingAgreeOnOneResolvedSource(
+                auth,
+                seededSource,
+                resolver,
+                inputs,
+                explicitDir,
+                seededDir!);
             Assert.True(auth.IsExplicitSource);
+
+            // The rejected candidate was never even looked at: explicit selection does not consult the
+            // default profile, so its home root was never read.
+            Assert.Equal(0, inputs.DefaultHomeReads);
+
+            // Both consumers answered the API-key question through the shared injected environment -
+            // one read each - so neither can reach process state for auth mode while the other does not.
+            Assert.Equal(2, inputs.ApiKeyReads);
         }
         finally
         {
@@ -149,10 +163,10 @@ public sealed class WorkerDispatchTestsDispatchPreparationClaudeCredentials
             var defaultHome = Path.Combine(root, "default-home");
             WriteProfile(defaultHome, ".claude", ValidSyntheticCredentials, "{\"theme\":\"light\"}");
 
-            var environmentReader = ClaudeEnvironment();
-            Func<string?> defaultHomeProvider = () => defaultHome;
+            var inputs = new CountingSelectionInputs(configDirectory: null, defaultHome: defaultHome);
+            var resolver = new ClaudeCredentialResolver(inputs.EnvironmentReader, inputs.DefaultHomeProvider);
 
-            var auth = ClaudeCliAuthProbe.From(environmentReader, defaultHomeProvider);
+            var auth = ClaudeCliAuthProbe.From(resolver);
             Assert.True(auth.HasCliCredentialArtifact);
             Assert.Equal(
                 Path.Combine(Path.GetFullPath(Path.Combine(defaultHome, ".claude")), ".credentials.json"),
@@ -162,15 +176,14 @@ public sealed class WorkerDispatchTestsDispatchPreparationClaudeCredentials
             var sandboxRoot = Path.Combine(root, ".mcg-sandbox");
             var stderrPath = Path.Combine(root, "dispatch.stderr.log");
 
-            DispatchProcessHost.SeedProviderEnvironment(
+            var seededSource = DispatchProcessHost.SeedProviderEnvironment(
                 startInfo,
                 WorkerSandboxProvider.Claude,
                 sandboxRoot,
                 stderrPath,
                 anthropicApiKeyAccessor: null,
                 claudeCredentialDirectoryAccessor: null,
-                environmentReader: environmentReader,
-                defaultHomeProvider: defaultHomeProvider);
+                claudeCredentialResolver: resolver);
 
             Assert.True(startInfo.Environment.TryGetValue("CLAUDE_CONFIG_DIR", out var seededDir));
             Assert.Equal(
@@ -181,9 +194,15 @@ public sealed class WorkerDispatchTestsDispatchPreparationClaudeCredentials
 
             AssertPreflightAndSeedingAgreeOnOneResolvedSource(
                 auth,
+                seededSource,
+                resolver,
+                inputs,
                 Path.Combine(defaultHome, ".claude"),
                 seededDir!);
             Assert.False(auth.IsExplicitSource);
+
+            // The fallback candidate was evaluated exactly once for the shared resolution.
+            Assert.Equal(1, inputs.DefaultHomeReads);
         }
         finally
         {
@@ -594,21 +613,139 @@ public sealed class WorkerDispatchTestsDispatchPreparationClaudeCredentials
     }
 
     /// <summary>
-    /// Binds preflight's resolved source to the bytes seeding wrote. Neither side of the equality is
-    /// a test constant: if the two ever recomputed selection independently, this fails.
+    /// Proves the selection was TRANSPORTED, not agreed on by coincidence: the resolved result seeding
+    /// consumed is the same object preflight reported, and selection ran exactly once. Comparing paths
+    /// or file hashes alone cannot fail when two independent resolutions read the same fixture, which
+    /// is why reference identity and the input-read counters carry the contract here.
     /// </summary>
     private static void AssertPreflightAndSeedingAgreeOnOneResolvedSource(
         ClaudeCliAuthState auth,
+        ClaudeCredentialResolution? seedingConsumed,
+        ClaudeCredentialResolver resolver,
+        CountingSelectionInputs inputs,
         string expectedSourceDirectory,
         string seededDirectory)
     {
+        // Identity, not equality: seeding consumed preflight's resolved result itself.
+        Assert.NotNull(auth.Resolution);
+        Assert.NotNull(seedingConsumed);
+        Assert.Same(auth.Resolution, seedingConsumed);
+
+        // And it was computed once. Any second resolution - a consumer building its own resolver, or
+        // reaching past it to re-evaluate candidates - must read a selection input again, so these
+        // counters fail instead of silently agreeing.
+        Assert.Equal(1, resolver.ResolutionCount);
+        Assert.Equal(1, inputs.ConfigDirectoryReads);
+
         Assert.NotNull(auth.CredentialArtifactPath);
         Assert.Null(auth.UnavailableReason);
         Assert.Equal(Path.GetFullPath(expectedSourceDirectory), auth.SelectedSourceDirectory);
+        Assert.Equal(auth.SelectedSourceDirectory, seedingConsumed!.Inspection.DirectoryPath);
         Assert.Equal(auth.SelectedSourceDirectory, Path.GetDirectoryName(auth.CredentialArtifactPath));
         Assert.Equal(
             HashFile(auth.CredentialArtifactPath!),
             HashFile(Path.Combine(seededDirectory, ".credentials.json")));
+    }
+
+    [Xunit.Fact(DisplayName = "Claude_preflight_and_seeding_share_one_resolution_when_the_source_is_rejected")]
+    public void ClaudePreflightAndSeedingShareOneResolutionWhenTheSourceIsRejected()
+    {
+        var root = CreateFixtureRoot();
+        try
+        {
+            // Rejected explicit source, with a usable default profile beside it that must stay unused.
+            var missingExplicitDir = Path.Combine(root, "operator-config-missing");
+            var defaultHome = Path.Combine(root, "default-home");
+            WriteProfile(defaultHome, ".claude", WrongProfileSentinelCredentials);
+
+            var inputs = new CountingSelectionInputs(
+                configDirectory: missingExplicitDir,
+                defaultHome: defaultHome);
+            var resolver = new ClaudeCredentialResolver(inputs.EnvironmentReader, inputs.DefaultHomeProvider);
+
+            var auth = ClaudeCliAuthProbe.From(resolver);
+            Assert.False(auth.HasCliCredentialArtifact);
+            Assert.NotNull(auth.Resolution);
+
+            var startInfo = CreateStartInfo(root);
+            var sandboxRoot = Path.Combine(root, ".mcg-sandbox");
+            var stderrPath = Path.Combine(root, "dispatch.stderr.log");
+
+            var failure = Assert.Throws<WorkerSubscriptionPreflightException>(() =>
+                DispatchProcessHost.SeedProviderEnvironment(
+                    startInfo,
+                    WorkerSandboxProvider.Claude,
+                    sandboxRoot,
+                    stderrPath,
+                    anthropicApiKeyAccessor: null,
+                    claudeCredentialDirectoryAccessor: null,
+                    claudeCredentialResolver: resolver));
+
+            // The rejection path transports the same resolution too: the source named in the pre-launch
+            // failure is the one preflight reported, resolved once, with no worker started.
+            Assert.Equal(1, resolver.ResolutionCount);
+            Assert.Equal(1, inputs.ConfigDirectoryReads);
+            Assert.Equal(0, inputs.DefaultHomeReads);
+            Assert.Same(auth.Resolution, resolver.Resolve());
+            Assert.Equal(
+                Path.GetFullPath(missingExplicitDir),
+                auth.Resolution!.Inspection.DirectoryPath);
+            Assert.Contains(auth.Resolution!.Inspection.DirectoryPath!, failure.Message);
+            Assert.Contains(auth.Resolution!.Inspection.DirectoryPath!, auth.UnavailableReason!);
+            Assert.False(startInfo.Environment.ContainsKey("CLAUDE_CONFIG_DIR"));
+            Assert.False(Directory.Exists(Path.Combine(sandboxRoot, "claude-config")));
+            Assert.DoesNotContain("WRONG-PROFILE-SENTINEL", failure.Message);
+            Assert.DoesNotContain("sk-ant-", ReadDiagnostics(stderrPath));
+        }
+        finally
+        {
+            DeleteQuietly(root);
+        }
+    }
+
+    /// <summary>
+    /// Counts every credential-selection input read. A second, independent resolution cannot hide from
+    /// this: any recomputed selection has to read CLAUDE_CONFIG_DIR (and, when it is blank, the default
+    /// home root) again. ANTHROPIC_API_KEY is counted separately because it is an auth-mode input, not
+    /// a selection input, and both consumers legitimately read it.
+    /// </summary>
+    private sealed class CountingSelectionInputs
+    {
+        private readonly string? _configDirectory;
+        private readonly string? _defaultHome;
+
+        internal CountingSelectionInputs(string? configDirectory, string? defaultHome)
+        {
+            _configDirectory = configDirectory;
+            _defaultHome = defaultHome;
+        }
+
+        internal int ConfigDirectoryReads { get; private set; }
+
+        internal int DefaultHomeReads { get; private set; }
+
+        internal int ApiKeyReads { get; private set; }
+
+        internal Func<string, string?> EnvironmentReader => name =>
+        {
+            switch (name)
+            {
+                case "CLAUDE_CONFIG_DIR":
+                    ConfigDirectoryReads++;
+                    return _configDirectory;
+                case "ANTHROPIC_API_KEY":
+                    ApiKeyReads++;
+                    return null;
+                default:
+                    return null;
+            }
+        };
+
+        internal Func<string?> DefaultHomeProvider => () =>
+        {
+            DefaultHomeReads++;
+            return _defaultHome;
+        };
     }
 
     private static void AssertSentinelIsNeverEmitted(Func<string, string> credentialsFactory)
